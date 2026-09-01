@@ -183,6 +183,14 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
      selection slides off, and `SetListText`'s fifth argument is a per-item enable array
      at `+0xD6` (`RESTRICT2` uses it). Both are reported, and `select` names them rather
      than clicking at something that will not take.
+   - **Deliberately not added**: a `dblclick` verb. The engine does detect double
+     clicks (`0x4AB570`), but every list screen in the stock set pairs its list with an
+     explicit button (`LOAD` / `CANCEL` / `DELETE`), so `select` + `click` covers it
+     without a second actuation path — the same reasoning that kept `fill` off
+     `GUIGADGET_SetText`.
+   - **Still unexercised live**: the per-item flag array. `RESTRICT2.GUI` is the only
+     screen that sets it and it hangs off the multiplayer lobby, which the `SELPROV`
+     crash blocks. It is read and reported; it has never been seen non-null.
    - **Settle got sharper**: a consequence in the clicked gadget's own `assoc` group
      counts, so a scroll-arrow click reports the slider it moved instead of "no
      GUI-visible change". Unnamed gadgets are labelled `#7` rather than an empty string.

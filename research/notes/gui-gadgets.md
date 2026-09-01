@@ -225,7 +225,9 @@ still report it: a select aimed at one of these rows silently does nothing.
 flags)`, `ret 0x14` — storing a one-byte-per-item array at `+0xD6` and setting attribs
 bit `0x800` (`0x4A33A8`). Bit 0 of each byte enables the row; the draw path greys the
 others (`0x4A21F4`). Only `RESTRICT2.GUI` uses it, and there it is what says which
-units are available. [BINARY-VERIFIED]
+units are available. [BINARY-VERIFIED] **Not exercised live**: `RESTRICT2` is reached
+from the multiplayer lobby, which the `SELPROV` crash (§9) blocks, so the flag array is
+read and reported but has never been seen non-null on a running instance.
 
 ### 2.4.1 Scrolling — what moves `top`, and by how much
 
@@ -238,6 +240,16 @@ Every writer of `+0xBC`, and this is the whole list: [BINARY-VERIFIED]
 | `0x4A3D82` / `0x4A3E26` | ∓1 row per 2 ticks | drag auto-scroll: press inside the list, hold the pointer above `y+2` or below `y+h-4` |
 | `0x4A2D61` | copies | another listbox with the same `assoc` |
 | `0x4A2DF6` | `round(maxtop * knobpos / (range-1))` | the bound scrollbar, through `Gadget_PropagateAssoc 0x4A2BE0` |
+
+The reverse sync (list → slider, `0x4A2CA8`) uses `knobpos = round(top * range / maxtop)`
+— **`range`, not `range-1`** — so a scrollbar at the bottom of its list reads
+`knobpos == range`, one past the `[0, range-1]` the mouse path clamps to. Seen live on
+`SELMAP`: `pos 159, range 159`. Do not treat it as corruption. [BINARY-VERIFIED, LIVE]
+
+If the listbox's `itemheight` is 0 the scrollbar cannot move `top` at all (guard at
+`0x4A2DB0`). `List_SetItems` forces it to at least `glyph('I').height + 3`
+(`0x4A3366`), so a text list always has one — but a list filled by the picture setters
+never does, and its scrollbar is inert. [BINARY-VERIFIED]
 | `0x4A30F0`, `0x4A33C7`, `0x4A3637`, `0x4A372B` | to 0 | the list setters |
 
 **The scroll arrows are not in the `.GUI` file.** `GUI_StageUpdateDraw` synthesizes two
