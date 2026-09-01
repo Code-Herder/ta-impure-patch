@@ -33,3 +33,23 @@ __pycache__/
 
 # Ghidra project DB (embeds game binary, churns every session; symbol exports are tracked instead)
 /tools/ghidra-projects/
+
+# Claude worktree checkouts (live git worktrees)
+/.claude/worktrees/
+
+# ta-drive per-instance sandboxes (contain game copies, logs, captures)
+/tagpu/instances/
+
+# Safety net: no game binaries or TA asset formats from anywhere
+*.exe
+*.dll
+*.hpi
+*.ufo
+*.ccx
+*.gp3
+*.gaf
+*.cob
+*.3do
+*.tnt
+*.smk
+*.pcx
