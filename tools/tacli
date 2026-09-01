@@ -1862,14 +1862,17 @@ def build_parser():
     u.add_argument("verb", nargs="?", default="snapshot",
                    help="snapshot (default) | show | click | set | check | uncheck "
                         "| select | hover | fill | press | wait")
-    u.add_argument("rest", nargs="*", help="selector, then a value for set/fill")
+    u.add_argument("rest", nargs="*",
+                   help="a gadget selector (NAME, type:NAME or #index), then a value "
+                        "for set/fill or an item for select (text or #index)")
     u.add_argument("--all", action="store_true",
                    help="snapshot: include decorative gadgets (labels, pictures, surfaces)")
     u.add_argument("--gui", help="wait: wait for this screen to reach the top of the stack")
     u.add_argument("--page", type=int,
                    help="click: walk a paged build menu to this page first")
     u.add_argument("--timeout", type=float, default=UI_TIMEOUT,
-                   help=f"seconds to auto-wait for a gadget (default {UI_TIMEOUT:g})")
+                   help=f"seconds to auto-wait for a gadget, and to scroll a long list "
+                        f"to an off-screen row (default {UI_TIMEOUT:g})")
     u.add_argument("--no-wait", dest="wait", action="store_false", default=True,
                    help="fail immediately instead of waiting for the gadget")
     u.set_defaults(func=cmd_ui)
