@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build the TotalA.exe modding wiki from research/notes/*.md into research/site/."""
 
+import hashlib
 import json
 import re
 import shutil
@@ -146,7 +147,9 @@ code,kbd,pre,.mono{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Cons
 .main{min-width:0; display:grid; grid-template-columns:minmax(0,1fr) 216px; gap:34px; padding:34px 40px 90px}
 @media (max-width:1240px){ .main{grid-template-columns:minmax(0,1fr)} .toc{display:none} }
 @media (max-width:640px){ .main{padding:22px 18px 60px} }
-.doc{max-width:74ch; min-width:0}
+.doc{min-width:0}
+.doc>p,.doc>ul,.doc>ol,.doc>blockquote{max-width:74ch}
+.tablewrap svg{display:block; width:100%; height:auto}
 
 .toc{position:sticky; top:34px; align-self:start; max-height:calc(100vh - 68px); overflow-y:auto; font-size:.82rem}
 .toc h5{
@@ -451,6 +454,9 @@ def blurb_from(md_text: str, fallback: str, limit: int = 165) -> str:
     return fallback[:limit] + "…"
 
 
+ASSET_VER = hashlib.md5((CSS + JS).encode()).hexdigest()[:10]
+
+
 def render(title, body, nav_html, toc_html, base, is_index=False, lede=""):
     crumb = "" if is_index else f'<div class="crumb"><a href="{base}index.html">Wiki</a> &nbsp;/&nbsp; {title}</div>'
     ledehtml = f'<p class="lede">{lede}</p>' if lede else ""
@@ -464,7 +470,7 @@ def render(title, body, nav_html, toc_html, base, is_index=False, lede=""):
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;600&display=swap">
-<link rel="stylesheet" href="{base}assets/wiki.css">
+<link rel="stylesheet" href="{base}assets/wiki.css?v={ASSET_VER}">
 </head>
 <body>
 <header class="topbar">
@@ -498,7 +504,7 @@ def render(title, body, nav_html, toc_html, base, is_index=False, lede=""):
   </div>
 </div>
 <script>var BASE="{base}";</script>
-<script src="{base}assets/wiki.js"></script>
+<script src="{base}assets/wiki.js?v={ASSET_VER}"></script>
 </body>
 </html>
 """
