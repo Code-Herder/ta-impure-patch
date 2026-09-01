@@ -75,6 +75,40 @@ a window.
 
 **tacli requirement**: every instance prefix gets `UseXRandR=N` at creation.
 
+## Bug 2b — all monitors blank *again*, once per launch and once per exit (2026-09-01)
+
+**Symptom** (user-reported, mid-session): with `UseXRandR=N` in place, all three monitors
+still blanked and came back — once when a game started, once when it stopped.
+
+**What it was not** (measured, not assumed): the Xorg output-probe count
+(`grep -c '(DFP-3): connected'`) stayed flat at 5969 across a launch *and* the stop that
+blanked, so bug 2 had not regressed; `journalctl -k` logged no drm/nvidia modeset. Nor is
+it wine or GL in general — three controls, each a single event the user watched for:
+
+| control | blanks? |
+|---|---|
+| bare wine process (`wine cmd /c exit`) | no |
+| bare GL context, no wine (`glxinfo -B`) | no |
+| wine window, no GL (`wine notepad`, mapped then killed) | no |
+| the game | **yes** |
+
+**Root cause**: `dd_SetDisplayMode` (`dd.c`) calls **`ChangeDisplaySettings(NULL, 0)`
+unconditionally** on the first mode set — "restore the registry display mode". Under wine
+that is a *real modeset*, and because wine then remembers this process changed the mode,
+it restores again at process exit: one blank at launch, one at exit. Every other
+`ChangeDisplaySettings` site in the fork is already guarded by `!g_config.windowed`; this
+one was not.
+
+**Fix**: guard it with `!g_config.windowed`. Windowed, we never change the display mode,
+so there is nothing to restore. Verified by the user: no blank on launch, none on stop.
+
+**Lesson**: "the display blanked" has more than one cause in this stack. Check the Xorg
+probe count *first* — flat count means it is not bug 2 and the search should move into our
+own `ChangeDisplaySettings` call sites. Beware anchoring wall-clock times onto
+`Xorg.1.log`: its relative timestamps did not line up with the running server here, and an
+early read of it produced a confident but wrong attribution. The probe **count** is the
+reliable signal; the timestamps are not.
+
 ## Bug 3 — the game steals the human's mouse pointer (mitigated; root cause is wine)
 
 **Symptom** (user-reported): starting the game snaps the real pointer to a screen or

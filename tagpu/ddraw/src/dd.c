@@ -683,7 +683,15 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
 
     if (!g_ddraw.mode.dmPelsWidth)
     {
-        ChangeDisplaySettings(NULL, 0);
+        /* tagpu: never when windowed. This "restore the registry display mode"
+           call is a REAL modeset under wine — it blanks every physical monitor
+           for about a second, at launch and again at exit (wine restores the
+           mode for a process that changed it). Windowed, we never change the
+           mode, so there is nothing to restore. Same rule as UseXRandR=N:
+           the game does not get to touch the human's display
+           (research/notes/windowed-mode.md). */
+        if (!g_config.windowed)
+            ChangeDisplaySettings(NULL, 0);
 
         g_ddraw.mode.dmSize = sizeof(DEVMODE);
         g_ddraw.mode.dmDriverExtra = 0;
