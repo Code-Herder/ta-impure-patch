@@ -17,6 +17,7 @@
 #include "tagpu_scaffold.h"
 #include "tagpu_input.h"
 #include "tagpu_native.h"
+#include "tagpu_peek.h"
 
 /* GL entry points the fork does not already expose — load once ourselves. */
 typedef void (APIENTRY *PFN_UNIFORM4F)(GLint,GLfloat,GLfloat,GLfloat,GLfloat);
@@ -509,6 +510,9 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     /* in-process input injection (tagpu_keys.txt / tagpu_eye.txt) — must run
        even at the menus and regardless of the overlay's enable state */
     tagpu_input_frame(f);
+    /* on-demand memory reads (tagpu_peek.trigger) — no-op unless triggered, and
+       must run at the menus too: switch effects land before the first game */
+    tagpu_peek_frame(f->frame_counter);
     /* DISPLAY-MODE CHANGES: the fork restarts its render thread with a NEW
        GL context — every GL object id we cached is dead. Detect the context
        change and re-init all GL-owning modules from scratch (without this a

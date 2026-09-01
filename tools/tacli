@@ -495,6 +495,14 @@ def cmd_create(args):
 
 
 def cmd_launch(args):
+    # Extra TotalA.exe switches. Only a handful are worth passing (see
+    # research/notes/cmdline-options.md); -r aborts the launch and -d bypasses the
+    # ddraw path our stack lives in, so both are refused — before anything is created.
+    argv = list(args.arg or [])
+    for a in argv:
+        if a[:1] in ("-", "/") and a[1:2].lower() in ("r", "d") and len(a) <= 3:
+            die(f"refusing {a!r}: see cmdline-options.md (-r registers DirectPlay and "
+                f"quits, -d is the engine's own windowed mode)")
     inst = Instance(args.name)
     if not inst.exists:
         args.force = False
@@ -544,8 +552,10 @@ def cmd_launch(args):
 
     env = inst.env()
     display = env["DISPLAY"]
+    meta["args"] = argv
+    inst.save_meta(meta)
     pointer_before = pointer_pos(display) if not args.no_restore_pointer else None
-    proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(inst.gamedir), env=env,
+    proc = subprocess.Popen(["wine", "TotalA.exe"] + argv, cwd=str(inst.gamedir), env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     deadline = time.time() + args.timeout
@@ -561,7 +571,7 @@ def cmd_launch(args):
     inst.save_meta(meta)
     res = {"name": args.name, "pid": pid, "launcher_pid": proc.pid,
            "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
-           "shield": shield_state(inst), "pointer_restored": restored}
+           "args": argv, "shield": shield_state(inst), "pointer_restored": restored}
     out(res, args.json,
         human=(f"launched {args.name} pid={pid} window={win[0] if win else 'pending'} "
                f"at {win[1] if win else '?'},{win[2] if win else '?'} "
@@ -654,6 +664,48 @@ def cmd_arm(args):
             results[name] = value or "on"
     out({"name": args.name, "flags": results}, args.json,
         human=", ".join(f"{k}={v}" for k, v in results.items()))
+
+
+PEEK_RX = re.compile(r"^peek: (?P<spec>\S+) (?:@0x(?P<addr>[0-9A-Fa-f]{8}) )?= (?P<value>.*)$")
+
+
+def cmd_peek(args):
+    """Read game memory from inside the process (tagpu_peek.trigger).
+
+    The measurement half of a switch trace: name the address, launch with and
+    without the switch, compare. Specs are `*0x511DE8+0x2C74:2` style — see
+    tagpu/ddraw/inc/tagpu_peek.h for the grammar.
+    """
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{args.name} is not running")
+    log = inst.gamedir / "tagpu.log"
+    start = log.stat().st_size if log.exists() else 0
+    (inst.gamedir / "tagpu_peek.trigger").write_text("\n".join(args.specs) + "\n")
+
+    deadline = time.time() + args.timeout
+    rows = []
+    while time.time() < deadline and len(rows) < len(args.specs):
+        if log.exists():
+            with open(log, "rb") as f:
+                f.seek(start)
+                chunk = f.read().decode("utf-8", "replace")
+            rows = []
+            for line in chunk.splitlines():
+                m = PEEK_RX.match(line)
+                if m:
+                    rows.append({"spec": m.group("spec"),
+                                 "addr": int(m.group("addr"), 16) if m.group("addr") else None,
+                                 "value": m.group("value")})
+        if len(rows) < len(args.specs):
+            time.sleep(0.2)
+
+    if not rows:
+        die("no peek lines — is the game past its first frame?")
+    out({"name": args.name, "peeks": rows}, args.json,
+        human="\n".join(f"{r['spec']:<24} "
+                        f"{'0x%08X' % r['addr'] if r['addr'] is not None else '':<12} "
+                        f"{r['value']}" for r in rows))
 
 
 def _wait_file(path: Path, timeout: float, since: float):
@@ -842,6 +894,9 @@ def build_parser():
                    help="N:controller[:side[:color]] (controller 0=off 1=human 2=AI)")
     l.add_argument("--los", type=int, help="SkirmishLineOfSight")
     l.add_argument("--mapping", type=int, help="SkirmishMapping")
+    l.add_argument("--arg", action="append",
+                   help="extra TotalA.exe switch, repeatable (e.g. --arg -t --arg 120); "
+                        "see research/notes/cmdline-options.md")
     l.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
     l.add_argument("--timeout", type=float, default=45)
     l.add_argument("--no-restore-pointer", action="store_true",
@@ -887,6 +942,14 @@ def build_parser():
     a.add_argument("name")
     a.add_argument("flags", nargs="+")
     a.set_defaults(func=cmd_arm)
+
+    pk = sub.add_parser("peek", help="read game memory (e.g. '*0x511DE8+0x2C74:2')")
+    add_common(pk)
+    pk.add_argument("name")
+    pk.add_argument("specs", nargs="+",
+                    help="['*']<hex>['+'<hex>...][':'1|2|4|s<N>|x<N>]")
+    pk.add_argument("--timeout", type=float, default=10)
+    pk.set_defaults(func=cmd_peek)
 
     sh = sub.add_parser("shot", help="engine surface screenshot (PNG)")
     add_common(sh)

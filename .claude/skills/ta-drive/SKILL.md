@@ -60,7 +60,10 @@ tools/tacli wait t1 'alive=[1-9]' --timeout 150
 
 Skirmish settings come from the registry, no clicking: `--map "Two Continents"`,
 `--player 2:2:1:1` (`N:controller[:side[:color]]`, controller 0=off 1=human 2=AI,
-side 0=ARM 1=CORE), `--los`, `--mapping`.
+side 0=ARM 1=CORE), `--los`, `--mapping`. **The registry is the only way** — every
+TotalA.exe switch was traced in phase 1.2 and none of them sets a game rule
+(`cmdline-options.md`). Raw switches go through `--arg=-t --arg=120` (keep the `=`);
+`-r` and `-d` are refused.
 
 ## Input details that cost time to learn
 
@@ -86,6 +89,10 @@ side 0=ARM 1=CORE), `--los`, `--mapping`.
   engine UI (menus, placement boxes). **Native GPU-rendered units are invisible here.**
 - `tacli glshot` — the GL framebuffer: what is actually presented, including our
   passes. Use this to judge our renderer.
+- `tacli peek <name> '*0x511DE8+0x2C74:2'` — read game memory from inside the
+  process (deref with `*`, `+hex` offsets, `:1|2|4|s<N>|x<N>`). The cheap way to
+  answer "did that actually change anything?" without a debugger. Grammar:
+  `tagpu/ddraw/inc/tagpu_peek.h`; worked example: `cmdline-options.md` §A/B.
 - `tacli log <name> -g <regex>` / `tacli wait <name> <regex>` — the fork logs
   `units:`/`native:`/`OWND` lines; `roster` parses the newest unit block (id, type,
   owner, world + screen coords — `owner` equal to the `me=` in `units:` is yours).

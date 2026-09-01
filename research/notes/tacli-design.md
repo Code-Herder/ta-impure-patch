@@ -32,8 +32,18 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    Human crosstalk measured away, and `ctrl+d` self-destructed a selected commander —
    the old "ctrl-d never lands" gap is closed. Full write-up: **`input-firewall.md`**.
    Shield is **on by default** (`tacli shield <name> off` hands the game to the human).
-3. **Phase 1.2 (opportunistic)**: trace `-b` battleroom words (`truelos`/`permlos`/
-   `mapping`/`fixedloc`/…, table in `cmdline-options.md`) for registry-free rule presets.
+3. **Phase 1.2 — command-line trace** — **DONE 2026-09-01**. Every switch the binary
+   parses is now traced to the global it writes and A/B-confirmed on a live instance;
+   full table, evidence and reproduction in **`cmdline-options.md`**.
+   Outcome: **no registry-free rule presets exist.** `-b` is broken in the stock
+   binary (its handler forgets the `add edi,2` every other handler does, so nothing
+   ever matches) and ten of its eleven words have empty bodies regardless. Skirmish
+   rules stay on the registry — that decision is now measured, not assumed.
+   The real rule surface is `online.dll` + `-c`, and it is network-only; noted as a
+   lead for agent-vs-agent multiplayer, not taken.
+   Shipped alongside: **`tacli peek`** (in-process memory reads via
+   `tagpu_peek.trigger`, `tagpu/ddraw/inc/tagpu_peek.h`) and
+   **`tacli launch --arg=<switch>`**, which refuses `-r` and `-d`.
 
 ## Why (constraints that shaped it)
 
