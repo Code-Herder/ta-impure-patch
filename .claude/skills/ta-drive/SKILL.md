@@ -41,18 +41,26 @@ Capture and video work: the **ta-capture** skill.
 tools/tacli launch t1 --res 1024x768        # creates on first use, ~2s to window
 tools/tacli ls                              # names, pids, windows
 tools/tacli keys t1 space                   # menu accelerators
+tools/tacli ui t1                           # what gadgets are on screen (preferred)
 tools/tacli shot t1 -o /tmp/where.png       # engine surface: see where you are
 tools/tacli click t1 320 240                # game coords; --right for orders
 tools/tacli roster t1 --json                # units + camera eye
 tools/tacli stop t1
 ```
 
-**Menus are stateful — verify, do not assume.** Take a `shot` after each step rather
-than firing a canned key sequence; a dropped or extra key lands you in the campaign
-screen instead of skirmish. Known-good path from a fresh launch:
-`space` (SINGLE) → `s` (Skirmish) → `Return` (Start), with a shot between each, and
-`escape` to back out. The first key after launch is often dropped — send a throwaway
-(`tab`) first. Then wait for the game proper:
+**Drive menus by name, not by keystroke.** `tacli ui` reads the actual gadgets on
+screen (see *Driving the UI* below), so the known-good path from a fresh launch is:
+
+```bash
+tools/tacli ui t1 click SINGLE            # each one auto-waits and reports the
+tools/tacli ui t1 click Skirmish          # screen it landed on
+tools/tacli ui t1 click Start
+```
+
+No shot between steps, and **no throwaway key** — `ui click` waits for the gadget to
+exist before clicking, which is what the old dropped-first-key workaround was papering
+over. (Blind `keys` sequences still drop their first key; that advice lives on only if
+you drive with `keys`.) Then wait for the game proper:
 
 ```bash
 tools/tacli wait t1 'alive=[1-9]' --timeout 150
@@ -82,6 +90,59 @@ TotalA.exe switch was traced in phase 1.2 and none of them sets a game rule
   `roster` call before doing coordinate maths.
 - Game speed: `keys <name> plus` / `minus` (TA's own feature, up to +10, and negative
   below normal — invaluable for catching fast events or slowing them for capture).
+
+## Driving the UI (menus, options, build panel)
+
+`tacli ui` is a Playwright-style layer over TA's own gadget tree: **snapshot the screen,
+then act on a gadget by name.** It reads the live gadget array from inside the process,
+so it sees exactly what the engine sees — including whether a button is a toggle, what
+stage it is on, and whether it is disabled. On demand only; nothing runs per frame.
+
+```bash
+tools/tacli ui t1                     # what is on screen right now
+tools/tacli ui t1 --json              # every field (stable contract; the table is not)
+tools/tacli ui t1 show Start          # one gadget in full
+tools/tacli ui t1 click Skirmish      # auto-waits, then clicks the rect centre
+tools/tacli ui t1 set LineOfSight 2   # declarative stage; check/uncheck are aliases
+tools/tacli ui t1 fill PlayerName Claude
+tools/tacli ui t1 press Start         # via the gadget's own quickkey
+tools/tacli ui t1 wait --gui SKIRMISH
+tools/tacli ui t1 click ARMLAB --page 2   # walk a paged build menu first
+```
+
+```
+gui SKIRMISH.GUI  640x480   under: -
+enter=Start  esc=PrevMenu
+  #  type     name             click       state        key
+  1  button   Start            550,445     ok           s
+  6  toggle   StartLocation    536,163     off
+ 12  cycle    LineOfSight      536,277     0/3
+ 16  button   Player0          101,104     ok           a
+text: Location / Commander / Mapping / Two Continents
+```
+
+- **Everything auto-waits** (5 s, `--timeout`, `--no-wait`). A click waits for the gadget
+  to appear and be actionable, then waits for a consequence and reports it —
+  `screen SINGLE.GUI -> SKIRMISH.GUI`, `stage 0 -> 1`, or `engine confirmed` (the
+  engine's own `UIChange_f`).
+- **It refuses rather than guessing.** Absent, `inactive`, `grayed` or zero-sized gadgets
+  error with the reason and list what *is* on screen. An ambiguous name is an error too —
+  disambiguate with `button:NAME` or `#7`.
+- **`enter=` / `esc=`** are the screen's own Enter/Escape bindings, so backing out is
+  `click PrevMenu`, never a guess.
+- **In game, select a unit first.** With nothing selected the top GUI is `ARMMAIN2.GUI`
+  (just KILLS/LOSSES/TOTALUNITS). Selecting a builder pushes its build page on top —
+  `ARMCOM1.GUI`, gadgets named after the buildable units (`ARMSOLAR`, `ARMLAB`), plus the
+  order buttons (`ARMMOVE`, `ARMSTOP`, `ARMATTACK`) and pagers `ARMPREV`/`ARMNEXT`.
+- **A build button reports "delivered (no GUI-visible change)" — that is success.** It
+  changes the cursor mode, not the GUI. Then place it with a world click:
+  `tacli keys t1 mouse:X,Y`, then `tacli click t1 X Y` (**left**; right-click cancels).
+  A red footprint box means the site is blocked — try clear ground.
+- **`ui` is the gadget layer only.** The map, minimap and resource bars are not gadgets;
+  they stay with `click` / `eye` / `roster`.
+- Not yet implemented: listbox items and slider values, reported as `items=?` / `value=?`
+  — *unknown*, not *empty*. Use the registry presets (`--map`, `--player`, `--los`)
+  meanwhile. Details: `research/notes/gui-gadgets.md`.
 
 ## Observing
 

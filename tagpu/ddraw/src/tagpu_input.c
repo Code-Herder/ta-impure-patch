@@ -78,6 +78,12 @@ static int token_vk(const char* t)
     if (!lstrcmpiA(t, "left"))   return VK_LEFT;
     if (!lstrcmpiA(t, "right"))  return VK_RIGHT;
     if (!lstrcmpiA(t, "tab"))    return VK_TAB;
+    /* text entry (tacli ui fill): clearing a field means one backspace per
+       character already in it. */
+    if (!lstrcmpiA(t, "backspace") || !lstrcmpiA(t, "back")) return VK_BACK;
+    if (!lstrcmpiA(t, "delete") || !lstrcmpiA(t, "del"))     return VK_DELETE;
+    if (!lstrcmpiA(t, "home"))   return VK_HOME;
+    if (!lstrcmpiA(t, "end"))    return VK_END;
     if ((t[0] == 'f' || t[0] == 'F') && t[1]) {
         int n = 0; const char* p = t + 1;
         while (*p >= '0' && *p <= '9') n = n * 10 + (*p++ - '0');

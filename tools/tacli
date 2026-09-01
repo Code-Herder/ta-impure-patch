@@ -845,6 +845,425 @@ def cmd_rm(args):
 
 # --------------------------------------------------------------------------- cli
 
+# ------------------------------------------------------------------------ ui
+#
+# `tacli ui` is a Playwright-CLI over TA's own gadget tree: snapshot the screen,
+# then act on a gadget by name. The fork walks the live gadget array on demand
+# (tagpu_ui.trigger -> tagpu_ui.json) — nothing here is periodic, and asking
+# costs one frame.
+#
+# Design: research/notes/tacli-design.md phase 1.3.
+# The reverse engineering it stands on: research/notes/gui-gadgets.md.
+
+UI_TIMEOUT = 5.0                 # Playwright's own expect() default
+UI_SETTLE = 1.5                  # how long an action waits for a consequence
+UI_ACTIONABLE = ("button", "button2", "listbox", "field", "slider")
+
+
+def _ui_snapshot(inst: Instance, timeout: float = UI_TIMEOUT) -> dict:
+    """Trigger one gadget-tree walk and read the result.
+
+    The fork writes a temp file and renames it, so a reader can never catch a
+    half-built snapshot — but a decode error is still retried rather than fatal.
+    """
+    path = inst.gamedir / "tagpu_ui.json"
+    before = path.stat().st_mtime_ns if path.exists() else 0
+    last = None
+    (inst.gamedir / "tagpu_ui.trigger").write_text("")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if path.exists() and path.stat().st_mtime_ns > before:
+            try:
+                snap = json.loads(path.read_text())
+            except json.JSONDecodeError:
+                pass
+            else:
+                if snap.get("ok"):
+                    return snap
+                # Mid-transition the engine pops the old screen before pushing the
+                # new one, so there is genuinely no active GUI for a frame or two.
+                # That is a state to wait through, not an error.
+                last = snap.get("error", "unknown")
+                before = path.stat().st_mtime_ns
+                (inst.gamedir / "tagpu_ui.trigger").write_text("")
+        time.sleep(0.05)
+    if last:
+        die(f"no UI to read after {timeout:g}s: {last}")
+    die("no UI snapshot appeared — is the instance running and past its first frame?")
+
+
+def _ui_kind(g: dict) -> str:
+    """How a gadget is presented: the engine's type, refined by what its state means."""
+    t = g.get("type")
+    if t in ("button", "button2"):
+        stages = g.get("stages") or 0
+        if stages > 2:
+            return "cycle"
+        if stages == 2:
+            return "toggle"
+        return "button"
+    return "list" if t == "listbox" else t
+
+
+def _ui_blocked(g: dict):
+    """Playwright's actionability check: why this gadget cannot be clicked, or None."""
+    if not g.get("active"):
+        return "inactive"
+    if g.get("grayed"):
+        return "grayed out"
+    if g["rect"][2] <= 0 or g["rect"][3] <= 0:
+        return "zero-sized"
+    return None
+
+
+def _ui_keyname(vk: int):
+    """The `tacli keys` token for a gadget's quickkey, or None if we cannot type it."""
+    if not vk:
+        return None
+    if 0x41 <= vk <= 0x5A:
+        return chr(vk + 32)
+    if 0x61 <= vk <= 0x7A:
+        return chr(vk)
+    if 0x30 <= vk <= 0x39:
+        return chr(vk)
+    if 0x70 <= vk <= 0x7B:
+        return f"f{vk - 0x6F}"
+    return {8: "backspace", 9: "tab", 13: "return", 27: "escape", 32: "space"}.get(vk)
+
+
+def _ui_state(g: dict) -> str:
+    why = _ui_blocked(g)
+    if why:
+        return why.split()[0]
+    kind = _ui_kind(g)
+    if kind == "toggle":
+        return "on" if g.get("stage") else "off"
+    if kind == "cycle":
+        return f"{g.get('stage')}/{g.get('stages')}"
+    if kind == "list":
+        return f"sel={g.get('selected')} items=?"
+    if kind == "slider":
+        return "value=?"
+    if kind == "field":
+        text = (g.get("text") or "")[:20]
+        return f'"{text}"'
+    return "ok"
+
+
+def _ui_screen(snap: dict) -> str:
+    """The screen name without its extension — the engine reports "MAINMENU.GUI"."""
+    name = snap.get("gui") or ""
+    return name[:-4] if name.upper().endswith(".GUI") else name
+
+
+def _ui_page(snap: dict):
+    """Build menus are <UNIT><page>.GUI, so the screen name carries the page number.
+
+    How many pages exist is not knowable at runtime — page n+1 lives in a .GUI file
+    that is not loaded — so this reports the current page, never a total.
+    """
+    m = re.fullmatch(r"(.*?)(\d+)", _ui_screen(snap))
+    if not m or m.group(1).upper().endswith("MAIN"):
+        # The in-game stats screen is literally "%sMAIN2.GUI" — a fixed name that
+        # happens to end in a digit, not a build page.
+        return (None, None)
+    return m.group(1), int(m.group(2))
+
+
+def _ui_render(snap: dict, show_all: bool = False) -> str:
+    head = f"gui {snap['gui']}  {snap['surface'][0]}x{snap['surface'][1]}"
+    _, page = _ui_page(snap)
+    if page is not None:
+        head += f"   page {page}"
+    under = snap.get("under") or []
+    head += "   under: " + (", ".join(under) if under else "-")
+    lines = [head]
+
+    binds = [f"{k}={snap[k]}" for k in ("enter", "esc", "focus") if snap.get(k)]
+    if binds:
+        lines.append("  ".join(binds))
+
+    rows = [g for g in snap["gadgets"] if show_all or g["type"] in UI_ACTIONABLE]
+    if rows:
+        lines.append(f"{'#':>3}  {'type':<8} {'name':<16} {'click':<11} {'state':<12} key")
+        for g in rows:
+            x, y = g["click"]
+            lines.append(f"{g['i']:>3}  {_ui_kind(g):<8} {g['name']:<16} "
+                         f"{f'{x},{y}':<11} {_ui_state(g):<12} "
+                         f"{_ui_keyname(g.get('quickkey') or 0) or ''}")
+    else:
+        lines.append("(no interactive gadgets on this screen — try --all)")
+
+    if not show_all:
+        seen = {}
+        for g in snap["gadgets"]:
+            if g["type"] == "label" and (g.get("text") or "").strip():
+                seen[g["text"].strip()] = None
+        if seen:
+            lines.append("text: " + " / ".join(seen))
+    return "\n".join(lines)
+
+
+def _ui_match(snap: dict, selector: str):
+    """Selector -> matching gadgets. `NAME`, `type:NAME` or `#index`."""
+    want, sep, name = selector.rpartition(":")
+    gadgets = snap.get("gadgets") or []
+    if name.startswith("#"):
+        try:
+            idx = int(name[1:])
+        except ValueError:
+            die(f"bad index selector {selector!r}")
+        hits = [g for g in gadgets if g["i"] == idx]
+    else:
+        hits = [g for g in gadgets if g["name"].lower() == name.lower()]
+    if sep and want:
+        want = want.lower()
+        hits = [g for g in hits if g["type"] == want or _ui_kind(g) == want]
+    return hits
+
+
+def _ui_resolve(inst: Instance, selector: str, timeout: float,
+                wait: bool = True, actionable: bool = True):
+    """Resolve one gadget, auto-waiting for it to appear and become actionable.
+
+    Strict, like Playwright: an ambiguous selector is an error rather than a guess,
+    and it fails immediately because waiting cannot resolve ambiguity.
+    """
+    deadline = time.time() + (timeout if wait else 0.0)
+    while True:
+        snap = _ui_snapshot(inst)
+        hits = _ui_match(snap, selector)
+
+        if len(hits) > 1:
+            where = ", ".join(f"#{g['i']} {_ui_kind(g)}:{g['name']}" for g in hits)
+            die(f"selector {selector!r} matched {len(hits)} gadgets ({where}) — "
+                f"disambiguate with type:name or #index")
+
+        if len(hits) == 1:
+            why = _ui_blocked(hits[0]) if actionable else None
+            if why is None:
+                return snap, hits[0]
+        else:
+            why = "not present"
+
+        if time.time() >= deadline:
+            if not hits:
+                present = ", ".join(g["name"] for g in snap["gadgets"]
+                                    if g["type"] in UI_ACTIONABLE) or "(none)"
+                die(f'no gadget "{selector}" on {snap["gui"]}. present: {present}')
+            die(f'gadget "{selector}" on {snap["gui"]} is {why}')
+
+        time.sleep(0.1)
+
+
+def _ui_settle(inst: Instance, before: dict, g: dict, timeout: float = UI_SETTLE):
+    """Wait for an observable consequence of an action, and report which one.
+
+    Three things count as confirmation, in the order they are worth trusting: the
+    screen changed, the gadget's own stage changed, or the engine's UIChange_f
+    names the gadget we aimed at. UIChange_f is transient and the snapshot samples
+    every 5th frame, so it is the fallback rather than the primary signal.
+    """
+    deadline = time.time() + timeout
+    while True:
+        snap = _ui_snapshot(inst)
+        if snap.get("gui") != before.get("gui"):
+            return snap, f"screen {before.get('gui')} -> {snap.get('gui')}"
+        now = _ui_match(snap, g["name"])
+        if len(now) == 1 and now[0].get("stage") != g.get("stage"):
+            return snap, f"stage {g.get('stage')} -> {now[0].get('stage')}"
+        if snap.get("uichange") == g["i"]:
+            return snap, "engine confirmed"
+        if time.time() >= deadline:
+            return snap, None
+        time.sleep(0.1)
+
+
+def _ui_click_gadget(inst: Instance, g: dict, before: dict, settle: bool = True):
+    x, y = g["click"]
+    _write_tokens(inst, f"pclick:{x},{y}")
+    if not settle:
+        return before, None
+    return _ui_settle(inst, before, g)
+
+
+def _ui_page_to(inst: Instance, snap: dict, page: int, timeout: float):
+    """Page a build menu to `page` by clicking its pager, then return the new snapshot.
+
+    Page n+1's gadgets live in a .GUI file that is not loaded, so they cannot be
+    seen from here — only walked to. The pager gadget is found by name; if the
+    screen has no obvious one we say what we did see rather than clicking blind.
+    """
+    for _ in range(16):
+        _, at = _ui_page(snap)
+        if at == page:
+            return snap
+        if at is None:
+            die(f'screen {snap["gui"]} is not a paged menu (no trailing page number)')
+        want = "NEXT" if page > at else "PREV"
+        pagers = [g for g in snap["gadgets"]
+                  if want in g["name"].upper() and not _ui_blocked(g)]
+        if not pagers:
+            names = ", ".join(g["name"] for g in snap["gadgets"]
+                              if g["type"] in UI_ACTIONABLE) or "(none)"
+            die(f'no {want} pager on {snap["gui"]} (at page {at}, want {page}). '
+                f"gadgets: {names}")
+        snap, _ = _ui_click_gadget(inst, pagers[0], snap)
+    die(f"gave up paging to {page}")
+
+
+def cmd_ui(args):
+    """Snapshot and drive the on-screen gadgets — menus, options, in-game panel."""
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{args.name} is not running")
+
+    verb = (args.verb or "snapshot").lower()
+    rest = list(args.rest)
+    tmo = args.timeout
+
+    if verb in ("snapshot", "snap"):
+        if rest:
+            die(f"snapshot takes no arguments (did you mean: ui {args.name} show {rest[0]})")
+        snap = _ui_snapshot(inst, tmo)
+        out(snap, args.json, human=_ui_render(snap, args.all))
+        return
+
+    if verb == "show":
+        if len(rest) != 1:
+            die("usage: ui <name> show <selector>")
+        snap, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait, actionable=False)
+        human = "\n".join(f"{k:<12} {v}" for k, v in g.items())
+        out({"gui": snap["gui"], "gadget": g}, args.json,
+            human=f"gui {snap['gui']}\n{human}")
+        return
+
+    if verb == "wait":
+        deadline = time.time() + tmo
+        if args.gui:
+            while True:
+                snap = _ui_snapshot(inst)
+                if _ui_screen(snap).lower() == _ui_screen({"gui": args.gui}).lower():
+                    out(snap, args.json, human=f"gui {snap['gui']} is on top")
+                    return
+                if time.time() >= deadline:
+                    die(f'timed out after {tmo:g}s waiting for gui "{args.gui}" '
+                        f'(on top: {snap.get("gui")})')
+                time.sleep(0.1)
+        if len(rest) != 1:
+            die("usage: ui <name> wait <selector> | ui <name> wait --gui <SCREEN>")
+        snap, g = _ui_resolve(inst, rest[0], tmo, wait=True)
+        out({"gui": snap["gui"], "gadget": g}, args.json,
+            human=f"{g['name']} is actionable on {snap['gui']}")
+        return
+
+    if verb == "click":
+        if len(rest) != 1:
+            die("usage: ui <name> click <selector>")
+        if args.page is not None:
+            _ui_page_to(inst, _ui_snapshot(inst), args.page, tmo)
+        before, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait)
+        after, how = _ui_click_gadget(inst, g, before)
+        msg = f"clicked {g['name']} at {g['click'][0]},{g['click'][1]}"
+        msg += f" — {how}" if how else " — delivered (no GUI-visible change)"
+        out({"clicked": g["name"], "at": g["click"], "confirm": how,
+             "gui": after.get("gui")}, args.json, human=msg)
+        return
+
+    if verb in ("set", "check", "uncheck"):
+        if verb == "set":
+            if len(rest) != 2:
+                die("usage: ui <name> set <selector> <stage>")
+            selector, target = rest[0], int(rest[1])
+        else:
+            if len(rest) != 1:
+                die(f"usage: ui <name> {verb} <selector>")
+            selector, target = rest[0], 1 if verb == "check" else 0
+
+        snap, g = _ui_resolve(inst, selector, tmo, wait=args.wait)
+        stages = g.get("stages") or 0
+        if stages < 2:
+            die(f'{g["name"]} is not a toggle (stages={stages}) — use click')
+        if not 0 <= target < stages:
+            die(f'{g["name"]} has {stages} stages, so stage {target} does not exist')
+
+        for _ in range(stages + 1):
+            if g.get("stage") == target:
+                out({"name": g["name"], "stage": g.get("stage")}, args.json,
+                    human=f"{g['name']} = stage {g.get('stage')}")
+                return
+            snap, _how = _ui_click_gadget(inst, g, snap)
+            hits = _ui_match(snap, g["name"])
+            if len(hits) != 1:
+                die(f'{g["name"]} vanished while cycling it')
+            g = hits[0]
+        die(f'{g["name"]} cycled through all {stages} stages without reaching {target}')
+
+    if verb in ("fill", "type"):
+        if len(rest) != 2:
+            die(f"usage: ui <name> {verb} <selector> <text>")
+        selector, text = rest[0], rest[1]
+        tokens = _ui_text_tokens(text)
+        snap, g = _ui_resolve(inst, selector, tmo, wait=args.wait)
+
+        _ui_click_gadget(inst, g, snap, settle=False)     # focus the field
+        time.sleep(0.2)
+        clear = len(g.get("text") or "")
+        if clear:
+            _write_tokens(inst, " ".join(["backspace"] * clear))
+        if tokens:
+            _write_tokens(inst, " ".join(tokens))
+        time.sleep(0.3)
+
+        after = _ui_snapshot(inst)
+        hits = _ui_match(after, g["name"])
+        got = hits[0].get("text") if len(hits) == 1 else None
+        note = "" if got == text else f" (field now reads {got!r} — expected {text!r})"
+        out({"name": g["name"], "text": got, "wanted": text}, args.json,
+            human=f"filled {g['name']}{note}")
+        return
+
+    if verb == "press":
+        if len(rest) != 1:
+            die("usage: ui <name> press <selector>")
+        before, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait)
+        key = _ui_keyname(g.get("quickkey") or 0)
+        if not key:
+            die(f'{g["name"]} has no quickkey (quickkey={g.get("quickkey")}) — use click')
+        _write_tokens(inst, key)
+        after, how = _ui_settle(inst, before, g)
+        msg = f"pressed {key} for {g['name']}"
+        msg += f" — {how}" if how else " — delivered (no GUI-visible change)"
+        out({"pressed": key, "gadget": g["name"], "confirm": how,
+             "gui": after.get("gui")}, args.json, human=msg)
+        return
+
+    die(f"unknown ui verb {verb!r} "
+        "(snapshot show click set check uncheck fill press wait)")
+
+
+def _ui_text_tokens(text: str):
+    """Text -> `tacli keys` tokens, refusing what the input layer cannot type.
+
+    The token vocabulary is letters, digits and named keys (tagpu_input.c), so
+    punctuation has no representation. Saying so beats typing something else.
+    """
+    tokens = []
+    for ch in text:
+        if ch == " ":
+            tokens.append("space")
+        elif ch.islower() and ch.isascii() and ch.isalpha():
+            tokens.append(ch)
+        elif ch.isupper() and ch.isascii() and ch.isalpha():
+            tokens.append(f"shift+{ch.lower()}")
+        elif ch.isascii() and ch.isdigit():
+            tokens.append(ch)
+        else:
+            die(f"cannot type {ch!r}: the input layer has tokens for letters, "
+                "digits and named keys only")
+    return tokens
+
+
 def res_type(text: str):
     m = re.fullmatch(r"(\d{3,4})\s*[xX*]\s*(\d{3,4})", text)
     if not m:
@@ -989,6 +1408,24 @@ def build_parser():
     st.add_argument("name")
     st.add_argument("--hard", action="store_true", help="also kill its wineserver")
     st.set_defaults(func=cmd_stop)
+
+    u = sub.add_parser("ui", help="snapshot and drive on-screen gadgets (menus, build panel)")
+    add_common(u)
+    u.add_argument("name")
+    u.add_argument("verb", nargs="?", default="snapshot",
+                   help="snapshot (default) | show | click | set | check | uncheck "
+                        "| fill | press | wait")
+    u.add_argument("rest", nargs="*", help="selector, then a value for set/fill")
+    u.add_argument("--all", action="store_true",
+                   help="snapshot: include decorative gadgets (labels, pictures, surfaces)")
+    u.add_argument("--gui", help="wait: wait for this screen to reach the top of the stack")
+    u.add_argument("--page", type=int,
+                   help="click: walk a paged build menu to this page first")
+    u.add_argument("--timeout", type=float, default=UI_TIMEOUT,
+                   help=f"seconds to auto-wait for a gadget (default {UI_TIMEOUT:g})")
+    u.add_argument("--no-wait", dest="wait", action="store_false", default=True,
+                   help="fail immediately instead of waiting for the gadget")
+    u.set_defaults(func=cmd_ui)
 
     rm = sub.add_parser("rm", help="delete an instance")
     add_common(rm)

@@ -18,6 +18,7 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
 | Input | Existing in-process file protocol (`tagpu_keys.txt`/`tagpu_eye.txt`, WM_* posts) — already per-gamedir and display-independent. CLI wraps it. xdotool era stays dead. |
 | TA `-d` switch | **Off-limits** (engine windowed mode likely bypasses the ddraw path our stack lives in). cnc-ddraw windowed is the one true mode. |
 | CLI | `tools/tacli`, Python 3 stdlib-only. Full driving surface v1: `launch ls keys click eye shot glshot video log roster wait stop rm`, JSON output, instance ids, `--map`/AI/LOS/speed skirmish presets via registry. Paths anchored at the **main checkout** (worktree-safe), env-overridable. `ddraw.dll` **copied** (pinned) into each instance at launch — rebuilds never corrupt running games. |
+| UI layer | **`tacli ui` — Playwright-CLI model over TA's own gadget tree** (`main+0x531 → ControlsAry`, stride `0x15B`). On-demand snapshot only (trigger → `tagpu_ui.json`), never periodic. Act **by gadget name** with strict mode (duplicate = error, not first-match); actuation is a **synthesized click** through the existing input path, never an engine call; Playwright-style **auto-wait + actionability** (exists · `active` · not `grayedout` · top GUI) and **post-action settle**; `UIChange_f` confirms the click landed. Verbs `click set fill press wait show`. Full RE backing: **`gui-gadgets.md`**. |
 | Skills | New **`ta-drive`** repo skill = agent-facing workflow (launch→drive→observe→stop, one instance per session). `ta-capture` slimmed to instance-aware capture; deprecated xdotool sections removed. |
 
 ## Phases
@@ -44,6 +45,57 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    Shipped alongside: **`tacli peek`** (in-process memory reads via
    `tagpu_peek.trigger`, `tagpu/ddraw/inc/tagpu_peek.h`) and
    **`tacli launch --arg=<switch>`**, which refuses `-r` and `-d`.
+
+4. **Phase 1.3 — text-driven UI (`tacli ui`)** — **DONE 2026-09-01**, scoped by
+   `/grill-me` and shipped the same session. RE backing: **`gui-gadgets.md`**. Drives
+   menus, options and the in-game build panel from text instead of screenshot-and-guess,
+   on the Playwright **CLI** model — snapshot the current screen, then act on a named
+   gadget. `tagpu/ddraw/src/tagpu_ui.c` (walk) + `tacli ui` (verbs).
+
+   Locked shape:
+   - **Source**: in-process walk of the live gadget array, not `.GUI` file parsing and not
+     OCR. One chain covers shell menus, dialogs and the in-game panel.
+   - **Snapshot**: top GUI's gadgets in full + a breadcrumb of the screens beneath (only the
+     top GUI is interactive, so listing covered gadgets would advertise dead affordances).
+     Surface size in the header — the front end is 640×480 whatever `--res` says.
+   - **Selectors**: TA's own `name[16]`, `type:name` to disambiguate, strict mode on
+     duplicates. No minted refs: every action re-resolves from a fresh snapshot, so the
+     stale-handle bug class does not exist.
+   - **Actuation**: synthesized click at the rect centre through `tagpu_keys.txt` — one
+     input path, rule 2 of the skill intact. Rects are absolute game-space, so
+     `(xpos+width/2, ypos+height/2)` needs no scaling.
+   - **Waiting**: auto-wait before the action, settle after it, 5 s default (Playwright's own
+     `expect` default), `--timeout` / `--no-wait`, plus a standalone `wait`.
+   - **Toggles**: declarative `set <name> <stage>` bounded by `stages`; `check`/`uncheck` are
+     aliases. `assoc` shown as a group tag so radio side-effects are legible.
+   - **`fill`**: click-to-focus + clear + type, *not* `GUIGADGET_SetText` — same observable
+     contract, no second actuation path.
+   - **Build pages**: `click` is strict (page 2 lives in an unloaded `.GUI`), `--page N` is the
+     explicit opt-in; snapshot reports `page n/m`. `ui` is the gadget layer only — the world
+     view stays with `click`/`eye`/`roster`.
+   - **Deferred (phase C)**: listbox items (`0x4B6AF0` node layout) and slider position
+     (`+0x136` vs `+0x142`). Rendered `items=?` / `value=?` — *not implemented*, never *empty*.
+
+   **Outcome — both DoDs met.** Snapshots verified on MAINMENU/SINGLE/SKIRMISH (640×480)
+   and the in-game panel (1024×768); `MAINMENU→SINGLE→Skirmish→Start→ARMSOLAR→placed`
+   driven entirely by gadget name, **no screenshot between steps and no throwaway key** —
+   auto-wait did retire the dropped-first-key workaround for `ui` (blind `keys` sequences
+   still drop theirs, and `SKILL.md` says so). `crdefault`/`escdefault`/`defaultfocus`,
+   `stages`, `status_curnt` and `text` all confirmed live; 2-stage toggles and 3-stage
+   cycles both render and `set` correctly.
+
+   **Two corrections the live run forced**, both worth remembering:
+   - **Gadget coordinates are panel-relative, not absolute.** Shell menus are full-screen
+     panels at `(0,0)` so the distinction is invisible, but the in-game build panel sits
+     at `(0,128)` and every raw rect must have that added. Read as absolute, `ARMSOLAR`'s
+     click lands inside the minimap and silently does nothing. The static reading missed
+     this; **only the pixel cross-check caught it** — which is exactly why that DoD item
+     existed.
+   - **`quickkey` is a `u8` ASCII accelerator**, not the `i16` the corpus declares.
+
+   Still open (phase C, unchanged): listbox items and slider values. `help` (`+0x33`) read
+   empty on every screen tested and `grayedout` never non-zero — TA expresses at least
+   some unavailability through `active` instead (`SINGLE.GUI`'s `AnyMsn`).
 
 ## Why (constraints that shaped it)
 
