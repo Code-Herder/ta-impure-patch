@@ -107,7 +107,7 @@ tools/tacli ui t1 set LineOfSight 2   # declarative stage; check/uncheck are ali
 tools/tacli ui t1 set FXVOL 32        # a slider takes a value, same verb
 tools/tacli ui t1 select MAPNAMES 'Anteer Strait'   # a row, by text or #index
 tools/tacli ui t1 fill GAMENAME Test_2
-tools/tacli ui t1 hover ARMSOLAR      # move over a gadget without clicking it
+tools/tacli ui t1 hover ARMSOLAR      # park the pointer on a gadget, no click
 tools/tacli ui t1 press Start         # via the gadget's own quickkey
 tools/tacli ui t1 wait --gui SKIRMISH
 tools/tacli ui t1 click ARMLAB --page 2   # walk a paged build menu first
@@ -119,7 +119,8 @@ enter=SELECT  esc=PREVMENU
   #  type     name             click       state          key  grp
   1  button   PREVMENU         533,415     ok             p
   3  list     DPLAY            321,146     sel=0 n=4           50
-  4  slider   SLIDER           586,149     value=0/178         50
+  4  slider   SLIDER           586,149     inactive            50
+  5  button   SELECT           533,293     ok             s
   7  button                    586,94      inactive            50
   9  button   SERVICE0         241,231     ok             w
 DPLAY: *0 Internet TCP/IP Connection For DirectPlay · 1 IPX Connection For DirectPlay …
@@ -134,15 +135,13 @@ DPLAY: *0 Internet TCP/IP Connection For DirectPlay · 1 IPX Connection For Dire
   disambiguate with `button:NAME` or `#7`. TA uses **both** `active=0` and `grayed=1` for
   "you cannot have this", so both show up.
 - **`#index` is the only way to reach an unnamed gadget**, and there are real ones: the
-  arrow buttons flanking a scrollbar have empty names. Take the `#` from the snapshot's
-  first column — `ui t1 click "#7"` — and re-read it after any screen change, because it
-  is a position in the current screen, not a handle.
+  arrows flanking a scrollbar are synthesized by the engine at load time, so they are in
+  no `.GUI` file and have empty names. Take the `#` from the snapshot's first column —
+  `ui t1 click "#7"` — and re-read it after any screen change, because it is a position
+  in the current screen, not a handle.
 - **`grp` appears only when `assoc` means something** — two or more toggles in one radio
   group, or a slider with its listbox and its arrow buttons. Same number = acting on one
   moves the others, and that is how an action reports its consequence.
-- **Some gadgets have no name.** The arrows flanking a scrollbar are synthesized by the
-  engine at load time, so they are absent from the `.GUI` file and show as `#7`-style rows
-  — reach them with `ui click "#7"`.
 - **`enter=` / `esc=`** are the screen's own Enter/Escape bindings, so backing out is
   `click PrevMenu`, never a guess.
 - **In game, select a unit first.** With nothing selected the top GUI is `ARMMAIN2.GUI`
@@ -168,14 +167,21 @@ DPLAY: *0 Internet TCP/IP Connection For DirectPlay · 1 IPX Connection For Dire
   whose entries are images with no text at all; that is different from `(empty)`.
   **Map and campaign selection are ordinary text lists**, so
   `Skirmish → SelectMap → select "<map>" → LOAD` works — which `--map` cannot do to an
-  instance that is already running.
+  instance that is already running. `select` refuses a row the selection cannot rest on:
+  a **separator** (TA marks these `&G` and the highlight slides off them) or one the
+  screen has **disabled**. Both would otherwise look like a click that did nothing.
 - **Sliders**: `ui set <name> <value>`, where the value is the number the engine acts on
   (`val=32/64` in the table), not a pixel offset. A slider that is a **scrollbar** — bound
   to a listbox by `assoc`, shown with the same `grp` — refuses, because the engine
   recomputes it from the list every frame; move the list with `select` instead.
 - **`fill` types through WM_CHAR**, so mixed case round-trips. What a field *keeps* is
   TA's rule: the save-name field takes letters, digits, space and `_` and silently drops
-  punctuation. `fill` reports the field's actual content, so read what it says.
+  punctuation. `fill` reports the field's actual content, so read what it says. It
+  refuses outright if your text is longer than the field's `maxchars`, rather than
+  handing you a truncation and calling it a fill.
+- **`hover` rarely shows you anything.** It parks the pointer and reports label text
+  that appeared, but no tooltip surfaced over the build panel in testing — consistent
+  with `help` being empty there. Use it to set up a hover state, not to read one.
 - **`help` is empty on almost every gadget** — the engine parses the `.GUI` tooltip and
   then zeroes the field. A few screens write it at runtime (SKIRMISH's toggles do), and
   those read back. Empty `help` is normal, not a broken read.
