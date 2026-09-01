@@ -18,16 +18,27 @@
                       to the map; delete the file to release. The eye is
                       display state, not sim state — read-only-over-sim holds.
 
-   Both are checked every 15 frames from the present hook. */
+   Both are checked every 15 frames from the present hook.
+
+   2026-09-01 (phase 1.1): keys and clicks now travel as tagged WM_TAGPU_*
+   messages that the shield translates in the wndproc, so they survive the
+   hardware-input filter and drive a virtual key/cursor state the game's polls
+   read (inc/tagpu_shield.h). That is what makes ctrl/shift combos land. */
 
 #include <windows.h>
 #include <stdio.h>
 #include "tagpu.h"
 #include "tagpu_input.h"
+#include "tagpu_shield.h"
 #include "mouse.h"        /* the fork's own mouse-lock (wndproc drops mouse
                              messages while unlocked — the "clicks never work
                              under a locked session" root cause) */
 extern BOOL g_mouse_locked;
+
+/* how long an injected modifier stays down around the key it qualifies. TA
+   polls modifier state instead of reading it off the message, so an interleaved
+   up would race that poll — hold it a few frames instead. */
+#define MOD_HOLD_MS 150
 
 #define TA_MAINPP   0x00511DE8u
 #define OFF_EYEX    0x1431F
@@ -51,6 +62,12 @@ static int token_vk(const char* t)
 {
     if (!t[1] && t[0] >= 'a' && t[0] <= 'z') return 'A' + (t[0] - 'a');
     if (!t[1] && t[0] >= '0' && t[0] <= '9') return t[0];
+    if (!lstrcmpiA(t, "ctrl"))    return VK_CONTROL;
+    if (!lstrcmpiA(t, "shift"))   return VK_SHIFT;
+    if (!lstrcmpiA(t, "alt"))     return VK_MENU;
+    if (!lstrcmpiA(t, "lbutton")) return VK_LBUTTON;
+    if (!lstrcmpiA(t, "rbutton")) return VK_RBUTTON;
+    if (!lstrcmpiA(t, "mbutton")) return VK_MBUTTON;
     if (!lstrcmpiA(t, "space"))  return VK_SPACE;
     if (!lstrcmpiA(t, "return") || !lstrcmpiA(t, "enter")) return VK_RETURN;
     if (!lstrcmpiA(t, "escape") || !lstrcmpiA(t, "esc"))   return VK_ESCAPE;
@@ -69,26 +86,32 @@ static int token_vk(const char* t)
     return 0;
 }
 
-static void post_key(HWND w, int vk)
+static void tap_key(HWND w, int vk)
 {
-    UINT sc = MapVirtualKeyA((UINT)vk, 0 /* MAPVK_VK_TO_VSC */);
-    LPARAM down = 1 | ((LPARAM)sc << 16);
-    LPARAM up   = down | ((LPARAM)1 << 30) | ((LPARAM)1 << 31);
-    PostMessageA(w, WM_KEYDOWN, (WPARAM)vk, down);
-    PostMessageA(w, WM_KEYUP,   (WPARAM)vk, up);
+    tagpu_shield_key(w, vk, FALSE);
+    tagpu_shield_key(w, vk, TRUE);
 }
 
-/* SendInput path: real synthetic input through wine's input queue — updates
-   thread key state (GetKeyState works, so Ctrl+X combos land) and feeds the
-   game's normal mouse pipeline. No X involved. */
-static void si_key(int vk, int up)
+/* "ctrl+", "shift+", "alt+" prefix test (case-insensitive, no CRT dependency) */
+static int mod_prefix(const char* t, const char* name, int n)
 {
-    INPUT in; ZeroMemory(&in, sizeof in);
-    in.type = INPUT_KEYBOARD;
-    in.ki.wVk = (WORD)vk;
-    in.ki.wScan = (WORD)MapVirtualKeyA((UINT)vk, 0);
-    in.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
-    SendInput(1, &in, sizeof in);
+    for (int i = 0; i < n; i++) {
+        char a = t[i];
+        if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+        if (a != name[i]) return 0;
+    }
+    return t[n] == '+';
+}
+
+/* mouse button token -> the down/up pair that drives it */
+static int button_code(int vk, int up)
+{
+    switch (vk) {
+    case VK_LBUTTON: return up ? TAGPU_M_LUP : TAGPU_M_LDOWN;
+    case VK_RBUTTON: return up ? TAGPU_M_RUP : TAGPU_M_RDOWN;
+    case VK_MBUTTON: return up ? TAGPU_M_MUP : TAGPU_M_MDOWN;
+    }
+    return -1;
 }
 
 /* game px -> virtual-screen absolute (0..65535) via the live window rect and
@@ -109,6 +132,9 @@ static int game_to_abs(const TAGPU_FRAME* f, int gx, int gy, LONG* ax, LONG* ay)
     return 1;
 }
 
+/* SendInput path — used only while the shield is disarmed, and only for the
+   mouse: it drives wine's real input queue, which moves the human's pointer.
+   The keyboard equivalent is gone; the shield's tagged messages replace it. */
 static void si_mouse(const TAGPU_FRAME* f, int gx, int gy, DWORD buttons)
 {
     LONG ax, ay;
@@ -127,6 +153,20 @@ static void si_mouse(const TAGPU_FRAME* f, int gx, int gy, DWORD buttons)
 }
 
 static const TAGPU_FRAME* s_frame;   /* set per call for mouse tokens */
+
+/* injected click: move, press, release, then park the pointer at the centre of
+   the view — a click near a screen edge otherwise leaves the engine's memory
+   mouse there and it EDGE-SCROLLS forever. */
+static void inject_click(HWND w, int gx, int gy, int right)
+{
+    tagpu_shield_mouse(w, TAGPU_M_MOVE, gx, gy);
+    tagpu_shield_mouse(w, right ? TAGPU_M_RDOWN : TAGPU_M_LDOWN, gx, gy);
+    tagpu_shield_mouse(w, right ? TAGPU_M_RUP : TAGPU_M_LUP, gx, gy);
+
+    if (s_frame && s_frame->game_width > 0 && s_frame->game_height > 0)
+        tagpu_shield_mouse(w, TAGPU_M_MOVE,
+                           s_frame->game_width / 2, s_frame->game_height / 2);
+}
 
 static void do_keys(HWND hwnd)
 {
@@ -151,41 +191,53 @@ static void do_keys(HWND hwnd)
         *q = 0;
         if (*p) {
             int gx, gy, done = 1;
-            if (sscanf(p, "mouse:%d,%d", &gx, &gy) == 2)       si_mouse(s_frame, gx, gy, 0);
-            else if (sscanf(p, "click:%d,%d", &gx, &gy) == 2)  si_mouse(s_frame, gx, gy, 1);
-            else if (sscanf(p, "rclick:%d,%d", &gx, &gy) == 2) si_mouse(s_frame, gx, gy, 2);
-            else if (sscanf(p, "mouserel:%d,%d", &gx, &gy) == 2) {
-                INPUT in; ZeroMemory(&in, sizeof in);
-                in.type = INPUT_MOUSE; in.mi.dx = gx; in.mi.dy = gy;
-                in.mi.dwFlags = MOUSEEVENTF_MOVE;
-                SendInput(1, &in, sizeof in);
+            char tok[64];
+            int mods[4], nmods = 0;
+            const char* base = p;
+
+            /* stackable modifier prefixes: ctrl+d, ctrl+shift+2, alt+f4 */
+            while (nmods < 4) {
+                if (mod_prefix(base, "ctrl", 4))       { mods[nmods++] = VK_CONTROL; base += 5; }
+                else if (mod_prefix(base, "shift", 5)) { mods[nmods++] = VK_SHIFT;   base += 6; }
+                else if (mod_prefix(base, "alt", 3))   { mods[nmods++] = VK_MENU;    base += 4; }
+                else break;
             }
-            else if (sscanf(p, "pclick:%d,%d", &gx, &gy) == 2 ||
-                     sscanf(p, "prclick:%d,%d", &gx, &gy) == 2) {
-                /* posted click WITH position: client-coord lParam so the
-                   wndproc translation hands TA exact game coords (SendInput
-                   buttons carry wine's stale internal position instead) */
-                int rt = (p[0] == 'p' && (p[1] == 'r' || p[1] == 'R'));
-                if (s_frame && s_frame->game_width > 0 && s_frame->vp_w > 0) {
-                    int cx = s_frame->vp_x + (int)((gx + 0.5) * s_frame->vp_w / s_frame->game_width);
-                    int cy = s_frame->vp_y + (int)((gy + 0.5) * s_frame->vp_h / s_frame->game_height);
-                    LPARAM lp = MAKELPARAM(cx, cy);
-                    PostMessageA(hwnd, WM_MOUSEMOVE, 0, lp);
-                    PostMessageA(hwnd, rt ? WM_RBUTTONDOWN : WM_LBUTTONDOWN,
-                                 rt ? MK_RBUTTON : MK_LBUTTON, lp);
-                    PostMessageA(hwnd, rt ? WM_RBUTTONUP : WM_LBUTTONUP, 0, lp);
-                    /* park the game mouse at view centre afterwards — a click
-                       near a screen edge otherwise leaves the memory mouse
-                       there and the engine EDGE-SCROLLS forever */
-                    {
-                        int mx = s_frame->vp_x + s_frame->vp_w / 2;
-                        int my = s_frame->vp_y + s_frame->vp_h / 2;
-                        PostMessageA(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(mx, my));
-                    }
+
+            if (nmods) {
+                int vk = token_vk(base);
+                if (vk) {
+                    /* the modifiers stay down past the keystroke and are released
+                       by the frame hook — an interleaved up races TA's poll */
+                    for (int i = 0; i < nmods; i++)
+                        tagpu_shield_key_hold(hwnd, mods[i], MOD_HOLD_MS);
+                    tap_key(hwnd, vk);
+                } else done = 0;
+            }
+            else if (sscanf(p, "mouse:%d,%d", &gx, &gy) == 2) {
+                if (tagpu_shield_on()) tagpu_shield_mouse(hwnd, TAGPU_M_MOVE, gx, gy);
+                else si_mouse(s_frame, gx, gy, 0);
+            }
+            else if (sscanf(p, "click:%d,%d", &gx, &gy) == 2) {
+                if (tagpu_shield_on()) inject_click(hwnd, gx, gy, 0);
+                else si_mouse(s_frame, gx, gy, 1);
+            }
+            else if (sscanf(p, "rclick:%d,%d", &gx, &gy) == 2) {
+                if (tagpu_shield_on()) inject_click(hwnd, gx, gy, 1);
+                else si_mouse(s_frame, gx, gy, 2);
+            }
+            else if (sscanf(p, "mouserel:%d,%d", &gx, &gy) == 2) {
+                if (tagpu_shield_on()) tagpu_shield_mouse(hwnd, TAGPU_M_MOVEREL, gx, gy);
+                else {
+                    INPUT in; ZeroMemory(&in, sizeof in);
+                    in.type = INPUT_MOUSE; in.mi.dx = gx; in.mi.dy = gy;
+                    in.mi.dwFlags = MOUSEEVENTF_MOVE;
+                    SendInput(1, &in, sizeof in);
                 }
             }
+            else if (sscanf(p, "pclick:%d,%d", &gx, &gy) == 2)  inject_click(hwnd, gx, gy, 0);
+            else if (sscanf(p, "prclick:%d,%d", &gx, &gy) == 2) inject_click(hwnd, gx, gy, 1);
             else if (sscanf(p, "char:%c", (char*)&gx) == 1) {
-                PostMessageA(hwnd, WM_CHAR, (WPARAM)(char)gx, 1);
+                tagpu_shield_char(hwnd, (char)gx);
             }
             else if (!lstrcmpiA(p, "mouselock")) {
                 mouse_lock();
@@ -193,36 +245,37 @@ static void do_keys(HWND hwnd)
             }
             else if (!lstrcmpiA(p, "click") || !lstrcmpiA(p, "rclick")) {
                 int rt = (p[0] == 'r' || p[0] == 'R');
-                INPUT in; ZeroMemory(&in, sizeof in);
-                in.type = INPUT_MOUSE;
-                in.mi.dwFlags = rt ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
-                SendInput(1, &in, sizeof in);
-                in.mi.dwFlags = rt ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP;
-                SendInput(1, &in, sizeof in);
+                if (tagpu_shield_on()) {
+                    tagpu_shield_mouse(hwnd, button_code(rt ? VK_RBUTTON : VK_LBUTTON, 0),
+                                       TAGPU_M_HERE, TAGPU_M_HERE);
+                    tagpu_shield_mouse(hwnd, button_code(rt ? VK_RBUTTON : VK_LBUTTON, 1),
+                                       TAGPU_M_HERE, TAGPU_M_HERE);
+                } else {
+                    INPUT in; ZeroMemory(&in, sizeof in);
+                    in.type = INPUT_MOUSE;
+                    in.mi.dwFlags = rt ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
+                    SendInput(1, &in, sizeof in);
+                    in.mi.dwFlags = rt ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP;
+                    SendInput(1, &in, sizeof in);
+                }
             }
-            else if (p[0]=='c'&&p[1]=='t'&&p[2]=='r'&&p[3]=='l'&&p[4]=='+'&&p[5]&&!p[6]) {
-                /* posted interleaved ctrl combo (SendInput keys do not reach
-                   TA under the shield; posted messages do) */
-                int vk = token_vk(p + 5);
-                if (vk) {
-                    UINT scC = MapVirtualKeyA(VK_CONTROL, 0), scK = MapVirtualKeyA((UINT)vk, 0);
-                    PostMessageA(hwnd, WM_KEYDOWN, VK_CONTROL, 1 | ((LPARAM)scC << 16));
-                    PostMessageA(hwnd, WM_KEYDOWN, (WPARAM)vk, 1 | ((LPARAM)scK << 16));
-                    PostMessageA(hwnd, WM_KEYUP, (WPARAM)vk,
-                                 1 | ((LPARAM)scK << 16) | ((LPARAM)3 << 30));
-                    PostMessageA(hwnd, WM_KEYUP, VK_CONTROL,
-                                 1 | ((LPARAM)scC << 16) | ((LPARAM)3 << 30));
-                } else done = 0;
+            else if (sscanf(p, "down:%63s", tok) == 1 || sscanf(p, "up:%63s", tok) == 1) {
+                /* explicit hold/release: the only way to keep a key or a mouse
+                   button down across frames (drag-select, held modifiers) */
+                int up = (p[0] == 'u' || p[0] == 'U');
+                int vk = token_vk(tok), code;
+                if (!vk) done = 0;
+                else if ((code = button_code(vk, up)) >= 0)
+                    tagpu_shield_mouse(hwnd, code, TAGPU_M_HERE, TAGPU_M_HERE);
+                else
+                    tagpu_shield_key(hwnd, vk, up);
             }
             else if (sscanf(p, "keydown:%d", &gx) == 1 || sscanf(p, "keyup:%d", &gx) == 1) {
-                int up = (p[3] == 'u');
-                UINT sc = MapVirtualKeyA((UINT)gx, 0);
-                PostMessageA(hwnd, up ? WM_KEYUP : WM_KEYDOWN, (WPARAM)gx,
-                             1 | ((LPARAM)sc << 16) | (up ? ((LPARAM)3 << 30) : 0));
+                tagpu_shield_key(hwnd, gx, p[3] == 'u');
             }
             else {
                 int vk = token_vk(p);
-                if (vk) post_key(hwnd, vk); else done = 0;
+                if (vk) tap_key(hwnd, vk); else done = 0;
             }
             if (lo < (int)sizeof lg - 8)
                 lo += _snprintf(lg + lo, sizeof lg - lo, " %s%s", p, done ? "" : "?");
@@ -281,6 +334,11 @@ void tagpu_input_frame(const TAGPU_FRAME* f)
     /* eye hold: every frame (cheap open-fail when absent is the common path
        is wrong way round — probe with GetFileAttributes first) */
     static int eyeHold = 0;
+
+    /* every frame: held modifiers must be released on time, not on the next
+       15-frame token poll */
+    tagpu_shield_frame((HWND)f->hwnd);
+
     if (f->frame_counter - last >= 15) {
         last = f->frame_counter;
         s_frame = f;

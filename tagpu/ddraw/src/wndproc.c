@@ -14,6 +14,7 @@
 #include "utils.h"
 #include "debug.h"
 #include "versionhelpers.h"
+#include "tagpu_shield.h"
 
 
 LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -39,6 +40,13 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
     static BOOL in_size_move = FALSE;
     static int redraw_count = 0;
+
+    /* tagpu input firewall: delivers our tagged injections, and swallows every
+       hardware key/mouse message while armed (inc/tagpu_shield.h) */
+    LRESULT shielded = 0;
+
+    if (tagpu_shield_wndproc(hWnd, uMsg, wParam, lParam, &shielded))
+        return shielded;
 
     switch (uMsg)
     {
@@ -103,7 +111,8 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     }
     case WM_NCHITTEST:
     {
-        if (g_mouse_locked || g_config.devmode)
+        /* the shielded game must not learn where the human's pointer is */
+        if ((g_mouse_locked || g_config.devmode) && !tagpu_shield_on())
         {
             POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
 

@@ -24,6 +24,7 @@
 #include "directinput.h"
 #include "ddpalette.h"
 #include "palette.h"
+#include "tagpu_shield.h"
 
 
 BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
@@ -38,7 +39,11 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 
     realpt = pt;
 
-    if ((g_mouse_locked || g_config.devmode || g_ddraw.bnet_active) && 
+    /* Armed shield: the game polls this ~700x a launch, and every one of those
+       polls would otherwise report the human's pointer. Fall through to the
+       injected cursor below instead (tagpu_shield.h). */
+    if ((g_mouse_locked || g_config.devmode || g_ddraw.bnet_active) &&
+        !tagpu_shield_on() &&
         (!g_config.windowed || real_ScreenToClient(g_ddraw.hwnd, &pt)))
     {
         int x = max(pt.x - g_ddraw.mouse.x_adjust, 0);
@@ -959,6 +964,15 @@ HDC WINAPI fake_BeginPaint(HWND hWnd, LPPAINTSTRUCT lpPaint)
 
 SHORT WINAPI fake_GetKeyState(int nVirtKey)
 {
+    SHORT injected;
+
+    /* the armed shield answers every poll from the injected state — this is what
+       makes ctrl/shift combos land, and it holds whether or not we have focus */
+    if (tagpu_shield_key_state(nVirtKey, FALSE, &injected))
+    {
+        return injected;
+    }
+
     if (g_config.windowed && g_ddraw.ref && g_ddraw.hwnd && !util_in_foreground())
     {
         return 0;
@@ -969,6 +983,13 @@ SHORT WINAPI fake_GetKeyState(int nVirtKey)
 
 SHORT WINAPI fake_GetAsyncKeyState(int vKey)
 {
+    SHORT injected;
+
+    if (tagpu_shield_key_state(vKey, TRUE, &injected))
+    {
+        return injected;
+    }
+
     if (g_config.windowed && g_ddraw.ref && g_ddraw.hwnd && !util_in_foreground())
     {
         return 0;

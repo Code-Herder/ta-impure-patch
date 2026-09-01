@@ -26,10 +26,12 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    already solved for mode switches — see decisions memory "THE BIG CATCH" entry), then
    tacli, then skills. DoD: windowed instance renders game + native pass, input tokens
    land, both shot triggers work, two instances side-by-side with the desktop usable.
-2. **Phase 1.1 — input firewall** (in-fork): wndproc drops hardware kbd/mouse when armed;
-   injector posts tagged `WM_APP` codes translated in wndproc; `GetCursorPos`/`GetKeyState`
-   IAT-virtualized to injected state. Kills human-crosstalk AND makes ctrl/shift combos
-   scriptable (TA polls modifiers — the old "ctrl-d never lands" gap).
+2. **Phase 1.1 — input firewall** — **DONE 2026-09-01**, exactly as scoped: wndproc drops
+   hardware kbd/mouse when armed; injector posts tagged `WM_APP` codes translated in
+   wndproc; `GetCursorPos`/`GetKeyState`/`GetAsyncKeyState` answered from injected state.
+   Human crosstalk measured away, and `ctrl+d` self-destructed a selected commander —
+   the old "ctrl-d never lands" gap is closed. Full write-up: **`input-firewall.md`**.
+   Shield is **on by default** (`tacli shield <name> off` hands the game to the human).
 3. **Phase 1.2 (opportunistic)**: trace `-b` battleroom words (`truelos`/`permlos`/
    `mapping`/`fixedloc`/…, table in `cmdline-options.md`) for registry-free rule presets.
 

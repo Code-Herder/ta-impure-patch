@@ -48,8 +48,22 @@ ROOT = repo_root()
 TAGPU = ROOT / "tagpu"
 TEMPLATE_GAMEDIR = TAGPU / "gamedir"
 TEMPLATE_PREFIX = ROOT / "wineprefix"
-BUILT_DLL = TAGPU / "ddraw" / "ddraw.dll"
 INSTANCES = TAGPU / "instances"
+
+
+def built_dll() -> Path:
+    """The fork build to pin into instances.
+
+    The runtime lives in the main checkout, but the *source being developed* lives
+    in whatever tree this tacli was run from: a worktree builds its own
+    tagpu/ddraw/ddraw.dll and must launch with it, or you spend an hour testing
+    the main checkout's binary and wondering why your change did nothing.
+    """
+    local = Path(__file__).resolve().parent.parent / "tagpu" / "ddraw" / "ddraw.dll"
+    return local if local.exists() else TAGPU / "ddraw" / "ddraw.dll"
+
+
+BUILT_DLL = built_dll()
 
 # Files that must never be shared between instances: each gets its own real copy,
 # everything else in the Steam dir is symlinked.
@@ -241,7 +255,8 @@ class Instance:
 
 # --------------------------------------------------------------------------- create
 
-def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, verbose=False):
+def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=True,
+                   verbose=False):
     """Symlink-mirror the template gamedir, with instance-private config files."""
     inst.gamedir.mkdir(parents=True, exist_ok=True)
     (inst.gamedir / "Screenshots").mkdir(exist_ok=True)
@@ -284,7 +299,23 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, verbose=
     # Never steal the human's pointer: the game snaps and fences the real cursor on
     # activation otherwise (fork honours this trigger, see mouse.c).
     (inst.gamedir / "tagpu_nowarp.on").write_text("")
+    set_shield(inst, shield)
     deploy_dll(inst)
+
+
+def set_shield(inst: Instance, on: bool):
+    """Input firewall: the game ignores the real keyboard and mouse entirely, and
+    only sees what we inject (fork: tagpu_shield.c). On by default so the human
+    can click through a running instance without perturbing it."""
+    path = inst.gamedir / "tagpu_shield.on"
+    if on:
+        path.write_text("")
+    else:
+        path.unlink(missing_ok=True)
+
+
+def shield_state(inst: Instance) -> bool:
+    return (inst.gamedir / "tagpu_shield.on").exists()
 
 
 def write_ddraw_ini(inst: Instance, tile):
@@ -434,10 +465,14 @@ def cmd_create(args):
     index = args.slot
     if index is None:
         index = next(i for i in range(64) if i not in taken)
-    res = tuple(args.res)
+    # `launch <new-name>` reaches here with res unset (its --res defaults to None so
+    # that relaunching an existing instance keeps the recorded resolution).
+    res = tuple(args.res or DEFAULT_RES)
     tile = tile_for(index, res)
+    shield = args.shield is not False
     clone_prefix(inst)
-    mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile)
+    mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
+                   shield=shield)
     meta = {
         "name": args.name,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -446,6 +481,7 @@ def cmd_create(args):
         "tile": list(tile),
         "sound": bool(args.sound),
         "intro": bool(args.intro),
+        "shield": shield,
         "display": args.display or default_display(),
         "gamedir": str(inst.gamedir),
         "prefix": str(inst.prefix),
@@ -454,7 +490,8 @@ def cmd_create(args):
     apply_prefix_settings(inst, res, sound=args.sound)
     out(meta, args.json, human=f"created instance {args.name} "
                                f"({res[0]}x{res[1]}, window at {tile[0]},{tile[1]}, "
-                               f"sound={'on' if args.sound else 'off'})")
+                               f"sound={'on' if args.sound else 'off'}, "
+                               f"shield={'on' if shield else 'off'})")
 
 
 def cmd_launch(args):
@@ -475,6 +512,10 @@ def cmd_launch(args):
         meta["sound"] = args.sound
         inst.save_meta(meta)
         write_totala_ini(inst, args.sound)
+    if args.shield is not None:
+        meta["shield"] = args.shield
+        inst.save_meta(meta)
+    set_shield(inst, meta.get("shield", True))
     if not args.keep_dll:
         deploy_dll(inst)
     apply_prefix_settings(inst, tuple(meta["res"]), sound=meta.get("sound", False))
@@ -520,10 +561,11 @@ def cmd_launch(args):
     inst.save_meta(meta)
     res = {"name": args.name, "pid": pid, "launcher_pid": proc.pid,
            "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
-           "pointer_restored": restored}
+           "shield": shield_state(inst), "pointer_restored": restored}
     out(res, args.json,
         human=(f"launched {args.name} pid={pid} window={win[0] if win else 'pending'} "
-               f"at {win[1] if win else '?'},{win[2] if win else '?'}"))
+               f"at {win[1] if win else '?'},{win[2] if win else '?'} "
+               f"shield={'on' if res['shield'] else 'off'}"))
 
 
 def cmd_ls(args):
@@ -535,6 +577,7 @@ def cmd_ls(args):
         meta["pid"] = pid
         meta["running"] = pid is not None
         meta["window"] = inst.window() if pid else None
+        meta["shield"] = shield_state(inst)   # the trigger file is the truth
         rows.append(meta)
     if args.json:
         out(rows, True)
@@ -543,7 +586,9 @@ def cmd_ls(args):
     else:
         for m in rows:
             state = f"running pid={m['pid']}" if m["running"] else "stopped"
-            print(f"{m['name']:<16} {m['res'][0]}x{m['res'][1]:<6} {state:<20} {m['gamedir']}")
+            shield = "shield" if m["shield"] else "OPEN"
+            print(f"{m['name']:<16} {m['res'][0]}x{m['res'][1]:<6} {state:<20} "
+                  f"{shield:<7} {m['gamedir']}")
 
 
 def _write_tokens(inst: Instance, tokens: str):
@@ -577,6 +622,22 @@ def cmd_eye(args):
     path.write_text(f"{args.x} {args.y}\n")
     out({"name": args.name, "eye": [args.x, args.y]}, args.json,
         human=f"camera held at {args.x},{args.y} (tacli eye {args.name} --release to free)")
+
+
+def cmd_shield(args):
+    """Arm/disarm the input firewall, live — a running game picks it up in <=15 frames."""
+    inst = Instance(args.name)
+    meta = inst.meta()
+    if args.state is not None:
+        on = args.state == "on"
+        set_shield(inst, on)
+        meta["shield"] = on
+        inst.save_meta(meta)
+    on = shield_state(inst)
+    out({"name": args.name, "shield": on}, args.json,
+        human=(f"{args.name}: hardware input BLOCKED (only tacli drives it)" if on else
+               f"{args.name}: hardware input allowed — the human's keyboard and mouse "
+               f"reach the game"))
 
 
 def cmd_arm(args):
@@ -662,12 +723,15 @@ def cmd_roster(args):
     lines = path.read_bytes().decode("utf-8", "replace").splitlines()
     units, eye = [], None
     for line in reversed(lines):
-        m = re.match(r"\s*u(\d+)\s+(\S+)\s+own=(\d+)\s+\((-?\d+),(-?\d+)\)"
-                     r"\s+screen\s*\((-?\d+),(-?\d+)\)", line)
+        # overlay format: "  u001 ARMCOM  own=0 world=(x,y,height) screen=(sx,sy) nano=.."
+        # world x,y are the eye plane (what `tacli eye` takes); the third is height.
+        m = re.match(r"\s*u(\d+)\s+(\S+)\s+own=(\d+)\s+world=\((-?\d+),(-?\d+),(-?\d+)\)"
+                     r"\s+screen=\((-?\d+),(-?\d+)\)", line)
         if m:
             units.append({"id": int(m.group(1)), "type": m.group(2), "owner": int(m.group(3)),
                           "world": [int(m.group(4)), int(m.group(5))],
-                          "screen": [int(m.group(6)), int(m.group(7))]})
+                          "height": int(m.group(6)),
+                          "screen": [int(m.group(7)), int(m.group(8))]})
         elif line.startswith("units:"):
             e = re.search(r"eye=?\(?(-?\d+)[, ]+(-?\d+)", line)
             if e:
@@ -759,6 +823,8 @@ def build_parser():
     add_launchish(c, default_res=DEFAULT_RES)
     c.add_argument("--sound", action="store_true", help="enable sound (default: silent)")
     c.add_argument("--intro", action="store_true", help="keep the intro movies")
+    c.add_argument("--no-shield", dest="shield", action="store_false", default=None,
+                   help="let hardware keyboard/mouse reach the game (default: blocked)")
     c.add_argument("--force", action="store_true")
     c.set_defaults(func=cmd_create)
 
@@ -768,6 +834,9 @@ def build_parser():
     l.add_argument("--sound", dest="sound", action="store_true", default=None)
     l.add_argument("--no-sound", dest="sound", action="store_false")
     l.add_argument("--intro", action="store_true")
+    l.add_argument("--shield", dest="shield", action="store_true", default=None,
+                   help="block hardware keyboard/mouse (the default)")
+    l.add_argument("--no-shield", dest="shield", action="store_false")
     l.add_argument("--map", help="skirmish map name, e.g. 'Two Continents'")
     l.add_argument("--player", action="append",
                    help="N:controller[:side[:color]] (controller 0=off 1=human 2=AI)")
@@ -805,6 +874,13 @@ def build_parser():
     e.add_argument("y", type=int, nargs="?", default=0)
     e.add_argument("--release", action="store_true")
     e.set_defaults(func=cmd_eye)
+
+    sd = sub.add_parser("shield", help="input firewall: block the hardware keyboard/mouse")
+    add_common(sd)
+    sd.add_argument("name")
+    sd.add_argument("state", nargs="?", choices=["on", "off"],
+                    help="omit to report the current state")
+    sd.set_defaults(func=cmd_shield)
 
     a = sub.add_parser("arm", help="set/clear trigger files, e.g. native.on=all owndraw.on")
     add_common(a)
