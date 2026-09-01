@@ -601,11 +601,42 @@ def cmd_ls(args):
                   f"{shield:<7} {m['gamedir']}")
 
 
-def _write_tokens(inst: Instance, tokens: str):
-    """Append tokens to the in-process input file (consumed once by the game)."""
+# The fork reads tagpu_keys.txt in one bounded gulp and deletes it, so a batch
+# larger than its buffer loses its tail with the file. Split below that.
+KEYS_BATCH = 900
+
+
+def _write_tokens(inst: Instance, tokens: str, timeout: float = 5.0):
+    """Append tokens to the in-process input file (consumed once by the game).
+
+    `ui fill` can emit a token per character plus a backspace per character
+    already in the field, which overruns a single batch. Long batches are split
+    and each piece waits for the game to swallow the one before it, so the tail
+    is never silently dropped.
+    """
     path = inst.gamedir / "tagpu_keys.txt"
-    with open(path, "a") as f:
-        f.write(tokens.strip() + "\n")
+    words = tokens.split()
+    if not words:
+        return
+
+    batches, cur = [], ""
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > KEYS_BATCH:
+            batches.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}" if cur else w
+    batches.append(cur)
+
+    for batch in batches:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            pending = path.stat().st_size if path.exists() else 0
+            if pending + len(batch) + 1 <= KEYS_BATCH:
+                break
+            time.sleep(0.05)
+        with open(path, "a") as f:
+            f.write(batch + "\n")
 
 
 def cmd_keys(args):
@@ -941,13 +972,40 @@ def _ui_state(g: dict) -> str:
     if kind == "cycle":
         return f"{g.get('stage')}/{g.get('stages')}"
     if kind == "list":
-        return f"sel={g.get('selected')} items=?"
+        items = g.get("items")
+        n = "?" if items is None else len(items)
+        return f"sel={g.get('selected')} n={n}"
     if kind == "slider":
-        return "value=?"
+        return f"value={g.get('value')}/{g.get('range')}"
     if kind == "field":
         text = (g.get("text") or "")[:20]
         return f'"{text}"'
     return "ok"
+
+
+def _ui_groups(snap: dict) -> dict:
+    """assoc -> the gadgets that share it, but only where assoc means something.
+
+    Every gadget carries an assoc, so tagging all of them would put a number on
+    every row and say nothing. It only carries information where the engine acts
+    on it: the radio reset at 0x4A6A40 clears every toggle sharing an assoc, and
+    GUI_SliderUpdate binds a scrollbar to the listbox with the same assoc. Those
+    are the two groups worth showing.
+    """
+    by_assoc = {}
+    for g in snap.get("gadgets") or []:
+        by_assoc.setdefault(g.get("assoc"), []).append(g)
+
+    groups = {}
+    for assoc, members in by_assoc.items():
+        if not assoc:
+            continue
+        toggles = [g for g in members if _ui_kind(g) in ("toggle", "cycle")]
+        scroll = ([g for g in members if g["type"] == "slider"]
+                  and [g for g in members if g["type"] == "listbox"])
+        if len(toggles) > 1 or scroll:
+            groups[assoc] = members
+    return groups
 
 
 def _ui_screen(snap: dict) -> str:
@@ -984,15 +1042,27 @@ def _ui_render(snap: dict, show_all: bool = False) -> str:
         lines.append("  ".join(binds))
 
     rows = [g for g in snap["gadgets"] if show_all or g["type"] in UI_ACTIONABLE]
+    groups = _ui_groups(snap)
     if rows:
-        lines.append(f"{'#':>3}  {'type':<8} {'name':<16} {'click':<11} {'state':<12} key")
+        head = f"{'#':>3}  {'type':<8} {'name':<16} {'click':<11} {'state':<14} key"
+        lines.append(head + ("  grp" if groups else ""))
         for g in rows:
             x, y = g["click"]
+            grp = f"  {g['assoc']}" if g.get("assoc") in groups else ""
             lines.append(f"{g['i']:>3}  {_ui_kind(g):<8} {g['name']:<16} "
-                         f"{f'{x},{y}':<11} {_ui_state(g):<12} "
-                         f"{_ui_keyname(g.get('quickkey') or 0) or ''}")
+                         f"{f'{x},{y}':<11} {_ui_state(g):<14} "
+                         f"{_ui_keyname(g.get('quickkey') or 0) or '':<3}{grp}")
     else:
         lines.append("(no interactive gadgets on this screen — try --all)")
+
+    for g in snap["gadgets"]:
+        if g["type"] != "listbox":
+            continue
+        if g.get("items") is None:
+            lines.append(f"{g['name']}: items unknown — this is a picture list "
+                         f"(attribs {g.get('attribs')}), its entries carry no text")
+        else:
+            lines.append(f"{g['name']}: " + _ui_item_line(g))
 
     if not show_all:
         seen = {}
@@ -1002,6 +1072,15 @@ def _ui_render(snap: dict, show_all: bool = False) -> str:
         if seen:
             lines.append("text: " + " / ".join(seen))
     return "\n".join(lines)
+
+
+def _ui_item_line(g: dict, limit: int = 8) -> str:
+    """One line of listbox items, marking the selected one. `show` prints them all."""
+    items = g.get("items") or []
+    sel = g.get("selected")
+    shown = [f"{'*' if i == sel else ''}{i} {t}" for i, t in enumerate(items[:limit])]
+    tail = f" … +{len(items) - limit} more" if len(items) > limit else ""
+    return (" · ".join(shown) or "(empty)") + tail
 
 
 def _ui_match(snap: dict, selector: str):
@@ -1020,6 +1099,54 @@ def _ui_match(snap: dict, selector: str):
         want = want.lower()
         hits = [g for g in hits if g["type"] == want or _ui_kind(g) == want]
     return hits
+
+
+def _ui_item_index(g: dict, selector: str) -> int:
+    """Which row of a listbox a selector names. Strict, like a gadget selector."""
+    items = g.get("items") or []
+    if selector.startswith("#"):
+        try:
+            idx = int(selector[1:])
+        except ValueError:
+            die(f"bad item index {selector!r}")
+        if not 0 <= idx < len(items):
+            die(f'{g["name"]} has {len(items)} items, so #{idx} does not exist')
+        return idx
+
+    hits = [i for i, t in enumerate(items) if t.strip().lower() == selector.lower()]
+    if not hits:
+        listing = ", ".join(f"#{i} {t}" for i, t in enumerate(items)) or "(empty)"
+        die(f'no item "{selector}" in {g["name"]}. items: {listing}')
+    if len(hits) > 1:
+        die(f'item "{selector}" appears {len(hits)} times in {g["name"]} '
+            f"({', '.join(f'#{i}' for i in hits)}) — use #index")
+    return hits[0]
+
+
+def _ui_row_click(g: dict, idx: int):
+    """Where to click to hit row `idx`, or a reason it cannot be reached.
+
+    The engine draws rows at a fixed pitch from the top of the gadget
+    (`rect.y + 2 + k*pitch`, 0x4A1D50), so only the rows currently scrolled into
+    view exist as click targets. Like `--page` for build menus, that is reported
+    rather than worked around: a session that silently scrolls stops being
+    reproducible.
+    """
+    pitch = g.get("rowpitch") or 0
+    x, y, w, h = g["rect"]
+    top = g.get("top") or 0
+
+    if pitch <= 0:
+        return None, (f'{g["name"]}: the engine\'s row pitch is not readable '
+                      "(no itemheight and no GUI font), so a row cannot be placed")
+
+    visible = max((h - 2) // pitch, 1)
+    if not top <= idx < top + visible:
+        return None, (f'item #{idx} of {g["name"]} is scrolled out of view '
+                      f"(showing #{top}..#{min(top + visible, len(g.get('items') or [])) - 1}"
+                      f" of {len(g.get('items') or [])})")
+
+    return (x + w // 2, y + 2 + (idx - top) * pitch + pitch // 2), None
 
 
 def _ui_resolve(inst: Instance, selector: str, timeout: float,
@@ -1079,6 +1206,34 @@ def _ui_settle(inst: Instance, before: dict, g: dict, timeout: float = UI_SETTLE
         time.sleep(0.1)
 
 
+def _ui_settle_item(inst: Instance, before: dict, g: dict, idx: int,
+                    timeout: float = UI_SETTLE):
+    """Wait for a listbox selection to land on `idx`, or for the screen to move on."""
+    deadline = time.time() + timeout
+    while True:
+        snap = _ui_snapshot(inst)
+        if snap.get("gui") != before.get("gui"):
+            return snap, f"screen {before.get('gui')} -> {snap.get('gui')}"
+        now = _ui_match(snap, g["name"])
+        if len(now) == 1 and now[0].get("selected") == idx:
+            was = g.get("selected")
+            return snap, (f"selection {was} -> {idx}" if was != idx
+                          else f"selection holds at {idx}")
+        if time.time() >= deadline:
+            return snap, None
+        time.sleep(0.1)
+
+
+def _ui_label_diff(before: dict, after: dict):
+    """Label text present after an action and not before it — what a hover reveals."""
+    def labels(snap):
+        return [g["text"].strip() for g in snap.get("gadgets") or []
+                if g["type"] == "label" and (g.get("text") or "").strip()]
+
+    was = set(labels(before))
+    return [t for t in dict.fromkeys(labels(after)) if t not in was]
+
+
 def _ui_click_gadget(inst: Instance, g: dict, before: dict, settle: bool = True):
     x, y = g["click"]
     _write_tokens(inst, f"pclick:{x},{y}")
@@ -1133,7 +1288,10 @@ def cmd_ui(args):
         if len(rest) != 1:
             die("usage: ui <name> show <selector>")
         snap, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait, actionable=False)
-        human = "\n".join(f"{k:<12} {v}" for k, v in g.items())
+        human = "\n".join(
+            f"{k:<12} " + ("\n".join(f"{'':<12} #{i} {t}" for i, t in enumerate(v)).strip()
+                            if k == "items" and v else str(v))
+            for k, v in g.items())
         out({"gui": snap["gui"], "gadget": g}, args.json,
             human=f"gui {snap['gui']}\n{human}")
         return
@@ -1218,9 +1376,51 @@ def cmd_ui(args):
         after = _ui_snapshot(inst)
         hits = _ui_match(after, g["name"])
         got = hits[0].get("text") if len(hits) == 1 else None
-        note = "" if got == text else f" (field now reads {got!r} — expected {text!r})"
+        note = "" if got == text else (
+            f" (field now reads {got!r}, not {text!r} — TA validates what a field "
+            "accepts and drops the rest)")
         out({"name": g["name"], "text": got, "wanted": text}, args.json,
             human=f"filled {g['name']}{note}")
+        return
+
+    if verb == "select":
+        if len(rest) != 2:
+            die("usage: ui <name> select <listbox> <item|#index>")
+        before, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait)
+        if g["type"] != "listbox":
+            die(f'{g["name"]} is a {_ui_kind(g)}, not a list')
+        if g.get("items") is None:
+            die(f'{g["name"]} is a picture list (attribs {g.get("attribs")}): its '
+                "entries carry no text, so there is nothing to select by name")
+
+        idx = _ui_item_index(g, rest[1])
+        point, why = _ui_row_click(g, idx)
+        if point is None:
+            die(why)
+
+        _write_tokens(inst, f"pclick:{point[0]},{point[1]}")
+        after, how = _ui_settle_item(inst, before, g, idx)
+        text = g["items"][idx]
+        msg = f'selected #{idx} "{text}" in {g["name"]} at {point[0]},{point[1]}'
+        msg += f" — {how}" if how else " — delivered (selection did not move)"
+        out({"list": g["name"], "index": idx, "item": text, "at": list(point),
+             "confirm": how, "gui": after.get("gui")}, args.json, human=msg)
+        return
+
+    if verb == "hover":
+        if len(rest) != 1:
+            die("usage: ui <name> hover <selector>")
+        before, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait, actionable=False)
+        x, y = g["click"]
+        _write_tokens(inst, f"pmove:{x},{y}")
+        time.sleep(0.4)
+        after = _ui_snapshot(inst)
+        revealed = _ui_label_diff(before, after)
+        msg = f"hovering {g['name']} at {x},{y}"
+        msg += ("\nrevealed: " + " / ".join(revealed)) if revealed else \
+               " — no label text changed"
+        out({"hover": g["name"], "at": [x, y], "revealed": revealed}, args.json,
+            human=msg)
         return
 
     if verb == "press":
@@ -1238,29 +1438,31 @@ def cmd_ui(args):
              "gui": after.get("gui")}, args.json, human=msg)
         return
 
-    die(f"unknown ui verb {verb!r} "
-        "(snapshot show click set check uncheck fill press wait)")
+    die(f"unknown ui verb {verb!r} (snapshot show click set check uncheck "
+        "select hover fill press wait)")
 
 
 def _ui_text_tokens(text: str):
     """Text -> `tacli keys` tokens, refusing what the input layer cannot type.
 
-    The token vocabulary is letters, digits and named keys (tagpu_input.c), so
-    punctuation has no representation. Saying so beats typing something else.
+    Every character goes as `char:`, the WM_CHAR token, rather than as a key
+    token. A key token carries a modifier the shield deliberately *holds* for
+    150 ms because TA polls it, so `shift+c` in a batch capitalises everything
+    typed behind it — "Claude" arrives as "CLAUDE". WM_CHAR carries the
+    character with no modifier state at all, which is what a text field wants.
+
+    Which characters a field then keeps is TA's business, not ours: the
+    save-name field accepts letters, digits, space and underscore and silently
+    drops the rest, so `fill` reports what the field ended up holding.
     """
     tokens = []
     for ch in text:
         if ch == " ":
             tokens.append("space")
-        elif ch.islower() and ch.isascii() and ch.isalpha():
-            tokens.append(ch)
-        elif ch.isupper() and ch.isascii() and ch.isalpha():
-            tokens.append(f"shift+{ch.lower()}")
-        elif ch.isascii() and ch.isdigit():
-            tokens.append(ch)
+        elif ch.isascii() and ch.isprintable():
+            tokens.append(f"char:{ch}")
         else:
-            die(f"cannot type {ch!r}: the input layer has tokens for letters, "
-                "digits and named keys only")
+            die(f"cannot type {ch!r}: the input layer carries printable ASCII only")
     return tokens
 
 
@@ -1414,7 +1616,7 @@ def build_parser():
     u.add_argument("name")
     u.add_argument("verb", nargs="?", default="snapshot",
                    help="snapshot (default) | show | click | set | check | uncheck "
-                        "| fill | press | wait")
+                        "| select | hover | fill | press | wait")
     u.add_argument("rest", nargs="*", help="selector, then a value for set/fill")
     u.add_argument("--all", action="store_true",
                    help="snapshot: include decorative gadgets (labels, pictures, surfaces)")

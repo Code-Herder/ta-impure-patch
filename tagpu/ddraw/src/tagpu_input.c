@@ -176,7 +176,11 @@ static void inject_click(HWND w, int gx, int gy, int right)
 
 static void do_keys(HWND hwnd)
 {
-    char buf[256]; DWORD n = 0;
+    /* One `tacli ui fill` can emit a token per character plus a backspace per
+       character already in the field, so 256 bytes is not enough headroom: an
+       over-long batch used to be silently truncated and its tail deleted with
+       the file. */
+    char buf[1024]; DWORD n = 0;
     HANDLE h = CreateFileA("tagpu_keys.txt", GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -242,6 +246,11 @@ static void do_keys(HWND hwnd)
             }
             else if (sscanf(p, "pclick:%d,%d", &gx, &gy) == 2)  inject_click(hwnd, gx, gy, 0);
             else if (sscanf(p, "prclick:%d,%d", &gx, &gy) == 2) inject_click(hwnd, gx, gy, 1);
+            /* injected move with no click and no parking: what a hover is. The
+               plain "mouse:" token falls back to SendInput when the shield is
+               down, which would drag the human's real pointer. */
+            else if (sscanf(p, "pmove:%d,%d", &gx, &gy) == 2)
+                tagpu_shield_mouse(hwnd, TAGPU_M_MOVE, gx, gy);
             else if (sscanf(p, "char:%c", (char*)&gx) == 1) {
                 tagpu_shield_char(hwnd, (char)gx);
             }
@@ -283,8 +292,15 @@ static void do_keys(HWND hwnd)
                 int vk = token_vk(p);
                 if (vk) tap_key(hwnd, vk); else done = 0;
             }
-            if (lo < (int)sizeof lg - 8)
-                lo += _snprintf(lg + lo, sizeof lg - lo, " %s%s", p, done ? "" : "?");
+            /* _snprintf returns -1 when it truncates, so the cursor has to be
+               re-clamped or a long batch walks it backwards off the buffer. */
+            if (lo >= 0 && lo < (int)sizeof lg - 8)
+            {
+                int w = _snprintf(lg + lo, sizeof lg - lo - 1, " %s%s", p,
+                                  done ? "" : "?");
+                lo = (w < 0) ? (int)sizeof lg : lo + w;
+                lg[sizeof lg - 1] = 0;
+            }
         }
         if (last) break;
         p = q + 1;

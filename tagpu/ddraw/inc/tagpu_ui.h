@@ -28,8 +28,12 @@
    top GUI is interactive; the ones below it are reported by name only, as a
    breadcrumb.
 
-   Coordinates are absolute game-space — the same space tacli's injected clicks
-   take — so the click point of a gadget is simply its rect centre. */
+   Gadget coordinates are relative to the panel record's own origin, in game
+   space — the space tacli's injected clicks take, with no scaling anywhere.
+   Shell menus are full-screen panels at (0,0) so their gadgets read as
+   absolute, but the in-game build panel sits at (0,128) and everything in it
+   shifts down by that. The emitted rect and click point are already in screen
+   space; "panel" keeps the raw origin. */
 
 void tagpu_ui_frame(const TAGPU_FRAME* f);
 

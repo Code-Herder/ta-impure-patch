@@ -18,7 +18,7 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
 | Input | Existing in-process file protocol (`tagpu_keys.txt`/`tagpu_eye.txt`, WM_* posts) — already per-gamedir and display-independent. CLI wraps it. xdotool era stays dead. |
 | TA `-d` switch | **Off-limits** (engine windowed mode likely bypasses the ddraw path our stack lives in). cnc-ddraw windowed is the one true mode. |
 | CLI | `tools/tacli`, Python 3 stdlib-only. Full driving surface v1: `launch ls keys click eye shot glshot video log roster wait stop rm`, JSON output, instance ids, `--map`/AI/LOS/speed skirmish presets via registry. Paths anchored at the **main checkout** (worktree-safe), env-overridable. `ddraw.dll` **copied** (pinned) into each instance at launch — rebuilds never corrupt running games. |
-| UI layer | **`tacli ui` — Playwright-CLI model over TA's own gadget tree** (`main+0x531 → ControlsAry`, stride `0x15B`). On-demand snapshot only (trigger → `tagpu_ui.json`), never periodic. Act **by gadget name** with strict mode (duplicate = error, not first-match); actuation is a **synthesized click** through the existing input path, never an engine call; Playwright-style **auto-wait + actionability** (exists · `active` · not `grayedout` · top GUI) and **post-action settle**; `UIChange_f` confirms the click landed. Verbs `click set fill press wait show`. Full RE backing: **`gui-gadgets.md`**. |
+| UI layer | **`tacli ui` — Playwright-CLI model over TA's own gadget tree** (`main+0x531 → ControlsAry`, stride `0x15B`). On-demand snapshot only (trigger → `tagpu_ui.json`), never periodic. Act **by gadget name** with strict mode (duplicate = error, not first-match); actuation is a **synthesized click** through the existing input path, never an engine call; Playwright-style **auto-wait + actionability** (exists · `active` · not `grayedout` · top GUI) and **post-action settle**; `UIChange_f` confirms the click landed. Verbs `click set check uncheck select hover fill press wait show`. Full RE backing: **`gui-gadgets.md`**. |
 | Skills | New **`ta-drive`** repo skill = agent-facing workflow (launch→drive→observe→stop, one instance per session). `ta-capture` slimmed to instance-aware capture; deprecated xdotool sections removed. |
 
 ## Phases
@@ -93,9 +93,64 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
      existed.
    - **`quickkey` is a `u8` ASCII accelerator**, not the `i16` the corpus declares.
 
-   Still open (phase C, unchanged): listbox items and slider values. `help` (`+0x33`) read
-   empty on every screen tested and `grayedout` never non-zero — TA expresses at least
-   some unavailability through `active` instead (`SINGLE.GUI`'s `AnyMsn`).
+   Also corrected in the locked text above: the **Actuation** bullet's "rects are absolute
+   game-space" is what the design assumed; the live run replaced it with the panel-relative
+   rule, and the fork applies the transform before reporting.
+
+5. **Phase 1.3c — the deferrals closed** — **DONE 2026-09-01**, same day, second live
+   pass. Everything listed as "still open" above is now resolved and verified on a running
+   instance. Evidence: `gui-gadgets.md` §2.4–2.6, §7, §7.1, §9.
+
+   - **Listbox items ship.** There was never a node structure to reverse: `0x4B6AF0` walks
+     a **flat blob** at `+0xC2` counting `\0`/`\n`, with the count in `+0xC0`. Items are
+     rendered in the snapshot and `ui select <list> <item|#index>` clicks the row.
+     The **picture** flavour (`attribs & 0xA0`, entries at `+0xC6`) carries no text at
+     all, so it stays `items: null` — and an *empty* text list is now `[]`, which is a
+     different answer and is reported differently. Verified on `SELPROV`'s four
+     DirectPlay providers and on `LOADGAME`'s save list, empty and non-empty.
+   - **Slider values ship.** The value is `knobpos`, an `i16` at **`+0x140`** — *neither*
+     of the two offsets the design guessed: `+0x136` is `range` and `+0x142` is
+     `knobsize`. Rendered as `value=N/range`. A slider `set` verb was **not** added: TA's
+     sliders are scrollbars bound to a listbox by `assoc`, so the thing an agent wants to
+     move is the list, and `ui select` moves it.
+   - **`fill` works** — first execution of shipped-but-untested code, on `LOADGAME.GUI`'s
+     `GAMENAME`. One change was needed: typing through key tokens capitalised the whole
+     batch, because the shield **holds** a modifier for 150 ms (TA polls it) and the
+     `shift+c` in "Claude" was still down for "laude". `fill` now types through the
+     `char:` WM_CHAR token, which carries no modifier state; `Test_2` round-trips exactly.
+     What a field then *keeps* is TA's rule, not ours — `GAMENAME` drops `- . , ! # @` —
+     and `fill` reports the field's actual content rather than claiming success.
+   - **`help` (`+0x33`): the offset was right and the engine wipes it.**
+     `GUI_ParseCommonFields` reads the TDF value into the field and then memsets it
+     (`0x4AD4A9`) before a translation round-trip. Some screens write it at runtime and
+     those read back — `SKIRMISH`'s `StartLocation`/`CommanderDeath` carry real sentences
+     live. So `help` stays in the contract; it is simply empty most of the time.
+   - **`grayedout` (`+0x13C`) is real** and fires. Only *builders'* build pages declare it
+     (never the commander's, which is why the first pass never saw it): selecting a built
+     `ARMLAB` shows `IGPATCH`, `ARMATTACK`, `ARMDEFEND`, `ARMBLAST` as `grayed`, with
+     `active=1`. Both branches of the actionability check are needed; neither is dead.
+   - **`assoc` ruling** (Q9's open sub-point). Rendering it on every row was rejected:
+     every gadget has one. It is shown **only where the engine acts on it** — 2+ toggles
+     sharing a group (`0x4A6A40`'s radio reset) or a slider bound to a listbox
+     (`0x4A3EF0`). On `SELPROV` that is exactly the `DPLAY`/`SLIDER`/arrows quartet; on
+     `SKIRMISH` nothing qualifies and no column appears.
+   - **`hover` added**, closing the verb that went missing between the interview and the
+     grammar. It is a move with no click and no pointer parking (a new `pmove:` token —
+     `mouse:` falls back to `SendInput` when the shield is down, which would drag the
+     human's real pointer) and it reports label text that appeared. No tooltip surfaced
+     over the build panel, which is consistent with `help` being empty everywhere there.
+   - **Two input bugs fixed on the way**: `tagpu_keys.txt` was read into a 256-byte buffer
+     and then deleted, so a batch longer than that lost its tail silently — the buffer is
+     now 1 KB and `tacli` splits long batches and waits for each to be consumed. And the
+     token log built its line with `_snprintf`, whose `-1` on truncation walked the write
+     cursor backwards out of the buffer.
+
+   **Route notes that cost time and should not be re-derived:** the in-game menu is
+   **`Tab`** (not `Esc`, which does nothing in game), reaching `ARMOPT.GUI`; `SAVEGAME.GUI`
+   / `SAVELIST.GUI` / `OPTION.GUI` / `CMENU.GUI` ship in the HPI but are named by no string
+   in the exe — the live save/load screen is `LOADGAME.GUI`. And on `SELPROV`, **only the
+   `SELECT` button crashes**; moving the list selection is safe, so the provider list can
+   be read without risking the instance.
 
 ## Why (constraints that shaped it)
 

@@ -28,10 +28,12 @@ Companion notes: `ui-markers.md` (per-unit *world* markers — a different subsy
 2. **Gadget records are `pack(1)`, stride `0x15B` (347 bytes)**, packed immediately after
    the panel record. `ControlsAry[0]` is the panel (its `totalgadgets` at `+0xB6` is the
    count); gadget *i* is at `ControlsAry + i*0x15B`. [BINARY-VERIFIED]
-3. **`id` is the type and `assoc` is a radio-group id.** The draw dispatcher switches on
+3. **`id` is the type and `assoc` is a group id.** The draw dispatcher switches on
    `id-1` through a 13-entry table at `0x4A962C`: 1=button, 2=listbox, 3=textfield,
    4=slider, 5=label, 6=surface, 11=picture, 13=timer. `id 0` (the panel) is not in the
-   table. [BINARY-VERIFIED]
+   table. `assoc` groups radio buttons (`0x4A6A40`) **and** binds a scrollbar to its
+   listbox (`0x4A3EF0`) — every gadget carries one, so only a shared value means
+   anything. [BINARY-VERIFIED]
 4. **Gadget coordinates are relative to the panel record's origin**, in game space
    (the space `tacli click` takes) — no scaling anywhere. Shell menus are full-screen
    panels at `(0,0)`, so their gadgets read as absolute; the **in-game build panel sits
@@ -155,24 +157,76 @@ exactly this against a 16-byte string. [BINARY-VERIFIED]
 
 | Off | Field | Evidence |
 |---|---|---|
-| `+0xBA` | `selected_i` (`i16`) | [CORPUS], read at `0x4A1F89` |
-| `+0xBC` | item count / scroll index | [BINARY-VERIFIED] used as the index arg at `0x4A1D0F` |
-| `+0xC2` | **list handle** — passed to the node accessor | [BINARY-VERIFIED] `0x4A1D09` |
-| `+0xDA` | `itemheight` (`i16`) | [CORPUS], read at `0x4A1CE.` |
+| `+0xBA` | `selected_i` (`i16`) | [LIVE] |
+| `+0xBC` | **`top`** — index of the first visible row (scroll position) | [BINARY-VERIFIED] `0x4A1D0F` |
+| `+0xBE` | **`maxtop`** — largest legal `top`, i.e. `count - visible` | [BINARY-VERIFIED] `0x4A3657`, and used as the scrollbar divisor at `0x4A3065` |
+| `+0xC0` | **`count`** (`i16`) | [BINARY-VERIFIED] written by the setter at `0x4A332A`; gates drawing at `0x4A1C6A` |
+| `+0xC2` | **`char* items`** — one flat blob, entries separated by `\0` or `\n` | [BINARY-VERIFIED] `0x4A1D09` + `0x4A3331` |
+| `+0xC6` | `void* entries` — the *picture* flavour's records, stride `0x18` | [BINARY-VERIFIED] `0x4A3621`, `0x4A20B5` |
+| `+0xDA` | `itemheight` (`i16`) — 0 means "use the font" | [LIVE] |
 
-Items are fetched by `0x4B6AF0(handle@+0xC2, index@+0xBC) -> node*` — a generic
-list-node accessor. The **node layout is unidentified**; see §7. [BINARY-VERIFIED call,
-[INFERRED] semantics]
+**There is no node structure.** `0x4B6AF0` is not a list-node accessor: it is
+`char* NthEntry(char* buf, int n)`, walking a flat buffer and counting `\0` and `\n`
+as separators. So the item text of a listbox is simply the blob at `+0xC2`, read
+`count` entries deep. [BINARY-VERIFIED]
 
-### 2.5 Textfield (`id 3`) and slider (`id 4`)
+**Which flavour a listbox is, is a property of `attribs`, not of the pointer:**
 
-**The corpus has no `GUI3IDControl` or `GUI4IDControl`.** `tamem_ghidra.h` defines
-`GUI0/1/2/5/6/9` only, so these two types have no documented per-type layout.
+| `attribs` bit | Set by | Items live at | Text? |
+|---|---|---|---|
+| `0x10` | `GUIGADGET_SetListText 0x4A32A0(gi, name, blob, count)` | `+0xC2` blob | yes |
+| `0x20` / `0x80` | `0x4A35A0(gi, name, entries, count)` | `+0xC6`, stride `0x18` | **no** — the draw path (`0x4A20A6`) follows pointers to pictures |
 
-- Textfield: `GUIGADGET_SetText 0x4A0BF0` is generic (name lookup, then write), so
-  `text[128] @ +0xB6` is the likely content field. [INFERRED]
-- Slider: `GUI_SliderUpdate 0x4A3EF0` touches `+0x136` and `+0x142` beyond the common
-  header; the position value is one of them. [INFERRED]
+The draw dispatcher tests `0x10` first (`0x4A1C54`) and falls through to `0xA0`
+(`0x4A2052`). A picture list therefore has *no readable item text at all*, which is a
+different answer from an empty list and must be reported as such. [BINARY-VERIFIED]
+
+**Row geometry** — rows sit at a fixed pitch from the top of the gadget, not spread over
+its height:
+
+```
+pitch = itemheight ? itemheight : glyph('I').height + 3      /* 0x4A1C21..0x4A1C4D */
+row k occupies y = rect.y + 2 + (k - top) * pitch            /* 0x4A1D50 */
+visible = (rect.height - 2) / pitch
+```
+
+The font is reached as `*(0x51FBA4) -> +0x14 -> +0x0C`, whose glyph *i* is
+`*(void**)(font + i*8 + 0x28)` (`GetGlyph 0x4B7F30`) with the height in the glyph's
+`i16` at `+0x02`. [BINARY-VERIFIED] Live, the engine sets `itemheight = 15` on
+`LOADGAME`'s and `SELPROV`'s lists even though no `.GUI` in the stock corpus declares
+one, so the font path is the fallback rather than the usual case. [LIVE]
+
+A leading `&G` on an entry is a colour marker the engine strips before drawing
+(`0x4A1E17`), so a reader should strip it too. [BINARY-VERIFIED]
+
+### 2.5 Textfield — `id 3`
+
+| Off | Field | Evidence |
+|---|---|---|
+| `+0xB6` | `text[128]` | [LIVE] |
+| `+0x138` | `maxchars` (`i16`) | [BINARY-VERIFIED] serializer `0x4AE8D7` |
+
+### 2.6 Slider — `id 4`
+
+The corpus has no `GUI3IDControl` or `GUI4IDControl` — `tamem_ghidra.h` defines
+`GUI0/1/2/5/6/9` only — but the TDF reader and writer pin every field exactly.
+
+| Off | Field | TDF key | Evidence |
+|---|---|---|---|
+| `+0x136` | `range` (`i16`) | `range` | [BINARY-VERIFIED] `0x4AE191` |
+| `+0x13C` | `thick` (`i32`) | `thick` | [BINARY-VERIFIED] `0x4AE1A3` |
+| `+0x140` | **`knobpos` (`i16`) — the value** | `knobpos` | [BINARY-VERIFIED] `0x4AE1B8` |
+| `+0x142` | `knobsize` (`i16`) | `knobsize` | [BINARY-VERIFIED] `0x4AE1DE` |
+
+Read the slider parser at `0x4AE170` and the writer at `0x4AE050`; they agree in both
+directions. **Neither of the two offsets previously guessed was the value**: `+0x136` is
+`range` and `+0x142` is `knobsize`. `GUI_SliderUpdate 0x4A3EF0` touching them is the
+scrollbar doing arithmetic, not storing a position.
+
+TA's sliders are **scrollbars bound to a listbox by `assoc`**: `0x4A3EF0` scans the panel
+for the `id 2` gadget whose `assoc` byte matches the slider's, and `0x4A3053` then writes
+`knobpos = range * list.top / list.maxtop`. [BINARY-VERIFIED] Live on `SELPROV`, the
+`DPLAY` list, its `SLIDER` and its two unnamed arrow buttons all carry `assoc 50`. [LIVE]
 
 ---
 
@@ -254,7 +308,14 @@ a 640x480 surface in an instance launched at 1024x768, and `ARMCOM1.GUI` reports
 | `0x49FD20` | `stdcall void ToGadgetLocal(GUIInfo*, gadget*, rect6* out)`; `ret 0xC` | Proves the coordinate space |
 | `0x4A0BF0` | `GUIGADGET_SetText(GUIInfo*, const char* name, …)` | The direct-write `fill` we deliberately did **not** take |
 | `0x4A6A40` | `stdcall void(GUIInfo*, int idx)`; clears `status_init` on every `id==1` gadget sharing `assoc`, redrawing each | TA's radio-group reset — why clicking one button silently clears another |
-| `0x4B6AF0` | `(list, index) -> node*` | Gate for listbox items (§7) |
+| `0x4B6AF0` | `stdcall char* NthEntry(char* buf, int n)`; `ret 8` | Walks a flat blob counting `\0`/`\n` — the whole of "listbox items" (§2.4) |
+| `0x4A32A0` | `stdcall void SetListText(GUIInfo*, const char* name, char* blob, int count)`; `ret 0x14` | Sets `+0xC2`/`+0xC0` and `attribs |= 0x10` |
+| `0x4A35A0` | `stdcall void SetListEntries(GUIInfo*, const char* name, void* recs, int count)`; `ret 0x10` | The picture flavour: `+0xC6`, `attribs |= 0x80` |
+| `0x4A3EF0` | `stdcall void GUI_SliderUpdate(GUIInfo*, int idx)` | Finds the listbox with the slider's `assoc` and writes `knobpos` |
+| `0x4B7F30` | `stdcall glyph* GetGlyph(font*, int ch)`; `ret 8` | Row pitch, via glyph `'I'` height at `+0x02` |
+| `0x4AD350` / `0x4AD2xx` | `GUI_ParseCommonFields` / its serializer | Where `help` is written and then zeroed (§7) |
+| `0x4AE170` / `0x4AE050` | slider TDF reader / writer | Pins `range`/`thick`/`knobpos`/`knobsize` (§2.6) |
+| `0x495010` | `void ToggleTabMenu(void)` | What `Tab` reaches in game (§9) |
 | `0x495860` | `ApplySelectUnitMenu` — presses gadget `"STOP"` (`0x502714`) on the top GUI | Confirms in-game order buttons are ordinary named gadgets |
 
 `main+0x37EA0` holds the name of the expected in-game screen. [BINARY-VERIFIED]
@@ -284,28 +345,67 @@ not loaded** while page *n* is up. [BINARY-VERIFIED]
 
 ---
 
-## 7. What is not known yet
+## 7. `help` is parsed and then wiped
 
-Two one-field gaps, each gating exactly one verb. Neither blocks anything currently
-driveable, because both surfaces are already bypassed by better paths (`--map`/`--player`
-write the registry; sound is off by default; speed is `keys +`/`-`; resolution is
-registry).
+`help` really is `char[128] @ +0x33` — both the reader (`0x4AD485`) and TA's own
+serializer (`0x4AD30A`) name that offset — but **the value from the `.GUI` never
+survives loading**. `GUI_ParseCommonFields` reads it and then zeroes the field before
+running it through the string table:
 
-1. **Listbox item strings.** Read `0x4B6AF0` and identify the string offset in a node →
-   unlocks item enumeration and `ui select`.
-2. **Slider position field.** Disambiguate `+0x136` vs `+0x142` in `GUI_SliderUpdate
-   0x4A3EF0` → unlocks slider `ui set`.
+```asm
+4ad485  lea ebp,[esi+0x33]          ; dest = gadget->help
+4ad496  call 0x4C48C0               ; TdfGetString(dest, "help", 0x80, "")
+4ad4a9  rep stos DWORD [edi],eax    ; edi = ebp, ecx = 0x20 -> 128 bytes of zero
+4ad4ad  call 0x4C5740               ; Translate(dest) — on the buffer just cleared
+4ad4b4  call 0x4E4760               ; strncpy(dest, result, 0x80)
+```
 
-Until then a snapshot must render these as `items=?` / `value=?` — **"not implemented",
-never "empty"**. An agent that reads a missing capability as an empty list will conclude
-the screen is broken and navigate away.
+`0x4C5740` is a binary search over the translation table at `ds:0x51FDB8` that returns
+its argument unchanged when the table is absent, so the net effect is an empty string
+either way. [BINARY-VERIFIED]
 
-Still unconfirmed after the first live pass, because no screen exercised them yet:
-**`help` (`+0x33`)** read empty on every gadget of MAINMENU / SINGLE / SKIRMISH /
-ARMCOM1 — either those screens carry no tooltips or the offset is wrong, and a screen
-that definitely has help text will settle it. **`grayedout` (`+0x13C`)** has never been
-seen non-zero; note that `SINGLE.GUI`'s unavailable `AnyMsn` button is `active=0`, not
-grayed, so unavailability in TA is expressed through `active` at least some of the time.
+That matches the corpus and the live reads exactly. Of 1252 gadgets in the stock `.GUI`
+files only 11 carry help text at all — one on `SKIRMISH.GUI` (`Difficulty`,
+*"Adjust skirmish difficulty."*) and ten on `SELGAME.GUI` [CORPUS] — and reading
+`Difficulty`'s `+0x33` on a live SKIRMISH screen returns 128 zero bytes. [LIVE]
+
+**Some screens write `help` at runtime, and those do read back.** `0x47A519` and its
+neighbours `strncpy` a translated sentence into `gadget->help` while setting the
+gadget's stage, for `SKIRMISH.GUI`'s toggles. Live on SKIRMISH: [LIVE]
+
+| Gadget | `text` | `help` |
+|---|---|---|
+| `StartLocation` | `Fixed` | `Commanders are randomly placed on the battle field.` |
+| `CommanderDeath` | `Game ends` | `Game ends when commander is destroyed.` |
+| `Difficulty` | `Easy` | *(empty)* |
+
+So a reader should keep reporting `help`: it is empty far more often than not, but when
+it is populated it is real. Note `StartLocation`'s help describes the *other* stage —
+observed, not explained.
+
+No tooltip appeared on screen when the pointer was parked over a build button with the
+in-game panel up, and with `help` empty on every build gadget there is nothing for a
+tooltip to show. Whether TA's tooltip renderer is the consumer of `+0x33` is [INFERRED].
+
+## 7.1 `grayedout` is used, and is not the same as `active`
+
+`grayedout (i32 @ +0x13C)` on a button is set by 58 gadgets across 24 stock `.GUI` files
+— every one of them a **builder's** build page (`ARMLAB1`, `ARMVP1`, `ARMSY1`,
+`ARMSILO1`, `ARMAMD1`, their CORE twins…), plus `LOUNGE2`. [CORPUS] The commander's own
+pages (`ARMCOM1/2`) declare none, which is why the first live pass — which only ever
+selected a commander — never saw the flag set.
+
+Building an `ARMLAB` and selecting it settles it: [LIVE]
+
+```
+gui ARMLAB1.GUI    9  button  IGPATCH    grayed
+                  15  button  ARMATTACK  grayed
+                  16  button  ARMDEFEND  grayed
+                  17  button  ARMBLAST   grayed
+```
+
+`IGPATCH` reads `active=1, grayed=1` — so TA expresses unavailability **both** ways and
+an actionability check needs both tests. `SINGLE.GUI`'s `AnyMsn` is the `active=0` case.
 
 ## 8. What the first live run settled
 
@@ -335,6 +435,36 @@ grayed, so unavailability in TA is expressed through `active` at least some of t
   (`14 -> 1`). The footprint box draws red on an invalid site, which is what a
   refused placement looks like.
 
+## 9. What the second live run settled
+
+[LIVE, 2026-09-01, second pass — the run that closed phase C]
+
+- **The in-game menu is `Tab`.** The key dispatcher at `0x495E90` indexes a byte table at
+  `0x496694` with `key - 9`; `VK_TAB` maps to case 0, which reaches the TABMENU toggle at
+  `0x495010`. [BINARY-VERIFIED] Live it pushes **`ARMOPT.GUI`** (`GAME OPTIONS`) with
+  `SAVEGAME` / `LOADGAME` / `PREFS` / `MISSION` / `HELP` / `EXIT` / `OK`, over
+  `ARMMAIN2.GUI`. `Esc` does nothing in game, held or tapped.
+- **`SAVEGAME` and `LOADGAME` both open `LOADGAME.GUI`** — one screen with the listbox
+  `GAMES`, the scrollbar `SLIDER`, the textfield `GAMENAME` and `LOAD` / `CANCEL` /
+  `DELETE`. It is the only screen reachable without multiplayer that carries all three
+  deferred surfaces at once, which makes it the test bed for them.
+  `SAVEGAME.GUI`, `SAVELIST.GUI`, `OPTION.GUI` and `CMENU.GUI` ship in `totala1.hpi` but
+  **no string in the exe names them** — they are dead files, and reading them as the live
+  save UI wastes a session. [BINARY-VERIFIED, strings]
+- **Textfields validate their own content.** `GAMENAME` (`maxchars=20`) keeps letters,
+  digits, space and `_`, and silently drops `- . , ! # @`. A `fill` that comes back short
+  is TA refusing characters, not input being lost.
+- **A held modifier bleeds across a batch.** The shield holds `shift` for 150 ms because
+  TA polls it, so a `shift+c` token in a `fill` batch capitalises every character behind
+  it — `Claude` arrived as `CLAUDE`. Typing through the `char:` (WM_CHAR) token instead
+  carries no modifier state and round-trips exactly, mixed case included.
+- **Only clicking `SELECT` on `SELPROV` crashes**, not touching its list. Moving the
+  `DPLAY` selection by clicking a row (`#0 -> #2 -> #1`) is safe and the screen keeps
+  working; the null call in `ErrorLog.txt` comes from the provider handshake behind the
+  `SELECT` button. That is the difference between reading the providers and using one.
+- **`assoc` binds a scrollbar to its list.** `SELPROV`'s `DPLAY`, `SLIDER` and its two
+  unnamed arrow buttons all carry `assoc 50`; `LOADGAME`'s carry `assoc 1`.
+
 ---
 
 ## Appendix — addresses
@@ -363,7 +493,15 @@ grayed, so unavailability in TA is expressed through `active` at least some of t
 0x4AB060  GUICONTROL_IsOnTop
 0x4AD350  GUI_ParseCommonFields
 0x4B0230  GUI_BlitToFramebuffer   id 11
-0x4B6AF0  list node accessor
+0x4B6AF0  NthEntry(buf, n)        listbox item locator, \0/\n separated
+0x4A32A0  SetListText             blob flavour  (+0xC2/+0xC0, attribs|0x10)
+0x4A35A0  SetListEntries          picture flavour (+0xC6,   attribs|0x80)
+0x4AE050  slider TDF writer
+0x4AE170  slider TDF reader
+0x4B7F30  GetGlyph(font, ch)
+0x495010  ToggleTabMenu           what Tab reaches in game
+0x495E90  in-game key dispatcher  byte table 0x496694, jump table 0x4965F4
+0x47A519  runtime help writer     SKIRMISH toggles
 ```
 
 ### Data
@@ -387,5 +525,14 @@ common: id +00  assoc +01  name +02[16]  xpos +13  ypos +15  width +17  height +
 panel:  totalgadgets +B6  crdefault +CC[16]  escdefault +DC[16]  defaultfocus +EC[16]
 button: text +B6[128]  stages +136  status_curnt +137  status_init +138  quickkey +13A
         grayedout +13C
-list:   selected +BA  index +BC  handle +C2  itemheight +DA
+list:   selected +BA  top +BC  maxtop +BE  count +C0  items* +C2  entries* +C6
+        itemheight +DA   (text flavour iff attribs & 0x10; picture iff & 0xA0)
+field:  text +B6[128]  maxchars +138
+slider: range +136  thick +13C  knobpos +140  knobsize +142
+```
+
+### Data (runtime globals)
+```
+0x51FBA4  GUI draw context   ->+0x14 font set ->+0x0C font (glyphs at +0x28, stride 8)
+0x51FDB8  translation table  (NULL => Translate() returns its argument)
 ```

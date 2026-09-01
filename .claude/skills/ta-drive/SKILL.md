@@ -104,21 +104,24 @@ tools/tacli ui t1 --json              # every field (stable contract; the table 
 tools/tacli ui t1 show Start          # one gadget in full
 tools/tacli ui t1 click Skirmish      # auto-waits, then clicks the rect centre
 tools/tacli ui t1 set LineOfSight 2   # declarative stage; check/uncheck are aliases
-tools/tacli ui t1 fill PlayerName Claude
+tools/tacli ui t1 select GAMES saveone    # a listbox row, by text or #index
+tools/tacli ui t1 fill GAMENAME Test_2
+tools/tacli ui t1 hover ARMSOLAR      # move over a gadget without clicking it
 tools/tacli ui t1 press Start         # via the gadget's own quickkey
 tools/tacli ui t1 wait --gui SKIRMISH
 tools/tacli ui t1 click ARMLAB --page 2   # walk a paged build menu first
 ```
 
 ```
-gui SKIRMISH.GUI  640x480   under: -
-enter=Start  esc=PrevMenu
-  #  type     name             click       state        key
-  1  button   Start            550,445     ok           s
-  6  toggle   StartLocation    536,163     off
- 12  cycle    LineOfSight      536,277     0/3
- 16  button   Player0          101,104     ok           a
-text: Location / Commander / Mapping / Two Continents
+gui SELPROV.GUI  640x480   under: -
+enter=SELECT  esc=PREVMENU
+  #  type     name             click       state          key  grp
+  1  button   PREVMENU         533,415     ok             p
+  3  list     DPLAY            321,146     sel=0 n=4           50
+  4  slider   SLIDER           586,149     value=0/178         50
+  7  button                    586,94      inactive            50
+  9  button   SERVICE0         241,231     ok             w
+DPLAY: *0 Internet TCP/IP Connection For DirectPlay · 1 IPX Connection For DirectPlay …
 ```
 
 - **Everything auto-waits** (5 s, `--timeout`, `--no-wait`). A click waits for the gadget
@@ -127,22 +130,45 @@ text: Location / Commander / Mapping / Two Continents
   engine's own `UIChange_f`).
 - **It refuses rather than guessing.** Absent, `inactive`, `grayed` or zero-sized gadgets
   error with the reason and list what *is* on screen. An ambiguous name is an error too —
-  disambiguate with `button:NAME` or `#7`.
+  disambiguate with `button:NAME` or `#7`. TA uses **both** `active=0` and `grayed=1` for
+  "you cannot have this", so both show up.
+- **`#index` is the only way to reach an unnamed gadget**, and there are real ones: the
+  arrow buttons flanking a scrollbar have empty names. Take the `#` from the snapshot's
+  first column — `ui t1 click "#7"` — and re-read it after any screen change, because it
+  is a position in the current screen, not a handle.
+- **`grp` appears only when `assoc` means something** — two or more toggles in one radio
+  group, or a scrollbar bound to its listbox. Same number = clicking one moves the other.
 - **`enter=` / `esc=`** are the screen's own Enter/Escape bindings, so backing out is
   `click PrevMenu`, never a guess.
 - **In game, select a unit first.** With nothing selected the top GUI is `ARMMAIN2.GUI`
   (just KILLS/LOSSES/TOTALUNITS). Selecting a builder pushes its build page on top —
   `ARMCOM1.GUI`, gadgets named after the buildable units (`ARMSOLAR`, `ARMLAB`), plus the
   order buttons (`ARMMOVE`, `ARMSTOP`, `ARMATTACK`) and pagers `ARMPREV`/`ARMNEXT`.
+- **The in-game menu is `Tab`, not `Esc`** (`Esc` does nothing in game). It opens
+  `ARMOPT.GUI` — `SAVEGAME` / `LOADGAME` / `PREFS` / `MISSION` / `HELP` / `EXIT` / `OK`.
+  Both SAVEGAME and LOADGAME land on **`LOADGAME.GUI`** (list `GAMES`, field `GAMENAME`,
+  `LOAD` / `CANCEL` / `DELETE`); the `SAVEGAME.GUI` and `SAVELIST.GUI` files in the HPI
+  are dead, no string in the exe names them. Quitting is `EXIT` → `MAINMENU` → `CHOICE1`.
 - **A build button reports "delivered (no GUI-visible change)" — that is success.** It
   changes the cursor mode, not the GUI. Then place it with a world click:
   `tacli keys t1 mouse:X,Y`, then `tacli click t1 X Y` (**left**; right-click cancels).
   A red footprint box means the site is blocked — try clear ground.
 - **`ui` is the gadget layer only.** The map, minimap and resource bars are not gadgets;
   they stay with `click` / `eye` / `roster`.
-- Not yet implemented: listbox items and slider values, reported as `items=?` / `value=?`
-  — *unknown*, not *empty*. Use the registry presets (`--map`, `--player`, `--los`)
-  meanwhile. Details: `research/notes/gui-gadgets.md`.
+- **Lists read out and can be picked**: `ui select <list> <text|#index>` clicks the row.
+  `items unknown` means a *picture* list (map thumbnails, side portraits) whose entries
+  carry no text at all — that is different from `(empty)`, which means the list really has
+  nothing in it. Only rows currently scrolled into view can be clicked, and `select` says
+  so rather than scrolling behind your back.
+- **Sliders are scrollbars**, bound to a listbox by `assoc`, so `value=N/range` is a
+  read-out of where that list is scrolled. There is no slider `set` — move the list with
+  `select`.
+- **`fill` types through WM_CHAR**, so mixed case round-trips. What a field *keeps* is
+  TA's rule: the save-name field takes letters, digits, space and `_` and silently drops
+  punctuation. `fill` reports the field's actual content, so read what it says.
+- **`help` is empty on almost every gadget** — the engine parses the `.GUI` tooltip and
+  then zeroes the field. A few screens write it at runtime (SKIRMISH's toggles do), and
+  those read back. Empty `help` is normal, not a broken read.
 
 ## Observing
 
@@ -203,3 +229,7 @@ Any `tagpu_<x>` trigger file works; value goes into the file (e.g. `all`, `armco
   both are written up in `windowed-mode.md`.
 - Instances are cheap in disk (hardlinked prefix, symlinked gamedir) but each running
   game is a real GPU client — a handful at a time, not dozens.
+- **`SELPROV`'s `SELECT` button kills the game** — `Access Violation ... at 0023:00000000`
+  in `ErrorLog.txt`, TA's DirectPlay path under wine, reproducible with plain `tacli keys`
+  and nothing to do with `ui`. Reading the provider list and moving its selection are
+  safe; pressing `SELECT` is not. That is what blocks agent-vs-agent multiplayer.

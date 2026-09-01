@@ -10,6 +10,12 @@
 #define UI_TMP      "tagpu_ui.json.tmp"
 
 #define TA_MAINPP   0x00511DE8u   /* TAdynmemStruct** */
+#define TA_GFXP     0x0051FBA4u   /* the draw context the GUI renders through */
+#define GFX_FONTSET 0x14          /* -> font set                             */
+#define FS_FONT     0x0C          /* -> the font the listbox measures with    */
+#define FONT_COUNT  0x00          /* u16 glyph count                          */
+#define FONT_GLYPHS 0x28          /* glyph[i] = *(void**)(font + i*8 + 0x28)  */
+#define GLYPH_H     0x02          /* i16                                      */
 
 #define OFF_GUIINFO 0x519         /* GUIInfo, inline in main            */
 #define GI_ACTIVE   0x18          /* GUIMEMSTRUCT* TheActive_GUIMEM     */
@@ -46,11 +52,29 @@
 #define B_GRAYED    0x13C         /* i32 */
 
 /* listbox (id 2) */
-#define L_SELECTED  0xBA          /* i16 */
+#define L_SELECTED  0xBA          /* i16 selected item                        */
+#define L_TOP       0xBC          /* i16 first visible item (scroll position) */
+#define L_MAXTOP    0xBE          /* i16 largest legal top = count - visible   */
+#define L_COUNT     0xC0          /* i16 item count                            */
+#define L_TEXT      0xC2          /* char* flat item blob, \0/\n separated     */
 #define L_ITEMH     0xDA          /* i16 */
+#define L_ATTR_TEXT 0x10          /* attribs bit: items are the +0xC2 blob    */
+#define L_ATTR_ICON 0xA0          /* attribs bits: items are pictures, no text */
+
+/* textfield (id 3) */
+#define F_MAXCHARS  0x138         /* i16 */
+
+/* slider (id 4) */
+#define S_RANGE     0x136         /* i16 */
+#define S_THICK     0x13C         /* i32 */
+#define S_KNOBPOS   0x140         /* i16 — the value                          */
+#define S_KNOBSIZE  0x142         /* i16 */
 
 #define MAX_GADGETS 512
 #define MAX_STACK   16
+#define MAX_ITEMS   256           /* per listbox                              */
+#define MAX_ITEMLEN 128
+#define MAX_BLOB    0x8000        /* how far into the item blob we will walk  */
 
 static void ulog(const char* s)
 {
@@ -88,6 +112,35 @@ static BOOL readable(const void* p, size_t n)
     }
 
     return TRUE;
+}
+
+/* How many bytes from p are readable, up to max. The item blob has no length
+   field — the engine walks it until it has counted `count` separators — so a
+   corrupt pointer must be bounded by the mapping, not by trust. */
+static size_t readable_span(const char* p, size_t max)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    size_t have = 0;
+
+    if (!p)
+        return 0;
+
+    while (have < max)
+    {
+        const char* c = p + have;
+        size_t span;
+
+        if (!VirtualQuery(c, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
+            break;
+
+        if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+            break;
+
+        span = (size_t)((const char*)mbi.BaseAddress + mbi.RegionSize - c);
+        have += span;
+    }
+
+    return have > max ? max : have;
 }
 
 static const char* type_name(int id)
@@ -136,6 +189,129 @@ static void jfield_str(FILE* f, const char* key, const char* src, size_t cap)
 {
     fprintf(f, ",\"%s\":", key);
     jstr(f, src, cap);
+}
+
+/* The pitch of one listbox row, or 0 if it cannot be established.
+
+   A row is not `height / count`: the engine lays rows out at a fixed pitch from
+   the top, so selecting item k means clicking `rect.y + 2 + k*pitch`. The pitch
+   is the gadget's own itemheight when it sets one — and across the whole stock
+   .GUI corpus exactly one gadget does — otherwise the height of the glyph 'I'
+   in the GUI font plus 3. That is what GUI_ListboxBuild computes at 0x4A1C0D,
+   mirrored here rather than called: every step is a plain read. */
+static int row_pitch(const char* g)
+{
+    char* gfx;
+    char* fontset;
+    char* font;
+    char* glyph;
+    int   ih = *(short*)(g + L_ITEMH);
+
+    if (ih > 0)
+        return ih;
+
+    gfx = *(char**)TA_GFXP;
+
+    if (!readable(gfx, GFX_FONTSET + 4))
+        return 0;
+
+    fontset = *(char**)(gfx + GFX_FONTSET);
+
+    if (!readable(fontset, FS_FONT + 4))
+        return 0;
+
+    font = *(char**)(fontset + FS_FONT);
+
+    if (!readable(font, FONT_GLYPHS + ('I' + 1) * 8))
+        return 0;
+
+    if ((unsigned short)*(short*)(font + FONT_COUNT) <= 'I')
+        return 0;
+
+    glyph = *(char**)(font + 'I' * 8 + FONT_GLYPHS);
+
+    if (!readable(glyph, GLYPH_H + 2))
+        return 0;
+
+    return *(short*)(glyph + GLYPH_H) + 3;
+}
+
+/* Listbox items.
+
+   TA keeps them as one flat char blob at +0xC2 whose entries are separated by
+   '\0' or '\n' — that is exactly the rule the engine's own item locator
+   (0x4B6AF0) walks — with the entry count in the i16 at +0xC0. The draw path
+   only reads that blob when attribs bit 0x10 is set (0x4A1C5C); bits 0x20/0x80
+   select the picture flavour instead, whose entries at +0xC6 hold no text at
+   all. So "has items" is a property of attribs, not of the pointer, and the two
+   cases must not be conflated: a picture list is reported as unknown, never as
+   an empty text list.
+
+   A leading "&G" is a colour marker the engine strips before drawing
+   (0x4A1E17), so it is stripped here too — what we report is what is on screen. */
+static void write_items(FILE* out, const char* g)
+{
+    const char* blob = *(const char**)(g + L_TEXT);
+    int   count = *(short*)(g + L_COUNT);
+    int   attr  = *(int*)(g + G_ATTRIBS);
+    size_t avail, at = 0;
+    int   k;
+
+    /* Unknown and empty are different answers. Without the text bit we cannot
+       read items at all; with it and a zero count the list really is empty. */
+    if (!(attr & L_ATTR_TEXT))
+    {
+        fprintf(out, ",\"items\":null");
+        return;
+    }
+
+    if (count <= 0)
+    {
+        fprintf(out, ",\"items\":[]");
+        return;
+    }
+
+    avail = readable_span(blob, MAX_BLOB);
+
+    if (!avail)
+    {
+        fprintf(out, ",\"items\":null");
+        return;
+    }
+
+    if (count > MAX_ITEMS)
+        count = MAX_ITEMS;
+
+    fprintf(out, ",\"items\":[");
+
+    for (k = 0; k < count && at < avail; k++)
+    {
+        const char* item = blob + at;
+        size_t raw = 0, len;
+
+        while (at + raw < avail && item[raw] && item[raw] != '\n')
+            raw++;
+
+        len = raw;
+
+        if (len >= 2 && item[0] == '&' && item[1] == 'G')
+        {
+            item += 2;
+            len  -= 2;
+        }
+
+        if (len > MAX_ITEMLEN)
+            len = MAX_ITEMLEN;
+
+        if (k)
+            fputc(',', out);
+
+        jstr(out, item, len);
+
+        at += raw + 1;                 /* step past the entry's separator */
+    }
+
+    fputc(']', out);
 }
 
 static void write_snapshot(const TAGPU_FRAME* f)
@@ -273,6 +449,10 @@ static void write_snapshot(const TAGPU_FRAME* f)
         fprintf(out, ",\"click\":[%d,%d]", x + w / 2, y + h / 2);
         fprintf(out, ",\"active\":%d", *(unsigned char*)(g + G_ACTIVE));
         fprintf(out, ",\"attribs\":%d", *(int*)(g + G_ATTRIBS));
+        /* Always empty in practice: GUI_ParseCommonFields reads the TDF's help
+           text into +0x33 and then memsets the field before re-copying it
+           through the (usually absent) translation table — 0x4AD49B. The offset
+           is right, the engine wipes the value. gui-gadgets.md §7. */
         jfield_str(out, "help", g + G_HELP, 128);
 
         /* Past +0x33 the type structs are a union over the same bytes — +0xB6 is
@@ -288,19 +468,32 @@ static void write_snapshot(const TAGPU_FRAME* f)
         }
         else if (id == 2)
         {
-            /* items stay null until 0x4B6AF0's node layout is identified —
-               "not implemented", never "empty". gui-gadgets.md §7. */
             fprintf(out, ",\"selected\":%d",   *(short*)(g + L_SELECTED));
+            fprintf(out, ",\"top\":%d",        *(short*)(g + L_TOP));
+            fprintf(out, ",\"maxtop\":%d",     *(short*)(g + L_MAXTOP));
+            fprintf(out, ",\"count\":%d",      *(short*)(g + L_COUNT));
             fprintf(out, ",\"itemheight\":%d", *(short*)(g + L_ITEMH));
-            fprintf(out, ",\"items\":null");
+            fprintf(out, ",\"rowpitch\":%d", row_pitch(g));
+            write_items(out, g);
         }
-        else if (id == 3 || id == 5)
+        else if (id == 3)
+        {
+            jfield_str(out, "text", g + B_TEXT, 128);
+            fprintf(out, ",\"maxchars\":%d", *(short*)(g + F_MAXCHARS));
+        }
+        else if (id == 5)
         {
             jfield_str(out, "text", g + B_TEXT, 128);
         }
         else if (id == 4)
         {
-            fprintf(out, ",\"value\":null");   /* position field unidentified */
+            /* knobpos is the value: the TDF reader writes it here (0x4AE1B8)
+               and the scrollbar sync computes it as range*top/maxtop
+               (0x4A3099). range/thick/knobsize are its bounds and geometry. */
+            fprintf(out, ",\"value\":%d",    *(short*)(g + S_KNOBPOS));
+            fprintf(out, ",\"range\":%d",    *(short*)(g + S_RANGE));
+            fprintf(out, ",\"knobsize\":%d", *(short*)(g + S_KNOBSIZE));
+            fprintf(out, ",\"thick\":%d",    *(int*)(g + S_THICK));
         }
 
         fputc('}', out);
