@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <stdio.h>
 #include <windowsx.h>
 #include <math.h>
 #include <vfw.h>
@@ -133,7 +134,9 @@ BOOL WINAPI fake_ClipCursor(const RECT* lpRect)
 
         CopyRect(&g_ddraw.mouse.rc, &dst_rc);
 
-        if (g_mouse_locked && !util_is_minimized(g_ddraw.hwnd))
+        /* tagpu: never fence the real pointer when sharing the desktop
+           (tagpu_nowarp.on). The game's own mouse rect above is still tracked. */
+        if (g_mouse_locked && !util_is_minimized(g_ddraw.hwnd) && !tagpu_mouse_nowarp())
         {
             real_MapWindowPoints(g_ddraw.hwnd, HWND_DESKTOP, (LPPOINT)&dst_rc, 2);
 
@@ -254,10 +257,21 @@ BOOL WINAPI fake_ScreenToClient(HWND hWnd, LPPOINT lpPoint)
 
 BOOL WINAPI fake_SetCursorPos(int X, int Y)
 {
+    /* Swallow every warp request, including early ones that arrive before our
+       ddraw state exists (those used to pass straight through). Verified: TA
+       itself never calls this - the launch-time pointer jump comes from wine. */
+    if (tagpu_mouse_nowarp())
+        return TRUE;
+
     if (!g_ddraw.ref || !g_ddraw.hwnd || !g_ddraw.width)
         return real_SetCursorPos(X, Y);
 
     if (!g_mouse_locked && !g_config.devmode)
+        return TRUE;
+
+    /* tagpu: the game re-centres the pointer during play; on a shared desktop that
+       yanks the human's cursor into the window. Report success, move nothing. */
+    if (tagpu_mouse_nowarp())
         return TRUE;
 
     POINT pt = { X, Y };

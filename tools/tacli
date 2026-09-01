@@ -1,0 +1,821 @@
+#!/usr/bin/env python3
+"""tacli — launch and drive Total Annihilation instances from the command line.
+
+Each instance is an isolated sandbox: its own gamedir (symlink mirror of the Steam
+files + private config/trigger/log files), its own wine prefix (hardlink clone of the
+template), its own wineserver and its own window. Several instances run in parallel
+without touching each other, and the human keeps using the desktop while they run.
+
+Design notes: research/notes/tacli-design.md
+Windowed/blackout fixes: research/notes/windowed-mode.md
+Launch knobs (sound, intro, resolution): research/notes/cmdline-options.md
+
+Everything is stdlib-only and every subcommand can print JSON (--json) for agents.
+"""
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+# --------------------------------------------------------------------------- paths
+
+def repo_root() -> Path:
+    """The main checkout (never a worktree): that is where the runtime lives."""
+    env = os.environ.get("TACLI_ROOT")
+    if env:
+        return Path(env).expanduser().resolve()
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "tagpu").is_dir() and (parent / "pristine").is_dir():
+            # inside .claude/worktrees/<name>/ the runtime still lives in the main checkout
+            marker = ".claude/worktrees"
+            text = str(parent)
+            if marker in text:
+                main = Path(text.split(marker)[0].rstrip("/"))
+                if (main / "tagpu" / "gamedir").is_dir():
+                    return main
+            return parent
+    raise SystemExit("tacli: cannot locate the repo root (set TACLI_ROOT)")
+
+
+ROOT = repo_root()
+TAGPU = ROOT / "tagpu"
+TEMPLATE_GAMEDIR = TAGPU / "gamedir"
+TEMPLATE_PREFIX = ROOT / "wineprefix"
+BUILT_DLL = TAGPU / "ddraw" / "ddraw.dll"
+INSTANCES = TAGPU / "instances"
+
+# Files that must never be shared between instances: each gets its own real copy,
+# everything else in the Steam dir is symlinked.
+PRIVATE_FILES = {
+    "ddraw.dll", "ddraw.ini", "totala.ini",
+    "TotalA.exe",  # symlinked to Steam, but listed so we handle it explicitly
+}
+# Intro movies: omitted from the mirror unless --intro (find-file gate skips playback).
+INTRO_MOVIES = {"1.zrb", "2.zrb"}
+
+DEFAULT_RES = (1024, 768)
+
+
+def default_display() -> str:
+    """The desktop to put windows on.
+
+    An agent shell often inherits a stale or absent DISPLAY (":0" is the usual
+    default and is frequently not the live session), so prefer TACLI_DISPLAY, then
+    the inherited value if that X server actually answers, then the first live
+    socket in /tmp/.X11-unix.
+    """
+    def alive(d: str) -> bool:
+        try:
+            return subprocess.run(["xdpyinfo"], env={**os.environ, "DISPLAY": d},
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  timeout=5).returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+
+    for cand in (os.environ.get("TACLI_DISPLAY"), os.environ.get("DISPLAY")):
+        if cand and alive(cand):
+            return cand
+    for sock in sorted(Path("/tmp/.X11-unix").glob("X*"), key=lambda p: p.name):
+        d = ":" + sock.name[1:]
+        if alive(d):
+            return d
+    return os.environ.get("DISPLAY", ":0")
+
+
+GAME_REG = r"HKCU\Software\Cavedog Entertainment\Total Annihilation"
+SKIRMISH_REG = GAME_REG + r"\Skirmish"
+
+
+# --------------------------------------------------------------------------- utils
+
+def die(msg: str) -> "NoReturn":  # noqa: F821
+    print(f"tacli: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def run(cmd, **kw):
+    kw.setdefault("stdout", subprocess.DEVNULL)
+    kw.setdefault("stderr", subprocess.DEVNULL)
+    return subprocess.run(cmd, **kw)
+
+
+def out(data, as_json: bool, human=None):
+    if as_json:
+        print(json.dumps(data, indent=2, default=str))
+    elif human is not None:
+        print(human)
+    elif isinstance(data, str):
+        print(data)
+    else:
+        print(json.dumps(data, indent=2, default=str))
+
+
+def pointer_pos(display: str):
+    """Current pointer position, or None if xdotool is unavailable."""
+    try:
+        o = subprocess.run(["xdotool", "getmouselocation", "--shell"],
+                           capture_output=True, text=True,
+                           env={**os.environ, "DISPLAY": display}).stdout
+    except FileNotFoundError:
+        return None
+    vals = dict(l.split("=", 1) for l in o.strip().splitlines() if "=" in l)
+    if "X" not in vals:
+        return None
+    return (int(vals["X"]), int(vals["Y"]))
+
+
+def pointer_restore(display: str, pos):
+    """Put the pointer back where the human left it.
+
+    Starting the game warps the pointer to a screen/monitor origin exactly once.
+    The warp is not ours and not TA's (the game never calls SetCursorPos: verified
+    with every warp swallowed and logged) - it happens inside wine's window setup,
+    and the pointer is free again afterwards. Until that is root-caused, put the
+    pointer back so the human never loses it mid-task.
+    """
+    if not pos:
+        return False
+    now = pointer_pos(display)
+    if not now or now == pos:
+        return False
+    run(["xdotool", "mousemove", "--sync", str(pos[0]), str(pos[1])],
+        env={**os.environ, "DISPLAY": display})
+    return True
+
+
+class Instance:
+    def __init__(self, name: str):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", name):
+            die(f"invalid instance name {name!r} (use letters, digits, . _ -)")
+        self.name = name
+        self.dir = INSTANCES / name
+        self.gamedir = self.dir / "gamedir"
+        self.prefix = self.dir / "prefix"
+        self.meta_path = self.dir / "instance.json"
+
+    # -- state ------------------------------------------------------------
+    @property
+    def exists(self) -> bool:
+        return self.meta_path.exists()
+
+    def meta(self) -> dict:
+        if not self.exists:
+            die(f"no such instance {self.name!r} (tacli ls)")
+        return json.loads(self.meta_path.read_text())
+
+    def save_meta(self, meta: dict):
+        self.meta_path.write_text(json.dumps(meta, indent=2))
+
+    def env(self) -> dict:
+        e = dict(os.environ)
+        e["WINEPREFIX"] = str(self.prefix)
+        e["DISPLAY"] = self.meta().get("display") or default_display()
+        e["WINEDLLOVERRIDES"] = "ddraw=n,b"
+        e.setdefault("WINEDEBUG", "-all")
+        return e
+
+    def pid(self):
+        """PID of this instance's TotalA.exe, identified by its own prefix."""
+        try:
+            pids = subprocess.run(["pgrep", "-x", "TotalA.exe"],
+                                  capture_output=True, text=True).stdout.split()
+        except FileNotFoundError:
+            return None
+        for pid in pids:
+            try:
+                environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+            except (OSError, PermissionError):
+                continue
+            for entry in environ:
+                if entry.startswith(b"WINEPREFIX="):
+                    if entry.decode(errors="replace").split("=", 1)[1] == str(self.prefix):
+                        return int(pid)
+        return None
+
+    def running(self) -> bool:
+        return self.pid() is not None
+
+    # -- window -----------------------------------------------------------
+    def window(self):
+        """(window_id, x, y, w, h) of the game's client window, or None.
+
+        Two X windows share the title; the client is the one whose size matches the
+        game resolution. Other apps (browser/Discord) can carry the name as a
+        substring, so match the title exactly and verify against this instance's pid.
+        """
+        display = self.meta().get("display") or default_display()
+        pid = self.pid()
+        try:
+            ids = subprocess.run(["xdotool", "search", "--name", "^Total Annihilation$"],
+                                 capture_output=True, text=True,
+                                 env={**os.environ, "DISPLAY": display}).stdout.split()
+        except FileNotFoundError:
+            return None
+        best = None
+        for wid in ids:
+            env = {**os.environ, "DISPLAY": display}
+            geom = subprocess.run(["xdotool", "getwindowgeometry", "--shell", wid],
+                                  capture_output=True, text=True, env=env).stdout
+            vals = dict(line.split("=", 1) for line in geom.strip().splitlines() if "=" in line)
+            if not vals:
+                continue
+            wpid = subprocess.run(["xdotool", "getwindowpid", wid],
+                                  capture_output=True, text=True, env=env).stdout.strip()
+            if pid and wpid.isdigit() and int(wpid) != pid:
+                continue
+            w, h = int(vals.get("WIDTH", 0)), int(vals.get("HEIGHT", 0))
+            rec = (int(wid), int(vals.get("X", 0)), int(vals.get("Y", 0)), w, h)
+            gw, gh = self.meta().get("res", list(DEFAULT_RES))
+            if (w, h) == (gw, gh):
+                return rec          # exact client match wins
+            best = best or rec
+        return best
+
+
+# --------------------------------------------------------------------------- create
+
+def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, verbose=False):
+    """Symlink-mirror the template gamedir, with instance-private config files."""
+    inst.gamedir.mkdir(parents=True, exist_ok=True)
+    (inst.gamedir / "Screenshots").mkdir(exist_ok=True)
+
+    for entry in sorted(TEMPLATE_GAMEDIR.iterdir()):
+        name = entry.name
+        low = name.lower()
+        if name in PRIVATE_FILES or low.startswith("tagpu") or low.startswith("cnc-ddraw-"):
+            continue
+        if name in ("Screenshots", "_triggers_off") or low.endswith(".log"):
+            continue
+        if name == "music" and not sound:
+            continue   # Steam MP3 soundtrack: audiere cannot play what is absent
+        dst = inst.gamedir / name
+        if dst.exists() or dst.is_symlink():
+            continue
+        src = entry.resolve() if entry.is_symlink() else entry
+        if name == "Data":
+            # Data must be a real directory so the intro movies can be omitted.
+            dst.mkdir(exist_ok=True)
+            for sub in sorted(src.iterdir()):
+                if not intro and sub.name.lower() in INTRO_MOVIES:
+                    continue
+                link = dst / sub.name
+                if not (link.exists() or link.is_symlink()):
+                    link.symlink_to(sub)
+            continue
+        dst.symlink_to(src)
+
+    # TotalA.exe: link to the pristine Steam executable (never modified; patches are
+    # applied at runtime from the fork's DllMain).
+    exe_src = (TEMPLATE_GAMEDIR / "TotalA.exe")
+    exe_src = exe_src.resolve() if exe_src.is_symlink() else exe_src
+    exe_dst = inst.gamedir / "TotalA.exe"
+    if not (exe_dst.exists() or exe_dst.is_symlink()):
+        exe_dst.symlink_to(exe_src)
+
+    write_ddraw_ini(inst, tile)
+    write_totala_ini(inst, sound)
+    # Never steal the human's pointer: the game snaps and fences the real cursor on
+    # activation otherwise (fork honours this trigger, see mouse.c).
+    (inst.gamedir / "tagpu_nowarp.on").write_text("")
+    deploy_dll(inst)
+
+
+def write_ddraw_ini(inst: Instance, tile):
+    x, y = tile
+    (inst.gamedir / "ddraw.ini").write_text(
+        "[ddraw]\n"
+        "renderer=openglcore\n"
+        "windowed=true\n"
+        "fullscreen=false\n"   # true here means borderless fullscreen, not a window
+        "maintas=true\n"
+        "vsync=false\n"
+        "maxfps=60\n"
+        "adjmouse=true\n"
+        "border=true\n"
+        "savesettings=0\n"
+        "center_window=0\n"     # otherwise posX/posY are ignored and instances stack
+        f"posX={x}\n"
+        f"posY={y}\n"
+        "\n[TotalA]\n"
+        "max_resolutions=32\n"
+        "lock_surfaces=true\n"
+        "singlecpu=false\n"
+        "maxgameticks=0\n"      # never raise: perturbs the sim
+        "minfps=0\n"
+    )
+
+
+def write_totala_ini(inst: Instance, sound: bool):
+    """Sound off via TA's own documented INI (research/notes/cmdline-options.md)."""
+    path = inst.gamedir / "totala.ini"
+    if sound:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text("[Preferences]\r\nNoDirectSound=1\r\nUseWindowsSound=0\r\n")
+
+
+def deploy_dll(inst: Instance):
+    """Pin a copy of the fork: rebuilds never disturb a running instance."""
+    if not BUILT_DLL.exists():
+        die(f"fork DLL not built: {BUILT_DLL}")
+    shutil.copy2(BUILT_DLL, inst.gamedir / "ddraw.dll")
+
+
+def clone_prefix(inst: Instance):
+    if inst.prefix.exists():
+        return
+    if not TEMPLATE_PREFIX.is_dir():
+        die(f"template wine prefix missing: {TEMPLATE_PREFIX}")
+    inst.prefix.parent.mkdir(parents=True, exist_ok=True)
+    # cp -al: hardlink clone. wine rewrites registry hives via temp+rename, which
+    # breaks the link instead of corrupting the template.
+    r = subprocess.run(["cp", "-al", str(TEMPLATE_PREFIX), str(inst.prefix)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"prefix clone failed: {r.stderr.strip()}")
+
+
+def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
+    run(["wine", "reg", "add", key, "/v", value, "/t", kind, "/d", data, "/f"],
+        env=inst.env(), cwd=str(inst.gamedir))
+
+
+def apply_prefix_settings(inst: Instance, res, sound: bool = False):
+    """Registry state that must hold before launch."""
+    # No XRandR: stops wine re-probing outputs, which blanks every physical monitor
+    # for seconds at each launch (research/notes/windowed-mode.md).
+    reg_add(inst, r"HKCU\Software\Wine\X11 Driver", "UseXRandR", "REG_SZ", "N")
+    w, h = res
+    reg_add(inst, GAME_REG, "DisplaymodeWidth", "REG_DWORD", str(w))
+    reg_add(inst, GAME_REG, "DisplaymodeHeight", "REG_DWORD", str(h))
+    # Right-mouse orders: the only interface type that accepts posted clicks.
+    reg_add(inst, GAME_REG, "Interface Type", "REG_DWORD", "1")
+    reg_add(inst, GAME_REG, "PlayMovie", "REG_DWORD", "0")
+    if not sound:
+        # NoDirectSound (totala.ini) only silences DirectSound effects. The Steam
+        # build also plays MP3 music through audiere, and TA keeps its own volume /
+        # voice settings — silence all of them.
+        for value, data in (("musicmode", "0"), ("musicvol", "0"), ("fxvol", "0"),
+                            ("cdmode", "0"), ("ackfx", "0"), ("buildfx", "0")):
+            reg_add(inst, GAME_REG, value, "REG_DWORD", data)
+
+
+def tile_for(index: int, res, screen=(3840, 2160), origin=(0, 0)):
+    """Lay instances out in a grid so parallel windows do not stack."""
+    w, h = res
+    cols = max(1, screen[0] // (w + 40))
+    col, row = index % cols, index // cols
+    return (origin[0] + col * (w + 40), origin[1] + row * (h + 80))
+
+
+# --------------------------------------------------------------------------- commands
+
+def cmd_create(args):
+    inst = Instance(args.name)
+    if inst.exists and not args.force:
+        die(f"instance {args.name!r} already exists (use --force to recreate)")
+    inst.dir.mkdir(parents=True, exist_ok=True)
+    existing = [p.name for p in sorted(INSTANCES.glob("*/instance.json"))]
+    index = args.slot if args.slot is not None else len(existing)
+    res = tuple(args.res)
+    tile = tile_for(index, res)
+    clone_prefix(inst)
+    mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile)
+    meta = {
+        "name": args.name,
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "res": list(res),
+        "slot": index,
+        "tile": list(tile),
+        "sound": bool(args.sound),
+        "intro": bool(args.intro),
+        "display": args.display or default_display(),
+        "gamedir": str(inst.gamedir),
+        "prefix": str(inst.prefix),
+    }
+    inst.save_meta(meta)
+    apply_prefix_settings(inst, res, sound=args.sound)
+    out(meta, args.json, human=f"created instance {args.name} "
+                               f"({res[0]}x{res[1]}, window at {tile[0]},{tile[1]}, "
+                               f"sound={'on' if args.sound else 'off'})")
+
+
+def cmd_launch(args):
+    inst = Instance(args.name)
+    if not inst.exists:
+        args.force = False
+        cmd_create(args)
+    meta = inst.meta()
+    if inst.running():
+        out(meta, args.json, human=f"{args.name} already running (pid {inst.pid()})")
+        return
+    if args.res:
+        meta["res"] = list(args.res)
+        meta["tile"] = list(tile_for(meta.get("slot", 0), tuple(args.res)))
+        inst.save_meta(meta)
+        write_ddraw_ini(inst, meta["tile"])
+    if args.sound is not None:
+        meta["sound"] = args.sound
+        inst.save_meta(meta)
+        write_totala_ini(inst, args.sound)
+    if not args.keep_dll:
+        deploy_dll(inst)
+    apply_prefix_settings(inst, tuple(meta["res"]), sound=meta.get("sound", False))
+    if args.map:
+        reg_add(inst, GAME_REG, "SkirmishMap", "REG_SZ", args.map)
+    for spec in args.player or []:
+        # --player N:controller[:side[:color]]  controller 0=off 1=human 2=AI
+        parts = spec.split(":")
+        n = parts[0]
+        reg_add(inst, SKIRMISH_REG, f"Player{n}Controller", "REG_DWORD", parts[1])
+        if len(parts) > 2:
+            reg_add(inst, SKIRMISH_REG, f"Player{n}Side", "REG_DWORD", parts[2])
+        if len(parts) > 3:
+            reg_add(inst, SKIRMISH_REG, f"Player{n}Color", "REG_DWORD", parts[3])
+    if args.los is not None:
+        reg_add(inst, GAME_REG, "SkirmishLineOfSight", "REG_DWORD", str(args.los))
+    if args.mapping is not None:
+        reg_add(inst, GAME_REG, "SkirmishMapping", "REG_DWORD", str(args.mapping))
+
+    for stale in ("tagpu.log", "tagpu_gl.ppm"):
+        p = inst.gamedir / stale
+        if p.exists():
+            p.rename(inst.gamedir / f"{stale}.prev")
+    for log in inst.gamedir.glob("cnc-ddraw-*.log"):
+        log.unlink()
+
+    env = inst.env()
+    display = env["DISPLAY"]
+    pointer_before = pointer_pos(display) if not args.no_restore_pointer else None
+    proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(inst.gamedir), env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    deadline = time.time() + args.timeout
+    pid = None
+    while time.time() < deadline:
+        pid = inst.pid()
+        if pid and inst.window():
+            break
+        time.sleep(0.5)
+    win = inst.window()
+    restored = pointer_restore(display, pointer_before)
+    meta["last_launch"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    inst.save_meta(meta)
+    res = {"name": args.name, "pid": pid, "launcher_pid": proc.pid,
+           "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
+           "pointer_restored": restored}
+    out(res, args.json,
+        human=(f"launched {args.name} pid={pid} window={win[0] if win else 'pending'} "
+               f"at {win[1] if win else '?'},{win[2] if win else '?'}"))
+
+
+def cmd_ls(args):
+    rows = []
+    for meta_path in sorted(INSTANCES.glob("*/instance.json")):
+        inst = Instance(meta_path.parent.name)
+        meta = json.loads(meta_path.read_text())
+        pid = inst.pid()
+        meta["pid"] = pid
+        meta["running"] = pid is not None
+        meta["window"] = inst.window() if pid else None
+        rows.append(meta)
+    if args.json:
+        out(rows, True)
+    elif not rows:
+        print("no instances (tacli create <name>)")
+    else:
+        for m in rows:
+            state = f"running pid={m['pid']}" if m["running"] else "stopped"
+            print(f"{m['name']:<16} {m['res'][0]}x{m['res'][1]:<6} {state:<20} {m['gamedir']}")
+
+
+def _write_tokens(inst: Instance, tokens: str):
+    """Append tokens to the in-process input file (consumed once by the game)."""
+    path = inst.gamedir / "tagpu_keys.txt"
+    with open(path, "a") as f:
+        f.write(tokens.strip() + "\n")
+
+
+def cmd_keys(args):
+    inst = Instance(args.name)
+    _write_tokens(inst, " ".join(args.tokens))
+    out({"name": args.name, "tokens": args.tokens}, args.json,
+        human=f"sent: {' '.join(args.tokens)}")
+
+
+def cmd_click(args):
+    inst = Instance(args.name)
+    token = f"{'prclick' if args.right else 'pclick'}:{args.x},{args.y}"
+    _write_tokens(inst, token)
+    out({"name": args.name, "token": token}, args.json, human=f"sent: {token}")
+
+
+def cmd_eye(args):
+    inst = Instance(args.name)
+    path = inst.gamedir / "tagpu_eye.txt"
+    if args.release:
+        path.unlink(missing_ok=True)
+        out({"name": args.name, "eye": None}, args.json, human="camera hold released")
+        return
+    path.write_text(f"{args.x} {args.y}\n")
+    out({"name": args.name, "eye": [args.x, args.y]}, args.json,
+        human=f"camera held at {args.x},{args.y} (tacli eye {args.name} --release to free)")
+
+
+def cmd_arm(args):
+    inst = Instance(args.name)
+    results = {}
+    for spec in args.flags:
+        name, _, value = spec.partition("=")
+        path = inst.gamedir / f"tagpu_{name}"
+        if value.lower() in ("off", "0", "false", "-"):
+            path.unlink(missing_ok=True)
+            results[name] = "removed"
+        else:
+            path.write_text("" if value in ("", "on", "1", "true") else value + "\n")
+            results[name] = value or "on"
+    out({"name": args.name, "flags": results}, args.json,
+        human=", ".join(f"{k}={v}" for k, v in results.items()))
+
+
+def _wait_file(path: Path, timeout: float, since: float):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if path.exists() and path.stat().st_mtime > since:
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def cmd_shot(args):
+    """Surface screenshot: TA's own 8bpp surface (no GPU passes, engine truth)."""
+    inst = Instance(args.name)
+    shots = inst.gamedir / "Screenshots"
+    before = time.time()
+    (inst.gamedir / "tagpu_shot.trigger").write_text("")
+    deadline = time.time() + args.timeout
+    newest = None
+    while time.time() < deadline:
+        cands = [p for p in shots.glob("*.png") if p.stat().st_mtime > before]
+        if cands:
+            newest = max(cands, key=lambda p: p.stat().st_mtime)
+            break
+        time.sleep(0.25)
+    if not newest:
+        die("no surface screenshot appeared (is the instance running?)")
+    dest = Path(args.output).expanduser() if args.output else newest
+    if args.output:
+        shutil.copy2(newest, dest)
+    out({"name": args.name, "path": str(dest)}, args.json, human=str(dest))
+
+
+def cmd_glshot(args):
+    """GL framebuffer capture: what is actually presented, including our passes."""
+    inst = Instance(args.name)
+    ppm = inst.gamedir / "tagpu_gl.ppm"
+    before = time.time()
+    (inst.gamedir / "tagpu_glshot.trigger").write_text("")
+    if not _wait_file(ppm, args.timeout, before):
+        die("no GL screenshot appeared (is the instance running?)")
+    dest = Path(args.output).expanduser() if args.output else ppm
+    if args.output:
+        shutil.copy2(ppm, dest)
+    out({"name": args.name, "path": str(dest)}, args.json, human=str(dest))
+
+
+def cmd_log(args):
+    inst = Instance(args.name)
+    path = inst.gamedir / "tagpu.log"
+    if not path.exists():
+        die("no tagpu.log yet")
+    data = path.read_bytes().decode("utf-8", "replace").splitlines()  # binary-safe
+    if args.grep:
+        rx = re.compile(args.grep)
+        data = [line for line in data if rx.search(line)]
+    data = data[-args.tail:]
+    out({"name": args.name, "lines": data}, args.json, human="\n".join(data))
+
+
+def cmd_roster(args):
+    """Parse the newest roster block the overlay logs every 300 frames."""
+    inst = Instance(args.name)
+    path = inst.gamedir / "tagpu.log"
+    if not path.exists():
+        die("no tagpu.log yet")
+    lines = path.read_bytes().decode("utf-8", "replace").splitlines()
+    units, eye = [], None
+    for line in reversed(lines):
+        m = re.match(r"\s*u(\d+)\s+(\S+)\s+own=(\d+)\s+\((-?\d+),(-?\d+)\)"
+                     r"\s+screen\s*\((-?\d+),(-?\d+)\)", line)
+        if m:
+            units.append({"id": int(m.group(1)), "type": m.group(2), "owner": int(m.group(3)),
+                          "world": [int(m.group(4)), int(m.group(5))],
+                          "screen": [int(m.group(6)), int(m.group(7))]})
+        elif line.startswith("units:"):
+            e = re.search(r"eye=?\(?(-?\d+)[, ]+(-?\d+)", line)
+            if e:
+                eye = [int(e.group(1)), int(e.group(2))]
+            if units:
+                break
+    units.reverse()
+    out({"name": args.name, "eye": eye, "units": units}, args.json,
+        human="\n".join(f"u{u['id']:<4} {u['type']:<10} own={u['owner']} "
+                        f"world={u['world']} screen={u['screen']}" for u in units)
+             or "no roster lines yet (needs a running game)")
+
+
+def cmd_wait(args):
+    """Block until a regex appears in tagpu.log (new lines only)."""
+    inst = Instance(args.name)
+    path = inst.gamedir / "tagpu.log"
+    rx = re.compile(args.pattern)
+    start = path.stat().st_size if path.exists() else 0
+    deadline = time.time() + args.timeout
+    while time.time() < deadline:
+        if path.exists():
+            with open(path, "rb") as f:
+                f.seek(start)
+                chunk = f.read().decode("utf-8", "replace")
+            for line in chunk.splitlines():
+                if rx.search(line):
+                    out({"name": args.name, "matched": line}, args.json, human=line)
+                    return
+        time.sleep(0.5)
+    die(f"timeout waiting for /{args.pattern}/")
+
+
+def cmd_stop(args):
+    inst = Instance(args.name)
+    pid = inst.pid()
+    if pid:
+        run(["kill", str(pid)])
+        for _ in range(20):
+            if not inst.running():
+                break
+            time.sleep(0.5)
+    if args.hard or inst.running():
+        run(["wineserver", "-k"], env=inst.env())
+    out({"name": args.name, "stopped": True}, args.json, human=f"stopped {args.name}")
+
+
+def cmd_rm(args):
+    inst = Instance(args.name)
+    if not inst.exists:
+        die(f"no such instance {args.name!r}")
+    if inst.running():
+        if not args.force:
+            die(f"{args.name} is running (tacli stop {args.name}, or --force)")
+        cmd_stop(argparse.Namespace(name=args.name, hard=True, json=False))
+    shutil.rmtree(inst.dir)
+    out({"name": args.name, "removed": True}, args.json, human=f"removed {args.name}")
+
+
+# --------------------------------------------------------------------------- cli
+
+def res_type(text: str):
+    m = re.fullmatch(r"(\d{3,4})\s*[xX*]\s*(\d{3,4})", text)
+    if not m:
+        raise argparse.ArgumentTypeError("resolution must look like 1024x768")
+    return (int(m.group(1)), int(m.group(2)))
+
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="tacli", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def add_common(sp):
+        """--json is accepted after the subcommand too, not just before it."""
+        sp.add_argument("--json", action="store_true", dest="json",
+                        default=argparse.SUPPRESS, help="machine-readable output")
+
+    def add_launchish(sp, default_res=None):
+        add_common(sp)
+        sp.add_argument("--res", type=res_type, default=default_res,
+                        help="game resolution, e.g. 1024x768")
+        sp.add_argument("--display", default=None, help="X display (default: autodetected live one)")
+        sp.add_argument("--slot", type=int, default=None, help="tiling slot (window position)")
+
+    c = sub.add_parser("create", help="create an isolated instance")
+    c.add_argument("name")
+    add_launchish(c, default_res=DEFAULT_RES)
+    c.add_argument("--sound", action="store_true", help="enable sound (default: silent)")
+    c.add_argument("--intro", action="store_true", help="keep the intro movies")
+    c.add_argument("--force", action="store_true")
+    c.set_defaults(func=cmd_create)
+
+    l = sub.add_parser("launch", help="start an instance (creating it if needed)")
+    l.add_argument("name")
+    add_launchish(l)
+    l.add_argument("--sound", dest="sound", action="store_true", default=None)
+    l.add_argument("--no-sound", dest="sound", action="store_false")
+    l.add_argument("--intro", action="store_true")
+    l.add_argument("--map", help="skirmish map name, e.g. 'Two Continents'")
+    l.add_argument("--player", action="append",
+                   help="N:controller[:side[:color]] (controller 0=off 1=human 2=AI)")
+    l.add_argument("--los", type=int, help="SkirmishLineOfSight")
+    l.add_argument("--mapping", type=int, help="SkirmishMapping")
+    l.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
+    l.add_argument("--timeout", type=float, default=45)
+    l.add_argument("--no-restore-pointer", action="store_true",
+                   help="leave the pointer wherever launching moved it")
+    l.add_argument("--force", action="store_true")
+    l.set_defaults(func=cmd_launch)
+
+    s = sub.add_parser("ls", help="list instances")
+    add_common(s)
+    s.set_defaults(func=cmd_ls)
+
+    k = sub.add_parser("keys", help="send key tokens (space, return, esc, plus, k:a ...)")
+    add_common(k)
+    k.add_argument("name")
+    k.add_argument("tokens", nargs="+")
+    k.set_defaults(func=cmd_keys)
+
+    cl = sub.add_parser("click", help="click at game coordinates")
+    add_common(cl)
+    cl.add_argument("name")
+    cl.add_argument("x", type=int)
+    cl.add_argument("y", type=int)
+    cl.add_argument("--right", action="store_true", help="right click (orders)")
+    cl.set_defaults(func=cmd_click)
+
+    e = sub.add_parser("eye", help="hold the camera at a world position")
+    add_common(e)
+    e.add_argument("name")
+    e.add_argument("x", type=int, nargs="?", default=0)
+    e.add_argument("y", type=int, nargs="?", default=0)
+    e.add_argument("--release", action="store_true")
+    e.set_defaults(func=cmd_eye)
+
+    a = sub.add_parser("arm", help="set/clear trigger files, e.g. native.on=all owndraw.on")
+    add_common(a)
+    a.add_argument("name")
+    a.add_argument("flags", nargs="+")
+    a.set_defaults(func=cmd_arm)
+
+    sh = sub.add_parser("shot", help="engine surface screenshot (PNG)")
+    add_common(sh)
+    sh.add_argument("name")
+    sh.add_argument("-o", "--output")
+    sh.add_argument("--timeout", type=float, default=15)
+    sh.set_defaults(func=cmd_shot)
+
+    g = sub.add_parser("glshot", help="GL framebuffer capture (PPM, includes our passes)")
+    add_common(g)
+    g.add_argument("name")
+    g.add_argument("-o", "--output")
+    g.add_argument("--timeout", type=float, default=15)
+    g.set_defaults(func=cmd_glshot)
+
+    lg = sub.add_parser("log", help="tail tagpu.log")
+    add_common(lg)
+    lg.add_argument("name")
+    lg.add_argument("-n", "--tail", type=int, default=40)
+    lg.add_argument("-g", "--grep")
+    lg.set_defaults(func=cmd_log)
+
+    r = sub.add_parser("roster", help="latest unit roster + camera eye")
+    add_common(r)
+    r.add_argument("name")
+    r.set_defaults(func=cmd_roster)
+
+    w = sub.add_parser("wait", help="wait for a regex in tagpu.log")
+    add_common(w)
+    w.add_argument("name")
+    w.add_argument("pattern")
+    w.add_argument("--timeout", type=float, default=120)
+    w.set_defaults(func=cmd_wait)
+
+    st = sub.add_parser("stop", help="stop an instance")
+    add_common(st)
+    st.add_argument("name")
+    st.add_argument("--hard", action="store_true", help="also kill its wineserver")
+    st.set_defaults(func=cmd_stop)
+
+    rm = sub.add_parser("rm", help="delete an instance")
+    add_common(rm)
+    rm.add_argument("name")
+    rm.add_argument("--force", action="store_true")
+    rm.set_defaults(func=cmd_rm)
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if not hasattr(args, "json"):
+        args.json = False
+    INSTANCES.mkdir(parents=True, exist_ok=True)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -987,6 +987,91 @@ static void gldbg(const char* tag)
     }
 }
 
+/* windowed-mode diagnosis counters */
+static unsigned s_dbg_uploads = 0, s_dbg_pal_uploads = 0;
+
+/* read one pixel of the default framebuffer (glReadPixels resolved from opengl32:
+   wglGetProcAddress returns NULL for GL 1.1 entry points under wine) */
+static void gldbg_pixel(const char* tag, int x, int y)
+{
+    if (GetFileAttributesA("tagpu_gldbg.on") == INVALID_FILE_ATTRIBUTES) return;
+    if ((s_gldbg_frame & 63) != 0) return;
+    typedef void (WINAPI * PFNRP)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
+    static PFNRP prp;
+    if (!prp) prp = (PFNRP)GetProcAddress(GetModuleHandleA("opengl32.dll"), "glReadPixels");
+    unsigned char px[4] = { 9, 9, 9, 9 };
+    if (prp) prp(x, y, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, px);
+    /* CPU-side source content: sum of the first surface row, and the palette's
+       first few entries — distinguishes "texture never uploaded" from "shader
+       output black" */
+    unsigned srcsum = 0;
+    if (g_ddraw.primary && g_ddraw.primary->surface)
+    {
+        unsigned char* s = (unsigned char*)g_ddraw.primary->surface;
+        for (int i = 0; i < 4096; i++) srcsum += s[i];
+    }
+    unsigned palsum = 0;
+    if (g_ddraw.primary && g_ddraw.primary->palette)
+    {
+        unsigned char* p = (unsigned char*)g_ddraw.primary->palette->data_bgr;
+        for (int i = 0; i < 1024; i++) palsum += p[i];
+    }
+    /* GL 1.1 entry points must come from opengl32 directly: the fork's
+       wglGetProcAddress returns NULL for them under wine. */
+    typedef void (WINAPI * PFNGIV)(GLenum, GLint*);
+    static PFNGIV pgiv;
+    if (!pgiv) pgiv = (PFNGIV)GetProcAddress(GetModuleHandleA("opengl32.dll"), "glGetIntegerv");
+    GLint fbo = -1, actex = -1, prog = -1, tex0 = -1, vp[4] = { -1, -1, -1, -1 };
+    if (pgiv)
+    {
+        pgiv(GL_FRAMEBUFFER_BINDING, &fbo);
+        pgiv(GL_ACTIVE_TEXTURE, &actex);
+        pgiv(GL_CURRENT_PROGRAM, &prog);
+        pgiv(GL_TEXTURE_BINDING_2D, &tex0);
+        pgiv(GL_VIEWPORT, vp);
+    }
+    FILE* f = fopen("tagpu.log", "a");
+    if (f) {
+        fprintf(f, "gldbgP %s px(%d,%d)=(%u,%u,%u) srcsum=%u palsum=%u uploads=%u palup=%u "
+                   "fbo=%d actex=%x prog=%d tex2d=%d glvp=(%d,%d %dx%d) surftex=%u\n",
+            tag, x, y, px[0], px[1], px[2], srcsum, palsum, s_dbg_uploads, s_dbg_pal_uploads,
+            (int)fbo, (unsigned)actex, (int)prog, (int)tex0,
+            vp[0], vp[1], vp[2], vp[3], (unsigned)g_ogl.surface_tex_ids[0]);
+        fclose(f);
+    }
+}
+
+/* windowed-mode diagnosis: dump the presentation geometry once per ~64 frames */
+static void gldbg_state(const char* tag)
+{
+    if (GetFileAttributesA("tagpu_gldbg.on") == INVALID_FILE_ATTRIBUTES) return;
+    if ((s_gldbg_frame & 63) != 0) return;
+    /* NB: no glGetIntegerv here — the fork resolves GL 1.1 entry points via
+       wglGetProcAddress, which returns NULL under wine (calling it crashes TA). */
+    RECT cr = { 0, 0, 0, 0 };
+    if (g_ddraw.hwnd) GetClientRect(g_ddraw.hwnd, &cr);
+    FILE* f = fopen("tagpu.log", "a");
+    if (f) {
+        fprintf(f,
+            "gldbgS %s surf=%dx%d render=%dx%d vp=(%d,%d %dx%d) yalign=%d "
+            "scale=(%.3f,%.3f) tex=%dx%d client=%dx%d progs(main=%u s1=%u s2=%u up=%d) "
+            "child=%d\n",
+            tag,
+            (int)g_ddraw.width, (int)g_ddraw.height,
+            (int)g_ddraw.render.width, (int)g_ddraw.render.height,
+            (int)g_ddraw.render.viewport.x, (int)g_ddraw.render.viewport.y,
+            (int)g_ddraw.render.viewport.width, (int)g_ddraw.render.viewport.height,
+            (int)g_ddraw.render.opengl_y_align,
+            (double)g_ogl.scale_w, (double)g_ogl.scale_h,
+            (int)g_ogl.surface_tex_width, (int)g_ogl.surface_tex_height,
+            (int)(cr.right - cr.left), (int)(cr.bottom - cr.top),
+            (unsigned)g_ogl.main_program, (unsigned)g_ogl.shader1_program,
+            (unsigned)g_ogl.shader2_program, (int)g_ogl.shader2_upscale,
+            (int)g_ddraw.child_window_exists);
+        fclose(f);
+    }
+}
+
 static void ogl_render()
 {
     BOOL needs_update = FALSE;
@@ -1084,6 +1169,8 @@ static void ogl_render()
                     GL_RGBA,
                     GL_UNSIGNED_BYTE,
                     g_ddraw.primary->palette->data_bgr);
+
+                s_dbg_pal_uploads++;
             }
 
             if (InterlockedExchange(&g_ddraw.render.surface_updated, FALSE) || g_config.minfps == -2)
@@ -1111,6 +1198,8 @@ static void ogl_render()
 
                 if (row_len != g_ddraw.primary->width)
                     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+
+                s_dbg_uploads++;
             }
 
             static int error_check_count = 0;
@@ -1268,6 +1357,8 @@ static void ogl_render()
             static int frames = 0;
             frames++;
 
+            gldbg_state("s2path");
+
             /* draw surface into framebuffer */
             glUseProgram(g_ogl.main_program);
 
@@ -1388,12 +1479,24 @@ static void ogl_render()
         }
         else if (g_oglu_got_version3 && g_ogl.main_program)
         {
+            gldbg_state("v3path");
+
+            /* Rebind per frame: the setup bind before the render loop is not enough,
+               because the overlay pass (and any other GL user) leaves program 0 bound
+               at the end of the frame. The shader1/shader2 branches above already
+               rebind every frame, which is why only this path rendered black. */
+            glUseProgram(g_ogl.main_program);
+
             glBindVertexArray(g_ogl.main_vao);
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
             glBindVertexArray(0);
+            gldbg_pixel("v3path-post",
+                g_ddraw.render.viewport.x + g_ddraw.render.viewport.width / 2,
+                g_ddraw.render.viewport.y + g_ddraw.render.viewport.height / 2);
         }
         else
         {
+            gldbg_state("legacy");
             glBegin(GL_TRIANGLE_FAN);
             glTexCoord2f(0, 0);                          glVertex2f(-1, 1);
             glTexCoord2f(g_ogl.scale_w, 0);              glVertex2f(1, 1);

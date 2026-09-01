@@ -1,6 +1,8 @@
 # Wine prefix and game data (large, not source)
 /wineprefix/
 /tagpu/gamedir/
+# tacli runtime: symlink mirrors + cloned wine prefixes
+/tagpu/instances/
 
 # Third-party upstream clones (each is its own git repo)
 /vendor/

@@ -11,6 +11,18 @@ BOOL g_mouse_locked;
 HHOOK g_mouse_hook;
 HOOKPROC g_mouse_proc;
 
+/* tagpu: on a desktop shared with a human, the game must never move or fence the
+   real pointer — the snap-to-window on activation steals the cursor mid-task.
+   Drop `tagpu_nowarp.on` next to the exe to suppress both (tacli does by default).
+   Cached: this is a per-instance property, and mouse_lock runs on activation. */
+BOOL tagpu_mouse_nowarp(void)
+{
+    static int cached = -1;
+    if (cached < 0)
+        cached = GetFileAttributesA("tagpu_nowarp.on") != INVALID_FILE_ATTRIBUTES;
+    return cached != 0;
+}
+
 void mouse_lock()
 {
     if (g_config.devmode || g_ddraw.bnet_active || !g_ddraw.hwnd)
@@ -41,13 +53,16 @@ void mouse_lock()
         int cur_x = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
         int cur_y = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
 
-        real_SetCursorPos(
-            g_config.adjmouse ? (int)(rc.left + (cur_x * g_ddraw.mouse.scale_x)) : rc.left + cur_x,
-            g_config.adjmouse ? (int)(rc.top + (cur_y * g_ddraw.mouse.scale_y)) : rc.top + cur_y);
+        if (!tagpu_mouse_nowarp())
+        {
+            real_SetCursorPos(
+                g_config.adjmouse ? (int)(rc.left + (cur_x * g_ddraw.mouse.scale_x)) : rc.left + cur_x,
+                g_config.adjmouse ? (int)(rc.top + (cur_y * g_ddraw.mouse.scale_y)) : rc.top + cur_y);
 
-        CopyRect(&rc, &g_ddraw.mouse.rc);
-        real_MapWindowPoints(g_ddraw.hwnd, HWND_DESKTOP, (LPPOINT)&rc, 2);
-        real_ClipCursor(&rc);
+            CopyRect(&rc, &g_ddraw.mouse.rc);
+            real_MapWindowPoints(g_ddraw.hwnd, HWND_DESKTOP, (LPPOINT)&rc, 2);
+            real_ClipCursor(&rc);
+        }
 
         g_mouse_locked = TRUE;
     }
@@ -73,9 +88,12 @@ void mouse_unlock()
         int cur_x = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
         int cur_y = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
 
-        real_SetCursorPos(
-            (int)(rc.left + (cur_x * g_ddraw.mouse.scale_x)),
-            (int)(rc.top + (cur_y * g_ddraw.mouse.scale_y)));
+        if (!tagpu_mouse_nowarp())
+        {
+            real_SetCursorPos(
+                (int)(rc.left + (cur_x * g_ddraw.mouse.scale_x)),
+                (int)(rc.top + (cur_y * g_ddraw.mouse.scale_y)));
+        }
 
         real_SetCursor(LoadCursor(NULL, IDC_ARROW));
 

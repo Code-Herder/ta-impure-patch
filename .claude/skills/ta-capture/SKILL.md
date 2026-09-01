@@ -1,49 +1,29 @@
 ---
 name: ta-capture
-description: Capture screenshots and video of Total Annihilation running under wine on the tagpu stack — surface shots, GL-framebuffer shots, ffmpeg x11grab video for flicker/animation debugging, frame-by-frame analysis, marker-verified engine-vs-ours pairs. Use when asked to record, capture, film, screenshot, or frame-analyze the game.
+description: Capture screenshots and video of Total Annihilation on the tagpu stack — surface shots, GL-framebuffer shots, ffmpeg x11grab video for flicker/animation debugging, frame-by-frame analysis, marker-verified engine-vs-ours pairs. Use when asked to record, capture, film, screenshot, or frame-analyze the game. Launching and driving the game is the ta-drive skill.
 ---
 
-# TA capture & driving (tagpu project)
+# TA capture (tagpu project)
 
-Adapted from an earlier capture skill; TA-specific rules earned in the
-Phase B–D sessions. **Fold new lessons back into this file.**
+Adapted from an earlier capture skill; TA-specific rules earned in the Phase B-D
+sessions. **Fold new lessons back into this file.**
 
-Game dir: `tagpu/gamedir/` (symlink mirror; cwd of the running game). All
-trigger files are created there (`: > tagpu/gamedir/<file>`).
+**Launching and driving the game is the `ta-drive` skill** (`tools/tacli`): instances,
+windowed mode, silence, keys, clicks, camera, skirmish presets. This file covers only
+*observing* what a running instance draws.
 
-## IN-PROCESS DRIVING (2026-09-01 — PREFER THIS OVER X INJECTION)
+Game dir: an instance's `tagpu/instances/<name>/gamedir/` (cwd of that game; the older
+single-gamedir path `tagpu/gamedir/` still works for a hand-launched run). Trigger files
+are created there; `tacli shot` / `tacli glshot` wrap the two screenshot triggers and
+return the file path, which is preferable to poking triggers by hand.
 
-X-level injection (xdotool keys, XSendEvent, SendInput buttons/relative moves)
-is UNRELIABLE-TO-DANGEROUS: a locked or half-dead GNOME session holds a server
-grab — keys vanish or land in the user's UNLOCK DIALOG (this really happened:
-a gdm auth failure from injected keys; see memory `ta-input-injection-safety`).
-The fork now drives the game from INSIDE the process — works under any
-lock/session state:
+Two facts that shape every capture:
 
-- `tagpu_keys.txt` (gamedir, consumed once ~4×/s): whitespace tokens
-  `a..z 0..9 space return escape plus minus up down left right tab f1..f12`
-  (posted WM_KEYDOWN/UP — menus AND in-game), `pclick:GX,GY` / `prclick:GX,GY`
-  (posted click at GAME px — the ONLY reliable click; it auto-parks the game
-  mouse at view centre afterwards, else edge-scroll war), `mouselock` (call
-  once in-game: cnc-ddraw's wndproc DROPS all mouse messages until its
-  mouse_lock() runs — the historical "clicks never work under lock" cause),
-  `keydown:VK`/`keyup:VK`, `char:C`, `mouserel/mouse/click/rclick` (SendInput
-  variants — DO NOT USE, they die under the shield), `ctrl+X` (posted combo —
-  TA ignores it, modifier state is polled; self-destruct is NOT scriptable yet).
-- `tagpu_eye.txt` "X Y" (world px): camera eye written every present frame
-  while the file exists. CAVEAT: the engine re-scrolls each tick if its OWN
-  scroll state disagrees (game mouse near an edge = permanent war); the log
-  line `eye: WAR engine=(..) hold=(..)` exposes it; the `units:` log samples
-  the eye AFTER our write and hides the war. Park the game mouse centrally
-  (any pclick does) and keep the X cursor off screen edges too.
-- Orders need registry `Interface Type=1` (right-mouse orders): select with
-  `pclick` on the unit, order with `prclick` on the target. Classic type 0's
-  left-click-order scheme resists posted clicks.
-- NATIVE UNITS ARE INVISIBLE IN SURFACE SHOTS (engine draws nothing for
-  them) — verify native-unit state via GL shots; verify ENGINE state
-  (menus/UI/placement boxes) via surface shots.
-- Archive `tagpu.log` before relaunching (`mv tagpu.log tagpu.runN.log`) —
-  numeric evidence (e.g. the sub-pixel anchor filmstrip) dies with `rm`.
+- **NATIVE UNITS ARE INVISIBLE IN SURFACE SHOTS** (the engine draws nothing for them) —
+  judge our renderer from GL shots, and engine state (menus, UI, placement boxes) from
+  surface shots.
+- **Archive `tagpu.log` before relaunching** (`mv tagpu.log tagpu.runN.log`): numeric
+  evidence such as a sub-pixel filmstrip dies with an `rm`.
 
 ## The three capture paths
 
@@ -58,28 +38,24 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
 
 ## Hard rules
 
-1. **Window targeting: exact title match only.** `xdotool search --name "Total
-   Annihilation"` MATCHES BROWSER TABS (e.g. a "Total Annihilation Universe -
-   Discord" window) and keys then go to the user's apps. Always filter:
-   `for w in $(xdotool search --name "Total Annihilation"); do
-      [ "$(xdotool getwindowname $w)" = "Total Annihilation" ] && W=$w && break; done`
-2. **Keys: XTEST after windowactivate** (`xdotool windowactivate $W; xdotool
-   key a` as throwaway first — the first key after activate often drops).
-   `key --window` (XSendEvent) has stopped working in some sessions. Any key
-   skips the intro movie; Escape is the conventional choice.
-3. **Geometry (640×480 fullscreen on the 4K monitor).** The monitor is at
-   desktop offset `+1080,0` (TRUST XRANDR, not wmctrl). Window = 3840×2160.
-   The 4:3 game content is letterboxed INSIDE the window at `+480,0`, size
-   2880×2160, scale 4.5 (desktop-coords: x[1560..4440]).
-   - x11grab of the game: `-video_size 3840x2160 -i :1.0+1080,0`, crop
-     `2880:2160:480:0` in post (window coords, NOT desktop coords).
-   - `tagpu_gl.ppm` is window-sized: game content at `+480,0` there too.
-   - game px (gx,gy) → window px = (480 + gx·4.5, gy·4.5).
-   - THESE NUMBERS ARE 640×480-ONLY — recalibrate after any resolution change
-     (self-calibrate against the memory-read mouse, as in G2).
-4. **Recording video**: session must be unlocked and displaying the game
-   (locked = blank frames; check `loginctl … LockedHint`). Capture:
-   `ffmpeg -y -f x11grab -framerate 60 -video_size 3840x2160 -i :1.0+1080,0
+1. **Window targeting: ask tacli, do not guess.** `tacli ls --json` gives the client
+   window id and its `x, y, w, h` for each instance. Searching by name is a trap:
+   `xdotool search --name "Total Annihilation"` also matches the user's browser and
+   Discord windows, and each instance itself owns two windows (frame + client).
+2. **Never inject keys or clicks with xdotool** — use `tacli keys` / `tacli click`
+   (in-process, reliable, session-state-proof). X injection has landed keystrokes in
+   the user's unlock dialog. xdotool stays fine for reading geometry and for capture.
+3. **Geometry: windowed instances are 1:1** — the client area *is* the game
+   resolution, so game px == window px and no letterbox maths is needed. Take the rect
+   from `tacli ls --json` and grab it directly:
+   `ffmpeg -f x11grab -video_size <w>x<h> -i :1+<x>,<y> ...`. `tagpu_gl.ppm` is the same
+   size as the client area. (Legacy fullscreen runs letterbox 4:3 inside 3840×2160 at
+   `+480,0`, scale 4.5, i.e. game px → window px = `(480 + gx*4.5, gy*4.5)`; those
+   numbers are 640×480-only and must be recalibrated after any resolution change.)
+4. **Recording video**: the session must be unlocked and actually displaying the
+   window (locked = blank frames; check `loginctl … LockedHint`). Capture the instance
+   rect from `tacli ls --json`:
+   `ffmpeg -y -f x11grab -framerate 60 -video_size <w>x<h> -i :1+<x>,<y>
     -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -t <secs> out.mp4`
    **CAPTURE AT 60 fps** for flicker hunts — the GL present runs at 60 Hz and a
    one-present dropout (16 ms) aliases invisibly into a 30 fps capture (this
@@ -93,15 +69,15 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    `tools/sbs.py out.png label1 img1 label2 img2` (needs Pillow).
 6. **`grep -a` on tagpu.log, always** — stray binary bytes make grep treat it
    as a binary file and silently print nothing.
-7. **Sim speed**: TA's own `+`/`-` keys (up to +10, down to −9; minus stretches
-   builds ~10× for capture). Keys land unreliably — verify empirically (sample
-   a log value twice, 15 s apart) before trusting a speed change.
-8. **Camera steering (no clicks under a locked session)**: XTEST mouse edge-
-   scroll — west `xdotool mousemove 1560 800`, east `4440 1080`, north
-   `3000 0`, south `3000 2159`; PARK at `3000 1080` to stop. ~1400 px/s.
-   Steer by the roster log (`u### TYPE own world screen` every 300 frames) —
-   roster `screen=` already includes the viewport offsets. Unit ids are NOT
-   stable (alive-counter order); match by world coords.
+7. **Sim speed**: TA's own `+`/`-` keys via `tacli keys <name> plus` / `minus`
+   (up to +10, down to −9; minus stretches builds ~10× for capture). Verify
+   empirically (sample a log value twice, 15 s apart) before trusting a change.
+8. **Camera steering**: `tacli eye <name> X Y` pins the eye (it writes both the eye
+   and the scroll target, so the engine stops fighting), `--release` frees it. Steer by
+   the roster log (`u### TYPE own world screen`, every 300 frames): roster `screen=`
+   already includes the viewport offsets, and unit ids are NOT stable (alive-counter
+   order) — match by world coords. Mouse-edge scrolling is legacy; do not warp the
+   user's pointer to scroll.
 
 ## Closed-loop camera steering (converges in ~3 rounds)
 
@@ -122,14 +98,14 @@ the delta (`~1400 px/s`, clamp 0.15–3 s) → park → re-read. Break when with
 4. A unit vanishing = empty-composite flicker (see r3dcache); pieces missing =
    partial render; pose jumps = temporal aliasing (one-frame lag, cosmetic).
 
-## Launch recipe (for completeness)
+## Launching (see the ta-drive skill for the full driving surface)
 
 ```bash
-export WINEPREFIX=<repo>/wineprefix DISPLAY=:1
-cd <repo>/tagpu/gamedir && WINEDLLOVERRIDES="ddraw=n,b" wine TotalA.exe &
-# ~15s to window; then: activate, throwaway key, Escape, space, s, Return
-# (registry-preset skirmish; verify the SETUP dialog with a surface shot first)
+tools/tacli launch cap1 --res 1024x768     # ~2s to a window, silent, no intro
+tools/tacli ls --json                      # window rect for x11grab
+tools/tacli stop cap1
 ```
-Wedged (menu keys dead) = `wineserver -k` and relaunch. DLL redeploy requires
-the game dead. Sandbox note: run game-dir reads/writes and wine/xdotool/ffmpeg
-UNSANDBOXED — the sandbox sees a stale view of the mirror dir.
+
+Wedged (menu keys dead) = `tacli stop <name> --hard` and relaunch. A DLL rebuild is
+picked up by the next `tacli launch`. Sandbox note: run game-dir reads/writes and
+wine/ffmpeg commands with the sandbox disabled.
