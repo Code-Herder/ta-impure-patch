@@ -947,19 +947,24 @@ def _ui_blocked(g: dict):
     return None
 
 
-def _ui_keyname(vk: int):
-    """The `tacli keys` token for a gadget's quickkey, or None if we cannot type it."""
-    if not vk:
+def _ui_keyname(code: int):
+    """The `tacli keys` token for a gadget's quickkey, or None if we cannot type it.
+
+    quickkey is a u8 **ASCII** accelerator, not a virtual-key code — every value in
+    the stock .GUI corpus is a letter, a digit or one of 0/8/13/32. There is
+    deliberately no VK_F1..VK_F12 branch: 0x70..0x7A are 'p'..'z' here, and reading
+    them as function keys would silently type the wrong thing.
+    """
+    if not code:
         return None
-    if 0x41 <= vk <= 0x5A:
-        return chr(vk + 32)
-    if 0x61 <= vk <= 0x7A:
-        return chr(vk)
-    if 0x30 <= vk <= 0x39:
-        return chr(vk)
-    if 0x70 <= vk <= 0x7B:
-        return f"f{vk - 0x6F}"
-    return {8: "backspace", 9: "tab", 13: "return", 27: "escape", 32: "space"}.get(vk)
+    if 0x41 <= code <= 0x5A:
+        return chr(code + 32)
+    if 0x61 <= code <= 0x7A:
+        return chr(code)
+    if 0x30 <= code <= 0x39:
+        return chr(code)
+    return {8: "backspace", 9: "tab", 13: "return", 27: "escape",
+            32: "space"}.get(code)
 
 
 def _ui_state(g: dict) -> str:
@@ -1364,11 +1369,22 @@ def cmd_ui(args):
         tokens = _ui_text_tokens(text)
         snap, g = _ui_resolve(inst, selector, tmo, wait=args.wait)
 
+        # The field's own limit is knowable before we type, so refuse rather than
+        # deliver a silently truncated string and call it a fill.
+        cap = g.get("maxchars") or 0
+        if cap and len(text) > cap:
+            die(f'{g["name"]} holds {cap} characters and {text!r} is {len(text)}')
+
         _ui_click_gadget(inst, g, snap, settle=False)     # focus the field
         time.sleep(0.2)
         clear = len(g.get("text") or "")
         if clear:
             _write_tokens(inst, " ".join(["backspace"] * clear))
+            time.sleep(0.3)
+            left = _ui_match(_ui_snapshot(inst), g["name"])
+            if len(left) == 1 and (left[0].get("text") or ""):
+                die(f'{g["name"]} still reads {left[0]["text"]!r} after clearing it '
+                    "— the caret is not where backspace can reach the whole field")
         if tokens:
             _write_tokens(inst, " ".join(tokens))
         time.sleep(0.3)

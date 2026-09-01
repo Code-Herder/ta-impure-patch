@@ -145,6 +145,15 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
      token log built its line with `_snprintf`, whose `-1` on truncation walked the write
      cursor backwards out of the buffer.
 
+   - **`tools/test_tacli.py`** — the first tests `tacli` has had. Stdlib `unittest`,
+     no game and no wine: every function that turns a snapshot dict into a decision
+     (which gadget a selector names, where a listbox row is, what to type, what the
+     table says) runs against synthetic snapshots. `python3 tools/test_tacli.py`.
+     It earned itself immediately by catching a live bug: `_ui_keyname` carried a
+     `VK_F1..VK_F12` branch, but `quickkey` is **ASCII** — `0x70` is `'p'`
+     (`ARMPATROL`'s accelerator), not F1 — so the branch was unreachable for every
+     real value and wrong for the one value that could reach it.
+
    **Route notes that cost time and should not be re-derived:** the in-game menu is
    **`Tab`** (not `Esc`, which does nothing in game), reaching `ARMOPT.GUI`; `SAVEGAME.GUI`
    / `SAVELIST.GUI` / `OPTION.GUI` / `CMENU.GUI` ship in the HPI but are named by no string

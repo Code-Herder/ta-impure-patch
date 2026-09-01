@@ -154,6 +154,7 @@ static const char* type_name(int id)
         case 4:  return "slider";
         case 5:  return "label";
         case 6:  return "surface";
+        case 7:  return "resource";   /* a font or GAF another gadget indexes */
         case 11: return "picture";
         case 12: return "button2";
         case 13: return "timer";

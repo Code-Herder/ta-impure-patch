@@ -118,7 +118,8 @@ iteration, bounded by `[ControlsAry+0xB6] + 1`. [BINARY-VERIFIED]
 | `+0x19` | `i16` | **`height`** | [BINARY-VERIFIED] `0x4A1B8F` |
 | `+0x1B` | `i32` | `attribs` | [BINARY-VERIFIED] `0x4A3F..` |
 | `+0x1F` / `+0x23` | `i32` | `colorf` / `colorb` | [CORPUS] |
-| `+0x27` / `+0x28` | `u8` | `texturenumber` / `fontnumber` (`+0x28` is also used as a group ordinal by the listbox and textfield handlers — [INFERRED]) | [CORPUS] |
+| `+0x27` | `u8` | `texturenumber` | [CORPUS] |
+| `+0x28` | `u8` | `fontnumber` — really an **index into the screen's `id 7` resource gadgets**, not an absolute font id (§3) | [BINARY-VERIFIED] |
 | `+0x29` | `u8` | **`active`** — zero ⇒ the draw loop skips the gadget entirely | [BINARY-VERIFIED] `0x4A915D` |
 | `+0x2A` | `u8` | `commonattribs` | [CORPUS] |
 | `+0x33` | `char[128]` | `help` — tooltip | [CORPUS] |
@@ -246,11 +247,41 @@ and is never drawn. The gadget is skipped outright if `active (+0x29)` is zero
 | 4 | `0x4A9301` | `GUI_SliderUpdate 0x4A3EF0` | **slider / scrollbar** |
 | 5 | `0x4A9345` | `GUI_LabelDraw 0x4A56B0` | **label** |
 | 6 | `0x4A9367` | `0x4A4980` | surface |
-| 7–9 | `0x4A940C` | — | not drawn (id 7 is scanned by the textfield handler) |
+| 7 | `0x4A940C` | — | **resource declaration** — never drawn; see below |
+| 8–9 | `0x4A940C` | — | not drawn, and absent from the stock corpus |
 | 10 | `0x4A93EB` | `0x4A4C90` | [INFERRED] |
 | 11 | `0x4A9186` | `GUI_BlitToFramebuffer 0x4B0230` | picture |
 | 12 | `0x4A9199` | `0x4A5F40` | button-like |
 | 13 | `0x4A93AB` | `GUI_TimerState 0x4A4660` | timer / animation |
+
+**`id 7` is how a screen declares its fonts and button art.** It is never drawn;
+instead twelve separate routines walk the gadget array counting `id == 7` records and
+stop when the running ordinal equals the *consuming* gadget's `+0x28`
+(`0x4A1839`, `0x4A1C9B`, `0x4A25D7`, `0x4A2ED8`, `0x4A3110`, `0x4A3864`, `0x4A3F98`,
+`0x4A4DA4`, `0x4A5402`, `0x4A56F9`, `0x4A5FEF`, `0x4A71F2` — all the same loop).
+So `+0x28` is not a font *number* in any absolute sense: it is an index into the
+screen's own list of `id 7` gadgets. [BINARY-VERIFIED] In the stock corpus they are
+named `FONT` / `ARMFONT` / `CORFONT` and `ARMBUTT` / `CORBUTT` — 68 of them, the
+third most common type. [CORPUS]
+
+**What the stock corpus actually contains** — 1907 records across 144 `.GUI` files,
+counted binary-safe (the files carry NUL padding, so a plain `grep` over a
+concatenation silently drops most of them): [CORPUS]
+
+| `id` | count | |
+|---|---|---|
+| 0 | 144 | one panel per file |
+| 1 | 1311 | buttons |
+| 2 | 40 | listboxes |
+| 3 | 17 | textfields |
+| 4 | 63 | sliders |
+| 5 | 200 | labels |
+| 6 | 54 | surfaces |
+| 7 | 68 | resources |
+| 12 | 10 | button-like |
+
+Ids 8, 9, 10, 11 and 13 are handled by the dispatcher but never appear in a stock
+screen.
 
 ---
 
@@ -364,8 +395,8 @@ running it through the string table:
 its argument unchanged when the table is absent, so the net effect is an empty string
 either way. [BINARY-VERIFIED]
 
-That matches the corpus and the live reads exactly. Of 1252 gadgets in the stock `.GUI`
-files only 11 carry help text at all — one on `SKIRMISH.GUI` (`Difficulty`,
+That matches the corpus and the live reads exactly. Of the 615 gadgets in the stock
+`.GUI` files that declare a `help` key at all, only 11 give it a value — one on `SKIRMISH.GUI` (`Difficulty`,
 *"Adjust skirmish difficulty."*) and ten on `SELGAME.GUI` [CORPUS] — and reading
 `Difficulty`'s `+0x33` on a live SKIRMISH screen returns 128 zero bytes. [LIVE]
 

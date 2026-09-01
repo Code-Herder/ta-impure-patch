@@ -170,6 +170,10 @@ DPLAY: *0 Internet TCP/IP Connection For DirectPlay · 1 IPX Connection For Dire
   then zeroes the field. A few screens write it at runtime (SKIRMISH's toggles do), and
   those read back. Empty `help` is normal, not a broken read.
 
+Changing `tacli ui`? `python3 tools/test_tacli.py` covers the selector, row-geometry,
+token and rendering logic offline — no game needed, and it runs in a hundredth of a
+second. Everything else about the layer needs a real instance.
+
 ## Observing
 
 - `tacli shot` — TA's own 8bpp surface. Engine truth, and the only view that shows
