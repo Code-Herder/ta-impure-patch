@@ -167,11 +167,118 @@ class RowGeometry(unittest.TestCase):
                      items=list("abcde"))
         self.assertIsNone(tacli._ui_row_click(lb, 0)[0])
 
+    def test_the_last_row_stays_inside_the_hit_box(self):
+        # The box stops four pixels short of the bottom edge (0x4A3AE6).
+        lb = listbox(rect=[10, 20, 100, 34], rowpitch=15, count=2, items=["a", "b"])
+        point, why = tacli._ui_row_click(lb, 1)
+        self.assertIsNone(why)
+        self.assertLessEqual(point[1], 20 + 34 - 5)
+
     def test_unknown_pitch_is_refused_rather_than_estimated(self):
         lb = listbox(rowpitch=0, count=3, items=["a", "b", "c"])
         point, why = tacli._ui_row_click(lb, 0)
         self.assertIsNone(point)
         self.assertIn("row pitch", why)
+
+
+def slider(**kw):
+    g = {"i": 2, "id": 4, "type": "slider", "name": "S", "assoc": 9,
+         "rect": [100, 50, 120, 16], "click": [160, 58], "active": 1,
+         "attribs": 1, "help": "", "pos": 0, "range": 107, "knobsize": 10,
+         "thick": 64, "horizontal": 1, "nomouse": 0, "value": 0}
+    g.update(kw)
+    return g
+
+
+class SliderValue(unittest.TestCase):
+    """pos is pixels, value is what the engine acts on; never confuse them."""
+
+    def test_zero_is_zero(self):
+        self.assertEqual(tacli._ui_slider_pos(slider(), 0), 0)
+
+    def test_full_scale_lands_on_the_last_pixel(self):
+        # value == thick must reach range-1, or the top of the scale is unreachable.
+        self.assertEqual(tacli._ui_slider_pos(slider(), 64), 106)
+
+    def test_the_inverse_round_trips(self):
+        # The engine truncates on the way out, so ceil on the way in must not
+        # undershoot: every value has to read back as itself.
+        g = slider()
+        rng, thick = g["range"], g["thick"]
+        for v in range(thick + 1):
+            pos = tacli._ui_slider_pos(g, v)
+            self.assertEqual(pos * thick // (rng - 1), v, f"value {v}")
+
+    def test_pos_never_leaves_the_track(self):
+        g = slider()
+        for v in range(g["thick"] + 1):
+            self.assertTrue(0 <= tacli._ui_slider_pos(g, v) <= g["range"] - 1)
+
+
+class SliderDrag(unittest.TestCase):
+    """The knob moves one pixel per unit, so the release is the grab plus delta."""
+
+    def test_horizontal_grab_lands_on_the_knob(self):
+        g = slider(pos=20, knobsize=10, rect=[100, 50, 120, 16])
+        grab, _ = tacli._ui_slider_drag(g, 20)
+        self.assertEqual(grab, (100 + 20 + 1 + 5, 50 + 8))
+
+    def test_release_is_the_grab_shifted_by_the_delta(self):
+        g = slider(pos=20)
+        grab, release = tacli._ui_slider_drag(g, 50)
+        self.assertEqual(release[0] - grab[0], 30)
+        self.assertEqual(release[1], grab[1])
+
+    def test_vertical_starts_two_pixels_in_and_moves_in_y(self):
+        g = slider(horizontal=0, pos=20, knobsize=10, rect=[100, 50, 16, 120])
+        grab, release = tacli._ui_slider_drag(g, 10)
+        self.assertEqual(grab, (100 + 8, 50 + 20 + 2 + 5))
+        self.assertEqual(release[0], grab[0])
+        self.assertEqual(release[1] - grab[1], -10)
+
+    def test_no_movement_when_already_there(self):
+        g = slider(pos=33)
+        grab, release = tacli._ui_slider_drag(g, 33)
+        self.assertEqual(grab, release)
+
+
+class SliderBinding(unittest.TestCase):
+    """A scrollbar is a slave of its list; only an unbound slider holds a value."""
+
+    def test_a_matching_listbox_makes_it_a_scrollbar(self):
+        snap = snapshot([listbox(assoc=9), slider(assoc=9)])
+        self.assertEqual(tacli._ui_bound_list(snap, slider(assoc=9))["name"], "L")
+
+    def test_an_unmatched_slider_is_a_value(self):
+        snap = snapshot([listbox(assoc=1), slider(assoc=243)])
+        self.assertIsNone(tacli._ui_bound_list(snap, slider(assoc=243)))
+
+    def test_state_shows_the_value_not_the_pixels(self):
+        self.assertEqual(tacli._ui_state(slider(pos=53, value=31)), "val=31/64")
+
+    def test_a_rangeless_slider_says_so(self):
+        self.assertIn("no value", tacli._ui_state(slider(value=None, pos=7)))
+
+
+class Selectable(unittest.TestCase):
+    """Two independent ways a row refuses the selection, from two engine sites."""
+
+    def test_an_ordinary_row_is_selectable(self):
+        lb = listbox(count=2, items=["a", "b"], separator=[0, 0])
+        self.assertIsNone(tacli._ui_item_selectable(lb, 1))
+
+    def test_a_separator_row_is_not(self):
+        lb = listbox(count=2, items=["a", "b"], separator=[0, 1])
+        self.assertIn("separator", tacli._ui_item_selectable(lb, 1))
+
+    def test_a_disabled_row_is_not(self):
+        lb = listbox(count=2, items=["a", "b"], separator=[0, 0], itemflags=[1, 0])
+        self.assertIn("disabled", tacli._ui_item_selectable(lb, 1))
+
+    def test_absent_flag_arrays_mean_no_objection(self):
+        # Most screens have neither array; that is not a reason to refuse.
+        self.assertIsNone(tacli._ui_item_selectable(
+            listbox(count=1, items=["a"]), 0))
 
 
 class TextTokens(unittest.TestCase):

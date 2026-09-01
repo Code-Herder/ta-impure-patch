@@ -175,12 +175,30 @@ as separators. So the item text of a listbox is simply the blob at `+0xC2`, read
 
 | `attribs` bit | Set by | Items live at | Text? |
 |---|---|---|---|
-| `0x10` | `GUIGADGET_SetListText 0x4A32A0(gi, name, blob, count)` | `+0xC2` blob | yes |
-| `0x20` / `0x80` | `0x4A35A0(gi, name, entries, count)` | `+0xC6`, stride `0x18` | **no** — the draw path (`0x4A20A6`) follows pointers to pictures |
+| `0x10` | `GUIGADGET_SetListText 0x4A32A0(gi, name, blob, count, flags)` | `+0xC2` blob | yes |
+| `0x80` | `0x4A35A0(gi, name, entries, count)` | `+0xC6`, stride `0x18` | **no** |
+| `0x20` | `0x4A36A0(gi, name, entries, count)` | `+0xC6`, pointer array | **no** |
 
 The draw dispatcher tests `0x10` first (`0x4A1C54`) and falls through to `0xA0`
-(`0x4A2052`). A picture list therefore has *no readable item text at all*, which is a
-different answer from an empty list and must be reported as such. [BINARY-VERIFIED]
+(`0x4A2052`). The `0x18` record is a **GAF frame header** — `u16 width @+0x00`,
+`u16 height @+0x02`, `u8 transparency @+0x08`, `u16 subframes @+0x0A`,
+`void* pixels @+0x10` (NULL ⇒ the row is skipped, `0x4A212C`) — with no name, no
+filename and no caption anywhere in it; the branch contains no text-drawing call at all.
+The `0x20` flavour's objects do carry a `char[32]` at `+0x08`, but every entry is a
+`rep movsd` copy of the same GAF entry header, so all of them read the same string.
+A picture list therefore has *no readable item text*, which is a different answer from
+an empty list and must be reported as such. [BINARY-VERIFIED]
+
+**In this binary only two screens are picture lists**: `RESTRICT2.GUI`'s `PICLIST`
+(`0x44CCD9`) and `LOGOSEL.GUI`'s `LOGOS` (`0x4452CC`). Everything else is the text
+flavour and reads out directly — including the ones previously assumed unreachable:
+`SELMAP.GUI` `MAPNAMES` (`0x444FF4`, `0x47ABA6`), `NEWGAME.GUI` `Campaign` and
+`Missions`, `SELGAME.GUI`'s ten parallel columns, `SELPROV.GUI` `DPLAY`,
+`LOADGAME.GUI` / `SAVELIST` / `LOADLIST` `GAMES`, `SHARE.GUI` `PLYRLIST`,
+`RESTRICT2.GUI` `DESCLIST`, `MODEM`/`SERIAL` port lists, `FILEREQ.GUI`. [BINARY-VERIFIED]
+`RESTRICT2` even parks a full text list beside its picture list at the same indices, so
+its rows can be identified through `DESCLIST` instead. Confirmed live: `SELMAP` reports
+99 map names and `ui select` reaches any of them. [LIVE]
 
 **Row geometry** — rows sit at a fixed pitch from the top of the gadget, not spread over
 its height:
@@ -197,8 +215,54 @@ The font is reached as `*(0x51FBA4) -> +0x14 -> +0x0C`, whose glyph *i* is
 `LOADGAME`'s and `SELPROV`'s lists even though no `.GUI` in the stock corpus declares
 one, so the font path is the fallback rather than the usual case. [LIVE]
 
-A leading `&G` on an entry is a colour marker the engine strips before drawing
-(`0x4A1E17`), so a reader should strip it too. [BINARY-VERIFIED]
+A leading `&G` marks a **non-selectable separator**. The engine strips the two
+characters before drawing (`0x4A1E17`) *and* refuses to leave the selection on such a
+row (`0x4A39EA`, `0x4A3BA3`, `0x4A996A`), so a reader must strip it for display and
+still report it: a select aimed at one of these rows silently does nothing.
+[BINARY-VERIFIED]
+
+`GUIGADGET_SetListText` takes a **fifth** argument — `(gi, name, blob, count, u8*
+flags)`, `ret 0x14` — storing a one-byte-per-item array at `+0xD6` and setting attribs
+bit `0x800` (`0x4A33A8`). Bit 0 of each byte enables the row; the draw path greys the
+others (`0x4A21F4`). Only `RESTRICT2.GUI` uses it, and there it is what says which
+units are available. [BINARY-VERIFIED]
+
+### 2.4.1 Scrolling — what moves `top`, and by how much
+
+Every writer of `+0xBC`, and this is the whole list: [BINARY-VERIFIED]
+
+| VA | Moves `top` by | Trigger |
+|---|---|---|
+| `0x4A9947` / `0x4A9AFA` | **∓1 row** | `List_SelectPrev` / `List_SelectNext` — the **arrow keys** |
+| `0x4A2F94` / `0x4A2FA4` | snaps to `selected` | `List_SelectByName 0x4A2E40`, when the selection leaves the view |
+| `0x4A3D82` / `0x4A3E26` | ∓1 row per 2 ticks | drag auto-scroll: press inside the list, hold the pointer above `y+2` or below `y+h-4` |
+| `0x4A2D61` | copies | another listbox with the same `assoc` |
+| `0x4A2DF6` | `round(maxtop * knobpos / (range-1))` | the bound scrollbar, through `Gadget_PropagateAssoc 0x4A2BE0` |
+| `0x4A30F0`, `0x4A33C7`, `0x4A3637`, `0x4A372B` | to 0 | the list setters |
+
+**The scroll arrows are not in the `.GUI` file.** `GUI_StageUpdateDraw` synthesizes two
+unnamed `id 1` buttons per slider at load (`0x4A8663`–`0x4A8979`), copying the slider's
+`assoc`, and shrinks the slider to make room (`0x4A8947`–`0x4A8976`). That is why
+`SELPROV.GUI` declares `totalgadgets=6` and a live snapshot shows 8. They are told apart
+by **attribs bits, not position**: `0x1800` marks a scroll arrow at all, `0x1000` is
+up/left (attribs exactly `0x3400`), `0x0800` is down/right (`0x2C00`) — read at
+`0x4A6F97`/`0x4A6FE8`. [BINARY-VERIFIED]
+
+**A click on an arrow moves `knobpos` by one *pixel*, not one row** (`0x4A7006`,
+`0x4A7018`), and the row only follows through the `round(maxtop * knobpos / (range-1))`
+above — so it takes roughly `(range-1)/maxtop` clicks to move a single row, and usually
+a click moves nothing at all. The same is true of clicking the scrollbar track
+(`0x4A426B`: ±1 px per frame). **There is no page-up/page-down anywhere**, and **no
+mouse wheel**: `WM_MOUSEWHEEL` (`0x20A`) does not appear in the binary.
+
+So the only mechanism that moves the selection a known number of rows is the keyboard.
+`GUI_HandleKey 0x4A9B90` dispatches on `key - 9` through a byte table at `0x4A9EE0`;
+TA's internal arrow codes are `0xF4`–`0xF7` (`0x4C1DA9`…`0x4C1E48` translate
+VK_LEFT/UP/RIGHT/DOWN), Up and Down act on the focused gadget when its `id == 2`
+(`0x4A9DE0`, `0x4A9E21`) and fire the listbox's callback exactly as a click would.
+Focus is `[guiobj+0x20]`, and **clicking inside a listbox sets it unconditionally**
+(`0x4A3AFB`). Left/Right act only on a *horizontal* slider. There is no PgUp/PgDn/Home/
+End. [BINARY-VERIFIED]
 
 ### 2.5 Textfield — `id 3`
 
@@ -223,6 +287,52 @@ Read the slider parser at `0x4AE170` and the writer at `0x4AE050`; they agree in
 directions. **Neither of the two offsets previously guessed was the value**: `+0x136` is
 `range` and `+0x142` is `knobsize`. `GUI_SliderUpdate 0x4A3EF0` touching them is the
 scrollbar doing arithmetic, not storing a position.
+
+**`knobpos` is a pixel offset; the *value* is derived from it.** The engine's own pair:
+
+```c
+int  GUI_SliderGetValue(g)        /* 0x45BA20 */ { return g->knobpos * g->thick / (g->range - 1); }   /* truncates */
+void GUI_SliderSetValue(g, v)     /* 0x45B9B0 */ { g->knobpos = ceil(min(v, g->thick) * (g->range - 1) / g->thick); }
+```
+
+so `value ∈ [0, thick]` is the number the game acts on and `knobpos ∈ [0, range-1]` is
+where the knob sits. [BINARY-VERIFIED] **`range`, `thick` and `knobsize` are routinely
+rewritten at screen-load time** — `SOUNDS`' `FXVOL` gets `thick = 64` at `0x45DEF2`,
+`SHARE`'s sliders get `range` and `knobsize` recomputed from the gadget's own width and
+height at `0x49378C` — so none of them may be taken from the `.GUI` file. Live on
+`SOUNDS`, `FXVOL` reads `range=89 thick=64` against the file's `range=107 thick=26`.
+[LIVE]
+
+### 2.6.1 Driving a slider
+
+`Slider_HandleMouse 0x4A4170` is the actuator. Orientation is **`attribs & 1`** — set is
+horizontal, clear is vertical — never width versus height; `attribs & 0x10`, or a
+non-zero byte at `+0x157`, makes it ignore the mouse entirely (`0x4A41A0`, `0x4A41A9`).
+The knob rect is `x + knobpos + 1` wide by `knobsize` when horizontal, and
+`y + knobpos + **2**` when vertical (`0x4A2407` / `0x4A2438` — the 1/2 asymmetry is
+real). Two gestures, and only two:
+
+- **Press on the knob and move** → `knobpos = knobpos_at_grab + (mouse_now −
+  mouse_at_grab)` along the live axis (`0x4A422C`), clamped to `[0, range-1]`. One pixel
+  per unit, no proportional mapping, and the only jump-to-position there is.
+- **Press anywhere else on the track** → ±1 pixel per frame toward the cursor
+  (`0x4A424A`), stopping when the knob covers it. A single click is worth exactly one
+  step; there is no paging.
+
+The press frame itself changes nothing — it only captures (`0x4A4301`) — so a gesture
+posted as one batch of input leaves the engine looking at a released button and moves
+nothing. It has to be spread across frames. [BINARY-VERIFIED]
+
+A change fires the slider's own callback at `+0x144` (`0x4A42EF`), which is what makes
+the value live: `FXVOL`'s (`0x45BDE0`) writes `main+0x37F0C` and reprograms the mixer,
+`GAMMA`'s (`0x45BD20`) writes `main+0x37F08` and reloads the gamma ramp, `SPEEDS`'
+`GAME` (`0x45C070`) writes `main+0x38A4B`. Confirmed live: `ui set FXVOL 48` then
+`ui set FXVOL 7` leaves `main+0x37F0C` reading 48 and then 7. [LIVE]
+
+**A slider bound to a listbox is not a value.** `0x4A3EF0` scans the panel for the
+`id 2` gadget sharing the slider's `assoc`; when it finds one the slider becomes that
+list's scrollbar and `Gadget_PropagateAssoc 0x4A2BE0` recomputes it from `top` — so
+setting it is pointless. Drive the list instead.
 
 TA's sliders are **scrollbars bound to a listbox by `assoc`**: `0x4A3EF0` scans the panel
 for the `id 2` gadget whose `assoc` byte matches the slider's, and `0x4A3053` then writes
@@ -347,6 +457,13 @@ a 640x480 surface in an instance launched at 1024x768, and `ARMCOM1.GUI` reports
 | `0x4AD350` / `0x4AD2xx` | `GUI_ParseCommonFields` / its serializer | Where `help` is written and then zeroed (§7) |
 | `0x4AE170` / `0x4AE050` | slider TDF reader / writer | Pins `range`/`thick`/`knobpos`/`knobsize` (§2.6) |
 | `0x495010` | `void ToggleTabMenu(void)` | What `Tab` reaches in game (§9) |
+| `0x4A4170` | `Slider_HandleMouse(ctx, idx)` | The only way a slider moves (§2.6.1) |
+| `0x45BA20` / `0x45B9B0` | `GUI_SliderGetValue` / `SetValue` | pixels ⇄ value (§2.6) |
+| `0x4A3780` | `Listbox_HandleMouse(ctx, idx, ?)` | Click-to-select, drag auto-scroll |
+| `0x4A2BE0` | `Gadget_PropagateAssoc(ctx, idx)` | Syncs everything sharing an `assoc` |
+| `0x4A9830` / `0x4A99C0` | `List_SelectPrev` / `Next` | ±1 row — the arrow keys (§2.4.1) |
+| `0x4A9B90` | `GUI_HandleKey(ctx, key)` | Key dispatch; focus is `[guiobj+0x20]` |
+| `0x4A8663` | arrow synthesis inside `0x4A81E0` | Where the unnamed scroll arrows come from |
 | `0x495860` | `ApplySelectUnitMenu` — presses gadget `"STOP"` (`0x502714`) on the top GUI | Confirms in-game order buttons are ordinary named gadgets |
 
 `main+0x37EA0` holds the name of the expected in-game screen. [BINARY-VERIFIED]
@@ -481,7 +598,11 @@ an actionability check needs both tests. `SINGLE.GUI`'s `AnyMsn` is the `active=
   deferred surfaces at once, which makes it the test bed for them.
   `SAVEGAME.GUI`, `SAVELIST.GUI`, `OPTION.GUI` and `CMENU.GUI` ship in `totala1.hpi` but
   **no string in the exe names them** — they are dead files, and reading them as the live
-  save UI wastes a session. [BINARY-VERIFIED, strings]
+  save UI wastes a session. The same is true of `SELCAMP` / `SELCAMPX` / `NEWCAMP` /
+  `MISSION` / `MISSIONX` / `SIDESEL` / `SELSIDE` / `METAL` / `ENERGY` / `GAMMA`: the
+  campaign screen this binary loads is `NEWGAME.GUI`, and the gamma slider lives in
+  `VISUALS.GUI`. Check a `.GUI` name against the exe's string table before spending a
+  session trying to reach it. [BINARY-VERIFIED, strings]
 - **Textfields validate their own content.** `GAMENAME` (`maxchars=20`) keeps letters,
   digits, space and `_`, and silently drops `- . , ! # @`. A `fill` that comes back short
   is TA refusing characters, not input being lost.
@@ -533,6 +654,16 @@ an actionability check needs both tests. `SINGLE.GUI`'s `AnyMsn` is the `active=
 0x495010  ToggleTabMenu           what Tab reaches in game
 0x495E90  in-game key dispatcher  byte table 0x496694, jump table 0x4965F4
 0x47A519  runtime help writer     SKIRMISH toggles
+0x4A4170  Slider_HandleMouse      drag on the knob, +-1px on the track
+0x45BA20  GUI_SliderGetValue      knobpos*thick/(range-1), truncating
+0x45B9B0  GUI_SliderSetValue      the ceil inverse
+0x4A3780  Listbox_HandleMouse     click-to-select + drag auto-scroll
+0x4A2BE0  Gadget_PropagateAssoc   slider <-> list, radio groups
+0x4A9830  List_SelectPrev         up arrow, -1 row
+0x4A99C0  List_SelectNext         down arrow, +1 row
+0x4A9B90  GUI_HandleKey           table 0x4A9EE0 -> jumps 0x4A9EBC
+0x4A8663  scroll-arrow synthesis  inside GUI_StageUpdateDraw
+0x4C1DA9  VK_UP -> 0xF5           TA's internal arrow codes are 0xF4..0xF7
 ```
 
 ### Data
@@ -559,7 +690,11 @@ button: text +B6[128]  stages +136  status_curnt +137  status_init +138  quickke
 list:   selected +BA  top +BC  maxtop +BE  count +C0  items* +C2  entries* +C6
         itemheight +DA   (text flavour iff attribs & 0x10; picture iff & 0xA0)
 field:  text +B6[128]  maxchars +138
-slider: range +136  thick +13C  knobpos +140  knobsize +142
+slider: range +136  thick +13C  knobpos +140  knobsize +142  altproc +157
+        horizontal iff attribs & 1; deaf to the mouse if attribs & 0x10
+        value = knobpos*thick/(range-1)   [0..thick]
+arrows: synthesized id 1, assoc = slider's, attribs & 0x1800
+        0x1000 = up/left (0x3400)   0x0800 = down/right (0x2C00)
 ```
 
 ### Data (runtime globals)

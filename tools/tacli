@@ -981,11 +981,18 @@ def _ui_state(g: dict) -> str:
         n = "?" if items is None else len(items)
         return f"sel={g.get('selected')} n={n}"
     if kind == "slider":
-        return f"value={g.get('value')}/{g.get('range')}"
+        if g.get("value") is None:
+            return f"pos={g.get('pos')} (no value)"
+        return f"val={g.get('value')}/{g.get('thick')}"
     if kind == "field":
         text = (g.get("text") or "")[:20]
         return f'"{text}"'
     return "ok"
+
+
+def _ui_label(g: dict) -> str:
+    """How to name a gadget in a message. Real gadgets do have empty names."""
+    return g.get("name") or f"#{g['i']}"
 
 
 def _ui_groups(snap: dict) -> dict:
@@ -1006,9 +1013,8 @@ def _ui_groups(snap: dict) -> dict:
         if not assoc:
             continue
         toggles = [g for g in members if _ui_kind(g) in ("toggle", "cycle")]
-        scroll = ([g for g in members if g["type"] == "slider"]
-                  and [g for g in members if g["type"] == "listbox"])
-        if len(toggles) > 1 or scroll:
+        sliders = [g for g in members if g["type"] == "slider"]
+        if len(toggles) > 1 or (sliders and len(members) > 1):
             groups[assoc] = members
     return groups
 
@@ -1064,8 +1070,9 @@ def _ui_render(snap: dict, show_all: bool = False) -> str:
         if g["type"] != "listbox":
             continue
         if g.get("items") is None:
-            lines.append(f"{g['name']}: items unknown — this is a picture list "
-                         f"(attribs {g.get('attribs')}), its entries carry no text")
+            lines.append(f"{g['name']}: items unknown — a picture list (attribs "
+                         f"{g.get('attribs')}); its entries are GAF frames and "
+                         "carry no text at all")
         else:
             lines.append(f"{g['name']}: " + _ui_item_line(g))
 
@@ -1104,6 +1111,25 @@ def _ui_match(snap: dict, selector: str):
         want = want.lower()
         hits = [g for g in hits if g["type"] == want or _ui_kind(g) == want]
     return hits
+
+
+def _ui_item_selectable(g: dict, idx: int):
+    """Why row `idx` cannot hold the selection, or None.
+
+    Two independent refusals, from two different places in the engine: a "&G"
+    prefix makes a row a separator that the selection slides off (0x4A39EA), and
+    the per-item flag array at +0xD6 greys a row out (0x4A21F4). Either one makes
+    a select silently do nothing, which is exactly the failure worth naming.
+    """
+    seps = g.get("separator") or []
+    if idx < len(seps) and seps[idx]:
+        return "a separator row, not a selectable item"
+
+    flags = g.get("itemflags")
+    if flags is not None and idx < len(flags) and not flags[idx]:
+        return "disabled on this screen"
+
+    return None
 
 
 def _ui_item_index(g: dict, selector: str) -> int:
@@ -1151,7 +1177,60 @@ def _ui_row_click(g: dict, idx: int):
                       f"(showing #{top}..#{min(top + visible, len(g.get('items') or [])) - 1}"
                       f" of {len(g.get('items') or [])})")
 
-    return (x + w // 2, y + 2 + (idx - top) * pitch + pitch // 2), None
+    # The hit box stops four pixels short of the bottom edge (0x4A3AE6), which
+    # only bites the last row of a tightly packed list.
+    cy = min(y + 2 + (idx - top) * pitch + pitch // 2, y + h - 5)
+    return (x + w // 2, cy), None
+
+
+def _ui_slider_pos(g: dict, value: int) -> int:
+    """The knobpos that makes the engine read back `value`.
+
+    The engine's own pair: GUI_SliderGetValue 0x45BA20 truncates
+    pos*thick/(range-1), and its inverse GUI_SliderSetValue 0x45B9B0 rounds the
+    other way. Mirroring the ceil is what makes a set land on the value asked
+    for rather than one below it.
+    """
+    rng, thick = g.get("range") or 0, g.get("thick") or 0
+    return -((-min(value, thick) * (rng - 1)) // thick)
+
+
+def _ui_slider_drag(g: dict, want: int):
+    """Grab point and release point for dragging the knob to `want`.
+
+    The knob tracks the pointer one pixel per unit — knobpos becomes
+    `knobpos_at_grab + (mouse_now - mouse_at_grab)` along the live axis
+    (0x4A422C) — so the release point is just the grab point shifted by the
+    difference. The press has to land *on the knob*: a press on the track is a
+    different gesture entirely, worth one unit per frame toward the cursor.
+    """
+    x, y, w, h = g["rect"]
+    pos = g.get("pos") or 0
+    knob = g.get("knobsize") or 0
+    delta = want - pos
+
+    if g.get("horizontal"):
+        # knob spans [x + pos + 1, + knobsize]  (0x4A2407)
+        grab = (x + pos + 1 + knob // 2, y + h // 2)
+        return grab, (grab[0] + delta, grab[1])
+
+    # vertical knobs start two pixels in, not one (0x4A2438)
+    grab = (x + w // 2, y + pos + 2 + knob // 2)
+    return grab, (grab[0], grab[1] + delta)
+
+
+def _ui_bound_list(snap: dict, slider: dict):
+    """The listbox a scrollbar drives, or None if the slider carries its own value.
+
+    GUI_SliderUpdate 0x4A3EF0 scans the panel for the id-2 gadget whose assoc
+    byte matches the slider's; finding one makes the slider a slave of that
+    list's scroll position, which it recomputes every frame. Dragging such a
+    slider is pointless — the binder overwrites it.
+    """
+    for g in snap.get("gadgets") or []:
+        if g["type"] == "listbox" and g.get("assoc") == slider.get("assoc"):
+            return g
+    return None
 
 
 def _ui_resolve(inst: Instance, selector: str, timeout: float,
@@ -1188,6 +1267,32 @@ def _ui_resolve(inst: Instance, selector: str, timeout: float,
         time.sleep(0.1)
 
 
+# What a gadget can visibly become. Deliberately narrow: a full diff would fire
+# on animating timers and clocks and call that a consequence of our click.
+_SETTLE_FIELDS = ("stage", "pos", "selected", "text")
+
+
+def _ui_group_change(before: dict, after: dict, g: dict):
+    """A change in the gadget's own assoc group, described, or None.
+
+    Clicking a scrollbar arrow moves the *slider*, and clicking one radio button
+    clears *another* — neither shows up on the gadget that was clicked. The
+    engine ties both to `assoc` (0x4A6A40, 0x4A3EF0), so that group is exactly
+    the right place to look, and looking no wider keeps a ticking timer
+    somewhere else on screen from being reported as our doing.
+    """
+    was = {b["i"]: b for b in before.get("gadgets") or []}
+
+    for now in after.get("gadgets") or []:
+        if now.get("assoc") != g.get("assoc") or now["i"] not in was:
+            continue
+        for f in _SETTLE_FIELDS:
+            if f in now and now.get(f) != was[now["i"]].get(f):
+                return (f"{_ui_label(now)} {f} "
+                        f"{was[now['i']].get(f)} -> {now.get(f)}")
+    return None
+
+
 def _ui_settle(inst: Instance, before: dict, g: dict, timeout: float = UI_SETTLE):
     """Wait for an observable consequence of an action, and report which one.
 
@@ -1204,11 +1309,128 @@ def _ui_settle(inst: Instance, before: dict, g: dict, timeout: float = UI_SETTLE
         now = _ui_match(snap, g["name"])
         if len(now) == 1 and now[0].get("stage") != g.get("stage"):
             return snap, f"stage {g.get('stage')} -> {now[0].get('stage')}"
+        moved = _ui_group_change(before, snap, g)
+        if moved:
+            return snap, moved
         if snap.get("uichange") == g["i"]:
             return snap, "engine confirmed"
         if time.time() >= deadline:
             return snap, None
         time.sleep(0.1)
+
+
+def _ui_set_slider(inst: Instance, snap: dict, g: dict, value: int):
+    """Drag a value slider's knob until the engine reads back `value`.
+
+    The gesture is the one the engine implements, spread over four batches
+    because each has to land in a different frame: the capture happens on the
+    frame the button-down message arrives, and the value only moves on the pump
+    iterations after it. Posting the whole gesture in one batch would leave the
+    engine looking at a released button and nothing would move.
+    """
+    bound = _ui_bound_list(snap, g)
+    if bound:
+        die(f'{g["name"]} is the scrollbar for {bound["name"]}, not a value — '
+            f"the engine recomputes it from that list every frame. "
+            f'Move the list instead: ui select {bound["name"]} <item>')
+
+    if g.get("nomouse"):
+        die(f'{g["name"]} ignores the mouse (attribs {g.get("attribs")})')
+
+    rng, thick = g.get("range") or 0, g.get("thick") or 0
+    if rng <= 1 or thick <= 0:
+        die(f'{g["name"]} has range={rng} thick={thick}, which carries no value')
+    if not 0 <= value <= thick:
+        die(f'{g["name"]} runs 0..{thick} and {value} is outside it')
+
+    want = _ui_slider_pos(g, value)
+    grab, release = _ui_slider_drag(g, want)
+
+    for tokens in (f"mouse:{grab[0]},{grab[1]}", "down:lbutton",
+                   f"mouse:{release[0]},{release[1]}", "up:lbutton"):
+        _write_tokens(inst, tokens)
+        time.sleep(0.35)
+
+    after = _ui_snapshot(inst)
+    hits = _ui_match(after, g["name"])
+    now = hits[0] if len(hits) == 1 else {}
+    got = now.get("value")
+
+    human = (f"{g['name']} = {got}/{thick} (knob {g.get('pos')} -> {now.get('pos')})"
+             + ("" if got == value else f" — asked for {value}"))
+    return {"name": g["name"], "value": got, "wanted": value,
+            "pos": now.get("pos"), "thick": thick}, human
+
+
+def _ui_select_row(inst: Instance, before: dict, g: dict, idx: int,
+                   timeout: float) -> dict:
+    """Put the selection on row `idx`, scrolling to it if it is off screen.
+
+    A visible row is one click. An off-screen one is reached with the arrow keys:
+    they are the only mechanism that moves the selection by exactly one row per
+    press (List_SelectPrev/Next 0x4A9830/0x4A99C0, which also drag `top` along
+    when the selection would leave the view). The scroll arrows flanking the
+    scrollbar move the knob one *pixel*, which is usually no rows at all, and the
+    engine offers no page-jump — so counting arrow presses is the only honest way
+    down a long list, and it is what a person holding the key does too.
+
+    Progress is polled rather than counted: a "&G" separator swallows a press
+    without moving, so a batch can land short but never long.
+    """
+    point, why = _ui_row_click(g, idx)
+
+    if point:
+        _write_tokens(inst, f"pclick:{point[0]},{point[1]}")
+        after, how = _ui_settle_item(inst, before, g, idx)
+        return {"at": list(point), "steps": 0, "confirm": how,
+                "gui": after.get("gui")}
+
+    # Off screen: click the nearest visible row to take the keyboard focus
+    # (0x4A3AFB sets it unconditionally on a click inside the box), then walk.
+    top = g.get("top") or 0
+    pitch = g.get("rowpitch") or 0
+    visible = max((g["rect"][3] - 2) // pitch, 1) if pitch else 1
+    anchor_row = top if idx < top else top + visible - 1
+    point, why = _ui_row_click(g, anchor_row)
+    if point is None:
+        die(why)
+
+    _write_tokens(inst, f"pclick:{point[0]},{point[1]}")
+    time.sleep(0.3)
+
+    deadline = time.time() + max(timeout, 15.0)
+    steps = 0
+    seen = None
+
+    while True:
+        snap = _ui_snapshot(inst)
+        hits = _ui_match(snap, g["name"])
+        if len(hits) != 1:
+            die(f'{g["name"]} vanished while scrolling to #{idx}')
+        sel = hits[0].get("selected")
+
+        if sel == idx:
+            return {"at": list(point), "steps": steps, "gui": snap.get("gui"),
+                    "confirm": f"selection {g.get('selected')} -> {idx}"
+                               + (f" in {steps} arrow presses" if steps else "")}
+
+        if sel == seen:
+            die(f'{g["name"]} stopped moving at #{sel} on the way to #{idx} '
+                "— a separator or a disabled row is in the way")
+        seen = sel
+
+        if time.time() >= deadline:
+            die(f'{g["name"]} reached #{sel} of #{idx} before the {timeout:g}s '
+                "timeout — raise --timeout for a very long list")
+
+        # Batched: a press can move one row or none, never more, so a batch
+        # cannot overshoot. Re-reading between batches keeps it self-correcting —
+        # which it needs to be, because a rapid batch does get partly dropped
+        # (96 rows cost 171 presses live), so `steps` counts presses sent.
+        n = min(abs(idx - sel), 8)
+        _write_tokens(inst, " ".join(["down" if idx > sel else "up"] * n))
+        steps += n
+        time.sleep(0.25)
 
 
 def _ui_settle_item(inst: Instance, before: dict, g: dict, idx: int,
@@ -1327,16 +1549,16 @@ def cmd_ui(args):
             _ui_page_to(inst, _ui_snapshot(inst), args.page, tmo)
         before, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait)
         after, how = _ui_click_gadget(inst, g, before)
-        msg = f"clicked {g['name']} at {g['click'][0]},{g['click'][1]}"
+        msg = f"clicked {_ui_label(g)} at {g['click'][0]},{g['click'][1]}"
         msg += f" — {how}" if how else " — delivered (no GUI-visible change)"
-        out({"clicked": g["name"], "at": g["click"], "confirm": how,
+        out({"clicked": _ui_label(g), "at": g["click"], "confirm": how,
              "gui": after.get("gui")}, args.json, human=msg)
         return
 
     if verb in ("set", "check", "uncheck"):
         if verb == "set":
             if len(rest) != 2:
-                die("usage: ui <name> set <selector> <stage>")
+                die("usage: ui <name> set <selector> <stage|value>")
             selector, target = rest[0], int(rest[1])
         else:
             if len(rest) != 1:
@@ -1344,6 +1566,14 @@ def cmd_ui(args):
             selector, target = rest[0], 1 if verb == "check" else 0
 
         snap, g = _ui_resolve(inst, selector, tmo, wait=args.wait)
+
+        if g["type"] == "slider":
+            if verb != "set":
+                die(f'{g["name"]} is a slider — use set <value>, not {verb}')
+            data, human = _ui_set_slider(inst, snap, g, target)
+            out(data, args.json, human=human)
+            return
+
         stages = g.get("stages") or 0
         if stages < 2:
             die(f'{g["name"]} is not a toggle (stages={stages}) — use click')
@@ -1410,17 +1640,16 @@ def cmd_ui(args):
                 "entries carry no text, so there is nothing to select by name")
 
         idx = _ui_item_index(g, rest[1])
-        point, why = _ui_row_click(g, idx)
-        if point is None:
-            die(why)
+        blocked = _ui_item_selectable(g, idx)
+        if blocked:
+            die(f'#{idx} "{g["items"][idx]}" in {g["name"]} is {blocked}')
 
-        _write_tokens(inst, f"pclick:{point[0]},{point[1]}")
-        after, how = _ui_settle_item(inst, before, g, idx)
         text = g["items"][idx]
-        msg = f'selected #{idx} "{text}" in {g["name"]} at {point[0]},{point[1]}'
-        msg += f" — {how}" if how else " — delivered (selection did not move)"
-        out({"list": g["name"], "index": idx, "item": text, "at": list(point),
-             "confirm": how, "gui": after.get("gui")}, args.json, human=msg)
+        data = _ui_select_row(inst, before, g, idx, tmo)
+        msg = f'selected #{idx} "{text}" in {g["name"]}'
+        msg += f" — {data['confirm']}" if data["confirm"] else \
+               " — delivered (selection did not move)"
+        out(dict(data, list=g["name"], index=idx, item=text), args.json, human=msg)
         return
 
     if verb == "hover":

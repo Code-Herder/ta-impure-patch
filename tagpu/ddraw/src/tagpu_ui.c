@@ -58,17 +58,22 @@
 #define L_COUNT     0xC0          /* i16 item count                            */
 #define L_TEXT      0xC2          /* char* flat item blob, \0/\n separated     */
 #define L_ITEMH     0xDA          /* i16 */
+#define L_FLAGS     0xD6          /* u8* one byte per item, bit0 = enabled    */
 #define L_ATTR_TEXT 0x10          /* attribs bit: items are the +0xC2 blob    */
 #define L_ATTR_ICON 0xA0          /* attribs bits: items are pictures, no text */
+#define L_ATTR_FLAG 0x800         /* attribs bit: +0xD6 is a real flag array  */
 
 /* textfield (id 3) */
 #define F_MAXCHARS  0x138         /* i16 */
 
 /* slider (id 4) */
-#define S_RANGE     0x136         /* i16 */
-#define S_THICK     0x13C         /* i32 */
-#define S_KNOBPOS   0x140         /* i16 — the value                          */
+#define S_RANGE     0x136         /* i16 pixel span the knob travels          */
+#define S_THICK     0x13C         /* i32 scale the value is expressed in      */
+#define S_KNOBPOS   0x140         /* i16 knob offset in pixels                */
 #define S_KNOBSIZE  0x142         /* i16 */
+#define S_ALTPROC   0x157         /* non-zero => the mouse handler bails out  */
+#define S_ATTR_HORZ 0x01          /* attribs bit: knob travels along x        */
+#define S_ATTR_DEAF 0x10          /* attribs bit: ignore the mouse entirely   */
 
 #define MAX_GADGETS 512
 #define MAX_STACK   16
@@ -243,74 +248,139 @@ static int row_pitch(const char* g)
    '\0' or '\n' — that is exactly the rule the engine's own item locator
    (0x4B6AF0) walks — with the entry count in the i16 at +0xC0. The draw path
    only reads that blob when attribs bit 0x10 is set (0x4A1C5C); bits 0x20/0x80
-   select the picture flavour instead, whose entries at +0xC6 hold no text at
-   all. So "has items" is a property of attribs, not of the pointer, and the two
-   cases must not be conflated: a picture list is reported as unknown, never as
-   an empty text list.
+   select the picture flavour instead, whose entries at +0xC6 are GAF frame
+   headers holding no text at all. So "has items" is a property of attribs, not
+   of the pointer, and the two cases must not be conflated: a picture list is
+   reported as unknown, never as an empty text list.
 
-   A leading "&G" is a colour marker the engine strips before drawing
-   (0x4A1E17), so it is stripped here too — what we report is what is on screen. */
+   A leading "&G" marks a NON-SELECTABLE separator row. The engine strips the
+   two characters before drawing (0x4A1E17) and refuses to leave the selection
+   on such a row (0x4A39EA, 0x4A3BA3, 0x4A996A). Both halves matter to a caller,
+   so the text is reported stripped — what is on screen — and the marker is
+   reported separately. */
+static const char* item_at(const char* blob, size_t avail, int k,
+                           size_t* len, int* marked)
+{
+    size_t at = 0;
+    int i;
+
+    for (i = 0; ; i++)
+    {
+        const char* item = blob + at;
+        size_t raw = 0;
+
+        if (at >= avail)
+            return NULL;
+
+        while (at + raw < avail && item[raw] && item[raw] != '\n')
+            raw++;
+
+        if (i == k)
+        {
+            *marked = (raw >= 2 && item[0] == '&' && item[1] == 'G');
+            *len = *marked ? raw - 2 : raw;
+
+            if (*len > MAX_ITEMLEN)
+                *len = MAX_ITEMLEN;
+
+            return *marked ? item + 2 : item;
+        }
+
+        at += raw + 1;
+    }
+}
+
+static int item_count(const char* g, const char** blob, size_t* avail)
+{
+    int count = *(short*)(g + L_COUNT);
+    int attr  = *(int*)(g + G_ATTRIBS);
+
+    if (!(attr & L_ATTR_TEXT) || count < 0)
+        return -1;                       /* unknown: not a text list at all */
+
+    if (count > MAX_ITEMS)
+        count = MAX_ITEMS;
+
+    *blob  = *(const char**)(g + L_TEXT);
+    *avail = count ? readable_span(*blob, MAX_BLOB) : 0;
+
+    return (count && !*avail) ? -1 : count;
+}
+
 static void write_items(FILE* out, const char* g)
 {
-    const char* blob = *(const char**)(g + L_TEXT);
-    int   count = *(short*)(g + L_COUNT);
-    int   attr  = *(int*)(g + G_ATTRIBS);
-    size_t avail, at = 0;
-    int   k;
+    const char* blob;
+    size_t avail;
+    int count = item_count(g, &blob, &avail);
+    int k;
 
-    /* Unknown and empty are different answers. Without the text bit we cannot
-       read items at all; with it and a zero count the list really is empty. */
-    if (!(attr & L_ATTR_TEXT))
+    if (count < 0)
     {
-        fprintf(out, ",\"items\":null");
+        fprintf(out, ",\"items\":null,\"separator\":null");
         return;
     }
 
-    if (count <= 0)
+    fprintf(out, ",\"items\":[");
+
+    for (k = 0; k < count; k++)
     {
-        fprintf(out, ",\"items\":[]");
-        return;
+        size_t len = 0;
+        int marked = 0;
+        const char* item = item_at(blob, avail, k, &len, &marked);
+
+        if (!item)
+            break;
+
+        if (k)
+            fputc(',', out);
+
+        jstr(out, item, len);
     }
 
-    avail = readable_span(blob, MAX_BLOB);
+    fprintf(out, "],\"separator\":[");
 
-    if (!avail)
+    for (k = 0; k < count; k++)
     {
-        fprintf(out, ",\"items\":null");
+        size_t len = 0;
+        int marked = 0;
+
+        if (!item_at(blob, avail, k, &len, &marked))
+            break;
+
+        fprintf(out, "%s%d", k ? "," : "", marked);
+    }
+
+    fputc(']', out);
+}
+
+/* Per-item enable flags.
+
+   GUIGADGET_SetListText takes a fifth argument the first reading missed — a u8
+   array, one byte per item, stored at +0xD6 with attribs bit 0x800 set
+   (0x4A33A8). The listbox draw path tests bit 0 of each byte to grey a row out
+   (0x4A21F4). Only RESTRICT2.GUI uses it, and there it is what says which units
+   are available, so a row's flag is the difference between a selection landing
+   and quietly doing nothing. */
+static void write_itemflags(FILE* out, const char* g)
+{
+    const unsigned char* flags = *(const unsigned char**)(g + L_FLAGS);
+    int count = *(short*)(g + L_COUNT);
+    int attr  = *(int*)(g + G_ATTRIBS);
+    int k;
+
+    if (!(attr & L_ATTR_FLAG) || count <= 0 || !readable(flags, (size_t)count))
+    {
+        fprintf(out, ",\"itemflags\":null");
         return;
     }
 
     if (count > MAX_ITEMS)
         count = MAX_ITEMS;
 
-    fprintf(out, ",\"items\":[");
+    fprintf(out, ",\"itemflags\":[");
 
-    for (k = 0; k < count && at < avail; k++)
-    {
-        const char* item = blob + at;
-        size_t raw = 0, len;
-
-        while (at + raw < avail && item[raw] && item[raw] != '\n')
-            raw++;
-
-        len = raw;
-
-        if (len >= 2 && item[0] == '&' && item[1] == 'G')
-        {
-            item += 2;
-            len  -= 2;
-        }
-
-        if (len > MAX_ITEMLEN)
-            len = MAX_ITEMLEN;
-
-        if (k)
-            fputc(',', out);
-
-        jstr(out, item, len);
-
-        at += raw + 1;                 /* step past the entry's separator */
-    }
+    for (k = 0; k < count; k++)
+        fprintf(out, "%s%d", k ? "," : "", flags[k] & 1);
 
     fputc(']', out);
 }
@@ -476,6 +546,7 @@ static void write_snapshot(const TAGPU_FRAME* f)
             fprintf(out, ",\"itemheight\":%d", *(short*)(g + L_ITEMH));
             fprintf(out, ",\"rowpitch\":%d", row_pitch(g));
             write_items(out, g);
+            write_itemflags(out, g);
         }
         else if (id == 3)
         {
@@ -488,13 +559,31 @@ static void write_snapshot(const TAGPU_FRAME* f)
         }
         else if (id == 4)
         {
-            /* knobpos is the value: the TDF reader writes it here (0x4AE1B8)
-               and the scrollbar sync computes it as range*top/maxtop
-               (0x4A3099). range/thick/knobsize are its bounds and geometry. */
-            fprintf(out, ",\"value\":%d",    *(short*)(g + S_KNOBPOS));
-            fprintf(out, ",\"range\":%d",    *(short*)(g + S_RANGE));
+            /* Two different numbers, and conflating them is the whole trap.
+               `pos` (knobpos) is a raw pixel offset of the knob along the track,
+               bounded by range-1. `value` is what the engine actually acts on —
+               GUI_SliderGetValue 0x45BA20 computes pos*thick/(range-1),
+               truncating — and it is the number a caller means by "set the
+               volume to 32". range/thick can both be rewritten at load time by
+               the screen that owns the slider, so neither may be taken from the
+               .GUI file. */
+            int  rng   = *(short*)(g + S_RANGE);
+            int  pos   = *(short*)(g + S_KNOBPOS);
+            int  thick = *(int*)(g + S_THICK);
+            int  attr  = *(int*)(g + G_ATTRIBS);
+
+            fprintf(out, ",\"pos\":%d",      pos);
+            fprintf(out, ",\"range\":%d",    rng);
             fprintf(out, ",\"knobsize\":%d", *(short*)(g + S_KNOBSIZE));
-            fprintf(out, ",\"thick\":%d",    *(int*)(g + S_THICK));
+            fprintf(out, ",\"thick\":%d",    thick);
+            fprintf(out, ",\"horizontal\":%d", (attr & S_ATTR_HORZ) ? 1 : 0);
+            fprintf(out, ",\"nomouse\":%d",
+                    ((attr & S_ATTR_DEAF) || *(unsigned char*)(g + S_ALTPROC)) ? 1 : 0);
+
+            if (rng > 1)
+                fprintf(out, ",\"value\":%d", (int)(((long long)pos * thick) / (rng - 1)));
+            else
+                fprintf(out, ",\"value\":null");
         }
 
         fputc('}', out);

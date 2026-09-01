@@ -104,7 +104,8 @@ tools/tacli ui t1 --json              # every field (stable contract; the table 
 tools/tacli ui t1 show Start          # one gadget in full
 tools/tacli ui t1 click Skirmish      # auto-waits, then clicks the rect centre
 tools/tacli ui t1 set LineOfSight 2   # declarative stage; check/uncheck are aliases
-tools/tacli ui t1 select GAMES saveone    # a listbox row, by text or #index
+tools/tacli ui t1 set FXVOL 32        # a slider takes a value, same verb
+tools/tacli ui t1 select MAPNAMES 'Anteer Strait'   # a row, by text or #index
 tools/tacli ui t1 fill GAMENAME Test_2
 tools/tacli ui t1 hover ARMSOLAR      # move over a gadget without clicking it
 tools/tacli ui t1 press Start         # via the gadget's own quickkey
@@ -137,7 +138,11 @@ DPLAY: *0 Internet TCP/IP Connection For DirectPlay · 1 IPX Connection For Dire
   first column — `ui t1 click "#7"` — and re-read it after any screen change, because it
   is a position in the current screen, not a handle.
 - **`grp` appears only when `assoc` means something** — two or more toggles in one radio
-  group, or a scrollbar bound to its listbox. Same number = clicking one moves the other.
+  group, or a slider with its listbox and its arrow buttons. Same number = acting on one
+  moves the others, and that is how an action reports its consequence.
+- **Some gadgets have no name.** The arrows flanking a scrollbar are synthesized by the
+  engine at load time, so they are absent from the `.GUI` file and show as `#7`-style rows
+  — reach them with `ui click "#7"`.
 - **`enter=` / `esc=`** are the screen's own Enter/Escape bindings, so backing out is
   `click PrevMenu`, never a guess.
 - **In game, select a unit first.** With nothing selected the top GUI is `ARMMAIN2.GUI`
@@ -155,14 +160,19 @@ DPLAY: *0 Internet TCP/IP Connection For DirectPlay · 1 IPX Connection For Dire
   A red footprint box means the site is blocked — try clear ground.
 - **`ui` is the gadget layer only.** The map, minimap and resource bars are not gadgets;
   they stay with `click` / `eye` / `roster`.
-- **Lists read out and can be picked**: `ui select <list> <text|#index>` clicks the row.
-  `items unknown` means a *picture* list (map thumbnails, side portraits) whose entries
-  carry no text at all — that is different from `(empty)`, which means the list really has
-  nothing in it. Only rows currently scrolled into view can be clicked, and `select` says
-  so rather than scrolling behind your back.
-- **Sliders are scrollbars**, bound to a listbox by `assoc`, so `value=N/range` is a
-  read-out of where that list is scrolled. There is no slider `set` — move the list with
-  `select`.
+- **Lists read out and can be picked**: `ui select <list> <text|#index>`. A visible row
+  is one click; an off-screen one is walked to with the arrow keys, which is the only
+  mechanism in TA that moves a selection a known number of rows (the scrollbar arrows
+  move one *pixel*, and there is no page-up/down and no mouse wheel). 99 maps takes about
+  8 seconds — raise `--timeout` for a long list. `items unknown` means a *picture* list,
+  whose entries are images with no text at all; that is different from `(empty)`.
+  **Map and campaign selection are ordinary text lists**, so
+  `Skirmish → SelectMap → select "<map>" → LOAD` works — which `--map` cannot do to an
+  instance that is already running.
+- **Sliders**: `ui set <name> <value>`, where the value is the number the engine acts on
+  (`val=32/64` in the table), not a pixel offset. A slider that is a **scrollbar** — bound
+  to a listbox by `assoc`, shown with the same `grp` — refuses, because the engine
+  recomputes it from the list every frame; move the list with `select` instead.
 - **`fill` types through WM_CHAR**, so mixed case round-trips. What a field *keeps* is
   TA's rule: the save-name field takes letters, digits, space and `_` and silently drops
   punctuation. `fill` reports the field's actual content, so read what it says.

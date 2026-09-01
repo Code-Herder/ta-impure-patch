@@ -154,6 +154,39 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
      (`ARMPATROL`'s accelerator), not F1 — so the branch was unreachable for every
      real value and wrong for the one value that could reach it.
 
+6. **Phase 1.3d — every gadget type is now driveable** — **DONE 2026-09-01**. Three
+   parallel RE passes closed the last capability gaps; evidence in `gui-gadgets.md`
+   §2.4.1, §2.6.1 and the picture-list part of §2.4.
+
+   - **Slider `set` shipped.** `ui set FXVOL 32` takes the *value* the engine acts on,
+     not the pixel offset: `value = knobpos*thick/(range-1)` truncating, inverted with
+     the engine's own ceil so every value round-trips. Actuation is the gesture
+     `Slider_HandleMouse 0x4A4170` implements — press on the knob, move, release, 1 px
+     per unit — spread over four input batches, because the press frame only captures
+     and a gesture posted in one batch leaves the engine looking at a released button.
+     Verified live on `SOUNDS.GUI` `FXVOL` at 32 / 64 / 0 / 48 / 7, with the engine's
+     SFX-volume global at `main+0x37F0C` following each time. A slider bound to a
+     listbox by `assoc` is a scrollbar and `set` refuses it, pointing at `select`.
+   - **`select` scrolls.** Reaching an off-screen row is the arrow keys and nothing
+     else: the scroll arrows move the knob one *pixel* (usually no rows), the track
+     click likewise, and TA has neither page-up/down nor a mouse wheel. `select` clicks
+     the nearest visible row for focus, then steps, polling the selection rather than
+     counting presses — a rapid batch is partly dropped, and a `&G` separator swallows
+     a press without moving. 96 rows in ~8 s on `SELMAP`'s 99-map list.
+   - **Map selection is no longer bypassed.** `SELMAP.GUI`'s `MAPNAMES` turned out to
+     be a *text* list, as are `NEWGAME.GUI`'s `Campaign`/`Missions` and `SELGAME`'s ten
+     columns — only `RESTRICT2`'s `PICLIST` and `LOGOSEL`'s `LOGOS` are picture lists in
+     this binary, and their entries are GAF frame headers with no text in them at all.
+     `MAINMENU -> Skirmish -> SelectMap -> select "Anteer Strait" -> LOAD` drives the
+     map from the CLI, which `--map` cannot do to a running instance.
+   - **Two silent-failure modes now refuse instead.** A `&G` row is a separator the
+     selection slides off, and `SetListText`'s fifth argument is a per-item enable array
+     at `+0xD6` (`RESTRICT2` uses it). Both are reported, and `select` names them rather
+     than clicking at something that will not take.
+   - **Settle got sharper**: a consequence in the clicked gadget's own `assoc` group
+     counts, so a scroll-arrow click reports the slider it moved instead of "no
+     GUI-visible change". Unnamed gadgets are labelled `#7` rather than an empty string.
+
    **Route notes that cost time and should not be re-derived:** the in-game menu is
    **`Tab`** (not `Esc`, which does nothing in game), reaching `ARMOPT.GUI`; `SAVEGAME.GUI`
    / `SAVELIST.GUI` / `OPTION.GUI` / `CMENU.GUI` ship in the HPI but are named by no string
