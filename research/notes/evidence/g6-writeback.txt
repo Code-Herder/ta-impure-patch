@@ -1,0 +1,11 @@
+# G6 write-back evidence (2026-08-31), ARM vs CORE, Canal Crossing, target=armcom
+
+writeback: ARMED target="armcom"
+
+## Composite buffer discovered live (diagnostic):
+writeback DIAG: name@00="Commander" unitname@20="ARMCOM" objname@80="ARMCOM" comp=00000000 (invalid)
+
+## Repaint active (1 armcom composite repainted/frame):
+writeback: painted=1 units (type=armcom)
+writeback: painted=1 units (type=armcom)
+writeback: painted=1 units (type=armcom)

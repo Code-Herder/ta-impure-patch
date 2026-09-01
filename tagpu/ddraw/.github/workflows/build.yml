@@ -1,0 +1,154 @@
+name: Build
+
+on:
+ push:
+  branches:
+  - 'master'
+  - 'github-action'
+
+jobs:
+ Build:
+  runs-on: windows-latest
+  steps:
+
+#  - name: Install Windows XP Support for Visual Studio 2022 # windows-2022 # v141_xp # Installation takes more than 5 minutes
+#    run: |
+#         Set-Location "C:\Program Files (x86)\Microsoft Visual Studio\Installer\"
+#         $InstallPath = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise"
+#         $componentsToAdd = @(
+#           "Microsoft.VisualStudio.Component.WinXP"
+#         )
+#         [string]$workloadArgs = $componentsToAdd | ForEach-Object {" --add " +  $_}
+#         $Arguments = ('/c', "vs_installer.exe", 'modify', '--installPath', "`"$InstallPath`"",$workloadArgs, '--quiet', '--norestart', '--nocache')
+#         $process = Start-Process -FilePath cmd.exe -ArgumentList $Arguments -Wait -PassThru -WindowStyle Hidden
+#         if ($process.ExitCode -eq 0)
+#         {
+#           Write-Host "components have been successfully added"
+#           Get-ChildItem C:\ProgramData\Microsoft\VisualStudio\Packages\Microsoft.Windows.XPSupport.*
+#         }
+#         else
+#         {
+#           Write-Host "components were not installed"
+#           exit 1
+#         }
+
+  - name: Clone cnc-ddraw
+    uses: actions/checkout@v4
+
+  - name: Release build
+    id: build-release
+    uses: ./
+    with:
+     release: true
+
+  - name: ReleaseXP build
+    id: build-releasexp
+    uses: ./
+    with:
+     releasexp: true
+
+  - name: Debug build
+    id: build-debug
+    uses: ./
+    with:
+     debug: true
+
+  - name: DebugLogXP build
+    id: build-debuglogxp
+    uses: ./
+    with:
+     debuglogxp: true
+
+  - name: DebugLogMiniXP build
+    id: build-debuglogminixp
+    uses: ./
+    with:
+     debuglogminixp: true
+
+  - name:  Prepare artifact
+    run:   |
+           :
+           
+           mkdir -p cnc-ddraw-experimental
+
+           if [[ -f "${{ steps.build-release.outputs.release }}" ]]; then
+              mkdir -p cnc-ddraw-release
+              
+              cp "${{ steps.build-release.outputs.release }}" cnc-ddraw-release
+           fi
+
+           if [[ -f "${{ steps.build-releasexp.outputs.releasexp }}" ]]; then
+              mkdir -p cnc-ddraw-releasexp
+              
+              cp "${{ steps.build-releasexp.outputs.releasexp }}" cnc-ddraw-releasexp
+              
+              rundll32.exe ./cnc-ddraw-releasexp/ddraw.dll, DDIsWindowed
+              
+              cp "${{ steps.build-releasexp.outputs.releasexp-pdb }}" cnc-ddraw-experimental
+              7z a -tzip -mm=Deflate -mfb=258 -mpass=15 "./cnc-ddraw-experimental/cnc-ddraw-experimental-release.zip" "./cnc-ddraw-releasexp/ddraw.*"
+           fi
+
+           if [[ -f "${{ steps.build-debug.outputs.debug }}" ]]; then
+              mkdir -p cnc-ddraw-debug
+              
+              cp "${{ steps.build-debug.outputs.debug }}" cnc-ddraw-debug
+              cp "${{ steps.build-debug.outputs.debug-pdb }}" cnc-ddraw-debug
+           fi
+
+           if [[ -f "${{ steps.build-debuglogxp.outputs.debuglogxp }}" ]]; then
+              mkdir -p cnc-ddraw-debuglogxp
+
+              cp "${{ steps.build-debuglogxp.outputs.debuglogxp }}" cnc-ddraw-debuglogxp
+              cp "${{ steps.build-debuglogxp.outputs.debuglogxp-pdb }}" cnc-ddraw-debuglogxp
+              
+              7z a -tzip -mm=Deflate -mfb=258 -mpass=15 "./cnc-ddraw-experimental/cnc-ddraw-experimental-debuglog.zip" "./cnc-ddraw-debuglogxp/*"
+           fi
+
+           if [[ -f "${{ steps.build-debuglogminixp.outputs.debuglogminixp }}" ]]; then
+              mkdir -p cnc-ddraw-debuglogminixp
+
+              cp "${{ steps.build-debuglogminixp.outputs.debuglogminixp }}" cnc-ddraw-debuglogminixp
+              cp "${{ steps.build-debuglogminixp.outputs.debuglogminixp-pdb }}" cnc-ddraw-debuglogminixp
+           fi
+           
+    shell: bash
+
+  - name: Upload artifacts cnc-ddraw-release
+    uses: actions/upload-artifact@v4
+    with:
+     name: cnc-ddraw-release
+     path: cnc-ddraw-release
+
+  - name: Upload artifacts cnc-ddraw-releasexp
+    uses: actions/upload-artifact@v4
+    with:
+     name: cnc-ddraw-releasexp
+     path: cnc-ddraw-releasexp
+
+  - name: Upload artifacts cnc-ddraw-debug
+    uses: actions/upload-artifact@v4
+    with:
+     name: cnc-ddraw-debug
+     path: cnc-ddraw-debug
+
+  - name: Upload artifacts cnc-ddraw-debuglogxp
+    uses: actions/upload-artifact@v4
+    with:
+     name: cnc-ddraw-debuglogxp
+     path: cnc-ddraw-debuglogxp
+
+  - name: Upload artifacts cnc-ddraw-debuglogminixp
+    uses: actions/upload-artifact@v4
+    with:
+     name: cnc-ddraw-debuglogminixp
+     path: cnc-ddraw-debuglogminixp
+     
+  - name: Release experimental
+    uses: softprops/action-gh-release@v1
+    with:
+      prerelease: true
+      name: experimental
+      tag_name: experimental
+      files: cnc-ddraw-experimental/* 
+      fail_on_unmatched_files: true
+      draft: true

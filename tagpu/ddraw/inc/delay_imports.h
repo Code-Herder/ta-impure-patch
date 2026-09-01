@@ -1,0 +1,25 @@
+#ifndef DELAY_IMPORTS_H
+#define DELAY_IMPORTS_H
+
+#define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
+#define ThreadQuerySetWin32StartAddress 9
+
+typedef NTSTATUS(WINAPI* RTLVERIFYVERSIONINFOPROC)(PRTL_OSVERSIONINFOEXW, ULONG, ULONGLONG);
+typedef const char* (CDECL* WINE_GET_VERSIONPROC)();
+typedef void (CDECL* WINE_GET_HOST_VERSIONPROC)(const char** sysname, const char** release);
+typedef NTSTATUS(WINAPI* NTQUERYINFORMATIONTHREADPROC)(HANDLE, LONG, PVOID, ULONG, PULONG);
+
+typedef ULONGLONG(WINAPI* VERSETCONDITIONMASKPROC)(ULONGLONG, DWORD, BYTE);
+typedef BOOL(WINAPI* GETMODULEHANDLEEXAPROC)(DWORD, LPCSTR, HMODULE*);
+
+extern NTQUERYINFORMATIONTHREADPROC delay_NtQueryInformationThread;
+extern RTLVERIFYVERSIONINFOPROC delay_RtlVerifyVersionInfo;
+extern WINE_GET_VERSIONPROC delay_wine_get_version;
+extern WINE_GET_HOST_VERSIONPROC delay_wine_get_host_version;
+
+extern VERSETCONDITIONMASKPROC delay_VerSetConditionMask;
+extern GETMODULEHANDLEEXAPROC delay_GetModuleHandleExA;
+
+void delay_imports_init();
+
+#endif

@@ -1,0 +1,24 @@
+# Phase B render3do — live evidence (2026-08-31)
+# Skirmish, ARM commander, tagpu_writeback.on=armcom. Full log: tagpu/gamedir/tagpu.log
+
+r3d DIAG summary piece  0 'torso' vis=1 faces=18 face0col=195
+r3d DIAG summary piece 10 'nanolath' vis=1 faces=11 face0col=60
+r3d DIAG summary piece 11 'biggun' vis=1 faces=12 face0col=95
+r3d DIAG summary piece 12 'rleg' vis=1 faces=5 face0col=90
+r3d DIAG summary piece 13 'lleg' vis=1 faces=5 face0col=93
+r3d DIAG summary piece 14 'ground' vis=1 faces=1 face0col=-1
+r3d DIAG summary piece  1 'ruparm' vis=1 faces=4 face0col=69
+r3d DIAG summary piece  2 'luparm' vis=1 faces=4 face0col=-1
+r3d DIAG summary piece  3 'rbigflash' vis=0 faces=6 face0col=197
+r3d DIAG summary piece  4 'nanospray' vis=0 faces=1 face0col=-1
+r3d DIAG summary piece  5 'pelvis' vis=1 faces=4 face0col=86
+r3d DIAG summary piece  6 'lfirept' vis=0 faces=3 face0col=246
+r3d DIAG summary piece  7 'head' vis=1 faces=16 face0col=94
+r3d DIAG summary piece  8 'lthigh' vis=1 faces=6 face0col=71
+r3d DIAG summary piece  9 'rthigh' vis=1 faces=6 face0col=59
+render3do: 185 tris (555 verts) -> 36x43 hotspot=(18,25)
+render3do: ready (FBO 640x640, index-in-red palettiser-free path)
+writeback: ARMED target="armcom"
+writeback: painted=1 units (type=armcom)
+
+# Face-record dumps (torso team-colour anim entry + inline frame table):

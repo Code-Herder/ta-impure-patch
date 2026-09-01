@@ -1,0 +1,30 @@
+#include "inc/version.h"
+#include "inc/git.h"
+
+
+1 VERSIONINFO
+FILEVERSION VERSION
+PRODUCTVERSION VERSION
+{
+    BLOCK "StringFileInfo"
+    {
+        BLOCK "040904B0"
+        {
+            VALUE "CompanyName", "github.com/FunkyFr3sh"
+            VALUE "FileDescription", "DirectDraw replacement"
+            VALUE "FileVersion", VERSION_STRING " (git~" GIT_COMMIT ", " GIT_BRANCH ")"
+            VALUE "InternalName", "ddraw"
+            VALUE "LegalCopyright", "Copyright (c) 2010-2024"
+            VALUE "LegalTrademarks", ""
+            VALUE "OriginalFileName", "ddraw.dll"
+            VALUE "ProductName", "cnc-ddraw"
+            VALUE "ProductVersion", VERSION_STRING " (git~" GIT_COMMIT ", " GIT_BRANCH ")"
+            VALUE "Comments", "https://github.com/FunkyFr3sh/cnc-ddraw"
+        }
+    }
+
+    BLOCK "VarFileInfo"
+    {
+        VALUE "Translation",  0x0409, 0x04B0
+    }
+}

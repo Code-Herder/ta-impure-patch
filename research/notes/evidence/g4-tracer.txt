@@ -1,0 +1,26 @@
+# G4 tracer evidence (2026-08-31), skirmish ARM vs CORE, Canal Crossing
+
+tracer: armed (tagpu_tracer.on present). DrawUnit@0x45AC20 hook=OK  blit@0x459200 hook=OK  stub_pool=015C0000
+
+## Raw events (first 12 of 300) — commander in view at game start (f=4649):
+TR_EV 0 f=4649 site=DU ret=00469A05 unit=06440138 arg0=0062F858 sx=0 sy=0
+TR_EV 1 f=4649 site=BL ret=0045894D unit=06440138 arg0=0534DEB8 sx=256 sy=197
+TR_EV 2 f=4649 site=DU ret=00469A05 unit=06440138 arg0=0062FA78 sx=0 sy=0
+TR_EV 3 f=4649 site=BL ret=0045894D unit=06440138 arg0=0534DEB8 sx=256 sy=197
+TR_EV 4 f=4649 site=DU ret=00469A05 unit=06440138 arg0=0062FA78 sx=0 sy=0
+TR_EV 5 f=4649 site=BL ret=0045894D unit=06440138 arg0=0534DEB8 sx=256 sy=197
+TR_EV 6 f=4649 site=DU ret=00469A05 unit=06440138 arg0=0062FA78 sx=0 sy=0
+TR_EV 7 f=4649 site=BL ret=0045894D unit=06440138 arg0=0534DEB8 sx=256 sy=197
+TR_EV 8 f=4649 site=DU ret=00469A05 unit=06440138 arg0=0062FA78 sx=0 sy=0
+TR_EV 9 f=4649 site=BL ret=0045894D unit=06440138 arg0=0534DEB8 sx=256 sy=197
+TR_EV 10 f=4649 site=DU ret=00469A05 unit=06440138 arg0=0062FA78 sx=0 sy=0
+TR_EV 11 f=4649 site=BL ret=0045894D unit=06440138 arg0=0534DEB8 sx=256 sy=197
+
+## Live window with commander on-screen (DU/BL fire 1:1, distinct=1):
+TR_SUM f=38400 win_events=6632 DU=3316(A@469A05=3316 B@469BA8=0 other=0) BL=3316 distinct=1 umin=06440138 umax=06440138 compA=05890028[unit=06440138 obj=0534DEB8] same compB=05C60020 same
+TR_SUM f=38460 win_events=6532 DU=3266(A@469A05=3266 B@469BA8=0 other=0) BL=3266 distinct=1 umin=06440138 umax=06440138 compA=05890028[unit=06440138 obj=0534DEB8] same compB=05C60020 same
+TR_SUM f=38520 win_events=6386 DU=3193(A@469A05=3193 B@469BA8=0 other=0) BL=3193 distinct=1 umin=06440138 umax=06440138 compA=05890028[unit=06440138 obj=0534DEB8] same compB=05C60020 same
+
+## Window with only fogged enemy units (overlay draws them, DU=0):
+TR_SUM f=35160 win_events=0 DU=0(A@469A05=0 B@469BA8=0 other=0) BL=0 distinct=0 umin=00000000 umax=00000000 compA=05890028[unit=06440138 obj=0534DEB8] same compB=05C60020 same
+TR_SUM f=35220 win_events=0 DU=0(A@469A05=0 B@469BA8=0 other=0) BL=0 distinct=0 umin=00000000 umax=00000000 compA=05890028[unit=06440138 obj=0534DEB8] same compB=05C60020 same

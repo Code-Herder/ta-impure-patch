@@ -1,0 +1,26 @@
+# G5 suppression evidence (2026-08-31), ARM vs CORE, Canal Crossing, target=armcom
+
+suppress: ARMED (tagpu_suppress.on present). DrawUnit@0x45AC20 hook=OK target="armcom" stub=015C0000
+
+## Suppression counters (armcom draws skipped, passed=other units drawn):
+SUPP type=armcom hits=4502 passed=0 (total hits=518011 passed=0)
+SUPP type=armcom hits=4316 passed=0 (total hits=522327 passed=0)
+SUPP type=armcom hits=4311 passed=0 (total hits=526638 passed=0)
+
+## Suppressed commander STILL a live model in memory (probe, sim untouched):
+probe: unit=06390138 obj3do=066904D0 base=066907E6 parts=15 bodyTurn=(0,0,0)
+  piece  0 'torso' vis=1 verts=37 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=026774F0
+  piece  1 'ruparm' vis=1 verts=9 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=026776B0
+  piece  2 'luparm' vis=1 verts=9 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=02677880
+  piece  3 'rbigflash' vis=0 verts=9 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=02677810
+  piece  4 'nanospray' vis=0 verts=3 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=02677A80
+  piece  5 'pelvis' vis=1 verts=9 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=026769F0
+  piece  6 'lfirept' vis=0 verts=7 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=026779C0
+  piece  7 'head' vis=1 verts=28 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=02677C30
+  piece  8 'lthigh' vis=1 verts=11 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=02676A60
+  piece  9 'rthigh' vis=1 verts=11 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=02676BC0
+  piece 10 'nanolath' vis=1 verts=17 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=026778F0
+  piece 11 'biggun' vis=1 verts=19 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=02677720
+  piece 12 'rleg' vis=1 verts=11 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=02676140
+  piece 13 'lleg' vis=1 verts=11 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=02676AF0
+  piece 14 'ground' vis=1 verts=4 pos=(0,0,0) turn=(0,0,0) org=(0,0,0) vbuf=026769C0

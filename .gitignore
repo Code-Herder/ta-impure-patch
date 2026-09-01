@@ -1,0 +1,35 @@
+# Wine prefix and game data (large, not source)
+/wineprefix/
+/tagpu/gamedir/
+
+# Third-party upstream clones (each is its own git repo)
+/vendor/
+
+# Ghidra distribution (tools/ghidra-projects IS tracked)
+/tools/ghidra/
+
+# Generated wiki output (rebuild with research/build_wiki.py)
+/research/site/
+
+# Build artifacts
+*.o
+*.obj
+/tagpu/tagpu.dll
+/tagpu/ddraw/ddraw.dll
+
+# Local Claude session state
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+
+__pycache__/
+
+# Disabled nested repo metadata (rename back to .git to restore)
+/tagpu/.git.empty-disabled/
+/tagpu/ddraw/.git.upstream/
+
+# Game binaries stay out of git
+*.pristine
+/pristine/*.exe
+
+# Ghidra project DB (embeds game binary, churns every session; symbol exports are tracked instead)
+/tools/ghidra-projects/
