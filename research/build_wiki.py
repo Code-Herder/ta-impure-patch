@@ -434,6 +434,9 @@ def build_page(md_text: str):
     md = markdown.Markdown(extensions=["tables", "fenced_code", "sane_lists", "attr_list", "toc"],
                            extension_configs={"toc": {"anchorlink": False, "permalink": False}})
     html = md.convert(md_text)
+    # cross-links between notes are authored as `page.md` (correct in the repo);
+    # the site serves `page.html`
+    html = re.sub(r'href="([a-z0-9_-]+)\.md(#[^"]*)?"', lambda m: f'href="{m.group(1)}.html{m.group(2) or ""}"', html)
     html = wrap_tables(pillify(html))
     toc = getattr(md, "toc_tokens", [])
     return html, toc

@@ -262,6 +262,32 @@ rejection (0x1B), ally (0x23) and team (0x24).
 
 ---
 
+## Extra weapons on the wire (2026-09-02)
+
+The [more-than-three-weapons module](extra-weapons.md) is the first thing in this
+project that changes the simulation, so it is the first thing that has to agree
+between peers. What it relies on from the network model, and what is still open:
+
+- Remote units are not aimed locally: `AutoAim` runs only for units owned by a local
+  human or AI (`player+0x73 ∈ {1,2}` in `0x48AD30`). A remote unit's weapons are driven
+  by two packets — `0x10 UNIT_START_SCRIPT` (COB method *index*, looked up by name on
+  the sender) and `0x0D WEAPON_FIRED`, whose `WeapIdx` byte at `+0x23` names the slot.
+  The wire format already carries a full byte, so ten weapons need no packet change;
+  the receiver (`0x49D270`) is spliced to resolve `WeapIdx >= 3` into the side slot and
+  clamps anything beyond the unit's count.
+- An **unarmed** peer receiving `WeapIdx >= 3` would index past its three inline slots
+  into `UnitOrders`. The intended guard is the unit-sync CRC handshake
+  (`CRC_weapons`, `def+0x146`, folded into `CRC_all`), but what the lobby does on a
+  mismatch is not established, and the "You have CRC errors" text people quote is not
+  in the binary.
+- **None of this has been tested**, because wine 9.0's DirectPlay TCP/IP service
+  provider is a stub (`fixme:dplay:DPWSCB_EnumSessions … stub`): the provider screen's
+  `SELECT` is fine for the TCP/IP row, but hosting and searching both bounce back with
+  "Invalid TCP/IP Address" / an empty `SELGAME`. Native `dplayx.dll` + `dpwsockx.dll`
+  from `dxnt.cab` (Feb 2010 DirectX redist, winetricks' `directplay`) is the known fix
+  and the package could not be downloaded from Microsoft or the Internet Archive. The
+  full attempt log is in [extra-weapons](extra-weapons.md#multiplayer-untested-and-why).
+
 ## Open questions / uncertainty
 
 1. Real concurrent-player numbers for TAF — the live counters are JS-rendered and I could not read them.

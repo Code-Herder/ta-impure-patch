@@ -605,6 +605,36 @@ repack. `.ccx`/`.ufo` open with the same tools by extension-agnostic sniffing of
 
 ---
 
+### What the engine actually checks when it mounts an archive (2026-09-02, live)
+
+Learned while writing `tools/hpipack.py` (a writer *and* reader for this container),
+by watching which archives `InitTAHPIAry` (`0x41D4C0`) accepts:
+
+- **The last 36 bytes of the file must be the literal
+  `Copyright 1997 Cavedog Entertainment`** (`1998` in the later packs; the year is
+  patched in from a 4-byte string at `0x50390C` before the compare). The open routine
+  (`0x4BDD70`) seeks to the end and `strcmp`s; anything else is not an archive, silently.
+  It is read raw — outside the whole-file XOR. Every third-party HPI tool appends it;
+  a hand-rolled writer that forgets it produces a file every *reader* accepts and the
+  *engine* ignores.
+- Header key 0 is fine (`rev31.gp3` ships with it); the XOR key is
+  `~((k*4)|(k>>6))` applied to every byte after the 20-byte header.
+- File payloads are SQSH chunks: `"SQSH" ver=2 method enc=1 csize dsize sum`, body
+  per-byte `((plain ^ i) + i)`, `sum` = the stored (encrypted) body bytes. Method 1
+  (LZSS, 4 KiB window) is what every Cavedog `.hpi`/`.ufo` uses, method 2 (zlib) what
+  `rev31.gp3` and `ccdata.ccx` use; both are read by the same code. A literal-only
+  method-1 stream (tag `0x00` + eight bytes, terminated by a set bit with offset 0)
+  is a valid, uncompressed encoding.
+- **Loose `units\*.fbi` files are found and then rejected.** The menu-time loader
+  (`0x42A8D0`) opens the disk copy first, but after the `Version` check it tests
+  `0x4BB650(handle)` ("came from an archive") and drops the type when it did not
+  (with `0x50289C`/`0x511DE4` nonzero — the stock case). So a loose FBI does not
+  override the archived one; it makes the unit vanish. Ship overrides in a `.ufo`.
+- Archive precedence for *duplicate* paths was not established (a `.ufo`, `.ccx`,
+  `.gp3` and `.hpi` copy of `units/ARMPW.fbi` all lost to `totala1.hpi`'s in the
+  same session, but those tests ran before the trailer fix and are not conclusive).
+  New unit names in a `.ufo` work; that is what the extra-weapons fixtures use.
+
 ## 6. `.TNT` / `.PCX` — maps & images  (brief)
 
 - **`.PCX`** — standard ZSoft PCX (8-bpp, RLE), used for logos/loading screens and some UI;

@@ -306,8 +306,11 @@ The guard for **mismatched** peers is the unit-sync handshake. `CRC_weapons`
 packet [CORPUS]. An armed peer folds `weapon4..N` in; an unarmed peer does not;
 so exactly the unit types that carry `Weapon4` disagree, and every other type
 still agrees. **What TA then does with a disagreeing unit — refuse to start,
-disable that unit, or only print "You have CRC errors on N units!" — is not
-established** (assertion 8). If it is warn-only, the guard is not a guard, and
+disable that unit, or only warn — is not established** (assertion 8). Note that
+the often-quoted "You have CRC errors on N units!" text does **not** exist in the
+binary: the only sync-related strings are `+syncerr`, `SYNCHING` and
+`Synchronization complete`, so whatever the lobby says comes from a GUI file, not
+a hard-coded message. If it is warn-only, the guard is not a guard, and
 we must add our own: either block the start, or have the armed side disable
 its extra weapons for that game. The failure mode being guarded against is not
 cosmetic: an unarmed receiver handling `WeapIdx ≥ 3` indexes past its three
@@ -398,3 +401,117 @@ All in `tools/ghidra-scripts/`, run with the usual headless form
 | `CallersOf.java` | `out, funcs(csv)` | code xrefs to each function entry |
 | `DisasmWindow.java` | `out, addr:before:after,…` | disassembly windows around addresses (for code Ghidra has no function for) |
 | `DecompileTAFuncs.java` | `funcs(csv), out` | (pre-existing) decompile a list of functions |
+
+## Implementation — landed 2026-09-02
+
+Option B as decided (per-type count from `Weapon4..N`, capacity 16), as the
+module `tagpu/ddraw/src/tagpu_weapons.c` (contract in
+`inc/tagpu_weapons.h`), initialised from `DllMain` after the render passes.
+Everything below was measured on the pristine 3.1 build under wine with `tacli`.
+
+### Shape
+
+| Piece | What it is |
+|---|---|
+| Gate | `tagpu_weapons.on` next to the exe at attach; absent = not one byte written (the oracle still works). `tacli arm <inst> weapons.on` before launch. |
+| Install | 20 entry hooks, 19 mid-function splices, 4 in-place byte patches, all byte-matched **before** the first write; one mismatch = `weapons: DISARMED` and nothing touched. Stubs and trampolines live in one `VirtualAlloc`'d RWX pool (1.6 KB used). |
+| Entry hooks (trampoline for stock) | `UNITS_StartWeaponsScripts`, `AutoAim`, the three name helpers, retaliation `0x406F80`, acquisition `0x4089A0` (per *batch*: the original runs unless a unit in the cursor's batch is extended), `0x4897E0`, `0x4898B0`, `0x489800` (an index helper the survey missed — the allocator's per-slot "enable"), `0x48A060/0A0/0F0/160`, `0x49ADF0`, `0x48A190`, `CheckUnitWeapon`, `Trajectory3` (also missed by the survey: it reads `unit+0x10+idx*0x1C`), `0x49D120`, and the def copy `0x42B370` (keeps the side record with the type it describes). |
+| Splices | loader `0x42CEF2` (reads `weaponN` / `wN_badTargetCategory`), `WEAPON_FIRED` receiver `0x49D364` (clamps `WeapIdx >= count` to slot 0 and logs), the three `FireProjectile_*` name lookups, eleven `state>>2&3` decodes in the four fire callbacks, two in the target finder `0x40B7B0`, one in the target-position helper `0x48A1E0`. |
+| Byte patches | the three `FireProjectile_*` heading loads (`mov si,[ebp+ecx*4+0x1a]` → `mov si,[edi+0x16]`, the slot pointer is in a register) and one `and al,3` after a spliced decode. |
+| Side tables | def records keyed by def array index (the game-start loader compacts the array, numbers it, *then* runs the FBI loader per final slot, so the index is stable; the record also stores the def pointer and answers "stock" on a mismatch); unit side rows `[units][13]` sized from the live unit array and reset by the module's own `StartWeaponsScripts` at creation (which every create path, savegame load included, goes through). |
+| Slot index | derived from pointers (`SlotIndex(unit, slot)`); the 2-bit field still holds `i & 3`. |
+| Names | slots 0–2 use the engine's own strings and tables; 3+ are `AimWeaponN` / `FireWeaponN` / `QueryWeaponN` / `AimFromWeaponN` (1-based). |
+| Oracle | `tagpu_weapons.trigger` → `tagpu_weapons.json`; `tacli weapons <inst> [idx…]` prints every slot of every unit (state, weapon, target, reload, heading, pitch, stock, aim result, thread), the arming state, the C-path hit counters and projectile launches per slot. Works unarmed, which makes the unarmed instance the control. |
+
+### Content tooling (no COB compiler needed)
+
+- `tools/hpipack.py` — HAPI writer *and* reader (`--list`, `--extract`). Finding
+  the hard way: the engine only mounts an archive whose last 36 bytes are
+  `Copyright 1997 Cavedog Entertainment` (details in file-formats.md §5).
+- `tools/cobalias.py` — add script names pointing at existing code (an alias
+  shares the aim script's `signal`/`set-signal-mask`, so two aliased slots kill
+  each other's aim thread and only the last starter fires — a content artifact).
+- `tools/cobclone.py` — clone `AimPrimary`/`FirePrimary`/`QueryPrimary`/
+  `AimFromPrimary` once per extra weapon with relocated jumps and a private
+  signal bit, so N slots aim concurrently through one turret.
+- `tools/extra_weapons_fixture.py` — builds `scenarios/content/wpn-test.ufo` (the
+  archive itself is gitignored like every `*.ufo`; run the script once per checkout)
+  (ARMPW4: a Peewee with `Weapon4`; ARMLLT10: an LLT with `Weapon1` + `Weapon4..10`)
+  from the game's own files. Scenarios `wpn-peewee4.json`, `wpn-llt10.json`.
+- Loose `units/*.fbi` overrides are rejected by the engine (the type vanishes);
+  ship content as a `.ufo`. `tacli scenario` caches the type list per instance in
+  `catalogue.json`; delete it after changing archives or the validation refuses
+  a type the game does have.
+
+### Assertions — status
+
+| # | Status | Evidence |
+|---|---|---|
+| 1 | **holds** | unarmed launches log nothing and leave every site pristine (the install path is never entered); the oracle reads the stock slots exactly as the note's layout says (states `0x12/0x14/0x18`, weapon in slot 0, thread preset `0x4FD6F0`). |
+| 2 | by construction, not exercised | `verify_all()` runs over all 43 sites before any write; a deliberate-mismatch debug run is still to do. |
+| 3 | **holds (live)** | armed + stock content through two `shootall` fights and an AI game: `stock_splice` = 8410 stub executions on the stock path, `mismatch` = 0 (the pointer-derived index agreed with the engine's 2-bit field every time), no crash across ~25 000 frames. A roster diff at fixed ticks between the armed and unarmed instances was not done (the two instances are not tick-aligned); the stub equivalence is proven directly instead. |
+| 4 | **holds** | every C-path counter (`start autoaim names retaliate acquire helpers splice`) stays 0 with stock content; only `loader` moves, once per unit type. |
+| 5 | **holds** | all 20 stolen prologues checked by hand against objdump for IP-relative code (none); every trampoline was executed on the stock path. |
+| 6 | **holds** | ARMLLT10: ten slots (`n=10`), each side slot holds `ARM_LIGHTLASER`, the target, an aim result and state `0x1F/0x13/0x17/0x1B` (`i & 3` in bits 2–3); `fires by slot: 0 3 4 5 6 7 8 9` all launched projectiles; the aim solutions of slots 3–9 equalled the stock slot-0 solution at the same tick (logged side by side during development). ARMPW4: slot 3 launched 60 projectiles in a fight. |
+| 7–10, 15 | **untested** | needs two instances in one game; see "Multiplayer — untested, and why" below and [networking-lobbies](networking-lobbies.md). The only in-module guard is the receiver clamping `WeapIdx >= count` to slot 0. |
+| 11 | holds by construction | savegame load creates units through `UNITS_Create` → the module's `StartWeaponsScripts` → side rows reset; not exercised live. |
+| 12 | not exercised | give-unit needs a LAN game. |
+| 13 | **holds so far** | `violation` = 0 in every run (AI skirmish, both fights, the extended scenarios). |
+| 14 | not measured | no tick-rate comparison yet. |
+
+### Multiplayer — untested, and why
+
+Background on TA's network model (the lockstep packet stream, the DirectPlay
+providers, what TA Forever and the demo recorder tunnel) is in
+[Networking, Lobbies & Multiplayer](networking-lobbies.md); this section only
+covers what the extra-weapons work needs from it and what stopped the test.
+
+Every multiplayer assertion (7 remote fire packets, 8/9 the unit-CRC handshake, 10
+`AutoAim` ownership, 12 give-unit, 15 unarmed peers) needs two `tacli` instances in
+one TCP/IP game over loopback. That was attempted on 2026-09-02 and does not work on
+this machine yet. What happened, so nobody re-derives it:
+
+1. **The provider screen does not crash for TCP/IP.** The ta-drive skill records that
+   `SELPROV`'s `SELECT` kills the game (`Access Violation at 0023:00000000`). With
+   row 0, *Internet TCP/IP Connection For DirectPlay*, selected, `SELECT` goes to
+   `TCP.GUI` ("Enter TCP address (leave blank to search)") with no crash. The
+   recorded crash is therefore specific to the other providers (IPX was the one
+   tried before), not to DirectPlay as such.
+2. **Blank address**: `OK` or Enter answers "Invalid TCP/IP Address" and returns to
+   `SELPROV`. **`127.0.0.1`**: `OK` reaches `SELGAME.GUI` behind an "Updating..."
+   box, then bounces back to `SELPROV` two seconds later; no session list, no host
+   button ever became clickable. (The `tacli ui fill` of the address field once kept
+   only `1` — retype and read back what the field reports.)
+3. **Root cause**: wine 9.0's DirectPlay TCP/IP service provider is a stub. Launched
+   by hand with `WINEDEBUG=-all,+dplay,+dplayx,+dpwsockx` (tacli discards wine's
+   stderr), the log shows `fixme:dplay:DPWSCB_EnumSessions … stub`,
+   `NS_SendSessionRequestBroadcast : not all data fields are correct`,
+   `DPWSCB_CloseEx … stub`, `DPWSCB_ShutdownEx … stub`. Session enumeration and
+   hosting both die inside `dpwsockx.dll`; nothing TA-side is at fault.
+4. **The fix is native DirectPlay**, what winetricks' `directplay` verb installs:
+   `dplayx.dll`, `dpwsockx.dll`, `dplaysvr.exe` (and `dpnet*`) taken from `dxnt.cab`
+   inside `directx_feb2010_redist.exe`, placed in the prefix's 32-bit `system32`
+   (`syswow64` in these 64-bit prefixes) with `WINEDLLOVERRIDES=dplayx,dpwsockx=n`
+   — tacli hard-codes `ddraw=n,b`, so it needs a launch option for that.
+   **The package could not be obtained**: the June 2010 redist (still on
+   download.microsoft.com, 100 MB) carries no `dxnt.cab` (its cabinet directory was
+   parsed; only the monthly D3DX cabs), the Feb 2010 URL is gone from Microsoft, the
+   holarse mirror returns an HTML page, and the Internet Archive has no snapshot of
+   it (CDX query empty; the `id_` fetch 429s). A copy of `dxnt.cab` from any Windows
+   machine with DirectX 9.0c unblocks this in an afternoon: extract, copy, override,
+   rerun the two-instance test with `scenarios/wpn-llt10.json`.
+5. Until then the multiplayer claims in this note (remote units driven by the `0x10`
+   and `0x0D` packets, the CRC handshake as the mismatched-peer guard) rest on the
+   static reading only. In particular the "You have CRC errors" lobby message is not
+   a string in the binary, so what the lobby does on a unit-CRC mismatch is still
+   unknown; if it turns out to be warn-only, the module needs its own guard before
+   anyone plays an armed build against an unarmed one.
+
+### Known gaps (unchanged from the plan)
+
+`CRC_weapons` is not extended for `weapon4..N` (only matters between armed
+peers, untestable until DirectPlay works); the HUD still shows three reload
+bars; savegames do not persist slots 4+ (they restart cold); `UNITS_GiveUnit`
+carries three stock bytes. A unit whose *only* weapons are 4+ (no `Weapon1`)
+gets the def's has-weapon flag cleared by the engine after our detour; keep
+`Weapon1` populated.

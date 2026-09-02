@@ -16,6 +16,7 @@
 #include "tagpu_owndraw.h"
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
+#include "tagpu_weapons.h"
 #include "utils.h"
 #include "versionhelpers.h"
 #include "delay_imports.h"
@@ -85,6 +86,12 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            "tagpu_featown.on" exists; byte-match guarded; one leaf,
            0x46A610, disjoint from every other detour. */
         tagpu_featown_init();
+
+        /* tagpu: 1..N weapons per unit — the first module that changes the
+           simulation, in its own file behind its own gate. No-op unless
+           "tagpu_weapons.on" exists; every site byte-matched, all-or-nothing;
+           stock units trampoline to the untouched engine functions. */
+        tagpu_weapons_init();
 
         PVOID(WINAPI * add_handler)(ULONG, PVECTORED_EXCEPTION_HANDLER) =
             (void*)real_GetProcAddress(GetModuleHandleA("Kernel32.dll"), "AddVectoredExceptionHandler");
