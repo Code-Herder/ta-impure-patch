@@ -65,6 +65,8 @@
 #include "tagpu_scaffold.h"
 #include "tagpu_hires.h"
 #include "tagpu_fx.h"
+#include "tagpu_sfx.h"
+#include "tagpu_glsl.h"
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -255,17 +257,12 @@ static const char* FS =
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uLUT;\n"
     "uniform sampler2D uPal;\n"              /* 256x1 RGBA live palette        */
-    "uniform sampler2D uScaf;\n"             /* G12a scaffold, R8, viewport    */
+    TAGPU_GLSL_SCAF_UNIFORMS                  /* G12a scaffold, R8, viewport    */
     "uniform sampler2D uLos;\n"              /* LOS counter bytes, 32px tiles  */
     "uniform sampler2D uMap;\n"              /* explored bits, 32px tiles      */
     "uniform int uShadow;\n"
     "uniform float uAlpha;\n"
     "uniform int uFog;\n"                    /* bit0 mapping on, bit1 true LOS */
-    "uniform int uScafOn;\n"
-    "uniform vec4 uScafP;\n"                 /* vpL, vpT, vw, vh (frame px)    */
-    "uniform float uSS;\n"                   /* supersample factor (1 or 2)    */
-    "uniform float uZoomF;\n"
-    "uniform vec2 uZoomCF;\n"
     "uniform float uWaterT;\n"              /* vy <= this is under water      */
     "uniform int uWaterMode;\n"             /* 1 erase (enemy), 2 tint (own)  */
     "uniform float uDigT;\n"                /* vy <= this is below ground     */
@@ -276,19 +273,9 @@ static const char* FS =
     "    idx = texture(uAtlas, vUV).r;\n"
     "    if (abs(idx - vFC.y) < 0.5/255.0) discard;\n"
     "  }\n"
-    /* scaffold occlusion: nearer stamped rows hide this fragment */
-    "  if (uScafOn == 1) {\n"
-    /* VS maps game py 0 -> NDC -1 -> FBO window y 0, so gl_FragCoord.xy/uSS IS
-       the game-frame pixel; scaffold texture row 0 = viewport top (top-down). */
-    "    vec2 fc = gl_FragCoord.xy / uSS;\n"
-    "    fc = (fc - uZoomCF) / uZoomF + uZoomCF;\n"
-    "    vec2 uv = vec2((fc.x - uScafP.x) / uScafP.z,\n"
-    "                   (fc.y - uScafP.y) / uScafP.w);\n"
-    "    if (uv.x >= 0.0 && uv.x < 1.0 && uv.y >= 0.0 && uv.y < 1.0) {\n"
-    "      float s = texture(uScaf, uv).r * 255.0;\n"
-    "      if (s > vEnc + 0.5) discard;\n"
-    "    }\n"
-    "  }\n"
+    /* scaffold occlusion: nearer stamped rows hide this fragment (one copy
+       of the rule, shared with the effects shader: tagpu_glsl.h) */
+    TAGPU_GLSL_SCAF_TEST
     /* waterline / digger clipping (shadows-cloak.md §3 depth-bias rules):
        the engine erases or tints composite pixels whose depth (= vertex
        height + bias) is at or below the water line; shadows are always
@@ -896,7 +883,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* the effects pass (tagpu_fx.on) rides this frame: it needs the view,
        fog and palette set up here and draws into this FBO */
     int fxOn = tagpu_fx_armed(f->frame_counter);
-    if (!s_armed && !fxOn) return;
+    int sfxOn = tagpu_sfx_armed(f->frame_counter);
+    if (!s_armed && !fxOn && !sfxOn) return;
     if (s_state == 0) init_gl();
     if (s_state != 1 || !tagpu_r3d_ensure()) return;
 
@@ -1179,18 +1167,32 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             }
         }
     }
-    /* ---- effects gather (projectiles, explosions, debris) ---- */
+    /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
     int nfx = 0;
-    if (fxOn) {
+    if (fxOn || sfxOn) {
         fv.ta = ta; fv.eyeX = eyeX; fv.eyeY = eyeY;
-        fv.vpL = vpL; fv.vpT = vpT;
+        fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.gw = gw; fv.gh = gh; fv.ss = s_ss ? 2 : 1; fv.fogMode = fogMode;
         fv.zoom = s_zoom;
         fv.zoomCx = (float)vpL + (float)vw * 0.5f;
         fv.zoomCy = (float)vpT + (float)vh * 0.5f;
         fv.encSprite = fxKey + 3.0f;      /* nearer than fx models (fxKey ± 1.8) */
         fv.depthScale = depthScale;
+        /* particle layer n -> depth key, from the ten 0x471F90 call sites
+           (terrain-depth.md 3): 0..4 before any unit row (under everything
+           the row sweep and the scaffold stamp), 5/6 after the row sweep and
+           before the projectiles (above the last row key fxKey-2.2, below
+           the fx models fxKey-1.8), 7 after the explosions (above the fx
+           sprites at fxKey+3), 8 after the airborne sweep, 9 before the fog */
+        {
+            int L;
+            for (L = 0; L <= 4; L++) fv.encLayer[L] = 0.5f;
+            fv.encLayer[5] = fv.encLayer[6] = fxKey - 2.0f;
+            fv.encLayer[7] = fxKey + 5.0f;
+            fv.encLayer[8] = airKey + 3.0f;
+            fv.encLayer[9] = airKey + 5.0f;
+        }
         fv.los = fogMode ? s_losBuf : NULL; fv.mapd = fogMode ? s_mapBuf : NULL;
         fv.losW = s_losW; fv.losH = s_losH;
         fv.frame_counter = f->frame_counter;
@@ -1372,7 +1374,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         glUniform1i(s_uWaterMode, 0);
         x_glDrawArrays(GL_TRIANGLES, fxFirst, fxLast - fxFirst);
     }
-    if (nfx) tagpu_fx_render(&fv, s_palTex, s_losTex, s_mapTex);
+    if (nfx) tagpu_fx_render(&fv, s_palTex, s_losTex, s_mapTex,
+                             scafOn ? tagpu_scaffold_texref() : 0);
     x_glDisable(GL_BLEND);
     x_glDisable(GL_DEPTH_TEST);
     if (x_glScissor) x_glDisable(GL_SCISSOR_TEST);

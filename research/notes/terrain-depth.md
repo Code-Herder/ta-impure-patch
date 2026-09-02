@@ -152,26 +152,31 @@ Key facts:
 0x468DBA  debug overlay 0x418310(ctx)                    ← usually no-op
           … HUD top-bar block (only when panel state changed) …
           SORT bucket reset + hot-unit binning loop      ← §3.1
-0x469849/55/61   plugin-layer hooks 0x471F90(ctx, 0/1/2)
+0x469849/55/61   particle layers 0/1/2  0x471F90(ctx, n)   ← wake foam (2)
           FLAT-FEATURE PRE-PASS                          ← §3.2   (defHeight < 10)
-0x469964/70      hooks 0x471F90(ctx, 3/4)
+0x469964/70      particle layers 3/4                       ← feature smoke (4)
           THE INTERLEAVED ROW SWEEP                      ← §3.3
             0x469A00   DrawUnit 0x45AC20  (ground units of row)
             0x469ABB   feature 0x46A610   (tall features of row)
-0x469AFD  hook 5;  0x469B18 hook 6
+0x469AFD  layer 5 (trail puffs);  0x469B18 layer 6 (nanolathe spray)
 0x469B22  projectiles 0x49BE60(ctx)      0x469B2C  explosions/sfx 0x420B00(ctx)
-0x469B38  hook 7
+0x469B38  layer 7 (bubbles)
 0x469BA3  DrawUnit 0x45AC20              ← SECOND sweep: airborne/non-ground units
-0x469BD7  hook 8 … health bars over HotUnits … 0x469D2C hook 9
+0x469BD7  layer 8 … health bars over HotUnits … 0x469D2C layer 9 (impact/damage smoke, fire)
 0x469D80  watch-player vcall 0x417F30    ← spectate overlay (vtable+0x28), not fog
 0x469D8E  FOG OVERLAY 0x4848E0(ctx)      ← §5
           … build-cursor rect, dialogs, chat, HUD, minimap …
 0x46A3DB  present 0x4C63A0
 ```
 
-(`0x471F90(ctx, n)` walks a registered-callback vector at
-`*(main+0x38D77) + n·0x10`, calling `vtbl+8` on each — ten engine plugin-layer
-slots threaded through the frame. Empty in stock play. [BINARY-VERIFIED])
+(`0x471F90(ctx, n)` walks the layer-`n` vector at `*(main+0x38D77) + n·0x10`,
+calling `vtbl+8` (draw) on each object. These are **not** empty plugin slots: they
+are the particle sfx — smoke, fire, wake foam, nanolathe spray — filed into ten
+layers by their emitters, so the layer number is their draw depth. Seen live: 2 =
+wake foam (under everything), 4 = feature smoke, 5 = rocket-trail puffs, 6 = the
+nanolathe spray (over ground units, under projectiles), 7 = submarine bubbles, 9 =
+impact/damage smoke and fire (over everything but the fog). Full RE and the native
+pass that owns them: effects.md §7. [BINARY-VERIFIED, LIVE-VERIFIED 2026-09-02])
 
 ### 3.1 Binning — who sorts on what
 
@@ -486,7 +491,7 @@ occlusion at native resolution — and where to read the inputs live:**
 | `0x482270` / `0x481930` | LOS counter stamp / MAPPED bit stamp (GAF circle `*(main+0x1485B)`) | — |
 | `0x4816A0` | `Game_SetLOSState` — re-prime both maps + restamp all units | — |
 | `0x482AC0` | `UNITS_RebuildLOS` — per-unit stamp refresh | — |
-| `0x471F90` | plugin-layer hook dispatch (slot n at `*(main+0x38D77)+n·0x10`) | (ctx, n) |
+| `0x471F90` | particle-layer draw walker (layer n at `*(main+0x38D77)+n·0x10`; smoke/fire/wake/nano — effects.md §7) | (ctx, n), `stdcall` `ret 8` |
 | `0x48C190` | get watched/next-selected unit (debug + spectate) | — |
 
 ### DrawGameScreen call sites (world section)

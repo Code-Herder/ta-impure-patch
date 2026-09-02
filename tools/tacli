@@ -581,7 +581,8 @@ def _ensure_owndraw_for_native(inst) -> "str | None":
 
 def _ensure_fxown_for_fx(inst) -> "str | None":
     """Same footgun, effects edition: the native effects pass (tagpu_fx.on) draws
-    weapon fire, explosions and debris itself, and the engine's own two effects passes
+    weapon fire, explosions and debris itself — and the particle pass (tagpu_sfx.on)
+    smoke, fire, wakes and nanolathe spray — while the engine's own draws
     are skipped by the fxown code patches (call-site redirects + leaf detours). Those
     install ONCE at DllMain, only if tagpu_fxown.on exists then. Without them the
     engine keeps drawing every effect under ours (a double draw that is hard to see
@@ -590,16 +591,19 @@ def _ensure_fxown_for_fx(inst) -> "str | None":
     tagpu_fx.on live, so removing fx.on later restores the engine's draw.
     """
     fx = inst.gamedir / "tagpu_fx.on"
+    sfx = inst.gamedir / "tagpu_sfx.on"        # particle layers ride the same patch set
     own = inst.gamedir / "tagpu_fxown.on"
-    if not fx.exists():
+    if not fx.exists() and not sfx.exists():
         if own.exists():
             own.unlink()
-            return "dropped fxown.on (fx.on is not set; the effects patches are only installed with it)"
+            return ("dropped fxown.on (neither fx.on nor sfx.on is set; the effects patches "
+                    "are only installed with one of them)")
         return None
     if own.exists():
         return None
     own.write_text("on\n")
-    return "auto-armed fxown.on (fx.on is set and fxown must be installed at launch, not after)"
+    have = " and ".join(n for n, p in (("fx.on", fx), ("sfx.on", sfx)) if p.exists())
+    return f"auto-armed fxown.on ({have} is set and fxown must be installed at launch, not after)"
 
 def _launch(args) -> dict:
     """Everything `launch` does, minus the printing — `load` composes with it."""
