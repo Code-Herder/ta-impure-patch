@@ -14,6 +14,10 @@
      0x4B7F90  CopyGafToContext — the explosion SPRITE blit, but shared with
                63 other callers (features, UI): skipped only while the
                explosion pass is running.
+     0x471F90  particle-layer draw walker (ctx, n) — the ONLY draw path of
+               the smoke/fire/wake/nanolathe objects (ten DrawGameScreen
+               sites, pure draw: the sim tick updates them elsewhere);
+               stdcall, ret 8. Its own skip byte follows tagpu_sfx.on.
 
    The projectile pass is pure draw (its only side effect is the CRT rand()
    jitter of lightning bolts, not the sim RNG), so its call site is redirected
@@ -45,6 +49,7 @@
 #define LEAF_FLASH_VA  0x004B8EC0u   /* ret 0x10 */
 #define LEAF_PIECE_VA  0x004211D0u   /* ret 0x0C */
 #define LEAF_COPY_VA   0x004B7F90u   /* ret 0x10 */
+#define LEAF_SFX_VA    0x00471F90u   /* ret 8    */
 
 static const unsigned char SITE_PROJ_BYTES[5] = { 0xE8, 0x39, 0x23, 0x03, 0x00 };
 static const unsigned char SITE_EXPL_BYTES[5] = { 0xE8, 0xCF, 0x6F, 0xFB, 0xFF };
@@ -52,9 +57,11 @@ static const unsigned char MODEL_STOLEN[5]    = { 0x51, 0x8B, 0x44, 0x24, 0x10 }
 static const unsigned char FLASH_STOLEN[6]    = { 0x81, 0xEC, 0x94, 0x00, 0x00, 0x00 };
 static const unsigned char PIECE_STOLEN[5]    = { 0xB8, 0x58, 0x3F, 0x00, 0x00 };
 static const unsigned char COPY_STOLEN[6]     = { 0x81, 0xEC, 0x94, 0x00, 0x00, 0x00 };
+static const unsigned char SFX_STOLEN[5]      = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }; /* mov eax,[0x511DE8] */
 
 volatile unsigned char g_fxown_skip = 0;     /* engine effects draw skipped */
 volatile unsigned char g_fxown_in   = 0;     /* inside the explosion pass   */
+volatile unsigned char g_fxown_skipSfx = 0;  /* particle layer draw skipped */
 static int g_installed = 0;
 static unsigned g_last = 0;
 
@@ -170,7 +177,8 @@ void tagpu_fxown_init(void)
              memcmp((void*)LEAF_MODEL_VA, MODEL_STOLEN, 5) == 0 &&
              memcmp((void*)LEAF_FLASH_VA, FLASH_STOLEN, 6) == 0 &&
              memcmp((void*)LEAF_PIECE_VA, PIECE_STOLEN, 5) == 0 &&
-             memcmp((void*)LEAF_COPY_VA,  COPY_STOLEN,  6) == 0;
+             memcmp((void*)LEAF_COPY_VA,  COPY_STOLEN,  6) == 0 &&
+             memcmp((void*)LEAF_SFX_VA,   SFX_STOLEN,   5) == 0;
     if (!ok) { flog("fxown: NOT armed — engine bytes differ at a patch site"); return; }
     int a = install_site_proj();
     int c = install_site_expl();
@@ -178,10 +186,11 @@ void tagpu_fxown_init(void)
     int e = install_leaf(LEAF_FLASH_VA, FLASH_STOLEN, 6, &g_fxown_skip, 0x10);
     int f = install_leaf(LEAF_PIECE_VA, PIECE_STOLEN, 5, &g_fxown_skip, 0x0C);
     int g = install_leaf(LEAF_COPY_VA,  COPY_STOLEN,  6, &g_fxown_in,   0x10);
-    g_installed = a && c && d && e && f && g;
+    int h = install_leaf(LEAF_SFX_VA,   SFX_STOLEN,   5, &g_fxown_skipSfx, 0x08);
+    g_installed = a && c && d && e && f && g && h;
     _snprintf(b, sizeof b,
-        "fxown: %s site.proj=%d site.expl=%d model@0x46BAE0=%d flash@0x4B8EC0=%d piece@0x4211D0=%d copy@0x4B7F90=%d (skip follows tagpu_fx.on)",
-        g_installed ? "ARMED" : "PARTIAL", a, c, d, e, f, g);
+        "fxown: %s site.proj=%d site.expl=%d model@0x46BAE0=%d flash@0x4B8EC0=%d piece@0x4211D0=%d copy@0x4B7F90=%d sfx@0x471F90=%d (skips follow tagpu_fx.on / tagpu_sfx.on)",
+        g_installed ? "ARMED" : "PARTIAL", a, c, d, e, f, g, h);
     flog(b);
 }
 
@@ -197,8 +206,18 @@ void tagpu_fxown_set_skip(int on)
 /* the native effects pass reports each frame it actually gathered; if it
    stops (overlay off, GL failure, a frame path that never reaches it) the
    engine's draw comes back after 90 present frames instead of vanishing */
-static unsigned g_beat = 0;
+static unsigned g_beat = 0, g_beatSfx = 0;
 void tagpu_fxown_beat(unsigned int frame_counter) { g_beat = frame_counter; }
+void tagpu_fxown_beat_sfx(unsigned int frame_counter) { g_beatSfx = frame_counter; }
+
+void tagpu_fxown_set_skip_sfx(int on)
+{
+    unsigned char v = (unsigned char)(on && g_installed);
+    if (v != g_fxown_skipSfx) {
+        g_fxown_skipSfx = v;
+        flog(v ? "fxown: engine particle draw SKIPPED (ours live)" : "fxown: engine particle draw restored");
+    }
+}
 
 int tagpu_fxown_installed(void) { return g_installed; }
 
@@ -209,10 +228,15 @@ void tagpu_fxown_flush(unsigned int frame_counter)
         flog("fxown: effects pass silent for 90 frames");
         tagpu_fxown_set_skip(0);
     }
+    if (g_fxown_skipSfx && frame_counter - g_beatSfx > 90) {
+        flog("fxown: particle pass silent for 90 frames");
+        tagpu_fxown_set_skip_sfx(0);
+    }
     if (frame_counter - g_last >= 300) {
         char b[96];
         g_last = frame_counter;
-        _snprintf(b, sizeof b, "FXOWN skip=%u in=%u", (unsigned)g_fxown_skip, (unsigned)g_fxown_in);
+        _snprintf(b, sizeof b, "FXOWN skip=%u sfx=%u in=%u", (unsigned)g_fxown_skip,
+                  (unsigned)g_fxown_skipSfx, (unsigned)g_fxown_in);
         flog(b);
     }
 }

@@ -1,0 +1,129 @@
+{
+  "format": "ta-scenario/1",
+  "description": "particle fixture on Two Continents (forest): badly damaged ARM units on hold (continuous damage smoke on the structures), a commander and a construction vehicle beside nanoframes \u2014 order the repair through the UI (select, ARMORDERS, ARMREPAIR, click the frame; a scripted repair order does not spray), no fighting; a CORE spare keeps the game alive. Prefer sfx-strait for open ground and wakes.",
+  "seed": 20260902,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "hurt1",
+      "type": "ARMSTUMP",
+      "owner": 0,
+      "pos": [
+        2960,
+        1120
+      ],
+      "facing": 90,
+      "health": 12,
+      "stance": "hold"
+    },
+    {
+      "id": "hurt2",
+      "type": "ARMROCK",
+      "owner": 0,
+      "pos": [
+        3020,
+        1120
+      ],
+      "facing": 90,
+      "health": 12,
+      "stance": "hold"
+    },
+    {
+      "id": "hurt3",
+      "type": "ARMPW",
+      "owner": 0,
+      "pos": [
+        3080,
+        1120
+      ],
+      "facing": 90,
+      "health": 12,
+      "stance": "hold"
+    },
+    {
+      "id": "hurt4",
+      "type": "ARMSOLAR",
+      "owner": 0,
+      "pos": [
+        3160,
+        1110
+      ],
+      "health": 15
+    },
+    {
+      "id": "frame_solar",
+      "type": "ARMSOLAR",
+      "owner": 0,
+      "pos": [
+        3000,
+        1260
+      ],
+      "nanoframe": 35
+    },
+    {
+      "id": "builder",
+      "type": "ARMCOM",
+      "owner": 0,
+      "pos": [
+        2930,
+        1320
+      ],
+      "facing": 45
+    },
+    {
+      "id": "frame_vp",
+      "type": "ARMVP",
+      "owner": 0,
+      "pos": [
+        3220,
+        1260
+      ],
+      "nanoframe": 40
+    },
+    {
+      "id": "cv",
+      "type": "ARMCV",
+      "owner": 0,
+      "pos": [
+        3150,
+        1350
+      ],
+      "facing": 45
+    },
+    {
+      "id": "spare",
+      "type": "CORSOLAR",
+      "owner": 1,
+      "pos": [
+        4100,
+        1300
+      ]
+    }
+  ],
+  "camera": {
+    "center_on": "frame_solar"
+  }
+}

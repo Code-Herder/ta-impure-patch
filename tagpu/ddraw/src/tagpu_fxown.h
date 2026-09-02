@@ -8,5 +8,8 @@ void tagpu_fxown_init(void);
 void tagpu_fxown_flush(unsigned int frame_counter);
 void tagpu_fxown_set_skip(int on);
 void tagpu_fxown_beat(unsigned int frame_counter);   /* "we drew this frame" */
+/* the particle layers (tagpu_sfx.on): one more detour, its own skip byte */
+void tagpu_fxown_set_skip_sfx(int on);
+void tagpu_fxown_beat_sfx(unsigned int frame_counter);
 int  tagpu_fxown_installed(void);
 #endif

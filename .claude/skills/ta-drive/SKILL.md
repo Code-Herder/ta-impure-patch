@@ -335,6 +335,23 @@ engine's effects within 30 frames, `arm fx.on="log passive"` keeps gathering and
 Verify with `fxown: ARMED site.proj=1 site.expl=1 …` and `FXOWN skip=1`. Fixtures:
 `scenarios/fx-mix.json`, `fx-lasers.json`, `fx-rockets.json`.
 
+**Particles (smoke, fire, wakes, nanolathe) are `sfx.on`** — tokens `log`, `passive`,
+`nosmoke`, `nofire`, `nowake`, `nonano` — on the same `fxown.on` patch set (tacli auto-arms
+it when either `fx.on` or `sfx.on` exists), with its own live skip: `arm sfx.on="log
+passive"` = engine draws while we count (`sfx: layers L2=44(wake:44) L6=26(nano:26) …`
+every 60 frames), `arm sfx.on=log` = ours. Verify `fxown: ARMED … sfx@0x471F90=1` and
+`FXOWN … sfx=1`; run it with `native.on=all` or the low layers (wake foam) composite over
+engine-drawn hulls. Fixture: `scenarios/sfx-strait.json` (Anteer Strait: damaged structures
+smoke, boats wake, a nanoframe to finish); lessons that cost an hour: a scripted `repair`
+order does not make a builder nanolathe — select it, `ui click ARMORDERS`, `ui click
+ARMREPAIR`, then `keys mouse:X,Y` + `click X Y` on the frame; the spray stops the moment
+metal hits zero, and clearing the starting commander drops the storage to what the
+remaining units provide (the fixture adds storage units); boats only path along the
+water and head for the map's far end, so put the camera on their route; `ctrl+d` on a
+selected structure gives burning debris (an extractor's explosion emits fire, a
+storage's does not); `tacli log` returns a tail of the file, so count lines in the raw
+`gamedir/tagpu.log` with `grep -a -c`.
+
 ## Things that will bite you
 
 - `pkill -f TotalA.exe` kills your own shell (the pattern matches the wrapper).

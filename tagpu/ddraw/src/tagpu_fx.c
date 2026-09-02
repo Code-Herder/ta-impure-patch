@@ -37,7 +37,11 @@
    frames (raw or TA-RLE, sub-frame lists) are decoded into a private atlas.
    ALP alpha = 50% blend; the LHT flash = additive, per-level colour derived
    from the live table. Armed by tagpu_fx.on; tokens: log, nolines, nomodels,
-   nosprites, noexpl, nodebris. Read-only over sim. */
+   nosprites, noexpl, nodebris, passive (gather + log, engine draws).
+   The particle sfx pass (tagpu_sfx.c, armed by tagpu_sfx.on) rides the same
+   buckets and program: layers 0..6 are emitted before the projectiles so the
+   engine's order (smoke under weapon sprites) survives, layers 7..9 after
+   the explosions; each sprite carries its own depth key. Read-only over sim. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -47,6 +51,8 @@
 #include "opengl_utils.h"
 #include "tagpu_fx.h"
 #include "tagpu_fxown.h"
+#include "tagpu_sfx.h"
+#include "tagpu_glsl.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define TAPROG_PP     0x0051FBD0u
@@ -116,10 +122,10 @@
 #define GF_PIX     0x10
 #define U_OWNER    0xFF
 
-#define MODE_FLAT   0
-#define MODE_OPAQUE 1
-#define MODE_ALPHA  2
-#define MODE_FLASH  3
+#define MODE_FLAT   TAGPU_FXMODE_FLAT
+#define MODE_OPAQUE TAGPU_FXMODE_OPAQUE
+#define MODE_ALPHA  TAGPU_FXMODE_ALPHA
+#define MODE_FLASH  TAGPU_FXMODE_FLASH
 
 #define MAXFXV   32768          /* vertices per bucket per frame             */
 #define FXST     9              /* x,y,enc, u,v, c,mode, wx,wz               */
@@ -177,13 +183,13 @@ static void read_arm(unsigned frame_counter)
     s_armed = 0;
     HANDLE h = CreateFileA("tagpu_fx.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    s_log = 0; s_lines = s_models = s_sprites = s_expl = s_debris = 1; s_passive = 0;
     if (h == INVALID_HANDLE_VALUE) {
         tagpu_fxown_set_skip(0);
         if (was > 0) flog("fx: disarmed");
         return;
     }
     char buf[128]; DWORD n = 0;
-    s_log = 0; s_lines = s_models = s_sprites = s_expl = s_debris = 1; s_passive = 0;
     if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
         buf[n] = 0;
         char* p = buf;
@@ -227,13 +233,20 @@ int tagpu_fx_armed(unsigned frame_counter)
 static int    s_state = 0;              /* 0 unloaded, 1 ready, 2 failed     */
 static GLuint s_prog, s_vao, s_vbo, s_atlasTex, s_lhtTex;
 static GLint  s_uGame, s_uFog, s_uZoom, s_uZoomC, s_uDepthScale;
-/* three buckets, drawn in this order: lines, flashes (additive), sprites —
+static GLint  s_uScafOn, s_uScafP, s_uSS, s_uZoomF, s_uZoomCF;
+/* four buckets, drawn in this order: the particle layers the engine draws
+   BEFORE its projectile pass (0..6: wake foam, feature smoke, trail puffs,
+   nanolathe), lines, flashes (additive), sprites (weapon sprites, explosions,
+   then particle layers 7..9) — so lasers and flashes sit over trail smoke and
    explosion sprites over their flash like the engine; no per-run segment
    table, so nothing is ever dropped for alternating too often */
-enum { B_LINES = 0, B_FLASH = 1, B_SPRITES = 2, NBUCKET = 3 };
+enum { B_UNDER = 0, B_LINES = 1, B_FLASH = 2, B_SPRITES = 3, NBUCKET = 4 };
 static float  s_verts[NBUCKET][MAXFXV * FXST];
 static int    s_nv[NBUCKET];
-static float  s_encSprite = 403.0f;    /* per-frame from the native pass      */
+static float  s_encCur = 403.0f;       /* depth key of what is being emitted  */
+static int    s_under = 0;             /* emit sprites/dots into B_UNDER      */
+static int    s_mute = 0;              /* passive: count, emit nothing        */
+static int    s_atlasFull = 0;         /* reset deferred to the next frame    */
 static TAGPU_FXMODEL s_models_[MAXMODEL];
 static int    s_nm = 0;
 
@@ -258,16 +271,16 @@ static const char* VS =
     "uniform float uZoom;\n"                  /* same view transform as units */
     "uniform vec2 uZoomC;\n"
     "uniform float uDepthScale;\n"            /* same depth encoding as units */
-    "out vec2 vUV; flat out vec2 vCM; out vec2 vWorld;\n"
+    "out vec2 vUV; flat out vec2 vCM; out vec2 vWorld; out float vEnc;\n"
     "void main(){\n"
     "  vec2 p = (aPos.xy - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);\n"
-    "  vUV = aUV; vCM = aCM; vWorld = aWorld;\n"
+    "  vUV = aUV; vCM = aCM; vWorld = aWorld; vEnc = aPos.z;\n"
     "}\n";
 static const char* FS =
     "#version 330 core\n"
-    "in vec2 vUV; flat in vec2 vCM; in vec2 vWorld;\n"
+    "in vec2 vUV; flat in vec2 vCM; in vec2 vWorld; in float vEnc;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uPal;\n"
@@ -275,9 +288,13 @@ static const char* FS =
     "uniform sampler2D uMap;\n"
     "uniform sampler2D uLht;\n"              /* 32x1 RGB additive per level  */
     "uniform int uFog;\n"
+    TAGPU_GLSL_SCAF_UNIFORMS
     "void main(){\n"
     "  int mode = int(vCM.y + 0.5);\n"
     "  vec3 rgb; float a = 1.0;\n"
+    /* scaffold occlusion, the unit shader's rule: only the B_UNDER draw
+       (particle layers below every row key) turns uScafOn on */
+    TAGPU_GLSL_SCAF_TEST
     "  if (mode == 0) {\n"
     "    rgb = texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb;\n"
     "  } else {\n"
@@ -341,12 +358,18 @@ static void init_gl(void)
     s_uZoom = glGetUniformLocation(s_prog, "uZoom");
     s_uZoomC = glGetUniformLocation(s_prog, "uZoomC");
     s_uDepthScale = glGetUniformLocation(s_prog, "uDepthScale");
+    s_uScafOn = glGetUniformLocation(s_prog, "uScafOn");
+    s_uScafP  = glGetUniformLocation(s_prog, "uScafP");
+    s_uSS     = glGetUniformLocation(s_prog, "uSS");
+    s_uZoomF  = glGetUniformLocation(s_prog, "uZoomF");
+    s_uZoomCF = glGetUniformLocation(s_prog, "uZoomCF");
     glUseProgram(s_prog);
     glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
     glUniform1i(glGetUniformLocation(s_prog, "uPal"),   1);
     glUniform1i(glGetUniformLocation(s_prog, "uLos"),   2);
     glUniform1i(glGetUniformLocation(s_prog, "uMap"),   3);
     glUniform1i(glGetUniformLocation(s_prog, "uLht"),   4);
+    glUniform1i(glGetUniformLocation(s_prog, "uScaf"),  5);
     glUseProgram(0);
 
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
@@ -383,6 +406,7 @@ static void init_gl(void)
 void tagpu_fx_glreset(void)
 {
     s_state = 0; s_atlasN = 0; s_shelfX = s_shelfY = s_shelfH = 0; s_lhtInit = 0;
+    s_atlasFull = 0;
 }
 
 /* ---- GAF frames ---- */
@@ -461,9 +485,12 @@ static int decode_frame(const unsigned char* g, int w, int h)
     return 1;
 }
 
+/* a reset in the middle of a gather would re-use texels that quads already
+   emitted this frame still point at, so a full atlas only flags itself: the
+   rest of this frame's new frames are skipped and the next gather resets */
 static void atlas_reset(void)
 {
-    s_atlasN = 0; s_shelfX = s_shelfY = s_shelfH = 0;
+    s_atlasN = 0; s_shelfX = s_shelfY = s_shelfH = 0; s_atlasFull = 0;
     flog("fx: atlas reset (full) — frames re-decode on demand");
 }
 
@@ -475,12 +502,10 @@ static const AtlasEnt* atlas_get(const unsigned char* g)
         if (s_atlas[i].frame == g && s_atlas[i].pix == pix &&
             s_atlas[i].w == w && s_atlas[i].h == h)
             return s_atlas[i].ok ? &s_atlas[i] : NULL;
-    if (s_atlasN >= ATLAS_MAX) atlas_reset();
+    if (s_atlasFull || h + 1 > ATLAS_DIM) return NULL;
+    if (s_atlasN >= ATLAS_MAX) { s_atlasFull = 1; return NULL; }
     if (s_shelfX + w + 1 > ATLAS_DIM) { s_shelfY += s_shelfH + 1; s_shelfX = 0; s_shelfH = 0; }
-    if (s_shelfY + h + 1 > ATLAS_DIM) {
-        atlas_reset();
-        if (h + 1 > ATLAS_DIM) return NULL;
-    }
+    if (s_shelfY + h + 1 > ATLAS_DIM) { s_atlasFull = 1; return NULL; }
     AtlasEnt* e = &s_atlas[s_atlasN++];
     e->frame = g; e->pix = pix; e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0;
     if (!decode_frame(g, w, h)) return NULL;
@@ -500,26 +525,47 @@ static const AtlasEnt* atlas_get(const unsigned char* g)
 static void put_vert(int b, float x, float y, float u, float v, float c, int mode, float wx, float wz)
 {
     float* o = s_verts[b] + (size_t)s_nv[b] * FXST;
-    o[0] = x; o[1] = y; o[2] = s_encSprite; o[3] = u; o[4] = v;
+    o[0] = x; o[1] = y; o[2] = s_encCur; o[3] = u; o[4] = v;
     o[5] = c; o[6] = (float)mode; o[7] = wx; o[8] = wz;
     s_nv[b]++;
 }
 
-static int s_cLines = 0, s_cSprites = 0, s_cFlash = 0;
+static int s_cLines = 0, s_cSprites = 0, s_cFlash = 0, s_cAtlasFail = 0;
+static int s_cOverflow = 0, s_cQuads = 0;
+static int s_traceN = 0;              /* emission trace lines left (sfx log) */
+void tagpu_fx_trace(int n) { s_traceN = n; }
+
+static void put_quad(int b, float x0, float y0, float x1, float y1,
+                     float u0, float v0, float u1, float v1, float c, int mode,
+                     float wx, float wz)
+{
+    if (s_nv[b] + 6 > MAXFXV) { s_cOverflow++; return; }
+    put_vert(b, x0, y0, u0, v0, c, mode, wx, wz);
+    put_vert(b, x1, y0, u1, v0, c, mode, wx, wz);
+    put_vert(b, x0, y1, u0, v1, c, mode, wx, wz);
+    put_vert(b, x1, y0, u1, v0, c, mode, wx, wz);
+    put_vert(b, x1, y1, u1, v1, c, mode, wx, wz);
+    put_vert(b, x0, y1, u0, v1, c, mode, wx, wz);
+    s_cQuads++;
+}
 
 static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, float wz)
 {
-    if (!s_lines || s_nv[B_LINES] + 2 > MAXFXV) return;
+    if (!s_lines) return;
+    s_cLines++;
+    if (s_mute) return;
+    if (s_nv[B_LINES] + 2 > MAXFXV) { s_cOverflow++; return; }
     float c = (float)colidx / 255.0f;
     /* pixel centres: the engine's Bresenham paints the cells at both ends */
     put_vert(B_LINES, (float)x0 + 0.5f, (float)y0 + 0.5f, -1, -1, c, MODE_FLAT, wx, wz);
     put_vert(B_LINES, (float)x1 + 0.5f, (float)y1 + 0.5f, -1, -1, c, MODE_FLAT, wx, wz);
-    s_cLines++;
 }
 
+/* the fx pass's own `nosprites` token lives at ITS call sites (fx_sprite),
+   not here: the particle pass emits through this path too */
 static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float wx, float wz, int depth)
 {
-    if (!s_sprites || depth > 4) return;
+    if (depth > 4) return;
     g = frame_sane(g);
     if (!g) return;
     int sub = g[GF_SUBN];
@@ -536,36 +582,80 @@ static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float 
         }
         return;
     }
-    int b = (mode == MODE_FLASH) ? B_FLASH : B_SPRITES;
-    if (s_nv[b] + 6 > MAXFXV) return;
+    int b = (mode == MODE_FLASH) ? B_FLASH : (s_under ? B_UNDER : B_SPRITES);
+    if (mode == MODE_FLASH) s_cFlash++; else s_cSprites++;
+    if (s_mute) return;
     const AtlasEnt* e = atlas_get(g);
-    if (!e) return;
+    if (!e) { s_cAtlasFail++; return; }
     int w = *(const unsigned short*)(g + GF_W), h = *(const unsigned short*)(g + GF_H);
     float x0 = (float)(sx - *(const short*)(g + GF_HOTX));
     float y0 = (float)(sy - *(const short*)(g + GF_HOTY));
     float x1 = x0 + (float)w, y1 = y0 + (float)h;
     float c = (float)e->ck / 255.0f;
-    put_vert(b, x0, y0, e->u0, e->v0, c, mode, wx, wz);
-    put_vert(b, x1, y0, e->u1, e->v0, c, mode, wx, wz);
-    put_vert(b, x0, y1, e->u0, e->v1, c, mode, wx, wz);
-    put_vert(b, x1, y0, e->u1, e->v0, c, mode, wx, wz);
-    put_vert(b, x1, y1, e->u1, e->v1, c, mode, wx, wz);
-    put_vert(b, x0, y1, e->u0, e->v1, c, mode, wx, wz);
-    if (mode == MODE_FLASH) s_cFlash++; else s_cSprites++;
+    if (s_traceN > 0) {
+        char tb[160]; s_traceN--;
+        _snprintf(tb, sizeof tb, "fx: emit b=%d mode=%d at=(%.0f,%.0f) %dx%d enc=%.1f ck=%u uv=(%.3f,%.3f) nv=%d",
+                  b, mode, x0, y0, w, h, s_encCur, (unsigned)e->ck, e->u0, e->v0, s_nv[b]);
+        flog(tb);
+    }
+    put_quad(b, x0, y0, x1, y1, e->u0, e->v0, e->u1, e->v1, c, mode, wx, wz);
+}
+
+/* the fx pass's sprites honour its own nosprites token */
+static void fx_sprite(const unsigned char* g, int sx, int sy, int mode, float wx, float wz)
+{
+    if (s_sprites) emit_sprite(g, sx, sy, mode, wx, wz, 0);
+}
+
+/* ---- the particle pass emits through the same buckets, at its own key;
+   under = the engine draws this layer before its projectile pass ---- */
+int tagpu_fx_emit_seq_frame(const char* seq, int frame, int sx, int sy, int mode,
+                            float wx, float wz, float enc, int under)
+{
+    const unsigned char* g = seq_frame(seq, frame);
+    if (!g) return 0;
+    float keep = s_encCur; int keepU = s_under, before = s_cQuads;
+    s_encCur = enc; s_under = under;
+    emit_sprite(g, sx, sy, mode, wx, wz, 0);
+    s_encCur = keep; s_under = keepU;
+    return s_cQuads > before;
+}
+
+/* DrawBar 0x4BF6F0 of the rect (x, y, x+1, y+1): a 2x2 flat dot */
+int tagpu_fx_emit_dot(int x, int y, int colidx, float wx, float wz, float enc, int under)
+{
+    if (s_mute) return 0;
+    float keep = s_encCur; int before = s_cQuads;
+    float x0 = (float)x, y0 = (float)y;
+    s_encCur = enc;
+    put_quad(under ? B_UNDER : B_SPRITES, x0, y0, x0 + 2.0f, y0 + 2.0f,
+             -1, -1, -1, -1, (float)colidx / 255.0f, MODE_FLAT, wx, wz);
+    s_encCur = keep;
+    return s_cQuads > before;
+}
+
+void tagpu_fx_set_mute(int on) { s_mute = on; }
+
+/* TAProgram capability bits (+0xF0): bit5 ALP alpha table built, bit7 LHT */
+unsigned tagpu_fx_caps(void)
+{
+    const char* prog = *(const char* const*)TAPROG_PP;
+    return prog_ok(prog) ? *(const unsigned short*)(prog + PROG_CAPS) : 0u;
 }
 
 static void emit_model(const char* node, float ax, float ay, float wx, float wz,
                        short t0, short t1, short t2, int owner)
 {
-    if (!s_models || s_nm >= MAXMODEL) return;
+    if (!s_models || s_mute || s_nm >= MAXMODEL) return;
     if (!ptr_ok(node) || IsBadReadPtr(node, 0x40)) return;
     TAGPU_FXMODEL* m = &s_models_[s_nm++];
     m->node = node; m->ax = ax; m->ay = ay; m->wx = wx; m->wz = wz;
     m->turn[0] = t0; m->turn[1] = t1; m->turn[2] = t2; m->owner = owner;
 }
 
-/* engine LOS gate for a projectile anchor tile (0x49BE60 head) */
-static int tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp)
+/* engine LOS gate for a projectile anchor tile (0x49BE60 head); the particle
+   leaves use the same test */
+int tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp)
 {
     if (!(v->fogMode & 1) || !v->los || !v->mapd) return 1;
     int tx = wx >> 5, ty = wzp >> 5;
@@ -590,26 +680,18 @@ static int jitter5(void)            /* rand()*11/0x8000 - 5, visual only */
 typedef struct { int hidden, fogged, laser, model, ball, sprite, flare, light, expl, debris, flash, other; } FXC;
 static FXC s_c;
 
-int tagpu_fx_gather(const TAGPU_FXVIEW* v)
+/* weapon fire, explosions, debris: the two engine passes, gathered */
+static void gather_fx(const TAGPU_FXVIEW* v)
 {
-    if (s_armed != 1) return 0;
-    if (s_state == 0) init_gl();
-    if (s_state != 1) return 0;
-    s_nv[0] = s_nv[1] = s_nv[2] = 0; s_nm = 0; s_cLines = s_cSprites = s_cFlash = 0;
-    memset(&s_c, 0, sizeof s_c);
+    s_mute = s_passive;                /* passive: count + log, emit nothing */
     /* we are drawing this frame: the engine may skip its own effects draw */
     if (!s_passive) tagpu_fxown_set_skip(1);
     tagpu_fxown_beat(v->frame_counter);
-    s_encSprite = v->encSprite;
 
     const char* ta = v->ta;
     int tick = *(const int*)(ta + OFF_TICK);
     const unsigned char* coltab = (const unsigned char*)(ta + OFF_COLTAB);
-    unsigned caps = 0;
-    {
-        const char* prog = *(const char* const*)TAPROG_PP;
-        if (prog_ok(prog)) caps = *(const unsigned short*)(prog + PROG_CAPS);
-    }
+    unsigned caps = tagpu_fx_caps();
     int alphaOn = (caps & 0x20) != 0, flashOn = (caps & 0x80) != 0;
     int eyeX = v->eyeX, eyeY = v->eyeY, vpL = v->vpL, vpT = v->vpT;
     char lb[200];
@@ -626,7 +708,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
             int X = *(const int*)(p + P_X), ALT = *(const int*)(p + P_ALT), Y = *(const int*)(p + P_Y);
             int hx = X >> 16, halt = ALT >> 16, hy = Y >> 16;
             int hzp = hy - (halt >> 1);
-            if (!tile_visible(v, hx, hzp)) { s_c.fogged++; continue; }
+            if (!tagpu_fx_tile_visible(v, hx, hzp)) { s_c.fogged++; continue; }
             const char* w = *(const char* const*)(p + P_WEAPON);
             if (!ptr_ok(w) || IsBadReadPtr(w, 0x115)) { s_c.other++; continue; }
             int rt = *(const signed char*)(w + W_RT);
@@ -654,7 +736,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
                shadow sequence's frame 0 at the projectile's ground point */
             #define SHADOW_BLOB() do { if (alphaOn && shadowFrame) { \
                 int gh = *(const unsigned short*)(p + P_GROUNDH); \
-                emit_sprite(shadowFrame, sx, (hy - eyeY) - (gh >> 1) + vpT, MODE_ALPHA, wx, wz, 0); } } while (0)
+                fx_sprite(shadowFrame, sx, (hy - eyeY) - (gh >> 1) + vpT, MODE_ALPHA, wx, wz); } } while (0)
             const short* tr = (const short*)(p + P_TURN);
             switch (rt) {
             case 0: {
@@ -714,7 +796,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
                 if (n > 0) {
                     int idx = (tick - *(const int*)(p + P_SPAWN)) % n;
                     if (idx < 0) idx += n;
-                    emit_sprite(seq_frame(seq, idx), sx, sy, MODE_OPAQUE, wx, wz, 0);
+                    fx_sprite(seq_frame(seq, idx), sx, sy, MODE_OPAQUE, wx, wz);
                 }
                 break;
             }
@@ -726,7 +808,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
                 if (n > 0 && life > 0 && alphaOn) {
                     int idx = n - ((*(const int*)(p + P_DEATH) - tick) * n) / life;
                     if (idx >= 0 && idx < n)
-                        emit_sprite(seq_frame(seq, idx), sx, sy, MODE_ALPHA, wx, wz, 0);
+                        fx_sprite(seq_frame(seq, idx), sx, sy, MODE_ALPHA, wx, wz);
                 }
                 break;
             }
@@ -808,7 +890,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
             if (pass == 0) {
                 if (flashOn && *(const unsigned* )(e + E_ST2 + AS_SEQ) != 0) {
                     const unsigned char* g = state_frame(e + E_ST2);
-                    if (g) { emit_sprite(g, sx, sy, MODE_FLASH, wx, wz, 0); s_c.flash++; }
+                    if (g) { fx_sprite(g, sx, sy, MODE_FLASH, wx, wz); s_c.flash++; }
                 }
             } else {
                 const char* node = *(const char* const*)(e + E_NODE);
@@ -820,7 +902,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
                 }
                 if (*(const unsigned*)(e + E_ST1 + AS_SEQ) != 0) {
                     const unsigned char* g = state_frame(e + E_ST1);
-                    if (g) emit_sprite(g, sx, sy, MODE_OPAQUE, wx, wz, 0);
+                    if (g) fx_sprite(g, sx, sy, MODE_OPAQUE, wx, wz);
                     if (s_log && i < 4 && (v->frame_counter % 60) == 0) {
                         const char* seq = *(const char* const*)(e + E_ST1 + AS_SEQ);
                         const char* seq2 = *(const char* const*)(e + E_ST2 + AS_SEQ);
@@ -869,25 +951,64 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
     if (v->frame_counter - last >= 60) {
         last = v->frame_counter;
         _snprintf(lb, sizeof lb,
-            "fx: proj=%d (laser=%d model=%d sprite=%d flare=%d light=%d ball=%d hidden=%d fogged=%d) expl=%d flash=%d debris=%d -> lines=%d sprites=%d flashq=%d models=%d atlas=%d",
+            "fx: proj=%d (laser=%d model=%d sprite=%d flare=%d light=%d ball=%d hidden=%d fogged=%d) expl=%d flash=%d debris=%d -> lines=%d sprites=%d flashq=%d models=%d atlas=%d%s",
             np, s_c.laser, s_c.model, s_c.sprite, s_c.flare, s_c.light, s_c.ball, s_c.hidden, s_c.fogged,
-            ne, s_c.flash, s_c.debris, s_cLines, s_cSprites, s_cFlash, s_nm, s_atlasN);
+            ne, s_c.flash, s_c.debris, s_cLines, s_cSprites, s_cFlash, s_nm, s_atlasN,
+            s_passive ? " (passive)" : "");
         flog(lb);
     }
-    if (s_passive) { s_nv[0] = s_nv[1] = s_nv[2] = 0; s_nm = 0; return 0; }
-    return s_nv[0] + s_nv[1] + s_nv[2] + s_nm;
+    s_mute = 0;
+}
+
+/* one frame: the particle layers the engine draws first, the two effects
+   passes, then the particle layers it draws after them */
+int tagpu_fx_gather(const TAGPU_FXVIEW* v)
+{
+    int fxOn = (s_armed == 1), sfxOn = tagpu_sfx_on();
+    if (!fxOn && !sfxOn) return 0;
+    if (s_state == 0) init_gl();
+    if (s_state != 1) {
+        static int said = 0;
+        if (sfxOn && !said) { said = 1; flog("fx: GL not ready — the particle pass (sfx) is idle too"); }
+        return 0;
+    }
+    if (s_atlasFull) atlas_reset();
+    memset(s_nv, 0, sizeof s_nv); s_nm = 0;
+    s_cLines = s_cSprites = s_cFlash = s_cAtlasFail = s_cOverflow = s_cQuads = 0;
+    memset(&s_c, 0, sizeof s_c);
+    s_encCur = v->encSprite; s_under = 0; s_mute = 0;
+    if (sfxOn) tagpu_sfx_gather(v, 0, 6);
+    if (fxOn) gather_fx(v);
+    if (sfxOn) { tagpu_sfx_gather(v, 7, 9); tagpu_sfx_frame_done(v); }
+    if (s_cOverflow || s_cAtlasFail) {
+        static unsigned last = 0;
+        if (v->frame_counter - last >= 60) {
+            char b[160];
+            last = v->frame_counter;
+            _snprintf(b, sizeof b, "fx: DROPPED this frame: bucket-full=%d atlas-fail=%d (under=%d lines=%d flash=%d sprites=%d verts)",
+                      s_cOverflow, s_cAtlasFail, s_nv[B_UNDER], s_nv[B_LINES], s_nv[B_FLASH], s_nv[B_SPRITES]);
+            flog(b);
+        }
+    }
+    return s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3] + s_nm;
 }
 
 int tagpu_fx_nmodels(void) { return s_nm; }
 const TAGPU_FXMODEL* tagpu_fx_model(int i) { return (i >= 0 && i < s_nm) ? &s_models_[i] : NULL; }
 
-void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex, unsigned int losTex, unsigned int mapTex)
+void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex, unsigned int losTex, unsigned int mapTex,
+                     unsigned int scafTex)
 {
-    int total = s_nv[0] + s_nv[1] + s_nv[2];
+    int total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3];
     if (s_state != 1 || total == 0) return;
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
     glUniform1i(s_uFog, v->fogMode);
+    int scaf = (v->scafOn && scafTex) ? 1 : 0;
+    if (s_uScafP >= 0) glUniform4f(s_uScafP, (float)v->vpL, (float)v->vpT, (float)v->vw, (float)v->vh);
+    x_glUniform1f(s_uSS, (float)(v->ss > 0 ? v->ss : 1));
+    x_glUniform1f(s_uZoomF, v->zoom > 0.0f ? v->zoom : 1.0f);
+    x_glUniform2f(s_uZoomCF, v->zoomCx, v->zoomCy);
     x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
     x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
     x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
@@ -896,6 +1017,7 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex, unsigned int lo
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, losTex);
     x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, mapTex);
     x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_lhtTex);
+    x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, scafTex);
     x_glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
@@ -913,13 +1035,21 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex, unsigned int lo
     x_glDepthMask(GL_FALSE);
     if (x_glLineWidth) x_glLineWidth((GLfloat)v->ss);
     x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    if (s_nv[B_LINES]) x_glDrawArrays(GL_LINES, 0, s_nv[B_LINES]);
+    /* only the under-layers can sit behind a stamped feature row: the
+       scaffold fetch is paid by that draw alone */
+    int first = 0;
+    glUniform1i(s_uScafOn, scaf);
+    if (s_nv[B_UNDER]) x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_UNDER]);
+    first += s_nv[B_UNDER];
+    glUniform1i(s_uScafOn, 0);
+    if (s_nv[B_LINES]) x_glDrawArrays(GL_LINES, first, s_nv[B_LINES]);
+    first += s_nv[B_LINES];
     if (s_nv[B_FLASH]) {
         x_glBlendFunc(GL_ONE, GL_ONE);
-        x_glDrawArrays(GL_TRIANGLES, s_nv[B_LINES], s_nv[B_FLASH]);
+        x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_FLASH]);
         x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     }
-    if (s_nv[B_SPRITES])
-        x_glDrawArrays(GL_TRIANGLES, s_nv[B_LINES] + s_nv[B_FLASH], s_nv[B_SPRITES]);
+    first += s_nv[B_FLASH];
+    if (s_nv[B_SPRITES]) x_glDrawArrays(GL_TRIANGLES, first, s_nv[B_SPRITES]);
     x_glDepthMask(GL_TRUE);
 }
