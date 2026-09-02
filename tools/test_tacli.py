@@ -1166,14 +1166,14 @@ class LiveSignal(unittest.TestCase):
     """A world in memory, told from the overlay's own count."""
 
     def test_a_non_zero_count_is_a_live_game(self):
-        m = tacli.SCN_LIVE_RX.search("units: alive=2 drawn=1 eye=(0,7312) me=0")
+        m = tacli.SCN_LIVE_RX.search("units: alive=2 onscreen=1 eye=(0,7312) me=0")
         self.assertEqual(int(m.group(1)), 2)
 
     def test_zero_units_is_not(self):
         # Measured: this line appears at the menu, where the struct is readable
         # and the world is not there yet. Waiting on it would apply into nothing.
         self.assertIsNone(
-            tacli.SCN_LIVE_RX.search("units: alive=0 drawn=0 eye=(0,0) me=0"))
+            tacli.SCN_LIVE_RX.search("units: alive=0 onscreen=0 eye=(0,0) me=0"))
 
 
 class TotalaIni(unittest.TestCase):

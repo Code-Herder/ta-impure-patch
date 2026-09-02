@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Build the TotalA.exe modding wiki from research/notes/*.md into research/site/."""
 
+import argparse
 import hashlib
 import json
 import re
 import shutil
+import subprocess
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -13,6 +16,7 @@ import markdown
 ROOT = Path(__file__).resolve().parent
 NOTES = ROOT / "notes"
 SITE = ROOT / "site"
+REPO = ROOT.parent
 ASSETS = SITE / "assets"
 
 SITE_TITLE = "TotalA.exe Modding Wiki"
@@ -59,6 +63,7 @@ PAGES = [
     ("networking-lobbies",        "TA Forever & netcode",      "Projects"),
 
     ("file-formats",              "File formats (3DO, COB, GAF)","Reference"),
+    ("undither",                  "Undithering screenshots",   "Reference"),
     ("cmdline-options",           "Launch knobs (cmdline & INI)","Reference"),
     ("resolution",                "Resolution pipeline",         "Reference"),
 
@@ -478,6 +483,97 @@ def blurb_from(md_text: str, fallback: str, limit: int = 165) -> str:
 
 ASSET_VER = hashlib.md5((CSS + JS).encode()).hexdigest()[:10]
 
+STATIC = NOTES / "assets"          # copied verbatim to site/assets/, pages link into it
+
+
+# --------------------------------------------------------------------------- learned bakes
+# The undither page's "Learned CNN" preset shows frames restored offline by the
+# shipped model (unditherer/models/full.*).  Those 15 lossless WebPs are 21 MB and
+# stay out of git; they are generated here on the first build and whenever the
+# model or a frame is newer than its bake.
+
+BAKE_SHOTS = NOTES / "assets" / "undither" / "shots"
+BAKE_OUT = NOTES / "assets" / "undither" / "learned"
+BAKE_MODEL = [REPO / "unditherer" / "models" / "full.pt", REPO / "unditherer" / "models" / "full.onnx"]
+
+
+def bake_frames(shots=BAKE_SHOTS):
+    return sorted(p for p in Path(shots).glob("*.png") if "mapfield" not in p.name)
+
+
+def stale_bakes(frames, out_dir, model_paths):
+    """Frames whose bake is missing or older than the model or the frame itself."""
+    out_dir = Path(out_dir)
+    model_mtime = max((Path(m).stat().st_mtime for m in model_paths if Path(m).exists()), default=0.0)
+    stale = []
+    for f in frames:
+        bake = out_dir / (Path(f).stem + ".webp")
+        if not bake.exists() or bake.stat().st_mtime < max(model_mtime, Path(f).stat().st_mtime):
+            stale.append(Path(f))
+    if frames and not (out_dir / "model.json").exists():
+        return list(map(Path, frames))
+    return stale
+
+
+def find_python():
+    """The unditherer environment if there is one (repo root, or the main checkout a
+    worktree belongs to), else whatever runs this script."""
+    cands = [REPO / ".venv-undither" / "bin" / "python"]
+    try:
+        common = subprocess.run(["git", "rev-parse", "--git-common-dir"], capture_output=True, text=True,
+                                check=True, cwd=REPO).stdout.strip()
+        main_root = (Path(common) if Path(common).is_absolute() else REPO / common).resolve().parent
+        cands.append(main_root / ".venv-undither" / "bin" / "python")
+    except Exception:
+        pass
+    for c in cands:
+        if c.exists():
+            return str(c)
+    return sys.executable
+
+
+def ensure_learned_bakes(mode="auto"):
+    """mode: auto (bake if missing/stale), force, or skip.  Never fatal: without the
+    model runtime the page still builds and its viewer says how to get the bakes."""
+    if mode == "skip":
+        return
+    frames = bake_frames()
+    if not frames:
+        return
+    stale = frames if mode == "force" else stale_bakes(frames, BAKE_OUT, BAKE_MODEL)
+    if not stale:
+        print(f"learned bakes: {len(frames)} up to date in {BAKE_OUT.relative_to(REPO)}")
+        return
+    if not any(m.exists() for m in BAKE_MODEL):
+        print("!! learned bakes: unditherer/models/full.* not found; the Learned CNN preset will have no images")
+        return
+    py = find_python()
+    print(f"learned bakes: {len(stale)} of {len(frames)} missing or stale -> baking with {py}")
+    cmd = [py, "-m", "unditherer.infer", "--model", "full", "--in", str(BAKE_SHOTS), "--out", str(BAKE_OUT)]
+    r = subprocess.run(cmd, cwd=REPO)
+    if r.returncode:
+        print("!! learned bakes failed (is onnxruntime or torch installed in that environment?); "
+              "the page builds without them -- see unditherer/README.md")
+
+
+def copy_static():
+    """Mirror research/notes/assets/ into the site and return a cache-bust tag.
+
+    Pages that ship their own CSS/JS (the undither viewer, for one) link to
+    assets/<dir>/<file>?v=__ASSETV__; the token is substituted at render time so a
+    changed asset busts the browser cache the same way wiki.css does."""
+    if not STATIC.exists():
+        return "0"
+    shutil.copytree(STATIC, ASSETS, dirs_exist_ok=True)
+    h = hashlib.md5()
+    for f in sorted(STATIC.rglob("*")):
+        if f.is_file():
+            h.update(f.name.encode())
+            h.update(str(f.stat().st_size).encode())
+            if f.suffix in (".js", ".css", ".json"):
+                h.update(f.read_bytes())
+    return h.hexdigest()[:10]
+
 
 def render(title, body, nav_html, toc_html, base, is_index=False, lede=""):
     crumb = "" if is_index else f'<div class="crumb"><a href="{base}index.html">Wiki</a> &nbsp;/&nbsp; {title}</div>'
@@ -532,11 +628,13 @@ def render(title, body, nav_html, toc_html, base, is_index=False, lede=""):
 """
 
 
-def main():
+def main(bake="auto"):
     SITE.mkdir(parents=True, exist_ok=True)
     ASSETS.mkdir(parents=True, exist_ok=True)
     (ASSETS / "wiki.css").write_text(CSS)
     (ASSETS / "wiki.js").write_text(JS)
+    ensure_learned_bakes(bake)
+    static_ver = copy_static()
 
     present = [(s, l, sec) for s, l, sec in PAGES if (NOTES / f"{s}.md").exists()]
     known = {s for s, _, _ in PAGES}
@@ -578,6 +676,7 @@ def main():
         )
         toc_html = f'<nav class="toc"><h5>On this page</h5>{toc_links}</nav>' if toc_links else ""
 
+        body = body.replace("__ASSETV__", static_ver)
         plain = strip_html(body)
         search_index.append({"u": f"{slug}.html", "t": title, "h": " ".join(heads), "b": plain[:2600]})
         meta[slug] = {"title": title, "label": label, "section": sec,
@@ -630,4 +729,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser(description=__doc__)
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--rebake", action="store_true", help="regenerate the undither page's learned bakes even if fresh")
+    g.add_argument("--no-bake", action="store_true", help="never run the model; build with whatever bakes exist")
+    a = ap.parse_args()
+    main("force" if a.rebake else "skip" if a.no_bake else "auto")

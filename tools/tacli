@@ -546,6 +546,39 @@ def cmd_create(args):
                                f"shield={'on' if meta['shield'] else 'off'})")
 
 
+def _ensure_owndraw_for_native(inst) -> "str | None":
+    """The native GPU pass (tagpu_native.on) needs the owndraw detours to wipe the
+    engine's 8bpp composite, or the engine keeps rasterising the same unit and you get
+    a near-invisible double draw. But owndraw installs its engine-code detours ONCE at
+    DllMain and only if tagpu_owndraw.on exists THEN — it has no per-frame re-arm (unlike
+    the native pass and the .off toggles), because patching live engine bytes off the
+    frame loop is racy; the tracer and suppressor install the same way. So arming owndraw
+    after launch silently does nothing. Close the footgun here, at the one moment it
+    matters: if this launch will bring up the native pass, make sure owndraw is armed to
+    match before the process starts. Returns a human note, or None if nothing was done.
+
+    Scoped to native deliberately: writeback (tagpu_writeback.on) overwrites the composite
+    the engine builds and needs no suppression, so it does not require owndraw.
+    """
+    nat = inst.gamedir / "tagpu_native.on"
+    if not nat.exists():
+        return None
+    # native.on is "TYPE [extra tokens]" (e.g. "all wrecks"); owndraw.on is just "TYPE".
+    tok = (nat.read_text().split() or ["all"])[0]
+    own = inst.gamedir / "tagpu_owndraw.on"
+    if not own.exists():
+        own.write_text(tok + "\n")
+        return (f"auto-armed owndraw.on={tok} (native.on is set and owndraw must be "
+                f"installed at launch, not after)")
+    have = (own.read_text().split() or [""])[0]
+    if have != tok:
+        return (f"warning: owndraw.on={have or '(empty)'} but native.on={tok} — the "
+                f"native pass will only be suppressed for {have!r}; other types will "
+                f"double-draw. Set them to match, or `tacli arm {inst.name} "
+                f"owndraw.on={tok}` and relaunch.")
+    return None
+
+
 def _launch(args) -> dict:
     """Everything `launch` does, minus the printing — `load` composes with it."""
     # Extra TotalA.exe switches. Only a handful are worth passing (see
@@ -612,6 +645,8 @@ def _launch(args) -> dict:
     for log in inst.gamedir.glob("cnc-ddraw-*.log"):
         log.unlink()
 
+    owndraw_note = _ensure_owndraw_for_native(inst)
+
     env = inst.env()
     display = env["DISPLAY"]
     meta["args"] = argv
@@ -634,7 +669,8 @@ def _launch(args) -> dict:
     return {"name": args.name, "pid": pid, "launcher_pid": proc.pid,
             "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
             "map": args.map, "unit_limit": meta.get("unit_limit"),
-            "args": argv, "shield": shield_state(inst), "pointer_restored": restored}
+            "args": argv, "shield": shield_state(inst), "pointer_restored": restored,
+            "owndraw_note": owndraw_note}
 
 
 def cmd_launch(args):
@@ -643,11 +679,13 @@ def cmd_launch(args):
         out(res, args.json, human=f"{args.name} already running (pid {res['pid']})")
         return
     win = res["window"]
-    out(res, args.json,
-        human=(f"launched {args.name} pid={res['pid']} "
-               f"window={win[0] if win else 'pending'} "
-               f"at {win[1] if win else '?'},{win[2] if win else '?'} "
-               f"shield={'on' if res['shield'] else 'off'}"))
+    human = (f"launched {args.name} pid={res['pid']} "
+             f"window={win[0] if win else 'pending'} "
+             f"at {win[1] if win else '?'},{win[2] if win else '?'} "
+             f"shield={'on' if res['shield'] else 'off'}")
+    if res.get("owndraw_note"):
+        human += f"\n  {res['owndraw_note']}"
+    out(res, args.json, human=human)
 
 
 def cmd_ls(args):
@@ -2988,7 +3026,7 @@ SCN_LAUNCH_TIMEOUT = 45.0   # `launch`'s own default: a cold prefix takes its ti
 SCN_MENU_TIMEOUT = 30.0     # ...and a gadget that never appears is a different fault
 SCN_LOAD_TIMEOUT = 180.0    # ...and a map load is longer again
 
-# The overlay logs this every 30 frames, from the same read that draws the units.
+# The overlay logs this every 30 frames, from the same read that logs the roster.
 # A non-zero count is proof TA is past its loading screen with a world in memory —
 # which is the precondition the applier would otherwise report as a 30s timeout.
 SCN_LIVE_RX = re.compile(r"units: alive=([1-9]\d*)")
@@ -3124,6 +3162,8 @@ def cmd_scenario_load(args):
     steps.append(f"launched {launched['res'][0]}x{launched['res'][1]}"
                  + (f", map {wanted_map!r}" if wanted_map else "")
                  + (f", unit limit {limit}" if limit is not None else ""))
+    if launched.get("owndraw_note"):
+        steps.append(launched["owndraw_note"])
 
     _scn_wait_shell(inst, args.launch_timeout)
     for i, selector in enumerate(SCN_MENU_PATH):

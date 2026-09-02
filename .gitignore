@@ -27,6 +27,7 @@
 .claude/settings.local.json
 
 __pycache__/
+.pytest_cache/
 
 # Disabled nested repo metadata (rename back to .git to restore)
 /tagpu/.git.empty-disabled/
@@ -58,3 +59,13 @@ __pycache__/
 *.tnt
 *.smk
 *.pcx
+
+# Local python venv for the undither tooling (opencv is not a repo dependency)
+.venv*/
+
+# CC0 texture corpus + training runs for the learned undither restorer (unditherer/fetch_data.py)
+.data/
+
+# Learned-restorer bakes for the undither wiki page (21 MB of lossless WebP, regenerated
+# by research/build_wiki.py from unditherer/models/full.* whenever missing or stale)
+/research/notes/assets/undither/learned/

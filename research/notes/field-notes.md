@@ -202,7 +202,7 @@ are enough to start and play a skirmish headless — this is how G2 was finished
 - **Mouse-edge scrolling via `xdotool mousemove` (XTEST motion works).** Holding the pointer at a
   screen edge scrolls the map; nudge the position each step to keep the scroll alive. The map is
   large (units start at opposite corners), so scroll adaptively: read the overlay's `eye=(x,y)` and
-  `drawn=N` log and stop when `drawn>0`. **The up-scroll edge is below the top HUD bar**, not at
+  `onscreen=N` log and stop when `onscreen>0`. **The up-scroll edge is below the top HUD bar**, not at
   `y=0`. Left/right/bottom edges scroll as expected.
 - **Self-locating via the overlay log.** Because our overlay logs `eye`, per-unit `world=` and
   `screen=` coords, we can steer the camera onto a unit numerically instead of by eye.

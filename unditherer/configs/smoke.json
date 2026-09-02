@@ -1,0 +1,15 @@
+{
+  "name": "smoke",
+  "description": "A two-minute end-to-end check of the pipeline on a few corpus images and a toy network. Numbers mean nothing; a green run does.",
+  "corpus": null,
+  "runs": null,
+  "fetch": {"mode": "manifest", "sources": "ambientcg,polyhaven,oga", "limit": 20},
+  "common": {"patch": 48, "batch": 8, "workers": 2, "val_every": 50, "val_n": 16},
+  "experiments": {
+    "smoke":    {"depth": 4, "ch": 8, "steps": 100, "lr": 0.001},
+    "smoke-mc": {"init": "smoke", "steps": 50, "lr": 0.0003, "mean_weight": 1.0}
+  },
+  "eval": {"n": 32, "seed": 1234, "patch": 48, "presets": "tuned"},
+  "export": {},
+  "bake": {"prep": false, "wiki": false}
+}

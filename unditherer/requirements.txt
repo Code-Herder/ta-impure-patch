@@ -1,0 +1,16 @@
+# Runtime for the CLI's classical stages
+numpy>=1.24
+pillow>=10
+opencv-python>=4.8          # opencv-contrib-python if you want undither_guided
+
+# Learned presets: ONE of these is enough for inference
+onnxruntime>=1.17           # CPU inference of models/*.onnx, no torch needed
+# torch>=2.3                # CUDA inference of models/*.pt, and required for training
+
+# Training / export (unditherer.train, unditherer.pipeline export stage)
+# torch>=2.3
+# onnx>=1.16
+# onnxscript>=0.2           # torch.onnx.export on torch >= 2.9
+
+# Tests
+pytest>=8
