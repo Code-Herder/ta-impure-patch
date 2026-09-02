@@ -1,0 +1,36 @@
+{
+  "format": "ta-scenario/1",
+  "description": "effects: a long laser duel — an ARM commander on hold against three Core LLTs 190 px away (both sides fire rendertype-0 lasers for tens of seconds), two Peewees in EMG range for rendertype-4 sprites; camera on the middle LLT",
+  "seed": 20260902,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "groups": [
+    { "id": "llts", "owner": 1, "at": [3150, 1140],
+      "pattern": {"kind": "line", "spacing": 60},
+      "composition": [{"type": "CORLLT", "count": 3}],
+      "facing": 270 },
+    { "id": "pws", "owner": 0, "at": [3010, 1120],
+      "pattern": {"kind": "line", "spacing": 50},
+      "composition": [{"type": "ARMPW", "count": 2}],
+      "facing": 90, "stance": "hold" }
+  ],
+
+  "units": [
+    { "id": "hero",   "type": "ARMCOM",   "owner": 0, "pos": [2960, 1200], "facing": 90, "stance": "hold" },
+    { "id": "spare",  "type": "CORSOLAR", "owner": 1, "pos": [4100, 1300] },
+    { "id": "spare2", "type": "ARMSOLAR", "owner": 0, "pos": [2000, 1300] }
+  ],
+
+  "camera": { "center_on": "hero" }
+}

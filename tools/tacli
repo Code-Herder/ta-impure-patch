@@ -579,6 +579,28 @@ def _ensure_owndraw_for_native(inst) -> "str | None":
     return None
 
 
+def _ensure_fxown_for_fx(inst) -> "str | None":
+    """Same footgun, effects edition: the native effects pass (tagpu_fx.on) draws
+    weapon fire, explosions and debris itself, and the engine's own two effects passes
+    are skipped by the fxown code patches (call-site redirects + leaf detours). Those
+    install ONCE at DllMain, only if tagpu_fxown.on exists then. Without them the
+    engine keeps drawing every effect under ours (a double draw that is hard to see
+    on sprites and obvious on lasers). So if this launch brings up the effects pass,
+    make sure fxown is armed before the process starts. The skip itself follows
+    tagpu_fx.on live, so removing fx.on later restores the engine's draw.
+    """
+    fx = inst.gamedir / "tagpu_fx.on"
+    own = inst.gamedir / "tagpu_fxown.on"
+    if not fx.exists():
+        if own.exists():
+            own.unlink()
+            return "dropped fxown.on (fx.on is not set; the effects patches are only installed with it)"
+        return None
+    if own.exists():
+        return None
+    own.write_text("on\n")
+    return "auto-armed fxown.on (fx.on is set and fxown must be installed at launch, not after)"
+
 def _launch(args) -> dict:
     """Everything `launch` does, minus the printing — `load` composes with it."""
     # Extra TotalA.exe switches. Only a handful are worth passing (see
@@ -646,6 +668,7 @@ def _launch(args) -> dict:
         log.unlink()
 
     owndraw_note = _ensure_owndraw_for_native(inst)
+    fxown_note = _ensure_fxown_for_fx(inst)
 
     env = inst.env()
     display = env["DISPLAY"]
@@ -670,7 +693,7 @@ def _launch(args) -> dict:
             "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
             "map": args.map, "unit_limit": meta.get("unit_limit"),
             "args": argv, "shield": shield_state(inst), "pointer_restored": restored,
-            "owndraw_note": owndraw_note}
+            "owndraw_note": owndraw_note, "fxown_note": fxown_note}
 
 
 def cmd_launch(args):
@@ -685,6 +708,8 @@ def cmd_launch(args):
              f"shield={'on' if res['shield'] else 'off'}")
     if res.get("owndraw_note"):
         human += f"\n  {res['owndraw_note']}"
+    if res.get("fxown_note"):
+        human += f"\n  {res['fxown_note']}"
     out(res, args.json, human=human)
 
 
@@ -3164,6 +3189,8 @@ def cmd_scenario_load(args):
                  + (f", unit limit {limit}" if limit is not None else ""))
     if launched.get("owndraw_note"):
         steps.append(launched["owndraw_note"])
+    if launched.get("fxown_note"):
+        steps.append(launched["fxown_note"])
 
     _scn_wait_shell(inst, args.launch_timeout)
     for i, selector in enumerate(SCN_MENU_PATH):

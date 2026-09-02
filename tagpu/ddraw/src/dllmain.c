@@ -14,6 +14,7 @@
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
 #include "tagpu_owndraw.h"
+#include "tagpu_fxown.h"
 #include "utils.h"
 #include "versionhelpers.h"
 #include "delay_imports.h"
@@ -72,6 +73,12 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            No-op unless "tagpu_owndraw.on" exists; byte-match guarded; touches
            only 0x459830/0x459C70, disjoint from the suppress/tracer detours. */
         tagpu_owndraw_init();
+
+        /* tagpu: own the effects draw — redirect the two effects-pass call sites
+           in DrawGameScreen and detour four draw leaves (0x46BAE0/0x4B8EC0/
+           0x4211D0/0x4B7F90), all disjoint from the detours above. No-op unless
+           "tagpu_fxown.on" exists; byte-match guarded, all-or-nothing. */
+        tagpu_fxown_init();
 
         PVOID(WINAPI * add_handler)(ULONG, PVECTORED_EXCEPTION_HANDLER) =
             (void*)real_GetProcAddress(GetModuleHandleA("Kernel32.dll"), "AddVectoredExceptionHandler");

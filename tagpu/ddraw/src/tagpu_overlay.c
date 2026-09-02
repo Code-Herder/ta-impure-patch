@@ -17,6 +17,7 @@
 #include "tagpu_suppress.h"
 #include "tagpu_render3do.h"
 #include "tagpu_owndraw.h"
+#include "tagpu_fxown.h"
 #include "tagpu_scaffold.h"
 #include "tagpu_input.h"
 #include "tagpu_native.h"
@@ -452,6 +453,8 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_suppress_flush(f->frame_counter);
     /* Phase B own-the-draw flush: no-op unless armed. */
     tagpu_owndraw_flush(f->frame_counter);
+    /* effects own-the-draw flush: no-op unless armed at launch. */
+    tagpu_fxown_flush(f->frame_counter);
     if (GetFileAttributesA("tagpu_overlay.off")!=INVALID_FILE_ATTRIBUTES) { writeback_paint(f); return; }
     if (s_state==0) init_overlay();
     if (s_state!=1) { writeback_paint(f); return; }

@@ -1,0 +1,31 @@
+{
+  "format": "ta-scenario/1",
+  "description": "effects: model projectiles — three Rockos on hold lob rockets (rendertype 1, 3DO + thrust flame + ground shadow blob) at a Core fusion plant 210 px away for minutes; camera on the target",
+  "seed": 20260902,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "groups": [
+    { "id": "rockos", "owner": 0, "at": [2900, 1150],
+      "pattern": {"kind": "line", "spacing": 50},
+      "composition": [{"type": "ARMROCK", "count": 3}],
+      "facing": 90, "stance": "hold" }
+  ],
+
+  "units": [
+    { "id": "target", "type": "CORFUS",   "owner": 1, "pos": [3110, 1200] },
+    { "id": "spare",  "type": "ARMSOLAR", "owner": 0, "pos": [2000, 1300] }
+  ],
+
+  "camera": { "center_on": "target" }
+}

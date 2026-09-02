@@ -326,6 +326,15 @@ to match `native.on`** when native is set — it prints `auto-armed owndraw.on=�
 normal flow is: `arm native.on=all wrecks`, then `scenario load … --restart`. Verify with
 the log line `owndraw: ARMED … opaque@0x459830=OK` and `OWND … skipped>0`.
 
+**The effects pass works the same way.** `fx.on` (weapon fire, explosions, debris — tokens
+`log`, `passive`, `nolines`, `nomodels`, `nosprites`, `noexpl`, `nodebris`) needs the
+`fxown.on` code patches, which tacli auto-arms at launch when `fx.on` exists (`auto-armed
+fxown.on`). The engine skip then *follows `fx.on` live*: `arm fx.on=off` restores the
+engine's effects within 30 frames, `arm fx.on="log passive"` keeps gathering and logging
+(`fx: proj=… expl=…` every 60 frames) while the engine draws — the same-fight A/B lever.
+Verify with `fxown: ARMED site.proj=1 site.expl=1 …` and `FXOWN skip=1`. Fixtures:
+`scenarios/fx-mix.json`, `fx-lasers.json`, `fx-rockets.json`.
+
 ## Things that will bite you
 
 - `pkill -f TotalA.exe` kills your own shell (the pattern matches the wrapper).
