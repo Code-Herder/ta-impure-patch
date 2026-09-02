@@ -1,0 +1,180 @@
+/* undither.css — viewer widget. Uses the wiki's tokens when they exist and
+   falls back to its own gunmetal & amber palette when mounted standalone. */
+.ud{
+  --ud-panel: var(--panel, #171e23);
+  --ud-panel-2: var(--panel-2, #1e262c);
+  --ud-edge: var(--edge, #2c373f);
+  --ud-ink: var(--ink, #dbe3e8);
+  --ud-ink-2: var(--ink-2, #9aa9b2);
+  --ud-ink-3: var(--ink-3, #71828d);
+  --ud-accent: var(--accent, #f0a828);
+  --ud-link: var(--link, #5ec6c0);
+  display:block;
+  border:1px solid var(--ud-edge);
+  border-radius:10px;
+  background:var(--ud-panel);
+  overflow:hidden;
+  outline:none;
+}
+.ud:focus-visible{ box-shadow:0 0 0 2px var(--ud-accent); }
+.ud:fullscreen{ border-radius:0; display:flex; flex-direction:column; }
+.ud:fullscreen .ud-stage{ flex:1 1 auto; aspect-ratio:auto; }
+
+/* ---- toolbar ---- */
+.ud-bar{
+  display:flex; flex-wrap:wrap; gap:.55rem 1.4rem; align-items:center;
+  padding:.6rem .8rem; background:var(--ud-panel-2);
+  border-bottom:1px solid var(--ud-edge);
+}
+.ud-group{ display:flex; align-items:center; gap:.35rem; }
+.ud-right{ margin-left:auto; }
+.ud-glabel{
+  font:600 .68rem/1 var(--ud-mono, ui-monospace, "IBM Plex Mono", monospace);
+  letter-spacing:.11em; text-transform:uppercase; color:var(--ud-ink-3);
+  margin-right:.2rem;
+}
+.ud-btn{
+  font:600 .82rem/1 inherit;
+  color:var(--ud-ink-2); background:var(--ud-panel);
+  border:1px solid var(--ud-edge); border-radius:6px;
+  padding:.4rem .7rem; cursor:pointer;
+  transition:background .12s, color .12s, border-color .12s;
+}
+.ud-btn:hover{ color:var(--ud-ink); border-color:var(--ud-ink-3); }
+.ud-btn.on{
+  color:#12181c; background:var(--ud-accent); border-color:var(--ud-accent);
+}
+
+/* ---- viewport ---- */
+.ud-stage{
+  position:relative; aspect-ratio:16/9; background:#0d1114;
+  touch-action:none; cursor:grab; overflow:hidden;
+}
+.ud-stage.ud-near-seam{ cursor:ew-resize; }
+.ud-stage.ud-dragging-pan{ cursor:grabbing; }
+.ud-stage.ud-dragging-split{ cursor:ew-resize; }
+.ud-canvas{ display:block; width:100%; height:100%; }
+.ud-handle{
+  position:absolute; top:0; bottom:0; width:2px; margin-left:-1px;
+  background:rgba(255,255,255,.85); pointer-events:none;
+  box-shadow:0 0 0 1px rgba(0,0,0,.45);
+}
+.ud-knob{
+  position:absolute; top:50%; left:50%; width:34px; height:34px;
+  margin:-17px 0 0 -17px; border-radius:50%;
+  background:rgba(255,255,255,.9); box-shadow:0 2px 8px rgba(0,0,0,.5);
+}
+.ud-knob::before, .ud-knob::after{
+  content:""; position:absolute; top:50%; margin-top:-5px;
+  border:5px solid transparent;
+}
+.ud-knob::before{ left:5px;  border-right-color:#12181c; }
+.ud-knob::after{  right:5px; border-left-color:#12181c; }
+.ud-tag{
+  position:absolute; top:.6rem; padding:.22rem .55rem; border-radius:4px;
+  font:600 .7rem/1.3 var(--ud-mono, ui-monospace, "IBM Plex Mono", monospace);
+  letter-spacing:.05em; background:rgba(10,14,17,.72); color:#e8eef2;
+  pointer-events:none; backdrop-filter:blur(2px);
+}
+.ud-tag-l{ left:.6rem; }
+.ud-tag-r{ right:.6rem; color:var(--ud-accent); }
+.ud-spin{
+  position:absolute; inset:0; display:grid; place-items:center;
+  background:rgba(13,17,20,.8); color:var(--ud-ink-2);
+  font:600 .8rem/1 inherit;
+}
+.ud-error{ padding:2rem; color:#e8815f; text-align:center; }
+
+/* ---- environment strip ---- */
+.ud-strip{
+  display:flex; gap:.4rem; overflow-x:auto; padding:.55rem;
+  background:var(--ud-panel-2); border-top:1px solid var(--ud-edge);
+  scrollbar-width:thin;
+}
+.ud-thumb{
+  flex:0 0 auto; width:118px; padding:0; cursor:pointer;
+  background:none; border:1px solid transparent; border-radius:6px;
+  color:var(--ud-ink-3); font:600 .66rem/1.5 inherit; text-align:center;
+  overflow:hidden;
+}
+.ud-thumb img{ display:block; width:100%; aspect-ratio:16/9; object-fit:cover;
+  border-radius:5px 5px 0 0; opacity:.62; transition:opacity .12s; }
+.ud-thumb:hover img{ opacity:.9; }
+.ud-thumb.on{ border-color:var(--ud-accent); color:var(--ud-accent); }
+.ud-thumb.on img{ opacity:1; }
+.ud-thumb span{ display:block; padding:.15rem .2rem .25rem; }
+
+/* ---- readout ---- */
+.ud-readout{
+  padding:.6rem .8rem; border-top:1px solid var(--ud-edge);
+  font:400 .8rem/1.55 var(--ud-mono, ui-monospace, "IBM Plex Mono", monospace);
+  color:var(--ud-ink-2); background:var(--ud-panel);
+}
+.ud-row{ display:flex; gap:.8rem; }
+.ud-row + .ud-row{ border-top:1px dotted var(--ud-edge); }
+.ud-k{ flex:0 0 12.5rem; color:var(--ud-ink-3); }
+.ud-v{ flex:1 1 auto; color:var(--ud-ink); word-break:break-word; }
+@media (max-width:640px){
+  .ud-row{ display:block; }
+  .ud-k{ display:block; }
+}
+
+/* ---- gallery + lightbox (wiki page) ---- */
+.ud-gallery{
+  display:grid; gap:.7rem; margin:1.4rem 0;
+  grid-template-columns:repeat(auto-fill, minmax(210px, 1fr));
+}
+.ud-gallery figure{ margin:0; }
+.ud-gallery button{
+  display:block; width:100%; padding:0; cursor:zoom-in; background:none;
+  border:1px solid var(--edge, #2c373f); border-radius:8px; overflow:hidden;
+}
+.ud-gallery img{ display:block; width:100%; aspect-ratio:16/9; object-fit:cover; }
+.ud-gallery figcaption{
+  padding:.35rem .1rem 0; font-size:.78rem; color:var(--ink-3, #71828d);
+}
+.ud-gallery b{ color:var(--ink, #dbe3e8); font-weight:600; }
+
+.ud-lightbox{
+  position:fixed; inset:0; z-index:9999; display:none;
+  background:rgba(8,11,13,.94); padding:2.2rem 1rem 1rem;
+}
+/* minmax(0,…) on both tracks: a bare 1fr takes the 1920px image as its
+   min-content size, and then max-width/max-height have nothing to resolve against */
+.ud-lightbox.open{
+  display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) auto;
+  place-items:center; overflow:hidden;
+}
+.ud-lightbox img{
+  max-width:100%; max-height:100%; min-width:0; min-height:0;
+  object-fit:contain; cursor:zoom-in;
+}
+/* click to inspect the dither at true scale — the frame is 1920×1080, so it scrolls */
+.ud-lightbox.zoom1{ overflow:auto; place-items:start center; }
+.ud-lightbox.zoom1 img{
+  max-width:none; max-height:none; width:auto; height:auto;
+  image-rendering:pixelated; cursor:zoom-out;
+}
+.ud-lightbox figcaption{
+  padding:.7rem 0 0; color:#cbd6dd; font-size:.82rem; text-align:center;
+}
+.ud-lbclose{
+  position:absolute; top:.6rem; right:.9rem; font:600 1.4rem/1 inherit;
+  background:none; border:0; color:#cbd6dd; cursor:pointer;
+}
+.ud-lbnav{
+  position:absolute; top:50%; transform:translateY(-50%);
+  background:rgba(255,255,255,.08); border:0; color:#e8eef2;
+  font:400 2rem/1 inherit; padding:.5rem .8rem; cursor:pointer; border-radius:6px;
+}
+.ud-lbnav.prev{ left:.6rem; } .ud-lbnav.next{ right:.6rem; }
+
+/* ---- undither kernel controls (second toolbar row) ---- */
+.ud-bar-2{ gap:.45rem 1.1rem; padding:.45rem .8rem; background:var(--ud-panel); }
+.ud-btn.ud-sm{ padding:.3rem .5rem; font-size:.74rem; }
+.ud-range{ width:100px; accent-color:var(--ud-accent); vertical-align:middle; margin:0 .2rem; }
+.ud-val{
+  font:500 .7rem/1 var(--ud-mono, ui-monospace, "IBM Plex Mono", monospace);
+  color:var(--ud-ink); min-width:5.5em; white-space:nowrap;
+}
+.ud-group.ud-off{ opacity:.38; pointer-events:none; }

@@ -1,0 +1,98 @@
+{
+ "full": {
+  "name": "full",
+  "source_run": "full-mc",
+  "depth": 12,
+  "ch": 64,
+  "params": 373443,
+  "step": 4000,
+  "train_val_psnr": 30.167371729503113,
+  "eval_psnr": 30.476050480951436,
+  "eval_set": {
+   "n": 512,
+   "patch": 96,
+   "seed": 1234
+  },
+  "trained": null,
+  "recipe": {
+   "patch": 96,
+   "batch": 64,
+   "workers": 10,
+   "val_every": 1000,
+   "val_n": 256,
+   "scale_min": 1.0,
+   "scale_max": 6.0,
+   "jitter_p": 0.7,
+   "sat_min": 0.6,
+   "sat_max": 2.2,
+   "hue_p": 0.5,
+   "vivid_p": 0.0,
+   "dither_modes": "fs,fs,fs,nearest,ordered4,ordered8",
+   "ordered_amp_min": 16,
+   "ordered_amp_max": 48,
+   "margin": 8,
+   "depth": 12,
+   "ch": 64,
+   "init": "full",
+   "steps": 8000,
+   "lr": 0.0002,
+   "mean_weight": 1.0,
+   "note": "SHIPPED as models/full: + block-mean consistency; 30.48 dB fixed-set, Water World 0.96 levels"
+  },
+  "aug": null,
+  "onnx_max_abs_diff": 2.980232238769531e-07,
+  "files": {
+   "full.pt": 1516305,
+   "full.onnx": 1495541
+  },
+  "exported": "2026-09-02 00:03:09"
+ },
+ "tiny": {
+  "name": "tiny",
+  "source_run": "tiny-mc",
+  "depth": 6,
+  "ch": 24,
+  "params": 22251,
+  "step": 4000,
+  "train_val_psnr": 29.670856817889536,
+  "eval_psnr": 29.788134139367383,
+  "eval_set": {
+   "n": 512,
+   "patch": 96,
+   "seed": 1234
+  },
+  "trained": null,
+  "recipe": {
+   "patch": 96,
+   "batch": 64,
+   "workers": 8,
+   "val_every": 1000,
+   "val_n": 256,
+   "scale_min": 1.0,
+   "scale_max": 6.0,
+   "jitter_p": 0.7,
+   "sat_min": 0.6,
+   "sat_max": 2.2,
+   "hue_p": 0.5,
+   "vivid_p": 0.0,
+   "dither_modes": "fs,fs,fs,nearest,ordered4,ordered8",
+   "ordered_amp_min": 16,
+   "ordered_amp_max": 48,
+   "margin": 8,
+   "depth": 6,
+   "ch": 24,
+   "init": "tiny",
+   "steps": 8000,
+   "lr": 0.0003,
+   "mean_weight": 1.0,
+   "note": "SHIPPED as models/tiny: + block-mean consistency; 29.79 dB fixed-set"
+  },
+  "aug": null,
+  "onnx_max_abs_diff": 6.556510925292969e-07,
+  "files": {
+   "tiny.pt": 98857,
+   "tiny.onnx": 90839
+  },
+  "exported": "2026-09-02 00:03:09"
+ }
+}

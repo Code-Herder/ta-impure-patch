@@ -1,0 +1,33 @@
+{
+  "name": "shipped",
+  "description": "The recipe that produced models/full.* and models/tiny.* (2026-09-01, RTX 4070). Plain-L1 runs of 40k steps, then an 8k-step fine-tune with the block-mean consistency term; the fine-tunes ship.",
+  "corpus": null,
+  "runs": null,
+  "fetch": {"mode": "manifest", "sources": "ambientcg,polyhaven,oga", "limit": 0},
+  "common": {
+    "patch": 96, "batch": 64, "workers": 10, "val_every": 2000, "val_n": 256,
+    "scale_min": 1.0, "scale_max": 6.0, "jitter_p": 0.7, "sat_min": 0.6, "sat_max": 2.2,
+    "hue_p": 0.5, "vivid_p": 0.0, "dither_modes": "fs,fs,fs,nearest,ordered4,ordered8",
+    "ordered_amp_min": 16, "ordered_amp_max": 48, "margin": 8
+  },
+  "experiments": {
+    "full":    {"depth": 12, "ch": 64, "steps": 40000, "lr": 0.001,
+                "note": "plain L1; 62 min; 31.72 dB fixed-set; Water World drifts 12 levels"},
+    "tiny":    {"depth": 6, "ch": 24, "steps": 40000, "lr": 0.001, "workers": 8,
+                "note": "plain L1; 49 min; 30.55 dB fixed-set"},
+    "full-mc": {"init": "full", "steps": 8000, "lr": 0.0002, "mean_weight": 1.0, "val_every": 1000,
+                "note": "SHIPPED as models/full: + block-mean consistency; 30.48 dB fixed-set, Water World 0.96 levels"},
+    "tiny-mc": {"init": "tiny", "steps": 8000, "lr": 0.0003, "mean_weight": 1.0, "val_every": 1000, "workers": 8,
+                "note": "SHIPPED as models/tiny: + block-mean consistency; 29.79 dB fixed-set"}
+  },
+  "dead_ends": {
+    "full-ft": {"init": "full", "steps": 8000, "lr": 0.0002, "val_every": 1000, "vivid_p": 0.4,
+                "note": "vivid-saturation push in augmentation: no effect on the water drift. Not shipped."},
+    "tiny-ft": {"init": "tiny", "steps": 8000, "lr": 0.0003, "val_every": 1000, "workers": 8, "vivid_p": 0.4,
+                "note": "same push on the tiny model: slightly worse (10.4 -> 12.2 levels on Water World). Not shipped."}
+  },
+  "eval": {"n": 512, "seed": 1234, "patch": 96, "presets": "tuned"},
+  "export": {"full": "full-mc", "tiny": "tiny-mc"},
+  "bake": {"model": "full", "shots": "research/notes/assets/undither/shots",
+           "out": "research/notes/assets/undither/learned", "prep": true, "wiki": true}
+}

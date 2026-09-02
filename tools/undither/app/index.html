@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Undither prototype — Total Annihilation screenshots</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../../research/notes/assets/undither/undither.css">
+<style>
+  :root{
+    --panel:#171e23; --panel-2:#1e262c; --edge:#2c373f;
+    --ink:#dbe3e8; --ink-2:#9aa9b2; --ink-3:#71828d;
+    --accent:#f0a828; --link:#5ec6c0; --ground:#11161a;
+    --ud-mono:"IBM Plex Mono", ui-monospace, monospace;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:1.6rem clamp(.8rem, 3vw, 2.4rem) 3rem;
+    background:var(--ground); color:var(--ink);
+    font:400 15px/1.6 "IBM Plex Sans", system-ui, sans-serif;
+  }
+  .wrap{ max-width:1400px; margin:0 auto; }
+  h1{
+    font:700 clamp(1.5rem,3.4vw,2.2rem)/1.1 "Saira Condensed", system-ui, sans-serif;
+    letter-spacing:.02em; margin:0 0 .2rem;
+  }
+  h1 em{ color:var(--accent); font-style:normal; }
+  .lede{ color:var(--ink-2); margin:0 0 1.4rem; max-width:74ch; }
+  .lede code{ color:var(--accent); font-family:var(--ud-mono); font-size:.88em; }
+  .hint{
+    margin:.9rem 0 0; color:var(--ink-3); font-size:.82rem;
+    font-family:var(--ud-mono);
+  }
+  .hint kbd{
+    background:var(--panel-2); border:1px solid var(--edge); border-radius:4px;
+    padding:.05em .35em; color:var(--ink-2);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Undither <em>prototype</em></h1>
+  <p class="lede">
+    Every pixel below came out of Total Annihilation's own 8bpp frame buffer at 1920×1080,
+    one screenshot per map environment. The right-hand side is rebuilt live on the GPU by the
+    same three stages <code>tools/undither/restore.py</code> runs — toggle them, drag the seam,
+    zoom in until the dither is visible.
+  </p>
+
+  <div id="viewer"></div>
+
+  <p class="hint">
+    drag the seam to wipe · drag anywhere else to pan · wheel to zoom ·
+    <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> toggle stages · <kbd>f</kbd> fit · <kbd>0</kbd> 1:1 ·
+    <kbd>←</kbd><kbd>→</kbd> change environment
+  </p>
+</div>
+
+<!-- the viewer itself is a wiki asset: the page and this harness load one copy -->
+<script src="../../../research/notes/assets/undither/undither.js"></script>
+<script src="../../../research/notes/assets/undither/undither-ui.js"></script>
+<script>
+// captures live with the wiki assets so one copy serves both the prototype and
+// the published page; ?base= overrides it when they are staged elsewhere
+var BASE = new URLSearchParams(location.search).get("base")
+        || "../../../research/notes/assets/undither/";
+fetch(BASE + "shots.json")
+  .then(function (r) { return r.json(); })
+  .then(function (images) { window.UD = Undither.mount(document.getElementById("viewer"), { base: BASE, images: images }); })
+  .catch(function (e) {
+    document.getElementById("viewer").innerHTML =
+      '<p class="ud-error">could not load ' + BASE + 'shots.json — run tools/undither/prep.py first (' + e + ')</p>';
+  });
+</script>
+</body>
+</html>
