@@ -249,7 +249,7 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | map extents | `MapWidth/Height` | `main+0x14223`/`0x14227` | World units. Bounds-checking source; `FeatureMapSizeX/Y` (`0x14233`/`0x14237`) is the same map in tiles. |
 | per-player cap | `MaxUnitNumberPerPlayer` | `main+0x37EEC` | Reads **250** in stock skirmish, and **500** after `setup.unit_limit: 500` (phase D writes it to `totala.ini`; the array grows with it, `array_slots` 2500 -> 5000). `ActualUnitLimit` (`0x37EEA`) reads 0 either way and is not written. |
 | loaded map | `GameingState.TNTFile` | `*(main+0x391E9) + 0x204` | The map the engine really has, `"Maps\Two Continents.TNT"`. TA falls back silently on a `SkirmishMap` it does not know, so this is the only honest answer [VERIFIED live, tamem.h:632,811]. |
-| player resources | `PlayerStruct[10]`, stride `0x14B` | `main+0x1B63` | `fCurrentEnergy +0x8C`, `fCurrentMetal +0x98`, `fMaxEnergyStorage +0xA4`, `fMaxMetalStorage +0xA8` — all confirmed against a live read. Writable, but not *settable*: see the phase C notes. |
+| player resources | `PlayerStruct[10]`, stride `0x14B` | `main+0x1B63` | `fCurrentEnergy +0x8C`, `fCurrentMetal +0x98`, `fMaxEnergyStorage +0xA4`, `fMaxMetalStorage +0xA8` — all confirmed against a live read, and the stride with them (slot 1 at `+0x1CAE`). Writable, but not *settable* from the apply point: see the phase C notes. Set them **at launch** instead, `Player<N>Metal`/`Energy` in the skirmish registry key (phase D). |
 
 ### The apply point
 
@@ -576,7 +576,8 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   in Python instead would mean renumbering ordinals and orphaning any order or camera that
   named it; the fork already re-checks every name, so per-entity best effort belongs
   exactly where it can be per-entity.
-- **`setup.players[].metal/energy` cannot be set from the apply point.** The offsets are
+- **`setup.players[].metal/energy` cannot be set from the apply point** — but they *can*
+  be set at launch, which phase D then found. The offsets are
   right (confirmed against a live read: `PlayerStruct` stride `0x14B` at `main+0x1B63`,
   `fCurrentEnergy +0x8C`, `fCurrentMetal +0x98`, storage at `+0xA4`/`+0xA8`) and the write
   lands — the result's `players.wrote` shows the figure back. But TA recomputes storage
@@ -585,7 +586,7 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   writes, and reports `requested` / `wrote` / `now`; the compiler warns whenever a file
   asks, so `validate` says it before anything runs; and the shipped example dropped the
   two keys rather than advertise a knob the engine overrules. Setting resources for real
-  is a launch-time problem and belongs to phase D.
+  is a launch-time problem — and phase D solved it; see below.
 
 **D — `scenario load` end to end. BUILT 2026-09-01.** `cmd_scenario_load` composes the
 verbs that already worked: launch carrying `setup`'s launch half, the shell path by gadget
@@ -637,6 +638,24 @@ line reading `Wreckage M:564` and `Rocko: Under Attack`. The `shootall` A/B is *
   world in memory. Zero is not: that line also appears at the *menu*, where the struct is
   readable and the world is not there yet, so waiting on the bare word would apply into
   nothing.
+- **Starting resources are a launch-time setting, and the knob was hiding in plain
+  sight.** The skirmish registry key carries `Player<N>Metal` and `Player<N>Energy`
+  alongside the `Controller`/`Side`/`Color` this tool already wrote — six values a seat,
+  defaulting to 1000 — and they set the player's **storage** as well as their level: 3000
+  metal asked for reads `fCurrentMetal` 3000 *and* `fMaxMetalStorage` 3000, TA's own bar
+  reads `3000/3000`, and it is still 3000 half a minute later. So phase C's finding was
+  right and incomplete: the engine recomputes storage from owned units *in a running
+  game*, which is why the applier's write evaporates, but at game start the skirmish
+  setting establishes both and nothing takes it away. `setup.players[].metal/energy` now
+  works through `load`, `--player` grew the two fields
+  (`N:controller[:side[:color[:metal[:energy]]]]`), and the compiler's warning fires for
+  every verb *except* the one that can honour it. Details and the whole key:
+  `cmdline-options.md`.
+- **Skirmish registry state is sticky, by design.** What a run does not name it inherits
+  from the run before — that is TA's own model (the setup screen remembers), and it is
+  already true of `side` and `color`. A scenario that wants a specific figure has to say
+  so; `load --json` reports the exact `--player` flags it launched with, in
+  `loaded.players`, so the answer is never a guess.
 - **"From nothing" includes the instance.** `scenario load dojoD one-unit` on a name that
   had never existed cloned the prefix, mirrored the gamedir, launched, drove the shell and
   put the commander at exactly `1600,1600`, dead centre of the window, in **7.8 seconds**.

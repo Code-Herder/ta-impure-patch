@@ -393,6 +393,36 @@ def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
         env=inst.env(), cwd=str(inst.gamedir))
 
 
+# The skirmish key's own per-player values, in `--player`'s field order.
+# `Metal`/`Energy` are TA's starting resources, and measured 2026-09-01 they set
+# the player's **storage** as well as the level — which is exactly why writing
+# them into a running game does not stick (the engine recomputes storage from
+# owned units every tick and clamps the level to it). `AllyGroup` exists too and
+# is deliberately not exposed: nothing has measured what its 5 means.
+PLAYER_KEYS = ("Controller", "Side", "Color", "Metal", "Energy")
+
+
+def player_keys(spec: str):
+    """`N:controller[:side[:color[:metal[:energy]]]]` -> registry values to write.
+
+    An **empty field is "leave that key alone"**, so a colour can be set without
+    naming a side (`0:1::3`) — the fields are positional and there is no other
+    way to skip one. Anything that is not a number is refused rather than
+    written: `wine reg add` fails quietly, so a mistyped spec would otherwise
+    read back as a game rule nobody asked for.
+    """
+    parts = spec.split(":")
+    if not (2 <= len(parts) <= len(PLAYER_KEYS) + 1 and parts[0].isdigit()
+            and parts[1].isdigit()
+            and all(p == "" or p.isdigit() for p in parts[2:])):
+        die(f"--player {spec!r}: say "
+            f"N:controller[:side[:color[:metal[:energy]]]], numbers only "
+            f"(controller 0=off 1=human 2=AI, side 0=ARM 1=CORE)")
+    names = PLAYER_KEYS
+    return [(f"Player{parts[0]}{names[i - 1]}", parts[i])
+            for i in range(1, len(parts)) if parts[i] != ""]
+
+
 def apply_prefix_settings(inst: Instance, res, sound: bool = False):
     """Registry state that must hold before launch."""
     # No XRandR: stops wine re-probing outputs, which blanks every physical monitor
@@ -558,14 +588,8 @@ def _launch(args) -> dict:
     if args.map:
         reg_add(inst, GAME_REG, "SkirmishMap", "REG_SZ", args.map)
     for spec in args.player or []:
-        # --player N:controller[:side[:color]]  controller 0=off 1=human 2=AI
-        # An empty field is "leave that key alone", so a colour can be set
-        # without naming a side: `--player 0:1::3`.
-        parts = spec.split(":")
-        n = parts[0]
-        for key, part in (("Controller", 1), ("Side", 2), ("Color", 3)):
-            if len(parts) > part and parts[part] != "":
-                reg_add(inst, SKIRMISH_REG, f"Player{n}{key}", "REG_DWORD", parts[part])
+        for value, data in player_keys(spec):
+            reg_add(inst, SKIRMISH_REG, value, "REG_DWORD", data)
     if args.los is not None:
         reg_add(inst, GAME_REG, "SkirmishLineOfSight", "REG_DWORD", str(args.los))
     if args.mapping is not None:
@@ -2370,7 +2394,7 @@ def _scn_spacing_warning(group, feet):
             f"units) — the engine will push them apart and the layout will drift")
 
 
-def _scn_validate(doc, label, catalogue=None):
+def _scn_validate(doc, label, catalogue=None, launching=False):
     """Layers 1 and 2: strict schema, then names checked against the live game.
 
     Returns a normalized document — every default filled in, every name
@@ -2408,12 +2432,14 @@ def _scn_validate(doc, label, catalogue=None):
     # storage to hold it — say so once, where an author reads it, rather than
     # letting `apply` look like it worked.
     for p in norm["setup"]["players"]:
-        if p["metal"] is not None or p["energy"] is not None:
+        if (p["metal"] is not None or p["energy"] is not None) and not launching:
             warnings.append(
-                f"setup.players slot {p['slot']}: the engine owns metal/energy — it "
-                f"recomputes storage from the player's own units every tick and "
-                f"clamps the level to it, so a figure above that storage is gone "
-                f"within a second (the result reports what survived)")
+                f"setup.players slot {p['slot']}: metal/energy is a launch-time "
+                f"setting — `scenario load` writes Player{p['slot']}Metal/Energy and "
+                f"TA reads them as the starting level *and* the storage. `apply` "
+                f"cannot: in a running game the engine recomputes storage from the "
+                f"player's own units every tick and clamps the level to it, so the "
+                f"figure is gone within a second (the result reports what survived)")
 
     slots = {p["slot"] for p in norm["setup"]["players"]}
     handles = {}
@@ -2761,7 +2787,7 @@ def _scn_catalogue(path):
     return cat
 
 
-def _scn_compile(name, catalogue_path=None, instance=None):
+def _scn_compile(name, catalogue_path=None, instance=None, launching=False):
     path, doc = _scn_read(name)
     catalogue = _scn_catalogue(catalogue_path)
     if instance:
@@ -2769,7 +2795,7 @@ def _scn_compile(name, catalogue_path=None, instance=None):
         if not catalogue:
             die(f"no catalogue cached for {instance!r} — ask a running game for one: "
                 f"tacli units {instance}; tacli features {instance}")
-    norm = _scn_validate(doc, path.name, catalogue)
+    norm = _scn_validate(doc, path.name, catalogue, launching)
     norm["label"] = path.name
     exp = _scn_expand(norm)
     exp["name"] = path.stem
@@ -2958,8 +2984,9 @@ def cmd_scenario_apply(args):
 # The shell path to a skirmish, by gadget name. Each click auto-waits for its
 # gadget to exist and be actionable, so this is a path, not a timing guess.
 SCN_MENU_PATH = ("SINGLE", "Skirmish", "Start")
-SCN_MENU_TIMEOUT = 30.0     # a cold wine prefix takes its time reaching the shell
-SCN_LOAD_TIMEOUT = 180.0    # ...and longer again to load a map
+SCN_LAUNCH_TIMEOUT = 45.0   # `launch`'s own default: a cold prefix takes its time
+SCN_MENU_TIMEOUT = 30.0     # ...and a gadget that never appears is a different fault
+SCN_LOAD_TIMEOUT = 180.0    # ...and a map load is longer again
 
 # The overlay logs this every 30 frames, from the same read that draws the units.
 # A non-zero count is proof TA is past its loading screen with a world in memory —
@@ -2982,9 +3009,10 @@ def _scn_player_flags(setup) -> list:
     """
     flags = []
     for p in setup["players"]:
-        side = "" if p["side"] is None else SCN_SIDES[p["side"]]
-        color = "" if p["color"] is None else p["color"]
-        spec = f"{p['slot']}:{SCN_CONTROLLERS[p['controller']]}:{side}:{color}"
+        fields = [SCN_CONTROLLERS[p["controller"]],
+                  "" if p["side"] is None else SCN_SIDES[p["side"]],
+                  p["color"], p["metal"], p["energy"]]
+        spec = f"{p['slot']}:" + ":".join("" if f is None else str(f) for f in fields)
         flags.append(spec.rstrip(":"))
     return flags
 
@@ -3067,7 +3095,7 @@ def cmd_scenario_load(args):
     # catalogue is the target's own, which is also what checks `setup.map`
     # against the 99 names this game has — before TA can fall back on one.
     catalogue = args.instance or (args.name if _cat_load(inst) else None)
-    exp = _scn_compile(args.scenario, args.catalogue, catalogue)
+    exp = _scn_compile(args.scenario, args.catalogue, catalogue, launching=True)
     setup = exp["setup"]
     steps = []
 
@@ -3129,6 +3157,7 @@ def cmd_scenario_load(args):
     res = _scn_apply_run(inst, exp, args.timeout, args.catalogue or catalogue or None)
     res["loaded"] = {"steps": steps, "map_file": loaded, "map_requested": wanted_map,
                      "res": launched["res"], "unit_limit": limit,
+                     "players": _scn_player_flags(setup),
                      "alive_before_apply": alive, "window": launched["window"],
                      "pid": launched["pid"]}
     lines = [f"{exp['name']}: loaded on {args.name}"]
@@ -3252,8 +3281,10 @@ def build_parser():
     l.add_argument("--unit-limit", dest="unit_limit", type=int,
                    help="per-player unit cap in totala.ini (TA clamps it to 20-1500)")
     l.add_argument("--player", action="append",
-                   help="N:controller[:side[:color]] (controller 0=off 1=human 2=AI; "
-                        "an empty field is left alone, e.g. 0:1::3 sets only a colour)")
+                   help="N:controller[:side[:color[:metal[:energy]]]] (controller "
+                        "0=off 1=human 2=AI, side 0=ARM 1=CORE; an empty field is "
+                        "left alone, e.g. 0:1::3 sets only a colour). Metal/energy "
+                        "are the skirmish starting resources, and set storage too.")
     l.add_argument("--los", type=int, help="SkirmishLineOfSight")
     l.add_argument("--mapping", type=int, help="SkirmishMapping")
     l.add_argument("--arg", action="append",
@@ -3462,9 +3493,9 @@ def build_parser():
                      help="stop the instance first if it is already running")
     scd.add_argument("--any-map", action="store_true",
                      help="apply even if TA loaded a map other than the one asked for")
-    scd.add_argument("--launch-timeout", type=float, default=SCN_MENU_TIMEOUT,
+    scd.add_argument("--launch-timeout", type=float, default=SCN_LAUNCH_TIMEOUT,
                      help=f"seconds to wait for the window and the shell "
-                          f"(default {SCN_MENU_TIMEOUT:g})")
+                          f"(default {SCN_LAUNCH_TIMEOUT:g})")
     scd.add_argument("--load-timeout", type=float, default=SCN_LOAD_TIMEOUT,
                      help=f"seconds to wait for the map to load "
                           f"(default {SCN_LOAD_TIMEOUT:g})")

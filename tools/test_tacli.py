@@ -569,14 +569,20 @@ class ScenarioSetup(unittest.TestCase):
         exp = compile_doc(scn(setup={"switches": {"shootall": False}}))
         self.assertFalse(exp["setup"]["switches"]["shootall"])
 
-    def test_asking_for_resources_warns_that_the_engine_owns_them(self):
+    def test_asking_for_resources_warns_that_apply_cannot_honour_them(self):
         # Measured live: the applier's write lands and TA recomputes storage from
-        # the player's own units within about a second. The key stays in the
-        # schema (phase D can set it before a game exists) but a file that uses
-        # it must not look like it worked.
+        # the player's own units within about a second. `load` sets them for real,
+        # through the registry, before the game exists — so the warning is about
+        # the verb that cannot, and a file using it must not look like it worked.
         exp = compile_doc(scn(setup={"players": [{"slot": 0, "metal": 5000}]},
                               units=[unit(owner=0)]))
         self.assertTrue(any("metal/energy" in w for w in exp["warnings"]))
+
+    def test_launching_does_not_warn_about_what_launching_can_do(self):
+        doc = scn(setup={"players": [{"slot": 0, "metal": 5000}]},
+                  units=[unit(owner=0)])
+        norm = tacli._scn_validate(doc, "t", None, launching=True)
+        self.assertEqual(norm["warnings"], [])
 
     def test_declaring_a_player_without_resources_is_quiet(self):
         exp = compile_doc(scn(setup={"players": [{"slot": 0}]}, units=[unit(owner=0)]))
@@ -1062,6 +1068,61 @@ class LoadComposition(unittest.TestCase):
 
     def test_no_players_means_no_flags(self):
         self.assertEqual(self.flags([]), [])
+
+
+class PlayerSpecs(unittest.TestCase):
+    """`--player` is positional, and the compiler writes it: both ends, one test."""
+
+    def test_the_three_keys_are_written_in_order(self):
+        self.assertEqual(tacli.player_keys("0:1:0:3"),
+                         [("Player0Controller", "1"), ("Player0Side", "0"),
+                          ("Player0Color", "3")])
+
+    def test_an_omitted_tail_writes_nothing_extra(self):
+        self.assertEqual(tacli.player_keys("5:2"), [("Player5Controller", "2")])
+
+    def test_an_empty_field_is_skipped_not_written_blank(self):
+        # `wine reg add` with empty data would set the key to nothing at all.
+        self.assertEqual(tacli.player_keys("0:1::3"),
+                         [("Player0Controller", "1"), ("Player0Color", "3")])
+
+    def test_a_spec_with_no_controller_is_refused_rather_than_ignored(self):
+        # It used to raise IndexError, and then, briefly, do nothing at all.
+        with refuses(self):
+            tacli.player_keys("2")
+
+    def test_a_field_that_is_not_a_number_is_refused(self):
+        # reg add fails quietly, so this would read back as a rule nobody set.
+        with refuses(self):
+            tacli.player_keys("0:human")
+
+    def test_starting_resources_are_the_last_two_fields(self):
+        # Measured live: TA reads these as the starting level *and* the storage,
+        # which is why the same figure written into a running game does not stick.
+        self.assertEqual(tacli.player_keys("0:1:0:0:5000:4000")[-2:],
+                         [("Player0Metal", "5000"), ("Player0Energy", "4000")])
+
+    def test_energy_can_be_set_without_metal(self):
+        self.assertEqual(tacli.player_keys("0:1::::4000"),
+                         [("Player0Controller", "1"), ("Player0Energy", "4000")])
+
+    def test_a_seventh_field_is_refused(self):
+        with refuses(self):
+            tacli.player_keys("0:1:0:3:1000:1000:9")
+
+    def test_every_flag_the_compiler_emits_parses(self):
+        # The one seam between the two halves: setup.players compiles to these
+        # strings and nothing else reads them.
+        setup = tacli._scn_setup({"setup": {"players": [
+            {"slot": 0, "controller": "human", "side": "arm", "color": 0,
+             "metal": 5000, "energy": 5000},
+            {"slot": 1, "controller": "ai", "side": "core"},
+            {"slot": 2, "color": 4},
+            {"slot": 3, "energy": 2000},
+            {"slot": 9, "controller": "off"}]}}, "t")
+        for flag in tacli._scn_player_flags(setup):
+            with self.subTest(flag=flag):
+                self.assertTrue(tacli.player_keys(flag))
 
 
 class LoadedMap(unittest.TestCase):

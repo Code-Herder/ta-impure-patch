@@ -67,8 +67,12 @@ tools/tacli wait t1 'alive=[1-9]' --timeout 150
 ```
 
 Skirmish settings come from the registry, no clicking: `--map "Two Continents"`,
-`--player 2:2:1:1` (`N:controller[:side[:color]]`, controller 0=off 1=human 2=AI,
-side 0=ARM 1=CORE), `--los`, `--mapping`. **The registry is the only way** — every
+`--player 2:2:1:1` (`N:controller[:side[:color[:metal[:energy]]]]`, controller 0=off
+1=human 2=AI, side 0=ARM 1=CORE; an empty field leaves that key alone, so `0:1::3` sets
+only a colour), `--los`, `--mapping`, `--unit-limit`. **Metal and energy are the starting
+resources and set storage too** — the only way to set them at all, since in a running
+game TA recomputes storage from owned units and clamps the level to it every tick. All of
+it is sticky per instance: what a launch does not name, it inherits from the last one. **The registry is the only way** — every
 TotalA.exe switch was traced in phase 1.2 and none of them sets a game rule
 (`cmdline-options.md`). Raw switches go through `--arg=-t --arg=120` (keep the `=`);
 `-r` and `-d` are refused.
