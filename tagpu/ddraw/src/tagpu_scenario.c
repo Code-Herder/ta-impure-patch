@@ -180,6 +180,8 @@ static int      g_seed, g_clear, g_abort, g_limit;
 static char     g_map[128];
 static unsigned g_sw_set, g_sw_clr;               /* SoftwareDebugMode bit masks */
 static int      g_pl_slot[10], g_pl_metal[10], g_pl_energy[10], g_npl;
+/* what the fields read back the instant after the write, still on the same tick */
+static int      g_pl_got_metal[10], g_pl_got_energy[10];
 static int      g_cam_kind, g_cam_a, g_cam_b, g_cam_pin;
 
 /* results filled by the apply pass */
@@ -1172,9 +1174,24 @@ static void apply_switches(char* ta)
     g_sw_after = *sw;
 }
 
+/* Player resources are the one thing in the schema the apply point cannot make
+   stick. The write lands — the offsets are confirmed against a live read — but
+   TA recomputes storage from the units a player owns and refills current from
+   production every simulation tick, so both fields are back to the engine's own
+   numbers before the next frame. Measured 2026-09-01: asking for 4321 metal
+   against 50 storage, and even for 12 against the same 50, both read 50 again.
+
+   So the write stays (it is free, and correct where the engine has no opinion),
+   and the result reports the read-back from the SAME tick beside a second read
+   taken when the file is written. Requested, wrote, and what survived: an agent
+   sees the clamp instead of believing a number. Setting resources for real is a
+   launch-time problem and belongs to `scenario load`. */
 static void apply_players(char* ta)
 {
     int i;
+
+    for (i = 0; i < 10; i++)
+        g_pl_got_metal[i] = g_pl_got_energy[i] = SCN_UNSET;
 
     for (i = 0; i < g_npl; i++)
     {
@@ -1189,6 +1206,7 @@ static void apply_players(char* ta)
             if (*(float*)(pl + PL_MAXMETAL) < want)
                 *(float*)(pl + PL_MAXMETAL) = want;
             *(float*)(pl + PL_METAL) = want;
+            g_pl_got_metal[i] = (int)*(float*)(pl + PL_METAL);
         }
 
         if (g_pl_energy[i] != SCN_UNSET)
@@ -1197,6 +1215,7 @@ static void apply_players(char* ta)
             if (*(float*)(pl + PL_MAXENERGY) < want)
                 *(float*)(pl + PL_MAXENERGY) = want;
             *(float*)(pl + PL_ENERGY) = want;
+            g_pl_got_energy[i] = (int)*(float*)(pl + PL_ENERGY);
         }
     }
 }
@@ -1657,6 +1676,28 @@ static void write_result(void)
         first = 0;
     }
     fprintf(f, "}");
+
+    if (g_npl)
+    {
+        char* ta = ta_base();
+        fprintf(f, ",\"players\":{");
+        for (i = 0; i < g_npl; i++)
+        {
+            char* pl = ta ? player_at(ta, g_pl_slot[i]) : 0;
+            fprintf(f, "%s\"%d\":{", i ? "," : "", g_pl_slot[i]);
+            fprintf(f, "\"requested\":{\"metal\":%d,\"energy\":%d}",
+                    g_pl_metal[i] == SCN_UNSET ? -1 : g_pl_metal[i],
+                    g_pl_energy[i] == SCN_UNSET ? -1 : g_pl_energy[i]);
+            fprintf(f, ",\"wrote\":{\"metal\":%d,\"energy\":%d}",
+                    g_pl_got_metal[i] == SCN_UNSET ? -1 : g_pl_got_metal[i],
+                    g_pl_got_energy[i] == SCN_UNSET ? -1 : g_pl_got_energy[i]);
+            if (pl)
+                fprintf(f, ",\"now\":{\"metal\":%d,\"energy\":%d}",
+                        (int)*(float*)(pl + PL_METAL), (int)*(float*)(pl + PL_ENERGY));
+            fprintf(f, "}");
+        }
+        fprintf(f, "}");
+    }
 
     if (g_probe_have)
         fprintf(f, ",\"order_probe\":{\"passed\":[%d,%d,%d],\"stored\":[%d,%d,%d]}",

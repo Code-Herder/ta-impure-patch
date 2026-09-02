@@ -52,7 +52,7 @@ unit names by scanning the live definition table. This design follows its recipe
 | Bulk authoring | **`groups` (count + composition + pattern) and a flat `units` array, both.** Expansion is **seeded and deterministic**, and happens in Python — the DLL only ever sees a flat list. `scenario expand` prints it without launching. |
 | Transport | **CLI compiles JSON → a private, versioned, line-oriented wire format**; the DLL scans that. The DLL never parses JSON *in* (it does write JSON *out*). This is the safety property: one testable component decides what reaches the engine. |
 | Identity | **Author-chosen string handles** → ordinals at compile time → `UnitStruct*` in a spawn table at apply time. Engine indices are never the public identity (`UnitInGameIndex` is recycled on death). |
-| Validation | **Three layers**: strict schema (unknown keys are errors), catalogue check against the live unit/feature/map lists, and an in-process **resolve-before-create** pass that creates nothing if anything fails. `on_error: "skip"` opts into best-effort. |
+| Validation | **Three layers**: strict schema (unknown keys are errors), catalogue check against the live unit/feature/map lists, and an in-process **resolve-before-create** pass that creates nothing if anything fails. `on_error: "skip"` opts into best-effort, and it acts in **layer 3**: layer 2 downgrades to a warning and passes the name through, because only the fork can drop entities one at a time. Layer 1 stays absolute — *not a name* is not *not in this game*. |
 | Timing | **Detect** the trigger in the present path (existing idiom); **apply** from a detour at **`0x4969D2`** — five position-independent bytes inside the block `0x4969CB` (TADR's `GameTickHook` address) enters — never mid-render, where the sort-grid walk lives. All entities in **one visit**, so the situation is reproducible. |
 | Existing units | `setup.clear_existing` defaults **true**, removing the skirmish's starting commanders silently via `UNITS_KillUnit(u, 0)` — a scenario contains exactly what the file says. It runs over a **snapshot** taken first, and **before** the create pass, for reasons phase C measured (below). |
 | Camera | `at` and `center_on` both mean **the centre of the window**, never the eye origin. Group targets compile to a coordinate; entity handles resolve to the unit's *actual* post-snap position. `pin` defaults false. |
@@ -80,7 +80,7 @@ unit names by scanning the live definition table. This design follows its recipe
     "clear_existing": true,
     "switches": {"shootall": true, "noshake": true},
     "players": [
-      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 5000, "energy": 5000},
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
       {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
     ]
   },
@@ -119,7 +119,8 @@ unit names by scanning the live definition table. This design follows its recipe
 - `seed` is optional and defaults to a hash of the file content, so an unseeded scenario is
   still deterministic. `expand` reports the seed it used.
 - `health` is a **percentage** (mirrors `HealthPerA`); `nanoframe` is separate, for a
-  half-built look.
+  half-built look, and is the percentage **built** — `40` is a 40%-complete scaffold.
+  The engine's own field is the fraction *remaining*, so the applier inverts it.
 - `stance` is a token (`hold` / `manoeuvre` / `roam`), never a raw mask.
 - `orders` at group level apply to every member; a unit-level `orders` overrides. Targets
   are a coordinate (`to`) or a handle (`target`) — a unit **or a feature** (that is how a
@@ -235,6 +236,7 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | apply point | `Game_MainLoopTick` detour | `0x4969D2` | See *The apply point* below. |
 | map extents | `MapWidth/Height` | `main+0x14223`/`0x14227` | World units. Bounds-checking source; `FeatureMapSizeX/Y` (`0x14233`/`0x14237`) is the same map in tiles. |
 | per-player cap | `MaxUnitNumberPerPlayer` | `main+0x37EEC` | Reads **250** in stock skirmish. `ActualUnitLimit` (`0x37EEA`) reads 0 there and is not written. |
+| player resources | `PlayerStruct[10]`, stride `0x14B` | `main+0x1B63` | `fCurrentEnergy +0x8C`, `fCurrentMetal +0x98`, `fMaxEnergyStorage +0xA4`, `fMaxMetalStorage +0xA8` — all confirmed against a live read. Writable, but not *settable*: see the phase C notes. |
 
 ### The apply point
 
@@ -496,6 +498,13 @@ component the terrain snap → an unknown unit name caught twice, by the catalog
 (`units[1].type: no unit named 'ARMNOPE' — did you mean 'ARMSNIPE'?`) and, from a
 hand-written wire file, by the fork (`applied 0`, naming the ordinal and the reason).
 
+Everything else in phase C's scope was exercised the same way rather than assumed:
+`on_error: "skip"` (2 of 3 created, the third named), an order targeting a **unit** handle
+(the ARMROCK left its spawn and closed on the CORAK), an order targeting a **feature**
+handle, `stance`, `health` (a short red bar), `nanoframe` (a translucent scaffold and a
+split build bar), and `camera.pin` (which writes the eye the fork chose into
+`tagpu_eye.txt`). The one thing that does not work is player resources — see below.
+
 **What the live runs corrected.** Every one of these was a design claim before this phase:
 
 - **Player slots are 0-based, and they are the engine's own.** TA's registry keys are
@@ -532,6 +541,23 @@ hand-written wire file, by the fork (`applied 0`, naming the ordinal and the rea
 - **The result file is ASCII.** The fork `\u`-escapes every byte over 0x7F one byte at a
   time, so a UTF-8 em-dash in a C string literal reaches the agent as mojibake. Comments
   may be typographic; runtime strings may not.
+- **`on_error: "skip"` never reached the fork.** The fork's skip path was right from the
+  start — a hand-written wire with one bad name creates the other two and reports the
+  ordinal that failed — but layer 2 refused the whole file first, so no author could ever
+  get there. Layer 2 now warns and passes the name through untouched. Dropping the entity
+  in Python instead would mean renumbering ordinals and orphaning any order or camera that
+  named it; the fork already re-checks every name, so per-entity best effort belongs
+  exactly where it can be per-entity.
+- **`setup.players[].metal/energy` cannot be set from the apply point.** The offsets are
+  right (confirmed against a live read: `PlayerStruct` stride `0x14B` at `main+0x1B63`,
+  `fCurrentEnergy +0x8C`, `fCurrentMetal +0x98`, storage at `+0xA4`/`+0xA8`) and the write
+  lands — the result's `players.wrote` shows the figure back. But TA recomputes storage
+  from the units a player owns and clamps the level to it every simulation tick: 4321
+  against 50 storage read 50 again within a second, and so did 12. The applier still
+  writes, and reports `requested` / `wrote` / `now`; the compiler warns whenever a file
+  asks, so `validate` says it before anything runs; and the shipped example dropped the
+  two keys rather than advertise a knob the engine overrules. Setting resources for real
+  is a launch-time problem and belongs to phase D.
 
 **D — `scenario load` end to end.** Launch, `ui click SINGLE/Skirmish/Start`, wait for live,
 drop the trigger, read the result, set the camera.

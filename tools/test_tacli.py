@@ -567,6 +567,19 @@ class ScenarioSetup(unittest.TestCase):
         exp = compile_doc(scn(setup={"switches": {"shootall": False}}))
         self.assertFalse(exp["setup"]["switches"]["shootall"])
 
+    def test_asking_for_resources_warns_that_the_engine_owns_them(self):
+        # Measured live: the applier's write lands and TA recomputes storage from
+        # the player's own units within about a second. The key stays in the
+        # schema (phase D can set it before a game exists) but a file that uses
+        # it must not look like it worked.
+        exp = compile_doc(scn(setup={"players": [{"slot": 0, "metal": 5000}]},
+                              units=[unit(owner=0)]))
+        self.assertTrue(any("metal/energy" in w for w in exp["warnings"]))
+
+    def test_declaring_a_player_without_resources_is_quiet(self):
+        exp = compile_doc(scn(setup={"players": [{"slot": 0}]}, units=[unit(owner=0)]))
+        self.assertEqual(exp["warnings"], [])
+
     def test_an_unknown_switch_is_fatal(self):
         with refuses(self):
             compile_doc(scn(setup={"switches": {"godmode": True}}))
@@ -633,6 +646,36 @@ class ScenarioCatalogue(unittest.TestCase):
         cat = {"units": [{"name": "ARMPW", "footprint": [2, 2]}]}
         self.assertEqual(compile_doc(scn(units=[unit()]), cat)["units"][0]["type"],
                          "ARMPW")
+
+
+class ScenarioOnError(unittest.TestCase):
+    """`on_error: "skip"` opts into best effort, and layer 2 has to honour it."""
+
+    def test_abort_is_the_default_and_an_unknown_name_is_fatal(self):
+        with refuses(self):
+            compile_doc(scn(units=[unit(type="ARMNOPE")]), CATALOGUE)
+
+    def test_skip_turns_it_into_a_warning(self):
+        exp = compile_doc(scn(on_error="skip",
+                              units=[unit(id="a", type="ARMPW"),
+                                     unit(id="b", type="ARMNOPE", pos=[901, 1200])]),
+                          CATALOGUE)
+        self.assertEqual([u["type"] for u in exp["units"]], ["ARMPW", "ARMNOPE"])
+        self.assertTrue(any("ARMNOPE" in w for w in exp["warnings"]))
+
+    def test_the_unknown_name_reaches_the_wire_untouched(self):
+        # Best effort is per-entity, and only the fork can do it per-entity: it
+        # re-checks every name against the live game anyway. So the CLI passes the
+        # name through rather than dropping the entity and reshuffling ordinals.
+        exp = compile_doc(scn(on_error="skip", units=[unit(type="ARMNOPE")]), CATALOGUE)
+        wire = tacli._scn_wire(exp)
+        self.assertIn("onerror=skip", wire)
+        self.assertIn("unit 0 ARMNOPE", wire)
+
+    def test_skip_does_not_excuse_a_malformed_name(self):
+        # Layer 1 is still absolute: "not a name" is different from "not in this game".
+        with refuses(self):
+            compile_doc(scn(on_error="skip", units=[unit(type="not a name!")]), CATALOGUE)
 
 
 class ScenarioCanonicalNames(unittest.TestCase):

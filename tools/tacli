@@ -2101,7 +2101,7 @@ def _scn_facing(node, where, default=None):
     return v % 360
 
 
-def _scn_type(node, where, catalogue_names, what: str):
+def _scn_type(node, where, catalogue_names, what: str, warnings=None):
     """A unit or feature type name, matched case-insensitively against the live
     catalogue when one is loaded (validation layer 2) and returned in the
     catalogue's own spelling.
@@ -2109,6 +2109,13 @@ def _scn_type(node, where, catalogue_names, what: str):
     With no catalogue the author's spelling is kept exactly as written. TA's own
     tables disagree with each other — units are `ARMPW`, wrecks are
     `armlab_dead` — so inventing a case here would be inventing a name.
+
+    `warnings` is passed only when the file said `on_error: "skip"`, and then an
+    unknown name is a warning rather than a refusal: the name goes through to the
+    wire untouched and the fork drops that one entity. Layer 3 re-checks every
+    name anyway — it must, the file is on disk — so best-effort belongs there,
+    where it can be per-entity, rather than here, where it could only be all or
+    nothing.
     """
     given = _scn_str(node, "type", where, raw=True)
     if not given or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}", given):
@@ -2117,8 +2124,12 @@ def _scn_type(node, where, catalogue_names, what: str):
     if catalogue_names is None:
         return given
     if given.upper() not in catalogue_names:
-        die(f"{where}.type: no {what} named {given!r} in this "
-            f"game{_scn_suggest(given.upper(), catalogue_names)}")
+        msg = (f"{where}.type: no {what} named {given!r} in this "
+               f"game{_scn_suggest(given.upper(), catalogue_names)}")
+        if warnings is None:
+            die(msg)
+        warnings.append(msg + " — on_error is skip, so the game will drop it")
+        return given
     return catalogue_names[given.upper()]
 
 
@@ -2332,6 +2343,22 @@ def _scn_validate(doc, label, catalogue=None):
             "groups": [], "units": [], "features": [], "camera": None,
             "warnings": warnings}
 
+    # `on_error: "skip"` reaches layer 2 as "warn, do not refuse" — see _scn_type.
+    lenient = warnings if norm["on_error"] == "skip" else None
+
+    # Measured 2026-09-01: the applier's write lands, and TA recomputes storage
+    # from the units a player owns and clamps current to it within about a
+    # second. So the number holds only if the scenario also gives that player the
+    # storage to hold it — say so once, where an author reads it, rather than
+    # letting `apply` look like it worked.
+    for p in norm["setup"]["players"]:
+        if p["metal"] is not None or p["energy"] is not None:
+            warnings.append(
+                f"setup.players slot {p['slot']}: the engine owns metal/energy — it "
+                f"recomputes storage from the player's own units every tick and "
+                f"clamps the level to it, so a figure above that storage is gone "
+                f"within a second (the result reports what survived)")
+
     slots = {p["slot"] for p in norm["setup"]["players"]}
     handles = {}
 
@@ -2375,7 +2402,7 @@ def _scn_validate(doc, label, catalogue=None):
         for j, c in enumerate(_scn_list(g, "composition", w)):
             cw = f"{w}.composition[{j}]"
             _scn_keys(c, cw, required=("type", "count"))
-            composition.append({"type": _scn_type(c, cw, unit_names, "unit"),
+            composition.append({"type": _scn_type(c, cw, unit_names, "unit", lenient),
                                 "count": _scn_int(c, "count", cw, 1, SCN_MAX_ENTITIES)})
         if not composition:
             die(f"{w}.composition: expected at least one {{type, count}}")
@@ -2395,7 +2422,7 @@ def _scn_validate(doc, label, catalogue=None):
                             "stance", "orders"))
         given = _scn_str(u, "id", w, raw=True)
         norm["units"].append({"id": claim(given or f"#u{i}", "unit", w, bool(given)),
-                              "type": _scn_type(u, w, unit_names, "unit"),
+                              "type": _scn_type(u, w, unit_names, "unit", lenient),
                               "owner": owner_of(u, w),
                               "pos": _scn_point(u, "pos", w, required=True),
                               **_scn_entity_body(u, w)})
@@ -2406,7 +2433,7 @@ def _scn_validate(doc, label, catalogue=None):
         given = _scn_str(f, "id", w, raw=True)
         norm["features"].append({
             "id": claim(given or f"#f{i}", "feature", w, bool(given)),
-            "type": _scn_type(f, w, feat_names, "feature"),
+            "type": _scn_type(f, w, feat_names, "feature", lenient),
             "pos": _scn_point(f, "pos", w, required=True),
             "facing": _scn_facing(f, w),
             "height": _scn_int(f, "height", w, 0, SCN_WORLD_MAX)})
@@ -2835,6 +2862,8 @@ def cmd_scenario_apply(args):
     if res.get("camera"):
         lines.append(f"camera: {res['camera']} (eye {eye}"
                      + (", pinned" if res.get("pin") else "") + ")")
+    for w in exp.get("warnings") or []:
+        lines.append(f"warning: {w}")
     for e in res.get("errors") or []:
         lines.append(f"error: {e}")
     if res.get("errors_dropped"):

@@ -11,7 +11,7 @@
     "clear_existing": true,
     "switches": {"shootall": true, "noshake": true},
     "players": [
-      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 5000, "energy": 5000},
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
       {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
     ]
   },
