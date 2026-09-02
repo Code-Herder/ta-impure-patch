@@ -521,6 +521,108 @@ def write_png(width: int, height: int, rgba: bytes) -> bytes:
             + chunk(b"IEND", b""))
 
 
+def write_indexed_png(width: int, height: int, indices, palette,
+                      transparent: int = None) -> bytes:
+    """An 8-bit palette PNG — the form the unditherer likes best.
+
+    It measures the dither amplitude and the palette band step from the image,
+    and inpaints the colour-key index before filtering, so handing it the
+    original indices and TA's own palette beats handing it flattened RGB.
+    """
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        raw += bytes(indices[y * width:(y + 1) * width])
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+    plte = b"".join(bytes(entry[:3]) for entry in palette)
+    parts = [b"\x89PNG\r\n\x1a\n",
+             chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 3, 0, 0, 0)),
+             chunk(b"PLTE", plte)]
+    if transparent is not None:
+        parts.append(chunk(b"tRNS", bytes([255] * transparent + [0])))
+    parts.append(chunk(b"IDAT", zlib.compress(bytes(raw), 9)))
+    parts.append(chunk(b"IEND", b""))
+    return b"".join(parts)
+
+
+# --------------------------------------------------------------------------- undither
+
+# The unditherer (see unditherer/README.md) is a separate, non-stdlib package
+# with its own virtualenv, so we drive its CLI rather than import it: one batch
+# call per model, indexed PNG in, restored true-colour PNG out.
+
+UNDITHER_SUFFIX = ".undithered"
+UNDITHER_PRESETS = ("learned", "learned-tiny", "tuned", "spec", "tight", "split")
+
+
+def undither_python() -> str:
+    env = os.environ.get("TA3DO_UNDITHER_PYTHON")
+    if env:
+        return env
+    venv = repo_root() / ".venv-undither" / "bin" / "python"
+    return str(venv) if venv.exists() else sys.executable
+
+
+def undither_frames(frames: dict, palette, preset: str = "learned",
+                    python: str = None, timeout: float = 600.0):
+    """{NAME: GafFrame} -> {NAME: (width, height, RGBA bytes)}, restored.
+
+    Frames go in one at a time as files but through a single process, because
+    loading the CNN costs far more than running it on a 32x32 texture.
+    """
+    import tempfile
+    if not frames:
+        return {}
+    checkout = Path(__file__).resolve().parents[1]
+    with tempfile.TemporaryDirectory(prefix="ta3do-undither-") as work:
+        work = Path(work)
+        source = work / "in"
+        target = work / "out"
+        source.mkdir()
+        target.mkdir()
+        stems = {}
+        for name, frame in frames.items():
+            stem = re.sub(r"[^A-Za-z0-9_.-]", "_", name.lower())
+            stems[stem] = name
+            (source / f"{stem}.png").write_bytes(
+                write_indexed_png(frame.width, frame.height, frame.pixels, palette,
+                                  transparent=frame.transparent))
+        cmd = [python or undither_python(), "-m", "unditherer", "restore",
+               *[str(p) for p in sorted(source.glob("*.png"))],
+               "-o", str(target), "--preset", preset, "--quiet"]
+        try:
+            proc = subprocess.run(cmd, cwd=str(checkout), timeout=timeout,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except FileNotFoundError:
+            die(f"cannot run the unditherer: no interpreter at {cmd[0]} "
+                "(set TA3DO_UNDITHER_PYTHON)")
+        if proc.returncode != 0:
+            tail = proc.stderr.decode("latin-1", "replace").strip().splitlines()[-4:]
+            die("unditherer failed: " + " / ".join(tail))
+        restored = {}
+        for stem, name in stems.items():
+            produced = target / f"{stem}{UNDITHER_SUFFIX}.png"
+            if not produced.exists():
+                continue
+            width, height, channels, pixels = read_png(produced.read_bytes())
+            if channels == 4:
+                rgba = pixels
+            else:
+                rgba = bytearray()
+                for i in range(0, len(pixels), 3):
+                    rgba += pixels[i:i + 3] + b"\xff"
+                rgba = bytes(rgba)
+            restored[name] = (width, height, rgba)
+    missing = [n for n in frames if n not in restored]
+    if missing:
+        die(f"unditherer produced nothing for: {', '.join(sorted(missing)[:4])}")
+    return restored
+
+
 # --------------------------------------------------------------------------- atlas
 
 # One texture per model: every GAF frame it names, plus a solid swatch for every
@@ -547,6 +649,14 @@ class Atlas:
         if key not in self.rects:
             self.rects[key] = None
             self.items.append((key, frame.width, frame.height, frame))
+        return key
+
+    def request_rgba(self, name: str, width: int, height: int, rgba: bytes):
+        """A texture that has already been turned into true colour (undithered)."""
+        key = ("tex", name.upper())
+        if key not in self.rects:
+            self.rects[key] = None
+            self.items.append((key, width, height, ("rgba", rgba)))
         return key
 
     def request_color(self, index: int):
@@ -596,7 +706,10 @@ class Atlas:
                 sy = min(max(row, 0), h - 1)
                 for col in range(-PAD, w + PAD):
                     sx = min(max(col, 0), w - 1)
-                    if key[0] == "tex":
+                    if isinstance(payload, tuple):          # restored RGBA tile
+                        at = (sy * w + sx) * 4
+                        r, g, b, alpha = payload[1][at:at + 4]
+                    elif key[0] == "tex":
                         idx = payload.pixels[sy * w + sx]
                         r, g, b = self.palette[idx]
                         alpha = 0 if idx == payload.transparent else 255
@@ -724,15 +837,33 @@ class Model:
         return (lo, hi)
 
 
+def model_textures(root: Piece, bank) -> dict:
+    """{NAME: GafFrame} for every texture the model's visible faces name."""
+    found = {}
+    for piece, _ in root.walk():
+        for prim in piece.primitives:
+            if not prim.texture or len(prim.indices) < 3:
+                continue
+            key = prim.texture.upper()
+            if key in found:
+                continue
+            frame = bank.frame(prim.texture)
+            if frame is not None:
+                found[key] = frame
+    return found
+
+
 def build_model(name, root: Piece, bank: TextureBank, palette,
                 keep_selection: bool = False, reverse: bool = REVERSE_WINDING,
-                hidden=frozenset()) -> Model:
+                hidden=frozenset(), restored=None) -> Model:
     """Turn a parsed 3DO into glTF-ready geometry.
 
     `hidden` names pieces the unit's own script hides at Create (§COB): their
     faces are dropped, but their nodes survive so the piece tree still matches
-    the model and a script could show them again.
+    the model and a script could show them again. `restored` supplies
+    already-undithered RGBA for texture names, replacing the palette lookup.
     """
+    restored = restored or {}
     atlas = Atlas(palette)
     hidden = {h.lower() for h in hidden}
     stats = {"pieces": 0, "primitives": 0, "triangles": 0, "textured": 0, "flat": 0,
@@ -759,7 +890,11 @@ def build_model(name, root: Piece, bank: TextureBank, palette,
                 continue
             frame = bank.frame(prim.texture) if prim.texture else None
             if frame is not None:
-                atlas.request_texture(prim.texture, frame)
+                tile = restored.get(prim.texture.upper())
+                if tile:
+                    atlas.request_rgba(prim.texture, *tile)
+                else:
+                    atlas.request_texture(prim.texture, frame)
                 stats["textured"] += 1
             else:
                 if prim.texture:
@@ -1145,14 +1280,32 @@ def script_hidden(assets: Assets, label: str):
         return frozenset()
 
 
-def load_model(assets: Assets, name: str, keep_selection=False,
-               show_hidden=False) -> Model:
+UNDITHER_TAG = "-undithered"
+
+
+def load_model(assets: Assets, name: str, keep_selection=False, show_hidden=False,
+               undither=None, python: str = None) -> Model:
+    """Parse, texture and build one model. `undither` names a preset or is None.
+
+    With a preset, each GAF frame the model uses is restored **on its own** —
+    the network sees one game texture at a time, the way it was trained — and
+    the atlas is then packed from the restored tiles.
+    """
     label, blob = resolve_model(assets, name)
     root = parse_3do(blob)
     bank = TextureBank(assets)
+    palette = load_palette(assets)
     hidden = frozenset() if show_hidden else script_hidden(assets, label)
-    return build_model(label, root, bank, load_palette(assets), keep_selection,
-                       hidden=hidden)
+    restored = None
+    if undither:
+        restored = undither_frames(model_textures(root, bank), palette,
+                                   preset=undither, python=python)
+    model = build_model(label + (UNDITHER_TAG if undither else ""), root, bank,
+                        palette, keep_selection, hidden=hidden, restored=restored)
+    if undither:
+        model.stats["undither"] = {"preset": undither,
+                                   "textures": len(restored or ())}
+    return model
 
 
 def export_model(model: Model, out_dir: Path, atlas_png: bool = True):
@@ -1172,6 +1325,7 @@ def export_model(model: Model, out_dir: Path, atlas_png: bool = True):
 
 CHROME_NAMES = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
 VIEWER_HTML = Path(__file__).with_name("ta3do-view.html")
+COMPARE_HTML = Path(__file__).with_name("ta3do-compare.html")
 
 
 def find_chrome() -> str:
@@ -1229,7 +1383,7 @@ class Display:
 class Viewer:
     """Serves an export directory over loopback so the page can fetch the .glb."""
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, port: int = 0):
         from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
         import threading
 
@@ -1238,7 +1392,10 @@ class Viewer:
                 pass
 
         handler = lambda *a, **k: Quiet(*a, directory=str(directory), **k)  # noqa: E731
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        try:
+            self.server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+        except OSError as err:
+            die(f"cannot serve on port {port}: {err}")
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -1344,7 +1501,8 @@ def cmd_views(args):
 
 def cmd_export(args):
     assets = Assets(args.gamedir)
-    model = load_model(assets, args.name, args.keep_selection, args.show_hidden)
+    model = load_model(assets, args.name, args.keep_selection, args.show_hidden,
+                       undither=args.undither, python=args.undither_python)
     written = export_model(model, Path(args.out))
     data = {"model": model.name, "stats": model.stats,
             "files": [str(p) for p in written]}
@@ -1353,7 +1511,8 @@ def cmd_export(args):
 
 def cmd_render(args):
     assets = Assets(args.gamedir)
-    model = load_model(assets, args.name, args.keep_selection, args.show_hidden)
+    model = load_model(assets, args.name, args.keep_selection, args.show_hidden,
+                       undither=args.undither, python=args.undither_python)
     out_dir = Path(args.out)
     written = export_model(model, out_dir)
     viewer_copy = out_dir / VIEWER_HTML.name
@@ -1423,13 +1582,79 @@ def cmd_render(args):
         die(f"{len(bad)} view(s) failed: {', '.join(r['view'] for r in bad)}")
 
 
+def cmd_compare(args):
+    """The same unit twice — shipped textures against undithered ones."""
+    assets = Assets(args.gamedir)
+    out_dir = Path(args.out)
+    plain = load_model(assets, args.name, args.keep_selection, args.show_hidden)
+    restored = load_model(assets, args.name, args.keep_selection, args.show_hidden,
+                          undither=args.undither or "learned",
+                          python=args.undither_python)
+    written = export_model(plain, out_dir) + export_model(restored, out_dir)
+    for page in (VIEWER_HTML, COMPARE_HTML):
+        (out_dir / page.name).write_bytes(page.read_bytes())
+
+    preset = args.undither or "learned"
+    query = (f"?a={plain.name}.glb&b={restored.name}.glb"
+             f"&aa={plain.name}-atlas.png&ab={restored.name}-atlas.png"
+             f"&la=as+shipped+(256+colours)&lb=undithered+({preset})")
+    server = Viewer(out_dir, port=args.port)
+    shots = []
+    try:
+        if args.shots:
+            views = args.views or DEFAULT_VIEWS
+            unknown = [v for v in views if v not in VIEWS]
+            if unknown:
+                die(f"unknown view(s): {', '.join(unknown)} (try `ta3do views`)")
+            chrome = find_chrome()
+            display = Display(want_xvfb=not args.no_xvfb)
+            try:
+                for view in views:
+                    png = out_dir / f"{plain.name}-compare-{view}.png"
+                    url = (f"{server.base}/{COMPARE_HTML.name}{query}&view={view}"
+                           f"&w={args.size * 2}&h={args.size}&shot=1"
+                           + (f"&bg={args.background}" if args.background else ""))
+                    error = shoot(chrome, display.name, url, png,
+                                  (args.size * 2, args.size), args.timeout, args.budget)
+                    row = {"view": view, "file": str(png)}
+                    if error:
+                        row["error"] = error
+                    else:
+                        row["coverage"] = round(png_coverage(png), 4)
+                    shots.append(row)
+            finally:
+                display.close()
+
+        page = f"{server.base}/{COMPARE_HTML.name}{query}&view=quarter"
+        data = {"model": plain.name, "undither": {"preset": preset},
+                "files": [str(p) for p in written] + [r["file"] for r in shots
+                                                      if "error" not in r],
+                "shots": shots, "url": page,
+                "atlases": {"shipped": f"{plain.name}-atlas.png",
+                            "undithered": f"{restored.name}-atlas.png"}}
+        lines = [f"{plain.name}: 256 colours vs undithered ({preset}, per GAF frame)"]
+        lines += [f"  {Path(p).name}" for p in data["files"]]
+        lines.append("")
+        lines.append(f"  open: {page}")
+        out(data, args.json, "\n".join(lines))
+        if args.serve:
+            print("  Ctrl-C to stop serving")
+            try:
+                while True:
+                    time.sleep(3600)
+            except KeyboardInterrupt:
+                pass
+    finally:
+        server.close()
+
+
 def cmd_serve(args):
     directory = Path(args.dir)
     if not directory.is_dir():
         die(f"no such directory: {directory}")
     viewer_copy = directory / VIEWER_HTML.name
     viewer_copy.write_bytes(VIEWER_HTML.read_bytes())
-    server = Viewer(directory)
+    server = Viewer(directory, port=args.port)
     models = sorted(p.name for p in directory.glob("*.glb"))
     first = models[0] if models else ""
     url = f"{server.base}/{VIEWER_HTML.name}?model={first}&view=quarter"
@@ -1489,6 +1714,16 @@ def cmd_check_winding(args):
 # --------------------------------------------------------------------------- cli
 
 
+def add_undither_flags(parser):
+    parser.add_argument("--undither", nargs="?", const="learned", metavar="PRESET",
+                        choices=UNDITHER_PRESETS,
+                        help="restore the textures to true colour first "
+                             f"({' | '.join(UNDITHER_PRESETS)}; default learned)")
+    parser.add_argument("--undither-python", dest="undither_python",
+                        help="interpreter that can import unditherer "
+                             "(default: the checkout's .venv-undither)")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="ta3do", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1518,6 +1753,7 @@ def main(argv=None):
     ex.add_argument("--keep-selection", action="store_true")
     ex.add_argument("--show-hidden", action="store_true",
                     help="keep pieces the unit's script hides at Create (flares)")
+    add_undither_flags(ex)
     ex.set_defaults(func=cmd_export)
 
     rd = sub.add_parser("render", help="export, then screenshot the standard views")
@@ -1543,10 +1779,37 @@ def main(argv=None):
     rd.add_argument("--timeout", type=float, default=120.0, help="seconds per view")
     rd.add_argument("--budget", type=int, default=12000,
                     help="Chrome virtual-time budget in ms")
+    add_undither_flags(rd)
     rd.set_defaults(func=cmd_render)
+
+    cp = sub.add_parser("compare",
+                        help="export the unit twice, shipped vs undithered, and "
+                             "serve a side-by-side page")
+    cp.add_argument("name")
+    cp.add_argument("-o", "--out", default="renders/compare", help="output directory")
+    cp.add_argument("--shots", action="store_true",
+                    help="also screenshot the comparison for each view")
+    cp.add_argument("--views", nargs="+", metavar="VIEW",
+                    help=f"views to screenshot (default: {' '.join(DEFAULT_VIEWS)})")
+    cp.add_argument("--size", type=int, default=640,
+                    help="pixels per pane (the image is twice this wide)")
+    cp.add_argument("--background", help="CSS colour; default is transparent")
+    cp.add_argument("--port", type=int, default=0,
+                    help="serve on this port instead of a free one")
+    cp.add_argument("--no-serve", dest="serve", action="store_false",
+                    help="write the files and exit instead of serving")
+    cp.add_argument("--keep-selection", action="store_true")
+    cp.add_argument("--show-hidden", action="store_true")
+    cp.add_argument("--no-xvfb", action="store_true")
+    cp.add_argument("--timeout", type=float, default=120.0)
+    cp.add_argument("--budget", type=int, default=12000)
+    add_undither_flags(cp)
+    cp.set_defaults(func=cmd_compare)
 
     sv = sub.add_parser("serve", help="serve an export directory for interactive viewing")
     sv.add_argument("dir", nargs="?", default="renders")
+    sv.add_argument("--port", type=int, default=0,
+                    help="serve on this port instead of a free one")
     sv.set_defaults(func=cmd_serve)
 
     cw = sub.add_parser("check-winding", help="measure which triangle order faces outward")

@@ -10,7 +10,11 @@ tools/ta3do render armpw -o renders/armpw --sheet
 reads `totala*.hpi` in place, parses `objects3d/ARMPW.3do`, resolves its GAF textures through
 `PALETTE.PAL` into one atlas, writes `armpw.glb`, then drives headless Chrome over three.js to
 screenshot the model from **front, side, top, back and 3/4** — one PNG per view, plus a contact
-sheet. Tests: `python3 tools/test_ta3do.py` (51, offline, no game files).
+sheet. Tests: `python3 tools/test_ta3do.py` (60, offline, no game files).
+
+With `--undither` the textures go through the [unditherer](undither.md) first, one GAF frame at
+a time, and the model comes out in true colour instead of TA's 256; `ta3do compare` puts the two
+side by side on a locally served page.
 
 The format details all live in [file formats](file-formats.md); this page is about the
 pipeline, the decisions it had to make, and the two places the shipped archives disagreed
@@ -24,7 +28,8 @@ with that page.
 | **Resolve** | `armpw` → `units/armpw.fbi` → `Objectname` → `objects3d/armpw.3do`. A bare model name or a file path also work; a miss suggests near matches. | `resolve_model` |
 | **Parse** | The 3DO object tree: 52-byte headers, 16.16 vertices, quads/N-gons, first-child/next-sibling links. | `parse_3do` |
 | **Hide** | Read `scripts/<unit>.cob` and collect the pieces `Create` hides on the first frame. | `hidden_at_create` |
-| **Atlas** | Every GAF frame the model names, plus a 4×4 swatch per flat-colour palette index, shelf-packed into one RGBA image with a 1px extruded border. | `Atlas` |
+| **Undither** (optional) | `--undither`: each GAF frame the model uses goes through the [unditherer](undither.md)'s CNN **on its own**, as an indexed PNG carrying TA's palette, and comes back true colour. | `undither_frames` |
+| **Atlas** | Every GAF frame the model names — restored or as shipped — plus a 4×4 swatch per flat-colour palette index, shelf-packed into one RGBA image with a 1px extruded border. | `Atlas` |
 | **Build** | Triangulate (fan), Newell normals per face, flat shading by vertex duplication, UVs from the atlas rect. | `build_model` |
 | **Export** | glTF 2.0 as a single `.glb`: one node per 3DO piece, one mesh per piece, **one material**, the atlas embedded as a PNG buffer view. | `model_to_gltf` |
 | **Render** | Private Xvfb → headless Chrome → `tools/ta3do-view.html` (three.js) over a loopback HTTP server → `--screenshot` per view. | `cmd_render` |
@@ -53,6 +58,36 @@ and two views of the same unit are comparable. Background is transparent by defa
 
 `tools/ta3do views` prints the table; the viewer page repeats it so it works standalone, and a
 test compares the two so they cannot drift apart.
+
+## Undithering: 256 colours, or true colour
+
+TA's textures are 8-bit palette art, dithered to fake shades the palette does not have. The
+[unditherer](undither.md) undoes that. One switch turns it on:
+
+```
+tools/ta3do export armpw -o renders --undither            # learned (the 12x64 CNN)
+tools/ta3do render armpw -o renders --undither tuned      # or a classical preset
+tools/ta3do compare armpw --port 8731                     # both, side by side, served
+```
+
+**Each GAF frame is restored on its own, and the atlas is packed from the results.** Not the
+other way round: the network was trained on single game textures, and a packed sheet puts
+tiles next to each other that are neighbours nowhere on the model, so colour can creep across
+a packing seam. The frames go out as **indexed PNGs with TA's own palette** rather than
+flattened RGB, because that is what the unditherer wants — it measures the dither amplitude and
+the palette band step from the indices, and inpaints the colour-key index before filtering.
+All of a model's frames go through **one** process, since loading the CNN costs far more than
+running it on a 32×32 texture (ARMPW: 13 frames, one invocation).
+
+The undithered export is a separate file — `armpw-undithered.glb`, `armpw-undithered-atlas.png`,
+`armpw-undithered-front.png` — so the two variants sit in one directory without collision.
+`ta3do` itself stays stdlib-only: it drives `python -m unditherer restore` in the checkout's
+`.venv-undither`, overridable with `--undither-python` or `TA3DO_UNDITHER_PYTHON`.
+
+`ta3do compare <unit>` exports both, writes `tools/ta3do-compare.html` next to them and serves
+the directory. The page draws **one camera into two scissored halves**, so the only difference
+between left and right is the texture pipeline; drag orbits both together, and the two atlases
+sit underneath at 1:1. `--shots` also screenshots the pair for each standard view.
 
 ## Decisions, and what backs them
 
@@ -116,6 +151,9 @@ of ARMPW matches `unitpics/armpw.pcx` in silhouette, camo, grey arms and dark le
 - **No pose.** Pieces sit at their rest offsets. The COB VM is only read for `Create` hides; a
   real animation path would run the bytecode (§2.6 of the file-formats note) and write per-piece
   translation/rotation into the glTF nodes — or export animation samplers.
+- **Undithering does not touch geometry or the flat-colour faces.** A face with no texture is
+  a single palette index and has nothing to undither; only sampled GAF frames go through the
+  network. On ARMPW that is 13 of the 41 textured faces' worth of frames, against 40 flat ones.
 - **No team-colour remap.** The palette band above is left alone, so every ARM unit renders
   blue and every CORE unit red-ish. A `--team-color` that rewrites 105–110 at atlas-build time
   is a small addition.

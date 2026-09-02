@@ -16,6 +16,7 @@ import re
 import struct
 import tempfile
 import unittest
+import unittest.mock
 import zlib
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -644,6 +645,155 @@ class TestViewStandard(unittest.TestCase):
             found[name] = (float(az), float(el))
         self.assertEqual(found, {k: (float(v[0]), float(v[1]))
                                  for k, v in ta3do.VIEWS.items()})
+
+
+
+
+# --------------------------------------------------------------------------- undither
+
+STUB_UNDITHERER = """#!/usr/bin/env python3
+"A stand-in for `python -m unditherer restore`: it inverts, it does not restore."
+import struct, sys, zlib
+from pathlib import Path
+
+args = sys.argv[1:]
+assert args[:2] == ["-m", "unditherer"] or args[0] == "-m", args
+rest = args[args.index("restore") + 1:]
+out = Path(rest[rest.index("-o") + 1])
+inputs = [Path(a) for a in rest[:rest.index("-o")]]
+
+def png_rgb(width, height, rgb):
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        raw += rgb[y * width * 3:(y + 1) * width * 3]
+    def chunk(tag, data):
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+    return (b"\\x89PNG\\r\\n\\x1a\\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw)))
+            + chunk(b"IEND", b""))
+
+for path in inputs:
+    blob = path.read_bytes()
+    pos, width, height, plte, idat = 8, 0, 0, b"", bytearray()
+    while pos < len(blob):
+        length, tag = struct.unpack_from(">I4s", blob, pos)
+        body = blob[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if tag == b"IHDR":
+            width, height, depth, colour = struct.unpack_from(">IIBB", body, 0)[:4]
+            assert depth == 8 and colour == 3, (depth, colour)
+        elif tag == b"PLTE":
+            plte = body
+        elif tag == b"IDAT":
+            idat += body
+    raw = zlib.decompress(bytes(idat))
+    rgb = bytearray()
+    for y in range(height):
+        row = raw[y * (width + 1) + 1:(y + 1) * (width + 1)]
+        for index in row:
+            r, g, b = plte[index * 3:index * 3 + 3]
+            rgb += bytes((255 - r, 255 - g, 255 - b))
+    (out / (path.stem + ".undithered.png")).write_bytes(png_rgb(width, height, bytes(rgb)))
+"""
+
+
+class TestIndexedPng(unittest.TestCase):
+    def chunks(self, blob):
+        found = {}
+        pos = 8
+        while pos < len(blob):
+            length, tag = struct.unpack_from(">I4s", blob, pos)
+            found[tag] = blob[pos + 8:pos + 8 + length]
+            pos += 12 + length
+        return found
+
+    def test_header_palette_and_indices(self):
+        indices = bytes([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+        blob = ta3do.write_indexed_png(4, 3, indices, PALETTE, transparent=9)
+        found = self.chunks(blob)
+        width, height, depth, colour = struct.unpack_from(">IIBB", found[b"IHDR"], 0)[:4]
+        self.assertEqual((width, height, depth, colour), (4, 3, 8, 3))
+        self.assertEqual(len(found[b"PLTE"]), 256 * 3)
+        self.assertEqual(found[b"PLTE"][:3], bytes(PALETTE[0]))
+        raw = zlib.decompress(found[b"IDAT"])
+        self.assertEqual(len(raw), 3 * (4 + 1))
+        self.assertEqual(raw[1:5], indices[:4])          # row 0, filter byte stripped
+
+    def test_transparency_chunk_marks_the_colour_key(self):
+        blob = ta3do.write_indexed_png(2, 1, bytes([9, 9]), PALETTE, transparent=9)
+        trns = self.chunks(blob)[b"tRNS"]
+        self.assertEqual(len(trns), 10)
+        self.assertEqual(trns[-1], 0)
+        self.assertEqual(set(trns[:-1]), {255})
+
+    def test_no_transparency_chunk_when_none_asked_for(self):
+        blob = ta3do.write_indexed_png(2, 1, bytes([1, 2]), PALETTE)
+        self.assertNotIn(b"tRNS", self.chunks(blob))
+
+
+class TestUnditherPlumbing(unittest.TestCase):
+    """The unditherer itself has its own 85 tests; these cover our side of the
+    pipe: indexed PNG out, one batch call, `.undithered.png` back, RGB widened
+    to RGBA, and every requested frame accounted for."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.stub = Path(self.tmp.name) / "stub.py"
+        self.stub.write_text(STUB_UNDITHERER)
+        self.stub.chmod(0o755)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_frames_go_out_and_come_back_as_rgba(self):
+        frames = {"METAL1B": frame_of(4, 4, fill=3), "CAMO": frame_of(2, 2, fill=200)}
+        with unittest.mock.patch.dict(
+                "os.environ", {"TA3DO_UNDITHER_PYTHON": str(self.stub)}):
+            restored = ta3do.undither_frames(frames, PALETTE, preset="learned")
+        self.assertEqual(set(restored), {"METAL1B", "CAMO"})
+        width, height, rgba = restored["METAL1B"]
+        self.assertEqual((width, height), (4, 4))
+        self.assertEqual(len(rgba), 4 * 4 * 4)
+        self.assertEqual(tuple(rgba[:4]),
+                         tuple(255 - c for c in PALETTE[3]) + (255,))
+
+    def test_no_frames_is_not_a_subprocess(self):
+        self.assertEqual(ta3do.undither_frames({}, PALETTE), {})
+
+    def test_restored_tiles_reach_the_atlas(self):
+        root = ta3do.parse_3do(make_3do(SIMPLE_TREE))
+        bank = FakeBank({"METAL1B": frame_of(8, 8, fill=3)})
+        tile = (2, 2, bytes([9, 8, 7, 255] * 4))
+        model = ta3do.build_model("t", root, bank, PALETTE,
+                                  restored={"METAL1B": tile})
+        key = ("tex", "METAL1B")
+        self.assertIn(key, model.atlas.rects)
+        x, y, w, h = model.atlas.rects[key]
+        self.assertEqual((w, h), (2, 2))                 # the restored size, not 8x8
+        at = (y * model.atlas.size + x) * 4
+        self.assertEqual(tuple(model.atlas.rgba[at:at + 4]), (9, 8, 7, 255))
+
+    def test_model_textures_lists_only_drawable_faces(self):
+        root = ta3do.parse_3do(make_3do(SIMPLE_TREE))
+        bank = FakeBank({"METAL1B": frame_of(8, 8)})
+        self.assertEqual(set(ta3do.model_textures(root, bank)), {"METAL1B"})
+
+
+class TestComparePage(unittest.TestCase):
+    def test_the_compare_page_shares_the_view_table(self):
+        html = ta3do.COMPARE_HTML.read_text()
+        block = re.search(r"const VIEWS = \{(.+?)\};", html, re.S).group(1)
+        found = {name: (float(az), float(el)) for name, az, el in re.findall(
+            r"(\w+):\s*\{\s*az:\s*(-?[\d.]+),\s*el:\s*(-?[\d.]+)", block)}
+        self.assertEqual(found, {k: (float(v[0]), float(v[1]))
+                                 for k, v in ta3do.VIEWS.items()})
+
+    def test_undither_tag_keeps_the_two_exports_apart(self):
+        self.assertTrue(ta3do.UNDITHER_TAG.startswith("-"))
+        self.assertIn("learned", ta3do.UNDITHER_PRESETS)
 
 
 if __name__ == "__main__":
