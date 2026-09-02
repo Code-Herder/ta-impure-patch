@@ -52,7 +52,13 @@
 #define ATLAS_COLS   64
 #define ATLAS_W      (ATLAS_COLS * TILE_PX)     /* 2048                        */
 #define MAX_TILES    65536                      /* the index is a u16          */
-#define MAXCELL      8192                       /* visible cells per frame     */
+#define MAXCELL      32768                      /* visible cells per frame: the
+                                                  zoomed-out rect at the 0.25x
+                                                  floor is ~12.9k on a 1024x768
+                                                  view and ~33.5k at 1920x1080,
+                                                  so this covers the first and
+                                                  tagpu_terr_clamp_span() trims
+                                                  the second                     */
 #define TVST         6                          /* x,y, u,v, wx,wz             */
 #define TERR_ENC     0.10f                      /* under every other band      */
 #define DEFAULT_KEY  254                        /* see tagpu_terrown.c         */
@@ -343,6 +349,35 @@ static int ensure_atlas(const char* ta)
     return 1;
 }
 
+/* The one budget every pass has to agree on.
+
+   `tagpu_terr_gather` bails when the rect it is asked for needs more cells than
+   MAXCELL, and a bail HANDS THE DRAW BACK — one frame of the engine's own
+   terrain under an inverted composite, which reads as a flash. Bailing is the
+   one behaviour that looks like a bug, so the zoom's rect is trimmed to what the
+   budget can actually draw BEFORE any pass sizes itself from it
+   (tagpu_native.c), trading a black margin at extreme zoom-out — honest, and
+   only past the resolutions MAXCELL was sized for — for a rect terrain, units,
+   wrecks and features all agree on.
+
+   Shrink is proportional and iterated rather than solved: the rect keeps its
+   aspect, so the margin is even on all four sides, and no square root is needed
+   for a loop that converges in three passes at any sane viewport. */
+void tagpu_terr_clamp_span(int* w, int* h)
+{
+    int guard = 64;
+    if (*w < 32) *w = 32;
+    if (*h < 32) *h = 32;
+    while (guard-- > 0) {
+        /* the +2 is the gather's own worst case: a fractional eye offset costs
+           one extra column and one extra row (ceil32 of size + frac) */
+        long cols = (long)*w / 32 + 2, rows = (long)*h / 32 + 2;
+        if (cols * rows <= MAXCELL) return;
+        *w -= *w / 32 + 1;
+        *h -= *h / 32 + 1;
+    }
+}
+
 /* the engine's own arithmetic: `cdq; and edx,0x1f; add; sar 5` is a division
    toward zero, not a floor — reproduce it, do not "fix" it */
 static int div32_trunc(int v) { return (v + (v < 0 ? 31 : 0)) >> 5; }
@@ -371,6 +406,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     int mapW16, mapH16, stride, mrows;
     int tx0, ty0, fx, fy, cols, rows, r, c;
     int skipped = 0, junk = 0, own, wasFilled, emit;
+    int eyeX, eyeY, vpL, vpT, evw, evh;
     float iw, ih;
 
     if (s_armed != 1) return terr_bail();
@@ -400,10 +436,19 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     mrows  = mapH16 / 2;
     if (stride <= 0 || mrows <= 0) return terr_bail();
 
-    tx0 = div32_trunc(v->eyeX); fx = v->eyeX - tx0 * 32;
-    ty0 = div32_trunc(v->eyeY); fy = v->eyeY - ty0 * 32;
-    cols = ceil32(v->vw + fx);
-    rows = ceil32(v->vh + fy);
+    /* Run the engine's own algorithm over the ZOOM's viewport, not the
+       engine's. Screen and world differ by a pure translation, so widening the
+       rect is the same as moving the eye to its top-left corner and asking for
+       more columns — the quads still land at unzoomed game coordinates, which is
+       what the vertex shader's scale-about-the-centre expects. At zoom >= 1
+       these are the engine's own numbers and the arithmetic is untouched. */
+    vpL = v->evpL; vpT = v->evpT; evw = v->evw; evh = v->evh;
+    eyeX = v->eyeX + (vpL - v->vpL);
+    eyeY = v->eyeY + (vpT - v->vpT);
+    tx0 = div32_trunc(eyeX); fx = eyeX - tx0 * 32;
+    ty0 = div32_trunc(eyeY); fy = eyeY - ty0 * 32;
+    cols = ceil32(evw + fx);
+    rows = ceil32(evh + fy);
     if (cols <= 0 || rows <= 0) return terr_bail();
     if ((long)cols * rows > MAXCELL) return terr_bail();
 
@@ -422,8 +467,8 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
             cx = idx % ATLAS_COLS; cy = idx / ATLAS_COLS;
             u0 = (float)(cx * TILE_PX) * iw; u1 = (float)(cx * TILE_PX + TILE_PX) * iw;
             v0 = (float)(cy * TILE_PX) * ih; v1 = (float)(cy * TILE_PX + TILE_PX) * ih;
-            x0 = (float)(v->vpL + c * 32 - fx);
-            y0 = (float)(v->vpT + r * 32 - fy);
+            x0 = (float)(vpL + c * 32 - fx);
+            y0 = (float)(vpT + r * 32 - fy);
             /* screen and world differ by a pure translation here, so a cell's
                world rect is exactly (mx*32, my*32)..+32 — which is the space
                the engine's fog grid is built in */
@@ -451,8 +496,8 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
             last = v->frame_counter;
             _snprintf(b, sizeof b,
                 "terr: grid=%dx%d tile0=(%d,%d) frac=(%d,%d) map=%dx%d cells=%d"
-                " off-map=%d junk=%d atlas=%dx%d/%d%s%s",
-                cols, rows, tx0, ty0, fx, fy, stride, mrows, s_nv / 6,
+                " zoomvp=%dx%d off-map=%d junk=%d atlas=%dx%d/%d%s%s",
+                cols, rows, tx0, ty0, fx, fy, stride, mrows, s_nv / 6, evw, evh,
                 skipped, junk, ATLAS_W, s_atlasH, s_setCount,
                 s_over ? " (over: engine still drawing)"
                        : (s_passive ? " (passive: engine still drawing)" : ""),
@@ -499,8 +544,11 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     x_glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof s_verts, NULL, GL_STREAM_DRAW);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)s_nv * TVST * 4, s_verts);
+    /* orphan and upload in one call, sized to what this frame USES. The staging
+       array is now big enough for a fully zoomed-out rect, and re-specifying all
+       of it every frame would churn megabytes of driver memory to draw the ~2.5k
+       cells a 1x view needs. */
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)s_nv * TVST * 4, s_verts, GL_STREAM_DRAW);
     /* opaque, and the far plane of the frame: depth writes ON, no blending
        needed (the FBO is premultiplied and terrain's alpha is 1 everywhere) */
     x_glDrawArrays(GL_TRIANGLES, 0, s_nv);

@@ -53,8 +53,24 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    `+480,0`, scale 4.5, i.e. game px → window px = `(480 + gx*4.5, gy*4.5)`; those
    numbers are 640×480-only and must be recalibrated after any resolution change.)
 4. **Recording video**: the session must be unlocked and actually displaying the
-   window (locked = blank frames; check `loginctl … LockedHint`). Capture the instance
-   rect from `tacli ls --json`:
+   window. **`:1` is the user's REAL desktop** (6200×2160, with their browser, Discord,
+   Zoom and terminals on it) — not an isolated display — so an x11grab region records
+   their screen, and anything stacked over the game window lands in the video. Grab the
+   game's rect only, and say so before you record.
+   `LockedHint` is **not** a sufficient check: a switched-away session reports
+   `LockedHint=no` while GNOME's `mutter guard window` (full-screen, `IsViewable`) covers
+   everything, and the capture comes back as blurred wallpaper. Test first — one
+   `-frames:v 1 -update 1` grab, diffed against a `tacli glshot` of the same instance;
+   a mean abs difference of ~1 means you have the window, ~40 means you have the guard.
+   Two more things learned the hard way (2026-09-02):
+   - the client rect from `xwininfo -id <client>` (`Absolute upper-left`) is the one to
+     grab, **not** the `tacli ls --json` rect, which is the frame — they differed by
+     (14, 49) here;
+   - **`xwd -id <window>` returns full window content even while the session is
+     locked** (3.1 MB for 1024×768, verified). It is not a 60 Hz path on its own, but it
+     is the escape hatch when the screen is unavailable, and it is the reason an
+     in-process `glReadPixels` recorder would make locked 60 Hz capture possible.
+   Capture the instance rect from `tacli ls --json`:
    `ffmpeg -y -f x11grab -framerate 60 -video_size <w>x<h> -i :1+<x>,<y>
     -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -t <secs> out.mp4`
    **CAPTURE AT 60 fps** for flicker hunts — the GL present runs at 60 Hz and a

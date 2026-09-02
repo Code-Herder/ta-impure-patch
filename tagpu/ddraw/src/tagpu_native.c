@@ -69,6 +69,8 @@
 #include "tagpu_feat.h"
 #include "tagpu_terr.h"
 #include "tagpu_terrown.h"
+#include "tagpu_mark.h"
+#include "tagpu_markown.h"
 #include "tagpu_glsl.h"
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
@@ -104,7 +106,14 @@
 #define U_MODELID    0xA6      /* u16 index into MODEL_PTRS                 */
 #define OFF_MODELPTRS 0x14377  /* Model3DONode* [] (model templates)        */
 #define OFF_UIGATES  0x37F2F   /* bit2 = SelBoxes toggle (default on)       */
-#define SELBOX_COLIDX 0x0A     /* GUI colour: bright green palette index    */
+#define OFF_GUICOL   0x0DCB    /* GUI colour byte array: GetGuiPaletteColor  */
+                               /* (composite-buffer.md) = *(u8*)(ta+0xDCB+i)*/
+#define SELBOX_COLIDX 0x0A     /* the select box's GUI colour — an INDEX INTO */
+                               /* that array, not a palette index: 0xA reads  */
+                               /* 233 in stock TA, and using 10 raw drew the  */
+                               /* box in a dark colour that went unnoticed    */
+                               /* while the engine still painted its own      */
+                               /* green one over it (G13d)                    */
 #define U_OBJ3DO     0x9E
 #define U_TYPE       0x92
 #define U_OWNER      0xFF
@@ -154,6 +163,14 @@
 #define F_INDICES    0x0C
 
 #define MAXNV  49152           /* vertices across all native units per frame */
+/* Units (and wrecks) gathered per frame. This is NOT a soft limit: a unit past
+   it is not merely undrawn, it is INVISIBLE — tagpu_overlay.c wipes the engine's
+   composite for every unit `tagpu_native_owns_unit` accepts, whether or not this
+   gather included it. So it has to stay ahead of the rect the gather fills from,
+   and since G13d that rect grows with zoom-out (16x the area at the 0.25x
+   floor). MAXNV is the real budget and truncates gracefully; this one must not
+   be what runs out first. */
+#define MAXU   2048
 #define NVST   11              /* x,y,depthEnc, u,v, flat,ck, shadeRow, wx,wzp, vy */
 /* depth keys: ground rows encode as (feat?3:1) + rel*4 (rel = row − r0, up
    to the sweep's row count plus the ±256 px gather slack); the engine draws
@@ -236,6 +253,9 @@ static int      s_fillStall = 0;
    negative eye (eye = -20: engine origin -16, floor would say -48). */
 static int fog_org(int eye) { int r = eye % 32; return eye + (r > 15 ? 16 : -16) - r; }
 static float  s_verts[MAXNV * NVST];
+/* set by the frame, read by tagpu_markown.c on the game thread: 1 while every
+   selection box this frame owed was actually emitted */
+static volatile int s_selComplete = 0;
 
 /* material constants copied per frame from render3do's calibration */
 static const float SH_V[3] = { 0.0f, 0.8944f, -0.4472f };
@@ -907,21 +927,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         s_ss     = (GetFileAttributesA("tagpu_ss.off")     == INVALID_FILE_ATTRIBUTES);
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
-        {
-            s_zoom = 1.0f;
-            HANDLE zh = CreateFileA("tagpu_zoom.txt", GENERIC_READ,
-                                    FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
-                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-            if (zh != INVALID_HANDLE_VALUE) {
-                char zb[32]; DWORD zn = 0;
-                if (ReadFile(zh, zb, sizeof zb - 1, &zn, 0) && zn > 0) {
-                    zb[zn] = 0;
-                    float z = (float)atof(zb);
-                    if (z >= 0.25f && z <= 8.0f) s_zoom = z;
-                }
-                CloseHandle(zh);
-            }
-        }
         if (s_armed != was && was >= 0) {
             char b[96]; _snprintf(b, sizeof b, "native: %s (type=%s wrecks=%d ss=%d subpix=%d)",
                                   s_armed ? "ARMED" : "disarmed", s_type,
@@ -929,13 +934,40 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             nlog(b);
         }
     }
+    /* View zoom — re-read EVERY frame, unlike the arm state above. It is a
+       continuous control, so a 30-frame poll would quantise any ramp to 2 Hz and
+       make a perfectly smooth renderer look like a staircase on video. A tiny
+       file read per frame is nothing next to the palette and fog uploads below.
+       On a bad parse the LAST GOOD value is kept rather than snapping back to
+       1.0: a writer driving a ramp at 60 Hz can be caught mid-write, and a
+       one-frame jump to unzoomed reads as a flicker. Only the file's absence
+       means "no zoom". */
+    {
+        HANDLE zh = CreateFileA("tagpu_zoom.txt", GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+        if (zh == INVALID_HANDLE_VALUE) {
+            s_zoom = 1.0f;
+        } else {
+            char zb[32]; DWORD zn = 0;
+            if (ReadFile(zh, zb, sizeof zb - 1, &zn, 0) && zn > 0) {
+                float z;
+                zb[zn] = 0;
+                z = (float)atof(zb);
+                if (z >= 0.25f && z <= 8.0f) s_zoom = z;
+            }
+            CloseHandle(zh);
+        }
+    }
+
     /* the effects pass (tagpu_fx.on) rides this frame: it needs the view,
        fog and palette set up here and draws into this FBO */
     int fxOn = tagpu_fx_armed(f->frame_counter);
     int sfxOn = tagpu_sfx_armed(f->frame_counter);
     int featOn = tagpu_feat_armed(f->frame_counter);
     int terrOn = tagpu_terr_armed(f->frame_counter);
-    if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn) return;
+    int markOn = tagpu_mark_armed(f->frame_counter);
+    if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn && !markOn) return;
     if (s_state == 0) init_gl();
     if (s_state != 1 || !tagpu_r3d_ensure()) return;
 
@@ -953,10 +985,32 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
 
+    /* ---- the viewport the zoom actually shows (see TAGPU_FXVIEW.evpL) ----
+       Every gather below sizes itself from this rather than the engine's own
+       viewport, so zooming out reaches further into the map instead of leaving
+       the frame edge bare. At z >= 1 it IS the engine's viewport, bit for bit. */
+    int evpL = vpL, evpT = vpT, evw = vw, evh = vh;
+    if (s_zoom > 0.05f && s_zoom < 1.0f) {
+        evw = (int)((float)vw / s_zoom) + 64;      /* +64: partial cells at the edge */
+        evh = (int)((float)vh / s_zoom) + 64;
+        if (evw > 8192) evw = 8192;
+        if (evh > 8192) evh = 8192;
+        /* and never ask the terrain pass for more cells than it can draw: it
+           would bail, and a bail hands the whole draw back for a frame */
+        tagpu_terr_clamp_span(&evw, &evh);
+        /* the effective rect is only ever WIDER than the engine's — a clamp that
+           took it below the viewport would cull content that is plainly on
+           screen. Unreachable at any real resolution, stated so it stays true. */
+        if (evw < vw) evw = vw;
+        if (evh < vh) evh = vh;
+        evpL = vpL + (vw - evw) / 2;
+        evpT = vpT + (vh - evh) / 2;
+    }
+
     int scafR0 = 0, scafRows = 0;
     int scafOn = tagpu_scaffold_frameinfo(f->frame_counter, &scafR0, &scafRows);
-    int r0 = scafOn ? scafR0 : (eyeY >> 4) - 16;
-    int rows = scafRows > 0 ? scafRows : (vh >> 4) + 32;
+    int r0 = scafOn ? scafR0 : ((eyeY + (evpT - vpT)) >> 4) - 16;
+    int rows = scafRows > 0 ? scafRows : (evh >> 4) + 32;
     /* this frame's depth bands (see ROW_SLACK) */
     float fxKey = 3.0f + (float)(rows + ROW_SLACK) * 4.0f + 4.0f;
     float airKey = fxKey + 12.0f;
@@ -1070,7 +1124,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                      float ax, ay, gy, wx0, wz0;
                      int rel, owner, cloaked, air, feat, sel, shadow; unsigned yaw;
                      float waterT, digT; int waterMode; } NU;
-    static NU units[512];
+    static NU units[MAXU];
     /* sub-pixel motion: the engine keeps 16.16 fixed-point positions (the
        roster shorts are just their high words) — read the true fractions and
        interpolate between the last two sim samples per unit SLOT for
@@ -1080,7 +1134,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int nu = 0, nv = 0, nwr = 0, nsel = 0;
     unsigned uiGates = *(unsigned char*)(ta + OFF_UIGATES);
     if (s_armed) {                 /* units are gathered only by the unit pass */
-    for (char* u = beg + UNIT_STRIDE; u < end && nu < 512; u += UNIT_STRIDE) {
+    for (char* u = beg + UNIT_STRIDE; u < end && nu < MAXU; u += UNIT_STRIDE) {
         unsigned st = *(unsigned*)(u + U_STATE);
         if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
         if (!tagpu_native_owns_unit(u)) continue;
@@ -1112,7 +1166,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         float ax = fx - (float)eyeX + (float)vpL;
         float ay = fy - fz * 0.5f - (float)eyeY + (float)vpT;
-        if (ax < vpL - 256 || ax > vpL + vw + 256 || ay < vpT - 256 || ay > vpT + vh + 256)
+        if (ax < evpL - 256 || ax > evpL + evw + 256 ||
+            ay < evpT - 256 || ay > evpT + evh + 256)
             continue;
         int owner = *(unsigned char*)(u + U_OWNER);
         int cloaked = (*(unsigned char*)(u + U_CLOAKF) & 4) != 0;
@@ -1219,14 +1274,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         int mapW = *(const int*)(ta + OFF_MAPW), mapH = *(const int*)(ta + OFF_MAPH);
         if (ptr_ok(fmap) && ptr_ok(defs) && ptr_ok(recs) &&
             mapW > 0 && mapH > 0 && mapW <= 4096 && mapH <= 4096) {
-            int tx0 = (eyeX >> 4) - 8, tx1 = (eyeX >> 4) + (vw >> 4) + 8;
+            /* both axes off the ZOOM's rect, like the row range and the cull
+               below — leaving the columns on the engine's viewport stopped
+               wrecks at the unzoomed left and right edges while terrain,
+               features and units carried on past them */
+            int tx0 = ((eyeX + (evpL - vpL)) >> 4) - 8;
+            int tx1 = tx0 + (evw >> 4) + 16;
             int ty0 = r0, ty1 = r0 + rows;
             if (tx0 < 0) tx0 = 0;
             if (ty0 < 0) ty0 = 0;
             if (tx1 > mapW) tx1 = mapW;
             if (ty1 > mapH) ty1 = mapH;
-            for (int ty = ty0; ty < ty1 && nu < 512; ty++)
-            for (int tx = tx0; tx < tx1 && nu < 512; tx++) {
+            for (int ty = ty0; ty < ty1 && nu < MAXU; ty++)
+            for (int tx = tx0; tx < tx1 && nu < MAXU; tx++) {
                 const char* t = fmap + ((size_t)ty * mapW + tx) * FT_STRIDE;
                 if (!(*(const unsigned char*)(t + FT_FLAGS) & 1)) continue;
                 unsigned defIdx = *(const unsigned short*)(t + FT_DEFIDX);
@@ -1249,8 +1309,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 int ry = *(const int*)(rec + WR_YPOS) >> 16;
                 float ax = (float)(rx - eyeX + vpL);
                 float ay = (float)(ry - rz / 2 - eyeY + vpT);
-                if (ax < vpL - 256 || ax > vpL + vw + 256 ||
-                    ay < vpT - 256 || ay > vpT + vh + 256) continue;
+                if (ax < evpL - 256 || ax > evpL + evw + 256 ||
+                    ay < evpT - 256 || ay > evpT + evh + 256) continue;
                 /* wreckage is remembered furniture: hidden only where the
                    map is unexplored, visible (darkened) in grey */
                 if ((fogMode & 1) &&
@@ -1270,10 +1330,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     }
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
-    int nfx = 0, nfeat = 0, nterr = 0;
-    if (fxOn || sfxOn || featOn || terrOn) {
+    int nfx = 0, nfeat = 0, nterr = 0, nmark = 0;
+    if (fxOn || sfxOn || featOn || terrOn || markOn) {
         fv.ta = ta; fv.eyeX = eyeX; fv.eyeY = eyeY;
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
+        fv.evpL = evpL; fv.evpT = evpT; fv.evw = evw; fv.evh = evh;
         fv.gw = gw; fv.gh = gh; fv.ss = s_ss ? 2 : 1; fv.fogMode = fogMode;
         fv.zoom = s_zoom;
         fv.zoomCx = (float)vpL + (float)vw * 0.5f;
@@ -1309,6 +1370,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (terrOn) nterr = tagpu_terr_gather(&fv);
         if (featOn) nfeat = tagpu_feat_gather(&fv);
         if (fxOn || sfxOn) nfx = tagpu_fx_gather(&fv);
+        if (markOn) nmark = tagpu_mark_gather(&fv);
     }
     /* NEVER return early while we own the terrain: the engine's frame is a
        flat key fill inside the viewport, and only the composite below turns it
@@ -1317,11 +1379,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        hard bail (no atlas, bad map pointer) can leave a key-filled frame with
        nothing of ours to cover it, and that frame still has to be composited. */
     int terrOwned = tagpu_terrown_filled();
-    if (nu == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !terrOwned) return;
+    if (nu == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !markOn && !terrOwned) return;
 
     /* ---- build geometry (body); shadow reuses it with an offset ---- */
-    static int firstv[513];
-    static float encb[512];
+    static int firstv[MAXU + 1];
+    static float encb[MAXU];
     int i;
     for (i = 0; i < nu; i++) {
         firstv[i] = nv;
@@ -1346,13 +1408,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         for (k = 0; k < nm; k++) nv = emit_fx_model(tagpu_fx_model(k), nv, fxKey);
     }
     int fxLast = nv;
-    if (nv == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !terrOwned) return;
+    if (nv == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !markOn && !terrOwned) return;
 
     /* ---- native selection rects (ui-markers: the ONLY marker interleaved
        with unit draws — the engine's is unreadable under our pixels, redraw
        it): flat model-XZ AABB rect at lowest model Y, rotated by body yaw,
        GUI colour 0xA, drawn as GL_LINES at just-under-the-unit depth ---- */
-    int lineStart = nv;
+    int lineStart = nv, selDrawn = 0;
     if (nsel) {
         const char* mptrs = *(const char* const*)(ta + OFF_MODELPTRS);
         for (i = 0; i < nu && nv + 8 <= MAXNV; i++) {
@@ -1377,6 +1439,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 py[k] = units[i].ay + (-rz2 - y0 * 0.5f);
             }
             float enc = encb[i] - 0.5f;
+            selDrawn++;
             for (k = 0; k < 4; k++) {
                 int k2 = (k + 1) & 3, t2;
                 for (t2 = 0; t2 < 2; t2++) {
@@ -1385,7 +1448,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     o[1] = t2 ? py[k2] : py[k];
                     o[2] = enc;
                     o[3] = -1.0f; o[4] = -1.0f;                 /* flat path  */
-                    o[5] = (float)SELBOX_COLIDX / 255.0f; o[6] = -1.0f;
+                    o[5] = (float)*(unsigned char*)(ta + OFF_GUICOL + SELBOX_COLIDX)
+                           / 255.0f;
+                    o[6] = -1.0f;
                     o[7] = (float)tagpu_r3d_shade_neutral() / 31.0f;
                     o[8] = units[i].wx0; o[9] = units[i].wz0;
                     o[10] = 1e9f;                               /* never clipped */
@@ -1394,6 +1459,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             }
         }
     }
+    /* Whether we owed a box we could not draw. `markown` suppresses the
+       engine's selection rect per unit on `tagpu_native_owns_unit` alone, but
+       this loop can still come up short — the gather cap, the vertex budget, an
+       unresolvable model AABB — and a suppressed box we then failed to draw
+       leaves a selected unit unmarked. So say so, and let markown hand the
+       WHOLE set back for a frame: at 1x the engine's boxes land on the same
+       pixels and nothing shows, at any other zoom a one-frame ghost is a much
+       smaller lie than a missing marker. Self-correcting either way. */
+    s_selComplete = (selDrawn == nsel && nu < MAXU);
 
     /* ---- render into the (optionally 2x supersampled) game-res FBO ---- */
     int ss = s_ss ? 2 : 1;
@@ -1521,6 +1595,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 #undef FOGW
     x_glDisable(GL_BLEND);
     x_glDisable(GL_DEPTH_TEST);
+    /* UI markers last and over everything — health bars, order lines, the
+       build cursor: in the engine they are painted after every world sprite,
+       and here they need no depth test and no blend (every fragment they keep
+       is opaque, and the key texels discard). The scissor stays on: a zoomed-in
+       marker layer reaches past the viewport and must be cut at its edge. */
+    if (markOn) tagpu_mark_render(&fv, s_palTex);
     if (x_glScissor) x_glDisable(GL_SCISSOR_TEST);
 
     /* ---- box-downsample 2x -> 1x (quad covers every pixel; no clear) ---- */
@@ -1578,8 +1658,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         last = f->frame_counter;
         char b[160];
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d%s",
-                  nu - nwr, nwr, nsel, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d%s",
+                  nu - nwr, nwr, nsel, nmark, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
     }
@@ -1637,9 +1717,12 @@ void tagpu_native_glreset(void)
     tagpu_fx_glreset();
     tagpu_feat_glreset();
     tagpu_terr_glreset();
+    tagpu_mark_glreset();
 }
 
 int tagpu_native_wrecks_armed(void)
 {
     return s_armed > 0 && s_state != 2 && s_wrecks;
 }
+
+int tagpu_native_selbox_complete(void) { return s_selComplete; }

@@ -27,6 +27,12 @@ int  tagpu_terr_gather(const TAGPU_FXVIEW* v);
 void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex);
 void tagpu_terr_glreset(void);
 
+/* Trim a would-be gather rect (in game px) to what this pass can actually draw
+   in one frame. The zoomed-out viewport is the only thing that ever exceeds the
+   budget, and a gather that bails hands the draw back for a frame — so the rect
+   is trimmed once, up front, and every pass sizes itself from the same one. */
+void tagpu_terr_clamp_span(int* w, int* h);
+
 /* the palette index tagpu_terrown.c fills the viewport with in place of the
    engine's terrain blit; the composite treats every OTHER index in the engine's
    frame as "an overlay the engine still draws, and we must not cover it" */

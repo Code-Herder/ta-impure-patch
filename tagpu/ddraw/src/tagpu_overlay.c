@@ -20,6 +20,7 @@
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
 #include "tagpu_terrown.h"
+#include "tagpu_markown.h"
 #include "tagpu_scaffold.h"
 #include "tagpu_input.h"
 #include "tagpu_native.h"
@@ -463,6 +464,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_fxown_flush(f->frame_counter);
     tagpu_featown_flush(f->frame_counter);
     tagpu_terrown_flush(f->frame_counter);
+    tagpu_markown_flush(f->frame_counter);
     if (GetFileAttributesA("tagpu_overlay.off")!=INVALID_FILE_ATTRIBUTES) { writeback_paint(f); return; }
     if (s_state==0) init_overlay();
     if (s_state!=1) { writeback_paint(f); return; }

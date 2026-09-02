@@ -714,6 +714,33 @@ def _ensure_terrown_for_terr(inst) -> "str | None":
     return ("auto-armed terrown.on (terr.on is set and terrown must be installed at "
             "launch, not after)")
 
+def _ensure_markown_for_mark(inst) -> "str | None":
+    """Same footgun, UI markers edition (G13d): the marker pass (tagpu_mark.on) draws
+    the health bars itself and replays the engine's own order markers, group digits,
+    build cursor and band box out of a capture — while tagpu_markown redirects the
+    six call sites that produce them (including the engine's own selection rect, per
+    unit) and detours DrawHealthBars (0x46A430). Those
+    patches install ONCE at DllMain, only if tagpu_markown.on exists then, so if this
+    launch brings up the marker pass, arm it before the process starts. The capture
+    and the bar skip follow tagpu_mark.on live (and both stay off under `passive`).
+
+    Without the patch the engine is still drawing all of it at UNZOOMED positions, so
+    the pass refuses to emit rather than double-draw, and says so in its log line.
+    """
+    mark = inst.gamedir / "tagpu_mark.on"
+    own = inst.gamedir / "tagpu_markown.on"
+    if not mark.exists():
+        if own.exists():
+            own.unlink()
+            return ("dropped markown.on (mark.on is not set; the marker patch is only "
+                    "installed with it)")
+        return None
+    if own.exists():
+        return None
+    own.write_text("on\n")
+    return ("auto-armed markown.on (mark.on is set and markown must be installed at "
+            "launch, not after)")
+
 def _launch(args) -> dict:
     """Everything `launch` does, minus the printing — `load` composes with it."""
     # Extra TotalA.exe switches. Only a handful are worth passing (see
@@ -793,6 +820,7 @@ def _launch(args) -> dict:
     fxown_note = _ensure_fxown_for_fx(inst)
     featown_note = _ensure_featown_for_feat(inst)
     terrown_note = _ensure_terrown_for_terr(inst)
+    markown_note = _ensure_markown_for_mark(inst)
 
     env = inst.env()
     display = env["DISPLAY"]
@@ -819,7 +847,8 @@ def _launch(args) -> dict:
             "args": argv, "shield": shield_state(inst), "pointer_restored": restored,
             "dplay": bool(meta.get("dplay")), "dplay_note": dplay_note,
             "owndraw_note": owndraw_note, "fxown_note": fxown_note,
-            "featown_note": featown_note, "terrown_note": terrown_note}
+            "featown_note": featown_note, "terrown_note": terrown_note,
+            "markown_note": markown_note}
 
 
 def cmd_launch(args):
@@ -843,6 +872,8 @@ def cmd_launch(args):
         human += f"\n  {res['featown_note']}"
     if res.get("terrown_note"):
         human += f"\n  {res['terrown_note']}"
+    if res.get("markown_note"):
+        human += f"\n  {res['markown_note']}"
     out(res, args.json, human=human)
 
 
@@ -3385,6 +3416,8 @@ def cmd_scenario_load(args):
         steps.append(launched["featown_note"])
     if launched.get("terrown_note"):
         steps.append(launched["terrown_note"])
+    if launched.get("markown_note"):
+        steps.append(launched["markown_note"])
 
     _scn_wait_shell(inst, args.launch_timeout)
     for i, selector in enumerate(SCN_MENU_PATH):

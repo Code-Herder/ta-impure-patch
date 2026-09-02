@@ -47,11 +47,11 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02) | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid | done — [Features](features.html) §9 |
 | Terrain tiles | ● native (G13b) | `terrown`: one detour on `0x483FA0`, whose skip path key-fills the viewport | 0-px parity vs the engine's own blit, engine surface 99.9 % key, in-process map change |
 | Fog overlay | ● native (G13b) | `terrown` detours `0x4848E0` too, replicating only its lazy grid rebuild | 99.06–99.39 % lit-vs-grey agreement with the engine's own overlay |
-| Health bars, wireframes, build cursor, UI, minimap | ○ engine 8bpp — and now surviving *through* our frame via the composite key | — | next cut / stays engine-side |
+| Health bars, order markers, group digits, build cursor, band box | ● native (G13d) | `markown`: six call-site redirects + one detour on `0x46A430`; bars re-drawn, the rest captured out of the engine's own draw and replayed | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5× |
+| Chat, dialogs, side panel, minimap, top bar | ○ engine 8bpp, through the composite key | — | stays engine-side: screen-space, correct at 1:1 at any zoom |
 
 So the engine's software frame is now **UI only** — inside the viewport it is a flat fill of
-one palette index, the *key*, with nothing on it but the overlays the engine has yet to hand
-over (health bars, nanoframe wireframes, the build cursor, chat). Everything a player looks at
+one palette index, the *key*, with nothing on it but the mouse cursor (G13d took the rest). Everything a player looks at
 in the world is ours. That inverts the composite: instead of dropping our empty pixels so the
 engine's frame shows through, we drop our pixels wherever the engine's frame is **not** the
 key — which is the entry condition for the declared endgame, ortho + smooth zoom.
@@ -63,6 +63,61 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G13d — the world-space UI markers, and zoom-out fills the frame.** The last engine pixels
+inside the viewport anchored to a *world* position, and therefore the last thing between us
+and a free view zoom: a marker the engine draws is a marker frozen at the unzoomed
+projection — invisible at 1×, a ghost at anything else. `tagpu_markown.c` + `tagpu_mark.c`
+take them with **two different mechanisms**, because they split cleanly in two
+([UI markers](ui-markers.html) §6, and the new "third rule" in
+[own the draw](own-the-draw.html)).
+
+**Health bars are re-drawn**, and `DrawHealthBars 0x46A430` is detoured away. They cannot be
+captured: the engine's loop walks **HotUnits, culled to the unzoomed viewport**, so a
+captured bar layer would stop at the 1× rect and leave the outer ring of a zoomed-out view
+bare. Ours walks the unit array with the zoom's effective rect. §2.1's arithmetic is
+reproduced exactly — the *unsigned* `(Health<<5)/maxHP`, the `maxHP/3` thirds, `DrawBar`'s
+inclusive edges — and verified in the frame: a full-health fill is **33 × 3 px at exactly
+the engine's x** (bar at `x-0x10` for a unit whose roster screen x is 266). It also exposed
+a live bug it had been hiding: `tagpu_native.c`'s native selection rect emitted palette
+index **10** where the engine emits `gui[0xA]` = **233**, drawing the box in a dark colour
+that nobody had seen because the engine was still painting its own green one over it.
+
+**Everything else is captured and replayed.** The order-marker pass is five drawers over the
+order list with a growing build rect, a marching dot phase, an LOS cache and `ShowRanges`
+text labels; re-deriving it is a lot of arithmetic to get subtly wrong. Instead the engine
+draws it into a scratch 8bpp buffer of ours — the `OFFSCREEN` is a **stack local**, so its
+pixel base is one pointer to redirect — and we upload that buffer and draw it as a quad
+through the same zoom transform the world uses. Parity is exact by construction, text
+included. **Two windows because fog divides them**: hook 8 `0x469BD7` → hook 9 `0x469D2C`
+(order markers + group digits, fog-darkened like the engine's) and the two
+`DrawTranspRectangle 0x4BF8C0` calls (build cursor + band box, never darkened). Six
+call-site redirects, no collision with `fxown`/`terrown` because the stubs *call*
+`0x471F90` and `0x4BF8C0`. The selection rect's own two sites are redirected through a
+**per-unit** `tagpu_native_owns_unit` test, so a unit the native pass does not own keeps
+the engine's.
+
+**Verified:** engine surface **99.98 % key with only the mouse cursor left** (112 px of
+630 784) — chat, dialogs, panel and minimap are screen-space and stay; `prefog=captured`
+with SHIFT held and the route dots, target sprite and selection box all in our frame;
+`postfog=captured` on a drag band box; bar fills exactly halve (33 px → 16 px) at 0.5×
+with every marker still over its unit.
+
+**And the zoom gathers are finished.** `tagpu_feat.c` was the last pass still sizing itself
+from the engine's viewport; it now uses the effective rect like the others, and the terrain
+budget went from a **bail** (which hands the draw back and flashes — the one behaviour that
+looks like a bug) to a **clamp**: `tagpu_terr_clamp_span()` trims the rect to what `MAXCELL`
+can draw before any pass reads it, so every gather agrees on one centred rect and extreme
+zoom-out degrades to an honest black margin instead of a flash. Measured black fraction
+inside the viewport: **0.0019 at 1×, 0.0003 at 0.5×, 0.0002 at 0.35×** — the zoom-out
+margin the G13b probe filmed is gone.
+
+**Gaps, both deliberate.** The *captured* layers are clipped to the 1× viewport (the
+engine's drawers clip to the OFFSCREEN rect), so at zoom < 1 order markers and group digits
+stop at the unzoomed edge while the world carries on — health bars, the always-on markers,
+do not have this limit. And **input under zoom is still 1:1**: making clicks land needs
+either owning the engine's cursor draw or accepting a cursor that visibly detaches from the
+pointer, which is its own gate.
 
 **G13b — terrain, native, and the composite inverts.** The last layer the engine painted in
 the world. The drawing half is small — `0x483FA0` is a grid blit of pre-rendered 32×32 tiles
