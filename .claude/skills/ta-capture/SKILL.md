@@ -76,6 +76,17 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    G13c fog gate: 19,768 px of apparent error, chased into the shader, when the real
    reading was 97 once the commander had parked. Park everything (`tacli eye` to pin
    the camera, let orders finish), confirm the zero, then run the A/B.
+   **And separate the confounders you cannot freeze.** Some differences are
+   permanent features of the frame, not of the change under test — the fog edge is
+   the standing example: the engine dithers its edge sprites and we threshold
+   cleanly, so every fogged A/B carries a 2–4 px band of "error" along the whole
+   boundary. In G13b that read as 0.91 % of the viewport and looked like a terrain
+   bug; the tell was that it was **the same number at four unrelated camera
+   positions** (a real geometry error scales with content). Either turn the
+   confounder off — note that the `LineOfSight` setting is sticky per instance and
+   will carry over from a previous launch — or dilate the difference mask by ~8 px
+   and measure what survives outside it. Here that left 90.6 % of the viewport with
+   **zero** differing pixels, which is the number worth reporting.
 7. **`grep -a` on tagpu.log, always** — stray binary bytes make grep treat it
    as a binary file and silently print nothing.
 8. **Sim speed**: TA's own `+`/`-` keys via `tacli keys <name> plus` / `minus`

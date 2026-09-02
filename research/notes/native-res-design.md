@@ -41,6 +41,14 @@ What this means for the design:
 
 ## The one-paragraph idea
 
+> **Superseded in scope, not in method (2026-09-02).** "Keep TA's software frame for
+> everything that is not a unit" held through G12; G12e/f, G13a and G13b took the effects,
+> particles, features, terrain and fog as well, so the engine's frame inside the viewport
+> is now a key fill and the composite reads it as a mask rather than a backdrop
+> ([terrain & depth](terrain-depth.html) §7). The resolution argument below — read the
+> viewport rect live, never hardcode a dimension — is unchanged and is what made each of
+> those gates portable.
+
 Keep TA's software frame for everything that is not a unit (terrain, features, fog, UI —
 all engine-drawn, upscaled by cnc-ddraw as today), but remove *unit pixels* from it and
 draw units ourselves in the GL present hook, at the game's requested resolution, 1:1 with

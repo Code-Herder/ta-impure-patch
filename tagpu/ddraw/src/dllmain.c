@@ -16,6 +16,7 @@
 #include "tagpu_owndraw.h"
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
+#include "tagpu_terrown.h"
 #include "tagpu_weapons.h"
 #include "utils.h"
 #include "versionhelpers.h"
@@ -86,6 +87,14 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            "tagpu_featown.on" exists; byte-match guarded; one leaf,
            0x46A610, disjoint from every other detour. */
         tagpu_featown_init();
+
+        /* tagpu: own the engine's terrain draw and, with it, the fog overlay
+           (G13b). No-op unless "tagpu_terrown.on" exists; byte-match guarded,
+           all-or-nothing; 0x483FA0 and 0x4848E0, disjoint from every other
+           detour. Unlike the others its skip path is not empty — it fills the
+           viewport with the composite's key and replicates the fog grid's
+           lazy rebuild. */
+        tagpu_terrown_init();
 
         /* tagpu: 1..N weapons per unit — the first module that changes the
            simulation, in its own file behind its own gate. No-op unless

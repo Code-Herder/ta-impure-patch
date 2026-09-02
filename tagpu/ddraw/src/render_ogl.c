@@ -1542,6 +1542,9 @@ static void ogl_render()
                 f.hdc          = g_ddraw.render.hdc;
                 f.frame_counter= s_tagpu_frames++;
                 f.bpp          = g_ddraw.bpp;
+                /* the index texture just uploaded above (or the last one still
+                   on screen when the surface did not change) */
+                f.surface_tex  = g_ddraw.bpp == 8 ? g_ogl.surface_tex_ids[tex_index] : 0;
 
                 /* No GL-state save/restore here: the overlay unbinds its own program/VAO
                    and disables blend before returning, and this call sits immediately

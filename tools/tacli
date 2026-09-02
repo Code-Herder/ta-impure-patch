@@ -636,6 +636,33 @@ def _ensure_featown_for_feat(inst) -> "str | None":
     return ("auto-armed featown.on (feat.on is set and featown must be installed at "
             "launch, not after)")
 
+def _ensure_terrown_for_terr(inst) -> "str | None":
+    """Same footgun, terrain edition: the native terrain pass (tagpu_terr.on) draws
+    the map tiles itself, while the engine's terrain pass (0x483FA0) and the fog
+    overlay (0x4848E0) are skipped by the terrown detours. They install ONCE at
+    DllMain, only if tagpu_terrown.on exists then — so if this launch brings up the
+    terrain pass, arm it before the process starts. The skip itself follows
+    tagpu_terr.on live (and stays off under the `passive` / `over` tokens).
+
+    Without the patch there is no key fill, so there is nothing for the composite to
+    invert against — the terrain pass then refuses to emit at all (its opaque
+    full-viewport layer would otherwise hide the health bars, wireframes, build
+    cursor and chat that the key exists to let through) and says so in its log line.
+    """
+    terr = inst.gamedir / "tagpu_terr.on"
+    own = inst.gamedir / "tagpu_terrown.on"
+    if not terr.exists():
+        if own.exists():
+            own.unlink()
+            return ("dropped terrown.on (terr.on is not set; the terrain patch is only "
+                    "installed with it)")
+        return None
+    if own.exists():
+        return None
+    own.write_text("on\n")
+    return ("auto-armed terrown.on (terr.on is set and terrown must be installed at "
+            "launch, not after)")
+
 def _launch(args) -> dict:
     """Everything `launch` does, minus the printing — `load` composes with it."""
     # Extra TotalA.exe switches. Only a handful are worth passing (see
@@ -705,6 +732,7 @@ def _launch(args) -> dict:
     owndraw_note = _ensure_owndraw_for_native(inst)
     fxown_note = _ensure_fxown_for_fx(inst)
     featown_note = _ensure_featown_for_feat(inst)
+    terrown_note = _ensure_terrown_for_terr(inst)
 
     env = inst.env()
     display = env["DISPLAY"]
@@ -730,7 +758,7 @@ def _launch(args) -> dict:
             "map": args.map, "unit_limit": meta.get("unit_limit"),
             "args": argv, "shield": shield_state(inst), "pointer_restored": restored,
             "owndraw_note": owndraw_note, "fxown_note": fxown_note,
-            "featown_note": featown_note}
+            "featown_note": featown_note, "terrown_note": terrown_note}
 
 
 def cmd_launch(args):
@@ -749,6 +777,8 @@ def cmd_launch(args):
         human += f"\n  {res['fxown_note']}"
     if res.get("featown_note"):
         human += f"\n  {res['featown_note']}"
+    if res.get("terrown_note"):
+        human += f"\n  {res['terrown_note']}"
     out(res, args.json, human=human)
 
 
@@ -3265,6 +3295,8 @@ def cmd_scenario_load(args):
         steps.append(launched["fxown_note"])
     if launched.get("featown_note"):
         steps.append(launched["featown_note"])
+    if launched.get("terrown_note"):
+        steps.append(launched["terrown_note"])
 
     _scn_wait_shell(inst, args.launch_timeout)
     for i, selector in enumerate(SCN_MENU_PATH):

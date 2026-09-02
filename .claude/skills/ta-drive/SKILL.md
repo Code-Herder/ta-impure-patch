@@ -385,6 +385,35 @@ overlay tints every tall feature purple and ruins captures). Verify `featown: AR
 feature@0x46A610=1` and `FEATOWN skip=1`. Fixture: `scenarios/feat-forest.json` (Two
 Continents: units parked two tile rows behind a tree row, a lab wreck, a walking commander).
 
+**Terrain is `terr.on`** — tokens `log`, `passive`, `over`, `key=N` — on its own patch,
+`terrown.on`, which tacli auto-arms at launch when `terr.on` exists. It has a **three-way**
+A/B lever rather than two: `passive` = the engine draws, we emit nothing; `over` = ours drawn
+on top of the engine's own terrain, which is the pixel-parity test (diff `shot` against
+`glshot` — a terrain-only band must differ by **zero** pixels); default = ours, with the
+engine's terrain pass *and its fog overlay* skipped. Verify `terrown: ARMED
+terrain@0x483FA0=1 fog@0x4848E0=1 key=254` and `TERROWN skip=1 filled=1`.
+
+Three things about this one are unlike the other passes:
+
+- **The engine's frame inside the viewport becomes a flat fill of one palette index** (the
+  key, 254 by default) in place of the terrain blit, and the composite then shows the engine's
+  frame **only** where it is *not* the key — that is how health bars, nanoframe wireframes,
+  the build cursor and chat still reach the screen. So `tacli shot` inside the viewport is
+  supposed to be ~99.9 % one flat colour while owned; that is the ownership proof, not a bug.
+  `key=N` moves it if a mod's UI ever uses 254.
+- **It owns the fog overlay too**, so `terr.on` off/`passive` restores *both*. If the grey
+  band ever disappears, check `native: … fog=N los=N` in the log before suspecting the shader:
+  fog is on whenever the grid uploaded, and `los` is the engine's raw `LosType`.
+- **Without `terrown.on` it refuses to draw at all**, and says so:
+  `terr: … (NOTHING EMITTED: terrown.on must exist at DLL attach — arm it before launch,
+  not after)`. Our terrain is opaque and covers the whole viewport, so drawing it with no
+  key to invert against would hide every engine overlay and still *look* right. Arming
+  `terr.on` after launch therefore does nothing visible — relaunch.
+
+`key=N` is re-read with the rest of the tokens, so dropping the token restores 254, and
+changing it live hands the draw back for one frame so the fill and the composite can never
+disagree about which index they mean.
+
 **Particles (smoke, fire, wakes, nanolathe) are `sfx.on`** — tokens `log`, `passive`,
 `nosmoke`, `nofire`, `nowake`, `nonano` — on the same `fxown.on` patch set (tacli auto-arms
 it when either `fx.on` or `sfx.on` exists), with its own live skip: `arm sfx.on="log

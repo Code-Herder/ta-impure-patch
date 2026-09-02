@@ -28,8 +28,17 @@ int tagpu_detour_write(unsigned int va, const unsigned char* bytes, int n);
 
 /* Prologue detour: while *flag is set the function returns at once with
    `ret retn`; otherwise the stolen prologue bytes run and control resumes at
-   va + nst. `nst` must be 5 or 6 and must end on an instruction boundary.
-   1 on success. */
+   va + nst. `nst` must be 5..16 and must end on an instruction boundary (the
+   bytes past the 5-byte jmp are NOPped). 1 on success. */
 int tagpu_detour_leaf(unsigned int va, const unsigned char* stolen, int nst,
                       volatile unsigned char* flag, unsigned char retn);
+
+/* Same, but the skipped path is not empty: it calls `fn` with the function's
+   FIRST stack argument before unwinding with `ret retn`. Registers and flags
+   are preserved across the call (pushad/popad). Used where taking an engine
+   call over still leaves us something to do in its place — the terrain fill
+   and the fog grid's lazy rebuild (tagpu_terrown.c). */
+int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst,
+                           volatile unsigned char* flag, unsigned char retn,
+                           void (__cdecl *fn)(void*));
 #endif

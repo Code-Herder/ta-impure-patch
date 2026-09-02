@@ -474,3 +474,19 @@ this note's frame map — the chain and hook table above remain valid:
   (def Height≥10); flat features draw under everything in a pre-pass.
 - **There is no destination depth plane.** `0x4B90A0` merges composite↔composite only (cargo);
   every sprite→screen path is colour-only — scene ordering is purely the painter's row sweep.
+
+## What is left of this frame map (2026-09-02, after G13b)
+
+Everything in the world half of the chain above is now drawn by our GL passes, and the
+engine's own calls for it are detoured away: units and wrecks (`owndraw`), weapon fire,
+explosions and particles (`fxown`), features (`featown`), and — as of G13b — **the terrain
+blit `0x483FA0` and the fog overlay `0x4848E0`** (`terrown`). `DrawGameScreen` still runs
+in full; what it now produces inside the viewport rect is a **flat fill of one palette
+index** (the composite key), with nothing on it but the overlays we have yet to take:
+health bars at `~0x469BD7`, nanoframe wireframes, the build-cursor rect, chat and dialogs.
+
+That inverts the compositing rule this note's Lock/Unlock story implies. The engine's
+finished offscreen is no longer the picture our overlay decorates — it is a **mask**
+telling the composite which pixels the engine still owns. Detail: [terrain &
+depth](terrain-depth.html) §7. The Lock/Unlock heartbeat is unchanged and still the
+"frame is done" fence.
