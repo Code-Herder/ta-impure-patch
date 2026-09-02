@@ -15,6 +15,7 @@
 #include "tagpu_suppress.h"
 #include "tagpu_owndraw.h"
 #include "tagpu_fxown.h"
+#include "tagpu_featown.h"
 #include "tagpu_weapons.h"
 #include "utils.h"
 #include "versionhelpers.h"
@@ -80,6 +81,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            0x4211D0/0x4B7F90), all disjoint from the detours above. No-op unless
            "tagpu_fxown.on" exists; byte-match guarded, all-or-nothing. */
         tagpu_fxown_init();
+
+        /* tagpu: own the engine's feature draw (G13a). No-op unless
+           "tagpu_featown.on" exists; byte-match guarded; one leaf,
+           0x46A610, disjoint from every other detour. */
+        tagpu_featown_init();
 
         /* tagpu: 1..N weapons per unit — the first module that changes the
            simulation, in its own file behind its own gate. No-op unless

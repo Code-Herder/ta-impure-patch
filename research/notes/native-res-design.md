@@ -58,7 +58,7 @@ integer-anchored. Everything else about it is perfect (engine does binning/fog/U
 | Service | Engine gives the composite path | Native pass must |
 |---|---|---|
 | Occlusion vs tall features | painter's row sweep | depth scaffold (below) |
-| Fog of war | fog pass remaps unit pixels after draw | per-fragment fog from the LOS maps |
+| Fog of war | fog pass remaps unit pixels after draw | per-fragment fog from the engine's **fog grid** (G13c; the LOS maps were tried first and do not reproduce the overlay) |
 | Shadows | silhouette alpha-blit inside blit 0x459200 | re-create (shadows-cloak.html rules) |
 | Cloak | ALP 50/50 blend on the blit path | true alpha (an upgrade, G12d) |
 | Selection circles / health bars | drawn over units in 8bpp | draw our own (or accept them under us, stage 1) |
@@ -102,13 +102,21 @@ scales the composed frame to the display exactly as it scales the engine frame t
 
 ## Fog per fragment
 
-From [terrain & depth §5.3](terrain-depth.html): visible = LOS counter byte map
-(`main+0x1B63 + localId·0x14B + 0x7C`, 32-px tiles, tile = `(wx>>5, (wz−alt/2)>>5)`,
-localId byte `main+0x2A43`); explored = `*(main+0x14273)` u16 bit `localId`; respect
-`LosType(main+0x14281)` modes. Unexplored → discard (black); explored-dark → darken
-(match the engine's fog LUT at `*(TAProgram+0xCC)` or a plain factor); visible → lit.
-Smooth fog edges come free from per-fragment sampling (better than the engine's 32-px
-cells — allowed, it reveals nothing extra).
+**SUPERSEDED 2026-09-02 by G13c — the plan below was implemented and is wrong.** It read:
+~~visible = the LOS counter byte map (`main+0x1B63 + localId·0x14B + 0x7C`), explored =
+`*(main+0x14273)` u16 bit `localId`, sampled per fragment; smooth edges come free.~~
+Sampling the *source* maps does not reproduce the engine's overlay: the overlay is driven
+by the view-anchored corner-mask grid behind `*(main+0x1421F)`, whose lattice is offset
+half a cell from the map cells and whose shape is a 4-bit corner mask, and the source maps
+were measured reporting "explored" across a band the engine paints solid black.
+
+What the passes actually do now (one shared rule, `tagpu_glsl.h`): upload the grid as an
+RG8 texture — its two bytes per cell *are* `(unexplored mask, out-of-LOS mask)` — and take
+bilinear coverage over the four corner bits, thresholded at 0.5. Smooth edges still come
+free, and they land where the engine's do. The explored-dark darken **is** the fog LUT at
+`*(TAProgram+0xCC)`, applied to the palette index (a plain factor is visibly too dark).
+Units and effects are *hidden* in grey, not darkened. Full write-up:
+[features §9](features.html); geometry in [terrain & depth §5.2](terrain-depth.html).
 
 ## Staging (each stage is a live demo)
 

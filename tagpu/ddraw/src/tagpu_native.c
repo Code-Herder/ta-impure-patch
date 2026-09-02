@@ -66,6 +66,7 @@
 #include "tagpu_hires.h"
 #include "tagpu_fx.h"
 #include "tagpu_sfx.h"
+#include "tagpu_feat.h"
 #include "tagpu_glsl.h"
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
@@ -79,14 +80,13 @@
 #define OFF_VIEW_W   0x37E37
 #define OFF_VIEW_H   0x37E3B
 #define OFF_GFXOPT   0x37F06   /* bit2 Shadow, bit3 TShadow                 */
-#define OFF_MAPPED   0x14273   /* u16 per 32-px tile, bit p = explored      */
+#define TAPROG_PP    0x0051FBD0u
+#define PROG_FOGLUT  0xCC      /* u8[256] fog shade remap (0x4BFE10)        */
+#define OFF_FOGGRID  0x1421F   /* -> {u16* buf, cols, rows, cells}: the      
+                                  engine screen fog grid, 4-bit corner masks
+                                  per 32-px view cell (terrain-depth.md 5)  */
 #define OFF_LOSTYPE  0x14281   /* u16: b0 mapping, b1 true LOS              */
 #define OFF_WATCHED  0x2A42    /* byte watched player id                    */
-#define OFF_PLAYERS  0x1B63    /* PlayerStruct[10], stride 0x14B            */
-#define PL_STRIDE    0x14B
-#define PL_LOSMAP    0x7C      /* u8* LOS counter map                       */
-#define PL_LOSW      0x80
-#define PL_LOSH      0x84
 #define UNIT_STRIDE  0x118
 #define U_STATE      0x110
 #define U_XPOS       0x6C
@@ -211,17 +211,26 @@ static int    s_ss     = 1;            /* 2x supersample (tagpu_ss.off)     */
 static int    s_subpix = 1;            /* sub-pixel motion (tagpu_subpix.off)*/
 static int    s_spxlog = 0;            /* anchor filmstrip (tagpu_spxlog.on) */
 static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_palTex;
-static GLuint s_losTex, s_mapTex, s_cprog, s_cvao, s_cvbo;
+static GLuint s_fogTex, s_fogLutTex, s_cprog, s_cvao, s_cvbo;
 static GLuint s_fbo2, s_colTex2, s_depTex2, s_dprog;
-static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uScafOn, s_uScafP;
+static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
+              s_uScafOn, s_uScafP;
 static GLint  s_uWaterT, s_uWaterMode, s_uDigT;
 static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepthScale;
 static float  s_zoom = 1.0f;
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
-static int    s_losW = 0, s_losH = 0;
+static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
+static const unsigned short* s_fogGrid = NULL;
+static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
+/* world origin of fog grid cell 0 on one axis: the builder's rounded eye>>5
+   turned back into world px, i.e. 32*col0 + 16 (0x4843C0 head, 0x4848E0).
+   `%` truncating toward zero is DELIBERATE, not a floor-mod bug: the builder
+   computes col0 as ((eye + (sign & 31)) >> 5) - 1, which is C's truncating
+   division, so a floor-based remainder would disagree with the engine for a
+   negative eye (eye = -20: engine origin -16, floor would say -48). */
+static int fog_org(int eye) { int r = eye % 32; return eye + (r > 15 ? 16 : -16) - r; }
 static float  s_verts[MAXNV * NVST];
-static unsigned char s_losBuf[512 * 512], s_mapBuf[512 * 512];
 
 /* material constants copied per frame from render3do's calibration */
 static const float SH_V[3] = { 0.0f, 0.8944f, -0.4472f };
@@ -258,14 +267,13 @@ static const char* FS =
     "uniform sampler2D uLUT;\n"
     "uniform sampler2D uPal;\n"              /* 256x1 RGBA live palette        */
     TAGPU_GLSL_SCAF_UNIFORMS                  /* G12a scaffold, R8, viewport    */
-    "uniform sampler2D uLos;\n"              /* LOS counter bytes, 32px tiles  */
-    "uniform sampler2D uMap;\n"              /* explored bits, 32px tiles      */
+    TAGPU_GLSL_FOG_UNIFORMS
     "uniform int uShadow;\n"
     "uniform float uAlpha;\n"
-    "uniform int uFog;\n"                    /* bit0 mapping on, bit1 true LOS */
     "uniform float uWaterT;\n"              /* vy <= this is under water      */
     "uniform int uWaterMode;\n"             /* 1 erase (enemy), 2 tint (own)  */
     "uniform float uDigT;\n"                /* vy <= this is below ground     */
+    TAGPU_GLSL_FOG_FN
     "void main(){\n"
     "  float idx;\n"
     "  if (vUV.x < 0.0) { idx = vFC.x; }\n"
@@ -276,6 +284,8 @@ static const char* FS =
     /* scaffold occlusion: nearer stamped rows hide this fragment (one copy
        of the rule, shared with the effects shader: tagpu_glsl.h) */
     TAGPU_GLSL_SCAF_TEST
+    /* fog before the shadow return, or a hidden unit keeps its shadow */
+    TAGPU_GLSL_FOG_DISCARD
     /* waterline / digger clipping (shadows-cloak.md §3 depth-bias rules):
        the engine erases or tints composite pixels whose depth (= vertex
        height + bias) is at or below the water line; shadows are always
@@ -284,21 +294,13 @@ static const char* FS =
     "  if (uShadow == 1) { if (vVY <= uWaterT) discard;\n"
     "                      frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
     "  idx = texelFetch(uLUT, ivec2(int(idx*255.0+0.5), int(vShade*31.0+0.5)), 0).r;\n"
-    "  vec3 rgb = texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb;\n"
+    "  int pi = int(idx*255.0+0.5);\n"
+    TAGPU_GLSL_FOG_SHADE("pi")
+    "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
     /* engine water table (prog+0xD0): r/2, g/2, b/2+0x32 */
     "  if (vVY <= uWaterT) {\n"
     "    if (uWaterMode == 1) discard;\n"
     "    rgb = rgb * 0.5 + vec3(0.0, 0.0, 50.0/255.0);\n"
-    "  }\n"
-    /* fog: 32-px LOS tiles, engine rules (terrain-depth.md 5.3) */
-    "  if ((uFog & 1) == 1) {\n"
-    "    ivec2 t = ivec2(int(vWorld.x) >> 5, int(vWorld.y) >> 5);\n"
-    "    float ex = texelFetch(uMap, t, 0).r;\n"
-    "    if (ex < 0.5/255.0) discard;\n"            /* unexplored: engine draws nothing */
-    "    if ((uFog & 2) == 2) {\n"
-    "      float lit = texelFetch(uLos, t, 0).r;\n"
-    "      if (lit < 0.5/255.0) rgb *= 0.55;\n"     /* explored, out of LOS  */
-    "    }\n"
     "  }\n"
     /* the FBO is PREMULTIPLIED: additive content (effects flashes) can then
        ride the same composite as (rgb, alpha 0) */
@@ -386,6 +388,8 @@ static void init_gl(void)
     s_uDigT      = glGetUniformLocation(s_prog, "uDigT");
     s_uAlpha  = glGetUniformLocation(s_prog, "uAlpha");
     s_uFog    = glGetUniformLocation(s_prog, "uFog");
+    s_uFogOrg = glGetUniformLocation(s_prog, "uFogOrg");
+    s_uFogDim = glGetUniformLocation(s_prog, "uFogDim");
     s_uScafOn = glGetUniformLocation(s_prog, "uScafOn");
     s_uScafP  = glGetUniformLocation(s_prog, "uScafP");
     s_uSS     = glGetUniformLocation(s_prog, "uSS");
@@ -399,8 +403,8 @@ static void init_gl(void)
     glUniform1i(glGetUniformLocation(s_prog, "uLUT"),   1);
     glUniform1i(glGetUniformLocation(s_prog, "uPal"),   2);
     glUniform1i(glGetUniformLocation(s_prog, "uScaf"),  3);
-    glUniform1i(glGetUniformLocation(s_prog, "uLos"),   4);
-    glUniform1i(glGetUniformLocation(s_prog, "uMap"),   5);
+    glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 4);
+    glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  5);
     glUseProgram(0);
 
     GLuint cvs = mksh(GL_VERTEX_SHADER, CVS), cfs = mksh(GL_FRAGMENT_SHADER, CFS);
@@ -451,8 +455,8 @@ static void init_gl(void)
     glBindVertexArray(0);
 
     tex2d(&s_palTex, GL_NEAREST);
-    tex2d(&s_losTex, GL_NEAREST);
-    tex2d(&s_mapTex, GL_NEAREST);
+    tex2d(&s_fogTex, GL_NEAREST);
+    tex2d(&s_fogLutTex, GL_NEAREST);
     tex2d(&s_colTex, GL_NEAREST);
     tex2d(&s_depTex, GL_NEAREST);
     tex2d(&s_colTex2, GL_LINEAR);          /* LINEAR = the 2:1 box filter */
@@ -884,7 +888,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        fog and palette set up here and draws into this FBO */
     int fxOn = tagpu_fx_armed(f->frame_counter);
     int sfxOn = tagpu_sfx_armed(f->frame_counter);
-    if (!s_armed && !fxOn && !sfxOn) return;
+    int featOn = tagpu_feat_armed(f->frame_counter);
+    if (!s_armed && !fxOn && !sfxOn && !featOn) return;
     if (s_state == 0) init_gl();
     if (s_state != 1 || !tagpu_r3d_ensure()) return;
 
@@ -915,38 +920,75 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     unsigned lostype = *(unsigned short*)(ta + OFF_LOSTYPE);
     int watched = *(unsigned char*)(ta + OFF_WATCHED);
 
-    /* ---- LOS/MAPPED upload (32-px tiles) ---- */
+    /* ---- fog upload: the engine's own screen fog grid ----
+       NOT the LOS/MAPPED source maps. The engine's overlay (0x4848E0) is
+       driven entirely by the grid 0x4843C0 builds, and reading the source
+       maps per fragment does not reproduce it: measured on Two Continents,
+       MAPPED reports explored across a whole band the engine paints solid
+       black. The grid is by construction what the engine drew, it is tiny
+       (30x24 here) and it carries the black/grey split in its two bytes.
+       Its cells are laid out exactly as an RG8 texture — low byte = the
+       unexplored corner mask, high byte = the out-of-LOS one — so the engine
+       buffer uploads with no conversion. */
     int fogMode = 0;
+    s_fogGrid = NULL; s_fogLut = 0;
     {
-        const char* pl = ta + OFF_PLAYERS + (size_t)watched * PL_STRIDE;
-        const unsigned char* los = *(const unsigned char* const*)(pl + PL_LOSMAP);
-        int lw = *(const int*)(pl + PL_LOSW), lh = *(const int*)(pl + PL_LOSH);
-        const unsigned short* mapd = *(const unsigned short* const*)(ta + OFF_MAPPED);
-        if (ptr_ok(los) && ptr_ok(mapd) && lw > 0 && lh > 0 && lw <= 512 && lh <= 512 &&
-            !IsBadReadPtr(los, (SIZE_T)lw * lh) &&
-            !IsBadReadPtr(mapd, (SIZE_T)lw * lh * 2)) {
-            int i, n = lw * lh;
-            unsigned short wbit = (unsigned short)(1u << watched);
-            for (i = 0; i < n; i++) {
-                s_losBuf[i] = los[i] ? 255 : 0;
-                s_mapBuf[i] = (mapd[i] & wbit) ? 255 : 0;
+        const int* fg = *(const int* const*)(ta + OFF_FOGGRID);
+        if (ptr_ok(fg) && !IsBadReadPtr(fg, 16)) {
+            const unsigned short* buf = (const unsigned short*)(size_t)fg[0];
+            int cols = fg[1], rows = fg[2], cells = fg[3];
+            if (ptr_ok(buf) && cols > 0 && rows > 0 && cols <= 256 && rows <= 256 &&
+                cells == cols * rows && !IsBadReadPtr(buf, (SIZE_T)cells * 2)) {
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                x_glActiveTexture(GL_TEXTURE4);
+                glBindTexture(GL_TEXTURE_2D, s_fogTex);
+                if (cols != s_fogCols || rows != s_fogRows)
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, cols, rows, 0,
+                                 GL_RG, GL_UNSIGNED_BYTE, buf);
+                else
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cols, rows,
+                                    GL_RG, GL_UNSIGNED_BYTE, buf);
+                x_glActiveTexture(GL_TEXTURE0);
+                s_fogGrid = buf; s_fogCols = cols; s_fogRows = rows;
+                /* the overlay puts cell (0,0) at screen vp + (+-16 - eye%32);
+                   in world terms 32*col0 + 16, col0 being the builder's
+                   half-cell-rounded eye>>5. The grid lattice is offset half a
+                   cell from the map cells: a corner IS a map cell's centre. */
+                s_fogOrgX = fog_org(eyeX);
+                s_fogOrgY = fog_org(eyeY);
+                fogMode = (lostype & 3);
+                /* the grey band's darken is a palette remap, not a scale:
+                   0x4BFE10 rewrites every pixel p as shadeLUT[p] through
+                   *(TAProgram+0xCC) (256 bytes, everything folded into the
+                   dark-grey ramp). Cheap enough to re-upload each frame. */
+                {
+                    const char* prog = *(const char* const*)TAPROG_PP;
+                    const unsigned char* t = NULL;
+                    static unsigned char ident[256];
+                    if ((size_t)prog > 0x400000u && !IsBadReadPtr(prog, 0x100)) {
+                        const unsigned char* p = 
+                            *(const unsigned char* const*)(prog + PROG_FOGLUT);
+                        if (ptr_ok(p) && !IsBadReadPtr(p, 256)) t = p;
+                    }
+                    s_fogLut = t ? 1 : 0;
+                    if (!t) {
+                        /* identity, so an unreadable table degrades to "grey is
+                           not darkened" — never to "every grey pixel is palette
+                           index 0", which is solid black over the whole band */
+                        int i;
+                        for (i = 0; i < 256; i++) ident[i] = (unsigned char)i;
+                        t = ident;
+                    }
+                    /* 256 bytes: always re-spec, so no init flag can survive a
+                       context reset and leave the texture storageless (which
+                       has the same all-black failure mode) */
+                    x_glActiveTexture(GL_TEXTURE5);
+                    glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 1, 0,
+                                 GL_RED, GL_UNSIGNED_BYTE, t);
+                    x_glActiveTexture(GL_TEXTURE0);
+                }
             }
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            x_glActiveTexture(GL_TEXTURE4);
-            glBindTexture(GL_TEXTURE_2D, s_losTex);
-            if (lw != s_losW || lh != s_losH)
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, lw, lh, 0, GL_RED, GL_UNSIGNED_BYTE, s_losBuf);
-            else
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, lw, lh, GL_RED, GL_UNSIGNED_BYTE, s_losBuf);
-            x_glActiveTexture(GL_TEXTURE5);
-            glBindTexture(GL_TEXTURE_2D, s_mapTex);
-            if (lw != s_losW || lh != s_losH)
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, lw, lh, 0, GL_RED, GL_UNSIGNED_BYTE, s_mapBuf);
-            else
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, lw, lh, GL_RED, GL_UNSIGNED_BYTE, s_mapBuf);
-            s_losW = lw; s_losH = lh;
-            x_glActiveTexture(GL_TEXTURE0);
-            fogMode = (lostype & 3);
         }
     }
 
@@ -1020,11 +1062,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (cloaked && owner != watched) continue;    /* enemies never see cloak */
         /* fog gate at the anchor tile: engine draws nothing there */
         if (fogMode & 1) {
-            int tx = (wx >> 5), ty = ((wy - wz / 2) >> 5);
-            if (tx >= 0 && ty >= 0 && tx < s_losW && ty < s_losH) {
-                if (!s_mapBuf[ty * s_losW + tx]) continue;
-                if ((fogMode & 2) && owner != watched && !s_losBuf[ty * s_losW + tx]) continue;
-            }
+            int fog = tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows,
+                                   s_fogOrgX, s_fogOrgY, wx, wy - wz / 2);
+            if (fog & 1) continue;                    /* unexplored: black    */
+            /* grey shows terrain, never units — the engine draws no unit it
+               cannot currently see. Our own stay: they are what makes LOS. */
+            if ((fog & 2) && owner != watched) continue;
         }
         /* sub-pixel evidence: with tagpu_spxlog.on present, log the emitted
            anchor of every SELECTED unit each present frame (60 Hz numeric
@@ -1151,11 +1194,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 float ay = (float)(ry - rz / 2 - eyeY + vpT);
                 if (ax < vpL - 256 || ax > vpL + vw + 256 ||
                     ay < vpT - 256 || ay > vpT + vh + 256) continue;
-                if (fogMode & 1) {          /* unexplored: engine draws nothing */
-                    int fx2 = rx >> 5, fy2 = (ry - rz / 2) >> 5;
-                    if (fx2 >= 0 && fy2 >= 0 && fx2 < s_losW && fy2 < s_losH &&
-                        !s_mapBuf[fy2 * s_losW + fx2]) continue;
-                }
+                /* wreckage is remembered furniture: hidden only where the
+                   map is unexplored, visible (darkened) in grey */
+                if ((fogMode & 1) &&
+                    (tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows,
+                                  s_fogOrgX, s_fogOrgY, rx, ry - rz / 2) & 1))
+                    continue;
                 NU* n2 = &units[nu++];
                 n2->o3 = o3; n2->u = NULL; n2->ax = ax; n2->ay = ay; n2->gy = ay;
                 n2->wx0 = (float)rx; n2->wz0 = (float)(ry - rz / 2);
@@ -1169,8 +1213,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     }
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
-    int nfx = 0;
-    if (fxOn || sfxOn) {
+    int nfx = 0, nfeat = 0;
+    if (fxOn || sfxOn || featOn) {
         fv.ta = ta; fv.eyeX = eyeX; fv.eyeY = eyeY;
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.gw = gw; fv.gh = gh; fv.ss = s_ss ? 2 : 1; fv.fogMode = fogMode;
@@ -1186,19 +1230,28 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            the fx models fxKey-1.8), 7 after the explosions (above the fx
            sprites at fxKey+3), 8 after the airborne sweep, 9 before the fog */
         {
+            /* layers 0..2 are drawn before the flat-feature pre-pass and 3..4
+               after it, so the flat band (0.40..0.50, tagpu_feat.c) sits
+               between them */
             int L;
-            for (L = 0; L <= 4; L++) fv.encLayer[L] = 0.5f;
+            for (L = 0; L <= 2; L++) fv.encLayer[L] = 0.30f;
+            fv.encLayer[3] = fv.encLayer[4] = 0.60f;
             fv.encLayer[5] = fv.encLayer[6] = fxKey - 2.0f;
             fv.encLayer[7] = fxKey + 5.0f;
             fv.encLayer[8] = airKey + 3.0f;
             fv.encLayer[9] = airKey + 5.0f;
         }
-        fv.los = fogMode ? s_losBuf : NULL; fv.mapd = fogMode ? s_mapBuf : NULL;
-        fv.losW = s_losW; fv.losH = s_losH;
+        fv.fogGrid = fogMode ? s_fogGrid : NULL;
+        fv.fogCols = s_fogCols; fv.fogRows = s_fogRows;
+        fv.fogOrgX = s_fogOrgX; fv.fogOrgY = s_fogOrgY;
+        fv.fogTex = s_fogTex; fv.fogLut = s_fogLutTex;
+        fv.r0 = r0; fv.rows = rows;
         fv.frame_counter = f->frame_counter;
-        nfx = tagpu_fx_gather(&fv);
+        /* features first: they own the depth the units are tested against */
+        if (featOn) nfeat = tagpu_feat_gather(&fv);
+        if (fxOn || sfxOn) nfx = tagpu_fx_gather(&fv);
     }
-    if (nu == 0 && nfx == 0) return;
+    if (nu == 0 && nfx == 0 && nfeat == 0) return;
 
     /* ---- build geometry (body); shadow reuses it with an offset ---- */
     static int firstv[513];
@@ -1227,7 +1280,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         for (k = 0; k < nm; k++) nv = emit_fx_model(tagpu_fx_model(k), nv, fxKey);
     }
     int fxLast = nv;
-    if (nv == 0 && nfx == 0) return;
+    if (nv == 0 && nfx == 0 && nfeat == 0) return;
 
     /* ---- native selection rects (ui-markers: the ONLY marker interleaved
        with unit draws — the engine's is unreadable under our pixels, redraw
@@ -1292,6 +1345,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glScissor(vpL * ss, vpT * ss, vw * ss, vh * ss);
     }
 
+    /* features (trees, rocks, splats, GAF wrecks) draw FIRST and write real
+       depth, so every unit body below is occluded by them through the depth
+       buffer — this is what the G12a scaffold was standing in for. Its own
+       program; the unit program and VAO are (re)bound right after. */
+    if (nfeat) {
+        glEnable(GL_BLEND);
+        tagpu_feat_render(&fv, s_palTex);
+    }
+
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)gw, (float)gh);
     x_glUniform1f(s_uSS, (float)ss);
@@ -1303,7 +1365,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glUniform1f(s_uZoomF, s_zoom);
         x_glUniform2f(s_uZoomCF, zcx, zcy);
     }
-    glUniform1i(s_uFog, fogMode);
+    x_glUniform2f(s_uFogOrg, (float)s_fogOrgX, (float)s_fogOrgY);
+    x_glUniform2f(s_uFogDim, (float)s_fogCols, (float)s_fogRows);
     x_glUniform1f(s_uDepthScale, depthScale);
     glUniform1i(s_uScafOn, scafOn ? 1 : 0);
     x_glUniform4f(s_uScafP, (float)vpL, (float)vpT, (float)vw, (float)vh);
@@ -1316,20 +1379,26 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     x_glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, scafOn ? tagpu_scaffold_texref() : 0);
     x_glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, s_losTex);
+    glBindTexture(GL_TEXTURE_2D, s_fogTex);
     x_glActiveTexture(GL_TEXTURE5);
-    glBindTexture(GL_TEXTURE_2D, s_mapTex);
+    glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
     x_glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);
     glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)nv * NVST * 4, s_verts);
 
+    /* uFog bit1 = hide in grey rather than darken. Units the watched player
+       cannot see are not drawn at all; wreckage is furniture and stays, and
+       our own units make the LOS they stand in. */
+#define FOGW(i) ((fogMode & 1) | \
+                 ((units[i].feat || units[i].owner == watched) ? 0 : 2))
     glEnable(GL_BLEND);
     x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied */
 
     /* selection rects first — the engine draws them under the unit sprite */
     if (nv > lineStart) {
+        glUniform1i(s_uFog, fogMode & 1);
         glUniform1i(s_uShadow, 0);
         x_glUniform1f(s_uAlpha, 1.0f);
         x_glUniform2f(s_uOffset, 0.0f, 0.0f);
@@ -1348,6 +1417,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glDepthMask(GL_FALSE);
         for (i = 0; i < nu; i++) {
             if (!units[i].shadow) continue;
+            glUniform1i(s_uFog, FOGW(i));
             x_glUniform2f(s_uOffset, 5.0f, (float)(units[i].gy - units[i].ay));
             x_glUniform1f(s_uWaterT, units[i].waterT);
             x_glUniform1f(s_uDigT, units[i].digT);
@@ -1359,6 +1429,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     glUniform1i(s_uShadow, 0);
     x_glUniform2f(s_uOffset, 0.0f, 0.0f);
     for (i = 0; i < nu; i++) {
+        glUniform1i(s_uFog, FOGW(i));
         x_glUniform1f(s_uAlpha, units[i].cloaked ? 0.5f : 1.0f);
         x_glUniform1f(s_uWaterT, units[i].waterT);
         x_glUniform1f(s_uDigT, units[i].digT);
@@ -1368,14 +1439,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* effects: models in the unit pipeline, then lines/sprites (own program;
        depth test still on so aircraft cover them, depth writes off) */
     if (fxLast > fxFirst) {
+        glUniform1i(s_uFog, (fogMode & 1) | 2);
         x_glUniform1f(s_uAlpha, 1.0f);
         x_glUniform1f(s_uWaterT, -1e9f);
         x_glUniform1f(s_uDigT, -1e9f);
         glUniform1i(s_uWaterMode, 0);
         x_glDrawArrays(GL_TRIANGLES, fxFirst, fxLast - fxFirst);
     }
-    if (nfx) tagpu_fx_render(&fv, s_palTex, s_losTex, s_mapTex,
-                             scafOn ? tagpu_scaffold_texref() : 0);
+    if (nfx) tagpu_fx_render(&fv, s_palTex, scafOn ? tagpu_scaffold_texref() : 0);
+#undef FOGW
     x_glDisable(GL_BLEND);
     x_glDisable(GL_DEPTH_TEST);
     if (x_glScissor) x_glDisable(GL_SCISSOR_TEST);
@@ -1411,8 +1483,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         last = f->frame_counter;
         char b[160];
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d%s",
-                  nu - nwr, nwr, nsel, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
+                  "native: %d unit(s) %d wreck(s) %d sel %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d foglut=%d%s",
+                  nu - nwr, nwr, nsel, nv, gw, gh, ss, s_subpix, scafOn, fogMode, s_fogLut,
                   s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
     }
@@ -1466,8 +1538,9 @@ static void pose_dump(const char* u, const char* o3)
 void tagpu_native_glreset(void)
 {
     s_state = 0; s_fboW = s_fboH = s_fboSS = 0; s_palInit = 0;
-    s_losW = s_losH = 0;
+    s_fogCols = s_fogRows = 0; s_fogGrid = NULL; s_fogLut = 0;
     tagpu_fx_glreset();
+    tagpu_feat_glreset();
 }
 
 int tagpu_native_wrecks_armed(void)
