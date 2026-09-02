@@ -66,6 +66,7 @@
 #include "tagpu_hires.h"
 #include "tagpu_fx.h"
 #include "tagpu_sfx.h"
+#include "tagpu_feat.h"
 #include "tagpu_glsl.h"
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
@@ -884,7 +885,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        fog and palette set up here and draws into this FBO */
     int fxOn = tagpu_fx_armed(f->frame_counter);
     int sfxOn = tagpu_sfx_armed(f->frame_counter);
-    if (!s_armed && !fxOn && !sfxOn) return;
+    int featOn = tagpu_feat_armed(f->frame_counter);
+    if (!s_armed && !fxOn && !sfxOn && !featOn) return;
     if (s_state == 0) init_gl();
     if (s_state != 1 || !tagpu_r3d_ensure()) return;
 
@@ -1169,8 +1171,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     }
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
-    int nfx = 0;
-    if (fxOn || sfxOn) {
+    int nfx = 0, nfeat = 0;
+    if (fxOn || sfxOn || featOn) {
         fv.ta = ta; fv.eyeX = eyeX; fv.eyeY = eyeY;
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.gw = gw; fv.gh = gh; fv.ss = s_ss ? 2 : 1; fv.fogMode = fogMode;
@@ -1186,8 +1188,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            the fx models fxKey-1.8), 7 after the explosions (above the fx
            sprites at fxKey+3), 8 after the airborne sweep, 9 before the fog */
         {
+            /* layers 0..2 are drawn before the flat-feature pre-pass and 3..4
+               after it, so the flat band (0.40..0.50, tagpu_feat.c) sits
+               between them */
             int L;
-            for (L = 0; L <= 4; L++) fv.encLayer[L] = 0.5f;
+            for (L = 0; L <= 2; L++) fv.encLayer[L] = 0.30f;
+            fv.encLayer[3] = fv.encLayer[4] = 0.60f;
             fv.encLayer[5] = fv.encLayer[6] = fxKey - 2.0f;
             fv.encLayer[7] = fxKey + 5.0f;
             fv.encLayer[8] = airKey + 3.0f;
@@ -1195,10 +1201,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         fv.los = fogMode ? s_losBuf : NULL; fv.mapd = fogMode ? s_mapBuf : NULL;
         fv.losW = s_losW; fv.losH = s_losH;
+        fv.r0 = r0; fv.rows = rows;
         fv.frame_counter = f->frame_counter;
-        nfx = tagpu_fx_gather(&fv);
+        /* features first: they own the depth the units are tested against */
+        if (featOn) nfeat = tagpu_feat_gather(&fv);
+        if (fxOn || sfxOn) nfx = tagpu_fx_gather(&fv);
     }
-    if (nu == 0 && nfx == 0) return;
+    if (nu == 0 && nfx == 0 && nfeat == 0) return;
 
     /* ---- build geometry (body); shadow reuses it with an offset ---- */
     static int firstv[513];
@@ -1227,7 +1236,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         for (k = 0; k < nm; k++) nv = emit_fx_model(tagpu_fx_model(k), nv, fxKey);
     }
     int fxLast = nv;
-    if (nv == 0 && nfx == 0) return;
+    if (nv == 0 && nfx == 0 && nfeat == 0) return;
 
     /* ---- native selection rects (ui-markers: the ONLY marker interleaved
        with unit draws — the engine's is unreadable under our pixels, redraw
@@ -1290,6 +1299,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (x_glScissor) {
         glEnable(GL_SCISSOR_TEST);
         x_glScissor(vpL * ss, vpT * ss, vw * ss, vh * ss);
+    }
+
+    /* features (trees, rocks, splats, GAF wrecks) draw FIRST and write real
+       depth, so every unit body below is occluded by them through the depth
+       buffer — this is what the G12a scaffold was standing in for. Its own
+       program; the unit program and VAO are (re)bound right after. */
+    if (nfeat) {
+        glEnable(GL_BLEND);
+        tagpu_feat_render(&fv, s_palTex, s_losTex, s_mapTex);
     }
 
     glUseProgram(s_prog);
@@ -1468,6 +1486,7 @@ void tagpu_native_glreset(void)
     s_state = 0; s_fboW = s_fboH = s_fboSS = 0; s_palInit = 0;
     s_losW = s_losH = 0;
     tagpu_fx_glreset();
+    tagpu_feat_glreset();
 }
 
 int tagpu_native_wrecks_armed(void)

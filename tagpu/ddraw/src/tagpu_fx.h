@@ -14,6 +14,8 @@ typedef struct TAGPU_FXVIEW {
     float zoom, zoomCx, zoomCy;  /* the native pass's view zoom (G12d demo)    */
     float encSprite, depthScale; /* this frame's sprite depth key and VS scale */
     float encLayer[10];          /* particle layer n -> depth key (tagpu_sfx)  */
+    int r0, rows;                /* the row sweep's base row and count: a row  */
+                                 /* key is (feat?3:1) + (row-r0)*4 (tagpu_feat)*/
     int vw, vh, scafOn;          /* viewport size; scene-depth scaffold armed  */
     int fogMode;                 /* LosType & 3                                */
     const unsigned char* los;    /* per-32px-tile 255/0 (watched player)       */

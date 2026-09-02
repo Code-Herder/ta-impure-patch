@@ -40,6 +40,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "tagpu_fxown.h"
+#include "tagpu_detour.h"
 
 #define SITE_PROJ_VA   0x00469B22u
 #define SITE_EXPL_VA   0x00469B2Cu
@@ -71,57 +72,21 @@ static void flog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-static unsigned char* stub_alloc(void)
-{
-    return (unsigned char*)VirtualAlloc(NULL, 0x80, MEM_COMMIT | MEM_RESERVE,
-                                        PAGE_EXECUTE_READWRITE);
-}
-
-static void put_rel(unsigned char* p, unsigned int target)
-{
-    int32_t rel = (int32_t)(target - ((unsigned int)p + 4));
-    memcpy(p, &rel, 4);
-}
-
-/* 80 3D <flag> 00 ; cmp byte [flag],0   (7 bytes) */
-static unsigned char* emit_cmp_flag(unsigned char* p, volatile unsigned char* flag)
-{
-    unsigned int a = (unsigned int)(size_t)flag;
-    *p++ = 0x80; *p++ = 0x3D; memcpy(p, &a, 4); p += 4; *p++ = 0x00;
-    return p;
-}
-
-/* C6 05 <flag> <v> ; mov byte [flag],v   (7 bytes) */
-static unsigned char* emit_set_flag(unsigned char* p, volatile unsigned char* flag, unsigned char v)
-{
-    unsigned int a = (unsigned int)(size_t)flag;
-    *p++ = 0xC6; *p++ = 0x05; memcpy(p, &a, 4); p += 4; *p++ = v;
-    return p;
-}
-
-static int patch_bytes(unsigned int va, const unsigned char* bytes, int n)
-{
-    DWORD old;
-    if (!VirtualProtect((void*)(size_t)va, (SIZE_T)n, PAGE_EXECUTE_READWRITE, &old)) return 0;
-    memcpy((void*)(size_t)va, bytes, (size_t)n);
-    VirtualProtect((void*)(size_t)va, (SIZE_T)n, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), (void*)(size_t)va, (SIZE_T)n);
-    return 1;
-}
+/* the stub/patch helpers are shared with tagpu_featown.c (tagpu_detour.c) */
 
 /* call-site -> stub: skip (ret 4) while g_fxown_skip, else jmp the pass */
 static int install_site_proj(void)
 {
-    unsigned char* s = stub_alloc(); unsigned char* p = s;
+    unsigned char* s = tagpu_detour_stub(); unsigned char* p = s;
     unsigned char call5[5];
     if (!s) return 0;
-    p = emit_cmp_flag(p, &g_fxown_skip);
+    p = tagpu_detour_cmp_flag(p, &g_fxown_skip);
     *p++ = 0x74; *p++ = 0x03;                       /* jz +3            */
     *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;          /* ret 4            */
-    *p++ = 0xE9; put_rel(p, PASS_PROJ_VA); p += 4;  /* jmp 0x49BE60     */
+    *p++ = 0xE9; tagpu_detour_rel(p, PASS_PROJ_VA); p += 4;  /* jmp 0x49BE60 */
     call5[0] = 0xE8;
-    { int32_t rel = (int32_t)((unsigned int)s - (SITE_PROJ_VA + 5)); memcpy(call5 + 1, &rel, 4); }
-    return patch_bytes(SITE_PROJ_VA, call5, 5);
+    { int32_t rel = (int32_t)((unsigned int)(size_t)s - (SITE_PROJ_VA + 5)); memcpy(call5 + 1, &rel, 4); }
+    return tagpu_detour_write(SITE_PROJ_VA, call5, 5);
 }
 
 /* call-site -> stub: bracket the real pass with g_fxown_in = g_fxown_skip
@@ -129,7 +94,7 @@ static int install_site_proj(void)
    eax is caller-saved at a call site, so `mov al` is free) */
 static int install_site_expl(void)
 {
-    unsigned char* s = stub_alloc(); unsigned char* p = s;
+    unsigned char* s = tagpu_detour_stub(); unsigned char* p = s;
     unsigned char call5[5];
     unsigned int a;
     if (!s) return 0;
@@ -138,34 +103,12 @@ static int install_site_expl(void)
     a = (unsigned int)(size_t)&g_fxown_in;
     *p++ = 0xA2; memcpy(p, &a, 4); p += 4;                /* mov [in],al   */
     *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x04;   /* push [esp+4] */
-    *p++ = 0xE8; put_rel(p, PASS_EXPL_VA); p += 4;        /* call 0x420B00 (ret 4) */
-    p = emit_set_flag(p, &g_fxown_in, 0);
+    *p++ = 0xE8; tagpu_detour_rel(p, PASS_EXPL_VA); p += 4; /* call 0x420B00 (ret 4) */
+    p = tagpu_detour_set_flag(p, &g_fxown_in, 0);
     *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;                /* ret 4        */
     call5[0] = 0xE8;
-    { int32_t rel = (int32_t)((unsigned int)s - (SITE_EXPL_VA + 5)); memcpy(call5 + 1, &rel, 4); }
-    return patch_bytes(SITE_EXPL_VA, call5, 5);
-}
-
-/* prologue detour: skip (ret n) while *flag, else stolen bytes + resume */
-static int install_leaf(unsigned int va, const unsigned char* stolen, int nst,
-                        volatile unsigned char* flag, unsigned char retn)
-{
-    unsigned char* s = stub_alloc(); unsigned char* p = s;
-    unsigned char jmp5[5];
-    if (!s) return 0;
-    p = emit_cmp_flag(p, flag);
-    *p++ = 0x74; *p++ = 0x03;                       /* jz +3            */
-    *p++ = 0xC2; *p++ = retn; *p++ = 0x00;          /* ret n            */
-    memcpy(p, stolen, (size_t)nst); p += nst;
-    *p++ = 0xE9; put_rel(p, va + (unsigned)nst); p += 4;
-    jmp5[0] = 0xE9;
-    { int32_t rel = (int32_t)((unsigned int)s - (va + 5)); memcpy(jmp5 + 1, &rel, 4); }
-    if (!patch_bytes(va, jmp5, 5)) return 0;
-    if (nst > 5) {                                  /* pad the tail of a 6-byte steal */
-        unsigned char nop = 0x90;
-        patch_bytes(va + 5, &nop, 1);
-    }
-    return 1;
+    { int32_t rel = (int32_t)((unsigned int)(size_t)s - (SITE_EXPL_VA + 5)); memcpy(call5 + 1, &rel, 4); }
+    return tagpu_detour_write(SITE_EXPL_VA, call5, 5);
 }
 
 void tagpu_fxown_init(void)
@@ -182,11 +125,11 @@ void tagpu_fxown_init(void)
     if (!ok) { flog("fxown: NOT armed — engine bytes differ at a patch site"); return; }
     int a = install_site_proj();
     int c = install_site_expl();
-    int d = install_leaf(LEAF_MODEL_VA, MODEL_STOLEN, 5, &g_fxown_skip, 0x10);
-    int e = install_leaf(LEAF_FLASH_VA, FLASH_STOLEN, 6, &g_fxown_skip, 0x10);
-    int f = install_leaf(LEAF_PIECE_VA, PIECE_STOLEN, 5, &g_fxown_skip, 0x0C);
-    int g = install_leaf(LEAF_COPY_VA,  COPY_STOLEN,  6, &g_fxown_in,   0x10);
-    int h = install_leaf(LEAF_SFX_VA,   SFX_STOLEN,   5, &g_fxown_skipSfx, 0x08);
+    int d = tagpu_detour_leaf(LEAF_MODEL_VA, MODEL_STOLEN, 5, &g_fxown_skip, 0x10);
+    int e = tagpu_detour_leaf(LEAF_FLASH_VA, FLASH_STOLEN, 6, &g_fxown_skip, 0x10);
+    int f = tagpu_detour_leaf(LEAF_PIECE_VA, PIECE_STOLEN, 5, &g_fxown_skip, 0x0C);
+    int g = tagpu_detour_leaf(LEAF_COPY_VA,  COPY_STOLEN,  6, &g_fxown_in,   0x10);
+    int h = tagpu_detour_leaf(LEAF_SFX_VA,   SFX_STOLEN,   5, &g_fxown_skipSfx, 0x08);
     g_installed = a && c && d && e && f && g && h;
     _snprintf(b, sizeof b,
         "fxown: %s site.proj=%d site.expl=%d model@0x46BAE0=%d flash@0x4B8EC0=%d piece@0x4211D0=%d copy@0x4B7F90=%d sfx@0x471F90=%d (skips follow tagpu_fx.on / tagpu_sfx.on)",

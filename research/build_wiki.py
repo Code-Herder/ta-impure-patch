@@ -37,6 +37,7 @@ PAGES = [
     ("shadows-cloak",              "Shadows & cloaking",          "Renderer"),
     ("terrain-depth",              "Terrain, features & depth",   "Renderer"),
     ("effects",                    "Effects (fire, explosions, debris)", "Renderer"),
+    ("features",                   "Features (trees, rocks, wreckage)",  "Renderer"),
     ("ui-markers",                 "UI markers",                  "Renderer"),
     ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
 

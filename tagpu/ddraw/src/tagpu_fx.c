@@ -53,6 +53,7 @@
 #include "tagpu_fxown.h"
 #include "tagpu_sfx.h"
 #include "tagpu_glsl.h"
+#include "tagpu_gaf.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define TAPROG_PP     0x0051FBD0u
@@ -106,20 +107,6 @@
 #define D_X        0x16
 #define D_ALT      0x1A
 #define D_Y        0x1E
-#define AS_FRAME   0x00
-#define AS_SEQ     0x08
-#define SQ_N       0x00         /* u16 frame count                           */
-#define SQ_NAME    0x08
-#define SQ_TAB     0x28         /* {GAFFrame*, u32}[] stride 8               */
-#define GF_W       0x00
-#define GF_H       0x02
-#define GF_HOTX    0x04
-#define GF_HOTY    0x06
-#define GF_CK      0x08
-#define GF_COMP    0x09
-#define GF_SUBN    0x0A
-#define GF_SUBALP  0x0B
-#define GF_PIX     0x10
 #define U_OWNER    0xFF
 
 #define MODE_FLAT   TAGPU_FXMODE_FLAT
@@ -132,7 +119,6 @@
 #define MAXMODEL 1024
 #define ATLAS_DIM 2048
 #define ATLAS_MAX 2048
-#define DEC_MAX   512
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 /* the TAProgram block (*0x51FBD0) lives in the exe's own data segment,
@@ -231,7 +217,7 @@ int tagpu_fx_armed(unsigned frame_counter)
 
 /* ---- GL ---- */
 static int    s_state = 0;              /* 0 unloaded, 1 ready, 2 failed     */
-static GLuint s_prog, s_vao, s_vbo, s_atlasTex, s_lhtTex;
+static GLuint s_prog, s_vao, s_vbo, s_lhtTex;
 static GLint  s_uGame, s_uFog, s_uZoom, s_uZoomC, s_uDepthScale;
 static GLint  s_uScafOn, s_uScafP, s_uSS, s_uZoomF, s_uZoomCF;
 /* four buckets, drawn in this order: the particle layers the engine draws
@@ -246,18 +232,14 @@ static int    s_nv[NBUCKET];
 static float  s_encCur = 403.0f;       /* depth key of what is being emitted  */
 static int    s_under = 0;             /* emit sprites/dots into B_UNDER      */
 static int    s_mute = 0;              /* passive: count, emit nothing        */
-static int    s_atlasFull = 0;         /* reset deferred to the next frame    */
 static TAGPU_FXMODEL s_models_[MAXMODEL];
 static int    s_nm = 0;
 
-/* keyed on the frame header address AND its pixel pointer/dims: effect
-   sequences (the flash) are freed when their explosion ends and the address
-   is reused for other frames */
-typedef struct { const void* frame; const void* pix; unsigned short w, h;
-                 float u0, v0, u1, v1; unsigned char ck; char ok; } AtlasEnt;
-static AtlasEnt s_atlas[ATLAS_MAX];
-static int s_atlasN = 0, s_shelfX = 0, s_shelfY = 0, s_shelfH = 0;
-static unsigned char s_dec[DEC_MAX * DEC_MAX];
+/* the shared shelf atlas (tagpu_gaf.c). Its entries are keyed on the frame
+   header AND its pixel pointer/dims: effect sequences (the flash) are freed
+   when their explosion ends and the address is reused for other frames */
+static TAGPU_GAFENT   s_atlasEnts[ATLAS_MAX];
+static TAGPU_GAFATLAS s_atlas;
 static int s_lhtInit = 0;
 static unsigned s_lhtStamp = 0;
 
@@ -385,19 +367,15 @@ static void init_gl(void)
     glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, FXST * 4, (void*)28);
     glBindVertexArray(0);
 
-    glGenTextures(1, &s_atlasTex);
-    glBindTexture(GL_TEXTURE_2D, s_atlasTex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ATLAS_DIM, ATLAS_DIM, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+    tagpu_gaf_atlas_lost(&s_atlas);      /* its texture is made on first use */
+    s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
+    s_atlas.ents = s_atlasEnts; s_atlas.tag = "fx";
+    tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
     glGenTextures(1, &s_lhtTex);
     glBindTexture(GL_TEXTURE_2D, s_lhtTex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glBindTexture(GL_TEXTURE_2D, 0);
-    s_atlasN = 0; s_shelfX = s_shelfY = s_shelfH = 0;
     s_lhtInit = 0;
     s_state = 1;
     flog("fx: GL ready");
@@ -405,120 +383,8 @@ static void init_gl(void)
 
 void tagpu_fx_glreset(void)
 {
-    s_state = 0; s_atlasN = 0; s_shelfX = s_shelfY = s_shelfH = 0; s_lhtInit = 0;
-    s_atlasFull = 0;
-}
-
-/* ---- GAF frames ---- */
-static const unsigned char* frame_sane(const void* g0)
-{
-    const unsigned char* g = (const unsigned char*)g0;
-    if (!ptr_ok(g) || IsBadReadPtr(g, 0x18)) return NULL;
-    int w = *(const unsigned short*)(g + GF_W), h = *(const unsigned short*)(g + GF_H);
-    if (w <= 0 || h <= 0 || w > DEC_MAX || h > DEC_MAX) return NULL;
-    return g;
-}
-
-/* GAF_SequenceIndex2Frame: seq+0x28 entry table, stride 8, dword = frame */
-static const unsigned char* seq_frame(const char* seq, int idx)
-{
-    if (!ptr_ok(seq) || IsBadReadPtr(seq, 0x2C)) return NULL;
-    int n = *(const unsigned short*)(seq + SQ_N);
-    if (idx < 0 || idx >= n || n > 4096) return NULL;
-    const char* tab = seq + SQ_TAB;
-    if (IsBadReadPtr(tab, (SIZE_T)(idx + 1) * 8)) return NULL;
-    return frame_sane(*(const void* const*)(tab + idx * 8));
-}
-static int seq_nframes(const char* seq)
-{
-    if (!ptr_ok(seq) || IsBadReadPtr(seq, 0x2C)) return 0;
-    return *(const unsigned short*)(seq + SQ_N);
-}
-
-/* GAFGetCurrentFramePtrAddr(state): {u16 frame; ...; seq* @+8} */
-static const unsigned char* state_frame(const char* st)
-{
-    const char* seq = *(const char* const*)(st + AS_SEQ);
-    return seq_frame(seq, *(const unsigned short*)(st + AS_FRAME));
-}
-
-/* decode a colour plane into s_dec (ck-filled); 0 if unreadable */
-static int decode_frame(const unsigned char* g, int w, int h)
-{
-    unsigned char ck = g[GF_CK], comp = g[GF_COMP];
-    const unsigned char* px = *(const unsigned char* const*)(g + GF_PIX);
-    if (!ptr_ok(px)) return 0;
-    if (comp == 0) {
-        if (IsBadReadPtr(px, (SIZE_T)w * h)) return 0;
-        int y;
-        for (y = 0; y < h; y++) memcpy(s_dec + (size_t)y * w, px + (size_t)y * w, (size_t)w);
-        return 1;
-    }
-    memset(s_dec, ck, (size_t)w * h);
-    const unsigned char* p = px;
-    int y;
-    for (y = 0; y < h; y++) {
-        if (IsBadReadPtr(p, 2)) return 0;
-        int rowlen = *(const unsigned short*)p; p += 2;
-        if (rowlen > 8192 || IsBadReadPtr(p, rowlen)) return 0;
-        const unsigned char* q = p; int x = 0;
-        unsigned char* row = s_dec + (size_t)y * w;
-        while (q < p + rowlen && x < w) {
-            unsigned char b = *q++;
-            if (b & 1) x += b >> 1;
-            else if (b & 2) {
-                int n = (b >> 2) + 1, i;
-                if (q >= p + rowlen) break;
-                unsigned char v = *q++;
-                for (i = 0; i < n && x < w; i++) row[x++] = v;
-            } else {
-                int n = (b >> 2) + 1, i;
-                for (i = 0; i < n && q < p + rowlen; i++) {
-                    unsigned char v = *q++;
-                    if (x < w) row[x] = v;
-                    x++;
-                }
-            }
-        }
-        p += rowlen;
-    }
-    return 1;
-}
-
-/* a reset in the middle of a gather would re-use texels that quads already
-   emitted this frame still point at, so a full atlas only flags itself: the
-   rest of this frame's new frames are skipped and the next gather resets */
-static void atlas_reset(void)
-{
-    s_atlasN = 0; s_shelfX = s_shelfY = s_shelfH = 0; s_atlasFull = 0;
-    flog("fx: atlas reset (full) — frames re-decode on demand");
-}
-
-static const AtlasEnt* atlas_get(const unsigned char* g)
-{
-    int i, w = *(const unsigned short*)(g + GF_W), h = *(const unsigned short*)(g + GF_H);
-    const void* pix = *(const void* const*)(g + GF_PIX);
-    for (i = 0; i < s_atlasN; i++)
-        if (s_atlas[i].frame == g && s_atlas[i].pix == pix &&
-            s_atlas[i].w == w && s_atlas[i].h == h)
-            return s_atlas[i].ok ? &s_atlas[i] : NULL;
-    if (s_atlasFull || h + 1 > ATLAS_DIM) return NULL;
-    if (s_atlasN >= ATLAS_MAX) { s_atlasFull = 1; return NULL; }
-    if (s_shelfX + w + 1 > ATLAS_DIM) { s_shelfY += s_shelfH + 1; s_shelfX = 0; s_shelfH = 0; }
-    if (s_shelfY + h + 1 > ATLAS_DIM) { s_atlasFull = 1; return NULL; }
-    AtlasEnt* e = &s_atlas[s_atlasN++];
-    e->frame = g; e->pix = pix; e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0;
-    if (!decode_frame(g, w, h)) return NULL;
-    int x = s_shelfX, y = s_shelfY;
-    s_shelfX += w + 1; if (h > s_shelfH) s_shelfH = h;
-    glBindTexture(GL_TEXTURE_2D, s_atlasTex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RED, GL_UNSIGNED_BYTE, s_dec);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    e->u0 = (float)x / ATLAS_DIM;       e->v0 = (float)y / ATLAS_DIM;
-    e->u1 = (float)(x + w) / ATLAS_DIM; e->v1 = (float)(y + h) / ATLAS_DIM;
-    e->ck = g[GF_CK]; e->ok = 1;
-    return e;
+    s_state = 0; s_lhtInit = 0;
+    tagpu_gaf_atlas_lost(&s_atlas);
 }
 
 /* ---- emission ---- */
@@ -566,18 +432,18 @@ static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, floa
 static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float wx, float wz, int depth)
 {
     if (depth > 4) return;
-    g = frame_sane(g);
+    g = tagpu_gaf_frame_sane(g);
     if (!g) return;
-    int sub = g[GF_SUBN];
+    int sub = g[TAGPU_GF_SUBN];
     if (sub) {
-        const unsigned char* const* arr = *(const unsigned char* const* const*)(g + GF_PIX);
+        const unsigned char* const* arr = *(const unsigned char* const* const*)(g + TAGPU_GF_PIX);
         if (!ptr_ok(arr) || IsBadReadPtr(arr, (SIZE_T)sub * 4)) return;
         int k;
         for (k = 0; k < sub; k++) {
-            const unsigned char* sg = frame_sane(arr[k]);
+            const unsigned char* sg = tagpu_gaf_frame_sane(arr[k]);
             if (!sg) continue;
             int m = mode;
-            if (mode == MODE_OPAQUE && sg[GF_SUBALP]) m = MODE_ALPHA;
+            if (mode == MODE_OPAQUE && sg[TAGPU_GF_SUBALP]) m = MODE_ALPHA;
             emit_sprite(sg, sx, sy, m, wx, wz, depth + 1);
         }
         return;
@@ -585,11 +451,11 @@ static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float 
     int b = (mode == MODE_FLASH) ? B_FLASH : (s_under ? B_UNDER : B_SPRITES);
     if (mode == MODE_FLASH) s_cFlash++; else s_cSprites++;
     if (s_mute) return;
-    const AtlasEnt* e = atlas_get(g);
+    const TAGPU_GAFENT* e = tagpu_gaf_atlas_get(&s_atlas, g);
     if (!e) { s_cAtlasFail++; return; }
-    int w = *(const unsigned short*)(g + GF_W), h = *(const unsigned short*)(g + GF_H);
-    float x0 = (float)(sx - *(const short*)(g + GF_HOTX));
-    float y0 = (float)(sy - *(const short*)(g + GF_HOTY));
+    int w = *(const unsigned short*)(g + TAGPU_GF_W), h = *(const unsigned short*)(g + TAGPU_GF_H);
+    float x0 = (float)(sx - *(const short*)(g + TAGPU_GF_HOTX));
+    float y0 = (float)(sy - *(const short*)(g + TAGPU_GF_HOTY));
     float x1 = x0 + (float)w, y1 = y0 + (float)h;
     float c = (float)e->ck / 255.0f;
     if (s_traceN > 0) {
@@ -612,7 +478,7 @@ static void fx_sprite(const unsigned char* g, int sx, int sy, int mode, float wx
 int tagpu_fx_emit_seq_frame(const char* seq, int frame, int sx, int sy, int mode,
                             float wx, float wz, float enc, int under)
 {
-    const unsigned char* g = seq_frame(seq, frame);
+    const unsigned char* g = tagpu_gaf_seq_frame(seq, frame);
     if (!g) return 0;
     float keep = s_encCur; int keepU = s_under, before = s_cQuads;
     s_encCur = enc; s_under = under;
@@ -700,7 +566,7 @@ static void gather_fx(const TAGPU_FXVIEW* v)
     int np = *(const int*)(ta + OFF_NPROJ);
     const char* pbase = *(const char* const*)(ta + OFF_PROJ);
     if (np > 0 && np <= 8192 && ptr_ok(pbase) && !IsBadReadPtr(pbase, (SIZE_T)np * PROJ_STRIDE)) {
-        const unsigned char* shadowFrame = seq_frame(*(const char* const*)(ta + OFF_SHADOWSEQ), 0);
+        const unsigned char* shadowFrame = tagpu_gaf_seq_frame(*(const char* const*)(ta + OFF_SHADOWSEQ), 0);
         int i;
         for (i = 0; i < np; i++) {
             const char* p = pbase + (size_t)i * PROJ_STRIDE;
@@ -792,23 +658,23 @@ static void gather_fx(const TAGPU_FXVIEW* v)
                 SHADOW_BLOB();
                 if (color > 4) break;
                 const char* seq = *(const char* const*)(ta + OFF_SPRSEQ0 + color * 4);
-                int n = seq_nframes(seq);
+                int n = tagpu_gaf_seq_nframes(seq);
                 if (n > 0) {
                     int idx = (tick - *(const int*)(p + P_SPAWN)) % n;
                     if (idx < 0) idx += n;
-                    fx_sprite(seq_frame(seq, idx), sx, sy, MODE_OPAQUE, wx, wz);
+                    fx_sprite(tagpu_gaf_seq_frame(seq, idx), sx, sy, MODE_OPAQUE, wx, wz);
                 }
                 break;
             }
             case 5: {
                 s_c.flare++;
                 const char* seq = *(const char* const*)(ta + OFF_FLARESEQ);
-                int n = seq_nframes(seq);
+                int n = tagpu_gaf_seq_nframes(seq);
                 int life = *(const unsigned short*)(w + W_LIFE);
                 if (n > 0 && life > 0 && alphaOn) {
                     int idx = n - ((*(const int*)(p + P_DEATH) - tick) * n) / life;
                     if (idx >= 0 && idx < n)
-                        fx_sprite(seq_frame(seq, idx), sx, sy, MODE_ALPHA, wx, wz);
+                        fx_sprite(tagpu_gaf_seq_frame(seq, idx), sx, sy, MODE_ALPHA, wx, wz);
                 }
                 break;
             }
@@ -888,8 +754,8 @@ static void gather_fx(const TAGPU_FXVIEW* v)
             if (!in_vprect(ta, sx, sy)) continue;
             float wx = (float)hx, wz = (float)(hy - (halt >> 1));
             if (pass == 0) {
-                if (flashOn && *(const unsigned* )(e + E_ST2 + AS_SEQ) != 0) {
-                    const unsigned char* g = state_frame(e + E_ST2);
+                if (flashOn && *(const unsigned* )(e + E_ST2 + TAGPU_AS_SEQ) != 0) {
+                    const unsigned char* g = tagpu_gaf_state_frame(e + E_ST2);
                     if (g) { fx_sprite(g, sx, sy, MODE_FLASH, wx, wz); s_c.flash++; }
                 }
             } else {
@@ -900,16 +766,16 @@ static void gather_fx(const TAGPU_FXVIEW* v)
                                (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT,
                                wx, wz, tr[0], tr[1], tr[2], 0);
                 }
-                if (*(const unsigned*)(e + E_ST1 + AS_SEQ) != 0) {
-                    const unsigned char* g = state_frame(e + E_ST1);
+                if (*(const unsigned*)(e + E_ST1 + TAGPU_AS_SEQ) != 0) {
+                    const unsigned char* g = tagpu_gaf_state_frame(e + E_ST1);
                     if (g) fx_sprite(g, sx, sy, MODE_OPAQUE, wx, wz);
                     if (s_log && i < 4 && (v->frame_counter % 60) == 0) {
-                        const char* seq = *(const char* const*)(e + E_ST1 + AS_SEQ);
-                        const char* seq2 = *(const char* const*)(e + E_ST2 + AS_SEQ);
+                        const char* seq = *(const char* const*)(e + E_ST1 + TAGPU_AS_SEQ);
+                        const char* seq2 = *(const char* const*)(e + E_ST2 + TAGPU_AS_SEQ);
                         _snprintf(lb, sizeof lb,
                             "fx: e%d seq=\"%.24s\" f=%u/%d flash=\"%.24s\" f=%u node=%p pos=(%d,%d,%d) scr=(%d,%d)",
-                            i, ptr_ok(seq) ? seq + SQ_NAME : "?", (unsigned)*(const unsigned short*)(e + E_ST1),
-                            seq_nframes(seq), ptr_ok(seq2) ? seq2 + SQ_NAME : "-",
+                            i, ptr_ok(seq) ? seq + TAGPU_SQ_NAME : "?", (unsigned)*(const unsigned short*)(e + E_ST1),
+                            tagpu_gaf_seq_nframes(seq), ptr_ok(seq2) ? seq2 + TAGPU_SQ_NAME : "-",
                             (unsigned)*(const unsigned short*)(e + E_ST2), (const void*)node, hx, halt, hy, sx, sy);
                         flog(lb);
                     }
@@ -953,7 +819,7 @@ static void gather_fx(const TAGPU_FXVIEW* v)
         _snprintf(lb, sizeof lb,
             "fx: proj=%d (laser=%d model=%d sprite=%d flare=%d light=%d ball=%d hidden=%d fogged=%d) expl=%d flash=%d debris=%d -> lines=%d sprites=%d flashq=%d models=%d atlas=%d%s",
             np, s_c.laser, s_c.model, s_c.sprite, s_c.flare, s_c.light, s_c.ball, s_c.hidden, s_c.fogged,
-            ne, s_c.flash, s_c.debris, s_cLines, s_cSprites, s_cFlash, s_nm, s_atlasN,
+            ne, s_c.flash, s_c.debris, s_cLines, s_cSprites, s_cFlash, s_nm, s_atlas.n,
             s_passive ? " (passive)" : "");
         flog(lb);
     }
@@ -972,7 +838,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         if (sfxOn && !said) { said = 1; flog("fx: GL not ready — the particle pass (sfx) is idle too"); }
         return 0;
     }
-    if (s_atlasFull) atlas_reset();
+    if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
     memset(s_nv, 0, sizeof s_nv); s_nm = 0;
     s_cLines = s_cSprites = s_cFlash = s_cAtlasFail = s_cOverflow = s_cQuads = 0;
     memset(&s_c, 0, sizeof s_c);
@@ -1012,7 +878,7 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex, unsigned int lo
     x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
     x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
     x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
-    x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlasTex);
+    x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
     x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, losTex);
     x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, mapTex);

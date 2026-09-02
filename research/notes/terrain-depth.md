@@ -417,6 +417,16 @@ All grids are **32-px tiles**, dims `LOSW = FeatureMapSizeX/2`,
 | Units | 8-bit plane inside the per-unit composite (`0=far,255=near`, `depth = pieceY+0x32`); **never compared across units or against the scene** | `0x459200`/`0x4B90A0` |
 | Projectiles/sfx/fog | none | §3.5, §5 |
 
+**Where that stands now (G13a, 2026-09-02).** Rows 2 and 3 of the table are history for
+the native pass: `tagpu_feat.c` draws every feature itself and **writes the depth** row
+2 says the engine has none of, and the 3D wrecks of row 3 are drawn by the native unit
+pass. The full leaf-level RE — the three bodies of `0x46A610`, the exact LOS gate, the
+sweep-rect clamps and the ownership detour — is on its own page,
+[Features](features.html); §3 below remains the map of *when* the engine draws them.
+The consequence for this section: synthesis item 2's "single scalar `rowKey*2 +
+isFeature`" is now real code, and the [scene-depth scaffold](native-res-design.html) that
+stood in for it is superseded as the occluder.
+
 **What we must synthesise for a full-scene GL pass that reproduces stock
 occlusion at native resolution — and where to read the inputs live:**
 

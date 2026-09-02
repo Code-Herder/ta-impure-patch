@@ -315,6 +315,12 @@ tools/tacli arm t1 native.on=off           # clear one
 
 Any `tagpu_<x>` trigger file works; value goes into the file (e.g. `all`, `armcom`).
 
+**A stale `owndraw.on` is worse than none.** Its detours skip the engine's unit rasterisers,
+so with `native.on` cleared but `owndraw.on` still armed the engine draws **no units at all**
+(only health bars) — an engine-side A/B then measures nothing, silently. `launch` now drops it
+when native is off and says so; if you ever see `OWND ... repaint=0 miss=<everything>` with no
+`native:` lines, that is the shape of it.
+
 **owndraw must exist at launch, not after.** The code-patching passes — `owndraw`,
 `suppress`, `tracer` — install their engine-code detours once at DLL load and only if
 their trigger is present then; there is no per-frame re-arm (patching live engine bytes
@@ -334,6 +340,19 @@ engine's effects within 30 frames, `arm fx.on="log passive"` keeps gathering and
 (`fx: proj=… expl=…` every 60 frames) while the engine draws — the same-fight A/B lever.
 Verify with `fxown: ARMED site.proj=1 site.expl=1 …` and `FXOWN skip=1`. Fixtures:
 `scenarios/fx-mix.json`, `fx-lasers.json`, `fx-rockets.json`.
+
+**Features (trees, rocks, metal patches, splats, wreckage) are `feat.on`** — tokens `log`,
+`passive`, `noflat`, `notall`, `noshadow`, `nowreck` — on their own patch, `featown.on`,
+which tacli auto-arms at launch when `feat.on` exists. Same live A/B lever: `arm feat.on="log
+passive"` = the engine draws while we count (`feat: rect=68x76 anchors=231 flat=38 tall=193
+... -> body=231 shadow=193` every 60 frames), `arm feat.on=log` = ours. Two things to know:
+it **only takes the draw while `native.on` carries `wrecks`** (3D wreckage is drawn through
+`DrawUnit` from inside the same leaf, so without the native wreck pass owning the leaf would
+delete every husk — the log line says so when it refuses), and it makes **`scaffold.on`
+unnecessary**: features now write real depth, so leave the scaffold disarmed (its debug
+overlay tints every tall feature purple and ruins captures). Verify `featown: ARMED
+feature@0x46A610=1` and `FEATOWN skip=1`. Fixture: `scenarios/feat-forest.json` (Two
+Continents: units parked two tile rows behind a tree row, a lab wreck, a walking commander).
 
 **Particles (smoke, fire, wakes, nanolathe) are `sfx.on`** — tokens `log`, `passive`,
 `nosmoke`, `nofire`, `nowake`, `nonano` — on the same `fxown.on` patch set (tacli auto-arms

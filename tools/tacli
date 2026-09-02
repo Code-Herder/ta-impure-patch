@@ -561,11 +561,19 @@ def _ensure_owndraw_for_native(inst) -> "str | None":
     the engine builds and needs no suppression, so it does not require owndraw.
     """
     nat = inst.gamedir / "tagpu_native.on"
+    own = inst.gamedir / "tagpu_owndraw.on"
     if not nat.exists():
+        # A stale owndraw.on is worse than none: its detours skip the engine's
+        # rasterisers while the native pass that would supply the pixels is not
+        # running, so the engine draws NO units at all (OWND ... repaint=0
+        # miss=<everything>) and an engine-side A/B silently measures nothing.
+        if own.exists():
+            own.unlink()
+            return ("dropped owndraw.on (native.on is not set; its detours would skip "
+                    "the engine's unit rasterisers with nothing drawing in their place)")
         return None
     # native.on is "TYPE [extra tokens]" (e.g. "all wrecks"); owndraw.on is just "TYPE".
     tok = (nat.read_text().split() or ["all"])[0]
-    own = inst.gamedir / "tagpu_owndraw.on"
     if not own.exists():
         own.write_text(tok + "\n")
         return (f"auto-armed owndraw.on={tok} (native.on is set and owndraw must be "
@@ -604,6 +612,29 @@ def _ensure_fxown_for_fx(inst) -> "str | None":
     own.write_text("on\n")
     have = " and ".join(n for n, p in (("fx.on", fx), ("sfx.on", sfx)) if p.exists())
     return f"auto-armed fxown.on ({have} is set and fxown must be installed at launch, not after)"
+
+def _ensure_featown_for_feat(inst) -> "str | None":
+    """Same footgun, features edition: the native feature pass (tagpu_feat.on) draws
+    trees, rocks, metal patches and GAF wreckage itself, while the engine's own
+    feature leaf (0x46A610) is skipped by the featown detour. It installs ONCE at
+    DllMain, only if tagpu_featown.on exists then — so if this launch brings up the
+    feature pass, arm it before the process starts. The skip itself follows
+    tagpu_feat.on live (and stays off unless native.on carries "wrecks", because
+    3D wreckage draws through that leaf as a unit).
+    """
+    feat = inst.gamedir / "tagpu_feat.on"
+    own = inst.gamedir / "tagpu_featown.on"
+    if not feat.exists():
+        if own.exists():
+            own.unlink()
+            return ("dropped featown.on (feat.on is not set; the feature patch is only "
+                    "installed with it)")
+        return None
+    if own.exists():
+        return None
+    own.write_text("on\n")
+    return ("auto-armed featown.on (feat.on is set and featown must be installed at "
+            "launch, not after)")
 
 def _launch(args) -> dict:
     """Everything `launch` does, minus the printing — `load` composes with it."""
@@ -673,6 +704,7 @@ def _launch(args) -> dict:
 
     owndraw_note = _ensure_owndraw_for_native(inst)
     fxown_note = _ensure_fxown_for_fx(inst)
+    featown_note = _ensure_featown_for_feat(inst)
 
     env = inst.env()
     display = env["DISPLAY"]
@@ -697,7 +729,8 @@ def _launch(args) -> dict:
             "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
             "map": args.map, "unit_limit": meta.get("unit_limit"),
             "args": argv, "shield": shield_state(inst), "pointer_restored": restored,
-            "owndraw_note": owndraw_note, "fxown_note": fxown_note}
+            "owndraw_note": owndraw_note, "fxown_note": fxown_note,
+            "featown_note": featown_note}
 
 
 def cmd_launch(args):
@@ -714,6 +747,8 @@ def cmd_launch(args):
         human += f"\n  {res['owndraw_note']}"
     if res.get("fxown_note"):
         human += f"\n  {res['fxown_note']}"
+    if res.get("featown_note"):
+        human += f"\n  {res['featown_note']}"
     out(res, args.json, human=human)
 
 
@@ -3195,6 +3230,8 @@ def cmd_scenario_load(args):
         steps.append(launched["owndraw_note"])
     if launched.get("fxown_note"):
         steps.append(launched["fxown_note"])
+    if launched.get("featown_note"):
+        steps.append(launched["featown_note"])
 
     _scn_wait_shell(inst, args.launch_timeout)
     for i, selector in enumerate(SCN_MENU_PATH):
