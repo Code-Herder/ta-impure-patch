@@ -66,16 +66,20 @@ you drive with `keys`.) Then wait for the game proper:
 tools/tacli wait t1 'alive=[1-9]' --timeout 150
 ```
 
+That whole path — launch, the three clicks, the wait — is what `tacli scenario load` does
+in one command, with the map and players from the file (see *Scenarios* below). Drive it
+by hand when you want the menus themselves; use `load` when you want the game.
+
 Skirmish settings come from the registry, no clicking: `--map "Two Continents"`,
 `--player 2:2:1:1` (`N:controller[:side[:color[:metal[:energy]]]]`, controller 0=off
 1=human 2=AI, side 0=ARM 1=CORE; an empty field leaves that key alone, so `0:1::3` sets
 only a colour), `--los`, `--mapping`, `--unit-limit`. **Metal and energy are the starting
 resources and set storage too** — the only way to set them at all, since in a running
 game TA recomputes storage from owned units and clamps the level to it every tick. All of
-it is sticky per instance: what a launch does not name, it inherits from the last one. **The registry is the only way** — every
-TotalA.exe switch was traced in phase 1.2 and none of them sets a game rule
-(`cmdline-options.md`). Raw switches go through `--arg=-t --arg=120` (keep the `=`);
-`-r` and `-d` are refused.
+it is sticky per instance: what a launch does not name, it inherits from the last one.
+**The registry is the only way** — every TotalA.exe switch was traced in phase 1.2 and
+none of them sets a game rule (`cmdline-options.md`). Raw switches go through
+`--arg=-t --arg=120` (keep the `=`); `-r` and `-d` are refused.
 
 ## Input details that cost time to learn
 
@@ -233,6 +237,12 @@ tools/tacli scenario expand   200v200 --wire    # the flat list, and the file th
 tools/tacli scenario apply    t1 200v200        # spawn it into a game already running
 tools/tacli switches t1 shootall=on noshake=on  # the SoftwareDebugMode bits, live
 ```
+
+- **`shootall` (on by default) means idle units engage enemy *buildings* in range**, not
+  just mobile units — measured, not lore: six Peewees on `hold` ignored an enemy Solar
+  Collector for 45 s with the bit off and left a wreck within 45 s with it on, without
+  moving. Turn it **off** when you want units to ignore structures. `noshake` kills screen
+  shake, which matters for frame comparison (**ta-capture**).
 
 - **`load` is the whole trip; `apply` is the mutation.** `load` launches with the file's
   own `setup` (map, resolution, players, unit limit), clicks `SINGLE → Skirmish → Start`,
