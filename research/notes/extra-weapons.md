@@ -453,11 +453,54 @@ Everything below was measured on the pristine 3.1 build under wine with `tacli`.
 | 4 | **holds** | every C-path counter (`start autoaim names retaliate acquire helpers splice`) stays 0 with stock content; only `loader` moves, once per unit type. |
 | 5 | **holds** | all 20 stolen prologues checked by hand against objdump for IP-relative code (none); every trampoline was executed on the stock path. |
 | 6 | **holds** | ARMLLT10: ten slots (`n=10`), each side slot holds `ARM_LIGHTLASER`, the target, an aim result and state `0x1F/0x13/0x17/0x1B` (`i & 3` in bits 2–3); `fires by slot: 0 3 4 5 6 7 8 9` all launched projectiles; the aim solutions of slots 3–9 equalled the stock slot-0 solution at the same tick (logged side by side during development). ARMPW4: slot 3 launched 60 projectiles in a fight. |
-| 7–10, 15 | **blocked** | wine 9.0's DirectPlay TCP/IP service provider is a stub (`DPWSCB_EnumSessions … stub` in `WINEDEBUG=+dplay`), so hosting and joining both bounce to `SELPROV` with "Invalid TCP/IP Address"; the provider list's `SELECT` itself does *not* crash for the TCP/IP row (the ta-drive note's crash is IPX-specific). Native `dplayx.dll`+`dpwsockx.dll` (winetricks' `directplay`, from `dxnt.cab` in the Feb 2010 DirectX redist) would unblock it; that package is no longer on Microsoft's or the Internet Archive's servers. Meanwhile the receiver clamps `WeapIdx >= count`, so an armed peer cannot be corrupted by a packet. |
+| 7–10, 15 | **untested** | needs two instances in one game; see "Multiplayer — untested, and why" below. The only in-module guard is the receiver clamping `WeapIdx >= count` to slot 0. |
 | 11 | holds by construction | savegame load creates units through `UNITS_Create` → the module's `StartWeaponsScripts` → side rows reset; not exercised live. |
 | 12 | not exercised | give-unit needs a LAN game. |
 | 13 | **holds so far** | `violation` = 0 in every run (AI skirmish, both fights, the extended scenarios). |
 | 14 | not measured | no tick-rate comparison yet. |
+
+### Multiplayer — untested, and why
+
+Every multiplayer assertion (7 remote fire packets, 8/9 the unit-CRC handshake, 10
+`AutoAim` ownership, 12 give-unit, 15 unarmed peers) needs two `tacli` instances in
+one TCP/IP game over loopback. That was attempted on 2026-09-02 and does not work on
+this machine yet. What happened, so nobody re-derives it:
+
+1. **The provider screen does not crash for TCP/IP.** The ta-drive skill records that
+   `SELPROV`'s `SELECT` kills the game (`Access Violation at 0023:00000000`). With
+   row 0, *Internet TCP/IP Connection For DirectPlay*, selected, `SELECT` goes to
+   `TCP.GUI` ("Enter TCP address (leave blank to search)") with no crash. The
+   recorded crash is therefore specific to the other providers (IPX was the one
+   tried before), not to DirectPlay as such.
+2. **Blank address**: `OK` or Enter answers "Invalid TCP/IP Address" and returns to
+   `SELPROV`. **`127.0.0.1`**: `OK` reaches `SELGAME.GUI` behind an "Updating..."
+   box, then bounces back to `SELPROV` two seconds later; no session list, no host
+   button ever became clickable. (The `tacli ui fill` of the address field once kept
+   only `1` — retype and read back what the field reports.)
+3. **Root cause**: wine 9.0's DirectPlay TCP/IP service provider is a stub. Launched
+   by hand with `WINEDEBUG=-all,+dplay,+dplayx,+dpwsockx` (tacli discards wine's
+   stderr), the log shows `fixme:dplay:DPWSCB_EnumSessions … stub`,
+   `NS_SendSessionRequestBroadcast : not all data fields are correct`,
+   `DPWSCB_CloseEx … stub`, `DPWSCB_ShutdownEx … stub`. Session enumeration and
+   hosting both die inside `dpwsockx.dll`; nothing TA-side is at fault.
+4. **The fix is native DirectPlay**, what winetricks' `directplay` verb installs:
+   `dplayx.dll`, `dpwsockx.dll`, `dplaysvr.exe` (and `dpnet*`) taken from `dxnt.cab`
+   inside `directx_feb2010_redist.exe`, placed in the prefix's 32-bit `system32`
+   (`syswow64` in these 64-bit prefixes) with `WINEDLLOVERRIDES=dplayx,dpwsockx=n`
+   — tacli hard-codes `ddraw=n,b`, so it needs a launch option for that.
+   **The package could not be obtained**: the June 2010 redist (still on
+   download.microsoft.com, 100 MB) carries no `dxnt.cab` (its cabinet directory was
+   parsed; only the monthly D3DX cabs), the Feb 2010 URL is gone from Microsoft, the
+   holarse mirror returns an HTML page, and the Internet Archive has no snapshot of
+   it (CDX query empty; the `id_` fetch 429s). A copy of `dxnt.cab` from any Windows
+   machine with DirectX 9.0c unblocks this in an afternoon: extract, copy, override,
+   rerun the two-instance test with `scenarios/wpn-llt10.json`.
+5. Until then the multiplayer claims in this note (remote units driven by the `0x10`
+   and `0x0D` packets, the CRC handshake as the mismatched-peer guard) rest on the
+   static reading only. In particular the "You have CRC errors" lobby message is not
+   a string in the binary, so what the lobby does on a unit-CRC mismatch is still
+   unknown; if it turns out to be warn-only, the module needs its own guard before
+   anyone plays an armed build against an unarmed one.
 
 ### Known gaps (unchanged from the plan)
 
