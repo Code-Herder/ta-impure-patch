@@ -453,13 +453,18 @@ Everything below was measured on the pristine 3.1 build under wine with `tacli`.
 | 4 | **holds** | every C-path counter (`start autoaim names retaliate acquire helpers splice`) stays 0 with stock content; only `loader` moves, once per unit type. |
 | 5 | **holds** | all 20 stolen prologues checked by hand against objdump for IP-relative code (none); every trampoline was executed on the stock path. |
 | 6 | **holds** | ARMLLT10: ten slots (`n=10`), each side slot holds `ARM_LIGHTLASER`, the target, an aim result and state `0x1F/0x13/0x17/0x1B` (`i & 3` in bits 2–3); `fires by slot: 0 3 4 5 6 7 8 9` all launched projectiles; the aim solutions of slots 3–9 equalled the stock slot-0 solution at the same tick (logged side by side during development). ARMPW4: slot 3 launched 60 projectiles in a fight. |
-| 7–10, 15 | **untested** | needs two instances in one game; see "Multiplayer — untested, and why" below. The only in-module guard is the receiver clamping `WeapIdx >= count` to slot 0. |
+| 7–10, 15 | **untested** | needs two instances in one game; see "Multiplayer — untested, and why" below and [networking-lobbies](networking-lobbies.md). The only in-module guard is the receiver clamping `WeapIdx >= count` to slot 0. |
 | 11 | holds by construction | savegame load creates units through `UNITS_Create` → the module's `StartWeaponsScripts` → side rows reset; not exercised live. |
 | 12 | not exercised | give-unit needs a LAN game. |
 | 13 | **holds so far** | `violation` = 0 in every run (AI skirmish, both fights, the extended scenarios). |
 | 14 | not measured | no tick-rate comparison yet. |
 
 ### Multiplayer — untested, and why
+
+Background on TA's network model (the lockstep packet stream, the DirectPlay
+providers, what TA Forever and the demo recorder tunnel) is in
+[Networking, Lobbies & Multiplayer](networking-lobbies.md); this section only
+covers what the extra-weapons work needs from it and what stopped the test.
 
 Every multiplayer assertion (7 remote fire packets, 8/9 the unit-CRC handshake, 10
 `AutoAim` ownership, 12 give-unit, 15 unarmed peers) needs two `tacli` instances in
