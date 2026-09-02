@@ -211,6 +211,38 @@ are enough to start and play a skirmish headless — this is how G2 was finished
 ARM Commander — live unit read + engine world→screen projection + GPU draw, over the real frame. The
 world→screen formula (`sx=wx-eyeX+128`, `sy=wy-alt/2-eyeY+32`) is verified correct against live units.
 
+## Verification discipline — three ways a gate has lied to us
+
+Each of these produced a confident wrong answer in a real session. They are cheap to
+guard against and expensive to diagnose after the fact.
+
+**1. An A/B diff is meaningless until the noise floor is zero.** Engine-vs-ours parity is
+measured by arming the engine's own draw, capturing, flipping to ours, capturing again, and
+diffing. That only works on a *frozen* scene. In the G13c fog gate a still-walking commander
+moved the LOS boundary and the health bars between the two halves and produced **19,768
+mismatched pixels** that were chased into the shader as a shading bug; the real figure was
+**97** once everything had parked. Park the scene (`tacli eye` to pin the camera, let orders
+finish), then **capture twice in the same arm state and diff those first — it must come out
+zero** — and only then trust the A/B. Operational detail: ta-capture skill, "Hard rules".
+
+**2. A one-shot `init` flag on a GL upload outlives the GL context.** `tagpu_native_glreset()`
+clears the module's cached state, and any upload guarded by a `static int …Init` flag **must
+be reset there too**, or after a context reset the texture object is regenerated with *no
+storage* while the flag still says "uploaded". Every sample then reads 0. In G13c that turned
+the entire fog grey band solid black (palette index 0) and looked exactly like a wrong remap
+table. For anything small, skip the flag entirely and `glTexImage2D` every frame — the fog
+shade LUT is 256 bytes and re-specs per frame for free. When a whole region of our output is
+uniformly *one* value, suspect a storageless texture before suspecting the maths.
+
+**3. Review findings must be checked against the decompile, not just against the code.** The
+`code-review` skill is worth running on every gate — it found four real issues in the G13c
+diff, two of them genuine bugs. But **two of the four were wrong**, because the reviewer read
+our source without the engine's. It proposed a floor-mod in `fog_org()`, where the truncating
+`%` deliberately mirrors the engine's own truncating division, and it flagged features being
+hidden in the grey band, which is exactly what the engine's `0x4658E0` does. Both "fixes"
+would have broken parity. **Where our code mirrors engine arithmetic, say so in a comment**
+naming the address — that is what stops the next reader, human or agent, from correcting it.
+
 ## Our engine patches
 
 Original byte-patches we author, applied at runtime from the fork's `DllMain`
