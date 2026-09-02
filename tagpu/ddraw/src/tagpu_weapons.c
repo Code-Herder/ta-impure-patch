@@ -110,11 +110,11 @@ static char   g_name_aim[WPN_CAP][24], g_name_fire[WPN_CAP][24],
 
 enum { H_START, H_AUTOAIM, H_NAMES, H_RETALIATE, H_ACQUIRE, H_HELPERS, H_SPLICE,
        H_LOADER, H_VIOLATION, H_STOCKSPLICE, H_MISMATCH, H_GROUND, H_COBFULL,
-       H_HOLDFIRE, H__N };
+       H_HOLDFIRE, H_CRC, H__N };
 static const char* const HIT_NAMES[H__N] =
     { "start", "autoaim", "names", "retaliate", "acquire", "helpers", "splice",
       "loader", "violation", "stock_splice", "mismatch", "ground", "cob_full",
-      "hold_fire" };
+      "hold_fire", "crc" };
 /* cob_full: AimFromWeaponN/QueryWeaponN resolved to no piece. COBEngine_QueryScript
    (0x4B0BC0 -> 0x4B0C40) opens with a thread-slot allocation (0x4B08C0) that scans
    a fixed EIGHT records of 0xA4 bytes at cob+0x1C and returns -1 when they are all
@@ -317,6 +317,9 @@ typedef int   (__thiscall *PFN_Name2Index)(void* cob, const char* name);
 typedef int*  (__stdcall  *PFN_PiecePos)(int* out, char* unit, int piece);
 typedef char* (__stdcall  *PFN_Name2Ptr)(const char* name);
 typedef void  (__thiscall *PFN_TdfGetStr)(void* ctx, char* buf, const char* key, int len, const char* dflt);
+typedef char* (__thiscall *PFN_TdfValue)(void* ctx, const char* key);
+typedef void  (__thiscall *PFN_TdfIterA)(void* ctx);
+typedef int   (__thiscall *PFN_TdfSection)(void* ctx, const char* name);
 typedef u32*  (__stdcall  *PFN_Categories)(const char* s);
 typedef void  (__stdcall  *PFN_SendStart)(char* unit, const char* name, int, int, int, int, int);
 typedef int   (__stdcall  *PFN_AimCalc)(char* unit, char* weapon, i16* heading, i16* pitch, u32 idx, int* tpos);
@@ -342,6 +345,20 @@ typedef char* (__stdcall  *PFN_FindTarget)(char* unit, u32 idx, int);          /
 #define E_PiecePos    ((PFN_PiecePos)   0x43DEF0u)
 #define E_Name2Ptr    ((PFN_Name2Ptr)   0x49E5B0u)
 #define E_TdfGetStr   ((PFN_TdfGetStr)  0x4C48C0u)
+/* the three the unit-info loader uses to turn "weaponN"'s value into that
+   weapon's TDF CRC: read the key, rewind a weapon-TDF context, ask it for
+   the section. */
+#define E_TdfValue    ((PFN_TdfValue)   0x4C4630u)
+#define E_TdfIterA    ((PFN_TdfIterA)   0x4C3E10u)
+#define E_TdfSection  ((PFN_TdfSection) 0x4C3410u)
+
+/* Every weapon TDF (Weapons\\*.tdf) parsed at startup: an array of 12-byte contexts, whose
+   +4 is the section the last SectionExists landed on and whose +0x25 is that
+   section's stored CRC. Built by FUN_0042A8D0 itself, just above the folds. */
+#define WTDF_BASE     (*(char**)0x5122A0u)
+#define WTDF_COUNT    (*(int*)  0x5122A4u)
+#define DEF_CRC_WPN   0x146            /* UnitDefStruct.CRC_weapons */
+#define DEF_CRC_ALL   0x142            /* UnitDefStruct.CRC_all (0x146 folded in) */
 #define E_Categories  ((PFN_Categories) 0x488C50u)
 #define E_SendStart   ((PFN_SendStart)  0x456200u)
 #define E_AimCalc     ((PFN_AimCalc)    0x49D910u)
@@ -1184,6 +1201,74 @@ static void __cdecl cb_loader(char* def, void* ctx)
         wlog("loader: %.12s (def #%u) has %d weapons", def + 0x20, idx, r->count);
 }
 
+/* The CRC of one weapon's TDF section, exactly as the engine computes it for
+   weapon1..3 at 0x42AE29 / 0x42AEA0 / 0x42AF17: rewind each loaded weapon-TDF
+   context in turn and take the stored CRC of the first section that matches.
+   Zero when no file defines it — which is also what the engine folds in then,
+   so an unresolvable name still agrees across peers. */
+static u32 weapon_tdf_crc(const char* name)
+{
+    char* ctx = WTDF_BASE;
+    int   i, n = WTDF_COUNT;
+    if (!name || !*name || (size_t)ctx < 0x600000u) return 0;
+    for (i = 0; i < n; i++, ctx += 0xC)
+    {
+        E_TdfIterA(ctx);
+        if (E_TdfSection(ctx, name))
+            return *(u32*)(*(char**)(ctx + 4) + 0x25);
+    }
+    return 0;
+}
+
+/* Unit-info loader (0x42A8D0) at 0x42B004: the engine has just folded weapon1..3,
+   explodeas and selfdestructas into CRC_weapons and is about to read it back for
+   its last XOR. Fold weapon4..N in the same way and in the same place.
+
+   This is the whole mismatched-peer guard. Without it an armed build and a stock
+   build compute an identical CRC for a type they simulate differently, and the
+   lobby has nothing to disagree about — while an unarmed receiver handling a
+   0x0D WEAPON_FIRED packet with WeapIdx >= 3 indexes past its three inline slots
+   into UnitOrders. With it, two armed peers still agree (same names, same TDFs)
+   and an unarmed peer differs on exactly the types that carry extra weapons.
+
+   `ctx` is the unit's own UNITINFO TDF context, the one the engine passes to
+   0x4C4630 for weapon1..3 four instructions earlier. */
+static void __cdecl cb_crc_weapons(char* def, void* ctx)
+{
+    char key[16];
+    int  n, folded = 0;
+    if (!g_armed || (size_t)def < 0x600000u || !ctx) return;
+    for (n = 4; n <= WPN_CAP; n++)
+    {
+        char* val;
+        u32   c;
+        _snprintf(key, sizeof key, "weapon%d", n);
+        val = E_TdfValue(ctx, key);
+        if (!val || !*val) continue;
+        /* Mix the slot number in, unlike the stock folds. XOR is self-inverse and
+           the extra slots are variable in number, so folding the bare weapon CRC
+           would let two slots holding the SAME weapon cancel each other out — a
+           unit with weapon4=weapon5=X would compute the stock CRC and match an
+           unarmed peer exactly where it must not. The same goes for a name no TDF
+           defines: its CRC is 0, but the armed side still gives it a slot, so the
+           term has to be nonzero anyway. Rotate-and-offset by n makes every slot
+           contribute distinctly while two armed peers with the same FBI still
+           agree bit for bit. */
+        c = weapon_tdf_crc(val) ^ ((u32)n * 0x9E3779B9u);
+        c = (c << n) | (c >> (32 - n));            /* n is 4..16: never 0 or 32 */
+        *(u32*)(def + DEF_CRC_WPN) ^= c;
+        folded++;
+    }
+    if (folded)
+    {
+        HIT(H_CRC);
+        /* the value here is still missing the engine's own selfdestructas fold,
+           which the stolen instruction is about to read back and apply */
+        wlog("crc: %.12s folded %d extra weapon(s), CRC_weapons=0x%08X (pre-final)",
+             def + 0x20, folded, *(u32*)(def + DEF_CRC_WPN));
+    }
+}
+
 /* =========================================================================
    9. x86 emitter, site tables, all-or-nothing install
    ========================================================================= */
@@ -1270,6 +1355,8 @@ static const u8 X_DEFCOPY[]  = { 0x8B,0xC1,0x53,0x8B,0x4C,0x24,0x08 };
 static const u8 X_GROUND[]   = { 0x6A,0x01,0x53,0x57,0xE8,0xD9,0x66,0x08,0x00 };
 
 static const u8 X_LOADER[]   = { 0x8B,0x85,0xEE,0x01,0x00,0x00,0x3B,0xC6 };
+/* 0x42B004: mov edx,[ebp+0x146] — the read-back after the last stock fold */
+static const u8 X_CRC[]      = { 0x8B,0x95,0x46,0x01,0x00,0x00 };
 static const u8 X_RECV[]     = { 0x33,0xC9,0x8A,0x48,0x23,0x8B,0xD1,0xC1,0xE2,0x03,0x2B,0xD1,0x8D,0x4C,0x95,0x04 };
 static const u8 X_RECV_X[]   = { 0x0F,0xB6,0x50,0x23,0x6B,0xD2,0x07 };  /* movzx edx,[eax+0x23]; imul edx,edx,7 */
 static const u8 X_FPN_EDX[]  = { 0x8B,0x14,0x8D,0x78,0x96,0x50,0x00 };  /* mov edx,[ecx*4+0x509678] */
@@ -1321,6 +1408,9 @@ static const Hook HOOKS[] = {
 static const Splice SPLICES[] = {
     /* loader: after weapon3 is stored; ebp = def, [esp+0x14] = TDF object */
     { "loader",      0x42CEF2, 8,  X_LOADER,  (void*)cb_loader,     2, { AREG(R_EBP), ASTACK(0x14) }, -1,    X_LOADER, 8, 0 },
+    /* unit-info CRC: ebp = def, [esp+0x1c] = the unit's UNITINFO TDF context.
+       Ours XORs into def+0x146 before the stolen read-back picks it up. */
+    { "crc",         0x42B004, 6,  X_CRC,     (void*)cb_crc_weapons, 2, { AREG(R_EBP), ASTACK(0x1C) }, -1,  X_CRC, 6, 0 },
     /* WEAPON_FIRED receiver: ebp = unit, eax = packet -> ecx = slot, edx = idx*7 */
     { "recv",        0x49D364, 16, X_RECV,    (void*)cb_recv_slot,  2, { AREG(R_EBP), AREG(R_EAX) },  R_ECX, X_RECV_X, 7, 0 },
     /* FireProjectile_*: fire-script name by slot (unit, slot) -> reg */
@@ -1523,7 +1613,9 @@ static void dump_unit(Out* o, char* u, int first)
     int   count = wpn_count(u), i;
     oput(o, "%s{\"idx\":%d,\"type\":", first ? "" : ",", (int)*(i16*)(u + 0xA8));
     oname(o, def + 0x20, 32);
-    oput(o, ",\"owner\":%d,\"count\":%d,\"slots\":[", (int)*(u8*)(u + 0xFF), count);
+    oput(o, ",\"owner\":%d,\"count\":%d,\"crc_weapons\":\"0x%08X\",\"crc_all\":\"0x%08X\",\"slots\":[",
+         (int)*(u8*)(u + 0xFF), count,
+         *(u32*)(def + DEF_CRC_WPN), *(u32*)(def + DEF_CRC_ALL));
     for (i = 0; i < count; i++)
     {
         WSlot* s = (i < 3) ? (WSlot*)(u + 4 + i * SLOT_STRIDE) : (side_row(u) ? side_row(u) + (i - 3) : 0);

@@ -53,6 +53,18 @@ TEMPLATE_GAMEDIR = TAGPU / "gamedir"
 TEMPLATE_PREFIX = ROOT / "wineprefix"
 INSTANCES = TAGPU / "instances"
 
+# Multiplayer. Wine ships the *client* half of DirectPlay TCP/IP only — dpwsockx's
+# create path is an explicit "not yet supported" on every release including master —
+# so no wine process can host a session. Microsoft's own DirectPlay in front of the
+# builtin fixes it on the stock wine 9.0 these instances use (research/notes/
+# networking-lobbies.md). The two EXEs must be overridden *by name* as well: with the
+# DLLs alone, native dplayx starts wine's stub dplaysvr and Open() hangs with no error.
+DPLAY_SRC = Path(os.environ.get("TA_DIRECTPLAY_SRC",
+                                Path.home() / ".local/share/ta-directplay"))
+DPLAY_INSTALL = Path(__file__).resolve().parent / "dpinstall.sh"
+DPLAY_OVERRIDES = ("dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,"
+                   "dplaysvr.exe,dpnsvr.exe=n")
+
 
 def built_dll() -> Path:
     """The fork build to pin into instances.
@@ -192,10 +204,16 @@ class Instance:
         self.meta_path.write_text(json.dumps(meta, indent=2))
 
     def env(self) -> dict:
+        meta = self.meta()
         e = dict(os.environ)
         e["WINEPREFIX"] = str(self.prefix)
-        e["DISPLAY"] = self.meta().get("display") or default_display()
-        e["WINEDLLOVERRIDES"] = "ddraw=n,b"
+        e["DISPLAY"] = meta.get("display") or default_display()
+        # ddraw is always ours; DirectPlay is appended only for instances launched
+        # with --dplay, so a stock single-player instance keeps wine's builtin.
+        overrides = ["ddraw=n,b"]
+        if meta.get("dplay"):
+            overrides.append(DPLAY_OVERRIDES)
+        e["WINEDLLOVERRIDES"] = ";".join(overrides)
         e.setdefault("WINEDEBUG", "-all")
         return e
 
@@ -386,6 +404,39 @@ def clone_prefix(inst: Instance):
                        capture_output=True, text=True)
     if r.returncode != 0:
         die(f"prefix clone failed: {r.stderr.strip()}")
+
+
+def install_dplay(inst: Instance) -> str:
+    """Drop Microsoft's DirectPlay into this prefix (idempotent).
+
+    Delegates to tools/dpinstall.sh so the file list, the win32/win64 split and the
+    provenance all live in one place. Cheap enough to re-run every launch (~1.2 MB of
+    copies), and re-running is how a prefix recreated behind our back heals itself.
+    """
+    if not DPLAY_SRC.is_dir():
+        die(f"no DirectPlay files at {DPLAY_SRC} — see research/notes/"
+            f"networking-lobbies.md for where they come from, or set TA_DIRECTPLAY_SRC")
+    r = subprocess.run(["bash", str(DPLAY_INSTALL), str(inst.prefix), str(DPLAY_SRC)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"dpinstall failed: {(r.stderr or r.stdout).strip()}")
+    return (r.stdout.strip().splitlines() or ["installed native DirectPlay"])[0]
+
+
+def free_dplay_port() -> int:
+    """Kill any stray dplaysvr.exe.
+
+    DirectPlay's name server outlives the game that started it and owns UDP 47624 for
+    the whole machine, not per prefix — so one left over from an earlier run makes the
+    next host fail Open(DPOPEN_CREATE) with DPERR_GENERIC, which looks exactly like a
+    broken prefix and is not. Only ever do this on a hosting launch: doing it while a
+    peer is hosting takes that game down too.
+    """
+    before = subprocess.run(["pgrep", "-x", "dplaysvr.exe"],
+                            capture_output=True, text=True).stdout.split()
+    if before:
+        subprocess.run(["pkill", "-x", "dplaysvr.exe"], capture_output=True)
+    return len(before)
 
 
 def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
@@ -726,6 +777,15 @@ def _launch(args) -> dict:
         meta["shield"] = args.shield
         inst.save_meta(meta)
     set_shield(inst, meta.get("shield", True))
+    if args.dplay is not None:
+        meta["dplay"] = args.dplay
+        inst.save_meta(meta)
+    dplay_note = install_dplay(inst) if meta.get("dplay") else None
+    if args.free_dplay_port:
+        killed = free_dplay_port()
+        dplay_note = ((dplay_note + "; ") if dplay_note else "") + (
+            f"killed {killed} stale dplaysvr.exe (UDP 47624 freed)" if killed
+            else "no stale dplaysvr.exe to kill")
     if not args.keep_dll:
         deploy_dll(inst)
     apply_prefix_settings(inst, tuple(meta["res"]), sound=meta.get("sound", False))
@@ -785,6 +845,7 @@ def _launch(args) -> dict:
             "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
             "map": args.map, "unit_limit": meta.get("unit_limit"),
             "args": argv, "shield": shield_state(inst), "pointer_restored": restored,
+            "dplay": bool(meta.get("dplay")), "dplay_note": dplay_note,
             "owndraw_note": owndraw_note, "fxown_note": fxown_note,
             "featown_note": featown_note, "terrown_note": terrown_note,
             "markown_note": markown_note}
@@ -799,7 +860,10 @@ def cmd_launch(args):
     human = (f"launched {args.name} pid={res['pid']} "
              f"window={win[0] if win else 'pending'} "
              f"at {win[1] if win else '?'},{win[2] if win else '?'} "
-             f"shield={'on' if res['shield'] else 'off'}")
+             f"shield={'on' if res['shield'] else 'off'}"
+             f"{' dplay=on' if res.get('dplay') else ''}")
+    if res.get("dplay_note"):
+        human += f"\n  {res['dplay_note']}"
     if res.get("owndraw_note"):
         human += f"\n  {res['owndraw_note']}"
     if res.get("fxown_note"):
@@ -1009,6 +1073,11 @@ def cmd_weapons(args):
         die("no weapon dump appeared (needs a running game past its first frame)")
     data = json.loads(result.read_text())
     rows = []
+    # One line per unit *type*: the CRCs are a property of the def, and comparing
+    # them across two instances is how a mismatched-peer test reads out.
+    types = {}
+    for u in data.get("units", []):
+        types.setdefault(u["type"], (u.get("crc_weapons"), u.get("crc_all"), u["count"]))
     for u in data.get("units", []):
         for s in u["slots"]:
             rows.append(f"u{u['idx']:<5} {u['type']:<12} own={u['owner']} n={u['count']:<2} "
@@ -1018,8 +1087,11 @@ def cmd_weapons(args):
                         f"aim={s['aimed']} thr={s['thread']}")
     hits = " ".join(f"{k}={v}" for k, v in data.get("hits", {}).items())
     fires = " ".join(f"{i}={n}" for i, n in enumerate(data.get("fires", [])) if n)
+    crcs = " ".join(f"{t}(n={n},w={w},all={a})" for t, (w, a, n) in sorted(types.items())
+                    if w is not None)
     head = (f"frame={data.get('frame')} armed={data.get('armed')} cap={data.get('cap')} "
-            f"units={len(data.get('units', []))}\nhits: {hits}\nfires by slot: {fires or '-'}")
+            f"units={len(data.get('units', []))}\nhits: {hits}\nfires by slot: {fires or '-'}"
+            + (f"\ntype CRCs: {crcs}" if crcs else ""))
     out(data, args.json, human=head + ("\n" + "\n".join(rows) if rows else "\n(no matching units)"))
 
 
@@ -1906,13 +1978,28 @@ def cmd_ui(args):
 
         _ui_click_gadget(inst, g, snap, settle=False)     # focus the field
         time.sleep(0.2)
-        clear = len(g.get("text") or "")
-        if clear:
-            _write_tokens(inst, " ".join(["backspace"] * clear))
-            time.sleep(0.3)
-            left = _ui_match(_ui_snapshot(inst), g["name"])
-            if len(left) == 1 and (left[0].get("text") or ""):
-                die(f'{g["name"]} still reads {left[0]["text"]!r} after clearing it '
+        # Clearing is one backspace at a time, each one waited for. Characters go
+        # as WM_CHAR and queue, so a whole word lands from a single batch; backspace
+        # is a key token, and the shield holds a key down for 150 ms because TA
+        # *polls* the keyboard — so a batch of five overlapping presses is one edge
+        # and deletes one character. Send one, wait for the field to actually get
+        # shorter, repeat; a backspace that never lands is the real failure and the
+        # only thing worth dying on.
+        left = len(g.get("text") or "")
+        while left:
+            _write_tokens(inst, "backspace")
+            deadline, was = time.time() + 3.0, left
+            while time.time() < deadline:
+                time.sleep(0.15)
+                now = _ui_match(_ui_snapshot(inst), g["name"])
+                if len(now) != 1:
+                    left = 0
+                    break
+                left = len(now[0].get("text") or "")
+                if left < was:
+                    break
+            if left >= was:
+                die(f'{g["name"]} still reads {was} characters after a backspace '
                     "— the caret is not where backspace can reach the whole field")
         if tokens:
             _write_tokens(inst, " ".join(tokens))
@@ -3312,6 +3399,7 @@ def cmd_scenario_load(args):
         name=args.name, json=True, force=False, res=res, map=wanted_map,
         unit_limit=limit, player=_scn_player_flags(setup) or None,
         display=args.display, slot=None, sound=None, intro=False, shield=None,
+        dplay=None, free_dplay_port=False,
         keep_dll=args.keep_dll, los=None, mapping=None, arg=[],
         timeout=args.launch_timeout, no_restore_pointer=False))
     if launched.get("already_running"):
@@ -3496,6 +3584,16 @@ def build_parser():
     l.add_argument("--arg", action="append",
                    help="extra TotalA.exe switch, repeatable (e.g. --arg -t --arg 120); "
                         "see research/notes/cmdline-options.md")
+    l.add_argument("--dplay", dest="dplay", action="store_true", default=None,
+                   help="multiplayer: install native DirectPlay into the prefix and "
+                        "override wine's builtin (sticky per instance; wine cannot "
+                        "host a session without it)")
+    l.add_argument("--no-dplay", dest="dplay", action="store_false",
+                   help="back to wine's builtin DirectPlay")
+    l.add_argument("--free-dplay-port", action="store_true",
+                   help="kill any stale dplaysvr.exe first — do this on the HOSTING "
+                        "launch only; it owns UDP 47624 machine-wide and killing it "
+                        "while a peer hosts takes that game down")
     l.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
     l.add_argument("--timeout", type=float, default=45)
     l.add_argument("--no-restore-pointer", action="store_true",

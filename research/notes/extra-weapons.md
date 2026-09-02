@@ -115,7 +115,7 @@ function found. Per-frame functions marked ●.
 | Site | Function | What it does with "3" | Patch action |
 |---|---|---|---|
 | `0x42CDDE`–`0x42CF04` | FBI loader `FUN_0042BF40` | reads `weapon1..3`, `w*_badTargetCategory`, sets has-weapon flag | detour after the block (TADR hooks this loader at `0x42BF97` for its own extra keys); read `weapon4..N`, `wN_badTargetCategory` into the def side table |
-| `0x42ADC5`, `0x42AE35`, `0x42AEAC` | `FUN_0042A8D0` | XORs the three weapon TDF CRCs into `CRC_weapons` (unit-sync handshake) | **not done.** Extend the XOR to N so armed peers agree and mismatched ones disagree; what the lobby then does is assertion 8, not a given |
+| `0x42AE29`, `0x42AEA0`, `0x42AF17`, `0x42AF8D`, `0x42B004` | `FUN_0042A8D0` | XORs **five** TDF CRCs into `CRC_weapons` — `weapon1..3` *and* `explodeas` and `selfdestructas`, not three as first surveyed | **done**: splice `crc` at `0x42B004` (the read-back before the last fold), folding `weapon4..N` the same way. See §Multiplayer |
 | `0x42B64C`, `0x42B7E5` | `FUN_0042B370` def copy | two 3-iteration copies | side table is per type, nothing to copy |
 | `0x409930` | `FUN_00409730` AI valuation | scores a unit type by its 3 weapons | optional |
 | `0x48606F`, `0x486293` | `UNITS_Create`, `UNITS_CreateFromNetwork` | preset 3 slot handles to `0x4FD6F0` | detour: also preset the side slots |
@@ -301,39 +301,72 @@ by two packets: `0x10 UNIT_START_SCRIPT`, which carries the COB **method index**
 files (already a unit-sync requirement) agree on which script a fired packet
 means, and the receiver indexes the side slot for `WeapIdx ≥ 3`.
 
-The intended guard for **mismatched** peers is the unit-sync handshake, and it is
-worth being exact about what exists today. `CRC_weapons` (`def + 0x146`) is
-XOR-folded into `CRC_all` (`+0x142`) by `UnitInfo_CalcScriptCRC` (`0x42A610`)
-before the first sub-2 `0x1A UNIT_DATA` packet [CORPUS], and `CRC_weapons` itself
-is built by `FUN_0042A8D0`, which folds in one weapon TDF CRC at each of three
-hard-coded sites (`0x42ADC5`, `0x42AE35`, `0x42AEAC`) — one per stock slot.
+The guard for **mismatched** peers is the unit-sync handshake, and it now exists.
+`CRC_weapons` (`def + 0x146`) is XOR-folded into `CRC_all` (`+0x142`) by
+`UnitInfo_CalcScriptCRC` (`0x42A610`) before the first sub-2 `0x1A UNIT_DATA`
+packet [CORPUS]. `CRC_weapons` itself is built by `FUN_0042A8D0` — and the survey
+undercounted it: the fold happens at **five** sites, not three. `weapon1`,
+`weapon2`, `weapon3`, **`explodeas` and `selfdestructas`** each contribute one
+weapon-TDF CRC, at `0x42AE29`, `0x42AEA0`, `0x42AF17`, `0x42AF8D` and `0x42B004`
+[DECOMPILE + DISASM]. Each site is the same shape: read the key's value with
+`0x4C4630`, then walk the loaded weapon-TDF contexts (an array of 12-byte records
+at `*0x5122A0`, count `*0x5122A4`) calling `TDF_SectionIterA` (`0x4C3E10`) and
+`TdfFile_SectionExists` (`0x4C3410`), and take `*(u32*)(*(u32*)(ctx + 4) + 0x25)`
+from the first file that has the section.
 
-**The module does not extend that fold, so the guard does not exist yet.** A unit
-type's CRC is today identical whether it carries four extra weapons or none. Two
-consequences, and only the second is serious:
+**The module extends the fold** with one splice, `crc` at `0x42B004` — the
+`mov edx,[ebp+0x146]` that reads the value back for the last stock fold. `ebp` is
+the def and `[esp+0x1c]` is that unit's own `UNITINFO` TDF context, so the callback
+has everything the engine has; it XORs its terms in first and the stolen
+instruction then picks them up. It fires only for a type that actually declares
+`weapon4+`, so stock content is bit-identical armed or not.
 
-- Between two *armed* peers, two builds of the same unit that differ only beyond
-  `Weapon3` hash the same. In practice unit-sync already requires identical
-  files, so this is a hazard rather than an observed failure.
-- Between an armed and an unarmed peer, **nothing disagrees at all**. Extending
-  the XOR to `weapon4..N` is what would make exactly the `Weapon4`-carrying types
-  disagree while every other type still agrees — that is the design, not the
-  current behaviour.
+The per-slot term is **not** the bare weapon CRC. XOR is self-inverse and the
+extra slots vary in number, so folding the bare CRC lets two slots holding the
+*same* weapon cancel out — a `weapon4 = weapon5 = ARM_LIGHTLASER` unit would
+compute the stock CRC and match an unarmed peer exactly where it must not. A name
+no TDF defines has CRC 0 and would vanish the same way while still costing the
+armed side a slot. So each occupied slot contributes
+`rotl(crc ^ n * 0x9E3779B9, n)` for slot number `n` (4..16, so the rotate is never
+0 or 32). Two armed peers with the same FBI still agree bit for bit.
 
-Even once extended, the guard is only as good as what TA does with a disagreeing
-unit, and **that is not established** (assertion 8): refuse to start, disable the
-type, or warn only. The often-quoted "You have CRC errors on N units!" text does
-**not** exist in the binary — the only sync-related strings are `+syncerr`,
-`SYNCHING` and `Synchronization complete` — so whatever the lobby says comes from
-a GUI file, not a hard-coded message. If it turns out to be warn-only, the CRC is
-not a guard at all and we must add our own: either block the start, or have the
-armed side disable its extra weapons for that game.
+Measured (`tacli weapons` reports `crc_weapons` / `crc_all` per type):
 
-The failure mode being guarded against is not cosmetic: an unarmed receiver
-handling `WeapIdx ≥ 3` indexes past its three slots into `UnitOrders`. The
-extension and the answer to assertion 8 were blocked on DirectPlay until
-2026-09-02; native DirectPlay now works under wine, so both are merely
-outstanding (see "Multiplayer — untested, and why").
+| Type | armed | unarmed |
+|---|---|---|
+| `ARMLLT10` (ten lasers) | `0x0D3E3F4D` | `0x2AE2553D` |
+| `ARMCOM`, `CORSOLAR`, … (stock) | unchanged | unchanged |
+
+The armed value is *predicted* by the formula from the unarmed one and
+`ARM_LIGHTLASER`'s TDF CRC (`0x8E326773`), which is how the fold was verified
+without a second fixture.
+
+**What TA does with a disagreeing type — assertions 8 and 9, measured
+2026-09-02 in three two-instance games:**
+
+| host `mp1` | joiner `mp2` | unit types in the game | `ARMLLT10` |
+|---|---|---|---|
+| unarmed | unarmed | 281 | present |
+| armed | armed | 281 | present |
+| **armed** | **unarmed** | **279** | **gone from both peers** |
+
+TA **disables exactly the mismatched unit types and starts the game anyway** —
+neither "refuse to start" nor "warn only". The two `.ufo` types disappear from the
+engine's own type table on *both* sides (`tacli units` counts 279 rather than 281,
+and the module's `loader` counter drops from 280 to 278); every stock type is
+untouched. So the granularity assertion 8 asked for holds exactly.
+
+The lobby says nothing at all: `LOUNGE2.GUI`'s `OUTPUT` list is empty on both
+peers before the start, and no message box appears. The often-quoted "You have CRC
+errors on N units!" text is not in the binary — the only sync-related strings are
+`+syncerr`, `SYNCHING` and `Synchronization complete` — and no GUI file produced
+one either. The mismatch is silent; the *effect* is the unit type going away.
+
+**That closes assertion 15 without a guard of our own.** The failure mode was an
+unarmed receiver handling `WeapIdx ≥ 3` and indexing past its three slots into
+`UnitOrders`. It cannot arise: in a mismatched game no unit of an extended type
+can exist, on either side, so no `0x0D` packet can name a slot beyond 2. The
+module's receiver clamp stays as belt-and-braces.
 
 ## Assertions that must hold before this ships
 
@@ -351,7 +384,7 @@ instances, armed and unarmed, with periodic roster dumps compared.
 | 5 | Trampolines are correct for every replaced function | wrong stolen-byte length = crash on the fast path | disassembly check that no relocated instruction is IP-relative (a `jmp`/`call` in the first 5 bytes) — `DisasmWindow.java` on each entry |
 | 6 | An N-weapon unit fires all N, each through its own `Aim/Fire/Query/AimFrom` script | the feature | test unit with `Weapon4..N`; log script starts per slot and projectile spawns per weapon type |
 | 7 | Remote peer: `0x10` arrives as method index and `0x0D` `WeapIdx ≥ 3` lands in the side slot | MP correctness between armed peers | two armed `tacli` instances in a LAN game; receiver-side log of `WeapIdx` and the slot it resolved to |
-| 8 | Mismatched peers: the lobby reports CRC errors for exactly the `Weapon4` unit types, and nothing else | the optionality guard | **needs the `CRC_weapons` extension first — it is not implemented, so today nothing disagrees**; then one armed, one unarmed instance, and read the lobby messages and the unit-sync result per unit type |
+| 8 | Mismatched peers: the sync handshake singles out exactly the `Weapon4` unit types, and nothing else | the optionality guard | one armed, one unarmed instance in one game; compare `tacli units` counts and the per-type `crc_weapons` on both sides |
 | 9 | What TA does on a unit CRC mismatch (refuse start / disable unit / warn only) | decides whether we need our own guard | same test, then attempt to start; if it starts, build the extra guard before anything else |
 | 10 | `AutoAim` is never executed for remote-owned units | confirms the ownership model the MP story rests on | log owner state in the `AutoAim` wrapper during the LAN game; remote units must never appear |
 | 11 | Save then load with an N-weapon unit: no crash, side slots are re-initialised | known gap is benign | save mid-fight, load, confirm weapons 4..N resume (the load path must reset side slots; the savegame loader does not call `UNITS_StartWeaponsScripts`) |
@@ -433,9 +466,9 @@ Everything below was measured on the pristine 3.1 build under wine with `tacli`.
 | Piece | What it is |
 |---|---|
 | Gate | `tagpu_weapons.on` next to the exe at attach; absent = not one byte written (the oracle still works). `tacli arm <inst> weapons.on` before launch. |
-| Install | 20 entry hooks, 20 mid-function splices, 4 in-place byte patches, all byte-matched **before** the first write; one mismatch = `weapons: DISARMED` and nothing touched. Stubs and trampolines live in one `VirtualAlloc`'d RWX pool (1.6 KB used). |
+| Install | 20 entry hooks, 21 mid-function splices, 4 in-place byte patches, all byte-matched **before** the first write; one mismatch = `weapons: DISARMED` and nothing touched. Stubs and trampolines live in one `VirtualAlloc`'d RWX pool (1.6 KB used). |
 | Entry hooks (trampoline for stock) | `UNITS_StartWeaponsScripts`, `AutoAim`, the three name helpers, retaliation `0x406F80`, acquisition `0x4089A0` (per *batch*: the original runs unless a unit in the cursor's batch is extended), `0x4897E0`, `0x4898B0`, `0x489800` (an index helper the survey missed — the allocator's per-slot "enable"), `0x48A060/0A0/0F0/160`, `0x49ADF0`, `0x48A190`, `CheckUnitWeapon`, `Trajectory3` (also missed by the survey: it reads `unit+0x10+idx*0x1C`), `0x49D120`, and the def copy `0x42B370` (keeps the side record with the type it describes). |
-| Splices | loader `0x42CEF2` (reads `weaponN` / `wN_badTargetCategory`), `WEAPON_FIRED` receiver `0x49D364` (clamps `WeapIdx >= count` to slot 0 and logs), the three `FireProjectile_*` name lookups, eleven `state>>2&3` decodes in the four fire callbacks, two in the target finder `0x40B7B0`, one in the target-position helper `0x48A1E0`. |
+| Splices | loader `0x42CEF2` (reads `weaponN` / `wN_badTargetCategory`), unit-info CRC `0x42B004` (folds `weapon4..N` into `CRC_weapons`), `WEAPON_FIRED` receiver `0x49D364` (clamps `WeapIdx >= count` to slot 0 and logs), the three `FireProjectile_*` name lookups, eleven `state>>2&3` decodes in the four fire callbacks, two in the target finder `0x40B7B0`, one in the target-position helper `0x48A1E0`. |
 | Byte patches | the three `FireProjectile_*` heading loads (`mov si,[ebp+ecx*4+0x1a]` → `mov si,[edi+0x16]`, the slot pointer is in a register) and one `and al,3` after a spliced decode. |
 | Side tables | def records keyed by def array index (the game-start loader compacts the array, numbers it, *then* runs the FBI loader per final slot, so the index is stable; the record also stores the def pointer and answers "stock" on a mismatch); unit side rows `[units][13]` sized from the live unit array and reset by the module's own `StartWeaponsScripts` at creation (which every create path, savegame load included, goes through). |
 | Slot index | derived from pointers (`SlotIndex(unit, slot)`); the 2-bit field still holds `i & 3`. |
@@ -646,40 +679,50 @@ piece 0 (must stay 0) and `hold_fire` counts shots declined mid-slew.
 | # | Status | Evidence |
 |---|---|---|
 | 1 | **holds** | unarmed launches log nothing and leave every site pristine (the install path is never entered); the oracle reads the stock slots exactly as the note's layout says (states `0x12/0x14/0x18`, weapon in slot 0, thread preset `0x4FD6F0`). |
-| 2 | by construction, not exercised | `verify_all()` runs over all 44 sites before any write; a deliberate-mismatch debug run is still to do. |
+| 2 | by construction, not exercised | `verify_all()` runs over all 45 sites before any write; a deliberate-mismatch debug run is still to do. |
 | 3 | **holds (live)** | armed + stock content through two `shootall` fights and an AI game: `stock_splice` = 8410 stub executions on the stock path, `mismatch` = 0 (the pointer-derived index agreed with the engine's 2-bit field every time), no crash across ~25 000 frames. A roster diff at fixed ticks between the armed and unarmed instances was not done (the two instances are not tick-aligned); the stub equivalence is proven directly instead. |
 | 4 | **holds** | every C-path counter (`start autoaim names retaliate acquire helpers splice ground hold_fire`) stays 0 with stock content; only `loader` moves, once per unit type. |
 | 5 | **holds** | all 20 stolen prologues checked by hand against objdump for IP-relative code (none); every trampoline was executed on the stock path. |
 | 6 | **holds** | ARMLLT10: ten slots (`n=10`), each side slot holds `ARM_LIGHTLASER`, the target, an aim result and state `0x1F/0x13/0x17/0x1B` (`i & 3` in bits 2–3); `fires by slot: 0 3 4 5 6 7 8 9` all launched projectiles; the aim solutions of slots 3–9 equalled the stock slot-0 solution at the same tick (logged side by side during development). ARMPW4: slot 3 launched 60 projectiles in a fight. |
-| 7–10, 15 | **untested** | needs two instances in one game; see "Multiplayer — untested, and why" below and [networking-lobbies](networking-lobbies.md). The only in-module guard is the receiver clamping `WeapIdx >= count` to slot 0. |
+| 7 | **holds (live)** | two armed instances in one loopback game (`tools/mp_lobby.sh`). The host spawned an `ARMLLT10`, which replicated to the joiner through TA's own create packet, and both peers then reported the *same* `fires by slot: 0=12 3=1 4=12 5=1 6=12 7=1 8=2`. The joiner's launches came only from `0x0D WEAPON_FIRED` — it owns nothing there and its `autoaim` counter is 0 — so `WeapIdx >= 3` resolved to the right side slot every time. `violation` = `mismatch` = 0 on both, no sync error. |
+| 8 | **holds (live)** | armed host + unarmed joiner: the engine's type table drops from 281 to **279** on *both* peers and `ARMLLT10`/`ARMPW4` are gone, while every stock type keeps its CRC (`ARMCOM` `0x9E542B67`, `CORSOLAR` `0x0E040BA1`, identical armed or not). Controls: both-unarmed and both-armed games each keep all 281. Exactly the mismatched types, nothing else. |
+| 9 | **answered (live)**: TA **disables the unit type and starts the game** | not "refuse to start", not "warn only" — the type simply does not exist in that game, so it cannot be built or spawned (`scenario apply` is refused by the engine's own catalogue). The lobby prints nothing: `OUTPUT` is empty on both peers and no message box appears. |
+| 10 | **holds (live)** | in the two-armed game the joiner's `autoaim` counter stayed 0 while the host's ran to 2038, with a live enemy tower in the world — `AutoAim` never runs for a remote-owned unit. |
+| 15 | **holds (live), and for a stronger reason than planned** | an unarmed peer cannot receive `WeapIdx >= 3` at all, because assertion 9's answer removes the extended type from the game before it starts. The receiver clamp remains as a second line. |
 | 11 | holds by construction | savegame load creates units through `UNITS_Create` → the module's `StartWeaponsScripts` → side rows reset; not exercised live. |
-| 12 | not exercised | give-unit needs a LAN game. |
+| 12 | not exercised | give-unit needs a LAN game; the game now exists (`tools/mp_lobby.sh`) but the give was not driven. |
 | 13 | **holds so far** | `violation` = 0 in every run (AI skirmish, both fights, the extended scenarios). |
 | 14 | not measured | no tick-rate comparison yet. |
 
-### Multiplayer — untested, and why
+### Multiplayer — what blocked it, how it was unblocked, and what it measured
 
 Background on TA's network model (the lockstep packet stream, the DirectPlay
 providers, what TA Forever and the demo recorder tunnel) is in
 [Networking, Lobbies & Multiplayer](networking-lobbies.md); this section only
-covers what the extra-weapons work needs from it and what stopped the test.
+covers what the extra-weapons work needs from it, what stopped the test, and
+what removed the obstacle on 2026-09-02.
 
 Every multiplayer assertion (7 remote fire packets, 8/9 the unit-CRC handshake, 10
 `AutoAim` ownership, 12 give-unit, 15 unarmed peers) needs two `tacli` instances in
-one TCP/IP game over loopback. That was attempted on 2026-09-02 and does not work on
-this machine yet. What happened, so nobody re-derives it:
+one TCP/IP game over loopback. **That game now runs**: `tools/mp_lobby.sh <host>
+<join> [map]` drives both instances from the main menu into one live game in a
+single command, and the assertions above are answered from it. The history below is
+kept because the two dead ends in it are expensive to re-derive.
 
 1. **The provider screen does not crash for TCP/IP.** The ta-drive skill records that
    `SELPROV`'s `SELECT` kills the game (`Access Violation at 0023:00000000`). With
-   row 0, *Internet TCP/IP Connection For DirectPlay*, selected, `SELECT` goes to
-   `TCP.GUI` ("Enter TCP address (leave blank to search)") with no crash. The
-   recorded crash is therefore specific to the other providers (IPX was the one
-   tried before), not to DirectPlay as such.
+   *Internet TCP/IP Connection For DirectPlay* selected, `SELECT` goes to `TCP.GUI`
+   ("Enter TCP address (leave blank to search)") with no crash. The recorded crash is
+   therefore specific to the other providers (IPX was the one tried before), not to
+   DirectPlay as such. **Select it by name, not by row**: with wine's builtin it is
+   row 0, with native DirectPlay the list is four rows in a different order and it is
+   row 3.
 2. **Blank address**: `OK` or Enter answers "Invalid TCP/IP Address" and returns to
    `SELPROV`. **`127.0.0.1`**: `OK` reaches `SELGAME.GUI` behind an "Updating..."
-   box, then bounces back to `SELPROV` two seconds later; no session list, no host
-   button ever became clickable. (The `tacli ui fill` of the address field once kept
-   only `1` — retype and read back what the field reports.)
+   box, and *with wine's builtin DirectPlay* bounced back to `SELPROV` two seconds
+   later. That symptom evaporated with native DirectPlay: `SELGAME` is now stable and
+   lists the host's session. (The "`tacli ui fill` of the address field kept only
+   `1`" note was misdiagnosed — see item 7.)
 3. **Root cause**: wine's DirectPlay TCP/IP service provider does not implement
    hosting. On wine 9.0 it implements nothing at all — launched by hand with
    `WINEDEBUG=-all,+dplay,+dplayx,+dpwsockx` the log shows
@@ -715,24 +758,37 @@ this machine yet. What happened, so nobody re-derives it:
    Provenance and the Authenticode verification are in
    [Networking, Lobbies & Multiplayer](networking-lobbies.md).
 
-   **So assertions 7-10, 12 and 15 are no longer blocked** — they are simply not
-   run yet. What remains is `tacli` work (per-launch DirectPlay overrides
-   alongside the hard-coded `ddraw=n,b`) and then the two-instance
-   `scenarios/wpn-llt10.json` test.
-6. Until that test runs, the multiplayer claims in this note (remote units driven by the `0x10`
-   and `0x0D` packets, the CRC handshake as the mismatched-peer guard) rest on the
-   static reading only. In particular the "You have CRC errors" lobby message is not
-   a string in the binary, so what the lobby does on a unit-CRC mismatch is still
-   unknown; if it turns out to be warn-only, the module needs its own guard before
-   anyone plays an armed build against an unarmed one.
+6. **`tacli` learned to launch a multiplayer instance.** `--dplay` installs native
+   DirectPlay into that instance's prefix and appends the overrides to the
+   hard-coded `ddraw=n,b` (sticky per instance, so a stock single-player instance is
+   unaffected); `--free-dplay-port` kills a stale `dplaysvr.exe` first and belongs on
+   the **hosting** launch only, since UDP 47624 is owned machine-wide and killing it
+   while a peer hosts takes that game down. One trap found the hard way:
+   `tools/dpinstall.sh` used a plain `cp`, and tacli clones prefixes with `cp -al`,
+   so every instance shares one inode per `system32` file with the template —
+   overwriting in place would have written wine's builtin `dplayx` out of the
+   template and all ten instances at once. It now uses `cp --remove-destination`.
+7. **Driving the lobby.** `tools/mp_lobby.sh` is the whole flow; three things in it
+   are not guessable. A text field must be **clicked before it is filled** — typing
+   into an unfocused field sends the first character to the screen as a *quickkey*
+   (on `SELGAME` `J` is `JOINGAME`'s, which is what "the field kept only `1`" always
+   was) and drops the rest. `START` ungreys only when **every** player is ready, the
+   host included, and each client lists *itself* as row 0, so the host's own toggle
+   is `READY0` on its own screen. And clearing a field is one backspace **per frame**
+   with a wait for it to land: characters go as `WM_CHAR` and queue, but backspace is
+   a key token the shield holds for 150 ms because TA polls the keyboard, so a batch
+   of five overlapping presses is a single edge and deletes one character. `tacli ui
+   fill` now does that itself.
+8. **What the games measured** is in §"Multiplayer: who computes what, and the guard"
+   above and in the assertion-status table: two armed peers stay in lockstep across
+   ten-slot fire packets, and a mismatched pair loses exactly the extended unit types
+   before the game starts. `scenario apply` on the host also replicates its units to
+   the joiner through TA's own create packet, which is what makes a scripted
+   two-instance weapon test possible at all.
 
 ### Known gaps (unchanged from the plan)
 
-`CRC_weapons` is not extended for `weapon4..N`, so an armed and an unarmed peer
-agree on the CRC of a unit they disagree about — the mismatched-peer guard is
-absent, not merely weak (§Multiplayer); now testable — native DirectPlay works
-under wine as of 2026-09-02. The
-HUD still shows three reload bars; savegames do not persist slots 4+ (they restart cold); `UNITS_GiveUnit`
+The HUD still shows three reload bars; savegames do not persist slots 4+ (they restart cold); `UNITS_GiveUnit`
 carries three stock bytes. A unit whose *only* weapons are 4+ (no `Weapon1`)
 gets the def's has-weapon flag cleared by the engine after our detour; keep
 `Weapon1` populated.
