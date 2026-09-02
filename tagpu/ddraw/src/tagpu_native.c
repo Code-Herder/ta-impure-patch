@@ -108,9 +108,9 @@
 #define FD_MASK      0xFE      /* u8; bit0 set = animated GAF wreck (engine)*/
 #define WR_STRIDE    0x30
 #define WR_OBJ3DO    0x04
-#define WR_XPOS      0x08      /* i32 world x                               */
-#define WR_ZPOS      0x0C      /* i32 altitude                              */
-#define WR_YPOS      0x10      /* i32 world z (map depth)                   */
+#define WR_XPOS      0x08      /* i32 16.16 world x   (>>16 = world units)   */
+#define WR_ZPOS      0x0C      /* i32 16.16 altitude  (>>16 = world units)   */
+#define WR_YPOS      0x10      /* i32 16.16 world z   (>>16 = map depth)     */
 #define O3_NUMPARTS  0x00
 #define O3_THISUNIT  0x0C
 #define O3_PRIM0     0x22
@@ -995,9 +995,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 if (IsBadReadPtr(rec, WR_STRIDE)) continue;
                 const char* o3 = *(const char* const*)(rec + WR_OBJ3DO);
                 if (!ptr_ok(o3)) continue;
-                int rx = *(const int*)(rec + WR_XPOS);
-                int rz = *(const int*)(rec + WR_ZPOS);
-                int ry = *(const int*)(rec + WR_YPOS);
+                /* wreck record positions are 16.16 fixed-point (the engine
+                   copies them straight into the scratch unit's +0x6A/6E/72
+                   16.16 pos fields, then projects from the high words) — shift
+                   to whole world units, exactly what the projection below and
+                   the fog/rel maths expect. Reading them raw put every wreck
+                   ~1700<<16 px off-screen, so all wrecks were culled (nu=0). */
+                int rx = *(const int*)(rec + WR_XPOS) >> 16;
+                int rz = *(const int*)(rec + WR_ZPOS) >> 16;
+                int ry = *(const int*)(rec + WR_YPOS) >> 16;
                 float ax = (float)(rx - eyeX + vpL);
                 float ay = (float)(ry - rz / 2 - eyeY + vpT);
                 if (ax < vpL - 256 || ax > vpL + vw + 256 ||

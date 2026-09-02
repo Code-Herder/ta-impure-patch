@@ -315,6 +315,17 @@ tools/tacli arm t1 native.on=off           # clear one
 
 Any `tagpu_<x>` trigger file works; value goes into the file (e.g. `all`, `armcom`).
 
+**owndraw must exist at launch, not after.** The code-patching passes — `owndraw`,
+`suppress`, `tracer` — install their engine-code detours once at DLL load and only if
+their trigger is present then; there is no per-frame re-arm (patching live engine bytes
+off the frame loop is racy). So `arm owndraw.on` *after* launch does nothing, and the
+native pass then double-draws (engine 8bpp under our RGB, near-invisible). The GL/behaviour
+triggers (`native.on`, `writeback.on`, the `.off` toggles) do re-read every frame and are
+fine to change live. To save the footgun, `launch`/`scenario load` **auto-arm `owndraw.on`
+to match `native.on`** when native is set — it prints `auto-armed owndraw.on=…`. So the
+normal flow is: `arm native.on=all wrecks`, then `scenario load … --restart`. Verify with
+the log line `owndraw: ARMED … opaque@0x459830=OK` and `OWND … skipped>0`.
+
 ## Things that will bite you
 
 - `pkill -f TotalA.exe` kills your own shell (the pattern matches the wrapper).
