@@ -1,0 +1,1561 @@
+#!/usr/bin/env python3
+"""ta3do — read Total Annihilation model assets and render them to PNG.
+
+One command turns a stock unit into a set of standard views:
+
+    tools/ta3do render armpw -o renders/armpw
+
+reads the game's own archives (no extraction step, nothing unpacked to disk),
+parses the `.3do` mesh, resolves its GAF textures through `PALETTE.PAL`, and
+rasterises the model from a fixed table of camera angles — FRONT, SIDE, TOP,
+BACK, 3/4 — into one PNG per view.
+
+The views are a *standard*, not a suggestion: same camera, same framing rule,
+same light, same file names every run, so two units (or the same unit before and
+after a change) are directly comparable.
+
+Formats implemented here (research/notes/file-formats.md is the reference):
+  .hpi/.ccx/.ufo/.gp3  archive        — §5
+  .3do                 mesh tree      — §1
+  .gaf                 8-bpp textures — §3
+  PALETTE.PAL          256-colour LUT
+
+Everything is stdlib-only (zlib for inflate and for writing PNGs) and every
+subcommand can print JSON (--json) for agents.
+"""
+
+import argparse
+import json
+import math
+import os
+import re
+import struct
+import subprocess
+import sys
+import time
+import zlib
+from pathlib import Path
+
+# --------------------------------------------------------------------------- paths
+
+
+def repo_root() -> Path:
+    """The main checkout (never a worktree): that is where the game data lives."""
+    env = os.environ.get("TACLI_ROOT")
+    if env:
+        return Path(env).expanduser().resolve()
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "tagpu").is_dir() and (parent / "pristine").is_dir():
+            marker = ".claude/worktrees"
+            text = str(parent)
+            if marker in text:
+                return Path(text.split(marker)[0].rstrip("/"))
+            return parent
+    return here.parents[1]
+
+
+def game_dir() -> Path:
+    """The Total Annihilation install whose archives we read."""
+    env = os.environ.get("TA3DO_GAMEDIR")
+    if env:
+        return Path(env).expanduser().resolve()
+    return repo_root() / "tagpu" / "gamedir"
+
+
+# --------------------------------------------------------------------------- utils
+
+
+def die(msg: str) -> "NoReturn":  # noqa: F821
+    print(f"ta3do: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def out(data, as_json: bool, human=None):
+    if as_json:
+        print(json.dumps(data, indent=2, default=str))
+    elif human is not None:
+        print(human)
+    elif isinstance(data, str):
+        print(data)
+    else:
+        print(json.dumps(data, indent=2, default=str))
+
+
+# --------------------------------------------------------------------------- HPI
+
+# §5. HAPI container, shared by .hpi/.ccx/.ufo/.gp3. Whole-file XOR obfuscation,
+# a directory tree of offsets, and per-file 64 KiB chunks that are stored, LZ77
+# (LZSS, 4 KiB window) or raw zlib.
+
+HPI_MARKER = b"HAPI"
+HPI_CHUNK = 65536
+
+
+class HpiError(Exception):
+    pass
+
+
+class HpiArchive:
+    """One HAPI archive, read lazily from disk."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.raw = self.path.read_bytes()
+        if self.raw[:4] != HPI_MARKER:
+            raise HpiError(f"{self.path.name}: not a HAPI archive")
+        version, dir_size, header_key, start = struct.unpack_from("<4xIIII", self.raw, 0)
+        if version == 0x4B4E4142:  # "BANK" — saved game, not an asset archive
+            raise HpiError(f"{self.path.name}: saved-game bank, not assets")
+        self.key = (~((header_key * 4) | (header_key >> 6)) & 0xFF) if header_key else 0
+        self.dir_size = dir_size
+        self.start = start
+        self.files = {}  # lowercase "dir/name" -> (offset, size, compression)
+        self._read_dir(start, "")
+
+    # -- obfuscation ------------------------------------------------------
+
+    def _bytes(self, offset: int, length: int) -> bytes:
+        chunk = self.raw[offset:offset + length]
+        if not self.key:
+            return chunk
+        key = self.key
+        return bytes(((offset + i) ^ key ^ (~b & 0xFF)) & 0xFF for i, b in enumerate(chunk))
+
+    def _u32(self, offset: int) -> int:
+        return struct.unpack("<I", self._bytes(offset, 4))[0]
+
+    def _cstr(self, offset: int) -> str:
+        end = offset
+        while True:
+            block = self._bytes(end, 64)
+            if not block:
+                break
+            stop = block.find(b"\0")
+            if stop >= 0:
+                end += stop
+                break
+            end += len(block)
+        return self._bytes(offset, end - offset).decode("latin-1")
+
+    # -- directory --------------------------------------------------------
+
+    def _read_dir(self, offset: int, prefix: str):
+        count = self._u32(offset)
+        entries = self._u32(offset + 4)
+        for i in range(count):
+            base = entries + i * 9
+            name_off, data_off = struct.unpack("<II", self._bytes(base, 8))
+            flag = self._bytes(base + 8, 1)[0]
+            name = self._cstr(name_off)
+            path = f"{prefix}{name}"
+            if flag == 1:
+                self._read_dir(data_off, path + "/")
+            else:
+                d_off, d_size, comp = struct.unpack("<IIB", self._bytes(data_off, 9))
+                self.files[path.lower().replace("\\", "/")] = (d_off, d_size, comp)
+
+    # -- extraction -------------------------------------------------------
+
+    def read(self, name: str) -> bytes:
+        entry = self.files.get(name.lower().replace("\\", "/"))
+        if entry is None:
+            raise HpiError(f"{self.path.name}: no such file {name!r}")
+        offset, size, comp = entry
+        if comp == 0:
+            return self._bytes(offset, size)
+        chunks = (size + HPI_CHUNK - 1) // HPI_CHUNK
+        table = struct.unpack_from(f"<{chunks}I", self._bytes(offset, chunks * 4))
+        pos = offset + chunks * 4
+        parts = []
+        for length in table:
+            parts.append(self._chunk(self._bytes(pos, length)))
+            pos += length
+        data = b"".join(parts)
+        if len(data) != size:
+            raise HpiError(f"{self.path.name}: {name} unpacked to {len(data)}, want {size}")
+        return data
+
+    @staticmethod
+    def _chunk(blob: bytes) -> bytes:
+        marker, version, method, encrypt, comp_size, dec_size, _sum = struct.unpack_from(
+            "<IBBBIII", blob, 0)
+        if marker != 0x48535153:  # "SQSH"
+            raise HpiError("bad SQSH chunk marker")
+        body = blob[19:19 + comp_size]
+        if encrypt:
+            body = bytes(((b - i) ^ i) & 0xFF for i, b in enumerate(body))
+        if method == 1:
+            data = lz77_decompress(body, dec_size)
+        elif method == 2:
+            data = zlib.decompress(body)
+        else:
+            raise HpiError(f"unknown chunk compression {method}")
+        return data
+
+
+def lz77_decompress(src: bytes, want: int) -> bytes:
+    """LZSS with a 4 KiB window.
+
+    Tag byte, LSB first: a **clear** bit is a literal byte, a **set** bit is a
+    two-byte back-reference (`offset = val >> 4`, `count = (val & 15) + 2`), and
+    `offset == 0` ends the stream. (file-formats.md §5 states the opposite
+    polarity; the archives disagree — ARMPW.3DO decodes to its `01 00 00 00`
+    version signature only this way.)
+    """
+    window = bytearray(4096)
+    wpos = 1
+    outbuf = bytearray()
+    src_len = len(src)
+    i = 0
+    while i < src_len and len(outbuf) < want:
+        tag = src[i]
+        i += 1
+        for bit in range(8):
+            if not tag & (1 << bit):
+                if i >= src_len:
+                    return bytes(outbuf)
+                byte = src[i]
+                i += 1
+                outbuf.append(byte)
+                window[wpos] = byte
+                wpos = (wpos + 1) & 0xFFF
+            else:
+                if i + 1 >= src_len:
+                    return bytes(outbuf)
+                val = src[i] | (src[i + 1] << 8)
+                i += 2
+                src_pos = val >> 4
+                if src_pos == 0:
+                    return bytes(outbuf)
+                count = (val & 0x0F) + 2
+                for _ in range(count):
+                    byte = window[src_pos]
+                    outbuf.append(byte)
+                    window[wpos] = byte
+                    src_pos = (src_pos + 1) & 0xFFF
+                    wpos = (wpos + 1) & 0xFFF
+            if len(outbuf) >= want:
+                return bytes(outbuf)
+    return bytes(outbuf)
+
+
+# --------------------------------------------------------------------------- VFS
+
+# TA mounts every archive in the game directory and lets later ones shadow
+# earlier ones. Load order (§5): .hpi < .ccx < .gp3/.ufo, alphabetical within a
+# class, and loose files on disk win over everything.
+
+ARCHIVE_ORDER = {".hpi": 0, ".ccx": 1, ".gp3": 2, ".ufo": 3}
+
+
+class Assets:
+    """Every archive in a game directory, merged into one lookup by path."""
+
+    def __init__(self, root: Path = None):
+        self.root = Path(root) if root else game_dir()
+        if not self.root.is_dir():
+            die(f"no game directory at {self.root} (set TA3DO_GAMEDIR)")
+        self.archives = []
+        self.index = {}  # lowercase path -> HpiArchive
+        for path in self._archive_paths():
+            try:
+                archive = HpiArchive(path)
+            except HpiError:
+                continue
+            self.archives.append(archive)
+            for name in archive.files:
+                self.index[name] = archive
+
+    def _archive_paths(self):
+        found = []
+        for path in sorted(self.root.iterdir()):
+            rank = ARCHIVE_ORDER.get(path.suffix.lower())
+            if rank is not None and path.is_file():
+                found.append((rank, path.name.lower(), path))
+        return [p for _, _, p in sorted(found)]
+
+    def read(self, name: str) -> bytes:
+        key = name.lower().replace("\\", "/")
+        loose = self.root / key
+        if loose.is_file():
+            return loose.read_bytes()
+        archive = self.index.get(key)
+        if archive is None:
+            raise HpiError(f"asset not found: {name}")
+        return archive.read(key)
+
+    def has(self, name: str) -> bool:
+        key = name.lower().replace("\\", "/")
+        return key in self.index or (self.root / key).is_file()
+
+    def glob(self, pattern: str):
+        rx = re.compile(pattern.lower().replace(".", r"\.").replace("*", ".*") + "$")
+        return sorted(n for n in self.index if rx.match(n))
+
+
+# --------------------------------------------------------------------------- palette
+
+# PALETTE.PAL is 256 x 4 bytes (R, G, B, pad). Every 8-bpp pixel in a GAF and
+# every untextured primitive's PaletteEntry indexes it.
+
+PALETTE_PATH = "palettes/palette.pal"
+TEAM_COLOR_BAND = range(9, 17)  # TA remaps these per player; we keep the file's own ramp
+
+
+def load_palette(assets: "Assets"):
+    raw = assets.read(PALETTE_PATH)
+    return [(raw[i * 4], raw[i * 4 + 1], raw[i * 4 + 2]) for i in range(256)]
+
+
+# --------------------------------------------------------------------------- GAF
+
+# §3. A GAF is a list of named entries (sequences); each entry has frames, each
+# frame is an 8-bpp bitmap, raw or RLE'd row by row. 3DO primitives name an
+# *entry*, so the first frame of that entry is the texture.
+
+
+class GafError(Exception):
+    pass
+
+
+class GafFrame:
+    __slots__ = ("width", "height", "pixels", "transparent")
+
+    def __init__(self, width, height, pixels, transparent):
+        self.width = width
+        self.height = height
+        self.pixels = pixels          # bytearray of palette indices, row-major
+        self.transparent = transparent  # index treated as alpha 0
+
+
+def gaf_entries(blob: bytes):
+    """Map entry name (upper case) -> offset of its first frame's data."""
+    sig, count, _ = struct.unpack_from("<III", blob, 0)
+    if sig != 0x00010100:
+        raise GafError("bad GAF signature")
+    offsets = struct.unpack_from(f"<{count}I", blob, 12)
+    entries = {}
+    for off in offsets:
+        frames = struct.unpack_from("<H", blob, off)[0]
+        name = blob[off + 8:off + 40].split(b"\0")[0].decode("latin-1").upper()
+        if frames <= 0:
+            continue
+        frame_off = struct.unpack_from("<I", blob, off + 40)[0]
+        entries[name] = frame_off
+    return entries
+
+
+def gaf_frame(blob: bytes, offset: int) -> GafFrame:
+    (width, height, _x, _y, transparent, compressed,
+     subframes, _unk, ptr, _unk2) = struct.unpack_from("<HHhhBBHIII", blob, offset)
+    pixels = bytearray([transparent]) * (width * height)
+    if subframes:
+        # A stack of sub-frames pasted at their own hotspots; rare for textures.
+        table = struct.unpack_from(f"<{subframes}I", blob, ptr)
+        for sub_off in table:
+            sub = gaf_frame(blob, sub_off)
+            for row in range(min(sub.height, height)):
+                start = row * width
+                pixels[start:start + min(sub.width, width)] = \
+                    sub.pixels[row * sub.width:row * sub.width + min(sub.width, width)]
+        return GafFrame(width, height, pixels, transparent)
+    if not compressed:
+        raw = blob[ptr:ptr + width * height]
+        pixels[:len(raw)] = raw
+        return GafFrame(width, height, pixels, transparent)
+    pos = ptr
+    for row in range(height):
+        bcount = struct.unpack_from("<H", blob, pos)[0]
+        pos += 2
+        end = pos + bcount
+        col = 0
+        while pos < end and col < width:
+            mask = blob[pos]
+            pos += 1
+            if mask & 0x01:                      # transparent run
+                col += mask >> 1
+            elif mask & 0x02:                    # repeat one byte
+                count = (mask >> 2) + 1
+                byte = blob[pos]
+                pos += 1
+                for _ in range(count):
+                    if col < width:
+                        pixels[row * width + col] = byte
+                        col += 1
+            else:                                # literal run
+                count = (mask >> 2) + 1
+                for k in range(count):
+                    if col < width and pos + k < len(blob):
+                        pixels[row * width + col] = blob[pos + k]
+                        col += 1
+                pos += count
+        pos = end
+    return GafFrame(width, height, pixels, transparent)
+
+
+class TextureBank:
+    """Every texture GAF in the game, indexed by entry name."""
+
+    def __init__(self, assets: "Assets", gafs=None):
+        self.assets = assets
+        self.blobs = {}
+        self.where = {}    # ENTRYNAME -> (gaf path, frame offset)
+        names = gafs if gafs is not None else sorted(
+            n for n in assets.index if n.startswith("textures/") and n.endswith(".gaf"))
+        for name in names:
+            try:
+                blob = assets.read(name)
+                entries = gaf_entries(blob)
+            except (HpiError, GafError, struct.error):
+                continue
+            self.blobs[name] = blob
+            for entry, off in entries.items():
+                self.where.setdefault(entry, (name, off))
+
+    def frame(self, name: str):
+        hit = self.where.get(name.upper())
+        if hit is None:
+            return None
+        path, off = hit
+        return gaf_frame(self.blobs[path], off)
+
+
+# --------------------------------------------------------------------------- 3DO
+
+# §1. The file *is* the root object at offset 0: a 52-byte header, then absolute
+# offsets to a name, a vertex array, a primitive array, a sibling and a child.
+
+FIXED = 65536.0
+OBJ_HEADER = struct.Struct("<11i")   # 44 bytes of the 52; last two are offsets
+PRIM_STRUCT = struct.Struct("<8i")
+
+
+class Primitive:
+    __slots__ = ("color", "indices", "texture", "flags", "is_selection")
+
+    def __init__(self, color, indices, texture, flags, is_selection=False):
+        self.color = color
+        self.indices = indices
+        self.texture = texture
+        self.flags = flags
+        self.is_selection = is_selection
+
+
+class Piece:
+    __slots__ = ("name", "offset", "vertices", "primitives", "children")
+
+    def __init__(self, name, offset, vertices, primitives, children):
+        self.name = name
+        self.offset = offset          # (x, y, z) from parent, model units
+        self.vertices = vertices      # [(x, y, z)] model units
+        self.primitives = primitives
+        self.children = children
+
+    def walk(self, depth=0):
+        yield self, depth
+        for child in self.children:
+            yield from child.walk(depth + 1)
+
+
+def _cstring(blob: bytes, offset: int) -> str:
+    end = blob.find(b"\0", offset)
+    return blob[offset:end if end >= 0 else len(blob)].decode("latin-1")
+
+
+def parse_3do(blob: bytes, offset: int = 0, is_root: bool = True) -> Piece:
+    (version, n_verts, n_prims, sel_prim, x, y, z,
+     name_off, _always0, vert_off, prim_off) = OBJ_HEADER.unpack_from(blob, offset)
+    sibling_off, child_off = struct.unpack_from("<ii", blob, offset + 44)
+    if version != 1:
+        raise ValueError(f"3DO object at {offset}: version {version}, expected 1")
+
+    name = _cstring(blob, name_off)
+    verts = []
+    for i in range(n_verts):
+        vx, vy, vz = struct.unpack_from("<3i", blob, vert_off + i * 12)
+        verts.append((vx / FIXED, vy / FIXED, vz / FIXED))
+
+    prims = []
+    for i in range(n_prims):
+        (color, n_idx, _z, idx_off, tex_off, f1, f2, f3) = \
+            PRIM_STRUCT.unpack_from(blob, prim_off + i * 32)
+        indices = list(struct.unpack_from(f"<{n_idx}H", blob, idx_off)) if n_idx else []
+        texture = _cstring(blob, tex_off) if tex_off else None
+        prims.append(Primitive(color, indices, texture, (f1, f2, f3),
+                               is_selection=(is_root and i == sel_prim)))
+
+    children = []
+    if child_off:
+        node = parse_3do(blob, child_off, is_root=False)
+        children.append(node)
+        # siblings of the first child are the remaining children of this piece
+        sib = struct.unpack_from("<i", blob, child_off + 44)[0]
+        while sib:
+            children.append(parse_3do(blob, sib, is_root=False))
+            sib = struct.unpack_from("<i", blob, sib + 44)[0]
+
+    piece = Piece(name, (x / FIXED, y / FIXED, z / FIXED), verts, prims, children)
+    piece_sibling = sibling_off  # noqa: F841 — handled by the caller's sibling walk
+    return piece
+
+
+# --------------------------------------------------------------------------- PNG
+
+
+def write_png(width: int, height: int, rgba: bytes) -> bytes:
+    """Minimal RGBA8 PNG (filter 0 rows), so the tool stays stdlib-only."""
+    raw = bytearray()
+    stride = width * 4
+    for y in range(height):
+        raw.append(0)
+        raw += rgba[y * stride:(y + 1) * stride]
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+            + chunk(b"IEND", b""))
+
+
+# --------------------------------------------------------------------------- atlas
+
+# One texture per model: every GAF frame it names, plus a solid swatch for every
+# palette colour its untextured faces use. One image means one glTF material,
+# which means the whole unit draws in a single call and stays one file.
+
+SWATCH = 4        # pixels on a side for a flat-colour swatch
+PAD = 1           # edge extrusion around every region, against filter bleed
+
+
+class Atlas:
+    """Shelf-packs GAF frames and colour swatches into one RGBA image."""
+
+    def __init__(self, palette):
+        self.palette = palette
+        self.items = []           # (key, width, height, pixels|color)
+        self.rects = {}           # key -> (x, y, w, h)
+        self.size = 0
+        self.rgba = b""
+        self.missing = []
+
+    def request_texture(self, name: str, frame):
+        key = ("tex", name.upper())
+        if key not in self.rects:
+            self.rects[key] = None
+            self.items.append((key, frame.width, frame.height, frame))
+        return key
+
+    def request_color(self, index: int):
+        key = ("col", index)
+        if key not in self.rects:
+            self.rects[key] = None
+            self.items.append((key, SWATCH, SWATCH, index))
+        return key
+
+    def pack(self):
+        order = sorted(self.items, key=lambda it: (-it[2], -it[1]))
+        size = 32
+        while size <= 4096:
+            placed = self._shelf(order, size)
+            if placed is not None:
+                self.size = size
+                self.rects = placed
+                break
+            size *= 2
+        else:
+            raise ValueError("texture atlas would exceed 4096px")
+        self._paint(order)
+
+    @staticmethod
+    def _shelf(order, size):
+        placed = {}
+        x = y = shelf_h = 0
+        for key, w, h, _ in order:
+            need_w, need_h = w + 2 * PAD, h + 2 * PAD
+            if x + need_w > size:
+                x = 0
+                y += shelf_h
+                shelf_h = 0
+            if y + need_h > size:
+                return None
+            placed[key] = (x + PAD, y + PAD, w, h)
+            x += need_w
+            shelf_h = max(shelf_h, need_h)
+        return placed
+
+    def _paint(self, order):
+        size = self.size
+        buf = bytearray(size * size * 4)
+        for key, w, h, payload in order:
+            ox, oy, _, _ = self.rects[key]
+            for row in range(-PAD, h + PAD):          # extrude the border outward
+                sy = min(max(row, 0), h - 1)
+                for col in range(-PAD, w + PAD):
+                    sx = min(max(col, 0), w - 1)
+                    if key[0] == "tex":
+                        idx = payload.pixels[sy * w + sx]
+                        r, g, b = self.palette[idx]
+                        alpha = 0 if idx == payload.transparent else 255
+                    else:
+                        r, g, b = self.palette[payload]
+                        alpha = 255
+                    p = ((oy + row) * size + (ox + col)) * 4
+                    buf[p:p + 4] = bytes((r, g, b, alpha))
+        self.rgba = bytes(buf)
+
+    def uv_rect(self, key):
+        x, y, w, h = self.rects[key]
+        s = float(self.size)
+        return (x / s, y / s, (x + w) / s, (y + h) / s)
+
+    def png(self) -> bytes:
+        return write_png(self.size, self.size, self.rgba)
+
+
+# --------------------------------------------------------------------------- geometry
+
+# 3DO is Y-up and left-handed; glTF is Y-up and right-handed. Negating Z crosses
+# the handedness, so triangle order is reversed too, which keeps face normals
+# pointing out of the hull (verified empirically on stock units — see
+# `ta3do check-winding`).
+
+
+def newell_normal(points):
+    """Plane normal of a polygon loop; robust when the first three verts are collinear."""
+    nx = ny = nz = 0.0
+    count = len(points)
+    for i in range(count):
+        ax, ay, az = points[i]
+        bx, by, bz = points[(i + 1) % count]
+        nx += (ay - by) * (az + bz)
+        ny += (az - bz) * (ax + bx)
+        nz += (ax - bx) * (ay + by)
+    length = math.sqrt(nx * nx + ny * ny + nz * nz)
+    if length < 1e-9:
+        return (0.0, 1.0, 0.0)
+    return (nx / length, ny / length, nz / length)
+
+
+def fan(count: int):
+    """Triangulate an n-gon as a fan from vertex 0 (§1.4)."""
+    return [(0, i, i + 1) for i in range(1, count - 1)]
+
+
+def face_uvs(points, count: int, rect):
+    """TA stretches one texture frame across one face; corners map to verts 0..3.
+
+    For n-gons past four vertices there is no corner left to use, so the extra
+    verts get a planar projection into the same rect — a choice, not a spec.
+    """
+    u0, v0, u1, v1 = rect
+    corners = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
+    if count <= 4:
+        return corners[:count]
+    normal = newell_normal(points)
+    ax, ay, az = points[1][0] - points[0][0], points[1][1] - points[0][1], \
+        points[1][2] - points[0][2]
+    length = math.sqrt(ax * ax + ay * ay + az * az) or 1.0
+    ax, ay, az = ax / length, ay / length, az / length
+    bx = normal[1] * az - normal[2] * ay
+    by = normal[2] * ax - normal[0] * az
+    bz = normal[0] * ay - normal[1] * ax
+    flat = [((p[0] - points[0][0]) * ax + (p[1] - points[0][1]) * ay + (p[2] - points[0][2]) * az,
+             (p[0] - points[0][0]) * bx + (p[1] - points[0][1]) * by + (p[2] - points[0][2]) * bz)
+            for p in points]
+    us = [f[0] for f in flat]
+    vs = [f[1] for f in flat]
+    span_u = (max(us) - min(us)) or 1.0
+    span_v = (max(vs) - min(vs)) or 1.0
+    return [(u0 + (u - min(us)) / span_u * (u1 - u0),
+             v0 + (v - min(vs)) / span_v * (v1 - v0)) for u, v in flat]
+
+
+# --------------------------------------------------------------------------- model build
+
+REVERSE_WINDING = True    # see `check-winding`: negating Z flips face orientation
+
+
+class PieceMesh:
+    __slots__ = ("name", "translation", "children", "positions", "normals", "uvs")
+
+    def __init__(self, name, translation):
+        self.name = name
+        self.translation = translation
+        self.children = []
+        self.positions = []
+        self.normals = []
+        self.uvs = []
+
+    @property
+    def triangles(self):
+        return len(self.positions) // 3
+
+
+class Model:
+    def __init__(self, name, root_mesh, meshes, atlas, stats, hidden=()):
+        self.hidden = sorted(hidden)
+        self.name = name
+        self.root = root_mesh
+        self.meshes = meshes      # depth-first order, root first
+        self.atlas = atlas
+        self.stats = stats
+
+    def bounds(self):
+        lo = [1e30] * 3
+        hi = [-1e30] * 3
+
+        def walk(mesh, base):
+            here = [base[i] + mesh.translation[i] for i in range(3)]
+            for i in range(0, len(mesh.positions), 3):
+                for axis in range(3):
+                    value = here[axis] + mesh.positions[i + axis]
+                    lo[axis] = min(lo[axis], value)
+                    hi[axis] = max(hi[axis], value)
+            for child in mesh.children:
+                walk(child, here)
+
+        walk(self.root, [0.0, 0.0, 0.0])
+        if lo[0] > hi[0]:
+            return ([0.0] * 3, [0.0] * 3)
+        return (lo, hi)
+
+
+def build_model(name, root: Piece, bank: TextureBank, palette,
+                keep_selection: bool = False, reverse: bool = REVERSE_WINDING,
+                hidden=frozenset()) -> Model:
+    """Turn a parsed 3DO into glTF-ready geometry.
+
+    `hidden` names pieces the unit's own script hides at Create (§COB): their
+    faces are dropped, but their nodes survive so the piece tree still matches
+    the model and a script could show them again.
+    """
+    atlas = Atlas(palette)
+    hidden = {h.lower() for h in hidden}
+    stats = {"pieces": 0, "primitives": 0, "triangles": 0, "textured": 0, "flat": 0,
+             "skipped_selection": 0, "skipped_degenerate": 0, "skipped_hidden": 0,
+             "hidden_pieces": sorted(hidden), "missing_textures": []}
+
+    def usable(prim, count=False):
+        if prim.is_selection and not keep_selection:
+            stats["skipped_selection"] += count
+            return False
+        if len(prim.indices) < 3:
+            stats["skipped_degenerate"] += count
+            return False
+        return True
+
+    for piece, _ in root.walk():
+        stats["pieces"] += 1
+        if piece.name.lower() in hidden:
+            stats["skipped_hidden"] += len(piece.primitives)
+            continue
+        for prim in piece.primitives:
+            stats["primitives"] += 1
+            if not usable(prim, count=True):
+                continue
+            frame = bank.frame(prim.texture) if prim.texture else None
+            if frame is not None:
+                atlas.request_texture(prim.texture, frame)
+                stats["textured"] += 1
+            else:
+                if prim.texture:
+                    stats["missing_textures"].append(prim.texture)
+                atlas.request_color(prim.color)
+                stats["flat"] += 1
+    atlas.pack()
+
+    def convert(piece: Piece) -> PieceMesh:
+        mesh = PieceMesh(piece.name,
+                         (piece.offset[0], piece.offset[1], -piece.offset[2]))
+        verts = [(v[0], v[1], -v[2]) for v in piece.vertices]
+        for prim in (() if piece.name.lower() in hidden else piece.primitives):
+            if not usable(prim):
+                continue
+            order = list(prim.indices)
+            if reverse:
+                order = order[::-1]
+            points = [verts[i] for i in order]
+            frame = bank.frame(prim.texture) if prim.texture else None
+            if frame is not None:
+                key = ("tex", prim.texture.upper())
+            else:
+                key = ("col", prim.color)
+            uvs = face_uvs(points, len(points), atlas.uv_rect(key))
+            normal = newell_normal(points)
+            for tri in fan(len(points)):
+                a, b, c = (points[tri[0]], points[tri[1]], points[tri[2]])
+                if _degenerate(a, b, c):
+                    continue
+                for corner in tri:
+                    mesh.positions.extend(points[corner])
+                    mesh.normals.extend(normal)
+                    mesh.uvs.extend(uvs[corner])
+                stats["triangles"] += 1
+        for child in piece.children:
+            mesh.children.append(convert(child))
+        return mesh
+
+    root_mesh = convert(root)
+    meshes = []
+
+    def flatten(mesh):
+        meshes.append(mesh)
+        for child in mesh.children:
+            flatten(child)
+
+    flatten(root_mesh)
+    return Model(name, root_mesh, meshes, atlas, stats, hidden)
+
+
+def _degenerate(a, b, c, eps=1e-9):
+    ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+    cx, cy, cz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+    return (cx * cx + cy * cy + cz * cz) < eps
+
+
+# --------------------------------------------------------------------------- glTF / GLB
+
+GLB_MAGIC = 0x46546C67
+CHUNK_JSON = 0x4E4F534A
+CHUNK_BIN = 0x004E4942
+FLOAT = 5126
+NEAREST = 9728
+LINEAR_MIPMAP_LINEAR = 9987
+CLAMP_TO_EDGE = 33071
+
+
+class BufferBuilder:
+    def __init__(self):
+        self.parts = []
+        self.length = 0
+        self.views = []
+
+    def add(self, data: bytes, target=None) -> int:
+        pad = (-self.length) % 4
+        if pad:
+            self.parts.append(b"\0" * pad)
+            self.length += pad
+        view = {"buffer": 0, "byteOffset": self.length, "byteLength": len(data)}
+        if target:
+            view["target"] = target
+        self.views.append(view)
+        self.parts.append(data)
+        self.length += len(data)
+        return len(self.views) - 1
+
+    def blob(self) -> bytes:
+        return b"".join(self.parts)
+
+
+def model_to_gltf(model: Model):
+    """glTF 2.0 document + binary blob: one node per 3DO piece, one shared material."""
+    buf = BufferBuilder()
+    accessors = []
+    meshes = []
+    nodes = []
+
+    def accessor(values, kind, per, target):
+        data = struct.pack(f"<{len(values)}f", *values)
+        view = buf.add(data, target)
+        count = len(values) // per
+        acc = {"bufferView": view, "componentType": FLOAT, "count": count, "type": kind}
+        if kind == "VEC3" and target == 34962:
+            mins = [min(values[i::3]) for i in range(3)]
+            maxs = [max(values[i::3]) for i in range(3)]
+            acc["min"], acc["max"] = mins, maxs
+        accessors.append(acc)
+        return len(accessors) - 1
+
+    index_of = {id(mesh): i for i, mesh in enumerate(model.meshes)}
+    for mesh in model.meshes:
+        node = {"name": mesh.name or f"piece{index_of[id(mesh)]}",
+                "translation": list(mesh.translation)}
+        if mesh.children:
+            node["children"] = [index_of[id(child)] for child in mesh.children]
+        if mesh.positions:
+            attrs = {
+                "POSITION": accessor(mesh.positions, "VEC3", 3, 34962),
+                "NORMAL": accessor(mesh.normals, "VEC3", 3, 34962),
+                "TEXCOORD_0": accessor(mesh.uvs, "VEC2", 2, 34962),
+            }
+            meshes.append({"name": mesh.name,
+                           "primitives": [{"attributes": attrs, "material": 0, "mode": 4}]})
+            node["mesh"] = len(meshes) - 1
+        nodes.append(node)
+
+    image_view = buf.add(model.atlas.png())
+    doc = {
+        "asset": {"version": "2.0", "generator": "ta3do (Total Annihilation 3DO exporter)",
+                  "extras": {"model": model.name,
+                             "hiddenPieces": model.hidden,
+                             "units": "TA model units (3DO 16.16 fixed-point / 65536)",
+                             "axes": "glTF right-handed, Y up, front faces +Z"}},
+        "scene": 0,
+        "scenes": [{"name": model.name, "nodes": [0]}],
+        "nodes": nodes,
+        "meshes": meshes,
+        "materials": [{
+            "name": "ta_atlas",
+            "doubleSided": True,
+            "pbrMetallicRoughness": {
+                "baseColorTexture": {"index": 0},
+                "metallicFactor": 0.0,
+                "roughnessFactor": 0.85,
+            },
+        }],
+        "textures": [{"sampler": 0, "source": 0}],
+        "images": [{"bufferView": image_view, "mimeType": "image/png", "name": "atlas"}],
+        "samplers": [{"magFilter": NEAREST, "minFilter": LINEAR_MIPMAP_LINEAR,
+                      "wrapS": CLAMP_TO_EDGE, "wrapT": CLAMP_TO_EDGE}],
+        "accessors": accessors,
+        "bufferViews": buf.views,
+        "buffers": [{"byteLength": buf.length}],
+    }
+    return doc, buf.blob()
+
+
+def write_glb(doc, blob: bytes) -> bytes:
+    text = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+    text += b" " * ((-len(text)) % 4)
+    blob += b"\0" * ((-len(blob)) % 4)
+    total = 12 + 8 + len(text) + (8 + len(blob) if blob else 0)
+    parts = [struct.pack("<III", GLB_MAGIC, 2, total),
+             struct.pack("<II", len(text), CHUNK_JSON), text]
+    if blob:
+        parts += [struct.pack("<II", len(blob), CHUNK_BIN), blob]
+    return b"".join(parts)
+
+
+# --------------------------------------------------------------------------- COB
+
+# §2. We do not run the script VM — we only need one fact from it: which pieces
+# the unit hides the moment it is created. Every stock unit's `Create` opens with
+# a run of `HIDE <piece>` for its muzzle flares and effect anchors, which is why
+# you never see those in game, and why they must not sit in a render (or stretch
+# its framing) either. So: walk `Create` from its entry point through opcodes
+# whose length is certain, collect the hides, and stop at the first word we
+# cannot account for. Conservative by construction.
+
+COB_HEADER = struct.Struct("<11i")
+OP_HIDE = 0x10006000
+OP_SHOW = 0x10005000
+# opcode -> inline operand words; anything absent ends the scan
+COB_PROLOGUE = {
+    OP_SHOW: 1, OP_HIDE: 1,
+    0x10007000: 1, 0x10008000: 1,               # CACHE, DONT_CACHE
+    0x1000D000: 1, 0x1000E000: 1,               # SHADE, DONT_SHADE
+    0x10001000: 2, 0x10002000: 2,               # MOVE, TURN
+    0x1000B000: 2, 0x1000C000: 2,               # MOVE_NOW, TURN_NOW
+    0x10021001: 1, 0x10021002: 1, 0x10021004: 1,  # PUSH_CONSTANT/LOCAL/STATIC
+    0x10023002: 1, 0x10023004: 1,               # POP_LOCAL_VAR, POP_STATIC
+    0x10022000: 0, 0x10024000: 0,               # CREATE_LOCAL_VAR, POP_STACK
+    0x10031000: 0, 0x10032000: 0, 0x10033000: 0, 0x10034000: 0, 0x10034001: 0,
+}
+
+
+def hidden_at_create(blob: bytes):
+    """Piece names the unit's script hides as soon as it exists (lower case)."""
+    try:
+        (version, n_scripts, n_pieces, code_len, _statics, _unk,
+         off_entry, off_snames, off_pnames, off_code, _unk3) = COB_HEADER.unpack_from(blob, 0)
+        if version != 4 or n_scripts <= 0:
+            return set()
+        entries = struct.unpack_from(f"<{n_scripts}i", blob, off_entry)
+        names = [_cstring(blob, o)
+                 for o in struct.unpack_from(f"<{n_scripts}i", blob, off_snames)]
+        pieces = [_cstring(blob, o).lower()
+                  for o in struct.unpack_from(f"<{n_pieces}i", blob, off_pnames)]
+        code = struct.unpack_from(f"<{code_len}i", blob, off_code)
+    except (struct.error, ValueError, IndexError):
+        return set()
+    lowered = [n.lower() for n in names]
+    if "create" not in lowered:
+        return set()
+    pc = entries[lowered.index("create")]
+    hidden = set()
+    while 0 <= pc < len(code):
+        op = code[pc] & 0xFFFFFFFF
+        inline = COB_PROLOGUE.get(op)
+        if inline is None:
+            break
+        if op in (OP_HIDE, OP_SHOW) and pc + 1 < len(code):
+            index = code[pc + 1]
+            if 0 <= index < len(pieces):
+                (hidden.add if op == OP_HIDE else hidden.discard)(pieces[index])
+        pc += 1 + inline
+    return hidden
+
+
+# --------------------------------------------------------------------------- PNG read
+
+
+def read_png(data: bytes):
+    """Decode an 8-bit RGB/RGBA PNG. Enough to check our own renders, not a library."""
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    pos = 8
+    width = height = depth = color = 0
+    idat = bytearray()
+    while pos < len(data):
+        length, tag = struct.unpack_from(">I4s", data, pos)
+        body = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if tag == b"IHDR":
+            width, height, depth, color = struct.unpack_from(">IIBB", body, 0)[:4]
+        elif tag == b"IDAT":
+            idat += body
+        elif tag == b"IEND":
+            break
+    if depth != 8 or color not in (2, 6):
+        raise ValueError(f"unsupported PNG (depth {depth}, colour type {color})")
+    channels = 4 if color == 6 else 3
+    raw = zlib.decompress(bytes(idat))
+    stride = width * channels
+    pixels = bytearray(height * stride)
+    prev = bytearray(stride)
+    pos = 0
+    for y in range(height):
+        filt = raw[pos]
+        pos += 1
+        line = bytearray(raw[pos:pos + stride])
+        pos += stride
+        for i in range(stride):
+            a = line[i - channels] if i >= channels else 0
+            b = prev[i]
+            c = prev[i - channels] if i >= channels else 0
+            if filt == 1:
+                line[i] = (line[i] + a) & 0xFF
+            elif filt == 2:
+                line[i] = (line[i] + b) & 0xFF
+            elif filt == 3:
+                line[i] = (line[i] + ((a + b) >> 1)) & 0xFF
+            elif filt == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pred = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[i] = (line[i] + pred) & 0xFF
+        pixels[y * stride:(y + 1) * stride] = line
+        prev = line
+    return width, height, channels, bytes(pixels)
+
+
+def png_coverage(path: Path) -> float:
+    """Fraction of pixels the model actually painted — 0.0 means an empty frame."""
+    width, height, channels, pixels = read_png(Path(path).read_bytes())
+    total = width * height
+    if channels == 4:
+        painted = sum(1 for i in range(3, len(pixels), 4) if pixels[i] > 8)
+    else:
+        first = pixels[0:3]
+        painted = sum(1 for i in range(0, len(pixels), 3) if pixels[i:i + 3] != first)
+    return painted / total if total else 0.0
+
+
+def contact_sheet(paths, gap: int = 10, background=(18, 20, 25, 255)) -> bytes:
+    """Lay the rendered views out in one strip, in the order they were asked for."""
+    tiles = [read_png(Path(path).read_bytes()) for path in paths]
+    width = max(t[0] for t in tiles)
+    height = max(t[1] for t in tiles)
+    total_w = len(tiles) * width + (len(tiles) + 1) * gap
+    total_h = height + 2 * gap
+    canvas = bytearray(bytes(background) * (total_w * total_h))
+    for index, (tw, th, channels, pixels) in enumerate(tiles):
+        ox = gap + index * (width + gap) + (width - tw) // 2
+        oy = gap + (height - th) // 2
+        for y in range(th):
+            row = (oy + y) * total_w
+            for x in range(tw):
+                src = (y * tw + x) * channels
+                r, g, b = pixels[src], pixels[src + 1], pixels[src + 2]
+                alpha = pixels[src + 3] if channels == 4 else 255
+                if not alpha:
+                    continue
+                dst = (row + ox + x) * 4
+                if alpha == 255:
+                    canvas[dst:dst + 4] = bytes((r, g, b, 255))
+                else:
+                    inv = 255 - alpha
+                    for c, value in enumerate((r, g, b)):
+                        canvas[dst + c] = (value * alpha + canvas[dst + c] * inv) // 255
+                    canvas[dst + 3] = 255
+    return write_png(total_w, total_h, bytes(canvas))
+
+
+# --------------------------------------------------------------------------- views
+
+# The standard. Azimuth 0 faces the model's front (+Z after export, which is
+# glTF's own "the front of an asset faces +Z"); azimuth rises anticlockwise seen
+# from above, so -90 is the model's right-hand side (glTF calls -X right, and TA's
+# own piece names agree: ARMPW's `lfire` sits at +X). Elevation is degrees above
+# the horizon.
+
+VIEWS = {
+    "front":   (0.0, 0.0),
+    "back":    (180.0, 0.0),
+    "right":   (-90.0, 0.0),
+    "left":    (90.0, 0.0),
+    "side":    (-90.0, 0.0),     # "side" means the unit's right-hand side
+    "top":     (0.0, 89.9),      # nose points to the top of the frame
+    "bottom":  (0.0, -89.9),
+    "quarter": (-45.0, 30.0),    # the 3/4: front, right and above
+}
+
+DEFAULT_VIEWS = ["front", "side", "top", "back", "quarter"]
+
+
+# --------------------------------------------------------------------------- resolve
+
+
+def resolve_model(assets: Assets, name: str):
+    """A unit name, a 3DO name, an archive path or a file on disk -> (label, bytes)."""
+    path = Path(name)
+    if path.is_file():
+        return path.stem.lower(), path.read_bytes()
+    key = name.lower().removesuffix(".3do")
+    if assets.has(f"units/{key}.fbi"):
+        text = assets.read(f"units/{key}.fbi").decode("latin-1")
+        match = re.search(r"objectname\s*=\s*([^;\s]+)", text, re.I)
+        if match:
+            obj = match.group(1).lower()
+            if assets.has(f"objects3d/{obj}.3do"):
+                return key, assets.read(f"objects3d/{obj}.3do")
+    for candidate in (f"objects3d/{key}.3do", key, f"{key}.3do"):
+        if assets.has(candidate):
+            return Path(candidate).stem.lower(), assets.read(candidate)
+    import difflib
+    pool = [Path(n).stem for n in assets.index if n.startswith("objects3d/")]
+    near = difflib.get_close_matches(key, pool, n=5, cutoff=0.5)
+    hint = f" — did you mean: {', '.join(near)}" if near else ""
+    die(f"no model called {name!r}{hint}")
+
+
+def script_hidden(assets: Assets, label: str):
+    """Pieces `scripts/<label>.cob` hides at Create, if the unit has a script."""
+    path = f"scripts/{label}.cob"
+    if not assets.has(path):
+        return frozenset()
+    try:
+        return hidden_at_create(assets.read(path))
+    except HpiError:
+        return frozenset()
+
+
+def load_model(assets: Assets, name: str, keep_selection=False,
+               show_hidden=False) -> Model:
+    label, blob = resolve_model(assets, name)
+    root = parse_3do(blob)
+    bank = TextureBank(assets)
+    hidden = frozenset() if show_hidden else script_hidden(assets, label)
+    return build_model(label, root, bank, load_palette(assets), keep_selection,
+                       hidden=hidden)
+
+
+def export_model(model: Model, out_dir: Path, atlas_png: bool = True):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    doc, blob = model_to_gltf(model)
+    glb = out_dir / f"{model.name}.glb"
+    glb.write_bytes(write_glb(doc, blob))
+    written = [glb]
+    if atlas_png:
+        atlas = out_dir / f"{model.name}-atlas.png"
+        atlas.write_bytes(model.atlas.png())
+        written.append(atlas)
+    return written
+
+
+# --------------------------------------------------------------------------- browser
+
+CHROME_NAMES = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
+VIEWER_HTML = Path(__file__).with_name("ta3do-view.html")
+
+
+def find_chrome() -> str:
+    import shutil
+    env = os.environ.get("TA3DO_CHROME")
+    if env:
+        return env
+    for name in CHROME_NAMES:
+        found = shutil.which(name)
+        if found:
+            return found
+    die("no Chrome/Chromium found (set TA3DO_CHROME)")
+
+
+class Display:
+    """A private X display for headless Chrome.
+
+    Chrome's headless mode still refuses WebGL here unless an X display exists,
+    and the user's own desktop is not ours to borrow — so we run our own Xvfb and
+    take it down again. If Xvfb is missing we fall back to $DISPLAY.
+    """
+
+    def __init__(self, want_xvfb: bool = True):
+        import shutil
+        self.proc = None
+        self.name = os.environ.get("DISPLAY", "")
+        if not want_xvfb or not shutil.which("Xvfb"):
+            return
+        import subprocess
+        for number in range(90, 130):
+            if Path(f"/tmp/.X11-unix/X{number}").exists():
+                continue
+            proc = subprocess.Popen(
+                ["Xvfb", f":{number}", "-screen", "0", "1280x1280x24", "-nolisten", "tcp"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for _ in range(100):
+                if Path(f"/tmp/.X11-unix/X{number}").exists():
+                    self.proc, self.name = proc, f":{number}"
+                    return
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+            proc.kill()
+        die("could not start Xvfb")
+
+    def close(self):
+        if self.proc:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except Exception:
+                self.proc.kill()
+
+
+class Viewer:
+    """Serves an export directory over loopback so the page can fetch the .glb."""
+
+    def __init__(self, directory: Path):
+        from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+
+        class Quiet(SimpleHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+        handler = lambda *a, **k: Quiet(*a, directory=str(directory), **k)  # noqa: E731
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    @property
+    def base(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def shoot(chrome: str, display: str, url: str, png: Path, size, timeout: float,
+          budget_ms: int) -> str:
+    import subprocess
+    import tempfile
+    env = dict(os.environ)
+    if display:
+        env["DISPLAY"] = display
+    with tempfile.TemporaryDirectory(prefix="ta3do-chrome-") as profile:
+        cmd = [chrome, "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
+               f"--user-data-dir={profile}",
+               # SwiftShader through ANGLE: the only WebGL that works headless here
+               "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
+               "--hide-scrollbars", "--force-color-profile=srgb",
+               "--default-background-color=00000000",
+               f"--window-size={size[0]},{size[1]}",
+               f"--virtual-time-budget={budget_ms}",
+               f"--screenshot={png}", url]
+        proc = subprocess.run(cmd, env=env, timeout=timeout,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if not png.exists():
+        tail = proc.stderr.decode("latin-1", "replace").strip().splitlines()[-3:]
+        return "chrome wrote no screenshot: " + " / ".join(tail)
+    return ""
+
+
+# --------------------------------------------------------------------------- commands
+
+
+def cmd_ls(args):
+    assets = Assets(args.gamedir)
+    pattern = (args.pattern or "*").lower()
+    rows = []
+    for name in sorted(assets.index):
+        if not name.startswith("objects3d/") or not name.endswith(".3do"):
+            continue
+        stem = Path(name).stem
+        if pattern != "*" and pattern.strip("*") not in stem:
+            continue
+        rows.append({"model": stem, "path": name,
+                     "archive": assets.index[name].path.name})
+    human = "\n".join(f"{r['model']:<20} {r['archive']}" for r in rows)
+    out({"count": len(rows), "models": rows}, args.json,
+        human + f"\n{len(rows)} models")
+
+
+def cmd_info(args):
+    assets = Assets(args.gamedir)
+    label, blob = resolve_model(assets, args.name)
+    root = parse_3do(blob)
+    bank = TextureBank(assets)
+    hidden = frozenset() if args.show_hidden else script_hidden(assets, label)
+    model = build_model(label, root, bank, load_palette(assets), args.keep_selection,
+                        hidden=hidden)
+    lo, hi = model.bounds()
+    tree = []
+    lines = []
+    for piece, depth in root.walk():
+        tree.append({"name": piece.name, "depth": depth,
+                     "offset": [round(v, 3) for v in piece.offset],
+                     "vertices": len(piece.vertices),
+                     "primitives": len(piece.primitives)})
+        lines.append(f"{'  ' * depth}{piece.name:<14} "
+                     f"verts={len(piece.vertices):<4} prims={len(piece.primitives)}")
+    textures = sorted({prim.texture for piece, _ in root.walk()
+                       for prim in piece.primitives if prim.texture})
+    data = {"model": label, "bytes": len(blob), "stats": model.stats,
+            "hidden_pieces": model.hidden,
+            "atlas": model.atlas.size, "textures": textures,
+            "bounds": {"min": [round(v, 3) for v in lo],
+                       "max": [round(v, 3) for v in hi],
+                       "size": [round(hi[i] - lo[i], 3) for i in range(3)]},
+            "pieces": tree}
+    human = "\n".join([
+        f"{label}: {model.stats['pieces']} pieces, {model.stats['triangles']} triangles, "
+        f"{len(textures)} textures, atlas {model.atlas.size}px",
+        f"size (x,y,z) = {', '.join(f'{hi[i] - lo[i]:.1f}' for i in range(3))} model units",
+        ("hidden by its own script at Create: " + ", ".join(model.hidden)
+         if model.hidden else "nothing hidden at Create"),
+        "", *lines])
+    out(data, args.json, human)
+
+
+def cmd_views(args):
+    rows = [{"view": name, "azimuth": az, "elevation": el,
+             "default": name in DEFAULT_VIEWS} for name, (az, el) in VIEWS.items()]
+    human = "\n".join(f"{r['view']:<9} az={r['azimuth']:>6.1f}  el={r['elevation']:>5.1f}"
+                      f"{'   (default set)' if r['default'] else ''}" for r in rows)
+    out({"views": rows, "default": DEFAULT_VIEWS}, args.json, human)
+
+
+def cmd_export(args):
+    assets = Assets(args.gamedir)
+    model = load_model(assets, args.name, args.keep_selection, args.show_hidden)
+    written = export_model(model, Path(args.out))
+    data = {"model": model.name, "stats": model.stats,
+            "files": [str(p) for p in written]}
+    out(data, args.json, "\n".join(str(p) for p in written))
+
+
+def cmd_render(args):
+    assets = Assets(args.gamedir)
+    model = load_model(assets, args.name, args.keep_selection, args.show_hidden)
+    out_dir = Path(args.out)
+    written = export_model(model, out_dir)
+    viewer_copy = out_dir / VIEWER_HTML.name
+    viewer_copy.write_bytes(VIEWER_HTML.read_bytes())
+
+    views = args.views or DEFAULT_VIEWS
+    unknown = [v for v in views if v not in VIEWS]
+    if unknown:
+        die(f"unknown view(s): {', '.join(unknown)} (try `ta3do views`)")
+
+    chrome = find_chrome()
+    display = Display(want_xvfb=not args.no_xvfb)
+    server = Viewer(out_dir)
+    results = []
+    try:
+        for view in views:
+            az, el = VIEWS[view]
+            png = out_dir / f"{model.name}-{view}.png"
+            if png.exists():
+                png.unlink()
+            query = (f"?model={model.name}.glb&view={view}&az={az}&el={el}"
+                     f"&w={args.size}&h={args.size}&fov={args.fov}"
+                     f"&margin={args.margin}&ss={args.supersample}&shot=1"
+                     + ("&ortho=1" if args.ortho else "")
+                     + (f"&bg={args.background}" if args.background else ""))
+            url = f"{server.base}/{VIEWER_HTML.name}{query}"
+            error = shoot(chrome, display.name, url, png,
+                          (args.size, args.size), args.timeout, args.budget)
+            row = {"view": view, "azimuth": az, "elevation": el, "file": str(png),
+                   "url": url}
+            if error:
+                row["error"] = error
+            else:
+                row["bytes"] = png.stat().st_size
+                row["coverage"] = round(png_coverage(png), 4)
+                if row["coverage"] < 0.001:
+                    row["error"] = "empty frame — nothing was drawn"
+            results.append(row)
+    finally:
+        server.close()
+        display.close()
+
+    good = [r for r in results if "error" not in r]
+    sheet = None
+    if args.sheet and good:
+        sheet = out_dir / f"{model.name}-sheet.png"
+        sheet.write_bytes(contact_sheet([r["file"] for r in good]))
+
+    bad = [r for r in results if "error" in r]
+    data = {"model": model.name, "stats": model.stats,
+            "files": [str(p) for p in written] + [r["file"] for r in good]
+                     + ([str(sheet)] if sheet else []),
+            "views": results}
+    lines = [f"{model.name}: {model.stats['triangles']} triangles, "
+             f"atlas {model.atlas.size}px"]
+    for row in results:
+        if "error" in row:
+            lines.append(f"  {row['view']:<8} FAILED: {row['error']}")
+        else:
+            lines.append(f"  {row['view']:<8} {row['file']}  "
+                         f"({row['coverage']:.0%} of the frame)")
+    if sheet:
+        lines.append(f"  sheet    {sheet}")
+    human = "\n".join(lines)
+    out(data, args.json, human)
+    if bad:
+        die(f"{len(bad)} view(s) failed: {', '.join(r['view'] for r in bad)}")
+
+
+def cmd_serve(args):
+    directory = Path(args.dir)
+    if not directory.is_dir():
+        die(f"no such directory: {directory}")
+    viewer_copy = directory / VIEWER_HTML.name
+    viewer_copy.write_bytes(VIEWER_HTML.read_bytes())
+    server = Viewer(directory)
+    models = sorted(p.name for p in directory.glob("*.glb"))
+    first = models[0] if models else ""
+    url = f"{server.base}/{VIEWER_HTML.name}?model={first}&view=quarter"
+    print(f"serving {directory} at {server.base}")
+    print(f"  {url}")
+    print("Ctrl-C to stop")
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.close()
+
+
+def cmd_check_winding(args):
+    """Evidence for REVERSE_WINDING: how many faces point away from the hull."""
+    assets = Assets(args.gamedir)
+    bank = TextureBank(assets)
+    palette = load_palette(assets)
+    rows = []
+    for name in args.names:
+        label, blob = resolve_model(assets, name)
+        root = parse_3do(blob)
+        row = {"model": label}
+        for reverse in (True, False):
+            model = build_model(label, root, bank, palette, reverse=reverse)
+            faces = []
+
+            def walk(mesh, base):
+                here = [base[i] + mesh.translation[i] for i in range(3)]
+                pos, nrm = mesh.positions, mesh.normals
+                for t in range(0, len(pos), 9):
+                    centre = [(pos[t + i] + pos[t + 3 + i] + pos[t + 6 + i]) / 3 + here[i]
+                              for i in range(3)]
+                    faces.append((centre, nrm[t:t + 3]))
+                for child in mesh.children:
+                    walk(child, here)
+
+            walk(model.root, [0.0, 0.0, 0.0])
+            if not faces:
+                continue
+            hub = [sum(f[0][i] for f in faces) / len(faces) for i in range(3)]
+            outward = sum(1 for c, n in faces
+                          if sum((c[i] - hub[i]) * n[i] for i in range(3)) > 0)
+            row["reversed" if reverse else "as_written"] = {
+                "outward": outward, "faces": len(faces),
+                "fraction": round(outward / len(faces), 3)}
+        rows.append(row)
+    human = "\n".join(
+        f"{r['model']:<12} reversed {r['reversed']['fraction']:.0%} outward   "
+        f"as-written {r['as_written']['fraction']:.0%} outward" for r in rows)
+    out({"models": rows, "using": "reversed" if REVERSE_WINDING else "as_written"},
+        args.json, human)
+
+
+# --------------------------------------------------------------------------- cli
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="ta3do", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--gamedir", help="Total Annihilation directory (default: the "
+                                     "checkout's tagpu/gamedir)")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    ls = sub.add_parser("ls", help="list the models in the mounted archives")
+    ls.add_argument("pattern", nargs="?", help="substring to filter on")
+    ls.set_defaults(func=cmd_ls)
+
+    info = sub.add_parser("info", help="piece tree, textures and bounds of one model")
+    info.add_argument("name", help="unit name (armpw), model name or a .3do file")
+    info.add_argument("--keep-selection", action="store_true",
+                      help="keep the root's invisible selection quad")
+    info.add_argument("--show-hidden", action="store_true",
+                      help="keep pieces the unit's script hides at Create (flares)")
+    info.set_defaults(func=cmd_info)
+
+    views = sub.add_parser("views", help="the standard camera table")
+    views.set_defaults(func=cmd_views)
+
+    ex = sub.add_parser("export", help="write glTF 2.0 (.glb) + texture atlas")
+    ex.add_argument("name")
+    ex.add_argument("-o", "--out", default="renders", help="output directory")
+    ex.add_argument("--keep-selection", action="store_true")
+    ex.add_argument("--show-hidden", action="store_true",
+                    help="keep pieces the unit's script hides at Create (flares)")
+    ex.set_defaults(func=cmd_export)
+
+    rd = sub.add_parser("render", help="export, then screenshot the standard views")
+    rd.add_argument("name")
+    rd.add_argument("-o", "--out", default="renders", help="output directory")
+    rd.add_argument("--views", nargs="+", metavar="VIEW",
+                    help=f"default: {' '.join(DEFAULT_VIEWS)}")
+    rd.add_argument("--size", type=int, default=768, help="pixels per side (default 768)")
+    rd.add_argument("--fov", type=float, default=22.0, help="perspective FOV in degrees")
+    rd.add_argument("--ortho", action="store_true", help="orthographic instead")
+    rd.add_argument("--margin", type=float, default=0.08,
+                    help="empty fraction of the frame around the model")
+    rd.add_argument("--supersample", type=int, default=2,
+                    help="render scale before downsampling (default 2)")
+    rd.add_argument("--background", help="CSS colour; default is transparent")
+    rd.add_argument("--sheet", action="store_true",
+                    help="also write one contact sheet of every view")
+    rd.add_argument("--keep-selection", action="store_true")
+    rd.add_argument("--show-hidden", action="store_true",
+                    help="keep pieces the unit's script hides at Create (flares)")
+    rd.add_argument("--no-xvfb", action="store_true",
+                    help="use $DISPLAY instead of a private Xvfb")
+    rd.add_argument("--timeout", type=float, default=120.0, help="seconds per view")
+    rd.add_argument("--budget", type=int, default=12000,
+                    help="Chrome virtual-time budget in ms")
+    rd.set_defaults(func=cmd_render)
+
+    sv = sub.add_parser("serve", help="serve an export directory for interactive viewing")
+    sv.add_argument("dir", nargs="?", default="renders")
+    sv.set_defaults(func=cmd_serve)
+
+    cw = sub.add_parser("check-winding", help="measure which triangle order faces outward")
+    cw.add_argument("names", nargs="*", default=["armpw", "armcom", "armstump", "armsolar"])
+    cw.set_defaults(func=cmd_check_winding)
+
+    args = p.parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

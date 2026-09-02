@@ -13,6 +13,9 @@
 # Generated wiki output (rebuild with research/build_wiki.py)
 /research/site/
 
+# ta3do output: models and pictures derived from the game's own assets
+/renders/
+
 # Build artifacts
 *.o
 *.obj

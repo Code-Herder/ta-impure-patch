@@ -524,7 +524,10 @@ Uncompressed frames are just `Width×Height` bytes, row-major. [VERIFIED `gaf.cp
 **For the renderer:** resolve each 3DO primitive's `pTextureName` to a GAF frame, expand it to
 RGBA via the palette (treat `Background` index as alpha 0), and upload as a texture (an atlas
 of a unit's texture GAFs is convenient). Team color is handled by a reserved palette band
-(indices ~216–223) that TA remaps per player — replace those at texture-build time.
+that TA remaps per player — replace those at texture-build time. The band is **indices
+105–110**: that is what ARM's own colour patches (`colorsmd`, `colorsdk`, `colordk2` in
+`textures/logos.gaf`) are painted with. [VERIFIED — pixel histogram; an earlier revision of
+this note guessed ~216–223.]
 
 Tools: **Spring/Recoil** GAF loader; **TA3D**; Cavedog **"GAF Builder"**; community
 **"gaf2png"/"TAGaf"** converters; **`gafbuilder`** editors.
@@ -588,9 +591,13 @@ source when implementing):
   `{ u32 Marker="SQSH"; u8 Version; u8 CompMethod(1 LZ77 / 2 ZLib); u8 Encrypt; u32
   CompressedSize; u32 DecompressedSize; u32 Checksum; }` followed by `CompressedSize` bytes.
   If `Encrypt`, each byte `x` at chunk index `i` is `(unsigned char)((x - i) ^ i)`.
-- **LZ77 (method 1):** LZSS, 4096-byte sliding window; tag byte of 8 flags, LSB→MSB: set =
-  copy literal byte (and into window); clear = 2-byte back-ref, `val = lo | (hi<<8)`,
+- **LZ77 (method 1):** LZSS, 4096-byte sliding window; tag byte of 8 flags, LSB→MSB: **clear**
+  = copy literal byte (and into window); **set** = 2-byte back-ref, `val = lo | (hi<<8)`,
   `offset = val >> 4`, `count = (val & 0x0F) + 2`; `offset == 0` ends the stream.
+  [VERIFIED — this polarity, and *only* this one, decodes the shipped archives: `ARMPW.3DO`'s
+  first tag byte is `0x74`, and the other reading asks for a back-reference before anything is
+  in the window. An earlier revision of this note had the two swapped; see
+  [model export](model-export.md).]
   **ZLib (method 2):** raw `inflate`.
 
 **To extract a `.3do`/`.cob`:** open archive → walk directory to the path

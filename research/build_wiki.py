@@ -36,6 +36,7 @@ PAGES = [
     ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
 
     ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
+    ("model-export",               "Model export (3DO → glTF)",   "Tooling"),
     ("input-firewall",             "The input firewall",          "Tooling"),
     ("gui-gadgets",                "GUI gadgets",                 "Tooling"),
     ("scenario-format",            "JSON scenarios",              "Tooling"),
