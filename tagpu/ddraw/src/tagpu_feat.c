@@ -404,8 +404,8 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
     x0 = (float)(sx - *(const short*)(g + TAGPU_GF_HOTX));
     y0 = (float)(sy - *(const short*)(g + TAGPU_GF_HOTY));
     x1 = x0 + (float)w; y1 = y0 + (float)h;
-    if (x1 < (float)v->vpL || x0 > (float)(v->vpL + v->vw) ||
-        y1 < (float)v->vpT || y0 > (float)(v->vpT + v->vh)) return;
+    if (x1 < (float)v->evpL || x0 > (float)(v->evpL + v->evw) ||
+        y1 < (float)v->evpT || y0 > (float)(v->evpT + v->evh)) return;
     if (s_nv[b] + 6 > s_vcap[b]) { s_cOverflow++; return; }
     e = tagpu_gaf_atlas_get(&s_atlas, g);
     if (!e) { s_cAtlasFail++; return; }
@@ -596,11 +596,26 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     if (mapW <= 0 || mapH <= 0 || mapW > 4096 || mapH > 4096) return feat_bail();
     if (nCols <= 0 || nRows <= 0 || nCols > 1024 || nRows > 1024) return feat_bail();
 
-    /* the engine's own sweep rect and its edge clamps (DrawGameScreen) */
-    r0 = (v->eyeY >> 4) - 16;
+    /* The engine's own sweep rect and its edge clamps (DrawGameScreen), run
+       over the ZOOM's viewport rather than the engine's (TAGPU_FXVIEW.evpL):
+       screen and world differ by a pure translation, so reaching further is
+       "move the eye to the wider rect's top-left and ask for more tiles". The
+       quads still land at unzoomed game coordinates — the vertex shader does
+       the scaling. At zoom >= 1 the deltas are zero and this IS the engine's
+       rect, tile for tile. */
+    r0 = ((v->eyeY + (v->evpT - v->vpT)) >> 4) - 16;
+    nRows += (v->evh - v->vh) >> 4;
+    /* the nCols/nRows <= 1024 sanity check above is on the ENGINE's numbers;
+       re-state a ceiling on ours, since we just added to them. The effective
+       rect is already trimmed to the terrain budget, and the map clamps below
+       bound this further — this is the guard keeping its meaning, not a new
+       policy. */
+    if (nRows > 4096) nRows = 4096;
     if (r0 < 0) { nRows += r0; r0 = 0; }
     if (r0 + nRows > mapH - 1) nRows = mapH - r0 - 1;
-    c0 = (v->eyeX >> 4) - 10;
+    c0 = ((v->eyeX + (v->evpL - v->vpL)) >> 4) - 10;
+    nCols += (v->evw - v->vw) >> 4;
+    if (nCols > 4096) nCols = 4096;
     if (c0 < 0) { nCols += c0; c0 = 0; }
     if (c0 + nCols > mapW - 1) nCols = mapW - c0 - 1;
     if (nRows <= 0 || nCols <= 0) return feat_bail();

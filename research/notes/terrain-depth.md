@@ -749,10 +749,15 @@ remap would roughly halve it.
 
 ### 7.7 What is left inside the viewport
 
-Health bars, nanoframe wireframes, the build-cursor rect, chat and dialogs — all still
-the engine's, all surviving through the key. Taking them too is the natural next cut and
-it needs no new machinery: the key already tells the composite exactly which pixels they
-are. One known deviation from suppressing `0x4848E0`: the engine used to shade-remap its
+**Since G13d: the mouse cursor, and nothing else** — measured at 112 px of 630 784,
+99.98 % key, with the world-space markers (health bars, order markers, group digits,
+build cursor, band box, and the engine's own copy of the selection rect) all taken by
+`tagpu_markown.c` / `tagpu_mark.c` ([UI markers](ui-markers.html) §6). Chat, dialogs,
+the side panel, the minimap and the top bar are screen-space and stay the engine's
+forever: they are correct at 1:1 at any zoom, which is exactly what the key exists to
+let through.
+
+One known deviation from suppressing `0x4848E0`: the engine used to shade-remap its
 *own* overlays under the grey band, and we no longer do — visible only if a health bar
 were ever drawn on out-of-LOS ground, which the engine does not do.
 

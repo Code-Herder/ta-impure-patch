@@ -414,6 +414,31 @@ Three things about this one are unlike the other passes:
 changing it live hands the draw back for one frame so the fill and the composite can never
 disagree about which index they mean.
 
+**The world-space UI markers are `mark.on`** — tokens `log`, `passive`, `nobars`,
+`nocapture`, `noselbox` — on its own patch, `markown.on`, which tacli auto-arms at launch
+when `mark.on` exists. It covers health bars, group digits, order/waypoint/build-queue
+markers, range circles, the build-cursor footprint and the drag band box, and it stops the
+engine drawing its own copy of the selection rect underneath ours. Two mechanisms:
+**health bars are re-drawn** from unit state (the engine's own loop walks HotUnits, culled
+to the *unzoomed* viewport, so a capture would leave a zoomed-out view's outer ring bare),
+**everything else is captured** — the engine draws it into a scratch buffer of ours and we
+replay that buffer through the zoom transform, so parity is exact including text. Verify
+`markown: ARMED (hook8/hook9/transp x2/selbox x2 redirected …)`, `MARKOWN capture=1
+bars-skipped=1 selbox=1`, and `mark: bars=N prefog=… postfog=…` (`log`).
+
+Three things to know:
+
+- **Health bars need the `damagebars` registry option**, which is *off* when the value is
+  missing — that is the engine's own gate (`main+0x37F06` bit0) and we honour it. Set it
+  before launch under `HKCU\Software\Cavedog Entertainment\Total Annihilation`.
+- **Order markers only draw while SHIFT is HELD** — the engine samples its own hotkey
+  `0xF9`, which this build resolves to `GetAsyncKeyState(VK_SHIFT)` (jump table at
+  `0x4C1C48`, verified). `tacli keys <i> down:shift` … `up:shift` around a shot. We call
+  the engine's sampler rather than reading the key ourselves, so a different keymap cannot
+  make us disagree with it.
+- **`passive` is the A/B lever** and hands *everything* back — bars, capture and the
+  selection rect — so the engine draws the lot while we still gather and count.
+
 **Particles (smoke, fire, wakes, nanolathe) are `sfx.on`** — tokens `log`, `passive`,
 `nosmoke`, `nofire`, `nowake`, `nonano` — on the same `fxown.on` patch set (tacli auto-arms
 it when either `fx.on` or `sfx.on` exists), with its own live skip: `arm sfx.on="log

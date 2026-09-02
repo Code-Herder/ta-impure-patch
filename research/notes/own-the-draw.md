@@ -38,11 +38,12 @@ sites — 2 patches cover all 3 rasterise-into-composite sites, and it matches
 
 ## The arming rule — every code-patching pass, not just this one
 
-`tagpu_owndraw.c` was the first of what are now four passes that install engine-code
+`tagpu_owndraw.c` was the first of what are now five passes that install engine-code
 detours through the shared `tagpu_detour.c`: **`owndraw`** (unit rasterisers),
-**`fxown`** (effects), **`featown`** (the feature leaf `0x46A610`) and **`terrown`**
-(the terrain pass `0x483FA0` *and* the fog overlay `0x4848E0`, G13b). They all obey one
-rule, and it has cost time in four separate gates:
+**`fxown`** (effects), **`featown`** (the feature leaf `0x46A610`), **`terrown`**
+(the terrain pass `0x483FA0` *and* the fog overlay `0x4848E0`, G13b) and **`markown`**
+(the world-space UI markers, G13d). They all obey one rule, and it has cost time in
+five separate gates:
 
 > **A code-patching pass installs its detours ONCE at DLL attach, and only if its trigger
 > file exists at that moment. There is no per-frame re-arm.** Patching live engine bytes
@@ -61,10 +62,10 @@ Consequences worth stating plainly:
   launch` now drops a stale `owndraw.on` when native is off and says so.
 - Because of both of the above, `tacli launch` / `scenario load` **auto-arm the patching
   companion to match its GL pass** — `owndraw` from `native.on`, `fxown` from `fx.on` or
-  `sfx.on`, `featown` from `feat.on`, `terrown` from `terr.on` — and print `auto-armed …`.
-  **Any new pass must be added to that list** (`tools/tacli`, near
-  `_ensure_terrown_for_terr`), or it will appear to work for whoever wrote it and fail for
-  everyone else.
+  `sfx.on`, `featown` from `feat.on`, `terrown` from `terr.on`, `markown` from `mark.on` —
+  and print `auto-armed …`. **Any new pass must be added to that list** (`tools/tacli`,
+  near `_ensure_terrown_for_terr`), or it will appear to work for whoever wrote it and
+  fail for everyone else.
 - **A GL pass must also refuse to draw when its patch is absent**, not just log about it.
   `terrown` made this concrete: the terrain pass paints an opaque full-viewport layer, so
   with `terr.on` armed but `terrown.on` missing it would cover every overlay the engine
@@ -110,6 +111,47 @@ exists), *dis*arming is the mirror hazard (the engine's frame is already filled 
 skip drops, so the GL pass keeps drawing for exactly one more frame), and a screen the
 game thread draws without ever reaching the patched call needs a stall timeout. All
 three are written up with their symptoms in terrain-depth §7.6.
+
+---
+
+## The third rule — you do not always have to REDRAW it (G13d)
+
+Every pass up to G13b answered "own the draw" the same way: suppress the engine's code
+and write the pixels ourselves. **`markown` is the first that mostly does not**, and the
+reason generalises:
+
+> **If the thing you are taking over is expensive to re-derive and cheap to redirect,
+> take its OUTPUT instead of its logic — point the engine's draw context at a buffer of
+> yours, let it draw, and replay the buffer on your own terms.**
+
+The order-marker pass is five drawers over a unit's order list, with a build rect that
+grows over ten game ticks, a marching dot phase, a last-seen LOS cache, and `ShowRanges`'
+text labels. Reproducing that is a week of arithmetic to get subtly wrong. Redirecting it
+is one pointer: the `OFFSCREEN` handed down `DrawGameScreen` is a **stack local**, so
+writing its pixel base (`+0x0C`) for the length of a block sends every clipped blit
+inside that block to a buffer of ours and leaves the engine's frame untouched. We upload
+that buffer and draw it as one quad through the zoom transform. Parity is exact by
+construction — including the text, which we have no font path for at all.
+
+Three things decide whether a block qualifies:
+
+- **A bracket that is two call sites, not a range.** Window A is hook 8 `0x469BD7` to
+  hook 9 `0x469D2C`; window B is the two `DrawTranspRectangle` calls themselves. Both
+  are `E8 rel32` sites we can redirect to a plain `__stdcall` C function that calls
+  through — which is also why this collides with nothing: `fxown`'s prologue detour on
+  `0x471F90` still runs, because our stub *calls* `0x471F90`.
+- **What the block reads back.** Alpha composites and "transparent" line variants read
+  the destination. Ours holds the fill key — which is what they already read out of the
+  engine's frame, since `terrown` key-fills the viewport. Identical behaviour, so
+  nothing is lost that G13b had not already lost.
+- **Whether the engine's own culling is good enough for you.** It is not, for health
+  bars: that loop walks HotUnits, culled to the *unzoomed* viewport, so a captured bar
+  layer stops at the 1× rect. Anything whose visible set must grow with the view has to
+  be re-derived. That is why G13d is a hybrid and not one mechanism.
+
+Replay is also where the zoom lives: a captured layer is a screen rect whose world
+coordinates differ from it by a pure translation, so the quad carries exact per-vertex
+world coordinates and the fragment shader runs the same fog rule as every other pass.
 
 ---
 

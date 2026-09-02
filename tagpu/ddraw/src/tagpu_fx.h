@@ -17,6 +17,13 @@ typedef struct TAGPU_FXVIEW {
     int r0, rows;                /* the row sweep's base row and count: a row  */
                                  /* key is (feat?3:1) + (row-r0)*4 (tagpu_feat)*/
     int vw, vh, scafOn;          /* viewport size; scene-depth scaffold armed  */
+    /* The viewport the ZOOM actually shows. The vertex shaders scale about the
+       view centre, so at zoom z a fragment inside the viewport comes from a
+       game-space rect of vw/z x vh/z centred on the same point: zoomed out, the
+       gathers must reach further than the engine's own viewport or the world
+       stops short of the frame edge. Identical to vpL/vpT/vw/vh at z >= 1, so
+       nothing about the 1x path (which every gate was verified at) changes. */
+    int evpL, evpT, evw, evh;
     int fogMode;                 /* bit0 = the engine's fog overlay is live    */
                                  /* (the grid itself says what it paints);     */
                                  /* bit1 = LosType true-LOS mode, diagnostic   */

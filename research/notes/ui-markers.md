@@ -13,15 +13,18 @@ decompiler output read for this build this session. **[CORPUS]** = TADR/`tamem.h
 name cross-checked against our bytes. **[INFERRED]** = my reading, not yet
 runtime-confirmed. `main` = `*(void**)0x511DE8` (the `TAdynmemStruct`).
 
-> **Status after G13b (2026-09-02).** These markers are now the *only* engine pixels
-> left inside the viewport — terrain, features, units, effects and the fog overlay are
-> all ours. They survive because the composite reads the engine's frame as a mask:
-> everywhere it is not the terrain key fill, we refuse to cover it
-> ([terrain & depth](terrain-depth.html) §7.3). That machinery is also exactly what a
-> gate to take these natively would start from — the key already identifies each
-> marker's pixels, and this page says who draws them and from what state. The
-> selection rectangle is already re-drawn natively (`tagpu_native.c`), because it is
-> the one marker that interleaves with unit pixels and is otherwise buried under them.
+> **Status after G13d (2026-09-02): TAKEN.** Every marker on this page is now ours,
+> and the engine's 8bpp surface inside the viewport is **99.98 % key with nothing left
+> on it but the mouse cursor** (measured, 112 px of 630 784). `tagpu_markown.c` +
+> `tagpu_mark.c`; what follows is still the RE this page always was, and it is what
+> those two modules were written from — but read §6 first for which half of it we
+> reproduce and which half we let the engine draw for us.
+>
+> The gate was not "draw markers", it was **free view zoom**. These were the last
+> engine pixels anchored to a WORLD position; everything else in the frame is either
+> ours or genuinely screen-space (side panel, minimap, top bar, chat, dialogs), which
+> must stay at 1:1 at any zoom. A marker left engine-drawn is a marker frozen at the
+> unzoomed projection — invisible at 1×, a ghost at anything else.
 
 ---
 
@@ -375,6 +378,76 @@ Caveats for the native pass:
 5. The health bar's `maxHP` divide reads a **dword** at def+0x1FA (tamem splits
    it as u16 nMaxHP + u16 data8) — replicate the dword read for parity with
    odd mods.
+
+---
+
+## 6. G13d — how we took them (2026-09-02)
+
+Two mechanisms, because the markers split cleanly in two.
+
+**Health bars are RE-DRAWN** (`tagpu_mark.c`), and `DrawHealthBars 0x46A430` is
+detoured away. They cannot be captured, because the engine's loop walks **HotUnits —
+a list culled to the UNZOOMED viewport** — so a captured bar layer would stop at the
+1× rect and leave the outer ring of a zoomed-out view bare. Our walk is over the unit
+array with the zoom's own effective rect, which is the same set at zoom ≥ 1 and a
+superset below it. The arithmetic of §2.1 is reproduced exactly, including the
+**unsigned** `(Health<<5)/maxHP` divide and the `maxHP/3` thirds; the colours go
+through `gui[i] = *(u8*)(main+0xDCB+i)` rather than being used as palette indices.
+
+> That last point caught a live bug in `tagpu_native.c`: its native selection rect had
+> been emitting palette index **10** where the engine emits `gui[0xA]` = **233**. It
+> drew the box in a dark colour and nobody saw it, because the engine was still
+> painting its own green one over the top. Suppressing the engine's is what exposed it.
+
+**Everything else is CAPTURED AND REPLAYED.** The order-marker pass alone is five
+drawers over the order list, with a build rect that grows over ten ticks, a marching
+dot phase, a last-seen LOS cache and `ShowRanges`' text labels — a lot of arithmetic
+to get subtly wrong. So the engine draws it, into a scratch 8bpp buffer of ours
+instead of into its frame, and we upload that buffer and draw it as one quad through
+the same zoom transform the world uses. Parity is exact by construction, text
+included. The capture is a pointer swap and nothing else: the OFFSCREEN is a stack
+local in `DrawGameScreen`, so pointing its pixel base (+0x0C) at our own buffer for
+the length of a block redirects every clipped blit inside it.
+
+| Marker | Ours how | Engine side |
+|---|---|---|
+| Health bar | re-drawn from unit state | `0x46A430` prologue detour |
+| Group digit | captured (window A) | rides the same block |
+| Order markers, route dots, target sprite/circle, build-site rect, range circles | captured (window A) | ride the same block |
+| Build-cursor footprint, drag band box | captured (window B) | the two `0x4BF8C0` call sites redirected |
+| Selection rect | already native since G12b | `0x4699EB`/`0x469B8A` redirected through a **per-unit** test — a unit `tagpu_native_owns_unit` does not own keeps the engine's |
+
+**Two capture windows, because fog divides them.** Window A is hook 8 `0x469BD7` →
+hook 9 `0x469D2C` and is drawn with the fog rule applied (the engine's block runs
+*before* `0x4848E0` and is darkened by it). Window B is the two `DrawTranspRectangle`
+calls, drawn with fog off, because the engine never darkens the build cursor. Layer A
+draws first, then our bars over it, then layer B — the engine's own order inside the
+block (`0x469BFC` markers, `0x469CB9` bars, and the cursor after fog).
+
+Six call-site redirects and one prologue detour. **No collision with the other passes**:
+the redirects *call* `0x471F90` and `0x4BF8C0`, so whatever `fxown` and `terrown`
+installed on those still runs.
+
+**What the capture buffer holds under a blend.** `DrawTranspRectangle`'s transparent
+edges and the order sprite's alpha composite read the destination. Ours is key-filled,
+which is exactly what they already read out of the engine's frame today, because
+`terrown` fills the viewport with that same key — so this changes nothing, and nothing
+is lost that was not already lost at G13b.
+
+### 6.1 Cost, and the one honest gap
+
+Window A is not opened at all unless something can draw in it: the engine's own SHIFT
+hotkey (`KeyboardHotkeySampler(0xF9)`, called through the engine's function so a
+different keymap cannot make us disagree with it) or a watched HotUnit carrying a
+squad tag with `damagebars` on. With `damagebars` off — the default when the registry
+value is missing — the common frame costs nothing at all.
+
+**The gap: the captured layers are clipped to the 1× viewport.** The engine's drawers
+clip to the OFFSCREEN's own rect, so at zoom < 1 order markers and group digits stop
+at the unzoomed viewport's edge while the world carries on past it. Health bars, which
+are the always-on markers, do not have this limit because they are re-drawn. Closing
+it for the rest would mean widening the context's clip rect and re-basing the scratch
+buffer around a negative origin — possible, and deliberately not done here.
 
 ---
 

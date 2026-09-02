@@ -17,6 +17,7 @@
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
 #include "tagpu_terrown.h"
+#include "tagpu_markown.h"
 #include "tagpu_weapons.h"
 #include "utils.h"
 #include "versionhelpers.h"
@@ -95,6 +96,15 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            viewport with the composite's key and replicates the fog grid's
            lazy rebuild. */
         tagpu_terrown_init();
+
+        /* tagpu: own the engine's world-space UI markers (G13d) — health bars
+           re-drawn natively, order markers / group digits / build cursor
+           captured out of the engine's frame and replayed through the zoom.
+           No-op unless "tagpu_markown.on" exists; byte-matched, all-or-nothing;
+           four call-site redirects plus 0x46A430, disjoint from every detour
+           above (the redirects CALL 0x471F90 and 0x4BF8C0, so whatever fxown
+           installed on them still runs). */
+        tagpu_markown_init();
 
         /* tagpu: 1..N weapons per unit — the first module that changes the
            simulation, in its own file behind its own gate. No-op unless
