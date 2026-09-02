@@ -131,6 +131,7 @@ function found. Per-frame functions marked ●.
 | `0x4898B0` | clear target for slot `n`, `3` = all | recursion over 0,1,2 | replace |
 | `0x49ABB0`, `0x49ADF0`, `0x49D120`, `0x48A060`, `0x48A0A0`, `0x48A0F0`, `0x48A190`, `0x48A1E0`, `0x40B7B0` | index-based helpers | `unit + 4 + idx*0x1C` (or `+0x10`) | detour the address computation (one `LEA`/`IMUL` each) |
 | `0x4022xx`, `0x4035xx`, `0x4037xx`, `0x4139xx` | attack/guard order state machines (no Ghidra function bodies) | pass an order-held index to `CheckUnitWeapon` | none — index-based |
+| `0x4039BE` in `FUN_004038A0` | attack-**ground** order, fire branch | unrolled: ground target on slots 0 and 1 only | splice `ground.order`: do slot 1, then every side slot (snag 9) |
 | `0x46AC51`–`0x46AC83` | HUD panel `FUN_0046A860` | 3 reload bars | optional; leave at 3 |
 | `0x487625`, `0x487A51` | savegame load/save `FUN_00487080` / `FUN_004876C0` | 3 slots × 0x18-byte records, bit-packed state | optional; extra slots start cold after a load |
 | `0x488570` | `UNITS_GiveUnit` | packet `0x14` carries 3 `cStock` bytes | optional (stockpile weapons beyond slot 3 lose their stock on give) |
@@ -414,14 +415,14 @@ Everything below was measured on the pristine 3.1 build under wine with `tacli`.
 | Piece | What it is |
 |---|---|
 | Gate | `tagpu_weapons.on` next to the exe at attach; absent = not one byte written (the oracle still works). `tacli arm <inst> weapons.on` before launch. |
-| Install | 20 entry hooks, 19 mid-function splices, 4 in-place byte patches, all byte-matched **before** the first write; one mismatch = `weapons: DISARMED` and nothing touched. Stubs and trampolines live in one `VirtualAlloc`'d RWX pool (1.6 KB used). |
+| Install | 20 entry hooks, 20 mid-function splices, 4 in-place byte patches, all byte-matched **before** the first write; one mismatch = `weapons: DISARMED` and nothing touched. Stubs and trampolines live in one `VirtualAlloc`'d RWX pool (1.6 KB used). |
 | Entry hooks (trampoline for stock) | `UNITS_StartWeaponsScripts`, `AutoAim`, the three name helpers, retaliation `0x406F80`, acquisition `0x4089A0` (per *batch*: the original runs unless a unit in the cursor's batch is extended), `0x4897E0`, `0x4898B0`, `0x489800` (an index helper the survey missed — the allocator's per-slot "enable"), `0x48A060/0A0/0F0/160`, `0x49ADF0`, `0x48A190`, `CheckUnitWeapon`, `Trajectory3` (also missed by the survey: it reads `unit+0x10+idx*0x1C`), `0x49D120`, and the def copy `0x42B370` (keeps the side record with the type it describes). |
 | Splices | loader `0x42CEF2` (reads `weaponN` / `wN_badTargetCategory`), `WEAPON_FIRED` receiver `0x49D364` (clamps `WeapIdx >= count` to slot 0 and logs), the three `FireProjectile_*` name lookups, eleven `state>>2&3` decodes in the four fire callbacks, two in the target finder `0x40B7B0`, one in the target-position helper `0x48A1E0`. |
 | Byte patches | the three `FireProjectile_*` heading loads (`mov si,[ebp+ecx*4+0x1a]` → `mov si,[edi+0x16]`, the slot pointer is in a register) and one `and al,3` after a spliced decode. |
 | Side tables | def records keyed by def array index (the game-start loader compacts the array, numbers it, *then* runs the FBI loader per final slot, so the index is stable; the record also stores the def pointer and answers "stock" on a mismatch); unit side rows `[units][13]` sized from the live unit array and reset by the module's own `StartWeaponsScripts` at creation (which every create path, savegame load included, goes through). |
 | Slot index | derived from pointers (`SlotIndex(unit, slot)`); the 2-bit field still holds `i & 3`. |
 | Names | slots 0–2 use the engine's own strings and tables; 3+ are `AimWeaponN` / `FireWeaponN` / `QueryWeaponN` / `AimFromWeaponN` (1-based). |
-| Oracle | `tagpu_weapons.trigger` → `tagpu_weapons.json`; `tacli weapons <inst> [idx…]` prints every slot of every unit (state, weapon, target, reload, heading, pitch, stock, aim result, thread), the arming state, the C-path hit counters and projectile launches per slot. Works unarmed, which makes the unarmed instance the control. |
+| Oracle | `tagpu_weapons.trigger` → `tagpu_weapons.json`; `tacli weapons <inst> [idx…]` prints every slot of every unit (state, weapon, target, reload, heading, pitch, stock, aim result, thread), the arming state, the C-path hit counters and projectile launches per slot. Works unarmed, which makes the unarmed instance the control. Four counters are diagnostics rather than coverage: `violation` and `mismatch` must stay 0 (assertions 3 and 13), `cob_full` must stay 0 (snag 10 — nonzero means the unit ran out of COB threads and some slot is aiming from piece 0), and `hold_fire` counts shots declined because the barrel had not slewed on target yet, which is working as intended. |
 
 ### Content tooling (no COB compiler needed)
 
@@ -438,19 +439,198 @@ Everything below was measured on the pristine 3.1 build under wine with `tacli`.
   archive itself is gitignored like every `*.ufo`; run the script once per checkout)
   (ARMPW4: a Peewee with `Weapon4`; ARMLLT10: an LLT with `Weapon1` + `Weapon4..10`)
   from the game's own files. Scenarios `wpn-peewee4.json`, `wpn-llt10.json`.
+- `tools/ta3domod` — read/edit/write `.3do`. `--stretch PIECE:AXIS:CUT:AMOUNT`
+  inserts hull at a cut plane (vertices past it slide out, a child past it moves
+  bodily, a child before it is entered with the plane rebased into its frame);
+  `--graft SRC:PIECE:DST:X,Y,Z:NAME` lifts a turret subtree off another unit,
+  renaming descendants so the COB's names stay unique. `ta3domod export` is
+  ta3do's glTF export plus `asset.extras.ta3do.atlas` — for every packed tile,
+  the GAF entry and archive it came from, its pixel rect and its UV rect — so an
+  externally edited mesh can be written back as a `.3do` with texture names
+  intact. Needs `tools/ta3do`, which is still on `worktree-3do_exporter`.
+- `tools/warlordex_content.py` — builds `scenarios/content/warlordex.ufo`:
+  CORBATSX "WarlordEx", the Warlord with 50 model units spliced into its
+  midbody and four CORLLT turrets on the deck that opens, with
+  `Aim/Fire/AimFrom/QueryWeapon4..7` written straight as bytecode (one turret
+  and one signal bit each, modelled on CORLLT's aim script) and a `Create` that
+  also hides the four new flares. New code is appended and `Create`'s entry
+  repointed at a relocated copy, so every absolute jump already in the file
+  still lands where it did.
 - Loose `units/*.fbi` overrides are rejected by the engine (the type vanishes);
   ship content as a `.ufo`. `tacli scenario` caches the type list per instance in
   `catalogue.json`; delete it after changing archives or the validation refuses
   a type the game does have.
+
+### Snags — every one that cost a run, building WarlordEx
+
+Seven weapons on a hand-built unit, and the first six live runs all failed for a
+different reason. None of them was the engine module: it reported `n=7`,
+`violation=0`, `mismatch=0` throughout. Every one was content.
+
+**1. `AimWeaponN` must not wait for the turn — the arrival test belongs in the
+module.** The most expensive one, three passes to get right, and every wrong
+answer was a plausible-looking script. Measured on
+`scenarios/warlordex-vs-fleet.json`, one 40-ship run each, shots on slots 4..7
+(weapon `CORE_BATSLASER`, range 810):
+
+| `AimWeaponN` body | slot 4..7 shots | verdict |
+|---|---|---|
+| `signal`, `set-signal-mask`, turn, wait-for-turn, return 1 — Cavedog's own shape | 0 2 0 6 | starves the COB pool; barely fires |
+| turn, wait-for-turn, return 1 (`track`) | 32 32 34 23 | starves it worse, and poisons the aim origin |
+| `turn-now` both axes, return 1 (`snap`) | 48 10 10 5 | on target, but the turret teleports |
+| **turn, return 1 (`slew`) + the module's arrival gate** | **19 18 25 19** | **even, slews, and aligned** |
+
+Read the first three rows with snag 10: **any aim script that waits holds one of
+the unit's eight COB threads for the whole slew**, and four extra turrets cannot
+each have one. That is the single cause behind both failures. Cavedog's `signal`
+pair is not decoration — it kills the previous instance, so a waiting script that
+omits it leaks a thread per restart and exhausts the pool in seconds; `track`
+does exactly that, which is why it looks best on shot count and is the worst of
+the four in play (starved slots share one bogus heading and stop tracking). And
+`full` keeps the pair but still parks four threads in `wait-for-turn`, leaving
+nothing for the fire scripts and `SmokeUnit`.
+
+An earlier version of this note blamed the pair itself and said the mechanism was
+unexplained. It also floated a double-start, which is wrong: stock `AutoAim`
+(`0x49E1A0`) makes the same two calls the port does, and the second, `0x456200`,
+is a bare `HAPI_BroadcastMessage` of packet `0x10` that returns immediately unless
+`TAdynmem+0x2A44` says the game is networked [DECOMPILE], so in a skirmish only
+one instance runs. Both guesses are retired: it is thread exhaustion, and the
+`signal` pair is the *cure* for a waiting script, not the disease.
+
+So the shipped script does not wait, and does not need the pair either. It issues
+the turn and returns inside the tick — a `turn` keeps running without a thread
+once issued — and the module supplies the guarantee the wait used to
+(`barrel_on_target()`, snag 10). Dropping the wait *without* that gate was the
+second wrong answer: the slot then reports aimed the instant the turn starts and
+the beam leaves a barrel that has not swung round, which reads in game as "the
+lasers don't come from the tip of the barrel". The model is not at fault —
+CORLLT's `gun` geometry ends at z = −23.62 and the `flare` piece `QueryWeaponN`
+hands back sits at −23.86, a quarter of a unit past the tip.
+
+**2. A short-ranged extra weapon needs a scenario that brings the enemy to it.**
+`CORE_LIGHTLASER` reaches 300; `ARM_ROY` reaches 660, the stock Warlord's own
+`COR_BATS` 1250. A fleet parks at arm's length and the new battery never fires a
+shot — the run looks exactly like a broken weapon, and a WarlordEx duel against
+two stock Warlords was won 2-0 with the four lasers silent throughout. Check
+`range` on both sides before blaming the content. WarlordEx now carries
+`CORE_BATSLASER`, the same 810-range High Energy Laser its own tri-barrel turret
+fires, so the battery reaches as far as the ship it is bolted to.
+
+**3. `energypershot` is a silent gate.** `CORE_LIGHTLASER` costs 10 energy a
+shot, and a scenario with `clear_existing: true` takes the starting commander
+away — with it the player's whole energy *storage*, which the engine recomputes
+from owned units every tick. Level pinned at 0, and the extra slots simply never
+fire while the stock ones (which cost nothing) carry on. Give the owner
+generation and storage; the fixture parks two fusions and three energy stores
+offshore of the fight.
+
+**4. `MaxDamage` above 32767 kills the unit on spawn.** A live unit's current
+health is `short Health` at `unit+0x108` (`tamem_ghidra.h:1107`), signed. 61400
+wraps to −4136 and the ship dies on the frame it appears.
+`warlordex_content.py` clamps and says so.
+
+**5. Inherit the FBI through the merged archive view, not `totala1.hpi`.** Core
+Contingency ships its own `CORBATS.FBI` in `ccdata.ccx`, and that is the Warlord
+the game loads. Deriving from `totala1.hpi` gives a unit built on stats the
+player never sees.
+
+**6. Grafted model pieces need unique names, and `Create` must hide the new
+flares.** The COB addresses pieces by name, so a second `flare` from a donor
+turret collides; `ta3domod --graft` suffixes the whole subtree. And a muzzle
+flare that no `Create` hides is a cone stuck on the deck for the unit's life.
+
+**7. TA's two order groups, and what a scenario can reach.** A scenario `stance`
+(`hold` / `manoeuvre` / `roam`) is the *movement* group only; there is no
+fire-state key. The fire group is an FBI property — `NoAutoFire=1` — so a
+target that must not shoot back is a unit variant, not a scenario setting.
+`warlordex.ufo` ships `ARMROYH` "Crusader (Hold)" for exactly that.
+
+**8. Housekeeping that bites.** Delete the instance's `catalogue.json` after
+every archive change or `scenario load` refuses a type the game does have.
+`--los 0` (permanent line of sight) takes through the registry, but `--mapping`
+does not — toggle `Mapping` on the SKIRMISH screen with `tacli ui set Mapping 1`
+and use `scenario apply` rather than `load`, since `load` relaunches and loses it.
+Without both, the whole fight happens inside a black circle.
+
+**9. An attack-ground order drives slots 0 and 1 and nothing else — engine, not
+content.** Reported from play: ordered onto a spot, the WarlordEx shells it with
+the stock laser and cannon while all four new turrets sit idle. `FUN_004038A0`,
+the attack order's state machine, unrolls the fire branch at `0x40399C` by hand —
+`ClearTargetN 0`, `ClearTargetN 1`, `SetGroundTarget 0`, `SetGroundTarget 1` — and
+that is the whole of it [BINARY-VERIFIED]. Weapon 3 is reached only by the sibling
+branch at `0x40396B`, which the order takes when its held weapon index is exactly
+2; nothing sets that for an extended unit. So the extra slots were never given the
+spot at all: `tacli weapons` showed `tgt=0 spot=0x8000` on every one of them while
+0 and 1 fired. Note the *unit*-target order does not have this problem for a
+different reason — it hands one slot the target (`order+0x36`, from `FirstWeapon`)
+and lets the rest reach it through acquisition, which the module already ports.
+Ground targets have no acquisition path, so there is nothing to fall back on.
+
+Fixed with a 9-byte splice, `ground.order`, over the second `SetGroundTarget` call
+at `0x4039BE`: it does that call and then gives every side slot the same spot on
+the same terms (clear may-acquire first, exactly as `ClearTargetN` did for 0 and
+1). Stock units are untouched — the callback returns after slot 1 when
+`count <= 3`. The `ground` hit counter in `tacli weapons` is the live proof it
+ran; the fixture is `scenarios/warlordex-groundattack.json`, one ship, no enemy
+inside weapon range, so every shot slots 4..7 fire came from the order.
+
+**10. A unit gets eight COB threads, and running out is silent.**
+`COBEngine_AllocThread` (`0x4B08C0`) scans a fixed **eight** `0xA4`-byte records
+at `cob+0x1C` and returns `-1` when they are all busy [BINARY-VERIFIED]; the
+running-thread count sits at `cob+0x53C`, immediately after the array, so the
+eight is a hard layout constant, not a tunable. Two callers matter:
+
+- `COBEngine_QueryScript` (`0x4B0BC0` → `0x4B0C40`) opens with that allocation
+  and, on `-1`, **returns without touching the caller's out-parameter**. No error,
+  no log. `UNITS_CallAimScripts` initialises the piece to `-1`, asks
+  `AimFromWeaponN`, gets silence, falls back to `QueryWeaponN`, gets silence, and
+  uses piece **0** — the hull's first piece. Every starved slot then computes the
+  same aim origin, so several turrets suddenly share one heading and pitch and
+  stop tracking, while the ones that got a thread carry on. That is exactly what
+  "one turret won't move to aim, and sometimes it starts working again" looks
+  like from the outside.
+- any aim script that `wait-for-turn`s holds a thread for the whole slew.
+
+A warship spends most of the eight before the extra weapons arrive: `AimPrimary`,
+`AimSecondary`, the `RestoreAfterDelay` each of them starts, `SmokeUnit` once
+damaged, and the fire scripts (Cavedog's flare is `show; sleep 150; hide`). Four
+more waiting aim scripts do not fit. Worse, without `signal` they *accumulate* —
+Cavedog's `signal`/`set-signal-mask` pair exists to kill the previous instance,
+so a script that waits and does not signal leaks a thread per restart and
+exhausts the pool in seconds. That is the real reason snag 1's `full` and `track`
+both fail, and it subsumes the guess left there: the pair is not optional for a
+long-lived script, and a script that needs no pair is one that does not wait.
+
+Two fixes, both in `tagpu_weapons.c`:
+
+1. **Cache the piece.** `AimFromWeaponN`/`QueryWeaponN` return a constant, so
+   `slot_piece()` asks once per unit *type* and remembers it in the def record
+   (`pc_aimfrom` / `pc_query`). After the first call the aim origin is a pointer
+   chase that cannot fail, and the per-tick query traffic disappears. Slots 0–2
+   still go through the engine every tick — a stock `Query*` may legitimately
+   answer a different barrel each call.
+2. **Move the arrival test out of the script.** The extended slots run an aim
+   script that returns inside its own tick (`AIM_STYLE = "slew"`), so no thread
+   is held; a `turn` keeps running once issued without one. `my_AutoAim` then
+   re-solves those slots every tick instead of latching state bit 0 (which is
+   only cleared on target loss, and would otherwise freeze the turret on its
+   first solution), re-issuing the turn only when the answer moves, and
+   `barrel_on_target()` withholds the shot until the muzzle piece really points
+   at the target — the muzzle rotates with the gun, so `mount → muzzle` versus
+   `mount → target` is the whole test, in yaw, to `AIM_TOLERANCE` (1024, 5.6°).
+
+`tacli weapons` reports both: `cob_full` counts aim origins that fell back to
+piece 0 (must stay 0) and `hold_fire` counts shots declined mid-slew.
 
 ### Assertions — status
 
 | # | Status | Evidence |
 |---|---|---|
 | 1 | **holds** | unarmed launches log nothing and leave every site pristine (the install path is never entered); the oracle reads the stock slots exactly as the note's layout says (states `0x12/0x14/0x18`, weapon in slot 0, thread preset `0x4FD6F0`). |
-| 2 | by construction, not exercised | `verify_all()` runs over all 43 sites before any write; a deliberate-mismatch debug run is still to do. |
+| 2 | by construction, not exercised | `verify_all()` runs over all 44 sites before any write; a deliberate-mismatch debug run is still to do. |
 | 3 | **holds (live)** | armed + stock content through two `shootall` fights and an AI game: `stock_splice` = 8410 stub executions on the stock path, `mismatch` = 0 (the pointer-derived index agreed with the engine's 2-bit field every time), no crash across ~25 000 frames. A roster diff at fixed ticks between the armed and unarmed instances was not done (the two instances are not tick-aligned); the stub equivalence is proven directly instead. |
-| 4 | **holds** | every C-path counter (`start autoaim names retaliate acquire helpers splice`) stays 0 with stock content; only `loader` moves, once per unit type. |
+| 4 | **holds** | every C-path counter (`start autoaim names retaliate acquire helpers splice ground hold_fire`) stays 0 with stock content; only `loader` moves, once per unit type. |
 | 5 | **holds** | all 20 stolen prologues checked by hand against objdump for IP-relative code (none); every trampoline was executed on the stock path. |
 | 6 | **holds** | ARMLLT10: ten slots (`n=10`), each side slot holds `ARM_LIGHTLASER`, the target, an aim result and state `0x1F/0x13/0x17/0x1B` (`i & 3` in bits 2–3); `fires by slot: 0 3 4 5 6 7 8 9` all launched projectiles; the aim solutions of slots 3–9 equalled the stock slot-0 solution at the same tick (logged side by side during development). ARMPW4: slot 3 launched 60 projectiles in a fight. |
 | 7–10, 15 | **untested** | needs two instances in one game; see "Multiplayer — untested, and why" below and [networking-lobbies](networking-lobbies.md). The only in-module guard is the receiver clamping `WeapIdx >= count` to slot 0. |

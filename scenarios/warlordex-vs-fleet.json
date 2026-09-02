@@ -1,0 +1,743 @@
+{
+  "format": "ta-scenario/1",
+  "description": "WarlordEx (CORBATSX, from warlordex.ufo: the Warlord with a spliced midbody, four extra laser turrets on weapons 4..7 and five times the hull) ringed by 40 ARM Skeeters, all of them ordered onto it. Skeeters are the right swarm for this: ARMPT_LASER reaches 180 against CORE_BATSLASER's 810, so they have to come inside the new battery to fight at all \u2014 a fleet of Crusaders (660) simply parks outside it and the four turrets never fire a shot. The rings are ellipses, not circles, because the strait's water runs east-west and a circle of this radius beaches its northern arc. Needs the extra-weapons module armed (tacli arm <inst> weapons.on), warlordex.ufo in the instance gamedir, and the fusions and energy stores on the north shore, because CORE_BATSLASER costs 75 energy a shot and clear_existing takes the commander's storage with it. Launch with --los 0 and Mapping on, or the fight happens inside a black circle.",
+  "seed": 20260902,
+  "on_error": "skip",
+  "setup": {
+    "map": "Anteer Strait",
+    "res": "1920x1080",
+    "clear_existing": true,
+    "switches": {
+      "shootall": true,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "core",
+        "color": 1,
+        "metal": 10000,
+        "energy": 10000
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "arm",
+        "color": 0,
+        "metal": 10000,
+        "energy": 10000
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "warlordex",
+      "type": "CORBATSX",
+      "owner": 0,
+      "pos": [
+        2900,
+        1980
+      ],
+      "facing": 90
+    },
+    {
+      "id": "fusion1",
+      "type": "CORFUS",
+      "owner": 0,
+      "pos": [
+        3000,
+        1400
+      ]
+    },
+    {
+      "id": "fusion2",
+      "type": "CORFUS",
+      "owner": 0,
+      "pos": [
+        3180,
+        1400
+      ]
+    },
+    {
+      "id": "estor1",
+      "type": "CORESTOR",
+      "owner": 0,
+      "pos": [
+        3340,
+        1400
+      ]
+    },
+    {
+      "id": "estor2",
+      "type": "CORESTOR",
+      "owner": 0,
+      "pos": [
+        3420,
+        1400
+      ]
+    },
+    {
+      "id": "estor3",
+      "type": "CORESTOR",
+      "owner": 0,
+      "pos": [
+        3500,
+        1400
+      ]
+    },
+    {
+      "id": "arm_spare",
+      "type": "ARMSOLAR",
+      "owner": 1,
+      "pos": [
+        3800,
+        1300
+      ]
+    },
+    {
+      "id": "skeet0_0",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2900,
+        1780
+      ],
+      "facing": 180,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_1",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3014,
+        1795
+      ],
+      "facing": 202,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_2",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3112,
+        1838
+      ],
+      "facing": 225,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_3",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3177,
+        1903
+      ],
+      "facing": 247,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_4",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3200,
+        1980
+      ],
+      "facing": 270,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_5",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3177,
+        2056
+      ],
+      "facing": 292,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_6",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3112,
+        2121
+      ],
+      "facing": 315,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_7",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3014,
+        2164
+      ],
+      "facing": 337,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_8",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2900,
+        2180
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_9",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2785,
+        2164
+      ],
+      "facing": 22,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_10",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2687,
+        2121
+      ],
+      "facing": 45,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_11",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2622,
+        2056
+      ],
+      "facing": 67,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_12",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2600,
+        1980
+      ],
+      "facing": 90,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_13",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2622,
+        1903
+      ],
+      "facing": 112,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_14",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2687,
+        1838
+      ],
+      "facing": 135,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet0_15",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2785,
+        1795
+      ],
+      "facing": 157,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_0",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2900,
+        1680
+      ],
+      "facing": 180,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_1",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3024,
+        1690
+      ],
+      "facing": 194,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_2",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3140,
+        1720
+      ],
+      "facing": 209,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_3",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3239,
+        1767
+      ],
+      "facing": 225,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_4",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3315,
+        1830
+      ],
+      "facing": 239,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_5",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3363,
+        1902
+      ],
+      "facing": 255,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_6",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3380,
+        1980
+      ],
+      "facing": 270,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_7",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3363,
+        2057
+      ],
+      "facing": 285,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_8",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3315,
+        2130
+      ],
+      "facing": 299,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_9",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3239,
+        2192
+      ],
+      "facing": 315,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_10",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3140,
+        2239
+      ],
+      "facing": 330,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_11",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3024,
+        2269
+      ],
+      "facing": 345,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_12",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2900,
+        2280
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_13",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2775,
+        2269
+      ],
+      "facing": 15,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_14",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2660,
+        2239
+      ],
+      "facing": 30,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_15",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2560,
+        2192
+      ],
+      "facing": 44,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_16",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2484,
+        2130
+      ],
+      "facing": 59,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_17",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2436,
+        2057
+      ],
+      "facing": 75,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_18",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2420,
+        1980
+      ],
+      "facing": 90,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_19",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2436,
+        1902
+      ],
+      "facing": 105,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_20",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2484,
+        1830
+      ],
+      "facing": 120,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_21",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2560,
+        1767
+      ],
+      "facing": 135,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_22",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2660,
+        1720
+      ],
+      "facing": 150,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    },
+    {
+      "id": "skeet1_23",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2775,
+        1690
+      ],
+      "facing": 164,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "warlordex"
+        }
+      ]
+    }
+  ],
+  "groups": [],
+  "camera": {
+    "center_on": "warlordex"
+  }
+}

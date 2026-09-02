@@ -15,6 +15,7 @@
 typedef unsigned char  u8;
 typedef unsigned short u16;
 typedef unsigned int   u32;
+typedef signed char    i8;
 typedef short          i16;
 typedef int            i32;
 
@@ -81,6 +82,15 @@ typedef struct WDef {             /* per unit type: what the FBI said beyond wea
     u8    count;                  /* 3..WPN_CAP */
     char* w[WPN_SIDE];            /* weapon4.. (Weapons[0] when absent)          */
     u32*  mask[WPN_SIDE];         /* w4_badTargetCategory..                      */
+    /* AimFromWeaponN / QueryWeaponN resolve to a fixed piece, so they are asked
+       once per unit *type* and remembered. Running them per slot per tick is
+       what tips a busy unit over the eight-thread COB cap (0x4B08C0), and a
+       query that loses that race returns silence: the piece stays unset, the
+       slot aims from the hull's first piece and stops tracking. Cached, the aim
+       origin is a pointer chase and cannot fail. Only for slots >= 3 — a stock
+       Query* may legitimately answer a different barrel each call. -1 = unasked. */
+    i8    pc_aimfrom[WPN_SIDE];
+    i8    pc_query[WPN_SIDE];
 } WDef;
 
 /* =========================================================================
@@ -99,10 +109,21 @@ static char   g_name_aim[WPN_CAP][24], g_name_fire[WPN_CAP][24],
               g_name_query[WPN_CAP][24], g_name_aimfrom[WPN_CAP][24];
 
 enum { H_START, H_AUTOAIM, H_NAMES, H_RETALIATE, H_ACQUIRE, H_HELPERS, H_SPLICE,
-       H_LOADER, H_VIOLATION, H_STOCKSPLICE, H_MISMATCH, H__N };
+       H_LOADER, H_VIOLATION, H_STOCKSPLICE, H_MISMATCH, H_GROUND, H_COBFULL,
+       H_HOLDFIRE, H__N };
 static const char* const HIT_NAMES[H__N] =
     { "start", "autoaim", "names", "retaliate", "acquire", "helpers", "splice",
-      "loader", "violation", "stock_splice", "mismatch" };
+      "loader", "violation", "stock_splice", "mismatch", "ground", "cob_full",
+      "hold_fire" };
+/* cob_full: AimFromWeaponN/QueryWeaponN resolved to no piece. COBEngine_QueryScript
+   (0x4B0BC0 -> 0x4B0C40) opens with a thread-slot allocation (0x4B08C0) that scans
+   a fixed EIGHT records of 0xA4 bytes at cob+0x1C and returns -1 when they are all
+   busy; on -1 it returns without touching the caller's out-parameter. So a unit
+   already running eight scripts gets silence, not an error, and the aim origin
+   falls back to piece 0 -- every starved slot then computes the same wrong
+   solution from the hull's first piece and stops tracking. Nonzero here means the
+   unit's scripts are over that cap; see research/notes/extra-weapons.md.
+   hold_fire: shots withheld because the barrel had not slewed onto the target. */
 /* stock_splice counts splice stubs taken for slots 0-2 (the stock path); mismatch
    counts the times the pointer-derived index disagreed with the engine's own
    2-bit field there — the live form of "the stub computes what the engine
@@ -292,7 +313,7 @@ static void build_names(void)
 
 typedef void  (__thiscall *PFN_StartScript)(void* cob, const char* name, void* thread, int, int, int, int, int, int);
 typedef void  (__thiscall *PFN_QueryScript)(void* cob, const char* name, int* result, int, int, int);
-typedef int   (__thiscall *PFN_StopScript)(void* cob, const char* name);
+typedef int   (__thiscall *PFN_Name2Index)(void* cob, const char* name);
 typedef int*  (__stdcall  *PFN_PiecePos)(int* out, char* unit, int piece);
 typedef char* (__stdcall  *PFN_Name2Ptr)(const char* name);
 typedef void  (__thiscall *PFN_TdfGetStr)(void* ctx, char* buf, const char* key, int len, const char* dflt);
@@ -314,7 +335,10 @@ typedef char* (__stdcall  *PFN_FindTarget)(char* unit, u32 idx, int);          /
 
 #define E_StartScript ((PFN_StartScript)0x4B0A70u)
 #define E_QueryScript ((PFN_QueryScript)0x4B0BC0u)
-#define E_StopScript  ((PFN_StopScript) 0x4B07C0u)
+/* 0x4B07C0 walks the COB name table and returns the script's index, or -1.
+   Stock's clear-target calls it here and throws the answer away; kept
+   call-for-call. It is NOT a stop-script, whatever the old name said. */
+#define E_Name2Index  ((PFN_Name2Index)0x4B07C0u)
 #define E_PiecePos    ((PFN_PiecePos)   0x43DEF0u)
 #define E_Name2Ptr    ((PFN_Name2Ptr)   0x49E5B0u)
 #define E_TdfGetStr   ((PFN_TdfGetStr)  0x4C48C0u)
@@ -379,19 +403,32 @@ static PFN_DefCopy      o_DefCopy;
 
 /* -- the three name helpers (0x43E2E0, 0x43E240, 0x43E1E0) ---------------- */
 
+/* The piece AimFromWeaponN (kind 0) or QueryWeaponN (kind 1) names, cached per
+   unit type. Returns -1 only while the COB engine is too busy to answer, and
+   the callers then fall back exactly as stock does. */
+static int slot_piece(char* u, int i, int kind)
+{
+    WDef* r = def_rec(UDEF(u));
+    i8*   c;
+    int   piece;
+    if (!r || i < 3 || i - 3 >= WPN_SIDE) return -1;
+    c = kind ? &r->pc_query[i - 3] : &r->pc_aimfrom[i - 3];
+    if (*c >= 0) return *c;
+    piece = -1;
+    E_QueryScript(UCOB(u), kind ? query_name(i) : aimfrom_name(i), &piece, 0, 0, 0);
+    if (piece >= 0 && piece < 127) *c = (i8)piece;
+    return piece;
+}
+
 static void __stdcall my_CallAimScripts(char* u, int* out, u32 idx)
 {
     int piece, tmp[3], *p;
     idx &= 0xFF;
     if (idx < 3) { o_CallAim(u, out, idx); return; }
     HIT(H_NAMES);
-    piece = -1;
-    E_QueryScript(UCOB(u), aimfrom_name((int)idx), &piece, 0, 0, 0);
-    if (piece == -1)
-    {
-        piece = 0;
-        E_QueryScript(UCOB(u), query_name((int)idx), &piece, 0, 0, 0);
-    }
+    piece = slot_piece(u, (int)idx, 0);
+    if (piece < 0) piece = slot_piece(u, (int)idx, 1);
+    if (piece < 0) { HIT(H_COBFULL); piece = 0; }        /* stock's fallback, counted */
     p = E_PiecePos(tmp, u, piece);
     out[0] = *(int*)(u + 0x6A) + p[0];
     out[1] = *(int*)(u + 0x6E) + p[1];
@@ -405,8 +442,8 @@ static void __stdcall my_QueryWeaponPosition(char* u, int* out, u32 idx, int pie
     HIT(H_NAMES);
     if (piece < 0)
     {
-        piece = 0;
-        E_QueryScript(UCOB(u), query_name((int)(idx & 0xFF)), &piece, 0, 0, 0);
+        piece = slot_piece(u, (int)(idx & 0xFF), 1);
+        if (piece < 0) { HIT(H_COBFULL); piece = 0; }
     }
     p = E_PiecePos(tmp, u, piece);
     out[0] = *(int*)(u + 0x6A) + p[0];
@@ -419,8 +456,8 @@ static int __stdcall my_QueryPiece(char* u, u32 idx)
     int piece = 0;
     if ((idx & 0xFF) < 3) return o_QueryPiece(u, idx);
     HIT(H_NAMES);
-    E_QueryScript(UCOB(u), query_name((int)(idx & 0xFF)), &piece, 0, 0, 0);
-    return piece;
+    piece = slot_piece(u, (int)(idx & 0xFF), 1);
+    return piece < 0 ? 0 : piece;
 }
 
 /* -- index helpers --------------------------------------------------------- */
@@ -456,7 +493,7 @@ static void clear_target_body(char* u, int idx)
     {
         s->target = 0;
         s->spot   = 0x8000;
-        E_StopScript(UCOB(u), S_STARTBUILDING);
+        E_Name2Index(UCOB(u), S_STARTBUILDING);
         E_StartScript(UCOB(u), S_TARGETCLEARED, 0, 0, 1, idx, 0, 0, 0);
     }
 }
@@ -707,6 +744,33 @@ static void __stdcall my_StartWeapons(char* u)
     E_StartScript(UCOB(u), S_SETMAXRELOAD, 0, 0, 1, (int)(maxreload * 1000) / 30, 0, 0, 0);
 }
 
+/* Has the turret actually swung round yet?
+
+   The muzzle piece rotates with the gun, so `stand -> muzzle` is the barrel's
+   own direction and can be compared with `stand -> target`. Cavedog's aim
+   scripts answer this question by construction — they `wait-for-turn` before
+   they return, so the slot cannot report aimed until the barrel has arrived —
+   but that costs a COB thread for the whole slew, and a unit only gets eight
+   (0x4B08C0). Four extra turrets cannot afford one each. So the extended slots
+   run an aim script that returns inside its own tick and the arrival test moves
+   here, where it costs nothing: same guarantee, no thread held.
+   Yaw only; a naval target's pitch is a fraction of a degree. */
+#define AIM_TOLERANCE 1024                 /* 5.6 degrees of 65536 */
+
+static int barrel_on_target(char* u, int i, const int* tpos)
+{
+    int from[3], muz[3], bx, bz, tx, tz, d;
+    my_CallAimScripts(u, from, (u32)i);            /* the mount, which does not turn */
+    my_QueryWeaponPosition(u, muz, (u32)i, -1);    /* the muzzle, which does          */
+    bx = muz[0] - from[0]; bz = muz[2] - from[2];
+    tx = tpos[0] - from[0]; tz = tpos[2] - from[2];
+    if ((bx == 0 && bz == 0) || (tx == 0 && tz == 0)) return 1;   /* degenerate */
+    d = (E_Atan2(bx, bz) - E_Atan2(tx, tz)) & 0xFFFF;
+    if (d > 0x8000) d -= 0x10000;
+    if (d < 0) d = -d;
+    return d <= AIM_TOLERANCE;
+}
+
 /* -- AutoAim (0x49E1A0): the per-tick aim-and-fire loop --------------------- */
 
 static void __stdcall my_AutoAim(char* u)
@@ -732,7 +796,14 @@ static void __stdcall my_AutoAim(char* u)
 
         if (wf & (1u << 19))
         {
-            if (!(s->state & 1))
+            /* Stock starts the aim script once and holds bit 0 until the target
+               is lost, because Cavedog's script is long-lived — it slews, waits
+               for the turn, and only then returns. The extended slots run one
+               that returns inside the tick, so there is nothing to protect and
+               holding bit 0 would freeze the turret on its first solution while
+               the target sails away. They re-solve every tick and re-issue the
+               turn only when the answer actually moves. */
+            if (!(s->state & 1) || i >= 3)
             {
                 int ok = 0;
                 if (wf & 2)
@@ -753,11 +824,15 @@ static void __stdcall my_AutoAim(char* u)
                 }
                 if (ok)
                 {
-                    s->pitch   = (i16)pitch;
-                    s->heading = (i16)heading;
-                    s->aimed   = 0;
-                    E_StartScript(UCOB(u), aim_name(i), &s->thread, 0, 2, heading & 0xFFFF, pitch & 0xFFFF, 0, 0);
-                    E_SendStart(u, aim_name(i), 2, heading & 0xFFFF, pitch & 0xFFFF, 0, 0);
+                    if (!(s->state & 1)
+                        || (i16)heading != s->heading || (i16)pitch != s->pitch)
+                    {
+                        s->pitch   = (i16)pitch;
+                        s->heading = (i16)heading;
+                        s->aimed   = 0;
+                        E_StartScript(UCOB(u), aim_name(i), &s->thread, 0, 2, heading & 0xFFFF, pitch & 0xFFFF, 0, 0);
+                        E_SendStart(u, aim_name(i), 2, heading & 0xFFFF, pitch & 0xFFFF, 0, 0);
+                    }
                     s->state |= 1;
                 }
             }
@@ -775,6 +850,7 @@ static void __stdcall my_AutoAim(char* u)
 
         if (s->reload != 0) continue;
         if (!my_Trajectory3(u, (int*)(u + 0x6A), tpos, (u32)i)) { *(u8*)(u + 0xBB) |= 0x10; continue; }
+        if (i >= 3 && !barrel_on_target(u, i, tpos)) { HIT(H_HOLDFIRE); continue; }
         if (wf & (1u << 28))
             fire = (s->stock != 0);
         else
@@ -1021,6 +1097,28 @@ static u32* __cdecl cb_mask(char* def, u32 idx)
     return def_mask(def, (int)idx);
 }
 
+/* Attack-ground order (FUN_004038a0, the "target is a spot" branch at 0x40399C):
+   the engine unrolls exactly two slots — ClearTargetN 0, ClearTargetN 1,
+   SetGroundTarget 0, SetGroundTarget 1 — so weapon 3 and every side weapon are
+   left with no target at all and sit idle while 1 and 2 shell the spot. (The
+   sibling branch at 0x40396B is the single-weapon case the order takes when its
+   held index is 2; nothing sets it for an extended unit, so it stays stock.)
+   Spliced over the second pair (`push 1; push ebx; push edi; call SetGround`):
+   do that call, then give the side slots the same spot on the same terms —
+   clear may-acquire first, exactly as ClearTargetN did for 0 and 1. */
+static void __cdecl cb_ground_order(char* unit, int* pos)
+{
+    int i, count = wpn_count(unit);
+    my_SetGroundTarget(unit, pos, 1);
+    if (count <= 3) return;
+    HIT(H_GROUND);
+    for (i = 3; i < count; i++)
+    {
+        clear_targetn_body(unit, i);
+        my_SetGroundTarget(unit, pos, i);
+    }
+}
+
 /* WEAPON_FIRED receiver (0x49D270): the packet's WeapIdx byte at +0x23 names
    the slot. Beyond the unit's count it would have indexed past the inline
    slots into UnitOrders; here it clamps to slot 0 and logs. */
@@ -1059,6 +1157,8 @@ static void __cdecl cb_loader(char* def, void* ctx)
     HIT(H_LOADER);
     r = &g_def[idx];
     memset(r, 0, sizeof *r);
+    memset(r->pc_aimfrom, -1, sizeof r->pc_aimfrom);
+    memset(r->pc_query,   -1, sizeof r->pc_query);
     r->def   = def;
     r->count = 3;
     for (n = 4; n <= WPN_CAP; n++)
@@ -1166,6 +1266,8 @@ static const u8 X_CHECK[]    = { 0x8B,0x44,0x24,0x0C,0x83,0xEC,0x0C };
 static const u8 X_TRAJ[]     = { 0x83,0xEC,0x10,0x8B,0x44,0x24,0x20 };
 static const u8 X_INTERCEPT[]= { 0x8B,0x44,0x24,0x08,0x53,0x25,0xFF,0x00,0x00,0x00 };
 static const u8 X_DEFCOPY[]  = { 0x8B,0xC1,0x53,0x8B,0x4C,0x24,0x08 };
+/* 0x4039BE: push 1; push ebx; push edi; call 0x48A0A0 (SetGroundTarget slot 1) */
+static const u8 X_GROUND[]   = { 0x6A,0x01,0x53,0x57,0xE8,0xD9,0x66,0x08,0x00 };
 
 static const u8 X_LOADER[]   = { 0x8B,0x85,0xEE,0x01,0x00,0x00,0x3B,0xC6 };
 static const u8 X_RECV[]     = { 0x33,0xC9,0x8A,0x48,0x23,0x8B,0xD1,0xC1,0xE2,0x03,0x2B,0xD1,0x8D,0x4C,0x95,0x04 };
@@ -1242,6 +1344,8 @@ static const Splice SPLICES[] = {
     { "ft.mask",     0x40B9FD, 7,  X_FT_M,    (void*)cb_mask,       2, { AREG(R_EDX), AREG(R_EBX) },  R_EDX, 0, 0, 0 },
     /* target position 0x48A1E0: slot address (edi=unit, esi=idx) -> ebx, then the stolen cmp */
     { "tpos.slot",   0x48A1F6, 14, X_TPOS,    (void*)cb_slot_ptr,   2, { AREG(R_EDI), AREG(R_ESI) },  R_EBX, X_TPOS_X, 4, 0 },
+    /* attack-ground order 0x4038A0: edi = unit, ebx = the order's position */
+    { "ground.order",0x4039BE, 9,  X_GROUND,  (void*)cb_ground_order,2,{ AREG(R_EDI), AREG(R_EBX) },  -1,    0, 0, 0 },
 };
 
 static const Patch PATCHES[] = {

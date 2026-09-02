@@ -39,7 +39,15 @@ and units are Spring's. Where that matters I say so.
   animates a specific mesh piece. The bytecode is a **32-bit-word-addressed stack VM**
   (`MOVE/TURN/SPIN/SHOW/HIDE/EMIT_SFX/…`, arithmetic, `GET`/`SET` engine queries). Its
   `MOVE`/`TURN` outputs are the **per-piece translation/rotation** a renderer applies to pose
-  the 3DO tree. [VERIFIED]
+  the 3DO tree. [VERIFIED] At runtime a unit may only run **eight scripts at once**:
+  `0x4B08C0` scans a fixed eight `0xA4`-byte thread records at `cob+0x1C` and returns `-1`
+  when they are all busy, and the running count at `cob+0x53C` sits immediately after the
+  array, so the eight is a struct layout constant. Anything that blocks — `sleep`,
+  `wait-for-turn`, `wait-for-move` — holds a record for its whole duration, and
+  `COBEngine_QueryScript` fails **silently** on a full pool (it returns without writing its
+  out-parameter, so the caller keeps whatever it had). Budget scripts accordingly; see
+  [Extra weapons](extra-weapons.md) snag 10 for what that looks like from the outside.
+  [BINARY-VERIFIED]
 - **`.GAF`** is the 8-bpp paletted sprite/texture container; 3DO primitives reference frames
   in it by name. **`.HPI`/`.CCX`/`.UFO`/`.GP3`** are the (compressed, optionally XOR-obfuscated)
   archives everything ships inside. **`.FBI`/`.TDF`/`.GUI`/`.OTA`** are TDF text

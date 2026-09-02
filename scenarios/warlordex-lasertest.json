@@ -1,0 +1,32 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Bench for the WarlordEx secondary battery: six Skeeters parked at ~200 world units, well inside CORE_BATSLASER's 810, holding position. Nothing here is a fair fight — it exists so `tacli weapons <inst> 1` answers one question, whether slots 4..7 fire, without a moving target or a range excuse.",
+  "seed": 20260902,
+  "on_error": "abort",
+  "setup": {
+    "map": "Anteer Strait",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "core", "color": 1, "metal": 10000, "energy": 10000},
+      {"slot": 1, "controller": "ai",    "side": "arm",  "color": 0, "metal": 10000, "energy": 10000}
+    ]
+  },
+  "units": [
+    { "id": "warlordex", "type": "CORBATSX", "owner": 0, "pos": [2900, 1980], "facing": 90 },
+    { "id": "fusion1",  "type": "CORFUS",   "owner": 0, "pos": [3000, 1400] },
+    { "id": "fusion2",  "type": "CORFUS",   "owner": 0, "pos": [3180, 1400] },
+    { "id": "estor1",   "type": "CORESTOR", "owner": 0, "pos": [3340, 1400] },
+    { "id": "estor2",   "type": "CORESTOR", "owner": 0, "pos": [3420, 1400] },
+    { "id": "estor3",   "type": "CORESTOR", "owner": 0, "pos": [3500, 1400] },
+    { "id": "t1", "type": "ARMPT", "owner": 1, "pos": [3100, 1980], "stance": "hold" },
+    { "id": "t2", "type": "ARMPT", "owner": 1, "pos": [3080, 1900], "stance": "hold" },
+    { "id": "t3", "type": "ARMPT", "owner": 1, "pos": [3080, 2060], "stance": "hold" },
+    { "id": "t4", "type": "ARMPT", "owner": 1, "pos": [2900, 2150], "stance": "hold" },
+    { "id": "t5", "type": "ARMPT", "owner": 1, "pos": [2900, 1810], "stance": "hold" },
+    { "id": "t6", "type": "ARMPT", "owner": 1, "pos": [2740, 1980], "stance": "hold" },
+    { "id": "arm_spare", "type": "ARMSOLAR", "owner": 1, "pos": [3800, 1300] }
+  ],
+  "camera": { "center_on": "warlordex" }
+}
