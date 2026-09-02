@@ -347,13 +347,24 @@ def write_ddraw_ini(inst: Instance, tile):
     )
 
 
-def write_totala_ini(inst: Instance, sound: bool):
-    """Sound off via TA's own documented INI (research/notes/cmdline-options.md)."""
+def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
+    """TA's own INI (research/notes/cmdline-options.md).
+
+    Both settings we write live in `[Preferences]`, so the file is composed from
+    what is asked for rather than branched on sound alone: with sound on and no
+    limit wanted there is nothing to say and the file goes away. `UnitLimit` is
+    read at 0x491653 and clamped by the engine itself to [20, 1500], which is why
+    it is not a registry key and cannot be raised in a running game.
+    """
     path = inst.gamedir / "totala.ini"
-    if sound:
+    prefs = [] if sound else [("NoDirectSound", 1), ("UseWindowsSound", 0)]
+    if unit_limit is not None:
+        prefs.append(("UnitLimit", int(unit_limit)))
+    if not prefs:
         path.unlink(missing_ok=True)
-    else:
-        path.write_text("[Preferences]\r\nNoDirectSound=1\r\nUseWindowsSound=0\r\n")
+        return
+    path.write_text("[Preferences]\r\n"
+                    + "".join(f"{k}={v}\r\n" for k, v in prefs))
 
 
 def deploy_dll(inst: Instance):
@@ -453,8 +464,8 @@ def tile_for(index: int, res, screen=(3840, 2160), origin=(0, 0)):
 
 # --------------------------------------------------------------------------- commands
 
-def cmd_create(args):
-    inst = Instance(args.name)
+def _create(inst: Instance, args) -> dict:
+    """Everything `create` does; `load` needs it without the printing."""
     if inst.exists and not args.force:
         die(f"instance {args.name!r} already exists (use --force to recreate)")
     inst.dir.mkdir(parents=True, exist_ok=True)
@@ -492,13 +503,21 @@ def cmd_create(args):
     }
     inst.save_meta(meta)
     apply_prefix_settings(inst, res, sound=args.sound)
+    return meta
+
+
+def cmd_create(args):
+    inst = Instance(args.name)
+    meta = _create(inst, args)
+    res, tile = meta["res"], meta["tile"]
     out(meta, args.json, human=f"created instance {args.name} "
                                f"({res[0]}x{res[1]}, window at {tile[0]},{tile[1]}, "
                                f"sound={'on' if args.sound else 'off'}, "
-                               f"shield={'on' if shield else 'off'})")
+                               f"shield={'on' if meta['shield'] else 'off'})")
 
 
-def cmd_launch(args):
+def _launch(args) -> dict:
+    """Everything `launch` does, minus the printing — `load` composes with it."""
     # Extra TotalA.exe switches. Only a handful are worth passing (see
     # research/notes/cmdline-options.md); -r aborts the launch and -d bypasses the
     # ddraw path our stack lives in, so both are refused — before anything is created.
@@ -510,11 +529,10 @@ def cmd_launch(args):
     inst = Instance(args.name)
     if not inst.exists:
         args.force = False
-        cmd_create(args)
+        _create(inst, args)
     meta = inst.meta()
     if inst.running():
-        out(meta, args.json, human=f"{args.name} already running (pid {inst.pid()})")
-        return
+        return dict(meta, already_running=True, pid=inst.pid())
     if args.res:
         meta["res"] = list(args.res)
         meta["tile"] = list(tile_for(meta.get("slot", 0), tuple(args.res)))
@@ -522,8 +540,14 @@ def cmd_launch(args):
         write_ddraw_ini(inst, meta["tile"])
     if args.sound is not None:
         meta["sound"] = args.sound
+    if args.unit_limit is not None:
+        meta["unit_limit"] = args.unit_limit
+    if args.sound is not None or args.unit_limit is not None:
+        # Both live in the same file, so either one being asked for rewrites it
+        # from the instance's recorded state — a limit set two launches ago is
+        # still in force, and turning sound on does not silently drop it.
         inst.save_meta(meta)
-        write_totala_ini(inst, args.sound)
+        write_totala_ini(inst, meta.get("sound", False), meta.get("unit_limit"))
     if args.shield is not None:
         meta["shield"] = args.shield
         inst.save_meta(meta)
@@ -535,13 +559,13 @@ def cmd_launch(args):
         reg_add(inst, GAME_REG, "SkirmishMap", "REG_SZ", args.map)
     for spec in args.player or []:
         # --player N:controller[:side[:color]]  controller 0=off 1=human 2=AI
+        # An empty field is "leave that key alone", so a colour can be set
+        # without naming a side: `--player 0:1::3`.
         parts = spec.split(":")
         n = parts[0]
-        reg_add(inst, SKIRMISH_REG, f"Player{n}Controller", "REG_DWORD", parts[1])
-        if len(parts) > 2:
-            reg_add(inst, SKIRMISH_REG, f"Player{n}Side", "REG_DWORD", parts[2])
-        if len(parts) > 3:
-            reg_add(inst, SKIRMISH_REG, f"Player{n}Color", "REG_DWORD", parts[3])
+        for key, part in (("Controller", 1), ("Side", 2), ("Color", 3)):
+            if len(parts) > part and parts[part] != "":
+                reg_add(inst, SKIRMISH_REG, f"Player{n}{key}", "REG_DWORD", parts[part])
     if args.los is not None:
         reg_add(inst, GAME_REG, "SkirmishLineOfSight", "REG_DWORD", str(args.los))
     if args.mapping is not None:
@@ -583,11 +607,21 @@ def cmd_launch(args):
     restored = pointer_restore(display, pointer_before)
     meta["last_launch"] = time.strftime("%Y-%m-%d %H:%M:%S")
     inst.save_meta(meta)
-    res = {"name": args.name, "pid": pid, "launcher_pid": proc.pid,
-           "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
-           "args": argv, "shield": shield_state(inst), "pointer_restored": restored}
+    return {"name": args.name, "pid": pid, "launcher_pid": proc.pid,
+            "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
+            "map": args.map, "unit_limit": meta.get("unit_limit"),
+            "args": argv, "shield": shield_state(inst), "pointer_restored": restored}
+
+
+def cmd_launch(args):
+    res = _launch(args)
+    if res.get("already_running"):
+        out(res, args.json, human=f"{args.name} already running (pid {res['pid']})")
+        return
+    win = res["window"]
     out(res, args.json,
-        human=(f"launched {args.name} pid={pid} window={win[0] if win else 'pending'} "
+        human=(f"launched {args.name} pid={res['pid']} "
+               f"window={win[0] if win else 'pending'} "
                f"at {win[1] if win else '?'},{win[2] if win else '?'} "
                f"shield={'on' if res['shield'] else 'off'}"))
 
@@ -714,23 +748,22 @@ def cmd_arm(args):
 PEEK_RX = re.compile(r"^peek: (?P<spec>\S+) (?:@0x(?P<addr>[0-9A-Fa-f]{8}) )?= (?P<value>.*)$")
 
 
-def cmd_peek(args):
+def _peek(inst: Instance, specs, timeout: float):
     """Read game memory from inside the process (tagpu_peek.trigger).
 
     The measurement half of a switch trace: name the address, launch with and
     without the switch, compare. Specs are `*0x511DE8+0x2C74:2` style — see
     tagpu/ddraw/inc/tagpu_peek.h for the grammar.
     """
-    inst = Instance(args.name)
     if not inst.running():
-        die(f"{args.name} is not running")
+        die(f"{inst.name} is not running")
     log = inst.gamedir / "tagpu.log"
     start = log.stat().st_size if log.exists() else 0
-    (inst.gamedir / "tagpu_peek.trigger").write_text("\n".join(args.specs) + "\n")
+    (inst.gamedir / "tagpu_peek.trigger").write_text("\n".join(specs) + "\n")
 
-    deadline = time.time() + args.timeout
+    deadline = time.time() + timeout
     rows = []
-    while time.time() < deadline and len(rows) < len(args.specs):
+    while time.time() < deadline and len(rows) < len(specs):
         if log.exists():
             with open(log, "rb") as f:
                 f.seek(start)
@@ -742,9 +775,26 @@ def cmd_peek(args):
                     rows.append({"spec": m.group("spec"),
                                  "addr": int(m.group("addr"), 16) if m.group("addr") else None,
                                  "value": m.group("value")})
-        if len(rows) < len(args.specs):
+        if len(rows) < len(specs):
             time.sleep(0.2)
+    return rows
 
+
+def _peek_uint(row):
+    """`12345 (0x00003039)` -> 12345. None when the fork could not read it."""
+    m = re.match(r"^(\d+)", (row or {}).get("value", ""))
+    return int(m.group(1)) if m else None
+
+
+def _peek_str(row):
+    """`"maps\\Foo.tnt"` -> the text between the quotes, or None."""
+    m = re.fullmatch(r'"(.*)"', (row or {}).get("value", ""))
+    return m.group(1) if m else None
+
+
+def cmd_peek(args):
+    inst = Instance(args.name)
+    rows = _peek(inst, args.specs, args.timeout)
     if not rows:
         die("no peek lines — is the game past its first frame?")
     out({"name": args.name, "peeks": rows}, args.json,
@@ -871,8 +921,7 @@ def cmd_wait(args):
     die(f"timeout waiting for /{args.pattern}/")
 
 
-def cmd_stop(args):
-    inst = Instance(args.name)
+def _stop(inst: Instance, hard: bool = False) -> dict:
     pid = inst.pid()
     if pid:
         run(["kill", str(pid)])
@@ -880,9 +929,14 @@ def cmd_stop(args):
             if not inst.running():
                 break
             time.sleep(0.5)
-    if args.hard or inst.running():
+    if hard or inst.running():
         run(["wineserver", "-k"], env=inst.env())
-    out({"name": args.name, "stopped": True}, args.json, human=f"stopped {args.name}")
+    return {"name": inst.name, "stopped": True, "was": pid}
+
+
+def cmd_stop(args):
+    res = _stop(Instance(args.name), args.hard)
+    out(res, args.json, human=f"stopped {args.name}")
 
 
 def cmd_rm(args):
@@ -892,7 +946,7 @@ def cmd_rm(args):
     if inst.running():
         if not args.force:
             die(f"{args.name} is running (tacli stop {args.name}, or --force)")
-        cmd_stop(argparse.Namespace(name=args.name, hard=True, json=False))
+        _stop(inst, hard=True)
     shutil.rmtree(inst.dir)
     out({"name": args.name, "removed": True}, args.json, human=f"removed {args.name}")
 
@@ -914,7 +968,7 @@ UI_SETTLE = 1.5                  # how long an action waits for a consequence
 UI_ACTIONABLE = ("button", "button2", "listbox", "field", "slider")
 
 
-def _ui_snapshot(inst: Instance, timeout: float = UI_TIMEOUT) -> dict:
+def _ui_snapshot(inst: Instance, timeout: float = UI_TIMEOUT, soft: bool = False):
     """Trigger one gadget-tree walk and read the result.
 
     The fork writes a temp file and renames it, so a reader can never catch a
@@ -941,6 +995,8 @@ def _ui_snapshot(inst: Instance, timeout: float = UI_TIMEOUT) -> dict:
                 before = path.stat().st_mtime_ns
                 (inst.gamedir / "tagpu_ui.trigger").write_text("")
         time.sleep(0.05)
+    if soft:
+        return None          # the caller is waiting for a UI to exist at all
     if last:
         die(f"no UI to read after {timeout:g}s: {last}")
     die("no UI snapshot appeared — is the instance running and past its first frame?")
@@ -2827,21 +2883,16 @@ def _scn_rekey(res: dict, exp: dict) -> dict:
     return res
 
 
-def cmd_scenario_apply(args):
-    """Apply a scenario to a game that is already running.
+def _scn_apply_run(inst: Instance, exp: dict, timeout: float, catalogue) -> dict:
+    """Write the wire, read the answer, put the handles back, hold the camera.
 
-    `apply` is the mutation verb: it ignores `setup`'s launch half (map,
-    resolution, players) because those are decided before a game exists, and
-    stacks the situation onto whatever is on screen. `load` (phase D) is the one
-    that launches first.
+    The half `apply` and `load` share: by the time either gets here the game is
+    live and the only remaining question is what the engine did with the file.
     """
-    inst = Instance(args.name)
-    catalogue = args.instance or (args.name if _cat_load(inst) else None)
-    exp = _scn_compile(args.scenario, args.catalogue, catalogue)
-    res = _scn_apply(inst, _scn_wire(exp), args.timeout)
-    res["name"] = args.name
+    res = _scn_apply(inst, _scn_wire(exp), timeout)
+    res["name"] = inst.name
     res["scenario"] = exp["name"]
-    res["catalogue"] = args.catalogue or catalogue or None
+    res["catalogue"] = catalogue
     _scn_rekey(res, exp)
 
     # `pin` holds the camera through the eye-hold file the fork already honours,
@@ -2849,18 +2900,23 @@ def cmd_scenario_apply(args):
     eye = res.get("eye")
     if res.get("pin") and eye:
         (inst.gamedir / "tagpu_eye.txt").write_text(f"{eye[0]} {eye[1]}\n")
+    return res
 
+
+def _scn_apply_lines(res: dict, exp: dict):
+    """What the engine did, in the words both verbs end with."""
     want = res.get("requested") or {}
-    total = want.get("units", 0) + want.get("features", 0)
-    lines = [f"{exp['name']}: applied {res.get('applied', 0)} of {total} "
-             f"({want.get('units', 0)} units + {want.get('features', 0)} features), "
+    nu, nf = want.get("units", 0), want.get("features", 0)
+    lines = [f"applied {res.get('applied', 0)} of {nu + nf} "
+             f"({nu} unit{'' if nu == 1 else 's'} + "
+             f"{nf} feature{'' if nf == 1 else 's'}), "
              f"{res.get('failed', 0)} failed, {res.get('cleared', 0)} cleared"]
     orders = res.get("orders") or {}
     if orders.get("issued") or orders.get("failed"):
         lines.append(f"orders: {orders.get('issued', 0)} issued, "
                      f"{orders.get('failed', 0)} failed")
     if res.get("camera"):
-        lines.append(f"camera: {res['camera']} (eye {eye}"
+        lines.append(f"camera: {res['camera']} (eye {res.get('eye')}"
                      + (", pinned" if res.get("pin") else "") + ")")
     for w in exp.get("warnings") or []:
         lines.append(f"warning: {w}")
@@ -2868,6 +2924,216 @@ def cmd_scenario_apply(args):
         lines.append(f"error: {e}")
     if res.get("errors_dropped"):
         lines.append(f"... and {res['errors_dropped']} more errors")
+    return lines
+
+
+def cmd_scenario_apply(args):
+    """Apply a scenario to a game that is already running.
+
+    `apply` is the mutation verb: it ignores `setup`'s launch half (map,
+    resolution, players) because those are decided before a game exists, and
+    stacks the situation onto whatever is on screen. `load` is the one that
+    launches first.
+    """
+    inst = Instance(args.name)
+    catalogue = args.instance or (args.name if _cat_load(inst) else None)
+    exp = _scn_compile(args.scenario, args.catalogue, catalogue)
+    res = _scn_apply_run(inst, exp, args.timeout, args.catalogue or catalogue or None)
+    lines = _scn_apply_lines(res, exp)
+    lines[0] = f"{exp['name']}: {lines[0]}"
+    out(res, args.json, human="\n".join(lines))
+    if not res.get("ok"):
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------- load
+#
+# `load` is the composition verb: from nothing to a described, live situation in
+# one command. Every step it takes is a verb that works on its own — launch, `ui
+# click`, the log wait, `apply` — so what this adds is the *order*, the launch
+# half of `setup` that `apply` deliberately drops, and a clear answer when a step
+# lands somewhere other than where it was aimed. Nothing here reaches the engine
+# that `apply` does not already reach.
+
+# The shell path to a skirmish, by gadget name. Each click auto-waits for its
+# gadget to exist and be actionable, so this is a path, not a timing guess.
+SCN_MENU_PATH = ("SINGLE", "Skirmish", "Start")
+SCN_MENU_TIMEOUT = 30.0     # a cold wine prefix takes its time reaching the shell
+SCN_LOAD_TIMEOUT = 180.0    # ...and longer again to load a map
+
+# The overlay logs this every 30 frames, from the same read that draws the units.
+# A non-zero count is proof TA is past its loading screen with a world in memory —
+# which is the precondition the applier would otherwise report as a 30s timeout.
+SCN_LIVE_RX = re.compile(r"units: alive=([1-9]\d*)")
+
+# GameingState* at TAdynmemStruct+0x391E9, its char TNTFile[MAX_PATH] at +0x204
+# [vendor/TADR/src/DDraw/tamem.h:632,811]. TA falls back silently on a SkirmishMap
+# it does not have, so the registry says what was asked for and only the engine
+# says what happened.
+SCN_GAMEINGSTATE = "*0x511DE8+0x391E9:4"
+SCN_TNTFILE = 0x204
+
+
+def _scn_player_flags(setup) -> list:
+    """setup.players -> the `--player N:controller[:side[:color]]` launch flags.
+
+    One numbering, one path: the same strings a human would type, so a scenario
+    and a hand-driven launch cannot disagree about what slot 0 means.
+    """
+    flags = []
+    for p in setup["players"]:
+        side = "" if p["side"] is None else SCN_SIDES[p["side"]]
+        color = "" if p["color"] is None else p["color"]
+        spec = f"{p['slot']}:{SCN_CONTROLLERS[p['controller']]}:{side}:{color}"
+        flags.append(spec.rstrip(":"))
+    return flags
+
+
+def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
+    """Wait for the fork to answer a gadget walk at all.
+
+    `_ui_resolve` is strict about a gadget that is missing, and rightly so — but
+    just after launch there is no UI to read yet, TA is still opening its window.
+    That is a state to wait through, once, here.
+    """
+    deadline = time.time() + timeout
+    while True:
+        if not inst.running():
+            die(f"{inst.name} exited before its shell came up "
+                f"(tacli log {inst.name} -n 40)")
+        snap = _ui_snapshot(inst, timeout=2.0, soft=True)
+        if snap:
+            return snap
+        if time.time() >= deadline:
+            die(f"no shell after {timeout:g}s — TA never drew a menu "
+                f"(tacli log {inst.name} -n 40)")
+        time.sleep(0.25)
+
+
+def _scn_wait_live(inst: Instance, timeout: float) -> int:
+    """Wait for a world: the overlay's own count of living units goes non-zero."""
+    path = inst.gamedir / "tagpu.log"
+    start = path.stat().st_size if path.exists() else 0
+    deadline = time.time() + timeout
+    while True:
+        if not inst.running():
+            die(f"{inst.name} exited while its map was loading "
+                f"(tacli log {inst.name} -n 40)")
+        if path.exists():
+            with open(path, "rb") as f:
+                f.seek(start)
+                chunk = f.read().decode("utf-8", "replace")
+            for line in chunk.splitlines():
+                m = SCN_LIVE_RX.search(line)
+                if m:
+                    return int(m.group(1))
+        if time.time() >= deadline:
+            die(f"no game after {timeout:g}s — the shell never reached a live map "
+                f"(tacli ui {inst.name} snapshot)")
+        time.sleep(0.5)
+
+
+def _scn_loaded_map(inst: Instance, timeout: float = 10.0):
+    """The map the engine actually loaded, straight out of GameingState."""
+    rows = _peek(inst, [SCN_GAMEINGSTATE], timeout)
+    ptr = _peek_uint(rows[0] if rows else None)
+    if not ptr or ptr < 0x600000:
+        return None
+    rows = _peek(inst, [f"0x{ptr:X}+0x{SCN_TNTFILE:X}:s96"], timeout)
+    return _peek_str(rows[0] if rows else None) or None
+
+
+def _scn_map_matches(loaded: str, wanted: str) -> bool:
+    """Is the loaded TNT file the map the scenario asked for?
+
+    A scenario names a map the way the shell's own list does; `TNTFile` is a file
+    name, possibly with a directory and always with an extension. The stem,
+    case-folded, is the only spelling the two share.
+    """
+    stem = loaded.replace("\\", "/").rsplit("/", 1)[-1]
+    if "." in stem:
+        stem = stem.rsplit(".", 1)[0]
+    return stem.strip().lower() == wanted.strip().lower()
+
+
+def cmd_scenario_load(args):
+    """From nothing to a described, live situation, in one command.
+
+    launch (carrying `setup`'s launch half) -> the shell path to a skirmish ->
+    wait for a world -> confirm the map the engine really loaded -> apply.
+    """
+    inst = Instance(args.name)
+    # Compile first: a scenario that cannot compile must not cost a launch. The
+    # catalogue is the target's own, which is also what checks `setup.map`
+    # against the 99 names this game has — before TA can fall back on one.
+    catalogue = args.instance or (args.name if _cat_load(inst) else None)
+    exp = _scn_compile(args.scenario, args.catalogue, catalogue)
+    setup = exp["setup"]
+    steps = []
+
+    if inst.running():
+        if not args.restart:
+            die(f"{args.name} is already running, and `load` is a clean start "
+                f"(tacli scenario apply {args.name} {args.scenario} to stack a "
+                f"situation onto it, or load --restart)")
+        _stop(inst)
+        steps.append("stopped the game that was running (--restart)")
+
+    # Explicit flags win over the file, so a scenario re-runs at another
+    # resolution, or on another map, without being edited.
+    res = tuple(args.res) if args.res else (tuple(setup["res"]) if setup["res"] else None)
+    wanted_map = args.map or setup["map"]
+    limit = args.unit_limit if args.unit_limit is not None else setup["unit_limit"]
+    launched = _launch(argparse.Namespace(
+        name=args.name, json=True, force=False, res=res, map=wanted_map,
+        unit_limit=limit, player=_scn_player_flags(setup) or None,
+        display=args.display, slot=None, sound=None, intro=False, shield=None,
+        keep_dll=args.keep_dll, los=None, mapping=None, arg=[],
+        timeout=args.launch_timeout, no_restore_pointer=False))
+    if launched.get("already_running"):
+        die(f"{args.name} is still running after being stopped "
+            f"(tacli stop {args.name} --hard)")
+    steps.append(f"launched {launched['res'][0]}x{launched['res'][1]}"
+                 + (f", map {wanted_map!r}" if wanted_map else "")
+                 + (f", unit limit {limit}" if limit is not None else ""))
+
+    _scn_wait_shell(inst, args.launch_timeout)
+    for i, selector in enumerate(SCN_MENU_PATH):
+        last = i == len(SCN_MENU_PATH) - 1
+        before, g = _ui_resolve(inst, selector, SCN_MENU_TIMEOUT, wait=True)
+        # `Start` tears the shell down to load the map, so there is no gadget
+        # tree left to settle against: the live wait below is that click's
+        # confirmation instead.
+        # The screen the click was made on, not the one it lands on: TA confirms
+        # a menu click on the frame it arrives (UIChange_f) and pushes the new
+        # screen a frame or two later, so `how` is the honest report and the next
+        # step's own screen says where this one went.
+        _after, how = _ui_click_gadget(inst, g, before, settle=not last)
+        steps.append(f"clicked {_ui_label(g)} on {before.get('gui')}"
+                     + (f" — {how}" if how else ""))
+
+    alive = _scn_wait_live(inst, args.load_timeout)
+    steps.append(f"live with {alive} unit{'' if alive == 1 else 's'}")
+
+    loaded = _scn_loaded_map(inst)
+    if wanted_map and loaded and not _scn_map_matches(loaded, wanted_map):
+        if not args.any_map:
+            die(f"the game loaded {loaded}, not {wanted_map!r} — TA falls back "
+                f"silently on a map it does not have, and a scenario's coordinates "
+                f"are map-specific (tacli maps {args.name} lists what this game "
+                f"has; load --any-map applies anyway)")
+        steps.append(f"map is {loaded}, not {wanted_map!r} (--any-map)")
+    elif loaded:
+        steps.append(f"map {loaded}")
+
+    res = _scn_apply_run(inst, exp, args.timeout, args.catalogue or catalogue or None)
+    res["loaded"] = {"steps": steps, "map_file": loaded, "map_requested": wanted_map,
+                     "res": launched["res"], "unit_limit": limit,
+                     "alive_before_apply": alive, "window": launched["window"],
+                     "pid": launched["pid"]}
+    lines = [f"{exp['name']}: loaded on {args.name}"]
+    lines += [f"  {step}" for step in steps]
+    lines += _scn_apply_lines(res, exp)
     out(res, args.json, human="\n".join(lines))
     if not res.get("ok"):
         sys.exit(1)
@@ -2932,11 +3198,10 @@ def cmd_switches(args):
 
 
 def cmd_scenario_todo(args):
-    """`load` and `dump` are phases D-E; say so instead of "invalid choice"."""
-    phase = {"load": "D", "dump": "E"}[args.cmd_todo]
-    die(f"scenario {args.cmd_todo} is phase {phase} "
-        f"(research/notes/scenario-format.md). Built today: list, validate, expand, "
-        f"apply.")
+    """`dump` is phase E; say so instead of "invalid choice"."""
+    die(f"scenario {args.cmd_todo} is phase E "
+        f"(research/notes/scenario-format.md). Built: list, validate, expand, "
+        f"apply, load.")
 
 
 def res_type(text: str):
@@ -2984,8 +3249,11 @@ def build_parser():
                    help="block hardware keyboard/mouse (the default)")
     l.add_argument("--no-shield", dest="shield", action="store_false")
     l.add_argument("--map", help="skirmish map name, e.g. 'Two Continents'")
+    l.add_argument("--unit-limit", dest="unit_limit", type=int,
+                   help="per-player unit cap in totala.ini (TA clamps it to 20-1500)")
     l.add_argument("--player", action="append",
-                   help="N:controller[:side[:color]] (controller 0=off 1=human 2=AI)")
+                   help="N:controller[:side[:color]] (controller 0=off 1=human 2=AI; "
+                        "an empty field is left alone, e.g. 0:1::3 sets only a colour)")
     l.add_argument("--los", type=int, help="SkirmishLineOfSight")
     l.add_argument("--mapping", type=int, help="SkirmishMapping")
     l.add_argument("--arg", action="append",
@@ -3174,10 +3442,39 @@ def build_parser():
     sca.add_argument("--timeout", type=float, default=SCN_APPLY_TIMEOUT)
     sca.set_defaults(func=cmd_scenario_apply)
 
-    for verb, phase in (("load", "D"), ("dump", "E")):
-        sp = add_scenario(verb, f"(phase {phase} — not built yet)")
-        sp.add_argument("rest", nargs="*")
-        sp.set_defaults(func=cmd_scenario_todo, cmd_todo=verb)
+    scd = add_scenario("load", "launch a game and put the situation in it")
+    scd.add_argument("name", help="the instance to launch")
+    scd.add_argument("scenario", help="a name in scenarios/, or a path to a .json")
+    scd.add_argument("--catalogue", help="a unit/feature/map list file to check "
+                                         "names against")
+    scd.add_argument("--instance", help="check names against this instance's cached "
+                                        "catalogue (default: the target's own)")
+    # Launch options the file may also carry. Explicit flags win, so a scenario
+    # re-runs at another resolution, or on another map, without being edited.
+    scd.add_argument("--res", type=res_type, help="override setup.res")
+    scd.add_argument("--map", help="override setup.map")
+    scd.add_argument("--unit-limit", dest="unit_limit", type=int,
+                     help="override setup.unit_limit")
+    scd.add_argument("--display", default=None, help="X display")
+    scd.add_argument("--keep-dll", action="store_true",
+                     help="do not refresh ddraw.dll")
+    scd.add_argument("--restart", action="store_true",
+                     help="stop the instance first if it is already running")
+    scd.add_argument("--any-map", action="store_true",
+                     help="apply even if TA loaded a map other than the one asked for")
+    scd.add_argument("--launch-timeout", type=float, default=SCN_MENU_TIMEOUT,
+                     help=f"seconds to wait for the window and the shell "
+                          f"(default {SCN_MENU_TIMEOUT:g})")
+    scd.add_argument("--load-timeout", type=float, default=SCN_LOAD_TIMEOUT,
+                     help=f"seconds to wait for the map to load "
+                          f"(default {SCN_LOAD_TIMEOUT:g})")
+    scd.add_argument("--timeout", type=float, default=SCN_APPLY_TIMEOUT,
+                     help="seconds to wait for the applier's answer")
+    scd.set_defaults(func=cmd_scenario_load)
+
+    sp = add_scenario("dump", "(phase E — not built yet)")
+    sp.add_argument("rest", nargs="*")
+    sp.set_defaults(func=cmd_scenario_todo, cmd_todo="dump")
 
     rm = sub.add_parser("rm", help="delete an instance")
     add_common(rm)

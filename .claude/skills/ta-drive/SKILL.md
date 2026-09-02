@@ -216,22 +216,31 @@ tools/tacli catalogue t1             # what this instance has cached
 ## Scenarios (JSON situations)
 
 A scenario is a JSON *situation* — 200 units fighting, a wreck of a chosen type, the
-camera already on it. `tacli scenario apply` puts a running game into one by calling the
-engine's own creation functions. Everything is name-keyed and resolved against the live
-game, so nothing is ever addressed by a numeric id.
+camera already on it. **`tacli scenario load` goes from nothing to that situation in one
+command**, calling the engine's own creation functions to build it. Everything is
+name-keyed and resolved against the live game, so nothing is ever addressed by a numeric
+id.
 
 ```bash
+tools/tacli scenario load     t1 200v200        # launch → menus → live → spawned → camera
 tools/tacli scenario list                       # what is in scenarios/
 tools/tacli scenario validate 200v200 --instance t1   # schema + this game's catalogue
 tools/tacli scenario expand   200v200 --wire    # the flat list, and the file the fork reads
-tools/tacli scenario apply    t1 200v200        # spawn it into the running game
+tools/tacli scenario apply    t1 200v200        # spawn it into a game already running
 tools/tacli switches t1 shootall=on noshake=on  # the SoftwareDebugMode bits, live
 ```
 
+- **`load` is the whole trip; `apply` is the mutation.** `load` launches with the file's
+  own `setup` (map, resolution, players, unit limit), clicks `SINGLE → Skirmish → Start`,
+  waits for a world, checks the map TA *actually* loaded against the one asked for, and
+  then applies. It is a clean start: on an instance that is already running it refuses
+  unless you pass `--restart`. `apply` stacks a situation onto whatever is on screen and
+  ignores `setup`'s launch half entirely, because none of it can be changed in a running
+  game. Explicit flags (`--map`, `--res`, `--unit-limit`) win over the file, so one
+  scenario re-runs elsewhere without being edited.
 - **`apply` needs a running game, not the menus.** It runs from a detour inside TA's main
   loop, which only turns over in game; at `MAINMENU` or on the mission-end screen it waits
-  600 frames and then tells you so. `scenario load` (launch → menus → apply in one command)
-  is not built yet.
+  600 frames and then tells you so.
 - **It validates three times and creates nothing if anything fails**: strict schema,
   the instance's cached catalogue (`tacli units` / `features`), and a resolve pass inside
   the game. `on_error: "skip"` opts into best effort.
@@ -242,7 +251,10 @@ tools/tacli switches t1 shootall=on noshake=on  # the SoftwareDebugMode bits, li
   silently. A scenario that leaves a player with **no units at all** is a defeat: TA goes
   to `ENDMSN.GUI` and nothing further applies. Give both sides something.
 - `roster` reports `idx=` — `UnitInGameIndex`, the same number `apply` returns, so the two
-  views line up. It is recycled on death, so it names a unit only while it lives.
+  views line up. It is recycled on death, so it names a unit only while it lives. Indices
+  are handed out in **per-player blocks of the unit limit**, so with `unit_limit: 500`
+  player 0's units are `1..500` and player 1's start at `501` — a free read of whether the
+  limit took.
 - Ship reusable situations in `scenarios/`; one-offs can be any path. Do not hand-write
   the wire file — it changes whenever the DLL does.
 

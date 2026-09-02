@@ -204,9 +204,21 @@ the literal string (`sharedialog.cpp:247`) and its preset button sends
 `KeyboardHook.pas:144` toggles the **memory bit directly**, which is why a two-byte write is
 an equivalent path with no chat plumbing. [VERIFIED]
 
-Its precise effect — idle/moving units also engage **buildings**, not only mobile units — is
-the community meaning and matches the player idiom, but the engine read site has not been
-found. **[CLAIMED — A/B it live and correct this table.]**
+Its precise effect is a measurement now, not lore. **[VERIFIED live, phase D]**
+`scenarios/shootall-ab.json` is the A/B: six ARMPW on `hold` stance so they cannot walk
+anywhere, an enemy CORSOLAR 130 world units away — in range, and unarmed, so it cannot
+shoot back — and a second CORSOLAR far out of range so its owner still owns something and
+the game keeps ticking (a player with no units is a defeat, and the applier stops). One
+game, one bit, `tacli switches` between the halves:
+
+| `shootall` | 45 seconds later |
+|---|---|
+| off (`0x001C`) | the Solar Collector stands, full health bar, `alive=8` |
+| on (`0x041C`) | `Wreckage M:116` where it stood, `alive=7` — and every Peewee still on its spawn coordinate |
+
+So **idle units engage an enemy *building* in range only with the bit set**: the community
+meaning, confirmed, and the reason `shootall` defaults on here. `cheats` was not needed.
+The engine's read site is still unfound, but the behaviour no longer waits on it.
 
 Also exposed as a live verb on any instance, scenario or not:
 
@@ -235,7 +247,8 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | commander-death gate | `ActiveCommanderDeath` | `main+0x37EF6` | `0x486688` compares it against zero and only then calls `UNITS_KillAllForPlayer`. [VERIFIED, binary] |
 | apply point | `Game_MainLoopTick` detour | `0x4969D2` | See *The apply point* below. |
 | map extents | `MapWidth/Height` | `main+0x14223`/`0x14227` | World units. Bounds-checking source; `FeatureMapSizeX/Y` (`0x14233`/`0x14237`) is the same map in tiles. |
-| per-player cap | `MaxUnitNumberPerPlayer` | `main+0x37EEC` | Reads **250** in stock skirmish. `ActualUnitLimit` (`0x37EEA`) reads 0 there and is not written. |
+| per-player cap | `MaxUnitNumberPerPlayer` | `main+0x37EEC` | Reads **250** in stock skirmish, and **500** after `setup.unit_limit: 500` (phase D writes it to `totala.ini`; the array grows with it, `array_slots` 2500 -> 5000). `ActualUnitLimit` (`0x37EEA`) reads 0 either way and is not written. |
+| loaded map | `GameingState.TNTFile` | `*(main+0x391E9) + 0x204` | The map the engine really has, `"Maps\Two Continents.TNT"`. TA falls back silently on a `SkirmishMap` it does not know, so this is the only honest answer [VERIFIED live, tamem.h:632,811]. |
 | player resources | `PlayerStruct[10]`, stride `0x14B` | `main+0x1B63` | `fCurrentEnergy +0x8C`, `fCurrentMetal +0x98`, `fMaxEnergyStorage +0xA4`, `fMaxMetalStorage +0xA8` — all confirmed against a live read. Writable, but not *settable*: see the phase C notes. |
 
 ### The apply point
@@ -398,10 +411,25 @@ the author's handles back over the fork's ordinals before anything is printed. W
 `camera.pin` it also writes the eye-hold file, using the eye the fork actually wrote
 rather than re-deriving the projection in a second place.
 
+Built in phase D, and needing **nothing** — this is the one that starts from a stopped
+instance, or from no instance at all:
+
+```bash
+tools/tacli scenario load  t1 200v200            # launch → menus → live → applied → camera
+tools/tacli scenario load  t1 200v200 --restart  # ...on an instance that is already running
+tools/tacli scenario load  t1 200v200 --res 1280x960 --map 'Comet Catcher'
+```
+
+`load` carries `setup`'s launch half — map, resolution, players, unit limit — into the
+launch, drives `SINGLE → Skirmish → Start` by gadget name, waits for a world, reads back
+the map the engine *actually* loaded, and only then applies. It is a clean start by
+definition, so on a running instance it refuses unless `--restart` says otherwise, and
+`--any-map` is the escape hatch for the map check. `launch --unit-limit` exposes the same
+INI knob on its own.
+
 Still waiting on the fork:
 
 ```bash
-tools/tacli scenario load    t1 200v200 --json         # launch → menus → live → applied → camera (D)
 tools/tacli scenario dump    t1 -o /tmp/captured.json  # (phase E)
 ```
 
@@ -559,10 +587,61 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   two keys rather than advertise a knob the engine overrules. Setting resources for real
   is a launch-time problem and belongs to phase D.
 
-**D — `scenario load` end to end.** Launch, `ui click SINGLE/Skirmish/Start`, wait for live,
-drop the trigger, read the result, set the camera.
-*DoD*: one command from nothing to a live 200v200 with the camera on the collision point,
-verified by `glshot`; and the `shootall` A/B recorded here as VERIFIED or corrected.
+**D — `scenario load` end to end. BUILT 2026-09-01.** `cmd_scenario_load` composes the
+verbs that already worked: launch carrying `setup`'s launch half, the shell path by gadget
+name, a wait for a world, a read-back of the map the engine really loaded, then `apply`.
+**No fork change was needed** — phase D is composition plus the launch half `apply` drops,
+and the C side is untouched.
+*DoD, met on `dojo1` / Two Continents*: `tacli scenario load dojo1 200v200` goes from a
+stopped instance to 402 entities, 400 orders, `failed 0` and the camera on the wreck
+between the two waves in **6.4 seconds**; `glshot` shows the collision with TA's own status
+line reading `Wreckage M:564` and `Rocko: Under Attack`. The `shootall` A/B is **VERIFIED**
+— see *Engine switches* above; `scenarios/shootall-ab.json` ships so it can be re-run.
+
+**What phase D added, and what the live runs corrected:**
+
+- **`setup.unit_limit` is real, and it is a launch-time key.** `write_totala_ini` now
+  composes `[Preferences]` from what is asked for instead of branching on sound alone, so
+  `NoDirectSound` and `UnitLimit` coexist and neither drops the other. With
+  `unit_limit: 500` the engine reads `MaxUnitNumberPerPlayer` **500** (250 unset) and sizes
+  its array to `array_slots` 5000 (2500 unset) — which is exactly why raising the limit in
+  a running game cannot work, and why this belongs to `load` and not to the applier.
+  `launch --unit-limit` exposes the same knob on its own.
+- **Unit indices are handed out in per-player blocks of the limit.** Player 0's units are
+  `idx=1..500` and player 1's start at `501`, so `roster` reads back whether the limit took
+  without a peek. (TAF's protocol notes say the same: a commander is `unitId % maxUnits == 1`.)
+- **Open question 5 is answered: the loaded map is readable, and the fallback is real.**
+  `*(main+0x391E9) + 0x204` reads `"Maps\Two Continents.TNT"` in a live game — the offsets
+  from `tamem.h` are right. Asked for a map that does not exist, TA silently loaded
+  **`Maps\Canal Crossing.TNT`** instead and said nothing, and with `--any-map` all 402
+  entities applied to it *without one out-of-bounds error*: Canal Crossing is large enough
+  that the Two Continents coordinates are all in bounds, just on the wrong terrain. That is
+  precisely the silent wrongness the check exists for, so `load` compares the stem,
+  case-folded, against `setup.map` and **refuses to apply on a mismatch**; `--any-map`
+  overrides. Layer 2 already catches an unknown map *name* before anything launches, so
+  this check covers what layer 2 cannot see: a map the shell lists and the engine then
+  declines to load, and any name that reaches the registry past validation (`--map`).
+- **`--player`'s fields are positional, and an empty one now means "leave that key
+  alone"** — `--player 0:1::3` sets a colour without inventing a side. `setup.players`
+  compiles straight to these strings rather than writing the registry a second way, so a
+  scenario and a hand-typed launch cannot disagree about what slot 0 means.
+- **`load` is a clean start, and refuses rather than assuming.** On an instance that is
+  already running it stops nothing unless `--restart` is given, and the refusal names
+  `apply` as the other thing the author might have meant.
+- **A menu click is confirmed before the screen changes.** TA answers a click through its
+  own `UIChange_f` on the frame the click arrives and pushes the new screen a frame or two
+  later, so a settle window sized for the transition is wasted: `load` reports the screen
+  it clicked *on* plus the engine's confirmation, and the next step's screen says where
+  that click went. Widening the settle to 5 s changed nothing and was reverted.
+- **The overlay's own `units: alive=N` is the live signal.** A non-zero count is proof of a
+  world in memory. Zero is not: that line also appears at the *menu*, where the struct is
+  readable and the world is not there yet, so waiting on the bare word would apply into
+  nothing.
+- **"From nothing" includes the instance.** `scenario load dojoD one-unit` on a name that
+  had never existed cloned the prefix, mirrored the gamedir, launched, drove the shell and
+  put the commander at exactly `1600,1600`, dead centre of the window, in **7.8 seconds**.
+  Its player 1 came back as `idx=251` — the stock 250-block, next to the 501 the
+  `unit_limit: 500` run produced, which is the control for that reading.
 
 **E — `scenario dump`.** Live game → JSON: units, features, camera, setup. Orders are **not**
 dumped in v1 (`UnitOrders` at `+0x5C` is an un-RE'd linked list); a dumped file is marked
@@ -571,9 +650,10 @@ situation snapshot for a savegame.
 
 ## Open questions
 
-1. **`shootall` semantics** — bit `0x400` is certain; what the engine does with it is
-   community lore. A/B on a live instance (blob + building in range, bit off vs on). If it
-   appears inert, set `cheats` (`0x2`) alongside it before concluding anything.
+1. ~~**`shootall` semantics**~~ — **ANSWERED, phase D.** Six idle Peewees and an enemy
+   Solar Collector in range: untouched for 45 s with the bit off, a wreck within 45 s with
+   it on, and nothing moved either way. Idle units engage enemy *buildings* in range only
+   with `0x400` set. `cheats` was not needed. The A/B ships as `scenarios/shootall-ab.json`.
 2. **The FBI `Corpse=` offset** inside `UnitDefStruct+0xA8..0x13D` — unlocks
    `{"type": "ARMCOM", "as": "wreck"}` without a corpse-name lookup.
 3. **`UnitOrders` layout** (`+0x5C`) — gates order round-tripping in `scenario dump`.
@@ -582,13 +662,15 @@ situation snapshot for a savegame.
 4. ~~**Spawn hitch at 400 units**~~ — **ANSWERED, phase C.** 402 creations and 400 orders
    in one visit to the detour: no visible stall, no dropped frame, 0.2 s of CLI round trip
    including the poll. `stagger_ticks` is not needed and is not being added.
-5. **Registry map name vs reality** — TA falls back silently on an unknown `SkirmishMap`.
-   Phase D verifies the loaded map by reading `GameingState.TNTFile` after Start.
+5. ~~**Registry map name vs reality**~~ — **ANSWERED, phase D.** `GameingState.TNTFile`
+   (`*(main+0x391E9) + 0x204`) reads `"Maps\Two Continents.TNT"` live, and `load` refuses to
+   apply when its stem is not the map the file asked for (`--any-map` overrides).
 6. **`load`/`unload` order constants disagree between the two corpora.** TA's Delphi table
    has `unload`(5) `load`(6); TADR's C++ `ordertype` enum has `LOAD = 5` `UNLOAD = 6`. The
    compiler follows the Delphi table. Neither is exercised by anything built so far, and
    one transport unit settles it.
 7. **`ActualUnitLimit` (`main+0x37EEA`) reads 0** in a stock skirmish while
-   `MaxUnitNumberPerPlayer` (`+0x37EEC`) reads the expected 250. The applier reports both
-   and writes neither: raising a limit mid-game cannot grow an array the engine sized at
-   load, so `setup.unit_limit` belongs to phase D's launch path, not here.
+   `MaxUnitNumberPerPlayer` (`+0x37EEC`) reads the expected 250 — and still reads 0 with
+   `UnitLimit=500` in `totala.ini`, where `MaxUnitNumberPerPlayer` reads 500 and the unit
+   array grows to match. So the field is not the live limit under any setting reached so
+   far; phase D's launch path made the question sharper rather than answering it.

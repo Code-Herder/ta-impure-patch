@@ -203,8 +203,9 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    be read without risking the instance.
 
 7. **Phase 1.4 — JSON scenarios (`tacli scenario`)** — **SCOPED 2026-09-01** by
-   `/grill-me`; **phases A (the compiler), B (the catalogues) and C (the applier) built
-   the same day**, D–E still to come. A strict JSON file describes a *situation* — 200 units
+   `/grill-me`; **phases A (the compiler), B (the catalogues), C (the applier) and D
+   (`load`) all built the same day**, E still to come. A strict JSON file describes a
+   *situation* — 200 units
    fighting, a wreck of a chosen type, the camera already on it — and one command launches
    an instance, drives `ui click SINGLE/Skirmish/Start`, waits for the game and spawns it by
    calling the engine's own `UNITS_CreateUnit` / `SpawnFeatureOnMap` / `Order2Unit`.
@@ -218,7 +219,15 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    Live today, with no game and no wine: `scenario list` / `validate <name>` /
    `expand <name> [--wire]`, and `scenarios/200v200.json`. The compiler is the component
    that decides what reaches the engine, so it is the one with exhaustive offline tests —
-   94 of `test_tacli.py`'s 157.
+   116 of `test_tacli.py`'s 181.
+
+   **From nothing: `scenario load <inst> <name>`.** One command launches with the file's
+   own `setup` (map, resolution, players, `unit_limit` via `totala.ini`), drives
+   `SINGLE → Skirmish → Start` by gadget name, waits for a world, reads back the map the
+   engine *actually* loaded — TA falls back silently on one it does not have — and applies.
+   A stopped instance to a live 200v200 with the camera on the collision point takes 6.4
+   seconds. It needed no fork change: every step was already a verb, which is the argument
+   for having built them as verbs.
 
    Against a running **game**: `scenario apply <inst> <name>` spawns the situation by
    calling the engine's own creation functions from a detour at `0x4969D2`, inside TA's
@@ -228,6 +237,9 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    the day it was written: 402 entities and 400 orders in one visit, every position exact,
    no spawn hitch — and it corrected four design claims, including the player-slot
    numbering the schema had wrong (`scenario-format.md`, *What the live runs corrected*).
+   `switches` then settled what `shootall` (`0x400`) actually does, which was community
+   lore in every source: idle units engage an enemy *building* in range only with the bit
+   set. Same game, same six Peewees, one bit, 45 seconds each way.
 
    With a running instance: `tacli units` / `features` / `maps` / `catalogue` ask the
    game what exists and cache it per instance, and `scenario validate --instance <name>`

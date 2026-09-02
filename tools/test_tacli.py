@@ -14,6 +14,8 @@ running game.
 import contextlib
 import io
 import json
+import tempfile
+import types
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -1033,6 +1035,107 @@ class Roster(unittest.TestCase):
                        "screen=(512,384) nano=0.00")
         self.assertIsNotNone(m)
         self.assertIsNone(m.group(4))
+
+
+class LoadComposition(unittest.TestCase):
+    """`scenario load` is composition: what it decides before anything launches."""
+
+    def flags(self, players):
+        setup = tacli._scn_setup({"setup": {"players": players}}, "t")
+        return tacli._scn_player_flags(setup)
+
+    def test_a_slot_becomes_the_launch_flag_a_human_would_type(self):
+        self.assertEqual(self.flags([{"slot": 0, "controller": "human",
+                                      "side": "arm", "color": 3}]), ["0:1:0:3"])
+
+    def test_core_is_side_one_and_ai_is_controller_two(self):
+        self.assertEqual(self.flags([{"slot": 1, "controller": "ai",
+                                      "side": "core"}]), ["1:2:1"])
+
+    def test_an_undeclared_field_is_left_alone_rather_than_guessed(self):
+        # --player's fields are positional, so a colour with no side needs the
+        # empty middle field: the alternative is writing a side nobody asked for.
+        self.assertEqual(self.flags([{"slot": 2, "color": 4}]), ["2:2::4"])
+
+    def test_a_player_with_nothing_but_a_slot_still_names_its_controller(self):
+        self.assertEqual(self.flags([{"slot": 5}]), ["5:2"])
+
+    def test_no_players_means_no_flags(self):
+        self.assertEqual(self.flags([]), [])
+
+
+class LoadedMap(unittest.TestCase):
+    """TA falls back silently on a map it does not have, so `load` reads it back."""
+
+    def test_the_tnt_file_names_the_map_the_scenario_asked_for(self):
+        self.assertTrue(tacli._scn_map_matches("Two Continents.tnt", "Two Continents"))
+
+    def test_a_directory_and_a_case_difference_are_not_a_mismatch(self):
+        self.assertTrue(tacli._scn_map_matches("maps\\TWO CONTINENTS.TNT",
+                                               "Two Continents"))
+
+    def test_a_different_map_is_a_mismatch(self):
+        self.assertFalse(tacli._scn_map_matches("Comet Catcher.tnt", "Two Continents"))
+
+    def test_a_name_that_merely_starts_the_same_is_a_mismatch(self):
+        self.assertFalse(tacli._scn_map_matches("Two Continents 2.tnt",
+                                                "Two Continents"))
+
+
+class PeekValues(unittest.TestCase):
+    """The peek log line is the only channel; parse it, do not re-derive it."""
+
+    def test_a_dword_reads_as_its_decimal_half(self):
+        self.assertEqual(tacli._peek_uint({"value": "6947272 (0x0069FBC8)"}), 6947272)
+
+    def test_a_string_reads_as_its_quoted_text(self):
+        self.assertEqual(tacli._peek_str({"value": '"maps\\Two Continents.tnt"'}),
+                         "maps\\Two Continents.tnt")
+
+    def test_an_unreadable_address_is_not_a_number(self):
+        self.assertIsNone(tacli._peek_uint({"value": "<unreadable>"}))
+        self.assertIsNone(tacli._peek_str({"value": "<unreadable pointer>"}))
+
+    def test_a_missing_row_is_not_a_crash(self):
+        self.assertIsNone(tacli._peek_uint(None))
+        self.assertIsNone(tacli._peek_str(None))
+
+
+class LiveSignal(unittest.TestCase):
+    """A world in memory, told from the overlay's own count."""
+
+    def test_a_non_zero_count_is_a_live_game(self):
+        m = tacli.SCN_LIVE_RX.search("units: alive=2 drawn=1 eye=(0,7312) me=0")
+        self.assertEqual(int(m.group(1)), 2)
+
+    def test_zero_units_is_not(self):
+        # Measured: this line appears at the menu, where the struct is readable
+        # and the world is not there yet. Waiting on it would apply into nothing.
+        self.assertIsNone(
+            tacli.SCN_LIVE_RX.search("units: alive=0 drawn=0 eye=(0,0) me=0"))
+
+
+class TotalaIni(unittest.TestCase):
+    """TA reads UnitLimit from its own INI, and clamps it itself to [20, 1500]."""
+
+    def write(self, sound, limit=None):
+        with tempfile.TemporaryDirectory() as d:
+            inst = types.SimpleNamespace(gamedir=Path(d))
+            tacli.write_totala_ini(inst, sound, limit)
+            path = Path(d) / "totala.ini"
+            # bytes: TA's INI is CRLF and read_text() would translate that away.
+            return path.read_bytes().decode("ascii") if path.exists() else None
+
+    def test_silence_and_a_limit_share_one_section(self):
+        self.assertEqual(self.write(False, 500),
+                         "[Preferences]\r\nNoDirectSound=1\r\n"
+                         "UseWindowsSound=0\r\nUnitLimit=500\r\n")
+
+    def test_a_limit_survives_sound_being_turned_on(self):
+        self.assertEqual(self.write(True, 500), "[Preferences]\r\nUnitLimit=500\r\n")
+
+    def test_nothing_to_say_leaves_no_file(self):
+        self.assertIsNone(self.write(True))
 
 
 class ScenarioFiles(unittest.TestCase):

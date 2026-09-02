@@ -1,0 +1,31 @@
+{
+  "format": "ta-scenario/1",
+  "description": "shootall A/B: six idle Peewees, an enemy building in range, one bit",
+  "seed": 20260901,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {"shootall": false, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "groups": [
+    { "id": "blob", "owner": 0, "at": [2340, 1200],
+      "pattern": {"kind": "grid", "cols": 2, "spacing": 40},
+      "composition": [{"type": "ARMPW", "count": 6}],
+      "facing": 90, "stance": "hold" }
+  ],
+
+  "units": [
+    { "id": "target", "type": "CORSOLAR", "owner": 1, "pos": [2460, 1200] },
+    { "id": "spare",  "type": "CORSOLAR", "owner": 1, "pos": [4100, 1300] }
+  ],
+
+  "camera": { "center_on": "target" }
+}
