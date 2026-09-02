@@ -203,7 +203,7 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    be read without risking the instance.
 
 7. **Phase 1.4 — JSON scenarios (`tacli scenario`)** — **SCOPED 2026-09-01** by
-   `/grill-me`, not yet built. A strict JSON file describes a *situation* — 200 units
+   `/grill-me`; **phase A (the compiler) built the same day**, phases B–E wait on the fork. A strict JSON file describes a *situation* — 200 units
    fighting, a wreck of a chosen type, the camera already on it — and one command launches
    an instance, drives `ui click SINGLE/Skirmish/Start`, waits for the game and spawns it by
    calling the engine's own `UNITS_CreateUnit` / `SpawnFeatureOnMap` / `Order2Unit`.
@@ -213,6 +213,11 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    The CLI compiles and validates; the DLL scans a private line format and re-checks
    everything, creating **nothing** unless every entity resolves. Full design, engine recipe,
    schema and phases: **`scenario-format.md`**.
+
+   Live today, with no game and no wine: `scenario list` / `validate <name>` /
+   `expand <name> [--wire]`, and `scenarios/200v200.json`. The compiler is the component
+   that decides what reaches the engine, so it is the one with exhaustive offline tests —
+   77 of `test_tacli.py`'s 140.
 
 ## Why (constraints that shaped it)
 

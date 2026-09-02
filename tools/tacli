@@ -14,7 +14,10 @@ Everything is stdlib-only and every subcommand can print JSON (--json) for agent
 """
 
 import argparse
+import difflib
+import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -75,6 +78,7 @@ PRIVATE_FILES = {
 INTRO_MOVIES = {"1.zrb", "2.zrb"}
 
 DEFAULT_RES = (1024, 768)
+RES_RX = re.compile(r"(\d{3,4})\s*[xX*]\s*(\d{3,4})")
 
 
 def default_display() -> str:
@@ -1711,8 +1715,788 @@ def _ui_text_tokens(text: str):
     return tokens
 
 
+# ------------------------------------------------------------------ scenarios
+#
+# `tacli scenario` turns a JSON *situation* — 200 units fighting, a wreck of a
+# chosen type, the camera already on it — into a private wire file the fork
+# applies by calling the engine's own creation functions. Nothing is addressed
+# by numeric id: units, features, orders and switches are all name-keyed and
+# resolved against the live game.
+#
+# Everything in this section is pure Python and runs with no wine and no game,
+# deliberately: this is the one component that decides what reaches the engine,
+# so it is the one that can be tested exhaustively (tools/test_tacli.py).
+#
+# Design, engine recipe and phases: research/notes/scenario-format.md
+
+SCN_FORMAT = "ta-scenario/1"
+
+# Scenario files are *source* — tracked in git, written by agents — so they come
+# from the tree this tacli was run from, for the same reason built_dll() does.
+SCENARIOS = Path(__file__).resolve().parent.parent / "scenarios"
+
+# The engine's own order names and their script indices [TA_MemoryStructures.pas].
+# The indices are reference only and never reach the wire: the fork resolves the
+# name through ScriptAction_Name2Index, against the live game, like everything else.
+# There is no attack-move in Total Annihilation; `attack` at a coordinate is the idiom.
+SCN_ORDERS = {"stop": 1, "move": 2, "attack": 3, "blast": 4, "unload": 5, "load": 6,
+              "defend": 7, "repair": 8, "patrol": 9, "reclaim": 12, "capture": 13,
+              "mobilebuild": 14}
+SCN_ORDER_ALIASES = {"guard": "defend"}
+SCN_ORDERS_ALONE = {"stop"}                 # the only order that takes no target
+SCN_NO_ATTACK_MOVE = {"attack-move", "attackmove", "attack_move"}
+
+SCN_STANCES = ("hold", "manoeuvre", "roam")
+SCN_STANCE_ALIASES = {"maneuver": "manoeuvre", "manoeuver": "manoeuvre",
+                      "maneouvre": "manoeuvre"}
+
+# SoftwareDebugMode bits, u16 at TAdynmemStruct+0x37F2F [tamem.h:1862].
+SCN_SWITCHES = {"drop": 0x1, "cheats": 0x2, "selboxes": 0x4, "invulnfeatures": 0x8,
+                "noshake": 0x10, "clock": 0x40, "doubleshot": 0x80, "halfshot": 0x100,
+                "radar": 0x200, "shootall": 0x400}
+SCN_SWITCH_DEFAULTS = {"shootall": True}    # the universal player convention
+
+SCN_SIDES = {"arm": 0, "core": 1}           # --player's side numbering
+SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2}
+
+SCN_PATTERNS = ("grid", "line", "random")
+SCN_HANDLE_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}")
+SCN_WORLD_MAX = 65535       # world coordinates are the integer half of a 16.16 dword
+SCN_MAX_ENTITIES = 5000     # a ceiling the fork enforces again on its side
+SCN_STOCK_LIMIT = 250       # TA's own per-player unit cap before UnitLimit is raised
+
+
+class _ScnRandom:
+    """xorshift32 — five lines, so an expansion is byte-identical on any Python.
+
+    The stdlib's Mersenne Twister would do the job, but a scenario's expansion is
+    a published artifact: an agent compares two runs, on two machines, months
+    apart. That is not a promise `random`'s stream makes; this one does.
+    """
+
+    def __init__(self, seed: int):
+        self.state = (seed & 0xFFFFFFFF) or 0x9E3779B9   # 0 is xorshift's fixed point
+
+    def next(self) -> int:
+        x = self.state
+        x ^= (x << 13) & 0xFFFFFFFF
+        x ^= x >> 17
+        x ^= (x << 5) & 0xFFFFFFFF
+        self.state = x
+        return x
+
+    def between(self, lo: int, hi: int) -> int:
+        """Inclusive both ends. Jitter is decoration; the modulo bias is fine."""
+        return lo if hi <= lo else lo + self.next() % (hi - lo + 1)
+
+
+# ---------------------------------------------------------------- schema layer
+
+def _scn_kind(v) -> str:
+    if isinstance(v, bool):
+        return "a boolean"
+    return {dict: "an object", list: "a list", str: "a string", int: "a number",
+            float: "a number", type(None): "null"}.get(type(v), "?")
+
+
+def _scn_suggest(word: str, known) -> str:
+    near = difflib.get_close_matches(str(word), [str(k) for k in known], 1, 0.6)
+    return f" — did you mean {near[0]!r}?" if near else ""
+
+
+def _scn_keys(node, where: str, required=(), optional=()):
+    """Unknown keys are fatal: these files are written by agents, and a typo'd
+    "unit" for "units" under a permissive schema is an empty map and a lost
+    afternoon."""
+    if not isinstance(node, dict):
+        die(f"{where}: expected an object, got {_scn_kind(node)}")
+    known = tuple(required) + tuple(optional)
+    for k in node:
+        if k not in known:
+            die(f"{where}: unknown key {k!r}{_scn_suggest(k, known)} "
+                f"(allowed: {', '.join(sorted(known))})")
+    for k in required:
+        if node.get(k) is None:
+            die(f"{where}: missing required key {k!r}")
+
+
+def _scn_list(node, key, where):
+    v = node.get(key)
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        die(f"{where}.{key}: expected a list, got {_scn_kind(v)}")
+    return v
+
+
+def _scn_int(node, key, where, lo, hi, default=None):
+    v = node.get(key)
+    if v is None:
+        return default
+    if isinstance(v, bool) or not isinstance(v, int):
+        die(f"{where}.{key}: expected a whole number, got {_scn_kind(v)}")
+    if not lo <= v <= hi:
+        die(f"{where}.{key}: {v} is outside {lo}..{hi}")
+    return v
+
+
+def _scn_str(node, key, where, choices=None, default=None, upper=False,
+             aliases=None, raw=False):
+    v = node.get(key)
+    if v is None:
+        return default
+    if not isinstance(v, str):
+        die(f"{where}.{key}: expected a string, got {_scn_kind(v)}")
+    if raw:
+        return v
+    v = v.upper() if upper else v.lower()
+    if aliases:
+        v = aliases.get(v, v)
+    if choices is not None and v not in choices:
+        die(f"{where}.{key}: {node[key]!r} is not a known "
+            f"{key}{_scn_suggest(v, choices)} (known: {', '.join(sorted(choices))})")
+    return v
+
+
+def _scn_bool(node, key, where, default=None):
+    v = node.get(key)
+    if v is None:
+        return default
+    if not isinstance(v, bool):
+        die(f"{where}.{key}: expected true or false, got {_scn_kind(v)}")
+    return v
+
+
+def _scn_point(node, key, where, required=False, bounded=True):
+    v = node.get(key)
+    if v is None:
+        if required:
+            die(f"{where}: missing required key {key!r} ([x, y] world coordinates)")
+        return None
+    if (not isinstance(v, list) or len(v) != 2
+            or any(isinstance(c, bool) or not isinstance(c, int) for c in v)):
+        die(f"{where}.{key}: expected [x, y] whole numbers, got {_scn_kind(v)}")
+    if bounded:
+        for c in v:
+            if not 0 <= c <= SCN_WORLD_MAX:
+                die(f"{where}.{key}: {v} is off the map "
+                    f"(world coordinates run 0..{SCN_WORLD_MAX})")
+    return list(v)
+
+
+def _scn_facing(node, where, default=None):
+    v = _scn_int(node, "facing", where, -360, 360, None)
+    if v is None:
+        return default
+    # Degrees, 0 = TA's own default build facing (heading word 0x8000). The fork
+    # converts; the file never speaks in heading words.
+    return v % 360
+
+
+def _scn_type(node, where, catalogue_names, what: str):
+    """Unit and feature type names, upper-cased and checked against the live
+    catalogue when one is loaded (validation layer 2)."""
+    name = _scn_str(node, "type", where, upper=True)
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9_.-]{0,31}", name or ""):
+        die(f"{where}.type: {node.get('type')!r} is not a {what} name "
+            f"(letters, digits and _ , like ARMPW)")
+    if catalogue_names is not None and name not in catalogue_names:
+        die(f"{where}.type: no {what} named {name!r} in this "
+            f"game{_scn_suggest(name, catalogue_names)}")
+    return name
+
+
+def _scn_orders(node, where, default=None):
+    """Order list. Targets stay symbolic here; they are resolved once every
+    handle in the file is known."""
+    if "orders" not in node:
+        return list(default or [])
+    orders = []
+    for i, o in enumerate(_scn_list(node, "orders", where)):
+        w = f"{where}.orders[{i}]"
+        _scn_keys(o, w, required=("cmd",), optional=("to", "target"))
+        raw = o["cmd"]
+        cmd = raw.lower() if isinstance(raw, str) else raw
+        if cmd in SCN_NO_ATTACK_MOVE:
+            die(f"{w}.cmd: no such order — Total Annihilation has none. Use "
+                f'{{"cmd": "attack", "to": [x, y]}}: units advance on the spot and '
+                f"engage what they meet.")
+        cmd = _scn_str({"cmd": cmd}, "cmd", w, choices=SCN_ORDERS,
+                       aliases=SCN_ORDER_ALIASES)
+        to = _scn_point(o, "to", w)
+        target = _scn_str(o, "target", w, raw=True)
+        if cmd in SCN_ORDERS_ALONE:
+            if to or target:
+                die(f"{w}: {cmd!r} takes no target")
+        elif (to is None) == (target is None):
+            die(f"{w}: {cmd!r} needs exactly one of \"to\" (a coordinate) "
+                f"or \"target\" (an entity handle)")
+        orders.append({"cmd": cmd, "to": to, "target": target})
+    return orders
+
+
+def _scn_pattern(node, where):
+    p = node.get("pattern")
+    if p is None:
+        die(f"{where}: missing required key 'pattern' "
+            f"({{\"kind\": \"grid\", \"cols\": 20, \"spacing\": 24}})")
+    w = f"{where}.pattern"
+    if not isinstance(p, dict):
+        die(f"{w}: expected an object, got {_scn_kind(p)}")
+    kind = _scn_str(p, "kind", w, choices=SCN_PATTERNS)
+    if kind is None:
+        die(f"{w}: missing required key 'kind' ({', '.join(SCN_PATTERNS)})")
+    if kind == "grid":
+        _scn_keys(p, w, required=("kind", "cols", "spacing"), optional=("jitter",))
+    elif kind == "line":
+        _scn_keys(p, w, required=("kind", "spacing"), optional=("angle", "jitter"))
+    else:
+        _scn_keys(p, w, required=("kind", "size"), optional=("jitter",))
+    out = {"kind": kind,
+           "cols": _scn_int(p, "cols", w, 1, 1000),
+           "spacing": _scn_int(p, "spacing", w, 1, 4096),
+           # `angle` is a *layout* direction in world degrees (0 = +x, 90 = +y).
+           # `facing` is TA's own convention; the two are deliberately not one knob.
+           "angle": _scn_int(p, "angle", w, -360, 360, 0) % 360,
+           "jitter": _scn_int(p, "jitter", w, 0, 4096, 0),
+           "size": None}
+    if kind == "random":
+        size = _scn_point(p, "size", w, required=True, bounded=False)
+        if size[0] < 1 or size[1] < 1:
+            die(f"{w}.size: expected a [width, height] rectangle of at least 1x1")
+        out["size"] = size
+    return out
+
+
+def _scn_entity_body(node, where, default=None):
+    """The per-entity attributes a unit carries, and a group hands to its members."""
+    d = default or {}
+    return {
+        "facing": _scn_facing(node, where, d.get("facing")),
+        "height": _scn_int(node, "height", where, 0, SCN_WORLD_MAX, d.get("height")),
+        "health": _scn_int(node, "health", where, 1, 100, d.get("health")),
+        "nanoframe": _scn_int(node, "nanoframe", where, 0, 100, d.get("nanoframe")),
+        "stance": _scn_str(node, "stance", where, choices=SCN_STANCES,
+                           aliases=SCN_STANCE_ALIASES, default=d.get("stance")),
+        "orders": _scn_orders(node, where, d.get("orders")),
+    }
+
+
+def _scn_setup(doc, label):
+    """Everything `load` needs before the game exists. `apply` ignores it."""
+    setup = {"map": None, "res": None, "unit_limit": None, "clear_existing": True,
+             "switches": dict(SCN_SWITCH_DEFAULTS), "players": []}
+    node = doc.get("setup")
+    if node is None:
+        return setup
+    w = f"{label}: setup"
+    _scn_keys(node, w, optional=("map", "res", "unit_limit", "clear_existing",
+                                 "switches", "players"))
+    setup["map"] = _scn_str(node, "map", w, raw=True)
+    res = _scn_str(node, "res", w, raw=True)
+    if res is not None:
+        m = RES_RX.fullmatch(res)
+        if not m:
+            die(f"{w}.res: {res!r} must look like 1024x768")
+        setup["res"] = [int(m.group(1)), int(m.group(2))]
+    # TA reads UnitLimit from totala.ini and clamps it to [20, 1500] itself.
+    setup["unit_limit"] = _scn_int(node, "unit_limit", w, 20, 1500)
+    setup["clear_existing"] = _scn_bool(node, "clear_existing", w, True)
+
+    switches = node.get("switches")
+    if switches is not None:
+        sw = f"{w}.switches"
+        _scn_keys(switches, sw, optional=tuple(SCN_SWITCHES))
+        for name in switches:
+            state = _scn_bool(switches, name, sw)
+            if state is not None:           # null is "unset", as everywhere else
+                setup["switches"][name] = state
+
+    slots = {}
+    for i, p in enumerate(_scn_list(node, "players", w)):
+        pw = f"{w}.players[{i}]"
+        _scn_keys(p, pw, required=("slot",),
+                  optional=("controller", "side", "color", "metal", "energy"))
+        slot = _scn_int(p, "slot", pw, 1, 10)
+        if slot in slots:
+            die(f"{pw}.slot: player {slot} is already declared")
+        slots[slot] = True
+        setup["players"].append({
+            "slot": slot,
+            "controller": _scn_str(p, "controller", pw, choices=SCN_CONTROLLERS,
+                                   default="ai"),
+            "side": _scn_str(p, "side", pw, choices=SCN_SIDES),
+            "color": _scn_int(p, "color", pw, 0, 9),
+            "metal": _scn_int(p, "metal", pw, 0, 1000000),
+            "energy": _scn_int(p, "energy", pw, 0, 1000000),
+        })
+    return setup
+
+
+def _scn_names(catalogue, key):
+    """The catalogue's name set for a kind, or None when it does not carry one.
+
+    Entries may be bare strings or objects with a "name" — phase B's catalogue
+    also carries footprints, and layer 2 should not care which it got.
+    """
+    seq = (catalogue or {}).get(key)
+    if not seq:
+        return None
+    return {str(e.get("name", "") if isinstance(e, dict) else e) for e in seq}
+
+
+def _scn_validate(doc, label, catalogue=None):
+    """Layers 1 and 2: strict schema, then names checked against the live game.
+
+    Returns a normalized document — every default filled in, every name
+    canonical — plus the warnings worth printing but not worth refusing over.
+    """
+    cat = catalogue or {}
+    unit_names = _scn_names(cat, "units")
+    feat_names = _scn_names(cat, "features")
+    map_names = _scn_names(cat, "maps")
+    if unit_names is not None:
+        unit_names = {n.upper() for n in unit_names}
+    if feat_names is not None:
+        feat_names = {n.upper() for n in feat_names}
+    warnings = []
+
+    _scn_keys(doc, label, required=("format",),
+              optional=("description", "seed", "on_error", "setup", "groups",
+                        "units", "features", "camera", "source"))
+    if doc["format"] != SCN_FORMAT:
+        die(f"{label}: format {doc['format']!r} is not {SCN_FORMAT!r}")
+
+    norm = {"format": SCN_FORMAT,
+            "description": _scn_str(doc, "description", label, raw=True) or "",
+            "source": _scn_str(doc, "source", label, raw=True),
+            "seed": _scn_int(doc, "seed", label, 0, 0xFFFFFFFF, _scn_seed(doc)),
+            "on_error": _scn_str(doc, "on_error", label, choices=("abort", "skip"),
+                                 default="abort"),
+            "setup": _scn_setup(doc, label),
+            "groups": [], "units": [], "features": [], "camera": None,
+            "warnings": warnings}
+
+    slots = {p["slot"] for p in norm["setup"]["players"]}
+    handles = {}
+
+    def claim(name, kind, where, authored=True):
+        # Synthesized handles carry a '#', which an author's never can — so a file
+        # that names nothing can still be reported entity by entity, with no
+        # chance of colliding with a handle somebody wrote.
+        if authored and not SCN_HANDLE_RX.fullmatch(name):
+            die(f"{where}.id: {name!r} is not a handle "
+                f"(letters, digits, . _ - ; 32 characters)")
+        if name in handles:
+            die(f"{where}.id: duplicate handle {name!r} "
+                f"(already used by a {handles[name]})")
+        handles[name] = kind
+        return name
+
+    def owner_of(node, where, default=None):
+        owner = _scn_int(node, "owner", where, 1, 10, default)
+        if owner is None:
+            die(f"{where}: missing required key 'owner' (a player slot)")
+        if slots and owner not in slots:
+            die(f"{where}.owner: player {owner} is not declared in setup.players "
+                f"(declared: {', '.join(str(s) for s in sorted(slots))})")
+        return owner
+
+    if norm["setup"]["map"] and map_names is not None:
+        if norm["setup"]["map"].lower() not in {m.lower() for m in map_names}:
+            die(f"{label}: setup.map: no map named {norm['setup']['map']!r} in this "
+                f"game{_scn_suggest(norm['setup']['map'], map_names)}")
+
+    for i, g in enumerate(_scn_list(doc, "groups", label)):
+        w = f"{label}: groups[{i}]"
+        _scn_keys(g, w, required=("at", "composition", "pattern"),
+                  optional=("id", "owner", "facing", "height", "health", "nanoframe",
+                            "stance", "orders"))
+        given = _scn_str(g, "id", w, raw=True)
+        gid = claim(given or f"group{i}", "group", w, bool(given))
+        composition = []
+        for j, c in enumerate(_scn_list(g, "composition", w)):
+            cw = f"{w}.composition[{j}]"
+            _scn_keys(c, cw, required=("type", "count"))
+            composition.append({"type": _scn_type(c, cw, unit_names, "unit"),
+                                "count": _scn_int(c, "count", cw, 1, SCN_MAX_ENTITIES)})
+        if not composition:
+            die(f"{w}.composition: expected at least one {{type, count}}")
+        norm["groups"].append({"id": gid, "owner": owner_of(g, w),
+                               "at": _scn_point(g, "at", w, required=True),
+                               "pattern": _scn_pattern(g, w),
+                               "composition": composition,
+                               **_scn_entity_body(g, w)})
+
+    for i, u in enumerate(_scn_list(doc, "units", label)):
+        w = f"{label}: units[{i}]"
+        _scn_keys(u, w, required=("type", "pos"),
+                  optional=("id", "owner", "facing", "height", "health", "nanoframe",
+                            "stance", "orders"))
+        given = _scn_str(u, "id", w, raw=True)
+        norm["units"].append({"id": claim(given or f"#u{i}", "unit", w, bool(given)),
+                              "type": _scn_type(u, w, unit_names, "unit"),
+                              "owner": owner_of(u, w),
+                              "pos": _scn_point(u, "pos", w, required=True),
+                              **_scn_entity_body(u, w)})
+
+    for i, f in enumerate(_scn_list(doc, "features", label)):
+        w = f"{label}: features[{i}]"
+        _scn_keys(f, w, required=("type", "pos"), optional=("id", "facing", "height"))
+        given = _scn_str(f, "id", w, raw=True)
+        norm["features"].append({
+            "id": claim(given or f"#f{i}", "feature", w, bool(given)),
+            "type": _scn_type(f, w, feat_names, "feature"),
+            "pos": _scn_point(f, "pos", w, required=True),
+            "facing": _scn_facing(f, w),
+            "height": _scn_int(f, "height", w, 0, SCN_WORLD_MAX)})
+
+    cam = doc.get("camera")
+    if cam is not None:
+        w = f"{label}: camera"
+        _scn_keys(cam, w, optional=("at", "center_on", "pin"))
+        at = _scn_point(cam, "at", w)
+        on = _scn_str(cam, "center_on", w, raw=True)
+        if (at is None) == (on is None):
+            die(f"{w}: expected exactly one of \"at\" (a coordinate) or "
+                f"\"center_on\" (an entity or group handle)")
+        if on is not None and on not in handles:
+            die(f"{w}.center_on: no entity named {on!r} in this "
+                f"scenario{_scn_suggest(on, handles)}")
+        # Both mean the centre of the window, never the eye origin.
+        norm["camera"] = {"at": at, "center_on": on,
+                          "pin": _scn_bool(cam, "pin", w, False)}
+
+    # Order targets resolve last, so a scenario may name an entity declared below it.
+    for holder in norm["groups"] + norm["units"]:
+        for o in holder["orders"]:
+            t = o["target"]
+            if t is None:
+                continue
+            if t not in handles:
+                die(f"{label}: {holder['id']}: order {o['cmd']!r} targets "
+                    f"{t!r}, which nothing declares{_scn_suggest(t, handles)}")
+            if handles[t] == "group":
+                die(f"{label}: {holder['id']}: order {o['cmd']!r} targets the group "
+                    f"{t!r} — a group is not an entity; target one of its members' "
+                    f"neighbours by handle, or give a coordinate with \"to\"")
+            if t == holder["id"]:
+                die(f"{label}: {holder['id']}: order {o['cmd']!r} targets itself")
+    return norm
+
+
+def _scn_seed(doc) -> int:
+    """An unseeded scenario is still deterministic: the seed is a hash of the file's
+    content, minus the seed field itself, so reformatting does not reshuffle it."""
+    body = {k: v for k, v in doc.items() if k != "seed"}
+    blob = json.dumps(body, sort_keys=True, separators=(",", ":"),
+                      default=str).encode()
+    return int.from_bytes(hashlib.sha256(blob).digest()[:4], "big")
+
+
+# ------------------------------------------------------------- expansion layer
+
+def _scn_round(v: float) -> int:
+    """Half up, always: Python's banker's rounding would make a grid asymmetric."""
+    return int(math.floor(v + 0.5))
+
+
+def _scn_points(pattern, at, n, rnd):
+    """The seeded, deterministic half of bulk authoring — `at` is the *centre* of
+    the formation, matching what `at` means everywhere else in the file."""
+    ax, ay = at
+    spacing = pattern["spacing"] or 0
+    pts = []
+    if pattern["kind"] == "grid":
+        cols = min(pattern["cols"], n) or 1          # 3 units, cols=20: one short row
+        rows = -(-n // cols)
+        for i in range(n):
+            col, row = i % cols, i // cols
+            pts.append((ax + (col - (cols - 1) / 2) * spacing,
+                        ay + (row - (rows - 1) / 2) * spacing))
+    elif pattern["kind"] == "line":
+        rad = math.radians(pattern["angle"])
+        dx, dy = math.cos(rad), math.sin(rad)
+        for i in range(n):
+            t = (i - (n - 1) / 2) * spacing
+            pts.append((ax + t * dx, ay + t * dy))
+    else:
+        w, h = pattern["size"]
+        for _ in range(n):
+            pts.append((rnd.between(ax - w // 2, ax + w // 2),
+                        rnd.between(ay - h // 2, ay + h // 2)))
+    jitter = pattern["jitter"]
+    if not jitter:
+        return [(_scn_round(x), _scn_round(y)) for x, y in pts]
+    return [(_scn_round(x) + rnd.between(-jitter, jitter),
+             _scn_round(y) + rnd.between(-jitter, jitter)) for x, y in pts]
+
+
+def _scn_unit_record(handle, type_name, owner, pos, body, group=None):
+    return {"id": handle, "type": type_name, "owner": owner, "pos": list(pos),
+            "height": body["height"], "facing": body["facing"],
+            "health": body["health"], "nanoframe": body["nanoframe"],
+            "stance": body["stance"], "orders": body["orders"], "group": group}
+
+
+def _scn_expand(norm):
+    """Groups become units. From here on the fork only ever sees a flat list."""
+    rnd = _ScnRandom(norm["seed"])
+    units = []
+    for g in norm["groups"]:
+        types = [c["type"] for c in g["composition"] for _ in range(c["count"])]
+        for i, (t, pos) in enumerate(zip(types, _scn_points(g["pattern"], g["at"],
+                                                            len(types), rnd))):
+            units.append(_scn_unit_record(f"{g['id']}#{i}", t, g["owner"], pos, g,
+                                          group=g["id"]))
+    for u in norm["units"]:
+        units.append(_scn_unit_record(u["id"], u["type"], u["owner"], u["pos"], u))
+
+    features = [dict(f) for f in norm["features"]]
+    exp = {"format": norm["format"], "description": norm["description"],
+           "seed": norm["seed"], "on_error": norm["on_error"],
+           "setup": norm["setup"], "units": units, "features": features,
+           "camera": _scn_camera(norm, units, features),
+           "counts": {"units": len(units), "features": len(features),
+                      "by_owner": {}},
+           "warnings": list(norm["warnings"])}
+    _scn_check(exp, norm)
+    return exp
+
+
+def _scn_camera(norm, units, features):
+    """`center_on` a group compiles to a coordinate; an entity stays a handle, so
+    the fork can centre on where the unit actually landed after the terrain snap."""
+    cam = norm["camera"]
+    if cam is None:
+        return None
+    if cam["at"] is not None or cam["center_on"] is None:
+        return {"at": cam["at"], "on": None, "pin": cam["pin"]}
+    on = cam["center_on"]
+    for g in norm["groups"]:
+        if g["id"] == on:
+            return {"at": list(g["at"]), "on": None, "pin": cam["pin"]}
+    for kind, seq in (("unit", units), ("feat", features)):
+        for ordinal, e in enumerate(seq):
+            if e["id"] == on:
+                return {"at": None, "on": [kind, ordinal, on], "pin": cam["pin"]}
+    die(f"camera.center_on: {on!r} resolves to nothing")   # unreachable: validated
+
+
+def _scn_check(exp, norm):
+    """Post-expansion limits: the checks that only a flat list can answer."""
+    label = norm.get("label", "scenario")
+    total = len(exp["units"]) + len(exp["features"])
+    if total > SCN_MAX_ENTITIES:
+        die(f"{label}: {total} entities is over the {SCN_MAX_ENTITIES} ceiling")
+    for u in exp["units"]:
+        for c in u["pos"]:
+            if not 0 <= c <= SCN_WORLD_MAX:
+                die(f"{label}: {u['id']} lands at {u['pos']}, off the map "
+                    f"(world coordinates run 0..{SCN_WORLD_MAX})")
+    by_owner = {}
+    for u in exp["units"]:
+        by_owner[u["owner"]] = by_owner.get(u["owner"], 0) + 1
+    exp["counts"]["by_owner"] = {str(k): by_owner[k] for k in sorted(by_owner)}
+    limit = exp["setup"]["unit_limit"]
+    for owner, n in sorted(by_owner.items()):
+        if limit is not None and n > limit:
+            die(f"{label}: player {owner} would get {n} units, over "
+                f"setup.unit_limit {limit}")
+        if limit is None and n > SCN_STOCK_LIMIT:
+            exp["warnings"].append(
+                f"player {owner} gets {n} units, over TA's stock per-player cap of "
+                f"{SCN_STOCK_LIMIT} — set setup.unit_limit or the engine drops the rest")
+
+
+# ------------------------------------------------------------------- wire layer
+#
+# A private, versioned, line-oriented file the CLI writes and the fork scans with
+# a small fixed-vocabulary parser. No user hand-writes it and nothing promises it
+# is stable: it changes freely whenever the DLL does. `-` is "unset, use the
+# engine's default"; the fork re-validates every field regardless, because the
+# file is on disk and can be stale or truncated.
+
+def _f(v) -> str:
+    """A wire column: `-` is "unset — use the engine's own default"."""
+    return "-" if v is None else str(v)
+
+
+def _scn_wire(exp) -> str:
+    setup = exp["setup"]
+    lines = ["# tagpu scenario wire v1 — written by `tacli scenario`, read once by the fork.",
+             f"v1 seed={exp['seed']} clear={int(setup['clear_existing'])} "
+             f"onerror={exp['on_error']} units={len(exp['units'])} "
+             f"feats={len(exp['features'])}"]
+    if setup["map"]:
+        lines.append(f"map {setup['map']}")             # rest of line: no escaping
+    if setup["unit_limit"] is not None:
+        lines.append(f"limit {setup['unit_limit']}")
+    if setup["switches"]:
+        lines.append("sw " + " ".join(f"{k}={int(bool(v))}"
+                                      for k, v in sorted(setup["switches"].items())))
+    for p in setup["players"]:
+        if p["metal"] is not None or p["energy"] is not None:
+            lines.append(f"player {p['slot']} metal={_f(p['metal'])} "
+                         f"energy={_f(p['energy'])}")
+
+    lines.append("# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> "
+                 "<stance> <nano%>")
+    for i, u in enumerate(exp["units"]):
+        lines.append(f"unit {i} {u['type']} {u['owner']} {u['pos'][0]} {u['pos'][1]} "
+                     f"{_f(u['height'])} {_f(u['facing'])} {_f(u['health'])} "
+                     f"{_f(u['stance'])} {_f(u['nanoframe'])}")
+    for i, f in enumerate(exp["features"]):
+        lines.append(f"feat {i} {f['type']} {f['pos'][0]} {f['pos'][1]} "
+                     f"{_f(f['height'])} {_f(f['facing'])}")
+
+    # Orders come after every entity: the fork creates the whole situation first,
+    # so an order can name a unit that is spawned later in the same tick.
+    ords = {u["id"]: i for i, u in enumerate(exp["units"])}
+    fords = {f["id"]: i for i, f in enumerate(exp["features"])}
+    for i, u in enumerate(exp["units"]):
+        for o in u["orders"]:
+            if o["to"]:
+                lines.append(f"order {i} {o['cmd']} pos {o['to'][0]} {o['to'][1]}")
+            elif o["target"] in ords:
+                lines.append(f"order {i} {o['cmd']} unit {ords[o['target']]}")
+            elif o["target"] in fords:
+                lines.append(f"order {i} {o['cmd']} feat {fords[o['target']]}")
+            else:
+                lines.append(f"order {i} {o['cmd']}")
+    cam = exp["camera"]
+    if cam:
+        pin = int(bool(cam["pin"]))
+        if cam["at"]:
+            lines.append(f"cam pos {cam['at'][0]} {cam['at'][1]} pin={pin}")
+        else:
+            kind, ordinal, _ = cam["on"]
+            lines.append(f"cam {kind} {ordinal} pin={pin}")
+    lines.append("end")
+    return "\n".join(lines) + "\n"
+
+
+# ------------------------------------------------------------------ scenario cli
+
+def _scn_path(name: str) -> Path:
+    """A bare name is scenarios/<name>.json; a path is anything with / or .json."""
+    if "/" in name or name.endswith(".json"):
+        return Path(name).expanduser()
+    return SCENARIOS / f"{name}.json"
+
+
+def _scn_read(name: str):
+    path = _scn_path(name)
+    if not path.exists():
+        die(f"no such scenario {name!r} ({path})")
+    try:
+        doc = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        die(f"{path.name}: not valid JSON: {e.msg} (line {e.lineno} column {e.colno})")
+    if not isinstance(doc, dict):
+        die(f"{path.name}: the top level must be an object, got {_scn_kind(doc)}")
+    return path, doc
+
+
+def _scn_catalogue(path):
+    """The live unit/feature/map lists — validation layer 2.
+
+    Phase B fills this per instance from a running game; until then it is an
+    explicit file, and absent simply means layer 2 does not run.
+    """
+    if not path:
+        return None
+    p = Path(path).expanduser()
+    if not p.exists():
+        die(f"no such catalogue {str(path)!r}")
+    try:
+        cat = json.loads(p.read_text())
+    except json.JSONDecodeError as e:
+        die(f"{p.name}: not valid JSON: {e.msg} (line {e.lineno})")
+    if not isinstance(cat, dict):
+        die(f"{p.name}: expected an object with 'units' / 'features' / 'maps'")
+    return cat
+
+
+def _scn_compile(name, catalogue_path=None):
+    path, doc = _scn_read(name)
+    norm = _scn_validate(doc, path.name, _scn_catalogue(catalogue_path))
+    norm["label"] = path.name
+    exp = _scn_expand(norm)
+    exp["name"] = path.stem
+    exp["path"] = str(path)
+    return exp
+
+
+def cmd_scenario_list(args):
+    rows = []
+    for path in sorted(SCENARIOS.glob("*.json")):
+        row = {"name": path.stem, "path": str(path), "description": "", "ok": True}
+        try:
+            doc = json.loads(path.read_text())
+            row["description"] = doc.get("description", "") if isinstance(doc, dict) else ""
+        except (json.JSONDecodeError, OSError) as e:
+            row["ok"], row["description"] = False, f"unreadable: {e}"
+        rows.append(row)
+    if args.json:
+        out(rows, True)
+    elif not rows:
+        print(f"no scenarios in {SCENARIOS}")
+    else:
+        for r in rows:
+            print(f"{r['name']:<20} {'' if r['ok'] else '(broken) '}{r['description']}")
+
+
+def cmd_scenario_validate(args):
+    exp = _scn_compile(args.scenario, args.catalogue)
+    res = {"name": exp["name"], "path": exp["path"], "ok": True,
+           "seed": exp["seed"], "counts": exp["counts"], "setup": exp["setup"],
+           "warnings": exp["warnings"],
+           "catalogue": bool(args.catalogue)}
+    c = exp["counts"]
+    plural = lambda n, word: f"{n} {word}{'' if n == 1 else 's'}"    # noqa: E731
+    human = (f"{exp['name']}: ok — {plural(c['units'], 'unit')}, "
+             f"{plural(c['features'], 'feature')}, seed {exp['seed']}"
+             + (f", map {exp['setup']['map']!r}" if exp["setup"]["map"] else "")
+             + ("" if args.catalogue else "  (no catalogue: names unchecked)"))
+    for w in exp["warnings"]:
+        human += f"\nwarning: {w}"
+    out(res, args.json, human=human)
+
+
+def cmd_scenario_expand(args):
+    exp = _scn_compile(args.scenario, args.catalogue)
+    if args.wire:
+        print(_scn_wire(exp), end="")
+        return
+    lines = []
+    for i, u in enumerate(exp["units"]):
+        lines.append(f"u{i:<5} {u['type']:<12} own={u['owner']} "
+                     f"pos={u['pos'][0]},{u['pos'][1]} "
+                     f"face={'-' if u['facing'] is None else u['facing']}  {u['id']}")
+    for i, f in enumerate(exp["features"]):
+        lines.append(f"f{i:<5} {f['type']:<12}          "
+                     f"pos={f['pos'][0]},{f['pos'][1]} "
+                     f"face={'-' if f['facing'] is None else f['facing']}  {f['id']}")
+    cam = exp["camera"]
+    if cam:
+        lines.append(f"cam    " + (f"pos={cam['at'][0]},{cam['at'][1]}" if cam["at"]
+                                   else f"on={cam['on'][2]} ({cam['on'][0]} "
+                                        f"{cam['on'][1]})"))
+    for w in exp["warnings"]:
+        lines.append(f"warning: {w}")
+    out(exp, args.json, human="\n".join(lines))
+
+
+def cmd_scenario_todo(args):
+    """`load`, `apply` and `dump` are phases C-E; say so instead of "invalid choice"."""
+    phase = {"load": "D", "apply": "C", "dump": "E"}[args.cmd_todo]
+    die(f"scenario {args.cmd_todo} is phase {phase} and needs the fork's applier "
+        f"(research/notes/scenario-format.md). Built today: list, validate, expand.")
+
+
 def res_type(text: str):
-    m = re.fullmatch(r"(\d{3,4})\s*[xX*]\s*(\d{3,4})", text)
+    m = RES_RX.fullmatch(text)
     if not m:
         raise argparse.ArgumentTypeError("resolution must look like 1024x768")
     return (int(m.group(1)), int(m.group(2)))
@@ -1876,6 +2660,35 @@ def build_parser():
     u.add_argument("--no-wait", dest="wait", action="store_false", default=True,
                    help="fail immediately instead of waiting for the gadget")
     u.set_defaults(func=cmd_ui)
+
+    sc = sub.add_parser("scenario", help="compile and apply JSON situation files")
+    add_common(sc)
+    scv = sc.add_subparsers(dest="verb", required=True)
+
+    def add_scenario(verb, help_text, **kw):
+        sp = scv.add_parser(verb, help=help_text, **kw)
+        add_common(sp)
+        return sp
+
+    scl = add_scenario("list", "list the scenarios in scenarios/")
+    scl.set_defaults(func=cmd_scenario_list)
+
+    for verb, fn, help_text in (
+            ("validate", cmd_scenario_validate, "schema + catalogue checks, no game"),
+            ("expand", cmd_scenario_expand, "the flat entity list, no game")):
+        sp = add_scenario(verb, help_text)
+        sp.add_argument("scenario", help="a name in scenarios/, or a path to a .json")
+        sp.add_argument("--catalogue", help="unit/feature/map lists to check names "
+                                            "against (phase B fills this per instance)")
+        if verb == "expand":
+            sp.add_argument("--wire", action="store_true",
+                            help="print the compiled wire file the fork will read")
+        sp.set_defaults(func=fn)
+
+    for verb, phase in (("load", "D"), ("apply", "C"), ("dump", "E")):
+        sp = add_scenario(verb, f"(phase {phase} — needs the fork's applier)")
+        sp.add_argument("rest", nargs="*")
+        sp.set_defaults(func=cmd_scenario_todo, cmd_todo=verb)
 
     rm = sub.add_parser("rm", help="delete an instance")
     add_common(rm)

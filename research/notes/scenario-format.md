@@ -122,11 +122,26 @@ unit names by scanning the live definition table. This design follows its recipe
   half-built look.
 - `stance` is a token (`hold` / `manoeuvre` / `roam`), never a raw mask.
 - `orders` at group level apply to every member; a unit-level `orders` overrides. Targets
-  are a coordinate (`to`) or a handle (`target`).
-- Patterns in v1: `grid`, `line`, `random` (in a rect). All seeded.
+  are a coordinate (`to`) or a handle (`target`) — a unit **or a feature** (that is how a
+  wreck gets reclaimed), never a group.
+- Every per-entity attribute (`facing`, `height`, `health`, `nanoframe`, `stance`,
+  `orders`) may sit on a group, where it applies to every member.
+- **`at` is the *centre* of a formation**, not its corner — the same thing `at` means for
+  the camera, so there is one rule for the word.
+- Patterns in v1: `grid`, `line`, `random` (in a rect). All seeded. A `line`'s optional
+  `angle` is a **layout** direction in world degrees (`0` = +x, `90` = +y) and is
+  deliberately *not* `facing`: laying units out and pointing them are two questions.
+- **`null` means "unset — use the engine's default"** wherever a value may appear.
 - `owner` and player `slot` use the **same numbering as `tacli --player`** — no third
-  convention.
-- Aliases accepted: `guard` → TA's `defend`.
+  convention. When `setup.players` is present, an `owner` outside it is an error.
+- Handles are `[A-Za-z0-9][A-Za-z0-9_.-]{0,31}`. An entity with no `id` gets a synthesized
+  one containing `#`, which an author's cannot — so a file that names nothing is still
+  reported entity by entity, with no chance of collision. Group members are
+  `<group>#<n>`.
+- Aliases accepted: `guard` → TA's `defend`; `maneuver` → `manoeuvre`.
+- Per-player unit counts are checked after expansion: over `setup.unit_limit` is an
+  **error**, over TA's stock cap of 250 with no limit set is a **warning** (the engine
+  would silently drop the rest).
 
 ## Order vocabulary
 
@@ -252,25 +267,47 @@ per-instance. Two established idioms, both followed:
   half-built file, polled by the CLI in an auto-wait loop (`tagpu_ui` idiom,
   `inc/tagpu_ui.h`).
 
+As emitted by `scenario expand --wire` (phase A). Blank lines and `#` comments are
+skipped; `-` is "unset, use the engine's default"; columns are positional:
+
 ```
-v1 map=Two_Continents
-unit  0 ARMPW    1 1200  900 -  180 100 0     # ord name owner x y height facing hp% flags
-feat  0 ARMCOM_DEAD  2400 900 -  90
-order 0 attack 2400 900
-sw    shootall=1 noshake=1
-cam   1200 900
+# tagpu scenario wire v1 — written by `tacli scenario`, read once by the fork.
+v1 seed=20260901 clear=1 onerror=abort units=401 feats=1
+map Two Continents
+limit 500
+sw noshake=1 shootall=1
+player 1 metal=5000 energy=5000
+# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%>
+unit 0 ARMPW 1 775 1098 - 90 - - -
+feat 0 ARMCOM_DEAD 1700 1200 - 45
+order 0 attack pos 2400 1200
+cam feat 0 pin=0
+end
 ```
+
+Three details the sketch above did not have. The map gets **its own line** — the rest of
+the line is the name — so a map with spaces needs no escaping. An order names its target
+in a fixed vocabulary (`pos <x> <y>` / `unit <ord>` / `feat <ord>` / nothing, for `stop`),
+which is cheaper to parse than guessing from the argument count. And **every entity line
+precedes every order line**, because the fork creates the whole situation before issuing
+anything — so an order can name a unit spawned later in the same tick. `end` closes the
+file: a truncated one is visible rather than half-applied.
+
+Ordinals are **per kind** (`unit 0` and `feat 0` coexist) and follow emission order: group
+members first, in composition order, then the explicit `units`. Handle *strings* never
+reach the engine — the fork keys its result by ordinal and the CLI maps it back.
 
 The DLL re-validates every field regardless of what the CLI promised — bounds against the
 live map extents, name lookups that can fail, a hard ceiling on entity count — because the
 file is on disk and can be stale or truncated.
 
-**Result JSON**:
+**Result JSON**, keyed by ordinal because that is all the fork knows; `tacli` puts the
+handles back before an agent sees it:
 
 ```json
 {"applied": 401, "failed": 0, "switches": {"shootall": true, "noshake": true},
- "handles": {"hero": {"ord": 0, "engine_index": 17,
-                      "requested": [900, 1200], "actual": [900, 1203]}},
+ "units": {"0": {"engine_index": 17,
+                 "requested": [900, 1200], "actual": [900, 1203]}},
  "camera": [1700, 1200]}
 ```
 
@@ -278,10 +315,18 @@ file is on disk and can be stale or truncated.
 
 ## CLI surface
 
+Built today (phase A) — the three that need no game:
+
 ```bash
 tools/tacli scenario list
 tools/tacli scenario validate 200v200                  # schema + catalogue, no game
 tools/tacli scenario expand  200v200 --json            # the flat entity list, no game
+tools/tacli scenario expand  200v200 --wire            # the file the fork will read
+```
+
+Waiting on the fork (phases B–E):
+
+```bash
 tools/tacli scenario load    t1 200v200 --json         # launch → menus → live → applied → camera
 tools/tacli scenario apply   t1 reinforcements --json  # mutate a live game
 tools/tacli scenario dump    t1 -o /tmp/captured.json  # (phase E)
@@ -295,6 +340,10 @@ Scenarios live in **`scenarios/` at the repo root**, tracked in git, plain `.jso
 name resolves to `scenarios/<name>.json`; anything with a `/` or a `.json` suffix is a path.
 Every verb takes `--json` and exits non-zero on failure. `setup` may carry launch options;
 explicit CLI flags win, so a scenario re-runs at a different resolution without editing.
+Until phase B's catalogue exists, `validate` and `expand` take **`--catalogue <file>`** —
+a JSON `{"units": [...], "features": [...], "maps": [...]}`, entries either names or
+objects with a `name` — and layer 2 simply does not run without one, which the human
+output says out loud rather than implying the names were checked.
 
 **Deliberately not added**: an inline `tacli spawn t1 ARMPW 1200,900`. It would be a second
 path into the engine with its own validation story, and `scenario apply /tmp/one.json`
@@ -304,11 +353,21 @@ already covers it through the safe one.
 
 ## Phases and DoD
 
-**A — the compiler (Python only).** Schema, strict validation, seeded expansion, patterns,
-handle resolution, wire writer. `list` / `validate` / `expand`.
-*DoD*: `expand 200v200 --json` yields 401 entities byte-identical across runs; unknown unit,
-out-of-map coord, duplicate handle, unknown key and `"attack-move"` each produce one clear
-error; `python3 tools/test_tacli.py` passes with no wine and no game.
+**A — the compiler (Python only). BUILT 2026-09-01.** Schema, strict validation, seeded
+expansion, patterns, handle resolution, wire writer. `list` / `validate` / `expand`, all in
+`tools/tacli` (one file, stdlib only, like the rest of it); `scenarios/200v200.json` is the
+example above, shipped.
+*DoD, met*: `expand 200v200 --json` yields 401 units + 1 feature byte-identical across
+runs; unknown unit (with `--catalogue`), out-of-map coord — before *and* after expansion,
+so a group shoved off the edge is caught too — duplicate handle, unknown key and
+`"attack-move"` each produce one clear error naming the exact path that is wrong;
+`python3 tools/test_tacli.py` passes (140 tests, no wine, no game, 0.02s).
+
+Determinism is stronger than the DoD asked: expansion draws from a **six-line xorshift32**
+rather than `random`, because an expansion is a published artifact — two runs, two
+machines, months apart — and the stdlib makes no promise about its stream. An unseeded
+file hashes its own content *minus the seed field*, so reformatting does not reshuffle the
+jitter.
 
 **B — catalogues (fork + CLI).** `tagpu_units.trigger` → `tagpu_units.json` walking
 `UnitDef[]`; the same for `FeatureDef[]`; `tacli maps` from `SELMAP`'s `MAPNAMES` via

@@ -190,6 +190,23 @@ Changing `tacli ui`? `python3 tools/test_tacli.py` covers the selector, row-geom
 token and rendering logic offline — no game needed, and it runs in a hundredth of a
 second. Everything else about the layer needs a real instance.
 
+## Scenarios (JSON situations) — compiler only, so far
+
+`tacli scenario` will one day put you in a named situation with one command. **Today only
+the offline half exists**, and it drives nothing:
+
+- `tacli scenario list` — what is in `scenarios/`.
+- `tacli scenario validate <name>` — strict schema; unknown keys, bad coordinates,
+  duplicate handles and `"attack-move"` (TA has none) are errors, each naming the exact
+  path that is wrong. Add `--catalogue <file>` to check unit/feature/map names too.
+- `tacli scenario expand <name> [--wire]` — the flat entity list a 400-unit `groups` block
+  compiles to, seeded and byte-identical every run; `--wire` shows the file the fork will
+  eventually read.
+
+`scenario load` / `apply` / `dump` need the fork's applier and say so instead of failing
+oddly. Do not hand-write the wire file, and do not expect a scenario to spawn anything
+yet. Design and phases: `research/notes/scenario-format.md`.
+
 ## Observing
 
 - `tacli shot` — TA's own 8bpp surface. Engine truth, and the only view that shows
