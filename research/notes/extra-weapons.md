@@ -115,7 +115,7 @@ function found. Per-frame functions marked ●.
 | Site | Function | What it does with "3" | Patch action |
 |---|---|---|---|
 | `0x42CDDE`–`0x42CF04` | FBI loader `FUN_0042BF40` | reads `weapon1..3`, `w*_badTargetCategory`, sets has-weapon flag | detour after the block (TADR hooks this loader at `0x42BF97` for its own extra keys); read `weapon4..N`, `wN_badTargetCategory` into the def side table |
-| `0x42ADC5`, `0x42AE35`, `0x42AEAC` | `FUN_0042A8D0` | XORs the three weapon TDF CRCs into `CRC_weapons` (unit-sync handshake) | extend the XOR to N so patched peers agree; unpatched peers would report unit CRC errors anyway |
+| `0x42ADC5`, `0x42AE35`, `0x42AEAC` | `FUN_0042A8D0` | XORs the three weapon TDF CRCs into `CRC_weapons` (unit-sync handshake) | **not done.** Extend the XOR to N so armed peers agree and mismatched ones disagree; what the lobby then does is assertion 8, not a given |
 | `0x42B64C`, `0x42B7E5` | `FUN_0042B370` def copy | two 3-iteration copies | side table is per type, nothing to copy |
 | `0x409930` | `FUN_00409730` AI valuation | scores a unit type by its 3 weapons | optional |
 | `0x48606F`, `0x486293` | `UNITS_Create`, `UNITS_CreateFromNetwork` | preset 3 slot handles to `0x4FD6F0` | detour: also preset the side slots |
@@ -301,21 +301,39 @@ by two packets: `0x10 UNIT_START_SCRIPT`, which carries the COB **method index**
 files (already a unit-sync requirement) agree on which script a fired packet
 means, and the receiver indexes the side slot for `WeapIdx ≥ 3`.
 
-The guard for **mismatched** peers is the unit-sync handshake. `CRC_weapons`
-(`def + 0x146`) is XOR-folded into `CRC_all` (`+0x142`) by
-`UnitInfo_CalcScriptCRC` (`0x42A610`) before the first sub-2 `0x1A UNIT_DATA`
-packet [CORPUS]. An armed peer folds `weapon4..N` in; an unarmed peer does not;
-so exactly the unit types that carry `Weapon4` disagree, and every other type
-still agrees. **What TA then does with a disagreeing unit — refuse to start,
-disable that unit, or only warn — is not established** (assertion 8). Note that
-the often-quoted "You have CRC errors on N units!" text does **not** exist in the
-binary: the only sync-related strings are `+syncerr`, `SYNCHING` and
-`Synchronization complete`, so whatever the lobby says comes from a GUI file, not
-a hard-coded message. If it is warn-only, the guard is not a guard, and
-we must add our own: either block the start, or have the armed side disable
-its extra weapons for that game. The failure mode being guarded against is not
-cosmetic: an unarmed receiver handling `WeapIdx ≥ 3` indexes past its three
-slots into `UnitOrders`.
+The intended guard for **mismatched** peers is the unit-sync handshake, and it is
+worth being exact about what exists today. `CRC_weapons` (`def + 0x146`) is
+XOR-folded into `CRC_all` (`+0x142`) by `UnitInfo_CalcScriptCRC` (`0x42A610`)
+before the first sub-2 `0x1A UNIT_DATA` packet [CORPUS], and `CRC_weapons` itself
+is built by `FUN_0042A8D0`, which folds in one weapon TDF CRC at each of three
+hard-coded sites (`0x42ADC5`, `0x42AE35`, `0x42AEAC`) — one per stock slot.
+
+**The module does not extend that fold, so the guard does not exist yet.** A unit
+type's CRC is today identical whether it carries four extra weapons or none. Two
+consequences, and only the second is serious:
+
+- Between two *armed* peers, two builds of the same unit that differ only beyond
+  `Weapon3` hash the same. In practice unit-sync already requires identical
+  files, so this is a hazard rather than an observed failure.
+- Between an armed and an unarmed peer, **nothing disagrees at all**. Extending
+  the XOR to `weapon4..N` is what would make exactly the `Weapon4`-carrying types
+  disagree while every other type still agrees — that is the design, not the
+  current behaviour.
+
+Even once extended, the guard is only as good as what TA does with a disagreeing
+unit, and **that is not established** (assertion 8): refuse to start, disable the
+type, or warn only. The often-quoted "You have CRC errors on N units!" text does
+**not** exist in the binary — the only sync-related strings are `+syncerr`,
+`SYNCHING` and `Synchronization complete` — so whatever the lobby says comes from
+a GUI file, not a hard-coded message. If it turns out to be warn-only, the CRC is
+not a guard at all and we must add our own: either block the start, or have the
+armed side disable its extra weapons for that game.
+
+The failure mode being guarded against is not cosmetic: an unarmed receiver
+handling `WeapIdx ≥ 3` indexes past its three slots into `UnitOrders`. The
+extension and the answer to assertion 8 were blocked on DirectPlay until
+2026-09-02; native DirectPlay now works under wine, so both are merely
+outstanding (see "Multiplayer — untested, and why").
 
 ## Assertions that must hold before this ships
 
@@ -333,7 +351,7 @@ instances, armed and unarmed, with periodic roster dumps compared.
 | 5 | Trampolines are correct for every replaced function | wrong stolen-byte length = crash on the fast path | disassembly check that no relocated instruction is IP-relative (a `jmp`/`call` in the first 5 bytes) — `DisasmWindow.java` on each entry |
 | 6 | An N-weapon unit fires all N, each through its own `Aim/Fire/Query/AimFrom` script | the feature | test unit with `Weapon4..N`; log script starts per slot and projectile spawns per weapon type |
 | 7 | Remote peer: `0x10` arrives as method index and `0x0D` `WeapIdx ≥ 3` lands in the side slot | MP correctness between armed peers | two armed `tacli` instances in a LAN game; receiver-side log of `WeapIdx` and the slot it resolved to |
-| 8 | Mismatched peers: the lobby reports CRC errors for exactly the `Weapon4` unit types, and nothing else | the optionality guard | one armed, one unarmed instance; read the lobby messages and the unit-sync result per unit type |
+| 8 | Mismatched peers: the lobby reports CRC errors for exactly the `Weapon4` unit types, and nothing else | the optionality guard | **needs the `CRC_weapons` extension first — it is not implemented, so today nothing disagrees**; then one armed, one unarmed instance, and read the lobby messages and the unit-sync result per unit type |
 | 9 | What TA does on a unit CRC mismatch (refuse start / disable unit / warn only) | decides whether we need our own guard | same test, then attempt to start; if it starts, build the extra guard before anything else |
 | 10 | `AutoAim` is never executed for remote-owned units | confirms the ownership model the MP story rests on | log owner state in the `AutoAim` wrapper during the LAN game; remote units must never appear |
 | 11 | Save then load with an N-weapon unit: no crash, side slots are re-initialised | known gap is benign | save mid-fight, load, confirm weapons 4..N resume (the load path must reset side slots; the savegame loader does not call `UNITS_StartWeaponsScripts`) |
@@ -662,25 +680,46 @@ this machine yet. What happened, so nobody re-derives it:
    box, then bounces back to `SELPROV` two seconds later; no session list, no host
    button ever became clickable. (The `tacli ui fill` of the address field once kept
    only `1` — retype and read back what the field reports.)
-3. **Root cause**: wine 9.0's DirectPlay TCP/IP service provider is a stub. Launched
-   by hand with `WINEDEBUG=-all,+dplay,+dplayx,+dpwsockx` (tacli discards wine's
-   stderr), the log shows `fixme:dplay:DPWSCB_EnumSessions … stub`,
-   `NS_SendSessionRequestBroadcast : not all data fields are correct`,
-   `DPWSCB_CloseEx … stub`, `DPWSCB_ShutdownEx … stub`. Session enumeration and
-   hosting both die inside `dpwsockx.dll`; nothing TA-side is at fault.
-4. **The fix is native DirectPlay**, what winetricks' `directplay` verb installs:
-   `dplayx.dll`, `dpwsockx.dll`, `dplaysvr.exe` (and `dpnet*`) taken from `dxnt.cab`
-   inside `directx_feb2010_redist.exe`, placed in the prefix's 32-bit `system32`
-   (`syswow64` in these 64-bit prefixes) with `WINEDLLOVERRIDES=dplayx,dpwsockx=n`
-   — tacli hard-codes `ddraw=n,b`, so it needs a launch option for that.
-   **The package could not be obtained**: the June 2010 redist (still on
-   download.microsoft.com, 100 MB) carries no `dxnt.cab` (its cabinet directory was
-   parsed; only the monthly D3DX cabs), the Feb 2010 URL is gone from Microsoft, the
-   holarse mirror returns an HTML page, and the Internet Archive has no snapshot of
-   it (CDX query empty; the `id_` fetch 429s). A copy of `dxnt.cab` from any Windows
-   machine with DirectX 9.0c unblocks this in an afternoon: extract, copy, override,
-   rerun the two-instance test with `scenarios/wpn-llt10.json`.
-5. Until then the multiplayer claims in this note (remote units driven by the `0x10`
+3. **Root cause**: wine's DirectPlay TCP/IP service provider does not implement
+   hosting. On wine 9.0 it implements nothing at all — launched by hand with
+   `WINEDEBUG=-all,+dplay,+dplayx,+dpwsockx` the log shows
+   `DPWSCB_EnumSessions … stub`, `NS_SendSessionRequestBroadcast : not all data
+   fields are correct`, `DPWSCB_CloseEx … stub`, `DPWSCB_ShutdownEx … stub`.
+   Nothing TA-side is at fault.
+4. **The earlier conclusion that a newer wine or native DirectPlay would fix it
+   was half right, and the half that matters is the bad half.** Measured
+   2026-09-02 with `tools/dptest`, a standalone 32-bit DirectPlay probe that
+   asks `dplayx`/`dpwsockx` for exactly what TA asks (see
+   [Networking, Lobbies & Multiplayer](networking-lobbies.md) §"DirectPlay under
+   Wine — measured" for the full write-up):
+
+   | Call | wine 9.0 | wine 11.0 (Proton Experimental) |
+   |---|---|---|
+   | `EnumSessions` | `DPERR_UNSUPPORTED` | `DP_OK` |
+   | `Open(DPOPEN_CREATE)` — host | `DPERR_UNSUPPORTED` | `DPERR_UNSUPPORTED` |
+
+   `dpwsockx` was rewritten upstream between 2023-10 and 2024-11 and has been
+   unchanged from `wine-10.0` through `master`; `DPWSCB_Open` still begins
+   `if ( data->bCreate ) { FIXME( "session creation is not yet supported\n" ); return DPERR_UNSUPPORTED; }`.
+   **Wine can join a DirectPlay session but cannot create one**, so upgrading
+   wine does not help.
+5. **Unblocked the same day with native DirectPlay.** Microsoft's own
+   `dplayx` + `dpwsockx` + `dplaysvr.exe`, in front of wine's builtins, make
+   hosting work on the stock **wine 9.0** the instances already use — host,
+   join, players and game messages all `DP_OK` in `tools/dptest`, in both
+   `win32` and `win64` prefixes. `tools/dpinstall.sh <prefix>` installs them.
+   Two traps: the two **EXEs must be overridden by name** as well
+   (`dplaysvr.exe,dpnsvr.exe=n`) or `Open` hangs silently on wine's stub
+   dplaysvr, and a **stale `dplaysvr.exe` holding UDP 47624** across prefixes
+   makes the next host fail `DPERR_GENERIC` — `pkill -x dplaysvr.exe` first.
+   Provenance and the Authenticode verification are in
+   [Networking, Lobbies & Multiplayer](networking-lobbies.md).
+
+   **So assertions 7-10, 12 and 15 are no longer blocked** — they are simply not
+   run yet. What remains is `tacli` work (per-launch DirectPlay overrides
+   alongside the hard-coded `ddraw=n,b`) and then the two-instance
+   `scenarios/wpn-llt10.json` test.
+6. Until that test runs, the multiplayer claims in this note (remote units driven by the `0x10`
    and `0x0D` packets, the CRC handshake as the mismatched-peer guard) rest on the
    static reading only. In particular the "You have CRC errors" lobby message is not
    a string in the binary, so what the lobby does on a unit-CRC mismatch is still
@@ -689,9 +728,11 @@ this machine yet. What happened, so nobody re-derives it:
 
 ### Known gaps (unchanged from the plan)
 
-`CRC_weapons` is not extended for `weapon4..N` (only matters between armed
-peers, untestable until DirectPlay works); the HUD still shows three reload
-bars; savegames do not persist slots 4+ (they restart cold); `UNITS_GiveUnit`
+`CRC_weapons` is not extended for `weapon4..N`, so an armed and an unarmed peer
+agree on the CRC of a unit they disagree about — the mismatched-peer guard is
+absent, not merely weak (§Multiplayer); now testable — native DirectPlay works
+under wine as of 2026-09-02. The
+HUD still shows three reload bars; savegames do not persist slots 4+ (they restart cold); `UNITS_GiveUnit`
 carries three stock bytes. A unit whose *only* weapons are 4+ (no `Weapon1`)
 gets the def's has-weapon flag cleared by the engine after our detour; keep
 `Weapon1` populated.
