@@ -67,12 +67,21 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    >> tagpu/gamedir/tagpu.log` before each capture, match PNG mtimes with
    `ls --time-style=+%s`. Blind alternation mislabels rows. Compose panels with
    `tools/sbs.py out.png label1 img1 label2 img2` (needs Pillow).
-6. **`grep -a` on tagpu.log, always** — stray binary bytes make grep treat it
+6. **Establish the noise floor before trusting any A/B number.** An engine-vs-ours
+   diff is only meaningful on a frozen scene: capture the SAME arm state twice, a
+   few seconds apart, and diff those first. It must come out **zero**. A walking
+   unit, a growing LOS blob or a still-scrolling camera moves the fog boundary and
+   the health bars between the two halves and shows up as thousands of "mismatched"
+   pixels that look exactly like a rendering bug. This cost a wrong diagnosis in the
+   G13c fog gate: 19,768 px of apparent error, chased into the shader, when the real
+   reading was 97 once the commander had parked. Park everything (`tacli eye` to pin
+   the camera, let orders finish), confirm the zero, then run the A/B.
+7. **`grep -a` on tagpu.log, always** — stray binary bytes make grep treat it
    as a binary file and silently print nothing.
-7. **Sim speed**: TA's own `+`/`-` keys via `tacli keys <name> plus` / `minus`
+8. **Sim speed**: TA's own `+`/`-` keys via `tacli keys <name> plus` / `minus`
    (up to +10, down to −9; minus stretches builds ~10× for capture). Verify
    empirically (sample a log value twice, 15 s apart) before trusting a change.
-8. **Camera steering**: `tacli eye <name> X Y` pins the eye (it writes both the eye
+9. **Camera steering**: `tacli eye <name> X Y` pins the eye (it writes both the eye
    and the scroll target, so the engine stops fighting), `--release` frees it. Steer by
    the roster log (`u### TYPE own world screen`, every 300 frames): roster `screen=`
    already includes the viewport offsets, and unit ids are NOT stable (alive-counter

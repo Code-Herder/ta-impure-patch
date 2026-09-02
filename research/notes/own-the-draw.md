@@ -36,6 +36,40 @@ sites — 2 patches cover all 3 rasterise-into-composite sites, and it matches
 
 ---
 
+## The arming rule — every code-patching pass, not just this one
+
+`tagpu_owndraw.c` was the first of what are now four passes that install engine-code
+detours through the shared `tagpu_detour.c`: **`owndraw`** (unit rasterisers),
+**`fxown`** (effects), **`featown`** (the feature leaf `0x46A610`) and, planned for G13b,
+**`terrown`** (the terrain pass `0x483FA0`). They all obey one rule, and it has cost time
+in three separate gates:
+
+> **A code-patching pass installs its detours ONCE at DLL attach, and only if its trigger
+> file exists at that moment. There is no per-frame re-arm.** Patching live engine bytes
+> off the frame loop is racy, so it is deliberately not attempted.
+
+Consequences worth stating plainly:
+
+- `tacli arm <inst> owndraw.on` **after** launch does nothing at all. The GL/behaviour
+  triggers (`native.on`, `fx.on`, `feat.on`, `sfx.on`, and the `.off` toggles) *are*
+  re-read every frame and can be flipped live — that asymmetry is the trap, because the
+  same `arm` verb behaves differently depending on which trigger you name.
+- **A stale own-draw trigger is worse than none.** With `owndraw.on` present but
+  `native.on` cleared, the engine's rasterisers are skipped and *nothing* draws the units
+  — only health bars. An engine-side A/B then silently measures nothing. The shape of it
+  in the log is `OWND … repaint=0 miss=<everything>` with no `native:` lines. `tacli
+  launch` now drops a stale `owndraw.on` when native is off and says so.
+- Because of both of the above, `tacli launch` / `scenario load` **auto-arm the patching
+  companion to match its GL pass** — `owndraw` from `native.on`, `fxown` from `fx.on` or
+  `sfx.on`, `featown` from `feat.on` — and print `auto-armed …`. **Any new pass must be
+  added to that list** (`tools/tacli`, near `_ensure_featown_for_feat`), or it will appear
+  to work for whoever wrote it and fail for everyone else.
+- Verify from the log, never from the trigger file: each pass prints an ARMED line naming
+  the sites it patched, e.g. `featown: ARMED feature@0x46A610=1`, plus a per-window skip
+  counter. No ARMED line means no patch, whatever the filesystem says.
+
+---
+
 ## 1. Builder `0x4586A0` — the two rasteriser call sites
 
 Builder convention (entry): **thiscall**, `ecx = this` = the model-layer object
