@@ -87,13 +87,13 @@ unit names by scanning the live definition table. This design follows its recipe
 
   "groups": [
     { "id": "arm_wave", "owner": 1, "at": [1000, 1200],
-      "pattern": {"kind": "grid", "cols": 20, "spacing": 24, "jitter": 6},
+      "pattern": {"kind": "grid", "cols": 20, "spacing": 40, "jitter": 6},
       "composition": [{"type": "ARMPW", "count": 150}, {"type": "ARMROCK", "count": 50}],
       "facing": 90,
       "orders": [{"cmd": "attack", "to": [2400, 1200]}] },
 
     { "id": "core_wave", "owner": 2, "at": [2400, 1200],
-      "pattern": {"kind": "grid", "cols": 20, "spacing": 24, "jitter": 6},
+      "pattern": {"kind": "grid", "cols": 20, "spacing": 40, "jitter": 6},
       "composition": [{"type": "CORAK", "count": 200}],
       "facing": 270,
       "orders": [{"cmd": "attack", "to": [1000, 1200]}] }
@@ -105,7 +105,7 @@ unit names by scanning the live definition table. This design follows its recipe
   ],
 
   "features": [
-    { "id": "the_wreck", "type": "ARMCOM_DEAD", "pos": [1700, 1200], "facing": 45 }
+    { "id": "the_wreck", "type": "armlab_dead", "pos": [1700, 1200], "facing": 45 }
   ],
 
   "camera": { "center_on": "the_wreck" }
@@ -139,6 +139,11 @@ unit names by scanning the live definition table. This design follows its recipe
   reported entity by entity, with no chance of collision. Group members are
   `<group>#<n>`.
 - Aliases accepted: `guard` → TA's `defend`; `maneuver` → `manoeuvre`.
+- **Type names are matched case-insensitively and emitted in the game's own
+  spelling.** TA's two tables disagree — units are `ARMPW`, wrecks are
+  `armlab_dead` — so with a catalogue the file may write either and the wire carries
+  what the engine calls it; with no catalogue the author's spelling is passed through
+  untouched, because inventing a case would be inventing a name.
 - Per-player unit counts are checked after expansion: over `setup.unit_limit` is an
   **error**, over TA's stock cap of 250 with no limit set is a **warning** (the engine
   would silently drop the rest).
@@ -330,20 +335,28 @@ Waiting on the fork (phases B–E):
 tools/tacli scenario load    t1 200v200 --json         # launch → menus → live → applied → camera
 tools/tacli scenario apply   t1 reinforcements --json  # mutate a live game
 tools/tacli scenario dump    t1 -o /tmp/captured.json  # (phase E)
-tools/tacli units    t1 --json                         # live unit catalogue (cached)
-tools/tacli features t1 --json
-tools/tacli maps     t1 --json                         # from SELMAP's MAPNAMES via `ui`
-tools/tacli switches t1 shootall=on noshake=on
+tools/tacli switches t1 shootall=on noshake=on         # (phase C)
+```
+
+Built in phase B, and needing only a running instance:
+
+```bash
+tools/tacli units     t1 --json     # live unit catalogue -> the instance's cache
+tools/tacli features  t1 --json     # live feature catalogue (wreck names)
+tools/tacli maps      t1 --json     # SELMAP's MAPNAMES, read and put back
+tools/tacli catalogue t1            # what this instance has cached
+tools/tacli scenario validate 200v200 --instance t1    # layer 2 against that cache
 ```
 
 Scenarios live in **`scenarios/` at the repo root**, tracked in git, plain `.json`. A bare
 name resolves to `scenarios/<name>.json`; anything with a `/` or a `.json` suffix is a path.
 Every verb takes `--json` and exits non-zero on failure. `setup` may carry launch options;
 explicit CLI flags win, so a scenario re-runs at a different resolution without editing.
-Until phase B's catalogue exists, `validate` and `expand` take **`--catalogue <file>`** —
-a JSON `{"units": [...], "features": [...], "maps": [...]}`, entries either names or
-objects with a `name` — and layer 2 simply does not run without one, which the human
-output says out loud rather than implying the names were checked.
+`validate` and `expand` take **`--instance <name>`** (that instance's cached catalogue)
+or **`--catalogue <file>`** (a JSON `{"units": [...], "features": [...], "maps": [...]}`,
+entries either names or objects with a `name` and a `footprint`). With neither, layer 2
+does not run — which the human output says out loud rather than implying the names were
+checked.
 
 **Deliberately not added**: an inline `tacli spawn t1 ARMPW 1200,900`. It would be a second
 path into the engine with its own validation story, and `scenario apply /tmp/one.json`
@@ -369,11 +382,41 @@ machines, months apart — and the stdlib makes no promise about its stream. An 
 file hashes its own content *minus the seed field*, so reformatting does not reshuffle the
 jitter.
 
-**B — catalogues (fork + CLI).** `tagpu_units.trigger` → `tagpu_units.json` walking
-`UnitDef[]`; the same for `FeatureDef[]`; `tacli maps` from `SELMAP`'s `MAPNAMES` via
-`ui --json`. Per-instance cache.
-*DoD*: stock TA lists `ARMCOM`/`CORAK` and `ARMCOM_DEAD`; validation layer 2 goes live; a
-footprint-vs-spacing warning fires on a deliberately too-tight grid.
+**B — catalogues (fork + CLI). BUILT 2026-09-01.** `tagpu_cat.c` walks both definition
+tables on demand (`tagpu_units.trigger` → `tagpu_units.json`, the same for features), and
+`tacli units` / `features` / `maps` fold the answers into a per-instance
+`catalogue.json` that `scenario validate|expand --instance <name>` checks against.
+*DoD, met — and one line of it was wrong*: stock TA lists `ARMCOM`, `CORAK` and 277 other
+unit types; layer 2 is live; the footprint warning fires. **`ARMCOM_DEAD` does not
+exist** — see below. `tacli maps` reads 99 names off `SELMAP` and leaves the shell back
+on `MAINMENU`.
+
+**What the live tables corrected.** Every one of these was a claim before this phase and
+is a measurement now:
+
+- **The commander leaves no corpse.** Stock TA's 570 features contain no name with `com`
+  in it at all: every other unit has `<name>_dead` (the wreck) and `<name>_heap` (the
+  rubble), but `armcom_dead` is not among them — the Commander explodes and leaves
+  nothing. The example above named it, and layer 2 caught it the first time it ran, with
+  *"did you mean 'ARMCROC_DEAD'?"*. Fixed here to `armlab_dead` (5x6, 564 metal).
+- **Unit table indices move between the menu and a game.** `ARMCOM` is index 162 at the
+  shell and 34 in a skirmish, with the same 279 entries both times — the table is
+  rebuilt, not extended. This is the case for name-keyed identity, measured: a scenario
+  compiled against menu indices would spawn the wrong units.
+- **Only the names load at startup.** At the menu `UnitName`, `Name` and `Side` read
+  correctly while `UnitDescription` and `FootX/FootY` are empty — TA parses enough of
+  each FBI to fill the menus and the rest when a game loads. `tacli units` says so out
+  loud when it caches a menu-time read, because a catalogue with no footprints silently
+  cannot run the spacing check.
+- **The unit table's base and stride are verified, not claimed.** The walk proves them
+  itself: a live unit's `UnitDefStruct*` (`unit+0x92`) must equal `defs + UnitID*0x249`,
+  and `stride_check` reports `ok` / `MISMATCH` / *no units to check against*. It read
+  `ok` in a live skirmish, which pins `UNITINFOCount` at `main+0x1438F` and `UnitDef` at
+  `main+0x1439B` [VERIFIED]. On `MISMATCH` the CLI refuses to cache — a plausible-looking
+  table in the wrong place is worse than none.
+- **The map list is a shell-only read.** `MAPNAMES` is a listbox on `SELMAP`, so `maps`
+  works before `Start` and says exactly that in a game. The screen push and the list's
+  fill are separate frames, so the walk waits for the list instead of snapshotting once.
 
 **C — the applier (fork).** Wire scanner, resolve-before-create, the `0x4969CB` hook, create
 pass, orders, switches, camera, result JSON. Roster gains `UnitInGameIndex`.

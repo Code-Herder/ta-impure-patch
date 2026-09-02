@@ -622,6 +622,80 @@ class ScenarioCatalogue(unittest.TestCase):
                          "ARMPW")
 
 
+class ScenarioCanonicalNames(unittest.TestCase):
+    """TA's own tables disagree about case — units are ARMPW, wrecks are
+    armlab_dead — so the catalogue's spelling is the one that reaches the wire."""
+
+    def test_the_catalogue_spelling_wins(self):
+        cat = {"features": ["armlab_dead"]}
+        exp = compile_doc(scn(features=[{"type": "ARMLAB_DEAD", "pos": [10, 10]}]), cat)
+        self.assertEqual(exp["features"][0]["type"], "armlab_dead")
+
+    def test_without_a_catalogue_the_author_spelling_is_kept(self):
+        # Inventing a case here would be inventing a name.
+        exp = compile_doc(scn(features=[{"type": "armlab_dead", "pos": [10, 10]}]))
+        self.assertEqual(exp["features"][0]["type"], "armlab_dead")
+
+    def test_a_map_name_is_canonicalized_too(self):
+        exp = compile_doc(scn(setup={"map": "two continents"}), CATALOGUE)
+        self.assertEqual(exp["setup"]["map"], "Two Continents")
+
+    def test_names_come_out_of_objects_or_strings(self):
+        self.assertEqual(tacli._scn_names({"units": ["ARMPW"]}, "units"),
+                         {"ARMPW": "ARMPW"})
+        self.assertEqual(tacli._scn_names({"units": [{"name": "armpw"}]}, "units"),
+                         {"ARMPW": "armpw"})
+
+    def test_no_list_is_not_an_empty_list(self):
+        # "the catalogue does not carry maps" and "this game has no maps" are
+        # different answers: only the second may fail a scenario.
+        self.assertIsNone(tacli._scn_names({"units": ["ARMPW"]}, "maps"))
+
+
+class ScenarioFootprints(unittest.TestCase):
+    """A grid tighter than the units are wide is not the layout the file asks for."""
+
+    CAT = {"units": [{"name": "ARMPW", "footprint": [2, 2]},
+                     {"name": "ARMFLASH", "footprint": [3, 3]}]}
+
+    def warnings(self, spacing, **pattern):
+        p = {"kind": "grid", "cols": 5, "spacing": spacing}
+        p.update(pattern)
+        return compile_doc(scn(groups=[group(
+            pattern=p, composition=[{"type": "ARMPW", "count": 10}])]),
+            self.CAT)["warnings"]
+
+    def test_a_tight_grid_warns_with_the_number_that_would_fix_it(self):
+        w = self.warnings(12)
+        self.assertEqual(len(w), 1)
+        self.assertIn("32 world units", w[0])       # 2 cells x 16
+        self.assertIn("ARMPW", w[0])
+
+    def test_room_enough_says_nothing(self):
+        self.assertEqual(self.warnings(40), [])
+
+    def test_the_worst_unit_in_the_composition_sets_the_bar(self):
+        w = compile_doc(scn(groups=[group(
+            pattern={"kind": "grid", "cols": 5, "spacing": 40},
+            composition=[{"type": "ARMPW", "count": 2},
+                         {"type": "ARMFLASH", "count": 2}])]), self.CAT)["warnings"]
+        self.assertIn("ARMFLASH", w[0])             # 3 cells x 16 = 48 > 40
+
+    def test_a_random_scatter_has_no_spacing_to_judge(self):
+        self.assertEqual(compile_doc(scn(groups=[group(
+            pattern={"kind": "random", "size": [100, 100]},
+            composition=[{"type": "ARMPW", "count": 10}])]), self.CAT)["warnings"], [])
+
+    def test_a_catalogue_with_no_footprints_cannot_warn(self):
+        # At the menu TA has parsed the names but not the FBIs: footprints read
+        # 0x0 there, and a zero is "unknown", never "fits anywhere".
+        cat = {"units": [{"name": "ARMPW", "footprint": [0, 0]}]}
+        self.assertEqual(tacli._scn_footprints(cat), {})
+        self.assertEqual(compile_doc(scn(groups=[group(
+            pattern={"kind": "grid", "cols": 5, "spacing": 1},
+            composition=[{"type": "ARMPW", "count": 10}])]), cat)["warnings"], [])
+
+
 class ScenarioGrid(unittest.TestCase):
     """`at` is the centre of the formation, everywhere `at` appears."""
 

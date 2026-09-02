@@ -18,13 +18,13 @@
 
   "groups": [
     { "id": "arm_wave", "owner": 1, "at": [1000, 1200],
-      "pattern": {"kind": "grid", "cols": 20, "spacing": 24, "jitter": 6},
+      "pattern": {"kind": "grid", "cols": 20, "spacing": 40, "jitter": 6},
       "composition": [{"type": "ARMPW", "count": 150}, {"type": "ARMROCK", "count": 50}],
       "facing": 90,
       "orders": [{"cmd": "attack", "to": [2400, 1200]}] },
 
     { "id": "core_wave", "owner": 2, "at": [2400, 1200],
-      "pattern": {"kind": "grid", "cols": 20, "spacing": 24, "jitter": 6},
+      "pattern": {"kind": "grid", "cols": 20, "spacing": 40, "jitter": 6},
       "composition": [{"type": "CORAK", "count": 200}],
       "facing": 270,
       "orders": [{"cmd": "attack", "to": [1000, 1200]}] }
@@ -36,7 +36,7 @@
   ],
 
   "features": [
-    { "id": "the_wreck", "type": "ARMCOM_DEAD", "pos": [1700, 1200], "facing": 45 }
+    { "id": "the_wreck", "type": "armlab_dead", "pos": [1700, 1200], "facing": 45 }
   ],
 
   "camera": { "center_on": "the_wreck" }

@@ -1715,6 +1715,195 @@ def _ui_text_tokens(text: str):
     return tokens
 
 
+# ----------------------------------------------------------------- catalogues
+#
+# What a scenario is allowed to name — validation layer 2. The authority is the
+# game's own definition tables, so these verbs ask a running instance and cache
+# the answer per instance: a mod changes what exists, and the catalogue changes
+# with it. Fork side: tagpu/ddraw/src/tagpu_cat.c.
+
+CAT_TIMEOUT = 10.0          # a 16k-entry table takes longer to write than a menu
+
+
+def _cat_ask(inst: Instance, kind: str, timeout: float = CAT_TIMEOUT) -> dict:
+    """Trigger one table walk and read the result (tmp + rename, like `ui`)."""
+    if not inst.running():
+        die(f"{inst.name} is not running (tacli launch {inst.name})")
+    path = inst.gamedir / f"tagpu_{kind}.json"
+    before = path.stat().st_mtime_ns if path.exists() else 0
+    (inst.gamedir / f"tagpu_{kind}.trigger").write_text("")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if path.exists() and path.stat().st_mtime_ns > before:
+            try:
+                return json.loads(path.read_text())
+            except json.JSONDecodeError:
+                pass                      # a rename we caught mid-flight; retry
+        time.sleep(0.05)
+    die(f"no {kind} catalogue appeared in {timeout:g}s — "
+        f"is the instance past its first frame?")
+
+
+def _cat_path(inst: Instance) -> Path:
+    """The merged per-instance cache. Lives beside instance.json, not in the
+    gamedir: it is tacli's own bookkeeping, not something the game reads."""
+    return inst.dir / "catalogue.json"
+
+
+def _cat_load(inst: Instance) -> dict:
+    path = _cat_path(inst)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+
+def _cat_merge(inst: Instance, key: str, rows) -> dict:
+    """Fold one table into the cache and write it back whole."""
+    cat = _cat_load(inst)
+    cat[key] = rows
+    cat["cached"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _cat_path(inst).write_text(json.dumps(cat, indent=1))
+    return cat
+
+
+def _cat_report(args, inst: Instance, kind: str, key: str, snap: dict, rows):
+    note = snap.get("note")
+    if snap.get("stride_check") == "MISMATCH":
+        # The walk cross-checks its own base and stride against a live unit. If
+        # that fails the table is not where we think it is, and every name in it
+        # is a guess — refuse rather than cache a plausible-looking lie.
+        die(f"{kind}: the definition table failed its own stride check — "
+            f"do not trust these names (tagpu_cat.c, scenario-format.md)")
+    _cat_merge(inst, key, rows)
+    res = {"name": inst.name, key: rows, "count": len(rows),
+           "declared": snap.get("declared"), "note": note,
+           "stride_check": snap.get("stride_check"),
+           "cache": str(_cat_path(inst))}
+    if args.json:
+        out(res, True)
+        return
+    if not rows:
+        print(f"no {kind} yet{': ' + note if note else ''} — "
+              f"the tables fill when a game loads")
+        return
+    if not any(max(r.get("footprint") or [0]) for r in rows):
+        # Startup parses enough of each FBI to name it; the rest — description,
+        # footprint — lands when a game loads. Verified live: at the menu ARMPW
+        # reads 0x0, in game 2x2 (and its table index moves).
+        print(f"cached at the menu: names only. Descriptions and footprints fill "
+              f"when a game loads — re-read then for the footprint checks.")
+    for r in rows[:args.limit] if args.limit else rows:
+        foot = r.get("footprint") or []
+        print(f"{r['name']:<16} {'x'.join(str(c) for c in foot):<7} "
+              f"{(r.get('side') or ''):<5} {r.get('desc', '')[:44]}")
+    if args.limit and len(rows) > args.limit:
+        print(f"... {len(rows) - args.limit} more (--limit 0 for all, --json for data)")
+
+
+def cmd_units(args):
+    """The live unit catalogue: what a scenario's unit `type` may name."""
+    inst = Instance(args.name)
+    snap = _cat_ask(inst, "units", args.timeout)
+    _cat_report(args, inst, "units", "units", snap, snap.get("units", []))
+
+
+def cmd_features(args):
+    """The live feature catalogue — where wreck names come from (`ARMCOM_DEAD`)."""
+    inst = Instance(args.name)
+    snap = _cat_ask(inst, "features", args.timeout)
+    _cat_report(args, inst, "features", "features", snap, snap.get("features", []))
+
+
+# The map list is not a memory table: it is a listbox on the skirmish map-select
+# screen, so `maps` reads it through `ui` and puts the screen back where it found
+# it. MAPNAMES is the gadget; SELMAP is the screen.
+MAPS_GADGET = "MAPNAMES"
+MAPS_ROUTE = ("SINGLE", "Skirmish", "SelectMap")
+
+
+def _maps_listbox(snap: dict):
+    for g in snap.get("gadgets", []):
+        if g.get("name", "").upper() == MAPS_GADGET and g.get("items"):
+            return g
+    return None
+
+
+def _maps_wait(inst: Instance, snap: dict, timeout: float):
+    """Re-snapshot until the list is there.
+
+    The screen push and the list's own fill are separate frames: a click that
+    reports `-> SELMAP.GUI` can still be a frame ahead of the 99 names, and one
+    snapshot taken right after it reads an empty screen.
+    """
+    deadline = time.time() + timeout
+    while True:
+        box = _maps_listbox(snap)
+        if box or time.time() >= deadline:
+            return snap, box
+        time.sleep(0.1)
+        snap = _ui_snapshot(inst)
+
+
+def cmd_maps(args):
+    """The map names this install offers, read off SELMAP's own list.
+
+    Reads whatever screen is up first: if the list is already there, nothing is
+    clicked at all. Otherwise it walks SINGLE -> Skirmish -> SelectMap and backs
+    out the way it came, because a catalogue read must not leave an agent on a
+    screen it did not ask for.
+    """
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{args.name} is not running (tacli launch {args.name})")
+    snap = _ui_snapshot(inst)
+    walked = []
+    box = _maps_listbox(snap)
+    if box is None and not args.no_walk:
+        for step in MAPS_ROUTE:
+            hits = _ui_match(snap, step)
+            if not hits:
+                die(f"maps: no {step!r} on {snap.get('gui')} — the map list is a "
+                    f"listbox on the shell's map-select screen, so it can only be read "
+                    f"from the menus (a fresh launch, before Start). Walk there "
+                    f"yourself and pass --no-walk if you are somewhere else.")
+            _ui_click_gadget(inst, hits[0], snap)
+            walked.append(step)
+            snap = _ui_snapshot(inst)
+        snap, box = _maps_wait(inst, snap, args.timeout)
+    if box is None:
+        die(f"maps: no {MAPS_GADGET} list on {snap.get('gui')}")
+    names = [i for i in box["items"] if i]
+    found_on = snap.get("gui")
+    for _ in walked:            # back out the way we came in
+        esc = snap.get("esc")
+        hits = _ui_match(snap, esc) if esc else []
+        if not hits:
+            break
+        _ui_click_gadget(inst, hits[0], snap)
+        snap = _ui_snapshot(inst)
+    _cat_merge(inst, "maps", names)
+    out({"name": args.name, "maps": names, "count": len(names),
+         "screen": found_on, "walked": walked,
+         "cache": str(_cat_path(inst))}, args.json,
+        human="\n".join(names) or "no maps in the list")
+
+
+def cmd_catalogue(args):
+    """Show the merged per-instance cache — what `--instance` will check against."""
+    inst = Instance(args.name)
+    cat = _cat_load(inst)
+    if not cat:
+        die(f"no catalogue cached for {args.name} "
+            f"(tacli units {args.name}; tacli features {args.name}; "
+            f"tacli maps {args.name})")
+    summary = {k: (len(v) if isinstance(v, list) else v) for k, v in cat.items()}
+    out({"name": args.name, "path": str(_cat_path(inst)), "have": summary}, args.json,
+        human="\n".join(f"{k:<10} {v}" for k, v in summary.items()))
+
+
 # ------------------------------------------------------------------ scenarios
 #
 # `tacli scenario` turns a JSON *situation* — 200 units fighting, a wreck of a
@@ -1894,16 +2083,24 @@ def _scn_facing(node, where, default=None):
 
 
 def _scn_type(node, where, catalogue_names, what: str):
-    """Unit and feature type names, upper-cased and checked against the live
-    catalogue when one is loaded (validation layer 2)."""
-    name = _scn_str(node, "type", where, upper=True)
-    if not re.fullmatch(r"[A-Z0-9][A-Z0-9_.-]{0,31}", name or ""):
+    """A unit or feature type name, matched case-insensitively against the live
+    catalogue when one is loaded (validation layer 2) and returned in the
+    catalogue's own spelling.
+
+    With no catalogue the author's spelling is kept exactly as written. TA's own
+    tables disagree with each other — units are `ARMPW`, wrecks are
+    `armlab_dead` — so inventing a case here would be inventing a name.
+    """
+    given = _scn_str(node, "type", where, raw=True)
+    if not given or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}", given):
         die(f"{where}.type: {node.get('type')!r} is not a {what} name "
             f"(letters, digits and _ , like ARMPW)")
-    if catalogue_names is not None and name not in catalogue_names:
-        die(f"{where}.type: no {what} named {name!r} in this "
-            f"game{_scn_suggest(name, catalogue_names)}")
-    return name
+    if catalogue_names is None:
+        return given
+    if given.upper() not in catalogue_names:
+        die(f"{where}.type: no {what} named {given!r} in this "
+            f"game{_scn_suggest(given.upper(), catalogue_names)}")
+    return catalogue_names[given.upper()]
 
 
 def _scn_orders(node, where, default=None):
@@ -2034,15 +2231,57 @@ def _scn_setup(doc, label):
 
 
 def _scn_names(catalogue, key):
-    """The catalogue's name set for a kind, or None when it does not carry one.
+    """{UPPERCASE: the catalogue's own spelling}, or None when it carries no list.
 
-    Entries may be bare strings or objects with a "name" — phase B's catalogue
-    also carries footprints, and layer 2 should not care which it got.
+    Entries may be bare strings or objects with a "name" — the catalogue also
+    carries footprints, and layer 2 should not care which it got. The canonical
+    spelling matters: TA's own tables are inconsistent (units are `ARMPW`, wrecks
+    are `armlab_dead`), and the engine's name lookups are not promised to be
+    case-insensitive, so what reaches the wire is what the game called it.
     """
     seq = (catalogue or {}).get(key)
     if not seq:
         return None
-    return {str(e.get("name", "") if isinstance(e, dict) else e) for e in seq}
+    names = {}
+    for e in seq:
+        name = str(e.get("name", "") if isinstance(e, dict) else e)
+        if name:
+            names.setdefault(name.upper(), name)
+    return names
+
+
+def _scn_footprints(catalogue):
+    """{NAME: (x, y)} for every catalogue entry that carries one, in map squares."""
+    feet = {}
+    for e in (catalogue or {}).get("units") or []:
+        foot = e.get("footprint") if isinstance(e, dict) else None
+        if foot and len(foot) == 2 and max(foot) > 0:
+            feet[str(e.get("name", "")).upper()] = (int(foot[0]), int(foot[1]))
+    return feet
+
+
+# A footprint cell is 16 world units — the same square the feature map is built
+# out of (scenario-format.md, the engine recipe).
+SCN_CELL = 16
+
+
+def _scn_spacing_warning(group, feet):
+    """A grid tighter than the units are wide is not the layout the file asks for:
+    the engine pushes the overlap apart and the formation comes out ragged."""
+    pattern = group["pattern"]
+    spacing = pattern["spacing"]
+    if not spacing or pattern["kind"] == "random":
+        return None
+    worst, worst_type = 0, None
+    for c in group["composition"]:
+        foot = feet.get(c["type"].upper())
+        if foot and max(foot) * SCN_CELL > worst:
+            worst, worst_type = max(foot) * SCN_CELL, c["type"]
+    if worst <= spacing:
+        return None
+    return (f"group {group['id']!r}: spacing {spacing} is tighter than {worst_type}'s "
+            f"{'x'.join(str(c) for c in feet[worst_type.upper()])} footprint ({worst} world "
+            f"units) — the engine will push them apart and the layout will drift")
 
 
 def _scn_validate(doc, label, catalogue=None):
@@ -2055,10 +2294,7 @@ def _scn_validate(doc, label, catalogue=None):
     unit_names = _scn_names(cat, "units")
     feat_names = _scn_names(cat, "features")
     map_names = _scn_names(cat, "maps")
-    if unit_names is not None:
-        unit_names = {n.upper() for n in unit_names}
-    if feat_names is not None:
-        feat_names = {n.upper() for n in feat_names}
+    footprints = _scn_footprints(cat)
     warnings = []
 
     _scn_keys(doc, label, required=("format",),
@@ -2103,9 +2339,11 @@ def _scn_validate(doc, label, catalogue=None):
         return owner
 
     if norm["setup"]["map"] and map_names is not None:
-        if norm["setup"]["map"].lower() not in {m.lower() for m in map_names}:
+        found = map_names.get(norm["setup"]["map"].upper())
+        if not found:
             die(f"{label}: setup.map: no map named {norm['setup']['map']!r} in this "
-                f"game{_scn_suggest(norm['setup']['map'], map_names)}")
+                f"game{_scn_suggest(norm['setup']['map'].upper(), map_names)}")
+        norm["setup"]["map"] = found
 
     for i, g in enumerate(_scn_list(doc, "groups", label)):
         w = f"{label}: groups[{i}]"
@@ -2127,6 +2365,9 @@ def _scn_validate(doc, label, catalogue=None):
                                "pattern": _scn_pattern(g, w),
                                "composition": composition,
                                **_scn_entity_body(g, w)})
+        tight = _scn_spacing_warning(norm["groups"][-1], footprints)
+        if tight:
+            warnings.append(tight)
 
     for i, u in enumerate(_scn_list(doc, "units", label)):
         w = f"{label}: units[{i}]"
@@ -2418,9 +2659,15 @@ def _scn_catalogue(path):
     return cat
 
 
-def _scn_compile(name, catalogue_path=None):
+def _scn_compile(name, catalogue_path=None, instance=None):
     path, doc = _scn_read(name)
-    norm = _scn_validate(doc, path.name, _scn_catalogue(catalogue_path))
+    catalogue = _scn_catalogue(catalogue_path)
+    if instance:
+        catalogue = _cat_load(Instance(instance))
+        if not catalogue:
+            die(f"no catalogue cached for {instance!r} — ask a running game for one: "
+                f"tacli units {instance}; tacli features {instance}")
+    norm = _scn_validate(doc, path.name, catalogue)
     norm["label"] = path.name
     exp = _scn_expand(norm)
     exp["name"] = path.stem
@@ -2448,24 +2695,25 @@ def cmd_scenario_list(args):
 
 
 def cmd_scenario_validate(args):
-    exp = _scn_compile(args.scenario, args.catalogue)
+    exp = _scn_compile(args.scenario, args.catalogue, args.instance)
     res = {"name": exp["name"], "path": exp["path"], "ok": True,
            "seed": exp["seed"], "counts": exp["counts"], "setup": exp["setup"],
            "warnings": exp["warnings"],
-           "catalogue": bool(args.catalogue)}
+           "catalogue": args.instance or args.catalogue or None}
     c = exp["counts"]
     plural = lambda n, word: f"{n} {word}{'' if n == 1 else 's'}"    # noqa: E731
     human = (f"{exp['name']}: ok — {plural(c['units'], 'unit')}, "
              f"{plural(c['features'], 'feature')}, seed {exp['seed']}"
              + (f", map {exp['setup']['map']!r}" if exp["setup"]["map"] else "")
-             + ("" if args.catalogue else "  (no catalogue: names unchecked)"))
+             + ("" if (args.catalogue or args.instance)
+                else "  (no catalogue: names unchecked)"))
     for w in exp["warnings"]:
         human += f"\nwarning: {w}"
     out(res, args.json, human=human)
 
 
 def cmd_scenario_expand(args):
-    exp = _scn_compile(args.scenario, args.catalogue)
+    exp = _scn_compile(args.scenario, args.catalogue, args.instance)
     if args.wire:
         print(_scn_wire(exp), end="")
         return
@@ -2661,6 +2909,30 @@ def build_parser():
                    help="fail immediately instead of waiting for the gadget")
     u.set_defaults(func=cmd_ui)
 
+    for verb, fn, help_text in (
+            ("units", cmd_units, "live unit catalogue (cached per instance)"),
+            ("features", cmd_features, "live feature catalogue — where wreck names are")):
+        cs = sub.add_parser(verb, help=help_text)
+        add_common(cs)
+        cs.add_argument("name")
+        cs.add_argument("--limit", type=int, default=40, help="rows to print (0 = all)")
+        cs.add_argument("--timeout", type=float, default=CAT_TIMEOUT)
+        cs.set_defaults(func=fn)
+
+    mp = sub.add_parser("maps", help="map names, read off the skirmish map list")
+    add_common(mp)
+    mp.add_argument("name")
+    mp.add_argument("--no-walk", action="store_true",
+                    help="read the current screen only; do not navigate to SELMAP")
+    mp.add_argument("--timeout", type=float, default=UI_TIMEOUT,
+                    help="how long to wait for the list to fill after the walk")
+    mp.set_defaults(func=cmd_maps)
+
+    cg = sub.add_parser("catalogue", help="what this instance has cached")
+    add_common(cg)
+    cg.add_argument("name")
+    cg.set_defaults(func=cmd_catalogue)
+
     sc = sub.add_parser("scenario", help="compile and apply JSON situation files")
     add_common(sc)
     scv = sc.add_subparsers(dest="verb", required=True)
@@ -2678,8 +2950,10 @@ def build_parser():
             ("expand", cmd_scenario_expand, "the flat entity list, no game")):
         sp = add_scenario(verb, help_text)
         sp.add_argument("scenario", help="a name in scenarios/, or a path to a .json")
-        sp.add_argument("--catalogue", help="unit/feature/map lists to check names "
-                                            "against (phase B fills this per instance)")
+        sp.add_argument("--catalogue", help="a unit/feature/map list file to check "
+                                            "names against")
+        sp.add_argument("--instance", help="check names against this instance's cached "
+                                           "catalogue (tacli units/features/maps)")
         if verb == "expand":
             sp.add_argument("--wire", action="store_true",
                             help="print the compiled wire file the fork will read")

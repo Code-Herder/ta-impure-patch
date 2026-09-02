@@ -203,7 +203,8 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    be read without risking the instance.
 
 7. **Phase 1.4 — JSON scenarios (`tacli scenario`)** — **SCOPED 2026-09-01** by
-   `/grill-me`; **phase A (the compiler) built the same day**, phases B–E wait on the fork. A strict JSON file describes a *situation* — 200 units
+   `/grill-me`; **phases A (the compiler) and B (the catalogues) built the same day**,
+   C–E wait on the fork's applier. A strict JSON file describes a *situation* — 200 units
    fighting, a wreck of a chosen type, the camera already on it — and one command launches
    an instance, drives `ui click SINGLE/Skirmish/Start`, waits for the game and spawns it by
    calling the engine's own `UNITS_CreateUnit` / `SpawnFeatureOnMap` / `Order2Unit`.
@@ -217,7 +218,13 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    Live today, with no game and no wine: `scenario list` / `validate <name>` /
    `expand <name> [--wire]`, and `scenarios/200v200.json`. The compiler is the component
    that decides what reaches the engine, so it is the one with exhaustive offline tests —
-   77 of `test_tacli.py`'s 140.
+   87 of `test_tacli.py`'s 150.
+
+   With a running instance: `tacli units` / `features` / `maps` / `catalogue` ask the
+   game what exists and cache it per instance, and `scenario validate --instance <name>`
+   checks every name against it. The fork side is `tagpu_cat.c`, one more on-demand
+   trigger in the `tagpu_ui` mould. It paid for itself immediately: the design note's own
+   example named `ARMCOM_DEAD`, and stock TA has no commander corpse at all.
 
 ## Why (constraints that shaped it)
 

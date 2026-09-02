@@ -190,6 +190,29 @@ Changing `tacli ui`? `python3 tools/test_tacli.py` covers the selector, row-geom
 token and rendering logic offline — no game needed, and it runs in a hundredth of a
 second. Everything else about the layer needs a real instance.
 
+## What exists in this game (catalogues)
+
+Ask the running game what it has; the answers cache in the instance and feed
+`scenario --instance`.
+
+```bash
+tools/tacli units    t1 --limit 0    # 279 unit types in stock TA: ARMPW, ARMCOM, CORAK…
+tools/tacli features t1 --json       # 570 features — this is where wreck names live
+tools/tacli maps     t1              # 99 map names, off SELMAP's own list
+tools/tacli catalogue t1             # what this instance has cached
+```
+
+- **Read them in a game, not at the menu.** At the shell TA has parsed only enough of
+  each FBI to name it: descriptions and footprints are empty, and the table is *re-indexed*
+  when a game loads (ARMCOM is 162 at the menu, 34 in a skirmish). `units` tells you when
+  it cached a menu-time read. Names are trustworthy either way; nothing else is.
+- **`maps` is the opposite** — the list is a listbox on `SELMAP`, so it only works from
+  the shell. It walks `SINGLE → Skirmish → SelectMap`, reads, and backs out to where it
+  started.
+- **Wreck names are lowercase** (`armlab_dead`, `corak_dead`) while unit names are
+  uppercase (`ARMPW`). Scenarios may write either; the game's spelling is what gets used.
+  **The Commander has no corpse** — there is no `armcom_dead` in stock TA.
+
 ## Scenarios (JSON situations) — compiler only, so far
 
 `tacli scenario` will one day put you in a named situation with one command. **Today only
@@ -198,7 +221,9 @@ the offline half exists**, and it drives nothing:
 - `tacli scenario list` — what is in `scenarios/`.
 - `tacli scenario validate <name>` — strict schema; unknown keys, bad coordinates,
   duplicate handles and `"attack-move"` (TA has none) are errors, each naming the exact
-  path that is wrong. Add `--catalogue <file>` to check unit/feature/map names too.
+  path that is wrong. Add `--instance <name>` to check every unit, feature and map name
+  against that instance's catalogue, and to get a warning when a group's grid is packed
+  tighter than the units' own footprints.
 - `tacli scenario expand <name> [--wire]` — the flat entity list a 400-unit `groups` block
   compiles to, seeded and byte-identical every run; `--wire` shows the file the fork will
   eventually read.

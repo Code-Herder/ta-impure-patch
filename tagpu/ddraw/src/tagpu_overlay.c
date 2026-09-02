@@ -19,6 +19,7 @@
 #include "tagpu_native.h"
 #include "tagpu_peek.h"
 #include "tagpu_ui.h"
+#include "tagpu_cat.h"
 
 /* GL entry points the fork does not already expose — load once ourselves. */
 typedef void (APIENTRY *PFN_UNIFORM4F)(GLint,GLfloat,GLfloat,GLfloat,GLfloat);
@@ -518,6 +519,9 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        The menus are exactly where it earns its keep, so like peek it must run
        before any game exists. */
     tagpu_ui_frame(f);
+    /* on-demand unit/feature catalogues (tagpu_units.trigger,
+       tagpu_features.trigger) — validation layer 2 for `tacli scenario`. */
+    tagpu_cat_frame(f);
     /* DISPLAY-MODE CHANGES: the fork restarts its render thread with a NEW
        GL context — every GL object id we cached is dead. Detect the context
        change and re-init all GL-owning modules from scratch (without this a
