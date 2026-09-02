@@ -25,6 +25,20 @@
    ever entered for extended units; hit counters prove it (`hits` in the oracle
    dump below, assertion 4 of the note).
 
+   IT ALSO OWNS AIMING AND GROUND ORDERS FOR THE EXTENDED SLOTS. Two engine
+   behaviours are hard-coded for three weapons in ways a loop bound cannot reach,
+   so the module supplies them instead. (a) The attack-*ground* order sets a
+   ground target on slots 0 and 1 only — `FUN_004038A0` unrolls exactly that pair
+   — so a splice extends it to the side slots. (b) A unit gets eight COB script
+   threads (`0x4B08C0`), and an aim script that waits for its turn holds one for
+   the whole slew; four more of those exhaust the pool, whereupon `QueryScript`
+   fails *silently* and starved slots aim from piece 0. So the extended slots run
+   an aim script that returns inside its own tick, the module re-solves them every
+   tick rather than latching the engine's "already aiming" bit, and it withholds
+   the shot until the muzzle piece really points at the target. Both are visible
+   in the oracle: `ground`, `cob_full` (must stay 0) and `hold_fire`. Slots 0-2
+   keep the engine's own behaviour untouched in both cases.
+
    The read-only oracle works armed or not: drop `tagpu_weapons.trigger` next to
    the exe (one engine unit index per line, or `all`) and the module writes
    `tagpu_weapons.json` — every slot of every requested unit (state byte, weapon,
