@@ -55,3 +55,6 @@ __pycache__/
 *.tnt
 *.smk
 *.pcx
+
+# Local python venv for the undither tooling (opencv is not a repo dependency)
+.venv*/

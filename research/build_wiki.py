@@ -27,6 +27,7 @@ PAGES = [
     ("unit-3do-bridge",            "Unit → 3DO bridge",         "Overview"),
     ("composite-buffer",           "Composite buffer (G6)",     "Overview"),
     ("file-formats",               "File formats (3DO, COB, GAF)","Reference"),
+    ("undither",                   "Undithering screenshots",   "Reference"),
     ("binary-patches",            "The core mechanism",        "Mechanism"),
     ("exe-reverse-engineering",   "Reverse-engineering the exe","Mechanism"),
     ("runtime-injection",         "Injection & hooking",       "Mechanism"),
@@ -456,6 +457,27 @@ def blurb_from(md_text: str, fallback: str, limit: int = 165) -> str:
 
 ASSET_VER = hashlib.md5((CSS + JS).encode()).hexdigest()[:10]
 
+STATIC = NOTES / "assets"          # copied verbatim to site/assets/, pages link into it
+
+
+def copy_static():
+    """Mirror research/notes/assets/ into the site and return a cache-bust tag.
+
+    Pages that ship their own CSS/JS (the undither viewer, for one) link to
+    assets/<dir>/<file>?v=__ASSETV__; the token is substituted at render time so a
+    changed asset busts the browser cache the same way wiki.css does."""
+    if not STATIC.exists():
+        return "0"
+    shutil.copytree(STATIC, ASSETS, dirs_exist_ok=True)
+    h = hashlib.md5()
+    for f in sorted(STATIC.rglob("*")):
+        if f.is_file():
+            h.update(f.name.encode())
+            h.update(str(f.stat().st_size).encode())
+            if f.suffix in (".js", ".css", ".json"):
+                h.update(f.read_bytes())
+    return h.hexdigest()[:10]
+
 
 def render(title, body, nav_html, toc_html, base, is_index=False, lede=""):
     crumb = "" if is_index else f'<div class="crumb"><a href="{base}index.html">Wiki</a> &nbsp;/&nbsp; {title}</div>'
@@ -515,6 +537,7 @@ def main():
     ASSETS.mkdir(parents=True, exist_ok=True)
     (ASSETS / "wiki.css").write_text(CSS)
     (ASSETS / "wiki.js").write_text(JS)
+    static_ver = copy_static()
 
     present = [(s, l, sec) for s, l, sec in PAGES if (NOTES / f"{s}.md").exists()]
     known = {s for s, _, _ in PAGES}
@@ -556,6 +579,7 @@ def main():
         )
         toc_html = f'<nav class="toc"><h5>On this page</h5>{toc_links}</nav>' if toc_links else ""
 
+        body = body.replace("__ASSETV__", static_ver)
         plain = strip_html(body)
         search_index.append({"u": f"{slug}.html", "t": title, "h": " ".join(heads), "b": plain[:2600]})
         meta[slug] = {"title": title, "label": label, "section": sec,

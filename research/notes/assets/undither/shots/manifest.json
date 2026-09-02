@@ -1,0 +1,227 @@
+[
+  {
+    "env": "Green planet",
+    "map": "Plains and Passes",
+    "file": "green-planet.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      0,
+      3268
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Desert",
+    "map": "Painted Desert",
+    "file": "desert.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      0,
+      3684
+    ],
+    "expansion": "Total Annihilation"
+  },
+  {
+    "env": "Archipelago",
+    "map": "East Indeez",
+    "file": "archipelago.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      8624,
+      8404
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Lava",
+    "map": "Red Hot Lava",
+    "file": "lava.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      64,
+      1924
+    ],
+    "expansion": "Total Annihilation"
+  },
+  {
+    "env": "Metal",
+    "map": "Core Prime Industrial Area",
+    "file": "metal.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      1488,
+      8020
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Lunar",
+    "map": "Moon Quartet",
+    "file": "lunar.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      0,
+      4004
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Ice",
+    "map": "Polar Range",
+    "file": "ice.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      6832,
+      996
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Red Planet",
+    "map": "Red River",
+    "file": "red-planet.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      0,
+      36
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Slate",
+    "map": "Temblorian Mist",
+    "file": "slate.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      0,
+      3444
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Lush",
+    "map": "Lusch Puppy",
+    "file": "lush.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      3328,
+      0
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Crystal",
+    "map": "Crystal Maze",
+    "file": "crystal.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      0,
+      3652
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Acid",
+    "map": "Acid Pools",
+    "file": "acid.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      10672,
+      1092
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Water World",
+    "map": "Brain Coral",
+    "file": "water-world.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      752,
+      4196
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Wet Desert",
+    "map": "Lake Shore",
+    "file": "wet-desert.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      2528,
+      2056
+    ],
+    "expansion": "Core Contingency"
+  },
+  {
+    "env": "Urban",
+    "map": "Assault on Suburbia",
+    "file": "urban.png",
+    "size": [
+      1920,
+      1080
+    ],
+    "mode": "P",
+    "eye": [
+      0,
+      7048
+    ],
+    "expansion": "Core Contingency"
+  }
+]

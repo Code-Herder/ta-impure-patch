@@ -1,0 +1,1082 @@
+[
+  {
+    "file": "green-planet.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 176,
+    "q": 35.8,
+    "step": 46.13,
+    "step_undithered": 4.12,
+    "lag1_autocorr": -0.177,
+    "flat_fraction": 0.207,
+    "flat_hf_energy": 558.7,
+    "dither_present": false,
+    "tileable": false,
+    "decisions": {
+      "undither": false,
+      "deband": true
+    },
+    "qa": {
+      "hf_energy_reduction": 0.279,
+      "mean_color_shift": 0.627,
+      "edge_retention": 0.996,
+      "residual_lag1_autocorr": -0.171
+    },
+    "variants": {
+      "spec": {
+        "step_after": 4.12,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.954,
+          "mean_color_shift": 1.542,
+          "edge_retention": 0.985,
+          "residual_lag1_autocorr": 0.051
+        }
+      },
+      "tuned": {
+        "step_after": 6.0,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.916,
+          "mean_color_shift": 1.238,
+          "edge_retention": 0.992,
+          "residual_lag1_autocorr": 0.113
+        }
+      },
+      "tight": {
+        "step_after": 9.64,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.805,
+          "mean_color_shift": 0.964,
+          "edge_retention": 0.988,
+          "residual_lag1_autocorr": 0.099
+        }
+      },
+      "split": {
+        "step_after": 11.87,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.75,
+          "mean_color_shift": 1.136,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": -0.139
+        }
+      }
+    },
+    "env": "Green planet",
+    "map": "Plains and Passes",
+    "expansion": "Core Contingency",
+    "bytes": 753910,
+    "thumb": "thumbs/green-planet.webp"
+  },
+  {
+    "file": "desert.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 189,
+    "q": 39.81,
+    "step": 67.53,
+    "step_undithered": 17.49,
+    "lag1_autocorr": -0.072,
+    "flat_fraction": 0.184,
+    "flat_hf_energy": 1640.1,
+    "dither_present": false,
+    "tileable": false,
+    "decisions": {
+      "undither": false,
+      "deband": true
+    },
+    "qa": {
+      "hf_energy_reduction": 0.082,
+      "mean_color_shift": 0.501,
+      "edge_retention": 0.977,
+      "residual_lag1_autocorr": -0.066
+    },
+    "variants": {
+      "spec": {
+        "step_after": 17.49,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.546,
+          "mean_color_shift": 1.562,
+          "edge_retention": 0.987,
+          "residual_lag1_autocorr": -0.06
+        }
+      },
+      "tuned": {
+        "step_after": 22.14,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.451,
+          "mean_color_shift": 1.062,
+          "edge_retention": 0.992,
+          "residual_lag1_autocorr": -0.057
+        }
+      },
+      "tight": {
+        "step_after": 30.61,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.301,
+          "mean_color_shift": 0.738,
+          "edge_retention": 0.994,
+          "residual_lag1_autocorr": -0.047
+        }
+      },
+      "split": {
+        "step_after": 28.6,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.353,
+          "mean_color_shift": 0.88,
+          "edge_retention": 0.993,
+          "residual_lag1_autocorr": -0.066
+        }
+      }
+    },
+    "env": "Desert",
+    "map": "Painted Desert",
+    "expansion": "Total Annihilation",
+    "bytes": 816987,
+    "thumb": "thumbs/desert.webp"
+  },
+  {
+    "file": "archipelago.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 200,
+    "q": 31.21,
+    "step": 49.48,
+    "step_undithered": 6.4,
+    "lag1_autocorr": -0.152,
+    "flat_fraction": 0.395,
+    "flat_hf_energy": 571.5,
+    "dither_present": false,
+    "tileable": false,
+    "decisions": {
+      "undither": false,
+      "deband": true
+    },
+    "qa": {
+      "hf_energy_reduction": 0.273,
+      "mean_color_shift": 1.452,
+      "edge_retention": 0.997,
+      "residual_lag1_autocorr": -0.148
+    },
+    "variants": {
+      "spec": {
+        "step_after": 6.4,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.845,
+          "mean_color_shift": 1.13,
+          "edge_retention": 0.996,
+          "residual_lag1_autocorr": -0.113
+        }
+      },
+      "tuned": {
+        "step_after": 7.68,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.742,
+          "mean_color_shift": 1.121,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": -0.079
+        }
+      },
+      "tight": {
+        "step_after": 13.19,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.546,
+          "mean_color_shift": 1.553,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": -0.055
+        }
+      },
+      "split": {
+        "step_after": 10.82,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.61,
+          "mean_color_shift": 1.266,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": -0.11
+        }
+      }
+    },
+    "env": "Archipelago",
+    "map": "East Indeez",
+    "expansion": "Core Contingency",
+    "bytes": 691076,
+    "thumb": "thumbs/archipelago.webp"
+  },
+  {
+    "file": "lava.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 171,
+    "q": 17.14,
+    "step": 22.98,
+    "step_undithered": 4.12,
+    "lag1_autocorr": -0.088,
+    "flat_fraction": 0.268,
+    "flat_hf_energy": 239.4,
+    "dither_present": false,
+    "tileable": false,
+    "decisions": {
+      "undither": false,
+      "deband": true
+    },
+    "qa": {
+      "hf_energy_reduction": 0.096,
+      "mean_color_shift": 0.511,
+      "edge_retention": 0.999,
+      "residual_lag1_autocorr": -0.093
+    },
+    "variants": {
+      "spec": {
+        "step_after": 4.12,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.677,
+          "mean_color_shift": 0.5,
+          "edge_retention": 0.999,
+          "residual_lag1_autocorr": -0.029
+        }
+      },
+      "tuned": {
+        "step_after": 4.9,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.587,
+          "mean_color_shift": 0.434,
+          "edge_retention": 0.999,
+          "residual_lag1_autocorr": -0.011
+        }
+      },
+      "tight": {
+        "step_after": 7.35,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.427,
+          "mean_color_shift": 0.372,
+          "edge_retention": 0.999,
+          "residual_lag1_autocorr": -0.016
+        }
+      },
+      "split": {
+        "step_after": 5.83,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.424,
+          "mean_color_shift": 0.449,
+          "edge_retention": 0.999,
+          "residual_lag1_autocorr": -0.051
+        }
+      }
+    },
+    "env": "Lava",
+    "map": "Red Hot Lava",
+    "expansion": "Total Annihilation",
+    "bytes": 658874,
+    "thumb": "thumbs/lava.webp"
+  },
+  {
+    "file": "metal.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 197,
+    "q": 18.14,
+    "step": 39.8,
+    "step_undithered": 22.0,
+    "lag1_autocorr": 0.016,
+    "flat_fraction": 0.126,
+    "flat_hf_energy": 378.4,
+    "dither_present": false,
+    "tileable": false,
+    "decisions": {
+      "undither": false,
+      "deband": true
+    },
+    "qa": {
+      "hf_energy_reduction": 0.237,
+      "mean_color_shift": 0.133,
+      "edge_retention": 0.997,
+      "residual_lag1_autocorr": 0.041
+    },
+    "variants": {
+      "spec": {
+        "step_after": 22.0,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.401,
+          "mean_color_shift": 0.284,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": 0.073
+        }
+      },
+      "tuned": {
+        "step_after": 22.52,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.352,
+          "mean_color_shift": 0.26,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": 0.068
+        }
+      },
+      "tight": {
+        "step_after": 24.84,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.288,
+          "mean_color_shift": 0.309,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": 0.063
+        }
+      },
+      "split": {
+        "step_after": 24.86,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.324,
+          "mean_color_shift": 0.323,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": 0.057
+        }
+      }
+    },
+    "env": "Metal",
+    "map": "Core Prime Industrial Area",
+    "expansion": "Core Contingency",
+    "bytes": 597912,
+    "thumb": "thumbs/metal.webp"
+  },
+  {
+    "file": "lunar.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 154,
+    "q": 21.18,
+    "step": 27.71,
+    "step_undithered": 15.59,
+    "lag1_autocorr": -0.06,
+    "flat_fraction": 0.171,
+    "flat_hf_energy": 464.2,
+    "dither_present": false,
+    "tileable": false,
+    "decisions": {
+      "undither": false,
+      "deband": true
+    },
+    "qa": {
+      "hf_energy_reduction": 0.06,
+      "mean_color_shift": 0.172,
+      "edge_retention": 0.998,
+      "residual_lag1_autocorr": -0.053
+    },
+    "variants": {
+      "spec": {
+        "step_after": 15.59,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.435,
+          "mean_color_shift": 0.46,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": -0.035
+        }
+      },
+      "tuned": {
+        "step_after": 13.86,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.369,
+          "mean_color_shift": 0.544,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": -0.021
+        }
+      },
+      "tight": {
+        "step_after": 15.59,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.262,
+          "mean_color_shift": 0.617,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": -0.021
+        }
+      },
+      "split": {
+        "step_after": 15.59,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.331,
+          "mean_color_shift": 0.612,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": -0.027
+        }
+      }
+    },
+    "env": "Lunar",
+    "map": "Moon Quartet",
+    "expansion": "Core Contingency",
+    "bytes": 258476,
+    "thumb": "thumbs/lunar.webp"
+  },
+  {
+    "file": "ice.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 161,
+    "q": 19.59,
+    "step": 21.54,
+    "step_undithered": 2.83,
+    "lag1_autocorr": -0.013,
+    "flat_fraction": 0.292,
+    "flat_hf_energy": 227.9,
+    "dither_present": false,
+    "tileable": false,
+    "decisions": {
+      "undither": false,
+      "deband": true
+    },
+    "qa": {
+      "hf_energy_reduction": 0.091,
+      "mean_color_shift": 0.093,
+      "edge_retention": 0.992,
+      "residual_lag1_autocorr": -0.028
+    },
+    "variants": {
+      "spec": {
+        "step_after": 2.83,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.804,
+          "mean_color_shift": 2.043,
+          "edge_retention": 0.991,
+          "residual_lag1_autocorr": 0.234
+        }
+      },
+      "tuned": {
+        "step_after": 3.61,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.733,
+          "mean_color_shift": 1.621,
+          "edge_retention": 0.992,
+          "residual_lag1_autocorr": 0.266
+        }
+      },
+      "tight": {
+        "step_after": 5.74,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.593,
+          "mean_color_shift": 1.211,
+          "edge_retention": 0.992,
+          "residual_lag1_autocorr": 0.226
+        }
+      },
+      "split": {
+        "step_after": 5.0,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.546,
+          "mean_color_shift": 1.209,
+          "edge_retention": 0.992,
+          "residual_lag1_autocorr": 0.095
+        }
+      }
+    },
+    "env": "Ice",
+    "map": "Polar Range",
+    "expansion": "Core Contingency",
+    "bytes": 325040,
+    "thumb": "thumbs/ice.webp"
+  },
+  {
+    "file": "red-planet.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 178,
+    "q": 35.79,
+    "step": 53.96,
+    "step_undithered": 5.39,
+    "lag1_autocorr": -0.319,
+    "flat_fraction": 0.373,
+    "flat_hf_energy": 657.9,
+    "dither_present": true,
+    "tileable": false,
+    "decisions": {
+      "undither": true,
+      "deband": false
+    },
+    "qa": {
+      "hf_energy_reduction": 0.927,
+      "mean_color_shift": 2.054,
+      "edge_retention": 0.993,
+      "residual_lag1_autocorr": -0.123
+    },
+    "variants": {
+      "spec": {
+        "step_after": 5.39,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.927,
+          "mean_color_shift": 2.054,
+          "edge_retention": 0.993,
+          "residual_lag1_autocorr": -0.123
+        }
+      },
+      "tuned": {
+        "step_after": 5.83,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.873,
+          "mean_color_shift": 1.65,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": -0.101
+        }
+      },
+      "tight": {
+        "step_after": 8.19,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.778,
+          "mean_color_shift": 1.03,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": -0.064
+        }
+      },
+      "split": {
+        "step_after": 16.4,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.758,
+          "mean_color_shift": 1.844,
+          "edge_retention": 0.996,
+          "residual_lag1_autocorr": -0.292
+        }
+      }
+    },
+    "env": "Red Planet",
+    "map": "Red River",
+    "expansion": "Core Contingency",
+    "bytes": 276577,
+    "thumb": "thumbs/red-planet.webp"
+  },
+  {
+    "file": "slate.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 169,
+    "q": 41.16,
+    "step": 46.3,
+    "step_undithered": 2.24,
+    "lag1_autocorr": -0.24,
+    "flat_fraction": 0.289,
+    "flat_hf_energy": 491.7,
+    "dither_present": true,
+    "tileable": false,
+    "decisions": {
+      "undither": true,
+      "deband": false
+    },
+    "qa": {
+      "hf_energy_reduction": 0.991,
+      "mean_color_shift": 0.494,
+      "edge_retention": 0.987,
+      "residual_lag1_autocorr": 0.298
+    },
+    "variants": {
+      "spec": {
+        "step_after": 2.24,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.991,
+          "mean_color_shift": 0.494,
+          "edge_retention": 0.987,
+          "residual_lag1_autocorr": 0.298
+        }
+      },
+      "tuned": {
+        "step_after": 3.61,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.98,
+          "mean_color_shift": 0.443,
+          "edge_retention": 0.993,
+          "residual_lag1_autocorr": 0.282
+        }
+      },
+      "tight": {
+        "step_after": 7.28,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.928,
+          "mean_color_shift": 0.256,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": 0.211
+        }
+      },
+      "split": {
+        "step_after": 4.58,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.954,
+          "mean_color_shift": 0.737,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": -0.075
+        }
+      }
+    },
+    "env": "Slate",
+    "map": "Temblorian Mist",
+    "expansion": "Core Contingency",
+    "bytes": 733193,
+    "thumb": "thumbs/slate.webp"
+  },
+  {
+    "file": "lush.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 200,
+    "q": 12.76,
+    "step": 21.54,
+    "step_undithered": 5.39,
+    "lag1_autocorr": -0.05,
+    "flat_fraction": 0.538,
+    "flat_hf_energy": 144.4,
+    "dither_present": false,
+    "tileable": false,
+    "decisions": {
+      "undither": false,
+      "deband": true
+    },
+    "qa": {
+      "hf_energy_reduction": 0.296,
+      "mean_color_shift": 0.49,
+      "edge_retention": 0.997,
+      "residual_lag1_autocorr": -0.051
+    },
+    "variants": {
+      "spec": {
+        "step_after": 5.39,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.637,
+          "mean_color_shift": 0.352,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": -0.021
+        }
+      },
+      "tuned": {
+        "step_after": 6.0,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.537,
+          "mean_color_shift": 0.295,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": 0.009
+        }
+      },
+      "tight": {
+        "step_after": 8.83,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.386,
+          "mean_color_shift": 0.341,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": 0.021
+        }
+      },
+      "split": {
+        "step_after": 9.64,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.43,
+          "mean_color_shift": 0.339,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": -0.021
+        }
+      }
+    },
+    "env": "Lush",
+    "map": "Lusch Puppy",
+    "expansion": "Core Contingency",
+    "bytes": 671241,
+    "thumb": "thumbs/lush.webp"
+  },
+  {
+    "file": "crystal.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 167,
+    "q": 28.62,
+    "step": 46.3,
+    "step_undithered": 9.54,
+    "lag1_autocorr": -0.189,
+    "flat_fraction": 0.175,
+    "flat_hf_energy": 447.4,
+    "dither_present": false,
+    "tileable": false,
+    "decisions": {
+      "undither": false,
+      "deband": true
+    },
+    "qa": {
+      "hf_energy_reduction": 0.305,
+      "mean_color_shift": 0.9,
+      "edge_retention": 0.985,
+      "residual_lag1_autocorr": -0.176
+    },
+    "variants": {
+      "spec": {
+        "step_after": 9.54,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.838,
+          "mean_color_shift": 0.603,
+          "edge_retention": 0.993,
+          "residual_lag1_autocorr": -0.043
+        }
+      },
+      "tuned": {
+        "step_after": 11.49,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.761,
+          "mean_color_shift": 0.436,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": -0.052
+        }
+      },
+      "tight": {
+        "step_after": 14.76,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.625,
+          "mean_color_shift": 0.461,
+          "edge_retention": 0.996,
+          "residual_lag1_autocorr": -0.058
+        }
+      },
+      "split": {
+        "step_after": 17.35,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.595,
+          "mean_color_shift": 0.531,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": -0.162
+        }
+      }
+    },
+    "env": "Crystal",
+    "map": "Crystal Maze",
+    "expansion": "Core Contingency",
+    "bytes": 872196,
+    "thumb": "thumbs/crystal.webp"
+  },
+  {
+    "file": "acid.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 173,
+    "q": 17.91,
+    "step": 26.53,
+    "step_undithered": 3.32,
+    "lag1_autocorr": -0.369,
+    "flat_fraction": 0.19,
+    "flat_hf_energy": 192.1,
+    "dither_present": true,
+    "tileable": false,
+    "decisions": {
+      "undither": true,
+      "deband": false
+    },
+    "qa": {
+      "hf_energy_reduction": 0.689,
+      "mean_color_shift": 0.704,
+      "edge_retention": 0.99,
+      "residual_lag1_autocorr": -0.32
+    },
+    "variants": {
+      "spec": {
+        "step_after": 3.32,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.689,
+          "mean_color_shift": 0.704,
+          "edge_retention": 0.99,
+          "residual_lag1_autocorr": -0.32
+        }
+      },
+      "tuned": {
+        "step_after": 4.24,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.625,
+          "mean_color_shift": 0.583,
+          "edge_retention": 0.992,
+          "residual_lag1_autocorr": -0.32
+        }
+      },
+      "tight": {
+        "step_after": 6.16,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.512,
+          "mean_color_shift": 0.459,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": -0.281
+        }
+      },
+      "split": {
+        "step_after": 4.58,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.486,
+          "mean_color_shift": 0.493,
+          "edge_retention": 0.994,
+          "residual_lag1_autocorr": -0.381
+        }
+      }
+    },
+    "env": "Acid",
+    "map": "Acid Pools",
+    "expansion": "Core Contingency",
+    "bytes": 353839,
+    "thumb": "thumbs/acid.webp"
+  },
+  {
+    "file": "water-world.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 119,
+    "q": 33.27,
+    "step": 44.9,
+    "step_undithered": 2.83,
+    "lag1_autocorr": -0.255,
+    "flat_fraction": 0.737,
+    "flat_hf_energy": 434.4,
+    "dither_present": true,
+    "tileable": false,
+    "decisions": {
+      "undither": true,
+      "deband": false
+    },
+    "qa": {
+      "hf_energy_reduction": 0.97,
+      "mean_color_shift": 2.392,
+      "edge_retention": 0.994,
+      "residual_lag1_autocorr": -0.03
+    },
+    "variants": {
+      "spec": {
+        "step_after": 2.83,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.97,
+          "mean_color_shift": 2.392,
+          "edge_retention": 0.994,
+          "residual_lag1_autocorr": -0.03
+        }
+      },
+      "tuned": {
+        "step_after": 3.61,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.936,
+          "mean_color_shift": 1.995,
+          "edge_retention": 0.994,
+          "residual_lag1_autocorr": 0.074
+        }
+      },
+      "tight": {
+        "step_after": 5.74,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.819,
+          "mean_color_shift": 1.24,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": 0.103
+        }
+      },
+      "split": {
+        "step_after": 7.14,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.689,
+          "mean_color_shift": 2.04,
+          "edge_retention": 0.994,
+          "residual_lag1_autocorr": -0.192
+        }
+      }
+    },
+    "env": "Water World",
+    "map": "Brain Coral",
+    "expansion": "Core Contingency",
+    "bytes": 283217,
+    "thumb": "thumbs/water-world.webp"
+  },
+  {
+    "file": "wet-desert.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 183,
+    "q": 20.38,
+    "step": 47.33,
+    "step_undithered": 20.45,
+    "lag1_autocorr": -0.089,
+    "flat_fraction": 0.48,
+    "flat_hf_energy": 408.9,
+    "dither_present": false,
+    "tileable": false,
+    "decisions": {
+      "undither": false,
+      "deband": true
+    },
+    "qa": {
+      "hf_energy_reduction": 0.253,
+      "mean_color_shift": 0.577,
+      "edge_retention": 0.984,
+      "residual_lag1_autocorr": -0.074
+    },
+    "variants": {
+      "spec": {
+        "step_after": 20.45,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.401,
+          "mean_color_shift": 0.48,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": -0.065
+        }
+      },
+      "tuned": {
+        "step_after": 14.49,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.34,
+          "mean_color_shift": 0.42,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": -0.058
+        }
+      },
+      "tight": {
+        "step_after": 19.54,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.273,
+          "mean_color_shift": 0.419,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": -0.055
+        }
+      },
+      "split": {
+        "step_after": 19.7,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.299,
+          "mean_color_shift": 0.398,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": -0.074
+        }
+      }
+    },
+    "env": "Wet Desert",
+    "map": "Lake Shore",
+    "expansion": "Core Contingency",
+    "bytes": 405168,
+    "thumb": "thumbs/wet-desert.webp"
+  },
+  {
+    "file": "urban.png",
+    "width": 1920,
+    "height": 1080,
+    "palette_mode": "P",
+    "distinct_colours": 178,
+    "q": 38.06,
+    "step": 46.13,
+    "step_undithered": 3.16,
+    "lag1_autocorr": -0.207,
+    "flat_fraction": 0.271,
+    "flat_hf_energy": 615.2,
+    "dither_present": true,
+    "tileable": false,
+    "decisions": {
+      "undither": true,
+      "deband": false
+    },
+    "qa": {
+      "hf_energy_reduction": 0.973,
+      "mean_color_shift": 1.684,
+      "edge_retention": 0.983,
+      "residual_lag1_autocorr": 0.067
+    },
+    "variants": {
+      "spec": {
+        "step_after": 3.16,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.973,
+          "mean_color_shift": 1.684,
+          "edge_retention": 0.983,
+          "residual_lag1_autocorr": 0.067
+        }
+      },
+      "tuned": {
+        "step_after": 5.0,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.948,
+          "mean_color_shift": 1.395,
+          "edge_retention": 0.991,
+          "residual_lag1_autocorr": 0.119
+        }
+      },
+      "tight": {
+        "step_after": 8.6,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.861,
+          "mean_color_shift": 0.98,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": 0.126
+        }
+      },
+      "split": {
+        "step_after": 8.37,
+        "deband": true,
+        "qa": {
+          "hf_energy_reduction": 0.839,
+          "mean_color_shift": 1.25,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": -0.144
+        }
+      }
+    },
+    "env": "Urban",
+    "map": "Assault on Suburbia",
+    "expansion": "Core Contingency",
+    "bytes": 628600,
+    "thumb": "thumbs/urban.webp"
+  }
+]
