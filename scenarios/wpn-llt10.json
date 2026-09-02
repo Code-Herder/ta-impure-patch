@@ -1,0 +1,27 @@
+{
+  "format": "ta-scenario/1",
+  "description": "extra-weapons: two ten-laser towers (ARMLLT10, from wpn-test.ufo) with enemy solars in range",
+  "seed": 20260902,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "units": [
+    { "id": "tower1", "type": "ARMLLT10", "owner": 0, "pos": [2340, 1180] },
+    { "id": "tower2", "type": "ARMLLT10", "owner": 0, "pos": [2340, 1240] },
+    { "id": "target", "type": "CORSOLAR", "owner": 1, "pos": [2470, 1200] },
+    { "id": "target2", "type": "CORSOLAR", "owner": 1, "pos": [2470, 1260] },
+    { "id": "spare",  "type": "CORSOLAR", "owner": 1, "pos": [4100, 1300] }
+  ],
+
+  "camera": { "center_on": "target" }
+}

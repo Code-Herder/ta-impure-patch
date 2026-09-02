@@ -890,6 +890,39 @@ def cmd_peek(args):
                         f"{r['value']}" for r in rows))
 
 
+def cmd_weapons(args):
+    """Dump every weapon slot of the requested units (tagpu_weapons.trigger).
+
+    The A/B oracle for the extra-weapons module (research/notes/extra-weapons.md):
+    the fork reads the engine's own slot records — the three inline ones and, when
+    the module is armed and the type has more, its side slots — and writes them
+    as JSON. Works armed or not, so an unarmed instance is the control.
+    """
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{inst.name} is not running")
+    result = inst.gamedir / "tagpu_weapons.json"
+    since = result.stat().st_mtime if result.exists() else 0
+    spec = "all" if not args.units else "\n".join(str(u) for u in args.units)
+    (inst.gamedir / "tagpu_weapons.trigger").write_text(spec + "\n")
+    if not _wait_file(result, args.timeout, since):
+        die("no weapon dump appeared (needs a running game past its first frame)")
+    data = json.loads(result.read_text())
+    rows = []
+    for u in data.get("units", []):
+        for s in u["slots"]:
+            rows.append(f"u{u['idx']:<5} {u['type']:<12} own={u['owner']} n={u['count']:<2} "
+                        f"slot{s['i']:<2} st={s['state']} w={s['weapon'] or '-':<14} "
+                        f"tgt={s['target']:<5} spot={s['spot']} rl={s['reload']:<4} "
+                        f"hd={s['heading']:<6} pt={s['pitch']:<6} stk={s['stock']} "
+                        f"aim={s['aimed']} thr={s['thread']}")
+    hits = " ".join(f"{k}={v}" for k, v in data.get("hits", {}).items())
+    fires = " ".join(f"{i}={n}" for i, n in enumerate(data.get("fires", [])) if n)
+    head = (f"frame={data.get('frame')} armed={data.get('armed')} cap={data.get('cap')} "
+            f"units={len(data.get('units', []))}\nhits: {hits}\nfires by slot: {fires or '-'}")
+    out(data, args.json, human=head + ("\n" + "\n".join(rows) if rows else "\n(no matching units)"))
+
+
 def _wait_file(path: Path, timeout: float, since: float):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -3410,6 +3443,14 @@ def build_parser():
                     help="['*']<hex>['+'<hex>...][':'1|2|4|s<N>|x<N>]")
     pk.add_argument("--timeout", type=float, default=10)
     pk.set_defaults(func=cmd_peek)
+
+    wp = sub.add_parser("weapons", help="dump the weapon slots of units (extra-weapons oracle)")
+    add_common(wp)
+    wp.add_argument("name")
+    wp.add_argument("units", nargs="*", type=int,
+                    help="engine unit indices (roster idx=); none = every live unit")
+    wp.add_argument("--timeout", type=float, default=10)
+    wp.set_defaults(func=cmd_weapons)
 
     sh = sub.add_parser("shot", help="engine surface screenshot (PNG)")
     add_common(sh)

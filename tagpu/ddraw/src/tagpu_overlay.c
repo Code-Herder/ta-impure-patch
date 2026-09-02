@@ -25,6 +25,7 @@
 #include "tagpu_ui.h"
 #include "tagpu_cat.h"
 #include "tagpu_scenario.h"
+#include "tagpu_weapons.h"
 
 /* GL entry point the fork does not already expose — load once ourselves. */
 typedef void (APIENTRY *PFN_READPIXELS)(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,void*);
@@ -405,6 +406,9 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     /* on-demand memory reads (tagpu_peek.trigger) — no-op unless triggered, and
        must run at the menus too: switch effects land before the first game */
     tagpu_peek_frame(f->frame_counter);
+    /* on-demand weapon-slot dump (tagpu_weapons.trigger) — the A/B oracle for
+       the extra-weapons module; read-only, runs armed or not. */
+    tagpu_weapons_frame(f->frame_counter);
     /* on-demand GUI snapshot (tagpu_ui.trigger) — the read half of `tacli ui`.
        The menus are exactly where it earns its keep, so like peek it must run
        before any game exists. */

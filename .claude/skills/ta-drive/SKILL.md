@@ -291,6 +291,37 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
 - Video and frame-by-frame flicker analysis: **ta-capture** skill (60fps or you will
   alias one-present dropouts). Grab the window rect from `tacli ls --json`.
 
+## Extra weapons (the sim-changing module)
+
+`tagpu_weapons.c` lifts "three weapons per unit" to `Weapon4..N` (capacity 16).
+It is **off unless armed before launch** and stock units keep running the untouched
+engine code either way (research/notes/extra-weapons.md, "Implementation").
+
+```bash
+tools/tacli launch w1; tools/tacli stop w1          # create the instance dir
+tools/tacli arm w1 weapons.on                        # must exist at DLL attach
+tools/extra_weapons_fixture.py                       # builds scenarios/content/wpn-test.ufo (gitignored)
+ln -s $PWD/scenarios/content/wpn-test.ufo tagpu/instances/w1/gamedir/   # the test units
+rm -f tagpu/instances/w1/catalogue.json              # cached type list is now stale
+tools/tacli scenario load w1 wpn-llt10 --restart     # two ten-laser towers vs solars
+tools/tacli weapons w1                               # every slot of every unit + counters
+tools/tacli log w1 -g "weapons: (loader|VIOL|MISM)"
+```
+
+- `tacli weapons <inst> [idx…]` is the oracle: per slot the state byte, weapon,
+  target, reload, heading, pitch, stock, aim result and COB thread, plus `armed`,
+  the C-path hit counters (`hits:`) and projectile launches per slot (`fires by
+  slot:`). It works **unarmed** too — that instance is your control. With stock
+  content and the module armed, every counter but `loader`/`stock_splice` must
+  read 0 and `mismatch`/`violation` must be 0; that is the regression check.
+- **Content goes in a `.ufo`, never as loose files** (the engine finds a loose
+  `units/*.fbi` and then drops the type). `tools/hpipack.py` writes/reads the
+  archive, `tools/cobclone.py` gives a COB per-weapon script copies, and
+  `tools/extra_weapons_fixture.py` rebuilds the shipped test pack from the game.
+  After adding or removing archives, delete the instance's `catalogue.json` or
+  `scenario load` refuses the new type at validation.
+- `tacli log -g` takes a Python regex: alternate with `(a|b)`, not `a\|b`.
+
 ## The input firewall (on by default)
 
 While armed, the game ignores the real keyboard and mouse completely and sees only what
