@@ -69,7 +69,9 @@ builds every runtime store, each with Cavedog's own allocation tag string
 
 Dimensions & constants set alongside [BINARY-VERIFIED]:
 `main+0x14233/0x14237` = map W/H in **16-px tiles** (`FeatureMapSizeX/Y`);
-`main+0x14223/0x14227` = map W/H in pixels (`= tiles<<4`); `main+0x1427F` =
+`main+0x14223/0x14227` = map W/H in pixels (`= tiles<<4`) — **note these are
+*not* the fog grid's cols/rows; those are fields inside the struct behind the
+pointer at `main+0x1421F`** (§5.2); `main+0x1427F` =
 SeaLevel (byte, height units); `main+0x1423B/0x1423F` = view W/H in 16-px tiles,
 `main+0x14243/0x14247` = view W/H in 32-px tiles; sweep bucket dims
 `main+0x1424B = viewTilesX+0xC` (row capacity/columns swept) and
@@ -369,6 +371,38 @@ map cell (origin = rounded `eyeX>>5, eyeY>>5`):
 Plus map-border corner completion. The result is the corner-mask smoothing that
 picks the 14 edge shapes.
 
+**The lattice geometry** [BINARY-VERIFIED 2026-09-02, G13c]. The grid origin is
+a *half-cell* offset from the map cells: `col0 = eyeX/32 − 1` when `eyeX % 32 <
+16`, else `eyeX/32` — i.e. `col0 = floor((eyeX − 16)/32)`, and the overlay draws
+cell `(col,row)` at `vp + (±16 − eye%32) + col·32`, so entry `(gx,gy)` covers
+world x `[32·(col0+gx) + 16, +32)`. Equivalently **origin = `32·col0 + 16`**, and
+a grid *corner* sits exactly at a map cell's *centre*. The four bits are those
+four surrounding cells:
+
+| bit | corner | map cell |
+|---|---|---|
+| 1 | top-left | `(col0+gx, row0+gy)` |
+| 2 | top-right | `(col0+gx+1, row0+gy)` |
+| 4 | bottom-left | `(col0+gx, row0+gy+1)` |
+| 8 | bottom-right | `(col0+gx+1, row0+gy+1)` |
+
+so one dark map cell sets a *different* bit in each of the four grid entries
+around it, and `0xF` needs all four cells dark. This half-cell offset is why
+per-fragment source-map sampling is ~16 px out of register (§6 item 4).
+
+**The grid is not a lazy cache in practice** — measured stable and in step with
+the frame at 25 s apart with the camera parked; the ~17 invalidation sites mean
+it rebuilds whenever anything moves. Reading it every frame is correct.
+
+**A caution about the source maps.** With the grid and MAPPED read *in the same
+frame*, at the same cells, using the stride this section documents, they
+disagree: on Two Continents MAPPED reported explored for cols 80..98 of row 20
+while the grid (and the screen) had only 92..96 lit. The grid matched the
+screenshot exactly; MAPPED did not, and re-reading it at other strides did not
+reconcile them either. Unresolved — and it does not matter for rendering, since
+the grid is what the engine draws. Do not build a fog rule on `main+0x14273`
+without re-checking it against the drawn frame first.
+
 **Invalidation** (clears bit 3 of `LosType`, forcing a rebuild): every scroll
 path (`0x41C54B..0x41D485`, ~17 sites in the scroll/minimap code), every LOS stamp
 add/remove that changes the local player's maps (`0x481911, 0x481D2D, 0x481D73,
@@ -451,16 +485,36 @@ occlusion at native resolution — and where to read the inputs live:**
    `+0xFA` height, `+0xFE` mask). Position with the §3.4 formula (avg 2×2 tile
    height /2). Wrecks: records at `*(main+0x1420B)` (stride 0x30) with a live
    `Object3doStruct*` at +4 — renderable by our existing 3DO path.
-4. **Fog/LOS at native res**: do NOT sample the engine's screen fog grid (32-px
-   blocks, view-sized, rebuilt lazily) — sample the *source* maps per fragment
-   for smooth native-res fog:
-   - visible: `PlayerStruct(main+0x1B63 + localId(main+0x2A43)·0x14B) + 0x7C`
-     byte map, `>0` ⇒ lit; tile = `(wx>>5, (wz − alt/2)>>5)`.
-   - explored: `*(main+0x14273)` u16, bit `localId`.
-   - Match stock look: explored-dark = shade-LUT `*(TAProgram+0xCC)` applied to
-     the composed colour (or just N% darken in linear GL); unexplored = black.
-   - Respect `LosType(main+0x14281)` bit1: in "mapped" mode everything explored
-     is fully lit.
+4. **Fog/LOS at native res**: ~~do NOT sample the engine's screen fog grid —
+   sample the *source* maps per fragment~~. **SUPERSEDED 2026-09-02 — this advice
+   was wrong, and the G13c gate reversed it. Sample the grid.** Per-fragment
+   source-map sampling was implemented in all four passes and does *not*
+   reproduce the overlay: measured on Two Continents, MAPPED (`*(main+0x14273)`,
+   u16, bit `localId`, stride `mapW16/2`) reports **explored across a whole band
+   the engine paints solid black**, so the discard never fires and features and
+   units get drawn over unexplored ground. The grid at `*(main+0x1421F)` matches
+   the drawn frame exactly, cell for cell, at the same instant. Two independent
+   reasons the source maps cannot work by themselves:
+   - the grid lattice is offset **half a cell**: a grid corner sits at a map
+     cell's *centre* (`origin = 32·col0 + 16`, `col0` = the builder's rounded
+     `eye>>5`), so a per-cell test lands ~16 px off; and
+   - the overlay's shape comes from **4-bit corner masks**, feathered by 14 edge
+     sprites — a per-cell boolean cannot express it.
+   What actually works (`tagpu_glsl.h`, G13c): upload the grid as an RG8 texture
+   — its two bytes *are* `(b0, b1)`, so it uploads with no conversion — and take
+   bilinear coverage over the four corner bits, thresholded at 0.5. That gives
+   the 14 shapes for free (`0xF` → everywhere, `0x3` → the top half, a lone
+   corner → its quadrant), with a clean edge where the engine dithers one.
+   - The grey darken **is** the shade-LUT `*(TAProgram+0xCC)`, applied to the
+     palette **index** before the palette fetch — not an N% darken of the
+     composed colour, which comes out visibly too dark on tree canopies
+     (measured: 19 768 mismatched px vs 97 with the real remap).
+   - `LosType(main+0x14281)` bit1 needs no shader flag: the builder only writes
+     `b1` when it is set, so in "mapped" mode the grey mask is simply all-zero.
+   - Units and effects are **hidden**, not darkened, in grey — the engine draws
+     no unit it cannot currently see; terrain, features and wreckage stay and
+     are remapped. (Verified: an enemy solar on grey ground disappears while its
+     flattened terrain footprint remains.)
 5. **Draw-order hooks**: the scene pass slots cleanly between the terrain call
    (`0x468DB0` ret) and the fog call (`0x469D8E`) — everything in between is what
    we would replace; fog, HUD, dialogs and present stay engine-side. All

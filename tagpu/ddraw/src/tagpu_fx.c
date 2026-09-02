@@ -218,7 +218,7 @@ int tagpu_fx_armed(unsigned frame_counter)
 /* ---- GL ---- */
 static int    s_state = 0;              /* 0 unloaded, 1 ready, 2 failed     */
 static GLuint s_prog, s_vao, s_vbo, s_lhtTex;
-static GLint  s_uGame, s_uFog, s_uZoom, s_uZoomC, s_uDepthScale;
+static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uDepthScale;
 static GLint  s_uScafOn, s_uScafP, s_uSS, s_uZoomF, s_uZoomCF;
 /* four buckets, drawn in this order: the particle layers the engine draws
    BEFORE its projectile pass (0..6: wake foam, feature smoke, trail puffs,
@@ -266,17 +266,19 @@ static const char* FS =
     "out vec4 frag;\n"
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uPal;\n"
-    "uniform sampler2D uLos;\n"
-    "uniform sampler2D uMap;\n"
     "uniform sampler2D uLht;\n"              /* 32x1 RGB additive per level  */
-    "uniform int uFog;\n"
+    TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_SCAF_UNIFORMS
+    TAGPU_GLSL_FOG_FN
     "void main(){\n"
     "  int mode = int(vCM.y + 0.5);\n"
     "  vec3 rgb; float a = 1.0;\n"
     /* scaffold occlusion, the unit shader's rule: only the B_UNDER draw
        (particle layers below every row key) turns uScafOn on */
     TAGPU_GLSL_SCAF_TEST
+    /* effects are transient: the engine's own passes are LOS-gated, so they
+       vanish in grey rather than darkening (uFog bit1 is set for this pass) */
+    TAGPU_GLSL_FOG_DISCARD
     "  if (mode == 0) {\n"
     "    rgb = texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb;\n"
     "  } else {\n"
@@ -289,17 +291,6 @@ static const char* FS =
     "    } else {\n"
     "      rgb = texelFetch(uPal, ivec2(ii, 0), 0).rgb;\n"
     "      if (mode == 2) a = 0.5;\n"
-    "    }\n"
-    "  }\n"
-    /* fog: the engine's overlay pass darkens explored/out-of-LOS cells and
-       blacks unexplored ones over effects too (terrain-depth.md 5) */
-    "  if ((uFog & 1) == 1) {\n"
-    "    ivec2 t = ivec2(int(vWorld.x) >> 5, int(vWorld.y) >> 5);\n"
-    "    float ex = texelFetch(uMap, t, 0).r;\n"
-    "    if (ex < 0.5/255.0) discard;\n"
-    "    if ((uFog & 2) == 2) {\n"
-    "      float lit = texelFetch(uLos, t, 0).r;\n"
-    "      if (lit < 0.5/255.0) rgb *= 0.55;\n"
     "    }\n"
     "  }\n"
     /* premultiplied FBO: flashes are pure additive light (alpha 0) */
@@ -337,6 +328,8 @@ static void init_gl(void)
     glDeleteShader(vs); glDeleteShader(fs);
     s_uGame = glGetUniformLocation(s_prog, "uGame");
     s_uFog  = glGetUniformLocation(s_prog, "uFog");
+    s_uFogOrg = glGetUniformLocation(s_prog, "uFogOrg");
+    s_uFogDim = glGetUniformLocation(s_prog, "uFogDim");
     s_uZoom = glGetUniformLocation(s_prog, "uZoom");
     s_uZoomC = glGetUniformLocation(s_prog, "uZoomC");
     s_uDepthScale = glGetUniformLocation(s_prog, "uDepthScale");
@@ -348,8 +341,10 @@ static void init_gl(void)
     glUseProgram(s_prog);
     glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
     glUniform1i(glGetUniformLocation(s_prog, "uPal"),   1);
-    glUniform1i(glGetUniformLocation(s_prog, "uLos"),   2);
-    glUniform1i(glGetUniformLocation(s_prog, "uMap"),   3);
+    glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 2);
+    glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  3);   /* unused here:
+        effects hide in grey rather than shading, but binding it keeps a future
+        FOG_SHADE in this pass off unit 0 (the atlas) */
     glUniform1i(glGetUniformLocation(s_prog, "uLht"),   4);
     glUniform1i(glGetUniformLocation(s_prog, "uScaf"),  5);
     glUseProgram(0);
@@ -519,15 +514,49 @@ static void emit_model(const char* node, float ax, float ay, float wx, float wz,
     m->turn[0] = t0; m->turn[1] = t1; m->turn[2] = t2; m->owner = owner;
 }
 
+/* the shaders' fog rule (tagpu_glsl.h) on the CPU — bilinear coverage over the
+   grid's four corner bits, thresholded at 0.5 */
+static float fog_cov(unsigned m, float fx, float fy)
+{
+    float tl = (float)( m       & 1u), tr = (float)((m >> 1) & 1u);
+    float bl = (float)((m >> 2) & 1u), br = (float)((m >> 3) & 1u);
+    float top = tl + (tr - tl) * fx, bot = bl + (br - bl) * fx;
+    return top + (bot - top) * fy;
+}
+
+int tagpu_fog_at(const unsigned short* grid, int cols, int rows,
+                 int orgX, int orgY, int wx, int wzp)
+{
+    if (!grid || cols <= 0 || rows <= 0) return 0;
+    float gx = (float)(wx  - orgX) * (1.0f / 32.0f);
+    float gy = (float)(wzp - orgY) * (1.0f / 32.0f);
+    /* The grid only spans the VIEW, while the gather accepts anchors up to
+       256 px outside it. Off-grid means "off-screen", not "off-map", so this
+       reports no fog and leaves the caller's own viewport cull to decide —
+       clamping to the border cell instead would cull anything whose anchor
+       sits past the edge over dark ground, popping sprites in as you scroll.
+       The shaders clamp, which is exact: an on-screen fragment is in range. */
+    if (gx < 0.0f || gy < 0.0f ||
+        gx >= (float)cols || gy >= (float)rows) return 0;
+    int cx = (int)gx, cy = (int)gy;
+    unsigned e = grid[cy * cols + cx];
+    int r = 0;
+    if (fog_cov(e        & 0xFu, gx - (float)cx, gy - (float)cy) >= 0.5f) r |= 1;
+    if (fog_cov((e >> 8) & 0xFu, gx - (float)cx, gy - (float)cy) >= 0.5f) r |= 2;
+    return r;
+}
+
 /* engine LOS gate for a projectile anchor tile (0x49BE60 head); the particle
-   leaves use the same test */
+   leaves (tagpu_sfx.c) and the feature gate 0x4658E0 (tagpu_feat.c) run the
+   same test. BOTH fog bands hide: the engine draws no effect it cannot
+   currently see, and 0x4658E0 likewise tests the LOS counter when LosType&2
+   and MAPPED otherwise — which is exactly the pairing the grid encodes, since
+   the builder only writes the grey mask in true-LOS mode. */
 int tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp)
 {
-    if (!(v->fogMode & 1) || !v->los || !v->mapd) return 1;
-    int tx = wx >> 5, ty = wzp >> 5;
-    if (tx < 0 || ty < 0 || tx >= v->losW || ty >= v->losH) return 0;
-    if (v->fogMode & 2) return v->los[ty * v->losW + tx] != 0;
-    return v->mapd[ty * v->losW + tx] != 0;
+    if (!(v->fogMode & 1) || !v->fogGrid) return 1;
+    return tagpu_fog_at(v->fogGrid, v->fogCols, v->fogRows,
+                        v->fogOrgX, v->fogOrgY, wx, wzp) == 0;
 }
 
 static int in_vprect(const char* ta, int sx, int sy)
@@ -862,14 +891,16 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
 int tagpu_fx_nmodels(void) { return s_nm; }
 const TAGPU_FXMODEL* tagpu_fx_model(int i) { return (i >= 0 && i < s_nm) ? &s_models_[i] : NULL; }
 
-void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex, unsigned int losTex, unsigned int mapTex,
+void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
                      unsigned int scafTex)
 {
     int total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3];
     if (s_state != 1 || total == 0) return;
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
-    glUniform1i(s_uFog, v->fogMode);
+    glUniform1i(s_uFog, (v->fogMode & 1) | 2);   /* effects hide in grey */
+    if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
+    if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
     int scaf = (v->scafOn && scafTex) ? 1 : 0;
     if (s_uScafP >= 0) glUniform4f(s_uScafP, (float)v->vpL, (float)v->vpT, (float)v->vw, (float)v->vh);
     x_glUniform1f(s_uSS, (float)(v->ss > 0 ? v->ss : 1));
@@ -880,8 +911,7 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex, unsigned int lo
     x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
     x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
     x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
-    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, losTex);
-    x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, mapTex);
+    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
     x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_lhtTex);
     x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, scafTex);
     x_glActiveTexture(GL_TEXTURE0);

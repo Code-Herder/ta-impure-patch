@@ -18,9 +18,10 @@ typedef struct TAGPU_FXVIEW {
                                  /* key is (feat?3:1) + (row-r0)*4 (tagpu_feat)*/
     int vw, vh, scafOn;          /* viewport size; scene-depth scaffold armed  */
     int fogMode;                 /* LosType & 3                                */
-    const unsigned char* los;    /* per-32px-tile 255/0 (watched player)       */
-    const unsigned char* mapd;
-    int losW, losH;
+    const unsigned short* fogGrid;  /* engine screen fog grid, corner masks    */
+    int fogCols, fogRows;           /* its dims (view-anchored 32-px cells)    */
+    int fogOrgX, fogOrgY;           /* world x, projected z of its cell (0,0)  */
+    unsigned int fogTex, fogLut;    /* RG8 grid; 256x1 grey palette remap      */
     unsigned int frame_counter;
 } TAGPU_FXVIEW;
 
@@ -45,7 +46,7 @@ const TAGPU_FXMODEL* tagpu_fx_model(int i);
 /* lines + sprites into the currently bound FBO (depth test on, mask off);
    uses its own program/VAO; leaves program/VAO/texture bindings dirty */
 void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
-                     unsigned int losTex, unsigned int mapTex, unsigned int scafTex);
+                     unsigned int scafTex);
 void tagpu_fx_glreset(void);
 
 /* emission API for the particle pass (tagpu_sfx.c): a sequence frame or a
@@ -57,4 +58,9 @@ void tagpu_fx_set_mute(int on);                 /* passive: count, emit nothing 
 void tagpu_fx_trace(int n);                     /* log the next n sprite emissions */
 unsigned tagpu_fx_caps(void);                   /* TAProgram+0xF0: bit5 ALP, bit7 LHT */
 int  tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp);   /* engine LOS gate */
+/* the fragment shaders' fog rule (tagpu_glsl.h) on the CPU, for gather-side
+   gates: bit0 = the engine paints this point black, bit1 = it shade-remaps it.
+   wzp is the PROJECTED world z (y - alt/2), the space the grid is built in. */
+int  tagpu_fog_at(const unsigned short* grid, int cols, int rows,
+                  int orgX, int orgY, int wx, int wzp);
 #endif

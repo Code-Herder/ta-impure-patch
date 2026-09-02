@@ -64,6 +64,7 @@
 #include <string.h>
 #include "opengl_utils.h"
 #include "tagpu_feat.h"
+#include "tagpu_glsl.h"
 #include "tagpu_featown.h"
 #include "tagpu_gaf.h"
 #include "tagpu_native.h"
@@ -223,7 +224,7 @@ int tagpu_feat_on(void) { return s_armed > 0; }
 /* ---- GL ---- */
 static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
 static GLuint s_prog, s_vao, s_vbo;
-static GLint  s_uGame, s_uFog, s_uZoom, s_uZoomC, s_uDepthScale;
+static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uDepthScale;
 static TAGPU_GAFENT   s_atlasEnts[ATLAS_MAX];
 static TAGPU_GAFATLAS s_atlas;
 
@@ -257,27 +258,20 @@ static const char* FS =
     "out vec4 frag;\n"
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uPal;\n"
-    "uniform sampler2D uLos;\n"
-    "uniform sampler2D uMap;\n"
-    "uniform int uFog;\n"
+    TAGPU_GLSL_FOG_UNIFORMS
+    TAGPU_GLSL_FOG_FN
     "void main(){\n"
+    /* features are terrain furniture: the engine draws them under the fog
+       overlay, so they stay visible in grey and are merely shade-remapped */
+    TAGPU_GLSL_FOG_DISCARD
     "  float idx = texture(uAtlas, vUV).r;\n"
     /* colour-keyed: the key texel is a hole, and discarding keeps it out of
        the depth buffer too — a tree occludes only where it has pixels */
     "  if (abs(idx - vCM.x) < 0.5/255.0) discard;\n"
-    "  vec3 rgb = texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb;\n"
+    "  int pi = int(idx*255.0+0.5);\n"
+    TAGPU_GLSL_FOG_SHADE("pi")
+    "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
     "  float a = (int(vCM.y + 0.5) == 2) ? 0.5 : 1.0;\n"
-    /* the engine's fog overlay darkens explored/out-of-LOS cells and blacks
-       unexplored ones over features too (terrain-depth.md §5) */
-    "  if ((uFog & 1) == 1) {\n"
-    "    ivec2 t = ivec2(int(vWorld.x) >> 5, int(vWorld.y) >> 5);\n"
-    "    float ex = texelFetch(uMap, t, 0).r;\n"
-    "    if (ex < 0.5/255.0) discard;\n"
-    "    if ((uFog & 2) == 2) {\n"
-    "      float lit = texelFetch(uLos, t, 0).r;\n"
-    "      if (lit < 0.5/255.0) rgb *= 0.55;\n"
-    "    }\n"
-    "  }\n"
     "  frag = vec4(rgb * a, a);\n"           /* premultiplied, like the FBO */
     "}\n";
 
@@ -315,14 +309,16 @@ static void init_gl(void)
     glDeleteShader(vs); glDeleteShader(fs);
     s_uGame = glGetUniformLocation(s_prog, "uGame");
     s_uFog  = glGetUniformLocation(s_prog, "uFog");
+    s_uFogOrg = glGetUniformLocation(s_prog, "uFogOrg");
+    s_uFogDim = glGetUniformLocation(s_prog, "uFogDim");
     s_uZoom = glGetUniformLocation(s_prog, "uZoom");
     s_uZoomC = glGetUniformLocation(s_prog, "uZoomC");
     s_uDepthScale = glGetUniformLocation(s_prog, "uDepthScale");
     glUseProgram(s_prog);
     glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
     glUniform1i(glGetUniformLocation(s_prog, "uPal"),   1);
-    glUniform1i(glGetUniformLocation(s_prog, "uLos"),   2);
-    glUniform1i(glGetUniformLocation(s_prog, "uMap"),   3);
+    glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 2);
+    glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  3);
     glUseProgram(0);
 
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
@@ -704,21 +700,22 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     return s_nv[B_SHADOW] + s_nv[B_BODY];
 }
 
-void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex,
-                       unsigned int losTex, unsigned int mapTex)
+void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
 {
     int total = s_nv[B_SHADOW] + s_nv[B_BODY];
     if (s_state != 1 || total == 0) return;
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
-    glUniform1i(s_uFog, v->fogMode);
+    glUniform1i(s_uFog, v->fogMode & 1);        /* features darken in grey */
+    if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
+    if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
     x_glUniform1f(s_uZoom, v->zoom > 0.0f ? v->zoom : 1.0f);
     x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
     x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
     x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
     x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
-    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, losTex);
-    x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, mapTex);
+    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
+    x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
     x_glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);

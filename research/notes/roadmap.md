@@ -44,7 +44,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
 | Smoke, fire, wakes, nanolathe | ● native (G12f) | one detour on the layer walker `0x471F90` | A/B `sfx-strait`, engine surface empty of particles |
 | Features (trees, rocks, splats, wreckage) | ● native (G13a) | `featown`: one detour on the leaf `0x46A610` | occlusion parity vs the engine's own draw, engine surface empty of features, `feat-forest` |
-| Fog of war *as drawn* | ◐ mirrored per fragment, **not at parity** | shared rule in all four native shaders | open — [Features](features.html) §9 |
+| Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02) | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid | done — [Features](features.html) §9 |
 | Terrain tiles | ○ engine 8bpp | — | G13b |
 | Fog overlay, UI, minimap | ○ engine 8bpp (fog is *mirrored* per fragment) | — | G13 / stays engine-side |
 

@@ -25,7 +25,6 @@ int  tagpu_feat_gather(const TAGPU_FXVIEW* v);
 /* draw into the currently bound FBO (depth test on; shadows without depth
    writes, bodies with). Uses its own program/VAO and leaves the program,
    VAO and texture bindings dirty. */
-void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex,
-                       unsigned int losTex, unsigned int mapTex);
+void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex);
 void tagpu_feat_glreset(void);
 #endif

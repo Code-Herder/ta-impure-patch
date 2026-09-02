@@ -342,47 +342,67 @@ Gaps, honestly:
   2048² of texels re-decodes everything on the next frame (never mid-frame). A 200v200
   battle reaches roughly a quarter of that.
 
-## 9. The fog gap — a shared, pre-existing problem this pass made visible
+## 9. The fog gap — closed (G13c, 2026-09-02)
 
-<figure><img src="assets/shots/feat-fog-gap.png" alt="features drawn over unexplored fog"><figcaption>LEFT the engine drawing its own features, RIGHT ours, same frame, fog of war on. The engine draws nothing in the unexplored black; we draw trees across it. The native <em>units</em> and the flat metal patches sit on that black in both halves — the rule is shared, and the feature pass simply covers enough of the map to make it obvious.</figcaption></figure>
+<figure><img src="assets/shots/feat-fog-gap.png" alt="features drawn over unexplored fog"><figcaption>THE BUG, before G13c: LEFT the engine drawing its own features, RIGHT ours, same frame, fog of war on. The engine draws nothing in the unexplored black; we drew trees across it.</figcaption></figure>
 
-Every native pass — units, effects, particles and now features — mirrors the fog by
-sampling the two source maps per fragment: discard where the MAPPED bit is clear, darken
-where the LOS counter is zero. That is what [terrain-depth.md](terrain-depth.html) §6
-item 4 recommends, in preference to the engine's own screen fog grid. **It does not
-reproduce the engine's overlay**, and the feature pass is the first thing to draw across
-enough of the map to show it.
+Every native pass used to mirror the fog by sampling the two source maps per
+fragment: discard where the MAPPED bit is clear, darken where the LOS counter is
+zero — the advice in [terrain-depth.md](terrain-depth.html) §6 item 4. **That
+advice was wrong**, and this gate reversed it. The engine's overlay is driven
+*entirely* by the view-anchored **screen fog grid** behind `*(main+0x1421F)`,
+and the source maps do not reproduce it.
 
-What was measured, on Two Continents (map 10752×12800 px, LOS/MAPPED grids 336×400 of
-32-px cells, `LosType = 9`, watched = local = player 0), at a cell the engine paints
-fully black at screen (186, 56) — world (2624, 640), cell (82, 20):
+**Why it could not work.** Two independent reasons, both now measured:
 
-| Source | Read | Says |
-|---|---|---|
-| MAPPED `*(main+0x14273)`, u16, bit `1 << player` | `1` | explored |
-| LOS counter `player+0x7C`, u8 | `1` (and `1` for 36 consecutive cells spanning both the black and the lit parts of that row) | lit |
-| A cell far off-map, same array | `0` | unexplored — so the array *is* being stamped, and our indexing reaches it |
+1. **Half-cell offset.** The grid's corners sit at map-cell *centres*
+   (origin `32·col0 + 16`), so a per-cell test is ~16 px out of register — and
+   the overlay's shape is a **4-bit corner mask** feathered by 14 edge sprites,
+   which a per-cell boolean cannot express at all. Geometry in
+   terrain-depth.md §5.2.
+2. **The source map disagrees with the drawn frame.** Read in the *same frame*
+   at the same cells: MAPPED said explored for cols 80..98 of row 20 while the
+   grid — and the screenshot — had only 92..96 lit. That discrepancy is still
+   unexplained and is written up in terrain-depth.md §5.2; it is moot for
+   rendering, because the grid is by construction what the engine drew.
 
-So **both source maps report the cell visible while the engine paints it black**, which
-is why our discard never fires. Indexing was ruled out directly: re-reading MAPPED with a
-16-px stride returns 0 for a lit cell as well as a black one, so the 32-px cell layout our
-code uses is the right one.
+**The fix.** One shared GLSL snippet (`tagpu_glsl.h`, `TAGPU_GLSL_FOG_*`) used by
+all four passes, replacing four copy-pasted blocks and the `uLos`/`uMap` texture
+pair with a single `uFogGrid`:
 
-The engine's overlay is driven by neither map directly but by the **screen fog grid**,
-whose header is *behind* the pointer at `main+0x1421F` — `{u16* buf, cols, rows, cells}` =
-`{…, 30, 24, 720}`, a view-anchored grid of 32-px cells whose entries are **4-bit corner
-masks** (`0x0F` fully lit, `0x00` fully dark, `0x03`/`0x05`/`0x07`/`0x0B` partial). That
-matches §5.2's description of `0x4843C0` as a corner-mask builder. (Note for the appendix
-of terrain-depth.md: `cols`/`rows` are fields of that struct, not `main+0x14223/0x14227`,
-which are the map's pixel dimensions.) Reading the grid back did not correlate with the
-screen either on a first pass, so the remaining work is a real decompile of `0x4843C0`
-(what it samples, and what `LosType` bit3 "fog-grid-valid" gates) and of the overlay
-`0x4848E0`.
+- the grid uploads as an **RG8 texture with no conversion** — its two bytes per
+  cell already *are* `r = unexplored corner mask, g = out-of-LOS corner mask`;
+- **bilinear coverage over the four corner bits, thresholded at 0.5**, is the 14
+  edge shapes (`0xF` → everywhere, `0x3` → exactly the top half, a lone corner →
+  its quadrant). We get a clean edge where the engine dithers one — the same
+  class of approximation as the LHT flash and the feature shadows;
+- the grey darken is the engine's real one: the shade LUT at
+  `*(TAProgram+0xCC)` applied to the palette **index** before the palette fetch.
+  A plain 0.55 multiply on the resolved colour is visibly too dark on canopies;
+- **units and effects hide in grey; terrain, features and wreckage stay** and are
+  remapped. This is the rule the passes did not implement at all before.
+  `LosType` bit1 needs no flag: the builder only writes the grey mask when it is
+  set, so "mapped" mode simply has an all-zero grey byte.
 
-**This is not a G13a regression** — it predates the feature pass and applies equally to
-units, effects and particles — but it is now the most visible defect in the native frame,
-and fixing it means changing the fog rule in all four shaders at once. It wants its own
-gate.
+**Measured, `feat-forest` on Two Continents, GL framebuffer, engine-draw vs
+ours at the same camera** (`feat.on="log passive"` vs `feat.on=log`):
+
+| mode | lit only in engine's draw | lit only in ours | agreeing |
+|---|---|---|---|
+| mapping only (`LosType=9`, fog=1) | 48 | 821 | 287 531 |
+| true LOS (`LosType=15`, fog=3) | **97** | 186 | 576 990 |
+
+0.05 % of the frame, and what is left is the dithered edge sprites plus unit
+health bars that moved between the two captures. The intermediate reading of
+19 768 in the true-LOS column is what the 0.55 multiply cost before the shade
+LUT went in — worth knowing if the grey ever looks wrong again.
+
+**Verified live**, not just by pixel count: an enemy solar collector standing on
+fully-grey ground is **not drawn**, while the flattened building footprint it
+stamped into the terrain still shows through the grey — which is exactly TA's
+rule that grey shows terrain but not units.
+
+<figure><img src="assets/shots/fog-grid-fix.png" alt="the same frame before and after the fog fix"><figcaption>The same camera on <code>feat-forest</code>, our GL framebuffer both times. LEFT the old per-fragment MAPPED rule: a whole forest and two units float on unexplored black. RIGHT the engine's own fog grid: the trees stop on the boundary the engine drew, and the units that stood in the black are gone.</figcaption></figure>
 
 ## Appendix — addresses
 
@@ -404,4 +424,5 @@ gate.
 | `main+0x14273` / `main+0x14281` | MAPPED bitmap / `LosType` |
 | `main+0x2A43` / `main+0x1B63 + id·0x14B` | local player id / PlayerStruct (`+0x7C` LOS map) |
 | `main+0x37F06` | gfx options, **bit4 = FShadow** |
-| `*(main+0x1421F)` | → `{u16* buf, cols, rows, cells}` screen fog grid; entries are 4-bit corner masks (§9) |
+| `*(main+0x1421F)` | → `{u16* buf, cols, rows, cells}` screen fog grid; per 32-px view cell 2 bytes = `(unexplored, out-of-LOS)` **4-bit corner masks**, origin `32·col0+16` — the fog source for every native pass (§9) |
+| `*(TAProgram+0xCC)` | u8[256] fog shade remap: the grey band's darken, applied to the palette index (§9) |
