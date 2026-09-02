@@ -38,7 +38,7 @@ native pass that replaces it. Gate **G13a**.*
 6. **Only defs flagged `+0xFF` bit3 are LOS-gated at all** — and only until the local
    player has seen the tile. Everything else is drawn regardless of fog and then covered
    by the fog overlay, which is why the native pass mirrors the fog rule per fragment
-   rather than culling.
+   (off the engine's own fog grid — §9) rather than culling.
 
 ---
 
@@ -221,8 +221,9 @@ the units**, so every unit body is tested against the depth features just wrote.
   nothing yields `(0.5·rgb, 0.5)`, which the composite resolves as a 50 % blend with the
   engine's terrain underneath — the same thing the engine's ALP table does, without
   needing the terrain in our buffer.
-- **Fog** is mirrored per fragment like every other native shader (discard unexplored,
-  darken explored-out-of-LOS), and each vertex carries **its own** world position —
+- **Fog** is mirrored per fragment like every other native shader — since G13c off the
+  engine's own screen fog grid rather than the LOS/MAPPED source maps (§9) — and each
+  vertex carries **its own** world position —
   anchor plus the corner's offset — so a tree straddling the fog edge fades across it
   instead of all at once. Getting this wrong (feeding the shader screen coordinates) made
   every feature vanish the moment fog was switched on; it is the one bug this gate had.
@@ -291,10 +292,11 @@ Install line: `featown: ARMED feature@0x46A610=1 (skip follows tagpu_feat.on)`; 
 - **Occlusion, the exit condition**: verified against the engine's *own* draw rather than
   against a scaffold. Parked units and the walking commander are clipped by the same
   canopies; a unit one row nearer stays in front.
-- **Fog: NOT at parity — see §9.** Feeding the shader screen coordinates instead of world
-  ones made every feature vanish the moment fog came on (fixed), but the rule the native
-  passes share still does not reproduce the engine's overlay: with a small explored area
-  our features are drawn over cells the engine paints black.
+- **Fog: not at parity *at G13a* — closed by G13c, see §9.** Feeding the shader screen
+  coordinates instead of world ones made every feature vanish the moment fog came on
+  (fixed in this gate), and the rule the native passes shared then still did not reproduce
+  the engine's overlay: with a small explored area our features were drawn over cells the
+  engine paints black. §9 has the cause and the fix; the same A/B now agrees to 0.05 %.
 - **The wrecks guard holds live.** Dropping `wrecks` from `native.on` makes the pass keep
   gathering and counting but **emit nothing** — `FEATOWN skip=0` and `(nothing emitted:
   native.on needs "wrecks" before we can own the leaf)` in the log line — and putting it
