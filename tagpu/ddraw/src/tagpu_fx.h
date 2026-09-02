@@ -17,7 +17,9 @@ typedef struct TAGPU_FXVIEW {
     int r0, rows;                /* the row sweep's base row and count: a row  */
                                  /* key is (feat?3:1) + (row-r0)*4 (tagpu_feat)*/
     int vw, vh, scafOn;          /* viewport size; scene-depth scaffold armed  */
-    int fogMode;                 /* LosType & 3                                */
+    int fogMode;                 /* bit0 = the engine's fog overlay is live    */
+                                 /* (the grid itself says what it paints);     */
+                                 /* bit1 = LosType true-LOS mode, diagnostic   */
     const unsigned short* fogGrid;  /* engine screen fog grid, corner masks    */
     int fogCols, fogRows;           /* its dims (view-anchored 32-px cells)    */
     int fogOrgX, fogOrgY;           /* world x, projected z of its cell (0,0)  */

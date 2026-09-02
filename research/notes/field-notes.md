@@ -211,7 +211,7 @@ are enough to start and play a skirmish headless — this is how G2 was finished
 ARM Commander — live unit read + engine world→screen projection + GPU draw, over the real frame. The
 world→screen formula (`sx=wx-eyeX+128`, `sy=wy-alt/2-eyeY+32`) is verified correct against live units.
 
-## Verification discipline — three ways a gate has lied to us
+## Verification discipline — four ways a gate has lied to us
 
 Each of these produced a confident wrong answer in a real session. They are cheap to
 guard against and expensive to diagnose after the fact.
@@ -242,6 +242,18 @@ our source without the engine's. It proposed a floor-mod in `fog_org()`, where t
 hidden in the grey band, which is exactly what the engine's `0x4658E0` does. Both "fixes"
 would have broken parity. **Where our code mirrors engine arithmetic, say so in a comment**
 naming the address — that is what stops the next reader, human or agent, from correcting it.
+
+**4. A parity diff over a fogged frame measures the fog edge, not the thing under test.**
+G13b's terrain pass matches the engine's blit *exactly* — 0 differing pixels — but the
+first whole-viewport diff read **0.91 %** and looked like a rendering error. All of it was
+the 2–4 px band where the engine dithers its fog edge sprites and we threshold cleanly, a
+deviation that was already known and deliberate. The number was identical at four unrelated
+camera positions, which is the tell: **a real geometry error scales with content, a constant
+across cameras is a constant feature of the frame.** Before calling a diff a defect, either
+turn the confounder off (the LineOfSight setting is sticky per instance and had silently
+carried over from the previous launch) or exclude its neighbourhood — dilate the difference
+mask by ~8 px and re-measure what is left. On this gate that left 90.6 % of the viewport
+with **zero** differing pixels, which is the number that means something.
 
 ## Our engine patches
 

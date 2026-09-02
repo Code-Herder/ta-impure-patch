@@ -40,9 +40,9 @@ sites — 2 patches cover all 3 rasterise-into-composite sites, and it matches
 
 `tagpu_owndraw.c` was the first of what are now four passes that install engine-code
 detours through the shared `tagpu_detour.c`: **`owndraw`** (unit rasterisers),
-**`fxown`** (effects), **`featown`** (the feature leaf `0x46A610`) and, planned for G13b,
-**`terrown`** (the terrain pass `0x483FA0`). They all obey one rule, and it has cost time
-in three separate gates:
+**`fxown`** (effects), **`featown`** (the feature leaf `0x46A610`) and **`terrown`**
+(the terrain pass `0x483FA0` *and* the fog overlay `0x4848E0`, G13b). They all obey one
+rule, and it has cost time in four separate gates:
 
 > **A code-patching pass installs its detours ONCE at DLL attach, and only if its trigger
 > file exists at that moment. There is no per-frame re-arm.** Patching live engine bytes
@@ -61,12 +61,55 @@ Consequences worth stating plainly:
   launch` now drops a stale `owndraw.on` when native is off and says so.
 - Because of both of the above, `tacli launch` / `scenario load` **auto-arm the patching
   companion to match its GL pass** — `owndraw` from `native.on`, `fxown` from `fx.on` or
-  `sfx.on`, `featown` from `feat.on` — and print `auto-armed …`. **Any new pass must be
-  added to that list** (`tools/tacli`, near `_ensure_featown_for_feat`), or it will appear
-  to work for whoever wrote it and fail for everyone else.
+  `sfx.on`, `featown` from `feat.on`, `terrown` from `terr.on` — and print `auto-armed …`.
+  **Any new pass must be added to that list** (`tools/tacli`, near
+  `_ensure_terrown_for_terr`), or it will appear to work for whoever wrote it and fail for
+  everyone else.
+- **A GL pass must also refuse to draw when its patch is absent**, not just log about it.
+  `terrown` made this concrete: the terrain pass paints an opaque full-viewport layer, so
+  with `terr.on` armed but `terrown.on` missing it would cover every overlay the engine
+  still draws — health bars, wireframes, the build cursor, chat — and *look* fine.
+  `tagpu_terr.c` therefore checks `tagpu_terrown_installed()` before emitting a single
+  quad and prints `NOTHING EMITTED: terrown.on must exist at DLL attach`. `tagpu_feat.c`
+  has the same shape for a different reason (it needs `native.on` to carry `wrecks`).
 - Verify from the log, never from the trigger file: each pass prints an ARMED line naming
   the sites it patched, e.g. `featown: ARMED feature@0x46A610=1`, plus a per-window skip
   counter. No ARMED line means no patch, whatever the filesystem says.
+
+## The second rule — a skip path is not always empty (G13b)
+
+`owndraw`, `fxown` and `featown` all skip *sprite* draws, so "return as the callee would"
+is the whole stub. **`terrown` is the first pass where that is wrong**, and the reason
+generalises to any future full-coverage layer:
+
+> **If the engine call you are taking over leaves state behind that later code depends
+> on, the skip path has to leave the same state behind.**
+
+Two instances in one gate:
+
+- **`0x483FA0` is why the engine's offscreen never needs clearing** — it repaints the
+  whole viewport every frame. Skip it and the overlays drawn afterwards land on last
+  frame's garbage. So the skip path fills the viewport rect with a chosen palette index
+  (which is also what makes the inverted composite possible — terrain-depth §7.3).
+- **`0x4848E0`'s first act is the lazy rebuild of the screen fog grid** that all four
+  native passes sample. Skip it whole and the grid freezes. So the skip path replicates
+  exactly those five instructions and nothing else.
+
+`tagpu_detour.c` grew one helper for this shape, **`tagpu_detour_leaf_call`**: the
+flag-set path does `pushad` / `push [esp+0x24]` (the callee's first stack argument, at
+that `esp`) / `call <cdecl C fn>` / `add esp,4` / `popad` / `ret n`. `popad` does not
+touch flags and restores every register, so the skipped call stays indistinguishable
+from one that returned normally. `tagpu_detour_leaf` also took an `nst` range of **5..16**
+for it — `0x483FA0`'s first instruction boundary at or past five bytes is **nine**
+(`sub esp,0x48` is only 3), and the bytes past our 5-byte `jmp` are NOPped.
+
+**And a rule for the pass on the other side of the patch:** when a detour's skip path
+writes something the composite then depends on, the two live on different threads and
+must not disagree. Arming is guarded (`filled` — do not invert until a filled frame
+exists), *dis*arming is the mirror hazard (the engine's frame is already filled when the
+skip drops, so the GL pass keeps drawing for exactly one more frame), and a screen the
+game thread draws without ever reaching the patched call needs a stall timeout. All
+three are written up with their symptoms in terrain-depth §7.6.
 
 ---
 

@@ -67,6 +67,8 @@
 #include "tagpu_fx.h"
 #include "tagpu_sfx.h"
 #include "tagpu_feat.h"
+#include "tagpu_terr.h"
+#include "tagpu_terrown.h"
 #include "tagpu_glsl.h"
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
@@ -217,12 +219,15 @@ static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
               s_uScafOn, s_uScafP;
 static GLint  s_uWaterT, s_uWaterMode, s_uDigT;
 static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepthScale;
+static GLint  s_uCKey = -1, s_uCSurfSz = -1, s_uCVp = -1;  /* composite: the key */
 static float  s_zoom = 1.0f;
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
 static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
 static const unsigned short* s_fogGrid = NULL;
 static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
+static unsigned s_fillSeq = 0;   /* terrain key-fill sequence + stall counter */
+static int      s_fillStall = 0;
 /* world origin of fog grid cell 0 on one axis: the builder's rounded eye>>5
    turned back into world px, i.e. 32*col0 + 16 (0x4843C0 head, 0x4848E0).
    `%` truncating toward zero is DELIBERATE, not a floor-mod bug: the builder
@@ -314,11 +319,44 @@ static const char* CVS =
     "out vec2 uv;\n"
     "void main(){ uv = vec2(p.x, p.y);\n"
     "  gl_Position = vec4(p.x*2.0-1.0, 1.0-p.y*2.0, 0.0, 1.0); }\n";
+/* THE COMPOSITE INVERTS ONCE WE OWN THE TERRAIN (G13b).
+   Until then our passes only ever covered sprites, so the rule was "drop our
+   empty pixels and let the engine's frame show". Terrain covers the whole
+   viewport, so that rule would hide everything the engine still draws inside
+   it — health bars, nanoframe wireframes, the build cursor, chat, dialogs.
+   In place of its terrain blit, tagpu_terrown.c fills the viewport rect of the
+   engine's offscreen with one palette index; every OTHER index there is by
+   construction something the engine drew afterwards, so we discard OUR
+   fragment at those pixels and its own already-drawn frame shows through.
+   uKey < 0 keeps the pre-G13b behaviour exactly. texelFetch, not texture(),
+   because the surface is an INDEX texture whose filter state belongs to
+   cnc-ddraw and may be linear — interpolated palette indices are garbage. */
 static const char* CFS =
     "#version 330 core\n"
-    "in vec2 uv; out vec4 frag; uniform sampler2D uTex;\n"
-    "void main(){ vec4 c = texture(uTex, uv);\n"
-    "  if (c.a < 0.004 && max(max(c.r, c.g), c.b) < 0.004) discard; frag = c; }\n";
+    "in vec2 uv; out vec4 frag;\n"
+    "uniform sampler2D uTex;\n"
+    "uniform sampler2D uSurf;\n"
+    "uniform ivec2 uSurfSz;\n"
+    "uniform vec4 uVp;\n"          /* the rect the key fill covers, game px */
+    "uniform int uKey;\n"
+    "void main(){\n"
+    "  vec4 c = texture(uTex, uv);\n"
+    "  bool empty = c.a < 0.004 && max(max(c.r, c.g), c.b) < 0.004;\n"
+    "  vec2 px = uv * vec2(uSurfSz);\n"
+    /* Only inside the viewport is the engine's frame our key fill. Outside it
+       the frame is UI we never touched, so the old rule stands there — and a
+       UI pixel that happens to BE the key index can never be mistaken for it. */
+    "  if (uKey >= 0 && px.x >= uVp.x && px.x < uVp.x + uVp.z &&\n"
+    "                   px.y >= uVp.y && px.y < uVp.y + uVp.w) {\n"
+    "    ivec2 p = clamp(ivec2(px), ivec2(0), uSurfSz - 1);\n"
+    "    if (int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5) != uKey) discard;\n"
+    /* the engine drew nothing here and neither did we: never let the raw key
+       fill reach the screen — black is what the engine paints for "no world" */
+    "    if (empty) { frag = vec4(0.0, 0.0, 0.0, 1.0); return; }\n"
+    "  }\n"
+    "  if (empty) discard;\n"
+    "  frag = c;\n"
+    "}\n";
 
 /* downsample: 2x FBO -> 1x FBO, same orientation, LINEAR sampler at the 1x
    texel centres = exact 2:1 box filter; fractional edge alpha is the AA */
@@ -416,6 +454,13 @@ static void init_gl(void)
     glDeleteShader(cvs); glDeleteShader(cfs);
     glUseProgram(s_cprog);
     glUniform1i(glGetUniformLocation(s_cprog, "uTex"), 0);
+    glUniform1i(glGetUniformLocation(s_cprog, "uSurf"), 1);
+    s_uCKey = glGetUniformLocation(s_cprog, "uKey");
+    s_uCSurfSz = glGetUniformLocation(s_cprog, "uSurfSz");
+    s_uCVp = glGetUniformLocation(s_cprog, "uVp");
+    /* a GLSL uniform defaults to 0, and uKey 0 is an ACTIVE key — the whole
+       frame would invert against palette index 0. Default it off explicitly. */
+    if (s_uCKey >= 0) glUniform1i(s_uCKey, -1);
     glUseProgram(0);
 
     GLuint dvs = mksh(GL_VERTEX_SHADER, DVS), dfs = mksh(GL_FRAGMENT_SHADER, DFS);
@@ -889,7 +934,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int fxOn = tagpu_fx_armed(f->frame_counter);
     int sfxOn = tagpu_sfx_armed(f->frame_counter);
     int featOn = tagpu_feat_armed(f->frame_counter);
-    if (!s_armed && !fxOn && !sfxOn && !featOn) return;
+    int terrOn = tagpu_terr_armed(f->frame_counter);
+    if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn) return;
     if (s_state == 0) init_gl();
     if (s_state != 1 || !tagpu_r3d_ensure()) return;
 
@@ -956,7 +1002,18 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    cell from the map cells: a corner IS a map cell's centre. */
                 s_fogOrgX = fog_org(eyeX);
                 s_fogOrgY = fog_org(eyeY);
-                fogMode = (lostype & 3);
+                /* "fog is on" is NOT LosType bit0 — that bit is only the
+                   MAPPING option. The overlay runs every frame and what it
+                   paints is decided entirely by the grid bytes: the builder
+                   writes the grey mask only when LosType&2 and the black mask
+                   only where MAPPED is clear, so an inactive mode is already an
+                   all-zero grid and costs nothing to sample. Gating on bit0
+                   dropped the whole rule under true-LOS-without-mapping
+                   (LosType=14, a reachable skirmish setting: LineOfSight cycle
+                   stage 1 with the mapping option off) — and since G13b
+                   suppresses the engine's overlay, that would delete the grey
+                   band outright instead of merely disagreeing with it. */
+                fogMode = 1 | (lostype & 2);
                 /* the grey band's darken is a palette remap, not a scale:
                    0x4BFE10 rewrites every pixel p as shadeLUT[p] through
                    *(TAProgram+0xCC) (256 bytes, everything folded into the
@@ -1213,8 +1270,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     }
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
-    int nfx = 0, nfeat = 0;
-    if (fxOn || sfxOn || featOn) {
+    int nfx = 0, nfeat = 0, nterr = 0;
+    if (fxOn || sfxOn || featOn || terrOn) {
         fv.ta = ta; fv.eyeX = eyeX; fv.eyeY = eyeY;
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.gw = gw; fv.gh = gh; fv.ss = s_ss ? 2 : 1; fv.fogMode = fogMode;
@@ -1247,11 +1304,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.fogTex = s_fogTex; fv.fogLut = s_fogLutTex;
         fv.r0 = r0; fv.rows = rows;
         fv.frame_counter = f->frame_counter;
-        /* features first: they own the depth the units are tested against */
+        /* terrain first (the frame's far plane), then features: they own the
+           depth the units are tested against */
+        if (terrOn) nterr = tagpu_terr_gather(&fv);
         if (featOn) nfeat = tagpu_feat_gather(&fv);
         if (fxOn || sfxOn) nfx = tagpu_fx_gather(&fv);
     }
-    if (nu == 0 && nfx == 0 && nfeat == 0) return;
+    /* NEVER return early while we own the terrain: the engine's frame is a
+       flat key fill inside the viewport, and only the composite below turns it
+       back into a picture. tagpu_terr_gather hands the draw back on any bail,
+       so nterr == 0 usually means the engine is painting terrain again — but a
+       hard bail (no atlas, bad map pointer) can leave a key-filled frame with
+       nothing of ours to cover it, and that frame still has to be composited. */
+    int terrOwned = tagpu_terrown_filled();
+    if (nu == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !terrOwned) return;
 
     /* ---- build geometry (body); shadow reuses it with an offset ---- */
     static int firstv[513];
@@ -1280,7 +1346,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         for (k = 0; k < nm; k++) nv = emit_fx_model(tagpu_fx_model(k), nv, fxKey);
     }
     int fxLast = nv;
-    if (nv == 0 && nfx == 0 && nfeat == 0) return;
+    if (nv == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !terrOwned) return;
 
     /* ---- native selection rects (ui-markers: the ONLY marker interleaved
        with unit draws — the engine's is unreadable under our pixels, redraw
@@ -1345,7 +1411,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glScissor(vpL * ss, vpT * ss, vw * ss, vh * ss);
     }
 
-    /* features (trees, rocks, splats, GAF wrecks) draw FIRST and write real
+    /* terrain is the frame's implicit far plane: it draws under everything,
+       writes depth at a key below every other band, and (since it is now the
+       bottom layer) paints the fog's solid black itself. Own program. */
+    if (nterr) tagpu_terr_render(&fv, s_palTex);
+
+    /* features (trees, rocks, splats, GAF wrecks) draw next and write real
        depth, so every unit body below is occluded by them through the depth
        buffer — this is what the G12a scaffold was standing in for. Its own
        program; the unit program and VAO are (re)bound right after. */
@@ -1465,11 +1536,35 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     /* ---- composite over the frame (restore the letterbox viewport) ---- */
+    int keyOn = -1;
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
     glUseProgram(s_cprog);
     glBindVertexArray(s_cvao);
     glEnable(GL_BLEND);
     x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied */
+    /* the inverted composite, and only once the engine has actually run a
+       key-filled frame — on the frame the skip is first set its surface still
+       carries a real terrain blit, and inverting on that would hide the world */
+    /* ...and only while the fill is actually still running. If the game thread
+       starts drawing a screen that never reaches 0x483FA0, its surface stops
+       carrying our key and inverting against it would black that screen out;
+       a stalled sequence simply stops the inversion and leaves our own FBO
+       covering the viewport, which is always safe and self-corrects. */
+    {
+        unsigned seq = tagpu_terrown_fill_seq();
+        if (seq != s_fillSeq) { s_fillSeq = seq; s_fillStall = 0; }
+        else if (s_fillStall < 1000) s_fillStall++;
+    }
+    keyOn = (f->surface_tex && terrOwned && s_fillStall < 30) ? tagpu_terr_key() : -1;
+    if (s_uCKey >= 0) glUniform1i(s_uCKey, keyOn);
+    if (keyOn >= 0) {
+        GLint sz[2]; sz[0] = gw; sz[1] = gh;
+        if (s_uCSurfSz >= 0) glUniform2iv(s_uCSurfSz, 1, sz);
+        if (s_uCVp >= 0) x_glUniform4f(s_uCVp, (float)vpL, (float)vpT,
+                                       (float)vw, (float)vh);
+        x_glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)f->surface_tex);
+    }
     x_glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, s_colTex);
     x_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -1483,9 +1578,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         last = f->frame_counter;
         char b[160];
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d foglut=%d%s",
-                  nu - nwr, nwr, nsel, nv, gw, gh, ss, s_subpix, scafOn, fogMode, s_fogLut,
-                  s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
+                  "native: %d unit(s) %d wreck(s) %d sel %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d%s",
+                  nu - nwr, nwr, nsel, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
+                  lostype, s_fogLut, keyOn, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
     }
     s_vtrunc = 0;
@@ -1541,6 +1636,7 @@ void tagpu_native_glreset(void)
     s_fogCols = s_fogRows = 0; s_fogGrid = NULL; s_fogLut = 0;
     tagpu_fx_glreset();
     tagpu_feat_glreset();
+    tagpu_terr_glreset();
 }
 
 int tagpu_native_wrecks_armed(void)

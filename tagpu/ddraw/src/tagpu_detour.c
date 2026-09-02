@@ -46,24 +46,54 @@ int tagpu_detour_write(unsigned int va, const unsigned char* bytes, int n)
     return 1;
 }
 
+/* land the 5-byte jmp on `va` and NOP whatever is left of the stolen bytes */
+static int detour_land(unsigned int va, const unsigned char* stub, int nst)
+{
+    unsigned char jmp5[5];
+    unsigned char nops[16];
+    jmp5[0] = 0xE9;
+    { int32_t rel = (int32_t)((unsigned int)(size_t)stub - (va + 5)); memcpy(jmp5 + 1, &rel, 4); }
+    if (!tagpu_detour_write(va, jmp5, 5)) return 0;
+    if (nst > 5) {
+        memset(nops, 0x90, sizeof nops);
+        tagpu_detour_write(va + 5, nops, nst - 5);
+    }
+    return 1;
+}
+
 int tagpu_detour_leaf(unsigned int va, const unsigned char* stolen, int nst,
                       volatile unsigned char* flag, unsigned char retn)
 {
     unsigned char* s = tagpu_detour_stub();
     unsigned char* p = s;
-    unsigned char jmp5[5];
-    if (!s) return 0;
+    if (!s || nst < 5 || nst > 16) return 0;
     p = tagpu_detour_cmp_flag(p, flag);
     *p++ = 0x74; *p++ = 0x03;                          /* jz +3                */
     *p++ = 0xC2; *p++ = retn; *p++ = 0x00;             /* ret n                */
     memcpy(p, stolen, (size_t)nst); p += nst;
     *p++ = 0xE9; tagpu_detour_rel(p, va + (unsigned)nst); p += 4;
-    jmp5[0] = 0xE9;
-    { int32_t rel = (int32_t)((unsigned int)(size_t)s - (va + 5)); memcpy(jmp5 + 1, &rel, 4); }
-    if (!tagpu_detour_write(va, jmp5, 5)) return 0;
-    if (nst > 5) {                                     /* pad a 6-byte steal   */
-        unsigned char nop = 0x90;
-        tagpu_detour_write(va + 5, &nop, 1);
-    }
-    return 1;
+    return detour_land(va, s, nst);
+}
+
+int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst,
+                           volatile unsigned char* flag, unsigned char retn,
+                           void (__cdecl *fn)(void*))
+{
+    unsigned char* s = tagpu_detour_stub();
+    unsigned char* p = s;
+    if (!s || !fn || nst < 5 || nst > 16) return 0;
+    p = tagpu_detour_cmp_flag(p, flag);
+    *p++ = 0x74; *p++ = 0x11;                          /* jz stolen (+17)      */
+    /* entry esp E: [E]=retaddr, [E+4]=arg1. pushad leaves esp at E-0x20, so
+       arg1 sits at [esp+0x24]; the cdecl call is cleaned by us, and popad
+       restores every register (and does not touch flags) before the ret. */
+    *p++ = 0x60;                                       /* pushad               */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x24;/* push [esp+0x24]      */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)fn); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;             /* add esp,4            */
+    *p++ = 0x61;                                       /* popad                */
+    *p++ = 0xC2; *p++ = retn; *p++ = 0x00;             /* ret n                */
+    memcpy(p, stolen, (size_t)nst); p += nst;
+    *p++ = 0xE9; tagpu_detour_rel(p, va + (unsigned)nst); p += 4;
+    return detour_land(va, s, nst);
 }

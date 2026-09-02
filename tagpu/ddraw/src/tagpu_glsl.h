@@ -72,6 +72,20 @@
     "    if (taFogC.x >= 0.5) discard;\n" \
     "    if (taFogC.y >= 0.5 && (uFog & 2) == 2) discard;\n" \
     "  }\n"
+/* terrain edition (G13b). Terrain is the frame's bottom layer, so where the
+   engine's overlay paints an unexplored cell SOLID BLACK it must paint black
+   too — discarding would punch a hole through to the engine's frame, which no
+   longer holds terrain (it holds tagpu_terrown.c's key fill). The engine's
+   black is DrawBar with GUI colour 0, i.e. palette index 0, so take it from
+   the live palette rather than assuming vec3(0). */
+#define TAGPU_GLSL_FOG_TERRAIN \
+    "  vec2 taFogC = vec2(0.0);\n" \
+    "  if ((uFog & 1) == 1) {\n" \
+    "    taFogC = taFog(vWorld);\n" \
+    "    if (taFogC.x >= 0.5) {\n" \
+    "      frag = vec4(texelFetch(uPal, ivec2(0, 0), 0).rgb, 1.0); return;\n" \
+    "    }\n" \
+    "  }\n"
 /* the overlay's darken over what stays visible in grey: the engine remaps
    every pixel's palette INDEX through *(TAProgram+0xCC) (0x4BFE10 for a full
    cell, 0x4B86E0 through an edge sprite), so we do the same on the index

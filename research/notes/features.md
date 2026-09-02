@@ -386,6 +386,24 @@ pair with a single `uFogGrid`:
   `LosType` bit1 needs no flag: the builder only writes the grey mask when it is
   set, so "mapped" mode simply has an all-zero grey byte.
 
+**One correction to this rule, found by G13b.** The passes gated the whole thing on
+`LosType` **bit 0** — which is only the *mapping* option, not "fog is on". Under true
+LOS with mapping off (`LosType = 14`, what `LineOfSight` cycle stage 1 gives when the
+SKIRMISH mapping toggle is clear) the grid carries a fully populated grey mask while
+`b0` is all zero, so the engine paints a grey band and our shaders drew none of it.
+It was invisible while the engine still drew its own overlay over its own terrain, and
+became a missing band the moment G13b suppressed that overlay. The gate is now simply
+*"the grid uploaded"* — by the paragraph above, an inactive mode is already an all-zero
+mask, so there is nothing else to test. (Measured that this does **not** double-darken
+where the engine's overlay is still live: the overlay remaps the 8bpp offscreen while
+our fragments composite over it afterwards, so it can never touch them — mean grey-band
+luminance 62.21 engine vs 61.77 ours. terrain-depth.md §7.5–7.6.)
+
+**And one addition.** `TAGPU_GLSL_FOG_TERRAIN` is the fifth user of this snippet and the
+only one that does not discard in unexplored black: terrain is the bottom layer since
+G13b, so it must *paint* that black (palette index 0, the engine's `DrawBar` GUI colour
+0) — discarding would punch a hole straight through to the composite key fill.
+
 **Measured, `feat-forest` on Two Continents, GL framebuffer, engine-draw vs
 ours at the same camera** (`feat.on="log passive"` vs `feat.on=log`):
 

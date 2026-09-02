@@ -13,6 +13,16 @@ decompiler output read for this build this session. **[CORPUS]** = TADR/`tamem.h
 name cross-checked against our bytes. **[INFERRED]** = my reading, not yet
 runtime-confirmed. `main` = `*(void**)0x511DE8` (the `TAdynmemStruct`).
 
+> **Status after G13b (2026-09-02).** These markers are now the *only* engine pixels
+> left inside the viewport — terrain, features, units, effects and the fog overlay are
+> all ours. They survive because the composite reads the engine's frame as a mask:
+> everywhere it is not the terrain key fill, we refuse to cover it
+> ([terrain & depth](terrain-depth.html) §7.3). That machinery is also exactly what a
+> gate to take these natively would start from — the key already identifies each
+> marker's pixels, and this page says who draws them and from what state. The
+> selection rectangle is already re-drawn natively (`tagpu_native.c`), because it is
+> the one marker that interleaves with unit pixels and is otherwise buried under them.
+
 ---
 
 ## Summary — the six things to know

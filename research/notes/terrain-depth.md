@@ -23,7 +23,9 @@ runtime-confirmed. `main` = `*(void**)0x511DE8` (the `TAdynmemStruct`).
    terrain pass is **`0x483FA0`**: a flat, colour-only blit of pre-rendered
    **32×32-px 8bpp tiles** indexed by a `u16` tile map. **No height, no depth, no
    LOS enters the terrain draw** — the "3D" look of cliffs is baked into the tile
-   art at map-compile time. [BINARY-VERIFIED]
+   art at map-compile time. [BINARY-VERIFIED] **Since G13b it is ours** — §7 has
+   the native pass, the two detours that take it, and the compositing model that
+   owning a full-viewport layer forced.
 2. **Terrain height exists as data, not as pixels**: one byte per **16×16-px tile**
    (`FeatureStruct.height`, grid at `*(main+0x14287)`, stride 0xD). Everything that
    *positions* things — features, LOS stamps, unit binning caps, the debug grid —
@@ -44,6 +46,9 @@ runtime-confirmed. `main` = `*(void**)0x511DE8` (the `TAdynmemStruct`).
    for soft borders. Driven by two runtime maps we can read: the per-player **LOS
    counter map** (byte per 32-px tile, `PlayerStruct+0x7C`) and the shared
    **MAPPED bitmask** (`u16` per 32-px tile, `*(main+0x14273)`). [BINARY-VERIFIED]
+   **Since G13b this pass is ours too** — it has to be, because its shade remap
+   would rewrite the terrain key fill; the one thing its skip path must keep is the
+   lazy grid rebuild every native pass samples (§7.2).
 
 ---
 
@@ -437,6 +442,23 @@ All grids are **32-px tiles**, dims `LOSW = FeatureMapSizeX/2`,
   true LOS (else explored==visible), bit2 = terrain-blocking raycast LOS, bit3 =
   screen fog grid valid. [BINARY-VERIFIED]
 
+**The four bits are independent, and "fog is on" is NOT bit 0** [LIVE-VERIFIED
+2026-09-02, G13b]. `LineOfSight` cycle stage 1 with the SKIRMISH *mapping* option
+off gives **`LosType = 14`** (bits 1,2,3 — true LOS, raycast, grid valid; mapping
+clear), and the grid in that state reads, per cell `[b0, b1]`:
+
+```
+00 0F 00 0F 00 07 00 03 00 03 00 01 00 00 …
+```
+
+— **`b0` all zero** (nothing is unexplored, because mapping is off) while **`b1` is
+fully populated** (plenty is out of LOS). So the engine paints a live grey band with
+`LosType & 1 == 0`. Any shader gate of the form `if (LosType & 1)` drops the whole
+rule in this configuration; the correct gate is simply *"the grid exists"*, since
+the builder already encodes an inactive mode as an all-zero mask. This cost G13c a
+latent bug that only became visible when G13b suppressed the engine's own overlay
+(§7.5).
+
 ---
 
 ## 6. SYNTHESIS — depth truth for the native-res GL scene pass
@@ -464,7 +486,8 @@ stood in for it is superseded as the occluder.
 **What we must synthesise for a full-scene GL pass that reproduces stock
 occlusion at native resolution — and where to read the inputs live:**
 
-1. **Terrain = backdrop at far depth.** Match the engine exactly by rendering (or
+1. **Terrain = backdrop at far depth.** ***Done — G13b, §7 below.*** Match the
+   engine exactly by rendering (or
    letting cnc-ddraw upscale) the tile layer at depth=FAR. No terrain fragment
    may ever occlude a unit — that is engine behaviour, not a shortcut. If we want
    *better*-than-engine (cliffs occluding), the height field is
@@ -530,6 +553,211 @@ occlusion at native resolution — and where to read the inputs live:**
 
 ---
 
+## 7. Owning the terrain — G13b [LIVE-VERIFIED 2026-09-02]
+
+`tagpu_terr.c` reproduces §2 and `tagpu_terrown.c` takes the draw. The drawing half
+is as small as §2 makes it look; **the gate is the compositing model, and owning a
+full-viewport layer inverts it.**
+
+### 7.1 The pass
+
+Armed by `tagpu_terr.on` (tokens `log`, `passive`, `over`, `key=N`). It rides the
+native pass's frame like the feature pass, walks the same grid §2 walks, and emits
+one quad per visible cell. Three things fall out of §2 exactly as predicted:
+
+- **Terrain is the frame's far plane**, so it draws at depth key `0.10` — under the
+  flat-feature band (`0.40`) and under particle layers 0..2 (`0.30`), i.e. under
+  everything, and it writes depth so nothing has to be ordered against it again.
+- **Water animates for free.** It is palette cycling and the native pass already
+  re-uploads the live palette every frame; sampling it is the whole implementation.
+- **The engine's arithmetic is reproduced, not corrected.** `cdq; and edx,0x1f;
+  add; sar 5` is a division *toward zero*, and `cols` is `ceil((viewW+fracX)/32)`
+  with the remainder test the engine does at `0x48403E`. `div32_trunc`/`ceil32`
+  carry a comment saying so, because a floor-based "fix" would be wrong for a
+  negative eye.
+
+**The atlas is built once per map**, not per frame: `LoadMap` builds `TILE_SET` and
+nothing changes it afterwards. A `GL_TEXTURE_2D_ARRAY` is not viable — Two Continents
+has **5062 tiles** against the usual 2048-layer cap — so it is one `GL_R8` texture of
+fixed 32×32 cells, 64 per row: **2048×2560 for 5062 tiles (5.0 MB)**, sized from the
+count and capped at `GL_MAX_TEXTURE_SIZE`. A map change is the `TILE_SET` pointer or
+its count moving; measured live, switching Two Continents → Anteer Strait **in the
+same process** rebuilt it to 2048×3552 for 7051 tiles.
+
+**Fog needed one change, and only one.** Terrain is now the bottom layer, so where the
+overlay paints an unexplored cell **solid black it must paint black rather than
+discard** — there is nothing behind it any more. That is `TAGPU_GLSL_FOG_TERRAIN` in
+`tagpu_glsl.h`, taking the black from palette index 0 (the engine's `DrawBar` GUI
+colour 0) rather than assuming `vec3(0)`. Otherwise the G13c rule drops in unchanged:
+terrain **darkens, never hides**, in grey.
+
+### 7.2 Taking the draw — and why the skip path is not empty
+
+One prologue detour, `tagpu_detour.c`'s shape, on
+
+```
+0x483FA0   83 EC 48 | 8B 0D E8 1D 51 00      sub esp,0x48; mov ecx,[0x511DE8]
+```
+
+— **nine** stolen bytes (the first instruction boundary at or past five), resuming at
+`0x483FA9`, with the four bytes past our `jmp` NOPped. `tagpu_detour_leaf` grew a
+`nst` range of 5..16 for it.
+
+But **the terrain repaint is why the engine's offscreen never needs clearing** (§2).
+Skip it outright and the overlays the engine still draws land on last frame's garbage.
+So the skip path is not a bare `ret 4`: it calls back into C and **fills the viewport
+rect of the offscreen with one palette index, the KEY** — `base = ctx+0x0C`,
+`pitch = ctx+0x08`, clamped to the context's own inclusive clip rect `ctx+0x1C..0x28`.
+`tagpu_detour_leaf_call` is that variant (`pushad`, `push [esp+0x24]` = the callee's
+first stack arg, `call fn`, `add esp,4`, `popad`, `ret n`).
+
+**The fog overlay goes with it**, second detour, same flag:
+
+```
+0x4848E0   83 EC 2C | 53 | 55                sub esp,0x2C; push ebx; push ebp
+```
+
+Two reasons: its grey band is a shade-LUT remap of pixels *already in the frame*, so it
+would rewrite the key fill into flat grey blobs — and every one of them would read as
+"the engine drew something here"; and we have reproduced the overlay exactly since G13c,
+so drawing it twice is wrong anyway. **But its first act is the lazy rebuild of the
+screen fog grid we sample**, and dropping that would freeze the grid and take G13c's
+parity with it. The skip path replicates those five lines and nothing else:
+
+```
+4848f2  test byte [esi+0x14281],bl   ; bl = 8
+4848f8  jne  0x484911
+4848fa  call 0x4843c0                ; rebuild the grid
+484904  or   word [eax+0x14281],bx   ; LosType |= 8
+```
+
+### 7.3 The inverted composite
+
+Until G13b our passes only ever covered *sprites*, so the composite rule was "drop our
+empty pixels and let the engine's frame show" (`tagpu_native.c`, `CFS`). Terrain covers
+the whole viewport, so that rule would hide everything the engine still draws inside
+it — health bars over HotUnits (`0x469BD7`), nanoframe wireframes, the build-cursor
+rect, chat, dialogs, the spectate overlay.
+
+**The key inverts it in one line.** Every index in the viewport other than the key is,
+by construction, something the engine drew *after* our fill, so:
+
+```glsl
+if (uKey >= 0) {
+  ivec2 p = clamp(ivec2(uv * vec2(uSurfSz)), ivec2(0), uSurfSz - 1);
+  if (int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5) != uKey) discard;
+}
+```
+
+— we discard **our** fragment there and the engine's own already-drawn frame shows
+through. No second full-screen draw and no palette plumbing: cnc-ddraw already holds
+the 8bpp frame as an `R8` **index** texture whose texel *(x,y)* is game pixel *(x,y)*
+(`g_ogl.surface_tex_ids[tex_index]`, plumbed through `TAGPU_FRAME.surface_tex`).
+`texelFetch`, not `texture()` — the filter state on that texture belongs to cnc-ddraw
+and may be linear, and interpolated palette indices are garbage. `uKey < 0` is the
+pre-G13b behaviour exactly.
+
+Two ordering rules keep it honest:
+
+- **`uKey` is armed only once the engine has actually run a key-filled frame.** On the
+  frame the skip is first set, the engine's surface still holds a real terrain blit;
+  inverting on that would hide the whole world for a frame. `tagpu_terrown_filled()`
+  is cleared by `set_skip()` and set by the fill.
+- **`tagpu_native_frame` must never return early while we own the terrain.** The
+  engine's frame is a flat key fill and only the composite turns it back into a
+  picture; the gather hands the draw back on every bail, so `nterr == 0` also means
+  the engine is painting terrain again.
+
+**Choosing the key.** Index 0 is not free — the fog's own solid black is `DrawBar` GUI
+colour 0. The default is **254**, and it is not a guess: the engine's 16-entry GUI
+colour table at `main+0xDCB` reads
+`00 04 02 06 D5 05 CB 55 5A 09 E9 20 D3 FD C2 FF` — it uses `0xFD` and `0xFF` and
+**leaves `0xFE` in the gap between them**. Verified on captured frames too: index 254
+appears nowhere in the panel, minimap, top bar, chat, build panel or selection boxes.
+`key=N` in `tagpu_terr.on` moves it if a mod's UI ever collides.
+
+### 7.4 Verified
+
+`terr1` on Two Continents (`feat-forest`) and Anteer Strait, 1024×768.
+
+| Check | Result |
+|---|---|
+| **Drawing parity** (`terr.on="log over"`, ours drawn over the engine's, features muted) | Fog off: **0** differing pixels in every terrain-only band; the only differences in the whole frame are our own native units (panel below). Fog on, measured by dilating the difference mask 8 px to exclude the boundary: 90.6 % of the viewport survives that and **0** of it differs |
+| **Sub-tile scroll** | exact at `frac=(0,0)`, `(6,8)` and `(25,31)`; outside the fog edge, 289 px of 625 306 differ (0.046 %) and they hug the boundary. No seams, no grid pattern. **The whole-viewport figure read 0.91 % at all four cameras** — a constant across unrelated positions is a feature of the frame, not a geometry error (field-notes "Verification discipline" §4) |
+| **Ownership** | the engine's 8bpp surface inside the viewport is **99.33–99.98 % key** depending on how much UI is up — **no terrain left at all**; the remainder is the cursor and the overlays listed below |
+| **The inversion** | engine chat text, the self-destruct countdown, `PAUSED`, the green selection box, the build panel and the mouse cursor all survive **inside** the viewport, over our terrain |
+| **Fog** | engine's own overlay vs ours at the same camera: **99.06–99.39 %** of the viewport agrees on lit-vs-grey (`feat-forest`), **99.48 %** of pixels identical at a fully-fogged map corner, mean abs diff **0.32/255**. The disagreement is a 2–4 px band on the boundary — the engine dithers its edge sprites, we threshold cleanly (G13c, deliberate). **No double-darkening** where the engine's overlay is still live: mean grey-band luminance **62.21** (engine drawing its own) vs **61.77** (ours) — a second remap would roughly halve it |
+| **Map change, in-process** | Two Continents → Anteer Strait rebuilt the atlas 2048×2560/5062 → 2048×3552/7051, dims 336×400 → 289×292 |
+| **Map corner** | at the far corner the grid ends exactly on the last cell, `off-map=0`, no garbage tiles, terrain to the viewport edge |
+| **Disarm** | `terr.on=off` restores the engine's terrain **and** the fog overlay; zero key pixels left |
+| **Watchdog** | `tagpu_overlay.off` stops the beat; after 90 frames `terrown` restores both and the frame is a normal engine draw. The flushes run *before* the overlay's own early return, which is why this works at all |
+| **Ownership flips** | six `passive`↔owned transitions, capturing after each: **zero** key pixels on screen every time, black at its 0.03–0.04 % baseline (dark terrain). The hand-back frame is covered by §7.6 |
+| **Patch absent** | `terr.on` armed with `terrown.on` missing: `cells=0`, the log says why, and the frame is a normal engine draw — the pass does not paint over the overlays it cannot let through |
+| **Key change, live** | `key=200` end to end: the engine's fill becomes palette index 200 and the composite follows it, GL frame unchanged |
+| **Stress** | 200v200 at sim +3, terrain + features + units + wrecks + effects all native: **59.7 fps** measured over 20 s off the 60-frame `terr:` cadence — terrain replaces a CPU blit of the whole viewport with 667 quads, so it is not a cost |
+
+<figure><img src="assets/shots/terr-parity.png" alt="terrain parity: engine, ours, difference"><figcaption>Drawing parity. LEFT the engine's own terrain on its 8bpp surface, MIDDLE ours drawn over it in the same frame, RIGHT the difference — <strong>only our native units</strong>. Every terrain-only band of the viewport differs by zero pixels.</figcaption></figure>
+
+<figure><img src="assets/shots/terr-ownership.png" alt="terrain ownership: the key fill and our frame"><figcaption>Ownership and the inverted composite. LEFT the engine's 8bpp surface while we own the draw — 99.9 % one palette index, the key, with only the cursor and the engine's own overlays left in it (99.3 % once a build panel and chat are up). RIGHT our GL frame of the same run.</figcaption></figure>
+
+<figure><img src="assets/shots/terr-fog-ab.png" alt="fog: engine overlay vs ours"><figcaption>Fog, with the engine's overlay suppressed and ours in its place. LEFT the engine drawing its own terrain and its own <code>0x4848E0</code>, RIGHT ours. 99 % of the viewport agrees on lit-vs-grey; the disagreement is the 2–4 px dithered edge band.</figcaption></figure>
+
+### 7.5 One thing G13b had to fix in G13c
+
+`fogMode` was `LosType & 3` and every pass gated the whole fog rule on **bit 0** — which
+is only the **MAPPING** option, not "fog is on". Under **true LOS without mapping**
+(`LosType=14`: `LineOfSight` cycle stage 1 with the mapping option off, a reachable
+skirmish setting) the engine's grid carries a live grey mask while our shaders skipped
+the rule entirely. Harmless while the engine still drew its own overlay on top of its
+own terrain; **fatal once G13b suppresses that overlay**, because then nothing draws the
+grey band at all. The gate is now "the grid uploaded": what the overlay paints is
+decided entirely by the grid bytes, and an inactive mode is already an all-zero grid.
+
+### 7.6 Failure modes, and why none of them can show the key
+
+Review found three ways the key fill could reach the screen. All are closed, and the
+shape of the fixes is worth keeping:
+
+- **Emitting without owning.** Our terrain is opaque and covers the whole viewport, so
+  drawing it while the composite is *not* inverting hides every engine overlay. The pass
+  therefore emits only when it owns the draw, when `over` asks for it explicitly, or on
+  the single hand-back frame below — and when `tagpu_terrown.on` was not armed at DLL
+  attach it emits nothing and says so, rather than silently blanking the overlays.
+- **The hand-back frame.** Arming is guarded (`filled` gates the inversion until a
+  key-filled frame exists) but *dis*arming is the mirror hazard: the engine's frame is
+  already key-filled when the skip drops. So the gather reads `filled` **before** it
+  touches the skip and emits terrain for that one last frame, in the same call that
+  releases it — the composite stops inverting and our own terrain covers the fill.
+- **A screen that never calls `0x483FA0`.** The fill bumps a sequence; when it stalls for
+  30 presents the composite stops inverting. Otherwise a non-world screen drawn by the
+  game thread would be blacked out by a key test it can never satisfy.
+
+Two more rules make the remainder harmless: **the key test is scoped to the viewport
+rect** (outside it the engine's frame is UI we never filled, so a UI pixel that happens
+to *be* index 254 can never be mistaken for our fill), and **inside it, a pixel the
+engine did not paint and we did not draw is painted black** rather than discarded — so a
+hard bail, or an atlas too large for `GL_MAX_TEXTURE_SIZE`, degrades to black and never
+to raw key colour. Verified across six ownership flips: **zero** key pixels on screen.
+
+One review finding was **wrong** and is recorded so it is not "fixed" later: making
+`fogMode` bit0 mean "the grid is live" does **not** double-darken when the engine's own
+overlay is still running. The overlay remaps pixels in the **8bpp offscreen**; our
+fragments are in the GL FBO and are composited over that surface afterwards, so it can
+never touch them. Measured with the engine drawing its own terrain and overlay while we
+draw features: mean grey-band luminance **62.21 (engine) vs 61.77 (ours)** — a second
+remap would roughly halve it.
+
+### 7.7 What is left inside the viewport
+
+Health bars, nanoframe wireframes, the build-cursor rect, chat and dialogs — all still
+the engine's, all surviving through the key. Taking them too is the natural next cut and
+it needs no new machinery: the key already tells the composite exactly which pixels they
+are. One known deviation from suppressing `0x4848E0`: the engine used to shade-remap its
+*own* overlays under the grey band, and we no longer do — visible only if a health bar
+were ever drawn on out-of-LOS ground, which the engine does not do.
+
+---
+
 ## Appendix — address & offset tables
 
 ### Functions
@@ -538,7 +766,9 @@ occlusion at native resolution — and where to read the inputs live:**
 |---|---|---|
 | `0x483FA0` | **terrain tile blit** (body to `0x4843B3`) | stdcall(OFFSCREEN*), ret 4 |
 | `0x418310` | map **debug overlay** (mapDebugMode/`0x511DD0` gated) | stdcall(OFFSCREEN*), ret 4 @`0x418BA8` |
-| `0x4C6E70` → `0x4CBEF1` | full 32×32 tile copy (colour-only) | — |
+| `0x4C6E70` → `0x4CBEF1` | full 32×32 tile copy (colour-only). `0x4CBEF1` is `(ctx,x,y,gfx)` **cdecl**, dst = `ctx[+0x0C] + ctx[+0x08]·y + x`, 32 rows of 8 dwords — this is where the OFFSCREEN pitch/base offsets are read from [BINARY-VERIFIED G13b] | `0x4C6E70` stdcall ×4, ret 0x10 |
+| `0x4C5E70` | fill a default OFFSCREEN (called by both blit wrappers when `ctx == NULL`) | stdcall(ctx*), ret 4 |
+| `0x4C6B10` | **set the OFFSCREEN clip rect** — `ecx = ctx`, writes 4 dwords at `ctx+0x1C` [BINARY-VERIFIED G13b] | thiscall ×4, ret 0x10 |
 | `0x4B8150` → `0x4CBDD1`/`0x4CC51D` | clipped GAF-descriptor blit (edge tiles; raw/RLE) | stdcall, ret 0x10 |
 | `0x46A610` | **feature draw** (3 bodies: 3D wreck → DrawUnit @`0x46A762`; GAF wreck; normal GAF) | stdcall(ctx,tile,tx,ty), ret 0x10 |
 | `0x4658E0` | feature LOS/MAPPED visibility test | stdcall ×6 args, ret 0x18 |
@@ -557,6 +787,59 @@ occlusion at native resolution — and where to read the inputs live:**
 | `0x482AC0` | `UNITS_RebuildLOS` — per-unit stamp refresh | — |
 | `0x471F90` | particle-layer draw walker (layer n at `*(main+0x38D77)+n·0x10`; smoke/fire/wake/nano — effects.md §7) | (ctx, n), `stdcall` `ret 8` |
 | `0x48C190` | get watched/next-selected unit (debug + spectate) | — |
+
+### `OFFSCREEN` — the software draw context [BINARY-VERIFIED G13b]
+
+12 dwords on the caller's stack (`DrawGameScreen` builds it at `[esp+0x34]`, so
+`0x483FA0` sees it at `[esp+0x5C]` after its own prologue). Only four fields matter
+to us, and the terrain key-fill (§7.2) needs all four:
+
+| Off | Field | Read from |
+|---|---|---|
+| `+0x08` | **pitch** (bytes per row) | `0x4CBEF1`: `dst = base + pitch·y + x` |
+| `+0x0C` | **pixel base** | ditto |
+| `+0x1C/0x20/0x24/0x28` | **clip rect L/T/R/B, INCLUSIVE** | `0x4C6B10` writes exactly these 4 dwords |
+
+There is **no width or height field** — the clip rect is the only bound on the last
+row of the buffer, which is why `tagpu_terrown.c` refuses to fill a context whose
+rect does not validate rather than trusting the viewport fields alone.
+
+### Prologue bytes of the functions we detour [BINARY-VERIFIED G13b]
+
+| VA | Bytes | Steal | Resume |
+|---|---|---|---|
+| `0x483FA0` terrain | `83 EC 48 · 8B 0D E8 1D 51 00` | **9** (`sub esp,0x48` is only 3, so the first boundary at or past 5 is 9) | `0x483FA9` |
+| `0x4848E0` fog overlay | `83 EC 2C · 53 · 55` | **5** exactly | `0x4848E5` |
+| `0x46A610` feature leaf | `8B 4C 24 08 · 53` | 5 | `0x46A615` |
+
+### The fog overlay's lazy grid rebuild — what a skip path must replicate
+
+```
+4848e6  mov  esi,[0x511DE8]
+4848ec  mov  ebx,8
+4848f2  test byte [esi+0x14281],bl    ; LosType bit3 = "grid is current"
+4848f8  jne  0x484911                 ; already current -> straight to the cells
+4848fa  call 0x4843c0                 ; rebuild the screen fog grid
+4848ff  mov  eax,[0x511DE8]
+484904  or   word [eax+0x14281],bx    ; LosType |= 8
+```
+
+Five lines, and they are **the only engine state the overlay writes**. Every native
+pass samples the grid this rebuilds, so suppressing `0x4848E0` without replicating
+them freezes the grid and silently takes G13c's fog parity with it (§7.2).
+
+### GUI colours — `main+0xDCB` [BINARY-VERIFIED G13b, live read]
+
+The 16-entry table `DrawBar` and the rest of the GUI index by colour number. Read
+live on Two Continents:
+
+```
+00 04 02 06 D5 05 CB 55 5A 09 E9 20 D3 FD C2 FF
+```
+
+Entry 0 is palette index 0 — the fog's own solid black, which is why **index 0 is not
+a free key**. The table uses `0xFD` and `0xFF` and **leaves `0xFE` (254) unused**,
+which is where G13b's composite key lives (§7.3).
 
 ### DrawGameScreen call sites (world section)
 
