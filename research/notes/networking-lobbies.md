@@ -441,12 +441,22 @@ November 2024 and no MR for host support was found.
 - Ubuntu 24.04's `wine` is pinned at 9.0 in `noble/universe`; WineHQ's own repo
   is not configured on this box. WineHQ packages install under `/opt/wine-*`, so
   a newer wine can coexist with the distro one rather than replacing it.
-- `tools/tacli` hard-codes `WINEDLLOVERRIDES=ddraw=n,b` at `tools/tacli:198`.
-  Multiplayer needs the DirectPlay overrides appended to that — and, since the
-  whole point is two instances in one game, it wants to be a **per-launch
-  option** rather than a new constant. The string to append is
-  `dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n`.
-  A launch that hosts should also `pkill -x dplaysvr.exe` first.
+- **`tacli` drives this now** (2026-09-02). `tacli launch <inst> --dplay` installs
+  native DirectPlay into that instance's prefix and appends
+  `dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n` to
+  the hard-coded `ddraw=n,b`; it is sticky per instance, so a single-player
+  instance keeps wine's builtin. `--free-dplay-port` kills a stale `dplaysvr.exe`
+  first and belongs on the **hosting** launch only — the port is owned
+  machine-wide, so doing it while a peer hosts takes that game down too.
+- **`dpinstall.sh` must not overwrite in place.** tacli clones prefixes with
+  `cp -al`, so every instance shares one inode per `system32` file with the
+  template; a plain `cp` would have written Microsoft's `dplayx` through the
+  hardlink into the template and all ten existing prefixes at once, including two
+  games another session had running. It uses `cp --remove-destination`.
+- **Let the prefix settle between `dptest` and a launch.** Starting TA into a
+  prefix whose wineserver is still shutting down after a killed `dptest host`
+  produced a launch that created no process at all and no `ErrorLog.txt`. The
+  relaunch was fine.
 - **Wine 11 is not needed for any of this.** Native DirectPlay works on the
   stock wine 9.0 the instances already use, because it replaces both halves.
 - Upgrading to wine 11 **on its own does not unblock multiplayer.** It buys
@@ -531,17 +541,25 @@ between peers. What it relies on from the network model, and what is still open:
   the receiver (`0x49D270`) is spliced to resolve `WeapIdx >= 3` into the side slot and
   clamps anything beyond the unit's count.
 - An **unarmed** peer receiving `WeapIdx >= 3` would index past its three inline slots
-  into `UnitOrders`. The intended guard is the unit-sync CRC handshake
-  (`CRC_weapons`, `def+0x146`, folded into `CRC_all`), but what the lobby does on a
-  mismatch is not established, and the "You have CRC errors" text people quote is not
-  in the binary.
-- **None of this has been tested yet, but it is no longer blocked.** wine's builtin
-  DirectPlay cannot host at all (`DPWSCB_Open`: "session creation is not yet supported"),
-  which is why the 2026-09-02 attempt got no further than an empty `SELGAME`. Native
-  `dplayx` + `dpwsockx` + `dplaysvr.exe` fix that on the stock wine 9.0 the instances
-  already use — see §"DirectPlay under Wine — measured" above, and `tools/dpinstall.sh`.
-  What remains is `tacli` work and the two-instance run. The full log is in
-  [extra-weapons](extra-weapons.md#multiplayer-what-blocked-it-and-how-it-was-unblocked).
+  into `UnitOrders`. The guard is the unit-sync CRC handshake (`CRC_weapons`,
+  `def+0x146`, folded into `CRC_all`), which the module now extends to `weapon4..N`.
+- **Tested 2026-09-02, in three two-instance games over loopback.** Two armed peers
+  stay in lockstep: the host spawned a ten-laser tower, it replicated to the joiner
+  through TA's own create packet, and both peers reported the same
+  `fires by slot: 0=12 3=1 4=12 5=1 6=12 7=1 8=2` — the joiner's launches coming
+  purely from `0x0D WEAPON_FIRED`, since it owns nothing there and never ran
+  `AutoAim`. An armed host against an **unarmed** joiner loses exactly the extended
+  unit types: the engine's type table drops from 281 to 279 on *both* sides and the
+  game starts, silently. So a mismatched peer can never see a `WeapIdx >= 3` packet,
+  because no unit of that type exists in the game. Both controls (both-armed and
+  both-unarmed) keep all 281. Full detail and the CRC formula are in
+  [extra-weapons](extra-weapons.md#multiplayer-who-computes-what-and-the-guard).
+- **How to run it**: `tools/mp_lobby.sh <host-instance> <join-instance> [map]`, with
+  both instances launched `--dplay` (the host also `--free-dplay-port`). wine's
+  builtin DirectPlay cannot host at all (`DPWSCB_Open`: "session creation is not yet
+  supported"), which is why the first attempt got no further than an empty
+  `SELGAME`; native `dplayx` + `dpwsockx` + `dplaysvr.exe` fix that on the stock
+  wine 9.0 the instances already use.
 
 ## Open questions / uncertainty
 
@@ -569,9 +587,11 @@ between peers. What it relies on from the network model, and what is still open:
 11. ~~A working `dxnt.cab` source.~~ **Answered 2026-09-02**: the March 2008 redist on
    archive.org carries it, Microsoft-signed and signature-verified. Feb 2010 remains
    undownloadable from every documented URL.
-12. Whether TA itself (not just the probe) forms a game over native DirectPlay, and what the
-   lobby does with a unit-CRC mismatch — assertions 8/9 in `extra-weapons.md`, now unblocked
-   but not yet run.
+12. ~~Whether TA itself (not just the probe) forms a game over native DirectPlay, and what the
+   lobby does with a unit-CRC mismatch.~~ **Answered 2026-09-02**: it does — two `tacli`
+   instances reach one live game over loopback (`tools/mp_lobby.sh`) — and on a unit-CRC
+   mismatch TA **disables the affected unit types on both peers and starts anyway**, with no
+   lobby message of any kind. See `extra-weapons.md` §Multiplayer.
 
 ---
 

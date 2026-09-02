@@ -187,6 +187,13 @@ DPLAY: *0 Internet TCP/IP Connection For DirectPlay · 1 IPX Connection For Dire
   punctuation. `fill` reports the field's actual content, so read what it says. It
   refuses outright if your text is longer than the field's `maxchars`, rather than
   handing you a truncation and calling it a fill.
+- **Click a field before you fill it.** An unfocused field turns your text into
+  *quickkeys*: the first character actuates whatever button owns that letter on the
+  screen (on `SELGAME`, `J` is `JOINGAME`'s) and the rest is dropped. The symptom is a
+  fill that "kept only the first character", or a screen that jumped somewhere. So
+  `ui <inst> click NICKNAME` then `ui <inst> fill NICKNAME …`. Filling a field that
+  already holds the value you want is also worth skipping — `fill` clears first, and
+  clearing is the slow half.
 - **`hover` rarely shows you anything.** It parks the pointer and reports label text
   that appeared, but no tooltip surfaced over the build panel in testing — consistent
   with `help` being empty there. Use it to set up a hover state, not to read one.
@@ -314,6 +321,11 @@ tools/tacli log w1 -g "weapons: (loader|VIOL|MISM)"
   slot:`). It works **unarmed** too — that instance is your control. With stock
   content and the module armed, every counter but `loader`/`stock_splice` must
   read 0 and `mismatch`/`violation` must be 0; that is the regression check.
+- It also prints `type CRCs:` — each unit type's `CRC_weapons` and `CRC_all`, the
+  unit-sync values. Two instances that agree about a type print the same pair;
+  armed and unarmed differ for exactly the types carrying `Weapon4+`. In a
+  multiplayer game TA **disables** a type the peers disagree about (it vanishes
+  from `tacli units` on both sides) and starts anyway, silently.
 - **Content goes in a `.ufo`, never as loose files** (the engine finds a loose
   `units/*.fbi` and then drops the type). `tools/hpipack.py` writes/reads the
   archive, `tools/cobclone.py` gives a COB per-weapon script copies, and
@@ -451,16 +463,51 @@ storage's does not); `tacli log` returns a tail of the file, so count lines in t
   game is a real GPU client — a handful at a time, not dozens.
 - **`SELPROV`'s `SELECT` kills the game on the *non*-TCP/IP rows** —
   `Access Violation ... at 0023:00000000` in `ErrorLog.txt`, reproducible with plain
-  `tacli keys` and nothing to do with `ui`. IPX was the row that did it. **Row 0,
-  *Internet TCP/IP Connection For DirectPlay*, selects cleanly** and goes to `TCP.GUI`.
-  Reading the provider list and moving its selection are always safe.
-- **Multiplayer is no longer blocked by the platform** (2026-09-02). What blocked it was
-  wine's builtin DirectPlay, which implements the client half only and cannot host at all
-  (`DPWSCB_Open`: "session creation is not yet supported", true through wine `master`).
-  Native Microsoft DirectPlay fixes it on the stock wine 9.0 these instances use:
-  `tools/dpinstall.sh <prefix>` installs it, `tools/dptest/` proves a prefix is ready.
-  Two traps — override the EXEs by name too (`dplaysvr.exe,dpnsvr.exe=n`) or `Open` hangs
-  silently, and `pkill -x dplaysvr.exe` before hosting since a stale one holds UDP 47624
-  across prefixes. **`tacli` cannot drive this yet**: it hard-codes
-  `WINEDLLOVERRIDES=ddraw=n,b` and needs a per-launch DirectPlay option first. Driving
-  recipes go here once a real two-instance game has actually run.
+  `tacli keys` and nothing to do with `ui`. IPX was the row that did it.
+  ***Internet TCP/IP Connection For DirectPlay* selects cleanly** and goes to `TCP.GUI`.
+  **Select it by name, never by row number**: with wine's builtin DirectPlay it is row
+  0, with native DirectPlay (below) the list is four rows in a different order and it is
+  row 3. Reading the provider list and moving its selection are always safe.
+## Multiplayer: two instances in one game
+
+Works since 2026-09-02, over loopback, on the stock wine 9.0 these instances use.
+What used to block it was wine's builtin DirectPlay, which implements the client half
+only and cannot create a session at all (`DPWSCB_Open`: "session creation is not yet
+supported", true through wine `master`); Microsoft's own DirectPlay in front of it
+fixes that. `tools/dpinstall.sh` installs it into a prefix and `tools/dptest/` proves
+a prefix can host before you go blaming the game.
+
+```bash
+tools/tacli launch h1 --dplay --free-dplay-port     # the host
+tools/tacli launch j1 --dplay                       # the joiner
+tools/mp_lobby.sh h1 j1 'Two Continents'            # menus -> battle room -> live
+```
+
+- `--dplay` installs native DirectPlay into that instance's prefix and appends the
+  overrides to `ddraw=n,b`. It is **sticky per instance**, so a single-player instance
+  keeps wine's builtin and nothing about it changes.
+- `--free-dplay-port` kills a stale `dplaysvr.exe`. DirectPlay's name server outlives
+  the game that started it and owns UDP 47624 **machine-wide**, so a leftover one makes
+  the next host fail `Open(DPOPEN_CREATE) = DPERR_GENERIC` — which looks exactly like a
+  broken prefix and is not. Put it on the **hosting** launch only: doing it while a peer
+  is hosting takes that game down too.
+- `MP_NO_START=1 tools/mp_lobby.sh …` stops in the battle room instead of starting, for
+  when you want to read or change the lobby.
+- After running `dptest` against an instance's prefix, **let it settle** before
+  launching TA there. Starting the game into a prefix whose wineserver is still shutting
+  down produced a launch with no process and no `ErrorLog.txt`; the relaunch was fine.
+
+Three lobby facts that are not guessable, all encoded in `mp_lobby.sh`:
+
+- **`START` ungreys only when every player is ready — the host included.** Each client
+  lists *itself* as row 0, so the host's own toggle is `READY0` on its own screen and
+  the joiner's is `READY0` on theirs. `PLAYER0`/`READY0`/`PLAYER1`… are created at
+  runtime and sit past the end of the default `ui` snapshot; reach them with
+  `ui <inst> show READY1`.
+- **Lobby state syncs**, so set the map on the host and read it back on the joiner
+  (`ui <join> show MAPNAME`) as a cheap proof the link is live.
+- **`scenario apply` on the host replicates its units to the joiner** through TA's own
+  create packet — which is what makes a scripted two-instance test possible. Apply on
+  one peer only; both peers then see the units.
+
+Do not `pkill -x dplaysvr.exe` by hand while another agent's game is hosting.

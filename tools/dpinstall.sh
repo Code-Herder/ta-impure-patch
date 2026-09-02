@@ -31,11 +31,15 @@ else
     DEST="$PFX/drive_c/windows/system32"; ARCH="win32"
 fi
 
-for f in $FILES; do cp -f "$SRC/$f" "$DEST/$f"; done
+# --remove-destination, not plain cp: tacli clones prefixes with `cp -al`, so every
+# instance shares one inode per system32 file with the template. Overwriting in place
+# would write through the hardlink into the template and every other instance at once.
+for f in $FILES; do cp -f --remove-destination "$SRC/$f" "$DEST/$f"; done
 # On a 64-bit prefix the two servers must also shadow the 64-bit builtins,
 # or dplayx launches wine's stub dplaysvr and Open() hangs.
 if [ "$ARCH" = win64 ]; then
-    cp -f "$SRC/dplaysvr.exe" "$SRC/dpnsvr.exe" "$PFX/drive_c/windows/system32/"
+    cp -f --remove-destination "$SRC/dplaysvr.exe" "$SRC/dpnsvr.exe" \
+        "$PFX/drive_c/windows/system32/"
 fi
 
 echo "installed native DirectPlay into $DEST  ($ARCH prefix)"
