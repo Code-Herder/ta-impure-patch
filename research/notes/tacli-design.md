@@ -202,6 +202,18 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    `SELECT` button crashes**; moving the list selection is safe, so the provider list can
    be read without risking the instance.
 
+7. **Phase 1.4 — JSON scenarios (`tacli scenario`)** — **SCOPED 2026-09-01** by
+   `/grill-me`, not yet built. A strict JSON file describes a *situation* — 200 units
+   fighting, a wreck of a chosen type, the camera already on it — and one command launches
+   an instance, drives `ui click SINGLE/Skirmish/Start`, waits for the game and spawns it by
+   calling the engine's own `UNITS_CreateUnit` / `SpawnFeatureOnMap` / `Order2Unit`.
+   Nothing is addressed by numeric id: units, features, orders and engine switches are all
+   **name-keyed and resolved against the live game**, so a mod that swaps what an index means
+   cannot corrupt a scenario — the failure mode TA's binary `.sav` is built out of.
+   The CLI compiles and validates; the DLL scans a private line format and re-checks
+   everything, creating **nothing** unless every entity resolves. Full design, engine recipe,
+   schema and phases: **`scenario-format.md`**.
+
 ## Why (constraints that shaped it)
 
 Human keeps the PC: no fullscreen grabs, no X-level injection, no focus stealing; the
