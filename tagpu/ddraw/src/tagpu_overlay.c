@@ -1,11 +1,14 @@
-/* tagpu_overlay.c — G1 GPU overlay, compiled INTO our cnc-ddraw fork.
-   Reuses the fork's already-loaded GL entry points; self-loads the few it lacks.
-   Draws translucent GL 3.3-core geometry over the live game frame, toggled by a
-   sentinel file (tagpu_overlay.off). No separate module => no runtime LoadLibrary,
-   which is what destabilised TA under wine. */
+/* tagpu_overlay.c — per-present entry point of the GPU pass, compiled INTO our
+   cnc-ddraw fork (no separate module => no runtime LoadLibrary, which is what
+   destabilised TA under wine). Called from render_ogl.c just before SwapBuffers.
+   Runs the file-triggered services (input, peek, ui, catalogues, scenario),
+   detects GL context changes, flushes the engine detours, logs the live roster
+   tacli reads, then dispatches the GL passes (scaffold, native, write-back).
+   tagpu_overlay.off is the kill switch for everything we draw in GL.
+   The G1/G2/Phase-A proof markers (corner spinner, mouse dot, per-unit and
+   per-piece triangles) were retired 2026-09-02; the log lines they shared stay. */
 
 #include <windows.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "opengl_utils.h"   /* the fork's extern GL function pointers   */
@@ -22,26 +25,12 @@
 #include "tagpu_cat.h"
 #include "tagpu_scenario.h"
 
-/* GL entry points the fork does not already expose — load once ourselves. */
-typedef void (APIENTRY *PFN_UNIFORM4F)(GLint,GLfloat,GLfloat,GLfloat,GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM2F)(GLint,GLfloat,GLfloat);
-typedef void (APIENTRY *PFN_UNIFORM1F)(GLint,GLfloat);
-typedef void (APIENTRY *PFN_GETPROGINFO)(GLuint,GLsizei,GLsizei*,GLchar*);
-typedef void (APIENTRY *PFN_DISABLE)(GLenum);
-typedef void (APIENTRY *PFN_BLENDFUNC)(GLenum,GLenum);
+/* GL entry point the fork does not already expose — load once ourselves. */
 typedef void (APIENTRY *PFN_READPIXELS)(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,void*);
 
-static PFN_UNIFORM4F   x_glUniform4f;
-static PFN_UNIFORM2F   x_glUniform2f;
-static PFN_UNIFORM1F   x_glUniform1f;
-static PFN_GETPROGINFO x_glGetProgramInfoLog;
-static PFN_DISABLE     x_glDisable;
-static PFN_BLENDFUNC   x_glBlendFunc;
 static PFN_READPIXELS  x_glReadPixels;
 
-static int   s_state = 0;   /* 0=unloaded 1=ready 2=failed */
-static GLuint s_prog, s_vao, s_vbo, s_ebo;
-static GLint  s_uAngle, s_uOffset, s_uScale, s_uColor;
+static int   s_state = 0;   /* 0=unloaded 1=ready (reset on GL context change) */
 
 static void olog(const char* s)
 {
@@ -59,75 +48,12 @@ static void* getgl(const char* n)
     return p;
 }
 
-static const char* VS =
-    "#version 330 core\n"
-    "layout(location=0) in vec2 pos;\n"
-    "uniform float uAngle; uniform vec2 uOffset; uniform vec2 uScale;\n"
-    "void main(){ float c=cos(uAngle), s=sin(uAngle);\n"
-    "  vec2 r=vec2(pos.x*c-pos.y*s, pos.x*s+pos.y*c);\n"
-    "  gl_Position=vec4(r*uScale+uOffset,0.0,1.0); }\n";
-static const char* FS =
-    "#version 330 core\n"
-    "out vec4 frag; uniform vec4 uColor; void main(){ frag=uColor; }\n";
-
-static GLuint mkshader(GLenum t, const char* src)
-{
-    GLuint s = glCreateShader(t);
-    glShaderSource(s, 1, &src, NULL);
-    glCompileShader(s);
-    GLint ok=0; glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok){ char log[512]; glGetShaderInfoLog(s,sizeof log,NULL,log);
-              olog("tagpu: shader compile FAILED:"); olog(log); s_state=2; }
-    return s;
-}
-
 static void init_overlay(void)
 {
-    { char b[320]; _snprintf(b, sizeof b,
-        "init entry: xwgl=%p glCreateShader=%p glShaderSource=%p glUseProgram=%p "
-        "glGenVertexArrays=%p glBindVertexArray=%p glGenBuffers=%p glDrawElements=%p "
-        "glGetUniformLocation=%p glEnable=%p",
-        (void*)xwglGetProcAddress,(void*)glCreateShader,(void*)glShaderSource,
-        (void*)glUseProgram,(void*)glGenVertexArrays,(void*)glBindVertexArray,
-        (void*)glGenBuffers,(void*)glDrawElements,(void*)glGetUniformLocation,
-        (void*)glEnable);
-      olog(b); }
-
-    x_glUniform4f        = (PFN_UNIFORM4F)  getgl("glUniform4f");
-    x_glUniform2f        = (PFN_UNIFORM2F)  getgl("glUniform2f");
-    x_glUniform1f        = (PFN_UNIFORM1F)  getgl("glUniform1f");
-    x_glGetProgramInfoLog= (PFN_GETPROGINFO)getgl("glGetProgramInfoLog");
-    x_glDisable          = (PFN_DISABLE)    getgl("glDisable");
-    x_glBlendFunc        = (PFN_BLENDFUNC)  getgl("glBlendFunc");
-    x_glReadPixels       = (PFN_READPIXELS) getgl("glReadPixels");
-    if (!x_glUniform4f||!x_glUniform2f||!x_glUniform1f||!x_glDisable||!x_glBlendFunc){
-        olog("tagpu: missing a GL uniform/blend proc"); s_state=2; return; }
-
-    GLuint vs=mkshader(GL_VERTEX_SHADER,VS), fs=mkshader(GL_FRAGMENT_SHADER,FS);
-    if (s_state==2) return;
-    s_prog=glCreateProgram(); glAttachShader(s_prog,vs); glAttachShader(s_prog,fs);
-    glLinkProgram(s_prog);
-    GLint ok=0; glGetProgramiv(s_prog,GL_LINK_STATUS,&ok);
-    if(!ok){ char log[512]; if(x_glGetProgramInfoLog) x_glGetProgramInfoLog(s_prog,sizeof log,NULL,log);
-             olog("tagpu: link FAILED:"); olog(log); s_state=2; return; }
-    glDeleteShader(vs); glDeleteShader(fs);
-    s_uAngle =glGetUniformLocation(s_prog,"uAngle");
-    s_uOffset=glGetUniformLocation(s_prog,"uOffset");
-    s_uScale =glGetUniformLocation(s_prog,"uScale");
-    s_uColor =glGetUniformLocation(s_prog,"uColor");
-
-    const float verts[]={0.0f,0.16f, -0.14f,-0.10f, 0.14f,-0.10f};
-    const unsigned short idx[]={0,1,2};
-    glGenVertexArrays(1,&s_vao); glBindVertexArray(s_vao);
-    glGenBuffers(1,&s_vbo); glBindBuffer(GL_ARRAY_BUFFER,s_vbo);
-    glBufferData(GL_ARRAY_BUFFER,sizeof verts,verts,GL_STATIC_DRAW);
-    glGenBuffers(1,&s_ebo); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,s_ebo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,sizeof idx,idx,GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,2*sizeof(float),(void*)0);
-    glBindVertexArray(0);
-    s_state=1;
-    olog("tagpu: overlay ready (built into fork, GL 3.3 core)");
+    x_glReadPixels = (PFN_READPIXELS)getgl("glReadPixels");
+    if (!x_glReadPixels) olog("tagpu: glReadPixels missing - GL capture disabled");
+    s_state = 1;
+    olog("tagpu: overlay ready (built into fork)");
 }
 
 /* Capture the composited GL framebuffer (game + our overlay) to a PPM next to the exe.
@@ -156,7 +82,7 @@ void tagpu_overlay_capture(const TAGPU_FRAME* f)
     free(buf);
 }
 
-/* ---- G2: read live engine state and draw a marker on every unit ----
+/* ---- G2: read live engine state (unit array, eye, local player, mouse) ----
    Addresses binary-confirmed against stock TA 3.1 (see wiki: field-notes / roadmap).
    All reads are read-only; guards keep us safe at the menu (no game struct yet). */
 #define TA_MAINPP     0x00511DE8u  /* TAdynmemStruct** */
@@ -386,64 +312,32 @@ static void writeback_paint(const TAGPU_FRAME* f)
 }
 
 
-/* Draw a marker at a game-space (sx,sy) using the current program/VAO/blend state. */
-static void marker(const TAGPU_FRAME* f, int sx, int sy, float r, float g, float b, float a, float scl)
-{
-    int gw = f->game_width  > 0 ? f->game_width  : 640;
-    int gh = f->game_height > 0 ? f->game_height : 480;
-    float nx = (float)sx / (float)gw * 2.0f - 1.0f;
-    float ny = 1.0f - (float)sy / (float)gh * 2.0f;
-    if (nx < -1.05f || nx > 1.05f || ny < -1.05f || ny > 1.05f) return;
-    x_glUniform4f(s_uColor, r, g, b, a);
-    x_glUniform1f(s_uAngle, 0.0f);
-    x_glUniform2f(s_uScale, scl * 0.68f, scl);   /* 0.68 ~ 480/640 aspect for a square marker */
-    x_glUniform2f(s_uOffset, nx, ny);
-    glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0);
-}
-
-/* Read TA's own mouse position from memory and draw a marker on it. Proves the
-   read->project->draw pipeline with live engine state even at the menu (no game needed).
-   Also logs it, which lets us calibrate the OS-pointer -> game-coord mapping exactly. */
-
-/* Yellow micro-marker on each posed piece origin of a unit: visual proof of the
-   unit->Object3do->PrimitiveStruct chain (wiki: unit-3do-bridge). Projection is
-   the engine's own per-vertex rule: sx=+x, sy=-z-y/2 (Render_DrawSpriteGroupUnit). */
-static void draw_piece_markers(const TAGPU_FRAME* f, char* u, int sx, int sy)
-{
-    char* o3 = *(char**)(u + U_OBJ3DO);
-    if (!ptr_ok(o3)) return;
-    int nparts = *(unsigned short*)(o3 + O3_NUMPARTS);
-    if (nparts <= 0 || nparts > 64) return;
-    for (int i = 0; i < nparts; i++) {
-        char* pr = o3 + O3_PRIM0 + i * PRIM_STRIDE;
-        if (!(*(unsigned char*)(pr + P_FLAGS) & 1)) continue;   /* COB-hidden piece */
-        int ox = *(int*)(pr + P_ORIGIN)     >> 16;
-        int oy = *(int*)(pr + P_ORIGIN + 4) >> 16;              /* model y = up   */
-        int oz = *(int*)(pr + P_ORIGIN + 8) >> 16;              /* model z = fwd  */
-        marker(f, sx + ox, sy - oz - oy / 2, 1.0f, 0.9f, 0.1f, 0.95f, 0.05f);
-    }
-}
-
-static void draw_mouse(const TAGPU_FRAME* f, char* ta)
+/* Log TA's own mouse position (game-space, read from memory). No longer drawn,
+   but still the way to read the engine's cursor without touching the user's
+   pointer (input-firewall.md). */
+static void log_mouse(const TAGPU_FRAME* f, char* ta)
 {
     int mx = *(int*)(ta + OFF_MOUSE);
     int my = *(int*)(ta + OFF_MOUSE + 4);
     if (mx < -50 || mx > 4000 || my < -50 || my > 4000) return;
-    marker(f, mx, my, 1.0f, 1.0f, 0.1f, 0.95f, 0.10f);   /* yellow dot at TA's cursor */
     static unsigned last = 0;
     if (f->frame_counter - last >= 15) { last = f->frame_counter;
         char b[96]; _snprintf(b, sizeof b, "mouse: game=(%d,%d)", mx, my); olog(b); }
 }
 
-static int draw_units(const TAGPU_FRAME* f)
+/* Walk the live unit array and log what tacli reads: the `units:` line every
+   30 frames (`scenario load` waits on alive>0, `roster` takes eye= from it) and
+   the full roster block every 300 frames (`tacli roster`). Screen coords use the
+   engine's rule sx=wx-eyeX+vpL, sy=wy-alt/2-eyeY+vpT at the 640x480 viewport. */
+static void log_units(const TAGPU_FRAME* f)
 {
     char* ta = *(char**)TA_MAINPP;
-    if ((size_t)ta < 0x600000u) return -1;          /* no game struct yet (menu) */
-    draw_mouse(f, ta);                               /* always: proves live-state read */
+    if ((size_t)ta < 0x600000u) return;             /* no game struct yet (menu) */
+    log_mouse(f, ta);
     char* beg = *(char**)(ta + OFF_BEGIN);
     char* end = *(char**)(ta + OFF_END);
-    if ((size_t)beg < 0x600000u || (size_t)end < 0x600000u || end <= beg) return -1;
-    if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return -1; /* sanity */
+    if ((size_t)beg < 0x600000u || (size_t)end < 0x600000u || end <= beg) return;
+    if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return; /* sanity */
 
     int eyeX = *(int*)(ta + OFF_EYEX);
     int eyeY = *(int*)(ta + OFF_EYEY);
@@ -451,7 +345,7 @@ static int draw_units(const TAGPU_FRAME* f)
     int gw = f->game_width  > 0 ? f->game_width  : 640;
     int gh = f->game_height > 0 ? f->game_height : 480;
 
-    int alive = 0, drawn = 0;
+    int alive = 0, onscreen = 0;
     for (char* u = beg + UNIT_STRIDE; u < end; u += UNIT_STRIDE) {
         unsigned st = *(unsigned*)(u + U_STATE);
         if (!(st & 0x10000000) || (st & 0x4000)) continue;
@@ -475,24 +369,13 @@ static int draw_units(const TAGPU_FRAME* f)
                 (int)*(short*)(u + 0xA8), wx, wy, wz, sx, sy,
                 *(float*)(u + 0x104));   /* build fraction REMAINING (build-state.md) */
             olog(db); }
-        float nx = (float)sx / (float)gw * 2.0f - 1.0f;
-        float ny = 1.0f - (float)sy / (float)gh * 2.0f;
-        if (nx < -1.05f || nx > 1.05f || ny < -1.05f || ny > 1.05f) continue; /* off-screen */
-        unsigned char owner = *(unsigned char*)(u + U_OWNER);
-        if (owner == me) x_glUniform4f(s_uColor, 0.20f, 1.00f, 0.35f, 0.95f);  /* mine: green */
-        else             x_glUniform4f(s_uColor, 1.00f, 0.25f, 0.20f, 0.95f);  /* other: red  */
-        x_glUniform1f(s_uAngle, 0.0f);
-        x_glUniform2f(s_uScale, 0.13f, 0.19f);      /* ~12px square marker in 640x480 */
-        x_glUniform2f(s_uOffset, nx, ny);
-        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0);
-        drawn++;
-        draw_piece_markers(f, u, sx, sy);
+        if (sx >= -gw / 40 && sx <= gw + gw / 40 && sy >= -gh / 40 && sy <= gh + gh / 40)
+            onscreen++;
     }
     static unsigned last = 0;
     if (f->frame_counter - last >= 30) { last = f->frame_counter;
-        char b[160]; _snprintf(b, sizeof b, "units: alive=%d drawn=%d eye=(%d,%d) me=%d",
-                               alive, drawn, eyeX, eyeY, (int)me); olog(b); }
-    return drawn;
+        char b[160]; _snprintf(b, sizeof b, "units: alive=%d onscreen=%d eye=(%d,%d) me=%d",
+                               alive, onscreen, eyeX, eyeY, (int)me); olog(b); }
 }
 
 static void oerr(const char* tag)
@@ -573,30 +456,9 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     if (s_state==0) init_overlay();
     if (s_state!=1) { writeback_paint(f); return; }
 
-    float t=(float)f->frame_counter;
-    float pulse=0.5f+0.5f*(float)sin(t*0.05f);
-
-    glUseProgram(s_prog);
-    glBindVertexArray(s_vao);
-    glEnable(GL_BLEND);
-    x_glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    /* live unit markers (the G2 proof) */
-    int units = draw_units(f);
+    /* live-state logs tacli depends on (roster, units:, mouse:) + the 3DO probe */
+    log_units(f);
     if ((f->frame_counter % 300) == 61) probe_unit_model();
-
-    /* small corner indicator so we can tell "overlay running" from "no units":
-       cyan when we have a game+units, amber pulse when not in a game */
-    x_glUniform1f(s_uAngle, t*0.03f);
-    x_glUniform2f(s_uScale, 0.11f, 0.14f);
-    x_glUniform2f(s_uOffset, -0.9f, 0.86f);
-    if (units >= 0) x_glUniform4f(s_uColor, 0.15f,0.85f,1.0f, 0.9f);
-    else            x_glUniform4f(s_uColor, 1.0f,0.7f,0.1f, 0.4f+0.4f*pulse);
-    glDrawElements(GL_TRIANGLES,3,GL_UNSIGNED_SHORT,0);
-
-    x_glDisable(GL_BLEND);
-    glBindVertexArray(0);
-    glUseProgram(0);
 
     /* G12a: scene-depth scaffold debug overlay (tagpu_scaffold.on). Own GL
        state block; leaves program/VAO at 0. */
