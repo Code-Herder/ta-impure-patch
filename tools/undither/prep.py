@@ -41,6 +41,17 @@ def measure(path):
         if name == "spec":
             undithered, step_undithered = und, step_after
 
+    # the learned restorer's output, if unditherer.infer has baked it (it replaces
+    # undither + deband, so its QA is measured on the bake as-is)
+    learned = None
+    baked = path.parent.parent / "learned" / (path.stem + ".webp")
+    if baked.exists():
+        lrgb = np.asarray(Image.open(baked).convert("RGB"), dtype=np.uint8)
+        if lrgb.shape == rgb.shape:
+            learned = f"learned/{path.stem}.webp"
+            variants["learned"] = {"step_after": round(band_step(lrgb), 2), "deband": False,
+                                   "qa": {k: round(v, 3) for k, v in qa(rgb, lrgb, st).items()}}
+
     # what restore.py's own decision tree would do with this image
     decisions = {"undither": st["dither_present"], "deband": False}
     out = rgb
@@ -72,6 +83,7 @@ def measure(path):
         "decisions": decisions,
         "qa": {k: round(v, 3) for k, v in qa(rgb, out, st).items()},
         "variants": variants,
+        "learned": learned,
     }
 
 

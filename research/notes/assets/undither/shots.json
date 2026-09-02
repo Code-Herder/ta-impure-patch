@@ -19,7 +19,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.279,
-      "mean_color_shift": 0.627,
+      "mean_color_shift": 0.443,
       "edge_retention": 0.996,
       "residual_lag1_autocorr": -0.171
     },
@@ -29,7 +29,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.954,
-          "mean_color_shift": 1.542,
+          "mean_color_shift": 1.36,
           "edge_retention": 0.985,
           "residual_lag1_autocorr": 0.051
         }
@@ -39,7 +39,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.916,
-          "mean_color_shift": 1.238,
+          "mean_color_shift": 1.064,
           "edge_retention": 0.992,
           "residual_lag1_autocorr": 0.113
         }
@@ -49,7 +49,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.805,
-          "mean_color_shift": 0.964,
+          "mean_color_shift": 0.564,
           "edge_retention": 0.988,
           "residual_lag1_autocorr": 0.099
         }
@@ -59,17 +59,27 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.75,
-          "mean_color_shift": 1.136,
+          "mean_color_shift": 0.848,
           "edge_retention": 0.995,
           "residual_lag1_autocorr": -0.139
         }
+      },
+      "learned": {
+        "step_after": 11.83,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.809,
+          "mean_color_shift": 0.134,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": 0.077
+        }
       }
     },
+    "learned": "learned/green-planet.webp",
     "env": "Green planet",
     "map": "Plains and Passes",
     "expansion": "Core Contingency",
-    "bytes": 753910,
-    "thumb": "thumbs/green-planet.webp"
+    "bytes": 753910
   },
   {
     "file": "desert.png",
@@ -91,7 +101,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.082,
-      "mean_color_shift": 0.501,
+      "mean_color_shift": 0.141,
       "edge_retention": 0.977,
       "residual_lag1_autocorr": -0.066
     },
@@ -101,7 +111,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.546,
-          "mean_color_shift": 1.562,
+          "mean_color_shift": 1.123,
           "edge_retention": 0.987,
           "residual_lag1_autocorr": -0.06
         }
@@ -111,7 +121,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.451,
-          "mean_color_shift": 1.062,
+          "mean_color_shift": 0.631,
           "edge_retention": 0.992,
           "residual_lag1_autocorr": -0.057
         }
@@ -121,7 +131,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.301,
-          "mean_color_shift": 0.738,
+          "mean_color_shift": 0.306,
           "edge_retention": 0.994,
           "residual_lag1_autocorr": -0.047
         }
@@ -131,17 +141,27 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.353,
-          "mean_color_shift": 0.88,
+          "mean_color_shift": 0.446,
           "edge_retention": 0.993,
           "residual_lag1_autocorr": -0.066
         }
+      },
+      "learned": {
+        "step_after": 31.62,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.372,
+          "mean_color_shift": 0.203,
+          "edge_retention": 0.996,
+          "residual_lag1_autocorr": -0.012
+        }
       }
     },
+    "learned": "learned/desert.webp",
     "env": "Desert",
     "map": "Painted Desert",
     "expansion": "Total Annihilation",
-    "bytes": 816987,
-    "thumb": "thumbs/desert.webp"
+    "bytes": 816987
   },
   {
     "file": "archipelago.png",
@@ -163,7 +183,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.273,
-      "mean_color_shift": 1.452,
+      "mean_color_shift": 0.186,
       "edge_retention": 0.997,
       "residual_lag1_autocorr": -0.148
     },
@@ -173,7 +193,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.845,
-          "mean_color_shift": 1.13,
+          "mean_color_shift": 0.529,
           "edge_retention": 0.996,
           "residual_lag1_autocorr": -0.113
         }
@@ -183,7 +203,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.742,
-          "mean_color_shift": 1.121,
+          "mean_color_shift": 0.369,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": -0.079
         }
@@ -193,7 +213,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.546,
-          "mean_color_shift": 1.553,
+          "mean_color_shift": 0.301,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": -0.055
         }
@@ -203,17 +223,27 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.61,
-          "mean_color_shift": 1.266,
+          "mean_color_shift": 0.257,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": -0.11
         }
+      },
+      "learned": {
+        "step_after": 15.78,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.543,
+          "mean_color_shift": 1.15,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": -0.029
+        }
       }
     },
+    "learned": "learned/archipelago.webp",
     "env": "Archipelago",
     "map": "East Indeez",
     "expansion": "Core Contingency",
-    "bytes": 691076,
-    "thumb": "thumbs/archipelago.webp"
+    "bytes": 691076
   },
   {
     "file": "lava.png",
@@ -235,7 +265,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.096,
-      "mean_color_shift": 0.511,
+      "mean_color_shift": 0.236,
       "edge_retention": 0.999,
       "residual_lag1_autocorr": -0.093
     },
@@ -245,7 +275,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.677,
-          "mean_color_shift": 0.5,
+          "mean_color_shift": 0.124,
           "edge_retention": 0.999,
           "residual_lag1_autocorr": -0.029
         }
@@ -255,7 +285,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.587,
-          "mean_color_shift": 0.434,
+          "mean_color_shift": 0.084,
           "edge_retention": 0.999,
           "residual_lag1_autocorr": -0.011
         }
@@ -265,7 +295,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.427,
-          "mean_color_shift": 0.372,
+          "mean_color_shift": 0.042,
           "edge_retention": 0.999,
           "residual_lag1_autocorr": -0.016
         }
@@ -275,17 +305,27 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.424,
-          "mean_color_shift": 0.449,
+          "mean_color_shift": 0.064,
           "edge_retention": 0.999,
           "residual_lag1_autocorr": -0.051
         }
+      },
+      "learned": {
+        "step_after": 12.73,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.412,
+          "mean_color_shift": 1.423,
+          "edge_retention": 0.999,
+          "residual_lag1_autocorr": 0.015
+        }
       }
     },
+    "learned": "learned/lava.webp",
     "env": "Lava",
     "map": "Red Hot Lava",
     "expansion": "Total Annihilation",
-    "bytes": 658874,
-    "thumb": "thumbs/lava.webp"
+    "bytes": 658874
   },
   {
     "file": "metal.png",
@@ -307,7 +347,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.237,
-      "mean_color_shift": 0.133,
+      "mean_color_shift": 0.137,
       "edge_retention": 0.997,
       "residual_lag1_autocorr": 0.041
     },
@@ -317,7 +357,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.401,
-          "mean_color_shift": 0.284,
+          "mean_color_shift": 0.241,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": 0.073
         }
@@ -327,7 +367,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.352,
-          "mean_color_shift": 0.26,
+          "mean_color_shift": 0.174,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": 0.068
         }
@@ -337,7 +377,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.288,
-          "mean_color_shift": 0.309,
+          "mean_color_shift": 0.129,
           "edge_retention": 0.998,
           "residual_lag1_autocorr": 0.063
         }
@@ -347,17 +387,27 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.324,
-          "mean_color_shift": 0.323,
+          "mean_color_shift": 0.191,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": 0.057
         }
+      },
+      "learned": {
+        "step_after": 20.66,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.418,
+          "mean_color_shift": 0.067,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": 0.109
+        }
       }
     },
+    "learned": "learned/metal.webp",
     "env": "Metal",
     "map": "Core Prime Industrial Area",
     "expansion": "Core Contingency",
-    "bytes": 597912,
-    "thumb": "thumbs/metal.webp"
+    "bytes": 597912
   },
   {
     "file": "lunar.png",
@@ -379,7 +429,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.06,
-      "mean_color_shift": 0.172,
+      "mean_color_shift": 0.149,
       "edge_retention": 0.998,
       "residual_lag1_autocorr": -0.053
     },
@@ -389,7 +439,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.435,
-          "mean_color_shift": 0.46,
+          "mean_color_shift": 0.067,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": -0.035
         }
@@ -399,7 +449,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.369,
-          "mean_color_shift": 0.544,
+          "mean_color_shift": 0.113,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": -0.021
         }
@@ -409,7 +459,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.262,
-          "mean_color_shift": 0.617,
+          "mean_color_shift": 0.143,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": -0.021
         }
@@ -419,17 +469,27 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.331,
-          "mean_color_shift": 0.612,
+          "mean_color_shift": 0.126,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": -0.027
         }
+      },
+      "learned": {
+        "step_after": 22.52,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.262,
+          "mean_color_shift": 0.052,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": 0.005
+        }
       }
     },
+    "learned": "learned/lunar.webp",
     "env": "Lunar",
     "map": "Moon Quartet",
     "expansion": "Core Contingency",
-    "bytes": 258476,
-    "thumb": "thumbs/lunar.webp"
+    "bytes": 258476
   },
   {
     "file": "ice.png",
@@ -451,7 +511,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.091,
-      "mean_color_shift": 0.093,
+      "mean_color_shift": 0.591,
       "edge_retention": 0.992,
       "residual_lag1_autocorr": -0.028
     },
@@ -461,7 +521,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.804,
-          "mean_color_shift": 2.043,
+          "mean_color_shift": 0.449,
           "edge_retention": 0.991,
           "residual_lag1_autocorr": 0.234
         }
@@ -471,7 +531,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.733,
-          "mean_color_shift": 1.621,
+          "mean_color_shift": 0.275,
           "edge_retention": 0.992,
           "residual_lag1_autocorr": 0.266
         }
@@ -481,7 +541,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.593,
-          "mean_color_shift": 1.211,
+          "mean_color_shift": 0.107,
           "edge_retention": 0.992,
           "residual_lag1_autocorr": 0.226
         }
@@ -491,17 +551,27 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.546,
-          "mean_color_shift": 1.209,
+          "mean_color_shift": 0.159,
           "edge_retention": 0.992,
           "residual_lag1_autocorr": 0.095
         }
+      },
+      "learned": {
+        "step_after": 6.48,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.726,
+          "mean_color_shift": 0.39,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": 0.388
+        }
       }
     },
+    "learned": "learned/ice.webp",
     "env": "Ice",
     "map": "Polar Range",
     "expansion": "Core Contingency",
-    "bytes": 325040,
-    "thumb": "thumbs/ice.webp"
+    "bytes": 325040
   },
   {
     "file": "red-planet.png",
@@ -523,7 +593,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.927,
-      "mean_color_shift": 2.054,
+      "mean_color_shift": 2.298,
       "edge_retention": 0.993,
       "residual_lag1_autocorr": -0.123
     },
@@ -533,7 +603,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.927,
-          "mean_color_shift": 2.054,
+          "mean_color_shift": 2.298,
           "edge_retention": 0.993,
           "residual_lag1_autocorr": -0.123
         }
@@ -543,7 +613,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.873,
-          "mean_color_shift": 1.65,
+          "mean_color_shift": 1.905,
           "edge_retention": 0.995,
           "residual_lag1_autocorr": -0.101
         }
@@ -553,7 +623,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.778,
-          "mean_color_shift": 1.03,
+          "mean_color_shift": 1.293,
           "edge_retention": 0.995,
           "residual_lag1_autocorr": -0.064
         }
@@ -563,17 +633,27 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.758,
-          "mean_color_shift": 1.844,
+          "mean_color_shift": 2.048,
           "edge_retention": 0.996,
           "residual_lag1_autocorr": -0.292
         }
+      },
+      "learned": {
+        "step_after": 4.9,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.952,
+          "mean_color_shift": 0.141,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": 0.245
+        }
       }
     },
+    "learned": "learned/red-planet.webp",
     "env": "Red Planet",
     "map": "Red River",
     "expansion": "Core Contingency",
-    "bytes": 276577,
-    "thumb": "thumbs/red-planet.webp"
+    "bytes": 276577
   },
   {
     "file": "slate.png",
@@ -595,7 +675,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.991,
-      "mean_color_shift": 0.494,
+      "mean_color_shift": 0.694,
       "edge_retention": 0.987,
       "residual_lag1_autocorr": 0.298
     },
@@ -605,7 +685,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.991,
-          "mean_color_shift": 0.494,
+          "mean_color_shift": 0.694,
           "edge_retention": 0.987,
           "residual_lag1_autocorr": 0.298
         }
@@ -615,7 +695,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.98,
-          "mean_color_shift": 0.443,
+          "mean_color_shift": 0.671,
           "edge_retention": 0.993,
           "residual_lag1_autocorr": 0.282
         }
@@ -625,7 +705,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.928,
-          "mean_color_shift": 0.256,
+          "mean_color_shift": 0.446,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": 0.211
         }
@@ -635,17 +715,27 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.954,
-          "mean_color_shift": 0.737,
+          "mean_color_shift": 0.943,
           "edge_retention": 0.995,
           "residual_lag1_autocorr": -0.075
         }
+      },
+      "learned": {
+        "step_after": 6.48,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.912,
+          "mean_color_shift": 0.116,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": 0.128
+        }
       }
     },
+    "learned": "learned/slate.webp",
     "env": "Slate",
     "map": "Temblorian Mist",
     "expansion": "Core Contingency",
-    "bytes": 733193,
-    "thumb": "thumbs/slate.webp"
+    "bytes": 733193
   },
   {
     "file": "lush.png",
@@ -667,7 +757,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.296,
-      "mean_color_shift": 0.49,
+      "mean_color_shift": 0.312,
       "edge_retention": 0.997,
       "residual_lag1_autocorr": -0.051
     },
@@ -677,7 +767,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.637,
-          "mean_color_shift": 0.352,
+          "mean_color_shift": 0.124,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": -0.021
         }
@@ -687,7 +777,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.537,
-          "mean_color_shift": 0.295,
+          "mean_color_shift": 0.065,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": 0.009
         }
@@ -697,7 +787,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.386,
-          "mean_color_shift": 0.341,
+          "mean_color_shift": 0.121,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": 0.021
         }
@@ -707,17 +797,27 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.43,
-          "mean_color_shift": 0.339,
+          "mean_color_shift": 0.138,
           "edge_retention": 0.997,
           "residual_lag1_autocorr": -0.021
         }
+      },
+      "learned": {
+        "step_after": 8.6,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.554,
+          "mean_color_shift": 1.331,
+          "edge_retention": 0.997,
+          "residual_lag1_autocorr": 0.116
+        }
       }
     },
+    "learned": "learned/lush.webp",
     "env": "Lush",
     "map": "Lusch Puppy",
     "expansion": "Core Contingency",
-    "bytes": 671241,
-    "thumb": "thumbs/lush.webp"
+    "bytes": 671241
   },
   {
     "file": "crystal.png",
@@ -739,7 +839,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.305,
-      "mean_color_shift": 0.9,
+      "mean_color_shift": 0.798,
       "edge_retention": 0.985,
       "residual_lag1_autocorr": -0.176
     },
@@ -749,7 +849,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.838,
-          "mean_color_shift": 0.603,
+          "mean_color_shift": 0.771,
           "edge_retention": 0.993,
           "residual_lag1_autocorr": -0.043
         }
@@ -759,7 +859,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.761,
-          "mean_color_shift": 0.436,
+          "mean_color_shift": 0.437,
           "edge_retention": 0.995,
           "residual_lag1_autocorr": -0.052
         }
@@ -769,7 +869,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.625,
-          "mean_color_shift": 0.461,
+          "mean_color_shift": 0.453,
           "edge_retention": 0.996,
           "residual_lag1_autocorr": -0.058
         }
@@ -779,17 +879,27 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.595,
-          "mean_color_shift": 0.531,
+          "mean_color_shift": 0.555,
           "edge_retention": 0.995,
           "residual_lag1_autocorr": -0.162
         }
+      },
+      "learned": {
+        "step_after": 13.3,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.692,
+          "mean_color_shift": 0.079,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": 0.008
+        }
       }
     },
+    "learned": "learned/crystal.webp",
     "env": "Crystal",
     "map": "Crystal Maze",
     "expansion": "Core Contingency",
-    "bytes": 872196,
-    "thumb": "thumbs/crystal.webp"
+    "bytes": 872196
   },
   {
     "file": "acid.png",
@@ -811,7 +921,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.689,
-      "mean_color_shift": 0.704,
+      "mean_color_shift": 0.328,
       "edge_retention": 0.99,
       "residual_lag1_autocorr": -0.32
     },
@@ -821,7 +931,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.689,
-          "mean_color_shift": 0.704,
+          "mean_color_shift": 0.328,
           "edge_retention": 0.99,
           "residual_lag1_autocorr": -0.32
         }
@@ -831,7 +941,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.625,
-          "mean_color_shift": 0.583,
+          "mean_color_shift": 0.219,
           "edge_retention": 0.992,
           "residual_lag1_autocorr": -0.32
         }
@@ -841,7 +951,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.512,
-          "mean_color_shift": 0.459,
+          "mean_color_shift": 0.101,
           "edge_retention": 0.995,
           "residual_lag1_autocorr": -0.281
         }
@@ -851,17 +961,27 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.486,
-          "mean_color_shift": 0.493,
+          "mean_color_shift": 0.168,
           "edge_retention": 0.994,
           "residual_lag1_autocorr": -0.381
         }
+      },
+      "learned": {
+        "step_after": 5.92,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.817,
+          "mean_color_shift": 0.973,
+          "edge_retention": 0.995,
+          "residual_lag1_autocorr": 0.148
+        }
       }
     },
+    "learned": "learned/acid.webp",
     "env": "Acid",
     "map": "Acid Pools",
     "expansion": "Core Contingency",
-    "bytes": 353839,
-    "thumb": "thumbs/acid.webp"
+    "bytes": 353839
   },
   {
     "file": "water-world.png",
@@ -883,7 +1003,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.97,
-      "mean_color_shift": 2.392,
+      "mean_color_shift": 1.699,
       "edge_retention": 0.994,
       "residual_lag1_autocorr": -0.03
     },
@@ -893,7 +1013,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.97,
-          "mean_color_shift": 2.392,
+          "mean_color_shift": 1.699,
           "edge_retention": 0.994,
           "residual_lag1_autocorr": -0.03
         }
@@ -903,7 +1023,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.936,
-          "mean_color_shift": 1.995,
+          "mean_color_shift": 1.295,
           "edge_retention": 0.994,
           "residual_lag1_autocorr": 0.074
         }
@@ -913,7 +1033,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.819,
-          "mean_color_shift": 1.24,
+          "mean_color_shift": 0.552,
           "edge_retention": 0.995,
           "residual_lag1_autocorr": 0.103
         }
@@ -923,17 +1043,27 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.689,
-          "mean_color_shift": 2.04,
+          "mean_color_shift": 1.287,
           "edge_retention": 0.994,
           "residual_lag1_autocorr": -0.192
         }
+      },
+      "learned": {
+        "step_after": 6.71,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.888,
+          "mean_color_shift": 0.527,
+          "edge_retention": 0.991,
+          "residual_lag1_autocorr": 0.328
+        }
       }
     },
+    "learned": "learned/water-world.webp",
     "env": "Water World",
     "map": "Brain Coral",
     "expansion": "Core Contingency",
-    "bytes": 283217,
-    "thumb": "thumbs/water-world.webp"
+    "bytes": 283217
   },
   {
     "file": "wet-desert.png",
@@ -955,7 +1085,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.253,
-      "mean_color_shift": 0.577,
+      "mean_color_shift": 0.398,
       "edge_retention": 0.984,
       "residual_lag1_autocorr": -0.074
     },
@@ -965,7 +1095,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.401,
-          "mean_color_shift": 0.48,
+          "mean_color_shift": 0.297,
           "edge_retention": 0.998,
           "residual_lag1_autocorr": -0.065
         }
@@ -975,7 +1105,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.34,
-          "mean_color_shift": 0.42,
+          "mean_color_shift": 0.182,
           "edge_retention": 0.998,
           "residual_lag1_autocorr": -0.058
         }
@@ -985,7 +1115,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.273,
-          "mean_color_shift": 0.419,
+          "mean_color_shift": 0.166,
           "edge_retention": 0.998,
           "residual_lag1_autocorr": -0.055
         }
@@ -995,17 +1125,27 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.299,
-          "mean_color_shift": 0.398,
+          "mean_color_shift": 0.164,
           "edge_retention": 0.998,
           "residual_lag1_autocorr": -0.074
         }
+      },
+      "learned": {
+        "step_after": 10.34,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.727,
+          "mean_color_shift": 0.627,
+          "edge_retention": 0.998,
+          "residual_lag1_autocorr": 0.121
+        }
       }
     },
+    "learned": "learned/wet-desert.webp",
     "env": "Wet Desert",
     "map": "Lake Shore",
     "expansion": "Core Contingency",
-    "bytes": 405168,
-    "thumb": "thumbs/wet-desert.webp"
+    "bytes": 405168
   },
   {
     "file": "urban.png",
@@ -1027,7 +1167,7 @@
     },
     "qa": {
       "hf_energy_reduction": 0.973,
-      "mean_color_shift": 1.684,
+      "mean_color_shift": 1.402,
       "edge_retention": 0.983,
       "residual_lag1_autocorr": 0.067
     },
@@ -1037,7 +1177,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.973,
-          "mean_color_shift": 1.684,
+          "mean_color_shift": 1.402,
           "edge_retention": 0.983,
           "residual_lag1_autocorr": 0.067
         }
@@ -1047,7 +1187,7 @@
         "deband": false,
         "qa": {
           "hf_energy_reduction": 0.948,
-          "mean_color_shift": 1.395,
+          "mean_color_shift": 1.108,
           "edge_retention": 0.991,
           "residual_lag1_autocorr": 0.119
         }
@@ -1057,7 +1197,7 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.861,
-          "mean_color_shift": 0.98,
+          "mean_color_shift": 0.605,
           "edge_retention": 0.995,
           "residual_lag1_autocorr": 0.126
         }
@@ -1067,16 +1207,26 @@
         "deband": true,
         "qa": {
           "hf_energy_reduction": 0.839,
-          "mean_color_shift": 1.25,
+          "mean_color_shift": 0.939,
           "edge_retention": 0.995,
           "residual_lag1_autocorr": -0.144
         }
+      },
+      "learned": {
+        "step_after": 11.0,
+        "deband": false,
+        "qa": {
+          "hf_energy_reduction": 0.833,
+          "mean_color_shift": 0.099,
+          "edge_retention": 0.999,
+          "residual_lag1_autocorr": 0.072
+        }
       }
     },
+    "learned": "learned/urban.webp",
     "env": "Urban",
     "map": "Assault on Suburbia",
     "expansion": "Core Contingency",
-    "bytes": 628600,
-    "thumb": "thumbs/urban.webp"
+    "bytes": 628600
   }
 ]

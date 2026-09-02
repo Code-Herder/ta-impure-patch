@@ -28,6 +28,8 @@
              hint: "σs 0.9 (3×3 cross): most texture kept, some grain left" },
     split: { label: "Luma ÷ chroma", sigmaSpace: 1.2, passes: 2, k: 1.3, metric: "split", strength: 1,
              hint: "5×5 with the range weight split — tight on luma (0.31 σr), loose on chroma (1.15 σr): off-hue flecks go, light/dark texture stays" },
+    learned: { label: "Learned CNN", sigmaSpace: 1.2, passes: 2, k: 1.3, metric: "learned", strength: 1,
+             hint: "a small residual CNN trained to invert TA-palette dither on CC0 textures — replaces undither and deband; its output is baked per frame by unditherer/infer.py" },
   };
   var PARAM_KEYS = ["sigmaSpace", "passes", "k", "metric", "strength"];
   var KERNELS = [["3×3", 0.9], ["5×5", 1.2], ["7×7", 1.8]];
@@ -138,15 +140,55 @@
           function () { setParams({ metric: "l1" }); }, metricEls, "l1");
     small(gMetric, "Luma ÷ chroma", "luma difference against 0.31 σr, chroma difference against 1.15 σr",
           function () { setParams({ metric: "split" }); }, metricEls, "split");
-    var kCtl = range(group("σr"), 0.5, 2.0, 0.05, function (v) { setParams({ k: v }); });
+    small(gMetric, "Learned", PRESETS.learned.hint,
+          function () { setParams({ metric: "learned" }); }, metricEls, "learned");
+    var gK = group("σr");
+    var kCtl = range(gK, 0.5, 2.0, 0.05, function (v) { setParams({ k: v }); });
     kCtl.input.title = "σr = k·q — below the dither amplitude the filter keeps the checkerboard, above edge contrast it melts silhouettes";
     var gPass = group("Passes");
     [1, 2, 3].forEach(function (n) {
       small(gPass, String(n), null, function () { setParams({ passes: n }); }, passEls, String(n));
     });
-    var sCtl = range(group("Strength"), 0, 1, 0.05, function (v) { setParams({ strength: v }); });
+    var gStr = group("Strength");
+    var sCtl = range(gStr, 0, 1, 0.05, function (v) { setParams({ strength: v }); });
     sCtl.input.title = "blend between the original and the filtered frame";
     container.appendChild(bar2);
+
+    // the learned preset only exists once infer.py has baked results
+    var haveLearned = images.some(function (m) { return m.learned; });
+    presetEls.learned.hidden = !haveLearned;
+    metricEls.learned.hidden = !haveLearned;
+    var modelInfo = null;
+    if (haveLearned) {
+      fetch(base + "learned/model.json").then(function (r) { return r.json(); })
+        .then(function (j) { modelInfo = j; if (renderer && renderer.src) updateReadout(); })
+        .catch(function () {});
+    }
+    var learnedCache = {};
+    function ensureLearned(cb) {
+      var m = images[current];
+      if (state.params.metric !== "learned" || !m.learned) {
+        renderer.setLearned(null); renderer.learnedFor = null; cb(); return;
+      }
+      if (renderer.learned && renderer.learnedFor === m.file) { cb(); return; }
+      var cached = learnedCache[m.file];
+      if (cached) { renderer.setLearned(cached); renderer.learnedFor = m.file; cb(); return; }
+      spin.textContent = "loading the learned result…";
+      spin.style.display = "";
+      var img = new Image();
+      img.onload = function () {
+        learnedCache[m.file] = img;
+        if (images[current] !== m) return;      // user moved on meanwhile
+        renderer.setLearned(img); renderer.learnedFor = m.file;
+        spin.style.display = "none";
+        cb();
+      };
+      img.onerror = function () {
+        spin.textContent = "no bake for " + m.env + " — the Learned CNN images are not in git; " +
+          "run python research/build_wiki.py (needs the unditherer environment) to generate them";
+      };
+      img.src = base + m.learned;
+    }
 
     function presetName() {
       var n = null;
@@ -166,6 +208,8 @@
       var q = images[current] ? images[current].q : 0;
       kCtl.value.textContent = P.k.toFixed(2) + " q = " + (P.k * q).toFixed(1);
       sCtl.value.textContent = Math.round(P.strength * 100) + " %";
+      var off = P.metric === "learned";              // the CNN has no kernel knobs
+      [gKernel, gK, gPass, gStr].forEach(function (g) { g.classList.toggle("ud-off", off); });
       if (!silent) run();
     }
 
@@ -230,9 +274,11 @@
 
     function run() {
       if (!renderer.src) return;
-      renderer.process(state);
-      draw();
-      updateReadout();
+      ensureLearned(function () {
+        renderer.process(state);
+        draw();
+        updateReadout();
+      });
     }
 
     function fmt(v, d) { return (v == null || isNaN(v)) ? "—" : Number(v).toFixed(d == null ? 1 : d); }
@@ -250,12 +296,22 @@
       var v = m.variants && m.variants[nearest];
       var step = state.undither ? (v ? v.step_after : m.step_undithered) : m.step;
       var sr = P.k * m.q;
-      var kernel = kernelName(P.sigmaSpace) + " (σ<sub>s</sub> " + P.sigmaSpace + ") · " +
-        P.passes + (P.passes === 1 ? " pass" : " passes") + " · " +
-        (P.metric === "split"
-          ? "luma σ " + fmt(global.Undither.SPLIT_Y_FRAC * sr) + " / chroma σ " + fmt(global.Undither.SPLIT_C_FRAC * sr)
-          : "RGB L1 σ<sub>r</sub> " + fmt(sr)) +
-        (P.strength < 1 ? " · strength " + Math.round(P.strength * 100) + " %" : "");
+      var kernel;
+      if (P.metric === "learned") {
+        kernel = modelInfo
+          ? "residual CNN, depth " + modelInfo.depth + " × " + modelInfo.ch + " ch, " +
+            Number(modelInfo.params).toLocaleString() + " params" +
+            (modelInfo.val_psnr ? " · synthetic val PSNR " + fmt(modelInfo.val_psnr) + " dB" : "")
+          : "residual CNN";
+        kernel += m.learned ? " · baked, replaces undither + deband" : " · <b>no bake for this frame</b>";
+      } else {
+        kernel = kernelName(P.sigmaSpace) + " (σ<sub>s</sub> " + P.sigmaSpace + ") · " +
+          P.passes + (P.passes === 1 ? " pass" : " passes") + " · " +
+          (P.metric === "split"
+            ? "luma σ " + fmt(global.Undither.SPLIT_Y_FRAC * sr) + " / chroma σ " + fmt(global.Undither.SPLIT_C_FRAC * sr)
+            : "RGB L1 σ<sub>r</sub> " + fmt(sr)) +
+          (P.strength < 1 ? " · strength " + Math.round(P.strength * 100) + " %" : "");
+      }
       var approx = pn ? "" : " (nearest measured kernel: " + PRESETS[nearest].label + ")";
       var rows = [
         ["Map", m.map + " · " + m.expansion],
@@ -286,6 +342,7 @@
       var img = new Image();
       img.onload = function () {
         renderer.setImage(img, m);
+        renderer.learnedFor = null;
         setZoom(zoomMode, true);
         setParams({}, true);            // refresh the σr readout for this image's q
         run();

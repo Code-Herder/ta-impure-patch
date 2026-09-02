@@ -271,6 +271,7 @@ void main(){
   // The prep.py variant whose measured post-undither band step stands in for a
   // parameter set: exact for the presets, nearest kernel size otherwise.
   function presetFor(P) {
+    if (P.metric === "learned") return "learned";
     if (P.metric === "split") return "split";
     return P.sigmaSpace >= 1.5 ? "spec" : P.sigmaSpace >= 1.05 ? "tuned" : "tight";
   }
@@ -368,6 +369,23 @@ void main(){
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, img);
     gl.generateMipmap(gl.TEXTURE_2D);
     this.params = params || {};
+    this.setLearned(null);                 // belongs to the previous image
+    return this;
+  };
+
+  /** A pre-rendered result for the current image (the learned restorer's
+   *  output, baked by unditherer/infer.py); null clears it. */
+  Renderer.prototype.setLearned = function (img) {
+    var gl = this.gl;
+    if (this.learned) { gl.deleteTexture(this.learned); this.learned = null; }
+    if (!img) return this;
+    if (img.width !== this.size[0] || img.height !== this.size[1]) {
+      throw new Error("learned image is " + img.width + "×" + img.height + ", frame is " + this.size.join("×"));
+    }
+    this.learned = this._tex(this.size[0], this.size[1], false);
+    gl.bindTexture(gl.TEXTURE_2D, this.learned);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, img);
     return this;
   };
 
@@ -380,7 +398,13 @@ void main(){
     var cur = this.src;
     var slot = 3;                                            // 0/1 ping-pong, 2 blend
 
-    if (opts.undither && q > 0) {
+    // The learned restorer replaces undither and deband together; its output is
+    // baked offline, so here it is a texture swap.  Missing bake -> show the
+    // original rather than silently substituting the bilateral.
+    var learned = P.metric === "learned";
+    if (opts.undither && learned) {
+      if (this.learned) cur = this.learned;
+    } else if (opts.undither && q > 0) {
       var radius = Math.max(1, Math.round(P.sigmaSpace * 1.5)); // OpenCV d = 0 -> radius from sigmaSpace
       var sr = P.k * q, start = cur;
       for (var pass = 0; pass < P.passes; pass++) {
@@ -408,7 +432,7 @@ void main(){
       }
     }
 
-    if (opts.deband) {
+    if (opts.deband && !(opts.undither && learned)) {
       // restore.py measures the step *after* undithering when undithering ran;
       // that number depends on the kernel, so take the matching prep.py variant
       var step = p.step || 0;

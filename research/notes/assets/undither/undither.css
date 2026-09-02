@@ -177,3 +177,4 @@
   font:500 .7rem/1 var(--ud-mono, ui-monospace, "IBM Plex Mono", monospace);
   color:var(--ud-ink); min-width:5.5em; white-space:nowrap;
 }
+.ud-group.ud-off{ opacity:.38; pointer-events:none; }
