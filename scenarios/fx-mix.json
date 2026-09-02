@@ -1,0 +1,39 @@
+{
+  "format": "ta-scenario/1",
+  "description": "effects mix: lasers (Peewee), rockets (Rocko/Storm), AA missiles (Jethro), a solar to blow up — two lines 260 px apart, camera between",
+  "seed": 20260902,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "groups": [
+    { "id": "arm_line", "owner": 0, "at": [2900, 1100],
+      "pattern": {"kind": "grid", "cols": 2, "spacing": 36},
+      "composition": [{"type": "ARMPW", "count": 4}, {"type": "ARMROCK", "count": 4}, {"type": "ARMJETH", "count": 2}],
+      "facing": 90,
+      "orders": [{"cmd": "attack", "to": [3160, 1200]}] },
+
+    { "id": "core_line", "owner": 1, "at": [3160, 1100],
+      "pattern": {"kind": "grid", "cols": 2, "spacing": 36},
+      "composition": [{"type": "CORAK", "count": 4}, {"type": "CORSTORM", "count": 4}],
+      "facing": 270,
+      "orders": [{"cmd": "attack", "to": [2900, 1200]}] }
+  ],
+
+  "units": [
+    { "id": "target", "type": "CORSOLAR", "owner": 1, "pos": [3100, 1320] },
+    { "id": "hero",   "type": "ARMCOM",   "owner": 0, "pos": [2800, 1320], "facing": 90, "stance": "hold" },
+    { "id": "spare",  "type": "CORSOLAR", "owner": 1, "pos": [4100, 1300] }
+  ],
+
+  "camera": { "center_on": "target" }
+}
