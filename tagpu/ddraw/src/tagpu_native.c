@@ -16,9 +16,19 @@
      - fog: per-fragment sample of the LOS counter map + MAPPED bits
        (32-px tiles, uploaded as R8 textures each frame), LosType-aware;
      - shadow: engine rules (shadows-cloak.md): the unit silhouette, 50%
-       black, +5px x, at ground height, options-gated, drawn before the body;
+       black, +5px x, at ground height, options-gated, drawn before the body
+       -- but ONLY for units whose engine shadow came from the composite we
+       wipe (mobile units). Units on the engine's 0x20000000 path (structures)
+       and wrecks keep the engine's CACHED slant-projected shadow, which is
+       built from the posed prims and survives the wipe; drawing ours too gave
+       them two shadows. FBI noshadow/canhover/floater gates mirror the engine;
      - cloak (unit+0x10E bit2): true translucency (alpha 0.5); cloaked
-       enemies are skipped entirely (engine parity).
+       enemies are skipped entirely (engine parity);
+     - waterline / digger (shadows-cloak.md §3, path-B units only): parts
+       whose model height sits at or below sea level minus the unit's
+       altitude are erased (enemy, no sonar) or tinted r/2,g/2,b/2+50 (own,
+       sonar-seen); shadows are cut there; diggers lose everything below
+       the origin. Per-vertex model height rides in the vertex stream.
 
    Armed by tagpu_native.on (first token = type, default armcom; the 3-name
    match as everywhere). Under-construction units (unit+0x104 nano > 0) stay
@@ -95,6 +105,16 @@
 #define U_OWNER      0xFF
 #define U_NANO       0x104     /* float fraction REMAINING                  */
 #define U_CLOAKF     0x10E     /* bit2 = actively cloaked                   */
+#define UD_TYPEMASK  0x241     /* u32 FBI booleans: bit12 canhover, bit19   */
+                               /* floater, bit25 noshadow (shadows-cloak §2)*/
+#define ST_STRUCT    0x20000000u /* state bit: engine takes the cached-shadow */
+                                 /* (nanoframe/structure) blit path          */
+#define ST_SONAR     0x200u    /* state bit: submerged enemy shown tinted    */
+#define UD_DIGGER    0x40000000u /* FBI mask bit30: clip below ground level  */
+#define OFF_SEALEVEL 0x1427F   /* u8 water level, elevation units           */
+#define OFF_LOCALPL  0x2A43    /* u8 the blit compares unit+0xFF against    */
+#define O3_COMPOSITE 0x10      /* GAFFrame* per-unit composite              */
+#define GF_PTRDEPTH  0x14      /* u8* depth plane; NULL = path A (no clip)  */
 #define OFF_FMAP     0x14287   /* FeatureStruct tile map, stride 0x0D       */
 #define OFF_MAPW     0x14233   /* map W in 16-px tiles                      */
 #define OFF_MAPH     0x14237   /* map H in 16-px tiles                      */
@@ -127,7 +147,7 @@
 #define F_INDICES    0x0C
 
 #define MAXNV  49152           /* vertices across all native units per frame */
-#define NVST   10              /* x,y,depthEnc, u,v, flat,ck, shadeRow, wx,wzp */
+#define NVST   11              /* x,y,depthEnc, u,v, flat,ck, shadeRow, wx,wzp, vy */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 static void pose_dump(const char* u, const char* o3);
@@ -182,6 +202,7 @@ static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_palTex;
 static GLuint s_losTex, s_mapTex, s_cprog, s_cvao, s_cvbo;
 static GLuint s_fbo2, s_colTex2, s_depTex2, s_dprog;
 static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uScafOn, s_uScafP;
+static GLint  s_uWaterT, s_uWaterMode, s_uDigT;
 static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF;
 static float  s_zoom = 1.0f;
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
@@ -201,22 +222,24 @@ static const char* VS =
     "layout(location=2) in vec2 aFC;\n"      /* flat idx/255, tex ck/255       */
     "layout(location=3) in float aShade;\n"  /* LUT row / 31                   */
     "layout(location=4) in vec2 aWorld;\n"   /* world x, projected world z     */
+    "layout(location=5) in float aVY;\n"     /* posed model height, elev units */
     "uniform vec2 uGame;\n"                  /* game_width, game_height        */
     "uniform vec2 uOffset;\n"                /* shadow pass shift, px          */
     "uniform float uZoom;\n"                 /* G12d partial-zoom demo         */
     "uniform vec2 uZoomC;\n"                 /* zoom centre, game px           */
     "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
-    "out float vEnc;\n"
+    "out float vEnc; out float vVY;\n"
     "void main(){\n"
     "  vec2 p = (aPos.xy + uOffset - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - aPos.z/512.0, 0.0, 1.0), 1.0);\n"
     "  vUV = aUV; vFC = aFC; vShade = aShade; vWorld = aWorld; vEnc = aPos.z;\n"
+    "  vVY = aVY;\n"
     "}\n";
 static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; flat in vec2 vFC; flat in float vShade; in vec2 vWorld;\n"
-    "in float vEnc;\n"
+    "in float vEnc; in float vVY;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uLUT;\n"
@@ -232,6 +255,9 @@ static const char* FS =
     "uniform float uSS;\n"                   /* supersample factor (1 or 2)    */
     "uniform float uZoomF;\n"
     "uniform vec2 uZoomCF;\n"
+    "uniform float uWaterT;\n"              /* vy <= this is under water      */
+    "uniform int uWaterMode;\n"             /* 1 erase (enemy), 2 tint (own)  */
+    "uniform float uDigT;\n"                /* vy <= this is below ground     */
     "void main(){\n"
     "  float idx;\n"
     "  if (vUV.x < 0.0) { idx = vFC.x; }\n"
@@ -252,9 +278,20 @@ static const char* FS =
     "      if (s > vEnc + 0.5) discard;\n"
     "    }\n"
     "  }\n"
-    "  if (uShadow == 1) { frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
+    /* waterline / digger clipping (shadows-cloak.md §3 depth-bias rules):
+       the engine erases or tints composite pixels whose depth (= vertex
+       height + bias) is at or below the water line; shadows are always
+       erased there. Our per-fragment height is the interpolated model y. */
+    "  if (vVY <= uDigT) discard;\n"
+    "  if (uShadow == 1) { if (vVY <= uWaterT) discard;\n"
+    "                      frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
     "  idx = texelFetch(uLUT, ivec2(int(idx*255.0+0.5), int(vShade*31.0+0.5)), 0).r;\n"
     "  vec3 rgb = texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb;\n"
+    /* engine water table (prog+0xD0): r/2, g/2, b/2+0x32 */
+    "  if (vVY <= uWaterT) {\n"
+    "    if (uWaterMode == 1) discard;\n"
+    "    rgb = rgb * 0.5 + vec3(0.0, 0.0, 50.0/255.0);\n"
+    "  }\n"
     /* fog: 32-px LOS tiles, engine rules (terrain-depth.md 5.3) */
     "  if ((uFog & 1) == 1) {\n"
     "    ivec2 t = ivec2(int(vWorld.x) >> 5, int(vWorld.y) >> 5);\n"
@@ -344,6 +381,9 @@ static void init_gl(void)
     s_uGame   = glGetUniformLocation(s_prog, "uGame");
     s_uOffset = glGetUniformLocation(s_prog, "uOffset");
     s_uShadow = glGetUniformLocation(s_prog, "uShadow");
+    s_uWaterT    = glGetUniformLocation(s_prog, "uWaterT");
+    s_uWaterMode = glGetUniformLocation(s_prog, "uWaterMode");
+    s_uDigT      = glGetUniformLocation(s_prog, "uDigT");
     s_uAlpha  = glGetUniformLocation(s_prog, "uAlpha");
     s_uFog    = glGetUniformLocation(s_prog, "uFog");
     s_uScafOn = glGetUniformLocation(s_prog, "uScafOn");
@@ -397,6 +437,8 @@ static void init_gl(void)
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, NVST * 4, (void*)28);
     glEnableVertexAttribArray(4);
     glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, NVST * 4, (void*)32);
+    glEnableVertexAttribArray(5);
+    glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, NVST * 4, (void*)40);
     glBindVertexArray(0);
 
     const float quad[] = { 0,0, 1,0, 0,1, 1,1 };
@@ -605,6 +647,7 @@ static int emit_hires(const void* mesh, int nv, float ax, float ay,
             o[7] = shade;
             o[8] = wx0 + x;
             o[9] = wz0 + (-z - y * 0.5f);
+            o[10] = y;
             nv++;
         }
     }
@@ -712,6 +755,7 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
                     o[7] = shade;
                     o[8] = wx0 + x;
                     o[9] = wz0 + (-z - y * 0.5f);
+                    o[10] = y;
                     nv++;
                 }
             }
@@ -858,7 +902,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- gather native-owned on-screen units ---- */
     typedef struct { const char* o3; const char* u; const void* hires;
                      float ax, ay, gy, wx0, wz0;
-                     int rel, owner, cloaked, air, feat, sel; unsigned yaw; } NU;
+                     int rel, owner, cloaked, air, feat, sel, shadow; unsigned yaw;
+                     float waterT, digT; int waterMode; } NU;
     static NU units[512];
     /* sub-pixel motion: the engine keeps 16.16 fixed-point positions (the
        roster shorts are just their high words) — read the true fractions and
@@ -928,9 +973,21 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         n2->wx0 = fx; n2->wz0 = fy - fz * 0.5f;
         n2->yaw = *(const unsigned short*)(u + U_YAW);
         n2->hires = NULL;
+        n2->shadow = 0;
+        n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
+        unsigned mask = 0;                    /* FBI booleans, read below */
         {
             const char* def = *(const char* const*)(u + U_TYPE);
             if (ptr_ok(def)) {
+                /* mirror the engine's shadow branch in the blit 0x459200
+                   (shadows-cloak.md §3): ST_STRUCT units get the cached
+                   slant shadow (Object3do+0x14) from the engine itself;
+                   the rest get a composite-derived silhouette the wipe
+                   emptied -- that one is ours, under the engine's FBI gates */
+                mask = *(const unsigned*)(def + UD_TYPEMASK);
+                n2->shadow = !(st & ST_STRUCT) &&
+                             !(mask & 0x02000000u) &&      /* noshadow          */
+                             !(mask & 0x00081000u);        /* canhover|floater  */
                 char nm[32]; int ci;
                 for (ci = 0; ci < 31; ci++) {
                     char cch = def[0x20 + ci];   /* UnitName, e.g. ARMSOLAR */
@@ -940,6 +997,24 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 }
                 nm[31] = 0;
                 n2->hires = tagpu_hires_mesh(nm);
+            }
+        }
+        /* waterline + digger clipping, PATH B only (composite has a depth
+           plane -- the engine splits on frame+0x14 at 0x45927E; stationary
+           path-A buildings are never clipped). Threshold is in vertex-height
+           units: depth = vy + 0x32 <= (sea - alt) + 0x32  <=>  vy <= sea - alt.
+           Enemy without the sonar bit: erased; own / sonar-seen: tinted.
+           Digger: everything below the unit origin is erased. */
+        {
+            const char* fr = *(const char* const*)(o3 + O3_COMPOSITE);
+            if (ptr_ok(fr) && *(const unsigned*)(fr + GF_PTRDEPTH) != 0) {
+                float sub = (float)*(const unsigned char*)(ta + OFF_SEALEVEL) - fz;
+                if (sub > 0.0f) {
+                    int local = *(const unsigned char*)(ta + OFF_LOCALPL);
+                    n2->waterT = sub;
+                    n2->waterMode = (owner != local && !(st & ST_SONAR)) ? 1 : 2;
+                }
+                if (mask & UD_DIGGER) n2->digT = 0.0f;
             }
         }
         n2->air = ((st & 3) != 1);
@@ -1018,6 +1093,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 n2->wx0 = (float)rx; n2->wz0 = (float)(ry - rz / 2);
                 n2->rel = (ry >> 4) - r0;
                 n2->owner = 0; n2->cloaked = 0; n2->air = 0; n2->feat = 1; n2->sel = 0;
+                n2->shadow = 0;     /* the engine's FShadow feature shadow stays */
+                n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
                 nwr++;
             }
         }
@@ -1084,6 +1161,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     o[5] = (float)SELBOX_COLIDX / 255.0f; o[6] = -1.0f;
                     o[7] = (float)tagpu_r3d_shade_neutral() / 31.0f;
                     o[8] = units[i].wx0; o[9] = units[i].wz0;
+                    o[10] = 1e9f;                               /* never clipped */
                     nv++;
                 }
             }
@@ -1146,6 +1224,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         glUniform1i(s_uShadow, 0);
         x_glUniform1f(s_uAlpha, 1.0f);
         x_glUniform2f(s_uOffset, 0.0f, 0.0f);
+        x_glUniform1f(s_uWaterT, -1e9f);
+        x_glUniform1f(s_uDigT, -1e9f);
+        glUniform1i(s_uWaterMode, 0);
         if (x_glLineWidth) x_glLineWidth((GLfloat)ss);
         x_glDrawArrays(GL_LINES, lineStart, nv - lineStart);
     }
@@ -1157,7 +1238,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glUniform1f(s_uAlpha, 0.5f);
         x_glDepthMask(GL_FALSE);
         for (i = 0; i < nu; i++) {
+            if (!units[i].shadow) continue;
             x_glUniform2f(s_uOffset, 5.0f, (float)(units[i].gy - units[i].ay));
+            x_glUniform1f(s_uWaterT, units[i].waterT);
+            x_glUniform1f(s_uDigT, units[i].digT);
             x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i+1] - firstv[i]);
         }
         x_glDepthMask(GL_TRUE);
@@ -1167,6 +1251,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     x_glUniform2f(s_uOffset, 0.0f, 0.0f);
     for (i = 0; i < nu; i++) {
         x_glUniform1f(s_uAlpha, units[i].cloaked ? 0.5f : 1.0f);
+        x_glUniform1f(s_uWaterT, units[i].waterT);
+        x_glUniform1f(s_uDigT, units[i].digT);
+        glUniform1i(s_uWaterMode, units[i].waterMode);
         x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i+1] - firstv[i]);
     }
     x_glDisable(GL_BLEND);

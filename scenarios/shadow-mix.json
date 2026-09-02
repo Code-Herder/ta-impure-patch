@@ -1,0 +1,15 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Shadow dedupe fixture: ground unit, static building, hovercraft, 3DO wreck",
+  "on_error": "abort",
+  "setup": { "clear_existing": false, "switches": {"shootall": false, "noshake": true} },
+  "units": [
+    { "id": "hero",  "type": "ARMCOM",   "owner": 0, "pos": [1600, 1600], "facing": 90 },
+    { "id": "solar", "type": "ARMSOLAR", "owner": 0, "pos": [1760, 1600], "facing": 0 },
+    { "id": "hover", "type": "ARMSH",    "owner": 0, "pos": [1600, 1740], "facing": 90 }
+  ],
+  "features": [
+    { "id": "wreck", "type": "armlab_dead", "pos": [1780, 1760], "facing": 45 }
+  ],
+  "camera": { "center_on": "hero" }
+}
