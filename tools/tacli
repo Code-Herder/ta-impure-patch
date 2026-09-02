@@ -551,6 +551,16 @@ def cmd_launch(args):
         p = inst.gamedir / stale
         if p.exists():
             p.rename(inst.gamedir / f"{stale}.prev")
+    # A trigger the previous run never consumed fires the moment this one reaches
+    # a game — measured 2026-09-01, when a leftover scenario spawned itself into a
+    # fresh skirmish. Triggers are requests, not state, and the same goes for the
+    # eye hold, which would otherwise pin the new game's camera to the old one's
+    # coordinates. Results go too: a stale one would satisfy the next poll.
+    for stale in ("tagpu_scenario.trigger", "tagpu_scenario.json",
+                  "tagpu_switches.trigger", "tagpu_switches.json",
+                  "tagpu_units.trigger", "tagpu_features.trigger",
+                  "tagpu_peek.trigger", "tagpu_ui.trigger", "tagpu_eye.txt"):
+        (inst.gamedir / stale).unlink(missing_ok=True)
     for log in inst.gamedir.glob("cnc-ddraw-*.log"):
         log.unlink()
 
@@ -801,6 +811,16 @@ def cmd_log(args):
     out({"name": args.name, "lines": data}, args.json, human="\n".join(data))
 
 
+# overlay: "  u001 ARMCOM own=0 idx=17 world=(x,y,height) screen=(sx,sy) nano=.."
+# world x,y are the eye plane (what `tacli eye` takes); the third is height. idx is
+# UnitInGameIndex — what `scenario apply` reports per spawned unit, and recycled on
+# death, so it identifies a unit only while it lives. It is optional in the pattern
+# because logs written before it existed must still parse.
+ROSTER_RX = re.compile(r"\s*u(\d+)\s+(\S+)\s+own=(\d+)(?:\s+idx=(-?\d+))?"
+                       r"\s+world=\((-?\d+),(-?\d+),(-?\d+)\)"
+                       r"\s+screen=\((-?\d+),(-?\d+)\)")
+
+
 def cmd_roster(args):
     """Parse the newest roster block the overlay logs every 300 frames."""
     inst = Instance(args.name)
@@ -810,15 +830,13 @@ def cmd_roster(args):
     lines = path.read_bytes().decode("utf-8", "replace").splitlines()
     units, eye = [], None
     for line in reversed(lines):
-        # overlay format: "  u001 ARMCOM  own=0 world=(x,y,height) screen=(sx,sy) nano=.."
-        # world x,y are the eye plane (what `tacli eye` takes); the third is height.
-        m = re.match(r"\s*u(\d+)\s+(\S+)\s+own=(\d+)\s+world=\((-?\d+),(-?\d+),(-?\d+)\)"
-                     r"\s+screen=\((-?\d+),(-?\d+)\)", line)
+        m = ROSTER_RX.match(line)
         if m:
             units.append({"id": int(m.group(1)), "type": m.group(2), "owner": int(m.group(3)),
-                          "world": [int(m.group(4)), int(m.group(5))],
-                          "height": int(m.group(6)),
-                          "screen": [int(m.group(7)), int(m.group(8))]})
+                          "engine_index": int(m.group(4)) if m.group(4) else None,
+                          "world": [int(m.group(5)), int(m.group(6))],
+                          "height": int(m.group(7)),
+                          "screen": [int(m.group(8)), int(m.group(9))]})
         elif line.startswith("units:"):
             e = re.search(r"eye=?\(?(-?\d+)[, ]+(-?\d+)", line)
             if e:
@@ -828,6 +846,7 @@ def cmd_roster(args):
     units.reverse()
     out({"name": args.name, "eye": eye, "units": units}, args.json,
         human="\n".join(f"u{u['id']:<4} {u['type']:<10} own={u['owner']} "
+                        f"idx={'-' if u['engine_index'] is None else u['engine_index']:<4} "
                         f"world={u['world']} screen={u['screen']}" for u in units)
              or "no roster lines yet (needs a running game)")
 
@@ -2214,7 +2233,7 @@ def _scn_setup(doc, label):
         pw = f"{w}.players[{i}]"
         _scn_keys(p, pw, required=("slot",),
                   optional=("controller", "side", "color", "metal", "energy"))
-        slot = _scn_int(p, "slot", pw, 1, 10)
+        slot = _scn_int(p, "slot", pw, 0, 9)
         if slot in slots:
             die(f"{pw}.slot: player {slot} is already declared")
         slots[slot] = True
@@ -2330,7 +2349,7 @@ def _scn_validate(doc, label, catalogue=None):
         return name
 
     def owner_of(node, where, default=None):
-        owner = _scn_int(node, "owner", where, 1, 10, default)
+        owner = _scn_int(node, "owner", where, 0, 9, default)
         if owner is None:
             die(f"{where}: missing required key 'owner' (a player slot)")
         if slots and owner not in slots:
@@ -2736,11 +2755,159 @@ def cmd_scenario_expand(args):
     out(exp, args.json, human="\n".join(lines))
 
 
+SCN_APPLY_TIMEOUT = 30.0    # 400 units in one tick, plus the poll's own cadence
+
+
+def _scn_apply(inst: Instance, wire: str, timeout: float) -> dict:
+    """Drop the wire file and read the fork's answer (tmp + rename, like `ui`)."""
+    if not inst.running():
+        die(f"{inst.name} is not running (tacli launch {inst.name})")
+    result = inst.gamedir / "tagpu_scenario.json"
+    before = result.stat().st_mtime_ns if result.exists() else 0
+    (inst.gamedir / "tagpu_scenario.trigger").write_text(wire)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if result.exists() and result.stat().st_mtime_ns > before:
+            try:
+                return json.loads(result.read_text())
+            except json.JSONDecodeError:
+                pass                      # a rename we caught mid-flight; retry
+        time.sleep(0.05)
+    die(f"no result appeared in {timeout:g}s — is the game past its loading screen? "
+        f"(tacli log {inst.name} -g scenario)")
+
+
+def _scn_rekey(res: dict, exp: dict) -> dict:
+    """Ordinals back to handles.
+
+    The fork keys its answer by ordinal because that is all it knows — handle
+    strings never reach the engine. Putting the author's own names back is the
+    CLI's job, and it happens before an agent ever sees the result.
+    """
+    for kind, key in (("units", "units"), ("features", "features")):
+        rows = res.get(kind)
+        if not isinstance(rows, dict):
+            continue
+        named = {}
+        for ordinal, row in rows.items():
+            try:
+                handle = exp[key][int(ordinal)]["id"]
+            except (ValueError, IndexError, KeyError):
+                handle = f"#{ordinal}"
+            row["ordinal"] = int(ordinal) if str(ordinal).isdigit() else ordinal
+            named[handle] = row
+        res[kind] = named
+    return res
+
+
+def cmd_scenario_apply(args):
+    """Apply a scenario to a game that is already running.
+
+    `apply` is the mutation verb: it ignores `setup`'s launch half (map,
+    resolution, players) because those are decided before a game exists, and
+    stacks the situation onto whatever is on screen. `load` (phase D) is the one
+    that launches first.
+    """
+    inst = Instance(args.name)
+    catalogue = args.instance or (args.name if _cat_load(inst) else None)
+    exp = _scn_compile(args.scenario, args.catalogue, catalogue)
+    res = _scn_apply(inst, _scn_wire(exp), args.timeout)
+    res["name"] = args.name
+    res["scenario"] = exp["name"]
+    res["catalogue"] = args.catalogue or catalogue or None
+    _scn_rekey(res, exp)
+
+    # `pin` holds the camera through the eye-hold file the fork already honours,
+    # using the eye it actually wrote rather than re-deriving the projection here.
+    eye = res.get("eye")
+    if res.get("pin") and eye:
+        (inst.gamedir / "tagpu_eye.txt").write_text(f"{eye[0]} {eye[1]}\n")
+
+    want = res.get("requested") or {}
+    total = want.get("units", 0) + want.get("features", 0)
+    lines = [f"{exp['name']}: applied {res.get('applied', 0)} of {total} "
+             f"({want.get('units', 0)} units + {want.get('features', 0)} features), "
+             f"{res.get('failed', 0)} failed, {res.get('cleared', 0)} cleared"]
+    orders = res.get("orders") or {}
+    if orders.get("issued") or orders.get("failed"):
+        lines.append(f"orders: {orders.get('issued', 0)} issued, "
+                     f"{orders.get('failed', 0)} failed")
+    if res.get("camera"):
+        lines.append(f"camera: {res['camera']} (eye {eye}"
+                     + (", pinned" if res.get("pin") else "") + ")")
+    for e in res.get("errors") or []:
+        lines.append(f"error: {e}")
+    if res.get("errors_dropped"):
+        lines.append(f"... and {res['errors_dropped']} more errors")
+    out(res, args.json, human="\n".join(lines))
+    if not res.get("ok"):
+        sys.exit(1)
+
+
+# ------------------------------------------------------------------- switches
+#
+# SoftwareDebugMode, a u16 at TAdynmemStruct+0x37F2F, name-keyed to its bits. A
+# live verb on any instance, scenario or not, because A/B-ing a switch on one
+# running game is how a [CLAIMED] row in scenario-format.md becomes a measured
+# one. Fork side: tagpu_scenario.c.
+
+SW_STATES = {"on": True, "off": False, "1": True, "0": False,
+             "true": True, "false": False, "yes": True, "no": False}
+
+
+def cmd_switches(args):
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{args.name} is not running")
+    wants = []
+    for spec in args.flags or []:
+        name, _, state = spec.partition("=")
+        name = name.lower()
+        if name not in SCN_SWITCHES:
+            die(f"no engine switch named {name!r} — "
+                f"one of {', '.join(sorted(SCN_SWITCHES))}")
+        if not _:
+            die(f"{spec!r}: say {name}=on or {name}=off")
+        if state.lower() not in SW_STATES:
+            die(f"{spec!r}: {state!r} is not on/off")
+        wants.append(f"{name}={int(SW_STATES[state.lower()])}")
+
+    result = inst.gamedir / "tagpu_switches.json"
+    before = result.stat().st_mtime_ns if result.exists() else 0
+    (inst.gamedir / "tagpu_switches.trigger").write_text("\n".join(wants) + "\n")
+    deadline = time.time() + args.timeout
+    res = None
+    while time.time() < deadline:
+        if result.exists() and result.stat().st_mtime_ns > before:
+            try:
+                res = json.loads(result.read_text())
+                break
+            except json.JSONDecodeError:
+                pass
+        time.sleep(0.05)
+    if res is None:
+        die(f"no answer in {args.timeout:g}s — is the game past its first frame?")
+    res["name"] = args.name
+    bits = res.get("bits") or {}
+    changed = [k for k, v in bits.items()
+               if bool(res.get("before", 0) & SCN_SWITCHES[k]) != v]
+    res["changed"] = changed
+    human = (f"SoftwareDebugMode 0x{res.get('after', 0):04X} "
+             f"(was 0x{res.get('before', 0):04X})\n"
+             + "  ".join(f"{k}={'on' if v else 'off'}" for k, v in sorted(bits.items())))
+    if changed:
+        human += f"\nchanged: {', '.join(sorted(changed))}"
+    out(res, args.json, human=human)
+    if not res.get("ok"):
+        sys.exit(1)
+
+
 def cmd_scenario_todo(args):
-    """`load`, `apply` and `dump` are phases C-E; say so instead of "invalid choice"."""
-    phase = {"load": "D", "apply": "C", "dump": "E"}[args.cmd_todo]
-    die(f"scenario {args.cmd_todo} is phase {phase} and needs the fork's applier "
-        f"(research/notes/scenario-format.md). Built today: list, validate, expand.")
+    """`load` and `dump` are phases D-E; say so instead of "invalid choice"."""
+    phase = {"load": "D", "dump": "E"}[args.cmd_todo]
+    die(f"scenario {args.cmd_todo} is phase {phase} "
+        f"(research/notes/scenario-format.md). Built today: list, validate, expand, "
+        f"apply.")
 
 
 def res_type(text: str):
@@ -2928,6 +3095,15 @@ def build_parser():
                     help="how long to wait for the list to fill after the walk")
     mp.set_defaults(func=cmd_maps)
 
+    sw = sub.add_parser("switches", help="read/set the engine switches "
+                                        "(shootall, noshake, cheats ...)")
+    add_common(sw)
+    sw.add_argument("name")
+    sw.add_argument("flags", nargs="*",
+                    help="name=on|off, repeatable; none = just report the current bits")
+    sw.add_argument("--timeout", type=float, default=10)
+    sw.set_defaults(func=cmd_switches)
+
     cg = sub.add_parser("catalogue", help="what this instance has cached")
     add_common(cg)
     cg.add_argument("name")
@@ -2959,8 +3135,18 @@ def build_parser():
                             help="print the compiled wire file the fork will read")
         sp.set_defaults(func=fn)
 
-    for verb, phase in (("load", "D"), ("apply", "C"), ("dump", "E")):
-        sp = add_scenario(verb, f"(phase {phase} — needs the fork's applier)")
+    sca = add_scenario("apply", "apply a situation to a game that is already running")
+    sca.add_argument("name", help="the instance to mutate")
+    sca.add_argument("scenario", help="a name in scenarios/, or a path to a .json")
+    sca.add_argument("--catalogue", help="a unit/feature/map list file to check "
+                                         "names against")
+    sca.add_argument("--instance", help="check names against this instance's cached "
+                                        "catalogue (default: the target's own)")
+    sca.add_argument("--timeout", type=float, default=SCN_APPLY_TIMEOUT)
+    sca.set_defaults(func=cmd_scenario_apply)
+
+    for verb, phase in (("load", "D"), ("dump", "E")):
+        sp = add_scenario(verb, f"(phase {phase} — not built yet)")
         sp.add_argument("rest", nargs="*")
         sp.set_defaults(func=cmd_scenario_todo, cmd_todo=verb)
 

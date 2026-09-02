@@ -588,6 +588,19 @@ class ScenarioSetup(unittest.TestCase):
         with refuses(self):
             compile_doc(scn(units=[unit(owner=99)]))
 
+    def test_slot_zero_is_a_real_player(self):
+        # Measured 2026-09-01: TA's own registry keys are Player0Controller..
+        # Player9Controller and the roster reports own=0 for the first of them,
+        # so the slots are the engine's 0-based Players[] indices. A schema that
+        # started at 1 could not name the human seat a plain launch uses.
+        exp = compile_doc(scn(setup={"players": [{"slot": 0}]},
+                              units=[unit(owner=0)]))
+        self.assertEqual(exp["counts"]["by_owner"], {"0": 1})
+
+    def test_slot_ten_is_not(self):
+        with refuses(self):
+            compile_doc(scn(setup={"players": [{"slot": 10}]}))
+
     def test_a_malformed_resolution_is_fatal(self):
         with refuses(self):
             compile_doc(scn(setup={"res": "1024*"}))
@@ -928,6 +941,57 @@ class ScenarioWire(unittest.TestCase):
         self.assertEqual(self.wire(scn(units=[unit()]))[-1], "end")
 
 
+class ScenarioResults(unittest.TestCase):
+    """The fork answers by ordinal; the CLI puts the author's handles back."""
+
+    def result(self, **kw):
+        r = {"ok": 1, "units": {"0": {"engine_index": 7}}, "features": {}}
+        r.update(kw)
+        return r
+
+    def test_ordinals_become_handles(self):
+        exp = compile_doc(scn(units=[unit(id="hero")],
+                              features=[{"id": "wreck", "type": "TREE1",
+                                         "pos": [10, 10]}]))
+        res = self.result(units={"0": {"engine_index": 7}},
+                          features={"0": {"def": 3}})
+        tacli._scn_rekey(res, exp)
+        self.assertEqual(set(res["units"]), {"hero"})
+        self.assertEqual(set(res["features"]), {"wreck"})
+        self.assertEqual(res["units"]["hero"]["ordinal"], 0)
+
+    def test_an_ordinal_with_no_entity_stays_visible(self):
+        # A stale result against a re-edited scenario must not vanish silently.
+        exp = compile_doc(scn(units=[unit(id="hero")]))
+        res = self.result(units={"0": {}, "9": {}})
+        tacli._scn_rekey(res, exp)
+        self.assertEqual(set(res["units"]), {"hero", "#9"})
+
+    def test_a_missing_section_is_left_alone(self):
+        res = {"ok": 0, "errors": ["nothing was created"]}
+        tacli._scn_rekey(res, compile_doc(scn()))
+        self.assertEqual(res, {"ok": 0, "errors": ["nothing was created"]})
+
+
+class Roster(unittest.TestCase):
+    """The roster line gained UnitInGameIndex; older logs still have to parse."""
+
+    def parse(self, line):
+        return tacli.ROSTER_RX.match(line)
+
+    def test_it_reads_the_engine_index(self):
+        m = self.parse("  u001 ARMCOM       own=0 idx=17 world=(1600,1600,91) "
+                       "screen=(512,384) nano=0.00")
+        self.assertEqual((m.group(2), int(m.group(4)), int(m.group(5))),
+                         ("ARMCOM", 17, 1600))
+
+    def test_a_line_written_before_idx_existed_still_parses(self):
+        m = self.parse("  u001 ARMCOM       own=0 world=(1600,1600,91) "
+                       "screen=(512,384) nano=0.00")
+        self.assertIsNotNone(m)
+        self.assertIsNone(m.group(4))
+
+
 class ScenarioFiles(unittest.TestCase):
     """The scenarios that ship in the repo have to stay compilable."""
 
@@ -941,7 +1005,7 @@ class ScenarioFiles(unittest.TestCase):
     def test_the_shipped_200v200_compiles_to_the_situation_it_describes(self):
         exp = tacli._scn_compile("200v200")
         self.assertEqual(exp["counts"], {"units": 401, "features": 1,
-                                         "by_owner": {"1": 201, "2": 200}})
+                                         "by_owner": {"0": 201, "1": 200}})
         self.assertEqual(exp["warnings"], [])
         self.assertEqual(exp["camera"]["on"], ["feat", 0, "the_wreck"])
 

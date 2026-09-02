@@ -213,24 +213,40 @@ tools/tacli catalogue t1             # what this instance has cached
   uppercase (`ARMPW`). Scenarios may write either; the game's spelling is what gets used.
   **The Commander has no corpse** — there is no `armcom_dead` in stock TA.
 
-## Scenarios (JSON situations) — compiler only, so far
+## Scenarios (JSON situations)
 
-`tacli scenario` will one day put you in a named situation with one command. **Today only
-the offline half exists**, and it drives nothing:
+A scenario is a JSON *situation* — 200 units fighting, a wreck of a chosen type, the
+camera already on it. `tacli scenario apply` puts a running game into one by calling the
+engine's own creation functions. Everything is name-keyed and resolved against the live
+game, so nothing is ever addressed by a numeric id.
 
-- `tacli scenario list` — what is in `scenarios/`.
-- `tacli scenario validate <name>` — strict schema; unknown keys, bad coordinates,
-  duplicate handles and `"attack-move"` (TA has none) are errors, each naming the exact
-  path that is wrong. Add `--instance <name>` to check every unit, feature and map name
-  against that instance's catalogue, and to get a warning when a group's grid is packed
-  tighter than the units' own footprints.
-- `tacli scenario expand <name> [--wire]` — the flat entity list a 400-unit `groups` block
-  compiles to, seeded and byte-identical every run; `--wire` shows the file the fork will
-  eventually read.
+```bash
+tools/tacli scenario list                       # what is in scenarios/
+tools/tacli scenario validate 200v200 --instance t1   # schema + this game's catalogue
+tools/tacli scenario expand   200v200 --wire    # the flat list, and the file the fork reads
+tools/tacli scenario apply    t1 200v200        # spawn it into the running game
+tools/tacli switches t1 shootall=on noshake=on  # the SoftwareDebugMode bits, live
+```
 
-`scenario load` / `apply` / `dump` need the fork's applier and say so instead of failing
-oddly. Do not hand-write the wire file, and do not expect a scenario to spawn anything
-yet. Design and phases: `research/notes/scenario-format.md`.
+- **`apply` needs a running game, not the menus.** It runs from a detour inside TA's main
+  loop, which only turns over in game; at `MAINMENU` or on the mission-end screen it waits
+  600 frames and then tells you so. `scenario load` (launch → menus → apply in one command)
+  is not built yet.
+- **It validates three times and creates nothing if anything fails**: strict schema,
+  the instance's cached catalogue (`tacli units` / `features`), and a resolve pass inside
+  the game. `on_error: "skip"` opts into best effort.
+- **Read the result.** `apply --json` reports, per entity, the engine index, what was
+  requested and where it actually landed (the third component is the terrain snap), plus
+  the switches, what the clear removed, and the camera. It is keyed by your own handles.
+- **`clear_existing` defaults true** and removes the skirmish's starting commanders
+  silently. A scenario that leaves a player with **no units at all** is a defeat: TA goes
+  to `ENDMSN.GUI` and nothing further applies. Give both sides something.
+- `roster` reports `idx=` — `UnitInGameIndex`, the same number `apply` returns, so the two
+  views line up. It is recycled on death, so it names a unit only while it lives.
+- Ship reusable situations in `scenarios/`; one-offs can be any path. Do not hand-write
+  the wire file — it changes whenever the DLL does.
+
+Design, engine recipe and what the live runs corrected: `research/notes/scenario-format.md`.
 
 ## Observing
 

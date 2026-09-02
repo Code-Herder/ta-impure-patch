@@ -53,10 +53,10 @@ unit names by scanning the live definition table. This design follows its recipe
 | Transport | **CLI compiles JSON → a private, versioned, line-oriented wire format**; the DLL scans that. The DLL never parses JSON *in* (it does write JSON *out*). This is the safety property: one testable component decides what reaches the engine. |
 | Identity | **Author-chosen string handles** → ordinals at compile time → `UnitStruct*` in a spawn table at apply time. Engine indices are never the public identity (`UnitInGameIndex` is recycled on death). |
 | Validation | **Three layers**: strict schema (unknown keys are errors), catalogue check against the live unit/feature/map lists, and an in-process **resolve-before-create** pass that creates nothing if anything fails. `on_error: "skip"` opts into best-effort. |
-| Timing | **Detect** the trigger in the present path (existing idiom); **apply** from a sim-tick hook at `0x4969CB`, the point TADR spawns from — never mid-render, where the sort-grid walk lives. All entities in **one tick**, so the situation is reproducible. |
-| Existing units | `setup.clear_existing` defaults **true**, removing the skirmish's starting commanders silently via `UNITS_KillUnit(u, 0)` — a scenario contains exactly what the file says. |
+| Timing | **Detect** the trigger in the present path (existing idiom); **apply** from a detour at **`0x4969D2`** — five position-independent bytes inside the block `0x4969CB` (TADR's `GameTickHook` address) enters — never mid-render, where the sort-grid walk lives. All entities in **one visit**, so the situation is reproducible. |
+| Existing units | `setup.clear_existing` defaults **true**, removing the skirmish's starting commanders silently via `UNITS_KillUnit(u, 0)` — a scenario contains exactly what the file says. It runs over a **snapshot** taken first, and **before** the create pass, for reasons phase C measured (below). |
 | Camera | `at` and `center_on` both mean **the centre of the window**, never the eye origin. Group targets compile to a coordinate; entity handles resolve to the unit's *actual* post-snap position. `pin` defaults false. |
-| Orders | The engine's own order **names**, resolved through `ScriptAction_Name2Index`. TA has **no attack-move**; the idiom for a meeting engagement is `attack` a ground position. |
+| Orders | The engine's own order **names**, compiled to TA's order constants and resolved per unit through **`ScriptAction_Type2Index`** (TADR's own path). TA has **no attack-move**; the idiom for a meeting engagement is `attack` a ground position. |
 | Switches | `setup.switches` name-keyed to the `SoftwareDebugMode` bits. **`shootall` defaults on** (the universal player convention); always echoed in the result. |
 | Assertions | **None.** The loader guarantees the setup and reports requested-vs-actual per entity; judging the outcome is the agent's job with `roster` / `shot` / `glshot`. |
 | Round trip | The schema is **designed to be dumpable** (every field readable back out of the engine); `scenario dump` is the first follow-on, not a v1 gate. |
@@ -69,7 +69,7 @@ unit names by scanning the live definition table. This design follows its recipe
 ```json
 {
   "format": "ta-scenario/1",
-  "description": "200 ARM vs 200 CORE meeting engagement on open ground",
+  "description": "200 ARM vs 200 CORE meeting engagement on the Two Continents plateau",
   "seed": 20260901,
   "on_error": "abort",
 
@@ -80,32 +80,32 @@ unit names by scanning the live definition table. This design follows its recipe
     "clear_existing": true,
     "switches": {"shootall": true, "noshake": true},
     "players": [
-      {"slot": 1, "controller": "human", "side": "arm",  "color": 0, "metal": 5000, "energy": 5000},
-      {"slot": 2, "controller": "ai",    "side": "core", "color": 1}
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 5000, "energy": 5000},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
     ]
   },
 
   "groups": [
-    { "id": "arm_wave", "owner": 1, "at": [1000, 1200],
+    { "id": "arm_wave", "owner": 0, "at": [2200, 1200],
       "pattern": {"kind": "grid", "cols": 20, "spacing": 40, "jitter": 6},
       "composition": [{"type": "ARMPW", "count": 150}, {"type": "ARMROCK", "count": 50}],
       "facing": 90,
-      "orders": [{"cmd": "attack", "to": [2400, 1200]}] },
+      "orders": [{"cmd": "attack", "to": [3800, 1200]}] },
 
-    { "id": "core_wave", "owner": 2, "at": [2400, 1200],
+    { "id": "core_wave", "owner": 1, "at": [3800, 1200],
       "pattern": {"kind": "grid", "cols": 20, "spacing": 40, "jitter": 6},
       "composition": [{"type": "CORAK", "count": 200}],
       "facing": 270,
-      "orders": [{"cmd": "attack", "to": [1000, 1200]}] }
+      "orders": [{"cmd": "attack", "to": [2200, 1200]}] }
   ],
 
   "units": [
-    { "id": "hero", "type": "ARMCOM", "owner": 1, "pos": [900, 1200],
+    { "id": "hero", "type": "ARMCOM", "owner": 0, "pos": [2000, 1200],
       "facing": 90, "health": 60, "stance": "hold" }
   ],
 
   "features": [
-    { "id": "the_wreck", "type": "armlab_dead", "pos": [1700, 1200], "facing": 45 }
+    { "id": "the_wreck", "type": "armlab_dead", "pos": [3000, 1200], "facing": 45 }
   ],
 
   "camera": { "center_on": "the_wreck" }
@@ -133,7 +133,11 @@ unit names by scanning the live definition table. This design follows its recipe
   deliberately *not* `facing`: laying units out and pointing them are two questions.
 - **`null` means "unset — use the engine's default"** wherever a value may appear.
 - `owner` and player `slot` use the **same numbering as `tacli --player`** — no third
-  convention. When `setup.players` is present, an `owner` outside it is an error.
+  convention, and phase C measured what that numbering is: TA's own registry keys are
+  `Player0Controller`..`Player9Controller` and the roster reports `own=0` for the first
+  of them, so a slot **is** the engine's 0-based `Players[]` index, `0..9`. (Phase A
+  bounded it `1..10` and so could not name the human seat a plain launch uses.)
+  When `setup.players` is present, an `owner` outside it is an error.
 - Handles are `[A-Za-z0-9][A-Za-z0-9_.-]{0,31}`. An entity with no `id` gets a synthesized
   one containing `#`, which an author's cannot — so a file that names nothing is still
   reported entity by entity, with no chance of collision. Group members are
@@ -218,16 +222,49 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 
 | Step | Call / field | Address | Notes |
 |---|---|---|---|
-| name → type index | scan `taPtr->UnitDef[i].UnitName` over `UNITINFOCount` | — | What TADR's spawner does. `UNITINFO_Name2ID 0x488B10` exists but the scan is the proven path and needs no call. |
-| create a unit | `UNITS_CreateUnit(owner, typeIdx, x, height, y, fullHp, stateMask, unitNumber)` → `UnitStruct*` | `0x485F50` | Pass `unitNumber = 0` and let the engine allocate; record what comes back. |
-| snap to ground | read `FeatureMap[(x>>20) + (z>>20)*FeatureMapSizeX].height` | — | TADR's own height rule; feature cells are **16 world units**. |
-| feature name → id | `FeatureName2ID(name)` | `0x422DD0` | |
-| place a feature | `SpawnFeatureOnMap(gridPos, corpseIdx, position, volume, playerId)` | `0x423C50` | Silent and instant — this is how wrecks are placed. |
-| order name → index | `ScriptAction_Name2Index(name)` | `0x438760` | Keeps orders name-keyed like everything else. |
-| issue an order | `Order2Unit(scriptIdx, shiftKey, unit, targetUnit, position, p1, p2)` | `0x43AFC0` | |
-| remove a unit silently | `UNITS_KillUnit(unit, 0)` | `0x4864B0` | Mode `0` = the "recreate proc" path (no explosion). Mode `3` is a normal death **with** wreckage. |
-| apply point | sim-tick hook | `0x4969CB` | TADR's `GameTickHook` site; its deferred spawner runs from here. |
-| map extents | `MapWidth/Height`, `MapSizeX/Y`, `FeatureMapSizeX/Y` | `main+0x14233…` | Bounds-checking source. |
+| name → type index | scan `taPtr->UnitDef[i].UnitName` over `UNITINFOCount` | — | What TADR's spawner does. `UNITINFO_Name2ID 0x488B10` exists but the scan is the proven path and needs no call. Case-insensitive here, so the wire may carry either spelling. |
+| create a unit | `UNITS_CreateUnit(owner, typeIdx, x, height, y, fullHp, stateMask, unitNumber)` → `UnitStruct*` | `0x485F50` | Positions are **16.16 fixed point** in the 3-D convention `(x, altitude, depth)`. `unitNumber = 0` lets the engine allocate; `fullHp = 1`, `stateMask = 1`, exactly TADR's call. [VERIFIED live] |
+| snap to ground | read `FeatureMap[(x>>20) + (z>>20)*FeatureMapSizeX].height` | `main+0x14287` | TADR's own height rule; feature cells are **16 world units**, `FeatureStruct` stride `0x0D`, `height` at `+0x04`. |
+| feature name → id | `FeatureName2ID(name)`, then `LoadFeature(name)` if it is `-1` | `0x422DD0`, `0x4224B0` | The two-step is TADR's `TAMap.PlaceFeatureOnMap`: a feature the map never loaded is loaded on demand. |
+| feature grid cell | `GetGridPosPLOT(x/16, z/16)` → `PlotGrid*` | `0x481550` | `SpawnFeatureOnMap` wants the cell, not the coordinate. |
+| place a feature | `SpawnFeatureOnMap(gridPlot, defIdx, position, volume, playerId)` | `0x423C50` | Silent and instant. `position` is 16.16 `(x, altitude, depth)`; `volume` is the `{bank, pitch, heading}` word triple; `playerId = 10` is what TADR passes for a map feature. [VERIFIED live] |
+| order name → script index | `ScriptAction_Type2Index(&idx, orderType, unit, target, pos)` → `char*` | `0x43F0E0` | **Not** `ScriptAction_Name2Index`. TADR's `SendOrder` resolves the *per-unit* script index from the order type, the unit and its target; the returned `char*` points at the byte to pass on, and `NULL` means this unit cannot take that order. Its `ScriptAction_Index2Handler` (`0x438830`) call is dead — that function is a pure `base + *ecx*25` address computation whose result TADR discards. |
+| issue an order | `ORDERS_NewMainOrder2Unit(*scriptIdx, shift, unit, target, position, 0, 0)` | `0x43AFC0` | `position` is **whole world units** in the screen convention `(x, depth, altitude)` — *not* 16.16, and transposed against the create call. See the asymmetry note below. [VERIFIED live] |
+| remove a unit silently | `UNITS_KillUnit(unit, 0)` | `0x4864B0` | Mode `0` = the "recreate proc" path (no explosion). Mode `3` is a normal death **with** wreckage. Park `ActiveCommanderDeath` at 0 across the sweep — see below. |
+| commander-death gate | `ActiveCommanderDeath` | `main+0x37EF6` | `0x486688` compares it against zero and only then calls `UNITS_KillAllForPlayer`. [VERIFIED, binary] |
+| apply point | `Game_MainLoopTick` detour | `0x4969D2` | See *The apply point* below. |
+| map extents | `MapWidth/Height` | `main+0x14223`/`0x14227` | World units. Bounds-checking source; `FeatureMapSizeX/Y` (`0x14233`/`0x14237`) is the same map in tiles. |
+| per-player cap | `MaxUnitNumberPerPlayer` | `main+0x37EEC` | Reads **250** in stock skirmish. `ActualUnitLimit` (`0x37EEA`) reads 0 there and is not written. |
+
+### The apply point
+
+The note originally fixed this at `0x4969CB`, TADR's `GameTickHook` address. That is a
+`push ebx; push ebx; call 0x468CF0` — seven bytes over three instructions, the last of
+them **eip-relative**, so a stolen-bytes trampoline would have to re-encode the call.
+Four bytes later, `0x4969D2` holds `A1 E8 1D 51 00` (`mov eax, ds:0x511DE8`): exactly five
+position-independent bytes, an E9 fits with no NOP pad and nothing to relocate, and it is
+straight-line code from `0x4969CB`, so it fires exactly as often. Incoming EFLAGS are dead
+at the resume point (`lea`/`call`/`mov`/`mov`, and the first flag consumer at `0x4969E9`
+writes them first), so `pushad`/`popad` alone bracket the call — the same argument
+`tagpu_tracer.c` makes for its two sites. Two nearby branches jump to `0x4969CB` itself,
+never into the middle of the patch.
+
+TADR's own comment (`AreaDamageOverflow.cpp:481`) says this site fires **9-15x per
+simulation tick**, not once, and sits *outside* the sim loop. The applier therefore gates
+on a one-way state machine (`IDLE → ARMED → APPLYING → DONE`) with an interlocked
+hand-off, not on a call count — and "one tick" in this design means **one visit**, which
+is the stronger guarantee.
+
+### The coordinate asymmetry
+
+Creating and ordering do not speak the same language, and the two vendored corpora
+disagree about the second one. `TA_MemUnits.pas` reads the order position's *high word*,
+implying 16.16; TADR's C++ `ConstructionKickout` feeds `ORDERS_NewMainOrder2Unit` the
+unit's whole-unit `XPos`/`YPos` words and divides `orders->Pos.X` by 16 to get a tile.
+Phase C settled it by measurement rather than by choosing a source: the applier reads
+`UnitOrders->Pos` (`+0x22`) back after issuing the first order and reports both numbers.
+Live, `passed [3800, 1200, 84]` came back as `stored [3800, 1200, 84]` — **whole world
+units, screen convention, stored verbatim**. TADR's C++ reading is correct.
 
 **Unit fields written after creation** (`vendor/TADR/src/DDraw/tamem.h:986-1103`):
 
@@ -237,11 +274,11 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | position | `+0x6A` X, `+0x6E` **altitude**, `+0x72` map depth | Three 16.16 dwords. **Naming trap**: tamem uses the screen convention (`XPos/ZPos/YPos`), Ghidra transposes it. Same bytes; do not "fix" either. |
 | type index | `+0xA6` `UnitID` | The unit **type**, not the instance. |
 | instance slot | `+0xA8` `UnitInGameIndex` | **Recycled on death — never a public identity.** |
-| health % | `+0xF6` `HealthPerA` | |
+| health % | `+0xF6` `HealthPerA`, `+0xF7` `HealthPerB` | Write both; the second lags the first and the GUI reads it. |
 | owner slot | `+0xFF` `cOwnerID` | |
-| build fraction | `+0x104` `Nanoframe` | |
-| health | `+0x108` | |
-| state mask | `+0x110` | `0xc0000` hold/manoeuvre/roam, `0x20` nanoframe, `0x10000000` alive |
+| build fraction | `+0x104` `Nanoframe` | Fraction **REMAINING**, `0.0` = finished (`build-state.md`). The file's `nanoframe` is the percentage **built**, so the applier writes `1 - n/100`. |
+| health | `+0x108` | Max HP needs no `UnitDefStruct` offset: create with `fullHp = 1` and this field *is* the maximum, so scale it in place. |
+| state mask | `+0x110` | `0x20` nanoframe, `0x10000000` alive, and `(mask & 0xC0000) >> 18` is the stance: **0 hold, 1 manoeuvre, 2 roam** [VERIFIED, TADR `dialog.cpp:409-417`]. |
 
 **Catalogue sources**: `UnitDefStruct` gives `UnitName` `+0x20`, `UnitDescription` `+0x40`,
 `Side` `+0xA0`, `FootX/FootY` `+0x14A/0x14C` (so Python can warn when a group's `spacing` is
@@ -310,11 +347,27 @@ file is on disk and can be stale or truncated.
 handles back before an agent sees it:
 
 ```json
-{"applied": 401, "failed": 0, "switches": {"shootall": true, "noshake": true},
- "units": {"0": {"engine_index": 17,
-                 "requested": [900, 1200], "actual": [900, 1203]}},
- "camera": [1700, 1200]}
+{"ok": 1, "frame": 630, "gametime": 279, "seed": 20260901,
+ "requested": {"units": 401, "features": 1, "orders": 400},
+ "applied": 402, "failed": 0, "cleared": 2,
+ "orders": {"issued": 400, "failed": 0},
+ "map": {"name": "Two Continents", "world": [10752, 12800], "tiles": [672, 800]},
+ "limit": {"total": 0, "per_player": 250, "array_slots": 2500},
+ "switches": {"before": 12, "after": 1052, "bits": {"shootall": true, "noshake": true}},
+ "units": {"0": {"engine_index": 3, "owner": 0, "type": "ARMPW",
+                 "requested": [1823, 1026], "actual": [1823, 1026, 85]}},
+ "features": {"0": {"def": 87, "type": "armlab_dead",
+                    "requested": [3000, 1200], "actual": [3000, 1200, 85]}},
+ "order_probe": {"passed": [3800, 1200, 84], "stored": [3800, 1200, 84]},
+ "camera": [3000, 1200], "pin": 0, "eye": [2616, 806], "errors": []}
 ```
+
+`actual` carries three components — the two the file asked for plus the terrain snap the
+engine chose. `order_probe` is the applier reading `UnitOrders->Pos` straight back after
+the first order, so the coordinate convention is a measurement in every result rather than
+a decision made once. `errors` is capped at 24 entries with an `errors_dropped` count, and
+a failure that names no entity (a truncated file, a tick that never came) reports there
+with `applied: 0`.
 
 ---
 
@@ -329,13 +382,25 @@ tools/tacli scenario expand  200v200 --json            # the flat entity list, n
 tools/tacli scenario expand  200v200 --wire            # the file the fork will read
 ```
 
-Waiting on the fork (phases B–E):
+Built in phase C, and needing a running **game** (not the menus):
 
 ```bash
-tools/tacli scenario load    t1 200v200 --json         # launch → menus → live → applied → camera
-tools/tacli scenario apply   t1 reinforcements --json  # mutate a live game
+tools/tacli scenario apply   t1 200v200 --json   # mutate a live game; ignores setup's launch half
+tools/tacli switches t1                          # report the SoftwareDebugMode bits
+tools/tacli switches t1 shootall=on noshake=on   # set them live, on any instance
+```
+
+`apply` checks names against the target instance's own cached catalogue by default
+(`--instance`/`--catalogue` override it), writes the wire, polls for the result, and puts
+the author's handles back over the fork's ordinals before anything is printed. With
+`camera.pin` it also writes the eye-hold file, using the eye the fork actually wrote
+rather than re-deriving the projection in a second place.
+
+Still waiting on the fork:
+
+```bash
+tools/tacli scenario load    t1 200v200 --json         # launch → menus → live → applied → camera (D)
 tools/tacli scenario dump    t1 -o /tmp/captured.json  # (phase E)
-tools/tacli switches t1 shootall=on noshake=on         # (phase C)
 ```
 
 Built in phase B, and needing only a running instance:
@@ -418,11 +483,55 @@ is a measurement now:
   works before `Start` and says exactly that in a game. The screen push and the list's
   fill are separate frames, so the walk waits for the list instead of snapshotting once.
 
-**C — the applier (fork).** Wire scanner, resolve-before-create, the `0x4969CB` hook, create
-pass, orders, switches, camera, result JSON. Roster gains `UnitInGameIndex`.
-*DoD, in order*: one ARMCOM appears where asked → one wreck appears → 200v200 spawns in one
-tick and fights → result JSON's actual positions match requested within terrain snap → a
-scenario naming a nonexistent unit creates **nothing** and says why.
+**C — the applier (fork). BUILT 2026-09-01.** `tagpu_scenario.c`: wire scanner,
+resolve-before-create, the `0x4969D2` detour, create pass, orders, switches, camera,
+result JSON. `tacli scenario apply` and `tacli switches`; `roster` gained
+`UnitInGameIndex` as `idx=`.
+*DoD, met in order, on `dojo1` / Two Continents*: one ARMCOM at exactly `1600,1600`,
+`engine_index 2`, dead centre of the window → one `armlab_dead` on screen with TA's own
+status line reading `Wreckage M:564`, the catalogue's metal value → 402 entities and 400
+orders in one visit, `failed 0`, and the two waves meeting in the middle under
+`Peewee: Under Attack` → **every** `actual [x,y]` equal to `requested`, the third
+component the terrain snap → an unknown unit name caught twice, by the catalogue
+(`units[1].type: no unit named 'ARMNOPE' — did you mean 'ARMSNIPE'?`) and, from a
+hand-written wire file, by the fork (`applied 0`, naming the ordinal and the reason).
+
+**What the live runs corrected.** Every one of these was a design claim before this phase:
+
+- **Player slots are 0-based, and they are the engine's own.** TA's registry keys are
+  `Player0Controller`..`Player9Controller`, `--player 0:1` lands in `Players[0]`, and the
+  roster reports `own=0` for it. Phase A's schema bounded `slot` and `owner` to `1..10`
+  and so could not name the human seat a plain launch uses. Now `0..9`, and the shipped
+  example moved with it.
+- **`clear_existing` must run BEFORE the create pass, over a snapshot.** Creating first
+  looked safer — no window with an empty world — and cost 302 of a 401-unit scenario:
+  `MaxUnitNumberPerPlayer` counts units that are about to die, and the engine refuses
+  silently, one unit at a time. Clearing first is safe precisely because the apply point
+  is *outside* the sim loop, so the simulation never observes the empty world. The
+  snapshot stays: it means the sweep kills exactly what was there and can never reach a
+  unit the same visit created.
+- **A scenario that leaves a player with no units ends the game**, and then
+  `Game_MainLoopTick` stops and the applier is never called again. That is the engine
+  being right, not a bug — but the first version reported it as a silent 30-second CLI
+  timeout. There is now a 600-frame watchdog in the present path that gives up and says
+  *"the game's main loop never reached the apply point — apply needs a running game, not
+  the menus, the mission-end screen or a paused one"*.
+- **Order positions are whole world units in the screen convention**, stored verbatim —
+  measured, not chosen between two disagreeing sources. See *The coordinate asymmetry*.
+- **The camera must subtract half the target's altitude.** `sy = wy - altitude/2 - eyeY
+  + 32`, so a target on 90-unit ground sat 45 px above the middle of the window until the
+  inverse carried the height term. With it, `roster` reports the target at exactly
+  `512,384` in a 1024x768 window.
+- **A trigger file that outlives its game is a live hazard.** A leftover
+  `tagpu_scenario.trigger` fired itself into the *next* launch's skirmish. `tacli launch`
+  now deletes every stale trigger and result alongside the log rotation: triggers are
+  requests, not state.
+- **No spawn hitch at 400 units** (open question 4). 402 creations and 400 orders in one
+  visit, 0.2 s of CLI round trip including the poll, no visible stall and no dropped
+  frame. `stagger_ticks` is not needed.
+- **The result file is ASCII.** The fork `\u`-escapes every byte over 0x7F one byte at a
+  time, so a UTF-8 em-dash in a C string literal reaches the agent as mojibake. Comments
+  may be typographic; runtime strings may not.
 
 **D — `scenario load` end to end.** Launch, `ui click SINGLE/Skirmish/Start`, wait for live,
 drop the trigger, read the result, set the camera.
@@ -442,7 +551,18 @@ situation snapshot for a savegame.
 2. **The FBI `Corpse=` offset** inside `UnitDefStruct+0xA8..0x13D` — unlocks
    `{"type": "ARMCOM", "as": "wreck"}` without a corpse-name lookup.
 3. **`UnitOrders` layout** (`+0x5C`) — gates order round-tripping in `scenario dump`.
-4. **Spawn hitch at 400 units** in one tick. Measured in phase C; a `stagger_ticks` knob
-   exists as a fallback but costs reproducibility.
+   Phase C pinned one field of it: `Pos` is a `Position_Dword` at `+0x22`, whole world
+   units, screen convention, written verbatim from the order call.
+4. ~~**Spawn hitch at 400 units**~~ — **ANSWERED, phase C.** 402 creations and 400 orders
+   in one visit to the detour: no visible stall, no dropped frame, 0.2 s of CLI round trip
+   including the poll. `stagger_ticks` is not needed and is not being added.
 5. **Registry map name vs reality** — TA falls back silently on an unknown `SkirmishMap`.
    Phase D verifies the loaded map by reading `GameingState.TNTFile` after Start.
+6. **`load`/`unload` order constants disagree between the two corpora.** TA's Delphi table
+   has `unload`(5) `load`(6); TADR's C++ `ordertype` enum has `LOAD = 5` `UNLOAD = 6`. The
+   compiler follows the Delphi table. Neither is exercised by anything built so far, and
+   one transport unit settles it.
+7. **`ActualUnitLimit` (`main+0x37EEA`) reads 0** in a stock skirmish while
+   `MaxUnitNumberPerPlayer` (`+0x37EEC`) reads the expected 250. The applier reports both
+   and writes neither: raising a limit mid-game cannot grow an array the engine sized at
+   load, so `setup.unit_limit` belongs to phase D's launch path, not here.

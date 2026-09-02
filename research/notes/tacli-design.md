@@ -203,8 +203,8 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    be read without risking the instance.
 
 7. **Phase 1.4 — JSON scenarios (`tacli scenario`)** — **SCOPED 2026-09-01** by
-   `/grill-me`; **phases A (the compiler) and B (the catalogues) built the same day**,
-   C–E wait on the fork's applier. A strict JSON file describes a *situation* — 200 units
+   `/grill-me`; **phases A (the compiler), B (the catalogues) and C (the applier) built
+   the same day**, D–E still to come. A strict JSON file describes a *situation* — 200 units
    fighting, a wreck of a chosen type, the camera already on it — and one command launches
    an instance, drives `ui click SINGLE/Skirmish/Start`, waits for the game and spawns it by
    calling the engine's own `UNITS_CreateUnit` / `SpawnFeatureOnMap` / `Order2Unit`.
@@ -218,7 +218,16 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    Live today, with no game and no wine: `scenario list` / `validate <name>` /
    `expand <name> [--wire]`, and `scenarios/200v200.json`. The compiler is the component
    that decides what reaches the engine, so it is the one with exhaustive offline tests —
-   87 of `test_tacli.py`'s 150.
+   94 of `test_tacli.py`'s 157.
+
+   Against a running **game**: `scenario apply <inst> <name>` spawns the situation by
+   calling the engine's own creation functions from a detour at `0x4969D2`, inside TA's
+   main loop and outside the renderer, and reports per entity what was requested and where
+   it actually landed. `tacli switches <inst> shootall=on` sets the `SoftwareDebugMode`
+   bits live on any instance, game or menu. The fork side is `tagpu_scenario.c`. Verified
+   the day it was written: 402 entities and 400 orders in one visit, every position exact,
+   no spawn hitch — and it corrected four design claims, including the player-slot
+   numbering the schema had wrong (`scenario-format.md`, *What the live runs corrected*).
 
    With a running instance: `tacli units` / `features` / `maps` / `catalogue` ask the
    game what exists and cache it per instance, and `scenario validate --instance <name>`
