@@ -31,6 +31,11 @@ the `sun.misc.Unsafe` warnings on every launch are harmless).
 | `ghidra-scripts/ExportTASymbols.java` | post-script: dumps all USER_DEFINED symbols for verification |
 | `ghidra-scripts/ImportTAStructs.java` | post-script: CParses a header into the program DTM |
 | `ghidra-scripts/VerifyTAStructs.java` | post-script: asserts the key struct sizes above |
+| `ghidra-scripts/DecompileTAFuncs.java` | post-script: decompile a csv of function addresses to a file (`funcs, out`) |
+| `ghidra-scripts/WeaponSurvey.java` | post-script: scalar-operand scan + string-xref scan (follows pointer tables) + data-address xrefs (`out, scalars, string-regex, data-addrs`) |
+| `ghidra-scripts/WeaponSurvey2.java` | post-script: instruction-text regex scan grouped by function (`out, regex;;regex…`) |
+| `ghidra-scripts/CallersOf.java` | post-script: code xrefs to each function entry (`out, funcs`) |
+| `ghidra-scripts/DisasmWindow.java` | post-script: disassembly windows around addresses Ghidra has no function for (`out, addr:before:after,…`) |
 
 ## Exact working commands (run from `tools/`)
 
