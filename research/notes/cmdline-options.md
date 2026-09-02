@@ -140,6 +140,33 @@ So skirmish rules stay on the registry (`SkirmishLineOfSight`, `SkirmishMapping`
 `resolution.md`). Fixing (1) would need a code-cave trampoline and would buy
 nothing, because of (2).
 
+### The skirmish key, per player [RUNTIME-VERIFIED 2026-09-01]
+
+`HKCU\Software\Cavedog Entertainment\Total Annihilation\Skirmish` carries six
+`REG_DWORD` values for each of `Player0`..`Player9` — the ten seats the engine's own
+`Players[]` array has, 0-based:
+
+| Value | Meaning |
+|---|---|
+| `Player<N>Controller` | 0 = off, 1 = human, 2 = AI |
+| `Player<N>Side` | 0 = ARM, 1 = CORE |
+| `Player<N>Color` | 0..9 |
+| `Player<N>Metal` | **Starting metal**, default 1000 (`0x3E8`) |
+| `Player<N>Energy` | **Starting energy**, default 1000 |
+| `Player<N>AllyGroup` | 5 on every seat out of the box; unmeasured |
+
+**`Metal` and `Energy` set the storage as well as the level.** Measured on a live
+skirmish: `Player0Metal = 5000` gives `fCurrentMetal` 5000 *and* `fMaxMetalStorage`
+5000, and both still read 5000 half a minute later — TA does not clamp them back to
+what the player's units would hold. That is precisely why the same write into a
+*running* game does not stick: there the engine recomputes storage from owned units
+every tick and clamps the level to it (`scenario-format.md`, phases C and D). Starting
+resources are a launch-time setting or nothing.
+
+`tacli launch --player N:controller[:side[:color[:metal[:energy]]]]` writes them, and an
+empty field leaves that key alone. The values are **sticky per instance**, like every
+other skirmish setting: what a run does not name, it inherits from the run before.
+
 ## `online.dll` — the lobby launch interface [BINARY-VERIFIED + RUNTIME-VERIFIED]
 
 `-c <str>` (handler `0x49F05D` → `0x45B670`) is a **plugin hook**, and the plugin

@@ -1,0 +1,16 @@
+{
+  "format": "ta-scenario/1",
+  "description": "One commander at a named spot — the applier's smallest live proof",
+  "on_error": "abort",
+
+  "setup": {
+    "clear_existing": false,
+    "switches": {"shootall": true, "noshake": true}
+  },
+
+  "units": [
+    { "id": "hero", "type": "ARMCOM", "owner": 0, "pos": [1600, 1600], "facing": 90 }
+  ],
+
+  "camera": { "center_on": "hero" }
+}

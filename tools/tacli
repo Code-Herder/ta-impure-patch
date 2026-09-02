@@ -14,7 +14,10 @@ Everything is stdlib-only and every subcommand can print JSON (--json) for agent
 """
 
 import argparse
+import difflib
+import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -75,6 +78,7 @@ PRIVATE_FILES = {
 INTRO_MOVIES = {"1.zrb", "2.zrb"}
 
 DEFAULT_RES = (1024, 768)
+RES_RX = re.compile(r"(\d{3,4})\s*[xX*]\s*(\d{3,4})")
 
 
 def default_display() -> str:
@@ -343,13 +347,24 @@ def write_ddraw_ini(inst: Instance, tile):
     )
 
 
-def write_totala_ini(inst: Instance, sound: bool):
-    """Sound off via TA's own documented INI (research/notes/cmdline-options.md)."""
+def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
+    """TA's own INI (research/notes/cmdline-options.md).
+
+    Both settings we write live in `[Preferences]`, so the file is composed from
+    what is asked for rather than branched on sound alone: with sound on and no
+    limit wanted there is nothing to say and the file goes away. `UnitLimit` is
+    read at 0x491653 and clamped by the engine itself to [20, 1500], which is why
+    it is not a registry key and cannot be raised in a running game.
+    """
     path = inst.gamedir / "totala.ini"
-    if sound:
+    prefs = [] if sound else [("NoDirectSound", 1), ("UseWindowsSound", 0)]
+    if unit_limit is not None:
+        prefs.append(("UnitLimit", int(unit_limit)))
+    if not prefs:
         path.unlink(missing_ok=True)
-    else:
-        path.write_text("[Preferences]\r\nNoDirectSound=1\r\nUseWindowsSound=0\r\n")
+        return
+    path.write_text("[Preferences]\r\n"
+                    + "".join(f"{k}={v}\r\n" for k, v in prefs))
 
 
 def deploy_dll(inst: Instance):
@@ -376,6 +391,36 @@ def clone_prefix(inst: Instance):
 def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
     run(["wine", "reg", "add", key, "/v", value, "/t", kind, "/d", data, "/f"],
         env=inst.env(), cwd=str(inst.gamedir))
+
+
+# The skirmish key's own per-player values, in `--player`'s field order.
+# `Metal`/`Energy` are TA's starting resources, and measured 2026-09-01 they set
+# the player's **storage** as well as the level — which is exactly why writing
+# them into a running game does not stick (the engine recomputes storage from
+# owned units every tick and clamps the level to it). `AllyGroup` exists too and
+# is deliberately not exposed: nothing has measured what its 5 means.
+PLAYER_KEYS = ("Controller", "Side", "Color", "Metal", "Energy")
+
+
+def player_keys(spec: str):
+    """`N:controller[:side[:color[:metal[:energy]]]]` -> registry values to write.
+
+    An **empty field is "leave that key alone"**, so a colour can be set without
+    naming a side (`0:1::3`) — the fields are positional and there is no other
+    way to skip one. Anything that is not a number is refused rather than
+    written: `wine reg add` fails quietly, so a mistyped spec would otherwise
+    read back as a game rule nobody asked for.
+    """
+    parts = spec.split(":")
+    if not (2 <= len(parts) <= len(PLAYER_KEYS) + 1 and parts[0].isdigit()
+            and parts[1].isdigit()
+            and all(p == "" or p.isdigit() for p in parts[2:])):
+        die(f"--player {spec!r}: say "
+            f"N:controller[:side[:color[:metal[:energy]]]], numbers only "
+            f"(controller 0=off 1=human 2=AI, side 0=ARM 1=CORE)")
+    names = PLAYER_KEYS
+    return [(f"Player{parts[0]}{names[i - 1]}", parts[i])
+            for i in range(1, len(parts)) if parts[i] != ""]
 
 
 def apply_prefix_settings(inst: Instance, res, sound: bool = False):
@@ -449,8 +494,8 @@ def tile_for(index: int, res, screen=(3840, 2160), origin=(0, 0)):
 
 # --------------------------------------------------------------------------- commands
 
-def cmd_create(args):
-    inst = Instance(args.name)
+def _create(inst: Instance, args) -> dict:
+    """Everything `create` does; `load` needs it without the printing."""
     if inst.exists and not args.force:
         die(f"instance {args.name!r} already exists (use --force to recreate)")
     inst.dir.mkdir(parents=True, exist_ok=True)
@@ -488,13 +533,54 @@ def cmd_create(args):
     }
     inst.save_meta(meta)
     apply_prefix_settings(inst, res, sound=args.sound)
+    return meta
+
+
+def cmd_create(args):
+    inst = Instance(args.name)
+    meta = _create(inst, args)
+    res, tile = meta["res"], meta["tile"]
     out(meta, args.json, human=f"created instance {args.name} "
                                f"({res[0]}x{res[1]}, window at {tile[0]},{tile[1]}, "
                                f"sound={'on' if args.sound else 'off'}, "
-                               f"shield={'on' if shield else 'off'})")
+                               f"shield={'on' if meta['shield'] else 'off'})")
 
 
-def cmd_launch(args):
+def _ensure_owndraw_for_native(inst) -> "str | None":
+    """The native GPU pass (tagpu_native.on) needs the owndraw detours to wipe the
+    engine's 8bpp composite, or the engine keeps rasterising the same unit and you get
+    a near-invisible double draw. But owndraw installs its engine-code detours ONCE at
+    DllMain and only if tagpu_owndraw.on exists THEN — it has no per-frame re-arm (unlike
+    the native pass and the .off toggles), because patching live engine bytes off the
+    frame loop is racy; the tracer and suppressor install the same way. So arming owndraw
+    after launch silently does nothing. Close the footgun here, at the one moment it
+    matters: if this launch will bring up the native pass, make sure owndraw is armed to
+    match before the process starts. Returns a human note, or None if nothing was done.
+
+    Scoped to native deliberately: writeback (tagpu_writeback.on) overwrites the composite
+    the engine builds and needs no suppression, so it does not require owndraw.
+    """
+    nat = inst.gamedir / "tagpu_native.on"
+    if not nat.exists():
+        return None
+    # native.on is "TYPE [extra tokens]" (e.g. "all wrecks"); owndraw.on is just "TYPE".
+    tok = (nat.read_text().split() or ["all"])[0]
+    own = inst.gamedir / "tagpu_owndraw.on"
+    if not own.exists():
+        own.write_text(tok + "\n")
+        return (f"auto-armed owndraw.on={tok} (native.on is set and owndraw must be "
+                f"installed at launch, not after)")
+    have = (own.read_text().split() or [""])[0]
+    if have != tok:
+        return (f"warning: owndraw.on={have or '(empty)'} but native.on={tok} — the "
+                f"native pass will only be suppressed for {have!r}; other types will "
+                f"double-draw. Set them to match, or `tacli arm {inst.name} "
+                f"owndraw.on={tok}` and relaunch.")
+    return None
+
+
+def _launch(args) -> dict:
+    """Everything `launch` does, minus the printing — `load` composes with it."""
     # Extra TotalA.exe switches. Only a handful are worth passing (see
     # research/notes/cmdline-options.md); -r aborts the launch and -d bypasses the
     # ddraw path our stack lives in, so both are refused — before anything is created.
@@ -506,11 +592,10 @@ def cmd_launch(args):
     inst = Instance(args.name)
     if not inst.exists:
         args.force = False
-        cmd_create(args)
+        _create(inst, args)
     meta = inst.meta()
     if inst.running():
-        out(meta, args.json, human=f"{args.name} already running (pid {inst.pid()})")
-        return
+        return dict(meta, already_running=True, pid=inst.pid())
     if args.res:
         meta["res"] = list(args.res)
         meta["tile"] = list(tile_for(meta.get("slot", 0), tuple(args.res)))
@@ -518,8 +603,14 @@ def cmd_launch(args):
         write_ddraw_ini(inst, meta["tile"])
     if args.sound is not None:
         meta["sound"] = args.sound
+    if args.unit_limit is not None:
+        meta["unit_limit"] = args.unit_limit
+    if args.sound is not None or args.unit_limit is not None:
+        # Both live in the same file, so either one being asked for rewrites it
+        # from the instance's recorded state — a limit set two launches ago is
+        # still in force, and turning sound on does not silently drop it.
         inst.save_meta(meta)
-        write_totala_ini(inst, args.sound)
+        write_totala_ini(inst, meta.get("sound", False), meta.get("unit_limit"))
     if args.shield is not None:
         meta["shield"] = args.shield
         inst.save_meta(meta)
@@ -530,14 +621,8 @@ def cmd_launch(args):
     if args.map:
         reg_add(inst, GAME_REG, "SkirmishMap", "REG_SZ", args.map)
     for spec in args.player or []:
-        # --player N:controller[:side[:color]]  controller 0=off 1=human 2=AI
-        parts = spec.split(":")
-        n = parts[0]
-        reg_add(inst, SKIRMISH_REG, f"Player{n}Controller", "REG_DWORD", parts[1])
-        if len(parts) > 2:
-            reg_add(inst, SKIRMISH_REG, f"Player{n}Side", "REG_DWORD", parts[2])
-        if len(parts) > 3:
-            reg_add(inst, SKIRMISH_REG, f"Player{n}Color", "REG_DWORD", parts[3])
+        for value, data in player_keys(spec):
+            reg_add(inst, SKIRMISH_REG, value, "REG_DWORD", data)
     if args.los is not None:
         reg_add(inst, GAME_REG, "SkirmishLineOfSight", "REG_DWORD", str(args.los))
     if args.mapping is not None:
@@ -547,8 +632,20 @@ def cmd_launch(args):
         p = inst.gamedir / stale
         if p.exists():
             p.rename(inst.gamedir / f"{stale}.prev")
+    # A trigger the previous run never consumed fires the moment this one reaches
+    # a game — measured 2026-09-01, when a leftover scenario spawned itself into a
+    # fresh skirmish. Triggers are requests, not state, and the same goes for the
+    # eye hold, which would otherwise pin the new game's camera to the old one's
+    # coordinates. Results go too: a stale one would satisfy the next poll.
+    for stale in ("tagpu_scenario.trigger", "tagpu_scenario.json",
+                  "tagpu_switches.trigger", "tagpu_switches.json",
+                  "tagpu_units.trigger", "tagpu_features.trigger",
+                  "tagpu_peek.trigger", "tagpu_ui.trigger", "tagpu_eye.txt"):
+        (inst.gamedir / stale).unlink(missing_ok=True)
     for log in inst.gamedir.glob("cnc-ddraw-*.log"):
         log.unlink()
+
+    owndraw_note = _ensure_owndraw_for_native(inst)
 
     env = inst.env()
     display = env["DISPLAY"]
@@ -569,13 +666,26 @@ def cmd_launch(args):
     restored = pointer_restore(display, pointer_before)
     meta["last_launch"] = time.strftime("%Y-%m-%d %H:%M:%S")
     inst.save_meta(meta)
-    res = {"name": args.name, "pid": pid, "launcher_pid": proc.pid,
-           "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
-           "args": argv, "shield": shield_state(inst), "pointer_restored": restored}
-    out(res, args.json,
-        human=(f"launched {args.name} pid={pid} window={win[0] if win else 'pending'} "
-               f"at {win[1] if win else '?'},{win[2] if win else '?'} "
-               f"shield={'on' if res['shield'] else 'off'}"))
+    return {"name": args.name, "pid": pid, "launcher_pid": proc.pid,
+            "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
+            "map": args.map, "unit_limit": meta.get("unit_limit"),
+            "args": argv, "shield": shield_state(inst), "pointer_restored": restored,
+            "owndraw_note": owndraw_note}
+
+
+def cmd_launch(args):
+    res = _launch(args)
+    if res.get("already_running"):
+        out(res, args.json, human=f"{args.name} already running (pid {res['pid']})")
+        return
+    win = res["window"]
+    human = (f"launched {args.name} pid={res['pid']} "
+             f"window={win[0] if win else 'pending'} "
+             f"at {win[1] if win else '?'},{win[2] if win else '?'} "
+             f"shield={'on' if res['shield'] else 'off'}")
+    if res.get("owndraw_note"):
+        human += f"\n  {res['owndraw_note']}"
+    out(res, args.json, human=human)
 
 
 def cmd_ls(args):
@@ -601,11 +711,42 @@ def cmd_ls(args):
                   f"{shield:<7} {m['gamedir']}")
 
 
-def _write_tokens(inst: Instance, tokens: str):
-    """Append tokens to the in-process input file (consumed once by the game)."""
+# The fork reads tagpu_keys.txt in one bounded gulp and deletes it, so a batch
+# larger than its buffer loses its tail with the file. Split below that.
+KEYS_BATCH = 900
+
+
+def _write_tokens(inst: Instance, tokens: str, timeout: float = 5.0):
+    """Append tokens to the in-process input file (consumed once by the game).
+
+    `ui fill` can emit a token per character plus a backspace per character
+    already in the field, which overruns a single batch. Long batches are split
+    and each piece waits for the game to swallow the one before it, so the tail
+    is never silently dropped.
+    """
     path = inst.gamedir / "tagpu_keys.txt"
-    with open(path, "a") as f:
-        f.write(tokens.strip() + "\n")
+    words = tokens.split()
+    if not words:
+        return
+
+    batches, cur = [], ""
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > KEYS_BATCH:
+            batches.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}" if cur else w
+    batches.append(cur)
+
+    for batch in batches:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            pending = path.stat().st_size if path.exists() else 0
+            if pending + len(batch) + 1 <= KEYS_BATCH:
+                break
+            time.sleep(0.05)
+        with open(path, "a") as f:
+            f.write(batch + "\n")
 
 
 def cmd_keys(args):
@@ -669,23 +810,22 @@ def cmd_arm(args):
 PEEK_RX = re.compile(r"^peek: (?P<spec>\S+) (?:@0x(?P<addr>[0-9A-Fa-f]{8}) )?= (?P<value>.*)$")
 
 
-def cmd_peek(args):
+def _peek(inst: Instance, specs, timeout: float):
     """Read game memory from inside the process (tagpu_peek.trigger).
 
     The measurement half of a switch trace: name the address, launch with and
     without the switch, compare. Specs are `*0x511DE8+0x2C74:2` style — see
     tagpu/ddraw/inc/tagpu_peek.h for the grammar.
     """
-    inst = Instance(args.name)
     if not inst.running():
-        die(f"{args.name} is not running")
+        die(f"{inst.name} is not running")
     log = inst.gamedir / "tagpu.log"
     start = log.stat().st_size if log.exists() else 0
-    (inst.gamedir / "tagpu_peek.trigger").write_text("\n".join(args.specs) + "\n")
+    (inst.gamedir / "tagpu_peek.trigger").write_text("\n".join(specs) + "\n")
 
-    deadline = time.time() + args.timeout
+    deadline = time.time() + timeout
     rows = []
-    while time.time() < deadline and len(rows) < len(args.specs):
+    while time.time() < deadline and len(rows) < len(specs):
         if log.exists():
             with open(log, "rb") as f:
                 f.seek(start)
@@ -697,9 +837,26 @@ def cmd_peek(args):
                     rows.append({"spec": m.group("spec"),
                                  "addr": int(m.group("addr"), 16) if m.group("addr") else None,
                                  "value": m.group("value")})
-        if len(rows) < len(args.specs):
+        if len(rows) < len(specs):
             time.sleep(0.2)
+    return rows
 
+
+def _peek_uint(row):
+    """`12345 (0x00003039)` -> 12345. None when the fork could not read it."""
+    m = re.match(r"^(\d+)", (row or {}).get("value", ""))
+    return int(m.group(1)) if m else None
+
+
+def _peek_str(row):
+    """`"maps\\Foo.tnt"` -> the text between the quotes, or None."""
+    m = re.fullmatch(r'"(.*)"', (row or {}).get("value", ""))
+    return m.group(1) if m else None
+
+
+def cmd_peek(args):
+    inst = Instance(args.name)
+    rows = _peek(inst, args.specs, args.timeout)
     if not rows:
         die("no peek lines — is the game past its first frame?")
     out({"name": args.name, "peeks": rows}, args.json,
@@ -766,6 +923,16 @@ def cmd_log(args):
     out({"name": args.name, "lines": data}, args.json, human="\n".join(data))
 
 
+# overlay: "  u001 ARMCOM own=0 idx=17 world=(x,y,height) screen=(sx,sy) nano=.."
+# world x,y are the eye plane (what `tacli eye` takes); the third is height. idx is
+# UnitInGameIndex — what `scenario apply` reports per spawned unit, and recycled on
+# death, so it identifies a unit only while it lives. It is optional in the pattern
+# because logs written before it existed must still parse.
+ROSTER_RX = re.compile(r"\s*u(\d+)\s+(\S+)\s+own=(\d+)(?:\s+idx=(-?\d+))?"
+                       r"\s+world=\((-?\d+),(-?\d+),(-?\d+)\)"
+                       r"\s+screen=\((-?\d+),(-?\d+)\)")
+
+
 def cmd_roster(args):
     """Parse the newest roster block the overlay logs every 300 frames."""
     inst = Instance(args.name)
@@ -775,15 +942,13 @@ def cmd_roster(args):
     lines = path.read_bytes().decode("utf-8", "replace").splitlines()
     units, eye = [], None
     for line in reversed(lines):
-        # overlay format: "  u001 ARMCOM  own=0 world=(x,y,height) screen=(sx,sy) nano=.."
-        # world x,y are the eye plane (what `tacli eye` takes); the third is height.
-        m = re.match(r"\s*u(\d+)\s+(\S+)\s+own=(\d+)\s+world=\((-?\d+),(-?\d+),(-?\d+)\)"
-                     r"\s+screen=\((-?\d+),(-?\d+)\)", line)
+        m = ROSTER_RX.match(line)
         if m:
             units.append({"id": int(m.group(1)), "type": m.group(2), "owner": int(m.group(3)),
-                          "world": [int(m.group(4)), int(m.group(5))],
-                          "height": int(m.group(6)),
-                          "screen": [int(m.group(7)), int(m.group(8))]})
+                          "engine_index": int(m.group(4)) if m.group(4) else None,
+                          "world": [int(m.group(5)), int(m.group(6))],
+                          "height": int(m.group(7)),
+                          "screen": [int(m.group(8)), int(m.group(9))]})
         elif line.startswith("units:"):
             e = re.search(r"eye=?\(?(-?\d+)[, ]+(-?\d+)", line)
             if e:
@@ -793,6 +958,7 @@ def cmd_roster(args):
     units.reverse()
     out({"name": args.name, "eye": eye, "units": units}, args.json,
         human="\n".join(f"u{u['id']:<4} {u['type']:<10} own={u['owner']} "
+                        f"idx={'-' if u['engine_index'] is None else u['engine_index']:<4} "
                         f"world={u['world']} screen={u['screen']}" for u in units)
              or "no roster lines yet (needs a running game)")
 
@@ -817,8 +983,7 @@ def cmd_wait(args):
     die(f"timeout waiting for /{args.pattern}/")
 
 
-def cmd_stop(args):
-    inst = Instance(args.name)
+def _stop(inst: Instance, hard: bool = False) -> dict:
     pid = inst.pid()
     if pid:
         run(["kill", str(pid)])
@@ -826,9 +991,14 @@ def cmd_stop(args):
             if not inst.running():
                 break
             time.sleep(0.5)
-    if args.hard or inst.running():
+    if hard or inst.running():
         run(["wineserver", "-k"], env=inst.env())
-    out({"name": args.name, "stopped": True}, args.json, human=f"stopped {args.name}")
+    return {"name": inst.name, "stopped": True, "was": pid}
+
+
+def cmd_stop(args):
+    res = _stop(Instance(args.name), args.hard)
+    out(res, args.json, human=f"stopped {args.name}")
 
 
 def cmd_rm(args):
@@ -838,15 +1008,2273 @@ def cmd_rm(args):
     if inst.running():
         if not args.force:
             die(f"{args.name} is running (tacli stop {args.name}, or --force)")
-        cmd_stop(argparse.Namespace(name=args.name, hard=True, json=False))
+        _stop(inst, hard=True)
     shutil.rmtree(inst.dir)
     out({"name": args.name, "removed": True}, args.json, human=f"removed {args.name}")
 
 
 # --------------------------------------------------------------------------- cli
 
+# ------------------------------------------------------------------------ ui
+#
+# `tacli ui` is a Playwright-CLI over TA's own gadget tree: snapshot the screen,
+# then act on a gadget by name. The fork walks the live gadget array on demand
+# (tagpu_ui.trigger -> tagpu_ui.json) — nothing here is periodic, and asking
+# costs one frame.
+#
+# Design: research/notes/tacli-design.md phase 1.3.
+# The reverse engineering it stands on: research/notes/gui-gadgets.md.
+
+UI_TIMEOUT = 5.0                 # Playwright's own expect() default
+UI_SETTLE = 1.5                  # how long an action waits for a consequence
+UI_ACTIONABLE = ("button", "button2", "listbox", "field", "slider")
+
+
+def _ui_snapshot(inst: Instance, timeout: float = UI_TIMEOUT, soft: bool = False):
+    """Trigger one gadget-tree walk and read the result.
+
+    The fork writes a temp file and renames it, so a reader can never catch a
+    half-built snapshot — but a decode error is still retried rather than fatal.
+    """
+    path = inst.gamedir / "tagpu_ui.json"
+    before = path.stat().st_mtime_ns if path.exists() else 0
+    last = None
+    (inst.gamedir / "tagpu_ui.trigger").write_text("")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if path.exists() and path.stat().st_mtime_ns > before:
+            try:
+                snap = json.loads(path.read_text())
+            except json.JSONDecodeError:
+                pass
+            else:
+                if snap.get("ok"):
+                    return snap
+                # Mid-transition the engine pops the old screen before pushing the
+                # new one, so there is genuinely no active GUI for a frame or two.
+                # That is a state to wait through, not an error.
+                last = snap.get("error", "unknown")
+                before = path.stat().st_mtime_ns
+                (inst.gamedir / "tagpu_ui.trigger").write_text("")
+        time.sleep(0.05)
+    if soft:
+        return None          # the caller is waiting for a UI to exist at all
+    if last:
+        die(f"no UI to read after {timeout:g}s: {last}")
+    die("no UI snapshot appeared — is the instance running and past its first frame?")
+
+
+def _ui_kind(g: dict) -> str:
+    """How a gadget is presented: the engine's type, refined by what its state means."""
+    t = g.get("type")
+    if t in ("button", "button2"):
+        stages = g.get("stages") or 0
+        if stages > 2:
+            return "cycle"
+        if stages == 2:
+            return "toggle"
+        return "button"
+    return "list" if t == "listbox" else t
+
+
+def _ui_blocked(g: dict):
+    """Playwright's actionability check: why this gadget cannot be clicked, or None."""
+    if not g.get("active"):
+        return "inactive"
+    if g.get("grayed"):
+        return "grayed out"
+    if g["rect"][2] <= 0 or g["rect"][3] <= 0:
+        return "zero-sized"
+    return None
+
+
+def _ui_keyname(code: int):
+    """The `tacli keys` token for a gadget's quickkey, or None if we cannot type it.
+
+    quickkey is a u8 **ASCII** accelerator, not a virtual-key code — every value in
+    the stock .GUI corpus is a letter, a digit or one of 0/8/13/32. There is
+    deliberately no VK_F1..VK_F12 branch: 0x70..0x7A are 'p'..'z' here, and reading
+    them as function keys would silently type the wrong thing.
+    """
+    if not code:
+        return None
+    if 0x41 <= code <= 0x5A:
+        return chr(code + 32)
+    if 0x61 <= code <= 0x7A:
+        return chr(code)
+    if 0x30 <= code <= 0x39:
+        return chr(code)
+    return {8: "backspace", 9: "tab", 13: "return", 27: "escape",
+            32: "space"}.get(code)
+
+
+def _ui_state(g: dict) -> str:
+    why = _ui_blocked(g)
+    if why:
+        return why.split()[0]
+    kind = _ui_kind(g)
+    if kind == "toggle":
+        return "on" if g.get("stage") else "off"
+    if kind == "cycle":
+        return f"{g.get('stage')}/{g.get('stages')}"
+    if kind == "list":
+        items = g.get("items")
+        n = "?" if items is None else len(items)
+        return f"sel={g.get('selected')} n={n}"
+    if kind == "slider":
+        if g.get("value") is None:
+            return f"pos={g.get('pos')} (no value)"
+        return f"val={g.get('value')}/{g.get('thick')}"
+    if kind == "field":
+        text = (g.get("text") or "")[:20]
+        return f'"{text}"'
+    return "ok"
+
+
+def _ui_label(g: dict) -> str:
+    """How to name a gadget in a message. Real gadgets do have empty names."""
+    return g.get("name") or f"#{g['i']}"
+
+
+def _ui_groups(snap: dict) -> dict:
+    """assoc -> the gadgets that share it, but only where assoc means something.
+
+    Every gadget carries an assoc, so tagging all of them would put a number on
+    every row and say nothing. It only carries information where the engine acts
+    on it: the radio reset at 0x4A6A40 clears every toggle sharing an assoc, and
+    GUI_SliderUpdate binds a scrollbar to the listbox with the same assoc. Those
+    are the two groups worth showing.
+    """
+    by_assoc = {}
+    for g in snap.get("gadgets") or []:
+        by_assoc.setdefault(g.get("assoc"), []).append(g)
+
+    groups = {}
+    for assoc, members in by_assoc.items():
+        if not assoc:
+            continue
+        toggles = [g for g in members if _ui_kind(g) in ("toggle", "cycle")]
+        sliders = [g for g in members if g["type"] == "slider"]
+        if len(toggles) > 1 or (sliders and len(members) > 1):
+            groups[assoc] = members
+    return groups
+
+
+def _ui_screen(snap: dict) -> str:
+    """The screen name without its extension — the engine reports "MAINMENU.GUI"."""
+    name = snap.get("gui") or ""
+    return name[:-4] if name.upper().endswith(".GUI") else name
+
+
+def _ui_page(snap: dict):
+    """Build menus are <UNIT><page>.GUI, so the screen name carries the page number.
+
+    How many pages exist is not knowable at runtime — page n+1 lives in a .GUI file
+    that is not loaded — so this reports the current page, never a total.
+    """
+    m = re.fullmatch(r"(.*?)(\d+)", _ui_screen(snap))
+    if not m or m.group(1).upper().endswith("MAIN"):
+        # The in-game stats screen is literally "%sMAIN2.GUI" — a fixed name that
+        # happens to end in a digit, not a build page.
+        return (None, None)
+    return m.group(1), int(m.group(2))
+
+
+def _ui_render(snap: dict, show_all: bool = False) -> str:
+    head = f"gui {snap['gui']}  {snap['surface'][0]}x{snap['surface'][1]}"
+    _, page = _ui_page(snap)
+    if page is not None:
+        head += f"   page {page}"
+    under = snap.get("under") or []
+    head += "   under: " + (", ".join(under) if under else "-")
+    lines = [head]
+
+    binds = [f"{k}={snap[k]}" for k in ("enter", "esc", "focus") if snap.get(k)]
+    if binds:
+        lines.append("  ".join(binds))
+
+    rows = [g for g in snap["gadgets"] if show_all or g["type"] in UI_ACTIONABLE]
+    groups = _ui_groups(snap)
+    if rows:
+        head = f"{'#':>3}  {'type':<8} {'name':<16} {'click':<11} {'state':<14} key"
+        lines.append(head + ("  grp" if groups else ""))
+        for g in rows:
+            x, y = g["click"]
+            grp = f"  {g['assoc']}" if g.get("assoc") in groups else ""
+            lines.append(f"{g['i']:>3}  {_ui_kind(g):<8} {g['name']:<16} "
+                         f"{f'{x},{y}':<11} {_ui_state(g):<14} "
+                         f"{_ui_keyname(g.get('quickkey') or 0) or '':<3}{grp}")
+    else:
+        lines.append("(no interactive gadgets on this screen — try --all)")
+
+    for g in snap["gadgets"]:
+        if g["type"] != "listbox":
+            continue
+        if g.get("items") is None:
+            lines.append(f"{g['name']}: items unknown — a picture list (attribs "
+                         f"{g.get('attribs')}); its entries are GAF frames and "
+                         "carry no text at all")
+        else:
+            lines.append(f"{g['name']}: " + _ui_item_line(g))
+
+    if not show_all:
+        seen = {}
+        for g in snap["gadgets"]:
+            if g["type"] == "label" and (g.get("text") or "").strip():
+                seen[g["text"].strip()] = None
+        if seen:
+            lines.append("text: " + " / ".join(seen))
+    return "\n".join(lines)
+
+
+def _ui_item_line(g: dict, limit: int = 8) -> str:
+    """One line of listbox items, marking the selected one. `show` prints them all."""
+    items = g.get("items") or []
+    sel = g.get("selected")
+    shown = [f"{'*' if i == sel else ''}{i} {t}" for i, t in enumerate(items[:limit])]
+    tail = f" … +{len(items) - limit} more" if len(items) > limit else ""
+    return (" · ".join(shown) or "(empty)") + tail
+
+
+def _ui_match(snap: dict, selector: str):
+    """Selector -> matching gadgets. `NAME`, `type:NAME` or `#index`."""
+    want, sep, name = selector.rpartition(":")
+    gadgets = snap.get("gadgets") or []
+    if name.startswith("#"):
+        try:
+            idx = int(name[1:])
+        except ValueError:
+            die(f"bad index selector {selector!r}")
+        hits = [g for g in gadgets if g["i"] == idx]
+    else:
+        hits = [g for g in gadgets if g["name"].lower() == name.lower()]
+    if sep and want:
+        want = want.lower()
+        hits = [g for g in hits if g["type"] == want or _ui_kind(g) == want]
+    return hits
+
+
+def _ui_item_selectable(g: dict, idx: int):
+    """Why row `idx` cannot hold the selection, or None.
+
+    Two independent refusals, from two different places in the engine: a "&G"
+    prefix makes a row a separator that the selection slides off (0x4A39EA), and
+    the per-item flag array at +0xD6 greys a row out (0x4A21F4). Either one makes
+    a select silently do nothing, which is exactly the failure worth naming.
+    """
+    seps = g.get("separator") or []
+    if idx < len(seps) and seps[idx]:
+        return "a separator row, not a selectable item"
+
+    flags = g.get("itemflags")
+    if flags is not None and idx < len(flags) and not flags[idx]:
+        return "disabled on this screen"
+
+    return None
+
+
+def _ui_item_index(g: dict, selector: str) -> int:
+    """Which row of a listbox a selector names. Strict, like a gadget selector."""
+    items = g.get("items") or []
+    if selector.startswith("#"):
+        try:
+            idx = int(selector[1:])
+        except ValueError:
+            die(f"bad item index {selector!r}")
+        if not 0 <= idx < len(items):
+            die(f'{g["name"]} has {len(items)} items, so #{idx} does not exist')
+        return idx
+
+    hits = [i for i, t in enumerate(items) if t.strip().lower() == selector.lower()]
+    if not hits:
+        listing = ", ".join(f"#{i} {t}" for i, t in enumerate(items)) or "(empty)"
+        die(f'no item "{selector}" in {g["name"]}. items: {listing}')
+    if len(hits) > 1:
+        die(f'item "{selector}" appears {len(hits)} times in {g["name"]} '
+            f"({', '.join(f'#{i}' for i in hits)}) — use #index")
+    return hits[0]
+
+
+def _ui_row_click(g: dict, idx: int):
+    """Where to click to hit row `idx`, or a reason it cannot be reached.
+
+    The engine draws rows at a fixed pitch from the top of the gadget
+    (`rect.y + 2 + k*pitch`, 0x4A1D50), so only the rows currently scrolled into
+    view exist as click targets. Like `--page` for build menus, that is reported
+    rather than worked around: a session that silently scrolls stops being
+    reproducible.
+    """
+    pitch = g.get("rowpitch") or 0
+    x, y, w, h = g["rect"]
+    top = g.get("top") or 0
+
+    if pitch <= 0:
+        return None, (f'{g["name"]}: the engine\'s row pitch is not readable '
+                      "(no itemheight and no GUI font), so a row cannot be placed")
+
+    visible = max((h - 2) // pitch, 1)
+    if not top <= idx < top + visible:
+        return None, (f'item #{idx} of {g["name"]} is scrolled out of view '
+                      f"(showing #{top}..#{min(top + visible, len(g.get('items') or [])) - 1}"
+                      f" of {len(g.get('items') or [])})")
+
+    # The hit box stops four pixels short of the bottom edge (0x4A3AE6), which
+    # only bites the last row of a tightly packed list.
+    cy = min(y + 2 + (idx - top) * pitch + pitch // 2, y + h - 5)
+    return (x + w // 2, cy), None
+
+
+def _ui_slider_pos(g: dict, value: int) -> int:
+    """The knobpos that makes the engine read back `value`.
+
+    The engine's own pair: GUI_SliderGetValue 0x45BA20 truncates
+    pos*thick/(range-1), and its inverse GUI_SliderSetValue 0x45B9B0 rounds the
+    other way. Mirroring the ceil is what makes a set land on the value asked
+    for rather than one below it.
+    """
+    rng, thick = g.get("range") or 0, g.get("thick") or 0
+    return -((-min(value, thick) * (rng - 1)) // thick)
+
+
+def _ui_slider_drag(g: dict, want: int):
+    """Grab point and release point for dragging the knob to `want`.
+
+    The knob tracks the pointer one pixel per unit — knobpos becomes
+    `knobpos_at_grab + (mouse_now - mouse_at_grab)` along the live axis
+    (0x4A422C) — so the release point is just the grab point shifted by the
+    difference. The press has to land *on the knob*: a press on the track is a
+    different gesture entirely, worth one unit per frame toward the cursor.
+    """
+    x, y, w, h = g["rect"]
+    pos = g.get("pos") or 0
+    knob = g.get("knobsize") or 0
+    delta = want - pos
+
+    if g.get("horizontal"):
+        # knob spans [x + pos + 1, + knobsize]  (0x4A2407)
+        grab = (x + pos + 1 + knob // 2, y + h // 2)
+        return grab, (grab[0] + delta, grab[1])
+
+    # vertical knobs start two pixels in, not one (0x4A2438)
+    grab = (x + w // 2, y + pos + 2 + knob // 2)
+    return grab, (grab[0], grab[1] + delta)
+
+
+def _ui_bound_list(snap: dict, slider: dict):
+    """The listbox a scrollbar drives, or None if the slider carries its own value.
+
+    GUI_SliderUpdate 0x4A3EF0 scans the panel for the id-2 gadget whose assoc
+    byte matches the slider's; finding one makes the slider a slave of that
+    list's scroll position, which it recomputes every frame. Dragging such a
+    slider is pointless — the binder overwrites it.
+    """
+    for g in snap.get("gadgets") or []:
+        if g["type"] == "listbox" and g.get("assoc") == slider.get("assoc"):
+            return g
+    return None
+
+
+def _ui_resolve(inst: Instance, selector: str, timeout: float,
+                wait: bool = True, actionable: bool = True):
+    """Resolve one gadget, auto-waiting for it to appear and become actionable.
+
+    Strict, like Playwright: an ambiguous selector is an error rather than a guess,
+    and it fails immediately because waiting cannot resolve ambiguity.
+    """
+    deadline = time.time() + (timeout if wait else 0.0)
+    while True:
+        snap = _ui_snapshot(inst)
+        hits = _ui_match(snap, selector)
+
+        if len(hits) > 1:
+            where = ", ".join(f"#{g['i']} {_ui_kind(g)}:{g['name']}" for g in hits)
+            die(f"selector {selector!r} matched {len(hits)} gadgets ({where}) — "
+                f"disambiguate with type:name or #index")
+
+        if len(hits) == 1:
+            why = _ui_blocked(hits[0]) if actionable else None
+            if why is None:
+                return snap, hits[0]
+        else:
+            why = "not present"
+
+        if time.time() >= deadline:
+            if not hits:
+                present = ", ".join(g["name"] for g in snap["gadgets"]
+                                    if g["type"] in UI_ACTIONABLE) or "(none)"
+                die(f'no gadget "{selector}" on {snap["gui"]}. present: {present}')
+            die(f'gadget "{selector}" on {snap["gui"]} is {why}')
+
+        time.sleep(0.1)
+
+
+# What a gadget can visibly become. Deliberately narrow: a full diff would fire
+# on animating timers and clocks and call that a consequence of our click.
+_SETTLE_FIELDS = ("stage", "pos", "selected", "text")
+
+
+def _ui_group_change(before: dict, after: dict, g: dict):
+    """A change in the gadget's own assoc group, described, or None.
+
+    Clicking a scrollbar arrow moves the *slider*, and clicking one radio button
+    clears *another* — neither shows up on the gadget that was clicked. The
+    engine ties both to `assoc` (0x4A6A40, 0x4A3EF0), so that group is exactly
+    the right place to look, and looking no wider keeps a ticking timer
+    somewhere else on screen from being reported as our doing.
+    """
+    was = {b["i"]: b for b in before.get("gadgets") or []}
+
+    for now in after.get("gadgets") or []:
+        if now.get("assoc") != g.get("assoc") or now["i"] not in was:
+            continue
+        for f in _SETTLE_FIELDS:
+            if f in now and now.get(f) != was[now["i"]].get(f):
+                return (f"{_ui_label(now)} {f} "
+                        f"{was[now['i']].get(f)} -> {now.get(f)}")
+    return None
+
+
+def _ui_settle(inst: Instance, before: dict, g: dict, timeout: float = UI_SETTLE):
+    """Wait for an observable consequence of an action, and report which one.
+
+    Three things count as confirmation, in the order they are worth trusting: the
+    screen changed, the gadget's own stage changed, or the engine's UIChange_f
+    names the gadget we aimed at. UIChange_f is transient and the snapshot samples
+    every 5th frame, so it is the fallback rather than the primary signal.
+    """
+    deadline = time.time() + timeout
+    while True:
+        snap = _ui_snapshot(inst)
+        if snap.get("gui") != before.get("gui"):
+            return snap, f"screen {before.get('gui')} -> {snap.get('gui')}"
+        now = _ui_match(snap, g["name"])
+        if len(now) == 1 and now[0].get("stage") != g.get("stage"):
+            return snap, f"stage {g.get('stage')} -> {now[0].get('stage')}"
+        moved = _ui_group_change(before, snap, g)
+        if moved:
+            return snap, moved
+        if snap.get("uichange") == g["i"]:
+            return snap, "engine confirmed"
+        if time.time() >= deadline:
+            return snap, None
+        time.sleep(0.1)
+
+
+def _ui_set_slider(inst: Instance, snap: dict, g: dict, value: int):
+    """Drag a value slider's knob until the engine reads back `value`.
+
+    The gesture is the one the engine implements, spread over four batches
+    because each has to land in a different frame: the capture happens on the
+    frame the button-down message arrives, and the value only moves on the pump
+    iterations after it. Posting the whole gesture in one batch would leave the
+    engine looking at a released button and nothing would move.
+    """
+    bound = _ui_bound_list(snap, g)
+    if bound:
+        die(f'{g["name"]} is the scrollbar for {bound["name"]}, not a value — '
+            f"the engine recomputes it from that list every frame. "
+            f'Move the list instead: ui select {bound["name"]} <item>')
+
+    if g.get("nomouse"):
+        die(f'{g["name"]} ignores the mouse (attribs {g.get("attribs")})')
+
+    rng, thick = g.get("range") or 0, g.get("thick") or 0
+    if rng <= 1 or thick <= 0:
+        die(f'{g["name"]} has range={rng} thick={thick}, which carries no value')
+    if not 0 <= value <= thick:
+        die(f'{g["name"]} runs 0..{thick} and {value} is outside it')
+
+    want = _ui_slider_pos(g, value)
+    grab, release = _ui_slider_drag(g, want)
+
+    for tokens in (f"mouse:{grab[0]},{grab[1]}", "down:lbutton",
+                   f"mouse:{release[0]},{release[1]}", "up:lbutton"):
+        _write_tokens(inst, tokens)
+        time.sleep(0.35)
+
+    after = _ui_snapshot(inst)
+    hits = _ui_match(after, g["name"])
+    now = hits[0] if len(hits) == 1 else {}
+    got = now.get("value")
+
+    human = (f"{g['name']} = {got}/{thick} (knob {g.get('pos')} -> {now.get('pos')})"
+             + ("" if got == value else f" — asked for {value}"))
+    return {"name": g["name"], "value": got, "wanted": value,
+            "pos": now.get("pos"), "thick": thick}, human
+
+
+def _ui_select_row(inst: Instance, before: dict, g: dict, idx: int,
+                   timeout: float) -> dict:
+    """Put the selection on row `idx`, scrolling to it if it is off screen.
+
+    A visible row is one click. An off-screen one is reached with the arrow keys:
+    they are the only mechanism that moves the selection by exactly one row per
+    press (List_SelectPrev/Next 0x4A9830/0x4A99C0, which also drag `top` along
+    when the selection would leave the view). The scroll arrows flanking the
+    scrollbar move the knob one *pixel*, which is usually no rows at all, and the
+    engine offers no page-jump — so counting arrow presses is the only honest way
+    down a long list, and it is what a person holding the key does too.
+
+    Progress is polled rather than counted: a "&G" separator swallows a press
+    without moving, so a batch can land short but never long.
+    """
+    point, why = _ui_row_click(g, idx)
+
+    if point:
+        _write_tokens(inst, f"pclick:{point[0]},{point[1]}")
+        after, how = _ui_settle_item(inst, before, g, idx)
+        return {"at": list(point), "steps": 0, "confirm": how,
+                "gui": after.get("gui")}
+
+    # Off screen: click the nearest visible row to take the keyboard focus
+    # (0x4A3AFB sets it unconditionally on a click inside the box), then walk.
+    top = g.get("top") or 0
+    pitch = g.get("rowpitch") or 0
+    visible = max((g["rect"][3] - 2) // pitch, 1) if pitch else 1
+    anchor_row = top if idx < top else top + visible - 1
+    point, why = _ui_row_click(g, anchor_row)
+    if point is None:
+        die(why)
+
+    _write_tokens(inst, f"pclick:{point[0]},{point[1]}")
+    time.sleep(0.3)
+
+    deadline = time.time() + max(timeout, 15.0)
+    steps = 0
+    seen = None
+
+    while True:
+        snap = _ui_snapshot(inst)
+        hits = _ui_match(snap, g["name"])
+        if len(hits) != 1:
+            die(f'{g["name"]} vanished while scrolling to #{idx}')
+        sel = hits[0].get("selected")
+
+        if sel == idx:
+            return {"at": list(point), "steps": steps, "gui": snap.get("gui"),
+                    "confirm": f"selection {g.get('selected')} -> {idx}"
+                               + (f" in {steps} arrow presses" if steps else "")}
+
+        if sel == seen:
+            die(f'{g["name"]} stopped moving at #{sel} on the way to #{idx} '
+                "— a separator or a disabled row is in the way")
+        seen = sel
+
+        if time.time() >= deadline:
+            die(f'{g["name"]} reached #{sel} of #{idx} before the {timeout:g}s '
+                "timeout — raise --timeout for a very long list")
+
+        # Batched: a press can move one row or none, never more, so a batch
+        # cannot overshoot. Re-reading between batches keeps it self-correcting —
+        # which it needs to be, because a rapid batch does get partly dropped
+        # (96 rows cost 171 presses live), so `steps` counts presses sent.
+        n = min(abs(idx - sel), 8)
+        _write_tokens(inst, " ".join(["down" if idx > sel else "up"] * n))
+        steps += n
+        time.sleep(0.25)
+
+
+def _ui_settle_item(inst: Instance, before: dict, g: dict, idx: int,
+                    timeout: float = UI_SETTLE):
+    """Wait for a listbox selection to land on `idx`, or for the screen to move on."""
+    deadline = time.time() + timeout
+    while True:
+        snap = _ui_snapshot(inst)
+        if snap.get("gui") != before.get("gui"):
+            return snap, f"screen {before.get('gui')} -> {snap.get('gui')}"
+        now = _ui_match(snap, g["name"])
+        if len(now) == 1 and now[0].get("selected") == idx:
+            was = g.get("selected")
+            return snap, (f"selection {was} -> {idx}" if was != idx
+                          else f"selection holds at {idx}")
+        if time.time() >= deadline:
+            return snap, None
+        time.sleep(0.1)
+
+
+def _ui_label_diff(before: dict, after: dict):
+    """Label text present after an action and not before it — what a hover reveals."""
+    def labels(snap):
+        return [g["text"].strip() for g in snap.get("gadgets") or []
+                if g["type"] == "label" and (g.get("text") or "").strip()]
+
+    was = set(labels(before))
+    return [t for t in dict.fromkeys(labels(after)) if t not in was]
+
+
+def _ui_click_gadget(inst: Instance, g: dict, before: dict, settle: bool = True):
+    x, y = g["click"]
+    _write_tokens(inst, f"pclick:{x},{y}")
+    if not settle:
+        return before, None
+    return _ui_settle(inst, before, g)
+
+
+def _ui_page_to(inst: Instance, snap: dict, page: int, timeout: float):
+    """Page a build menu to `page` by clicking its pager, then return the new snapshot.
+
+    Page n+1's gadgets live in a .GUI file that is not loaded, so they cannot be
+    seen from here — only walked to. The pager gadget is found by name; if the
+    screen has no obvious one we say what we did see rather than clicking blind.
+    """
+    for _ in range(16):
+        _, at = _ui_page(snap)
+        if at == page:
+            return snap
+        if at is None:
+            die(f'screen {snap["gui"]} is not a paged menu (no trailing page number)')
+        want = "NEXT" if page > at else "PREV"
+        pagers = [g for g in snap["gadgets"]
+                  if want in g["name"].upper() and not _ui_blocked(g)]
+        if not pagers:
+            names = ", ".join(g["name"] for g in snap["gadgets"]
+                              if g["type"] in UI_ACTIONABLE) or "(none)"
+            die(f'no {want} pager on {snap["gui"]} (at page {at}, want {page}). '
+                f"gadgets: {names}")
+        snap, _ = _ui_click_gadget(inst, pagers[0], snap)
+    die(f"gave up paging to {page}")
+
+
+def cmd_ui(args):
+    """Snapshot and drive the on-screen gadgets — menus, options, in-game panel."""
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{args.name} is not running")
+
+    verb = (args.verb or "snapshot").lower()
+    rest = list(args.rest)
+    tmo = args.timeout
+
+    if verb in ("snapshot", "snap"):
+        if rest:
+            die(f"snapshot takes no arguments (did you mean: ui {args.name} show {rest[0]})")
+        snap = _ui_snapshot(inst, tmo)
+        out(snap, args.json, human=_ui_render(snap, args.all))
+        return
+
+    if verb == "show":
+        if len(rest) != 1:
+            die("usage: ui <name> show <selector>")
+        snap, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait, actionable=False)
+        human = "\n".join(
+            f"{k:<12} " + ("\n".join(f"{'':<12} #{i} {t}" for i, t in enumerate(v)).strip()
+                            if k == "items" and v else str(v))
+            for k, v in g.items())
+        out({"gui": snap["gui"], "gadget": g}, args.json,
+            human=f"gui {snap['gui']}\n{human}")
+        return
+
+    if verb == "wait":
+        deadline = time.time() + tmo
+        if args.gui:
+            while True:
+                snap = _ui_snapshot(inst)
+                if _ui_screen(snap).lower() == _ui_screen({"gui": args.gui}).lower():
+                    out(snap, args.json, human=f"gui {snap['gui']} is on top")
+                    return
+                if time.time() >= deadline:
+                    die(f'timed out after {tmo:g}s waiting for gui "{args.gui}" '
+                        f'(on top: {snap.get("gui")})')
+                time.sleep(0.1)
+        if len(rest) != 1:
+            die("usage: ui <name> wait <selector> | ui <name> wait --gui <SCREEN>")
+        snap, g = _ui_resolve(inst, rest[0], tmo, wait=True)
+        out({"gui": snap["gui"], "gadget": g}, args.json,
+            human=f"{g['name']} is actionable on {snap['gui']}")
+        return
+
+    if verb == "click":
+        if len(rest) != 1:
+            die("usage: ui <name> click <selector>")
+        if args.page is not None:
+            _ui_page_to(inst, _ui_snapshot(inst), args.page, tmo)
+        before, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait)
+        after, how = _ui_click_gadget(inst, g, before)
+        msg = f"clicked {_ui_label(g)} at {g['click'][0]},{g['click'][1]}"
+        msg += f" — {how}" if how else " — delivered (no GUI-visible change)"
+        out({"clicked": _ui_label(g), "at": g["click"], "confirm": how,
+             "gui": after.get("gui")}, args.json, human=msg)
+        return
+
+    if verb in ("set", "check", "uncheck"):
+        if verb == "set":
+            if len(rest) != 2:
+                die("usage: ui <name> set <selector> <stage|value>")
+            selector, target = rest[0], int(rest[1])
+        else:
+            if len(rest) != 1:
+                die(f"usage: ui <name> {verb} <selector>")
+            selector, target = rest[0], 1 if verb == "check" else 0
+
+        snap, g = _ui_resolve(inst, selector, tmo, wait=args.wait)
+
+        if g["type"] == "slider":
+            if verb != "set":
+                die(f'{g["name"]} is a slider — use set <value>, not {verb}')
+            data, human = _ui_set_slider(inst, snap, g, target)
+            out(data, args.json, human=human)
+            return
+
+        stages = g.get("stages") or 0
+        if stages < 2:
+            die(f'{g["name"]} is not a toggle (stages={stages}) — use click')
+        if not 0 <= target < stages:
+            die(f'{g["name"]} has {stages} stages, so stage {target} does not exist')
+
+        for _ in range(stages + 1):
+            if g.get("stage") == target:
+                out({"name": g["name"], "stage": g.get("stage")}, args.json,
+                    human=f"{g['name']} = stage {g.get('stage')}")
+                return
+            snap, _how = _ui_click_gadget(inst, g, snap)
+            hits = _ui_match(snap, g["name"])
+            if len(hits) != 1:
+                die(f'{g["name"]} vanished while cycling it')
+            g = hits[0]
+        die(f'{g["name"]} cycled through all {stages} stages without reaching {target}')
+
+    if verb in ("fill", "type"):
+        if len(rest) != 2:
+            die(f"usage: ui <name> {verb} <selector> <text>")
+        selector, text = rest[0], rest[1]
+        tokens = _ui_text_tokens(text)
+        snap, g = _ui_resolve(inst, selector, tmo, wait=args.wait)
+
+        # The field's own limit is knowable before we type, so refuse rather than
+        # deliver a silently truncated string and call it a fill.
+        cap = g.get("maxchars") or 0
+        if cap and len(text) > cap:
+            die(f'{g["name"]} holds {cap} characters and {text!r} is {len(text)}')
+
+        _ui_click_gadget(inst, g, snap, settle=False)     # focus the field
+        time.sleep(0.2)
+        clear = len(g.get("text") or "")
+        if clear:
+            _write_tokens(inst, " ".join(["backspace"] * clear))
+            time.sleep(0.3)
+            left = _ui_match(_ui_snapshot(inst), g["name"])
+            if len(left) == 1 and (left[0].get("text") or ""):
+                die(f'{g["name"]} still reads {left[0]["text"]!r} after clearing it '
+                    "— the caret is not where backspace can reach the whole field")
+        if tokens:
+            _write_tokens(inst, " ".join(tokens))
+        time.sleep(0.3)
+
+        after = _ui_snapshot(inst)
+        hits = _ui_match(after, g["name"])
+        got = hits[0].get("text") if len(hits) == 1 else None
+        note = "" if got == text else (
+            f" (field now reads {got!r}, not {text!r} — TA validates what a field "
+            "accepts and drops the rest)")
+        out({"name": g["name"], "text": got, "wanted": text}, args.json,
+            human=f"filled {g['name']}{note}")
+        return
+
+    if verb == "select":
+        if len(rest) != 2:
+            die("usage: ui <name> select <listbox> <item|#index>")
+        before, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait)
+        if g["type"] != "listbox":
+            die(f'{g["name"]} is a {_ui_kind(g)}, not a list')
+        if g.get("items") is None:
+            die(f'{g["name"]} is a picture list (attribs {g.get("attribs")}): its '
+                "entries carry no text, so there is nothing to select by name")
+
+        idx = _ui_item_index(g, rest[1])
+        blocked = _ui_item_selectable(g, idx)
+        if blocked:
+            die(f'#{idx} "{g["items"][idx]}" in {g["name"]} is {blocked}')
+
+        text = g["items"][idx]
+        data = _ui_select_row(inst, before, g, idx, tmo)
+        msg = f'selected #{idx} "{text}" in {g["name"]}'
+        msg += f" — {data['confirm']}" if data["confirm"] else \
+               " — delivered (selection did not move)"
+        out(dict(data, list=g["name"], index=idx, item=text), args.json, human=msg)
+        return
+
+    if verb == "hover":
+        if len(rest) != 1:
+            die("usage: ui <name> hover <selector>")
+        before, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait, actionable=False)
+        x, y = g["click"]
+        _write_tokens(inst, f"pmove:{x},{y}")
+        time.sleep(0.4)
+        after = _ui_snapshot(inst)
+        revealed = _ui_label_diff(before, after)
+        msg = f"hovering {g['name']} at {x},{y}"
+        msg += ("\nrevealed: " + " / ".join(revealed)) if revealed else \
+               " — no label text changed"
+        out({"hover": g["name"], "at": [x, y], "revealed": revealed}, args.json,
+            human=msg)
+        return
+
+    if verb == "press":
+        if len(rest) != 1:
+            die("usage: ui <name> press <selector>")
+        before, g = _ui_resolve(inst, rest[0], tmo, wait=args.wait)
+        key = _ui_keyname(g.get("quickkey") or 0)
+        if not key:
+            die(f'{g["name"]} has no quickkey (quickkey={g.get("quickkey")}) — use click')
+        _write_tokens(inst, key)
+        after, how = _ui_settle(inst, before, g)
+        msg = f"pressed {key} for {g['name']}"
+        msg += f" — {how}" if how else " — delivered (no GUI-visible change)"
+        out({"pressed": key, "gadget": g["name"], "confirm": how,
+             "gui": after.get("gui")}, args.json, human=msg)
+        return
+
+    die(f"unknown ui verb {verb!r} (snapshot show click set check uncheck "
+        "select hover fill press wait)")
+
+
+def _ui_text_tokens(text: str):
+    """Text -> `tacli keys` tokens, refusing what the input layer cannot type.
+
+    Every character goes as `char:`, the WM_CHAR token, rather than as a key
+    token. A key token carries a modifier the shield deliberately *holds* for
+    150 ms because TA polls it, so `shift+c` in a batch capitalises everything
+    typed behind it — "Claude" arrives as "CLAUDE". WM_CHAR carries the
+    character with no modifier state at all, which is what a text field wants.
+
+    Which characters a field then keeps is TA's business, not ours: the
+    save-name field accepts letters, digits, space and underscore and silently
+    drops the rest, so `fill` reports what the field ended up holding.
+    """
+    tokens = []
+    for ch in text:
+        if ch == " ":
+            tokens.append("space")
+        elif ch.isascii() and ch.isprintable():
+            tokens.append(f"char:{ch}")
+        else:
+            die(f"cannot type {ch!r}: the input layer carries printable ASCII only")
+    return tokens
+
+
+# ----------------------------------------------------------------- catalogues
+#
+# What a scenario is allowed to name — validation layer 2. The authority is the
+# game's own definition tables, so these verbs ask a running instance and cache
+# the answer per instance: a mod changes what exists, and the catalogue changes
+# with it. Fork side: tagpu/ddraw/src/tagpu_cat.c.
+
+CAT_TIMEOUT = 10.0          # a 16k-entry table takes longer to write than a menu
+
+
+def _cat_ask(inst: Instance, kind: str, timeout: float = CAT_TIMEOUT) -> dict:
+    """Trigger one table walk and read the result (tmp + rename, like `ui`)."""
+    if not inst.running():
+        die(f"{inst.name} is not running (tacli launch {inst.name})")
+    path = inst.gamedir / f"tagpu_{kind}.json"
+    before = path.stat().st_mtime_ns if path.exists() else 0
+    (inst.gamedir / f"tagpu_{kind}.trigger").write_text("")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if path.exists() and path.stat().st_mtime_ns > before:
+            try:
+                return json.loads(path.read_text())
+            except json.JSONDecodeError:
+                pass                      # a rename we caught mid-flight; retry
+        time.sleep(0.05)
+    die(f"no {kind} catalogue appeared in {timeout:g}s — "
+        f"is the instance past its first frame?")
+
+
+def _cat_path(inst: Instance) -> Path:
+    """The merged per-instance cache. Lives beside instance.json, not in the
+    gamedir: it is tacli's own bookkeeping, not something the game reads."""
+    return inst.dir / "catalogue.json"
+
+
+def _cat_load(inst: Instance) -> dict:
+    path = _cat_path(inst)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+
+def _cat_merge(inst: Instance, key: str, rows) -> dict:
+    """Fold one table into the cache and write it back whole."""
+    cat = _cat_load(inst)
+    cat[key] = rows
+    cat["cached"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _cat_path(inst).write_text(json.dumps(cat, indent=1))
+    return cat
+
+
+def _cat_report(args, inst: Instance, kind: str, key: str, snap: dict, rows):
+    note = snap.get("note")
+    if snap.get("stride_check") == "MISMATCH":
+        # The walk cross-checks its own base and stride against a live unit. If
+        # that fails the table is not where we think it is, and every name in it
+        # is a guess — refuse rather than cache a plausible-looking lie.
+        die(f"{kind}: the definition table failed its own stride check — "
+            f"do not trust these names (tagpu_cat.c, scenario-format.md)")
+    _cat_merge(inst, key, rows)
+    res = {"name": inst.name, key: rows, "count": len(rows),
+           "declared": snap.get("declared"), "note": note,
+           "stride_check": snap.get("stride_check"),
+           "cache": str(_cat_path(inst))}
+    if args.json:
+        out(res, True)
+        return
+    if not rows:
+        print(f"no {kind} yet{': ' + note if note else ''} — "
+              f"the tables fill when a game loads")
+        return
+    if not any(max(r.get("footprint") or [0]) for r in rows):
+        # Startup parses enough of each FBI to name it; the rest — description,
+        # footprint — lands when a game loads. Verified live: at the menu ARMPW
+        # reads 0x0, in game 2x2 (and its table index moves).
+        print(f"cached at the menu: names only. Descriptions and footprints fill "
+              f"when a game loads — re-read then for the footprint checks.")
+    for r in rows[:args.limit] if args.limit else rows:
+        foot = r.get("footprint") or []
+        print(f"{r['name']:<16} {'x'.join(str(c) for c in foot):<7} "
+              f"{(r.get('side') or ''):<5} {r.get('desc', '')[:44]}")
+    if args.limit and len(rows) > args.limit:
+        print(f"... {len(rows) - args.limit} more (--limit 0 for all, --json for data)")
+
+
+def cmd_units(args):
+    """The live unit catalogue: what a scenario's unit `type` may name."""
+    inst = Instance(args.name)
+    snap = _cat_ask(inst, "units", args.timeout)
+    _cat_report(args, inst, "units", "units", snap, snap.get("units", []))
+
+
+def cmd_features(args):
+    """The live feature catalogue — where wreck names come from (`ARMCOM_DEAD`)."""
+    inst = Instance(args.name)
+    snap = _cat_ask(inst, "features", args.timeout)
+    _cat_report(args, inst, "features", "features", snap, snap.get("features", []))
+
+
+# The map list is not a memory table: it is a listbox on the skirmish map-select
+# screen, so `maps` reads it through `ui` and puts the screen back where it found
+# it. MAPNAMES is the gadget; SELMAP is the screen.
+MAPS_GADGET = "MAPNAMES"
+MAPS_ROUTE = ("SINGLE", "Skirmish", "SelectMap")
+
+
+def _maps_listbox(snap: dict):
+    for g in snap.get("gadgets", []):
+        if g.get("name", "").upper() == MAPS_GADGET and g.get("items"):
+            return g
+    return None
+
+
+def _maps_wait(inst: Instance, snap: dict, timeout: float):
+    """Re-snapshot until the list is there.
+
+    The screen push and the list's own fill are separate frames: a click that
+    reports `-> SELMAP.GUI` can still be a frame ahead of the 99 names, and one
+    snapshot taken right after it reads an empty screen.
+    """
+    deadline = time.time() + timeout
+    while True:
+        box = _maps_listbox(snap)
+        if box or time.time() >= deadline:
+            return snap, box
+        time.sleep(0.1)
+        snap = _ui_snapshot(inst)
+
+
+def cmd_maps(args):
+    """The map names this install offers, read off SELMAP's own list.
+
+    Reads whatever screen is up first: if the list is already there, nothing is
+    clicked at all. Otherwise it walks SINGLE -> Skirmish -> SelectMap and backs
+    out the way it came, because a catalogue read must not leave an agent on a
+    screen it did not ask for.
+    """
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{args.name} is not running (tacli launch {args.name})")
+    snap = _ui_snapshot(inst)
+    walked = []
+    box = _maps_listbox(snap)
+    if box is None and not args.no_walk:
+        for step in MAPS_ROUTE:
+            hits = _ui_match(snap, step)
+            if not hits:
+                die(f"maps: no {step!r} on {snap.get('gui')} — the map list is a "
+                    f"listbox on the shell's map-select screen, so it can only be read "
+                    f"from the menus (a fresh launch, before Start). Walk there "
+                    f"yourself and pass --no-walk if you are somewhere else.")
+            _ui_click_gadget(inst, hits[0], snap)
+            walked.append(step)
+            snap = _ui_snapshot(inst)
+        snap, box = _maps_wait(inst, snap, args.timeout)
+    if box is None:
+        die(f"maps: no {MAPS_GADGET} list on {snap.get('gui')}")
+    names = [i for i in box["items"] if i]
+    found_on = snap.get("gui")
+    for _ in walked:            # back out the way we came in
+        esc = snap.get("esc")
+        hits = _ui_match(snap, esc) if esc else []
+        if not hits:
+            break
+        _ui_click_gadget(inst, hits[0], snap)
+        snap = _ui_snapshot(inst)
+    _cat_merge(inst, "maps", names)
+    out({"name": args.name, "maps": names, "count": len(names),
+         "screen": found_on, "walked": walked,
+         "cache": str(_cat_path(inst))}, args.json,
+        human="\n".join(names) or "no maps in the list")
+
+
+def cmd_catalogue(args):
+    """Show the merged per-instance cache — what `--instance` will check against."""
+    inst = Instance(args.name)
+    cat = _cat_load(inst)
+    if not cat:
+        die(f"no catalogue cached for {args.name} "
+            f"(tacli units {args.name}; tacli features {args.name}; "
+            f"tacli maps {args.name})")
+    summary = {k: (len(v) if isinstance(v, list) else v) for k, v in cat.items()}
+    out({"name": args.name, "path": str(_cat_path(inst)), "have": summary}, args.json,
+        human="\n".join(f"{k:<10} {v}" for k, v in summary.items()))
+
+
+# ------------------------------------------------------------------ scenarios
+#
+# `tacli scenario` turns a JSON *situation* — 200 units fighting, a wreck of a
+# chosen type, the camera already on it — into a private wire file the fork
+# applies by calling the engine's own creation functions. Nothing is addressed
+# by numeric id: units, features, orders and switches are all name-keyed and
+# resolved against the live game.
+#
+# Everything in this section is pure Python and runs with no wine and no game,
+# deliberately: this is the one component that decides what reaches the engine,
+# so it is the one that can be tested exhaustively (tools/test_tacli.py).
+#
+# Design, engine recipe and phases: research/notes/scenario-format.md
+
+SCN_FORMAT = "ta-scenario/1"
+
+# Scenario files are *source* — tracked in git, written by agents — so they come
+# from the tree this tacli was run from, for the same reason built_dll() does.
+SCENARIOS = Path(__file__).resolve().parent.parent / "scenarios"
+
+# The engine's own order names and their script indices [TA_MemoryStructures.pas].
+# The indices are reference only and never reach the wire: the fork resolves the
+# name through ScriptAction_Name2Index, against the live game, like everything else.
+# There is no attack-move in Total Annihilation; `attack` at a coordinate is the idiom.
+SCN_ORDERS = {"stop": 1, "move": 2, "attack": 3, "blast": 4, "unload": 5, "load": 6,
+              "defend": 7, "repair": 8, "patrol": 9, "reclaim": 12, "capture": 13,
+              "mobilebuild": 14}
+SCN_ORDER_ALIASES = {"guard": "defend"}
+SCN_ORDERS_ALONE = {"stop"}                 # the only order that takes no target
+SCN_NO_ATTACK_MOVE = {"attack-move", "attackmove", "attack_move"}
+
+SCN_STANCES = ("hold", "manoeuvre", "roam")
+SCN_STANCE_ALIASES = {"maneuver": "manoeuvre", "manoeuver": "manoeuvre",
+                      "maneouvre": "manoeuvre"}
+
+# SoftwareDebugMode bits, u16 at TAdynmemStruct+0x37F2F [tamem.h:1862].
+SCN_SWITCHES = {"drop": 0x1, "cheats": 0x2, "selboxes": 0x4, "invulnfeatures": 0x8,
+                "noshake": 0x10, "clock": 0x40, "doubleshot": 0x80, "halfshot": 0x100,
+                "radar": 0x200, "shootall": 0x400}
+SCN_SWITCH_DEFAULTS = {"shootall": True}    # the universal player convention
+
+SCN_SIDES = {"arm": 0, "core": 1}           # --player's side numbering
+SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2}
+
+SCN_PATTERNS = ("grid", "line", "random")
+SCN_HANDLE_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}")
+SCN_WORLD_MAX = 65535       # world coordinates are the integer half of a 16.16 dword
+SCN_MAX_ENTITIES = 5000     # a ceiling the fork enforces again on its side
+SCN_STOCK_LIMIT = 250       # TA's own per-player unit cap before UnitLimit is raised
+
+
+class _ScnRandom:
+    """xorshift32 — five lines, so an expansion is byte-identical on any Python.
+
+    The stdlib's Mersenne Twister would do the job, but a scenario's expansion is
+    a published artifact: an agent compares two runs, on two machines, months
+    apart. That is not a promise `random`'s stream makes; this one does.
+    """
+
+    def __init__(self, seed: int):
+        self.state = (seed & 0xFFFFFFFF) or 0x9E3779B9   # 0 is xorshift's fixed point
+
+    def next(self) -> int:
+        x = self.state
+        x ^= (x << 13) & 0xFFFFFFFF
+        x ^= x >> 17
+        x ^= (x << 5) & 0xFFFFFFFF
+        self.state = x
+        return x
+
+    def between(self, lo: int, hi: int) -> int:
+        """Inclusive both ends. Jitter is decoration; the modulo bias is fine."""
+        return lo if hi <= lo else lo + self.next() % (hi - lo + 1)
+
+
+# ---------------------------------------------------------------- schema layer
+
+def _scn_kind(v) -> str:
+    if isinstance(v, bool):
+        return "a boolean"
+    return {dict: "an object", list: "a list", str: "a string", int: "a number",
+            float: "a number", type(None): "null"}.get(type(v), "?")
+
+
+def _scn_suggest(word: str, known) -> str:
+    near = difflib.get_close_matches(str(word), [str(k) for k in known], 1, 0.6)
+    return f" — did you mean {near[0]!r}?" if near else ""
+
+
+def _scn_keys(node, where: str, required=(), optional=()):
+    """Unknown keys are fatal: these files are written by agents, and a typo'd
+    "unit" for "units" under a permissive schema is an empty map and a lost
+    afternoon."""
+    if not isinstance(node, dict):
+        die(f"{where}: expected an object, got {_scn_kind(node)}")
+    known = tuple(required) + tuple(optional)
+    for k in node:
+        if k not in known:
+            die(f"{where}: unknown key {k!r}{_scn_suggest(k, known)} "
+                f"(allowed: {', '.join(sorted(known))})")
+    for k in required:
+        if node.get(k) is None:
+            die(f"{where}: missing required key {k!r}")
+
+
+def _scn_list(node, key, where):
+    v = node.get(key)
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        die(f"{where}.{key}: expected a list, got {_scn_kind(v)}")
+    return v
+
+
+def _scn_int(node, key, where, lo, hi, default=None):
+    v = node.get(key)
+    if v is None:
+        return default
+    if isinstance(v, bool) or not isinstance(v, int):
+        die(f"{where}.{key}: expected a whole number, got {_scn_kind(v)}")
+    if not lo <= v <= hi:
+        die(f"{where}.{key}: {v} is outside {lo}..{hi}")
+    return v
+
+
+def _scn_str(node, key, where, choices=None, default=None, upper=False,
+             aliases=None, raw=False):
+    v = node.get(key)
+    if v is None:
+        return default
+    if not isinstance(v, str):
+        die(f"{where}.{key}: expected a string, got {_scn_kind(v)}")
+    if raw:
+        return v
+    v = v.upper() if upper else v.lower()
+    if aliases:
+        v = aliases.get(v, v)
+    if choices is not None and v not in choices:
+        die(f"{where}.{key}: {node[key]!r} is not a known "
+            f"{key}{_scn_suggest(v, choices)} (known: {', '.join(sorted(choices))})")
+    return v
+
+
+def _scn_bool(node, key, where, default=None):
+    v = node.get(key)
+    if v is None:
+        return default
+    if not isinstance(v, bool):
+        die(f"{where}.{key}: expected true or false, got {_scn_kind(v)}")
+    return v
+
+
+def _scn_point(node, key, where, required=False, bounded=True):
+    v = node.get(key)
+    if v is None:
+        if required:
+            die(f"{where}: missing required key {key!r} ([x, y] world coordinates)")
+        return None
+    if (not isinstance(v, list) or len(v) != 2
+            or any(isinstance(c, bool) or not isinstance(c, int) for c in v)):
+        die(f"{where}.{key}: expected [x, y] whole numbers, got {_scn_kind(v)}")
+    if bounded:
+        for c in v:
+            if not 0 <= c <= SCN_WORLD_MAX:
+                die(f"{where}.{key}: {v} is off the map "
+                    f"(world coordinates run 0..{SCN_WORLD_MAX})")
+    return list(v)
+
+
+def _scn_facing(node, where, default=None):
+    v = _scn_int(node, "facing", where, -360, 360, None)
+    if v is None:
+        return default
+    # Degrees, 0 = TA's own default build facing (heading word 0x8000). The fork
+    # converts; the file never speaks in heading words.
+    return v % 360
+
+
+def _scn_type(node, where, catalogue_names, what: str, warnings=None):
+    """A unit or feature type name, matched case-insensitively against the live
+    catalogue when one is loaded (validation layer 2) and returned in the
+    catalogue's own spelling.
+
+    With no catalogue the author's spelling is kept exactly as written. TA's own
+    tables disagree with each other — units are `ARMPW`, wrecks are
+    `armlab_dead` — so inventing a case here would be inventing a name.
+
+    `warnings` is passed only when the file said `on_error: "skip"`, and then an
+    unknown name is a warning rather than a refusal: the name goes through to the
+    wire untouched and the fork drops that one entity. Layer 3 re-checks every
+    name anyway — it must, the file is on disk — so best-effort belongs there,
+    where it can be per-entity, rather than here, where it could only be all or
+    nothing.
+    """
+    given = _scn_str(node, "type", where, raw=True)
+    if not given or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}", given):
+        die(f"{where}.type: {node.get('type')!r} is not a {what} name "
+            f"(letters, digits and _ , like ARMPW)")
+    if catalogue_names is None:
+        return given
+    if given.upper() not in catalogue_names:
+        msg = (f"{where}.type: no {what} named {given!r} in this "
+               f"game{_scn_suggest(given.upper(), catalogue_names)}")
+        if warnings is None:
+            die(msg)
+        warnings.append(msg + " — on_error is skip, so the game will drop it")
+        return given
+    return catalogue_names[given.upper()]
+
+
+def _scn_orders(node, where, default=None):
+    """Order list. Targets stay symbolic here; they are resolved once every
+    handle in the file is known."""
+    if "orders" not in node:
+        return list(default or [])
+    orders = []
+    for i, o in enumerate(_scn_list(node, "orders", where)):
+        w = f"{where}.orders[{i}]"
+        _scn_keys(o, w, required=("cmd",), optional=("to", "target"))
+        raw = o["cmd"]
+        cmd = raw.lower() if isinstance(raw, str) else raw
+        if cmd in SCN_NO_ATTACK_MOVE:
+            die(f"{w}.cmd: no such order — Total Annihilation has none. Use "
+                f'{{"cmd": "attack", "to": [x, y]}}: units advance on the spot and '
+                f"engage what they meet.")
+        cmd = _scn_str({"cmd": cmd}, "cmd", w, choices=SCN_ORDERS,
+                       aliases=SCN_ORDER_ALIASES)
+        to = _scn_point(o, "to", w)
+        target = _scn_str(o, "target", w, raw=True)
+        if cmd in SCN_ORDERS_ALONE:
+            if to or target:
+                die(f"{w}: {cmd!r} takes no target")
+        elif (to is None) == (target is None):
+            die(f"{w}: {cmd!r} needs exactly one of \"to\" (a coordinate) "
+                f"or \"target\" (an entity handle)")
+        orders.append({"cmd": cmd, "to": to, "target": target})
+    return orders
+
+
+def _scn_pattern(node, where):
+    p = node.get("pattern")
+    if p is None:
+        die(f"{where}: missing required key 'pattern' "
+            f"({{\"kind\": \"grid\", \"cols\": 20, \"spacing\": 24}})")
+    w = f"{where}.pattern"
+    if not isinstance(p, dict):
+        die(f"{w}: expected an object, got {_scn_kind(p)}")
+    kind = _scn_str(p, "kind", w, choices=SCN_PATTERNS)
+    if kind is None:
+        die(f"{w}: missing required key 'kind' ({', '.join(SCN_PATTERNS)})")
+    if kind == "grid":
+        _scn_keys(p, w, required=("kind", "cols", "spacing"), optional=("jitter",))
+    elif kind == "line":
+        _scn_keys(p, w, required=("kind", "spacing"), optional=("angle", "jitter"))
+    else:
+        _scn_keys(p, w, required=("kind", "size"), optional=("jitter",))
+    out = {"kind": kind,
+           "cols": _scn_int(p, "cols", w, 1, 1000),
+           "spacing": _scn_int(p, "spacing", w, 1, 4096),
+           # `angle` is a *layout* direction in world degrees (0 = +x, 90 = +y).
+           # `facing` is TA's own convention; the two are deliberately not one knob.
+           "angle": _scn_int(p, "angle", w, -360, 360, 0) % 360,
+           "jitter": _scn_int(p, "jitter", w, 0, 4096, 0),
+           "size": None}
+    if kind == "random":
+        size = _scn_point(p, "size", w, required=True, bounded=False)
+        if size[0] < 1 or size[1] < 1:
+            die(f"{w}.size: expected a [width, height] rectangle of at least 1x1")
+        out["size"] = size
+    return out
+
+
+def _scn_entity_body(node, where, default=None):
+    """The per-entity attributes a unit carries, and a group hands to its members."""
+    d = default or {}
+    return {
+        "facing": _scn_facing(node, where, d.get("facing")),
+        "height": _scn_int(node, "height", where, 0, SCN_WORLD_MAX, d.get("height")),
+        "health": _scn_int(node, "health", where, 1, 100, d.get("health")),
+        "nanoframe": _scn_int(node, "nanoframe", where, 0, 100, d.get("nanoframe")),
+        "stance": _scn_str(node, "stance", where, choices=SCN_STANCES,
+                           aliases=SCN_STANCE_ALIASES, default=d.get("stance")),
+        "orders": _scn_orders(node, where, d.get("orders")),
+    }
+
+
+def _scn_setup(doc, label):
+    """Everything `load` needs before the game exists. `apply` ignores it."""
+    setup = {"map": None, "res": None, "unit_limit": None, "clear_existing": True,
+             "switches": dict(SCN_SWITCH_DEFAULTS), "players": []}
+    node = doc.get("setup")
+    if node is None:
+        return setup
+    w = f"{label}: setup"
+    _scn_keys(node, w, optional=("map", "res", "unit_limit", "clear_existing",
+                                 "switches", "players"))
+    setup["map"] = _scn_str(node, "map", w, raw=True)
+    res = _scn_str(node, "res", w, raw=True)
+    if res is not None:
+        m = RES_RX.fullmatch(res)
+        if not m:
+            die(f"{w}.res: {res!r} must look like 1024x768")
+        setup["res"] = [int(m.group(1)), int(m.group(2))]
+    # TA reads UnitLimit from totala.ini and clamps it to [20, 1500] itself.
+    setup["unit_limit"] = _scn_int(node, "unit_limit", w, 20, 1500)
+    setup["clear_existing"] = _scn_bool(node, "clear_existing", w, True)
+
+    switches = node.get("switches")
+    if switches is not None:
+        sw = f"{w}.switches"
+        _scn_keys(switches, sw, optional=tuple(SCN_SWITCHES))
+        for name in switches:
+            state = _scn_bool(switches, name, sw)
+            if state is not None:           # null is "unset", as everywhere else
+                setup["switches"][name] = state
+
+    slots = {}
+    for i, p in enumerate(_scn_list(node, "players", w)):
+        pw = f"{w}.players[{i}]"
+        _scn_keys(p, pw, required=("slot",),
+                  optional=("controller", "side", "color", "metal", "energy"))
+        slot = _scn_int(p, "slot", pw, 0, 9)
+        if slot in slots:
+            die(f"{pw}.slot: player {slot} is already declared")
+        slots[slot] = True
+        setup["players"].append({
+            "slot": slot,
+            "controller": _scn_str(p, "controller", pw, choices=SCN_CONTROLLERS,
+                                   default="ai"),
+            "side": _scn_str(p, "side", pw, choices=SCN_SIDES),
+            "color": _scn_int(p, "color", pw, 0, 9),
+            "metal": _scn_int(p, "metal", pw, 0, 1000000),
+            "energy": _scn_int(p, "energy", pw, 0, 1000000),
+        })
+    return setup
+
+
+def _scn_names(catalogue, key):
+    """{UPPERCASE: the catalogue's own spelling}, or None when it carries no list.
+
+    Entries may be bare strings or objects with a "name" — the catalogue also
+    carries footprints, and layer 2 should not care which it got. The canonical
+    spelling matters: TA's own tables are inconsistent (units are `ARMPW`, wrecks
+    are `armlab_dead`), and the engine's name lookups are not promised to be
+    case-insensitive, so what reaches the wire is what the game called it.
+    """
+    seq = (catalogue or {}).get(key)
+    if not seq:
+        return None
+    names = {}
+    for e in seq:
+        name = str(e.get("name", "") if isinstance(e, dict) else e)
+        if name:
+            names.setdefault(name.upper(), name)
+    return names
+
+
+def _scn_footprints(catalogue):
+    """{NAME: (x, y)} for every catalogue entry that carries one, in map squares."""
+    feet = {}
+    for e in (catalogue or {}).get("units") or []:
+        foot = e.get("footprint") if isinstance(e, dict) else None
+        if foot and len(foot) == 2 and max(foot) > 0:
+            feet[str(e.get("name", "")).upper()] = (int(foot[0]), int(foot[1]))
+    return feet
+
+
+# A footprint cell is 16 world units — the same square the feature map is built
+# out of (scenario-format.md, the engine recipe).
+SCN_CELL = 16
+
+
+def _scn_spacing_warning(group, feet):
+    """A grid tighter than the units are wide is not the layout the file asks for:
+    the engine pushes the overlap apart and the formation comes out ragged."""
+    pattern = group["pattern"]
+    spacing = pattern["spacing"]
+    if not spacing or pattern["kind"] == "random":
+        return None
+    worst, worst_type = 0, None
+    for c in group["composition"]:
+        foot = feet.get(c["type"].upper())
+        if foot and max(foot) * SCN_CELL > worst:
+            worst, worst_type = max(foot) * SCN_CELL, c["type"]
+    if worst <= spacing:
+        return None
+    return (f"group {group['id']!r}: spacing {spacing} is tighter than {worst_type}'s "
+            f"{'x'.join(str(c) for c in feet[worst_type.upper()])} footprint ({worst} world "
+            f"units) — the engine will push them apart and the layout will drift")
+
+
+def _scn_validate(doc, label, catalogue=None, launching=False):
+    """Layers 1 and 2: strict schema, then names checked against the live game.
+
+    Returns a normalized document — every default filled in, every name
+    canonical — plus the warnings worth printing but not worth refusing over.
+    """
+    cat = catalogue or {}
+    unit_names = _scn_names(cat, "units")
+    feat_names = _scn_names(cat, "features")
+    map_names = _scn_names(cat, "maps")
+    footprints = _scn_footprints(cat)
+    warnings = []
+
+    _scn_keys(doc, label, required=("format",),
+              optional=("description", "seed", "on_error", "setup", "groups",
+                        "units", "features", "camera", "source"))
+    if doc["format"] != SCN_FORMAT:
+        die(f"{label}: format {doc['format']!r} is not {SCN_FORMAT!r}")
+
+    norm = {"format": SCN_FORMAT,
+            "description": _scn_str(doc, "description", label, raw=True) or "",
+            "source": _scn_str(doc, "source", label, raw=True),
+            "seed": _scn_int(doc, "seed", label, 0, 0xFFFFFFFF, _scn_seed(doc)),
+            "on_error": _scn_str(doc, "on_error", label, choices=("abort", "skip"),
+                                 default="abort"),
+            "setup": _scn_setup(doc, label),
+            "groups": [], "units": [], "features": [], "camera": None,
+            "warnings": warnings}
+
+    # `on_error: "skip"` reaches layer 2 as "warn, do not refuse" — see _scn_type.
+    lenient = warnings if norm["on_error"] == "skip" else None
+
+    # Measured 2026-09-01: the applier's write lands, and TA recomputes storage
+    # from the units a player owns and clamps current to it within about a
+    # second. So the number holds only if the scenario also gives that player the
+    # storage to hold it — say so once, where an author reads it, rather than
+    # letting `apply` look like it worked.
+    for p in norm["setup"]["players"]:
+        if (p["metal"] is not None or p["energy"] is not None) and not launching:
+            warnings.append(
+                f"setup.players slot {p['slot']}: metal/energy is a launch-time "
+                f"setting — `scenario load` writes Player{p['slot']}Metal/Energy and "
+                f"TA reads them as the starting level *and* the storage. `apply` "
+                f"cannot: in a running game the engine recomputes storage from the "
+                f"player's own units every tick and clamps the level to it, so the "
+                f"figure is gone within a second (the result reports what survived)")
+
+    slots = {p["slot"] for p in norm["setup"]["players"]}
+    handles = {}
+
+    def claim(name, kind, where, authored=True):
+        # Synthesized handles carry a '#', which an author's never can — so a file
+        # that names nothing can still be reported entity by entity, with no
+        # chance of colliding with a handle somebody wrote.
+        if authored and not SCN_HANDLE_RX.fullmatch(name):
+            die(f"{where}.id: {name!r} is not a handle "
+                f"(letters, digits, . _ - ; 32 characters)")
+        if name in handles:
+            die(f"{where}.id: duplicate handle {name!r} "
+                f"(already used by a {handles[name]})")
+        handles[name] = kind
+        return name
+
+    def owner_of(node, where, default=None):
+        owner = _scn_int(node, "owner", where, 0, 9, default)
+        if owner is None:
+            die(f"{where}: missing required key 'owner' (a player slot)")
+        if slots and owner not in slots:
+            die(f"{where}.owner: player {owner} is not declared in setup.players "
+                f"(declared: {', '.join(str(s) for s in sorted(slots))})")
+        return owner
+
+    if norm["setup"]["map"] and map_names is not None:
+        found = map_names.get(norm["setup"]["map"].upper())
+        if not found:
+            die(f"{label}: setup.map: no map named {norm['setup']['map']!r} in this "
+                f"game{_scn_suggest(norm['setup']['map'].upper(), map_names)}")
+        norm["setup"]["map"] = found
+
+    for i, g in enumerate(_scn_list(doc, "groups", label)):
+        w = f"{label}: groups[{i}]"
+        _scn_keys(g, w, required=("at", "composition", "pattern"),
+                  optional=("id", "owner", "facing", "height", "health", "nanoframe",
+                            "stance", "orders"))
+        given = _scn_str(g, "id", w, raw=True)
+        gid = claim(given or f"group{i}", "group", w, bool(given))
+        composition = []
+        for j, c in enumerate(_scn_list(g, "composition", w)):
+            cw = f"{w}.composition[{j}]"
+            _scn_keys(c, cw, required=("type", "count"))
+            composition.append({"type": _scn_type(c, cw, unit_names, "unit", lenient),
+                                "count": _scn_int(c, "count", cw, 1, SCN_MAX_ENTITIES)})
+        if not composition:
+            die(f"{w}.composition: expected at least one {{type, count}}")
+        norm["groups"].append({"id": gid, "owner": owner_of(g, w),
+                               "at": _scn_point(g, "at", w, required=True),
+                               "pattern": _scn_pattern(g, w),
+                               "composition": composition,
+                               **_scn_entity_body(g, w)})
+        tight = _scn_spacing_warning(norm["groups"][-1], footprints)
+        if tight:
+            warnings.append(tight)
+
+    for i, u in enumerate(_scn_list(doc, "units", label)):
+        w = f"{label}: units[{i}]"
+        _scn_keys(u, w, required=("type", "pos"),
+                  optional=("id", "owner", "facing", "height", "health", "nanoframe",
+                            "stance", "orders"))
+        given = _scn_str(u, "id", w, raw=True)
+        norm["units"].append({"id": claim(given or f"#u{i}", "unit", w, bool(given)),
+                              "type": _scn_type(u, w, unit_names, "unit", lenient),
+                              "owner": owner_of(u, w),
+                              "pos": _scn_point(u, "pos", w, required=True),
+                              **_scn_entity_body(u, w)})
+
+    for i, f in enumerate(_scn_list(doc, "features", label)):
+        w = f"{label}: features[{i}]"
+        _scn_keys(f, w, required=("type", "pos"), optional=("id", "facing", "height"))
+        given = _scn_str(f, "id", w, raw=True)
+        norm["features"].append({
+            "id": claim(given or f"#f{i}", "feature", w, bool(given)),
+            "type": _scn_type(f, w, feat_names, "feature", lenient),
+            "pos": _scn_point(f, "pos", w, required=True),
+            "facing": _scn_facing(f, w),
+            "height": _scn_int(f, "height", w, 0, SCN_WORLD_MAX)})
+
+    cam = doc.get("camera")
+    if cam is not None:
+        w = f"{label}: camera"
+        _scn_keys(cam, w, optional=("at", "center_on", "pin"))
+        at = _scn_point(cam, "at", w)
+        on = _scn_str(cam, "center_on", w, raw=True)
+        if (at is None) == (on is None):
+            die(f"{w}: expected exactly one of \"at\" (a coordinate) or "
+                f"\"center_on\" (an entity or group handle)")
+        if on is not None and on not in handles:
+            die(f"{w}.center_on: no entity named {on!r} in this "
+                f"scenario{_scn_suggest(on, handles)}")
+        # Both mean the centre of the window, never the eye origin.
+        norm["camera"] = {"at": at, "center_on": on,
+                          "pin": _scn_bool(cam, "pin", w, False)}
+
+    # Order targets resolve last, so a scenario may name an entity declared below it.
+    for holder in norm["groups"] + norm["units"]:
+        for o in holder["orders"]:
+            t = o["target"]
+            if t is None:
+                continue
+            if t not in handles:
+                die(f"{label}: {holder['id']}: order {o['cmd']!r} targets "
+                    f"{t!r}, which nothing declares{_scn_suggest(t, handles)}")
+            if handles[t] == "group":
+                die(f"{label}: {holder['id']}: order {o['cmd']!r} targets the group "
+                    f"{t!r} — a group is not an entity; target one of its members' "
+                    f"neighbours by handle, or give a coordinate with \"to\"")
+            if t == holder["id"]:
+                die(f"{label}: {holder['id']}: order {o['cmd']!r} targets itself")
+    return norm
+
+
+def _scn_seed(doc) -> int:
+    """An unseeded scenario is still deterministic: the seed is a hash of the file's
+    content, minus the seed field itself, so reformatting does not reshuffle it."""
+    body = {k: v for k, v in doc.items() if k != "seed"}
+    blob = json.dumps(body, sort_keys=True, separators=(",", ":"),
+                      default=str).encode()
+    return int.from_bytes(hashlib.sha256(blob).digest()[:4], "big")
+
+
+# ------------------------------------------------------------- expansion layer
+
+def _scn_round(v: float) -> int:
+    """Half up, always: Python's banker's rounding would make a grid asymmetric."""
+    return int(math.floor(v + 0.5))
+
+
+def _scn_points(pattern, at, n, rnd):
+    """The seeded, deterministic half of bulk authoring — `at` is the *centre* of
+    the formation, matching what `at` means everywhere else in the file."""
+    ax, ay = at
+    spacing = pattern["spacing"] or 0
+    pts = []
+    if pattern["kind"] == "grid":
+        cols = min(pattern["cols"], n) or 1          # 3 units, cols=20: one short row
+        rows = -(-n // cols)
+        for i in range(n):
+            col, row = i % cols, i // cols
+            pts.append((ax + (col - (cols - 1) / 2) * spacing,
+                        ay + (row - (rows - 1) / 2) * spacing))
+    elif pattern["kind"] == "line":
+        rad = math.radians(pattern["angle"])
+        dx, dy = math.cos(rad), math.sin(rad)
+        for i in range(n):
+            t = (i - (n - 1) / 2) * spacing
+            pts.append((ax + t * dx, ay + t * dy))
+    else:
+        w, h = pattern["size"]
+        for _ in range(n):
+            pts.append((rnd.between(ax - w // 2, ax + w // 2),
+                        rnd.between(ay - h // 2, ay + h // 2)))
+    jitter = pattern["jitter"]
+    if not jitter:
+        return [(_scn_round(x), _scn_round(y)) for x, y in pts]
+    return [(_scn_round(x) + rnd.between(-jitter, jitter),
+             _scn_round(y) + rnd.between(-jitter, jitter)) for x, y in pts]
+
+
+def _scn_unit_record(handle, type_name, owner, pos, body, group=None):
+    return {"id": handle, "type": type_name, "owner": owner, "pos": list(pos),
+            "height": body["height"], "facing": body["facing"],
+            "health": body["health"], "nanoframe": body["nanoframe"],
+            "stance": body["stance"], "orders": body["orders"], "group": group}
+
+
+def _scn_expand(norm):
+    """Groups become units. From here on the fork only ever sees a flat list."""
+    rnd = _ScnRandom(norm["seed"])
+    units = []
+    for g in norm["groups"]:
+        types = [c["type"] for c in g["composition"] for _ in range(c["count"])]
+        for i, (t, pos) in enumerate(zip(types, _scn_points(g["pattern"], g["at"],
+                                                            len(types), rnd))):
+            units.append(_scn_unit_record(f"{g['id']}#{i}", t, g["owner"], pos, g,
+                                          group=g["id"]))
+    for u in norm["units"]:
+        units.append(_scn_unit_record(u["id"], u["type"], u["owner"], u["pos"], u))
+
+    features = [dict(f) for f in norm["features"]]
+    exp = {"format": norm["format"], "description": norm["description"],
+           "seed": norm["seed"], "on_error": norm["on_error"],
+           "setup": norm["setup"], "units": units, "features": features,
+           "camera": _scn_camera(norm, units, features),
+           "counts": {"units": len(units), "features": len(features),
+                      "by_owner": {}},
+           "warnings": list(norm["warnings"])}
+    _scn_check(exp, norm)
+    return exp
+
+
+def _scn_camera(norm, units, features):
+    """`center_on` a group compiles to a coordinate; an entity stays a handle, so
+    the fork can centre on where the unit actually landed after the terrain snap."""
+    cam = norm["camera"]
+    if cam is None:
+        return None
+    if cam["at"] is not None or cam["center_on"] is None:
+        return {"at": cam["at"], "on": None, "pin": cam["pin"]}
+    on = cam["center_on"]
+    for g in norm["groups"]:
+        if g["id"] == on:
+            return {"at": list(g["at"]), "on": None, "pin": cam["pin"]}
+    for kind, seq in (("unit", units), ("feat", features)):
+        for ordinal, e in enumerate(seq):
+            if e["id"] == on:
+                return {"at": None, "on": [kind, ordinal, on], "pin": cam["pin"]}
+    die(f"camera.center_on: {on!r} resolves to nothing")   # unreachable: validated
+
+
+def _scn_check(exp, norm):
+    """Post-expansion limits: the checks that only a flat list can answer."""
+    label = norm.get("label", "scenario")
+    total = len(exp["units"]) + len(exp["features"])
+    if total > SCN_MAX_ENTITIES:
+        die(f"{label}: {total} entities is over the {SCN_MAX_ENTITIES} ceiling")
+    for u in exp["units"]:
+        for c in u["pos"]:
+            if not 0 <= c <= SCN_WORLD_MAX:
+                die(f"{label}: {u['id']} lands at {u['pos']}, off the map "
+                    f"(world coordinates run 0..{SCN_WORLD_MAX})")
+    by_owner = {}
+    for u in exp["units"]:
+        by_owner[u["owner"]] = by_owner.get(u["owner"], 0) + 1
+    exp["counts"]["by_owner"] = {str(k): by_owner[k] for k in sorted(by_owner)}
+    limit = exp["setup"]["unit_limit"]
+    for owner, n in sorted(by_owner.items()):
+        if limit is not None and n > limit:
+            die(f"{label}: player {owner} would get {n} units, over "
+                f"setup.unit_limit {limit}")
+        if limit is None and n > SCN_STOCK_LIMIT:
+            exp["warnings"].append(
+                f"player {owner} gets {n} units, over TA's stock per-player cap of "
+                f"{SCN_STOCK_LIMIT} — set setup.unit_limit or the engine drops the rest")
+
+
+# ------------------------------------------------------------------- wire layer
+#
+# A private, versioned, line-oriented file the CLI writes and the fork scans with
+# a small fixed-vocabulary parser. No user hand-writes it and nothing promises it
+# is stable: it changes freely whenever the DLL does. `-` is "unset, use the
+# engine's default"; the fork re-validates every field regardless, because the
+# file is on disk and can be stale or truncated.
+
+def _f(v) -> str:
+    """A wire column: `-` is "unset — use the engine's own default"."""
+    return "-" if v is None else str(v)
+
+
+def _scn_wire(exp) -> str:
+    setup = exp["setup"]
+    lines = ["# tagpu scenario wire v1 — written by `tacli scenario`, read once by the fork.",
+             f"v1 seed={exp['seed']} clear={int(setup['clear_existing'])} "
+             f"onerror={exp['on_error']} units={len(exp['units'])} "
+             f"feats={len(exp['features'])}"]
+    if setup["map"]:
+        lines.append(f"map {setup['map']}")             # rest of line: no escaping
+    if setup["unit_limit"] is not None:
+        lines.append(f"limit {setup['unit_limit']}")
+    if setup["switches"]:
+        lines.append("sw " + " ".join(f"{k}={int(bool(v))}"
+                                      for k, v in sorted(setup["switches"].items())))
+    for p in setup["players"]:
+        if p["metal"] is not None or p["energy"] is not None:
+            lines.append(f"player {p['slot']} metal={_f(p['metal'])} "
+                         f"energy={_f(p['energy'])}")
+
+    lines.append("# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> "
+                 "<stance> <nano%>")
+    for i, u in enumerate(exp["units"]):
+        lines.append(f"unit {i} {u['type']} {u['owner']} {u['pos'][0]} {u['pos'][1]} "
+                     f"{_f(u['height'])} {_f(u['facing'])} {_f(u['health'])} "
+                     f"{_f(u['stance'])} {_f(u['nanoframe'])}")
+    for i, f in enumerate(exp["features"]):
+        lines.append(f"feat {i} {f['type']} {f['pos'][0]} {f['pos'][1]} "
+                     f"{_f(f['height'])} {_f(f['facing'])}")
+
+    # Orders come after every entity: the fork creates the whole situation first,
+    # so an order can name a unit that is spawned later in the same tick.
+    ords = {u["id"]: i for i, u in enumerate(exp["units"])}
+    fords = {f["id"]: i for i, f in enumerate(exp["features"])}
+    for i, u in enumerate(exp["units"]):
+        for o in u["orders"]:
+            if o["to"]:
+                lines.append(f"order {i} {o['cmd']} pos {o['to'][0]} {o['to'][1]}")
+            elif o["target"] in ords:
+                lines.append(f"order {i} {o['cmd']} unit {ords[o['target']]}")
+            elif o["target"] in fords:
+                lines.append(f"order {i} {o['cmd']} feat {fords[o['target']]}")
+            else:
+                lines.append(f"order {i} {o['cmd']}")
+    cam = exp["camera"]
+    if cam:
+        pin = int(bool(cam["pin"]))
+        if cam["at"]:
+            lines.append(f"cam pos {cam['at'][0]} {cam['at'][1]} pin={pin}")
+        else:
+            kind, ordinal, _ = cam["on"]
+            lines.append(f"cam {kind} {ordinal} pin={pin}")
+    lines.append("end")
+    return "\n".join(lines) + "\n"
+
+
+# ------------------------------------------------------------------ scenario cli
+
+def _scn_path(name: str) -> Path:
+    """A bare name is scenarios/<name>.json; a path is anything with / or .json."""
+    if "/" in name or name.endswith(".json"):
+        return Path(name).expanduser()
+    return SCENARIOS / f"{name}.json"
+
+
+def _scn_read(name: str):
+    path = _scn_path(name)
+    if not path.exists():
+        die(f"no such scenario {name!r} ({path})")
+    try:
+        doc = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        die(f"{path.name}: not valid JSON: {e.msg} (line {e.lineno} column {e.colno})")
+    if not isinstance(doc, dict):
+        die(f"{path.name}: the top level must be an object, got {_scn_kind(doc)}")
+    return path, doc
+
+
+def _scn_catalogue(path):
+    """The live unit/feature/map lists — validation layer 2.
+
+    Phase B fills this per instance from a running game; until then it is an
+    explicit file, and absent simply means layer 2 does not run.
+    """
+    if not path:
+        return None
+    p = Path(path).expanduser()
+    if not p.exists():
+        die(f"no such catalogue {str(path)!r}")
+    try:
+        cat = json.loads(p.read_text())
+    except json.JSONDecodeError as e:
+        die(f"{p.name}: not valid JSON: {e.msg} (line {e.lineno})")
+    if not isinstance(cat, dict):
+        die(f"{p.name}: expected an object with 'units' / 'features' / 'maps'")
+    return cat
+
+
+def _scn_compile(name, catalogue_path=None, instance=None, launching=False):
+    path, doc = _scn_read(name)
+    catalogue = _scn_catalogue(catalogue_path)
+    if instance:
+        catalogue = _cat_load(Instance(instance))
+        if not catalogue:
+            die(f"no catalogue cached for {instance!r} — ask a running game for one: "
+                f"tacli units {instance}; tacli features {instance}")
+    norm = _scn_validate(doc, path.name, catalogue, launching)
+    norm["label"] = path.name
+    exp = _scn_expand(norm)
+    exp["name"] = path.stem
+    exp["path"] = str(path)
+    return exp
+
+
+def cmd_scenario_list(args):
+    rows = []
+    for path in sorted(SCENARIOS.glob("*.json")):
+        row = {"name": path.stem, "path": str(path), "description": "", "ok": True}
+        try:
+            doc = json.loads(path.read_text())
+            row["description"] = doc.get("description", "") if isinstance(doc, dict) else ""
+        except (json.JSONDecodeError, OSError) as e:
+            row["ok"], row["description"] = False, f"unreadable: {e}"
+        rows.append(row)
+    if args.json:
+        out(rows, True)
+    elif not rows:
+        print(f"no scenarios in {SCENARIOS}")
+    else:
+        for r in rows:
+            print(f"{r['name']:<20} {'' if r['ok'] else '(broken) '}{r['description']}")
+
+
+def cmd_scenario_validate(args):
+    exp = _scn_compile(args.scenario, args.catalogue, args.instance)
+    res = {"name": exp["name"], "path": exp["path"], "ok": True,
+           "seed": exp["seed"], "counts": exp["counts"], "setup": exp["setup"],
+           "warnings": exp["warnings"],
+           "catalogue": args.instance or args.catalogue or None}
+    c = exp["counts"]
+    plural = lambda n, word: f"{n} {word}{'' if n == 1 else 's'}"    # noqa: E731
+    human = (f"{exp['name']}: ok — {plural(c['units'], 'unit')}, "
+             f"{plural(c['features'], 'feature')}, seed {exp['seed']}"
+             + (f", map {exp['setup']['map']!r}" if exp["setup"]["map"] else "")
+             + ("" if (args.catalogue or args.instance)
+                else "  (no catalogue: names unchecked)"))
+    for w in exp["warnings"]:
+        human += f"\nwarning: {w}"
+    out(res, args.json, human=human)
+
+
+def cmd_scenario_expand(args):
+    exp = _scn_compile(args.scenario, args.catalogue, args.instance)
+    if args.wire:
+        print(_scn_wire(exp), end="")
+        return
+    lines = []
+    for i, u in enumerate(exp["units"]):
+        lines.append(f"u{i:<5} {u['type']:<12} own={u['owner']} "
+                     f"pos={u['pos'][0]},{u['pos'][1]} "
+                     f"face={'-' if u['facing'] is None else u['facing']}  {u['id']}")
+    for i, f in enumerate(exp["features"]):
+        lines.append(f"f{i:<5} {f['type']:<12}          "
+                     f"pos={f['pos'][0]},{f['pos'][1]} "
+                     f"face={'-' if f['facing'] is None else f['facing']}  {f['id']}")
+    cam = exp["camera"]
+    if cam:
+        lines.append(f"cam    " + (f"pos={cam['at'][0]},{cam['at'][1]}" if cam["at"]
+                                   else f"on={cam['on'][2]} ({cam['on'][0]} "
+                                        f"{cam['on'][1]})"))
+    for w in exp["warnings"]:
+        lines.append(f"warning: {w}")
+    out(exp, args.json, human="\n".join(lines))
+
+
+SCN_APPLY_TIMEOUT = 30.0    # 400 units in one tick, plus the poll's own cadence
+
+
+def _scn_apply(inst: Instance, wire: str, timeout: float) -> dict:
+    """Drop the wire file and read the fork's answer (tmp + rename, like `ui`)."""
+    if not inst.running():
+        die(f"{inst.name} is not running (tacli launch {inst.name})")
+    result = inst.gamedir / "tagpu_scenario.json"
+    before = result.stat().st_mtime_ns if result.exists() else 0
+    (inst.gamedir / "tagpu_scenario.trigger").write_text(wire)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if result.exists() and result.stat().st_mtime_ns > before:
+            try:
+                return json.loads(result.read_text())
+            except json.JSONDecodeError:
+                pass                      # a rename we caught mid-flight; retry
+        time.sleep(0.05)
+    die(f"no result appeared in {timeout:g}s — is the game past its loading screen? "
+        f"(tacli log {inst.name} -g scenario)")
+
+
+def _scn_rekey(res: dict, exp: dict) -> dict:
+    """Ordinals back to handles.
+
+    The fork keys its answer by ordinal because that is all it knows — handle
+    strings never reach the engine. Putting the author's own names back is the
+    CLI's job, and it happens before an agent ever sees the result.
+    """
+    for kind, key in (("units", "units"), ("features", "features")):
+        rows = res.get(kind)
+        if not isinstance(rows, dict):
+            continue
+        named = {}
+        for ordinal, row in rows.items():
+            try:
+                handle = exp[key][int(ordinal)]["id"]
+            except (ValueError, IndexError, KeyError):
+                handle = f"#{ordinal}"
+            row["ordinal"] = int(ordinal) if str(ordinal).isdigit() else ordinal
+            named[handle] = row
+        res[kind] = named
+    return res
+
+
+def _scn_apply_run(inst: Instance, exp: dict, timeout: float, catalogue) -> dict:
+    """Write the wire, read the answer, put the handles back, hold the camera.
+
+    The half `apply` and `load` share: by the time either gets here the game is
+    live and the only remaining question is what the engine did with the file.
+    """
+    res = _scn_apply(inst, _scn_wire(exp), timeout)
+    res["name"] = inst.name
+    res["scenario"] = exp["name"]
+    res["catalogue"] = catalogue
+    _scn_rekey(res, exp)
+
+    # `pin` holds the camera through the eye-hold file the fork already honours,
+    # using the eye it actually wrote rather than re-deriving the projection here.
+    eye = res.get("eye")
+    if res.get("pin") and eye:
+        (inst.gamedir / "tagpu_eye.txt").write_text(f"{eye[0]} {eye[1]}\n")
+    return res
+
+
+def _scn_apply_lines(res: dict, exp: dict):
+    """What the engine did, in the words both verbs end with."""
+    want = res.get("requested") or {}
+    nu, nf = want.get("units", 0), want.get("features", 0)
+    lines = [f"applied {res.get('applied', 0)} of {nu + nf} "
+             f"({nu} unit{'' if nu == 1 else 's'} + "
+             f"{nf} feature{'' if nf == 1 else 's'}), "
+             f"{res.get('failed', 0)} failed, {res.get('cleared', 0)} cleared"]
+    orders = res.get("orders") or {}
+    if orders.get("issued") or orders.get("failed"):
+        lines.append(f"orders: {orders.get('issued', 0)} issued, "
+                     f"{orders.get('failed', 0)} failed")
+    if res.get("camera"):
+        lines.append(f"camera: {res['camera']} (eye {res.get('eye')}"
+                     + (", pinned" if res.get("pin") else "") + ")")
+    for w in exp.get("warnings") or []:
+        lines.append(f"warning: {w}")
+    for e in res.get("errors") or []:
+        lines.append(f"error: {e}")
+    if res.get("errors_dropped"):
+        lines.append(f"... and {res['errors_dropped']} more errors")
+    return lines
+
+
+def cmd_scenario_apply(args):
+    """Apply a scenario to a game that is already running.
+
+    `apply` is the mutation verb: it ignores `setup`'s launch half (map,
+    resolution, players) because those are decided before a game exists, and
+    stacks the situation onto whatever is on screen. `load` is the one that
+    launches first.
+    """
+    inst = Instance(args.name)
+    catalogue = args.instance or (args.name if _cat_load(inst) else None)
+    exp = _scn_compile(args.scenario, args.catalogue, catalogue)
+    res = _scn_apply_run(inst, exp, args.timeout, args.catalogue or catalogue or None)
+    lines = _scn_apply_lines(res, exp)
+    lines[0] = f"{exp['name']}: {lines[0]}"
+    out(res, args.json, human="\n".join(lines))
+    if not res.get("ok"):
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------- load
+#
+# `load` is the composition verb: from nothing to a described, live situation in
+# one command. Every step it takes is a verb that works on its own — launch, `ui
+# click`, the log wait, `apply` — so what this adds is the *order*, the launch
+# half of `setup` that `apply` deliberately drops, and a clear answer when a step
+# lands somewhere other than where it was aimed. Nothing here reaches the engine
+# that `apply` does not already reach.
+
+# The shell path to a skirmish, by gadget name. Each click auto-waits for its
+# gadget to exist and be actionable, so this is a path, not a timing guess.
+SCN_MENU_PATH = ("SINGLE", "Skirmish", "Start")
+SCN_LAUNCH_TIMEOUT = 45.0   # `launch`'s own default: a cold prefix takes its time
+SCN_MENU_TIMEOUT = 30.0     # ...and a gadget that never appears is a different fault
+SCN_LOAD_TIMEOUT = 180.0    # ...and a map load is longer again
+
+# The overlay logs this every 30 frames, from the same read that draws the units.
+# A non-zero count is proof TA is past its loading screen with a world in memory —
+# which is the precondition the applier would otherwise report as a 30s timeout.
+SCN_LIVE_RX = re.compile(r"units: alive=([1-9]\d*)")
+
+# GameingState* at TAdynmemStruct+0x391E9, its char TNTFile[MAX_PATH] at +0x204
+# [vendor/TADR/src/DDraw/tamem.h:632,811]. TA falls back silently on a SkirmishMap
+# it does not have, so the registry says what was asked for and only the engine
+# says what happened.
+SCN_GAMEINGSTATE = "*0x511DE8+0x391E9:4"
+SCN_TNTFILE = 0x204
+
+
+def _scn_player_flags(setup) -> list:
+    """setup.players -> the `--player N:controller[:side[:color]]` launch flags.
+
+    One numbering, one path: the same strings a human would type, so a scenario
+    and a hand-driven launch cannot disagree about what slot 0 means.
+    """
+    flags = []
+    for p in setup["players"]:
+        fields = [SCN_CONTROLLERS[p["controller"]],
+                  "" if p["side"] is None else SCN_SIDES[p["side"]],
+                  p["color"], p["metal"], p["energy"]]
+        spec = f"{p['slot']}:" + ":".join("" if f is None else str(f) for f in fields)
+        flags.append(spec.rstrip(":"))
+    return flags
+
+
+def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
+    """Wait for the fork to answer a gadget walk at all.
+
+    `_ui_resolve` is strict about a gadget that is missing, and rightly so — but
+    just after launch there is no UI to read yet, TA is still opening its window.
+    That is a state to wait through, once, here.
+    """
+    deadline = time.time() + timeout
+    while True:
+        if not inst.running():
+            die(f"{inst.name} exited before its shell came up "
+                f"(tacli log {inst.name} -n 40)")
+        snap = _ui_snapshot(inst, timeout=2.0, soft=True)
+        if snap:
+            return snap
+        if time.time() >= deadline:
+            die(f"no shell after {timeout:g}s — TA never drew a menu "
+                f"(tacli log {inst.name} -n 40)")
+        time.sleep(0.25)
+
+
+def _scn_wait_live(inst: Instance, timeout: float) -> int:
+    """Wait for a world: the overlay's own count of living units goes non-zero."""
+    path = inst.gamedir / "tagpu.log"
+    start = path.stat().st_size if path.exists() else 0
+    deadline = time.time() + timeout
+    while True:
+        if not inst.running():
+            die(f"{inst.name} exited while its map was loading "
+                f"(tacli log {inst.name} -n 40)")
+        if path.exists():
+            with open(path, "rb") as f:
+                f.seek(start)
+                chunk = f.read().decode("utf-8", "replace")
+            for line in chunk.splitlines():
+                m = SCN_LIVE_RX.search(line)
+                if m:
+                    return int(m.group(1))
+        if time.time() >= deadline:
+            die(f"no game after {timeout:g}s — the shell never reached a live map "
+                f"(tacli ui {inst.name} snapshot)")
+        time.sleep(0.5)
+
+
+def _scn_loaded_map(inst: Instance, timeout: float = 10.0):
+    """The map the engine actually loaded, straight out of GameingState."""
+    rows = _peek(inst, [SCN_GAMEINGSTATE], timeout)
+    ptr = _peek_uint(rows[0] if rows else None)
+    if not ptr or ptr < 0x600000:
+        return None
+    rows = _peek(inst, [f"0x{ptr:X}+0x{SCN_TNTFILE:X}:s96"], timeout)
+    return _peek_str(rows[0] if rows else None) or None
+
+
+def _scn_map_matches(loaded: str, wanted: str) -> bool:
+    """Is the loaded TNT file the map the scenario asked for?
+
+    A scenario names a map the way the shell's own list does; `TNTFile` is a file
+    name, possibly with a directory and always with an extension. The stem,
+    case-folded, is the only spelling the two share.
+    """
+    stem = loaded.replace("\\", "/").rsplit("/", 1)[-1]
+    if "." in stem:
+        stem = stem.rsplit(".", 1)[0]
+    return stem.strip().lower() == wanted.strip().lower()
+
+
+def cmd_scenario_load(args):
+    """From nothing to a described, live situation, in one command.
+
+    launch (carrying `setup`'s launch half) -> the shell path to a skirmish ->
+    wait for a world -> confirm the map the engine really loaded -> apply.
+    """
+    inst = Instance(args.name)
+    # Compile first: a scenario that cannot compile must not cost a launch. The
+    # catalogue is the target's own, which is also what checks `setup.map`
+    # against the 99 names this game has — before TA can fall back on one.
+    catalogue = args.instance or (args.name if _cat_load(inst) else None)
+    exp = _scn_compile(args.scenario, args.catalogue, catalogue, launching=True)
+    setup = exp["setup"]
+    steps = []
+
+    if inst.running():
+        if not args.restart:
+            die(f"{args.name} is already running, and `load` is a clean start "
+                f"(tacli scenario apply {args.name} {args.scenario} to stack a "
+                f"situation onto it, or load --restart)")
+        _stop(inst)
+        steps.append("stopped the game that was running (--restart)")
+
+    # Explicit flags win over the file, so a scenario re-runs at another
+    # resolution, or on another map, without being edited.
+    res = tuple(args.res) if args.res else (tuple(setup["res"]) if setup["res"] else None)
+    wanted_map = args.map or setup["map"]
+    limit = args.unit_limit if args.unit_limit is not None else setup["unit_limit"]
+    launched = _launch(argparse.Namespace(
+        name=args.name, json=True, force=False, res=res, map=wanted_map,
+        unit_limit=limit, player=_scn_player_flags(setup) or None,
+        display=args.display, slot=None, sound=None, intro=False, shield=None,
+        keep_dll=args.keep_dll, los=None, mapping=None, arg=[],
+        timeout=args.launch_timeout, no_restore_pointer=False))
+    if launched.get("already_running"):
+        die(f"{args.name} is still running after being stopped "
+            f"(tacli stop {args.name} --hard)")
+    steps.append(f"launched {launched['res'][0]}x{launched['res'][1]}"
+                 + (f", map {wanted_map!r}" if wanted_map else "")
+                 + (f", unit limit {limit}" if limit is not None else ""))
+    if launched.get("owndraw_note"):
+        steps.append(launched["owndraw_note"])
+
+    _scn_wait_shell(inst, args.launch_timeout)
+    for i, selector in enumerate(SCN_MENU_PATH):
+        last = i == len(SCN_MENU_PATH) - 1
+        before, g = _ui_resolve(inst, selector, SCN_MENU_TIMEOUT, wait=True)
+        # `Start` tears the shell down to load the map, so there is no gadget
+        # tree left to settle against: the live wait below is that click's
+        # confirmation instead.
+        # The screen the click was made on, not the one it lands on: TA confirms
+        # a menu click on the frame it arrives (UIChange_f) and pushes the new
+        # screen a frame or two later, so `how` is the honest report and the next
+        # step's own screen says where this one went.
+        _after, how = _ui_click_gadget(inst, g, before, settle=not last)
+        steps.append(f"clicked {_ui_label(g)} on {before.get('gui')}"
+                     + (f" — {how}" if how else ""))
+
+    alive = _scn_wait_live(inst, args.load_timeout)
+    steps.append(f"live with {alive} unit{'' if alive == 1 else 's'}")
+
+    loaded = _scn_loaded_map(inst)
+    if wanted_map and loaded and not _scn_map_matches(loaded, wanted_map):
+        if not args.any_map:
+            die(f"the game loaded {loaded}, not {wanted_map!r} — TA falls back "
+                f"silently on a map it does not have, and a scenario's coordinates "
+                f"are map-specific (tacli maps {args.name} lists what this game "
+                f"has; load --any-map applies anyway)")
+        steps.append(f"map is {loaded}, not {wanted_map!r} (--any-map)")
+    elif loaded:
+        steps.append(f"map {loaded}")
+
+    res = _scn_apply_run(inst, exp, args.timeout, args.catalogue or catalogue or None)
+    res["loaded"] = {"steps": steps, "map_file": loaded, "map_requested": wanted_map,
+                     "res": launched["res"], "unit_limit": limit,
+                     "players": _scn_player_flags(setup),
+                     "alive_before_apply": alive, "window": launched["window"],
+                     "pid": launched["pid"]}
+    lines = [f"{exp['name']}: loaded on {args.name}"]
+    lines += [f"  {step}" for step in steps]
+    lines += _scn_apply_lines(res, exp)
+    out(res, args.json, human="\n".join(lines))
+    if not res.get("ok"):
+        sys.exit(1)
+
+
+# ------------------------------------------------------------------- switches
+#
+# SoftwareDebugMode, a u16 at TAdynmemStruct+0x37F2F, name-keyed to its bits. A
+# live verb on any instance, scenario or not, because A/B-ing a switch on one
+# running game is how a [CLAIMED] row in scenario-format.md becomes a measured
+# one. Fork side: tagpu_scenario.c.
+
+SW_STATES = {"on": True, "off": False, "1": True, "0": False,
+             "true": True, "false": False, "yes": True, "no": False}
+
+
+def cmd_switches(args):
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{args.name} is not running")
+    wants = []
+    for spec in args.flags or []:
+        name, _, state = spec.partition("=")
+        name = name.lower()
+        if name not in SCN_SWITCHES:
+            die(f"no engine switch named {name!r} — "
+                f"one of {', '.join(sorted(SCN_SWITCHES))}")
+        if not _:
+            die(f"{spec!r}: say {name}=on or {name}=off")
+        if state.lower() not in SW_STATES:
+            die(f"{spec!r}: {state!r} is not on/off")
+        wants.append(f"{name}={int(SW_STATES[state.lower()])}")
+
+    result = inst.gamedir / "tagpu_switches.json"
+    before = result.stat().st_mtime_ns if result.exists() else 0
+    (inst.gamedir / "tagpu_switches.trigger").write_text("\n".join(wants) + "\n")
+    deadline = time.time() + args.timeout
+    res = None
+    while time.time() < deadline:
+        if result.exists() and result.stat().st_mtime_ns > before:
+            try:
+                res = json.loads(result.read_text())
+                break
+            except json.JSONDecodeError:
+                pass
+        time.sleep(0.05)
+    if res is None:
+        die(f"no answer in {args.timeout:g}s — is the game past its first frame?")
+    res["name"] = args.name
+    bits = res.get("bits") or {}
+    changed = [k for k, v in bits.items()
+               if bool(res.get("before", 0) & SCN_SWITCHES[k]) != v]
+    res["changed"] = changed
+    human = (f"SoftwareDebugMode 0x{res.get('after', 0):04X} "
+             f"(was 0x{res.get('before', 0):04X})\n"
+             + "  ".join(f"{k}={'on' if v else 'off'}" for k, v in sorted(bits.items())))
+    if changed:
+        human += f"\nchanged: {', '.join(sorted(changed))}"
+    out(res, args.json, human=human)
+    if not res.get("ok"):
+        sys.exit(1)
+
+
+def cmd_scenario_todo(args):
+    """`dump` is phase E; say so instead of "invalid choice"."""
+    die(f"scenario {args.cmd_todo} is phase E "
+        f"(research/notes/scenario-format.md). Built: list, validate, expand, "
+        f"apply, load.")
+
+
 def res_type(text: str):
-    m = re.fullmatch(r"(\d{3,4})\s*[xX*]\s*(\d{3,4})", text)
+    m = RES_RX.fullmatch(text)
     if not m:
         raise argparse.ArgumentTypeError("resolution must look like 1024x768")
     return (int(m.group(1)), int(m.group(2)))
@@ -890,8 +3318,13 @@ def build_parser():
                    help="block hardware keyboard/mouse (the default)")
     l.add_argument("--no-shield", dest="shield", action="store_false")
     l.add_argument("--map", help="skirmish map name, e.g. 'Two Continents'")
+    l.add_argument("--unit-limit", dest="unit_limit", type=int,
+                   help="per-player unit cap in totala.ini (TA clamps it to 20-1500)")
     l.add_argument("--player", action="append",
-                   help="N:controller[:side[:color]] (controller 0=off 1=human 2=AI)")
+                   help="N:controller[:side[:color[:metal[:energy]]]] (controller "
+                        "0=off 1=human 2=AI, side 0=ARM 1=CORE; an empty field is "
+                        "left alone, e.g. 0:1::3 sets only a colour). Metal/energy "
+                        "are the skirmish starting resources, and set storage too.")
     l.add_argument("--los", type=int, help="SkirmishLineOfSight")
     l.add_argument("--mapping", type=int, help="SkirmishMapping")
     l.add_argument("--arg", action="append",
@@ -989,6 +3422,130 @@ def build_parser():
     st.add_argument("name")
     st.add_argument("--hard", action="store_true", help="also kill its wineserver")
     st.set_defaults(func=cmd_stop)
+
+    u = sub.add_parser("ui", help="snapshot and drive on-screen gadgets (menus, build panel)")
+    add_common(u)
+    u.add_argument("name")
+    u.add_argument("verb", nargs="?", default="snapshot",
+                   help="snapshot (default) | show | click | set | check | uncheck "
+                        "| select | hover | fill | press | wait")
+    u.add_argument("rest", nargs="*",
+                   help="a gadget selector (NAME, type:NAME or #index), then a value "
+                        "for set/fill or an item for select (text or #index)")
+    u.add_argument("--all", action="store_true",
+                   help="snapshot: include decorative gadgets (labels, pictures, surfaces)")
+    u.add_argument("--gui", help="wait: wait for this screen to reach the top of the stack")
+    u.add_argument("--page", type=int,
+                   help="click: walk a paged build menu to this page first")
+    u.add_argument("--timeout", type=float, default=UI_TIMEOUT,
+                   help=f"seconds to auto-wait for a gadget, and to scroll a long list "
+                        f"to an off-screen row (default {UI_TIMEOUT:g})")
+    u.add_argument("--no-wait", dest="wait", action="store_false", default=True,
+                   help="fail immediately instead of waiting for the gadget")
+    u.set_defaults(func=cmd_ui)
+
+    for verb, fn, help_text in (
+            ("units", cmd_units, "live unit catalogue (cached per instance)"),
+            ("features", cmd_features, "live feature catalogue — where wreck names are")):
+        cs = sub.add_parser(verb, help=help_text)
+        add_common(cs)
+        cs.add_argument("name")
+        cs.add_argument("--limit", type=int, default=40, help="rows to print (0 = all)")
+        cs.add_argument("--timeout", type=float, default=CAT_TIMEOUT)
+        cs.set_defaults(func=fn)
+
+    mp = sub.add_parser("maps", help="map names, read off the skirmish map list")
+    add_common(mp)
+    mp.add_argument("name")
+    mp.add_argument("--no-walk", action="store_true",
+                    help="read the current screen only; do not navigate to SELMAP")
+    mp.add_argument("--timeout", type=float, default=UI_TIMEOUT,
+                    help="how long to wait for the list to fill after the walk")
+    mp.set_defaults(func=cmd_maps)
+
+    sw = sub.add_parser("switches", help="read/set the engine switches "
+                                        "(shootall, noshake, cheats ...)")
+    add_common(sw)
+    sw.add_argument("name")
+    sw.add_argument("flags", nargs="*",
+                    help="name=on|off, repeatable; none = just report the current bits")
+    sw.add_argument("--timeout", type=float, default=10)
+    sw.set_defaults(func=cmd_switches)
+
+    cg = sub.add_parser("catalogue", help="what this instance has cached")
+    add_common(cg)
+    cg.add_argument("name")
+    cg.set_defaults(func=cmd_catalogue)
+
+    sc = sub.add_parser("scenario", help="compile and apply JSON situation files")
+    add_common(sc)
+    scv = sc.add_subparsers(dest="verb", required=True)
+
+    def add_scenario(verb, help_text, **kw):
+        sp = scv.add_parser(verb, help=help_text, **kw)
+        add_common(sp)
+        return sp
+
+    scl = add_scenario("list", "list the scenarios in scenarios/")
+    scl.set_defaults(func=cmd_scenario_list)
+
+    for verb, fn, help_text in (
+            ("validate", cmd_scenario_validate, "schema + catalogue checks, no game"),
+            ("expand", cmd_scenario_expand, "the flat entity list, no game")):
+        sp = add_scenario(verb, help_text)
+        sp.add_argument("scenario", help="a name in scenarios/, or a path to a .json")
+        sp.add_argument("--catalogue", help="a unit/feature/map list file to check "
+                                            "names against")
+        sp.add_argument("--instance", help="check names against this instance's cached "
+                                           "catalogue (tacli units/features/maps)")
+        if verb == "expand":
+            sp.add_argument("--wire", action="store_true",
+                            help="print the compiled wire file the fork will read")
+        sp.set_defaults(func=fn)
+
+    sca = add_scenario("apply", "apply a situation to a game that is already running")
+    sca.add_argument("name", help="the instance to mutate")
+    sca.add_argument("scenario", help="a name in scenarios/, or a path to a .json")
+    sca.add_argument("--catalogue", help="a unit/feature/map list file to check "
+                                         "names against")
+    sca.add_argument("--instance", help="check names against this instance's cached "
+                                        "catalogue (default: the target's own)")
+    sca.add_argument("--timeout", type=float, default=SCN_APPLY_TIMEOUT)
+    sca.set_defaults(func=cmd_scenario_apply)
+
+    scd = add_scenario("load", "launch a game and put the situation in it")
+    scd.add_argument("name", help="the instance to launch")
+    scd.add_argument("scenario", help="a name in scenarios/, or a path to a .json")
+    scd.add_argument("--catalogue", help="a unit/feature/map list file to check "
+                                         "names against")
+    scd.add_argument("--instance", help="check names against this instance's cached "
+                                        "catalogue (default: the target's own)")
+    # Launch options the file may also carry. Explicit flags win, so a scenario
+    # re-runs at another resolution, or on another map, without being edited.
+    scd.add_argument("--res", type=res_type, help="override setup.res")
+    scd.add_argument("--map", help="override setup.map")
+    scd.add_argument("--unit-limit", dest="unit_limit", type=int,
+                     help="override setup.unit_limit")
+    scd.add_argument("--display", default=None, help="X display")
+    scd.add_argument("--keep-dll", action="store_true",
+                     help="do not refresh ddraw.dll")
+    scd.add_argument("--restart", action="store_true",
+                     help="stop the instance first if it is already running")
+    scd.add_argument("--any-map", action="store_true",
+                     help="apply even if TA loaded a map other than the one asked for")
+    scd.add_argument("--launch-timeout", type=float, default=SCN_LAUNCH_TIMEOUT,
+                     help=f"seconds to wait for the window and the shell "
+                          f"(default {SCN_LAUNCH_TIMEOUT:g})")
+    scd.add_argument("--load-timeout", type=float, default=SCN_LOAD_TIMEOUT,
+                     help=f"seconds to wait for the map to load "
+                          f"(default {SCN_LOAD_TIMEOUT:g})")
+    scd.add_argument("--timeout", type=float, default=SCN_APPLY_TIMEOUT,
+                     help="seconds to wait for the applier's answer")
+    scd.set_defaults(func=cmd_scenario_load)
+
+    sp = add_scenario("dump", "(phase E — not built yet)")
+    sp.add_argument("rest", nargs="*")
+    sp.set_defaults(func=cmd_scenario_todo, cmd_todo="dump")
 
     rm = sub.add_parser("rm", help="delete an instance")
     add_common(rm)

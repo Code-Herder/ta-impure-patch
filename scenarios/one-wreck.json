@@ -1,0 +1,13 @@
+{
+  "format": "ta-scenario/1",
+  "description": "One laboratory wreck, no units — features go in through a different door",
+  "on_error": "abort",
+
+  "setup": { "clear_existing": false },
+
+  "features": [
+    { "id": "the_wreck", "type": "armlab_dead", "pos": [1700, 1500], "facing": 45 }
+  ],
+
+  "camera": { "center_on": "the_wreck" }
+}

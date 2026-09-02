@@ -24,14 +24,27 @@ SUBTITLE = "How the Total Annihilation community adds engine features to a close
 
 # slug -> (nav label, section). Order here is the nav order.
 PAGES = [
-    ("project-map",                "Project map",               "Overview"),
-    ("roadmap",                    "GPU renderer roadmap",      "Overview"),
-    ("field-notes",                "Field notes & gotchas",     "Overview"),
-    ("frame-composition",          "Frame composition (G3)",    "Overview"),
-    ("unit-3do-bridge",            "Unit → 3DO bridge",         "Overview"),
-    ("composite-buffer",           "Composite buffer (G6)",     "Overview"),
-    ("file-formats",               "File formats (3DO, COB, GAF)","Reference"),
-    ("undither",                   "Undithering screenshots",   "Reference"),
+    ("project-map",                "Project map",                 "Overview"),
+    ("roadmap",                    "GPU renderer roadmap",        "Overview"),
+    ("field-notes",                "Field notes & gotchas",       "Overview"),
+
+    ("frame-composition",          "Frame composition (G3)",      "Renderer"),
+    ("unit-3do-bridge",            "Unit → 3DO bridge",           "Renderer"),
+    ("composite-buffer",           "Composite buffer (G6)",       "Renderer"),
+    ("own-the-draw",               "Own the draw (G7)",           "Renderer"),
+    ("gpu-render3do",              "GPU 3DO geometry (phase B)",  "Renderer"),
+    ("build-state",                "Build state (nanoframe)",     "Renderer"),
+    ("shadows-cloak",              "Shadows & cloaking",          "Renderer"),
+    ("terrain-depth",              "Terrain, features & depth",   "Renderer"),
+    ("ui-markers",                 "UI markers",                  "Renderer"),
+    ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
+
+    ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
+    ("input-firewall",             "The input firewall",          "Tooling"),
+    ("gui-gadgets",                "GUI gadgets",                 "Tooling"),
+    ("scenario-format",            "JSON scenarios",              "Tooling"),
+    ("windowed-mode",              "Windowed mode",               "Tooling"),
+
     ("binary-patches",            "The core mechanism",        "Mechanism"),
     ("exe-reverse-engineering",   "Reverse-engineering the exe","Mechanism"),
     ("runtime-injection",         "Injection & hooking",       "Mechanism"),
@@ -48,19 +61,27 @@ PAGES = [
     ("deep-ta-esc",               "TA: Escalation",            "Projects"),
     ("networking-lobbies",        "TA Forever & netcode",      "Projects"),
 
+    ("file-formats",              "File formats (3DO, COB, GAF)","Reference"),
+    ("undither",                  "Undithering screenshots",   "Reference"),
+    ("cmdline-options",           "Launch knobs (cmdline & INI)","Reference"),
+    ("resolution",                "Resolution pipeline",         "Reference"),
+
     ("candidates-community",      "Community sweep",           "Survey"),
     ("candidates-features",       "Feature-first sweep",       "Survey"),
     ("candidates-code",           "Code-host sweep",           "Survey"),
     ("patching-playbooks",        "Playbooks from other games","Survey"),
 ]
 
-SECTION_ORDER = ["Overview", "Mechanism", "Projects", "Reference", "Survey"]
+SECTION_ORDER = ["Overview", "Renderer", "Tooling", "Mechanism", "Projects",
+                 "Reference", "Survey"]
 SECTION_BLURB = {
-    "Overview": "Lineage, versions and feature totals at a glance",
+    "Overview": "Where the project stands, and the gotchas that cost time",
+    "Renderer": "The GPU renderer: TA's draw paths mapped, and our passes",
+    "Tooling": "Driving the game from a CLI — instances, input, UI, scenarios",
     "Mechanism": "How the patching actually works",
     "Projects": "The mods and patches, one page each",
     "Survey": "Discovery passes and comparisons",
-    "Reference": "File-format specs and loader references",
+    "Reference": "Asset formats and the stock engine's external surfaces",
 }
 
 CSS = r"""

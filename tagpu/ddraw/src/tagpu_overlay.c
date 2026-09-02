@@ -18,6 +18,9 @@
 #include "tagpu_input.h"
 #include "tagpu_native.h"
 #include "tagpu_peek.h"
+#include "tagpu_ui.h"
+#include "tagpu_cat.h"
+#include "tagpu_scenario.h"
 
 /* GL entry points the fork does not already expose — load once ourselves. */
 typedef void (APIENTRY *PFN_UNIFORM4F)(GLint,GLfloat,GLfloat,GLfloat,GLfloat);
@@ -462,9 +465,14 @@ static int draw_units(const TAGPU_FRAME* f)
             char* def = *(char**)(u + 0x92);
             const char* nm = "?";
             if ((size_t)def > 0x600000u && (size_t)def < 0x7FFF0000u) nm = def + 0x20;
-            char db[160]; _snprintf(db, sizeof db,
-                "  u%03d %-12.12s own=%d world=(%d,%d,%d) screen=(%d,%d) nano=%.2f",
-                alive, nm, (int)*(unsigned char*)(u + U_OWNER), wx, wy, wz, sx, sy,
+            /* idx = UnitInGameIndex (+0xA8), the engine's own slot. It is
+               RECYCLED on death, so it is never a public identity — but it is
+               what `tacli scenario` reports per spawned entity, so the roster
+               has to speak the same number for the two to be comparable. */
+            char db[192]; _snprintf(db, sizeof db,
+                "  u%03d %-12.12s own=%d idx=%d world=(%d,%d,%d) screen=(%d,%d) nano=%.2f",
+                alive, nm, (int)*(unsigned char*)(u + U_OWNER),
+                (int)*(short*)(u + 0xA8), wx, wy, wz, sx, sy,
                 *(float*)(u + 0x104));   /* build fraction REMAINING (build-state.md) */
             olog(db); }
         float nx = (float)sx / (float)gw * 2.0f - 1.0f;
@@ -513,6 +521,18 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     /* on-demand memory reads (tagpu_peek.trigger) — no-op unless triggered, and
        must run at the menus too: switch effects land before the first game */
     tagpu_peek_frame(f->frame_counter);
+    /* on-demand GUI snapshot (tagpu_ui.trigger) — the read half of `tacli ui`.
+       The menus are exactly where it earns its keep, so like peek it must run
+       before any game exists. */
+    tagpu_ui_frame(f);
+    /* on-demand unit/feature catalogues (tagpu_units.trigger,
+       tagpu_features.trigger) — validation layer 2 for `tacli scenario`. */
+    tagpu_cat_frame(f);
+    /* on-demand situation applier (tagpu_scenario.trigger) and the engine
+       switches (tagpu_switches.trigger). Detection and reporting live here; the
+       creation pass runs from this module's own Game_MainLoopTick detour, never
+       mid-render. Switches must reach the menus too, like peek. */
+    tagpu_scenario_frame(f);
     /* DISPLAY-MODE CHANGES: the fork restarts its render thread with a NEW
        GL context — every GL object id we cached is dead. Detect the context
        change and re-init all GL-owning modules from scratch (without this a
