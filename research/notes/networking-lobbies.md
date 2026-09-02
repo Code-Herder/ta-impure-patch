@@ -245,9 +245,10 @@ err:dplay:DP_SecureOpen Unable to open session: DPERR_UNSUPPORTED
 
 **Wine implements the client half of DirectPlay TCP/IP and not the host half.**
 `EnumSessions` succeeds and `DPWSCB_Open`'s join branch is fully written; the
-create branch is a `FIXME`. Two `tacli` instances on one machine therefore
-cannot form a game on any wine version — and this has nothing to do with TA, the
-tagpu stack or the extra weapons module.
+create branch is a `FIXME`. With wine's **builtin** DirectPlay, two `tacli`
+instances on one machine therefore cannot form a game on any wine version — and
+this has nothing to do with TA, the tagpu stack or the extra weapons module.
+(Native DirectPlay lifts exactly this limit; see the next subsection.)
 
 Note what was *not* proven by that table: joining was never exercised end to end,
 because with hosting broken there was never a session to join. `EnumSessions`
@@ -534,13 +535,13 @@ between peers. What it relies on from the network model, and what is still open:
   (`CRC_weapons`, `def+0x146`, folded into `CRC_all`), but what the lobby does on a
   mismatch is not established, and the "You have CRC errors" text people quote is not
   in the binary.
-- **None of this has been tested**, because wine 9.0's DirectPlay TCP/IP service
-  provider is a stub (`fixme:dplay:DPWSCB_EnumSessions … stub`): the provider screen's
-  `SELECT` is fine for the TCP/IP row, but hosting and searching both bounce back with
-  "Invalid TCP/IP Address" / an empty `SELGAME`. Native `dplayx.dll` + `dpwsockx.dll`
-  from `dxnt.cab` (Feb 2010 DirectX redist, winetricks' `directplay`) is the known fix
-  and the package could not be downloaded from Microsoft or the Internet Archive. The
-  full attempt log is in [extra-weapons](extra-weapons.md#multiplayer-untested-and-why).
+- **None of this has been tested yet, but it is no longer blocked.** wine's builtin
+  DirectPlay cannot host at all (`DPWSCB_Open`: "session creation is not yet supported"),
+  which is why the 2026-09-02 attempt got no further than an empty `SELGAME`. Native
+  `dplayx` + `dpwsockx` + `dplaysvr.exe` fix that on the stock wine 9.0 the instances
+  already use — see §"DirectPlay under Wine — measured" above, and `tools/dpinstall.sh`.
+  What remains is `tacli` work and the two-instance run. The full log is in
+  [extra-weapons](extra-weapons.md#multiplayer-what-blocked-it-and-how-it-was-unblocked).
 
 ## Open questions / uncertainty
 

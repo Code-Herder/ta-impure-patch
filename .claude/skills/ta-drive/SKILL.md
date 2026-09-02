@@ -420,7 +420,18 @@ storage's does not); `tacli log` returns a tail of the file, so count lines in t
   both are written up in `windowed-mode.md`.
 - Instances are cheap in disk (hardlinked prefix, symlinked gamedir) but each running
   game is a real GPU client — a handful at a time, not dozens.
-- **`SELPROV`'s `SELECT` button kills the game** — `Access Violation ... at 0023:00000000`
-  in `ErrorLog.txt`, TA's DirectPlay path under wine, reproducible with plain `tacli keys`
-  and nothing to do with `ui`. Reading the provider list and moving its selection are
-  safe; pressing `SELECT` is not. That is what blocks agent-vs-agent multiplayer.
+- **`SELPROV`'s `SELECT` kills the game on the *non*-TCP/IP rows** —
+  `Access Violation ... at 0023:00000000` in `ErrorLog.txt`, reproducible with plain
+  `tacli keys` and nothing to do with `ui`. IPX was the row that did it. **Row 0,
+  *Internet TCP/IP Connection For DirectPlay*, selects cleanly** and goes to `TCP.GUI`.
+  Reading the provider list and moving its selection are always safe.
+- **Multiplayer is no longer blocked by the platform** (2026-09-02). What blocked it was
+  wine's builtin DirectPlay, which implements the client half only and cannot host at all
+  (`DPWSCB_Open`: "session creation is not yet supported", true through wine `master`).
+  Native Microsoft DirectPlay fixes it on the stock wine 9.0 these instances use:
+  `tools/dpinstall.sh <prefix>` installs it, `tools/dptest/` proves a prefix is ready.
+  Two traps — override the EXEs by name too (`dplaysvr.exe,dpnsvr.exe=n`) or `Open` hangs
+  silently, and `pkill -x dplaysvr.exe` before hosting since a stale one holds UDP 47624
+  across prefixes. **`tacli` cannot drive this yet**: it hard-codes
+  `WINEDLLOVERRIDES=ddraw=n,b` and needs a per-launch DirectPlay option first. Driving
+  recipes go here once a real two-instance game has actually run.
