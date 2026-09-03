@@ -9,8 +9,32 @@ in progress. **Landing** — fast-forwarding local `main` — is the act with a 
   now correct what I just landed", it was not finished. Batch the commits and land once.
 - **Verified by running it**, not by reading it. Both DLLs compiling is not evidence the change
   works. For documentation, check the claims against the source *before* landing — no build gate
-  catches a wrong statement.
+  catches a wrong statement — and **regenerate the wiki**, because a note that does not render
+  is not documentation either:
+
+  ```
+  .venv-undither/bin/python research/build_wiki.py      # from the main checkout OR any worktree
+  ```
+
+  It must end `built N pages + index`. `research/site/` is gitignored, so this costs nothing but
+  the run; grep the generated HTML for the section you touched before calling it done.
 - **Nothing half-done left behind** — no debug instrumentation, no counters added to chase a bug.
+
+## Python tooling: install what you need, into the shared venv
+
+**`.venv-undither/` at the main checkout root is the project's Python environment**, and you may
+`pip install` into it whenever a tool needs a package — that is what it is for. It already carries
+`markdown` (the wiki builder) and the undither inference stack (torch/onnx, which
+`build_wiki.py` shells out to for the learned bakes). `.gitignore` has `.venv*/`, so it is local
+state and nothing you install reaches the repo.
+
+**One venv, at the main checkout, shared by every worktree** — do not make a per-worktree copy.
+`build_wiki.py:find_python()` already resolves it through `git rev-parse --git-common-dir` for
+exactly this reason, and duplicating a CUDA torch install per ephemeral worktree is pure waste.
+
+The system `python3` is PEP 668 externally-managed, so it will refuse installs and has none of
+this — **a bare `python3 research/build_wiki.py` fails at `import markdown`**. Name the venv's
+interpreter, as above.
 
 ## Review engine changes before they land
 
