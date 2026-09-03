@@ -13,6 +13,14 @@ That is the whole interface. No registry key, no FBI tag, no restart: the slot l
 every 30 frames and reloads when its write time moves, so the edit loop is about two seconds. The
 file going away puts the engine's 3DO back.
 
+A load that **fails** puts the 3DO back too, says why, and then stands down until the file's
+write time moves again — re-parsing megabytes on the render thread twice a second for the rest
+of the session is not a retry, it is a stall, and it appends the same failure to `tagpu.log`
+forever. That still retries the case retrying is for (a file caught mid-copy: the copy ends by
+stamping its own write time on the destination), and the failed model hands its payload slot
+back, so a broken export cannot hold one of the eight against a model that works. Save the file
+again to try again.
+
 | Piece of it | Where |
 |---|---|
 | Loader — glTF/GLB → one static interleaved VBO per model, triangles sorted by material, one piece index per vertex | `tagpu/ddraw/src/tagpu_hires.c` |
@@ -20,8 +28,12 @@ file going away puts the engine's 3DO back.
 | Pose — reads the engine's live per-piece state and hands the renderer one matrix per piece | `tagpu/ddraw/src/tagpu_native.c`, `pose_accum` / `hires_pose` |
 | The oracle — `tagpu_posedump.on`, and what makes all of this checkable | `tagpu_native.c`, `pose_dump` |
 
-Scenarios: `scenarios/hires-one.json` (one Peewee beside one engine-drawn AK, the close-up)
-and `scenarios/hires-peewee.json` (20 v 20). Driving them: the **ta-drive** skill.
+Scenarios: `scenarios/hires-one.json` (one Peewee beside one engine-drawn AK, the close-up),
+`scenarios/hires-crowd.json` (12 ordinary types on screen before the one with a file — the
+payload-slot regression), `scenarios/hires-peewee.json` (20 v 20), and
+`scenarios/hires-wreck.json` (units, then husks on the indices they held — the gather-array
+regression; its own `description` says how to drive it and what failure looks like). Driving
+them: the **ta-drive** skill.
 
 ## What the file has to contain
 
@@ -42,9 +54,12 @@ engine, not the file), sparse accessors, texture wrap modes (UVs clamp), KHR ext
 every material channel past base colour + normal + metallic/roughness.
 
 Caps, all of which log when they bite: 65536 triangles, 32 materials, 32 images, 2048 px on an
-image side, `TAGPU_HMAXPIECE` = **48 posable pieces** (a GPU budget: the vertex shader spends
-3 `vec4` of uniform on each), and **8 replacement models loaded at once** — that last one counts
-only types that actually have a file, so ordinary units on screen never consume it.
+image side, 4096 nodes, 64 MB of file, `TAGPU_HMAXPIECE` = **48 posable pieces** (a GPU budget:
+the vertex shader spends 3 `vec4` of uniform on each), and **8 replacement models loaded at
+once** — that last one counts only types that actually have a file, so ordinary units on screen
+never consume it. The node cap is a refusal rather than a truncation: the walk's cycle guard is
+a mark per node index, and past the end of that array a malformed child list would recurse
+2^depth deep with nothing to stop it.
 
 An image that fails to decode says so too. PNG is the only decoder in the DLL and a JPEG is
 legal glTF, so a normal Blender export can hit it; the material falls back to 1×1 white, which
