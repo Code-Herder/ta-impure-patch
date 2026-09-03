@@ -32,9 +32,12 @@
    are skipped before the lookup). [BINARY-VERIFIED] */
 #define GFX_GLOBALS_PP   0x0051FBD0u
 #define GFX_ALPHATAB     0xC0
-/* the target-sprite drawer and its only two callers (`0x4394E0` delegates to
-   it, `0x439B30` dispatches bit 3 to it); stdcall(ctx, view, node, pos, flag),
-   ret 0x14, no function-pointer table in the path [BINARY-VERIFIED] */
+/* the target-sprite drawer and its only two `E8` callers (`0x4394E0` delegates
+   to it, `0x439B30` dispatches bit 3 to it); stdcall(ctx, view, node, pos,
+   flag), ret 0x14. Its address is ALSO in `.rdata` 19 times, as the `+8` field
+   of the 25-byte order-descriptor records — a field this build never reads, so
+   the two redirects are the whole path today and would be bypassed silently if
+   it were ever brought into use. [BINARY-VERIFIED] */
 #define SITE_TSPRITE1_VA 0x00439516u
 #define SITE_TSPRITE2_VA 0x00439C7Du
 #define LEAF_TSPRITE_VA  0x00439740u
@@ -82,8 +85,8 @@ static const unsigned char BARS_STOLEN[5] = { 0x83, 0xEC, 0x10, 0x53, 0x55 };
    "exactly what they already read out of the engine's frame today". That is
    true of what the primitive READS and wrong about what it WRITES: the blend
    result is a function of the destination, so a key destination gives a keyed
-   colour. Measured against stock: star olive vs ours teal, 14% of the sprite's
-   bounding box on the cyan ramp against 1% after this.
+   colour. Measured against stock: star olive vs ours teal, 17.6% of the
+   sprite's box cyan-family before, 0% after.
 
    The fix is to make that one composite a copy: an identity LUT, every
    (src,dst) pair answering src, lands the sprite in our buffer as its own
@@ -436,6 +439,17 @@ static void __stdcall mark_hook8(void* ctx, int n)
     LAYER* L = &g_L[TAGPU_MARK_PREFOG];
     LAYER* P = &g_L[TAGPU_MARK_POSTFOG];
     const char* ta;
+
+    /* FIRST, before anything else in this frame draws. This only ever fires if
+       a non-local exit left our identity table installed (mark_tsprite brackets
+       a call that always returns, so it should not) — but the layer-8 particle
+       draw below reaches the composite itself: `0x471F90` dispatches
+       `call [edx+8]` per effect object and vtable `0x4FD638`'s slot 8 is
+       `0x475700`, which composites at `0x475757` [BINARY-VERIFIED]. Restoring
+       after that call would blit a frame of translucent particles opaque into
+       the engine's own frame. */
+    if (g_tabSlot) alpha_opaque_off();
+
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
 
     /* A window still open here belongs to a frame that never reached hook 9,
@@ -453,13 +467,6 @@ static void __stdcall mark_hook8(void* ctx, int n)
        draw either way — nothing here can give it back — but the next frame
        starts clean instead of corrupting a stack. */
     if (L->active) { L->active = 0; L->ctx = NULL; L->saved = NULL; }
-    /* Belt and braces for the blend LUT. mark_tsprite brackets one call that
-       always returns, so this should never fire — but "always returns" is an
-       assumption about SEH, and if TA or wine ever unwound past the wrapper our
-       pointer would sit in a slot the engine frees and refills. Putting the
-       ENGINE's pointer back is the safe direction (alpha_opaque_off only writes
-       when ours is still the one installed), and one branch a frame is nothing. */
-    if (g_tabSlot) alpha_opaque_off();
 
     /* The post-fog window is per-call and every one of its calls is still ahead
        of us in this frame, so this is where its frame starts. Its "nothing to
@@ -490,6 +497,7 @@ static void __stdcall mark_hook9(void* ctx, int n)
        drawUnits == 0, which only the movie recorder passes (see hook 8) — and
        `opens == ends` over ~50 000 blocks of live play says so. */
     layer_end(&g_L[TAGPU_MARK_PREFOG], 1);
+    if (g_tabSlot) alpha_opaque_off();   /* same reason as hook 8, layer 9 */
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
 }
 

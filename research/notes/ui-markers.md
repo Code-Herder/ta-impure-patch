@@ -449,8 +449,9 @@ sprite (`0x439740`, the pulsing star at a move/attack waypoint) alpha-composites
 `out = tab[(src << 8) | dst]` with the LUT pointer at `*(*(u32*)0x51FBD0 + 0xC0)`
 (`0x4B6220` is just `mov eax,ds:0x51FBD0; ret`). [BINARY-VERIFIED] With `dst` = the key,
 that is a blend against palette 254 — bright cyan — so the star rendered **teal** where
-stock TA renders it olive over grass. Measured in its bounding box: 14 % of its pixels on
-the cyan ramp, against 1 % after the fix.
+stock TA renders it olive over grass. Measured in a 32x32 box on the sprite: **17.6 % of its
+pixels cyan-family before, 0 % after** (an earlier "14 % -> 1 %" in this branch used a
+palette-index set that also caught tree-canopy greens; this colour-based measure is the one).
 
 **The fix: an identity LUT around the drawer.** `tab[(s<<8)|d] = s` for every pair makes
 the composite a plain copy, so the sprite lands in our buffer as its own palette indices.

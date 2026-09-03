@@ -305,8 +305,10 @@ Established while fixing the waypoint star, which rendered teal because the engi
 composite was blending it against our fill key (`ui-markers.md` §6). Every VA below was read
 off `objdump` in this session unless a row says otherwise.]
 
-**The graphics globals block.** `0x4B6220` is the whole accessor: `mov eax,ds:0x51FBD0; ret`
-(and `0x4B6230` is an identical duplicate). `0x51FBD0` sits past `.data`'s raw end in the BSS
+**The graphics globals block.** `0x4B6220` is the whole accessor: `mov eax,ds:0x51FBD0; ret`.
+(`0x4B6230` starts with the same load and is **not** a second accessor — it does
+`or byte [eax+0xF1],0x8` and continues into a longer routine gated on `[eax+0xF0]` bit 1. A
+mutator; do not call it for the pointer.) `0x51FBD0` sits past `.data`'s raw end in the BSS
 region, mapped at run time — the same region as `TA_MAINPP 0x511DE8`. Live read: `*0x51FBD0`
 = `0x0051F320`, so the block itself is static and only its contents move.
 
@@ -355,10 +357,18 @@ TA's own malloc/free.
 bracketed around the call visible to it. It has **24 call sites**: `0x4399BB`, `0x459319`,
 `0x459353`, `0x4593BA`, `0x4595E9`, `0x4597D3`, `0x46A7AF`, `0x46A807`, `0x46A840`, `0x4736B1`,
 `0x474291`, `0x474CA3`, `0x475080`, `0x4755C6`, `0x475757`, `0x49C0F5`, `0x49C24A`, `0x49C2DC`,
-`0x49C40E`, `0x49C46F`, `0x4B7FFE`, `0x4B81BE`, `0x4B838A`, `0x4B8579`. Exactly one —
-`0x4399BB` — is reachable between marker hooks 8 and 9: the `0x459xxx` group is the earlier
-unit row sweep, `0x46A7xx` is past `DrawGameScreen`'s `ret` at `0x46A3FD`, and `0x49Cxxx` is
-the projectile pass `0x49BE60`, called at `0x469B22` *before* hook 8.
+`0x49C40E`, `0x49C46F`, `0x4B7FFE`, `0x4B81BE`, `0x4B838A`, `0x4B8579`. All 24 accounted for,
+because this survey is the evidence that a bracketed swap cannot be observed by anything else:
+
+| Sites | Where | Inside the capture window? |
+| --- | --- | --- |
+| `0x4399BB` | the target sprite `0x439740` | **yes, always** — this is the one we wrap |
+| `0x4B7FFE` | `CopyGafToContext`'s composite branch, taken when a sub-frame's `+0xB` is non-zero | **yes, but GAF-data-gated** — the route dots; stock `pathicon` frames do not take it |
+| `0x459319`, `0x459353`, `0x4593BA`, `0x4595E9`, `0x4597D3` | the unit row sweep | no — earlier in the frame |
+| `0x4736B1`, `0x474291`, `0x474CA3`, `0x475080`, `0x4755C6`, `0x475757` | the effect-object handlers, reached through `0x471F90`'s indirect `call [edx+8]` at `0x471FBB` (vtable `0x4FD638` slot 8 = `0x475700`) | no — but note **both hooks call `0x471F90` themselves**: hook 8 draws layer 8 *before* opening the window and hook 9 draws layer 9 *after* closing it, so they sit outside it by ordering rather than by address. That ordering is load-bearing; see `tagpu_markown.c`. |
+| `0x49C0F5`, `0x49C24A`, `0x49C2DC`, `0x49C40E`, `0x49C46F` | the projectile pass `0x49BE60`, called at `0x469B22` | no — before hook 8 |
+| `0x46A7AF`, `0x46A807`, `0x46A840` | past `DrawGameScreen`'s `ret` at `0x46A3FD` | no — different function |
+| `0x4B81BE`, `0x4B838A`, `0x4B8579` | inside the `0x4B8xxx` composite family itself (self/sibling recursion) | only as children of a site above |
 
 | VA | What it is |
 | --- | --- |
