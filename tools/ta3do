@@ -300,7 +300,6 @@ class Assets:
 # every untextured primitive's PaletteEntry indexes it.
 
 PALETTE_PATH = "palettes/palette.pal"
-TEAM_COLOR_BAND = range(9, 17)  # TA remaps these per player; we keep the file's own ramp
 
 
 def load_palette(assets: "Assets"):
@@ -313,6 +312,14 @@ def load_palette(assets: "Assets"):
 # §3. A GAF is a list of named entries (sequences); each entry has frames, each
 # frame is an 8-bpp bitmap, raw or RLE'd row by row. 3DO primitives name an
 # *entry*, so the first frame of that entry is the texture.
+#
+# Frame 0 is a choice, not the whole story: an entry with several frames is one
+# the engine indexes by *owning player* (verified live, research/notes/
+# gpu-render3do.md), and each frame is separately painted in that player's
+# colours -- logos.gaf's `colorsmd` runs palette 105-107 in frame 0, 202-204 in
+# frame 1, 80-83 in frame 2. Team colour is that frame table, not a palette
+# remap of one image. Taking frame 0 therefore paints every unit in player 0's
+# blue; 263 of the 608 stock models name at least one such entry.
 
 
 class GafError(Exception):
