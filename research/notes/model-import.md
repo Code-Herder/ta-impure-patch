@@ -170,6 +170,13 @@ stay invisible, and a stock `Create` opens with a run of `HIDE`. `ta3do` drops t
 export by reading the COB prologue, so the usual asset never exercises the path; exporting with
 `--show-hidden` does, and the frame comes back within 5 pixels of the export without them.
 
+The zero matrix is also what makes a **muzzle flash** on a hires model possible at all: the
+engine hides and shows the flare piece by name, exactly as it does for the 3DO, so the flash
+works if — and only if — the `.glb` still carries that piece's geometry. `ta3do --keep-flares`
+keeps precisely the pieces the script hides at Create and shows again later, which is that
+geometry and nothing else; see [model export](model-export.md). Untested in game so far: no
+hires model with a flare piece has been rendered firing.
+
 ## What the renderer does that the native pass cannot
 
 A modern asset pushed through the engine's palette-index shader comes out flat, unlit and

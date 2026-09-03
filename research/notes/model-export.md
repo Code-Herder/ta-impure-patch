@@ -34,7 +34,7 @@ inverse trip is not the conversion below run backwards.
 | **Mount** | Every `.hpi`/`.ccx`/`.gp3`/`.ufo` in the game dir, later shadowing earlier, into one lookup. Loose files on disk win. | `Assets` |
 | **Resolve** | `armpw` → `units/armpw.fbi` → `Objectname` → `objects3d/armpw.3do`. A bare model name or a file path also work; a miss suggests near matches. | `resolve_model` |
 | **Parse** | The 3DO object tree: 52-byte headers, 16.16 vertices, quads/N-gons, first-child/next-sibling links. | `parse_3do` |
-| **Hide** | Read `scripts/<unit>.cob` and collect the pieces `Create` hides on the first frame. | `hidden_at_create` |
+| **Hide** | Read `scripts/<unit>.cob` and collect the pieces `Create` hides on the first frame; a second, flat scan of the whole script collects every piece it `SHOW`s, and the intersection is the muzzle flash. | `hidden_at_create`, `shown_after_create`, `piece_visibility` |
 | **Undither** (optional) | `--undither`: each GAF frame the model uses goes through the [unditherer](undither.md)'s CNN **on its own**, as an indexed PNG carrying TA's palette, and comes back true colour. | `undither_frames` |
 | **Atlas** | Every GAF frame the model names — restored or as shipped — plus a 4×4 swatch per flat-colour palette index, shelf-packed into one RGBA image with a 1px extruded border. | `Atlas` |
 | **Build** | Triangulate (fan), Newell normals per face, flat shading by vertex duplication, UVs from the atlas rect. | `build_model` |
@@ -123,6 +123,30 @@ sit underneath at 1:1. `--shots` also screenshots the pair for each standard vie
   account for**, so it never guesses. Without this the flares draw as floating spikes and, worse,
   stretch the framing: ARMPW's bounding box is 33.3 units deep with them and 21.7 without.
   [VERIFIED] `--show-hidden` keeps them.
+- **Hidden-at-Create splits in two, and `--keep-flares` keeps only one half.** A piece the script
+  hides *and shows again later* is geometry the unit really wears in play — the muzzle flash,
+  `SHOW`n by `FireWeapon` for a few frames per shot. A piece it hides and never shows is an
+  anchor the effects system fires a sprite from, invisible in game as well, and stays dropped.
+  Over the 90 stock units whose `Create` hides anything: 23 hide a `flare`, 26 a `flare1`, 25 a
+  `flare2` and 5 a `flash` that they all show again, against a tail of never-shown anchors
+  (ARMCOM's `nanospray`, ARMJETH's `lfirept`/`rfirept`, 4 units with a dead `flare`). A few kept
+  pieces are not flashes at all but geometry the unit reveals — ARMZEUS's `gun`, ARMSS's and
+  CORSS's `sshead2`, ARMMAV's gun barrels, CORAH's `launcher2` — which is the same thing for the
+  file's purposes: the unit shows them. [VERIFIED —
+  scan of every model with a script]
+  The `SHOW` scan is **flat**, not a walk: the flash is shown from `FireWeapon`, past jumps and
+  calls this exporter deliberately does not decode. It accepts a word only when the word is the
+  `SHOW` opcode *and* the next word is a valid piece index, and a false positive can only keep a
+  piece that would otherwise be dropped.
+  This matters most for [import](model-import.md), not for renders: the engine gives a HIDden
+  piece an all-zero matrix, so the flare geometry in an exported `.glb` stays invisible until the
+  unit's own script shows it, and a hires model exported **without** it simply cannot flash.
+  It does widen the framing of a render — ARMSTUMP is 32.2 model units deep without the flare and
+  42.7 with it — so it is off by default. [VERIFIED — `ta3do info armstump [--keep-flares]`]
+  The file says which pieces those are: `asset.extras.flarePieces` alongside `hiddenPieces`.
+  **Not every unit has flash geometry to keep.** ARMFLASH's own `flare1`/`flare2` are single
+  vertices with no faces, so the flag changes nothing there — the node is exported either way,
+  as an empty, and the flash is the engine's sprite. [VERIFIED — `ta3do info armflash`]
 - **One material per unit.** Textured faces sample a GAF frame; untextured ones are a single
   palette index. Both go in the same atlas (the flat colours as small swatches), so a unit is
   one draw call and one file, and `NEAREST` magnification keeps the 1997 pixels crisp.

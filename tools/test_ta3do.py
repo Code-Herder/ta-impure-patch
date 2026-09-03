@@ -455,6 +455,20 @@ class TestBuildModel(unittest.TestCase):
         self.assertEqual(model.stats["skipped_selection"], 0)
         self.assertEqual(model.stats["triangles"], 2 + 2 + 1 + 2)
 
+    def test_a_kept_flare_is_labelled_but_not_dropped(self):
+        model = self.build(flares={"flare"})
+        flare = next(m for m in model.meshes if m.name == "flare")
+        self.assertGreater(flare.triangles, 0)
+        self.assertEqual(model.stats["skipped_hidden"], 0)
+        self.assertEqual(model.stats["flare_pieces"], ["flare"])
+        self.assertEqual(model.flares, ["flare"])
+
+    def test_a_piece_cannot_be_both_hidden_and_a_flare(self):
+        """Dropping wins: the label never claims a piece the file does not carry."""
+        model = self.build(hidden={"flare"}, flares={"flare"})
+        self.assertEqual(model.stats["skipped_hidden"], 1)
+        self.assertEqual(model.stats["flare_pieces"], [])
+
     def test_hidden_pieces_lose_faces_but_keep_their_node(self):
         model = self.build(hidden={"flare"})
         names = [mesh.name for mesh in model.meshes]
@@ -553,6 +567,16 @@ class TestGltf(unittest.TestCase):
 
     def test_hidden_pieces_are_recorded_in_extras(self):
         self.assertEqual(self.doc["asset"]["extras"]["hiddenPieces"], ["flare"])
+        self.assertEqual(self.doc["asset"]["extras"]["flarePieces"], [])
+
+    def test_a_kept_flare_is_recorded_in_extras_and_keeps_its_mesh(self):
+        root = ta3do.parse_3do(make_3do(SIMPLE_TREE))
+        model = ta3do.build_model("test", root, FakeBank({"METAL1B": frame_of(8, 8)}),
+                                  PALETTE, flares={"flare"})
+        doc, _blob = ta3do.model_to_gltf(model)
+        self.assertEqual(doc["asset"]["extras"]["flarePieces"], ["flare"])
+        self.assertEqual(doc["asset"]["extras"]["hiddenPieces"], [])
+        self.assertIn("mesh", doc["nodes"][2])
 
 
 # --------------------------------------------------------------------------- COB
@@ -582,6 +606,60 @@ class TestCob(unittest.TestCase):
 
     def test_garbage_is_not_fatal(self):
         self.assertEqual(ta3do.hidden_at_create(b"not a cob at all"), set())
+        self.assertEqual(ta3do.shown_after_create(b"not a cob at all"), set())
+
+    def test_shows_are_found_past_the_prologue_and_in_other_scripts(self):
+        """The muzzle flash is shown from FireWeapon, behind opcodes we do not
+        decode — the flat scan has to reach it anyway."""
+        create = [ta3do.OP_HIDE, 1, ta3do.OP_HIDE, 3, 0x10061000, 0, 0]
+        fire = [0x10043000, ta3do.OP_SHOW, 1, 0x10065000]   # GET, then SHOW flare
+        blob = make_cob(["base", "flare", "turret", "flare2"],
+                        {"Create": create, "FireWeapon": fire})
+        self.assertEqual(ta3do.hidden_at_create(blob), {"flare", "flare2"})
+        self.assertEqual(ta3do.shown_after_create(blob), {"flare"})
+
+    def test_a_show_with_no_valid_piece_behind_it_is_ignored(self):
+        blob = make_cob(["base", "flare"], {"Create": [ta3do.OP_SHOW, 9]})
+        self.assertEqual(ta3do.shown_after_create(blob), set())
+
+
+class TestPieceVisibility(unittest.TestCase):
+    """Which of the hidden pieces `--keep-flares` keeps, over a fake archive."""
+
+    class Assets:
+        def __init__(self, blob):
+            self.blob = blob
+
+        def has(self, path):
+            return path == "scripts/unit.cob" and self.blob is not None
+
+        def read(self, path):
+            return self.blob
+
+    def setUp(self):
+        create = [ta3do.OP_HIDE, 1, ta3do.OP_HIDE, 2, 0x10061000, 0, 0]
+        fire = [ta3do.OP_SHOW, 1, 0x10065000]
+        self.assets = self.Assets(make_cob(["base", "flare", "firept"],
+                                           {"Create": create, "FireWeapon": fire}))
+
+    def test_default_drops_every_hidden_piece(self):
+        self.assertEqual(ta3do.piece_visibility(self.assets, "unit"),
+                         ({"flare", "firept"}, frozenset()))
+
+    def test_keep_flares_keeps_only_the_piece_the_script_shows_again(self):
+        dropped, flares = ta3do.piece_visibility(self.assets, "unit", keep_flares=True)
+        self.assertEqual(dropped, {"firept"})
+        self.assertEqual(flares, {"flare"})
+        self.assertEqual(ta3do.script_flares(self.assets, "unit"), {"flare"})
+
+    def test_show_hidden_keeps_everything_and_labels_nothing(self):
+        self.assertEqual(ta3do.piece_visibility(self.assets, "unit", show_hidden=True),
+                         (frozenset(), frozenset()))
+
+    def test_a_unit_with_no_script_hides_nothing(self):
+        self.assertEqual(ta3do.piece_visibility(self.Assets(None), "unit",
+                                                keep_flares=True),
+                         (frozenset(), frozenset()))
 
 
 # --------------------------------------------------------------------------- PNG
