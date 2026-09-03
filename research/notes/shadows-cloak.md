@@ -36,8 +36,11 @@ cross-checked. **[INFERRED]** = my reading, not yet runtime-confirmed.
    table at **(sx+0x85, groundY)** — 5 px right of the body, at the ground
    height under the unit. Gated by option word `TA+0x37F06` bit2 ("Shadow") and,
    for completed units, bit3 ("TShadow"), minus `noshadow`/`canhover`/`floater`
-   unit types. Under-construction units instead get a **true slant-projected,
-   RLE-compressed shadow cached at `Object3do+0x14`** (`0x45A790`).
+   unit types. Structures — state bit `0x20000000`, nanoframe or completed —
+   instead get a **true slant-projected, RLE-compressed shadow cached at
+   `Object3do+0x14`** (`0x45A790`). *Since G13k that branch is redirected under
+   `owndraw all` and the native pass draws the slant projection itself — see
+   "Structure shadows, owned" below.*
 5. **Cloak changes only the final blit**: `unit+0x10E & 4` (actively cloaked) →
    the body goes through `0x4B8500` (50 % blend with the background) instead of
    the plain `CopyGafToContext`; enemies never see it at all
@@ -204,13 +207,25 @@ if (TA+0x37F06 & 4)                        ; option "Shadow"
     │           digger:      0x4BA1B0(scratch, 0x7D)          ; clip below ground
     │           else if seaLevel>alt: 0x4BA1B0(scratch, (seaLevel−alt)+0x32)
     │        0x4B8500(ctx, scratch,  sx+0x85, shadowY)        ; 50% black blend
-    └ NANOFRAME (state & 0x20000000, and not digger):
-        skip if (unit.UnitID==0 && altitude<seaLevel)
+    └ STRUCTURE (state & 0x20000000 — buildings, nanoframe or complete; not digger):
+        skip if (unit+0xA6 model index == 0 && altitude<seaLevel)
         if (obj+0x14 == 0)  0x45A790(this, obj, composite)    ; build cached shadow
         0x4B8500(ctx, obj+0x14frame, sx+0x85, shadowY)        ; RLE path 0x4CC057
 ```
-(`seaLevel` = byte `TA+0x1427F`; `state` = `unit+0x110`; nanoframe test is
-`byte[unit+0x113] & 0x20`.)
+(`seaLevel` = byte `TA+0x1427F`; `state` = `unit+0x110`; the structure test is
+`byte[unit+0x113] & 0x20` in path A at `0x4592BF` and `test dword [ecx+0x110],
+0x20000000` in path B at `0x459522`. Site addresses of every branch:
+`exe-reverse-engineering.md` §"The unit blit's shadow branches". The word this
+tree used to call `UnitID` is `unit+0xA6`, the u16 model index the native pass
+reads as `U_MODELID` — corrected 2026-09-03 off the disassembly at `0x4592D5`.)
+The `je` that enters the STRUCTURE branch — `0x4592C6` (path A) and `0x45952C`
+(path B) — is what `owndraw all` flips to a `jmp` (G13k), so every structure then
+takes the COMPLETED branch and its blank composite blits nothing. Two path
+asymmetries the tree above flattens: path A tests the structure bit *before*
+`digger` and sends a digger structure to COMPLETED (with the TShadow and
+`canhover`/`floater` tests); path B tests `digger` *first* (`0x4594D0`) and
+takes an inline branch (`0x4594D8..0x45951D`: silhouette, ground clip
+`0x7D`, straight to the shared blit) that applies neither test.
 
 ### `0x45A470` + `0x4B96A0` — the completed-unit shadow builder
 `0x45A470` copies the unit's composite (header W/H/Hot/ColorKey + colour plane +
@@ -226,14 +241,21 @@ through the ALP table darkens the background 50 % toward black in exactly the
 unit's shape. It is NOT a re-projection — a completed unit's shadow is a cheap
 offset copy of its own sprite.
 
-### `0x45A790` — the nanoframe (under-construction) shadow, cached at `Object3do+0x14`
+### `0x45A790` — the structure shadow (nanoframe or complete), cached at `Object3do+0x14`
 A **true slant-projected** shadow [BINARY-VERIFIED]:
 1. `0x45A510` — ground-projection AABB over the posed prims:
    `gx = x + y/4`, `gy = −z − y/4` (height leans the shadow up-right).
 2. Fill scratch colour = ColorKey, depth = 0.
 3. `0x45A610` — rasterise the silhouette with the same slant
    (per-vertex `(x + y/4, −z − y/4)`, faces flat-filled via `0x4C1000`; only
-   prims with visibility flag bit1 set — the build-completed pieces).
+   prims whose flag byte (`PrimitiveStruct+0x28`) has **both bit0 and bit1**
+   set — `test cl,1 ; je` at `0x45A64C`, `test cl,2 ; je` at `0x45A655`. The
+   AABB pass `0x45A510` tests bit0 alone (`0x45A55B`). What bit1 *means* is
+   not settled: it is not simply "build-completed" — a completed CORE wind
+   generator's mast and rotor pieces lack it and cast no shadow in the engine
+   (measured 2026-09-03, `shadow-struct` fixture, engine terrain), while its
+   base pieces carry it. [INFERRED: a per-piece "casts shadow" bit set by the
+   model or the script, not by construction.])
 4. `0x4B9D70(bodyComposite, scratch, 5, 0)` — punch the body's own pixels back
    out of the shadow (writes ColorKey where the body overlaps, offset +5 px)
    so the ground shadow never darkens under the sprite itself. [INFERRED intent]
@@ -355,11 +377,41 @@ i.e. composited above projectiles — engine quirk, reproduce or knowingly fix.)
    The `0x20000000`-path shadow (structures: the cached slant projection at
    `Object3do+0x14`, built from the posed prims) and the `FShadow` feature
    shadow of a 3D wreck survive the wipe and keep drawing — the native pass
-   draws **no** shadow for those, and honours `noshadow`/`canhover`/`floater`
+   drew **no** shadow for those, and honours `noshadow`/`canhover`/`floater`
    (`UnitDefStruct+0x241`) exactly as the engine does (an ARM Skimmer had been
-   getting a shadow from us). Rule in `tagpu_native.c`: `shadow = !(state &
-   0x20000000) && !(mask & 0x02000000) && !(mask & 0x81000)`, never for wrecks.
-   Panel: `assets/shots/g12c-shadow-ownership.png`.
+   getting a shadow from us). Rule in `tagpu_native.c` at the time: `shadow =
+   !(state & 0x20000000) && !(mask & 0x02000000) && !(mask & 0x81000)`, never
+   for wrecks. Panel: `assets/shots/g12c-shadow-ownership.png`.
+   **Structure shadows, owned 2026-09-03 (G13k).** That split stopped holding
+   the moment the terrain became ours: the cached shadow is drawn by the ALP
+   blend blit `0x4B8500`, and inside the key-filled viewport its destination
+   is palette 254's cyan, so every building's shadow came out as an **opaque
+   teal silhouette** (`(0,128,128)`, cyan halved) over our terrain — and, being
+   in the engine's frame, at the **1× position whatever the zoom**, so zoomed
+   out it sat detached beside the body (reported from play on Two Continents:
+   *"metal extractors casting strange shadows"*). Now: `owndraw all` flips the
+   two `je`s that enter the STRUCTURE branch (`0x4592C6`, `0x45952C`) to `jmp`,
+   so a building takes the COMPLETED branch, whose composite is blank under
+   `all` and blits nothing; the native pass emits the slant projection itself
+   from the live posed prims — `(x + y/4, −z − y/4)`, pieces with flags
+   bit0|bit1 only, 5 px right, 50 % black, gated by the Shadow option bit alone
+   (the engine's cached branch never tests TShadow), `noshadow`, and the
+   model-0-under-water skip; `canhover`/`floater` are NOT tested on that branch
+   and are not tested by us for it either. A `digger` structure is not slanted
+   — the engine never gives one the cached shadow — and takes the silhouette
+   rule. Rule now: structures `shadow = structshadow_ours && !noshadow`, the
+   rest as before. Measured over the
+   engine's own terrain (`terr.on=passive`) against the pre-fix engine shadow,
+   same frame position, four buildings: the only differences are the rotating
+   pieces (drill arms, rotor) caught at other animation phases and a **strip
+   up to 5 px wide along each body's right edge**, which is the engine's
+   punch-out (`0x4B9D70(body, scratch, 5, 0)`) that we do not replicate — our
+   body covers the shadow from `+0`, the engine erases it from `+5`. Not
+   closed: a replacement (glTF) structure casts every piece (no per-piece
+   bit1 on that side); a nanoframe under construction casts nothing until
+   complete (the native pass does not list it), where the engine drew its
+   cached shadow — teal under `terrown`, so this is the lesser wrong; a
+   nanoframe was not captured mid-build in this landing. Fixture: `scenarios/shadow-struct.json`.
    **Factory-built check (2026-09-02):** a Peewee rolled out of an ARMLAB reads
    state `0x90242321` with nano = 0 — bit `0x20000000` CLEAR — while a
    commander-built ARMSOLAR reads `0x30282321` after completion — bit SET. So

@@ -6,4 +6,8 @@
    pixels. Armed by tagpu_owndraw.on (first token = type, or "all"). */
 void tagpu_owndraw_init(void);
 void tagpu_owndraw_flush(unsigned int frame_counter);
+/* 1 while target "all" has redirected the blit's structure-shadow branches
+   (0x4592C6 / 0x45952C je->jmp): the engine then draws NO cached slant shadow
+   and the native pass owes every structure one (tagpu_native.c). */
+int  tagpu_owndraw_structshadow_ours(void);
 #endif

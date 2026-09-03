@@ -42,7 +42,10 @@ typedef struct {
     int   fog;                  /* uFog bits, as the native shader takes them */
     float waterT, digT;
     int   waterMode;
-    int   shadow;               /* this unit owes a silhouette shadow         */
+    int   shadow;               /* this unit owes a shadow                    */
+    int   slant;                /* ...the structure kind: the engine's ground
+                                   projection x+y/4, -z-y/4 instead of the
+                                   body's silhouette (tagpu_native.c)         */
 } TAGPU_HUNIT;
 
 /* 0 when the pass cannot draw, so the caller can leave those units to the

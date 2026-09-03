@@ -72,6 +72,7 @@
 #include "tagpu_terrown.h"
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
+#include "tagpu_owndraw.h"   /* tagpu_owndraw_structshadow_ours: who draws a building's shadow */
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
@@ -761,9 +762,13 @@ static const MAABB* model_aabb(const char* root)
 static int s_vtrunc = 0;            /* vertex budget hit this frame (logged) */
 #define MAXNODEV 4096               /* verts of one node staged for emission */
 
+/* slant: emit the engine's ground-projected slant shadow (0x45A510/0x45A610:
+   gx = x + y/4, gy = -z - y/4) instead of the body projection -- the
+   structure shadow the cached-shadow branch would have built */
 static int emit_node(const char* nd, const float* P, int nvert, int nv,
                      float ax, float ay, float wx0, float wz0, float encBase,
-                     int owner, int pieceShaded, int skipFace, int quadOnly)
+                     int owner, int pieceShaded, int skipFace, int quadOnly,
+                     int slant)
 {
     int shNeutral = tagpu_r3d_shade_neutral(), shDir = tagpu_r3d_shade_dir();
     int nface = *(const int*)(nd + N_FCOUNT);
@@ -824,8 +829,10 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
             for (t = 0; t < 3; t++) {
                 float x = V[t][0], y = V[t][1], z = V[t][2];
                 float* o = s_verts + nv * NVST;
-                o[0] = ax + x;
-                o[1] = ay + (-z - y * 0.5f);
+                float px = slant ? x + y * 0.25f      : x;
+                float py = slant ? (-z - y * 0.25f)   : (-z - y * 0.5f);
+                o[0] = ax + px;
+                o[1] = ay + py;
                 /* depth enc: row base +- intra-model view depth (2y-z),
                    squeezed into the +-2 gap between row keys */
                 float md = (2.0f * y - z) / 256.0f;
@@ -841,8 +848,8 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
                     o[5] = colv;  o[6] = -1.0f;
                 }
                 o[7] = shade;
-                o[8] = wx0 + x;
-                o[9] = wz0 + (-z - y * 0.5f);
+                o[8] = wx0 + px;
+                o[9] = wz0 + py;
                 o[10] = y;
                 nv++;
             }
@@ -854,7 +861,7 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
 static float s_P[MAXNODEV * 3];     /* one node's model-space vertices */
 
 static int emit_geom(const char* o3, int nv, float ax, float ay,
-                     float wx0, float wz0, float encBase, int owner)
+                     float wx0, float wz0, float encBase, int owner, int slant)
 {
     int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
     if (nparts <= 0 || nparts > 64) return nv;
@@ -868,7 +875,13 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
         const char* pr = o3 + O3_PRIM0 + p * PRIM_STRIDE;
         unsigned char pflags = *(const unsigned char*)(pr + P_FLAGS);
         if (!(pflags & 1)) continue;
+        /* the engine's slant raster 0x45A610 takes a piece only when flag
+           bit1 is set as well (test cl,1 at 0x45A64C, test cl,2 at 0x45A655;
+           its AABB pass 0x45A510 tests bit0 alone) -- a wind generator's mast
+           and rotor carry bit0 only and cast nothing in the engine */
+        if (slant && !(pflags & 2)) continue;
         int pieceShaded = anyShadeFlag ? ((pflags & 4) != 0) : 1;
+        if (slant) pieceShaded = 0;  /* a shadow fragment returns before shade */
         const char* nd = *(const char* const*)(pr + P_NODE);
         const int*  vb = *(const int* const*)(pr + P_VBUF);
         if (!ptr_ok(nd) || !ptr_ok(vb)) continue;
@@ -877,7 +890,7 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
         int i;
         for (i = 0; i < nvert * 3; i++) s_P[i] = (float)vb[i] / 65536.0f;
         nv = emit_node(nd, s_P, nvert, nv, ax, ay, wx0, wz0, encBase, owner,
-                       pieceShaded, -1, 0);
+                       pieceShaded, -1, 0, slant);
     }
     return nv;
 }
@@ -917,7 +930,7 @@ static int emit_fx_model(const TAGPU_FXMODEL* m, int nv, float fxKey)
     }
     int selprim = *(const int*)(nd + N_SELPRIM);
     return emit_node(nd, s_P, nvert, nv, m->ax, m->ay, m->wx, m->wz, fxKey,
-                     m->owner, 0, selprim != -1 ? 0 : -1, 1);
+                     m->owner, 0, selprim != -1 ? 0 : -1, 1, 0);
 }
 
 /* ------------------------------------------------------- replacement pose --
@@ -1390,7 +1403,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- gather native-owned on-screen units ---- */
     typedef struct { const char* o3; const char* u; const void* hires;
                      float ax, ay, gy, wx0, wz0;
-                     int rel, owner, cloaked, air, feat, sel, shadow; unsigned yaw;
+                     int rel, owner, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
                      float waterT, digT; int waterMode; } NU;
     static NU units[MAXU];
     /* sub-pixel motion: the engine keeps 16.16 fixed-point positions (the
@@ -1464,21 +1477,40 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         n2->wx0 = fx; n2->wz0 = fy - fz * 0.5f;
         n2->yaw = *(const unsigned short*)(u + U_YAW);
         n2->hires = NULL;
-        n2->shadow = 0;
+        n2->shadow = 0; n2->slant = 0;
         n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
         unsigned mask = 0;                    /* FBI booleans, read below */
         {
             const char* def = *(const char* const*)(u + U_TYPE);
             if (ptr_ok(def)) {
                 /* mirror the engine's shadow branch in the blit 0x459200
-                   (shadows-cloak.md §3): ST_STRUCT units get the cached
-                   slant shadow (Object3do+0x14) from the engine itself;
-                   the rest get a composite-derived silhouette the wipe
-                   emptied -- that one is ours, under the engine's FBI gates */
+                   (shadows-cloak.md §3). ST_STRUCT units take the CACHED
+                   SLANT SHADOW branch (Object3do+0x14): while owndraw "all"
+                   has redirected that branch (tagpu_owndraw_structshadow_ours)
+                   the engine draws nothing for them and the slant shadow is
+                   ours, under that branch's own gates -- noshadow, and the
+                   model-0-under-water skip at 0x4592D5; canhover/floater are
+                   NOT tested there. The rest get a composite-derived
+                   silhouette the wipe emptied -- ours, under the engine's
+                   FBI gates. Without the redirect a structure keeps the
+                   engine's cached shadow, exactly as before. */
                 mask = *(const unsigned*)(def + UD_TYPEMASK);
-                n2->shadow = !(st & ST_STRUCT) &&
-                             !(mask & 0x02000000u) &&      /* noshadow          */
-                             !(mask & 0x00081000u);        /* canhover|floater  */
+                /* a digger never reaches the cached branch: path A tests the
+                   structure bit first and then sends a digger to the
+                   COMPLETED branch (0x4592C8), path B tests digger before the
+                   structure bit (0x4594D0) and clips a silhouette inline */
+                n2->slant = (st & ST_STRUCT) != 0 && !(mask & UD_DIGGER);
+                if (n2->slant) {
+                    n2->shadow = tagpu_owndraw_structshadow_ours() &&
+                                 !(mask & 0x02000000u);    /* noshadow          */
+                    if (n2->shadow &&
+                        *(const unsigned short*)(u + U_MODELID) == 0 &&
+                        fz < (float)*(const unsigned char*)(ta + OFF_SEALEVEL))
+                        n2->shadow = 0;
+                } else {
+                    n2->shadow = !(mask & 0x02000000u) &&  /* noshadow          */
+                                 !(mask & 0x00081000u);    /* canhover|floater  */
+                }
                 char nm[32]; int ci;
                 for (ci = 0; ci < 31; ci++) {
                     char cch = def[0x20 + ci];   /* UnitName, e.g. ARMSOLAR */
@@ -1607,6 +1639,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 n2->rel = (ry >> 4) - r0;
                 n2->owner = 0; n2->cloaked = 0; n2->air = 0; n2->feat = 1; n2->sel = 0;
                 n2->shadow = 0;     /* the engine's FShadow feature shadow stays */
+                n2->slant = 0;
                 /* units[] is static and only nu resets per frame, so a field
                    left unwritten here is last frame's. A wreck landing on an
                    index that held a replacement unit would inherit its HMesh*:
@@ -1723,10 +1756,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             h->waterT = units[i].waterT;
             h->digT = units[i].digT;
             h->waterMode = units[i].waterMode;
-            h->shadow = units[i].shadow;
+            /* the silhouette needs both option bits, the slant only "Shadow"
+               (the engine's cached branch never tests TShadow) */
+            h->slant = units[i].slant;
+            h->shadow = units[i].shadow && (units[i].slant || (gfx & 8));
         } else {
             nv = emit_geom(units[i].o3, nv, units[i].ax, units[i].ay,
-                           units[i].wx0, units[i].wz0, encBase, units[i].owner);
+                           units[i].wx0, units[i].wz0, encBase, units[i].owner, 0);
         }
     }
     firstv[nu] = nv;
@@ -1801,6 +1837,23 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        pixels and nothing shows, at any other zoom a one-frame ghost is a much
        smaller lie than a missing marker. Self-correcting either way. */
     s_selComplete = (selDrawn == nsel && nu < MAXU);
+    int lineEnd = nv;
+
+    /* structure shadows: the slant projection is a second vertex range per
+       unit (the body range cannot be re-offset into it); empty for everyone
+       else, so the shadow pass below indexes it uniformly. Emitted LAST so
+       that under the vertex budget effects and selection rects win over a
+       building's shadow, the least visible thing to lose. */
+    static int sfirst[MAXU + 1];
+    int nslant = 0;
+    for (i = 0; i < nu; i++) {
+        sfirst[i] = nv;
+        if (!units[i].slant || !units[i].shadow || units[i].hires) continue;
+        nv = emit_geom(units[i].o3, nv, units[i].ax, units[i].ay,
+                       units[i].wx0, units[i].wz0, encb[i], units[i].owner, 1);
+        nslant++;
+    }
+    sfirst[nu] = nv;
 
     /* ---- render into the (optionally 2x supersampled) game-res FBO ---- */
     int ss = s_ss ? 2 : 1;
@@ -1902,7 +1955,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied */
 
     /* selection rects first — the engine draws them under the unit sprite */
-    if (nv > lineStart) {
+    if (lineEnd > lineStart) {
         glUniform1i(s_uFog, fogMode & 1);
         glUniform1i(s_uShadow, 0);
         x_glUniform1f(s_uAlpha, 1.0f);
@@ -1911,22 +1964,29 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glUniform1f(s_uDigT, -1e9f);
         glUniform1i(s_uWaterMode, 0);
         if (x_glLineWidth) x_glLineWidth((GLfloat)ss);
-        x_glDrawArrays(GL_LINES, lineStart, nv - lineStart);
+        x_glDrawArrays(GL_LINES, lineStart, lineEnd - lineStart);
     }
 
     /* shadow first (engine order), only when options allow; per unit so an
-       aircraft's shadow lands at GROUND height (gy - ay shifts body->ground) */
-    if ((gfx & 4) && (gfx & 8)) {
+       aircraft's shadow lands at GROUND height (gy - ay shifts body->ground).
+       Option bits as the engine tests them: the silhouette needs Shadow AND
+       TShadow, a structure's slant shadow only Shadow. Both sit 5 px right
+       of the body (the blit's sx+0x85 against the body's sx+0x80). */
+    if (gfx & 4) {
         glUniform1i(s_uShadow, 1);
         x_glUniform1f(s_uAlpha, 0.5f);
         x_glDepthMask(GL_FALSE);
         for (i = 0; i < nu; i++) {
             if (!units[i].shadow) continue;
+            if (!units[i].slant && !(gfx & 8)) continue;
             glUniform1i(s_uFog, FOGW(i));
             x_glUniform2f(s_uOffset, 5.0f, (float)(units[i].gy - units[i].ay));
             x_glUniform1f(s_uWaterT, units[i].waterT);
             x_glUniform1f(s_uDigT, units[i].digT);
-            x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i+1] - firstv[i]);
+            if (units[i].slant)
+                x_glDrawArrays(GL_TRIANGLES, sfirst[i], sfirst[i+1] - sfirst[i]);
+            else
+                x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i+1] - firstv[i]);
         }
         if (nhi) {
             tagpu_hires_draw(&hv, hunits, nhi, 1, f->frame_counter);
@@ -2048,8 +2108,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         last = f->frame_counter;
         char b[160];
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d%s",
-                  nu - nwr, nwr, nsel, nmark, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d%s",
+                  nu - nwr, nwr, nsel, nmark, nslant, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
     }

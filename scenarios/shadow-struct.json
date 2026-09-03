@@ -1,0 +1,14 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Structure shadows over our terrain: own and enemy buildings, at 1x and zoomed",
+  "on_error": "abort",
+  "setup": { "clear_existing": false, "switches": {"shootall": false, "noshake": true} },
+  "units": [
+    { "id": "hero",   "type": "ARMCOM",   "owner": 0, "pos": [1600, 1600], "facing": 90 },
+    { "id": "solar",  "type": "ARMSOLAR", "owner": 0, "pos": [1760, 1600], "facing": 0 },
+    { "id": "armmex", "type": "ARMMEX",   "owner": 0, "pos": [1440, 1760], "facing": 0 },
+    { "id": "cormex", "type": "CORMEX",   "owner": 1, "pos": [1600, 1760], "facing": 0 },
+    { "id": "corwin", "type": "CORWIN",   "owner": 1, "pos": [1760, 1760], "facing": 0 }
+  ],
+  "camera": { "center_on": "hero" }
+}
