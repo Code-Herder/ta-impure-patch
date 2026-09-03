@@ -747,6 +747,120 @@ def build_units(scenario, assets, out, restore=None):
             "stride": UNIT_VSTRIDE, "meshes": meshes, "instances": instances}
 
 
+# --------------------------------------------------------------------------- art light
+
+# "The art already contains the hill" was the exploration lane's open question
+# (tascene-design.md). This answers it with a number instead of an opinion.
+#
+# For every 16-px cell steeper than `--steep`, correlate the mean luminance of
+# the tile quadrant PAINTED there against the N.L that quadrant's own gradient
+# would receive, sweeping the sun's azimuth. A directional signal (the art was
+# painted lit) shows up as the AMPLITUDE of the resulting sinusoid; a material
+# confound -- steep cells simply being painted with darker rock -- shifts its
+# OFFSET instead, so the two separate.
+
+REC709 = (0.2126, 0.7152, 0.0722)
+
+
+def _tile_quadrant_luma(tnt, palette):
+    """[tile][quadrant] -> mean luminance, quadrants (row&1)*2 + (col&1)."""
+    lut = [int(round((REC709[0] * c[0] + REC709[1] * c[1] + REC709[2] * c[2]) * 1000))
+           for c in palette]
+    get = lut.__getitem__
+    out = []
+    for i in range(tnt.tiles):
+        src = tnt.p_tilegfx + i * TILE_BYTES
+        quads = [0, 0, 0, 0]
+        for r in range(TILE_PX):
+            row = tnt.blob[src + r * TILE_PX: src + (r + 1) * TILE_PX]
+            q = (r >> 4) * 2
+            quads[q] += sum(map(get, row[:16]))
+            quads[q + 1] += sum(map(get, row[16:]))
+        out.append([v / 256000.0 for v in quads])
+    return out
+
+
+def art_light(tnt, palette, steep=0.25, elevation=53.1, step=15):
+    """(n_steep, [(azimuth, pearson r)]) for one map."""
+    quads = _tile_quadrant_luma(tnt, palette)
+    heights = tnt.heights()
+    tmap = tnt.tilemap()
+    W, H, MW = tnt.w16, tnt.h16, tnt.mw
+    cells = []
+    for r in range(H - 1):
+        base, nxt = r * W, (r + 1) * W
+        trow = (r >> 1) * MW
+        for c in range(W - 1):
+            o = (trow + (c >> 1)) * 2
+            t = tmap[o] | (tmap[o + 1] << 8)
+            if t >= tnt.tiles:
+                continue
+            h00, h10 = heights[base + c], heights[base + c + 1]
+            h01, h11 = heights[nxt + c], heights[nxt + c + 1]
+            dx = ((h10 + h11) - (h00 + h01)) / 32.0
+            dz = ((h01 + h11) - (h00 + h10)) / 32.0
+            if math.hypot(dx, dz) < steep:
+                continue
+            cells.append((dx, dz, quads[t][(r & 1) * 2 + (c & 1)]))
+    curve = []
+    e = math.radians(elevation)
+    n = len(cells)
+    for azi in range(0, 360, step):
+        a = math.radians(azi)
+        sx_, sy_, sz_ = math.sin(a) * math.cos(e), math.sin(e), -math.cos(a) * math.cos(e)
+        sx = sy = sxx = syy = sxy = 0.0
+        for dx, dz, b in cells:
+            inv = 1.0 / math.hypot(dx, 1.0, dz)
+            nl = (-dx * inv) * sx_ + inv * sy_ + (-dz * inv) * sz_
+            if nl < 0.0:
+                nl = 0.0
+            sx += nl; sy += b; sxx += nl * nl; syy += b * b; sxy += nl * b
+        if not n:
+            curve.append((azi, 0.0))
+            continue
+        mx, my = sx / n, sy / n
+        sdx = math.sqrt(max(sxx / n - mx * mx, 0.0))
+        sdy = math.sqrt(max(syy / n - my * my, 0.0))
+        curve.append((azi, (sxy / n - mx * my) / (sdx * sdy) if sdx and sdy else 0.0))
+    return n, curve
+
+
+def cmd_artlight(args):
+    assets = ta3do.Assets()
+    palette = ta3do.load_palette(assets)
+    if args.all:
+        paths = sorted(assets.glob("maps/*.tnt"))
+    else:
+        if not args.map:
+            die("name a map with --map, or sweep every stock map with --all")
+        paths = [map_tnt(assets, args.map)]
+    rows = []
+    for path in paths:
+        try:
+            tnt = Tnt(assets.read(path), path)
+        except Exception as err:
+            print(f"tascene: skipping {path}: {err}", file=sys.stderr)
+            continue
+        n, curve = art_light(tnt, palette, args.steep, args.elevation)
+        peak = max(curve, key=lambda t: t[1])
+        trough = min(curve, key=lambda t: t[1])
+        rows.append({"map": Path(path).stem, "steep": n,
+                     "peakAz": peak[0], "peakR": round(peak[1], 4),
+                     "troughAz": trough[0], "troughR": round(trough[1], 4),
+                     "amplitude": round(peak[1] - trough[1], 4),
+                     "offset": round((peak[1] + trough[1]) / 2, 4),
+                     "curve": [[a, round(r, 4)] for a, r in curve]})
+        if not args.json:
+            row = rows[-1]
+            print(f"{row['map'][:28]:28s} steep {row['steep']:7d}  "
+                  f"peak {row['peakR']:+.3f} @ az {row['peakAz']:3d}  "
+                  f"trough {row['troughR']:+.3f} @ az {row['troughAz']:3d}  "
+                  f"amplitude {row['amplitude']:.3f}  offset {row['offset']:+.3f}")
+    if args.json:
+        ta3do.out({"steep": args.steep, "elevation": args.elevation, "maps": rows},
+                  True)
+
+
 # --------------------------------------------------------------------------- maps
 
 def map_tnt(assets, name: str):
@@ -1192,6 +1306,18 @@ def main(argv=None):
                    help="chrome --virtual-time-budget in ms")
     t.add_argument("--json", action="store_true")
     t.set_defaults(func=cmd_shot)
+
+    al = sub.add_parser("artlight",
+                        help="is the map art already painted lit? sweep the sun "
+                             "and correlate against the heightfield's own slope")
+    al.add_argument("--map", help="map name (default: --all)")
+    al.add_argument("--all", action="store_true", help="every stock map (slow)")
+    al.add_argument("--steep", type=float, default=0.25,
+                    help="only cells with |grad h| at least this (0.25 = ~14 deg)")
+    al.add_argument("--elevation", type=float, default=53.1,
+                    help="sun elevation in degrees (default: the engine's own)")
+    al.add_argument("--json", action="store_true")
+    al.set_defaults(func=cmd_artlight)
 
     ab = sub.add_parser("ab", help="drive the game and the browser, and diff them")
     ab.add_argument("scenario")

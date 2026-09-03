@@ -138,9 +138,10 @@ function sideQuery(side, presets) {
   return merged;
 }
 
-// tagpu_render3do.c's own model light, SH_L = (-0.35, 0.80, -0.49), as an
-// azimuth/elevation: the lab's default sun IS the engine's, so switching lanes
-// changes the shading MODEL (32 LUT rows -> continuous) and not the direction.
+// tagpu_render3do.c:250's own model light, SH_L = (-0.35, 0.80, -0.49), as an
+// azimuth/elevation (it round-trips to within 0.0013 per component): the lab's
+// default sun is the engine's, so switching lanes changes the shading MODEL
+// (32 LUT rows -> continuous) and not the direction.
 const SUN_DEFAULT = [324.5, 53.1];
 
 function sunVector(az, el) {

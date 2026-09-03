@@ -18,11 +18,14 @@ are quoted so they can be re-checked. `[CLAIMED]` = asserted but not yet run.
 `tools/tascene` compiles a **scenario JSON** — the same file `tacli scenario load` runs in the
 real game — into a **scene pack**: the map's tile atlas, tile index map, heightmap, feature
 anchors and unit meshes, all read straight out of the game's own archives with no game running
-and nothing unpacked to disk. `tools/tascene-view.html` draws that pack in **WebGL2 using
-`tagpu`'s own shaders**, extracted from the C sources at export time so they cannot drift.
-Every setting is a URL query parameter, so a look is a link, and the same string drives a
-headless screenshot. `tascene ab` runs both sides of the same scenario — engine and browser —
-and diffs them.
+and nothing unpacked to disk. `tools/tascene-view.html` draws that pack in WebGL2 in one of two
+lanes: the **parity lane** uses **`tagpu`'s own shaders**, extracted from the C sources at
+export time so they cannot drift, and is diffable against a real game frame; the **exploration
+lane** uses the page's own lab shaders for relief, restored colour and a real sun, and makes no
+parity claim. Every setting is a URL query parameter, so a look is a link, the same string
+drives a headless screenshot, and `?a=…&b=…&wipe=…` puts two looks in one frame at identical
+pixel coordinates. `tascene ab` runs both sides of the same scenario — engine and browser — and
+diffs them.
 
 ## Two lanes, and the reason there are two
 
@@ -34,7 +37,7 @@ export is correct). They pull in opposite directions, so they are separate modes
 | terrain | flat quads on the engine's grid | heightfield relief from `mapattr` |
 | textures | R8 indexed — the texel *is* the palette index | undithered RGB |
 | shading | the engine's `PALETTE.SHD` LUT, in index space | N·L sun over real normals |
-| camera | oblique, shear 0.5 | oblique (orbit available for debugging) |
+| camera | oblique, shear 0.5 | oblique, shear 0.5 (the same one — relief needs no new camera) |
 | claim it can make | **pixel-diffable against the game** | "this is what it could look like" |
 
 The parity lane is the **calibration**. A subtly wrong tile stride, height scale or sort key
@@ -49,12 +52,12 @@ first, and the exploration lane is built on ground already proven.
 | Purpose | **Port-faithful lab, not an art sandbox.** A shader that wins in the browser is a diff to `tagpu_glsl.h`, not a reimplementation. GLSL 330 core → GLSL ES 300 is `#version` plus three `precision` lines; nothing else in the existing shaders changes. |
 | Scene source | **Offline, from a scenario JSON.** No game needed, deterministic, checked in — and the *same* file runs in the real game, which is what makes the A/B free. A live snapshot writer may fill the fields offline leaves null (COB poses, the fog grid) later, into the same pack schema. |
 | Terrain | **Both flat and relief**, one uniform apart. Flat reproduces `0x483FA0`'s grid blit and is diffable; relief displaces a vertex per 16-px cell from the heightmap. |
-| Camera | **The engine's oblique projection is the default and the only mode carrying parity claims.** TA's `screenY = worldZ − h/2` is a *shear of 0.5*, not a rotation (a rotated ortho would need `cos θ = 1` and `sin θ = 0.5` at once) — so a heightfield under that same shear stays consistent with every engine rule: units still anchor at `worldZ − h/2`, features still sort by 16-px row. A free orbit exists to inspect geometry; it makes no parity claim. |
+| Camera | **The engine's oblique projection is the default and the only mode carrying parity claims.** TA's `screenY = worldZ − h/2` is a *shear of 0.5*, not a rotation (a rotated ortho would need `cos θ = 1` and `sin θ = 0.5` at once) — so a heightfield under that same shear stays consistent with every engine rule: units still anchor at `worldZ − h/2`, features still sort by 16-px row. A free orbit to inspect geometry was proposed and is **not built** — landing 2 did not need one, because the heightfield renders under the same shear. |
 | Textures | **Dithered and undithered are a viewer toggle**, and they are two whole shading philosophies, not two files: indexed keeps the SHD LUT and stays diffable; undithered drops the LUT and lights with a real sun. Reconciling them (carrying the index alongside the colour and ramp-sampling) was considered and deliberately **not** taken. |
 | Units | **Stock 3DO bind pose + the `gamedir/hires/<name>` replacement slot**, switchable per unit type — so the lab is also the authoring loop for G11's replacement pipeline. `ta3do`'s `Create`-`HIDE` scan keeps muzzle flares out, as in `render`. **No COB VM**: a second interpreter to keep correct, when the deferred live-snapshot path would give real poses far more cheaply. |
 | Shader sharing | **One-way extraction at export time.** `tascene` parses `static const char* VS/FS =` out of `tagpu_terr.c` / `tagpu_native.c` / `tagpu_feat.c`, expands the `TAGPU_GLSL_*` macros from `tagpu_glsl.h`, swaps the version header, and writes real `.glsl` into the pack. `tagpu` stays authoritative and the browser is provably never stale. Lab-only shaders live outside the pack, checked in; `pack/` is generated and gitignored. |
 | Tool layout | **New `tools/tascene`, importing `tools/ta3do` via `SourceFileLoader`** — the idiom `tools/test_ta3do.py` already uses. `ta3do` keeps its name and its meaning (one model, standard views); `tascene` owns maps, scenes and the lab. No refactor of a tested 1824-line tool. |
-| Options | **Every knob is a URL query parameter** (the `ta3do-view.html` house idiom, including `?shot=1` → hide UI, one frame, stamp `document.title`). A look is a link; the headless shooter takes the same string. An in-page **wipe** renders two parameter sets at once for direct comparison, and named looks live in a checked-in `presets.json`. **The wipe and `presets.json` are landing 2 and are NOT built** — see "Using it" for the parameters that exist today. |
+| Options | **Every knob is a URL query parameter** (the `ta3do-view.html` house idiom, including `?shot=1` → hide UI, one frame, stamp `document.title`). A look is a link; the headless shooter takes the same string. **The wipe** — `?a=<query>&b=<query>&wipe=<0..1>`: two looks rendered into two offscreens, and the canvas split between them at `wipe`, so two parameter sets are read **at identical pixel coordinates**. Drag the divider when serving; pass a fixed `wipe=` to `shot`. Named looks live in a checked-in `tools/tascene-presets.json`, staged next to the viewer. **Both landed in landing 2.** |
 | Pack encoding | **Raw `.bin` for anything whose bytes are semantic; PNG only for display RGB.** Browsers colour-manage and premultiply PNGs — in the parity lane the atlas texel *is* a palette index, so an image decode path would silently rewrite the data and the diff would measure nothing. Raw blobs go straight to `texImage2D`, byte-exact by construction. |
 | Map extent | **Whole map, no windowing or streaming.** Worst stock case (Two Continents) is a 2048×2560 R8 atlas, a 336×400 `u16` tilemap, a 672×800 R8 heightmap and ~5000 feature anchors; the relief mesh is 537k verts. Trivial for WebGL2. |
 | A/B | **One verb drives both sides.** `tascene ab <scenario>` loads the scenario in a real instance, holds the eye, `glshot`s, reads the live eye/viewport back through `roster`, builds the pack with those exact numbers, shoots the browser at the same resolution, diffs, and writes an `sbs.py` panel plus a mismatched-pixel count. It degrades to build+shot with no instance running. A comparison that only happens when someone remembers is a comparison that does not happen. |
@@ -134,7 +137,15 @@ pack/
   shaders/terrain.*        extracted from tagpu_terr.c
   shaders/sprite.*         extracted from tagpu_feat.c
   shaders/unit.*           extracted from tagpu_native.c
+
+  --undither only, for the exploration lane, same layout as the R8 beside it:
+  terrain/atlas.rgba.bin   features/atlas.rgba.bin   units/atlas.rgba.bin
 ```
+
+`serve` and `shot` also stage two **checked-in** files into the pack directory so
+the page can fetch them same-origin: `tascene-view.html` itself and
+`tascene-presets.json`. Neither is pack content — `pack/` is generated and
+disposable, and nothing there may be the only copy of anything.
 
 Raw `.bin` for everything whose bytes are data, as decided: the atlases go
 straight to `texImage2D` with no image decode path, so nothing colour-manages
@@ -158,9 +169,10 @@ the visible cell count, off-map cells, features and unit triangles.
 
 | | |
 |---|---|
-| `build <scenario.json> -o <dir>` | compile a pack from the archives. `--map` / `--res` override `setup.map` / `setup.res`; `--eye X,Y` sets the viewport's top-left in world units (default: derived from the scenario's `camera`); `--no-features` and `--no-units` cut the pack down — `--no-features` is also how you get a terrain-only diff; `--json` for agents |
+| `build <scenario.json> -o <dir>` | compile a pack from the archives. `--map` / `--res` override `setup.map` / `setup.res`; `--eye X,Y` sets the viewport's top-left in world units (default: derived from the scenario's `camera`); `--no-features` and `--no-units` cut the pack down — `--no-features` is also how you get a terrain-only diff; **`--undither [PRESET]`** also packs restored true-colour atlases for the exploration lane (`--undither-python`, `--cache-dir`); `--json` for agents |
 | `serve <pack>` | the lab on loopback. `--port` (default: an ephemeral one) |
 | `shot <pack> -o <png>` | one deterministic headless frame. `--opts '<query>'` passes the viewer parameters below; `--timeout`, `--budget` (Chrome's `--virtual-time-budget`, ms); `--json` |
+| `artlight` | **is the map art already painted lit?** `--map <name>` or `--all`; `--steep` (default 0.25 ≈ 14°), `--elevation` (default 53.1, the engine's own), `--json` for the whole azimuth curve. Needs no pack and no game — it reads the TNT. See "Does the art already contain the hill" below |
 | `ab <scenario.json>` | drive both sides and diff. `--name` the instance (default `tascene`), `--no-launch` to use one already running, `--eye X,Y` to pin the camera, `--los`/`--mapping` for the SKIRMISH fog toggles (defaults `0`/`1` = no fog), `--settle` seconds to wait for a roster with units and a real eye, `--opts`, `--launch-timeout`, `--json` |
 
 ### Viewer query parameters
@@ -175,6 +187,53 @@ The page's whole state is the query string — that is the point: a look is a li
 | `eye=<x,y>` | override the pack's eye (viewport top-left, world units) |
 | `ss=<n>` | supersample factor for the offscreen (default 1) |
 | `feat=<what>` | features: `both` (default), `body`, `shadow`. A debug split, because "is the shadow drawing at all" is not eye-answerable — it was 152 133 differing pixels, i.e. yes |
+| `preset=<name>` | a named look from `tascene-presets.json`; anything else you spell out wins over it. A preset may not name another preset |
+| `a=<query>` `b=<query>` `wipe=<0..1>` | **the wipe** — see below |
+| `lane=<lane>` | `parity` (default) or `explore`. Naming any exploration parameter selects `explore` on its own; naming one *and* `lane=parity` is an error rather than a silent winner, because the lanes do not blend |
+
+### Exploration-lane parameters
+
+These exist only in `lane=explore`, and they are what landing 2 added.
+
+| Parameter | Meaning |
+|---|---|
+| `relief=<k>` | displacement scale. **1 = the engine's own `h/2`**; **0 leaves the art exactly where it is painted while still lighting it by the real gradient**, which is the control for the double-count question below |
+| `sun=<az,el>` | the sun in degrees, or `off`. The default **`324.5,53.1` is `tagpu_render3do.c:250`'s own model light** `SH_L = {-0.35f, 0.80f, -0.49f}` re-expressed as a direction (it round-trips to within **0.0013 per component**), and the lab dots it against the same raw model-space face normal the engine's LUT path uses — so switching lanes changes the shading *model* (32 `PALETTE.SHD` rows → continuous lambert) and not the light |
+| `amb=<a>` | ambient floor, default `0.35`. The shading is `amb + (1−amb)·max(N·L, 0)` for terrain, unit faces and feature sprites alike |
+| `slope=<k>` | exaggerate the heightfield's gradient before normalising, default 1 |
+| `undither=1` | use the pack's restored atlases. A pack built without `--undither` says so instead of drawing something plausible |
+
+### The wipe
+
+`?a=<query>&b=<query>&wipe=<0..1>` renders **two whole looks into two offscreens**
+and splits the canvas between them at `wipe`, so two parameter sets are read at
+**identical pixel coordinates** — which is the only way to see a 3 % change in a
+picture nobody has a reference for. A side's value with no `=` in it names a
+preset. `shot` takes the same string; when serving, drag the divider.
+
+```bash
+# what the restorer buys, on the same pixels
+tools/tascene shot pack -o w.png --opts 'a=engine&b=restored&wipe=0.5'
+# the double count: art lit by the real gradient, against art ALSO displaced
+tools/tascene shot pack -o d.png --opts 'a=slope&b=relief-sun&wipe=0.5'
+```
+
+`eye`, `ss` and `shot` are global to the frame — a wipe with two eyes would not
+be a wipe. Everything else is per side: the top-level query is the base and each
+side's own query overrides it, so `?eye=X,Y&a=engine&b=relief` shares the camera
+and differs only in the look.
+
+### The presets  (`tools/tascene-presets.json`)
+
+| Name | What it is for |
+|---|---|
+| `engine` | the parity lane — the only look carrying a pixel claim |
+| `slope` | art not displaced, lit by the real gradient: the double-count **control** |
+| `relief` | displaced at the engine's `h/2`, unlit: the geometry alone |
+| `relief-sun` | both — where the art's baked-in shading double-counts |
+| `half-relief` | `relief=0.5`, the middle of that axis |
+| `restored` | the undithered atlases and nothing else changed |
+| `restored-relief` | everything the exploration lane has |
 
 `serve` and `shot` reuse `ta3do`'s existing `Viewer` (`ThreadingHTTPServer`) and `shoot`
 (`--headless=new` Chrome on a private X display, ANGLE/SwiftShader) rather than growing a
@@ -202,10 +261,9 @@ rule the shaders carry.
 - **No fog.** G13c proved the fog shape is the engine's view-anchored corner-mask grid and
   is *not* derivable from the LOS/MAPPED source maps, so an offline pack cannot reproduce it.
   The parity diff must therefore be taken on a scene with fog off, or the fogged region masked.
-- **The art already contains the hill.** TED map art is painted with its relief and shading
-  baked in, so draping it on a displaced heightfield double-counts the elevation. The lab is
-  built to *measure* how bad that is; it does not assume an answer, and "relief looks wrong" is
-  a legitimate outcome.
+- ~~**The art already contains the hill.**~~ **Measured in landing 2 — see "Does the art
+  already contain the hill" below.** It does, the amount is per-map, and each map's artist
+  chose a different sun. The gap is now a number rather than a worry.
 - **Minimap letterboxing convention** (how a non-square map maps into the stored picture) was
   not determined — the corner pixel is map content, not padding, on all three maps sampled.
 - **Hires `.glb` parsing** leans on three.js's `GLTFLoader` in parse-only mode (read the
@@ -215,10 +273,13 @@ rule the shaders carry.
 ## Landing plan
 
 1. **Landing 1 — the parity lane.** ● **done, A/B'd** (2026-09-03) — numbers below.
-2. **Landing 2 — the exploration lane.** Relief displacement, undithered atlases
-   with the restorer cache, N·L sun, the wipe, `presets.json`.
+2. **Landing 2 — the exploration lane.** ● **done** (2026-09-03) — relief
+   displacement, undithered atlases with the restorer cache, N·L sun, the wipe,
+   `presets.json`. Numbers below.
 3. **Then, and only then**, a winning prototype becomes a roadmap gate with its
-   GLSL carried over verbatim.
+   GLSL carried over verbatim. **Not started**, and landing 2 does not nominate
+   one: what it produced is a measurement (below) that says a single sun cannot
+   be right for both the terrain art and the units on most maps.
 
 ### What landing 1 actually built
 
@@ -345,3 +406,157 @@ The A/B **has** been run — the numbers are above. What it left open:
   draw it, and it is 232 of the 284 terrain-classified differing pixels. The diff
   should mask it, or the fixture should park the pointer outside the viewport.
 - **No tests for `tascene`** (`ta3do` and `tacli` both have suites).
+
+### What landing 2 actually built
+
+The exploration lane, in `tools/tascene-view.html`'s own **lab shaders** — kept
+outside the pack and checked in, as the shader-sharing decision requires, and
+written to stay portable back into `tagpu_glsl.h` if one wins (same uniform
+names, same premultiplied output).
+
+- **Relief.** The same 32-px tile grid, each cell split into **four 16-px
+  quads** so every `mapattr` height gets a vertex and the tile's UVs are
+  quartered with it. Nothing about the art's mapping changes — only where its
+  corners land. `relief` scales the displacement; the normals are central
+  differences over the heightfield and are real at every `relief`, which is what
+  makes `relief=0` a *control* rather than an off switch.
+- **Undithered atlases.** `build --undither[=PRESET]` packs restored
+  true-colour atlases for terrain, features and units beside the R8 ones. Per
+  tile, with no neighbour context — that is the 2.03/255 edge-ring measurement
+  above cashed in.
+- **The N·L sun**, one direction for terrain, unit faces and feature sprites. A
+  sprite is a billboard with no normal of its own, so it takes **the ground's
+  lambert at its own anchor cell**: a tree on a shaded slope sits in the shade
+  instead of on top of it.
+- **The wipe and the presets**, described under "Using it".
+
+### The exploration lane, calibrated against the parity lane  [VERIFIED 2026-09-03]
+
+Two lanes in one page is exactly the arrangement where one quietly starts
+changing the other, so both directions were measured rather than assumed.
+
+- **The parity lane did not move.** The same pack shot before and after the
+  rewrite is **byte-identical** (`md5 60adadd4334a9ab7e1027cd1090e0175`).
+- **The exploration lane reduces to it.** At `relief=0&sun=off` — the whole lab
+  path: 16-px mesh, quartered UVs, lab shaders, lab depth keys — the frame is
+  **0 differing pixels out of 630 784** against the parity lane, terrain and
+  feature sprites together, on the hilly viewport at eye (4864, 11392). So a
+  difference seen in the exploration lane is the relief or the light, and never
+  the re-tessellation.
+
+Two lane differences remain by construction, both located rather than guessed:
+
+- **Flat-feature depth, 315 px (0.050 %) on the parity fixture.** The parity
+  lane gives every flat feature a key in one global 0.40–0.50 band, so a rock is
+  behind every tall feature whatever row it stands on; under a **per-row
+  heightfield** that band would sit behind the ground itself, so the lab keys
+  flat features per row like everything else. The 315 differing pixels are all
+  rocks that the engine's band hides behind trees anchored further away.
+  Isolated by shooting the buckets separately: **bodies 315, shadows 0**, and
+  unchanged when the tall-feature column term is put back to the parity 1.5 —
+  so it is the flat key and nothing else.
+- **Units, the remaining 365 px at the fixture eye.** The lab unit shader reads
+  vertex slot 3 as a **lambert** where tagpu's reads it as a `PALETTE.SHD` row /
+  31 — same buffer, same stride, one float re-meant. That is the whole
+  difference between the two shading philosophies, and it is the decision
+  ("undithered drops the LUT") made visible.
+
+### The restorer, cached  [VERIFIED 2026-09-03]
+
+Two Continents, `learned` preset: **5 154 frames** (5 062 tiles + the feature
+and unit textures) in **55 s cold**. The cache is keyed by the frame's own
+**content** — `sha256(preset ‖ w ‖ h ‖ transparent ‖ pixels ‖ palette)` — not by
+`(map, preset)`: tiles recur between maps and between builds, and a content key
+cannot go stale. Warm, the same build takes **7.3 s**, which is what a build
+with no `--undither` at all costs, and the atlas is **byte-identical** to the
+cold one. Writes are `tmp` + `replace`, so two builds can share one cache.
+
+### Does the art already contain the hill?  [VERIFIED 2026-09-03]
+
+The question the exploration lane exists to answer, and it now has a number.
+Method — and it is a verb, `tascene artlight --map <name>` (or `--all`), ~2 s a
+map: for every 16-px cell steeper than ~14° (`--steep 0.25`), correlate the
+**mean Rec.709 luminance of the tile quadrant painted there** against the
+**N·L that quadrant's own gradient would receive**, sweeping the sun's azimuth
+in 15° steps at the engine's elevation of 53.1°. A directional signal shows up
+as the **amplitude** of the resulting sinusoid; a material confound — steep
+cells simply being painted with darker rock — shifts its **offset** instead, so
+the two are separable.
+
+Four maps as worked examples:
+
+| Map | steep cells | peak | trough | amplitude | offset | r at the engine's own sun |
+|---|---|---|---|---|---|---|
+| Two Continents | 82 481 | **+0.173** @ az 240 | −0.161 @ az 60 | 0.334 | +0.006 | **+0.014** |
+| Gods of War | 13 907 | **+0.213** @ az 285 | −0.227 @ az 120 | 0.440 | −0.007 | +0.177 |
+| Painted Desert | 70 958 | **+0.517** @ az 270 | −0.324 @ az 90 | 0.841 | +0.097 | +0.359 |
+| Metal Heck | 7 700 | **+0.666** @ az 315 | −0.555 @ az 135 | 1.221 | +0.056 | **+0.659** |
+
+### …across all 275 stock maps  [VERIFIED 2026-09-03]
+
+`tascene artlight --all --json`, ~11 min. 275 maps read, **273** with at least
+2 000 steep cells (the other two are effectively flat and were dropped).
+
+| | median | p10 | p90 | max |
+|---|---|---|---|---|
+| **amplitude** — the directional signal | **0.501** | 0.255 | 1.011 | 1.385 |
+| **&#124;offset&#124;** — the material confound | **0.060** | — | 0.148 | 0.300 |
+| **r at the engine's own sun** (az 324.5) | **+0.191** | +0.018 | +0.457 | — |
+
+**The art is lit — on nearly every map.** Only **8 of 273** have an amplitude
+below 0.15, and the confound stays an order of magnitude smaller than the signal
+throughout, so this is a direction and not steep cells simply being painted with
+darker rock.
+
+**But not from where the engine thinks.** The amplitude-weighted circular mean
+of the peak azimuths is **277.5°** (concentration R = 0.79) — the screen-left,
+about **47° counter-clockwise of the engine's own unit light at 324.5°** — and
+only **61 of 273 maps (22 %)** peak within 22.5° of it. The mode is az 240
+(47 maps) and **252 of 273 (92 %)** peak somewhere in the 225–345 arc, so TED
+artists agree the sun is up and to the left, and disagree about the rest.
+
+Three things follow, and they are the useful output of landing 2:
+
+1. **`relief=1` plus a sun double-counts, by an amount that is a property of the
+   map**, not of the renderer. At the engine's own sun: **40 maps score r ≥
+   +0.4** (the art already carries most of that light — Metal Heck is one),
+   **75 score ≤ +0.1** (almost none — Two Continents is one, at +0.014), and
+   **23 go negative**, i.e. their art is lit from the other side and a sun there
+   fights the painting rather than reinforcing it.
+2. **A single sun cannot be right for both layers on most maps.** The units are
+   lit from az 324.5 by the engine itself, and the terrain art disagrees on
+   78 % of stock maps. Any "add lighting" gate has to pick which layer to
+   respect, or relight the terrain art rather than multiply it — and if it
+   picks per map, `artlight`'s peak azimuth is the number to pick with.
+3. **"Relief looks wrong" was the right thing to leave open.** It is not one
+   answer. The honest knob is `relief`, and `half-relief` exists because the
+   answer is somewhere on that axis and not at either end.
+
+The correlation is a **screen, not a proof**: brightness varies for reasons
+other than light, and r ≈ 0.19 explains ~4 % of the variance on the median map.
+What it establishes is the *direction*, its *strength ordering* and the fact
+that the disagreement with the engine's light is systematic rather than
+anecdotal — which is what the lane needed.
+
+### Still open on landing 2
+
+- **Landing 1's list above is untouched** — none of it was in landing 2's scope,
+  and `tascene` still has **no tests** while `ta3do` and `tacli` both have suites.
+- **No smoothing.** The undithered atlases are sampled `NEAREST`, like the
+  indexed ones. Bilinear on a *packed* atlas bleeds across tile borders — the
+  seam problem `TAGPU_EDGE_NUDGE` exists for — so a `filter=linear` knob needs a
+  padded RGBA atlas with a one-texel border extrusion per tile (`ta3do.Atlas`
+  already does exactly that for models, with `PAD = 1`). Deliberately not
+  attempted here rather than shipped looking broken.
+- **The exploration lane runs at zoom 1 by construction.** The lab shaders drop
+  `uZoom`/`uZoomC`; the parity lane keeps them because tagpu's shaders have them.
+- **Water is still static** in both lanes, for the reason in "Gaps" above.
+- **The double-count measurement is a screen, not a proof** (see its own
+  caveat). It now covers all 275 stock maps, but it says nothing about *what to
+  do*: relighting painted art means removing the light already in it, and
+  nothing here estimates that.
+- **Nothing has been carried back into `tagpu`.** Landing 3 in the plan is
+  deliberately not started, and landing 2's own finding — that the terrain art
+  and the units disagree about where the sun is on three of the four maps
+  sampled — is an argument for choosing carefully rather than for shipping the
+  sun as it stands.
