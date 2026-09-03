@@ -198,11 +198,12 @@ These exist only in `lane=explore`, and they are what landing 2 added.
 
 | Parameter | Meaning |
 |---|---|
-| `relief=<k>` | displacement scale. **1 = the engine's own `h/2`**; **0 leaves the art exactly where it is painted while still lighting it by the real gradient**, which is the control for the double-count question below |
-| `sun=<az,el>` | the sun in degrees, or `off`. The default **`324.5,53.1` is `tagpu_render3do.c:250`'s own model light** `SH_L = {-0.35f, 0.80f, -0.49f}` re-expressed as a direction (it round-trips to within **0.0013 per component**), and the lab dots it against the same raw model-space face normal the engine's LUT path uses — so switching lanes changes the shading *model* (32 `PALETTE.SHD` rows → continuous lambert) and not the light |
-| `amb=<a>` | ambient floor, default `0.35`. The shading is `amb + (1−amb)·max(N·L, 0)` for terrain, unit faces and feature sprites alike |
+| `relief=<k>` | displacement scale, **default 0** (`dd5e739`): the art stays exactly where it is painted and is still lit by the real gradient. **1 = the engine's own `h/2`**, which misregisters the art — the tiles are already the oblique projection of the hill, so displacing them applies it twice; measured on Two Continents it moves the terrain 41–94 px off the engine's frame while the features do not move at all. Kept as the double-count experiment |
+| `datum=<h>` | the height a non-zero `relief` pivots about (`8b73f50`): a cell moves by `relief·(h − datum)/2`, so a cell at the datum stays where the engine paints it. Default the map's own sealevel, which removes the constant part of the slide (66 px of it on Two Continents) and cannot remove the part that varies with the terrain — which is why `relief` itself defaults to 0 |
+| `sun=<az,el>` | the sun in degrees, or `off`. The default **`324.5,53.1` is `tagpu_render3do.c:250`'s own model light** `SH_L = {-0.35f, 0.80f, -0.49f}` re-expressed as a direction (it round-trips to within **0.0013 per component**), and the lab dots it against the same raw model-space face normal the engine's LUT path uses — so switching lanes changes the shading *model* (32 `PALETTE.SHD` rows → continuous lambert) and not the light. **Level ground always takes exactly 1.0** — see "Level ground takes exactly 1.0" under landing 2 |
+| `amb=<a>` | ambient floor, default `0.35`, **relative to level ground**: the shading is `(amb + (1−amb)·max(N·L, 0)) / (amb + (1−amb)·sin(el))` for terrain, unit faces and feature sprites alike, so a face turned fully away from the sun takes `0.40` at the defaults |
 | `slope=<k>` | exaggerate the heightfield's gradient before normalising, default 1 |
-| `undither=1` | use the pack's restored atlases. A pack built without `--undither` says so instead of drawing something plausible |
+| `undither=<b>` | `1` = the pack's restored atlases, `0` = the palette indices. **Default: restored when the pack carries them** (`build --undither`), indexed otherwise — so the lane's defaults still reduce to parity on an indexed pack, and show the colour a restored pack was built for. `undither=1` on a pack built without `--undither` says so instead of drawing something plausible |
 
 ### The wipe
 
@@ -425,10 +426,28 @@ names, same premultiplied output).
   true-colour atlases for terrain, features and units beside the R8 ones. Per
   tile, with no neighbour context — that is the 2.03/255 edge-ring measurement
   above cashed in.
-- **The N·L sun**, one direction for terrain, unit faces and feature sprites. A
-  sprite is a billboard with no normal of its own, so it takes **the ground's
-  lambert at its own anchor cell**: a tree on a shaded slope sits in the shade
-  instead of on top of it.
+- **The N·L sun**, one direction and one rule (`LAB_LIGHT`) for terrain, unit
+  faces and feature sprites, evaluated **per pixel** in the fragment shader
+  wherever there is a normal to evaluate it on — which is where a local light
+  (a laser, an explosion) will join it, as a term that varies across one face.
+  A 3DO's faces are flat, so its per-pixel value equals the old per-face one
+  (byte-identical with the sun off); a smooth model would only put a different
+  normal on each vertex. A sprite is a billboard with no normal of its own, so
+  it takes **the ground's lambert at its own anchor cell** (`lambertAt`, the
+  rule's JS twin): a tree on a shaded slope sits in the shade instead of on
+  top of it.
+- **Level ground takes exactly 1.0.** The art is already lit (`artlight`,
+  below), so the lambert is divided by what a level normal receives —
+  `amb + (1−amb)·sin(el)` = 0.870 at the defaults — and the sun only modulates
+  by the tilt from level. Before this the lane rendered every level cell at
+  0.870, a second sun on top of the artist's, and read 13 % dark against
+  parity in any wipe. Measured on the hilly viewport at eye (4864, 11392): with
+  `slope=0`, so that every normal is level, the lane is now **0 differing
+  pixels** against parity where it was 626 776 of 630 784; at the default sun
+  its mean brightness is **0.988×** parity's, from 0.859× (the residual is the
+  tilt itself — a tilted normal's N·L averages a little under level's). Unit
+  faces take the same factor: their shade is the old one × 1.1505 (median over
+  325 unit pixels; predicted 1/0.870 = 1.1494).
 - **The wipe and the presets**, described under "Using it".
 
 ### The exploration lane, calibrated against the parity lane  [VERIFIED 2026-09-03]
@@ -443,7 +462,8 @@ changing the other, so both directions were measured rather than assumed.
   **0 differing pixels out of 630 784** against the parity lane, terrain and
   feature sprites together, on the hilly viewport at eye (4864, 11392). So a
   difference seen in the exploration lane is the relief or the light, and never
-  the re-tessellation.
+  the re-tessellation. With the sun **on** and `slope=0` it is also 0 differing
+  pixels, which is the level-ground normalisation being exact.
 
 Two lane differences remain by construction, both located rather than guessed:
 

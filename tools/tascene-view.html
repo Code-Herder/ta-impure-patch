@@ -51,11 +51,27 @@
                      which is why relief itself defaults to 0
        sun=<az,el>   EXPLORE: sun in degrees, or `off`. The default 324,53 IS
                      tagpu_render3do.c's own model light re-expressed as a
-                     direction, so terrain and units share one sun by default
-       amb=<a>       EXPLORE: ambient floor, default 0.35
+                     direction, so terrain and units share one sun by default.
+                     LEVEL GROUND ALWAYS TAKES EXACTLY 1.0: the art is already
+                     lit (artlight), so the sun only modulates by how far a
+                     surface tilts from level — sunward slopes brighten past
+                     the painted colour, leeward ones darken. Before this
+                     normalisation level ground took 0.870, a second sun on
+                     top of the artist's, and the whole lane read 13 % dark.
+                     Terrain, feature sprites and unit faces take the one
+                     rule (LAB_LIGHT), evaluated per pixel where there is a
+                     normal to evaluate it on
+       amb=<a>       EXPLORE: ambient floor, default 0.35 — relative to level
+                     ground, so a face turned fully away from the sun takes
+                     amb / (amb + (1-amb)·sin(el)) = 0.40 at the defaults
        slope=<k>     EXPLORE: exaggerate the heightfield's gradient, default 1
-       undither=1    EXPLORE: use the pack's restored true-colour atlases
-                     (needs a pack built with `tascene build --undither`)
+       undither=<b>  EXPLORE: 1 = the pack's restored true-colour atlases,
+                     0 = the palette indices. DEFAULT: restored when the pack
+                     carries them (`tascene build --undither`), indexed
+                     otherwise — so on an indexed pack the lane's defaults
+                     still reduce to parity, and on a restored pack they show
+                     the colour it was built for. undither=1 on an indexed
+                     pack fails loudly rather than drawing something plausible
 
      THE COORDINATE CONVENTION IS TAGPU'S, DELIBERATELY. The extracted vertex
      shader maps game py 0 -> NDC -1, i.e. the offscreen's row 0 is the game
@@ -194,6 +210,14 @@ function readLook(p, label) {
       fail(`${label}: sun must be "<azimuth>,<elevation>" in degrees, or "off"`);
     sun = v;
   }
+  // amb >= 1 is how "no sun" reaches the shaders: one uniform, no branch
+  const amb = lit ? Math.min(1, Math.max(0, num("amb", 0.35))) : 1;
+  const sunV = sunVector(sun[0], sun[1]);
+  // Level ground takes exactly 1.0. The art is already lit (artlight), so the
+  // sun may only modulate by the tilt from level: every lambert is divided by
+  // the one a level normal (0,1,0) gets, whose N.L is sunV[1]. The floor keeps
+  // amb=0 with the sun on the horizon finite instead of 1/0.
+  const norm = 1 / Math.max(amb + (1 - amb) * Math.max(sunV[1], 0), 1e-3);
   return {
     label, lane, preset: p.get("preset") || null, query: p.toString(),
     terrain: passes.includes("terrain"),
@@ -205,11 +229,12 @@ function readLook(p, label) {
     // is loaded; readLook only sees the query, so it cannot know the map yet
     datum: lane === "explore" && p.get("datum") !== null ? num("datum", 0) : null,
     slope: num("slope", 1),
-    // amb >= 1 is how "no sun" reaches the shaders: one uniform, no branch
-    amb: lit ? Math.min(1, Math.max(0, num("amb", 0.35))) : 1,
-    sun: sunVector(sun[0], sun[1]), sunAE: lit ? sun : null,
-    undither: lane === "explore" && p.get("undither") !== null &&
-              p.get("undither") !== "0",
+    amb, norm,
+    sun: sunV, sunAE: lit ? sun : null,
+    // null = "not named": restored if the pack carries the atlases, resolved
+    // once the scene is loaded, like datum
+    undither: lane !== "explore" ? false
+            : p.get("undither") === null ? null : p.get("undither") !== "0",
     stats: {},
   };
 }
@@ -270,6 +295,22 @@ void main(){
                      clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);
   vUV = aUV; vNrm = aNrm;
 }`;
+// The exploration lane's ONE lighting rule, spliced into every lab fragment
+// shader that has a normal to evaluate it on (terrain, units; sprites have
+// none and take the ground's value from lambertAt, the JS twin of this). An
+// ambient-floored lambert, divided by what LEVEL ground takes, so level is
+// exactly 1.0 and the sun only modulates by the tilt from level — the art is
+// already lit, the sun must not light it twice. Per pixel, because that is
+// where a local light (a laser, an explosion) will join it: a term that varies
+// across one face, which no per-vertex shade could carry.
+const LAB_LIGHT = `
+uniform vec3 uSun;          // unit vector TOWARD the light
+uniform float uAmb;         // ambient floor; 1.0 means "no sun at all"
+uniform float uNorm;        // 1 / the lambert of level ground
+float lambert(vec3 n) {
+  return (uAmb + (1.0 - uAmb) * max(dot(normalize(n), uSun), 0.0)) * uNorm;
+}`;
+
 const LAB_TERR_FS = `#version 300 es
 precision highp float;
 in vec2 vUV; in vec3 vNrm;
@@ -278,8 +319,7 @@ uniform sampler2D uAtlas;   // R8 palette indices
 uniform sampler2D uRGB;     // restored true colour, same layout
 uniform sampler2D uPal;
 uniform int uUndither;
-uniform vec3 uSun;          // unit vector TOWARD the light
-uniform float uAmb;         // ambient floor; 1.0 means "no sun at all"
+${LAB_LIGHT}
 void main(){
   vec3 rgb;
   if (uUndither == 1) rgb = texture(uRGB, vUV).rgb;
@@ -287,8 +327,7 @@ void main(){
     int pi = int(texture(uAtlas, vUV).r * 255.0 + 0.5);
     rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;
   }
-  float l = uAmb + (1.0 - uAmb) * max(dot(normalize(vNrm), uSun), 0.0);
-  frag = vec4(rgb * l, 1.0);
+  frag = vec4(rgb * lambert(vNrm), 1.0);
 }`;
 
 // Features are billboards, so there is no normal to light them by; they take
@@ -334,33 +373,36 @@ void main(){
   frag = vec4(rgb * vLam * a, a);
 }`;
 
-// The unit lab shader reads slot 3 as a LAMBERT FACTOR where tagpu's reads it
-// as a PALETTE.SHD row / 31. Same buffer, same stride, one float re-meant —
-// which is the whole difference between the two shading philosophies.
+// The unit lab shader ignores slot 3 (tagpu's PALETTE.SHD row / 31) and lights
+// from slot 6, the posed face normal, per PIXEL through LAB_LIGHT. Same buffer,
+// same stride, one attribute more — which is the whole difference between the
+// two shading philosophies: a 32-row LUT looked up per face, or a lambert
+// evaluated at every fragment, where a local light can vary across the face.
 const LAB_UNIT_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec2 aUV;
 layout(location=2) in vec2 aFC;     // flat idx/255, tex colour key/255
-layout(location=3) in float aLam;   // N.L, already ambient-floored
 layout(location=4) in vec2 aWorld;
 layout(location=5) in float aVY;
+layout(location=6) in vec3 aNrm;    // posed, unit length; flat per face for a 3DO
 uniform vec2 uGame;
 uniform float uDepthScale;
-out vec2 vUV; flat out vec2 vFC; flat out float vLam;
+out vec2 vUV; flat out vec2 vFC; out vec3 vNrm;
 void main(){
   gl_Position = vec4(aPos.x/uGame.x*2.0-1.0, aPos.y/uGame.y*2.0-1.0,
                      clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);
-  vUV = aUV; vFC = aFC; vLam = aLam;
+  vUV = aUV; vFC = aFC; vNrm = aNrm;
 }`;
 const LAB_UNIT_FS = `#version 300 es
 precision highp float;
-in vec2 vUV; flat in vec2 vFC; flat in float vLam;
+in vec2 vUV; flat in vec2 vFC; in vec3 vNrm;
 out vec4 frag;
 uniform sampler2D uAtlas;
 uniform sampler2D uRGB;
 uniform sampler2D uPal;
 uniform int uUndither;
+${LAB_LIGHT}
 void main(){
   vec3 rgb;
   if (vUV.x < 0.0) {                          // untextured face: one index
@@ -374,7 +416,7 @@ void main(){
     if (abs(idx - vFC.y) < 0.5/255.0) discard;
     rgb = texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb;
   }
-  frag = vec4(rgb * vLam, 1.0);
+  frag = vec4(rgb * lambert(vNrm), 1.0);
 }`;
 
 // ---- the composite: FBO -> canvas, flipped, and the wipe --------------------
@@ -423,6 +465,8 @@ async function main() {
   // mean slide down to 28.9 px, and a cell at the waterline lands exactly
   // where the engine paints it. datum=0 restores the un-pivoted behaviour.
   for (const L of sides) if (L.datum === null) L.datum = scene.map.sealevel || 0;
+  // undither not named: restored when the pack carries the atlases
+  for (const L of sides) if (L.undither === null) L.undither = !!scene.map.atlas.rgba;
 
   const view = scene.view, map = scene.map;
   const [GW, GH] = view.res;
@@ -567,7 +611,7 @@ async function main() {
     }
     gl.bindVertexArray(null);
     LTU = uniforms(gl, ltProg, ["uGame", "uDepthScale", "uAtlas", "uRGB", "uPal",
-                                "uUndither", "uSun", "uAmb"]);
+                                "uUndither", "uSun", "uAmb", "uNorm"]);
   }
 
   // ---- feature (sprite) pass — tagpu_feat.c's shaders and vertex format, plus
@@ -620,7 +664,7 @@ async function main() {
   }
 
   // ---- unit pass — tagpu_native.c's shaders, tagpu_render3do.c's geometry rule
-  const UVST = 11;                                  // x,y,enc, u,v, fc,ck, shade, wx,wz, vy
+  const UVST = 14;                    // x,y,enc, u,v, fc,ck, shade, wx,wz, vy, nx,ny,nz
   let uProg = null, uVAO = null, uVBO = null, luProg = null, UU = {}, LUU = {};
   let uVerts = null;
   // tagpu_render3do.c: the model-space toward-camera axis and the light
@@ -634,8 +678,10 @@ async function main() {
     uVAO = gl.createVertexArray(); uVBO = gl.createBuffer();
     gl.bindVertexArray(uVAO);
     gl.bindBuffer(gl.ARRAY_BUFFER, uVBO);
-    const sizes = [3, 2, 2, 1, 2, 1], offs = [0, 12, 20, 28, 32, 40];
-    for (let i = 0; i < 6; i++) {
+    // slot 6 (the normal) is only the lab program's; the parity program leaves
+    // it enabled and unread, which GL allows as long as the buffer covers it
+    const sizes = [3, 2, 2, 1, 2, 1, 3], offs = [0, 12, 20, 28, 32, 40, 44];
+    for (let i = 0; i < 7; i++) {
       gl.enableVertexAttribArray(i);
       gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, UVST * 4, offs[i]);
     }
@@ -652,7 +698,7 @@ async function main() {
     if (wantLab) {
       luProg = program(gl, LAB_UNIT_VS, LAB_UNIT_FS, "lab-unit");
       LUU = uniforms(gl, luProg, ["uGame", "uDepthScale", "uAtlas", "uRGB",
-                                  "uPal", "uUndither"]);
+                                  "uPal", "uUndither", "uSun", "uAmb", "uNorm"]);
     }
     uVerts = new Float32Array(65536 * UVST);
   }
@@ -680,12 +726,13 @@ async function main() {
     const inv = 1 / Math.hypot(dx, 1, dz);
     out[o] = -dx * inv; out[o + 1] = inv; out[o + 2] = -dz * inv;
   }
+  // LAB_LIGHT's JS twin, for the sprites, which have no normal of their own
   function lambertAt(c, r, L) {
     if (L.amb >= 1) return 1;
     const n = [0, 0, 0];
     normalAt(c, r, L.slope, n, 0);
     const d = n[0] * L.sun[0] + n[1] * L.sun[1] + n[2] * L.sun[2];
-    return L.amb + (1 - L.amb) * Math.max(d, 0);
+    return (L.amb + (1 - L.amb) * Math.max(d, 0)) * L.norm;
   }
   // the row the depth keys are relative to — one definition, used by every pass
   const rowBase = () => (eye[1] >> 4) - 16;
@@ -919,10 +966,11 @@ async function main() {
   // take the shade row from the POSED normal — rotating before shading is what
   // makes the LUT row the same one the engine's own pass would pick.
   //
-  // In the exploration lane slot 3 carries a LAMBERT instead of a LUT row: the
-  // same face normal and (by default) the same light, with the 32-row
-  // quantisation taken out. That is the whole "free lighting" half of the
-  // undithered decision — there is no SHD LUT to look a restored colour up in.
+  // In the exploration lane slot 3 is left at 1.0 and slot 6 carries the same
+  // POSED face normal, so LAB_UNIT_FS can light every pixel by (by default)
+  // the same light with the 32-row quantisation taken out. That is the whole
+  // "free lighting" half of the undithered decision — there is no SHD LUT to
+  // look a restored colour up in.
   function buildUnits(L) {
     const lab = L.lane === "explore";
     const U = scene.units, D = scene.depth;
@@ -957,6 +1005,7 @@ async function main() {
         }
         // per-face flat shading, tagpu_render3do.c line for line
         let shade = lab ? 1.0 : SH_NEUTRAL / 31;
+        let ux = 0, uy = 1, uz = 0;               // the lab's normal; level if degenerate
         const e1 = [P[1][0] - P[0][0], P[1][1] - P[0][1], P[1][2] - P[0][2]];
         const e2 = [P[2][0] - P[0][0], P[2][1] - P[0][1], P[2][2] - P[0][2]];
         let nx = e1[1] * e2[2] - e1[2] * e2[1];
@@ -966,8 +1015,10 @@ async function main() {
         const nl = Math.hypot(nx, ny, nz);
         if (nl > 1e-6) {
           if (lab) {
-            const I = (nx * L.sun[0] + ny * L.sun[1] + nz * L.sun[2]) / nl;
-            shade = L.amb + (1 - L.amb) * Math.max(I, 0);
+            // lit per pixel in LAB_UNIT_FS; the face only supplies its normal.
+            // Flat, as a 3DO is — a smooth model would put a different one on
+            // each vertex right here and nothing downstream changes
+            ux = nx / nl; uy = ny / nl; uz = nz / nl;
           } else {
             const I = (nx * SH_L[0] + ny * SH_L[1] + nz * SH_L[2]) / nl;
             let rr = SH_NEUTRAL + SH_DIR * Math.floor(I * 12 + 0.5);
@@ -993,6 +1044,7 @@ async function main() {
           uVerts[q + 8] = wldX + x;                 // per-vertex, as the engine
           uVerts[q + 9] = wldZ + (-z - y * 0.5);
           uVerts[q + 10] = y;
+          uVerts[q + 11] = ux; uVerts[q + 12] = uy; uVerts[q + 13] = uz;
           n++;
         }
       }
@@ -1011,6 +1063,8 @@ async function main() {
       gl.uniform1f(LUU.uDepthScale, scene.depth.scale);
       gl.uniform1i(LUU.uAtlas, 6); gl.uniform1i(LUU.uRGB, 10);
       gl.uniform1i(LUU.uPal, 1); gl.uniform1i(LUU.uUndither, L.undither ? 1 : 0);
+      gl.uniform3f(LUU.uSun, L.sun[0], L.sun[1], L.sun[2]);
+      gl.uniform1f(LUU.uAmb, L.amb); gl.uniform1f(LUU.uNorm, L.norm);
     } else {
       gl.useProgram(uProg);
       gl.uniform2f(UU.uGame, GW, GH);
@@ -1067,6 +1121,7 @@ async function main() {
         gl.uniform1i(LTU.uUndither, L.undither ? 1 : 0);
         gl.uniform3f(LTU.uSun, L.sun[0], L.sun[1], L.sun[2]);
         gl.uniform1f(LTU.uAmb, L.amb);
+        gl.uniform1f(LTU.uNorm, L.norm);
         gl.bindVertexArray(ltVAO);
       } else {
         gl.useProgram(terrProg);
