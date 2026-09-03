@@ -78,6 +78,13 @@ float tagpu_zoom_level(void);
    wider addressable rect, or shifting its eye for the duration of a click. */
 int   tagpu_zoom_to_engine(int* x, int* y);
 
+/* The same, for the position the engine DRAWS its mouse cursor at (what
+   GetCursorPos reports). Identical at zoom >= 1 and inside the viewport; the
+   difference is the ring, where this keeps handing the pointer through
+   unchanged even when tagpu_vpwide has made the ring addressable. The engine
+   can NAME more than it can DRAW ON: see tagpu_zoom.c. */
+int   tagpu_zoom_to_engine_draw(int* x, int* y);
+
 /* 1 when this mouse message must not reach the engine at all: a BUTTON event in
    the display-only ring above. Take the screen-space lParam, before the
    rewrite. Dropping is the honest answer — the click has no world point the

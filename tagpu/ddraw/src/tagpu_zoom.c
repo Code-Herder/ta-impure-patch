@@ -162,6 +162,20 @@ static int iround(float v)
    edge scroll, the cursor — working exactly as at 1x, and the one thing that
    would then be wrong, a click on the 1x world point, is what
    tagpu_zoom_drop_mouse() throws away. */
+/* to_engine with the ring measured against the TRUE viewport, whatever
+   tagpu_vpwide may have widened the engine's rect to. */
+static int to_engine_true(int* x, int* y)
+{
+    float z, cx, cy; int L, T, W, H, ux, uy;
+    if (!x || !y || !view(&z, &cx, &cy, &L, &T, &W, &H)) return 0;
+    if (!in_viewport(*x, *y, L, T, W, H)) return 0;   /* screen-space: 1:1 */
+    ux = iround(((float)*x - cx) / z + cx);
+    uy = iround(((float)*y - cy) / z + cy);
+    if (!in_viewport(ux, uy, L, T, W, H)) return 0;   /* the ring: unchanged */
+    *x = ux; *y = uy;
+    return 1;
+}
+
 static int to_engine(int* x, int* y, int* ring)
 {
     float z, cx, cy; int L, T, W, H, ux, uy;
@@ -195,6 +209,27 @@ int tagpu_zoom_to_engine(int* x, int* y)
     return to_engine(x, y, NULL);
 }
 
+/* The same transform for the position the engine DRAWS its cursor at, and the
+   one place the addressable rect must NOT be consulted.
+
+   The engine draws its cursor wherever GetCursorPos reports, and the composite
+   moves the sprite back under the pointer from there — which only works while
+   that position is inside the engine's own 1x viewport, over the terrain key
+   fill. tagpu_vpwide widens what the engine can NAME, not what it can DRAW ON:
+   a ring `u` lands on the side panel (where the sprite is composited over panel
+   pixels the composite must not stamp into the world) or off the surface
+   entirely. So the ring test here stays on the TRUE viewport and the ring keeps
+   G13e's answer — the pointer is handed through unchanged and the engine draws
+   its cursor exactly where the player's pointer is, which needs no moving at
+   all. The input path is unaffected: what the engine can NAME still comes from
+   the messages, which carry the widened `u`. */
+int tagpu_zoom_to_engine_draw(int* x, int* y)
+{
+    return to_engine_true(x, y);
+}
+
+#define to_engine_draw_pt to_engine_true
+
 int tagpu_zoom_cursor_shift(int* dx, int* dy, int* ux, int* uy)
 {
     /* g_ddraw.cursor is the TRUE pointer position: every write site stores `s`
@@ -208,7 +243,10 @@ int tagpu_zoom_cursor_shift(int* dx, int* dy, int* ux, int* uy)
     if (dy) *dy = 0;
     if (ux) *ux = 0;
     if (uy) *uy = 0;
-    if (!to_engine(&ex, &ey, NULL)) return 0;
+    /* the DRAW transform, so this agrees with where the engine actually put the
+       sprite: in the ring that is the pointer itself and there is nothing to
+       move (tagpu_zoom_to_engine_draw) */
+    if (!to_engine_draw_pt(&ex, &ey)) return 0;
     if (sx == ex && sy == ey) return 0;      /* nothing to move */
     if (dx) *dx = sx - ex;
     if (dy) *dy = sy - ey;

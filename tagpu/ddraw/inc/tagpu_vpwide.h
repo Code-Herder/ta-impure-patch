@@ -36,13 +36,28 @@
 
      W/H: the eye clamp `0x41C3C0` derives `maxEye = map - W` from them, and a
        negative maxEye makes it alternate between 0 and a negative eye every
-       call. W and H are therefore NEVER touched — which is also why the true
-       rect stays recoverable while we own L/T/R/B.
+       call. W and H are therefore never DRIVEN — only repaired, see below.
 
-   The one engine WRITE to the rect, `0x49821D`, is not a fight: it lives in
-   the game-screen enter callback `0x497F40` and recomputes all six from the
+     THE CURSOR is NOT a reader of this rect, and that is the point: the engine
+       draws its sprite wherever `GetCursorPos` reports, and the composite moves
+       it back under the pointer from there — which only works while that
+       position is inside the engine's own viewport, over the terrain key fill.
+       Widening what the engine can NAME must therefore not widen what it draws
+       ON, so `tagpu_zoom_to_engine_draw()` keeps the ring identity for that one
+       poll while the messages carry the widened `u`. Measured before the split:
+       at 0.5× with the pointer at screen (320,400) there was no cursor at the
+       pointer and a ghost one on the build panel.
+
+   The one engine WRITE to the rect, `0x49821D`, mostly is not a fight: it lives
+   in the game-screen enter callback `0x497F40` and recomputes all six from the
    screen dimensions, so a re-entry RESTORES the true rect rather than
-   compounding on a widened one — and the per-frame apply picks it up again.
+   compounding on a widened one, and the per-frame apply picks it up again.
+   The exception is W and H: that callback computes `W = R - L + 1` by RE-READING
+   L (`0x4981C9` writes it, `0x498214` reads it back), so a store of ours landing
+   in that window would leave W hundreds of pixels wide and the eye clamp
+   oscillating. The true rect is therefore derived from the SCREEN dimensions at
+   `+0x37E1F`/`+0x37E23` — fields we never write — and W/H are checked against
+   that every frame and put back when they disagree.
 
    MP-safety is the `ScrollSpeed` argument unchanged: the viewport rect is
    camera state that no other machine ever sees.
@@ -51,8 +66,13 @@
    pass. Nothing is written to the rect unless the patches installed AND the
    true rect verified AND a zoomed-out view is live. */
 
-/* Install the four call-site redirects. DllMain only, byte-matched,
-   all-or-nothing; a no-op unless tagpu_vpwide.on exists then. */
+/* Install the four call-site redirects and the wndproc lParam patch. DllMain
+   only, byte-matched, all-or-nothing; a no-op unless tagpu_vpwide.on exists
+   then. (The lParam patch: TA unpacks the mouse position with `AND 0xffff` /
+   `SHR 0x10`, which is zero-extending, so a client x of -20 arrived as 65516
+   and the event was lost — half the ring. It becomes `MOVSX`/`SAR`, which is
+   Microsoft's own GET_X_LPARAM and identical for any position a real mouse can
+   report.) */
 void tagpu_vpwide_init(void);
 
 /* Render thread, once a frame, from tagpu_zoom_frame_end(): widen the rect to

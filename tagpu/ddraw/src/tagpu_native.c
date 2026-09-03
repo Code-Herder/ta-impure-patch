@@ -402,9 +402,12 @@ static const char* CFS =
     "    if (uCur.z > 0.0) {\n"
     /* where the pointer is: paint the cursor texel the engine put at u */
     "      vec2 sp = px - uCurOff;\n"
-    /* ...and only from inside the viewport: `u` is guaranteed to be in it but
-       not 64 px clear of its edge, so the box can straddle the boundary and
-       would otherwise stamp side-panel or top-bar texels into the world */
+    /* ...and only from inside the viewport: `u` is in it but not 64 px clear
+       of its edge, so the box can straddle the boundary and would otherwise
+       stamp side-panel or top-bar texels into the world. `u` being in it is an
+       invariant tagpu_vpwide would break — a widened rect puts the ring's `u`
+       on the panel or off the surface — so while that module is live it takes
+       the cursor over entirely and uCur.z is 0 here (tagpu_zoom_cursor_shift). */
     "      if (inbox(sp, uCur) && inbox(sp, uVp)) {\n"
     "        ivec2 q = clamp(ivec2(sp), ivec2(0), uSurfSz - 1);\n"
     "        int si = int(texelFetch(uSurf, q, 0).r * 255.0 + 0.5);\n"

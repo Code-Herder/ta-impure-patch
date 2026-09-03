@@ -91,7 +91,7 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
         {
             /* g_ddraw.cursor keeps the TRUE pointer position; only what leaves
                for the engine is unzoomed (tagpu_zoom.h). */
-            tagpu_zoom_to_engine(&x, &y);
+            tagpu_zoom_to_engine_draw(&x, &y);
             lpPoint->x = x;
             lpPoint->y = y;
         }
@@ -104,7 +104,7 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
         int cx = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
         int cy = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
 
-        tagpu_zoom_to_engine(&cx, &cy);
+        tagpu_zoom_to_engine_draw(&cx, &cy);
         lpPoint->x = cx;
         lpPoint->y = cy;
     }
