@@ -1049,6 +1049,25 @@ def cmd_click(args):
     out({"name": args.name, "token": token}, args.json, human=f"sent: {token}")
 
 
+def cmd_wheel(args):
+    """Turn the mouse wheel, which is the zoom control.
+
+    The wheel is only live over the world viewport, exactly as it is for a
+    player, so a position is almost always what you want: without `--at` the
+    notches land wherever the injected pointer happens to be, and if that is the
+    side panel or a menu they do nothing at all (the game logs `zoom: wheel
+    ignored`). One notch is ~1.1x, geometric, eased over about six frames.
+    """
+    inst = Instance(args.name)
+    tokens = []
+    if args.at is not None:
+        tokens.append(f"pmove:{args.at[0]},{args.at[1]}")
+    tokens.append(f"wheel:{args.notches:+d}")
+    _write_tokens(inst, " ".join(tokens))
+    out({"name": args.name, "notches": args.notches, "at": args.at}, args.json,
+        human=f"sent: {' '.join(tokens)}")
+
+
 def cmd_eye(args):
     inst = Instance(args.name)
     path = inst.gamedir / "tagpu_eye.txt"
@@ -3761,6 +3780,15 @@ def build_parser():
     cl.add_argument("y", type=int)
     cl.add_argument("--right", action="store_true", help="right click (orders)")
     cl.set_defaults(func=cmd_click)
+
+    wh = sub.add_parser("wheel", help="turn the mouse wheel (the zoom control)")
+    add_common(wh)
+    wh.add_argument("name")
+    wh.add_argument("notches", type=int,
+                    help="+N zooms in, -N zooms out (~1.1x per notch)")
+    wh.add_argument("--at", type=int, nargs=2, metavar=("X", "Y"),
+                    help="point here first — the wheel is dead off the world viewport")
+    wh.set_defaults(func=cmd_wheel)
 
     e = sub.add_parser("eye", help="hold the camera at a world position")
     add_common(e)

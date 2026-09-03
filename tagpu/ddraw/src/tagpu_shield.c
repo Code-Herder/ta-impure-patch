@@ -195,7 +195,11 @@ static LRESULT to_game(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
     if (g_ddraw.wndproc)
     {
         /* injected input goes through exactly the same transform, or `tacli
-           click` and the human's mouse would disagree about the world */
+           click` and the human's mouse would disagree about the world — and
+           the same is true of the wheel, which is why an injected notch is
+           offered to the zoom here rather than short-circuited at the token */
+        if (tagpu_zoom_wheel(msg, wparam, lparam))
+            return 0;
         if (tagpu_zoom_drop_mouse(msg, lparam))
             return 0;
         return CallWindowProcA(g_ddraw.wndproc, hwnd, msg, wparam,
@@ -257,7 +261,7 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
     InterlockedExchange((LONG*)&g_ddraw.cursor.y, gy);
 
     UINT msg = WM_MOUSEMOVE;
-    int  vk = 0, down = 0;
+    int  vk = 0, down = 0, wheel = 0;
 
     switch (code)
     {
@@ -267,6 +271,13 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
     case TAGPU_M_RUP:   msg = WM_RBUTTONUP;   vk = VK_RBUTTON;           break;
     case TAGPU_M_MDOWN: msg = WM_MBUTTONDOWN; vk = VK_MBUTTON; down = 1; break;
     case TAGPU_M_MUP:   msg = WM_MBUTTONUP;   vk = VK_MBUTTON;           break;
+    /* One notch, carried the way the hardware carries it: the signed delta in
+       the high word of wParam and a CLIENT-space point in lParam, which is what
+       cnc-ddraw has already made of a real wheel by this point. Going through
+       the same message rather than calling the zoom directly is what makes an
+       injected wheel test the path a player's wheel takes. */
+    case TAGPU_M_WHEELUP: msg = WM_MOUSEWHEEL; wheel =  WHEEL_DELTA; break;
+    case TAGPU_M_WHEELDN: msg = WM_MOUSEWHEEL; wheel = -WHEEL_DELTA; break;
     }
 
     /* A PRESS in the display-only ring is dropped WHOLE — the virtual key state
@@ -289,6 +300,8 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
     if (s_down[VK_MBUTTON]) wparam |= MK_MBUTTON;
     if (s_down[VK_SHIFT])   wparam |= MK_SHIFT;
     if (s_down[VK_CONTROL]) wparam |= MK_CONTROL;
+
+    if (wheel) wparam = MAKEWPARAM((WORD)wparam, (WORD)(short)wheel);
 
     /* the game expects game-space coordinates in lParam — that is what the
        wndproc hands it after unscaling a hardware message */

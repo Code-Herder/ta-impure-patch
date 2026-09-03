@@ -33,6 +33,7 @@ enum {
     TAGPU_M_RDOWN, TAGPU_M_RUP,
     TAGPU_M_MDOWN, TAGPU_M_MUP,
     TAGPU_M_MOVEREL,                 /* x,y are a delta on the injected cursor */
+    TAGPU_M_WHEELUP, TAGPU_M_WHEELDN,/* one wheel notch — the zoom control     */
 };
 
 /* pass as the position to leave the injected cursor where it is */

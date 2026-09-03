@@ -1050,6 +1050,12 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     }
     }
 
+    /* tagpu: the wheel is the zoom control. It is consumed over the world and
+       passed through everywhere else, where the engine ignores it anyway — its
+       jump table stops at 0x206 (tagpu_zoom.h). */
+    if (tagpu_zoom_wheel(uMsg, wParam, lParam))
+        return 0;
+
     /* tagpu: the world is drawn zoomed, the engine's screen->world maths is
        1:1 — hand it the unzoomed position so a click lands where it looks, and
        swallow a click the engine has no world point for (tagpu_zoom.h). */

@@ -135,6 +135,29 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x41C442` | `call 0x466B70` — ...and at bottom | call-site redirect |
 | `0x430FAE` | `call 0x4B6A50` — the one site that persists `ScrollSpeed` | call-site redirect; substitutes the player's own value so our scaling can never reach the registry |
 
+**The level comes from two levers, and neither is an engine patch.** `tagpu_zoom.txt` is the
+scripted one and **wins whenever it exists**; the **mouse wheel** is the player's, and takes
+over the moment the file is gone. The wheel needs nothing from the engine because the engine
+never wanted it: TA's window procedure dispatches only `0x200..0x206` through its jump table
+at `0x4B5E3B`, so `WM_MOUSEWHEEL` (`0x20A`) fails the `CMP EAX,6` at `0x4B5E41` and falls to
+a bare `DefWindowProcA` tail call at `0x4B5FA8`. Nothing had to be taken away from anyone.
+
+`tagpu_zoom_wheel()` is offered the message at the two of the three engine doors a wheel can
+arrive at (`wndproc.c`'s tail for hardware, the shield's `to_game` for injected; the third,
+`wndproc.c`'s `WM_NCHITTEST` arm, carries no wheel) and consumes it only over a
+live world viewport, so the menus cannot be wheeled and a future scrollable list keeps its
+wheel. It does one thing on the message thread — `InterlockedExchangeAdd` the raw delta — and
+the level itself still moves in exactly one place, `tagpu_zoom_read_lever()` on the render
+thread, which folds the notches in (×1.1 per notch, geometric, clamped to 0.25–8.0), eases a
+quarter of the remaining log-distance per frame, and **snaps a cancelled round trip to exactly
+`1.0f`** so 1× stays the byte-identical identity the transform, the minimap rect and the
+scroll rate all test for by equality. While the file is in force the wheel is *pinned* to it,
+which is what makes deleting the file a handover rather than a jump.
+
+Centre-anchored: no eye motion at all, so `vpwide`, the minimap rect and `ScrollSpeed` follow
+with no further plumbing. Pointer-anchored zoom is the open follow-up and is a camera move —
+`tagpu_input.c`'s eye hold, not a transient bias (§3.1).
+
 ### 2.3b The addressable viewport at zoom < 1 (`tagpu_vpwide.c`, `vpwide.on`)
 
 **Opt-in and off by default.** Nothing here writes a byte unless `tagpu_vpwide.on` existed at

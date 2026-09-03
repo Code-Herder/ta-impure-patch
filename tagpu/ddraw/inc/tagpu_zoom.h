@@ -39,10 +39,38 @@
    and armed by tagpu_zoom.on; inert at zoom 1. */
 void  tagpu_zoom_init(void);
 
-/* Re-read tagpu_zoom.txt. Render thread only; called once a frame. Returns the
-   level in force: the file's value when it parses in 0.25..8.0, the last good
-   value on a torn read, 1.0 when the file is absent. */
+/* Re-read the level. Render thread only; called once a frame. Returns the level
+   in force, from the two levers in priority order:
+
+     tagpu_zoom.txt, when present — the file's value when it parses in
+       0.25..8.0, the last good value on a torn read. Scripted drivers (tacli,
+       the scenarios) own this one, and while it is there it WINS.
+     the wheel otherwise — the level the player has wheeled to, eased toward
+       its target one step per call, and 1.0 until they turn the wheel.
+
+   While the file is in force the wheel is pinned to it, so DELETING the file
+   leaves the view exactly where it was and hands the wheel control from there,
+   rather than snapping back to 1.0 or to some level wheeled at long ago. */
 float tagpu_zoom_read_lever(void);
+
+/* A mouse message on its way into the engine, offered to the wheel first.
+   Returns 1 when the wheel took it — the caller must then NOT pass it on.
+
+   The engine has no use for it either way: its window procedure dispatches only
+   0x200..0x206 through the jump table at 0x4B5E3B, so WM_MOUSEWHEEL falls
+   straight to a bare DefWindowProcA. Nothing is being taken away from anyone.
+
+   Only WM_MOUSEWHEEL is taken, only while a zoomed world is actually on screen
+   (so the menus can never be wheeled), only while the pointer is over the world
+   viewport (the side panel, the minimap and every dialog keep their wheel for
+   whatever wants it later), and not at all when tagpu_wheel.off exists. `lparam`
+   must be the CLIENT-space point — cnc-ddraw has already converted the wheel's
+   screen-space lParam by the time the message reaches either door.
+
+   Message thread. It only accumulates the notches; the level itself moves on
+   the render thread in tagpu_zoom_read_lever(), which is what keeps one owner
+   for the number. */
+int   tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam);
 
 /* The native pass drew this world-viewport rect this frame. Render thread; it
    is what says "the world on screen IS zoomed", so the transform is live only
