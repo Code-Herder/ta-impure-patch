@@ -1257,6 +1257,25 @@ static void ogl_render()
 
         gldbg("A-upload"); s_gldbg_frame++;
 
+        /* tagpu: GL-framebuffer capture (includes our overlay) — drop
+           tagpu_glshot.trigger next to the exe.  Armed HERE, before the first
+           draw, because the whole frame has to land in an FBO we own: reading
+           the window's back buffer is undefined wherever the window is not
+           visible on the desktop, which silently mangled every glshot of an
+           off-screen or covered window. */
+        BOOL tagpu_capturing = FALSE;
+        if (GetFileAttributesA("tagpu_glshot.trigger") != INVALID_FILE_ATTRIBUTES)
+        {
+            tagpu_capturing =
+                tagpu_overlay_capture_begin(g_ddraw.render.width, g_ddraw.render.height);
+            /* consumed only once it is actually armed — this runs BEFORE the
+               overlay's own lazy init, so the first frame after a GL context
+               change cannot serve a shot, and eating the trigger there would
+               turn that into a silently empty capture */
+            if (tagpu_capturing)
+                DeleteFileA("tagpu_glshot.trigger");
+        }
+
         if (g_ddraw.render.viewport.x != 0 || g_ddraw.render.viewport.y != 0)
         {
             glClear(GL_COLOR_BUFFER_BIT);
@@ -1370,7 +1389,7 @@ static void ogl_render()
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
             glBindVertexArray(0);
 
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
 
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, 0);
@@ -1395,7 +1414,7 @@ static void ogl_render()
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
             glBindVertexArray(0);
 
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
 
             /* apply shader2 */
 
@@ -1443,7 +1462,7 @@ static void ogl_render()
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
             glBindVertexArray(0);
 
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
             gldbg("C-mainpass");
 
             glActiveTexture(GL_TEXTURE1);
@@ -1555,11 +1574,10 @@ static void ogl_render()
                 tagpu_overlay_draw(&f);
                 gldbg("E-tagpu");
 
-                /* GL-framebuffer capture (includes our overlay): drop tagpu_glshot.trigger */
-                if (GetFileAttributesA("tagpu_glshot.trigger") != INVALID_FILE_ATTRIBUTES)
+                if (tagpu_capturing)
                 {
-                    DeleteFileA("tagpu_glshot.trigger");
-                    /* mode-switch debug: which render branch + probe pixel + errors */
+                    /* mode-switch debug: which render branch + probe pixel + errors.
+                       Reads the armed capture FBO — capture_end() unbinds it. */
                     {
                         unsigned char px[4] = {9,9,9,9};
                         typedef void (WINAPI* PFNRP)(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,void*);
@@ -1585,7 +1603,7 @@ static void ogl_render()
                                 g_ogl.scale_w, g_ogl.scale_h);
                             fclose(df); }
                     }
-                    tagpu_overlay_capture(&f);
+                    tagpu_overlay_capture_end(&f);
                 }
             }
         }

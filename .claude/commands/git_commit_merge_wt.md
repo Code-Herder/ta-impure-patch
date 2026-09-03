@@ -16,6 +16,58 @@ Chains together the common "ship this worktree" flow:
 
 If any step produces an unexpected state (conflicts, non-fast-forward, detached HEAD, failing builds, etc.) **STOP** and report the state. Never use `--force`, `--no-verify`, `reset --hard`, or rewrite history.
 
+## Step 0 — Is this ready to LAND? (and the review that decides)
+
+**Committing and landing are different acts.** Commits on the worktree branch are cheap
+checkpoints — make as many as are useful, including work in progress. **Landing** is
+fast-forwarding local `main` (Step 4), and that is the act with a bar. Historically this repo has
+run at roughly one landing per 1.7 commits, i.e. almost every commit went straight to `main`;
+that is what makes the review below expensive and what lets half-checked work reach `main`.
+
+**Land one FINISHED unit of work, not one commit.** A gate, a fix, a documentation pass. If the
+next thing you do would be "…and now correct what I just landed", it was not finished.
+
+### The bar — all of these, before Step 4
+
+1. **It does what it claims**, verified by running it, not by reading it. Both DLLs compiling is
+   Step 3's gate, not evidence the change works.
+2. **Its claims are checked.** This bites documentation hardest: a build gate cannot catch a
+   wrong statement. Do not land a page and then discover a claim in it was too rosy — check the
+   claims against the source *first*.
+3. **Nothing is left half-done behind it** — no debug instrumentation, no counters added to
+   chase a bug, no `.on` file the change depends on but does not create.
+
+### The review
+
+**Run `/code-review medium` on the accumulated branch diff (`main...HEAD` plus anything still
+uncommitted) once per landing** — not once per commit — when the landing touches:
+
+- `tagpu/ddraw/src/**` or `tagpu/ddraw/inc/**` (the fork and our modules), or
+- `tagpu/src/**` (tagpu.dll), or
+- `tools/tacli` (it drives every session; a bug here costs hours).
+
+**Skip it** — and say so in the final summary — when the landing is only docs
+(`research/notes/**`, `*.md`), scenarios (`scenarios/*.json`), comments, or a handful of lines
+with no new state, no new engine patch and no new GL object. A review costs roughly 100k tokens;
+it is worth that for a real change and not for a typo. Batching landings is what keeps this
+cheap: three commits that land together cost one review, not three.
+
+**Use `high` instead of `medium`** when the landing writes engine or user state, adds or moves a
+byte patch, or touches anything sim-adjacent. That is the class that ships silently: the review
+that caught `ScrollSpeed` being persisted into the player's registry — where it would have
+compounded across launches — was exactly this case.
+
+Findings become another commit on the branch before Step 4; that is what the branch is for.
+
+**Verify every finding against the code (and the decompile) before acting on it.** The hit rate
+on this codebase is high but not perfect — on the G13e diff, 2 of 11 findings were HIGH and real
+(a dropped button *release* left the engine and the shield's virtual key state holding the button
+forever; `ScrollSpeed` corrupting the registry), several MEDIUMs were real, and about a third
+were overstated or described existing intentional behaviour as a bug. Fix what is real, say what
+you rejected and why. **Do not use `--fix`** — it applies the wrong ones too.
+
+Re-run the review only if the fixes were themselves substantial.
+
 ## Step 1 — Commit local changes
 
 Run these in parallel:

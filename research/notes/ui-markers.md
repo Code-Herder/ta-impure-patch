@@ -449,6 +449,16 @@ are the always-on markers, do not have this limit because they are re-drawn. Clo
 it for the rest would mean widening the context's clip rect and re-basing the scratch
 buffer around a negative origin — possible, and deliberately not done here.
 
+**G13e found the same edge from the other side, and named it.** The engine can only
+*name* screen positions inside its own viewport — a click whose position falls outside
+it is routed to the screen-space UI and does nothing at all (measured). So at zoom < 1
+the ring of world outside the 1× viewport is **display-only**: the captured markers stop
+there, and input stops there too — a click in it is *dropped* rather than landed on the
+wrong world point (`tagpu_zoom.h`). It is one
+boundary, not two, and one fix would close all of it: give the engine a wider addressable
+rect, or shift its eye for the duration of a click. Still only worth doing if zoom-out
+becomes a real play mode rather than a demo.
+
 ---
 
 ## Appendix — addresses & offsets

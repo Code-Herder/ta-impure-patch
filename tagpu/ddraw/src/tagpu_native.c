@@ -72,6 +72,8 @@
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
 #include "tagpu_glsl.h"
+#include "tagpu_zoom.h"
+#include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -237,6 +239,12 @@ static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
 static GLint  s_uWaterT, s_uWaterMode, s_uDigT;
 static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepthScale;
 static GLint  s_uCKey = -1, s_uCSurfSz = -1, s_uCVp = -1;  /* composite: the key */
+static GLint  s_uCCur = -1, s_uCCurOff = -1;      /* ...and the cursor it moves */
+/* Half-width of the box the cursor is moved in, game px. A TA cursor comes from
+   a cursor_ary GAF frame and is a few tens of pixels; 64 is comfortably clear of
+   the largest of them, and small enough that "the only engine pixel in here is
+   the cursor" stays the safe assumption it is measured to be. */
+#define CURSOR_PAD 64
 static float  s_zoom = 1.0f;
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
@@ -351,14 +359,36 @@ static const char* CVS =
    uKey < 0 keeps the pre-G13b behaviour exactly. texelFetch, not texture(),
    because the surface is an INDEX texture whose filter state belongs to
    cnc-ddraw and may be linear — interpolated palette indices are garbage. */
+/* MOVING THE MOUSE CURSOR (the other half of the zoom input fix, tagpu_zoom.h).
+   The engine draws its cursor wherever it thinks the mouse is, which while the
+   world is zoomed is the UNZOOMED position `u` we feed it, not where the pointer
+   actually is. It has to be put back at `s`.
+
+   It is done HERE rather than by capturing the draw the way G13d captured the
+   markers, because the cursor is the one thing in the frame that does not go
+   through DrawGameScreen's OFFSCREEN: `0x4C2870`/`0x4C2380` blit it with a NULL
+   context, which makes the blit build its own offscreen over the primary
+   surface, so swapping a pixel base cannot reach it. The composite is the one
+   place that already owns this boundary — it is the code that decides, per
+   pixel, whether the viewport shows ours or the engine's — and inside the
+   viewport the engine's surface is 99.98 % key with NOTHING ON IT BUT THE CURSOR
+   (terrain-depth.md 7.7, measured). So: paint the engine's own texels from the
+   box around `u` at the box around `s`, and let our world cover the box at `u`.
+   Both boxes are small, and the whole branch is off (uCur.z == 0) at zoom 1. */
 static const char* CFS =
     "#version 330 core\n"
     "in vec2 uv; out vec4 frag;\n"
     "uniform sampler2D uTex;\n"
     "uniform sampler2D uSurf;\n"
+    "uniform sampler2D uPal;\n"
     "uniform ivec2 uSurfSz;\n"
     "uniform vec4 uVp;\n"          /* the rect the key fill covers, game px */
+    "uniform vec4 uCur;\n"         /* cursor box at u (x,y,w,h); w=0 = off   */
+    "uniform vec2 uCurOff;\n"      /* s - u                                  */
     "uniform int uKey;\n"
+    "bool inbox(vec2 p, vec4 b){\n"
+    "  return p.x >= b.x && p.x < b.x + b.z && p.y >= b.y && p.y < b.y + b.w;\n"
+    "}\n"
     "void main(){\n"
     "  vec4 c = texture(uTex, uv);\n"
     "  bool empty = c.a < 0.004 && max(max(c.r, c.g), c.b) < 0.004;\n"
@@ -368,6 +398,27 @@ static const char* CFS =
        UI pixel that happens to BE the key index can never be mistaken for it. */
     "  if (uKey >= 0 && px.x >= uVp.x && px.x < uVp.x + uVp.z &&\n"
     "                   px.y >= uVp.y && px.y < uVp.y + uVp.w) {\n"
+    "    if (uCur.z > 0.0) {\n"
+    /* where the pointer is: paint the cursor texel the engine put at u */
+    "      vec2 sp = px - uCurOff;\n"
+    /* ...and only from inside the viewport: `u` is guaranteed to be in it but
+       not 64 px clear of its edge, so the box can straddle the boundary and
+       would otherwise stamp side-panel or top-bar texels into the world */
+    "      if (inbox(sp, uCur) && inbox(sp, uVp)) {\n"
+    "        ivec2 q = clamp(ivec2(sp), ivec2(0), uSurfSz - 1);\n"
+    "        int si = int(texelFetch(uSurf, q, 0).r * 255.0 + 0.5);\n"
+    "        if (si != uKey) {\n"
+    "          frag = vec4(texelFetch(uPal, ivec2(si, 0), 0).rgb, 1.0);\n"
+    "          return;\n"
+    "        }\n"
+    "      }\n"
+    /* where the engine put it: ours covers it, so do NOT fall through to the
+       discard that would reveal the engine's frame and its stale cursor */
+    "      if (inbox(px, uCur)) {\n"
+    "        frag = empty ? vec4(0.0, 0.0, 0.0, 1.0) : c;\n"
+    "        return;\n"
+    "      }\n"
+    "    }\n"
     "    ivec2 p = clamp(ivec2(px), ivec2(0), uSurfSz - 1);\n"
     "    if (int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5) != uKey) discard;\n"
     /* the engine drew nothing here and neither did we: never let the raw key
@@ -475,9 +526,12 @@ static void init_gl(void)
     glUseProgram(s_cprog);
     glUniform1i(glGetUniformLocation(s_cprog, "uTex"), 0);
     glUniform1i(glGetUniformLocation(s_cprog, "uSurf"), 1);
+    glUniform1i(glGetUniformLocation(s_cprog, "uPal"),  2);
     s_uCKey = glGetUniformLocation(s_cprog, "uKey");
     s_uCSurfSz = glGetUniformLocation(s_cprog, "uSurfSz");
     s_uCVp = glGetUniformLocation(s_cprog, "uVp");
+    s_uCCur = glGetUniformLocation(s_cprog, "uCur");
+    s_uCCurOff = glGetUniformLocation(s_cprog, "uCurOff");
     /* a GLSL uniform defaults to 0, and uKey 0 is an ACTIVE key — the whole
        frame would invert against palette index 0. Default it off explicitly. */
     if (s_uCKey >= 0) glUniform1i(s_uCKey, -1);
@@ -559,7 +613,7 @@ static void fbo_size(int w, int h, int ss)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_depTex2, 0);
         st2 = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     s_fboW = w; s_fboH = h; s_fboSS = ss;
     { char b[96]; _snprintf(b, sizeof b, "native: FBO %dx%d ss=%d status=%x/%x",
                             w, h, ss, st, st2); nlog(b); }
@@ -936,29 +990,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     }
     /* View zoom — re-read EVERY frame, unlike the arm state above. It is a
        continuous control, so a 30-frame poll would quantise any ramp to 2 Hz and
-       make a perfectly smooth renderer look like a staircase on video. A tiny
-       file read per frame is nothing next to the palette and fog uploads below.
-       On a bad parse the LAST GOOD value is kept rather than snapping back to
-       1.0: a writer driving a ramp at 60 Hz can be caught mid-write, and a
-       one-frame jump to unzoomed reads as a flicker. Only the file's absence
-       means "no zoom". */
-    {
-        HANDLE zh = CreateFileA("tagpu_zoom.txt", GENERIC_READ,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
-                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-        if (zh == INVALID_HANDLE_VALUE) {
-            s_zoom = 1.0f;
-        } else {
-            char zb[32]; DWORD zn = 0;
-            if (ReadFile(zh, zb, sizeof zb - 1, &zn, 0) && zn > 0) {
-                float z;
-                zb[zn] = 0;
-                z = (float)atof(zb);
-                if (z >= 0.25f && z <= 8.0f) s_zoom = z;
-            }
-            CloseHandle(zh);
-        }
-    }
+       make a perfectly smooth renderer look like a staircase on video. The lever
+       and the transform built on it live in tagpu_zoom.c, because the input path
+       needs exactly the same numbers and the two must never disagree. */
+    s_zoom = tagpu_zoom_read_lever();
 
     /* the effects pass (tagpu_fx.on) rides this frame: it needs the view,
        fog and palette set up here and draws into this FBO */
@@ -1613,7 +1648,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         glBindTexture(GL_TEXTURE_2D, s_colTex2);
         x_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
 
     /* ---- composite over the frame (restore the letterbox viewport) ---- */
     int keyOn = -1;
@@ -1636,12 +1671,33 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         else if (s_fillStall < 1000) s_fillStall++;
     }
     keyOn = (f->surface_tex && terrOwned && s_fillStall < 30) ? tagpu_terr_key() : -1;
+    /* `keyOn >= 0` is precisely "the world you are looking at is OURS, drawn at
+       our zoom" — the terrain is ours and the inverted composite is in force. It
+       is the only honest moment to tell the input path to start unzooming: with,
+       say, only the marker pass armed the screen still shows the engine's 1x
+       world, and bending clicks against it would be the bug this fixes. */
+    if (keyOn >= 0) tagpu_zoom_publish_view(vpL, vpT, vw, vh);
     if (s_uCKey >= 0) glUniform1i(s_uCKey, keyOn);
     if (keyOn >= 0) {
         GLint sz[2]; sz[0] = gw; sz[1] = gh;
         if (s_uCSurfSz >= 0) glUniform2iv(s_uCSurfSz, 1, sz);
         if (s_uCVp >= 0) x_glUniform4f(s_uCVp, (float)vpL, (float)vpT,
                                        (float)vw, (float)vh);
+        /* the cursor the engine drew at `u`, and where it belongs (see CFS) */
+        if (s_uCCur >= 0) {
+            int dx, dy, ux, uy;
+            if (tagpu_zoom_cursor_shift(&dx, &dy, &ux, &uy)) {
+                x_glUniform4f(s_uCCur, (float)(ux - CURSOR_PAD),
+                                       (float)(uy - CURSOR_PAD),
+                                       (float)(2 * CURSOR_PAD),
+                                       (float)(2 * CURSOR_PAD));
+                if (s_uCCurOff >= 0) x_glUniform2f(s_uCCurOff, (float)dx, (float)dy);
+            } else {
+                x_glUniform4f(s_uCCur, 0.0f, 0.0f, 0.0f, 0.0f);
+            }
+        }
+        x_glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, s_palTex);
         x_glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, (GLuint)f->surface_tex);
     }

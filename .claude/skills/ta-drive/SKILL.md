@@ -508,6 +508,27 @@ Three things to know:
 - **`passive` is the A/B lever** and hands *everything* back — bars, capture and the
   selection rect — so the engine draws the lot while we still gather and count.
 
+**Zoom is `tagpu_zoom.txt` in the gamedir** — a bare float 0.25–8.0, re-read every frame;
+delete the file for 1×. Write it **atomically** (temp + rename) or the DLL reads a torn
+value. Since G13e the input follows it: a click lands on the world point it is drawn
+over, the engine's cursor is moved back under the pointer, and the minimap's view box and
+the scroll rate scale with it. `tacli arm <i> zoom.on` (at launch, like every other
+code-patching pass) additionally installs the one engine patch it needs — the minimap
+view rectangle — and logs `zoom: minimap view rect ARMED`. Everything else needs no arm
+at all and is inert at 1×.
+
+Two things to know when driving zoomed:
+
+- **`tacli click` takes the position ON SCREEN**, the same as your eyes — the transform
+  is applied on the far side of `g_ddraw.cursor`, so the injected path and the human's
+  mouse cannot disagree.
+- **At zoom < 1 the outer ring of the view is DISPLAY-ONLY.** The engine can only name
+  screen positions inside its own 1× viewport, so the world the zoom-out reveals beyond
+  it has no address: a click there is **dropped** (the selection is left alone rather
+  than being moved to whatever sat at the 1× position), and the captured marker layers
+  stop at the same edge. At 0.5× the addressable region is the central half of the frame
+  in each axis. Zoom ≥ 1 has no such limit.
+
 **Particles (smoke, fire, wakes, nanolathe) are `sfx.on`** — tokens `log`, `passive`,
 `nosmoke`, `nofire`, `nowake`, `nonano` — on the same `fxown.on` patch set (tacli auto-arms
 it when either `fx.on` or `sfx.on` exists), with its own live skip: `arm sfx.on="log
