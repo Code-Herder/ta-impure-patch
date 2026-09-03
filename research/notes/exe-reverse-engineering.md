@@ -424,9 +424,15 @@ off `objdump` in this session unless a row says otherwise.]
 | `0x48CD80` | the unit-under-cursor lookup *[INFERRED]*; its return is stored as a WORD to `main+0x2CBA` at `0x499283`. **Not disassembled** — known only by that call site and by the field's live behaviour | call site + live read |
 | `0x48D220` | `CorretCursor_InGame(orderByte)` — returns the cursor index to show. Two call sites: `0x491D36` and `0x499297`. `ret 4` | name [CORPUS] (TADR, `tools/ta_symbols.txt`); body from disassembly |
 | `0x43E490` | the per-candidate cursor mapper: `(orderByte, candidate, hoveredUnit, &worldPos)` → cursor index, `ret 0x10`. **Exactly one caller, `0x48D3E4`**, and the literal `0x0043E490` appears nowhere in the image — no dispatch table, no indirect call | disassembly + literal scan |
-| `0x4AB400` | `SetUICursor(uiCtx, gafSequence)` — 12 call sites; `0x499200` reaches it at `0x4992C8`, its only one | name [CORPUS]; call count from disassembly |
+| `0x4AB400` | `SetUICursor(uiCtx, gafSequence)` — 12 call sites, of which **five are inside `0x499200`**: `0x4992C8` (the cursor block below) plus `0x499560`, `0x4995A3`, `0x49966D`, `0x4997F7` in its button handling | name [CORPUS]; call sites from disassembly |
 
-**What `0x499200` does, and the gate that decides whether a cursor is chosen at all.**
+**What `0x499200` does, and the gate that decides whether a cursor is chosen at all.** This is
+the head of the handler, not the whole of it: there is no `ret` between `0x499200` and the `c3`
+at `0x499876`, so `done` below means "jump to `0x4992CD`", where the same function carries on
+into `call 0x41C180`, the `main+0x2CC6 & 0x20` test at `0x4992D8` and the mouse-button handling
+— which is where two of the four ordering readers of `main+0x37EFA` (`0x499352`, `0x499567`)
+live. *[Extent FROM REVIEW 2026-09-03; the block below was first written as though each `done`
+returned.]*
 
 ```
 edx  = main                       ; ds:0x511DE8
@@ -522,11 +528,19 @@ Measured on a **stock** instance (nothing armed), commander selected, on `shadow
 | own building | `0x0F` `cursorselect` | `0x0F` `cursorselect` |
 
 `main+0x37EFA` is the `Interface Type` registry value (already in `resolution.md`), read at
-`0x42F9AF` and clamped to ≤ 1 at `0x42F9CD`. It is **read at eight sites**: `0x42F9F6` and `0x430F08` (the settings
-round-trip), `0x43E505` (this one, cursor only), `0x43F9EF`, and `0x499046` / `0x499162` /
-`0x499352` / `0x499567` (the click handlers, which is where left-vs-right ordering lives). That
-split is the whole licence for our patch: neutering the branch at `0x43E50C` changes which
-sprite is shown and cannot change which button issues an order.
+`0x42F9AF` and clamped to ≤ 1 at `0x42F9CD`. It is **read at nine sites**: `0x42F9F6` and `0x430F08` (the settings
+round-trip), `0x45EF6D` (the options screen pushing the value into its `LEFTCLICK` gadget,
+`0x4A1080("LEFTCLICK", value)`), `0x43E505` (this one, cursor only), `0x43F9EF`, and `0x499046`
+/ `0x499162` / `0x499352` / `0x499567` — the last two inside `0x499200`'s own button handling.
+Those four are where left-vs-right ordering lives *[INFERRED from their position in the input
+path; not traced instruction by instruction]*.
+
+**The licence for the patch is the one-caller fact above, not this enumeration.** `0x43E490`
+contains no store to `main` at all and is reached from exactly one place, so neutering
+`0x43E50C` changes which sprite is chosen and can reach nothing else — that holds however many
+readers of `main+0x37EFA` turn out to exist. *[The ninth reader is FROM REVIEW 2026-09-03; the
+list first said eight and the split was called "the whole licence", which overstated what an
+enumeration can prove.]*
 
 **`cursor_ary` — index → GAF sequence.** Base `main+0x1487F`, entry `idx*4`, matching
 `ui-markers.md`'s `cursor_ary[0x15]` [CORPUS]. The mapping is read out of the loader at
@@ -571,8 +585,13 @@ seven by driving the game and reading `main+0x2CBE` back, and `cursormove` and
   there provably cursor-only, and it is the fact the whole fix rests on.
 - **`0x499200` is never called.** Only installed, by mode 6. Anything hunting for "where the
   cursor is chosen" by following calls will not find it.
-- **Nothing in `.text` reads the displacement `0x391F5`.** All twelve references are stores. How
-  the dispatcher fetches the installed handler was not established.
+- **The handler is dispatched by `call dword [eax+0x391F5]` at `0x499A1C`.** Of the 24
+  references to that displacement in `.text`, 23 are stores — the nine arms of `0x490B30`'s mode
+  table plus `0x491617`, `0x49297E`, `0x492A7F`, `0x496AFF`, `0x496B94`, `0x496BF6`, `0x496C3D`,
+  `0x496CA4`, `0x496D75`, `0x496D9D`, `0x496DFF`, `0x498457`, `0x4996DF`, `0x499852` — and that
+  one is the read. *[FROM REVIEW 2026-09-03: this line first claimed there was no reader at all.
+  It was written off a `grep | head -12`, so the twelfth match was the last one seen and the
+  absence was an artefact of the pipe. Confirmed by re-running it unbounded.]*
 - **Interface Type is not one switch with one meaning.** It gates the cursor at exactly one
   site and ordering at four others, and those are independent — which is why the game can be
   left on right-mouse orders and still show the classic cursors.

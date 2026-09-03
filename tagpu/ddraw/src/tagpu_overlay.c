@@ -418,9 +418,9 @@ static void writeback_paint(const TAGPU_FRAME* f)
 }
 
 
-/* Log TA's own mouse position (game-space, read from memory). No longer drawn,
-   but still the way to read the engine's cursor without touching the user's
-   pointer (input-firewall.md). */
+/* Log TA's own mouse position (SCREEN space, read from memory — 0x498DA0 is what
+   makes the world point). No longer drawn, but still the way to read the engine's
+   cursor without touching the user's pointer (input-firewall.md). */
 static void log_mouse(const TAGPU_FRAME* f, char* ta)
 {
     int mx = *(int*)(ta + OFF_MOUSE);
@@ -428,7 +428,7 @@ static void log_mouse(const TAGPU_FRAME* f, char* ta)
     if (mx < -50 || mx > 4000 || my < -50 || my > 4000) return;
     static unsigned last = 0;
     if (f->frame_counter - last >= 15) { last = f->frame_counter;
-        char b[96]; _snprintf(b, sizeof b, "mouse: game=(%d,%d)", mx, my); olog(b); }
+        char b[96]; _snprintf(b, sizeof b, "mouse: screen=(%d,%d)", mx, my); olog(b); }
 }
 
 /* Walk the live unit array and log what tacli reads: the `units:` line every

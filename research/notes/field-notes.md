@@ -162,8 +162,9 @@ cost time; each is a landmine for the next GL-hook we add.
 ## G2 state-read — findings (2026-08-31)
 
 - **Reading live engine state works and is safe.** `*(void**)0x00511DE8` is the main game struct;
-  it is valid even at the menu. We read the mouse position (`+0x2C76`, a `POINT` in game space),
-  the unit array bounds (`+0x14357`/`+0x1435B`, stride `0x118`, slot 0 is a dummy), the alive mask
+  it is valid even at the menu. We read the mouse position (`+0x2C76`, a `POINT` in **screen**
+  space — `0x498DA0` is what turns it into the world point; this line said "game space" until
+  2026-09-03), the unit array bounds (`+0x14357`/`+0x1435B`, stride `0x118`, slot 0 is a dummy), the alive mask
   (`+0x110`, alive bit `0x10000000`, skip bit `0x4000`), positions (`+0x6C/+0x70/+0x74` as signed
   shorts) and the scroll origin (`+0x1431F/+0x14323`). All reads are read-only, guarded by a
   `>0x600000` pointer sanity check so the menu (no unit array) is a safe no-op. No crash. [VERIFIED]
