@@ -63,9 +63,16 @@ float tagpu_zoom_read_lever(void);
    Only WM_MOUSEWHEEL is taken, only while a zoomed world is actually on screen
    (so the menus can never be wheeled), only while the pointer is over the world
    viewport (the side panel, the minimap and every dialog keep their wheel for
-   whatever wants it later), and not at all when tagpu_wheel.off exists. `lparam`
-   must be the CLIENT-space point — cnc-ddraw has already converted the wheel's
-   screen-space lParam by the time the message reaches either door.
+   whatever wants it later), and not at all when tagpu_wheel.off exists.
+
+   `lparam` must be the GAME-space point, which is the space the engine's own
+   window procedure is handed and the space tagpu_zoom_publish_view() reports
+   the viewport in — so the gate compares like with like. A hardware wheel
+   arrives in SCREEN space and cnc-ddraw has already walked it the whole way by
+   the time either door is reached: ScreenToClient, then the letterbox offset
+   (mouse.x_adjust) and the unscale (mouse.unscale_x), then a clamp to
+   g_ddraw.width/height. Do not pass a raw client point: wherever adjmouse
+   scaling is in force, client and game space differ.
 
    Message thread. It only accumulates the notches; the level itself moves on
    the render thread in tagpu_zoom_read_lever(), which is what keeps one owner

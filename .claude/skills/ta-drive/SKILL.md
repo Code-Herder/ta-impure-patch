@@ -520,7 +520,10 @@ about six frames. It is live **only while our zoomed world is actually on screen
 pointer is over the world viewport** — the menus, the side panel and the minimap keep their
 wheel, and the log says which gate refused (`zoom: wheel ignored — no zoomed world on
 screen` / `— pointer is off the world viewport`). Every accepted turn logs
-`zoom: wheel +720 -> 1.000`. `tacli arm <i> wheel.off` disables it live.
+`zoom: wheel +720 -> 1.000`, once per gesture rather than per notch.
+`tacli arm <i> wheel.off` disables it live and **`tacli arm <i> wheel.off=off`
+puts it back** — the re-enable is the flag's own removal, not a `wheel.on`,
+which would only leave a stray file and a dead wheel.
 
 ```bash
 tools/tacli wheel <i> -6 --at 576 384    # six notches out, pointed at the world first

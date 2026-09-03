@@ -272,10 +272,11 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
     case TAGPU_M_MDOWN: msg = WM_MBUTTONDOWN; vk = VK_MBUTTON; down = 1; break;
     case TAGPU_M_MUP:   msg = WM_MBUTTONUP;   vk = VK_MBUTTON;           break;
     /* One notch, carried the way the hardware carries it: the signed delta in
-       the high word of wParam and a CLIENT-space point in lParam, which is what
-       cnc-ddraw has already made of a real wheel by this point. Going through
-       the same message rather than calling the zoom directly is what makes an
-       injected wheel test the path a player's wheel takes. */
+       the high word of wParam and a GAME-space point in lParam — the same space
+       cnc-ddraw has unscaled a real wheel into by the time it reaches the other
+       door, and the space gx/gy are already in here (see the lParam comment
+       below). Going through the same message rather than calling the zoom
+       directly is what makes an injected wheel test a player's path. */
     case TAGPU_M_WHEELUP: msg = WM_MOUSEWHEEL; wheel =  WHEEL_DELTA; break;
     case TAGPU_M_WHEELDN: msg = WM_MOUSEWHEEL; wheel = -WHEEL_DELTA; break;
     }

@@ -58,14 +58,34 @@ static int  in_viewport(int x, int y, int L, int T, int W, int H);
 static volatile LONG s_wheelAccum;              /* raw delta, message thread */
 static float         s_wheelTgt = 1.0f;         /* render thread only        */
 static float         s_wheelCur = 1.0f;         /* render thread only        */
+static LONG          s_wheelPend;               /* notches not yet logged    */
 
 /* Pin the wheel to a level without an ease, and throw away any notches that
    arrived alongside. Used while the file lever is in force: the file wins, and
    when it goes away the wheel takes over from exactly where it left the view. */
 static void wheel_pin(float z)
 {
-    InterlockedExchange(&s_wheelAccum, 0);
+    LONG dropped = InterlockedExchange(&s_wheelAccum, 0);
     s_wheelTgt = s_wheelCur = z;
+    s_wheelPend = 0;
+    /* Say when the file is the reason the wheel did nothing. This is the only
+       gate that swallows a notch silently — the other two report themselves
+       from tagpu_zoom_wheel() — and it is the easiest to hit by accident, from
+       a scenario that wrote tagpu_zoom.txt and never removed it. Throttled: the
+       pin runs every frame the file exists. */
+    if (dropped) {
+        static DWORD tick;                       /* render thread only */
+        DWORD now = GetTickCount();
+        if (now - tick > 1000) {
+            char b[96];
+            tick = now;
+            _snprintf(b, sizeof b,
+                      "zoom: wheel %+d ignored - tagpu_zoom.txt is in force at %.3f",
+                      (int)dropped, z);
+            b[sizeof b - 1] = 0;
+            zlog(b);
+        }
+    }
 }
 
 /* Fold in the notches since the last frame and take one step of the ease. */
@@ -86,12 +106,22 @@ static float wheel_level(void)
            narrower than one 10% notch, and the off-grid levels a clamp produces
            (0.25 * 1.1^n) miss it too, so nothing else can fall into it. */
         if (s_wheelTgt > 0.999f && s_wheelTgt < 1.001f) s_wheelTgt = 1.0f;
-        {
-            char b[64];
-            _snprintf(b, sizeof b, "zoom: wheel %+d -> %.3f", (int)d, s_wheelTgt);
-            b[sizeof b - 1] = 0;
-            zlog(b);
-        }
+        s_wheelPend += d;
+    }
+    else if (s_wheelPend) {
+        /* ONE line per gesture, at the end of it, not one per frame that
+           carried notches. zlog is an fopen/fprintf/fclose and this runs on the
+           render thread, so a sustained spin would otherwise open the log every
+           frame for as long as it lasted — and unlike every other per-frame log
+           in this stack (tagpu_spxlog.on and friends) there is no flag file to
+           turn it off. Deferring to the settle costs nothing diagnostically: the
+           total and the level it landed on are what the line was ever read for. */
+        char b[64];
+        _snprintf(b, sizeof b, "zoom: wheel %+d -> %.3f",
+                  (int)s_wheelPend, s_wheelTgt);
+        b[sizeof b - 1] = 0;
+        s_wheelPend = 0;
+        zlog(b);
     }
     if (s_wheelCur == s_wheelTgt) return s_wheelCur;
 
