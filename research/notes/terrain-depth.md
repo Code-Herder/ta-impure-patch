@@ -581,20 +581,32 @@ one quad per visible cell. Three things fall out of §2 exactly as predicted:
   float** for every `N` a viewport can produce (`|N|` far below 2²⁴), and the vertex
   shader's scale-about-the-centre is a pure function of that position — so two
   neighbours can never disagree about where their shared edge is. Plain
-  rasterisation therefore **cannot** open a gap between tiles. Worth knowing
-  because a coloured hairline in the world looks exactly like the tile-seam
-  artefact that 2D-drawn-in-3D is famous for, and is not one (§7.6). Atlas bleed is
-  out for the same kind of reason: interpolated `u` stays inside `[u0, u1)` for any
-  fragment centre inside the quad, and the atlas is `GL_NEAREST` with no mipmaps,
-  so a fragment cannot reach the neighbouring cell however small the quad gets.
+  rasterisation therefore **cannot** open a gap between tiles — that much is
+  still true, and it is worth knowing because a coloured hairline in the world
+  looks exactly like the tile-seam artefact that 2D-drawn-in-3D is famous for.
+
+  **The sentence that used to follow it was wrong, and it cost this project the
+  interior-crack hunt.** It read: *atlas bleed is out for the same kind of
+  reason — interpolated `u` stays inside `[u0, u1)` for any fragment centre
+  inside the quad, so a fragment cannot reach the neighbouring cell however
+  small the quad gets.* The half-open interval is the error. A fragment centre
+  can land **exactly on** the quad's far edge, not merely inside it, and then
+  the interpolated `u` is exactly `u1` — the one value `[u0, u1)` excludes — and
+  `GL_NEAREST` resolves `floor(u1·W)` to the first texel of the **next** atlas
+  cell. Geometry being watertight is what makes this possible rather than what
+  rules it out: the two quads agree about the edge to the bit, so a sample point
+  sitting on it is a real case rather than a rounding accident. §7.6's fifth
+  failure mode is that bug, reproduced and fixed.
 
 **The atlas is built once per map**, not per frame: `LoadMap` builds `TILE_SET` and
 nothing changes it afterwards. A `GL_TEXTURE_2D_ARRAY` is not viable — Two Continents
 has **5062 tiles** against the usual 2048-layer cap — so it is one `GL_R8` texture of
-fixed 32×32 cells, 64 per row: **2048×2560 for 5062 tiles (5.0 MB)**, sized from the
-count and capped at `GL_MAX_TEXTURE_SIZE`. A map change is the `TILE_SET` pointer or
-its count moving; measured live, switching Two Continents → Anteer Strait **in the
-same process** rebuilt it to 2048×3552 for 7051 tiles.
+32×32 cells on a **34-texel pitch**, 64 per row: **2176×2720 for 5062 tiles (5.9 MB)**,
+sized from the count and capped at `GL_MAX_TEXTURE_SIZE`. The spare texel on each side
+is the cell's own outermost row/column repeated — a guard rail, not padding, and §7.6's
+fifth failure mode is why. A map change is the `TILE_SET` pointer or its count moving;
+measured live (before the pitch changed), switching Two Continents → Anteer Strait **in
+the same process** rebuilt it for 7051 tiles.
 
 **Fog needed one change, and only one.** Terrain is now the bottom layer, so where the
 overlay paints an unexplored cell **solid black it must paint black rather than
@@ -738,12 +750,13 @@ own terrain; **fatal once G13b suppresses that overlay**, because then nothing d
 grey band at all. The gate is now "the grid uploaded": what the overlay paints is
 decided entirely by the grid bytes, and an inactive mode is already an all-zero grid.
 
-### 7.6 Failure modes — three the review found, and one that shipped
+### 7.6 Failure modes — three the review found, one that shipped, and the reported one
 
 Review found three ways the key fill could reach the screen; play found a fourth the
-day after, and it is the one worth reading first if you are here because something in
-the world is the wrong colour. All four are closed, and the shape of the fixes is worth
-keeping:
+day after; and the fifth — the interior crack this whole section was opened for — turned
+out not to involve the key at all. **If you are here because something in the world is
+the wrong colour, read the fourth and fifth first.** All five are closed, and the shape
+of the fixes is worth keeping:
 
 - **Emitting without owning.** Our terrain is opaque and covers the whole viewport, so
   drawing it while the composite is *not* inverting hides every engine overlay. The pass
@@ -808,14 +821,81 @@ never touch them. Measured with the engine drawing its own terrain and overlay w
 draw features: mean grey-band luminance **62.21 (engine) vs 61.77 (ours)** — a second
 remap would roughly halve it.
 
-**What is not closed is the report that started it.** The reported artefact was in
-the map **interior**, and the interior has not been reproduced. §7.1 rules out plain tile
-seams, so it is a different mechanism. Untried ground, in order of promise: a map whose
-tile set overflows the atlas (`idx >= s_atlasN` cells are **skipped**, which punches real
-interior holes — `junk=0` on Two Continents); fog of war actually active, since both
-sweeps ran fully lit and never exercised `TAGPU_GLSL_FOG_TERRAIN` or the shade remap;
-`ss=1`, where a leak would be a whole key pixel rather than a fraction; zoom above 2.5;
-and transients during the wheel ease, which a settled-zoom capture cannot see.
+#### The fifth mode, and the one the interior report was about
+
+[LIVE-VERIFIED 2026-09-03] **A fragment centre landing exactly on a quad's far edge
+samples one texel outside the atlas cell.** This is the reported interior crack, and it
+is not a key leak at all — which is why 350+ frames of sweeping never found it (below).
+
+**The mechanism.** Quads are emitted on integer game-pixel boundaries, so at some zooms
+a quad's far edge falls exactly on a fragment centre. The rasteriser must give that
+fragment to exactly one of the two quads sharing the edge, and — measured on this stack,
+not assumed — it gives it to the **upper/left** one. Its interpolated `u`/`v` is then
+exactly `u1`/`v1`, and `GL_NEAREST` reads `floor(u1·W)`: the first texel of the next
+atlas cell. On terrain the next cell down the atlas is tile index **+64**, an unrelated
+tile, so the sample is an arbitrary other piece of the map — blue over forest, because
+Two Continents' tile set is mostly water. On a GAF sprite it is the shelf packer's
+**gutter**, which `glTexImage2D(…, NULL)` had never written: index 0, a real palette
+entry (black) rather than the frame's colour key, so it survived the key test and drew
+**a black hairline down the right of every tree**.
+
+**When it fires** is pure arithmetic, and it is why the bug came and went. At zoom `z`
+with supersample `ss` a tile's screen pitch is `32·z·ss` FBO px and its edges sit at
+`z·y0·ss + (1−z)·cy·ss`; the pathology needs that to be a half-integer. At `z = 0.25`,
+`ss = 2` it reduces to the **parity of `y0`**, so moving the camera **one world pixel**
+turns the whole artefact on or off — measured, 8 phases, at 1024×768 and at 1920×1080:
+a period-8 row anomaly of **1.92×** and **2.05×** the baseline at odd `eyeY`, **1.04×**
+and **1.12×** at even. At `ss = 1` the same condition is mod 4 and the peak is **2.05×**.
+At `z = 0.5` and `z = 1` the edges land on integers and it cannot fire at all — which is
+why every earlier check, all of them at or near 1×, was clean.
+
+**Two fixes, because there are two halves.** *Padding* stops the sample leaving the cell:
+every terrain cell now sits on a **34-texel pitch with its outermost row and column
+repeated on all four sides** (`CELL_PITCH`, atlas 2176×2720 for 5062 tiles), and every
+GAF frame gets the same 1-texel border (the packer advances `w+2`/`h+2` and uploads the
+bordered block, instead of reserving one gutter and never writing it). That is also what
+a **filtered** sampler will need the day this stops being `GL_NEAREST`, which is the
+reason the border is on all four sides rather than the two that would close today's bug.
+
+Padding alone is **not** enough under `GL_NEAREST`, and the measurement says so: with the
+guard texel in place the fragment reads a *copy of the cell's last row*, which is out of
+phase with the row cadence the rest of the 4×-minified tile is sampled on, and TA's tile
+art is dithered — so an out-of-phase row still reads as a coloured line. It moved the
+seam metric from **1.92× to 1.86×**, i.e. not at all. So the geometry moves too:
+`TAGPU_EDGE_NUDGE` (`tagpu_glsl.h`) subtracts **1/32 of a game-screen pixel** in the
+terrain vertex shader, *after* the zoom scale so it is the same sub-pixel distance at
+every zoom. That puts a coincident fragment centre inside the **following** quad, where
+it samples that cell's first texel — the thing it is standing on — and the cadence stays
+uniform. 1/32 px is ~300× the float noise in a coordinate that size and 1/8 of a texel at
+the 0.25 zoom floor, so it can neither be lost nor change which texel any other fragment
+reads. Sprites need no nudge: repeating a silhouette's edge column is correct, because a
+sprite's neighbour is not another piece of the same picture.
+
+**Verified.** Two Continents, `feat-forest`. Period-8 row anomaly **1.03–1.13×** at every
+camera phase, at `ss=1` and `ss=2`, 1024×768 and 1920×1080 — against 1.92×/2.05× before,
+and against **1.71×** in the frame the user captured from the running game. No periodic
+anomaly at any of ten zoom levels 0.25→8.0 (the residual outliers are single map-edge and
+coastline rows). The black hairline beside every tree is gone; the feature atlas still
+packs the map's frames (`atlas=27`) with the wider border. **And the 1× path is
+untouched, bit-exactly**: the GL frame at zoom 1.0 is **0 differing pixels** against a
+build of the same tree without these three files, and the `over` A/B residual against the
+engine's own blit is identical on both (39.7583 %, which is the fog remap, not us).
+
+**Why the sweeps missed it.** The detector was `min(r,b) − g` — the *key's* tint — because
+every hypothesis at the time was a key leak. This defect never touches the key: it draws
+a neighbouring **tile**, whose colour is ordinary map art. The 350+ archived frames were
+very likely carrying it all along. A seam that is periodic in screen space wants a
+periodic detector, not a colour one: score each row against its own two neighbours and
+group by `y mod (32·z)`; a clean frame is flat across the phases and a leaking one has
+one phase standing 2× above the rest.
+
+**What this does not close.** The nudge is applied to the terrain pass only, so features,
+effects, particles and markers still rasterise on the un-nudged grid — they are correct
+today because their atlases now have borders and a repeated silhouette edge is harmless,
+but a future filtered sampler will want the same treatment and the same reasoning. The
+three leads that were never tried are still untried and now unmotivated: a tile set that
+overflows the atlas (`idx >= s_atlasN` cells are skipped, `junk=0` on Two Continents),
+fog actually active during a sweep, and transients during the wheel ease.
 
 ### 7.7 What is left inside the viewport
 

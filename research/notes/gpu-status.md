@@ -314,6 +314,28 @@ extreme of the range and inside it everywhere else.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 
+### 3.0 Closed since the last pass: the interior cracks at zoom-out
+
+**Reproduced, root-caused and fixed** ([terrain & depth](terrain-depth.html) §7.6, the *fifth*
+mode). Two artefacts, one cause: at zoom 0.25 a quad's far edge can land exactly on a fragment
+centre, and that fragment's `u`/`v` interpolates to exactly `u1`/`v1`, which `GL_NEAREST` reads as
+the first texel of the **next atlas cell** — an unrelated tile for terrain (the blue hairlines
+along tile edges) and the packer's unwritten gutter for a GAF sprite (the black hairline down the
+right of every tree). It is **not** a key leak, which is why the key-tint detector used for 350+
+frames of sweeping was blind to it by construction.
+
+Fixed by a 1-texel replicated border on all four sides of every atlas cell (terrain now on a
+34-texel pitch, 2176×2720; GAF frames advance `w+2`/`h+2`) **plus** `TAGPU_EDGE_NUDGE`, a 1/32
+game-screen-pixel offset in the terrain vertex shader — the border alone leaves the fragment
+reading a repeated row that is out of phase with the minified tile's sampling cadence, which on
+dithered tile art is still a visible line (measured: 1.92× → 1.86×, i.e. no help). Verified flat
+(1.03–1.13× against a 1.92–2.05× baseline) at every camera phase, `ss=1` and `ss=2`, 1024×768 and
+1920×1080, across ten zoom levels; **1× output is bit-identical** to a build without the change.
+
+The border is also what a filtered sampler will need when the atlases stop being `GL_NEAREST`,
+which is why it is on all four sides rather than only the two that close today's bug.
+
+
 Ranked by how much they cost a player.
 
 ### 3.1 The ring at zoom < 1 — closed for play, bounded for markers
@@ -383,17 +405,6 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 ### 3.3 Open questions, not limits
 
-- **Blue seams reported in the map INTERIOR at some zoom levels, and not reproduced**
-  ([terrain & depth](terrain-depth.html) §7.6, "a fourth mode"). A blue that does not belong to the
-  tile art is the composite key — index 254 is bright cyan — and one such leak *was* found and
-  fixed on `worktree-gpu_renderer_bug`: part-covered pixels blended a fraction of the fill, drawing
-  a hairline along the **map boundary** at 29 of 151 zoom levels. But the report is about the
-  interior, and three sweeps totalling 350+ frames (151 levels zooming out, 151 zooming in, ten at
-  each of five camera positions) put every leak on the boundary. §7.1 rules out tile seams outright
-  — neighbouring quads share bit-identical vertices — so the interior case is a different mechanism
-  and is still open. Ranked leads are in §7.6. Note the fix also turns any *remaining*
-  part-coverage leak **black** rather than blue, so a repro attempt should hunt thin black lines
-  too, or revert it first.
 - **The MAPPED anomaly** ([terrain & depth](terrain-depth.html) §5.2) — two LOS stores that will
   not reconcile. Unresolved, and moot for rendering.
 - **A scenario `move` order across the Two Continents forest** walks the unit to the map's west
