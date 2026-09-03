@@ -925,12 +925,17 @@ def _launch(args) -> dict:
     meta["args"] = argv
     inst.save_meta(meta)
     pointer_before = pointer_pos(display) if not args.no_restore_pointer else None
+    # Baseline the crash log BEFORE the process exists: TA writes ErrorLog.txt
+    # the instant it faults, and a fault this early is exactly the one worth
+    # catching. Sampled after Popen, that crash is newer than nothing and gets
+    # attributed to a previous run -- reported as "no crash", which is the one
+    # answer that sends you looking in the wrong place.
+    crash_since = crash_mtime(inst)
     proc = subprocess.Popen(["wine", "TotalA.exe"] + argv, cwd=str(inst.gamedir), env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
     deadline = time.time() + args.timeout
     pid = None
-    crash_since = crash_mtime(inst)
     while time.time() < deadline:
         pid = inst.pid()
         if pid and inst.window():

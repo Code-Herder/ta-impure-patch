@@ -1467,7 +1467,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     if (!cch) break;
                 }
                 nm[31] = 0;
-                n2->hires = tagpu_hires_mesh(nm);
+                n2->hires = tagpu_hires_mesh(nm, f->frame_counter);
                 /* A replacement unit contributes NO vertices to this pass, so
                    routing it there while the other pass cannot draw makes it
                    invisible rather than stock — and the other pass latches off

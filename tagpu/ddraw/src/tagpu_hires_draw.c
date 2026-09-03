@@ -289,13 +289,23 @@ static void ensure(void)
         dlog("hires draw: missing GL proc"); s_state = 2; return;
     }
     GLuint vs = mksh(GL_VERTEX_SHADER, VS), fs = mksh(GL_FRAGMENT_SHADER, FS);
-    if (s_state == 2) return;
+    /* a failed build still has to give its objects back: a display-mode change
+       restarts the render thread with a new context and runs all of this
+       again, so "one-shot" is only true of a context, not of a session */
+    if (s_state == 2) { glDeleteShader(vs); glDeleteShader(fs); return; }
     s_prog = glCreateProgram();
     glAttachShader(s_prog, vs); glAttachShader(s_prog, fs);
     glLinkProgram(s_prog);
     GLint ok = 0;
     glGetProgramiv(s_prog, GL_LINK_STATUS, &ok);
-    if (!ok) { dlog("hires draw: link FAILED"); s_state = 2; return; }
+    if (!ok) {
+        dlog("hires draw: link FAILED");
+        glDeleteShader(vs); glDeleteShader(fs);
+        glDeleteProgram(s_prog);
+        s_prog = 0;
+        s_state = 2;
+        return;
+    }
     glDeleteShader(vs); glDeleteShader(fs);
 #define U(n) glGetUniformLocation(s_prog, n)
     u_game = U("uGame");        u_offset = U("uOffset");
@@ -381,7 +391,11 @@ static const float* ident_pose(void)
     return I;
 }
 
-int tagpu_hires_draw_ready(void) { return s_state != 2; }
+/* Builds the program if it has not been built, so the answer is the truth and
+   not "nobody has asked the driver yet" -- the caller routes units on this,
+   and a replacement unit routed to a pass that cannot draw is invisible rather
+   than stock. CALL ONLY WITH A CURRENT GL CONTEXT, like tagpu_hires_vao. */
+int tagpu_hires_draw_ready(void) { ensure(); return s_state != 2; }
 
 void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
                       int shadowPass, unsigned frame_counter)

@@ -9,8 +9,8 @@ statue:
 cp armpw.glb <instance>/gamedir/hires/armpw.glb     # lowercase unit def name
 ```
 
-That is the whole interface. No registry key, no FBI tag, no restart: the slot stats the file
-every frame and reloads when its write time moves, so the edit loop is about two seconds. The
+That is the whole interface. No registry key, no FBI tag, no restart: the slot looks at the file
+every 30 frames and reloads when its write time moves, so the edit loop is about two seconds. The
 file going away puts the engine's 3DO back.
 
 | Piece of it | Where |
@@ -42,8 +42,13 @@ engine, not the file), sparse accessors, texture wrap modes (UVs clamp), KHR ext
 every material channel past base colour + normal + metallic/roughness.
 
 Caps, all of which log when they bite: 65536 triangles, 32 materials, 32 images, 2048 px on an
-image side, and `TAGPU_HMAXPIECE` = **48 posable pieces** (a GPU budget: the vertex shader
-spends 3 `vec4` of uniform on each).
+image side, `TAGPU_HMAXPIECE` = **48 posable pieces** (a GPU budget: the vertex shader spends
+3 `vec4` of uniform on each), and **8 replacement models loaded at once** — that last one counts
+only types that actually have a file, so ordinary units on screen never consume it.
+
+An image that fails to decode says so too. PNG is the only decoder in the DLL and a JPEG is
+legal glTF, so a normal Blender export can hit it; the material falls back to 1×1 white, which
+otherwise reads as a broken export rather than a rejected image.
 
 ## Axes: the round trip lands one axis away from where you would guess
 

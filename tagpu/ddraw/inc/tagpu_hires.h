@@ -18,9 +18,10 @@ typedef struct {
     int   first, count;       /* first vertex and vertex count, for glDrawArrays    */
 } TAGPU_HGROUP;
 
-/* NULL when no replacement exists for the type. Cheap to call per frame: it
-   only stats the file, and reloads when the write time moves. */
-const void*  tagpu_hires_mesh(const char* defname);
+/* NULL when no replacement exists for the type. Cheap to call per unit per
+   frame: the answer is remembered per def name, and the file itself is only
+   looked at (and reloaded, when its write time moved) every 30 frames. */
+const void*  tagpu_hires_mesh(const char* defname, unsigned frame);
 int          tagpu_hires_ngroup(const void* mesh);
 /* The pieces the model can be posed by: one per glTF node carrying geometry,
    in the order the vertices' piece attribute tags them. The NAME is the whole

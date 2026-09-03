@@ -63,7 +63,9 @@
 #include "lodepng.h"
 #include "tagpu_hires.h"
 
-#define MAXMESH   8        /* replacement types held at once                 */
+#define MAXMESH   8        /* replacement MODELS held at once (the payload)  */
+#define MAXNAME   256      /* def names remembered, with or without a model  */
+#define RECHECK   30       /* frames between file lookups for one name       */
 #define MAXTRI    65536    /* triangles in one replacement model             */
 #define MAXGRP    32       /* materials per model                            */
 #define MAXIMG    32       /* distinct images per model                      */
@@ -90,7 +92,6 @@ typedef struct {
     char     path[128];
     FILETIME mtime;
     int      valid;
-    int      announced;        /* the one "looked here, found this" log line  */
     int      ntri;
     float*   v;                /* 3 * ntri verts, HVSTRIDE floats each       */
     HImg     img[MAXIMG];
@@ -105,8 +106,26 @@ typedef struct {
 } HMesh;
 
 static HMesh s_mesh[MAXMESH];
-static int   s_nmesh = 0;
 static GLuint s_white = 0;     /* 1x1 opaque white, for untextured materials */
+
+/* Every def name the gather has handed us, with or without a replacement.
+   This is deliberately NOT the mesh table. A type with no .glb must not
+   consume one of the MAXMESH payload slots — the gather asks about every
+   visible unit's type, so nine ordinary types on screen would otherwise fill
+   the table and a real replacement would never load again, silently, and only
+   in a game busy enough to have nine (which is why a two-unit test scenario
+   never showed it). Keeping the answer here also means the file lookup is
+   once per name per RECHECK frames rather than two syscalls per unit per
+   frame; a .glb dropped in still takes effect within half a second. */
+typedef struct {
+    char     name[32];
+    int      mesh;             /* index into s_mesh, -1 = no replacement     */
+    unsigned checked;          /* frame counter of the last file lookup      */
+    int      ever;             /* a lookup has run at least once             */
+    int      announced;        /* the one "looked here, found this" log line */
+} HName;
+static HName s_name[MAXNAME];
+static int   s_nname = 0;
 
 static void hlog(const char* s)
 {
@@ -578,10 +597,27 @@ static int img_slot(Build* b, int idx)
     }
     unsigned uw = 0, uh = 0;
     unsigned char* out = NULL;
+    char lb[192];
     unsigned err = lodepng_decode32(&out, &uw, &uh, data, len);
     free(tmp);
-    if (err || !out) { free(out); return -1; }
-    if (!uw || !uh || uw > MAXTEX || uh > MAXTEX) { free(out); return -1; }
+    /* Both of these leave the material on the 1x1 white fallback, which reads
+       as a broken export rather than as a rejected image — so say which it is.
+       PNG is the only decoder in the DLL, and a JPEG is perfectly legal glTF,
+       so "did not decode" is a thing a normal Blender export can hit. */
+    if (err || !out) {
+        free(out);
+        _snprintf(lb, sizeof lb, "hires: image %d did not decode as PNG (lodepng %u)"
+                  " - its material renders white", idx, err);
+        hlog(lb);
+        return -1;
+    }
+    if (!uw || !uh || uw > MAXTEX || uh > MAXTEX) {
+        _snprintf(lb, sizeof lb, "hires: image %d is %ux%u, past the %d px cap"
+                  " - its material renders white", idx, uw, uh, MAXTEX);
+        hlog(lb);
+        free(out);
+        return -1;
+    }
     HImg* s2 = &m->img[m->nimg];
     s2->idx = idx; s2->px = out; s2->w = (int)uw; s2->h = (int)uh; s2->tex = 0;
     return m->nimg++;
@@ -1027,8 +1063,14 @@ static GLuint upload_img(HImg* im, int magf, int minf)
              ? GL_NEAREST : GL_LINEAR;
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mn);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magf ? magf : GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    /* CLAMP, not REPEAT, and not only because the sampler's wrap mode is one
+       of the things this loader does not read. `tools/ta3do` packs a unit's
+       GAF frames into an ATLAS, so a UV a hair outside its tile must smear
+       that tile's own edge — under REPEAT it wraps to the far side of the
+       atlas and samples an unrelated texture. The native pass clamps its atlas
+       for the same reason. */
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     free(im->px);
     im->px = NULL;
     return im->tex;
@@ -1049,44 +1091,68 @@ static GLuint white_tex(void)
 
 /* ------------------------------------------------------------------ API -- */
 
-const void* tagpu_hires_mesh(const char* defname)
+/* release a payload slot back to the pool (the file went away, or the type
+   fell out of the name table) */
+static void mesh_release(HMesh* m)
 {
-    int i;
-    HMesh* m = NULL;
-    for (i = 0; i < s_nmesh; i++)
-        if (!lstrcmpiA(s_mesh[i].name, defname)) { m = &s_mesh[i]; break; }
-    if (!m) {
-        if (s_nmesh >= MAXMESH) return NULL;
-        m = &s_mesh[s_nmesh];
-        memset(m, 0, sizeof *m);
-        lstrcpynA(m->name, defname, sizeof m->name);
-        s_nmesh++;
-    }
-    char glb[128], gltf[128];
-    _snprintf(glb,  sizeof glb,  "hires\\%s.glb",  m->name);
-    _snprintf(gltf, sizeof gltf, "hires\\%s.gltf", m->name);
+    mesh_gl_free(m);
+    mesh_free(m);
+    m->valid = 0;
+    memset(&m->mtime, 0, sizeof m->mtime);
+    m->path[0] = 0;
+    m->name[0] = 0;            /* the slot is free: name[0] is the marker */
+}
+
+/* the file lookup for one name: claims or releases a payload slot, and
+   reloads when the write time moved. Runs on the RECHECK cadence, not per
+   unit per frame. */
+static void name_check(HName* n)
+{
+    char glb[128], gltf[128], b[224];
     WIN32_FILE_ATTRIBUTE_DATA fad;
     const char* use = NULL;
+    HMesh* m;
+    int i;
+
+    _snprintf(glb,  sizeof glb,  "hires\\%s.glb",  n->name);
+    _snprintf(gltf, sizeof gltf, "hires\\%s.gltf", n->name);
     if (GetFileAttributesExA(glb, GetFileExInfoStandard, &fad)) use = glb;
     else if (GetFileAttributesExA(gltf, GetFileExInfoStandard, &fad)) use = gltf;
-    if (!m->announced) {
+    if (!n->announced) {
         /* say once, per unit type, where the slot looked. Silence here used to
            be indistinguishable from a load that failed, and the two want very
            different fixes. */
-        char b[224];
-        m->announced = 1;
-        _snprintf(b, sizeof b, "hires: %s -> %s", m->name, use ? use : "no replacement (looked for hires\\<name>.glb / .gltf)");
+        n->announced = 1;
+        _snprintf(b, sizeof b, "hires: %s -> %s", n->name,
+                  use ? use : "no replacement (looked for hires\\<name>.glb / .gltf)");
         hlog(b);
     }
     if (!use) {
         /* the file went away: forget it, so putting it back reloads even if
-           its write time is older than the one we last saw */
-        if (m->valid) { mesh_gl_free(m); mesh_free(m); }
-        m->valid = 0;
-        memset(&m->mtime, 0, sizeof m->mtime);
-        m->path[0] = 0;
-        return NULL;
+           its write time is older than the one we last saw, and hand the
+           payload slot to whichever type does have one */
+        if (n->mesh >= 0) { mesh_release(&s_mesh[n->mesh]); n->mesh = -1; }
+        return;
     }
+    if (n->mesh < 0) {
+        for (i = 0; i < MAXMESH; i++)
+            if (!s_mesh[i].name[0]) break;
+        if (i >= MAXMESH) {
+            /* every payload slot is spoken for by another type that really
+               has a replacement — a real limit, so say so rather than render
+               the stock model and leave the modeller guessing */
+            _snprintf(b, sizeof b,
+                      "hires: %s has a replacement but all %d model slots are "
+                      "in use - it renders as the engine's 3DO", n->name, MAXMESH);
+            hlog(b);
+            return;
+        }
+        m = &s_mesh[i];
+        memset(m, 0, sizeof *m);
+        lstrcpynA(m->name, n->name, sizeof m->name);
+        n->mesh = i;
+    }
+    m = &s_mesh[n->mesh];
     if (strcmp(m->path, use) != 0 ||
         CompareFileTime(&fad.ftLastWriteTime, &m->mtime) != 0) {
         mesh_gl_free(m);
@@ -1097,7 +1163,28 @@ const void* tagpu_hires_mesh(const char* defname)
            something derived from the piece list has to be told the list is new */
         m->gen++;
     }
-    return m->valid ? (const void*)m : NULL;
+}
+
+const void* tagpu_hires_mesh(const char* defname, unsigned frame)
+{
+    HName* n = NULL;
+    int i;
+    for (i = 0; i < s_nname; i++)
+        if (!lstrcmpiA(s_name[i].name, defname)) { n = &s_name[i]; break; }
+    if (!n) {
+        if (s_nname >= MAXNAME) return NULL;
+        n = &s_name[s_nname++];
+        memset(n, 0, sizeof *n);
+        lstrcpynA(n->name, defname, sizeof n->name);
+        n->mesh = -1;
+    }
+    if (!n->ever || (unsigned)(frame - n->checked) >= RECHECK) {
+        n->ever = 1;
+        n->checked = frame;
+        name_check(n);
+    }
+    if (n->mesh < 0) return NULL;
+    return s_mesh[n->mesh].valid ? (const void*)&s_mesh[n->mesh] : NULL;
 }
 
 int tagpu_hires_ngroup(const void* mesh) { return ((const HMesh*)mesh)->ngrp; }
@@ -1168,8 +1255,9 @@ unsigned int tagpu_hires_vao(const void* mesh)
 void tagpu_hires_glreset(void)
 {
     int i, k;
-    for (i = 0; i < s_nmesh; i++) {
+    for (i = 0; i < MAXMESH; i++) {
         HMesh* m = &s_mesh[i];
+        if (!m->name[0]) continue;
         for (k = 0; k < MAXIMG; k++) m->img[k].tex = 0;
         m->vao = m->vbo = 0;
         /* the buffers those names stood for are gone with the context, and the
@@ -1179,6 +1267,9 @@ void tagpu_hires_glreset(void)
         memset(&m->mtime, 0, sizeof m->mtime);
         m->path[0] = 0;
     }
+    /* and every name re-checks on the next frame rather than waiting out its
+       cadence, so the first frame after the new context has its models back */
+    for (i = 0; i < s_nname; i++) s_name[i].ever = 0;
     s_white = 0;
     s_glprobed = 0;
 }

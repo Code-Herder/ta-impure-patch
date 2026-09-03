@@ -41,6 +41,9 @@ typedef struct {
     int   shadow;               /* this unit owes a silhouette shadow         */
 } TAGPU_HUNIT;
 
+/* 0 when the pass cannot draw, so the caller can leave those units to the
+   native pass instead of to nobody. Builds the program on the first call —
+   CALL ONLY WITH A CURRENT GL CONTEXT. */
 int  tagpu_hires_draw_ready(void);
 /* pass 1 = the silhouette shadow pass, 0 = bodies. Leaves program, VAO and the
    active texture unit dirty: the caller restores what it still needs. */
