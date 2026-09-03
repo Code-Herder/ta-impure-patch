@@ -1090,14 +1090,54 @@ def cmd_serve(args):
     _stage_viewer(pack)
     server = ta3do.Viewer(pack, port=args.port)
     url = f"{server.base}/{VIEWER.name}"
-    print(f"serving {pack} at {url}  (ctrl-c to stop)")
+    watching = "" if args.no_reload else "  (live: edit the viewer and the page reloads)"
+    print(f"serving {pack} at {url}  (ctrl-c to stop){watching}", flush=True)
     try:
-        while True:
-            __import__("time").sleep(3600)
+        if args.no_reload:
+            while True:
+                time.sleep(3600)
+        else:
+            _watch_sources(pack)
     except KeyboardInterrupt:
         pass
     finally:
         server.close()
+
+
+# The viewer is STAGED into the pack (same-origin fetches), so an edit to
+# tools/tascene-view.html reached a running server only by restarting it — and
+# then only after a manual browser reload. Both steps were easy to forget and
+# the failure mode is silent: you look at the old code and believe the result.
+# So the serving copy is re-staged whenever the source changes, and the token
+# below is what the page polls to know it should reload itself.
+RELOAD_TOKEN = "__reload"
+
+
+def _source_token() -> str:
+    """mtime+size of every checked-in file the served page is built from."""
+    parts = []
+    for f in (VIEWER, PRESETS):
+        st = f.stat() if f.exists() else None
+        parts.append(f"{f.name}:{st.st_mtime_ns}:{st.st_size}" if st else f"{f.name}:-")
+    return " ".join(parts)
+
+
+def _watch_sources(pack: Path, interval: float = 0.5):
+    (pack / RELOAD_TOKEN).write_text(_source_token())
+    last = _source_token()
+    while True:
+        time.sleep(interval)
+        now = _source_token()
+        if now == last:
+            continue
+        last = now
+        try:
+            _stage_viewer(pack)
+        except SystemExit:            # die() inside the stager: keep serving
+            print("viewer vanished mid-edit; keeping the last good copy", flush=True)
+            continue
+        (pack / RELOAD_TOKEN).write_text(now)
+        print(f"restaged {VIEWER.name} -> reloading the page", flush=True)
 
 
 def _stage_viewer(pack: Path):
@@ -1325,6 +1365,9 @@ def main(argv=None):
     s = sub.add_parser("serve", help="serve a pack for interactive viewing")
     s.add_argument("pack")
     s.add_argument("--port", type=int, default=0)
+    s.add_argument("--no-reload", action="store_true",
+                   help="do not re-stage the viewer on edit, and do not let the "
+                        "page reload itself (the pre-live-reload behaviour)")
     s.set_defaults(func=cmd_serve)
 
     t = sub.add_parser("shot", help="headless screenshot of a pack")

@@ -11,6 +11,12 @@
        lane=explore  the LAB shaders below — a 16-px heightfield, undithered
                      RGB atlases and an N·L sun. Makes no parity claim at all.
 
+     LIVE RELOAD. Under `tascene serve` this file is re-staged into the pack
+     whenever the checked-in source changes, and the open page polls `__reload`
+     and refreshes itself — so editing the viewer updates the browser with no
+     server restart and no manual reload. `serve --no-reload` turns both halves
+     off. Never active under shot=1. See the poll at the bottom of this file.
+
      Query parameters. Global (top level only):
        shot=1        hide the UI, render one frame, then set document.title to
                      "tascene-ready" so a screenshotter knows it is done
@@ -1181,4 +1187,25 @@ async function main() {
 }
 
 main().catch(fail);
+
+// LIVE RELOAD. `tascene serve` re-stages this file into the pack whenever the
+// checked-in source changes and writes its mtime token to __reload; we poll
+// that and reload when it moves, so editing the viewer updates the open tab
+// without a server restart or a manual refresh. Never under shot=1 — the
+// headless shooter must render exactly one frame and stop. Any failure (an old
+// pack with no token, a server that is not tascene's) silently stops the poll
+// rather than logging once a second.
+if (!SHOT) {
+  (async () => {
+    const read = async () => (await fetch("__reload", { cache: "no-store" })).text();
+    let seen;
+    try { seen = await read(); } catch (e) { return; }
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 700));
+      let now;
+      try { now = await read(); } catch (e) { return; }
+      if (now !== seen) { location.reload(); return; }
+    }
+  })();
+}
 </script>
