@@ -419,15 +419,26 @@ static const char* CFS =
     /* where the engine put it: ours covers it, so do NOT fall through to the
        discard that would reveal the engine's frame and its stale cursor */
     "      if (inbox(px, uCur)) {\n"
-    "        frag = empty ? vec4(0.0, 0.0, 0.0, 1.0) : c;\n"
+    "        frag = vec4(c.rgb, 1.0);\n"
     "        return;\n"
     "      }\n"
     "    }\n"
     "    ivec2 p = clamp(ivec2(px), ivec2(0), uSurfSz - 1);\n"
     "    if (int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5) != uKey) discard;\n"
-    /* the engine drew nothing here and neither did we: never let the raw key
-       fill reach the screen — black is what the engine paints for "no world" */
-    "    if (empty) { frag = vec4(0.0, 0.0, 0.0, 1.0); return; }\n"
+    /* THE KEY FILL MUST NEVER REACH THE SCREEN, NOT EVEN A FRACTION OF IT.
+       This pixel of the engine's frame is the raw key — index 254, a bright
+       cyan — so `c` has to land on BLACK here, the colour the engine paints
+       for "no world", rather than be blended over what is behind us.
+
+       Emitting `c` and letting the blend do it only works when c.a is 1. Every
+       partially covered pixel (the FBO is premultiplied and the 2x downsample
+       gives fractional alpha along any edge terrain does not reach — the map
+       boundary is a full-length one) would otherwise come out as
+       `c.rgb + (1 - c.a) * key`: a cyan-tinted line at exactly the zoom levels
+       where the world's edge lands off the pixel grid. Opaque `c.rgb` is that
+       same composite against black, and it subsumes the empty case (c.rgb is
+       then 0, which is the black this used to special-case). */
+    "    frag = vec4(c.rgb, 1.0); return;\n"
     "  }\n"
     "  if (empty) discard;\n"
     "  frag = c;\n"
