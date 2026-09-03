@@ -37,9 +37,25 @@ above records; **G13e is the newest and is still in "awaiting review" on the roa
 things remain from the original plan:
 
 - **G11 — the replacement pipeline** (glTF convention + loader + one exemplar unit driven by
-  live COB state). This is the project's stated purpose, and nothing blocks it: the hi-res
-  loader slot (`gamedir/hires/<UnitName>.obj`) is proven with hot reload and `tools/ta3do`
-  already exports glTF.
+  live COB state). This is the project's stated purpose and it is the next real gate. The
+  groundwork is real but the two halves **do not meet yet** — worth being precise about,
+  because "the slot is proven and the exporter exists" reads as further along than it is:
+
+  | Half | Where it is | The gap |
+  |---|---|---|
+  | Replacement-mesh slot in the DLL | `tagpu_hires.c` — `gamedir/hires/<defname>.obj` renders instead of the 3DO, hot-reloaded on mtime, engine anchor + body yaw, our shade/palette pipeline. **Proven end-to-end** (a 210-tri dome replaced the solar collector) | speaks an **OBJ subset** (`v` / `f` / `c <palette index>`), **whole-model only** — the source says so: *"piece-wise COB pose = G11"* — and colours are palette indices through the SHD LUT, not textures |
+  | glTF exporter | `tools/ta3do` — 3DO + GAF → glTF, standard views, `--undither` | **not on `main`**: it lives on the unmerged `worktree-3do_exporter` branch |
+
+  So G11 is three concrete pieces of work, not a wiring job: **(a)** land the exporter and
+  agree one format between it and the loader; **(b)** per-piece pose — the engine hands us
+  *fully posed* vertex buffers for its own 3DOs (`PrimitiveStruct+0x22`), which is why the
+  native pass needs no rotation maths today, but replacement geometry is not in the engine's
+  piece tree, so it must be placed from the posed origin (`+0x16/1A/1E`) and posed turns
+  (`+0x10/12/14`) — fields already identified in [Unit → 3DO bridge](unit-3do-bridge.html),
+  with the exact order/signs of the rotation composition still to be settled (that is what the
+  `tagpu_posedump.on` probe was written for, and it has not been run); **(c)** true-colour and
+  translucent materials, which is the part of the stated purpose the palette-index path does
+  not reach at all.
 - **G9 — the MP-safety replay byte-diff.** Mostly formalisation now: 200v200 measures 59.7 fps
   and every hook is read-only over the sim, but this is the gate that *proves* the native stack
   is sim-neutral, and the byte-diff needs an unlocked session. It has been deferred several
@@ -163,12 +179,35 @@ viewport is display-only:
 - **The captured marker layers stop there** too — order markers and group digits clip at the
   unzoomed viewport's edge, because the engine's drawers clip to the OFFSCREEN's own rect
   ([UI markers](ui-markers.html) §6.1). Health bars do not: they are re-drawn, not captured.
-- At 0.5× the addressable region is the central half of the frame in each axis. Zoom ≥ 1 has no
-  such limit.
+- **The addressable region is the central `z` fraction of the viewport in each axis**, so the
+  dead area grows fast: at 0.5× only the central 50 % per axis — **25 % of what you can see** —
+  is clickable; at 0.25× it is 6 %. Zoom ≥ 1 has no such limit (`u` contracts toward the centre
+  and always stays inside).
 
-**It is one boundary, not three, and one fix would close all of it:** give the engine a wider
-addressable rect, or shift its eye for the duration of a click. Worth doing when zoom-out
-becomes a real play mode rather than a demo — which is a product decision, not a technical one.
+**Handled is not fixed.** Dropping the click is the *safe* answer, not the closed one: nothing
+lands on the wrong world point and nothing is left half-pressed, but a unit you can plainly see
+in the outer ring cannot be selected or ordered. **Zoom-out below ~1 is a viewing mode, not yet
+a play mode**, and that is the honest status.
+
+**It is one boundary, not three, and one fix would close all of it.** Three routes, cheapest
+first — and the first looks much more tractable after G13a–d than it would have before:
+
+1. **Widen the engine's own viewport rect** (`main+0x37E27..0x37E3B`) while zoomed out, and keep
+   OUR passes on the true 1× rect. The engine barely draws in the viewport any more, so the rect
+   has few readers left that matter: the eye clamp `0x41C3C0`, the scroll/minimap cluster, and
+   centre-on-unit — all of which arguably *should* widen with the view. It is also the same rect
+   the routing test and the **HotUnits cull** use, so widening it would close the captured-marker
+   half of the gap in the same stroke. The care is all on our side: `terrown`'s key-fill and the
+   composite's `uVp` must keep using the real rect, or the fill would erase the side panel.
+   It writes engine state, but the viewport is camera state, not sim state — the same argument
+   that makes `ScrollSpeed` safe.
+2. **Shift the eye for the duration of a click** — exact, but it assumes the engine consumes the
+   click during dispatch rather than queueing it, which is unverified.
+3. **Resolve the click ourselves and call the engine's order API directly** — we already call
+   `ORDERS_NewMainOrder2Unit 0x43AFC0` and friends from `tagpu_scenario.c`, so the door is open;
+   but it means reimplementing selection, box-select, build placement and every cursor mode.
+
+Route 1 is the one to try, and it is a real piece of work with real risk — not a tidy-up.
 
 ### 3.2 Smaller, known, and cheap to close
 
