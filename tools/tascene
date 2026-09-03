@@ -270,10 +270,15 @@ def read_glsl_macros(header: Path):
     # rejoin backslash continuations into one logical line per #define
     text = re.sub(r"\\\n", " ", text)
     macros = {}
+    # `TAGPU_\w+`, not `TAGPU_GLSL_\w+`: shader bodies also use plain value
+    # macros from the same header — `TAGPU_EDGE_NUDGE` ("0.03125", the sub-pixel
+    # tile-seam nudge) sits inside terrain VS's `vec2(...)`. Matching only the
+    # GLSL_ prefix dropped it and emitted `vec2()`, which does not compile.
+    #
     # `[ \t]*` and not `\s+`: a macro body must be on the #define's own line.
     # With `\s+` the guard `#define TAGPU_GLSL_H` (empty body) swallowed the
     # NEXT macro's text, and that macro then silently ceased to exist.
-    for m in re.finditer(r"#define[ \t]+(TAGPU_GLSL_\w+)(\([^)]*\))?[ \t]*(.*)", text):
+    for m in re.finditer(r"#define[ \t]+(TAGPU_\w+)(\([^)]*\))?[ \t]*(.*)", text):
         name, args, body = m.group(1), m.group(2), m.group(3)
         params = [a.strip() for a in args[1:-1].split(",")] if args else None
         macros[name] = (params, body)
@@ -301,7 +306,7 @@ def expand_glsl(body: str, macros) -> str:
     """Concatenate string literals and expand TAGPU_GLSL_* invocations in order."""
     out = []
     i = 0
-    for tok in re.finditer(r'"(?:[^"\\]|\\.)*"|TAGPU_GLSL_\w+(?:\("(?:[^"\\]|\\.)*"\))?', body):
+    for tok in re.finditer(r'"(?:[^"\\]|\\.)*"|TAGPU_\w+(?:\("(?:[^"\\]|\\.)*"\))?', body):
         if tok.start() < i:
             continue
         i = tok.end()
@@ -309,9 +314,12 @@ def expand_glsl(body: str, macros) -> str:
         if text.startswith('"'):
             out.append(_unescape(text[1:-1]))
             continue
-        name = re.match(r"TAGPU_GLSL_\w+", text).group(0)
+        name = re.match(r"TAGPU_\w+", text).group(0)
         if name not in macros:
-            raise ValueError(f"unknown macro {name}")
+            # never drop it: a silently missing token is a shader that either
+            # fails to compile or, worse, compiles and renders subtly wrong
+            raise ValueError(f"unknown macro {name} — is it defined outside "
+                             "tagpu_glsl.h?")
         params, mbody = macros[name]
         args = []
         if params:

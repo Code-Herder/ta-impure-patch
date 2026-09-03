@@ -248,9 +248,16 @@ Two unit-level gaps the A/B exposed, neither a placement error:
   own `roster screen=(512,384)`, and the TNT height at that cell (**96**) equals
   the engine's runtime height — so the heightmap read and the
   `worldZ − h/2` projection are both right.
-- **No team colour.** Our commander is visibly brighter: the engine remaps the
-  team-colour palette band per player and we do not. Cosmetic, and the band is
-  known (`ta3do`'s `TEAM_COLOR_BAND = range(9, 17)`).
+- **Our commander is visibly brighter than the engine's, and the cause is NOT
+  established.** It is *not* team colour: team colour is a **GAF frame table**,
+  not a palette-band remap — a multi-frame entry carries one ramp per player and
+  the engine picks `frame[owner]` (file-formats.md §3). tascene takes frame 0,
+  which *is* player 0's ramp, and the fixture's commander is owner 0. So frame
+  selection is right here and the brightness is something else — most likely the
+  shade row. Unmeasured.
+- **Team colour is still a real gap for other players' units**: frame 0 for
+  everyone means an owner-1 unit wears owner 0's colours. `ta3do` exports frame 0
+  too, so this is shared, not a tascene regression.
 - **Yaw is still unverified.** The fixture places the commander at facing 90; a
   facing-45 fixture is what would actually settle `facing + 180`.
 
@@ -266,6 +273,13 @@ Two unit-level gaps the A/B exposed, neither a placement error:
   `#define TAGPU_GLSL_H` (empty body) swallowed the macro after it and that
   macro silently ceased to exist. It surfaced as a hard "unknown macro" error
   only because expansion refuses to guess — which is why it refuses.
+- **The extractor only knew `TAGPU_GLSL_*`**, and shader bodies also use plain
+  value macros from the same header. Merging main brought in the tile-seam fix,
+  whose terrain VS reads `- vec2(" TAGPU_EDGE_NUDGE ")`; the extractor dropped
+  the token and emitted `vec2()`, which does not compile. **This is the
+  extract-don't-copy decision paying for itself on its first merge** — a
+  hand-maintained copy would simply have gone on rendering the old shader, and
+  the browser would have quietly stopped matching what tagpu ships.
 
 ### Still open on landing 1
 
