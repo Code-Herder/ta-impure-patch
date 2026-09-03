@@ -107,6 +107,7 @@ async function fetchBin(u) {
 // reproduced deliberately, not cleaned up, because a cell boundary landing one
 // pixel differently is exactly what the parity diff exists to catch.
 const div32trunc = (v) => (v + (v < 0 ? 31 : 0)) >> 5;
+const TILE_PX = 32;
 const UNIT_STRIDE = 7;             // the mesh .bin's own stride: x,y,z,u,v,fc,ck
 const ceil32 = (v) => { const q = div32trunc(v); return (v - q * 32) ? q + 1 : q; };
 
@@ -412,6 +413,13 @@ async function main() {
   const wantLab = any((L) => L.lane === "explore");
   const wantRGB = any((L) => L.undither);
   const labD = scene.labDepth || { terrain: 0.10, flat: 0.50, tallCol: 0.9 };
+  // tagpu_terr.c's guard rail: cells sit CELL_PITCH apart and the border texel
+  // is a COPY of the cell's edge, so a fragment landing exactly on a quad's far
+  // edge resolves to the right colour instead of the first texel of the NEXT
+  // cell. Packs built before the guard have neither field — fall back to the
+  // old flush 32-px layout rather than reading one cell to the left.
+  const PITCH = map.atlas.pitch || TILE_PX;
+  const BORDER = map.atlas.border || 0;
 
   if (wantRGB && !map.atlas.rgba)
     fail("undither=1, but this pack has no restored atlases.\n" +
@@ -672,8 +680,11 @@ async function main() {
         const idx = tilemap[my * stride + mx];
         if (idx >= map.atlas.tiles) { junk++; continue; }
         const cx = idx % map.atlas.cols, cy = (idx / map.atlas.cols) | 0;
-        const u0 = cx * 32 * iw, u1 = (cx * 32 + 32) * iw;
-        const v0 = cy * 32 * ih, v1 = (cy * 32 + 32) * ih;
+        // the quad still spans exactly TILE_PX texels; u1 lands ON the guard
+        // column, which is a copy of the last real one (tagpu_terr.c)
+        const tu = cx * PITCH + BORDER, tv = cy * PITCH + BORDER;
+        const u0 = tu * iw, u1 = (tu + TILE_PX) * iw;
+        const v0 = tv * ih, v1 = (tv + TILE_PX) * ih;
         const x0 = vpL + c * 32 - fx, y0 = vpT + r * 32 - fy;
         const wx0 = mx * 32, wz0 = my * 32;
         put(x0,      y0,      u0, v0, wx0,      wz0);
@@ -732,11 +743,14 @@ async function main() {
         const idx = tilemap[my * stride + mx];
         if (idx >= map.atlas.tiles) { junk++; continue; }
         const cx = idx % map.atlas.cols, cy = (idx / map.atlas.cols) | 0;
+        const tu = cx * PITCH + BORDER, tv = cy * PITCH + BORDER;
         for (let sy = 0; sy < 2; sy++) {
           for (let sx = 0; sx < 2; sx++) {
             const gc = mx * 2 + sx, gr = my * 2 + sy;
-            const u0 = (cx * 32 + sx * 16) * iw, u1 = u0 + 16 * iw;
-            const v0 = (cy * 32 + sy * 16) * ih, v1 = v0 + 16 * ih;
+            // the OUTER edges land on the guard; the interior boundary between
+            // two quadrants is inside the same tile, so it needs none
+            const u0 = (tu + sx * 16) * iw, u1 = u0 + 16 * iw;
+            const v0 = (tv + sy * 16) * ih, v1 = v0 + 16 * ih;
             put(gc,     gr,     u0, v0);
             put(gc + 1, gr,     u1, v0);
             put(gc,     gr + 1, u0, v1);

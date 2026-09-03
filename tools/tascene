@@ -70,7 +70,19 @@ TNT_HDR = "<3i2I I 2i I i I i 4i"
 TILE_PX = 32
 TILE_BYTES = 0x400
 ATLAS_COLS = 64                      # tagpu_terr.c: 64 tiles per atlas row
-ATLAS_W = ATLAS_COLS * TILE_PX       # 2048
+# THE GUARD RAIL, copied from tagpu_terr.c (CELL_BORDER / CELL_PITCH). Cells sit
+# one texel apart and that texel is a COPY of the cell's last row/column. A
+# fragment centre landing exactly on a quad's far edge interpolates v to exactly
+# v1, and GL_NEAREST resolves that to floor(v1*H) = the first texel of the NEXT
+# cell -- the unrelated tile 64 cells later in the atlas, i.e. blue hairlines
+# along tile edges. The quad still spans exactly TILE_PX texels, so sampling at
+# 1:1 is bit-identical to the un-padded atlas; it is the cases that are NOT 1:1
+# that this saves. The parity lane never hit it (its quads are integer-aligned);
+# the exploration lane displaces y by relief*h/2, which is a half-pixel whenever
+# the height is odd, and the hairlines came straight back.
+CELL_BORDER = 1
+CELL_PITCH = TILE_PX + 2 * CELL_BORDER   # 34
+ATLAS_W = ATLAS_COLS * CELL_PITCH        # 2176
 
 
 class Tnt:
@@ -133,17 +145,26 @@ class Tnt:
         return names
 
     def atlas(self):
-        """One R8 atlas of 32x32 cells, 64 per row — tagpu_terr.c's layout exactly."""
+        """One R8 atlas of 34x34 guarded cells, 64 per row — tagpu_terr.c's layout."""
         rows = (self.tiles + ATLAS_COLS - 1) // ATLAS_COLS
-        h = rows * TILE_PX
+        h = rows * CELL_PITCH
         buf = bytearray(ATLAS_W * h)
         for i in range(self.tiles):
             src = self.p_tilegfx + i * TILE_BYTES
-            ox = (i % ATLAS_COLS) * TILE_PX
-            oy = (i // ATLAS_COLS) * TILE_PX
+            ox = (i % ATLAS_COLS) * CELL_PITCH + CELL_BORDER
+            oy = (i // ATLAS_COLS) * CELL_PITCH + CELL_BORDER
             for r in range(TILE_PX):
+                row = self.blob[src + r * TILE_PX: src + (r + 1) * TILE_PX]
                 o = (oy + r) * ATLAS_W + ox
-                buf[o:o + TILE_PX] = self.blob[src + r * TILE_PX: src + (r + 1) * TILE_PX]
+                buf[o - 1] = row[0]                       # left  border column
+                buf[o:o + TILE_PX] = row
+                buf[o + TILE_PX] = row[TILE_PX - 1]       # right border column
+            top = (oy - 1) * ATLAS_W + ox - 1
+            first = (oy) * ATLAS_W + ox - 1
+            buf[top:top + CELL_PITCH] = buf[first:first + CELL_PITCH]
+            bot = (oy + TILE_PX) * ATLAS_W + ox - 1
+            last = (oy + TILE_PX - 1) * ATLAS_W + ox - 1
+            buf[bot:bot + CELL_PITCH] = buf[last:last + CELL_PITCH]
         return ATLAS_W, h, bytes(buf)
 
     def minimap(self):
@@ -166,20 +187,29 @@ class Tnt:
         return out
 
     def atlas_rgba(self, restored):
-        """The same layout as atlas(), painted from restored true colour."""
+        """The same guarded layout as atlas(), painted from restored true colour."""
         rows = (self.tiles + ATLAS_COLS - 1) // ATLAS_COLS
-        h = rows * TILE_PX
+        h = rows * CELL_PITCH
         buf = bytearray(ATLAS_W * h * 4)
         for i in range(self.tiles):
             got = restored.get(i)
             if not got:
                 continue
             _w, _h, px = got
-            ox = (i % ATLAS_COLS) * TILE_PX
-            oy = (i // ATLAS_COLS) * TILE_PX
+            ox = (i % ATLAS_COLS) * CELL_PITCH + CELL_BORDER
+            oy = (i // ATLAS_COLS) * CELL_PITCH + CELL_BORDER
             for r in range(TILE_PX):
+                row = px[r * TILE_PX * 4:(r + 1) * TILE_PX * 4]
                 o = ((oy + r) * ATLAS_W + ox) * 4
-                buf[o:o + TILE_PX * 4] = px[r * TILE_PX * 4:(r + 1) * TILE_PX * 4]
+                buf[o - 4:o] = row[0:4]                             # left  border
+                buf[o:o + TILE_PX * 4] = row
+                buf[o + TILE_PX * 4:o + (TILE_PX + 1) * 4] = row[-4:]  # right border
+            top = ((oy - 1) * ATLAS_W + ox - 1) * 4
+            first = (oy * ATLAS_W + ox - 1) * 4
+            buf[top:top + CELL_PITCH * 4] = buf[first:first + CELL_PITCH * 4]
+            bot = ((oy + TILE_PX) * ATLAS_W + ox - 1) * 4
+            last = ((oy + TILE_PX - 1) * ATLAS_W + ox - 1) * 4
+            buf[bot:bot + CELL_PITCH * 4] = buf[last:last + CELL_PITCH * 4]
         return ATLAS_W, h, bytes(buf)
 
 
@@ -988,6 +1018,7 @@ def cmd_build(args):
             "w16": tnt.w16, "h16": tnt.h16,
             "tilemap": {"w": tnt.mw, "h": tnt.mh, "file": "terrain/tilemap.u16.bin"},
             "atlas": {"w": aw, "h": ah, "cols": ATLAS_COLS, "tiles": tnt.tiles,
+                      "pitch": CELL_PITCH, "border": CELL_BORDER,
                       "file": "terrain/atlas.r8.bin", "rgba": terr_rgba},
             "height": {"w": tnt.w16, "h": tnt.h16, "file": "terrain/height.r8.bin"},
             "sealevel": tnt.sealevel,

@@ -59,7 +59,7 @@ first, and the exploration lane is built on ground already proven.
 | Tool layout | **New `tools/tascene`, importing `tools/ta3do` via `SourceFileLoader`** — the idiom `tools/test_ta3do.py` already uses. `ta3do` keeps its name and its meaning (one model, standard views); `tascene` owns maps, scenes and the lab. No refactor of a tested 1824-line tool. |
 | Options | **Every knob is a URL query parameter** (the `ta3do-view.html` house idiom, including `?shot=1` → hide UI, one frame, stamp `document.title`). A look is a link; the headless shooter takes the same string. **The wipe** — `?a=<query>&b=<query>&wipe=<0..1>`: two looks rendered into two offscreens, and the canvas split between them at `wipe`, so two parameter sets are read **at identical pixel coordinates**. Drag the divider when serving; pass a fixed `wipe=` to `shot`. Named looks live in a checked-in `tools/tascene-presets.json`, staged next to the viewer. **Both landed in landing 2.** |
 | Pack encoding | **Raw `.bin` for anything whose bytes are semantic; PNG only for display RGB.** Browsers colour-manage and premultiply PNGs — in the parity lane the atlas texel *is* a palette index, so an image decode path would silently rewrite the data and the diff would measure nothing. Raw blobs go straight to `texImage2D`, byte-exact by construction. |
-| Map extent | **Whole map, no windowing or streaming.** Worst stock case (Two Continents) is a 2048×2560 R8 atlas, a 336×400 `u16` tilemap, a 672×800 R8 heightmap and ~5000 feature anchors; the relief mesh is 537k verts. Trivial for WebGL2. |
+| Map extent | **Whole map, no windowing or streaming.** Worst stock case (Two Continents) is a 2176×2720 R8 atlas, a 336×400 `u16` tilemap, a 672×800 R8 heightmap and ~5000 feature anchors; the relief mesh is 537k verts. Trivial for WebGL2. |
 | A/B | **One verb drives both sides.** `tascene ab <scenario>` loads the scenario in a real instance, holds the eye, `glshot`s, reads the live eye/viewport back through `roster`, builds the pack with those exact numbers, shoots the browser at the same resolution, diffs, and writes an `sbs.py` panel plus a mismatched-pixel count. It degrades to build+shot with no instance running. A comparison that only happens when someone remembers is a comparison that does not happen. |
 | v1 | **Parity lane first**, exploration second. See "Landing plan". |
 
@@ -74,7 +74,7 @@ verified; the field table lives there (§6). What matters for the lab:
 |---|---|---|
 | `PTRmapdata` | `u16` per **32-px** cell, row-major, stride `Width/2` | one quad per cell, indexing the tile atlas — the flat lane |
 | `PTRmapattr` | 4 B per **16-px** cell, row-major, stride `Width` | **byte 0 = height 0–255** (relief, and the `−h/2` anchor); **bytes 1–2 = `u16` feature index**, `0xFFFF` = none |
-| `PTRtilegfx` | `tiles` × 1024 B | the 32×32 8-bpp tiles → one `GL_R8` atlas, 64 per row, exactly as `tagpu_terr.c` builds it |
+| `PTRtilegfx` | `tiles` × 1024 B | the 32×32 8-bpp tiles → one `GL_R8` atlas, 64 per row, exactly as `tagpu_terr.c` builds it — **including its `CELL_PITCH` guard border**, see "The seam that came back" |
 | `PTRtileanim` | `tileanims` × 132 B (`i32` + name) | **the feature name table** the `mapattr` index resolves against — `Tree1`, `RockMetal2`, `DryRuin10` |
 | `PTRminimap` | `i32 w`, `i32 h`, then `w·h` 8-bpp | the map picture (`TED_GENERATED_PIC`) |
 | `sealevel` | byte | the waterline |
@@ -126,7 +126,8 @@ Generated, disposable. One directory per scene; this is what `build` writes.
 pack/
   scene.json               manifest: map, view, palette calibration, depth keys,
                            feature defs + instance count, unit meshes + instances
-  terrain/atlas.r8.bin     2048 x (ceil(tiles/64)*32) palette indices, 64 tiles/row
+  terrain/atlas.r8.bin     2176 x (ceil(tiles/64)*34) palette indices, 64 tiles/row,
+                           34-texel CELL_PITCH with a replicated guard border
   terrain/tilemap.u16.bin  u16 tile index per 32-px cell, stride w16/2
   terrain/height.r8.bin    one byte per 16-px cell, straight from mapattr
   palette/pal.bin          256 x RGBA      palette/shd.bin  32 x 256 shade table
@@ -538,16 +539,69 @@ What it establishes is the *direction*, its *strength ordering* and the fact
 that the disagreement with the engine's light is systematic rather than
 anecdotal — which is what the lane needed.
 
+### The seam that came back  [VERIFIED 2026-09-03]
+
+Reported from the live page: *"explore version has blue bars between tiles."* It
+was the tile seam, and the diagnosis is worth keeping because it is a good
+example of a lane inheriting a bug the other lane cannot see.
+
+`tagpu_terr.c` fixed this in G13h with a **guard rail**: cells sit
+`CELL_PITCH = 34` apart and the border texel is a *copy* of the cell's edge
+row/column, so a fragment centre landing exactly on a quad's far edge — which
+interpolates `v` to exactly `v1`, and `GL_NEAREST` resolves to
+`floor(v1·H)` = the first texel of the **next** cell, an unrelated tile 64 cells
+later in the atlas — reads the right colour instead. **tascene's pack was still
+building the pre-guard flush 32-pitch atlas.**
+
+The parity lane never showed it: its quads are integer-aligned, so no fragment
+centre ever lands on a cell edge. **The exploration lane displaces y by
+`relief·h/2`, which is a half-pixel whenever the height is odd**, and the
+hairlines came straight back — visible as blue only where the wrong cell
+happened to be water, which is why they read as "blue bars".
+
+Measured by rebuilding the pack with the guard and diffing the two, which is
+exact: the guard changes nothing *except* the samples that used to fall off the
+cell, so the difference **is** the seam set.
+
+| eye | `relief=0` | `relief=1` | `relief=1` + `undither=1` |
+|---|---|---|---|
+| 4864,11392 | **0** | 13 660 px / 704 rows | 16 070 px |
+| 2560,10496 | **0** | 4 142 px / 698 rows | 6 657 px |
+| 640,1408 | **0** | 7 819 px / 695 rows | 10 931 px |
+| 4736,7168 | **0** | 6 371 px / 701 rows | 9 830 px |
+| 2256,768 (the fixture) | **0** | 14 858 px / 605 rows | 17 773 px |
+
+Two things that table says, and neither was obvious from the symptom:
+
+- **It was never one line.** Thousands of pixels across ~700 of the 704 rows, at
+  every `y mod 16` phase. A displaced heightfield puts *every* quad row at some
+  fractional offset, so the visible blue hairlines were only the subset where
+  the neighbouring cell was water.
+- **`relief=0` is 0 px on every eye**, which is `tagpu_terr.c`'s own claim
+  ("the quad still spans 32 texels, so sampling at 1:1 is bit-identical to the
+  un-padded atlas") holding in the lab. That is also why the parity fixture shot
+  is still `md5 60adadd4…` after the change, and why the exploration lane still
+  reduces to the parity lane at 0 differing pixels of 630 784.
+
+The extracted fragment shader's own comment had been asserting the guard all
+along — *"a fragment landing exactly on the far edge reads the cell's replicated
+guard texel rather than the next cell (CELL_PITCH)"* — while the pack it was
+sampling did not provide one. **Extracting the shader does not extract the
+invariants it depends on**, and this is the second time that has bitten (the
+first was `TAGPU_EDGE_NUDGE` going missing after a merge). Worth a check on any
+future pack-format change: the C source is authoritative for the *data layout*
+too, not only for the GLSL.
+
 ### Still open on landing 2
 
 - **Landing 1's list above is untouched** — none of it was in landing 2's scope,
   and `tascene` still has **no tests** while `ta3do` and `tacli` both have suites.
 - **No smoothing.** The undithered atlases are sampled `NEAREST`, like the
-  indexed ones. Bilinear on a *packed* atlas bleeds across tile borders — the
-  seam problem `TAGPU_EDGE_NUDGE` exists for — so a `filter=linear` knob needs a
-  padded RGBA atlas with a one-texel border extrusion per tile (`ta3do.Atlas`
-  already does exactly that for models, with `PAD = 1`). Deliberately not
-  attempted here rather than shipped looking broken.
+  indexed ones. The `CELL_PITCH` guard is a *one*-texel replicated border, which
+  is what `NEAREST` needs and not what `LINEAR` needs — bilinear would still
+  blend toward the neighbouring cell over the outer half-texel. A `filter=linear`
+  knob wants a wider border, or explicit UV clamping in the shader.
+  Deliberately not attempted here rather than shipped looking broken.
 - **The exploration lane runs at zoom 1 by construction.** The lab shaders drop
   `uZoom`/`uZoomC`; the parity lane keeps them because tagpu's shaders have them.
 - **Water is still static** in both lanes, for the reason in "Gaps" above.
