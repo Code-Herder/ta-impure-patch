@@ -92,8 +92,15 @@ stepper `0x41CA30`, the scroll poll `0x41CF10`, the dead clamp `0x41C450`.
 
 ### The review
 
-**Run `/code-review medium` on the accumulated branch diff (`main...HEAD` plus anything still
-uncommitted) once per landing** — not once per commit — when the landing touches:
+**It starts when a human says the feature is ready, not when you think it is.** Commit the code
+and the docs, then stop and report: what was built, how it was verified, what is still open. Wait
+for their "ready" or "review it". This is a hard precondition on everything below — the review
+re-reads the whole branch diff, so launching it at work the human still considers in progress
+spends ~100k tokens on a diff that is about to change, and it did exactly that on the
+window-title landing, where the human killed the run.
+
+**Then run `/code-review medium` on the accumulated branch diff (`main...HEAD` plus anything
+still uncommitted) once per landing** — not once per commit — when the landing touches:
 
 - `tagpu/ddraw/src/**` or `tagpu/ddraw/inc/**` (the fork and our modules), or
 - `tagpu/src/**` (tagpu.dll), or

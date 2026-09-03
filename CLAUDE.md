@@ -15,22 +15,33 @@ in progress. **Landing** — fast-forwarding local `main` — is the act with a 
 
 ## Review engine changes before they land
 
-Once per landing (not per commit), on the accumulated branch diff, run **`/code-review medium`**
-when the landing touches **`tagpu/ddraw/**`**, **`tagpu/src/**`** or **`tools/tacli`** — `high`
-if it writes engine or user state, adds or moves a byte patch, or is sim-adjacent. Verify each
-finding against the code before acting on it, and never use `--fix`.
+**A human declares a feature ready for review. Never launch the review off your own judgement.**
+When the work looks finished, stop: say what was built and how it was verified, and ask. Their
+"ready" — or an explicit "review it" — is the trigger. Until then keep committing to the branch
+and leave it there; an unasked-for review is not a free extra check, it is ~100k tokens spent
+grading work the human may not consider done, and spent again after they change it.
+
+Once approved, once per landing (not per commit), on the accumulated branch diff, run
+**`/code-review medium`** when the landing touches **`tagpu/ddraw/**`**, **`tagpu/src/**`** or
+**`tools/tacli`** — `high` if it writes engine or user state, adds or moves a byte patch, or is
+sim-adjacent. Verify each finding against the code before acting on it, and never use `--fix`.
 
 Skip it for docs, scenarios, comments, or a few lines with no new state, no new engine patch and
 no new GL object — a review costs ~100k tokens and is not worth that for a typo. Batching
 landings is what keeps this cheap: three commits landed together cost one review, not three.
 
-**Why:** this stack patches a 1997 binary at absolute addresses, so mistakes are silent — they do
-not throw, they render slightly wrong or corrupt state days later. The reviews have paid for
-themselves every time: 6/6 real findings on the G13d diff, on G13e two HIGH findings that were
-both real bugs about to ship (a dropped button *release* that left the engine holding the button
-for the rest of the session, and `ScrollSpeed` being written back to the player's registry where
-it would compound across launches), and on G13g a HIGH that was a fog-grid rebuild firing every
-frame after any zoom-out from a map edge.
+**Why the human's approval gates it:** on the window-title landing the review was launched the
+moment the code and docs were committed, without being asked for, and the human killed it — the
+tokens were already spent and no finding came back. Judging the work finished is not the same as
+being finished with it.
+
+**Why the review itself:** this stack patches a 1997 binary at absolute addresses, so mistakes are
+silent — they do not throw, they render slightly wrong or corrupt state days later. The reviews
+have paid for themselves every time: 6/6 real findings on the G13d diff, on G13e two HIGH findings
+that were both real bugs about to ship (a dropped button *release* that left the engine holding
+the button for the rest of the session, and `ScrollSpeed` being written back to the player's
+registry where it would compound across launches), and on G13g a HIGH that was a fog-grid rebuild
+firing every frame after any zoom-out from a map edge.
 
 ## Document what the landing learned — before the review, not after
 

@@ -53,14 +53,14 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02) | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid | done — [Features](features.html) §9 |
 | Terrain tiles | ● native (G13b) | `terrown`: one detour on `0x483FA0`, whose skip path key-fills the viewport | 0-px parity vs the engine's own blit, engine surface 99.9 % key, in-process map change |
 | Fog overlay | ● native (G13b) | `terrown` detours `0x4848E0` too, replicating only its lazy grid rebuild | 99.06–99.39 % lit-vs-grey agreement with the engine's own overlay |
-| Health bars, order markers, group digits, build cursor, band box | ● native (G13d) | `markown`: six call-site redirects + one detour on `0x46A430`; bars re-drawn, the rest captured out of the engine's own draw and replayed | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5× |
+| Health bars, order markers, group digits, build cursor, band box | ● native (G13d, corrected G13h) | `markown`: eight call-site redirects + one detour on `0x46A430`; bars re-drawn, the rest captured out of the engine's own draw and replayed. G13h fixed the capture's publication discipline and gave the waypoint star an identity blend LUT | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5×; **0 overlay dropouts in 840 held-SHIFT frames** (was 13 in 120) and **0 % cyan** on the star (was 17.6 %) |
 | Chat, dialogs, side panel, minimap, top bar | ○ engine 8bpp, through the composite key | — | stays engine-side: screen-space, correct at 1:1 at any zoom |
 | Mouse cursor | ● moved in the composite (G13e) | the cursor is the ONLY engine pixel left inside the viewport, so the composite paints the box around `u` at the box around `s` | full sprite at the pointer at 0.25×/0.5×/1×/2×, in every corner and in the display-only ring |
 | Click → world point | ● transformed (G13e) | `tagpu_zoom.c`: one rewrite at the three doors into the engine's own wndproc, plus `fake_GetCursorPos` | at 0.5× the commander selects at its DRAWN position (394,427) and no longer at its 1× one (212,470); the side panel still clicks 1:1 |
 | Minimap view rectangle, scroll rate | ● zoom-aware (G13e) | `0x466B70` ×2 redirected and its rect rescaled by 1/z; `ScrollSpeed` (`main+0x1434D`) driven at base/z | minimap box doubles at 0.5× and quadruples at 0.25×; ScrollSpeed 32 → 64 → 128 → 16 at 2×, and restores |
 | The camera's range at zoom > 1 | ● follows the zoom (G13g) | `tagpu_zoom.c`: the eye clamp `0x41C3C0` replaced by a `leaf_call` detour while zoom > 1, widening `[0, map − W]` by `d = (W/2)(1 − 1/z)`, plus a map clamp on the `GetTPosition` inside `0x498DA0` | measured on Two Continents at 1024×768: (−224,−176) at 2×, (−392,−308) at 8×, (10048,12144) at the far corner, all exact; 1× and 0.5× land on the engine's own (0,0)/(9824,11968) |
 | The addressable ring at zoom < 1 | ● closed for input (G13f, **opt-in** `vpwide.on`) | `tagpu_vpwide.c`: the engine's own viewport rect widened to the transform's range, with the clip (`0x4C6B10` ×3) and the screen→world origin (`0x498DA0`) redirected and corrected, plus a signed `lParam` unpack in TA's wndproc | at 0.5× a ring click selects the unit under it in all four quadrants and a right-click walks it to the world point clicked; 1× untouched; the captured markers reach the offscreen bound, not the frame edge |
-| Atlas cell edges at zoom-out | ● closed (G13h) | every atlas cell carries a 1-texel replicated border (terrain on a 34-texel pitch; GAF frames advance `w+2`/`h+2`), plus `TAGPU_EDGE_NUDGE` — 1/32 game-screen px in the terrain VS, after the zoom scale | the period-8 row anomaly at zoom 0.25 goes 1.92×/2.05× → 1.03–1.13× at every camera phase, `ss=1` and `ss=2`, 1024×768 and 1920×1080; ten zoom levels clean; **1× output bit-identical** to a build without it |
+| Atlas cell edges at zoom-out | ● closed (G13i) | every atlas cell carries a 1-texel replicated border (terrain on a 34-texel pitch; GAF frames advance `w+2`/`h+2`), plus `TAGPU_EDGE_NUDGE` — 1/32 game-screen px in the terrain VS, after the zoom scale | the period-8 row anomaly at zoom 0.25 goes 1.92×/2.05× → 1.03–1.13× at every camera phase, `ss=1` and `ss=2`, 1024×768 and 1920×1080; ten zoom levels clean; **1× output bit-identical** to a build without it |
 
 So the engine's software frame is now **UI only** — inside the viewport it is a flat fill of
 one palette index, the *key*, with nothing on it but the mouse cursor (G13d took the rest). Everything a player looks at
@@ -76,7 +76,7 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 
 ### Awaiting review
 
-**G13h — the interior cracks, and a note that said they were impossible.** Reported from
+**G13i — the interior cracks, and a note that said they were impossible.** Reported from
 play: *"at max zoom out there are a lot of crack artifacts — black line on the right side of all
 the map features like trees, and blue-ish or sometimes black lines on all sides of map tiles,
 most often top/bottom."* Both are one bug. Quads are emitted on integer game-pixel boundaries, so
@@ -106,6 +106,57 @@ were swept for a key leak that was never there; the detector, `min(r,b) − g`, 
 key's tint and this defect never touches the key. §7.1 now carries the correction and §7.6 the
 mechanism. A seam that is periodic in screen space wants a periodic detector: score each row
 against its own two neighbours and group by `y mod (32·z)`.
+
+**G13h — the order overlay stopped flickering, and the waypoint star stopped being teal.**
+Both reported from play, both in `markown`, and both older than the gate that shipped them.
+
+*The flicker.* `mark_hook8` cleared the published marker layer on the way into every capture
+and only republished it at hook 9. That hole is open for the length of one capture — and the
+engine runs that block far more often than we present, because with the stack armed everything
+else in its frame is skipped and ours is the slow half. **Measured on a live skirmish at
+1024×768: 9 300–10 200 hook-8 blocks per 120 presented frames, ~80 per frame the player sees.**
+The GL thread reads the publication on cnc-ddraw's render thread, which leaves the primary
+surface's critical section long before `tagpu_overlay_draw`, so it landed in that hole **13
+times in 120 presents** — roughly every eighth frame had no order markers. Deciding "nothing
+this frame" *before* the capture and leaving the last publication standing otherwise took it to
+**0 in 840**. The second buffer already existed for exactly this; what was missing was the rule
+that a publication is only ever *replaced*, never emptied and refilled. Two buffers turn out to
+be enough, and that was measured rather than assumed (0 in ~50 000 publications for the case
+where the writer reclaims the slot the reader still holds) — it rests on the upload finishing
+inside two of the engine's blocks, so it is the number to re-take if the layer ever grows much
+faster than the block does.
+
+*The star.* The pulsing sprite at a waypoint is the one alpha-composited marker: `0x439740`
+goes through `AlphaCompsteBuf2OFFScreen 0x4B8500`, which reads the destination pixel and looks
+the pair up in `tab[(src<<8)|dst]`. Stock TA's destination is the terrain, so the star reads
+olive over grass; since G13b ours has been the fill key, so it blended with palette 254's
+bright cyan and looked washed out. **17.6 % of the sprite's box was on the cyan ramp; it is
+0 % now.** The fix is an identity LUT — every pair answering `src` — which turns that one
+composite into a copy, and the replay then draws it **opaque**: a deliberate departure from
+stock's blend, chosen over re-blending against our own scene, which would now be a shader
+change rather than another capture change.
+
+Three things this gate is worth remembering for:
+
+- **`markown.h` had already predicted the star bug and dismissed it** — "what they see
+  underneath is the fill key, which is exactly what they already read out of the engine's frame
+  today". True of what the primitive READS, wrong about what it WRITES. Both that comment and
+  `ui-markers.md` are corrected in place rather than deleted; the wrong inference is the useful
+  part.
+- **The blend LUT pointer is not a hook point.** `[globals+0xC0]` owns a 64 KB heap buffer:
+  `0x4BA5C0` allocates it, `0x4BA5F0` frees it from the graphics teardown, `0x4BAAD0` refills
+  64 KB *through* it. The first revision installed the swap at hook 8 and restored it at hook 9,
+  reasoning that a global can safely be put back a frame late — and the review caught that. It
+  cannot: `0x469C03 je 0x469D38` skips hook 9 whenever `drawUnits == 0` (TA's own movie
+  recorder, `0x495E88`, is the one caller that passes 0), and the star is drawn *before* that
+  branch, so an abandoned frame would leave our pointer to be clobbered or cross-heap-freed.
+  The swap is now bracketed around the drawer's two call sites — a call that always returns.
+- **What the reviewer had to correct in the prose, twice.** That `0x439740` is "not in a
+  function-pointer table" (it is, 19 times in `.rdata`; the field is simply never read in this
+  build), and that `DrawTranspRectangle 0x4BF8C0` reads a destination (it does not — it is
+  named for its hollow centre, and the band box rendering as a clean white outline instead of
+  washing out like the star is the visible proof). Addresses in
+  `exe-reverse-engineering.md` §"The blend LUT and the marker composites".
 
 **G13g — the camera's range follows the zoom.** Reported from play: *"when you zoom in and try
 to get to the edge of the map it's impossible — the engine pushes your camera back as if you

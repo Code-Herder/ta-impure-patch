@@ -74,6 +74,34 @@ it — before 2026-09-02 it did neither, so the twelfth instance drew slot 10 an
   first. `xprop -id <wid> WM_STATE` reads `Withdrawn` when this is what happened,
   and the WM may resize the window on remap, so a relaunch is the clean fix.
 
+**Which window is which: the title names the build and the instance.** Every `tacli
+launch` writes `tagpu_title.txt` into the gamedir and the DLL appends it, so the title bar
+reads
+
+```
+Total Annihilation - wt:worktree-gpu_render | tacli:play1
+```
+
+instead of the bare name every instance used to share. `wt:` is the **branch of the tree
+tacli was run from** — the tree whose `ddraw.dll` it pinned, so it says which *build* you
+are looking at, not just which checkout. `tacli:` is the **instance name**, the id every
+other tacli command takes, so the title also tells you what to type to drive that window.
+
+```bash
+tools/tacli launch t1                      # Total Annihilation - wt:<branch> | tacli:t1
+tools/tacli launch t1 --title "fog A/B"    # Total Annihilation - fog A/B
+tools/tacli launch t1 --no-title           # stock title, no label
+tools/tacli launch t1 --title auto         # back to the wt:/tacli: default
+```
+
+`--title` replaces the **whole** label, both fields included — it is the escape hatch for
+an arbitrary title, not a way to edit one field. It is sticky per instance like every other
+launch knob, and `--title auto` is the only way back out of a `--no-title`. A label that is
+blank, or has nothing printable left in it, is the same as `--no-title`. `tacli ls --json` reports the exact string as
+`window_title`, and that is what `tacli` searches for to find the client window — so
+**take the window from `tacli ls`, never from an `xdotool search` you typed yourself**;
+the title is no longer a constant you can hard-code.
+
 Handing the game over is `tacli launch <name> --no-shield`, or `tacli shield <name>
 off` on one that is already running: with the shield off their keyboard and mouse
 reach the game and yours is no longer the only input.
@@ -155,12 +183,32 @@ game; the registry is only where TA saves the last one. So:
   If a combo does nothing, read the diagnostic the shield logs when the hold expires —
   `shield: vk=17 released after 150ms, polls=2 down=2`. `down>0` means the game saw
   your modifier and the binding is the problem, not the input path.
+- **Injected modifiers need the shield ARMED, and that is not optional.** A polled
+  modifier only reaches TA through `fake_GetAsyncKeyState`, and
+  `tagpu_shield_key_state` opens with `if (!tagpu_shield_on()) return FALSE;` — so with
+  `--no-shield` (or after `shield off`) the poll falls through to the **real keyboard**
+  and your injected `down:shift` is invisible. Anything gated on a held modifier is
+  therefore **untestable with the shield off**: the order markers are the case that
+  bites, because `markown` samples the engine's own SHIFT hotkey (`0xF9` →
+  `GetAsyncKeyState(VK_SHIFT)`). Symptom: `mark: prefog=-` and no markers, with the
+  injection reporting `sent: down:shift` perfectly happily. Hand the instance over
+  *after* you have finished measuring, not before.
 - Hold anything across frames with `down:<tok>` / `up:<tok>` — keys, or
   `lbutton`/`rbutton`/`mbutton`. Drag-select is `down:lbutton`, `mouse:x,y`,
   `up:lbutton`.
 - `tacli eye X Y` pins the camera (writes both eye and scroll-target, else the engine
   fights back); `tacli eye <name> --release` frees it. Read the settled value from a
   `roster` call before doing coordinate maths.
+- **A moving unit invalidates `roster`'s `screen=` before your click lands.** A unit
+  with a move order walks between the read and the injected click, and a selection
+  click that misses is silent — the symptom is `native: … 0 sel` in the log and every
+  subsequent order going nowhere. Re-read the roster immediately before clicking, or
+  select first and order second. `grep -a "native: .* sel " tagpu.log` is the cheap
+  confirmation that the selection actually took.
+- **A right-click on water is rejected for a ground unit**, so it queues nothing and
+  draws no order markers — which looks exactly like a broken marker pass. Sample the
+  frame for grass before picking a waypoint (green-dominant, `g > b + 30`) rather than
+  guessing an offset from the unit.
 - Game speed: `keys <name> plus` / `minus` (TA's own feature, up to +10, and negative
   below normal — invaluable for catching fast events or slowing them for capture).
 
@@ -404,6 +452,14 @@ tools/tacli log w1 -g "weapons: (loader|VIOL|MISM)"
 - `tacli log -g` takes a Python regex: alternate with `(a|b)`, not `a\|b`.
 
 ## The input firewall (on by default)
+
+**"Human controllable" / "let me play it" / "hand it to me" means SHIELD OFF.** That is the
+whole content of the request: an instance launched with the shield on answers every `tacli`
+command and ignores the human's keyboard and mouse entirely, which reads to them as a game
+that is running but broken. So `--no-shield` at launch (or `tacli shield <i> off` on a running
+one), and check `tacli ls` says `OPEN` before saying it is theirs. Also check the window is on
+one of their monitors (*Where the window lands*) — the two together are what "controllable"
+means.
 
 While armed, the game ignores the real keyboard and mouse completely and sees only what
 tacli injects — the human can click and type across your window without perturbing your
@@ -654,8 +710,10 @@ storage's does not); `tacli log` returns a tail of the file, so count lines in t
 - `pkill -f TotalA.exe` kills your own shell (the pattern matches the wrapper).
   Use `pkill -x` / `pgrep -x`, or just `tacli stop`.
 - `tagpu.log` contains binary bytes: always `grep -a` (tacli's `log`/`wait` handle it).
-- Two X windows share the title `Total Annihilation` (frame + client), and the user's
-  browser/Discord windows match the *substring* — tacli matches exact title + pid.
+- Two X windows share each instance's title (frame + client), and the user's
+  browser/Discord windows match the *substring* — tacli matches exact title + pid. The
+  title now carries a per-tree label (above), so an instance launched before that existed
+  still answers to the bare `Total Annihilation`, and tacli searches for both.
 - The launch briefly warps the pointer to a screen origin (a wine-side quirk, not TA);
   tacli restores it and reports `pointer_restored`. Do not "fix" this with xdotool.
 - The DEBUG build writes `cnc-ddraw-TotalA-*.log` at **~100 MB/minute** and rotates
