@@ -98,6 +98,15 @@ Three things had to be true for that to work, and two of them were not obvious:
   surface. Otherwise a wide rect would license any engine drawer still running inside the
   viewport to write outside its allocation.
 
+A third, found by the code review and reproduced in the frame: **the engine can NAME more than
+it can DRAW ON.** Widening the addressable rect also moved where the engine put its cursor, and
+in the ring that is the side panel or off the surface — at 0.5× with the pointer at screen
+(320,400) there was no cursor at the pointer and a ghost one on the build panel. The cursor poll
+now has its own transform that keeps G13e's ring identity while the messages carry the widened
+`u`. The same ambiguity — engine coordinates `[0,128)` reached both by a ring pointer and by a
+pointer on the panel — is why the `0x498DA0` stub settles "world or UI?" from the true pointer
+position rather than from the coordinate it is handed.
+
 And the lesson the survey did not predict: **the engine is not defensive about inputs its own
 eye clamp made impossible.** An edge scroll at 0.5× took an access violation at `0x421E64`
 reading `[NULL+8]` — the widened clamp reaches world points the 1× viewport never could,

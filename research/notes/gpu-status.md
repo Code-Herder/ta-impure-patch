@@ -148,8 +148,21 @@ DLL attach, the true rect verified, *and* a zoomed-out view is live.
 
 The rect it writes is `main+0x37E27..0x37E33` (L, T, R, B) only — **never W/H at `+0x37E37`/`+0x37E3B`**,
 because the eye clamp `0x41C3C0` derives `maxEye = map − W` from them and a negative `maxEye`
-makes it alternate between 0 and a negative eye. Leaving W/H alone is also what keeps the true
-rect recoverable: it is `(0x80, 0x20, W, H)`, verified once against what `0x497F40` builds.
+makes it alternate between 0 and a negative eye. The true rect is derived from the **screen
+dimensions** at `+0x37E1F`/`+0x37E23` — fields nothing here writes — because `0x497F40` computes
+`W = R − L + 1` by *re-reading* L, so a store of ours landing in that window would corrupt W;
+W/H are checked against the derivation every frame and put back when they disagree.
+
+**The cursor is deliberately not a reader of this rect, and that is the design point.** The
+engine draws its sprite wherever `GetCursorPos` reports and the composite moves it back under
+the pointer from there, which only works while that position is inside the 1× viewport, over the
+terrain key fill. **The engine can NAME more than it can DRAW ON**: in the ring a widened `u`
+lands on the side panel — where the sprite is composited over panel pixels the composite must not
+stamp into the world — or off the surface entirely. So `tagpu_zoom_to_engine_draw()` keeps the
+ring identity for that one poll while the messages carry the widened `u`. The same ambiguity is
+why the `0x498DA0` stub takes `g_ddraw.cursor` rather than trusting the engine coordinate: at
+0.5× the range `[0,128)` is reached both by a ring pointer and by a pointer on the panel, and
+without the true pointer to settle it a click in the world lands in the minimap's click rect.
 
 ### 2.4 Tooling (not part of the render path)
 
@@ -203,6 +216,10 @@ things — bounds, origin, clip, and W/H — and §2.3b is that table. Two of th
   three arms of its `0x200..0x206` table), so a negative client x arrived as 65516 and the whole
   event vanished. Hover worked and clicks did not, for exactly `x < 0` or `y < 0` — which is half
   the ring. The byte patch is `GET_X_LPARAM`, identical for any position a real mouse can report.
+- **The engine can name more than it can draw on.** Widening the addressable rect also moved
+  where the engine drew its cursor, and in the ring that is the side panel or off the surface —
+  measured as no cursor at the pointer and a ghost one on the build panel. The cursor poll got
+  its own transform, which keeps the ring identity.
 
 And one crash the survey did not predict and running it did: the widened clamp reaches world
 points the 1× viewport never could, `GetGridPosPLOT` returns NULL outside the plot grid, and
