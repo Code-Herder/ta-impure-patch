@@ -530,7 +530,7 @@ typedef struct {
     unsigned char* gid;        /* per tri: which HGroup it belongs to        */
     unsigned char* pid;        /* per tri: which piece it belongs to         */
     int    piece;              /* piece the node being walked owns          */
-    int    ntri, trunc, ptrunc;
+    int    ntri, trunc, ptrunc, gtrunc, itrunc;
 } Build;
 
 /* decode images[idx] once per model; returns its HMesh.img slot, or -1 */
@@ -541,7 +541,7 @@ static int img_slot(Build* b, int idx)
     int i;
     if (idx < 0) return -1;
     for (i = 0; i < m->nimg; i++) if (m->img[i].idx == idx) return i;
-    if (m->nimg >= MAXIMG) return -1;
+    if (m->nimg >= MAXIMG) { b->itrunc = 1; return -1; }
 
     int im = jelem(g, groot(g, "images"), idx);
     if (im < 0) return -1;
@@ -608,7 +608,7 @@ static int group_for(Build* b, int matIdx)
     HMesh* m = b->m;
     int i;
     for (i = 0; i < m->ngrp; i++) if (m->grp[i].mat == matIdx) return i;
-    if (m->ngrp >= MAXGRP) return -1;
+    if (m->ngrp >= MAXGRP) { b->gtrunc = 1; return -1; }
     HGroup* h = &m->grp[m->ngrp];
     memset(h, 0, sizeof *h);
     h->mat = matIdx;
@@ -954,13 +954,23 @@ static int load_gltf(HMesh* m, const char* path)
     }
 
     _snprintf(b, sizeof b,
-              "hires: %s loaded, %d tris, %d material%s, %d image%s, %d piece%s%s%s",
+              "hires: %s loaded, %d tris, %d material%s, %d image%s, %d piece%s",
               path, m->ntri, m->ngrp, m->ngrp == 1 ? "" : "s",
               m->nimg, m->nimg == 1 ? "" : "s",
-              m->npiece, m->npiece == 1 ? "" : "s",
-              bd.trunc ? " (TRUNCATED at the triangle cap)" : "",
-              bd.ptrunc ? " (TRUNCATED at the piece cap: the rest cannot pose)" : "");
+              m->npiece, m->npiece == 1 ? "" : "s");
     hlog(b);
+    /* Every cap says so, on its own line: the counts above are what LOADED, so
+       silence about a cap reads as "the model really has 32 materials" — and a
+       model over the material or image cap comes out with holes or white
+       patches, which looks like a broken export rather than a limit. */
+    if (bd.trunc || bd.ptrunc || bd.gtrunc || bd.itrunc) {
+        _snprintf(b, sizeof b, "hires: TRUNCATED:%s%s%s%s",
+                  bd.trunc  ? " triangles past the cap dropped;" : "",
+                  bd.ptrunc ? " pieces past the cap cannot pose;" : "",
+                  bd.gtrunc ? " materials past the cap DROP their triangles;" : "",
+                  bd.itrunc ? " images past the cap render white;" : "");
+        hlog(b);
+    }
 
     free(bd.p); free(bd.n); free(bd.t); free(bd.gid); free(bd.pid);
     ctx_free(&g);

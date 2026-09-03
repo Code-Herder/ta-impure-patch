@@ -1468,6 +1468,22 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 }
                 nm[31] = 0;
                 n2->hires = tagpu_hires_mesh(nm);
+                /* A replacement unit contributes NO vertices to this pass, so
+                   routing it there while the other pass cannot draw makes it
+                   invisible rather than stock — and the other pass latches off
+                   for the session when its program fails to build. Ask first;
+                   the file is still looked up and logged, so the log says the
+                   glTF was found AND why the unit is rendering as a 3DO. */
+                if (n2->hires && !tagpu_hires_draw_ready()) {
+                    static int said = 0;
+                    n2->hires = NULL;
+                    if (!said) {
+                        said = 1;
+                        nlog("hires: the replacement pass failed to build (see "
+                             "'hires draw:' above) - replacement units fall "
+                             "back to the engine's own 3DO");
+                    }
+                }
             }
         }
         /* waterline + digger clipping, PATH B only (composite has a depth
