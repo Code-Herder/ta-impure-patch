@@ -29,6 +29,7 @@ moved by the composite too.
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
 | Health bars, order markers, group digits, build cursor, band box, selection rect | G13d | `markown`: 6 call-site redirects + 1 detour; bars re-drawn, the rest captured and replayed |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e | `tagpu_zoom.c` + the composite |
+| The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + 1 more + a 3-site byte patch, all behind `vpwide.on` |
 | **Chat, dialogs, side panel, minimap, top bar** | **— never** | screen-space and correct at 1:1 at any zoom; they come through the composite key by design |
 
 **Phases.** Phase 0 (foothold) is complete and Phase B (blit-level GPU units) is verified
@@ -134,6 +135,22 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x41C442` | `call 0x466B70` — ...and at bottom | call-site redirect |
 | `0x430FAE` | `call 0x4B6A50` — the one site that persists `ScrollSpeed` | call-site redirect; substitutes the player's own value so our scaling can never reach the registry |
 
+### 2.3b The addressable viewport at zoom < 1 (`tagpu_vpwide.c`, `vpwide.on`)
+
+**Opt-in and off by default.** Nothing here writes a byte unless `tagpu_vpwide.on` existed at
+DLL attach, the true rect verified, *and* a zoomed-out view is live.
+
+| VA | What it is | Mechanism |
+|---|---|---|
+| `0x468D85` / `0x46964F` / `0x469F95` | `call 0x4C6B10` — the three sites in `DrawGameScreen` that copy the viewport rect into the offscreen surface's clip rect (`+0x1C..+0x28`) | call-site redirect; **clamped to the surface**, because `0x4C6B10` is a bare four-dword store with no clamping and a wide rect would license an engine drawer to write outside its allocation |
+| `0x499221` | `call 0x498DA0` — the mouse → world / map cell / hovered feature conversion, and the ONE reader that uses L and T as the screen→world **origin** (`world = eye + clamp(pos, L, R) − L`) | call-site redirect; redone with the TRUE origin and the WIDE clamp, a straight pass-through whenever the rect is not ours |
+| `0x4B5E5F` / `0x4B5EC0` / `0x4B5F0C` | the three arms of TA's own window procedure's `0x200..0x206` jump table, each unpacking the mouse `lParam` with `AND 0xffff` + `SHR 0x10` | **byte patch** → `MOVSX ECX,CX` + `SAR EAX,0x10`. `LOWORD`/`HIWORD` is zero-extending, so a client x of −20 arrived as 65516 and the event was lost; this is Microsoft's own `GET_X_LPARAM`, and for any position a real mouse can report it is bit-for-bit identical |
+
+The rect it writes is `main+0x37E27..0x37E33` (L, T, R, B) only — **never W/H at `+0x37E37`/`+0x37E3B`**,
+because the eye clamp `0x41C3C0` derives `maxEye = map − W` from them and a negative `maxEye`
+makes it alternate between 0 and a negative eye. Leaving W/H alone is also what keeps the true
+rect recoverable: it is `(0x80, 0x20, W, H)`, verified once against what `0x497F40` builds.
+
 ### 2.4 Tooling (not part of the render path)
 
 | VA | What it is | Module (arm file) |
@@ -144,15 +161,15 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x4969D2` | the sim tick site (5 stolen) | `scenario` — applies a situation on the game thread |
 | `0x485F50` `0x4864B0` `0x422DD0` `0x4224B0` `0x481550` `0x423C50` `0x43F0E0` `0x43AFC0` | `CreateUnit`, `KillUnit`, `FeatureName2ID`, `LoadFeature`, `GetGridPosPLOT`, `SpawnFeatureOnMap`, `ScriptAction_Type2Index`, `NewMainOrder2Unit` | `scenario` — *called by us*, never patched |
 
-### 2.5 State we read (never write, except one)
+### 2.5 State we read, and the two fields we write
 
 | Where | What |
 |---|---|
 | `0x511DE8` | `TAdynmemStruct**` — the root of everything below |
 | `main+0x14357` / `+0x1435B` | unit array begin/end, stride `0x118` |
-| `main+0x1435F` / `+0x14367` | HotUnits ids / count (**culled to the UNZOOMED viewport** — see §3) |
+| `main+0x1435F` / `+0x14367` | HotUnits ids / count (culled to whatever the viewport rect says — the unzoomed one, or the widened one under `vpwide`) |
 | `main+0x1431F` / `+0x14323` | eyeX / eyeY |
-| `main+0x37E27..0x37E3B` | viewport rect L/T/W/H |
+| `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live** (§2.3b); every pass that means the true 1× rect must call `tagpu_vpwide_true_rect()` rather than read the field |
 | `main+0x2C76` | mouse position |
 | `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index) |
 | `main+0x37F06` bit0 | `damagebars` registry option |
@@ -167,100 +184,52 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 
 Ranked by how much they cost a player.
 
-### 3.1 The display-only ring at zoom < 1 *(the big one)*
+### 3.1 The ring at zoom < 1 — closed for play, bounded for markers
 
-At zoom < 1 the view shows more world than the engine's 1× viewport has room to **name**. The
-engine can only address screen positions inside that viewport — a position outside it is routed
-to the screen-space UI and does nothing at all (measured). So the ring of world outside the 1×
-viewport is display-only:
+At zoom < 1 the view shows more world than the engine's 1× viewport can **name**, and until
+G13f that made the outer ring display-only: a click there was dropped whole rather than landed
+on the wrong world point, and the captured marker layers clipped at the same edge. **G13f closes
+the input half** — `vpwide` (§2.3b) widens the rect the engine addresses to exactly the range the
+zoom transform produces, so a unit in the ring can be selected and ordered like any other. It is
+**opt-in**: `tacli arm <i> vpwide.on`, at launch like every other code-patching pass.
 
-- **Input stops there.** A button press in the ring is dropped whole rather than landed on the
-  wrong world point (`tagpu_zoom.h`).
-- **The captured marker layers stop there** too — order markers and group digits clip at the
-  unzoomed viewport's edge, because the engine's drawers clip to the OFFSCREEN's own rect
-  ([UI markers](ui-markers.html) §6.1). Health bars do not: they are re-drawn, not captured.
-- **The addressable region is the central `z` fraction of the viewport in each axis**, so the
-  dead area grows fast: at 0.5× only the central 50 % per axis — **25 % of what you can see** —
-  is clickable; at 0.25× it is 6 %. Zoom ≥ 1 has no such limit (`u` contracts toward the centre
-  and always stays inside).
+**What it took, and why the shape is not obvious.** The rect's readers want four different
+things — bounds, origin, clip, and W/H — and §2.3b is that table. Two of them are traps:
 
-**Handled is not fixed.** Dropping the click is the *safe* answer, not the closed one: nothing
-lands on the wrong world point and nothing is left half-pressed, but a unit you can plainly see
-in the outer ring cannot be selected or ordered. **Zoom-out below ~1 is a viewing mode, not yet
-a play mode**, and that is the honest status.
+- **`0x498DA0` uses L and T as the screen→world ORIGIN**, not as a bound. Measured: moving
+  L 128→0 and T 32→0 shifts the map cell under the cursor by exactly `(+8, +2)` cells. It is
+  redirected and redone with the true origin and the wide clamp.
+- **TA's own window procedure zero-extends the mouse `lParam`** (`AND 0xffff` / `SHR 0x10`, all
+  three arms of its `0x200..0x206` table), so a negative client x arrived as 65516 and the whole
+  event vanished. Hover worked and clicks did not, for exactly `x < 0` or `y < 0` — which is half
+  the ring. The byte patch is `GET_X_LPARAM`, identical for any position a real mouse can report.
 
-**It is one boundary, not three, and one fix would close all of it.** Three routes, cheapest
-first — and the first looks much more tractable after G13a–d than it would have before:
+And one crash the survey did not predict and running it did: the widened clamp reaches world
+points the 1× viewport never could, `GetGridPosPLOT` returns NULL outside the plot grid, and
+`GetGridPosFeature` dereferences whatever it is handed — an access violation at `0x421E64`
+reading `[NULL+8]` during an edge scroll at 0.5×. The world point is now clamped to the map, the
+cell to the plot grid, and the plot null-checked even then. **The engine is not defensive about
+inputs its own eye clamp made impossible; a widened viewport is exactly what makes them possible.**
 
-1. **Widen the engine's own viewport rect** (`main+0x37E27..`) while zoomed out, and keep OUR
-   passes on the true 1× rect. The routing test, the unit pick and the **HotUnits cull** all read
-   that rect, so one widening closes input *and* the captured-marker half of the gap.
-2. **Shift the eye for the duration of a click** — exact, but it assumes the engine consumes the
-   click during dispatch rather than queueing it, which is unverified.
-3. **Resolve the click ourselves and call the engine's order API directly** — we already call
-   `ORDERS_NewMainOrder2Unit 0x43AFC0` and friends from `tagpu_scenario.c`, so the door is open;
-   but it means reimplementing selection, box-select, build placement and every cursor mode.
+**What is still bounded.** The captured marker layers improve but do not close, and the bound is
+not the rect any more — it is the **engine's offscreen, which is screen-sized**. Markers are drawn
+by the engine into a buffer of ours through its own clip; that clip now reaches the surface edge
+instead of the 1× viewport, so at 0.5× on a 1024×768 frame they cover screen `[288,863]×[192,575]`
+where they used to stop at `[352,799]×[208,559]` — confirmed with a waypoint at `s=(318,542)` that
+used to be clipped. Beyond that the engine would have to draw at a negative position into a
+screen-sized buffer, which it cannot. Closing that half means giving the capture window its own
+wider buffer and offsetting the base so negative engine coordinates land inside it: `markown`
+already swaps `ctx[CTX_BASE]`, so it would also have to own `CTX_PITCH` and the clip fields.
+Health bars are unaffected either way — they are re-drawn from unit state, not captured.
 
-Route 1 is the one to try, and it is a real piece of work with real risk — not a tidy-up.
+**MP-safety** is the `ScrollSpeed` argument unchanged: the viewport rect is camera state that no
+other machine ever sees. G9's replay byte-diff would settle it for good.
 
-#### What route 1 actually needs *(surveyed and measured 2026-09-02; nothing built)*
-
-**The field is six ints, not four.** `main+0x37E27` is a `RECT` — L, T, R, B — followed by W at
-`+0x37E37` and H at `+0x37E3B`. **The one engine WRITE, `0x49821D`, is not a per-frame fight**:
-it sits in the game-screen enter callback at `0x497F40` (installed as a function pointer, reached
-from the state table around `0x496C3D`), which recomputes **all six from the screen dimensions**
-— `L=0x80`, `T=0x20`, `R=screenW-1`, `B=screenH-33`, then `W=R-L+1`, `H=B-T+1` (measured live at
-1024×768: `128, 32, 1023, 735, 896, 704`). Because nothing it writes depends on the previous
-value, a re-entry **restores** the true rect rather than compounding on a widened one.
-
-**Its readers fall into four kinds, and the kinds want different things.**
-
-| Kind | Who | What widening does |
-|---|---|---|
-| **Bounds**, with the origin hardcoded `+0x80`/`+0x20` | routing test `0x469DF6`, `GetUnitAtMouse 0x48CD80` (its *first* instruction is `IsPositionInRect(vpRect, mouse)`), the **HotUnits cull `0x48BAE0`**, the projectile `0x49C1BE` and debris `0x421234` visibility tests | **exactly the wanted effect** — the addressable region grows and every coordinate stays right |
-| **Origin** | `0x498DA0` alone — `world = eye + clamp(pos, L, R) - L`, and the same in y with T,B. One call site, `0x499221` | **L and T are the screen→world origin, not a bound.** Moving them offsets every ground order, build placement and feature-hover by the same amount |
-| **Clip** | three `CALL 0x4C6B10` inside `DrawGameScreen` (`0x468D85`, `0x46964F`, `0x469F95`) | `0x4C6B10` is a bare four-dword store into the offscreen surface's clip rect (`+0x1C..+0x28`, initialised to `0,0,w-1,h-1` by `SurfaceCreateNamed`) **with no clamping**, so a rect outside the surface would license an engine drawer to write outside its allocation |
-| **W/H only** | eye clamp `0x41C3C0`/`0x41C4C0` (`maxEye = map − W`), the scroll/centre cluster `0x41C7C0…0x41D240`, centre-on-unit `0x496EE0`/`0x497180`, and the load-time terrain tile grid `0x483610` (called once, from `LoadGameData_Main`) | **leave W and H alone.** Shrinking `maxEye` below 0 on a map narrower than `W/z` makes the clamp alternate between 0 and a negative eye every call |
-
-`DrawUnitUI 0x4AB170` also takes the rect, but only to decide which GUI gadgets to repaint;
-widening repaints more of the panel at its own geometry, which is harmless.
-
-**Measured, not argued.** A temporary probe widened **B alone**, 735 → 767 (inside the surface,
-so the clip kind cannot bite, and B is a bound in `0x498DA0`, not the origin):
-
-- a commander parked at screen y 750 — below the 1× rect — **selects with the widening and not
-  without** (`tacli ui` reports `ARMCOM1.GUI` vs `ARMMAIN2.GUI`);
-- **at 0.5× the same unit in the display-only ring**, screen `(394,567)`, behaves the same way:
-  dropped without, selected with — the acceptance criterion, in the band this half reaches;
-- the **HotUnits count goes 7 → 8** once the unit is fully below the old bottom edge, so the
-  captured-marker/health-bar cull really does follow the same rect;
-- the grid cell under the cursor at screen y 764 stops clamping (`gridY 67 → 69`) and is exactly
-  right, so `0x498DA0` needs no correction when only R/B move;
-- the GL frame is **unchanged** — 720 differing pixels, all inside an animated smoke plume.
-
-And the counter-measurement: moving **L 128 → 0 and T 32 → 0** shifts the grid cell under the
-cursor by exactly `(+8, +2)` cells = `(+128, +32)` world px — the amount L and T moved. That is
-the origin behaviour, observed.
-
-**So the value is all in L and T.** Widening R/B alone takes the addressable share at 0.5× from
-25 % to about 26 %: at 1024×768 the ring is symmetric about the view centre and R was already at
-the screen edge. Closing the ring needs L and T negative — `(-320, -320, 1471, 1087)` at 0.5× —
-which is what makes the origin and clip problems real. Route 1 is therefore four pieces:
-
-1. **Publish the true rect** from `tagpu_zoom.c` and switch the passes that need it off the engine
-   field — `terrown`'s key fill, `markown`'s capture rect, `tagpu_native`'s `vpL/vpT` and the
-   composite's `uVp` (its `inbox(sp, uVp)` cursor guard keeps working unchanged *because* `uVp`
-   stays true). `tagpu_input.c` and `tagpu_scenario.c` read W/H only and are unaffected.
-2. **Widen L/T/R/B, never W/H**, and only while a zoomed view is live.
-3. **Guard the clip**: redirect the three `CALL 0x4C6B10` sites to a stub that clamps to the
-   surface. Fail-closed, in the mechanism the stack already uses everywhere.
-4. **Correct the origin**: redirect `0x499221` to a stub that biases the eye by
-   `(L_wide − 0x80, T_wide − 0x20)` for the duration of the call, so the engine's own conversion
-   comes out right without reimplementing it. The bias must be published, because our render
-   thread reads the eye too.
-
-**MP-safety** is the `ScrollSpeed` argument unchanged: the viewport rect and the eye are camera
-state that no other machine ever sees. G9's replay byte-diff would settle it for good.
+**If it ever needs undoing:** the two routes that were not taken are shifting the eye for the
+duration of a click (exact, but it assumes the engine consumes the click during dispatch rather
+than queueing it, and our overlay reads the eye on cnc-ddraw's render thread so a transient bias
+races it), and resolving the click ourselves against `ORDERS_NewMainOrder2Unit 0x43AFC0` — which
+means reimplementing selection, box-select, build placement and every cursor mode.
 
 ### 3.2 Smaller, known, and cheap to close
 

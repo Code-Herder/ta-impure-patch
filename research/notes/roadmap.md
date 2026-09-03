@@ -58,6 +58,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Mouse cursor | ● moved in the composite (G13e) | the cursor is the ONLY engine pixel left inside the viewport, so the composite paints the box around `u` at the box around `s` | full sprite at the pointer at 0.25×/0.5×/1×/2×, in every corner and in the display-only ring |
 | Click → world point | ● transformed (G13e) | `tagpu_zoom.c`: one rewrite at the three doors into the engine's own wndproc, plus `fake_GetCursorPos` | at 0.5× the commander selects at its DRAWN position (394,427) and no longer at its 1× one (212,470); the side panel still clicks 1:1 |
 | Minimap view rectangle, scroll rate | ● zoom-aware (G13e) | `0x466B70` ×2 redirected and its rect rescaled by 1/z; `ScrollSpeed` (`main+0x1434D`) driven at base/z | minimap box doubles at 0.5× and quadruples at 0.25×; ScrollSpeed 32 → 64 → 128 → 16 at 2×, and restores |
+| The addressable ring at zoom < 1 | ● closed for input (G13f, **opt-in** `vpwide.on`) | `tagpu_vpwide.c`: the engine's own viewport rect widened to the transform's range, with the clip (`0x4C6B10` ×3) and the screen→world origin (`0x498DA0`) redirected and corrected, plus a signed `lParam` unpack in TA's wndproc | at 0.5× a ring click selects the unit under it in all four quadrants and a right-click walks it to the world point clicked; 1× untouched; the captured markers reach the offscreen bound, not the frame edge |
 
 So the engine's software frame is now **UI only** — inside the viewport it is a flat fill of
 one palette index, the *key*, with nothing on it but the mouse cursor (G13d took the rest). Everything a player looks at
@@ -72,6 +73,40 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G13f — the ring at zoom < 1 is a play mode (opt-in, `vpwide.on`).** G13e's honest answer
+to the ring was to *drop* the click; this addresses the ring instead. `tagpu_vpwide.c` widens
+the engine's own viewport rect — `main+0x37E27..0x37E33`, never W/H — to exactly the range the
+zoom transform produces, so the routing test, `GetUnitAtMouse` and the **HotUnits cull** all
+follow the view. Verified at 0.5× on `feat-forest`: a ring click selects the unit under it in
+all four quadrants (`ARMCOM1.GUI` vs `ARMMAIN2.GUI`) and a right-click into the ring walks it
+to the world point clicked.
+
+Three things had to be true for that to work, and two of them were not obvious:
+
+- **`0x498DA0` uses L and T as the screen→world ORIGIN**, not as a bound
+  (`world = eye + clamp(pos, L, R) − L`). Measured: moving L 128→0 and T 32→0 shifts the map
+  cell under the cursor by exactly (+8, +2) cells. Its one call site is redirected and the
+  conversion redone with the true origin and the wide clamp.
+- **TA's own window procedure zero-extends the mouse `lParam`** — `AND 0xffff` / `SHR 0x10` at
+  all three arms of its `0x200..0x206` jump table, the `LOWORD`/`HIWORD` idiom. A client x of
+  −20 arrived as 65516 and the event was lost, so hover worked and clicks did not, for exactly
+  `x < 0` or `y < 0` — half the ring. The byte patch is `GET_X_LPARAM`, and for any position a
+  real mouse can report it is bit-for-bit identical.
+- **The offscreen's clip rect comes from the same field** through `0x4C6B10`, which is a bare
+  four-dword store with no clamping, so those three call sites are redirected and clamped to the
+  surface. Otherwise a wide rect would license any engine drawer still running inside the
+  viewport to write outside its allocation.
+
+And the lesson the survey did not predict: **the engine is not defensive about inputs its own
+eye clamp made impossible.** An edge scroll at 0.5× took an access violation at `0x421E64`
+reading `[NULL+8]` — the widened clamp reaches world points the 1× viewport never could,
+`GetGridPosPLOT` returns NULL outside the plot grid, and `GetGridPosFeature` dereferences it.
+Every widened value now has to be brought back into range before it is handed to engine code.
+
+The marker half is **improved, not closed**: the capture reaches the engine's screen-sized
+offscreen instead of the 1× viewport, and beyond that the engine cannot draw at a negative
+position into a screen-sized buffer ([UI markers](ui-markers.html) §6.1).
 
 **G13e — zoom is finished: the click, the cursor, the minimap and the scroll rate.**
 G13d made everything the player *looks* at ours and scaling as one thing; what was left
@@ -99,8 +134,9 @@ knows it.
   at. There the transform returns the pointer unchanged, which keeps hover, edge scroll
   and the cursor working exactly as at 1×, and the **button event is dropped whole** —
   the virtual key state as well as the message, because the engine polls that too.
-  A click in the ring now leaves the selection alone instead of selecting whatever
-  happened to be at the 1× position.
+  A click in the ring leaves the selection alone instead of selecting whatever happened
+  to be at the 1× position. **G13f closes this for input** (below); the drop is what
+  still happens with `vpwide.on` absent, and it stays the safe fallback.
 - **The minimap view rectangle and the scroll rate**, both zoom-aware, both by letting
   the engine do the work and adjusting the result.
 

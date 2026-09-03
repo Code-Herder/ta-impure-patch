@@ -442,22 +442,30 @@ different keymap cannot make us disagree with it) or a watched HotUnit carrying 
 squad tag with `damagebars` on. With `damagebars` off — the default when the registry
 value is missing — the common frame costs nothing at all.
 
-**The gap: the captured layers are clipped to the 1× viewport.** The engine's drawers
-clip to the OFFSCREEN's own rect, so at zoom < 1 order markers and group digits stop
-at the unzoomed viewport's edge while the world carries on past it. Health bars, which
-are the always-on markers, do not have this limit because they are re-drawn. Closing
-it for the rest would mean widening the context's clip rect and re-basing the scratch
-buffer around a negative origin — possible, and deliberately not done here.
+**The gap: the captured layers are clipped to the offscreen.** The engine's drawers clip
+to the OFFSCREEN's own rect, so at zoom < 1 order markers and group digits stop while the
+world carries on past them. Health bars, which are the always-on markers, do not have this
+limit because they are re-drawn.
 
-**G13e found the same edge from the other side, and named it.** The engine can only
-*name* screen positions inside its own viewport — a click whose position falls outside
-it is routed to the screen-space UI and does nothing at all (measured). So at zoom < 1
-the ring of world outside the 1× viewport is **display-only**: the captured markers stop
-there, and input stops there too — a click in it is *dropped* rather than landed on the
-wrong world point (`tagpu_zoom.h`). It is one
-boundary, not two, and one fix would close all of it: give the engine a wider addressable
-rect, or shift its eye for the duration of a click. Still only worth doing if zoom-out
-becomes a real play mode rather than a demo.
+**G13f moved that edge but did not remove it.** `vpwide` widens the engine's addressable
+viewport rect, and the same rect is what `DrawGameScreen` copies into the offscreen's clip
+— so with `vpwide.on` armed the capture reaches the **surface** bound rather than the 1×
+viewport (at 0.5× on a 1024×768 frame, screen `[288,863]×[192,575]` instead of
+`[352,799]×[208,559]`; confirmed with a waypoint at `s=(318,542)` that used to be clipped).
+`layer_begin` asks for the addressable rect for exactly this reason, and the intersection
+with the context clip is what keeps it inside our scratch. Beyond the surface the engine
+would have to draw at a negative position into a screen-sized buffer, which it cannot:
+closing that last part means giving the capture window its own wider buffer and offsetting
+the base so negative engine coordinates land inside it — `markown` already owns
+`ctx[CTX_BASE]`, so it would also have to own `CTX_PITCH` and the clip fields. Possible,
+and deliberately not done here.
+
+**The input half of the same boundary IS closed.** G13e named it — the engine can only
+*name* screen positions inside its own viewport, and a click outside it does nothing at all
+(measured) — and G13f closes it: with `vpwide.on` a click in the ring selects and orders
+like any other ([GPU status](gpu-status.html) §2.3b, §3.1). Without that arm the pre-G13f
+behaviour stands and a ring click is *dropped* rather than landed on the wrong world point
+(`tagpu_zoom.h`).
 
 ---
 

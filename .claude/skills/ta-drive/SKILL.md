@@ -465,12 +465,23 @@ Two things to know when driving zoomed:
 - **`tacli click` takes the position ON SCREEN**, the same as your eyes — the transform
   is applied on the far side of `g_ddraw.cursor`, so the injected path and the human's
   mouse cannot disagree.
-- **At zoom < 1 the outer ring of the view is DISPLAY-ONLY.** The engine can only name
-  screen positions inside its own 1× viewport, so the world the zoom-out reveals beyond
-  it has no address: a click there is **dropped** (the selection is left alone rather
-  than being moved to whatever sat at the 1× position), and the captured marker layers
-  stop at the same edge. At 0.5× the addressable region is the central half of the frame
-  in each axis. Zoom ≥ 1 has no such limit.
+- **At zoom < 1 the outer ring needs `vpwide.on`, or it is display-only.** The engine can
+  only name screen positions inside its own 1× viewport, so without that arm the world the
+  zoom-out reveals beyond it has no address: a click there is **dropped** (the selection is
+  left alone rather than being moved to whatever sat at the 1× position). At 0.5× the
+  addressable region is then the central half of the frame in each axis. Zoom ≥ 1 has no
+  such limit either way.
+
+**`tacli arm <i> vpwide.on`** (at launch) closes that: it widens the rect the engine
+addresses to exactly what the zoom shows, so a ring click selects and orders normally.
+Verify with `vpwide: ARMED (…)` and `vpwide: true viewport rect verified (128,32 896x704)`;
+you will also see `vpwide: viewport rect restored to 1x` whenever the zoom goes back to 1.
+It writes engine state (`main+0x37E27..0x37E33`, camera state only) and patches four more
+sites, so it is **off by default** — arm it when you are testing zoomed play, leave it off
+when you want the pre-G13f baseline. Two things it does not change: the captured **order
+markers** still stop at the engine's screen-sized offscreen (further out than before, not
+to the frame edge), and the left/up edge-scroll not firing under injected input is
+pre-existing and present with it disarmed too.
 
 **Particles (smoke, fire, wakes, nanolathe) are `sfx.on`** — tokens `log`, `passive`,
 `nosmoke`, `nofire`, `nowake`, `nonano` — on the same `fxown.on` patch set (tacli auto-arms
