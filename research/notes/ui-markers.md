@@ -134,6 +134,11 @@ cell granularity like everything else under the overlay). Block layout
             jump entry 0x4C1BB5 = GetAsyncKeyState(0x10))     ← SHIFT held?
 0x469BFC  if held: call 0x48CC30(&ctx, main+0x142F3)          ← ORDER MARKERS (§3)
           (note: NOT gated on drawUnits — runs even when the unit block is skipped)
+0x469C01  if (!drawUnits) goto 0x469D38  -- PAST hook 9, which is therefore
+          NOT reached on such a frame. Only one of DrawGameScreen's four callers
+          passes drawUnits=0: 0x4962C2, TA's movie recorder ("%s\MOVIE%03i",
+          function 0x495E88, `xor ebx,ebx` @0x495EA1). 0x495C74 and 0x495E64
+          pass a literal 1; 0x4969CC's ebx is set to 1 @0x4967CF. [BINARY-VERIFIED]
 0x469C01  if (drawUnits) for each HotUnit (u16 indices at *(main+0x1435F),
           count main+0x14367; unit = *(main+0x14357) + idx*0x118):
   0x469C4A   if (!(main+0x37F06 & 1) && unit->0xAC == 0) continue;
@@ -466,6 +471,40 @@ and deliberately not done here.
 like any other ([GPU status](gpu-status.html) §2.3b, §3.1). Without that arm the pre-G13f
 behaviour stands and a ring click is *dropped* rather than landed on the wrong world point
 (`tagpu_zoom.h`).
+
+### 6.2 The capture runs ~83× per presented frame [MEASURED 2026-09-03]
+
+The game thread and the GL thread are not in step, and they are not even close. With the
+stack armed, almost everything in `DrawGameScreen` is skipped — terrain, units, features,
+effects and fog are all ours — so the engine's frame is cheap and free-runs, while ours is
+the slow half. Counted on a live skirmish at 1024×768: **9 300–10 200 hook 8 → hook 9
+blocks per 120 presented frames, i.e. 78-85 captures for every frame the player sees.**
+`cnc-ddraw` presents from its own thread (`ogl_render_main`), which leaves the primary
+surface's critical section long before `tagpu_overlay_draw` runs, so the read is concurrent
+with the game thread by design.
+
+Two consequences, both measured with SHIFT held:
+
+- **The publication must only ever be REPLACED, never emptied first.** `mark_hook8` used
+  to `layer_clear` on the way in and republish at hook 9; that hole is open for the length
+  of one capture, and at 80 captures a frame the GL thread landed in it **13 times in 120
+  presents (~11 %)** — an order overlay that visibly flickered on and off the whole time
+  SHIFT was down. Deciding "nothing this frame" *before* the capture and leaving the last
+  publication standing otherwise takes it to **0 in 840**.
+- **Two buffers are enough, and that was checked rather than assumed.** The writer
+  alternates slots, so the buffer the GL thread is uploading is only reclaimed two
+  publications later. Instrumented for the case where the slot about to be key-filled is
+  the one the reader still holds: **0 in ~50 000 publications at 1024×768**. It is the
+  `glTexSubImage2D` finishing inside two of the engine's blocks that makes that true, so it
+  is the number to re-take if the layer ever grows much faster than the block does.
+
+The post-fog window (build cursor, band box) has the same shape with one twist: its "there
+was nothing to draw" is only knowable *in arrears*, because no `DrawTranspRectangle` came.
+It is therefore decided at the **next** frame's hook 8, about the frame that just ended —
+a one-block ghost where the old code had a hole most of a frame wide. Two residuals are
+known and deliberately left: the block in which a drag ends still carries its last rect,
+and the second of the two `DrawTranspRectangle` calls continues into the buffer the first
+one published, so a present between them shows the outer outline without the inner.
 
 ---
 

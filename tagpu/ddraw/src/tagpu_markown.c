@@ -66,9 +66,28 @@ static unsigned g_beat = 0, g_last = 0;
    thread may still be uploading the other: a single buffer would let a present
    catch the key-fill half-done and show a frame with the top of every marker
    missing, which reads as flicker. Two buffers and a published pointer cost
-   one more allocation and remove the whole class. */
+   one more allocation and remove the whole class.
+
+   The publication is therefore only ever REPLACED, never emptied and refilled.
+   That distinction is the whole point and it is not academic: the engine runs
+   this draw block far more often than we present — measured at ~83 blocks per
+   presented frame on a live skirmish, because everything else in its frame is
+   skipped and ours is the slow half — so anything the game thread leaves the
+   published slot holding for the length of one capture is what roughly a tenth
+   of all presents will read. Clearing at the start of a capture cost exactly
+   that: 13 presents in 120 with SHIFT held showed no order markers at all.
+
+   TWO buffers are enough only because the reader outruns them, and that was
+   measured rather than assumed. The writer alternates slots, so the buffer the
+   GL thread is uploading is reclaimed two publications later — about 0.4 ms at
+   the rate above. Instrumented for the case that matters (the slot about to be
+   key-filled is the one the reader still holds): 0 in ~50 000 publications at
+   1024x768. It is the upload finishing inside two of the engine's blocks that
+   keeps this true, so it is the thing to re-measure if the layer ever grows far
+   faster than the block does. */
 typedef struct {
     unsigned char* buf[2];
+    unsigned char* retired[2];            /* the pair before the last growth */
     int   bytes;                          /* size of each buffer             */
     int   which;                          /* the one being written           */
     int   active;                         /* base is currently swapped out   */
@@ -112,6 +131,8 @@ int tagpu_markown_layer(int i, TAGPU_MARKLAYER* out)
 }
 
 /* ---- the capture itself ---------------------------------------------- */
+
+static void layer_clear(LAYER* L);
 
 /* Point the context's pixel base at our scratch and, on the first call of a
    frame, key-fill the viewport rect of it first. Returns 0 (and leaves the
@@ -171,15 +192,38 @@ static int layer_begin(LAYER* L, int* ctx, int fresh)
     if (x1 <= x0 || y1 <= y0) return 0;
 
     if (need > L->bytes) {
-        unsigned char* a = (unsigned char*)realloc(L->buf[0], (size_t)need);
-        unsigned char* b;
-        if (a) L->buf[0] = a;
-        b = a ? (unsigned char*)realloc(L->buf[1], (size_t)need) : NULL;
-        if (b) L->buf[1] = b;
-        if (!a || !b) { flog("markown: capture buffer alloc failed"); return 0; }
+        /* NOT realloc. It moves the block, and the GL thread may be part-way
+           through a glTexSubImage2D out of it with no handshake to wait on —
+           dropping the publication first would only narrow that window, not
+           close it, because the reader has already copied the pointer out.
+           Allocate a new pair and RETIRE the old one for a generation instead:
+           `need` only grows when the engine's surface pitch does, i.e. on a
+           resolution change, so this holds at most one spare pair and frees it
+           the next time round, by which point no reader can still be in it. */
+        unsigned char* a = (unsigned char*)malloc((size_t)need);
+        unsigned char* b = a ? (unsigned char*)malloc((size_t)need) : NULL;
+        if (!a || !b) {
+            free(a); free(b);
+            flog("markown: capture buffer alloc failed");
+            return 0;                     /* buffers untouched; retry next call */
+        }
+        free(L->retired[0]); free(L->retired[1]);
+        L->retired[0] = L->buf[0]; L->retired[1] = L->buf[1];
+        L->buf[0] = a; L->buf[1] = b;
         L->bytes = need;
+        /* both descriptors now name pixels in the retired pair */
+        layer_clear(L);
     }
-    L->which ^= 1;
+
+    /* The slot the GL side is NOT reading, chosen BEFORE the fill and
+       REMEMBERED for layer_end: deriving it again there would pick the wrong
+       one if layer_clear ran on the other thread in between. Buffer index and
+       descriptor slot are the same number by construction, so this KEY FILL can
+       never land in the buffer the published descriptor names, and one index
+       cannot drift from the other. (The non-fresh path above is the deliberate
+       exception — see mark_transp.) */
+    L->pend = (L->pub == 0) ? 1 : 0;
+    L->which = L->pend;
     buf = L->buf[L->which];
 
     /* Only the viewport rect is filled, and only the viewport rect is ever
@@ -195,12 +239,8 @@ static int layer_begin(LAYER* L, int* ctx, int fresh)
     L->ctx = ctx;
     L->saved = (unsigned char*)(size_t)(unsigned)ctx[CTX_BASE];
     ctx[CTX_BASE] = (int)(size_t)buf;
-    {   /* into the slot the GL side is NOT reading, REMEMBERED for layer_end:
-           deriving it again there would pick the wrong one if layer_clear ran
-           on the other thread in between */
-        TAGPU_MARKLAYER* d;
-        L->pend = (L->pub == 0) ? 1 : 0;
-        d = &L->desc[L->pend];
+    {
+        TAGPU_MARKLAYER* d = &L->desc[L->pend];
         d->pix = NULL; d->pitch = pitch;
         d->x = x0; d->y = y0; d->w = x1 - x0; d->h = y1 - y0;
     }
@@ -229,7 +269,12 @@ static void layer_end(LAYER* L, int publish)
 /* Publish "nothing here" without touching the context, and WITHOUT claiming a
    slot — a flip here could hand layer_end the descriptor of an older frame.
    One volatile int, safe from either thread; layer_end is not, which is why
-   nothing but the game thread calls it. */
+   nothing but the game thread calls it.
+
+   Call it only for a frame that has DECIDED it has nothing — never to open a
+   capture with. A capture that is about to publish leaves the last publication
+   standing until it has a whole new one to put in its place; that is what the
+   second buffer is for. */
 static void layer_clear(LAYER* L) { L->pub = -1; }
 
 /* Is there anything for capture window A to catch? Order markers only draw
@@ -280,24 +325,56 @@ static int prefog_wanted(const char* ta)
    opens behind it. */
 static void __stdcall mark_hook8(void* ctx, int n)
 {
+    LAYER* L = &g_L[TAGPU_MARK_PREFOG];
+    LAYER* P = &g_L[TAGPU_MARK_POSTFOG];
     const char* ta;
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
-    layer_clear(&g_L[TAGPU_MARK_PREFOG]);
-    if (!g_capture) return;
+
+    /* A window still open here belongs to a frame that never reached hook 9,
+       and there is exactly one way to get that: `0x469C03 je 0x469D38` leaves
+       the block early when drawUnits is 0 and lands PAST the hook. Three of
+       DrawGameScreen's four callers pass drawUnits=1 (two as a literal,
+       `0x4969CD` through an ebx its function sets to 1 at `0x4967CF`); the
+       fourth, `0x4962C2`, is TA's own movie recorder (`"%s\\MOVIE%03i"`,
+       function at `0x495E88`, `xor ebx,ebx` at `0x495EA1`) and passes 0.
+       [BINARY-VERIFIED]
+
+       Abandon it rather than close it: `saved` belongs to a stack frame that
+       has since returned, so writing it back would scribble on whatever lives
+       at that address now. The engine's own frame lost the tail of that one
+       draw either way — nothing here can give it back — but the next frame
+       starts clean instead of corrupting a stack. */
+    if (L->active) { L->active = 0; L->ctx = NULL; L->saved = NULL; }
+
+    /* The post-fog window is per-call and every one of its calls is still ahead
+       of us in this frame, so this is where its frame starts. Its "nothing to
+       show" is only knowable in arrears — no DrawTranspRectangle came — so it
+       is decided here, about the frame that just ended, rather than by clearing
+       on the way in and hoping a call arrives before the next present. The cost
+       is a one-block ghost — the block in which the drag ends still carries the
+       last rect — against a hole that was most of a frame wide. */
+    if (!P->opened) layer_clear(P);
+    P->tried = 0;
+    P->opened = 0;
+
+    /* The engine's markers land in our buffer or in its own frame; there is no
+       third option, so every path that does not open a window has to give the
+       last capture up. Opening one does not: it fills the OTHER buffer and
+       hook 9 swaps it in whole. */
     ta = *(const char* const*)TA_MAINPP;
-    if (!ptr_ok(ta) || !prefog_wanted(ta)) return;
-    layer_begin(&g_L[TAGPU_MARK_PREFOG], (int*)ctx, 1);
+    if (!g_capture || !ptr_ok(ta) || !prefog_wanted(ta) ||
+        !layer_begin(L, (int*)ctx, 1))
+        layer_clear(L);
 }
 
 /* hook 9: close the window before the layer-9 particles, which the engine
    draws after the markers and which are not ours to move. */
 static void __stdcall mark_hook9(void* ctx, int n)
 {
+    /* Every in-game frame reaches this hook — the one branch that does not is
+       drawUnits == 0, which only the movie recorder passes (see hook 8) — and
+       `opens == ends` over ~50 000 blocks of live play says so. */
     layer_end(&g_L[TAGPU_MARK_PREFOG], 1);
-    /* the post-fog window is per-call, so this is where its frame starts */
-    g_L[TAGPU_MARK_POSTFOG].tried = 0;
-    g_L[TAGPU_MARK_POSTFOG].opened = 0;
-    layer_clear(&g_L[TAGPU_MARK_POSTFOG]);
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
 }
 
@@ -315,6 +392,13 @@ static void __stdcall mark_transp(void* ctx, void* rect, int colour)
            buffer and re-key-fill — that would drop the outer rect and publish
            only the inner one. A refused first call means this frame's cursor
            stays the engine's, whole. */
+        /* The second call continues into the buffer the first one PUBLISHED,
+           so a present landing between them uploads the outer rect without the
+           inner: one frame of single-outlined cursor. Publishing once, after
+           both, would need layer_end split into "give the context back" and
+           "swap the descriptor in" — worth it if the cursor is ever seen to
+           thin out, not before. It is strictly smaller than what it replaced,
+           which showed NO cursor from hook 9 until the first of these calls. */
         int fresh = !L->tried;
         L->tried = 1;
         opened = layer_begin(L, (int*)ctx, fresh);
