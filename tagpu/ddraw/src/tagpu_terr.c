@@ -26,10 +26,10 @@
      any more except tagpu_terrown.c's key fill (TAGPU_GLSL_FOG_TERRAIN).
 
    The tile set is built by LoadMap and never changes after, so the atlas is
-   built ONCE per map — a single R8 texture of 32x32 cells on a 33-texel pitch,
+   built ONCE per map — a single R8 texture of 32x32 cells on a 34-texel pitch,
    64 per row (a GL_TEXTURE_2D_ARRAY is not viable: 5062 tiles on Two Continents
-   against the usual 2048-layer cap). The spare texel is a replicated edge guard,
-   not padding — see CELL_PITCH. A map change is the TILE_SET pointer or its
+   against the usual 2048-layer cap). The spare texel on each side is a
+   replicated edge guard, not padding — see CELL_PITCH. A map change is the TILE_SET pointer or its
    count moving. */
 
 #include <windows.h>
@@ -176,7 +176,7 @@ static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
 static GLuint s_prog, s_vao, s_vbo, s_atlasTex;
 static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC,
               s_uDepthScale, s_uEnc;
-static int    s_atlasH, s_atlasN;      /* atlas rows*33, tiles it holds       */
+static int    s_atlasH, s_atlasN;      /* atlas rows*CELL_PITCH, tiles held   */
 static const void* s_setPtr;           /* the TILE_SET we built from          */
 static int    s_setCount;
 static int    s_maxTex;
@@ -284,9 +284,24 @@ static void init_gl(void)
         x_glGetIntegerv(GL_MAX_TEXTURE_SIZE, &m);
         s_maxTex = (int)m;
     }
-    /* GL 3.3 guarantees far more than this; 4096 is the conservative floor we
-       use when the query is unavailable — 124 atlas rows = 7936 tiles */
-    if (s_maxTex < ATLAS_W) s_maxTex = 4096;
+    /* Only a FAILED query gets the fallback. 4096 is the conservative floor GL
+       3.3 hardware always beats — 120 atlas rows on the 34-texel pitch, 7680
+       tiles. This used to read `< ATLAS_W`, which was harmless while ATLAS_W
+       was 2048 and a device answering exactly 2048 passed; at 2176 that same
+       honest answer would be overwritten with 4096 and we would then hand
+       glTexImage2D a width the driver rejects, leaving the atlas storageless —
+       and with the composite inverted that is a BLACK viewport, not a missing
+       texture. So a device that genuinely cannot hold the atlas is refused
+       here instead, once, and the engine keeps its own terrain pass. */
+    if (s_maxTex <= 0) s_maxTex = 4096;
+    if (s_maxTex < ATLAS_W) {
+        char b[128];
+        _snprintf(b, sizeof b, "terr: GL_MAX_TEXTURE_SIZE %d < atlas width %d —"
+                               " terrain stays the engine's", s_maxTex, ATLAS_W);
+        flog(b);
+        s_state = 2;
+        return;
+    }
 
     s_atlasTex = 0; s_setPtr = NULL; s_setCount = 0;
     s_state = 1;
