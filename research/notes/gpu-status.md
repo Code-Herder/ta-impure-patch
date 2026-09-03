@@ -192,15 +192,9 @@ a play mode**, and that is the honest status.
 **It is one boundary, not three, and one fix would close all of it.** Three routes, cheapest
 first — and the first looks much more tractable after G13a–d than it would have before:
 
-1. **Widen the engine's own viewport rect** (`main+0x37E27..0x37E3B`) while zoomed out, and keep
-   OUR passes on the true 1× rect. The engine barely draws in the viewport any more, so the rect
-   has few readers left that matter: the eye clamp `0x41C3C0`, the scroll/minimap cluster, and
-   centre-on-unit — all of which arguably *should* widen with the view. It is also the same rect
-   the routing test and the **HotUnits cull** use, so widening it would close the captured-marker
-   half of the gap in the same stroke. The care is all on our side: `terrown`'s key-fill and the
-   composite's `uVp` must keep using the real rect, or the fill would erase the side panel.
-   It writes engine state, but the viewport is camera state, not sim state — the same argument
-   that makes `ScrollSpeed` safe.
+1. **Widen the engine's own viewport rect** (`main+0x37E27..`) while zoomed out, and keep OUR
+   passes on the true 1× rect. The routing test, the unit pick and the **HotUnits cull** all read
+   that rect, so one widening closes input *and* the captured-marker half of the gap.
 2. **Shift the eye for the duration of a click** — exact, but it assumes the engine consumes the
    click during dispatch rather than queueing it, which is unverified.
 3. **Resolve the click ourselves and call the engine's order API directly** — we already call
@@ -208,6 +202,65 @@ first — and the first looks much more tractable after G13a–d than it would h
    but it means reimplementing selection, box-select, build placement and every cursor mode.
 
 Route 1 is the one to try, and it is a real piece of work with real risk — not a tidy-up.
+
+#### What route 1 actually needs *(surveyed and measured 2026-09-02; nothing built)*
+
+**The field is six ints, not four.** `main+0x37E27` is a `RECT` — L, T, R, B — followed by W at
+`+0x37E37` and H at `+0x37E3B`. **The one engine WRITE, `0x49821D`, is not a per-frame fight**:
+it sits in the game-screen enter callback at `0x497F40` (installed as a function pointer, reached
+from the state table around `0x496C3D`), which recomputes **all six from the screen dimensions**
+— `L=0x80`, `T=0x20`, `R=screenW-1`, `B=screenH-33`, then `W=R-L+1`, `H=B-T+1` (measured live at
+1024×768: `128, 32, 1023, 735, 896, 704`). Because nothing it writes depends on the previous
+value, a re-entry **restores** the true rect rather than compounding on a widened one.
+
+**Its readers fall into four kinds, and the kinds want different things.**
+
+| Kind | Who | What widening does |
+|---|---|---|
+| **Bounds**, with the origin hardcoded `+0x80`/`+0x20` | routing test `0x469DF6`, `GetUnitAtMouse 0x48CD80` (its *first* instruction is `IsPositionInRect(vpRect, mouse)`), the **HotUnits cull `0x48BAE0`**, the projectile `0x49C1BE` and debris `0x421234` visibility tests | **exactly the wanted effect** — the addressable region grows and every coordinate stays right |
+| **Origin** | `0x498DA0` alone — `world = eye + clamp(pos, L, R) - L`, and the same in y with T,B. One call site, `0x499221` | **L and T are the screen→world origin, not a bound.** Moving them offsets every ground order, build placement and feature-hover by the same amount |
+| **Clip** | three `CALL 0x4C6B10` inside `DrawGameScreen` (`0x468D85`, `0x46964F`, `0x469F95`) | `0x4C6B10` is a bare four-dword store into the offscreen surface's clip rect (`+0x1C..+0x28`, initialised to `0,0,w-1,h-1` by `SurfaceCreateNamed`) **with no clamping**, so a rect outside the surface would license an engine drawer to write outside its allocation |
+| **W/H only** | eye clamp `0x41C3C0`/`0x41C4C0` (`maxEye = map − W`), the scroll/centre cluster `0x41C7C0…0x41D240`, centre-on-unit `0x496EE0`/`0x497180`, and the load-time terrain tile grid `0x483610` (called once, from `LoadGameData_Main`) | **leave W and H alone.** Shrinking `maxEye` below 0 on a map narrower than `W/z` makes the clamp alternate between 0 and a negative eye every call |
+
+`DrawUnitUI 0x4AB170` also takes the rect, but only to decide which GUI gadgets to repaint;
+widening repaints more of the panel at its own geometry, which is harmless.
+
+**Measured, not argued.** A temporary probe widened **B alone**, 735 → 767 (inside the surface,
+so the clip kind cannot bite, and B is a bound in `0x498DA0`, not the origin):
+
+- a commander parked at screen y 750 — below the 1× rect — **selects with the widening and not
+  without** (`tacli ui` reports `ARMCOM1.GUI` vs `ARMMAIN2.GUI`);
+- **at 0.5× the same unit in the display-only ring**, screen `(394,567)`, behaves the same way:
+  dropped without, selected with — the acceptance criterion, in the band this half reaches;
+- the **HotUnits count goes 7 → 8** once the unit is fully below the old bottom edge, so the
+  captured-marker/health-bar cull really does follow the same rect;
+- the grid cell under the cursor at screen y 764 stops clamping (`gridY 67 → 69`) and is exactly
+  right, so `0x498DA0` needs no correction when only R/B move;
+- the GL frame is **unchanged** — 720 differing pixels, all inside an animated smoke plume.
+
+And the counter-measurement: moving **L 128 → 0 and T 32 → 0** shifts the grid cell under the
+cursor by exactly `(+8, +2)` cells = `(+128, +32)` world px — the amount L and T moved. That is
+the origin behaviour, observed.
+
+**So the value is all in L and T.** Widening R/B alone takes the addressable share at 0.5× from
+25 % to about 26 %: at 1024×768 the ring is symmetric about the view centre and R was already at
+the screen edge. Closing the ring needs L and T negative — `(-320, -320, 1471, 1087)` at 0.5× —
+which is what makes the origin and clip problems real. Route 1 is therefore four pieces:
+
+1. **Publish the true rect** from `tagpu_zoom.c` and switch the passes that need it off the engine
+   field — `terrown`'s key fill, `markown`'s capture rect, `tagpu_native`'s `vpL/vpT` and the
+   composite's `uVp` (its `inbox(sp, uVp)` cursor guard keeps working unchanged *because* `uVp`
+   stays true). `tagpu_input.c` and `tagpu_scenario.c` read W/H only and are unaffected.
+2. **Widen L/T/R/B, never W/H**, and only while a zoomed view is live.
+3. **Guard the clip**: redirect the three `CALL 0x4C6B10` sites to a stub that clamps to the
+   surface. Fail-closed, in the mechanism the stack already uses everywhere.
+4. **Correct the origin**: redirect `0x499221` to a stub that biases the eye by
+   `(L_wide − 0x80, T_wide − 0x20)` for the duration of the call, so the engine's own conversion
+   comes out right without reimplementing it. The bias must be published, because our render
+   thread reads the eye too.
+
+**MP-safety** is the `ScrollSpeed` argument unchanged: the viewport rect and the eye are camera
+state that no other machine ever sees. G9's replay byte-diff would settle it for good.
 
 ### 3.2 Smaller, known, and cheap to close
 
