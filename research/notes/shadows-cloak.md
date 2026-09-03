@@ -220,7 +220,12 @@ tree used to call `UnitID` is `unit+0xA6`, the u16 model index the native pass
 reads as `U_MODELID` — corrected 2026-09-03 off the disassembly at `0x4592D5`.)
 The `je` that enters the STRUCTURE branch — `0x4592C6` (path A) and `0x45952C`
 (path B) — is what `owndraw all` flips to a `jmp` (G13k), so every structure then
-takes the COMPLETED branch and its blank composite blits nothing.
+takes the COMPLETED branch and its blank composite blits nothing. Two path
+asymmetries the tree above flattens: path A tests the structure bit *before*
+`digger` and sends a digger structure to COMPLETED (with the TShadow and
+`canhover`/`floater` tests); path B tests `digger` *first* (`0x4594D0`) and
+takes an inline branch (`0x4594D8..0x45951D`: silhouette, ground clip
+`0x7D`, straight to the shared blit) that applies neither test.
 
 ### `0x45A470` + `0x4B96A0` — the completed-unit shadow builder
 `0x45A470` copies the unit's composite (header W/H/Hot/ColorKey + colour plane +
@@ -392,8 +397,10 @@ i.e. composited above projectiles — engine quirk, reproduce or knowingly fix.)
    bit0|bit1 only, 5 px right, 50 % black, gated by the Shadow option bit alone
    (the engine's cached branch never tests TShadow), `noshadow`, and the
    model-0-under-water skip; `canhover`/`floater` are NOT tested on that branch
-   and are not tested by us for it either. Rule now: structures `shadow =
-   structshadow_ours && !noshadow`, the rest as before. Measured over the
+   and are not tested by us for it either. A `digger` structure is not slanted
+   — the engine never gives one the cached shadow — and takes the silhouette
+   rule. Rule now: structures `shadow = structshadow_ours && !noshadow`, the
+   rest as before. Measured over the
    engine's own terrain (`terr.on=passive`) against the pre-fix engine shadow,
    same frame position, four buildings: the only differences are the rotating
    pieces (drill arms, rotor) caught at other animation phases and a **strip

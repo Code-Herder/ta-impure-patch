@@ -427,7 +427,7 @@ tree, drawn before the body. Every site in it:
 | `0x4592A0..0x4592AC` | `0x4594B4..0x4594C0` | `unit+0x92 → UnitDefStruct`, `+0x241` type mask, `test …,0x2000000` = `noshadow` → skip |
 | `0x4592BF` `test byte [ecx+0x113],0x20` | `0x459522` `test dword [ecx+0x110],0x20000000` | **the structure bit** of `unit+0x110` |
 | **`0x4592C6`** `74 5C` `je 0x459324` | **`0x45952C`** `74 4A` `je 0x459578` | not a structure → the COMPLETED branch. **`owndraw all` rewrites both to `EB` (`jmp`)** — `tagpu_owndraw.c`, verified byte-for-byte before the write, installed as a pair or not at all |
-| `0x4592C8` `test [esp+0x10],0x40000000` | `0x4594D0` `shr edx,0x1E; test dl,1` | `digger` → the COMPLETED branch too (path B clips it below ground first, `0x4594DB..0x459503`) |
+| `0x4592C8` `test [esp+0x10],0x40000000` (after the structure test) | `0x4594D0` `shr edx,0x1E; test dl,1` (**before** the structure test) | `digger`. Path A sends it to the COMPLETED branch, TShadow and `canhover`/`floater` tests included. Path B takes an **inline** branch `0x4594D8..0x45951D` — `0x45A470` silhouette, `0x4BA1B0(scratch, 0x7D)` ground clip, then `jmp 0x4595E9` to the shared blit — and applies neither test. So a digger never reaches the cached branch in either path |
 | `0x4592D5` `cmp word [eax+0xA6],0` | `0x45952E` | `unit+0xA6` — the **model index** (`U_MODELID` in the native pass), not a unit id. Zero → |
 | `0x4592E4` `movzx cx,byte [eax+0x1427F]` | `0x45953D` | sea level; `cmp word [esp+0x42],cx ; jl` skips the shadow for a model-0 unit below it |
 | `0x4592FE` `call 0x45A790` | `0x45955B` | build the cached slant shadow when `Object3do+0x14` is NULL |
@@ -461,9 +461,13 @@ build-state path `0x459641`) and `0x459C70` (nanoframe, called from the builder 
 Both open `mov eax,imm32` (5 bytes) before `call __chkstk`, which is the detour boundary;
 evidence and the classify-then-`ret 0x10` stub: `own-the-draw.md`, `tagpu_owndraw.c`.
 
-**Negative results.** `[esp+0x42]` is compared with sea level but was not traced back to its
-producer (`[esp+0x14]` is the altitude the waterline code subtracts; `+0x42` is a different
-word). The body punch-out `0x4B9D70(body, scratch, 5, 0)` inside `0x45A790` was read, not
+**`[esp+0x42]` is the altitude.** `0x459257 movsx edx,word [esp+0x42]` is stored at
+`0x459263 mov [esp+0x14],edx`, and `[esp+0x14]` is what the waterline code subtracts from sea
+level at `0x45959F` — the same word, sign-extended (the first draft of this section called them
+different words; the G13k review corrected it). The model-0 skip therefore compares the unit's
+altitude with sea level, which is what the native pass's `fz` gate does.
+
+**Negative results.** The body punch-out `0x4B9D70(body, scratch, 5, 0)` inside `0x45A790` was read, not
 replicated. `0x459200` itself was not disassembled past `0x459900`.
 
 ## The cursor chain — mapped by us

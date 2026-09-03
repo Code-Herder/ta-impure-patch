@@ -881,6 +881,7 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
            and rotor carry bit0 only and cast nothing in the engine */
         if (slant && !(pflags & 2)) continue;
         int pieceShaded = anyShadeFlag ? ((pflags & 4) != 0) : 1;
+        if (slant) pieceShaded = 0;  /* a shadow fragment returns before shade */
         const char* nd = *(const char* const*)(pr + P_NODE);
         const int*  vb = *(const int* const*)(pr + P_VBUF);
         if (!ptr_ok(nd) || !ptr_ok(vb)) continue;
@@ -1476,7 +1477,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         n2->wx0 = fx; n2->wz0 = fy - fz * 0.5f;
         n2->yaw = *(const unsigned short*)(u + U_YAW);
         n2->hires = NULL;
-        n2->shadow = 0;
+        n2->shadow = 0; n2->slant = 0;
         n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
         unsigned mask = 0;                    /* FBI booleans, read below */
         {
@@ -1494,7 +1495,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    FBI gates. Without the redirect a structure keeps the
                    engine's cached shadow, exactly as before. */
                 mask = *(const unsigned*)(def + UD_TYPEMASK);
-                n2->slant = (st & ST_STRUCT) != 0;
+                /* a digger never reaches the cached branch: path A tests the
+                   structure bit first and then sends a digger to the
+                   COMPLETED branch (0x4592C8), path B tests digger before the
+                   structure bit (0x4594D0) and clips a silhouette inline */
+                n2->slant = (st & ST_STRUCT) != 0 && !(mask & UD_DIGGER);
                 if (n2->slant) {
                     n2->shadow = tagpu_owndraw_structshadow_ours() &&
                                  !(mask & 0x02000000u);    /* noshadow          */
@@ -1761,19 +1766,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
     }
     firstv[nu] = nv;
-    /* structure shadows: the slant projection is a second vertex range per
-       unit (the body range cannot be re-offset into it); empty for everyone
-       else, so the shadow pass below indexes it uniformly */
-    static int sfirst[MAXU + 1];
-    int nslant = 0;
-    for (i = 0; i < nu; i++) {
-        sfirst[i] = nv;
-        if (!units[i].slant || !units[i].shadow || units[i].hires) continue;
-        nv = emit_geom(units[i].o3, nv, units[i].ax, units[i].ay,
-                       units[i].wx0, units[i].wz0, encb[i], units[i].owner, 1);
-        nslant++;
-    }
-    sfirst[nu] = nv;
     /* effects models (missiles, shells, debris) through the same path */
     int fxFirst = nv;
     if (nfx) {
@@ -1845,6 +1837,23 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        pixels and nothing shows, at any other zoom a one-frame ghost is a much
        smaller lie than a missing marker. Self-correcting either way. */
     s_selComplete = (selDrawn == nsel && nu < MAXU);
+    int lineEnd = nv;
+
+    /* structure shadows: the slant projection is a second vertex range per
+       unit (the body range cannot be re-offset into it); empty for everyone
+       else, so the shadow pass below indexes it uniformly. Emitted LAST so
+       that under the vertex budget effects and selection rects win over a
+       building's shadow, the least visible thing to lose. */
+    static int sfirst[MAXU + 1];
+    int nslant = 0;
+    for (i = 0; i < nu; i++) {
+        sfirst[i] = nv;
+        if (!units[i].slant || !units[i].shadow || units[i].hires) continue;
+        nv = emit_geom(units[i].o3, nv, units[i].ax, units[i].ay,
+                       units[i].wx0, units[i].wz0, encb[i], units[i].owner, 1);
+        nslant++;
+    }
+    sfirst[nu] = nv;
 
     /* ---- render into the (optionally 2x supersampled) game-res FBO ---- */
     int ss = s_ss ? 2 : 1;
@@ -1946,7 +1955,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied */
 
     /* selection rects first — the engine draws them under the unit sprite */
-    if (nv > lineStart) {
+    if (lineEnd > lineStart) {
         glUniform1i(s_uFog, fogMode & 1);
         glUniform1i(s_uShadow, 0);
         x_glUniform1f(s_uAlpha, 1.0f);
@@ -1955,7 +1964,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glUniform1f(s_uDigT, -1e9f);
         glUniform1i(s_uWaterMode, 0);
         if (x_glLineWidth) x_glLineWidth((GLfloat)ss);
-        x_glDrawArrays(GL_LINES, lineStart, nv - lineStart);
+        x_glDrawArrays(GL_LINES, lineStart, lineEnd - lineStart);
     }
 
     /* shadow first (engine order), only when options allow; per unit so an
