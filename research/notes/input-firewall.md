@@ -60,7 +60,7 @@ and chat typing working, and it makes `shift+key` type an upper-case character.
 ## Evidence
 
 **Hardware isolation** — A/B, same script, same hardware click + four-point pointer sweep
-across the window, reading the engine's *own* memory mouse (`mouse: game=` in `tagpu.log`,
+across the window, reading the engine's *own* memory mouse (`mouse: screen=` in `tagpu.log`,
 from `draw_mouse` in `tagpu_overlay.c`):
 
 | shield | engine memory mouse |

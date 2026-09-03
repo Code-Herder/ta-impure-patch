@@ -606,18 +606,18 @@ clock text.
 | `main+0x14357` | unit array base (stride 0x118); `0x1435F/0x14367` HotUnits (u16 ids) / count |
 | `main+0x14377` | `MODEL_PTRS` — Model3DONode* per unit type [CORPUS] |
 | `main+0x1439B` | UnitDef array base (stride 0x249) |
-| `main+0x1487F` | `cursor_ary[0x15]` GAF sequences (order-target sprites) [CORPUS] |
+| `main+0x1487F` | `cursor_ary[0x15]` GAF sequences (order-target sprites, and every mouse cursor) [CORPUS]; the index → name table is in `exe-reverse-engineering.md` §"The cursor chain" |
 | `main+0x148D3` | `pathicon` GAF sequence (route dots) [CORPUS] |
 | `main+0x2A42/0x2A43` | watched / local player id |
-| `main+0x2C76` | mouse pos (POINT, world-space) [CORPUS]; `0x2CBA` unit-under-cursor id; `0x37E9C` tracked-unit id [INFERRED names] |
+| `main+0x2C76` | mouse pos (POINT). **SCREEN space, not world** — measured 2026-09-03: an injected pointer at screen (400,300) reads back 400 / 300, and `0x498DA0` is what converts it to the world point at `main+0x2CAA`. (An earlier line here said world-space; that was wrong.) `0x2CBA` unit-under-cursor id; `0x2CBC` **feature**-under-cursor id (`0xFFFF` = none); `0x2CBE` the cursor index currently installed; `0x37E9C` tracked-unit id [INFERRED names] |
 | `main+0x2C92..0x2CA6` | build/band rect: x1,h1,z1,x2,h2,z2 (world) |
-| `main+0x2CC3` | mouse cursor mode (0xE = build); `0x2CC6` flags: bit3 rect-forced, bit6 placement-valid |
+| `main+0x2CC3` | current order byte (0xE = build; 1 = contextual, 2 Move, 3 Attack, 7 Guard, 8 Repair, 9 Patrol, 12 Reclaim, 13 Capture — measured); `0x2CC6` flags: bit0 pointer on the minimap, bit1 pointer on the world viewport, bit2 either, bit3 rect-forced, bit6 placement-valid |
 | `main+0x37F06` | GameOptionMask: **bit0 = damagebars**; (bit1 AA … per shadows-cloak.md) |
 | `main+0x37F2F` | display/debug word: **bit2 = SelBoxes** (default on), bit3 TreeDeath, bit4 NoShake |
 | `main+0x38A47` | GameTime (marker animation clock) |
 | `main+0x391BF` | ShowRanges toggle |
 | `0x512344` | → order/script handler table, stride 0x19: +0xC marker mask (bits per §3.2), +0x10 cursor_ary index |
-| `PlayerStruct+0x67/+0x6B` | first/last unit ptr (order-marker walk); `+0x146` player id |
+| `PlayerStruct+0x67/+0x6B` | first/last unit ptr (order-marker walk, and the selected-unit walk in `CorretCursor_InGame 0x48D220`); `+0x146` player id |
 | UnitStruct | +0x5C order list head; +0x64 rotation; +0x6A/6E/72 pos (16.16); +0x92 UnitType; +0x96 owner PlayerStruct*; +0xA6 UnitID (type); +0xA8 UnitInGameIndex; +0xAC squad digit; +0x108 Health (s16); +0x10E cloak flags; +0x110 stateMask (0x10 selected, 0x10000000 alive) |
 | UnitDefStruct | +0x156 CANBUILD_ptr; +0x15E..0x172 footprint extents; +0x178 size (circle radius); +0x1FA maxHP (read as u32); +0x202..0x218 ranges; +0x220 ExplodeAs; +0x241 UnitTypeMask_0 (bit28 kamikaze [INFERRED]) |
 | Order node | +0x4 type; +0xE unit; +0x16 target unit; +0x22/26/2A target pos; +0x32/34 last-seen; +0x36 build type; +0x42 flags (0x200000 cached); +0x46 issue time; +0x4A next |
