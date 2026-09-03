@@ -43,6 +43,7 @@ PAGES = [
     ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
 
     ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
+    ("model-export",               "Model export (3DO → glTF)",   "Tooling"),
     ("input-firewall",             "The input firewall",          "Tooling"),
     ("gui-gadgets",                "GUI gadgets",                 "Tooling"),
     ("scenario-format",            "JSON scenarios",              "Tooling"),
@@ -54,6 +55,7 @@ PAGES = [
     ("api-wrappers",              "The DirectDraw boundary",   "Mechanism"),
     ("deep-plugin-abi-and-corpus","Cavedog's plugin ABI",      "Mechanism"),
     ("extra-weapons",             "More weapons per unit",     "Mechanism"),
+    ("line-of-sight",             "Line of sight & fog",       "Mechanism"),
 
     ("deep-tadr",                 "TADR / tdraw.dll",          "Projects"),
     ("release-matrix",            "Releases & feature matrix", "Projects"),

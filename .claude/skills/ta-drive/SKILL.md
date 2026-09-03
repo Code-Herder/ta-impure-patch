@@ -34,6 +34,41 @@ Capture and video work: the **ta-capture** skill.
    In a **worktree**, tacli pins the DLL your tree built (`<tree>/tagpu/ddraw/ddraw.dll`),
    falling back to the main checkout's — so build where you edit, or you will test the
    main checkout's binary and wonder why your change did nothing.
+6. **When the human is going to play it, check the window is on their monitor**
+   before handing it over — see *Where the window lands*. A game that is running
+   perfectly but sits off-screen still answers every `tacli` command and shows
+   them nothing, which is indistinguishable from a launch that failed.
+
+## Where the window lands
+
+Two separate things decide whether the human can see the game. Each has cost this
+project a session.
+
+**The display — theirs, not a virtual one.** `tacli` records it in `instance.json`
+at create time: `TACLI_DISPLAY` first, then the inherited `DISPLAY`, then the live
+sockets in `/tmp/.X11-unix` — skipping **virtual** X servers (Xvfb/Xephyr/Xnest) on
+the first pass, because parallel agent sessions leave 3840x2160 Xvfb displays
+running and a shell that inherits one launches the game where nobody can see it.
+The human's session is the `Xorg` in `ps -eo args`; everything else is a stand-in
+for a monitor. An explicit `TACLI_DISPLAY` still wins, so an agent that genuinely
+wants a virtual display can ask for one. Read back the `display` field with
+`tacli ls --json` before telling the human it is ready.
+
+**The tile.** Instances are laid out in a grid so parallel windows do not stack.
+`tile_for()` wraps within the screen and pulls the last row and column back inside
+it — before 2026-09-02 it did neither, so the twelfth instance drew slot 10 and its
+1920x1080 window was placed at y=11600, off every monitor. Two things follow:
+
+- Slots are held by **running** instances only, so a stopped one frees its place;
+  pass `--slot 0` to claim a cell explicitly.
+- A window created off-screen is left **unmapped** by GNOME, and `xdotool
+  windowmove` alone will not bring it back — it must be `xdotool windowmap`ped
+  first. `xprop -id <wid> WM_STATE` reads `Withdrawn` when this is what happened,
+  and the WM may resize the window on remap, so a relaunch is the clean fix.
+
+Handing the game over is `tacli launch <name> --no-shield`, or `tacli shield <name>
+off` on one that is already running: with the shield off their keyboard and mouse
+reach the game and yours is no longer the only input.
 
 ## The loop
 
@@ -80,6 +115,28 @@ it is sticky per instance: what a launch does not name, it inherits from the las
 **The registry is the only way** — every TotalA.exe switch was traced in phase 1.2 and
 none of them sets a game rule (`cmdline-options.md`). Raw switches go through
 `--arg=-t --arg=120` (keep the `=`); `-r` and `-d` are refused.
+
+**Two of those are not really registry settings.** `SKIRMISH.GUI`'s `Mapping` and
+`LineOfSight` toggles come up at the stage their `.GUI` file gives them — `Unmapped`,
+`Permanent` — whatever `SkirmishMapping` / `SkirmishLineOfSight` hold (measured
+2026-09-02, and `SingleMapping` makes no difference either). The gadget decides the
+game; the registry is only where TA saves the last one. So:
+
+- **`scenario load` starts every game Mapped**, and says so (`map unmapped -> mapped`).
+  `--mapping 0` opts out. Mapped is the default because a scenario places units by
+  world coordinate all over the map, and on an unmapped one the human — and every
+  screenshot — sees them through black.
+- **`--los 0` turns the grey fog off.** `Mapping` reveals the *terrain*; the grey
+  wash over ground nothing is currently looking at is the `LineOfSight` toggle
+  (`Permanent|True|Circular`, stages 0-2). `--los 0` (Permanent) leaves everything
+  already seen in full colour — measured 2026-09-02: the engine's `LosType` word at
+  `*0x511DE8+0x14281` goes 14 → 12, and bit 1 is the one the terrain pass paints the
+  grey mask from (`tagpu_native.c`, "fog is on is NOT LosType bit0"). Not the default,
+  because a fog-free map is a play setting, not a test setting.
+- Add `switches: {"radar": true}` (or `tacli switches <inst> radar=on`) to see enemy
+  units as well as ground — that is TA's own `+radar` debug bit.
+- Driving the menus by hand, set them before `Start`: `tacli ui t1 set Mapping 1`,
+  `tacli ui t1 set LineOfSight 0`.
 
 ## Input details that cost time to learn
 

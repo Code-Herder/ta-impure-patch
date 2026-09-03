@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<!-- ta3do-compare.html — two exports of the same unit, one camera.
+
+     `tools/ta3do compare armpw` writes both .glb files next to this page and
+     serves the directory, so the two halves differ in exactly one thing: whether
+     the GAF textures went through the unditherer on the way in.
+
+     Query parameters:
+       a=<file.glb>  b=<file.glb>     the two models (required)
+       la=<text>     lb=<text>        the labels drawn over each half
+       aa=<file.png> ab=<file.png>    the two texture atlases, shown in the strip
+       view=<name>                    front|back|left|right|side|top|bottom|quarter
+       az=<deg> el=<deg>              camera override
+       w=, h=, fov=, margin=, ss=, bg=, ortho=1    as in ta3do-view.html
+       shot=1                         one frame, no UI, then title "ta3do-ready"
+
+     Drag to orbit both halves together; the camera is literally the same object.
+-->
+<meta charset="utf-8">
+<title>ta3do compare</title>
+<style>
+  :root { color-scheme: dark; --line: #2c333d; }
+  html, body { margin: 0; height: 100%; background: #14171c; color: #c8ced8;
+               font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  #stage { position: relative; }
+  canvas { display: block; }
+  #split { position: absolute; inset: 0; pointer-events: none;
+           border-left: 1px solid transparent; }
+  #split::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0;
+                  width: 1px; background: rgba(200, 214, 232, .22); }
+  .tag { position: absolute; top: 12px; padding: 3px 9px; border-radius: 6px;
+         background: rgba(14, 17, 22, .72); border: 1px solid var(--line);
+         font-size: 12px; letter-spacing: .01em; }
+  .tag.a { left: 12px; }
+  .tag.b { left: calc(50% + 12px); }
+  #bar { display: flex; gap: 6px; padding: 8px; margin-top: 12px; border-radius: 10px;
+         background: #1e232b; border: 1px solid var(--line); }
+  button { font: inherit; color: #c8ced8; background: #262c35; border: 1px solid #39414d;
+           border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button:hover { background: #2f3742; }
+  button.on { background: #3d6ea5; border-color: #4d84c2; color: #fff; }
+  #atlases { display: flex; gap: 18px; margin-top: 14px; align-items: center; }
+  #atlases figure { margin: 0; text-align: center; }
+  #atlases img { width: 128px; height: 128px; image-rendering: pixelated;
+                 border: 1px solid var(--line); border-radius: 6px; background: #0e1116; }
+  #atlases figcaption { margin-top: 5px; font-size: 11px; color: #8d97a5; }
+  body.shot #bar, body.shot #atlases, body.shot #err { display: none; }
+  body.shot { background: transparent; }
+  #err { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: #40222a;
+         border: 1px solid #6b3540; color: #f0c8ce; display: none; }
+</style>
+<div id="stage"><div id="split"></div></div>
+<div id="bar"></div>
+<div id="atlases"></div>
+<div id="err"></div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const q = new URLSearchParams(location.search);
+const num = (key, dflt) => (q.has(key) ? parseFloat(q.get(key)) : dflt);
+
+const VIEWS = {
+  front:   { az: 0,    el: 0 },
+  back:    { az: 180,  el: 0 },
+  right:   { az: -90,  el: 0 },
+  left:    { az: 90,   el: 0 },
+  side:    { az: -90,  el: 0 },
+  top:     { az: 0,    el: 89.9 },
+  bottom:  { az: 0,    el: -89.9 },
+  quarter: { az: -45,  el: 30 },
+};
+
+const shot = q.get('shot') === '1';
+const width = num('w', 1280), height = num('h', 640);
+const margin = num('margin', 0.10);
+const fov = num('fov', 22);
+const ortho = q.get('ortho') === '1';
+const bg = q.get('bg');
+const view = VIEWS[q.get('view') || 'quarter'] || VIEWS.quarter;
+let az = num('az', view.az), el = num('el', view.el);
+if (shot) document.body.classList.add('shot');
+
+const stage = document.getElementById('stage');
+stage.style.width = width + 'px';
+stage.style.height = height + 'px';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(num('ss', 2));
+renderer.setSize(width, height);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.setScissorTest(true);
+stage.insertBefore(renderer.domElement, document.getElementById('split'));
+
+// Half the canvas each, so the camera aspect is the aspect of one pane.
+const camera = ortho
+  ? new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 10000)
+  : new THREE.PerspectiveCamera(fov, (width / 2) / height, 0.01, 10000);
+
+function makeScene() {
+  const scene = new THREE.Scene();
+  if (bg && bg !== 'none') scene.background = new THREE.Color(bg);
+  const rig = new THREE.Group();
+  rig.add(new THREE.DirectionalLight(0xfff4e6, 1.55).translateX(-0.55).translateY(0.85).translateZ(1));
+  rig.add(new THREE.DirectionalLight(0xa8c4e8, 0.45).translateX(1).translateY(-0.15).translateZ(0.35));
+  scene.add(rig);
+  scene.add(new THREE.HemisphereLight(0xc4d4e8, 0x23262b, 0.55));
+  return { scene, rig };
+}
+const left = makeScene();
+const right = makeScene();
+
+const fail = (msg) => {
+  const box = document.getElementById('err');
+  box.style.display = 'block';
+  box.textContent = msg;
+  document.title = 'ta3do-error: ' + msg;
+};
+
+let centre = new THREE.Vector3();
+
+function place() {
+  const box = new THREE.Box3().setFromObject(left.scene);
+  centre = box.getCenter(new THREE.Vector3());
+  const a = THREE.MathUtils.degToRad(az), e = THREE.MathUtils.degToRad(el);
+  const dir = new THREE.Vector3(
+    Math.sin(a) * Math.cos(e), Math.sin(e), Math.cos(a) * Math.cos(e));
+
+  camera.up.set(0, 1, 0);
+  if (Math.abs(el) > 89) camera.up.set(0, 0, el > 0 ? 1 : -1);
+  const fwd = dir.clone().negate();
+  const rightAxis = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
+  const upAxis = new THREE.Vector3().crossVectors(rightAxis, fwd).normalize();
+
+  const vfov = THREE.MathUtils.degToRad(fov);
+  const aspect = (width / 2) / height;
+  const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect);
+  const tanV = Math.tan(vfov / 2) * (1 - margin);
+  const tanH = Math.tan(hfov / 2) * (1 - margin);
+  let dist = 0, half = 0, depth = 0;
+  for (let i = 0; i < 8; i++) {
+    const corner = new THREE.Vector3(
+      (i & 1) ? box.max.x : box.min.x,
+      (i & 2) ? box.max.y : box.min.y,
+      (i & 4) ? box.max.z : box.min.z).sub(centre);
+    const x = Math.abs(corner.dot(rightAxis));
+    const y = Math.abs(corner.dot(upAxis));
+    const z = corner.dot(dir);
+    dist = Math.max(dist, x / tanH + z, y / tanV + z);
+    half = Math.max(half, y / (1 - margin), x / aspect / (1 - margin));
+    depth = Math.max(depth, Math.abs(z));
+  }
+  if (ortho) {
+    camera.left = -half * aspect; camera.right = half * aspect;
+    camera.top = half; camera.bottom = -half;
+    camera.near = 0.01; camera.far = depth * 4 + 1000;
+    camera.position.copy(centre).addScaledVector(dir, depth + 10);
+  } else {
+    camera.position.copy(centre).addScaledVector(dir, dist);
+  }
+  camera.lookAt(centre);
+  camera.updateProjectionMatrix();
+}
+
+function draw() {
+  for (const pane of [left, right]) {
+    pane.rig.position.copy(camera.position);
+    pane.rig.quaternion.copy(camera.quaternion);
+  }
+  const w = Math.floor(width / 2);
+  renderer.setViewport(0, 0, w, height);
+  renderer.setScissor(0, 0, w, height);
+  renderer.render(left.scene, camera);
+  renderer.setViewport(w, 0, width - w, height);
+  renderer.setScissor(w, 0, width - w, height);
+  renderer.render(right.scene, camera);
+}
+
+const files = [q.get('a'), q.get('b')];
+if (!files[0] || !files[1]) fail('need ?a= and ?b= .glb files');
+
+const loader = new GLTFLoader();
+const load = (file) => new Promise((resolve, reject) =>
+  loader.load(file, (gltf) => resolve(gltf.scene), undefined, reject));
+
+Promise.all(files.map(load)).then(([modelA, modelB]) => {
+  left.scene.add(modelA);
+  right.scene.add(modelB);
+  place();
+
+  for (const [side, text] of [['a', q.get('la') || 'as shipped'],
+                              ['b', q.get('lb') || 'undithered']]) {
+    const tag = document.createElement('div');
+    tag.className = 'tag ' + side;
+    tag.textContent = text;
+    stage.appendChild(tag);
+  }
+
+  const atlases = document.getElementById('atlases');
+  for (const [param, caption] of [['aa', q.get('la') || 'as shipped'],
+                                  ['ab', q.get('lb') || 'undithered']]) {
+    if (!q.get(param)) continue;
+    const figure = document.createElement('figure');
+    const img = document.createElement('img');
+    img.src = q.get(param);
+    const cap = document.createElement('figcaption');
+    cap.textContent = 'atlas — ' + caption;
+    figure.append(img, cap);
+    atlases.appendChild(figure);
+  }
+
+  if (shot) {
+    draw();
+    requestAnimationFrame(() => { draw(); document.title = 'ta3do-ready'; });
+    return;
+  }
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.copy(centre);
+  controls.update();
+  const bar = document.getElementById('bar');
+  for (const name of ['front', 'side', 'top', 'back', 'quarter']) {
+    const button = document.createElement('button');
+    button.textContent = name;
+    button.onclick = () => {
+      az = VIEWS[name].az; el = VIEWS[name].el;
+      place();
+      controls.target.copy(centre);
+      controls.update();
+      for (const other of bar.children) other.classList.toggle('on', other === button);
+    };
+    bar.appendChild(button);
+  }
+  renderer.setAnimationLoop(draw);
+  document.title = 'ta3do compare: ' + files[0] + ' vs ' + files[1];
+}).catch((err) => fail('load failed: ' + (err && err.message ? err.message : err)));
+</script>

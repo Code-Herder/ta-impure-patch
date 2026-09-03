@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<!-- ta3do-view.html — the viewer half of the ta3do pipeline.
+
+     Loads a .glb exported by `tools/ta3do export` and shows it either
+       * interactively (open the page, drag to orbit, click a view button), or
+       * as one deterministic still, which is how `tools/ta3do render` drives it:
+         ?model=armpw.glb&view=front&w=768&h=768&shot=1
+
+     Query parameters (all optional except model):
+       model=<file.glb>   what to load, relative to this page
+       view=<name>        a named view from ta3do's table (front|back|left|right|top|bottom|quarter)
+       az=<deg> el=<deg>  camera azimuth/elevation, overriding `view`
+       roll=<deg>         image-plane rotation (top view uses it to point the nose up)
+       w=<px> h=<px>      canvas size
+       fov=<deg>          perspective field of view; ortho=1 switches to orthographic
+       margin=<f>         fraction of the frame left empty around the model (default 0.08)
+       bg=<css|none>      background colour; omitted or `none` = transparent
+       ss=<n>             supersampling factor (device pixel ratio), default 2
+       shot=1             hide the UI and stop animating: one frame, then `document.title`
+                          becomes "ta3do-ready" so a screenshotter knows it is done
+     Azimuth 0 looks at the model's front (+Z, glTF's own "front faces +Z"), and
+     rises anticlockwise seen from above; elevation is degrees above the horizon.
+-->
+<meta charset="utf-8">
+<title>ta3do viewer</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #14171c; color: #c8ced8;
+               font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
+  body { display: grid; place-items: center; }
+  body.shot { background: transparent; }
+  #stage { position: relative; }
+  canvas { display: block; }
+  #bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px;
+         display: flex; gap: 6px; padding: 6px; border-radius: 10px;
+         background: #1e232b; border: 1px solid #2c333d; }
+  body.shot #bar, body.shot #err { display: none; }
+  button { font: inherit; color: #c8ced8; background: #262c35; border: 1px solid #39414d;
+           border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button:hover { background: #2f3742; }
+  button.on { background: #3d6ea5; border-color: #4d84c2; color: #fff; }
+  #err { position: fixed; top: 10px; left: 10px; right: 10px; padding: 8px 10px;
+         border-radius: 8px; background: #40222a; border: 1px solid #6b3540;
+         color: #f0c8ce; white-space: pre-wrap; display: none; }
+</style>
+<div id="stage"></div>
+<div id="bar"></div>
+<div id="err"></div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const q = new URLSearchParams(location.search);
+const num = (key, dflt) => (q.has(key) ? parseFloat(q.get(key)) : dflt);
+
+// The view table is ta3do's standard, mirrored here so the page is usable on its
+// own. `tools/ta3do views` prints the same numbers; keep the two in step.
+const VIEWS = {
+  front:   { az: 0,    el: 0,  roll: 0 },
+  back:    { az: 180,  el: 0,  roll: 0 },
+  right:   { az: -90,  el: 0,  roll: 0 },
+  left:    { az: 90,   el: 0,  roll: 0 },
+  side:    { az: -90,  el: 0,  roll: 0 },
+  top:     { az: 0,    el: 89.9, roll: 0 },
+  bottom:  { az: 0,    el: -89.9, roll: 0 },
+  quarter: { az: -45,  el: 30, roll: 0 },
+};
+
+const shot = q.get('shot') === '1';
+const width = num('w', 768), height = num('h', 768);
+const margin = num('margin', 0.08);
+const fov = num('fov', 22);
+const ortho = q.get('ortho') === '1';
+const bg = q.get('bg');
+const view = VIEWS[q.get('view') || 'quarter'] || VIEWS.quarter;
+const az = num('az', view.az), el = num('el', view.el), roll = num('roll', view.roll);
+if (shot) document.body.classList.add('shot');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(num('ss', 2));
+renderer.setSize(width, height);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;
+document.getElementById('stage').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+if (bg && bg !== 'none') scene.background = new THREE.Color(bg);
+
+// Lights ride with the camera, so every view in a set is lit identically and a
+// back view is no darker than a front one.
+const camera = ortho
+  ? new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 10000)
+  : new THREE.PerspectiveCamera(fov, width / height, 0.01, 10000);
+const rig = new THREE.Group();
+rig.add(new THREE.DirectionalLight(0xfff4e6, 1.55).translateX(-0.55).translateY(0.85).translateZ(1));
+rig.add(new THREE.DirectionalLight(0xa8c4e8, 0.45).translateX(1).translateY(-0.15).translateZ(0.35));
+camera.add(rig);
+scene.add(camera);
+scene.add(new THREE.HemisphereLight(0xc4d4e8, 0x23262b, 0.55));
+
+const fail = (msg) => {
+  const box = document.getElementById('err');
+  box.style.display = 'block';
+  box.textContent = msg;
+  document.title = 'ta3do-error: ' + msg;
+};
+
+// Frame the model the same way for every view: measure the bounding box as the
+// camera actually sees it (not its bounding sphere, which wastes half the frame
+// on a tall thin unit) and back off until it just fits, plus `margin`.
+function frame(object) {
+  const box = new THREE.Box3().setFromObject(object);
+  const centre = box.getCenter(new THREE.Vector3());
+
+  const a = THREE.MathUtils.degToRad(az), e = THREE.MathUtils.degToRad(el);
+  const dir = new THREE.Vector3(
+    Math.sin(a) * Math.cos(e), Math.sin(e), Math.cos(a) * Math.cos(e));
+
+  camera.up.set(0, 1, 0);
+  if (Math.abs(el) > 89) camera.up.set(0, 0, el > 0 ? 1 : -1);
+  const fwd = dir.clone().negate();                       // camera looks along -dir
+  const right = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
+  const up = new THREE.Vector3().crossVectors(right, fwd).normalize();
+
+  // Exact fit: for each corner, the distance at which it lands on the frame edge
+  // is |offset| / (tan(fov/2) * (1 - margin)) + its depth. The largest wins.
+  const vfov = THREE.MathUtils.degToRad(fov);
+  const hfov = 2 * Math.atan(Math.tan(vfov / 2) * (width / height));
+  const tanV = Math.tan(vfov / 2) * (1 - margin);
+  const tanH = Math.tan(hfov / 2) * (1 - margin);
+  const aspect = width / height;
+  let dist = 0, half = 0, depth = 0;
+  for (let i = 0; i < 8; i++) {
+    const corner = new THREE.Vector3(
+      (i & 1) ? box.max.x : box.min.x,
+      (i & 2) ? box.max.y : box.min.y,
+      (i & 4) ? box.max.z : box.min.z).sub(centre);
+    const x = Math.abs(corner.dot(right));
+    const y = Math.abs(corner.dot(up));
+    const z = corner.dot(dir);
+    dist = Math.max(dist, x / tanH + z, y / tanV + z);
+    half = Math.max(half, y / (1 - margin), x / aspect / (1 - margin));
+    depth = Math.max(depth, Math.abs(z));
+  }
+
+  if (ortho) {
+    camera.left = -half * aspect; camera.right = half * aspect;
+    camera.top = half; camera.bottom = -half;
+    camera.near = 0.01; camera.far = depth * 4 + 1000;
+    camera.position.copy(centre).addScaledVector(dir, depth + 10);
+  } else {
+    camera.position.copy(centre).addScaledVector(dir, dist);
+  }
+  camera.lookAt(centre);
+  if (roll) camera.rotateZ(THREE.MathUtils.degToRad(roll));
+  camera.updateProjectionMatrix();
+  return centre;
+}
+
+const model = q.get('model');
+if (!model) fail('no ?model= given');
+
+new GLTFLoader().load(model, (gltf) => {
+  scene.add(gltf.scene);
+  const centre = frame(gltf.scene);
+
+  if (!shot) {
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.copy(centre);
+    controls.update();
+    const bar = document.getElementById('bar');
+    for (const name of ['front', 'side', 'top', 'back', 'quarter']) {
+      const b = document.createElement('button');
+      b.textContent = name;
+      b.onclick = () => {
+        const v = VIEWS[name];
+        const a = THREE.MathUtils.degToRad(v.az), e = THREE.MathUtils.degToRad(v.el);
+        const dist = camera.position.distanceTo(controls.target);
+        camera.position.copy(controls.target).add(new THREE.Vector3(
+          Math.sin(a) * Math.cos(e), Math.sin(e), Math.cos(a) * Math.cos(e)
+        ).multiplyScalar(dist));
+        camera.up.set(0, 1, 0);
+        if (Math.abs(v.el) > 89) camera.up.set(0, 0, v.el > 0 ? 1 : -1);
+        controls.update();
+        for (const other of bar.children) other.classList.toggle('on', other === b);
+      };
+      bar.appendChild(b);
+    }
+    renderer.setAnimationLoop(() => renderer.render(scene, camera));
+    document.title = 'ta3do: ' + model;
+    return;
+  }
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(() => {
+    renderer.render(scene, camera);
+    document.title = 'ta3do-ready';
+  });
+}, undefined, (err) => fail('load failed: ' + (err && err.message ? err.message : err)));
+</script>

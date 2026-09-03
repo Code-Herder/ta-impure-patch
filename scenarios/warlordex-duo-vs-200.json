@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "Two WarlordEx (CORBATSX, from warlordex.ufo) under the human player against an ARM fleet of 200 Skeeters lying to the east, for driving by hand. Four fusions and four energy stores sit on the north shore: each ship carries four CORE_BATSLASER at 75 energy a shot on top of its two stock guns, and clear_existing takes the commander's storage away, so without them the new turrets stay silent. Launch with --unit-limit 500 (player 1 alone needs 200 slots), --los 0 and Mapping on, then `tacli shield <inst> off` to hand the keyboard and mouse over.",
+  "description": "Two WarlordEx (CORBATSX, from warlordex.ufo) under the human player against an ARM fleet of 200 Skeeters lying to the east, for driving by hand. Four fusions and four energy stores sit on the north shore: each ship carries four CORE_BATSLASER at 75 energy a shot on top of its two stock guns, and clear_existing takes the commander's storage away, so without them the new turrets stay silent. Launch with --unit-limit 500 (player 1 alone needs 200 slots); `scenario load` maps the terrain itself. Then `tacli shield <inst> off` to hand the keyboard and mouse over.",
   "seed": 20260902,
   "on_error": "skip",
 
