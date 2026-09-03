@@ -239,6 +239,21 @@ walks the eye to that target and our wider clamp leaves it there, so **those pat
 inside our range and both stop — it is simply the old behaviour where the detour does not sit.
 Closing it means widening three inline clamps in the middle of the camera module.
 
+**And the right-edge mouse scroll cannot fire at zoom > 1 — only the right one.** Found while
+documenting this, not by the change: TA's scroll poll (`0x41CF10`, mapped in
+[exe RE](exe-reverse-engineering.html)) fires on *hotkey* or *pointer on an exact screen edge*,
+and the mouse half is an **equality on the outermost pixel** — `x == 0`, `y == 0`,
+`x == screenW − 1`, `y == screenH − 1` — read through `GetCursorPos`, which
+`fake_GetCursorPos` answers with the **unzoomed** `u`. Three of those four screen edges lie
+*outside* the viewport rect (`L=128`, `T=32`, `B=screenH−33`), so the transform passes them
+through as identity and they still scroll. The screen's right column, though, *is* the
+viewport's right column, so it is contracted toward the centre: measured at 2× on 1024×768 a
+pointer at `x=1023` reaches the engine as **800**, and `x == 1023` becomes unsatisfiable. So
+zoomed in, scrolling right needs the keyboard (`0xF6`) or the minimap. The narrow fix is to
+keep `tagpu_zoom_to_engine_draw()` at identity on the outermost screen column and row, which
+would also put the drawn cursor there — G13e's cursor path, so it wants its own verification
+rather than a quiet ride-along on this change.
+
 **The flag is what keeps 1× byte-identical.** The detour is a `leaf_call` on a flag raised
 only while a zoomed-**in** world is live; with it clear the engine's own function runs
 verbatim, *including the two minimap-rect redirects inside it*. `tagpu_zoomedge.off` in the
@@ -287,7 +302,7 @@ extreme of the range and inside it everywhere else.
 | `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA30` eases the eye toward it. **WRITTEN by `apply_eye_range()` only**, clamped to the same range as the eye and for the same frame, because a disagreement between the two costs the fog grid its is-current flag every frame (§2.3c). The replacement clamp deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
 | `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so `apply_eye_range()` recomputes it through the same wrapper on the frames it corrects the eye. The one **render-thread** write of it; a game thread drawing the minimap in that instant sees a one-frame torn box, the same standing as the published view |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live** (§2.3b); every pass that means the true 1× rect must call `tagpu_vpwide_true_rect()` rather than read the field |
-| `main+0x2C76` | mouse position |
+| `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) |
 | `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index) |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F2F` bit2 | `SelBoxes` |

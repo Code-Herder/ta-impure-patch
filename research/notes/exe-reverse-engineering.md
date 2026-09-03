@@ -227,6 +227,77 @@ so machine-checked against the real layout rather than guessed. [VERIFIED]
 | Spatial index | `SortGridBucket`, stride `0x0A`, list head at +0x06; buckets ptr at `0x1429F`, cols at `0x142A3`, plus a dedicated off-map bucket at `0x142B7`. |
 | Projectiles | Count at `TAdynmemStruct+0x141F3`; **each projectile is `0x6B` (107) bytes**. |
 
+## The camera module — mapped by us
+
+[MEASURED 2026-09-03, this project — disassembly of the pristine build plus live reads, not
+from any vendor corpus. Established while making the camera's range follow the zoom
+(`gpu-status.md` §2.3c); the community corpora name only `0x41C3C0`, and name it for its tail.]
+
+**"Eye"** is the world position the viewport's top-left corner shows. **"View"** is `W`/`H` at
+`main+0x37E37`/`+0x37E3B`. The module keeps *two* positions: the eye, and a **scroll target**
+the eye is eased toward.
+
+| VA | What it is |
+| --- | --- |
+| **`0x41C3C0`** | **The eye clamp.** `eyeX = clamp(eyeX, 0, mapW − W)`, the same for Y, then `0x466B70(main+0x142CB)` to refill the minimap's view rect — every path through it ends in that one call. TADR calls it `ScrollMinimap`, which describes the tail rather than the job. **12 call sites:** `0x41C59F`, `0x41C898`, `0x41C9CC`, `0x41CC16`, `0x41CC37`, `0x41CC52`, `0x41CDE1`, `0x41D054`, `0x41D184`, `0x41D26B`, `0x41D319`, `0x41D459`. |
+| `0x41C450` | The same clamp shape for the *target* pair — and it has **no callers**. Dead code; an `E8`/`E9` scan of `.text` finds nothing pointing at it. |
+| `0x41C4C0` | `SetCamera(x, y, smooth)` — writes the target, then clamps it **inline** against `[0, map − view]` without calling `0x41C3C0`. Callers: `0x495C68`, `0x495E11`, `0x497060`, `0x4978C9` (game-screen entry / load). |
+| **`0x41CA30`** | **The per-frame camera stepper.** With no follow object it takes `je 0x41CB4A`. Where eye ≠ target it sets bit 1 of `main+0x142F1` ("camera moved"), **clears bit 3 of `main+0x14281`** — the screen fog grid's own is-current flag — then moves the eye *halfway* toward the target, capped at ±`0x140` (320 px) per axis per frame, and hands the result to `0x41C3C0`. It never writes the target. |
+| `0x41CAF7` | Inside the stepper: the camera-**follow** target, recomputed every frame from the tracked unit as `pos − view/2` and clamped **inline** to `[0, map − view]`. |
+| `0x41C7F7` | Smooth centre-on; clamps its target inline the same way. |
+| `0x41CF10`…`0x41D060` | The scroll poll — see the table below. |
+| `0x466B70` | Fills a RECT with the minimap's view box from the eye and the view size in map cells (`main+0x1423B`/`+0x1423F`). Pure computation; its only two call sites are inside `0x41C3C0`. |
+
+**The scroll poll.** Position source is `GetCursorPos` (IAT slot `0x4FC2E0`), clamped to the
+screen. Four independent directions, each firing on *hotkey* **or** *pointer on an exact screen
+edge* — the hotkeys go through `KeyboardHotkeySampler` `0x4C1B80`, the same sampler `markown`
+uses for SHIFT (`0xF9`):
+
+| Direction | Hotkey id | Mouse condition | Site |
+| --- | --- | --- | --- |
+| left | `0xF4` | `x == 0` | `0x41CF87` |
+| up | `0xF5` | `y == 0` | `0x41CFCE` |
+| right | `0xF6` | `x == (main+0x37E1F) − 1`, i.e. screenW − 1 | `0x41CFA5` |
+| down | `0xF7` | `y == (main+0x37E23) − 1`, i.e. screenH − 1 | `0x41CFFF` |
+
+Two things follow, and both cost time to learn the hard way:
+
+- **The trigger is an exact equality on the outermost pixel, not a band.** Measured on a
+  1024-wide screen at 1×: a pointer at `x = 1023` scrolls right, at `x = 1020` it does not.
+  (This is also why edge scroll looks dead under injected input — it is not, you just have to
+  land on the last pixel. See `ta-drive`.)
+- **At zoom > 1 the right edge cannot fire, and only the right edge.** `fake_GetCursorPos`
+  hands the engine the *unzoomed* `u`, and three of the four screen edges lie **outside** the
+  viewport rect (`L=128`, `T=32`, `B=screenH−33`), so the transform passes them through as
+  identity. The screen's right column, though, *is* the viewport's right column, so it gets
+  contracted toward the centre. Measured at 2× on 1024×768: a pointer at `x=1023` reaches the
+  engine as **800**, so `x == 1023` is unsatisfiable, while left, up and down all still scroll.
+
+### Fields this module owns
+
+| Where | What |
+| --- | --- |
+| `main+0x1431F` / `+0x14323` | eyeX / eyeY |
+| `main+0x14327` / `+0x1432B` | **the scroll target** (`MapXScrollingTo`) the stepper eases the eye toward. Every reference to it in `.text` is inside `0x41C4xx`–`0x41D4xx` — 30 and 28 respectively, and **no drawing code reads it**, which is what makes it camera-local. |
+| `main+0x142F1` bit 1 | set by every camera-module path that moves the eye: the operand appears at `0x41C59A`, `0x41C893`, `0x41C9C7`, `0x41CB62`, `0x41CBD2`, `0x41CDDD`, `0x41D04F`, `0x41D17F`, `0x41D266`, `0x41D314`, `0x41D454` — one per eye writer, immediately before its `0x41C3C0` call — plus minimap/GUI readers in `0x466xxx`. Name *[INFERRED]* ("the camera moved this frame"); what is measured is which sites touch it. |
+| `main+0x14281` bit 3 | the screen fog grid is current — already documented (`terrain-depth.md`: "if `LosType & 8` clear, first rebuild the screen fog grid"). **New here:** the camera stepper clears it at `0x41CB6B` on every frame the eye and target disagree, so a stale target becomes a per-frame grid rebuild. Also cleared at `0x41CB3B`, `0x41C567`, `0x41CE0D`. |
+| `main+0x2C76` / `+0x2C7A` | the engine's mouse position, two **DWORDs** — agrees with `ui-markers.md`. Worth restating because `+0x2C78` looks like the y and is the high half of x; and `main+0x2C74` is an unrelated word (the battleroom lock bit, `cmdline-options.md`). |
+| `main+0x37E1F` / `+0x37E23` | screen width / height — the fields `vpwide` derives the true viewport rect from, and the ones the scroll poll compares against |
+
+### Two per-cell loops that differ, and it matters
+
+An off-map eye is only safe where the engine bounds-checks. Both of these read map arrays from
+the eye, and they do not agree:
+
+- **`0x4843C0`** (screen fog-grid rebuild, which `terrown` calls itself) tests each cell against
+  the LOS map dimensions with **unsigned** compares — `cmp`/`jae` at `0x4844B9` and `0x4844C7` —
+  so a negative index is *skipped*, not faulted. This is why the widened camera range needed no
+  guard here.
+- **`0x483FA0`** (the terrain pass) indexes the tile map at `main+0x1428B` with **no bounds
+  check at all**: `0x48409B` does `imul` row × stride, `add` col, `lea ebp,[edx+eax*2]`. A
+  negative eye would read before the array. Moot in practice — `terrown` skips the whole
+  function — but it is the reason to keep the eye's excursion a property of *our* passes.
+
 ## Hard-coded limits & constants
 
 [VERIFIED unless noted — from `EngineLimits.cpp`/`.h` and `tamem.h`]
