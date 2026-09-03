@@ -16,7 +16,7 @@ Chains together the common "ship this worktree" flow:
 
 If any step produces an unexpected state (conflicts, non-fast-forward, detached HEAD, failing builds, etc.) **STOP** and report the state. Never use `--force`, `--no-verify`, `reset --hard`, or rewrite history.
 
-## Step 0 — Is this ready to LAND? (and the review that decides)
+## Step 0 — Is this ready to LAND? (the documentation pass, and the review that decides)
 
 **Committing and landing are different acts.** Commits on the worktree branch are cheap
 checkpoints — make as many as are useful, including work in progress. **Landing** is
@@ -36,6 +36,59 @@ next thing you do would be "…and now correct what I just landed", it was not f
    claims against the source *first*.
 3. **Nothing is left half-done behind it** — no debug instrumentation, no counters added to
    chase a bug, no `.on` file the change depends on but does not create.
+4. **The documentation it taught us is written down** — the pass below, in the same landing.
+
+### The documentation pass
+
+**Same trigger as the review, once per landing.** If the landing touches engine code, its
+documentation is part of the finished unit of work — not a follow-up someone gets to later.
+Do it *before* the review (see why below).
+
+**The engine map first: `research/notes/exe-reverse-engineering.md`.** Update it as fully as the
+work allows. It takes every address the work **touched or merely read**, not only the ones we
+patched:
+
+- what the function is, in one line, and **its call sites** (an `E8`/`E9` scan of `.text` for the
+  target is cheap and it is the fact nobody has when they need it);
+- the **fields it owns**, with the layout gotchas — strides that are not what they look like,
+  bits whose meaning is known, names that are guessed;
+- **how each fact was established**: disassembly of the pristine build, or a live measurement,
+  and then quote the numbers. Section-mark our own work so it is not confused with the vendor
+  corpora, which are `[VERIFIED]` against TADR's asserted layouts.
+- **Negative results count and are often the most valuable.** A function with no callers at all;
+  a per-cell loop that bounds-tests with unsigned compares next to one that does not check at
+  all; a trigger that is an equality rather than a band. These are what stop the next person
+  re-deriving, or assuming symmetry that is not there.
+
+**Then the module docs**, each in its own place:
+
+- `research/notes/gpu-status.md` — the §2.x hook map (VA, what it is, mechanism) and the
+  **"State we read, and the fields we write"** table. Anything newly written, or newly written
+  *from a second thread*, belongs in that table.
+- `research/notes/roadmap.md` — the capability row and the gate entry, **including the gaps the
+  landing did not close.**
+- `.claude/skills/ta-*/SKILL.md` — only if how you *drive or measure* the game changed. A
+  procedure that cost you an hour to work out is the thing to write here.
+- And **correct whatever the work proved wrong.** A stale note is worse than a missing one.
+
+**The bar for the prose is the same as rule 2 above**: every claim traceable to disassembly or a
+live measurement, never to memory or to an agent's report you did not check. Mark guessed names
+`[INFERRED]`. Say what is *not* covered rather than writing as though it were.
+
+**Commit the docs BEFORE running `/code-review`.** The reviewer reads the accumulated branch
+diff and it disassembles, so the claims get fact-checked for free — on the G13g landing it
+returned a MEDIUM against a documentation overclaim ("the second eye pair is a copy taken right
+after every clamp call, so it follows too") that the header comment, `gpu-status.md` and
+`roadmap.md` all repeated, and it was wrong: three sites clamp that pair inline and never call
+the patched function. The "skip the review for docs-only landings" rule below is unchanged —
+docs *riding with code* are simply in the diff.
+
+**Why this is a step and not a nicety:** the addresses are the expensive part of this project.
+They get re-derived every time they are not written down, and a *wrong* line costs more than a
+missing one — G13g spent several probes chasing a skill note that claimed edge scroll "does not
+fire under injected input" (it does; the trigger is an exact equality on the outermost pixel).
+The most reused output of that landing was the page for functions we only *read* — the camera
+stepper `0x41CA30`, the scroll poll `0x41CF10`, the dead clamp `0x41C450`.
 
 ### The review
 
