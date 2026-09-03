@@ -22,6 +22,13 @@ typedef struct {
 
 typedef struct {
     const void* mesh;           /* from tagpu_hires_mesh()                    */
+    /* The engine's COB pose, one 4x3 row-major matrix (3 vec4) per piece, in
+       the order tagpu_hires_piece() names them: it carries a REST vertex to
+       where the script is holding that piece this frame. NULL = rest pose.
+       A hidden piece (COB HIDE) arrives as an all-zero matrix, which collapses
+       its triangles to a point and so draws nothing. */
+    const float* pose;
+    int   npose;                /* pieces covered by `pose`                   */
     float ax, ay;               /* frame-px anchor                            */
     float wx0, wz0;             /* world x and projected world z at the anchor*/
     float enc;                  /* depth key base                             */

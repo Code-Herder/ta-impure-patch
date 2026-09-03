@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "one Peewee beside one engine-rendered AK, parked, camera on them \u2014 the replacement-mesh close-up. Player 1 is an AI holding one distant unit: a slot that owns units must NOT be controller 'off' (the engine's UNITS_AllocateUnit faults on an off player's missing unit table), and a player with no units at all ends the mission.",
+  "description": "one Peewee beside one engine-rendered AK, parked, camera on them \u2014 the replacement-mesh close-up, and the yaw regression test. Facing 45 on purpose: at 0/90/180/270 one of cos(yaw), sin(yaw) is zero, and a yaw convention that is a reflection or an inverse of the engine's still renders CORRECTLY there \u2014 which is how the replacement pass shipped a half-turn out and looked fine in every screenshot. Player 1 is an AI holding one distant unit: a slot that owns units must NOT be controller 'off' (the engine's UNITS_AllocateUnit faults on an off player's missing unit table), and a player with no units at all ends the mission.",
   "seed": 1,
   "on_error": "abort",
   "setup": {
@@ -36,7 +36,7 @@
         2600,
         1200
       ],
-      "facing": 90,
+      "facing": 45,
       "stance": "hold"
     },
     {
@@ -47,7 +47,7 @@
         2680,
         1200
       ],
-      "facing": 90,
+      "facing": 45,
       "stance": "hold"
     },
     {
@@ -58,7 +58,7 @@
         4200,
         2400
       ],
-      "facing": 90,
+      "facing": 45,
       "stance": "hold"
     }
   ],

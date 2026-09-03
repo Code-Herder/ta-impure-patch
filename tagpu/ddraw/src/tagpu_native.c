@@ -154,13 +154,19 @@
 #define O3_PRIM0     0x22
 #define PRIM_STRIDE  0x36
 #define P_NODE       0x00
+#define P_POS        0x04      /* i32[3] 16.16 COB MOVE delta               */
+#define P_TURN       0x10      /* u16[3] COB TURN, 65536 = 360 degrees      */
 #define P_VBUF       0x22
 #define P_FLAGS      0x28
 #define N_VCOUNT     0x04
 #define N_FCOUNT     0x08
 #define N_SELPRIM    0x0C      /* selection primitive index, -1 = none      */
+#define N_OFF        0x10      /* i32[3] 16.16 rest offset from the parent  */
+#define N_NAME       0x1C      /* char* piece name                          */
 #define N_VERTS      0x24      /* raw model-space verts i32[3] 16.16        */
 #define N_FACES      0x28
+#define N_SIB        0x2C
+#define N_CHILD      0x30
 #define FACE_STRIDE  0x20
 #define F_COLORTAB   0x00
 #define F_VCOUNT     0x04
@@ -903,6 +909,248 @@ static int emit_fx_model(const TAGPU_FXMODEL* m, int nv, float fxKey)
                      m->owner, 0, selprim != -1 ? 0 : -1, 1);
 }
 
+/* ------------------------------------------------------- replacement pose --
+   One unit's COB pose, in the form tagpu_hires_draw.c consumes: per glTF
+   piece a 4x3 (3 rows of 4) that carries a REST vertex of that piece to where
+   the unit's script is holding it this frame.
+
+   The engine keeps the pose as explicit fields rather than only as posed
+   vertices, so nothing here has to recover a transform from geometry. Per
+   piece: the node's rest offset from its parent (N_OFF -- the same field
+   aabb_walk sums), a MOVE delta and a TURN triple in the PrimitiveStruct.
+   Accumulated down the tree that is P = parent * T(off + move) * R(turn), and
+   the REST transform is the same walk with move and turn zero, which collapses
+   to a translation by the accumulated offset. The matrix we want is therefore
+   P * T(-restOffset), and it is the identity for a piece the script has not
+   touched -- so a model whose pieces never move renders exactly as before.
+
+   The conventions were measured against the engine's own posed vertex buffer
+   (P_VBUF), which is the ground truth this cannot argue with, and the residual
+   came out at 2e-5 model units over every piece of a walking Peewee:
+
+     - turn[0] rotates about X, turn[1] about Y, turn[2] about Z, each the
+       positive-angle rot2 above at 65536 = 360 degrees. NOT the index order
+       the effects models use (emit_fx_model reads a different struct);
+     - the sample could not settle the ORDER the three compose in, every piece
+       in it turning about one axis only. Z then X then Y is the plane order
+       the engine's own transform 0x4B6CC0 uses, so it is the one used here;
+     - `pos` read zero on every piece of every sample, a Peewee mid-stride
+       included, so it is taken as a MOVE delta in the parent's frame. It is
+       the one field here that no live data has yet exercised.
+
+   research/notes/model-import.md carries the derivation and the numbers. */
+
+#define HPOSE_MAX  49152        /* floats: ~340 posed Peewees in a frame     */
+static float s_hpose[HPOSE_MAX];
+static int   s_hposeN;
+
+/* o = a * b, both 4x3 row-major (rows of {m0,m1,m2,t}) */
+static void m43_mul(const float* a, const float* b, float* o)
+{
+    int r, c;
+    for (r = 0; r < 3; r++) {
+        for (c = 0; c < 3; c++)
+            o[r*4+c] = a[r*4+0]*b[0*4+c] + a[r*4+1]*b[1*4+c] + a[r*4+2]*b[2*4+c];
+        o[r*4+3] = a[r*4+0]*b[0*4+3] + a[r*4+1]*b[1*4+3] +
+                   a[r*4+2]*b[2*4+3] + a[r*4+3];
+    }
+}
+
+/* T(d) * R(turn), as a 4x3. R is built by rotating the basis vectors through
+   the very same rot2 sequence a vertex would take, so the matrix cannot
+   disagree with the convention above. */
+static void piece_local(const unsigned short* turn, const float* d, float* o)
+{
+    const float K = 6.2831853f / 65536.0f;
+    float c0 = cosf((float)turn[0] * K), s0 = sinf((float)turn[0] * K);
+    float c1 = cosf((float)turn[1] * K), s1 = sinf((float)turn[1] * K);
+    float c2 = cosf((float)turn[2] * K), s2 = sinf((float)turn[2] * K);
+    int j;
+    for (j = 0; j < 3; j++) {
+        float x = j == 0 ? 1.0f : 0.0f;
+        float y = j == 1 ? 1.0f : 0.0f;
+        float z = j == 2 ? 1.0f : 0.0f;
+        if (turn[2]) rot2(c2, s2, &x, &y);      /* about Z */
+        if (turn[0]) rot2(c0, s0, &y, &z);      /* about X */
+        if (turn[1]) rot2(c1, s1, &x, &z);      /* about Y */
+        o[0*4+j] = x; o[1*4+j] = y; o[2*4+j] = z;
+    }
+    o[0*4+3] = d[0]; o[1*4+3] = d[1]; o[2*4+3] = d[2];
+}
+
+/* glTF piece -> engine primitive, resolved by name once per unit TYPE: the
+   Model3DONode tree is shared by every unit of a type, so the node pointer of
+   primitive 0 identifies the template the mapping was resolved against, and
+   the mesh's reload generation identifies the piece list on the other side. */
+typedef struct {
+    const void* mesh;
+    unsigned gen;
+    const void* nd0;
+    int   n;                                  /* glTF pieces mapped         */
+    short e[TAGPU_HMAXPIECE];                 /* engine primitive, -1 = none */
+} HPMAP;
+static HPMAP s_pmap[8];
+static int   s_npmap;
+
+static int name_eq(const char* a, const char* b)
+{
+    for (; *a && *b; a++, b++) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
+        if (ca != cb) return 0;
+    }
+    return *a == *b;
+}
+
+static const HPMAP* pmap_for(const void* mesh, const char* const* nd, int nparts)
+{
+    int i, g, np = tagpu_hires_npiece(mesh);
+    unsigned gen = tagpu_hires_gen(mesh);
+    HPMAP* m;
+    if (np > TAGPU_HMAXPIECE) np = TAGPU_HMAXPIECE;
+    for (i = 0; i < s_npmap; i++)
+        if (s_pmap[i].mesh == mesh && s_pmap[i].gen == gen &&
+            s_pmap[i].nd0 == nd[0]) return &s_pmap[i];
+    /* the table only ever holds one entry per replacement type, and there can
+       be at most MAXMESH of those; a full table means a type was reloaded
+       against a new template, so start over rather than stop mapping */
+    if (s_npmap >= (int)(sizeof s_pmap / sizeof s_pmap[0])) s_npmap = 0;
+    m = &s_pmap[s_npmap++];
+    m->mesh = mesh; m->gen = gen; m->nd0 = nd[0]; m->n = np;
+    char b[256];
+    int nb = 0, bl;
+    bl = _snprintf(b, sizeof b, "hires: pose unbound:");
+    for (g = 0; g < np; g++) {
+        const char* want = tagpu_hires_piece(mesh, g);
+        m->e[g] = -1;
+        if (want && want[0])
+            for (i = 0; i < nparts; i++) {
+                const char* have = *(const char* const*)(nd[i] + N_NAME);
+                if (!ptr_ok(have) || IsBadReadPtr(have, 1)) continue;
+                if (name_eq(want, have)) { m->e[g] = (short)i; break; }
+            }
+        if (m->e[g] >= 0) { nb++; continue; }
+        /* a node the unit's 3DO has no piece for can never move: say which,
+           because a renamed node is silent otherwise — it just stops posing */
+        if (bl > 0 && bl < (int)sizeof b - 34)
+            bl += _snprintf(b + bl, sizeof b - bl, " %.30s",
+                            (want && want[0]) ? want : "<unnamed>");
+    }
+    {
+        char l[128];
+        _snprintf(l, sizeof l, "hires: pose bound %d of %d piece%s to the unit's 3DO",
+                  nb, np, np == 1 ? "" : "s");
+        nlog(l);
+        if (nb < np) nlog(b);
+    }
+    return m;
+}
+
+/* Everything one unit's pose needs, accumulated down the piece tree. Shared
+   with pose_dump, which checks it against the engine's own posed vertices. */
+typedef struct {
+    const char* nd[64];
+    const char* pr[64];
+    float acc[64][12];          /* rest vertex of that piece -> model space  */
+    float rest[64][3];          /* accumulated rest offset                   */
+    unsigned char done[64];     /* 0 = tree link broken, piece left at rest  */
+} HPOSE;
+
+static int pose_accum(const char* o3, HPOSE* h)
+{
+    short parent[64];
+    int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
+    const char** nd = h->nd;
+    const char** pr = h->pr;
+    int i, g, left, pass;
+    if (nparts <= 0 || nparts > 64) return 0;
+    for (i = 0; i < nparts; i++) {
+        pr[i] = o3 + O3_PRIM0 + i * PRIM_STRIDE;
+        nd[i] = *(const char* const*)(pr[i] + P_NODE);
+        if (!ptr_ok(nd[i]) || IsBadReadPtr(nd[i], N_CHILD + 4)) return 0;
+        parent[i] = -1;
+        h->done[i] = 0;
+    }
+    /* parent links out of the node tree: a node's children are its `child`
+       and everything down that child's sibling chain */
+    for (i = 0; i < nparts; i++) {
+        const char* ch = *(const char* const*)(nd[i] + N_CHILD);
+        int sib;
+        for (sib = 0; sib < nparts && ptr_ok(ch); sib++) {
+            for (g = 0; g < nparts; g++)
+                if (nd[g] == ch) { if (parent[g] < 0) parent[g] = (short)i; break; }
+            if (IsBadReadPtr(ch, N_SIB + 4)) break;
+            ch = *(const char* const*)(ch + N_SIB);
+        }
+    }
+    /* accumulate parents before children; a piece whose parent link is broken
+       stays undone and falls back to its rest place */
+    left = nparts;
+    for (pass = 0; pass < nparts && left > 0; pass++) {
+        for (i = 0; i < nparts; i++) {
+            if (h->done[i] || (parent[i] >= 0 && !h->done[parent[i]])) continue;
+            {
+                const int* off = (const int*)(nd[i] + N_OFF);
+                const int* mv  = (const int*)(pr[i] + P_POS);
+                float d[3], loc[12];
+                int k;
+                for (k = 0; k < 3; k++)
+                    d[k] = (float)off[k] / 65536.0f + (float)mv[k] / 65536.0f;
+                piece_local((const unsigned short*)(pr[i] + P_TURN), d, loc);
+                if (parent[i] < 0) {
+                    memcpy(h->acc[i], loc, sizeof loc);
+                    for (k = 0; k < 3; k++)
+                        h->rest[i][k] = (float)off[k] / 65536.0f;
+                } else {
+                    m43_mul(h->acc[parent[i]], loc, h->acc[i]);
+                    for (k = 0; k < 3; k++)
+                        h->rest[i][k] = h->rest[parent[i]][k] + (float)off[k] / 65536.0f;
+                }
+            }
+            h->done[i] = 1;
+            left--;
+        }
+    }
+    return nparts;
+}
+
+/* Fill out[npiece*12] for `mesh` from the unit's Object3do. 0 = leave it all
+   at rest (the caller then uploads the identity). */
+static int hires_pose(const char* o3, const void* mesh, float* out, int npiece)
+{
+    HPOSE h;
+    int g, nparts = pose_accum(o3, &h);
+    if (!nparts) return 0;
+    {
+        const HPMAP* pm = pmap_for(mesh, h.nd, nparts);
+        for (g = 0; g < npiece; g++) {
+            float* o = out + g * 12;
+            int e = (g < pm->n) ? pm->e[g] : -1;
+            int r;
+            if (e < 0 || !h.done[e]) {                  /* rest pose */
+                memset(o, 0, 12 * sizeof(float));
+                o[0] = o[5] = o[10] = 1.0f;
+                continue;
+            }
+            if (!(*(const unsigned char*)(h.pr[e] + P_FLAGS) & 1)) {
+                memset(o, 0, 12 * sizeof(float));       /* COB HIDE */
+                continue;
+            }
+            /* P * T(-restOffset) */
+            for (r = 0; r < 3; r++) {
+                o[r*4+0] = h.acc[e][r*4+0];
+                o[r*4+1] = h.acc[e][r*4+1];
+                o[r*4+2] = h.acc[e][r*4+2];
+                o[r*4+3] = h.acc[e][r*4+3] - (h.acc[e][r*4+0]*h.rest[e][0] +
+                                              h.acc[e][r*4+1]*h.rest[e][1] +
+                                              h.acc[e][r*4+2]*h.rest[e][2]);
+            }
+        }
+    }
+    return 1;
+}
+
 void tagpu_native_frame(const TAGPU_FRAME* f)
 {
     if (s_state == 2) return;
@@ -1389,6 +1637,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int i;
     static TAGPU_HUNIT hunits[MAXU];
     int nhi = 0;
+    s_hposeN = 0;
     for (i = 0; i < nu; i++) {
         firstv[i] = nv;
         /* airborne units draw in a second, un-rowed sweep above everything
@@ -1402,6 +1651,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                firstv[i] == firstv[i+1] makes its draws below empty */
             TAGPU_HUNIT* h = &hunits[nhi++];
             h->mesh = units[i].hires;
+            /* the COB pose, into a frame arena; past the arena a unit still
+               draws, at rest, rather than dropping out of the scene */
+            h->pose = NULL; h->npose = 0;
+            {
+                int np = tagpu_hires_npiece(units[i].hires);
+                if (np > TAGPU_HMAXPIECE) np = TAGPU_HMAXPIECE;
+                if (np > 0 && s_hposeN + np * 12 <= HPOSE_MAX) {
+                    float* dst = s_hpose + s_hposeN;
+                    if (hires_pose(units[i].o3, units[i].hires, dst, np)) {
+                        h->pose = dst; h->npose = np;
+                        s_hposeN += np * 12;
+                    }
+                }
+            }
             h->ax = units[i].ax;   h->ay = units[i].ay;
             h->wx0 = units[i].wx0; h->wz0 = units[i].wz0;
             h->enc = encBase;
@@ -1426,7 +1689,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         for (k = 0; k < nm; k++) nv = emit_fx_model(tagpu_fx_model(k), nv, fxKey);
     }
     int fxLast = nv;
-    if (nv == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !markOn && !terrOwned) return;
+    /* nhi belongs in this test: a replacement unit contributes no vertices to
+       this pass (it is the other one's), so a frame holding nothing but those
+       would bail here and draw them nowhere */
+    if (nv == 0 && nhi == 0 && nfx == 0 && nfeat == 0 && nterr == 0 &&
+        !markOn && !terrOwned) return;
 
     /* ---- native selection rects (ui-markers: the ONLY marker interleaved
        with unit draws — the engine's is unreadable under our pixels, redraw
@@ -1741,34 +2008,72 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     s_vtrunc = 0;
 }
 
-/* G11 groundwork: one-shot numeric dump of the engine's per-piece pose data
-   for the first owned unit — posed pos/turn PLUS raw node verts vs posed vbuf
-   verts, enough to solve the exact transform convention offline (order/signs
-   of Rz,Rx,Ry at 65536=360°). Armed by tagpu_posedump.on (self-deleting). */
+/* The pose oracle, armed by tagpu_posedump.on (self-deleting): a one-shot
+   numeric dump of the engine's per-piece pose for the first owned unit — its
+   rest offset, MOVE delta and TURN triple, its raw node verts against the
+   engine's own posed vbuf, and `err=`, the largest disagreement in model units
+   between those posed verts and what pose_accum() reconstructs from the
+   fields. That last number is the whole point: it is how the transform
+   convention was solved in the first place (research/notes/model-import.md),
+   and it is how a unit whose script does something no sample covered — a piece
+   MOVEd, two turn axes at once — says so, instead of just rendering slightly
+   wrong. err should read 0.00. */
 static void pose_dump(const char* u, const char* o3)
 {
     if (GetFileAttributesA("tagpu_posedump.on") == INVALID_FILE_ATTRIBUTES) return;
     DeleteFileA("tagpu_posedump.on");
-    int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
+    HPOSE h;
+    int nparts = pose_accum(o3, &h);
     char b[256];
-    _snprintf(b, sizeof b, "posedump: unit=%p o3=%p nparts=%d yaw=%u", u, o3, nparts,
+    _snprintf(b, sizeof b, "posedump: unit=%p o3=%p nparts=%d yaw=%u", u, o3,
+              (int)*(const unsigned short*)(o3 + O3_NUMPARTS),
               (unsigned)*(const unsigned short*)(u + U_YAW));
     nlog(b);
+    if (!nparts) { nlog("posedump: pose_accum refused this unit"); return; }
+    /* the engine bakes the BODY YAW into vbuf; pose_accum stops at model
+       space, which is where the replacement pass takes over from it */
+    const float K = 6.2831853f / 65536.0f;
+    unsigned yaw = *(const unsigned short*)(u + U_YAW);
+    float yc = cosf((float)yaw * K), ys = sinf((float)yaw * K);
     int p;
-    for (p = 0; p < nparts && p < 20; p++) {
-        const char* pr = o3 + O3_PRIM0 + p * PRIM_STRIDE;
-        const char* nd = *(const char* const*)(pr + P_NODE);
+    for (p = 0; p < nparts && p < 32; p++) {
+        const char* pr = h.pr[p];
+        const char* nd = h.nd[p];
         const int*  vb = *(const int* const*)(pr + P_VBUF);
-        if (!ptr_ok(nd)) continue;
-        const int* pp = (const int*)(pr + 0x04);          /* posed pos 16.16 */
-        const unsigned short* pt = (const unsigned short*)(pr + 0x10); /* posed turn */
-        const char* nm = *(const char* const*)(nd + 0x1C);
-        _snprintf(b, sizeof b, "posedump: p%d %s pos=(%d,%d,%d) turn=(%u,%u,%u)",
-                  p, ptr_ok(nm) ? nm : "?", pp[0], pp[1], pp[2],
-                  (unsigned)pt[0], (unsigned)pt[1], (unsigned)pt[2]);
+        const int*  of = (const int*)(nd + N_OFF);
+        const int*  mv = (const int*)(pr + P_POS);
+        const unsigned short* tn = (const unsigned short*)(pr + P_TURN);
+        const char* nm = *(const char* const*)(nd + N_NAME);
+        const int*  nv = *(const int* const*)(nd + N_VERTS);
+        int cnt = *(const int*)(nd + N_VCOUNT);
+        float worst = -1.0f;
+        if (h.done[p] && ptr_ok(nv) && ptr_ok(vb) && cnt > 0 && cnt <= MAXNODEV &&
+            !IsBadReadPtr(nv, (SIZE_T)cnt * 12) && !IsBadReadPtr(vb, (SIZE_T)cnt * 12)) {
+            int k, r;
+            worst = 0.0f;
+            for (k = 0; k < cnt; k++) {
+                float v[3], g[3];
+                for (r = 0; r < 3; r++) v[r] = (float)nv[k*3+r] / 65536.0f;
+                for (r = 0; r < 3; r++) {
+                    const float* m = h.acc[p] + r * 4;
+                    g[r] = m[0]*v[0] + m[1]*v[1] + m[2]*v[2] + m[3];
+                }
+                rot2(yc, ys, &g[0], &g[2]);
+                for (r = 0; r < 3; r++) {
+                    float d = g[r] - (float)vb[k*3+r] / 65536.0f;
+                    if (d < 0.0f) d = -d;
+                    if (d > worst) worst = d;
+                }
+            }
+        }
+        _snprintf(b, sizeof b,
+                  "posedump: p%d %s%s off=(%d,%d,%d) move=(%d,%d,%d) "
+                  "turn=(%u,%u,%u) err=%.2f",
+                  p, ptr_ok(nm) ? nm : "?",
+                  (*(const unsigned char*)(pr + P_FLAGS) & 1) ? "" : " HIDDEN",
+                  of[0], of[1], of[2], mv[0], mv[1], mv[2],
+                  (unsigned)tn[0], (unsigned)tn[1], (unsigned)tn[2], worst);
         nlog(b);
-        const int* nv = *(const int* const*)(nd + 0x24);
-        int cnt = *(const int*)(nd + 0x04);
         if (ptr_ok(nv) && ptr_ok(vb) && cnt > 0) {
             int k, kmax = cnt < 3 ? cnt : 3;
             for (k = 0; k < kmax; k++) {

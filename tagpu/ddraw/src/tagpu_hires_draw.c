@@ -25,6 +25,13 @@
        costs a handful of uniforms and one draw per material, and NOTHING is
        transformed on the CPU. Yaw and the anchor are uniforms, applied in the
        vertex shader;
+     - the COB POSE is uniforms too. Every vertex carries the index of the
+       piece it belongs to, and `uPiece` holds one 4x3 matrix per piece that
+       carries a rest vertex to where the unit's script is holding that piece
+       this frame. So a replacement unit walks, aims and recoils off the same
+       static buffer, at one uniform upload per unit rather than one draw per
+       piece. tagpu_native.c reads the pose out of the engine; the axis and
+       angle conventions it decodes are in research/notes/model-import.md;
      - per-PIXEL lighting against the engine's own light direction, so our unit
        is lit from where the game lights everything else;
      - normal maps through a tangent frame derived from screen-space
@@ -71,11 +78,20 @@ static void dlog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
+#define STR2(x) #x
+#define STR(x) STR2(x)
+
 static const char* VS =
     "#version 330 core\n"
-    "layout(location=0) in vec3 aPos;\n"      /* TA model space               */
+    "layout(location=0) in vec3 aPos;\n"      /* engine model space, REST     */
     "layout(location=1) in vec3 aNrm;\n"
     "layout(location=2) in vec2 aUV;\n"
+    "layout(location=3) in float aPiece;\n"
+    /* 3 rows of a 4x3 per piece: the COB pose, rest -> posed. Identity when
+       the unit's pose could not be read; all zeros when the piece is HIDden,
+       which collapses its triangles onto the model origin and rasterises
+       nothing. */
+    "uniform vec4 uPiece[" STR(TAGPU_HMAXPIECE) "*3];\n"
     "uniform vec2 uGame;\n"
     "uniform vec2 uOffset;\n"
     "uniform float uZoom;\n"
@@ -86,9 +102,16 @@ static const char* VS =
     "out vec3 vPos; out vec3 vNrm; out vec2 vUV;\n"
     "out vec2 vWorld; out float vEnc; out float vVY;\n"
     "void main(){\n"
+    "  int pb = int(aPiece) * 3;\n"
+    "  vec4 rp = vec4(aPos, 1.0);\n"
+    "  vec3 bp = vec3(dot(uPiece[pb], rp), dot(uPiece[pb+1], rp), dot(uPiece[pb+2], rp));\n"
+    "  vec3 bn = vec3(dot(uPiece[pb].xyz, aNrm), dot(uPiece[pb+1].xyz, aNrm),\n"
+    "                 dot(uPiece[pb+2].xyz, aNrm));\n"
+    /* body yaw, the engine's own rotation (tagpu_native.c rot2), applied to
+       the posed piece: x' = x cos - z sin, z' = x sin + z cos */
     "  float c = uYawEnc.x, s = uYawEnc.y;\n"
-    "  vec3 m = vec3(aPos.x*c + aPos.z*s, aPos.y, -aPos.x*s + aPos.z*c);\n"
-    "  vec3 n = vec3(aNrm.x*c + aNrm.z*s, aNrm.y, -aNrm.x*s + aNrm.z*c);\n"
+    "  vec3 m = vec3(bp.x*c - bp.z*s, bp.y, bp.x*s + bp.z*c);\n"
+    "  vec3 n = vec3(bn.x*c - bn.z*s, bn.y, bn.x*s + bn.z*c);\n"
     /* the engine's projection, per vertex, exactly as the native emitters bake
        it on the CPU: sx = anchor + x, sy = anchor + (-z - y/2) */
     "  vec2 p0 = vec2(uAnchor.x + m.x, uAnchor.y + (-m.z - m.y*0.5));\n"
@@ -218,6 +241,7 @@ static PFN_ACTIVETEX  x_glActiveTexture;
 static int    s_state = 0;                 /* 0 unloaded, 1 ready, 2 failed */
 static GLuint s_prog;
 static GLint  u_game, u_offset, u_zoom, u_zoomC, u_depthScale, u_anchor, u_yawEnc;
+static GLint  u_piece;
 static GLint  u_hasNrm, u_base, u_mr, u_cutoff, u_shadow, u_alpha;
 static GLint  u_waterT, u_waterMode, u_digT, u_light, u_view, u_sunAmb;
 static GLint  u_anchorMix, u_shade, u_fog, u_fogOrg, u_fogDim;
@@ -278,6 +302,7 @@ static void ensure(void)
     u_zoom = U("uZoom");        u_zoomC = U("uZoomC");
     u_depthScale = U("uDepthScale");
     u_anchor = U("uAnchor");    u_yawEnc = U("uYawEnc");
+    u_piece = U("uPiece");
     u_hasNrm = U("uHasNrm");    u_base = U("uBase");
     u_mr = U("uMR");            u_cutoff = U("uCutoff");
     u_shadow = U("uShadow");    u_alpha = U("uAlpha");
@@ -339,6 +364,23 @@ static void tune(unsigned frame_counter)
     if (s_anchorMix > 1.0f) s_anchorMix = 1.0f;
 }
 
+/* what a unit with no readable pose gets: every piece at its rest place */
+static const float* ident_pose(void)
+{
+    static float I[TAGPU_HMAXPIECE * 12];
+    static int built = 0;
+    if (!built) {
+        int i;
+        built = 1;
+        for (i = 0; i < TAGPU_HMAXPIECE; i++) {
+            I[i*12 + 0] = 1.0f;
+            I[i*12 + 5] = 1.0f;
+            I[i*12 + 10] = 1.0f;
+        }
+    }
+    return I;
+}
+
 int tagpu_hires_draw_ready(void) { return s_state != 2; }
 
 void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
@@ -385,6 +427,13 @@ void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
         if (!vao) continue;
         int ng = tagpu_hires_ngroup(h->mesh);
         glBindVertexArray(vao);
+        {
+            int np = tagpu_hires_npiece(h->mesh);
+            if (np > TAGPU_HMAXPIECE) np = TAGPU_HMAXPIECE;
+            if (np > 0)
+                glUniform4fv(u_piece, np * 3,
+                             (h->pose && h->npose >= np) ? h->pose : ident_pose());
+        }
         {
             float anc[4]; anc[0] = h->ax; anc[1] = h->ay; anc[2] = h->wx0; anc[3] = h->wz0;
             float ang = (float)h->yaw * 6.2831853f / 65536.0f;

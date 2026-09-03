@@ -15,32 +15,44 @@
    squeezed through the engine's palette-index one.
 
    WHAT THIS PRODUCES, and it is shaped for the GPU, not for the file:
-     - ONE static interleaved vertex buffer per model (position, normal, uv),
-       triangles SORTED BY MATERIAL so each material is one contiguous draw.
-       The buffer is uploaded once at load; a unit costs a handful of uniforms
-       and one draw per material per frame, never a per-vertex CPU transform;
+     - ONE static interleaved vertex buffer per model (position, normal, uv,
+       PIECE INDEX), triangles SORTED BY MATERIAL so each material is one
+       contiguous draw. The buffer is uploaded once at load; a unit costs a
+       handful of uniforms and one draw per material per frame, never a
+       per-vertex CPU transform;
      - one HGroup per glTF material, carrying its two textures (base colour,
        normal), its factors and its doubleSided flag;
+     - one PIECE per glTF node that carries a mesh, named after that node, and
+       every vertex tagged with its piece. The vertex buffer holds the REST
+       pose; the pose the engine's COB script is holding this frame arrives as
+       one matrix per piece (tagpu_hires_draw.c), so the same static buffer
+       walks, aims and recoils. Names are how a piece finds its engine
+       counterpart, and `tools/ta3do` names each node after the 3DO piece it
+       came from, so a round-tripped model matches by construction;
      - textures uploaded once, mipmapped, with the glTF sampler's own filters.
        PNG only — lodepng is already in the DLL and nothing else is.
 
    SUPPORTED: .glb and .gltf, buffers and images from the GLB BIN chunk, a
    `data:...;base64,` URI or a file beside the .gltf; the whole scene graph
-   (node TRS or `matrix`, composed down the tree and BAKED — per-piece COB pose
-   is G11's half, not this); primitive mode 4, indexed or not; POSITION,
-   NORMAL, TEXCOORD_0.
+   (node TRS or `matrix`, composed down the tree and BAKED as the rest pose);
+   primitive mode 4, indexed or not; POSITION, NORMAL, TEXCOORD_0.
 
-   AXES. glTF is right-handed Y-up; the 3DO model space the frame is built in
-   is the left-handed one, so Z is negated on positions AND normals, and
-   triangle order reversed to match — the exact inverse of the conversion in
-   `tools/ta3do`, which is what makes the round trip land back where it
-   started. Both sides are in TA model units (game px): ta3do writes the 16.16
-   fixed-point verts divided by 65536.
+   AXES, and why X and not Z. glTF is right-handed Y-up; the space the frame is
+   built in is the LEFT-handed one the engine holds a loaded 3DO in, so one
+   axis is negated on positions AND normals and triangle order is reversed to
+   match. Which axis is not free: `tools/ta3do` writes glTF = the .3do file
+   with Z negated, and the ENGINE loads that same file with X *and* Z negated
+   (a 180° yaw — measured against live posed vertices, research/notes/
+   model-export.md). Undoing ta3do and then landing in the engine's frame is
+   therefore -Z followed by 180°, which is exactly `negate X`. Get this wrong
+   and the model is a half turn out: it renders perfectly at facings where
+   cos(yaw) = 0 and backwards everywhere else. Both sides are in TA model units
+   (game px): ta3do writes the 16.16 fixed-point verts divided by 65536.
 
-   NOT SUPPORTED, deliberately: per-piece COB pose (G11), skins, morph targets,
-   animation, sparse accessors, texture wrap modes (UVs are clamped), KHR
-   extensions, and every material channel past base colour + normal +
-   metallic/roughness. */
+   NOT SUPPORTED, deliberately: skins, morph targets, glTF animation (the pose
+   comes from the engine, not the file), sparse accessors, texture wrap modes
+   (UVs are clamped), KHR extensions, and every material channel past base
+   colour + normal + metallic/roughness. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -58,7 +70,7 @@
 #define MAXBUF    8        /* glTF buffers per model                         */
 #define MAXTEX    2048     /* an image may not exceed this on a side         */
 #define MAXFILE   (64u << 20)
-#define HVSTRIDE  8        /* floats per vertex: px,py,pz, nx,ny,nz, u,v     */
+#define HVSTRIDE  9        /* floats/vertex: px,py,pz, nx,ny,nz, u,v, piece  */
 
 typedef struct { int idx; unsigned char* px; int w, h; GLuint tex; } HImg;
 
@@ -85,6 +97,9 @@ typedef struct {
     int      nimg;
     HGroup   grp[MAXGRP];
     int      ngrp;
+    char     pname[TAGPU_HMAXPIECE][32];  /* piece names, indexed as the verts tag  */
+    int      npiece;
+    unsigned gen;              /* bumped per load: the piece list is new     */
     GLuint   vao, vbo;
     int      uploaded;
 } HMesh;
@@ -513,7 +528,9 @@ typedef struct {
     float  (*n)[9];            /* per tri: 3 verts x normal, TA model space  */
     float  (*t)[6];            /* per tri: 3 verts x uv                      */
     unsigned char* gid;        /* per tri: which HGroup it belongs to        */
-    int    ntri, trunc;
+    unsigned char* pid;        /* per tri: which piece it belongs to         */
+    int    piece;              /* piece the node being walked owns          */
+    int    ntri, trunc, ptrunc;
 } Build;
 
 /* decode images[idx] once per model; returns its HMesh.img slot, or -1 */
@@ -688,9 +705,10 @@ static void emit_mesh(Build* b, int meshIdx, const float* m)
         int k;
         for (k = 0; k + 2 < nverts; k += 3) {
             if (b->ntri >= MAXTRI) { b->trunc = 1; return; }
-            /* winding reversed BECAUSE Z is negated: mirroring flips the sense
-               of a triangle, and reversing it back leaves the geometric normal
-               agreeing with the shading normal we mirror the same way */
+            /* winding reversed BECAUSE one axis is negated: mirroring flips
+               the sense of a triangle, and reversing it back leaves the
+               geometric normal agreeing with the shading normal we mirror the
+               same way */
             static const int order[3] = { 0, 2, 1 };
             float p[3][3], n[3][3], t[3][2];
             int c, bad = 0;
@@ -701,12 +719,12 @@ static void emit_mesh(Build* b, int meshIdx, const float* m)
                 float v[3];
                 gread(&pos, (int)vi, v, 3);
                 mat_pt(m, v, p[c]);
-                p[c][2] = -p[c][2];                 /* glTF -> 3DO model space */
+                p[c][0] = -p[c][0];            /* glTF -> engine model space */
                 if (hasN) {
                     float s[3];
                     gread(&nrm, (int)vi, s, 3);
                     nrm_apply(nm, s, n[c]);
-                    n[c][2] = -n[c][2];
+                    n[c][0] = -n[c][0];
                     nrm_unit(n[c]);
                 }
                 if (hasUV && vi < (unsigned)uv.count) gread(&uv, (int)vi, t[c], 2);
@@ -732,10 +750,32 @@ static void emit_mesh(Build* b, int meshIdx, const float* m)
                 ot[c*2+0] = t[c][0]; ot[c*2+1] = t[c][1];
             }
             b->gid[b->ntri] = (unsigned char)grp;
+            b->pid[b->ntri] = (unsigned char)b->piece;
             b->m->grp[grp].count++;
             b->ntri++;
         }
     }
+}
+
+/* one piece slot per node that carries geometry, named after the node — that
+   name is the whole binding to the engine's piece, so a node the file left
+   unnamed simply never poses (slot 0's name stays empty and matches nothing).
+   Past TAGPU_HMAXPIECE the geometry still draws, tagged to the last slot; a model
+   that big is louder as a log line than as missing pieces. */
+static int piece_slot(Build* b, int nd)
+{
+    HMesh* m = b->m;
+    if (m->npiece >= TAGPU_HMAXPIECE) { b->ptrunc = 1; return m->npiece - 1; }
+    int p = m->npiece++;
+    int nt = jfield(b->g, nd, "name");
+    m->pname[p][0] = 0;
+    if (nt >= 0 && b->g->t[nt].type == JS_STR) {
+        int len = b->g->t[nt].end - b->g->t[nt].start;
+        if (len > (int)sizeof m->pname[p] - 1) len = (int)sizeof m->pname[p] - 1;
+        memcpy(m->pname[p], b->g->js + b->g->t[nt].start, (size_t)len);
+        m->pname[p][len] = 0;
+    }
+    return p;
 }
 
 static void walk_node(Build* b, int nodeIdx, const float* parent, int depth)
@@ -748,7 +788,12 @@ static void walk_node(Build* b, int nodeIdx, const float* parent, int depth)
     node_local(g, nd, loc);
     mat_mul(parent, loc, m);
     int mi = gi(g, nd, "mesh", -1);
-    if (mi >= 0) emit_mesh(b, mi, m);
+    if (mi >= 0) {
+        int was = b->piece;
+        b->piece = piece_slot(b, nd);
+        emit_mesh(b, mi, m);
+        b->piece = was;
+    }
     int ch = jfield(g, nd, "children");
     int nc = jlen(g, ch), k;
     for (k = 0; k < nc; k++)
@@ -763,9 +808,10 @@ static void mesh_free(HMesh* m)
     free(m->v);
     m->v = NULL;
     for (i = 0; i < m->nimg; i++) free(m->img[i].px);
-    m->ntri = 0; m->ngrp = 0; m->nimg = 0; m->uploaded = 0;
+    m->ntri = 0; m->ngrp = 0; m->nimg = 0; m->npiece = 0; m->uploaded = 0;
     memset(m->img, 0, sizeof m->img);
     memset(m->grp, 0, sizeof m->grp);
+    memset(m->pname, 0, sizeof m->pname);
 }
 
 /* GL objects survive a reload only to be deleted here, on a thread that has a
@@ -864,7 +910,8 @@ static int load_gltf(HMesh* m, const char* path)
     bd.n   = malloc(sizeof(float) * 9 * MAXTRI);
     bd.t   = malloc(sizeof(float) * 6 * MAXTRI);
     bd.gid = malloc(MAXTRI);
-    if (!bd.p || !bd.n || !bd.t || !bd.gid) goto fail;
+    bd.pid = malloc(MAXTRI);
+    if (!bd.p || !bd.n || !bd.t || !bd.gid || !bd.pid) goto fail;
 
     {
         float I[16];
@@ -900,18 +947,22 @@ static int load_gltf(HMesh* m, const char* path)
                 o[0] = bd.p[i][c*3+0]; o[1] = bd.p[i][c*3+1]; o[2] = bd.p[i][c*3+2];
                 o[3] = bd.n[i][c*3+0]; o[4] = bd.n[i][c*3+1]; o[5] = bd.n[i][c*3+2];
                 o[6] = bd.t[i][c*2+0]; o[7] = bd.t[i][c*2+1];
+                o[8] = (float)bd.pid[i];
             }
         }
         m->ntri = bd.ntri;
     }
 
-    _snprintf(b, sizeof b, "hires: %s loaded, %d tris, %d material%s, %d image%s%s",
+    _snprintf(b, sizeof b,
+              "hires: %s loaded, %d tris, %d material%s, %d image%s, %d piece%s%s%s",
               path, m->ntri, m->ngrp, m->ngrp == 1 ? "" : "s",
               m->nimg, m->nimg == 1 ? "" : "s",
-              bd.trunc ? " (TRUNCATED at the triangle cap)" : "");
+              m->npiece, m->npiece == 1 ? "" : "s",
+              bd.trunc ? " (TRUNCATED at the triangle cap)" : "",
+              bd.ptrunc ? " (TRUNCATED at the piece cap: the rest cannot pose)" : "");
     hlog(b);
 
-    free(bd.p); free(bd.n); free(bd.t); free(bd.gid);
+    free(bd.p); free(bd.n); free(bd.t); free(bd.gid); free(bd.pid);
     ctx_free(&g);
     free(toks);
     if (json != (char*)file) free(json);
@@ -919,7 +970,7 @@ static int load_gltf(HMesh* m, const char* path)
     return 1;
 
 fail:
-    free(bd.p); free(bd.n); free(bd.t); free(bd.gid);
+    free(bd.p); free(bd.n); free(bd.t); free(bd.gid); free(bd.pid);
     mesh_free(m);
     ctx_free(&g);
     free(toks);
@@ -1032,11 +1083,24 @@ const void* tagpu_hires_mesh(const char* defname)
         m->mtime = fad.ftLastWriteTime;
         lstrcpynA(m->path, use, sizeof m->path);
         m->valid = load_gltf(m, use);
+        /* the HMesh keeps its address across a reload, so anything that cached
+           something derived from the piece list has to be told the list is new */
+        m->gen++;
     }
     return m->valid ? (const void*)m : NULL;
 }
 
 int tagpu_hires_ngroup(const void* mesh) { return ((const HMesh*)mesh)->ngrp; }
+
+int tagpu_hires_npiece(const void* mesh) { return ((const HMesh*)mesh)->npiece; }
+
+unsigned tagpu_hires_gen(const void* mesh) { return ((const HMesh*)mesh)->gen; }
+
+const char* tagpu_hires_piece(const void* mesh, int i)
+{
+    const HMesh* m = (const HMesh*)mesh;
+    return (i >= 0 && i < m->npiece) ? m->pname[i] : NULL;
+}
 
 int tagpu_hires_group(const void* mesh, int i, TAGPU_HGROUP* out)
 {
@@ -1076,6 +1140,8 @@ unsigned int tagpu_hires_vao(const void* mesh)
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, HVSTRIDE * 4, (void*)12);
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, HVSTRIDE * 4, (void*)24);
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, HVSTRIDE * 4, (void*)32);
     glBindVertexArray(0);
     for (i = 0; i < m->ngrp; i++) {
         HGroup* h = &m->grp[i];
