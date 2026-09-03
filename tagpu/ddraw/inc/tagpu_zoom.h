@@ -31,12 +31,33 @@
    the player actually clicked) and on `u` for the cursor (where the engine
    actually drew it). */
 
-/* Install the one engine patch the zoom needs: the minimap's view rectangle
-   (0x466B70) is computed from the eye and the view size in map cells, so at any
-   zoom != 1 it draws the 1x region and lies about what is on screen. The
-   rectangle stays ENGINE-DRAWN — the minimap is screen-space and correct at 1:1
-   — we only rescale the rect it was going to draw. DllMain only, byte-matched,
-   and armed by tagpu_zoom.on; inert at zoom 1. */
+/* Install the engine patches the zoom needs. DllMain only, byte-matched,
+   all-or-nothing, armed by tagpu_zoom.on, and every one of them inert at zoom 1.
+
+     THE MINIMAP'S VIEW RECTANGLE (0x466B70) is computed from the eye and the
+       view size in map cells, so at any zoom != 1 it draws the 1x region and
+       lies about what is on screen. The rectangle stays ENGINE-DRAWN — the
+       minimap is screen-space and correct at 1:1 — we only rescale the rect it
+       was going to draw.
+
+     THE SCROLLSPEED SAVE (0x430FAE) keeps the rate we scale (see frame_end)
+       out of the player's registry, where it would compound across launches.
+
+     THE CAMERA'S RANGE (0x41C3C0, the eye clamp) is widened to the range the
+       zoom actually shows: the engine's own bounds hold the VIEWPORT's edges on
+       the map's, which at zoom > 1 stops the visible window short of every map
+       edge and reads as the camera being pushed back off them. A leaf_call
+       detour on a flag that is raised only while a zoomed-IN world is live, so
+       1x and zoom-out run the engine's own function verbatim — including the
+       two minimap-rect redirects inside it. `tagpu_zoomedge.off` in the gamedir
+       disables it live and walks the eye back onto the 1x range.
+
+     THE WORLD POINT UNDER THE MOUSE (0x498EF9, the GetTPosition call inside
+       0x498DA0) is clamped to the map, because for a pointer OUTSIDE the
+       viewport that point is the eye itself — on the map for every eye the
+       engine can produce, off it for the widened range above, and the chain
+       from there dereferences a NULL plot. Not gated on the zoom: it is a
+       no-op whenever the eye is the engine's own. */
 void  tagpu_zoom_init(void);
 
 /* Re-read the level. Render thread only; called once a frame. Returns the level
@@ -96,11 +117,26 @@ void  tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh);
    so a zoom lever left lying in the gamedir cannot bend menu clicks. It is also
    where the engine's scroll rate is kept in step with the zoom (see
    apply_scroll_rate() in tagpu_zoom.c) — the view has to move at the same rate
-   across the SCREEN at every zoom, or scrolling at 0.25x feels glued. */
+   across the SCREEN at every zoom, or scrolling at 0.25x feels glued — and
+   where the camera's own range is kept in step (see apply_eye_range(): the
+   engine clamps the eye only when IT moves the camera, so an eye left past the
+   1x bound by a zoom-out has to be walked home from here). */
 void  tagpu_zoom_frame_end(void);
 
 /* The level in force (1.0 until the first publish — menus are never zoomed). */
 float tagpu_zoom_level(void);
+
+/* The camera range in force: the engine's own eye bounds, widened to the range
+   the zoom actually shows (see the camera-range block in tagpu_zoom.c), or the
+   engine's own verbatim whenever that patch is not the one clamping. Returns 0
+   — and leaves every output alone — when there is no sane engine state to
+   compute one from.
+
+   ANYTHING THAT POSITIONS THE CAMERA ITSELF MUST CLAMP WITH THIS, not with
+   [0, map - view]: those are the bounds that hold the 1x VIEWPORT's edges on
+   the map's, and using them at zoom > 1 pulls the view back off every map edge,
+   which is the bug the camera range exists to fix. */
+int   tagpu_zoom_eye_range(int* loX, int* hiX, int* loY, int* hiY);
 
 /* s -> u. Returns 1 if the point was transformed, 0 if it was left alone
    (zoom 1, no view published yet, or a screen-space position outside the world

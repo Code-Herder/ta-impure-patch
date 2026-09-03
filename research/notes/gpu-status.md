@@ -148,8 +148,11 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x41C426` | `call 0x466B70` — minimap view rect, eye clamped at top | call-site redirect; the engine fills the rect, we rescale it by 1/z |
 | `0x41C442` | `call 0x466B70` — ...and at bottom | call-site redirect |
 | `0x430FAE` | `call 0x4B6A50` — the one site that persists `ScrollSpeed` | call-site redirect; substitutes the player's own value so our scaling can never reach the registry |
+| `0x41C3C0` | the eye clamp — `eye = clamp(eye, 0, map − W)`, plus the minimap rect as its last act | **`leaf_call` detour, 5 stolen**, on a flag raised only while zoom > 1; our replacement widens the range and calls the same minimap wrapper |
+| `0x498EF9` | `call 0x484B50` — the `GetTPosition` inside the mouse → world conversion | call-site redirect; clamps the world point to the map, a no-op for any eye the engine's own bounds can produce |
 
-**The level comes from two levers, and neither is an engine patch.** `tagpu_zoom.txt` is the
+**The camera's range follows the zoom (§2.3c).** **The level comes from two levers, and
+neither is an engine patch.** `tagpu_zoom.txt` is the
 scripted one and **wins whenever it exists**; the **mouse wheel** is the player's, and takes
 over the moment the file is gone. The wheel needs nothing from the engine because the engine
 never wanted it: TA's window procedure dispatches only `0x200..0x206` through its jump table
@@ -201,6 +204,50 @@ why the `0x498DA0` stub takes `g_ddraw.cursor` rather than trusting the engine c
 0.5× the range `[0,128)` is reached both by a ring pointer and by a pointer on the panel, and
 without the true pointer to settle it a click in the world lands in the minimap's click rect.
 
+### 2.3c The camera's range at zoom > 1 (`tagpu_zoom.c`, `zoom.on`)
+
+The mirror of §2.3b, at the other end of the lever, and it needed no new arm file. `0x41C3C0`
+clamps the eye to `[0, map − W]`, W being the 1× viewport size: the range that puts the
+**viewport's** own edges exactly on the map's. At zoom `z` the view is still centred on
+`eye + W/2` but is only `W/z` wide, so those bounds stop the visible window
+`W/2 − W/(2z)` short of the map on **every** side — at 1024×768 (W=896, H=704) that is
+224 px at 2×, and 392 px at 8×. Zoomed in, the edges and corners of the map could not be
+reached at all, and the camera read as though it were being pushed back off them.
+
+The range the zoom needs is the engine's own, widened by exactly that shortfall:
+
+```
+d   = (W/2)(1 − 1/z)                    0 at 1×, W/2 in the limit
+eye ∈ [−d, (map − W) + d]
+```
+
+which is the same arithmetic the transform uses about the same centre, so the two cannot
+disagree at the edges: the world at the viewport's left edge is `eye + d`, which is 0 exactly
+when `eye = −d`. **Everything downstream follows for free, because the eye IS the engine's
+camera** — the minimap's view box, "centre on this unit", the minimap click jump, the HotUnits
+cull and our own passes all read it and needed nothing new. (The engine's second eye pair at
+`main+0x14327`/`+0x1432B` is a copy taken right after every clamp call and is read nowhere
+outside the camera module, so it follows too.)
+
+**The flag is what keeps 1× byte-identical.** The detour is a `leaf_call` on a flag raised
+only while a zoomed-**in** world is live; with it clear the engine's own function runs
+verbatim, *including the two minimap-rect redirects inside it*. `tagpu_zoomedge.off` in the
+gamedir clears it live and walks the eye back onto the 1× range.
+
+**Two things an off-map eye needed.** The engine clamps the eye only when *it* moves the
+camera, so an eye parked at −d at 4× would sit there until the next scroll — a zoom-out at a
+map edge would show the void past it. `apply_eye_range()` re-applies the same clamp from the
+render thread once a frame and writes only when the eye is actually outside the range in
+force (same standing as the `ScrollSpeed` write: local camera state no other machine sees).
+And `0x498DA0` hands a pointer **outside** the viewport the world point
+`eye + clamp(pos, L, R) − L`, which on the side panel is `eye` itself and under the bottom bar
+is `eye + H − 1`: on the map for every eye the engine can produce, off it for ours, and the
+chain from there is the `GetGridPosPLOT` → NULL → `GetGridPosFeature` crash vpwide's own stub
+carries a clamp for. So the `GetTPosition` call that starts it is redirected and the world
+point clamped. A pointer **inside** the viewport needs none of this: at `z > 1` the transform
+maps the whole viewport into `[L+d, R−d]`, so the world it names is `[0, map−1]` at either
+extreme of the range and inside it everywhere else.
+
 ### 2.4 Tooling (not part of the render path)
 
 | VA | What it is | Module (arm file) |
@@ -211,14 +258,14 @@ without the true pointer to settle it a click in the world lands in the minimap'
 | `0x4969D2` | the sim tick site (5 stolen) | `scenario` — applies a situation on the game thread |
 | `0x485F50` `0x4864B0` `0x422DD0` `0x4224B0` `0x481550` `0x423C50` `0x43F0E0` `0x43AFC0` | `CreateUnit`, `KillUnit`, `FeatureName2ID`, `LoadFeature`, `GetGridPosPLOT`, `SpawnFeatureOnMap`, `ScriptAction_Type2Index`, `NewMainOrder2Unit` | `scenario` — *called by us*, never patched |
 
-### 2.5 State we read, and the two fields we write
+### 2.5 State we read, and the fields we write
 
 | Where | What |
 |---|---|
 | `0x511DE8` | `TAdynmemStruct**` — the root of everything below |
 | `main+0x14357` / `+0x1435B` | unit array begin/end, stride `0x118` |
 | `main+0x1435F` / `+0x14367` | HotUnits ids / count (culled to whatever the viewport rect says — the unzoomed one, or the widened one under `vpwide`) |
-| `main+0x1431F` / `+0x14323` | eyeX / eyeY |
+| `main+0x1431F` / `+0x14323` | eyeX / eyeY. **WRITTEN**, and only ever *clamped*: our replacement of the engine's own clamp widens its range to what the zoom shows (§2.3c), and `apply_eye_range()` re-applies the same bounds once a frame so a zoom-out cannot leave the eye past them. Sim-neutral for the same reason `ScrollSpeed` is |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live** (§2.3b); every pass that means the true 1× rect must call `tagpu_vpwide_true_rect()` rather than read the field |
 | `main+0x2C76` | mouse position |
 | `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index) |
@@ -226,7 +273,7 @@ without the true pointer to settle it a click in the world lands in the minimap'
 | `main+0x37F2F` bit2 | `SelBoxes` |
 | `main+0x142E7..0x142ED` | minimap rect on screen |
 | `main+0x1423B` / `+0x1423F` | view size in map cells (the minimap rect's size comes from here) |
-| **`main+0x1434D`** | **`ScrollSpeed` — the ONE engine field the stack writes.** Sim-neutral (a local camera preference no other machine ever sees), driven at base/z, and its save path is guarded (§2.3) |
+| **`main+0x1434D`** | **`ScrollSpeed`** — sim-neutral (a local camera preference no other machine ever sees), driven at base/z, and its save path is guarded (§2.3) |
 
 ---
 

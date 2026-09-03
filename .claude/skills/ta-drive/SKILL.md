@@ -542,10 +542,33 @@ tools/tacli keys  <i> pmove:576,384 wheel:-6      # the same thing as raw tokens
   0.25 or 8.0 **clamp**: the grid re-anchors there, so −15/+15 comes back at 1.044, not 1.
   Re-anchor with the file (write `1.0`, then delete it) when you need exactly 1× back.
 
-`tacli arm <i> zoom.on` (at launch, like every other code-patching pass) installs the one
-engine patch either lever needs — the minimap view rectangle, plus the guard that keeps our
-`ScrollSpeed` scaling out of the player's registry — and logs `zoom: ARMED`. Everything
-else needs no arm at all and is inert at 1×.
+`tacli arm <i> zoom.on` (at launch, like every other code-patching pass) installs the engine
+patches either lever needs — the minimap view rectangle, the guard that keeps our
+`ScrollSpeed` scaling out of the player's registry, and **the camera's range** — and logs
+`zoom: ARMED (… camera range 0x41C3C0 + world guard 0x498EF9)`. Everything else needs no arm
+at all, and every patch is inert at 1×.
+
+**The camera's range is what lets a zoomed-in view reach the map edge.** TA clamps the eye to
+the range that puts the *1× viewport's* edges on the map's, which at zoom > 1 stops the visible
+window `W/2 − W/(2z)` short of every edge — 224 px at 2× on 1024×768 — so the map's edges and
+corners could not be reached and the camera read as if it were being pushed back off them.
+Armed, the range widens by exactly that, so `eyeX` goes **negative** at the left edge and past
+`map − W` at the right; zoom back out and the eye walks home on its own within a frame.
+`tacli eye` clamps with the same range, so a scripted camera reaches the edges too.
+`tacli arm <i> zoomedge.off` disables just this and puts the eye back on the 1× range;
+`zoomedge.off=off` removes the file again.
+
+**To measure a camera bound, jump with the minimap and peek the eye** — arrow keys do not
+scroll and edge scroll does not fire under injected input, but a *held* left button on the
+minimap does jump the camera, and lands exactly on `world − (W/2, H/2)` before the clamp:
+
+```bash
+tools/tacli keys edge1 mouse:10,0 down:lbutton   # top-left of the minimap click rect
+tools/tacli peek edge1 '*0x511DE8+0x1431F:4' '*0x511DE8+0x14323:4'
+tools/tacli keys edge1 up:lbutton
+```
+
+`pclick:` alone does **not** work here — the camera jump wants the button held across a frame.
 
 Three things to know when driving zoomed:
 

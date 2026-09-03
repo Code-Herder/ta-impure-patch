@@ -30,6 +30,7 @@
 #include "tagpu.h"
 #include "tagpu_input.h"
 #include "tagpu_shield.h"
+#include "tagpu_zoom.h"   /* the camera's range — the eye hold clamps with it */
 #include "mouse.h"        /* the fork's own mouse-lock (wndproc drops mouse
                              messages while unlocked — the "clicks never work
                              under a locked session" root cause) */
@@ -354,9 +355,19 @@ static void do_eye(void)
     }
     int mw = *(int*)(ta + OFF_MAPPXW), mh = *(int*)(ta + OFF_MAPPXH);
     int vw = *(int*)(ta + OFF_VIEW_W), vh = *(int*)(ta + OFF_VIEW_H);
+    int loX, hiX, loY, hiY;
     if (mw <= 0 || mh <= 0 || vw <= 0 || vh <= 0) return;
-    if (x < 0) x = 0; else if (x > mw - vw) x = mw - vw;
-    if (y < 0) y = 0; else if (y > mh - vh) y = mh - vh;
+    /* THE CAMERA'S RANGE, not [0, map - view]: at zoom > 1 those are the bounds
+       that hold the 1x VIEWPORT's edges on the map's, so clamping a hold with
+       them would pull a scripted camera back off every map edge — the same bug
+       the engine's own clamp had (tagpu_zoom.h). Falls back to them when the
+       zoom has nothing to say, which is what this always did. */
+    if (!tagpu_zoom_eye_range(&loX, &hiX, &loY, &hiY)) {
+        loX = 0; hiX = mw - vw;
+        loY = 0; hiY = mh - vh;
+    }
+    if (x < loX) x = loX; else if (x > hiX) x = hiX;
+    if (y < loY) y = loY; else if (y > hiY) y = hiY;
     *(volatile int*)(ta + OFF_EYEX) = x;
     *(volatile int*)(ta + OFF_EYEY) = y;
     *(volatile int*)(ta + OFF_SCRTX) = x;

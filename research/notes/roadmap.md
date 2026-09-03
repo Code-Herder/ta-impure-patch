@@ -58,6 +58,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Mouse cursor | ● moved in the composite (G13e) | the cursor is the ONLY engine pixel left inside the viewport, so the composite paints the box around `u` at the box around `s` | full sprite at the pointer at 0.25×/0.5×/1×/2×, in every corner and in the display-only ring |
 | Click → world point | ● transformed (G13e) | `tagpu_zoom.c`: one rewrite at the three doors into the engine's own wndproc, plus `fake_GetCursorPos` | at 0.5× the commander selects at its DRAWN position (394,427) and no longer at its 1× one (212,470); the side panel still clicks 1:1 |
 | Minimap view rectangle, scroll rate | ● zoom-aware (G13e) | `0x466B70` ×2 redirected and its rect rescaled by 1/z; `ScrollSpeed` (`main+0x1434D`) driven at base/z | minimap box doubles at 0.5× and quadruples at 0.25×; ScrollSpeed 32 → 64 → 128 → 16 at 2×, and restores |
+| The camera's range at zoom > 1 | ● follows the zoom (G13g) | `tagpu_zoom.c`: the eye clamp `0x41C3C0` replaced by a `leaf_call` detour while zoom > 1, widening `[0, map − W]` by `d = (W/2)(1 − 1/z)`, plus a map clamp on the `GetTPosition` inside `0x498DA0` | measured on Two Continents at 1024×768: (−224,−176) at 2×, (−392,−308) at 8×, (10048,12144) at the far corner, all exact; 1× and 0.5× land on the engine's own (0,0)/(9824,11968) |
 | The addressable ring at zoom < 1 | ● closed for input (G13f, **opt-in** `vpwide.on`) | `tagpu_vpwide.c`: the engine's own viewport rect widened to the transform's range, with the clip (`0x4C6B10` ×3) and the screen→world origin (`0x498DA0`) redirected and corrected, plus a signed `lParam` unpack in TA's wndproc | at 0.5× a ring click selects the unit under it in all four quadrants and a right-click walks it to the world point clicked; 1× untouched; the captured markers reach the offscreen bound, not the frame edge |
 
 So the engine's software frame is now **UI only** — inside the viewport it is a flat fill of
@@ -73,6 +74,40 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G13g — the camera's range follows the zoom.** Reported from play: *"when you zoom in and try
+to get to the edge of the map it's impossible — the engine pushes your camera back as if you
+were still at 1:1 zoom level."* Exactly right. `0x41C3C0` clamps the eye to `[0, map − W]`,
+which puts the **1× viewport's** edges on the map's; at zoom `z` the view is still centred on
+`eye + W/2` but is only `W/z` wide, so the visible window stopped `W/2 − W/(2z)` short of every
+map edge — 224 px at 2×, 392 px at 8× on 1024×768. The range is now the engine's own widened by
+exactly that `d`, so the visible window's edges land on the map's at both extremes. Everything
+downstream came for free, because the eye *is* the engine's camera: minimap box, "centre on
+unit", the minimap click jump, the HotUnits cull, our passes.
+
+Three things made it small rather than a camera rewrite:
+
+- **The widening is the transform's own arithmetic**, about the same centre, so the two cannot
+  disagree at the edges — the world at the viewport's left edge is `eye + d`, zero exactly at
+  `eye = −d`. Measured to the pixel: (−224,−176) at 2×, (−392,−308) at 8×, (10048,12144) at the
+  far corner, (−239,−188) at the wheel's 1.1⁸ = 2.144.
+- **The flag keeps 1× byte-identical.** A `leaf_call` detour raised only while a zoomed-*in*
+  world is live; clear, the engine's own function runs verbatim *including the two minimap-rect
+  redirects inside it*. 1× and 0.5× land on the engine's own (0,0)/(9824,11968).
+- **An off-map eye needed a guard, and only one.** For a pointer *outside* the viewport
+  `0x498DA0` answers `eye` itself (side panel) or `eye + H − 1` (bottom bar) — the
+  `GetGridPosPLOT`→NULL→`GetGridPosFeature` crash `vpwide` already carries a clamp for — so its
+  `GetTPosition` call is redirected and the world point clamped. A pointer *inside* needs
+  nothing: at `z > 1` the transform maps the viewport into `[L+d, R−d]`, so the world it names
+  is `[0, map−1]` at either extreme. Verified by sweeping the panel and both bars at 2× and 8×
+  with the eye negative: alive, cell (0,14), no feature. Our terrain pass was already general
+  about negative tiles (`tile0=(−10,−7) off-map=346 junk=0`), and the viewport black fraction at
+  the corner is 0.000515.
+
+`apply_eye_range()` re-applies the same bounds once a frame, because the engine clamps only when
+*it* moves the camera — without it a zoom-out at a map edge left the eye parked off-map until the
+next scroll. `tagpu_zoomedge.off` is the live off switch and puts the eye back on the 1× range.
+`tacli eye`'s own clamp was the same bug in the scripted path and now shares the range.
 
 **G13f — the ring at zoom < 1 is a play mode (opt-in, `vpwide.on`).** G13e's honest answer
 to the ring was to *drop* the click; this addresses the ring instead. `tagpu_vpwide.c` widens
