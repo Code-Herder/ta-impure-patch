@@ -524,10 +524,78 @@ static float fog_cov(unsigned m, float fx, float fy)
     return top + (bot - top) * fy;
 }
 
+/* ---- the fog-grid guard -----------------------------------------------------
+
+   `grid` is the ENGINE's own screen fog buffer, read raw out of its struct once
+   a frame (tagpu_native.c) and indexed here, later, on the render thread. The
+   only test either caller ever made was `!grid`, which a NON-NULL garbage value
+   walks straight through — and on 2026-09-03 one did: a hard read fault at
+   `tagpu_fog_at+0x10c` off a base of -9 (and, in an earlier instance, -318),
+   from tagpu_sfx_gather, which killed the render thread and left the process up
+   and the game frozen. Reproduced with the file zoom lever and NO wheel input,
+   so it is not the wheel; what it wants is a zoomed-out view, live effects and
+   the camera moving, which is when the engine rebuilds this buffer under us.
+
+   THE ROOT CAUSE IS NOT FOUND YET. This turns the crash into a dropped fog
+   sample so the session survives to be examined, and — because a log line in a
+   98 MB file is invisible while you are playing — says so on screen, ONCE, from
+   a thread of its own so the renderer never blocks on the dialog. */
+
+static volatile LONG s_fogAlarmed;
+static char s_fogAlarm[256];
+
+static DWORD WINAPI fog_alarm_thread(LPVOID p)
+{
+    (void)p;
+    MessageBoxA(NULL, s_fogAlarm, "tagpu: fog grid guard tripped",
+                MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    return 0;
+}
+
+static void fog_alarm(const char* why, const unsigned short* grid, int cols,
+                      int rows, int orgX, int orgY, int wx, int wzp)
+{
+    FILE* f;
+    if (InterlockedCompareExchange(&s_fogAlarmed, 1, 0) != 0) return;
+    _snprintf(s_fogAlarm, sizeof s_fogAlarm,
+              "The fog-grid guard caught a bad read and dropped it.\n\n"
+              "%s\ngrid=%p cols=%d rows=%d org=(%d,%d) world=(%d,%d)\n\n"
+              "Without the guard this is the crash that freezes the renderer.\n"
+              "The game is still running. Please tell Claude, and keep the log.",
+              why, (const void*)grid, cols, rows, orgX, orgY, wx, wzp);
+    s_fogAlarm[sizeof s_fogAlarm - 1] = 0;
+    f = fopen("tagpu.log", "a");
+    if (f) {
+        fprintf(f, "FOGGUARD %s grid=%p cols=%d rows=%d org=(%d,%d) world=(%d,%d)\n",
+                why, (const void*)grid, cols, rows, orgX, orgY, wx, wzp);
+        fclose(f);
+    }
+    /* never on the render thread: a modal dialog there stops the frame loop and
+       we would be diagnosing our own hang instead of the engine's grid */
+    {
+        HANDLE h = CreateThread(NULL, 0, fog_alarm_thread, NULL, 0, NULL);
+        if (h) CloseHandle(h);
+    }
+}
+
 int tagpu_fog_at(const unsigned short* grid, int cols, int rows,
                  int orgX, int orgY, int wx, int wzp)
 {
     if (!grid || cols <= 0 || rows <= 0) return 0;
+    /* the same bounds tagpu_native.c validates the pointer with when it reads it
+       out of the engine struct — if it no longer holds, the buffer moved */
+    if ((size_t)grid <= 0x600000u || (size_t)grid >= 0x7FFF0000u) {
+        fog_alarm("grid pointer is not in engine address space",
+                  grid, cols, rows, orgX, orgY, wx, wzp);
+        return 0;
+    }
+    /* and the dims: the producer refuses anything over 256 a side, so a larger
+       one here means cols/rows and the buffer have come apart */
+    if (cols > 256 || rows > 256) {
+        fog_alarm("grid dims exceed the 256 the producer accepts",
+                  grid, cols, rows, orgX, orgY, wx, wzp);
+        return 0;
+    }
     float gx = (float)(wx  - orgX) * (1.0f / 32.0f);
     float gy = (float)(wzp - orgY) * (1.0f / 32.0f);
     /* The grid only spans the VIEW, while the gather accepts anchors up to
