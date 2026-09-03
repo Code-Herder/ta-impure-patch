@@ -93,13 +93,33 @@ DEFAULT_RES = (1024, 768)
 RES_RX = re.compile(r"(\d{3,4})\s*[xX*]\s*(\d{3,4})")
 
 
+VIRTUAL_X_RX = re.compile(r"(?:^|/)(?:Xvfb|Xephyr|Xnest)\s+(:\d+)")
+
+
+def virtual_displays() -> set:
+    """Display numbers served by a virtual X server rather than a monitor.
+
+    Parallel agent sessions leave 3840x2160 Xvfb servers running, and a shell
+    that inherits one of those in DISPLAY launches the game somewhere the human
+    cannot see it — which looks exactly like a game that failed to start. The
+    physical session is an Xorg; Xvfb/Xephyr/Xnest are stand-ins for one.
+    """
+    try:
+        ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True,
+                            timeout=5).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return set()
+    return {m.group(1) for m in (VIRTUAL_X_RX.search(l) for l in ps.splitlines()) if m}
+
+
 def default_display() -> str:
-    """The desktop to put windows on.
+    """The desktop to put windows on — the human's monitor unless told otherwise.
 
     An agent shell often inherits a stale or absent DISPLAY (":0" is the usual
-    default and is frequently not the live session), so prefer TACLI_DISPLAY, then
-    the inherited value if that X server actually answers, then the first live
-    socket in /tmp/.X11-unix.
+    default and is frequently not the live session), so prefer TACLI_DISPLAY —
+    an explicit choice wins even if it is virtual — then the inherited value and
+    then the live sockets, in both cases skipping the virtual servers on the
+    first pass and only falling back to one if there is no real display at all.
     """
     def alive(d: str) -> bool:
         try:
@@ -109,14 +129,32 @@ def default_display() -> str:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
 
-    for cand in (os.environ.get("TACLI_DISPLAY"), os.environ.get("DISPLAY")):
-        if cand and alive(cand):
-            return cand
-    for sock in sorted(Path("/tmp/.X11-unix").glob("X*"), key=lambda p: p.name):
-        d = ":" + sock.name[1:]
-        if alive(d):
-            return d
+    explicit = os.environ.get("TACLI_DISPLAY")
+    if explicit and alive(explicit):
+        return explicit
+    virtual = virtual_displays()
+    cands = [os.environ.get("DISPLAY")]
+    cands += [":" + s.name[1:] for s in sorted(Path("/tmp/.X11-unix").glob("X*"),
+                                               key=lambda p: p.name)]
+    for skip_virtual in (True, False):
+        for cand in cands:
+            if not cand or (skip_virtual and cand in virtual):
+                continue
+            if alive(cand):
+                return cand
     return os.environ.get("DISPLAY", ":0")
+
+
+def screen_size(display: str) -> tuple:
+    """The display's pixel size, so windows can be laid out inside it."""
+    try:
+        r = subprocess.run(["xdotool", "getdisplaygeometry"],
+                           env={**os.environ, "DISPLAY": display},
+                           capture_output=True, text=True, timeout=5)
+        w, h = r.stdout.split()[:2]
+        return int(w), int(h)
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError):
+        return (3840, 2160)
 
 
 GAME_REG = r"HKCU\Software\Cavedog Entertainment\Total Annihilation"
@@ -536,11 +574,23 @@ def place_window(inst: "Instance", display: str):
 
 
 def tile_for(index: int, res, screen=(3840, 2160), origin=(0, 0)):
-    """Lay instances out in a grid so parallel windows do not stack."""
+    """Lay instances out in a grid so parallel windows do not stack.
+
+    Every tile stays **inside** the screen: the grid wraps when it runs out of
+    rows, and the last row and column are pulled back so the window fits. A
+    window created outside every monitor is not merely awkward to find — GNOME
+    leaves it *unmapped*, so the game renders, takes input and answers `tacli`
+    while showing the human nothing, which reads exactly like a failed launch.
+    (Found 2026-09-02: the twelfth instance drew slot 10, and a 1920x1080 window
+    on a 3840x2160 screen fits one per row, so its tile was y=11600.)
+    """
     w, h = res
-    cols = max(1, screen[0] // (w + 40))
+    cols = max(1, (screen[0] + 40) // (w + 40))    # n windows, n-1 gutters
+    rows = max(1, (screen[1] + 80) // (h + 80))
+    index %= cols * rows
     col, row = index % cols, index // cols
-    return (origin[0] + col * (w + 40), origin[1] + row * (h + 80))
+    return (min(origin[0] + col * (w + 40), max(0, screen[0] - w)),
+            min(origin[1] + row * (h + 80), max(0, screen[1] - h)))
 
 
 # --------------------------------------------------------------------------- commands
@@ -550,9 +600,13 @@ def _create(inst: Instance, args) -> dict:
     if inst.exists and not args.force:
         die(f"instance {args.name!r} already exists (use --force to recreate)")
     inst.dir.mkdir(parents=True, exist_ok=True)
+    # Only a *running* instance holds a slot. Reserving one per instance that has
+    # ever been created walks the grid off the screen after a dozen of them, and
+    # stopped instances are the normal state of this directory.
     taken = set()
     for meta_path in INSTANCES.glob("*/instance.json"):
-        if meta_path.parent.name == args.name:
+        other = Instance(meta_path.parent.name)
+        if other.name == args.name or not other.running():
             continue
         try:
             taken.add(json.loads(meta_path.read_text()).get("slot"))
@@ -564,7 +618,8 @@ def _create(inst: Instance, args) -> dict:
     # `launch <new-name>` reaches here with res unset (its --res defaults to None so
     # that relaunching an existing instance keeps the recorded resolution).
     res = tuple(args.res or DEFAULT_RES)
-    tile = tile_for(index, res)
+    display = args.display or default_display()
+    tile = tile_for(index, res, screen_size(display))
     shield = args.shield is not False
     clone_prefix(inst)
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
@@ -578,7 +633,7 @@ def _create(inst: Instance, args) -> dict:
         "sound": bool(args.sound),
         "intro": bool(args.intro),
         "shield": shield,
-        "display": args.display or default_display(),
+        "display": display,
         "gamedir": str(inst.gamedir),
         "prefix": str(inst.prefix),
     }
@@ -760,9 +815,20 @@ def _launch(args) -> dict:
         return dict(meta, already_running=True, pid=inst.pid())
     if args.res:
         meta["res"] = list(args.res)
-        meta["tile"] = list(tile_for(meta.get("slot", 0), tuple(args.res)))
+        meta["tile"] = list(tile_for(meta.get("slot", 0), tuple(args.res),
+                                     screen_size(meta.get("display") or default_display())))
         inst.save_meta(meta)
         write_ddraw_ini(inst, meta["tile"])
+    else:
+        # An instance created by an older tacli — or on a different screen — can
+        # carry a tile that sits outside every monitor, and an unmapped window
+        # shows the human nothing. Re-tile before the game reads the ini.
+        fixed = list(tile_for(meta.get("slot", 0), tuple(meta.get("res", DEFAULT_RES)),
+                              screen_size(meta.get("display") or default_display())))
+        if fixed != meta.get("tile"):
+            meta["tile"] = fixed
+            inst.save_meta(meta)
+            write_ddraw_ini(inst, fixed)
     if args.sound is not None:
         meta["sound"] = args.sound
     if args.unit_limit is not None:

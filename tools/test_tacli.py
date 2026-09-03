@@ -1227,5 +1227,28 @@ class ScenarioFiles(unittest.TestCase):
                 tacli._scn_compile(path.stem)
 
 
+class WindowTiling(unittest.TestCase):
+    """A tile must land inside the screen — GNOME never maps a window that does
+    not, so the game runs invisibly and looks like it failed to start."""
+
+    SCREEN = (3840, 2160)
+
+    def test_a_small_window_keeps_the_historical_grid(self):
+        for slot, tile in ((0, (0, 0)), (1, (1064, 0)), (2, (2128, 0)), (3, (0, 848))):
+            self.assertEqual(tacli.tile_for(slot, (1024, 768), self.SCREEN), tile)
+
+    def test_every_slot_lands_inside_the_screen(self):
+        for res in ((1024, 768), (1280, 1024), (1920, 1080)):
+            for slot in range(64):
+                x, y = tacli.tile_for(slot, res, self.SCREEN)
+                with self.subTest(res=res, slot=slot):
+                    self.assertGreaterEqual(min(x, y), 0)
+                    self.assertLessEqual(x + res[0], self.SCREEN[0])
+                    self.assertLessEqual(y + res[1], self.SCREEN[1])
+
+    def test_a_window_taller_than_the_screen_is_pinned_to_the_origin(self):
+        self.assertEqual(tacli.tile_for(7, (4000, 3000), self.SCREEN), (0, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

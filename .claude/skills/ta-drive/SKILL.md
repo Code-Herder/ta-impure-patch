@@ -34,6 +34,41 @@ Capture and video work: the **ta-capture** skill.
    In a **worktree**, tacli pins the DLL your tree built (`<tree>/tagpu/ddraw/ddraw.dll`),
    falling back to the main checkout's — so build where you edit, or you will test the
    main checkout's binary and wonder why your change did nothing.
+6. **When the human is going to play it, check the window is on their monitor**
+   before handing it over — see *Where the window lands*. A game that is running
+   perfectly but sits off-screen still answers every `tacli` command and shows
+   them nothing, which is indistinguishable from a launch that failed.
+
+## Where the window lands
+
+Two separate things decide whether the human can see the game. Each has cost this
+project a session.
+
+**The display — theirs, not a virtual one.** `tacli` records it in `instance.json`
+at create time: `TACLI_DISPLAY` first, then the inherited `DISPLAY`, then the live
+sockets in `/tmp/.X11-unix` — skipping **virtual** X servers (Xvfb/Xephyr/Xnest) on
+the first pass, because parallel agent sessions leave 3840x2160 Xvfb displays
+running and a shell that inherits one launches the game where nobody can see it.
+The human's session is the `Xorg` in `ps -eo args`; everything else is a stand-in
+for a monitor. An explicit `TACLI_DISPLAY` still wins, so an agent that genuinely
+wants a virtual display can ask for one. Read back the `display` field with
+`tacli ls --json` before telling the human it is ready.
+
+**The tile.** Instances are laid out in a grid so parallel windows do not stack.
+`tile_for()` wraps within the screen and pulls the last row and column back inside
+it — before 2026-09-02 it did neither, so the twelfth instance drew slot 10 and its
+1920x1080 window was placed at y=11600, off every monitor. Two things follow:
+
+- Slots are held by **running** instances only, so a stopped one frees its place;
+  pass `--slot 0` to claim a cell explicitly.
+- A window created off-screen is left **unmapped** by GNOME, and `xdotool
+  windowmove` alone will not bring it back — it must be `xdotool windowmap`ped
+  first. `xprop -id <wid> WM_STATE` reads `Withdrawn` when this is what happened,
+  and the WM may resize the window on remap, so a relaunch is the clean fix.
+
+Handing the game over is `tacli launch <name> --no-shield`, or `tacli shield <name>
+off` on one that is already running: with the shield off their keyboard and mouse
+reach the game and yours is no longer the only input.
 
 ## The loop
 

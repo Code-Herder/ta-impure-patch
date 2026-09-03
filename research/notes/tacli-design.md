@@ -10,7 +10,7 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
 | Branch | Decision |
 |---|---|
 | Display | **All instances windowed (cnc-ddraw `windowed=true fullscreen=false`) on the real display**, NVIDIA GL. Not Xvfb/Xephyr (software GL, unwatchable). Human interference solved properly by the phase-1.1 input firewall, not by hiding windows. |
-| Windows | **1:1** (client area = game res), CLI auto-tiles via per-instance `posX/posY`. Default `--res 1024x768` (known-good; formulas verified), `--res WxH` free choice. |
+| Windows | **1:1** (client area = game res), CLI auto-tiles via per-instance `posX/posY`. Default `--res 1024x768` (known-good; formulas verified), `--res WxH` free choice. **Every tile lands inside the screen** and slots are held by *running* instances only — corrected 2026-09-02, see below. |
 | Isolation | `tagpu/instances/<id>/{gamedir,prefix}` (gitignored). Gamedir = fresh symlink mirror + instance-private files. Prefix = **`cp -al` hardlink clone** of the template `wineprefix/` (wine rewrites registry hives via temp+rename → template safe; TA writes go to gamedir). Separate prefix ⇒ separate wineserver ⇒ `wineserver -k` kills one instance only. |
 | Sound | Default **off** via per-instance `totala.ini` `[Preferences] NoDirectSound=1` (official mechanism, see `cmdline-options.md`); `--sound` omits it. No wine audio-driver registry hacks. |
 | Intro | Instance mirror **omits `Data/1.ZRB` + `Data/2.zrb` symlinks** — the `0x425ECF` find-file gate skips playback gracefully. No patch, no keystrokes. `3/4/5.zrb` stay linked. |
@@ -246,6 +246,38 @@ launch knob), `resolution.md` (registry display mode), `runtime-injection.md`.*
    checks every name against it. The fork side is `tagpu_cat.c`, one more on-demand
    trigger in the `tagpu_ui` mould. It paid for itself immediately: the design note's own
    example named `ARMCOM_DEAD`, and stock TA has no commander corpse at all.
+
+## Window placement — the invisible-game failure [FIXED 2026-09-02]
+
+Handing a game to the human to play turned up two placement bugs that between
+them make a perfectly healthy instance show nothing at all.
+
+1. **Slots were reserved by every instance that had ever been created**, not by
+   the running ones. The twelfth instance drew slot 10.
+2. **`tile_for()` never wrapped.** `cols` came from the screen width, `row =
+   index // cols` grew without limit, and a 1920x1080 window on a 3840x2160
+   screen fits one per row — so slot 10 was placed at **y = 11600**, below every
+   monitor. cnc-ddraw honours `posX/posY`, so the game created its window there.
+
+The symptom is nasty because nothing looks broken: the game runs, renders,
+accepts injected input, drives its menus and answers `tacli weapons`/`roster`
+normally. GNOME simply leaves a window that is outside every monitor **unmapped**
+(`xprop -id <wid> WM_STATE` → `Withdrawn`), and `xdotool windowmove` on an
+unmapped window changes its geometry without showing it — it needs `windowmap`,
+and the WM may resize it on the way back in.
+
+Fixed by wrapping and clamping the grid (`index %= cols * rows`, then pull the
+last row/column inside the screen), reserving slots against *running* instances
+only, taking the grid's screen size from the display instead of a hard-coded
+3840x2160, and re-tiling on launch when a recorded tile no longer fits. Covered
+by `WindowTiling` in `tools/test_tacli.py`.
+
+The same session found the display-choice hazard next door: `default_display()`
+took the inherited `DISPLAY` whenever it answered, and parallel agent sessions
+leave 3840x2160 **Xvfb** servers running, so a shell that inherited one would put
+the game on a display with no monitor behind it. It now skips virtual X servers
+(Xvfb/Xephyr/Xnest, identified from `ps`) unless `TACLI_DISPLAY` names one
+explicitly.
 
 ## Why (constraints that shaped it)
 
