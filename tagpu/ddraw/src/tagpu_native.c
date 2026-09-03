@@ -64,6 +64,7 @@
 #include "tagpu_render3do.h"
 #include "tagpu_scaffold.h"
 #include "tagpu_hires.h"
+#include "tagpu_hires_draw.h"
 #include "tagpu_fx.h"
 #include "tagpu_sfx.h"
 #include "tagpu_feat.h"
@@ -724,59 +725,12 @@ static const MAABB* model_aabb(const char* root)
     return a;
 }
 
-/* G12d replacement-mesh emitter: flat-colour tris through the same shade/
-   palette pipeline, rotated by body yaw, anchored like the 3DO would be */
-static int emit_hires(const void* mesh, int nv, float ax, float ay,
-                      float wx0, float wz0, float encBase, unsigned yaw)
-{
-    int nt = tagpu_hires_ntri(mesh), i, k;
-    int shNeutral = tagpu_r3d_shade_neutral(), shDir = tagpu_r3d_shade_dir();
-    float ang = (float)yaw * 6.2831853f / 65536.0f;
-    float c = cosf(ang), sn = sinf(ang);
-    for (i = 0; i < nt; i++) {
-        if (nv + 3 > MAXNV) return nv;
-        const float* t = tagpu_hires_tri(mesh, i);
-        float colv = (float)tagpu_hires_col(mesh, i) / 255.0f;
-        float P[3][3];
-        for (k = 0; k < 3; k++) {
-            float x = t[k*3+0], y = t[k*3+1], z = t[k*3+2];
-            P[k][0] = x * c + z * sn;
-            P[k][1] = y;
-            P[k][2] = -x * sn + z * c;
-        }
-        float shade = (float)shNeutral / 31.0f;
-        {
-            float e1x = P[1][0]-P[0][0], e1y = P[1][1]-P[0][1], e1z = P[1][2]-P[0][2];
-            float e2x = P[2][0]-P[0][0], e2y = P[2][1]-P[0][1], e2z = P[2][2]-P[0][2];
-            float nx = e1y*e2z - e1z*e2y, ny = e1z*e2x - e1x*e2z, nz = e1x*e2y - e1y*e2x;
-            if (nx*SH_V[0] + ny*SH_V[1] + nz*SH_V[2] < 0.0f) { nx=-nx; ny=-ny; nz=-nz; }
-            float nl = sqrtf(nx*nx + ny*ny + nz*nz);
-            if (nl > 1e-6f) {
-                float I = (nx*SH_L[0] + ny*SH_L[1] + nz*SH_L[2]) / nl;
-                int rr = shNeutral + shDir * (int)floorf(I * 12.0f + 0.5f);
-                if (rr < 0) rr = 0; else if (rr > 31) rr = 31;
-                shade = (float)rr / 31.0f;
-            }
-        }
-        for (k = 0; k < 3; k++) {
-            float x = P[k][0], y = P[k][1], z = P[k][2];
-            float* o = s_verts + nv * NVST;
-            o[0] = ax + x;
-            o[1] = ay + (-z - y * 0.5f);
-            float md = (2.0f * y - z) / 256.0f;
-            if (md > 1.8f) md = 1.8f; if (md < -1.8f) md = -1.8f;
-            o[2] = encBase + md;
-            o[3] = -1.0f; o[4] = -1.0f;
-            o[5] = colv;  o[6] = -1.0f;
-            o[7] = shade;
-            o[8] = wx0 + x;
-            o[9] = wz0 + (-z - y * 0.5f);
-            o[10] = y;
-            nv++;
-        }
-    }
-    return nv;
-}
+/* Replacement meshes do NOT come through this vertex stream. A glTF model has
+   smooth normals, normal maps and true-colour materials, none of which this
+   program's palette-index shader can carry, so it renders in its own pass
+   (tagpu_hires_draw.c) which shares this frame's FBO, depth keys, scaffold,
+   fog and shadow rules. Units holding one are gathered below and simply
+   contribute no vertices here. */
 
 /* faces of one Model3DONode whose vertices are already model-space floats
    P[nvert*3] — the engine-posed vbuf for units, rotated raw verts for
@@ -1416,10 +1370,18 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int terrOwned = tagpu_terrown_filled();
     if (nu == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !markOn && !terrOwned) return;
 
+    /* uFog bit1 = hide in grey rather than darken. Units the watched player
+       cannot see are not drawn at all; wreckage is furniture and stays, and
+       our own units make the LOS they stand in. */
+#define FOGW(i) ((fogMode & 1) | \
+                 ((units[i].feat || units[i].owner == watched) ? 0 : 2))
+
     /* ---- build geometry (body); shadow reuses it with an offset ---- */
     static int firstv[MAXU + 1];
     static float encb[MAXU];
     int i;
+    static TAGPU_HUNIT hunits[MAXU];
+    int nhi = 0;
     for (i = 0; i < nu; i++) {
         firstv[i] = nv;
         /* airborne units draw in a second, un-rowed sweep above everything
@@ -1428,12 +1390,26 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         float encBase = units[i].air ? airKey
                       : (units[i].feat ? 3.0f : 1.0f) + (float)units[i].rel * 4.0f;
         encb[i] = encBase;
-        if (units[i].hires)
-            nv = emit_hires(units[i].hires, nv, units[i].ax, units[i].ay,
-                            units[i].wx0, units[i].wz0, encBase, units[i].yaw);
-        else
+        if (units[i].hires) {
+            /* no vertices here: this unit is the other pass's, and leaving
+               firstv[i] == firstv[i+1] makes its draws below empty */
+            TAGPU_HUNIT* h = &hunits[nhi++];
+            h->mesh = units[i].hires;
+            h->ax = units[i].ax;   h->ay = units[i].ay;
+            h->wx0 = units[i].wx0; h->wz0 = units[i].wz0;
+            h->enc = encBase;
+            h->shadowDy = (float)(units[i].gy - units[i].ay);
+            h->yaw = units[i].yaw;
+            h->alpha = units[i].cloaked ? 0.5f : 1.0f;
+            h->fog = FOGW(i);
+            h->waterT = units[i].waterT;
+            h->digT = units[i].digT;
+            h->waterMode = units[i].waterMode;
+            h->shadow = units[i].shadow;
+        } else {
             nv = emit_geom(units[i].o3, nv, units[i].ax, units[i].ay,
                            units[i].wx0, units[i].wz0, encBase, units[i].owner);
+        }
     }
     firstv[nu] = nv;
     /* effects models (missiles, shells, debris) through the same path */
@@ -1568,11 +1544,38 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);
     glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)nv * NVST * 4, s_verts);
 
-    /* uFog bit1 = hide in grey rather than darken. Units the watched player
-       cannot see are not drawn at all; wreckage is furniture and stays, and
-       our own units make the LOS they stand in. */
-#define FOGW(i) ((fogMode & 1) | \
-                 ((units[i].feat || units[i].owner == watched) ? 0 : 2))
+    /* the replacement pass gets the same frame it would have drawn into here:
+       same FBO, same projection and depth scale, same scaffold, same fog grid,
+       and the palette + SHD textures already bound above on units 1..5 */
+    TAGPU_HVIEW hv;
+    if (nhi) {
+        memset(&hv, 0, sizeof hv);
+        hv.game[0] = (float)gw; hv.game[1] = (float)gh;
+        hv.zoom = s_zoom;
+        hv.zoomC[0] = (float)vpL + (float)vw * 0.5f;
+        hv.zoomC[1] = (float)vpT + (float)vh * 0.5f;
+        hv.depthScale = depthScale;
+        hv.ss = (float)ss;
+        hv.scafOn = scafOn;
+        hv.scafTex = scafOn ? tagpu_scaffold_texref() : 0;
+        hv.scafP[0] = (float)vpL; hv.scafP[1] = (float)vpT;
+        hv.scafP[2] = (float)vw;  hv.scafP[3] = (float)vh;
+        hv.fogOrg[0] = (float)s_fogOrgX; hv.fogOrg[1] = (float)s_fogOrgY;
+        hv.fogDim[0] = (float)s_fogCols; hv.fogDim[1] = (float)s_fogRows;
+        hv.palTex = s_palTex; hv.lutTex = tagpu_r3d_lut_texref();
+        hv.fogTex = s_fogTex; hv.fogLutTex = s_fogLutTex;
+        hv.shNeutral = tagpu_r3d_shade_neutral();
+        hv.shDir = tagpu_r3d_shade_dir();
+    }
+/* the replacement pass runs its own program; put ours back for the draws that
+   follow it, and leave texture unit 0 selected the way the rest expects */
+#define HIRES_RESTORE() do { \
+        glUseProgram(s_prog); \
+        glBindVertexArray(s_vao); \
+        glBindBuffer(GL_ARRAY_BUFFER, s_vbo); \
+        x_glActiveTexture(GL_TEXTURE0); \
+    } while (0)
+
     glEnable(GL_BLEND);
     x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied */
 
@@ -1603,6 +1606,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             x_glUniform1f(s_uDigT, units[i].digT);
             x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i+1] - firstv[i]);
         }
+        if (nhi) {
+            tagpu_hires_draw(&hv, hunits, nhi, 1, f->frame_counter);
+            HIRES_RESTORE();
+        }
         x_glDepthMask(GL_TRUE);
     }
     /* bodies */
@@ -1616,6 +1623,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         glUniform1i(s_uWaterMode, units[i].waterMode);
         x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i+1] - firstv[i]);
     }
+    if (nhi) {
+        tagpu_hires_draw(&hv, hunits, nhi, 0, f->frame_counter);
+        HIRES_RESTORE();
+    }
+#undef HIRES_RESTORE
     /* effects: models in the unit pipeline, then lines/sprites (own program;
        depth test still on so aircraft cover them, depth writes off) */
     if (fxLast > fxFirst) {
@@ -1774,6 +1786,7 @@ void tagpu_native_glreset(void)
     tagpu_feat_glreset();
     tagpu_terr_glreset();
     tagpu_mark_glreset();
+    tagpu_hires_draw_glreset();
 }
 
 int tagpu_native_wrecks_armed(void)

@@ -1,0 +1,68 @@
+{
+  "format": "ta-scenario/1",
+  "description": "one Peewee beside one engine-rendered AK, parked, camera on them \u2014 the replacement-mesh close-up (a distant CORE unit keeps the mission alive)",
+  "seed": 1,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "off",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "pw",
+      "type": "ARMPW",
+      "owner": 0,
+      "pos": [
+        2600,
+        1200
+      ],
+      "facing": 90,
+      "stance": "hold"
+    },
+    {
+      "id": "ak",
+      "type": "CORAK",
+      "owner": 0,
+      "pos": [
+        2680,
+        1200
+      ],
+      "facing": 90,
+      "stance": "hold"
+    },
+    {
+      "id": "far",
+      "type": "CORAK",
+      "owner": 1,
+      "pos": [
+        4200,
+        2400
+      ],
+      "facing": 90,
+      "stance": "hold"
+    }
+  ],
+  "camera": {
+    "center_on": "pw"
+  }
+}
