@@ -83,6 +83,20 @@ Three mechanisms, and the difference matters:
   with the original's first stack argument. Used where taking the draw over still leaves us
   something to do in its place (the terrain key-fill, the fog grid's lazy rebuild).
 
+**BUILD THE HEADERS INTO THE DEPENDENCIES.** Until 2026-09-03 neither Makefile
+tracked header dependencies, so `make` rebuilt only the `.c` files that changed and
+objects that disagreed about a struct's layout linked without a murmur. G13d
+(`0e6b6b7`) inserted four ints — `evpL/evpT/evw/evh` — into the **middle** of
+`TAGPU_FXVIEW`; `tagpu_sfx.o` had been built hours earlier and was never rebuilt, so
+`tagpu_sfx_gather` went on reading `fogGrid` 16 bytes early, where `evpT` now lives.
+At zoom < 1 that is a small negative int, the `!v->fogGrid` test passes because it is
+non-zero, and the render thread dereferences it — a hard crash that froze the game
+with the process still up. It hid for a day because the mis-read gate (`fogMode` <-
+`evpL`) is EVEN at 1x and only odd at *some* zoom levels, so it presented as an
+intermittent, zoom-and-scroll-dependent crash rather than a build fault. `-MMD -MP`
+plus `-include` now covers both DLLs; the arithmetic is in the `tagpu_fog_at` guard's
+comment. **A crash whose faulting base is a small negative integer is this shape.**
+
 Every install is **byte-matched first and all-or-nothing**: nothing is written unless every
 site in the module still holds the bytes we recorded, so a patched or different exe arms
 nothing rather than half of it. Every module installs **once at `DllMain`** and only if its

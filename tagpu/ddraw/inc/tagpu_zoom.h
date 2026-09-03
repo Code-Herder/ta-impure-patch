@@ -79,6 +79,13 @@ float tagpu_zoom_read_lever(void);
    for the number. */
 int   tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam);
 
+/* A wheel arrived but cnc-ddraw's own mouse-lock gate is about to swallow it
+   (windowed, not yet clicked in, devmode off), so it can never reach
+   tagpu_zoom_wheel(). Says so in the log, throttled — without this that case is
+   the one refusal with no explanation, which is exactly what the other two
+   gripes exist to prevent. Message thread. */
+void  tagpu_zoom_wheel_locked_out(void);
+
 /* The native pass drew this world-viewport rect this frame. Render thread; it
    is what says "the world on screen IS zoomed", so the transform is live only
    between a publish and the frame_end that finds none. */

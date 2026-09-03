@@ -940,6 +940,11 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     {
         if (!g_config.devmode && !g_mouse_locked)
         {
+            /* tagpu: this returns before the wheel ever reaches the zoom, so
+               say why — otherwise it is indistinguishable from a wheel that was
+               never wired up (tagpu_zoom.h). */
+            if (uMsg == WM_MOUSEWHEEL)
+                tagpu_zoom_wheel_locked_out();
             return 0;
         }
 

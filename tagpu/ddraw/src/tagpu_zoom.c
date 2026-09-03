@@ -215,6 +215,17 @@ int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
     return 1;
 }
 
+void tagpu_zoom_wheel_locked_out(void)
+{
+    static DWORD tick;                       /* message thread only */
+    DWORD now = GetTickCount();
+    if (now - tick > 1000) {
+        tick = now;
+        zlog("zoom: wheel ignored - the window has no mouse lock yet "
+             "(click in it once)");
+    }
+}
+
 void tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh)
 {
     if (vw <= 0 || vh <= 0) return;

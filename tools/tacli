@@ -1062,7 +1062,14 @@ def cmd_wheel(args):
     tokens = []
     if args.at is not None:
         tokens.append(f"pmove:{args.at[0]},{args.at[1]}")
-    tokens.append(f"wheel:{args.notches:+d}")
+    # The DLL caps ONE `wheel:` token at 64 notches, so a bigger ask is split
+    # rather than silently clipped — reporting 100 sent while delivering 64 would
+    # put a script's computed zoom level ~2.7x off with nothing to show for it.
+    n, step = abs(args.notches), (1 if args.notches >= 0 else -1)
+    while n > 0:
+        chunk = min(n, 64)
+        tokens.append(f"wheel:{step * chunk:+d}")
+        n -= chunk
     _write_tokens(inst, " ".join(tokens))
     out({"name": args.name, "notches": args.notches, "at": args.at}, args.json,
         human=f"sent: {' '.join(tokens)}")

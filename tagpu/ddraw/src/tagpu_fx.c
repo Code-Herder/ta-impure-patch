@@ -542,7 +542,9 @@ static float fog_cov(unsigned m, float fx, float fy)
    a thread of its own so the renderer never blocks on the dialog. */
 
 static volatile LONG s_fogAlarmed;
-static char s_fogAlarm[256];
+/* 512, not 256: the formatted message is ~290 bytes and _snprintf silently
+   truncated it mid-word, dropping exactly the half that says what to do. */
+static char s_fogAlarm[512];
 
 static DWORD WINAPI fog_alarm_thread(LPVOID p)
 {
@@ -556,6 +558,22 @@ static void fog_alarm(const char* why, const unsigned short* grid, int cols,
                       int rows, int orgX, int orgY, int wx, int wzp)
 {
     FILE* f;
+    /* The LOG fires every trip (throttled); only the DIALOG is one-shot. The
+       two checks below catch different faults — a moved buffer and dims that
+       have come apart from it — and with a root cause still open the second,
+       differing trip is the evidence most worth having. Gating both on one flag
+       threw it away. */
+    static DWORD tick;
+    DWORD now = GetTickCount();
+    if (now - tick > 1000) {
+        tick = now;
+        f = fopen("tagpu.log", "a");
+        if (f) {
+            fprintf(f, "FOGGUARD %s grid=%p cols=%d rows=%d org=(%d,%d) world=(%d,%d)\n",
+                    why, (const void*)grid, cols, rows, orgX, orgY, wx, wzp);
+            fclose(f);
+        }
+    }
     if (InterlockedCompareExchange(&s_fogAlarmed, 1, 0) != 0) return;
     _snprintf(s_fogAlarm, sizeof s_fogAlarm,
               "The fog-grid guard caught a bad read and dropped it.\n\n"
@@ -564,12 +582,6 @@ static void fog_alarm(const char* why, const unsigned short* grid, int cols,
               "The game is still running. Please tell Claude, and keep the log.",
               why, (const void*)grid, cols, rows, orgX, orgY, wx, wzp);
     s_fogAlarm[sizeof s_fogAlarm - 1] = 0;
-    f = fopen("tagpu.log", "a");
-    if (f) {
-        fprintf(f, "FOGGUARD %s grid=%p cols=%d rows=%d org=(%d,%d) world=(%d,%d)\n",
-                why, (const void*)grid, cols, rows, orgX, orgY, wx, wzp);
-        fclose(f);
-    }
     /* never on the render thread: a modal dialog there stops the frame loop and
        we would be diagnosing our own hang instead of the engine's grid */
     {
