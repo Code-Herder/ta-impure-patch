@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<!-- tascene-view.html — the browser half of the tascene lab.
+
+     Draws a scene pack built by `tools/tascene build` in WebGL2, using tagpu's
+     OWN shaders (pack/shaders/*, extracted from the C sources at export time).
+
+     Query parameters (all optional):
+       shot=1        hide the UI, render one frame, then set document.title
+                     to "tascene-ready" so a screenshotter knows it is done
+       pass=<list>   comma-separated passes to draw: terrain,features,units
+                     (default: every pass the pack carries)
+       eye=<x,y>     override the pack's eye (viewport top-left, world units)
+       ss=<n>        supersample factor for the offscreen (default 1)
+       feat=<what>   features: both (default), body, shadow — a debug split,
+                     because "is the shadow drawing at all" is not eye-answerable
+
+     THE COORDINATE CONVENTION IS TAGPU'S, DELIBERATELY. The extracted vertex
+     shader maps game py 0 -> NDC -1, i.e. the offscreen's row 0 is the game
+     frame's TOP row and gl_FragCoord.xy is the game-frame pixel — which is what
+     the fog and scaffold rules in tagpu_glsl.h assume. So this page renders into
+     an FBO exactly as tagpu does and flips only in the final composite to the
+     canvas. Do not "fix" the flip in the vertex shader: it would silently
+     invert every screen-space rule the shaders carry.
+-->
+<meta charset="utf-8">
+<title>tascene</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #14171c; color: #c8ced8;
+               font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
+  body { display: grid; place-items: center; overflow: hidden; }
+  canvas { display: block; image-rendering: pixelated; }
+  body.shot { background: #000; }
+  body.shot #bar, body.shot #err { display: none; }
+  #bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 10px;
+         display: flex; gap: 8px; align-items: center; padding: 6px 10px;
+         border-radius: 10px; background: #1e232bee; border: 1px solid #2c333d;
+         font-variant-numeric: tabular-nums; }
+  #bar b { color: #e6ecf5; font-weight: 600; }
+  #bar span { color: #8b95a4; }
+  #err { position: fixed; top: 10px; left: 10px; right: 10px; padding: 8px 10px;
+         border-radius: 8px; background: #40222a; border: 1px solid #6b3540;
+         color: #f0c8ce; white-space: pre-wrap; display: none; font-family: ui-monospace, monospace; }
+</style>
+<canvas id="cv"></canvas>
+<div id="bar"></div>
+<div id="err"></div>
+
+<script type="module">
+const Q = new URLSearchParams(location.search);
+const SHOT = Q.get("shot") === "1";
+const SS   = Math.max(1, parseInt(Q.get("ss") || "1", 10));
+const err  = document.getElementById("err");
+const bar  = document.getElementById("bar");
+if (SHOT) document.body.classList.add("shot");
+
+function fail(msg) {
+  err.style.display = "block";
+  err.textContent = String(msg && msg.stack || msg);
+  document.title = "tascene-error";
+  throw msg;
+}
+
+const fetchJSON = async (u) => (await fetch(u)).json();
+const fetchText = async (u) => (await fetch(u)).text();
+async function fetchBin(u) {
+  const r = await fetch(u);
+  if (!r.ok) throw new Error(`${u}: HTTP ${r.status}`);
+  return new Uint8Array(await r.arrayBuffer());
+}
+
+// ---- the engine's own integer arithmetic (tagpu_terr.c / terrain-depth.md 2).
+// `sar 5` is a division TOWARD ZERO, and the column count is a ceil — both are
+// reproduced deliberately, not cleaned up, because a cell boundary landing one
+// pixel differently is exactly what the parity diff exists to catch.
+const div32trunc = (v) => (v + (v < 0 ? 31 : 0)) >> 5;
+const UNIT_STRIDE = 7;             // the mesh .bin's own stride: x,y,z,u,v,fc,ck
+const ceil32 = (v) => { const q = div32trunc(v); return (v - q * 32) ? q + 1 : q; };
+
+// ---- GL helpers -----------------------------------------------------------
+function shader(gl, type, src, label) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src); gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS))
+    fail(`${label}: ${gl.getShaderInfoLog(sh)}\n---\n` +
+         src.split("\n").map((l, i) => `${i + 1}: ${l}`).join("\n"));
+  return sh;
+}
+function program(gl, vs, fs, label) {
+  const p = gl.createProgram();
+  gl.attachShader(p, shader(gl, gl.VERTEX_SHADER, vs, label + ".vert"));
+  gl.attachShader(p, shader(gl, gl.FRAGMENT_SHADER, fs, label + ".frag"));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    fail(`${label}: ${gl.getProgramInfoLog(p)}`);
+  return p;
+}
+function tex2D(gl, unit, internal, w, h, format, type, data, filter) {
+  const t = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, data);
+  const f = filter || gl.NEAREST;
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+// ---- the composite: FBO -> canvas, flipped ---------------------------------
+// The offscreen holds the game frame with row 0 at the BOTTOM (see the header
+// comment). Canvas NDC +1 is the top, so the top of the canvas samples v = 0.
+const BLIT_VS = `#version 300 es
+precision highp float;
+out vec2 vUV;
+void main(){
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  vUV = vec2(p.x, 1.0 - p.y);
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+const BLIT_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; out vec4 frag;
+uniform sampler2D uSrc;
+void main(){ frag = vec4(texture(uSrc, vUV).rgb, 1.0); }`;
+
+// ---------------------------------------------------------------------------
+async function main() {
+  const scene = await fetchJSON("scene.json");
+  const view = scene.view, map = scene.map;
+  const [GW, GH] = view.res;
+  const [vpL, vpT, vw, vh] = view.vp;
+  let eye = view.eye.slice();
+  if (Q.get("eye")) eye = Q.get("eye").split(",").map(Number);
+
+  const cv = document.getElementById("cv");
+  cv.width = GW; cv.height = GH;
+  cv.style.width = GW + "px"; cv.style.height = GH + "px";
+  const gl = cv.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
+  if (!gl) fail("no WebGL2 context");
+
+  // ---- data
+  const want = (Q.get("pass") || "terrain,features,units").split(",").map((s) => s.trim());
+  const hasFeat = !!scene.features && want.includes("features");
+  const hasUnit = !!scene.units && want.includes("units");
+  const hasTerr = want.includes("terrain");
+
+  const [atlasBuf, tilemapBuf, heightBuf, palBuf, terrVS, terrFS, sprVS, sprFS] =
+    await Promise.all([
+      fetchBin(map.atlas.file), fetchBin(map.tilemap.file), fetchBin(map.height.file),
+      fetchBin(scene.palette.file),
+      fetchText("shaders/terrain.vert"), fetchText("shaders/terrain.frag"),
+      hasFeat ? fetchText("shaders/sprite.vert") : "",
+      hasFeat ? fetchText("shaders/sprite.frag") : "",
+    ]);
+  const [featAtlas, featInst] = hasFeat ? await Promise.all([
+    fetchBin(scene.features.atlas.file), fetchBin(scene.features.instances),
+  ]) : [null, null];
+
+  let unitAtlas = null, shdBuf = null, unitVS = "", unitFS = "", meshData = {};
+  if (hasUnit) {
+    [unitAtlas, shdBuf, unitVS, unitFS] = await Promise.all([
+      fetchBin(scene.units.atlas.file), fetchBin(scene.palette.shd),
+      fetchText("shaders/unit.vert"), fetchText("shaders/unit.frag"),
+    ]);
+    await Promise.all(Object.entries(scene.units.meshes).map(async ([k, m]) => {
+      const b = await fetchBin(m.file);
+      meshData[k] = new Float32Array(b.buffer, b.byteOffset, b.byteLength >> 2);
+    }));
+  }
+  const tilemap = new Uint16Array(tilemapBuf.buffer, tilemapBuf.byteOffset,
+                                  tilemapBuf.byteLength >> 1);
+
+  // Raw bytes straight to texImage2D: no image decode path, so nothing
+  // colour-manages or premultiplies the palette INDICES (tascene-design.md).
+  tex2D(gl, 0, gl.R8, map.atlas.w, map.atlas.h, gl.RED, gl.UNSIGNED_BYTE, atlasBuf);
+  tex2D(gl, 1, gl.RGBA8, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, palBuf);
+  // fog is off in the parity fixture, but the samplers must still be bound
+  tex2D(gl, 2, gl.RG8, 1, 1, gl.RG, gl.UNSIGNED_BYTE, new Uint8Array([0, 0]));
+  tex2D(gl, 3, gl.R8, 256, 1, gl.RED, gl.UNSIGNED_BYTE,
+        Uint8Array.from({ length: 256 }, (_, i) => i));
+
+  // ---- offscreen at game resolution (x SS)
+  const FW = GW * SS, FH = GH * SS;
+  const colour = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, colour);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, FW, FH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, SS > 1 ? gl.LINEAR : gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, SS > 1 ? gl.LINEAR : gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const depth = gl.createRenderbuffer();
+  gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, FW, FH);
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colour, 0);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+    fail("offscreen framebuffer incomplete");
+
+  // ---- terrain pass
+  const terrProg = program(gl, terrVS, terrFS, "terrain");
+  const terrVAO = gl.createVertexArray();
+  const terrVBO = gl.createBuffer();
+  gl.bindVertexArray(terrVAO);
+  gl.bindBuffer(gl.ARRAY_BUFFER, terrVBO);
+  const TVST = 6;                                   // x,y, u,v, wx,wz
+  for (let i = 0; i < 3; i++) {
+    gl.enableVertexAttribArray(i);
+    gl.vertexAttribPointer(i, 2, gl.FLOAT, false, TVST * 4, i * 8);
+  }
+  gl.bindVertexArray(null);
+
+  const U = {};
+  for (const n of ["uGame", "uZoom", "uZoomC", "uDepthScale", "uEnc",
+                   "uAtlas", "uPal", "uFogGrid", "uFogLUT", "uFogOrg", "uFogDim", "uFog"])
+    U[n] = gl.getUniformLocation(terrProg, n);
+
+  // ---- feature (sprite) pass — tagpu_feat.c's shaders and vertex format
+  let sprProg = null, sprVAO = null, sprVBO = null, SU = {}, anchors = [];
+  const SVST = 9;                                   // x,y,enc, u,v, ck,mode, wx,wz
+  let sprVerts = null;
+  if (hasFeat) {
+    tex2D(gl, 5, gl.R8, scene.features.atlas.w, scene.features.atlas.h,
+          gl.RED, gl.UNSIGNED_BYTE, featAtlas);
+    sprProg = program(gl, sprVS, sprFS, "sprite");
+    sprVAO = gl.createVertexArray();
+    sprVBO = gl.createBuffer();
+    gl.bindVertexArray(sprVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, sprVBO);
+    const sizes = [3, 2, 2, 2], offs = [0, 12, 20, 28];
+    for (let i = 0; i < 4; i++) {
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, SVST * 4, offs[i]);
+    }
+    gl.bindVertexArray(null);
+    for (const n of ["uGame", "uZoom", "uZoomC", "uDepthScale",
+                     "uAtlas", "uPal", "uFogGrid", "uFogLUT", "uFogOrg", "uFogDim", "uFog"])
+      SU[n] = gl.getUniformLocation(sprProg, n);
+    // cell -> anchor, so the sweep can look features up in its own order
+    const inst = new Uint16Array(featInst.buffer, featInst.byteOffset,
+                                 featInst.byteLength >> 1);
+    for (let i = 0; i < inst.length; i += 3)
+      anchors[inst[i + 1] * map.w16 + inst[i]] = inst[i + 2];
+    sprVerts = new Float32Array(65536 * SVST);
+  }
+
+  // ---- unit pass — tagpu_native.c's shaders, tagpu_render3do.c's geometry rule
+  let uProg = null, uVAO = null, uVBO = null, UU = {}, uVerts = null;
+  const UVST = 11;                                  // x,y,enc, u,v, fc,ck, shade, wx,wz, vy
+  // tagpu_render3do.c: the model-space toward-camera axis and the light
+  const SH_V = [0.0, 0.8944, -0.4472], SH_L = [-0.35, 0.80, -0.49];
+  const [SH_NEUTRAL, SH_DIR] = scene.palette.neutral;
+  if (hasUnit) {
+    tex2D(gl, 6, gl.R8, scene.units.atlas.w, scene.units.atlas.h,
+          gl.RED, gl.UNSIGNED_BYTE, unitAtlas);
+    tex2D(gl, 7, gl.R8, 256, scene.palette.shdRows, gl.RED, gl.UNSIGNED_BYTE, shdBuf);
+    uProg = program(gl, unitVS, unitFS, "unit");
+    uVAO = gl.createVertexArray(); uVBO = gl.createBuffer();
+    gl.bindVertexArray(uVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, uVBO);
+    const sizes = [3, 2, 2, 1, 2, 1], offs = [0, 12, 20, 28, 32, 40];
+    for (let i = 0; i < 6; i++) {
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, UVST * 4, offs[i]);
+    }
+    gl.bindVertexArray(null);
+    for (const n of ["uGame", "uOffset", "uZoom", "uZoomC", "uDepthScale",
+                     "uAtlas", "uLUT", "uPal", "uShadow", "uAlpha",
+                     "uWaterT", "uWaterMode", "uDigT",
+                     "uScaf", "uScafOn", "uScafP", "uSS", "uZoomF", "uZoomCF",
+                     "uFogGrid", "uFogLUT", "uFogOrg", "uFogDim", "uFog"])
+      UU[n] = gl.getUniformLocation(uProg, n);
+    uVerts = new Float32Array(65536 * UVST);
+  }
+
+  const blitProg = program(gl, BLIT_VS, BLIT_FS, "blit");
+  const blitVAO = gl.createVertexArray();
+
+  const verts = new Float32Array(32768 * 6 * TVST);
+  let stats = {};
+
+  function buildTerrain() {
+    // tagpu_terr.c's emit loop, line for line.
+    const stride = map.tilemap.w, mrows = map.tilemap.h;
+    const tx0 = div32trunc(eye[0]), fx = eye[0] - tx0 * 32;
+    const ty0 = div32trunc(eye[1]), fy = eye[1] - ty0 * 32;
+    const cols = ceil32(vw + fx), rows = ceil32(vh + fy);
+    const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
+    let n = 0, skipped = 0, junk = 0;
+    const put = (x, y, u, v, wx, wz) => {
+      const o = n * TVST;
+      verts[o] = x; verts[o + 1] = y; verts[o + 2] = u;
+      verts[o + 3] = v; verts[o + 4] = wx; verts[o + 5] = wz; n++;
+    };
+    for (let r = 0; r < rows; r++) {
+      const my = ty0 + r;
+      if (my < 0 || my >= mrows) { skipped += cols; continue; }
+      for (let c = 0; c < cols; c++) {
+        const mx = tx0 + c;
+        if (mx < 0 || mx >= stride) { skipped++; continue; }
+        const idx = tilemap[my * stride + mx];
+        if (idx >= map.atlas.tiles) { junk++; continue; }
+        const cx = idx % map.atlas.cols, cy = (idx / map.atlas.cols) | 0;
+        const u0 = cx * 32 * iw, u1 = (cx * 32 + 32) * iw;
+        const v0 = cy * 32 * ih, v1 = (cy * 32 + 32) * ih;
+        const x0 = vpL + c * 32 - fx, y0 = vpT + r * 32 - fy;
+        const wx0 = mx * 32, wz0 = my * 32;
+        put(x0,      y0,      u0, v0, wx0,      wz0);
+        put(x0 + 32, y0,      u1, v0, wx0 + 32, wz0);
+        put(x0,      y0 + 32, u0, v1, wx0,      wz0 + 32);
+        put(x0 + 32, y0,      u1, v0, wx0 + 32, wz0);
+        put(x0 + 32, y0 + 32, u1, v1, wx0 + 32, wz0 + 32);
+        put(x0,      y0 + 32, u0, v1, wx0,      wz0 + 32);
+      }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, terrVBO);
+    gl.bufferData(gl.ARRAY_BUFFER, verts.subarray(0, n * TVST), gl.DYNAMIC_DRAW);
+    stats = { cols, rows, tx0, ty0, fx, fy, cells: n / 6, skipped, junk };
+    return n;
+  }
+
+  // tagpu_feat.c's gather: the engine's own sweep rect, its projection with
+  // +128/+32 baked in, and the depth keys the painter's order implies.
+  // Shadows and bodies go to separate buckets because the shadow is drawn with
+  // depth writes OFF (a shadow occludes nothing) — G13a's rule.
+  function buildFeatures() {
+    const D = scene.depth, defs = scene.features.defs;
+    const w16 = map.w16, h16 = map.h16;
+    let r0 = (eye[1] >> 4) - 16, nRows = (vh >> 4) + 32;
+    let c0 = (eye[0] >> 4) - 10, nCols = (vw >> 4) + 12;
+    if (r0 < 0) { nRows += r0; r0 = 0; }
+    if (r0 + nRows > h16 - 1) nRows = h16 - r0 - 1;
+    if (c0 < 0) { nCols += c0; c0 = 0; }
+    if (c0 + nCols > w16 - 1) nCols = w16 - c0 - 1;
+    if (nRows <= 0 || nCols <= 0) return [0, 0];
+    const flatSpan = nRows * nCols;
+    const iw = 1 / scene.features.atlas.w, ih = 1 / scene.features.atlas.h;
+    const shadow = [], body = [];
+    const quad = (into, rect, sx, sy, enc, mode, wax, waz) => {
+      const x0 = sx - rect.hx, y0 = sy - rect.hy;
+      const x1 = x0 + rect.w,  y1 = y0 + rect.h;
+      const u0 = rect.x * iw,  u1 = (rect.x + rect.w) * iw;
+      const v0 = rect.y * ih,  v1 = (rect.y + rect.h) * ih;
+      const ck = rect.ck / 255;
+      for (const [x, y, u, v] of [[x0, y0, u0, v0], [x1, y0, u1, v0], [x0, y1, u0, v1],
+                                  [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]])
+        into.push(x, y, enc, u, v, ck, mode, wax, waz);
+    };
+    for (let row = r0; row < r0 + nRows; row++) {
+      for (let col = c0; col < c0 + nCols; col++) {
+        const idx = anchors[row * w16 + col];
+        if (idx === undefined) continue;
+        const d = defs[idx];
+        if (!d) continue;
+        const h00 = heightBuf[row * w16 + col];
+        const h01 = (col + 1 < w16) ? heightBuf[row * w16 + col + 1] : h00;
+        let h10 = h00, h11 = h01;
+        if (row + 1 < h16) {
+          h10 = heightBuf[(row + 1) * w16 + col];
+          h11 = (col + 1 < w16) ? heightBuf[(row + 1) * w16 + col + 1] : h10;
+        }
+        // the engine's projection: screenY is worldZ minus half the height
+        const wax = col * 16 + ((d.footx * 16) / 2 | 0);
+        const waz = row * 16 + ((d.footz * 16) / 2 | 0) - ((h00 + h01 + h10 + h11) >> 3);
+        const sx = wax + 128 - eye[0], sy = waz + 32 - eye[1];
+        let enc;
+        if (d.flat) {
+          enc = D.flat0 + D.flatSpan * (((row - r0) * nCols + (col - c0)) / flatSpan);
+        } else {
+          let rel = row - r0;
+          if (rel < 0) rel = 0;
+          if (rel > nRows + 8) rel = nRows + 8;
+          enc = D.tall0 + rel * D.rowStep + 1.5 * ((col - c0) / nCols);
+        }
+        if (d.shadow)
+          quad(shadow, d.shadow, sx, sy, enc - (d.flat ? D.shadowFlat : D.shadowTall),
+               d.shadtrans ? 2 : 1, wax, waz);
+        if (d.body)
+          quad(body, d.body, sx, sy, enc, d.animtrans ? 2 : 1, wax, waz);
+      }
+    }
+    const all = shadow.concat(body);
+    if (all.length > sprVerts.length) sprVerts = new Float32Array(all.length);
+    sprVerts.set(all);
+    gl.bindBuffer(gl.ARRAY_BUFFER, sprVBO);
+    gl.bufferData(gl.ARRAY_BUFFER, sprVerts.subarray(0, all.length), gl.DYNAMIC_DRAW);
+    stats.feat = (shadow.length + body.length) / 6 / SVST;
+    return [shadow.length / SVST, body.length / SVST];
+  }
+
+  function drawSprites(nShadow, nBody, bodyBase) {
+    gl.useProgram(sprProg);
+    gl.uniform2f(SU.uGame, GW, GH);
+    gl.uniform1f(SU.uZoom, 1.0);
+    gl.uniform2f(SU.uZoomC, vpL + vw * 0.5, vpT + vh * 0.5);
+    gl.uniform1f(SU.uDepthScale, scene.depth.scale);
+    gl.uniform1i(SU.uAtlas, 5); gl.uniform1i(SU.uPal, 1);
+    gl.uniform1i(SU.uFogGrid, 2); gl.uniform1i(SU.uFogLUT, 3);
+    gl.uniform2f(SU.uFogOrg, 0, 0); gl.uniform2f(SU.uFogDim, 1, 1);
+    gl.uniform1i(SU.uFog, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);   // the shader premultiplies
+    gl.bindVertexArray(sprVAO);
+    if (nShadow) { gl.depthMask(false); gl.drawArrays(gl.TRIANGLES, 0, nShadow); }
+    if (nBody)   { gl.depthMask(true);  gl.drawArrays(gl.TRIANGLES, bodyBase, nBody); }
+    gl.bindVertexArray(null);
+    gl.disable(gl.BLEND);
+  }
+
+  // One unit instance: yaw the bind pose, project with the engine's rule, and
+  // take the shade row from the POSED normal — rotating before shading is what
+  // makes the LUT row the same one the engine's own pass would pick.
+  function buildUnits() {
+    const U = scene.units, D = scene.depth, w16 = map.w16, h16 = map.h16;
+    let r0 = (eye[1] >> 4) - 16, nRows = (vh >> 4) + 32;
+    if (r0 < 0) { nRows += r0; r0 = 0; }
+    let n = 0;
+    for (const inst of U.instances) {
+      const mesh = meshData[inst.type];
+      if (!mesh) continue;
+      // scenario facing 0 is TA's default build heading 0x8000, i.e. half a turn
+      const yaw = (inst.facing + 180) * Math.PI / 180;
+      const cs = Math.cos(yaw), sn = Math.sin(yaw);
+      const wx = inst.pos[0], wz = inst.pos[1];
+      const col = Math.min(w16 - 1, Math.max(0, wx >> 4));
+      const row = Math.min(h16 - 1, Math.max(0, wz >> 4));
+      const wy = heightBuf[row * w16 + col];          // the engine snaps to terrain
+      const hotX = wx - eye[0] + vpL;
+      const hotY = wz - (wy >> 1) - eye[1] + vpT;
+      let rel = row - r0;
+      if (rel < 0) rel = 0;
+      if (rel > nRows + 8) rel = nRows + 8;
+      const enc = D.unit0 + rel * D.rowStep;
+      const wldX = wx, wldZ = wz - (wy >> 1);
+      const P = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      for (let i = 0; i + 3 * UNIT_STRIDE <= mesh.length; i += 3 * UNIT_STRIDE) {
+        for (let t2 = 0; t2 < 3; t2++) {
+          const o = i + t2 * UNIT_STRIDE;
+          const x = mesh[o], y = mesh[o + 1], z = mesh[o + 2];
+          P[t2][0] = x * cs + z * sn;                 // yaw about the up axis
+          P[t2][1] = y;
+          P[t2][2] = -x * sn + z * cs;
+        }
+        // per-face flat shading, tagpu_render3do.c line for line
+        let shade = SH_NEUTRAL / 31;
+        const e1 = [P[1][0] - P[0][0], P[1][1] - P[0][1], P[1][2] - P[0][2]];
+        const e2 = [P[2][0] - P[0][0], P[2][1] - P[0][1], P[2][2] - P[0][2]];
+        let nx = e1[1] * e2[2] - e1[2] * e2[1];
+        let ny = e1[2] * e2[0] - e1[0] * e2[2];
+        let nz = e1[0] * e2[1] - e1[1] * e2[0];
+        if (nx * SH_V[0] + ny * SH_V[1] + nz * SH_V[2] < 0) { nx = -nx; ny = -ny; nz = -nz; }
+        const nl = Math.hypot(nx, ny, nz);
+        if (nl > 1e-6) {
+          const I = (nx * SH_L[0] + ny * SH_L[1] + nz * SH_L[2]) / nl;
+          let rr = SH_NEUTRAL + SH_DIR * Math.floor(I * 12 + 0.5);
+          rr = Math.max(0, Math.min(31, rr));
+          shade = rr / 31;
+        }
+        for (let t2 = 0; t2 < 3; t2++) {
+          const o = i + t2 * UNIT_STRIDE, q = n * UVST;
+          const x = P[t2][0], y = P[t2][1], z = P[t2][2];
+          // Intra-model depth. Without it every face of a unit shares one key
+          // and GL_LESS keeps whichever drew first — which is how the
+          // commander's yellow GLOW panels drew over its own torso. The engine
+          // squeezes this into the +-2 gap between row keys.
+          let md = (2 * y - z) / 256;
+          if (md > 1.8) md = 1.8; else if (md < -1.8) md = -1.8;
+          uVerts[q]     = x + hotX;
+          uVerts[q + 1] = (-z - y * 0.5) + hotY;
+          uVerts[q + 2] = enc + md;
+          uVerts[q + 3] = mesh[o + 3]; uVerts[q + 4] = mesh[o + 4];
+          uVerts[q + 5] = mesh[o + 5]; uVerts[q + 6] = mesh[o + 6];
+          uVerts[q + 7] = shade;
+          uVerts[q + 8] = wldX + x;                 // per-vertex, as the engine
+          uVerts[q + 9] = wldZ + (-z - y * 0.5);
+          uVerts[q + 10] = y;
+          n++;
+        }
+      }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, uVBO);
+    gl.bufferData(gl.ARRAY_BUFFER, uVerts.subarray(0, n * UVST), gl.DYNAMIC_DRAW);
+    stats.units = n / 3;
+    return n;
+  }
+
+  function drawUnits(n) {
+    if (!n) return;
+    gl.useProgram(uProg);
+    gl.uniform2f(UU.uGame, GW, GH);
+    gl.uniform2f(UU.uOffset, 0, 0);
+    gl.uniform1f(UU.uZoom, 1.0);
+    gl.uniform2f(UU.uZoomC, vpL + vw * 0.5, vpT + vh * 0.5);
+    gl.uniform1f(UU.uDepthScale, scene.depth.scale);
+    gl.uniform1i(UU.uAtlas, 6); gl.uniform1i(UU.uLUT, 7); gl.uniform1i(UU.uPal, 1);
+    gl.uniform1i(UU.uShadow, 0); gl.uniform1f(UU.uAlpha, 1.0);
+    // the water/dig tests are `vVY <= threshold`; -1e9 disables both
+    gl.uniform1f(UU.uWaterT, -1e9); gl.uniform1i(UU.uWaterMode, 0);
+    gl.uniform1f(UU.uDigT, -1e9);
+    gl.uniform1i(UU.uScaf, 2); gl.uniform1i(UU.uScafOn, 0);
+    gl.uniform4f(UU.uScafP, vpL, vpT, vw, vh);
+    gl.uniform1f(UU.uSS, SS); gl.uniform1f(UU.uZoomF, 1.0);
+    gl.uniform2f(UU.uZoomCF, vpL + vw * 0.5, vpT + vh * 0.5);
+    gl.uniform1i(UU.uFogGrid, 2); gl.uniform1i(UU.uFogLUT, 3);
+    gl.uniform2f(UU.uFogOrg, 0, 0); gl.uniform2f(UU.uFogDim, 1, 1);
+    gl.uniform1i(UU.uFog, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(true);
+    gl.bindVertexArray(uVAO);
+    gl.drawArrays(gl.TRIANGLES, 0, n);
+    gl.bindVertexArray(null);
+    gl.disable(gl.BLEND);
+  }
+
+  function draw() {
+    const nverts = buildTerrain();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, FW, FH);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clearDepth(1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    // The play area is the engine's viewport rect; the HUD around it is not
+    // ours to draw. FBO y == game py here, so the scissor needs no flip.
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(vpL * SS, vpT * SS, vw * SS, vh * SS);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+
+    gl.useProgram(terrProg);
+    gl.uniform2f(U.uGame, GW, GH);
+    gl.uniform1f(U.uZoom, 1.0);
+    gl.uniform2f(U.uZoomC, vpL + vw * 0.5, vpT + vh * 0.5);
+    gl.uniform1f(U.uDepthScale, scene.depth.scale);
+    gl.uniform1f(U.uEnc, scene.depth.terrain);
+    gl.uniform1i(U.uAtlas, 0); gl.uniform1i(U.uPal, 1);
+    gl.uniform1i(U.uFogGrid, 2); gl.uniform1i(U.uFogLUT, 3);
+    gl.uniform2f(U.uFogOrg, 0, 0); gl.uniform2f(U.uFogDim, 1, 1);
+    gl.uniform1i(U.uFog, 0);
+    gl.bindVertexArray(terrVAO);
+    if (hasTerr) gl.drawArrays(gl.TRIANGLES, 0, nverts);
+    gl.bindVertexArray(null);
+
+    if (hasFeat) {
+      const [ns, nb] = buildFeatures();
+      const which = Q.get("feat") || "both";
+      drawSprites(which === "body" ? 0 : ns, which === "shadow" ? 0 : nb, ns);
+    }
+    if (hasUnit) drawUnits(buildUnits());
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.DEPTH_TEST);
+    gl.viewport(0, 0, GW, GH);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(blitProg);
+    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, colour);
+    gl.uniform1i(gl.getUniformLocation(blitProg, "uSrc"), 4);
+    gl.bindVertexArray(blitVAO);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+
+    if (!SHOT) {
+      bar.innerHTML =
+        `<b>${map.name}</b> <span>${map.w16}x${map.h16} cells</span>` +
+        `<span>eye</span><b>${eye[0]},${eye[1]}</b>` +
+        `<span>grid</span><b>${stats.cols}x${stats.rows}</b>` +
+        `<span>frac</span><b>${stats.fx},${stats.fy}</b>` +
+        `<span>cells</span><b>${stats.cells}</b>` +
+        `<span>off-map</span><b>${stats.skipped}</b>` +
+        (stats.feat !== undefined ? `<span>features</span><b>${stats.feat}</b>` : "") +
+        (stats.units !== undefined ? `<span>unit tris</span><b>${stats.units}</b>` : "");
+    }
+  }
+
+  // ---- interaction (serve only): pan the eye, which is what the engine scrolls
+  if (!SHOT) {
+    const maxX = Math.max(0, map.w16 * 16 - vw), maxY = Math.max(0, map.h16 * 16 - vh);
+    const clamp = () => {
+      eye[0] = Math.max(0, Math.min(eye[0], maxX));
+      eye[1] = Math.max(0, Math.min(eye[1], maxY));
+    };
+    addEventListener("keydown", (e) => {
+      const step = e.shiftKey ? 256 : 32;
+      if (e.key === "ArrowLeft")  eye[0] -= step;
+      else if (e.key === "ArrowRight") eye[0] += step;
+      else if (e.key === "ArrowUp")    eye[1] -= step;
+      else if (e.key === "ArrowDown")  eye[1] += step;
+      else return;
+      e.preventDefault(); clamp(); draw();
+    });
+    let drag = null;
+    cv.addEventListener("pointerdown", (e) => {
+      drag = { x: e.clientX, y: e.clientY, ex: eye[0], ey: eye[1] };
+      cv.setPointerCapture(e.pointerId);
+    });
+    cv.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      eye[0] = drag.ex - (e.clientX - drag.x);
+      eye[1] = drag.ey - (e.clientY - drag.y);
+      clamp(); draw();
+    });
+    cv.addEventListener("pointerup", () => { drag = null; });
+  }
+
+  draw();
+  document.title = "tascene-ready";
+}
+
+main().catch(fail);
+</script>

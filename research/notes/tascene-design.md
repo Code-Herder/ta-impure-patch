@@ -117,20 +117,28 @@ as well, which puts feature shadows and the LHT flash within reach at true parit
 
 ## The pack
 
-Generated, disposable, gitignored. One directory per scene.
+Generated, disposable. One directory per scene; this is what `build` writes.
 
 ```
 pack/
-  scene.json              manifest: map, eye, viewport, zoom, palette, unit + feature instances
-  terrain/atlas.r8.bin    2048x2560 palette indices        (raw: no image decode path)
-  terrain/tilemap.u16.bin 336x400 tile indices
-  terrain/height.r8.bin   672x800 heights, one per 16-px cell
-  palette/pal.bin         256x4 RGB0      palette/shd.bin  32x256 shade LUT
-  textures/atlas.r8.bin   GAF frames, indexed              (units + features)
-  textures/atlas.rgb.png  the same, undithered             (display only)
-  meshes/<unit>.bin       bind-pose 3DO: pos, uv, per-face palette index, per-face normal
-  shaders/*.vert|frag     extracted from tagpu, macros expanded, #version 300 es
+  scene.json               manifest: map, view, palette calibration, depth keys,
+                           feature defs + instance count, unit meshes + instances
+  terrain/atlas.r8.bin     2048 x (ceil(tiles/64)*32) palette indices, 64 tiles/row
+  terrain/tilemap.u16.bin  u16 tile index per 32-px cell, stride w16/2
+  terrain/height.r8.bin    one byte per 16-px cell, straight from mapattr
+  palette/pal.bin          256 x RGBA      palette/shd.bin  32 x 256 shade table
+  features/atlas.r8.bin    every GAF sprite the map's features name, shelf-packed
+  features/instances.bin   u16 col, u16 row, u16 def -- one per anchor
+  units/atlas.r8.bin       the 3DO textures, shelf-packed
+  units/<type>.bin         bind-pose mesh: x,y,z, u,v, flatColour, colourKey
+  shaders/terrain.*        extracted from tagpu_terr.c
+  shaders/sprite.*         extracted from tagpu_feat.c
+  shaders/unit.*           extracted from tagpu_native.c
 ```
+
+Raw `.bin` for everything whose bytes are data, as decided: the atlases go
+straight to `texImage2D` with no image decode path, so nothing colour-manages
+or premultiplies a palette index.
 
 ## CLI surface
 
@@ -170,11 +178,59 @@ tascene ab     <scenario.json>              drive both sides, diff, write the pa
 
 ## Landing plan
 
-1. **Landing 1 — the parity lane.** TNT + TDF parsers, `tascene build/serve/shot`, the WebGL2
-   viewer with flat terrain, GAF features and indexed units under the oblique camera, the
-   shader extractor, and `tascene ab`. **Exit: a near-zero pixel diff against a real `glshot`
-   on a fog-off scenario** — that diff is what certifies the exporter.
-2. **Landing 2 — the exploration lane.** Relief displacement, undithered atlases with the
-   restorer cache, N·L sun, the wipe, `presets.json`.
-3. **Then, and only then**, a winning prototype becomes a roadmap gate with its GLSL carried
-   over verbatim.
+1. **Landing 1 — the parity lane.** ◐ **built, not yet A/B'd** (2026-09-03).
+2. **Landing 2 — the exploration lane.** Relief displacement, undithered atlases
+   with the restorer cache, N·L sun, the wipe, `presets.json`.
+3. **Then, and only then**, a winning prototype becomes a roadmap gate with its
+   GLSL carried over verbatim.
+
+### What landing 1 actually built
+
+`tools/tascene` (build / serve / shot / ab) and `tools/tascene-view.html`:
+
+- **TNT and TDF parsers**, the TNT one self-checking every block offset against
+  the header's counts on load — the same arithmetic that verified the format, so
+  a misread file is an error and not a plausible-looking picture.
+- **Terrain pass** reproducing `tagpu_terr.c`'s emit loop line for line,
+  including the engine's truncating `sar 5` and its `ceil` column count.
+- **Feature pass** reproducing `tagpu_feat.c`'s sweep rect, its projection
+  (`+128/+32` baked in, `−(h00+h01+h10+h11)>>3` for the half-height shift), its
+  flat/tall depth-key split, and its shadow-with-depth-writes-off rule.
+- **Unit pass**: 3DO bind pose with `Create`-hidden pieces dropped, the
+  quad-corner UV rule, per-face shading through the engine's real `PALETTE.SHD`
+  with `tagpu_render3do.c`'s own neutral/direction calibration (measured: neutral
+  row **15**, direction **+1**).
+- **Shader extraction** from the three C sources, macros expanded, `#version`
+  swapped. All three passes run tagpu's GLSL, not a copy of it.
+- **`tascene ab`** — drives `tacli scenario load` / `eye` / `roster` / `glshot`,
+  rebuilds the pack at the live eye and resolution, shoots the browser headless
+  and diffs inside the viewport rect.
+- **`scenarios/tascene-parity.json`** — the fog-off fixture (`--los 0
+  --mapping 1`), fixed camera, two still units, nothing that moves or burns.
+
+Cross-checks that passed without a game running: the unit exporter produces
+**189 triangles for ARMCOM, the same count `ta3do render` reports**, and the
+gold shoulder panel that looked like a bug is in `ta3do`'s own quarter view too.
+
+### Two bugs the build found, both worth keeping written down
+
+- **Intra-model depth is not optional.** `tagpu_native.c` gives every vertex
+  `encBase + clamp((2y − z)/256, ±1.8)` — "squeezed into the ±2 gap between row
+  keys" — and the world position per *vertex*, not per unit. With one depth key
+  for a whole unit, GL_LESS keeps whatever drew first and the commander's yellow
+  `GLOW` torso panels drew over its own front. It looked like a texture or
+  palette bug and was neither.
+- **The shader extractor's `\s+` crossed newlines**, so the header guard
+  `#define TAGPU_GLSL_H` (empty body) swallowed the macro after it and that
+  macro silently ceased to exist. It surfaced as a hard "unknown macro" error
+  only because expansion refuses to guess — which is why it refuses.
+
+### Still open on landing 1
+
+- **The A/B has not been run.** Every piece is wired and the fixture exists, but
+  no live diff number has been produced yet, so **no parity claim is made here**.
+  Running it launches a game window on the user's desktop, which is theirs.
+- No tests for `tascene` yet (`ta3do` and `tacli` both have suites).
+- The unit yaw convention (`facing + 180`, from the scenario format's "0 = build
+  heading 0x8000") is **unverified** — a bind pose at facing 90 looks plausible
+  from every angle. The A/B is what settles it, at facing 45.

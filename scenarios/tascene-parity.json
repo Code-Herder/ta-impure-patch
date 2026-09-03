@@ -1,0 +1,24 @@
+{
+  "format": "ta-scenario/1",
+  "description": "The tascene parity fixture: a fixed camera over varied terrain with two still units, and NOTHING that moves, animates or fogs. Fog is off (a default skirmish has LosType 0 — G13c's grey needs SkirmishLineOfSight set, and this fixture deliberately does not set it), so the browser's flat-terrain pass and the engine's own 0x483FA0 blit can be diffed pixel for pixel. The units are on `hold` with shootall off so no weapon fire, smoke or wreckage enters the frame; the camera is pinned so the eye cannot drift between the engine capture and the browser build.",
+  "seed": 20260903,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": { "shootall": false, "noshake": true },
+    "players": [
+      { "slot": 0, "controller": "human", "side": "arm", "color": 0 },
+      { "slot": 1, "controller": "ai", "side": "core", "color": 1 }
+    ]
+  },
+
+  "units": [
+    { "id": "anchor", "type": "ARMCOM",   "owner": 0, "pos": [2704, 1120], "facing": 90, "stance": "hold" },
+    { "id": "spare",  "type": "CORSOLAR", "owner": 1, "pos": [4300, 1400] }
+  ],
+
+  "camera": { "center_on": "anchor", "pin": true }
+}

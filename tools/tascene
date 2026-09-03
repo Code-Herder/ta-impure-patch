@@ -1,0 +1,999 @@
+#!/usr/bin/env python3
+"""tascene — compile a Total Annihilation scenario into a browser scene pack.
+
+    tools/tascene build scenarios/tascene-parity.json -o /tmp/pack
+    tools/tascene serve /tmp/pack
+    tools/tascene shot  /tmp/pack --opts 'pass=terrain' -o shot.png
+    tools/tascene ab    scenarios/tascene-parity.json
+
+The pack is everything the browser lab needs to draw a real map with real units,
+read straight out of the game's own archives — no game running, nothing unpacked.
+`tools/tascene-view.html` draws it in WebGL2 using **tagpu's own shaders**, which
+this tool extracts from the C sources at export time so the two cannot drift.
+
+Design and locked decisions: research/notes/tascene-design.md
+Formats: research/notes/file-formats.md (TNT is §6, verified across 275 maps)
+The draw this reproduces: research/notes/terrain-depth.md §1-§3
+
+Everything is stdlib-only. The asset stack (HPI/VFS, palette, GAF, 3DO, atlas,
+PNG, the local server and the headless-Chrome shooter) is `tools/ta3do`, loaded
+as a module the way tools/test_ta3do.py already loads it.
+"""
+
+import argparse
+import json
+import math
+import os
+import re
+import struct
+import subprocess
+import sys
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+SRC_ROOT = HERE.parent               # this checkout — where tagpu's C sources are
+
+
+def _load_ta3do():
+    loader = SourceFileLoader("ta3do", str(HERE / "ta3do"))
+    import importlib.util
+    spec = importlib.util.spec_from_loader("ta3do", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+ta3do = _load_ta3do()
+
+
+def die(msg):
+    print(f"tascene: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+# --------------------------------------------------------------------------- TNT
+
+# §6, VERIFIED against all 275 stock maps (2026-09-03): every block offset is
+# predicted exactly by the previous block's size and the header's counts.
+#   header      64 bytes, 16 int32 LE
+#   mapdata     u16 tile index per 32-px cell, row-major, stride W/2
+#   mapattr     4 B per 16-px cell, row-major, stride W:
+#                 byte0 = height 0..255, bytes1-2 = u16 feature index, byte3 = 0
+#   tilegfx     tiles x 1024 B, 32x32 8bpp
+#   tileanim    tileanims x 132 B = int32 + name -- the FEATURE NAME table
+#   minimap     int32 w, int32 h, then w*h 8bpp.  Ends the file.
+
+TNT_HDR = "<3i2I I 2i I i I i 4i"
+TILE_PX = 32
+TILE_BYTES = 0x400
+ATLAS_COLS = 64                      # tagpu_terr.c: 64 tiles per atlas row
+ATLAS_W = ATLAS_COLS * TILE_PX       # 2048
+
+
+class Tnt:
+    def __init__(self, blob: bytes, name: str = ""):
+        if len(blob) < 64:
+            raise ValueError("TNT shorter than its header")
+        (self.version, self.w16, self.h16, self.p_mapdata, self.p_mapattr,
+         self.p_tilegfx, self.tiles, self.tileanims, self.p_tileanim,
+         self.sealevel, self.p_minimap, self.unknown1,
+         *_pad) = struct.unpack_from(TNT_HDR, blob, 0)
+        if self.version not in (0x2000, 0x1020):
+            raise ValueError(f"unknown TNT version 0x{self.version:X}")
+        if self.version != 0x2000:
+            raise ValueError("legacy TNT (0x1020) not implemented")
+        self.blob = blob
+        self.name = name
+        self.mw = self.w16 // 2          # map width in 32-px cells
+        self.mh = self.h16 // 2
+        self.check()
+
+    def check(self):
+        """The arithmetic that verified the format; a mismatch means we misread."""
+        md = self.mw * self.mh * 2
+        for got, want, what in (
+            (self.p_mapdata, 64, "mapdata"),
+            (self.p_tilegfx, self.p_mapattr + self.w16 * self.h16 * 4, "tilegfx"),
+            (self.p_tileanim, self.p_tilegfx + self.tiles * TILE_BYTES, "tileanim"),
+            (self.p_minimap, self.p_tileanim + self.tileanims * 132, "minimap"),
+        ):
+            if got != want:
+                raise ValueError(f"{self.name}: {what} at {got}, expected {want}")
+        if not (self.p_mapdata + md <= self.p_mapattr <= self.p_mapdata + md + 15):
+            raise ValueError(f"{self.name}: mapattr {self.p_mapattr} not just past mapdata")
+
+    def tilemap(self) -> bytes:
+        """u16 per 32-px cell, row-major, stride self.mw."""
+        return self.blob[self.p_mapdata:self.p_mapdata + self.mw * self.mh * 2]
+
+    def heights(self) -> bytes:
+        """byte per 16-px cell, row-major, stride self.w16 — mapattr byte 0."""
+        a = self.blob[self.p_mapattr:self.p_mapattr + self.w16 * self.h16 * 4]
+        return bytes(a[0::4])
+
+    def feature_indices(self):
+        """(col, row, u16 def index) for every 16-px cell that anchors a feature."""
+        a = self.blob[self.p_mapattr:self.p_mapattr + self.w16 * self.h16 * 4]
+        out = []
+        for i in range(self.w16 * self.h16):
+            idx = a[i * 4 + 1] | (a[i * 4 + 2] << 8)
+            if idx < 0xFFFB:
+                out.append((i % self.w16, i // self.w16, idx))
+        return out
+
+    def feature_names(self):
+        """The tileanim block: the map's own feature name table."""
+        names = []
+        for i in range(self.tileanims):
+            rec = self.blob[self.p_tileanim + i * 132: self.p_tileanim + (i + 1) * 132]
+            names.append(rec[4:].split(b"\0")[0].decode("latin-1"))
+        return names
+
+    def atlas(self):
+        """One R8 atlas of 32x32 cells, 64 per row — tagpu_terr.c's layout exactly."""
+        rows = (self.tiles + ATLAS_COLS - 1) // ATLAS_COLS
+        h = rows * TILE_PX
+        buf = bytearray(ATLAS_W * h)
+        for i in range(self.tiles):
+            src = self.p_tilegfx + i * TILE_BYTES
+            ox = (i % ATLAS_COLS) * TILE_PX
+            oy = (i // ATLAS_COLS) * TILE_PX
+            for r in range(TILE_PX):
+                o = (oy + r) * ATLAS_W + ox
+                buf[o:o + TILE_PX] = self.blob[src + r * TILE_PX: src + (r + 1) * TILE_PX]
+        return ATLAS_W, h, bytes(buf)
+
+    def minimap(self):
+        w, h = struct.unpack_from("<2i", self.blob, self.p_minimap)
+        px = self.blob[self.p_minimap + 8: self.p_minimap + 8 + w * h]
+        return w, h, px
+
+
+# --------------------------------------------------------------------------- TDF
+
+def parse_tdf(text: str):
+    """TA's brace/key=value format -> nested dict, section names lowercased.
+
+    Tolerant by design: stock content has stray semicolons, comments and the
+    occasional unterminated block, and a strict parser would reject real maps.
+    """
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    text = re.sub(r"//[^\n]*", " ", text)
+    root, stack = {}, []
+    cur = root
+    for tok in re.finditer(r"\[([^\]]*)\]|([{}])|([^;{}\[\]]+)", text):
+        section, brace, body = tok.group(1), tok.group(2), tok.group(3)
+        if section is not None:
+            child = {}
+            cur.setdefault(section.strip().lower(), child)
+            pending = cur[section.strip().lower()]
+            stack.append((cur, pending))
+            continue
+        if brace == "{":
+            if stack:
+                cur = stack[-1][1]
+            continue
+        if brace == "}":
+            if stack:
+                cur = stack.pop()[0]
+            continue
+        if body and "=" in body:
+            k, _, v = body.partition("=")
+            k = k.strip().lower()
+            if k:
+                cur[k] = v.strip()
+    return root
+
+
+class FeatureDefs:
+    """Every [name] block in features/**/*.tdf, indexed by lowercase name."""
+
+    def __init__(self, assets):
+        self.defs = {}
+        for path in assets.glob("features/*/*.tdf") + assets.glob("features/*.tdf"):
+            try:
+                blob = assets.read(path).decode("latin-1")
+            except Exception:
+                continue
+            for name, body in parse_tdf(blob).items():
+                if isinstance(body, dict) and body:
+                    self.defs.setdefault(name, body)
+
+    def get(self, name):
+        return self.defs.get(name.lower())
+
+
+# --------------------------------------------------------------------------- GAF
+
+def gaf_hotspot(blob, offset):
+    """The frame's hotspot — gaf_frame() in ta3do drops it, and features need it."""
+    _w, _h, x, y = struct.unpack_from("<HHhh", blob, offset)
+    return x, y
+
+
+class GafBank:
+    """anims/*.gaf, resolved by entry name — where feature sprites live."""
+
+    def __init__(self, assets):
+        self.assets = assets
+        self._index = None
+
+    def index(self):
+        if self._index is None:
+            self._index = {}
+            for path in self.assets.glob("anims/*.gaf"):
+                try:
+                    blob = self.assets.read(path)
+                    for name, off in ta3do.gaf_entries(blob).items():
+                        self._index.setdefault(name, (path, off))
+                except Exception:
+                    continue
+        return self._index
+
+    def frame(self, seq):
+        hit = self.index().get(seq.upper())
+        if not hit:
+            return None
+        path, off = hit
+        blob = self.assets.read(path)
+        frame = ta3do.gaf_frame(blob, off)
+        hx, hy = gaf_hotspot(blob, off)
+        return frame, hx, hy
+
+
+# --------------------------------------------------------------------------- shaders
+
+# tagpu keeps its GLSL as C string literals with a small #define include system.
+# We parse it out rather than keeping a copy: tagpu stays authoritative and the
+# browser is provably never stale (tascene-design.md, "Shader sharing").
+
+GLSL_ES_HEADER = ("#version 300 es\n"
+                  "precision highp float;\n"
+                  "precision highp int;\n"
+                  "precision highp sampler2D;\n")
+
+
+def _unescape(lit: str) -> str:
+    return (lit.replace("\\n", "\n").replace("\\t", "\t")
+               .replace('\\"', '"').replace("\\\\", "\\"))
+
+
+def _strip_comments(text: str) -> str:
+    return re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+
+
+def read_glsl_macros(header: Path):
+    """#define NAME [ (ARGS) ] followed by continued "..." literals."""
+    text = _strip_comments(header.read_text())
+    # rejoin backslash continuations into one logical line per #define
+    text = re.sub(r"\\\n", " ", text)
+    macros = {}
+    # `[ \t]*` and not `\s+`: a macro body must be on the #define's own line.
+    # With `\s+` the guard `#define TAGPU_GLSL_H` (empty body) swallowed the
+    # NEXT macro's text, and that macro then silently ceased to exist.
+    for m in re.finditer(r"#define[ \t]+(TAGPU_GLSL_\w+)(\([^)]*\))?[ \t]*(.*)", text):
+        name, args, body = m.group(1), m.group(2), m.group(3)
+        params = [a.strip() for a in args[1:-1].split(",")] if args else None
+        macros[name] = (params, body)
+    return macros
+
+
+def _macro_body(body: str, params, args) -> str:
+    """A macro body is string literals interleaved with bare parameter tokens.
+
+    TAGPU_GLSL_FOG_SHADE(I) is written `"...(" I ", 0)..."`, so collecting only
+    the quoted runs silently drops the argument — the substitution has to walk
+    literals and bare identifiers together.
+    """
+    out = []
+    for tok in re.finditer(r'"(?:[^"\\]|\\.)*"|[A-Za-z_]\w*', body):
+        text = tok.group(0)
+        if text.startswith('"'):
+            out.append(_unescape(text[1:-1]))
+        elif params and text in params:
+            out.append(args[params.index(text)])
+    return "".join(out)
+
+
+def expand_glsl(body: str, macros) -> str:
+    """Concatenate string literals and expand TAGPU_GLSL_* invocations in order."""
+    out = []
+    i = 0
+    for tok in re.finditer(r'"(?:[^"\\]|\\.)*"|TAGPU_GLSL_\w+(?:\("(?:[^"\\]|\\.)*"\))?', body):
+        if tok.start() < i:
+            continue
+        i = tok.end()
+        text = tok.group(0)
+        if text.startswith('"'):
+            out.append(_unescape(text[1:-1]))
+            continue
+        name = re.match(r"TAGPU_GLSL_\w+", text).group(0)
+        if name not in macros:
+            raise ValueError(f"unknown macro {name}")
+        params, mbody = macros[name]
+        args = []
+        if params:
+            arg = re.search(r'\("((?:[^"\\]|\\.)*)"\)', text)
+            if not arg:
+                raise ValueError(f"{name} used without its argument")
+            args = [_unescape(arg.group(1))]
+        out.append(_macro_body(mbody, params, args))
+    return "".join(out)
+
+
+def extract_shaders(pairs):
+    """[(c_source, {glsl_name: c_symbol})] -> {glsl_name: source}, GLSL ES 300."""
+    macros = read_glsl_macros(SRC_ROOT / "tagpu/ddraw/src/tagpu_glsl.h")
+    out = {}
+    for src, wanted in pairs:
+        path = SRC_ROOT / "tagpu/ddraw/src" / src
+        if not path.exists():
+            die(f"no such tagpu source: {path}")
+        text = _strip_comments(path.read_text())
+        for glsl_name, symbol in wanted.items():
+            m = re.search(r"static const char\*\s+" + re.escape(symbol) + r"\s*=(.*?);\s*\n",
+                          text, flags=re.S)
+            if not m:
+                die(f"{src}: cannot find `static const char* {symbol} =`")
+            body = expand_glsl(m.group(1), macros)
+            if not body.startswith("#version 330 core\n"):
+                die(f"{src}:{symbol} does not start with #version 330 core")
+            out[glsl_name] = GLSL_ES_HEADER + body[len("#version 330 core\n"):]
+    return out
+
+
+SHADER_SET = [("tagpu_terr.c", {"terrain.vert": "VS", "terrain.frag": "FS"}),
+              ("tagpu_feat.c", {"sprite.vert": "VS", "sprite.frag": "FS"}),
+              ("tagpu_native.c", {"unit.vert": "VS", "unit.frag": "FS"})]
+
+
+# --------------------------------------------------------------------------- features
+
+# terrain-depth.md 3 / tagpu_feat.c: one anchor per 16-px cell, drawn as a GAF
+# sprite at the engine's projection with the frame's hotspot subtracted. The
+# def's `height` is the tall-vs-flat sort class (< 10 = flat), and animtrans /
+# shadtrans are the alpha bits the engine's FeatureDef mask carries.
+
+def shelf_pack(frames, width=2048):
+    """Height-sorted shelf packer -> {key: (x, y)} and the atlas height."""
+    order = sorted(frames, key=lambda k: -frames[k].height)
+    place, x, y, shelf = {}, 0, 0, 0
+    for key in order:
+        f = frames[key]
+        if f.width > width:
+            continue
+        if x + f.width > width:
+            x, y, shelf = 0, y + shelf, 0
+        place[key] = (x, y)
+        x += f.width
+        shelf = max(shelf, f.height)
+    return place, y + shelf
+
+
+def build_features(tnt, defs, gafs, out):
+    """Every feature the map anchors: sprite atlas, instance list, def table."""
+    names = tnt.feature_names()
+    anchors = tnt.feature_indices()
+    used = {}                                  # def index -> name
+    for _col, _row, idx in anchors:
+        if idx < len(names):
+            used.setdefault(idx, names[idx])
+
+    frames, hotspots, table = {}, {}, {}
+    for idx, name in sorted(used.items()):
+        body = defs.get(name)
+        entry = {"name": name, "height": 0, "footx": 1, "footz": 1,
+                 "body": None, "shadow": None, "animtrans": 0, "shadtrans": 0}
+        if body:
+            entry["height"] = int(float(body.get("height", 0) or 0))
+            entry["footx"] = int(float(body.get("footprintx", 1) or 1))
+            entry["footz"] = int(float(body.get("footprintz", 1) or 1))
+            entry["animtrans"] = 1 if body.get("animtrans", "0").strip() == "1" else 0
+            entry["shadtrans"] = 1 if body.get("shadtrans", "0").strip() == "1" else 0
+            for slot, key in (("body", "seqname"), ("shadow", "seqnameshad")):
+                seq = (body.get(key) or "").strip()
+                if not seq:
+                    continue
+                got = gafs.frame(seq)
+                if not got:
+                    continue
+                frame, hx, hy = got
+                frames[seq.upper()] = frame
+                hotspots[seq.upper()] = (hx, hy)
+                entry[slot] = seq.upper()
+        entry["flat"] = 1 if entry["height"] < 10 else 0
+        table[idx] = entry
+
+    place, ah = shelf_pack(frames)
+    aw = 2048 if frames else 1
+    ah = max(1, ah)
+    atlas = bytearray(aw * ah)
+    rects = {}
+    for key, (x, y) in place.items():
+        f = frames[key]
+        for r in range(f.height):
+            o = (y + r) * aw + x
+            atlas[o:o + f.width] = f.pixels[r * f.width:(r + 1) * f.width]
+        hx, hy = hotspots[key]
+        rects[key] = {"x": x, "y": y, "w": f.width, "h": f.height,
+                      "hx": hx, "hy": hy, "ck": f.transparent}
+
+    (out / "features").mkdir(parents=True, exist_ok=True)
+    (out / "features/atlas.r8.bin").write_bytes(bytes(atlas))
+    inst = bytearray()
+    kept = 0
+    for col, row, idx in anchors:
+        entry = table.get(idx)
+        if not entry or (entry["body"] is None and entry["shadow"] is None):
+            continue
+        inst += struct.pack("<3H", col, row, idx)
+        kept += 1
+    (out / "features/instances.bin").write_bytes(bytes(inst))
+
+    defs_out = {}
+    for idx, entry in table.items():
+        if entry["body"] is None and entry["shadow"] is None:
+            continue
+        defs_out[str(idx)] = {
+            "name": entry["name"], "height": entry["height"], "flat": entry["flat"],
+            "footx": entry["footx"], "footz": entry["footz"],
+            "animtrans": entry["animtrans"], "shadtrans": entry["shadtrans"],
+            "body": rects.get(entry["body"]), "shadow": rects.get(entry["shadow"]),
+        }
+    return {"count": kept, "instances": "features/instances.bin",
+            "atlas": {"w": aw, "h": ah, "file": "features/atlas.r8.bin"},
+            "defs": defs_out}
+
+
+# --------------------------------------------------------------------------- shade
+
+# tagpu_render3do.c calibrates the engine's PALETTE.SHD rather than assuming:
+# neutral is the row with the most identity entries, and the direction (which
+# way along the table is *brighter*) comes from end-row luminance.
+
+SH_ROWS = 32
+
+
+def shd_neutral(shd: bytes, palette):
+    best_row, best_n = 0, -1
+    for r in range(SH_ROWS):
+        n = sum(1 for i in range(256) if shd[r * 256 + i] == i)
+        if n > best_n:
+            best_row, best_n = r, n
+    lum0 = sum(sum(palette[shd[i]][:3]) for i in range(256))
+    lum31 = sum(sum(palette[shd[31 * 256 + i]][:3]) for i in range(256))
+    return [best_row, 1 if lum31 >= lum0 else -1]
+
+
+# --------------------------------------------------------------------------- units
+
+# Bind pose only, by design (tascene-design.md): offline there is no COB VM, so
+# pieces sit at their *FromParent offsets with the unit's own yaw applied in the
+# viewer. What the engine hides at Create is honoured -- ta3do already scans the
+# script for it, and without that a unit renders with its muzzle flares stuck on.
+#
+# The mesh is stored in MODEL space, not screen space, because tagpu's per-face
+# shade row is computed from the POSED normal: rotating first and shading after
+# is the only order that gives the same LUT row the engine's own pass would.
+
+UNIT_VSTRIDE = 7                       # x,y,z, u,v, flatCol, colourKey
+
+
+def build_units(scenario, assets, out):
+    types = []
+    for unit in scenario.get("units", []):
+        if unit.get("type") and unit["type"].lower() not in types:
+            types.append(unit["type"].lower())
+    for group in scenario.get("groups", []):
+        for comp in group.get("composition", []):
+            if comp.get("type") and comp["type"].lower() not in types:
+                types.append(comp["type"].lower())
+    if not types:
+        return None
+
+    bank = ta3do.TextureBank(assets)
+    models, frames = {}, {}
+    for name in types:
+        try:
+            label, blob = ta3do.resolve_model(assets, name)
+            root = ta3do.parse_3do(blob)
+        except SystemExit:
+            continue
+        except Exception:
+            continue
+        hidden = {h.lower() for h in ta3do.script_hidden(assets, label) or ()}
+        models[name] = (label, root, hidden)
+        for key, frame in ta3do.model_textures(root, bank).items():
+            frames.setdefault(key, frame)
+
+    if not models:
+        return None
+
+    place, ah = shelf_pack(frames)
+    aw, ah = (2048 if frames else 1), max(1, ah)
+    atlas = bytearray(aw * ah)
+    rects = {}
+    for key, (x, y) in place.items():
+        f = frames[key]
+        for r in range(f.height):
+            o = (y + r) * aw + x
+            atlas[o:o + f.width] = f.pixels[r * f.width:(r + 1) * f.width]
+        rects[key] = (x / aw, y / ah, (x + f.width) / aw, (y + f.height) / ah,
+                      f.transparent)
+
+    (out / "units").mkdir(parents=True, exist_ok=True)
+    (out / "units/atlas.r8.bin").write_bytes(bytes(atlas))
+
+    meshes = {}
+    for name, (label, root, hidden) in models.items():
+        verts = []
+        stats = {"pieces": 0, "faces": 0, "tris": 0, "textured": 0, "flat": 0}
+
+        def emit(piece, ox, oy, oz):
+            px, py, pz = ox + piece.offset[0], oy + piece.offset[1], oz + piece.offset[2]
+            if piece.name.lower() not in hidden:
+                stats["pieces"] += 1
+                for prim in piece.primitives:
+                    if prim.is_selection or len(prim.indices) < 3:
+                        continue
+                    rect = rects.get(prim.texture.upper()) if prim.texture else None
+                    if rect is None and prim.texture:
+                        continue                   # named a texture we cannot resolve
+                    flat = None
+                    if rect is None:
+                        flat = (prim.color & 0xFF) / 255.0
+                    stats["faces"] += 1
+                    stats["textured" if rect else "flat"] += 1
+                    n = len(prim.indices)
+                    for k in range(1, n - 1):        # fan from vertex 0 (§1.4)
+                        slots = (0, k, k + 1)
+                        if any(prim.indices[s] >= len(piece.vertices) for s in slots):
+                            continue
+                        for slot in slots:
+                            vx, vy, vz = piece.vertices[prim.indices[slot]]
+                            if rect:
+                                # the engine maps a whole GAF frame across the
+                                # face's four corners; n-gons collapse onto them
+                                c = slot if n <= 4 else slot * 4 // n
+                                u = rect[2] if c in (1, 2) else rect[0]
+                                v = rect[3] if c >= 2 else rect[1]
+                                verts.extend((px + vx, py + vy, pz + vz,
+                                              u, v, 0.0, rect[4] / 255.0))
+                            else:
+                                verts.extend((px + vx, py + vy, pz + vz,
+                                              -1.0, -1.0, flat, -1.0))
+                        stats["tris"] += 1
+            for child in piece.children:
+                emit(child, px, py, pz)
+
+        emit(root, 0.0, 0.0, 0.0)
+        blob = struct.pack(f"<{len(verts)}f", *verts)
+        (out / f"units/{name}.bin").write_bytes(blob)
+        meshes[name] = {"file": f"units/{name}.bin", "verts": len(verts) // UNIT_VSTRIDE,
+                        "label": label, "stats": stats}
+
+    instances = []
+    for unit in scenario.get("units", []):
+        key = (unit.get("type") or "").lower()
+        if key not in meshes or not isinstance(unit.get("pos"), list):
+            continue
+        instances.append({"type": key, "pos": [int(unit["pos"][0]), int(unit["pos"][1])],
+                          "facing": float(unit.get("facing", 0) or 0),
+                          "id": unit.get("id")})
+    return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin"},
+            "stride": UNIT_VSTRIDE, "meshes": meshes, "instances": instances}
+
+
+# --------------------------------------------------------------------------- maps
+
+def map_tnt(assets, name: str):
+    """A scenario's map name -> its maps/*.tnt path."""
+    want = name.strip().lower()
+    direct = f"maps/{want}.tnt"
+    if assets.has(direct):
+        return direct
+    for path in assets.glob("maps/*.tnt"):
+        if Path(path).stem.lower() == want:
+            return path
+    # fall back to the .ota's own missionname
+    for ota in assets.glob("maps/*.ota"):
+        try:
+            tdf = parse_tdf(assets.read(ota).decode("latin-1"))
+        except Exception:
+            continue
+        for body in tdf.values():
+            if isinstance(body, dict) and body.get("missionname", "").strip().lower() == want:
+                cand = ota[:-4] + ".tnt"
+                if assets.has(cand):
+                    return cand
+    die(f"no map named {name!r} in the archives")
+
+
+# --------------------------------------------------------------------------- view
+
+# resolution.md §3: the viewport rect is {128, 32, W-1, H-33}, so the play area
+# is always viewW = W-128, viewH = H-64 with its top-left at (128, 32).
+VP_L, VP_T = 128, 32
+
+
+def viewport(res):
+    w, h = res
+    return VP_L, VP_T, w - 128, h - 64
+
+
+def clamp_eye(eye, tnt, vw, vh):
+    """The eye is the world position of the viewport's top-left corner."""
+    x, y = eye
+    maxx = max(0, tnt.w16 * 16 - vw)
+    maxy = max(0, tnt.h16 * 16 - vh)
+    return [max(0, min(int(x), maxx)), max(0, min(int(y), maxy))]
+
+
+# --------------------------------------------------------------------------- build
+
+def load_scenario(path: Path):
+    try:
+        doc = json.loads(path.read_text())
+    except Exception as err:
+        die(f"{path}: {err}")
+    if doc.get("format") != "ta-scenario/1":
+        die(f"{path}: not a ta-scenario/1 file")
+    return doc
+
+
+def cmd_build(args):
+    scenario = load_scenario(Path(args.scenario))
+    setup = scenario.get("setup", {})
+    assets = ta3do.Assets()
+    palette = ta3do.load_palette(assets)
+
+    mapname = args.map or setup.get("map")
+    if not mapname:
+        die("scenario has no setup.map and --map was not given")
+    tnt_path = map_tnt(assets, mapname)
+    tnt = Tnt(assets.read(tnt_path), tnt_path)
+
+    res = [int(v) for v in (args.res or setup.get("res", "1024x768")).lower().split("x")]
+    vpL, vpT, vw, vh = viewport(res)
+
+    if args.eye:
+        eye = [int(v) for v in args.eye.split(",")]
+    else:
+        centre = scenario_centre(scenario, tnt)
+        eye = [centre[0] - vw // 2, centre[1] - vh // 2]
+    eye = clamp_eye(eye, tnt, vw, vh)
+
+    out = Path(args.output)
+    (out / "terrain").mkdir(parents=True, exist_ok=True)
+    (out / "palette").mkdir(parents=True, exist_ok=True)
+    (out / "shaders").mkdir(parents=True, exist_ok=True)
+
+    aw, ah, atlas = tnt.atlas()
+    (out / "terrain/atlas.r8.bin").write_bytes(atlas)
+    (out / "terrain/tilemap.u16.bin").write_bytes(tnt.tilemap())
+    (out / "terrain/height.r8.bin").write_bytes(tnt.heights())
+
+    pal = bytearray()
+    for i in range(256):
+        c = palette[i]
+        pal += bytes((c[0], c[1], c[2], 255))
+    (out / "palette/pal.bin").write_bytes(bytes(pal))
+    shd = assets.read("palettes/palette.shd") if assets.has("palettes/palette.shd") else b""
+    if shd:
+        (out / "palette/shd.bin").write_bytes(shd)
+
+    for name, src in extract_shaders(SHADER_SET).items():
+        (out / "shaders" / name).write_text(src)
+
+    features = None
+    if not args.no_features:
+        features = build_features(tnt, FeatureDefs(assets), GafBank(assets), out)
+    units = None if args.no_units else build_units(scenario, assets, out)
+
+    manifest = {
+        "format": "ta-scene/1",
+        "scenario": str(args.scenario),
+        "map": {
+            "name": mapname,
+            "file": tnt_path,
+            "w16": tnt.w16, "h16": tnt.h16,
+            "tilemap": {"w": tnt.mw, "h": tnt.mh, "file": "terrain/tilemap.u16.bin"},
+            "atlas": {"w": aw, "h": ah, "cols": ATLAS_COLS, "tiles": tnt.tiles,
+                      "file": "terrain/atlas.r8.bin"},
+            "height": {"w": tnt.w16, "h": tnt.h16, "file": "terrain/height.r8.bin"},
+            "sealevel": tnt.sealevel,
+        },
+        "view": {"res": res, "vp": [vpL, vpT, vw, vh], "eye": eye, "zoom": 1.0},
+        "palette": {"file": "palette/pal.bin", "shd": "palette/shd.bin" if shd else None,
+                    "shdRows": (len(shd) // 256) if shd else 0,
+                    "neutral": shd_neutral(shd, palette) if shd else [15, 1]},
+        "features": features,
+        "units": units,
+        "depth": {"terrain": 0.10, "scale": 512.0,
+                  "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0, "rowStep": 4.0,
+                  "unit0": 1.0, "shadowTall": 0.30, "shadowFlat": 0.03},
+        "shaders": sorted(n for n in extract_shaders(SHADER_SET)),
+    }
+    (out / "scene.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+    nfeat = features["count"] if features else 0
+    nunit = len(units["instances"]) if units else 0
+    ta3do.out({"pack": str(out), "map": mapname, "tiles": tnt.tiles,
+               "atlas": [aw, ah], "eye": eye, "res": res,
+               "features": nfeat, "units": nunit}, args.json,
+              human=(f"{out}: {mapname} {tnt.w16}x{tnt.h16} 16px cells, "
+                     f"{tnt.tiles} tiles, atlas {aw}x{ah}, {nfeat} features, "
+                     f"{nunit} units, eye {eye[0]},{eye[1]}"))
+
+
+def scenario_centre(scenario, tnt):
+    """Where the scenario points the camera, in world units."""
+    cam = scenario.get("camera") or {}
+    if isinstance(cam.get("at"), list) and len(cam["at"]) == 2:
+        return [int(cam["at"][0]), int(cam["at"][1])]
+    target = cam.get("center_on")
+    if target:
+        for unit in scenario.get("units", []) + scenario.get("features", []):
+            if unit.get("id") == target and isinstance(unit.get("pos"), list):
+                return [int(unit["pos"][0]), int(unit["pos"][1])]
+        for group in scenario.get("groups", []):
+            if group.get("id") == target and isinstance(group.get("at"), list):
+                return [int(group["at"][0]), int(group["at"][1])]
+    units = [u for u in scenario.get("units", []) if isinstance(u.get("pos"), list)]
+    if units:
+        return [sum(u["pos"][0] for u in units) // len(units),
+                sum(u["pos"][1] for u in units) // len(units)]
+    return [tnt.w16 * 8, tnt.h16 * 8]
+
+
+# --------------------------------------------------------------------------- serve / shot
+
+VIEWER = HERE / "tascene-view.html"
+
+
+def cmd_serve(args):
+    pack = Path(args.pack).resolve()
+    if not (pack / "scene.json").exists():
+        die(f"{pack} has no scene.json (run `tascene build` first)")
+    _stage_viewer(pack)
+    server = ta3do.Viewer(pack, port=args.port)
+    url = f"{server.base}/{VIEWER.name}"
+    print(f"serving {pack} at {url}  (ctrl-c to stop)")
+    try:
+        while True:
+            __import__("time").sleep(3600)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.close()
+
+
+def _stage_viewer(pack: Path):
+    """The viewer is served from the pack so fetches are same-origin."""
+    if not VIEWER.exists():
+        die(f"viewer missing: {VIEWER}")
+    (pack / VIEWER.name).write_text(VIEWER.read_text())
+
+
+def cmd_shot(args):
+    pack = Path(args.pack).resolve()
+    if not (pack / "scene.json").exists():
+        die(f"{pack} has no scene.json (run `tascene build` first)")
+    _stage_viewer(pack)
+    scene = json.loads((pack / "scene.json").read_text())
+    w, h = scene["view"]["res"]
+    png = Path(args.output).expanduser().resolve()
+    png.parent.mkdir(parents=True, exist_ok=True)
+    if png.exists():
+        png.unlink()
+    chrome = ta3do.find_chrome()
+    display = ta3do.Display()
+    server = ta3do.Viewer(pack)
+    try:
+        query = "?shot=1" + (("&" + args.opts) if args.opts else "")
+        url = f"{server.base}/{VIEWER.name}{query}"
+        error = ta3do.shoot(chrome, display.name, url, png, (w, h),
+                            args.timeout, args.budget)
+        if error:
+            die(error)
+    finally:
+        server.close()
+        display.close()
+    ta3do.out({"png": str(png), "size": [w, h]}, args.json, human=str(png))
+
+
+# --------------------------------------------------------------------------- ab
+
+# The parity claim, made checkable. Everything here already exists — tacli
+# drives the game, glshot captures the GL framebuffer top-down, roster reports
+# the live eye — so `ab` is glue, and being glue is the point: a comparison
+# that only happens when someone remembers does not happen.
+
+TACLI = HERE / "tacli"
+
+
+def run_tacli(argv, timeout=600.0, want_json=False):
+    cmd = [sys.executable, str(TACLI)] + argv + (["--json"] if want_json else [])
+    proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    text = proc.stdout.decode("utf-8", "replace")
+    if proc.returncode != 0:
+        tail = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-4:]
+        die(f"tacli {' '.join(argv[:2])} failed: " + " / ".join(tail or [text[-200:]]))
+    if want_json:
+        try:
+            return json.loads(text)
+        except Exception:
+            die(f"tacli {' '.join(argv[:2])}: not JSON: {text[:200]}")
+    return text
+
+
+def read_ppm(path: Path):
+    blob = path.read_bytes()
+    if not blob.startswith(b"P6"):
+        die(f"{path}: not a P6 PPM")
+    fields, pos = [], 2
+    while len(fields) < 3:
+        while pos < len(blob) and blob[pos:pos + 1].isspace():
+            pos += 1
+        if blob[pos:pos + 1] == b"#":
+            while pos < len(blob) and blob[pos] != 0x0A:
+                pos += 1
+            continue
+        start = pos
+        while pos < len(blob) and not blob[pos:pos + 1].isspace():
+            pos += 1
+        fields.append(int(blob[start:pos]))
+    w, h, _maxv = fields
+    return w, h, blob[pos + 1:pos + 1 + w * h * 3]
+
+
+def diff_rgb(a, b, w, h, rect):
+    """Differing pixels and mean abs error inside rect, ignoring nothing."""
+    x0, y0, rw, rh = rect
+    n, total = 0, 0
+    for y in range(y0, min(y0 + rh, h)):
+        row = y * w
+        for x in range(x0, min(x0 + rw, w)):
+            o = (row + x) * 3
+            d = (abs(a[o] - b[o]) + abs(a[o + 1] - b[o + 1]) + abs(a[o + 2] - b[o + 2]))
+            if d:
+                n += 1
+                total += d
+    px = max(1, min(rw, w - x0) * min(rh, h - y0))
+    return n, total / (3.0 * px), px
+
+
+GAP = 4
+
+
+def panel(images, out_png):
+    """Side-by-side composite, stdlib only — ta3do owns the PNG codec.
+
+    tools/sbs.py does this with PIL and labels; this stays inside tascene's
+    stdlib-only budget, so the panel is unlabelled and the numbers are printed.
+    """
+    W = sum(w for _l, _rgb, w, _h in images) + GAP * (len(images) - 1)
+    H = max(h for _l, _rgb, _w, h in images)
+    canvas = bytearray(b"\x18\x18\x18\xff" * (W * H))
+    x = 0
+    for _label, rgb, w, h in images:
+        for y in range(h):
+            src, dst = y * w * 3, (y * W + x) * 4
+            for i in range(w):
+                canvas[dst + i * 4:dst + i * 4 + 3] = rgb[src + i * 3:src + i * 3 + 3]
+        x += w + GAP
+    out_png.write_bytes(ta3do.write_png(W, H, bytes(canvas)))
+
+
+def cmd_ab(args):
+    scenario_path = Path(args.scenario)
+    scenario = load_scenario(scenario_path)
+    out = Path(args.output)
+    out.mkdir(parents=True, exist_ok=True)
+
+    if not args.no_launch:
+        load = ["scenario", "load", args.name, str(scenario_path), "--restart"]
+        if args.los is not None:
+            load += ["--los", str(args.los)]
+        if args.mapping is not None:
+            load += ["--mapping", str(args.mapping)]
+        print(f"tascene: launching {args.name} with {scenario_path.name} ...")
+        run_tacli(load, timeout=args.launch_timeout)
+
+    if args.eye:
+        ex, ey = args.eye.split(",")
+        run_tacli(["eye", args.name, ex, ey])
+
+    roster = run_tacli(["roster", args.name], want_json=True)
+    eye = roster.get("eye")
+    if not eye:
+        die("the instance reported no camera eye yet (is the game past the shell?)")
+    print(f"tascene: live eye {eye[0]},{eye[1]}, {len(roster.get('units') or [])} units")
+
+    ppm = out / "engine.ppm"
+    run_tacli(["glshot", args.name, "-o", str(ppm)])
+    ew, eh, engine = read_ppm(ppm)
+
+    pack = out / "pack"
+    build_argv = [str(scenario_path), "-o", str(pack), "--eye", f"{eye[0]},{eye[1]}",
+                  "--res", f"{ew}x{eh}"]
+    main(["build"] + build_argv)
+
+    ours_png = out / "browser.png"
+    main(["shot", str(pack), "-o", str(ours_png)] + (["--opts", args.opts] if args.opts else []))
+    ow, oh, _ch, ours = ta3do.read_png(ours_png.read_bytes())
+    if _ch == 4:
+        ours = bytes(b for i, b in enumerate(ours) if i % 4 != 3)
+
+    if (ow, oh) != (ew, eh):
+        die(f"size mismatch: engine {ew}x{eh}, browser {ow}x{oh}")
+
+    vpL, vpT, vw, vh = viewport([ew, eh])
+    n, mae, px = diff_rgb(engine, ours, ew, eh, (vpL, vpT, vw, vh))
+    panel([("engine", engine, ew, eh), ("tascene", ours, ow, oh)], out / "ab.png")
+
+    result = {"eye": eye, "res": [ew, eh], "viewport": [vpL, vpT, vw, vh],
+              "differing": n, "viewport_px": px, "pct": round(100.0 * n / px, 3),
+              "mean_abs": round(mae, 3), "panel": str(out / "ab.png")}
+    ta3do.out(result, args.json,
+              human=(f"engine vs tascene inside the viewport: {n}/{px} px differ "
+                     f"({100.0 * n / px:.2f}%), mean abs {mae:.2f}/255\n"
+                     f"panel: {out / 'ab.png'}"))
+
+
+# --------------------------------------------------------------------------- CLI
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="tascene", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    b = sub.add_parser("build", help="compile a scenario into a scene pack")
+    b.add_argument("scenario")
+    b.add_argument("-o", "--output", required=True)
+    b.add_argument("--map", help="override setup.map")
+    b.add_argument("--res", help="override setup.res, e.g. 1024x768")
+    b.add_argument("--eye", help="viewport top-left in world units, 'X,Y'")
+    b.add_argument("--no-units", action="store_true",
+                   help="skip unit meshes")
+    b.add_argument("--no-features", action="store_true",
+                   help="terrain only (a smaller pack, and a terrain-only diff)")
+    b.add_argument("--json", action="store_true")
+    b.set_defaults(func=cmd_build)
+
+    s = sub.add_parser("serve", help="serve a pack for interactive viewing")
+    s.add_argument("pack")
+    s.add_argument("--port", type=int, default=0)
+    s.set_defaults(func=cmd_serve)
+
+    t = sub.add_parser("shot", help="headless screenshot of a pack")
+    t.add_argument("pack")
+    t.add_argument("-o", "--output", required=True)
+    t.add_argument("--opts", help="viewer query string, e.g. 'pass=terrain&relief=off'")
+    t.add_argument("--timeout", type=float, default=90.0)
+    t.add_argument("--budget", type=int, default=8000,
+                   help="chrome --virtual-time-budget in ms")
+    t.add_argument("--json", action="store_true")
+    t.set_defaults(func=cmd_shot)
+
+    ab = sub.add_parser("ab", help="drive the game and the browser, and diff them")
+    ab.add_argument("scenario")
+    ab.add_argument("--name", default="tascene", help="instance name")
+    ab.add_argument("-o", "--output", default="ab-out")
+    ab.add_argument("--eye", help="pin the eye to 'X,Y' before capturing")
+    ab.add_argument("--opts", help="viewer query string")
+    ab.add_argument("--no-launch", action="store_true",
+                    help="use an instance that is already running")
+    ab.add_argument("--los", type=int, choices=(0, 1, 2), default=0,
+                    help="SKIRMISH Line of Sight (0 = Permanent: no grey fog)")
+    ab.add_argument("--mapping", type=int, choices=(0, 1), default=1)
+    ab.add_argument("--launch-timeout", type=float, default=600.0)
+    ab.add_argument("--json", action="store_true")
+    ab.set_defaults(func=cmd_ab)
+
+    args = ap.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    main()
