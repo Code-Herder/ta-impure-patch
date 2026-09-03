@@ -1126,8 +1126,12 @@ static int hires_pose(const char* o3, const void* mesh, float* out, int npiece)
         const HPMAP* pm = pmap_for(mesh, h.nd, nparts);
         for (g = 0; g < npiece; g++) {
             float* o = out + g * 12;
+            /* the map was resolved against a node template, and `nparts`
+               comes off the unit rather than the template — so bound the index
+               by THIS unit's part count rather than trusting the two agree */
             int e = (g < pm->n) ? pm->e[g] : -1;
             int r;
+            if (e >= nparts) e = -1;
             if (e < 0 || !h.done[e]) {                  /* rest pose */
                 memset(o, 0, 12 * sizeof(float));
                 o[0] = o[5] = o[10] = 1.0f;
