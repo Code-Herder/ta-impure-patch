@@ -1587,6 +1587,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 n2->rel = (ry >> 4) - r0;
                 n2->owner = 0; n2->cloaked = 0; n2->air = 0; n2->feat = 1; n2->sel = 0;
                 n2->shadow = 0;     /* the engine's FShadow feature shadow stays */
+                /* units[] is static and only nu resets per frame, so a field
+                   left unwritten here is last frame's. A wreck landing on an
+                   index that held a replacement unit would inherit its HMesh*:
+                   the build loop takes the hires branch, emits no native
+                   vertices (the wreck itself vanishes) and draws that unit's
+                   model at the wreck's anchor, at a stale yaw, posed against
+                   the wreck's own Object3do. */
+                n2->hires = NULL; n2->yaw = 0;
                 n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
                 nwr++;
             }

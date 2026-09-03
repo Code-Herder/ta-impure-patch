@@ -124,6 +124,9 @@ typedef struct {
     unsigned checked;          /* frame counter of the last file lookup      */
     int      ever;             /* a lookup has run at least once             */
     int      announced;        /* the one "looked here, found this" log line */
+    int      slotwarn;         /* the one "all slots are in use" log line    */
+    int      failed;           /* the load failed; stand down until it moves */
+    FILETIME failft;           /* the write time that failed to load         */
 } HName;
 static HName s_name[MAXNAME];
 static int   s_nname = 0;
@@ -901,7 +904,15 @@ static int load_gltf(HMesh* m, const char* path)
     size_t flen = 0;
     unsigned char* file = slurp(path, &flen);
     char b[192];
-    if (!file) return 0;
+    if (!file) {
+        /* every other failure in here names itself; silence at the very first
+           step is the "looked here / load failed" ambiguity the announce line
+           was added to remove */
+        _snprintf(b, sizeof b, "hires: %s could not be read - missing, locked,"
+                  " or past the %u MB file cap", path, (unsigned)(MAXFILE >> 20));
+        hlog(b);
+        return 0;
+    }
 
     char* json = NULL;
     size_t jsonlen = 0;
@@ -982,15 +993,45 @@ static int load_gltf(HMesh* m, const char* path)
     {
         float I[16];
         mat_id(I);
+        int nodes = groot(&g, "nodes");
+        int nn = jlen(&g, nodes);
+        /* bd.seen only marks the first MAXNODE indices, and that mark is the
+           whole defence against a child list that explodes 2^depth — past it
+           walk_node would recurse with the guard silently off. So refuse the
+           file rather than walk it half-guarded: under this cap every index
+           the nodes array can hold also indexes seen. */
+        if (nn > MAXNODE) {
+            _snprintf(b, sizeof b, "hires: %s has %d nodes, past the %d-node cap",
+                      path, nn, MAXNODE);
+            hlog(b);
+            goto fail;
+        }
         int sc = jelem(&g, groot(&g, "scenes"), gi(&g, g.root, "scene", 0));
         if (sc >= 0) {
             int roots = jfield(&g, sc, "nodes");
             int nr = jlen(&g, roots), k;
             for (k = 0; k < nr; k++)
                 walk_node(&bd, (int)jval(&g, jelem(&g, roots, k), -1.0), I, 0);
-        } else {                       /* no scene: every node is its own root */
-            int nn = jlen(&g, groot(&g, "nodes")), k;
-            for (k = 0; k < nn; k++) walk_node(&bd, k, I, 0);
+        } else {
+            /* No scene: the roots are the nodes nothing lists as a child.
+               Walking every node as a root instead draws a child at the origin
+               when its index comes up before its parent's — and the second
+               visit trips the cycle guard, so a well-formed file reports
+               itself TRUNCATED as a non-tree. */
+            char* haspar = calloc((size_t)(nn > 0 ? nn : 1), 1);
+            int k;
+            if (!haspar) goto fail;
+            for (k = 0; k < nn; k++) {
+                int ch = jfield(&g, jelem(&g, nodes, k), "children");
+                int nc = jlen(&g, ch), c;
+                for (c = 0; c < nc; c++) {
+                    int ci = (int)jval(&g, jelem(&g, ch, c), -1.0);
+                    if (ci >= 0 && ci < nn) haspar[ci] = 1;
+                }
+            }
+            for (k = 0; k < nn; k++)
+                if (!haspar[k]) walk_node(&bd, k, I, 0);
+            free(haspar);
         }
     }
 
@@ -1164,7 +1205,14 @@ static void name_check(HName* n)
            its write time is older than the one we last saw, and hand the
            payload slot to whichever type does have one */
         if (n->mesh >= 0) { mesh_release(&s_mesh[n->mesh]); n->mesh = -1; }
+        n->failed = 0;
         return;
+    }
+    if (n->failed) {
+        /* a load that failed is not retried until the file itself moves: see
+           the stand-down below for why */
+        if (CompareFileTime(&fad.ftLastWriteTime, &n->failft) == 0) return;
+        n->failed = 0;
     }
     if (n->mesh < 0) {
         for (i = 0; i < MAXMESH; i++)
@@ -1173,14 +1221,27 @@ static void name_check(HName* n)
             /* every payload slot is spoken for by another type that really
                has a replacement — a real limit, so say so rather than render
                the stock model and leave the modeller guessing */
-            _snprintf(b, sizeof b,
-                      "hires: %s has a replacement but all %d model slots are "
-                      "in use - it renders as the engine's 3DO", n->name, MAXMESH);
-            hlog(b);
+            if (!n->slotwarn) {      /* once per type: this runs on the
+                                        RECHECK cadence, for the session */
+                n->slotwarn = 1;
+                _snprintf(b, sizeof b,
+                          "hires: %s has a replacement but all %d model slots "
+                          "are in use - it renders as the engine's 3DO",
+                          n->name, MAXMESH);
+                hlog(b);
+            }
             return;
         }
         m = &s_mesh[i];
-        memset(m, 0, sizeof *m);
+        {   /* gen must outlive the slot: pmap_for keys its cached glTF-piece
+               -> engine-primitive mapping on {slot address, gen, template},
+               so a slot reclaimed by the same type and back at gen 1 would
+               match the entry from its previous life and pose a new piece
+               list through the old mapping. Monotonic per slot, per session. */
+            unsigned g0 = m->gen;
+            memset(m, 0, sizeof *m);
+            m->gen = g0;
+        }
         lstrcpynA(m->name, n->name, sizeof m->name);
         n->mesh = i;
     }
@@ -1191,14 +1252,28 @@ static void name_check(HName* n)
         m->mtime = fad.ftLastWriteTime;
         lstrcpynA(m->path, use, sizeof m->path);
         m->valid = load_gltf(m, use);
-        /* a load that failed must not leave a CURRENT-looking mtime behind, or
-           every later check matches and the model is never retried — and the
-           file being briefly unreadable while it is copied in is exactly the
-           moment this fires */
-        if (!m->valid) memset(&m->mtime, 0, sizeof m->mtime);
         /* the HMesh keeps its address across a reload, so anything that cached
            something derived from the piece list has to be told the list is new */
         m->gen++;
+        if (!m->valid) {
+            /* A file that will not load will not load a second later either.
+               Retrying it every RECHECK re-slurps and re-parses megabytes on
+               the RENDER thread twice a second and appends the same failure to
+               tagpu.log for the rest of the session; remembering the write
+               time it failed on costs one comparison instead. That still
+               retries the case the retry was for — a file caught mid-copy —
+               because a copy ends by stamping its own write time on the
+               destination. The payload slot goes back too: MAXMESH is 8, and
+               a broken export must not hold one against a type whose model
+               works. */
+            n->failed = 1;
+            n->failft = fad.ftLastWriteTime;
+            mesh_release(m);
+            n->mesh = -1;
+            _snprintf(b, sizeof b, "hires: %s renders as the engine's 3DO "
+                      "until %s is written again", n->name, use);
+            hlog(b);
+        }
     }
 }
 
