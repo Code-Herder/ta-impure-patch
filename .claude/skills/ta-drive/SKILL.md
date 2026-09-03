@@ -116,6 +116,28 @@ it is sticky per instance: what a launch does not name, it inherits from the las
 none of them sets a game rule (`cmdline-options.md`). Raw switches go through
 `--arg=-t --arg=120` (keep the `=`); `-r` and `-d` are refused.
 
+**Two of those are not really registry settings.** `SKIRMISH.GUI`'s `Mapping` and
+`LineOfSight` toggles come up at the stage their `.GUI` file gives them — `Unmapped`,
+`Permanent` — whatever `SkirmishMapping` / `SkirmishLineOfSight` hold (measured
+2026-09-02, and `SingleMapping` makes no difference either). The gadget decides the
+game; the registry is only where TA saves the last one. So:
+
+- **`scenario load` starts every game Mapped**, and says so (`map unmapped -> mapped`).
+  `--mapping 0` opts out. Mapped is the default because a scenario places units by
+  world coordinate all over the map, and on an unmapped one the human — and every
+  screenshot — sees them through black.
+- **`--los 0` turns the grey fog off.** `Mapping` reveals the *terrain*; the grey
+  wash over ground nothing is currently looking at is the `LineOfSight` toggle
+  (`Permanent|True|Circular`, stages 0-2). `--los 0` (Permanent) leaves everything
+  already seen in full colour — measured 2026-09-02: the engine's `LosType` word at
+  `*0x511DE8+0x14281` goes 14 → 12, and bit 1 is the one the terrain pass paints the
+  grey mask from (`tagpu_native.c`, "fog is on is NOT LosType bit0"). Not the default,
+  because a fog-free map is a play setting, not a test setting.
+- Add `switches: {"radar": true}` (or `tacli switches <inst> radar=on`) to see enemy
+  units as well as ground — that is TA's own `+radar` debug bit.
+- Driving the menus by hand, set them before `Start`: `tacli ui t1 set Mapping 1`,
+  `tacli ui t1 set LineOfSight 0`.
+
 ## Input details that cost time to learn
 
 - Clicks need `Interface Type=1` (right-mouse orders) — tacli sets it. Select with

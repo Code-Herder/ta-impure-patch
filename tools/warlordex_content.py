@@ -20,9 +20,11 @@ What goes in the archive:
       Aim/Fire/AimFrom/QueryWeapon4..7 written straight as bytecode — one
       turret each, one signal bit each, modelled on CORLLT's own aim script.
   units/corbatsx.fbi       CORBATS.FBI with Weapon4..7=CORE_LIGHTLASER, a longer
-      footprint and a much bigger hull (capped at the int16 health field). Stats are otherwise the stock Warlord's — read through
-      the merged archive view, so it is Core Contingency's CORBATS.FBI out of
-      ccdata.ccx that gets inherited, not the older one in totala1.hpi.
+      footprint, a much bigger hull (capped at the int16 health field) and a
+      sight radius that reaches past its own longest gun. Stats are otherwise
+      the stock Warlord's — read through the merged archive view, so it is Core
+      Contingency's CORBATS.FBI out of ccdata.ccx that gets inherited, not the
+      older one in totala1.hpi.
   unitpics/CORBATSX.pcx    the Warlord's build picture, unchanged.
   units/armroyh.fbi        ARMROYH "Crusader (Hold)", the stock Crusader with
       `NoAutoFire=1` and nothing else changed — it keeps ARMROY's model and gets
@@ -80,6 +82,13 @@ FIRST_SLOT = 4
 # negative health and it dies on the frame it appears. x10 does exactly that.
 HULL_MULTIPLIER = 5
 HULL_CAP = 32767
+
+# The stock Warlord sees 350 and shoots 1250 (COR_BATS) and 810 (CORE_BATSLASER),
+# so it spends a fight firing at things it cannot see and waiting for someone
+# else to spot for it. A demo ship wants the opposite: see everything it can
+# reach, so the seven mounts pick targets the moment they are in range and the
+# human watching can see what they are shooting at.
+SIGHT_DISTANCE = 1300
 
 # How AimWeaponN reports "aimed". The aim script's *return* is what the slot
 # waits on before it will fire, and a script that waits holds one of the unit's
@@ -304,6 +313,9 @@ def build_fbi(text: str) -> str:
     damage = re.search(r"(?im)^\s*MaxDamage=(\d+);", text)
     if not damage:
         raise SystemExit("warlordex_content: CORBATS.FBI has no MaxDamage")
+    sight = re.search(r"(?im)^\s*SightDistance=(\d+);", text)
+    if not sight:
+        raise SystemExit("warlordex_content: CORBATS.FBI has no SightDistance")
     hull = int(damage.group(1)) * HULL_MULTIPLIER
     if hull > HULL_CAP:
         print(f"  note:  MaxDamage {hull} exceeds the int16 health field; clamped to {HULL_CAP}")
@@ -319,6 +331,7 @@ def build_fbi(text: str) -> str:
         # the hull is 191 model units long where the Warlord's is 141
         ("FootprintZ=6;", "FootprintZ=8;"),
         (damage.group(0).strip(), tougher),
+        (sight.group(0).strip(), f"SightDistance={SIGHT_DISTANCE};"),
         (f"Weapon2=COR_BATS;", f"Weapon2=COR_BATS;{extra}"),
     ]
     for old, new in swaps:

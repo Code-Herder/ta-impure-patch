@@ -1756,6 +1756,29 @@ def _ui_settle(inst: Instance, before: dict, g: dict, timeout: float = UI_SETTLE
         time.sleep(0.1)
 
 
+def _ui_set_stage(inst: Instance, snap: dict, g: dict, target: int) -> dict:
+    """Cycle a toggle to `target` and return the gadget as it then reads.
+
+    A toggle has no "set stage" call in the engine — it advances one stage per
+    click — so this clicks it round, re-reading the gadget each time because the
+    array is rebuilt on every snapshot.
+    """
+    stages = g.get("stages") or 0
+    if stages < 2:
+        die(f'{g["name"]} is not a toggle (stages={stages}) — use click')
+    if not 0 <= target < stages:
+        die(f'{g["name"]} has {stages} stages, so stage {target} does not exist')
+    for _ in range(stages + 1):
+        if g.get("stage") == target:
+            return g
+        snap, _how = _ui_click_gadget(inst, g, snap)
+        hits = _ui_match(snap, g["name"])
+        if len(hits) != 1:
+            die(f'{g["name"]} vanished while cycling it')
+        g = hits[0]
+    die(f'{g["name"]} cycled through all {stages} stages without reaching {target}')
+
+
 def _ui_set_slider(inst: Instance, snap: dict, g: dict, value: int):
     """Drag a value slider's knob until the engine reads back `value`.
 
@@ -2011,23 +2034,10 @@ def cmd_ui(args):
             out(data, args.json, human=human)
             return
 
-        stages = g.get("stages") or 0
-        if stages < 2:
-            die(f'{g["name"]} is not a toggle (stages={stages}) — use click')
-        if not 0 <= target < stages:
-            die(f'{g["name"]} has {stages} stages, so stage {target} does not exist')
-
-        for _ in range(stages + 1):
-            if g.get("stage") == target:
-                out({"name": g["name"], "stage": g.get("stage")}, args.json,
-                    human=f"{g['name']} = stage {g.get('stage')}")
-                return
-            snap, _how = _ui_click_gadget(inst, g, snap)
-            hits = _ui_match(snap, g["name"])
-            if len(hits) != 1:
-                die(f'{g["name"]} vanished while cycling it')
-            g = hits[0]
-        die(f'{g["name"]} cycled through all {stages} stages without reaching {target}')
+        g = _ui_set_stage(inst, snap, g, target)
+        out({"name": g["name"], "stage": g.get("stage")}, args.json,
+            human=f"{g['name']} = stage {g.get('stage')}")
+        return
 
     if verb in ("fill", "type"):
         if len(rest) != 2:
@@ -3333,6 +3343,9 @@ def cmd_scenario_apply(args):
 # The shell path to a skirmish, by gadget name. Each click auto-waits for its
 # gadget to exist and be actionable, so this is a path, not a timing guess.
 SCN_MENU_PATH = ("SINGLE", "Skirmish", "Start")
+SCN_MAPPING_NAMES = ("unmapped", "mapped")
+SCN_MAPPING_DEFAULT = 1     # see _scn_set_toggle's callers
+SCN_LOS_NAMES = ("permanent", "true", "circular")
 SCN_LAUNCH_TIMEOUT = 45.0   # `launch`'s own default: a cold prefix takes its time
 SCN_MENU_TIMEOUT = 30.0     # ...and a gadget that never appears is a different fault
 SCN_LOAD_TIMEOUT = 180.0    # ...and a map load is longer again
@@ -3364,6 +3377,28 @@ def _scn_player_flags(setup) -> list:
         spec = f"{p['slot']}:" + ":".join("" if f is None else str(f) for f in fields)
         flags.append(spec.rstrip(":"))
     return flags
+
+
+def _scn_set_toggle(inst: Instance, gadget: str, want: int, names, label: str) -> str:
+    """Put one of SKIRMISH's toggles where we want it before Start is clicked.
+
+    The gadget is the only thing that decides. TA persists `SkirmishMapping` and
+    `SkirmishLineOfSight` in the registry and tacli writes them, but the screen
+    still comes up at the stage its `.GUI` file gives it whatever those values
+    hold — measured 2026-09-02, and `SingleMapping` makes no difference either.
+
+    **Mapped by default** (`--mapping 0` opts out): a scenario places units by
+    world coordinate all over the map, and on an unmapped one the human — and
+    every screenshot — sees them through black. `--los` is left alone unless
+    asked for; stage 0 `Permanent` is the one that keeps explored ground in
+    full colour instead of greying it back out when nothing is looking.
+    """
+    snap, g = _ui_resolve(inst, gadget, SCN_MENU_TIMEOUT, wait=True)
+    was = g.get("stage")
+    if was == want:
+        return f"{label} is {names[want]}"
+    g = _ui_set_stage(inst, snap, g, want)
+    return f"{label} {names[was]} -> {names[g.get('stage')]}"
 
 
 def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
@@ -3461,12 +3496,14 @@ def cmd_scenario_load(args):
     res = tuple(args.res) if args.res else (tuple(setup["res"]) if setup["res"] else None)
     wanted_map = args.map or setup["map"]
     limit = args.unit_limit if args.unit_limit is not None else setup["unit_limit"]
+    mapping = SCN_MAPPING_DEFAULT if args.mapping is None else args.mapping
+    los = args.los
     launched = _launch(argparse.Namespace(
         name=args.name, json=True, force=False, res=res, map=wanted_map,
         unit_limit=limit, player=_scn_player_flags(setup) or None,
         display=args.display, slot=None, sound=None, intro=False, shield=None,
         dplay=None, free_dplay_port=False,
-        keep_dll=args.keep_dll, los=None, mapping=None, arg=[],
+        keep_dll=args.keep_dll, los=los, mapping=mapping, arg=[],
         timeout=args.launch_timeout, no_restore_pointer=False))
     if launched.get("already_running"):
         die(f"{args.name} is still running after being stopped "
@@ -3499,6 +3536,12 @@ def cmd_scenario_load(args):
         _after, how = _ui_click_gadget(inst, g, before, settle=not last)
         steps.append(f"clicked {_ui_label(g)} on {before.get('gui')}"
                      + (f" — {how}" if how else ""))
+        if selector == "Skirmish":
+            steps.append(_scn_set_toggle(inst, "Mapping", mapping,
+                                         SCN_MAPPING_NAMES, "map"))
+            if los is not None:
+                steps.append(_scn_set_toggle(inst, "LineOfSight", los,
+                                             SCN_LOS_NAMES, "line of sight"))
 
     alive = _scn_wait_live(inst, args.load_timeout)
     steps.append(f"live with {alive} unit{'' if alive == 1 else 's'}")
@@ -3646,7 +3689,10 @@ def build_parser():
                         "left alone, e.g. 0:1::3 sets only a colour). Metal/energy "
                         "are the skirmish starting resources, and set storage too.")
     l.add_argument("--los", type=int, help="SkirmishLineOfSight")
-    l.add_argument("--mapping", type=int, help="SkirmishMapping")
+    l.add_argument("--mapping", type=int,
+                   help="SkirmishMapping (TA's saved value; the SKIRMISH screen's "
+                        "own toggle is what decides a game — `scenario load` sets "
+                        "it, or `ui set Mapping 1` when driving by hand)")
     l.add_argument("--arg", action="append",
                    help="extra TotalA.exe switch, repeatable (e.g. --arg -t --arg 120); "
                         "see research/notes/cmdline-options.md")
@@ -3865,6 +3911,13 @@ def build_parser():
     scd.add_argument("--unit-limit", dest="unit_limit", type=int,
                      help="override setup.unit_limit")
     scd.add_argument("--display", default=None, help="X display")
+    scd.add_argument("--mapping", type=int, choices=(0, 1), default=None,
+                     help="SKIRMISH's Mapping toggle: 1 = Mapped (the default), "
+                          "0 = the terrain starts blacked out")
+    scd.add_argument("--los", type=int, choices=(0, 1, 2), default=None,
+                     help="SKIRMISH's Line of Sight toggle: 0 = Permanent (no grey "
+                          "fog over ground already seen), 1 = True, 2 = Circular. "
+                          "Left as the screen has it when not given")
     scd.add_argument("--keep-dll", action="store_true",
                      help="do not refresh ddraw.dll")
     scd.add_argument("--restart", action="store_true",
