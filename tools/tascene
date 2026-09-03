@@ -21,6 +21,7 @@ as a module the way tools/test_ta3do.py already loads it.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -149,6 +150,37 @@ class Tnt:
         w, h = struct.unpack_from("<2i", self.blob, self.p_minimap)
         px = self.blob[self.p_minimap + 8: self.p_minimap + 8 + w * h]
         return w, h, px
+
+    def tile_frames(self):
+        """{index: GafFrame} — the tiles as the unditherer wants them, one 32x32
+        image each. Per-tile is the whole story: a tile restored in isolation
+        differs from the same tile restored inside a 3x3 patch of its real map
+        neighbours by 2.03/255 on the edge ring and 0.45/255 inside it, so there
+        is deliberately no neighbour-context machinery here (tascene-design.md).
+        """
+        out = {}
+        for i in range(self.tiles):
+            src = self.p_tilegfx + i * TILE_BYTES
+            out[i] = ta3do.GafFrame(TILE_PX, TILE_PX,
+                                    bytearray(self.blob[src:src + TILE_BYTES]), None)
+        return out
+
+    def atlas_rgba(self, restored):
+        """The same layout as atlas(), painted from restored true colour."""
+        rows = (self.tiles + ATLAS_COLS - 1) // ATLAS_COLS
+        h = rows * TILE_PX
+        buf = bytearray(ATLAS_W * h * 4)
+        for i in range(self.tiles):
+            got = restored.get(i)
+            if not got:
+                continue
+            _w, _h, px = got
+            ox = (i % ATLAS_COLS) * TILE_PX
+            oy = (i // ATLAS_COLS) * TILE_PX
+            for r in range(TILE_PX):
+                o = ((oy + r) * ATLAS_W + ox) * 4
+                buf[o:o + TILE_PX * 4] = px[r * TILE_PX * 4:(r + 1) * TILE_PX * 4]
+        return ATLAS_W, h, bytes(buf)
 
 
 # --------------------------------------------------------------------------- TDF
@@ -357,6 +389,98 @@ SHADER_SET = [("tagpu_terr.c", {"terrain.vert": "VS", "terrain.frag": "FS"}),
               ("tagpu_native.c", {"unit.vert": "VS", "unit.frag": "FS"})]
 
 
+# --------------------------------------------------------------------------- undither
+
+# The exploration lane's textures. `ta3do.undither_frames` already drives the
+# unditherer's CLI (indexed PNG in, restored true-colour PNG out, one process
+# for a whole batch because loading the CNN costs far more than running it on a
+# 32x32 texture) — this is the cache and the batching around it.
+#
+# WHY A CACHE: the largest stock map is 5062 tiles at ~19 ms each, i.e. ~1.6
+# min, and a pack gets rebuilt every time the eye moves. The key is the frame's
+# own CONTENT plus the preset and the palette, not (map, preset): tiles recur
+# between maps and between builds, and a content key cannot go stale.
+
+CACHE_ENV = "TASCENE_CACHE"
+UNDITHER_BATCH = 256                  # frames per unditherer process
+CACHE_MAGIC = b"TSU1"
+
+
+def cache_root(explicit=None) -> Path:
+    if explicit:
+        return Path(explicit).expanduser()
+    env = os.environ.get(CACHE_ENV)
+    if env:
+        return Path(env).expanduser()
+    base = os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
+    return Path(base) / "tascene" / "undither"
+
+
+def _cache_key(frame, palette, preset) -> str:
+    h = hashlib.sha256()
+    h.update(preset.encode())
+    h.update(struct.pack("<3i", frame.width, frame.height,
+                         -1 if frame.transparent is None else frame.transparent))
+    h.update(bytes(frame.pixels))
+    for entry in palette:
+        h.update(bytes(entry[:3]))
+    return h.hexdigest()
+
+
+def _cache_read(path: Path):
+    try:
+        blob = path.read_bytes()
+    except OSError:
+        return None
+    if len(blob) < 8 or blob[:4] != CACHE_MAGIC:
+        return None
+    w, h = struct.unpack_from("<2H", blob, 4)
+    rgba = blob[8:]
+    if len(rgba) != w * h * 4:
+        return None                     # a truncated write: treat it as a miss
+    return (w, h, rgba)
+
+
+def _cache_write(path: Path, got):
+    w, h, rgba = got
+    tmp = path.with_suffix(".part")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(CACHE_MAGIC + struct.pack("<2H", w, h) + rgba)
+        tmp.replace(path)               # atomic: two builds can share one cache
+    except OSError:
+        pass                            # a cache that cannot be written is not fatal
+
+
+def undither(frames, palette, preset, cdir: Path, python=None, tally=None):
+    """{key: GafFrame} -> {key: (w, h, RGBA bytes)}, cached on disk by content."""
+    if not frames:
+        return {}
+    keys = {k: _cache_key(f, palette, preset) for k, f in frames.items()}
+    out, todo = {}, {}
+    for k, digest in keys.items():
+        got = _cache_read(cdir / preset / digest[:2] / f"{digest}.bin")
+        if got:
+            out[k] = got
+        else:
+            todo[k] = frames[k]
+    if tally is not None:
+        tally["frames"] = tally.get("frames", 0) + len(frames)
+        tally["cached"] = tally.get("cached", 0) + len(out)
+    order = sorted(todo)
+    for i in range(0, len(order), UNDITHER_BATCH):
+        batch = {k: todo[k] for k in order[i:i + UNDITHER_BATCH]}
+        # the keys become filenames inside undither_frames, so give it strings
+        # that survive its own sanitiser without colliding
+        tags = {f"f{n:05d}": k for n, k in enumerate(batch)}
+        got = ta3do.undither_frames({t: batch[k] for t, k in tags.items()},
+                                    palette, preset=preset, python=python)
+        for tag, k in tags.items():
+            out[k] = got[tag]
+            _cache_write(cdir / preset / keys[k][:2] / f"{keys[k]}.bin", got[tag])
+    return out
+
+
 # --------------------------------------------------------------------------- features
 
 # terrain-depth.md 3 / tagpu_feat.c: one anchor per 16-px cell, drawn as a GAF
@@ -380,7 +504,30 @@ def shelf_pack(frames, width=2048):
     return place, y + shelf
 
 
-def build_features(tnt, defs, gafs, out):
+def paint_rgba(frames, place, aw, ah, restore, path: Path):
+    """The R8 atlas's layout, painted from restored true colour. None if off.
+
+    The restorer keeps the colour key's alpha (it inpaints the key index before
+    filtering and writes RGBA), so the undithered lane gets its holes for free
+    and does not need the index compare the parity shaders do.
+    """
+    if restore is None or not frames:
+        return None
+    restored = restore(frames)
+    buf = bytearray(aw * ah * 4)
+    for key, (x, y) in place.items():
+        got = restored.get(key)
+        if not got:
+            continue
+        w, h, px = got
+        for r in range(min(h, ah - y)):
+            o = ((y + r) * aw + x) * 4
+            buf[o:o + w * 4] = px[r * w * 4:(r + 1) * w * 4]
+    path.write_bytes(bytes(buf))
+    return str(path.relative_to(path.parent.parent)).replace(os.sep, "/")
+
+
+def build_features(tnt, defs, gafs, out, restore=None):
     """Every feature the map anchors: sprite atlas, instance list, def table."""
     names = tnt.feature_names()
     anchors = tnt.feature_indices()
@@ -430,6 +577,8 @@ def build_features(tnt, defs, gafs, out):
 
     (out / "features").mkdir(parents=True, exist_ok=True)
     (out / "features/atlas.r8.bin").write_bytes(bytes(atlas))
+    rgba_file = paint_rgba(frames, place, aw, ah, restore,
+                           out / "features/atlas.rgba.bin")
     inst = bytearray()
     kept = 0
     for col, row, idx in anchors:
@@ -451,7 +600,8 @@ def build_features(tnt, defs, gafs, out):
             "body": rects.get(entry["body"]), "shadow": rects.get(entry["shadow"]),
         }
     return {"count": kept, "instances": "features/instances.bin",
-            "atlas": {"w": aw, "h": ah, "file": "features/atlas.r8.bin"},
+            "atlas": {"w": aw, "h": ah, "file": "features/atlas.r8.bin",
+                      "rgba": rgba_file},
             "defs": defs_out}
 
 
@@ -489,7 +639,7 @@ def shd_neutral(shd: bytes, palette):
 UNIT_VSTRIDE = 7                       # x,y,z, u,v, flatCol, colourKey
 
 
-def build_units(scenario, assets, out):
+def build_units(scenario, assets, out, restore=None):
     types = []
     for unit in scenario.get("units", []):
         if unit.get("type") and unit["type"].lower() not in types:
@@ -533,6 +683,8 @@ def build_units(scenario, assets, out):
 
     (out / "units").mkdir(parents=True, exist_ok=True)
     (out / "units/atlas.r8.bin").write_bytes(bytes(atlas))
+    rgba_file = paint_rgba(frames, place, aw, ah, restore,
+                           out / "units/atlas.rgba.bin")
 
     meshes = {}
     for name, (label, root, hidden) in models.items():
@@ -590,7 +742,8 @@ def build_units(scenario, assets, out):
         instances.append({"type": key, "pos": [int(unit["pos"][0]), int(unit["pos"][1])],
                           "facing": float(unit.get("facing", 0) or 0),
                           "id": unit.get("id")})
-    return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin"},
+    return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin",
+                      "rgba": rgba_file},
             "stride": UNIT_VSTRIDE, "meshes": meshes, "instances": instances}
 
 
@@ -678,10 +831,21 @@ def cmd_build(args):
     (out / "palette").mkdir(parents=True, exist_ok=True)
     (out / "shaders").mkdir(parents=True, exist_ok=True)
 
+    restore, tally = None, {}
+    if args.undither:
+        cdir = cache_root(args.cache_dir)
+        def restore(frames, _pal=palette, _p=args.undither, _c=cdir, _t=tally):
+            return undither(frames, _pal, _p, _c, args.undither_python, _t)
+
     aw, ah, atlas = tnt.atlas()
     (out / "terrain/atlas.r8.bin").write_bytes(atlas)
     (out / "terrain/tilemap.u16.bin").write_bytes(tnt.tilemap())
     (out / "terrain/height.r8.bin").write_bytes(tnt.heights())
+    terr_rgba = None
+    if restore:
+        _w, _h, rgba = tnt.atlas_rgba(restore(tnt.tile_frames()))
+        (out / "terrain/atlas.rgba.bin").write_bytes(rgba)
+        terr_rgba = "terrain/atlas.rgba.bin"
 
     pal = bytearray()
     for i in range(256):
@@ -697,8 +861,9 @@ def cmd_build(args):
 
     features = None
     if not args.no_features:
-        features = build_features(tnt, FeatureDefs(assets), GafBank(assets), out)
-    units = None if args.no_units else build_units(scenario, assets, out)
+        features = build_features(tnt, FeatureDefs(assets), GafBank(assets), out,
+                                  restore)
+    units = None if args.no_units else build_units(scenario, assets, out, restore)
 
     manifest = {
         "format": "ta-scene/1",
@@ -709,7 +874,7 @@ def cmd_build(args):
             "w16": tnt.w16, "h16": tnt.h16,
             "tilemap": {"w": tnt.mw, "h": tnt.mh, "file": "terrain/tilemap.u16.bin"},
             "atlas": {"w": aw, "h": ah, "cols": ATLAS_COLS, "tiles": tnt.tiles,
-                      "file": "terrain/atlas.r8.bin"},
+                      "file": "terrain/atlas.r8.bin", "rgba": terr_rgba},
             "height": {"w": tnt.w16, "h": tnt.h16, "file": "terrain/height.r8.bin"},
             "sealevel": tnt.sealevel,
         },
@@ -723,17 +888,28 @@ def cmd_build(args):
                   "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0, "rowStep": 4.0,
                   "unit0": 1.0, "shadowTall": 0.30, "shadowFlat": 0.03},
         "shaders": sorted(n for n in extract_shaders(SHADER_SET)),
+        # the exploration lane's own depth keys: with a HEIGHTFIELD the ground
+        # is per-row, so the parity lane's one global terrain key (and the flat
+        # features' global 0.40-0.50 band, which would then sit behind it) do
+        # not survive. Lane-local, and making no parity claim -- that is the
+        # point of the split (tascene-design.md, "Two lanes").
+        "labDepth": {"terrain": 0.10, "flat": 0.50, "tallCol": 0.9},
+        "undither": ({"preset": args.undither, "frames": tally.get("frames", 0),
+                      "cached": tally.get("cached", 0)} if args.undither else None),
     }
     (out / "scene.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
     nfeat = features["count"] if features else 0
     nunit = len(units["instances"]) if units else 0
+    undithered = (f", undithered {tally.get('frames', 0)} frames "
+                  f"({tally.get('cached', 0)} cached)") if args.undither else ""
     ta3do.out({"pack": str(out), "map": mapname, "tiles": tnt.tiles,
                "atlas": [aw, ah], "eye": eye, "res": res,
-               "features": nfeat, "units": nunit}, args.json,
+               "features": nfeat, "units": nunit,
+               "undither": manifest["undither"]}, args.json,
               human=(f"{out}: {mapname} {tnt.w16}x{tnt.h16} 16px cells, "
                      f"{tnt.tiles} tiles, atlas {aw}x{ah}, {nfeat} features, "
-                     f"{nunit} units, eye {eye[0]},{eye[1]}"))
+                     f"{nunit} units, eye {eye[0]},{eye[1]}{undithered}"))
 
 
 def scenario_centre(scenario, tnt):
@@ -759,6 +935,7 @@ def scenario_centre(scenario, tnt):
 # --------------------------------------------------------------------------- serve / shot
 
 VIEWER = HERE / "tascene-view.html"
+PRESETS = HERE / "tascene-presets.json"
 
 
 def cmd_serve(args):
@@ -779,10 +956,16 @@ def cmd_serve(args):
 
 
 def _stage_viewer(pack: Path):
-    """The viewer is served from the pack so fetches are same-origin."""
+    """The viewer and its presets are served from the pack: same-origin fetches.
+
+    Both are checked-in lab files, not pack contents — `pack/` is generated and
+    disposable, so nothing here may be the only copy of anything.
+    """
     if not VIEWER.exists():
         die(f"viewer missing: {VIEWER}")
     (pack / VIEWER.name).write_text(VIEWER.read_text())
+    if PRESETS.exists():
+        (pack / PRESETS.name).write_text(PRESETS.read_text())
 
 
 def cmd_shot(args):
@@ -980,6 +1163,17 @@ def main(argv=None):
                    help="skip unit meshes")
     b.add_argument("--no-features", action="store_true",
                    help="terrain only (a smaller pack, and a terrain-only diff)")
+    b.add_argument("--undither", nargs="?", const="learned", metavar="PRESET",
+                   choices=ta3do.UNDITHER_PRESETS,
+                   help="also pack true-colour atlases for the EXPLORATION lane "
+                        f"({' | '.join(ta3do.UNDITHER_PRESETS)}; default learned). "
+                        "The parity lane keeps its palette indices either way")
+    b.add_argument("--undither-python", dest="undither_python",
+                   help="interpreter that can import unditherer "
+                        "(default: the checkout's .venv-undither)")
+    b.add_argument("--cache-dir", dest="cache_dir",
+                   help=f"restored-frame cache (default ${CACHE_ENV} or "
+                        "~/.cache/tascene/undither)")
     b.add_argument("--json", action="store_true")
     b.set_defaults(func=cmd_build)
 
@@ -991,7 +1185,8 @@ def main(argv=None):
     t = sub.add_parser("shot", help="headless screenshot of a pack")
     t.add_argument("pack")
     t.add_argument("-o", "--output", required=True)
-    t.add_argument("--opts", help="viewer query string, e.g. 'pass=terrain&relief=off'")
+    t.add_argument("--opts", help="viewer query string, e.g. 'preset=relief' or "
+                                  "'a=engine&b=restored&wipe=0.5'")
     t.add_argument("--timeout", type=float, default=90.0)
     t.add_argument("--budget", type=int, default=8000,
                    help="chrome --virtual-time-budget in ms")
