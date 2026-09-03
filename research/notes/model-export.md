@@ -18,7 +18,10 @@ side by side on a locally served page.
 
 The format details all live in [file formats](file-formats.md); this page is about the
 pipeline, the decisions it had to make, and the two places the shipped archives disagreed
-with that page. Taking a glTF back the other way — into the running engine, posed by the
+with that page. The same stack is loaded as a **library** by
+[tascene](tascene-design.md) — the browser render lab imports this file for HPI/VFS, the
+palette, GAF decode, the 3DO parser and the PNG codec, and reuses its `Viewer` and headless
+Chrome shooter, so a change to the format code here lands in both. Taking a glTF back the other way — into the running engine, posed by the
 unit's own script — is [model import](model-import.md), and it is worth reading the axes
 section there before editing an exported model: the frame this page writes is a **mirror** of
 the file, while the frame the engine holds that same file in is a **180° yaw** of it, so the
@@ -149,6 +152,11 @@ Both found by reading real archives; the note tags them `[CLAIMED]`, and the cla
    (`colorsmd`, `colorsdk`, `colordk2` in `textures/logos.gaf`) use **105–110**. `ta3do` leaves
    the palette as shipped, so renders come out in the default ARM blue. [VERIFIED — pixel
    histogram of those three frames]
+   **Superseded, and the framing here was wrong too:** file-formats §3 has since established
+   that team colour is a **frame table**, not a band — an entry carries one separately painted
+   frame per player and the engine draws `frame[owner]`. "105–110" is **player 0's ramp seen
+   through frame 0**; frame 1 runs 202–204, frame 2 runs 80–83, and so on. Nothing rewrites a
+   band. [VERIFIED — per-frame histogram of every `logos.gaf` entry]
 
 ## What it covers
 
@@ -166,9 +174,13 @@ of ARMPW matches `unitpics/armpw.pcx` in silhouette, camo, grey arms and dark le
 - **Undithering does not touch geometry or the flat-colour faces.** A face with no texture is
   a single palette index and has nothing to undither; only sampled GAF frames go through the
   network. On ARMPW that is 13 of the 41 textured faces' worth of frames, against 40 flat ones.
-- **No team-colour remap.** The palette band above is left alone, so every ARM unit renders
-  blue and every CORE unit red-ish. A `--team-color` that rewrites 105–110 at atlas-build time
-  is a small addition.
+- **No owner colour.** A static exporter has to pick a frame and `ta3do` picks frame 0, so
+  every unit renders in **player 0's ramp** regardless of side. The small addition is
+  `--owner N` selecting `frame[owner]` (clamped) for multi-frame entries at atlas-build time —
+  **not** a palette rewrite: an earlier revision of this page proposed rewriting 105–110, which
+  followed from the band model that file-formats §3 disproved. 263 of the 608 stock models name
+  at least one team-colour entry, and the engine keys on the entry being multi-frame rather
+  than on the file — ARMCOM's torso takes its owner colour from `glow` in `armbldg.gaf`.
 - **No wreck/feature variants.** `armpw_dead.3do` exports fine, but nothing joins a unit to its
   wreckage or to `features/*`.
 - **Three.js comes from a CDN.** The viewer page needs network on first load. Vendoring the two

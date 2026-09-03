@@ -54,7 +54,7 @@ first, and the exploration lane is built on ground already proven.
 | Units | **Stock 3DO bind pose + the `gamedir/hires/<name>` replacement slot**, switchable per unit type — so the lab is also the authoring loop for G11's replacement pipeline. `ta3do`'s `Create`-`HIDE` scan keeps muzzle flares out, as in `render`. **No COB VM**: a second interpreter to keep correct, when the deferred live-snapshot path would give real poses far more cheaply. |
 | Shader sharing | **One-way extraction at export time.** `tascene` parses `static const char* VS/FS =` out of `tagpu_terr.c` / `tagpu_native.c` / `tagpu_feat.c`, expands the `TAGPU_GLSL_*` macros from `tagpu_glsl.h`, swaps the version header, and writes real `.glsl` into the pack. `tagpu` stays authoritative and the browser is provably never stale. Lab-only shaders live outside the pack, checked in; `pack/` is generated and gitignored. |
 | Tool layout | **New `tools/tascene`, importing `tools/ta3do` via `SourceFileLoader`** — the idiom `tools/test_ta3do.py` already uses. `ta3do` keeps its name and its meaning (one model, standard views); `tascene` owns maps, scenes and the lab. No refactor of a tested 1824-line tool. |
-| Options | **Every knob is a URL query parameter** (the `ta3do-view.html` house idiom, including `?shot=1` → hide UI, one frame, stamp `document.title`). A look is a link; the headless shooter takes the same string. An in-page **wipe** renders two parameter sets at once for direct comparison, and named looks live in a checked-in `presets.json`. |
+| Options | **Every knob is a URL query parameter** (the `ta3do-view.html` house idiom, including `?shot=1` → hide UI, one frame, stamp `document.title`). A look is a link; the headless shooter takes the same string. An in-page **wipe** renders two parameter sets at once for direct comparison, and named looks live in a checked-in `presets.json`. **The wipe and `presets.json` are landing 2 and are NOT built** — see "Using it" for the parameters that exist today. |
 | Pack encoding | **Raw `.bin` for anything whose bytes are semantic; PNG only for display RGB.** Browsers colour-manage and premultiply PNGs — in the parity lane the atlas texel *is* a palette index, so an image decode path would silently rewrite the data and the diff would measure nothing. Raw blobs go straight to `texImage2D`, byte-exact by construction. |
 | Map extent | **Whole map, no windowing or streaming.** Worst stock case (Two Continents) is a 2048×2560 R8 atlas, a 336×400 `u16` tilemap, a 672×800 R8 heightmap and ~5000 feature anchors; the relief mesh is 537k verts. Trivial for WebGL2. |
 | A/B | **One verb drives both sides.** `tascene ab <scenario>` loads the scenario in a real instance, holds the eye, `glshot`s, reads the live eye/viewport back through `roster`, builds the pack with those exact numbers, shoots the browser at the same resolution, diffs, and writes an `sbs.py` panel plus a mismatched-pixel count. It degrades to build+shot with no instance running. A comparison that only happens when someone remembers is a comparison that does not happen. |
@@ -140,18 +140,54 @@ Raw `.bin` for everything whose bytes are data, as decided: the atlases go
 straight to `texImage2D` with no image decode path, so nothing colour-manages
 or premultiplies a palette index.
 
-## CLI surface
+## Using it
 
+### The two-minute recipe
+
+```bash
+tools/tascene build scenarios/tascene-parity.json -o /tmp/pack   # ~7 s, no game needed
+tools/tascene serve /tmp/pack --port 8899                        # then open the URL it prints
 ```
-tascene build  <scenario.json> -o pack/     compile a scene from the archives
-tascene serve  pack/                        the lab, on localhost
-tascene shot   pack/ --opts '<query>' -o png/    headless, deterministic, one frame
-tascene ab     <scenario.json>              drive both sides, diff, write the panel
-```
+
+`serve` prints `http://127.0.0.1:<port>/tascene-view.html`. In the page: **drag** or the
+**arrow keys** pan the eye (shift = 256 px steps), and the bar along the bottom reports the
+map, the live eye, the grid the engine's algorithm produced, the sub-tile scroll fraction,
+the visible cell count, off-map cells, features and unit triangles.
+
+### The verbs
+
+| | |
+|---|---|
+| `build <scenario.json> -o <dir>` | compile a pack from the archives. `--map` / `--res` override `setup.map` / `setup.res`; `--eye X,Y` sets the viewport's top-left in world units (default: derived from the scenario's `camera`); `--no-features` and `--no-units` cut the pack down — `--no-features` is also how you get a terrain-only diff; `--json` for agents |
+| `serve <pack>` | the lab on loopback. `--port` (default: an ephemeral one) |
+| `shot <pack> -o <png>` | one deterministic headless frame. `--opts '<query>'` passes the viewer parameters below; `--timeout`, `--budget` (Chrome's `--virtual-time-budget`, ms); `--json` |
+| `ab <scenario.json>` | drive both sides and diff. `--name` the instance (default `tascene`), `--no-launch` to use one already running, `--eye X,Y` to pin the camera, `--los`/`--mapping` for the SKIRMISH fog toggles (defaults `0`/`1` = no fog), `--settle` seconds to wait for a roster with units and a real eye, `--opts`, `--launch-timeout`, `--json` |
+
+### Viewer query parameters
+
+The page's whole state is the query string — that is the point: a look is a link, and `shot
+--opts` takes the same string.
+
+| Parameter | Meaning |
+|---|---|
+| `shot=1` | hide the UI, render exactly one frame, then set `document.title` to `tascene-ready` so a screenshotter knows it is done |
+| `pass=<list>` | comma-separated passes to draw: `terrain`, `features`, `units`. Default: every pass the pack carries. `pass=terrain` is the terrain-only render the parity split uses |
+| `eye=<x,y>` | override the pack's eye (viewport top-left, world units) |
+| `ss=<n>` | supersample factor for the offscreen (default 1) |
+| `feat=<what>` | features: `both` (default), `body`, `shadow`. A debug split, because "is the shadow drawing at all" is not eye-answerable — it was 152 133 differing pixels, i.e. yes |
 
 `serve` and `shot` reuse `ta3do`'s existing `Viewer` (`ThreadingHTTPServer`) and `shoot`
-(`--headless=new` Chrome on a private X display, ANGLE/SwiftShader, waiting on
-`document.title`) rather than growing a second copy.
+(`--headless=new` Chrome on a private X display, ANGLE/SwiftShader) rather than growing a
+second copy.
+
+### One rule for anyone editing the viewer
+
+**The coordinate convention is tagpu's, deliberately.** The extracted vertex shader maps game
+`py` 0 to NDC −1, so the offscreen's row 0 is the game frame's *top* row and `gl_FragCoord.xy`
+*is* the game-frame pixel — which is what the fog and scaffold rules in `tagpu_glsl.h` assume.
+The page renders into an FBO exactly as tagpu does and flips only in the final composite to the
+canvas. Do not "fix" the flip in the vertex shader: it would silently invert every screen-space
+rule the shaders carry.
 
 ---
 
@@ -248,15 +284,18 @@ Two unit-level gaps the A/B exposed, neither a placement error:
   own `roster screen=(512,384)`, and the TNT height at that cell (**96**) equals
   the engine's runtime height — so the heightmap read and the
   `worldZ − h/2` projection are both right.
-- **Our commander is visibly brighter than the engine's, and the cause is NOT
-  established.** It is *not* team colour: team colour is a **GAF frame table**,
-  not a palette-band remap — a multi-frame entry carries one ramp per player and
-  the engine picks `frame[owner]` (file-formats.md §3). tascene takes frame 0,
-  which *is* player 0's ramp, and the fixture's commander is owner 0. So frame
-  selection is right here and the brightness is something else — most likely the
-  shade row. Unmeasured.
-- **Team colour is still a real gap for other players' units**: frame 0 for
-  everyone means an owner-1 unit wears owner 0's colours. `ta3do` exports frame 0
+- **Our commander is visibly brighter than the engine's.** Team colour is a
+  **GAF frame table**, not a palette-band remap: a multi-frame entry carries one
+  *separately painted* frame per player and the engine draws `frame[owner]`
+  (file-formats.md §3, live-verified). tascene takes frame 0 for every entry.
+  The suspect is named there: **ARMCOM's torso takes its owner colour from
+  `glow` — 8 frames, in `armbldg.gaf`** — and `glow` is exactly the entry whose
+  yellow faces this build already had trouble with. Frame 0 *is* player 0's ramp
+  and the fixture's commander is owner 0, so this should agree; it visibly does
+  not. **Named mechanism, unmeasured cause** — a per-frame histogram of `glow`
+  against the engine's pixels would settle it.
+- **Team colour is a certain gap for other players' units**: frame 0 for
+  everyone means an owner-1 unit wears owner 0's colours. `ta3do` takes frame 0
   too, so this is shared, not a tascene regression.
 - **Yaw is still unverified.** The fixture places the commander at facing 90; a
   facing-45 fixture is what would actually settle `facing + 180`.
