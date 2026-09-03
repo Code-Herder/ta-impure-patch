@@ -16,6 +16,37 @@ Chains together the common "ship this worktree" flow:
 
 If any step produces an unexpected state (conflicts, non-fast-forward, detached HEAD, failing builds, etc.) **STOP** and report the state. Never use `--force`, `--no-verify`, `reset --hard`, or rewrite history.
 
+## Step 0 — Review before you commit (engine / DLL changes only)
+
+**Run `/code-review medium` on the working tree BEFORE Step 1**, when the change touches:
+
+- `tagpu/ddraw/src/**` or `tagpu/ddraw/inc/**` (the fork and our modules), or
+- `tagpu/src/**` (tagpu.dll), or
+- `tools/tacli` (it drives every session; a bug here costs hours).
+
+**Skip it** — and say so in the final summary — when the diff is only docs
+(`research/notes/**`, `*.md`), scenarios (`scenarios/*.json`), comments, or a handful of lines
+with no new state, no new engine patch and no new GL object. A review costs roughly 100k tokens;
+it is worth that for a real change and not for a typo.
+
+**Use `high` instead of `medium`** when the change writes engine or user state, adds or moves a
+byte patch, or touches anything sim-adjacent. That is the class that ships silently: the review
+that caught `ScrollSpeed` being persisted into the player's registry — where it would have
+compounded across launches — was exactly this case.
+
+**Before the commit, not after it**, so the fixes fold into the same commit instead of becoming
+follow-ups.
+
+**Verify every finding against the code (and the decompile) before acting on it.** The hit rate
+on this codebase is high but not perfect — on the G13e diff, 2 of 11 findings were HIGH and real
+(a dropped button *release* left the engine and the shield's virtual key state holding the button
+forever; `ScrollSpeed` corrupting the registry), several MEDIUMs were real, and about a third
+were overstated or described existing intentional behaviour as a bug. Fix what is real, say what
+you rejected and why. **Do not use `--fix`** — it applies the wrong ones too.
+
+Re-run the review only if the fixes were themselves substantial. One review per landing, not per
+commit.
+
 ## Step 1 — Commit local changes
 
 Run these in parallel:
