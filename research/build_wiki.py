@@ -26,6 +26,7 @@ SUBTITLE = "How the Total Annihilation community adds engine features to a close
 PAGES = [
     ("project-map",                "Project map",                 "Overview"),
     ("roadmap",                    "GPU renderer roadmap",        "Overview"),
+    ("gpu-status",                 "GPU status, hooks & limits",  "Overview"),
     ("field-notes",                "Field notes & gotchas",       "Overview"),
 
     ("frame-composition",          "Frame composition (G3)",      "Renderer"),

@@ -760,7 +760,7 @@ let through.
 **G13e turned that measurement into a mechanism.** Because the cursor is the *only*
 engine pixel left inside the viewport, the composite can MOVE it: at zoom `z` the
 engine draws its cursor where it thinks the mouse is, which is the unzoomed position
-`u` the input path feeds it ([tagpu_zoom.h](../../tagpu/ddraw/inc/tagpu_zoom.h)), and
+`u` the input path feeds it (`tagpu_zoom.h`), and
 the composite paints the texels of a 128×128 box around `u` at the box around the real
 pointer `s` instead, letting our world cover the box at `u`. No capture, no new call
 site — the composite is already the code that decides, per pixel, whether the viewport

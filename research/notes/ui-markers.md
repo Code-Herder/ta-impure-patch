@@ -454,7 +454,7 @@ buffer around a negative origin — possible, and deliberately not done here.
 it is routed to the screen-space UI and does nothing at all (measured). So at zoom < 1
 the ring of world outside the 1× viewport is **display-only**: the captured markers stop
 there, and input stops there too — a click in it is *dropped* rather than landed on the
-wrong world point ([tagpu_zoom.h](../../tagpu/ddraw/inc/tagpu_zoom.h)). It is one
+wrong world point (`tagpu_zoom.h`). It is one
 boundary, not two, and one fix would close all of it: give the engine a wider addressable
 rect, or shift its eye for the duration of a click. Still only worth doing if zoom-out
 becomes a real play mode rather than a demo.
