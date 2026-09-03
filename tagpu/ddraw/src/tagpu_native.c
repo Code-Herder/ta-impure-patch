@@ -876,7 +876,7 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
         unsigned char pflags = *(const unsigned char*)(pr + P_FLAGS);
         if (!(pflags & 1)) continue;
         /* the engine's slant raster 0x45A610 takes a piece only when flag
-           bit1 is set as well (test cl,1 / test cl,2 at 0x45A64C..0x45A658;
+           bit1 is set as well (test cl,1 at 0x45A64C, test cl,2 at 0x45A655;
            its AABB pass 0x45A510 tests bit0 alone) -- a wind generator's mast
            and rotor carry bit0 only and cast nothing in the engine */
         if (slant && !(pflags & 2)) continue;

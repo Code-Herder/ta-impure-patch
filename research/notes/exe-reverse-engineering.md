@@ -455,6 +455,12 @@ and the COMPLETED branch is the engine's own path for every non-structure unit; 
 writes nothing. Nothing else reads `Object3do+0x14`; it is simply never allocated. Without
 `all` the bytes are left alone and structures keep the engine's cached shadow.
 
+**The two rasterisers `owndraw` already detours**, for completeness of this map: `0x459830`
+(opaque, `thiscall`, `ret 0x10`; called from the builder `0x45878B` and from the blit's
+build-state path `0x459641`) and `0x459C70` (nanoframe, called from the builder `0x458765`).
+Both open `mov eax,imm32` (5 bytes) before `call __chkstk`, which is the detour boundary;
+evidence and the classify-then-`ret 0x10` stub: `own-the-draw.md`, `tagpu_owndraw.c`.
+
 **Negative results.** `[esp+0x42]` is compared with sea level but was not traced back to its
 producer (`[esp+0x14]` is the altitude the waterline code subtracts; `+0x42` is a different
 word). The body punch-out `0x4B9D70(body, scratch, 5, 0)` inside `0x45A790` was read, not
