@@ -17,14 +17,26 @@ in progress. **Landing** — fast-forwarding local `main` — is the act with a 
 
 **A human declares a feature ready for review. Never launch the review off your own judgement.**
 When the work looks finished, stop: say what was built and how it was verified, and ask. Their
-"ready" — or an explicit "review it" — is the trigger. Until then keep committing to the branch
-and leave it there; an unasked-for review is not a free extra check, it is ~100k tokens spent
-grading work the human may not consider done, and spent again after they change it.
+"ready" — or an explicit "review it", or **invoking `/git_commit_merge_wt`** — is the trigger.
+Until then keep committing to the branch and leave it there; an unasked-for review is not a free
+extra check, it is ~100k tokens spent grading work the human may not consider done, and spent
+again after they change it.
 
-Once approved, once per landing (not per commit), on the accumulated branch diff, run
-**`/code-review medium`** when the landing touches **`tagpu/ddraw/**`**, **`tagpu/src/**`** or
+Once approved, once per landing (not per commit), on the accumulated branch diff, review at
+**`medium`** when the landing touches **`tagpu/ddraw/**`**, **`tagpu/src/**`** or
 **`tools/tacli`** — `high` if it writes engine or user state, adds or moves a byte patch, or is
-sim-adjacent. Verify each finding against the code before acting on it, and never use `--fix`.
+sim-adjacent. Verify each finding against the code before acting on it, and never apply findings
+blindly.
+
+**Reviews run on Opus (Opus 5), not on the session model.** The built-in `/code-review` cannot
+do that: it launches as a fork of the session, and a fork always runs on the session's model
+(measured 2026-09-03 — it started on Fable and had to be stopped). So the review is a
+**general-purpose `Agent` with `model: "opus"`**, read-only, given the brief in
+`.claude/commands/git_commit_merge_wt.md` **Step 5**: the worktree path, the range
+`main...HEAD`, what the change does in engine terms, the binary and the `objdump` command to
+verify addresses against, the risky spots, and the report format. Record it afterwards as a
+`landing-review:` git note on the reviewed commit — that note is how the landing command knows
+the gate was met.
 
 Skip it for docs, scenarios, comments, or a few lines with no new state, no new engine patch and
 no new GL object — a review costs ~100k tokens and is not worth that for a typo. Batching
@@ -70,7 +82,7 @@ lands with it.
   It must end `built N pages + index`; then grep the generated `research/site/*.html` for the
   section you touched. `research/site/` is gitignored, so the only cost is the run.
 
-**Commit the docs BEFORE running `/code-review`,** so the claims are in the diff it reads — the
+**Commit the docs BEFORE running the review,** so the claims are in the diff it reads — the
 reviewer disassembles, and it earns this: on the G13g landing it caught a documentation overclaim
 (the scroll target is *not* "a copy taken after every clamp call") that three files repeated.
 A docs-only landing still skips the review; docs riding with code do not.
@@ -80,8 +92,10 @@ rounds against a skill note claiming edge scroll "does not fire under injected i
 on the exact edge pixel — and the session's most reused new page was the functions we only
 *read*: the camera stepper, the scroll poll, a clamp with no callers at all.
 
-Full conditions and rationale: `.claude/commands/git_commit_merge_wt.md` **Step 0**, which is
-where all three rules are enforced. These lines exist so they still apply when landing by hand.
+Full conditions and rationale: `.claude/commands/git_commit_merge_wt.md`, which **checks each
+gate and runs whichever is missing** — commit, merge main in, build, the documentation pass
+(Step 4), the Opus review (Step 5), then the fast-forward. These lines exist so the rules still
+apply when landing by hand.
 
 ## Python tooling: install what you need, into the shared venv
 
