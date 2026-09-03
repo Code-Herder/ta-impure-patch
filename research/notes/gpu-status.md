@@ -27,7 +27,7 @@ moved by the composite too.
 | Features (trees, rocks, splats, wreckage) | G13a | `featown`: one detour on the feature leaf |
 | Terrain tiles + the fog overlay | G13b | `terrown`: two detours; the terrain skip path key-fills the viewport |
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
-| Health bars, order markers, group digits, build cursor, band box, selection rect | G13d | `markown`: 6 call-site redirects + 1 detour; bars re-drawn, the rest captured and replayed |
+| Health bars, order markers, group digits, build cursor, band box, selection rect | G13d | `markown`: 8 call-site redirects + 1 detour; bars re-drawn, the rest captured and replayed. The waypoint star's two sites are wrapped with an identity blend LUT so it composites opaque instead of against the fill key (§2.2) |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e | `tagpu_zoom.c` + the composite |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + 1 more + a 3-site byte patch, all behind `vpwide.on` |
 | **Chat, dialogs, side panel, minimap, top bar** | **— never** | screen-space and correct at 1:1 at any zoom; they come through the composite key by design |
@@ -142,8 +142,18 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x469D2C` | `call 0x471F90(ctx,9)` — hook 9, closes window A | call-site redirect |
 | `0x469EC5` | `call 0x4BF8C0` — build-cursor rect (window B) | call-site redirect |
 | `0x469F1E` | `call 0x4BF8C0` — drag band box (window B) | call-site redirect |
+| `0x439516` | `call 0x439740` — target sprite, from the route-dot drawer | call-site redirect; brackets the call with an identity blend LUT |
+| `0x439C7D` | `call 0x439740` — target sprite, from the walker's bit-3 dispatch | call-site redirect, same wrapper |
 | `0x46A430` | `DrawHealthBars` (`ret 0x10`) | prologue detour, 5 stolen — bars are **re-drawn**, not captured |
 | `0x4C1B80` | `KeyboardHotkeySampler(id)` (`ret 4`) | *called by us* — we sample the engine's own SHIFT gate (`0xF9`) rather than reading the key |
+
+**Why the star needs a wrapper at all.** `0x439740` is the only alpha-composited marker: it
+reads the destination pixel through `tab[(src<<8)|dst]`, and inside our viewport the
+destination is the fill key, so it blended the waypoint star with palette 254's bright cyan
+and rendered it teal. Wrapping the two call sites with an identity LUT turns that one
+composite into a copy. The swap is scoped to the **call**, never the frame, because
+`[globals+0xC0]` owns a heap buffer the engine allocates, frees and refills — full
+derivation in `exe-reverse-engineering.md` §"The blend LUT and the marker composites".
 
 ### 2.3 Zoom (`tagpu_zoom.c`, `zoom.on`)
 
@@ -152,8 +162,11 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x41C426` | `call 0x466B70` — minimap view rect, eye clamped at top | call-site redirect; the engine fills the rect, we rescale it by 1/z |
 | `0x41C442` | `call 0x466B70` — ...and at bottom | call-site redirect |
 | `0x430FAE` | `call 0x4B6A50` — the one site that persists `ScrollSpeed` | call-site redirect; substitutes the player's own value so our scaling can never reach the registry |
+| `0x41C3C0` | the eye clamp — `eye = clamp(eye, 0, map − W)`, plus the minimap rect as its last act | **`leaf_call` detour, 5 stolen**, on a flag raised only while zoom > 1; our replacement widens the range and calls the same minimap wrapper |
+| `0x498EF9` | `call 0x484B50` — the `GetTPosition` inside the mouse → world conversion | call-site redirect; clamps the world point to the map, a no-op for any eye the engine's own bounds can produce |
 
-**The level comes from two levers, and neither is an engine patch.** `tagpu_zoom.txt` is the
+**The camera's range follows the zoom (§2.3c).** **The level comes from two levers, and
+neither is an engine patch.** `tagpu_zoom.txt` is the
 scripted one and **wins whenever it exists**; the **mouse wheel** is the player's, and takes
 over the moment the file is gone. The wheel needs nothing from the engine because the engine
 never wanted it: TA's window procedure dispatches only `0x200..0x206` through its jump table
@@ -205,6 +218,83 @@ why the `0x498DA0` stub takes `g_ddraw.cursor` rather than trusting the engine c
 0.5× the range `[0,128)` is reached both by a ring pointer and by a pointer on the panel, and
 without the true pointer to settle it a click in the world lands in the minimap's click rect.
 
+### 2.3c The camera's range at zoom > 1 (`tagpu_zoom.c`, `zoom.on`)
+
+The mirror of §2.3b, at the other end of the lever, and it needed no new arm file. `0x41C3C0`
+clamps the eye to `[0, map − W]`, W being the 1× viewport size: the range that puts the
+**viewport's** own edges exactly on the map's. At zoom `z` the view is still centred on
+`eye + W/2` but is only `W/z` wide, so those bounds stop the visible window
+`W/2 − W/(2z)` short of the map on **every** side — at 1024×768 (W=896, H=704) that is
+224 px at 2×, and 392 px at 8×. Zoomed in, the edges and corners of the map could not be
+reached at all, and the camera read as though it were being pushed back off them.
+
+The range the zoom needs is the engine's own, widened by exactly that shortfall:
+
+```
+d   = (W/2)(1 − 1/z)                    0 at 1×, W/2 in the limit
+eye ∈ [−d, (map − W) + d]
+```
+
+which is the same arithmetic the transform uses about the same centre, so the two cannot
+disagree at the edges: the world at the viewport's left edge is `eye + d`, which is 0 exactly
+when `eye = −d`. **Everything that reads the EYE follows for free, because the eye is the
+engine's camera** — the minimap's view box, the minimap click jump, the mouse and edge scroll,
+the HotUnits cull and our own passes needed nothing new.
+
+**What is not covered, and the scroll target is where the line falls.** `main+0x14327`/`+0x1432B`
+is where the camera is *heading*, and the per-frame stepper `0x41CA30` eases the eye toward it.
+Paths that set the eye and copy it into the target afterwards (`0x41C574`, `0x41CDB0`, the
+scroll `0x41D037`) reach the widened range through the detour. Three sites instead compute the
+target and clamp it **inline** against `[0, map − W]`, never calling `0x41C3C0` for it —
+`0x41C4C0` (smooth `SetCamera`), `0x41C7F7` (smooth centre-on) and `0x41CAF7` (the per-frame
+camera **follow**, which recomputes the target from the tracked unit every frame). The stepper
+walks the eye to that target and our wider clamp leaves it there, so **those paths still stop
+`d` short of a map edge**. Nothing fights and nothing churns — the eye arrives at a target
+inside our range and both stop — it is simply the old behaviour where the detour does not sit.
+Closing it means widening three inline clamps in the middle of the camera module.
+
+**And the right-edge mouse scroll cannot fire at zoom > 1 — only the right one.** Found while
+documenting this, not by the change: TA's scroll poll (`0x41CF10`, mapped in
+[exe RE](exe-reverse-engineering.html)) fires on *hotkey* or *pointer on an exact screen edge*,
+and the mouse half is an **equality on the outermost pixel** — `x == 0`, `y == 0`,
+`x == screenW − 1`, `y == screenH − 1` — read through `GetCursorPos`, which
+`fake_GetCursorPos` answers with the **unzoomed** `u`. Three of those four screen edges lie
+*outside* the viewport rect (`L=128`, `T=32`, `B=screenH−33`), so the transform passes them
+through as identity and they still scroll. The screen's right column, though, *is* the
+viewport's right column, so it is contracted toward the centre: measured at 2× on 1024×768 a
+pointer at `x=1023` reaches the engine as **800**, and `x == 1023` becomes unsatisfiable. So
+zoomed in, scrolling right needs the keyboard (`0xF6`) or the minimap. The narrow fix is to
+keep `tagpu_zoom_to_engine_draw()` at identity on the outermost screen column and row, which
+would also put the drawn cursor there — G13e's cursor path, so it wants its own verification
+rather than a quiet ride-along on this change.
+
+**The flag is what keeps 1× byte-identical.** The detour is a `leaf_call` on a flag raised
+only while a zoomed-**in** world is live; with it clear the engine's own function runs
+verbatim, *including the two minimap-rect redirects inside it*. `tagpu_zoomedge.off` in the
+gamedir clears it live and walks the eye back onto the 1× range.
+
+**Two things an off-map eye needed.** The engine clamps the eye only when *it* moves the
+camera, so an eye parked at −d at 4× would sit there until the next scroll — a zoom-out at a
+map edge would show the void past it. `apply_eye_range()` re-applies the same clamp from the
+render thread once a frame and writes only when the eye is actually outside the range in
+force (same standing as the `ScrollSpeed` write: local camera state no other machine sees).
+**It must clamp the scroll target with it**: that correction has no caller to copy the eye
+into the target afterwards, and the stepper acts on any disagreement — `0x41CB5F` sets the
+camera-moved bit and `0x41CB6B` **clears `main+0x14281` bit 3, the fog grid's is-current
+flag**, then halves the distance and hands the result to the (no longer widened) engine clamp,
+which puts it straight back. Left alone that is a permanent per-frame fog-grid rebuild after
+any zoom-out from a map edge, on exactly the path `97e518f` had to guard against a crash.
+Clamping the target rather than assigning the eye to it is what preserves a camera move that
+is genuinely in flight: such a target is inside `[0, map − W]` already, so inside ours too.
+And `0x498DA0` hands a pointer **outside** the viewport the world point
+`eye + clamp(pos, L, R) − L`, which on the side panel is `eye` itself and under the bottom bar
+is `eye + H − 1`: on the map for every eye the engine can produce, off it for ours, and the
+chain from there is the `GetGridPosPLOT` → NULL → `GetGridPosFeature` crash vpwide's own stub
+carries a clamp for. So the `GetTPosition` call that starts it is redirected and the world
+point clamped. A pointer **inside** the viewport needs none of this: at `z > 1` the transform
+maps the whole viewport into `[L+d, R−d]`, so the world it names is `[0, map−1]` at either
+extreme of the range and inside it everywhere else.
+
 ### 2.4 Tooling (not part of the render path)
 
 | VA | What it is | Module (arm file) |
@@ -215,26 +305,59 @@ without the true pointer to settle it a click in the world lands in the minimap'
 | `0x4969D2` | the sim tick site (5 stolen) | `scenario` — applies a situation on the game thread |
 | `0x485F50` `0x4864B0` `0x422DD0` `0x4224B0` `0x481550` `0x423C50` `0x43F0E0` `0x43AFC0` | `CreateUnit`, `KillUnit`, `FeatureName2ID`, `LoadFeature`, `GetGridPosPLOT`, `SpawnFeatureOnMap`, `ScriptAction_Type2Index`, `NewMainOrder2Unit` | `scenario` — *called by us*, never patched |
 
-### 2.5 State we read, and the two fields we write
+**The window title** (`tagpu_title.c`) patches no engine address at all: it is a
+`SetWindowTextA` from inside `dd_SetCooperativeLevel`, composing `"<stock title> - <label>"`
+from `tagpu_title.txt` (tacli writes `wt:<branch> | tacli:<instance>` there by default; how
+the label is *composed* is tacli's business, the DLL only appends it). Listed here only
+so the module is accounted for — it reads no engine state and writes none. Placed after the
+`GetWindowText` into `g_ddraw.title`, so cnc-ddraw's own per-game `strcmp`s and
+`screenshot.c`'s filenames still see the unsuffixed name.
+
+### 2.5 State we read, and the fields we write
 
 | Where | What |
 |---|---|
 | `0x511DE8` | `TAdynmemStruct**` — the root of everything below |
 | `main+0x14357` / `+0x1435B` | unit array begin/end, stride `0x118` |
 | `main+0x1435F` / `+0x14367` | HotUnits ids / count (culled to whatever the viewport rect says — the unzoomed one, or the widened one under `vpwide`) |
-| `main+0x1431F` / `+0x14323` | eyeX / eyeY |
+| `main+0x1431F` / `+0x14323` | eyeX / eyeY. **WRITTEN**, and only ever *clamped*: our replacement of the engine's own clamp widens its range to what the zoom shows (§2.3c), and `apply_eye_range()` re-applies the same bounds once a frame so a zoom-out cannot leave the eye past them. Sim-neutral for the same reason `ScrollSpeed` is |
+| `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA30` eases the eye toward it. **WRITTEN by `apply_eye_range()` only**, clamped to the same range as the eye and for the same frame, because a disagreement between the two costs the fog grid its is-current flag every frame (§2.3c). The replacement clamp deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
+| `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so `apply_eye_range()` recomputes it through the same wrapper on the frames it corrects the eye. The one **render-thread** write of it; a game thread drawing the minimap in that instant sees a one-frame torn box, the same standing as the published view |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live** (§2.3b); every pass that means the true 1× rect must call `tagpu_vpwide_true_rect()` rather than read the field |
-| `main+0x2C76` | mouse position |
+| `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) |
 | `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index) |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F2F` bit2 | `SelBoxes` |
 | `main+0x142E7..0x142ED` | minimap rect on screen |
 | `main+0x1423B` / `+0x1423F` | view size in map cells (the minimap rect's size comes from here) |
-| **`main+0x1434D`** | **`ScrollSpeed` — the ONE engine field the stack writes.** Sim-neutral (a local camera preference no other machine ever sees), driven at base/z, and its save path is guarded (§2.3) |
+| **`main+0x1434D`** | **`ScrollSpeed`** — sim-neutral (a local camera preference no other machine ever sees), driven at base/z, and its save path is guarded (§2.3) |
+| **`*(0x51FBD0) + 0xC0`** | **the blend LUT pointer. WRITTEN, transiently, and this is the one field we write that is NOT in `main`.** Swapped to an identity table across the target sprite's draw and restored on return, so the star composites as a copy (§2.2). Game thread only, bracketed around one call that always returns, restored only if ours is still installed, with a belt-and-braces restore at hook 8. It must never be left installed across a frame: `0x4BA5C0` allocates that buffer, `0x4BA5F0` frees it and `0x4BAAD0` refills 64 KB through the pointer, so a stale one of ours would be clobbered or cross-heap-freed |
 
 ---
 
 ## 3. Known limits — what is still wrong, and what closing it needs
+
+### 3.0 Closed since the last pass: the interior cracks at zoom-out
+
+**Reproduced, root-caused and fixed** ([terrain & depth](terrain-depth.html) §7.6, the *fifth*
+mode). Two artefacts, one cause: at zoom 0.25 a quad's far edge can land exactly on a fragment
+centre, and that fragment's `u`/`v` interpolates to exactly `u1`/`v1`, which `GL_NEAREST` reads as
+the first texel of the **next atlas cell** — an unrelated tile for terrain (the blue hairlines
+along tile edges) and the packer's unwritten gutter for a GAF sprite (the black hairline down the
+right of every tree). It is **not** a key leak, which is why the key-tint detector used for 350+
+frames of sweeping was blind to it by construction.
+
+Fixed by a 1-texel replicated border on all four sides of every atlas cell (terrain now on a
+34-texel pitch, 2176×2720; GAF frames advance `w+2`/`h+2`) **plus** `TAGPU_EDGE_NUDGE`, a 1/32
+game-screen-pixel offset in the terrain vertex shader — the border alone leaves the fragment
+reading a repeated row that is out of phase with the minified tile's sampling cadence, which on
+dithered tile art is still a visible line (measured: 1.92× → 1.86×, i.e. no help). Verified flat
+(1.03–1.13× against a 1.92–2.05× baseline) at every camera phase, `ss=1` and `ss=2`, 1024×768 and
+1920×1080, across ten zoom levels; **1× output is bit-identical** to a build without the change.
+
+The border is also what a filtered sampler will need when the atlases stop being `GL_NEAREST`,
+which is why it is on all four sides rather than only the two that close today's bug.
+
 
 Ranked by how much they cost a player.
 

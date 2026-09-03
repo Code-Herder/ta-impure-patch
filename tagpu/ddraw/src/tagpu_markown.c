@@ -1,4 +1,4 @@
-/* tagpu_markown.c — the four call-site redirects and the capture buffers.
+/* tagpu_markown.c — the eight call-site redirects and the capture buffers.
    See tagpu_markown.h for what this owns and why it is a pointer swap. */
 
 #include <windows.h>
@@ -25,6 +25,22 @@
 #define PASS_TRANSP_VA   0x004BF8C0u   /* DrawTranspRectangle, stdcall, ret 0x0C  */
 #define LEAF_BARS_VA     0x0046A430u   /* DrawHealthBars, stdcall, ret 0x10       */
 #define HOTKEY_VA        0x004C1B80u   /* KeyboardHotkeySampler(id), ret 4        */
+/* The graphics globals block (`0x4B6220` is just `mov eax,ds:0x51FBD0; ret`)
+   and, inside it, the pointer to the 64 KB blend LUT every alpha composite
+   runs through: `out = tab[(src << 8) | dst]`, the inner loop at
+   `0x4CBF99..0x4CBFAC` (source texels equal to the sprite's transparent index
+   are skipped before the lookup). [BINARY-VERIFIED] */
+#define GFX_GLOBALS_PP   0x0051FBD0u
+#define GFX_ALPHATAB     0xC0
+/* the target-sprite drawer and its only two `E8` callers (`0x4394E0` delegates
+   to it, `0x439B30` dispatches bit 3 to it); stdcall(ctx, view, node, pos,
+   flag), ret 0x14. Its address is ALSO in `.rdata` 19 times, as the `+8` field
+   of the 25-byte order-descriptor records — a field this build never reads, so
+   the two redirects are the whole path today and would be bypassed silently if
+   it were ever brought into use. [BINARY-VERIFIED] */
+#define SITE_TSPRITE1_VA 0x00439516u
+#define SITE_TSPRITE2_VA 0x00439C7Du
+#define LEAF_TSPRITE_VA  0x00439740u
 
 /* `83 EC 10 | 53 | 55` = sub esp,0x10; push ebx; push ebp — five
    position-independent bytes ending on an instruction boundary (0x46A435) */
@@ -55,6 +71,57 @@ static const unsigned char BARS_STOLEN[5] = { 0x83, 0xEC, 0x10, 0x53, 0x55 };
 
 #define SHIFT_HOTKEY 0xF9        /* the id the engine samples for the markers */
 
+/* WHY THE ENGINE'S BLEND LUT IS REPLACED ACROSS ONE CALL.
+
+   The order pass's target sprite — the pulsing star at a move/attack waypoint,
+   drawn by `0x439740` through `AlphaCompsteBuf2OFFScreen 0x4B8500` — is
+   ALPHA-COMPOSITED: it reads the destination pixel and looks the pair up in the
+   LUT above. In stock TA that destination is the terrain, so the star comes out
+   blended with the ground (olive over grass). In our frame the destination is
+   the fill key, because terrown replaced the terrain blit with it — so the star
+   came out blended with palette 254, a bright cyan, and read as washed out.
+
+   markown.h used to argue this was harmless, on the grounds that the key is
+   "exactly what they already read out of the engine's frame today". That is
+   true of what the primitive READS and wrong about what it WRITES: the blend
+   result is a function of the destination, so a key destination gives a keyed
+   colour. Measured against stock: star olive vs ours teal, 17.6% of the
+   sprite's box cyan-family before, 0% after.
+
+   The fix is to make that one composite a copy: an identity LUT, every
+   (src,dst) pair answering src, lands the sprite in our buffer as its own
+   palette indices and the replay draws it opaque. That is a DELIBERATE
+   departure from stock, which blends it; the sprite's true colours are what the
+   capture now holds, so re-blending it against our own scene instead would be a
+   shader change rather than another capture change.
+
+   THE SWAP IS SCOPED TO THE SINGLE CALL, and that is the whole design, not a
+   detail. `[globals+0xC0]` is not a bare pointer to borrow — it OWNS a 64 KB
+   heap buffer with a lifetime: `0x4BA5C0` allocates it through TA's own
+   allocator (`push 0x10000; call 0x4D83B0`), `0x4BA5F0` hands it to TA's free
+   (`0x4D85A0`) from the graphics teardown, and `0x4BAAD0` (`rep movsd` of
+   0x4000 dwords) and `0x4BA750` refill it wholesale when `palettes\PALETTE.ALP`
+   is (re)loaded per game. [BINARY-VERIFIED] So a pointer of ours left in that
+   slot across a frame boundary is not merely untidy: a table reload would write
+   64 KB into OUR buffer — silently un-fixing the star while leaving the
+   engine's real table stale for every other blend in the session — and a
+   teardown would pass a block from the DLL's heap to TA's static-CRT free.
+
+   An earlier revision installed it at hook 8 and restored it at hook 9, with a
+   comment claiming that a global "is safe to restore from a LATER frame". It is
+   not, and the abandonment path that comment pointed at (a `drawUnits == 0`
+   frame skips hook 9 entirely) is exactly how the pointer would have escaped.
+   Wrapping the two call sites of the drawer instead makes escape impossible:
+   the swap begins and ends inside one function call that always returns, so no
+   engine allocation, free or reload can ever observe it.
+
+   Gated on our capture window actually being open, so passive mode and the
+   engine's own frame are left with the engine's own blend. */
+static unsigned char*  g_opaqueTab;      /* 64 KB, built once at init      */
+static unsigned char** g_tabSlot;        /* non-NULL while ours is in      */
+static unsigned char*  g_tabSaved;       /* the engine's own pointer       */
+static char*           g_gfxOk;          /* globals block already validated */
+
 volatile unsigned char g_markown_skipBars = 0;
 
 static int g_installed = 0;
@@ -66,9 +133,28 @@ static unsigned g_beat = 0, g_last = 0;
    thread may still be uploading the other: a single buffer would let a present
    catch the key-fill half-done and show a frame with the top of every marker
    missing, which reads as flicker. Two buffers and a published pointer cost
-   one more allocation and remove the whole class. */
+   one more allocation and remove the whole class.
+
+   The publication is therefore only ever REPLACED, never emptied and refilled.
+   That distinction is the whole point and it is not academic: the engine runs
+   this draw block far more often than we present — measured at ~83 blocks per
+   presented frame on a live skirmish, because everything else in its frame is
+   skipped and ours is the slow half — so anything the game thread leaves the
+   published slot holding for the length of one capture is what roughly a tenth
+   of all presents will read. Clearing at the start of a capture cost exactly
+   that: 13 presents in 120 with SHIFT held showed no order markers at all.
+
+   TWO buffers are enough only because the reader outruns them, and that was
+   measured rather than assumed. The writer alternates slots, so the buffer the
+   GL thread is uploading is reclaimed two publications later — about 0.4 ms at
+   the rate above. Instrumented for the case that matters (the slot about to be
+   key-filled is the one the reader still holds): 0 in ~50 000 publications at
+   1024x768. It is the upload finishing inside two of the engine's blocks that
+   keeps this true, so it is the thing to re-measure if the layer ever grows far
+   faster than the block does. */
 typedef struct {
     unsigned char* buf[2];
+    unsigned char* retired[2];            /* the pair before the last growth */
     int   bytes;                          /* size of each buffer             */
     int   which;                          /* the one being written           */
     int   active;                         /* base is currently swapped out   */
@@ -112,6 +198,52 @@ int tagpu_markown_layer(int i, TAGPU_MARKLAYER* out)
 }
 
 /* ---- the capture itself ---------------------------------------------- */
+
+static void layer_clear(LAYER* L);
+
+static void alpha_build(void)
+{
+    int v;
+    g_opaqueTab = (unsigned char*)malloc(256 * 256);
+    if (!g_opaqueTab) { flog("markown: opaque blend table alloc failed"); return; }
+    /* row `src` is 256 copies of `src`, so any dst answers src */
+    for (v = 0; v < 256; v++)
+        memset(g_opaqueTab + v * 256, v, 256);
+}
+
+static void alpha_opaque_on(void)
+{
+    unsigned char** slot;
+    char* g;
+    if (g_tabSlot || !g_opaqueTab) return;         /* already in, or no table */
+    g = *(char**)GFX_GLOBALS_PP;
+    if (!ptr_ok(g)) return;
+    /* Validate a globals block ONCE, not once per sprite. This runs per target
+       sprite per marker block, and the block itself runs ~83 times per present,
+       so an IsBadWritePtr here was thousands of SEH-guarded probes per frame
+       asking the same question — and IsBadWritePtr *writes* (it probes with a
+       read-modify-write) into engine memory to answer it. */
+    if (g != g_gfxOk) {
+        if (IsBadReadPtr(g + GFX_ALPHATAB, 4)) return;
+        g_gfxOk = g;
+    }
+    slot = (unsigned char**)(g + GFX_ALPHATAB);
+    if (!ptr_ok(*slot)) return;                    /* table not built yet */
+    g_tabSaved = *slot;
+    *slot = g_opaqueTab;
+    g_tabSlot = slot;
+}
+
+static void alpha_opaque_off(void)
+{
+    if (!g_tabSlot) return;
+    /* only put ours back if ours is still what is there: if the engine has
+       re-pointed the slot in between, writing the old pointer over it would
+       leak the new buffer and hand the engine a dangling one */
+    if (*g_tabSlot == g_opaqueTab) *g_tabSlot = g_tabSaved;
+    g_tabSlot = NULL;
+    g_tabSaved = NULL;
+}
 
 /* Point the context's pixel base at our scratch and, on the first call of a
    frame, key-fill the viewport rect of it first. Returns 0 (and leaves the
@@ -171,15 +303,38 @@ static int layer_begin(LAYER* L, int* ctx, int fresh)
     if (x1 <= x0 || y1 <= y0) return 0;
 
     if (need > L->bytes) {
-        unsigned char* a = (unsigned char*)realloc(L->buf[0], (size_t)need);
-        unsigned char* b;
-        if (a) L->buf[0] = a;
-        b = a ? (unsigned char*)realloc(L->buf[1], (size_t)need) : NULL;
-        if (b) L->buf[1] = b;
-        if (!a || !b) { flog("markown: capture buffer alloc failed"); return 0; }
+        /* NOT realloc. It moves the block, and the GL thread may be part-way
+           through a glTexSubImage2D out of it with no handshake to wait on —
+           dropping the publication first would only narrow that window, not
+           close it, because the reader has already copied the pointer out.
+           Allocate a new pair and RETIRE the old one for a generation instead:
+           `need` only grows when the engine's surface pitch does, i.e. on a
+           resolution change, so this holds at most one spare pair and frees it
+           the next time round, by which point no reader can still be in it. */
+        unsigned char* a = (unsigned char*)malloc((size_t)need);
+        unsigned char* b = a ? (unsigned char*)malloc((size_t)need) : NULL;
+        if (!a || !b) {
+            free(a); free(b);
+            flog("markown: capture buffer alloc failed");
+            return 0;                     /* buffers untouched; retry next call */
+        }
+        free(L->retired[0]); free(L->retired[1]);
+        L->retired[0] = L->buf[0]; L->retired[1] = L->buf[1];
+        L->buf[0] = a; L->buf[1] = b;
         L->bytes = need;
+        /* both descriptors now name pixels in the retired pair */
+        layer_clear(L);
     }
-    L->which ^= 1;
+
+    /* The slot the GL side is NOT reading, chosen BEFORE the fill and
+       REMEMBERED for layer_end: deriving it again there would pick the wrong
+       one if layer_clear ran on the other thread in between. Buffer index and
+       descriptor slot are the same number by construction, so this KEY FILL can
+       never land in the buffer the published descriptor names, and one index
+       cannot drift from the other. (The non-fresh path above is the deliberate
+       exception — see mark_transp.) */
+    L->pend = (L->pub == 0) ? 1 : 0;
+    L->which = L->pend;
     buf = L->buf[L->which];
 
     /* Only the viewport rect is filled, and only the viewport rect is ever
@@ -195,12 +350,8 @@ static int layer_begin(LAYER* L, int* ctx, int fresh)
     L->ctx = ctx;
     L->saved = (unsigned char*)(size_t)(unsigned)ctx[CTX_BASE];
     ctx[CTX_BASE] = (int)(size_t)buf;
-    {   /* into the slot the GL side is NOT reading, REMEMBERED for layer_end:
-           deriving it again there would pick the wrong one if layer_clear ran
-           on the other thread in between */
-        TAGPU_MARKLAYER* d;
-        L->pend = (L->pub == 0) ? 1 : 0;
-        d = &L->desc[L->pend];
+    {
+        TAGPU_MARKLAYER* d = &L->desc[L->pend];
         d->pix = NULL; d->pitch = pitch;
         d->x = x0; d->y = y0; d->w = x1 - x0; d->h = y1 - y0;
     }
@@ -229,7 +380,12 @@ static void layer_end(LAYER* L, int publish)
 /* Publish "nothing here" without touching the context, and WITHOUT claiming a
    slot — a flip here could hand layer_end the descriptor of an older frame.
    One volatile int, safe from either thread; layer_end is not, which is why
-   nothing but the game thread calls it. */
+   nothing but the game thread calls it.
+
+   Call it only for a frame that has DECIDED it has nothing — never to open a
+   capture with. A capture that is about to publish leaves the last publication
+   standing until it has a whole new one to put in its place; that is what the
+   second buffer is for. */
 static void layer_clear(LAYER* L) { L->pub = -1; }
 
 /* Is there anything for capture window A to catch? Order markers only draw
@@ -280,24 +436,68 @@ static int prefog_wanted(const char* ta)
    opens behind it. */
 static void __stdcall mark_hook8(void* ctx, int n)
 {
+    LAYER* L = &g_L[TAGPU_MARK_PREFOG];
+    LAYER* P = &g_L[TAGPU_MARK_POSTFOG];
     const char* ta;
+
+    /* FIRST, before anything else in this frame draws. This only ever fires if
+       a non-local exit left our identity table installed (mark_tsprite brackets
+       a call that always returns, so it should not) — but the layer-8 particle
+       draw below reaches the composite itself: `0x471F90` dispatches
+       `call [edx+8]` per effect object and vtable `0x4FD638`'s slot 8 is
+       `0x475700`, which composites at `0x475757` [BINARY-VERIFIED]. Restoring
+       after that call would blit a frame of translucent particles opaque into
+       the engine's own frame. */
+    if (g_tabSlot) alpha_opaque_off();
+
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
-    layer_clear(&g_L[TAGPU_MARK_PREFOG]);
-    if (!g_capture) return;
+
+    /* A window still open here belongs to a frame that never reached hook 9,
+       and there is exactly one way to get that: `0x469C03 je 0x469D38` leaves
+       the block early when drawUnits is 0 and lands PAST the hook. Three of
+       DrawGameScreen's four callers pass drawUnits=1 (two as a literal,
+       `0x4969CD` through an ebx its function sets to 1 at `0x4967CF`); the
+       fourth, `0x4962C2`, is TA's own movie recorder (`"%s\\MOVIE%03i"`,
+       function at `0x495E88`, `xor ebx,ebx` at `0x495EA1`) and passes 0.
+       [BINARY-VERIFIED]
+
+       Abandon it rather than close it: `saved` belongs to a stack frame that
+       has since returned, so writing it back would scribble on whatever lives
+       at that address now. The engine's own frame lost the tail of that one
+       draw either way — nothing here can give it back — but the next frame
+       starts clean instead of corrupting a stack. */
+    if (L->active) { L->active = 0; L->ctx = NULL; L->saved = NULL; }
+
+    /* The post-fog window is per-call and every one of its calls is still ahead
+       of us in this frame, so this is where its frame starts. Its "nothing to
+       show" is only knowable in arrears — no DrawTranspRectangle came — so it
+       is decided here, about the frame that just ended, rather than by clearing
+       on the way in and hoping a call arrives before the next present. The cost
+       is a one-block ghost — the block in which the drag ends still carries the
+       last rect — against a hole that was most of a frame wide. */
+    if (!P->opened) layer_clear(P);
+    P->tried = 0;
+    P->opened = 0;
+
+    /* The engine's markers land in our buffer or in its own frame; there is no
+       third option, so every path that does not open a window has to give the
+       last capture up. Opening one does not: it fills the OTHER buffer and
+       hook 9 swaps it in whole. */
     ta = *(const char* const*)TA_MAINPP;
-    if (!ptr_ok(ta) || !prefog_wanted(ta)) return;
-    layer_begin(&g_L[TAGPU_MARK_PREFOG], (int*)ctx, 1);
+    if (!g_capture || !ptr_ok(ta) || !prefog_wanted(ta) ||
+        !layer_begin(L, (int*)ctx, 1))
+        layer_clear(L);
 }
 
 /* hook 9: close the window before the layer-9 particles, which the engine
    draws after the markers and which are not ours to move. */
 static void __stdcall mark_hook9(void* ctx, int n)
 {
+    /* Every in-game frame reaches this hook — the one branch that does not is
+       drawUnits == 0, which only the movie recorder passes (see hook 8) — and
+       `opens == ends` over ~50 000 blocks of live play says so. */
     layer_end(&g_L[TAGPU_MARK_PREFOG], 1);
-    /* the post-fog window is per-call, so this is where its frame starts */
-    g_L[TAGPU_MARK_POSTFOG].tried = 0;
-    g_L[TAGPU_MARK_POSTFOG].opened = 0;
-    layer_clear(&g_L[TAGPU_MARK_POSTFOG]);
+    if (g_tabSlot) alpha_opaque_off();   /* same reason as hook 8, layer 9 */
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
 }
 
@@ -315,6 +515,13 @@ static void __stdcall mark_transp(void* ctx, void* rect, int colour)
            buffer and re-key-fill — that would drop the outer rect and publish
            only the inner one. A refused first call means this frame's cursor
            stays the engine's, whole. */
+        /* The second call continues into the buffer the first one PUBLISHED,
+           so a present landing between them uploads the outer rect without the
+           inner: one frame of single-outlined cursor. Publishing once, after
+           both, would need layer_end split into "give the context back" and
+           "swap the descriptor in" — worth it if the cursor is ever seen to
+           thin out, not before. It is strictly smaller than what it replaced,
+           which showed NO cursor from hook 9 until the first of these calls. */
         int fresh = !L->tried;
         L->tried = 1;
         opened = layer_begin(L, (int*)ctx, fresh);
@@ -342,6 +549,19 @@ static void __stdcall mark_selbox(void* ctx, void* unit)
     if (g_selbox && tagpu_native_selbox_complete() &&
         tagpu_native_owns_unit((const char*)unit)) return;
     ((void (__stdcall *)(void*, void*))LEAF_SELBOX_VA)(ctx, unit);
+}
+
+/* The waypoint star, and the only place the blend LUT is touched. Bracketing
+   the call rather than the frame is what keeps our pointer out of a slot the
+   engine owns (see the note above). */
+static void __stdcall mark_tsprite(void* ctx, void* view, void* node,
+                                   void* pos, int flag)
+{
+    int mine = g_L[TAGPU_MARK_PREFOG].active;
+    if (mine) alpha_opaque_on();
+    ((void (__stdcall *)(void*, void*, void*, void*, int))LEAF_TSPRITE_VA)
+        (ctx, view, node, pos, flag);
+    if (mine) alpha_opaque_off();
 }
 
 /* ---- install ---------------------------------------------------------- */
@@ -378,11 +598,16 @@ void tagpu_markown_init(void)
         !site_is(SITE_TRANSP2_VA, PASS_TRANSP_VA) ||
         !site_is(SITE_SELBOX1_VA, LEAF_SELBOX_VA)  ||
         !site_is(SITE_SELBOX2_VA, LEAF_SELBOX_VA)  ||
+        !site_is(SITE_TSPRITE1_VA, LEAF_TSPRITE_VA) ||
+        !site_is(SITE_TSPRITE2_VA, LEAF_TSPRITE_VA) ||
         memcmp((void*)LEAF_BARS_VA, BARS_STOLEN, 5) != 0) {
         flog("markown: NOT armed — engine bytes differ at one of "
-             "0x4699EB/0x469B8A/0x469BD7/0x469D2C/0x469EC5/0x469F1E/0x46A430");
+             "0x4699EB/0x469B8A/0x469BD7/0x469D2C/0x469EC5/0x469F1E/0x46A430/"
+             "0x439516/0x439C7D");
         return;
     }
+
+    alpha_build();
 
     ok  = redirect(SITE_HOOK8_VA,   (void*)mark_hook8);
     ok &= redirect(SITE_HOOK9_VA,   (void*)mark_hook9);
@@ -390,12 +615,15 @@ void tagpu_markown_init(void)
     ok &= redirect(SITE_TRANSP2_VA, (void*)mark_transp);
     ok &= redirect(SITE_SELBOX1_VA, (void*)mark_selbox);
     ok &= redirect(SITE_SELBOX2_VA, (void*)mark_selbox);
+    ok &= redirect(SITE_TSPRITE1_VA, (void*)mark_tsprite);
+    ok &= redirect(SITE_TSPRITE2_VA, (void*)mark_tsprite);
     ok &= tagpu_detour_leaf(LEAF_BARS_VA, BARS_STOLEN, 5,
                             &g_markown_skipBars, 0x10);
     g_installed = ok;
     _snprintf(b, sizeof b,
-        "markown: %s (hook8/hook9/transp x2/selbox x2 redirected, bars@0x46A430 "
-        "detoured; all follow tagpu_mark.on)", ok ? "ARMED" : "PARTIAL — see above");
+        "markown: %s (hook8/hook9/transp x2/selbox x2/tsprite x2 redirected, "
+        "bars@0x46A430 detoured; all follow tagpu_mark.on)",
+        ok ? "ARMED" : "PARTIAL — see above");
     flog(b);
 }
 

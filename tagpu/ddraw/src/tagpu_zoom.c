@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 #include "dd.h"
 #include "tagpu_zoom.h"
 #include "tagpu_detour.h"
@@ -25,6 +26,7 @@ static int            g_mmInstalled;   /* tagpu_zoom_init() patched the engine  
 
 static void zlog(const char* m);
 static int  in_viewport(int x, int y, int L, int T, int W, int H);
+static void apply_eye_range(void);
 
 /* ---- the wheel -------------------------------------------------------------
 
@@ -298,6 +300,9 @@ void tagpu_zoom_frame_end(void)
     /* and the same for the addressable rect: a frame that published nothing
        must hand the engine its own viewport back before the menus see it */
     tagpu_vpwide_frame(tagpu_zoom_level());
+    /* and for the camera range — last, because it is the only one of the three
+       that can still MOVE the view this frame */
+    apply_eye_range();
 }
 
 float tagpu_zoom_level(void)
@@ -582,6 +587,261 @@ static void __stdcall zoom_minimap_rect(int* r)
     if (r[3] > my + mh - 1) r[3] = my + mh - 1;
 }
 
+/* ---- the camera's range ----------------------------------------------------
+
+   `0x41C3C0` clamps the eye to `[0, map - W]`, W being the 1x viewport size:
+   the range that puts the VIEWPORT's own edges exactly on the map's. At zoom z
+   the view is still centred on `eye + W/2` but is only W/z wide, so those
+   bounds stop the visible window `W/2 - W/(2z)` short of the map on every side.
+   Zoomed in, the edges and corners of the map cannot be reached at all, and the
+   camera reads as though it were being pushed back off them.
+
+   THE RANGE THE ZOOM ACTUALLY NEEDS is the engine's own, widened by exactly
+   that shortfall:
+
+       d   = (W/2)(1 - 1/z)            0 at 1x, and W/2 in the limit
+       eye in [-d, (map - W) + d]
+
+   which is the same arithmetic the transform uses about the same centre, so the
+   two cannot disagree at the edges: the world at the viewport's left edge is
+   `eye + d`, which is 0 exactly when `eye = -d`. At z <= 1, d is 0 and the range
+   is the engine's own, byte for byte.
+
+   Everything that reads the EYE follows for free, because the eye is the
+   engine's camera: the minimap's view box, the minimap click jump, the mouse
+   and edge scroll, the HotUnits cull and our own passes need nothing new.
+
+   WHAT IS NOT COVERED, and it is the SCROLL TARGET `main+0x14327`/`+0x1432B`
+   that draws the line. Every path that sets the eye and copies it into the
+   target afterwards (`0x41C574` SetCamera, `0x41CDB0`, the scroll `0x41D037`)
+   reaches the widened range through us. But three sites compute that target and
+   clamp it INLINE against `[0, map - W]` without going through this function at
+   all — `0x41C4C0` (the smooth SetCamera), `0x41C7F7` (the smooth centre-on) and
+   `0x41CAF7` (the per-frame camera FOLLOW, which recomputes the target from the
+   tracked unit every frame). The stepper `0x41CA30` then eases the eye to that
+   target and our clamp, being wider, leaves it there — so those paths still stop
+   `d` short of a map edge. Nothing fights and nothing churns (the eye arrives at
+   a target that is inside our range and both stop), it is simply the old
+   behaviour on the paths the detour does not sit on. Closing them means widening
+   three inline clamps in the middle of the camera module, which is a much bigger
+   patch than this one and has not been done.
+
+   MECHANISM: a `leaf_call` detour on the clamp itself, on a flag raised only
+   while a zoomed-IN world is live. With it clear the engine's own function runs
+   verbatim — including the two minimap-rect redirects INSIDE it — so 1x and
+   zoom-out are untouched. With it set our replacement does the whole job: the
+   widened clamp, then the same minimap rect the engine computes last, through
+   the same wrapper.
+
+   AND THE ONE THING AN OFF-MAP EYE BREAKS. `0x498DA0` hands a pointer OUTSIDE
+   the viewport the world point `eye + clamp(pos, L, R) - L`, which on the side
+   panel is `eye` itself and under the bottom bar is `eye + H - 1`: on the map
+   for every eye the ENGINE can produce, off it for ours. The chain from there
+   is not defensive — `GetGridPosPLOT` returns NULL outside the map and
+   `GetGridPosFeature` dereferences whatever it is handed, the crash vpwide's own
+   stub carries a clamp for — so the one call site that starts it is redirected
+   and the world point clamped to the map. A no-op at 1x, where the engine's own
+   bounds cannot produce a world point off the map, and needed on every frame
+   the eye is ours, so it is not gated on the zoom.
+
+   A pointer INSIDE the viewport needs none of this: at z > 1 the transform maps
+   the whole viewport into `[L + d, R - d]`, so the world it names spans
+   `[eye + d, eye + W - 1 - d]` — which is `[0, map - 1]` at either extreme of
+   the range above, and inside it everywhere else. */
+
+#define EYECLAMP_VA      0x0041C3C0u   /* stdcall(void), ret 0: clamp + mm rect */
+#define VA_GETTPOS       0x00484B50u   /* GetTPosition(x,y,out), stdcall, ret 0xC */
+#define SITE_GETTPOS     0x00498EF9u   /* its call site inside 0x498DA0           */
+#define OFF_EYEX         0x1431F
+#define OFF_EYEY         0x14323
+#define OFF_MAP_W        0x1422B       /* map size in world px                    */
+#define OFF_MAP_H        0x1422F
+#define OFF_SCRTX        0x14327       /* MapXScrollingTo — the eye eases to here */
+#define OFF_SCRTY        0x1432B
+#define OFF_MM_RECT      0x142CB       /* the RECT 0x466B70 fills                 */
+
+/* `mov eax, ds:0x511DE8` — the whole first instruction, so the five stolen
+   bytes end on an instruction boundary (0x41C3C5 is `push esi`). */
+static const unsigned char EYE_STOLEN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };
+
+typedef void (__stdcall *PFN_GETTPOS)(int x, int y, int* out);
+
+static volatile unsigned char g_eyeWide;  /* the game thread reads this one      */
+static int  g_eyeInstalled;               /* the detour and the guard both went in */
+static int  s_eyeOff;                     /* tagpu_zoomedge.off, polled          */
+
+static int ta_ok(const char* ta)
+{
+    return (size_t)ta > 0x600000u && (size_t)ta < 0x7FFF0000u;
+}
+
+/* The escape hatch, polled rather than cached at attach so it can be flipped on
+   a running instance. Thrown, the level below reads as 1.0, which walks the eye
+   back onto the 1x range rather than merely freezing it where it stood.
+
+   The poll is the RENDER thread's, from apply_eye_range() once a frame and
+   throttled on top of that: the level has one owner in this module, and a
+   synchronous file stat has no business on the game thread — which reads the
+   result here and does nothing else with it. */
+static void eye_poll_off(void)
+{
+    static DWORD tick;                       /* render thread only */
+    DWORD now = GetTickCount();
+    if (now - tick > 250) {
+        tick = now;
+        s_eyeOff = (GetFileAttributesA("tagpu_zoomedge.off") != INVALID_FILE_ATTRIBUTES);
+    }
+}
+
+static float eye_level(void)
+{
+    return s_eyeOff ? 1.0f : tagpu_zoom_level();
+}
+
+/* The camera range at `z`: the engine's own bounds, widened by d. Returns 0 —
+   and leaves the outputs alone — when the engine state is not sane enough to
+   compute one. */
+static int zoom_eye_range(const char* ta, float z,
+                          int* loX, int* hiX, int* loY, int* hiY)
+{
+    int L, T, W, H, mapW, mapH, dx = 0, dy = 0;
+
+    if (!ta_ok(ta)) return 0;
+    /* the TRUE viewport, never the field: vpwide owns that one at zoom < 1 */
+    tagpu_vpwide_true_rect(ta, &L, &T, &W, &H);
+    if (W <= 0 || H <= 0) return 0;
+    mapW = *(const int*)(ta + OFF_MAP_W);
+    mapH = *(const int*)(ta + OFF_MAP_H);
+    if (mapW <= 0 || mapH <= 0) return 0;
+
+    if (z > 1.0f) {
+        dx = iround((float)W * 0.5f * (1.0f - 1.0f / z));
+        dy = iround((float)H * 0.5f * (1.0f - 1.0f / z));
+    }
+    *loX = -dx; *hiX = mapW - W + dx;
+    *loY = -dy; *hiY = mapH - H + dy;
+    /* A map smaller than the viewport inverts the ENGINE's range too — it then
+       alternates between 0 and a negative bound on every call. Ours holds
+       still, which is the most that can be said for either. */
+    if (*hiX < *loX) *hiX = *loX;
+    if (*hiY < *loY) *hiY = *loY;
+    return 1;
+}
+
+/* Clamp one x/y pair into the range where it is stored. 1 when it moved. */
+static int clamp_pair(int* px, int* py, int loX, int hiX, int loY, int hiY)
+{
+    int moved = 0;
+
+    if      (*px < loX) { *px = loX; moved = 1; }
+    else if (*px > hiX) { *px = hiX; moved = 1; }
+    if      (*py < loY) { *py = loY; moved = 1; }
+    else if (*py > hiY) { *py = hiY; moved = 1; }
+    return moved;
+}
+
+/* The replacement clamp. GAME THREAD, and only while g_eyeWide is set. `arg` is
+   the first stack slot of a function that takes no arguments — ignored.
+
+   THE SCROLL TARGET IS DELIBERATELY NOT TOUCHED HERE, unlike in
+   apply_eye_range(). `main+0x14327`/`+0x1432B` is where the camera is heading,
+   and three of this function's callers are inside the per-frame stepper
+   `0x41CA30`, which eases the eye halfway toward it and calls us afterwards:
+   writing the target there would make it the eye every frame and the camera
+   would never arrive. Every caller that MEANT to move the camera copies the
+   clamped eye into the target itself, right after we return (`0x41C5A4`,
+   `0x41CDE6`, `0x41D05E`), so the pair stays consistent without our help. */
+static void __cdecl zoom_eye_clamp(void* arg)
+{
+    char* ta = *(char**)TA_MAINPP;
+    int loX, hiX, loY, hiY;
+
+    (void)arg;
+    if (!ta_ok(ta)) return;
+    if (zoom_eye_range(ta, eye_level(), &loX, &hiX, &loY, &hiY))
+        clamp_pair((int*)(ta + OFF_EYEX), (int*)(ta + OFF_EYEY),
+                   loX, hiX, loY, hiY);
+    /* the engine's own last act, and the only place this rect is recomputed */
+    zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
+}
+
+/* THE EYE HAS TO COME HOME WHEN THE ZOOM DOES. The clamp above runs only when
+   the engine moves the camera, so an eye parked at -d at 4x would sit there —
+   showing the void past the map edge — from the moment the player wheels back
+   out until the next time they scroll. This is the same clamp applied from the
+   render thread once a frame; it writes only when the eye is actually outside
+   the range in force, which is during a zoom-out at a map edge and at no other
+   time. Same standing as the ScrollSpeed write above: local camera state that
+   no other machine ever sees.
+
+   AND IT MUST MOVE THE SCROLL TARGET WITH IT — `main+0x14327`/`+0x1432B`, the
+   pair the engine eases the eye toward. Unlike the clamp above, this correction
+   has no caller to copy the eye into the target afterwards, and the per-frame
+   stepper `0x41CA30` acts on any disagreement between the two: at `0x41CB5F` it
+   sets the camera-moved bit and at `0x41CB6B` it CLEARS `main+0x14281` bit 3,
+   the fog grid's own is-current flag, then halves the distance and hands the
+   result to the (no longer widened) engine clamp, which puts it straight back.
+   A zoom-out from a map edge would therefore leave the eye at 0 and the target
+   at -d for as long as the player did not scroll — a permanent per-frame fog
+   grid rebuild on exactly the path 97e518f had to guard against a crash.
+
+   Clamping the target into the range rather than assigning the eye to it is
+   what keeps a camera move that is genuinely in flight: such a target is inside
+   [0, map - W] already, so it is inside ours too and is not touched at all. */
+static void apply_eye_range(void)
+{
+    char* ta;
+    int loX, hiX, loY, hiY, moved;
+    float z;
+
+    if (!g_eyeInstalled) return;
+    eye_poll_off();
+    z = eye_level();
+    g_eyeWide = (unsigned char)(z > 1.0f);   /* 1.0 in the menus: s_live is 0 */
+    if (!s_live) return;                     /* nothing to correct, and no game */
+    ta = *(char**)TA_MAINPP;
+    if (!zoom_eye_range(ta, z, &loX, &hiX, &loY, &hiY)) return;
+    moved  = clamp_pair((int*)(ta + OFF_EYEX),  (int*)(ta + OFF_EYEY),
+                        loX, hiX, loY, hiY);
+    moved |= clamp_pair((int*)(ta + OFF_SCRTX), (int*)(ta + OFF_SCRTY),
+                        loX, hiX, loY, hiY);
+    /* Recomputed here because `0x41C3C0` is the only place the engine ever
+       fills this rect, so a corrected eye would otherwise leave the minimap's
+       box where it was until the next camera move. It is a write to
+       `main+0x142CB` from the RENDER thread — the same one-frame-tear standing
+       as the published view this module already accepts, and it happens only on
+       the frames the correction fires. */
+    if (moved) zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
+}
+
+int tagpu_zoom_eye_range(int* loX, int* hiX, int* loY, int* hiY)
+{
+    const char* ta = *(const char* const*)TA_MAINPP;
+    /* the ENGINE's own bounds unless our clamp is the one actually in force —
+       an eye hold that reached past them with the detour absent would only be
+       hauled back by the engine on its next scroll */
+    return zoom_eye_range(ta, g_eyeInstalled ? eye_level() : 1.0f,
+                          loX, hiX, loY, hiY);
+}
+
+/* GetTPosition on the world point under the mouse, clamped to the map — see the
+   block above for why an off-map eye makes that necessary and why it is a no-op
+   without one. */
+static void __stdcall zoom_tpos_guard(int x, int y, int* out)
+{
+    const char* ta = *(const char* const*)TA_MAINPP;
+
+    if (ta_ok(ta)) {
+        int mw = *(const int*)(ta + OFF_MAP_W);
+        int mh = *(const int*)(ta + OFF_MAP_H);
+        if (mw > 0 && mh > 0) {
+            if (x < 0) x = 0; else if (x > mw - 1) x = mw - 1;
+            if (y < 0) y = 0; else if (y > mh - 1) y = mh - 1;
+        }
+    }
+    ((PFN_GETTPOS)VA_GETTPOS)(x, y, out);
+}
+
 /* Keep our scaling out of the player's registry — see the block above. */
 static void __stdcall zoom_save_scroll(void* section, const char* name, int value)
 {
@@ -597,6 +857,12 @@ static int site_is(unsigned int site, unsigned int expect)
     if (IsBadReadPtr((void*)p, 5)) return 0;
     return p[0] == 0xE8 &&
            *(const unsigned int*)(p + 1) == expect - (site + 5);
+}
+
+static int bytes_are(unsigned int va, const unsigned char* want, int n)
+{
+    const void* p = (const void*)(size_t)va;
+    return !IsBadReadPtr(p, (UINT_PTR)n) && memcmp(p, want, (size_t)n) == 0;
 }
 
 static int redirect(unsigned int site, void* target)
@@ -617,15 +883,34 @@ void tagpu_zoom_init(void)
        different exe arms nothing rather than half of it. */
     if (!site_is(SITE_MMRECT1_VA, MINIMAP_RECT_VA) ||
         !site_is(SITE_MMRECT2_VA, MINIMAP_RECT_VA) ||
-        !site_is(SITE_SAVESCROLL, SAVE_SETTING_VA)) {
+        !site_is(SITE_SAVESCROLL, SAVE_SETTING_VA) ||
+        !site_is(SITE_GETTPOS, VA_GETTPOS) ||
+        !bytes_are(EYECLAMP_VA, EYE_STOLEN, (int)sizeof EYE_STOLEN)) {
         zlog("zoom: NOT armed — engine bytes differ at one of "
-             "0x41C426/0x41C442/0x430FAE");
+             "0x41C426/0x41C442/0x430FAE/0x498EF9/0x41C3C0");
         return;
     }
     ok  = redirect(SITE_MMRECT1_VA, (void*)zoom_minimap_rect);
     ok &= redirect(SITE_MMRECT2_VA, (void*)zoom_minimap_rect);
     ok &= redirect(SITE_SAVESCROLL, (void*)zoom_save_scroll);
     g_mmInstalled = ok;
-    zlog(ok ? "zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save 0x430FAE)"
-            : "zoom: PARTIAL — see above");
+    /* The camera range needs its own guard in place before it may widen a
+       thing, so the two arm together or not at all — and only on top of a
+       minimap wrapper that went in, because our replacement clamp calls it.
+       `&&`, not `&=`: the detour must not be LANDED at all when the guard did
+       not take, rather than landed and left inert by a flag that happens never
+       to be raised. */
+    if (ok) {
+        int eye = redirect(SITE_GETTPOS, (void*)zoom_tpos_guard) &&
+                  tagpu_detour_leaf_call(EYECLAMP_VA, EYE_STOLEN,
+                                         (int)sizeof EYE_STOLEN,
+                                         &g_eyeWide, 0, zoom_eye_clamp);
+        g_eyeInstalled = eye;
+        zlog(eye ? "zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save "
+                   "0x430FAE, camera range 0x41C3C0 + world guard 0x498EF9)"
+                 : "zoom: PARTIAL — minimap and ScrollSpeed only, the camera "
+                   "range did NOT install");
+    } else {
+        zlog("zoom: PARTIAL — see above");
+    }
 }

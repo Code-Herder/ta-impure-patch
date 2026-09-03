@@ -227,6 +227,186 @@ so machine-checked against the real layout rather than guessed. [VERIFIED]
 | Spatial index | `SortGridBucket`, stride `0x0A`, list head at +0x06; buckets ptr at `0x1429F`, cols at `0x142A3`, plus a dedicated off-map bucket at `0x142B7`. |
 | Projectiles | Count at `TAdynmemStruct+0x141F3`; **each projectile is `0x6B` (107) bytes**. |
 
+## The camera module — mapped by us
+
+[MEASURED 2026-09-03, this project — disassembly of the pristine build plus live reads, not
+from any vendor corpus. Established while making the camera's range follow the zoom
+(`gpu-status.md` §2.3c); the community corpora name only `0x41C3C0`, and name it for its tail.]
+
+**"Eye"** is the world position the viewport's top-left corner shows. **"View"** is `W`/`H` at
+`main+0x37E37`/`+0x37E3B`. The module keeps *two* positions: the eye, and a **scroll target**
+the eye is eased toward.
+
+| VA | What it is |
+| --- | --- |
+| **`0x41C3C0`** | **The eye clamp.** `eyeX = clamp(eyeX, 0, mapW − W)`, the same for Y, then `0x466B70(main+0x142CB)` to refill the minimap's view rect — every path through it ends in that one call. TADR calls it `ScrollMinimap`, which describes the tail rather than the job. **12 call sites:** `0x41C59F`, `0x41C898`, `0x41C9CC`, `0x41CC16`, `0x41CC37`, `0x41CC52`, `0x41CDE1`, `0x41D054`, `0x41D184`, `0x41D26B`, `0x41D319`, `0x41D459`. |
+| `0x41C450` | The same clamp shape for the *target* pair — and it has **no callers**. Dead code; an `E8`/`E9` scan of `.text` finds nothing pointing at it. |
+| `0x41C4C0` | `SetCamera(x, y, smooth)` — writes the target, then clamps it **inline** against `[0, map − view]` without calling `0x41C3C0`. Callers: `0x495C68`, `0x495E11`, `0x497060`, `0x4978C9` (game-screen entry / load). |
+| **`0x41CA30`** | **The per-frame camera stepper.** With no follow object it takes `je 0x41CB4A`. Where eye ≠ target it sets bit 1 of `main+0x142F1` ("camera moved"), **clears bit 3 of `main+0x14281`** — the screen fog grid's own is-current flag — then moves the eye *halfway* toward the target, capped at ±`0x140` (320 px) per axis per frame, and hands the result to `0x41C3C0`. It never writes the target. |
+| `0x41CAF7` | Inside the stepper: the camera-**follow** target, recomputed every frame from the tracked unit as `pos − view/2` and clamped **inline** to `[0, map − view]`. |
+| `0x41C7F7` | Smooth centre-on; clamps its target inline the same way. |
+| `0x41CF10`…`0x41D060` | The scroll poll — see the table below. |
+| `0x466B70` | Fills a RECT with the minimap's view box from the eye and the view size in map cells (`main+0x1423B`/`+0x1423F`). Pure computation; its only two call sites are inside `0x41C3C0`. |
+
+**The scroll poll.** Position source is `GetCursorPos` (IAT slot `0x4FC2E0`), clamped to the
+screen. Four independent directions, each firing on *hotkey* **or** *pointer on an exact screen
+edge* — the hotkeys go through `KeyboardHotkeySampler` `0x4C1B80`, the same sampler `markown`
+uses for SHIFT (`0xF9`):
+
+| Direction | Hotkey id | Mouse condition | Site |
+| --- | --- | --- | --- |
+| left | `0xF4` | `x == 0` | `0x41CF87` |
+| up | `0xF5` | `y == 0` | `0x41CFCE` |
+| right | `0xF6` | `x == (main+0x37E1F) − 1`, i.e. screenW − 1 | `0x41CFA5` |
+| down | `0xF7` | `y == (main+0x37E23) − 1`, i.e. screenH − 1 | `0x41CFFF` |
+
+Two things follow, and both cost time to learn the hard way:
+
+- **The trigger is an exact equality on the outermost pixel, not a band.** Measured on a
+  1024-wide screen at 1×: a pointer at `x = 1023` scrolls right, at `x = 1020` it does not.
+  (This is also why edge scroll looks dead under injected input — it is not, you just have to
+  land on the last pixel. See `ta-drive`.)
+- **At zoom > 1 the right edge cannot fire, and only the right edge.** `fake_GetCursorPos`
+  hands the engine the *unzoomed* `u`, and three of the four screen edges lie **outside** the
+  viewport rect (`L=128`, `T=32`, `B=screenH−33`), so the transform passes them through as
+  identity. The screen's right column, though, *is* the viewport's right column, so it gets
+  contracted toward the centre. Measured at 2× on 1024×768: a pointer at `x=1023` reaches the
+  engine as **800**, so `x == 1023` is unsatisfiable, while left, up and down all still scroll.
+
+### Fields this module owns
+
+| Where | What |
+| --- | --- |
+| `main+0x1431F` / `+0x14323` | eyeX / eyeY |
+| `main+0x14327` / `+0x1432B` | **the scroll target** (`MapXScrollingTo`) the stepper eases the eye toward. Every reference to it in `.text` is inside `0x41C4xx`–`0x41D4xx` — 30 and 28 respectively, and **no drawing code reads it**, which is what makes it camera-local. |
+| `main+0x142F1` bit 1 | set by every camera-module path that moves the eye: the operand appears at `0x41C59A`, `0x41C893`, `0x41C9C7`, `0x41CB62`, `0x41CBD2`, `0x41CDDD`, `0x41D04F`, `0x41D17F`, `0x41D266`, `0x41D314`, `0x41D454` — one per eye writer, immediately before its `0x41C3C0` call — plus minimap/GUI readers in `0x466xxx`. Name *[INFERRED]* ("the camera moved this frame"); what is measured is which sites touch it. |
+| `main+0x14281` bit 3 | the screen fog grid is current — already documented (`terrain-depth.md`: "if `LosType & 8` clear, first rebuild the screen fog grid"). **New here:** the camera stepper clears it at `0x41CB6B` on every frame the eye and target disagree, so a stale target becomes a per-frame grid rebuild. Also cleared at `0x41CB3B`, `0x41C567`, `0x41CE0D`. |
+| `main+0x2C76` / `+0x2C7A` | the engine's mouse position, two **DWORDs** — agrees with `ui-markers.md`. Worth restating because `+0x2C78` looks like the y and is the high half of x; and `main+0x2C74` is an unrelated word (the battleroom lock bit, `cmdline-options.md`). |
+| `main+0x37E1F` / `+0x37E23` | screen width / height — the fields `vpwide` derives the true viewport rect from, and the ones the scroll poll compares against |
+
+### Two per-cell loops that differ, and it matters
+
+An off-map eye is only safe where the engine bounds-checks. Both of these read map arrays from
+the eye, and they do not agree:
+
+- **`0x4843C0`** (screen fog-grid rebuild, which `terrown` calls itself) tests each cell against
+  the LOS map dimensions with **unsigned** compares — `cmp`/`jae` at `0x4844B9` and `0x4844C7` —
+  so a negative index is *skipped*, not faulted. This is why the widened camera range needed no
+  guard here.
+- **`0x483FA0`** (the terrain pass) indexes the tile map at `main+0x1428B` with **no bounds
+  check at all**: `0x48409B` does `imul` row × stride, `add` col, `lea ebp,[edx+eax*2]`. A
+  negative eye would read before the array. Moot in practice — `terrown` skips the whole
+  function — but it is the reason to keep the eye's excursion a property of *our* passes.
+
+## The blend LUT and the marker composites — mapped by us
+
+[MEASURED 2026-09-03, this project — disassembly of the pristine Steam build plus live reads.
+Established while fixing the waypoint star, which rendered teal because the engine's alpha
+composite was blending it against our fill key (`ui-markers.md` §6). Every VA below was read
+off `objdump` in this session unless a row says otherwise.]
+
+**The graphics globals block.** `0x4B6220` is the whole accessor: `mov eax,ds:0x51FBD0; ret`.
+(`0x4B6230` starts with the same load and is **not** a second accessor — it does
+`or byte [eax+0xF1],0x8` and continues into a longer routine gated on `[eax+0xF0]` bit 1. A
+mutator; do not call it for the pointer.) `0x51FBD0` sits past `.data`'s raw end in the BSS
+region, mapped at run time — the same region as `TA_MAINPP 0x511DE8`. Live read: `*0x51FBD0`
+= `0x0051F320`, so the block itself is static and only its contents move.
+
+| Field | What it is |
+| --- | --- |
+| **`[globals+0xC0]`** | **Pointer to the 64 KB blend LUT.** Not a borrowable pointer — the block is *owned* (allocated, freed and refilled; see below). Live read: `0x02C91D68`, i.e. heap. |
+| `[globals+0xF0]` bit 5 | Gates every LUT user: `test cl,0x20` at `0x4B8519`, and `shr cl,5; test cl,1` at `0x4BAADB` / `0x4BA765`. Name *[INFERRED]* — "translucency available". |
+
+**The LUT's shape.** `out = tab[(src << 8) | dst]`, so it is 256 rows of 256, indexed
+source-major. The inner loop is `0x4CBF99..0x4CBFAC`:
+
+```
+edx = [ebp+0x1C]        ; the table, arg 6
+al  = [esi]             ; source texel
+cmp al,[ebp+0x18]       ; the sprite's transparent index
+je  skip                ;   -> leave the destination alone
+ebx = eax; shl ebx,8    ; src << 8
+al  = [edi]             ; DESTINATION texel  <-- this is what made the star teal
+add ebx,edx
+al  = [eax+ebx]         ; tab[(src<<8) + dst]
+[edi] = al
+```
+
+Only **three call sites read the LUT** at all: `0x4CBF2C` from `0x4B8499` and `0x4B8682`, and
+`0x4CC057` from `0x4B86AA`. `0x4B8682`/`0x4B86AA` are inside `0x4B8500`; `0x4B8499` is in a
+neighbouring function that takes its table from its own argument and never reads
+`[globals+0xC0]`.
+
+**The LUT's lifetime — the reason a pointer of ours must never outlive one call.**
+
+| VA | What it does to `[globals+0xC0]` |
+| --- | --- |
+| `0x4BA5C0` | **Allocates it**: `push 0x10000; push 0x50A430` (a tag string); `call 0x4D83B0` (TA's allocator); `mov [ecx+0xC0],eax`. |
+| `0x4BA5F0` | **Frees it**: `mov ecx,[eax+0xC0]; push ecx; call 0x4D85A0` (TA's free). |
+| `0x4BAAD0` | **Overwrites it wholesale**: `mov edi,[eax+0xC0]; mov ecx,0x4000; rep movsd` — 64 KB copied *in*. |
+| `0x4BA750` | Builds its contents (0x510 bytes of stack scratch; same bit-5 gate). |
+
+So the slot is a heap buffer with a lifetime, not a hook point. Leaving our own table's address
+there across a frame would let a reload `rep movsd` 64 KB into *our* buffer — silently undoing
+the fix while leaving the engine's real table stale for every other blend in the session — or
+let the teardown hand a DLL-heap block to TA's static-CRT free. `0x4D83B0` / `0x4D85A0` are
+TA's own malloc/free.
+
+**The composite, and who reaches it.** `AlphaCompsteBuf2OFFScreen 0x4B8500` re-reads
+`[globals+0xC0]` *inside* the call, at `0x4B8665` and `0x4B8691`, which is what makes a swap
+bracketed around the call visible to it. It has **24 call sites**: `0x4399BB`, `0x459319`,
+`0x459353`, `0x4593BA`, `0x4595E9`, `0x4597D3`, `0x46A7AF`, `0x46A807`, `0x46A840`, `0x4736B1`,
+`0x474291`, `0x474CA3`, `0x475080`, `0x4755C6`, `0x475757`, `0x49C0F5`, `0x49C24A`, `0x49C2DC`,
+`0x49C40E`, `0x49C46F`, `0x4B7FFE`, `0x4B81BE`, `0x4B838A`, `0x4B8579`. All 24 accounted for,
+because this survey is the evidence that a bracketed swap cannot be observed by anything else:
+
+| Sites | Where | Inside the capture window? |
+| --- | --- | --- |
+| `0x4399BB` | the target sprite `0x439740` | **yes, always** — this is the one we wrap |
+| `0x4B7FFE` | `CopyGafToContext`'s composite branch, taken when a sub-frame's `+0xB` is non-zero | **yes, but GAF-data-gated** — the route dots; stock `pathicon` frames do not take it |
+| `0x459319`, `0x459353`, `0x4593BA`, `0x4595E9`, `0x4597D3` | the unit row sweep | no — earlier in the frame |
+| `0x4736B1`, `0x474291`, `0x474CA3`, `0x475080`, `0x4755C6`, `0x475757` | the effect-object handlers, reached through `0x471F90`'s indirect `call [edx+8]` at `0x471FBB` (vtable `0x4FD638` slot 8 = `0x475700`) | no — but note **both hooks call `0x471F90` themselves**: hook 8 draws layer 8 *before* opening the window and hook 9 draws layer 9 *after* closing it, so they sit outside it by ordering rather than by address. That ordering is load-bearing; see `tagpu_markown.c`. |
+| `0x49C0F5`, `0x49C24A`, `0x49C2DC`, `0x49C40E`, `0x49C46F` | the projectile pass `0x49BE60`, called at `0x469B22` | no — before hook 8 |
+| `0x46A7AF`, `0x46A807`, `0x46A840` | past `DrawGameScreen`'s `ret` at `0x46A3FD` | no — different function |
+| `0x4B81BE`, `0x4B838A`, `0x4B8579` | inside the `0x4B8xxx` composite family itself (self/sibling recursion) | only as children of a site above |
+
+| VA | What it is |
+| --- | --- |
+| **`0x439740`** | **The order pass's target sprite** — the pulsing star at a move/attack waypoint, and the only alpha-composited marker. `stdcall(ctx, view, node, pos, flag)`, `ret 0x14`. Two direct `E8` callers: `0x439516` (inside the route-dot drawer `0x4394E0`) and `0x439C7D` (the walker `0x439B30`'s bit-3 dispatch). Its address is **also** in `.rdata` 19 times as the `+8` field of the 25-byte order-descriptor records behind `*(u32*)0x512344` — first occurrences `0x4FC4B1`, then `0x4FC754`/`0x4FC76D`/`0x4FC786`/`0x4FC79F` at stride 25. That field is reported unread in this build (the dispatcher loading only `+0`, `+4`, `+0xC`, `+0x10`, `+0x14`, `+0x15`) — *that* half is [FROM REVIEW, not re-derived here]; the 19 records and the stride are measured. If it were ever brought into use, a wrapper on the two `E8` sites would be bypassed silently. |
+| `0x4B7F90` | `CopyGafToContext` — the route dots' blitter, and **usually** a masked copy. But `0x4B7FF7` reads each sub-frame's byte at `+0xB` and `jbe`-skips only when it is zero: non-zero routes into `0x4B8500` at `0x4B7FFE`. So whether the dots blend is a property of the **GAF data**, not of the code. Stock `pathicon` frames do not carry it, which is why they render solid. |
+| `0x4BF8C0` | `DrawTranspRectangle` — named for its hollow centre, **not** for translucency. Clips through `0x4C5E70` and draws edge runs via `0x4BEA20`; it reaches no alpha composite. Corrects a long-standing claim in `ui-markers.md` and `tagpu_markown.h` that its "transparent edges" read the destination. [The store-only inner writer `0x4CC7AB` is FROM REVIEW; independently confirmed on screen — the drag band box renders as a clean white outline instead of washing out to teal the way the star did.] |
+| `0x4C14F0` | `DrawTextCustomFont` (the group digits, drawn inside the same window). Calls `0x4B6220`, `0x4B6750`, `0x4C5E70`, `0x4C5FA0`, `0x4C6AE0`, `0x4CCF60`, `0x4E4760` — it blits through `0x4CCF60` and never touches the LUT, so an identity table cannot affect it. |
+
+### `DrawGameScreen 0x468CF0` — its arguments, and the branch that skips hook 9
+
+Prologue `sub esp,0x214` then four pushes (`ebx`, `ebp`, `esi`, `edi`), so inside the function
+argument 1 is at `[esp+0x228]` — which is the `ebx` the marker block tests. Signature confirmed
+as `(drawUnits, blitScreen)` stdcall.
+
+**`0x469C01 test ebx,ebx / 0x469C03 je 0x469D38` jumps PAST hook 9 at `0x469D2C`.** A
+`drawUnits == 0` frame therefore runs hook 8 and never reaches hook 9 — and the order markers
+are drawn at `0x469BFC`, *before* that branch, so such a frame does reach the sprite. Any
+state a capture opens at hook 8 must be able to survive not being closed.
+
+| Caller | Passes | Which is it |
+| --- | --- | --- |
+| `0x495C76` | `drawUnits=1`, `blitScreen=0` | literal `push 0x1` |
+| `0x495E66` | `1`, `1` | literal |
+| **`0x4962C2`** | **`drawUnits=ebx=0`**, `1` | **TA's movie recorder.** Function starts `0x495E88`, `xor ebx,ebx` at `0x495EA1` and no other write to `ebx` before the call. Strings: `"%s\\MOVIE%03i"` `0x509500`, `"%s\\MOVIE*"` `0x509510`, `"FRAM"` `0x5094F8`. |
+| `0x4969CD` | `1`, `1` | the in-game frame callback `0x496790`, which sets `mov ebx,1` at `0x4967CF` and uses `ebx` as its constant 1 throughout. |
+
+Live counter-check on the played path: hook-8 opens and hook-9 closes were equal across
+~50 000 blocks of a skirmish, so nothing in normal play takes the `drawUnits == 0` route.
+
+### `KeyboardHotkeySampler 0x4C1B80` — why polling it twice is safe
+
+`ui-markers.md` relies on this and it is worth having in the map. The function is a jump table
+(`0x4C1C48`, index bytes at `0x4C1C6C`); the SHIFT entry `0xF9` lands at `0x4C1BB5`, which is
+`push 0x10; call ds:0x4FC350` (`GetAsyncKeyState`) then **`and al,0xfe`** — masking off bit 0,
+the "pressed since last call" bit — before `neg ax; sbb eax,eax; neg eax` normalises to 0/1.
+All nine stubs in the `0x4C1BA1..0x4C1D56` block do the same mask, so nothing in the engine
+reads the consumable bit and an extra poll of our own cannot steal an edge.
+
 ## Hard-coded limits & constants
 
 [VERIFIED unless noted — from `EngineLimits.cpp`/`.h` and `tamem.h`]

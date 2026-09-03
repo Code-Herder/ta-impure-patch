@@ -134,6 +134,11 @@ cell granularity like everything else under the overlay). Block layout
             jump entry 0x4C1BB5 = GetAsyncKeyState(0x10))     ← SHIFT held?
 0x469BFC  if held: call 0x48CC30(&ctx, main+0x142F3)          ← ORDER MARKERS (§3)
           (note: NOT gated on drawUnits — runs even when the unit block is skipped)
+0x469C01  if (!drawUnits) goto 0x469D38  -- PAST hook 9, which is therefore
+          NOT reached on such a frame. Only one of DrawGameScreen's four callers
+          passes drawUnits=0: 0x4962C2, TA's movie recorder ("%s\MOVIE%03i",
+          function 0x495E88, `xor ebx,ebx` @0x495EA1). 0x495C74 and 0x495E64
+          pass a literal 1; 0x4969CC's ebx is set to 1 @0x4967CF. [BINARY-VERIFIED]
 0x469C01  if (drawUnits) for each HotUnit (u16 indices at *(main+0x1435F),
           count main+0x14367; unit = *(main+0x14357) + idx*0x118):
   0x469C4A   if (!(main+0x37F06 & 1) && unit->0xAC == 0) continue;
@@ -424,15 +429,65 @@ calls, drawn with fog off, because the engine never darkens the build cursor. La
 draws first, then our bars over it, then layer B — the engine's own order inside the
 block (`0x469BFC` markers, `0x469CB9` bars, and the cursor after fog).
 
-Six call-site redirects and one prologue detour. **No collision with the other passes**:
+Eight call-site redirects and one prologue detour. **No collision with the other passes**:
 the redirects *call* `0x471F90` and `0x4BF8C0`, so whatever `fxown` and `terrown`
 installed on those still runs.
 
-**What the capture buffer holds under a blend.** `DrawTranspRectangle`'s transparent
-edges and the order sprite's alpha composite read the destination. Ours is key-filled,
-which is exactly what they already read out of the engine's frame today, because
-`terrown` fills the viewport with that same key — so this changes nothing, and nothing
-is lost that was not already lost at G13b.
+**What the capture buffer holds under a blend.** Exactly one primitive in either window
+reads the destination: the order pass's target sprite. Ours is key-filled, which is what
+it already read out of the engine's frame today, because `terrown` fills the viewport with
+that same key. **`DrawTranspRectangle 0x4BF8C0` does not** — it is named for its hollow
+centre, not for translucency, and its four clipped edge runs only ever store, never load
+[CORRECTED 2026-09-03: earlier text here called its "transparent edges" blend-reading].
+The drag band box rendering as a clean white outline rather than washing out like the star
+is the visible confirmation.
+
+**That was originally called harmless, and it was not** [CORRECTED 2026-09-03]. What
+those primitives *read* is unchanged; what they *write* is a function of it. The target
+sprite (`0x439740`, the pulsing star at a move/attack waypoint) alpha-composites through
+`AlphaCompsteBuf2OFFScreen 0x4B8500`, whose inner loop at `0x4CBF99..0x4CBFAC` is
+`out = tab[(src << 8) | dst]` with the LUT pointer at `*(*(u32*)0x51FBD0 + 0xC0)`
+(`0x4B6220` is just `mov eax,ds:0x51FBD0; ret`). [BINARY-VERIFIED] With `dst` = the key,
+that is a blend against palette 254 — bright cyan — so the star rendered **teal** where
+stock TA renders it olive over grass. Measured in a 32x32 box on the sprite: **17.6 % of its
+pixels cyan-family before, 0 % after** (an earlier "14 % -> 1 %" in this branch used a
+palette-index set that also caught tree-canopy greens; this colour-based measure is the one).
+
+**The fix: an identity LUT around the drawer.** `tab[(s<<8)|d] = s` for every pair makes
+the composite a plain copy, so the sprite lands in our buffer as its own palette indices.
+The replay then draws it **opaque**, a deliberate departure from stock's blend; re-blending
+it against our own scene instead would now be a shader change, not another capture change.
+
+> **Do NOT install this at hook 8 and restore it at hook 9.** The first revision did, on
+> the reasoning that a *global* can safely be put back a frame late, and that is wrong —
+> see the paragraph below for why the slot cannot hold a pointer of ours across a frame at
+> all. The star is drawn at `0x469BFC`, which is *before* the `0x469C03` drawUnits early
+> exit, so an abandoned frame really does reach the sprite with the swap live.
+
+What else draws in the window cannot reach the LUT, with one data-gated caveat: the rects
+and circles are `DrawLine`, the group digits' `DrawTextCustomFont 0x4C14F0` blits through
+`0x4CCF60`, and the health bars are ours. The route dots go through `CopyGafToContext
+0x4B7F90`, which is *usually* a masked copy — but `0x4B7FF7` reads the sub-frame byte at
+`+0xB` and routes anything non-zero into `AlphaCompsteBuf2OFFScreen 0x4B8500` itself
+[BINARY-VERIFIED]. Stock `pathicon` frames do not carry it, which is why the dots come
+through solid; a mod or a different build whose frames do would reproduce the same
+teal-against-the-key bug on the dots, outside the bracketed call. That is a property of
+the GAF data, not of the code, so it is worth knowing rather than asserting away.
+
+**The swap is bracketed around the drawer's two call sites, not the frame, and that is
+load-bearing.** `[globals+0xC0]` owns a 64 KB heap buffer: `0x4BA5C0` allocates it through
+TA's allocator, `0x4BA5F0` frees it from the graphics teardown, and `0x4BAAD0` (`rep movsd`
+of 0x4000 dwords) plus `0x4BA750` refill it when `palettes\PALETTE.ALP` loads per game.
+[BINARY-VERIFIED] A pointer of ours left there across a frame would therefore be
+overwritten by a table reload — silently un-fixing the star *and* leaving the engine's real
+table stale for every other blend — or handed to TA's free at teardown. `0x439740` has
+exactly two direct `E8` callers (`0x439516` in `0x4394E0`, `0x439C7D` in `0x439B30`), so
+wrapping them scopes the swap to a call that always returns and no engine alloc/free/reload
+can observe it. Its address IS also in a table — 19 times in `.rdata`, as the `+8` field of
+the 25-byte order-descriptor records behind `*(u32*)0x512344` — but **that field is never
+read in this build**: the dispatcher only ever loads `+0`, `+4`, `+0xC`, `+0x10`, `+0x14`
+and `+0x15`. So the two wrappers are the whole path today, and if that slot were ever
+brought into use both would be bypassed silently. [BINARY-VERIFIED]
 
 ### 6.1 Cost, and the one honest gap
 
@@ -466,6 +521,40 @@ and deliberately not done here.
 like any other ([GPU status](gpu-status.html) §2.3b, §3.1). Without that arm the pre-G13f
 behaviour stands and a ring click is *dropped* rather than landed on the wrong world point
 (`tagpu_zoom.h`).
+
+### 6.2 The capture runs ~83× per presented frame [MEASURED 2026-09-03]
+
+The game thread and the GL thread are not in step, and they are not even close. With the
+stack armed, almost everything in `DrawGameScreen` is skipped — terrain, units, features,
+effects and fog are all ours — so the engine's frame is cheap and free-runs, while ours is
+the slow half. Counted on a live skirmish at 1024×768: **9 300–10 200 hook 8 → hook 9
+blocks per 120 presented frames, i.e. 78-85 captures for every frame the player sees.**
+`cnc-ddraw` presents from its own thread (`ogl_render_main`), which leaves the primary
+surface's critical section long before `tagpu_overlay_draw` runs, so the read is concurrent
+with the game thread by design.
+
+Two consequences, both measured with SHIFT held:
+
+- **The publication must only ever be REPLACED, never emptied first.** `mark_hook8` used
+  to `layer_clear` on the way in and republish at hook 9; that hole is open for the length
+  of one capture, and at 80 captures a frame the GL thread landed in it **13 times in 120
+  presents (~11 %)** — an order overlay that visibly flickered on and off the whole time
+  SHIFT was down. Deciding "nothing this frame" *before* the capture and leaving the last
+  publication standing otherwise takes it to **0 in 840**.
+- **Two buffers are enough, and that was checked rather than assumed.** The writer
+  alternates slots, so the buffer the GL thread is uploading is only reclaimed two
+  publications later. Instrumented for the case where the slot about to be key-filled is
+  the one the reader still holds: **0 in ~50 000 publications at 1024×768**. It is the
+  `glTexSubImage2D` finishing inside two of the engine's blocks that makes that true, so it
+  is the number to re-take if the layer ever grows much faster than the block does.
+
+The post-fog window (build cursor, band box) has the same shape with one twist: its "there
+was nothing to draw" is only knowable *in arrears*, because no `DrawTranspRectangle` came.
+It is therefore decided at the **next** frame's hook 8, about the frame that just ended —
+a one-block ghost where the old code had a hole most of a frame wide. Two residuals are
+known and deliberately left: the block in which a drag ends still carries its last rect,
+and the second of the two `DrawTranspRectangle` calls continues into the buffer the first
+one published, so a present between them shows the outer outline without the inner.
 
 ---
 

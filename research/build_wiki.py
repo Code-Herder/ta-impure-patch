@@ -11,7 +11,33 @@ import sys
 from datetime import date
 from pathlib import Path
 
-import markdown
+try:
+    import markdown
+except ModuleNotFoundError:                                 # pragma: no cover
+    # The system python is PEP 668 externally-managed and has none of this. The
+    # project's environment is .venv-undither at the MAIN CHECKOUT — one venv,
+    # shared by every worktree (find_python() below resolves it the same way for
+    # the bake subprocess). Say so here rather than dying on a bare ImportError,
+    # because from a worktree the obvious `python3 research/build_wiki.py` is
+    # exactly the command that fails.
+    _here = Path(__file__).resolve().parent
+    _cands = [_here.parent / ".venv-undither" / "bin" / "python"]
+    try:
+        _c = subprocess.run(["git", "rev-parse", "--git-common-dir"], capture_output=True,
+                            text=True, check=True, cwd=_here).stdout.strip()
+        _main = (Path(_c) if Path(_c).is_absolute() else _here.parent / _c).resolve().parent
+        _cands.append(_main / ".venv-undither" / "bin" / "python")
+    except Exception:
+        pass
+    _py = next((c for c in _cands if c.exists()), None)
+    sys.exit(
+        "build_wiki: no 'markdown' module in {}.\n"
+        "Run it with the project venv instead:\n    {} {}\n"
+        "{}".format(
+            sys.executable,
+            _py or "<main checkout>/.venv-undither/bin/python", __file__,
+            "" if _py else "(no .venv-undither found — create one and "
+                           "`pip install markdown`; see CLAUDE.md)"))
 
 ROOT = Path(__file__).resolve().parent
 NOTES = ROOT / "notes"

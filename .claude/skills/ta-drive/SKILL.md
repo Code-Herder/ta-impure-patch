@@ -34,6 +34,14 @@ Capture and video work: the **ta-capture** skill.
    In a **worktree**, tacli pins the DLL your tree built (`<tree>/tagpu/ddraw/ddraw.dll`),
    falling back to the main checkout's — so build where you edit, or you will test the
    main checkout's binary and wonder why your change did nothing.
+   **It picks that DLL relative to the `tools/tacli` you invoked, not your cwd**
+   (`built_dll()`, `tools/tacli:77`), so run the worktree's own copy: `cd <tree> &&
+   tools/tacli …`. Building in the worktree and then calling the *main* checkout's
+   tacli silently launches the main checkout's binary, and the symptom is not an
+   error — modules simply never appear in `tagpu.log` (no `terrown:` / `zoom:` /
+   `vpwide:` ARMED line, no `terr:` grid line), which reads like a failed arm rather
+   than a stale DLL. When a module you know is armed does not log, `md5sum` the
+   instance's `gamedir/ddraw.dll` against your build before debugging anything else.
 6. **When the human is going to play it, check the window is on their monitor**
    before handing it over — see *Where the window lands*. A game that is running
    perfectly but sits off-screen still answers every `tacli` command and shows
@@ -65,6 +73,34 @@ it — before 2026-09-02 it did neither, so the twelfth instance drew slot 10 an
   windowmove` alone will not bring it back — it must be `xdotool windowmap`ped
   first. `xprop -id <wid> WM_STATE` reads `Withdrawn` when this is what happened,
   and the WM may resize the window on remap, so a relaunch is the clean fix.
+
+**Which window is which: the title names the build and the instance.** Every `tacli
+launch` writes `tagpu_title.txt` into the gamedir and the DLL appends it, so the title bar
+reads
+
+```
+Total Annihilation - wt:worktree-gpu_render | tacli:play1
+```
+
+instead of the bare name every instance used to share. `wt:` is the **branch of the tree
+tacli was run from** — the tree whose `ddraw.dll` it pinned, so it says which *build* you
+are looking at, not just which checkout. `tacli:` is the **instance name**, the id every
+other tacli command takes, so the title also tells you what to type to drive that window.
+
+```bash
+tools/tacli launch t1                      # Total Annihilation - wt:<branch> | tacli:t1
+tools/tacli launch t1 --title "fog A/B"    # Total Annihilation - fog A/B
+tools/tacli launch t1 --no-title           # stock title, no label
+tools/tacli launch t1 --title auto         # back to the wt:/tacli: default
+```
+
+`--title` replaces the **whole** label, both fields included — it is the escape hatch for
+an arbitrary title, not a way to edit one field. It is sticky per instance like every other
+launch knob, and `--title auto` is the only way back out of a `--no-title`. A label that is
+blank, or has nothing printable left in it, is the same as `--no-title`. `tacli ls --json` reports the exact string as
+`window_title`, and that is what `tacli` searches for to find the client window — so
+**take the window from `tacli ls`, never from an `xdotool search` you typed yourself**;
+the title is no longer a constant you can hard-code.
 
 Handing the game over is `tacli launch <name> --no-shield`, or `tacli shield <name>
 off` on one that is already running: with the shield off their keyboard and mouse
@@ -147,12 +183,32 @@ game; the registry is only where TA saves the last one. So:
   If a combo does nothing, read the diagnostic the shield logs when the hold expires —
   `shield: vk=17 released after 150ms, polls=2 down=2`. `down>0` means the game saw
   your modifier and the binding is the problem, not the input path.
+- **Injected modifiers need the shield ARMED, and that is not optional.** A polled
+  modifier only reaches TA through `fake_GetAsyncKeyState`, and
+  `tagpu_shield_key_state` opens with `if (!tagpu_shield_on()) return FALSE;` — so with
+  `--no-shield` (or after `shield off`) the poll falls through to the **real keyboard**
+  and your injected `down:shift` is invisible. Anything gated on a held modifier is
+  therefore **untestable with the shield off**: the order markers are the case that
+  bites, because `markown` samples the engine's own SHIFT hotkey (`0xF9` →
+  `GetAsyncKeyState(VK_SHIFT)`). Symptom: `mark: prefog=-` and no markers, with the
+  injection reporting `sent: down:shift` perfectly happily. Hand the instance over
+  *after* you have finished measuring, not before.
 - Hold anything across frames with `down:<tok>` / `up:<tok>` — keys, or
   `lbutton`/`rbutton`/`mbutton`. Drag-select is `down:lbutton`, `mouse:x,y`,
   `up:lbutton`.
 - `tacli eye X Y` pins the camera (writes both eye and scroll-target, else the engine
   fights back); `tacli eye <name> --release` frees it. Read the settled value from a
   `roster` call before doing coordinate maths.
+- **A moving unit invalidates `roster`'s `screen=` before your click lands.** A unit
+  with a move order walks between the read and the injected click, and a selection
+  click that misses is silent — the symptom is `native: … 0 sel` in the log and every
+  subsequent order going nowhere. Re-read the roster immediately before clicking, or
+  select first and order second. `grep -a "native: .* sel " tagpu.log` is the cheap
+  confirmation that the selection actually took.
+- **A right-click on water is rejected for a ground unit**, so it queues nothing and
+  draws no order markers — which looks exactly like a broken marker pass. Sample the
+  frame for grass before picking a waypoint (green-dominant, `g > b + 30`) rather than
+  guessing an offset from the unit.
 - Game speed: `keys <name> plus` / `minus` (TA's own feature, up to +10, and negative
   below normal — invaluable for catching fast events or slowing them for capture).
 
@@ -362,10 +418,14 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
   **`ErrorLog.txt` is shared between instances** (the gamedir symlinks it), which
   is why the report matches the crashing exe's path against the instance before
   claiming the crash is yours.
-- `tacli peek <name> '*0x511DE8+0x2C74:2'` — read game memory from inside the
+- `tacli peek <name> '*0x511DE8+0x2C76:4'` — read game memory from inside the
   process (deref with `*`, `+hex` offsets, `:1|2|4|s<N>|x<N>`). The cheap way to
   answer "did that actually change anything?" without a debugger. Grammar:
   `tagpu/ddraw/inc/tagpu_peek.h`; worked example: `cmdline-options.md` §A/B.
+  Handy camera reads: eye `+0x1431F`/`+0x14323`, its scroll target `+0x14327`/`+0x1432B`,
+  view size `+0x37E37`/`+0x37E3B`, screen size `+0x37E1F`/`+0x37E23`, map px
+  `+0x1422B`/`+0x1422F`, mouse `+0x2C76`/`+0x2C7A` (two DWORDs — **y is at +0x2C7A**, not
+  `+0x2C78`, which is the high half of x). Camera-module map: `exe-reverse-engineering.md`.
 - `tacli log <name> -g <regex>` / `tacli wait <name> <regex>` — the fork logs
   `units:`/`native:`/`OWND` lines; `roster` parses the newest unit block (id, type,
   owner, world + screen coords — `owner` equal to the `me=` in `units:` is yours).
@@ -410,6 +470,14 @@ tools/tacli log w1 -g "weapons: (loader|VIOL|MISM)"
 - `tacli log -g` takes a Python regex: alternate with `(a|b)`, not `a\|b`.
 
 ## The input firewall (on by default)
+
+**"Human controllable" / "let me play it" / "hand it to me" means SHIELD OFF.** That is the
+whole content of the request: an instance launched with the shield on answers every `tacli`
+command and ignores the human's keyboard and mouse entirely, which reads to them as a game
+that is running but broken. So `--no-shield` at launch (or `tacli shield <i> off` on a running
+one), and check `tacli ls` says `OPEN` before saying it is theirs. Also check the window is on
+one of their monitors (*Where the window lands*) — the two together are what "controllable"
+means.
 
 While armed, the game ignores the real keyboard and mouse completely and sees only what
 tacli injects — the human can click and type across your window without perturbing your
@@ -560,10 +628,52 @@ tools/tacli keys  <i> pmove:576,384 wheel:-6      # the same thing as raw tokens
   0.25 or 8.0 **clamp**: the grid re-anchors there, so −15/+15 comes back at 1.044, not 1.
   Re-anchor with the file (write `1.0`, then delete it) when you need exactly 1× back.
 
-`tacli arm <i> zoom.on` (at launch, like every other code-patching pass) installs the one
-engine patch either lever needs — the minimap view rectangle, plus the guard that keeps our
-`ScrollSpeed` scaling out of the player's registry — and logs `zoom: ARMED`. Everything
-else needs no arm at all and is inert at 1×.
+`tacli arm <i> zoom.on` (at launch, like every other code-patching pass) installs the engine
+patches either lever needs — the minimap view rectangle, the guard that keeps our
+`ScrollSpeed` scaling out of the player's registry, and **the camera's range** — and logs
+`zoom: ARMED (… camera range 0x41C3C0 + world guard 0x498EF9)`. Everything else needs no arm
+at all, and every patch is inert at 1×.
+
+**The camera's range is what lets a zoomed-in view reach the map edge.** TA clamps the eye to
+the range that puts the *1× viewport's* edges on the map's, which at zoom > 1 stops the visible
+window `W/2 − W/(2z)` short of every edge — 224 px at 2× on 1024×768 — so the map's edges and
+corners could not be reached and the camera read as if it were being pushed back off them.
+Armed, the range widens by exactly that, so `eyeX` goes **negative** at the left edge and past
+`map − W` at the right; zoom back out and the eye walks home on its own within a frame.
+`tacli eye` clamps with the same range, so a scripted camera reaches the edges too.
+`tacli arm <i> zoomedge.off` disables just this and puts the eye back on the 1× range;
+`zoomedge.off=off` removes the file again.
+
+**To measure a camera bound, jump with the minimap and peek the eye.** Arrow keys do not scroll
+(TA's scroll hotkeys are its own ids `0xF4`/`0xF5`/`0xF6`/`0xF7`, not VK arrows), but a *held*
+left button on the minimap does jump the camera, and lands exactly on `world − (W/2, H/2)`
+before the clamp:
+
+```bash
+tools/tacli keys edge1 mouse:10,0 down:lbutton   # top-left of the minimap click rect
+tools/tacli peek edge1 '*0x511DE8+0x1431F:4' '*0x511DE8+0x14323:4'
+tools/tacli keys edge1 up:lbutton
+```
+
+`pclick:` alone does **not** work here — the camera jump wants the button held across a frame.
+
+**Edge scroll DOES fire under injected input — you have to land on the exact edge pixel.**
+TA's mouse trigger is an *equality* on the outermost pixel, not a band: `x == 0`, `y == 0`,
+`x == screenW − 1`, `y == screenH − 1`. Measured at 1× on 1024×768: `mouse:1023,400` scrolls
+right, `mouse:1020,400` does nothing at all. (Earlier notes here claimed edge scroll was dead
+under injection; that was a probe 3 px short of the edge.)
+
+```bash
+tools/tacli keys <i> mouse:1023,400     # scroll right;  x=0 left, y=0 up, y=767 down
+```
+
+**At zoom > 1 the RIGHT edge stops firing, and only the right one.** The engine polls
+`GetCursorPos`, which we answer with the *unzoomed* position, and three of the four screen
+edges lie outside the viewport rect (`L=128`, `T=32`, `B=screenH−33`) so they pass through
+untransformed. The screen's right column *is* the viewport's right column, so it contracts
+toward the centre — at 2× a pointer at `x=1023` reaches the engine as 800. Zoomed in, scroll
+right with the minimap or hotkey `0xF6`. Not caused by the camera-range change; found while
+documenting it (`gpu-status.md` §2.3c).
 
 Three things to know when driving zoomed:
 
@@ -593,8 +703,8 @@ It writes engine state (`main+0x37E27..0x37E33`, camera state only) and patches 
 sites, so it is **off by default** — arm it when you are testing zoomed play, leave it off
 when you want the pre-G13f baseline. Two things it does not change: the captured **order
 markers** still stop at the engine's screen-sized offscreen (further out than before, not
-to the frame edge), and the left/up edge-scroll not firing under injected input is
-pre-existing and present with it disarmed too.
+to the frame edge), and edge scroll behaves the same armed or not (see the zoom section: it
+does fire under injection, on the exact edge pixel).
 
 **Particles (smoke, fire, wakes, nanolathe) are `sfx.on`** — tokens `log`, `passive`,
 `nosmoke`, `nofire`, `nowake`, `nonano` — on the same `fxown.on` patch set (tacli auto-arms
@@ -621,8 +731,10 @@ storage's does not); `tacli log` returns a tail of the file, so count lines in t
 - `pkill -f TotalA.exe` kills your own shell (the pattern matches the wrapper).
   Use `pkill -x` / `pgrep -x`, or just `tacli stop`.
 - `tagpu.log` contains binary bytes: always `grep -a` (tacli's `log`/`wait` handle it).
-- Two X windows share the title `Total Annihilation` (frame + client), and the user's
-  browser/Discord windows match the *substring* — tacli matches exact title + pid.
+- Two X windows share each instance's title (frame + client), and the user's
+  browser/Discord windows match the *substring* — tacli matches exact title + pid. The
+  title now carries a per-tree label (above), so an instance launched before that existed
+  still answers to the bare `Total Annihilation`, and tacli searches for both.
 - The launch briefly warps the pointer to a screen origin (a wine-side quirk, not TA);
   tacli restores it and reports `pointer_restored`. Do not "fix" this with xdotool.
 - The DEBUG build writes `cnc-ddraw-TotalA-*.log` at **~100 MB/minute** and rotates

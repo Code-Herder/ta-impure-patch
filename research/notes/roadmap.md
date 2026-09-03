@@ -53,12 +53,14 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02) | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid | done — [Features](features.html) §9 |
 | Terrain tiles | ● native (G13b) | `terrown`: one detour on `0x483FA0`, whose skip path key-fills the viewport | 0-px parity vs the engine's own blit, engine surface 99.9 % key, in-process map change |
 | Fog overlay | ● native (G13b) | `terrown` detours `0x4848E0` too, replicating only its lazy grid rebuild | 99.06–99.39 % lit-vs-grey agreement with the engine's own overlay |
-| Health bars, order markers, group digits, build cursor, band box | ● native (G13d) | `markown`: six call-site redirects + one detour on `0x46A430`; bars re-drawn, the rest captured out of the engine's own draw and replayed | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5× |
+| Health bars, order markers, group digits, build cursor, band box | ● native (G13d, corrected G13h) | `markown`: eight call-site redirects + one detour on `0x46A430`; bars re-drawn, the rest captured out of the engine's own draw and replayed. G13h fixed the capture's publication discipline and gave the waypoint star an identity blend LUT | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5×; **0 overlay dropouts in 840 held-SHIFT frames** (was 13 in 120) and **0 % cyan** on the star (was 17.6 %) |
 | Chat, dialogs, side panel, minimap, top bar | ○ engine 8bpp, through the composite key | — | stays engine-side: screen-space, correct at 1:1 at any zoom |
 | Mouse cursor | ● moved in the composite (G13e) | the cursor is the ONLY engine pixel left inside the viewport, so the composite paints the box around `u` at the box around `s` | full sprite at the pointer at 0.25×/0.5×/1×/2×, in every corner and in the display-only ring |
 | Click → world point | ● transformed (G13e) | `tagpu_zoom.c`: one rewrite at the three doors into the engine's own wndproc, plus `fake_GetCursorPos` | at 0.5× the commander selects at its DRAWN position (394,427) and no longer at its 1× one (212,470); the side panel still clicks 1:1 |
 | Minimap view rectangle, scroll rate | ● zoom-aware (G13e) | `0x466B70` ×2 redirected and its rect rescaled by 1/z; `ScrollSpeed` (`main+0x1434D`) driven at base/z | minimap box doubles at 0.5× and quadruples at 0.25×; ScrollSpeed 32 → 64 → 128 → 16 at 2×, and restores |
+| The camera's range at zoom > 1 | ● follows the zoom (G13g) | `tagpu_zoom.c`: the eye clamp `0x41C3C0` replaced by a `leaf_call` detour while zoom > 1, widening `[0, map − W]` by `d = (W/2)(1 − 1/z)`, plus a map clamp on the `GetTPosition` inside `0x498DA0` | measured on Two Continents at 1024×768: (−224,−176) at 2×, (−392,−308) at 8×, (10048,12144) at the far corner, all exact; 1× and 0.5× land on the engine's own (0,0)/(9824,11968) |
 | The addressable ring at zoom < 1 | ● closed for input (G13f, **opt-in** `vpwide.on`) | `tagpu_vpwide.c`: the engine's own viewport rect widened to the transform's range, with the clip (`0x4C6B10` ×3) and the screen→world origin (`0x498DA0`) redirected and corrected, plus a signed `lParam` unpack in TA's wndproc | at 0.5× a ring click selects the unit under it in all four quadrants and a right-click walks it to the world point clicked; 1× untouched; the captured markers reach the offscreen bound, not the frame edge |
+| Atlas cell edges at zoom-out | ● closed (G13i) | every atlas cell carries a 1-texel replicated border (terrain on a 34-texel pitch; GAF frames advance `w+2`/`h+2`), plus `TAGPU_EDGE_NUDGE` — 1/32 game-screen px in the terrain VS, after the zoom scale | the period-8 row anomaly at zoom 0.25 goes 1.92×/2.05× → 1.03–1.13× at every camera phase, `ss=1` and `ss=2`, 1024×768 and 1920×1080; ten zoom levels clean; **1× output bit-identical** to a build without it |
 
 So the engine's software frame is now **UI only** — inside the viewport it is a flat fill of
 one palette index, the *key*, with nothing on it but the mouse cursor (G13d took the rest). Everything a player looks at
@@ -73,6 +75,140 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G13i — the interior cracks, and a note that said they were impossible.** Reported from
+play: *"at max zoom out there are a lot of crack artifacts — black line on the right side of all
+the map features like trees, and blue-ish or sometimes black lines on all sides of map tiles,
+most often top/bottom."* Both are one bug. Quads are emitted on integer game-pixel boundaries, so
+at zoom 0.25 a quad's far edge lands exactly on a fragment centre; the rasteriser hands that
+fragment to the upper/left quad, its `u`/`v` interpolates to exactly `u1`/`v1`, and `GL_NEAREST`
+resolves that to the first texel of the **next atlas cell** — tile index +64 for terrain (an
+unrelated tile, blue over forest because Two Continents' tile set is mostly water) and the shelf
+packer's never-written gutter for a sprite (index 0 = black, and not the frame's colour key, so
+it survived the key test). It fires on the **parity of the camera**: one world pixel of eye
+movement turns it on or off, which is exactly the "not always present" in the report.
+
+Two halves, two fixes. A **1-texel replicated border on all four sides** of every atlas cell
+stops the sample leaving the cell — and is what a filtered sampler will need when these atlases
+stop being `GL_NEAREST`, which is why it is four-sided and not two. But padding alone is not
+enough under `GL_NEAREST`: the fragment then repeats the cell's last row, which is out of phase
+with the cadence the rest of the 4×-minified tile is sampled on, and TA's tile art is dithered,
+so it is still a line — measured, 1.92× → 1.86×, i.e. no help at all. So the geometry moves too,
+by 1/32 of a screen pixel, applied after the zoom scale so it is the same sub-pixel distance
+everywhere; a coincident fragment centre then falls inside the *following* quad and samples the
+texel it is standing on.
+
+**The expensive part was a note.** [terrain & depth](terrain-depth.html) §7.1 asserted that atlas
+bleed was impossible because "interpolated `u` stays inside `[u0, u1)` for any fragment centre
+inside the quad" — and a fragment centre can land exactly **on** the far edge, which is the one
+value that interval excludes. That sentence ruled tile seams out of the hunt, and 350+ frames
+were swept for a key leak that was never there; the detector, `min(r,b) − g`, was measuring the
+key's tint and this defect never touches the key. §7.1 now carries the correction and §7.6 the
+mechanism. A seam that is periodic in screen space wants a periodic detector: score each row
+against its own two neighbours and group by `y mod (32·z)`.
+
+**G13h — the order overlay stopped flickering, and the waypoint star stopped being teal.**
+Both reported from play, both in `markown`, and both older than the gate that shipped them.
+
+*The flicker.* `mark_hook8` cleared the published marker layer on the way into every capture
+and only republished it at hook 9. That hole is open for the length of one capture — and the
+engine runs that block far more often than we present, because with the stack armed everything
+else in its frame is skipped and ours is the slow half. **Measured on a live skirmish at
+1024×768: 9 300–10 200 hook-8 blocks per 120 presented frames, ~80 per frame the player sees.**
+The GL thread reads the publication on cnc-ddraw's render thread, which leaves the primary
+surface's critical section long before `tagpu_overlay_draw`, so it landed in that hole **13
+times in 120 presents** — roughly every eighth frame had no order markers. Deciding "nothing
+this frame" *before* the capture and leaving the last publication standing otherwise took it to
+**0 in 840**. The second buffer already existed for exactly this; what was missing was the rule
+that a publication is only ever *replaced*, never emptied and refilled. Two buffers turn out to
+be enough, and that was measured rather than assumed (0 in ~50 000 publications for the case
+where the writer reclaims the slot the reader still holds) — it rests on the upload finishing
+inside two of the engine's blocks, so it is the number to re-take if the layer ever grows much
+faster than the block does.
+
+*The star.* The pulsing sprite at a waypoint is the one alpha-composited marker: `0x439740`
+goes through `AlphaCompsteBuf2OFFScreen 0x4B8500`, which reads the destination pixel and looks
+the pair up in `tab[(src<<8)|dst]`. Stock TA's destination is the terrain, so the star reads
+olive over grass; since G13b ours has been the fill key, so it blended with palette 254's
+bright cyan and looked washed out. **17.6 % of the sprite's box was on the cyan ramp; it is
+0 % now.** The fix is an identity LUT — every pair answering `src` — which turns that one
+composite into a copy, and the replay then draws it **opaque**: a deliberate departure from
+stock's blend, chosen over re-blending against our own scene, which would now be a shader
+change rather than another capture change.
+
+Three things this gate is worth remembering for:
+
+- **`markown.h` had already predicted the star bug and dismissed it** — "what they see
+  underneath is the fill key, which is exactly what they already read out of the engine's frame
+  today". True of what the primitive READS, wrong about what it WRITES. Both that comment and
+  `ui-markers.md` are corrected in place rather than deleted; the wrong inference is the useful
+  part.
+- **The blend LUT pointer is not a hook point.** `[globals+0xC0]` owns a 64 KB heap buffer:
+  `0x4BA5C0` allocates it, `0x4BA5F0` frees it from the graphics teardown, `0x4BAAD0` refills
+  64 KB *through* it. The first revision installed the swap at hook 8 and restored it at hook 9,
+  reasoning that a global can safely be put back a frame late — and the review caught that. It
+  cannot: `0x469C03 je 0x469D38` skips hook 9 whenever `drawUnits == 0` (TA's own movie
+  recorder, `0x495E88`, is the one caller that passes 0), and the star is drawn *before* that
+  branch, so an abandoned frame would leave our pointer to be clobbered or cross-heap-freed.
+  The swap is now bracketed around the drawer's two call sites — a call that always returns.
+- **What the reviewer had to correct in the prose, twice.** That `0x439740` is "not in a
+  function-pointer table" (it is, 19 times in `.rdata`; the field is simply never read in this
+  build), and that `DrawTranspRectangle 0x4BF8C0` reads a destination (it does not — it is
+  named for its hollow centre, and the band box rendering as a clean white outline instead of
+  washing out like the star is the visible proof). Addresses in
+  `exe-reverse-engineering.md` §"The blend LUT and the marker composites".
+
+**G13g — the camera's range follows the zoom.** Reported from play: *"when you zoom in and try
+to get to the edge of the map it's impossible — the engine pushes your camera back as if you
+were still at 1:1 zoom level."* Exactly right. `0x41C3C0` clamps the eye to `[0, map − W]`,
+which puts the **1× viewport's** edges on the map's; at zoom `z` the view is still centred on
+`eye + W/2` but is only `W/z` wide, so the visible window stopped `W/2 − W/(2z)` short of every
+map edge — 224 px at 2×, 392 px at 8× on 1024×768. The range is now the engine's own widened by
+exactly that `d`, so the visible window's edges land on the map's at both extremes. Everything
+downstream came for free, because the eye *is* the engine's camera: minimap box, "centre on
+unit", the minimap click jump, the HotUnits cull, our passes.
+
+Three things made it small rather than a camera rewrite:
+
+- **The widening is the transform's own arithmetic**, about the same centre, so the two cannot
+  disagree at the edges — the world at the viewport's left edge is `eye + d`, zero exactly at
+  `eye = −d`. Measured to the pixel: (−224,−176) at 2×, (−392,−308) at 8×, (10048,12144) at the
+  far corner, (−239,−188) at the wheel's 1.1⁸ = 2.144.
+- **The flag keeps 1× byte-identical.** A `leaf_call` detour raised only while a zoomed-*in*
+  world is live; clear, the engine's own function runs verbatim *including the two minimap-rect
+  redirects inside it*. 1× and 0.5× land on the engine's own (0,0)/(9824,11968).
+- **An off-map eye needed a guard, and only one.** For a pointer *outside* the viewport
+  `0x498DA0` answers `eye` itself (side panel) or `eye + H − 1` (bottom bar) — the
+  `GetGridPosPLOT`→NULL→`GetGridPosFeature` crash `vpwide` already carries a clamp for — so its
+  `GetTPosition` call is redirected and the world point clamped. A pointer *inside* needs
+  nothing: at `z > 1` the transform maps the viewport into `[L+d, R−d]`, so the world it names
+  is `[0, map−1]` at either extreme. Verified by sweeping the panel and both bars at 2× and 8×
+  with the eye negative: alive, cell (0,14), no feature. Our terrain pass was already general
+  about negative tiles (`tile0=(−10,−7) off-map=346 junk=0`), and the viewport black fraction at
+  the corner is 0.000515.
+
+`apply_eye_range()` re-applies the same bounds once a frame, because the engine clamps only when
+*it* moves the camera — without it a zoom-out at a map edge left the eye parked off-map until the
+next scroll — **and it must clamp the scroll target `main+0x14327`/`+0x1432B` with it.** The
+review caught that one: the correction has no caller to copy the eye into the target afterwards,
+and the stepper `0x41CA30` acts on any disagreement — `0x41CB5F` sets the camera-moved bit and
+`0x41CB6B` clears `main+0x14281` bit 3, the fog grid's own is-current flag, then halves the
+distance and hands it to the no-longer-widened engine clamp, which puts it straight back. That is
+a permanent per-frame fog-grid rebuild after any zoom-out from a map edge, on exactly the path
+`97e518f` had to guard against a crash. The replacement clamp deliberately does *not* write the
+target: three of its callers are inside that stepper, and doing so would stop the camera arriving.
+
+`tagpu_zoomedge.off` is the live off switch and puts the eye back on the 1× range.
+`tacli eye`'s own clamp was the same bug in the scripted path and now shares the range.
+
+**Known gap, and it is the scroll target that draws the line.** Three sites compute that target
+and clamp it *inline* against `[0, map − W]` without ever calling `0x41C3C0` — `0x41C4C0` (smooth
+`SetCamera`), `0x41C7F7` (smooth centre-on) and `0x41CAF7` (per-frame camera **follow**). The
+stepper walks the eye to that target and our wider clamp leaves it there, so **those paths still
+stop `d` short of a map edge**: track a unit into a corner at 4× and the camera stops where 1×
+would. Nothing fights and nothing churns — the eye arrives at a target inside our range and both
+stop. Closing it means widening three inline clamps in the middle of the camera module, which is
+a bigger patch than this one.
 
 **G13f — the ring at zoom < 1 is a play mode (opt-in, `vpwide.on`).** G13e's honest answer
 to the ring was to *drop* the click; this addresses the ring instead. `tagpu_vpwide.c` widens
@@ -231,7 +367,12 @@ engine's already-drawn frame is still the key fill; and a screen the game thread
 without ever reaching `0x483FA0` needs a stall timeout or the key test would black it out.
 The key test is scoped to the viewport rect, and inside it a pixel neither side painted is
 drawn black — so a bail degrades to black, never to raw key colour. Six ownership flips,
-zero key pixels on screen. The gate also fixed a latent G13c bug it made fatal: `fogMode`
+zero key pixels on screen. **INCOMPLETE, corrected 2026-09-03:** that rule caught only
+*entirely* empty pixels; a **part-covered** one was still blended over the engine's frame
+and so carried `(1 - c.a)` of the key, which drew a cyan hairline along the map boundary
+at 29 of 151 zoom levels. "Zero key pixels" could not see it — a blend never equals the
+key. Inside the fill our fragment is now composited over black outright
+([terrain & depth](terrain-depth.html) §7.6). The gate also fixed a latent G13c bug it made fatal: `fogMode`
 bit 0 was `LosType & 1`, the *mapping* option, so true-LOS-without-mapping (`LosType = 14`)
 skipped the fog rule entirely — invisible while the engine drew its own overlay, a missing
 grey band once we suppress it.
@@ -621,7 +762,7 @@ Two static-RE agents landed at phase start (proven pattern):
 | G12e — effects pass (weapon fire, explosions, debris) | ● done (2026-09-02) | The engine's two effects passes are reverse-engineered ([Effects](effects.html)) and replaced: `tagpu_fx.c` gathers `ProjectileStruct[]` / `ExplosionStruct[]` / the debris particle slots and draws lasers and lightning as lines, rockets/missiles/shells and debris as 3DO models through the native geometry path, sprite weapons, flares, explosions and the LHT light flash as sprites from a private RLE-decoding GAF atlas — at the engine's depth band (above every ground row, below aircraft), LOS-gated per projectile like the engine. `tagpu_fxown.c` owns the draw: two call-site redirects + four leaf detours, the skip following `tagpu_fx.on` live; tacli auto-arms it at launch. Verified same-fight (`passive` token = engine draws while we log): laser colours palette-identical, EMG sprites, rockets with thrust flames, explosion sprites + flashes, flying debris; the engine surface shows no effects while ours draw. Not reproduced: the rendertype-2 refraction ball; smoke/fire/wake particles stay engine-side (hook-vector sfx — next gate). |
 | G12f — particle sfx (smoke, fire, wakes, nanolathe) | ● done (2026-09-02) | The ten `0x471F90(ctx, n)` sites in `DrawGameScreen` — filed in terrain-depth.md as "plugin-layer hooks, empty in stock play" — are the particle sfx: pooled 76-byte objects in ten *layer* vectors at `*(main+0x38D77)`, each layer drawn at a fixed depth of the frame (2 = wake foam under everything, 4 = feature smoke, 5 = rocket-trail puffs, 6 = nanolathe spray, 7 = bubbles, 9 = impact/damage smoke and fire over everything), the layer being the emitter's argument ([Effects](effects.html) §7). `tagpu_sfx.c` walks the layers, classifies each object by vtable (Smoke1/Smoke2/fire/flare = alpha sequence sprites; wake/nano = 2×2 `DrawBar` dots) and emits through the effects buckets with per-layer depth keys derived from the frame's row count; `tagpu_fxown.c` owns the draw with one more byte-matched prologue detour on the walker (`ret 8`), its own skip byte following `tagpu_sfx.on` live. Verified same-fight on `scenarios/sfx-strait.json` (Anteer Strait): wake dots, nano spray, damage smoke and burning debris identical engine vs ours, the engine surface clean while owned; 200v200 at sim +3 with every pass live holds ~60 fps (28 sixty-frame log lines in 30 s, 217 native units and ~230 particle sprites on screen). Fixture lessons (UI repair order, metal storage, boat pathing) in the ta-drive skill. |
 | G13a — features native (trees, rocks, splats, wreckage) | ● done (2026-09-02) | The last colour-keyed sprites in the 8bpp frame besides the terrain. One leaf draws every feature pixel — `0x46A610(ctx, tile, tileX, tileY)`, `stdcall` `ret 0x10`, three call sites, three bodies (3D wreck via `DrawUnit` on the scratch feature-unit, animated GAF wreck, normal feature: shadow then body, static frame 0 or the anim state, plain copy or 50 % alpha per mask bits 2/3) — and its decompile settled the two open questions the handoff carried: the leaf mutates nothing the sim reads (bodies 2 and 3 write nothing at all; body 1 only the draw-side scratch unit) and `GAFGetCurrentFramePtrAddr` is a pure read, so animation is driven by the tick and survives ownership ([Features](features.html)). `tagpu_feat.c` walks the engine's own clamped sweep rect and draws the same frames **with depth writes on** at the row key the painter's order implies (tall bodies `3 + rel*4` above that row's units at `1 + rel*4`, flat ones in a band between the particle layers the engine draws around the pre-pass, shadows a notch below with depth writes off); `tagpu_featown.c` owns the draw with one 5-byte prologue detour, gated on `native.on` carrying `wrecks` because body 1 draws husks through `DrawUnit`. **This retires the G12a scaffold as the occluder**: occlusion was verified against the engine's own draw (engine units + engine features vs ours, `scaffold.on` disarmed) and matches unit for unit; the engine surface is empty of features while owned; fog, map scrolling a 200v200 stress at ~60 fps and map scrolling all clean. Two shared modules fell out, closing three old review follow-ups: `tagpu_gaf.c` (the RLE decoder + shelf atlas, was a private copy in `tagpu_fx.c`) and `tagpu_detour.c` (the stub/patch machinery, now shared by `fxown` and `featown`). Gaps: **fog was not at parity** — the rule all four native passes shared drew over cells the engine paints black, which this pass was simply the first to make obvious; it predated G13a and got its own gate, **G13c below, which closed it** ([Features](features.html) §9); the animated-GAF-wreck body is unreachable with stock content (every `*_dead` def takes the 3D path); feature shadows are a true 50 % RGB blend where the engine does a palette-space ALP remap, so they dither differently. |
-| G13b — terrain native, and the composite inverts | ● done (2026-09-02, reviewed) | The last engine-drawn world layer. `tagpu_terr.c` reproduces `0x483FA0` — a grid blit and nothing else: one `GL_R8` atlas of fixed 32×32 cells, 64 per row, **built once per map** (`LoadMap` builds `TILE_SET` and nothing changes it; 2048×2560 for Two Continents' 5062 tiles, and a `GL_TEXTURE_2D_ARRAY` is not viable against the usual 2048-layer cap), one quad per visible cell at depth key `0.10` — under the flat-feature band and the low particle layers, i.e. the frame's implicit far plane. Water animates for free (palette cycling, and the pass already re-uploads the live palette). The engine's truncating `sar 5` and its `ceil` column count are reproduced deliberately, with a comment saying so. **Parity is exact**: 0 differing pixels against the engine's own blit in every terrain-only band, at `frac=(0,0)`, `(6,8)` and `(25,31)`. **The gate was the compositing model, and it inverts.** Terrain covers the whole viewport, so the old rule ("discard our empty pixels, let the engine's frame show") would hide health bars, nanoframe wireframes, the build cursor, chat and dialogs. `tagpu_terrown.c` therefore does not just skip `0x483FA0` — its skip path (a new `tagpu_detour_leaf_call`, nine stolen bytes) **fills the viewport rect of the engine's offscreen with one palette index, the KEY**, which also restores the clear that the terrain repaint used to provide; the composite then discards *our* fragment wherever the engine's frame is not the key, reading it straight out of cnc-ddraw's own `R8` index texture with `texelFetch` (`TAGPU_FRAME.surface_tex`). The key is **254**, not a guess: the engine's GUI colour table at `main+0xDCB` uses `0xFD` and `0xFF` and leaves `0xFE` in the gap. The **fog overlay `0x4848E0` is suppressed with the terrain** (its shade remap would rewrite the key into grey blobs, and we have reproduced it since G13c) **with its lazy grid rebuild replicated exactly**, because our own fog rule samples that grid. Terrain is the bottom layer now, so it paints the fog's solid black rather than discarding (`TAGPU_GLSL_FOG_TERRAIN`). Verified: engine surface **99.3–99.98 % key** with no terrain left; engine chat, `PAUSED`, selection boxes, the build panel and the cursor all survive inside the viewport; fog **99.06–99.39 %** lit-vs-grey agreement (99.48 % of pixels identical at a fully-fogged corner, mean abs 0.32/255) with only the dithered edge differing; in-process map change rebuilds the atlas (5062 → 7051 tiles); map corners clean with `off-map=0`; `terr.on=off` and the 90-frame watchdog both restore the engine's terrain *and* fog; 200v200 with everything native at **59.7 fps**. It also fixed a G13c gate bug it made fatal: `fogMode` bit0 was `LosType & 1`, the **mapping** option, so true-LOS-without-mapping (`LosType=14`) skipped the fog rule entirely — invisible while the engine drew its own overlay, a missing grey band once we suppress it. Review closed the three failure modes an inverted composite has and an overlay does not (emitting without owning; the disarm frame; a screen that never calls `0x483FA0`) — all written up with their symptoms in §7.6, along with the one review finding that was **wrong** and must not be "fixed" later. [terrain & depth](terrain-depth.html) §7. |
+| G13b — terrain native, and the composite inverts | ● done (2026-09-02, reviewed) | The last engine-drawn world layer. `tagpu_terr.c` reproduces `0x483FA0` — a grid blit and nothing else: one `GL_R8` atlas of 32×32 cells, 64 per row, **built once per map** (`LoadMap` builds `TILE_SET` and nothing changes it; 2048×2560 for Two Continents' 5062 tiles, and a `GL_TEXTURE_2D_ARRAY` is not viable against the usual 2048-layer cap — G13h later put the cells on a 34-texel pitch with a replicated border, 2176×2720), one quad per visible cell at depth key `0.10` — under the flat-feature band and the low particle layers, i.e. the frame's implicit far plane. Water animates for free (palette cycling, and the pass already re-uploads the live palette). The engine's truncating `sar 5` and its `ceil` column count are reproduced deliberately, with a comment saying so. **Parity is exact**: 0 differing pixels against the engine's own blit in every terrain-only band, at `frac=(0,0)`, `(6,8)` and `(25,31)`. **The gate was the compositing model, and it inverts.** Terrain covers the whole viewport, so the old rule ("discard our empty pixels, let the engine's frame show") would hide health bars, nanoframe wireframes, the build cursor, chat and dialogs. `tagpu_terrown.c` therefore does not just skip `0x483FA0` — its skip path (a new `tagpu_detour_leaf_call`, nine stolen bytes) **fills the viewport rect of the engine's offscreen with one palette index, the KEY**, which also restores the clear that the terrain repaint used to provide; the composite then discards *our* fragment wherever the engine's frame is not the key, reading it straight out of cnc-ddraw's own `R8` index texture with `texelFetch` (`TAGPU_FRAME.surface_tex`). The key is **254**, not a guess: the engine's GUI colour table at `main+0xDCB` uses `0xFD` and `0xFF` and leaves `0xFE` in the gap. The **fog overlay `0x4848E0` is suppressed with the terrain** (its shade remap would rewrite the key into grey blobs, and we have reproduced it since G13c) **with its lazy grid rebuild replicated exactly**, because our own fog rule samples that grid. Terrain is the bottom layer now, so it paints the fog's solid black rather than discarding (`TAGPU_GLSL_FOG_TERRAIN`). Verified: engine surface **99.3–99.98 % key** with no terrain left; engine chat, `PAUSED`, selection boxes, the build panel and the cursor all survive inside the viewport; fog **99.06–99.39 %** lit-vs-grey agreement (99.48 % of pixels identical at a fully-fogged corner, mean abs 0.32/255) with only the dithered edge differing; in-process map change rebuilds the atlas (5062 → 7051 tiles); map corners clean with `off-map=0`; `terr.on=off` and the 90-frame watchdog both restore the engine's terrain *and* fog; 200v200 with everything native at **59.7 fps**. It also fixed a G13c gate bug it made fatal: `fogMode` bit0 was `LosType & 1`, the **mapping** option, so true-LOS-without-mapping (`LosType=14`) skipped the fog rule entirely — invisible while the engine drew its own overlay, a missing grey band once we suppress it. Review closed the three failure modes an inverted composite has and an overlay does not (emitting without owning; the disarm frame; a screen that never calls `0x483FA0`) — all written up with their symptoms in §7.6, along with the one review finding that was **wrong** and must not be "fixed" later. [terrain & depth](terrain-depth.html) §7. |
 | G13c — fog of war at parity | ● done (2026-09-02) | **Reverses [terrain & depth](terrain-depth.html) §6 item 4.** All four native passes mirrored fog by sampling the LOS/MAPPED source maps per fragment; that advice was wrong and the gate proved it. The engine's overlay `0x4848E0` is driven entirely by the view-anchored corner-mask grid `0x4843C0` builds behind `*(main+0x1421F)`, and the source maps cannot reproduce it: the lattice is offset **half a cell** (a grid corner sits at a map cell's *centre*, `origin = 32·col0 + 16`), its shape is a **4-bit corner mask** feathered by 14 GAF edge sprites that a per-cell boolean cannot express, and — read in the *same frame* at the same cells — MAPPED reported explored across a band the engine paints solid black (that last discrepancy is still unexplained, written up in terrain-depth §5.2; it is moot for rendering because the grid is by construction what the engine drew). The fix is one shared rule in `tagpu_glsl.h` replacing four copy-pasted blocks and the `uLos`/`uMap` pair with a single `uFogGrid`: the grid uploads as an **RG8 texture with no conversion** (its two bytes per cell already *are* the unexplored and out-of-LOS masks), and **bilinear coverage over the four corner bits thresholded at 0.5** reproduces the 14 edge shapes — `0xF` → everywhere, `0x3` → exactly the top half, a lone corner → its quadrant — clean where the engine dithers. The grey darken is the engine's own shade LUT `*(TAProgram+0xCC)` applied to the palette **index** before the palette fetch (a multiply on the resolved colour costs 19,768 mismatched px — visibly too dark on canopies). **Units and effects hide in grey while terrain, features and wreckage stay and are remapped** — the rule the passes did not implement at all before. MEASURED, `feat-forest` on Two Continents, GL framebuffer, engine draw vs ours at the same camera: mapping-only 48 px lit only in the engine's / 821 only in ours / 287,531 agreeing; true LOS **97 / 186 / 576,990** (0.05 %). Verified live that an enemy solar collector on fully-grey ground is **not drawn** while the flattened building footprint it stamped into the terrain still shows — TA's own "grey shows terrain but not units". Panel and method: [Features](features.html) §9. |
 | Resolution track | ● done (2026-09-01 night 2) | LIVE AT 1024×768: registry `DisplaymodeWidth/Height` (REG_DWORD 1024/768) → the game runs the mode; every live read matched the RE formulas exactly — vp=(128,32), view=896×704 (=W−128, H−64), sweep=68×76, native FBO 1024×768 (ss=2 ⇒ 2048×1536 internally); UI lays out fine (top-bar art tiles on the right — acceptable); clicks/camera/build all worked with ZERO tool recalibration (the in-process driver computes from live vp/game dims by construction; only capture-crop scale changes: 2.8125 vs 4.5). THE REAL PAYOFF: the first in-game mode switch ever exercised exposed that `dd_SetDisplayMode` restarts the render thread with a NEW GL CONTEXT — all our cached GL ids die silently (stale-FBO bind → our pass cleared the real backbuffer black). Fixed with context-change detection (wglGetCurrentContext each frame) + per-module glreset (state, texture dims, AND the CPU-side atlas/LUT upload caches — forgetting those left everything sampling black). Mode switches are now robust — a G13 prerequisite banked early. |
 
