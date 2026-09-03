@@ -293,7 +293,8 @@ extreme of the range and inside it everywhere else.
 
 **The window title** (`tagpu_title.c`) patches no engine address at all: it is a
 `SetWindowTextA` from inside `dd_SetCooperativeLevel`, composing `"<stock title> - <label>"`
-from `tagpu_title.txt` (tacli writes the tree's branch there by default). Listed here only
+from `tagpu_title.txt` (tacli writes `wt:<branch> | tacli:<instance>` there by default; how
+the label is *composed* is tacli's business, the DLL only appends it). Listed here only
 so the module is accounted for — it reads no engine state and writes none. Placed after the
 `GetWindowText` into `g_ddraw.title`, so cnc-ddraw's own per-game `strcmp`s and
 `screenshot.c`'s filenames still see the unsuffixed name.

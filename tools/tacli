@@ -104,7 +104,21 @@ def tree_label() -> str:
     return branch if branch and branch != "HEAD" else TREE.name
 
 
-LABEL_MAX = 63          # tagpu_title.c's LABEL_MAX, minus the NUL
+LABEL_MAX = 95          # tagpu_title.c's LABEL_MAX, minus the NUL
+
+
+def default_label(inst: "Instance") -> str:
+    """The window-title label: which build, and which instance.
+
+        wt:worktree-gpu_render | tacli:play1
+
+    Both halves answer a question you ask of a desktop with several of these on it.
+    `wt:` is the tree tacli ran from, which is the tree whose ddraw.dll it pinned —
+    so it names the BUILD, not just the checkout. `tacli:` is the instance name,
+    which is the id every other tacli command takes, so the title tells you what to
+    type to drive that window.
+    """
+    return f"wt:{tree_label()} | tacli:{inst.name}"
 
 
 def title_label(label: str) -> str:
@@ -1011,7 +1025,7 @@ def _launch(args) -> dict:
             meta.pop("title", None)
         else:
             meta["title"] = args.title
-    label = meta["title"] if meta.get("title") is not None else tree_label()
+    label = meta["title"] if meta.get("title") is not None else default_label(inst)
     meta["window_title"] = write_title(inst, label)
 
     env = inst.env()
@@ -3834,10 +3848,11 @@ def build_parser():
                    help="block hardware keyboard/mouse (the default)")
     l.add_argument("--no-shield", dest="shield", action="store_false")
     l.add_argument("--title", default=None,
-                   help="label after \"Total Annihilation - \" in the window title "
-                        "(default: the branch of the tree this tacli ran from, which "
-                        "is the tree whose ddraw.dll it pinned). Sticky per instance; "
-                        "--title auto goes back to the default")
+                   help="replace the whole label after \"Total Annihilation - \" in "
+                        "the window title (default: \"wt:<branch of the tree this tacli "
+                        "ran from, i.e. the one whose ddraw.dll it pinned> | "
+                        "tacli:<instance>\"). Sticky per instance; --title auto goes "
+                        "back to the default")
     l.add_argument("--no-title", dest="title", action="store_const", const="",
                    help="stock window title, no label (also sticky; --title auto undoes it)")
     l.add_argument("--map", help="skirmish map name, e.g. 'Two Continents'")

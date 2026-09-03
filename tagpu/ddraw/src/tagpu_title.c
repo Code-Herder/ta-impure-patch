@@ -5,7 +5,11 @@
 #include "tagpu_title.h"
 
 #define TITLE_FILE  "tagpu_title.txt"
-#define LABEL_MAX   64          /* a branch name; a title bar shows less anyway */
+/* Two fields fit here (wt: and tacli:), so 63 usable chars is not much slack.
+ * The ceiling is TITLE_MAX: "Total Annihilation" (18) + " - " (3) + 95 = 116, well
+ * inside 191 — the composed title must NEVER truncate, because tacli records the
+ * string it expects and then finds the window by it. */
+#define LABEL_MAX   96
 #define TITLE_MAX   192         /* dd.h's g_ddraw.title is 128 */
 
 static void tlog(const char* m)

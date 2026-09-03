@@ -160,14 +160,16 @@ windows also match the *name substring* — the exact-title rule from `ta-captur
 applies.
 
 **The title is no longer the constant `Total Annihilation`.** `tagpu_title.c` appends the
-label in `tagpu_title.txt` — written by every `tacli launch`, and by default the branch of
-the tree that tacli ran from, i.e. the tree whose `ddraw.dll` it pinned:
+label in `tagpu_title.txt`, written by every `tacli launch`:
 
 ```
-Total Annihilation - worktree-gpu_render
+Total Annihilation - wt:worktree-gpu_render | tacli:play1
 ```
 
-so several instances of the same 1997 binary on one desktop say which build each is. It is
+`wt:` is the branch of the tree tacli ran from — the tree whose `ddraw.dll` it pinned, so
+it names the *build*, not just the checkout — and `tacli:` is the instance name, the id
+every other tacli command takes. Several instances of the same 1997 binary on one desktop
+therefore say which build each is and what to type to drive it. It is
 set in `dd_SetCooperativeLevel` (dd.c), *after* the `GetWindowText` into `g_ddraw.title`
 that cnc-ddraw's per-game detection and `screenshot.c`'s filenames read, and measured to
 survive the 640×480 menu → in-game resolution switch (logged once, `title: "…"`). With no

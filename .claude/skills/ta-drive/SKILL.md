@@ -66,22 +66,30 @@ it — before 2026-09-02 it did neither, so the twelfth instance drew slot 10 an
   first. `xprop -id <wid> WM_STATE` reads `Withdrawn` when this is what happened,
   and the WM may resize the window on remap, so a relaunch is the clean fix.
 
-**Which window is which: the title names the tree.** Every `tacli launch` writes
-`tagpu_title.txt` into the gamedir and the DLL appends it, so the title bar reads
-`Total Annihilation - worktree-gpu_render` instead of the bare name every instance used
-to share. The default label is the **branch of the tree tacli was run from** — which is
-the tree whose `ddraw.dll` it pinned, so the title says which build you are looking at.
+**Which window is which: the title names the build and the instance.** Every `tacli
+launch` writes `tagpu_title.txt` into the gamedir and the DLL appends it, so the title bar
+reads
 
-```bash
-tools/tacli launch t1                      # Total Annihilation - <branch>
-tools/tacli launch t1 --title "fog A/B"    # Total Annihilation - fog A/B
-tools/tacli launch t1 --no-title           # stock title, no label
-tools/tacli launch t1 --title auto         # back to the branch default
+```
+Total Annihilation - wt:worktree-gpu_render | tacli:play1
 ```
 
-`--title` is sticky per instance like every other launch knob, and `--title auto` is the
-only way back out of a `--no-title`. A label that is blank, or has nothing printable left
-in it, is the same as `--no-title`. `tacli ls --json` reports the exact string as
+instead of the bare name every instance used to share. `wt:` is the **branch of the tree
+tacli was run from** — the tree whose `ddraw.dll` it pinned, so it says which *build* you
+are looking at, not just which checkout. `tacli:` is the **instance name**, the id every
+other tacli command takes, so the title also tells you what to type to drive that window.
+
+```bash
+tools/tacli launch t1                      # Total Annihilation - wt:<branch> | tacli:t1
+tools/tacli launch t1 --title "fog A/B"    # Total Annihilation - fog A/B
+tools/tacli launch t1 --no-title           # stock title, no label
+tools/tacli launch t1 --title auto         # back to the wt:/tacli: default
+```
+
+`--title` replaces the **whole** label, both fields included — it is the escape hatch for
+an arbitrary title, not a way to edit one field. It is sticky per instance like every other
+launch knob, and `--title auto` is the only way back out of a `--no-title`. A label that is
+blank, or has nothing printable left in it, is the same as `--no-title`. `tacli ls --json` reports the exact string as
 `window_title`, and that is what `tacli` searches for to find the client window — so
 **take the window from `tacli ls`, never from an `xdotool search` you typed yourself**;
 the title is no longer a constant you can hard-code.
