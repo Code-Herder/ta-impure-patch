@@ -16,9 +16,19 @@
      - fog: per-fragment sample of the LOS counter map + MAPPED bits
        (32-px tiles, uploaded as R8 textures each frame), LosType-aware;
      - shadow: engine rules (shadows-cloak.md): the unit silhouette, 50%
-       black, +5px x, at ground height, options-gated, drawn before the body;
+       black, +5px x, at ground height, options-gated, drawn before the body
+       -- but ONLY for units whose engine shadow came from the composite we
+       wipe (mobile units). Units on the engine's 0x20000000 path (structures)
+       and wrecks keep the engine's CACHED slant-projected shadow, which is
+       built from the posed prims and survives the wipe; drawing ours too gave
+       them two shadows. FBI noshadow/canhover/floater gates mirror the engine;
      - cloak (unit+0x10E bit2): true translucency (alpha 0.5); cloaked
-       enemies are skipped entirely (engine parity).
+       enemies are skipped entirely (engine parity);
+     - waterline / digger (shadows-cloak.md §3, path-B units only): parts
+       whose model height sits at or below sea level minus the unit's
+       altitude are erased (enemy, no sonar) or tinted r/2,g/2,b/2+50 (own,
+       sonar-seen); shadows are cut there; diggers lose everything below
+       the origin. Per-vertex model height rides in the vertex stream.
 
    Armed by tagpu_native.on (first token = type, default armcom; the 3-name
    match as everywhere). Under-construction units (unit+0x104 nano > 0) stay
@@ -54,6 +64,16 @@
 #include "tagpu_render3do.h"
 #include "tagpu_scaffold.h"
 #include "tagpu_hires.h"
+#include "tagpu_fx.h"
+#include "tagpu_sfx.h"
+#include "tagpu_feat.h"
+#include "tagpu_terr.h"
+#include "tagpu_terrown.h"
+#include "tagpu_mark.h"
+#include "tagpu_markown.h"
+#include "tagpu_glsl.h"
+#include "tagpu_zoom.h"
+#include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -66,14 +86,13 @@
 #define OFF_VIEW_W   0x37E37
 #define OFF_VIEW_H   0x37E3B
 #define OFF_GFXOPT   0x37F06   /* bit2 Shadow, bit3 TShadow                 */
-#define OFF_MAPPED   0x14273   /* u16 per 32-px tile, bit p = explored      */
+#define TAPROG_PP    0x0051FBD0u
+#define PROG_FOGLUT  0xCC      /* u8[256] fog shade remap (0x4BFE10)        */
+#define OFF_FOGGRID  0x1421F   /* -> {u16* buf, cols, rows, cells}: the      
+                                  engine screen fog grid, 4-bit corner masks
+                                  per 32-px view cell (terrain-depth.md 5)  */
 #define OFF_LOSTYPE  0x14281   /* u16: b0 mapping, b1 true LOS              */
 #define OFF_WATCHED  0x2A42    /* byte watched player id                    */
-#define OFF_PLAYERS  0x1B63    /* PlayerStruct[10], stride 0x14B            */
-#define PL_STRIDE    0x14B
-#define PL_LOSMAP    0x7C      /* u8* LOS counter map                       */
-#define PL_LOSW      0x80
-#define PL_LOSH      0x84
 #define UNIT_STRIDE  0x118
 #define U_STATE      0x110
 #define U_XPOS       0x6C
@@ -89,12 +108,29 @@
 #define U_MODELID    0xA6      /* u16 index into MODEL_PTRS                 */
 #define OFF_MODELPTRS 0x14377  /* Model3DONode* [] (model templates)        */
 #define OFF_UIGATES  0x37F2F   /* bit2 = SelBoxes toggle (default on)       */
-#define SELBOX_COLIDX 0x0A     /* GUI colour: bright green palette index    */
+#define OFF_GUICOL   0x0DCB    /* GUI colour byte array: GetGuiPaletteColor  */
+                               /* (composite-buffer.md) = *(u8*)(ta+0xDCB+i)*/
+#define SELBOX_COLIDX 0x0A     /* the select box's GUI colour — an INDEX INTO */
+                               /* that array, not a palette index: 0xA reads  */
+                               /* 233 in stock TA, and using 10 raw drew the  */
+                               /* box in a dark colour that went unnoticed    */
+                               /* while the engine still painted its own      */
+                               /* green one over it (G13d)                    */
 #define U_OBJ3DO     0x9E
 #define U_TYPE       0x92
 #define U_OWNER      0xFF
 #define U_NANO       0x104     /* float fraction REMAINING                  */
 #define U_CLOAKF     0x10E     /* bit2 = actively cloaked                   */
+#define UD_TYPEMASK  0x241     /* u32 FBI booleans: bit12 canhover, bit19   */
+                               /* floater, bit25 noshadow (shadows-cloak §2)*/
+#define ST_STRUCT    0x20000000u /* state bit: engine takes the cached-shadow */
+                                 /* (nanoframe/structure) blit path          */
+#define ST_SONAR     0x200u    /* state bit: submerged enemy shown tinted    */
+#define UD_DIGGER    0x40000000u /* FBI mask bit30: clip below ground level  */
+#define OFF_SEALEVEL 0x1427F   /* u8 water level, elevation units           */
+#define OFF_LOCALPL  0x2A43    /* u8 the blit compares unit+0xFF against    */
+#define O3_COMPOSITE 0x10      /* GAFFrame* per-unit composite              */
+#define GF_PTRDEPTH  0x14      /* u8* depth plane; NULL = path A (no clip)  */
 #define OFF_FMAP     0x14287   /* FeatureStruct tile map, stride 0x0D       */
 #define OFF_MAPW     0x14233   /* map W in 16-px tiles                      */
 #define OFF_MAPH     0x14237   /* map H in 16-px tiles                      */
@@ -120,6 +156,8 @@
 #define P_FLAGS      0x28
 #define N_VCOUNT     0x04
 #define N_FCOUNT     0x08
+#define N_SELPRIM    0x0C      /* selection primitive index, -1 = none      */
+#define N_VERTS      0x24      /* raw model-space verts i32[3] 16.16        */
 #define N_FACES      0x28
 #define FACE_STRIDE  0x20
 #define F_COLORTAB   0x00
@@ -127,7 +165,22 @@
 #define F_INDICES    0x0C
 
 #define MAXNV  49152           /* vertices across all native units per frame */
-#define NVST   10              /* x,y,depthEnc, u,v, flat,ck, shadeRow, wx,wzp */
+/* Units (and wrecks) gathered per frame. This is NOT a soft limit: a unit past
+   it is not merely undrawn, it is INVISIBLE — tagpu_overlay.c wipes the engine's
+   composite for every unit `tagpu_native_owns_unit` accepts, whether or not this
+   gather included it. So it has to stay ahead of the rect the gather fills from,
+   and since G13d that rect grows with zoom-out (16x the area at the 0.25x
+   floor). MAXNV is the real budget and truncates gracefully; this one must not
+   be what runs out first. */
+#define MAXU   2048
+#define NVST   11              /* x,y,depthEnc, u,v, flat,ck, shadeRow, wx,wzp, vy */
+/* depth keys: ground rows encode as (feat?3:1) + rel*4 (rel = row − r0, up
+   to the sweep's row count plus the ±256 px gather slack); the engine draws
+   projectiles/explosions after every ground row and before the airborne sweep
+   (terrain-depth.md 3), so per frame: fxKey = just above the last possible
+   row, airKey above that, and the VS divides by a scale above airKey — no
+   absolute constant survives a taller viewport */
+#define ROW_SLACK 8               /* rows a gathered unit may sit past the sweep */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 static void pose_dump(const char* u, const char* o3);
@@ -179,16 +232,38 @@ static int    s_ss     = 1;            /* 2x supersample (tagpu_ss.off)     */
 static int    s_subpix = 1;            /* sub-pixel motion (tagpu_subpix.off)*/
 static int    s_spxlog = 0;            /* anchor filmstrip (tagpu_spxlog.on) */
 static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_palTex;
-static GLuint s_losTex, s_mapTex, s_cprog, s_cvao, s_cvbo;
+static GLuint s_fogTex, s_fogLutTex, s_cprog, s_cvao, s_cvbo;
 static GLuint s_fbo2, s_colTex2, s_depTex2, s_dprog;
-static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uScafOn, s_uScafP;
-static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF;
+static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
+              s_uScafOn, s_uScafP;
+static GLint  s_uWaterT, s_uWaterMode, s_uDigT;
+static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepthScale;
+static GLint  s_uCKey = -1, s_uCSurfSz = -1, s_uCVp = -1;  /* composite: the key */
+static GLint  s_uCCur = -1, s_uCCurOff = -1;      /* ...and the cursor it moves */
+/* Half-width of the box the cursor is moved in, game px. A TA cursor comes from
+   a cursor_ary GAF frame and is a few tens of pixels; 64 is comfortably clear of
+   the largest of them, and small enough that "the only engine pixel in here is
+   the cursor" stays the safe assumption it is measured to be. */
+#define CURSOR_PAD 64
 static float  s_zoom = 1.0f;
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
-static int    s_losW = 0, s_losH = 0;
+static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
+static const unsigned short* s_fogGrid = NULL;
+static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
+static unsigned s_fillSeq = 0;   /* terrain key-fill sequence + stall counter */
+static int      s_fillStall = 0;
+/* world origin of fog grid cell 0 on one axis: the builder's rounded eye>>5
+   turned back into world px, i.e. 32*col0 + 16 (0x4843C0 head, 0x4848E0).
+   `%` truncating toward zero is DELIBERATE, not a floor-mod bug: the builder
+   computes col0 as ((eye + (sign & 31)) >> 5) - 1, which is C's truncating
+   division, so a floor-based remainder would disagree with the engine for a
+   negative eye (eye = -20: engine origin -16, floor would say -48). */
+static int fog_org(int eye) { int r = eye % 32; return eye + (r > 15 ? 16 : -16) - r; }
 static float  s_verts[MAXNV * NVST];
-static unsigned char s_losBuf[512 * 512], s_mapBuf[512 * 512];
+/* set by the frame, read by tagpu_markown.c on the game thread: 1 while every
+   selection box this frame owed was actually emitted */
+static volatile int s_selComplete = 0;
 
 /* material constants copied per frame from render3do's calibration */
 static const float SH_V[3] = { 0.0f, 0.8944f, -0.4472f };
@@ -201,37 +276,37 @@ static const char* VS =
     "layout(location=2) in vec2 aFC;\n"      /* flat idx/255, tex ck/255       */
     "layout(location=3) in float aShade;\n"  /* LUT row / 31                   */
     "layout(location=4) in vec2 aWorld;\n"   /* world x, projected world z     */
+    "layout(location=5) in float aVY;\n"     /* posed model height, elev units */
     "uniform vec2 uGame;\n"                  /* game_width, game_height        */
     "uniform vec2 uOffset;\n"                /* shadow pass shift, px          */
     "uniform float uZoom;\n"                 /* G12d partial-zoom demo         */
     "uniform vec2 uZoomC;\n"                 /* zoom centre, game px           */
+    "uniform float uDepthScale;\n"           /* > every key in use this frame  */
     "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
-    "out float vEnc;\n"
+    "out float vEnc; out float vVY;\n"
     "void main(){\n"
     "  vec2 p = (aPos.xy + uOffset - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
-    "                     clamp(1.0 - aPos.z/512.0, 0.0, 1.0), 1.0);\n"
+    "                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);\n"
     "  vUV = aUV; vFC = aFC; vShade = aShade; vWorld = aWorld; vEnc = aPos.z;\n"
+    "  vVY = aVY;\n"
     "}\n";
 static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; flat in vec2 vFC; flat in float vShade; in vec2 vWorld;\n"
-    "in float vEnc;\n"
+    "in float vEnc; in float vVY;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uLUT;\n"
     "uniform sampler2D uPal;\n"              /* 256x1 RGBA live palette        */
-    "uniform sampler2D uScaf;\n"             /* G12a scaffold, R8, viewport    */
-    "uniform sampler2D uLos;\n"              /* LOS counter bytes, 32px tiles  */
-    "uniform sampler2D uMap;\n"              /* explored bits, 32px tiles      */
+    TAGPU_GLSL_SCAF_UNIFORMS                  /* G12a scaffold, R8, viewport    */
+    TAGPU_GLSL_FOG_UNIFORMS
     "uniform int uShadow;\n"
     "uniform float uAlpha;\n"
-    "uniform int uFog;\n"                    /* bit0 mapping on, bit1 true LOS */
-    "uniform int uScafOn;\n"
-    "uniform vec4 uScafP;\n"                 /* vpL, vpT, vw, vh (frame px)    */
-    "uniform float uSS;\n"                   /* supersample factor (1 or 2)    */
-    "uniform float uZoomF;\n"
-    "uniform vec2 uZoomCF;\n"
+    "uniform float uWaterT;\n"              /* vy <= this is under water      */
+    "uniform int uWaterMode;\n"             /* 1 erase (enemy), 2 tint (own)  */
+    "uniform float uDigT;\n"                /* vy <= this is below ground     */
+    TAGPU_GLSL_FOG_FN
     "void main(){\n"
     "  float idx;\n"
     "  if (vUV.x < 0.0) { idx = vFC.x; }\n"
@@ -239,33 +314,30 @@ static const char* FS =
     "    idx = texture(uAtlas, vUV).r;\n"
     "    if (abs(idx - vFC.y) < 0.5/255.0) discard;\n"
     "  }\n"
-    /* scaffold occlusion: nearer stamped rows hide this fragment */
-    "  if (uScafOn == 1) {\n"
-    /* VS maps game py 0 -> NDC -1 -> FBO window y 0, so gl_FragCoord.xy/uSS IS
-       the game-frame pixel; scaffold texture row 0 = viewport top (top-down). */
-    "    vec2 fc = gl_FragCoord.xy / uSS;\n"
-    "    fc = (fc - uZoomCF) / uZoomF + uZoomCF;\n"
-    "    vec2 uv = vec2((fc.x - uScafP.x) / uScafP.z,\n"
-    "                   (fc.y - uScafP.y) / uScafP.w);\n"
-    "    if (uv.x >= 0.0 && uv.x < 1.0 && uv.y >= 0.0 && uv.y < 1.0) {\n"
-    "      float s = texture(uScaf, uv).r * 255.0;\n"
-    "      if (s > vEnc + 0.5) discard;\n"
-    "    }\n"
-    "  }\n"
-    "  if (uShadow == 1) { frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
+    /* scaffold occlusion: nearer stamped rows hide this fragment (one copy
+       of the rule, shared with the effects shader: tagpu_glsl.h) */
+    TAGPU_GLSL_SCAF_TEST
+    /* fog before the shadow return, or a hidden unit keeps its shadow */
+    TAGPU_GLSL_FOG_DISCARD
+    /* waterline / digger clipping (shadows-cloak.md §3 depth-bias rules):
+       the engine erases or tints composite pixels whose depth (= vertex
+       height + bias) is at or below the water line; shadows are always
+       erased there. Our per-fragment height is the interpolated model y. */
+    "  if (vVY <= uDigT) discard;\n"
+    "  if (uShadow == 1) { if (vVY <= uWaterT) discard;\n"
+    "                      frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
     "  idx = texelFetch(uLUT, ivec2(int(idx*255.0+0.5), int(vShade*31.0+0.5)), 0).r;\n"
-    "  vec3 rgb = texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb;\n"
-    /* fog: 32-px LOS tiles, engine rules (terrain-depth.md 5.3) */
-    "  if ((uFog & 1) == 1) {\n"
-    "    ivec2 t = ivec2(int(vWorld.x) >> 5, int(vWorld.y) >> 5);\n"
-    "    float ex = texelFetch(uMap, t, 0).r;\n"
-    "    if (ex < 0.5/255.0) discard;\n"            /* unexplored: engine draws nothing */
-    "    if ((uFog & 2) == 2) {\n"
-    "      float lit = texelFetch(uLos, t, 0).r;\n"
-    "      if (lit < 0.5/255.0) rgb *= 0.55;\n"     /* explored, out of LOS  */
-    "    }\n"
+    "  int pi = int(idx*255.0+0.5);\n"
+    TAGPU_GLSL_FOG_SHADE("pi")
+    "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
+    /* engine water table (prog+0xD0): r/2, g/2, b/2+0x32 */
+    "  if (vVY <= uWaterT) {\n"
+    "    if (uWaterMode == 1) discard;\n"
+    "    rgb = rgb * 0.5 + vec3(0.0, 0.0, 50.0/255.0);\n"
     "  }\n"
-    "  frag = vec4(rgb, uAlpha);\n"
+    /* the FBO is PREMULTIPLIED: additive content (effects flashes) can then
+       ride the same composite as (rgb, alpha 0) */
+    "  frag = vec4(rgb * uAlpha, uAlpha);\n"
     "}\n";
 
 /* composite: the game-res FBO over the frame, NEAREST (game-res look kept) */
@@ -275,11 +347,87 @@ static const char* CVS =
     "out vec2 uv;\n"
     "void main(){ uv = vec2(p.x, p.y);\n"
     "  gl_Position = vec4(p.x*2.0-1.0, 1.0-p.y*2.0, 0.0, 1.0); }\n";
+/* THE COMPOSITE INVERTS ONCE WE OWN THE TERRAIN (G13b).
+   Until then our passes only ever covered sprites, so the rule was "drop our
+   empty pixels and let the engine's frame show". Terrain covers the whole
+   viewport, so that rule would hide everything the engine still draws inside
+   it — health bars, nanoframe wireframes, the build cursor, chat, dialogs.
+   In place of its terrain blit, tagpu_terrown.c fills the viewport rect of the
+   engine's offscreen with one palette index; every OTHER index there is by
+   construction something the engine drew afterwards, so we discard OUR
+   fragment at those pixels and its own already-drawn frame shows through.
+   uKey < 0 keeps the pre-G13b behaviour exactly. texelFetch, not texture(),
+   because the surface is an INDEX texture whose filter state belongs to
+   cnc-ddraw and may be linear — interpolated palette indices are garbage. */
+/* MOVING THE MOUSE CURSOR (the other half of the zoom input fix, tagpu_zoom.h).
+   The engine draws its cursor wherever it thinks the mouse is, which while the
+   world is zoomed is the UNZOOMED position `u` we feed it, not where the pointer
+   actually is. It has to be put back at `s`.
+
+   It is done HERE rather than by capturing the draw the way G13d captured the
+   markers, because the cursor is the one thing in the frame that does not go
+   through DrawGameScreen's OFFSCREEN: `0x4C2870`/`0x4C2380` blit it with a NULL
+   context, which makes the blit build its own offscreen over the primary
+   surface, so swapping a pixel base cannot reach it. The composite is the one
+   place that already owns this boundary — it is the code that decides, per
+   pixel, whether the viewport shows ours or the engine's — and inside the
+   viewport the engine's surface is 99.98 % key with NOTHING ON IT BUT THE CURSOR
+   (terrain-depth.md 7.7, measured). So: paint the engine's own texels from the
+   box around `u` at the box around `s`, and let our world cover the box at `u`.
+   Both boxes are small, and the whole branch is off (uCur.z == 0) at zoom 1. */
 static const char* CFS =
     "#version 330 core\n"
-    "in vec2 uv; out vec4 frag; uniform sampler2D uTex;\n"
-    "void main(){ vec4 c = texture(uTex, uv);\n"
-    "  if (c.a < 0.004) discard; frag = c; }\n";
+    "in vec2 uv; out vec4 frag;\n"
+    "uniform sampler2D uTex;\n"
+    "uniform sampler2D uSurf;\n"
+    "uniform sampler2D uPal;\n"
+    "uniform ivec2 uSurfSz;\n"
+    "uniform vec4 uVp;\n"          /* the rect the key fill covers, game px */
+    "uniform vec4 uCur;\n"         /* cursor box at u (x,y,w,h); w=0 = off   */
+    "uniform vec2 uCurOff;\n"      /* s - u                                  */
+    "uniform int uKey;\n"
+    "bool inbox(vec2 p, vec4 b){\n"
+    "  return p.x >= b.x && p.x < b.x + b.z && p.y >= b.y && p.y < b.y + b.w;\n"
+    "}\n"
+    "void main(){\n"
+    "  vec4 c = texture(uTex, uv);\n"
+    "  bool empty = c.a < 0.004 && max(max(c.r, c.g), c.b) < 0.004;\n"
+    "  vec2 px = uv * vec2(uSurfSz);\n"
+    /* Only inside the viewport is the engine's frame our key fill. Outside it
+       the frame is UI we never touched, so the old rule stands there — and a
+       UI pixel that happens to BE the key index can never be mistaken for it. */
+    "  if (uKey >= 0 && px.x >= uVp.x && px.x < uVp.x + uVp.z &&\n"
+    "                   px.y >= uVp.y && px.y < uVp.y + uVp.w) {\n"
+    "    if (uCur.z > 0.0) {\n"
+    /* where the pointer is: paint the cursor texel the engine put at u */
+    "      vec2 sp = px - uCurOff;\n"
+    /* ...and only from inside the viewport: `u` is guaranteed to be in it but
+       not 64 px clear of its edge, so the box can straddle the boundary and
+       would otherwise stamp side-panel or top-bar texels into the world */
+    "      if (inbox(sp, uCur) && inbox(sp, uVp)) {\n"
+    "        ivec2 q = clamp(ivec2(sp), ivec2(0), uSurfSz - 1);\n"
+    "        int si = int(texelFetch(uSurf, q, 0).r * 255.0 + 0.5);\n"
+    "        if (si != uKey) {\n"
+    "          frag = vec4(texelFetch(uPal, ivec2(si, 0), 0).rgb, 1.0);\n"
+    "          return;\n"
+    "        }\n"
+    "      }\n"
+    /* where the engine put it: ours covers it, so do NOT fall through to the
+       discard that would reveal the engine's frame and its stale cursor */
+    "      if (inbox(px, uCur)) {\n"
+    "        frag = empty ? vec4(0.0, 0.0, 0.0, 1.0) : c;\n"
+    "        return;\n"
+    "      }\n"
+    "    }\n"
+    "    ivec2 p = clamp(ivec2(px), ivec2(0), uSurfSz - 1);\n"
+    "    if (int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5) != uKey) discard;\n"
+    /* the engine drew nothing here and neither did we: never let the raw key
+       fill reach the screen — black is what the engine paints for "no world" */
+    "    if (empty) { frag = vec4(0.0, 0.0, 0.0, 1.0); return; }\n"
+    "  }\n"
+    "  if (empty) discard;\n"
+    "  frag = c;\n"
+    "}\n";
 
 /* downsample: 2x FBO -> 1x FBO, same orientation, LINEAR sampler at the 1x
    texel centres = exact 2:1 box filter; fractional edge alpha is the AA */
@@ -344,8 +492,13 @@ static void init_gl(void)
     s_uGame   = glGetUniformLocation(s_prog, "uGame");
     s_uOffset = glGetUniformLocation(s_prog, "uOffset");
     s_uShadow = glGetUniformLocation(s_prog, "uShadow");
+    s_uWaterT    = glGetUniformLocation(s_prog, "uWaterT");
+    s_uWaterMode = glGetUniformLocation(s_prog, "uWaterMode");
+    s_uDigT      = glGetUniformLocation(s_prog, "uDigT");
     s_uAlpha  = glGetUniformLocation(s_prog, "uAlpha");
     s_uFog    = glGetUniformLocation(s_prog, "uFog");
+    s_uFogOrg = glGetUniformLocation(s_prog, "uFogOrg");
+    s_uFogDim = glGetUniformLocation(s_prog, "uFogDim");
     s_uScafOn = glGetUniformLocation(s_prog, "uScafOn");
     s_uScafP  = glGetUniformLocation(s_prog, "uScafP");
     s_uSS     = glGetUniformLocation(s_prog, "uSS");
@@ -353,13 +506,14 @@ static void init_gl(void)
     s_uZoomC  = glGetUniformLocation(s_prog, "uZoomC");
     s_uZoomF  = glGetUniformLocation(s_prog, "uZoomF");
     s_uZoomCF = glGetUniformLocation(s_prog, "uZoomCF");
+    s_uDepthScale = glGetUniformLocation(s_prog, "uDepthScale");
     glUseProgram(s_prog);
     glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
     glUniform1i(glGetUniformLocation(s_prog, "uLUT"),   1);
     glUniform1i(glGetUniformLocation(s_prog, "uPal"),   2);
     glUniform1i(glGetUniformLocation(s_prog, "uScaf"),  3);
-    glUniform1i(glGetUniformLocation(s_prog, "uLos"),   4);
-    glUniform1i(glGetUniformLocation(s_prog, "uMap"),   5);
+    glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 4);
+    glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  5);
     glUseProgram(0);
 
     GLuint cvs = mksh(GL_VERTEX_SHADER, CVS), cfs = mksh(GL_FRAGMENT_SHADER, CFS);
@@ -371,6 +525,16 @@ static void init_gl(void)
     glDeleteShader(cvs); glDeleteShader(cfs);
     glUseProgram(s_cprog);
     glUniform1i(glGetUniformLocation(s_cprog, "uTex"), 0);
+    glUniform1i(glGetUniformLocation(s_cprog, "uSurf"), 1);
+    glUniform1i(glGetUniformLocation(s_cprog, "uPal"),  2);
+    s_uCKey = glGetUniformLocation(s_cprog, "uKey");
+    s_uCSurfSz = glGetUniformLocation(s_cprog, "uSurfSz");
+    s_uCVp = glGetUniformLocation(s_cprog, "uVp");
+    s_uCCur = glGetUniformLocation(s_cprog, "uCur");
+    s_uCCurOff = glGetUniformLocation(s_cprog, "uCurOff");
+    /* a GLSL uniform defaults to 0, and uKey 0 is an ACTIVE key — the whole
+       frame would invert against palette index 0. Default it off explicitly. */
+    if (s_uCKey >= 0) glUniform1i(s_uCKey, -1);
     glUseProgram(0);
 
     GLuint dvs = mksh(GL_VERTEX_SHADER, DVS), dfs = mksh(GL_FRAGMENT_SHADER, DFS);
@@ -397,6 +561,8 @@ static void init_gl(void)
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, NVST * 4, (void*)28);
     glEnableVertexAttribArray(4);
     glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, NVST * 4, (void*)32);
+    glEnableVertexAttribArray(5);
+    glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, NVST * 4, (void*)40);
     glBindVertexArray(0);
 
     const float quad[] = { 0,0, 1,0, 0,1, 1,1 };
@@ -408,8 +574,8 @@ static void init_gl(void)
     glBindVertexArray(0);
 
     tex2d(&s_palTex, GL_NEAREST);
-    tex2d(&s_losTex, GL_NEAREST);
-    tex2d(&s_mapTex, GL_NEAREST);
+    tex2d(&s_fogTex, GL_NEAREST);
+    tex2d(&s_fogLutTex, GL_NEAREST);
     tex2d(&s_colTex, GL_NEAREST);
     tex2d(&s_depTex, GL_NEAREST);
     tex2d(&s_colTex2, GL_LINEAR);          /* LINEAR = the 2:1 box filter */
@@ -447,7 +613,7 @@ static void fbo_size(int w, int h, int ss)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_depTex2, 0);
         st2 = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     s_fboW = w; s_fboH = h; s_fboSS = ss;
     { char b[96]; _snprintf(b, sizeof b, "native: FBO %dx%d ss=%d status=%x/%x",
                             w, h, ss, st, st2); nlog(b); }
@@ -605,18 +771,118 @@ static int emit_hires(const void* mesh, int nv, float ax, float ay,
             o[7] = shade;
             o[8] = wx0 + x;
             o[9] = wz0 + (-z - y * 0.5f);
+            o[10] = y;
             nv++;
         }
     }
     return nv;
 }
 
+/* faces of one Model3DONode whose vertices are already model-space floats
+   P[nvert*3] — the engine-posed vbuf for units, rotated raw verts for
+   effects models. skipFace: index the engine never draws (-1 = none);
+   quadOnly: textured faces need exactly 4 verts (GAF_DrawTransformed is a
+   quad rasteriser — the generic 3DO draw 0x46BAE0 skips the rest). */
+static int s_vtrunc = 0;            /* vertex budget hit this frame (logged) */
+#define MAXNODEV 4096               /* verts of one node staged for emission */
+
+static int emit_node(const char* nd, const float* P, int nvert, int nv,
+                     float ax, float ay, float wx0, float wz0, float encBase,
+                     int owner, int pieceShaded, int skipFace, int quadOnly)
+{
+    int shNeutral = tagpu_r3d_shade_neutral(), shDir = tagpu_r3d_shade_dir();
+    int nface = *(const int*)(nd + N_FCOUNT);
+    const char* faces = *(const char* const*)(nd + N_FACES);
+    if (nvert <= 0 || nface <= 0 || nface > 512 || !ptr_ok(faces)) return nv;
+    if (IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) return nv;
+
+    int j;
+    for (j = 0; j < nface; j++) {
+        if (j == skipFace) continue;
+        const char* fa = faces + j * FACE_STRIDE;
+        int fvc = *(const int*)(fa + F_VCOUNT);
+        const unsigned short* idx = *(const unsigned short* const*)(fa + F_INDICES);
+        if (fvc < 3 || fvc > 32 || !ptr_ok(idx)) continue;
+        if (IsBadReadPtr(idx, (SIZE_T)fvc * 2)) continue;
+
+        /* material — shared helpers from render3do */
+        float uv[4], ckf = -1.0f, colv = -1.0f;
+        int hasTex = 0;
+        {
+            const char* tg = tagpu_r3d_face_texframe(fa, owner);
+            if (tg && tagpu_r3d_atlas_uv(tg, uv, &ckf)) hasTex = 1;
+            if (!hasTex) {
+                int fc = tagpu_r3d_face_colour(fa);
+                if (fc < 0) continue;
+                colv = (float)fc / 255.0f;
+            }
+        }
+        if (quadOnly && hasTex && fvc != 4) continue;
+
+        int k;
+        for (k = 1; k + 1 < fvc; k++) {
+            unsigned short tri[3]; int slot[3];
+            tri[0] = idx[0]; slot[0] = 0;
+            tri[1] = idx[k]; slot[1] = k;
+            tri[2] = idx[k+1]; slot[2] = k+1;
+            if (tri[0] >= nvert || tri[1] >= nvert || tri[2] >= nvert) continue;
+            if (nv + 3 > MAXNV) { s_vtrunc = 1; return nv; }
+            float V[3][3]; int t;
+            for (t = 0; t < 3; t++) {
+                const float* v = P + tri[t] * 3;
+                V[t][0] = v[0]; V[t][1] = v[1]; V[t][2] = v[2];
+            }
+            float shade = (float)shNeutral / 31.0f;
+            if (pieceShaded) {
+                float e1x = V[1][0]-V[0][0], e1y = V[1][1]-V[0][1], e1z = V[1][2]-V[0][2];
+                float e2x = V[2][0]-V[0][0], e2y = V[2][1]-V[0][1], e2z = V[2][2]-V[0][2];
+                float nx = e1y*e2z - e1z*e2y, ny = e1z*e2x - e1x*e2z, nz = e1x*e2y - e1y*e2x;
+                if (nx*SH_V[0] + ny*SH_V[1] + nz*SH_V[2] < 0.0f) { nx=-nx; ny=-ny; nz=-nz; }
+                float nl = sqrtf(nx*nx + ny*ny + nz*nz);
+                if (nl > 1e-6f) {
+                    float I = (nx*SH_L[0] + ny*SH_L[1] + nz*SH_L[2]) / nl;
+                    int rr = shNeutral + shDir * (int)floorf(I * 12.0f + 0.5f);
+                    if (rr < 0) rr = 0; else if (rr > 31) rr = 31;
+                    shade = (float)rr / 31.0f;
+                }
+            }
+            for (t = 0; t < 3; t++) {
+                float x = V[t][0], y = V[t][1], z = V[t][2];
+                float* o = s_verts + nv * NVST;
+                o[0] = ax + x;
+                o[1] = ay + (-z - y * 0.5f);
+                /* depth enc: row base +- intra-model view depth (2y-z),
+                   squeezed into the +-2 gap between row keys */
+                float md = (2.0f * y - z) / 256.0f;
+                if (md > 1.8f) md = 1.8f; if (md < -1.8f) md = -1.8f;
+                o[2] = encBase + md;
+                if (hasTex) {
+                    int c = fvc <= 4 ? slot[t] : slot[t] * 4 / fvc;
+                    o[3] = (c == 1 || c == 2) ? uv[2] : uv[0];
+                    o[4] = (c >= 2)           ? uv[3] : uv[1];
+                    o[5] = 0.0f; o[6] = ckf;
+                } else {
+                    o[3] = -1.0f; o[4] = -1.0f;
+                    o[5] = colv;  o[6] = -1.0f;
+                }
+                o[7] = shade;
+                o[8] = wx0 + x;
+                o[9] = wz0 + (-z - y * 0.5f);
+                o[10] = y;
+                nv++;
+            }
+        }
+    }
+    return nv;
+}
+
+static float s_P[MAXNODEV * 3];     /* one node's model-space vertices */
+
 static int emit_geom(const char* o3, int nv, float ax, float ay,
                      float wx0, float wz0, float encBase, int owner)
 {
     int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
     if (nparts <= 0 || nparts > 64) return nv;
-    int shNeutral = tagpu_r3d_shade_neutral(), shDir = tagpu_r3d_shade_dir();
 
     int anyShadeFlag = 0, p;
     for (p = 0; p < nparts; p++) {
@@ -632,92 +898,51 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
         const int*  vb = *(const int* const*)(pr + P_VBUF);
         if (!ptr_ok(nd) || !ptr_ok(vb)) continue;
         int nvert = *(const int*)(nd + N_VCOUNT);
-        int nface = *(const int*)(nd + N_FCOUNT);
-        const char* faces = *(const char* const*)(nd + N_FACES);
-        if (nvert <= 0 || nface <= 0 || nface > 512 || !ptr_ok(faces)) continue;
-        if (IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE) ||
-            IsBadReadPtr(vb, (SIZE_T)nvert * 12)) continue;
-
-        int j;
-        for (j = 0; j < nface; j++) {
-            const char* fa = faces + j * FACE_STRIDE;
-            int fvc = *(const int*)(fa + F_VCOUNT);
-            const unsigned short* idx = *(const unsigned short* const*)(fa + F_INDICES);
-            if (fvc < 3 || fvc > 32 || !ptr_ok(idx)) continue;
-            if (IsBadReadPtr(idx, (SIZE_T)fvc * 2)) continue;
-
-            /* material — shared helpers from render3do */
-            float uv[4], ckf = -1.0f, colv = -1.0f;
-            int hasTex = 0;
-            {
-                extern const char* tagpu_r3d_face_texframe(const char* fa, int owner);
-                extern int tagpu_r3d_face_colour(const char* fa);
-                const char* tg = tagpu_r3d_face_texframe(fa, owner);
-                if (tg && tagpu_r3d_atlas_uv(tg, uv, &ckf)) hasTex = 1;
-                if (!hasTex) {
-                    int fc = tagpu_r3d_face_colour(fa);
-                    if (fc < 0) continue;
-                    colv = (float)fc / 255.0f;
-                }
-            }
-
-            int k;
-            for (k = 1; k + 1 < fvc; k++) {
-                unsigned short tri[3]; int slot[3];
-                tri[0] = idx[0]; slot[0] = 0;
-                tri[1] = idx[k]; slot[1] = k;
-                tri[2] = idx[k+1]; slot[2] = k+1;
-                if (tri[0] >= nvert || tri[1] >= nvert || tri[2] >= nvert) continue;
-                if (nv + 3 > MAXNV) return nv;
-                float P[3][3]; int t;
-                for (t = 0; t < 3; t++) {
-                    const int* v = vb + tri[t] * 3;
-                    P[t][0] = (float)v[0] / 65536.0f;
-                    P[t][1] = (float)v[1] / 65536.0f;
-                    P[t][2] = (float)v[2] / 65536.0f;
-                }
-                float shade = (float)shNeutral / 31.0f;
-                if (pieceShaded) {
-                    float e1x = P[1][0]-P[0][0], e1y = P[1][1]-P[0][1], e1z = P[1][2]-P[0][2];
-                    float e2x = P[2][0]-P[0][0], e2y = P[2][1]-P[0][1], e2z = P[2][2]-P[0][2];
-                    float nx = e1y*e2z - e1z*e2y, ny = e1z*e2x - e1x*e2z, nz = e1x*e2y - e1y*e2x;
-                    if (nx*SH_V[0] + ny*SH_V[1] + nz*SH_V[2] < 0.0f) { nx=-nx; ny=-ny; nz=-nz; }
-                    float nl = sqrtf(nx*nx + ny*ny + nz*nz);
-                    if (nl > 1e-6f) {
-                        float I = (nx*SH_L[0] + ny*SH_L[1] + nz*SH_L[2]) / nl;
-                        int rr = shNeutral + shDir * (int)floorf(I * 12.0f + 0.5f);
-                        if (rr < 0) rr = 0; else if (rr > 31) rr = 31;
-                        shade = (float)rr / 31.0f;
-                    }
-                }
-                for (t = 0; t < 3; t++) {
-                    float x = P[t][0], y = P[t][1], z = P[t][2];
-                    float* o = s_verts + nv * NVST;
-                    o[0] = ax + x;
-                    o[1] = ay + (-z - y * 0.5f);
-                    /* depth enc: row base +- intra-model view depth (2y-z),
-                       squeezed into the +-2 gap between row keys */
-                    float md = (2.0f * y - z) / 256.0f;
-                    if (md > 1.8f) md = 1.8f; if (md < -1.8f) md = -1.8f;
-                    o[2] = encBase + md;
-                    if (hasTex) {
-                        int c = fvc <= 4 ? slot[t] : slot[t] * 4 / fvc;
-                        o[3] = (c == 1 || c == 2) ? uv[2] : uv[0];
-                        o[4] = (c >= 2)           ? uv[3] : uv[1];
-                        o[5] = 0.0f; o[6] = ckf;
-                    } else {
-                        o[3] = -1.0f; o[4] = -1.0f;
-                        o[5] = colv;  o[6] = -1.0f;
-                    }
-                    o[7] = shade;
-                    o[8] = wx0 + x;
-                    o[9] = wz0 + (-z - y * 0.5f);
-                    nv++;
-                }
-            }
-        }
+        if (nvert <= 0 || nvert > MAXNODEV || IsBadReadPtr(vb, (SIZE_T)nvert * 12)) continue;
+        int i;
+        for (i = 0; i < nvert * 3; i++) s_P[i] = (float)vb[i] / 65536.0f;
+        nv = emit_node(nd, s_P, nvert, nv, ax, ay, wx0, wz0, encBase, owner,
+                       pieceShaded, -1, 0);
     }
     return nv;
+}
+
+/* effects models (projectiles, debris): the raw node rotated by the engine
+   triple exactly like 0x4B6CC0 — Rz(t0) on (x,y), then Rx(t2) on (y,z),
+   then Ry(t1) on (x,z); drawn unshaded (GAF_DrawTransformed copies texels);
+   the face at index 0 is skipped when the node has a selection primitive
+   (0x46BAE0's rule); textured faces must be quads */
+static void rot2(float c, float s, float* a, float* b)
+{
+    float na = *a * c - *b * s;
+    *b = *a * s + *b * c;
+    *a = na;
+}
+
+static int emit_fx_model(const TAGPU_FXMODEL* m, int nv, float fxKey)
+{
+    const char* nd = m->node;
+    if (!ptr_ok(nd) || IsBadReadPtr(nd, 0x40)) return nv;
+    int nvert = *(const int*)(nd + N_VCOUNT);
+    const int* vb = *(const int* const*)(nd + N_VERTS);
+    if (nvert <= 0 || nvert > MAXNODEV || !ptr_ok(vb) || IsBadReadPtr(vb, (SIZE_T)nvert * 12)) return nv;
+    const float K = 6.2831853f / 65536.0f;
+    float c0 = cosf((float)m->turn[0] * K), s0 = sinf((float)m->turn[0] * K);
+    float c1 = cosf((float)m->turn[1] * K), s1 = sinf((float)m->turn[1] * K);
+    float c2 = cosf((float)m->turn[2] * K), s2 = sinf((float)m->turn[2] * K);
+    int i;
+    for (i = 0; i < nvert; i++) {
+        float x = (float)vb[i*3+0] / 65536.0f;
+        float y = (float)vb[i*3+1] / 65536.0f;
+        float z = (float)vb[i*3+2] / 65536.0f;
+        if (m->turn[0]) rot2(c0, s0, &x, &y);
+        if (m->turn[2]) rot2(c2, s2, &y, &z);
+        if (m->turn[1]) rot2(c1, s1, &x, &z);
+        s_P[i*3+0] = x; s_P[i*3+1] = y; s_P[i*3+2] = z;
+    }
+    int selprim = *(const int*)(nd + N_SELPRIM);
+    return emit_node(nd, s_P, nvert, nv, m->ax, m->ay, m->wx, m->wz, fxKey,
+                     m->owner, 0, selprim != -1 ? 0 : -1, 1);
 }
 
 void tagpu_native_frame(const TAGPU_FRAME* f)
@@ -756,21 +981,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         s_ss     = (GetFileAttributesA("tagpu_ss.off")     == INVALID_FILE_ATTRIBUTES);
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
-        {
-            s_zoom = 1.0f;
-            HANDLE zh = CreateFileA("tagpu_zoom.txt", GENERIC_READ,
-                                    FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
-                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-            if (zh != INVALID_HANDLE_VALUE) {
-                char zb[32]; DWORD zn = 0;
-                if (ReadFile(zh, zb, sizeof zb - 1, &zn, 0) && zn > 0) {
-                    zb[zn] = 0;
-                    float z = (float)atof(zb);
-                    if (z >= 0.25f && z <= 8.0f) s_zoom = z;
-                }
-                CloseHandle(zh);
-            }
-        }
         if (s_armed != was && was >= 0) {
             char b[96]; _snprintf(b, sizeof b, "native: %s (type=%s wrecks=%d ss=%d subpix=%d)",
                                   s_armed ? "ARMED" : "disarmed", s_type,
@@ -778,7 +988,21 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             nlog(b);
         }
     }
-    if (!s_armed) return;
+    /* View zoom — re-read EVERY frame, unlike the arm state above. It is a
+       continuous control, so a 30-frame poll would quantise any ramp to 2 Hz and
+       make a perfectly smooth renderer look like a staircase on video. The lever
+       and the transform built on it live in tagpu_zoom.c, because the input path
+       needs exactly the same numbers and the two must never disagree. */
+    s_zoom = tagpu_zoom_read_lever();
+
+    /* the effects pass (tagpu_fx.on) rides this frame: it needs the view,
+       fog and palette set up here and draws into this FBO */
+    int fxOn = tagpu_fx_armed(f->frame_counter);
+    int sfxOn = tagpu_sfx_armed(f->frame_counter);
+    int featOn = tagpu_feat_armed(f->frame_counter);
+    int terrOn = tagpu_terr_armed(f->frame_counter);
+    int markOn = tagpu_mark_armed(f->frame_counter);
+    if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn && !markOn) return;
     if (s_state == 0) init_gl();
     if (s_state != 1 || !tagpu_r3d_ensure()) return;
 
@@ -796,46 +1020,121 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
 
+    /* ---- the viewport the zoom actually shows (see TAGPU_FXVIEW.evpL) ----
+       Every gather below sizes itself from this rather than the engine's own
+       viewport, so zooming out reaches further into the map instead of leaving
+       the frame edge bare. At z >= 1 it IS the engine's viewport, bit for bit. */
+    int evpL = vpL, evpT = vpT, evw = vw, evh = vh;
+    if (s_zoom > 0.05f && s_zoom < 1.0f) {
+        evw = (int)((float)vw / s_zoom) + 64;      /* +64: partial cells at the edge */
+        evh = (int)((float)vh / s_zoom) + 64;
+        if (evw > 8192) evw = 8192;
+        if (evh > 8192) evh = 8192;
+        /* and never ask the terrain pass for more cells than it can draw: it
+           would bail, and a bail hands the whole draw back for a frame */
+        tagpu_terr_clamp_span(&evw, &evh);
+        /* the effective rect is only ever WIDER than the engine's — a clamp that
+           took it below the viewport would cull content that is plainly on
+           screen. Unreachable at any real resolution, stated so it stays true. */
+        if (evw < vw) evw = vw;
+        if (evh < vh) evh = vh;
+        evpL = vpL + (vw - evw) / 2;
+        evpT = vpT + (vh - evh) / 2;
+    }
+
     int scafR0 = 0, scafRows = 0;
     int scafOn = tagpu_scaffold_frameinfo(f->frame_counter, &scafR0, &scafRows);
-    int r0 = scafOn ? scafR0 : (eyeY >> 4) - 16;
+    int r0 = scafOn ? scafR0 : ((eyeY + (evpT - vpT)) >> 4) - 16;
+    int rows = scafRows > 0 ? scafRows : (evh >> 4) + 32;
+    /* this frame's depth bands (see ROW_SLACK) */
+    float fxKey = 3.0f + (float)(rows + ROW_SLACK) * 4.0f + 4.0f;
+    float airKey = fxKey + 12.0f;
+    float depthScale = airKey + 8.0f;
 
     unsigned gfx = *(unsigned short*)(ta + OFF_GFXOPT);
     unsigned lostype = *(unsigned short*)(ta + OFF_LOSTYPE);
     int watched = *(unsigned char*)(ta + OFF_WATCHED);
 
-    /* ---- LOS/MAPPED upload (32-px tiles) ---- */
+    /* ---- fog upload: the engine's own screen fog grid ----
+       NOT the LOS/MAPPED source maps. The engine's overlay (0x4848E0) is
+       driven entirely by the grid 0x4843C0 builds, and reading the source
+       maps per fragment does not reproduce it: measured on Two Continents,
+       MAPPED reports explored across a whole band the engine paints solid
+       black. The grid is by construction what the engine drew, it is tiny
+       (30x24 here) and it carries the black/grey split in its two bytes.
+       Its cells are laid out exactly as an RG8 texture — low byte = the
+       unexplored corner mask, high byte = the out-of-LOS one — so the engine
+       buffer uploads with no conversion. */
     int fogMode = 0;
+    s_fogGrid = NULL; s_fogLut = 0;
     {
-        const char* pl = ta + OFF_PLAYERS + (size_t)watched * PL_STRIDE;
-        const unsigned char* los = *(const unsigned char* const*)(pl + PL_LOSMAP);
-        int lw = *(const int*)(pl + PL_LOSW), lh = *(const int*)(pl + PL_LOSH);
-        const unsigned short* mapd = *(const unsigned short* const*)(ta + OFF_MAPPED);
-        if (ptr_ok(los) && ptr_ok(mapd) && lw > 0 && lh > 0 && lw <= 512 && lh <= 512 &&
-            !IsBadReadPtr(los, (SIZE_T)lw * lh) &&
-            !IsBadReadPtr(mapd, (SIZE_T)lw * lh * 2)) {
-            int i, n = lw * lh;
-            unsigned short wbit = (unsigned short)(1u << watched);
-            for (i = 0; i < n; i++) {
-                s_losBuf[i] = los[i] ? 255 : 0;
-                s_mapBuf[i] = (mapd[i] & wbit) ? 255 : 0;
+        const int* fg = *(const int* const*)(ta + OFF_FOGGRID);
+        if (ptr_ok(fg) && !IsBadReadPtr(fg, 16)) {
+            const unsigned short* buf = (const unsigned short*)(size_t)fg[0];
+            int cols = fg[1], rows = fg[2], cells = fg[3];
+            if (ptr_ok(buf) && cols > 0 && rows > 0 && cols <= 256 && rows <= 256 &&
+                cells == cols * rows && !IsBadReadPtr(buf, (SIZE_T)cells * 2)) {
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                x_glActiveTexture(GL_TEXTURE4);
+                glBindTexture(GL_TEXTURE_2D, s_fogTex);
+                if (cols != s_fogCols || rows != s_fogRows)
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, cols, rows, 0,
+                                 GL_RG, GL_UNSIGNED_BYTE, buf);
+                else
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cols, rows,
+                                    GL_RG, GL_UNSIGNED_BYTE, buf);
+                x_glActiveTexture(GL_TEXTURE0);
+                s_fogGrid = buf; s_fogCols = cols; s_fogRows = rows;
+                /* the overlay puts cell (0,0) at screen vp + (+-16 - eye%32);
+                   in world terms 32*col0 + 16, col0 being the builder's
+                   half-cell-rounded eye>>5. The grid lattice is offset half a
+                   cell from the map cells: a corner IS a map cell's centre. */
+                s_fogOrgX = fog_org(eyeX);
+                s_fogOrgY = fog_org(eyeY);
+                /* "fog is on" is NOT LosType bit0 — that bit is only the
+                   MAPPING option. The overlay runs every frame and what it
+                   paints is decided entirely by the grid bytes: the builder
+                   writes the grey mask only when LosType&2 and the black mask
+                   only where MAPPED is clear, so an inactive mode is already an
+                   all-zero grid and costs nothing to sample. Gating on bit0
+                   dropped the whole rule under true-LOS-without-mapping
+                   (LosType=14, a reachable skirmish setting: LineOfSight cycle
+                   stage 1 with the mapping option off) — and since G13b
+                   suppresses the engine's overlay, that would delete the grey
+                   band outright instead of merely disagreeing with it. */
+                fogMode = 1 | (lostype & 2);
+                /* the grey band's darken is a palette remap, not a scale:
+                   0x4BFE10 rewrites every pixel p as shadeLUT[p] through
+                   *(TAProgram+0xCC) (256 bytes, everything folded into the
+                   dark-grey ramp). Cheap enough to re-upload each frame. */
+                {
+                    const char* prog = *(const char* const*)TAPROG_PP;
+                    const unsigned char* t = NULL;
+                    static unsigned char ident[256];
+                    if ((size_t)prog > 0x400000u && !IsBadReadPtr(prog, 0x100)) {
+                        const unsigned char* p = 
+                            *(const unsigned char* const*)(prog + PROG_FOGLUT);
+                        if (ptr_ok(p) && !IsBadReadPtr(p, 256)) t = p;
+                    }
+                    s_fogLut = t ? 1 : 0;
+                    if (!t) {
+                        /* identity, so an unreadable table degrades to "grey is
+                           not darkened" — never to "every grey pixel is palette
+                           index 0", which is solid black over the whole band */
+                        int i;
+                        for (i = 0; i < 256; i++) ident[i] = (unsigned char)i;
+                        t = ident;
+                    }
+                    /* 256 bytes: always re-spec, so no init flag can survive a
+                       context reset and leave the texture storageless (which
+                       has the same all-black failure mode) */
+                    x_glActiveTexture(GL_TEXTURE5);
+                    glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 256, 1, 0,
+                                 GL_RED, GL_UNSIGNED_BYTE, t);
+                    x_glActiveTexture(GL_TEXTURE0);
+                }
             }
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            x_glActiveTexture(GL_TEXTURE4);
-            glBindTexture(GL_TEXTURE_2D, s_losTex);
-            if (lw != s_losW || lh != s_losH)
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, lw, lh, 0, GL_RED, GL_UNSIGNED_BYTE, s_losBuf);
-            else
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, lw, lh, GL_RED, GL_UNSIGNED_BYTE, s_losBuf);
-            x_glActiveTexture(GL_TEXTURE5);
-            glBindTexture(GL_TEXTURE_2D, s_mapTex);
-            if (lw != s_losW || lh != s_losH)
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, lw, lh, 0, GL_RED, GL_UNSIGNED_BYTE, s_mapBuf);
-            else
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, lw, lh, GL_RED, GL_UNSIGNED_BYTE, s_mapBuf);
-            s_losW = lw; s_losH = lh;
-            x_glActiveTexture(GL_TEXTURE0);
-            fogMode = (lostype & 3);
         }
     }
 
@@ -858,8 +1157,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- gather native-owned on-screen units ---- */
     typedef struct { const char* o3; const char* u; const void* hires;
                      float ax, ay, gy, wx0, wz0;
-                     int rel, owner, cloaked, air, feat, sel; unsigned yaw; } NU;
-    static NU units[512];
+                     int rel, owner, cloaked, air, feat, sel, shadow; unsigned yaw;
+                     float waterT, digT; int waterMode; } NU;
+    static NU units[MAXU];
     /* sub-pixel motion: the engine keeps 16.16 fixed-point positions (the
        roster shorts are just their high words) — read the true fractions and
        interpolate between the last two sim samples per unit SLOT for
@@ -868,7 +1168,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     static SPX spx[8192];
     int nu = 0, nv = 0, nwr = 0, nsel = 0;
     unsigned uiGates = *(unsigned char*)(ta + OFF_UIGATES);
-    for (char* u = beg + UNIT_STRIDE; u < end && nu < 512; u += UNIT_STRIDE) {
+    if (s_armed) {                 /* units are gathered only by the unit pass */
+    for (char* u = beg + UNIT_STRIDE; u < end && nu < MAXU; u += UNIT_STRIDE) {
         unsigned st = *(unsigned*)(u + U_STATE);
         if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
         if (!tagpu_native_owns_unit(u)) continue;
@@ -900,18 +1201,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         float ax = fx - (float)eyeX + (float)vpL;
         float ay = fy - fz * 0.5f - (float)eyeY + (float)vpT;
-        if (ax < vpL - 256 || ax > vpL + vw + 256 || ay < vpT - 256 || ay > vpT + vh + 256)
+        if (ax < evpL - 256 || ax > evpL + evw + 256 ||
+            ay < evpT - 256 || ay > evpT + evh + 256)
             continue;
         int owner = *(unsigned char*)(u + U_OWNER);
         int cloaked = (*(unsigned char*)(u + U_CLOAKF) & 4) != 0;
         if (cloaked && owner != watched) continue;    /* enemies never see cloak */
         /* fog gate at the anchor tile: engine draws nothing there */
         if (fogMode & 1) {
-            int tx = (wx >> 5), ty = ((wy - wz / 2) >> 5);
-            if (tx >= 0 && ty >= 0 && tx < s_losW && ty < s_losH) {
-                if (!s_mapBuf[ty * s_losW + tx]) continue;
-                if ((fogMode & 2) && owner != watched && !s_losBuf[ty * s_losW + tx]) continue;
-            }
+            int fog = tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows,
+                                   s_fogOrgX, s_fogOrgY, wx, wy - wz / 2);
+            if (fog & 1) continue;                    /* unexplored: black    */
+            /* grey shows terrain, never units — the engine draws no unit it
+               cannot currently see. Our own stay: they are what makes LOS. */
+            if ((fog & 2) && owner != watched) continue;
         }
         /* sub-pixel evidence: with tagpu_spxlog.on present, log the emitted
            anchor of every SELECTED unit each present frame (60 Hz numeric
@@ -928,9 +1231,21 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         n2->wx0 = fx; n2->wz0 = fy - fz * 0.5f;
         n2->yaw = *(const unsigned short*)(u + U_YAW);
         n2->hires = NULL;
+        n2->shadow = 0;
+        n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
+        unsigned mask = 0;                    /* FBI booleans, read below */
         {
             const char* def = *(const char* const*)(u + U_TYPE);
             if (ptr_ok(def)) {
+                /* mirror the engine's shadow branch in the blit 0x459200
+                   (shadows-cloak.md §3): ST_STRUCT units get the cached
+                   slant shadow (Object3do+0x14) from the engine itself;
+                   the rest get a composite-derived silhouette the wipe
+                   emptied -- that one is ours, under the engine's FBI gates */
+                mask = *(const unsigned*)(def + UD_TYPEMASK);
+                n2->shadow = !(st & ST_STRUCT) &&
+                             !(mask & 0x02000000u) &&      /* noshadow          */
+                             !(mask & 0x00081000u);        /* canhover|floater  */
                 char nm[32]; int ci;
                 for (ci = 0; ci < 31; ci++) {
                     char cch = def[0x20 + ci];   /* UnitName, e.g. ARMSOLAR */
@@ -940,6 +1255,24 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 }
                 nm[31] = 0;
                 n2->hires = tagpu_hires_mesh(nm);
+            }
+        }
+        /* waterline + digger clipping, PATH B only (composite has a depth
+           plane -- the engine splits on frame+0x14 at 0x45927E; stationary
+           path-A buildings are never clipped). Threshold is in vertex-height
+           units: depth = vy + 0x32 <= (sea - alt) + 0x32  <=>  vy <= sea - alt.
+           Enemy without the sonar bit: erased; own / sonar-seen: tinted.
+           Digger: everything below the unit origin is erased. */
+        {
+            const char* fr = *(const char* const*)(o3 + O3_COMPOSITE);
+            if (ptr_ok(fr) && *(const unsigned*)(fr + GF_PTRDEPTH) != 0) {
+                float sub = (float)*(const unsigned char*)(ta + OFF_SEALEVEL) - fz;
+                if (sub > 0.0f) {
+                    int local = *(const unsigned char*)(ta + OFF_LOCALPL);
+                    n2->waterT = sub;
+                    n2->waterMode = (owner != local && !(st & ST_SONAR)) ? 1 : 2;
+                }
+                if (mask & UD_DIGGER) n2->digT = 0.0f;
             }
         }
         n2->air = ((st & 3) != 1);
@@ -962,28 +1295,33 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         n2->rel = (wy >> 4) - r0;
         n2->owner = owner; n2->cloaked = cloaked;
     }
+    }
 
     /* ---- gather 3D wrecks from the sweep-rect tiles (G12c close-out) ----
        anchor tile: flags bit0 + live def with FeatureMask bit0 CLEAR ->
        wreck record holds the husk's Object3do + world pos; drawn at FEATURE
        depth (3+rel*4). The engine's own scratch-fake-unit draw is suppressed
        by the owndraw classifier while this pass is armed. */
-    if (s_wrecks) {
+    if (s_armed && s_wrecks) {
         const char* fmap = *(const char* const*)(ta + OFF_FMAP);
         const char* defs = *(const char* const*)(ta + OFF_FDEFS);
         const char* recs = *(const char* const*)(ta + OFF_WRECKS);
         int mapW = *(const int*)(ta + OFF_MAPW), mapH = *(const int*)(ta + OFF_MAPH);
         if (ptr_ok(fmap) && ptr_ok(defs) && ptr_ok(recs) &&
             mapW > 0 && mapH > 0 && mapW <= 4096 && mapH <= 4096) {
-            int rows = scafRows > 0 ? scafRows : (vh >> 4) + 32;
-            int tx0 = (eyeX >> 4) - 8, tx1 = (eyeX >> 4) + (vw >> 4) + 8;
+            /* both axes off the ZOOM's rect, like the row range and the cull
+               below — leaving the columns on the engine's viewport stopped
+               wrecks at the unzoomed left and right edges while terrain,
+               features and units carried on past them */
+            int tx0 = ((eyeX + (evpL - vpL)) >> 4) - 8;
+            int tx1 = tx0 + (evw >> 4) + 16;
             int ty0 = r0, ty1 = r0 + rows;
             if (tx0 < 0) tx0 = 0;
             if (ty0 < 0) ty0 = 0;
             if (tx1 > mapW) tx1 = mapW;
             if (ty1 > mapH) ty1 = mapH;
-            for (int ty = ty0; ty < ty1 && nu < 512; ty++)
-            for (int tx = tx0; tx < tx1 && nu < 512; tx++) {
+            for (int ty = ty0; ty < ty1 && nu < MAXU; ty++)
+            for (int tx = tx0; tx < tx1 && nu < MAXU; tx++) {
                 const char* t = fmap + ((size_t)ty * mapW + tx) * FT_STRIDE;
                 if (!(*(const unsigned char*)(t + FT_FLAGS) & 1)) continue;
                 unsigned defIdx = *(const unsigned short*)(t + FT_DEFIDX);
@@ -1006,34 +1344,90 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 int ry = *(const int*)(rec + WR_YPOS) >> 16;
                 float ax = (float)(rx - eyeX + vpL);
                 float ay = (float)(ry - rz / 2 - eyeY + vpT);
-                if (ax < vpL - 256 || ax > vpL + vw + 256 ||
-                    ay < vpT - 256 || ay > vpT + vh + 256) continue;
-                if (fogMode & 1) {          /* unexplored: engine draws nothing */
-                    int fx2 = rx >> 5, fy2 = (ry - rz / 2) >> 5;
-                    if (fx2 >= 0 && fy2 >= 0 && fx2 < s_losW && fy2 < s_losH &&
-                        !s_mapBuf[fy2 * s_losW + fx2]) continue;
-                }
+                if (ax < evpL - 256 || ax > evpL + evw + 256 ||
+                    ay < evpT - 256 || ay > evpT + evh + 256) continue;
+                /* wreckage is remembered furniture: hidden only where the
+                   map is unexplored, visible (darkened) in grey */
+                if ((fogMode & 1) &&
+                    (tagpu_fog_at(s_fogGrid, s_fogCols, s_fogRows,
+                                  s_fogOrgX, s_fogOrgY, rx, ry - rz / 2) & 1))
+                    continue;
                 NU* n2 = &units[nu++];
                 n2->o3 = o3; n2->u = NULL; n2->ax = ax; n2->ay = ay; n2->gy = ay;
                 n2->wx0 = (float)rx; n2->wz0 = (float)(ry - rz / 2);
                 n2->rel = (ry >> 4) - r0;
                 n2->owner = 0; n2->cloaked = 0; n2->air = 0; n2->feat = 1; n2->sel = 0;
+                n2->shadow = 0;     /* the engine's FShadow feature shadow stays */
+                n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
                 nwr++;
             }
         }
     }
-    if (nu == 0) return;
+    /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
+    TAGPU_FXVIEW fv;
+    int nfx = 0, nfeat = 0, nterr = 0, nmark = 0;
+    if (fxOn || sfxOn || featOn || terrOn || markOn) {
+        fv.ta = ta; fv.eyeX = eyeX; fv.eyeY = eyeY;
+        fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
+        fv.evpL = evpL; fv.evpT = evpT; fv.evw = evw; fv.evh = evh;
+        fv.gw = gw; fv.gh = gh; fv.ss = s_ss ? 2 : 1; fv.fogMode = fogMode;
+        fv.zoom = s_zoom;
+        fv.zoomCx = (float)vpL + (float)vw * 0.5f;
+        fv.zoomCy = (float)vpT + (float)vh * 0.5f;
+        fv.encSprite = fxKey + 3.0f;      /* nearer than fx models (fxKey ± 1.8) */
+        fv.depthScale = depthScale;
+        /* particle layer n -> depth key, from the ten 0x471F90 call sites
+           (terrain-depth.md 3): 0..4 before any unit row (under everything
+           the row sweep and the scaffold stamp), 5/6 after the row sweep and
+           before the projectiles (above the last row key fxKey-2.2, below
+           the fx models fxKey-1.8), 7 after the explosions (above the fx
+           sprites at fxKey+3), 8 after the airborne sweep, 9 before the fog */
+        {
+            /* layers 0..2 are drawn before the flat-feature pre-pass and 3..4
+               after it, so the flat band (0.40..0.50, tagpu_feat.c) sits
+               between them */
+            int L;
+            for (L = 0; L <= 2; L++) fv.encLayer[L] = 0.30f;
+            fv.encLayer[3] = fv.encLayer[4] = 0.60f;
+            fv.encLayer[5] = fv.encLayer[6] = fxKey - 2.0f;
+            fv.encLayer[7] = fxKey + 5.0f;
+            fv.encLayer[8] = airKey + 3.0f;
+            fv.encLayer[9] = airKey + 5.0f;
+        }
+        fv.fogGrid = fogMode ? s_fogGrid : NULL;
+        fv.fogCols = s_fogCols; fv.fogRows = s_fogRows;
+        fv.fogOrgX = s_fogOrgX; fv.fogOrgY = s_fogOrgY;
+        fv.fogTex = s_fogTex; fv.fogLut = s_fogLutTex;
+        fv.r0 = r0; fv.rows = rows;
+        fv.frame_counter = f->frame_counter;
+        /* terrain first (the frame's far plane), then features: they own the
+           depth the units are tested against */
+        if (terrOn) nterr = tagpu_terr_gather(&fv);
+        if (featOn) nfeat = tagpu_feat_gather(&fv);
+        if (fxOn || sfxOn) nfx = tagpu_fx_gather(&fv);
+        if (markOn) nmark = tagpu_mark_gather(&fv);
+    }
+    /* NEVER return early while we own the terrain: the engine's frame is a
+       flat key fill inside the viewport, and only the composite below turns it
+       back into a picture. tagpu_terr_gather hands the draw back on any bail,
+       so nterr == 0 usually means the engine is painting terrain again — but a
+       hard bail (no atlas, bad map pointer) can leave a key-filled frame with
+       nothing of ours to cover it, and that frame still has to be composited. */
+    int terrOwned = tagpu_terrown_filled();
+    if (nu == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !markOn && !terrOwned) return;
 
     /* ---- build geometry (body); shadow reuses it with an offset ---- */
-    static int firstv[513];
+    static int firstv[MAXU + 1];
+    static float encb[MAXU];
     int i;
     for (i = 0; i < nu; i++) {
         firstv[i] = nv;
         /* airborne units draw in a second, un-rowed sweep above everything
-           (terrain-depth 3.3) -> give them a nearest-band key; wrecks sit at
-           FEATURE depth (3+rel*4, terrain-depth 3.4) */
-        int rel = units[i].air ? 300 : units[i].rel;
-        float encBase = (units[i].feat ? 3.0f : 1.0f) + (float)rel * 4.0f;
+           (terrain-depth 3.3) -> the air band above the effects band; wrecks
+           sit at FEATURE depth (3+rel*4, terrain-depth 3.4) */
+        float encBase = units[i].air ? airKey
+                      : (units[i].feat ? 3.0f : 1.0f) + (float)units[i].rel * 4.0f;
+        encb[i] = encBase;
         if (units[i].hires)
             nv = emit_hires(units[i].hires, nv, units[i].ax, units[i].ay,
                             units[i].wx0, units[i].wz0, encBase, units[i].yaw);
@@ -1042,13 +1436,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                            units[i].wx0, units[i].wz0, encBase, units[i].owner);
     }
     firstv[nu] = nv;
-    if (nv == 0) return;
+    /* effects models (missiles, shells, debris) through the same path */
+    int fxFirst = nv;
+    if (nfx) {
+        int k, nm = tagpu_fx_nmodels();
+        for (k = 0; k < nm; k++) nv = emit_fx_model(tagpu_fx_model(k), nv, fxKey);
+    }
+    int fxLast = nv;
+    if (nv == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !markOn && !terrOwned) return;
 
     /* ---- native selection rects (ui-markers: the ONLY marker interleaved
        with unit draws — the engine's is unreadable under our pixels, redraw
        it): flat model-XZ AABB rect at lowest model Y, rotated by body yaw,
        GUI colour 0xA, drawn as GL_LINES at just-under-the-unit depth ---- */
-    int lineStart = nv;
+    int lineStart = nv, selDrawn = 0;
     if (nsel) {
         const char* mptrs = *(const char* const*)(ta + OFF_MODELPTRS);
         for (i = 0; i < nu && nv + 8 <= MAXNV; i++) {
@@ -1072,7 +1473,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 px[k] = units[i].ax + rx2;
                 py[k] = units[i].ay + (-rz2 - y0 * 0.5f);
             }
-            float enc = ((units[i].air ? 300 : units[i].rel) * 4.0f + 1.0f) - 0.5f;
+            float enc = encb[i] - 0.5f;
+            selDrawn++;
             for (k = 0; k < 4; k++) {
                 int k2 = (k + 1) & 3, t2;
                 for (t2 = 0; t2 < 2; t2++) {
@@ -1081,14 +1483,26 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     o[1] = t2 ? py[k2] : py[k];
                     o[2] = enc;
                     o[3] = -1.0f; o[4] = -1.0f;                 /* flat path  */
-                    o[5] = (float)SELBOX_COLIDX / 255.0f; o[6] = -1.0f;
+                    o[5] = (float)*(unsigned char*)(ta + OFF_GUICOL + SELBOX_COLIDX)
+                           / 255.0f;
+                    o[6] = -1.0f;
                     o[7] = (float)tagpu_r3d_shade_neutral() / 31.0f;
                     o[8] = units[i].wx0; o[9] = units[i].wz0;
+                    o[10] = 1e9f;                               /* never clipped */
                     nv++;
                 }
             }
         }
     }
+    /* Whether we owed a box we could not draw. `markown` suppresses the
+       engine's selection rect per unit on `tagpu_native_owns_unit` alone, but
+       this loop can still come up short — the gather cap, the vertex budget, an
+       unresolvable model AABB — and a suppressed box we then failed to draw
+       leaves a selected unit unmarked. So say so, and let markown hand the
+       WHOLE set back for a frame: at 1x the engine's boxes land on the same
+       pixels and nothing shows, at any other zoom a one-frame ghost is a much
+       smaller lie than a missing marker. Self-correcting either way. */
+    s_selComplete = (selDrawn == nsel && nu < MAXU);
 
     /* ---- render into the (optionally 2x supersampled) game-res FBO ---- */
     int ss = s_ss ? 2 : 1;
@@ -1106,6 +1520,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glScissor(vpL * ss, vpT * ss, vw * ss, vh * ss);
     }
 
+    /* terrain is the frame's implicit far plane: it draws under everything,
+       writes depth at a key below every other band, and (since it is now the
+       bottom layer) paints the fog's solid black itself. Own program. */
+    if (nterr) tagpu_terr_render(&fv, s_palTex);
+
+    /* features (trees, rocks, splats, GAF wrecks) draw next and write real
+       depth, so every unit body below is occluded by them through the depth
+       buffer — this is what the G12a scaffold was standing in for. Its own
+       program; the unit program and VAO are (re)bound right after. */
+    if (nfeat) {
+        glEnable(GL_BLEND);
+        tagpu_feat_render(&fv, s_palTex);
+    }
+
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)gw, (float)gh);
     x_glUniform1f(s_uSS, (float)ss);
@@ -1117,7 +1545,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glUniform1f(s_uZoomF, s_zoom);
         x_glUniform2f(s_uZoomCF, zcx, zcy);
     }
-    glUniform1i(s_uFog, fogMode);
+    x_glUniform2f(s_uFogOrg, (float)s_fogOrgX, (float)s_fogOrgY);
+    x_glUniform2f(s_uFogDim, (float)s_fogCols, (float)s_fogRows);
+    x_glUniform1f(s_uDepthScale, depthScale);
     glUniform1i(s_uScafOn, scafOn ? 1 : 0);
     x_glUniform4f(s_uScafP, (float)vpL, (float)vpT, (float)vw, (float)vh);
     x_glActiveTexture(GL_TEXTURE0);
@@ -1129,23 +1559,32 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     x_glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, scafOn ? tagpu_scaffold_texref() : 0);
     x_glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, s_losTex);
+    glBindTexture(GL_TEXTURE_2D, s_fogTex);
     x_glActiveTexture(GL_TEXTURE5);
-    glBindTexture(GL_TEXTURE_2D, s_mapTex);
+    glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
     x_glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);
     glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)nv * NVST * 4, s_verts);
 
+    /* uFog bit1 = hide in grey rather than darken. Units the watched player
+       cannot see are not drawn at all; wreckage is furniture and stays, and
+       our own units make the LOS they stand in. */
+#define FOGW(i) ((fogMode & 1) | \
+                 ((units[i].feat || units[i].owner == watched) ? 0 : 2))
     glEnable(GL_BLEND);
-    x_glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied */
 
     /* selection rects first — the engine draws them under the unit sprite */
     if (nv > lineStart) {
+        glUniform1i(s_uFog, fogMode & 1);
         glUniform1i(s_uShadow, 0);
         x_glUniform1f(s_uAlpha, 1.0f);
         x_glUniform2f(s_uOffset, 0.0f, 0.0f);
+        x_glUniform1f(s_uWaterT, -1e9f);
+        x_glUniform1f(s_uDigT, -1e9f);
+        glUniform1i(s_uWaterMode, 0);
         if (x_glLineWidth) x_glLineWidth((GLfloat)ss);
         x_glDrawArrays(GL_LINES, lineStart, nv - lineStart);
     }
@@ -1157,7 +1596,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glUniform1f(s_uAlpha, 0.5f);
         x_glDepthMask(GL_FALSE);
         for (i = 0; i < nu; i++) {
+            if (!units[i].shadow) continue;
+            glUniform1i(s_uFog, FOGW(i));
             x_glUniform2f(s_uOffset, 5.0f, (float)(units[i].gy - units[i].ay));
+            x_glUniform1f(s_uWaterT, units[i].waterT);
+            x_glUniform1f(s_uDigT, units[i].digT);
             x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i+1] - firstv[i]);
         }
         x_glDepthMask(GL_TRUE);
@@ -1166,11 +1609,33 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     glUniform1i(s_uShadow, 0);
     x_glUniform2f(s_uOffset, 0.0f, 0.0f);
     for (i = 0; i < nu; i++) {
+        glUniform1i(s_uFog, FOGW(i));
         x_glUniform1f(s_uAlpha, units[i].cloaked ? 0.5f : 1.0f);
+        x_glUniform1f(s_uWaterT, units[i].waterT);
+        x_glUniform1f(s_uDigT, units[i].digT);
+        glUniform1i(s_uWaterMode, units[i].waterMode);
         x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i+1] - firstv[i]);
     }
+    /* effects: models in the unit pipeline, then lines/sprites (own program;
+       depth test still on so aircraft cover them, depth writes off) */
+    if (fxLast > fxFirst) {
+        glUniform1i(s_uFog, (fogMode & 1) | 2);
+        x_glUniform1f(s_uAlpha, 1.0f);
+        x_glUniform1f(s_uWaterT, -1e9f);
+        x_glUniform1f(s_uDigT, -1e9f);
+        glUniform1i(s_uWaterMode, 0);
+        x_glDrawArrays(GL_TRIANGLES, fxFirst, fxLast - fxFirst);
+    }
+    if (nfx) tagpu_fx_render(&fv, s_palTex, scafOn ? tagpu_scaffold_texref() : 0);
+#undef FOGW
     x_glDisable(GL_BLEND);
     x_glDisable(GL_DEPTH_TEST);
+    /* UI markers last and over everything — health bars, order lines, the
+       build cursor: in the engine they are painted after every world sprite,
+       and here they need no depth test and no blend (every fragment they keep
+       is opaque, and the key texels discard). The scissor stays on: a zoomed-in
+       marker layer reaches past the viewport and must be cut at its edge. */
+    if (markOn) tagpu_mark_render(&fv, s_palTex);
     if (x_glScissor) x_glDisable(GL_SCISSOR_TEST);
 
     /* ---- box-downsample 2x -> 1x (quad covers every pixel; no clear) ---- */
@@ -1183,14 +1648,59 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         glBindTexture(GL_TEXTURE_2D, s_colTex2);
         x_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
 
     /* ---- composite over the frame (restore the letterbox viewport) ---- */
+    int keyOn = -1;
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
     glUseProgram(s_cprog);
     glBindVertexArray(s_cvao);
     glEnable(GL_BLEND);
-    x_glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied */
+    /* the inverted composite, and only once the engine has actually run a
+       key-filled frame — on the frame the skip is first set its surface still
+       carries a real terrain blit, and inverting on that would hide the world */
+    /* ...and only while the fill is actually still running. If the game thread
+       starts drawing a screen that never reaches 0x483FA0, its surface stops
+       carrying our key and inverting against it would black that screen out;
+       a stalled sequence simply stops the inversion and leaves our own FBO
+       covering the viewport, which is always safe and self-corrects. */
+    {
+        unsigned seq = tagpu_terrown_fill_seq();
+        if (seq != s_fillSeq) { s_fillSeq = seq; s_fillStall = 0; }
+        else if (s_fillStall < 1000) s_fillStall++;
+    }
+    keyOn = (f->surface_tex && terrOwned && s_fillStall < 30) ? tagpu_terr_key() : -1;
+    /* `keyOn >= 0` is precisely "the world you are looking at is OURS, drawn at
+       our zoom" — the terrain is ours and the inverted composite is in force. It
+       is the only honest moment to tell the input path to start unzooming: with,
+       say, only the marker pass armed the screen still shows the engine's 1x
+       world, and bending clicks against it would be the bug this fixes. */
+    if (keyOn >= 0) tagpu_zoom_publish_view(vpL, vpT, vw, vh);
+    if (s_uCKey >= 0) glUniform1i(s_uCKey, keyOn);
+    if (keyOn >= 0) {
+        GLint sz[2]; sz[0] = gw; sz[1] = gh;
+        if (s_uCSurfSz >= 0) glUniform2iv(s_uCSurfSz, 1, sz);
+        if (s_uCVp >= 0) x_glUniform4f(s_uCVp, (float)vpL, (float)vpT,
+                                       (float)vw, (float)vh);
+        /* the cursor the engine drew at `u`, and where it belongs (see CFS) */
+        if (s_uCCur >= 0) {
+            int dx, dy, ux, uy;
+            if (tagpu_zoom_cursor_shift(&dx, &dy, &ux, &uy)) {
+                x_glUniform4f(s_uCCur, (float)(ux - CURSOR_PAD),
+                                       (float)(uy - CURSOR_PAD),
+                                       (float)(2 * CURSOR_PAD),
+                                       (float)(2 * CURSOR_PAD));
+                if (s_uCCurOff >= 0) x_glUniform2f(s_uCCurOff, (float)dx, (float)dy);
+            } else {
+                x_glUniform4f(s_uCCur, 0.0f, 0.0f, 0.0f, 0.0f);
+            }
+        }
+        x_glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, s_palTex);
+        x_glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)f->surface_tex);
+    }
     x_glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, s_colTex);
     x_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -1204,10 +1714,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         last = f->frame_counter;
         char b[160];
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d",
-                  nu - nwr, nwr, nsel, nv, gw, gh, ss, s_subpix, scafOn, fogMode);
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d%s",
+                  nu - nwr, nwr, nsel, nmark, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
+                  lostype, s_fogLut, keyOn, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
     }
+    s_vtrunc = 0;
 }
 
 /* G11 groundwork: one-shot numeric dump of the engine's per-piece pose data
@@ -1257,10 +1769,16 @@ static void pose_dump(const char* u, const char* o3)
 void tagpu_native_glreset(void)
 {
     s_state = 0; s_fboW = s_fboH = s_fboSS = 0; s_palInit = 0;
-    s_losW = s_losH = 0;
+    s_fogCols = s_fogRows = 0; s_fogGrid = NULL; s_fogLut = 0;
+    tagpu_fx_glreset();
+    tagpu_feat_glreset();
+    tagpu_terr_glreset();
+    tagpu_mark_glreset();
 }
 
 int tagpu_native_wrecks_armed(void)
 {
     return s_armed > 0 && s_state != 2 && s_wrecks;
 }
+
+int tagpu_native_selbox_complete(void) { return s_selComplete; }

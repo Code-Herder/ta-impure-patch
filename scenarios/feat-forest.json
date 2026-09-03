@@ -1,0 +1,41 @@
+{
+  "format": "ta-scenario/1",
+  "description": "feature fixture on Two Continents: a dense forest of Tree1/Tree3 (def height 40, the tall class), with ARM units parked two 16-px tile rows NORTH of a tree row so each canopy overlaps the unit standing behind it — the occlusion proof for the native feature pass with the G12a scaffold disarmed. A commander stands among the trees as a large, easily-read occlusion subject, a laboratory wreck exercises the 3D-wreckage body of 0x46A610 (native.on must carry \"wrecks\"), and a CORE spare keeps the game alive. NOTE: a scenario `move` order across this forest does not go where it is told — every attempt walked the commander to the map's west edge instead of the target (the order is accepted, \"orders: 1 issued, 0 failed\"); undiagnosed, so this fixture does not depend on it.",
+  "seed": 20260902,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    },
+    "players": [
+      { "slot": 0, "controller": "human", "side": "arm", "color": 0 },
+      { "slot": 1, "controller": "ai", "side": "core", "color": 1 }
+    ]
+  },
+
+  "units": [
+    { "id": "behind1", "type": "ARMSTUMP", "owner": 0, "pos": [2704, 880], "facing": 180, "stance": "hold" },
+    { "id": "behind2", "type": "ARMSTUMP", "owner": 0, "pos": [2800, 880], "facing": 180, "stance": "hold" },
+    { "id": "behind3", "type": "ARMPW",    "owner": 0, "pos": [2832, 880], "facing": 180, "stance": "hold" },
+    { "id": "behind4", "type": "ARMPW",    "owner": 0, "pos": [2928, 880], "facing": 180, "stance": "hold" },
+    { "id": "behind5", "type": "ARMSTUMP", "owner": 0, "pos": [3008, 880], "facing": 180, "stance": "hold" },
+
+    { "id": "front1",  "type": "ARMSTUMP", "owner": 0, "pos": [2704, 976], "facing": 0, "stance": "hold" },
+    { "id": "front2",  "type": "ARMPW",    "owner": 0, "pos": [2928, 976], "facing": 0, "stance": "hold" },
+
+    { "id": "commander", "type": "ARMCOM", "owner": 0, "pos": [2650, 1120], "facing": 90 },
+
+    { "id": "spare",   "type": "CORSOLAR", "owner": 1, "pos": [4300, 1400] }
+  ],
+
+  "features": [
+    { "id": "wreck_lab", "type": "armlab_dead", "pos": [2960, 1120], "facing": 0 }
+  ],
+
+  "camera": { "at": [2950, 1010] }
+}

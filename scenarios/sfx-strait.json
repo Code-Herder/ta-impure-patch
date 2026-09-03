@@ -1,0 +1,250 @@
+{
+  "format": "ta-scenario/1",
+  "description": "all-particle fixture on Anteer Strait (sea level 75, shore at y~1600, water south of it): badly damaged ARM structures on the beach (damage smoke), a commander and a construction vehicle beside nanoframes (order the repair through the UI: select, ARMORDERS, ARMREPAIR, click the frame \u2014 the spray needs metal, so both players start rich and ARM has storage units, since the engine clamps the level to the storage its units provide once the starting commander is cleared), boats and a submarine crossing the water (wakes, bubbles); a CORE spare inland keeps the game alive. Self-destruct a damaged structure (select, ctrl+d) for burning debris.",
+  "seed": 20260902,
+  "on_error": "skip",
+  "setup": {
+    "map": "Anteer Strait",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0,
+        "metal": 100000,
+        "energy": 100000
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1,
+        "metal": 100000,
+        "energy": 100000
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "hurt_solar",
+      "type": "ARMSOLAR",
+      "owner": 0,
+      "pos": [
+        3200,
+        1440
+      ],
+      "health": 12
+    },
+    {
+      "id": "hurt_win",
+      "type": "ARMWIN",
+      "owner": 0,
+      "pos": [
+        3300,
+        1440
+      ],
+      "health": 12
+    },
+    {
+      "id": "hurt_mex",
+      "type": "ARMMEX",
+      "owner": 0,
+      "pos": [
+        3400,
+        1450
+      ],
+      "health": 12
+    },
+    {
+      "id": "hurt_stump",
+      "type": "ARMSTUMP",
+      "owner": 0,
+      "pos": [
+        3480,
+        1500
+      ],
+      "facing": 90,
+      "health": 12,
+      "stance": "hold"
+    },
+    {
+      "id": "frame",
+      "type": "ARMSOLAR",
+      "owner": 0,
+      "pos": [
+        3150,
+        1560
+      ],
+      "nanoframe": 30
+    },
+    {
+      "id": "builder",
+      "type": "ARMCOM",
+      "owner": 0,
+      "pos": [
+        3080,
+        1620
+      ],
+      "facing": 45
+    },
+    {
+      "id": "cv",
+      "type": "ARMCV",
+      "owner": 0,
+      "pos": [
+        3470,
+        1600
+      ],
+      "facing": 45
+    },
+    {
+      "id": "spare",
+      "type": "CORSOLAR",
+      "owner": 1,
+      "pos": [
+        3300,
+        900
+      ]
+    },
+    {
+      "id": "pt1",
+      "type": "ARMPT",
+      "owner": 0,
+      "pos": [
+        3600,
+        1900
+      ],
+      "facing": 270,
+      "orders": [
+        {
+          "cmd": "move",
+          "to": [
+            2700,
+            1900
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pt2",
+      "type": "ARMPT",
+      "owner": 0,
+      "pos": [
+        2750,
+        2000
+      ],
+      "facing": 90,
+      "orders": [
+        {
+          "cmd": "move",
+          "to": [
+            3700,
+            2000
+          ]
+        }
+      ]
+    },
+    {
+      "id": "roy",
+      "type": "ARMROY",
+      "owner": 0,
+      "pos": [
+        3650,
+        2060
+      ],
+      "facing": 270,
+      "orders": [
+        {
+          "cmd": "move",
+          "to": [
+            2700,
+            2060
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sub",
+      "type": "ARMSUB",
+      "owner": 0,
+      "pos": [
+        2800,
+        1950
+      ],
+      "facing": 90,
+      "orders": [
+        {
+          "cmd": "move",
+          "to": [
+            3600,
+            1950
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mstor1",
+      "type": "ARMMSTOR",
+      "owner": 0,
+      "pos": [
+        3250,
+        1360
+      ]
+    },
+    {
+      "id": "mstor2",
+      "type": "ARMMSTOR",
+      "owner": 0,
+      "pos": [
+        3330,
+        1360
+      ]
+    },
+    {
+      "id": "mstor3",
+      "type": "ARMMSTOR",
+      "owner": 0,
+      "pos": [
+        3410,
+        1360
+      ]
+    },
+    {
+      "id": "estor1",
+      "type": "ARMESTOR",
+      "owner": 0,
+      "pos": [
+        3490,
+        1370
+      ]
+    },
+    {
+      "id": "estor2",
+      "type": "ARMESTOR",
+      "owner": 0,
+      "pos": [
+        3570,
+        1380
+      ]
+    },
+    {
+      "id": "aicom",
+      "type": "CORCOM",
+      "owner": 1,
+      "pos": [
+        3300,
+        980
+      ],
+      "facing": 180
+    }
+  ],
+  "camera": {
+    "center_on": "frame"
+  }
+}

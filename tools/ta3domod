@@ -1,0 +1,558 @@
+#!/usr/bin/env python3
+"""ta3domod — read a Total Annihilation `.3do`, change it, write it back.
+
+`tools/ta3do` renders models; this one edits them. It parses the mesh tree with
+every on-disk field kept (§1 of research/notes/file-formats.md), applies a list
+of operations, and re-serialises a valid `.3do`:
+
+    tools/ta3domod dump corbats
+    tools/ta3domod edit corbats -o out.3do \
+        --stretch base:z:0:40 \
+        --graft corfhlt:turret1:base:0,10,20:laser1
+    tools/ta3domod export out.3do -o renders/warlordex
+
+Two operations, both of them things you cannot do by scaling a whole model:
+
+  --stretch PIECE:AXIS:CUT:AMOUNT   insert AMOUNT model units of hull at the
+      plane AXIS=CUT — every vertex beyond the cut slides out by AMOUNT, and so
+      does every child piece anchored beyond it. The polygons that *span* the
+      cut simply get longer, which is how a real ship is jumboised: bow and
+      stern detail is untouched and only the parallel midbody grows.
+
+  --graft SRC:SRCPIECE:DSTPIECE:X,Y,Z[:NAME]   copy a piece subtree out of
+      another model and hang it off DSTPIECE at that offset. Texture names ride
+      along, and the renderer resolves them from the shared GAF pool, so a
+      turret lifted off another unit keeps its skin.
+
+  --drop PIECE   remove a piece and its children, for the flare anchors a
+      donor turret brings with it when the destination script would not hide
+      them.
+
+`export` is ta3do's glTF export plus the one thing a *re*-import needs: the
+atlas is a lossy destination — a GAF frame goes in, a rectangle of pixels comes
+out — so the .glb carries `asset.extras.ta3do.atlas`, naming for every packed
+tile the GAF entry and the archive it came from, its pixel rect and its UV rect,
+and `...extras.ta3do.pieces`, the source 3DO's per-primitive texture names in
+file order. Between them a face's UVs identify the GAF frame it wants, so a mesh
+edited in Blender can be written back out as a `.3do` with its texture names
+intact. The same JSON is written beside the .glb as `<name>-atlas.json`.
+
+Stdlib only, and it reads the archives through the same HPI code path as ta3do
+(no extraction step).
+"""
+
+import argparse
+import json
+import os
+import re
+import struct
+import sys
+from pathlib import Path
+
+FIXED = 65536.0
+OBJ_HEADER = struct.Struct("<11i")   # 44 of the 52 bytes; sibling/child follow
+PRIM_STRUCT = struct.Struct("<8i")
+AXES = {"x": 0, "y": 1, "z": 2}
+
+
+def die(msg):
+    print(f"ta3domod: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+# --------------------------------------------------------------------------- assets
+
+def _ta3do_module():
+    """Borrow ta3do's archive reader; fall back to plain files without it."""
+    import importlib.machinery
+    import importlib.util
+    for path in _ta3do_candidates():
+        if path.is_file():
+            loader = importlib.machinery.SourceFileLoader("ta3do_lib", str(path))
+            spec = importlib.util.spec_from_loader("ta3do_lib", loader)
+            module = importlib.util.module_from_spec(spec)
+            loader.exec_module(module)
+            return module
+    return None
+
+
+def _ta3do_candidates():
+    env = os.environ.get("TA3DO_BIN")
+    if env:
+        yield Path(env).expanduser()
+    here = Path(__file__).resolve()
+    yield here.with_name("ta3do")
+    for parent in here.parents:
+        worktrees = parent / ".claude" / "worktrees"
+        if worktrees.is_dir():
+            for tree in sorted(worktrees.iterdir()):
+                yield tree / "tools" / "ta3do"
+            break
+
+
+class Source:
+    """Where a model can come from: a file on disk, or the game's archives."""
+
+    def __init__(self):
+        self._assets = None
+
+    @property
+    def assets(self):
+        if self._assets is None:
+            module = _ta3do_module()
+            if module is None:
+                die("no ta3do alongside this script (set TA3DO_BIN) — "
+                    "archive names need it; a .3do path still works")
+            self._assets = module.Assets()
+        return self._assets
+
+    def read(self, name: str) -> bytes:
+        path = Path(name)
+        if path.is_file():
+            return path.read_bytes()
+        key = name.lower().removesuffix(".3do")
+        assets = self.assets
+        if assets.has(f"units/{key}.fbi"):
+            text = assets.read(f"units/{key}.fbi").decode("latin-1")
+            match = re.search(r"objectname\s*=\s*([^;\s]+)", text, re.I)
+            if match and assets.has(f"objects3d/{match.group(1).lower()}.3do"):
+                return assets.read(f"objects3d/{match.group(1).lower()}.3do")
+        for candidate in (f"objects3d/{key}.3do", key, f"{key}.3do"):
+            if assets.has(candidate):
+                return assets.read(candidate)
+        die(f"no model called {name!r}")
+
+
+# --------------------------------------------------------------------------- model
+
+class Primitive:
+    __slots__ = ("color", "always0", "indices", "texture", "flags")
+
+    def __init__(self, color, always0, indices, texture, flags):
+        self.color = color
+        self.always0 = always0
+        self.indices = indices
+        self.texture = texture
+        self.flags = flags
+
+    def copy(self):
+        return Primitive(self.color, self.always0, list(self.indices),
+                         self.texture, tuple(self.flags))
+
+
+class Piece:
+    __slots__ = ("name", "sel_prim", "always0", "offset", "vertices",
+                 "primitives", "children", "_off")
+
+    def __init__(self, name, sel_prim, always0, offset, vertices, primitives, children):
+        self.name = name
+        self.sel_prim = sel_prim
+        self.always0 = always0
+        self.offset = offset            # (x, y, z) from parent, model units
+        self.vertices = vertices        # [(x, y, z)] model units
+        self.primitives = primitives
+        self.children = children
+        self._off = 0
+
+    def walk(self, depth=0):
+        yield self, depth
+        for child in self.children:
+            yield from child.walk(depth + 1)
+
+    def find(self, name):
+        for piece, _ in self.walk():
+            if piece.name.lower() == name.lower():
+                return piece
+        return None
+
+    def copy(self):
+        return Piece(self.name, self.sel_prim, self.always0, self.offset,
+                     list(self.vertices), [p.copy() for p in self.primitives],
+                     [c.copy() for c in self.children])
+
+
+def _cstring(blob, offset):
+    end = blob.find(b"\0", offset)
+    return blob[offset:end if end >= 0 else len(blob)].decode("latin-1")
+
+
+def parse_3do(blob, offset=0):
+    (version, n_verts, n_prims, sel_prim, x, y, z,
+     name_off, always0, vert_off, prim_off) = OBJ_HEADER.unpack_from(blob, offset)
+    if version != 1:
+        die(f"object at {offset}: version {version}, expected 1")
+    child_off = struct.unpack_from("<i", blob, offset + 48)[0]
+
+    verts = [tuple(v / FIXED for v in struct.unpack_from("<3i", blob, vert_off + i * 12))
+             for i in range(n_verts)]
+
+    prims = []
+    for i in range(n_prims):
+        (color, n_idx, p_always0, idx_off, tex_off, f1, f2, f3) = \
+            PRIM_STRUCT.unpack_from(blob, prim_off + i * 32)
+        indices = list(struct.unpack_from(f"<{n_idx}H", blob, idx_off)) if n_idx else []
+        prims.append(Primitive(color, p_always0, indices,
+                               _cstring(blob, tex_off) if tex_off else None, (f1, f2, f3)))
+
+    children = []
+    node = child_off
+    while node:
+        children.append(parse_3do(blob, node))
+        node = struct.unpack_from("<i", blob, node + 44)[0]
+
+    return Piece(_cstring(blob, name_off), sel_prim, always0,
+                 (x / FIXED, y / FIXED, z / FIXED), verts, prims, children)
+
+
+def _fx(value):
+    return int(round(value * FIXED))
+
+
+def write_3do(root: Piece) -> bytes:
+    """Serialise the tree. Every offset is absolute, so layout is free: headers
+    first in DFS order (so sibling/child links are known), then the payloads."""
+    buf = bytearray()
+    order = []
+
+    def reserve(piece):
+        piece._off = len(buf)
+        buf.extend(b"\0" * 52)
+        order.append(piece)
+        for child in piece.children:
+            reserve(child)
+
+    reserve(root)
+
+    pool = {}
+
+    def emit_string(text):
+        if text not in pool:
+            pool[text] = len(buf)
+            buf.extend(text.encode("latin-1") + b"\0")
+        return pool[text]
+
+    for piece in order:
+        name_off = emit_string(piece.name)
+        vert_off = len(buf)
+        for x, y, z in piece.vertices:
+            buf.extend(struct.pack("<3i", _fx(x), _fx(y), _fx(z)))
+
+        placed = []
+        for prim in piece.primitives:
+            idx_off = len(buf)
+            for index in prim.indices:
+                buf.extend(struct.pack("<H", index))
+            tex_off = emit_string(prim.texture) if prim.texture else 0
+            placed.append((idx_off if prim.indices else 0, tex_off))
+
+        prim_off = len(buf)
+        for prim, (idx_off, tex_off) in zip(piece.primitives, placed):
+            buf.extend(PRIM_STRUCT.pack(prim.color, len(prim.indices), prim.always0,
+                                        idx_off, tex_off, *prim.flags))
+
+        OBJ_HEADER.pack_into(buf, piece._off, 1, len(piece.vertices),
+                             len(piece.primitives), piece.sel_prim,
+                             _fx(piece.offset[0]), _fx(piece.offset[1]), _fx(piece.offset[2]),
+                             name_off, piece.always0, vert_off, prim_off)
+
+    for piece in order:
+        children = piece.children
+        child_off = children[0]._off if children else 0
+        struct.pack_into("<i", buf, piece._off + 48, child_off)
+        for a, b in zip(children, children[1:]):
+            struct.pack_into("<i", buf, a._off + 44, b._off)
+        if children:
+            struct.pack_into("<i", buf, children[-1]._off + 44, 0)
+    struct.pack_into("<i", buf, root._off + 44, 0)
+    return bytes(buf)
+
+
+# --------------------------------------------------------------------------- ops
+
+def bounds(piece):
+    """Axis-aligned bounds of a subtree, in the coordinates of `piece`'s parent
+    origin — i.e. including the piece's own offset from parent."""
+    lo = [float("inf")] * 3
+    hi = [float("-inf")] * 3
+
+    def visit(node, base):
+        origin = [base[i] + node.offset[i] for i in range(3)]
+        for vertex in node.vertices:
+            for i in range(3):
+                value = origin[i] + vertex[i]
+                lo[i] = min(lo[i], value)
+                hi[i] = max(hi[i], value)
+        for child in node.children:
+            visit(child, origin)
+
+    visit(piece, (0.0, 0.0, 0.0))
+    if lo[0] == float("inf"):
+        return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
+    return tuple(lo), tuple(hi)
+
+
+def stretch(piece, axis, cut, amount):
+    """Insert `amount` units at the plane axis=cut, in `piece`'s own frame.
+
+    Vertices past the cut slide out; vertices before it stay, so the polygons
+    that straddle the plane simply get longer. A child whose *origin* is past
+    the cut moves bodily — a turret must not be sheared in half — and a child
+    whose origin is before it is entered with the plane rebased into its frame,
+    which is what keeps a stern-anchored piece like a wake with the stern even
+    though it hangs off the root at (0, 0, 0).
+
+    Returns (vertices moved, pieces moved bodily)."""
+    i = AXES[axis]
+    moved_verts = 0
+    moved_kids = 0
+
+    def visit(node, plane):
+        nonlocal moved_verts, moved_kids
+        for n, vertex in enumerate(node.vertices):
+            if vertex[i] > plane:
+                shifted = list(vertex)
+                shifted[i] += amount
+                node.vertices[n] = tuple(shifted)
+                moved_verts += 1
+        for child in node.children:
+            if child.offset[i] > plane:
+                offset = list(child.offset)
+                offset[i] += amount
+                child.offset = tuple(offset)
+                moved_kids += 1
+            else:
+                visit(child, plane - child.offset[i])
+
+    visit(piece, cut)
+    return moved_verts, moved_kids
+
+
+def drop(root, name):
+    """Remove a piece and its children from the tree."""
+    for node, _ in root.walk():
+        for n, child in enumerate(node.children):
+            if child.name.lower() == name.lower():
+                del node.children[n]
+                return child
+    return None
+
+
+def rename_subtree(piece, suffix):
+    for node, _ in piece.walk():
+        node.name = f"{node.name}{suffix}"[:15]
+
+
+def graft(dest_root, dest_name, source_piece, offset, name=None):
+    """Hang a copy of `source_piece`'s subtree off `dest_name` at `offset`.
+
+    Piece names have to stay unique — the COB addresses them by name — so the
+    descendants take a suffix from the new root's trailing digits (`lasr2` ->
+    `stand2`, `gun2`, `flare2`)."""
+    parent = dest_root.find(dest_name)
+    if parent is None:
+        die(f"no piece called {dest_name!r} in the destination model")
+    taken = {p.name.lower() for p, _ in dest_root.walk()}
+    clone = source_piece.copy()
+    clone.offset = offset
+    clone.sel_prim = -1
+    if name:
+        match = re.search(r"\d+$", name)
+        rename_subtree(clone, match.group(0) if match else name)
+        clone.name = name[:15]
+    clash = sorted(p.name for p, _ in clone.walk() if p.name.lower() in taken)
+    if clash:
+        die(f"grafted piece name(s) already in the model: {', '.join(clash)}")
+    parent.children.append(clone)
+    return clone
+
+
+# --------------------------------------------------------------------------- export
+
+def atlas_metadata(model, bank, root: Piece):
+    """What the atlas threw away: which GAF frame each packed tile came from.
+
+    The renderer bakes every texture the model names into one image, so a face
+    in the .glb points at a rectangle, not at `LOGO`. This records both ends of
+    that mapping — tile rect and UV rect against the GAF entry and the archive
+    file it lives in — plus the untextured tiles, which are flat palette
+    swatches rather than art. `pieces` then lists the source primitives in file
+    order so a reimporter can match faces up without guessing."""
+    entries = []
+    for key, rect in sorted(model.atlas.rects.items(), key=lambda kv: str(kv[0])):
+        x, y, w, h = rect
+        uv = model.atlas.uv_rect(key)
+        row = {"rect": [x, y, w, h], "uv": [round(v, 6) for v in uv]}
+        if key[0] == "tex":
+            where = bank.where.get(key[1])
+            row.update(kind="texture", name=key[1],
+                       gaf=where[0] if where else None,
+                       gafFrameOffset=where[1] if where else None)
+        else:
+            index = key[1]
+            colour = model.atlas.palette[index] if index < len(model.atlas.palette) else None
+            row.update(kind="color", paletteEntry=index,
+                       rgb=list(colour[:3]) if colour else None)
+        entries.append(row)
+
+    pieces = []
+    for piece, depth in root.walk():
+        pieces.append({
+            "name": piece.name, "depth": depth, "offset": list(piece.offset),
+            "vertices": len(piece.vertices),
+            "primitives": [{"texture": prim.texture, "paletteEntry": prim.color,
+                            "indices": len(prim.indices)}
+                           for prim in piece.primitives],
+        })
+    return {"size": model.atlas.size, "padding": "1px border extrude per tile",
+            "entries": entries, "pieces": pieces}
+
+
+def cmd_export(args):
+    ta3do = _ta3do_module()
+    if ta3do is None:
+        die("export needs ta3do alongside this script (set TA3DO_BIN)")
+    assets = ta3do.Assets()
+    model = ta3do.load_model(assets, args.model, show_hidden=args.show_hidden)
+    root = parse_3do(Source().read(args.model))
+    meta = atlas_metadata(model, ta3do.TextureBank(assets), root)
+
+    doc, blob = ta3do.model_to_gltf(model)
+    doc["asset"]["extras"]["atlas"] = meta
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    glb = out_dir / f"{model.name}.glb"
+    glb.write_bytes(ta3do.write_glb(doc, blob))
+    png = out_dir / f"{model.name}-atlas.png"
+    png.write_bytes(model.atlas.png())
+    sidecar = out_dir / f"{model.name}-atlas.json"
+    sidecar.write_text(json.dumps(meta, indent=2))
+
+    written = [str(glb), str(png), str(sidecar)]
+    textures = [e for e in meta["entries"] if e["kind"] == "texture"]
+    if args.json:
+        print(json.dumps({"model": model.name, "files": written,
+                          "atlas": model.atlas.size,
+                          "textures": len(textures),
+                          "colors": len(meta["entries"]) - len(textures)}, indent=2))
+    else:
+        print(f"{model.name}: atlas {model.atlas.size}px, {len(textures)} GAF frames + "
+              f"{len(meta['entries']) - len(textures)} flat colours")
+        for path in written:
+            print(f"  {path}")
+
+
+# --------------------------------------------------------------------------- commands
+
+def cmd_dump(args):
+    source = Source()
+    root = parse_3do(source.read(args.model))
+    report = []
+    for piece, depth in root.walk():
+        lo, hi = bounds(piece)
+        report.append({
+            "name": piece.name, "depth": depth, "offset": piece.offset,
+            "vertices": len(piece.vertices), "primitives": len(piece.primitives),
+            "min": lo, "max": hi,
+            "textures": sorted({p.texture for p in piece.primitives if p.texture}),
+        })
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return
+    for entry in report:
+        pad = "  " * entry["depth"]
+        ox, oy, oz = entry["offset"]
+        lo, hi = entry["min"], entry["max"]
+        print(f"{pad}{entry['name']:<15} v={entry['vertices']:<4} p={entry['primitives']:<4} "
+              f"at ({ox:7.2f},{oy:7.2f},{oz:7.2f})  "
+              f"x[{lo[0]:7.2f},{hi[0]:7.2f}] y[{lo[1]:7.2f},{hi[1]:7.2f}] "
+              f"z[{lo[2]:7.2f},{hi[2]:7.2f}]")
+    if args.verts:
+        piece = root.find(args.verts) or die(f"no piece called {args.verts!r}")
+        for n, (x, y, z) in enumerate(piece.vertices):
+            print(f"  [{n:3}] {x:8.2f} {y:8.2f} {z:8.2f}")
+
+
+def cmd_edit(args):
+    source = Source()
+    root = parse_3do(source.read(args.model))
+    log = []
+
+    for spec in args.stretch or []:
+        parts = spec.split(":")
+        if len(parts) != 4:
+            die(f"--stretch wants PIECE:AXIS:CUT:AMOUNT, got {spec!r}")
+        name, axis, cut, amount = parts[0], parts[1].lower(), float(parts[2]), float(parts[3])
+        if axis not in AXES:
+            die(f"--stretch axis must be x, y or z, got {axis!r}")
+        piece = root.find(name) or die(f"no piece called {name!r}")
+        verts, kids = stretch(piece, axis, cut, amount)
+        log.append(f"stretch {piece.name} {axis}>{cut} by {amount}: "
+                   f"{verts} vertices, {kids} children moved")
+
+    for spec in args.graft or []:
+        parts = spec.split(":")
+        if len(parts) not in (4, 5):
+            die(f"--graft wants SRC:SRCPIECE:DSTPIECE:X,Y,Z[:NAME], got {spec!r}")
+        src_model, src_piece, dst_piece, offset = parts[0], parts[1], parts[2], parts[3]
+        name = parts[4] if len(parts) == 5 else None
+        try:
+            position = tuple(float(v) for v in offset.split(","))
+        except ValueError:
+            position = ()
+        if len(position) != 3:
+            die(f"--graft offset wants X,Y,Z, got {offset!r}")
+        donor = parse_3do(source.read(src_model))
+        piece = donor.find(src_piece) or die(f"no piece {src_piece!r} in {src_model}")
+        clone = graft(root, dst_piece, piece, position, name=name)
+        log.append(f"graft {src_model}:{piece.name} -> {dst_piece} as {clone.name} "
+                   f"({sum(1 for _ in clone.walk())} pieces) at {position}")
+
+    for name in args.drop or []:
+        gone = drop(root, name) or die(f"no piece called {name!r}")
+        log.append(f"drop {gone.name} ({sum(1 for _ in gone.walk())} pieces)")
+
+    blob = write_3do(root)
+    Path(args.out).write_bytes(blob)
+    log.append(f"wrote {args.out} ({len(blob)} bytes, "
+               f"{sum(1 for _ in root.walk())} pieces)")
+    if args.json:
+        print(json.dumps({"out": args.out, "bytes": len(blob), "log": log}, indent=2))
+    else:
+        print("\n".join(log))
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="ta3domod", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    dump = sub.add_parser("dump", help="piece tree with per-subtree bounds")
+    dump.add_argument("model")
+    dump.add_argument("--verts", metavar="PIECE", help="also list that piece's vertices")
+    dump.add_argument("--json", action="store_true")
+    dump.set_defaults(func=cmd_dump)
+
+    edit = sub.add_parser("edit", help="apply operations and write a new .3do")
+    edit.add_argument("model")
+    edit.add_argument("-o", "--out", required=True)
+    edit.add_argument("--stretch", action="append", metavar="PIECE:AXIS:CUT:AMOUNT")
+    edit.add_argument("--graft", action="append", metavar="SRC:SRCPIECE:DST:X,Y,Z[:NAME]")
+    edit.add_argument("--drop", action="append", metavar="PIECE",
+                      help="remove a piece and its children (applied last)")
+    edit.add_argument("--json", action="store_true")
+    edit.set_defaults(func=cmd_edit)
+
+    ex = sub.add_parser("export", help="ta3do's glTF export + the GAF/atlas mapping")
+    ex.add_argument("model")
+    ex.add_argument("-o", "--out", required=True, help="output directory")
+    ex.add_argument("--show-hidden", action="store_true",
+                    help="keep pieces the unit's script hides at Create (flares)")
+    ex.add_argument("--json", action="store_true")
+    ex.set_defaults(func=cmd_export)
+
+    args = parser.parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

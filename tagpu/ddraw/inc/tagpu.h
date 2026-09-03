@@ -18,6 +18,11 @@ typedef struct TAGPU_FRAME {
     void* hdc;                       /* g_ddraw.render.hdc                           */
     unsigned int frame_counter;      /* monotonic, maintained by the fork            */
     int   bpp;                       /* g_ddraw.bpp (8 for TA)                        */
+    /* G13b: the GL id of the engine's own 8bpp frame, an R8 INDEX texture whose
+       texel (x,y) is game pixel (x,y) (0 when not 8bpp / not uploaded). The
+       composite reads it to find the pixels the engine still paints inside the
+       viewport once we own the terrain — see tagpu_terrown.c. */
+    unsigned int surface_tex;
 } TAGPU_FRAME;
 
 typedef void (__cdecl *TagpuPresentProc)(const TAGPU_FRAME*);

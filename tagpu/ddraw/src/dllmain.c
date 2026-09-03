@@ -14,6 +14,12 @@
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
 #include "tagpu_owndraw.h"
+#include "tagpu_fxown.h"
+#include "tagpu_featown.h"
+#include "tagpu_terrown.h"
+#include "tagpu_markown.h"
+#include "tagpu_zoom.h"
+#include "tagpu_weapons.h"
 #include "utils.h"
 #include "versionhelpers.h"
 #include "delay_imports.h"
@@ -72,6 +78,44 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            No-op unless "tagpu_owndraw.on" exists; byte-match guarded; touches
            only 0x459830/0x459C70, disjoint from the suppress/tracer detours. */
         tagpu_owndraw_init();
+
+        /* tagpu: own the effects draw — redirect the two effects-pass call sites
+           in DrawGameScreen and detour four draw leaves (0x46BAE0/0x4B8EC0/
+           0x4211D0/0x4B7F90), all disjoint from the detours above. No-op unless
+           "tagpu_fxown.on" exists; byte-match guarded, all-or-nothing. */
+        tagpu_fxown_init();
+
+        /* tagpu: own the engine's feature draw (G13a). No-op unless
+           "tagpu_featown.on" exists; byte-match guarded; one leaf,
+           0x46A610, disjoint from every other detour. */
+        tagpu_featown_init();
+
+        /* tagpu: own the engine's terrain draw and, with it, the fog overlay
+           (G13b). No-op unless "tagpu_terrown.on" exists; byte-match guarded,
+           all-or-nothing; 0x483FA0 and 0x4848E0, disjoint from every other
+           detour. Unlike the others its skip path is not empty — it fills the
+           viewport with the composite's key and replicates the fog grid's
+           lazy rebuild. */
+        tagpu_terrown_init();
+
+        /* tagpu: own the engine's world-space UI markers (G13d) — health bars
+           re-drawn natively, order markers / group digits / build cursor
+           captured out of the engine's frame and replayed through the zoom.
+           No-op unless "tagpu_markown.on" exists; byte-matched, all-or-nothing;
+           four call-site redirects plus 0x46A430, disjoint from every detour
+           above (the redirects CALL 0x471F90 and 0x4BF8C0, so whatever fxown
+           installed on them still runs). */
+        tagpu_markown_init();
+
+        /* zoom: the minimap's view rectangle, computed from the 1x view and so a
+           lie at any other (tagpu_zoom.h). Inert at zoom 1. */
+        tagpu_zoom_init();
+
+        /* tagpu: 1..N weapons per unit — the first module that changes the
+           simulation, in its own file behind its own gate. No-op unless
+           "tagpu_weapons.on" exists; every site byte-matched, all-or-nothing;
+           stock units trampoline to the untouched engine functions. */
+        tagpu_weapons_init();
 
         PVOID(WINAPI * add_handler)(ULONG, PVECTORED_EXCEPTION_HANDLER) =
             (void*)real_GetProcAddress(GetModuleHandleA("Kernel32.dll"), "AddVectoredExceptionHandler");

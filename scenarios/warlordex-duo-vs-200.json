@@ -1,0 +1,41 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Two WarlordEx (CORBATSX, from warlordex.ufo) under the human player against an ARM fleet of 200 Skeeters lying to the east, for driving by hand. Four fusions and four energy stores sit on the north shore: each ship carries four CORE_BATSLASER at 75 energy a shot on top of its two stock guns, and clear_existing takes the commander's storage away, so without them the new turrets stay silent. Launch with --unit-limit 500 (player 1 alone needs 200 slots); `scenario load` maps the terrain itself. Then `tacli shield <inst> off` to hand the keyboard and mouse over.",
+  "seed": 20260902,
+  "on_error": "skip",
+
+  "setup": {
+    "map": "Anteer Strait",
+    "res": "1920x1080",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "core", "color": 1, "metal": 10000, "energy": 10000},
+      {"slot": 1, "controller": "ai",    "side": "arm",  "color": 0, "metal": 10000, "energy": 10000}
+    ]
+  },
+
+  "units": [
+    { "id": "warlordex1", "type": "CORBATSX", "owner": 0, "pos": [2700, 1880], "facing": 90 },
+    { "id": "warlordex2", "type": "CORBATSX", "owner": 0, "pos": [2700, 2110], "facing": 90 },
+    { "id": "fusion1",  "type": "CORFUS",   "owner": 0, "pos": [2900, 1400] },
+    { "id": "fusion2",  "type": "CORFUS",   "owner": 0, "pos": [3060, 1400] },
+    { "id": "fusion3",  "type": "CORFUS",   "owner": 0, "pos": [3220, 1400] },
+    { "id": "fusion4",  "type": "CORFUS",   "owner": 0, "pos": [3380, 1400] },
+    { "id": "estor1",   "type": "CORESTOR", "owner": 0, "pos": [2900, 1300] },
+    { "id": "estor2",   "type": "CORESTOR", "owner": 0, "pos": [2980, 1300] },
+    { "id": "estor3",   "type": "CORESTOR", "owner": 0, "pos": [3060, 1300] },
+    { "id": "estor4",   "type": "CORESTOR", "owner": 0, "pos": [3140, 1300] },
+    { "id": "arm_spare", "type": "ARMSOLAR", "owner": 1, "pos": [3800, 1250] }
+  ],
+
+  "groups": [
+    { "id": "skeeters", "owner": 1, "at": [3650, 1990],
+      "pattern": {"kind": "grid", "cols": 20, "spacing": 45, "jitter": 6},
+      "composition": [{"type": "ARMPT", "count": 200}],
+      "facing": 270 }
+  ],
+
+  "camera": { "center_on": "warlordex1" }
+}

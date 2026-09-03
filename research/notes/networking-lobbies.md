@@ -13,6 +13,12 @@ online in 2026 works by *wrapping* DirectPlay rather than replacing the engine's
   the TA directory that wraps the DirectPlay COM objects and logs the packet stream to `.tad`; plus a
   proxy `ddraw.dll` ("TA Hook") for in-game UI, and later in-memory `TotalA.exe` code splicing.
 - The `.tad` format is documented, both in the 2003 source release and in TAF's C++ re-implementation.
+- **Under wine you must bring your own DirectPlay.** Wine implements the *client* half of
+  DirectPlay TCP/IP and not the host half, so no wine process can create a session on any
+  version, `master` included. Dropping in Microsoft's native `dplayx`/`dpwsockx`/`dplaysvr.exe`
+  fixes it completely — host, join and game traffic all verified on wine 9.0, 2026-09-02, with
+  `tools/dptest`. See [DirectPlay under Wine](#directplay-under-wine-measured-2026-09-02);
+  `tools/dpinstall.sh` does the install.
 
 Everything below that is marked *verified* comes from source I read directly (cloned repos, the 2003
 source zip). Forum/wiki claims are marked as such.
@@ -197,6 +203,265 @@ rejection (0x1B), ally (0x23) and team (0x24).
 
 ---
 
+---
+
+## DirectPlay under Wine — measured, 2026-09-02
+
+The 2026-09-02 extra-weapons session concluded that wine 9.0's DirectPlay TCP/IP
+provider is "a stub" and that the fix was native `dplayx`/`dpwsockx` from
+`dxnt.cab`. That was right about wine 9.0 and **wrong about the fix**. This
+section replaces it with measurements.
+
+### How it was measured
+
+Not with TA. TA reports every DirectPlay failure the same way — a two-second
+"Updating..." box that bounces back to `SELPROV` — so the game cannot tell a
+missing provider from a bad address. `tools/dptest/` is a ~200-line 32-bit PE
+that asks `dplayx` + `dpwsockx` for exactly what TA asks: select the *Internet
+TCP/IP Connection For DirectPlay* provider via a compound address, `Open` a
+session, `EnumSessions`, join, `CreatePlayer`, `SendEx`. It returns `HRESULT`s.
+`tools/dptest/run.sh` runs host/enum/join against any wine binary in a throwaway
+prefix.
+
+### The result
+
+| Call | wine 9.0 (Ubuntu 24.04 stock) | wine 11.0 (Proton Experimental) |
+|---|---|---|
+| `CoCreateInstance(IID_IDirectPlay4A)` | `DP_OK` | `DP_OK` |
+| `CreateCompoundAddress` (SP=TCP/IP, INet=127.0.0.1) | `DP_OK` | `DP_OK` |
+| `InitializeConnection` | `DP_OK` | `DP_OK` |
+| `EnumSessions` | `DPERR_UNSUPPORTED` | **`DP_OK`** |
+| `Open(DPOPEN_CREATE)` — *host* | `DPERR_UNSUPPORTED` | **`DPERR_UNSUPPORTED`** |
+
+`DPERR_UNSUPPORTED` is `E_NOTIMPL` (`0x80004001`). The trace names the cause
+exactly:
+
+```
+fixme:dplay:DP_SecureOpen (…): partial stub
+trace:dplay:DPWSCB_Open (1,00000000,…)
+fixme:dplay:DPWSCB_Open session creation is not yet supported
+err:dplay:DP_SecureOpen Unable to open session: DPERR_UNSUPPORTED
+```
+
+**Wine implements the client half of DirectPlay TCP/IP and not the host half.**
+`EnumSessions` succeeds and `DPWSCB_Open`'s join branch is fully written; the
+create branch is a `FIXME`. With wine's **builtin** DirectPlay, two `tacli`
+instances on one machine therefore cannot form a game on any wine version — and
+this has nothing to do with TA, the tagpu stack or the extra weapons module.
+(Native DirectPlay lifts exactly this limit; see the next subsection.)
+
+Note what was *not* proven by that table: joining was never exercised end to end,
+because with hosting broken there was never a session to join. `EnumSessions`
+returning `DP_OK` with zero results is the honest reading — the call is
+implemented, the network was empty.
+
+### Resolved the same day: native DirectPlay, and multiplayer works
+
+Swapping Microsoft's own DirectPlay in front of wine's builtins fixes hosting
+outright. Measured with the same probe, **wine 9.0**, native `dplayx` +
+`dpwsockx` + `dplaysvr.exe`:
+
+| Call | builtin | native |
+|---|---|---|
+| `EnumSessions` | `DPERR_UNSUPPORTED` | `DP_OK`, and it *finds* the session |
+| `Open(DPOPEN_CREATE)` — host | `DPERR_UNSUPPORTED` | **`DP_OK`** |
+| `Open(DPOPEN_JOIN)` | never reached | **`DP_OK`** |
+| `CreatePlayer` both ends | never reached | **`DP_OK`** |
+| game messages host←join | never reached | **3/3 delivered** |
+
+```
+[join]   SESSION "DPTEST-SESSION" players=1/4 flags=0x44
+[host]   *** GAME MSG from=0x88f4ede7 to=0x88f4ede5 len=18: "hello-from-join-0"
+```
+
+Verified in **both** a `win32` and a `win64` prefix (32-bit DLLs go to
+`syswow64` on the latter). `tools/dpinstall.sh <prefix>` does the install and
+prints the override string.
+
+**Two things that will waste an afternoon if you don't know them:**
+
+1. **Override the two EXEs by name, not just the DLLs.** With only
+   `dplayx,dpwsockx=n`, wine runs *its own* stub `dplaysvr.exe`
+   (`programs/dplaysvr/main.c` is `WINE_FIXME("stub:")` + `return 0`), native
+   dplayx waits for a name server that never appears, and `Open` **hangs with no
+   error at all**. The trace tell is `fixme:dplaysvr:wmain`. The full string is
+   `dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n`.
+2. **`dplaysvr.exe` outlives the game and owns UDP 47624 across prefixes.** A
+   stale one from an earlier run makes the next host fail
+   `Open(DPOPEN_CREATE) = DPERR_GENERIC` — which looks like a prefix problem and
+   isn't. `pkill -x dplaysvr.exe` first. This is precisely why TAF calls
+   `TotalAnnihilationService.freePort47624`; that behaviour now makes sense
+   rather than looking like superstition.
+
+Where the files came from is its own small saga — see the routes below. They live
+outside the repo at `~/.local/share/ta-directplay/` (Microsoft redistributables,
+deliberately not committed); `PROVENANCE.txt` there records the source chain and
+the signature check.
+
+### Why wine 9.0 vs 11.0 differ, and where the ceiling is
+
+`dpwsockx` was rewritten by **Anton Baskanov** between 2023-10 and 2024-11.
+`dlls/dpwsockx/dpwsockx_main.c` goes 240 lines (everything a stub) at `wine-9.0`
+→ 652 at `wine-9.18` → **1292 at `wine-9.21`**, which is the release the press
+notes describe as "expanded support for network sessions in DirectPlay". It has
+been **1293 lines and unchanged from `wine-10.0` through `master`** (2026); only
+build-system churn since. So 9.21 is the step that matters and there is no later
+one to wait for.
+
+The surviving stubs in master are `Cancel`, `GetAddress`, `GetAddressChoices`,
+`GetMessageQueue`, `Reply`, `Send` — plus the `bCreate` branch of `Open`:
+
+```c
+static HRESULT WINAPI DPWSCB_Open( LPDPSP_OPENDATA data )
+{
+    …
+    if ( data->bCreate )
+    {
+        FIXME( "session creation is not yet supported\n" );
+        return DPERR_UNSUPPORTED;
+    }
+```
+
+*(`Send` being a stub is harmless — DirectPlay ≥3 uses `SendEx`, which is
+implemented.)*
+
+### How large the missing piece actually is
+
+Smaller than it looks, because `dplayx` already carries the host-side protocol.
+`dlls/dplayx/dplay.c` handles `DPMSGCMD_ENUMSESSIONSREQUEST` (calling
+`NS_ReplyToEnumSessionsRequest`), `REQUESTNEWPLAYERID`, `CREATESESSION`,
+`ADDFORWARD`, `FORWARDADDPLAYER`, `CREATEPLAYER` and `PING` — those are all
+things only a host does. `dpwsockx`'s `DPWS_Start()` already binds a TCP
+listener, binds a UDP socket, and runs a background receive thread.
+
+What is missing is the rendezvous:
+
+1. **Nothing binds UDP 47624.** `DPWS_PORT` (47624) appears exactly twice in
+   `dpwsockx_main.c` — as the *destination* of the enumeration broadcast in
+   `DPWSCB_EnumSessions`, and in the `#define`. `DPWS_Start` binds its UDP socket
+   to a *free* port in the dynamic range, so a wine host would never see a
+   client's broadcast even if it were listening.
+2. **Wine's `dplaysvr.exe` is a literal stub** — `programs/dplaysvr/main.c` is
+   1047 bytes whose `wmain` is `WINE_FIXME("stub:")` and `return 0`. On Windows
+   this is the daemon that owns 47624 and answers enumeration for every
+   DirectPlay app on the box. (It is also why TAF kills `dplaysvr.exe` before
+   launching: on Windows the port is *taken*, not free.)
+3. **`DPWSCB_Open`'s create branch** needs to `DPWS_Start()` and mark the local
+   player as the name server, instead of dialling out to a remote one.
+
+So the patch is: bind 47624, route what arrives there into the existing message
+handler, and fill in the create branch. That is small — but it is real protocol
+work, since the reply has to carry the host's TCP port in the SP header for the
+joiner to connect back. Nothing upstream appears to be in progress on it.
+
+### The IPX branch is closed, for two independent reasons
+
+1. **The kernel no longer has IPX.** `CONFIG_IPX` was dropped in Linux **5.15**;
+   this machine runs 7.0 and `/boot/config` has `CONFIG_ATALK` and
+   `CONFIG_NETROM` but no `CONFIG_IPX`, and `modinfo ipx` finds nothing. Wine's
+   IPX support needs `AF_IPX` sockets from the kernel.
+2. **It would not help anyway.** `loader/wine.inf.in` registers *both* providers
+   against the same DLL — `Internet TCP/IP Connection For DirectPlay` →
+   `Path=dpwsockx.dll` and `IPX Connection For DirectPlay` → `Path=dpwsockx.dll`.
+   Choosing IPX in TA's provider list reaches the identical `DPWSCB_Open`, so it
+   hits the identical "session creation is not yet supported".
+
+**IPXWrapper** (`solemnwarning/ipxwrapper`, tunnels IPX over UDP, no kernel IPX
+needed; GOG ships it with some titles) is the answer the internet gives for IPX
+games on modern systems, and it does work under wine — but it wraps *winsock*,
+so it only helps a **native** `dpwsockx` that opens `AF_IPX` sockets. Against
+wine's builtin provider there is nothing for it to wrap. It is a companion to
+route (a) below, not an alternative to it.
+
+### Routes considered, cheapest first — (a) is the one that worked
+
+**(a) Native DirectPlay — done, 2026-09-02.** This is the route that worked.
+`winetricks directplay` wants `dxnt.cab` from `directx_feb2010_redist.exe`, and
+every Feb-2010 source is dead (table below, all re-checked in a real browser).
+**The March 2008 redist carries the same `dxnt.cab` and is still on archive.org**
+— item `directx_mar2008_redist`, "DirectX End-User Runtimes (March 2008)",
+72,829,472 bytes, sha1 `21aa91ca…4cae` matching the item metadata. March 2008
+predates the DirectPlay split, so `dxnt.cab` (13,265,040 bytes) is present.
+
+Authenticity was verified rather than assumed: the Authenticode SHA1 computed
+independently from the installer's own PE bytes,
+`4c157a4dec8da4b6ff1ad07759527b22bc09718d`, is byte-identical to the digest
+sealed in its PKCS#7 `SpcIndirectDataContent` (OID `1.3.6.1.4.1.311.2.1.4`), and
+the signer chain is Microsoft Corporation → Microsoft Code Signing PCA →
+Microsoft Root Authority. So Microsoft's signature covers that exact file and the
+archive.org copy is unmodified.
+
+Extraction needed no new packages: the outer cabinet is **LZX**, which no
+installed tool handled, so `tools/dptest/`'s sibling trick was used — a small
+mingw program driving `cabinet.dll`'s FDI API under wine, i.e. wine's own LZX
+decoder. (`cabextract`, `7z`, `bsdtar` and `gcab` are all absent on this box, and
+wine's `expand` only does `infile outfile`.)
+
+**The original framing, kept because it is still true of Feb 2010:**
+`winetricks directplay` extracts `dplayx.dll`, `dpwsockx.dll`, `dplaysvr.exe`,
+`dpmodemx`, `dpnet`, `dpnhpast`, `dpnhupnp`, `dpnsvr.exe` from `dxnt.cab` inside
+`directx_feb2010_redist.exe`, then overrides them native. This bypasses the wine
+gap completely — Microsoft's DLLs implement hosting — and it does **not** require
+a newer wine, since it replaces both halves. Download status re-checked
+2026-09-02, all four sources dead:
+
+| Source | Result |
+|---|---|
+| `download.microsoft.com/.../directx_feb2010_redist.exe` | **404** |
+| `files.holarse-linuxgaming.de/mirrors/microsoft/…` (winetricks' 2026-08 note) | **403**, with or without a `Referer` |
+| `web.archive.org/…id_/…` (the URL winetricks itself now uses, sha256 `f6d191e8…`) | empty body |
+| archive.org items | only `directx_Jun2010_redist` variants — **June 2010 has no `dxnt.cab`**, only the monthly D3DX cabs |
+
+`dxnt.cab` also exists on any Windows box with DirectX 9.0c, and DirectPlay ships
+in Windows XP's own `system32` — either would have worked. In the end none was
+needed.
+
+**(b) Patch wine's `dpwsockx`.** *No longer needed here, but still the only fix
+that would help someone without the Microsoft files, and still upstreamable.* Scoped in "How large the missing piece is"
+above. Needs a wine 11 build tree; the result is one PE DLL that can be dropped
+into a prefix and overridden. Upstreamable. The honest estimate is days, not an
+afternoon, and it is protocol work with a real chance of a long tail.
+
+**(c) Host on Windows, join from wine.** Moot now, and never tested. A Windows box or VM hosting, with wine
+instances joining, should work today. For the extra-weapons assertions this is
+awkward — the armed/unarmed pair wants both peers under `tacli` — but it would
+settle the CRC question (assertions 8/9) with one Windows peer.
+
+**(d) Wait for upstream.** Not recommended: `dpwsockx` has been untouched since
+November 2024 and no MR for host support was found.
+
+### Practical notes for whoever picks this up
+
+- **A wine 11 is already on this machine, with nothing to download**:
+  `~/.steam/steam/steamapps/common/Proton - Experimental/files/bin/wine` reports
+  `wine-11.0` (build `experimental-11.0-20260826`) and runs 32-bit PEs from a
+  plain `WINEPREFIX` with no Steam runtime — that is how the table above was
+  measured. It ships i386 `dplayx.dll`, `dpwsockx.dll`, `dplaysvr.exe`.
+  **Whether TA + the tagpu `ddraw` override run under it is untested.**
+- Ubuntu 24.04's `wine` is pinned at 9.0 in `noble/universe`; WineHQ's own repo
+  is not configured on this box. WineHQ packages install under `/opt/wine-*`, so
+  a newer wine can coexist with the distro one rather than replacing it.
+- **`tacli` drives this now** (2026-09-02). `tacli launch <inst> --dplay` installs
+  native DirectPlay into that instance's prefix and appends
+  `dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,dplaysvr.exe,dpnsvr.exe=n` to
+  the hard-coded `ddraw=n,b`; it is sticky per instance, so a single-player
+  instance keeps wine's builtin. `--free-dplay-port` kills a stale `dplaysvr.exe`
+  first and belongs on the **hosting** launch only — the port is owned
+  machine-wide, so doing it while a peer hosts takes that game down too.
+- **`dpinstall.sh` must not overwrite in place.** tacli clones prefixes with
+  `cp -al`, so every instance shares one inode per `system32` file with the
+  template; a plain `cp` would have written Microsoft's `dplayx` through the
+  hardlink into the template and all ten existing prefixes at once, including two
+  games another session had running. It uses `cp --remove-destination`.
+- **Let the prefix settle between `dptest` and a launch.** Starting TA into a
+  prefix whose wineserver is still shutting down after a killed `dptest host`
+  produced a launch that created no process at all and no `ErrorLog.txt`. The
+  relaunch was fine.
+- **Wine 11 is not needed for any of this.** Native DirectPlay works on the
+  stock wine 9.0 the instances already use, because it replaces both halves.
+- Upgrading to wine 11 **on its own does not unblock multiplayer.** It buys
+  working enumeration and joining, and nothing that lets a game start locally.
+
 ## What we learned about TA's network model
 
 *(All verified from source unless noted.)*
@@ -262,6 +527,40 @@ rejection (0x1B), ally (0x23) and team (0x24).
 
 ---
 
+## Extra weapons on the wire (2026-09-02)
+
+The [more-than-three-weapons module](extra-weapons.md) is the first thing in this
+project that changes the simulation, so it is the first thing that has to agree
+between peers. What it relies on from the network model, and what is still open:
+
+- Remote units are not aimed locally: `AutoAim` runs only for units owned by a local
+  human or AI (`player+0x73 ∈ {1,2}` in `0x48AD30`). A remote unit's weapons are driven
+  by two packets — `0x10 UNIT_START_SCRIPT` (COB method *index*, looked up by name on
+  the sender) and `0x0D WEAPON_FIRED`, whose `WeapIdx` byte at `+0x23` names the slot.
+  The wire format already carries a full byte, so ten weapons need no packet change;
+  the receiver (`0x49D270`) is spliced to resolve `WeapIdx >= 3` into the side slot and
+  clamps anything beyond the unit's count.
+- An **unarmed** peer receiving `WeapIdx >= 3` would index past its three inline slots
+  into `UnitOrders`. The guard is the unit-sync CRC handshake (`CRC_weapons`,
+  `def+0x146`, folded into `CRC_all`), which the module now extends to `weapon4..N`.
+- **Tested 2026-09-02, in three two-instance games over loopback.** Two armed peers
+  stay in lockstep: the host spawned a ten-laser tower, it replicated to the joiner
+  through TA's own create packet, and both peers reported the same
+  `fires by slot: 0=12 3=1 4=12 5=1 6=12 7=1 8=2` — the joiner's launches coming
+  purely from `0x0D WEAPON_FIRED`, since it owns nothing there and never ran
+  `AutoAim`. An armed host against an **unarmed** joiner loses exactly the extended
+  unit types: the engine's type table drops from 281 to 279 on *both* sides and the
+  game starts, silently. So a mismatched peer can never see a `WeapIdx >= 3` packet,
+  because no unit of that type exists in the game. Both controls (both-armed and
+  both-unarmed) keep all 281. Full detail and the CRC formula are in
+  [extra-weapons](extra-weapons.md#multiplayer-who-computes-what-and-the-guard).
+- **How to run it**: `tools/mp_lobby.sh <host-instance> <join-instance> [map]`, with
+  both instances launched `--dplay` (the host also `--free-dplay-port`). wine's
+  builtin DirectPlay cannot host at all (`DPWSCB_Open`: "session creation is not yet
+  supported"), which is why the first attempt got no further than an empty
+  `SELGAME`; native `dplayx` + `dpwsockx` + `dplaysvr.exe` fix that on the stock
+  wine 9.0 the instances already use.
+
 ## Open questions / uncertainty
 
 1. Real concurrent-player numbers for TAF — the live counters are JS-rendered and I could not read them.
@@ -279,6 +578,20 @@ rejection (0x1B), ally (0x23) and team (0x24).
    (Cavedog's original online plugin vs. a TAF replacement) is unverified.
 8. "TA Direct Connect" as a named project — I could not find it; it may be a colloquialism for
    direct-IP play.
+9. Whether **TA plus the tagpu `ddraw` override runs under wine 11 at all** — only the DirectPlay
+   probe was run against Proton's wine, never the game.
+10. Whether TAF actually hosts under wine, given that `DPWSCB_Open`'s create path is unimplemented.
+   TAF carries commits about coping with "wine's builtin dplayx" (CrossOver/Mac), which is hard to
+   square with the measurement unless TAF hosts only on Windows or its proxy stands in for the host.
+   **Not resolved** — worth reading `libs/jdplay` against the wine finding before trusting either.
+11. ~~A working `dxnt.cab` source.~~ **Answered 2026-09-02**: the March 2008 redist on
+   archive.org carries it, Microsoft-signed and signature-verified. Feb 2010 remains
+   undownloadable from every documented URL.
+12. ~~Whether TA itself (not just the probe) forms a game over native DirectPlay, and what the
+   lobby does with a unit-CRC mismatch.~~ **Answered 2026-09-02**: it does — two `tacli`
+   instances reach one live game over loopback (`tools/mp_lobby.sh`) — and on a unit-CRC
+   mismatch TA **disables the affected unit types on both peers and starts anyway**, with no
+   lobby message of any kind. See `extra-weapons.md` §Multiplayer.
 
 ---
 
@@ -309,7 +622,23 @@ rejection (0x1B), ally (0x23) and team (0x24).
   `src/Docs/lobbyprot_2.txt`, `ta entry point.txt`, `ta info.txt`.
 - <https://github.com/jchristi/tademo99b2-src> (another copy of the 2003 source).
 
+**Code read directly (wine, 2026-09-02)**
+- <https://github.com/wine-mirror/wine> — `dlls/dpwsockx/dpwsockx_main.c` at tags `wine-9.0`,
+  `wine-9.18`, `wine-9.21`, `wine-10.0` and `master`; `dlls/dplayx/{dplay.c,name_server.c}` at
+  `wine-11.0`; `programs/dplaysvr/main.c`; `loader/wine.inf.in` (service-provider registration).
+  Commit history of `dlls/dpwsockx` and `dlls/dplayx` via the GitHub API.
+- <https://github.com/Winetricks/winetricks> — `src/winetricks`, the `directplay` verb and
+  `helper_directx_dl` (the `dxnt.cab` file list and the archive.org URL + sha256 it now uses).
+
+**Measured here**
+- `tools/dptest/` — the probe and its `run.sh`; raw logs regenerate in `out-<label>/`.
+
 **Web**
+- <https://www.winehq.org/news/2024110801> — Wine 9.21 release notes ("more support for network
+  sessions in DirectPlay"); also covered by Phoronix, GamingOnLinux and Linuxiac.
+- <https://github.com/solemnwarning/ipxwrapper> — IPX over UDP, no kernel IPX required.
+- <https://cateee.net/lkddb/web-lkddb/IPX.html> — `CONFIG_IPX`, removed in Linux 5.15.
+- <https://github.com/playage/dprun> — a DirectPlay lobby launcher (noted, not tried).
 - <https://www.taforever.com/> — client version, feature claims, 53,685+ battles since 2023.
 - <https://www.tademos.xyz/> — the TAF demo archive (browsed 2026-08-31).
 - <https://github.com/ta-forever/downlords-taf-client/releases> — changelogs v2026.7.19 … v2026.8.23.

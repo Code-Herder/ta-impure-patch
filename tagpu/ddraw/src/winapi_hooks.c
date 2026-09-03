@@ -18,6 +18,7 @@
 #include "render_ogl.h"
 #include "directinput.h"
 #include "ddsurface.h"
+#include "tagpu_zoom.h"
 #include "ddclipper.h"
 #include "dllmain.h"
 #include "hook.h"
@@ -88,6 +89,9 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 
         if (lpPoint)
         {
+            /* g_ddraw.cursor keeps the TRUE pointer position; only what leaves
+               for the engine is unzoomed (tagpu_zoom.h). */
+            tagpu_zoom_to_engine(&x, &y);
             lpPoint->x = x;
             lpPoint->y = y;
         }
@@ -97,8 +101,12 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 
     if (lpPoint)
     {
-        lpPoint->x = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
-        lpPoint->y = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+        int cx = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
+        int cy = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+
+        tagpu_zoom_to_engine(&cx, &cy);
+        lpPoint->x = cx;
+        lpPoint->y = cy;
     }
 
     return TRUE;

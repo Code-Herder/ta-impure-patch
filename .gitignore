@@ -69,3 +69,4 @@ __pycache__/
 # Learned-restorer bakes for the undither wiki page (21 MB of lossless WebP, regenerated
 # by research/build_wiki.py from unditherer/models/full.* whenever missing or stale)
 /research/notes/assets/undither/learned/
+renders/

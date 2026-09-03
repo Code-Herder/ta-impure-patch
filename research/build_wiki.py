@@ -26,6 +26,7 @@ SUBTITLE = "How the Total Annihilation community adds engine features to a close
 PAGES = [
     ("project-map",                "Project map",                 "Overview"),
     ("roadmap",                    "GPU renderer roadmap",        "Overview"),
+    ("gpu-status",                 "GPU status, hooks & limits",  "Overview"),
     ("field-notes",                "Field notes & gotchas",       "Overview"),
 
     ("frame-composition",          "Frame composition (G3)",      "Renderer"),
@@ -36,6 +37,8 @@ PAGES = [
     ("build-state",                "Build state (nanoframe)",     "Renderer"),
     ("shadows-cloak",              "Shadows & cloaking",          "Renderer"),
     ("terrain-depth",              "Terrain, features & depth",   "Renderer"),
+    ("effects",                    "Effects (fire, explosions, debris)", "Renderer"),
+    ("features",                   "Features (trees, rocks, wreckage)",  "Renderer"),
     ("ui-markers",                 "UI markers",                  "Renderer"),
     ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
 
@@ -51,6 +54,7 @@ PAGES = [
     ("runtime-injection",         "Injection & hooking",       "Mechanism"),
     ("api-wrappers",              "The DirectDraw boundary",   "Mechanism"),
     ("deep-plugin-abi-and-corpus","Cavedog's plugin ABI",      "Mechanism"),
+    ("extra-weapons",             "More weapons per unit",     "Mechanism"),
 
     ("deep-tadr",                 "TADR / tdraw.dll",          "Projects"),
     ("release-matrix",            "Releases & feature matrix", "Projects"),
@@ -432,6 +436,9 @@ def build_page(md_text: str):
     md = markdown.Markdown(extensions=["tables", "fenced_code", "sane_lists", "attr_list", "toc"],
                            extension_configs={"toc": {"anchorlink": False, "permalink": False}})
     html = md.convert(md_text)
+    # cross-links between notes are authored as `page.md` (correct in the repo);
+    # the site serves `page.html`
+    html = re.sub(r'href="([a-z0-9_-]+)\.md(#[^"]*)?"', lambda m: f'href="{m.group(1)}.html{m.group(2) or ""}"', html)
     html = wrap_tables(pillify(html))
     toc = getattr(md, "toc_tokens", [])
     return html, toc

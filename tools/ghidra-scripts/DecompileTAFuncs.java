@@ -1,5 +1,6 @@
 // Decompile a list of functions (hex addresses in args[0], comma-separated)
-// and write the C to args[1].
+// and write the C to args[1]. An address with no function yet (a vtable slot
+// auto-analysis never reached) gets one created there first.
 import ghidra.app.script.GhidraScript;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
@@ -19,6 +20,11 @@ public class DecompileTAFuncs extends GhidraScript {
             Address addr = toAddr(Long.parseLong(a.trim().replace("0x",""), 16));
             Function f = getFunctionAt(addr);
             if (f == null) f = getFunctionContaining(addr);
+            if (f == null) {
+                disassemble(addr);
+                f = createFunction(addr, null);
+                if (f != null) out.println("// (function created at " + a + ")");
+            }
             out.println("// ================= " + a + " =================");
             if (f == null) { out.println("// NO FUNCTION AT " + a); continue; }
             out.println("// name: " + f.getName() + "  entry: " + f.getEntryPoint());

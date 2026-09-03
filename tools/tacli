@@ -53,6 +53,18 @@ TEMPLATE_GAMEDIR = TAGPU / "gamedir"
 TEMPLATE_PREFIX = ROOT / "wineprefix"
 INSTANCES = TAGPU / "instances"
 
+# Multiplayer. Wine ships the *client* half of DirectPlay TCP/IP only — dpwsockx's
+# create path is an explicit "not yet supported" on every release including master —
+# so no wine process can host a session. Microsoft's own DirectPlay in front of the
+# builtin fixes it on the stock wine 9.0 these instances use (research/notes/
+# networking-lobbies.md). The two EXEs must be overridden *by name* as well: with the
+# DLLs alone, native dplayx starts wine's stub dplaysvr and Open() hangs with no error.
+DPLAY_SRC = Path(os.environ.get("TA_DIRECTPLAY_SRC",
+                                Path.home() / ".local/share/ta-directplay"))
+DPLAY_INSTALL = Path(__file__).resolve().parent / "dpinstall.sh"
+DPLAY_OVERRIDES = ("dplayx,dpmodemx,dpnet,dpnhpast,dpnhupnp,dpwsockx,"
+                   "dplaysvr.exe,dpnsvr.exe=n")
+
 
 def built_dll() -> Path:
     """The fork build to pin into instances.
@@ -81,13 +93,33 @@ DEFAULT_RES = (1024, 768)
 RES_RX = re.compile(r"(\d{3,4})\s*[xX*]\s*(\d{3,4})")
 
 
+VIRTUAL_X_RX = re.compile(r"(?:^|/)(?:Xvfb|Xephyr|Xnest)\s+(:\d+)")
+
+
+def virtual_displays() -> set:
+    """Display numbers served by a virtual X server rather than a monitor.
+
+    Parallel agent sessions leave 3840x2160 Xvfb servers running, and a shell
+    that inherits one of those in DISPLAY launches the game somewhere the human
+    cannot see it — which looks exactly like a game that failed to start. The
+    physical session is an Xorg; Xvfb/Xephyr/Xnest are stand-ins for one.
+    """
+    try:
+        ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True,
+                            timeout=5).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return set()
+    return {m.group(1) for m in (VIRTUAL_X_RX.search(l) for l in ps.splitlines()) if m}
+
+
 def default_display() -> str:
-    """The desktop to put windows on.
+    """The desktop to put windows on — the human's monitor unless told otherwise.
 
     An agent shell often inherits a stale or absent DISPLAY (":0" is the usual
-    default and is frequently not the live session), so prefer TACLI_DISPLAY, then
-    the inherited value if that X server actually answers, then the first live
-    socket in /tmp/.X11-unix.
+    default and is frequently not the live session), so prefer TACLI_DISPLAY —
+    an explicit choice wins even if it is virtual — then the inherited value and
+    then the live sockets, in both cases skipping the virtual servers on the
+    first pass and only falling back to one if there is no real display at all.
     """
     def alive(d: str) -> bool:
         try:
@@ -97,13 +129,19 @@ def default_display() -> str:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
 
-    for cand in (os.environ.get("TACLI_DISPLAY"), os.environ.get("DISPLAY")):
-        if cand and alive(cand):
-            return cand
-    for sock in sorted(Path("/tmp/.X11-unix").glob("X*"), key=lambda p: p.name):
-        d = ":" + sock.name[1:]
-        if alive(d):
-            return d
+    explicit = os.environ.get("TACLI_DISPLAY")
+    if explicit and alive(explicit):
+        return explicit
+    virtual = virtual_displays()
+    cands = [os.environ.get("DISPLAY")]
+    cands += [":" + s.name[1:] for s in sorted(Path("/tmp/.X11-unix").glob("X*"),
+                                               key=lambda p: p.name)]
+    for skip_virtual in (True, False):
+        for cand in cands:
+            if not cand or (skip_virtual and cand in virtual):
+                continue
+            if alive(cand):
+                return cand
     return os.environ.get("DISPLAY", ":0")
 
 
@@ -192,10 +230,16 @@ class Instance:
         self.meta_path.write_text(json.dumps(meta, indent=2))
 
     def env(self) -> dict:
+        meta = self.meta()
         e = dict(os.environ)
         e["WINEPREFIX"] = str(self.prefix)
-        e["DISPLAY"] = self.meta().get("display") or default_display()
-        e["WINEDLLOVERRIDES"] = "ddraw=n,b"
+        e["DISPLAY"] = meta.get("display") or default_display()
+        # ddraw is always ours; DirectPlay is appended only for instances launched
+        # with --dplay, so a stock single-player instance keeps wine's builtin.
+        overrides = ["ddraw=n,b"]
+        if meta.get("dplay"):
+            overrides.append(DPLAY_OVERRIDES)
+        e["WINEDLLOVERRIDES"] = ";".join(overrides)
         e.setdefault("WINEDEBUG", "-all")
         return e
 
@@ -388,6 +432,39 @@ def clone_prefix(inst: Instance):
         die(f"prefix clone failed: {r.stderr.strip()}")
 
 
+def install_dplay(inst: Instance) -> str:
+    """Drop Microsoft's DirectPlay into this prefix (idempotent).
+
+    Delegates to tools/dpinstall.sh so the file list, the win32/win64 split and the
+    provenance all live in one place. Cheap enough to re-run every launch (~1.2 MB of
+    copies), and re-running is how a prefix recreated behind our back heals itself.
+    """
+    if not DPLAY_SRC.is_dir():
+        die(f"no DirectPlay files at {DPLAY_SRC} — see research/notes/"
+            f"networking-lobbies.md for where they come from, or set TA_DIRECTPLAY_SRC")
+    r = subprocess.run(["bash", str(DPLAY_INSTALL), str(inst.prefix), str(DPLAY_SRC)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"dpinstall failed: {(r.stderr or r.stdout).strip()}")
+    return (r.stdout.strip().splitlines() or ["installed native DirectPlay"])[0]
+
+
+def free_dplay_port() -> int:
+    """Kill any stray dplaysvr.exe.
+
+    DirectPlay's name server outlives the game that started it and owns UDP 47624 for
+    the whole machine, not per prefix — so one left over from an earlier run makes the
+    next host fail Open(DPOPEN_CREATE) with DPERR_GENERIC, which looks exactly like a
+    broken prefix and is not. Only ever do this on a hosting launch: doing it while a
+    peer is hosting takes that game down too.
+    """
+    before = subprocess.run(["pgrep", "-x", "dplaysvr.exe"],
+                            capture_output=True, text=True).stdout.split()
+    if before:
+        subprocess.run(["pkill", "-x", "dplaysvr.exe"], capture_output=True)
+    return len(before)
+
+
 def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
     run(["wine", "reg", "add", key, "/v", value, "/t", kind, "/d", data, "/f"],
         env=inst.env(), cwd=str(inst.gamedir))
@@ -470,26 +547,81 @@ def place_window(inst: "Instance", display: str):
 
     if not clashes(x, y):
         return win
+    # Walk the same on-screen grid tile_for lays out, and settle for an overlap
+    # rather than stepping off the desktop — see tile_for on why off-screen is
+    # never an option.
+    screen = screen_size(display)
+    cells = max(1, screen[0] // (w + 40)) * max(1, screen[1] // (h + 80))
     nx, ny = x, y
-    for step in range(1, 16):
-        nx, ny = x + step * (w + 40), y
-        if not clashes(nx, ny):
+    for cell in range(cells):
+        cand = tile_for(cell, (w, h), screen=screen)
+        if not clashes(*cand):
+            nx, ny = cand
             break
-        nx, ny = x + ((step - 1) % 3) * (w + 40), y + ((step - 1) // 3 + 1) * (h + 80)
-        if not clashes(nx, ny):
-            break
+    else:
+        return win        # every cell taken: leave it overlapping where it is
     run(["xdotool", "windowmove", str(wid), str(nx), str(ny)],
         env={**os.environ, "DISPLAY": display})
     time.sleep(0.3)
     return inst.window() or (wid, nx, ny, w, h)
 
 
-def tile_for(index: int, res, screen=(3840, 2160), origin=(0, 0)):
-    """Lay instances out in a grid so parallel windows do not stack."""
+_SCREEN_SIZE: dict = {}
+
+
+def screen_size(display: "str | None" = None) -> tuple:
+    """Real desktop dimensions, read once per display.
+
+    Reading geometry is a read, which the desktop-is-the-user's rule allows;
+    we never run xrandr against the live session. Falls back to 3840x2160 only
+    if xdpyinfo cannot be reached.
+    """
+    d = display or default_display()
+    if d not in _SCREEN_SIZE:
+        size = None
+        try:
+            txt = subprocess.run(["xdpyinfo"], env={**os.environ, "DISPLAY": d},
+                                 capture_output=True, text=True, timeout=5).stdout
+            m = re.search(r"dimensions:\s+(\d+)x(\d+)", txt)
+            if m:
+                size = (int(m.group(1)), int(m.group(2)))
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        _SCREEN_SIZE[d] = size or (3840, 2160)
+    return _SCREEN_SIZE[d]
+
+
+def tile_for(index: int, res, screen=None, origin=(0, 0)):
+    """Lay instances out in a grid so parallel windows do not stack.
+
+    Never places a window off the visible desktop. That is not cosmetic: OpenGL
+    leaves glReadPixels on the default framebuffer undefined outside the visible
+    region, so an off-screen window used to hand back a mangled `glshot` with no
+    error anywhere. When the grid runs out of cells the layout WRAPS and windows
+    overlap — an overlapped window still captures correctly, an off-screen one
+    did not.
+    """
     w, h = res
-    cols = max(1, screen[0] // (w + 40))
-    col, row = index % cols, index // cols
-    return (origin[0] + col * (w + 40), origin[1] + row * (h + 80))
+    if screen is None:
+        screen = screen_size()
+    pitch_x, pitch_y = w + 40, h + 80          # margins cover the WM decoration
+    cols = max(1, screen[0] // pitch_x)
+    rows = max(1, screen[1] // pitch_y)
+    cell = index % (cols * rows)
+    x = origin[0] + (cell % cols) * pitch_x
+    y = origin[1] + (cell // cols) * pitch_y
+    # Bound even when a single cell does not fit (window bigger than the screen,
+    # or an origin that pushes the last cell over the edge).
+    return (max(0, min(x, max(0, screen[0] - w))),
+            max(0, min(y, max(0, screen[1] - h))))
+
+
+def tile_is_onscreen(tile, res, screen=None) -> bool:
+    """Is this recorded tile still fully on the desktop it will open on?"""
+    if screen is None:
+        screen = screen_size()
+    return (0 <= tile[0] and 0 <= tile[1]
+            and tile[0] + res[0] <= screen[0] and tile[1] + res[1] <= screen[1])
 
 
 # --------------------------------------------------------------------------- commands
@@ -499,9 +631,13 @@ def _create(inst: Instance, args) -> dict:
     if inst.exists and not args.force:
         die(f"instance {args.name!r} already exists (use --force to recreate)")
     inst.dir.mkdir(parents=True, exist_ok=True)
+    # Only a *running* instance holds a slot. Reserving one per instance that has
+    # ever been created walks the grid off the screen after a dozen of them, and
+    # stopped instances are the normal state of this directory.
     taken = set()
     for meta_path in INSTANCES.glob("*/instance.json"):
-        if meta_path.parent.name == args.name:
+        other = Instance(meta_path.parent.name)
+        if other.name == args.name or not other.running():
             continue
         try:
             taken.add(json.loads(meta_path.read_text()).get("slot"))
@@ -513,7 +649,8 @@ def _create(inst: Instance, args) -> dict:
     # `launch <new-name>` reaches here with res unset (its --res defaults to None so
     # that relaunching an existing instance keeps the recorded resolution).
     res = tuple(args.res or DEFAULT_RES)
-    tile = tile_for(index, res)
+    display = args.display or default_display()
+    tile = tile_for(index, res, screen=screen_size(display))
     shield = args.shield is not False
     clone_prefix(inst)
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
@@ -527,7 +664,7 @@ def _create(inst: Instance, args) -> dict:
         "sound": bool(args.sound),
         "intro": bool(args.intro),
         "shield": shield,
-        "display": args.display or default_display(),
+        "display": display,
         "gamedir": str(inst.gamedir),
         "prefix": str(inst.prefix),
     }
@@ -561,11 +698,19 @@ def _ensure_owndraw_for_native(inst) -> "str | None":
     the engine builds and needs no suppression, so it does not require owndraw.
     """
     nat = inst.gamedir / "tagpu_native.on"
+    own = inst.gamedir / "tagpu_owndraw.on"
     if not nat.exists():
+        # A stale owndraw.on is worse than none: its detours skip the engine's
+        # rasterisers while the native pass that would supply the pixels is not
+        # running, so the engine draws NO units at all (OWND ... repaint=0
+        # miss=<everything>) and an engine-side A/B silently measures nothing.
+        if own.exists():
+            own.unlink()
+            return ("dropped owndraw.on (native.on is not set; its detours would skip "
+                    "the engine's unit rasterisers with nothing drawing in their place)")
         return None
     # native.on is "TYPE [extra tokens]" (e.g. "all wrecks"); owndraw.on is just "TYPE".
     tok = (nat.read_text().split() or ["all"])[0]
-    own = inst.gamedir / "tagpu_owndraw.on"
     if not own.exists():
         own.write_text(tok + "\n")
         return (f"auto-armed owndraw.on={tok} (native.on is set and owndraw must be "
@@ -578,6 +723,109 @@ def _ensure_owndraw_for_native(inst) -> "str | None":
                 f"owndraw.on={tok}` and relaunch.")
     return None
 
+
+def _ensure_fxown_for_fx(inst) -> "str | None":
+    """Same footgun, effects edition: the native effects pass (tagpu_fx.on) draws
+    weapon fire, explosions and debris itself — and the particle pass (tagpu_sfx.on)
+    smoke, fire, wakes and nanolathe spray — while the engine's own draws
+    are skipped by the fxown code patches (call-site redirects + leaf detours). Those
+    install ONCE at DllMain, only if tagpu_fxown.on exists then. Without them the
+    engine keeps drawing every effect under ours (a double draw that is hard to see
+    on sprites and obvious on lasers). So if this launch brings up the effects pass,
+    make sure fxown is armed before the process starts. The skip itself follows
+    tagpu_fx.on live, so removing fx.on later restores the engine's draw.
+    """
+    fx = inst.gamedir / "tagpu_fx.on"
+    sfx = inst.gamedir / "tagpu_sfx.on"        # particle layers ride the same patch set
+    own = inst.gamedir / "tagpu_fxown.on"
+    if not fx.exists() and not sfx.exists():
+        if own.exists():
+            own.unlink()
+            return ("dropped fxown.on (neither fx.on nor sfx.on is set; the effects patches "
+                    "are only installed with one of them)")
+        return None
+    if own.exists():
+        return None
+    own.write_text("on\n")
+    have = " and ".join(n for n, p in (("fx.on", fx), ("sfx.on", sfx)) if p.exists())
+    return f"auto-armed fxown.on ({have} is set and fxown must be installed at launch, not after)"
+
+def _ensure_featown_for_feat(inst) -> "str | None":
+    """Same footgun, features edition: the native feature pass (tagpu_feat.on) draws
+    trees, rocks, metal patches and GAF wreckage itself, while the engine's own
+    feature leaf (0x46A610) is skipped by the featown detour. It installs ONCE at
+    DllMain, only if tagpu_featown.on exists then — so if this launch brings up the
+    feature pass, arm it before the process starts. The skip itself follows
+    tagpu_feat.on live (and stays off unless native.on carries "wrecks", because
+    3D wreckage draws through that leaf as a unit).
+    """
+    feat = inst.gamedir / "tagpu_feat.on"
+    own = inst.gamedir / "tagpu_featown.on"
+    if not feat.exists():
+        if own.exists():
+            own.unlink()
+            return ("dropped featown.on (feat.on is not set; the feature patch is only "
+                    "installed with it)")
+        return None
+    if own.exists():
+        return None
+    own.write_text("on\n")
+    return ("auto-armed featown.on (feat.on is set and featown must be installed at "
+            "launch, not after)")
+
+def _ensure_terrown_for_terr(inst) -> "str | None":
+    """Same footgun, terrain edition: the native terrain pass (tagpu_terr.on) draws
+    the map tiles itself, while the engine's terrain pass (0x483FA0) and the fog
+    overlay (0x4848E0) are skipped by the terrown detours. They install ONCE at
+    DllMain, only if tagpu_terrown.on exists then — so if this launch brings up the
+    terrain pass, arm it before the process starts. The skip itself follows
+    tagpu_terr.on live (and stays off under the `passive` / `over` tokens).
+
+    Without the patch there is no key fill, so there is nothing for the composite to
+    invert against — the terrain pass then refuses to emit at all (its opaque
+    full-viewport layer would otherwise hide the health bars, wireframes, build
+    cursor and chat that the key exists to let through) and says so in its log line.
+    """
+    terr = inst.gamedir / "tagpu_terr.on"
+    own = inst.gamedir / "tagpu_terrown.on"
+    if not terr.exists():
+        if own.exists():
+            own.unlink()
+            return ("dropped terrown.on (terr.on is not set; the terrain patch is only "
+                    "installed with it)")
+        return None
+    if own.exists():
+        return None
+    own.write_text("on\n")
+    return ("auto-armed terrown.on (terr.on is set and terrown must be installed at "
+            "launch, not after)")
+
+def _ensure_markown_for_mark(inst) -> "str | None":
+    """Same footgun, UI markers edition (G13d): the marker pass (tagpu_mark.on) draws
+    the health bars itself and replays the engine's own order markers, group digits,
+    build cursor and band box out of a capture — while tagpu_markown redirects the
+    six call sites that produce them (including the engine's own selection rect, per
+    unit) and detours DrawHealthBars (0x46A430). Those
+    patches install ONCE at DllMain, only if tagpu_markown.on exists then, so if this
+    launch brings up the marker pass, arm it before the process starts. The capture
+    and the bar skip follow tagpu_mark.on live (and both stay off under `passive`).
+
+    Without the patch the engine is still drawing all of it at UNZOOMED positions, so
+    the pass refuses to emit rather than double-draw, and says so in its log line.
+    """
+    mark = inst.gamedir / "tagpu_mark.on"
+    own = inst.gamedir / "tagpu_markown.on"
+    if not mark.exists():
+        if own.exists():
+            own.unlink()
+            return ("dropped markown.on (mark.on is not set; the marker patch is only "
+                    "installed with it)")
+        return None
+    if own.exists():
+        return None
+    own.write_text("on\n")
+    return ("auto-armed markown.on (mark.on is set and markown must be installed at "
+            "launch, not after)")
 
 def _launch(args) -> dict:
     """Everything `launch` does, minus the printing — `load` composes with it."""
@@ -596,9 +844,20 @@ def _launch(args) -> dict:
     meta = inst.meta()
     if inst.running():
         return dict(meta, already_running=True, pid=inst.pid())
+    # The instance's OWN display, not this shell's — a second X server or an
+    # Xvfb is a different size, and measuring the wrong one puts the window
+    # exactly where this is meant to stop it going.
+    screen = screen_size(meta.get("display"))
     if args.res:
         meta["res"] = list(args.res)
-        meta["tile"] = list(tile_for(meta.get("slot", 0), tuple(args.res)))
+        meta["tile"] = list(tile_for(meta.get("slot", 0), tuple(args.res), screen=screen))
+        inst.save_meta(meta)
+        write_ddraw_ini(inst, meta["tile"])
+    # Self-heal a tile recorded against a different (or wrongly assumed) desktop:
+    # an off-screen window is a silently broken `glshot`, so never open one there.
+    res = tuple(meta.get("res") or DEFAULT_RES)
+    if not tile_is_onscreen(tuple(meta.get("tile") or (0, 0)), res, screen=screen):
+        meta["tile"] = list(tile_for(meta.get("slot", 0), res, screen=screen))
         inst.save_meta(meta)
         write_ddraw_ini(inst, meta["tile"])
     if args.sound is not None:
@@ -615,6 +874,15 @@ def _launch(args) -> dict:
         meta["shield"] = args.shield
         inst.save_meta(meta)
     set_shield(inst, meta.get("shield", True))
+    if args.dplay is not None:
+        meta["dplay"] = args.dplay
+        inst.save_meta(meta)
+    dplay_note = install_dplay(inst) if meta.get("dplay") else None
+    if args.free_dplay_port:
+        killed = free_dplay_port()
+        dplay_note = ((dplay_note + "; ") if dplay_note else "") + (
+            f"killed {killed} stale dplaysvr.exe (UDP 47624 freed)" if killed
+            else "no stale dplaysvr.exe to kill")
     if not args.keep_dll:
         deploy_dll(inst)
     apply_prefix_settings(inst, tuple(meta["res"]), sound=meta.get("sound", False))
@@ -646,6 +914,10 @@ def _launch(args) -> dict:
         log.unlink()
 
     owndraw_note = _ensure_owndraw_for_native(inst)
+    fxown_note = _ensure_fxown_for_fx(inst)
+    featown_note = _ensure_featown_for_feat(inst)
+    terrown_note = _ensure_terrown_for_terr(inst)
+    markown_note = _ensure_markown_for_mark(inst)
 
     env = inst.env()
     display = env["DISPLAY"]
@@ -670,7 +942,10 @@ def _launch(args) -> dict:
             "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
             "map": args.map, "unit_limit": meta.get("unit_limit"),
             "args": argv, "shield": shield_state(inst), "pointer_restored": restored,
-            "owndraw_note": owndraw_note}
+            "dplay": bool(meta.get("dplay")), "dplay_note": dplay_note,
+            "owndraw_note": owndraw_note, "fxown_note": fxown_note,
+            "featown_note": featown_note, "terrown_note": terrown_note,
+            "markown_note": markown_note}
 
 
 def cmd_launch(args):
@@ -682,9 +957,20 @@ def cmd_launch(args):
     human = (f"launched {args.name} pid={res['pid']} "
              f"window={win[0] if win else 'pending'} "
              f"at {win[1] if win else '?'},{win[2] if win else '?'} "
-             f"shield={'on' if res['shield'] else 'off'}")
+             f"shield={'on' if res['shield'] else 'off'}"
+             f"{' dplay=on' if res.get('dplay') else ''}")
+    if res.get("dplay_note"):
+        human += f"\n  {res['dplay_note']}"
     if res.get("owndraw_note"):
         human += f"\n  {res['owndraw_note']}"
+    if res.get("fxown_note"):
+        human += f"\n  {res['fxown_note']}"
+    if res.get("featown_note"):
+        human += f"\n  {res['featown_note']}"
+    if res.get("terrown_note"):
+        human += f"\n  {res['terrown_note']}"
+    if res.get("markown_note"):
+        human += f"\n  {res['markown_note']}"
     out(res, args.json, human=human)
 
 
@@ -863,6 +1149,47 @@ def cmd_peek(args):
         human="\n".join(f"{r['spec']:<24} "
                         f"{'0x%08X' % r['addr'] if r['addr'] is not None else '':<12} "
                         f"{r['value']}" for r in rows))
+
+
+def cmd_weapons(args):
+    """Dump every weapon slot of the requested units (tagpu_weapons.trigger).
+
+    The A/B oracle for the extra-weapons module (research/notes/extra-weapons.md):
+    the fork reads the engine's own slot records — the three inline ones and, when
+    the module is armed and the type has more, its side slots — and writes them
+    as JSON. Works armed or not, so an unarmed instance is the control.
+    """
+    inst = Instance(args.name)
+    if not inst.running():
+        die(f"{inst.name} is not running")
+    result = inst.gamedir / "tagpu_weapons.json"
+    since = result.stat().st_mtime if result.exists() else 0
+    spec = "all" if not args.units else "\n".join(str(u) for u in args.units)
+    (inst.gamedir / "tagpu_weapons.trigger").write_text(spec + "\n")
+    if not _wait_file(result, args.timeout, since):
+        die("no weapon dump appeared (needs a running game past its first frame)")
+    data = json.loads(result.read_text())
+    rows = []
+    # One line per unit *type*: the CRCs are a property of the def, and comparing
+    # them across two instances is how a mismatched-peer test reads out.
+    types = {}
+    for u in data.get("units", []):
+        types.setdefault(u["type"], (u.get("crc_weapons"), u.get("crc_all"), u["count"]))
+    for u in data.get("units", []):
+        for s in u["slots"]:
+            rows.append(f"u{u['idx']:<5} {u['type']:<12} own={u['owner']} n={u['count']:<2} "
+                        f"slot{s['i']:<2} st={s['state']} w={s['weapon'] or '-':<14} "
+                        f"tgt={s['target']:<5} spot={s['spot']} rl={s['reload']:<4} "
+                        f"hd={s['heading']:<6} pt={s['pitch']:<6} stk={s['stock']} "
+                        f"aim={s['aimed']} thr={s['thread']}")
+    hits = " ".join(f"{k}={v}" for k, v in data.get("hits", {}).items())
+    fires = " ".join(f"{i}={n}" for i, n in enumerate(data.get("fires", [])) if n)
+    crcs = " ".join(f"{t}(n={n},w={w},all={a})" for t, (w, a, n) in sorted(types.items())
+                    if w is not None)
+    head = (f"frame={data.get('frame')} armed={data.get('armed')} cap={data.get('cap')} "
+            f"units={len(data.get('units', []))}\nhits: {hits}\nfires by slot: {fires or '-'}"
+            + (f"\ntype CRCs: {crcs}" if crcs else ""))
+    out(data, args.json, human=head + ("\n" + "\n".join(rows) if rows else "\n(no matching units)"))
 
 
 def _wait_file(path: Path, timeout: float, since: float):
@@ -1460,6 +1787,29 @@ def _ui_settle(inst: Instance, before: dict, g: dict, timeout: float = UI_SETTLE
         time.sleep(0.1)
 
 
+def _ui_set_stage(inst: Instance, snap: dict, g: dict, target: int) -> dict:
+    """Cycle a toggle to `target` and return the gadget as it then reads.
+
+    A toggle has no "set stage" call in the engine — it advances one stage per
+    click — so this clicks it round, re-reading the gadget each time because the
+    array is rebuilt on every snapshot.
+    """
+    stages = g.get("stages") or 0
+    if stages < 2:
+        die(f'{g["name"]} is not a toggle (stages={stages}) — use click')
+    if not 0 <= target < stages:
+        die(f'{g["name"]} has {stages} stages, so stage {target} does not exist')
+    for _ in range(stages + 1):
+        if g.get("stage") == target:
+            return g
+        snap, _how = _ui_click_gadget(inst, g, snap)
+        hits = _ui_match(snap, g["name"])
+        if len(hits) != 1:
+            die(f'{g["name"]} vanished while cycling it')
+        g = hits[0]
+    die(f'{g["name"]} cycled through all {stages} stages without reaching {target}')
+
+
 def _ui_set_slider(inst: Instance, snap: dict, g: dict, value: int):
     """Drag a value slider's knob until the engine reads back `value`.
 
@@ -1715,23 +2065,10 @@ def cmd_ui(args):
             out(data, args.json, human=human)
             return
 
-        stages = g.get("stages") or 0
-        if stages < 2:
-            die(f'{g["name"]} is not a toggle (stages={stages}) — use click')
-        if not 0 <= target < stages:
-            die(f'{g["name"]} has {stages} stages, so stage {target} does not exist')
-
-        for _ in range(stages + 1):
-            if g.get("stage") == target:
-                out({"name": g["name"], "stage": g.get("stage")}, args.json,
-                    human=f"{g['name']} = stage {g.get('stage')}")
-                return
-            snap, _how = _ui_click_gadget(inst, g, snap)
-            hits = _ui_match(snap, g["name"])
-            if len(hits) != 1:
-                die(f'{g["name"]} vanished while cycling it')
-            g = hits[0]
-        die(f'{g["name"]} cycled through all {stages} stages without reaching {target}')
+        g = _ui_set_stage(inst, snap, g, target)
+        out({"name": g["name"], "stage": g.get("stage")}, args.json,
+            human=f"{g['name']} = stage {g.get('stage')}")
+        return
 
     if verb in ("fill", "type"):
         if len(rest) != 2:
@@ -1748,13 +2085,28 @@ def cmd_ui(args):
 
         _ui_click_gadget(inst, g, snap, settle=False)     # focus the field
         time.sleep(0.2)
-        clear = len(g.get("text") or "")
-        if clear:
-            _write_tokens(inst, " ".join(["backspace"] * clear))
-            time.sleep(0.3)
-            left = _ui_match(_ui_snapshot(inst), g["name"])
-            if len(left) == 1 and (left[0].get("text") or ""):
-                die(f'{g["name"]} still reads {left[0]["text"]!r} after clearing it '
+        # Clearing is one backspace at a time, each one waited for. Characters go
+        # as WM_CHAR and queue, so a whole word lands from a single batch; backspace
+        # is a key token, and the shield holds a key down for 150 ms because TA
+        # *polls* the keyboard — so a batch of five overlapping presses is one edge
+        # and deletes one character. Send one, wait for the field to actually get
+        # shorter, repeat; a backspace that never lands is the real failure and the
+        # only thing worth dying on.
+        left = len(g.get("text") or "")
+        while left:
+            _write_tokens(inst, "backspace")
+            deadline, was = time.time() + 3.0, left
+            while time.time() < deadline:
+                time.sleep(0.15)
+                now = _ui_match(_ui_snapshot(inst), g["name"])
+                if len(now) != 1:
+                    left = 0
+                    break
+                left = len(now[0].get("text") or "")
+                if left < was:
+                    break
+            if left >= was:
+                die(f'{g["name"]} still reads {was} characters after a backspace '
                     "— the caret is not where backspace can reach the whole field")
         if tokens:
             _write_tokens(inst, " ".join(tokens))
@@ -3022,6 +3374,9 @@ def cmd_scenario_apply(args):
 # The shell path to a skirmish, by gadget name. Each click auto-waits for its
 # gadget to exist and be actionable, so this is a path, not a timing guess.
 SCN_MENU_PATH = ("SINGLE", "Skirmish", "Start")
+SCN_MAPPING_NAMES = ("unmapped", "mapped")
+SCN_MAPPING_DEFAULT = 1     # see _scn_set_toggle's callers
+SCN_LOS_NAMES = ("permanent", "true", "circular")
 SCN_LAUNCH_TIMEOUT = 45.0   # `launch`'s own default: a cold prefix takes its time
 SCN_MENU_TIMEOUT = 30.0     # ...and a gadget that never appears is a different fault
 SCN_LOAD_TIMEOUT = 180.0    # ...and a map load is longer again
@@ -3053,6 +3408,28 @@ def _scn_player_flags(setup) -> list:
         spec = f"{p['slot']}:" + ":".join("" if f is None else str(f) for f in fields)
         flags.append(spec.rstrip(":"))
     return flags
+
+
+def _scn_set_toggle(inst: Instance, gadget: str, want: int, names, label: str) -> str:
+    """Put one of SKIRMISH's toggles where we want it before Start is clicked.
+
+    The gadget is the only thing that decides. TA persists `SkirmishMapping` and
+    `SkirmishLineOfSight` in the registry and tacli writes them, but the screen
+    still comes up at the stage its `.GUI` file gives it whatever those values
+    hold — measured 2026-09-02, and `SingleMapping` makes no difference either.
+
+    **Mapped by default** (`--mapping 0` opts out): a scenario places units by
+    world coordinate all over the map, and on an unmapped one the human — and
+    every screenshot — sees them through black. `--los` is left alone unless
+    asked for; stage 0 `Permanent` is the one that keeps explored ground in
+    full colour instead of greying it back out when nothing is looking.
+    """
+    snap, g = _ui_resolve(inst, gadget, SCN_MENU_TIMEOUT, wait=True)
+    was = g.get("stage")
+    if was == want:
+        return f"{label} is {names[want]}"
+    g = _ui_set_stage(inst, snap, g, want)
+    return f"{label} {names[was]} -> {names[g.get('stage')]}"
 
 
 def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
@@ -3150,11 +3527,14 @@ def cmd_scenario_load(args):
     res = tuple(args.res) if args.res else (tuple(setup["res"]) if setup["res"] else None)
     wanted_map = args.map or setup["map"]
     limit = args.unit_limit if args.unit_limit is not None else setup["unit_limit"]
+    mapping = SCN_MAPPING_DEFAULT if args.mapping is None else args.mapping
+    los = args.los
     launched = _launch(argparse.Namespace(
         name=args.name, json=True, force=False, res=res, map=wanted_map,
         unit_limit=limit, player=_scn_player_flags(setup) or None,
         display=args.display, slot=None, sound=None, intro=False, shield=None,
-        keep_dll=args.keep_dll, los=None, mapping=None, arg=[],
+        dplay=None, free_dplay_port=False,
+        keep_dll=args.keep_dll, los=los, mapping=mapping, arg=[],
         timeout=args.launch_timeout, no_restore_pointer=False))
     if launched.get("already_running"):
         die(f"{args.name} is still running after being stopped "
@@ -3164,6 +3544,14 @@ def cmd_scenario_load(args):
                  + (f", unit limit {limit}" if limit is not None else ""))
     if launched.get("owndraw_note"):
         steps.append(launched["owndraw_note"])
+    if launched.get("fxown_note"):
+        steps.append(launched["fxown_note"])
+    if launched.get("featown_note"):
+        steps.append(launched["featown_note"])
+    if launched.get("terrown_note"):
+        steps.append(launched["terrown_note"])
+    if launched.get("markown_note"):
+        steps.append(launched["markown_note"])
 
     _scn_wait_shell(inst, args.launch_timeout)
     for i, selector in enumerate(SCN_MENU_PATH):
@@ -3179,6 +3567,12 @@ def cmd_scenario_load(args):
         _after, how = _ui_click_gadget(inst, g, before, settle=not last)
         steps.append(f"clicked {_ui_label(g)} on {before.get('gui')}"
                      + (f" — {how}" if how else ""))
+        if selector == "Skirmish":
+            steps.append(_scn_set_toggle(inst, "Mapping", mapping,
+                                         SCN_MAPPING_NAMES, "map"))
+            if los is not None:
+                steps.append(_scn_set_toggle(inst, "LineOfSight", los,
+                                             SCN_LOS_NAMES, "line of sight"))
 
     alive = _scn_wait_live(inst, args.load_timeout)
     steps.append(f"live with {alive} unit{'' if alive == 1 else 's'}")
@@ -3326,10 +3720,23 @@ def build_parser():
                         "left alone, e.g. 0:1::3 sets only a colour). Metal/energy "
                         "are the skirmish starting resources, and set storage too.")
     l.add_argument("--los", type=int, help="SkirmishLineOfSight")
-    l.add_argument("--mapping", type=int, help="SkirmishMapping")
+    l.add_argument("--mapping", type=int,
+                   help="SkirmishMapping (TA's saved value; the SKIRMISH screen's "
+                        "own toggle is what decides a game — `scenario load` sets "
+                        "it, or `ui set Mapping 1` when driving by hand)")
     l.add_argument("--arg", action="append",
                    help="extra TotalA.exe switch, repeatable (e.g. --arg -t --arg 120); "
                         "see research/notes/cmdline-options.md")
+    l.add_argument("--dplay", dest="dplay", action="store_true", default=None,
+                   help="multiplayer: install native DirectPlay into the prefix and "
+                        "override wine's builtin (sticky per instance; wine cannot "
+                        "host a session without it)")
+    l.add_argument("--no-dplay", dest="dplay", action="store_false",
+                   help="back to wine's builtin DirectPlay")
+    l.add_argument("--free-dplay-port", action="store_true",
+                   help="kill any stale dplaysvr.exe first — do this on the HOSTING "
+                        "launch only; it owns UDP 47624 machine-wide and killing it "
+                        "while a peer hosts takes that game down")
     l.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
     l.add_argument("--timeout", type=float, default=45)
     l.add_argument("--no-restore-pointer", action="store_true",
@@ -3383,6 +3790,14 @@ def build_parser():
                     help="['*']<hex>['+'<hex>...][':'1|2|4|s<N>|x<N>]")
     pk.add_argument("--timeout", type=float, default=10)
     pk.set_defaults(func=cmd_peek)
+
+    wp = sub.add_parser("weapons", help="dump the weapon slots of units (extra-weapons oracle)")
+    add_common(wp)
+    wp.add_argument("name")
+    wp.add_argument("units", nargs="*", type=int,
+                    help="engine unit indices (roster idx=); none = every live unit")
+    wp.add_argument("--timeout", type=float, default=10)
+    wp.set_defaults(func=cmd_weapons)
 
     sh = sub.add_parser("shot", help="engine surface screenshot (PNG)")
     add_common(sh)
@@ -3527,6 +3942,13 @@ def build_parser():
     scd.add_argument("--unit-limit", dest="unit_limit", type=int,
                      help="override setup.unit_limit")
     scd.add_argument("--display", default=None, help="X display")
+    scd.add_argument("--mapping", type=int, choices=(0, 1), default=None,
+                     help="SKIRMISH's Mapping toggle: 1 = Mapped (the default), "
+                          "0 = the terrain starts blacked out")
+    scd.add_argument("--los", type=int, choices=(0, 1, 2), default=None,
+                     help="SKIRMISH's Line of Sight toggle: 0 = Permanent (no grey "
+                          "fog over ground already seen), 1 = True, 2 = Circular. "
+                          "Left as the screen has it when not given")
     scd.add_argument("--keep-dll", action="store_true",
                      help="do not refresh ddraw.dll")
     scd.add_argument("--restart", action="store_true",

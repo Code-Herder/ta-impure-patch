@@ -1,0 +1,37 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Waterline fixture (load with --map \"Anteer Strait\"): own commanders leg-deep (alt 62) and waist-deep (alt 55) on the shore at y=1600, sea level 75",
+  "on_error": "abort",
+  "setup": {
+    "clear_existing": false,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    }
+  },
+  "units": [
+    {
+      "id": "legs",
+      "type": "ARMCOM",
+      "owner": 0,
+      "pos": [
+        3350,
+        1600
+      ],
+      "facing": 180
+    },
+    {
+      "id": "waist",
+      "type": "ARMCOM",
+      "owner": 0,
+      "pos": [
+        3300,
+        1700
+      ],
+      "facing": 180
+    }
+  ],
+  "camera": {
+    "center_on": "legs"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Ground-attack bench. One WarlordEx, no enemy inside 300, and an `attack` order on a spot 250 world units off the bow. Nothing here can be auto-acquired by the secondary battery, so every shot slots 4..7 fire is a shot the ground order gave them: stock TA unrolls exactly two SetGroundTarget calls (slots 0 and 1) in FUN_004038a0, and `tacli weapons <inst>` reading `fires[3..6] > 0` is the whole test.",
+  "seed": 20260902,
+  "on_error": "abort",
+  "setup": {
+    "map": "Anteer Strait",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "core", "color": 1, "metal": 10000, "energy": 10000},
+      {"slot": 1, "controller": "ai",    "side": "arm",  "color": 0, "metal": 10000, "energy": 10000}
+    ]
+  },
+  "units": [
+    { "id": "warlordex", "type": "CORBATSX", "owner": 0, "pos": [2900, 1980], "facing": 90,
+      "orders": [{"cmd": "attack", "to": [3150, 1980]}] },
+    { "id": "fusion1",  "type": "CORFUS",   "owner": 0, "pos": [3000, 1400] },
+    { "id": "fusion2",  "type": "CORFUS",   "owner": 0, "pos": [3180, 1400] },
+    { "id": "estor1",   "type": "CORESTOR", "owner": 0, "pos": [3340, 1400] },
+    { "id": "estor2",   "type": "CORESTOR", "owner": 0, "pos": [3420, 1400] },
+    { "id": "estor3",   "type": "CORESTOR", "owner": 0, "pos": [3500, 1400] },
+    { "id": "arm_spare", "type": "ARMSOLAR", "owner": 1, "pos": [4200, 1200] }
+  ],
+  "camera": { "center_on": "warlordex" }
+}

@@ -34,6 +34,41 @@ Capture and video work: the **ta-capture** skill.
    In a **worktree**, tacli pins the DLL your tree built (`<tree>/tagpu/ddraw/ddraw.dll`),
    falling back to the main checkout's — so build where you edit, or you will test the
    main checkout's binary and wonder why your change did nothing.
+6. **When the human is going to play it, check the window is on their monitor**
+   before handing it over — see *Where the window lands*. A game that is running
+   perfectly but sits off-screen still answers every `tacli` command and shows
+   them nothing, which is indistinguishable from a launch that failed.
+
+## Where the window lands
+
+Two separate things decide whether the human can see the game. Each has cost this
+project a session.
+
+**The display — theirs, not a virtual one.** `tacli` records it in `instance.json`
+at create time: `TACLI_DISPLAY` first, then the inherited `DISPLAY`, then the live
+sockets in `/tmp/.X11-unix` — skipping **virtual** X servers (Xvfb/Xephyr/Xnest) on
+the first pass, because parallel agent sessions leave 3840x2160 Xvfb displays
+running and a shell that inherits one launches the game where nobody can see it.
+The human's session is the `Xorg` in `ps -eo args`; everything else is a stand-in
+for a monitor. An explicit `TACLI_DISPLAY` still wins, so an agent that genuinely
+wants a virtual display can ask for one. Read back the `display` field with
+`tacli ls --json` before telling the human it is ready.
+
+**The tile.** Instances are laid out in a grid so parallel windows do not stack.
+`tile_for()` wraps within the screen and pulls the last row and column back inside
+it — before 2026-09-02 it did neither, so the twelfth instance drew slot 10 and its
+1920x1080 window was placed at y=11600, off every monitor. Two things follow:
+
+- Slots are held by **running** instances only, so a stopped one frees its place;
+  pass `--slot 0` to claim a cell explicitly.
+- A window created off-screen is left **unmapped** by GNOME, and `xdotool
+  windowmove` alone will not bring it back — it must be `xdotool windowmap`ped
+  first. `xprop -id <wid> WM_STATE` reads `Withdrawn` when this is what happened,
+  and the WM may resize the window on remap, so a relaunch is the clean fix.
+
+Handing the game over is `tacli launch <name> --no-shield`, or `tacli shield <name>
+off` on one that is already running: with the shield off their keyboard and mouse
+reach the game and yours is no longer the only input.
 
 ## The loop
 
@@ -80,6 +115,28 @@ it is sticky per instance: what a launch does not name, it inherits from the las
 **The registry is the only way** — every TotalA.exe switch was traced in phase 1.2 and
 none of them sets a game rule (`cmdline-options.md`). Raw switches go through
 `--arg=-t --arg=120` (keep the `=`); `-r` and `-d` are refused.
+
+**Two of those are not really registry settings.** `SKIRMISH.GUI`'s `Mapping` and
+`LineOfSight` toggles come up at the stage their `.GUI` file gives them — `Unmapped`,
+`Permanent` — whatever `SkirmishMapping` / `SkirmishLineOfSight` hold (measured
+2026-09-02, and `SingleMapping` makes no difference either). The gadget decides the
+game; the registry is only where TA saves the last one. So:
+
+- **`scenario load` starts every game Mapped**, and says so (`map unmapped -> mapped`).
+  `--mapping 0` opts out. Mapped is the default because a scenario places units by
+  world coordinate all over the map, and on an unmapped one the human — and every
+  screenshot — sees them through black.
+- **`--los 0` turns the grey fog off.** `Mapping` reveals the *terrain*; the grey
+  wash over ground nothing is currently looking at is the `LineOfSight` toggle
+  (`Permanent|True|Circular`, stages 0-2). `--los 0` (Permanent) leaves everything
+  already seen in full colour — measured 2026-09-02: the engine's `LosType` word at
+  `*0x511DE8+0x14281` goes 14 → 12, and bit 1 is the one the terrain pass paints the
+  grey mask from (`tagpu_native.c`, "fog is on is NOT LosType bit0"). Not the default,
+  because a fog-free map is a play setting, not a test setting.
+- Add `switches: {"radar": true}` (or `tacli switches <inst> radar=on`) to see enemy
+  units as well as ground — that is TA's own `+radar` debug bit.
+- Driving the menus by hand, set them before `Start`: `tacli ui t1 set Mapping 1`,
+  `tacli ui t1 set LineOfSight 0`.
 
 ## Input details that cost time to learn
 
@@ -187,6 +244,13 @@ DPLAY: *0 Internet TCP/IP Connection For DirectPlay · 1 IPX Connection For Dire
   punctuation. `fill` reports the field's actual content, so read what it says. It
   refuses outright if your text is longer than the field's `maxchars`, rather than
   handing you a truncation and calling it a fill.
+- **Click a field before you fill it.** An unfocused field turns your text into
+  *quickkeys*: the first character actuates whatever button owns that letter on the
+  screen (on `SELGAME`, `J` is `JOINGAME`'s) and the rest is dropped. The symptom is a
+  fill that "kept only the first character", or a screen that jumped somewhere. So
+  `ui <inst> click NICKNAME` then `ui <inst> fill NICKNAME …`. Filling a field that
+  already holds the value you want is also worth skipping — `fill` clears first, and
+  clearing is the slow half.
 - **`hover` rarely shows you anything.** It parks the pointer and reports label text
   that appeared, but no tooltip surfaced over the build panel in testing — consistent
   with `help` being empty there. Use it to set up a hover state, not to read one.
@@ -291,6 +355,42 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
 - Video and frame-by-frame flicker analysis: **ta-capture** skill (60fps or you will
   alias one-present dropouts). Grab the window rect from `tacli ls --json`.
 
+## Extra weapons (the sim-changing module)
+
+`tagpu_weapons.c` lifts "three weapons per unit" to `Weapon4..N` (capacity 16).
+It is **off unless armed before launch** and stock units keep running the untouched
+engine code either way (research/notes/extra-weapons.md, "Implementation").
+
+```bash
+tools/tacli launch w1; tools/tacli stop w1          # create the instance dir
+tools/tacli arm w1 weapons.on                        # must exist at DLL attach
+tools/extra_weapons_fixture.py                       # builds scenarios/content/wpn-test.ufo (gitignored)
+ln -s $PWD/scenarios/content/wpn-test.ufo tagpu/instances/w1/gamedir/   # the test units
+rm -f tagpu/instances/w1/catalogue.json              # cached type list is now stale
+tools/tacli scenario load w1 wpn-llt10 --restart     # two ten-laser towers vs solars
+tools/tacli weapons w1                               # every slot of every unit + counters
+tools/tacli log w1 -g "weapons: (loader|VIOL|MISM)"
+```
+
+- `tacli weapons <inst> [idx…]` is the oracle: per slot the state byte, weapon,
+  target, reload, heading, pitch, stock, aim result and COB thread, plus `armed`,
+  the C-path hit counters (`hits:`) and projectile launches per slot (`fires by
+  slot:`). It works **unarmed** too — that instance is your control. With stock
+  content and the module armed, every counter but `loader`/`stock_splice` must
+  read 0 and `mismatch`/`violation` must be 0; that is the regression check.
+- It also prints `type CRCs:` — each unit type's `CRC_weapons` and `CRC_all`, the
+  unit-sync values. Two instances that agree about a type print the same pair;
+  armed and unarmed differ for exactly the types carrying `Weapon4+`. In a
+  multiplayer game TA **disables** a type the peers disagree about (it vanishes
+  from `tacli units` on both sides) and starts anyway, silently.
+- **Content goes in a `.ufo`, never as loose files** (the engine finds a loose
+  `units/*.fbi` and then drops the type). `tools/hpipack.py` writes/reads the
+  archive, `tools/cobclone.py` gives a COB per-weapon script copies, and
+  `tools/extra_weapons_fixture.py` rebuilds the shipped test pack from the game.
+  After adding or removing archives, delete the instance's `catalogue.json` or
+  `scenario load` refuses the new type at validation.
+- `tacli log -g` takes a Python regex: alternate with `(a|b)`, not `a\|b`.
+
 ## The input firewall (on by default)
 
 While armed, the game ignores the real keyboard and mouse completely and sees only what
@@ -315,6 +415,12 @@ tools/tacli arm t1 native.on=off           # clear one
 
 Any `tagpu_<x>` trigger file works; value goes into the file (e.g. `all`, `armcom`).
 
+**A stale `owndraw.on` is worse than none.** Its detours skip the engine's unit rasterisers,
+so with `native.on` cleared but `owndraw.on` still armed the engine draws **no units at all**
+(only health bars) — an engine-side A/B then measures nothing, silently. `launch` now drops it
+when native is off and says so; if you ever see `OWND ... repaint=0 miss=<everything>` with no
+`native:` lines, that is the shape of it.
+
 **owndraw must exist at launch, not after.** The code-patching passes — `owndraw`,
 `suppress`, `tracer` — install their engine-code detours once at DLL load and only if
 their trigger is present then; there is no per-frame re-arm (patching live engine bytes
@@ -325,6 +431,120 @@ fine to change live. To save the footgun, `launch`/`scenario load` **auto-arm `o
 to match `native.on`** when native is set — it prints `auto-armed owndraw.on=…`. So the
 normal flow is: `arm native.on=all wrecks`, then `scenario load … --restart`. Verify with
 the log line `owndraw: ARMED … opaque@0x459830=OK` and `OWND … skipped>0`.
+
+**The effects pass works the same way.** `fx.on` (weapon fire, explosions, debris — tokens
+`log`, `passive`, `nolines`, `nomodels`, `nosprites`, `noexpl`, `nodebris`) needs the
+`fxown.on` code patches, which tacli auto-arms at launch when `fx.on` exists (`auto-armed
+fxown.on`). The engine skip then *follows `fx.on` live*: `arm fx.on=off` restores the
+engine's effects within 30 frames, `arm fx.on="log passive"` keeps gathering and logging
+(`fx: proj=… expl=…` every 60 frames) while the engine draws — the same-fight A/B lever.
+Verify with `fxown: ARMED site.proj=1 site.expl=1 …` and `FXOWN skip=1`. Fixtures:
+`scenarios/fx-mix.json`, `fx-lasers.json`, `fx-rockets.json`.
+
+**Features (trees, rocks, metal patches, splats, wreckage) are `feat.on`** — tokens `log`,
+`passive`, `noflat`, `notall`, `noshadow`, `nowreck` — on their own patch, `featown.on`,
+which tacli auto-arms at launch when `feat.on` exists. Same live A/B lever: `arm feat.on="log
+passive"` = the engine draws while we count (`feat: rect=68x76 anchors=231 flat=38 tall=193
+... -> body=231 shadow=193` every 60 frames), `arm feat.on=log` = ours. Two things to know:
+it **only takes the draw while `native.on` carries `wrecks`** (3D wreckage is drawn through
+`DrawUnit` from inside the same leaf, so without the native wreck pass owning the leaf would
+delete every husk — the log line says so when it refuses), and it makes **`scaffold.on`
+unnecessary**: features now write real depth, so leave the scaffold disarmed (its debug
+overlay tints every tall feature purple and ruins captures). Verify `featown: ARMED
+feature@0x46A610=1` and `FEATOWN skip=1`. Fixture: `scenarios/feat-forest.json` (Two
+Continents: units parked two tile rows behind a tree row, a lab wreck, a walking commander).
+
+**Terrain is `terr.on`** — tokens `log`, `passive`, `over`, `key=N` — on its own patch,
+`terrown.on`, which tacli auto-arms at launch when `terr.on` exists. It has a **three-way**
+A/B lever rather than two: `passive` = the engine draws, we emit nothing; `over` = ours drawn
+on top of the engine's own terrain, which is the pixel-parity test (diff `shot` against
+`glshot` — a terrain-only band must differ by **zero** pixels); default = ours, with the
+engine's terrain pass *and its fog overlay* skipped. Verify `terrown: ARMED
+terrain@0x483FA0=1 fog@0x4848E0=1 key=254` and `TERROWN skip=1 filled=1`.
+
+Three things about this one are unlike the other passes:
+
+- **The engine's frame inside the viewport becomes a flat fill of one palette index** (the
+  key, 254 by default) in place of the terrain blit, and the composite then shows the engine's
+  frame **only** where it is *not* the key — that is how health bars, nanoframe wireframes,
+  the build cursor and chat still reach the screen. So `tacli shot` inside the viewport is
+  supposed to be ~99.9 % one flat colour while owned; that is the ownership proof, not a bug.
+  `key=N` moves it if a mod's UI ever uses 254.
+- **It owns the fog overlay too**, so `terr.on` off/`passive` restores *both*. If the grey
+  band ever disappears, check `native: … fog=N los=N` in the log before suspecting the shader:
+  fog is on whenever the grid uploaded, and `los` is the engine's raw `LosType`.
+- **Without `terrown.on` it refuses to draw at all**, and says so:
+  `terr: … (NOTHING EMITTED: terrown.on must exist at DLL attach — arm it before launch,
+  not after)`. Our terrain is opaque and covers the whole viewport, so drawing it with no
+  key to invert against would hide every engine overlay and still *look* right. Arming
+  `terr.on` after launch therefore does nothing visible — relaunch.
+
+`key=N` is re-read with the rest of the tokens, so dropping the token restores 254, and
+changing it live hands the draw back for one frame so the fill and the composite can never
+disagree about which index they mean.
+
+**The world-space UI markers are `mark.on`** — tokens `log`, `passive`, `nobars`,
+`nocapture`, `noselbox` — on its own patch, `markown.on`, which tacli auto-arms at launch
+when `mark.on` exists. It covers health bars, group digits, order/waypoint/build-queue
+markers, range circles, the build-cursor footprint and the drag band box, and it stops the
+engine drawing its own copy of the selection rect underneath ours. Two mechanisms:
+**health bars are re-drawn** from unit state (the engine's own loop walks HotUnits, culled
+to the *unzoomed* viewport, so a capture would leave a zoomed-out view's outer ring bare),
+**everything else is captured** — the engine draws it into a scratch buffer of ours and we
+replay that buffer through the zoom transform, so parity is exact including text. Verify
+`markown: ARMED (hook8/hook9/transp x2/selbox x2 redirected …)`, `MARKOWN capture=1
+bars-skipped=1 selbox=1`, and `mark: bars=N prefog=… postfog=…` (`log`).
+
+Three things to know:
+
+- **Health bars need the `damagebars` registry option**, which is *off* when the value is
+  missing — that is the engine's own gate (`main+0x37F06` bit0) and we honour it. Set it
+  before launch under `HKCU\Software\Cavedog Entertainment\Total Annihilation`.
+- **Order markers only draw while SHIFT is HELD** — the engine samples its own hotkey
+  `0xF9`, which this build resolves to `GetAsyncKeyState(VK_SHIFT)` (jump table at
+  `0x4C1C48`, verified). `tacli keys <i> down:shift` … `up:shift` around a shot. We call
+  the engine's sampler rather than reading the key ourselves, so a different keymap cannot
+  make us disagree with it.
+- **`passive` is the A/B lever** and hands *everything* back — bars, capture and the
+  selection rect — so the engine draws the lot while we still gather and count.
+
+**Zoom is `tagpu_zoom.txt` in the gamedir** — a bare float 0.25–8.0, re-read every frame;
+delete the file for 1×. Write it **atomically** (temp + rename) or the DLL reads a torn
+value. Since G13e the input follows it: a click lands on the world point it is drawn
+over, the engine's cursor is moved back under the pointer, and the minimap's view box and
+the scroll rate scale with it. `tacli arm <i> zoom.on` (at launch, like every other
+code-patching pass) additionally installs the one engine patch it needs — the minimap
+view rectangle — and logs `zoom: minimap view rect ARMED`. Everything else needs no arm
+at all and is inert at 1×.
+
+Two things to know when driving zoomed:
+
+- **`tacli click` takes the position ON SCREEN**, the same as your eyes — the transform
+  is applied on the far side of `g_ddraw.cursor`, so the injected path and the human's
+  mouse cannot disagree.
+- **At zoom < 1 the outer ring of the view is DISPLAY-ONLY.** The engine can only name
+  screen positions inside its own 1× viewport, so the world the zoom-out reveals beyond
+  it has no address: a click there is **dropped** (the selection is left alone rather
+  than being moved to whatever sat at the 1× position), and the captured marker layers
+  stop at the same edge. At 0.5× the addressable region is the central half of the frame
+  in each axis. Zoom ≥ 1 has no such limit.
+
+**Particles (smoke, fire, wakes, nanolathe) are `sfx.on`** — tokens `log`, `passive`,
+`nosmoke`, `nofire`, `nowake`, `nonano` — on the same `fxown.on` patch set (tacli auto-arms
+it when either `fx.on` or `sfx.on` exists), with its own live skip: `arm sfx.on="log
+passive"` = engine draws while we count (`sfx: layers L2=44(wake:44) L6=26(nano:26) …`
+every 60 frames), `arm sfx.on=log` = ours. Verify `fxown: ARMED … sfx@0x471F90=1` and
+`FXOWN … sfx=1`; run it with `native.on=all` or the low layers (wake foam) composite over
+engine-drawn hulls. Fixture: `scenarios/sfx-strait.json` (Anteer Strait: damaged structures
+smoke, boats wake, a nanoframe to finish); lessons that cost an hour: a scripted `repair`
+order does not make a builder nanolathe — select it, `ui click ARMORDERS`, `ui click
+ARMREPAIR`, then `keys mouse:X,Y` + `click X Y` on the frame; the spray stops the moment
+metal hits zero, and clearing the starting commander drops the storage to what the
+remaining units provide (the fixture adds storage units); boats only path along the
+water and head for the map's far end, so put the camera on their route; `ctrl+d` on a
+selected structure gives burning debris (an extractor's explosion emits fire, a
+storage's does not); `tacli log` returns a tail of the file, so count lines in the raw
+`gamedir/tagpu.log` with `grep -a -c`.
 
 ## Things that will bite you
 
@@ -344,7 +564,53 @@ the log line `owndraw: ARMED … opaque@0x459830=OK` and `OWND … skipped>0`.
   both are written up in `windowed-mode.md`.
 - Instances are cheap in disk (hardlinked prefix, symlinked gamedir) but each running
   game is a real GPU client — a handful at a time, not dozens.
-- **`SELPROV`'s `SELECT` button kills the game** — `Access Violation ... at 0023:00000000`
-  in `ErrorLog.txt`, TA's DirectPlay path under wine, reproducible with plain `tacli keys`
-  and nothing to do with `ui`. Reading the provider list and moving its selection are
-  safe; pressing `SELECT` is not. That is what blocks agent-vs-agent multiplayer.
+- **`SELPROV`'s `SELECT` kills the game on the *non*-TCP/IP rows** —
+  `Access Violation ... at 0023:00000000` in `ErrorLog.txt`, reproducible with plain
+  `tacli keys` and nothing to do with `ui`. IPX was the row that did it.
+  ***Internet TCP/IP Connection For DirectPlay* selects cleanly** and goes to `TCP.GUI`.
+  **Select it by name, never by row number**: with wine's builtin DirectPlay it is row
+  0, with native DirectPlay (below) the list is four rows in a different order and it is
+  row 3. Reading the provider list and moving its selection are always safe.
+## Multiplayer: two instances in one game
+
+Works since 2026-09-02, over loopback, on the stock wine 9.0 these instances use.
+What used to block it was wine's builtin DirectPlay, which implements the client half
+only and cannot create a session at all (`DPWSCB_Open`: "session creation is not yet
+supported", true through wine `master`); Microsoft's own DirectPlay in front of it
+fixes that. `tools/dpinstall.sh` installs it into a prefix and `tools/dptest/` proves
+a prefix can host before you go blaming the game.
+
+```bash
+tools/tacli launch h1 --dplay --free-dplay-port     # the host
+tools/tacli launch j1 --dplay                       # the joiner
+tools/mp_lobby.sh h1 j1 'Two Continents'            # menus -> battle room -> live
+```
+
+- `--dplay` installs native DirectPlay into that instance's prefix and appends the
+  overrides to `ddraw=n,b`. It is **sticky per instance**, so a single-player instance
+  keeps wine's builtin and nothing about it changes.
+- `--free-dplay-port` kills a stale `dplaysvr.exe`. DirectPlay's name server outlives
+  the game that started it and owns UDP 47624 **machine-wide**, so a leftover one makes
+  the next host fail `Open(DPOPEN_CREATE) = DPERR_GENERIC` — which looks exactly like a
+  broken prefix and is not. Put it on the **hosting** launch only: doing it while a peer
+  is hosting takes that game down too.
+- `MP_NO_START=1 tools/mp_lobby.sh …` stops in the battle room instead of starting, for
+  when you want to read or change the lobby.
+- After running `dptest` against an instance's prefix, **let it settle** before
+  launching TA there. Starting the game into a prefix whose wineserver is still shutting
+  down produced a launch with no process and no `ErrorLog.txt`; the relaunch was fine.
+
+Three lobby facts that are not guessable, all encoded in `mp_lobby.sh`:
+
+- **`START` ungreys only when every player is ready — the host included.** Each client
+  lists *itself* as row 0, so the host's own toggle is `READY0` on its own screen and
+  the joiner's is `READY0` on theirs. `PLAYER0`/`READY0`/`PLAYER1`… are created at
+  runtime and sit past the end of the default `ui` snapshot; reach them with
+  `ui <inst> show READY1`.
+- **Lobby state syncs**, so set the map on the host and read it back on the joiner
+  (`ui <join> show MAPNAME`) as a cheap proof the link is live.
+- **`scenario apply` on the host replicates its units to the joiner** through TA's own
+  create packet — which is what makes a scripted two-instance test possible. Apply on
+  one peer only; both peers then see the units.
+
+Do not `pkill -x dplaysvr.exe` by hand while another agent's game is hosting.

@@ -1,0 +1,42 @@
+{
+  "format": "ta-scenario/1",
+  "description": "The upgrade against the original: two WarlordEx (CORBATSX, from warlordex.ufo — spliced midbody, four extra CORE_BATSLASER on weapons 4..7, five times the hull) against two stock Core Warlords, 800 units apart in the strait. Both sides get fusions and energy stores ashore, because both need them: CORE_BATSLASER costs 75 energy a shot and CORE_BATSLASER 75, and clear_existing takes each player's commander — and with it the storage the engine recomputes from owned units every tick. `shootall` is off so the ships fight each other instead of wandering off to shell the shore buildings. The stock pair has orders to attack; the WarlordEx pair is left unordered so it can be driven by hand with the shield off.",
+  "seed": 20260902,
+  "on_error": "skip",
+
+  "setup": {
+    "map": "Anteer Strait",
+    "res": "1920x1080",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {"shootall": false, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "core", "color": 1, "metal": 10000, "energy": 10000},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 3, "metal": 10000, "energy": 10000}
+    ]
+  },
+
+  "units": [
+    { "id": "warlordex1", "type": "CORBATSX", "owner": 0, "pos": [2700, 1880], "facing": 90 },
+    { "id": "warlordex2", "type": "CORBATSX", "owner": 0, "pos": [2700, 2110], "facing": 90 },
+
+    { "id": "warlord1", "type": "CORBATS", "owner": 1, "pos": [3500, 1880], "facing": 270,
+      "orders": [{"cmd": "attack", "target": "warlordex1"}] },
+    { "id": "warlord2", "type": "CORBATS", "owner": 1, "pos": [3500, 2110], "facing": 270,
+      "orders": [{"cmd": "attack", "target": "warlordex2"}] },
+
+    { "id": "p0_fusion1", "type": "CORFUS",   "owner": 0, "pos": [2600, 1400] },
+    { "id": "p0_fusion2", "type": "CORFUS",   "owner": 0, "pos": [2760, 1400] },
+    { "id": "p0_estor1",  "type": "CORESTOR", "owner": 0, "pos": [2600, 1300] },
+    { "id": "p0_estor2",  "type": "CORESTOR", "owner": 0, "pos": [2680, 1300] },
+    { "id": "p0_estor3",  "type": "CORESTOR", "owner": 0, "pos": [2760, 1300] },
+
+    { "id": "p1_fusion1", "type": "CORFUS",   "owner": 1, "pos": [4000, 1400] },
+    { "id": "p1_fusion2", "type": "CORFUS",   "owner": 1, "pos": [4160, 1400] },
+    { "id": "p1_estor1",  "type": "CORESTOR", "owner": 1, "pos": [4000, 1300] },
+    { "id": "p1_estor2",  "type": "CORESTOR", "owner": 1, "pos": [4080, 1300] },
+    { "id": "p1_estor3",  "type": "CORESTOR", "owner": 1, "pos": [4160, 1300] }
+  ],
+
+  "camera": { "center_on": "warlordex1" }
+}

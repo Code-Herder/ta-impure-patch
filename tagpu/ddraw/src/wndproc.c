@@ -15,6 +15,7 @@
 #include "debug.h"
 #include "versionhelpers.h"
 #include "tagpu_shield.h"
+#include "tagpu_zoom.h"
 
 
 LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -136,7 +137,8 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 pt.y = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
             }
 
-            CallWindowProcA(g_ddraw.wndproc, hWnd, uMsg, wParam, MAKELPARAM(pt.x, pt.y));
+            CallWindowProcA(g_ddraw.wndproc, hWnd, uMsg, wParam,
+                tagpu_zoom_mouse_lparam(uMsg, MAKELPARAM(pt.x, pt.y)));
         }
 
         LRESULT result = real_DefWindowProcA(hWnd, uMsg, wParam, lParam);
@@ -1048,5 +1050,12 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     }
     }
 
-    return CallWindowProcA(g_ddraw.wndproc, hWnd, uMsg, wParam, lParam);
+    /* tagpu: the world is drawn zoomed, the engine's screen->world maths is
+       1:1 — hand it the unzoomed position so a click lands where it looks, and
+       swallow a click the engine has no world point for (tagpu_zoom.h). */
+    if (tagpu_zoom_drop_mouse(uMsg, lParam))
+        return 0;
+
+    return CallWindowProcA(g_ddraw.wndproc, hWnd, uMsg, wParam,
+                           tagpu_zoom_mouse_lparam(uMsg, lParam));
 }

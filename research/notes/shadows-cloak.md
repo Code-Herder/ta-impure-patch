@@ -349,6 +349,35 @@ i.e. composited above projectiles — engine quirk, reproduce or knowingly fix.)
    - *Clipping*: erase shadow/body pixels below the waterline for units above
      water (`seaLevel − altitude` in elevation units, bias `0x32`); `digger`
      units clip everything below ground (depth ≤ `0x7D`).
+   **Ownership split, measured 2026-09-02 (native pass armed, composite wiped):**
+   the engine's *completed-unit* shadow is built from the composite, so for a
+   natively-owned mobile unit it comes out empty — that shadow is ours to draw.
+   The `0x20000000`-path shadow (structures: the cached slant projection at
+   `Object3do+0x14`, built from the posed prims) and the `FShadow` feature
+   shadow of a 3D wreck survive the wipe and keep drawing — the native pass
+   draws **no** shadow for those, and honours `noshadow`/`canhover`/`floater`
+   (`UnitDefStruct+0x241`) exactly as the engine does (an ARM Skimmer had been
+   getting a shadow from us). Rule in `tagpu_native.c`: `shadow = !(state &
+   0x20000000) && !(mask & 0x02000000) && !(mask & 0x81000)`, never for wrecks.
+   Panel: `assets/shots/g12c-shadow-ownership.png`.
+   **Factory-built check (2026-09-02):** a Peewee rolled out of an ARMLAB reads
+   state `0x90242321` with nano = 0 — bit `0x20000000` CLEAR — while a
+   commander-built ARMSOLAR reads `0x30282321` after completion — bit SET. So
+   the bit marks structures (and nanoframes), not only "under construction",
+   and the ownership rule holds in a real game (panel
+   `assets/shots/g12c-factory-built-shadow.png`).
+   **Waterline / digger clipping, implemented 2026-09-02** in the native
+   pass, mirroring the rules above: per-vertex model height in the vertex
+   stream; per unit, only when the composite has a depth plane (path B),
+   `sub = seaLevel(TA+0x1427F) − altitude`; if `sub > 0`, fragments with
+   `vy <= sub` are erased for enemies without state bit `0x200` (the compare
+   byte is `TA+0x2A43`) and tinted `r/2, g/2, b/2+0x32` for own / sonar-seen
+   units; the shadow pass always erases them; `digger` (mask bit30) erases
+   `vy <= 0`. Measured on Anteer Strait (sea 75): commanders at altitude 62
+   and 55 — the stock engine tints shins/feet navy and cuts the shadow at the
+   same height ours now does (panel `assets/shots/g12c-waterline-ab.png`).
+   Not exercised: the enemy-erase branch (the AI walks its units out of the
+   water; a kbot cannot be created in it) and 3D wrecks (left unclipped).
 2. **Cloak = 50 % blend, owner-only.** If `unit+0x10E & 4`: blend the unit's
    colour output with the destination at 50 % (the engine's ALP table is
    exactly `nearest(pal[src]/2 + pal[dst]/2)`); in GL just use
