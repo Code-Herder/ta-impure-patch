@@ -89,8 +89,17 @@ static const unsigned char BARS_STOLEN[5] = { 0x83, 0xEC, 0x10, 0x53, 0x55 };
    game thread — the pointer is a global, so unlike the draw context's pixel
    base it is safe to restore from a LATER frame if a window is ever abandoned
    (see mark_hook8). Inside the window the only alpha composite the engine
-   reaches is that sprite: the route dots are a masked `CopyGafToContext`, the
-   rects and circles are `DrawLine`, and the health bars are ours. */
+   reaches is that sprite, which is a caller survey rather than a guess: the LUT
+   has exactly three consumers in the image (`0x4CBF2C` x2 and `0x4CC057`, all
+   inside `0x4B8500` and its sibling at `0x4B84xx`), and of `0x4B8500`'s 24 call
+   sites only `0x4399BB` — the target-sprite drawer — is reachable between the
+   two hooks. The unit-sprite ones (`0x4593xx`, `0x4595E9`, `0x4597D3`) belong to
+   the earlier row sweep, `0x46A7xx` is past DrawGameScreen's `ret` at
+   `0x46A3FD`, and `0x49Cxxx` is the projectile pass `0x49BE60`, called at
+   `0x469B22` — before hook 8. The other things drawn in here cannot reach it:
+   the route dots are a masked `CopyGafToContext 0x4B7F90`, the rects and
+   circles are `DrawLine`, the group digits' `DrawTextCustomFont 0x4C14F0`
+   blits through `0x4CCF60`, and the health bars are ours. [BINARY-VERIFIED] */
 static unsigned char*  g_opaqueTab;      /* 64 KB, built once at init      */
 static unsigned char** g_tabSlot;        /* non-NULL while ours is in      */
 static unsigned char*  g_tabSaved;       /* the engine's own pointer       */
