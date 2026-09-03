@@ -66,6 +66,26 @@ it — before 2026-09-02 it did neither, so the twelfth instance drew slot 10 an
   first. `xprop -id <wid> WM_STATE` reads `Withdrawn` when this is what happened,
   and the WM may resize the window on remap, so a relaunch is the clean fix.
 
+**Which window is which: the title names the tree.** Every `tacli launch` writes
+`tagpu_title.txt` into the gamedir and the DLL appends it, so the title bar reads
+`Total Annihilation - worktree-gpu_render` instead of the bare name every instance used
+to share. The default label is the **branch of the tree tacli was run from** — which is
+the tree whose `ddraw.dll` it pinned, so the title says which build you are looking at.
+
+```bash
+tools/tacli launch t1                      # Total Annihilation - <branch>
+tools/tacli launch t1 --title "fog A/B"    # Total Annihilation - fog A/B
+tools/tacli launch t1 --no-title           # stock title, no label
+tools/tacli launch t1 --title auto         # back to the branch default
+```
+
+`--title` is sticky per instance like every other launch knob, and `--title auto` is the
+only way back out of a `--no-title`. A label that is blank, or has nothing printable left
+in it, is the same as `--no-title`. `tacli ls --json` reports the exact string as
+`window_title`, and that is what `tacli` searches for to find the client window — so
+**take the window from `tacli ls`, never from an `xdotool search` you typed yourself**;
+the title is no longer a constant you can hard-code.
+
 Handing the game over is `tacli launch <name> --no-shield`, or `tacli shield <name>
 off` on one that is already running: with the shield off their keyboard and mouse
 reach the game and yours is no longer the only input.
@@ -654,8 +674,10 @@ storage's does not); `tacli log` returns a tail of the file, so count lines in t
 - `pkill -f TotalA.exe` kills your own shell (the pattern matches the wrapper).
   Use `pkill -x` / `pgrep -x`, or just `tacli stop`.
 - `tagpu.log` contains binary bytes: always `grep -a` (tacli's `log`/`wait` handle it).
-- Two X windows share the title `Total Annihilation` (frame + client), and the user's
-  browser/Discord windows match the *substring* — tacli matches exact title + pid.
+- Two X windows share each instance's title (frame + client), and the user's
+  browser/Discord windows match the *substring* — tacli matches exact title + pid. The
+  title now carries a per-tree label (above), so an instance launched before that existed
+  still answers to the bare `Total Annihilation`, and tacli searches for both.
 - The launch briefly warps the pointer to a screen origin (a wine-side quirk, not TA);
   tacli restores it and reports `pointer_restored`. Do not "fix" this with xdotool.
 - The DEBUG build writes `cnc-ddraw-TotalA-*.log` at **~100 MB/minute** and rotates

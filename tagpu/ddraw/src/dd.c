@@ -16,6 +16,7 @@
 #include "utils.h"
 #include "blt.h"
 #include "versionhelpers.h"
+#include "tagpu_title.h"
 
 
 CNCDDRAW g_ddraw;
@@ -1459,6 +1460,12 @@ HRESULT dd_SetCooperativeLevel(HWND hwnd, DWORD dwFlags)
         g_ddraw.iscnc1 = strcmp(g_ddraw.title, "Command & Conquer") == 0;
         g_ddraw.iskkndx = strcmp(g_ddraw.title, "KKND Xtreme") == 0;
         g_ddraw.isworms2 = strcmp(g_ddraw.title, "worms2") == 0;
+
+        /* Name the tree this DLL came from in the title bar, AFTER the game
+         * detection above and the g_ddraw.title copy it reads: the suffix must
+         * not reach those strcmps, nor screenshot.c's filenames. Passing the
+         * pristine copy as the base also keeps repeat calls from stacking it. */
+        tagpu_title_apply(g_ddraw.hwnd, g_ddraw.title);
 
         if (g_ddraw.iskkndx)
         {

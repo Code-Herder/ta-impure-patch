@@ -80,6 +80,55 @@ def built_dll() -> Path:
 
 BUILT_DLL = built_dll()
 
+# The window title. Several instances of the same 1997 binary sit on the desktop
+# at once, one per worktree, and every one of them used to be titled exactly
+# "Total Annihilation": nothing on screen said which build you were looking at.
+BASE_TITLE = "Total Annihilation"
+TREE = Path(__file__).resolve().parent.parent      # the tree this tacli ran from
+
+
+def tree_label() -> str:
+    """Label for the window title: which tree the pinned ddraw.dll came from.
+
+    The BRANCH, because that is the name the work has (`worktree-gpu_render`) and
+    the same string the DLL already compiles into GIT_BRANCH, so a title and a
+    `tacli log` line name the build identically. A detached HEAD — or no git at
+    all — falls back to the directory name, which is never empty.
+    """
+    try:
+        branch = subprocess.run(
+            ["git", "-C", str(TREE), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        branch = ""
+    return branch if branch and branch != "HEAD" else TREE.name
+
+
+LABEL_MAX = 63          # tagpu_title.c's LABEL_MAX, minus the NUL
+
+
+def title_label(label: str) -> str:
+    """The label as the DLL will read it back: first line, printable ASCII, no
+    outer blanks, capped — in that order, which is the order tagpu_title.c's
+    read_label() applies (leading blanks are skipped BEFORE the cap counts).
+
+    Both halves have to sanitise identically. tacli records the resulting window
+    title and then finds the window BY that exact string, so a label the DLL
+    trims differently is a search for a title no window carries. An empty result
+    is the "no label" state: the stock title, and no file.
+    """
+    line = (label or "").replace("\r", "\n").split("\n")[0]
+    text = "".join(c for c in line if " " <= c <= "~").lstrip(" ")
+    return text[:LABEL_MAX].rstrip(" ")
+
+
+def ere_quote(s: str) -> str:
+    """Quote for xdotool's POSIX extended regex (NOT re.escape: that escapes `-`,
+    which is not a metacharacter outside a bracket expression and which GNU
+    regcomp is only incidentally forgiving about)."""
+    return "".join("\\" + c if c in ".[]{}()*+?^$|\\" else c for c in s)
+
+
 # Files that must never be shared between instances: each gets its own real copy,
 # everything else in the Steam dir is symlinked.
 PRIVATE_FILES = {
@@ -271,15 +320,29 @@ class Instance:
         Two X windows share the title; the client is the one whose size matches the
         game resolution. Other apps (browser/Discord) can carry the name as a
         substring, so match the title exactly and verify against this instance's pid.
+
+        "Exactly" is why the launch RECORDS the title it asked the DLL for
+        (`window_title`): the tree label makes it instance-specific, and matching
+        `^Total Annihilation - .*$` instead would start matching the user's browser
+        tab about the game. The bare title stays in the list for an instance
+        launched before this existed, or with the label turned off.
         """
         display = self.meta().get("display") or default_display()
         pid = self.pid()
-        try:
-            ids = subprocess.run(["xdotool", "search", "--name", "^Total Annihilation$"],
-                                 capture_output=True, text=True,
-                                 env={**os.environ, "DISPLAY": display}).stdout.split()
-        except FileNotFoundError:
-            return None
+        patterns = []
+        recorded = self.meta().get("window_title")
+        if recorded and recorded != BASE_TITLE:
+            patterns.append("^" + ere_quote(recorded) + "$")
+        patterns.append("^" + ere_quote(BASE_TITLE) + "$")
+        ids = []
+        for pattern in patterns:
+            try:
+                found = subprocess.run(["xdotool", "search", "--name", pattern],
+                                       capture_output=True, text=True,
+                                       env={**os.environ, "DISPLAY": display}).stdout.split()
+            except FileNotFoundError:
+                return None
+            ids += [w for w in found if w not in ids]
         best = None
         for wid in ids:
             env = {**os.environ, "DISPLAY": display}
@@ -364,6 +427,25 @@ def set_shield(inst: Instance, on: bool):
 
 def shield_state(inst: Instance) -> bool:
     return (inst.gamedir / "tagpu_shield.on").exists()
+
+
+def write_title(inst: Instance, label: str) -> str:
+    """Point the DLL at a title label; return the title the window will carry.
+
+    An empty label — none passed, blank, or nothing left of it after
+    `title_label` — removes the file, which is the DLL's "leave the stock title
+    alone": the same state as an instance launched before this existed, or a game
+    launched outside tacli at all. Written on every launch rather than at create,
+    so switching the tree's branch retitles the next launch without anyone having
+    to remember to.
+    """
+    path = inst.gamedir / "tagpu_title.txt"
+    label = title_label(label)
+    if not label:
+        path.unlink(missing_ok=True)
+        return BASE_TITLE
+    path.write_text(label + "\n")
+    return f"{BASE_TITLE} - {label}"
 
 
 def write_ddraw_ini(inst: Instance, tile):
@@ -919,6 +1001,19 @@ def _launch(args) -> dict:
     terrown_note = _ensure_terrown_for_terr(inst)
     markown_note = _ensure_markown_for_mark(inst)
 
+    # Before Popen: the DLL reads the label once, at attach. Recorded in the meta
+    # because Instance.window() then searches for this exact title.
+    if args.title is not None:
+        # Sticky like every other launch knob, so there has to be a way back out:
+        # "auto" drops the override rather than becoming a label (a stored "" is
+        # the deliberate no-label state, and would otherwise be unreachable-from).
+        if args.title.strip().lower() == "auto":
+            meta.pop("title", None)
+        else:
+            meta["title"] = args.title
+    label = meta["title"] if meta.get("title") is not None else tree_label()
+    meta["window_title"] = write_title(inst, label)
+
     env = inst.env()
     display = env["DISPLAY"]
     meta["args"] = argv
@@ -942,6 +1037,7 @@ def _launch(args) -> dict:
             "window": win, "gamedir": str(inst.gamedir), "res": meta["res"],
             "map": args.map, "unit_limit": meta.get("unit_limit"),
             "args": argv, "shield": shield_state(inst), "pointer_restored": restored,
+            "window_title": meta["window_title"],
             "dplay": bool(meta.get("dplay")), "dplay_note": dplay_note,
             "owndraw_note": owndraw_note, "fxown_note": fxown_note,
             "featown_note": featown_note, "terrown_note": terrown_note,
@@ -3559,7 +3655,7 @@ def cmd_scenario_load(args):
         name=args.name, json=True, force=False, res=res, map=wanted_map,
         unit_limit=limit, player=_scn_player_flags(setup) or None,
         display=args.display, slot=None, sound=None, intro=False, shield=None,
-        dplay=None, free_dplay_port=False,
+        dplay=None, free_dplay_port=False, title=None,
         keep_dll=args.keep_dll, los=los, mapping=mapping, arg=[],
         timeout=args.launch_timeout, no_restore_pointer=False))
     if launched.get("already_running"):
@@ -3737,6 +3833,13 @@ def build_parser():
     l.add_argument("--shield", dest="shield", action="store_true", default=None,
                    help="block hardware keyboard/mouse (the default)")
     l.add_argument("--no-shield", dest="shield", action="store_false")
+    l.add_argument("--title", default=None,
+                   help="label after \"Total Annihilation - \" in the window title "
+                        "(default: the branch of the tree this tacli ran from, which "
+                        "is the tree whose ddraw.dll it pinned). Sticky per instance; "
+                        "--title auto goes back to the default")
+    l.add_argument("--no-title", dest="title", action="store_const", const="",
+                   help="stock window title, no label (also sticky; --title auto undoes it)")
     l.add_argument("--map", help="skirmish map name, e.g. 'Two Continents'")
     l.add_argument("--unit-limit", dest="unit_limit", type=int,
                    help="per-player unit cap in totala.ini (TA clamps it to 20-1500)")

@@ -291,6 +291,13 @@ extreme of the range and inside it everywhere else.
 | `0x4969D2` | the sim tick site (5 stolen) | `scenario` — applies a situation on the game thread |
 | `0x485F50` `0x4864B0` `0x422DD0` `0x4224B0` `0x481550` `0x423C50` `0x43F0E0` `0x43AFC0` | `CreateUnit`, `KillUnit`, `FeatureName2ID`, `LoadFeature`, `GetGridPosPLOT`, `SpawnFeatureOnMap`, `ScriptAction_Type2Index`, `NewMainOrder2Unit` | `scenario` — *called by us*, never patched |
 
+**The window title** (`tagpu_title.c`) patches no engine address at all: it is a
+`SetWindowTextA` from inside `dd_SetCooperativeLevel`, composing `"<stock title> - <label>"`
+from `tagpu_title.txt` (tacli writes the tree's branch there by default). Listed here only
+so the module is accounted for — it reads no engine state and writes none. Placed after the
+`GetWindowText` into `g_ddraw.title`, so cnc-ddraw's own per-game `strcmp`s and
+`screenshot.c`'s filenames still see the unsuffixed name.
+
 ### 2.5 State we read, and the fields we write
 
 | Where | What |

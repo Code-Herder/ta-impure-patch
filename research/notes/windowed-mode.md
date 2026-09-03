@@ -154,10 +154,26 @@ maxgameticks=0        ; never raise: perturbs the sim
 minfps=0
 ```
 
-Two X windows carry the title `Total Annihilation`: the outer frame (client + decoration,
-e.g. 668×546) and the 640×480 client. Match on geometry, and remember the user's Discord
-and browser windows also match the *name substring* — the exact-title rule from
-`ta-capture` still applies.
+Two X windows carry the game's title: the outer frame (client + decoration, e.g. 668×546)
+and the 640×480 client. Match on geometry, and remember the user's Discord and browser
+windows also match the *name substring* — the exact-title rule from `ta-capture` still
+applies.
+
+**The title is no longer the constant `Total Annihilation`.** `tagpu_title.c` appends the
+label in `tagpu_title.txt` — written by every `tacli launch`, and by default the branch of
+the tree that tacli ran from, i.e. the tree whose `ddraw.dll` it pinned:
+
+```
+Total Annihilation - worktree-gpu_render
+```
+
+so several instances of the same 1997 binary on one desktop say which build each is. It is
+set in `dd_SetCooperativeLevel` (dd.c), *after* the `GetWindowText` into `g_ddraw.title`
+that cnc-ddraw's per-game detection and `screenshot.c`'s filenames read, and measured to
+survive the 640×480 menu → in-game resolution switch (logged once, `title: "…"`). With no
+file — a game launched outside tacli, an instance created before this, or `--no-title` —
+the title is untouched, which is why `Instance.window()` keeps the bare title in its
+search list alongside the exact one the launch recorded in `window_title`.
 
 ## Free side effect: no intro movie in windowed mode
 
