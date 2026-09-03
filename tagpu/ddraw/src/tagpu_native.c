@@ -74,6 +74,7 @@
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
+#include "tagpu_vpwide.h"
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -1013,8 +1014,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return;
     if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return;
 
-    int vpL = *(int*)(ta + OFF_VP_L), vpT = *(int*)(ta + OFF_VP_T);
-    int vw  = *(int*)(ta + OFF_VIEW_W), vh = *(int*)(ta + OFF_VIEW_H);
+    /* the TRUE 1x rect, not the field: while tagpu_vpwide is live the engine's
+       copy is deliberately wider, and the composite key rect (uVp), the zoom's
+       published view and the effective gather below all mean the real one */
+    int vpL, vpT, vw, vh;
+    tagpu_vpwide_true_rect(ta, &vpL, &vpT, &vw, &vh);
     int eyeX = *(int*)(ta + OFF_EYEX), eyeY = *(int*)(ta + OFF_EYEY);
     if (vw < 64 || vh < 64 || vw > 4096 || vh > 4096) return;
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;

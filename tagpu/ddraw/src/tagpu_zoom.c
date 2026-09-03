@@ -7,6 +7,7 @@
 #include "dd.h"
 #include "tagpu_zoom.h"
 #include "tagpu_detour.h"
+#include "tagpu_vpwide.h"
 
 /* Published view. Volatile because two threads touch it; each is one aligned
    32-bit slot, which x86 loads and stores atomically. */
@@ -111,6 +112,9 @@ void tagpu_zoom_frame_end(void)
     /* after s_live settles, so a frame that drew nothing zoomed puts the
        engine's own rate back */
     apply_scroll_rate();
+    /* and the same for the addressable rect: a frame that published nothing
+       must hand the engine its own viewport back before the menus see it */
+    tagpu_vpwide_frame(tagpu_zoom_level());
 }
 
 float tagpu_zoom_level(void)
@@ -166,6 +170,18 @@ static int to_engine(int* x, int* y, int* ring)
     if (!in_viewport(*x, *y, L, T, W, H)) return 0;   /* screen-space: 1:1 */
     ux = iround(((float)*x - cx) / z + cx);
     uy = iround(((float)*y - cy) / z + cy);
+    /* The ring is whatever the engine cannot NAME, so it is measured against
+       the addressable rect — which tagpu_vpwide has widened to exactly this
+       transform's range when it is armed, and which is the true viewport when
+       it is not. The gate above stays on the TRUE rect: it decides "did the
+       player click on the world or on the screen-space UI", and that boundary
+       does not move. */
+    {
+        int aL, aT, aW, aH;
+        if (tagpu_vpwide_addressable(&aL, &aT, &aW, &aH)) {
+            L = aL; T = aT; W = aW; H = aH;
+        }
+    }
     if (!in_viewport(ux, uy, L, T, W, H)) {
         if (ring) *ring = 1;
         return 0;

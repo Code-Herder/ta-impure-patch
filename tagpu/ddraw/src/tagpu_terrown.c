@@ -50,6 +50,7 @@
 #include "tagpu_terrown.h"
 #include "tagpu_terr.h"
 #include "tagpu_detour.h"
+#include "tagpu_vpwide.h"
 
 #define TERRAIN_VA   0x00483FA0u   /* stdcall(ctx), ret 4  */
 #define FOG_VA       0x004848E0u   /* stdcall(ctx), ret 4  */
@@ -102,10 +103,14 @@ static void __cdecl terr_fill(void* ctxv)
     base  = (unsigned char*)(size_t)(unsigned)ctx[CTX_BASE];
     if (!ptr_ok(base) || pitch <= 0 || pitch > 16384) return;
 
-    x0 = *(const int*)(ta + OFF_VP_L);
-    y0 = *(const int*)(ta + OFF_VP_T);
-    x1 = x0 + *(const int*)(ta + OFF_VIEW_W);
-    y1 = y0 + *(const int*)(ta + OFF_VIEW_H);
+    /* the TRUE 1x rect — tagpu_vpwide widens the engine's copy at zoom < 1 and
+       a key fill taken from the wide one would erase the side panel */
+    {
+        int tw, th;
+        tagpu_vpwide_true_rect(ta, &x0, &y0, &tw, &th);
+        x1 = x0 + tw;
+        y1 = y0 + th;
+    }
     /* The engine's own blits are clipped to the context rect (inclusive), so
        intersecting with it can only shrink the fill to what the terrain pass
        would have covered — and since the OFFSCREEN carries no buffer HEIGHT,
