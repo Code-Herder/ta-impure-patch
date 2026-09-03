@@ -93,4 +93,31 @@
    name of the int index variable. */
 #define TAGPU_GLSL_FOG_SHADE(I) \
     "  if (taFogC.y >= 0.5) " I " = int(texelFetch(uFogLUT, ivec2(" I ", 0), 0).r * 255.0 + 0.5);\n"
+
+/* ---- the sub-pixel edge nudge -----------------------------------------
+   Quads are emitted on exact integer game-pixel boundaries, so at some zooms
+   a quad's far edge lands EXACTLY on a fragment centre. The rasteriser gives
+   that fragment to one of the two quads sharing the edge -- measured on this
+   stack, to the upper/left one -- and its interpolated u (or v) is then
+   exactly u1, which GL_NEAREST resolves to the first texel of the NEXT atlas
+   cell. On terrain that is the unrelated tile 64 cells later (the blue
+   hairlines along tile edges at zoom 0.25); on a GAF sprite it is the packer's
+   gutter (the black hairline down the right of every tree).
+
+   Clamping the texel back into the cell is NOT the fix: the fragment then
+   repeats the cell's last row, which is out of phase with the row cadence the
+   rest of the minified tile is sampled on, and TA's tile art is dithered, so
+   an out-of-phase row still reads as a coloured line. Measured -- it moved the
+   seam metric from 1.92x to 1.86x, i.e. not at all.
+
+   So move the geometry instead, by a fraction of a pixel, in the direction
+   that puts a coincident fragment centre INSIDE the following quad. That
+   restores the ordinary case exactly (the shared fragment samples the next
+   cell's first texel, which is what it is standing on) and leaves the
+   sampling cadence uniform. The value is in game-screen pixels, applied
+   AFTER the zoom scale so it is the same sub-pixel distance at every zoom:
+   1/32 px is ~300x the float noise in a coordinate that size and 1/8 of a
+   texel at the 0.25 zoom floor, so it can neither be lost nor change which
+   texel any other fragment reads. */
+#define TAGPU_EDGE_NUDGE "0.03125"
 #endif

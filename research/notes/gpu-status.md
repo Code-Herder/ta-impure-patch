@@ -29,7 +29,7 @@ moved by the composite too.
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
 | Health bars, order markers, group digits, build cursor, band box, selection rect | G13d | `markown`: 8 call-site redirects + 1 detour; bars re-drawn, the rest captured and replayed. The waypoint star's two sites are wrapped with an identity blend LUT so it composites opaque instead of against the fill key (§2.2) |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e | `tagpu_zoom.c` + the composite |
-| Which cursor sprite the engine picks on hover (move / reclaim / …) | G13i | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
+| Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + 1 more + a 3-site byte patch, all behind `vpwide.on` |
 | **Chat, dialogs, side panel, minimap, top bar** | **— never** | screen-space and correct at 1:1 at any zoom; they come through the composite key by design |
 
@@ -349,6 +349,28 @@ itself — the composite only moves it (§1); what the patch changes is which se
 ---
 
 ## 3. Known limits — what is still wrong, and what closing it needs
+
+### 3.0 Closed since the last pass: the interior cracks at zoom-out
+
+**Reproduced, root-caused and fixed** ([terrain & depth](terrain-depth.html) §7.6, the *fifth*
+mode). Two artefacts, one cause: at zoom 0.25 a quad's far edge can land exactly on a fragment
+centre, and that fragment's `u`/`v` interpolates to exactly `u1`/`v1`, which `GL_NEAREST` reads as
+the first texel of the **next atlas cell** — an unrelated tile for terrain (the blue hairlines
+along tile edges) and the packer's unwritten gutter for a GAF sprite (the black hairline down the
+right of every tree). It is **not** a key leak, which is why the key-tint detector used for 350+
+frames of sweeping was blind to it by construction.
+
+Fixed by a 1-texel replicated border on all four sides of every atlas cell (terrain now on a
+34-texel pitch, 2176×2720; GAF frames advance `w+2`/`h+2`) **plus** `TAGPU_EDGE_NUDGE`, a 1/32
+game-screen-pixel offset in the terrain vertex shader — the border alone leaves the fragment
+reading a repeated row that is out of phase with the minified tile's sampling cadence, which on
+dithered tile art is still a visible line (measured: 1.92× → 1.86×, i.e. no help). Verified flat
+(1.03–1.13× against a 1.92–2.05× baseline) at every camera phase, `ss=1` and `ss=2`, 1024×768 and
+1920×1080, across ten zoom levels; **1× output is bit-identical** to a build without the change.
+
+The border is also what a filtered sampler will need when the atlases stop being `GL_NEAREST`,
+which is why it is on all four sides rather than only the two that close today's bug.
+
 
 Ranked by how much they cost a player.
 
