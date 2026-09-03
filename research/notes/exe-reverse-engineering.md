@@ -457,7 +457,7 @@ two rects with `0x4B6720` (point-in-rect *[INFERRED]*) and records which one it 
 | --- | --- | --- |
 | `0x01` | pointer is inside the rect at `main+0x142BB` — the minimap's click area *[INFERRED]*: it is the rect this arm scales the pointer by the map size against, and it sits immediately below the minimap view RECT at `main+0x142CB` (`gpu-status.md` §2.5) | set `or bl,1` at `0x498DE4`; cleared `and bl,0xFE` at `0x498E8E`. **Disassembly only — not confirmed live** |
 | `0x02` | pointer is inside the **world viewport** rect `main+0x37E27` | cleared `and …,0xFD` at `0x498E26` on the minimap path; set from `PtInRect` at `0x498EAD..0x498EBC`. Live: reads **6** with the pointer anywhere on the world, **0** on the lower side panel |
-| `0x04` | `(bits 0\|1) != 0` — "on one of them" | computed at `0x498ECE..0x498EE6` |
+| `0x04` | set when **bit 0 or bit 1** is — "the pointer is on one of them" | computed at `0x498ECE..0x498EE6` |
 | `0x08` | already documented elsewhere; gates the minimap branch at `0x498DD5`: while it is set the minimap rect is not consulted at all. `ui-markers.md` §4 has it as the drag/band "rect forced on" bit; the two readings are consistent | disassembly |
 
 The minimap arm scales the pointer by the minimap rect (`main+0x142E7..0x142ED`) against the map
