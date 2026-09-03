@@ -6,6 +6,10 @@ The archive holds the two test units the extra-weapons scenarios spawn:
     ARMPW4    a Peewee with Weapon4=EMG (four slots, two real guns)
     ARMLLT10  a Light Laser Tower with Weapon1 and Weapon4..10 = ARM_LIGHTLASER
 
+A second archive, `wpn-badtgt.ufo`, holds one more unit on its own:
+
+    ARMPW4B   the same Peewee whose Weapon4 carries w4_badTargetCategory=ENERGY
+
 Both reuse the stock model and get their COB from `cobclone` (per-weapon copies
 of the primary scripts with their own signal bits), their FBI from the stock one
 plus the extra keys. Nothing here is hand-authored art; it is the smallest
@@ -40,6 +44,7 @@ if GAMEDIR is None:
     sys.exit("extra_weapons_fixture: no totala1.hpi found; set TA_GAMEDIR")
 
 OUT = ROOT / "scenarios" / "content" / "wpn-test.ufo"
+OUT_BAD = ROOT / "scenarios" / "content" / "wpn-badtgt.ufo"
 
 
 def main():
@@ -76,10 +81,33 @@ def main():
                         f"scripts/ARMPW4.cob={tmp / 'ARMPW4.cob'}",
                         f"units/ARMLLT10.fbi={tmp / 'ARMLLT10.fbi'}",
                         f"scripts/ARMLLT10.cob={tmp / 'ARMLLT10.cob'}"], check=True)
+
+        # The bad-target probe, in its own archive so that linking it into an
+        # instance is a separate decision and the type counts the multiplayer
+        # notes quote stay put. Weapon1 and Weapon4 are the *same* EMG and only
+        # the mask differs, so whatever the two slots shoot differently is the
+        # mask and nothing else. ENERGY is a category CORSOLAR carries and
+        # CORRAD does not, which makes those two the readable pair of targets.
+        bad = (pw_fbi.replace("UnitName=ARMPW;", "UnitName=ARMPW4B;", 1)
+                     .replace("Name=Peewee;", "Name=Peewee BadTgt;", 1)
+                     .replace("Description=Infantry Kbot;",
+                              "Description=Two-EMG Kbot, weapon 4 refuses ENERGY;", 1)
+                     .replace("Weapon1=EMG;",
+                              "Weapon1=EMG;\r\n\tWeapon4=EMG;\r\n\tw4_badTargetCategory=ENERGY;", 1))
+        assert "w4_badTargetCategory=ENERGY;" in bad and "UnitName=ARMPW4B;" in bad
+        (tmp / "ARMPW4B.fbi").write_bytes(bad.encode("latin-1"))
+        subprocess.run([sys.executable, str(TOOLS / "cobclone.py"), str(tmp / "armpw.cob"),
+                        str(tmp / "ARMPW4B.cob"), "--weapons", "4"], check=True)
+        subprocess.run([sys.executable, str(TOOLS / "hpipack.py"), str(OUT_BAD),
+                        f"units/ARMPW4B.fbi={tmp / 'ARMPW4B.fbi'}",
+                        f"scripts/ARMPW4B.cob={tmp / 'ARMPW4B.cob'}"], check=True)
     check = hpipack.Archive(OUT)
     assert sorted(check.files) == ["scripts/armllt10.cob", "scripts/armpw4.cob",
                                    "units/armllt10.fbi", "units/armpw4.fbi"]
+    assert sorted(hpipack.Archive(OUT_BAD).files) == ["scripts/armpw4b.cob",
+                                                      "units/armpw4b.fbi"]
     print(f"{OUT}: OK ({OUT.stat().st_size} bytes)")
+    print(f"{OUT_BAD}: OK ({OUT_BAD.stat().st_size} bytes)")
 
 
 if __name__ == "__main__":

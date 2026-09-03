@@ -1,0 +1,27 @@
+{
+  "format": "ta-scenario/1",
+  "description": "extra weapons: w4_badTargetCategory on slot 4. ARMPW4B carries the same EMG in Weapon1 and Weapon4; only Weapon4's mask (ENERGY) differs. The ENERGY target is the NEARER of the two, so a slot that walks past it to the radar is reading the mask. Needs content/wpn-badtgt.ufo linked into the instance.",
+  "seed": 20260902,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "units": [
+    { "id": "pw",     "type": "ARMPW4B",  "owner": 0, "pos": [2300, 1200] },
+    { "id": "energy", "type": "CORSOLAR", "owner": 1, "pos": [2360, 1200] },
+    { "id": "radar",  "type": "CORRAD",   "owner": 1, "pos": [2445, 1200] },
+    { "id": "mine",   "type": "ARMSOLAR", "owner": 0, "pos": [2120, 1330] },
+    { "id": "spare",  "type": "CORSOLAR", "owner": 1, "pos": [4100, 1300] }
+  ],
+
+  "camera": { "center_on": "pw" }
+}

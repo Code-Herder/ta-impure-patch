@@ -131,6 +131,8 @@ function found. Per-frame functions marked ●.
 | `0x4898B0` | clear target for slot `n`, `3` = all | recursion over 0,1,2 | replace |
 | `0x49ABB0`, `0x49ADF0`, `0x49D120`, `0x48A060`, `0x48A0A0`, `0x48A0F0`, `0x48A190`, `0x48A1E0`, `0x40B7B0` | index-based helpers | `unit + 4 + idx*0x1C` (or `+0x10`) | detour the address computation (one `LEA`/`IMUL` each) |
 | `0x4022xx`, `0x4035xx`, `0x4037xx`, `0x4139xx` | attack/guard order state machines (no Ghidra function bodies) | pass an order-held index to `CheckUnitWeapon` | none — index-based |
+| `0x406482` (in `0x403180`–`0x406BF0`), `0x40FE28` (in `0x40F790`–`0x4103A0`) | the same state machines: `slot < 3` re-check of each slot's current target, using `badTargetCategory[idx]` | found 2026-09-02 by scanning for indexed `0x231` reads; **not extended** — assignment still reaches every slot, a side slot merely keeps a target the stock slots would drop |
+| `0x48A46C` (in `0x48A1E0`'s block), `0x439908` | "which of my 3 slots targets unit X"; the `weapon %d - coverage` debug overlay | left at three |
 | `0x4039BE` in `FUN_004038A0` | attack-**ground** order, fire branch | unrolled: ground target on slots 0 and 1 only | splice `ground.order`: do slot 1, then every side slot (snag 9) |
 | `0x46AC51`–`0x46AC83` | HUD panel `FUN_0046A860` | 3 reload bars | optional; leave at 3 |
 | `0x487625`, `0x487A51` | savegame load/save `FUN_00487080` / `FUN_004876C0` | 3 slots × 0x18-byte records, bit-packed state | optional; extra slots start cold after a load |
@@ -217,7 +219,11 @@ Go with (1).
 ### Script and data conventions for authors
 
 - **FBI**: `Weapon4=` … `WeaponN=`, `w4_badTargetCategory=` … (stock uses
-  `wpri_/wsec_/wspe_`; keep those for 1–3).
+  `wpri_/wsec_/wspe_`; keep those for 1–3). That is the whole per-weapon FBI
+  vocabulary — everything else a weapon does (range, reload, D-gun/`commandfire`,
+  stockpile, interceptor, water and air rules) comes from the weapon's own TDF
+  and therefore applies per slot without any extension. Measurements and the
+  three places that still stop at three: §Per-weapon behaviour on slots 4..N.
 - **COB**: `AimWeapon4`, `FireWeapon4`, `QueryWeapon4`, `AimFromWeapon4` …
   (Spring's names; `scriptor` accepts any function name). Slots 1–3 keep
   `AimPrimary` etc. so existing COBs are untouched. `TargetCleared(n)` and
@@ -489,7 +495,12 @@ Everything below was measured on the pristine 3.1 build under wine with `tacli`.
 - `tools/extra_weapons_fixture.py` — builds `scenarios/content/wpn-test.ufo` (the
   archive itself is gitignored like every `*.ufo`; run the script once per checkout)
   (ARMPW4: a Peewee with `Weapon4`; ARMLLT10: an LLT with `Weapon1` + `Weapon4..10`)
-  from the game's own files. Scenarios `wpn-peewee4.json`, `wpn-llt10.json`.
+  from the game's own files, plus a second archive `wpn-badtgt.ufo` holding
+  ARMPW4B alone — the same Peewee whose `Weapon4` carries
+  `w4_badTargetCategory=ENERGY`, so the two identical EMGs differ only by their
+  mask. It is a separate file on purpose: linking it is a decision, and the type
+  counts the multiplayer section quotes stay put when it is not linked.
+  Scenarios `wpn-peewee4.json`, `wpn-llt10.json`, `wpn-badtgt.json`.
 - `tools/ta3domod` — read/edit/write `.3do`. `--stretch PIECE:AXIS:CUT:AMOUNT`
   inserts hull at a cut plane (vertices past it slide out, a child past it moves
   bodily, a child before it is entered with the plane rebased into its frame);
@@ -672,7 +683,90 @@ Two fixes, both in `tagpu_weapons.c`:
    `mount → target` is the whole test, in yaw, to `AIM_TOLERANCE` (1024, 5.6°).
 
 `tacli weapons` reports both: `cob_full` counts aim origins that fell back to
-piece 0 (must stay 0) and `hold_fire` counts shots declined mid-slew.
+piece 0 (must stay 0) and `hold_fire` counts shots declined mid-slew. A steadily
+climbing `hold_fire` on a **mobile** unit is not healthy, though — see the kbot
+defect at the end of the next section.
+
+### Per-weapon behaviour on slots 4..N [MEASURED 2026-09-02]
+
+"Which of the FBI's per-weapon knobs work for weapons past the third" turns out
+to have a short answer, because the FBI carries almost none of them.
+
+**Where per-weapon data lives.** The unit def has exactly *two* three-entry
+per-slot arrays: the weapon pointers at `0x1EE` and the bad-target masks at
+`0x231`. `noChaseCategory` (`0x23D`) is per unit, not per weapon. Everything
+else that makes one weapon behave differently from another — range, reload,
+damage, ballistics, tracking, `commandfire` (the D-gun bit, `1 << 26` of the
+flags at weapon `+0x111`), `stockpile` (`1 << 28`), interceptor (`1 << 30`), the
+water/air rules (`0x10000`/`0x20000`), which of the two aim modes it uses — is in
+the **weapon's own TDF**, and every side slot holds a real `WeaponStruct*`. Those
+behaviours are therefore per weapon by construction rather than by extension, and
+the module's ports read them per slot already (the retaliation port skips a
+command-fire slot exactly as the engine does). The FBI's per-weapon vocabulary is
+just `weaponN` and `wN_badTargetCategory`, and the loader splice reads both for
+4..N.
+
+**Primary/secondary/special.** The slot number itself means something in a
+handful of places, and those are patched: `FirstWeapon` (`0x4897E0`) walks all N;
+`ClearTargetN`/`EnableSlotN` (`0x4898B0`/`0x489800`) treat `n == 3` as "every
+slot" and now really mean every slot, which is the call the D-gun-ground and
+nanolathe paths make (`push 3; call 0x4898B0` at `0x403975` — ProTA's famous
+`push 3` → `push 2` patch site); the attack-ground order reaches all N (snag 9).
+
+**Every indexed read of the mask array**, from an exhaustive scan of `.text` for
+a `0x231` displacement with an index register — five, not one:
+
+| Site | Function | Covered by |
+|---|---|---|
+| `0x406482` | order state machine `0x403180`–`0x406BF0`: re-check this slot's target, drop it if it went bad | **no** — the loop is `slot < 3` |
+| `0x407170` | retaliation `FUN_00406F80` | the `Retaliate` port |
+| `0x408AE6` | periodic acquisition `FUN_004089A0` | the `Acquire` port |
+| `0x40B9FD` | target finder `FUN_0040B7B0` | the `ft.mask` splice |
+| `0x40FE28` | order state machine `0x40F790`–`0x4103A0`, same shape as `0x406482` | **no** |
+
+A companion scan for three-slot loops (`ADD reg,0x1C` with a nearby `CMP 3`)
+finds seven: those two, the two ported ones, `0x439908` (the `"weapon %d -
+coverage"` debug overlay), `0x48A46C` (inside `0x48A1E0`'s block — which of my
+slots is aiming at unit X), and `0x49E137`/`0x49E54C` inside the two functions we
+re-implement wholesale. So the un-extended remainder is three loops, all of them
+target *re-checks* or debug drawing, none of them the assignment path — which is
+why nothing measurable falls out of them (next paragraph but one).
+
+**What a bad-target mask does.** `FUN_0040B7B0` keeps two candidates as it scans:
+the nearest target that is *not* in the slot's mask, and the nearest one that is.
+It returns the second only when the first came up empty [DECOMPILE]. So
+`badTargetCategory` is a preference, not a prohibition — and since that is the
+engine's own code reading our mask through the splice, slots 4..N inherit the
+behaviour rather than imitate it.
+
+Measured with `scenarios/wpn-badtgt.json` and `scenarios/content/wpn-badtgt.ufo`:
+`ARMPW4B` carries the *same* `EMG` in `Weapon1` (stock mask `VTOL`) and in
+`Weapon4` (`w4_badTargetCategory=ENERGY`), so nothing but the mask separates the
+two slots. With a `CORSOLAR` (`Category=CORE ENERGY LEVEL1 …`) at 60 world units
+and a `CORRAD` (no `ENERGY`) at 145, slot 0 locks the **near** solar and slot 3
+holds the **far** radar, sampled three times over 15 s. Kill the radar and slot 3
+takes the solar: the documented fallback, not a leak.
+
+**Explicit orders reach every slot.** An `ARMLLT10` ordered onto a unit puts
+`tgt=<id> spot=0x8000` in all ten slots; ordered onto ground, all ten carry the
+same spot. The two un-extended `< 3` loops above are re-validation, not
+assignment.
+
+**Open defect — a mobile unit's extra weapons acquire but never fire.**
+`ARMPW4`/`ARMPW4B` in a walking fight take targets in slot 3 and launch nothing:
+`fires by slot: 0=12` with `hold_fire` at 190 after 12 s. The gate is ours, not
+the engine's. `barrel_on_target()` reads `AimFrom piece → Query piece` as the
+barrel direction; on a turret that *is* the barrel, but on a kbot whose guns hang
+off the arms it is mostly a lateral offset, so the yaw never comes inside
+`AIM_TOLERANCE` (1024 = 5.6°). A/B on the same scenario with the tolerance
+temporarily raised to 24576: `fires by slot: 0=12 3=6`, `hold_fire=0`. Towers are
+unaffected — their muzzle really is in front of their mount — which is also why
+every earlier extended-fire measurement, both multiplayer games included, came
+from `ARMLLT10`. Fixes to weigh, none taken: gate on the slot's own solved
+heading against the unit heading instead of the two pieces; skip the gate when
+the mount→muzzle vector is too short or too lateral to mean anything; or trust
+the COB's own `aimed` signal for slots whose `Aim*` script returns within the
+tick.
 
 ### Assertions — status
 
@@ -683,7 +777,7 @@ piece 0 (must stay 0) and `hold_fire` counts shots declined mid-slew.
 | 3 | **holds (live)** | armed + stock content through two `shootall` fights and an AI game: `stock_splice` = 8410 stub executions on the stock path, `mismatch` = 0 (the pointer-derived index agreed with the engine's 2-bit field every time), no crash across ~25 000 frames. A roster diff at fixed ticks between the armed and unarmed instances was not done (the two instances are not tick-aligned); the stub equivalence is proven directly instead. |
 | 4 | **holds** | every C-path counter (`start autoaim names retaliate acquire helpers splice ground hold_fire`) stays 0 with stock content; only `loader` moves, once per unit type. |
 | 5 | **holds** | all 20 stolen prologues checked by hand against objdump for IP-relative code (none); every trampoline was executed on the stock path. |
-| 6 | **holds** | ARMLLT10: ten slots (`n=10`), each side slot holds `ARM_LIGHTLASER`, the target, an aim result and state `0x1F/0x13/0x17/0x1B` (`i & 3` in bits 2–3); `fires by slot: 0 3 4 5 6 7 8 9` all launched projectiles; the aim solutions of slots 3–9 equalled the stock slot-0 solution at the same tick (logged side by side during development). ARMPW4: slot 3 launched 60 projectiles in a fight. |
+| 6 | **holds** | ARMLLT10: ten slots (`n=10`), each side slot holds `ARM_LIGHTLASER`, the target, an aim result and state `0x1F/0x13/0x17/0x1B` (`i & 3` in bits 2–3); `fires by slot: 0 3 4 5 6 7 8 9` all launched projectiles; the aim solutions of slots 3–9 equalled the stock slot-0 solution at the same tick (logged side by side during development). ARMPW4: slot 3 launched 60 projectiles in a fight. **Qualified 2026-09-02**: that holds for towers. A *walking* ARMPW4 acquires in slot 3 and launches nothing, held by our own `barrel_on_target()` gate — see §Per-weapon behaviour on slots 4..N. Read this row as proven for turreted units and open for kbots. |
 | 7 | **holds (live)** | two armed instances in one loopback game (`tools/mp_lobby.sh`). The host spawned an `ARMLLT10`, which replicated to the joiner through TA's own create packet, and both peers then reported the *same* `fires by slot: 0=12 3=1 4=12 5=1 6=12 7=1 8=2`. The joiner's launches came only from `0x0D WEAPON_FIRED` — it owns nothing there and its `autoaim` counter is 0 — so `WeapIdx >= 3` resolved to the right side slot every time. `violation` = `mismatch` = 0 on both, no sync error. |
 | 8 | **holds (live)** | armed host + unarmed joiner: the engine's type table drops from 281 to **279** on *both* peers and `ARMLLT10`/`ARMPW4` are gone, while every stock type keeps its CRC (`ARMCOM` `0x9E542B67`, `CORSOLAR` `0x0E040BA1`, identical armed or not). Controls: both-unarmed and both-armed games each keep all 281. Exactly the mismatched types, nothing else. |
 | 9 | **answered (live)**: TA **disables the unit type and starts the game** | not "refuse to start", not "warn only" — the type simply does not exist in that game, so it cannot be built or spawned (`scenario apply` is refused by the engine's own catalogue). The lobby prints nothing: `OUTPUT` is empty on both peers and no message box appears. |
@@ -786,9 +880,23 @@ kept because the two dead ends in it are expensive to re-derive.
    the joiner through TA's own create packet, which is what makes a scripted
    two-instance weapon test possible at all.
 
-### Known gaps (unchanged from the plan)
+### Known gaps
 
-The HUD still shows three reload bars; savegames do not persist slots 4+ (they restart cold); `UNITS_GiveUnit`
-carries three stock bytes. A unit whose *only* weapons are 4+ (no `Weapon1`)
-gets the def's has-weapon flag cleared by the engine after our detour; keep
-`Weapon1` populated.
+From the plan, unchanged: the HUD still shows three reload bars; savegames do not
+persist slots 4+ (they restart cold); `UNITS_GiveUnit` carries three stock bytes.
+A unit whose *only* weapons are 4+ (no `Weapon1`) gets the def's has-weapon flag
+cleared by the engine after our detour; keep `Weapon1` populated.
+
+Found 2026-09-02 while answering "do the per-weapon FBI tags work for slots 4+"
+(all three written up in §Per-weapon behaviour on slots 4..N):
+
+- **Side weapons on a mobile kbot never fire.** They acquire, they aim, and
+  `barrel_on_target()` holds every shot because the mount→muzzle vector is not
+  the barrel direction on a unit whose guns are on its arms. Towers are fine.
+  This is the one gap that is a defect rather than a deliberate omission.
+- Two `slot < 3` loops in the order state machines (`0x406482`, `0x40FE28`) still
+  re-check only the stock slots' targets. Nothing measurable falls out of it —
+  assignment and acquisition both reach every slot — but a side slot will keep a
+  target the stock slots would have dropped.
+- `0x48A46C` ("which of my slots is aiming at unit X") and the `weapon %d -
+  coverage` debug overlay still stop at three.
