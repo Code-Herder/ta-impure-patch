@@ -26,10 +26,11 @@
      any more except tagpu_terrown.c's key fill (TAGPU_GLSL_FOG_TERRAIN).
 
    The tile set is built by LoadMap and never changes after, so the atlas is
-   built ONCE per map — a single R8 texture of fixed 32x32 cells, 64 per row
-   (a GL_TEXTURE_2D_ARRAY is not viable: 5062 tiles on Two Continents against
-   the usual 2048-layer cap). A map change is the TILE_SET pointer or its count
-   moving. */
+   built ONCE per map — a single R8 texture of 32x32 cells on a 33-texel pitch,
+   64 per row (a GL_TEXTURE_2D_ARRAY is not viable: 5062 tiles on Two Continents
+   against the usual 2048-layer cap). The spare texel is a replicated edge guard,
+   not padding — see CELL_PITCH. A map change is the TILE_SET pointer or its
+   count moving. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -50,7 +51,19 @@
 #define TILE_PX      32
 #define TILE_BYTES   0x400
 #define ATLAS_COLS   64
-#define ATLAS_W      (ATLAS_COLS * TILE_PX)     /* 2048                        */
+/* Cells are laid out one texel apart, and that texel is a COPY of the cell's
+   last row/column — it is not padding, it is a guard rail. A fragment centre
+   that lands exactly on a quad's far edge interpolates u (or v) to exactly u1,
+   and GL_NEAREST resolves that to floor(u1*W) = the FIRST texel of the next
+   cell: at zoom 0.25 with ss=2 a tile is 16 FBO px, so a tile boundary lands
+   on a pixel centre whenever the cell's game-space top edge is odd, and every
+   such row sampled the unrelated tile 64 cells later in the atlas — the blue
+   hairlines along tile edges. Duplicating the edge texel makes that sample the
+   right colour instead. Nothing else changes: the quad still spans 32 texels,
+   so sampling at 1:1 is bit-identical to the un-padded atlas. */
+#define CELL_BORDER  1
+#define CELL_PITCH   (TILE_PX + 2 * CELL_BORDER) /* 34                         */
+#define ATLAS_W      (ATLAS_COLS * CELL_PITCH)   /* 2176                       */
 #define MAX_TILES    65536                      /* the index is a u16          */
 #define MAXCELL      32768                      /* visible cells per frame: the
                                                   zoomed-out rect at the 0.25x
@@ -163,7 +176,7 @@ static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
 static GLuint s_prog, s_vao, s_vbo, s_atlasTex;
 static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC,
               s_uDepthScale, s_uEnc;
-static int    s_atlasH, s_atlasN;      /* atlas rows*32, tiles it holds       */
+static int    s_atlasH, s_atlasN;      /* atlas rows*33, tiles it holds       */
 static const void* s_setPtr;           /* the TILE_SET we built from          */
 static int    s_setCount;
 static int    s_maxTex;
@@ -183,7 +196,7 @@ static const char* VS =
     "uniform float uEnc;\n"
     "out vec2 vUV; out vec2 vWorld;\n"
     "void main(){\n"
-    "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC;\n"
+    "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC - vec2(" TAGPU_EDGE_NUDGE ");\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - uEnc/uDepthScale, 0.0, 1.0), 1.0);\n"
     "  vUV = aUV; vWorld = aWorld;\n"
@@ -200,8 +213,10 @@ static const char* FS =
     /* terrain is the bottom layer: it paints the fog's black instead of
        discarding, and it darkens (never hides) in grey — the engine's rule */
     TAGPU_GLSL_FOG_TERRAIN
-    /* NEAREST on an R8 atlas: the texel IS the palette index, and the quad is
-       1:1 with the tile, so no colour key and no filtering to get wrong */
+    /* NEAREST on an R8 atlas: the texel IS the palette index, and the quad
+       spans exactly the tile's 32 texels, so no colour key and no filtering to
+       get wrong. A fragment landing exactly on the far edge reads the cell's
+       replicated guard texel rather than the next cell (CELL_PITCH). */
     "  int pi = int(texture(uAtlas, vUV).r * 255.0 + 0.5);\n"
     TAGPU_GLSL_FOG_SHADE("pi")
     "  frag = vec4(texelFetch(uPal, ivec2(pi, 0), 0).rgb, 1.0);\n"
@@ -270,7 +285,7 @@ static void init_gl(void)
         s_maxTex = (int)m;
     }
     /* GL 3.3 guarantees far more than this; 4096 is the conservative floor we
-       use when the query is unavailable — 128 atlas rows = 8192 tiles */
+       use when the query is unavailable — 124 atlas rows = 7936 tiles */
     if (s_maxTex < ATLAS_W) s_maxTex = 4096;
 
     s_atlasTex = 0; s_setPtr = NULL; s_setCount = 0;
@@ -304,10 +319,10 @@ static int ensure_atlas(const char* ta)
     if (!ptr_ok(pix) || IsBadReadPtr((void*)pix, (SIZE_T)count * TILE_BYTES)) return 0;
 
     rows = (count + ATLAS_COLS - 1) / ATLAS_COLS;
-    h = rows * TILE_PX;
+    h = rows * CELL_PITCH;
     if (h > s_maxTex) {                 /* keep what fits; the rest draw black */
-        rows = s_maxTex / TILE_PX;
-        h = rows * TILE_PX;
+        rows = s_maxTex / CELL_PITCH;
+        h = rows * CELL_PITCH;
         _snprintf(b, sizeof b, "terr: tile set %d exceeds the atlas (%dx%d max) — %d kept",
                   count, ATLAS_W, s_maxTex, rows * ATLAS_COLS);
         flog(b);
@@ -316,11 +331,19 @@ static int ensure_atlas(const char* ta)
     if (!buf) { flog("terr: atlas alloc failed"); return 0; }
     for (i = 0; i < count && i < rows * ATLAS_COLS; i++) {
         const unsigned char* src = pix + (size_t)i * TILE_BYTES;
-        unsigned char* dst = buf + (size_t)(i / ATLAS_COLS) * TILE_PX * ATLAS_W
-                                 + (size_t)(i % ATLAS_COLS) * TILE_PX;
+        unsigned char* cell = buf + (size_t)(i / ATLAS_COLS) * CELL_PITCH * ATLAS_W
+                                  + (size_t)(i % ATLAS_COLS) * CELL_PITCH;
+        unsigned char* dst = cell + (size_t)CELL_BORDER * ATLAS_W + CELL_BORDER;
         int r;
-        for (r = 0; r < TILE_PX; r++)
-            memcpy(dst + (size_t)r * ATLAS_W, src + (size_t)r * TILE_PX, TILE_PX);
+        for (r = 0; r < TILE_PX; r++) {
+            unsigned char* row = dst + (size_t)r * ATLAS_W;
+            memcpy(row, src + (size_t)r * TILE_PX, TILE_PX);
+            row[-1] = row[0];                       /* left  border column */
+            row[TILE_PX] = row[TILE_PX - 1];        /* right border column */
+        }
+        memcpy(cell, dst - CELL_BORDER, CELL_PITCH);                    /* top    */
+        memcpy(cell + (size_t)(CELL_PITCH - 1) * ATLAS_W,               /* bottom */
+               dst + (size_t)(TILE_PX - 1) * ATLAS_W - CELL_BORDER, CELL_PITCH);
     }
     if (!s_atlasTex) {
         glGenTextures(1, &s_atlasTex);
@@ -465,8 +488,12 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
             idx = tmap[(size_t)my * stride + mx];
             if (idx >= s_atlasN) { junk++; continue; }
             cx = idx % ATLAS_COLS; cy = idx / ATLAS_COLS;
-            u0 = (float)(cx * TILE_PX) * iw; u1 = (float)(cx * TILE_PX + TILE_PX) * iw;
-            v0 = (float)(cy * TILE_PX) * ih; v1 = (float)(cy * TILE_PX + TILE_PX) * ih;
+            /* the quad still spans exactly TILE_PX texels; u1 lands ON the
+               guard column, which is a copy of the last real one */
+            u0 = (float)(cx * CELL_PITCH + CELL_BORDER) * iw;
+            u1 = (float)(cx * CELL_PITCH + CELL_BORDER + TILE_PX) * iw;
+            v0 = (float)(cy * CELL_PITCH + CELL_BORDER) * ih;
+            v1 = (float)(cy * CELL_PITCH + CELL_BORDER + TILE_PX) * ih;
             x0 = (float)(vpL + c * 32 - fx);
             y0 = (float)(vpT + r * 32 - fy);
             /* screen and world differ by a pure translation here, so a cell's
