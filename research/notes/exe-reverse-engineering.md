@@ -298,6 +298,115 @@ the eye, and they do not agree:
   negative eye would read before the array. Moot in practice — `terrown` skips the whole
   function — but it is the reason to keep the eye's excursion a property of *our* passes.
 
+## The blend LUT and the marker composites — mapped by us
+
+[MEASURED 2026-09-03, this project — disassembly of the pristine Steam build plus live reads.
+Established while fixing the waypoint star, which rendered teal because the engine's alpha
+composite was blending it against our fill key (`ui-markers.md` §6). Every VA below was read
+off `objdump` in this session unless a row says otherwise.]
+
+**The graphics globals block.** `0x4B6220` is the whole accessor: `mov eax,ds:0x51FBD0; ret`.
+(`0x4B6230` starts with the same load and is **not** a second accessor — it does
+`or byte [eax+0xF1],0x8` and continues into a longer routine gated on `[eax+0xF0]` bit 1. A
+mutator; do not call it for the pointer.) `0x51FBD0` sits past `.data`'s raw end in the BSS
+region, mapped at run time — the same region as `TA_MAINPP 0x511DE8`. Live read: `*0x51FBD0`
+= `0x0051F320`, so the block itself is static and only its contents move.
+
+| Field | What it is |
+| --- | --- |
+| **`[globals+0xC0]`** | **Pointer to the 64 KB blend LUT.** Not a borrowable pointer — the block is *owned* (allocated, freed and refilled; see below). Live read: `0x02C91D68`, i.e. heap. |
+| `[globals+0xF0]` bit 5 | Gates every LUT user: `test cl,0x20` at `0x4B8519`, and `shr cl,5; test cl,1` at `0x4BAADB` / `0x4BA765`. Name *[INFERRED]* — "translucency available". |
+
+**The LUT's shape.** `out = tab[(src << 8) | dst]`, so it is 256 rows of 256, indexed
+source-major. The inner loop is `0x4CBF99..0x4CBFAC`:
+
+```
+edx = [ebp+0x1C]        ; the table, arg 6
+al  = [esi]             ; source texel
+cmp al,[ebp+0x18]       ; the sprite's transparent index
+je  skip                ;   -> leave the destination alone
+ebx = eax; shl ebx,8    ; src << 8
+al  = [edi]             ; DESTINATION texel  <-- this is what made the star teal
+add ebx,edx
+al  = [eax+ebx]         ; tab[(src<<8) + dst]
+[edi] = al
+```
+
+Only **three call sites read the LUT** at all: `0x4CBF2C` from `0x4B8499` and `0x4B8682`, and
+`0x4CC057` from `0x4B86AA`. `0x4B8682`/`0x4B86AA` are inside `0x4B8500`; `0x4B8499` is in a
+neighbouring function that takes its table from its own argument and never reads
+`[globals+0xC0]`.
+
+**The LUT's lifetime — the reason a pointer of ours must never outlive one call.**
+
+| VA | What it does to `[globals+0xC0]` |
+| --- | --- |
+| `0x4BA5C0` | **Allocates it**: `push 0x10000; push 0x50A430` (a tag string); `call 0x4D83B0` (TA's allocator); `mov [ecx+0xC0],eax`. |
+| `0x4BA5F0` | **Frees it**: `mov ecx,[eax+0xC0]; push ecx; call 0x4D85A0` (TA's free). |
+| `0x4BAAD0` | **Overwrites it wholesale**: `mov edi,[eax+0xC0]; mov ecx,0x4000; rep movsd` — 64 KB copied *in*. |
+| `0x4BA750` | Builds its contents (0x510 bytes of stack scratch; same bit-5 gate). |
+
+So the slot is a heap buffer with a lifetime, not a hook point. Leaving our own table's address
+there across a frame would let a reload `rep movsd` 64 KB into *our* buffer — silently undoing
+the fix while leaving the engine's real table stale for every other blend in the session — or
+let the teardown hand a DLL-heap block to TA's static-CRT free. `0x4D83B0` / `0x4D85A0` are
+TA's own malloc/free.
+
+**The composite, and who reaches it.** `AlphaCompsteBuf2OFFScreen 0x4B8500` re-reads
+`[globals+0xC0]` *inside* the call, at `0x4B8665` and `0x4B8691`, which is what makes a swap
+bracketed around the call visible to it. It has **24 call sites**: `0x4399BB`, `0x459319`,
+`0x459353`, `0x4593BA`, `0x4595E9`, `0x4597D3`, `0x46A7AF`, `0x46A807`, `0x46A840`, `0x4736B1`,
+`0x474291`, `0x474CA3`, `0x475080`, `0x4755C6`, `0x475757`, `0x49C0F5`, `0x49C24A`, `0x49C2DC`,
+`0x49C40E`, `0x49C46F`, `0x4B7FFE`, `0x4B81BE`, `0x4B838A`, `0x4B8579`. All 24 accounted for,
+because this survey is the evidence that a bracketed swap cannot be observed by anything else:
+
+| Sites | Where | Inside the capture window? |
+| --- | --- | --- |
+| `0x4399BB` | the target sprite `0x439740` | **yes, always** — this is the one we wrap |
+| `0x4B7FFE` | `CopyGafToContext`'s composite branch, taken when a sub-frame's `+0xB` is non-zero | **yes, but GAF-data-gated** — the route dots; stock `pathicon` frames do not take it |
+| `0x459319`, `0x459353`, `0x4593BA`, `0x4595E9`, `0x4597D3` | the unit row sweep | no — earlier in the frame |
+| `0x4736B1`, `0x474291`, `0x474CA3`, `0x475080`, `0x4755C6`, `0x475757` | the effect-object handlers, reached through `0x471F90`'s indirect `call [edx+8]` at `0x471FBB` (vtable `0x4FD638` slot 8 = `0x475700`) | no — but note **both hooks call `0x471F90` themselves**: hook 8 draws layer 8 *before* opening the window and hook 9 draws layer 9 *after* closing it, so they sit outside it by ordering rather than by address. That ordering is load-bearing; see `tagpu_markown.c`. |
+| `0x49C0F5`, `0x49C24A`, `0x49C2DC`, `0x49C40E`, `0x49C46F` | the projectile pass `0x49BE60`, called at `0x469B22` | no — before hook 8 |
+| `0x46A7AF`, `0x46A807`, `0x46A840` | past `DrawGameScreen`'s `ret` at `0x46A3FD` | no — different function |
+| `0x4B81BE`, `0x4B838A`, `0x4B8579` | inside the `0x4B8xxx` composite family itself (self/sibling recursion) | only as children of a site above |
+
+| VA | What it is |
+| --- | --- |
+| **`0x439740`** | **The order pass's target sprite** — the pulsing star at a move/attack waypoint, and the only alpha-composited marker. `stdcall(ctx, view, node, pos, flag)`, `ret 0x14`. Two direct `E8` callers: `0x439516` (inside the route-dot drawer `0x4394E0`) and `0x439C7D` (the walker `0x439B30`'s bit-3 dispatch). Its address is **also** in `.rdata` 19 times as the `+8` field of the 25-byte order-descriptor records behind `*(u32*)0x512344` — first occurrences `0x4FC4B1`, then `0x4FC754`/`0x4FC76D`/`0x4FC786`/`0x4FC79F` at stride 25. That field is reported unread in this build (the dispatcher loading only `+0`, `+4`, `+0xC`, `+0x10`, `+0x14`, `+0x15`) — *that* half is [FROM REVIEW, not re-derived here]; the 19 records and the stride are measured. If it were ever brought into use, a wrapper on the two `E8` sites would be bypassed silently. |
+| `0x4B7F90` | `CopyGafToContext` — the route dots' blitter, and **usually** a masked copy. But `0x4B7FF7` reads each sub-frame's byte at `+0xB` and `jbe`-skips only when it is zero: non-zero routes into `0x4B8500` at `0x4B7FFE`. So whether the dots blend is a property of the **GAF data**, not of the code. Stock `pathicon` frames do not carry it, which is why they render solid. |
+| `0x4BF8C0` | `DrawTranspRectangle` — named for its hollow centre, **not** for translucency. Clips through `0x4C5E70` and draws edge runs via `0x4BEA20`; it reaches no alpha composite. Corrects a long-standing claim in `ui-markers.md` and `tagpu_markown.h` that its "transparent edges" read the destination. [The store-only inner writer `0x4CC7AB` is FROM REVIEW; independently confirmed on screen — the drag band box renders as a clean white outline instead of washing out to teal the way the star did.] |
+| `0x4C14F0` | `DrawTextCustomFont` (the group digits, drawn inside the same window). Calls `0x4B6220`, `0x4B6750`, `0x4C5E70`, `0x4C5FA0`, `0x4C6AE0`, `0x4CCF60`, `0x4E4760` — it blits through `0x4CCF60` and never touches the LUT, so an identity table cannot affect it. |
+
+### `DrawGameScreen 0x468CF0` — its arguments, and the branch that skips hook 9
+
+Prologue `sub esp,0x214` then four pushes (`ebx`, `ebp`, `esi`, `edi`), so inside the function
+argument 1 is at `[esp+0x228]` — which is the `ebx` the marker block tests. Signature confirmed
+as `(drawUnits, blitScreen)` stdcall.
+
+**`0x469C01 test ebx,ebx / 0x469C03 je 0x469D38` jumps PAST hook 9 at `0x469D2C`.** A
+`drawUnits == 0` frame therefore runs hook 8 and never reaches hook 9 — and the order markers
+are drawn at `0x469BFC`, *before* that branch, so such a frame does reach the sprite. Any
+state a capture opens at hook 8 must be able to survive not being closed.
+
+| Caller | Passes | Which is it |
+| --- | --- | --- |
+| `0x495C76` | `drawUnits=1`, `blitScreen=0` | literal `push 0x1` |
+| `0x495E66` | `1`, `1` | literal |
+| **`0x4962C2`** | **`drawUnits=ebx=0`**, `1` | **TA's movie recorder.** Function starts `0x495E88`, `xor ebx,ebx` at `0x495EA1` and no other write to `ebx` before the call. Strings: `"%s\\MOVIE%03i"` `0x509500`, `"%s\\MOVIE*"` `0x509510`, `"FRAM"` `0x5094F8`. |
+| `0x4969CD` | `1`, `1` | the in-game frame callback `0x496790`, which sets `mov ebx,1` at `0x4967CF` and uses `ebx` as its constant 1 throughout. |
+
+Live counter-check on the played path: hook-8 opens and hook-9 closes were equal across
+~50 000 blocks of a skirmish, so nothing in normal play takes the `drawUnits == 0` route.
+
+### `KeyboardHotkeySampler 0x4C1B80` — why polling it twice is safe
+
+`ui-markers.md` relies on this and it is worth having in the map. The function is a jump table
+(`0x4C1C48`, index bytes at `0x4C1C6C`); the SHIFT entry `0xF9` lands at `0x4C1BB5`, which is
+`push 0x10; call ds:0x4FC350` (`GetAsyncKeyState`) then **`and al,0xfe`** — masking off bit 0,
+the "pressed since last call" bit — before `neg ax; sbb eax,eax; neg eax` normalises to 0/1.
+All nine stubs in the `0x4C1BA1..0x4C1D56` block do the same mask, so nothing in the engine
+reads the consumable bit and an extra poll of our own cannot steal an edge.
+
 ## Hard-coded limits & constants
 
 [VERIFIED unless noted — from `EngineLimits.cpp`/`.h` and `tamem.h`]
