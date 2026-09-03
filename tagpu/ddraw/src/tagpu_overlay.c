@@ -197,7 +197,7 @@ void tagpu_overlay_capture_end(const TAGPU_FRAME* f)
 #define OFF_EYEX      0x1431F      /* int scroll origin X */
 #define OFF_EYEY      0x14323      /* int scroll origin Y */
 #define OFF_LOCALPID  0x2A42       /* char local player slot */
-#define OFF_MOUSE     0x2C76       /* POINT CurtMousePostion (game-space x,y) */
+#define OFF_MOUSE     0x2C76       /* POINT CurtMousePostion — SCREEN x,y (0x498DA0 makes the world point) */
 #define UNIT_STRIDE   0x118
 #define U_STATE       0x110        /* uint UnitStateMask: alive 0x10000000, skip 0x4000 */
 #define U_XPOS        0x6C         /* short world X */

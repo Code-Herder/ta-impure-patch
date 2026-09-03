@@ -281,7 +281,7 @@ Two things follow, and both cost time to learn the hard way:
 | `main+0x14327` / `+0x1432B` | **the scroll target** (`MapXScrollingTo`) the stepper eases the eye toward. Every reference to it in `.text` is inside `0x41C4xx`–`0x41D4xx` — 30 and 28 respectively, and **no drawing code reads it**, which is what makes it camera-local. |
 | `main+0x142F1` bit 1 | set by every camera-module path that moves the eye: the operand appears at `0x41C59A`, `0x41C893`, `0x41C9C7`, `0x41CB62`, `0x41CBD2`, `0x41CDDD`, `0x41D04F`, `0x41D17F`, `0x41D266`, `0x41D314`, `0x41D454` — one per eye writer, immediately before its `0x41C3C0` call — plus minimap/GUI readers in `0x466xxx`. Name *[INFERRED]* ("the camera moved this frame"); what is measured is which sites touch it. |
 | `main+0x14281` bit 3 | the screen fog grid is current — already documented (`terrain-depth.md`: "if `LosType & 8` clear, first rebuild the screen fog grid"). **New here:** the camera stepper clears it at `0x41CB6B` on every frame the eye and target disagree, so a stale target becomes a per-frame grid rebuild. Also cleared at `0x41CB3B`, `0x41C567`, `0x41CE0D`. |
-| `main+0x2C76` / `+0x2C7A` | the engine's mouse position, two **DWORDs** — agrees with `ui-markers.md`. Worth restating because `+0x2C78` looks like the y and is the high half of x; and `main+0x2C74` is an unrelated word (the battleroom lock bit, `cmdline-options.md`). |
+| `main+0x2C76` / `+0x2C7A` | the engine's mouse position, two **DWORDs**, in **SCREEN** space (measured 2026-09-03: an injected pointer at screen (400,300) reads back 400 / 300; `0x498DA0` is what makes the world point). Worth restating because `+0x2C78` looks like the y and is the high half of x; and `main+0x2C74` is an unrelated word (the battleroom lock bit, `cmdline-options.md`). |
 | `main+0x37E1F` / `+0x37E23` | screen width / height — the fields `vpwide` derives the true viewport rect from, and the ones the scroll poll compares against |
 
 ### Two per-cell loops that differ, and it matters
@@ -406,6 +406,179 @@ Live counter-check on the played path: hook-8 opens and hook-9 closes were equal
 the "pressed since last call" bit — before `neg ax; sbb eax,eax; neg eax` normalises to 0/1.
 All nine stubs in the `0x4C1BA1..0x4C1D56` block do the same mask, so nothing in the engine
 reads the consumable bit and an extra poll of our own cannot steal an edge.
+
+## The cursor chain — mapped by us
+
+[MEASURED 2026-09-03, this project — disassembly of the pristine Steam build (`objdump -d -M
+intel`) plus live `tacli peek` reads on a running game. Established while fixing "selecting a
+unit does not give the move cursor" (`field-notes.md`, our patch 2). Every VA below was read
+off `objdump` in this session unless a row says otherwise.]
+
+**The chain, top to bottom.**
+
+| VA | What it is | How established |
+| --- | --- | --- |
+| `0x490B30` | `SetInputMode(mode)` *[INFERRED]*. Stores `mode` at `main+0x391F1` and installs the matching per-event handler into `main+0x391F5`, off a jump table at `0x490C14` (modes 0–7). 11 call sites. **Mode 6 is in-game** — the value a dozen sites elsewhere test for (`0x4289F1`, `0x45053A`, `0x476C75`, `0x476CA5`, `0x476E5B`, `0x478DB6`) | disassembly |
+| `0x499200` | the **mode-6 (in-game) mouse handler**: `rep movsd` six dwords from `main+0x2C76` onto the stack, `call 0x498DA0`, then choose and set the cursor. **No `call` site anywhere**: the 4-byte literal `0x00499200` occurs in the image only as the immediate of the two `mov dword [main+0x391F5],0x499200` stores at `0x490BC5` (mode 6’s arm) and `0x498455` | disassembly + a scan for the literal across all sections |
+| `0x498DA0` | mouse → world point, map cell and hovered feature. One call site, `0x499221` — the one `vpwide` redirects (`gpu-status.md` §2.3b) | disassembly |
+| `0x48CD80` | the unit-under-cursor lookup *[INFERRED]*; its return is stored as a WORD to `main+0x2CBA` at `0x499283`. **Not disassembled** — known only by that call site and by the field's live behaviour | call site + live read |
+| `0x48D220` | `CorretCursor_InGame(orderByte)` — returns the cursor index to show. Two call sites: `0x491D36` and `0x499297`. `ret 4` | name [CORPUS] (TADR, `tools/ta_symbols.txt`); body from disassembly |
+| `0x43E490` | the per-candidate cursor mapper: `(orderByte, candidate, hoveredUnit, &worldPos)` → cursor index, `ret 0x10`. **Exactly one caller, `0x48D3E4`**, and the literal `0x0043E490` appears nowhere in the image — no dispatch table, no indirect call | disassembly + literal scan |
+| `0x4AB400` | `SetUICursor(uiCtx, gafSequence)` — 12 call sites; `0x499200` reaches it at `0x4992C8`, its only one | name [CORPUS]; call count from disassembly |
+
+**What `0x499200` does, and the gate that decides whether a cursor is chosen at all.**
+
+```
+edx  = main                       ; ds:0x511DE8
+copy 6 dwords main+0x2C76 -> stack ; the mouse POINT and four more dwords
+call 0x498DA0(&copy)              ; fills the world point / cell / hovered feature
+cl   = main[0x2CC6]
+if ((cl & 2) && main[0x2CC3] == 0x0E) { call 0x4197D0; done }   ; build placement mode
+if (!(cl & 2) && !(cl & 1)) {                                  ; pointer on NEITHER region
+    if (main[0x2CBE] != 0x13) { main[0x2CBE] = 0x13;
+                                SetUICursor(main+0x519, *(main+0x148CB)); }   ; cursornormal
+    done
+}
+main[0x2CBA] = (WORD)0x48CD80()                       ; the unit under the cursor
+eax = CorretCursor_InGame(main[0x2CC3])               ; the index it wants
+if (eax != main[0x2CBE]) { main[0x2CBE] = eax;
+                           SetUICursor(main+0x519, *(main+0x1487F + eax*4)); }
+```
+
+Two things fall out. The store-if-changed guard at `0x4992A2` is the address TADR's corpus
+names `SuppressShowReclaimCursorAddr` — independent corroboration that `main+0x2CBE` is the
+current cursor index. And `*(main+0x148CB)` is `cursor_ary[0x13]`, which the loader table below
+independently makes `cursornormal`: the off-region default and index 19 agree.
+
+**`0x498DA0` and the mouse-region bits of `main+0x2CC6`.** The function tests the pointer against
+two rects with `0x4B6720` (point-in-rect *[INFERRED]*) and records which one it landed in:
+
+| bit | Meaning | Where |
+| --- | --- | --- |
+| `0x01` | pointer is inside the rect at `main+0x142BB` — the minimap's click area *[INFERRED]*: it is the rect this arm scales the pointer by the map size against, and it sits immediately below the minimap view RECT at `main+0x142CB` (`gpu-status.md` §2.5) | set `or bl,1` at `0x498DE4`; cleared `and bl,0xFE` at `0x498E8E`. **Disassembly only — not confirmed live** |
+| `0x02` | pointer is inside the **world viewport** rect `main+0x37E27` | cleared `and …,0xFD` at `0x498E26` on the minimap path; set from `PtInRect` at `0x498EAD..0x498EBC`. Live: reads **6** with the pointer anywhere on the world, **0** on the lower side panel |
+| `0x04` | `(bits 0\|1) != 0` — "on one of them" | computed at `0x498ECE..0x498EE6` |
+| `0x08` | already documented elsewhere; gates the minimap branch at `0x498DD5`: while it is set the minimap rect is not consulted at all. `ui-markers.md` §4 has it as the drag/band "rect forced on" bit; the two readings are consistent | disassembly |
+
+The minimap arm scales the pointer by the minimap rect (`main+0x142E7..0x142ED`) against the map
+size (`main+0x1422B`/`+0x1422F`); the viewport arm is the `world = eye + clamp(pos, L, R) − L`
+form already documented in `gpu-status.md` §2.3b. The tail converts the world point to a cell
+pair at `main+0x2C8E` (`>> 0x14`) and stores the **hovered feature id** as a WORD at
+`main+0x2CBC` — live: `0xFFFF` over open ground, `87` over a lab wreck.
+
+**`CorretCursor_InGame 0x48D220(orderByte)`.** It gathers candidates, maps each one and keeps
+the lowest index:
+
+- hovered unit: `main+0x2CBA` != 0 → `unit = *(main+0x14357) + id*0x118` (`0x48D242`: `id*8 − id`,
+  then `*5`, then `*8` — 280 = `0x118`, the same unit stride `gpu-status.md` §2.5 records);
+- the local player's selected units: `esi = main + 331*p + 0x1B63` where `p = main[0x2A42]`
+  (`0x48D280..0x48D292`: `p + (33p)*5*2 + 0x1B63`), then walk `[esi+0x67] .. [esi+0x6B]` in
+  `0x118` steps, calling `0x48DDC0` for each entry whose `[unit+0x110]` has bit 4 set. The
+  begin/end pair is the same `PlayerStruct+0x67/+0x6B` `ui-markers.md`'s appendix records for
+  the order-marker walk; bit 4 meaning "selected" is *[INFERRED]* from the use;
+- the hovered unit adds its own candidate through `0x480100`;
+- then `for each candidate: idx = min(idx, 0x43E490(order, cand, hovered, main+0x2CAA))`,
+  starting from `0x13`. **With no candidates at all** it returns `0x0F` when the hovered unit is
+  the player's own and passes four field tests (`+0xFF == player`, `+0x110 & 0x20`,
+  `+0x104 < *0x4FD758`, `+0xFB == 0`), else `0x13`.
+
+**The order → case jump table at `0x43F0A8`.** `0x43E490` dispatches on `orderByte − 1`, `ja
+0x43F098` above 13, so **only order bytes 1..14 have cases**:
+
+| order | case VA | order | case VA |
+| --- | --- | --- | --- |
+| 1 | `0x43E505` | 8 | `0x43E5FA` |
+| 2 | `0x43E8BB` | 9 | `0x43E5DE` |
+| 3 | `0x43E545` | 10 | `0x43F098` (the default) |
+| 4 | `0x43E850` | 11 | `0x43E8AE` |
+| 5 | `0x43E80C` | 12 | `0x43E65C` |
+| 6 | `0x43E7D3` | 13 | `0x43E797` |
+| 7 | `0x43E615` | 14 | `0x43E828` |
+
+`main+0x2CC3` holds the current order byte. Measured live by clicking each order button and
+reading it back: **1** = contextual (no command button pressed), **2** = Move, **3** = Attack,
+**7** = Guard, **8** = Repair, **9** = Patrol, **12** = Reclaim, **13** = Capture, **14** =
+build placement (the `0x0E` that `ui-markers.md` §4 already records as "build mode").
+
+**The Interface Type gate — the bug.** Order 1's case opens with
+
+```
+0043E505  83 BB FA 7E 03 00 01   cmp dword [ebx+0x37EFA], 1     ; Interface Type
+0043E50C  0F 84 F0 05 00 00      je  0x43EB02                   ; right-mouse-orders branch
+```
+
+and `0x43EB02` can only ever return `0x0F` `cursorselect`, `0x11` `cursorred`, `0x12`
+`cursorgrn` or fall through to `0x13` `cursornormal`. The classic branch at `0x43E512` instead
+re-dispatches: `[esp+0x18] = 3` at `0x43E520` and `= 0xC` at `0x43E53B` rewrite the order byte
+and jump back to `0x43E49F`, so the contextual cursor becomes the **attack** and **reclaim**
+cases, with the move case reached through `0x43EDB6`.
+
+Measured on a **stock** instance (nothing armed), commander selected, on `shadow-mix`:
+
+| pointer over | Interface Type 1 | Interface Type 0 |
+| --- | --- | --- |
+| empty ground | `0x13` `cursornormal` | `0x0E` `cursormove` |
+| lab wreck | `0x12` `cursorgrn` | `0x0B` `cursorreclamate` |
+| own building | `0x0F` `cursorselect` | `0x0F` `cursorselect` |
+
+`main+0x37EFA` is the `Interface Type` registry value (already in `resolution.md`), read at
+`0x42F9AF` and clamped to ≤ 1 at `0x42F9CD`. It is **read at eight sites**: `0x42F9F6` and `0x430F08` (the settings
+round-trip), `0x43E505` (this one, cursor only), `0x43F9EF`, and `0x499046` / `0x499162` /
+`0x499352` / `0x499567` (the click handlers, which is where left-vs-right ordering lives). That
+split is the whole licence for our patch: neutering the branch at `0x43E50C` changes which
+sprite is shown and cannot change which button issues an order.
+
+**`cursor_ary` — index → GAF sequence.** Base `main+0x1487F`, entry `idx*4`, matching
+`ui-markers.md`'s `cursor_ary[0x15]` [CORPUS]. The mapping is read out of the loader at
+`0x429C84..0x429E94`, which opens the `cursors` GAF (`0x429700`, handle to `main+0x14903`) and
+then calls `0x4B8D40(handle, name)` once per sequence, storing **the previous call's** result —
+so the name pushed at a site belongs to the offset stored at the *next* one:
+
+| idx | name | idx | name | idx | name |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `cursorattack` ✔ | 8 | `cursorpickup` | 15 | `cursorselect` ✔ |
+| 2 | `cursorairstrike` | 9 | `cursorteleport` | 16 | `cursorfindsite` |
+| 3 | `cursortoofar` | 10 | `cursorrevive` | 17 | `cursorred` |
+| 4 | `cursorcapture` | 11 | `cursorreclamate` ✔ | 18 | `cursorgrn` ✔ |
+| 5 | `cursordefend` ✔ | 12 | `cursorload` | 19 | `cursornormal` ✔ |
+| 6 | `cursorrepair` | 13 | `cursorunload` | 20 | `cursorhourglass` |
+| 7 | `cursorpatrol` ✔ | 14 | `cursormove` ✔ | 21 | `pathicon` |
+
+Index **0** (`main+0x1487F` itself) is written by nothing in that loader and was not chased.
+✔ marks the eight confirmed by behaviour rather than by the loader's instruction order alone —
+seven by driving the game and reading `main+0x2CBE` back, and `cursormove` and
+`cursorreclamate` additionally by reading their sprites out of the GL framebuffer. `pathicon` at
+21 agrees with `ui-markers.md` §3, which already had the route dots at `main+0x148D3`.
+
+**Globals this chain owns.**
+
+| Field | What |
+| --- | --- |
+| `main+0x2CBA` | WORD, unit under the cursor (0 = none). Written at `0x499283` |
+| `main+0x2CBC` | WORD, **feature under the cursor** (`0xFFFF` = none). Written at `0x498F5D` |
+| `main+0x2CBE` | BYTE, **the cursor index currently installed**. Written at `0x49925D` / `0x4992AD` |
+| `main+0x2CC3` | BYTE, current order byte (the jump-table selector above) |
+| `main+0x2CC6` | BYTE, mouse-region flags — bits 0/1/2 above, 3/6 in `ui-markers.md` §4 |
+| `main+0x2CAA` | the world point under the cursor, filled by `0x484B50` from inside `0x498DA0` |
+| `main+0x2C8E` / `+0x2C90` | the map cell pair, `world >> 0x14` |
+| `main+0x391F1` / `+0x391F5` | input mode, and the handler pointer for it |
+| `main+0x14903` | the `cursors` GAF handle |
+| `main+0x2A42` / `+0x2A43` | local player index, and the player's LOS bit (`shl 1, cl` at `0x43EBF4`) |
+
+**Negative results worth the line.**
+
+- **`0x43E490` has one caller and no address literal in the image.** That is what makes a patch
+  there provably cursor-only, and it is the fact the whole fix rests on.
+- **`0x499200` is never called.** Only installed, by mode 6. Anything hunting for "where the
+  cursor is chosen" by following calls will not find it.
+- **Nothing in `.text` reads the displacement `0x391F5`.** All twelve references are stores. How
+  the dispatcher fetches the installed handler was not established.
+- **Interface Type is not one switch with one meaning.** It gates the cursor at exactly one
+  site and ordering at four others, and those are independent — which is why the game can be
+  left on right-mouse orders and still show the classic cursors.
+- **The contextual cursor is the only one the interface type touches.** Order bytes 2, 3, 9, 12
+  … reach their cases without consulting `main+0x37EFA`, so the Move/Attack/Patrol/Reclaim/Guard
+  buttons produced correct cursors at Interface Type 1 before the patch. Measured.
 
 ## Hard-coded limits & constants
 

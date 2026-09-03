@@ -168,8 +168,20 @@ game; the registry is only where TA saves the last one. So:
 
 ## Input details that cost time to learn
 
-- Clicks need `Interface Type=1` (right-mouse orders) — tacli sets it. Select with
-  `click`, order with `click --right`. Classic left-click-order resists posted clicks.
+- Clicks need `Interface Type=1` (right-mouse orders) — tacli sets it, on **every** launch
+  (`apply_prefix_settings`), so there is no instance anywhere that runs TA's own default.
+  Select with `click`, order with `click --right`. Classic left-click-order resists posted
+  clicks, and at `Interface Type=0` a posted **right**-click orders nothing at all (measured
+  2026-09-03: the unit carried on to the earlier left-click target).
+- **`Interface Type=1` is not neutral — it changes what the game does.** TA switches its
+  *contextual* cursor off at type 1: with a unit selected, hovering ground gives `cursornormal`
+  and hovering a wreck gives `cursorgrn`, where stock TA at type 0 gives `cursormove` and
+  `cursorreclamate`. So an instance is **not a baseline for anything cursor- or
+  interface-shaped**, and "stock TA does X" measured on a tacli instance may be measuring the
+  registry. Since G13i the fork patches the cursor half back on at any interface type
+  (`field-notes.md` patch 2); `tacli arm <i> curs.off` before launch restores the engine's own
+  behaviour for an A/B. The explicit order buttons (Move/Attack/Patrol/Reclaim/Guard) were
+  never affected either way.
 - **Ctrl/Shift/Alt combos land** (since phase 1.1): `tacli keys t1 ctrl+d`,
   `shift+2`, `ctrl+shift+a`. The modifier is held 150 ms because TA *polls* it.
   If a combo does nothing, read the diagnostic the shield logs when the hold expires —
@@ -392,6 +404,15 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
   engine UI (menus, placement boxes). **Native GPU-rendered units are invisible here.**
 - `tacli glshot` — the GL framebuffer: what is actually presented, including our
   passes. Use this to judge our renderer.
+- **Cursor and hover state, without a screenshot**: `main+0x2CBE` is the cursor index the
+  engine currently has installed, `+0x2CBA` the unit under the pointer (0 = none), `+0x2CBC`
+  the feature under it (`0xFFFF` = none), `+0x2CC3` the current order byte (1 = contextual,
+  2 Move, 3 Attack, 7 Guard, 8 Repair, 9 Patrol, 12 Reclaim, 13 Capture, 14 build placement)
+  and `+0x2CC6` the mouse-region flags (bit0 minimap, bit1 world viewport, bit2 either). The
+  indices that matter: 1 attack, 5 defend, 7 patrol, 11 reclamate, 14 move, 15 select, 17 red,
+  18 grn, 19 normal — full table in `exe-reverse-engineering.md` §"The cursor chain". Park the
+  pointer with `keys <i> mouse:X,Y`, then peek; that is the whole measurement, and it beats
+  reading sprites out of a capture.
 - `tacli peek <name> '*0x511DE8+0x2C76:4'` — read game memory from inside the
   process (deref with `*`, `+hex` offsets, `:1|2|4|s<N>|x<N>`). The cheap way to
   answer "did that actually change anything?" without a debugger. Grammar:

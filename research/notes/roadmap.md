@@ -56,6 +56,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Health bars, order markers, group digits, build cursor, band box | ● native (G13d, corrected G13h) | `markown`: eight call-site redirects + one detour on `0x46A430`; bars re-drawn, the rest captured out of the engine's own draw and replayed. G13h fixed the capture's publication discipline and gave the waypoint star an identity blend LUT | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5×; **0 overlay dropouts in 840 held-SHIFT frames** (was 13 in 120) and **0 % cyan** on the star (was 17.6 %) |
 | Chat, dialogs, side panel, minimap, top bar | ○ engine 8bpp, through the composite key | — | stays engine-side: screen-space, correct at 1:1 at any zoom |
 | Mouse cursor | ● moved in the composite (G13e) | the cursor is the ONLY engine pixel left inside the viewport, so the composite paints the box around `u` at the box around `s` | full sprite at the pointer at 0.25×/0.5×/1×/2×, in every corner and in the display-only ring |
+| Contextual order cursors | ● restored by patch (G13i) | `tagpu_patches.c`: six NOPs over the `je` at `0x43E50C`, the `Interface Type == 1` branch inside `0x43E490` — whose only caller is `CorretCursor_InGame 0x48D220`, so it is the sprite and nothing else | at Interface Type 1, commander selected: ground 14 `cursormove`, wreck 11 `cursorreclamate`, own unit 15 `cursorselect`, nothing selected 19 `cursornormal`; right-click still orders; sprites read out of the GL framebuffer; unchanged at zoom 1/2/0.5 |
 | Click → world point | ● transformed (G13e) | `tagpu_zoom.c`: one rewrite at the three doors into the engine's own wndproc, plus `fake_GetCursorPos` | at 0.5× the commander selects at its DRAWN position (394,427) and no longer at its 1× one (212,470); the side panel still clicks 1:1 |
 | Minimap view rectangle, scroll rate | ● zoom-aware (G13e) | `0x466B70` ×2 redirected and its rect rescaled by 1/z; `ScrollSpeed` (`main+0x1434D`) driven at base/z | minimap box doubles at 0.5× and quadruples at 0.25×; ScrollSpeed 32 → 64 → 128 → 16 at 2×, and restores |
 | The camera's range at zoom > 1 | ● follows the zoom (G13g) | `tagpu_zoom.c`: the eye clamp `0x41C3C0` replaced by a `leaf_call` detour while zoom > 1, widening `[0, map − W]` by `d = (W/2)(1 − 1/z)`, plus a map clamp on the `GetTPosition` inside `0x498DA0` | measured on Two Continents at 1024×768: (−224,−176) at 2×, (−392,−308) at 8×, (10048,12144) at the far corner, all exact; 1× and 0.5× land on the engine's own (0,0)/(9824,11968) |
@@ -74,6 +75,44 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G13i — selecting a unit gives the move cursor again.** Reported from play: *"when we select a
+unit, the move cursor should appear, instead we get the regular cursor. Similar issue for
+reclaim."*
+
+**It was not the renderer.** A stock instance with nothing armed and one with the full stack
+(`native owndraw terr feat fx sfx mark zoom`) return **identical** cursor indices on every
+probe — ground, own unit, wreck, minimap, side panel, with and without a selection. What
+differs is a registry value: `tacli` writes `Interface Type = 1` (right-mouse orders) into every
+instance because it is the only type that accepts posted clicks, and TA's own default — the key
+absent — is 0.
+
+TA picks the pointer sprite in `0x43E490`, and that function's order-1 case — the *contextual*
+cursor, no command button pressed — opens `cmp dword [main+0x37EFA],1 ; je 0x43EB02`. The
+branch it takes can only ever return `cursorselect`, `cursorred`, `cursorgrn` or `cursornormal`.
+Measured on stock TA with a commander selected: ground **19 `cursornormal`** and wreck **18
+`cursorgrn`** at Interface Type 1, against **14 `cursormove`** and **11 `cursorreclamate`** at
+Interface Type 0.
+
+The fix is six NOPs over that `je`, so the contextual case always takes the classic branch — it
+re-dispatches to the attack (order 3) and reclaim (order 12) cases and reaches move through
+`0x43EDB6`. It is safe to be this blunt because **`0x43E490` has exactly one caller and its
+address appears nowhere in the image as a literal**: the compare governs the sprite and cannot
+reach ordering, which lives at four other readers of `main+0x37EFA` (`0x499046`, `0x499162`,
+`0x499352`, `0x499567`). Verified by right-clicking a move order through after the patch.
+`tagpu_curs.off` opts out, read once at attach like every byte patch.
+
+**What this gate did not close.** The **explicit** order-button cursors (Move, Attack, Patrol,
+Reclaim, Guard) were never affected — their order bytes reach their cases without consulting
+`main+0x37EFA`, and they were measured correct at Interface Type 1 before the patch. Nothing
+here touches `tacli`'s `Interface Type = 1`; ordering stays on the right mouse button, which is
+what every scripted recipe in the repo depends on. Index **0** of `cursor_ary` is written by
+nothing in the loader and was not chased. `0x48CD80`, the unit-under-cursor lookup, is known
+only by its call site and its field's behaviour — not disassembled. And `main+0x2CC6` bit 0
+("pointer is on the minimap") is disassembly only; the live reads confirmed bits 1 and 2.
+
+Full chain, the `cursor_ary` index → GAF table and the globals:
+[exe-reverse-engineering](exe-reverse-engineering.html) §"The cursor chain — mapped by us".
 
 **G13h — the order overlay stopped flickering, and the waypoint star stopped being teal.**
 Both reported from play, both in `markown`, and both older than the gate that shipped them.

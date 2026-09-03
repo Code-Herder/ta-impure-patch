@@ -29,6 +29,7 @@ moved by the composite too.
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
 | Health bars, order markers, group digits, build cursor, band box, selection rect | G13d | `markown`: 8 call-site redirects + 1 detour; bars re-drawn, the rest captured and replayed. The waypoint star's two sites are wrapped with an identity blend LUT so it composites opaque instead of against the fill key (§2.2) |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e | `tagpu_zoom.c` + the composite |
+| Which cursor sprite the engine picks on hover (move / reclaim / …) | G13i | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + 1 more + a 3-site byte patch, all behind `vpwide.on` |
 | **Chat, dialogs, side panel, minimap, top bar** | **— never** | screen-space and correct at 1:1 at any zoom; they come through the composite key by design |
 
@@ -328,6 +329,22 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x1423B` / `+0x1423F` | view size in map cells (the minimap rect's size comes from here) |
 | **`main+0x1434D`** | **`ScrollSpeed`** — sim-neutral (a local camera preference no other machine ever sees), driven at base/z, and its save path is guarded (§2.3) |
 | **`*(0x51FBD0) + 0xC0`** | **the blend LUT pointer. WRITTEN, transiently, and this is the one field we write that is NOT in `main`.** Swapped to an identity table across the target sprite's draw and restored on return, so the star composites as a copy (§2.2). Game thread only, bracketed around one call that always returns, restored only if ours is still installed, with a belt-and-braces restore at hook 8. It must never be left installed across a frame: `0x4BA5C0` allocates that buffer, `0x4BA5F0` frees it and `0x4BAAD0` refills 64 KB through the pointer, so a stale one of ours would be clobbered or cross-heap-freed |
+
+### 2.6 Engine byte patches — no hook, no state (`tagpu_patches.c`)
+
+Not detours and not redirects: bytes rewritten once in `DllMain` through `VirtualProtect`, each
+written only if the site still holds the value we recorded. They own no state and run no code of
+ours, so they are listed here rather than in §2.1–2.5. The table of them with the before/after
+bytes is `field-notes.md` §"Our engine patches".
+
+| VA | What it is | Mechanism |
+|---|---|---|
+| `0x4266A7` | the `jne` that reaches TA's startup DirectX-version warning | `75` → `EB`, so the warning is always skipped |
+| `0x43E50C` | `je 0x43EB02` — the `Interface Type == 1` arm of `0x43E490`'s order-1 (contextual) case, which suppresses `cursormove`, `cursorreclamate` and the rest | `0F 84 F0 05 00 00` → `90` ×6, so the contextual cursor always takes the classic branch. **Cursor only**: `0x43E490` has exactly one caller (`CorretCursor_InGame 0x48D220`) and no address literal in the image, while left-vs-right ordering reads `main+0x37EFA` at four other sites. `tagpu_curs.off` opts out, read once at attach |
+
+Neither writes engine state, so neither appears in §2.5. The engine still draws the cursor
+itself — the composite only moves it (§1); what the patch changes is which sequence out of
+`cursor_ary` (`main+0x1487F + idx*4`) the engine hands to `SetUICursor 0x4AB400`.
 
 ---
 
