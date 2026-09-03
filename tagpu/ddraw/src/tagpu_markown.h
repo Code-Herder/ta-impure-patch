@@ -47,10 +47,18 @@
    LUT IS REPLACED"). Drawing it opaque is then a deliberate choice rather than
    an accident of the key.
 
-   Nothing else in either window reads a destination. `DrawTranspRectangle`
-   `0x4BF8C0` is named for its hollow centre, not for translucency: it is four
-   clipped edge runs that only ever store, so the build cursor and the band box
-   need none of this — they came through the key-fill unharmed all along.
+   `DrawTranspRectangle 0x4BF8C0` is named for its hollow centre, not for
+   translucency: it is clipped edge runs that only ever store, so the build
+   cursor and the band box need none of this — they came through the key-fill
+   unharmed all along.
+
+   The route dots are ALMOST as safe, and the gap is data, not code:
+   `CopyGafToContext 0x4B7F90` is a masked copy, but `0x4B7FF7` reads each
+   sub-frame's byte at `+0xB` and routes a non-zero one into the same
+   `0x4B8500` — outside the bracketed call. Stock `pathicon` frames do not
+   carry it, which is why the dots are solid today; a mod or a different build
+   whose frames do would show the same teal-against-the-key on the dots. Worth
+   knowing rather than asserting away. [BINARY-VERIFIED]
 
    Two capture windows, because fog divides them:
 

@@ -1,4 +1,4 @@
-/* tagpu_markown.c — the four call-site redirects and the capture buffers.
+/* tagpu_markown.c — the eight call-site redirects and the capture buffers.
    See tagpu_markown.h for what this owns and why it is a pointer swap. */
 
 #include <windows.h>
@@ -117,6 +117,7 @@ static const unsigned char BARS_STOLEN[5] = { 0x83, 0xEC, 0x10, 0x53, 0x55 };
 static unsigned char*  g_opaqueTab;      /* 64 KB, built once at init      */
 static unsigned char** g_tabSlot;        /* non-NULL while ours is in      */
 static unsigned char*  g_tabSaved;       /* the engine's own pointer       */
+static char*           g_gfxOk;          /* globals block already validated */
 
 volatile unsigned char g_markown_skipBars = 0;
 
@@ -214,8 +215,17 @@ static void alpha_opaque_on(void)
     if (g_tabSlot || !g_opaqueTab) return;         /* already in, or no table */
     g = *(char**)GFX_GLOBALS_PP;
     if (!ptr_ok(g)) return;
+    /* Validate a globals block ONCE, not once per sprite. This runs per target
+       sprite per marker block, and the block itself runs ~83 times per present,
+       so an IsBadWritePtr here was thousands of SEH-guarded probes per frame
+       asking the same question — and IsBadWritePtr *writes* (it probes with a
+       read-modify-write) into engine memory to answer it. */
+    if (g != g_gfxOk) {
+        if (IsBadReadPtr(g + GFX_ALPHATAB, 4)) return;
+        g_gfxOk = g;
+    }
     slot = (unsigned char**)(g + GFX_ALPHATAB);
-    if (IsBadWritePtr(slot, 4) || !ptr_ok(*slot)) return;  /* not built yet */
+    if (!ptr_ok(*slot)) return;                    /* table not built yet */
     g_tabSaved = *slot;
     *slot = g_opaqueTab;
     g_tabSlot = slot;
@@ -443,6 +453,13 @@ static void __stdcall mark_hook8(void* ctx, int n)
        draw either way — nothing here can give it back — but the next frame
        starts clean instead of corrupting a stack. */
     if (L->active) { L->active = 0; L->ctx = NULL; L->saved = NULL; }
+    /* Belt and braces for the blend LUT. mark_tsprite brackets one call that
+       always returns, so this should never fire — but "always returns" is an
+       assumption about SEH, and if TA or wine ever unwound past the wrapper our
+       pointer would sit in a slot the engine frees and refills. Putting the
+       ENGINE's pointer back is the safe direction (alpha_opaque_off only writes
+       when ours is still the one installed), and one branch a frame is nothing. */
+    if (g_tabSlot) alpha_opaque_off();
 
     /* The post-fog window is per-call and every one of its calls is still ahead
        of us in this frame, so this is where its frame starts. Its "nothing to

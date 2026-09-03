@@ -429,7 +429,7 @@ calls, drawn with fog off, because the engine never darkens the build cursor. La
 draws first, then our bars over it, then layer B — the engine's own order inside the
 block (`0x469BFC` markers, `0x469CB9` bars, and the cursor after fog).
 
-Six call-site redirects and one prologue detour. **No collision with the other passes**:
+Eight call-site redirects and one prologue detour. **No collision with the other passes**:
 the redirects *call* `0x471F90` and `0x4BF8C0`, so whatever `fxown` and `terrown`
 installed on those still runs.
 
@@ -452,17 +452,26 @@ that is a blend against palette 254 — bright cyan — so the star rendered **t
 stock TA renders it olive over grass. Measured in its bounding box: 14 % of its pixels on
 the cyan ramp, against 1 % after the fix.
 
-**The fix: an identity LUT for the length of the capture.** `tab[(s<<8)|d] = s` for every
-pair, installed at hook 8 and restored at hook 9, makes the composite a plain copy, so the
-sprite lands in our buffer as its own palette indices. The pointer is a *global*, so
-unlike the context's pixel base it can safely be restored from a later frame if a window
-is ever abandoned. Inside the window it is the only alpha composite the engine reaches —
-the route dots are a masked `CopyGafToContext 0x4B7F90` (and `fxown`'s detour on that leaf
-only skips while the explosion pass is running, so the dots are untouched), the rects and
-circles are `DrawLine`, the group digits' `DrawTextCustomFont 0x4C14F0` blits through
-`0x4CCF60`, and the health bars are ours. The replay then draws the sprite **opaque**,
-which is a deliberate departure from stock's blend; re-blending it against our own scene
-instead would now be a shader change, not another capture change.
+**The fix: an identity LUT around the drawer.** `tab[(s<<8)|d] = s` for every pair makes
+the composite a plain copy, so the sprite lands in our buffer as its own palette indices.
+The replay then draws it **opaque**, a deliberate departure from stock's blend; re-blending
+it against our own scene instead would now be a shader change, not another capture change.
+
+> **Do NOT install this at hook 8 and restore it at hook 9.** The first revision did, on
+> the reasoning that a *global* can safely be put back a frame late, and that is wrong —
+> see the paragraph below for why the slot cannot hold a pointer of ours across a frame at
+> all. The star is drawn at `0x469BFC`, which is *before* the `0x469C03` drawUnits early
+> exit, so an abandoned frame really does reach the sprite with the swap live.
+
+What else draws in the window cannot reach the LUT, with one data-gated caveat: the rects
+and circles are `DrawLine`, the group digits' `DrawTextCustomFont 0x4C14F0` blits through
+`0x4CCF60`, and the health bars are ours. The route dots go through `CopyGafToContext
+0x4B7F90`, which is *usually* a masked copy — but `0x4B7FF7` reads the sub-frame byte at
+`+0xB` and routes anything non-zero into `AlphaCompsteBuf2OFFScreen 0x4B8500` itself
+[BINARY-VERIFIED]. Stock `pathicon` frames do not carry it, which is why the dots come
+through solid; a mod or a different build whose frames do would reproduce the same
+teal-against-the-key bug on the dots, outside the bracketed call. That is a property of
+the GAF data, not of the code, so it is worth knowing rather than asserting away.
 
 **The swap is bracketed around the drawer's two call sites, not the frame, and that is
 load-bearing.** `[globals+0xC0]` owns a 64 KB heap buffer: `0x4BA5C0` allocates it through
@@ -471,9 +480,13 @@ of 0x4000 dwords) plus `0x4BA750` refill it when `palettes\PALETTE.ALP` loads pe
 [BINARY-VERIFIED] A pointer of ours left there across a frame would therefore be
 overwritten by a table reload — silently un-fixing the star *and* leaving the engine's real
 table stale for every other blend — or handed to TA's free at teardown. `0x439740` has
-exactly two direct callers (`0x439516` in `0x4394E0`, `0x439C7D` in `0x439B30`) and no
-function-pointer table in the path, so wrapping them scopes the swap to a call that always
-returns and no engine alloc/free/reload can observe it.
+exactly two direct `E8` callers (`0x439516` in `0x4394E0`, `0x439C7D` in `0x439B30`), so
+wrapping them scopes the swap to a call that always returns and no engine alloc/free/reload
+can observe it. Its address IS also in a table — 19 times in `.rdata`, as the `+8` field of
+the 25-byte order-descriptor records behind `*(u32*)0x512344` — but **that field is never
+read in this build**: the dispatcher only ever loads `+0`, `+4`, `+0xC`, `+0x10`, `+0x14`
+and `+0x15`. So the two wrappers are the whole path today, and if that slot were ever
+brought into use both would be bypassed silently. [BINARY-VERIFIED]
 
 ### 6.1 Cost, and the one honest gap
 
