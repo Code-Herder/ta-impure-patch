@@ -147,12 +147,32 @@ game; the registry is only where TA saves the last one. So:
   If a combo does nothing, read the diagnostic the shield logs when the hold expires —
   `shield: vk=17 released after 150ms, polls=2 down=2`. `down>0` means the game saw
   your modifier and the binding is the problem, not the input path.
+- **Injected modifiers need the shield ARMED, and that is not optional.** A polled
+  modifier only reaches TA through `fake_GetAsyncKeyState`, and
+  `tagpu_shield_key_state` opens with `if (!tagpu_shield_on()) return FALSE;` — so with
+  `--no-shield` (or after `shield off`) the poll falls through to the **real keyboard**
+  and your injected `down:shift` is invisible. Anything gated on a held modifier is
+  therefore **untestable with the shield off**: the order markers are the case that
+  bites, because `markown` samples the engine's own SHIFT hotkey (`0xF9` →
+  `GetAsyncKeyState(VK_SHIFT)`). Symptom: `mark: prefog=-` and no markers, with the
+  injection reporting `sent: down:shift` perfectly happily. Hand the instance over
+  *after* you have finished measuring, not before.
 - Hold anything across frames with `down:<tok>` / `up:<tok>` — keys, or
   `lbutton`/`rbutton`/`mbutton`. Drag-select is `down:lbutton`, `mouse:x,y`,
   `up:lbutton`.
 - `tacli eye X Y` pins the camera (writes both eye and scroll-target, else the engine
   fights back); `tacli eye <name> --release` frees it. Read the settled value from a
   `roster` call before doing coordinate maths.
+- **A moving unit invalidates `roster`'s `screen=` before your click lands.** A unit
+  with a move order walks between the read and the injected click, and a selection
+  click that misses is silent — the symptom is `native: … 0 sel` in the log and every
+  subsequent order going nowhere. Re-read the roster immediately before clicking, or
+  select first and order second. `grep -a "native: .* sel " tagpu.log` is the cheap
+  confirmation that the selection actually took.
+- **A right-click on water is rejected for a ground unit**, so it queues nothing and
+  draws no order markers — which looks exactly like a broken marker pass. Sample the
+  frame for grass before picking a waypoint (green-dominant, `g > b + 30`) rather than
+  guessing an offset from the unit.
 - Game speed: `keys <name> plus` / `minus` (TA's own feature, up to +10, and negative
   below normal — invaluable for catching fast events or slowing them for capture).
 

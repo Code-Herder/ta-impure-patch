@@ -27,7 +27,7 @@ moved by the composite too.
 | Features (trees, rocks, splats, wreckage) | G13a | `featown`: one detour on the feature leaf |
 | Terrain tiles + the fog overlay | G13b | `terrown`: two detours; the terrain skip path key-fills the viewport |
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
-| Health bars, order markers, group digits, build cursor, band box, selection rect | G13d | `markown`: 6 call-site redirects + 1 detour; bars re-drawn, the rest captured and replayed |
+| Health bars, order markers, group digits, build cursor, band box, selection rect | G13d | `markown`: 8 call-site redirects + 1 detour; bars re-drawn, the rest captured and replayed. The waypoint star's two sites are wrapped with an identity blend LUT so it composites opaque instead of against the fill key (§2.2) |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e | `tagpu_zoom.c` + the composite |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + 1 more + a 3-site byte patch, all behind `vpwide.on` |
 | **Chat, dialogs, side panel, minimap, top bar** | **— never** | screen-space and correct at 1:1 at any zoom; they come through the composite key by design |
@@ -138,8 +138,18 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x469D2C` | `call 0x471F90(ctx,9)` — hook 9, closes window A | call-site redirect |
 | `0x469EC5` | `call 0x4BF8C0` — build-cursor rect (window B) | call-site redirect |
 | `0x469F1E` | `call 0x4BF8C0` — drag band box (window B) | call-site redirect |
+| `0x439516` | `call 0x439740` — target sprite, from the route-dot drawer | call-site redirect; brackets the call with an identity blend LUT |
+| `0x439C7D` | `call 0x439740` — target sprite, from the walker's bit-3 dispatch | call-site redirect, same wrapper |
 | `0x46A430` | `DrawHealthBars` (`ret 0x10`) | prologue detour, 5 stolen — bars are **re-drawn**, not captured |
 | `0x4C1B80` | `KeyboardHotkeySampler(id)` (`ret 4`) | *called by us* — we sample the engine's own SHIFT gate (`0xF9`) rather than reading the key |
+
+**Why the star needs a wrapper at all.** `0x439740` is the only alpha-composited marker: it
+reads the destination pixel through `tab[(src<<8)|dst]`, and inside our viewport the
+destination is the fill key, so it blended the waypoint star with palette 254's bright cyan
+and rendered it teal. Wrapping the two call sites with an identity LUT turns that one
+composite into a copy. The swap is scoped to the **call**, never the frame, because
+`[globals+0xC0]` owns a heap buffer the engine allocates, frees and refills — full
+derivation in `exe-reverse-engineering.md` §"The blend LUT and the marker composites".
 
 ### 2.3 Zoom (`tagpu_zoom.c`, `zoom.on`)
 
@@ -309,6 +319,7 @@ extreme of the range and inside it everywhere else.
 | `main+0x142E7..0x142ED` | minimap rect on screen |
 | `main+0x1423B` / `+0x1423F` | view size in map cells (the minimap rect's size comes from here) |
 | **`main+0x1434D`** | **`ScrollSpeed`** — sim-neutral (a local camera preference no other machine ever sees), driven at base/z, and its save path is guarded (§2.3) |
+| **`*(0x51FBD0) + 0xC0`** | **the blend LUT pointer. WRITTEN, transiently, and this is the one field we write that is NOT in `main`.** Swapped to an identity table across the target sprite's draw and restored on return, so the star composites as a copy (§2.2). Game thread only, bracketed around one call that always returns, restored only if ours is still installed, with a belt-and-braces restore at hook 8. It must never be left installed across a frame: `0x4BA5C0` allocates that buffer, `0x4BA5F0` frees it and `0x4BAAD0` refills 64 KB through the pointer, so a stale one of ours would be clobbered or cross-heap-freed |
 
 ---
 
