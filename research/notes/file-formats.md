@@ -650,17 +650,47 @@ by watching which archives `InitTAHPIAry` (`0x41D4C0`) accepts:
   same session, but those tests ran before the trailer fix and are not conclusive).
   New unit names in a `.ufo` work; that is what the extra-weapons fixtures use.
 
-## 6. `.TNT` / `.PCX` — maps & images  (brief)
+## 6. `.TNT` / `.PCX` — maps & images
 
 - **`.PCX`** — standard ZSoft PCX (8-bpp, RLE), used for logos/loading screens and some UI;
   ordinary PCX decoders work.
-- **`.TNT`** — the map terrain file: a header (map tile dimensions, tileset count, offsets to
-  the tile-graphics block, the tile-index map, height data, minimap, features), a set of
-  **32×32×8-bpp** tile bitmaps, and a 2-D array of tile indices. Our project reads a live
-  `TNTHeaderStruct` via `TNTtoMiniMap` (`vendor/TADR/src/DDraw/MegamapTAStuff.cpp:155-378` —
-  `tnt->tiles`, `tnt->PTRtilegfx`, `tnt->PTRmapdata`). Pairs with the map's `.OTA` (§4).
-  Out of scope for unit rendering; documented here for completeness. [VERIFIED that TADR
-  consumes those TNT fields; CLAIMED for the full on-disk TNT header layout.]
+- **`.TNT`** — the map terrain file. **The on-disk layout is now verified** against all 275
+  stock maps (2026-09-03): every block offset is predicted exactly by the previous block's size
+  and the header's counts, with no slack. Header = **64 bytes, 16 `int32` LE**:
+
+| Off | Field | Notes |
+|---|---|---|
+| +0x00 | `IDversion` | `0x2000` retail (all 275 stock maps), `0x1020` legacy |
+| +0x04 | `Width` | map width in **16-px cells** (= `main+0x14233` at runtime; pixels = `<<4`) |
+| +0x08 | `Height` | map height in 16-px cells |
+| +0x0C | `PTRmapdata` | always `64`: `u16` tile index per **32-px** cell, row-major, stride `Width/2` → `TILE_MAP` |
+| +0x10 | `PTRmapattr` | `= 64 + pad16(mapdata)`: **4 bytes per 16-px cell**, row-major, stride `Width` |
+| +0x14 | `PTRtilegfx` | `= mapattr + Width·Height·4`: `tiles` × **1024 B** 32×32 8-bpp bitmaps → `TILE_SET` |
+| +0x18 | `tiles` | tile count (Two Continents 5062, Painted Desert 7045) |
+| +0x1C | `tileanims` | count of the name table below |
+| +0x20 | `PTRtileanim` | `= tilegfx + tiles·1024`: `tileanims` × **132 B** = `int32` index + NUL-terminated name |
+| +0x24 | `sealevel` | waterline, in height units |
+| +0x28 | `PTRminimap` | `= tileanim + tileanims·132`: `int32 w`, `int32 h`, then `w·h` 8-bpp → `TED_GENERATED_PIC`. Ends the file. 252×252 or 252×256 |
+| +0x2C | `unknown1` | `1` on every stock map |
+| +0x30..0x3C | pad | zero |
+
+  The **`mapattr` record** (4 bytes, per 16-px cell) is the runtime `FeatureStruct`'s file form:
+  **byte 0 = terrain height** (0–255 — *this is THE heightmap*), **bytes 1–2 = `u16` feature
+  index** (`0xFFFF` = none), byte 3 = 0. The feature index resolves through the TNT's **own
+  `tileanim` name table** — the entries are feature names (`Tree1`, `RockMetal2`, `DryRuin10`),
+  not tile animations — and thence to `features/*/*.tdf`, where `filename`/`seqname` give the
+  GAF and `height` gives the tall-vs-flat sort class (terrain-depth.md §3).
+
+  Row order and stride were cross-validated between two independent blocks: correlating tile
+  brightness (`mapdata`) against `height > sealevel` (`mapattr`) scores **−0.484** on Two
+  Continents with these strides vs **−0.018** transposed, and **+0.606** on Gods of War. Maps
+  with `sealevel` 0–1 score 0.000 — every cell is land, so the test is undefined, not failing.
+
+  At runtime the loader `0x483610` turns these blocks into the stores in terrain-depth.md §1.
+  TADR's `TNTHeaderStruct` (`vendor/TADR/src/DDraw/mapParse.h`) names the same 16 fields and is
+  consumed by `TNTtoMiniMap` (`MegamapTAStuff.cpp:155-378`). Pairs with the map's `.OTA` (§4).
+  [VERIFIED — layout and record meanings measured across all 275 stock maps, 2026-09-03;
+  `unknown1` is named, not understood.]
 
 Tools: **TA3D** map loader; **"Annihilator"/"TA Map Editor"**; Spring map converters.
 
