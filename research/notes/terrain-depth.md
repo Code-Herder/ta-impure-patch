@@ -757,6 +757,24 @@ the side panel, the minimap and the top bar are screen-space and stay the engine
 forever: they are correct at 1:1 at any zoom, which is exactly what the key exists to
 let through.
 
+**G13e turned that measurement into a mechanism.** Because the cursor is the *only*
+engine pixel left inside the viewport, the composite can MOVE it: at zoom `z` the
+engine draws its cursor where it thinks the mouse is, which is the unzoomed position
+`u` the input path feeds it ([tagpu_zoom.h](../../tagpu/ddraw/inc/tagpu_zoom.h)), and
+the composite paints the texels of a 128×128 box around `u` at the box around the real
+pointer `s` instead, letting our world cover the box at `u`. No capture, no new call
+site — the composite is already the code that decides, per pixel, whether the viewport
+shows ours or the engine's, so this is one more clause in that decision.
+
+It has to be done there rather than by capturing the draw the way G13d captured the
+markers, because **the cursor is the one thing in the frame that does not go through
+`DrawGameScreen`'s OFFSCREEN.** `0x4C2870` (the engine's show-cursor, called at
+`0x46A3C7` after everything else in the frame) and `0x4C2380` blit it with a **NULL
+context**, and a NULL context makes `0x4B7F90`/`0x4C6B70` build their own default
+offscreen over the primary surface — so swapping a pixel base cannot reach it. That was
+measured, not assumed: a capture window bracketing the widget-tree draw at `0x46A303`
+opens fine and catches **zero** non-key texels.
+
 One known deviation from suppressing `0x4848E0`: the engine used to shade-remap its
 *own* overlays under the grey band, and we no longer do — visible only if a health bar
 were ever drawn on out-of-LOS ground, which the engine does not do.

@@ -14,6 +14,7 @@
 #include "dd.h"
 #include "hook.h"
 #include "tagpu_shield.h"
+#include "tagpu_zoom.h"
 
 #define SHIELD_TRIGGER  "tagpu_shield.on"
 
@@ -192,7 +193,14 @@ BOOL tagpu_shield_key_state(int vk, BOOL async, SHORT* state)
 static LRESULT to_game(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
     if (g_ddraw.wndproc)
-        return CallWindowProcA(g_ddraw.wndproc, hwnd, msg, wparam, lparam);
+    {
+        /* injected input goes through exactly the same transform, or `tacli
+           click` and the human's mouse would disagree about the world */
+        if (tagpu_zoom_drop_mouse(msg, lparam))
+            return 0;
+        return CallWindowProcA(g_ddraw.wndproc, hwnd, msg, wparam,
+                               tagpu_zoom_mouse_lparam(msg, lparam));
+    }
 
     return real_DefWindowProcA(hwnd, msg, wparam, lparam);
 }
@@ -249,15 +257,29 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
     InterlockedExchange((LONG*)&g_ddraw.cursor.y, gy);
 
     UINT msg = WM_MOUSEMOVE;
+    int  vk = 0, down = 0;
 
     switch (code)
     {
-    case TAGPU_M_LDOWN: msg = WM_LBUTTONDOWN; set_key(VK_LBUTTON, TRUE);  break;
-    case TAGPU_M_LUP:   msg = WM_LBUTTONUP;   set_key(VK_LBUTTON, FALSE); break;
-    case TAGPU_M_RDOWN: msg = WM_RBUTTONDOWN; set_key(VK_RBUTTON, TRUE);  break;
-    case TAGPU_M_RUP:   msg = WM_RBUTTONUP;   set_key(VK_RBUTTON, FALSE); break;
-    case TAGPU_M_MDOWN: msg = WM_MBUTTONDOWN; set_key(VK_MBUTTON, TRUE);  break;
-    case TAGPU_M_MUP:   msg = WM_MBUTTONUP;   set_key(VK_MBUTTON, FALSE); break;
+    case TAGPU_M_LDOWN: msg = WM_LBUTTONDOWN; vk = VK_LBUTTON; down = 1; break;
+    case TAGPU_M_LUP:   msg = WM_LBUTTONUP;   vk = VK_LBUTTON;           break;
+    case TAGPU_M_RDOWN: msg = WM_RBUTTONDOWN; vk = VK_RBUTTON; down = 1; break;
+    case TAGPU_M_RUP:   msg = WM_RBUTTONUP;   vk = VK_RBUTTON;           break;
+    case TAGPU_M_MDOWN: msg = WM_MBUTTONDOWN; vk = VK_MBUTTON; down = 1; break;
+    case TAGPU_M_MUP:   msg = WM_MBUTTONUP;   vk = VK_MBUTTON;           break;
+    }
+
+    /* A PRESS in the display-only ring is dropped WHOLE — the virtual key state
+       as well as the message, because the engine polls that too and a press it
+       can see is a press it can act on at its own idea of where the mouse is
+       (tagpu_zoom.h). A RELEASE always clears the key state even when its
+       message is dropped: a virtual button left down is a button held for the
+       rest of the session. The move that carried the pointer there still goes
+       through, so the cursor keeps tracking. */
+    {
+        int drop = vk ? tagpu_zoom_drop_mouse(msg, MAKELPARAM(gx, gy)) : 0;
+        if (vk && !(down && drop)) set_key(vk, down ? TRUE : FALSE);
+        if (drop) return;
     }
 
     WPARAM wparam = 0;

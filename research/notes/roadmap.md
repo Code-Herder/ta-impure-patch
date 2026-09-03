@@ -49,6 +49,9 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Fog overlay | ● native (G13b) | `terrown` detours `0x4848E0` too, replicating only its lazy grid rebuild | 99.06–99.39 % lit-vs-grey agreement with the engine's own overlay |
 | Health bars, order markers, group digits, build cursor, band box | ● native (G13d) | `markown`: six call-site redirects + one detour on `0x46A430`; bars re-drawn, the rest captured out of the engine's own draw and replayed | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5× |
 | Chat, dialogs, side panel, minimap, top bar | ○ engine 8bpp, through the composite key | — | stays engine-side: screen-space, correct at 1:1 at any zoom |
+| Mouse cursor | ● moved in the composite (G13e) | the cursor is the ONLY engine pixel left inside the viewport, so the composite paints the box around `u` at the box around `s` | full sprite at the pointer at 0.25×/0.5×/1×/2×, in every corner and in the display-only ring |
+| Click → world point | ● transformed (G13e) | `tagpu_zoom.c`: one rewrite at the three doors into the engine's own wndproc, plus `fake_GetCursorPos` | at 0.5× the commander selects at its DRAWN position (394,427) and no longer at its 1× one (212,470); the side panel still clicks 1:1 |
+| Minimap view rectangle, scroll rate | ● zoom-aware (G13e) | `0x466B70` ×2 redirected and its rect rescaled by 1/z; `ScrollSpeed` (`main+0x1434D`) driven at base/z | minimap box doubles at 0.5× and quadruples at 0.25×; ScrollSpeed 32 → 64 → 128 → 16 at 2×, and restores |
 
 So the engine's software frame is now **UI only** — inside the viewport it is a flat fill of
 one palette index, the *key*, with nothing on it but the mouse cursor (G13d took the rest). Everything a player looks at
@@ -63,6 +66,37 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G13e — zoom is finished: the click, the cursor, the minimap and the scroll rate.**
+G13d made everything the player *looks* at ours and scaling as one thing; what was left
+was that everything the player *does* was still 1:1, so at any zoom ≠ 1 every click
+landed on the wrong world point and the engine's cursor sat visibly away from the
+pointer. All four halves are now closed, and the whole of it hangs off one small module,
+`tagpu_zoom.c`, which owns the transform `u = (s - c)/z + c` and is the only place that
+knows it.
+
+- **The click.** The transform is applied at the three doors into the engine's own
+  window procedure (`wndproc.c` ×2, the shield's `to_game`) and at `fake_GetCursorPos`
+  — never at the many places that *write* `g_ddraw.cursor`, because cnc-ddraw's
+  PeekMessage rewriter and its wndproc both normalise the same event and a transform at
+  a write site would be applied twice. `g_ddraw.cursor` keeps the TRUE pointer position;
+  only what leaves for the engine is unzoomed. Outside the world viewport it is the
+  identity, so the side panel, minimap and top bar stay 1:1 — verified by clicking their
+  gadgets at 0.5× and 2×.
+- **The cursor** — see [terrain & depth](terrain-depth.html) §7.7. Moved in the
+  composite, not captured: the cursor is the one thing in the frame the G13d capture
+  trick cannot reach, because it is blitted with a NULL context.
+- **The display-only ring, and the honest answer to it.** The engine can only name
+  screen positions inside its own viewport (measured: a click outside does nothing at
+  all). At zoom < 1 the view shows more world than the 1× viewport has room to name, so
+  the outer ring is *display-only* — the same boundary the captured marker layers stop
+  at. There the transform returns the pointer unchanged, which keeps hover, edge scroll
+  and the cursor working exactly as at 1×, and the **button event is dropped whole** —
+  the virtual key state as well as the message, because the engine polls that too.
+  A click in the ring now leaves the selection alone instead of selecting whatever
+  happened to be at the 1× position.
+- **The minimap view rectangle and the scroll rate**, both zoom-aware, both by letting
+  the engine do the work and adjusting the result.
 
 **G13d — the world-space UI markers, and zoom-out fills the frame.** The last engine pixels
 inside the viewport anchored to a *world* position, and therefore the last thing between us

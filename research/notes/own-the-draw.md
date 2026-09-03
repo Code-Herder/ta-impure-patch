@@ -153,6 +153,28 @@ Replay is also where the zoom lives: a captured layer is a screen rect whose wor
 coordinates differ from it by a pure translation, so the quad carries exact per-vertex
 world coordinates and the fragment shader runs the same fog rule as every other pass.
 
+**And the fourth rule, from G13e: you do not always have to OWN it either.** The mouse
+cursor failed all three tests above — it is not bracketed by two call sites we can
+redirect, because it is blitted with a **NULL draw context**, and a NULL context makes
+the engine build its own offscreen over the primary surface. A pixel-base swap cannot
+reach a context the callee makes for itself. That was measured rather than assumed: a
+capture window around the widget-tree draw at `0x46A303` opens on every frame and
+catches **zero** non-key texels.
+
+What made it tractable is a fact G13b and G13d had already established and *measured*:
+inside the viewport the engine's surface is 99.98 % key with nothing on it but the
+cursor. So the composite — the shader that already decides, per pixel, whether the
+viewport shows ours or the engine's — simply reads the engine's texels from a box
+around where the engine put the cursor and paints them where the pointer actually is.
+
+> **A pass that already arbitrates between your pixels and theirs can move theirs.
+> Owning the *decision* can be enough; you do not always need to own the *draw*.**
+
+It rests entirely on the measurement — "the only engine pixel in this box is the
+cursor" — which is exactly the kind of claim this project is willing to make because it
+is checked. It would be wrong the moment something else engine-drawn appeared inside the
+viewport, and that is the invariant to re-measure if it ever does.
+
 ---
 
 ## 1. Builder `0x4586A0` — the two rasteriser call sites

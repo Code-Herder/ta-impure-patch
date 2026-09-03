@@ -23,6 +23,7 @@
 #include "opengl_utils.h"
 #include "tagpu_render3do.h"
 #include "tagpu_r3dcache.h"
+#include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
 
 /* ---- engine layout (binary-verified; wiki unit-3do-bridge / composite-buffer) ---- */
 #define O3_NUMPARTS   0x00     /* u16 piece count                          */
@@ -432,7 +433,7 @@ static void r3d_init(void)
     { GLenum bufs[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
       glDrawBuffers(2, bufs); }
     GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     if (st != GL_FRAMEBUFFER_COMPLETE) {
         char b[64]; _snprintf(b, sizeof b, "render3do: FBO incomplete 0x%x", st);
         rlog(b); s_state = 2; return;
@@ -949,7 +950,7 @@ int tagpu_render3do(const TAGPU_FRAME* f, const char* unit, const char* obj3do,
     glUseProgram(0);
     x_glDisable(GL_DEPTH_TEST);
     x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);            /* GL default back */
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
 
     if (dump_pair) {
         save_pgm("tagpu_ours.pgm", s_pixels, W, H);

@@ -521,26 +521,81 @@ def place_window(inst: "Instance", display: str):
 
     if not clashes(x, y):
         return win
+    # Walk the same on-screen grid tile_for lays out, and settle for an overlap
+    # rather than stepping off the desktop — see tile_for on why off-screen is
+    # never an option.
+    screen = screen_size(display)
+    cells = max(1, screen[0] // (w + 40)) * max(1, screen[1] // (h + 80))
     nx, ny = x, y
-    for step in range(1, 16):
-        nx, ny = x + step * (w + 40), y
-        if not clashes(nx, ny):
+    for cell in range(cells):
+        cand = tile_for(cell, (w, h), screen=screen)
+        if not clashes(*cand):
+            nx, ny = cand
             break
-        nx, ny = x + ((step - 1) % 3) * (w + 40), y + ((step - 1) // 3 + 1) * (h + 80)
-        if not clashes(nx, ny):
-            break
+    else:
+        return win        # every cell taken: leave it overlapping where it is
     run(["xdotool", "windowmove", str(wid), str(nx), str(ny)],
         env={**os.environ, "DISPLAY": display})
     time.sleep(0.3)
     return inst.window() or (wid, nx, ny, w, h)
 
 
-def tile_for(index: int, res, screen=(3840, 2160), origin=(0, 0)):
-    """Lay instances out in a grid so parallel windows do not stack."""
+_SCREEN_SIZE: dict = {}
+
+
+def screen_size(display: "str | None" = None) -> tuple:
+    """Real desktop dimensions, read once per display.
+
+    Reading geometry is a read, which the desktop-is-the-user's rule allows;
+    we never run xrandr against the live session. Falls back to 3840x2160 only
+    if xdpyinfo cannot be reached.
+    """
+    d = display or default_display()
+    if d not in _SCREEN_SIZE:
+        size = None
+        try:
+            txt = subprocess.run(["xdpyinfo"], env={**os.environ, "DISPLAY": d},
+                                 capture_output=True, text=True, timeout=5).stdout
+            m = re.search(r"dimensions:\s+(\d+)x(\d+)", txt)
+            if m:
+                size = (int(m.group(1)), int(m.group(2)))
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        _SCREEN_SIZE[d] = size or (3840, 2160)
+    return _SCREEN_SIZE[d]
+
+
+def tile_for(index: int, res, screen=None, origin=(0, 0)):
+    """Lay instances out in a grid so parallel windows do not stack.
+
+    Never places a window off the visible desktop. That is not cosmetic: OpenGL
+    leaves glReadPixels on the default framebuffer undefined outside the visible
+    region, so an off-screen window used to hand back a mangled `glshot` with no
+    error anywhere. When the grid runs out of cells the layout WRAPS and windows
+    overlap — an overlapped window still captures correctly, an off-screen one
+    did not.
+    """
     w, h = res
-    cols = max(1, screen[0] // (w + 40))
-    col, row = index % cols, index // cols
-    return (origin[0] + col * (w + 40), origin[1] + row * (h + 80))
+    if screen is None:
+        screen = screen_size()
+    pitch_x, pitch_y = w + 40, h + 80          # margins cover the WM decoration
+    cols = max(1, screen[0] // pitch_x)
+    rows = max(1, screen[1] // pitch_y)
+    cell = index % (cols * rows)
+    x = origin[0] + (cell % cols) * pitch_x
+    y = origin[1] + (cell // cols) * pitch_y
+    # Bound even when a single cell does not fit (window bigger than the screen,
+    # or an origin that pushes the last cell over the edge).
+    return (max(0, min(x, max(0, screen[0] - w))),
+            max(0, min(y, max(0, screen[1] - h))))
+
+
+def tile_is_onscreen(tile, res, screen=None) -> bool:
+    """Is this recorded tile still fully on the desktop it will open on?"""
+    if screen is None:
+        screen = screen_size()
+    return (0 <= tile[0] and 0 <= tile[1]
+            and tile[0] + res[0] <= screen[0] and tile[1] + res[1] <= screen[1])
 
 
 # --------------------------------------------------------------------------- commands
@@ -564,7 +619,8 @@ def _create(inst: Instance, args) -> dict:
     # `launch <new-name>` reaches here with res unset (its --res defaults to None so
     # that relaunching an existing instance keeps the recorded resolution).
     res = tuple(args.res or DEFAULT_RES)
-    tile = tile_for(index, res)
+    display = args.display or default_display()
+    tile = tile_for(index, res, screen=screen_size(display))
     shield = args.shield is not False
     clone_prefix(inst)
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
@@ -578,7 +634,7 @@ def _create(inst: Instance, args) -> dict:
         "sound": bool(args.sound),
         "intro": bool(args.intro),
         "shield": shield,
-        "display": args.display or default_display(),
+        "display": display,
         "gamedir": str(inst.gamedir),
         "prefix": str(inst.prefix),
     }
@@ -758,9 +814,20 @@ def _launch(args) -> dict:
     meta = inst.meta()
     if inst.running():
         return dict(meta, already_running=True, pid=inst.pid())
+    # The instance's OWN display, not this shell's — a second X server or an
+    # Xvfb is a different size, and measuring the wrong one puts the window
+    # exactly where this is meant to stop it going.
+    screen = screen_size(meta.get("display"))
     if args.res:
         meta["res"] = list(args.res)
-        meta["tile"] = list(tile_for(meta.get("slot", 0), tuple(args.res)))
+        meta["tile"] = list(tile_for(meta.get("slot", 0), tuple(args.res), screen=screen))
+        inst.save_meta(meta)
+        write_ddraw_ini(inst, meta["tile"])
+    # Self-heal a tile recorded against a different (or wrongly assumed) desktop:
+    # an off-screen window is a silently broken `glshot`, so never open one there.
+    res = tuple(meta.get("res") or DEFAULT_RES)
+    if not tile_is_onscreen(tuple(meta.get("tile") or (0, 0)), res, screen=screen):
+        meta["tile"] = list(tile_for(meta.get("slot", 0), res, screen=screen))
         inst.save_meta(meta)
         write_ddraw_ini(inst, meta["tile"])
     if args.sound is not None:

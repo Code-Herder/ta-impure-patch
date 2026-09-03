@@ -18,6 +18,7 @@
 #include "tagpu_featown.h"
 #include "tagpu_terrown.h"
 #include "tagpu_markown.h"
+#include "tagpu_zoom.h"
 #include "tagpu_weapons.h"
 #include "utils.h"
 #include "versionhelpers.h"
@@ -105,6 +106,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            above (the redirects CALL 0x471F90 and 0x4BF8C0, so whatever fxown
            installed on them still runs). */
         tagpu_markown_init();
+
+        /* zoom: the minimap's view rectangle, computed from the 1x view and so a
+           lie at any other (tagpu_zoom.h). Inert at zoom 1. */
+        tagpu_zoom_init();
 
         /* tagpu: 1..N weapons per unit — the first module that changes the
            simulation, in its own file behind its own gate. No-op unless

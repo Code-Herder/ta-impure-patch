@@ -29,11 +29,16 @@
 #include "tagpu_cat.h"
 #include "tagpu_scenario.h"
 #include "tagpu_weapons.h"
+#include "tagpu_zoom.h"
 
-/* GL entry point the fork does not already expose — load once ourselves. */
+/* GL entry points the fork does not already expose — load once ourselves. */
 typedef void (APIENTRY *PFN_READPIXELS)(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,void*);
+typedef void (APIENTRY *PFN_BLITFB)(GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLbitfield,GLenum);
+typedef void (APIENTRY *PFN_READBUFFER)(GLenum);
 
 static PFN_READPIXELS  x_glReadPixels;
+static PFN_BLITFB      x_glBlitFramebuffer;
+static PFN_READBUFFER  x_glReadBuffer;
 
 static int   s_state = 0;   /* 0=unloaded 1=ready (reset on GL context change) */
 
@@ -57,34 +62,130 @@ static void init_overlay(void)
 {
     x_glReadPixels = (PFN_READPIXELS)getgl("glReadPixels");
     if (!x_glReadPixels) olog("tagpu: glReadPixels missing - GL capture disabled");
+    x_glBlitFramebuffer = (PFN_BLITFB)getgl("glBlitFramebuffer");
+    x_glReadBuffer = (PFN_READBUFFER)getgl("glReadBuffer");
     s_state = 1;
     olog("tagpu: overlay ready (built into fork)");
 }
 
-/* Capture the composited GL framebuffer (game + our overlay) to a PPM next to the exe.
-   This is the review path for anything drawn in GL — the cnc-ddraw surface screenshot
-   only sees the 8bpp game surface, which predates our overlay. */
-void tagpu_overlay_capture(const TAGPU_FRAME* f)
+/* ---- glshot: capture the composited frame (game + our overlay) to a PPM -------
+   The read target is an FBO WE OWN, never the window's back buffer.  glReadPixels
+   on the default framebuffer is only defined for pixels that pass the ownership
+   test, so a window placed off the desktop or covered by another window reads back
+   garbage — which is exactly what every mangled glshot was.  Rendering the frame
+   into our own colour attachment removes the window from the equation entirely:
+   the capture is correct whether the window is off-screen, obscured, or the
+   session is locked.
+
+   The frame still has to reach the screen, so capture_end() blits the FBO to the
+   default framebuffer before returning; SwapBuffers then presents as usual. */
+
+static GLuint s_capFbo, s_capTex;
+static int    s_capW, s_capH;      /* size of the current attachment  */
+static int    s_capArmed;          /* this frame renders into s_capFbo */
+
+unsigned int tagpu_overlay_target_fbo(void)
 {
-    if (s_state != 1 || !x_glReadPixels || !f) return;
-    int w = f->win_width, h = f->win_height;
-    if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return;
+    return s_capArmed ? s_capFbo : 0u;
+}
+
+/* Bind our own colour target for this frame. Returns 1 when armed. */
+int tagpu_overlay_capture_begin(int w, int h)
+{
+    if (s_state != 1 || !x_glReadPixels) return 0;
+    if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return 0;
+    if (!glGenFramebuffers || !glBindFramebuffer || !glFramebufferTexture2D ||
+        !glCheckFramebufferStatus || !glDrawBuffers)
+        return 0;
+
+    if (!s_capFbo) glGenFramebuffers(1, &s_capFbo);
+    if (!s_capTex) glGenTextures(1, &s_capTex);
+    if (!s_capFbo || !s_capTex) return 0;
+
+    if (w != s_capW || h != s_capH) {
+        glBindTexture(GL_TEXTURE_2D, s_capTex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, s_capFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_capTex, 0);
+        {
+            GLenum bufs[1] = { GL_COLOR_ATTACHMENT0 };
+            glDrawBuffers(1, bufs);
+        }
+        s_capW = w; s_capH = h;
+    } else {
+        glBindFramebuffer(GL_FRAMEBUFFER, s_capFbo);
+    }
+
+    /* Checked on EVERY arm, not just after a resize: this runs before the
+       context-change detection in tagpu_overlay_draw, so on the frame a new GL
+       context appears our ids are already dead and binding one silently sends
+       the whole frame nowhere. An incomplete target refuses the capture, which
+       leaves the trigger file in place for the next frame — by which time the
+       reset below has run and the ids are rebuilt. */
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        olog("tagpu: glshot capture FBO incomplete - frame left to the window");
+        s_capW = s_capH = 0;
+        return 0;
+    }
+
+    glClear(GL_COLOR_BUFFER_BIT);
+    s_capArmed = 1;
+    return 1;
+}
+
+/* The GL context went away and took every id with it (see the context-change
+   block in tagpu_overlay_draw). Forget ours rather than binding a dead one. */
+void tagpu_overlay_glreset(void)
+{
+    s_capFbo = 0; s_capTex = 0;
+    s_capW = 0; s_capH = 0;
+    s_capArmed = 0;
+}
+
+/* Read the armed FBO out to tagpu_gl.ppm, then blit it to the window. */
+void tagpu_overlay_capture_end(const TAGPU_FRAME* f)
+{
+    if (!s_capArmed) return;
+    s_capArmed = 0;               /* cleared first: every path below must unarm */
+
+    int w = s_capW, h = s_capH;
     /* mode changes can report an off-by-one drawable (e.g. 2161) — an
        out-of-bounds read makes glReadPixels fail wholesale (all black) */
-    w &= ~3; h &= ~7;
-    unsigned char* buf = (unsigned char*)malloc((size_t)w * h * 3);
-    if (!buf) return;
-    x_glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, buf);
-    FILE* fp = fopen("tagpu_gl.ppm", "wb");
-    if (fp) {
-        fprintf(fp, "P6\n%d %d\n255\n", w, h);
-        /* glReadPixels is bottom-up; write rows top-down for a normal image */
-        for (int y = h - 1; y >= 0; --y)
-            fwrite(buf + (size_t)y * w * 3, 1, (size_t)w * 3, fp);
-        fclose(fp);
-        olog("tagpu: GL framebuffer captured to tagpu_gl.ppm");
+    int rw = w & ~3, rh = h & ~7;
+    unsigned char* buf = (rw > 0 && rh > 0)
+        ? (unsigned char*)malloc((size_t)rw * rh * 3) : NULL;
+    if (buf) {
+        if (x_glReadBuffer) x_glReadBuffer(GL_COLOR_ATTACHMENT0);
+        x_glReadPixels(0, 0, rw, rh, GL_RGB, GL_UNSIGNED_BYTE, buf);
+        FILE* fp = fopen("tagpu_gl.ppm", "wb");
+        if (fp) {
+            fprintf(fp, "P6\n%d %d\n255\n", rw, rh);
+            /* glReadPixels is bottom-up; write rows top-down for a normal image */
+            for (int y = rh - 1; y >= 0; --y)
+                fwrite(buf + (size_t)y * rw * 3, 1, (size_t)rw * 3, fp);
+            fclose(fp);
+            olog("tagpu: GL framebuffer captured to tagpu_gl.ppm");
+        }
+        free(buf);
     }
-    free(buf);
+
+    /* Hand the frame to the window: without this the back buffer holds nothing
+       this frame and the swap presents garbage. */
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (x_glBlitFramebuffer) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_capFbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        if (x_glReadBuffer) x_glReadBuffer(GL_COLOR_ATTACHMENT0);
+        x_glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    } else {
+        olog("tagpu: glBlitFramebuffer missing - one frame not presented");
+    }
+    (void)f;
 }
 
 /* ---- G2: read live engine state (unit array, eye, local player, mouse) ----
@@ -445,6 +546,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
             if (s_ctx) {
                 s_state = 0;
                 s_wb_state = 0;
+                tagpu_overlay_glreset();
                 tagpu_native_glreset();
                 tagpu_scaffold_glreset();
                 tagpu_r3d_glreset();
@@ -465,9 +567,14 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_featown_flush(f->frame_counter);
     tagpu_terrown_flush(f->frame_counter);
     tagpu_markown_flush(f->frame_counter);
-    if (GetFileAttributesA("tagpu_overlay.off")!=INVALID_FILE_ATTRIBUTES) { writeback_paint(f); return; }
+    /* On EVERY path out of here, including these two: a frame that drew nothing
+       zoomed must take the input transform back to 1:1, or `tagpu_overlay.off`
+       (or a GL context change) would leave it bending clicks against the last
+       viewport it saw — menu clicks included (tagpu_zoom.h). */
+    if (GetFileAttributesA("tagpu_overlay.off")!=INVALID_FILE_ATTRIBUTES)
+        { tagpu_zoom_frame_end(); writeback_paint(f); return; }
     if (s_state==0) init_overlay();
-    if (s_state!=1) { writeback_paint(f); return; }
+    if (s_state!=1) { tagpu_zoom_frame_end(); writeback_paint(f); return; }
 
     /* live-state logs tacli depends on (roster, units:, mouse:) + the 3DO probe */
     log_units(f);
@@ -482,6 +589,11 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     /* G12b: native unit pass (tagpu_native.on) — needs this frame's scaffold */
     tagpu_native_frame(f);
     oerr("native");
+
+    /* If the native pass did not publish a view this frame, nothing zoomed was
+       drawn, so the input path goes back to 1:1 (tagpu_zoom.h). Every early
+       return above does the same. */
+    tagpu_zoom_frame_end();
 
     /* G6/Phase B write-back LAST: its FBO pass clobbers the viewport and FBO
        binding (it restores binding 0), which is safe here — nothing after us
