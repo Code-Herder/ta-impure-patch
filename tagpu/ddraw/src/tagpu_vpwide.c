@@ -95,11 +95,15 @@ static int  s_verified;         /* the rect matched what 0x497F40 builds     */
 static int  s_saidUnverified;   /* the diagnostic is one-shot                */
 static int  s_wide;             /* we are currently writing the rect         */
 
-/* Published for the message thread's ring test. Five aligned 32-bit slots, the
-   same discipline tagpu_zoom uses: a reader can at worst see the previous
-   frame's rect, which costs one click's ring decision a frame of lag and is
-   not worth a lock on the input path. `s_pubLive` is set last and cleared
-   first, so "live" never advertises a rect that was not written. */
+/* Published for the two readers on other threads: the message thread's ring
+   test and markown's capture window on the game thread. Five aligned 32-bit
+   slots, the same discipline tagpu_zoom uses. `s_pubLive` is stored last and
+   cleared first, and x86 does not reorder stores with stores or loads with
+   loads, so "live" never advertises a rect that was not written. The values
+   themselves can still change under a reader mid-read while live stays set —
+   only when the zoom LEVEL changes, and the cost is one frame's ring decision
+   or one frame's capture rect taken from a mixed pair. Not worth a lock on the
+   input path; a steady zoom writes nothing at all. */
 static volatile LONG s_pubL, s_pubT, s_pubW, s_pubH, s_pubLive;
 
 /* ---- the clip guard -------------------------------------------------------
@@ -234,9 +238,12 @@ void tagpu_vpwide_true_rect(const char* ta, int* L, int* T, int* W, int* H)
 
 int tagpu_vpwide_addressable(int* L, int* T, int* W, int* H)
 {
+    int l, t, w, h;
     if (!s_pubLive) return 0;
-    *L = (int)s_pubL; *T = (int)s_pubT; *W = (int)s_pubW; *H = (int)s_pubH;
-    return *W > 0 && *H > 0;
+    l = (int)s_pubL; t = (int)s_pubT; w = (int)s_pubW; h = (int)s_pubH;
+    if (w <= 0 || h <= 0) return 0;      /* the outputs are left alone */
+    *L = l; *T = t; *W = w; *H = h;
+    return 1;
 }
 
 /* `s_wide` is what the game thread's 0x498DA0 stub reads to decide whether the
