@@ -10,7 +10,7 @@ tools/ta3do render armpw -o renders/armpw --sheet
 reads `totala*.hpi` in place, parses `objects3d/ARMPW.3do`, resolves its GAF textures through
 `PALETTE.PAL` into one atlas, writes `armpw.glb`, then drives headless Chrome over three.js to
 screenshot the model from **front, side, top, back and 3/4** — one PNG per view, plus a contact
-sheet. Tests: `python3 tools/test_ta3do.py` (60, offline, no game files).
+sheet. Tests: `python3 tools/test_ta3do.py` (76, offline, no game files).
 
 With `--undither` the textures go through the [unditherer](undither.md) first, one GAF frame at
 a time, and the model comes out in true colour instead of TA's 256; `ta3do compare` puts the two
@@ -95,6 +95,30 @@ The undithered export is a separate file — `armpw-undithered.glb`, `armpw-undi
 the directory. The page draws **one camera into two scissored halves**, so the only difference
 between left and right is the texture pipeline; drag orbits both together, and the two atlases
 sit underneath at 1:1. `--shots` also screenshots the pair for each standard view.
+
+## Every unit at once
+
+```
+tools/ta3do export-units --keep-flares --undither --suffix _orig -o <dir>
+```
+
+writes one `.glb` per unit into a folder per side — `<dir>/Arm/flash_orig.glb`,
+`<dir>/Core/warrior_orig.glb` — and takes the file name from the FBI's own **`Name`**, the
+short name players see: `Flash`, `Stumpy`, `Big Bertha` → `big_bertha`. That field is
+**unique within a side across all 278 stock units** (137 ARM, 141 CORE, no collisions and no
+blanks), which is what makes it usable as a file name; the unit's archive id, its `Objectname`
+and its side ride along in `asset.extras` (`unit`, `objectName`, `side`, `displayName`) so a
+file is always traceable back. `--sides` picks the sides, `--flares-only` narrows it to the
+78 units that have a muzzle flash. [VERIFIED — the collision scan and the run]
+
+**One undither pass for the whole roster, not one per unit.** The 278 units make **5853**
+texture references to just **454 distinct GAF frames**, and the unditherer sees each frame on
+its own, so a frame restored for one unit *is* the frame every other unit naming it would have
+got. `export-units` therefore collects the union first and restores it in a single call: one
+CNN load instead of 278, 454 network runs instead of 5853. The whole export takes **11 s** and
+writes 28 MB. [VERIFIED — the atlas PNG embedded in the batch's `flash_orig.glb` is
+byte-identical (sha256 `79f054696bde…`) to the one from a lone `ta3do export armflash
+--keep-flares --undither`, same triangle count, same buffer length]
 
 ## Decisions, and what backs them
 

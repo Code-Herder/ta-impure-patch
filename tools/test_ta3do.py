@@ -662,6 +662,83 @@ class TestPieceVisibility(unittest.TestCase):
                          (frozenset(), frozenset()))
 
 
+# --------------------------------------------------------------------------- roster
+
+
+def make_fbi(unit, side, name, obj=None):
+    """A unit's FBI as the archives write one: uppercase ids, one `key=value;` a line."""
+    return ("[UNITINFO]\n\t{\n"
+            f"\tUnitName={unit.upper()};\n"
+            f"\tSide={side};\n"
+            f"\tObjectname={(obj or unit).upper()};\n"
+            f"\tName={name};\n"
+            "\tDescription=Fast Assault Tank;\n"
+            "\tBuildCostMetal=106;\n\t}\n")
+
+
+class TestUnitRoster(unittest.TestCase):
+    """Which units a batch export covers, and what each file is called."""
+
+    class Assets:
+        def __init__(self, units, models):
+            self.units = units                      # unit -> fbi text
+            self.index = {f"units/{u}.fbi": None for u in units}
+            self.index.update({f"objects3d/{m}.3do": None for m in models})
+
+        def has(self, path):
+            return path in self.index
+
+        def read(self, path):
+            return self.units[Path(path).stem].encode("latin-1")
+
+    def roster(self, *entries, models=None, **kw):
+        units = {e["unit"]: make_fbi(**e) for e in entries}
+        models = ["armflash", "corak"] if models is None else models
+        return ta3do.unit_roster(self.Assets(units, models), **kw)
+
+    ARMFLASH = {"unit": "armflash", "side": "ARM", "name": "Flash"}
+    CORAK = {"unit": "corak", "side": "CORE", "name": "Warrior"}
+
+    def test_name_becomes_the_file_stem(self):
+        self.assertEqual(ta3do.unit_slug("Flash"), "flash")
+        self.assertEqual(ta3do.unit_slug("Big Bertha"), "big_bertha")
+        self.assertEqual(ta3do.unit_slug("A.K. Bot!"), "a_k_bot")
+
+    def test_both_sides_come_back_with_their_display_name(self):
+        rows = self.roster(self.ARMFLASH, self.CORAK)
+        self.assertEqual([(r["side"], r["unit"], r["slug"]) for r in rows],
+                         [("ARM", "armflash", "flash"), ("CORE", "corak", "warrior")])
+
+    def test_a_side_can_be_selected(self):
+        rows = self.roster(self.ARMFLASH, self.CORAK, sides=["CORE"])
+        self.assertEqual([r["unit"] for r in rows], ["corak"])
+
+    def test_a_third_side_is_left_out(self):
+        rows = self.roster(self.ARMFLASH,
+                           {**self.CORAK, "side": "GOK", "unit": "gokship"},
+                           models=["armflash", "gokship"])
+        self.assertEqual([r["unit"] for r in rows], ["armflash"])
+
+    def test_objectname_is_what_has_to_exist(self):
+        """The FBI may point at a model under another name — and if that model is
+        not in the archives the unit is not exportable at all."""
+        rows = self.roster({**self.ARMFLASH, "obj": "armflash2"},
+                           models=["armflash2"])
+        self.assertEqual([r["object"] for r in rows], ["armflash2"])
+        self.assertEqual(self.roster({**self.ARMFLASH, "obj": "gone"}), [])
+
+    def test_a_blank_name_falls_back_to_the_unit_id(self):
+        rows = self.roster({**self.ARMFLASH, "name": ""})
+        self.assertEqual(rows[0]["slug"], "armflash")
+
+    def test_fbi_fields_are_lower_cased_keys_and_stripped_values(self):
+        fields = ta3do.fbi_fields(
+            self.Assets({"armflash": make_fbi(**self.ARMFLASH)}, []), "armflash")
+        self.assertEqual(fields["unitname"], "ARMFLASH")
+        self.assertEqual(fields["name"], "Flash")
+        self.assertEqual(fields["buildcostmetal"], "106")
+
+
 # --------------------------------------------------------------------------- PNG
 
 
