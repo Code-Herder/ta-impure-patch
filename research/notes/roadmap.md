@@ -106,8 +106,26 @@ Three things made it small rather than a camera rewrite:
 
 `apply_eye_range()` re-applies the same bounds once a frame, because the engine clamps only when
 *it* moves the camera — without it a zoom-out at a map edge left the eye parked off-map until the
-next scroll. `tagpu_zoomedge.off` is the live off switch and puts the eye back on the 1× range.
+next scroll — **and it must clamp the scroll target `main+0x14327`/`+0x1432B` with it.** The
+review caught that one: the correction has no caller to copy the eye into the target afterwards,
+and the stepper `0x41CA30` acts on any disagreement — `0x41CB5F` sets the camera-moved bit and
+`0x41CB6B` clears `main+0x14281` bit 3, the fog grid's own is-current flag, then halves the
+distance and hands it to the no-longer-widened engine clamp, which puts it straight back. That is
+a permanent per-frame fog-grid rebuild after any zoom-out from a map edge, on exactly the path
+`97e518f` had to guard against a crash. The replacement clamp deliberately does *not* write the
+target: three of its callers are inside that stepper, and doing so would stop the camera arriving.
+
+`tagpu_zoomedge.off` is the live off switch and puts the eye back on the 1× range.
 `tacli eye`'s own clamp was the same bug in the scripted path and now shares the range.
+
+**Known gap, and it is the scroll target that draws the line.** Three sites compute that target
+and clamp it *inline* against `[0, map − W]` without ever calling `0x41C3C0` — `0x41C4C0` (smooth
+`SetCamera`), `0x41C7F7` (smooth centre-on) and `0x41CAF7` (per-frame camera **follow**). The
+stepper walks the eye to that target and our wider clamp leaves it there, so **those paths still
+stop `d` short of a map edge**: track a unit into a corner at 4× and the camera stops where 1×
+would. Nothing fights and nothing churns — the eye arrives at a target inside our range and both
+stop. Closing it means widening three inline clamps in the middle of the camera module, which is
+a bigger patch than this one.
 
 **G13f — the ring at zoom < 1 is a play mode (opt-in, `vpwide.on`).** G13e's honest answer
 to the ring was to *drop* the click; this addresses the ring instead. `tagpu_vpwide.c` widens

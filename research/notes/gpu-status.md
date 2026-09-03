@@ -223,11 +223,21 @@ eye ∈ [−d, (map − W) + d]
 
 which is the same arithmetic the transform uses about the same centre, so the two cannot
 disagree at the edges: the world at the viewport's left edge is `eye + d`, which is 0 exactly
-when `eye = −d`. **Everything downstream follows for free, because the eye IS the engine's
-camera** — the minimap's view box, "centre on this unit", the minimap click jump, the HotUnits
-cull and our own passes all read it and needed nothing new. (The engine's second eye pair at
-`main+0x14327`/`+0x1432B` is a copy taken right after every clamp call and is read nowhere
-outside the camera module, so it follows too.)
+when `eye = −d`. **Everything that reads the EYE follows for free, because the eye is the
+engine's camera** — the minimap's view box, the minimap click jump, the mouse and edge scroll,
+the HotUnits cull and our own passes needed nothing new.
+
+**What is not covered, and the scroll target is where the line falls.** `main+0x14327`/`+0x1432B`
+is where the camera is *heading*, and the per-frame stepper `0x41CA30` eases the eye toward it.
+Paths that set the eye and copy it into the target afterwards (`0x41C574`, `0x41CDB0`, the
+scroll `0x41D037`) reach the widened range through the detour. Three sites instead compute the
+target and clamp it **inline** against `[0, map − W]`, never calling `0x41C3C0` for it —
+`0x41C4C0` (smooth `SetCamera`), `0x41C7F7` (smooth centre-on) and `0x41CAF7` (the per-frame
+camera **follow**, which recomputes the target from the tracked unit every frame). The stepper
+walks the eye to that target and our wider clamp leaves it there, so **those paths still stop
+`d` short of a map edge**. Nothing fights and nothing churns — the eye arrives at a target
+inside our range and both stop — it is simply the old behaviour where the detour does not sit.
+Closing it means widening three inline clamps in the middle of the camera module.
 
 **The flag is what keeps 1× byte-identical.** The detour is a `leaf_call` on a flag raised
 only while a zoomed-**in** world is live; with it clear the engine's own function runs
@@ -239,6 +249,14 @@ camera, so an eye parked at −d at 4× would sit there until the next scroll �
 map edge would show the void past it. `apply_eye_range()` re-applies the same clamp from the
 render thread once a frame and writes only when the eye is actually outside the range in
 force (same standing as the `ScrollSpeed` write: local camera state no other machine sees).
+**It must clamp the scroll target with it**: that correction has no caller to copy the eye
+into the target afterwards, and the stepper acts on any disagreement — `0x41CB5F` sets the
+camera-moved bit and `0x41CB6B` **clears `main+0x14281` bit 3, the fog grid's is-current
+flag**, then halves the distance and hands the result to the (no longer widened) engine clamp,
+which puts it straight back. Left alone that is a permanent per-frame fog-grid rebuild after
+any zoom-out from a map edge, on exactly the path `97e518f` had to guard against a crash.
+Clamping the target rather than assigning the eye to it is what preserves a camera move that
+is genuinely in flight: such a target is inside `[0, map − W]` already, so inside ours too.
 And `0x498DA0` hands a pointer **outside** the viewport the world point
 `eye + clamp(pos, L, R) − L`, which on the side panel is `eye` itself and under the bottom bar
 is `eye + H − 1`: on the map for every eye the engine can produce, off it for ours, and the
@@ -266,6 +284,8 @@ extreme of the range and inside it everywhere else.
 | `main+0x14357` / `+0x1435B` | unit array begin/end, stride `0x118` |
 | `main+0x1435F` / `+0x14367` | HotUnits ids / count (culled to whatever the viewport rect says — the unzoomed one, or the widened one under `vpwide`) |
 | `main+0x1431F` / `+0x14323` | eyeX / eyeY. **WRITTEN**, and only ever *clamped*: our replacement of the engine's own clamp widens its range to what the zoom shows (§2.3c), and `apply_eye_range()` re-applies the same bounds once a frame so a zoom-out cannot leave the eye past them. Sim-neutral for the same reason `ScrollSpeed` is |
+| `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA30` eases the eye toward it. **WRITTEN by `apply_eye_range()` only**, clamped to the same range as the eye and for the same frame, because a disagreement between the two costs the fog grid its is-current flag every frame (§2.3c). The replacement clamp deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
+| `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so `apply_eye_range()` recomputes it through the same wrapper on the frames it corrects the eye. The one **render-thread** write of it; a game thread drawing the minimap in that instant sees a one-frame torn box, the same standing as the published view |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live** (§2.3b); every pass that means the true 1× rect must call `tagpu_vpwide_true_rect()` rather than read the field |
 | `main+0x2C76` | mouse position |
 | `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index) |
