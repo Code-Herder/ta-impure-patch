@@ -301,6 +301,17 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 ### 3.3 Open questions, not limits
 
+- **Blue seams reported in the map INTERIOR at some zoom levels, and not reproduced**
+  ([terrain & depth](terrain-depth.html) §7.6, "a fourth mode"). A blue that does not belong to the
+  tile art is the composite key — index 254 is bright cyan — and one such leak *was* found and
+  fixed on `worktree-gpu_renderer_bug`: part-covered pixels blended a fraction of the fill, drawing
+  a hairline along the **map boundary** at 29 of 151 zoom levels. But the report is about the
+  interior, and three sweeps totalling 350+ frames (151 levels zooming out, 151 zooming in, ten at
+  each of five camera positions) put every leak on the boundary. §7.1 rules out tile seams outright
+  — neighbouring quads share bit-identical vertices — so the interior case is a different mechanism
+  and is still open. Ranked leads are in §7.6. Note the fix also turns any *remaining*
+  part-coverage leak **black** rather than blue, so a repro attempt should hunt thin black lines
+  too, or revert it first.
 - **The MAPPED anomaly** ([terrain & depth](terrain-depth.html) §5.2) — two LOS stores that will
   not reconcile. Unresolved, and moot for rendering.
 - **A scenario `move` order across the Two Continents forest** walks the unit to the map's west

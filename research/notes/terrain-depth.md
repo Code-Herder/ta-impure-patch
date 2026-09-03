@@ -575,6 +575,18 @@ one quad per visible cell. Three things fall out of §2 exactly as predicted:
   with the remainder test the engine does at `0x48403E`. `div32_trunc`/`ceil32`
   carry a comment saying so, because a floor-based "fix" would be wrong for a
   negative eye.
+- **The grid is watertight, at every zoom.** [ANALYSED 2026-09-03] Column *c*'s
+  right edge is emitted as `float(N) + 32` and column *c+1*'s left edge as
+  `float(N + 32)`, where `N = vpL + c*32 - fracX` is an int; those are the **same
+  float** for every `N` a viewport can produce (`|N|` far below 2²⁴), and the vertex
+  shader's scale-about-the-centre is a pure function of that position — so two
+  neighbours can never disagree about where their shared edge is. Plain
+  rasterisation therefore **cannot** open a gap between tiles. Worth knowing
+  because a coloured hairline in the world looks exactly like the tile-seam
+  artefact that 2D-drawn-in-3D is famous for, and is not one (§7.6). Atlas bleed is
+  out for the same kind of reason: interpolated `u` stays inside `[u0, u1)` for any
+  fragment centre inside the quad, and the atlas is `GL_NEAREST` with no mipmaps,
+  so a fragment cannot reach the neighbouring cell however small the quad gets.
 
 **The atlas is built once per map**, not per frame: `LoadMap` builds `TILE_SET` and
 nothing changes it afterwards. A `GL_TEXTURE_2D_ARRAY` is not viable — Two Continents
@@ -676,6 +688,19 @@ colour table at `main+0xDCB` reads
 appears nowhere in the panel, minimap, top bar, chat, build panel or selection boxes.
 `key=N` in `tagpu_terr.on` moves it if a mod's UI ever collides.
 
+**And it is LOUD, which is a diagnostic asset.** `palettes/palette.pal` ends in the
+Windows system tail — `249..255` = pure red, green, yellow, blue, magenta, cyan, white —
+so index 254 is `(0,255,255)`, **bright cyan**. Neither it nor 253 (`(255,0,255)`,
+magenta) occurs in the tile art: across 350+ captured frames of Two Continents, **zero**
+pixels equalled either colour.
+
+So `key=N` is the **first** move when hunting a leak, not the last: set `key=253` and
+see whether the artefact changes colour. If it does it is the fill; if it does not it is
+ours — and both answers arrive in one frame. Do it *before* measuring anything, because
+with the default cyan key a "how cyan is this pixel" test also fires on **ocean and
+dithered water**, which is a trap worth naming; magenta is the colour Two Continents has
+no opinion about. This is how §7.6's fourth failure mode was pinned.
+
 ### 7.4 Verified
 
 `terr1` on Two Continents (`feat-forest`) and Anteer Strait, 1024×768.
@@ -713,10 +738,12 @@ own terrain; **fatal once G13b suppresses that overlay**, because then nothing d
 grey band at all. The gate is now "the grid uploaded": what the overlay paints is
 decided entirely by the grid bytes, and an inactive mode is already an all-zero grid.
 
-### 7.6 Failure modes, and why none of them can show the key
+### 7.6 Failure modes — three the review found, and one that shipped
 
-Review found three ways the key fill could reach the screen. All are closed, and the
-shape of the fixes is worth keeping:
+Review found three ways the key fill could reach the screen; play found a fourth the
+day after, and it is the one worth reading first if you are here because something in
+the world is the wrong colour. All four are closed, and the shape of the fixes is worth
+keeping:
 
 - **Emitting without owning.** Our terrain is opaque and covers the whole viewport, so
   drawing it while the composite is *not* inverting hides every engine overlay. The pass
@@ -734,10 +761,44 @@ shape of the fixes is worth keeping:
 
 Two more rules make the remainder harmless: **the key test is scoped to the viewport
 rect** (outside it the engine's frame is UI we never filled, so a UI pixel that happens
-to *be* index 254 can never be mistaken for our fill), and **inside it, a pixel the
-engine did not paint and we did not draw is painted black** rather than discarded — so a
-hard bail, or an atlas too large for `GL_MAX_TEXTURE_SIZE`, degrades to black and never
-to raw key colour. Verified across six ownership flips: **zero** key pixels on screen.
+to *be* index 254 can never be mistaken for our fill), and **inside it our fragment is
+composited over BLACK, not over the engine's frame** — so a hard bail, or an atlas too
+large for `GL_MAX_TEXTURE_SIZE`, degrades to black and never to key colour. Verified
+across six ownership flips: **zero** key pixels on screen — a test with a blind spot,
+which is the next paragraph.
+
+#### A fourth mode, found in play and not by review: a fraction of the key
+
+[LIVE-VERIFIED 2026-09-03] That second rule used to be narrower — "paint black when the
+pixel is **entirely** empty" — and every other pixel was emitted as `c` and left to
+`glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)` over the engine's frame. **That is correct
+only when `c.a` is 1.** The FBO is premultiplied and cleared to `(0,0,0,0)`, and the 2×
+downsample averages covered samples with uncovered ones along any edge terrain does not
+reach, so a part-covered pixel came out as `c.rgb + (1 - c.a) * key`.
+
+The symptom was a **bright cyan hairline the full width (and height) of the world**: the
+map's own boundary is a full-length edge of exactly that kind, landing at a screen
+position that depends on the zoom. **29 of the 151 levels** between 0.25 and 1.00 (step
+0.005) carried one and the rest did not — Two Continents, 1920×1080, `ss=2`. It was the
+map edge and not a tile seam, confirmed to the pixel: the line sat at screen
+y = `cy + (vpT − eyeY − cy)·z`, which for that rect (`cy` = 540) and eye y = 460 is
+`540 − 968·z` — exactly where world y = 0 projects — measured at z = 0.26, 0.265, 0.30
+and 0.33. Ten levels at each of five camera positions, plus 151 levels of zoom
+1.00→2.50, put **every** leak on the map boundary — never once between tiles, as §7.1
+says it cannot be.
+
+**The verification that missed it is the lesson.** "Zero key pixels on screen" counted
+pixels *equal* to the key, and a blend never is one: on the seam row at z = 0.300, 1779
+pixels carried a cyan cast and **none** of them equalled index 254's colour. So measure
+the key's **tint** — `min(g,b) - r` for key 254 — not its exact value, and move the key
+to magenta first (§7.3) so that ocean and dithered water cannot answer the same test.
+
+The fix is one clause in `CFS`: inside the fill, `frag = vec4(c.rgb, 1.0)`. Opaque
+`c.rgb` **is** the composite against black, so it subsumes the empty case that used to
+be special-cased, and the cursor box needed the same treatment for the same reason. Same
+sweep afterwards: full-length lines **29 → 0**; the detector's total over 151 frames
+69 659 → 8 869 px, all of which resolve to genuine purple terrain art (`(51,19,63)`,
+`(99,59,127)`, `(119,75,143)`) with **no exact key pixel** among them.
 
 One review finding was **wrong** and is recorded so it is not "fixed" later: making
 `fogMode` bit0 mean "the grid is live" does **not** double-darken when the engine's own
@@ -746,6 +807,15 @@ fragments are in the GL FBO and are composited over that surface afterwards, so 
 never touch them. Measured with the engine drawing its own terrain and overlay while we
 draw features: mean grey-band luminance **62.21 (engine) vs 61.77 (ours)** — a second
 remap would roughly halve it.
+
+**What is not closed is the report that started it.** The reported artefact was in
+the map **interior**, and the interior has not been reproduced. §7.1 rules out plain tile
+seams, so it is a different mechanism. Untried ground, in order of promise: a map whose
+tile set overflows the atlas (`idx >= s_atlasN` cells are **skipped**, which punches real
+interior holes — `junk=0` on Two Continents); fog of war actually active, since both
+sweeps ran fully lit and never exercised `TAGPU_GLSL_FOG_TERRAIN` or the shade remap;
+`ss=1`, where a leak would be a whole key pixel rather than a fraction; zoom above 2.5;
+and transients during the wheel ease, which a settled-zoom capture cannot see.
 
 ### 7.7 What is left inside the viewport
 
@@ -869,7 +939,9 @@ live on Two Continents:
 
 Entry 0 is palette index 0 — the fog's own solid black, which is why **index 0 is not
 a free key**. The table uses `0xFD` and `0xFF` and **leaves `0xFE` (254) unused**,
-which is where G13b's composite key lives (§7.3).
+which is where G13b's composite key lives (§7.3). In `palettes/palette.pal` that index
+is `(0,255,255)` — the cyan of the Windows system tail at `249..255` — so a key leak is
+always blue-green, and always identifiable by moving the key (§7.3).
 
 ### DrawGameScreen call sites (world section)
 

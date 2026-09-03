@@ -34,6 +34,14 @@ Capture and video work: the **ta-capture** skill.
    In a **worktree**, tacli pins the DLL your tree built (`<tree>/tagpu/ddraw/ddraw.dll`),
    falling back to the main checkout's — so build where you edit, or you will test the
    main checkout's binary and wonder why your change did nothing.
+   **It picks that DLL relative to the `tools/tacli` you invoked, not your cwd**
+   (`built_dll()`, `tools/tacli:77`), so run the worktree's own copy: `cd <tree> &&
+   tools/tacli …`. Building in the worktree and then calling the *main* checkout's
+   tacli silently launches the main checkout's binary, and the symptom is not an
+   error — modules simply never appear in `tagpu.log` (no `terrown:` / `zoom:` /
+   `vpwide:` ARMED line, no `terr:` grid line), which reads like a failed arm rather
+   than a stale DLL. When a module you know is armed does not log, `md5sum` the
+   instance's `gamedir/ddraw.dll` against your build before debugging anything else.
 6. **When the human is going to play it, check the window is on their monitor**
    before handing it over — see *Where the window lands*. A game that is running
    perfectly but sits off-screen still answers every `tacli` command and shows

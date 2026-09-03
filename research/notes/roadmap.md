@@ -231,7 +231,12 @@ engine's already-drawn frame is still the key fill; and a screen the game thread
 without ever reaching `0x483FA0` needs a stall timeout or the key test would black it out.
 The key test is scoped to the viewport rect, and inside it a pixel neither side painted is
 drawn black — so a bail degrades to black, never to raw key colour. Six ownership flips,
-zero key pixels on screen. The gate also fixed a latent G13c bug it made fatal: `fogMode`
+zero key pixels on screen. **INCOMPLETE, corrected 2026-09-03:** that rule caught only
+*entirely* empty pixels; a **part-covered** one was still blended over the engine's frame
+and so carried `(1 - c.a)` of the key, which drew a cyan hairline along the map boundary
+at 29 of 151 zoom levels. "Zero key pixels" could not see it — a blend never equals the
+key. Inside the fill our fragment is now composited over black outright
+([terrain & depth](terrain-depth.html) §7.6). The gate also fixed a latent G13c bug it made fatal: `fogMode`
 bit 0 was `LosType & 1`, the *mapping* option, so true-LOS-without-mapping (`LosType = 14`)
 skipped the fog rule entirely — invisible while the engine drew its own overlay, a missing
 grey band once we suppress it.

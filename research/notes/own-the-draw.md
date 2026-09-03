@@ -110,7 +110,8 @@ must not disagree. Arming is guarded (`filled` — do not invert until a filled 
 exists), *dis*arming is the mirror hazard (the engine's frame is already filled when the
 skip drops, so the GL pass keeps drawing for exactly one more frame), and a screen the
 game thread draws without ever reaching the patched call needs a stall timeout. All
-three are written up with their symptoms in terrain-depth §7.6.
+three are written up with their symptoms in terrain-depth §7.6, along with a fourth that
+the review did not find and play did.
 
 ---
 
