@@ -397,6 +397,14 @@ tools/tacli log w1 -g "weapons: (loader|VIOL|MISM)"
 
 ## The input firewall (on by default)
 
+**"Human controllable" / "let me play it" / "hand it to me" means SHIELD OFF.** That is the
+whole content of the request: an instance launched with the shield on answers every `tacli`
+command and ignores the human's keyboard and mouse entirely, which reads to them as a game
+that is running but broken. So `--no-shield` at launch (or `tacli shield <i> off` on a running
+one), and check `tacli ls` says `OPEN` before saying it is theirs. Also check the window is on
+one of their monitors (*Where the window lands*) — the two together are what "controllable"
+means.
+
 While armed, the game ignores the real keyboard and mouse completely and sees only what
 tacli injects — the human can click and type across your window without perturbing your
 test, and your instance does not need focus.
