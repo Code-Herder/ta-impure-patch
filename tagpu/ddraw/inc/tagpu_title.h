@@ -20,10 +20,12 @@
 
 /* Compose "<base> - <tagpu_title.txt>" onto hwnd.
  *
- * `base` must be the title WITHOUT a suffix — dd.c passes the copy it took
- * before we ever touched the window — so repeat calls cannot stack suffixes.
- * Idempotent and cheap (one file open, and no window write when the title is
- * already right), so it is safe on every dd_SetCooperativeLevel. */
+ * `base` is the unsuffixed title, and only the FIRST call for a given hwnd is
+ * believed: dd.c re-reads it off the live window inside a gate that re-opens
+ * (see tagpu_title.c), so a later call would hand back our own composed title
+ * and stack a second suffix. Idempotent and cheap (one file open, and no window
+ * write when the title is already right), so it is safe on every
+ * dd_SetCooperativeLevel. */
 void tagpu_title_apply(HWND hwnd, const char* base);
 
 #endif /* TAGPU_TITLE_H */

@@ -5,12 +5,13 @@
 #include "tagpu_title.h"
 
 #define TITLE_FILE  "tagpu_title.txt"
-/* Two fields fit here (wt: and tacli:), so 63 usable chars is not much slack.
- * The ceiling is TITLE_MAX: "Total Annihilation" (18) + " - " (3) + 95 = 116, well
- * inside 191 — the composed title must NEVER truncate, because tacli records the
- * string it expects and then finds the window by it. */
-#define LABEL_MAX   96
-#define TITLE_MAX   192         /* dd.h's g_ddraw.title is 128 */
+/* Two fields live in the label (wt: and tacli:), so 95 usable chars is not much
+ * slack. TITLE_MAX is then sized from the WORST case rather than the expected one:
+ * the composed title must never truncate, because tacli records the string it
+ * expects and then finds the window by it. */
+#define LABEL_MAX   96                              /* 95 usable + NUL */
+#define BASE_MAX    128                             /* = dd.h's g_ddraw.title[128] */
+#define TITLE_MAX   (BASE_MAX + 3 + LABEL_MAX)      /* base + " - " + label */
 
 static void tlog(const char* m)
 {
@@ -50,13 +51,32 @@ static int read_label(char* out, int cap)
 
 void tagpu_title_apply(HWND hwnd, const char* base)
 {
+    static HWND s_hwnd;
+    static char s_base[BASE_MAX];
     char label[LABEL_MAX], want[TITLE_MAX], cur[TITLE_MAX];
 
     if (!hwnd || !IsWindow(hwnd) || !base || !*base) return;
     if (!read_label(label, sizeof label)) return;
 
-    /* MSVCRT's _snprintf does not NUL-terminate on truncation. */
-    _snprintf(want, sizeof want, "%s - %s", base, label);
+    /* Keep the base OURSELVES, once per window. The caller re-reads it off the
+     * live window (dd.c's GetWindowText into g_ddraw.title), inside a gate that
+     * re-opens: dd_Release restores the old wndproc and zeroes g_ddraw while the
+     * window is still alive, so a second DirectDraw creation on the same HWND
+     * runs the block again — and the "pristine" title it would hand us the second
+     * time is the one we set the first time. Composing from that stacks a second
+     * suffix, and a title that matches neither of tacli's two search patterns is
+     * an instance whose window it can no longer find at all. A new HWND is a new
+     * window, which carries TA's own title again, so re-capture on change. */
+    if (hwnd != s_hwnd || !s_base[0]) {
+        s_hwnd = hwnd;
+        lstrcpynA(s_base, base, sizeof s_base);
+    }
+
+    /* MSVCRT's _snprintf does not NUL-terminate on truncation. TITLE_MAX cannot
+     * be overrun by the real inputs; refuse rather than set a truncated title if
+     * that ever stops being true. */
+    if (lstrlenA(s_base) + 3 + lstrlenA(label) >= (int)sizeof want) return;
+    _snprintf(want, sizeof want, "%s - %s", s_base, label);
     want[sizeof want - 1] = 0;
 
     cur[0] = 0;
