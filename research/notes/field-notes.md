@@ -267,6 +267,8 @@ The exe on disk is never modified.
 | 1 | Remove the startup **DirectX version warning** dialog | VA `0x004266A7` (file `0x25AA7`) | `75`→`EB` (`jne 0x42670A` → `jmp`, always skip the warning) | ● shipped, verified: clean main menu, no dialog |
 | 2 | **Contextual order cursors at any `Interface Type`** — restore `cursormove` over ground and `cursorreclamate` over a wreck, which the engine switches off when `Interface Type = 1` (right-mouse orders), the value `tacli` writes into every instance | VA `0x0043E50C` | `0F 84 F0 05 00 00` → `90 ×6` (drop the `je 0x43EB02` in `0x43E490`'s order-1 case) | ● shipped, verified live at Interface Type 1: ground 14 `cursormove`, wreck 11 `cursorreclamate`, own unit 15 `cursorselect`, nothing selected 19 `cursornormal`; a right-click still issues the order. Opt out with `tagpu_curs.off` |
 
+| 3 | **Structure shadows are ours** — flip the `je` that sends a state-`0x20000000` unit into the blit's cached-slant-shadow branch, so under our key-filled terrain the engine no longer ALP-blends that shadow into teal | VA `0x004592C6` (path A) and `0x0045952C` (path B) of `0x459200` | `74`→`EB` on each (`je`→`jmp`, always the completed-unit branch, whose blank composite blits nothing). **Lives in `tagpu_owndraw.c`, not `tagpu_patches.c`**, and only with target `all`; installed as a pair or not at all | ● shipped (G13k), measured against the engine's shadow over engine terrain |
+
 Patch 2 is safe to make this bluntly because `0x43E490` has **exactly one caller** and its
 address appears nowhere in the image as a literal, so the branch governs which sprite is shown
 and nothing else; the four sites that decide left-vs-right ordering read `main+0x37EFA`

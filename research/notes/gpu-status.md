@@ -22,6 +22,7 @@ moved by the composite too.
 | What the engine used to draw | Ours since | Owned how |
 |---|---|---|
 | Units, wrecks, shadows, cloak, waterline | G12a–c | `owndraw` skips the software rasterisers; `tagpu_native.c` draws them |
+| Structure shadows (the cached slant projection) | G13k | `owndraw all` flips the blit's two structure-shadow `je`s; the native pass emits the slant projection from the posed prims — see §2.1 and [shadows & cloak](shadows-cloak.html) §"Structure shadows, owned" |
 | Weapon fire, explosions, debris | G12e | `fxown`: 2 call-site redirects + 4 leaf detours |
 | Smoke, fire, wakes, nanolathe | G12f | `fxown`: one detour on the layer walker |
 | Features (trees, rocks, splats, wreckage) | G13a | `featown`: one detour on the feature leaf |
@@ -115,6 +116,8 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 |---|---|---|---|
 | `0x459830` | opaque 3DO rasteriser | `owndraw` (`owndraw.on`) | prologue detour, 5 stolen |
 | `0x459C70` | nanoframe/build rasteriser | `owndraw` | prologue detour, 5 stolen |
+| `0x4592C6` | `je 0x459324` in the blit `0x459200`, path A — the branch into the cached structure shadow (`Object3do+0x14`, blitted through the ALP blend, which turns the fill key teal) | `owndraw`, target `all` only | `74`→`EB`, one byte, verified `74 5C` first; installed with the next as a pair or not at all |
+| `0x45952C` | the same `je` in path B (`je 0x459578`) | `owndraw`, target `all` only | `74`→`EB`, verified `74 4A` |
 | `0x469B22` | `call 0x49BE60` — projectile pass | `fxown` (`fxown.on`) | call-site redirect |
 | `0x469B2C` | `call 0x420B00` — explosions/particles pass | `fxown` | call-site redirect |
 | `0x46BAE0` | model-projectile leaf (`ret 0x10`) | `fxown` | prologue detour, 5 stolen |
@@ -442,6 +445,9 @@ means reimplementing selection, box-select, build placement and every cursor mod
 | Layer 8 and the `0x4FD588` particle class were never observed live (the latter is emitted by teleport and `0x472630`) | [Effects](effects.html) | a fixture that emits them |
 | The sim-side particle update walker's entry is not pinned | [Effects](effects.html) | nothing — only the DRAW is owned, by design |
 | Cloak polish (true alpha) | [Shadows & cloak](shadows-cloak.html) | a cloakable unit in a fixture |
+| **A structure's slant shadow is not punched out by its own body at +5 px.** The engine erases the shadow where the body sprite sits 5 px right of itself (`0x4B9D70`), then draws the body at +0; we draw the shadow and cover it with the body at +0, so a strip up to 5 px wide along each building's right edge is shadowed where the engine shows ground | [Shadows & cloak](shadows-cloak.html) §"Structure shadows, owned" | a stencil pass (the FBO's depth attachment has no stencil today), or accept it |
+| A **replacement-mesh structure** casts every piece; the engine's raster takes only pieces with prim flag bit1 | `tagpu_hires_draw.c` `uSlant` | zeroing the shadow pose of the pieces whose engine prim lacks bit1 — no replacement structure exists yet to test it on |
+| A **nanoframe** casts nothing until complete; the engine drew the cached shadow of its finished pieces (teal under `terrown`) | `tagpu_native.c` (nano > 0 is not listed) | listing nanoframes shadow-only, pieces with bit1 |
 | Extreme zoom-out clamps the terrain span to `MAXCELL` and leaves an honest black margin | `tagpu_terr_clamp_span()` | nothing — a **clamp** was chosen over a bail on purpose; a bail hands the draw back and flashes, which is the one behaviour that looks like a bug |
 
 ### 3.3 Open questions, not limits

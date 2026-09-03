@@ -537,7 +537,11 @@ triggers (`native.on`, `writeback.on`, the `.off` toggles) do re-read every fram
 fine to change live. To save the footgun, `launch`/`scenario load` **auto-arm `owndraw.on`
 to match `native.on`** when native is set — it prints `auto-armed owndraw.on=…`. So the
 normal flow is: `arm native.on=all wrecks`, then `scenario load … --restart`. Verify with
-the log line `owndraw: ARMED … opaque@0x459830=OK` and `OWND … skipped>0`.
+the log line `owndraw: ARMED … opaque@0x459830=OK` and `OWND … skipped>0`. With target `all`
+that line also reads `structshadow@0x4592C6+0x45952C=OURS`: the engine's cached building
+shadow is skipped and the native pass draws it (`native: … N slant`). A solid **teal**
+silhouette on or beside a building is that shadow leaking through the composite — it means
+this build predates G13k, or owndraw is armed for a single type.
 
 **The effects pass works the same way.** `fx.on` (weapon fire, explosions, debris — tokens
 `log`, `passive`, `nolines`, `nomodels`, `nosprites`, `noexpl`, `nodebris`) needs the

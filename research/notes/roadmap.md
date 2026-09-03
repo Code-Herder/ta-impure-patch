@@ -46,7 +46,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
-| Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates | part of the unit pass | A/B `shadow-mix`, `waterline` (Anteer Strait) |
+| Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
 | Smoke, fire, wakes, nanolathe | ● native (G12f) | one detour on the layer walker `0x471F90` | A/B `sfx-strait`, engine surface empty of particles |
 | Features (trees, rocks, splats, wreckage) | ● native (G13a) | `featown`: one detour on the leaf `0x46A610` | occlusion parity vs the engine's own draw, engine surface empty of features, `feat-forest` |
@@ -76,6 +76,38 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G13k — buildings stopped casting teal.** Reported from play, zoomed out on Two Continents:
+*"enemy units have strange shadows, kind of a dark green … metal extractors casting strange
+shadows."* Every structure — own or enemy, extractor, solar, wind generator — had a solid
+`(0,128,128)` silhouette beside it.
+
+**It was the one shadow the engine still drew.** Completed mobile units get a silhouette shadow
+built from their composite, which the wipe empties, so that one was already ours; structures
+(state bit `0x20000000`) take a different branch of the blit `0x459200` — a slant projection
+cached at `Object3do+0x14`, built from the posed prims, which survives the wipe. It is blitted
+through the ALP blend `0x4B8500`, and inside the key-filled viewport the blend's destination
+is palette 254's cyan: cyan halved is exactly that teal, no longer the key, so it composited
+opaque. And because it lives in the engine's frame it sat at the 1× position whatever the zoom,
+which is why zoomed out it looked like a shadow that had wandered off. At 1× it covered the
+building. The same mechanism as the waypoint star of G13h, one layer down.
+
+**The fix owns it.** `owndraw all` flips the `je` that enters the structure branch in each path
+(`0x4592C6`, `0x45952C`, `74`→`EB`) so a building takes the completed branch, whose blank
+composite blits nothing; the native pass emits the engine's slant projection `(x + y/4,
+−z − y/4)` from the live posed prims, only pieces carrying prim flag bit1 as `0x45A610` does,
+5 px right, 50 % black, under the Shadow option bit alone. Diffed against the engine's own
+cached shadow over engine terrain at the same frame position (`shadow-struct`: ARM solar and
+extractor, CORE extractor and wind generator): what remains is the rotating pieces at other
+animation phases and a ≤5 px strip along each body's right edge — the engine's body punch-out,
+not replicated. The wind generator was the tell: our first pass cast its whole rotor and mast,
+the engine casts neither, and the reason is the bit1 test at `0x45A655`. Zero teal pixels at
+1× and at 0.785×, and zero over the AI's base while it was expanding.
+
+**What this gate did not close.** The punch-out strip; replacement-mesh structures cast every
+piece; a nanoframe casts nothing until complete. Bit1's meaning is inferred, not proven. Full
+site table: [exe-reverse-engineering](exe-reverse-engineering.html) §"The unit blit's shadow
+branches".
 
 **G13j — selecting a unit gives the move cursor again.** Reported from play: *"when we select a
 unit, the move cursor should appear, instead we get the regular cursor. Similar issue for

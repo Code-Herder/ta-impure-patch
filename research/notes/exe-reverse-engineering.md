@@ -407,6 +407,59 @@ the "pressed since last call" bit — before `neg ax; sbb eax,eax; neg eax` norm
 All nine stubs in the `0x4C1BA1..0x4C1D56` block do the same mask, so nothing in the engine
 reads the consumable bit and an extra poll of our own cannot steal an edge.
 
+## The unit blit's shadow branches — mapped by us
+
+[MEASURED 2026-09-03, this project — `objdump` of the pristine Steam build, plus the live A/B in
+`shadows-cloak.md` §"Structure shadows, owned". Established while fixing the teal structure
+shadows (G13k): the engine's cached slant shadow is drawn through the ALP blend blit and,
+inside a key-filled viewport, blends against the fill key. Every VA below was read off the
+disassembly in this session.]
+
+**`0x459200` — the per-unit composite blit** (`ret 0x18`), reached from `0x458810` under
+`DrawUnit 0x45AC20`. It splits on the composite's depth-plane pointer at `0x45927E..0x459282`
+(`mov eax,[esi+0x14]; test eax,eax; jne 0x45949D`): **path A** (colour-only composite) at
+`0x459288`, **path B** (colour + depth) at `0x45949D`. Both open with the same shadow decision
+tree, drawn before the body. Every site in it:
+
+| Path A | Path B | What it is |
+| --- | --- | --- |
+| `0x45928E` `mov ax,[ecx+0x37F06]` | `0x4594A2` | the graphics-option word; `test al,4` (Shadow) right after, `je` to the body |
+| `0x4592A0..0x4592AC` | `0x4594B4..0x4594C0` | `unit+0x92 → UnitDefStruct`, `+0x241` type mask, `test …,0x2000000` = `noshadow` → skip |
+| `0x4592BF` `test byte [ecx+0x113],0x20` | `0x459522` `test dword [ecx+0x110],0x20000000` | **the structure bit** of `unit+0x110` |
+| **`0x4592C6`** `74 5C` `je 0x459324` | **`0x45952C`** `74 4A` `je 0x459578` | not a structure → the COMPLETED branch. **`owndraw all` rewrites both to `EB` (`jmp`)** — `tagpu_owndraw.c`, verified byte-for-byte before the write, installed as a pair or not at all |
+| `0x4592C8` `test [esp+0x10],0x40000000` | `0x4594D0` `shr edx,0x1E; test dl,1` | `digger` → the COMPLETED branch too (path B clips it below ground first, `0x4594DB..0x459503`) |
+| `0x4592D5` `cmp word [eax+0xA6],0` | `0x45952E` | `unit+0xA6` — the **model index** (`U_MODELID` in the native pass), not a unit id. Zero → |
+| `0x4592E4` `movzx cx,byte [eax+0x1427F]` | `0x45953D` | sea level; `cmp word [esp+0x42],cx ; jl` skips the shadow for a model-0 unit below it |
+| `0x4592FE` `call 0x45A790` | `0x45955B` | build the cached slant shadow when `Object3do+0x14` is NULL |
+| **`0x459319`** `call 0x4B8500` | `0x459576` `jmp 0x4595E9` → **`0x4595E9`** | blit the cached shadow, at `sx + 0x85` (`add edx,0x85` at `0x45930B` / `0x45956C`). Path B shares one call site between the digger, structure and completed branches; path A has one per branch |
+| `0x459324` `shr al,3; test al,1` | `0x459578` | the COMPLETED branch: TShadow bit, then `test …,0x81000` (`canhover`/`floater`), `0x45A470` (scratch := composite silhouette), blit at `0x459353` / `0x4595E9` |
+| `0x4593BA` `call 0x4B8500` | `0x4597D3` | the body blit, further down each path |
+
+So the five "unit row sweep" call sites of `0x4B8500` in the blend-LUT survey above are:
+`0x459319` structure shadow (A), `0x459353` completed shadow (A), `0x4593BA` body (A),
+`0x4595E9` every shadow (B), `0x4597D3` body (B).
+
+**The slant builders.** `0x45A510` (ground-projection AABB) walks the prims at stride `0x36`
+from `Object3do+0x22` and tests only flag bit0 (`test byte [ecx+0x28],1` at `0x45A55B`).
+`0x45A610` (the silhouette raster) tests **bit0 and bit1** (`test cl,1; je` at `0x45A64C`,
+`test cl,2; je` at `0x45A655`) and flat-fills each face through `0x4C1000` at `0x45A750`. The
+projection is `gx = x + y/4`, `gy = −z − y/4` against the body's `−z − y/2`, so a point at
+height `y` casts `y/4` right of and `y/4` below its drawn position. Bit1's meaning is open:
+a completed CORE wind generator's mast and rotor lack it (they cast nothing in the engine)
+while its base pieces carry it.
+
+**Why the branch flip is safe.** Both `je`s are 2-byte short jumps whose fall-through and
+target both continue with `eax` still holding the option word the target tests (`shr al,3`),
+and the COMPLETED branch is the engine's own path for every non-structure unit; under
+`owndraw all` its composite is blank, so `0x45A470` builds an all-key silhouette and the blit
+writes nothing. Nothing else reads `Object3do+0x14`; it is simply never allocated. Without
+`all` the bytes are left alone and structures keep the engine's cached shadow.
+
+**Negative results.** `[esp+0x42]` is compared with sea level but was not traced back to its
+producer (`[esp+0x14]` is the altitude the waterline code subtracts; `+0x42` is a different
+word). The body punch-out `0x4B9D70(body, scratch, 5, 0)` inside `0x45A790` was read, not
+replicated. `0x459200` itself was not disassembled past `0x459900`.
+
 ## The cursor chain — mapped by us
 
 [MEASURED 2026-09-03, this project — disassembly of the pristine Steam build (`objdump -d -M

@@ -34,6 +34,20 @@
    skip:
      C2 10 00                   ; ret 0x10 — unwind exactly like the callee
 
+   With target "all" two more bytes go in, both inside the blit 0x459200
+   (shadows-cloak.md "Shadow decision tree"): the `je` that sends a unit whose
+   state carries 0x20000000 (structures) to the CACHED SLANT SHADOW branch
+   becomes a `jmp`, so every unit takes the completed-unit silhouette branch
+   instead. That branch builds its shadow from the composite -- blank under
+   "all" -- and so blits nothing. Why: the cached shadow is drawn by the
+   ALP-blend blit 0x4B8500, and inside a key-filled viewport (terrown) the
+   blend darkens palette 254's cyan into an opaque teal silhouette that sits
+   at the 1x position whatever the zoom. The native pass draws the slant
+   shadow in its place (tagpu_native.c, `slant`).
+     0x4592C6: 74 5C  je 0x459324   (path A, colour-only composite)  -> EB 5C
+     0x45952C: 74 4A  je 0x459578   (path B, colour+depth)           -> EB 4A
+   Both leave eax (the graphics-option word the target tests) untouched.
+
    Classification: Object3do+0x0C -> UnitStruct -> +0x92 UnitDefStruct, match
    the token against Name@0x00 / UnitName@0x20 / ObjectName@0x80 (all three;
    same rule as suppress/writeback); token "all" skips every unit. Read-only
@@ -62,9 +76,16 @@
 static const unsigned char OPQ_STOLEN[5]  = { 0xB8, 0x04, 0x5F, 0x00, 0x00 };
 static const unsigned char NANO_STOLEN[5] = { 0xB8, 0xD4, 0x59, 0x01, 0x00 };
 
+/* the two structure-shadow `je`s (see the header comment): site, rel8 */
+#define SSHADOW_A_VA     0x004592C6u
+#define SSHADOW_A_REL    0x5C
+#define SSHADOW_B_VA     0x0045952Cu
+#define SSHADOW_B_REL    0x4A
+
 static int               g_armed      = 0;
 static char              g_target[32] = "armcom";
 static int               g_all        = 0;
+static int               g_sshadow    = 0;   /* both je->jmp patches in */
 
 static volatile unsigned g_skipped    = 0;
 static volatile unsigned g_passed     = 0;
@@ -187,6 +208,21 @@ static int install_one(unsigned int va, unsigned int resume,
     return 1;
 }
 
+/* `74 rel8` (je) -> `EB rel8` (jmp) at one verified site; 0 = wrong build */
+static int patch_je_to_jmp(unsigned int va, unsigned char rel)
+{
+    unsigned char* t = (unsigned char*)va;
+    DWORD old;
+    if (t[0] != 0x74 || t[1] != rel) return 0;
+    if (!VirtualProtect(t, 2, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    t[0] = 0xEB;
+    VirtualProtect(t, 2, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), t, 2);
+    return 1;
+}
+
+int tagpu_owndraw_structshadow_ours(void) { return g_sshadow; }
+
 static void read_target(void)
 {
     HANDLE h;
@@ -227,12 +263,31 @@ void tagpu_owndraw_init(void)
     a = install_one(RAST_OPAQUE_VA, RAST_OPAQUE_RES, OPQ_STOLEN);
     c = install_one(RAST_NANO_VA,   RAST_NANO_RES,   NANO_STOLEN);
     g_armed = a && c;
+    /* structure shadows: only with "all" (every composite blank), and only
+       as a pair -- one path redirected and not the other would leave a
+       building's shadow depending on which composite it was given */
+    if (g_armed && g_all) {
+        int sa = patch_je_to_jmp(SSHADOW_A_VA, SSHADOW_A_REL);
+        int sb = sa && patch_je_to_jmp(SSHADOW_B_VA, SSHADOW_B_REL);
+        if (sa && !sb) {
+            unsigned char* t = (unsigned char*)SSHADOW_A_VA;
+            DWORD old;
+            if (VirtualProtect(t, 2, PAGE_EXECUTE_READWRITE, &old)) {
+                t[0] = 0x74;
+                VirtualProtect(t, 2, old, &old);
+                FlushInstructionCache(GetCurrentProcess(), t, 2);
+            }
+        }
+        g_sshadow = sa && sb;
+    }
 
     _snprintf(b, sizeof b,
         "owndraw: %s target=\"%s\" opaque@0x459830=%s nano@0x459C70=%s "
+        "structshadow@0x4592C6+0x45952C=%s "
         "(engine rasterise skipped for target; writeback must paint it)",
         g_armed ? "ARMED" : "not armed", g_target,
-        a ? "OK" : "SKIP", c ? "OK" : "SKIP");
+        a ? "OK" : "SKIP", c ? "OK" : "SKIP",
+        g_sshadow ? "OURS" : (g_all ? "SKIP" : "engine"));
     olog2(b);
 }
 

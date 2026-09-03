@@ -99,6 +99,7 @@ static const char* VS =
     "uniform float uDepthScale;\n"
     "uniform vec4 uAnchor;\n"                 /* ax, ay, world x, world z     */
     "uniform vec3 uYawEnc;\n"                 /* cos yaw, sin yaw, depth key  */
+    "uniform int uSlant;\n"                   /* 1: structure shadow slant    */
     "out vec3 vPos; out vec3 vNrm; out vec2 vUV;\n"
     "out vec2 vWorld; out float vEnc; out float vVY;\n"
     "void main(){\n"
@@ -113,15 +114,18 @@ static const char* VS =
     "  vec3 m = vec3(bp.x*c - bp.z*s, bp.y, bp.x*s + bp.z*c);\n"
     "  vec3 n = vec3(bn.x*c - bn.z*s, bn.y, bn.x*s + bn.z*c);\n"
     /* the engine's projection, per vertex, exactly as the native emitters bake
-       it on the CPU: sx = anchor + x, sy = anchor + (-z - y/2) */
-    "  vec2 p0 = vec2(uAnchor.x + m.x, uAnchor.y + (-m.z - m.y*0.5));\n"
+       it on the CPU: sx = anchor + x, sy = anchor + (-z - y/2); a structure's
+       shadow pass takes its slant projection instead (x + y/4, -z - y/4) */
+    "  vec2 pm = (uSlant == 1) ? vec2(m.x + m.y*0.25, -m.z - m.y*0.25)\n"
+    "                          : vec2(m.x, -m.z - m.y*0.5);\n"
+    "  vec2 p0 = uAnchor.xy + pm;\n"
     "  float md = clamp((2.0*m.y - m.z) / 256.0, -1.8, 1.8);\n"
     "  float enc = uYawEnc.z + md;\n"
     "  vec2 p = (p0 + uOffset - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - enc/uDepthScale, 0.0, 1.0), 1.0);\n"
     "  vPos = m; vNrm = n; vUV = aUV;\n"
-    "  vWorld = vec2(uAnchor.z + m.x, uAnchor.w + (-m.z - m.y*0.5));\n"
+    "  vWorld = uAnchor.zw + pm;\n"
     "  vEnc = enc; vVY = m.y;\n"
     "}\n";
 
@@ -242,7 +246,7 @@ static int    s_state = 0;                 /* 0 unloaded, 1 ready, 2 failed */
 static GLuint s_prog;
 static GLint  u_game, u_offset, u_zoom, u_zoomC, u_depthScale, u_anchor, u_yawEnc;
 static GLint  u_piece;
-static GLint  u_hasNrm, u_base, u_mr, u_cutoff, u_shadow, u_alpha;
+static GLint  u_hasNrm, u_base, u_mr, u_cutoff, u_shadow, u_alpha, u_slant;
 static GLint  u_waterT, u_waterMode, u_digT, u_light, u_view, u_sunAmb;
 static GLint  u_anchorMix, u_shade, u_fog, u_fogOrg, u_fogDim;
 static GLint  u_scafOn, u_scafP, u_ss, u_zoomF, u_zoomCF;
@@ -316,6 +320,7 @@ static void ensure(void)
     u_hasNrm = U("uHasNrm");    u_base = U("uBase");
     u_mr = U("uMR");            u_cutoff = U("uCutoff");
     u_shadow = U("uShadow");    u_alpha = U("uAlpha");
+    u_slant = U("uSlant");
     u_waterT = U("uWaterT");    u_waterMode = U("uWaterMode");
     u_digT = U("uDigT");        u_light = U("uLight");
     u_view = U("uView");        u_sunAmb = U("uSunAmb");
@@ -478,6 +483,7 @@ void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
             glUniform4fv(u_anchor, 1, anc);
             glUniform3fv(u_yawEnc, 1, ye);
             glUniform2fv(u_offset, 1, off);
+            glUniform1i(u_slant, (shadowPass && h->slant) ? 1 : 0);
             glUniform1f(u_alpha, shadowPass ? 0.5f : h->alpha);
             glUniform1i(u_fog, h->fog);
             glUniform1f(u_waterT, h->waterT);
