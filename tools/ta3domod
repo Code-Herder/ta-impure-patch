@@ -10,6 +10,7 @@ of operations, and re-serialises a valid `.3do`:
         --stretch base:z:0:40 \
         --graft corfhlt:turret1:base:0,10,20:laser1
     tools/ta3domod export out.3do -o renders/warlordex
+    tools/ta3domod export armpw -o renders/armpw --undither
 
 Two operations, both of them things you cannot do by scaling a whole model:
 
@@ -28,7 +29,8 @@ Two operations, both of them things you cannot do by scaling a whole model:
       donor turret brings with it when the destination script would not hide
       them.
 
-`export` is ta3do's glTF export plus the one thing a *re*-import needs: the
+`export` is ta3do's glTF export — `--undither` and all — plus the one thing a
+*re*-import needs: the
 atlas is a lossy destination — a GAF frame goes in, a rectangle of pixels comes
 out — so the .glb carries `asset.extras.ta3do.atlas`, naming for every packed
 tile the GAF entry and the archive it came from, its pixel rect and its UV rect,
@@ -62,8 +64,15 @@ def die(msg):
 
 # --------------------------------------------------------------------------- assets
 
+_TA3DO_MODULE = ...  # unloaded; None once a search has failed
+
+
 def _ta3do_module():
     """Borrow ta3do's archive reader; fall back to plain files without it."""
+    global _TA3DO_MODULE
+    if _TA3DO_MODULE is not ...:
+        return _TA3DO_MODULE
+    _TA3DO_MODULE = None
     import importlib.machinery
     import importlib.util
     for path in _ta3do_candidates():
@@ -72,6 +81,7 @@ def _ta3do_module():
             spec = importlib.util.spec_from_loader("ta3do_lib", loader)
             module = importlib.util.module_from_spec(spec)
             loader.exec_module(module)
+            _TA3DO_MODULE = module
             return module
     return None
 
@@ -412,7 +422,9 @@ def cmd_export(args):
     if ta3do is None:
         die("export needs ta3do alongside this script (set TA3DO_BIN)")
     assets = ta3do.Assets()
-    model = ta3do.load_model(assets, args.model, show_hidden=args.show_hidden)
+    model = ta3do.load_model(assets, args.model, show_hidden=args.show_hidden,
+                             undither=getattr(args, "undither", None),
+                             python=getattr(args, "undither_python", None))
     root = parse_3do(Source().read(args.model))
     meta = atlas_metadata(model, ta3do.TextureBank(assets), root)
 
@@ -548,6 +560,9 @@ def main(argv=None):
     ex.add_argument("--show-hidden", action="store_true",
                     help="keep pieces the unit's script hides at Create (flares)")
     ex.add_argument("--json", action="store_true")
+    ta3do = _ta3do_module()
+    if ta3do is not None:
+        ta3do.add_undither_flags(ex)
     ex.set_defaults(func=cmd_export)
 
     args = parser.parse_args(argv)

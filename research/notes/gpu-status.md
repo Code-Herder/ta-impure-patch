@@ -40,24 +40,29 @@ things remain from the original plan:
 
 - **G11 — the replacement pipeline** (glTF convention + loader + one exemplar unit driven by
   live COB state). This is the project's stated purpose and it is the next real gate. The
-  groundwork is real but the two halves **do not meet yet** — worth being precise about,
-  because "the slot is proven and the exporter exists" reads as further along than it is:
+  groundwork is real and both halves are on `main` as of `f508124`, but "the slot is proven
+  and the exporter exists" still reads as further along than it is — the proven exemplar did
+  not come out of the exporter:
 
   | Half | Where it is | The gap |
   |---|---|---|
-  | Replacement-mesh slot in the DLL | `tagpu_hires.c` — `gamedir/hires/<defname>.obj` renders instead of the 3DO, hot-reloaded on mtime, engine anchor + body yaw, our shade/palette pipeline. **Proven end-to-end** (a 210-tri dome replaced the solar collector) | speaks an **OBJ subset** (`v` / `f` / `c <palette index>`), **whole-model only** — the source says so: *"piece-wise COB pose = G11"* — and colours are palette indices through the SHD LUT, not textures |
-  | glTF exporter | `tools/ta3do` — 3DO + GAF → glTF, standard views, `--undither` | **not on `main`**: it lives on the unmerged `worktree-3do_exporter` branch |
+  | Replacement-mesh slot in the DLL | `tagpu_hires.c` (glTF 2.0 loader) + `tagpu_hires_draw.c` (its own GL program) — `gamedir/hires/<defname>.glb` or `.gltf` renders instead of the 3DO, hot-reloaded on mtime. One static VBO per model, triangles sorted by material, one draw per material; per-pixel lighting against the engine's own light direction, normal maps through a derived TBN, metallic/roughness, mipmapped true colour. **Posed per piece from the engine's live COB state**, bound by glTF node name, so it walks, aims, recoils and honours `HIDE`. Shares the native pass's FBO, depth keys, scaffold, fog, waterline and silhouette shadow. **Proven end-to-end** (a 1577-tri 6-material Peewee, 20 of them in a fight vs engine-drawn AKs; the pose reconstructs the engine's own posed vertex buffer to 2e-5 model units) — [model import](model-import.html) | No skins, morph targets, glTF animation, sparse accessors or texture wrap modes (UVs clamp); PNG images only; 48 posable pieces. Team colour arrives as a `baseColorFactor` authored into the model by hand — the exemplar's `pw_team` and `pw_team_chest` materials carry ARM blue as a linear factor — and nothing drives it from the owning player. The order two simultaneous piece-turn axes compose in is a documented guess, and COB `MOVE` read zero in every sample |
+  | glTF exporter | `tools/ta3do` — 3DO + GAF → glTF, standard views, `--undither` | on `main` since `f508124`. The **landed exemplar did not come out of it**: `units/pee-wee/armpw-detailed.glb` carries Blender's own `Khronos glTF Blender I/O` generator string and a `baseColorFactor` this tool never writes (it emits `pbrMetallicRoughness` with `metallicFactor`/`roughnessFactor` only). So the hand-authoring step between 3DO and shippable model is the unautomated half |
 
   So G11 is three concrete pieces of work, not a wiring job: **(a)** land the exporter and
-  agree one format between it and the loader; **(b)** per-piece pose — the engine hands us
-  *fully posed* vertex buffers for its own 3DOs (`PrimitiveStruct+0x22`), which is why the
-  native pass needs no rotation maths today, but replacement geometry is not in the engine's
-  piece tree, so it must be placed from the posed origin (`+0x16/1A/1E`) and posed turns
-  (`+0x10/12/14`) — fields already identified in [Unit → 3DO bridge](unit-3do-bridge.html),
-  with the exact order/signs of the rotation composition still to be settled (that is what the
-  `tagpu_posedump.on` probe was written for, and it has not been run); **(c)** true-colour and
-  translucent materials, which is the part of the stated purpose the palette-index path does
-  not reach at all.
+  agree one format between it and the loader; **(b)** per-piece pose — **done**: the engine
+  hands us *fully posed* vertex buffers for its own 3DOs (`PrimitiveStruct+0x22`), which is why
+  the native pass needs no rotation maths today, and replacement geometry, not being in the
+  engine's piece tree, is placed instead from the node's rest offset (`Model3DONode+0x10`), the
+  `MOVE` delta (`PrimitiveStruct+0x04`) and the `TURN` triple (`+0x10`) accumulated down the
+  tree. The `tagpu_posedump.on` probe it was written for has now been run, and it settled both
+  the rotation convention and the axis the exported model has to be mirrored on — the residual
+  against the engine's own posed vertices is 2e-5 model units per piece. It also caught the
+  replacement pass applying the body yaw *inverted*, which had been invisible because the test
+  scenario was parked at facing 90, one of the four facings where the two agree. Derivation and
+  authoring guide: [model import](model-import.html); **(c)** true-colour and translucent
+  materials, which is the part of the stated purpose the palette-index path does not reach at
+  all.
 - **G9 — the MP-safety replay byte-diff.** Mostly formalisation now: 200v200 measures 59.7 fps
   and every hook is read-only over the sim, but this is the gate that *proves* the native stack
   is sim-neutral, and the byte-diff needs an unlocked session. It has been deferred several

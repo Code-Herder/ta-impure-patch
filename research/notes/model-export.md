@@ -18,7 +18,11 @@ side by side on a locally served page.
 
 The format details all live in [file formats](file-formats.md); this page is about the
 pipeline, the decisions it had to make, and the two places the shipped archives disagreed
-with that page.
+with that page. Taking a glTF back the other way — into the running engine, posed by the
+unit's own script — is [model import](model-import.md), and it is worth reading the axes
+section there before editing an exported model: the frame this page writes is a **mirror** of
+the file, while the frame the engine holds that same file in is a **180° yaw** of it, so the
+inverse trip is not the conversion below run backwards.
 
 ## The pipeline
 
@@ -100,6 +104,12 @@ sit underneath at 1:1. `--shots` also screenshots the pair for each standard vie
 - **Left and right survive the flip.** ARMPW's piece named `lfire` sits at +X in the file, and
   glTF calls +X *left*. The naming and the convention agree, so the export needs no extra
   rotation. [VERIFIED]
+- **The engine does not agree with this file's frame either — it yaws it 180°.** Measured
+  against a live unit's posed vertex buffer: `Model3DONode` vertices and offsets are the file's
+  with **x and z both negated**, which is a rotation, not a mirror, and is invisible in any
+  render of the model alone. It matters only when an exported model has to be placed back in the
+  engine's own frame; [model import](model-import.md) carries the derivation. [VERIFIED —
+  `tagpu_posedump.on`, residual 2e-5 model units over every piece of a walking Peewee]
 - **Forward is -Z in the file.** Muzzle pieces sit at negative Z on every unit checked
   (ARMPW `lfire` -13.2, ARMSTUMP `flare` -16.3, CORRAID `flare` -15.2), so file -Z becomes
   export +Z and the model faces the glTF front. [VERIFIED]
@@ -148,9 +158,11 @@ of ARMPW matches `unitpics/armpw.pcx` in silhouette, camo, grey arms and dark le
 
 ## Not done yet
 
-- **No pose.** Pieces sit at their rest offsets. The COB VM is only read for `Create` hides; a
-  real animation path would run the bytecode (§2.6 of the file-formats note) and write per-piece
-  translation/rotation into the glTF nodes — or export animation samplers.
+- **No pose in the file.** Pieces sit at their rest offsets. The COB VM is only read for
+  `Create` hides; writing per-piece translation/rotation into the glTF nodes, or exporting
+  animation samplers, would need the bytecode run (§2.6 of the file-formats note). This is a
+  gap in the *file*, not in the game: an imported model is posed by the engine's live COB state
+  at render time, by node name — see [model import](model-import.md).
 - **Undithering does not touch geometry or the flat-colour faces.** A face with no texture is
   a single palette index and has nothing to undither; only sampled GAF frames go through the
   network. On ARMPW that is 13 of the 41 textured faces' worth of frames, against 40 flat ones.
