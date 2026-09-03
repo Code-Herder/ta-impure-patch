@@ -32,6 +32,12 @@
    are skipped before the lookup). [BINARY-VERIFIED] */
 #define GFX_GLOBALS_PP   0x0051FBD0u
 #define GFX_ALPHATAB     0xC0
+/* the target-sprite drawer and its only two callers (`0x4394E0` delegates to
+   it, `0x439B30` dispatches bit 3 to it); stdcall(ctx, view, node, pos, flag),
+   ret 0x14, no function-pointer table in the path [BINARY-VERIFIED] */
+#define SITE_TSPRITE1_VA 0x00439516u
+#define SITE_TSPRITE2_VA 0x00439C7Du
+#define LEAF_TSPRITE_VA  0x00439740u
 
 /* `83 EC 10 | 53 | 55` = sub esp,0x10; push ebx; push ebp — five
    position-independent bytes ending on an instruction boundary (0x46A435) */
@@ -62,7 +68,7 @@ static const unsigned char BARS_STOLEN[5] = { 0x83, 0xEC, 0x10, 0x53, 0x55 };
 
 #define SHIFT_HOTKEY 0xF9        /* the id the engine samples for the markers */
 
-/* WHY THE ENGINE'S BLEND LUT IS REPLACED FOR THE LENGTH OF A CAPTURE.
+/* WHY THE ENGINE'S BLEND LUT IS REPLACED ACROSS ONE CALL.
 
    The order pass's target sprite — the pulsing star at a move/attack waypoint,
    drawn by `0x439740` through `AlphaCompsteBuf2OFFScreen 0x4B8500` — is
@@ -76,30 +82,38 @@ static const unsigned char BARS_STOLEN[5] = { 0x83, 0xEC, 0x10, 0x53, 0x55 };
    "exactly what they already read out of the engine's frame today". That is
    true of what the primitive READS and wrong about what it WRITES: the blend
    result is a function of the destination, so a key destination gives a keyed
-   colour. Measured against stock: star olive (35,91,15)-ish vs ours teal.
+   colour. Measured against stock: star olive vs ours teal, 14% of the sprite's
+   bounding box on the cyan ramp against 1% after this.
 
-   The fix is to make the composite a copy. An identity LUT — every (src,dst)
-   pair answering src — lands the sprite in our buffer as its own palette
-   indices, and the replay then draws it opaque. That is a DELIBERATE departure
-   from stock, which blends it; the sprite's true colours are what the capture
-   now holds, so re-blending it against our own scene instead is a shader
-   change, not another capture change.
+   The fix is to make that one composite a copy: an identity LUT, every
+   (src,dst) pair answering src, lands the sprite in our buffer as its own
+   palette indices and the replay draws it opaque. That is a DELIBERATE
+   departure from stock, which blends it; the sprite's true colours are what the
+   capture now holds, so re-blending it against our own scene instead would be a
+   shader change rather than another capture change.
 
-   Installed only while a capture window is open, and only ever touched from the
-   game thread — the pointer is a global, so unlike the draw context's pixel
-   base it is safe to restore from a LATER frame if a window is ever abandoned
-   (see mark_hook8). Inside the window the only alpha composite the engine
-   reaches is that sprite, which is a caller survey rather than a guess: the LUT
-   has exactly three consumers in the image (`0x4CBF2C` x2 and `0x4CC057`, all
-   inside `0x4B8500` and its sibling at `0x4B84xx`), and of `0x4B8500`'s 24 call
-   sites only `0x4399BB` — the target-sprite drawer — is reachable between the
-   two hooks. The unit-sprite ones (`0x4593xx`, `0x4595E9`, `0x4597D3`) belong to
-   the earlier row sweep, `0x46A7xx` is past DrawGameScreen's `ret` at
-   `0x46A3FD`, and `0x49Cxxx` is the projectile pass `0x49BE60`, called at
-   `0x469B22` — before hook 8. The other things drawn in here cannot reach it:
-   the route dots are a masked `CopyGafToContext 0x4B7F90`, the rects and
-   circles are `DrawLine`, the group digits' `DrawTextCustomFont 0x4C14F0`
-   blits through `0x4CCF60`, and the health bars are ours. [BINARY-VERIFIED] */
+   THE SWAP IS SCOPED TO THE SINGLE CALL, and that is the whole design, not a
+   detail. `[globals+0xC0]` is not a bare pointer to borrow — it OWNS a 64 KB
+   heap buffer with a lifetime: `0x4BA5C0` allocates it through TA's own
+   allocator (`push 0x10000; call 0x4D83B0`), `0x4BA5F0` hands it to TA's free
+   (`0x4D85A0`) from the graphics teardown, and `0x4BAAD0` (`rep movsd` of
+   0x4000 dwords) and `0x4BA750` refill it wholesale when `palettes\PALETTE.ALP`
+   is (re)loaded per game. [BINARY-VERIFIED] So a pointer of ours left in that
+   slot across a frame boundary is not merely untidy: a table reload would write
+   64 KB into OUR buffer — silently un-fixing the star while leaving the
+   engine's real table stale for every other blend in the session — and a
+   teardown would pass a block from the DLL's heap to TA's static-CRT free.
+
+   An earlier revision installed it at hook 8 and restored it at hook 9, with a
+   comment claiming that a global "is safe to restore from a LATER frame". It is
+   not, and the abandonment path that comment pointed at (a `drawUnits == 0`
+   frame skips hook 9 entirely) is exactly how the pointer would have escaped.
+   Wrapping the two call sites of the drawer instead makes escape impossible:
+   the swap begins and ends inside one function call that always returns, so no
+   engine allocation, free or reload can ever observe it.
+
+   Gated on our capture window actually being open, so passive mode and the
+   engine's own frame are left with the engine's own blend. */
 static unsigned char*  g_opaqueTab;      /* 64 KB, built once at init      */
 static unsigned char** g_tabSlot;        /* non-NULL while ours is in      */
 static unsigned char*  g_tabSaved;       /* the engine's own pointer       */
@@ -210,7 +224,10 @@ static void alpha_opaque_on(void)
 static void alpha_opaque_off(void)
 {
     if (!g_tabSlot) return;
-    *g_tabSlot = g_tabSaved;
+    /* only put ours back if ours is still what is there: if the engine has
+       re-pointed the slot in between, writing the old pointer over it would
+       leak the new buffer and hand the engine a dangling one */
+    if (*g_tabSlot == g_opaqueTab) *g_tabSlot = g_tabSaved;
     g_tabSlot = NULL;
     g_tabSaved = NULL;
 }
@@ -426,8 +443,6 @@ static void __stdcall mark_hook8(void* ctx, int n)
        draw either way — nothing here can give it back — but the next frame
        starts clean instead of corrupting a stack. */
     if (L->active) { L->active = 0; L->ctx = NULL; L->saved = NULL; }
-    /* the blend LUT pointer is a global, so this one CAN be put back late */
-    alpha_opaque_off();
 
     /* The post-fog window is per-call and every one of its calls is still ahead
        of us in this frame, so this is where its frame starts. Its "nothing to
@@ -448,8 +463,6 @@ static void __stdcall mark_hook8(void* ctx, int n)
     if (!g_capture || !ptr_ok(ta) || !prefog_wanted(ta) ||
         !layer_begin(L, (int*)ctx, 1))
         layer_clear(L);
-    else
-        alpha_opaque_on();       /* the star is a copy, not a blend, in here */
 }
 
 /* hook 9: close the window before the layer-9 particles, which the engine
@@ -460,7 +473,6 @@ static void __stdcall mark_hook9(void* ctx, int n)
        drawUnits == 0, which only the movie recorder passes (see hook 8) — and
        `opens == ends` over ~50 000 blocks of live play says so. */
     layer_end(&g_L[TAGPU_MARK_PREFOG], 1);
-    alpha_opaque_off();
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
 }
 
@@ -514,6 +526,19 @@ static void __stdcall mark_selbox(void* ctx, void* unit)
     ((void (__stdcall *)(void*, void*))LEAF_SELBOX_VA)(ctx, unit);
 }
 
+/* The waypoint star, and the only place the blend LUT is touched. Bracketing
+   the call rather than the frame is what keeps our pointer out of a slot the
+   engine owns (see the note above). */
+static void __stdcall mark_tsprite(void* ctx, void* view, void* node,
+                                   void* pos, int flag)
+{
+    int mine = g_L[TAGPU_MARK_PREFOG].active;
+    if (mine) alpha_opaque_on();
+    ((void (__stdcall *)(void*, void*, void*, void*, int))LEAF_TSPRITE_VA)
+        (ctx, view, node, pos, flag);
+    if (mine) alpha_opaque_off();
+}
+
 /* ---- install ---------------------------------------------------------- */
 
 /* an `E8 <rel32>` at `site` whose target is `expect`? */
@@ -548,9 +573,12 @@ void tagpu_markown_init(void)
         !site_is(SITE_TRANSP2_VA, PASS_TRANSP_VA) ||
         !site_is(SITE_SELBOX1_VA, LEAF_SELBOX_VA)  ||
         !site_is(SITE_SELBOX2_VA, LEAF_SELBOX_VA)  ||
+        !site_is(SITE_TSPRITE1_VA, LEAF_TSPRITE_VA) ||
+        !site_is(SITE_TSPRITE2_VA, LEAF_TSPRITE_VA) ||
         memcmp((void*)LEAF_BARS_VA, BARS_STOLEN, 5) != 0) {
         flog("markown: NOT armed — engine bytes differ at one of "
-             "0x4699EB/0x469B8A/0x469BD7/0x469D2C/0x469EC5/0x469F1E/0x46A430");
+             "0x4699EB/0x469B8A/0x469BD7/0x469D2C/0x469EC5/0x469F1E/0x46A430/"
+             "0x439516/0x439C7D");
         return;
     }
 
@@ -562,12 +590,15 @@ void tagpu_markown_init(void)
     ok &= redirect(SITE_TRANSP2_VA, (void*)mark_transp);
     ok &= redirect(SITE_SELBOX1_VA, (void*)mark_selbox);
     ok &= redirect(SITE_SELBOX2_VA, (void*)mark_selbox);
+    ok &= redirect(SITE_TSPRITE1_VA, (void*)mark_tsprite);
+    ok &= redirect(SITE_TSPRITE2_VA, (void*)mark_tsprite);
     ok &= tagpu_detour_leaf(LEAF_BARS_VA, BARS_STOLEN, 5,
                             &g_markown_skipBars, 0x10);
     g_installed = ok;
     _snprintf(b, sizeof b,
-        "markown: %s (hook8/hook9/transp x2/selbox x2 redirected, bars@0x46A430 "
-        "detoured; all follow tagpu_mark.on)", ok ? "ARMED" : "PARTIAL — see above");
+        "markown: %s (hook8/hook9/transp x2/selbox x2/tsprite x2 redirected, "
+        "bars@0x46A430 detoured; all follow tagpu_mark.on)",
+        ok ? "ARMED" : "PARTIAL — see above");
     flog(b);
 }
 

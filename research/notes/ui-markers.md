@@ -433,10 +433,14 @@ Six call-site redirects and one prologue detour. **No collision with the other p
 the redirects *call* `0x471F90` and `0x4BF8C0`, so whatever `fxown` and `terrown`
 installed on those still runs.
 
-**What the capture buffer holds under a blend.** `DrawTranspRectangle`'s transparent
-edges and the order sprite's alpha composite read the destination. Ours is key-filled,
-which is exactly what they already read out of the engine's frame today, because
-`terrown` fills the viewport with that same key.
+**What the capture buffer holds under a blend.** Exactly one primitive in either window
+reads the destination: the order pass's target sprite. Ours is key-filled, which is what
+it already read out of the engine's frame today, because `terrown` fills the viewport with
+that same key. **`DrawTranspRectangle 0x4BF8C0` does not** — it is named for its hollow
+centre, not for translucency, and its four clipped edge runs only ever store, never load
+[CORRECTED 2026-09-03: earlier text here called its "transparent edges" blend-reading].
+The drag band box rendering as a clean white outline rather than washing out like the star
+is the visible confirmation.
 
 **That was originally called harmless, and it was not** [CORRECTED 2026-09-03]. What
 those primitives *read* is unchanged; what they *write* is a function of it. The target
@@ -455,9 +459,21 @@ unlike the context's pixel base it can safely be restored from a later frame if 
 is ever abandoned. Inside the window it is the only alpha composite the engine reaches —
 the route dots are a masked `CopyGafToContext 0x4B7F90` (and `fxown`'s detour on that leaf
 only skips while the explosion pass is running, so the dots are untouched), the rects and
-circles are `DrawLine`, and the health bars are ours. The replay then draws the sprite
-**opaque**, which is a deliberate departure from stock's blend; re-blending it against our
-own scene instead would now be a shader change, not another capture change.
+circles are `DrawLine`, the group digits' `DrawTextCustomFont 0x4C14F0` blits through
+`0x4CCF60`, and the health bars are ours. The replay then draws the sprite **opaque**,
+which is a deliberate departure from stock's blend; re-blending it against our own scene
+instead would now be a shader change, not another capture change.
+
+**The swap is bracketed around the drawer's two call sites, not the frame, and that is
+load-bearing.** `[globals+0xC0]` owns a 64 KB heap buffer: `0x4BA5C0` allocates it through
+TA's allocator, `0x4BA5F0` frees it from the graphics teardown, and `0x4BAAD0` (`rep movsd`
+of 0x4000 dwords) plus `0x4BA750` refill it when `palettes\PALETTE.ALP` loads per game.
+[BINARY-VERIFIED] A pointer of ours left there across a frame would therefore be
+overwritten by a table reload — silently un-fixing the star *and* leaving the engine's real
+table stale for every other blend — or handed to TA's free at teardown. `0x439740` has
+exactly two direct callers (`0x439516` in `0x4394E0`, `0x439C7D` in `0x439B30`) and no
+function-pointer table in the path, so wrapping them scopes the swap to a call that always
+returns and no engine alloc/free/reload can observe it.
 
 ### 6.1 Cost, and the one honest gap
 

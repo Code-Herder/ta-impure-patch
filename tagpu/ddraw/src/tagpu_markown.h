@@ -34,19 +34,23 @@
    (+0x0C) at our own buffer for the length of a block sends every clipped blit
    inside it to us and leaves the engine's own frame untouched.
 
-   ONE PRIMITIVE NEEDS MORE THAN THAT. The blend-reading drawers
-   (`DrawTranspRectangle`'s transparent edges, the order pass's target sprite)
-   see the fill key underneath — the same thing they already read out of the
-   engine's frame, because tagpu_terrown.c fills the viewport with that key.
-   That was once written down here as harmless. It is not: what they READ is
-   unchanged, but what they WRITE is a function of it, so the waypoint star —
-   alpha-composited through `table[(src<<8)|dst]` — came out blended with the
-   key's bright cyan and looked washed out, where stock TA blends it with the
-   ground. The capture therefore also swaps the engine's blend LUT for an
-   identity one while a window is open, which turns that composite into a copy
-   and lands the sprite as its own colours (tagpu_markown.c, "WHY THE ENGINE'S
-   BLEND LUT IS REPLACED"). Drawing it opaque is then a deliberate choice, not
+   ONE PRIMITIVE NEEDS MORE THAN THAT, and it is exactly one: the order pass's
+   target sprite, the pulsing star at a waypoint. It is alpha-composited
+   through `table[(src<<8)|dst]`, so it READS the destination — which inside our
+   viewport is the fill key, tagpu_terrown.c having replaced the terrain with
+   it. That was once written down here as harmless. It is not: what it reads is
+   the same as before, but what it WRITES is a function of that, so the star
+   came out blended with the key's bright cyan and looked washed out where stock
+   TA blends it with the ground. The star's two call sites are therefore wrapped
+   with an identity blend LUT, which turns that one composite into a copy and
+   lands the sprite as its own colours (tagpu_markown.c, "WHY THE ENGINE'S BLEND
+   LUT IS REPLACED"). Drawing it opaque is then a deliberate choice rather than
    an accident of the key.
+
+   Nothing else in either window reads a destination. `DrawTranspRectangle`
+   `0x4BF8C0` is named for its hollow centre, not for translucency: it is four
+   clipped edge runs that only ever store, so the build cursor and the band box
+   need none of this — they came through the key-fill unharmed all along.
 
    Two capture windows, because fog divides them:
 
