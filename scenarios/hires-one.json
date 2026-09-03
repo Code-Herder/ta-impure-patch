@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "one Peewee beside one engine-rendered AK, parked, camera on them \u2014 the replacement-mesh close-up (a distant CORE unit keeps the mission alive)",
+  "description": "one Peewee beside one engine-rendered AK, parked, camera on them \u2014 the replacement-mesh close-up. Player 1 is an AI holding one distant unit: a slot that owns units must NOT be controller 'off' (the engine's UNITS_AllocateUnit faults on an off player's missing unit table), and a player with no units at all ends the mission.",
   "seed": 1,
   "on_error": "abort",
   "setup": {
@@ -21,7 +21,7 @@
       },
       {
         "slot": 1,
-        "controller": "off",
+        "controller": "ai",
         "side": "core",
         "color": 1
       }

@@ -328,6 +328,12 @@ tools/tacli switches t1 shootall=on noshake=on  # the SoftwareDebugMode bits, li
 - **`clear_existing` defaults true** and removes the skirmish's starting commanders
   silently. A scenario that leaves a player with **no units at all** is a defeat: TA goes
   to `ENDMSN.GUI` and nothing further applies. Give both sides something.
+- **A slot with `controller: "off"` must own nothing.** An off player never gets a unit
+  table, so the first unit created for it faults inside `UNITS_AllocateUnit` on a null
+  base — a hard crash during load with nothing in `tagpu.log` to explain it. Validation
+  now refuses this before launch and names the slot, so the failure mode is a message
+  rather than a dead game; the fix is `"ai"` (an idle AI with one unit is the usual way
+  to keep a side alive without giving it anything to do).
 - `roster` reports `idx=` — `UnitInGameIndex`, the same number `apply` returns, so the two
   views line up. It is recycled on death, so it names a unit only while it lives. Indices
   are handed out in **per-player blocks of the unit limit**, so with `unit_limit: 500`
@@ -344,6 +350,18 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
   engine UI (menus, placement boxes). **Native GPU-rendered units are invisible here.**
 - `tacli glshot` — the GL framebuffer: what is actually presented, including our
   passes. Use this to judge our renderer.
+- `tacli crash <name>` — the last crash TA recorded, **symbolised**. TA installs
+  its own exception handler and writes `ErrorLog.txt` the instant it faults, so a
+  crash is visible in milliseconds; `launch`, `wait` and `scenario apply/load` all
+  poll for it and **fail fast with the fault address** instead of sitting out their
+  timeout and then blaming the loading screen. Read the address, not just the
+  message: `hires CRASHED in TotalA.exe at UNITS_SetHotKeyGroup+0x8d | C0000005 |
+  Access violation: Illegal read, data address 0x0000001C` named the cause
+  (below) in one line. Symbols come from `tools/ta_symbols.txt`, so the name is
+  the nearest preceding one — treat it as a neighbourhood, not a signature.
+  **`ErrorLog.txt` is shared between instances** (the gamedir symlinks it), which
+  is why the report matches the crashing exe's path against the instance before
+  claiming the crash is yours.
 - `tacli peek <name> '*0x511DE8+0x2C74:2'` — read game memory from inside the
   process (deref with `*`, `+hex` offsets, `:1|2|4|s<N>|x<N>`). The cheap way to
   answer "did that actually change anything?" without a debugger. Grammar:
@@ -597,6 +615,9 @@ storage's does not); `tacli log` returns a tail of the file, so count lines in t
 
 ## Things that will bite you
 
+- **A launch or wait that "timed out" has usually crashed instead.** Check
+  `tacli crash <name>` before theorising about loading screens — the commands do it
+  for you now, but a hand-rolled poll will not.
 - `pkill -f TotalA.exe` kills your own shell (the pattern matches the wrapper).
   Use `pkill -x` / `pgrep -x`, or just `tacli stop`.
 - `tagpu.log` contains binary bytes: always `grep -a` (tacli's `log`/`wait` handle it).

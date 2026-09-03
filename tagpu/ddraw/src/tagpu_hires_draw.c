@@ -127,7 +127,6 @@ static const char* FS =
     "uniform vec2 uSunAmb;\n"                 /* sun, ambient                 */
     "uniform float uAnchorMix;\n"             /* 0 modern .. 1 engine ramp    */
     "uniform ivec3 uShade;\n"
-    "uniform int uDbg;\n"                 /* ref index, neutral row, dir  */
     TAGPU_GLSL_FOG_FN
     "const float PI = 3.14159265;\n"
     "float lum(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }\n"
@@ -163,10 +162,16 @@ static const char* FS =
     "  vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdH, 5.0);\n"
     "  vec3 spec = D * G * F / (4.0 * NdL * NdV + 1e-4);\n"
     "  vec3 kd = (1.0 - F) * (1.0 - uMR.x);\n"
-    "  return (kd * alb / PI + spec) * uSunAmb.x * NdL + alb * uSunAmb.y;\n"
+    /* The ambient stands in for an environment map we do not have, and it has
+       to cover BOTH lobes. A metal has no diffuse at all, so lighting it with
+       `albedo * ambient` alone leaves it BLACK everywhere the one directional
+       highlight does not land — which is most of a unit most of the time. Give
+       the specular lobe its own ambient, weighted by F0 and opened by
+       roughness. */
+    "  vec3 amb = uSunAmb.y * (kd * alb + F0 * (2.0 - r));\n"
+    "  return (kd * alb / PI + spec) * uSunAmb.x * NdL + amb;\n"
     "}\n"
     "void main(){\n"
-    "  if (uDbg == 1) { frag = vec4(1.0, 0.0, 1.0, 1.0); return; }\n"
     "  vec4 tex = texture(uAlbedo, vUV);\n"
     "  if (uCutoff >= 0.0 && tex.a * uBase.a < uCutoff) discard;\n"
     TAGPU_GLSL_SCAF_TEST
@@ -175,7 +180,6 @@ static const char* FS =
     "  if (uShadow == 1) { if (vVY <= uWaterT) discard;\n"
     "                      frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
     /* double-sided: face the viewer, the same rule the native emitters use */
-    "  if (uDbg == 2) { frag = vec4(0.0, 1.0, 1.0, 1.0); return; }\n"
     "  vec3 N = normalize(vNrm);\n"
     "  if (dot(N, normalize(uView)) < 0.0) N = -N;\n"
     "  if (uHasNrm == 1) {\n"
@@ -197,8 +201,6 @@ static const char* FS =
     "  vec3 modern = pow(max(pbr(albLin, N), 0.0), vec3(1.0/2.2));\n"
     "  vec3 engine = pow(albLin, vec3(1.0/2.2)) * engineMul(N);\n"
     "  vec3 rgb = mix(modern, engine, uAnchorMix);\n"
-    "  if (uDbg == 3) rgb = pow(tex.rgb, vec3(1.0));\n"
-    "  if (uDbg == 4) rgb = N * 0.5 + 0.5;\n"
     "  if (taFogC.y >= 0.5) rgb *= fogMul();\n"
     /* engine water table (prog+0xD0): r/2, g/2, b/2 + 0x32 */
     "  if (vVY <= uWaterT) {\n"
@@ -218,7 +220,7 @@ static GLuint s_prog;
 static GLint  u_game, u_offset, u_zoom, u_zoomC, u_depthScale, u_anchor, u_yawEnc;
 static GLint  u_hasNrm, u_base, u_mr, u_cutoff, u_shadow, u_alpha;
 static GLint  u_waterT, u_waterMode, u_digT, u_light, u_view, u_sunAmb;
-static GLint  u_anchorMix, u_shade, u_dbg, u_fog, u_fogOrg, u_fogDim;
+static GLint  u_anchorMix, u_shade, u_fog, u_fogOrg, u_fogDim;
 static GLint  u_scafOn, u_scafP, u_ss, u_zoomF, u_zoomCF;
 
 /* tagpu_hires.on tweaks, re-read on the same 30-frame cadence as the rest */
@@ -227,7 +229,6 @@ static float s_sun = 2.67f;      /* pi * 0.85: full light lands near albedo   */
 static float s_amb = 0.18f;
 static int   s_normalMaps = 1;
 static int   s_log = 0;
-static int   s_dbg = 0;
 
 static void* getgl(const char* n)
 {
@@ -284,7 +285,6 @@ static void ensure(void)
     u_digT = U("uDigT");        u_light = U("uLight");
     u_view = U("uView");        u_sunAmb = U("uSunAmb");
     u_anchorMix = U("uAnchorMix");  u_shade = U("uShade");
-    u_dbg = U("uDbg");
     u_fog = U("uFog");          u_fogOrg = U("uFogOrg");
     u_fogDim = U("uFogDim");    u_scafOn = U("uScafOn");
     u_scafP = U("uScafP");      u_ss = U("uSS");
@@ -310,7 +310,6 @@ static void tune(unsigned frame_counter)
     static int first = 1;
     if (!first && (frame_counter % 30) != 0) return;
     first = 0;
-    s_anchorMix = 0.0f; s_sun = 2.67f; s_amb = 0.18f; s_normalMaps = 1; s_log = 0; s_dbg = 0;
     HANDLE h = CreateFileA("tagpu_hires.on", GENERIC_READ, FILE_SHARE_READ,
                            0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -331,7 +330,6 @@ static void tune(unsigned frame_counter)
             else if (!_strnicmp(p, "amb=", 4))  s_amb = (float)atof(p + 4);
             else if (!lstrcmpiA(p, "nonormal")) s_normalMaps = 0;
             else if (!lstrcmpiA(p, "log"))      s_log = 1;
-            else if (!_strnicmp(p, "dbg=", 4))  s_dbg = atoi(p + 4);
             if (last) break;
             p = q + 1;
         }
@@ -370,7 +368,6 @@ void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
         float sa[2]; sa[0] = s_sun; sa[1] = s_amb;
         glUniform2fv(u_sunAmb, 1, sa);
         glUniform1f(u_anchorMix, s_anchorMix);
-        glUniform1i(u_dbg, s_dbg);
         GLint sh[3];
         sh[0] = SHADE_REF; sh[1] = v->shNeutral; sh[2] = v->shDir;
         glUniform3iv(u_shade, 1, sh);

@@ -16,6 +16,7 @@ Everything is stdlib-only and every subcommand can print JSON (--json) for agent
 import argparse
 import difflib
 import hashlib
+import bisect
 import json
 import math
 import os
@@ -929,10 +930,19 @@ def _launch(args) -> dict:
                             start_new_session=True)
     deadline = time.time() + args.timeout
     pid = None
+    crash_since = crash_mtime(inst)
     while time.time() < deadline:
         pid = inst.pid()
         if pid and inst.window():
             break
+        if proc.poll() is not None:
+            time.sleep(0.3)               # let TA's handler finish writing
+            die(crash_report(inst, crash_since) or
+                f"{inst.name} exited during launch before showing a window "
+                f"(no ErrorLog.txt)")
+        report = crash_report(inst, crash_since)
+        if report:
+            die(report)
         time.sleep(0.5)
     win = place_window(inst, display)
     restored = pointer_restore(display, pointer_before)
@@ -1218,6 +1228,114 @@ def cmd_weapons(args):
     out(data, args.json, human=head + ("\n" + "\n".join(rows) if rows else "\n(no matching units)"))
 
 
+# ---------------------------------------------------------------- crash watch
+
+# TA installs its own exception handler and writes ErrorLog.txt the instant it
+# faults, so a crash is detectable in milliseconds. Waiting out a 30 s timeout
+# and then guessing ("is the game past its loading screen?") wastes the time AND
+# names the wrong cause; every wait below now fails fast with the fault address,
+# symbolised against tools/ta_symbols.txt.
+
+_SYMS = None
+
+
+def _symbols():
+    """(addr, name) sorted, from tools/ta_symbols.txt — empty if it is missing."""
+    global _SYMS
+    if _SYMS is None:
+        _SYMS = []
+        try:
+            for ln in (Path(__file__).resolve().parent / "ta_symbols.txt").read_text().splitlines():
+                f = ln.split()
+                if len(f) >= 2 and f[1].startswith("0x"):
+                    try:
+                        _SYMS.append((int(f[1], 16), f[0]))
+                    except ValueError:
+                        pass
+        except OSError:
+            pass
+        _SYMS.sort()
+    return _SYMS
+
+
+def symbolize(addr: int) -> str:
+    """`name+0xNN` for the nearest preceding symbol, or the bare address."""
+    syms = _symbols()
+    i = bisect.bisect_right(syms, (addr, "\xff")) - 1
+    if i < 0 or addr - syms[i][0] > 0x4000:
+        return f"0x{addr:06X}"
+    return f"{syms[i][1]}+0x{addr - syms[i][0]:x}"
+
+
+def crash_mtime(inst: "Instance") -> float:
+    try:
+        return (inst.gamedir / "ErrorLog.txt").stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def crash_report(inst: "Instance", since: float):
+    """A one-line summary of a crash newer than `since` belonging to THIS
+    instance, or None. The file can be shared between instances (the gamedir
+    symlinks it), so the exe path inside it is what attributes the crash."""
+    path = inst.gamedir / "ErrorLog.txt"
+    try:
+        if path.stat().st_mtime <= since:
+            return None
+        text = path.read_text(errors="replace")
+    except OSError:
+        return None
+    want = str(inst.gamedir).replace("/", "\\").lower()
+    if want not in text.replace("/", "\\").lower():
+        return None                    # another instance's crash, same file
+    m = re.search(r"module (\S+?) at [0-9a-fA-F]+:([0-9a-fA-F]+)", text)
+    where = f"{m.group(1)} at {symbolize(int(m.group(2), 16))}" if m else "unknown address"
+    code = re.search(r"ExceptionCode = (\S+ - .+)", text)
+    detail = re.search(r"(Access violation: .+)", text)
+    stack = re.findall(r"^([0-9a-fA-F]{6,8})$", text, re.M)[:4]
+    msg = [f"{inst.name} CRASHED in {where}"]
+    if code:
+        msg.append(code.group(1).strip())
+    if detail:
+        msg.append(detail.group(1).strip())
+    if stack:
+        msg.append("stack: " + " <- ".join(symbolize(int(a, 16)) for a in stack))
+    return " | ".join(msg) + f" (full report: {path})"
+
+
+class CrashWatch:
+    """Poll for "the game died" alongside whatever a wait loop is waiting for.
+
+    Two signals: TA's own ErrorLog.txt (fast, and says where), and the process
+    going away (covers a kill or a fault the handler never got to report)."""
+
+    def __init__(self, inst: "Instance", what: str = "the game"):
+        self.inst = inst
+        self.what = what
+        self.since = crash_mtime(inst)
+        self.had_pid = inst.running()
+        self.next_poll = time.time() + 0.5
+
+    def check(self):
+        report = crash_report(self.inst, self.since)
+        if report:
+            return report
+        now = time.time()
+        if self.had_pid and now >= self.next_poll:
+            self.next_poll = now + 0.5          # scanning /proc is not free
+            if not self.inst.running():
+                time.sleep(0.3)                 # let the handler finish writing
+                return (crash_report(self.inst, self.since) or
+                        f"{self.inst.name} exited while waiting for {self.what} "
+                        f"(no ErrorLog.txt — killed, or a fault TA could not report)")
+        return None
+
+    def die_if_crashed(self):
+        report = self.check()
+        if report:
+            die(report)
+
+
 def _wait_file(path: Path, timeout: float, since: float):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -1316,12 +1434,27 @@ def cmd_roster(args):
              or "no roster lines yet (needs a running game)")
 
 
+def cmd_crash(args):
+    """Report the last crash TA recorded for this instance, symbolised."""
+    inst = Instance(args.name)
+    path = inst.gamedir / "ErrorLog.txt"
+    report = crash_report(inst, -1.0)
+    if not report:
+        human = (f"no crash recorded for {inst.name}"
+                 + ("" if path.exists() else f" (no {path.name})"))
+        out({"name": inst.name, "crashed": False}, args.json, human=human)
+        return
+    out({"name": inst.name, "crashed": True, "report": report,
+         "log": str(path)}, args.json, human=report)
+
+
 def cmd_wait(args):
     """Block until a regex appears in tagpu.log (new lines only)."""
     inst = Instance(args.name)
     path = inst.gamedir / "tagpu.log"
     rx = re.compile(args.pattern)
     start = path.stat().st_size if path.exists() else 0
+    watch = CrashWatch(inst, f"/{args.pattern}/")
     deadline = time.time() + args.timeout
     while time.time() < deadline:
         if path.exists():
@@ -1332,6 +1465,7 @@ def cmd_wait(args):
                 if rx.search(line):
                     out({"name": args.name, "matched": line}, args.json, human=line)
                     return
+        watch.die_if_crashed()
         time.sleep(0.5)
     die(f"timeout waiting for /{args.pattern}/")
 
@@ -2858,6 +2992,13 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
                 f"figure is gone within a second (the result reports what survived)")
 
     slots = {p["slot"] for p in norm["setup"]["players"]}
+    # A slot with controller "off" gets no unit table from the engine, so the
+    # first unit created for it faults inside UNITS_AllocateUnit reading a null
+    # base (measured: TotalA.exe UNITS_SetHotKeyGroup+0x8d, illegal read at
+    # 0x1C). It is a hard crash on load with nothing in tagpu.log to explain it,
+    # so refuse here rather than let the game die.
+    off_slots = {p["slot"] for p in norm["setup"]["players"]
+                 if p["controller"] == "off"}
     handles = {}
 
     def claim(name, kind, where, authored=True):
@@ -2880,6 +3021,11 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
         if slots and owner not in slots:
             die(f"{where}.owner: player {owner} is not declared in setup.players "
                 f"(declared: {', '.join(str(s) for s in sorted(slots))})")
+        if owner in off_slots:
+            die(f"{where}.owner: player {owner} has controller 'off', and an off "
+                f"player owns no unit table — creating a unit for it CRASHES TA "
+                f"in UNITS_AllocateUnit. Give slot {owner} controller 'ai' (or "
+                f"'human'), or hand the unit to another slot")
         return owner
 
     if norm["setup"]["map"] and map_names is not None:
@@ -3289,6 +3435,7 @@ def _scn_apply(inst: Instance, wire: str, timeout: float) -> dict:
         die(f"{inst.name} is not running (tacli launch {inst.name})")
     result = inst.gamedir / "tagpu_scenario.json"
     before = result.stat().st_mtime_ns if result.exists() else 0
+    watch = CrashWatch(inst, "the scenario result")
     (inst.gamedir / "tagpu_scenario.trigger").write_text(wire)
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -3297,6 +3444,7 @@ def _scn_apply(inst: Instance, wire: str, timeout: float) -> dict:
                 return json.loads(result.read_text())
             except json.JSONDecodeError:
                 pass                      # a rename we caught mid-flight; retry
+        watch.die_if_crashed()
         time.sleep(0.05)
     die(f"no result appeared in {timeout:g}s — is the game past its loading screen? "
         f"(tacli log {inst.name} -g scenario)")
@@ -3847,6 +3995,11 @@ def build_parser():
     g.add_argument("-o", "--output")
     g.add_argument("--timeout", type=float, default=15)
     g.set_defaults(func=cmd_glshot)
+
+    cr = sub.add_parser("crash", help="last crash TA recorded, symbolised")
+    add_common(cr)
+    cr.add_argument("name")
+    cr.set_defaults(func=cmd_crash)
 
     lg = sub.add_parser("log", help="tail tagpu.log")
     add_common(lg)
