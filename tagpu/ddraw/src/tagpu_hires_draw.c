@@ -345,6 +345,17 @@ static void tune(unsigned frame_counter)
     static int first = 1;
     if (!first && (frame_counter % 30) != 0) return;
     first = 0;
+    /* Back to the defaults FIRST, every re-read. These are live knobs whose
+       whole point is a one-second loop, and a flag that only ever latches on
+       is not a knob: write `nonormal` to compare, delete it, and normal maps
+       would have stayed off for the rest of the session — as would `log`,
+       still writing to tagpu.log every 60 frames. Deleting the file has to
+       mean the defaults too, so this happens before the early return. */
+    s_anchorMix = 0.0f;
+    s_sun = 2.67f;
+    s_amb = 0.18f;
+    s_normalMaps = 1;
+    s_log = 0;
     HANDLE h = CreateFileA("tagpu_hires.on", GENERIC_READ, FILE_SHARE_READ,
                            0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -428,9 +439,19 @@ void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
         sh[0] = SHADE_REF; sh[1] = v->shNeutral; sh[2] = v->shDir;
         glUniform3iv(u_shade, 1, sh);
     }
-    /* units 6 and 7 are ours; the shared textures on 0..5 stay exactly as the
-       native pass bound them, INCLUDING its atlas on unit 0 — the texture
-       uploads below would otherwise clobber it mid-frame */
+    /* The shared textures this pass samples, bound from the view struct that
+       carries them rather than inherited from wherever the native pass last
+       left the units. It used to work only because these calls happen to sit
+       after that binding block; anything inserted between — a new pass, a
+       reordered one — would have shaded our units through the wrong LUT with
+       nothing to show for it. Unit 0 is deliberately NOT touched: it holds the
+       native atlas, and the texture uploads below would clobber it mid-frame.
+       Units 6 and 7 are ours. */
+    x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, v->lutTex);
+    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->palTex);
+    x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->scafTex);
+    x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, v->fogTex);
+    x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, v->fogLutTex);
     x_glActiveTexture(GL_TEXTURE6);
 
     int drawn = 0, tris = 0;

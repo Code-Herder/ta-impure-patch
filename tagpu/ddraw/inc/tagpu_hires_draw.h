@@ -16,6 +16,10 @@ typedef struct {
     unsigned int scafTex;
     float scafP[4];             /* vpL, vpT, vw, vh                           */
     float fogOrg[2], fogDim[2];
+    /* the shared textures the pass samples: it binds these itself, on the
+       units its shader names (1 LUT, 2 palette, 3 scaffold, 4 fog grid,
+       5 fog LUT), so it does not depend on being called while the native
+       pass's own binds happen to still be live */
     unsigned int palTex, lutTex, fogTex, fogLutTex;
     int   shNeutral, shDir;     /* the engine's SHD rows, for the ramp anchor */
 } TAGPU_HVIEW;

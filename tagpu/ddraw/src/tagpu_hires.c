@@ -71,6 +71,7 @@
 #define MAXIMG    32       /* distinct images per model                      */
 #define MAXBUF    8        /* glTF buffers per model                         */
 #define MAXTEX    2048     /* an image may not exceed this on a side         */
+#define MAXNODE   4096     /* glTF nodes we will walk in one model           */
 #define MAXFILE   (64u << 20)
 #define HVSTRIDE  9        /* floats/vertex: px,py,pz, nx,ny,nz, u,v, piece  */
 
@@ -289,7 +290,11 @@ static double jval(const GCtx* g, int tok, double def)
     if (tok < 0 || g->t[tok].type != JS_PRIM) return def;
     const char* s = g->js + g->t[tok].start;
     if (*s == 't') return 1.0;
-    if (*s == 'f' || *s == 'n') return 0.0;
+    if (*s == 'f') return 0.0;
+    /* null is the ABSENCE of a value, not zero. `"mesh": null` reaching
+       gi(..., "mesh", -1) as 0 would give that node mesh 0's geometry a second
+       time, at that node's transform, and a piece slot to go with it. */
+    if (*s == 'n') return def;
     return jnum(s, g->js + g->t[tok].end);
 }
 
@@ -549,7 +554,8 @@ typedef struct {
     unsigned char* gid;        /* per tri: which HGroup it belongs to        */
     unsigned char* pid;        /* per tri: which piece it belongs to         */
     int    piece;              /* piece the node being walked owns          */
-    int    ntri, trunc, ptrunc, gtrunc, itrunc;
+    unsigned char* seen;       /* per glTF node: already walked             */
+    int    ntri, trunc, ptrunc, gtrunc, itrunc, cyc;
 } Build;
 
 /* decode images[idx] once per model; returns its HMesh.img slot, or -1 */
@@ -734,7 +740,21 @@ static void emit_mesh(Build* b, int meshIdx, const float* m)
         int hasUV = ua >= 0 && gacc(g, ua, &uv) && uv.ncomp >= 2 &&
                     uv.count >= pos.count;
         int ia = gi(g, pr, "indices", -1);
-        int hasI = ia >= 0 && gacc(g, ia, &idx) && idx.ncomp == 1 && compsz(idx.comp);
+        /* only the three UNSIGNED types glTF allows for indices, which are
+           also the three gidx can read: compsz() also accepts the signed and
+           float ones, and letting those through here would drop every triangle
+           and report "no drawable triangles" — a message that points at the
+           geometry rather than at the index encoding */
+        int hasI = ia >= 0 && gacc(g, ia, &idx) && idx.ncomp == 1 &&
+                   (idx.comp == 5121 || idx.comp == 5123 || idx.comp == 5125);
+        if (ia >= 0 && !hasI) {
+            char ib[160];
+            _snprintf(ib, sizeof ib, "hires: primitive indices are component "
+                      "type %d, which glTF does not allow and this does not "
+                      "read - the primitive is skipped", gi(g, jelem(g, groot(g, "accessors"), ia), "componentType", 0));
+            hlog(ib);
+            continue;
+        }
         int nverts = hasI ? idx.count : pos.count;
         int grp = group_for(b, gi(g, pr, "material", -1));
         if (grp < 0) continue;
@@ -820,6 +840,15 @@ static void walk_node(Build* b, int nodeIdx, const float* parent, int depth)
     if (depth > 32) return;
     int nd = jelem(g, groot(g, "nodes"), nodeIdx);
     if (nd < 0) return;
+    /* glTF nodes are a disjoint union of strict trees, so reaching one twice
+       means the file is malformed. The depth cap alone does not save us: it
+       bounds chain LENGTH, and a node listing the same child twice at each of
+       32 levels is 2^32 visits — the render thread hangs with nothing logged,
+       which is the worst way for a bad file to fail. */
+    if (nodeIdx >= 0 && nodeIdx < MAXNODE) {
+        if (b->seen[nodeIdx]) { b->cyc = 1; return; }
+        b->seen[nodeIdx] = 1;
+    }
     float loc[16], m[16];
     node_local(g, nd, loc);
     mat_mul(parent, loc, m);
@@ -947,7 +976,8 @@ static int load_gltf(HMesh* m, const char* path)
     bd.t   = malloc(sizeof(float) * 6 * MAXTRI);
     bd.gid = malloc(MAXTRI);
     bd.pid = malloc(MAXTRI);
-    if (!bd.p || !bd.n || !bd.t || !bd.gid || !bd.pid) goto fail;
+    bd.seen = calloc(MAXNODE, 1);
+    if (!bd.p || !bd.n || !bd.t || !bd.gid || !bd.pid || !bd.seen) goto fail;
 
     {
         float I[16];
@@ -999,16 +1029,18 @@ static int load_gltf(HMesh* m, const char* path)
        silence about a cap reads as "the model really has 32 materials" — and a
        model over the material or image cap comes out with holes or white
        patches, which looks like a broken export rather than a limit. */
-    if (bd.trunc || bd.ptrunc || bd.gtrunc || bd.itrunc) {
-        _snprintf(b, sizeof b, "hires: TRUNCATED:%s%s%s%s",
+    if (bd.trunc || bd.ptrunc || bd.gtrunc || bd.itrunc || bd.cyc) {
+        _snprintf(b, sizeof b, "hires: TRUNCATED:%s%s%s%s%s",
                   bd.trunc  ? " triangles past the cap dropped;" : "",
                   bd.ptrunc ? " pieces past the cap cannot pose;" : "",
                   bd.gtrunc ? " materials past the cap DROP their triangles;" : "",
-                  bd.itrunc ? " images past the cap render white;" : "");
+                  bd.itrunc ? " images past the cap render white;" : "",
+                  bd.cyc    ? " a node was reached twice (the node graph is not"
+                              " a tree) and the repeat was skipped;" : "");
         hlog(b);
     }
 
-    free(bd.p); free(bd.n); free(bd.t); free(bd.gid); free(bd.pid);
+    free(bd.p); free(bd.n); free(bd.t); free(bd.gid); free(bd.pid); free(bd.seen);
     ctx_free(&g);
     free(toks);
     if (json != (char*)file) free(json);
@@ -1016,7 +1048,7 @@ static int load_gltf(HMesh* m, const char* path)
     return 1;
 
 fail:
-    free(bd.p); free(bd.n); free(bd.t); free(bd.gid); free(bd.pid);
+    free(bd.p); free(bd.n); free(bd.t); free(bd.gid); free(bd.pid); free(bd.seen);
     mesh_free(m);
     ctx_free(&g);
     free(toks);
@@ -1159,6 +1191,11 @@ static void name_check(HName* n)
         m->mtime = fad.ftLastWriteTime;
         lstrcpynA(m->path, use, sizeof m->path);
         m->valid = load_gltf(m, use);
+        /* a load that failed must not leave a CURRENT-looking mtime behind, or
+           every later check matches and the model is never retried — and the
+           file being briefly unreadable while it is copied in is exactly the
+           moment this fires */
+        if (!m->valid) memset(&m->mtime, 0, sizeof m->mtime);
         /* the HMesh keeps its address across a reload, so anything that cached
            something derived from the piece list has to be told the list is new */
         m->gen++;
