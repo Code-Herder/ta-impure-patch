@@ -28,6 +28,7 @@ import re
 import struct
 import subprocess
 import sys
+import time
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -905,11 +906,24 @@ def cmd_ab(args):
         ex, ey = args.eye.split(",")
         run_tacli(["eye", args.name, ex, ey])
 
-    roster = run_tacli(["roster", args.name], want_json=True)
-    eye = roster.get("eye")
-    if not eye:
-        die("the instance reported no camera eye yet (is the game past the shell?)")
-    print(f"tascene: live eye {eye[0]},{eye[1]}, {len(roster.get('units') or [])} units")
+    # `scenario load` returns when the applier has answered, but the overlay
+    # logs its roster block on its own cadence — so the newest `units:` line can
+    # still be the one from boot, whose eye is (0,0). Waiting for a roster that
+    # actually has units is the difference between a parity number and a
+    # meaningless 95% diff against the loading screen.
+    roster, eye = None, None
+    deadline = time.time() + args.settle
+    while time.time() < deadline:
+        roster = run_tacli(["roster", args.name], want_json=True)
+        eye = roster.get("eye")
+        if eye and (eye[0] or eye[1]) and roster.get("units"):
+            break
+        time.sleep(2.0)
+    if not eye or not (eye[0] or eye[1]) or not roster.get("units"):
+        die(f"no settled game state after {args.settle:g}s "
+            f"(eye={eye}, units={len(roster.get('units') or []) if roster else 0}) — "
+            "the roster still reads the boot frame, so any diff would be noise")
+    print(f"tascene: live eye {eye[0]},{eye[1]}, {len(roster['units'])} units")
 
     ppm = out / "engine.ppm"
     run_tacli(["glshot", args.name, "-o", str(ppm)])
@@ -988,6 +1002,8 @@ def main(argv=None):
                     help="SKIRMISH Line of Sight (0 = Permanent: no grey fog)")
     ab.add_argument("--mapping", type=int, choices=(0, 1), default=1)
     ab.add_argument("--launch-timeout", type=float, default=600.0)
+    ab.add_argument("--settle", type=float, default=90.0,
+                    help="seconds to wait for a roster with units and a real eye")
     ab.add_argument("--json", action="store_true")
     ab.set_defaults(func=cmd_ab)
 

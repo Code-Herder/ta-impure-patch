@@ -178,7 +178,7 @@ tascene ab     <scenario.json>              drive both sides, diff, write the pa
 
 ## Landing plan
 
-1. **Landing 1 — the parity lane.** ◐ **built, not yet A/B'd** (2026-09-03).
+1. **Landing 1 — the parity lane.** ● **done, A/B'd** (2026-09-03) — numbers below.
 2. **Landing 2 — the exploration lane.** Relief displacement, undithered atlases
    with the restorer cache, N·L sun, the wipe, `presets.json`.
 3. **Then, and only then**, a winning prototype becomes a roadmap gate with its
@@ -211,6 +211,48 @@ tascene ab     <scenario.json>              drive both sides, diff, write the pa
 Cross-checks that passed without a game running: the unit exporter produces
 **189 triangles for ARMCOM, the same count `ta3do render` reports**, and the
 gold shoulder panel that looked like a bug is in `ta3do`'s own quarter view too.
+
+### The A/B, measured  [VERIFIED 2026-09-03]
+
+`tascene ab scenarios/tascene-parity.json` against a live instance on Two
+Continents at 1024×768, engine eye **(2320,720)** read back from the roster,
+`--los 0 --mapping 1` (no fog). Engine GL framebuffer vs the browser, inside the
+896×704 viewport rect:
+
+| Region | Pixels | Differing | |
+|---|---|---|---|
+| whole viewport | 630 784 | 75 672 | 12.00 %, mean abs **0.91/255** |
+| **where we drew only terrain** | 354 744 | **284** | **0.080 %** |
+| where we drew a sprite or unit | 276 040 | 75 388 | 27.31 % |
+
+**88.00 % of the whole viewport is bit-exact**, and only 964 pixels (0.15 %)
+differ by more than 40 on any channel.
+
+The terrain residue is not terrain. **232 of those 284 pixels (81.7 %) are the
+mouse cursor** at (512,384), which the engine draws into the frame and we do
+not; the other 52 are scattered single pixels on feature-sprite edges. So the
+terrain pass reproduces `0x483FA0` at **52 / 354 744 = 0.015 %** — consistent
+with G13b's own "0 differing pixels" for the same blit.
+
+The sprite residue is **one known divergence, inherited rather than introduced**:
+tree *bodies* are pixel-identical, and the difference is the shadow. The engine
+remaps shadow pixels in palette space through `PALETTE.ALP`; we do tagpu's
+`frag = vec4(rgb * 0.5, 0.5)` premultiplied blend, so it is smooth where the
+engine dithers. G13a already recorded exactly this gap for tagpu's own feature
+pass. `palettes/palette.alp` is on disk (256×256) and shipping it in the pack
+would close it — not attempted here.
+
+Two unit-level gaps the A/B exposed, neither a placement error:
+
+- **The anchor is exact.** Computed screen anchor (512, 384) equals the engine's
+  own `roster screen=(512,384)`, and the TNT height at that cell (**96**) equals
+  the engine's runtime height — so the heightmap read and the
+  `worldZ − h/2` projection are both right.
+- **No team colour.** Our commander is visibly brighter: the engine remaps the
+  team-colour palette band per player and we do not. Cosmetic, and the band is
+  known (`ta3do`'s `TEAM_COLOR_BAND = range(9, 17)`).
+- **Yaw is still unverified.** The fixture places the commander at facing 90; a
+  facing-45 fixture is what would actually settle `facing + 180`.
 
 ### Two bugs the build found, both worth keeping written down
 
