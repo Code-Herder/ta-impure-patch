@@ -300,7 +300,7 @@ Two unit-level gaps the A/B exposed, neither a placement error:
 - **Yaw is still unverified.** The fixture places the commander at facing 90; a
   facing-45 fixture is what would actually settle `facing + 180`.
 
-### Two bugs the build found, both worth keeping written down
+### Three bugs the build found, all worth keeping written down
 
 - **Intra-model depth is not optional.** `tagpu_native.c` gives every vertex
   `encBase + clamp((2y − z)/256, ±1.8)` — "squeezed into the ±2 gap between row
@@ -320,12 +320,28 @@ Two unit-level gaps the A/B exposed, neither a placement error:
   hand-maintained copy would simply have gone on rendering the old shader, and
   the browser would have quietly stopped matching what tagpu ships.
 
+And a fourth, found by the A/B rather than by the build: **`ab` trusted a zero
+eye.** `tacli scenario load` returns when the applier has answered, but the
+overlay logs its roster block on its own cadence, so the newest `units:` line can
+still be the one from boot — whose eye is `(0,0)`. The first run built the browser
+frame at eye (0,0), diffed it against a real game frame and reported a
+meaningless **94.63 %**. That number looked like a result. `ab` now polls until
+the roster has both a non-zero eye and units, and dies saying so if it never
+settles.
+
 ### Still open on landing 1
 
-- **The A/B has not been run.** Every piece is wired and the fixture exists, but
-  no live diff number has been produced yet, so **no parity claim is made here**.
-  Running it launches a game window on the user's desktop, which is theirs.
-- No tests for `tascene` yet (`ta3do` and `tacli` both have suites).
-- The unit yaw convention (`facing + 180`, from the scenario format's "0 = build
-  heading 0x8000") is **unverified** — a bind pose at facing 90 looks plausible
-  from every angle. The A/B is what settles it, at facing 45.
+The A/B **has** been run — the numbers are above. What it left open:
+
+- **Feature shadows** use an RGB blend where the engine uses the `PALETTE.ALP`
+  palette-space remap, which is the whole of the sprite residue. This is tagpu's
+  existing gap (G13a), not a new one, but tascene could close it first —
+  `palettes/palette.alp` is on disk, 256×256.
+- **Owner colour**: frame 0 for every entry, so any unit not owned by player 0
+  wears player 0's ramp.
+- **Yaw is unverified**: the fixture is at facing 90, which looks plausible from
+  every angle. A facing-45 fixture settles `facing + 180`.
+- **The mouse cursor is counted against us** — it is engine-drawn and we do not
+  draw it, and it is 232 of the 284 terrain-classified differing pixels. The diff
+  should mask it, or the fixture should park the pointer outside the viewport.
+- **No tests for `tascene`** (`ta3do` and `tacli` both have suites).
