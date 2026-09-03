@@ -1,0 +1,34 @@
+{
+  "format": "ta-scenario/1",
+  "description": "20 Peewees vs 20 CORE AKs — the glTF replacement mesh (hires/armpw.glb) beside engine-rendered AKs",
+  "seed": 20260903,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "groups": [
+    { "id": "arm_wave", "owner": 0, "at": [2600, 1200],
+      "pattern": {"kind": "grid", "cols": 5, "spacing": 44, "jitter": 4},
+      "composition": [{"type": "ARMPW", "count": 20}],
+      "facing": 90,
+      "orders": [{"cmd": "attack", "to": [3200, 1200]}] },
+
+    { "id": "core_wave", "owner": 1, "at": [3200, 1200],
+      "pattern": {"kind": "grid", "cols": 5, "spacing": 44, "jitter": 4},
+      "composition": [{"type": "CORAK", "count": 20}],
+      "facing": 270,
+      "orders": [{"cmd": "attack", "to": [2600, 1200]}] }
+  ],
+
+  "camera": { "center_on": "arm_wave" }
+}

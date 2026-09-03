@@ -531,11 +531,22 @@ Uncompressed frames are just `Width×Height` bytes, row-major. [VERIFIED `gaf.cp
 
 **For the renderer:** resolve each 3DO primitive's `pTextureName` to a GAF frame, expand it to
 RGBA via the palette (treat `Background` index as alpha 0), and upload as a texture (an atlas
-of a unit's texture GAFs is convenient). Team color is handled by a reserved palette band
-that TA remaps per player — replace those at texture-build time. The band is **indices
-105–110**: that is what ARM's own colour patches (`colorsmd`, `colorsdk`, `colordk2` in
-`textures/logos.gaf`) are painted with. [VERIFIED — pixel histogram; an earlier revision of
-this note guessed ~216–223.]
+of a unit's texture GAFs is convenient).
+
+**Team colour is a frame table, not a palette remap.** An entry with several frames carries one
+**separately painted** frame per player, and the engine draws `frame[owner]` (clamped) — live-
+verified in a 4-AI skirmish, [gpu-render3do](gpu-render3do.html). `logos.gaf`'s `colorsmd` runs
+palette **105–107** in frame 0, 202–204 in frame 1, 80–83 in frame 2, 166–168 in frame 3 and so
+on for all ten player colours, so the "indices 105–110" of an earlier revision of this note was
+**player 0's ramp seen through frame 0**, not a band the engine rewrites. [VERIFIED — per-frame
+pixel histogram of every `logos.gaf` entry; an even earlier revision guessed ~216–223.]
+
+The canonical team-colour art is **16 entries × 10 frames in `textures/logos.gaf`**
+(`colorslt/md/dk`, `colordk2`, `Solid1a/2a/3a/3b`, `Solgradb`, `32xlogos`, `32XGouraud`,
+`Arm32Lt/Dk`, `Core32Lt/Dk`, `ArmLogoGouraud`, `CoreLogoGouraud`); **263 of the 608 stock
+models** name at least one. The engine keys on the entry being multi-frame rather than on the
+file: ARMCOM's torso takes its owner colour from `glow` (8 frames, `armbldg.gaf`). A static
+exporter has to pick a frame — `tools/ta3do` takes frame 0, i.e. player 0's blue.
 
 Tools: **Spring/Recoil** GAF loader; **TA3D**; Cavedog **"GAF Builder"**; community
 **"gaf2png"/"TAGaf"** converters; **`gafbuilder`** editors.
@@ -713,7 +724,8 @@ Tools: **TA3D** map loader; **"Annihilator"/"TA Map Editor"**; Spring map conver
    flat shading. Decide winding once and set cull face accordingly.
 5. **Resolve textures (§3).** For each primitive: `pTextureName==0` → flat material from the
    `PaletteEntry` palette color; else sample the named GAF frame, expanded palette→RGBA
-   (transparency index → alpha 0, team-color band remapped). Batch into an atlas per unit.
+   (transparency index → alpha 0; a multi-frame entry is team colour — pick `frame[owner]`,
+   §3). Batch into an atlas per unit.
 6. **Build the scene graph.** One node per 3DO piece; local matrix from `*FromParent` (+
    runtime `PrimitiveStruct.*Pos/*Turn` if animating). Upload interleaved vertex buffers
    per piece (or a merged buffer with per-vertex piece id for skinning-free posing).

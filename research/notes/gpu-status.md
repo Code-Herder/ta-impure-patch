@@ -29,6 +29,7 @@ moved by the composite too.
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
 | Health bars, order markers, group digits, build cursor, band box, selection rect | G13d | `markown`: 8 call-site redirects + 1 detour; bars re-drawn, the rest captured and replayed. The waypoint star's two sites are wrapped with an identity blend LUT so it composites opaque instead of against the fill key (§2.2) |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e | `tagpu_zoom.c` + the composite |
+| Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + 1 more + a 3-site byte patch, all behind `vpwide.on` |
 | **Chat, dialogs, side panel, minimap, top bar** | **— never** | screen-space and correct at 1:1 at any zoom; they come through the composite key by design |
 
@@ -39,24 +40,29 @@ things remain from the original plan:
 
 - **G11 — the replacement pipeline** (glTF convention + loader + one exemplar unit driven by
   live COB state). This is the project's stated purpose and it is the next real gate. The
-  groundwork is real but the two halves **do not meet yet** — worth being precise about,
-  because "the slot is proven and the exporter exists" reads as further along than it is:
+  groundwork is real and both halves are on `main` as of `f508124`, but "the slot is proven
+  and the exporter exists" still reads as further along than it is — the proven exemplar did
+  not come out of the exporter:
 
   | Half | Where it is | The gap |
   |---|---|---|
-  | Replacement-mesh slot in the DLL | `tagpu_hires.c` — `gamedir/hires/<defname>.obj` renders instead of the 3DO, hot-reloaded on mtime, engine anchor + body yaw, our shade/palette pipeline. **Proven end-to-end** (a 210-tri dome replaced the solar collector) | speaks an **OBJ subset** (`v` / `f` / `c <palette index>`), **whole-model only** — the source says so: *"piece-wise COB pose = G11"* — and colours are palette indices through the SHD LUT, not textures |
-  | glTF exporter | `tools/ta3do` — 3DO + GAF → glTF, standard views, `--undither` | **not on `main`**: it lives on the unmerged `worktree-3do_exporter` branch |
+  | Replacement-mesh slot in the DLL | `tagpu_hires.c` (glTF 2.0 loader) + `tagpu_hires_draw.c` (its own GL program) — `gamedir/hires/<defname>.glb` or `.gltf` renders instead of the 3DO, hot-reloaded on mtime. One static VBO per model, triangles sorted by material, one draw per material; per-pixel lighting against the engine's own light direction, normal maps through a derived TBN, metallic/roughness, mipmapped true colour. **Posed per piece from the engine's live COB state**, bound by glTF node name, so it walks, aims, recoils and honours `HIDE`. Shares the native pass's FBO, depth keys, scaffold, fog, waterline and silhouette shadow. **Proven end-to-end** (a 1577-tri 6-material Peewee, 20 of them in a fight vs engine-drawn AKs; the pose reconstructs the engine's own posed vertex buffer to 2e-5 model units) — [model import](model-import.html) | No skins, morph targets, glTF animation, sparse accessors or texture wrap modes (UVs clamp); PNG images only; 48 posable pieces. Team colour arrives as a `baseColorFactor` authored into the model by hand — the exemplar's `pw_team` and `pw_team_chest` materials carry ARM blue as a linear factor — and nothing drives it from the owning player. The order two simultaneous piece-turn axes compose in is a documented guess, and COB `MOVE` read zero in every sample |
+  | glTF exporter | `tools/ta3do` — 3DO + GAF → glTF, standard views, `--undither` | on `main` since `f508124`. The **landed exemplar did not come out of it**: `units/pee-wee/armpw-detailed.glb` carries Blender's own `Khronos glTF Blender I/O` generator string and a `baseColorFactor` this tool never writes (it emits `pbrMetallicRoughness` with `metallicFactor`/`roughnessFactor` only). So the hand-authoring step between 3DO and shippable model is the unautomated half |
 
   So G11 is three concrete pieces of work, not a wiring job: **(a)** land the exporter and
-  agree one format between it and the loader; **(b)** per-piece pose — the engine hands us
-  *fully posed* vertex buffers for its own 3DOs (`PrimitiveStruct+0x22`), which is why the
-  native pass needs no rotation maths today, but replacement geometry is not in the engine's
-  piece tree, so it must be placed from the posed origin (`+0x16/1A/1E`) and posed turns
-  (`+0x10/12/14`) — fields already identified in [Unit → 3DO bridge](unit-3do-bridge.html),
-  with the exact order/signs of the rotation composition still to be settled (that is what the
-  `tagpu_posedump.on` probe was written for, and it has not been run); **(c)** true-colour and
-  translucent materials, which is the part of the stated purpose the palette-index path does
-  not reach at all.
+  agree one format between it and the loader; **(b)** per-piece pose — **done**: the engine
+  hands us *fully posed* vertex buffers for its own 3DOs (`PrimitiveStruct+0x22`), which is why
+  the native pass needs no rotation maths today, and replacement geometry, not being in the
+  engine's piece tree, is placed instead from the node's rest offset (`Model3DONode+0x10`), the
+  `MOVE` delta (`PrimitiveStruct+0x04`) and the `TURN` triple (`+0x10`) accumulated down the
+  tree. The `tagpu_posedump.on` probe it was written for has now been run, and it settled both
+  the rotation convention and the axis the exported model has to be mirrored on — the residual
+  against the engine's own posed vertices is 2e-5 model units per piece. It also caught the
+  replacement pass applying the body yaw *inverted*, which had been invisible because the test
+  scenario was parked at facing 90, one of the four facings where the two agree. Derivation and
+  authoring guide: [model import](model-import.html); **(c)** true-colour and translucent
+  materials, which is the part of the stated purpose the palette-index path does not reach at
+  all.
 - **G9 — the MP-safety replay byte-diff.** Mostly formalisation now: 200v200 measures 59.7 fps
   and every hook is read-only over the sim, but this is the gate that *proves* the native stack
   is sim-neutral, and the byte-diff needs an unlocked session. It has been deferred several
@@ -329,9 +335,47 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | **`main+0x1434D`** | **`ScrollSpeed`** — sim-neutral (a local camera preference no other machine ever sees), driven at base/z, and its save path is guarded (§2.3) |
 | **`*(0x51FBD0) + 0xC0`** | **the blend LUT pointer. WRITTEN, transiently, and this is the one field we write that is NOT in `main`.** Swapped to an identity table across the target sprite's draw and restored on return, so the star composites as a copy (§2.2). Game thread only, bracketed around one call that always returns, restored only if ours is still installed, with a belt-and-braces restore at hook 8. It must never be left installed across a frame: `0x4BA5C0` allocates that buffer, `0x4BA5F0` frees it and `0x4BAAD0` refills 64 KB through the pointer, so a stale one of ours would be clobbered or cross-heap-freed |
 
+### 2.6 Engine byte patches — no hook, no state (`tagpu_patches.c`)
+
+Not detours and not redirects: bytes rewritten once in `DllMain` through `VirtualProtect`, each
+written only if the site still holds the value we recorded. They own no state and run no code of
+ours, so they are listed here rather than in §2.1–2.5. The table of them with the before/after
+bytes is `field-notes.md` §"Our engine patches".
+
+| VA | What it is | Mechanism |
+|---|---|---|
+| `0x4266A7` | the `jne` that reaches TA's startup DirectX-version warning | `75` → `EB`, so the warning is always skipped |
+| `0x43E50C` | `je 0x43EB02` — the `Interface Type == 1` arm of `0x43E490`'s order-1 (contextual) case, which suppresses `cursormove`, `cursorreclamate` and the rest | `0F 84 F0 05 00 00` → `90` ×6, so the contextual cursor always takes the classic branch. **Cursor only**: `0x43E490` has exactly one caller (`CorretCursor_InGame 0x48D220`) and no address literal in the image, while left-vs-right ordering reads `main+0x37EFA` at four other sites. `tagpu_curs.off` opts out, read once at attach |
+
+Neither writes engine state, so neither appears in §2.5. The engine still draws the cursor
+itself — the composite only moves it (§1); what the patch changes is which sequence out of
+`cursor_ary` (`main+0x1487F + idx*4`) the engine hands to `SetUICursor 0x4AB400`.
+
 ---
 
 ## 3. Known limits — what is still wrong, and what closing it needs
+
+### 3.0 Closed since the last pass: the interior cracks at zoom-out
+
+**Reproduced, root-caused and fixed** ([terrain & depth](terrain-depth.html) §7.6, the *fifth*
+mode). Two artefacts, one cause: at zoom 0.25 a quad's far edge can land exactly on a fragment
+centre, and that fragment's `u`/`v` interpolates to exactly `u1`/`v1`, which `GL_NEAREST` reads as
+the first texel of the **next atlas cell** — an unrelated tile for terrain (the blue hairlines
+along tile edges) and the packer's unwritten gutter for a GAF sprite (the black hairline down the
+right of every tree). It is **not** a key leak, which is why the key-tint detector used for 350+
+frames of sweeping was blind to it by construction.
+
+Fixed by a 1-texel replicated border on all four sides of every atlas cell (terrain now on a
+34-texel pitch, 2176×2720; GAF frames advance `w+2`/`h+2`) **plus** `TAGPU_EDGE_NUDGE`, a 1/32
+game-screen-pixel offset in the terrain vertex shader — the border alone leaves the fragment
+reading a repeated row that is out of phase with the minified tile's sampling cadence, which on
+dithered tile art is still a visible line (measured: 1.92× → 1.86×, i.e. no help). Verified flat
+(1.03–1.13× against a 1.92–2.05× baseline) at every camera phase, `ss=1` and `ss=2`, 1024×768 and
+1920×1080, across ten zoom levels; **1× output is bit-identical** to a build without the change.
+
+The border is also what a filtered sampler will need when the atlases stop being `GL_NEAREST`,
+which is why it is on all four sides rather than only the two that close today's bug.
+
 
 Ranked by how much they cost a player.
 

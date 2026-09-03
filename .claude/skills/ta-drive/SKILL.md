@@ -34,6 +34,14 @@ Capture and video work: the **ta-capture** skill.
    In a **worktree**, tacli pins the DLL your tree built (`<tree>/tagpu/ddraw/ddraw.dll`),
    falling back to the main checkout's — so build where you edit, or you will test the
    main checkout's binary and wonder why your change did nothing.
+   **It picks that DLL relative to the `tools/tacli` you invoked, not your cwd**
+   (`built_dll()`, `tools/tacli:77`), so run the worktree's own copy: `cd <tree> &&
+   tools/tacli …`. Building in the worktree and then calling the *main* checkout's
+   tacli silently launches the main checkout's binary, and the symptom is not an
+   error — modules simply never appear in `tagpu.log` (no `terrown:` / `zoom:` /
+   `vpwide:` ARMED line, no `terr:` grid line), which reads like a failed arm rather
+   than a stale DLL. When a module you know is armed does not log, `md5sum` the
+   instance's `gamedir/ddraw.dll` against your build before debugging anything else.
 6. **When the human is going to play it, check the window is on their monitor**
    before handing it over — see *Where the window lands*. A game that is running
    perfectly but sits off-screen still answers every `tacli` command and shows
@@ -168,8 +176,20 @@ game; the registry is only where TA saves the last one. So:
 
 ## Input details that cost time to learn
 
-- Clicks need `Interface Type=1` (right-mouse orders) — tacli sets it. Select with
-  `click`, order with `click --right`. Classic left-click-order resists posted clicks.
+- Clicks need `Interface Type=1` (right-mouse orders) — tacli sets it, on **every** launch
+  (`apply_prefix_settings`), so there is no instance anywhere that runs TA's own default.
+  Select with `click`, order with `click --right`. Classic left-click-order resists posted
+  clicks, and at `Interface Type=0` a posted **right**-click orders nothing at all (measured
+  2026-09-03: the unit carried on to the earlier left-click target).
+- **`Interface Type=1` is not neutral — it changes what the game does.** TA switches its
+  *contextual* cursor off at type 1: with a unit selected, hovering ground gives `cursornormal`
+  and hovering a wreck gives `cursorgrn`, where stock TA at type 0 gives `cursormove` and
+  `cursorreclamate`. So an instance is **not a baseline for anything cursor- or
+  interface-shaped**, and "stock TA does X" measured on a tacli instance may be measuring the
+  registry. Since G13j the fork patches the cursor half back on at any interface type
+  (`field-notes.md` patch 2); `tacli arm <i> curs.off` before launch restores the engine's own
+  behaviour for an A/B. The explicit order buttons (Move/Attack/Patrol/Reclaim/Guard) were
+  never affected either way.
 - **Ctrl/Shift/Alt combos land** (since phase 1.1): `tacli keys t1 ctrl+d`,
   `shift+2`, `ctrl+shift+a`. The modifier is held 150 ms because TA *polls* it.
   If a combo does nothing, read the diagnostic the shield logs when the hold expires —
@@ -376,6 +396,12 @@ tools/tacli switches t1 shootall=on noshake=on  # the SoftwareDebugMode bits, li
 - **`clear_existing` defaults true** and removes the skirmish's starting commanders
   silently. A scenario that leaves a player with **no units at all** is a defeat: TA goes
   to `ENDMSN.GUI` and nothing further applies. Give both sides something.
+- **A slot with `controller: "off"` must own nothing.** An off player never gets a unit
+  table, so the first unit created for it faults inside `UNITS_AllocateUnit` on a null
+  base — a hard crash during load with nothing in `tagpu.log` to explain it. Validation
+  now refuses this before launch and names the slot, so the failure mode is a message
+  rather than a dead game; the fix is `"ai"` (an idle AI with one unit is the usual way
+  to keep a side alive without giving it anything to do).
 - `roster` reports `idx=` — `UnitInGameIndex`, the same number `apply` returns, so the two
   views line up. It is recycled on death, so it names a unit only while it lives. Indices
   are handed out in **per-player blocks of the unit limit**, so with `unit_limit: 500`
@@ -392,6 +418,27 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
   engine UI (menus, placement boxes). **Native GPU-rendered units are invisible here.**
 - `tacli glshot` — the GL framebuffer: what is actually presented, including our
   passes. Use this to judge our renderer.
+- `tacli crash <name>` — the last crash TA recorded, **symbolised**. TA installs
+  its own exception handler and writes `ErrorLog.txt` the instant it faults, so a
+  crash is visible in milliseconds; `launch`, `wait` and `scenario apply/load` all
+  poll for it and **fail fast with the fault address** instead of sitting out their
+  timeout and then blaming the loading screen. Read the address, not just the
+  message: `hires CRASHED in TotalA.exe at UNITS_SetHotKeyGroup+0x8d | C0000005 |
+  Access violation: Illegal read, data address 0x0000001C` named the cause
+  (below) in one line. Symbols come from `tools/ta_symbols.txt`, so the name is
+  the nearest preceding one — treat it as a neighbourhood, not a signature.
+  **`ErrorLog.txt` is shared between instances** (the gamedir symlinks it), which
+  is why the report matches the crashing exe's path against the instance before
+  claiming the crash is yours.
+- **Cursor and hover state, without a screenshot**: `main+0x2CBE` is the cursor index the
+  engine currently has installed, `+0x2CBA` the unit under the pointer (0 = none), `+0x2CBC`
+  the feature under it (`0xFFFF` = none), `+0x2CC3` the current order byte (1 = contextual,
+  2 Move, 3 Attack, 7 Guard, 8 Repair, 9 Patrol, 12 Reclaim, 13 Capture, 14 build placement)
+  and `+0x2CC6` the mouse-region flags (bit0 minimap, bit1 world viewport, bit2 either). The
+  indices that matter: 1 attack, 5 defend, 7 patrol, 11 reclamate, 14 move, 15 select, 17 red,
+  18 grn, 19 normal — full table in `exe-reverse-engineering.md` §"The cursor chain". Park the
+  pointer with `keys <i> mouse:X,Y`, then peek; that is the whole measurement, and it beats
+  reading sprites out of a capture.
 - `tacli peek <name> '*0x511DE8+0x2C76:4'` — read game memory from inside the
   process (deref with `*`, `+hex` offsets, `:1|2|4|s<N>|x<N>`). The cheap way to
   answer "did that actually change anything?" without a debugger. Grammar:
@@ -699,6 +746,9 @@ storage's does not); `tacli log` returns a tail of the file, so count lines in t
 
 ## Things that will bite you
 
+- **A launch or wait that "timed out" has usually crashed instead.** Check
+  `tacli crash <name>` before theorising about loading screens — the commands do it
+  for you now, but a hand-rolled poll will not.
 - `pkill -f TotalA.exe` kills your own shell (the pattern matches the wrapper).
   Use `pkill -x` / `pgrep -x`, or just `tacli stop`.
 - `tagpu.log` contains binary bytes: always `grep -a` (tacli's `log`/`wait` handle it).

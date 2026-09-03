@@ -1,122 +1,1412 @@
-/* tagpu_hires.c — G12d hi-res model experiment: the REPLACEMENT-MESH SLOT.
+/* tagpu_hires.c — the REPLACEMENT-MESH SLOT (G12d, feeding G11): the glTF 2.0
+   loader. `tagpu_hires_draw.c` is the renderer that draws what this produces.
 
-   If gamedir/hires/<defname>.obj exists (lowercase unit def name, e.g.
-   armsolar.obj), the native pass renders THAT mesh for the unit type instead
-   of the engine's 3DO — proving the G11 replacement slot end-to-end: file-
-   driven geometry, hot reload (mtime watched), engine anchor + body yaw, our
-   shading/palette pipeline. Whole-model only (piece-wise COB pose = G11).
+   If gamedir/hires/<defname>.glb (or .gltf) exists — lowercase unit def name,
+   e.g. armpw.glb — the native pass renders THAT model for the unit type
+   instead of the engine's 3DO: engine anchor + body yaw, the frame's depth,
+   fog and water rules, hot reload on mtime (~2 s iteration loop).
 
-   OBJ subset: `v x y z` (model units = game px; +y up, +z north — same axes
-   as the 3DO model space, projected sx=+x, sy=-z-y/2), `f a b c [d]`
-   (1-based, quads split), `c <idx>` sets the palette colour index (0..255)
-   for subsequent faces (default 0xB4, metal grey). */
+   WHY glTF, AND NOT THE OBJ SUBSET IT REPLACED. glTF is what `tools/ta3do`
+   already writes when it exports a stock 3DO, so 3DO -> GLB -> edit -> back
+   into the game is a ROUND TRIP rather than a conversion; it carries the piece
+   TREE by name (what G11 needs to drive rigid pieces from live COB state); and
+   it carries real materials — base colour and normal maps, metallic/roughness —
+   which is why replacement meshes get their own render path instead of being
+   squeezed through the engine's palette-index one.
+
+   WHAT THIS PRODUCES, and it is shaped for the GPU, not for the file:
+     - ONE static interleaved vertex buffer per model (position, normal, uv,
+       PIECE INDEX), triangles SORTED BY MATERIAL so each material is one
+       contiguous draw. The buffer is uploaded once at load; a unit costs a
+       handful of uniforms and one draw per material per frame, never a
+       per-vertex CPU transform;
+     - one HGroup per glTF material, carrying its two textures (base colour,
+       normal), its factors and its doubleSided flag;
+     - one PIECE per glTF node that carries a mesh, named after that node, and
+       every vertex tagged with its piece. The vertex buffer holds the REST
+       pose; the pose the engine's COB script is holding this frame arrives as
+       one matrix per piece (tagpu_hires_draw.c), so the same static buffer
+       walks, aims and recoils. Names are how a piece finds its engine
+       counterpart, and `tools/ta3do` names each node after the 3DO piece it
+       came from, so a round-tripped model matches by construction;
+     - textures uploaded once, mipmapped, with the glTF sampler's own filters.
+       PNG only — lodepng is already in the DLL and nothing else is.
+
+   SUPPORTED: .glb and .gltf, buffers and images from the GLB BIN chunk, a
+   `data:...;base64,` URI or a file beside the .gltf; the whole scene graph
+   (node TRS or `matrix`, composed down the tree and BAKED as the rest pose);
+   primitive mode 4, indexed or not; POSITION, NORMAL, TEXCOORD_0.
+
+   AXES, and why X and not Z. glTF is right-handed Y-up; the space the frame is
+   built in is the LEFT-handed one the engine holds a loaded 3DO in, so one
+   axis is negated on positions AND normals and triangle order is reversed to
+   match. Which axis is not free: `tools/ta3do` writes glTF = the .3do file
+   with Z negated, and the ENGINE loads that same file with X *and* Z negated
+   (a 180° yaw — measured against live posed vertices, research/notes/
+   model-export.md). Undoing ta3do and then landing in the engine's frame is
+   therefore -Z followed by 180°, which is exactly `negate X`. Get this wrong
+   and the model is a half turn out: it renders perfectly at facings where
+   cos(yaw) = 0 and backwards everywhere else. Both sides are in TA model units
+   (game px): ta3do writes the 16.16 fixed-point verts divided by 65536.
+
+   NOT SUPPORTED, deliberately: skins, morph targets, glTF animation (the pose
+   comes from the engine, not the file), sparse accessors, texture wrap modes
+   (UVs are clamped), KHR extensions, and every material channel past base
+   colour + normal + metallic/roughness. */
 
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include "opengl_utils.h"
+#include "lodepng.h"
 #include "tagpu_hires.h"
 
-#define MAXV 8192
-#define MAXT 16384
+#define MAXMESH   8        /* replacement MODELS held at once (the payload)  */
+#define MAXNAME   256      /* def names remembered, with or without a model  */
+#define RECHECK   30       /* frames between file lookups for one name       */
+#define MAXTRI    65536    /* triangles in one replacement model             */
+#define MAXGRP    32       /* materials per model                            */
+#define MAXIMG    32       /* distinct images per model                      */
+#define MAXBUF    8        /* glTF buffers per model                         */
+#define MAXTEX    2048     /* an image may not exceed this on a side         */
+#define MAXNODE   4096     /* glTF nodes we will walk in one model           */
+#define MAXFILE   (64u << 20)
+#define HVSTRIDE  9        /* floats/vertex: px,py,pz, nx,ny,nz, u,v, piece  */
+
+typedef struct { int idx; unsigned char* px; int w, h; GLuint tex; } HImg;
+
+typedef struct {
+    int   albedo, normal;      /* index into HMesh.img, or -1                */
+    float base[4];             /* baseColorFactor, LINEAR as glTF stores it  */
+    float metal, rough;
+    float cutoff;              /* < 0 = OPAQUE; MASK and BLEND both cut out   */
+    int   doubleSided;
+    int   magf, minf;          /* glTF sampler filters (0 = our defaults)    */
+    int   first, count;        /* triangles, contiguous in the vertex buffer */
+    int   mat;                 /* glTF material index, -1 = the default one  */
+} HGroup;
 
 typedef struct {
     char     name[32];
+    char     path[128];
     FILETIME mtime;
-    int      ntri;
-    float    (*pos)[9];     /* per tri: 3 verts x xyz */
-    unsigned char* col;     /* per tri: palette index */
     int      valid;
+    int      ntri;
+    float*   v;                /* 3 * ntri verts, HVSTRIDE floats each       */
+    HImg     img[MAXIMG];
+    int      nimg;
+    HGroup   grp[MAXGRP];
+    int      ngrp;
+    char     pname[TAGPU_HMAXPIECE][32];  /* piece names, indexed as the verts tag  */
+    int      npiece;
+    unsigned gen;              /* bumped per load: the piece list is new     */
+    GLuint   vao, vbo;
+    int      uploaded;
 } HMesh;
 
-static HMesh s_mesh[8];
-static int   s_nmesh = 0;
+static HMesh s_mesh[MAXMESH];
+static GLuint s_white = 0;     /* 1x1 opaque white, for untextured materials */
+
+/* Every def name the gather has handed us, with or without a replacement.
+   This is deliberately NOT the mesh table. A type with no .glb must not
+   consume one of the MAXMESH payload slots — the gather asks about every
+   visible unit's type, so nine ordinary types on screen would otherwise fill
+   the table and a real replacement would never load again, silently, and only
+   in a game busy enough to have nine (which is why a two-unit test scenario
+   never showed it). Keeping the answer here also means the file lookup is
+   once per name per RECHECK frames rather than two syscalls per unit per
+   frame; a .glb dropped in still takes effect within half a second. */
+typedef struct {
+    char     name[32];
+    int      mesh;             /* index into s_mesh, -1 = no replacement     */
+    unsigned checked;          /* frame counter of the last file lookup      */
+    int      ever;             /* a lookup has run at least once             */
+    int      announced;        /* the one "looked here, found this" log line */
+    int      slotwarn;         /* the one "all slots are in use" log line    */
+    int      failed;           /* the load failed; stand down until it moves */
+    FILETIME failft;           /* the write time that failed to load         */
+} HName;
+static HName s_name[MAXNAME];
+static int   s_nname = 0;
 
 static void hlog(const char* s)
 {
     FILE* f = fopen("tagpu.log", "a");
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
+/* ------------------------------------------------------------------ JSON --
+   A jsmn-shaped tokeniser: one pass to count, one to fill, then navigation by
+   PARENT LINKS (an object's direct children alternate key, value, key, ...).
+   Numbers are parsed by hand rather than by strtod: the host process's
+   LC_NUMERIC is not ours to assume, and a comma decimal point would turn every
+   vertex into garbage silently. */
 
-static int load_obj(HMesh* m, const char* path)
+enum { JS_OBJ = 1, JS_ARR, JS_STR, JS_PRIM };
+
+typedef struct { unsigned char type; int start, end, parent; } JTok;
+typedef struct { const char* js; size_t len, pos; JTok* toks; int ntok, next, super; } JP;
+
+static JTok* jalloc(JP* p)
 {
-    FILE* f = fopen(path, "r");
-    if (!f) return 0;
-    static float vx[MAXV][3];
-    int nv = 0, nt = 0;
-    float (*tris)[9] = malloc(sizeof(float) * 9 * MAXT);
-    unsigned char* cols = malloc(MAXT);
-    unsigned char curc = 0xB4;
-    char line[256];
-    while (fgets(line, sizeof line, f)) {
-        if (line[0] == 'v' && line[1] == ' ') {
-            if (nv < MAXV &&
-                sscanf(line + 2, "%f %f %f", &vx[nv][0], &vx[nv][1], &vx[nv][2]) == 3)
-                nv++;
-        } else if (line[0] == 'c' && line[1] == ' ') {
-            int c = atoi(line + 2);
-            if (c >= 0 && c <= 255) curc = (unsigned char)c;
-        } else if (line[0] == 'f' && line[1] == ' ') {
-            int a = 0, b = 0, c = 0, d = 0;
-            int n = sscanf(line + 2, "%d %d %d %d", &a, &b, &c, &d);
-            if (n >= 3 && a >= 1 && b >= 1 && c >= 1 &&
-                a <= nv && b <= nv && c <= nv && nt < MAXT) {
-                int idx[6] = { a - 1, b - 1, c - 1, a - 1, c - 1, d - 1 };
-                int k, t, ntri = (n == 4 && d >= 1 && d <= nv) ? 2 : 1;
-                for (t = 0; t < ntri && nt < MAXT; t++) {
-                    for (k = 0; k < 3; k++) {
-                        int vi = idx[t * 3 + k];
-                        tris[nt][k*3+0] = vx[vi][0];
-                        tris[nt][k*3+1] = vx[vi][1];
-                        tris[nt][k*3+2] = vx[vi][2];
-                    }
-                    cols[nt] = curc;
-                    nt++;
+    if (!p->toks) { p->next++; return NULL; }
+    if (p->next >= p->ntok) return NULL;
+    JTok* t = &p->toks[p->next++];
+    t->start = t->end = -1; t->parent = -1;
+    return t;
+}
+
+static int jparse(JP* p)
+{
+    for (p->pos = 0; p->pos < p->len; p->pos++) {
+        char c = p->js[p->pos];
+        if (c == '{' || c == '[') {
+            JTok* t = jalloc(p);
+            if (p->toks && !t) return -1;
+            if (t) {
+                t->type = (unsigned char)((c == '{') ? JS_OBJ : JS_ARR);
+                t->start = (int)p->pos;
+                t->parent = p->super;
+            }
+            p->super = p->next - 1;
+        } else if (c == '}' || c == ']') {
+            if (!p->toks) continue;
+            int ty = (c == '}') ? JS_OBJ : JS_ARR, k;
+            for (k = p->next - 1; k >= 0; k--) {
+                if (p->toks[k].start != -1 && p->toks[k].end == -1) {
+                    if (p->toks[k].type != ty) return -1;
+                    p->toks[k].end = (int)p->pos + 1;
+                    p->super = p->toks[k].parent;
+                    break;
                 }
             }
+            if (k < 0) return -1;
+        } else if (c == '"') {
+            size_t start = ++p->pos;
+            for (; p->pos < p->len; p->pos++) {
+                char ch = p->js[p->pos];
+                if (ch == '"') break;
+                if (ch == '\\' && p->pos + 1 < p->len) p->pos++;
+            }
+            if (p->pos >= p->len) return -1;
+            JTok* t = jalloc(p);
+            if (p->toks && !t) return -1;
+            if (t) { t->type = JS_STR; t->start = (int)start;
+                     t->end = (int)p->pos; t->parent = p->super; }
+        } else if (c == ' ' || c == '\t' || c == '\r' || c == '\n' ||
+                   c == ':' || c == ',') {
+            continue;
+        } else {
+            size_t start = p->pos;
+            for (; p->pos < p->len; p->pos++) {
+                char ch = p->js[p->pos];
+                if (ch == ',' || ch == '}' || ch == ']' || ch == ' ' ||
+                    ch == '\t' || ch == '\r' || ch == '\n' || ch == ':') break;
+            }
+            JTok* t = jalloc(p);
+            if (p->toks && !t) return -1;
+            if (t) { t->type = JS_PRIM; t->start = (int)start;
+                     t->end = (int)p->pos; t->parent = p->super; }
+            p->pos--;
         }
     }
-    fclose(f);
-    if (nt == 0) { free(tris); free(cols); return 0; }
-    free(m->pos); free(m->col);
-    m->pos = realloc(tris, sizeof(float) * 9 * nt);
-    m->col = cols;
-    m->ntri = nt;
-    { char b[128]; _snprintf(b, sizeof b, "hires: %s loaded, %d tris", path, nt); hlog(b); }
+    if (p->toks) {
+        int k;
+        for (k = 0; k < p->next; k++)
+            if (p->toks[k].end == -1) return -1;      /* unterminated container */
+    }
+    return p->next;
+}
+
+static double jnum(const char* s, const char* e)
+{
+    double sign = 1.0, v = 0.0;
+    if (s < e && (*s == '-' || *s == '+')) { if (*s == '-') sign = -1.0; s++; }
+    while (s < e && *s >= '0' && *s <= '9') v = v * 10.0 + (*s++ - '0');
+    if (s < e && *s == '.') {
+        double f = 0.1; s++;
+        while (s < e && *s >= '0' && *s <= '9') { v += (*s++ - '0') * f; f *= 0.1; }
+    }
+    if (s < e && (*s == 'e' || *s == 'E')) {
+        int es = 1, ev = 0; s++;
+        if (s < e && (*s == '-' || *s == '+')) { if (*s == '-') es = -1; s++; }
+        while (s < e && *s >= '0' && *s <= '9') ev = ev * 10 + (*s++ - '0');
+        if (ev > 300) ev = 300;
+        v *= pow(10.0, (double)(es * ev));
+    }
+    return sign * v;
+}
+
+/* ------------------------------------------------------------------ glTF -- */
+
+typedef struct {
+    const char* js;
+    const JTok* t;
+    int    n, root;
+    const unsigned char* bin; size_t binlen;   /* the GLB BIN chunk, if any   */
+    char   dir[160];                           /* "hires\", for sidecar files */
+    unsigned char* own[MAXBUF];                /* buffers we allocated        */
+    const unsigned char* buf[MAXBUF];
+    size_t buflen[MAXBUF];
+    int    bufdone[MAXBUF];
+} GCtx;
+
+static int jfield(const GCtx* g, int obj, const char* key)
+{
+    if (obj < 0 || g->t[obj].type != JS_OBJ) return -1;
+    int k, c = 0, kl = (int)strlen(key), last = -1, end = g->t[obj].end;
+    for (k = obj + 1; k < g->n && g->t[k].start < end; k++) {
+        if (g->t[k].parent != obj) continue;
+        if ((c & 1) == 0) last = k;
+        else if (last >= 0 && g->t[last].end - g->t[last].start == kl &&
+                 !memcmp(g->js + g->t[last].start, key, (size_t)kl))
+            return k;
+        c++;
+    }
+    return -1;
+}
+
+static int jelem(const GCtx* g, int arr, int i)
+{
+    if (arr < 0 || g->t[arr].type != JS_ARR || i < 0) return -1;
+    int k, c = 0, end = g->t[arr].end;
+    for (k = arr + 1; k < g->n && g->t[k].start < end; k++) {
+        if (g->t[k].parent != arr) continue;
+        if (c == i) return k;
+        c++;
+    }
+    return -1;
+}
+
+static int jlen(const GCtx* g, int arr)
+{
+    if (arr < 0 || g->t[arr].type != JS_ARR) return 0;
+    int k, c = 0, end = g->t[arr].end;
+    for (k = arr + 1; k < g->n && g->t[k].start < end; k++)
+        if (g->t[k].parent == arr) c++;
+    return c;
+}
+
+static double jval(const GCtx* g, int tok, double def)
+{
+    if (tok < 0 || g->t[tok].type != JS_PRIM) return def;
+    const char* s = g->js + g->t[tok].start;
+    if (*s == 't') return 1.0;
+    if (*s == 'f') return 0.0;
+    /* null is the ABSENCE of a value, not zero. `"mesh": null` reaching
+       gi(..., "mesh", -1) as 0 would give that node mesh 0's geometry a second
+       time, at that node's transform, and a piece slot to go with it. */
+    if (*s == 'n') return def;
+    return jnum(s, g->js + g->t[tok].end);
+}
+
+static int    gi(const GCtx* g, int obj, const char* k, int def)
+{ int f = jfield(g, obj, k); return f < 0 ? def : (int)jval(g, f, (double)def); }
+static double gf(const GCtx* g, int obj, const char* k, double def)
+{ int f = jfield(g, obj, k); return f < 0 ? def : jval(g, f, def); }
+
+/* n floats out of an array field; returns 1 if the field was there and long
+   enough, leaving `out` untouched otherwise */
+static int gvec(const GCtx* g, int obj, const char* k, float* out, int n)
+{
+    int a = jfield(g, obj, k), i;
+    if (a < 0 || jlen(g, a) < n) return 0;
+    for (i = 0; i < n; i++) out[i] = (float)jval(g, jelem(g, a, i), 0.0);
     return 1;
 }
 
-/* returns the mesh for a (lowercased) def name, or NULL. Checks mtime each
-   call it is asked to (cheap: caller rate-limits via its 30-frame recheck). */
-const void* tagpu_hires_mesh(const char* defname)
+static int gstreq(const GCtx* g, int tok, const char* s)
 {
-    char path[96];
-    int i;
-    HMesh* m = NULL;
-    for (i = 0; i < s_nmesh; i++)
-        if (!lstrcmpiA(s_mesh[i].name, defname)) { m = &s_mesh[i]; break; }
-    if (!m) {
-        if (s_nmesh >= 8) return NULL;
-        m = &s_mesh[s_nmesh];
-        memset(m, 0, sizeof *m);
-        lstrcpynA(m->name, defname, sizeof m->name);
-        s_nmesh++;
-    }
-    _snprintf(path, sizeof path, "hires\\%s.obj", m->name);
-    {
-        WIN32_FILE_ATTRIBUTE_DATA fad;
-        if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) {
-            m->valid = 0;
-            return NULL;
-        }
-        if (CompareFileTime(&fad.ftLastWriteTime, &m->mtime) != 0) {
-            m->mtime = fad.ftLastWriteTime;
-            m->valid = load_obj(m, path);
-        }
-    }
-    return m->valid ? (const void*)m : NULL;
+    int l = (int)strlen(s);
+    return tok >= 0 && g->t[tok].type == JS_STR &&
+           g->t[tok].end - g->t[tok].start == l &&
+           !memcmp(g->js + g->t[tok].start, s, (size_t)l);
 }
 
-int tagpu_hires_ntri(const void* mesh) { return ((const HMesh*)mesh)->ntri; }
-const float* tagpu_hires_tri(const void* mesh, int i) { return ((const HMesh*)mesh)->pos[i]; }
-int tagpu_hires_col(const void* mesh, int i) { return ((const HMesh*)mesh)->col[i]; }
+static int groot(const GCtx* g, const char* name) { return jfield(g, g->root, name); }
+
+/* ------------------------------------------------------------ file + b64 -- */
+
+static unsigned char* slurp(const char* path, size_t* out)
+{
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    long n;
+    if (fseek(f, 0, SEEK_END) != 0 || (n = ftell(f)) < 0 ||
+        (unsigned long)n > MAXFILE) { fclose(f); return NULL; }
+    rewind(f);
+    unsigned char* b = malloc((size_t)n + 1);
+    if (!b) { fclose(f); return NULL; }
+    size_t got = fread(b, 1, (size_t)n, f);
+    fclose(f);
+    b[got] = 0;
+    *out = got;
+    return b;
+}
+
+static int b64v(char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+' || c == '-') return 62;
+    if (c == '/' || c == '_') return 63;
+    return -1;
+}
+
+static unsigned char* b64dec(const char* s, size_t len, size_t* out)
+{
+    unsigned char* o = malloc(len / 4 * 3 + 4);
+    if (!o) return NULL;
+    size_t n = 0;
+    int acc = 0, bits = 0, i;
+    for (i = 0; (size_t)i < len; i++) {
+        int v = b64v(s[i]);
+        if (v < 0) continue;                     /* '=' and whitespace */
+        acc = (acc << 6) | v; bits += 6;
+        if (bits >= 8) { bits -= 8; o[n++] = (unsigned char)((acc >> bits) & 0xFF); }
+    }
+    *out = n;
+    return o;
+}
+
+/* A glTF uri, percent-decoded, joined to the document's directory. Refused if
+   it tries to leave that directory or name a drive: these files are dropped in
+   by hand, and a slot that reads arbitrary paths is a slot that surprises. */
+static int uri_path(const GCtx* g, const char* uri, size_t len, char* out, size_t cap)
+{
+    char rel[128];
+    size_t n = 0, i;
+    for (i = 0; i < len && n + 1 < sizeof rel; i++) {
+        char c = uri[i];
+        if (c == '%' && i + 2 < len) {
+            char h[3]; h[0] = uri[i+1]; h[1] = uri[i+2]; h[2] = 0;
+            c = (char)strtol(h, NULL, 16); i += 2;
+        }
+        if (c == '/') c = '\\';
+        rel[n++] = c;
+    }
+    rel[n] = 0;
+    if (!n || rel[0] == '\\' || strstr(rel, "..") || strchr(rel, ':')) return 0;
+    if (strlen(g->dir) + n + 1 > cap) return 0;
+    _snprintf(out, cap, "%s%s", g->dir, rel);
+    out[cap - 1] = 0;
+    return 1;
+}
+
+/* ------------------------------------------------------- buffers/accessors */
+
+static int gbuf(GCtx* g, int idx, const unsigned char** p, size_t* len)
+{
+    if (idx < 0 || idx >= MAXBUF) return 0;
+    if (!g->bufdone[idx]) {
+        g->bufdone[idx] = 1;
+        int b = jelem(g, groot(g, "buffers"), idx);
+        int u = jfield(g, b, "uri");
+        if (u < 0) {                                   /* the GLB BIN chunk */
+            g->buf[idx] = g->bin; g->buflen[idx] = g->binlen;
+        } else {
+            const char* s = g->js + g->t[u].start;
+            size_t l = (size_t)(g->t[u].end - g->t[u].start);
+            const char* c = NULL;
+            if (l > 5 && !memcmp(s, "data:", 5)) {
+                size_t i;
+                for (i = 0; i + 7 < l; i++)
+                    if (!memcmp(s + i, ";base64,", 8)) { c = s + i + 8; break; }
+                if (c) g->own[idx] = b64dec(c, l - (size_t)(c - s), &g->buflen[idx]);
+            } else {
+                char path[192];
+                if (uri_path(g, s, l, path, sizeof path))
+                    g->own[idx] = slurp(path, &g->buflen[idx]);
+            }
+            g->buf[idx] = g->own[idx];
+            if (!g->buf[idx]) g->buflen[idx] = 0;
+        }
+    }
+    *p = g->buf[idx]; *len = g->buflen[idx];
+    return *p != NULL;
+}
+
+typedef struct { const unsigned char* p; size_t stride; int count, comp, ncomp, norm; } GAcc;
+
+static int compsz(int c)
+{
+    switch (c) {
+    case 5120: case 5121: return 1;
+    case 5122: case 5123: return 2;
+    case 5125: case 5126: return 4;
+    default: return 0;
+    }
+}
+
+static int gacc(GCtx* g, int idx, GAcc* a)
+{
+    int ac = jelem(g, groot(g, "accessors"), idx);
+    if (ac < 0) return 0;
+    int ty = jfield(g, ac, "type");
+    a->ncomp = gstreq(g, ty, "SCALAR") ? 1 : gstreq(g, ty, "VEC2") ? 2
+             : gstreq(g, ty, "VEC3")   ? 3 : gstreq(g, ty, "VEC4") ? 4 : 0;
+    a->comp  = gi(g, ac, "componentType", 0);
+    a->count = gi(g, ac, "count", 0);
+    a->norm  = gi(g, ac, "normalized", 0);
+    int esz  = compsz(a->comp) * a->ncomp;
+    if (!a->ncomp || !esz || a->count <= 0 || a->count > (1 << 22)) return 0;
+
+    int bvi = gi(g, ac, "bufferView", -1);
+    if (bvi < 0) return 0;                    /* sparse-only: unsupported */
+    int bv = jelem(g, groot(g, "bufferViews"), bvi);
+    if (bv < 0) return 0;
+    const unsigned char* base; size_t blen;
+    if (!gbuf(g, gi(g, bv, "buffer", 0), &base, &blen)) return 0;
+    size_t bo = (size_t)gi(g, bv, "byteOffset", 0);
+    size_t bl = (size_t)gi(g, bv, "byteLength", 0);
+    size_t bs = (size_t)gi(g, bv, "byteStride", 0);
+    size_t ao = (size_t)gi(g, ac, "byteOffset", 0);
+    if (!bl || bo > blen || bl > blen - bo) return 0;
+    a->stride = bs ? bs : (size_t)esz;
+    if (a->stride < (size_t)esz) return 0;
+    if (ao > bl || (size_t)(a->count - 1) * a->stride + (size_t)esz > bl - ao) return 0;
+    a->p = base + bo + ao;
+    return 1;
+}
+
+static void gread(const GAcc* a, int i, float* out, int n)
+{
+    const unsigned char* p = a->p + (size_t)i * a->stride;
+    int k;
+    for (k = 0; k < n; k++) {
+        float v = 0.0f;
+        if (k < a->ncomp) {
+            switch (a->comp) {
+            case 5126: memcpy(&v, p + k * 4, 4); break;
+            case 5121: v = (float)p[k];             if (a->norm) v /= 255.0f;   break;
+            case 5123: { unsigned short s; memcpy(&s, p + k * 2, 2);
+                         v = (float)s;              if (a->norm) v /= 65535.0f; } break;
+            case 5120: { signed char s = (signed char)p[k];
+                         v = (float)s;              if (a->norm) v = v / 127.0f; } break;
+            case 5122: { short s; memcpy(&s, p + k * 2, 2);
+                         v = (float)s;              if (a->norm) v = v / 32767.0f; } break;
+            case 5125: { unsigned int s; memcpy(&s, p + k * 4, 4); v = (float)s; } break;
+            default: break;
+            }
+        }
+        out[k] = v;
+    }
+}
+
+static unsigned gidx(const GAcc* a, int i)
+{
+    const unsigned char* p = a->p + (size_t)i * a->stride;
+    unsigned short s16; unsigned int s32;
+    switch (a->comp) {
+    case 5121: return p[0];
+    case 5123: memcpy(&s16, p, 2); return s16;
+    case 5125: memcpy(&s32, p, 4); return s32;
+    default: return 0xFFFFFFFFu;
+    }
+}
+
+/* ------------------------------------------------------------- matrices --
+   glTF matrices are column-major: m[col*4 + row]. */
+
+static void mat_id(float* m)
+{ memset(m, 0, 16 * sizeof(float)); m[0] = m[5] = m[10] = m[15] = 1.0f; }
+
+static void mat_mul(const float* a, const float* b, float* o)
+{
+    int c, r;
+    for (c = 0; c < 4; c++)
+        for (r = 0; r < 4; r++)
+            o[c*4+r] = a[0*4+r]*b[c*4+0] + a[1*4+r]*b[c*4+1] +
+                       a[2*4+r]*b[c*4+2] + a[3*4+r]*b[c*4+3];
+}
+
+static void mat_pt(const float* m, const float* v, float* o)
+{
+    int r;
+    for (r = 0; r < 3; r++)
+        o[r] = m[0*4+r]*v[0] + m[1*4+r]*v[1] + m[2*4+r]*v[2] + m[3*4+r];
+}
+
+static void node_local(const GCtx* g, int node, float* m)
+{
+    float raw[16];
+    if (gvec(g, node, "matrix", raw, 16)) { memcpy(m, raw, sizeof raw); return; }
+    float t[3] = {0,0,0}, r[4] = {0,0,0,1}, s[3] = {1,1,1};
+    gvec(g, node, "translation", t, 3);
+    gvec(g, node, "rotation", r, 4);
+    gvec(g, node, "scale", s, 3);
+    float x = r[0], y = r[1], z = r[2], w = r[3];
+    float xx = x*x, yy = y*y, zz = z*z, xy = x*y, xz = x*z, yz = y*z;
+    float wx = w*x, wy = w*y, wz = w*z;
+    m[0]  = (1-2*(yy+zz))*s[0]; m[1]  = (2*(xy+wz))*s[0];   m[2]  = (2*(xz-wy))*s[0];   m[3]  = 0;
+    m[4]  = (2*(xy-wz))*s[1];   m[5]  = (1-2*(xx+zz))*s[1]; m[6]  = (2*(yz+wx))*s[1];   m[7]  = 0;
+    m[8]  = (2*(xz+wy))*s[2];   m[9]  = (2*(yz-wx))*s[2];   m[10] = (1-2*(xx+yy))*s[2]; m[11] = 0;
+    m[12] = t[0];               m[13] = t[1];               m[14] = t[2];               m[15] = 1;
+}
+
+/* ------------------------------------------------------------ materials -- */
+
+typedef struct {
+    GCtx*  g;
+    HMesh* m;
+    float  (*p)[9];            /* per tri: 3 verts x xyz, TA model space     */
+    float  (*n)[9];            /* per tri: 3 verts x normal, TA model space  */
+    float  (*t)[6];            /* per tri: 3 verts x uv                      */
+    unsigned char* gid;        /* per tri: which HGroup it belongs to        */
+    unsigned char* pid;        /* per tri: which piece it belongs to         */
+    int    piece;              /* piece the node being walked owns          */
+    unsigned char* seen;       /* per glTF node: already walked             */
+    int    ntri, trunc, ptrunc, gtrunc, itrunc, cyc;
+} Build;
+
+/* decode images[idx] once per model; returns its HMesh.img slot, or -1 */
+static int img_slot(Build* b, int idx)
+{
+    GCtx* g = b->g;
+    HMesh* m = b->m;
+    int i;
+    if (idx < 0) return -1;
+    for (i = 0; i < m->nimg; i++) if (m->img[i].idx == idx) return i;
+    if (m->nimg >= MAXIMG) { b->itrunc = 1; return -1; }
+
+    int im = jelem(g, groot(g, "images"), idx);
+    if (im < 0) return -1;
+    const unsigned char* data = NULL;
+    size_t len = 0;
+    unsigned char* tmp = NULL;
+    int bvi = gi(g, im, "bufferView", -1);
+    if (bvi >= 0) {
+        int bv = jelem(g, groot(g, "bufferViews"), bvi);
+        const unsigned char* base; size_t blen;
+        if (bv < 0 || !gbuf(g, gi(g, bv, "buffer", 0), &base, &blen)) return -1;
+        size_t bo = (size_t)gi(g, bv, "byteOffset", 0);
+        size_t bl = (size_t)gi(g, bv, "byteLength", 0);
+        if (!bl || bo > blen || bl > blen - bo) return -1;
+        data = base + bo; len = bl;
+    } else {
+        int u = jfield(g, im, "uri");
+        if (u < 0) return -1;
+        const char* s = g->js + g->t[u].start;
+        size_t l = (size_t)(g->t[u].end - g->t[u].start);
+        if (l > 5 && !memcmp(s, "data:", 5)) {
+            const char* c = NULL; size_t k;
+            for (k = 0; k + 7 < l; k++)
+                if (!memcmp(s + k, ";base64,", 8)) { c = s + k + 8; break; }
+            if (!c) return -1;
+            tmp = b64dec(c, l - (size_t)(c - s), &len);
+        } else {
+            char path[192];
+            if (!uri_path(g, s, l, path, sizeof path)) return -1;
+            tmp = slurp(path, &len);
+        }
+        if (!tmp) return -1;
+        data = tmp;
+    }
+    unsigned uw = 0, uh = 0;
+    unsigned char* out = NULL;
+    char lb[192];
+    unsigned err = lodepng_decode32(&out, &uw, &uh, data, len);
+    free(tmp);
+    /* Both of these leave the material on the 1x1 white fallback, which reads
+       as a broken export rather than as a rejected image — so say which it is.
+       PNG is the only decoder in the DLL, and a JPEG is perfectly legal glTF,
+       so "did not decode" is a thing a normal Blender export can hit. */
+    if (err || !out) {
+        free(out);
+        _snprintf(lb, sizeof lb, "hires: image %d did not decode as PNG (lodepng %u)"
+                  " - its material renders white", idx, err);
+        hlog(lb);
+        return -1;
+    }
+    if (!uw || !uh || uw > MAXTEX || uh > MAXTEX) {
+        _snprintf(lb, sizeof lb, "hires: image %d is %ux%u, past the %d px cap"
+                  " - its material renders white", idx, uw, uh, MAXTEX);
+        hlog(lb);
+        free(out);
+        return -1;
+    }
+    HImg* s2 = &m->img[m->nimg];
+    s2->idx = idx; s2->px = out; s2->w = (int)uw; s2->h = (int)uh; s2->tex = 0;
+    return m->nimg++;
+}
+
+/* textures[ti] -> (image slot, sampler filters) */
+static int tex_slot(Build* b, int ti, int* magf, int* minf)
+{
+    GCtx* g = b->g;
+    int tx = jelem(g, groot(g, "textures"), ti);
+    if (tx < 0) return -1;
+    int sm = jelem(g, groot(g, "samplers"), gi(g, tx, "sampler", -1));
+    if (sm >= 0) {
+        if (magf) *magf = gi(g, sm, "magFilter", 0);
+        if (minf) *minf = gi(g, sm, "minFilter", 0);
+    }
+    return img_slot(b, gi(g, tx, "source", -1));
+}
+
+/* one HGroup per glTF material — the unit of a draw call */
+static int group_for(Build* b, int matIdx)
+{
+    GCtx* g = b->g;
+    HMesh* m = b->m;
+    int i;
+    for (i = 0; i < m->ngrp; i++) if (m->grp[i].mat == matIdx) return i;
+    if (m->ngrp >= MAXGRP) { b->gtrunc = 1; return -1; }
+    HGroup* h = &m->grp[m->ngrp];
+    memset(h, 0, sizeof *h);
+    h->mat = matIdx;
+    h->albedo = h->normal = -1;
+    h->base[0] = h->base[1] = h->base[2] = h->base[3] = 1.0f;
+    h->metal = 1.0f; h->rough = 1.0f;      /* the glTF defaults */
+    h->cutoff = -1.0f;
+    int mt = jelem(g, groot(g, "materials"), matIdx);
+    if (mt >= 0) {
+        int pbr = jfield(g, mt, "pbrMetallicRoughness");
+        gvec(g, pbr, "baseColorFactor", h->base, 4);
+        h->metal = (float)gf(g, pbr, "metallicFactor", 1.0);
+        h->rough = (float)gf(g, pbr, "roughnessFactor", 1.0);
+        h->doubleSided = gi(g, mt, "doubleSided", 0);
+        /* MASK cuts out at its own threshold. BLEND would need the draws
+           sorted back to front, which this pass does not do, so it cuts out
+           at half too — a hard edge beats a wrong one drawn out of order. */
+        int am = jfield(g, mt, "alphaMode");
+        if (gstreq(g, am, "MASK"))       h->cutoff = (float)gf(g, mt, "alphaCutoff", 0.5);
+        else if (gstreq(g, am, "BLEND")) h->cutoff = 0.5f;
+        int bct = gi(g, jfield(g, pbr, "baseColorTexture"), "index", -1);
+        if (bct >= 0) h->albedo = tex_slot(b, bct, &h->magf, &h->minf);
+        int nt = gi(g, jfield(g, mt, "normalTexture"), "index", -1);
+        if (nt >= 0) h->normal = tex_slot(b, nt, NULL, NULL);
+    }
+    return m->ngrp++;
+}
+
+/* -------------------------------------------------------------- normals -- */
+
+static void cross3(const float* a, const float* b, float* o)
+{
+    o[0] = a[1]*b[2] - a[2]*b[1];
+    o[1] = a[2]*b[0] - a[0]*b[2];
+    o[2] = a[0]*b[1] - a[1]*b[0];
+}
+
+/* inverse-transpose of a 4x4's upper 3x3, so a node that rotates or scales
+   non-uniformly still hands us normals that point out of the surface */
+static int nrm_mat(const float* m, float* o)
+{
+    const float *c0 = m, *c1 = m + 4, *c2 = m + 8;
+    float a[3], b[3], c[3];
+    int i;
+    cross3(c1, c2, a); cross3(c2, c0, b); cross3(c0, c1, c);
+    float det = c0[0]*a[0] + c0[1]*a[1] + c0[2]*a[2];
+    if (fabsf(det) < 1e-12f) return 0;
+    float inv = 1.0f / det;
+    for (i = 0; i < 3; i++) { o[0*3+i] = a[i]*inv; o[1*3+i] = b[i]*inv; o[2*3+i] = c[i]*inv; }
+    return 1;
+}
+
+static void nrm_apply(const float* o, const float* v, float* out)
+{
+    int r;
+    for (r = 0; r < 3; r++) out[r] = o[0*3+r]*v[0] + o[1*3+r]*v[1] + o[2*3+r]*v[2];
+}
+
+static void nrm_unit(float* v)
+{
+    float l = sqrtf(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+    if (l > 1e-12f) { v[0] /= l; v[1] /= l; v[2] /= l; }
+    else { v[0] = 0.0f; v[1] = 1.0f; v[2] = 0.0f; }
+}
+
+/* ------------------------------------------------------------ mesh walk -- */
+
+static void emit_mesh(Build* b, int meshIdx, const float* m)
+{
+    GCtx* g = b->g;
+    float nm[9];
+    int haveNM = nrm_mat(m, nm);
+    int me = jelem(g, groot(g, "meshes"), meshIdx);
+    int prims = jfield(g, me, "primitives");
+    int np = jlen(g, prims), pi;
+    for (pi = 0; pi < np; pi++) {
+        int pr = jelem(g, prims, pi);
+        if (gi(g, pr, "mode", 4) != 4) continue;
+        int at = jfield(g, pr, "attributes");
+        GAcc pos, nrm, uv, idx;
+        int pa = gi(g, at, "POSITION", -1);
+        if (pa < 0 || !gacc(g, pa, &pos) || pos.ncomp < 3) continue;
+        int na = gi(g, at, "NORMAL", -1);
+        int hasN = na >= 0 && gacc(g, na, &nrm) && nrm.ncomp >= 3 &&
+                   nrm.count >= pos.count && haveNM;
+        int ua = gi(g, at, "TEXCOORD_0", -1);
+        int hasUV = ua >= 0 && gacc(g, ua, &uv) && uv.ncomp >= 2 &&
+                    uv.count >= pos.count;
+        int ia = gi(g, pr, "indices", -1);
+        /* only the three UNSIGNED types glTF allows for indices, which are
+           also the three gidx can read: compsz() also accepts the signed and
+           float ones, and letting those through here would drop every triangle
+           and report "no drawable triangles" — a message that points at the
+           geometry rather than at the index encoding */
+        int hasI = ia >= 0 && gacc(g, ia, &idx) && idx.ncomp == 1 &&
+                   (idx.comp == 5121 || idx.comp == 5123 || idx.comp == 5125);
+        if (ia >= 0 && !hasI) {
+            char ib[160];
+            _snprintf(ib, sizeof ib, "hires: primitive indices are component "
+                      "type %d, which glTF does not allow and this does not "
+                      "read - the primitive is skipped", gi(g, jelem(g, groot(g, "accessors"), ia), "componentType", 0));
+            hlog(ib);
+            continue;
+        }
+        int nverts = hasI ? idx.count : pos.count;
+        int grp = group_for(b, gi(g, pr, "material", -1));
+        if (grp < 0) continue;
+        int k;
+        for (k = 0; k + 2 < nverts; k += 3) {
+            if (b->ntri >= MAXTRI) { b->trunc = 1; return; }
+            /* winding reversed BECAUSE one axis is negated: mirroring flips
+               the sense of a triangle, and reversing it back leaves the
+               geometric normal agreeing with the shading normal we mirror the
+               same way */
+            static const int order[3] = { 0, 2, 1 };
+            float p[3][3], n[3][3], t[3][2];
+            int c, bad = 0;
+            for (c = 0; c < 3; c++) {
+                unsigned vi = hasI ? gidx(&idx, k + order[c])
+                                   : (unsigned)(k + order[c]);
+                if (vi >= (unsigned)pos.count) { bad = 1; break; }
+                float v[3];
+                gread(&pos, (int)vi, v, 3);
+                mat_pt(m, v, p[c]);
+                p[c][0] = -p[c][0];            /* glTF -> engine model space */
+                if (hasN) {
+                    float s[3];
+                    gread(&nrm, (int)vi, s, 3);
+                    nrm_apply(nm, s, n[c]);
+                    n[c][0] = -n[c][0];
+                    nrm_unit(n[c]);
+                }
+                if (hasUV && vi < (unsigned)uv.count) gread(&uv, (int)vi, t[c], 2);
+                else { t[c][0] = 0.0f; t[c][1] = 0.0f; }
+            }
+            if (bad) continue;
+            if (!hasN) {                            /* flat: the face's own */
+                float e1[3], e2[3], fn[3];
+                for (c = 0; c < 3; c++) {
+                    e1[c] = p[1][c] - p[0][c];
+                    e2[c] = p[2][c] - p[0][c];
+                }
+                cross3(e1, e2, fn);
+                nrm_unit(fn);
+                for (c = 0; c < 3; c++) memcpy(n[c], fn, sizeof fn);
+            }
+            float* op = b->p[b->ntri];
+            float* on = b->n[b->ntri];
+            float* ot = b->t[b->ntri];
+            for (c = 0; c < 3; c++) {
+                op[c*3+0] = p[c][0]; op[c*3+1] = p[c][1]; op[c*3+2] = p[c][2];
+                on[c*3+0] = n[c][0]; on[c*3+1] = n[c][1]; on[c*3+2] = n[c][2];
+                ot[c*2+0] = t[c][0]; ot[c*2+1] = t[c][1];
+            }
+            b->gid[b->ntri] = (unsigned char)grp;
+            b->pid[b->ntri] = (unsigned char)b->piece;
+            b->m->grp[grp].count++;
+            b->ntri++;
+        }
+    }
+}
+
+/* one piece slot per node that carries geometry, named after the node — that
+   name is the whole binding to the engine's piece, so a node the file left
+   unnamed simply never poses (slot 0's name stays empty and matches nothing).
+   Past TAGPU_HMAXPIECE the geometry still draws, tagged to the last slot; a model
+   that big is louder as a log line than as missing pieces. */
+static int piece_slot(Build* b, int nd)
+{
+    HMesh* m = b->m;
+    if (m->npiece >= TAGPU_HMAXPIECE) { b->ptrunc = 1; return m->npiece - 1; }
+    int p = m->npiece++;
+    int nt = jfield(b->g, nd, "name");
+    m->pname[p][0] = 0;
+    if (nt >= 0 && b->g->t[nt].type == JS_STR) {
+        int len = b->g->t[nt].end - b->g->t[nt].start;
+        if (len > (int)sizeof m->pname[p] - 1) len = (int)sizeof m->pname[p] - 1;
+        memcpy(m->pname[p], b->g->js + b->g->t[nt].start, (size_t)len);
+        m->pname[p][len] = 0;
+    }
+    return p;
+}
+
+static void walk_node(Build* b, int nodeIdx, const float* parent, int depth)
+{
+    GCtx* g = b->g;
+    if (depth > 32) return;
+    int nd = jelem(g, groot(g, "nodes"), nodeIdx);
+    if (nd < 0) return;
+    /* glTF nodes are a disjoint union of strict trees, so reaching one twice
+       means the file is malformed. The depth cap alone does not save us: it
+       bounds chain LENGTH, and a node listing the same child twice at each of
+       32 levels is 2^32 visits — the render thread hangs with nothing logged,
+       which is the worst way for a bad file to fail. */
+    if (nodeIdx >= 0 && nodeIdx < MAXNODE) {
+        if (b->seen[nodeIdx]) { b->cyc = 1; return; }
+        b->seen[nodeIdx] = 1;
+    }
+    float loc[16], m[16];
+    node_local(g, nd, loc);
+    mat_mul(parent, loc, m);
+    int mi = gi(g, nd, "mesh", -1);
+    if (mi >= 0) {
+        int was = b->piece;
+        b->piece = piece_slot(b, nd);
+        emit_mesh(b, mi, m);
+        b->piece = was;
+    }
+    int ch = jfield(g, nd, "children");
+    int nc = jlen(g, ch), k;
+    for (k = 0; k < nc; k++)
+        walk_node(b, (int)jval(g, jelem(g, ch, k), -1.0), m, depth + 1);
+}
+
+/* --------------------------------------------------------------- loader -- */
+
+static void mesh_free(HMesh* m)
+{
+    int i;
+    free(m->v);
+    m->v = NULL;
+    for (i = 0; i < m->nimg; i++) free(m->img[i].px);
+    m->ntri = 0; m->ngrp = 0; m->nimg = 0; m->npiece = 0; m->uploaded = 0;
+    memset(m->img, 0, sizeof m->img);
+    memset(m->grp, 0, sizeof m->grp);
+    memset(m->pname, 0, sizeof m->pname);
+}
+
+/* GL objects survive a reload only to be deleted here, on a thread that has a
+   context; tagpu_hires_glreset forgets them instead, the context being gone */
+static void mesh_gl_free(HMesh* m)
+{
+    int i;
+    for (i = 0; i < MAXIMG; i++)
+        if (m->img[i].tex) { glDeleteTextures(1, &m->img[i].tex); m->img[i].tex = 0; }
+    if (m->vbo) { glDeleteBuffers(1, &m->vbo); m->vbo = 0; }
+    if (m->vao) { glDeleteVertexArrays(1, &m->vao); m->vao = 0; }
+}
+
+static void ctx_free(GCtx* g)
+{
+    int i;
+    for (i = 0; i < MAXBUF; i++) free(g->own[i]);
+}
+
+static int load_gltf(HMesh* m, const char* path)
+{
+    size_t flen = 0;
+    unsigned char* file = slurp(path, &flen);
+    char b[192];
+    if (!file) {
+        /* every other failure in here names itself; silence at the very first
+           step is the "looked here / load failed" ambiguity the announce line
+           was added to remove */
+        _snprintf(b, sizeof b, "hires: %s could not be read - missing, locked,"
+                  " or past the %u MB file cap", path, (unsigned)(MAXFILE >> 20));
+        hlog(b);
+        return 0;
+    }
+
+    char* json = NULL;
+    size_t jsonlen = 0;
+    GCtx g;
+    JTok* toks = NULL;
+    Build bd;
+    int i, ntok = 0;
+    memset(&g, 0, sizeof g);
+    memset(&bd, 0, sizeof bd);
+
+    if (flen >= 12 && !memcmp(file, "glTF", 4)) {
+        unsigned total;
+        memcpy(&total, file + 8, 4);
+        if (total > flen) total = (unsigned)flen;
+        size_t o = 12;
+        while (o + 8 <= total) {
+            unsigned clen, ctype;
+            memcpy(&clen, file + o, 4);
+            memcpy(&ctype, file + o + 4, 4);
+            o += 8;
+            if (clen > total - o) break;
+            if (ctype == 0x4E4F534Au && !json) {
+                json = malloc(clen + 1);
+                if (!json) { free(file); return 0; }
+                memcpy(json, file + o, clen);
+                json[clen] = 0;
+                jsonlen = clen;
+            } else if (ctype == 0x004E4942u && !g.bin) {
+                g.bin = file + o; g.binlen = clen;
+            }
+            o += clen + ((4 - (clen & 3)) & 3);
+        }
+        if (!json) { hlog("hires: GLB has no JSON chunk"); free(file); return 0; }
+    } else {
+        json = (char*)file;
+        jsonlen = flen;
+    }
+
+    {   /* two-pass tokenise: count, allocate exactly, fill */
+        JP p;
+        memset(&p, 0, sizeof p);
+        p.js = json; p.len = jsonlen; p.super = -1;
+        ntok = jparse(&p);
+        if (ntok <= 0) {
+            _snprintf(b, sizeof b, "hires: %s is not valid JSON", path); hlog(b);
+            goto fail;
+        }
+        toks = malloc((size_t)ntok * sizeof *toks);
+        if (!toks) goto fail;
+        memset(&p, 0, sizeof p);
+        p.js = json; p.len = jsonlen; p.super = -1; p.toks = toks; p.ntok = ntok;
+        if (jparse(&p) != ntok || toks[0].type != JS_OBJ) {
+            _snprintf(b, sizeof b, "hires: %s JSON did not re-parse", path); hlog(b);
+            goto fail;
+        }
+    }
+
+    g.js = json; g.t = toks; g.n = ntok; g.root = 0;
+    {   /* the document's directory, for .gltf sidecar buffers and images */
+        const char* slash = strrchr(path, '\\');
+        size_t dl = slash ? (size_t)(slash - path) + 1 : 0;
+        if (dl >= sizeof g.dir) dl = 0;
+        memcpy(g.dir, path, dl);
+        g.dir[dl] = 0;
+    }
+
+    mesh_free(m);
+    bd.g = &g;
+    bd.m = m;
+    bd.p   = malloc(sizeof(float) * 9 * MAXTRI);
+    bd.n   = malloc(sizeof(float) * 9 * MAXTRI);
+    bd.t   = malloc(sizeof(float) * 6 * MAXTRI);
+    bd.gid = malloc(MAXTRI);
+    bd.pid = malloc(MAXTRI);
+    bd.seen = calloc(MAXNODE, 1);
+    if (!bd.p || !bd.n || !bd.t || !bd.gid || !bd.pid || !bd.seen) goto fail;
+
+    {
+        float I[16];
+        mat_id(I);
+        int nodes = groot(&g, "nodes");
+        int nn = jlen(&g, nodes);
+        /* bd.seen only marks the first MAXNODE indices, and that mark is the
+           whole defence against a child list that explodes 2^depth — past it
+           walk_node would recurse with the guard silently off. So refuse the
+           file rather than walk it half-guarded: under this cap every index
+           the nodes array can hold also indexes seen. */
+        if (nn > MAXNODE) {
+            _snprintf(b, sizeof b, "hires: %s has %d nodes, past the %d-node cap",
+                      path, nn, MAXNODE);
+            hlog(b);
+            goto fail;
+        }
+        int sc = jelem(&g, groot(&g, "scenes"), gi(&g, g.root, "scene", 0));
+        if (sc >= 0) {
+            int roots = jfield(&g, sc, "nodes");
+            int nr = jlen(&g, roots), k;
+            for (k = 0; k < nr; k++)
+                walk_node(&bd, (int)jval(&g, jelem(&g, roots, k), -1.0), I, 0);
+        } else {
+            /* No scene: the roots are the nodes nothing lists as a child.
+               Walking every node as a root instead draws a child at the origin
+               when its index comes up before its parent's — and the second
+               visit trips the cycle guard, so a well-formed file reports
+               itself TRUNCATED as a non-tree. */
+            char* haspar = calloc((size_t)(nn > 0 ? nn : 1), 1);
+            int k;
+            if (!haspar) goto fail;
+            for (k = 0; k < nn; k++) {
+                int ch = jfield(&g, jelem(&g, nodes, k), "children");
+                int nc = jlen(&g, ch), c;
+                for (c = 0; c < nc; c++) {
+                    int ci = (int)jval(&g, jelem(&g, ch, c), -1.0);
+                    if (ci >= 0 && ci < nn) haspar[ci] = 1;
+                }
+            }
+            for (k = 0; k < nn; k++)
+                if (!haspar[k]) walk_node(&bd, k, I, 0);
+            free(haspar);
+        }
+    }
+
+    if (bd.ntri == 0) {
+        _snprintf(b, sizeof b, "hires: %s has no drawable triangles", path);
+        hlog(b);
+        goto fail;
+    }
+
+    /* sort triangles into their groups, so a material is one contiguous draw */
+    {
+        int fill[MAXGRP], run = 0;
+        for (i = 0; i < m->ngrp; i++) { m->grp[i].first = run; fill[i] = run; run += m->grp[i].count; }
+        m->v = malloc(sizeof(float) * HVSTRIDE * 3 * (size_t)bd.ntri);
+        if (!m->v) goto fail;
+        for (i = 0; i < bd.ntri; i++) {
+            int gidx2 = bd.gid[i], dst = fill[gidx2]++, c;
+            float* o = m->v + (size_t)dst * 3 * HVSTRIDE;
+            for (c = 0; c < 3; c++, o += HVSTRIDE) {
+                o[0] = bd.p[i][c*3+0]; o[1] = bd.p[i][c*3+1]; o[2] = bd.p[i][c*3+2];
+                o[3] = bd.n[i][c*3+0]; o[4] = bd.n[i][c*3+1]; o[5] = bd.n[i][c*3+2];
+                o[6] = bd.t[i][c*2+0]; o[7] = bd.t[i][c*2+1];
+                o[8] = (float)bd.pid[i];
+            }
+        }
+        m->ntri = bd.ntri;
+    }
+
+    _snprintf(b, sizeof b,
+              "hires: %s loaded, %d tris, %d material%s, %d image%s, %d piece%s",
+              path, m->ntri, m->ngrp, m->ngrp == 1 ? "" : "s",
+              m->nimg, m->nimg == 1 ? "" : "s",
+              m->npiece, m->npiece == 1 ? "" : "s");
+    hlog(b);
+    /* Every cap says so, on its own line: the counts above are what LOADED, so
+       silence about a cap reads as "the model really has 32 materials" — and a
+       model over the material or image cap comes out with holes or white
+       patches, which looks like a broken export rather than a limit. */
+    if (bd.trunc || bd.ptrunc || bd.gtrunc || bd.itrunc || bd.cyc) {
+        _snprintf(b, sizeof b, "hires: TRUNCATED:%s%s%s%s%s",
+                  bd.trunc  ? " triangles past the cap dropped;" : "",
+                  bd.ptrunc ? " pieces past the cap cannot pose;" : "",
+                  bd.gtrunc ? " materials past the cap DROP their triangles;" : "",
+                  bd.itrunc ? " images past the cap render white;" : "",
+                  bd.cyc    ? " a node was reached twice (the node graph is not"
+                              " a tree) and the repeat was skipped;" : "");
+        hlog(b);
+    }
+
+    free(bd.p); free(bd.n); free(bd.t); free(bd.gid); free(bd.pid); free(bd.seen);
+    ctx_free(&g);
+    free(toks);
+    if (json != (char*)file) free(json);
+    free(file);
+    return 1;
+
+fail:
+    free(bd.p); free(bd.n); free(bd.t); free(bd.gid); free(bd.pid); free(bd.seen);
+    mesh_free(m);
+    ctx_free(&g);
+    free(toks);
+    if (json != (char*)file) free(json);
+    free(file);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ GL -- */
+
+typedef void (APIENTRY *PFN_GENMIPMAP)(GLenum);
+static PFN_GENMIPMAP x_glGenerateMipmap;
+static int s_glprobed = 0;
+
+static void gl_probe(void)
+{
+    if (s_glprobed) return;
+    s_glprobed = 1;
+    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress("glGenerateMipmap") : NULL;
+    if (!p) {
+        HMODULE gl = GetModuleHandleA("opengl32.dll");
+        if (gl) p = (void*)GetProcAddress(gl, "glGenerateMipmap");
+    }
+    x_glGenerateMipmap = (PFN_GENMIPMAP)p;
+}
+
+static GLuint upload_img(HImg* im, int magf, int minf)
+{
+    if (im->tex) return im->tex;
+    glGenTextures(1, &im->tex);
+    glBindTexture(GL_TEXTURE_2D, im->tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, im->w, im->h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, im->px);
+    int mips = 0;
+    if (x_glGenerateMipmap) { x_glGenerateMipmap(GL_TEXTURE_2D); mips = 1; }
+    /* A replacement unit is a 1024px texture on a ~40px sprite: without mips
+       every frame resamples different texels and the surface crawls. Honour
+       the glTF sampler's own filters when it named them, but never select a
+       mipmapped minification we could not build. An image is uploaded once,
+       so where two materials share one it is the FIRST to reference it that
+       decides — the sampler is a property of the reference in glTF and of the
+       texture object in GL, and one object per image is the trade. */
+    /* and the enum is the FILE's, so it has to be one of the six before it
+       reaches GL: an out-of-range one is GL_INVALID_ENUM and leaves the GL
+       default MIN filter, which without mips is an incomplete texture that
+       samples black — the one path around the fallback just below. */
+    int mn = (minf == GL_NEAREST || minf == GL_LINEAR ||
+              minf == GL_NEAREST_MIPMAP_NEAREST || minf == GL_LINEAR_MIPMAP_NEAREST ||
+              minf == GL_NEAREST_MIPMAP_LINEAR  || minf == GL_LINEAR_MIPMAP_LINEAR)
+             ? minf : GL_LINEAR_MIPMAP_LINEAR;
+    if (!mips && (mn == GL_NEAREST_MIPMAP_NEAREST || mn == GL_LINEAR_MIPMAP_NEAREST ||
+                  mn == GL_NEAREST_MIPMAP_LINEAR  || mn == GL_LINEAR_MIPMAP_LINEAR))
+        mn = (mn == GL_NEAREST_MIPMAP_NEAREST || mn == GL_NEAREST_MIPMAP_LINEAR)
+             ? GL_NEAREST : GL_LINEAR;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mn);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                    (magf == GL_NEAREST || magf == GL_LINEAR) ? magf : GL_LINEAR);
+    /* CLAMP, not REPEAT, and not only because the sampler's wrap mode is one
+       of the things this loader does not read. `tools/ta3do` packs a unit's
+       GAF frames into an ATLAS, so a UV a hair outside its tile must smear
+       that tile's own edge — under REPEAT it wraps to the far side of the
+       atlas and samples an unrelated texture. The native pass clamps its atlas
+       for the same reason. */
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    free(im->px);
+    im->px = NULL;
+    return im->tex;
+}
+
+static GLuint white_tex(void)
+{
+    if (!s_white) {
+        const unsigned char px[4] = { 255, 255, 255, 255 };
+        glGenTextures(1, &s_white);
+        glBindTexture(GL_TEXTURE_2D, s_white);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    }
+    return s_white;
+}
+
+/* ------------------------------------------------------------------ API -- */
+
+/* release a payload slot back to the pool (the file went away, or the type
+   fell out of the name table) */
+static void mesh_release(HMesh* m)
+{
+    mesh_gl_free(m);
+    mesh_free(m);
+    m->valid = 0;
+    memset(&m->mtime, 0, sizeof m->mtime);
+    m->path[0] = 0;
+    m->name[0] = 0;            /* the slot is free: name[0] is the marker */
+}
+
+/* the file lookup for one name: claims or releases a payload slot, and
+   reloads when the write time moved. Runs on the RECHECK cadence, not per
+   unit per frame. */
+static void name_check(HName* n)
+{
+    char glb[128], gltf[128], b[224];
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    const char* use = NULL;
+    HMesh* m;
+    int i;
+
+    _snprintf(glb,  sizeof glb,  "hires\\%s.glb",  n->name);
+    _snprintf(gltf, sizeof gltf, "hires\\%s.gltf", n->name);
+    if (GetFileAttributesExA(glb, GetFileExInfoStandard, &fad)) use = glb;
+    else if (GetFileAttributesExA(gltf, GetFileExInfoStandard, &fad)) use = gltf;
+    if (!n->announced) {
+        /* say once, per unit type, where the slot looked. Silence here used to
+           be indistinguishable from a load that failed, and the two want very
+           different fixes. */
+        n->announced = 1;
+        _snprintf(b, sizeof b, "hires: %s -> %s", n->name,
+                  use ? use : "no replacement (looked for hires\\<name>.glb / .gltf)");
+        hlog(b);
+    }
+    if (!use) {
+        /* the file went away: forget it, so putting it back reloads even if
+           its write time is older than the one we last saw, and hand the
+           payload slot to whichever type does have one */
+        if (n->mesh >= 0) { mesh_release(&s_mesh[n->mesh]); n->mesh = -1; }
+        n->failed = 0;
+        return;
+    }
+    if (n->failed) {
+        /* a load that failed is not retried until the file itself moves: see
+           the stand-down below for why */
+        if (CompareFileTime(&fad.ftLastWriteTime, &n->failft) == 0) return;
+        n->failed = 0;
+    }
+    if (n->mesh < 0) {
+        for (i = 0; i < MAXMESH; i++)
+            if (!s_mesh[i].name[0]) break;
+        if (i >= MAXMESH) {
+            /* every payload slot is spoken for by another type that really
+               has a replacement — a real limit, so say so rather than render
+               the stock model and leave the modeller guessing */
+            if (!n->slotwarn) {      /* once per type: this runs on the
+                                        RECHECK cadence, for the session */
+                n->slotwarn = 1;
+                _snprintf(b, sizeof b,
+                          "hires: %s has a replacement but all %d model slots "
+                          "are in use - it renders as the engine's 3DO",
+                          n->name, MAXMESH);
+                hlog(b);
+            }
+            return;
+        }
+        m = &s_mesh[i];
+        {   /* gen must outlive the slot: pmap_for keys its cached glTF-piece
+               -> engine-primitive mapping on {slot address, gen, template},
+               so a slot reclaimed by the same type and back at gen 1 would
+               match the entry from its previous life and pose a new piece
+               list through the old mapping. Monotonic per slot, per session. */
+            unsigned g0 = m->gen;
+            memset(m, 0, sizeof *m);
+            m->gen = g0;
+        }
+        lstrcpynA(m->name, n->name, sizeof m->name);
+        n->mesh = i;
+    }
+    m = &s_mesh[n->mesh];
+    if (strcmp(m->path, use) != 0 ||
+        CompareFileTime(&fad.ftLastWriteTime, &m->mtime) != 0) {
+        mesh_gl_free(m);
+        m->mtime = fad.ftLastWriteTime;
+        lstrcpynA(m->path, use, sizeof m->path);
+        m->valid = load_gltf(m, use);
+        /* the HMesh keeps its address across a reload, so anything that cached
+           something derived from the piece list has to be told the list is new */
+        m->gen++;
+        if (!m->valid) {
+            /* A file that will not load will not load a second later either.
+               Retrying it every RECHECK re-slurps and re-parses megabytes on
+               the RENDER thread twice a second and appends the same failure to
+               tagpu.log for the rest of the session; remembering the write
+               time it failed on costs one comparison instead. That still
+               retries the case the retry was for — a file caught mid-copy —
+               because a copy ends by stamping its own write time on the
+               destination. The payload slot goes back too: MAXMESH is 8, and
+               a broken export must not hold one against a type whose model
+               works. */
+            n->failed = 1;
+            n->failft = fad.ftLastWriteTime;
+            mesh_release(m);
+            n->mesh = -1;
+            _snprintf(b, sizeof b, "hires: %s renders as the engine's 3DO "
+                      "until %s is written again", n->name, use);
+            hlog(b);
+        }
+    }
+}
+
+const void* tagpu_hires_mesh(const char* defname, unsigned frame)
+{
+    HName* n = NULL;
+    int i;
+    for (i = 0; i < s_nname; i++)
+        if (!lstrcmpiA(s_name[i].name, defname)) { n = &s_name[i]; break; }
+    if (!n) {
+        if (s_nname >= MAXNAME) {
+            /* the same guessing game a full payload table used to be: the
+               replacement just never loads. Stock TA has 279 unit types, so a
+               long enough game really does walk past this. */
+            static int said = 0;
+            if (!said) {
+                char b[176];
+                said = 1;
+                _snprintf(b, sizeof b, "hires: the def-name table is full at %d "
+                          "names - a type first seen from here on renders as "
+                          "the engine's 3DO", MAXNAME);
+                hlog(b);
+            }
+            return NULL;
+        }
+        n = &s_name[s_nname++];
+        memset(n, 0, sizeof *n);
+        lstrcpynA(n->name, defname, sizeof n->name);
+        n->mesh = -1;
+    }
+    if (!n->ever || (unsigned)(frame - n->checked) >= RECHECK) {
+        n->ever = 1;
+        n->checked = frame;
+        name_check(n);
+    }
+    if (n->mesh < 0) return NULL;
+    return s_mesh[n->mesh].valid ? (const void*)&s_mesh[n->mesh] : NULL;
+}
+
+int tagpu_hires_ngroup(const void* mesh) { return ((const HMesh*)mesh)->ngrp; }
+
+int tagpu_hires_npiece(const void* mesh) { return ((const HMesh*)mesh)->npiece; }
+
+unsigned tagpu_hires_gen(const void* mesh) { return ((const HMesh*)mesh)->gen; }
+
+const char* tagpu_hires_piece(const void* mesh, int i)
+{
+    const HMesh* m = (const HMesh*)mesh;
+    return (i >= 0 && i < m->npiece) ? m->pname[i] : NULL;
+}
+
+int tagpu_hires_group(const void* mesh, int i, TAGPU_HGROUP* out)
+{
+    const HMesh* m = (const HMesh*)mesh;
+    if (i < 0 || i >= m->ngrp || !m->uploaded) return 0;
+    const HGroup* h = &m->grp[i];
+    out->albedo = h->albedo >= 0 ? m->img[h->albedo].tex : s_white;
+    out->normal = h->normal >= 0 ? m->img[h->normal].tex : 0;
+    memcpy(out->base, h->base, sizeof out->base);
+    out->metal = h->metal;
+    out->rough = h->rough;
+    out->cutoff = h->cutoff;
+    out->doubleSided = h->doubleSided;
+    out->first = h->first * 3;
+    out->count = h->count * 3;
+    return out->count > 0;
+}
+
+unsigned int tagpu_hires_vao(const void* mesh)
+{
+    HMesh* m = (HMesh*)mesh;
+    int i;
+    if (m->uploaded) return m->vao;
+    if (!m->v || m->ntri <= 0) return 0;
+    gl_probe();
+    white_tex();
+    glGenVertexArrays(1, &m->vao);
+    glBindVertexArray(m->vao);
+    glGenBuffers(1, &m->vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
+    glBufferData(GL_ARRAY_BUFFER,
+                 (GLsizeiptr)((size_t)m->ntri * 3 * HVSTRIDE * sizeof(float)),
+                 m->v, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, HVSTRIDE * 4, (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, HVSTRIDE * 4, (void*)12);
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, HVSTRIDE * 4, (void*)24);
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, HVSTRIDE * 4, (void*)32);
+    glBindVertexArray(0);
+    for (i = 0; i < m->ngrp; i++) {
+        HGroup* h = &m->grp[i];
+        if (h->albedo >= 0) upload_img(&m->img[h->albedo], h->magf, h->minf);
+        if (h->normal >= 0) upload_img(&m->img[h->normal], 0, 0);
+    }
+    /* the vertex data is the GPU's now, and the pixels went with the textures */
+    free(m->v);
+    m->v = NULL;
+    m->uploaded = 1;
+    return m->vao;
+}
+
+void tagpu_hires_glreset(void)
+{
+    int i, k;
+    for (i = 0; i < MAXMESH; i++) {
+        HMesh* m = &s_mesh[i];
+        if (!m->name[0]) continue;
+        for (k = 0; k < MAXIMG; k++) m->img[k].tex = 0;
+        m->vao = m->vbo = 0;
+        /* the buffers those names stood for are gone with the context, and the
+           CPU copies were freed at upload — reload from the file instead */
+        mesh_free(m);
+        m->valid = 0;
+        memset(&m->mtime, 0, sizeof m->mtime);
+        m->path[0] = 0;
+    }
+    /* and every name re-checks on the next frame rather than waiting out its
+       cadence, so the first frame after the new context has its models back */
+    for (i = 0; i < s_nname; i++) s_name[i].ever = 0;
+    s_white = 0;
+    s_glprobed = 0;
+}

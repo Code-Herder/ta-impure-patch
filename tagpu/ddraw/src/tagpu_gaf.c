@@ -29,6 +29,8 @@ static void glog(const char* s)
    tagpu_gaf_atlas_get, on the render thread, and the bytes are consumed by
    the upload before the call returns */
 static unsigned char s_dec[TAGPU_GAF_DECMAX * TAGPU_GAF_DECMAX];
+/* the frame re-emitted with a 1-texel replicated border on all four sides */
+static unsigned char s_pad[(TAGPU_GAF_DECMAX + 2) * (TAGPU_GAF_DECMAX + 2)];
 
 const unsigned char* tagpu_gaf_frame_sane(const void* g0)
 {
@@ -168,22 +170,27 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
 
 const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* g)
 {
-    int w, h, x, y, slot;
+    int w, h, x, y, slot, i;
     const void* pix;
     TAGPU_GAFENT* e;
     if (!tagpu_gaf_atlas_create(a)) return NULL;
     w = *(const unsigned short*)(g + TAGPU_GF_W);
     h = *(const unsigned short*)(g + TAGPU_GF_H);
+    /* tagpu_gaf_frame_sane already promises this of every caller's frame; the
+       decode into s_dec and the guard-rail copy below both index off it */
+    if (w <= 0 || h <= 0 || w > TAGPU_GAF_DECMAX || h > TAGPU_GAF_DECMAX) return NULL;
     pix = *(const void* const*)(g + TAGPU_GF_PIX);
     for (slot = (int)gaf_hash(g); a->hash[slot]; slot = (slot + 1) & (TAGPU_GAF_HASH - 1)) {
         TAGPU_GAFENT* c = &a->ents[a->hash[slot] - 1];
         if (c->frame == g && c->pix == pix && c->w == w && c->h == h)
             return c->ok ? c : NULL;
     }
-    if (a->full || h + 1 > a->dim) return NULL;
+    /* every frame carries its OWN 1-texel border, so the shelf advances by
+       w+2 / h+2 rather than sharing one gutter between two neighbours */
+    if (a->full || h + 2 > a->dim) return NULL;
     if (a->n >= a->max) { a->full = 1; return NULL; }
-    if (a->shelfX + w + 1 > a->dim) { a->shelfY += a->shelfH + 1; a->shelfX = 0; a->shelfH = 0; }
-    if (a->shelfY + h + 1 > a->dim) { a->full = 1; return NULL; }
+    if (a->shelfX + w + 2 > a->dim) { a->shelfY += a->shelfH + 2; a->shelfX = 0; a->shelfH = 0; }
+    if (a->shelfY + h + 2 > a->dim) { a->full = 1; return NULL; }
     e = &a->ents[a->n];
     e->frame = g; e->pix = pix;
     e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0;
@@ -192,12 +199,34 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
        life, and the feature atlas is meant to live as long as the map */
     if (!tagpu_gaf_decode(g, w, h, s_dec)) return NULL;
     a->hash[slot] = ++a->n;
-    x = a->shelfX; y = a->shelfY;
-    a->shelfX += w + 1;
+    x = a->shelfX + 1; y = a->shelfY + 1;          /* inside the border */
+    a->shelfX += w + 2;
     if (h > a->shelfH) a->shelfH = h;
     glBindTexture(GL_TEXTURE_2D, a->tex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RED, GL_UNSIGNED_BYTE, s_dec);
+    /* Re-emit the frame with its outermost row and column repeated all round.
+       The border is what any sampler that reaches past the frame must land on:
+       under GL_NEAREST that is the fragment whose centre falls exactly on the
+       quad's far edge (its u interpolates to exactly u1, and floor(u1*dim) is
+       one texel past the frame) — left unwritten that texel is whatever
+       glTexImage2D(NULL) leaves, i.e. index 0, a real palette entry (black)
+       rather than the frame's colour key, which is the black hairline down the
+       right of every tree at zoom 0.25. Under a filtered sampler it is every
+       edge fragment, which is why the border is on all four sides and not just
+       the two the shelf packer used to leave spare. */
+    {
+        const int pw = w + 2;
+        for (i = 0; i < h; i++) {
+            unsigned char* row = s_pad + (size_t)(i + 1) * pw + 1;
+            memcpy(row, s_dec + (size_t)i * w, (size_t)w);
+            row[-1] = row[0];
+            row[w]  = row[w - 1];
+        }
+        memcpy(s_pad, s_pad + (size_t)pw, (size_t)pw);
+        memcpy(s_pad + (size_t)(h + 1) * pw, s_pad + (size_t)h * pw, (size_t)pw);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, x - 1, y - 1, pw, h + 2,
+                        GL_RED, GL_UNSIGNED_BYTE, s_pad);
+    }
     glBindTexture(GL_TEXTURE_2D, 0);
     e->u0 = (float)x / (float)a->dim;         e->v0 = (float)y / (float)a->dim;
     e->u1 = (float)(x + w) / (float)a->dim;   e->v1 = (float)(y + h) / (float)a->dim;

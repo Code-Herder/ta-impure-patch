@@ -162,8 +162,9 @@ cost time; each is a landmine for the next GL-hook we add.
 ## G2 state-read — findings (2026-08-31)
 
 - **Reading live engine state works and is safe.** `*(void**)0x00511DE8` is the main game struct;
-  it is valid even at the menu. We read the mouse position (`+0x2C76`, a `POINT` in game space),
-  the unit array bounds (`+0x14357`/`+0x1435B`, stride `0x118`, slot 0 is a dummy), the alive mask
+  it is valid even at the menu. We read the mouse position (`+0x2C76`, a `POINT` in **screen**
+  space — `0x498DA0` is what turns it into the world point; this line said "game space" until
+  2026-09-03), the unit array bounds (`+0x14357`/`+0x1435B`, stride `0x118`, slot 0 is a dummy), the alive mask
   (`+0x110`, alive bit `0x10000000`, skip bit `0x4000`), positions (`+0x6C/+0x70/+0x74` as signed
   shorts) and the scroll origin (`+0x1431F/+0x14323`). All reads are read-only, guarded by a
   `>0x600000` pointer sanity check so the menu (no unit array) is a safe no-op. No crash. [VERIFIED]
@@ -264,8 +265,15 @@ The exe on disk is never modified.
 | # | What | Site | Change | Status |
 |---|---|---|---|---|
 | 1 | Remove the startup **DirectX version warning** dialog | VA `0x004266A7` (file `0x25AA7`) | `75`→`EB` (`jne 0x42670A` → `jmp`, always skip the warning) | ● shipped, verified: clean main menu, no dialog |
+| 2 | **Contextual order cursors at any `Interface Type`** — restore `cursormove` over ground and `cursorreclamate` over a wreck, which the engine switches off when `Interface Type = 1` (right-mouse orders), the value `tacli` writes into every instance | VA `0x0043E50C` | `0F 84 F0 05 00 00` → `90 ×6` (drop the `je 0x43EB02` in `0x43E490`'s order-1 case) | ● shipped, verified live at Interface Type 1: ground 14 `cursormove`, wreck 11 `cursorreclamate`, own unit 15 `cursorselect`, nothing selected 19 `cursornormal`; a right-click still issues the order. Opt out with `tagpu_curs.off` |
 
-This is our **first original engine modification** — proof the runtime-patch approach works end to end
+Patch 2 is safe to make this bluntly because `0x43E490` has **exactly one caller** and its
+address appears nowhere in the image as a literal, so the branch governs which sprite is shown
+and nothing else; the four sites that decide left-vs-right ordering read `main+0x37EFA`
+separately and are untouched. Full chain, the `cursor_ary` index → GAF table and the measured
+before/after: `exe-reverse-engineering.md` §"The cursor chain — mapped by us".
+
+Patch 1 is our **first original engine modification** — proof the runtime-patch approach works end to end
 on our own binary: locate the check by its string (`0x004FD050`), find the branch, flip one byte from
 `DllMain`. The dialog was also a modal blocker for menu automation, so removing it clears that too.
 

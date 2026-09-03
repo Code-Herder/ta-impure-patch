@@ -1,0 +1,116 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Four ARMPWs with a replacement mesh at one spot, four husks 900wu east. Pan the camera off the units and onto the husks (tacli eye <i> 3216 885) and the wrecks land on units[] indices that held an HMesh* the frame before -- the gather array is static and only nu resets per frame. PASS is silence: the only pose line stays 'pose bound 12 of 12'. A wreck that inherited hires logs 'pose bound 0 of 12' with the Peewee's own piece names unbound, draws a Peewee at the husk and drops the husk itself. Needs native.on to carry 'wrecks'.",
+  "seed": 20260903,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "groups": [
+    {
+      "id": "pw",
+      "owner": 0,
+      "at": [
+        2600,
+        1200
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 2,
+        "spacing": 40
+      },
+      "composition": [
+        {
+          "type": "ARMPW",
+          "count": 4
+        }
+      ],
+      "facing": 45
+    },
+    {
+      "id": "keepalive",
+      "owner": 1,
+      "at": [
+        4200,
+        2400
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 1,
+        "spacing": 40
+      },
+      "composition": [
+        {
+          "type": "CORAK",
+          "count": 1
+        }
+      ],
+      "facing": 0
+    }
+  ],
+  "features": [
+    {
+      "id": "w0",
+      "type": "armlab_dead",
+      "pos": [
+        3500,
+        1200
+      ],
+      "facing": 0
+    },
+    {
+      "id": "w1",
+      "type": "armlab_dead",
+      "pos": [
+        3560,
+        1280
+      ],
+      "facing": 0
+    },
+    {
+      "id": "w2",
+      "type": "armlab_dead",
+      "pos": [
+        3620,
+        1360
+      ],
+      "facing": 0
+    },
+    {
+      "id": "w3",
+      "type": "armlab_dead",
+      "pos": [
+        3680,
+        1440
+      ],
+      "facing": 0
+    }
+  ],
+  "camera": {
+    "at": [
+      2600,
+      1200
+    ]
+  }
+}
