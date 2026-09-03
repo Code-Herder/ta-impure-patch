@@ -21,7 +21,8 @@ What goes in the archive:
       turret each, one signal bit each, modelled on CORLLT's own aim script.
   units/corbatsx.fbi       CORBATS.FBI with Weapon4..7=CORE_LIGHTLASER, a longer
       footprint, a much bigger hull (capped at the int16 health field) and a
-      sight radius that reaches past its own longest gun. Stats are otherwise
+      SightDistance the engine then throws most of away (see SIGHT_DISTANCE).
+      Stats are otherwise
       the stock Warlord's — read through the merged archive view, so it is Core
       Contingency's CORBATS.FBI out of ccdata.ccx that gets inherited, not the
       older one in totala1.hpi.
@@ -85,9 +86,28 @@ HULL_CAP = 32767
 
 # The stock Warlord sees 350 and shoots 1250 (COR_BATS) and 810 (CORE_BATSLASER),
 # so it spends a fight firing at things it cannot see and waiting for someone
-# else to spot for it. A demo ship wants the opposite: see everything it can
-# reach, so the seven mounts pick targets the moment they are in range and the
-# human watching can see what they are shooting at.
+# else to spot for it. Wanting the opposite for a demo ship is not something the
+# FBI can buy: **TA saturates SightDistance**, and 1300 lands on the same ceiling
+# 288 would [MEASURED 2026-09-02, LOS band read out of the engine's own map].
+#
+#   True LOS  (SKIRMISH's LineOfSight stage 1, LosType bit 2 set) picks a ray fan
+#     out of `gamedata/los.tdf` by `SightDistance/32`, clamped to `numtables - 1`.
+#     Stock ships numtables=9, and the accessor takes element `idx - 1`, so the
+#     reachable maximum is TABLE8 — **8 cells = 256 world units** (TABLE9 is in
+#     the file and unreachable). Verified live: the WarlordEx's lit band in the
+#     player's LOS byte map is exactly cols -8..+8 with SightDistance=1300.
+#   Circular  stamps a mask out of the `vismask` sequence of `anims/vismasks.gaf`
+#     by `SightDistance/32 - 5`, clamped to nframes-1. That sequence has ten
+#     frames, 11x11..29x29, so its ceiling is **14 cells = 448 world units** and
+#     anything >= 480 is the same circle. (Stage 2 also clears the LOS-on bit in
+#     this build — LosType reads 8 — so it draws no unit fog at all.)
+#
+# So the ship still out-ranges its own eyes by 554 (laser) and 994 (main guns),
+# and it still opens fire into the fog — because **retaliation is not LOS-gated**
+# in stock TA (`FUN_00406F80` targets the attacker with no visibility test at
+# all, and our port mirrors it), while periodic acquisition is. Raising this
+# number is harmless and buys nothing; the caps are content, not code, so the
+# real lever is a bigger `los.tdf` / `vismasks.gaf` in the .ufo.
 SIGHT_DISTANCE = 1300
 
 # How AimWeaponN reports "aimed". The aim script's *return* is what the slot
