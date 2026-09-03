@@ -33,12 +33,22 @@
        pass=<list>   comma-separated passes: terrain,features,units
        feat=<what>   features: both (default), body, shadow — a debug split
        lane=<lane>   parity | explore (see above)
-       relief=<k>    EXPLORE: displacement scale. 1 = the engine's own h/2,
-                     0 = the art left where it is painted (normals still real)
-       datum=<h>     EXPLORE: the height the displacement PIVOTS about, so a
+       relief=<k>    EXPLORE: displacement scale. DEFAULT 0 — the art left
+                     exactly where the engine paints it, lit by the real
+                     gradient. 1 = the engine's own h/2, which MISREGISTERS
+                     the art: the tiles are already the oblique projection of
+                     the hill, so displacing them applies it twice. Measured on
+                     Two Continents, relief=1 moves the terrain 41-94 px away
+                     from the engine's frame while the features do not move at
+                     all. Keep it for the double-count experiment; do not
+                     mistake it for a better picture
+       datum=<h>     EXPLORE: the height a NON-ZERO relief pivots about, so a
                      cell moves by relief*(h-datum)/2 and a cell AT the datum
                      stays where the engine paints it. Default is the map's
-                     own sealevel; datum=0 is the un-pivoted h/2 (see below)
+                     own sealevel, which removes the constant part of the
+                     slide (66 px of it here); datum=0 is the un-pivoted h/2.
+                     It cannot remove the part that varies with the terrain,
+                     which is why relief itself defaults to 0
        sun=<az,el>   EXPLORE: sun in degrees, or `off`. The default 324,53 IS
                      tagpu_render3do.c's own model light re-expressed as a
                      direction, so terrain and units share one sun by default
@@ -190,7 +200,7 @@ function readLook(p, label) {
     features: passes.includes("features"),
     units: passes.includes("units"),
     feat: p.get("feat") || "both",
-    relief: lane === "explore" ? num("relief", 1) : 0,
+    relief: lane === "explore" ? num("relief", 0) : 0,
     // null = "not named", resolved against the map's sealevel once the scene
     // is loaded; readLook only sees the query, so it cannot know the map yet
     datum: lane === "explore" && p.get("datum") !== null ? num("datum", 0) : null,
