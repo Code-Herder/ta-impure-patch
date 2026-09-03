@@ -4,9 +4,11 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "dd.h"
 #include "tagpu_zoom.h"
 #include "tagpu_detour.h"
+#include "tagpu_vpwide.h"
 
 /* Published view. Volatile because two threads touch it; each is one aligned
    32-bit slot, which x86 loads and stores atomically. */
@@ -16,6 +18,124 @@ static volatile LONG  s_live;          /* a zoomed world is on screen right now 
 static volatile LONG  s_fresh;         /* the pass published during this frame     */
 static int            g_mmInstalled;   /* tagpu_zoom_init() patched the engine     */
 
+/* The range BOTH levers share. The transform is fine outside it; these are the
+   levels the rest of the stack has been checked at. */
+#define ZOOM_MIN  0.25f
+#define ZOOM_MAX  8.0f
+
+static void zlog(const char* m);
+static int  in_viewport(int x, int y, int L, int T, int W, int H);
+
+/* ---- the wheel -------------------------------------------------------------
+
+   The message thread only ever does one thing to the zoom: add this notch to
+   s_wheelAccum. Everything else — folding those notches into a target, easing
+   toward it, the clamp — happens on the render thread inside read_lever(), so
+   the level still has exactly one owner and no float is ever shared across the
+   two. It also batches for free: a flick that lands six notches inside one
+   frame is one multiply, not six.
+
+   The step is geometric because zoom is: a notch has to mean the same
+   proportional change at 0.3x as at 6x, or the control is unusable at one end.
+   1.1 per notch puts the full 0.25..8 range about 36 notches apart end to end,
+   which is roughly two flicks of a real wheel and fine enough to stop where you
+   meant to.
+
+   And it EASES rather than jumping. The per-frame re-read in read_lever()
+   exists precisely so a ramp is smooth (see its comment), and a bare notch is a
+   9% jump of the whole world — harsh to look at, and worse at speed. A quarter
+   of the remaining log-distance per frame settles in about six frames: fast
+   enough to feel direct, slow enough that the eye tracks the world through it.
+   Log-distance, not linear, so zooming in and out ease identically. */
+#define WHEEL_STEP  1.1f      /* per notch, geometric              */
+#define WHEEL_EASE  0.25f     /* of the remaining log-distance, per frame */
+#define WHEEL_SNAP  0.0025f   /* log-distance at which the ease is done   */
+
+#ifndef WHEEL_DELTA
+#define WHEEL_DELTA 120
+#endif
+
+static volatile LONG s_wheelAccum;              /* raw delta, message thread */
+static float         s_wheelTgt = 1.0f;         /* render thread only        */
+static float         s_wheelCur = 1.0f;         /* render thread only        */
+static LONG          s_wheelPend;               /* notches not yet logged    */
+
+/* Pin the wheel to a level without an ease, and throw away any notches that
+   arrived alongside. Used while the file lever is in force: the file wins, and
+   when it goes away the wheel takes over from exactly where it left the view. */
+static void wheel_pin(float z)
+{
+    LONG dropped = InterlockedExchange(&s_wheelAccum, 0);
+    s_wheelTgt = s_wheelCur = z;
+    s_wheelPend = 0;
+    /* Say when the file is the reason the wheel did nothing. This is the only
+       gate that swallows a notch silently — the other two report themselves
+       from tagpu_zoom_wheel() — and it is the easiest to hit by accident, from
+       a scenario that wrote tagpu_zoom.txt and never removed it. Throttled: the
+       pin runs every frame the file exists. */
+    if (dropped) {
+        static DWORD tick;                       /* render thread only */
+        DWORD now = GetTickCount();
+        if (now - tick > 1000) {
+            char b[96];
+            tick = now;
+            _snprintf(b, sizeof b,
+                      "zoom: wheel %+d ignored - tagpu_zoom.txt is in force at %.3f",
+                      (int)dropped, z);
+            b[sizeof b - 1] = 0;
+            zlog(b);
+        }
+    }
+}
+
+/* Fold in the notches since the last frame and take one step of the ease. */
+static float wheel_level(void)
+{
+    LONG d = InterlockedExchange(&s_wheelAccum, 0);
+    float lc, lt;
+
+    if (d) {
+        s_wheelTgt *= (float)pow(WHEEL_STEP, (double)d / WHEEL_DELTA);
+        if (s_wheelTgt < ZOOM_MIN) s_wheelTgt = ZOOM_MIN;
+        if (s_wheelTgt > ZOOM_MAX) s_wheelTgt = ZOOM_MAX;
+        /* Land EXACTLY on 1.0 when the notches cancel. 1x is the identity the
+           whole stack tests for by equality — the transform, the minimap rect
+           and the scroll rate each short-circuit on `z == 1.0f` — so wheeling
+           out and back has to restore it, not leave a 1e-7 residue that keeps
+           all three live and makes 1x no longer byte-identical. The band is far
+           narrower than one 10% notch, and the off-grid levels a clamp produces
+           (0.25 * 1.1^n) miss it too, so nothing else can fall into it. */
+        if (s_wheelTgt > 0.999f && s_wheelTgt < 1.001f) s_wheelTgt = 1.0f;
+        s_wheelPend += d;
+    }
+    else if (s_wheelPend) {
+        /* ONE line per gesture, at the end of it, not one per frame that
+           carried notches. zlog is an fopen/fprintf/fclose and this runs on the
+           render thread, so a sustained spin would otherwise open the log every
+           frame for as long as it lasted — and unlike every other per-frame log
+           in this stack (tagpu_spxlog.on and friends) there is no flag file to
+           turn it off. Deferring to the settle costs nothing diagnostically: the
+           total and the level it landed on are what the line was ever read for. */
+        char b[64];
+        _snprintf(b, sizeof b, "zoom: wheel %+d -> %.3f",
+                  (int)s_wheelPend, s_wheelTgt);
+        b[sizeof b - 1] = 0;
+        s_wheelPend = 0;
+        zlog(b);
+    }
+    if (s_wheelCur == s_wheelTgt) return s_wheelCur;
+
+    lc = (float)log(s_wheelCur);
+    lt = (float)log(s_wheelTgt);
+    lc += (lt - lc) * WHEEL_EASE;
+    /* Snap rather than approach forever: an ease that never arrives leaves the
+       level a hair off the notch that was asked for, and recomputes two
+       transcendentals every frame to stay there. */
+    if (lt - lc < WHEEL_SNAP && lc - lt < WHEEL_SNAP) s_wheelCur = s_wheelTgt;
+    else s_wheelCur = (float)exp(lc);
+    return s_wheelCur;
+}
+
 float tagpu_zoom_read_lever(void)
 {
     /* Re-read EVERY frame: this is a continuous control, so a 30-frame poll
@@ -23,23 +143,87 @@ float tagpu_zoom_read_lever(void)
        staircase on video. On a bad parse the LAST GOOD value is kept rather
        than snapping back to 1.0 — a writer driving a ramp at 60 Hz can be
        caught mid-write, and a one-frame jump to unzoomed reads as a flicker.
-       Only the file's ABSENCE means "no zoom". */
+       Only the file's ABSENCE hands the level to the wheel. */
     HANDLE zh = CreateFileA("tagpu_zoom.txt", GENERIC_READ,
                             FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (zh == INVALID_HANDLE_VALUE) {
-        s_zoom = 1.0f;
+        s_zoom = wheel_level();
     } else {
         char zb[32]; DWORD zn = 0;
         if (ReadFile(zh, zb, sizeof zb - 1, &zn, 0) && zn > 0) {
             float z;
             zb[zn] = 0;
             z = (float)atof(zb);
-            if (z >= 0.25f && z <= 8.0f) s_zoom = z;
+            if (z >= ZOOM_MIN && z <= ZOOM_MAX) s_zoom = z;
         }
         CloseHandle(zh);
+        /* Pin to `s_zoom` rather than to the value just parsed: on a torn read
+           that is the LAST GOOD level, which is the one actually in force and
+           therefore the one the wheel must inherit when the file goes away. */
+        wheel_pin(s_zoom);
     }
     return s_zoom;
+}
+
+int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
+{
+    static DWORD s_offTick;       /* message thread only */
+    static int   s_off;
+    static DWORD s_gripeTick;
+    DWORD now;
+    int x, y, delta;
+
+    if (msg != WM_MOUSEWHEEL) return 0;
+
+    /* The escape hatch, polled rather than cached at attach so it can be
+       flipped on a running instance. Throttled because a stat per notch on the
+       message thread is pointless; a quarter second is well under the time it
+       takes to reach for the wheel after touching the file. */
+    /* Unsigned tick arithmetic, so a wrap is a non-event; a zero stamp is a
+       tick count 250 ms after boot, which no running game is ever in. */
+    now = GetTickCount();
+    if (now - s_offTick > 250) {
+        s_offTick = now;
+        s_off = (GetFileAttributesA("tagpu_wheel.off") != INVALID_FILE_ATTRIBUTES);
+    }
+    if (s_off) return 0;
+
+    /* `s_live` is "our zoomed world is on screen": no publish, no wheel, so the
+       menus and a game not yet loaded are untouchable however hard it is spun.
+       The gate is the TRUE viewport — the screen region the world is drawn in,
+       which does not move with the zoom — so at zoom < 1 the wheel is live over
+       the whole world including the ring, and dead over the screen-space UI. */
+    x = (int)(short)LOWORD(lparam);
+    y = (int)(short)HIWORD(lparam);
+    if (!s_live ||
+        !in_viewport(x, y, (int)s_vpL, (int)s_vpT, (int)s_vw, (int)s_vh)) {
+        /* Say so, once a second: a notch that does nothing is otherwise
+           indistinguishable from a wheel that is not wired up at all, and the
+           two reasons want different fixes. */
+        if (now - s_gripeTick > 1000) {
+            s_gripeTick = now;
+            zlog(s_live ? "zoom: wheel ignored — pointer is off the world viewport"
+                        : "zoom: wheel ignored — no zoomed world on screen");
+        }
+        return 0;
+    }
+
+    delta = (int)(short)HIWORD(wparam);
+    if (!delta) return 0;
+    InterlockedExchangeAdd(&s_wheelAccum, (LONG)delta);
+    return 1;
+}
+
+void tagpu_zoom_wheel_locked_out(void)
+{
+    static DWORD tick;                       /* message thread only */
+    DWORD now = GetTickCount();
+    if (now - tick > 1000) {
+        tick = now;
+        zlog("zoom: wheel ignored - the window has no mouse lock yet "
+             "(click in it once)");
+    }
 }
 
 void tagpu_zoom_publish_view(int vpL, int vpT, int vw, int vh)
@@ -111,6 +295,9 @@ void tagpu_zoom_frame_end(void)
     /* after s_live settles, so a frame that drew nothing zoomed puts the
        engine's own rate back */
     apply_scroll_rate();
+    /* and the same for the addressable rect: a frame that published nothing
+       must hand the engine its own viewport back before the menus see it */
+    tagpu_vpwide_frame(tagpu_zoom_level());
 }
 
 float tagpu_zoom_level(void)
@@ -158,6 +345,20 @@ static int iround(float v)
    edge scroll, the cursor — working exactly as at 1x, and the one thing that
    would then be wrong, a click on the 1x world point, is what
    tagpu_zoom_drop_mouse() throws away. */
+/* to_engine with the ring measured against the TRUE viewport, whatever
+   tagpu_vpwide may have widened the engine's rect to. */
+static int to_engine_true(int* x, int* y)
+{
+    float z, cx, cy; int L, T, W, H, ux, uy;
+    if (!x || !y || !view(&z, &cx, &cy, &L, &T, &W, &H)) return 0;
+    if (!in_viewport(*x, *y, L, T, W, H)) return 0;   /* screen-space: 1:1 */
+    ux = iround(((float)*x - cx) / z + cx);
+    uy = iround(((float)*y - cy) / z + cy);
+    if (!in_viewport(ux, uy, L, T, W, H)) return 0;   /* the ring: unchanged */
+    *x = ux; *y = uy;
+    return 1;
+}
+
 static int to_engine(int* x, int* y, int* ring)
 {
     float z, cx, cy; int L, T, W, H, ux, uy;
@@ -166,6 +367,18 @@ static int to_engine(int* x, int* y, int* ring)
     if (!in_viewport(*x, *y, L, T, W, H)) return 0;   /* screen-space: 1:1 */
     ux = iround(((float)*x - cx) / z + cx);
     uy = iround(((float)*y - cy) / z + cy);
+    /* The ring is whatever the engine cannot NAME, so it is measured against
+       the addressable rect — which tagpu_vpwide has widened to exactly this
+       transform's range when it is armed, and which is the true viewport when
+       it is not. The gate above stays on the TRUE rect: it decides "did the
+       player click on the world or on the screen-space UI", and that boundary
+       does not move. */
+    {
+        int aL, aT, aW, aH;
+        if (tagpu_vpwide_addressable(&aL, &aT, &aW, &aH)) {
+            L = aL; T = aT; W = aW; H = aH;
+        }
+    }
     if (!in_viewport(ux, uy, L, T, W, H)) {
         if (ring) *ring = 1;
         return 0;
@@ -178,6 +391,27 @@ int tagpu_zoom_to_engine(int* x, int* y)
 {
     return to_engine(x, y, NULL);
 }
+
+/* The same transform for the position the engine DRAWS its cursor at, and the
+   one place the addressable rect must NOT be consulted.
+
+   The engine draws its cursor wherever GetCursorPos reports, and the composite
+   moves the sprite back under the pointer from there — which only works while
+   that position is inside the engine's own 1x viewport, over the terrain key
+   fill. tagpu_vpwide widens what the engine can NAME, not what it can DRAW ON:
+   a ring `u` lands on the side panel (where the sprite is composited over panel
+   pixels the composite must not stamp into the world) or off the surface
+   entirely. So the ring test here stays on the TRUE viewport and the ring keeps
+   G13e's answer — the pointer is handed through unchanged and the engine draws
+   its cursor exactly where the player's pointer is, which needs no moving at
+   all. The input path is unaffected: what the engine can NAME still comes from
+   the messages, which carry the widened `u`. */
+int tagpu_zoom_to_engine_draw(int* x, int* y)
+{
+    return to_engine_true(x, y);
+}
+
+#define to_engine_draw_pt to_engine_true
 
 int tagpu_zoom_cursor_shift(int* dx, int* dy, int* ux, int* uy)
 {
@@ -192,7 +426,10 @@ int tagpu_zoom_cursor_shift(int* dx, int* dy, int* ux, int* uy)
     if (dy) *dy = 0;
     if (ux) *ux = 0;
     if (uy) *uy = 0;
-    if (!to_engine(&ex, &ey, NULL)) return 0;
+    /* the DRAW transform, so this agrees with where the engine actually put the
+       sprite: in the ring that is the pointer itself and there is nothing to
+       move (tagpu_zoom_to_engine_draw) */
+    if (!to_engine_draw_pt(&ex, &ey)) return 0;
     if (sx == ex && sy == ey) return 0;      /* nothing to move */
     if (dx) *dx = sx - ex;
     if (dy) *dy = sy - ey;

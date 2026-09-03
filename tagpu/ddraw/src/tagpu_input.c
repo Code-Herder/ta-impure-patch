@@ -251,6 +251,19 @@ static void do_keys(HWND hwnd)
                down, which would drag the human's real pointer. */
             else if (sscanf(p, "pmove:%d,%d", &gx, &gy) == 2)
                 tagpu_shield_mouse(hwnd, TAGPU_M_MOVE, gx, gy);
+            /* `wheel:+3` / `wheel:-3` — N notches at the pointer, which is the
+               zoom control (tagpu_zoom.h). It is posted where the pointer is
+               and NOT where a token says, because the wheel is only live over
+               the world viewport: aim it with `pmove:` first, exactly as a
+               player aims it by moving the mouse. The count is capped so a
+               fat-fingered `wheel:100000` cannot flood the message queue. */
+            else if (sscanf(p, "wheel:%d", &gx) == 1) {
+                int n = gx < 0 ? -gx : gx;
+                int code = gx < 0 ? TAGPU_M_WHEELDN : TAGPU_M_WHEELUP;
+                if (n > 64) n = 64;
+                while (n-- > 0)
+                    tagpu_shield_mouse(hwnd, code, TAGPU_M_HERE, TAGPU_M_HERE);
+            }
             else if (sscanf(p, "char:%c", (char*)&gx) == 1) {
                 tagpu_shield_char(hwnd, (char)gx);
             }

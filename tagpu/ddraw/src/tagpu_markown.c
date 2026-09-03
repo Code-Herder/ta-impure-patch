@@ -9,6 +9,7 @@
 #include "tagpu_terr.h"
 #include "tagpu_native.h"
 #include "tagpu_detour.h"
+#include "tagpu_vpwide.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -149,10 +150,20 @@ static int layer_begin(LAYER* L, int* ctx, int fresh)
         return 1;
     }
 
-    x0 = *(const int*)(ta + OFF_VP_L);
-    y0 = *(const int*)(ta + OFF_VP_T);
-    x1 = x0 + *(const int*)(ta + OFF_VIEW_W);
-    y1 = y0 + *(const int*)(ta + OFF_VIEW_H);
+    /* The ADDRESSABLE rect, not the true one: at zoom < 1 tagpu_vpwide widens
+       what the engine can name, its own drawers then reach past the 1x edge,
+       and the replay maps every captured pixel back through the zoom anyway
+       (layer_quad projects from the TRUE vpL/eye, so a capture at an engine
+       position outside the 1x viewport lands where it belongs on screen).
+       Capturing only the 1x rect would throw the ring's markers away again.
+       The clip intersection below is what keeps it inside our scratch. */
+    {
+        int w, h;
+        if (!tagpu_vpwide_addressable(&x0, &y0, &w, &h))
+            tagpu_vpwide_true_rect(ta, &x0, &y0, &w, &h);
+        x1 = x0 + w;
+        y1 = y0 + h;
+    }
     if (x0 < cl) x0 = cl;
     if (y0 < ct) y0 = ct;
     if (x1 > cr + 1) x1 = cr + 1;

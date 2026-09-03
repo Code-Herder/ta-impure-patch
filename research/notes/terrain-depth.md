@@ -819,13 +819,20 @@ to us, and the terrain key-fill (§7.2) needs all four:
 
 | Off | Field | Read from |
 |---|---|---|
+| `+0x00` | **width** | `SurfaceCreateNamed 0x4C69F0` writes it, and the default clip from it |
+| `+0x04` | **height** | ditto |
 | `+0x08` | **pitch** (bytes per row) | `0x4CBEF1`: `dst = base + pitch·y + x` |
 | `+0x0C` | **pixel base** | ditto |
 | `+0x1C/0x20/0x24/0x28` | **clip rect L/T/R/B, INCLUSIVE** | `0x4C6B10` writes exactly these 4 dwords |
 
-There is **no width or height field** — the clip rect is the only bound on the last
-row of the buffer, which is why `tagpu_terrown.c` refuses to fill a context whose
-rect does not validate rather than trusting the viewport fields alone.
+**Corrected G13f:** this note used to say there was no width or height field. There is —
+`SurfaceCreateNamed` allocates `w·h + 0x30`, stores `w` at `+0x00`, `h` at `+0x04`,
+the pitch at `+0x08`, the pixel base at `+0x0C`, and initialises the clip to
+`(0, 0, w-1, h-1)`. `tagpu_vpwide.c` reads `+0x00`/`+0x04` to clamp the clip rect back
+inside the surface, which is the whole point of that redirect. What remains true is that
+`tagpu_terrown.c` validates the **clip rect** before filling: the context it is handed is
+a stack COPY of the descriptor, so the clip is the bound that actually governs the blit,
+and refusing an implausible one is cheaper than trusting the viewport fields alone.
 
 ### Prologue bytes of the functions we detour [BINARY-VERIFIED G13b]
 

@@ -19,6 +19,7 @@
 # Build artifacts
 *.o
 *.obj
+*.d
 /tagpu/tagpu.dll
 /tagpu/ddraw/ddraw.dll
 

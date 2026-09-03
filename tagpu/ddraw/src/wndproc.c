@@ -940,6 +940,11 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     {
         if (!g_config.devmode && !g_mouse_locked)
         {
+            /* tagpu: this returns before the wheel ever reaches the zoom, so
+               say why — otherwise it is indistinguishable from a wheel that was
+               never wired up (tagpu_zoom.h). */
+            if (uMsg == WM_MOUSEWHEEL)
+                tagpu_zoom_wheel_locked_out();
             return 0;
         }
 
@@ -1049,6 +1054,12 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         break;
     }
     }
+
+    /* tagpu: the wheel is the zoom control. It is consumed over the world and
+       passed through everywhere else, where the engine ignores it anyway — its
+       jump table stops at 0x206 (tagpu_zoom.h). */
+    if (tagpu_zoom_wheel(uMsg, wParam, lParam))
+        return 0;
 
     /* tagpu: the world is drawn zoomed, the engine's screen->world maths is
        1:1 — hand it the unzoomed position so a click lands where it looks, and

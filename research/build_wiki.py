@@ -55,6 +55,7 @@ PAGES = [
     ("api-wrappers",              "The DirectDraw boundary",   "Mechanism"),
     ("deep-plugin-abi-and-corpus","Cavedog's plugin ABI",      "Mechanism"),
     ("extra-weapons",             "More weapons per unit",     "Mechanism"),
+    ("line-of-sight",             "Line of sight & fog",       "Mechanism"),
 
     ("deep-tadr",                 "TADR / tdraw.dll",          "Projects"),
     ("release-matrix",            "Releases & feature matrix", "Projects"),

@@ -75,6 +75,7 @@
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
+#include "tagpu_vpwide.h"
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -402,9 +403,12 @@ static const char* CFS =
     "    if (uCur.z > 0.0) {\n"
     /* where the pointer is: paint the cursor texel the engine put at u */
     "      vec2 sp = px - uCurOff;\n"
-    /* ...and only from inside the viewport: `u` is guaranteed to be in it but
-       not 64 px clear of its edge, so the box can straddle the boundary and
-       would otherwise stamp side-panel or top-bar texels into the world */
+    /* ...and only from inside the viewport: `u` is in it but not 64 px clear
+       of its edge, so the box can straddle the boundary and would otherwise
+       stamp side-panel or top-bar texels into the world. `u` being in it is an
+       invariant tagpu_vpwide would break — a widened rect puts the ring's `u`
+       on the panel or off the surface — so while that module is live it takes
+       the cursor over entirely and uCur.z is 0 here (tagpu_zoom_cursor_shift). */
     "      if (inbox(sp, uCur) && inbox(sp, uVp)) {\n"
     "        ivec2 q = clamp(ivec2(sp), ivec2(0), uSurfSz - 1);\n"
     "        int si = int(texelFetch(uSurf, q, 0).r * 255.0 + 0.5);\n"
@@ -967,8 +971,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return;
     if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return;
 
-    int vpL = *(int*)(ta + OFF_VP_L), vpT = *(int*)(ta + OFF_VP_T);
-    int vw  = *(int*)(ta + OFF_VIEW_W), vh = *(int*)(ta + OFF_VIEW_H);
+    /* the TRUE 1x rect, not the field: while tagpu_vpwide is live the engine's
+       copy is deliberately wider, and the composite key rect (uVp), the zoom's
+       published view and the effective gather below all mean the real one */
+    int vpL, vpT, vw, vh;
+    tagpu_vpwide_true_rect(ta, &vpL, &vpT, &vw, &vh);
     int eyeX = *(int*)(ta + OFF_EYEX), eyeY = *(int*)(ta + OFF_EYEY);
     if (vw < 64 || vh < 64 || vw > 4096 || vh > 4096) return;
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;

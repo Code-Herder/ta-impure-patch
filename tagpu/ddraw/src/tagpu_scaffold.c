@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include "opengl_utils.h"
 #include "tagpu_scaffold.h"
+#include "tagpu_vpwide.h"
 
 /* ---- engine layout (terrain-depth.md, binary-verified) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -343,8 +344,8 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     if (!ptr_ok(ta)) return;
 
     /* live view geometry — the Phase D rule: no constants */
-    int vpL = *(int*)(ta + OFF_VP_L), vpT = *(int*)(ta + OFF_VP_T);
-    int vw  = *(int*)(ta + OFF_VIEW_W), vh = *(int*)(ta + OFF_VIEW_H);
+    int vpL, vpT, vw, vh;
+    tagpu_vpwide_true_rect(ta, &vpL, &vpT, &vw, &vh);   /* TRUE, not the field */
     int eyeX = *(int*)(ta + OFF_EYEX), eyeY = *(int*)(ta + OFF_EYEY);
     int mapW = *(int*)(ta + OFF_MAP_W16), mapH = *(int*)(ta + OFF_MAP_H16);
     int nCols = *(int*)(ta + OFF_SWEEP_C), nRows = *(int*)(ta + OFF_SWEEP_R);

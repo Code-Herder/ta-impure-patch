@@ -1,0 +1,148 @@
+{
+  "format": "ta-scenario/1",
+  "description": "LOS probe: a WarlordEx (CORBATSX, SightDistance=1300, CORE_BATSLASER reaching 810) with four ARM Skeeters parked at 420 and 700 world units on no orders at all. ARMPT_LASER only reaches 180, so the Skeeters can never damage the ship and retaliation \u2014 the one target path in TA that does not check line of sight \u2014 can never fire. Anything the ship targets therefore came from periodic acquisition alone, which is the question this scenario exists to answer. Run it with `--los 1` (True) and read the ship's lit band out of the player's own LOS byte map: it is 8 cells = 256 world units whatever SightDistance says, so all four Skeeters sit in fog inside laser range, and the ship holds no target. Needs warlordex.ufo in the instance gamedir and the extra-weapons module armed (tacli arm <inst> weapons.on). Full mechanism: research/notes/line-of-sight.md.",
+  "seed": 20260902,
+  "on_error": "skip",
+  "setup": {
+    "map": "Anteer Strait",
+    "res": "1920x1080",
+    "clear_existing": true,
+    "switches": {
+      "shootall": true,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "core",
+        "color": 1,
+        "metal": 10000,
+        "energy": 10000
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "arm",
+        "color": 0,
+        "metal": 10000,
+        "energy": 10000
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "warlordex",
+      "type": "CORBATSX",
+      "owner": 0,
+      "pos": [
+        2900,
+        1980
+      ],
+      "facing": 90,
+      "stance": "hold"
+    },
+    {
+      "id": "fusion1",
+      "type": "CORFUS",
+      "owner": 0,
+      "pos": [
+        3000,
+        1400
+      ]
+    },
+    {
+      "id": "fusion2",
+      "type": "CORFUS",
+      "owner": 0,
+      "pos": [
+        3180,
+        1400
+      ]
+    },
+    {
+      "id": "estor1",
+      "type": "CORESTOR",
+      "owner": 0,
+      "pos": [
+        3340,
+        1400
+      ]
+    },
+    {
+      "id": "estor2",
+      "type": "CORESTOR",
+      "owner": 0,
+      "pos": [
+        3420,
+        1400
+      ]
+    },
+    {
+      "id": "estor3",
+      "type": "CORESTOR",
+      "owner": 0,
+      "pos": [
+        3500,
+        1400
+      ]
+    },
+    {
+      "id": "arm_spare",
+      "type": "ARMSOLAR",
+      "owner": 1,
+      "pos": [
+        3800,
+        1300
+      ]
+    },
+    {
+      "id": "probe0",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2480,
+        1980
+      ],
+      "facing": 90,
+      "stance": "hold"
+    },
+    {
+      "id": "probe1",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3320,
+        1980
+      ],
+      "facing": 90,
+      "stance": "hold"
+    },
+    {
+      "id": "probe2",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        2200,
+        1980
+      ],
+      "facing": 90,
+      "stance": "hold"
+    },
+    {
+      "id": "probe3",
+      "type": "ARMPT",
+      "owner": 1,
+      "pos": [
+        3600,
+        1980
+      ],
+      "facing": 90,
+      "stance": "hold"
+    }
+  ],
+  "groups": [],
+  "camera": {
+    "center_on": "warlordex"
+  }
+}

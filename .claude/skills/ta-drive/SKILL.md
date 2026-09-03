@@ -508,26 +508,75 @@ Three things to know:
 - **`passive` is the A/B lever** and hands *everything* back — bars, capture and the
   selection rect — so the engine draws the lot while we still gather and count.
 
-**Zoom is `tagpu_zoom.txt` in the gamedir** — a bare float 0.25–8.0, re-read every frame;
-delete the file for 1×. Write it **atomically** (temp + rename) or the DLL reads a torn
-value. Since G13e the input follows it: a click lands on the world point it is drawn
-over, the engine's cursor is moved back under the pointer, and the minimap's view box and
-the scroll rate scale with it. `tacli arm <i> zoom.on` (at launch, like every other
-code-patching pass) additionally installs the one engine patch it needs — the minimap
-view rectangle — and logs `zoom: minimap view rect ARMED`. Everything else needs no arm
-at all and is inert at 1×.
+**Zoom has two levers, and the file wins.**
 
-Two things to know when driving zoomed:
+**`tagpu_zoom.txt` in the gamedir** — a bare float 0.25–8.0, re-read every frame; write it
+**atomically** (temp + rename) or the DLL reads a torn value. This is the scripted lever, so
+every scenario and every `tacli` recipe still drives zoom exactly as before.
+
+**The mouse wheel** is what the player uses, and what the level falls back to whenever the
+file is *absent*: one notch is ×1.1 geometric, clamped to the same 0.25–8.0, eased over
+about six frames. It is live **only while our zoomed world is actually on screen and the
+pointer is over the world viewport** — the menus, the side panel and the minimap keep their
+wheel, and the log says which gate refused (`zoom: wheel ignored — no zoomed world on
+screen` / `— pointer is off the world viewport`). Every accepted turn logs
+`zoom: wheel +720 -> 1.000`, once per gesture rather than per notch.
+`tacli arm <i> wheel.off` disables it live and **`tacli arm <i> wheel.off=off`
+puts it back** — the re-enable is the flag's own removal, not a `wheel.on`,
+which would only leave a stray file and a dead wheel.
+
+```bash
+tools/tacli wheel <i> -6 --at 576 384    # six notches out, pointed at the world first
+tools/tacli wheel <i> 6  --at 576 384    # and back — this lands on EXACTLY 1.0
+tools/tacli keys  <i> pmove:576,384 wheel:-6      # the same thing as raw tokens
+```
+
+- **Aim it.** `--at` is a `pmove:` first, and without it the notches land wherever the
+  injected pointer was left, and if that is the side panel or a menu the notches do
+  nothing at all.
+- **Deleting `tagpu_zoom.txt` hands over, it does not reset.** While the file is there the
+  wheel is pinned to it, so removing it leaves the view exactly where the file had it and
+  the wheel continues from there. Wheel notches sent while the file is present are dropped.
+- **Wheeling out and back lands on exactly 1×** — the round trip is snapped to `1.0f`, so
+  the identity path really is the identity. The exception is a round trip that hit the
+  0.25 or 8.0 **clamp**: the grid re-anchors there, so −15/+15 comes back at 1.044, not 1.
+  Re-anchor with the file (write `1.0`, then delete it) when you need exactly 1× back.
+
+`tacli arm <i> zoom.on` (at launch, like every other code-patching pass) installs the one
+engine patch either lever needs — the minimap view rectangle, plus the guard that keeps our
+`ScrollSpeed` scaling out of the player's registry — and logs `zoom: ARMED`. Everything
+else needs no arm at all and is inert at 1×.
+
+Three things to know when driving zoomed:
 
 - **`tacli click` takes the position ON SCREEN**, the same as your eyes — the transform
   is applied on the far side of `g_ddraw.cursor`, so the injected path and the human's
   mouse cannot disagree.
-- **At zoom < 1 the outer ring of the view is DISPLAY-ONLY.** The engine can only name
-  screen positions inside its own 1× viewport, so the world the zoom-out reveals beyond
-  it has no address: a click there is **dropped** (the selection is left alone rather
-  than being moved to whatever sat at the 1× position), and the captured marker layers
-  stop at the same edge. At 0.5× the addressable region is the central half of the frame
-  in each axis. Zoom ≥ 1 has no such limit.
+- **At zoom < 1 the outer ring needs `vpwide.on`, or it is display-only.** The engine can
+  only name screen positions inside its own 1× viewport, so without that arm the world the
+  zoom-out reveals beyond it has no address: a click there is **dropped** (the selection is
+  left alone rather than being moved to whatever sat at the 1× position). At 0.5× the
+  addressable region is then the central half of the frame in each axis. Zoom ≥ 1 has no
+  such limit either way.
+- **In-game dialogs drawn inside the viewport take bent clicks at any zoom ≠ 1.** The
+  transform's gate is geometric — inside the world viewport rect or not — so `ARMOPT`,
+  `EXITMENU` and `YESORNO`, which the engine draws over the middle of the world, are
+  treated as world clicks and unzoomed. Measured at 0.386×: `ui click MAINMENU` at its
+  own (577,336) does nothing and its **pre-image** (576,365) hits it. Pre-existing (it is
+  the same with the file lever), harmless (the keyboard is unaffected — `ui press` uses
+  the gadget's quickkey — and wheeling back to 1× restores clicking), and not the same
+  gap as the ring. `tagpu_zoom.h` promises dialogs arrive unmodified; it cannot see them.
+
+**`tacli arm <i> vpwide.on`** (at launch) closes that: it widens the rect the engine
+addresses to exactly what the zoom shows, so a ring click selects and orders normally.
+Verify with `vpwide: ARMED (…)` and `vpwide: true viewport rect verified (128,32 896x704)`;
+you will also see `vpwide: viewport rect restored to 1x` whenever the zoom goes back to 1.
+It writes engine state (`main+0x37E27..0x37E33`, camera state only) and patches four more
+sites, so it is **off by default** — arm it when you are testing zoomed play, leave it off
+when you want the pre-G13f baseline. Two things it does not change: the captured **order
+markers** still stop at the engine's screen-sized offscreen (further out than before, not
+to the frame edge), and the left/up edge-scroll not firing under injected input is
+pre-existing and present with it disarmed too.
 
 **Particles (smoke, fire, wakes, nanolathe) are `sfx.on`** — tokens `log`, `passive`,
 `nosmoke`, `nofire`, `nowake`, `nonano` — on the same `fxown.on` patch set (tacli auto-arms

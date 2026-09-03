@@ -19,6 +19,7 @@
 #include "tagpu_terrown.h"
 #include "tagpu_markown.h"
 #include "tagpu_zoom.h"
+#include "tagpu_vpwide.h"
 #include "tagpu_weapons.h"
 #include "utils.h"
 #include "versionhelpers.h"
@@ -110,6 +111,14 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         /* zoom: the minimap's view rectangle, computed from the 1x view and so a
            lie at any other (tagpu_zoom.h). Inert at zoom 1. */
         tagpu_zoom_init();
+
+        /* vpwide: close the display-only ring at zoom < 1 by widening the
+           engine's own addressable viewport rect, with the two readers that
+           must NOT see it wide — the offscreen's clip and the screen->world
+           conversion — redirected and corrected (tagpu_vpwide.h). No-op unless
+           "tagpu_vpwide.on" exists; byte-matched, all-or-nothing; the rect is
+           only written while a zoomed-out view is live. */
+        tagpu_vpwide_init();
 
         /* tagpu: 1..N weapons per unit — the first module that changes the
            simulation, in its own file behind its own gate. No-op unless
