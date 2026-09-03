@@ -32,11 +32,21 @@
    The capture is a pointer swap, nothing more: the OFFSCREEN context passed
    down the draw is a stack local in DrawGameScreen, so pointing its pixel base
    (+0x0C) at our own buffer for the length of a block sends every clipped blit
-   inside it to us and leaves the engine's own frame untouched. What the
-   blend-reading primitives (`DrawTranspRectangle`'s transparent edges, the
-   order sprite's alpha composite) see underneath is the fill key — which is
-   exactly what they already read out of the engine's frame today, because
-   tagpu_terrown.c fills the viewport with that same key.
+   inside it to us and leaves the engine's own frame untouched.
+
+   ONE PRIMITIVE NEEDS MORE THAN THAT. The blend-reading drawers
+   (`DrawTranspRectangle`'s transparent edges, the order pass's target sprite)
+   see the fill key underneath — the same thing they already read out of the
+   engine's frame, because tagpu_terrown.c fills the viewport with that key.
+   That was once written down here as harmless. It is not: what they READ is
+   unchanged, but what they WRITE is a function of it, so the waypoint star —
+   alpha-composited through `table[(src<<8)|dst]` — came out blended with the
+   key's bright cyan and looked washed out, where stock TA blends it with the
+   ground. The capture therefore also swaps the engine's blend LUT for an
+   identity one while a window is open, which turns that composite into a copy
+   and lands the sprite as its own colours (tagpu_markown.c, "WHY THE ENGINE'S
+   BLEND LUT IS REPLACED"). Drawing it opaque is then a deliberate choice, not
+   an accident of the key.
 
    Two capture windows, because fog divides them:
 

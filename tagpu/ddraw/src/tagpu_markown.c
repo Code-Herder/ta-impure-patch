@@ -25,6 +25,13 @@
 #define PASS_TRANSP_VA   0x004BF8C0u   /* DrawTranspRectangle, stdcall, ret 0x0C  */
 #define LEAF_BARS_VA     0x0046A430u   /* DrawHealthBars, stdcall, ret 0x10       */
 #define HOTKEY_VA        0x004C1B80u   /* KeyboardHotkeySampler(id), ret 4        */
+/* The graphics globals block (`0x4B6220` is just `mov eax,ds:0x51FBD0; ret`)
+   and, inside it, the pointer to the 64 KB blend LUT every alpha composite
+   runs through: `out = tab[(src << 8) | dst]`, the inner loop at
+   `0x4CBF99..0x4CBFAC` (source texels equal to the sprite's transparent index
+   are skipped before the lookup). [BINARY-VERIFIED] */
+#define GFX_GLOBALS_PP   0x0051FBD0u
+#define GFX_ALPHATAB     0xC0
 
 /* `83 EC 10 | 53 | 55` = sub esp,0x10; push ebx; push ebp — five
    position-independent bytes ending on an instruction boundary (0x46A435) */
@@ -54,6 +61,39 @@ static const unsigned char BARS_STOLEN[5] = { 0x83, 0xEC, 0x10, 0x53, 0x55 };
 #define CTX_FIELDS   11          /* how much of it we read                    */
 
 #define SHIFT_HOTKEY 0xF9        /* the id the engine samples for the markers */
+
+/* WHY THE ENGINE'S BLEND LUT IS REPLACED FOR THE LENGTH OF A CAPTURE.
+
+   The order pass's target sprite — the pulsing star at a move/attack waypoint,
+   drawn by `0x439740` through `AlphaCompsteBuf2OFFScreen 0x4B8500` — is
+   ALPHA-COMPOSITED: it reads the destination pixel and looks the pair up in the
+   LUT above. In stock TA that destination is the terrain, so the star comes out
+   blended with the ground (olive over grass). In our frame the destination is
+   the fill key, because terrown replaced the terrain blit with it — so the star
+   came out blended with palette 254, a bright cyan, and read as washed out.
+
+   markown.h used to argue this was harmless, on the grounds that the key is
+   "exactly what they already read out of the engine's frame today". That is
+   true of what the primitive READS and wrong about what it WRITES: the blend
+   result is a function of the destination, so a key destination gives a keyed
+   colour. Measured against stock: star olive (35,91,15)-ish vs ours teal.
+
+   The fix is to make the composite a copy. An identity LUT — every (src,dst)
+   pair answering src — lands the sprite in our buffer as its own palette
+   indices, and the replay then draws it opaque. That is a DELIBERATE departure
+   from stock, which blends it; the sprite's true colours are what the capture
+   now holds, so re-blending it against our own scene instead is a shader
+   change, not another capture change.
+
+   Installed only while a capture window is open, and only ever touched from the
+   game thread — the pointer is a global, so unlike the draw context's pixel
+   base it is safe to restore from a LATER frame if a window is ever abandoned
+   (see mark_hook8). Inside the window the only alpha composite the engine
+   reaches is that sprite: the route dots are a masked `CopyGafToContext`, the
+   rects and circles are `DrawLine`, and the health bars are ours. */
+static unsigned char*  g_opaqueTab;      /* 64 KB, built once at init      */
+static unsigned char** g_tabSlot;        /* non-NULL while ours is in      */
+static unsigned char*  g_tabSaved;       /* the engine's own pointer       */
 
 volatile unsigned char g_markown_skipBars = 0;
 
@@ -133,6 +173,38 @@ int tagpu_markown_layer(int i, TAGPU_MARKLAYER* out)
 /* ---- the capture itself ---------------------------------------------- */
 
 static void layer_clear(LAYER* L);
+
+static void alpha_build(void)
+{
+    int v;
+    g_opaqueTab = (unsigned char*)malloc(256 * 256);
+    if (!g_opaqueTab) { flog("markown: opaque blend table alloc failed"); return; }
+    /* row `src` is 256 copies of `src`, so any dst answers src */
+    for (v = 0; v < 256; v++)
+        memset(g_opaqueTab + v * 256, v, 256);
+}
+
+static void alpha_opaque_on(void)
+{
+    unsigned char** slot;
+    char* g;
+    if (g_tabSlot || !g_opaqueTab) return;         /* already in, or no table */
+    g = *(char**)GFX_GLOBALS_PP;
+    if (!ptr_ok(g)) return;
+    slot = (unsigned char**)(g + GFX_ALPHATAB);
+    if (IsBadWritePtr(slot, 4) || !ptr_ok(*slot)) return;  /* not built yet */
+    g_tabSaved = *slot;
+    *slot = g_opaqueTab;
+    g_tabSlot = slot;
+}
+
+static void alpha_opaque_off(void)
+{
+    if (!g_tabSlot) return;
+    *g_tabSlot = g_tabSaved;
+    g_tabSlot = NULL;
+    g_tabSaved = NULL;
+}
 
 /* Point the context's pixel base at our scratch and, on the first call of a
    frame, key-fill the viewport rect of it first. Returns 0 (and leaves the
@@ -345,6 +417,8 @@ static void __stdcall mark_hook8(void* ctx, int n)
        draw either way — nothing here can give it back — but the next frame
        starts clean instead of corrupting a stack. */
     if (L->active) { L->active = 0; L->ctx = NULL; L->saved = NULL; }
+    /* the blend LUT pointer is a global, so this one CAN be put back late */
+    alpha_opaque_off();
 
     /* The post-fog window is per-call and every one of its calls is still ahead
        of us in this frame, so this is where its frame starts. Its "nothing to
@@ -365,6 +439,8 @@ static void __stdcall mark_hook8(void* ctx, int n)
     if (!g_capture || !ptr_ok(ta) || !prefog_wanted(ta) ||
         !layer_begin(L, (int*)ctx, 1))
         layer_clear(L);
+    else
+        alpha_opaque_on();       /* the star is a copy, not a blend, in here */
 }
 
 /* hook 9: close the window before the layer-9 particles, which the engine
@@ -375,6 +451,7 @@ static void __stdcall mark_hook9(void* ctx, int n)
        drawUnits == 0, which only the movie recorder passes (see hook 8) — and
        `opens == ends` over ~50 000 blocks of live play says so. */
     layer_end(&g_L[TAGPU_MARK_PREFOG], 1);
+    alpha_opaque_off();
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
 }
 
@@ -467,6 +544,8 @@ void tagpu_markown_init(void)
              "0x4699EB/0x469B8A/0x469BD7/0x469D2C/0x469EC5/0x469F1E/0x46A430");
         return;
     }
+
+    alpha_build();
 
     ok  = redirect(SITE_HOOK8_VA,   (void*)mark_hook8);
     ok &= redirect(SITE_HOOK9_VA,   (void*)mark_hook9);

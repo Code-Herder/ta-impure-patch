@@ -436,8 +436,28 @@ installed on those still runs.
 **What the capture buffer holds under a blend.** `DrawTranspRectangle`'s transparent
 edges and the order sprite's alpha composite read the destination. Ours is key-filled,
 which is exactly what they already read out of the engine's frame today, because
-`terrown` fills the viewport with that same key — so this changes nothing, and nothing
-is lost that was not already lost at G13b.
+`terrown` fills the viewport with that same key.
+
+**That was originally called harmless, and it was not** [CORRECTED 2026-09-03]. What
+those primitives *read* is unchanged; what they *write* is a function of it. The target
+sprite (`0x439740`, the pulsing star at a move/attack waypoint) alpha-composites through
+`AlphaCompsteBuf2OFFScreen 0x4B8500`, whose inner loop at `0x4CBF99..0x4CBFAC` is
+`out = tab[(src << 8) | dst]` with the LUT pointer at `*(*(u32*)0x51FBD0 + 0xC0)`
+(`0x4B6220` is just `mov eax,ds:0x51FBD0; ret`). [BINARY-VERIFIED] With `dst` = the key,
+that is a blend against palette 254 — bright cyan — so the star rendered **teal** where
+stock TA renders it olive over grass. Measured in its bounding box: 14 % of its pixels on
+the cyan ramp, against 1 % after the fix.
+
+**The fix: an identity LUT for the length of the capture.** `tab[(s<<8)|d] = s` for every
+pair, installed at hook 8 and restored at hook 9, makes the composite a plain copy, so the
+sprite lands in our buffer as its own palette indices. The pointer is a *global*, so
+unlike the context's pixel base it can safely be restored from a later frame if a window
+is ever abandoned. Inside the window it is the only alpha composite the engine reaches —
+the route dots are a masked `CopyGafToContext 0x4B7F90` (and `fxown`'s detour on that leaf
+only skips while the explosion pass is running, so the dots are untouched), the rects and
+circles are `DrawLine`, and the health bars are ours. The replay then draws the sprite
+**opaque**, which is a deliberate departure from stock's blend; re-blending it against our
+own scene instead would now be a shader change, not another capture change.
 
 ### 6.1 Cost, and the one honest gap
 
