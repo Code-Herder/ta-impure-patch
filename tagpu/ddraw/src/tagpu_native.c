@@ -992,15 +992,24 @@ typedef struct {
 static HPMAP s_pmap[8];
 static int   s_npmap;
 
+/* `a` is ours (a glTF piece name, at most 31 chars); `b` is the engine's, and
+   the caller can only establish that ONE byte of it is readable. This compare
+   reads as many as `a` is long, so a name lying in the last bytes of a page
+   would fault the render thread on the next one — every other engine-string
+   read in this file is bounded the same way. It resolves once per unit TYPE,
+   so probing each byte costs nothing worth measuring. */
 static int name_eq(const char* a, const char* b)
 {
-    for (; *a && *b; a++, b++) {
-        char ca = *a, cb = *b;
+    for (; *a; a++, b++) {
+        char ca = *a, cb;
+        if (IsBadReadPtr(b, 1)) return 0;
+        cb = *b;
+        if (!cb) return 0;
         if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
         if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
         if (ca != cb) return 0;
     }
-    return *a == *b;
+    return !IsBadReadPtr(b, 1) && *b == 0;
 }
 
 static const HPMAP* pmap_for(const void* mesh, const char* const* nd, int nparts)

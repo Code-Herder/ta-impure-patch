@@ -1128,14 +1128,25 @@ static GLuint upload_img(HImg* im, int magf, int minf)
     /* A replacement unit is a 1024px texture on a ~40px sprite: without mips
        every frame resamples different texels and the surface crawls. Honour
        the glTF sampler's own filters when it named them, but never select a
-       mipmapped minification we could not build. */
-    int mn = minf ? minf : GL_LINEAR_MIPMAP_LINEAR;
+       mipmapped minification we could not build. An image is uploaded once,
+       so where two materials share one it is the FIRST to reference it that
+       decides — the sampler is a property of the reference in glTF and of the
+       texture object in GL, and one object per image is the trade. */
+    /* and the enum is the FILE's, so it has to be one of the six before it
+       reaches GL: an out-of-range one is GL_INVALID_ENUM and leaves the GL
+       default MIN filter, which without mips is an incomplete texture that
+       samples black — the one path around the fallback just below. */
+    int mn = (minf == GL_NEAREST || minf == GL_LINEAR ||
+              minf == GL_NEAREST_MIPMAP_NEAREST || minf == GL_LINEAR_MIPMAP_NEAREST ||
+              minf == GL_NEAREST_MIPMAP_LINEAR  || minf == GL_LINEAR_MIPMAP_LINEAR)
+             ? minf : GL_LINEAR_MIPMAP_LINEAR;
     if (!mips && (mn == GL_NEAREST_MIPMAP_NEAREST || mn == GL_LINEAR_MIPMAP_NEAREST ||
                   mn == GL_NEAREST_MIPMAP_LINEAR  || mn == GL_LINEAR_MIPMAP_LINEAR))
         mn = (mn == GL_NEAREST_MIPMAP_NEAREST || mn == GL_NEAREST_MIPMAP_LINEAR)
              ? GL_NEAREST : GL_LINEAR;
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mn);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magf ? magf : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                    (magf == GL_NEAREST || magf == GL_LINEAR) ? magf : GL_LINEAR);
     /* CLAMP, not REPEAT, and not only because the sampler's wrap mode is one
        of the things this loader does not read. `tools/ta3do` packs a unit's
        GAF frames into an ATLAS, so a UV a hair outside its tile must smear
@@ -1284,7 +1295,21 @@ const void* tagpu_hires_mesh(const char* defname, unsigned frame)
     for (i = 0; i < s_nname; i++)
         if (!lstrcmpiA(s_name[i].name, defname)) { n = &s_name[i]; break; }
     if (!n) {
-        if (s_nname >= MAXNAME) return NULL;
+        if (s_nname >= MAXNAME) {
+            /* the same guessing game a full payload table used to be: the
+               replacement just never loads. Stock TA has 279 unit types, so a
+               long enough game really does walk past this. */
+            static int said = 0;
+            if (!said) {
+                char b[176];
+                said = 1;
+                _snprintf(b, sizeof b, "hires: the def-name table is full at %d "
+                          "names - a type first seen from here on renders as "
+                          "the engine's 3DO", MAXNAME);
+                hlog(b);
+            }
+            return NULL;
+        }
         n = &s_name[s_nname++];
         memset(n, 0, sizeof *n);
         lstrcpynA(n->name, defname, sizeof n->name);
