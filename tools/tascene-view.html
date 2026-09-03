@@ -29,6 +29,10 @@
        lane=<lane>   parity | explore (see above)
        relief=<k>    EXPLORE: displacement scale. 1 = the engine's own h/2,
                      0 = the art left where it is painted (normals still real)
+       datum=<h>     EXPLORE: the height the displacement PIVOTS about, so a
+                     cell moves by relief*(h-datum)/2 and a cell AT the datum
+                     stays where the engine paints it. Default is the map's
+                     own sealevel; datum=0 is the un-pivoted h/2 (see below)
        sun=<az,el>   EXPLORE: sun in degrees, or `off`. The default 324,53 IS
                      tagpu_render3do.c's own model light re-expressed as a
                      direction, so terrain and units share one sun by default
@@ -120,7 +124,7 @@ const ceil32 = (v) => { const q = div32trunc(v); return (v - q * 32) ? q + 1 : q
 const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b"]);
 // naming any of these IS choosing the exploration lane; saying lane=parity as
 // well is a contradiction and an error rather than a silent winner
-const EXPLORE_ONLY = ["relief", "sun", "amb", "slope", "undither"];
+const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither"];
 
 function sideQuery(side, presets) {
   const p = new URLSearchParams();
@@ -181,6 +185,9 @@ function readLook(p, label) {
     units: passes.includes("units"),
     feat: p.get("feat") || "both",
     relief: lane === "explore" ? num("relief", 1) : 0,
+    // null = "not named", resolved against the map's sealevel once the scene
+    // is loaded; readLook only sees the query, so it cannot know the map yet
+    datum: lane === "explore" && p.get("datum") !== null ? num("datum", 0) : null,
     slope: num("slope", 1),
     // amb >= 1 is how "no sun" reaches the shaders: one uniform, no branch
     amb: lit ? Math.min(1, Math.max(0, num("amb", 0.35))) : 1,
@@ -391,6 +398,15 @@ async function main() {
     sides.push(readLook(sideQuery(Q.get("b"), presets), "b"));
   let wipe = sides.length > 1 ? Math.min(1, Math.max(0, parseFloat(Q.get("wipe") ?? "0.5")))
                               : 2.0;
+
+  // The displacement pivots about a reference height rather than about 0. The
+  // engine's tile art is ALREADY the oblique projection of the hill, so any
+  // displacement re-applies it; the part of h/2 that is common to the whole
+  // viewport is pure misregistration carrying no shape at all. Pivoting about
+  // the map's own sealevel removes it — on Two Continents that is 66.4 px of
+  // mean slide down to 28.9 px, and a cell at the waterline lands exactly
+  // where the engine paints it. datum=0 restores the un-pivoted behaviour.
+  for (const L of sides) if (L.datum === null) L.datum = scene.map.sealevel || 0;
 
   const view = scene.view, map = scene.map;
   const [GW, GH] = view.res;
@@ -712,15 +728,21 @@ async function main() {
     const stride = map.tilemap.w, mrows = map.tilemap.h;
     const tx0 = div32trunc(eye[0]), fx = eye[0] - tx0 * 32;
     const ty0 = div32trunc(eye[1]), fy = eye[1] - ty0 * 32;
-    // a cell rises by relief*h/2 <= 128 px, so cells up to 4 more 32-px rows
-    // BELOW the viewport can still reach into it; nothing rises INTO the top
+    // a cell rises by relief*(h-datum)/2 <= 128 px, so cells up to 4 more 32-px
+    // rows BELOW the viewport can still reach into it. With a datum a cell
+    // BELOW it also SINKS, by up to relief*datum/2, so rows ABOVE the viewport
+    // now reach in too — which they could not before and is why this scan runs
+    // from a negative row. (rowBase() already leaves 16 rows of depth-key
+    // headroom above the eye, so the keys of those rows stay positive.)
     const cols = ceil32(vw + fx) + 1;
     const rows = ceil32(vh + fy) + (L.relief > 0 ? 5 : 1);
-    const need = cols * rows * 24 * LTVST;
+    const rAbove = L.relief > 0 && L.datum > 0
+                 ? Math.ceil(L.relief * L.datum * 0.5 / 32) + 1 : 0;
+    const need = cols * (rows + rAbove) * 24 * LTVST;
     if (ltVerts.length < need) ltVerts = new Float32Array(need);
     const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
     const D = scene.depth, r0 = rowBase(), relMax = (vh >> 4) + 40;
-    const k = L.relief * 0.5;
+    const k = L.relief * 0.5, dat = L.datum;
     let n = 0, skipped = 0, junk = 0;
     const nrm = [0, 0, 0];
     const put = (gc, gr, u, v) => {
@@ -728,13 +750,13 @@ async function main() {
       let rel = gr - r0;
       if (rel < 0) rel = 0; else if (rel > relMax) rel = relMax;
       ltVerts[o]     = vpL + gc * 16 - eye[0];
-      ltVerts[o + 1] = vpT + gr * 16 - k * H(gc, gr) - eye[1];
+      ltVerts[o + 1] = vpT + gr * 16 - k * (H(gc, gr) - dat) - eye[1];
       ltVerts[o + 2] = labD.terrain + rel * D.rowStep;
       ltVerts[o + 3] = u; ltVerts[o + 4] = v;
       normalAt(gc, gr, L.slope, ltVerts, o + 5);
       n++;
     };
-    for (let r = 0; r < rows; r++) {
+    for (let r = -rAbove; r < rows; r++) {
       const my = ty0 + r;
       if (my < 0 || my >= mrows) { skipped += cols; continue; }
       for (let c = 0; c < cols; c++) {
@@ -763,7 +785,8 @@ async function main() {
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, ltVBO);
     gl.bufferData(gl.ARRAY_BUFFER, ltVerts.subarray(0, n * LTVST), gl.DYNAMIC_DRAW);
-    L.stats = { cols, rows, tx0, ty0, fx, fy, cells: n / 24, skipped, junk };
+    L.stats = { cols, rows: rows + rAbove, tx0, ty0, fx, fy,
+                cells: n / 24, skipped, junk };
     return n;
   }
 
@@ -1094,6 +1117,7 @@ async function main() {
         (L.preset ? `<span>preset</span><b>${L.preset}</b>` : "") +
         (L.lane === "explore"
           ? `<span>relief</span><b>${L.relief}</b>` +
+            (L.relief > 0 ? `<span>datum</span><b>${L.datum}</b>` : "") +
             `<span>sun</span><b>${L.sunAE ? L.sunAE.join(",") : "off"}</b>` +
             `<span>amb</span><b>${L.amb.toFixed(2)}</b>` +
             `<span>slope</span><b>${L.slope}</b>` +
