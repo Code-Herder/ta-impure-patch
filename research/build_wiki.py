@@ -67,6 +67,7 @@ PAGES = [
     ("features",                   "Features (trees, rocks, wreckage)",  "Renderer"),
     ("ui-markers",                 "UI markers",                  "Renderer"),
     ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
+    ("renderers",                  "Classic and Classic++ renderers", "Renderer"),
 
     ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
     ("model-export",               "Model export (3DO → glTF)",   "Tooling"),
