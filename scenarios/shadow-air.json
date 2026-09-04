@@ -1,0 +1,32 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Aircraft shadow fixture: five airframes patrolling west-east lanes that cross the coastline, a row of ground units directly under one lane, and a commander and a building as grounded shadow references. Aircraft land unless they are given an order, so every lane is a patrol.",
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": false,
+    "switches": {"shootall": false, "noshake": true}
+  },
+  "units": [
+    { "id": "hero",   "type": "ARMCOM",   "owner": 0, "pos": [1600, 1820], "facing": 90 },
+    { "id": "solar",  "type": "ARMSOLAR", "owner": 0, "pos": [1800, 1820], "facing": 0 },
+
+    { "id": "pw_a",   "type": "ARMPW",    "owner": 0, "pos": [1400, 1610], "facing": 90, "stance": "hold" },
+    { "id": "pw_b",   "type": "ARMPW",    "owner": 0, "pos": [1560, 1610], "facing": 90, "stance": "hold" },
+    { "id": "pw_c",   "type": "ARMPW",    "owner": 0, "pos": [1720, 1610], "facing": 90, "stance": "hold" },
+    { "id": "pw_d",   "type": "ARMPW",    "owner": 0, "pos": [1880, 1610], "facing": 90, "stance": "hold" },
+
+    { "id": "fig",    "type": "ARMFIG",   "owner": 0, "pos": [1180, 1400], "facing": 90,
+      "orders": [{ "cmd": "patrol", "to": [1900, 1400] }] },
+    { "id": "thund",  "type": "ARMTHUND", "owner": 0, "pos": [1180, 1470], "facing": 90,
+      "orders": [{ "cmd": "patrol", "to": [1900, 1470] }] },
+    { "id": "peep",   "type": "ARMPEEP",  "owner": 0, "pos": [1180, 1540], "facing": 90,
+      "orders": [{ "cmd": "patrol", "to": [1900, 1540] }] },
+    { "id": "atlas",  "type": "ARMATLAS", "owner": 0, "pos": [1180, 1610], "facing": 90,
+      "orders": [{ "cmd": "patrol", "to": [1900, 1610] }] },
+    { "id": "brawl",  "type": "ARMBRAWL", "owner": 0, "pos": [1180, 1680], "facing": 90,
+      "orders": [{ "cmd": "patrol", "to": [1900, 1680] }] }
+  ],
+  "camera": { "at": [1500, 1500] }
+}

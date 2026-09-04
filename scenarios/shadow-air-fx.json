@@ -1,0 +1,27 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Aircraft layering fixture: badly damaged buildings smoke and burn continuously at fixed spots directly under a patrol lane, so an aircraft shadow crosses live effects at a position you know in advance. Answers whether the airborne sweep composites shadow and body above the effects (shadows-cloak.md section 4).",
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": false,
+    "switches": {"shootall": false, "noshake": true}
+  },
+  "units": [
+    { "id": "hero",  "type": "ARMCOM",   "owner": 0, "pos": [1300, 1900], "facing": 90 },
+
+    { "id": "burn_a", "type": "ARMSOLAR", "owner": 0, "pos": [1420, 1560], "facing": 0, "health": 8 },
+    { "id": "burn_b", "type": "ARMSOLAR", "owner": 0, "pos": [1580, 1560], "facing": 0, "health": 8 },
+    { "id": "burn_c", "type": "ARMSOLAR", "owner": 0, "pos": [1740, 1560], "facing": 0, "health": 8 },
+    { "id": "burn_d", "type": "ARMMEX",   "owner": 0, "pos": [1660, 1560], "facing": 0, "health": 6 },
+
+    { "id": "peep",  "type": "ARMPEEP",  "owner": 0, "pos": [1180, 1560], "facing": 90,
+      "orders": [{ "cmd": "patrol", "to": [1940, 1560] }] },
+    { "id": "atlas", "type": "ARMATLAS", "owner": 0, "pos": [1180, 1560], "facing": 90,
+      "orders": [{ "cmd": "patrol", "to": [1940, 1560] }] },
+    { "id": "fig",   "type": "ARMFIG",   "owner": 0, "pos": [1180, 1560], "facing": 90,
+      "orders": [{ "cmd": "patrol", "to": [1940, 1560] }] }
+  ],
+  "camera": { "at": [1560, 1560] }
+}

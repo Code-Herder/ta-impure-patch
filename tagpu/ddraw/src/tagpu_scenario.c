@@ -89,12 +89,19 @@
    (tools/ta_symbols.txt) and every signature from the vendored TADR corpus; the
    recipes below are TADR's own, which is the prior art that settles feasibility.
 
-   UNITS_CreateUnit takes 16.16 fixed-point positions in the 3-D convention
-   (x, altitude, depth). ORDERS_NewMainOrder2Unit takes WHOLE world units in the
-   screen convention (x, depth, altitude) — an asymmetry, not a typo: TADR's
-   ConstructionKickout feeds it unit->XPos/YPos, which are the whole-unit words.
-   The applier reads the stored order position back and reports it, so the first
-   live run confirms this rather than trusting it. */
+   UNITS_CreateUnit and ORDERS_NewMainOrder2Unit speak the SAME language: 16.16
+   fixed-point positions in the 3-D convention (x, altitude, depth). There is no
+   asymmetry — the earlier claim here (whole world units, {x, depth, altitude},
+   read off TADR's ConstructionKickout) was wrong, and the read-back probe below
+   could not catch it because the constructor 0x43A0C0 copies the caller's three
+   dwords verbatim into UnitOrders->Pos (0x43A164..), so anything written reads
+   back unchanged. What settles the scale is the duplicate-order test inside
+   0x43AFC0: `sub ebp,[esi+0x22]; add ebp,0x100000; cmp ebp,0x200000` at
+   0x43B006 -- a tolerance of +/-0x100000, which is +/-16.0 in 16.16, one map
+   cell. It compares components 0 and 2 (0x22 and 0x2A) and never component 1,
+   i.e. the ground plane and not the altitude. Measured 2026-09-04: with whole
+   units every ordered unit walked to the map origin (1900 >> 16 == 0), aircraft
+   included; with the shift they go where the file says. */
 typedef void* (__stdcall* PFN_CREATE)(int owner, int typeIdx, int x, int alt, int depth,
                                       int fullHp, unsigned stateMask, int unitNumber);
 typedef int   (__stdcall* PFN_KILL)(void* unit, unsigned mode);
@@ -1383,10 +1390,12 @@ static void issue_orders(void)
 
         if (o->kind == TGT_POS)
         {
-            /* whole world units, screen convention {x, depth, altitude} */
-            pos[0] = o->a;
-            pos[1] = o->b;
-            pos[2] = ground_at(o->a, o->b);
+            /* 16.16 fixed point, 3-D convention {x, altitude, depth} — the same
+               language UNITS_CreateUnit speaks, not the asymmetry this file used
+               to claim (see the header comment). */
+            pos[0] = o->a << 16;
+            pos[1] = ground_at(o->a, o->b) << 16;
+            pos[2] = o->b << 16;
         }
         else if (o->kind == TGT_UNIT)
         {
@@ -1397,17 +1406,17 @@ static void issue_orders(void)
                 scn_err("order %d: its target unit %d was never created", i, o->a);
                 continue;
             }
-            pos[0] = g_units[o->a].ax;
-            pos[1] = g_units[o->a].ay;
-            pos[2] = g_units[o->a].ah;
+            pos[0] = g_units[o->a].ax << 16;
+            pos[1] = g_units[o->a].ah << 16;
+            pos[2] = g_units[o->a].ay << 16;
         }
         else if (o->kind == TGT_FEAT)
         {
             /* A feature is not a UnitStruct: TA reclaims and attacks it through the
                map cell, so the order carries the position and no target pointer. */
-            pos[0] = g_feats[o->a].ax;
-            pos[1] = g_feats[o->a].ay;
-            pos[2] = g_feats[o->a].ah;
+            pos[0] = g_feats[o->a].ax << 16;
+            pos[1] = g_feats[o->a].ah << 16;
+            pos[2] = g_feats[o->a].ay << 16;
         }
 
         resolved = ScriptAction_Type2Index(&index, (unsigned)o->cmd, u->unit, target, pos);
@@ -1423,20 +1432,21 @@ static void issue_orders(void)
         ORDERS_NewMainOrder2Unit((int)(unsigned char)*resolved, 0, u->unit, target, pos, 0, 0);
         g_ord_ok++;
 
-        /* Read the stored order position back once. The engine's own answer is
-           what settles the units-and-convention question the vendored sources
-           disagree about; the result file carries both numbers side by side. */
+        /* Read the stored order position back once, in whole world units, so the
+           result file shows where the order actually points. It cannot prove the
+           scale (the constructor copies the dwords verbatim), but it does catch
+           the engine relocating or clamping a target. */
         if (!g_probe_have)
         {
             char* ord = *(char**)((char*)u->unit + U_ORDERS);
-            g_probe_pass[0] = pos[0];
-            g_probe_pass[1] = pos[1];
-            g_probe_pass[2] = pos[2];
+            g_probe_pass[0] = pos[0] >> 16;
+            g_probe_pass[1] = pos[1] >> 16;
+            g_probe_pass[2] = pos[2] >> 16;
             if (readable(ord, UO_POS + 12))
             {
-                g_probe_stored[0] = *(int*)(ord + UO_POS);
-                g_probe_stored[1] = *(int*)(ord + UO_POS + 4);
-                g_probe_stored[2] = *(int*)(ord + UO_POS + 8);
+                g_probe_stored[0] = *(int*)(ord + UO_POS)       >> 16;
+                g_probe_stored[1] = *(int*)(ord + UO_POS + 4)   >> 16;
+                g_probe_stored[2] = *(int*)(ord + UO_POS + 8)   >> 16;
                 g_probe_have = 1;
             }
         }
