@@ -206,16 +206,23 @@ game; the registry is only where TA saves the last one. So:
   `--no-shield` (or after `shield off`) the poll falls through to the **real keyboard**
   and your injected `down:shift` is invisible. Anything gated on a held modifier is
   therefore **untestable with the shield off**: the order markers are the case that
-  bites, because `markown` samples the engine's own SHIFT hotkey (`0xF9` →
-  `GetAsyncKeyState(VK_SHIFT)`). Symptom: `mark: prefog=-` and no markers, with the
-  injection reporting `sent: down:shift` perfectly happily. Hand the instance over
-  *after* you have finished measuring, not before.
+  bites, because the engine's own SHIFT hotkey (`0xF9` → `GetAsyncKeyState(VK_SHIFT)`) is
+  what gates the whole marker block. Symptom: `order: arena=-1` for ever and no markers,
+  with the injection reporting `sent: down:shift` perfectly happily. Hand the instance over
+  *after* you have finished measuring, not before. The 150 ms hold diagnostic tells the two
+  apart: `shield: vk=16 released after 166ms, polls=0 down=0` with **polls=0** means the
+  game never asked, so nothing about your injection was the problem.
 - Hold anything across frames with `down:<tok>` / `up:<tok>` — keys, or
   `lbutton`/`rbutton`/`mbutton`. Drag-select is `down:lbutton`, `mouse:x,y`,
   `up:lbutton`.
 - `tacli eye X Y` pins the camera (writes both eye and scroll-target, else the engine
   fights back); `tacli eye <name> --release` frees it. Read the settled value from a
   `roster` call before doing coordinate maths.
+- **`roster`'s `screen=` is the 1x projection, so at any zoom != 1 it is NOT where to
+  click.** `tacli click` takes the position on screen; the roster reports the engine's own
+  unzoomed one. At 0.25x a unit the roster puts at (512,384) is hovered at (560,382), and a
+  click at the roster's figure silently selects nothing. Either drive at 1x, or find the
+  unit by parking the pointer and reading `main+0x2CBA` (0 = nothing under it).
 - **A moving unit invalidates `roster`'s `screen=` before your click lands.** A unit
   with a move order walks between the read and the injected click, and a selection
   click that misses is silent — the symptom is `native: … 0 sel` in the log and every
@@ -535,11 +542,12 @@ that matters — and `launch` auto-arms each pass's `*own.on` patch half for you
 
 ```bash
 tools/tacli arm <i> 'native.on=all wrecks' terr.on feat.on fx.on sfx.on \
-                    mark.on zoom.on vpwide.on
+                    mark.on order.on zoom.on vpwide.on
 tools/tacli launch <i> --no-shield --res 1920x1080
 ```
 
-Units and wrecks, terrain, features, weapon effects, particles, world-space markers,
+Units and wrecks, terrain, features, weapon effects, particles, world-space markers and
+the shift-held order overlay,
 zoom (wheel live, camera range widened) and the wide viewport that makes zoomed-out
 clicks land. `launch` then prints `auto-armed owndraw.on=all / fxown.on / featown.on /
 terrown.on / markown.on`, and `tagpu.log` carries one `ARMED` line per pass — read them,
@@ -595,9 +603,8 @@ WINEPREFIX=<inst>/prefix wine reg add \
 
 **Two things this set changes about how you observe.** `terr.on` makes `tacli shot`
 inside the viewport ~99.9 % one flat palette index (that is the ownership proof, not a
-bug) — judge the picture with `glshot`. And `mark.on`'s order markers only draw while
-SHIFT is held, which needs the **shield on**, so measure the markers before handing the
-instance over.
+bug) — judge the picture with `glshot`. And order markers only draw while SHIFT is held,
+which needs the **shield on**, so measure the markers before handing the instance over.
 
 **A stale `owndraw.on` is worse than none.** Its detours skip the engine's unit rasterisers,
 so with `native.on` cleared but `owndraw.on` still armed the engine draws **no units at all**
@@ -679,10 +686,20 @@ engine drawing its own copy of the selection rect underneath ours. Two mechanism
 **health bars, the selection rect and the build cursor / band box are re-drawn** from engine
 state (a capture cannot reach any of them at zoom < 1 — the bar loop walks HotUnits, culled to
 the *unzoomed* viewport, and the cursor's rasteriser clips to the offscreen's own width and
-height), **the order-marker block is captured** — the engine draws it into a scratch buffer of
-ours and we replay that buffer through the zoom transform, so parity is exact including text.
-Verify `markown: ARMED (hook8/hook9/transp x2/selbox x2 redirected …)`, `MARKOWN capture=1
-bars-skipped=1 selbox=1 cursor=1`, and `mark: bars=N cursor=N prefog=… postfog=…` (`log`).
+height), and **only the group digit is still captured**. Verify
+`markown: ARMED (hook8/hook9/transp x2/selbox x2/tsprite x2/orders/drawers x4 redirected …)`,
+`MARKOWN capture=1 bars-skipped=1 selbox=1 cursor=1 orders=1`, and
+`mark: bars=N cursor=N ordtri=N ordline=N prefog=… postfog=…` (`log`).
+
+**The order markers are their own pass, `order.on`** (G13o) — tokens `log`, `passive`,
+`trace`, `nobuild`, `nodots`, `nocircle`, `nosprite`, `noranges` — riding the same
+`markown.on` patch set. It walks the order lists **on the game thread** at the engine's own
+driver call site and draws them at native resolution, so a queued build site or a waypoint out
+in the zoomed-out ring is drawn where the capture reached nothing at all. It needs `mark.on`:
+the geometry lands in that pass's buckets, and a disarmed `mark.on` hands the markers straight
+back. Verify `order: ARMED (…)`, `markown: engine order markers SKIPPED (ours live)` and
+`order: arena=N recs=N drawn=N lines=N dots=N …` (`log`). **`arena=-1` is normal** — it means
+no snapshot ran in the last block, i.e. SHIFT is not held.
 
 Three things to know:
 
@@ -700,8 +717,15 @@ Three things to know:
   at zoom < 1 the engine's own are **clipped away** wherever the placement's engine coordinate
   leaves the screen-sized offscreen (at 0.467× on 1024×768, everything outside screen
   `[307,785]×[205,563]`), so `nocursor` is a way to see the bug, not a baseline for the look.
-- **The captured half still stops at that same offscreen bound.** A queued build-site rect or
-  a waypoint out in the zoomed-out ring is not drawn at all — known, and not closed.
+- **`order.on=passive` is the order pass's own A/B** — the engine draws its markers again,
+  captured, which is the way to *see* the bound: at 0.25× on 1024×768 the engine reaches only
+  screen x ∈ (432,688), y ∈ (288,480), so a site queued outside that band draws nothing.
+  **`order.on=trace` runs BOTH sides in one pass** and logs both node lists
+  (`order TRACE own:` / `order TRACE eng:`), which is the correctness gate — a pixel diff is
+  unavailable, because native resolution means the frames deliberately differ. Diff them per
+  block: the own-phase always precedes the eng-phase.
+- **Still not closed: text.** `ShowRanges`' labels are absent (the circles are there) and the
+  group digit is still engine-drawn and still clipped in the ring.
 
 **Zoom has two levers, and the file wins.**
 

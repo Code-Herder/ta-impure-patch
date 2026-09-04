@@ -55,7 +55,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02) | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid | done — [Features](features.html) §9 |
 | Terrain tiles | ● native (G13b) | `terrown`: one detour on `0x483FA0`, whose skip path key-fills the viewport | 0-px parity vs the engine's own blit, engine surface 99.9 % key, in-process map change |
 | Fog overlay | ● native (G13b) | `terrown` detours `0x4848E0` too, replicating only its lazy grid rebuild | 99.06–99.39 % lit-vs-grey agreement with the engine's own overlay |
-| Health bars, order markers, group digits, build cursor, band box | ● native (G13d, corrected G13h, cursor re-drawn G13n) | `markown`: eight call-site redirects + one detour on `0x46A430`. Health bars and — since G13n — the build cursor and drag band box are re-drawn; the order-marker block is captured out of the engine's own draw and replayed. G13h fixed the capture's publication discipline and gave the waypoint star an identity blend LUT | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5×; **0 overlay dropouts in 840 held-SHIFT frames** (was 13 in 120) and **0 % cyan** on the star (was 17.6 %); the build cursor **0-px against the captured path** at 1× and 2.144×, and present in the ring at 0.467× where the capture drew nothing. **Still open: the order-marker block itself stops at the offscreen bound** — a queued build-site rect out in the ring is not drawn |
+| Health bars, order markers, group digits, build cursor, band box | ● native (G13d, corrected G13h, cursor re-drawn G13n, **order block ported G13o**) | `markown`: eight call-site redirects + one detour on `0x46A430`. Health bars and — since G13n — the build cursor and drag band box are re-drawn; the order-marker block is captured out of the engine's own draw and replayed. G13h fixed the capture's publication discipline and gave the waypoint star an identity blend LUT | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5×; **0 overlay dropouts in 840 held-SHIFT frames** (was 13 in 120) and **0 % cyan** on the star (was 17.6 %); the build cursor **0-px against the captured path** at 1× and 2.144×, and present in the ring at 0.467× where the capture drew nothing. G13o then **ported** the order block outright: node-list diff against the engine clean over **16 650 records / 1 665 blocks**, and at 0.25× four build sites queued in the ring draw where the engine draws none. **Still open: text** — `ShowRanges`' labels and the group digit |
 | Chat, dialogs, side panel, minimap, top bar | ○ engine 8bpp, through the composite key | — | stays engine-side: screen-space, correct at 1:1 at any zoom |
 | Mouse cursor | ● the engine's own, under the pointer (G13e, cured G13m) | `fake_GetCursorPos` answers the TRUE pointer, so the engine blits its sprite where the player is looking; the unzoomed `u` reaches it only through a button message and through the `0x498DA0` mouse→world repair. The composite no longer touches the cursor | 0 % of motion frames left behind at `u` across three runs at 1920×1080 / 0.25× with a real pointer (was 10–11 %); exact at four static positions; box- and click-select in the band, in the ring and at 2× |
 | Contextual order cursors | ● restored by patch (G13j) | `tagpu_patches.c`: six NOPs over the `je` at `0x43E50C`, the `Interface Type == 1` branch inside `0x43E490` — whose only caller is `CorretCursor_InGame 0x48D220`, so it is the sprite and nothing else | at Interface Type 1, commander selected: ground 14 `cursormove`, wreck 11 `cursorreclamate`, own unit 15 `cursorselect`, nothing selected 19 `cursornormal`; right-click still orders; sprites read out of the GL framebuffer; unchanged at zoom 1/2/0.5 |
@@ -112,15 +112,71 @@ screen (880,400) with engine point (1228,418), and (170,250) with engine point *
 scissored correctly at the viewport's left edge. The band box drawn across the ring is whole,
 where the capture showed a truncated top edge and no left edge at all.
 
-**What this gate did not close.** The *other* capture window — order markers, group digits and
-the queued build-site rect `0x438C00` — has the same bound and keeps it, which is the second
-half of the report. Re-drawing that block is a much larger job (five drawers, GAF sprites, a
-ten-tick growth animation and text labels), and a wider buffer runs into the `+0x00`/`+0x04`
-bound above as well as the cost: the window opens ~83× per presented frame, so its key fill
-would scale as 1/z² against that multiplier. Also corrected in passing: `ui-markers.md` said
+**What this gate did not close** — and **G13o now does.** The *other* capture window — order
+markers, group digits and the queued build-site rect `0x438C00` — had the same bound, which
+is the second half of the report. Also corrected in passing: `ui-markers.md` said
 `DrawTranspRectangle` drew "two edges through the transparent line variant" — there is no
 variant; top and right reach `0x4CC7AB` directly and bottom and left go through
 `DrawLine 0x4BE950`, which makes the same two calls.
+
+**G13o — the order markers survive zooming out.** The second half of G13n's report: *"queueing
+with shift-click looks like it has the same problem."* It did, and for the same reason — the
+engine's rasterisers clip to the OFFSCREEN's own width and height (`ctx+0x00`/`ctx+0x04`, read
+by `0x4CC650` *below* the clip rect `vpwide` widens), the offscreen is screen-sized, and at
+zoom < 1 every marker whose engine position leaves that surface is thrown away before our
+capture buffer sees it. Reproduced at 0.467×: a mex queued inside the central band shows its
+site rect, one queued out in the ring shows nothing.
+
+**The fix is the same one, at ten times the size: stop capturing, port it.** `tagpu_order.c`
+re-derives the whole of `ui-markers.md` §3 — the driver's three selection rules at `0x48CC30`,
+the walker's capability-mask dispatch and `pos` chaining at `0x439B30`, and all five leaf
+drawers — and `tagpu_mark.c` draws it as geometry. The engine's driver call at `0x469BFC` is
+skipped.
+
+**The walk is on the GAME THREAD, and that is the design.** The order list is a linked list
+whose nodes the sim frees (`unit+0x5C`, next `node+0x4A`), unlike the unit array, which is
+stable storage a render thread may read at any time: a present-thread walk can follow a
+pointer into a recycled block (still mapped, still readable, now someone else's data —
+`IsBadReadPtr` does not catch that), into a cycle, or into a freed page. So the stub at
+`0x469BFC` snapshots into an arena and the present thread only ever walks that. Two arenas,
+the published index stored last, only ever replaced — and, because the block republishes ~83×
+per presented frame while building a frame's geometry does not outrun that, the gather takes a
+private `memcpy` of the records in use first. That was not theoretical: a seven-record arena
+was measured being lapped part way through, dropping three markers from the frame.
+
+**One sim-side write is reproduced deliberately**, on the game thread at the instant the
+engine did it: the target sprite's last-seen cache (`node+0x32/0x34`, flag `0x200000`).
+Dropping it would leak a target's live position once it left LOS.
+
+**Native resolution from the start**, and that was the human's call over "faithful first,
+crisp later": real arcs at a segment count chosen for the zoom, one SCREEN pixel of line width
+at any zoom, a round dot where `pathicon` put one and a crosshair on the engine's own frame
+phase where `cursor_ary` put one — both in the ink read out of the GAF frame that would have
+been blitted, the brightest index making up a twentieth of it rather than the most common one,
+which is the dark outline and drew every dot in (11,11,0). Same spacing, same phase, same
+colours. Unit-anchored markers ride `tagpu_native_unit_pos()`, the sub-pixel interpolated
+sample the unit pass already keeps, or a crisp circle would step against a body that slides.
+
+**The gate is a node-list diff, because a pixel diff is unavailable by construction.**
+`order.on=trace` runs both sides in one pass: our snapshot logs its node list, and four more
+call-site redirects inside the walker log the engine's. **16 650 records over 1 665 complete
+blocks, 10 distinct nodes, both driver flags and four distinct capability masks — zero
+disagreements** on the node set, the dispatched mask bits, the flag or the chained `pos`,
+including the newly established rule that `pos` is restored before bits 0..3 and *not* before
+bit 4. Then the visual pass on 1024×768: at **1×** ours and the engine's put the site rects on
+the same corners in the same colours and the dots on the same points at the same spacing; at
+**0.25×** with four sites queued out in the ring, the engine draws none of them and no route
+at all while ours draws every one; at **2×** hairlines, not magnified 1997 pixels.
+
+**Corrected in passing:** `ui-markers.md` said the build rect's ten-tick animation *grows* an
+inner rect. It sweeps the four edges **inward**, and the clamp is unsigned, so a negative age
+reads as finished rather than as not-started.
+
+**What this gate does not close.** `ShowRanges`' text LABELS (the circles are there), the
+group digit at `0x469CF9`, and window A's remaining life for that digit — which needs
+`damagebars` *and* a squad tag, so a default install never opens it. All three are text, and
+text is the L2 half: `0x4CCF60` takes its destination directly, with no OFFSCREEN and no clip
+rect, so it can rasterise TA's own glyphs into a buffer of ours at any size.
 
 **G14b — the restorer runs on the GPU.** The owner's question about G14a: why is the model on
 the CPU? Because the pinned ONNX Runtime package is CPU-only and its CUDA provider is x64. The

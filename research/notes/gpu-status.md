@@ -29,7 +29,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Features (trees, rocks, splats, wreckage) | G13a | `featown`: one detour on the feature leaf |
 | Terrain tiles + the fog overlay | G13b | `terrown`: two detours; the terrain skip path key-fills the viewport |
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
-| Health bars, order markers, group digits, build cursor, band box, selection rect | G13d, cursor G13n | `markown`: 8 call-site redirects + 1 detour. Health bars, the selection rect and — since G13n — **the build cursor and drag band box** are re-drawn from engine state; the order-marker block is captured and replayed. The waypoint star's two sites are wrapped with an identity blend LUT so it composites opaque instead of against the fill key (§2.2) |
+| Health bars, order markers, group digits, build cursor, band box, selection rect | G13d, cursor G13n, order block G13o | `markown`: 13 call-site redirects + 1 detour. Health bars, the selection rect, the build cursor and drag band box are re-drawn from engine state, and since **G13o the order-marker block is PORTED** (`tagpu_order.c`): a game-thread snapshot of the order lists at `0x469BFC`, drawn at native resolution in the marker pass. What is still captured is the group digit alone. The waypoint star's two sites keep the identity blend LUT for the `passive` path (§2.2) |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e, cured G13m | `tagpu_zoom.c`; the cursor is the engine's own again — the composite no longer touches it (§2.3d) |
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + a 3-site byte patch behind `vpwide.on`, plus the `0x499221` redirect that also carries the zoom's mouse-point repair and is armed by `zoom.on` too (§2.3d) |
@@ -154,6 +154,22 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x439C7D` | `call 0x439740` — target sprite, from the walker's bit-3 dispatch | call-site redirect, same wrapper |
 | `0x46A430` | `DrawHealthBars` (`ret 0x10`) | prologue detour, 5 stolen — bars are **re-drawn**, not captured |
 | `0x4C1B80` | `KeyboardHotkeySampler(id)` (`ret 4`) | *called by us* — we sample the engine's own SHIFT gate (`0xF9`) rather than reading the key |
+| `0x469BFC` | `call 0x48CC30(ctx, main+0x142F3)` — the order-marker driver, SHIFT-gated | call-site redirect; our stub **snapshots the order lists on the game thread** and the engine's driver is then **skipped** (G13o). `passive`/`trace` make the snapshot decline, so the engine draws its own |
+| `0x439BAC` | `call 0x438C00` — build-site rect, from the walker's bit-0 dispatch | call-site redirect, **trace only**: logs the engine's node list under `order.on=trace`, otherwise a compare and a call through |
+| `0x439BF2` | `call 0x4394E0` — route dots, bit 1 | call-site redirect, trace only |
+| `0x439C37` | `call 0x4399F0` — target circle, bit 2 | call-site redirect, trace only |
+| `0x439CBE` | `call 0x4390A0` — range circles, bit 4 | call-site redirect, trace only |
+| `0x465AC0` | `UnitInPlayerLOS(player, unit)` (`ret 8`) | *called by us*, on the game thread, to reproduce the target sprite's LOS rule and its last-seen cache write |
+| `0x485070` | `GetPosHeight(POS16_16*)` (`ret 4`) | *called by us*, on the render thread — a pure read of the height grid, which is what makes a range circle follow the terrain |
+
+**The order block is PORTED, not captured, since G13o.** `tagpu_order.c` re-derives §3 of
+[UI markers](ui-markers.html) — the driver's three selection rules, the walker's
+capability-mask dispatch and its `pos` chaining, and all five leaf drawers — and draws them
+at native resolution in `tagpu_mark.c`'s pass. A capture could never reach past the
+OFFSCREEN's own width and height, and the offscreen is screen-sized while `vpwide` lets the
+projection run far outside it, so at zoom < 1 the engine's own clipper threw the outer ring's
+markers away before our buffer saw them. Window A stays open only for the group digit, which
+needs `damagebars` and a squad tag.
 
 **Why the star needs a wrapper at all.** `0x439740` is the only alpha-composited marker: it
 reads the destination pixel through `tab[(src<<8)|dst]`, and inside our viewport the
@@ -446,6 +462,11 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index). `DrawGameScreen` caches it in a local at `0x468D49`/`0x468D51`, which is the `[esp+0x74]` the build-cursor block indexes |
 | `main+0x2CC3` / `+0x2CC6` | cursor/order mode byte and the mouse-region flags. Read only. The build-cursor draw keys off `0x2CC3 == 0x0E` (placement) or `0x2CC6 & 8` (band drag), and picks green vs blocked from `0x2CC6 & 0x40` |
 | `main+0x2C92`, `+0x2C96`, `+0x2C9A`, `+0x2C9E`, `+0x2CA2`, `+0x2CA6` | the build-cursor / band-box rect: two corners as (world x, altitude, world z) DWORDs. Read only, once a frame on the render thread, and projected with the engine's own baked `+0x80`/`+0x20` origin — **not** `main+0x37E27`'s L/T, which `vpwide` widens |
+| `main+0x1B63` (+ watched × `0x14B`) | PlayerStruct; `+0x67`/`+0x6B` its first/last unit pointer — the range the order-marker driver walks. Read only, game thread |
+| `main+0x37E9C` / `main+0x2CBA` | tracked / hovered unit id. Read only; with `viewStruct+0` (`CameraToUnit`) these are the three units the order-marker driver's selection rules key off |
+| `main+0x1487F` / `main+0x148D3` | `cursor_ary[0x15]` and the `pathicon` GAF sequence. Read only, once each per session — the order pass decodes frame 0 of each for the ink its procedural dot and crosshair inherit |
+| `0x512344` / `0x512348` | the order-descriptor array and its end: `+0xC` is the type's marker-capability mask and `+0x10` its `cursor_ary` index. Read only; the end pointer is what lets us bound an index the engine does not |
+| **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F2F` bit2 | `SelBoxes` |
 | `main+0x142E7..0x142ED` | minimap rect on screen |

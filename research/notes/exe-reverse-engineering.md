@@ -503,6 +503,301 @@ the "pressed since last call" bit — before `neg ax; sbb eax,eax; neg eax` norm
 All nine stubs in the `0x4C1BA1..0x4C1D56` block do the same mask, so nothing in the engine
 reads the consumable bit and an extra poll of our own cannot steal an edge.
 
+## The order-marker chain — mapped by us
+
+[MEASURED 2026-09-04, this project — `objdump -d -M intel` of the pristine Steam build
+(md5 `8e74a1dffa1f5988624c52048f5b20cd`), every function below read instruction by
+instruction for this landing, plus a live 16 650-record trace against the engine's own
+drawer calls. This is the block `tagpu_order.c` now re-draws instead of capturing;
+`ui-markers.md` §3 is the same chain written from the marker's point of view.]
+
+The shift-held overlay is one driver, one list walker and five leaf drawers, reached from
+a single call site inside `DrawGameScreen`.
+
+```
+0x469BD7  hook 8                                    (capture window A opens)
+0x469BE1  KeyboardHotkeySampler(0xF9)  -> SHIFT?    (0x469BE8 je 0x469C01)
+0x469BFC  call 0x48CC30(ctx, main+0x142F3)          <- the driver, SHIFT-gated
+0x469C03  je 0x469D38                               (drawUnits == 0 exits past hook 9)
+0x469CB9  call 0x46A430                             health bars, AFTER the markers
+0x469CF9  call 0x4C14F0                             group digits
+0x469D2C  hook 9
+```
+
+### `0x48CC30` — the driver, and the three selection rules
+
+`stdcall(OFFSCREEN* ctx, void* viewStruct)`, `ret 8` @ `0x48CD70`, sole caller `0x469BFC`.
+Five register pushes, so `ctx` is `[esp+0x18]` and `viewStruct` `[esp+0x1c]` inside.
+
+It resolves three units before the loop, and each is `0` when its id is `0`:
+
+| What | Where | Read at |
+| --- | --- | --- |
+| `CameraToUnit` | `viewStruct+0` (`main+0x142F3`) | `0x48CCB0` |
+| tracked unit | `units(main+0x14357) + main[0x37E9C]·0x118` | `0x48CC58..0x48CC81` |
+| hovered unit | `units + main[0x2CBA]·0x118` | `0x48CC84..0x48CCA9` |
+
+`bl` is set at `0x48CCEE` iff ANY of those three has a non-null `UnitDef+0x156`
+(`CANBUILD_ptr`) — the "hover a constructor and see everyone's claimed build sites" rule.
+Note the three tests at `0x48CCB6/0x48CCCA/0x48CCDE` dereference `unit+0x92` without a null
+check; ours adds one.
+
+The walk is over the WATCHED player's own unit range —
+`PlayerStruct = main+0x1B63 + main[0x2A42]·0x14B` (`0x48CC3B..0x48CC51` builds the stride
+without a multiply, as `cl + ((cl·33)·5)·2` = `cl·331`), first `+0x67`, last `+0x6B`, step
+`0x118`, bounds compared **unsigned**
+(`ja` @ `0x48CCFC`, `jbe` @ `0x48CD69`) and the end pointer **re-read every iteration**.
+
+```
+st = unit[0x110]
+if (!(st & 0x10000000)) continue                    alive        0x48CD08
+if (st & 0x4000)        continue                    excluded     0x48CD10 (test ch,0x40)
+if (unit == CameraToUnit)                mask=0x1F flag=1        0x48CD15
+else if (unit[0xA8] == main[0x37E9C])    mask=0x1F flag=1        0x48CD20
+else if (unit[0xA8] == main[0x2CBA])     mask=0x1F flag=1        0x48CD29
+else if (st & 0x10)                      mask=0x1F flag=0        0x48CD32 (shr ecx,4; test cl,1)
+else if (bl)                             mask=0x01 flag=1        0x48CD3E
+else                                     continue
+0x439B30(unit, mask, ctx, viewStruct, flag)                      0x48CD51
+```
+
+The two id comparisons are made **without** first checking the id is non-zero, so a unit
+whose `UnitInGameIndex` is 0 matches a tracked/hovered id of 0. Reproduced as-is.
+
+### `0x439B30` — the walker, its dispatch table, and where `pos` is restored
+
+`ret 0x14`, args `(unit, mask, ctx, view, flag)`. `sub esp,0xC` then four pushes: the three
+dwords at `[esp+0x10..0x18]` are `pos`, seeded from the unit's own 16.16 triple at `+0x6A`
+(`0x439B40..0x439B62`), and **the `unit` argument slot `[esp+0x20]` is reused as the
+range-circle guard byte** (cleared at `0x439B47`, set at `0x439CC3`).
+
+Per node — head `unit+0x5C`, next `node+0x4A` (`0x439CC8`) — the order type byte `node+0x4`
+indexes the descriptor array behind `*(u32*)0x512344`:
+
+```
+eax = node[0x4];  eax *= 5;  edx = base + eax*4;  mask = [eax + edx + 0xC]
+                                     i.e.  base + type*0x19 + 0xC
+```
+recomputed from scratch ahead of every one of the five tests (`0x439B6C`, `0x439BB1`,
+`0x439BF7`, `0x439C3C`, `0x439C82`), ANDed with the caller's mask each time.
+
+| bit | drawer | call site |
+| --- | --- | --- |
+| 0 | `0x438C00` build-site footprint rect | `0x439BAC` |
+| 1 | `0x4394E0` route dots (delegates to bit 3 first, unconditionally) | `0x439BF2` |
+| 2 | `0x4399F0` circle around the order target | `0x439C37` |
+| 3 | `0x439740` animated target sprite | `0x439C7D` |
+| 4 | `0x4390A0` per-unit range circles, behind the guard byte | `0x439CBE` |
+
+**`pos` IS RESTORED TO THE NODE'S ENTRY VALUE BEFORE BITS 0..3 AND NOT BEFORE BIT 4.** The
+walker keeps a register copy of the node-entry position in `edi`/`ebp`/`ebx` (reloaded from
+`pos` at `0x439CCB..0x439CD3`, i.e. at the END of each node) and writes it back into `pos`
+with the three stores `mov [esp+0x24],edi` / `[esp+0x28],ebp` / `[esp+0x2c],ebx` immediately
+before the calls at `0x439BAC`, `0x439BF2`, `0x439C37` and `0x439C7D`. There is **no such
+triple ahead of `0x439CBE`**. So every one of bits 0..3 starts from the same point, the chain
+advances by whichever of them ran LAST, and the range-circle drawer sees whatever they left.
+[This is the fact the trace was built to check, and it holds: 16 650 records, zero
+disagreements — `git log` "Three things the live bring-up found".]
+
+### `0x512344` — the order-descriptor array
+
+`0x512344` begin, `0x512348` end, `0x51234C` capacity: a vector of **25-byte** records, all
+three zeroed by the constructor at `0x438450` and freed at `0x438480` through `0x4B4F20`. A
+lookup by name walks it with `strcmp 0x4F8A70` against the pointer at `record+0x15`
+(`0x4387A9`, `0x4387E4`), which is what fixes both the stride and that last field.
+
+| Offset | What | Read at |
+| --- | --- | --- |
+| `+0x00..0x0B` | unread by any of the marker paths | — |
+| `+0x08` | the target-sprite drawer's own address, **never read in this build** | — |
+| `+0x0C` | u32 marker-capability mask (bits per the table above) | `0x439B7D` etc. |
+| `+0x10` | u8 `cursor_ary` index; 0 = this order type draws no sprite | `0x4397F3`, `0x439965` |
+| `+0x15` | `char*` name, for the console lookup | `0x4387A9` |
+
+The engine indexes this with the raw type byte and no bound at all. With a live end pointer
+in `0x512348` the bound costs two loads, so ours takes it.
+
+### `0x438C00` — the build-site footprint rect
+
+`ret 0x14`. Nothing at all unless `node+0x36` (the build target's unit type id, u16) is
+non-zero — the early exit at `0x438C0E` skips the `pos` chaining as well as the draw.
+`def = UnitDefs(main+0x1439B) + type·0x249` (`0x438C1D..0x438C38`, the multiply written as
+`(type·65)·9`).
+
+```
+P0 = (t.x + def[0x15E],  t.y + def[0x162],  t.z + def[0x166])     t = node+0x22 (16.16)
+P1 = (t.x + def[0x16A],   --                t.z + def[0x172])     def[0x16E] is never read
+alt = (s16)(P0.y >> 16)
+x0  = (s16)(P0.x>>16) - view[0x2C] + 0x80        x1 likewise from P1.x
+z0  = (s16)(P0.z>>16) - (alt>>1) - view[0x30] + 0x20      z1 likewise from P1.z
+```
+
+Then the ten-tick animation (`0x438CB7..0x438D3D`), and **it sweeps the four edges INWARD,
+it does not grow an inner rect** — `ui-markers.md` said "grows" and that was wrong:
+
+```
+t   = gameTime(main+0x38A47) - node[0x46]
+t   = ((unsigned)t >= 10) ? 10 : t        <- UNSIGNED: a negative age reads as FINISHED
+dxg = (x1-x0)*t/10        dzg = (z1-z0)*t/10        both /10 by the 0x66666667 magic
+xg0 = x0+dxg   xg1 = x1-dxg   zg0 = z0+dzg   zg1 = z1-dzg
+```
+
+At `t=0` the four animated lines sit exactly on the rect; at `t=10` they have crossed to one
+pixel inside the OPPOSITE edges. Colour pair from the ISSUING unit `node+0xE`'s
+`stateMask & 0x10` (`0x438D41..0x438D85`): selected → `main[0xDCE]`(gui 3) + `main[0xDD5]`
+(gui 0xA), not → `main[0xDCC]`(gui 1) + `main[0xDD4]`(gui 9).
+
+Eight `DrawLine 0x4BE950` calls, four in colour A one pixel outside the animated positions
+and spanning one pixel past the corners, four in colour B exactly on them
+(`0x438DAA`, `0x438DCE`, `0x438DF5`, `0x438E18`, `0x438E34`, `0x438E47`, `0x438E5E`,
+`0x438E6D`). Finally `pos ← node+0x22..0x2A` (`0x438E74..0x438E8B`).
+
+**`DrawLine 0x4BE950` is `stdcall(ctx, x0, y0, x1, y1, colour)`** — fixed by those eight
+call sites, where the first and third pushed values are the two x's.
+
+### `0x4394E0` — the route dots
+
+`ret 0x14`. Saves `pos` into locals, calls `0x439740` with the SAME `pos` pointer
+(`0x439516`) so the sprite's resolved position becomes the segment's far end, then returns
+at once unless `flag == 1` (`0x43951D`) — a merely *selected* unit gets no route line.
+
+```
+len   = (int)sqrt(dx² + dy² + dz²)      dx,dy,dz = pos - saved, 16.16   0x43956A..0x43957C
+if (len < 0x10000) return                                               0x439587
+age   = gameTime - node[0x46]
+phase = ((age % 30) * 0x300000) / 30            48.0 world units per 30 ticks
+seq   = *(main+0x148D3)                          the `pathicon` GAF sequence
+period= (u16)seq[0x2C] ? that : 1                = frametab[0]'s duration dword
+frame = (age / period) % (u16)seq[0]
+for (cursor = phase; cursor < len; cursor += 0x300000) {
+    p = saved + delta * ((int64)cursor << 16) / len >> 16      __alldiv/__allmul/__allshr
+    CopyGafToContext 0x4B7F90(ctx, seq[0x28 + frame*8], px, pz)
+    frame = (frame + 1) % nframes
+}
+```
+
+`seq[0x2C]` is not a field of its own: `TAGPU_SQ_TAB` is `0x28` with stride 8, so it is the
+u32 half of frame 0's table entry.
+
+### `0x4399F0` — the circle around the order target
+
+`ret 0x14`. Centre and radius: with `node+0x16` non-zero, the target unit's own 16.16 triple
+and `(s16)def[0x178]`; with a ground target, `node+0x22..0x2A` and a flat `0x20`
+(`0x4399F7..0x439A4C`). The y radius is `(int)(R * 0.89)` — the double at **`0x4FD2C0`**.
+Sixteen chords, angle `0x1000` to `0x10000` step `0x1000`, vertices
+`(cx + TurnZLookup 0x4B7123(angle,R), cz + TurnXLookup 0x4B70EF(angle,R2))`, colour
+`main[0xDD7]` (gui 0xC). Both lookups are **cdecl** (`add esp,8` after each). `pos ← centre`.
+
+### `0x439740` — the target sprite, and the one sim write in the block
+
+`ret 0x14`. Resolves the position first:
+
+```
+tgt = node[0x16]
+if (!tgt)                       p = node[0x22..0x2A]              ground target
+else if (UnitInPlayerLOS 0x465AC0(node[0xE][0x96], tgt))          stdcall(player, unit), ret 8
+                                p = tgt[0x6A..0x72]
+                                node[0x32] = (s16)(p.x>>16)       <- WRITES THE CACHE
+                                node[0x34] = (s16)(p.z>>16)
+                                node[0x42] |= 0x200000
+else if (node[0x42] & 0x200000) p = ((s16)node[0x32]<<16, tgt[0x6E], (s16)node[0x34]<<16)
+else                            the live branch above
+```
+
+That cache write is the only thing in the whole marker block that touches sim-side state,
+and it is what stops a waypoint marker following a target the player can no longer see. A
+port that drops it leaks the target's live position; ours reproduces it on the game thread
+at the same instant (`tagpu_order.c`, `resolve_sprite`).
+
+Then, only if the descriptor's `+0x10` cursor index is non-zero (`0x4397F7` — a zero index
+chains `pos` and returns), frame `(gameTime / (2·period)) % nframes` of
+`cursor_ary[idx]` = `*(main+0x1487F + idx*4)` is alpha-blitted through
+`AlphaCompsteBuf2OFFScreen 0x4B8500` (`0x4399BB`). `pos ← p`.
+
+`0x439811..0x439948` is a `ShowRanges`-only debug limb: for descriptor cursor index 1 or 2 it
+labels each weapon's AoE (`w+0xD6`) and `attackrunlength` (`w+0xE0`) and `def[0x216]`.
+
+### `0x4390A0` — the per-unit range circles
+
+`ret 0x14`. `unit = node+0xE`, `def = unit[0x92]`. With `ShowRanges` (`main+0x391BF`) clear:
+
+```
+if (def[0x208] && (unit[0x10E] & 4))                                 cloaked
+    DrawRangeCircle(ctx, view, unit+0x6A, (s16)def[0x208], main[0xDDA], 0, 0)
+if (!(def[0x241] & 0x10000000)) return                               not kamikaze
+w = def[0x220]; if (!w) return                                       ExplodeAs
+aoe = (u16)w[0xD6] >> 1
+r   = ((gameTime % 60) * aoe * 2) / 60      unsigned throughout      0x43913E..0x43915E
+r   = max(8, min(r, aoe))
+DrawRangeCircle(..., r,                       main[0xDD7], 0, 0)
+DrawRangeCircle(..., unit[0x0] ? (u16)def[0x218] : (s16)def[0x202], main[0xDD7], 0, 0)
+```
+
+With `ShowRanges` set it draws the labelled set instead: `def[0x202]` sight, `+0x204` radar,
+`+0x206` sonar, `+0x20A` radar jam, `+0x20C` sonar jam, `+0x212` builddistance, `+0x214`
+maneuver, `+0x218` kamikazedistance, all in `main[0xDD9]` (gui 0xE) with label strings at
+`0x505190/88/80/78/6C/60/50/44` and `0x503A0C`; then the three weapon ranges (`unit+0x10`,
+`+0x2C`, `+0x48`, each `+0xDC`) flashing `main[0xDCF]`/`main[0xDD7]` on `gameTime & 1`.
+
+**An engine quirk worth knowing before it looks like a bug in a port:** weapon 1 is gated on
+`unit[0x1F] & 2` and weapon 2 on `unit[0x3B] & 2` (= `0x1F + 0x1C`), but weapon 3 is gated on
+`unit[0x1F] & 2` **again** at `0x43949D`, where `0x1F + 0x38 = 0x57` was meant. Reproduced
+rather than corrected — a "fix" would draw a circle the engine never draws.
+
+### `DrawRangeCircle 0x438EA0` — the terrain-following circle
+
+`ret 0x1C`: `(ctx, view, POS16_16* centre, radius, colour, char* label, labelSlot)`. The
+segment count is `(int)(radius · 2π · 0.125)` — the doubles at **`0x4FD2B0`** (2π) and
+**`0x4FD2B8`** (0.125) — i.e. one segment per 8 world units of circumference, and the loop
+runs `i = 0..N` inclusive.
+
+Each endpoint is `centre ± TurnX/TurnZLookup(angle, radius<<16)` and then, and this is what
+makes these circles hug the ground, its altitude is raised:
+
+```
+p.y_hi = max((s16)centre[+6], GetPosHeight 0x485070(&p))            0x438F47, 0x438F5C
+```
+
+before the standard `- alt/2 - eyeY + 0x20` projection. `GetPosHeight` is
+`stdcall(POS16_16*)`, `ret 4`, and reads only the two high words `[p+2]` and `[p+0xA]`; it is
+a pure bilinear read of the height grid at `main+0x14287` with dims `main+0x14233` /
+`main+0x14237`, no writes and no globals of its own, which is why our render thread may call
+it directly. The label (when `label != 0`) is `DrawTextCustomFont 0x4C14F0(ctx, str, x, y+4,
+-1)` at the vertex whose index equals `labelSlot·3`.
+
+### The in-game bitmap font — read, not yet used
+
+[Read for this landing while scoping the L2 text half; nothing here is patched yet.]
+
+`DrawTextCustomFont 0x4C14F0` takes its font object from `[globals+0x204]` (`0x4B6220` is
+just `mov eax,ds:0x51FBD0; ret`). Its measure loop at `0x4C1527`:
+
+```
+font+0x00   u8    baseline offset, added to y            (read at 0x4C1659)
+font+0x03   u8    first character code
+font+0x04   u16[] offset table, indexed by (char - first); 0 = glyph absent
+font+off    u8    that glyph's advance width
+```
+
+and the blit at `0x4C16D4` is **one call per string**. `DrawTextCustomFont` itself is
+`stdcall(ctx, str, x, y, ?)`, `ret 0x14`; the blit it makes is **cdecl with nine arguments**
+(`add esp,0x24` at `0x4C16D9`), pushed at `0x4C16B0..0x4C16D3` as:
+
+```
+0x4CCF60(local[esp-0x150], local[esp-0x154], font, string, esi, ebp,
+         [globals+0x208], [globals+0x20C], [globals+0x210])
+```
+
+**No OFFSCREEN pointer reaches it, and neither does a clip rect** — so none of the
+`0x4CC650` surface bound that clips the line drawers applies, which is the whole reason the
+L2 text half can rasterise TA's own glyphs into a buffer of ours at any size without
+decoding the font. Arguments 1 and 2 are two of `0x4C14F0`'s own locals, and the natural
+reading of a destination taken directly is a base pointer and a pitch — but **the stores
+that fill them have not been traced**, so that is inference, not a read; the three
+`[globals+0x208..0x210]` aux values are likewise unidentified. Both are the L2 work's to
+close. This is a **different font object** from the GUI one `tagpu_ui.c` measures with
+(`gfx+0x14` → fontset `+0x0C` → glyph pointer array at `font+0x28`).
+
 ## The unit blit's shadow branches — mapped by us
 
 [MEASURED 2026-09-03, this project — `objdump` of the pristine Steam build, plus the live A/B in
