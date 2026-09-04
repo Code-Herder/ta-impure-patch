@@ -16,8 +16,8 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5
 **The engine's software frame is UI only.** Inside the world viewport it is a flat fill of one
 palette index — the *key* — and the composite is inverted against it: we drop OUR fragment
 wherever the engine's frame is **not** the key, so anything it still draws in there shows
-through. Measured 99.98 % key with nothing on it but the mouse cursor, and the cursor is
-moved by the composite too.
+through. Measured 99.98 % key with nothing on it but the mouse cursor — which is the engine's
+own sprite, drawn under the pointer at every zoom and left alone by the composite (§2.3d).
 
 | What the engine used to draw | Ours since | Owned how |
 |---|---|---|
@@ -30,9 +30,9 @@ moved by the composite too.
 | Terrain tiles + the fog overlay | G13b | `terrown`: two detours; the terrain skip path key-fills the viewport |
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
 | Health bars, order markers, group digits, build cursor, band box, selection rect | G13d | `markown`: 8 call-site redirects + 1 detour; bars re-drawn, the rest captured and replayed. The waypoint star's two sites are wrapped with an identity blend LUT so it composites opaque instead of against the fill key (§2.2) |
-| Mouse cursor position, clicks, minimap view rect, scroll rate | G13e | `tagpu_zoom.c` + the composite |
+| Mouse cursor position, clicks, minimap view rect, scroll rate | G13e, cured G13m | `tagpu_zoom.c`; the cursor is the engine's own again — the composite no longer touches it (§2.3d) |
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
-| The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + 1 more + a 3-site byte patch, all behind `vpwide.on` |
+| The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + a 3-site byte patch behind `vpwide.on`, plus the `0x499221` redirect that also carries the zoom's mouse-point repair and is armed by `zoom.on` too (§2.3d) |
 | **Chat, dialogs, side panel, minimap, top bar** | **— never** | screen-space and correct at 1:1 at any zoom; they come through the composite key by design |
 
 **Phases.** Phase 0 (foothold) is complete and Phase B (blit-level GPU units) is verified
@@ -214,16 +214,18 @@ dimensions** at `+0x37E1F`/`+0x37E23` — fields nothing here writes — because
 `W = R − L + 1` by *re-reading* L, so a store of ours landing in that window would corrupt W;
 W/H are checked against the derivation every frame and put back when they disagree.
 
-**The cursor is deliberately not a reader of this rect, and that is the design point.** The
-engine draws its sprite wherever `GetCursorPos` reports and the composite moves it back under
-the pointer from there, which only works while that position is inside the 1× viewport, over the
-terrain key fill. **The engine can NAME more than it can DRAW ON**: in the ring a widened `u`
-lands on the side panel — where the sprite is composited over panel pixels the composite must not
-stamp into the world — or off the surface entirely. So `tagpu_zoom_to_engine_draw()` keeps the
-ring identity for that one poll while the messages carry the widened `u`. The same ambiguity is
-why the `0x498DA0` stub takes `g_ddraw.cursor` rather than trusting the engine coordinate: at
-0.5× the range `[0,128)` is reached both by a ring pointer and by a pointer on the panel, and
-without the true pointer to settle it a click in the world lands in the minimap's click rect.
+**The cursor is not a reader of this rect and no longer needs to be** — §2.3d is why. Until
+G13m it was: the engine drew its sprite wherever `GetCursorPos` reported, so widening what it
+could NAME also moved where it DREW, and in the ring a widened `u` lands on the side panel or off
+the surface (measured at 0.5× with the pointer at screen (320,400): no cursor at the pointer and
+a ghost one on the build panel). That is why the draw poll had its own transform. The cure was to
+stop transforming that poll at all.
+
+**The stub takes `g_ddraw.cursor` rather than trusting the engine coordinate it is handed,** and
+the widened rect is the reason: at 0.5× the range `[0,128)` is reached both by a ring pointer
+(transformed) and by a pointer on the panel (passed through 1:1), and without the true pointer to
+settle it a click in the world lands in the minimap's click rect. Since G13m the same sample also
+*produces* the engine coordinate — see §2.3d.
 
 ### 2.3c The camera's range at zoom > 1 (`tagpu_zoom.c`, `zoom.on`)
 
@@ -260,20 +262,25 @@ walks the eye to that target and our wider clamp leaves it there, so **those pat
 inside our range and both stop — it is simply the old behaviour where the detour does not sit.
 Closing it means widening three inline clamps in the middle of the camera module.
 
-**And the right-edge mouse scroll cannot fire at zoom > 1 — only the right one.** Found while
-documenting this, not by the change: TA's scroll poll (`0x41CF10`, mapped in
-[exe RE](exe-reverse-engineering.html)) fires on *hotkey* or *pointer on an exact screen edge*,
-and the mouse half is an **equality on the outermost pixel** — `x == 0`, `y == 0`,
-`x == screenW − 1`, `y == screenH − 1` — read through `GetCursorPos`, which
-`fake_GetCursorPos` answers with the **unzoomed** `u`. Three of those four screen edges lie
-*outside* the viewport rect (`L=128`, `T=32`, `B=screenH−33`), so the transform passes them
-through as identity and they still scroll. The screen's right column, though, *is* the
-viewport's right column, so it is contracted toward the centre: measured at 2× on 1024×768 a
-pointer at `x=1023` reaches the engine as **800**, and `x == 1023` becomes unsatisfiable. So
-zoomed in, scrolling right needs the keyboard (`0xF6`) or the minimap. The narrow fix is to
-keep `tagpu_zoom_to_engine_draw()` at identity on the outermost screen column and row, which
-would also put the drawn cursor there — G13e's cursor path, so it wants its own verification
-rather than a quiet ride-along on this change.
+**The right-edge mouse scroll could not fire at zoom > 1 — only the right one. CLOSED in G13m
+(§2.3d).** Found while documenting this, not by the change: TA's scroll poll (`0x41CE90`, mapped
+in [exe RE](exe-reverse-engineering.html)) fires on *hotkey* or *pointer on an exact screen
+edge*, and the mouse half is an **equality on the outermost pixel** — `x == 0`, `y == 0`,
+`x == screenW − 1`, `y == screenH − 1` — taken from `[obj+0x196]`, the record the `GetCursorPos`
+polls keep, which `fake_GetCursorPos` used to fill with the **unzoomed** `u`. Three of those four
+screen edges lie *outside* the viewport rect (`L=128`, `T=32`, `B=screenH−33`), so the transform
+passed them through as identity and they still scrolled. The screen's right column, though, *is*
+the viewport's right column, so it was contracted toward the centre: measured at 2× on 1024×768 a
+pointer at `x=1023` reached the engine as **800**, and `x == 1023` became unsatisfiable.
+
+§2.3d fixed it by construction rather than by a special case — the poll now answers the true
+pointer, so every screen-edge equality holds again. Measured at 1920×1080, all four edges, eye
+before → after a 2 s hold: at **2×** left 3000→1864, **right 2856→3928**, up →1880, down →3912;
+the same four fire at 1× and 0.25×.
+
+*[CORRECTION: this section named the poll `0x41CF10`, which is not an instruction boundary. The
+function is `0x41CE90`, one caller `0x496976`; and the `GetCursorPos` at `0x41CEE7` inside it is
+not the edge test at all but the off-screen warp-back.]*
 
 **The flag is what keeps 1× byte-identical.** The detour is a `leaf_call` on a flag raised
 only while a zoomed-**in** world is live; with it clear the engine's own function runs
@@ -301,6 +308,84 @@ carries a clamp for. So the `GetTPosition` call that starts it is redirected and
 point clamped. A pointer **inside** the viewport needs none of this: at `z > 1` the transform
 maps the whole viewport into `[L+d, R−d]`, so the world it names is `[0, map−1]` at either
 extreme of the range and inside it everywhere else.
+
+### 2.3d The cursor, and where `u` is allowed to reach the engine (`zoom.on`, G13m)
+
+**The engine is told the truth about where the pointer is.** `fake_GetCursorPos` answers `s`, at
+every zoom. It used to answer the unzoomed `u`, because the engine's screen→world arithmetic is
+1:1 and needs that number — but the engine also DRAWS its cursor from that poll, so the sprite
+landed at `u` and the composite had to carry it back under the pointer. That job cannot be done
+exactly: the surface texture the composite samples is only replaced when the game flipped, the
+engine draws its cursor several times per flip, and any residual mismatch is multiplied by 1/z.
+This gate's own first commit removed the largest term (a second, later sample of the pointer,
+taken on the render thread) and halved the artefact; the rest was structural.
+
+So `u` now reaches the engine in exactly two places, and neither is a poll:
+
+| Path | Where | Why there |
+|---|---|---|
+| a **button** message's `lParam` | `tagpu_zoom_mouse_lparam()`, at the three `CallWindowProcA` doors | a button is queued on the engine's own event ring (`0x4B5EB2`/`0x4B5EFE` → `0x4C2E30`) and dispatched whenever the game loop reaches it. Its position is where the press was MADE, and no later pointer sample can reconstruct that |
+| the **dispatched record**, at the mouse→world conversion | `vpw_mouse_world()`, our redirect of `0x498DA0` at `0x499221` | this is the one place the 1:1 arithmetic happens. It recomputes `u` from a single `g_ddraw.cursor` sample and writes it into `main+0x2C76` as well as the stack copy it is handed, because `GetUnitAtMouse 0x48CD80` (`0x499283`) and the routing test at `0x469DE1` read the field |
+
+**A MOVE message must NOT be rewritten, and that is the half that took a measurement to find.**
+`0x4B5E51` does not queue: it copies its record into `[obj+0x196]` through `0x4C2360`, and
+`[obj+0x196]` is *also* a position the cursor is drawn at — `0x4C67C0`, called from the surface
+present machinery, blits the sprite from that record without polling ([exe
+RE](exe-reverse-engineering.html)). With the poll answering `s` and the move still carrying `u`,
+whichever ran last decided where the sprite appeared: measured at 1920×1080 / 0.25×, the sprite
+tracked `u` across the frame at 4× the pointer's speed and off the left edge — the very artefact
+this set out to remove. `carries_point()` is now the button messages only.
+
+**Records that came off the ring are left alone.** `vpw_mouse_world()` reads the record's message
+id (`+0x10`) and repairs only what is not `0x201..0x206`; a button record already holds the
+message's own `u`, and recomputing it would replace where the player pressed with where the
+pointer is now.
+
+**Armed by `tagpu_zoom.on` as well as `tagpu_vpwide.on`.** The repair is not optional once the
+engine is told the truth, and the zoom transform goes live from its own lever — `tagpu_zoom.txt`
+or the wheel — with no arm file at all. So `zoom.on` installs the `0x499221` redirect **and
+nothing else**: no rect is ever widened, no other byte written. Verified live at 0.25× with
+`vpwide.on` absent: the viewport rect stays `(128 … 1919)`, the log reads
+`vpwide: mouse->world repair only (0x498DA0)`, hover in the band is correct, and the ring stays
+display-only exactly as §2.3b describes it without `vpwide`. At zoom 1
+`tagpu_zoom_to_engine()` reports "nothing to do" and the stub writes nothing.
+
+**What it closed.**
+
+- **The widened hover, which was being clobbered every frame.** `main+0x2C76` followed the poll,
+  so the wide `u` the window message correctly delivered was thrown away, and hover, the
+  cursor-shape choice and build placement all named the 1× world point in the ring. Measured now,
+  1920×1080 at 0.25×, `vpwide` armed, eye 2000: a commander whose 1× screen position is
+  (956, 480) sits at screen (699, 525); `main+0x2C76` reads **(−276, 480)** and `main+0x2CBA`
+  reads **unit 2**. The ring picks units up on hover, not only on click.
+- **The right-edge scroll at zoom > 1** — §2.3c, measured there.
+- **The composite's cursor machinery**, deleted: `uCur`/`uCurOff` and their branch in the
+  composite shader, `CURSOR_PAD`, the pair recorder behind its seqlock, the poll filter, the
+  latch at the surface upload, and `tagpu_zoom_to_engine_draw()`. The composite no longer knows
+  the cursor exists.
+
+**Measured, the same rig and scorer as the mitigation** (1920×1080, 0.25×, a real pointer crossing the band
+at ~37 px per composited frame, three runs each), share of motion frames with the cursor left
+behind at `u`:
+
+| build | three runs |
+|---|---|
+| before the gate | 11 %, 10 %, 11 % |
+| the composite mitigation (`13bc91c`) | 6 %, 7 %, 0 % |
+| **this** | **0 %, 0 %, 0 %** (120–128 motion frames per run) |
+
+Statically the sprite sits exactly under the pointer at (1100,570), (1600,600), (700,600) and
+(300,500). Screen space is byte-identical at 1×, 0.25× and 2× — same `main+0x2C76`, same map
+cell, same `main+0x2CC6` — over the minimap, the side panel and below the bottom bar. Box select
+and click-select both pick the commander in the band at 0.25×, in the ring at 0.25×, and at 2×.
+
+**What it did not close.** In the ring the engine's own build-placement footprint is not drawn at
+all: the engine projects it to a `u` off the surface and the clip discards it, so `markown` has
+nothing to capture. Before, it was drawn — in the wrong place, from a wrong cell. The cell is now
+right and the preview is absent; closing that means drawing the footprint ourselves, the same
+answer `ui-markers.md` §6.1 gives for everything else outside the 1× viewport. **Dialogs drawn
+over the viewport** (`ARMOPT`, `EXITMENU`) are unchanged and still take the transform as though
+they were world, which was already true before this and is not verified either way here.
 
 ### 2.4 Tooling (not part of the render path)
 
@@ -331,7 +416,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA30` eases the eye toward it. **WRITTEN by `apply_eye_range()` only**, clamped to the same range as the eye and for the same frame, because a disagreement between the two costs the fog grid its is-current flag every frame (§2.3c). The replacement clamp deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
 | `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so `apply_eye_range()` recomputes it through the same wrapper on the frames it corrects the eye. The one **render-thread** write of it; a game thread drawing the minimap in that instant sees a one-frame torn box, the same standing as the published view |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live** (§2.3b); every pass that means the true 1× rect must call `tagpu_vpwide_true_rect()` rather than read the field |
-| `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) |
+| `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) — the x and y of the 6-dword record the dispatch fills. **WRITTEN by `vpw_mouse_world()` while the zoom transform is live** (§2.3d): the engine is polled with the true pointer now, so the unzoomed `u` is put back here, where `GetUnitAtMouse 0x48CD80` and the routing test at `0x469DE1` read it. Untouched at zoom 1, on the screen-space UI, and for a record that came off the event ring |
 | `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index) |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F2F` bit2 | `SelBoxes` |
@@ -485,12 +570,16 @@ second, third and fourth rules.)
    `DrawGameScreen` is a stack local, so writing its pixel base (`+0x0C`) for the length of a
    block redirects every clipped blit inside it. Parity is exact by construction — including
    text, which we have no font path for at all.
-4. **Move it in a pass you already own** — *the fourth rule.* A pass that already arbitrates
-   between your pixels and theirs can move theirs. The mouse cursor failed every capture test
-   (it is blitted with a **NULL draw context**, which makes the callee build its own offscreen
-   over the primary surface), but the composite already decides per pixel whether the viewport
-   shows ours or the engine's, so it simply reads the cursor's texels from where the engine put
-   them and paints them where the pointer is.
+4. **Move it in a pass you already own** — *the fourth rule, and the one that was retired.* A
+   pass that already arbitrates between your pixels and theirs can move theirs. The mouse cursor
+   failed every capture test (it is blitted with a **NULL draw context**, which makes the callee
+   build its own offscreen over the primary surface), so the composite read its texels from where
+   the engine put them and painted them where the pointer is. It worked, and it could never be
+   exact — the composite cannot know which of several draws per flip produced the texture it
+   holds. **G13m deleted it** by fixing the input instead: tell the engine the truth about the
+   pointer and it draws the sprite in the right place itself (§2.3d). The rule still stands for
+   pixels you genuinely cannot reach any other way; the lesson is to check first whether what you
+   are compensating for is something you told the engine.
 
 **Never invent a gate.** Every condition we honour is the engine's own: health bars follow the
 `damagebars` registry option, order markers follow SHIFT sampled through the engine's *own*
@@ -506,9 +595,9 @@ flashes. Clamp, and accept an honest black margin.
 and `0x4BF8C0`, so whatever `fxown` and `terrown` detoured on those still runs.
 
 **Measure the invariant you are about to rely on.** "Inside the viewport the engine's surface is
-99.98 % key with nothing on it but the cursor" is what makes the composite able to move the
-cursor at all. It was measured (112 px of 630 784), and it is the thing to re-measure if
-anything engine-drawn ever appears in the viewport again.
+99.98 % key with nothing on it but the cursor" was what let the composite move the cursor at all.
+It was measured (112 px of 630 784). The composite no longer needs it (§2.3d), but the invariant
+is still the one to re-measure if anything engine-drawn ever appears in the viewport again.
 
 **Prove the negative before designing around it.** The cursor cost a session partly because
 `0x491CA1`/`0x491D58`/`0x4992B9` *look* like cursor draws and are actually mode selectors. What

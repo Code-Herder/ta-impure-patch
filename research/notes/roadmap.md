@@ -56,7 +56,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Fog overlay | ● native (G13b) | `terrown` detours `0x4848E0` too, replicating only its lazy grid rebuild | 99.06–99.39 % lit-vs-grey agreement with the engine's own overlay |
 | Health bars, order markers, group digits, build cursor, band box | ● native (G13d, corrected G13h) | `markown`: eight call-site redirects + one detour on `0x46A430`; bars re-drawn, the rest captured out of the engine's own draw and replayed. G13h fixed the capture's publication discipline and gave the waypoint star an identity blend LUT | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5×; **0 overlay dropouts in 840 held-SHIFT frames** (was 13 in 120) and **0 % cyan** on the star (was 17.6 %) |
 | Chat, dialogs, side panel, minimap, top bar | ○ engine 8bpp, through the composite key | — | stays engine-side: screen-space, correct at 1:1 at any zoom |
-| Mouse cursor | ● moved in the composite (G13e) | the cursor is the ONLY engine pixel left inside the viewport, so the composite paints the box around `u` at the box around `s` | full sprite at the pointer at 0.25×/0.5×/1×/2×, in every corner and in the display-only ring |
+| Mouse cursor | ● the engine's own, under the pointer (G13e, cured G13m) | `fake_GetCursorPos` answers the TRUE pointer, so the engine blits its sprite where the player is looking; the unzoomed `u` reaches it only through a button message and through the `0x498DA0` mouse→world repair. The composite no longer touches the cursor | 0 % of motion frames left behind at `u` across three runs at 1920×1080 / 0.25× with a real pointer (was 10–11 %); exact at four static positions; box- and click-select in the band, in the ring and at 2× |
 | Contextual order cursors | ● restored by patch (G13j) | `tagpu_patches.c`: six NOPs over the `je` at `0x43E50C`, the `Interface Type == 1` branch inside `0x43E490` — whose only caller is `CorretCursor_InGame 0x48D220`, so it is the sprite and nothing else | at Interface Type 1, commander selected: ground 14 `cursormove`, wreck 11 `cursorreclamate`, own unit 15 `cursorselect`, nothing selected 19 `cursornormal`; right-click still orders; sprites read out of the GL framebuffer; unchanged at zoom 1/2/0.5 |
 | Click → world point | ● transformed (G13e) | `tagpu_zoom.c`: one rewrite at the three doors into the engine's own wndproc, plus `fake_GetCursorPos` | at 0.5× the commander selects at its DRAWN position (394,427) and no longer at its 1× one (212,470); the side panel still clicks 1:1 |
 | Minimap view rectangle, scroll rate | ● zoom-aware (G13e) | `0x466B70` ×2 redirected and its rect rescaled by 1/z; `ScrollSpeed` (`main+0x1434D`) driven at base/z | minimap box doubles at 0.5× and quadruples at 0.25×; ScrollSpeed 32 → 64 → 128 → 16 at 2×, and restores |
@@ -77,6 +77,68 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G13m — the cursor stopped skipping to the side bar, and the engine got its own mouse point
+back.** Reported from play: *"with a unit selected, zoomed fully out, sweep the mouse right to
+left — the cursor skips from mid-screen to the UI side bar."* Reproduced on a private Xvfb with a
+real pointer: 10–11 % of motion frames showed the cursor left behind.
+
+**The cause was that the engine was being told a lie it also drew with.** At zoom `z != 1`
+`fake_GetCursorPos` answered the *unzoomed* `u`, because the engine's screen→world arithmetic is
+1:1 and needs that number. But the engine draws its cursor sprite from that same poll, so the
+sprite landed at `u` and the composite had to move it back under the pointer — a job the
+composite cannot do exactly, because the surface texture it samples is only replaced when the
+game flipped, the engine draws its cursor several times per flip, and any residual mismatch is
+multiplied by `1/z`. When it exceeds the 64 px box the composite moves, the sprite is neither
+covered at `u` nor painted at `s`, so it stays at `u` — crossing the frame at `1/z` times the
+pointer's speed and into the side panel. That is the report, exactly.
+
+**The first commit was a mitigation and is written up as one.** It recorded the `(s, u)` pair at
+the poll instead of re-deriving `u` from a second, later sample of a moving pointer taken on the
+render thread. 11/10/11 % → 6/7/0 %. It could go no further.
+
+**The cure is to stop moving the sprite: tell the engine the truth, and put `u` back at the one
+place the world point is computed.** `fake_GetCursorPos` answers `s` now, at every zoom, so the
+engine blits its own cursor under the pointer with no pairing, no latch and no skew. `u` reaches
+the engine in exactly two places — a **button** message's `lParam` (queued on the engine's event
+ring, where the position of the press is the one thing a later sample cannot reconstruct), and
+`vpw_mouse_world()`, our redirect of `0x498DA0`, which recomputes it from one `g_ddraw.cursor`
+sample and writes it into `main+0x2C76` as well as the stack copy it is handed — `GetUnitAtMouse
+0x48CD80` and the routing test at `0x469DE1` read the field, not the copy.
+
+**A MOVE message must not be rewritten, and that is the half that took a measurement to find.**
+TA's window procedure does not queue a move: it copies the record into `[obj+0x196]`, which is
+*also* a position the cursor is drawn at — `0x4C67C0`, in the surface present path, blits the
+sprite from that record without polling. With the poll answering `s` and the move still carrying
+`u`, whichever ran last decided where the sprite appeared, and the sprite tracked `u` across the
+frame again. The transform is now applied to button messages only.
+
+**Two open items closed with it.** The **widened hover** was being clobbered every frame:
+`main+0x2C76` followed the poll, so the wide `u` the window message correctly delivered was
+thrown away and hover, the cursor-shape choice and build placement all named the 1× world point
+in the ring — vpwide's whole purpose, half defeated. Measured now at 1920×1080 / 0.25×: a
+commander whose 1× screen position is (956,480) sits at screen (699,525), `main+0x2C76` reads
+(−276,480) and the hovered-unit field reads unit 2. And the **right-edge scroll at zoom > 1**
+([gpu-status](gpu-status.html) §2.3c), which failed because TA's scroll poll tests
+`x == screenW − 1` against a contracted `u`: all four edges now scroll at 1×, 0.25× **and** 2×
+(at 2×, eye 2856 → 3928 to the right).
+
+Most of the mitigation is reverted with it — the seqlock, the pair recorder, the poll filter, the
+latch at the surface upload — along with the composite's cursor branch, its two uniforms and
+`CURSOR_PAD`. **The composite no longer knows the cursor exists.**
+
+Verified: 0 %, 0 %, 0 % of motion frames left behind across three runs (120–128 motion frames
+each); the sprite exactly under the pointer at four static positions; screen space byte-identical
+at 1×, 0.25× and 2× over the minimap, the side panel and below the bottom bar; box select and
+click-select both picking the commander in the band at 0.25×, in the ring at 0.25×, and at 2×;
+and `zoom.on` without `vpwide.on` arming the repair alone, with the viewport rect left at
+(128 … 1919).
+
+**Open:** in the ring the engine's own build-placement footprint is not drawn at all — it is
+projected to a `u` off the surface and clipped, so `markown` has nothing to capture. Before this
+it was drawn in the wrong place from a wrong cell; the cell is right now and the preview is
+absent. Closing it means drawing the footprint ourselves, which is what
+[ui-markers](ui-markers.html) §6.1 already says about everything outside the 1× viewport.
 
 **G13l — the thing being built stopped sliding across the map.** Reported from play: *"when a
 unit is being built and you zoom in or out the unit being built will move across the screen …
@@ -385,8 +447,9 @@ A third, found by the code review and reproduced in the frame: **the engine can 
 it can DRAW ON.** Widening the addressable rect also moved where the engine put its cursor, and
 in the ring that is the side panel or off the surface — at 0.5× with the pointer at screen
 (320,400) there was no cursor at the pointer and a ghost one on the build panel. The cursor poll
-now has its own transform that keeps G13e's ring identity while the messages carry the widened
-`u`. The same ambiguity — engine coordinates `[0,128)` reached both by a ring pointer and by a
+was given its own transform that kept G13e's ring identity while the messages carried the widened
+`u`; **G13m removed that split entirely** by giving the poll the true pointer and moving the
+transform to the mouse→world conversion. The same ambiguity — engine coordinates `[0,128)` reached both by a ring pointer and by a
 pointer on the panel — is why the `0x498DA0` stub settles "world or UI?" from the true pointer
 position rather than from the coordinate it is handed.
 
@@ -415,10 +478,13 @@ knows it.
   a write site would be applied twice. `g_ddraw.cursor` keeps the TRUE pointer position;
   only what leaves for the engine is unzoomed. Outside the world viewport it is the
   identity, so the side panel, minimap and top bar stay 1:1 — verified by clicking their
-  gadgets at 0.5× and 2×.
+  gadgets at 0.5× and 2×. *(**G13m narrowed both doors**: `fake_GetCursorPos` answers the
+  true pointer now, and only BUTTON messages are rewritten — a move must not be, because
+  the engine draws its cursor from where a move lands.)*
 - **The cursor** — see [terrain & depth](terrain-depth.html) §7.7. Moved in the
   composite, not captured: the cursor is the one thing in the frame the G13d capture
-  trick cannot reach, because it is blitted with a NULL context.
+  trick cannot reach, because it is blitted with a NULL context. *(**Superseded by
+  G13m**: the engine draws it under the pointer itself and the composite does nothing.)*
 - **The display-only ring, and the honest answer to it.** The engine can only name
   screen positions inside its own viewport (measured: a click outside does nothing at
   all). At zoom < 1 the view shows more world than the 1× viewport has room to name, so

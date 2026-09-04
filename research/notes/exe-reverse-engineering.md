@@ -633,6 +633,131 @@ disassembled, and there is a **second `+0x8E` writer** in `0x47Cxxx` (`0x47CB26`
 function of `0x48B58B`/`0x48B5C5` was not delimited — `0x48B43C`'s `ret 8` is an early return
 inside it, not its end — so the COB opcode that reaches them is unidentified.
 
+## The mouse object, its event ring, and the two ways the cursor gets drawn — mapped by us
+
+[MEASURED 2026-09-04, this project — `objdump -d -M intel` of the pristine Steam build plus live
+`tacli peek` on a running game. Established while replacing the composite's cursor-moving hack
+with the structural fix (`gpu-status.md` §2.3d). Every VA was read off `objdump` in that session
+unless a row says otherwise. This is the layer *below* the cursor chain in the next section: that
+one is "which cursor picture", this one is "where the pointer is and who drew it".]
+
+**The object.** `0x4B6220` is exactly `mov eax, ds:0x51FBD0; ret` — the mouse/UI singleton
+accessor, called at the head of every function below. So the object is `*(void**)0x51FBD0`.
+
+| Offset | What | How established |
+| --- | --- | --- |
+| `+0x186` | event-ring capacity — the divisor in `idiv` at `0x4C2E44` | disassembly |
+| `+0x18A` | event-ring base; entries are 6 dwords (`lea eax,[ecx+ecx*2]` then `*8` = stride 24) | disassembly |
+| `+0x18E` | ring **head** (write index), advanced and wrapped at `0x4C2E78..0x4C2E82` | disassembly |
+| `+0x192` | ring **tail** (read index), advanced at `0x4C2DB5` | disassembly |
+| `+0x196` | the **current mouse record**, 6 dwords, laid out exactly like a ring entry. Written whole by `0x4C2360`, and x/y alone by each of the three drawing polls | disassembly + live |
+| `+0x1AE` | cursor hide/nesting counter — `0x4C2870` decrements it and returns early while it is still > 0 | disassembly |
+| `+0x1B2` | the current cursor sprite record: size at `+0`/`+2`, hotspot at `+4`/`+6`, all read `movsx` WORD | disassembly |
+| `+0x1B6` / `+0x1BA` | the position the sprite was last DRAWN at, i.e. position − hotspot | disassembly |
+| `+0x1BE` / `+0x1C2` / `+0x1C6` | saved-background rects, one per draw path *[INFERRED]* — each draw path fills exactly one of them before blitting | disassembly |
+| `+0x1CE` | a mode word, and **not a simple disable**: `0x4C67C0` returns early when it is **zero**, `0x4C2870` returns early when it is exactly **1**. The two draw paths below are selected by it *[INFERRED]* | disassembly |
+| `+0x1D2` | non-zero is required by `0x4C24B0`, `0x4C25E0` and `0x4C67C0` before any of them draws | disassembly |
+
+**The record is 6 dwords, and the fifth is the message id.** Read off TA's own window procedure,
+whose `0x200..0x206` jump table at `0x4B60F4` has three arms:
+
+| offset | field | set at (move arm `0x4B5E51`) |
+| --- | --- | --- |
+| `+0x00` | x | `[esp+0x04]`, the sign-extended lParam LOWORD |
+| `+0x04` | y | `[esp+0x08]` |
+| `+0x08` | wParam (the key/button flag word) | `[esp+0x0C]` |
+| `+0x0C` | a `timeGetTime`-derived stamp, scaled by `[obj+0xE8]` and divided by 1000 | `0x4B5E9C` |
+| `+0x10` | **the message id** | `0x4B5EA0` (`mov [esp+0x18],esi`, esi = uMsg) |
+| `+0x14` | 0 for a move and a button-**up**, 1 for a button-**down** or double-click | `0x4B5E90` / `0x4B5EF4` / `0x4B5F40` |
+
+The jump table entries, in order `0x200..0x206`: `0x4B5E51`, `0x4B5EB2`, `0x4B5EB2`, `0x4B5EFE`,
+`0x4B5EB2`, `0x4B5EB2`, `0x4B5EFE`. So **`WM_MOUSEMOVE` alone goes to `0x4C2360`, which copies
+its record into `[obj+0x196]`; every button message (0x201..0x206) goes to `0x4C2E30`, which
+pushes onto the ring.** That asymmetry is the whole reason a move and a click have to be treated
+differently on the input path (`gpu-status.md` §2.3d).
+
+| VA | What it is |
+| --- | --- |
+| `0x4C2360(rec*)` | copy 6 dwords **into** `[obj+0x196]`. Two call sites: `0x4B5A88` (an init/reset path) and `0x4B5EA4`, the `WM_MOUSEMOVE` arm |
+| `0x4C2E30(rec*)` | ring **push**: writes at `[obj+0x18A] + head*24`, advances and wraps head, and **drops the event when the ring is full** (`head+1 == tail`). One call site, `0x4B5F51` — the button arms |
+| `0x4C2D60(rec*)` | ring **pop**: copies the tail entry out and advances the tail; when `head == tail` it copies `[obj+0x196]` instead. `ret 4` |
+| `0x4C2DE0(rec*)` | the same **without** advancing the tail — a peek. Returns 1 when it took a real ring entry, 0 when it fell back to `[obj+0x196]` |
+| `0x4C2340(rec*)` | copy 6 dwords **out of** `[obj+0x196]`, no ring, no poll. 5 call sites |
+
+**`GetCursorPos` is the IAT slot `ds:0x4FC2E4`, reached from six places, and only three of them
+move the cursor.**
+
+| Site | Return addr | Draws? | What it is |
+| --- | --- | --- | --- |
+| `0x4C28AA` | `0x4C28B0` | **yes** | inside `0x4C2870`, the hide-counter path: poll → `[obj+0x196]` → `+0x1B6/+0x1BA` = answer − hotspot → save background `0x4C6B70` → blit `0x4B7F90` |
+| `0x4C24DE` | `0x4C24E4` | **yes** | inside `0x4C24B0`, same shape, saved rect at `+0x1BE` |
+| `0x4C2610` | `0x4C2616` | **yes** | inside `0x4C25E0`, same shape, saved rect at `+0x1C2` |
+| `0x41CEE7` | `0x41CEED` | no | inside the scroll poll: **only** the off-screen warp-back, see below |
+| `0x4C2318` | — | no | a bare `GetMousePos(int*,int*)` wrapper (`0x4C2310`, `ret 8`). **DEAD: zero `call` sites and the literal `0x004C2310` does not occur anywhere in the image** |
+| `0x49F7CA` | — | no | a `jmp` thunk to the same import. **DEAD by the same two tests** |
+
+All three drawing polls take the position from **their own answer**, never from `[obj+0x196]`.
+That matters, because there is a fourth draw that does the opposite.
+
+**THE SECOND DRAW: `0x4C67C0(mouseObj, surface)`, which blits from the RECORD and never polls.**
+It early-outs unless `[+0x1CE]`, `[+0x1D2]` and `[+0x1B2]` are all non-zero, then computes
+`+0x1B6/+0x1BA` from `[obj+0x196]` − hotspot, saves the background through `0x4C6B70` and blits
+through `0x4B7F90` — the same blit the polling paths use. Two call sites, both in the surface
+present machinery: `0x4C641B` (inside `0x4C63A0`, which has **44 callers** of its own — 20 in
+`0x41Fxxx`, the rest spread over `0x420xxx`–`0x49Fxxx`) and `0x4C6544` (inside the large flip
+routine that ends at `0x4C67BA`).
+
+**So `[obj+0x196]` is not merely "the last mouse record" — it is a position the cursor can be
+drawn at.** Whatever wrote it last decides where the sprite appears on the next present: a
+`WM_MOUSEMOVE` through `0x4C2360`, or the last drawing poll. Measured, 1920×1080 at zoom 0.25×
+with `fake_GetCursorPos` answering the true pointer while the move message still carried the
+transformed `u`: the sprite tracked `u` across the frame at 4× the pointer's speed and off the
+left edge. `0x4C2380` — which the previous pass listed as the record-drawing path — is **DEAD**
+(zero `call` sites, literal absent); `0x4C67C0` is the live one.
+
+**`main+0x2C76` — the record the game actually acts on.** Filled once per mouse dispatch by the
+routine that ends at `0x499A2A`:
+
+```
+0x499982  PeekMouseEvent(&A)                       ; 0x4C2DE0, into [esp+0x8]
+0x49999C  PeekMouseEvent(&B)                       ; 0x4C2DE0, into [esp+0x20]
+0x4999AB  if (A.msg == B.msg)  GetMouseEvent(main+0x2C76)     ; 0x4C2D60 — pops
+          else if (A.msg == 0x202 || A.msg == 0x205) main+0x2C76 = A
+          else                                       main+0x2C76 = B
+0x499A1C  call [main+0x391F5]                      ; the per-input-mode handler
+```
+
+`0x499200` (input mode 6, in-game — see the next section) then copies those 6 dwords to its own
+stack and passes the copy to `0x498DA0`. **The copy is not what the readers after that call
+read**: `GetUnitAtMouse 0x48CD80` at `0x499278` and the mouse routing test at `0x469DE1` both
+load `main+0x2C76`/`+0x2C7A` directly. Anything that corrects the mouse point inside a
+`0x498DA0` redirect must therefore write the field as well as the copy.
+
+Readers of `main+0x2C76` found in the image: `0x419BF0`, `0x41A4B2`, `0x41CCAF`, `0x41CD63`,
+`0x41D101`, `0x469DE7`, `0x48CD91`/`0x48CD97`, `0x496490`, `0x498D16`, `0x499210`. The only
+writers are the three stores above.
+
+**The scroll poll is `0x41CE90`, not `0x41CF10`.** *[CORRECTION: `gpu-status.md` §2.3c named
+`0x41CF10`, which is not an instruction boundary — `0x41CF0E` is `lea ebp,[esi+0x64]`.]* One
+caller, `0x496976`. It reads the mouse position with `0x4C2340` — i.e. out of `[obj+0x196]`, not
+from a fresh poll — into `[esp+0x1C]`/`[esp+0x20]`, and then tests, against the SCREEN dimensions
+at `main+0x37E1F`/`+0x37E23`:
+
+```
+0x41CF8B  x == 0            -> eye.x -= step        (or hotkey 0xF6)
+0x41CFC8  x == screenW - 1  -> eye.x += step        (or hotkey 0xF5)
+0x41CFE9  y == 0            -> eye.y -= step
+0x41D021  y == screenH - 1  -> eye.y += step
+0x41D054  call 0x41C3C0                             ; the eye clamp
+```
+
+The `GetCursorPos` at `0x41CEE7` is **not** that test. It runs first and only handles the pointer
+having gone 1..100 px *past* the screen: `(x >= screenW || y >= screenH) && x < screenW+100 &&
+y < screenH+100`, and then — if `GetActiveWindow` matches `[obj+0x40]` — it overwrites
+`[esp+0x1C]`/`[esp+0x20]` with the polled position clamped to `screenW-1`/`screenH-1`. So the
+edge scroll fires off whatever `[obj+0x196]` holds, which is why answering the true pointer at
+the three drawing polls is what makes the right edge work at zoom > 1 (`gpu-status.md` §2.3c).
+
 ## The cursor chain — mapped by us
 
 [MEASURED 2026-09-03, this project — disassembly of the pristine Steam build (`objdump -d -M

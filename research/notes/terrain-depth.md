@@ -907,23 +907,34 @@ the side panel, the minimap and the top bar are screen-space and stay the engine
 forever: they are correct at 1:1 at any zoom, which is exactly what the key exists to
 let through.
 
-**G13e turned that measurement into a mechanism.** Because the cursor is the *only*
-engine pixel left inside the viewport, the composite can MOVE it: at zoom `z` the
-engine draws its cursor where it thinks the mouse is, which is the unzoomed position
-`u` the input path feeds it (`tagpu_zoom.h`), and
-the composite paints the texels of a 128×128 box around `u` at the box around the real
-pointer `s` instead, letting our world cover the box at `u`. No capture, no new call
-site — the composite is already the code that decides, per pixel, whether the viewport
-shows ours or the engine's, so this is one more clause in that decision.
+**G13e turned that measurement into a mechanism, and G13m retired it.** Because the
+cursor was the *only* engine pixel left inside the viewport, the composite could MOVE
+it: at zoom `z` the engine drew its cursor where it thought the mouse was, which was the
+unzoomed position `u` the input path fed it, and the composite painted the texels of a
+128×128 box around `u` at the box around the real pointer `s` instead, letting our world
+cover the box at `u`.
 
-It has to be done there rather than by capturing the draw the way G13d captured the
-markers, because **the cursor is the one thing in the frame that does not go through
-`DrawGameScreen`'s OFFSCREEN.** `0x4C2870` (the engine's show-cursor, called at
-`0x46A3C7` after everything else in the frame) and `0x4C2380` blit it with a **NULL
-context**, and a NULL context makes `0x4B7F90`/`0x4C6B70` build their own default
-offscreen over the primary surface — so swapping a pixel base cannot reach it. That was
-measured, not assumed: a capture window bracketing the widget-tree draw at `0x46A303`
-opens fine and catches **zero** non-key texels.
+**That is gone.** The move could never be exact — the surface texture the composite
+samples is only replaced when the game flipped, the engine draws its cursor several times
+per flip, and any residual mismatch is multiplied by `1/z`, so at 0.25× the sprite was
+left behind at `u` on 10–11 % of motion frames. **G13m fixed the input instead**
+(`gpu-status.md` §2.3d): `fake_GetCursorPos` answers the TRUE pointer, so the engine
+blits its own cursor under it, and the unzoomed `u` is put back at the one place the
+world point is computed. The composite's cursor branch, its two uniforms and `CURSOR_PAD`
+are deleted; the cursor is still the only engine pixel in the viewport, and it is now in
+the right place by construction.
+
+The capture route was ruled out first, and that part still holds: **the cursor is the one
+thing in the frame that does not go through `DrawGameScreen`'s OFFSCREEN.** `0x4C2870`
+(the engine's show-cursor, called at `0x46A3C7` after everything else in the frame) and
+`0x4C67C0` (the present path's draw-from-record, [exe
+RE](exe-reverse-engineering.html)) blit it with a **NULL context**, and a NULL context
+makes `0x4B7F90`/`0x4C6B70` build their own default offscreen over the primary surface —
+so swapping a pixel base cannot reach it. That was measured, not assumed: a capture
+window bracketing the widget-tree draw at `0x46A303` opens fine and catches **zero**
+non-key texels. *[CORRECTION: this named `0x4C2380` as the second blitter; that function
+has no call site and no address literal anywhere in the image. The live one is
+`0x4C67C0`.]*
 
 One known deviation from suppressing `0x4848E0`: the engine used to shade-remap its
 *own* overlays under the grey band, and we no longer do — visible only if a health bar

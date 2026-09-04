@@ -747,19 +747,22 @@ under injection; that was a probe 3 px short of the edge.)
 tools/tacli keys <i> mouse:1023,400     # scroll right;  x=0 left, y=0 up, y=767 down
 ```
 
-**At zoom > 1 the RIGHT edge stops firing, and only the right one.** The engine polls
-`GetCursorPos`, which we answer with the *unzoomed* position, and three of the four screen
-edges lie outside the viewport rect (`L=128`, `T=32`, `B=screenH−33`) so they pass through
-untransformed. The screen's right column *is* the viewport's right column, so it contracts
-toward the centre — at 2× a pointer at `x=1023` reaches the engine as 800. Zoomed in, scroll
-right with the minimap or hotkey `0xF6`. Not caused by the camera-range change; found while
-documenting it (`gpu-status.md` §2.3c).
+**All four edges fire at every zoom since G13m.** They did not before: the engine takes the
+mouse position from the record the `GetCursorPos` polls fill, which we used to answer with the
+*unzoomed* position. Three of the four screen edges lie outside the viewport rect (`L=128`,
+`T=32`, `B=screenH−33`) so they passed through untransformed, but the screen's right column *is*
+the viewport's right column, so it contracted toward the centre — at 2× a pointer at `x=1023`
+reached the engine as 800 and `x == 1023` was unsatisfiable. The poll answers the true pointer
+now (`gpu-status.md` §2.3d). Measured at 1920×1080 on all four edges at 1×, 0.25× and 2×.
 
 Three things to know when driving zoomed:
 
 - **`tacli click` takes the position ON SCREEN**, the same as your eyes — the transform
   is applied on the far side of `g_ddraw.cursor`, so the injected path and the human's
   mouse cannot disagree.
+- **The cursor sprite is the engine's own and sits under the pointer at every zoom**
+  (G13m). If you are hunting a cursor artefact, `main+0x2C76`/`+0x2C7A` is the *unzoomed*
+  point the engine is naming, not where the sprite is; the sprite is at the pointer.
 - **At zoom < 1 the outer ring needs `vpwide.on`, or it is display-only.** The engine can
   only name screen positions inside its own 1× viewport, so without that arm the world the
   zoom-out reveals beyond it has no address: a click there is **dropped** (the selection is
@@ -785,6 +788,13 @@ when you want the pre-G13f baseline. Two things it does not change: the captured
 markers** still stop at the engine's screen-sized offscreen (further out than before, not
 to the frame edge), and edge scroll behaves the same armed or not (see the zoom section: it
 does fire under injection, on the exact edge pixel).
+
+Since G13m `zoom.on` **on its own** also installs one of vpwide's redirects — the `0x498DA0`
+mouse→world repair, which the zoom now depends on. You will see
+`vpwide: mouse->world repair only (0x498DA0) — the viewport rect is never widened` in the log
+where you used to see no `vpwide:` line at all. Nothing is written to the viewport rect in that
+mode; the ring is still display-only. `vpwide.on` upgrades the same line to the full
+`vpwide: ARMED (…)`.
 
 **Particles (smoke, fire, wakes, nanolathe) are `sfx.on`** — tokens `log`, `passive`,
 `nosmoke`, `nofire`, `nowake`, `nonano` — on the same `fxown.on` patch set (tacli auto-arms
