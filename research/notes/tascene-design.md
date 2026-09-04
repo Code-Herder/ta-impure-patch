@@ -207,11 +207,17 @@ These exist only in `lane=explore`, and they are what landing 2 added.
 |---|---|
 | `relief=<k>` | displacement scale, **default 0** (`dd5e739`): the art stays exactly where it is painted and is still lit by the real gradient. **1 = the engine's own `h/2`**, which misregisters the art — the tiles are already the oblique projection of the hill, so displacing them applies it twice; measured on Two Continents it moves the terrain 41–94 px off the engine's frame while the features do not move at all. Kept as the double-count experiment |
 | `datum=<h>` | the height a non-zero `relief` pivots about (`8b73f50`): a cell moves by `relief·(h − datum)/2`, so a cell at the datum stays where the engine paints it. Default the map's own sealevel, which removes the constant part of the slide (66 px of it on Two Continents) and cannot remove the part that varies with the terrain — which is why `relief` itself defaults to 0 |
-| `sun=<az,el>` | the sun in degrees, or `off`. The default **`324.5,53.1` is `tagpu_render3do.c:250`'s own model light** `SH_L = {-0.35f, 0.80f, -0.49f}` re-expressed as a direction (it round-trips to within **0.0013 per component**), and the lab dots it against the same raw model-space face normal the engine's LUT path uses — so switching lanes changes the shading *model* (32 `PALETTE.SHD` rows → continuous lambert) and not the light. **Level ground always takes exactly 1.0** — see "Level ground takes exactly 1.0" under landing 2 |
+| `sun=<az,el>` | the sun in degrees, or `off`. The default **`324.5,53.1` is `tagpu_render3do.c:250`'s own model light** `SH_L = {-0.35f, 0.80f, -0.49f}` re-expressed as a direction (it round-trips to within **0.0013 per component**), and the lab applies it **in map space (x east, y up, z south) to terrain and units alike** — so switching lanes changes the shading *model* (32 `PALETTE.SHD` rows → continuous lambert) and not the light. Until the shadows landed (2026-09-03) unit normals were dotted in 3DO model space, whose z points north, which mirrored the units' sun to the south-west — the engine's camera light, and exactly the "units and terrain disagree" the artlight study measured. A cast shadow has to fall away from the one sun the ground is lit by, so the normals are flipped into map space now: tops take 1.0, west faces are lit, camera-facing fronts sit in ambient. **Level ground always takes exactly 1.0** — see "Level ground takes exactly 1.0" under landing 2 |
 | `amb=<a>` | ambient floor, default `0.35`, **relative to level ground**: the shading is `(amb + (1−amb)·max(N·L, 0)) / (amb + (1−amb)·sin(el))` for terrain, unit faces and feature sprites alike, so a face turned fully away from the sun takes `0.40` at the defaults |
 | `slope=<k>` | exaggerate the heightfield's gradient before normalising, default 1 |
 | `filter=<f>` | how the exploration lane samples the **restored unit textures**. `linear` = trilinear (bilinear + mipmaps, levels 0–2) with `aniso` taps — what the game's own hires path does (`tagpu_hires.c:1142`, `GL_LINEAR_MIPMAP_LINEAR`); `nearest` = one texel, the stock look. **Default `linear` when the pack's unit atlas is padded** (`pad` ≥ 4 in the manifest, every `build` since 2026-09-03), `nearest` otherwise; `filter=linear` on an unpadded pack fails loudly because its mips would bleed. Indexed colour is always nearest — an index cannot be averaged. Measured on the base fixture: 13 740 pixels differ from `nearest`, all units |
 | `aniso=<n>` | anisotropic taps for `filter=linear`, default 4. TA's projection `(x, −z − y/2)` foreshortens every vertical face 2:1, which trilinear alone over-blurs along that axis. 0 or 1 = off. The status bar reports what the GPU allows (`none` = unsupported); the headless shooter honours it too — `aniso=4` vs `aniso=0` is 10 099 differing pixels there, and the live RTX 4070 reports 16× |
+| `shadows=<b>` | cast shadows from the sun, default 1 (off whenever the sun is). One depth-only pass per side over every 3DO — units, wrecks, buildings — and by default the heightfield, orthographic along the sun into a `DEPTH_COMPONENT24` map, read back by terrain and unit fragments through `sampler2DShadow` (bilinear compare) with a 16-tap Poisson kernel. Self-shadowing and unit-on-unit come with it. Sprites neither cast nor receive: a billboard has no geometry, and a tree's shadow is in its own frames. The two shadow samplers are set even when off — left at unit 0 they would be two sampler *types* on one unit and GL drops the whole draw, which cost one blank afternoon |
+| `penumbra=<k>` | PCSS-lite: 8 raw taps over a 24-unit search radius find the average blocker, and the kernel radius is `k` × the receiver–blocker distance, at least half a texel. Default **0.1** — TA's casters are 20–60 units tall, so 0.25 was all penumbra (median shadow 0.876 of lit; at 0.1 the core reaches 0.405 and the median is 0.737). 0 = hard |
+| `shade=<s>` | the fraction of the *direct* light a shadow removes, default 1: full shadow is the ambient floor, `amb/level` = 0.40 at the defaults. The ambient term is never shadowed |
+| `terrainshadow=<b>` | the heightfield casts too, default 1. The art has slope shading but no cast shadows, so this adds and does not double-count the way relief did; on Two Continents' 53° sun it amounts to 786 pixels |
+| `shadowres=<n>` | depth map size, default 2048. The light-space bounds are the view plus a 192-unit margin and the height range actually in view, about 0.7 world units per texel |
+| `debug=shadow` | (global) show side A's depth map instead of the frame, near = bright |
 | `undither=<b>` | `1` = the pack's restored atlases, `0` = the palette indices. **Default: restored when the pack carries them** (`build --undither`), indexed otherwise — so the lane's defaults still reduce to parity on an indexed pack, and show the colour a restored pack was built for. `undither=1` on a pack built without `--undither` says so instead of drawing something plausible |
 
 ### The wipe
@@ -478,6 +484,18 @@ names, same premultiplied output).
   tilt itself — a tilted normal's N·L averages a little under level's). Unit
   faces take the same factor: their shade is the old one × 1.1505 (median over
   325 unit pixels; predicted 1/0.870 = 1.1494).
+- **Cast shadows** (2026-09-03), a depth map along the sun with a PCF/PCSS-lite
+  read-back inside `LAB_LIGHT`, on the base fixture at the defaults: **10 259
+  pixels** change against `shadows=0`, of which the unit casters alone are
+  9 101 with a fully dark core (p10 of shadowed/lit = 0.405) and a soft edge
+  (median 0.737); hard (`penumbra=0`) they are 6 966 pixels at median 0.556.
+  The **receiver-plane depth bias** is what makes the heightfield usable as a
+  caster: the blocker search's own upslope texels were 57 920 pixels of haze on
+  the hill before it and are 786 after. Every receiver's world point is the
+  one it *depicts*, not where it is drawn — the art at grid row G shows world
+  `Z = G + h/2`, so a unit drawn at `wz − wy/2` casts at its own feet. Wrecks
+  cast and receive through the unit path. Not yet: sprites as receivers, and
+  a second cascade for zoom-out.
 - **The wipe and the presets**, described under "Using it".
 
 ### The exploration lane, calibrated against the parity lane  [VERIFIED 2026-09-03]
