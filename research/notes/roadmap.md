@@ -46,7 +46,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
-| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 **inside the DLL**, once per map on a worker thread, cached under `gamedir/tagpu_cache`; `tagpu_terr.c` uploads a second atlas and samples it under `tagpu_classicpp.on`. The restorer engine decision for [Classic and Classic++](renderers.html) §2.5 | Two Continents: runtime 11–13 ms, session 23–25 ms, 5062 tiles in 22.6 s uncached / 29 ms cached; Classic baselines unchanged; **15-min 200v200 soak with the runtime in the process: alive, no GL or restore errors** — the first full game with a second module loaded at runtime |
+| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04), **on the GPU** (G14b, 2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 **inside the DLL**, once per map on a worker thread, cached under `gamedir/tagpu_cache`; `tagpu_terr.c` uploads a second atlas and samples it under `tagpu_classicpp.on`. The provider is DirectML where it loads (Wine needs vkd3d-proton for the D3D12 under it), the CPU where it does not. The restorer engine decision for [Classic and Classic++](renderers.html) §2.5 | Two Continents: runtime 11–13 ms, session 23–25 ms CPU / 1.9 s DirectML, 5062 tiles in **589–662 ms on DirectML against 19.2 s on 4 CPU threads** / 29 ms cached; the two providers' atlases differ in 61 of 20.7 M bytes, all by 1 level; Classic baselines unchanged; **two 15-min 200v200 soaks, runtime then D3D12 device resident: alive, no GL or restore errors** |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
@@ -78,6 +78,34 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G14b — the restorer runs on the GPU.** The owner's question about G14a: why is the model on
+the CPU? Because the pinned ONNX Runtime package is CPU-only and its CUDA provider is x64. The
+answer is Microsoft's **DirectML** flavour, which *does* ship a win-x86 runtime, and which
+`tagpu_restore.c` now appends when its export is present — falling back to the CPU provider
+on any refusal, which is what a runtime without it, a machine without a suitable D3D12, and
+`tagpu_restorecpu.on` all produce. Ordinary DLL-load discipline throughout; no engine address
+is touched and no sim state is read or written.
+
+**Under Wine that needed vkd3d-proton.** Wine 9's built-in `vkd3d` builds the D3D12 device on
+the RTX 4070 and then refuses DirectML: `ID3D12Device5::EnumerateMetaCommands` is a stub, so
+the provider append returns `E_NOTIMPL`, and `CheckFeatureSupport` answers shader model 5.1 to
+DirectML's 6.6 ask. vkd3d-proton 3.0.1's 32-bit `d3d12.dll`/`d3d12core.dll` host it; they are
+pinned by hash beside the runtime and `tacli` sets `WINEDLLOVERRIDES=d3d12,d3d12core=n,b` so
+they win over the built-in (an instance without them keeps it, and the restorer takes the CPU).
+Preloading them by full path from our own thread is not a substitute — Wine keys modules by
+path. On real Windows the system D3D12 hosts DirectML directly.
+
+**Measured, Two Continents, in the running game:** 5062 tiles in 80 batches, **589–662 ms on
+DirectML against 19,211 ms on four CPU threads — 29–33×**; standalone the per-batch gap is 34×
+at 32×32 and 41× at the wrap-padded 56×56. It costs a one-time **1.9 s session build** (21 ms
+on the CPU) — which made a cached map cost more to reach the runtime than to read its atlas,
+so the job now reads the cache *before* loading any runtime and a restored map builds no
+session at all. The pre-warm idea is worth more, not less. **Correctness**: restoring the map
+on each provider and diffing the two cache files, **61 of 20,733,952 bytes differ, every one by
+exactly 1 level** — fp32 rounding, so a cache written by either provider is valid for the other.
+A 15-minute 200v200 match ran with the D3D12 device resident beside our GL context: alive, no
+GL or restore errors. `assets`: none.
 
 **G14a — the Classic++ restorer runs inside the game.** The first engine step of the
 Classic++ port ([Classic and Classic++ renderers](renderers.html) §2.5), built as a spike to

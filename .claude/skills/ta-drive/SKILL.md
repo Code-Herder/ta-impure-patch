@@ -545,6 +545,17 @@ clicks land. `launch` then prints `auto-armed owndraw.on=all / fxown.on / featow
 terrown.on / markown.on`, and `tagpu.log` carries one `ARMED` line per pass — read them,
 because a missing one is the whole pass silently absent.
 
+**Classic++ is a separate switch, and its restorer has a launch-time one.**
+`tacli arm <i> classicpp.on` turns on the restored true-colour terrain; it is *polled* twice
+a second, so it flips live for an A/B. **`tagpu_restorecpu.on` is not** — it is read once,
+when the inference runtime is first loaded, so arm it **before** the launch you are measuring.
+It keeps the model on the CPU provider where DirectML would otherwise take the GPU (0.6 s
+against 19 s for Two Continents' 5062 tiles); the restored pixels are the same either way, so
+this is for timing the two, not for choosing a look. Read the result in `tagpu.log`:
+`restore: ... on DirectML` or `on the CPU`, then the per-map `N tiles ... in M batches on ...`
+line. A map already in `gamedir/tagpu_cache/` is read back in ~30 ms and no model runs at all —
+delete the `.rgba` to re-measure.
+
 **Health bars are a registry value, not a trigger**, and `tacli` does not set it, so
 the mark pass draws no bars until you do (`tagpu_mark.c:333` gates on `main+0x37F06`
 bit0):

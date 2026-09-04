@@ -92,6 +92,7 @@ model is in scope** (decided before the engine question was settled).
 | onnxruntime 1.29, Linux x64, 1 thread | 5.1 ms | 20 ms | the lab's own path |
 | **onnxruntime 1.20.1, Windows x86 DLL, under Wine 9.0, 1 thread / all** | **10.5 / 4.1 ms** | **42 / 11 ms** | 32-bit test exe, fresh prefix, Wine's built-in `msvcp140`/`vcruntime140`, nothing installed |
 | naive C loops (libonnx class), 1 thread | 286 ms | 1180 ms | `gcc -O2`, same shape; libonnx's `Conv` is plain loops, no SIMD, no threads |
+| **onnxruntime 1.20.1 x86 + DirectML, under Wine 9.0 on vkd3d-proton, RTX 4070** | **0.094 ms** | **0.24 ms at 56×56** | per tile in batches of 64, as the module issues them — the measured GPU path, below |
 | GLSL passes on the GPU (estimate) | ≪ 1 ms | ≪ 1 ms | ~750 k FLOPs per texel |
 
 So at load, batched by frame size and threaded, Two Continents' tiles are roughly 7–10 s
@@ -140,6 +141,46 @@ Measured in the running game under Wine 9 on Two Continents **[MEASURED]**:
 | first restore of 5062 tiles, 4 intra-op threads (400 tiles wrap-padded at 56×56, 80 batches) | 22.6 s, off both game threads |
 | the same map from the cache | 29–33 ms |
 | Classic parity baselines after the shader change | unchanged, `6f7ad6b1` / `9c9ab215` |
+
+**The provider is DirectML, and under Wine that means vkd3d-proton** **[MEASURED
+2026-09-04]**. The CPU was never a decision, only what the spike reached for first; the
+question the owner asked — why not the GPU — has three answers stacked on each other:
+
+- The pinned `Microsoft.ML.OnnxRuntime` package is **CPU-only**, and the CUDA provider is
+  **x64 only**, so it cannot load in a 32-bit process at all.
+- `Microsoft.ML.OnnxRuntime.DirectML` **1.20.1 does ship `runtimes/win-x86/native`**, and
+  that DLL is a superset of the CPU-only one: it serves the CPU provider at the same speed
+  (3.16 ms per 32×32 tile on four threads, batch 64 — the same number the CPU-only build
+  gives), so installing it costs nothing when the GPU side is unavailable. It loads under
+  Wine 9's built-in `msvcp140` exactly as 1.20.1 does — same generation, no
+  `std::_Throw_Cpp_error`.
+- **Wine 9's built-in D3D12 cannot host DirectML.** `vkd3d` creates the device on the
+  RTX 4070 (max feature level 11_1) and then refuses the provider two ways:
+  `ID3D12Device5::EnumerateMetaCommands` is a stub, which is the actual failure —
+  `OrtSessionOptionsAppendExecutionProvider_DML` returns `E_NOTIMPL` at
+  `dml_provider_factory.cc(520)` — and behind it `CheckFeatureSupport` answers **shader
+  model 0x51 to DirectML's 0x66 ask**, so its DXIL shaders would not compile either.
+  **vkd3d-proton 3.0.1's 32-bit `d3d12.dll`/`d3d12core.dll` host it**, and are pinned by
+  hash in `tools/fetch_onnxruntime.sh`. They must be *preferred over the built-in*:
+  `WINEDLLOVERRIDES=d3d12,d3d12core=n,b`, which `tacli` now sets for every instance. Loading
+  them by full path from our own thread first does **not** work as a substitute — Wine keys
+  loaded modules by path, so DirectML's later `d3d12.dll` by name still finds the built-in.
+  On real Windows none of this arises.
+
+**What the GPU is worth, in the running game on Two Continents** **[MEASURED 2026-09-04]**:
+the same 5062 tiles in 80 batches take **589–662 ms on DirectML against 19.2 s on four CPU
+threads — 29–33×**; standalone the per-batch gap is 34× at 32×32 (0.094 vs 3.16 ms/tile) and
+41× at 56×56 (0.237 vs 9.95). The GPU's cost is a **one-time ~1.9 s session build** (against
+21 ms on the CPU) on the worker thread — which made a *cached* map cost more to reach the
+runtime than to read its atlas, so the job now **reads the cache before it loads any runtime**
+and a restored map never builds a session at all. The pre-warm idea in §4 is worth more, not
+less. **The two providers
+agree**: restoring the map both ways and diffing the two cache files, **61 of 20,733,952
+bytes differ and every one by exactly 1 level** — fp32 rounding, so DirectML is running the
+same graph and not a half-precision one, and a cache written by either is valid for the
+other (the key is the tile content, not the provider). `tagpu_restorecpu.on` forces the CPU
+side for that A/B. A 15-minute 200v200 match ran with the D3D12 device resident beside our GL
+context: alive, no GL or restore errors.
 
 **Not 1.22.1 — 1.20.1.** The 1.21.0 and 1.22.1 x86 builds call `std::_Throw_Cpp_error`,
 which Wine 9.0's built-in `msvcp140` does not implement: standalone in the instance prefix
@@ -275,9 +316,10 @@ Why it fits:
 - **The restorer is terrain-only so far.** Feature sprites and unit textures go through the
   same job next (they have colour keys, so the inpaint stand-in of §2.5 lands with them), and
   the unit atlas needs its 4-texel pad, alignment and mips.
-- **The first restore blocks nothing but is visible**: 22.6 s during which Classic++ terrain
-  draws indexed, then switches. Acceptable for a spike; a loading-screen hook or a tacli
-  pre-warm of the cache would hide it.
+- **The first restore blocks nothing but is visible**: on the CPU 19–23 s during which
+  Classic++ terrain draws indexed, then switches; **on DirectML 0.6 s, which is no longer
+  worth hiding** on a map this size. A loading-screen hook or a tacli pre-warm still pays on
+  the CPU fallback and on the largest maps (11561 tiles ≈ 1.4 s GPU, 44 s CPU).
 - **The cache's format is undecided.** Today it is raw RGBA, 19.8 MB for Two Continents and
   4.4 GB if every stock map were played (275 maps, 1.12 M tiles, median 3218, largest 11561).
   Measured on the real cache **[MEASURED 2026-09-04]**, per Two Continents / all maps:
@@ -312,6 +354,15 @@ Why it fits:
   needs a stencil pass per nanoframe.
 - **Windows users** need the VC++ 2019 redistributable for onnxruntime.dll; under Wine the
   built-in runtime sufficed.
+- **The GPU path's shape on other machines is untested.** DirectML was measured on one
+  adapter (RTX 4070, NVIDIA 595.84, vkd3d-proton 3.0.1) and picks device 0 unconditionally —
+  a laptop whose device 0 is an integrated GPU would get that one, and no fallback compares
+  the two. Nothing has run on AMD or Intel, on real Windows, or on Wine's built-in D3D12
+  once it grows `EnumerateMetaCommands`. Every failure falls back to the CPU provider, so
+  the risk is speed, not correctness.
+- **The GLSL conv passes are now a fallback, not the plan.** DirectML reaches the GPU with no
+  shader of ours, so the hand-written passes are only worth building if the vkd3d-proton
+  dependency has to go.
 
 ---
 

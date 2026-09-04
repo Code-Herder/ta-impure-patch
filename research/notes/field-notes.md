@@ -178,6 +178,29 @@ cost time; each is a landmine for the next GL-hook we add.
   with `glReadPixels` — our `tagpu_glshot.trigger` writes `tagpu_gl.ppm` (convert with
   `convert tagpu_gl.ppm out.png`). The framebuffer is the whole window (desktop-res, letterboxed),
   not the 640×480 logical surface. [VERIFIED]
+- **Wine keys loaded modules by PATH, so you cannot pre-empt a built-in DLL by loading yours
+  first.** The trick that works on Windows — `LoadLibraryA("C:\\game\\d3d12.dll")` from our own
+  thread, so a library's later `LoadLibraryA("d3d12.dll")` finds the module already loaded —
+  does nothing here: the by-name load resolves to `system32\d3d12.dll`, sees a different path,
+  and loads the built-in beside ours. Measured 2026-09-04 with vkd3d-proton and DirectML: both
+  preloads returned valid handles and DirectML still got wine's `vkd3d`. **The only lever is
+  `WINEDLLOVERRIDES`**, which is per-process env and therefore the launcher's job, not the
+  DLL's — `tacli` sets `d3d12,d3d12core=n,b` ("n,b" so an instance missing the files keeps the
+  built-in rather than failing the load). [VERIFIED]
+- **Wine 9's built-in D3D12 (`vkd3d`) cannot host DirectML.** It creates the device on the
+  RTX 4070 at feature level 11_1, then `ID3D12Device5::EnumerateMetaCommands` is a `stub!` and
+  the ONNX Runtime DirectML provider append fails with `E_NOTIMPL` at
+  `dml_provider_factory.cc(520)`; `CheckFeatureSupport` also answers shader model **0x51** to
+  DirectML's **0x66** ask, so its DXIL shaders would not compile even past that.
+  **vkd3d-proton 3.0.1 hosts it** — upstream still ships an `x86/` pair in the release tarball
+  (Proton's own copy under `files/lib/wine/vkd3d-proton/i386-windows` works identically).
+  `WINEDEBUG=+dxgi,+d3d12,+vkd3d` names the stub directly; that is how this was found.
+  [VERIFIED 2026-09-04]
+- **A DXGI/D3D12 probe needs a live `DISPLAY` even when it draws nothing.** With no display the
+  factory dies at `CreateDXGIFactory2` → `wined3d_caps_gl_ctx_create Failed to create a window`
+  → `dxgi_factory_create ... hr 0x887a0004` (`DXGI_ERROR_UNSUPPORTED`), which reads like "this
+  GPU cannot do D3D12" and is not. An agent shell's inherited `DISPLAY=:0` is usually the wrong
+  one — check `/tmp/.X11-unix` and `xdpyinfo` (this machine's live session is `:1`). [VERIFIED]
 
 
 ## G2 state-read — findings (2026-08-31)

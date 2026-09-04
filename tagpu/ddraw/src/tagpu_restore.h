@@ -4,6 +4,10 @@
    through ONNX Runtime, once per map, on a worker thread. Design and the
    measurements behind it: research/notes/renderers.md 2.5. */
 
+/* gamedir/tagpu_restorecpu.on — read once, when the runtime is first loaded:
+   keeps the model on the CPU provider even where DirectML would load, for an
+   A/B of the two. The restored pixels are the same either way. */
+
 /* gamedir/tagpu_classicpp.on — the renderer switch, polled at most twice a
    second. Absent = Classic, exactly today's pixels. */
 int tagpu_classicpp_on(void);

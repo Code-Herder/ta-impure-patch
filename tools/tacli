@@ -301,6 +301,13 @@ class Instance:
         # ddraw is always ours; DirectPlay is appended only for instances launched
         # with --dplay, so a stock single-player instance keeps wine's builtin.
         overrides = ["ddraw=n,b"]
+        # The Classic++ restorer's DirectML provider is a D3D12 stack, and wine 9's
+        # built-in vkd3d refuses it (ID3D12Device5::EnumerateMetaCommands is a stub,
+        # shader model 5.1 against DirectML's 6.6 ask). vkd3d-proton's 32-bit
+        # d3d12.dll in the gamedir serves it, but only if native is preferred here;
+        # "n,b" keeps the built-in for an instance that has no such file, and nothing
+        # else in TA touches D3D12 either way.
+        overrides.append("d3d12,d3d12core=n,b")
         if meta.get("dplay"):
             overrides.append(DPLAY_OVERRIDES)
         e["WINEDLLOVERRIDES"] = ";".join(overrides)
@@ -508,11 +515,24 @@ def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
                     + "".join(f"{k}={v}\r\n" for k, v in prefs))
 
 
+# The Classic++ restorer's inference stack, installed into the template gamedir by
+# tools/fetch_onnxruntime.sh. mirror_gamedir() runs only at create, so an instance
+# made before a component existed would never see it — these are re-linked on every
+# launch instead. Absent from the template is fine: the restorer logs why and falls
+# back (no runtime at all -> indexed terrain; no d3d12 -> the CPU provider).
+RESTORER_FILES = ("onnxruntime.dll", "full.onnx", "DirectML.dll",
+                  "d3d12.dll", "d3d12core.dll")
+
+
 def deploy_dll(inst: Instance):
     """Pin a copy of the fork: rebuilds never disturb a running instance."""
     if not BUILT_DLL.exists():
         die(f"fork DLL not built: {BUILT_DLL}")
     shutil.copy2(BUILT_DLL, inst.gamedir / "ddraw.dll")
+    for name in RESTORER_FILES:
+        src, dst = TEMPLATE_GAMEDIR / name, inst.gamedir / name
+        if src.exists() and not (dst.exists() or dst.is_symlink()):
+            dst.symlink_to(src.resolve() if src.is_symlink() else src)
 
 
 def clone_prefix(inst: Instance):

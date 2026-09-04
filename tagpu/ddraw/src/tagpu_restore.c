@@ -20,6 +20,15 @@
    10.5 ms per 32x32 frame single-threaded (2026-09-04); what this module adds
    to that experiment is being INSIDE the game's process.
 
+   THE PROVIDER. The DirectML flavour of the same 1.20.1 package (a superset:
+   its DLL runs the CPU provider at the same speed) puts the model on the GPU,
+   and try_dml() below takes it whenever the append succeeds. Standalone under
+   Wine 9 on an RTX 4070, batches of 64 as this module issues them: 0.094 ms
+   per 32x32 tile and 0.241 ms per 56x56 tile against 3.16 / 9.95 ms on four
+   CPU threads — 34x and 41x — and the two agree to 4.8e-7 (0.0001 of an 8-bit
+   level), so DirectML is running the same fp32 graph, not a half-precision
+   one. It needs vkd3d-proton for its D3D12; see try_dml().
+
    THE MODEL. full.onnx: 12 3x3 convolutions, BatchNorm folded, output =
    input - net(input); the graph is Conv/Relu/Sub only, input "rgb" as
    [n,3,h,w] float in 0..1, NCHW. Every tile is 32x32, so a whole map goes
@@ -114,6 +123,7 @@ static OrtSession*      s_session;
 static OrtMemoryInfo*   s_mem;
 static char*            s_outName;
 static int              s_rtState = 0;       /* 0 untried, 1 ready, -1 failed */
+static int              s_gpu = 0;           /* 1 when the session runs on DirectML  */
 
 static void cs_init(void)
 {
@@ -132,6 +142,66 @@ static int ort_ok(OrtStatus* st, const char* what)
     return 0;
 }
 
+/* ---- the execution provider ----
+   DirectML puts the model on the GPU. It is a Direct3D 12 stack, so under Wine
+   it needs a D3D12 that implements ID3D12Device5::EnumerateMetaCommands and
+   shader model 6: Wine 9's built-in vkd3d does neither and fails the append with
+   E_NOTIMPL (measured 2026-09-04, `d3d12_device_EnumerateMetaCommands ... stub!`,
+   with CheckFeatureSupport answering shader model 0x51 to DirectML's 0x66 ask);
+   vkd3d-proton's 32-bit d3d12.dll does both, and needs WINEDLLOVERRIDES to be
+   picked over the built-in (tacli sets it). Every failure path here falls back to
+   the CPU provider, which is what a stock Wine and a runtime without the DirectML
+   export both get.  tagpu_restorecpu.on forces the CPU side for an A/B. */
+static int try_dml(HMODULE h, OrtSessionOptions* so)
+{
+    typedef OrtStatus* (ORT_API_CALL *PFN_DML)(OrtSessionOptions*, int);
+    PFN_DML dml;
+    OrtStatus* st;
+    char b[512];
+
+    if (GetFileAttributesA("tagpu_restorecpu.on") != INVALID_FILE_ATTRIBUTES) {
+        rlog("restore: tagpu_restorecpu.on -- CPU provider by request");
+        return 0;
+    }
+    dml = (PFN_DML)GetProcAddress(h, "OrtSessionOptionsAppendExecutionProvider_DML");
+    if (!dml) {
+        rlog("restore: no DirectML export in this onnxruntime -- CPU provider");
+        return 0;
+    }
+    /* DirectML supports neither the memory-pattern planner nor parallel execution */
+    ort_ok(s_api->DisableMemPattern(so), "DisableMemPattern");
+    ort_ok(s_api->SetSessionExecutionMode(so, ORT_SEQUENTIAL), "SetSessionExecutionMode");
+    st = dml(so, 0);
+    if (st) {
+        _snprintf(b, sizeof b, "restore: DirectML unavailable -- CPU provider (%s)", s_api->GetErrorMessage(st));
+        rlog(b);
+        s_api->ReleaseStatus(st);
+        return 0;
+    }
+    return 1;
+}
+
+/* Build the session on one provider; 1 = s_session is live and s_gpu says which. */
+static int build_session(HMODULE h, int want_gpu)
+{
+    OrtSessionOptions* so = NULL;
+    int built;
+
+    if (!ort_ok(s_api->CreateSessionOptions(&so), "CreateSessionOptions")) return 0;
+    ort_ok(s_api->SetSessionGraphOptimizationLevel(so, ORT_ENABLE_ALL), "SetSessionGraphOptimizationLevel");
+    s_gpu = want_gpu ? try_dml(h, so) : 0;
+    if (want_gpu && !s_gpu) { s_api->ReleaseSessionOptions(so); return 0; }
+    if (!s_gpu)
+        /* a fixed intra-op pool for the spike; the runtime's default probes the
+           CPU topology, which is one more thing to rule out under Wine */
+        ort_ok(s_api->SetIntraOpNumThreads(so, 4), "SetIntraOpNumThreads");
+    rlog(s_gpu ? "restore: DirectML provider on (device 0); creating the session on full.onnx"
+               : "restore: CPU provider, 4 intra-op threads; creating the session on full.onnx");
+    built = ort_ok(s_api->CreateSession(s_env, MODEL_FILE, so, &s_session), "CreateSession(full.onnx)");
+    s_api->ReleaseSessionOptions(so);
+    return built;
+}
+
 static int ensure_runtime(void)     /* s_cs held */
 {
     typedef const OrtApiBase* (ORT_API_CALL *PFN_GETBASE)(void);
@@ -139,7 +209,6 @@ static int ensure_runtime(void)     /* s_cs held */
     HMODULE h = NULL;
     PFN_GETBASE getbase;
     const OrtApiBase* base;
-    OrtSessionOptions* so = NULL;
     OrtAllocator* alloc = NULL;
     double t0, t1, t2;
 
@@ -171,24 +240,18 @@ static int ensure_runtime(void)     /* s_cs held */
     _snprintf(b, sizeof b, "restore: onnxruntime %s loaded in %.0f ms; creating the session", base->GetVersionString(), t1 - t0); rlog(b);
     if (!ort_ok(s_api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "tagpu", &s_env), "CreateEnv")) { s_rtState = -1; return 0; }
     rlog("restore: env created");
-    if (!ort_ok(s_api->CreateSessionOptions(&so), "CreateSessionOptions")) { s_rtState = -1; return 0; }
-    ort_ok(s_api->SetSessionGraphOptimizationLevel(so, ORT_ENABLE_ALL), "SetSessionGraphOptimizationLevel");
-    /* a fixed intra-op pool for the spike; the runtime's default probes the
-       CPU topology, which is one more thing to rule out under Wine */
-    ort_ok(s_api->SetIntraOpNumThreads(so, 4), "SetIntraOpNumThreads");
-    rlog("restore: session options set; creating the session on full.onnx");
-    if (!ort_ok(s_api->CreateSession(s_env, MODEL_FILE, so, &s_session), "CreateSession(full.onnx)")) {
-        s_api->ReleaseSessionOptions(so); s_rtState = -1; return 0;
-    }
-    s_api->ReleaseSessionOptions(so);
+    /* DirectML first, the CPU if it is unavailable OR if its session does not
+       build: the append succeeding does not guarantee the graph lands on it, and
+       losing the restorer altogether is a worse answer than running it slowly. */
+    if (!build_session(h, 1) && !build_session(h, 0)) { s_rtState = -1; return 0; }
     if (!ort_ok(s_api->GetAllocatorWithDefaultOptions(&alloc), "GetAllocatorWithDefaultOptions") ||
         !ort_ok(s_api->SessionGetOutputName(s_session, 0, alloc, &s_outName), "SessionGetOutputName") ||
         !ort_ok(s_api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &s_mem), "CreateCpuMemoryInfo")) {
         s_rtState = -1; return 0;
     }
     t2 = now_ms();
-    _snprintf(b, sizeof b, "restore: onnxruntime %s loaded in %.0f ms, session on full.onnx in %.0f ms (api %d, output '%s')",
-              base->GetVersionString(), t1 - t0, t2 - t1, ORT_API_VERSION, s_outName);
+    _snprintf(b, sizeof b, "restore: onnxruntime %s loaded in %.0f ms, session on full.onnx in %.0f ms on %s (api %d, output '%s')",
+              base->GetVersionString(), t1 - t0, t2 - t1, s_gpu ? "DirectML" : "the CPU", ORT_API_VERSION, s_outName);
     rlog(b);
     s_rtState = 1;
     return 1;
@@ -333,18 +396,23 @@ static DWORD WINAPI job_main(LPVOID p)
     float *in = NULL, *out = NULL;
     int idx[BATCH];
 
-    EnterCriticalSection(&s_cs);
-    ok = ensure_runtime();
-    LeaveCriticalSection(&s_cs);
-    if (!ok) { InterlockedExchange(&j->state, -1); return 0; }
+    /* The cache is plain file I/O and needs nothing from the runtime, so read it
+       BEFORE loading one: a map already restored then never pays for a session it
+       will not use — 1.9 s to build the DirectML one against 30 ms to read the
+       atlas, which on the GPU is the whole cost of a cached load. */
     tr = now_ms();
-
     if (cache_read(j)) {
         _snprintf(b, sizeof b, "restore: terrain gen %d: %d tiles from cache in %.0f ms", j->gen, j->count, now_ms() - tr);
         rlog(b);
         InterlockedExchange(&j->state, 1);
         return 0;
     }
+
+    EnterCriticalSection(&s_cs);
+    ok = ensure_runtime();
+    LeaveCriticalSection(&s_cs);
+    if (!ok) { InterlockedExchange(&j->state, -1); return 0; }
+    tr = now_ms();
 
     j->rgba = (unsigned char*)malloc((size_t)j->count * TILE_BYTES * 4);
     wrap = (unsigned char*)malloc((size_t)j->count);
@@ -380,8 +448,8 @@ static DWORD WINAPI job_main(LPVOID p)
         return 0;
     }
     cache_write(j);
-    _snprintf(b, sizeof b, "restore: terrain gen %d: %d tiles (%d wrap-padded) in %d batches, %.0f ms model (%.0f ms total), cached",
-              j->gen, j->count, nwrap, nb, now_ms() - tr, now_ms() - t0);
+    _snprintf(b, sizeof b, "restore: terrain gen %d: %d tiles (%d wrap-padded) in %d batches on %s, %.0f ms model (%.0f ms total), cached",
+              j->gen, j->count, nwrap, nb, s_gpu ? "DirectML" : "the CPU", now_ms() - tr, now_ms() - t0);
     rlog(b);
     InterlockedExchange(&j->state, 1);
     return 0;

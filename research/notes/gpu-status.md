@@ -33,7 +33,7 @@ moved by the composite too.
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e | `tagpu_zoom.c` + the composite |
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + 1 more + a 3-site byte patch, all behind `vpwide.on` |
-| Terrain in **restored true colour** (Classic++, `tagpu_classicpp.on`) | G14a (spike, 2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 inside the DLL, once per map, off-thread; `tagpu_terr.c` uploads the result as a second atlas and samples it. Reads only — see [Classic and Classic++ renderers](renderers.html) §2.5 |
+| Terrain in **restored true colour** (Classic++, `tagpu_classicpp.on`) | G14a (spike, 2026-09-04); GPU G14b (2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 inside the DLL, once per map, off-thread, on the **DirectML** provider where it loads (0.6 s for Two Continents' 5062 tiles) and on the CPU where it does not (19 s); `tagpu_terr.c` uploads the result as a second atlas and samples it. Reads only — see [Classic and Classic++ renderers](renderers.html) §2.5 |
 | **Chat, dialogs, side panel, minimap, top bar** | **— never** | screen-space and correct at 1:1 at any zoom; they come through the composite key by design |
 
 **Phases.** Phase 0 (foothold) is complete and Phase B (blit-level GPU units) is verified
