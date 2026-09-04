@@ -169,14 +169,45 @@ int   tagpu_zoom_to_engine_draw(int* x, int* y);
    engine can name, and the clamped one is somewhere the player did not click. */
 int   tagpu_zoom_drop_mouse(UINT msg, LPARAM lparam);
 
+/* The pointer position the engine was last HANDED, and the `u` we answered it
+   with. Called from fake_GetCursorPos, which is the engine's only source for
+   where it draws its cursor: `0x4C2870` polls it, stores the answer in the
+   mouse object at `+0x196` and blits the sprite from there in the same call.
+
+   Recording the pair is what makes the composite able to move that sprite.
+   Reading `g_ddraw.cursor` again when the frame is composited samples a MOVING
+   pointer a second time, on a different thread, and the two samples differ by
+   however far the pointer travelled in between — which at zoom z puts the
+   sprite `1/z` times that far from where the composite looks for it. Measured
+   at 0.25x with a real mouse: a 26 px sampling skew placed the sprite 104 px
+   out, past the 64 px box the composite moves, so it was neither covered at `u`
+   nor painted at `s` and stayed where the engine had put it — crossing the
+   frame at 4x the pointer's speed and into the side panel.
+
+   `ret` is the caller's return address, and it is what says whether THIS poll
+   moved the sprite: the engine reaches GetCursorPos from six places and only
+   three of them draw from the answer (see tagpu_zoom.c). Pass NULL for
+   cnc-ddraw's own internal reads of the pointer — the WH_MOUSE hook and the two
+   adjmouse/vhack paths — which run on the message thread and would otherwise
+   publish a newer sample than the sprite was drawn from, the same skew again. */
+void  tagpu_zoom_note_cursor(const void* ret, int sx, int sy, int ux, int uy);
+
+/* Take the pair belonging to the engine surface just uploaded. Render thread,
+   at that upload and nowhere else: the texture the composite samples the cursor
+   OUT of is only replaced when the game flipped, so pinning the pair to it is
+   closer than using whatever the engine has polled since. */
+void  tagpu_zoom_latch_cursor(void);
+
 /* How far the engine's own cursor sprite has to be moved to sit back under the
-   pointer, for the CURRENT pointer position: (s - u), plus `u` itself, which is
-   where the engine drew it and therefore the box worth capturing. The engine
-   draws its cursor wherever it thinks the mouse is, which is `u`, so without
-   this the sprite detaches from the pointer at any zoom != 1. Returns 0 — and
-   leaves every output at zero — when there is nothing to move, which is the
-   common case: zoom 1, or a pointer on the screen-space UI. Any output pointer
-   may be NULL. */
+   pointer: (s - u), plus `u` itself, which is where the engine drew it and
+   therefore the box worth capturing. The engine draws its cursor wherever it
+   thinks the mouse is, which is `u`, so without this the sprite detaches from
+   the pointer at any zoom != 1. BOTH come from the pair
+   tagpu_zoom_note_cursor() recorded, never from a fresh read of the pointer —
+   see there for why that distinction is the whole correctness of this.
+   Returns 0 — and leaves every output at zero — when there is nothing to move,
+   which is the common case: zoom 1, or a pointer on the screen-space UI. Any
+   output pointer may be NULL. */
 int   tagpu_zoom_cursor_shift(int* dx, int* dy, int* ux, int* uy);
 
 /* Rewrite a mouse message's lParam on its way into the engine's own window

@@ -28,7 +28,10 @@
 #include "tagpu_shield.h"
 
 
-BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
+/* `ret` is the engine's return address, or NULL for cnc-ddraw's OWN calls
+   below: only what the engine is told, from the polls it actually draws from,
+   may be recorded as where the cursor sprite is (tagpu_zoom.h). */
+static BOOL cursorpos(LPPOINT lpPoint, const void* ret)
 {
     if (!g_ddraw.ref || !g_ddraw.hwnd || !g_ddraw.width)
         return real_GetCursorPos(lpPoint);
@@ -91,7 +94,9 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
         {
             /* g_ddraw.cursor keeps the TRUE pointer position; only what leaves
                for the engine is unzoomed (tagpu_zoom.h). */
+            int sx = x, sy = y;
             tagpu_zoom_to_engine_draw(&x, &y);
+            if (ret) tagpu_zoom_note_cursor(ret, sx, sy, x, y);
             lpPoint->x = x;
             lpPoint->y = y;
         }
@@ -103,13 +108,27 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
     {
         int cx = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
         int cy = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+        int sx = cx, sy = cy;
 
         tagpu_zoom_to_engine_draw(&cx, &cy);
+        if (ret) tagpu_zoom_note_cursor(ret, sx, sy, cx, cy);
         lpPoint->x = cx;
         lpPoint->y = cy;
     }
 
     return TRUE;
+}
+
+BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
+{
+    return cursorpos(lpPoint, __builtin_return_address(0));
+}
+
+/* cnc-ddraw's own reads of the pointer, which must not be mistaken for the
+   engine's (tagpu_zoom.h). */
+BOOL cursorpos_internal(LPPOINT lpPoint)
+{
+    return cursorpos(lpPoint, NULL);
 }
 
 BOOL WINAPI fake_ClipCursor(const RECT* lpRect)
@@ -762,7 +781,7 @@ void HandleMessage(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMa
                 if (g_config.vhack && !g_config.devmode)
                 {
                     POINT pt = { 0, 0 };
-                    fake_GetCursorPos(&pt);
+                    cursorpos_internal(&pt);
 
                     x = pt.x;
                     y = pt.y;

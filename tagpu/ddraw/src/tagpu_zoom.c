@@ -18,6 +18,7 @@ static volatile LONG  s_vpL, s_vpT, s_vw, s_vh;
 static volatile LONG  s_live;          /* a zoomed world is on screen right now */
 static volatile LONG  s_fresh;         /* the pass published during this frame     */
 static int            g_mmInstalled;   /* tagpu_zoom_init() patched the engine     */
+static void zlog(const char* m);   /* defined with the minimap patch below */
 
 /* The range BOTH levers share. The transform is fine outside it; these are the
    levels the rest of the stack has been checked at. */
@@ -416,25 +417,158 @@ int tagpu_zoom_to_engine_draw(int* x, int* y)
     return to_engine_true(x, y);
 }
 
-#define to_engine_draw_pt to_engine_true
+/* WHICH POLL MOVED THE SPRITE. The engine reaches `GetCursorPos` from six
+   places and only three of them go on to store the answer in the mouse object
+   at `+0x196` and blit the cursor from it:
+
+       0x4C24DE, 0x4C2610, 0x4C28AA   poll -> [obj+0x196] -> blit the sprite
+       0x41CEE7                       the edge-scroll test, polls and returns
+       0x4C2318                       a bare GetMousePos(int*,int*) wrapper
+       0x49F7CA                       a `jmp` thunk to the same import
+
+   A pair recorded from one of the other three is internally consistent — a real
+   pointer position and our real answer for it — but it names a place the SPRITE
+   is not: it is still where the last DRAWING poll put it. The edge-scroll test
+   runs every frame, so left unfiltered it lands last about as often as not.
+   (Which of the two dominates was not separable in the A/B below; the rule is
+   from the disassembly, not from that measurement.)
+
+   The return address separates them and writes nothing to the engine. The three
+   sites are byte-checked once; if this build does not have them there the
+   filter turns itself off and every engine poll is recorded again, which is
+   still better than re-reading a moving pointer, just not exact. */
+#define CURS_RET_A      0x004C24E4u      /* the instruction after each of the */
+#define CURS_RET_B      0x004C2616u      /* three drawing polls               */
+#define CURS_RET_C      0x004C28B0u
+static const unsigned char CURS_CALL[6] = { 0xFF,0x15,0xE4,0xC2,0x4F,0x00 };
+
+static volatile LONG s_pollFilter = -1;  /* -1 unknown, 0 off, 1 on */
+
+static int call_site_is_getcursorpos(unsigned int retva)
+{
+    const void* p = (const void*)(size_t)(retva - sizeof CURS_CALL);
+    return !IsBadReadPtr(p, sizeof CURS_CALL) &&
+           memcmp(p, CURS_CALL, sizeof CURS_CALL) == 0;
+}
+
+static int poll_filter(void)
+{
+    if (s_pollFilter < 0) {
+        LONG on = call_site_is_getcursorpos(CURS_RET_A) &&
+                  call_site_is_getcursorpos(CURS_RET_B) &&
+                  call_site_is_getcursorpos(CURS_RET_C);
+        if (InterlockedCompareExchange(&s_pollFilter, on, -1) == -1)
+            zlog(on ? "zoom: cursor poll filter ON — only 0x4C24DE/0x4C2610/"
+                      "0x4C28AA move the sprite"
+                    : "zoom: cursor poll filter OFF — 0x4C24DE/0x4C2610/0x4C28AA "
+                      "are not GetCursorPos calls in this build; every engine "
+                      "poll will be recorded");
+    }
+    return (int)s_pollFilter;
+}
+
+/* THE PAIR THE ENGINE WAS ACTUALLY HANDED (tagpu_zoom.h). Two packed slots and
+   a sequence counter, written by whichever thread the engine polls on and read
+   by the render thread. A seqlock and not the "live flag stored last" pattern
+   the rest of this file uses, because here the two slots must be read as ONE
+   sample: an `s` from this poll paired with a `u` from the last one is exactly
+   the skew this exists to remove, and a flag cannot rule that out.
+
+   Odd `s_curSeq` means a write is in flight. x86 does not reorder stores with
+   stores or loads with loads, and `volatile` holds the compiler to the same
+   order, so a reader that sees one even sequence number twice around its two
+   loads read a coherent pair. Both coordinates are clamped to the game surface
+   by every caller, so each fits a signed 16-bit half; they are read back
+   through `short` so a negative could never be mistaken for a large positive. */
+static volatile LONG s_curSeq;          /* even and unchanged = the pair is coherent */
+static volatile LONG s_curS, s_curU;    /* (x | y<<16), the pointer and our answer   */
+static volatile LONG s_curLive;         /* the engine has polled at least once        */
+
+static LONG pack_pt(int x, int y)
+{
+    return (LONG)(((unsigned)(y & 0xFFFF) << 16) | (unsigned)(x & 0xFFFF));
+}
+
+void tagpu_zoom_note_cursor(const void* ret, int sx, int sy, int ux, int uy)
+{
+    unsigned int r = (unsigned int)(size_t)ret;
+
+    if (poll_filter() && r != CURS_RET_A && r != CURS_RET_B && r != CURS_RET_C)
+        return;
+
+    InterlockedIncrement(&s_curSeq);             /* odd: in flight */
+    s_curS = pack_pt(sx, sy);
+    s_curU = pack_pt(ux, uy);
+    InterlockedIncrement(&s_curSeq);             /* even: coherent */
+    s_curLive = 1;
+}
+
+/* The pair as of the last engine-surface upload — see tagpu_zoom_latch_cursor(). */
+static int s_latchLive, s_latchSx, s_latchSy, s_latchUx, s_latchUy;
+
+/* One coherent read of that pair. Returns 0 if the engine has never polled, or
+   if four attempts all raced a writer — at which point the honest answer is
+   "no cursor to move this frame", which leaves the sprite where the engine put
+   it for one frame rather than moving it somewhere invented. */
+static int cursor_pair(int* sx, int* sy, int* ux, int* uy)
+{
+    int tries;
+
+    if (!s_curLive) return 0;
+    for (tries = 0; tries < 4; tries++) {
+        LONG a = s_curSeq, ps, pu, b;
+        ps = s_curS;
+        pu = s_curU;
+        b = s_curSeq;
+        if (a != b || (a & 1)) continue;
+        *sx = (int)(short)(ps & 0xFFFF); *sy = (int)(short)((ps >> 16) & 0xFFFF);
+        *ux = (int)(short)(pu & 0xFFFF); *uy = (int)(short)((pu >> 16) & 0xFFFF);
+        return 1;
+    }
+    return 0;
+}
+
+void tagpu_zoom_latch_cursor(void)
+{
+    s_latchLive = cursor_pair(&s_latchSx, &s_latchSy, &s_latchUx, &s_latchUy);
+}
 
 int tagpu_zoom_cursor_shift(int* dx, int* dy, int* ux, int* uy)
 {
-    /* g_ddraw.cursor is the TRUE pointer position: every write site stores `s`
-       and only the engine-facing reads are unzoomed, which is what lets this
-       recover both halves of the pair. */
-    int sx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
-    int sy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
-    int ex = sx, ey = sy;
+    int sx, sy, ex, ey;
 
     if (dx) *dx = 0;
     if (dy) *dy = 0;
     if (ux) *ux = 0;
     if (uy) *uy = 0;
-    /* the DRAW transform, so this agrees with where the engine actually put the
-       sprite: in the ring that is the pointer itself and there is nothing to
-       move (tagpu_zoom_to_engine_draw) */
-    if (!to_engine_draw_pt(&ex, &ey)) return 0;
+
+    /* `ex, ey` is the position the engine drew the sprite at, because it is the
+       number we handed it — not the DRAW transform re-run against a fresh
+       pointer, which is a second sample of something that moves.
+
+       THIS IS A MITIGATION, NOT A CURE, and the honest bound is worth writing
+       down. What is removed is the render-thread-vs-game-thread second sample.
+       What remains is that the composite still cannot know WHICH poll produced
+       the sprite in the surface texture it is looking at: the texture is only
+       replaced when the game flipped, the engine draws its cursor several times
+       per flip, and any residual mismatch is multiplied by 1/z. When it exceeds
+       CURSOR_PAD the sprite is neither covered at `u` nor painted at `s` and
+       shows where the engine left it. Measured, 1920x1080 at 0.25x, a real
+       pointer crossing the band at ~37 px per composited frame, share of motion
+       frames with the cursor left behind at `u`:
+
+           before          11 %, 10 %, 11 %   (three runs)
+           this            6 %,  7 %,  0 %
+
+       The cure is to stop moving the sprite at all — to hand the DRAWING polls
+       the true pointer so the engine blits it under the pointer, and to give
+       the engine its `u` back where the world point is computed
+       (tagpu_vpwide.c's 0x498DA0 stub, which already holds the true pointer).
+       That also fixes hover in the ring and the right-edge scroll, and it is an
+       input-path change, not a composite one. */
+    if (s_latchLive) {
+        sx = s_latchSx; sy = s_latchSy; ex = s_latchUx; ey = s_latchUy;
+    } else if (!cursor_pair(&sx, &sy, &ex, &ey)) return 0;
     if (sx == ex && sy == ey) return 0;      /* nothing to move */
     if (dx) *dx = sx - ex;
     if (dy) *dy = sy - ey;

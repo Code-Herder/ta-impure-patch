@@ -963,7 +963,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             if (g_config.vhack && !g_config.devmode)
             {
                 POINT pt = { 0, 0 };
-                fake_GetCursorPos(&pt);
+                cursorpos_internal(&pt);
 
                 x = pt.x;
                 y = pt.y;

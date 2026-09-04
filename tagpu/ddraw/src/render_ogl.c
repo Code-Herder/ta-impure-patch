@@ -14,6 +14,7 @@
 #include "hook.h"
 #include "tagpu.h"
 #include "tagpu_overlay.h"
+#include "tagpu_zoom.h"
 
 
 static HGLRC ogl_create_core_context(HDC hdc);
@@ -1198,6 +1199,8 @@ static void ogl_render()
 
                 if (row_len != g_ddraw.primary->width)
                     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+
+                tagpu_zoom_latch_cursor();
 
                 s_dbg_uploads++;
             }
