@@ -325,7 +325,10 @@ static void init_gl(void)
         return;
     }
 
-    s_atlasTex = 0; s_setPtr = NULL; s_setCount = 0;
+    /* s_atlasTex = 0 is what forces the rebuild (ensure_atlas tests it first);
+       the set identity must SURVIVE, or ensure_atlas cannot tell "same set, new
+       context" from "new map" and throws the restore away -- see glreset */
+    s_atlasTex = 0;
     s_state = 1;
     flog("terr: GL ready");
 }
@@ -334,8 +337,12 @@ void tagpu_terr_glreset(void)
 {
     s_state = 0;
     s_atlasTex = 0;                     /* the id died with the context */
-    s_setPtr = NULL; s_setCount = 0;
     s_rgbTex = 0;
+    /* The set identity (s_setPtr/s_setCount/s_setPix) is deliberately LEFT ALONE:
+       zeroing s_atlasTex already forces the atlas rebuild, and ensure_atlas
+       compares that identity to decide whether the restore survives. Clearing it
+       here made the comparison always differ, so every mode change restarted the
+       whole restore -- the case this function exists to avoid. */
     if (s_rgbState == 2) s_rgbState = 1;   /* the result is kept: re-upload */
 }
 

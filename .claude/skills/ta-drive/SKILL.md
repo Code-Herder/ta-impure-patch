@@ -549,8 +549,8 @@ because a missing one is the whole pass silently absent.
 `tacli arm <i> classicpp.on` turns on the restored true-colour terrain; it is *polled* twice
 a second, so it flips live for an A/B. **`tagpu_restorecpu.on` is not** — it is read once,
 when the inference runtime is first loaded, so arm it **before** the launch you are measuring.
-It keeps the model on the CPU provider where DirectML would otherwise take the GPU (0.6 s
-against 19 s for Two Continents' 5062 tiles); the restored pixels are the same either way, so
+It keeps the model on the CPU provider where DirectML would otherwise take the GPU (1.8 s
+against 21 s for Two Continents' 5062 tiles, cold); the restored pixels are the same either way, so
 this is for timing the two, not for choosing a look. Read the result in `tagpu.log`:
 `restore: ... on DirectML` or `on the CPU`, then the per-map `N tiles ... in M batches on ...`
 line. A map already in `gamedir/tagpu_cache/` is read back in ~30 ms and no model runs at all —

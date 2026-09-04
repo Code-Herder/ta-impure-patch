@@ -138,6 +138,7 @@ static int ort_ok(OrtStatus* st, const char* what)
     char b[512];
     if (!st) return 1;
     _snprintf(b, sizeof b, "restore: %s failed: %s", what, s_api->GetErrorMessage(st));
+    b[sizeof b - 1] = 0;                 /* MSVCRT leaves it unterminated on truncation */
     rlog(b);
     s_api->ReleaseStatus(st);
     return 0;
@@ -175,6 +176,7 @@ static int try_dml(HMODULE h, OrtSessionOptions* so)
     st = dml(so, 0);
     if (st) {
         _snprintf(b, sizeof b, "restore: DirectML unavailable -- CPU provider (%s)", s_api->GetErrorMessage(st));
+        b[sizeof b - 1] = 0;             /* as ort_ok: the message is unbounded */
         rlog(b);
         s_api->ReleaseStatus(st);
         return 0;
@@ -259,16 +261,25 @@ static int ensure_runtime(void)     /* s_cs held */
 }
 
 /* ---- one job ---- */
-typedef struct {
+typedef struct Job {
     int            gen, count;
     unsigned char* tiles;                /* count * TILE_BYTES                  */
     unsigned char  pal[256 * 4];
     unsigned char* rgba;                 /* count * TILE_BYTES * 4 when done    */
     volatile LONG  state;                /* 0 running, 1 done, -1 failed        */
     HANDLE         thread;
+    struct Job*    next;                 /* the parked list, below              */
 } Job;
 static Job*          s_job;              /* the latest job; older ones free themselves */
 static volatile LONG s_gen = 0;
+
+/* Superseded jobs whose thread has not exited yet. begin() is called from the
+   RENDER thread, so it must never wait on one: an abandoned job only notices the
+   generation moved at a batch boundary (hundreds of ms on the CPU provider), and
+   a runtime wedged inside CreateEnv -- which onnxruntime 1.21/1.22 does under
+   wine, see field-notes -- would never signal at all. They are reaped with a zero
+   timeout on each begin instead, and each one drains on its own within a batch. */
+static Job* s_parked;
 
 static void job_free(Job* j)
 {
@@ -277,6 +288,15 @@ static void job_free(Job* j)
     if (j->rgba) free(j->rgba);
     if (j->thread) CloseHandle(j->thread);
     free(j);
+}
+
+static void reap_parked(void)            /* render thread; never blocks */
+{
+    Job **pp = &s_parked, *p;
+    while ((p = *pp) != NULL) {
+        if (WaitForSingleObject(p->thread, 0) == WAIT_OBJECT_0) { *pp = p->next; job_free(p); }
+        else pp = &p->next;
+    }
 }
 
 /* classical.is_tileable on the tile's palette colours: mean |left - right|
@@ -399,7 +419,7 @@ static DWORD WINAPI job_main(LPVOID p)
 
     /* The cache is plain file I/O and needs nothing from the runtime, so read it
        BEFORE loading one: a map already restored then never pays for a session it
-       will not use — 1.9 s to build the DirectML one against 30 ms to read the
+       will not use — 1.0-1.9 s to build the DirectML one against 30 ms to read the
        atlas, which on the GPU is the whole cost of a cached load. */
     tr = now_ms();
     if (cache_read(j)) {
@@ -472,12 +492,12 @@ int tagpu_restore_terrain_begin(const unsigned char* tiles, int count, const uns
     j->gen = (int)InterlockedIncrement(&s_gen);
     /* the previous job, if any: it exits on its own when it sees s_gen move;
        its buffers go when the thread has gone */
+    reap_parked();
     if (s_job) {
         Job* old = s_job;
         if (old->thread && WaitForSingleObject(old->thread, 0) == WAIT_OBJECT_0) job_free(old);
         else if (!old->thread) job_free(old);
-        else { /* still running: leak-free later — a finished old thread frees nothing itself, so park it */
-            static Job* s_park; if (s_park) { WaitForSingleObject(s_park->thread, INFINITE); job_free(s_park); } s_park = old; }
+        else { old->next = s_parked; s_parked = old; }   /* still running: reaped on a later begin */
     }
     s_job = j;
     j->thread = CreateThread(NULL, 0, job_main, j, 0, NULL);

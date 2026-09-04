@@ -175,11 +175,25 @@ question the owner asked — why not the GPU — has three answers stacked on ea
   in 1.0 s against pinned 3.0.1's 1.4–1.9 s, and restores at the same rate. `launch` and
   `scenario load` print which one they linked whenever it is not the pinned copy.
 
-**What the GPU is worth, in the running game on Two Continents** **[MEASURED 2026-09-04]**:
-the same 5062 tiles in 80 batches take **589–662 ms on DirectML against 19.2 s on four CPU
-threads — 29–33×**; standalone the per-batch gap over two runs is **34–37×** at 32×32
+**What the GPU is worth, in the running game on Two Continents** **[MEASURED 2026-09-04, and
+CORRECTED — read the note below before quoting an in-game figure]**: the same 5062 tiles in 80
+batches (73 plain, 7 wrap-padded) take **1.83–1.84 s on DirectML against 20.8 s on four CPU
+threads — 11×**, cold, one generation, measured after the restart bug below was fixed.
+Standalone, where the model runs alone, the per-batch gap is far wider: **34–37×** at 32×32
 (0.087–0.094 against 3.16–3.19 ms/tile) and **41–42×** at the wrap-padded 56×56 (0.239–0.241
-against 9.95–10.08). The GPU's cost is a **one-time ~1.9 s session build** (against
+against 9.95–10.08).
+
+**Why the in-game gap is a third of the standalone one, and why an earlier number here said
+29–33×.** Those standalone rates predict **0.55 s** for this exact batch mix on DirectML and
+**19.4 s** on the CPU. The CPU restore lands within 7 % of its prediction (20.8 s); the
+DirectML one takes 3.3× its own (1.83 s against 0.55 s). The difference is *when* the batches
+run. Until this landing, `tagpu_terr.c` threw the restore away on the GL reset the game does at
+startup and began a second one — so the figure recorded here, 589–662 ms, was that **second**
+generation, running after the map was live and the engine was idle. With one generation the
+work overlaps map load, where the engine saturates the CPU, and DirectML's per-batch submission
+is CPU-side work. **That last sentence is [INFERRED]** — the timing is measured, the cause is
+not isolated. The honest summary: the GPU is worth ~11× on a cold map load today and ~36× on
+the model alone, and closing that gap has not been attempted. The GPU's cost is a **one-time 1.0–1.9 s session build**, depending on the vkd3d-proton build (against
 21 ms on the CPU) on the worker thread — which made a *cached* map cost more to reach the
 runtime than to read its atlas, so the job now **reads the cache before it loads any runtime**
 and a restored map never builds a session at all. The pre-warm idea in §4 is worth more, not
@@ -195,7 +209,7 @@ context: alive, no GL or restore errors, 13,514 log lines and none of them an er
 160 MiB as a pure graphics process and 320 MiB with the D3D12 device and DirectML session
 alive (`nvidia-smi` also reclassifies it `G` → `C+G`). The session is never released, so that
 is held for the whole run, not just the restore; releasing it after the last atlas would give
-it back at the price of a 1.4–1.9 s rebuild on the next map. Irrelevant on a 12 GB card,
+it back at the price of a 1.0–1.9 s rebuild on the next map. Irrelevant on a 12 GB card,
 worth a thought on a small one. **A cached map pays none of it**: since the job reads the
 cache first, `onnxruntime.dll` is not loaded at all and the process stays at the 160 MiB
 graphics figure.
@@ -334,10 +348,11 @@ Why it fits:
 - **The restorer is terrain-only so far.** Feature sprites and unit textures go through the
   same job next (they have colour keys, so the inpaint stand-in of §2.5 lands with them), and
   the unit atlas needs its 4-texel pad, alignment and mips.
-- **The first restore blocks nothing but is visible**: on the CPU 19–23 s during which
-  Classic++ terrain draws indexed, then switches; **on DirectML 0.6 s, which is no longer
-  worth hiding** on a map this size. A loading-screen hook or a tacli pre-warm still pays on
-  the CPU fallback and on the largest maps (11561 tiles ≈ 1.4 s GPU, 44 s CPU).
+- **The first restore blocks nothing but is visible**: on the CPU ~21 s during which Classic++
+  terrain draws indexed, then switches; **on DirectML 1.8 s (2.9 s from map load, including the
+  runtime and the session)**. A loading-screen hook or a tacli pre-warm still pays on the CPU
+  fallback and on the largest maps (11561 tiles ≈ 4 s GPU, 47 s CPU at the measured in-game
+  rates).
 - **The cache's format is undecided.** Today it is raw RGBA, 19.8 MB for Two Continents and
   4.4 GB if every stock map were played (275 maps, 1.12 M tiles, median 3218, largest 11561).
   Measured on the real cache **[MEASURED 2026-09-04]**, per Two Continents / all maps:
@@ -356,9 +371,10 @@ Why it fits:
   *between* maps. Loading the maps in name order, the median map adds 1,611 new tiles
   (mean 2,011) and 76 maps add under 10 % — several variants share a whole tile set. So
   the cache should be a **content-keyed tile bank shared by every map**, not a file per
-  map: each load restores only the tiles the bank lacks (a median map's 1,611 new tiles
-  ≈ 0.2 s on DirectML at the measured 0.12 ms/tile, ≈ 6 s on four CPU threads at 3.8;
-  a variant ≈ 0), and the whole game's ceiling is the unique count:
+  map: each load restores only the tiles the bank lacks (a median map's 1,611 new tiles ≈ 0.6 s
+  on DirectML at the measured in-game 0.36 ms/tile, ≈ 6.6 s on four CPU threads at 4.1 — both
+  rates carry this map's fixed warm-up, so a small batch is pessimistic here; a variant ≈ 0),
+  and the whole game's ceiling is the unique count:
   raw RGBA 2.2 GB, zstd 0.93 GB, BC7 0.54 GB, BC1 0.27 GB. The palette is one for all
   maps, so a content key is valid across them.
 - **Definition → loaded model → texture frames**: the walk the load-time atlas build needs,

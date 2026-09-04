@@ -46,7 +46,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
-| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04), **on the GPU** (G14b, 2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 **inside the DLL**, once per map on a worker thread, cached under `gamedir/tagpu_cache`; `tagpu_terr.c` uploads a second atlas and samples it under `tagpu_classicpp.on`. The provider is DirectML where it loads (Wine needs vkd3d-proton for the D3D12 under it), the CPU where it does not. The restorer engine decision for [Classic and Classic++](renderers.html) §2.5 | Two Continents: runtime 11–13 ms, session 23–25 ms CPU / 1.9 s DirectML, 5062 tiles in **589–662 ms on DirectML against 19.2 s on 4 CPU threads** / 29 ms cached; the two providers' atlases differ in 61 of 20.7 M bytes, all by 1 level; Classic baselines unchanged; **two 15-min 200v200 soaks, runtime then D3D12 device resident: alive, no GL or restore errors** |
+| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04), **on the GPU** (G14b, 2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 **inside the DLL**, once per map on a worker thread, cached under `gamedir/tagpu_cache`; `tagpu_terr.c` uploads a second atlas and samples it under `tagpu_classicpp.on`. The provider is DirectML where it loads (Wine needs vkd3d-proton for the D3D12 under it), the CPU where it does not. The restorer engine decision for [Classic and Classic++](renderers.html) §2.5 | Two Continents: runtime 11–13 ms, session 21 ms CPU / 1.0–1.9 s DirectML, 5062 tiles cold in **1.83 s on DirectML against 20.8 s on 4 CPU threads — 11×** (standalone, model alone, 34–42×) / 24–29 ms cached; the two providers' atlases differ in 61 of 20.7 M bytes, all by 1 level; Classic baselines unchanged; **two 15-min 200v200 soaks, runtime then D3D12 device resident: alive, no GL or restore errors** |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
@@ -99,9 +99,23 @@ one that does not — which keeps wine's built-in and puts the restorer on the C
 them by full path from our own thread is not a substitute — Wine keys modules by path. On real
 Windows the system D3D12 hosts DirectML directly.
 
-**Measured, Two Continents, in the running game:** 5062 tiles in 80 batches, **589–662 ms on
-DirectML against 19,211 ms on four CPU threads — 29–33×**; standalone the per-batch gap is
-34–37× at 32×32 and 41–42× at the wrap-padded 56×56. It costs a one-time **1.9 s session build** (21 ms
+**A bug the review found, and what it did to these numbers.** `tagpu_terr.c` kept a
+set-identity check meant to preserve a restore across a GL context reset, but `glreset` and
+`init_gl` both cleared the very fields it compared, so the check could never match: the reset
+the game does at startup — every launch — threw the restore away and started a second one. The
+fix is to let the identity survive (zeroing `s_atlasTex` is what forces the atlas rebuild, and
+it already did). Confirmed by the log: one `terrain gen 1 started` per launch now, where every
+previous run showed `gen 1` abandoned and `gen 2` doing the work. **This invalidated the
+headline measurement**, because the number recorded was that second generation, running after
+the map was live; with one generation the work overlaps map load.
+
+**Measured, Two Continents, in the running game, cold and single-generation:** 5062 tiles in 80
+batches, **1.83–1.84 s on DirectML against 20,777 ms on four CPU threads — 11×**. Standalone,
+model alone, the per-batch gap is 34–37× at 32×32 and 41–42× at the wrap-padded 56×56, and
+those rates predict 0.55 s / 19.4 s for this batch mix — the CPU lands within 7 % of its
+prediction, DirectML at 3.3× its own. That gap is measured and **not explained**; the plausible
+cause, that DirectML's per-batch submission is CPU-side work now competing with map load, is
+`[INFERRED]` and untested. It costs a one-time **1.0–1.9 s session build**, depending on the vkd3d-proton build (21 ms
 on the CPU) — which made a cached map cost more to reach the runtime than to read its atlas,
 so the job now reads the cache *before* loading any runtime and a restored map builds no
 session at all. The pre-warm idea is worth more, not less. **Correctness**: restoring the map
