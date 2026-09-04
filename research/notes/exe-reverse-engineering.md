@@ -470,6 +470,169 @@ altitude with sea level, which is what the native pass's `fz` gate does.
 **Negative results.** The body punch-out `0x4B9D70(body, scratch, 5, 0)` inside `0x45A790` was read, not
 replicated. `0x459200` itself was not disassembled past `0x459900`.
 
+**A unit under construction casts no shadow until it is nearly finished, and this tree does not
+say why.** [MEASURED 2026-09-03] One ARM solar, same ground, same camera, held at 25 / 50 / 75 /
+85 / 89 / 95 / 99 / 100 % built by the scenario applier and captured off the stock renderer (no
+passes armed). Taking the pixels the *completed* unit darkens by half as the shadow lobe, and its
+own 25 % frame as the bare-terrain reference, the mean luminance over that lobe reads **1.00** at
+25 %, **0.82** at 75 %, **0.84** at 85 %, **0.87** at 89 %, **0.70** at 95 %, **0.71** at 99 % and
+**0.48** complete — no shadow for most of a build, something partial in the last few per cent.
+**Caveat on the fixture:** the applier creates the unit complete and then writes `+0x104`, so its
+composite and cached shadow have a history a lathed unit's does not; the recolour classifies this
+model identically at `p` 28 and 12, so the 89→95 % step is not explained by the staging and may
+be an artefact of that history. Nothing in the branch table above tests
+`Nanoframe`: a building is a structure whether finished or not (see the state-bit measurement
+below), so it reaches `0x45955B`/`0x4592FE` and blits `Object3do+0x14` either way. The
+resolution is therefore in what that cached sprite CONTAINS while the unit is a nanoframe —
+whose composite the dispatch `0x458810` throws away on every progress pulse
+([build-state](build-state.html) §1) — and that was not chased. Recorded as behaviour: our own
+pass suppresses the shadow on `Nanoframe != 0`, which matches every row to 89 % and is
+conservative for the last two.
+
+**`unit+0x110 & 0x20000000` is the STRUCTURE bit.** [MEASURED 2026-09-03] Read live in one game
+from `*(main+0x14357) + idx*0x118 + 0x110`: complete mobile ARMCOM `0x91600371` (clear),
+complete building ARMSOLAR `0x30282321` (set), ARMLAB **under construction** `0x30E42321` (set).
+So the table above is right to call it the structure bit — as the factory-built check of
+2026-09-02 in [shadows & cloak](shadows-cloak.html) already found from the other side (a
+Peewee out of an ARMLAB reads it CLEAR) — and [build-state](build-state.html)'s
+"under-construction/nanoframe state" reading was wrong, corrected there. The consequences are
+larger than a name: `0x45873C` selects the Gouraud rasteriser `0x459C70` for **structures**, not
+for nanoframes, and the only state that means *under construction* is `Nanoframe != 0` at
+`+0x104`. The spawn site `0x485AFE..0x485B03`, which that page cited as where the bit is set,
+computes `(UnitDef+0x241 & 0x200) << 0x15` = bit **`0x40000000`** and writes only that.
+
+## `0x458DD0` — the blit-time build-state effect — mapped by us
+
+[MEASURED 2026-09-03, this project — `objdump` of the pristine Steam build, and detoured live.]
+The whole nanoframe look — the height-threshold recolour `0x458D30` and the wireframe
+`0x458FA0` — is applied at **blit** time to a scratch copy of the composite, every frame
+([build-state](build-state.html)). `thiscall(this, GAFFrame* frame, Object3do* obj)`, `ret 8`;
+`obj` is at `[esp+8]` on entry. Two early-outs, both `xor eax,eax; ret 8`:
+
+| VA | Bytes | What |
+| --- | --- | --- |
+| `0x458DD0` | `53 55 8B 6C 24 0C` | `push ebx; push ebp; mov ebp,[esp+0xC]` — `ebp` := the GAFFrame arg. **Six whole bytes, the detour boundary** (a 5-byte steal would split the `mov`) |
+| `0x458DDA` | `8b 45 14 / 85 c0 / 75 09` | `frame+0x14` — no depth plane, return 0 |
+| `0x458DEA..0x458E06` | `8b 44 24 18 / 8b 50 0c / d9 82 04 01 00 00 / d8 1d c0 d4 4f 00` | `obj+0x0C` → unit, `fld [unit+0x104]`, `fcomp ds:0x4FD4C0` (0.0f) — **`Nanoframe == 0` returns 0**, so this function only ever does anything for a unit under construction |
+| `0x458E11..0x458E1F` | `66 8b 8a a8 00 00 00` | `unit+0xA8` (the slot index) into the oscillator maths |
+
+Our detour (`tagpu_owndraw.c`, the third one) replays those six bytes after `popad` — at the
+entry `esp`, so the esp-relative `mov` reads what it always read — and takes `xor eax,0; ret 8`
+for units the native pass owns, which is the callee's own "did nothing" return. Call sites:
+`0x458D0E` (the last `call` in `0x4589C0`, followed by that function's own
+`pop edi/esi/ebp/ebx; add esp,0x68; ret 8` — a plain call, not a tail call) for the unit's own
+scratch, and `0x459686` for each cargo composite, so a factory's unit-in-progress is covered by
+the same skip. Both call sites discard `eax`, so the stub's `xor eax,eax` cannot be observed even
+where the real function would have returned 1 (`0x458F88`).
+
+The resume address is **`0x458DD6`**; the six stolen bytes end exactly on an instruction
+boundary there.
+
+## `0x459646..0x4596DD` — the cargo loop, and `0x4B90A0` the z-merge — mapped by us
+
+[MEASURED 2026-09-03, this project — `objdump -d -M intel` of the pristine Steam build. Read,
+not patched, while fixing "the unit is being built UNDER the lab". The mechanism and the
+consequences for our pass are in [build-state](build-state.html) §7, and the whole carry
+relationship — what a factory does with the unit on its pad, and what happens when it lets go —
+is on [factories](factory-build.html); this is the address-level record.]
+
+**A unit inside a factory is never sorted as its own sprite.** The blit walks the parent's cargo
+chain and merges each member's composite *into the parent's scratch*, per pixel:
+
+| VA | What |
+| --- | --- |
+| `0x459646` | `mov edx,[ebp+0xC]` (the unit) → `mov esi,[edx+0x8A]` — the cargo head; `je 0x4596EB` exits when the chain is empty |
+| `0x459657` | `test dword [esi+0x110],0x20000` / `jne 0x4596DD` — **the chain skip**: a member with that bit is stepped over undrawn. Also the loop's re-entry target |
+| `0x459670` | `call 0x4586A0(cargo_obj, 1, -1)` — rebuild the cargo composite, **every frame** |
+| `0x459686` | `call 0x458DD0(cargo_composite, cargo_obj)` — the build-state effect on the cargo (the section above) |
+| `0x45968B..0x4596D3` | the position delta: `cargo+0x6A/+0x6E/+0x72` minus the parent's same three dwords, each taken as its **high word** (the whole-world-unit part) |
+| `0x4596D8` | `call 0x4B90A0` |
+| `0x4596DD` | `mov esi,[esi+0x8E]` — next in chain; `jne 0x459657` loops |
+
+**`0x4B90A0(srcFrame, dstFrame, sx, sy, dbias)`, `ret 0x14`** — a depth-tested 8bpp paint of one
+`GAFFrame` into another ([composite-buffer](composite-buffer.html) has the header layout). The
+five arguments come out of the push order at `0x4596B5..0x4596D7`:
+
+- `srcFrame` = `cargoObj3do+0x10`, `dstFrame` = `this+0x10` (the blitter's shared scratch);
+- `sx` = `HIWORD(dx)`, `sy` = `HIWORD(dz) − HIWORD(dy)/2` — **the isometric projection of the
+  delta**, not a raw dy, so the merge lands the cargo where the camera would put it;
+- `dbias` = `HIWORD(dy)`, the pure height delta, applied to the *depth* plane.
+
+The inner loop (`0x4B9130..0x4B9170`), per pixel: skip if the source colour equals the frame's
+key byte at `srcFrame+0x8`; otherwise compare `dstDepth` against `srcDepth + dbias` and
+**`jg` keeps the destination** — i.e. the source wins on `dstDepth <= srcDepth + dbias`, larger
+depth = higher/nearer, the same convention the intra-model rasteriser uses. On a win it writes
+the colour and sets `dstDepth = srcDepth + dbias`.
+
+**Two negative results.**
+
+- **`0x4B90A0` has exactly one caller in the entire image** — `0x4596D8`, the line above. A
+  disassembly of every section and a scan for the literal find no other call and no pointer to
+  it. The cargo merge is the only thing in the game that composites two sprites by depth.
+- **The compare and the store disagree about width.** The compare adds `dbias` as a full dword
+  to a zero-extended source byte (`0x4B913D..0x4B914D`), but the store re-reads `dbias` as a
+  *byte* and does an 8-bit `add cl,dl` (`0x4B914F..0x4B9159`), so a stored depth wraps where the
+  comparison did not. Cargo sits within a few world units of its parent, so `dbias` is small and
+  this never fires in stock play; it is recorded because it is read, not exercised.
+
+**Why this cost us a bug.** Our native pass first sorted a factory's cargo as an ordinary unit,
+which put it on its own tile row — an ARM lab at world y 1072 building a Hammer at 1068 is one
+16-unit row apart, four whole depth keys behind the lab, which then covered it at every pixel.
+Matching the engine means giving every chain member the parent's row and band and letting the
+two models sort against each other by `md`, our intra-model view depth. That **approximates** the
+merge rather than porting it: `0x4B90A0` compares a *height* biased by `HIWORD(dy)` and samples
+at the projected offset, while `md = (2y − z)/256` is model-local and carries neither term. They
+agree while parent and cargo are level, which is every factory pad, and diverge for a cargo whose
+origin sits above or below its parent.
+
+## `0x48AB70` — attach and detach one unit to another — mapped by us
+
+[MEASURED 2026-09-03, this project — `objdump -d -M intel` of the pristine Steam build. Read, not
+patched, while answering "does a unit walk under the factory in the original too?". Full write-up,
+including how a carried unit is drawn: [factories](factory-build.html).]
+
+`0x48AB70 .. 0x48AD2D`, `ret 4`. **One argument, and it is a packed command, not a unit** — which
+is what tells you attach/detach is a *simulation* event, replicated by unit id rather than by
+pointer:
+
+| Packet | What |
+| --- | --- |
+| `+0x1` word | child unit id (`0` = none) |
+| `+0x3` word | parent unit id (**`0` = detach**) |
+| `+0x5` byte | attach point; **`0xFF` = "inside"** |
+| `+0x6` byte | two low bits xor'd into `Object3do+0x2E` (`0x48ACE1..0x48ACF0`) |
+
+**Unit id → address**, computed the long way at `0x48AB8A..0x48AB9F`: `id*8 − id` then
+`lea eax,[eax+eax*4]` then `lea esi,[ecx+eax*8]` = `*(main+0x14357) + id*0x118`.
+
+**The fields it owns**, all in `UnitStruct`: `+0x86` parent, `+0x8A` head of the carried chain,
+`+0x8E` next sibling, `+0xF9` the attach-point byte, and bit `0x20000` of `+0x110`.
+
+**The guards** (`0x48ABC7..0x48AC1D`, all bailing to `0x48AD2A` having done nothing) are the
+interesting part, because each is a rule of the game engine: the child must be alive
+(`+0x110 & 0x10000000`); **a structure can never be carried** (`+0x110 & 0x20000000` must be
+clear); a unit that is itself carrying something cannot be attached (`+0x8A` must be `0`); and
+**carrying does not nest** — the parent's own `+0x86` must be `0`.
+
+**`+0x110 & 0x20000` is set iff the attach point is `0xFF`** (`and edx,0xfffdffff` /
+`cmp cl,0xff` / `sete al` / `shl eax,0x11` / `or edx,eax`, `0x48AC88..0x48ACA7`). It is a
+**"drawn by nobody" flag, not an "is cargo" flag**: the blit's cargo loop skips it at `0x459657`
+*and* `DrawUnit 0x45AC20` skips it at `0x45AD43`, so a unit in a transport hold is drawn neither
+by itself nor by its carrier. A unit attached to a *piece* — the one on a factory pad — has the
+bit clear and is drawn by its carrier, merged through `0x4B90A0`.
+
+**Call sites (4).** `0x455403` in a large command dispatcher (every arm `jmp`s `0x455F50`);
+`0x48AB62` from the wrapper `0x48AB40..0x48AB6A` (`ret 0x10`); `0x48B58B` attaching with a real
+piece; and **`0x48B5C5` the detach** — child id from `+0xA8`, parent id `0`, point `0xFF`, guarded
+on `[edi+0x86] != 0`. Detaching is "attach to nobody", and it happens in one step, so there is no
+state in which a unit is still in the chain but positioned away from its carrier.
+
+**Negative results.** `0x47CB00` (no-previous-parent path) and `0x47CB40` (detach path) were not
+disassembled, and there is a **second `+0x8E` writer** in `0x47Cxxx` (`0x47CB26`, `0x47CB47`,
+`0x47CBA3`, `0x47CBB0`, `0x47CC13`, `0x47CD0F`, `0x47D0B9`) that has not been read. The enclosing
+function of `0x48B58B`/`0x48B5C5` was not delimited — `0x48B43C`'s `ret 8` is an early return
+inside it, not its end — so the COB opcode that reaches them is unidentified.
+
 ## The cursor chain — mapped by us
 
 [MEASURED 2026-09-03, this project — disassembly of the pristine Steam build (`objdump -d -M

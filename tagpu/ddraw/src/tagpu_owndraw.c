@@ -7,7 +7,11 @@
 
      0x459830  opaque rasteriser   (called from builder 0x45878B and from the
                                     blit's build-state path 0x459641)
-     0x459C70  nanoframe rasteriser (called from builder 0x458765)
+     0x459C70  the SAME rasteriser plus Gouraud lighting, taken for STRUCTURES
+               (called from builder 0x458765, whose test at 0x45873C is
+               unit+0x110 & 0x20000000 — measured to be the structure bit, not
+               "under construction": build-state.md 1. This comment used to
+               call it the nanoframe rasteriser; it is not one.)
 
    Both are thiscall with 4 stack args, callee-clean `ret 0x10`:
      [esp+4]=composite GAFFrame*, [esp+8]=Object3do*, [esp+0xC]=cloak byte,
@@ -48,6 +52,24 @@
      0x45952C: 74 4A  je 0x459578   (path B, colour+depth)           -> EB 4A
    Both leave eax (the graphics-option word the target tests) untouched.
 
+   A THIRD detour, on the BLIT-TIME BUILD-STATE EFFECT 0x458DD0, covers units
+   under construction (build-state.md). That function is the whole nanoframe
+   look — the height-threshold recolour and the wireframe — and it runs on a
+   scratch COPY of the composite every frame, so wiping the composite does not
+   stop it: with the rasterise skipped it simply recoloured nothing and stamped
+   its wireframe alone, at the 1x projection, where a zoomed view left it
+   sitting away from the unit being built. It early-outs on `Nanoframe == 0`
+   already, so the detour only ever fires for a nanoframe, and it is skipped on
+   exactly the units the native pass has taken over (which stages the same
+   effect itself, through the zoom transform, from the same engine formulas).
+
+     0x458DD0: 53 55 8B 6C 24 0C -> resume 0x458DD6 (6 stolen: push ebx,
+               push ebp, mov ebp,[esp+0xC] — whole instructions, and the
+               esp-relative one is replayed at the entry esp after popad)
+     thiscall(this, GAFFrame* frame, Object3do* obj), ret 8; obj is at
+     [esp+8] on entry. The skip path returns 0 in eax, which is the engine's
+     own "did nothing" return from both of its early-outs.
+
    Classification: Object3do+0x0C -> UnitStruct -> +0x92 UnitDefStruct, match
    the token against Name@0x00 / UnitName@0x20 / ObjectName@0x80 (all three;
    same rule as suppress/writeback); token "all" skips every unit. Read-only
@@ -65,6 +87,8 @@
 #define RAST_OPAQUE_RES  0x00459835u
 #define RAST_NANO_VA     0x00459C70u
 #define RAST_NANO_RES    0x00459C75u
+#define BUILDFX_VA       0x00458DD0u
+#define BUILDFX_RES      0x00458DD6u
 
 #define O3_THISUNIT      0x0C
 #define U_UNITTYPE       0x92
@@ -75,6 +99,7 @@
 
 static const unsigned char OPQ_STOLEN[5]  = { 0xB8, 0x04, 0x5F, 0x00, 0x00 };
 static const unsigned char NANO_STOLEN[5] = { 0xB8, 0xD4, 0x59, 0x01, 0x00 };
+static const unsigned char BFX_STOLEN[6]  = { 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x0C };
 
 /* the two structure-shadow `je`s (see the header comment): site, rel8 */
 #define SSHADOW_A_VA     0x004592C6u
@@ -86,6 +111,7 @@ static int               g_armed      = 0;
 static char              g_target[32] = "armcom";
 static int               g_all        = 0;
 static int               g_sshadow    = 0;   /* both je->jmp patches in */
+static int               g_buildfx    = 0;   /* 0x458DD0 detour in      */
 
 static volatile unsigned g_skipped    = 0;
 static volatile unsigned g_passed     = 0;
@@ -165,6 +191,72 @@ int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
     }
     return 1;
 }
+
+/* The build-state effect 0x458DD0 is skipped for exactly the units the native
+   pass draws: it stages the same scaffold itself, and leaving the engine's copy
+   in would stamp a second one at the unzoomed projection. Every other unit —
+   the pass unarmed, a type it does not own — keeps the engine's own. */
+int __cdecl tagpu_owndraw_buildfx_skip(unsigned int obj3do)
+{
+    extern int tagpu_native_owns_obj(unsigned int obj3do);
+    if (!ptr_ok(obj3do)) return 0;
+    return tagpu_native_owns_obj(obj3do) ? 1 : 0;
+}
+
+/* Detour 0x458DD0 onto a classify-then-skip stub of the same shape as
+   install_one's, with SIX stolen bytes and the callee's own `ret 8`. */
+static int install_buildfx(void)
+{
+    unsigned char* t = (unsigned char*)BUILDFX_VA;
+    unsigned char* s;
+    unsigned char* p;
+    DWORD old;
+    int32_t rel;
+
+    if (memcmp(t, BFX_STOLEN, sizeof BFX_STOLEN) != 0) return 0;
+
+    s = (unsigned char*)VirtualAlloc(NULL, 0x80,
+            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!s) return 0;
+    p = s;
+
+    *p++ = 0x60;                                            /* pushad            */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x28;     /* push [esp+0x28]=obj */
+    *p++ = 0xE8;                                            /* call skip?        */
+    rel = (int32_t)((unsigned int)&tagpu_owndraw_buildfx_skip - ((unsigned int)p + 4));
+    memcpy(p, &rel, 4); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                  /* add esp,4         */
+    *p++ = 0x85; *p++ = 0xC0;                               /* test eax,eax      */
+    *p++ = 0x61;                                            /* popad             */
+    *p++ = 0x75; *p++ = 0x0B;                               /* jnz +11 -> skip   */
+    memcpy(p, BFX_STOLEN, sizeof BFX_STOLEN);               /* the 6 stolen      */
+    p += sizeof BFX_STOLEN;
+    *p++ = 0xE9;                                            /* jmp resume        */
+    rel = (int32_t)(BUILDFX_RES - ((unsigned int)p + 4));
+    memcpy(p, &rel, 4); p += 4;
+    *p++ = 0x33; *p++ = 0xC0;                               /* skip: xor eax,eax */
+    *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;                  /*       ret 8       */
+
+    if (!VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &old)) {
+        VirtualFree(s, 0, MEM_RELEASE);   /* nothing points at it yet */
+        return 0;
+    }
+    t[0] = 0xE9;
+    rel = (int32_t)((unsigned int)s - (BUILDFX_VA + 5));
+    memcpy(t + 1, &rel, 4);
+    VirtualProtect(t, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), t, 5);
+    return 1;
+}
+
+/* Whether the 0x458DD0 detour is actually in place. The native pass may only
+   claim a unit under construction while it is: without the detour the engine
+   still stamps its own recolour and wireframe onto the composite, at the
+   unzoomed 1x projection, which is precisely the drift this pass exists to
+   remove. install_buildfx() can fail (a build whose bytes do not match, or a
+   VirtualAlloc/VirtualProtect refusal) long after the two rasteriser detours
+   went in, so "owndraw is armed" is not the same question. */
+int tagpu_owndraw_buildfx_armed(void) { return g_buildfx; }
 
 /* Build one classify-then-skip stub and detour `va` onto it. */
 static int install_one(unsigned int va, unsigned int resume,
@@ -263,6 +355,7 @@ void tagpu_owndraw_init(void)
     a = install_one(RAST_OPAQUE_VA, RAST_OPAQUE_RES, OPQ_STOLEN);
     c = install_one(RAST_NANO_VA,   RAST_NANO_RES,   NANO_STOLEN);
     g_armed = a && c;
+    if (g_armed) g_buildfx = install_buildfx();
     /* structure shadows: only with "all" (every composite blank), and only
        as a pair -- one path redirected and not the other would leave a
        building's shadow depending on which composite it was given */
@@ -283,10 +376,11 @@ void tagpu_owndraw_init(void)
 
     _snprintf(b, sizeof b,
         "owndraw: %s target=\"%s\" opaque@0x459830=%s nano@0x459C70=%s "
-        "structshadow@0x4592C6+0x45952C=%s "
+        "buildfx@0x458DD0=%s structshadow@0x4592C6+0x45952C=%s "
         "(engine rasterise skipped for target; writeback must paint it)",
         g_armed ? "ARMED" : "not armed", g_target,
         a ? "OK" : "SKIP", c ? "OK" : "SKIP",
+        g_buildfx ? "OK" : "SKIP",
         g_sshadow ? "OURS" : (g_all ? "SKIP" : "engine"));
     olog2(b);
 }

@@ -424,7 +424,8 @@ def cmd_export(args):
     assets = ta3do.Assets()
     model = ta3do.load_model(assets, args.model, show_hidden=args.show_hidden,
                              undither=getattr(args, "undither", None),
-                             python=getattr(args, "undither_python", None))
+                             python=getattr(args, "undither_python", None),
+                             keep_flares=args.keep_flares)
     root = parse_3do(Source().read(args.model))
     meta = atlas_metadata(model, ta3do.TextureBank(assets), root)
 
@@ -559,6 +560,9 @@ def main(argv=None):
     ex.add_argument("-o", "--out", required=True, help="output directory")
     ex.add_argument("--show-hidden", action="store_true",
                     help="keep pieces the unit's script hides at Create (flares)")
+    ex.add_argument("--keep-flares", action="store_true",
+                    help="keep the muzzle flash: the pieces hidden at Create that "
+                         "the script shows again when the unit fires")
     ex.add_argument("--json", action="store_true")
     ta3do = _ta3do_module()
     if ta3do is not None:

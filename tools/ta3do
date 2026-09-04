@@ -816,8 +816,9 @@ class PieceMesh:
 
 
 class Model:
-    def __init__(self, name, root_mesh, meshes, atlas, stats, hidden=()):
+    def __init__(self, name, root_mesh, meshes, atlas, stats, hidden=(), flares=()):
         self.hidden = sorted(hidden)
+        self.flares = sorted(flares)
         self.name = name
         self.root = root_mesh
         self.meshes = meshes      # depth-first order, root first
@@ -862,20 +863,24 @@ def model_textures(root: Piece, bank) -> dict:
 
 def build_model(name, root: Piece, bank: TextureBank, palette,
                 keep_selection: bool = False, reverse: bool = REVERSE_WINDING,
-                hidden=frozenset(), restored=None) -> Model:
+                hidden=frozenset(), restored=None, flares=frozenset()) -> Model:
     """Turn a parsed 3DO into glTF-ready geometry.
 
     `hidden` names pieces the unit's own script hides at Create (§COB): their
     faces are dropped, but their nodes survive so the piece tree still matches
-    the model and a script could show them again. `restored` supplies
-    already-undithered RGBA for texture names, replacing the palette lookup.
+    the model and a script could show them again. `flares` is only a label for
+    the ones a caller chose *not* to hide (the muzzle flash), so the file can say
+    which pieces those are. `restored` supplies already-undithered RGBA for
+    texture names, replacing the palette lookup.
     """
     restored = restored or {}
     atlas = Atlas(palette)
     hidden = {h.lower() for h in hidden}
+    flares = {f.lower() for f in flares} - hidden
     stats = {"pieces": 0, "primitives": 0, "triangles": 0, "textured": 0, "flat": 0,
              "skipped_selection": 0, "skipped_degenerate": 0, "skipped_hidden": 0,
-             "hidden_pieces": sorted(hidden), "missing_textures": []}
+             "hidden_pieces": sorted(hidden), "flare_pieces": sorted(flares),
+             "missing_textures": []}
 
     def usable(prim, count=False):
         if prim.is_selection and not keep_selection:
@@ -950,7 +955,7 @@ def build_model(name, root: Piece, bank: TextureBank, palette,
             flatten(child)
 
     flatten(root_mesh)
-    return Model(name, root_mesh, meshes, atlas, stats, hidden)
+    return Model(name, root_mesh, meshes, atlas, stats, hidden, flares)
 
 
 def _degenerate(a, b, c, eps=1e-9):
@@ -1035,6 +1040,7 @@ def model_to_gltf(model: Model):
         "asset": {"version": "2.0", "generator": "ta3do (Total Annihilation 3DO exporter)",
                   "extras": {"model": model.name,
                              "hiddenPieces": model.hidden,
+                             "flarePieces": model.flares,
                              "units": "TA model units (3DO 16.16 fixed-point / 65536)",
                              "axes": "glTF right-handed, Y up, front faces +Z"}},
         "scene": 0,
@@ -1100,25 +1106,33 @@ COB_PROLOGUE = {
 }
 
 
-def hidden_at_create(blob: bytes):
-    """Piece names the unit's script hides as soon as it exists (lower case)."""
+def _cob_read(blob: bytes):
+    """(entry points, script names, piece names, code words) — None if not a COB."""
     try:
         (version, n_scripts, n_pieces, code_len, _statics, _unk,
          off_entry, off_snames, off_pnames, off_code, _unk3) = COB_HEADER.unpack_from(blob, 0)
         if version != 4 or n_scripts <= 0:
-            return set()
+            return None
         entries = struct.unpack_from(f"<{n_scripts}i", blob, off_entry)
-        names = [_cstring(blob, o)
+        names = [_cstring(blob, o).lower()
                  for o in struct.unpack_from(f"<{n_scripts}i", blob, off_snames)]
         pieces = [_cstring(blob, o).lower()
                   for o in struct.unpack_from(f"<{n_pieces}i", blob, off_pnames)]
         code = struct.unpack_from(f"<{code_len}i", blob, off_code)
     except (struct.error, ValueError, IndexError):
+        return None
+    return entries, names, pieces, code
+
+
+def hidden_at_create(blob: bytes):
+    """Piece names the unit's script hides as soon as it exists (lower case)."""
+    parsed = _cob_read(blob)
+    if parsed is None:
         return set()
-    lowered = [n.lower() for n in names]
-    if "create" not in lowered:
+    entries, names, pieces, code = parsed
+    if "create" not in names:
         return set()
-    pc = entries[lowered.index("create")]
+    pc = entries[names.index("create")]
     hidden = set()
     while 0 <= pc < len(code):
         op = code[pc] & 0xFFFFFFFF
@@ -1131,6 +1145,31 @@ def hidden_at_create(blob: bytes):
                 (hidden.add if op == OP_HIDE else hidden.discard)(pieces[index])
         pc += 1 + inline
     return hidden
+
+
+def shown_after_create(blob: bytes):
+    """Piece names the script SHOWs anywhere in its code (lower case).
+
+    The muzzle flash lives past the prologue: `FireWeapon` SHOWs a flare, sleeps
+    a few frames and hides it again. Reaching it the way `hidden_at_create` walks
+    Create is not possible — that would mean decoding the jumps and calls this
+    file deliberately leaves alone — so this is a flat scan of the code words
+    instead. Both halves of the pattern must check out (the word is the SHOW
+    opcode, the next word is a valid piece index), and a false positive only ever
+    *keeps* a piece we would otherwise drop, so the scan errs the harmless way.
+    """
+    parsed = _cob_read(blob)
+    if parsed is None:
+        return set()
+    _entries, _names, pieces, code = parsed
+    shown = set()
+    for pc, word in enumerate(code):
+        if (word & 0xFFFFFFFF) != OP_SHOW or pc + 1 >= len(code):
+            continue
+        index = code[pc + 1]
+        if 0 <= index < len(pieces):
+            shown.add(pieces[index])
+    return shown
 
 
 # --------------------------------------------------------------------------- PNG read
@@ -1276,22 +1315,102 @@ def resolve_model(assets: Assets, name: str):
     die(f"no model called {name!r}{hint}")
 
 
-def script_hidden(assets: Assets, label: str):
-    """Pieces `scripts/<label>.cob` hides at Create, if the unit has a script."""
+def fbi_fields(assets: Assets, unit: str) -> dict:
+    """`units/<unit>.fbi` as a lower-cased {key: value}. TDF: one `key=value;` a line."""
+    text = assets.read(f"units/{unit}.fbi").decode("latin-1", "replace")
+    return {m.group(1).lower(): m.group(2).strip()
+            for m in re.finditer(r"^\s*([A-Za-z0-9_]+)\s*=\s*([^;]*);", text, re.M)}
+
+
+def unit_slug(name: str) -> str:
+    """`Big Bertha` -> `big_bertha`: the FBI's display name as a file name."""
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def unit_roster(assets: Assets, sides=("ARM", "CORE")):
+    """Every unit of those sides that has a model: {unit, side, object, name, slug}.
+
+    `Name` is the FBI's own display name — `Flash`, `Stumpy`, `Big Bertha` — and
+    it is unique within a side across all 278 stock units, so it names the file;
+    `unit` (the archive's own id) travels in the glTF extras so a file is always
+    traceable back to the unit that produced it.
+    """
+    wanted = {side.upper() for side in sides}
+    roster = []
+    for path in sorted(assets.index):
+        if not path.startswith("units/") or not path.endswith(".fbi"):
+            continue
+        unit = Path(path).stem.lower()
+        try:
+            fields = fbi_fields(assets, unit)
+        except (HpiError, ValueError):
+            continue
+        side = fields.get("side", "").upper()
+        if side not in wanted:
+            continue
+        obj = fields.get("objectname", unit).lower().removesuffix(".3do")
+        if not assets.has(f"objects3d/{obj}.3do"):
+            continue
+        display = fields.get("name") or fields.get("unitname") or unit
+        roster.append({"unit": unit, "side": side, "object": obj,
+                       "name": display, "slug": unit_slug(display) or unit})
+    return roster
+
+
+def script_cob(assets: Assets, label: str):
+    """`scripts/<label>.cob`, or None if the unit has no script (or it is unreadable)."""
     path = f"scripts/{label}.cob"
     if not assets.has(path):
-        return frozenset()
+        return None
     try:
-        return hidden_at_create(assets.read(path))
+        return assets.read(path)
     except HpiError:
+        return None
+
+
+def script_hidden(assets: Assets, label: str):
+    """Pieces `scripts/<label>.cob` hides at Create, if the unit has a script."""
+    blob = script_cob(assets, label)
+    return frozenset(hidden_at_create(blob)) if blob is not None else frozenset()
+
+
+def script_flares(assets: Assets, label: str):
+    """Of the pieces hidden at Create, the ones the script shows again later.
+
+    That is the muzzle flash. A stock `Create` hides every flare and `FireWeapon`
+    SHOWs one for a few frames per shot, so a piece that is hidden *and shown* is
+    geometry the unit really wears in play — ARMPW's `lfire`, ARMSTUMP's `flare`,
+    CORLEVLR's `flash`. A piece that is hidden and never shown is an anchor the
+    effects system fires from, with no life in the game either (ARMCOM's
+    `nanospray`, ARMJETH's `lfirept`), so it stays dropped.
+    """
+    blob = script_cob(assets, label)
+    if blob is None:
         return frozenset()
+    return frozenset(hidden_at_create(blob) & shown_after_create(blob))
+
+
+def piece_visibility(assets: Assets, label: str, show_hidden=False, keep_flares=False):
+    """(dropped, flares) — the pieces `build_model` must skip, and the kept flash.
+
+    `show_hidden` keeps everything the script hides at Create; `keep_flares` keeps
+    only the half of it the script shows again. Both drop nothing when they agree.
+    """
+    if show_hidden:
+        return frozenset(), frozenset()
+    blob = script_cob(assets, label)
+    if blob is None:
+        return frozenset(), frozenset()
+    hidden = frozenset(hidden_at_create(blob))
+    flares = hidden & frozenset(shown_after_create(blob)) if keep_flares else frozenset()
+    return hidden - flares, flares
 
 
 UNDITHER_TAG = "-undithered"
 
 
 def load_model(assets: Assets, name: str, keep_selection=False, show_hidden=False,
-               undither=None, python: str = None) -> Model:
+               undither=None, python: str = None, keep_flares=False) -> Model:
     """Parse, texture and build one model. `undither` names a preset or is None.
 
     With a preset, each GAF frame the model uses is restored **on its own** —
@@ -1302,13 +1421,14 @@ def load_model(assets: Assets, name: str, keep_selection=False, show_hidden=Fals
     root = parse_3do(blob)
     bank = TextureBank(assets)
     palette = load_palette(assets)
-    hidden = frozenset() if show_hidden else script_hidden(assets, label)
+    hidden, flares = piece_visibility(assets, label, show_hidden, keep_flares)
     restored = None
     if undither:
         restored = undither_frames(model_textures(root, bank), palette,
                                    preset=undither, python=python)
     model = build_model(label + (UNDITHER_TAG if undither else ""), root, bank,
-                        palette, keep_selection, hidden=hidden, restored=restored)
+                        palette, keep_selection, hidden=hidden, restored=restored,
+                        flares=flares)
     if undither:
         model.stats["undither"] = {"preset": undither,
                                    "textures": len(restored or ())}
@@ -1466,9 +1586,9 @@ def cmd_info(args):
     label, blob = resolve_model(assets, args.name)
     root = parse_3do(blob)
     bank = TextureBank(assets)
-    hidden = frozenset() if args.show_hidden else script_hidden(assets, label)
+    hidden, flares = piece_visibility(assets, label, args.show_hidden, args.keep_flares)
     model = build_model(label, root, bank, load_palette(assets), args.keep_selection,
-                        hidden=hidden)
+                        hidden=hidden, flares=flares)
     lo, hi = model.bounds()
     tree = []
     lines = []
@@ -1482,7 +1602,7 @@ def cmd_info(args):
     textures = sorted({prim.texture for piece, _ in root.walk()
                        for prim in piece.primitives if prim.texture})
     data = {"model": label, "bytes": len(blob), "stats": model.stats,
-            "hidden_pieces": model.hidden,
+            "hidden_pieces": model.hidden, "flare_pieces": model.flares,
             "atlas": model.atlas.size, "textures": textures,
             "bounds": {"min": [round(v, 3) for v in lo],
                        "max": [round(v, 3) for v in hi],
@@ -1492,8 +1612,11 @@ def cmd_info(args):
         f"{label}: {model.stats['pieces']} pieces, {model.stats['triangles']} triangles, "
         f"{len(textures)} textures, atlas {model.atlas.size}px",
         f"size (x,y,z) = {', '.join(f'{hi[i] - lo[i]:.1f}' for i in range(3))} model units",
-        ("hidden by its own script at Create: " + ", ".join(model.hidden)
-         if model.hidden else "nothing hidden at Create"),
+        ("hidden by its own script at Create, and dropped: " + ", ".join(model.hidden)
+         if model.hidden else
+         ("nothing else hidden at Create" if model.flares else "nothing hidden at Create")),
+        *(["muzzle flash kept (hidden at Create, shown again later): "
+           + ", ".join(model.flares)] if model.flares else []),
         "", *lines])
     out(data, args.json, human)
 
@@ -1509,17 +1632,101 @@ def cmd_views(args):
 def cmd_export(args):
     assets = Assets(args.gamedir)
     model = load_model(assets, args.name, args.keep_selection, args.show_hidden,
-                       undither=args.undither, python=args.undither_python)
+                       undither=args.undither, python=args.undither_python,
+                       keep_flares=args.keep_flares)
     written = export_model(model, Path(args.out))
     data = {"model": model.name, "stats": model.stats,
             "files": [str(p) for p in written]}
     out(data, args.json, "\n".join(str(p) for p in written))
 
 
+def cmd_export_units(args):
+    """Every unit of a side, one .glb each, named by the FBI's own `Name`."""
+    assets = Assets(args.gamedir)
+    bank = TextureBank(assets)
+    palette = load_palette(assets)
+    roster = unit_roster(assets, args.sides)
+    if not roster:
+        die(f"no units on side(s) {', '.join(args.sides)}")
+
+    ready, failed, skipped = [], [], 0
+    for entry in roster:
+        try:
+            entry["root"] = parse_3do(assets.read(f"objects3d/{entry['object']}.3do"))
+        except (HpiError, ValueError, IndexError, KeyError, struct.error) as exc:
+            failed.append({"unit": entry["unit"], "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        entry["hidden"], entry["flares"] = piece_visibility(
+            assets, entry["unit"], args.show_hidden, args.keep_flares)
+        if args.flares_only and not entry["flares"]:
+            skipped += 1
+            continue
+        ready.append(entry)
+
+    # One undither pass for the whole roster. The network sees each GAF frame on
+    # its own (§undither), so a frame restored for one unit *is* the frame every
+    # other unit naming it would have got: 454 distinct frames behind 5853
+    # references, one model load instead of 278.
+    restored, frame_count = {}, 0
+    if args.undither:
+        frames = {}
+        for entry in ready:
+            frames.update(model_textures(entry["root"], bank))
+        frame_count = len(frames)
+        restored = undither_frames(frames, palette, preset=args.undither,
+                                   python=args.undither_python)
+
+    rows = []
+    for entry in ready:
+        stem = entry["slug"] + args.suffix
+        model = build_model(stem, entry["root"], bank, palette, args.keep_selection,
+                            hidden=entry["hidden"], restored=restored,
+                            flares=entry["flares"])
+        doc, blob = model_to_gltf(model)
+        doc["asset"]["extras"].update({"unit": entry["unit"], "side": entry["side"],
+                                       "objectName": entry["object"],
+                                       "displayName": entry["name"]})
+        if args.undither:
+            doc["asset"]["extras"]["undither"] = args.undither
+        out_dir = Path(args.out) / entry["side"].title()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{stem}.glb"
+        path.write_bytes(write_glb(doc, blob))
+        rows.append({"unit": entry["unit"], "side": entry["side"],
+                     "name": entry["name"], "file": str(path),
+                     "pieces": model.stats["pieces"],
+                     "triangles": model.stats["triangles"],
+                     "flares": model.flares})
+
+    by_side = {}
+    for row in rows:
+        by_side[row["side"]] = by_side.get(row["side"], 0) + 1
+    data = {"units": rows, "failed": failed, "skipped": skipped,
+            "bySide": by_side, "undither": args.undither,
+            "undither_frames": frame_count}
+    lines = [f"{row['file']:<52} {row['unit']:<12} {row['name']:<20} "
+             f"{row['triangles']:>5} tris"
+             + ("   flash: " + " ".join(row["flares"]) if row["flares"] else "")
+             for row in rows]
+    lines.append(f"{len(rows)} units -> "
+                 + ", ".join(f"{n} {side.title()}" for side, n in sorted(by_side.items()))
+                 + f"; {sum(1 for r in rows if r['flares'])} with a muzzle flash"
+                 + (f"; undithered ({args.undither}, {frame_count} frames)"
+                    if args.undither else ""))
+    if skipped:
+        lines.append(f"{skipped} skipped (no muzzle flash)")
+    for bad in failed:
+        lines.append(f"FAILED {bad['unit']}: {bad['error']}")
+    out(data, args.json, "\n".join(lines))
+    if failed:
+        die(f"{len(failed)} unit(s) failed to export")
+
+
 def cmd_render(args):
     assets = Assets(args.gamedir)
     model = load_model(assets, args.name, args.keep_selection, args.show_hidden,
-                       undither=args.undither, python=args.undither_python)
+                       undither=args.undither, python=args.undither_python,
+                       keep_flares=args.keep_flares)
     out_dir = Path(args.out)
     written = export_model(model, out_dir)
     viewer_copy = out_dir / VIEWER_HTML.name
@@ -1593,10 +1800,11 @@ def cmd_compare(args):
     """The same unit twice — shipped textures against undithered ones."""
     assets = Assets(args.gamedir)
     out_dir = Path(args.out)
-    plain = load_model(assets, args.name, args.keep_selection, args.show_hidden)
+    plain = load_model(assets, args.name, args.keep_selection, args.show_hidden,
+                       keep_flares=args.keep_flares)
     restored = load_model(assets, args.name, args.keep_selection, args.show_hidden,
                           undither=args.undither or "learned",
-                          python=args.undither_python)
+                          python=args.undither_python, keep_flares=args.keep_flares)
     written = export_model(plain, out_dir) + export_model(restored, out_dir)
     for page in (VIEWER_HTML, COMPARE_HTML):
         (out_dir / page.name).write_bytes(page.read_bytes())
@@ -1749,6 +1957,9 @@ def main(argv=None):
                       help="keep the root's invisible selection quad")
     info.add_argument("--show-hidden", action="store_true",
                       help="keep pieces the unit's script hides at Create (flares)")
+    info.add_argument("--keep-flares", action="store_true",
+                      help="keep the muzzle flash: the pieces hidden at Create that "
+                           "the script shows again when the unit fires")
     info.set_defaults(func=cmd_info)
 
     views = sub.add_parser("views", help="the standard camera table")
@@ -1760,8 +1971,30 @@ def main(argv=None):
     ex.add_argument("--keep-selection", action="store_true")
     ex.add_argument("--show-hidden", action="store_true",
                     help="keep pieces the unit's script hides at Create (flares)")
+    ex.add_argument("--keep-flares", action="store_true",
+                    help="keep the muzzle flash: the pieces hidden at Create that "
+                         "the script shows again when the unit fires")
     add_undither_flags(ex)
     ex.set_defaults(func=cmd_export)
+
+    eu = sub.add_parser("export-units",
+                        help="export every unit of a side, one .glb per unit, into "
+                             "per-side folders named by the FBI's own Name")
+    eu.add_argument("-o", "--out", default="renders/units",
+                    help="output directory; each side gets a subfolder (Arm, Core)")
+    eu.add_argument("--sides", nargs="+", default=["ARM", "CORE"], metavar="SIDE",
+                    help="FBI Side values to export (default: ARM CORE)")
+    eu.add_argument("--suffix", default="",
+                    help="appended to every file name, e.g. --suffix _orig")
+    eu.add_argument("--keep-flares", action="store_true",
+                    help="keep the muzzle flash: the pieces hidden at Create that "
+                         "the script shows again when the unit fires")
+    eu.add_argument("--flares-only", action="store_true",
+                    help="export only the units that have one")
+    eu.add_argument("--keep-selection", action="store_true")
+    eu.add_argument("--show-hidden", action="store_true")
+    add_undither_flags(eu)
+    eu.set_defaults(func=cmd_export_units)
 
     rd = sub.add_parser("render", help="export, then screenshot the standard views")
     rd.add_argument("name")
@@ -1781,6 +2014,9 @@ def main(argv=None):
     rd.add_argument("--keep-selection", action="store_true")
     rd.add_argument("--show-hidden", action="store_true",
                     help="keep pieces the unit's script hides at Create (flares)")
+    rd.add_argument("--keep-flares", action="store_true",
+                    help="keep the muzzle flash (it widens the framing: the flare "
+                         "sticks out past the barrel)")
     rd.add_argument("--no-xvfb", action="store_true",
                     help="use $DISPLAY instead of a private Xvfb")
     rd.add_argument("--timeout", type=float, default=120.0, help="seconds per view")
@@ -1807,6 +2043,7 @@ def main(argv=None):
                     help="write the files and exit instead of serving")
     cp.add_argument("--keep-selection", action="store_true")
     cp.add_argument("--show-hidden", action="store_true")
+    cp.add_argument("--keep-flares", action="store_true")
     cp.add_argument("--no-xvfb", action="store_true")
     cp.add_argument("--timeout", type=float, default=120.0)
     cp.add_argument("--budget", type=int, default=12000)

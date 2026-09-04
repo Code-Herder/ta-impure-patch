@@ -268,6 +268,42 @@ static void nano_stage(int p, float b1, float b2, float* t, float c[3])
     else               { *t = (float)(p*255/30);                    c[0]=-1; c[1]=b1; c[2]=-1; }
 }
 
+/* The whole build-state decision for one unit, in the engine's own terms, so
+   the two renderers that stage the scaffold (this one into a composite plane,
+   the native pass into the GL frame) cannot drift apart on the formulas.
+
+   Fills `t` (the height threshold, in composite depth-plane bytes), `c`
+   (cAbove, cBand, cBelow: -2 erase, -1 keep the texture, else a palette index
+   over 255) and `wire` (the second blue, the wireframe's colour). Returns 0 —
+   touching nothing — when the unit is not a nanoframe, which is every unit
+   whose `Nanoframe` (+0x104, the fraction of the build REMAINING) is 0.
+
+   Deliberately does NOT test tagpu_nano.off: each caller reads that flag at
+   its own cadence (the native pass once per arm poll; the composite path only
+   after this function has said the unit is a nanoframe at all, so the stat
+   costs nothing on the units that are not). build-state.md 0x458DD0 /
+   0x458D30. */
+int tagpu_r3d_nano_state(const char* unit, float* t, float c[3], float* wire)
+{
+    if (!ptr_ok(unit) || IsBadReadPtr(unit, 0x108)) return 0;
+    float nano = *(const float*)(unit + 0x104);
+    if (!(nano > 0.0f && nano <= 1.0f)) return 0;
+    {
+        const char* base = *(const char* const*)0x511DE8;
+        unsigned tick = 0;
+        if (ptr_ok(base) && !IsBadReadPtr(base + 0x38A47, 4))
+            tick = *(const unsigned*)(base + 0x38A47);
+        unsigned slot = *(const unsigned short*)(unit + 0xA8);
+        int b1 = nano_tri((int)((slot ^ 5) + tick * 0x21 / 0x1E));
+        int b2 = nano_tri((int)((slot ^ 9) + tick * 0x39 / 0x1E));
+        int p  = (int)(nano * 255.0f);
+        if (p > 255) p = 255; else if (p < 0) p = 0;
+        *wire = (float)b2 / 255.0f;
+        nano_stage(p, (float)b1 / 255.0f, *wire, t, c);
+    }
+    return 1;
+}
+
 static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec3 aPos;\n"   /* sprite px, sprite py, view depth  */
@@ -655,27 +691,13 @@ int tagpu_render3do(const TAGPU_FRAME* f, const char* unit, const char* obj3do,
     /* build-state: fraction REMAINING at unit+0x104; staged scaffold in-shader
        + wireframe line pass (the engine's blit-time effect does not fire on
        our written pixels — live-verified — so we own the look). */
-    float nano = 0.0f;
-    if (ptr_ok(unit) && !IsBadReadPtr(unit + 0x104, 4))
-        nano = *(const float*)(unit + 0x104);
-    int   nanoOn = (nano > 0.0f && nano <= 1.0f) &&
-                   GetFileAttributesA("tagpu_nano.off") == INVALID_FILE_ATTRIBUTES;
     float nanoT = 0.0f, nanoC[3] = { -1.0f, -1.0f, -1.0f }, blue2f = 0.0f;
     int   nlv = 0;
-    if (nanoOn) {
-        const char* base = *(const char* const*)0x511DE8;
-        unsigned tick = 0;
-        if (ptr_ok(base) && !IsBadReadPtr(base + 0x38A47, 4))
-            tick = *(const unsigned*)(base + 0x38A47);
-        unsigned slot = !IsBadReadPtr(unit + 0xA8, 2)
-                        ? *(const unsigned short*)(unit + 0xA8) : 0;
-        int b1 = nano_tri((int)((slot ^ 5) + tick * 0x21 / 0x1E));
-        int b2 = nano_tri((int)((slot ^ 9) + tick * 0x39 / 0x1E));
-        int p  = (int)(nano * 255.0f);
-        if (p > 255) p = 255; else if (p < 0) p = 0;
-        blue2f = (float)b2 / 255.0f;
-        nano_stage(p, (float)b1 / 255.0f, blue2f, &nanoT, nanoC);
-    }
+    /* nano_state FIRST: it early-outs on Nanoframe == 0, which is nearly every
+       unit, and the lever is a disk stat. Testing the file first ran that stat
+       once per unit per frame for the whole roster writeback_paint walks. */
+    int   nanoOn = tagpu_r3d_nano_state(unit, &nanoT, nanoC, &blue2f) &&
+                   GetFileAttributesA("tagpu_nano.off") == INVALID_FILE_ATTRIBUTES;
     r3d_diag(obj3do, nparts);
 
     if (s_diff_state == 0 &&

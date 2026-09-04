@@ -10,7 +10,7 @@ tools/ta3do render armpw -o renders/armpw --sheet
 reads `totala*.hpi` in place, parses `objects3d/ARMPW.3do`, resolves its GAF textures through
 `PALETTE.PAL` into one atlas, writes `armpw.glb`, then drives headless Chrome over three.js to
 screenshot the model from **front, side, top, back and 3/4** — one PNG per view, plus a contact
-sheet. Tests: `python3 tools/test_ta3do.py` (60, offline, no game files).
+sheet. Tests: `python3 tools/test_ta3do.py` (76, offline, no game files).
 
 With `--undither` the textures go through the [unditherer](undither.md) first, one GAF frame at
 a time, and the model comes out in true colour instead of TA's 256; `ta3do compare` puts the two
@@ -34,7 +34,7 @@ inverse trip is not the conversion below run backwards.
 | **Mount** | Every `.hpi`/`.ccx`/`.gp3`/`.ufo` in the game dir, later shadowing earlier, into one lookup. Loose files on disk win. | `Assets` |
 | **Resolve** | `armpw` → `units/armpw.fbi` → `Objectname` → `objects3d/armpw.3do`. A bare model name or a file path also work; a miss suggests near matches. | `resolve_model` |
 | **Parse** | The 3DO object tree: 52-byte headers, 16.16 vertices, quads/N-gons, first-child/next-sibling links. | `parse_3do` |
-| **Hide** | Read `scripts/<unit>.cob` and collect the pieces `Create` hides on the first frame. | `hidden_at_create` |
+| **Hide** | Read `scripts/<unit>.cob` and collect the pieces `Create` hides on the first frame; a second, flat scan of the whole script collects every piece it `SHOW`s, and the intersection is the muzzle flash. | `hidden_at_create`, `shown_after_create`, `piece_visibility` |
 | **Undither** (optional) | `--undither`: each GAF frame the model uses goes through the [unditherer](undither.md)'s CNN **on its own**, as an indexed PNG carrying TA's palette, and comes back true colour. | `undither_frames` |
 | **Atlas** | Every GAF frame the model names — restored or as shipped — plus a 4×4 swatch per flat-colour palette index, shelf-packed into one RGBA image with a 1px extruded border. | `Atlas` |
 | **Build** | Triangulate (fan), Newell normals per face, flat shading by vertex duplication, UVs from the atlas rect. | `build_model` |
@@ -96,6 +96,30 @@ the directory. The page draws **one camera into two scissored halves**, so the o
 between left and right is the texture pipeline; drag orbits both together, and the two atlases
 sit underneath at 1:1. `--shots` also screenshots the pair for each standard view.
 
+## Every unit at once
+
+```
+tools/ta3do export-units --keep-flares --undither --suffix _orig -o <dir>
+```
+
+writes one `.glb` per unit into a folder per side — `<dir>/Arm/flash_orig.glb`,
+`<dir>/Core/warrior_orig.glb` — and takes the file name from the FBI's own **`Name`**, the
+short name players see: `Flash`, `Stumpy`, `Big Bertha` → `big_bertha`. That field is
+**unique within a side across all 278 stock units** (137 ARM, 141 CORE, no collisions and no
+blanks), which is what makes it usable as a file name; the unit's archive id, its `Objectname`
+and its side ride along in `asset.extras` (`unit`, `objectName`, `side`, `displayName`) so a
+file is always traceable back. `--sides` picks the sides, `--flares-only` narrows it to the
+78 units that have a muzzle flash. [VERIFIED — the collision scan and the run]
+
+**One undither pass for the whole roster, not one per unit.** The 278 units make **5853**
+texture references to just **454 distinct GAF frames**, and the unditherer sees each frame on
+its own, so a frame restored for one unit *is* the frame every other unit naming it would have
+got. `export-units` therefore collects the union first and restores it in a single call: one
+CNN load instead of 278, 454 network runs instead of 5853. The whole export takes **11 s** and
+writes 28 MB. [VERIFIED — the atlas PNG embedded in the batch's `flash_orig.glb` is
+byte-identical (sha256 `79f054696bde…`) to the one from a lone `ta3do export armflash
+--keep-flares --undither`, same triangle count, same buffer length]
+
 ## Decisions, and what backs them
 
 - **Handedness: negate Z, reverse winding.** The 3DO file is Y-up left-handed; glTF is
@@ -123,6 +147,30 @@ sit underneath at 1:1. `--shots` also screenshots the pair for each standard vie
   account for**, so it never guesses. Without this the flares draw as floating spikes and, worse,
   stretch the framing: ARMPW's bounding box is 33.3 units deep with them and 21.7 without.
   [VERIFIED] `--show-hidden` keeps them.
+- **Hidden-at-Create splits in two, and `--keep-flares` keeps only one half.** A piece the script
+  hides *and shows again later* is geometry the unit really wears in play — the muzzle flash,
+  `SHOW`n by `FireWeapon` for a few frames per shot. A piece it hides and never shows is an
+  anchor the effects system fires a sprite from, invisible in game as well, and stays dropped.
+  Over the 90 stock units whose `Create` hides anything: 23 hide a `flare`, 26 a `flare1`, 25 a
+  `flare2` and 5 a `flash` that they all show again, against a tail of never-shown anchors
+  (ARMCOM's `nanospray`, ARMJETH's `lfirept`/`rfirept`, 4 units with a dead `flare`). A few kept
+  pieces are not flashes at all but geometry the unit reveals — ARMZEUS's `gun`, ARMSS's and
+  CORSS's `sshead2`, ARMMAV's gun barrels, CORAH's `launcher2` — which is the same thing for the
+  file's purposes: the unit shows them. [VERIFIED —
+  scan of every model with a script]
+  The `SHOW` scan is **flat**, not a walk: the flash is shown from `FireWeapon`, past jumps and
+  calls this exporter deliberately does not decode. It accepts a word only when the word is the
+  `SHOW` opcode *and* the next word is a valid piece index, and a false positive can only keep a
+  piece that would otherwise be dropped.
+  This matters most for [import](model-import.md), not for renders: the engine gives a HIDden
+  piece an all-zero matrix, so the flare geometry in an exported `.glb` stays invisible until the
+  unit's own script shows it, and a hires model exported **without** it simply cannot flash.
+  It does widen the framing of a render — ARMSTUMP is 32.2 model units deep without the flare and
+  42.7 with it — so it is off by default. [VERIFIED — `ta3do info armstump [--keep-flares]`]
+  The file says which pieces those are: `asset.extras.flarePieces` alongside `hiddenPieces`.
+  **Not every unit has flash geometry to keep.** ARMFLASH's own `flare1`/`flare2` are single
+  vertices with no faces, so the flag changes nothing there — the node is exported either way,
+  as an empty, and the flash is the engine's sprite. [VERIFIED — `ta3do info armflash`]
 - **One material per unit.** Textured faces sample a GAF frame; untextured ones are a single
   palette index. Both go in the same atlas (the flat colours as small swatches), so a unit is
   one draw call and one file, and `NEAREST` magnification keeps the 1997 pixels crisp.

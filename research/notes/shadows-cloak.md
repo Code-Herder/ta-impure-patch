@@ -408,10 +408,21 @@ i.e. composited above projectiles — engine quirk, reproduce or knowingly fix.)
    punch-out (`0x4B9D70(body, scratch, 5, 0)`) that we do not replicate — our
    body covers the shadow from `+0`, the engine erases it from `+5`. Not
    closed: a replacement (glTF) structure casts every piece (no per-piece
-   bit1 on that side); a nanoframe under construction casts nothing until
-   complete (the native pass does not list it), where the engine drew its
-   cached shadow — teal under `terrown`, so this is the lesser wrong; a
-   nanoframe was not captured mid-build in this landing. Fixture: `scenarios/shadow-struct.json`.
+   bit1 on that side). **A nanoframe casting nothing is now the correct
+   behaviour for most of a build** — measured 2026-09-03 against the stock
+   renderer on one solar at one spot with only the build state varying: over the
+   pixels the completed unit darkens by half, the lobe reads 1.00 of bare terrain
+   at 25 % built, 0.87 at 89 %, 0.70 at 95 % and 0.48 complete. So the engine
+   draws no shadow for a unit under construction until the last few per cent,
+   where something partial appears — and the fixture back-dates a completed unit
+   rather than lathing one, so that tail is not trustworthy
+   ([build-state](build-state.html) §7). The native pass suppresses it on `Nanoframe != 0`
+   (G13l), which it has to: the scaffold's erased parts would otherwise show
+   our slant projection through as a black silhouette. Why the engine's own
+   structure branch — which has no nanoframe test and does blit
+   `Object3do+0x14` — ends up drawing nothing is NOT settled; see
+   [exe-reverse-engineering](exe-reverse-engineering.html) §"The unit blit's
+   shadow branches". Fixture: `scenarios/shadow-struct.json`.
    **Factory-built check (2026-09-02):** a Peewee rolled out of an ARMLAB reads
    state `0x90242321` with nano = 0 — bit `0x20000000` CLEAR — while a
    commander-built ARMSOLAR reads `0x30282321` after completion — bit SET. So

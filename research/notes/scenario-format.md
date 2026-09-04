@@ -293,7 +293,7 @@ units, screen convention, stored verbatim**. TADR's C++ reading is correct.
 | owner slot | `+0xFF` `cOwnerID` | |
 | build fraction | `+0x104` `Nanoframe` | Fraction **REMAINING**, `0.0` = finished (`build-state.md`). The file's `nanoframe` is the percentage **built**, so the applier writes `1 - n/100`. |
 | health | `+0x108` | Max HP needs no `UnitDefStruct` offset: create with `fullHp = 1` and this field *is* the maximum, so scale it in place. |
-| state mask | `+0x110` | `0x20` nanoframe, `0x10000000` alive, and `(mask & 0xC0000) >> 18` is the stance: **0 hold, 1 manoeuvre, 2 roam** [VERIFIED, TADR `dialog.cpp:409-417`]. |
+| state mask | `+0x110` | `0x10000000` alive, and `(mask & 0xC0000) >> 18` is the stance: **0 hold, 1 manoeuvre, 2 roam** [VERIFIED, TADR `dialog.cpp:409-417`]. The applier also sets `0x20` for a nanoframe, which **the draw path does not read** — measured 2026-09-03 (G13l): under construction is `Nanoframe != 0` at `+0x104` and nothing else, and `0x20000000` is the **structure** bit, set by the engine for any building whether finished or not. A scenario nanoframe therefore renders correctly on the strength of `+0x104` alone, and the `0x20` write is inert. |
 
 **Catalogue sources**: `UnitDefStruct` gives `UnitName` `+0x20`, `UnitDescription` `+0x40`,
 `Side` `+0xA0`, `FootX/FootY` `+0x14A/0x14C` (so Python can warn when a group's `spacing` is

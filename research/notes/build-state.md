@@ -32,8 +32,12 @@ under-construction appearance is applied **at blit time, every frame**, by
    closed polygon outline, 2 edge pixels per scanline, depth-tested against the
    depth plane, in the second animated blue.
 
-The two blues are **palette indices `0xA0..0xAF`** (TA's blue ramp), animated as
-triangle waves of the 30 Hz game tick, salted by the unit's slot index. The fill
+The two animated colours are **palette indices `0xA0..0xAF`**, animated as
+triangle waves of the 30 Hz game tick, salted by the unit's slot index. This page
+used to call that ramp *blue*; it is **green** — read live off the engine's own
+palette at `main+0x143A7` (2026-09-03): `0xA0` = `D7 FF A7`, then `AB E7 7F`,
+`83 D3 5B`, `67 BF 3F` … down to a near-black green at `0xAF`. The names `b1`/`b2`
+survive below as the two oscillator phases, not as a colour claim. The fill
 cutoff is a **height threshold in depth-plane units** (whole-model space, not
 per-piece). `mode` (`[esp+0x10]` of both rasterisers) selects **which piece-cache
 class to draw** — `1` = cached pieces (the bake), `0` = `dont-cache` pieces
@@ -59,7 +63,7 @@ else
     0x437BE0(...);                          // colour + DEPTH plane (w*h*2+0x18)
 if (composite) {
     <hotspot writes>
-    if ((unit+0x110 & 0x20000000)           // 0x45873C: under-construction bit
+    if ((unit+0x110 & 0x20000000)           // 0x45873C: the STRUCTURE bit
         && (TAdynmem+0x37F06 & 0x20))       // 0x45874A: GameOptionMask bit5
         0x459C70(composite, obj, unit->cOwnerID, mode);   // "lit" rasteriser
     else
@@ -72,8 +76,18 @@ if (composite) {
   path). The depth plane is what makes the blit take the build-state path.
 - **`0x459C70` is selected only for `0x20000000`-flagged units when GameOptionMask
   (`TAdynmem+0x37F06`) bit `0x20` is set** — it is the *same* rasteriser as
-  `0x459830` plus per-vertex Gouraud lighting (§4). With bit `0x20` clear,
-  nanoframes bake through plain `0x459830`. The scaffold appears either way.
+  `0x459830` plus per-vertex Gouraud lighting (§4). With bit `0x20` clear those
+  units bake through plain `0x459830`. The scaffold appears either way.
+- **`0x20000000` IS THE STRUCTURE BIT, NOT "UNDER CONSTRUCTION"** — measured live
+  2026-09-03 by reading `unit+0x110` for three units in one game: a **complete
+  mobile** ARMCOM `0x91600371` (clear), a **complete building** ARMSOLAR
+  `0x30282321` (set), and an **ARMLAB under construction** `0x30E42321` (set).
+  So `0x459C70` is the *structure* rasteriser — a nanoframe reaches it only when
+  the thing being built is a building — and every "nanoframe bit" reading of
+  `0x20000000` on this page and in the code that quoted it was wrong. The state
+  that means under construction is `Nanoframe != 0` at `+0x104`, nothing else.
+  ([shadows & cloak](shadows-cloak.html) already read this bit as the structure
+  bit in the blit's shadow tree; the two pages disagreed and this settles it.)
 
 Builder call sites (all four in the binary) [BINARY-VERIFIED]:
 
@@ -153,11 +167,14 @@ from disassembly [BINARY-VERIFIED]:
 **Type/range: IEEE float, 1.0 (just placed) → 0.0 (complete) = fraction of build
 REMAINING.** Fraction built = `1 − Nanoframe`.
 
-State bits involved (`unit+0x110`): `0x20000000` = under-construction/nanoframe
-state (set at spawn with `1<<0x15`-family writes at `0x485AFE..0x485B03`, tested by
-builder/dispatch/blit/rasterisers); `0x2000` = "lathed/progress changed" pulse.
-(The tamem comment claiming "0x20: nanoframe" is off — the draw path uses
-`0x20000000` and `0x2000`.)
+State bits involved (`unit+0x110`): `0x20000000` = **structure** (see the
+correction in §1; tested by builder/dispatch/blit/rasterisers, and true of a
+building whether it is finished or a nanoframe); `0x2000` = "lathed/progress
+changed" pulse. (The tamem comment claiming "0x20: nanoframe" is off; so was this
+page's own earlier claim that `0x485AFE..0x485B03` sets `0x20000000` at spawn —
+disassembled 2026-09-03, that site computes `(UnitDef+0x241 & 0x200) << 0x15` and
+stores it, which is bit **`0x40000000`**, and it is the only thing it writes to
+`+0x110`.)
 
 ---
 
@@ -385,7 +402,7 @@ Anti-aliased nanoframe bakes, option-gated.
 |---|---|---|
 | `UnitStruct.Nanoframe` | +0x104 | float, build fraction REMAINING 1.0→0.0; 0 = complete |
 | `UnitStruct.Health` | +0x108 | s16, grows with build ticks |
-| `UnitStruct.UnitSelected` (state mask) | +0x110 | bit `0x20000000` = under construction; bit `0x2000` = lathe pulse/progress-changed; bit `0x200` = sonar-LOS (underwater tint choice) |
+| `UnitStruct.UnitSelected` (state mask) | +0x110 | bit `0x20000000` = **structure** (measured, §1 — not "under construction"); bit `0x2000` = lathe pulse/progress-changed; bit `0x200` = sonar-LOS (underwater tint choice); bit `0x40000000` = `UnitDef+0x241 & 0x200`, written at spawn (`0x485AFE`) |
 | `UnitStruct` unknown | +0x114 | bit0 forces depth-plane composite (non-nanoframe depth users) |
 | `UnitStruct.UnitInGameIndex` | +0xA8 | salt for the blue-phase oscillators |
 | `UnitStruct.cOwnerID` | +0xFF | flagByte arg → team-colour texture row |
@@ -468,3 +485,121 @@ misfire) — filling depth is not optional. Detect the case with
 
 Either way, nothing about the scaffold needs sim writes; it is pure presentation
 derived from `unit+0x104`, `unit+0x110`, the tick counter, and the unit slot.
+
+---
+
+## 7. What we built — Option B, live (2026-09-03)
+
+**Option B is the one that shipped**, because by then a nanoframe was the last
+world thing still coming from the engine's own frame, and everything the engine
+draws inside the viewport lands at the **unzoomed** projection: the composite
+scales OUR fragments and passes its frame through 1:1. A building or a factory's
+cargo therefore slid across the map the moment the zoom left 1, away from the
+commander or factory building it. Reported from play, reproduced on a scripted
+`nanoframe` fixture and on a live commander build.
+
+- **Ownership.** `tagpu_native_owns_unit()` no longer excludes `Nanoframe > 0`
+  (`tagpu_native.c`); the native pass draws the unit like any other, so the
+  scaffold goes through the zoom transform with the world.
+- **The formulas live once.** `tagpu_r3d_nano_state(unit, &t, c, &wire)` in
+  `tagpu_render3do.c` is §3's stage table plus the two oscillators; the composite
+  path (`tagpu_render3do`) and the native pass both call it. `tagpu_nano.off`
+  still disables the staging: the native pass reads it once per arm poll, the
+  composite path only after `nano_state` has said the unit is a nanoframe at
+  all. With the lever set, a nanoframe goes back to the engine entirely —
+  `tagpu_native_owns_unit()` declines it — so the lever stays a real A/B
+  instead of showing a finished-looking unit with the engine's copy suppressed.
+- **The recolour** is three per-unit uniforms in the native fragment shader
+  (`uNanoOn`, `uNanoT`, `uNanoC`), classifying by `vVY + 50` exactly as §1.2.
+  An **erased fragment discards**, and that is a deliberate divergence — see
+  the gap below.
+- **The wireframe** is a second line range per unit (`emit_wire`), every face of
+  every visible piece, in the second oscillator's colour, biased 0.15 depth-key
+  units nearer than the skin it traces (1.8 + 0.15 = 1.95 against the 2.0
+  half-gap between row keys — inside it, with 0.05 to spare). It is not
+  decoration: at the top of a build the recolour erases the whole model and the
+  skeleton is the only thing on screen.
+- **Where the rest of this lives.** A factory's unit-in-progress is *carried*, and being carried
+  is a separate axis from being a nanoframe: the attach/detach function, the guards it enforces,
+  why a released unit appears to walk under the plant, and the A/B proving that is stock, are all
+  on [factories](factory-build.html).
+- **GAP — the wireframe's back edges show through the unbuilt part, and the
+  engine's do not.** The engine hides them by testing each outline pixel
+  against the composite's own height plane, which keeps the whole model's
+  heights even where the colour was erased (§1). That plane is **per sprite**;
+  ours is the one shared GL depth buffer. An erased fragment that wrote depth
+  would hide the back edges correctly *and* become an invisible occluder for
+  everything drawn after it — and since `nano_stage` erases all but a thin band
+  at `p >= 201`, that occluder is nearly the whole model for the first fifth of
+  every build. It took a factory's own far wall against the unit on its pad
+  (the cargo is given the parent's `encBase`, so the two sort by `md` alone),
+  and the nanolathe spray, later-indexed units and hires bodies with it. So the
+  erased fragment discards and the extra edges are accepted. Closing this
+  properly needs per-sprite isolation — a stencil pass around each nanoframe —
+  which this landing did not attempt. **Not yet confirmed by eye in a running
+  game.**
+- **The engine's own copy had to be stopped.** Wiping the composite does not do
+  it — `0x458DD0` runs on a scratch COPY every frame, so with the rasterise
+  skipped it recoloured nothing and stamped its **wireframe alone**, at the 1×
+  position. `tagpu_owndraw.c` now carries a third detour on `0x458DD0` (6 stolen
+  bytes, `xor eax,eax; ret 8` on the skip path — the engine's own "did nothing"
+  return), taken for exactly the units the native pass owns.
+- **A unit in a factory is part of the FACTORY's sprite, not a sprite beside
+  it.** The blit's cargo loop (`0x459646..0x4596DD`) rebuilds the cargo
+  composite, scaffolds it and **z-merges** it into the factory's own scratch
+  through `0x4B90A0`, per pixel, by the two height planes offset by the position
+  delta (`cargo+0x6A/0x6E/0x72 − parent's`). Sorted as an independent sprite it
+  lands on its OWN tile row instead: measured on an ARM lab at world y 1072
+  building a Hammer at 1068 — one 16-unit row apart, four whole depth keys, and
+  the lab covered it at every pixel it filled ("the unit is being built UNDER
+  the lab", reported from play against the first cut of this gate). The gather
+  now walks `unit+0x8A` / `+0x8E` and gives every chain member the parent's row
+  and band, mirroring the engine's own skip on `state & 0x20000`, so the two
+  models sort against each other by `md`, our intra-model view depth. **That is
+  an approximation of the merge, not a port of it.** `0x4B90A0` compares
+  `dstDepth` against `srcDepth + HIWORD(dy)`: its depth plane is a *height*,
+  biased by the world height delta between the two origins, and it samples at
+  the projected offset. `md = (2y − z)/256` is model-local and carries neither.
+  They agree while parent and cargo are at the same height — every factory pad —
+  and diverge for a cargo whose origin sits above or below its parent, which
+  this landing did not cover.
+- **A unit under construction casts no shadow — nearly to the end.** Ours had to
+  drop it or the erased body showed our slant projection through as a black
+  silhouette. Measured against the stock renderer on ONE solar at one spot, only
+  the build state varying, taking the pixels the completed unit darkens by half
+  as the lobe and its own 25 % frame as the bare-terrain reference:
+
+  | built | `p` | lobe / terrain | reads as |
+  |---|---|---|---|
+  | 25 % | 191 | 1.00 | no shadow |
+  | 75 % | 63 | 0.82 | no shadow (the body itself covers part of the lobe) |
+  | 85 % | 38 | 0.84 | no shadow |
+  | 89 % | 28 | 0.87 | no shadow |
+  | 95 % | 12 | 0.70 | *something* |
+  | 99 % | 2 | 0.71 | *something* |
+  | 100 % | 0 | 0.48 | the full shadow |
+
+  **We draw none of it while `Nanoframe != 0`**, which matches every row up to
+  89 % and is conservative for the last two — a missing shadow rather than a
+  wrong black one.
+
+  **Two things this does NOT establish.** The mechanism: the blit's shadow tree
+  has no nanoframe test and does blit `Object3do+0x14` for a structure
+  ([shadows & cloak](shadows-cloak.html)), so what that branch has to blit is
+  evidently empty for most of a build, and why is unknown. And the fixture is
+  not a real build: `scenario`'s `nanoframe` creates the unit COMPLETE and then
+  writes `+0x104`, so its composite and its cached shadow have a history a
+  lathed unit's does not — which is the likeliest reason the 95/99 % rows differ
+  from 89 % at all, since the recolour classifies this model identically at
+  `p` 28 and 12. A real build watched through those last percentages is the
+  measurement that would settle it.
+
+**Verified** at 1024×768 against an unarmed control instance on the same
+scenario: the 5/25/50/75/95/100 % ladder reproduces the engine's own progression
+— wireframe, solid fill, texture — and its pulse; a commander-built solar tracks
+the zoom at 0.6/1.0/1.8 where before it stood still.
+
+**Not closed.** A replacement (glTF) mesh under construction draws unstaged: the
+hires pass has no build-state uniforms, though the wireframe still comes off the
+3DO tree. The `mode`-selected `dont-cache` re-rasterise (§1) has no equivalent in
+our pass. And the engine's reason for dropping the shadow is unknown.
