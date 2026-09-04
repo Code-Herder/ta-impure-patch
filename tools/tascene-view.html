@@ -103,9 +103,12 @@
        unitsun=<az,el>   EXPLORE: see THREE SUNS above
        shadowsun=<az,el> EXPLORE: see THREE SUNS above
        shadowlen=<a>,<b>  EXPLORE: how long a 3DO's shadow is, in world
-                     units: a + b * the model's height. Default 10,0.25 —
-                     the kbot lab (11 tall) gets 13, a Peewee (26) 16, the
-                     laser tower (47) 22. A parallel light makes length
+                     units: a + b * the model's height. Default 14,0.25 —
+                     a Flash (8.5 tall) gets 16, the kbot lab (11) 17, a
+                     Peewee (26) 21, the laser tower (47) 26. The base term
+                     is what a LOW unit shows: a Flash is 28 wide, so of a
+                     12-unit shadow almost nothing cleared its own body.
+                     A parallel light makes length
                      proportional to height, and what reads on TA's low
                      buildings is three times too long on its kbots; the
                      engine does not project mobile units at all (a flat
@@ -308,7 +311,7 @@ function readLook(p, label) {
     return v;
   };
   const unitAE = angles("unitsun", UNITSUN_DEFAULT);
-  let shadowlen = [10, 0.25];                         // a + b * height, or null
+  let shadowlen = [14, 0.25];                         // a + b * height, or null
   const slRaw = p.get("shadowlen");
   if (slRaw === "off") shadowlen = null;
   else if (slRaw !== null) {
