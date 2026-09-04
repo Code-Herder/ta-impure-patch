@@ -46,7 +46,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
-| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 **inside the DLL**, once per map on a worker thread, cached under `gamedir/tagpu_cache`; `tagpu_terr.c` uploads a second atlas and samples it under `tagpu_classicpp.on`. The restorer engine decision for [Classic and Classic++](renderers.html) §2.5 | Two Continents: runtime 11–13 ms, session 23–25 ms, 5062 tiles in 22.6 s uncached / 29 ms cached; Classic baselines unchanged; the first full game with a second module loaded at runtime |
+| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 **inside the DLL**, once per map on a worker thread, cached under `gamedir/tagpu_cache`; `tagpu_terr.c` uploads a second atlas and samples it under `tagpu_classicpp.on`. The restorer engine decision for [Classic and Classic++](renderers.html) §2.5 | Two Continents: runtime 11–13 ms, session 23–25 ms, 5062 tiles in 22.6 s uncached / 29 ms cached; Classic baselines unchanged; **15-min 200v200 soak with the runtime in the process: alive, no GL or restore errors** — the first full game with a second module loaded at runtime |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
@@ -96,8 +96,8 @@ parity baselines re-shot after the shader change are byte-identical.
 **Measured, Two Continents, 1024×768, in the running game:** runtime load 11–13 ms, env and
 session 23–25 ms, first restore 22.6 s at 4 intra-op threads (off both the game and the render
 thread; the terrain draws indexed meanwhile and switches when the atlas lands), 29–33 ms from
-the cache on every later load. A 200v200 match ran on it for the soak — the result is in the
-row above. `assets`: none yet; the on/off pair was inspected live (grass loses its dither,
+the cache on every later load. A 200v200 match ran on it for 15 minutes with the runtime resident: alive throughout, no GL
+error and no restore line after the load. `assets`: none yet; the on/off pair was inspected live (grass loses its dither,
 everything else identical).
 
 **Two corrections the spike forced.** (1) **1.20.1, not 1.22.1.** The 1.21.0 and 1.22.1 x86

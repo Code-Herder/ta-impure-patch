@@ -150,8 +150,10 @@ x86 build that runs on the built-in runtime, so `tools/fetch_onnxruntime.sh` pin
 hash; a prefix with the native VC++ 2019 runtime (winetricks) could take 1.22.1. On Windows
 the redistributable is the requirement either way.
 
-**The module-load rule is settled**: a second DLL loaded at runtime from our own thread ran
-the whole match with the game untouched (the soak result is on the roadmap's G14a row). The
+**The module-load rule is settled**: a second DLL loaded at runtime from our own thread sat in
+the process through a 15-minute 200v200 match, alive throughout, no GL or restore errors
+**[MEASURED 2026-09-04]**. The in-game result also matches the lab's Python-restored atlas of
+the same tiles to 0.006 levels per texel on average — same model, same numbers. The
 fork's `LoadLibrary` hook (`hook=4`) is bypassed with `real_LoadLibraryA` so `hook_init()`
 does not re-scan the runtime's module tree — a precaution, not a measured fault.
 
@@ -276,6 +278,18 @@ Why it fits:
 - **The first restore blocks nothing but is visible**: 22.6 s during which Classic++ terrain
   draws indexed, then switches. Acceptable for a spike; a loading-screen hook or a tacli
   pre-warm of the cache would hide it.
+- **The cache's format is undecided.** Today it is raw RGBA, 19.8 MB for Two Continents and
+  4.4 GB if every stock map were played (275 maps, 1.12 M tiles, median 3218, largest 11561).
+  Measured on the real cache **[MEASURED 2026-09-04]**, per Two Continents / all maps:
+  RGB+gzip 11.2 MB / 2.5 GB (zlib is in the DLL); one PNG sheet 8.7 / 1.9; RGB+zstd-19
+  8.5 / 1.9 (one BSD file to drop in); xz 7.8 / 1.7; lossless WebP 7.1 / 1.6; zlib per
+  tile 11.9 / 2.6; BC7 4.9 / 1.1 and BC1 2.5 / 0.5 (GPU formats: lossy, upload as-is,
+  4–8× less VRAM; a crude BC1 sits at ~35 dB against the restored art, above the
+  restorer's own 30.5 dB). Rejected by measurement: the residual against the palette
+  colour (7.9 MB — the residual *is* the dither noise), tile de-duplication (5054 of 5062
+  already unique), RGB565 (banding back). Lossless tops out near 40 %; only block
+  compression goes further. Also on the table: cap the cache to the newest N maps, or
+  move it to the user's profile.
 - **Definition → loaded model → texture frames**: the walk the load-time atlas build needs,
   to be established from the binary and written into
   [the engine map](exe-reverse-engineering.html).
