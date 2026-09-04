@@ -112,12 +112,16 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            lie at any other (tagpu_zoom.h). Inert at zoom 1. */
         tagpu_zoom_init();
 
-        /* vpwide: close the display-only ring at zoom < 1 by widening the
-           engine's own addressable viewport rect, with the two readers that
-           must NOT see it wide — the offscreen's clip and the screen->world
-           conversion — redirected and corrected (tagpu_vpwide.h). No-op unless
-           "tagpu_vpwide.on" exists; byte-matched, all-or-nothing; the rect is
-           only written while a zoomed-out view is live. */
+        /* vpwide: two jobs on one redirect (tagpu_vpwide.h). It always carries
+           the zoom's mouse->world repair at 0x498DA0 — which the zoom cannot go
+           live without, so tagpu_zoom_read_lever() pins to 1.0 when it is
+           absent — and with "tagpu_vpwide.on" it ALSO widens the engine's own
+           addressable viewport rect to close the display-only ring at zoom < 1,
+           redirecting the two readers that must not see it wide (the
+           offscreen's clip, and the screen->world origin). Armed by
+           "tagpu_vpwide.on" or "tagpu_zoom.on"; byte-matched; the widening half
+           is all-or-nothing and the rect is only written while a zoomed-out
+           view is live. MUST run after tagpu_zoom_init(). */
         tagpu_vpwide_init();
 
         /* tagpu: 1..N weapons per unit — the first module that changes the

@@ -255,12 +255,6 @@ static GLint  s_uWaterT, s_uWaterMode, s_uDigT;
 static GLint  s_uNanoOn, s_uNanoT, s_uNanoC;
 static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepthScale;
 static GLint  s_uCKey = -1, s_uCSurfSz = -1, s_uCVp = -1;  /* composite: the key */
-static GLint  s_uCCur = -1, s_uCCurOff = -1;      /* ...and the cursor it moves */
-/* Half-width of the box the cursor is moved in, game px. A TA cursor comes from
-   a cursor_ary GAF frame and is a few tens of pixels; 64 is comfortably clear of
-   the largest of them, and small enough that "the only engine pixel in here is
-   the cursor" stays the safe assumption it is measured to be. */
-#define CURSOR_PAD 64
 static float  s_zoom = 1.0f;
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
@@ -404,22 +398,6 @@ static const char* CVS =
    uKey < 0 keeps the pre-G13b behaviour exactly. texelFetch, not texture(),
    because the surface is an INDEX texture whose filter state belongs to
    cnc-ddraw and may be linear — interpolated palette indices are garbage. */
-/* MOVING THE MOUSE CURSOR (the other half of the zoom input fix, tagpu_zoom.h).
-   The engine draws its cursor wherever it thinks the mouse is, which while the
-   world is zoomed is the UNZOOMED position `u` we feed it, not where the pointer
-   actually is. It has to be put back at `s`.
-
-   It is done HERE rather than by capturing the draw the way G13d captured the
-   markers, because the cursor is the one thing in the frame that does not go
-   through DrawGameScreen's OFFSCREEN: `0x4C2870`/`0x4C2380` blit it with a NULL
-   context, which makes the blit build its own offscreen over the primary
-   surface, so swapping a pixel base cannot reach it. The composite is the one
-   place that already owns this boundary — it is the code that decides, per
-   pixel, whether the viewport shows ours or the engine's — and inside the
-   viewport the engine's surface is 99.98 % key with NOTHING ON IT BUT THE CURSOR
-   (terrain-depth.md 7.7, measured). So: paint the engine's own texels from the
-   box around `u` at the box around `s`, and let our world cover the box at `u`.
-   Both boxes are small, and the whole branch is off (uCur.z == 0) at zoom 1. */
 static const char* CFS =
     "#version 330 core\n"
     "in vec2 uv; out vec4 frag;\n"
@@ -428,12 +406,7 @@ static const char* CFS =
     "uniform sampler2D uPal;\n"
     "uniform ivec2 uSurfSz;\n"
     "uniform vec4 uVp;\n"          /* the rect the key fill covers, game px */
-    "uniform vec4 uCur;\n"         /* cursor box at u (x,y,w,h); w=0 = off   */
-    "uniform vec2 uCurOff;\n"      /* s - u                                  */
     "uniform int uKey;\n"
-    "bool inbox(vec2 p, vec4 b){\n"
-    "  return p.x >= b.x && p.x < b.x + b.z && p.y >= b.y && p.y < b.y + b.w;\n"
-    "}\n"
     "void main(){\n"
     "  vec4 c = texture(uTex, uv);\n"
     "  bool empty = c.a < 0.004 && max(max(c.r, c.g), c.b) < 0.004;\n"
@@ -443,30 +416,6 @@ static const char* CFS =
        UI pixel that happens to BE the key index can never be mistaken for it. */
     "  if (uKey >= 0 && px.x >= uVp.x && px.x < uVp.x + uVp.z &&\n"
     "                   px.y >= uVp.y && px.y < uVp.y + uVp.w) {\n"
-    "    if (uCur.z > 0.0) {\n"
-    /* where the pointer is: paint the cursor texel the engine put at u */
-    "      vec2 sp = px - uCurOff;\n"
-    /* ...and only from inside the viewport: `u` is in it but not 64 px clear
-       of its edge, so the box can straddle the boundary and would otherwise
-       stamp side-panel or top-bar texels into the world. `u` being in it is an
-       invariant tagpu_vpwide would break — a widened rect puts the ring's `u`
-       on the panel or off the surface — so while that module is live it takes
-       the cursor over entirely and uCur.z is 0 here (tagpu_zoom_cursor_shift). */
-    "      if (inbox(sp, uCur) && inbox(sp, uVp)) {\n"
-    "        ivec2 q = clamp(ivec2(sp), ivec2(0), uSurfSz - 1);\n"
-    "        int si = int(texelFetch(uSurf, q, 0).r * 255.0 + 0.5);\n"
-    "        if (si != uKey) {\n"
-    "          frag = vec4(texelFetch(uPal, ivec2(si, 0), 0).rgb, 1.0);\n"
-    "          return;\n"
-    "        }\n"
-    "      }\n"
-    /* where the engine put it: ours covers it, so do NOT fall through to the
-       discard that would reveal the engine's frame and its stale cursor */
-    "      if (inbox(px, uCur)) {\n"
-    "        frag = vec4(c.rgb, 1.0);\n"
-    "        return;\n"
-    "      }\n"
-    "    }\n"
     "    ivec2 p = clamp(ivec2(px), ivec2(0), uSurfSz - 1);\n"
     "    if (int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5) != uKey) discard;\n"
     /* THE KEY FILL MUST NEVER REACH THE SCREEN, NOT EVEN A FRACTION OF IT.
@@ -593,8 +542,6 @@ static void init_gl(void)
     s_uCKey = glGetUniformLocation(s_cprog, "uKey");
     s_uCSurfSz = glGetUniformLocation(s_cprog, "uSurfSz");
     s_uCVp = glGetUniformLocation(s_cprog, "uVp");
-    s_uCCur = glGetUniformLocation(s_cprog, "uCur");
-    s_uCCurOff = glGetUniformLocation(s_cprog, "uCurOff");
     /* a GLSL uniform defaults to 0, and uKey 0 is an ACTIVE key — the whole
        frame would invert against palette index 0. Default it off explicitly. */
     if (s_uCKey >= 0) glUniform1i(s_uCKey, -1);
@@ -2322,19 +2269,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (s_uCSurfSz >= 0) glUniform2iv(s_uCSurfSz, 1, sz);
         if (s_uCVp >= 0) x_glUniform4f(s_uCVp, (float)vpL, (float)vpT,
                                        (float)vw, (float)vh);
-        /* the cursor the engine drew at `u`, and where it belongs (see CFS) */
-        if (s_uCCur >= 0) {
-            int dx, dy, ux, uy;
-            if (tagpu_zoom_cursor_shift(&dx, &dy, &ux, &uy)) {
-                x_glUniform4f(s_uCCur, (float)(ux - CURSOR_PAD),
-                                       (float)(uy - CURSOR_PAD),
-                                       (float)(2 * CURSOR_PAD),
-                                       (float)(2 * CURSOR_PAD));
-                if (s_uCCurOff >= 0) x_glUniform2f(s_uCCurOff, (float)dx, (float)dy);
-            } else {
-                x_glUniform4f(s_uCCur, 0.0f, 0.0f, 0.0f, 0.0f);
-            }
-        }
         x_glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, s_palTex);
         x_glActiveTexture(GL_TEXTURE1);

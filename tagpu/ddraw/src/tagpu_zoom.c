@@ -140,6 +140,37 @@ static float wheel_level(void)
 
 float tagpu_zoom_read_lever(void)
 {
+    /* NO ZOOM WITHOUT THE MOUSE-WORLD REPAIR, and this is the gate that makes
+       that structural rather than merely documented.
+
+       `fake_GetCursorPos` answers the engine the TRUE pointer at every zoom, so
+       the only thing that still hands its 1:1 screen->world arithmetic the
+       unzoomed `u` is tagpu_vpwide's redirect of `0x498DA0`. Without that
+       redirect a zoomed world would name the world point under the SCREEN
+       position: hover, the cursor-shape choice, build placement, the routing
+       test at `0x469DE1` and `GetUnitAtMouse` all wrong, silently, while clicks
+       (which carry `u` in the message) still land correctly — half broken and
+       hard to see.
+
+       BOTH LEVERS ARE UNGATED BY ANY ARM FILE. `tagpu_zoom.on` installs the
+       minimap/ScrollSpeed/camera-range patches and nothing else; the file and
+       the wheel are read here, and the native pass publishes the view, with no
+       arm file consulted at all. So a build with `native.on` and `terr.on` but
+       no `zoom.on` could be wheeled to 0.5x and reach exactly that state. Pin
+       to 1.0 instead, and say so once. */
+    if (!tagpu_vpwide_mouse_world_live()) {
+        static LONG said;
+        if (InterlockedCompareExchange(&said, 1, 0) == 0)
+            zlog("zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not "
+                 "installed, so a zoomed world would name the point under the "
+                 "SCREEN position. Arm tagpu_zoom.on (or tagpu_vpwide.on).");
+        InterlockedExchange(&s_wheelAccum, 0);
+        s_wheelTgt = s_wheelCur = 1.0f;
+        s_wheelPend = 0;
+        s_zoom = 1.0f;
+        return 1.0f;
+    }
+
     /* Re-read EVERY frame: this is a continuous control, so a 30-frame poll
        would quantise a ramp to 2 Hz and make a smooth renderer look like a
        staircase on video. On a bad parse the LAST GOOD value is kept rather
@@ -337,33 +368,24 @@ static int iround(float v)
     return (int)(v >= 0.0f ? v + 0.5f : v - 0.5f);
 }
 
-/* The whole transform. `ring` (may be NULL) reports that the true `u` fell
-   outside the viewport — the display-only ring, where the engine has no screen
-   position for the world under the pointer.
+/* The whole transform. `ring` (may be NULL) reports that `u` fell outside the
+   rect the engine can NAME — the display-only ring, where it has no screen
+   position for the world under the pointer. tagpu_vpwide closes that ring while
+   it is armed, so this is the answer for zoom < 1 without it.
 
    There the transform gives up and returns the pointer UNCHANGED rather than
-   clamping it to the viewport edge. Clamping looks tempting and is worse in
-   every way: it parks the engine's cursor in the middle of the screen, it kills
-   the edge scroll (whose trigger zone at the right of the frame is inside the
-   viewport, so a clamped `u` never reaches it), and it still names a world point
-   the player did not click. Identity keeps every screen-space behaviour — hover,
-   edge scroll, the cursor — working exactly as at 1x, and the one thing that
-   would then be wrong, a click on the 1x world point, is what
-   tagpu_zoom_drop_mouse() throws away. */
-/* to_engine with the ring measured against the TRUE viewport, whatever
-   tagpu_vpwide may have widened the engine's rect to. */
-static int to_engine_true(int* x, int* y)
-{
-    float z, cx, cy; int L, T, W, H, ux, uy;
-    if (!x || !y || !view(&z, &cx, &cy, &L, &T, &W, &H)) return 0;
-    if (!in_viewport(*x, *y, L, T, W, H)) return 0;   /* screen-space: 1:1 */
-    ux = iround(((float)*x - cx) / z + cx);
-    uy = iround(((float)*y - cy) / z + cy);
-    if (!in_viewport(ux, uy, L, T, W, H)) return 0;   /* the ring: unchanged */
-    *x = ux; *y = uy;
-    return 1;
-}
+   clamping it to the viewport edge. Clamping still names a world point the
+   player did not click, and it names one that MOVES with the pointer along the
+   edge, so a hover reads as though the cursor were sliding along the viewport
+   border. Identity at least leaves the 1x world point under the pointer, which
+   is what every screen-space behaviour already expects; and the one thing that
+   would then be wrong, a CLICK on that 1x point, is what
+   tagpu_zoom_drop_mouse() throws away.
 
+   Nothing about the CURSOR is decided here any more. The engine is told the
+   truth by fake_GetCursorPos and draws its sprite under the pointer; this
+   transform reaches it only through a button message and through the
+   mouse->world repair in tagpu_vpwide.c. */
 static int to_engine(int* x, int* y, int* ring)
 {
     float z, cx, cy; int L, T, W, H, ux, uy;
@@ -397,61 +419,33 @@ int tagpu_zoom_to_engine(int* x, int* y)
     return to_engine(x, y, NULL);
 }
 
-/* The same transform for the position the engine DRAWS its cursor at, and the
-   one place the addressable rect must NOT be consulted.
+/* WHICH MESSAGES MAY CARRY `u` INTO THE ENGINE — the BUTTON events, and only
+   them. A button message is pushed on the engine's own event ring
+   (`0x4B5EB2` / `0x4B5EFE` -> `0x4C2E30`), which is a queue: the position it
+   carries is the position the press was MADE at, and it is the one thing in
+   this stack that a later pointer sample cannot reconstruct. So the transform
+   is applied there, at the door, and the ring keeps it.
 
-   The engine draws its cursor wherever GetCursorPos reports, and the composite
-   moves the sprite back under the pointer from there — which only works while
-   that position is inside the engine's own 1x viewport, over the terrain key
-   fill. tagpu_vpwide widens what the engine can NAME, not what it can DRAW ON:
-   a ring `u` lands on the side panel (where the sprite is composited over panel
-   pixels the composite must not stamp into the world) or off the surface
-   entirely. So the ring test here stays on the TRUE viewport and the ring keeps
-   G13e's answer — the pointer is handed through unchanged and the engine draws
-   its cursor exactly where the player's pointer is, which needs no moving at
-   all. The input path is unaffected: what the engine can NAME still comes from
-   the messages, which carry the widened `u`. */
-int tagpu_zoom_to_engine_draw(int* x, int* y)
-{
-    return to_engine_true(x, y);
-}
+   A MOVE MUST NOT BE REWRITTEN, and that is the whole reason the sprite used to
+   jump. `0x4B5E51` does not queue: it copies its record into `[obj+0x196]`
+   (`0x4C2360`), which is both the dispatch's fallback record AND the position
+   the engine draws its cursor from on the path that does not poll — `0x4C67C0`,
+   called twice out of the surface present machinery.
+   A rewritten move therefore puts `u` where the sprite is read from, and
+   whichever of the message and the next GetCursorPos poll ran last decides
+   where the cursor appears — measured at 1920x1080 / 0.25x: the sprite tracked
+   `u` across the frame at 4x the pointer's speed and off the left edge, exactly
+   the artefact this was supposed to remove. The move's own position is not
+   needed as `u` by anything: the world point is recomputed from the pointer in
+   vpw_mouse_world() (tagpu_vpwide.c), which is where it is actually used.
 
-#define to_engine_draw_pt to_engine_true
-
-int tagpu_zoom_cursor_shift(int* dx, int* dy, int* ux, int* uy)
-{
-    /* g_ddraw.cursor is the TRUE pointer position: every write site stores `s`
-       and only the engine-facing reads are unzoomed, which is what lets this
-       recover both halves of the pair. */
-    int sx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
-    int sy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
-    int ex = sx, ey = sy;
-
-    if (dx) *dx = 0;
-    if (dy) *dy = 0;
-    if (ux) *ux = 0;
-    if (uy) *uy = 0;
-    /* the DRAW transform, so this agrees with where the engine actually put the
-       sprite: in the ring that is the pointer itself and there is nothing to
-       move (tagpu_zoom_to_engine_draw) */
-    if (!to_engine_draw_pt(&ex, &ey)) return 0;
-    if (sx == ex && sy == ey) return 0;      /* nothing to move */
-    if (dx) *dx = sx - ex;
-    if (dy) *dy = sy - ey;
-    if (ux) *ux = ex;
-    if (uy) *uy = ey;
-    return 1;
-}
-
-/* Which messages carry a point in lParam. WM_MOUSEWHEEL is in the list because
-   cnc-ddraw has already converted its screen-space point to client space by the
-   time the message reaches the engine's window procedure. */
+   WM_MOUSEWHEEL is not in the list either — the engine's jump table covers only
+   0x200..0x206 and drops the wheel to DefWindowProcA — and tagpu_zoom_wheel()
+   is handed the point separately. */
 static int carries_point(UINT msg)
 {
     switch (msg)
     {
-    case WM_MOUSEMOVE:    case WM_MOUSEHOVER:   case WM_NCHITTEST:
-    case WM_MOUSEWHEEL:
     case WM_LBUTTONDOWN:  case WM_LBUTTONUP:    case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN:  case WM_RBUTTONUP:    case WM_RBUTTONDBLCLK:
     case WM_MBUTTONDOWN:  case WM_MBUTTONUP:    case WM_MBUTTONDBLCLK:

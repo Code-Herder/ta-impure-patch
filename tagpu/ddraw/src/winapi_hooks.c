@@ -28,6 +28,22 @@
 #include "tagpu_shield.h"
 
 
+/* THE ENGINE IS TOLD THE TRUTH ABOUT WHERE THE POINTER IS, at every zoom.
+
+   It used to be handed the unzoomed `u` here, because its 1:1 screen->world
+   arithmetic needs that number — and the cost was that it also DREW its cursor
+   sprite at `u`, which the composite then had to move back under the pointer.
+   That move can never be exact: the texture the composite samples is only
+   replaced when the game flipped, and the engine draws its cursor several times
+   per flip, so any mismatch is multiplied by 1/z.
+
+   So the transform moved to the one place the world point is actually computed
+   (`vpw_mouse_world()` in tagpu_vpwide.c, our redirect of `0x498DA0`), and this
+   hook answers `s`. The engine blits its sprite under the pointer by itself, at
+   any zoom and any frame rate; the screen-space readers of this poll — the edge
+   scroll's equality on the outermost screen pixel (`0x41CE90`, which takes the
+   position from `[obj+0x196]`), the off-screen warp-back at `0x41CEE7` — get the
+   screen position they were always asking for. */
 BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 {
     if (!g_ddraw.ref || !g_ddraw.hwnd || !g_ddraw.width)
@@ -89,9 +105,6 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 
         if (lpPoint)
         {
-            /* g_ddraw.cursor keeps the TRUE pointer position; only what leaves
-               for the engine is unzoomed (tagpu_zoom.h). */
-            tagpu_zoom_to_engine_draw(&x, &y);
             lpPoint->x = x;
             lpPoint->y = y;
         }
@@ -101,12 +114,8 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 
     if (lpPoint)
     {
-        int cx = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
-        int cy = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
-
-        tagpu_zoom_to_engine_draw(&cx, &cy);
-        lpPoint->x = cx;
-        lpPoint->y = cy;
+        lpPoint->x = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
+        lpPoint->y = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
     }
 
     return TRUE;
