@@ -123,6 +123,9 @@
 #define U_TYPE       0x92
 #define U_OWNER      0xFF
 #define U_NANO       0x104     /* float fraction REMAINING                  */
+#define U_CARGO      0x8A      /* first unit carried/being built inside      */
+#define U_CARGONEXT  0x8E      /* next in that chain                         */
+#define ST_NOCARGO   0x20000u  /* the blit's own skip on a chain member      */
 #define U_CLOAKF     0x10E     /* bit2 = actively cloaked                   */
 #define UD_TYPEMASK  0x241     /* u32 FBI booleans: bit12 canhover, bit19   */
                                /* floater, bit25 noshadow (shadows-cloak §2)*/
@@ -1704,6 +1707,36 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         n2->rel = (wy >> 4) - r0;
         n2->owner = owner; n2->cloaked = cloaked;
+    }
+
+    /* A UNIT BEING BUILT INSIDE A FACTORY IS PART OF THE FACTORY'S SPRITE.
+       The engine does not sort it against the factory at all: the blit's cargo
+       loop (0x459646..0x4596DD) rebuilds the cargo composite, scaffolds it and
+       Z-MERGES it into the factory's own scratch through 0x4B90A0, per pixel,
+       by the two height planes offset by the position delta. Sorted as a
+       separate sprite it lands on ITS OWN tile row instead -- measured on an
+       ARM lab at world y 1072 building a Hammer at 1068, one 16-unit row
+       apart, so four whole depth keys behind the lab, which then covered it at
+       every pixel it filled (reported from play: "the unit is being built
+       UNDER the lab"). Giving the cargo the parent's row and band leaves the
+       two models to sort against each other by the same intra-model view depth
+       the engine's height compare is doing. The engine's own chain skip
+       (0x459657, state & 0x20000) is mirrored so a member it does not draw
+       does not get moved either. */
+    for (int a = 0; a < nu; a++) {
+        const char* pu = units[a].u;
+        if (!ptr_ok(pu)) continue;
+        const char* c = *(const char* const*)(pu + U_CARGO);
+        for (int guard = 0; ptr_ok(c) && guard < 64; guard++,
+             c = *(const char* const*)(c + U_CARGONEXT)) {
+            if (*(const unsigned*)(c + U_STATE) & ST_NOCARGO) continue;
+            for (int b = 0; b < nu; b++)
+                if (units[b].u == c) {
+                    units[b].rel = units[a].rel;
+                    units[b].air = units[a].air;
+                    break;
+                }
+        }
     }
     }
 

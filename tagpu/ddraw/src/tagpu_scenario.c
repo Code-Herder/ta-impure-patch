@@ -78,7 +78,10 @@
 #define U_OWNER       0xFF         /* unsigned char cOwnerID                      */
 #define U_NANOFRAME   0x104        /* float, fraction of the build REMAINING      */
 #define U_HEALTH      0x108        /* short                                       */
-#define U_STATE       0x110        /* alive 0x10000000, nanoframe 0x20,           */
+#define U_STATE       0x110        /* alive 0x10000000; 0x20 is written below for  */
+                                   /* a nanoframe but the DRAW path never reads it */
+                                   /* — under construction is +0x104 alone, and    */
+                                   /* 0x20000000 is the STRUCTURE bit (G13l)       */
                                    /* stance (0xC0000)>>18: 0 hold 1 manv 2 roam  */
 #define UO_POS        0x22         /* Position_Dword Pos in UnitOrdersStruct      */
 

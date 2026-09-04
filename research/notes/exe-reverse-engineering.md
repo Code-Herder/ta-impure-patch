@@ -470,6 +470,52 @@ altitude with sea level, which is what the native pass's `fz` gate does.
 **Negative results.** The body punch-out `0x4B9D70(body, scratch, 5, 0)` inside `0x45A790` was read, not
 replicated. `0x459200` itself was not disassembled past `0x459900`.
 
+**A unit under construction casts no shadow, and this tree does not say why.**
+[MEASURED 2026-09-03] One ARM solar, same ground, same camera, held at 25 / 50 / 75 / 100 %
+built by the scenario applier and captured off the stock renderer (no passes armed). Taking the
+pixels the *completed* unit darkens by half as the shadow lobe, the mean luminance over that
+lobe reads **0.99** of bare terrain at 50 % built, **0.82** at 75 %, and **0.48** when complete
+— i.e. no shadow at all until the build is nearly done. Nothing in the branch table above tests
+`Nanoframe`: a building is a structure whether finished or not (see the state-bit measurement
+below), so it reaches `0x45955B`/`0x4592FE` and blits `Object3do+0x14` either way. The
+resolution is therefore in what that cached sprite CONTAINS while the unit is a nanoframe —
+whose composite the dispatch `0x458810` throws away on every progress pulse
+([build-state](build-state.html) §1) — and that was not chased. Recorded as behaviour: our own
+pass suppresses the shadow on `Nanoframe != 0` to match it.
+
+**`unit+0x110 & 0x20000000` is the STRUCTURE bit.** [MEASURED 2026-09-03] Read live in one game
+from `*(main+0x14357) + idx*0x118 + 0x110`: complete mobile ARMCOM `0x91600371` (clear),
+complete building ARMSOLAR `0x30282321` (set), ARMLAB **under construction** `0x30E42321` (set).
+So the table above is right to call it the structure bit — as the factory-built check of
+2026-09-02 in [shadows & cloak](shadows-cloak.html) already found from the other side (a
+Peewee out of an ARMLAB reads it CLEAR) — and [build-state](build-state.html)'s
+"under-construction/nanoframe state" reading was wrong, corrected there. The consequences are
+larger than a name: `0x45873C` selects the Gouraud rasteriser `0x459C70` for **structures**, not
+for nanoframes, and the only state that means *under construction* is `Nanoframe != 0` at
+`+0x104`. The spawn site `0x485AFE..0x485B03`, which that page cited as where the bit is set,
+computes `(UnitDef+0x241 & 0x200) << 0x15` = bit **`0x40000000`** and writes only that.
+
+## `0x458DD0` — the blit-time build-state effect — mapped by us
+
+[MEASURED 2026-09-03, this project — `objdump` of the pristine Steam build, and detoured live.]
+The whole nanoframe look — the height-threshold recolour `0x458D30` and the wireframe
+`0x458FA0` — is applied at **blit** time to a scratch copy of the composite, every frame
+([build-state](build-state.html)). `thiscall(this, GAFFrame* frame, Object3do* obj)`, `ret 8`;
+`obj` is at `[esp+8]` on entry. Two early-outs, both `xor eax,eax; ret 8`:
+
+| VA | Bytes | What |
+| --- | --- | --- |
+| `0x458DD0` | `53 55 8B 6C 24 0C` | `push ebx; push ebp; mov ebp,[esp+0xC]` — `ebp` := the GAFFrame arg. **Six whole bytes, the detour boundary** (a 5-byte steal would split the `mov`) |
+| `0x458DDA` | `8b 45 14 / 85 c0 / 75 09` | `frame+0x14` — no depth plane, return 0 |
+| `0x458DEA..0x458E06` | `8b 44 24 18 / 8b 50 0c / d9 82 04 01 00 00 / d8 1d c0 d4 4f 00` | `obj+0x0C` → unit, `fld [unit+0x104]`, `fcomp ds:0x4FD4C0` (0.0f) — **`Nanoframe == 0` returns 0**, so this function only ever does anything for a unit under construction |
+| `0x458E11..0x458E1F` | `66 8b 8a a8 00 00 00` | `unit+0xA8` (the slot index) into the oscillator maths |
+
+Our detour (`tagpu_owndraw.c`, the third one) replays those six bytes after `popad` — at the
+entry `esp`, so the esp-relative `mov` reads what it always read — and takes `xor eax,0; ret 8`
+for units the native pass owns, which is the callee's own "did nothing" return. Call sites:
+`0x4589C0` tail-calls it for the unit's own scratch, `0x459686` for each cargo composite, so a
+factory's unit-in-progress is covered by the same skip.
+
 ## The cursor chain — mapped by us
 
 [MEASURED 2026-09-03, this project — disassembly of the pristine Steam build (`objdump -d -M

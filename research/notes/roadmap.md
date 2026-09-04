@@ -45,6 +45,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | What the engine used to draw | State | Owned how | Verified how |
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
+| Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key the way the engine's z-merge does | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
@@ -76,6 +77,63 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G13l — the thing being built stopped sliding across the map.** Reported from play: *"when a
+unit is being built and you zoom in or out the unit being built will move across the screen …
+units built by factories or buildings built by commanders."*
+
+**A nanoframe was the last world thing still on the engine's composite path.** Everything the
+engine draws inside the viewport arrives at the **unzoomed** projection — the composite scales
+OUR fragments and passes its frame through 1:1 — so a half-built solar stayed at its 1× pixels
+while the world moved under it, ending up beside the commander lathing it. The same mechanism as
+G13h's waypoint star and G13k's structure shadows, one layer further in, and the last of them:
+`tagpu_native_owns_unit()` returned 0 while `Nanoframe > 0`, on purpose, from G12b.
+
+**It was not even the engine's look any more.** With `owndraw all` the rasterise is skipped for
+every unit, so the blit-time effect `0x458DD0` recoloured an empty composite and stamped its
+**wireframe alone** — a bare skeleton at every build percentage, where TA shows a skeleton, then
+a solid fill, then the texture.
+
+**The fix owns it.** Ownership no longer stops at `Nanoframe > 0`; the recolour is three per-unit
+uniforms in the unit shader (engine `0x458D30` semantics: erase / band / fill by the composite
+depth byte) and the wireframe (`0x458FA0`) a second line range per unit, biased one notch nearer
+than the skin it traces. An **erased fragment is emitted transparent rather than discarded**, so
+it changes no pixel and still writes depth — which is what hides the wireframe's back edges, the
+job the engine's own height plane does. The stage table and the two oscillators moved into one
+shared function, `tagpu_r3d_nano_state()`, which the composite path calls too. A third `owndraw`
+detour, on `0x458DD0` itself (6 stolen bytes, `xor eax,eax; ret 8` — the callee's own early-out),
+stops the engine stamping its copy at the 1× position.
+
+**A unit in a factory belongs to the factory's sprite.** The first cut sorted it as its own
+sprite and it vanished under the lab — reported from play the same session. The engine never
+sorts it at all: the blit's cargo loop z-merges the cargo composite INTO the factory's scratch
+per pixel (`0x4B90A0`, the two height planes offset by the position delta), while a separate
+sprite lands on its own tile row — measured one 16-unit row apart on an ARM lab building a
+Hammer, four whole depth keys behind it. The gather now walks `unit+0x8A`/`+0x8E` and hands
+every chain member the parent's row and band.
+
+**And a unit under construction casts no shadow**, which ours had to learn or the erased body
+showed our slant projection through as a black silhouette. Measured against the stock renderer on
+one solar held at 25/50/75/100 % built on the same ground: over the pixels the completed unit
+darkens by half, the 50 %-built frame reads **0.99** of bare terrain and the complete one
+**0.48**.
+
+**Verified live at 1024×768** against an unarmed control instance on the same scenario: the
+5/25/50/75/95/100 % ladder reproduces the engine's own progression and its pulse; a
+commander-built solar tracks the zoom at 0.6/1.0/1.8; a Hammer inside an ARM lab is gathered,
+staged and animated where the transform puts the lab.
+
+**Two corrections the gate forced.** `unit+0x110 & 0x20000000` is the **structure** bit, not
+"under construction" (measured: complete mobile clear, complete building set, building under
+construction set) — so `0x459C70` is the *structure* Gouraud rasteriser, and the only state that
+means under construction is `Nanoframe` at `+0x104`. And the `0xA0..0xAF` ramp the scaffold
+animates over is **green** in the live palette, not blue as [build-state](build-state.html) said.
+
+**What this gate did not close.** A replacement (glTF) mesh under construction draws unstaged —
+the hires pass has no build-state uniforms, though its wireframe still comes off the 3DO tree.
+Why the engine's own shadow branch draws nothing for a nanoframe is unresolved: it has no
+nanoframe test and does blit `Object3do+0x14`, so the answer is in what that sprite holds while
+the composite is thrown away every progress pulse.
 
 **G13k — buildings stopped casting teal.** Reported from play, zoomed out on Two Continents:
 *"enemy units have strange shadows, kind of a dark green … metal extractors casting strange

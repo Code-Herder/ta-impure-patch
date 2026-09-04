@@ -7,7 +7,11 @@
 
      0x459830  opaque rasteriser   (called from builder 0x45878B and from the
                                     blit's build-state path 0x459641)
-     0x459C70  nanoframe rasteriser (called from builder 0x458765)
+     0x459C70  the SAME rasteriser plus Gouraud lighting, taken for STRUCTURES
+               (called from builder 0x458765, whose test at 0x45873C is
+               unit+0x110 & 0x20000000 — measured to be the structure bit, not
+               "under construction": build-state.md 1. This comment used to
+               call it the nanoframe rasteriser; it is not one.)
 
    Both are thiscall with 4 stack args, callee-clean `ret 0x10`:
      [esp+4]=composite GAFFrame*, [esp+8]=Object3do*, [esp+0xC]=cloak byte,

@@ -22,6 +22,7 @@ moved by the composite too.
 | What the engine used to draw | Ours since | Owned how |
 |---|---|---|
 | Units, wrecks, shadows, cloak, waterline | G12a–c | `owndraw` skips the software rasterisers; `tagpu_native.c` draws them |
+| **Units under construction** — the nanoframe scaffold, its fill and its wireframe | G13l | the same pass: ownership no longer stops at `Nanoframe > 0`, the recolour is three per-unit uniforms in the unit shader and the wireframe a line range per unit; a third `owndraw` detour (`0x458DD0`) stops the engine stamping its own copy at the 1× position. A unit under construction casts no shadow, as the engine's does not, and a factory's cargo takes the FACTORY's depth key — the engine z-merges it into the factory's sprite (`0x4B90A0`) rather than sorting it, and on its own tile row it disappeared under the lab |
 | Structure shadows (the cached slant projection) | G13k | `owndraw all` flips the blit's two structure-shadow `je`s; the native pass emits the slant projection from the posed prims — see §2.1 and [shadows & cloak](shadows-cloak.html) §"Structure shadows, owned" |
 | Weapon fire, explosions, debris | G12e | `fxown`: 2 call-site redirects + 4 leaf detours |
 | Smoke, fire, wakes, nanolathe | G12f | `fxown`: one detour on the layer walker |
@@ -115,7 +116,8 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | VA | What it is | Module (arm file) | Mechanism |
 |---|---|---|---|
 | `0x459830` | opaque 3DO rasteriser | `owndraw` (`owndraw.on`) | prologue detour, 5 stolen |
-| `0x459C70` | nanoframe/build rasteriser | `owndraw` | prologue detour, 5 stolen |
+| `0x459C70` | the Gouraud-lit 3DO rasteriser — **selected for STRUCTURES**, not for nanoframes (`0x45873C` tests `unit+0x110 & 0x20000000`, measured to be the structure bit; [build-state](build-state.html) §1) | `owndraw` | prologue detour, 5 stolen |
+| `0x458DD0` | the blit-time **build-state effect** (`thiscall(this, frame, obj)`, `ret 8`): the height-threshold recolour plus the nanoframe wireframe, applied to a scratch copy of the composite every frame. Wiping the composite does not stop it — with the rasterise skipped it recoloured nothing and stamped its wireframe alone, at the 1× position | `owndraw` | prologue detour, **6 stolen** (`53 55 8B 6C 24 0C`; a 5-byte steal splits the `mov`), skip path `xor eax,eax; ret 8` = the callee's own early-out. Taken only for units `tagpu_native_owns_obj` claims |
 | `0x4592C6` | `je 0x459324` in the blit `0x459200`, path A — the branch into the cached structure shadow (`Object3do+0x14`, blitted through the ALP blend, which turns the fill key teal) | `owndraw`, target `all` only | `74`→`EB`, one byte, verified `74 5C` first; installed with the next as a pair or not at all |
 | `0x45952C` | the same `je` in path B (`je 0x459578`) | `owndraw`, target `all` only | `74`→`EB`, verified `74 4A` |
 | `0x469B22` | `call 0x49BE60` — projectile pass | `fxown` (`fxown.on`) | call-site redirect |
