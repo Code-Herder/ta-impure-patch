@@ -102,6 +102,16 @@
                      washed a low building's rim out; 0 = hard
        unitsun=<az,el>   EXPLORE: see THREE SUNS above
        shadowsun=<az,el> EXPLORE: see THREE SUNS above
+       shadowlen=<a>,<b>  EXPLORE: how long a 3DO's shadow is, in world
+                     units: a + b * the model's height. Default 10,0.25 —
+                     the kbot lab (11 tall) gets 13, a Peewee (26) 16, the
+                     laser tower (47) 22. A parallel light makes length
+                     proportional to height, and what reads on TA's low
+                     buildings is three times too long on its kbots; the
+                     engine does not project mobile units at all (a flat
+                     5-px drop). Implemented as a per-caster vertical scale
+                     in the depth pass, the unit's own shadow lookup scaled
+                     with it; hills are unscaled. off = physical
        shade=<s>     EXPLORE: the fraction of the DIRECT light a shadow
                      removes, default 1 (ambient only in full shadow, which
                      is amb/level = 0.40 at the defaults). Lower for a
@@ -229,7 +239,8 @@ const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 // well is a contradiction and an error rather than a silent winner
 const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither",
                       "filter", "aniso", "shadows", "penumbra", "shade",
-                      "terrainshadow", "shadowres", "unitsun", "shadowsun"];
+                      "terrainshadow", "shadowres", "unitsun", "shadowsun",
+                      "shadowlen"];
 
 function sideQuery(side, presets) {
   const p = new URLSearchParams();
@@ -297,6 +308,14 @@ function readLook(p, label) {
     return v;
   };
   const unitAE = angles("unitsun", UNITSUN_DEFAULT);
+  let shadowlen = [10, 0.25];                         // a + b * height, or null
+  const slRaw = p.get("shadowlen");
+  if (slRaw === "off") shadowlen = null;
+  else if (slRaw !== null) {
+    shadowlen = slRaw.split(",").map(Number);
+    if (shadowlen.length !== 2 || shadowlen.some(Number.isNaN))
+      fail(`${label}: shadowlen must be "<a>,<b>" (length = a + b*height) or off`);
+  }
   const shadowAE = angles("shadowsun", SHADOWSUN_DEFAULT);
   // amb >= 1 is how "no sun" reaches the shaders: one uniform, no branch
   const amb = lit ? Math.min(1, Math.max(0, num("amb", 0.35))) : 1;
@@ -326,6 +345,7 @@ function readLook(p, label) {
     sun: sunV, sunAE: lit ? sun : null,
     unitSun: unitV, unitSunAE: unitAE,
     shadowSun: sunVector(shadowAE[0], shadowAE[1]), shadowSunAE: shadowAE,
+    shadowlen,
     // null = "not named": restored if the pack carries the atlases, resolved
     // once the scene is loaded, like datum
     undither: lane !== "explore" ? false
@@ -890,6 +910,7 @@ async function main() {
   const UVST = 17;      // x,y,enc, u,v, fc,ck, shade, wx,wz, vy, nx,ny,nz, WX,WY,WZ
   let uProg = null, uVAO = null, uVBO = null, luProg = null, UU = {}, LUU = {};
   let uVerts = null;
+  const meshTop = {};                 // model height (max y) per unit type
   // tagpu_render3do.c: the model-space toward-camera axis and the light
   const SH_V = [0.0, 0.8944, -0.4472], SH_L = [-0.35, 0.80, -0.49];
   let unitRGBTex = null;
@@ -1340,9 +1361,21 @@ async function main() {
     let r0 = rowBase(), nRows = (vh >> 4) + 32;
     if (r0 < 0) { nRows += r0; r0 = 0; }
     let n = 0;
+    // shadowlen: the shadow's length is a + b*height instead of the parallel
+    // light's height/tan(el), done as a vertical scale on the caster in the
+    // shadow map. sv = height ONLY along the shadow sun's ground direction
+    const cot = Math.hypot(L.shadowSun[0], L.shadowSun[2]) / Math.max(L.shadowSun[1], 1e-3);
     for (const inst of U.instances) {
       const mesh = meshData[inst.type];
       if (!mesh) continue;
+      if (meshTop[inst.type] === undefined) {
+        let top = 0;
+        for (let i = 1; i < mesh.length; i += UNIT_STRIDE) if (mesh[i] > top) top = mesh[i];
+        meshTop[inst.type] = top;
+      }
+      const top = meshTop[inst.type];
+      const sv = L.shadowlen && top > 0 && cot > 1e-3
+               ? (L.shadowlen[0] + L.shadowlen[1] * top) / (top * cot) : 1;
       // scenario facing 0 is TA's default build heading 0x8000, i.e. half a turn
       const yaw = (inst.facing + 180) * Math.PI / 180;
       const cs = Math.cos(yaw), sn = Math.sin(yaw);
@@ -1410,7 +1443,10 @@ async function main() {
           uVerts[q + 9] = wldZ + (-z - y * 0.5);
           uVerts[q + 10] = y;
           uVerts[q + 11] = ux; uVerts[q + 12] = uy; uVerts[q + 13] = uz;
-          uVerts[q + 14] = wx + x; uVerts[q + 15] = wy + y; uVerts[q + 16] = wz - z;
+          // the SHADOW position: real x/z, height scaled by sv. The depth pass
+          // casts from it and LAB_UNIT_FS looks its own shadow up at it, so a
+          // unit is consistent with itself; only the ground sees the real world
+          uVerts[q + 14] = wx + x; uVerts[q + 15] = wy + sv * y; uVerts[q + 16] = wz - z;
           n++;
         }
       }
@@ -1592,7 +1628,8 @@ async function main() {
             `<span>filter</span><b>${L.filter}${L.filter === "linear" && L.aniso > 1
                 ? ` ·${Math.min(L.aniso, ANISO_MAX || 1)}x` : ""}</b>` +
             `<span>shadows</span><b>${L.shadows
-                ? `pen ${L.penumbra} shade ${L.shade}${L.terrainshadow ? " +hills" : ""}`
+                ? `pen ${L.penumbra} shade ${L.shade}${L.terrainshadow ? " +hills" : ""}` +
+                  (L.shadowlen ? ` len ${L.shadowlen[0]}+${L.shadowlen[1]}h` : " len physical")
                 : "off"}</b>`
           : "") +
         `<span>cells</span><b>${st.cells}</b>` +
