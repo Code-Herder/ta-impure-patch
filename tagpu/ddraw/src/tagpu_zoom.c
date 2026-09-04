@@ -399,7 +399,8 @@ int tagpu_zoom_to_engine(int* x, int* y)
    A MOVE MUST NOT BE REWRITTEN, and that is the whole reason the sprite used to
    jump. `0x4B5E51` does not queue: it copies its record into `[obj+0x196]`
    (`0x4C2360`), which is both the dispatch's fallback record AND the position
-   the engine draws its cursor from on the paths that do not poll (`0x4C2380`).
+   the engine draws its cursor from on the path that does not poll — `0x4C67C0`,
+   called twice out of the surface present machinery.
    A rewritten move therefore puts `u` where the sprite is read from, and
    whichever of the message and the next GetCursorPos poll ran last decides
    where the cursor appears — measured at 1920x1080 / 0.25x: the sprite tracked
