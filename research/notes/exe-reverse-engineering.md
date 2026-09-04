@@ -532,8 +532,9 @@ boundary there.
 
 [MEASURED 2026-09-03, this project — `objdump -d -M intel` of the pristine Steam build. Read,
 not patched, while fixing "the unit is being built UNDER the lab". The mechanism and the
-consequences for our pass are in [build-state](build-state.html) §7; this is the address-level
-record.]
+consequences for our pass are in [build-state](build-state.html) §7, and the whole carry
+relationship — what a factory does with the unit on its pad, and what happens when it lets go —
+is on [factories](factory-build.html); this is the address-level record.]
 
 **A unit inside a factory is never sorted as its own sprite.** The blit walks the parent's cargo
 chain and merges each member's composite *into the parent's scratch*, per pixel:
@@ -583,6 +584,54 @@ merge rather than porting it: `0x4B90A0` compares a *height* biased by `HIWORD(d
 at the projected offset, while `md = (2y − z)/256` is model-local and carries neither term. They
 agree while parent and cargo are level, which is every factory pad, and diverge for a cargo whose
 origin sits above or below its parent.
+
+## `0x48AB70` — attach and detach one unit to another — mapped by us
+
+[MEASURED 2026-09-03, this project — `objdump -d -M intel` of the pristine Steam build. Read, not
+patched, while answering "does a unit walk under the factory in the original too?". Full write-up,
+including how a carried unit is drawn: [factories](factory-build.html).]
+
+`0x48AB70 .. 0x48AD2D`, `ret 4`. **One argument, and it is a packed command, not a unit** — which
+is what tells you attach/detach is a *simulation* event, replicated by unit id rather than by
+pointer:
+
+| Packet | What |
+| --- | --- |
+| `+0x1` word | child unit id (`0` = none) |
+| `+0x3` word | parent unit id (**`0` = detach**) |
+| `+0x5` byte | attach point; **`0xFF` = "inside"** |
+| `+0x6` byte | two low bits xor'd into `Object3do+0x2E` (`0x48ACE1..0x48ACF0`) |
+
+**Unit id → address**, computed the long way at `0x48AB8A..0x48AB9F`: `id*8 − id` then
+`lea eax,[eax+eax*4]` then `lea esi,[ecx+eax*8]` = `*(main+0x14357) + id*0x118`.
+
+**The fields it owns**, all in `UnitStruct`: `+0x86` parent, `+0x8A` head of the carried chain,
+`+0x8E` next sibling, `+0xF9` the attach-point byte, and bit `0x20000` of `+0x110`.
+
+**The guards** (`0x48ABC7..0x48AC1D`, all bailing to `0x48AD2A` having done nothing) are the
+interesting part, because each is a rule of the game engine: the child must be alive
+(`+0x110 & 0x10000000`); **a structure can never be carried** (`+0x110 & 0x20000000` must be
+clear); a unit that is itself carrying something cannot be attached (`+0x8A` must be `0`); and
+**carrying does not nest** — the parent's own `+0x86` must be `0`.
+
+**`+0x110 & 0x20000` is set iff the attach point is `0xFF`** (`and edx,0xfffdffff` /
+`cmp cl,0xff` / `sete al` / `shl eax,0x11` / `or edx,eax`, `0x48AC88..0x48ACA7`). It is a
+**"drawn by nobody" flag, not an "is cargo" flag**: the blit's cargo loop skips it at `0x459657`
+*and* `DrawUnit 0x45AC20` skips it at `0x45AD43`, so a unit in a transport hold is drawn neither
+by itself nor by its carrier. A unit attached to a *piece* — the one on a factory pad — has the
+bit clear and is drawn by its carrier, merged through `0x4B90A0`.
+
+**Call sites (4).** `0x455403` in a large command dispatcher (every arm `jmp`s `0x455F50`);
+`0x48AB62` from the wrapper `0x48AB40..0x48AB6A` (`ret 0x10`); `0x48B58B` attaching with a real
+piece; and **`0x48B5C5` the detach** — child id from `+0xA8`, parent id `0`, point `0xFF`, guarded
+on `[edi+0x86] != 0`. Detaching is "attach to nobody", and it happens in one step, so there is no
+state in which a unit is still in the chain but positioned away from its carrier.
+
+**Negative results.** `0x47CB00` (no-previous-parent path) and `0x47CB40` (detach path) were not
+disassembled, and there is a **second `+0x8E` writer** in `0x47Cxxx` (`0x47CB26`, `0x47CB47`,
+`0x47CBA3`, `0x47CBB0`, `0x47CC13`, `0x47CD0F`, `0x47D0B9`) that has not been read. The enclosing
+function of `0x48B58B`/`0x48B5C5` was not delimited — `0x48B43C`'s `ret 8` is an early return
+inside it, not its end — so the COB opcode that reaches them is unidentified.
 
 ## The cursor chain — mapped by us
 

@@ -519,6 +519,10 @@ commander or factory building it. Reported from play, reproduced on a scripted
   half-gap between row keys — inside it, with 0.05 to spare). It is not
   decoration: at the top of a build the recolour erases the whole model and the
   skeleton is the only thing on screen.
+- **Where the rest of this lives.** A factory's unit-in-progress is *carried*, and being carried
+  is a separate axis from being a nanoframe: the attach/detach function, the guards it enforces,
+  why a released unit appears to walk under the plant, and the A/B proving that is stock, are all
+  on [factories](factory-build.html).
 - **GAP — the wireframe's back edges show through the unbuilt part, and the
   engine's do not.** The engine hides them by testing each outline pixel
   against the composite's own height plane, which keeps the whole model's

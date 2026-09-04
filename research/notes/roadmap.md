@@ -110,7 +110,9 @@ sprite lands on its own tile row — measured one 16-unit row apart on an ARM la
 Hammer, four whole depth keys behind it. The gather now walks `unit+0x8A`/`+0x8E` and hands
 every chain member the parent's row and band. That **approximates** the merge rather than porting
 it: `0x4B90A0` compares a *height* biased by the world height delta, our `md` is model-local, and
-the two agree only while parent and cargo are level — which every factory pad is.
+the two agree only while parent and cargo are level — which every factory pad is. The carry
+relationship this rests on, and the separate question of what happens when the factory *releases*
+the unit, are on [factories](factory-build.html).
 
 **And a unit under construction casts no shadow**, which ours had to learn or the erased body
 showed our slant projection through as a black silhouette. Measured against the stock renderer on

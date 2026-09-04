@@ -1,0 +1,27 @@
+{
+  "format": "ta-scenario/1",
+  "description": "A kbot standing north of an ARM lab, on the lab's own tiles, to compare unit-vs-structure sprite sorting against the stock engine",
+  "seed": 20260903,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1920x1080",
+    "unit_limit": 64,
+    "clear_existing": true,
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "units": [
+    { "id": "lab",   "type": "ARMLAB", "owner": 0, "pos": [2000, 1200], "facing": 0 },
+    { "id": "north", "type": "ARMPW",  "owner": 0, "pos": [2000, 1160], "facing": 0 },
+    { "id": "far",   "type": "ARMPW",  "owner": 0, "pos": [2000, 1120], "facing": 0 },
+    { "id": "south", "type": "ARMPW",  "owner": 0, "pos": [2000, 1260], "facing": 0 },
+    { "id": "enemy", "type": "CORCOM", "owner": 1, "pos": [3200, 2400], "facing": 180 }
+  ],
+
+  "camera": { "center_on": "lab" }
+}
