@@ -522,6 +522,61 @@ for units the native pass owns, which is the callee's own "did nothing" return. 
 `0x4589C0` tail-calls it for the unit's own scratch, `0x459686` for each cargo composite, so a
 factory's unit-in-progress is covered by the same skip.
 
+The resume address is **`0x458DD6`**; the six stolen bytes end exactly on an instruction
+boundary there.
+
+## `0x459646..0x4596DD` — the cargo loop, and `0x4B90A0` the z-merge — mapped by us
+
+[MEASURED 2026-09-03, this project — `objdump -d -M intel` of the pristine Steam build. Read,
+not patched, while fixing "the unit is being built UNDER the lab". The mechanism and the
+consequences for our pass are in [build-state](build-state.html) §7; this is the address-level
+record.]
+
+**A unit inside a factory is never sorted as its own sprite.** The blit walks the parent's cargo
+chain and merges each member's composite *into the parent's scratch*, per pixel:
+
+| VA | What |
+| --- | --- |
+| `0x459646` | `mov edx,[ebp+0xC]` (the unit) → `mov esi,[edx+0x8A]` — the cargo head; `je 0x4596EB` exits when the chain is empty |
+| `0x459657` | `test dword [esi+0x110],0x20000` / `jne 0x4596DD` — **the chain skip**: a member with that bit is stepped over undrawn. Also the loop's re-entry target |
+| `0x459670` | `call 0x4586A0(cargo_obj, 1, -1)` — rebuild the cargo composite, **every frame** |
+| `0x459686` | `call 0x458DD0(cargo_composite, cargo_obj)` — the build-state effect on the cargo (the section above) |
+| `0x45968B..0x4596D3` | the position delta: `cargo+0x6A/+0x6E/+0x72` minus the parent's same three dwords, each taken as its **high word** (the whole-world-unit part) |
+| `0x4596D8` | `call 0x4B90A0` |
+| `0x4596DD` | `mov esi,[esi+0x8E]` — next in chain; `jne 0x459657` loops |
+
+**`0x4B90A0(srcFrame, dstFrame, sx, sy, dbias)`, `ret 0x14`** — a depth-tested 8bpp paint of one
+`GAFFrame` into another ([composite-buffer](composite-buffer.html) has the header layout). The
+five arguments come out of the push order at `0x4596B5..0x4596D7`:
+
+- `srcFrame` = `cargoObj3do+0x10`, `dstFrame` = `this+0x10` (the blitter's shared scratch);
+- `sx` = `HIWORD(dx)`, `sy` = `HIWORD(dz) − HIWORD(dy)/2` — **the isometric projection of the
+  delta**, not a raw dy, so the merge lands the cargo where the camera would put it;
+- `dbias` = `HIWORD(dy)`, the pure height delta, applied to the *depth* plane.
+
+The inner loop (`0x4B9130..0x4B9170`), per pixel: skip if the source colour equals the frame's
+key byte at `srcFrame+0x8`; otherwise compare `dstDepth` against `srcDepth + dbias` and
+**`jg` keeps the destination** — i.e. the source wins on `dstDepth <= srcDepth + dbias`, larger
+depth = higher/nearer, the same convention the intra-model rasteriser uses. On a win it writes
+the colour and sets `dstDepth = srcDepth + dbias`.
+
+**Two negative results.**
+
+- **`0x4B90A0` has exactly one caller in the entire image** — `0x4596D8`, the line above. A
+  disassembly of every section and a scan for the literal find no other call and no pointer to
+  it. The cargo merge is the only thing in the game that composites two sprites by depth.
+- **The compare and the store disagree about width.** The compare adds `dbias` as a full dword
+  to a zero-extended source byte (`0x4B913D..0x4B914D`), but the store re-reads `dbias` as a
+  *byte* and does an 8-bit `add cl,dl` (`0x4B914F..0x4B9159`), so a stored depth wraps where the
+  comparison did not. Cargo sits within a few world units of its parent, so `dbias` is small and
+  this never fires in stock play; it is recorded because it is read, not exercised.
+
+**Why this cost us a bug.** Our native pass first sorted a factory's cargo as an ordinary unit,
+which put it on its own tile row — an ARM lab at world y 1072 building a Hammer at 1068 is one
+16-unit row apart, four whole depth keys behind the lab, which then covered it at every pixel.
+Matching the engine means giving every chain member the parent's row and band and letting the
+two models sort against each other by view depth, which is what the height compare above does.
+
 ## The cursor chain — mapped by us
 
 [MEASURED 2026-09-03, this project — disassembly of the pristine Steam build (`objdump -d -M
