@@ -4,7 +4,13 @@
      Draws a scene pack built by `tools/tascene build` in WebGL2. There are two
      renderers and they do not blend (research/notes/tascene-design.md):
 
-       lane=classic    (default) "Classic" — tagpu's OWN shaders, extracted
+       (nothing)       BOTH — the wipe, Classic left, Classic++ right. A
+                       bare page, or one with only eye/zoom/ss, shows both;
+                       naming a renderer, a preset or any Classic++ parameter
+                       shows that one look alone. Under shot=1 a bare query
+                       is Classic alone: `tascene shot pack` with no options
+                       is the parity ritual's baseline, and a shot measures
+       lane=classic    "Classic" — tagpu's OWN shaders, extracted
                        from the C sources at export time into pack/shaders/*.
                        Flat 32-px grid, R8 palette indices, the engine's
                        PALETTE.SHD LUT. The only renderer that carries a
@@ -709,8 +715,19 @@ async function main() {
     presets = (await fetchJSON("tascene-presets.json")).presets || {};
   } catch (e) { presets = {}; }        // a pack served without the presets file
 
-  const sides = [readLook(sideQuery(Q.get("a"), presets), "a")];
-  if (Q.get("b") !== null)
+  // NOTHING NAMED SHOWS BOTH: a bare page (or eye/zoom/ss alone) is the wipe,
+  // Classic on the left, Classic++ on the right. A renderer, a preset or any
+  // Classic++ parameter at the top level names one look and shows it alone.
+  // Under shot=1 nothing named is Classic alone: a shot is a measurement, and
+  // `tascene shot pack` with no options is the parity ritual's baseline.
+  const NAMES = new Set(["lane", "preset", ...EXPLORE_ONLY]);
+  const nothingNamed = Q.get("a") === null && Q.get("b") === null &&
+                       ![...Q.keys()].some((k) => NAMES.has(k));
+  const sides = nothingNamed && !SHOT
+    ? [readLook(sideQuery("lane=classic", presets), "a"),
+       readLook(sideQuery("lane=classicpp", presets), "b")]
+    : [readLook(sideQuery(Q.get("a"), presets), "a")];
+  if (sides.length === 1 && Q.get("b") !== null)
     sides.push(readLook(sideQuery(Q.get("b"), presets), "b"));
   let wipe = sides.length > 1 ? Math.min(1, Math.max(0, parseFloat(Q.get("wipe") ?? "0.5")))
                               : 2.0;
