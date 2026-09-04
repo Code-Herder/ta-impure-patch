@@ -20,7 +20,13 @@
      Query parameters. Global (top level only):
        shot=1        hide the UI, render one frame, then set document.title to
                      "tascene-ready" so a screenshotter knows it is done
-       ss=<n>        supersample factor for the offscreen (default 1)
+       ss=<n>        supersample factor for the offscreen. DEFAULT 2, THE
+                     GAME'S OWN: tagpu renders its native unit FBO at 2x and
+                     box-downsamples (tagpu_native.c, `tagpu_ss.off` turns it
+                     off), so at 1 the unit textures alias where the game's
+                     do not — the kbot lab's roof shimmers. The composite is
+                     an exact n x n box for any n; 1 = raw. Terrain and
+                     sprites are 1:1 texel-to-pixel and do not change with it
        eye=<x,y>     override the pack's eye (viewport top-left, world units)
        a=<query>     the WIPE: render two looks into the same frame and split
        b=<query>     them at `wipe`, so the difference between two parameter
@@ -114,7 +120,7 @@
 <script type="module">
 const Q = new URLSearchParams(location.search);
 const SHOT = Q.get("shot") === "1";
-const SS   = Math.max(1, parseInt(Q.get("ss") || "1", 10));
+const SS   = Math.max(1, parseInt(Q.get("ss") || "2", 10));
 const err  = document.getElementById("err");
 const bar  = document.getElementById("bar");
 if (SHOT) document.body.classList.add("shot");
@@ -437,8 +443,16 @@ uniform sampler2D uA;
 uniform sampler2D uB;
 uniform float uWipe;      // split position in canvas x; > 1 = side A only
 uniform float uWidth;     // canvas width in px, so the divider is one pixel
+uniform int uSS;          // the offscreen is uSS x the canvas: exact box filter
 void main(){
-  vec3 c = (vUV.x < uWipe) ? texture(uA, vUV).rgb : texture(uB, vUV).rgb;
+  ivec2 sz = textureSize(uA, 0);
+  ivec2 base = ivec2(floor(vUV * vec2(sz) / float(uSS))) * uSS;
+  vec3 c = vec3(0.0);
+  for (int j = 0; j < uSS; j++)
+    for (int i = 0; i < uSS; i++)
+      c += (vUV.x < uWipe) ? texelFetch(uA, base + ivec2(i, j), 0).rgb
+                           : texelFetch(uB, base + ivec2(i, j), 0).rgb;
+  c /= float(uSS * uSS);
   if (uWipe <= 1.0 && abs(vUV.x - uWipe) * uWidth < 1.0) c = vec3(0.85, 0.70, 0.29);
   frag = vec4(c, 1.0);
 }`;
@@ -558,8 +572,9 @@ async function main() {
     const colour = gl.createTexture();
     gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, colour);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, FW, FH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, SS > 1 ? gl.LINEAR : gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, SS > 1 ? gl.LINEAR : gl.NEAREST);
+    // the composite texelFetches its SS x SS box, so no filter is involved
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     const depth = gl.createRenderbuffer();
@@ -705,7 +720,7 @@ async function main() {
 
   const blitProg = program(gl, BLIT_VS, BLIT_FS, "blit");
   const blitVAO = gl.createVertexArray();
-  const BU = uniforms(gl, blitProg, ["uA", "uB", "uWipe", "uWidth"]);
+  const BU = uniforms(gl, blitProg, ["uA", "uB", "uWipe", "uWidth", "uSS"]);
 
   const verts = new Float32Array(32768 * 6 * TVST);
 
@@ -1162,7 +1177,7 @@ async function main() {
     gl.activeTexture(gl.TEXTURE11);
     gl.bindTexture(gl.TEXTURE_2D, (targets[1] || targets[0]).colour);
     gl.uniform1i(BU.uA, 4); gl.uniform1i(BU.uB, 11);
-    gl.uniform1f(BU.uWipe, wipe); gl.uniform1f(BU.uWidth, GW);
+    gl.uniform1f(BU.uWipe, wipe); gl.uniform1f(BU.uWidth, GW); gl.uniform1i(BU.uSS, SS);
     gl.bindVertexArray(blitVAO);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

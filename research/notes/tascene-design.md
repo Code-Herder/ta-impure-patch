@@ -190,7 +190,7 @@ The page's whole state is the query string — that is the point: a look is a li
 | `shot=1` | hide the UI, render exactly one frame, then set `document.title` to `tascene-ready` so a screenshotter knows it is done |
 | `pass=<list>` | comma-separated passes to draw: `terrain`, `features`, `units`. Default: every pass the pack carries. `pass=terrain` is the terrain-only render the parity split uses |
 | `eye=<x,y>` | override the pack's eye (viewport top-left, world units) |
-| `ss=<n>` | supersample factor for the offscreen (default 1) |
+| `ss=<n>` | supersample factor for the offscreen. **Default 2, the game's own**: `tagpu_native.c` renders its native unit FBO at 2× and box-downsamples (`tagpu_ss.off` turns it off), so at `ss=1` the unit textures alias where the game's do not — the kbot lab's roof shimmered in both lanes until the default followed the game. The composite is an exact n×n `texelFetch` box for any n (a single bilinear tap, which it was, is only a box at n = 2). Terrain and sprites are 1:1 texel-to-pixel and are **0 differing pixels** at any factor; on the base fixture `ss=2` changes 12 883 parity pixels, all units, and in the exploration lane 19 939 more by ±2, the per-pixel lambert averaged over its sub-samples |
 | `feat=<what>` | features: `both` (default), `body`, `shadow`. A debug split, because "is the shadow drawing at all" is not eye-answerable — it was 152 133 differing pixels, i.e. yes |
 | `preset=<name>` | a named look from `tascene-presets.json`; anything else you spell out wins over it. A preset may not name another preset |
 | `a=<query>` `b=<query>` `wipe=<0..1>` | **the wipe** — see below |
@@ -472,7 +472,10 @@ Two lanes in one page is exactly the arrangement where one quietly starts
 changing the other, so both directions were measured rather than assumed.
 
 - **The parity lane did not move.** The same pack shot before and after the
-  rewrite is **byte-identical** (`md5 60adadd4334a9ab7e1027cd1090e0175`).
+  rewrite is **byte-identical** (`md5 60adadd4334a9ab7e1027cd1090e0175`). That
+  md5 is the `ss=1` frame; since the default became `ss=2` (2026-09-03) the
+  default frame is `md5 4549242d3e8ff29dfd52f3c42be0dbb8`, and `ss=1` still
+  gives the old one — the box composite at n = 1 is the old single tap.
 - **The exploration lane reduces to it.** At `relief=0&sun=off` — the whole lab
   path: 16-px mesh, quartered UVs, lab shaders, lab depth keys — the frame is
   **0 differing pixels out of 630 784** against the parity lane, terrain and
@@ -616,8 +619,9 @@ Two things that table says, and neither was obvious from the symptom:
 - **`relief=0` is 0 px on every eye**, which is `tagpu_terr.c`'s own claim
   ("the quad still spans 32 texels, so sampling at 1:1 is bit-identical to the
   un-padded atlas") holding in the lab. That is also why the parity fixture shot
-  is still `md5 60adadd4…` after the change, and why the exploration lane still
-  reduces to the parity lane at 0 differing pixels of 630 784.
+  is still `md5 60adadd4…` after the change (at `ss=1`; `4549242d…` at the
+  later default of `ss=2`), and why the exploration lane still reduces to the
+  parity lane at 0 differing pixels of 630 784.
 
 The extracted fragment shader's own comment had been asserting the guard all
 along — *"a fragment landing exactly on the far edge reads the cell's replicated
