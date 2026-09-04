@@ -518,23 +518,46 @@ def undither(frames, palette, preset, cdir: Path, python=None, tally=None):
 # def's `height` is the tall-vs-flat sort class (< 10 = flat), and animtrans /
 # shadtrans are the alpha bits the engine's FeatureDef mask carries.
 
-def shelf_pack(frames, width=2048):
-    """Height-sorted shelf packer -> {key: (x, y)} and the atlas height."""
+# The unit atlas is padded so the exploration lane can MIPMAP it: every frame
+# gets a replicated border of UNIT_PAD texels and its allocation is aligned to
+# UNIT_PAD, so a mip texel at level L <= log2(UNIT_PAD) that touches a frame is
+# made only of that frame's own texels. The viewer clamps TEXTURE_MAX_LOD to
+# match. Parity never reads outside a frame (NEAREST, UVs on the frame), so the
+# padding changes nothing there — the ss=1 fixture md5 is the proof.
+UNIT_PAD = 4
+
+
+def shelf_pack(frames, width=2048, pad=0, align=1):
+    """Height-sorted shelf packer -> {key: (x, y)} and the atlas height. With
+    `pad` the allocation carries a border and (x, y) is the frame's own origin
+    inside it; `align` rounds every allocation up to a multiple."""
+    up = lambda v: -(-v // align) * align
     order = sorted(frames, key=lambda k: -frames[k].height)
     place, x, y, shelf = {}, 0, 0, 0
     for key in order:
         f = frames[key]
-        if f.width > width:
+        w, h = up(f.width + 2 * pad), up(f.height + 2 * pad)
+        if w > width:
             continue
-        if x + f.width > width:
+        if x + w > width:
             x, y, shelf = 0, y + shelf, 0
-        place[key] = (x, y)
-        x += f.width
-        shelf = max(shelf, f.height)
+        place[key] = (x + pad, y + pad)
+        x += w
+        shelf = max(shelf, h)
     return place, y + shelf
 
 
-def paint_rgba(frames, place, aw, ah, restore, path: Path):
+def blit_frame(dst, aw, bpp, x, y, w, h, row, pad=0):
+    """Paint one frame at (x, y) with `pad` replicated border texels around it.
+    `row(r)` is the frame's row r as bytes, w*bpp long."""
+    for r in range(-pad, h + pad):
+        src = row(min(max(r, 0), h - 1))
+        line = src[:bpp] * pad + src + src[-bpp:] * pad
+        o = ((y + r) * aw + x - pad) * bpp
+        dst[o:o + len(line)] = line
+
+
+def paint_rgba(frames, place, aw, ah, restore, path: Path, pad=0):
     """The R8 atlas's layout, painted from restored true colour. None if off.
 
     The restorer keeps the colour key's alpha (it inpaints the key index before
@@ -550,9 +573,7 @@ def paint_rgba(frames, place, aw, ah, restore, path: Path):
         if not got:
             continue
         w, h, px = got
-        for r in range(min(h, ah - y)):
-            o = ((y + r) * aw + x) * 4
-            buf[o:o + w * 4] = px[r * w * 4:(r + 1) * w * 4]
+        blit_frame(buf, aw, 4, x, y, w, h, lambda r: px[r * w * 4:(r + 1) * w * 4], pad)
     path.write_bytes(bytes(buf))
     return str(path.relative_to(path.parent.parent)).replace(os.sep, "/")
 
@@ -730,22 +751,21 @@ def build_units(scenario, assets, out, restore=None, defs=None):
     if not models:
         return None
 
-    place, ah = shelf_pack(frames)
+    place, ah = shelf_pack(frames, pad=UNIT_PAD, align=UNIT_PAD)
     aw, ah = (2048 if frames else 1), max(1, ah)
     atlas = bytearray(aw * ah)
     rects = {}
     for key, (x, y) in place.items():
         f = frames[key]
-        for r in range(f.height):
-            o = (y + r) * aw + x
-            atlas[o:o + f.width] = f.pixels[r * f.width:(r + 1) * f.width]
+        blit_frame(atlas, aw, 1, x, y, f.width, f.height,
+                   lambda r, f=f: f.pixels[r * f.width:(r + 1) * f.width], UNIT_PAD)
         rects[key] = (x / aw, y / ah, (x + f.width) / aw, (y + f.height) / ah,
                       f.transparent)
 
     (out / "units").mkdir(parents=True, exist_ok=True)
     (out / "units/atlas.r8.bin").write_bytes(bytes(atlas))
     rgba_file = paint_rgba(frames, place, aw, ah, restore,
-                           out / "units/atlas.rgba.bin")
+                           out / "units/atlas.rgba.bin", UNIT_PAD)
 
     meshes = {}
     for name, (label, root, hidden) in models.items():
@@ -811,7 +831,7 @@ def build_units(scenario, assets, out, restore=None, defs=None):
                           "facing": float(feat.get("facing", 0) or 0),
                           "id": feat.get("id"), "feature": feat.get("type")})
     return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin",
-                      "rgba": rgba_file},
+                      "rgba": rgba_file, "pad": UNIT_PAD},
             "stride": UNIT_VSTRIDE, "meshes": meshes, "instances": instances}
 
 

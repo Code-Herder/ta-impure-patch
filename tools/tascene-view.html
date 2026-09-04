@@ -71,6 +71,20 @@
                      ground, so a face turned fully away from the sun takes
                      amb / (amb + (1-amb)·sin(el)) = 0.40 at the defaults
        slope=<k>     EXPLORE: exaggerate the heightfield's gradient, default 1
+       filter=<f>    EXPLORE: how the RESTORED unit textures are sampled.
+                     linear = trilinear (bilinear + mipmaps, levels 0..2)
+                     with `aniso` taps — what the game's own hires path does
+                     (tagpu_hires.c: GL_LINEAR_MIPMAP_LINEAR). nearest = one
+                     texel, the stock look. DEFAULT linear when the pack's
+                     unit atlas is padded for it (`build` since UNIT_PAD),
+                     nearest otherwise; filter=linear on an unpadded pack
+                     fails loudly, because its mips would bleed neighbours.
+                     Indexed colour is always nearest: an index cannot be
+                     averaged
+       aniso=<n>     EXPLORE: anisotropic taps for filter=linear, default 4.
+                     TA's projection foreshortens every vertical face 2:1,
+                     which trilinear alone over-blurs. 0 or 1 = off. The
+                     status bar says what the GPU allows; none = unsupported
        undither=<b>  EXPLORE: 1 = the pack's restored true-colour atlases,
                      0 = the palette indices. DEFAULT: restored when the pack
                      carries them (`tascene build --undither`), indexed
@@ -162,7 +176,8 @@ const ceil32 = (v) => { const q = div32trunc(v); return (v - q * 32) ? q + 1 : q
 const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b"]);
 // naming any of these IS choosing the exploration lane; saying lane=parity as
 // well is a contradiction and an error rather than a silent winner
-const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither"];
+const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither",
+                      "filter", "aniso"];
 
 function sideQuery(side, presets) {
   const p = new URLSearchParams();
@@ -224,6 +239,9 @@ function readLook(p, label) {
   // the one a level normal (0,1,0) gets, whose N.L is sunV[1]. The floor keeps
   // amb=0 with the sun on the horizon finite instead of 1/0.
   const norm = 1 / Math.max(amb + (1 - amb) * Math.max(sunV[1], 0), 1e-3);
+  const filter = p.get("filter");
+  if (filter !== null && filter !== "linear" && filter !== "nearest")
+    fail(`${label}: filter must be linear or nearest, not "${filter}"`);
   return {
     label, lane, preset: p.get("preset") || null, query: p.toString(),
     terrain: passes.includes("terrain"),
@@ -241,6 +259,9 @@ function readLook(p, label) {
     // once the scene is loaded, like datum
     undither: lane !== "explore" ? false
             : p.get("undither") === null ? null : p.get("undither") !== "0",
+    // null = "not named": linear if the pack's unit atlas is padded for mips
+    filter: lane !== "explore" ? "nearest" : filter,
+    aniso: Math.max(1, Math.floor(num("aniso", 4))),
     stats: {},
   };
 }
@@ -481,6 +502,15 @@ async function main() {
   for (const L of sides) if (L.datum === null) L.datum = scene.map.sealevel || 0;
   // undither not named: restored when the pack carries the atlases
   for (const L of sides) if (L.undither === null) L.undither = !!scene.map.atlas.rgba;
+  // filter not named: linear where the unit atlas can be mipmapped without
+  // bleeding, i.e. a pack built with the padded layout
+  const unitPad = (scene.units && scene.units.atlas.pad) || 0;
+  for (const L of sides) {
+    if (L.filter === null) L.filter = unitPad >= 4 ? "linear" : "nearest";
+    else if (L.filter === "linear" && L.lane === "explore" && scene.units && unitPad < 4)
+      fail("filter=linear, but this pack's unit atlas is not padded for mipmaps.\n" +
+           "Rebuild it with:  tools/tascene build <scenario> -o <pack> --undither");
+  }
 
   const view = scene.view, map = scene.map;
   const [GW, GH] = view.res;
@@ -684,12 +714,20 @@ async function main() {
   let uVerts = null;
   // tagpu_render3do.c: the model-space toward-camera axis and the light
   const SH_V = [0.0, 0.8944, -0.4472], SH_L = [-0.35, 0.80, -0.49];
+  let unitRGBTex = null;
+  const ANISO = gl.getExtension("EXT_texture_filter_anisotropic");
+  const ANISO_MAX = ANISO ? gl.getParameter(ANISO.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : 0;
   const [SH_NEUTRAL, SH_DIR] = scene.palette.neutral;
   if (hasUnit) {
     tex2D(gl, 6, gl.R8, scene.units.atlas.w, scene.units.atlas.h,
           gl.RED, gl.UNSIGNED_BYTE, unitAtlas);
     tex2D(gl, 7, gl.R8, 256, scene.palette.shdRows, gl.RED, gl.UNSIGNED_BYTE, shdBuf);
-    rgbaTex(10, unitRGB, scene.units.atlas.w, scene.units.atlas.h);
+    unitRGBTex = rgbaTex(10, unitRGB, scene.units.atlas.w, scene.units.atlas.h);
+    if (unitRGB && unitPad >= 4) {
+      // levels 0..log2(pad) are bleed-free by construction; never go deeper
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameterf(gl.TEXTURE_2D, gl.TEXTURE_MAX_LOD, Math.log2(unitPad));
+    }
     uVAO = gl.createVertexArray(); uVBO = gl.createBuffer();
     gl.bindVertexArray(uVAO);
     gl.bindBuffer(gl.ARRAY_BUFFER, uVBO);
@@ -1080,6 +1118,15 @@ async function main() {
       gl.uniform1i(LUU.uPal, 1); gl.uniform1i(LUU.uUndither, L.undither ? 1 : 0);
       gl.uniform3f(LUU.uSun, L.sun[0], L.sun[1], L.sun[2]);
       gl.uniform1f(LUU.uAmb, L.amb); gl.uniform1f(LUU.uNorm, L.norm);
+      // the sampler state is per side, because the two sides of a wipe may
+      // sample the one restored atlas differently
+      const lin = L.filter === "linear";
+      gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, unitRGBTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER,
+                       lin ? gl.LINEAR_MIPMAP_LINEAR : gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, lin ? gl.LINEAR : gl.NEAREST);
+      if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO.TEXTURE_MAX_ANISOTROPY_EXT,
+                                  lin ? Math.min(L.aniso, ANISO_MAX) : 1);
     } else {
       gl.useProgram(uProg);
       gl.uniform2f(UU.uGame, GW, GH);
@@ -1193,6 +1240,7 @@ async function main() {
       `<span>grid</span><b>${s0.cols}x${s0.rows}</b>` +
       `<span>frac</span><b>${s0.fx},${s0.fy}</b>` +
       (sides.length > 1 ? `<span>wipe</span><b>${wipe.toFixed(2)}</b>` : "") +
+      `<span>ss</span><b>${SS}</b><span>aniso</span><b>${ANISO_MAX || "none"}</b>` +
       `</div>`];
     for (let i = 0; i < sides.length; i++) {
       const L = sides[i], st = L.stats;
@@ -1207,7 +1255,9 @@ async function main() {
             `<span>sun</span><b>${L.sunAE ? L.sunAE.join(",") : "off"}</b>` +
             `<span>amb</span><b>${L.amb.toFixed(2)}</b>` +
             `<span>slope</span><b>${L.slope}</b>` +
-            `<span>colour</span><b>${L.undither ? "restored" : "indexed"}</b>`
+            `<span>colour</span><b>${L.undither ? "restored" : "indexed"}</b>` +
+            `<span>filter</span><b>${L.filter}${L.filter === "linear" && L.aniso > 1
+                ? ` ·${Math.min(L.aniso, ANISO_MAX || 1)}x` : ""}</b>`
           : "") +
         `<span>cells</span><b>${st.cells}</b>` +
         `<span>off-map</span><b>${st.skipped}</b>` +

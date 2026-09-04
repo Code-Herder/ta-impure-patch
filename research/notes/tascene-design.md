@@ -134,7 +134,10 @@ pack/
   features/atlas.r8.bin    every GAF sprite the map's features name, shelf-packed
   features/instances.bin   u16 col, u16 row, u16 def -- one per anchor, the map's
                            own and then the scenario's GAF features at pos>>4
-  units/atlas.r8.bin       the 3DO textures, shelf-packed
+  units/atlas.r8.bin       the 3DO textures, shelf-packed with a replicated
+                           4-texel border per frame, allocations aligned to 4
+                           (`pad` in the manifest) so the restored copy can be
+                           mipmapped to level 2 without bleeding a neighbour
   units/<type>.bin         bind-pose mesh: x,y,z, u,v, flatColour, colourKey --
                            scenario units AND its 3DO features (every wreck is
                            `object=<name>_dead` in features/*.tdf): same
@@ -207,6 +210,8 @@ These exist only in `lane=explore`, and they are what landing 2 added.
 | `sun=<az,el>` | the sun in degrees, or `off`. The default **`324.5,53.1` is `tagpu_render3do.c:250`'s own model light** `SH_L = {-0.35f, 0.80f, -0.49f}` re-expressed as a direction (it round-trips to within **0.0013 per component**), and the lab dots it against the same raw model-space face normal the engine's LUT path uses — so switching lanes changes the shading *model* (32 `PALETTE.SHD` rows → continuous lambert) and not the light. **Level ground always takes exactly 1.0** — see "Level ground takes exactly 1.0" under landing 2 |
 | `amb=<a>` | ambient floor, default `0.35`, **relative to level ground**: the shading is `(amb + (1−amb)·max(N·L, 0)) / (amb + (1−amb)·sin(el))` for terrain, unit faces and feature sprites alike, so a face turned fully away from the sun takes `0.40` at the defaults |
 | `slope=<k>` | exaggerate the heightfield's gradient before normalising, default 1 |
+| `filter=<f>` | how the exploration lane samples the **restored unit textures**. `linear` = trilinear (bilinear + mipmaps, levels 0–2) with `aniso` taps — what the game's own hires path does (`tagpu_hires.c:1142`, `GL_LINEAR_MIPMAP_LINEAR`); `nearest` = one texel, the stock look. **Default `linear` when the pack's unit atlas is padded** (`pad` ≥ 4 in the manifest, every `build` since 2026-09-03), `nearest` otherwise; `filter=linear` on an unpadded pack fails loudly because its mips would bleed. Indexed colour is always nearest — an index cannot be averaged. Measured on the base fixture: 13 740 pixels differ from `nearest`, all units |
+| `aniso=<n>` | anisotropic taps for `filter=linear`, default 4. TA's projection `(x, −z − y/2)` foreshortens every vertical face 2:1, which trilinear alone over-blurs along that axis. 0 or 1 = off. The status bar reports what the GPU allows (`none` = unsupported); the headless shooter honours it too — `aniso=4` vs `aniso=0` is 10 099 differing pixels there, and the live RTX 4070 reports 16× |
 | `undither=<b>` | `1` = the pack's restored atlases, `0` = the palette indices. **Default: restored when the pack carries them** (`build --undither`), indexed otherwise — so the lane's defaults still reduce to parity on an indexed pack, and show the colour a restored pack was built for. `undither=1` on a pack built without `--undither` says so instead of drawing something plausible |
 
 ### The wipe
@@ -476,6 +481,14 @@ changing the other, so both directions were measured rather than assumed.
   md5 is the `ss=1` frame; since the default became `ss=2` (2026-09-03) the
   default frame is `md5 4549242d3e8ff29dfd52f3c42be0dbb8`, and `ss=1` still
   gives the old one — the box composite at n = 1 is the old single tap.
+  **Padding the unit atlas moved it by 11 pixels, deliberately** (later the
+  same day): `ss=1` is now `md5 9c9ab215099e581288b24cc47d41f9be` and the
+  default `md5 6f7ad6b122591d6db2a2b028938be5b3`. All 11 are on the commander
+  and all 11 were `(0,0,0)` before — fragments whose collapsed n-gon UVs land
+  exactly on the frame's far edge, which `NEAREST` resolved to the empty atlas
+  texel past the frame and now resolves to the frame's replicated edge, as the
+  engine's rasteriser clamps. The viewer alone leaves the old pack at
+  `60adadd4…` exactly; the pack layout is the whole difference.
 - **The exploration lane reduces to it.** At `relief=0&sun=off` — the whole lab
   path: 16-px mesh, quartered UVs, lab shaders, lab depth keys — the frame is
   **0 differing pixels out of 630 784** against the parity lane, terrain and
@@ -619,8 +632,9 @@ Two things that table says, and neither was obvious from the symptom:
 - **`relief=0` is 0 px on every eye**, which is `tagpu_terr.c`'s own claim
   ("the quad still spans 32 texels, so sampling at 1:1 is bit-identical to the
   un-padded atlas") holding in the lab. That is also why the parity fixture shot
-  is still `md5 60adadd4…` after the change (at `ss=1`; `4549242d…` at the
-  later default of `ss=2`), and why the exploration lane still reduces to the
+  is still `md5 60adadd4…` after the change (at `ss=1`; the calibration
+  section carries the two later re-baselines, `ss=2` and the padded unit
+  atlas), and why the exploration lane still reduces to the
   parity lane at 0 differing pixels of 630 784.
 
 The extracted fragment shader's own comment had been asserting the guard all
