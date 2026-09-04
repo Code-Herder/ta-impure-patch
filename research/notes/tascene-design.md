@@ -197,7 +197,8 @@ The page's whole state is the query string — that is the point: a look is a li
 | `feat=<what>` | features: `both` (default), `body`, `shadow`. A debug split, because "is the shadow drawing at all" is not eye-answerable — it was 152 133 differing pixels, i.e. yes |
 | `preset=<name>` | a named look from `tascene-presets.json`; anything else you spell out wins over it. A preset may not name another preset |
 | `a=<query>` `b=<query>` `wipe=<0..1>` | **the wipe** — see below |
-| `lane=<lane>` | `parity` (default) or `explore`. Naming any exploration parameter selects `explore` on its own; naming one *and* `lane=parity` is an error rather than a silent winner, because the lanes do not blend |
+| `lane=<lane>` | **`classic`** (default) or **`classicpp`** — the renderers' names since 2026-09-03: *Classic* is what tagpu draws today, *Classic++* the lab renderer at its defaults; `parity` / `explore` are accepted and are what the code and this note call the lanes, because "the lane with a parity claim" is the property that matters here. `classic++` cannot be spelled in a query string (a `+` is a space). Naming any Classic++ parameter selects it on its own; naming one *and* `lane=classic` is an error rather than a silent winner, because the renderers do not blend |
+| `zoom=<z>` | (global) view zoom, `0.25`–`8`, default 1 — `tagpu_zoom.c`'s range. The viewport shows `vw/z × vh/z` world units centred where the zoom-1 view is centred; the eye stays the zoom-1 top-left, as in the game. Every builder sweeps the zoomed extent and places vertices at scale 1, and the shaders scale about the viewport corner by `uZoom` — tagpu's own transform with its centre moved to the corner, the same picture — so **zoom 1 is byte-identical** (ritual md5s unchanged, `lane=classicpp&zoom=1` = 0 differing pixels). The wheel changes it live, ×1.1 per notch like the game, landing exactly on 1. Only zoom 1 carries a parity claim: tagpu resamples differently at other zooms and no A/B has been run there |
 
 ### Exploration-lane parameters
 
@@ -222,6 +223,16 @@ These exist only in `lane=explore`, and they are what landing 2 added.
 | `shadowres=<n>` | depth map size, default 2048. The light-space bounds are the view plus a 192-unit margin and the height range actually in view, about 0.7 world units per texel |
 | `debug=shadow` | (global) show side A's depth map instead of the frame, near = bright |
 | `undither=<b>` | `1` = the pack's restored atlases, `0` = the palette indices. **Default: restored when the pack carries them** (`build --undither`), indexed otherwise — so the lane's defaults still reduce to parity on an indexed pack, and show the colour a restored pack was built for. `undither=1` on a pack built without `--undither` says so instead of drawing something plausible |
+
+### The renderer buttons
+
+The status bar carries two toggles, **Classic** and **Classic++**. One selected shows
+that renderer alone; both selected shows the wipe with its divider. They rewrite the
+query and reload: the live eye, `zoom`, `ss` and `debug` carry over, the wipe position
+is kept, and a renderer already on screen keeps every parameter its side has — a new
+one comes in at its defaults. The last renderer on cannot be switched off. Under
+`shot=1` there is no bar and no button. `tascene-presets.json` has `classic` and
+`classicpp` for the same two looks; `engine` stays as the older name of `classic`.
 
 ### The wipe
 

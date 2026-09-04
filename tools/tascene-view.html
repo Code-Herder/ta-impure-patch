@@ -2,14 +2,25 @@
 <!-- tascene-view.html — the browser half of the tascene lab.
 
      Draws a scene pack built by `tools/tascene build` in WebGL2. There are two
-     lanes and they do not blend (research/notes/tascene-design.md):
+     renderers and they do not blend (research/notes/tascene-design.md):
 
-       lane=parity   (default) tagpu's OWN shaders, extracted from the C sources
-                     at export time into pack/shaders/*. Flat 32-px grid, R8
-                     palette indices, the engine's PALETTE.SHD LUT. This is the
-                     only lane that carries a pixel claim against the game.
-       lane=explore  the LAB shaders below — a 16-px heightfield, undithered
-                     RGB atlases and an N·L sun. Makes no parity claim at all.
+       lane=classic    (default) "Classic" — tagpu's OWN shaders, extracted
+                       from the C sources at export time into pack/shaders/*.
+                       Flat 32-px grid, R8 palette indices, the engine's
+                       PALETTE.SHD LUT. The only renderer that carries a
+                       pixel claim against the game. Was `parity`, which is
+                       still accepted — the code and the notes call it the
+                       parity lane, because that is its property.
+       lane=classicpp  "Classic++" — the LAB shaders below: restored colour,
+                       a level-normalised per-pixel sun, trilinear textures,
+                       cast shadows. Makes no parity claim at all. Was
+                       `explore`, still accepted; `classic++` cannot be spelled
+                       in a query string, where a + is a space.
+
+     THE RENDERER BUTTONS in the status bar toggle the two. One selected shows
+     that look alone; both selected shows the wipe with its divider. They
+     rewrite the query and reload: the current eye, ss and wipe are kept, and
+     a renderer that is already on screen keeps every parameter its side has.
 
      LIVE RELOAD. Under `tascene serve` this file is re-staged into the pack
      whenever the checked-in source changes, and the open page polls `__reload`
@@ -20,6 +31,14 @@
      Query parameters. Global (top level only):
        shot=1        hide the UI, render one frame, then set document.title to
                      "tascene-ready" so a screenshotter knows it is done
+       zoom=<z>      view zoom, 0.25..8, default 1 — tagpu_zoom.c's range.
+                     The viewport shows vw/z x vh/z world units centred where
+                     the zoom-1 view is centred; the eye stays the zoom-1
+                     top-left, as in the game. The WHEEL changes it live,
+                     x1.1 per notch like the game, landing exactly on 1.
+                     Both renderers zoom; only zoom 1 carries a parity claim
+                     (tagpu resamples differently at other zooms — no A/B
+                     has been done there)
        ss=<n>        supersample factor for the offscreen. DEFAULT 2, THE
                      GAME'S OWN: tagpu renders its native unit FBO at 2x and
                      box-downsamples (tagpu_native.c, `tagpu_ss.off` turns it
@@ -40,7 +59,7 @@
                      spell out wins over it
        pass=<list>   comma-separated passes: terrain,features,units
        feat=<what>   features: both (default), body, shadow — a debug split
-       lane=<lane>   parity | explore (see above)
+       lane=<lane>   classic | classicpp (parity | explore still accepted)
        relief=<k>    EXPLORE: displacement scale. DEFAULT 0 — the art left
                      exactly where the engine paints it, lit by the real
                      gradient. 1 = the engine's own h/2, which MISREGISTERS
@@ -186,6 +205,11 @@
   #bar .tag { color: #14171c; background: #d8b24a; border-radius: 4px;
               padding: 0 5px; font-weight: 700; }
   #bar .tag.b { background: #6aa8d8; }
+  #bar .modes button { font: inherit; color: #8b95a4; background: #14171c;
+                       border: 1px solid #2c333d; border-radius: 5px; padding: 1px 9px;
+                       cursor: pointer; }
+  #bar .modes button.on { color: #e6ecf5; background: #2c333d; border-color: #6aa8d8; }
+  #bar .modes button:hover { border-color: #d8b24a; }
   #err { position: fixed; top: 10px; left: 10px; right: 10px; padding: 8px 10px;
          border-radius: 8px; background: #40222a; border: 1px solid #6b3540;
          color: #f0c8ce; white-space: pre-wrap; display: none; font-family: ui-monospace, monospace; }
@@ -236,7 +260,9 @@ const ceil32 = (v) => { const q = div32trunc(v); return (v - q * 32) ? q + 1 : q
 // top-level query overridden by its own a= / b= query overridden by nothing —
 // which is what makes `?eye=X,Y&a=engine&b=relief` share the camera and differ
 // only in the look, i.e. the same pixel coordinates on both sides.
-const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b", "debug"]);
+const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b", "debug", "zoom"]);
+const zoomClamp = (z) => (Number.isNaN(z) ? 1 : Math.max(0.25, Math.min(8, z)));
+let zoom = zoomClamp(parseFloat(Q.get("zoom") || "1"));
 const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 // naming any of these IS choosing the exploration lane; saying lane=parity as
 // well is a contradiction and an error rather than a silent winner
@@ -283,14 +309,19 @@ function sunVector(az, el) {
 function readLook(p, label) {
   const num = (k, d) => (p.get(k) === null ? d : parseFloat(p.get(k)));
   const named = EXPLORE_ONLY.filter((k) => p.get(k) !== null);
+  // the renderers' names, and the lane names the code and the notes use
+  const LANE = { classic: "parity", parity: "parity",
+                 classicpp: "explore", "classic++": "explore", explore: "explore" };
   let lane = p.get("lane");
+  if (lane !== null && !(lane in LANE))
+    fail(`${label}: lane must be classic or classicpp (parity / explore still ` +
+         `accepted), not "${lane}"`);
+  if (lane !== null) lane = LANE[lane];
   if (lane === "parity" && named.length)
-    fail(`${label}: ${named.join(", ")} ${named.length > 1 ? "are" : "is an"} ` +
-         `exploration-lane parameter${named.length > 1 ? "s" : ""}, but lane=parity ` +
-         `was asked for. Drop one of the two — the lanes do not blend.`);
+    fail(`${label}: ${named.join(", ")} ${named.length > 1 ? "are" : "is a"} ` +
+         `Classic++ parameter${named.length > 1 ? "s" : ""}, but lane=classic ` +
+         `was asked for. Drop one of the two — the renderers do not blend.`);
   if (!lane) lane = named.length ? "explore" : "parity";
-  if (lane !== "parity" && lane !== "explore")
-    fail(`${label}: lane must be parity or explore, not "${lane}"`);
 
   const passes = (p.get("pass") || "terrain,features,units").split(",").map((s) => s.trim());
   const sunRaw = p.get("sun");
@@ -334,7 +365,8 @@ function readLook(p, label) {
   if (filter !== null && filter !== "linear" && filter !== "nearest")
     fail(`${label}: filter must be linear or nearest, not "${filter}"`);
   return {
-    label, lane, preset: p.get("preset") || null, query: p.toString(),
+    label, lane, name: lane === "parity" ? "Classic" : "Classic++",
+    preset: p.get("preset") || null, query: p.toString(),
     terrain: passes.includes("terrain"),
     features: passes.includes("features"),
     units: passes.includes("units"),
@@ -416,9 +448,11 @@ layout(location=2) in vec3 aNrm;    // heightfield normal, world (x, elev, z)
 layout(location=7) in vec3 aWorld;  // the world point this vertex DEPICTS
 uniform vec2 uGame;
 uniform float uDepthScale;
+uniform float uZoom; uniform vec2 uZoomC;   // tagpu's own: scale about uZoomC
 out vec2 vUV; out vec3 vNrm; out vec3 vWorld;
 void main(){
-  gl_Position = vec4(aPos.x/uGame.x*2.0-1.0, aPos.y/uGame.y*2.0-1.0,
+  vec2 p = (aPos.xy - uZoomC) * uZoom + uZoomC;
+  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,
                      clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);
   vUV = aUV; vNrm = aNrm; vWorld = aWorld;
 }`;
@@ -545,9 +579,11 @@ layout(location=3) in vec2 aWorld;  // unused here; kept so one build fills both
 layout(location=4) in float aLam;   // ground lambert at the anchor
 uniform vec2 uGame;
 uniform float uDepthScale;
+uniform float uZoom; uniform vec2 uZoomC;
 out vec2 vUV; flat out vec2 vCM; flat out float vLam;
 void main(){
-  gl_Position = vec4(aPos.x/uGame.x*2.0-1.0, aPos.y/uGame.y*2.0-1.0,
+  vec2 p = (aPos.xy - uZoomC) * uZoom + uZoomC;
+  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,
                      clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);
   vUV = aUV; vCM = aCM; vLam = aLam;
 }`;
@@ -592,9 +628,11 @@ layout(location=6) in vec3 aNrm;    // posed, map space, unit length; flat per f
 layout(location=7) in vec3 aWorld3; // posed world position, map space
 uniform vec2 uGame;
 uniform float uDepthScale;
+uniform float uZoom; uniform vec2 uZoomC;
 out vec2 vUV; flat out vec2 vFC; out vec3 vNrm; out vec3 vWorld;
 void main(){
-  gl_Position = vec4(aPos.x/uGame.x*2.0-1.0, aPos.y/uGame.y*2.0-1.0,
+  vec2 p = (aPos.xy - uZoomC) * uZoom + uZoomC;
+  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,
                      clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);
   vUV = aUV; vFC = aFC; vNrm = aNrm; vWorld = aWorld3;
 }`;
@@ -700,6 +738,19 @@ async function main() {
   const view = scene.view, map = scene.map;
   const [GW, GH] = view.res;
   const [vpL, vpT, vw, vh] = view.vp;
+  // THE ZOOMED VIEW. The viewport shows vw/zoom x vh/zoom world units centred
+  // where the zoom-1 view is centred; E is that region's top-left and W its
+  // size, both integer. Every builder sweeps from E over W and places its
+  // vertices relative to E at scale 1; the shaders scale about (vpL, vpT) by
+  // uZoom — tagpu's own transform with its centre moved to the corner, the
+  // same picture. At zoom 1, E is the eye and W the viewport: byte-identical.
+  let E = [0, 0], W = [vw, vh];                   // set by zoomView() before every draw
+  function zoomView() {
+    const ww = vw / zoom, wh = vh / zoom;
+    E = [Math.floor(eye[0] + (vw - ww) / 2), Math.floor(eye[1] + (vh - wh) / 2)];
+    W = [Math.ceil(ww) + (zoom === 1 ? 0 : 1), Math.ceil(wh) + (zoom === 1 ? 0 : 1)];
+  }
+  const ZOOM_C = [vpL, vpT];
   let eye = view.eye.slice();
   if (Q.get("eye")) eye = Q.get("eye").split(",").map(Number);
 
@@ -857,7 +908,8 @@ async function main() {
     }
     gl.bindVertexArray(null);
     LTU = uniforms(gl, ltProg, ["uGame", "uDepthScale", "uAtlas", "uRGB", "uPal",
-                                "uUndither", "uSun", "uAmb", "uNorm", ...SHADOW_U]);
+                                "uUndither", "uSun", "uAmb", "uNorm", "uZoom", "uZoomC",
+                                ...SHADOW_U]);
   }
 
   // ---- feature (sprite) pass — tagpu_feat.c's shaders and vertex format, plus
@@ -899,7 +951,7 @@ async function main() {
       }
       gl.bindVertexArray(null);
       LSU = uniforms(gl, lsProg, ["uGame", "uDepthScale", "uAtlas", "uRGB",
-                                  "uPal", "uUndither"]);
+                                  "uPal", "uUndither", "uZoom", "uZoomC"]);
     }
     // cell -> anchor, so the sweep can look features up in its own order
     const inst = new Uint16Array(featInst.buffer, featInst.byteOffset,
@@ -955,7 +1007,7 @@ async function main() {
       luProg = program(gl, LAB_UNIT_VS, LAB_UNIT_FS, "lab-unit");
       LUU = uniforms(gl, luProg, ["uGame", "uDepthScale", "uAtlas", "uRGB",
                                   "uPal", "uUndither", "uSun", "uAmb", "uNorm",
-                                  ...SHADOW_U]);
+                                  "uZoom", "uZoomC", ...SHADOW_U]);
     }
     uVerts = new Float32Array(65536 * UVST);
   }
@@ -1011,14 +1063,14 @@ async function main() {
     // extent and so the texel density, which halves for every 128 wasted
     const M = 192;
     let h0 = 255, h1 = 0;
-    const c0 = Math.max(0, (eye[0] - M) >> 4), c1 = Math.min(w16 - 1, (eye[0] + vw + M) >> 4);
-    const r0 = Math.max(0, (eye[1] - M) >> 4), r1 = Math.min(h16 - 1, (eye[1] + vh + 128 + M) >> 4);
+    const c0 = Math.max(0, (E[0] - M) >> 4), c1 = Math.min(w16 - 1, (E[0] + W[0] + M) >> 4);
+    const r0 = Math.max(0, (E[1] - M) >> 4), r1 = Math.min(h16 - 1, (E[1] + W[1] + 128 + M) >> 4);
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
       const h = heightBuf[r * w16 + c];
       if (h < h0) h0 = h; if (h > h1) h1 = h;
     }
-    const bx = [eye[0] - M, eye[0] + vw + M], by = [h0, h1 + 128],
-          bz = [eye[1] - M, eye[1] + vh + 128 + M];
+    const bx = [E[0] - M, E[0] + W[0] + M], by = [h0, h1 + 128],
+          bz = [E[1] - M, E[1] + W[1] + 128 + M];
     let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity,
         d0 = Infinity, d1 = -Infinity;
     for (const X of bx) for (const Y of by) for (const Z of bz) {
@@ -1106,14 +1158,14 @@ async function main() {
     return (L.amb + (1 - L.amb) * Math.max(d, 0)) * L.norm;
   }
   // the row the depth keys are relative to — one definition, used by every pass
-  const rowBase = () => (eye[1] >> 4) - 16;
+  const rowBase = () => (E[1] >> 4) - 16;
 
   function buildTerrain(L) {
     // tagpu_terr.c's emit loop, line for line.
     const stride = map.tilemap.w, mrows = map.tilemap.h;
-    const tx0 = div32trunc(eye[0]), fx = eye[0] - tx0 * 32;
-    const ty0 = div32trunc(eye[1]), fy = eye[1] - ty0 * 32;
-    const cols = ceil32(vw + fx), rows = ceil32(vh + fy);
+    const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
+    const ty0 = div32trunc(E[1]), fy = E[1] - ty0 * 32;
+    const cols = ceil32(W[0] + fx), rows = ceil32(W[1] + fy);
     const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
     let n = 0, skipped = 0, junk = 0;
     const put = (x, y, u, v, wx, wz) => {
@@ -1160,22 +1212,22 @@ async function main() {
   // the real gradient, which is the control.
   function buildTerrainLab(L) {
     const stride = map.tilemap.w, mrows = map.tilemap.h;
-    const tx0 = div32trunc(eye[0]), fx = eye[0] - tx0 * 32;
-    const ty0 = div32trunc(eye[1]), fy = eye[1] - ty0 * 32;
+    const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
+    const ty0 = div32trunc(E[1]), fy = E[1] - ty0 * 32;
     // a cell rises by relief*(h-datum)/2 <= 128 px, so cells up to 4 more 32-px
     // rows BELOW the viewport can still reach into it. With a datum a cell
     // BELOW it also SINKS, by up to relief*datum/2, so rows ABOVE the viewport
     // now reach in too — which they could not before and is why this scan runs
     // from a negative row. (rowBase() already leaves 16 rows of depth-key
     // headroom above the eye, so the keys of those rows stay positive.)
-    const cols = ceil32(vw + fx) + 1;
-    const rows = ceil32(vh + fy) + (L.relief > 0 ? 5 : 1);
+    const cols = ceil32(W[0] + fx) + 1;
+    const rows = ceil32(W[1] + fy) + (L.relief > 0 ? 5 : 1);
     const rAbove = L.relief > 0 && L.datum > 0
                  ? Math.ceil(L.relief * L.datum * 0.5 / 32) + 1 : 0;
     const need = cols * (rows + rAbove) * 24 * LTVST;
     if (ltVerts.length < need) ltVerts = new Float32Array(need);
     const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
-    const D = scene.depth, r0 = rowBase(), relMax = (vh >> 4) + 40;
+    const D = scene.depth, r0 = rowBase(), relMax = (W[1] >> 4) + 40;
     const k = L.relief * 0.5, dat = L.datum;
     let n = 0, skipped = 0, junk = 0;
     const nrm = [0, 0, 0];
@@ -1184,8 +1236,8 @@ async function main() {
       let rel = gr - r0;
       if (rel < 0) rel = 0; else if (rel > relMax) rel = relMax;
       const h = H(gc, gr);
-      ltVerts[o]     = vpL + gc * 16 - eye[0];
-      ltVerts[o + 1] = vpT + gr * 16 - k * (h - dat) - eye[1];
+      ltVerts[o]     = vpL + gc * 16 - E[0];
+      ltVerts[o + 1] = vpT + gr * 16 - k * (h - dat) - E[1];
       // Per-row keys only when relief can lift a southern cell over a
       // northern unit. With relief=0 nothing rises, and per-row keys would
       // put the ground of every row south of a unit's anchor IN FRONT of the
@@ -1252,8 +1304,8 @@ async function main() {
     const lab = L.lane === "explore";
     const VST = lab ? LSVST : SVST;
     const D = scene.depth, defs = scene.features.defs;
-    let r0 = rowBase(), nRows = (vh >> 4) + 32;
-    let c0 = (eye[0] >> 4) - 10, nCols = (vw >> 4) + 12;
+    let r0 = rowBase(), nRows = (W[1] >> 4) + 32;
+    let c0 = (E[0] >> 4) - 10, nCols = (W[0] >> 4) + 12;
     if (r0 < 0) { nRows += r0; r0 = 0; }
     if (r0 + nRows > h16 - 1) nRows = h16 - r0 - 1;
     if (c0 < 0) { nCols += c0; c0 = 0; }
@@ -1290,7 +1342,7 @@ async function main() {
         // the engine's projection: screenY is worldZ minus half the height
         const wax = col * 16 + ((d.footx * 16) / 2 | 0);
         const waz = row * 16 + ((d.footz * 16) / 2 | 0) - ((h00 + h01 + h10 + h11) >> 3);
-        const sx = wax + 128 - eye[0], sy = waz + 32 - eye[1];
+        const sx = wax + 128 - E[0], sy = waz + 32 - E[1];
         const rel0 = row - r0;
         let enc;
         if (d.flat) {
@@ -1330,10 +1382,11 @@ async function main() {
       gl.uniform1f(LSU.uDepthScale, scene.depth.scale);
       gl.uniform1i(LSU.uAtlas, 5); gl.uniform1i(LSU.uRGB, 9);
       gl.uniform1i(LSU.uPal, 1); gl.uniform1i(LSU.uUndither, L.undither ? 1 : 0);
+      gl.uniform1f(LSU.uZoom, zoom); gl.uniform2f(LSU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
     } else {
       gl.uniform2f(SU.uGame, GW, GH);
-      gl.uniform1f(SU.uZoom, 1.0);
-      gl.uniform2f(SU.uZoomC, vpL + vw * 0.5, vpT + vh * 0.5);
+      gl.uniform1f(SU.uZoom, zoom);
+      gl.uniform2f(SU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
       gl.uniform1f(SU.uDepthScale, scene.depth.scale);
       gl.uniform1i(SU.uAtlas, 5); gl.uniform1i(SU.uPal, 1);
       gl.uniform1i(SU.uFogGrid, 2); gl.uniform1i(SU.uFogLUT, 3);
@@ -1361,7 +1414,7 @@ async function main() {
   function buildUnits(L) {
     const lab = L.lane === "explore";
     const U = scene.units, D = scene.depth;
-    let r0 = rowBase(), nRows = (vh >> 4) + 32;
+    let r0 = rowBase(), nRows = (W[1] >> 4) + 32;
     if (r0 < 0) { nRows += r0; r0 = 0; }
     let n = 0;
     // shadowlen: the shadow's length is a + b*height instead of the parallel
@@ -1386,8 +1439,8 @@ async function main() {
       const col = Math.min(w16 - 1, Math.max(0, wx >> 4));
       const row = Math.min(h16 - 1, Math.max(0, wz >> 4));
       const wy = heightBuf[row * w16 + col];          // the engine snaps to terrain
-      const hotX = wx - eye[0] + vpL;
-      const hotY = wz - (wy >> 1) - eye[1] + vpT;
+      const hotX = wx - E[0] + vpL;
+      const hotY = wz - (wy >> 1) - E[1] + vpT;
       let rel = row - r0;
       if (rel < 0) rel = 0;
       if (rel > nRows + 8) rel = nRows + 8;
@@ -1470,6 +1523,7 @@ async function main() {
       gl.uniform1i(LUU.uPal, 1); gl.uniform1i(LUU.uUndither, L.undither ? 1 : 0);
       gl.uniform3f(LUU.uSun, L.unitSun[0], L.unitSun[1], L.unitSun[2]);
       gl.uniform1f(LUU.uAmb, L.amb); gl.uniform1f(LUU.uNorm, L.unitNorm);
+      gl.uniform1f(LUU.uZoom, zoom); gl.uniform2f(LUU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
       setShadowUniforms(LUU, L, L.shadowFrame);
       // the sampler state is per side, because the two sides of a wipe may
       // sample the one restored atlas differently
@@ -1484,8 +1538,8 @@ async function main() {
       gl.useProgram(uProg);
       gl.uniform2f(UU.uGame, GW, GH);
       gl.uniform2f(UU.uOffset, 0, 0);
-      gl.uniform1f(UU.uZoom, 1.0);
-      gl.uniform2f(UU.uZoomC, vpL + vw * 0.5, vpT + vh * 0.5);
+      gl.uniform1f(UU.uZoom, zoom);
+      gl.uniform2f(UU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
       gl.uniform1f(UU.uDepthScale, scene.depth.scale);
       gl.uniform1i(UU.uAtlas, 6); gl.uniform1i(UU.uLUT, 7); gl.uniform1i(UU.uPal, 1);
       gl.uniform1i(UU.uShadow, 0); gl.uniform1f(UU.uAlpha, 1.0);
@@ -1494,8 +1548,8 @@ async function main() {
       gl.uniform1f(UU.uDigT, -1e9);
       gl.uniform1i(UU.uScaf, 2); gl.uniform1i(UU.uScafOn, 0);
       gl.uniform4f(UU.uScafP, vpL, vpT, vw, vh);
-      gl.uniform1f(UU.uSS, SS); gl.uniform1f(UU.uZoomF, 1.0);
-      gl.uniform2f(UU.uZoomCF, vpL + vw * 0.5, vpT + vh * 0.5);
+      gl.uniform1f(UU.uSS, SS); gl.uniform1f(UU.uZoomF, zoom);
+      gl.uniform2f(UU.uZoomCF, ZOOM_C[0], ZOOM_C[1]);
       gl.uniform1i(UU.uFogGrid, 2); gl.uniform1i(UU.uFogLUT, 3);
       gl.uniform2f(UU.uFogOrg, 0, 0); gl.uniform2f(UU.uFogDim, 1, 1);
       gl.uniform1i(UU.uFog, 0);
@@ -1541,13 +1595,14 @@ async function main() {
         gl.uniform3f(LTU.uSun, L.sun[0], L.sun[1], L.sun[2]);
         gl.uniform1f(LTU.uAmb, L.amb);
         gl.uniform1f(LTU.uNorm, L.norm);
+        gl.uniform1f(LTU.uZoom, zoom); gl.uniform2f(LTU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
         setShadowUniforms(LTU, L, L.shadowFrame);
         gl.bindVertexArray(ltVAO);
       } else {
         gl.useProgram(terrProg);
         gl.uniform2f(U.uGame, GW, GH);
-        gl.uniform1f(U.uZoom, 1.0);
-        gl.uniform2f(U.uZoomC, vpL + vw * 0.5, vpT + vh * 0.5);
+        gl.uniform1f(U.uZoom, zoom);
+        gl.uniform2f(U.uZoomC, ZOOM_C[0], ZOOM_C[1]);
         gl.uniform1f(U.uDepthScale, scene.depth.scale);
         gl.uniform1f(U.uEnc, scene.depth.terrain);
         gl.uniform1i(U.uAtlas, 0); gl.uniform1i(U.uPal, 1);
@@ -1568,6 +1623,7 @@ async function main() {
   }
 
   function draw() {
+    zoomView();
     for (let i = 0; i < sides.length; i++) drawSide(sides[i], targets[i]);
     if (dbgProg) {                        // side A's depth map, as it was left
       if (sides.length > 1) shadowPass(sides[0], buildTerrainLab(sides[0]), buildUnits(sides[0]));
@@ -1602,13 +1658,18 @@ async function main() {
   }
 
   function report() {
-    const s0 = sides[0].stats;
+    const s0 = sides[0].stats, on = new Set(sides.map((L) => L.lane));
     const rows = [
+      `<div class="row modes"><span>renderers</span>` +
+      `<button data-mode="parity" class="${on.has("parity") ? "on" : ""}">Classic</button>` +
+      `<button data-mode="explore" class="${on.has("explore") ? "on" : ""}">Classic++</button>` +
+      `</div>`,
       `<div class="row"><b>${map.name}</b> <span>${map.w16}x${map.h16} cells</span>` +
       `<span>eye</span><b>${eye[0]},${eye[1]}</b>` +
       `<span>grid</span><b>${s0.cols}x${s0.rows}</b>` +
       `<span>frac</span><b>${s0.fx},${s0.fy}</b>` +
       (sides.length > 1 ? `<span>wipe</span><b>${wipe.toFixed(2)}</b>` : "") +
+      `<span>zoom</span><b>${zoom === 1 ? "1" : zoom.toFixed(3).replace(/0+$/, "")}</b>` +
       `<span>ss</span><b>${SS}</b><span>aniso</span><b>${ANISO_MAX || "none"}</b>` +
       `<span>device</span><b>${cv.dataset.device}</b>` +
       `</div>`];
@@ -1617,7 +1678,7 @@ async function main() {
       rows.push(
         `<div class="row">` +
         (sides.length > 1 ? `<span class="tag ${i ? "b" : "a"}">${L.label}</span>` : "") +
-        `<b>${L.lane}</b>` +
+        `<b>${L.name}</b>` +
         (L.preset ? `<span>preset</span><b>${L.preset}</b>` : "") +
         (L.lane === "explore"
           ? `<span>relief</span><b>${L.relief}</b>` +
@@ -1647,11 +1708,48 @@ async function main() {
   // ---- interaction (serve only): pan the eye, which is what the engine
   // scrolls, and drag the wipe divider when the pointer is on it
   if (!SHOT) {
-    const maxX = Math.max(0, map.w16 * 16 - vw), maxY = Math.max(0, map.h16 * 16 - vh);
+    // The renderer buttons rewrite the query and reload. A renderer already
+    // on screen keeps its side's own parameters; a new one comes in at its
+    // defaults; the live eye, ss, debug and the wipe position carry over.
+    bar.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-mode]");
+      if (!btn) return;
+      const want = new Set(sides.map((L) => L.lane)), mode = btn.dataset.mode;
+      if (want.has(mode)) { if (want.size === 1) return; want.delete(mode); }
+      else want.add(mode);
+      const own = (lane) => {
+        const L = sides.find((s) => s.lane === lane);
+        return L ? L.query : (lane === "parity" ? "lane=classic" : "lane=classicpp");
+      };
+      const q = new URLSearchParams();
+      for (const k of ["ss", "debug"]) if (Q.get(k) !== null) q.set(k, Q.get(k));
+      q.set("eye", `${eye[0]},${eye[1]}`);
+      if (zoom !== 1) q.set("zoom", String(zoom));
+      const modes = ["parity", "explore"].filter((m) => want.has(m));
+      if (modes.length === 1) {
+        for (const [k, v] of new URLSearchParams(own(modes[0]))) q.set(k, v);
+      } else {
+        q.set("a", own(modes[0])); q.set("b", own(modes[1]));
+        q.set("wipe", (wipe > 1 ? 0.5 : wipe).toFixed(2));
+      }
+      location.search = "?" + q.toString();
+    });
+    // keep the ZOOMED view on the map: E >= 0 and E + W <= the map, in eye terms
     const clamp = () => {
-      eye[0] = Math.max(0, Math.min(eye[0], maxX));
-      eye[1] = Math.max(0, Math.min(eye[1], maxY));
+      const mx = (vw - vw / zoom) / 2, my = (vh - vh / zoom) / 2;
+      const maxX = map.w16 * 16 - vw + mx, maxY = map.h16 * 16 - vh + my;
+      eye[0] = Math.round(Math.max(-mx, Math.min(eye[0], maxX)));
+      eye[1] = Math.round(Math.max(-my, Math.min(eye[1], maxY)));
     };
+    // tagpu_zoom.c's wheel: geometric, 1.1 per notch, 0.25..8, and land
+    // exactly on 1 when the notches cancel (1x is what the parity claim
+    // tests by equality). No easing here — a lab wants the level it asked for
+    cv.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      let z = zoomClamp(zoom * Math.pow(1.1, -e.deltaY / 100));
+      if (z > 0.999 && z < 1.001) z = 1;
+      zoom = z; clamp(); draw();
+    }, { passive: false });
     addEventListener("keydown", (e) => {
       const step = e.shiftKey ? 256 : 32;
       if (e.key === "ArrowLeft")  eye[0] -= step;
