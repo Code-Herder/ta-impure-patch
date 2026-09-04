@@ -19,8 +19,8 @@ date; **[OPEN]** = not settled.
 |---|---|---|
 | What it is | what tagpu draws today; the lab's `lane=classic` | the lab's `lane=classicpp` at its current defaults |
 | Claim | **pixel parity** with itself: it must not move by a pixel, and the lab's parity ritual is the proof | none against the engine; it is judged by eye and measured against the lab |
-| Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | restored true colour (the `unditherer` full model), 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic; indexed frames stay `NEAREST` |
-| Terrain | the engine's 32-px tile blit, no height, no light | the same tiles, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit) |
+| Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST` |
+| Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit) |
 | Units | per-face shade row from `SH_L` through the 32-row LUT | per-pixel lambert in map space from the posed face normal, same level normalisation |
 | Shadows | the engine's rules: 5-px silhouette drop for mobiles, the cached slant for structures | a depth map along `shadowsun`, PCSS-lite (8-tap blocker search, 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive |
 | Suns | one, `SH_L = (−0.35, 0.80, −0.49)` in model space | **three** knobs: `sun=324.5,53.1` (terrain), `unitsun=215.5,53.1` (= `SH_L` in map space), `shadowsun=225,40` |
@@ -61,38 +61,84 @@ so the shadow of a hull on the seabed is seen before it is built.
 space, and hires meshes are in no depth pass. **Decided: not a Classic++ concern.** Revisit
 after the port.
 
-### 2.5 The restorer runs in the DLL, on the GPU, per GAF frame
-The restorer is a plain residual CNN — `unditherer/model.py`: 3×3 convolutions, ReLU,
-BatchNorm, output = input − net(input); the **full** model is 12 layers × 64 channels,
-373,443 parameters, eval PSNR 30.48 dB; **tiny** is 6 × 24, 22,251 parameters, 29.79 dB
-**[SOURCE `unditherer/models/models.json`]**. The DLL is a 32-bit MinGW build under Wine and
-cannot host torch or onnxruntime **[SOURCE `tagpu/ddraw/Makefile`]**, but a chain of
-convolutions is a chain of fragment-shader passes.
+### 2.5 The restorer runs at map load, inside the DLL, through ONNX Runtime — spike first
 
-**Decided: port the full model only, as GLSL, and run it on each GAF frame the moment the
-atlas first sees it.** Not the tiny one, not offline files. Per frame the full model is about
-750 k FLOPs per texel — a 64×64 frame is 3 GFLOP, well under a millisecond on the
-RTX 4070 at insert time. Consequences and port rules:
+**Static atlases, built once per map.** Everything Classic++ restores is in memory when a
+map loads: the tile set is built by `LoadMap` and never changes after (tagpu already builds
+its terrain atlas once per map for that reason **[SOURCE `tagpu_terr.c`]**), and every unit
+definition, model and texture GAF is loaded at game start. tagpu's unit and feature atlases
+fill lazily on first draw today only as an implementation choice **[SOURCE
+`tagpu_render3do.c atlas_get`, `tagpu_gaf.c`]**. **Decided: Classic++ builds its three
+restored atlases at map load, so a new unit on screen costs nothing.** The lab restores the
+same three (`terrain/atlas.rgba.bin`, `features/…`, `units/…` **[SOURCE `tools/tascene
+build`]**); the base pack's 5192 restored frames are 5062 tiles + 53 feature frames + 77 unit
+frames.
 
-- **Per frame, in isolation.** The receptive field is 25 px; running over a packed atlas would
-  pull neighbouring frames into each other's edges.
-- **The Python path's gates are the spec** **[SOURCE `unditherer/restore.py`, `infer.py`,
-  `classical.py`]**: colour-key texels are inpainted before the network (OpenCV Telea,
-  radius 3) and alpha is restored from the key mask after; a frame whose opposite edges
-  agree within 12 levels (`is_tileable`) is wrap-padded by the depth, every other frame is
-  zero-padded (the convolutions' own `zeros` padding); output is clipped to 8 bits. The GLSL
-  port replaces only the inpaint, which has no shader twin, with a few dilation passes.
-- **Activations live in a 2D texture array**, one RGBA layer per 4 channels, RGBA32F, so a
-  64-channel layer reads one texture unit and is written 8 attachments per pass — two passes
-  per convolution, 24 per frame. BatchNorm is folded into the weights at export; the weights
-  ship as one float texture from a Python export verb.
-- **The lab's Classic++ lane switches to the same GLSL restorer**, extracted into the pack the
-  way the Classic shaders already are. A GLSL port is not byte-identical to ONNX, and two
-  restorers would make the game and the lab disagree by a level or two forever. This also
-  removes the shipping-format question entirely: no manifest, no content hash, mods and
-  third-party units are restored on first sight like stock.
-- **The atlas** is a new RGBA object beside Classic's indexed one, which does not change:
-  4-texel replicated pad, 4-aligned allocation, mip levels 0–2 rendered at insert.
+**The workload, per map load** **[MEASURED 2026-09-04]**: Two Continents has 5062 tiles =
+5.2 M texels; the whole install's `textures/*.gaf` is 11 files, 546 entries, 753 frames
+(team-colour variants included) = 1.35 M texels, median entry 32×64. Feature frames are
+small beside these.
+
+**The model is a plain residual CNN.** `unditherer/model.py`: 3×3 convolutions, ReLU,
+BatchNorm folded at export, output = input − net(input). The exported graph is only `Conv`,
+`Relu`, `Sub`, opset 17, 24 nodes. Full: 12 × 64, 373,443 parameters, 30.48 dB; tiny: 6 × 24,
+22,251 parameters, 29.79 dB **[SOURCE `unditherer/models/models.json`]**. **Only the full
+model is in scope** (decided before the engine question was settled).
+
+**Engines measured, full model, this machine (Ryzen + RTX 4070)** **[MEASURED 2026-09-04]**:
+
+| Engine | 32×32 | 64×64 | Notes |
+|---|---|---|---|
+| onnxruntime 1.29, Linux x64, 1 thread | 5.1 ms | 20 ms | the lab's own path |
+| **onnxruntime 1.20.1, Windows x86 DLL, under Wine 9.0, 1 thread / all** | **10.5 / 4.1 ms** | **42 / 11 ms** | 32-bit test exe, fresh prefix, Wine's built-in `msvcp140`/`vcruntime140`, nothing installed |
+| naive C loops (libonnx class), 1 thread | 286 ms | 1180 ms | `gcc -O2`, same shape; libonnx's `Conv` is plain loops, no SIMD, no threads |
+| GLSL passes on the GPU (estimate) | ≪ 1 ms | ≪ 1 ms | ~750 k FLOPs per texel |
+
+So at load, batched by frame size and threaded, Two Continents' tiles are roughly 7–10 s
+through the x86 runtime, the install's unit textures about 2 s; with libonnx as it ships it
+would be minutes; on the GPU about a second.
+
+**Availability of Microsoft's runtime** **[MEASURED 2026-09-04, NuGet package contents]**:
+the official C API is one exported function returning a table of function pointers and a
+MinGW 32-bit build against the shipped header works (SAL macros stubbed). But TotalA.exe is a
+32-bit process and the 32-bit Windows binary is gone:
+
+| `Microsoft.ML.OnnxRuntime` | Windows native runtimes |
+|---|---|
+| 1.20.1, 1.22.1 (May 2025) | x64, arm64, **x86** |
+| 1.23.2, 1.24.4, 1.26.0, 1.29.0 (current) | x64, arm64 |
+
+The build docs say 32-bit builds are no longer supported. **1.22.1 is the last usable
+runtime, frozen.** It runs the opset-17 model.
+
+**The risk the spike must answer.** The overlay's header says a runtime `LoadLibrary` of a
+companion DLL "destabilised TA under wine", which is why every pass is compiled into the
+fork. The record of that event ([field notes](field-notes.html), G1 gotchas, 2026-08-31)
+shows the crash was a **null GL function pointer**: `glGetIntegerv` resolved through
+`wglGetProcAddress` is NULL under Wine, the companion called it, and TA's own crash reporter
+then faulted at `0x4D94E0` while reporting it — the note's later bullets say so themselves.
+The module load was never isolated as the cause. onnxruntime.dll is nevertheless a 10 MB C++
+DLL with its own thread pool and a VC++ 2019 runtime dependency inside the game's process,
+which the standalone test did not exercise.
+
+**Decided: spike ONNX Runtime 1.22.1 x86 inside TA first; the GLSL passes are the
+fallback.** The spike: the DLL loads `onnxruntime.dll` from the game thread at map load (not
+from the render thread mid-present), restores the tile set batched by size, writes a disk
+cache, and is watched for stability and time on Two Continents and through one long session.
+If it holds, it is the engine: official, the same runtime family as the lab so the two agree
+by construction, no port, a few seconds on a map's first load. If Wine or the game misbehaves,
+the GLSL port replaces it and the lab's Classic++ lane moves to that port. Rejected: libonnx
+(minutes per map, threading and SIMD would be ours), a 64-bit helper process (exact and fast,
+but IPC, process lifecycle and a Windows x64 helper to ship).
+
+**Rules that are ours in C whichever engine runs** **[SOURCE `unditherer/restore.py`,
+`infer.py`, `classical.py`]**: colour-key texels are inpainted before the network (OpenCV
+Telea, radius 3 — no C twin, a few dilation passes stand in) and alpha is restored from the
+key mask after; a frame whose opposite edges agree within 12 levels (`is_tileable`) is
+wrap-padded by the depth, every other frame is zero-padded (the convolutions' own `zeros`
+padding); output is clipped to 8 bits. The restored RGBA atlases are new objects beside
+Classic's indexed ones, which do not change: units 4-texel replicated pad, 4-aligned, mip
+levels 0–2.
 
 ### 2.6 Fog of war: one RGB rule after lighting
 The engine's grey band remaps each palette index to the palette entry nearest its own
@@ -152,7 +198,8 @@ Why it fits:
   live in `gamedir/tagpu_classicpp.cfg` as `key=value` lines re-read on mtime change, keyed
   like the lab's URL parameters (`sun`, `unitsun`, `shadowsun`, `amb`, `penumbra`,
   `shadowlen`, `shade`, `aniso`, `shadows`). A human editing files, a tacli verb and the menu
-  drive the same state. The restorer weights ship as `gamedir/tagpu_classicpp.model`.
+  drive the same state. The model `full.onnx` and `onnxruntime.dll` (1.22.1 x86) ship in
+  gamedir beside them.
 
 ### 2.11 Two small calls made by the implementer
 - **The unit vertex stream** grows from 11 to 15 floats: the map-space normal and the
@@ -175,9 +222,14 @@ Why it fits:
   the grid is `*(main+0x14287)` with stride `0xD`; `tagpu_feat.c` reads four of them for every
   feature anchor **[SOURCE]**. The terrain shader already carries world x and z per vertex.
   The work is one R8 height texture per map plus a sampler.
-- **GL 3.3 is in effect.** The native shaders are `#version 330 core` and compile, so
-  sampler objects are available; `render_ogl.c` still *requests* 3.2 core — bump the request
-  so the contract matches **[SOURCE `render_ogl.c` 189–192, `tagpu_native.c`]**.
+- **The definition tables are known.** Unit definitions: count `main+0x1438F`, table
+  `main+0x1439B`, stride `0x249`; feature definitions: count `main+0x14253`, table
+  `main+0x1426F`, stride `0x100` **[SOURCE `tagpu_cat.c`]**. The load-time atlas walk starts
+  there; the path from a definition to its loaded model's faces is not yet written down (§4).
+- **The GL context is requested at 3.2 core** (`render_ogl.c` 189–192) and the field notes
+  record `GL_VERSION 3.2.0 core` on the 4070. The native shaders are `#version 330 core` and
+  compile, which is the NVIDIA driver being lenient, not a guarantee; sampler objects are a
+  3.3 feature. **Bump the request to 3.3** before relying on either **[SOURCE, field notes]**.
 - **Fog cannot leak through shadows.** The unit gather drops units whose anchor tile is
   unexplored or unseen, and cloaked enemies, before anything is emitted; its rect has 256 px
   of slack on every side, more than the lab's 192-unit caster margin **[SOURCE
@@ -186,14 +238,20 @@ Why it fits:
   any pass renders; a depth pre-pass over the frame's unit buffer slots in before the terrain
   render with no frame lag **[SOURCE `tagpu_native_frame`]**.
 - **Team colour is per-owner GAF frames** (`frame[owner]` from the anim's inline table,
-  `tagpu_render3do.c face_texframe`). With the restorer in-DLL each variant is restored on
-  its own when first drawn; nothing to enumerate.
+  `tagpu_render3do.c face_texframe`). Every variant is a frame in `textures/*.gaf` and is
+  restored at load like any other; nothing to enumerate separately.
 - **The composite over the top bar** and the wndproc interception are established, §2.10.
 
 ---
 
 ## 4. Open  [OPEN]
 
+- **The onnxruntime spike** of §2.5: does the 1.22.1 x86 DLL load and run inside TotalA.exe
+  under Wine without destabilising it, and what does a first load of Two Continents cost.
+  Its answer chooses the engine.
+- **Definition → loaded model → texture frames**: the walk the load-time atlas build needs,
+  to be established from the binary and written into
+  [the engine map](exe-reverse-engineering.html).
 - **Aircraft and boats** — the viewer prototype of §2.2/§2.3 has not been built.
 - **Hires glb under Classic++** — lighting model, depth pass, shadow read-back, silhouette
   shadow off; deferred by §2.4.
@@ -201,19 +259,17 @@ Why it fits:
   reference until the lane gains `uZoom`.
 - **Nanoframe wireframe back edges** show through the unbuilt part — inherited from G13l,
   needs a stencil pass per nanoframe.
-- **The restorer port's exactness** against the Python path is unmeasured; it becomes moot
-  once the lab runs the port (§2.5), but the first port should still be diffed against the
-  ONNX output on a handful of frames so a transposed weight is caught.
-- **The engine's own key map** was not needed once the switch became a button; if a hotkey is
-  ever wanted, it has to be checked against TA's bindings first.
+- **Windows users** need the VC++ 2019 redistributable for onnxruntime.dll; under Wine the
+  built-in runtime sufficed.
 
 ---
 
 ## 5. Order of work
 
-1. **Restorer port**: weights export verb, the GLSL passes, diff against ONNX on sample
-   frames, the lab lane switched to it.
-2. **RGBA atlas** at insert: pad, align, mips 0–2; the shader's restored-texture branch.
+1. **The restorer spike**: onnxruntime 1.22.1 x86 loaded at map load, tiles restored
+   batched, disk cache, stability watched; fall back to the GLSL passes if it fails.
+2. **The three restored atlases at load**: the definition → model → frames walk, pad and
+   align, mips 0–2; the shaders' restored-texture branch.
 3. **Unit shading** in map space: normal and world height per vertex, `LAB_LIGHT` into
    `tagpu_glsl.h` with the viewer's uniform names.
 4. **Terrain lighting** from the height texture, level-normalised.

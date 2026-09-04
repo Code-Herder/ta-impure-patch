@@ -133,6 +133,11 @@ cost time; each is a landmine for the next GL-hook we add.
   `0x004D94E0` while formatting a 16-byte-per-module field — that secondary crash is what surfaces
   in the wine log and masks the real one. Fix: **compile the overlay INTO the fork** and call it
   directly. No second module, no loader interaction, no crash. [VERIFIED]
+  *2026-09-04, re-read for the Classic++ restorer:* the crash described here is the null
+  `glGetIntegerv` two bullets down — the companion called a NULL GL pointer — so the module
+  load itself was never isolated as the cause. The rule stands as a caution, not a proof;
+  the onnxruntime spike on [Classic and Classic++ renderers](renderers.html) §2.5 loads a
+  DLL from the game thread at map load and will settle it either way.
 - **`0x004D94E0` is TA's crash-report writer, not your bug.** If you ever see `c0000005 @ 0x4d94e0`,
   an *earlier* exception already happened and TA is dying while trying to report it. Re-run with
   `WINEDEBUG=+seh` and read the **first** `dispatch_exception`, not the unhandled one. [VERIFIED]
