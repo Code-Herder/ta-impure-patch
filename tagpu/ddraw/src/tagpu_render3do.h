@@ -19,4 +19,8 @@ int tagpu_r3d_ready(void);
 int tagpu_r3d_ensure(void);
 const char* tagpu_r3d_face_texframe(const char* fa, int owner);
 int tagpu_r3d_face_colour(const char* fa);
+/* build-state (nanoframe) staging for one unit — the engine's own formulas,
+   shared so the composite path and the native pass stay identical. Returns 0
+   for a unit that is not under construction. */
+int tagpu_r3d_nano_state(const char* unit, float* t, float c[3], float* wire);
 #endif

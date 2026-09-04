@@ -206,6 +206,7 @@ typedef void (APIENTRY *PFN_DISABLE)(GLenum);
 typedef void (APIENTRY *PFN_BLENDFUNC)(GLenum,GLenum);
 typedef void (APIENTRY *PFN_UNIFORM1F)(GLint,GLfloat);
 typedef void (APIENTRY *PFN_UNIFORM2F)(GLint,GLfloat,GLfloat);
+typedef void (APIENTRY *PFN_UNIFORM3F)(GLint,GLfloat,GLfloat,GLfloat);
 typedef void (APIENTRY *PFN_UNIFORM4F)(GLint,GLfloat,GLfloat,GLfloat,GLfloat);
 typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
 typedef void (APIENTRY *PFN_CLEARBUFFERFV)(GLenum,GLint,const GLfloat*);
@@ -218,6 +219,7 @@ static PFN_DISABLE    x_glDisable;
 static PFN_BLENDFUNC  x_glBlendFunc;
 static PFN_UNIFORM1F  x_glUniform1f;
 static PFN_UNIFORM2F  x_glUniform2f;
+static PFN_UNIFORM3F  x_glUniform3f;
 static PFN_UNIFORM4F  x_glUniform4f;
 static PFN_ACTIVETEX  x_glActiveTexture;
 static PFN_CLEARBUFFERFV x_glClearBufferfv;
@@ -240,12 +242,14 @@ static int    s_wrecks = 0;            /* "wrecks" token present            */
 static int    s_ss     = 1;            /* 2x supersample (tagpu_ss.off)     */
 static int    s_subpix = 1;            /* sub-pixel motion (tagpu_subpix.off)*/
 static int    s_spxlog = 0;            /* anchor filmstrip (tagpu_spxlog.on) */
+static int    s_nano   = 1;            /* build-state look (tagpu_nano.off)  */
 static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_palTex;
 static GLuint s_fogTex, s_fogLutTex, s_cprog, s_cvao, s_cvbo;
 static GLuint s_fbo2, s_colTex2, s_depTex2, s_dprog;
 static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
               s_uScafOn, s_uScafP;
 static GLint  s_uWaterT, s_uWaterMode, s_uDigT;
+static GLint  s_uNanoOn, s_uNanoT, s_uNanoC;
 static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepthScale;
 static GLint  s_uCKey = -1, s_uCSurfSz = -1, s_uCVp = -1;  /* composite: the key */
 static GLint  s_uCCur = -1, s_uCCurOff = -1;      /* ...and the cursor it moves */
@@ -315,6 +319,9 @@ static const char* FS =
     "uniform float uWaterT;\n"              /* vy <= this is under water      */
     "uniform int uWaterMode;\n"             /* 1 erase (enemy), 2 tint (own)  */
     "uniform float uDigT;\n"                /* vy <= this is below ground     */
+    "uniform int uNanoOn;\n"                /* build-state staging on         */
+    "uniform float uNanoT;\n"               /* height threshold, depth bytes  */
+    "uniform vec3 uNanoC;\n"                /* cAbove, cBand, cBelow          */
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
     "  float idx;\n"
@@ -336,6 +343,21 @@ static const char* FS =
     "  if (uShadow == 1) { if (vVY <= uWaterT) discard;\n"
     "                      frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
     "  idx = texelFetch(uLUT, ivec2(int(idx*255.0+0.5), int(vShade*31.0+0.5)), 0).r;\n"
+    /* build-state (nanoframe) recolour, engine 0x458D30 semantics
+       (build-state.md): classify the fragment by its composite DEPTH byte —
+       the model height plus 0x32 — against the threshold that sweeps with the
+       build, then erase it, keep the texture, or paint one of the two animated
+       blues. An ERASED fragment is emitted fully transparent rather than
+       discarded so that it still writes DEPTH: the engine keeps the whole
+       model's heights in the depth plane whatever the fill has reached, and
+       the wireframe pass is tested against them. */
+    "  if (uNanoOn == 1) {\n"
+    "    float nd = vVY + 50.0;\n"
+    "    float nc = (nd < uNanoT - 4.0) ? uNanoC.z\n"
+    "             : (nd < uNanoT)       ? uNanoC.y : uNanoC.x;\n"
+    "    if (nc < -1.5) { frag = vec4(0.0); return; }\n"
+    "    if (nc > -0.5) idx = nc;\n"
+    "  }\n"
     "  int pi = int(idx*255.0+0.5);\n"
     TAGPU_GLSL_FOG_SHADE("pi")
     "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
@@ -494,6 +516,7 @@ static void init_gl(void)
     x_glBlendFunc  = (PFN_BLENDFUNC) getgl("glBlendFunc");
     x_glUniform1f  = (PFN_UNIFORM1F) getgl("glUniform1f");
     x_glUniform2f  = (PFN_UNIFORM2F) getgl("glUniform2f");
+    x_glUniform3f  = (PFN_UNIFORM3F) getgl("glUniform3f");
     x_glUniform4f  = (PFN_UNIFORM4F) getgl("glUniform4f");
     x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
     x_glClearBufferfv = (PFN_CLEARBUFFERFV)getgl("glClearBufferfv");
@@ -518,6 +541,9 @@ static void init_gl(void)
     s_uWaterT    = glGetUniformLocation(s_prog, "uWaterT");
     s_uWaterMode = glGetUniformLocation(s_prog, "uWaterMode");
     s_uDigT      = glGetUniformLocation(s_prog, "uDigT");
+    s_uNanoOn    = glGetUniformLocation(s_prog, "uNanoOn");
+    s_uNanoT     = glGetUniformLocation(s_prog, "uNanoT");
+    s_uNanoC     = glGetUniformLocation(s_prog, "uNanoC");
     s_uAlpha  = glGetUniformLocation(s_prog, "uAlpha");
     s_uFog    = glGetUniformLocation(s_prog, "uFog");
     s_uFogOrg = glGetUniformLocation(s_prog, "uFogOrg");
@@ -661,15 +687,23 @@ static int type_match(const char* def)
            name_ieq(def + 0x80, s_type);
 }
 
-/* Is this unit natively owned RIGHT NOW? (armed + type + complete) */
+/* Is this unit natively owned RIGHT NOW? (armed + type)
+
+   UNDER-CONSTRUCTION UNITS ARE OURS TOO, and that is not a detail: everything
+   the engine still draws inside the viewport lands at the UNZOOMED projection,
+   because the composite scales OUR fragments and passes its frame through 1:1.
+   A nanoframe left on the composite path therefore sits at its 1x pixels while
+   the world moves under it — it slides away from the factory or the commander
+   building it the moment the zoom is not 1 (the bug this pass now closes), and
+   with owndraw "all" in force it is not even the engine's own look any more:
+   the rasterise is skipped, so 0x458DD0 recolours an empty composite and only
+   its wireframe survives. */
 int tagpu_native_owns_unit(const char* u)
 {
     if (s_armed != 1) return 0;
     const char* def = *(const char* const*)(u + U_TYPE);
     if (!ptr_ok(def)) return 0;
-    if (!type_match(def)) return 0;
-    float nano = *(const float*)(u + U_NANO);
-    return nano <= 0.0f;
+    return type_match(def);
 }
 
 int tagpu_native_owns_obj(unsigned int obj3do)
@@ -891,6 +925,81 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
         for (i = 0; i < nvert * 3; i++) s_P[i] = (float)vb[i] / 65536.0f;
         nv = emit_node(nd, s_P, nvert, nv, ax, ay, wx0, wz0, encBase, owner,
                        pieceShaded, -1, 0, slant);
+    }
+    return nv;
+}
+
+/* ---- nanoframe wireframe (engine 0x458FA0, build-state.md) ----------------
+   Every drawable face of every visible piece as a closed polygon outline in
+   the second animated blue. It is what a just-placed nanoframe IS: at the top
+   of the build the recolour erases the whole model and this skeleton is the
+   only thing on screen, so it is not decoration and cannot be left out.
+
+   The engine depth-tests each outline pixel against the composite's own height
+   plane, which is why its back edges do not show through. Here the model's own
+   faces are already in the GL depth buffer (an erased fragment still writes
+   depth, see the FS), so the outline is emitted one notch NEARER than the
+   surface it traces and the depth buffer does the same job. The bias stays far
+   inside the +-2 gap between row keys, so nothing changes about how the unit
+   sorts against terrain, features or other units. */
+static int emit_wire(const char* o3, int nv, float ax, float ay,
+                     float wx0, float wz0, float encBase, int owner, float wire)
+{
+    int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
+    if (nparts <= 0 || nparts > 64) return nv;
+    int shNeutral = tagpu_r3d_shade_neutral();
+    int p;
+    for (p = 0; p < nparts; p++) {
+        const char* pr = o3 + O3_PRIM0 + p * PRIM_STRIDE;
+        if (!(*(const unsigned char*)(pr + P_FLAGS) & 1)) continue;
+        const char* nd = *(const char* const*)(pr + P_NODE);
+        const int*  vb = *(const int* const*)(pr + P_VBUF);
+        if (!ptr_ok(nd) || !ptr_ok(vb)) continue;
+        int nvert = *(const int*)(nd + N_VCOUNT);
+        if (nvert <= 0 || nvert > MAXNODEV) continue;
+        if (IsBadReadPtr(vb, (SIZE_T)nvert * 12)) continue;
+        int nface = *(const int*)(nd + N_FCOUNT);
+        const char* faces = *(const char* const*)(nd + N_FACES);
+        if (nface <= 0 || nface > 512 || !ptr_ok(faces)) continue;
+        if (IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) continue;
+        int j;
+        for (j = 0; j < nface; j++) {
+            const char* fa = faces + j * FACE_STRIDE;
+            int fvc = *(const int*)(fa + F_VCOUNT);
+            const unsigned short* idx = *(const unsigned short* const*)(fa + F_INDICES);
+            if (fvc < 3 || fvc > 32 || !ptr_ok(idx)) continue;
+            if (IsBadReadPtr(idx, (SIZE_T)fvc * 2)) continue;
+            /* a face the engine paints nothing for gets no outline either */
+            if (!tagpu_r3d_face_texframe(fa, owner) &&
+                tagpu_r3d_face_colour(fa) < 0) continue;
+            int e;
+            for (e = 0; e < fvc; e++) {
+                unsigned short pa = idx[e], pb = idx[(e + 1) % fvc];
+                int q;
+                if (pa >= nvert || pb >= nvert) continue;
+                if (nv + 2 > MAXNV) { s_vtrunc = 1; return nv; }
+                for (q = 0; q < 2; q++) {
+                    const int* v = vb + (q ? pb : pa) * 3;
+                    float x = (float)v[0] / 65536.0f;
+                    float y = (float)v[1] / 65536.0f;
+                    float z = (float)v[2] / 65536.0f;
+                    float px = x, py = -z - y * 0.5f;
+                    float md = (2.0f * y - z) / 256.0f;
+                    if (md > 1.8f) md = 1.8f; if (md < -1.8f) md = -1.8f;
+                    float* o = s_verts + nv * NVST;
+                    o[0] = ax + px;
+                    o[1] = ay + py;
+                    o[2] = encBase + md + 0.15f;
+                    o[3] = -1.0f; o[4] = -1.0f;          /* flat colour path */
+                    o[5] = wire;  o[6] = -1.0f;
+                    o[7] = (float)shNeutral / 31.0f;     /* LUT identity row */
+                    o[8] = wx0 + px;
+                    o[9] = wz0 + py;
+                    o[10] = y;
+                    nv++;
+                }
+            }
+        }
     }
     return nv;
 }
@@ -1224,6 +1333,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         s_ss     = (GetFileAttributesA("tagpu_ss.off")     == INVALID_FILE_ATTRIBUTES);
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
+        s_nano   = (GetFileAttributesA("tagpu_nano.off")   == INVALID_FILE_ATTRIBUTES);
         if (s_armed != was && was >= 0) {
             char b[96]; _snprintf(b, sizeof b, "native: %s (type=%s wrecks=%d ss=%d subpix=%d)",
                                   s_armed ? "ARMED" : "disarmed", s_type,
@@ -1404,7 +1514,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     typedef struct { const char* o3; const char* u; const void* hires;
                      float ax, ay, gy, wx0, wz0;
                      int rel, owner, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
-                     float waterT, digT; int waterMode; } NU;
+                     float waterT, digT; int waterMode;
+                     int nanoOn; float nanoT, nanoC[3], nanoWire; } NU;
     static NU units[MAXU];
     /* sub-pixel motion: the engine keeps 16.16 fixed-point positions (the
        roster shorts are just their high words) — read the true fractions and
@@ -1478,6 +1589,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         n2->yaw = *(const unsigned short*)(u + U_YAW);
         n2->hires = NULL;
         n2->shadow = 0; n2->slant = 0;
+        /* build state: the engine's own staging for a unit under construction
+           (build-state.md), shared with the composite path so the two cannot
+           drift. The blit-time effect that would otherwise draw this at the 1x
+           projection is skipped for every unit this pass owns — the third
+           owndraw detour, on 0x458DD0. */
+        n2->nanoOn = s_nano &&
+                     tagpu_r3d_nano_state(u, &n2->nanoT, n2->nanoC, &n2->nanoWire);
         n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
         unsigned mask = 0;                    /* FBI booleans, read below */
         {
@@ -1556,6 +1674,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 if (mask & UD_DIGGER) n2->digT = 0.0f;
             }
         }
+        /* A UNIT UNDER CONSTRUCTION CASTS NO SHADOW, measured against the
+           engine on one solar held at 25/50/75/100 % built on the same ground
+           (2026-09-03): over the pixels the completed unit darkens by half,
+           the 50 %-built frame reads 0.99 of the bare terrain and the complete
+           one 0.48. The mechanism is not settled — the blit's structure branch
+           (shadows-cloak.md) has no nanoframe test and does blit the cached
+           slant projection, but a nanoframe throws its composite away on every
+           progress pulse (build-state.md 1), so what that branch has to blit is
+           evidently empty. Ours has to go the same way or the scaffold's erased
+           parts show it: a black silhouette where the engine shows grass. */
+        if (n2->nanoOn) n2->shadow = 0;
         n2->air = ((st & 3) != 1);
         n2->feat = 0;
         n2->sel = ((st & 0x10) && (uiGates & 4));
@@ -1839,6 +1968,22 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     s_selComplete = (selDrawn == nsel && nu < MAXU);
     int lineEnd = nv;
 
+    /* nanoframe wireframes: a second line range per unit, empty for everyone
+       not under construction. Before the shadows in the vertex budget — at the
+       top of a build the scaffold is erased down to this skeleton, so losing it
+       loses the unit, while losing a shadow loses a shadow. */
+    static int wfirst[MAXU + 1];
+    int nwire = 0;
+    for (i = 0; i < nu; i++) {
+        wfirst[i] = nv;
+        if (!units[i].nanoOn) continue;
+        nv = emit_wire(units[i].o3, nv, units[i].ax, units[i].ay,
+                       units[i].wx0, units[i].wz0, encb[i], units[i].owner,
+                       units[i].nanoWire);
+        if (nv > wfirst[i]) nwire++;
+    }
+    wfirst[nu] = nv;
+
     /* structure shadows: the slant projection is a second vertex range per
        unit (the body range cannot be re-offset into it); empty for everyone
        else, so the shadow pass below indexes it uniformly. Emitted LAST so
@@ -1955,6 +2100,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied */
 
     /* selection rects first — the engine draws them under the unit sprite */
+    glUniform1i(s_uNanoOn, 0);
     if (lineEnd > lineStart) {
         glUniform1i(s_uFog, fogMode & 1);
         glUniform1i(s_uShadow, 0);
@@ -2003,7 +2149,26 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glUniform1f(s_uWaterT, units[i].waterT);
         x_glUniform1f(s_uDigT, units[i].digT);
         glUniform1i(s_uWaterMode, units[i].waterMode);
+        glUniform1i(s_uNanoOn, units[i].nanoOn);
+        if (units[i].nanoOn) {
+            x_glUniform1f(s_uNanoT, units[i].nanoT);
+            x_glUniform3f(s_uNanoC, units[i].nanoC[0], units[i].nanoC[1],
+                                    units[i].nanoC[2]);
+        }
         x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i+1] - firstv[i]);
+    }
+    glUniform1i(s_uNanoOn, 0);      /* the wireframe carries its own colour */
+    if (nwire) {
+        x_glUniform1f(s_uAlpha, 1.0f);
+        glUniform1i(s_uWaterMode, 0);
+        if (x_glLineWidth) x_glLineWidth((GLfloat)ss);
+        for (i = 0; i < nu; i++) {
+            if (wfirst[i+1] == wfirst[i]) continue;
+            glUniform1i(s_uFog, FOGW(i));
+            x_glUniform1f(s_uWaterT, units[i].waterT);
+            x_glUniform1f(s_uDigT, units[i].digT);
+            x_glDrawArrays(GL_LINES, wfirst[i], wfirst[i+1] - wfirst[i]);
+        }
     }
     if (nhi) {
         tagpu_hires_draw(&hv, hunits, nhi, 0, f->frame_counter);
@@ -2106,10 +2271,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     static unsigned last = 0;
     if (f->frame_counter - last >= 300) {
         last = f->frame_counter;
-        char b[160];
+        char b[192];
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d%s",
-                  nu - nwr, nwr, nsel, nmark, nslant, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d%s",
+                  nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
     }
