@@ -21,6 +21,7 @@ as a module the way tools/test_ta3do.py already loads it.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -69,7 +70,19 @@ TNT_HDR = "<3i2I I 2i I i I i 4i"
 TILE_PX = 32
 TILE_BYTES = 0x400
 ATLAS_COLS = 64                      # tagpu_terr.c: 64 tiles per atlas row
-ATLAS_W = ATLAS_COLS * TILE_PX       # 2048
+# THE GUARD RAIL, copied from tagpu_terr.c (CELL_BORDER / CELL_PITCH). Cells sit
+# one texel apart and that texel is a COPY of the cell's last row/column. A
+# fragment centre landing exactly on a quad's far edge interpolates v to exactly
+# v1, and GL_NEAREST resolves that to floor(v1*H) = the first texel of the NEXT
+# cell -- the unrelated tile 64 cells later in the atlas, i.e. blue hairlines
+# along tile edges. The quad still spans exactly TILE_PX texels, so sampling at
+# 1:1 is bit-identical to the un-padded atlas; it is the cases that are NOT 1:1
+# that this saves. The parity lane never hit it (its quads are integer-aligned);
+# the exploration lane displaces y by relief*h/2, which is a half-pixel whenever
+# the height is odd, and the hairlines came straight back.
+CELL_BORDER = 1
+CELL_PITCH = TILE_PX + 2 * CELL_BORDER   # 34
+ATLAS_W = ATLAS_COLS * CELL_PITCH        # 2176
 
 
 class Tnt:
@@ -132,23 +145,72 @@ class Tnt:
         return names
 
     def atlas(self):
-        """One R8 atlas of 32x32 cells, 64 per row — tagpu_terr.c's layout exactly."""
+        """One R8 atlas of 34x34 guarded cells, 64 per row — tagpu_terr.c's layout."""
         rows = (self.tiles + ATLAS_COLS - 1) // ATLAS_COLS
-        h = rows * TILE_PX
+        h = rows * CELL_PITCH
         buf = bytearray(ATLAS_W * h)
         for i in range(self.tiles):
             src = self.p_tilegfx + i * TILE_BYTES
-            ox = (i % ATLAS_COLS) * TILE_PX
-            oy = (i // ATLAS_COLS) * TILE_PX
+            ox = (i % ATLAS_COLS) * CELL_PITCH + CELL_BORDER
+            oy = (i // ATLAS_COLS) * CELL_PITCH + CELL_BORDER
             for r in range(TILE_PX):
+                row = self.blob[src + r * TILE_PX: src + (r + 1) * TILE_PX]
                 o = (oy + r) * ATLAS_W + ox
-                buf[o:o + TILE_PX] = self.blob[src + r * TILE_PX: src + (r + 1) * TILE_PX]
+                buf[o - 1] = row[0]                       # left  border column
+                buf[o:o + TILE_PX] = row
+                buf[o + TILE_PX] = row[TILE_PX - 1]       # right border column
+            top = (oy - 1) * ATLAS_W + ox - 1
+            first = (oy) * ATLAS_W + ox - 1
+            buf[top:top + CELL_PITCH] = buf[first:first + CELL_PITCH]
+            bot = (oy + TILE_PX) * ATLAS_W + ox - 1
+            last = (oy + TILE_PX - 1) * ATLAS_W + ox - 1
+            buf[bot:bot + CELL_PITCH] = buf[last:last + CELL_PITCH]
         return ATLAS_W, h, bytes(buf)
 
     def minimap(self):
         w, h = struct.unpack_from("<2i", self.blob, self.p_minimap)
         px = self.blob[self.p_minimap + 8: self.p_minimap + 8 + w * h]
         return w, h, px
+
+    def tile_frames(self):
+        """{index: GafFrame} — the tiles as the unditherer wants them, one 32x32
+        image each. Per-tile is the whole story: a tile restored in isolation
+        differs from the same tile restored inside a 3x3 patch of its real map
+        neighbours by 2.03/255 on the edge ring and 0.45/255 inside it, so there
+        is deliberately no neighbour-context machinery here (tascene-design.md).
+        """
+        out = {}
+        for i in range(self.tiles):
+            src = self.p_tilegfx + i * TILE_BYTES
+            out[i] = ta3do.GafFrame(TILE_PX, TILE_PX,
+                                    bytearray(self.blob[src:src + TILE_BYTES]), None)
+        return out
+
+    def atlas_rgba(self, restored):
+        """The same guarded layout as atlas(), painted from restored true colour."""
+        rows = (self.tiles + ATLAS_COLS - 1) // ATLAS_COLS
+        h = rows * CELL_PITCH
+        buf = bytearray(ATLAS_W * h * 4)
+        for i in range(self.tiles):
+            got = restored.get(i)
+            if not got:
+                continue
+            _w, _h, px = got
+            ox = (i % ATLAS_COLS) * CELL_PITCH + CELL_BORDER
+            oy = (i // ATLAS_COLS) * CELL_PITCH + CELL_BORDER
+            for r in range(TILE_PX):
+                row = px[r * TILE_PX * 4:(r + 1) * TILE_PX * 4]
+                o = ((oy + r) * ATLAS_W + ox) * 4
+                buf[o - 4:o] = row[0:4]                             # left  border
+                buf[o:o + TILE_PX * 4] = row
+                buf[o + TILE_PX * 4:o + (TILE_PX + 1) * 4] = row[-4:]  # right border
+            top = ((oy - 1) * ATLAS_W + ox - 1) * 4
+            first = (oy * ATLAS_W + ox - 1) * 4
+            buf[top:top + CELL_PITCH * 4] = buf[first:first + CELL_PITCH * 4]
+            bot = ((oy + TILE_PX) * ATLAS_W + ox - 1) * 4
+            last = ((oy + TILE_PX - 1) * ATLAS_W + ox - 1) * 4
+            buf[bot:bot + CELL_PITCH * 4] = buf[last:last + CELL_PITCH * 4]
+        return ATLAS_W, h, bytes(buf)
 
 
 # --------------------------------------------------------------------------- TDF
@@ -357,6 +419,98 @@ SHADER_SET = [("tagpu_terr.c", {"terrain.vert": "VS", "terrain.frag": "FS"}),
               ("tagpu_native.c", {"unit.vert": "VS", "unit.frag": "FS"})]
 
 
+# --------------------------------------------------------------------------- undither
+
+# The exploration lane's textures. `ta3do.undither_frames` already drives the
+# unditherer's CLI (indexed PNG in, restored true-colour PNG out, one process
+# for a whole batch because loading the CNN costs far more than running it on a
+# 32x32 texture) — this is the cache and the batching around it.
+#
+# WHY A CACHE: the largest stock map is 5062 tiles at ~19 ms each, i.e. ~1.6
+# min, and a pack gets rebuilt every time the eye moves. The key is the frame's
+# own CONTENT plus the preset and the palette, not (map, preset): tiles recur
+# between maps and between builds, and a content key cannot go stale.
+
+CACHE_ENV = "TASCENE_CACHE"
+UNDITHER_BATCH = 256                  # frames per unditherer process
+CACHE_MAGIC = b"TSU1"
+
+
+def cache_root(explicit=None) -> Path:
+    if explicit:
+        return Path(explicit).expanduser()
+    env = os.environ.get(CACHE_ENV)
+    if env:
+        return Path(env).expanduser()
+    base = os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
+    return Path(base) / "tascene" / "undither"
+
+
+def _cache_key(frame, palette, preset) -> str:
+    h = hashlib.sha256()
+    h.update(preset.encode())
+    h.update(struct.pack("<3i", frame.width, frame.height,
+                         -1 if frame.transparent is None else frame.transparent))
+    h.update(bytes(frame.pixels))
+    for entry in palette:
+        h.update(bytes(entry[:3]))
+    return h.hexdigest()
+
+
+def _cache_read(path: Path):
+    try:
+        blob = path.read_bytes()
+    except OSError:
+        return None
+    if len(blob) < 8 or blob[:4] != CACHE_MAGIC:
+        return None
+    w, h = struct.unpack_from("<2H", blob, 4)
+    rgba = blob[8:]
+    if len(rgba) != w * h * 4:
+        return None                     # a truncated write: treat it as a miss
+    return (w, h, rgba)
+
+
+def _cache_write(path: Path, got):
+    w, h, rgba = got
+    tmp = path.with_suffix(".part")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(CACHE_MAGIC + struct.pack("<2H", w, h) + rgba)
+        tmp.replace(path)               # atomic: two builds can share one cache
+    except OSError:
+        pass                            # a cache that cannot be written is not fatal
+
+
+def undither(frames, palette, preset, cdir: Path, python=None, tally=None):
+    """{key: GafFrame} -> {key: (w, h, RGBA bytes)}, cached on disk by content."""
+    if not frames:
+        return {}
+    keys = {k: _cache_key(f, palette, preset) for k, f in frames.items()}
+    out, todo = {}, {}
+    for k, digest in keys.items():
+        got = _cache_read(cdir / preset / digest[:2] / f"{digest}.bin")
+        if got:
+            out[k] = got
+        else:
+            todo[k] = frames[k]
+    if tally is not None:
+        tally["frames"] = tally.get("frames", 0) + len(frames)
+        tally["cached"] = tally.get("cached", 0) + len(out)
+    order = sorted(todo)
+    for i in range(0, len(order), UNDITHER_BATCH):
+        batch = {k: todo[k] for k in order[i:i + UNDITHER_BATCH]}
+        # the keys become filenames inside undither_frames, so give it strings
+        # that survive its own sanitiser without colliding
+        tags = {f"f{n:05d}": k for n, k in enumerate(batch)}
+        got = ta3do.undither_frames({t: batch[k] for t, k in tags.items()},
+                                    palette, preset=preset, python=python)
+        for tag, k in tags.items():
+            out[k] = got[tag]
+            _cache_write(cdir / preset / keys[k][:2] / f"{keys[k]}.bin", got[tag])
+    return out
+
+
 # --------------------------------------------------------------------------- features
 
 # terrain-depth.md 3 / tagpu_feat.c: one anchor per 16-px cell, drawn as a GAF
@@ -364,30 +518,92 @@ SHADER_SET = [("tagpu_terr.c", {"terrain.vert": "VS", "terrain.frag": "FS"}),
 # def's `height` is the tall-vs-flat sort class (< 10 = flat), and animtrans /
 # shadtrans are the alpha bits the engine's FeatureDef mask carries.
 
-def shelf_pack(frames, width=2048):
-    """Height-sorted shelf packer -> {key: (x, y)} and the atlas height."""
+# The unit atlas is padded so the exploration lane can MIPMAP it: every frame
+# gets a replicated border of UNIT_PAD texels and its allocation is aligned to
+# UNIT_PAD, so a mip texel at level L <= log2(UNIT_PAD) that touches a frame is
+# made only of that frame's own texels. The viewer clamps TEXTURE_MAX_LOD to
+# match. Parity never reads outside a frame (NEAREST, UVs on the frame), so the
+# padding changes nothing there — the ss=1 fixture md5 is the proof.
+UNIT_PAD = 4
+
+
+def shelf_pack(frames, width=2048, pad=0, align=1):
+    """Height-sorted shelf packer -> {key: (x, y)} and the atlas height. With
+    `pad` the allocation carries a border and (x, y) is the frame's own origin
+    inside it; `align` rounds every allocation up to a multiple."""
+    up = lambda v: -(-v // align) * align
     order = sorted(frames, key=lambda k: -frames[k].height)
     place, x, y, shelf = {}, 0, 0, 0
     for key in order:
         f = frames[key]
-        if f.width > width:
+        w, h = up(f.width + 2 * pad), up(f.height + 2 * pad)
+        if w > width:
             continue
-        if x + f.width > width:
+        if x + w > width:
             x, y, shelf = 0, y + shelf, 0
-        place[key] = (x, y)
-        x += f.width
-        shelf = max(shelf, f.height)
+        place[key] = (x + pad, y + pad)
+        x += w
+        shelf = max(shelf, h)
     return place, y + shelf
 
 
-def build_features(tnt, defs, gafs, out):
-    """Every feature the map anchors: sprite atlas, instance list, def table."""
+def blit_frame(dst, aw, bpp, x, y, w, h, row, pad=0):
+    """Paint one frame at (x, y) with `pad` replicated border texels around it.
+    `row(r)` is the frame's row r as bytes, w*bpp long."""
+    for r in range(-pad, h + pad):
+        src = row(min(max(r, 0), h - 1))
+        line = src[:bpp] * pad + src + src[-bpp:] * pad
+        o = ((y + r) * aw + x - pad) * bpp
+        dst[o:o + len(line)] = line
+
+
+def paint_rgba(frames, place, aw, ah, restore, path: Path, pad=0):
+    """The R8 atlas's layout, painted from restored true colour. None if off.
+
+    The restorer keeps the colour key's alpha (it inpaints the key index before
+    filtering and writes RGBA), so the undithered lane gets its holes for free
+    and does not need the index compare the parity shaders do.
+    """
+    if restore is None or not frames:
+        return None
+    restored = restore(frames)
+    buf = bytearray(aw * ah * 4)
+    for key, (x, y) in place.items():
+        got = restored.get(key)
+        if not got:
+            continue
+        w, h, px = got
+        blit_frame(buf, aw, 4, x, y, w, h, lambda r: px[r * w * 4:(r + 1) * w * 4], pad)
+    path.write_bytes(bytes(buf))
+    return str(path.relative_to(path.parent.parent)).replace(os.sep, "/")
+
+
+def build_features(tnt, defs, gafs, out, restore=None, scenario=None):
+    """Every feature the map anchors, plus the scenario's GAF ones: sprite
+    atlas, instance list, def table. A scenario feature whose def names an
+    `object` instead of a `seqname` is a 3DO (every wreck is) and is drawn by
+    build_units, exactly as the engine hands it to its 3DO renderer."""
     names = tnt.feature_names()
-    anchors = tnt.feature_indices()
+    anchors = list(tnt.feature_indices())
     used = {}                                  # def index -> name
     for _col, _row, idx in anchors:
         if idx < len(names):
             used.setdefault(idx, names[idx])
+    # the scenario's sprite features anchor at their cell, like the map's own;
+    # a def the map's table does not carry gets an index past its end
+    lower = {n.lower(): i for i, n in enumerate(names)}
+    for feat in (scenario or {}).get("features", []):
+        name = (feat.get("type") or "").lower()
+        body = defs.get(name)
+        if not body or not isinstance(feat.get("pos"), list):
+            continue
+        if not (body.get("seqname") or "").strip():
+            continue                           # a 3DO feature: build_units draws it
+        idx = lower.get(name)
+        if idx is None:
+            idx = lower[name] = len(lower)
+        used.setdefault(idx, name)
+        anchors.append((int(feat["pos"][0]) >> 4, int(feat["pos"][1]) >> 4, idx))
 
     frames, hotspots, table = {}, {}, {}
     for idx, name in sorted(used.items()):
@@ -430,6 +646,8 @@ def build_features(tnt, defs, gafs, out):
 
     (out / "features").mkdir(parents=True, exist_ok=True)
     (out / "features/atlas.r8.bin").write_bytes(bytes(atlas))
+    rgba_file = paint_rgba(frames, place, aw, ah, restore,
+                           out / "features/atlas.rgba.bin")
     inst = bytearray()
     kept = 0
     for col, row, idx in anchors:
@@ -451,7 +669,8 @@ def build_features(tnt, defs, gafs, out):
             "body": rects.get(entry["body"]), "shadow": rects.get(entry["shadow"]),
         }
     return {"count": kept, "instances": "features/instances.bin",
-            "atlas": {"w": aw, "h": ah, "file": "features/atlas.r8.bin"},
+            "atlas": {"w": aw, "h": ah, "file": "features/atlas.r8.bin",
+                      "rgba": rgba_file},
             "defs": defs_out}
 
 
@@ -489,7 +708,14 @@ def shd_neutral(shd: bytes, palette):
 UNIT_VSTRIDE = 7                       # x,y,z, u,v, flatCol, colourKey
 
 
-def build_units(scenario, assets, out):
+def feature_object(defs, feat):
+    """The 3DO a scenario feature is drawn with (a wreck's `object=`), or None."""
+    body = defs.get(feat.get("type") or "") if defs else None
+    obj = ((body or {}).get("object") or "").strip().lower()
+    return obj or None
+
+
+def build_units(scenario, assets, out, restore=None, defs=None):
     types = []
     for unit in scenario.get("units", []):
         if unit.get("type") and unit["type"].lower() not in types:
@@ -498,6 +724,12 @@ def build_units(scenario, assets, out):
         for comp in group.get("composition", []):
             if comp.get("type") and comp["type"].lower() not in types:
                 types.append(comp["type"].lower())
+    # 3DO features (wrecks) ride the unit path: same models3d/ 3DOs, same
+    # renderer in the engine, posed by their facing and snapped to the ground
+    for feat in scenario.get("features", []):
+        obj = feature_object(defs, feat)
+        if obj and obj not in types:
+            types.append(obj)
     if not types:
         return None
 
@@ -519,20 +751,21 @@ def build_units(scenario, assets, out):
     if not models:
         return None
 
-    place, ah = shelf_pack(frames)
+    place, ah = shelf_pack(frames, pad=UNIT_PAD, align=UNIT_PAD)
     aw, ah = (2048 if frames else 1), max(1, ah)
     atlas = bytearray(aw * ah)
     rects = {}
     for key, (x, y) in place.items():
         f = frames[key]
-        for r in range(f.height):
-            o = (y + r) * aw + x
-            atlas[o:o + f.width] = f.pixels[r * f.width:(r + 1) * f.width]
+        blit_frame(atlas, aw, 1, x, y, f.width, f.height,
+                   lambda r, f=f: f.pixels[r * f.width:(r + 1) * f.width], UNIT_PAD)
         rects[key] = (x / aw, y / ah, (x + f.width) / aw, (y + f.height) / ah,
                       f.transparent)
 
     (out / "units").mkdir(parents=True, exist_ok=True)
     (out / "units/atlas.r8.bin").write_bytes(bytes(atlas))
+    rgba_file = paint_rgba(frames, place, aw, ah, restore,
+                           out / "units/atlas.rgba.bin", UNIT_PAD)
 
     meshes = {}
     for name, (label, root, hidden) in models.items():
@@ -590,8 +823,130 @@ def build_units(scenario, assets, out):
         instances.append({"type": key, "pos": [int(unit["pos"][0]), int(unit["pos"][1])],
                           "facing": float(unit.get("facing", 0) or 0),
                           "id": unit.get("id")})
-    return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin"},
+    for feat in scenario.get("features", []):
+        obj = feature_object(defs, feat)
+        if obj not in meshes or not isinstance(feat.get("pos"), list):
+            continue
+        instances.append({"type": obj, "pos": [int(feat["pos"][0]), int(feat["pos"][1])],
+                          "facing": float(feat.get("facing", 0) or 0),
+                          "id": feat.get("id"), "feature": feat.get("type")})
+    return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin",
+                      "rgba": rgba_file, "pad": UNIT_PAD},
             "stride": UNIT_VSTRIDE, "meshes": meshes, "instances": instances}
+
+
+# --------------------------------------------------------------------------- art light
+
+# "The art already contains the hill" was the exploration lane's open question
+# (tascene-design.md). This answers it with a number instead of an opinion.
+#
+# For every 16-px cell steeper than `--steep`, correlate the mean luminance of
+# the tile quadrant PAINTED there against the N.L that quadrant's own gradient
+# would receive, sweeping the sun's azimuth. A directional signal (the art was
+# painted lit) shows up as the AMPLITUDE of the resulting sinusoid; a material
+# confound -- steep cells simply being painted with darker rock -- shifts its
+# OFFSET instead, so the two separate.
+
+REC709 = (0.2126, 0.7152, 0.0722)
+
+
+def _tile_quadrant_luma(tnt, palette):
+    """[tile][quadrant] -> mean luminance, quadrants (row&1)*2 + (col&1)."""
+    lut = [int(round((REC709[0] * c[0] + REC709[1] * c[1] + REC709[2] * c[2]) * 1000))
+           for c in palette]
+    get = lut.__getitem__
+    out = []
+    for i in range(tnt.tiles):
+        src = tnt.p_tilegfx + i * TILE_BYTES
+        quads = [0, 0, 0, 0]
+        for r in range(TILE_PX):
+            row = tnt.blob[src + r * TILE_PX: src + (r + 1) * TILE_PX]
+            q = (r >> 4) * 2
+            quads[q] += sum(map(get, row[:16]))
+            quads[q + 1] += sum(map(get, row[16:]))
+        out.append([v / 256000.0 for v in quads])
+    return out
+
+
+def art_light(tnt, palette, steep=0.25, elevation=53.1, step=15):
+    """(n_steep, [(azimuth, pearson r)]) for one map."""
+    quads = _tile_quadrant_luma(tnt, palette)
+    heights = tnt.heights()
+    tmap = tnt.tilemap()
+    W, H, MW = tnt.w16, tnt.h16, tnt.mw
+    cells = []
+    for r in range(H - 1):
+        base, nxt = r * W, (r + 1) * W
+        trow = (r >> 1) * MW
+        for c in range(W - 1):
+            o = (trow + (c >> 1)) * 2
+            t = tmap[o] | (tmap[o + 1] << 8)
+            if t >= tnt.tiles:
+                continue
+            h00, h10 = heights[base + c], heights[base + c + 1]
+            h01, h11 = heights[nxt + c], heights[nxt + c + 1]
+            dx = ((h10 + h11) - (h00 + h01)) / 32.0
+            dz = ((h01 + h11) - (h00 + h10)) / 32.0
+            if math.hypot(dx, dz) < steep:
+                continue
+            cells.append((dx, dz, quads[t][(r & 1) * 2 + (c & 1)]))
+    curve = []
+    e = math.radians(elevation)
+    n = len(cells)
+    for azi in range(0, 360, step):
+        a = math.radians(azi)
+        sx_, sy_, sz_ = math.sin(a) * math.cos(e), math.sin(e), -math.cos(a) * math.cos(e)
+        sx = sy = sxx = syy = sxy = 0.0
+        for dx, dz, b in cells:
+            inv = 1.0 / math.hypot(dx, 1.0, dz)
+            nl = (-dx * inv) * sx_ + inv * sy_ + (-dz * inv) * sz_
+            if nl < 0.0:
+                nl = 0.0
+            sx += nl; sy += b; sxx += nl * nl; syy += b * b; sxy += nl * b
+        if not n:
+            curve.append((azi, 0.0))
+            continue
+        mx, my = sx / n, sy / n
+        sdx = math.sqrt(max(sxx / n - mx * mx, 0.0))
+        sdy = math.sqrt(max(syy / n - my * my, 0.0))
+        curve.append((azi, (sxy / n - mx * my) / (sdx * sdy) if sdx and sdy else 0.0))
+    return n, curve
+
+
+def cmd_artlight(args):
+    assets = ta3do.Assets()
+    palette = ta3do.load_palette(assets)
+    if args.all:
+        paths = sorted(assets.glob("maps/*.tnt"))
+    else:
+        if not args.map:
+            die("name a map with --map, or sweep every stock map with --all")
+        paths = [map_tnt(assets, args.map)]
+    rows = []
+    for path in paths:
+        try:
+            tnt = Tnt(assets.read(path), path)
+        except Exception as err:
+            print(f"tascene: skipping {path}: {err}", file=sys.stderr)
+            continue
+        n, curve = art_light(tnt, palette, args.steep, args.elevation)
+        peak = max(curve, key=lambda t: t[1])
+        trough = min(curve, key=lambda t: t[1])
+        rows.append({"map": Path(path).stem, "steep": n,
+                     "peakAz": peak[0], "peakR": round(peak[1], 4),
+                     "troughAz": trough[0], "troughR": round(trough[1], 4),
+                     "amplitude": round(peak[1] - trough[1], 4),
+                     "offset": round((peak[1] + trough[1]) / 2, 4),
+                     "curve": [[a, round(r, 4)] for a, r in curve]})
+        if not args.json:
+            row = rows[-1]
+            print(f"{row['map'][:28]:28s} steep {row['steep']:7d}  "
+                  f"peak {row['peakR']:+.3f} @ az {row['peakAz']:3d}  "
+                  f"trough {row['troughR']:+.3f} @ az {row['troughAz']:3d}  "
+                  f"amplitude {row['amplitude']:.3f}  offset {row['offset']:+.3f}")
+    if args.json:
+        ta3do.out({"steep": args.steep, "elevation": args.elevation, "maps": rows},
+                  True)
 
 
 # --------------------------------------------------------------------------- maps
@@ -678,10 +1033,21 @@ def cmd_build(args):
     (out / "palette").mkdir(parents=True, exist_ok=True)
     (out / "shaders").mkdir(parents=True, exist_ok=True)
 
+    restore, tally = None, {}
+    if args.undither:
+        cdir = cache_root(args.cache_dir)
+        def restore(frames, _pal=palette, _p=args.undither, _c=cdir, _t=tally):
+            return undither(frames, _pal, _p, _c, args.undither_python, _t)
+
     aw, ah, atlas = tnt.atlas()
     (out / "terrain/atlas.r8.bin").write_bytes(atlas)
     (out / "terrain/tilemap.u16.bin").write_bytes(tnt.tilemap())
     (out / "terrain/height.r8.bin").write_bytes(tnt.heights())
+    terr_rgba = None
+    if restore:
+        _w, _h, rgba = tnt.atlas_rgba(restore(tnt.tile_frames()))
+        (out / "terrain/atlas.rgba.bin").write_bytes(rgba)
+        terr_rgba = "terrain/atlas.rgba.bin"
 
     pal = bytearray()
     for i in range(256):
@@ -695,10 +1061,11 @@ def cmd_build(args):
     for name, src in extract_shaders(SHADER_SET).items():
         (out / "shaders" / name).write_text(src)
 
+    defs = FeatureDefs(assets)
     features = None
     if not args.no_features:
-        features = build_features(tnt, FeatureDefs(assets), GafBank(assets), out)
-    units = None if args.no_units else build_units(scenario, assets, out)
+        features = build_features(tnt, defs, GafBank(assets), out, restore, scenario)
+    units = None if args.no_units else build_units(scenario, assets, out, restore, defs)
 
     manifest = {
         "format": "ta-scene/1",
@@ -709,7 +1076,8 @@ def cmd_build(args):
             "w16": tnt.w16, "h16": tnt.h16,
             "tilemap": {"w": tnt.mw, "h": tnt.mh, "file": "terrain/tilemap.u16.bin"},
             "atlas": {"w": aw, "h": ah, "cols": ATLAS_COLS, "tiles": tnt.tiles,
-                      "file": "terrain/atlas.r8.bin"},
+                      "pitch": CELL_PITCH, "border": CELL_BORDER,
+                      "file": "terrain/atlas.r8.bin", "rgba": terr_rgba},
             "height": {"w": tnt.w16, "h": tnt.h16, "file": "terrain/height.r8.bin"},
             "sealevel": tnt.sealevel,
         },
@@ -723,17 +1091,28 @@ def cmd_build(args):
                   "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0, "rowStep": 4.0,
                   "unit0": 1.0, "shadowTall": 0.30, "shadowFlat": 0.03},
         "shaders": sorted(n for n in extract_shaders(SHADER_SET)),
+        # the exploration lane's own depth keys: with a HEIGHTFIELD the ground
+        # is per-row, so the parity lane's one global terrain key (and the flat
+        # features' global 0.40-0.50 band, which would then sit behind it) do
+        # not survive. Lane-local, and making no parity claim -- that is the
+        # point of the split (tascene-design.md, "Two lanes").
+        "labDepth": {"terrain": 0.10, "flat": 0.50, "tallCol": 0.9},
+        "undither": ({"preset": args.undither, "frames": tally.get("frames", 0),
+                      "cached": tally.get("cached", 0)} if args.undither else None),
     }
     (out / "scene.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
     nfeat = features["count"] if features else 0
     nunit = len(units["instances"]) if units else 0
+    undithered = (f", undithered {tally.get('frames', 0)} frames "
+                  f"({tally.get('cached', 0)} cached)") if args.undither else ""
     ta3do.out({"pack": str(out), "map": mapname, "tiles": tnt.tiles,
                "atlas": [aw, ah], "eye": eye, "res": res,
-               "features": nfeat, "units": nunit}, args.json,
+               "features": nfeat, "units": nunit,
+               "undither": manifest["undither"]}, args.json,
               human=(f"{out}: {mapname} {tnt.w16}x{tnt.h16} 16px cells, "
                      f"{tnt.tiles} tiles, atlas {aw}x{ah}, {nfeat} features, "
-                     f"{nunit} units, eye {eye[0]},{eye[1]}"))
+                     f"{nunit} units, eye {eye[0]},{eye[1]}{undithered}"))
 
 
 def scenario_centre(scenario, tnt):
@@ -759,6 +1138,7 @@ def scenario_centre(scenario, tnt):
 # --------------------------------------------------------------------------- serve / shot
 
 VIEWER = HERE / "tascene-view.html"
+PRESETS = HERE / "tascene-presets.json"
 
 
 def cmd_serve(args):
@@ -768,21 +1148,67 @@ def cmd_serve(args):
     _stage_viewer(pack)
     server = ta3do.Viewer(pack, port=args.port)
     url = f"{server.base}/{VIEWER.name}"
-    print(f"serving {pack} at {url}  (ctrl-c to stop)")
+    watching = "" if args.no_reload else "  (live: edit the viewer and the page reloads)"
+    print(f"serving {pack} at {url}  (ctrl-c to stop){watching}", flush=True)
     try:
-        while True:
-            __import__("time").sleep(3600)
+        if args.no_reload:
+            while True:
+                time.sleep(3600)
+        else:
+            _watch_sources(pack)
     except KeyboardInterrupt:
         pass
     finally:
         server.close()
 
 
+# The viewer is STAGED into the pack (same-origin fetches), so an edit to
+# tools/tascene-view.html reached a running server only by restarting it — and
+# then only after a manual browser reload. Both steps were easy to forget and
+# the failure mode is silent: you look at the old code and believe the result.
+# So the serving copy is re-staged whenever the source changes, and the token
+# below is what the page polls to know it should reload itself.
+RELOAD_TOKEN = "__reload"
+
+
+def _source_token() -> str:
+    """mtime+size of every checked-in file the served page is built from."""
+    parts = []
+    for f in (VIEWER, PRESETS):
+        st = f.stat() if f.exists() else None
+        parts.append(f"{f.name}:{st.st_mtime_ns}:{st.st_size}" if st else f"{f.name}:-")
+    return " ".join(parts)
+
+
+def _watch_sources(pack: Path, interval: float = 0.5):
+    (pack / RELOAD_TOKEN).write_text(_source_token())
+    last = _source_token()
+    while True:
+        time.sleep(interval)
+        now = _source_token()
+        if now == last:
+            continue
+        last = now
+        try:
+            _stage_viewer(pack)
+        except SystemExit:            # die() inside the stager: keep serving
+            print("viewer vanished mid-edit; keeping the last good copy", flush=True)
+            continue
+        (pack / RELOAD_TOKEN).write_text(now)
+        print(f"restaged {VIEWER.name} -> reloading the page", flush=True)
+
+
 def _stage_viewer(pack: Path):
-    """The viewer is served from the pack so fetches are same-origin."""
+    """The viewer and its presets are served from the pack: same-origin fetches.
+
+    Both are checked-in lab files, not pack contents — `pack/` is generated and
+    disposable, so nothing here may be the only copy of anything.
+    """
     if not VIEWER.exists():
         die(f"viewer missing: {VIEWER}")
     (pack / VIEWER.name).write_text(VIEWER.read_text())
+    if PRESETS.exists():
+        (pack / PRESETS.name).write_text(PRESETS.read_text())
 
 
 def cmd_shot(args):
@@ -980,23 +1406,50 @@ def main(argv=None):
                    help="skip unit meshes")
     b.add_argument("--no-features", action="store_true",
                    help="terrain only (a smaller pack, and a terrain-only diff)")
+    b.add_argument("--undither", nargs="?", const="learned", metavar="PRESET",
+                   choices=ta3do.UNDITHER_PRESETS,
+                   help="also pack true-colour atlases for the EXPLORATION lane "
+                        f"({' | '.join(ta3do.UNDITHER_PRESETS)}; default learned). "
+                        "The parity lane keeps its palette indices either way")
+    b.add_argument("--undither-python", dest="undither_python",
+                   help="interpreter that can import unditherer "
+                        "(default: the checkout's .venv-undither)")
+    b.add_argument("--cache-dir", dest="cache_dir",
+                   help=f"restored-frame cache (default ${CACHE_ENV} or "
+                        "~/.cache/tascene/undither)")
     b.add_argument("--json", action="store_true")
     b.set_defaults(func=cmd_build)
 
     s = sub.add_parser("serve", help="serve a pack for interactive viewing")
     s.add_argument("pack")
     s.add_argument("--port", type=int, default=0)
+    s.add_argument("--no-reload", action="store_true",
+                   help="do not re-stage the viewer on edit, and do not let the "
+                        "page reload itself (the pre-live-reload behaviour)")
     s.set_defaults(func=cmd_serve)
 
     t = sub.add_parser("shot", help="headless screenshot of a pack")
     t.add_argument("pack")
     t.add_argument("-o", "--output", required=True)
-    t.add_argument("--opts", help="viewer query string, e.g. 'pass=terrain&relief=off'")
+    t.add_argument("--opts", help="viewer query string, e.g. 'preset=relief' or "
+                                  "'a=engine&b=restored&wipe=0.5'")
     t.add_argument("--timeout", type=float, default=90.0)
     t.add_argument("--budget", type=int, default=8000,
                    help="chrome --virtual-time-budget in ms")
     t.add_argument("--json", action="store_true")
     t.set_defaults(func=cmd_shot)
+
+    al = sub.add_parser("artlight",
+                        help="is the map art already painted lit? sweep the sun "
+                             "and correlate against the heightfield's own slope")
+    al.add_argument("--map", help="map name (default: --all)")
+    al.add_argument("--all", action="store_true", help="every stock map (slow)")
+    al.add_argument("--steep", type=float, default=0.25,
+                    help="only cells with |grad h| at least this (0.25 = ~14 deg)")
+    al.add_argument("--elevation", type=float, default=53.1,
+                    help="sun elevation in degrees (default: the engine's own)")
+    al.add_argument("--json", action="store_true")
+    al.set_defaults(func=cmd_artlight)
 
     ab = sub.add_parser("ab", help="drive the game and the browser, and diff them")
     ab.add_argument("scenario")

@@ -15,6 +15,7 @@ Everything is stdlib-only and every subcommand can print JSON (--json) for agent
 
 import argparse
 import difflib
+import glob
 import hashlib
 import bisect
 import json
@@ -301,6 +302,14 @@ class Instance:
         # ddraw is always ours; DirectPlay is appended only for instances launched
         # with --dplay, so a stock single-player instance keeps wine's builtin.
         overrides = ["ddraw=n,b"]
+        # The Classic++ restorer's DirectML provider is a D3D12 stack, and wine's
+        # built-in vkd3d cannot host it, so link_restorer_files() puts a vkd3d-proton
+        # pair in the gamedir and this prefers it. Added only when the pair is really
+        # there: an override naming files that do not exist makes a launch harder to
+        # read, and the restorer falls back to its CPU provider anyway. "n,b" keeps
+        # the built-in for anything else, and nothing else in TA touches D3D12.
+        if all((self.gamedir / f).is_file() for f in D3D12_FILES):
+            overrides.append("d3d12,d3d12core=n,b")
         if meta.get("dplay"):
             overrides.append(DPLAY_OVERRIDES)
         e["WINEDLLOVERRIDES"] = ";".join(overrides)
@@ -427,6 +436,7 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
     (inst.gamedir / "tagpu_nowarp.on").write_text("")
     set_shield(inst, shield)
     deploy_dll(inst)
+    link_restorer_files(inst)
 
 
 def set_shield(inst: Instance, on: bool):
@@ -506,6 +516,98 @@ def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
         return
     path.write_text("[Preferences]\r\n"
                     + "".join(f"{k}={v}\r\n" for k, v in prefs))
+
+
+# The Classic++ restorer's inference stack, installed into the template gamedir by
+# tools/fetch_onnxruntime.sh. mirror_gamedir() runs only at create, so an instance
+# made before a component existed would never see it — these are re-linked at launch
+# instead, alongside deploy_dll and so, deliberately, under the same --keep-dll
+# guard: that flag means "leave this instance's deployed stack exactly as it is",
+# and swapping a d3d12 under a pinned ddraw.dll would not honour it. Absent from the
+# template is fine: the restorer logs why and falls back (no runtime at all ->
+# indexed terrain; no d3d12 -> the CPU provider).
+RESTORER_FILES = ("onnxruntime.dll", "full.onnx", "DirectML.dll")
+
+# The D3D12 under the restorer's DirectML provider. Wine's own vkd3d cannot host
+# DirectML (ID3D12Device5::EnumerateMetaCommands is a stub, and it answers shader
+# model 5.1 to DirectML's 6.6 ask), so the pair below has to come from
+# vkd3d-proton. Steam ships a 32-bit build inside every Proton, which is why we
+# look there first: a machine with Proton installed needs no download at all. The
+# hash-pinned copy that tools/fetch_onnxruntime.sh puts in the template gamedir is
+# the fallback, and TA_VKD3D_PROTON overrides both — point it at a directory
+# holding the two DLLs to test a specific build. Steam's Proton auto-updates, so
+# the pinned copy is the reproducible one; set TA_VKD3D_PROTON=<template gamedir>
+# to hold a version still.
+D3D12_FILES = ("d3d12.dll", "d3d12core.dll")
+PROTON_GLOBS = (
+    "~/.local/share/Steam/steamapps/common/Proton*/files/lib/wine/vkd3d-proton/i386-windows",
+    "~/.steam/steam/steamapps/common/Proton*/files/lib/wine/vkd3d-proton/i386-windows",
+    "~/.local/share/Steam/compatibilitytools.d/*/files/lib/wine/vkd3d-proton/i386-windows",
+)
+
+
+def vkd3d_proton_dir():
+    """Directory holding a 32-bit vkd3d-proton d3d12 pair, or None if there is none."""
+    cands = []
+    explicit = os.environ.get("TA_VKD3D_PROTON")
+    if explicit:
+        cands.append(Path(explicit).expanduser())
+    hits = []
+    for pat in PROTON_GLOBS:
+        hits += glob.glob(os.path.expanduser(pat))
+    # Most recently installed or updated first — Steam keeps several Proton
+    # versions side by side, and a directory mtime tracks its last content change,
+    # NOT its last use, so this is "newest build", not "the one Steam plays with".
+    # Steam can also remove one between the glob and the stat, and dying there
+    # rather than falling through to the pinned copy would be a poor trade.
+    def mtime(h):
+        try:
+            return os.path.getmtime(h)
+        except OSError:
+            return -1
+    cands += [Path(h) for h in sorted(hits, key=mtime, reverse=True)]
+    cands.append(TEMPLATE_GAMEDIR)
+    for d in cands:
+        if all((d / f).is_file() for f in D3D12_FILES):
+            return d
+    return None
+
+
+def _relink(src: Path, dst: Path):
+    """Point dst at src, repairing a symlink that has gone stale.
+
+    A REAL file at dst is left alone: a build someone dropped in by hand beats
+    anything we would resolve, and silently replacing it would be a mystery.
+    """
+    if not src.is_file():
+        return
+    src = src.resolve()
+    if dst.is_symlink():
+        if dst.resolve() == src:
+            return
+        dst.unlink()
+    elif dst.exists():
+        return
+    dst.symlink_to(src)
+
+
+def link_restorer_files(inst: Instance):
+    """Give the instance the restorer's runtime stack. Returns a note, or None.
+
+    Separate from deploy_dll because these are not the fork: they are third-party
+    runtimes that the instance links rather than copies. Called from the same
+    places, so --keep-dll skips this too, by design.
+    """
+    for name in RESTORER_FILES:
+        _relink(TEMPLATE_GAMEDIR / name, inst.gamedir / name)
+    d = vkd3d_proton_dir()
+    if not d:
+        return None
+    for name in D3D12_FILES:
+        _relink(d / name, inst.gamedir / name)
+    if d == TEMPLATE_GAMEDIR:
+        return None                       # the pinned copy, the unremarkable case
+    return f"vkd3d-proton for the restorer's DirectML from {d}"
 
 
 def deploy_dll(inst: Instance):
@@ -980,8 +1082,10 @@ def _launch(args) -> dict:
         dplay_note = ((dplay_note + "; ") if dplay_note else "") + (
             f"killed {killed} stale dplaysvr.exe (UDP 47624 freed)" if killed
             else "no stale dplaysvr.exe to kill")
+    restorer_note = None
     if not args.keep_dll:
         deploy_dll(inst)
+        restorer_note = link_restorer_files(inst)
     apply_prefix_settings(inst, tuple(meta["res"]), sound=meta.get("sound", False))
     if args.map:
         reg_add(inst, GAME_REG, "SkirmishMap", "REG_SZ", args.map)
@@ -1070,7 +1174,7 @@ def _launch(args) -> dict:
             "dplay": bool(meta.get("dplay")), "dplay_note": dplay_note,
             "owndraw_note": owndraw_note, "fxown_note": fxown_note,
             "featown_note": featown_note, "terrown_note": terrown_note,
-            "markown_note": markown_note}
+            "markown_note": markown_note, "restorer_note": restorer_note}
 
 
 def cmd_launch(args):
@@ -1096,6 +1200,8 @@ def cmd_launch(args):
         human += f"\n  {res['terrown_note']}"
     if res.get("markown_note"):
         human += f"\n  {res['markown_note']}"
+    if res.get("restorer_note"):
+        human += f"\n  {res['restorer_note']}"
     out(res, args.json, human=human)
 
 
@@ -1230,6 +1336,10 @@ def cmd_shield(args):
 
 def cmd_arm(args):
     inst = Instance(args.name)
+    # `arm` is documented to run BEFORE the first launch (the detours install
+    # at DLL attach), so the instance may not exist yet: make its gamedir, and
+    # mirror_gamedir() will fill the rest in around the trigger files.
+    inst.gamedir.mkdir(parents=True, exist_ok=True)
     results = {}
     for spec in args.flags:
         name, _, value = spec.partition("=")
@@ -3841,6 +3951,8 @@ def cmd_scenario_load(args):
         steps.append(launched["terrown_note"])
     if launched.get("markown_note"):
         steps.append(launched["markown_note"])
+    if launched.get("restorer_note"):
+        steps.append(launched["restorer_note"])
 
     _scn_wait_shell(inst, args.launch_timeout)
     for i, selector in enumerate(SCN_MENU_PATH):

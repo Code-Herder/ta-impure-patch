@@ -33,6 +33,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e, cured G13m | `tagpu_zoom.c`; the cursor is the engine's own again — the composite no longer touches it (§2.3d) |
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + a 3-site byte patch behind `vpwide.on`, plus the `0x499221` redirect that also carries the zoom's mouse-point repair and is armed by `zoom.on` too (§2.3d) |
+| Terrain in **restored true colour** (Classic++, `tagpu_classicpp.on`) | G14a (spike, 2026-09-04); GPU G14b (2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 inside the DLL, once per map, off-thread, on the **DirectML** provider where it loads (1.8 s cold for Two Continents' 5062 tiles) and on the CPU where it does not (21 s); `tagpu_terr.c` uploads the result as a second atlas and samples it. Reads only — see [Classic and Classic++ renderers](renderers.html) §2.5 |
 | **Chat, dialogs, side panel, minimap, top bar** | **— never** | screen-space and correct at 1:1 at any zoom; they come through the composite key by design |
 
 **Phases.** Phase 0 (foothold) is complete and Phase B (blit-level GPU units) is verified
@@ -447,6 +448,8 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x37F2F` bit2 | `SelBoxes` |
 | `main+0x142E7..0x142ED` | minimap rect on screen |
 | `main+0x1423B` / `+0x1423F` | view size in map cells (the minimap rect's size comes from here) |
+| `main+0x14283` / `+0x1428B` | `TILE_SET` `{count, pixels}` and the `u16` `TILE_MAP` — the terrain pass reads both per frame; the Classic++ restorer copies the set once per map (5 MB on Two Continents) and never touches it again |
+| `main+0x143A7` | the live palette, 256 × (R, G, B, pad) — uploaded per frame by the native passes; copied once per map by the restorer, whose cache key covers it |
 | **`main+0x1434D`** | **`ScrollSpeed`** — sim-neutral (a local camera preference no other machine ever sees), driven at base/z, and its save path is guarded (§2.3) |
 | **`*(0x51FBD0) + 0xC0`** | **the blend LUT pointer. WRITTEN, transiently, and this is the one field we write that is NOT in `main`.** Swapped to an identity table across the target sprite's draw and restored on return, so the star composites as a copy (§2.2). Game thread only, bracketed around one call that always returns, restored only if ours is still installed, with a belt-and-braces restore at hook 8. It must never be left installed across a frame: `0x4BA5C0` allocates that buffer, `0x4BA5F0` frees it and `0x4BAAD0` refills 64 KB through the pointer, so a stale one of ours would be clobbered or cross-heap-freed |
 

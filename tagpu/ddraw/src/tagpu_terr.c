@@ -38,6 +38,7 @@
 #include <string.h>
 #include "opengl_utils.h"
 #include "tagpu_terr.h"
+#include "tagpu_restore.h"
 #include "tagpu_glsl.h"
 #include "tagpu_terrown.h"
 #include "tagpu_native.h"
@@ -180,6 +181,15 @@ static int    s_atlasH, s_atlasN;      /* atlas rows*CELL_PITCH, tiles held   */
 static const void* s_setPtr;           /* the TILE_SET we built from          */
 static int    s_setCount;
 static int    s_maxTex;
+/* Classic++ (tagpu_classicpp.on): the RESTORED copy of the atlas -- the same
+   cells on the same pitch, true colour from the unditherer through
+   tagpu_restore.c -- so the one set of UVs serves both looks. Built once per
+   map, off-thread; until it lands the pass draws indexed. */
+static GLuint s_rgbTex;
+static int    s_rgbGen = 0;        /* restore job for the current tile set */
+static int    s_rgbState = 0;      /* 0 none, 1 running, 2 uploaded, -1 failed */
+static GLint  s_uRestored;
+static const unsigned char* s_setPix;   /* the current set's tile pixels     */
 
 static float s_verts[MAXCELL * 6 * TVST];
 static int   s_nv;
@@ -207,6 +217,8 @@ static const char* FS =
     "out vec4 frag;\n"
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uPal;\n"
+    "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the restored atlas    */
+    "uniform int uRestored;\n"         /* 1 = sample it instead of the LUT */
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
@@ -217,6 +229,14 @@ static const char* FS =
        spans exactly the tile's 32 texels, so no colour key and no filtering to
        get wrong. A fragment landing exactly on the far edge reads the cell's
        replicated guard texel rather than the next cell (CELL_PITCH). */
+    /* Classic++: true colour, so the grey band is the RGB rule (renderers.md
+       2.6) rather than the index LUT; the lighting multiply will sit between
+       the sample and the fog when it lands */
+    "  if (uRestored == 1) {\n"
+    "    vec3 c = texture(uAtlasRGB, vUV).rgb;\n"
+    TAGPU_GLSL_FOG_GREY_RGB("c")
+    "    frag = vec4(c, 1.0); return;\n"
+    "  }\n"
     "  int pi = int(texture(uAtlas, vUV).r * 255.0 + 0.5);\n"
     TAGPU_GLSL_FOG_SHADE("pi")
     "  frag = vec4(texelFetch(uPal, ivec2(pi, 0), 0).rgb, 1.0);\n"
@@ -264,6 +284,8 @@ static void init_gl(void)
     glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
     glUniform1i(glGetUniformLocation(s_prog, "uPal"),   1);
     glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 2);
+    glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 4);
+    s_uRestored = glGetUniformLocation(s_prog, "uRestored");
     glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  3);
     glUseProgram(0);
 
@@ -303,7 +325,10 @@ static void init_gl(void)
         return;
     }
 
-    s_atlasTex = 0; s_setPtr = NULL; s_setCount = 0;
+    /* s_atlasTex = 0 is what forces the rebuild (ensure_atlas tests it first);
+       the set identity must SURVIVE, or ensure_atlas cannot tell "same set, new
+       context" from "new map" and throws the restore away -- see glreset */
+    s_atlasTex = 0;
     s_state = 1;
     flog("terr: GL ready");
 }
@@ -312,7 +337,13 @@ void tagpu_terr_glreset(void)
 {
     s_state = 0;
     s_atlasTex = 0;                     /* the id died with the context */
-    s_setPtr = NULL; s_setCount = 0;
+    s_rgbTex = 0;
+    /* The set identity (s_setPtr/s_setCount/s_setPix) is deliberately LEFT ALONE:
+       zeroing s_atlasTex already forces the atlas rebuild, and ensure_atlas
+       compares that identity to decide whether the restore survives. Clearing it
+       here made the comparison always differ, so every mode change restarted the
+       whole restore -- the case this function exists to avoid. */
+    if (s_rgbState == 2) s_rgbState = 1;   /* the result is kept: re-upload */
 }
 
 /* ---- the atlas: built once per map, never per frame ---- */
@@ -380,11 +411,80 @@ static int ensure_atlas(const char* ta)
 
     s_atlasH = h;
     s_atlasN = count < rows * ATLAS_COLS ? count : rows * ATLAS_COLS;
-    s_setPtr = (const void*)set; s_setCount = count;
+    /* a GL reset rebuilds the atlas for the SAME set: keep the restore job and
+       its result (glreset already asks for a re-upload); only a different set
+       starts over -- the first run restored Two Continents twice for this */
+    if (s_setPtr != (const void*)set || s_setCount != count || s_setPix != pix) {
+        s_rgbGen = 0; s_rgbState = 0;
+    }
+    s_setPtr = (const void*)set; s_setCount = count; s_setPix = pix;
     _snprintf(b, sizeof b, "terr: atlas built %dx%d for %d tiles (set=%p pix=%p, %d KB)",
               ATLAS_W, h, count, (void*)set, (void*)pix, (count * TILE_BYTES) >> 10);
     flog(b);
     return 1;
+}
+
+/* ---- Classic++: the restored atlas, same layout, RGBA8 ---- */
+static void upload_rgb(const unsigned char* rgba, int count)
+{
+    unsigned char* buf;
+    int rows = s_atlasH / CELL_PITCH, i;
+    char b[160];
+    buf = (unsigned char*)calloc((size_t)ATLAS_W * (size_t)s_atlasH, 4);
+    if (!buf) { flog("terr: rgb atlas alloc failed"); s_rgbState = -1; return; }
+    for (i = 0; i < count && i < rows * ATLAS_COLS; i++) {
+        const unsigned char* src = rgba + (size_t)i * TILE_PX * TILE_PX * 4;
+        unsigned char* cell = buf + ((size_t)(i / ATLAS_COLS) * CELL_PITCH * ATLAS_W
+                                  + (size_t)(i % ATLAS_COLS) * CELL_PITCH) * 4;
+        unsigned char* dst = cell + ((size_t)CELL_BORDER * ATLAS_W + CELL_BORDER) * 4;
+        int r;
+        for (r = 0; r < TILE_PX; r++) {
+            unsigned char* row = dst + (size_t)r * ATLAS_W * 4;
+            memcpy(row, src + (size_t)r * TILE_PX * 4, TILE_PX * 4);
+            memcpy(row - 4, row, 4);                             /* left  guard */
+            memcpy(row + TILE_PX * 4, row + (TILE_PX - 1) * 4, 4); /* right guard */
+        }
+        memcpy(cell, dst - CELL_BORDER * 4, CELL_PITCH * 4);                   /* top    */
+        memcpy(cell + (size_t)(CELL_PITCH - 1) * ATLAS_W * 4,                   /* bottom */
+               dst + ((size_t)(TILE_PX - 1) * ATLAS_W - CELL_BORDER) * 4, CELL_PITCH * 4);
+    }
+    if (!s_rgbTex) {
+        glGenTextures(1, &s_rgbTex);
+        glBindTexture(GL_TEXTURE_2D, s_rgbTex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else {
+        glBindTexture(GL_TEXTURE_2D, s_rgbTex);
+    }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, ATLAS_W, s_atlasH, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    free(buf);
+    s_rgbState = 2;
+    _snprintf(b, sizeof b, "terr: restored atlas uploaded %dx%d RGBA for %d tiles", ATLAS_W, s_atlasH, count);
+    flog(b);
+}
+
+/* Once per frame after the atlas is known: start the restore job when the
+   switch is on and none exists for this set; land its result when it is in.
+   The switch going off leaves the texture in place and stops sampling it. */
+static void restore_step(const char* ta)
+{
+    if (!tagpu_classicpp_on() || !s_atlasTex || !s_setPix) return;
+    if (s_rgbState == 0) {
+        s_rgbGen = tagpu_restore_terrain_begin(s_setPix, s_setCount,
+                                               (const unsigned char*)(ta + 0x143A7));
+        s_rgbState = s_rgbGen > 0 ? 1 : -1;
+        return;
+    }
+    if (s_rgbState == 1) {
+        const unsigned char* rgba; int n;
+        int st = tagpu_restore_state(s_rgbGen);
+        if (st < 0) { s_rgbState = -1; flog("terr: restore failed; Classic++ terrain stays indexed"); return; }
+        if (st == 1 && tagpu_restore_terrain_result(s_rgbGen, &rgba, &n)) upload_rgb(rgba, n);
+    }
 }
 
 /* The one budget every pass has to agree on.
@@ -451,6 +551,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     if (s_state == 0) init_gl();
     if (s_state != 1) return terr_bail();
     if (!ensure_atlas(ta)) return terr_bail();
+    restore_step(ta);
 
     s_nv = 0;
     /* Read BEFORE touching the skip: it says whether the engine frame we are
@@ -583,7 +684,9 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
     x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
+    x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_rgbTex);
     x_glActiveTexture(GL_TEXTURE0);
+    glUniform1i(s_uRestored, (s_rgbState == 2 && tagpu_classicpp_on()) ? 1 : 0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     /* orphan and upload in one call, sized to what this frame USES. The staging

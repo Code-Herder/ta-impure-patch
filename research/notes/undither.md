@@ -425,6 +425,18 @@ for the [3DO/GAF texture](file-formats.html) work, where the input really is 256
 tiling texture art and the wrap-padding, colourkey and BC7 parts of the spec all come into
 play.
 
+**Two tools drive the CLI rather than importing it**, both through
+`ta3do.undither_frames()` (indexed PNG in, restored RGBA out, one process per batch
+because loading the CNN costs far more than running it on a 32×32 texture):
+
+- `tools/ta3do --undither` restores a unit's GAF textures before atlasing them.
+- `tools/tascene build --undither` restores a whole **map's tile set** for the browser
+  lab's exploration lane ([tascene](tascene-design.html)). Per tile, with no neighbour
+  context — a tile restored in isolation differs from the same tile restored inside a 3×3
+  patch of its real map neighbours by **2.03/255 on the edge ring, 0.45/255 interior, max
+  7**. Two Continents' 5 062 tiles plus its sprite and unit textures are 5 154 frames in
+  **55 s**, cached by frame content so a rebuild is free.
+
 <script src="assets/undither/undither.js?v=__ASSETV__"></script>
 <script src="assets/undither/undither-ui.js?v=__ASSETV__"></script>
 <script src="assets/undither/undither-page.js?v=__ASSETV__"></script>

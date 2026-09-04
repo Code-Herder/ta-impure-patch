@@ -1,0 +1,43 @@
+{
+  "format": "ta-scene-presets/1",
+  "_": "Named looks for tascene-view.html. `?preset=<name>` expands to that query string; anything you also spell out in the URL wins over the preset. A preset may not name another preset. Staged into the pack next to the viewer by `tascene serve` / `tascene shot`, so it is a checked-in lab file and never pack content.",
+
+  "presets": {
+    "classic": {
+      "q": "lane=classic",
+      "about": "Classic: what tagpu draws today — the flat 32-px grid, R8 palette indices, the engine's PALETTE.SHD LUT on units. The only look that carries a parity claim; this is the side to put a new one against. `engine` is the same look under its older name."
+    },
+    "classicpp": {
+      "q": "lane=classicpp",
+      "about": "Classic++: the lab renderer at its defaults — restored colour (needs a pack built with --undither; indexed otherwise), a level-normalised per-pixel sun, trilinear textures, cast shadows under the engine's three suns."
+    },
+    "engine": {
+      "q": "lane=classic",
+      "about": "The older name of `classic`, kept because notes and scripts spell it: a=engine&b=… still works."
+    },
+    "slope": {
+      "q": "lane=explore&relief=0&sun=324,53",
+      "about": "The painted art, not displaced, lit by the map's real gradient. The control for the double-count question: geometry unchanged, lighting added, so anything that goes wrong here is the light alone."
+    },
+    "relief": {
+      "q": "lane=explore&relief=1&sun=off",
+      "about": "The heightfield displaced by the engine's own h/2, unlit. Isolates the geometry: whatever looks wrong here is the shape."
+    },
+    "relief-sun": {
+      "q": "lane=explore&relief=1&sun=324,53",
+      "about": "Displaced AND lit — where the art's baked-in shading double-counts. Wipe it against `slope` to see by how much."
+    },
+    "restored": {
+      "q": "lane=explore&relief=0&sun=off&undither=1",
+      "about": "The undithered atlases and nothing else changed. Needs a pack built with `--undither`."
+    },
+    "restored-relief": {
+      "q": "lane=explore&relief=1&sun=324,53&undither=1",
+      "about": "Everything the exploration lane has: restored colour, real relief, a real sun. Needs a pack built with `--undither`."
+    },
+    "half-relief": {
+      "q": "lane=explore&relief=0.5&sun=324,53",
+      "about": "Half the engine's displacement. If the double-count is the problem, the answer is somewhere on this axis and this is the middle of it."
+    }
+  }
+}

@@ -133,6 +133,27 @@ cost time; each is a landmine for the next GL-hook we add.
   `0x004D94E0` while formatting a 16-byte-per-module field — that secondary crash is what surfaces
   in the wine log and masks the real one. Fix: **compile the overlay INTO the fork** and call it
   directly. No second module, no loader interaction, no crash. [VERIFIED]
+  *2026-09-04, re-read for the Classic++ restorer:* the crash described here is the null
+  `glGetIntegerv` two bullets down — the companion called a NULL GL pointer — so the module
+  load itself was never isolated as the cause. **Settled the same day:** `tagpu_restore.c`
+  loads the 10 MB `onnxruntime.dll` at runtime from a worker thread of its own, and the game
+  ran a 200v200 match with it in the process ([renderers](renderers.html) §2.5, roadmap
+  G14a). The surviving rules: load from your own thread, never from DllMain or mid-present,
+  and go through `real_LoadLibraryA` so the fork's `hook=4` `LoadLibrary` hook does not
+  re-scan the new module tree.
+- **Wine 9's built-in `msvcp140` is not the real one, and a missing export hangs your
+  thread silently.** onnxruntime 1.21.0 and 1.22.1 (x86) call `std::_Throw_Cpp_error`, which
+  Wine 9.0's `msvcp140` lacks. Standalone the process aborts with `unimplemented function
+  msvcp140.dll.?_Throw_Cpp_error@std@@YAXH@Z`; **inside TA the worker thread simply never
+  returned from `CreateEnv`** — no fault, no log line, the game unaffected — because the
+  stub's exception passes the fork's filter (`debug.c` continues only on privileged
+  instructions). Before trusting a third-party DLL in the process, run it in a standalone
+  32-bit exe **under the instance's own prefix**: `WINEPREFIX=<instance>/prefix wine
+  test.exe`. 1.20.1 is the last onnxruntime x86 build that runs on the built-in runtime.
+  [VERIFIED 2026-09-04]
+- **`tacli arm` on a not-yet-created instance** used to fail with `FileNotFoundError` on the
+  gamedir, although the skill documents arming *before* the first launch. Fixed 2026-09-04:
+  `cmd_arm` creates the gamedir; `mirror_gamedir()` fills in around the trigger files.
 - **`0x004D94E0` is TA's crash-report writer, not your bug.** If you ever see `c0000005 @ 0x4d94e0`,
   an *earlier* exception already happened and TA is dying while trying to report it. Re-run with
   `WINEDEBUG=+seh` and read the **first** `dispatch_exception`, not the unhandled one. [VERIFIED]
@@ -157,6 +178,31 @@ cost time; each is a landmine for the next GL-hook we add.
   with `glReadPixels` — our `tagpu_glshot.trigger` writes `tagpu_gl.ppm` (convert with
   `convert tagpu_gl.ppm out.png`). The framebuffer is the whole window (desktop-res, letterboxed),
   not the 640×480 logical surface. [VERIFIED]
+- **Wine keys loaded modules by PATH, so you cannot pre-empt a built-in DLL by loading yours
+  first.** The trick that works on Windows — `LoadLibraryA("C:\\game\\d3d12.dll")` from our own
+  thread, so a library's later `LoadLibraryA("d3d12.dll")` finds the module already loaded —
+  does nothing here: the by-name load resolves to `system32\d3d12.dll`, sees a different path,
+  and loads the built-in beside ours. Measured 2026-09-04 with vkd3d-proton and DirectML: both
+  preloads returned valid handles and DirectML still got wine's `vkd3d`. **The only lever is
+  `WINEDLLOVERRIDES`**, which is per-process env and therefore the launcher's job, not the
+  DLL's — `tacli` sets `d3d12,d3d12core=n,b` ("n,b" so an instance missing the files keeps the
+  built-in rather than failing the load). [VERIFIED]
+- **Wine 9's built-in D3D12 (`vkd3d`) cannot host DirectML.** It creates the device on the
+  RTX 4070 at feature level 11_1, then `ID3D12Device5::EnumerateMetaCommands` is a `stub!` and
+  the ONNX Runtime DirectML provider append fails with `E_NOTIMPL` at
+  `dml_provider_factory.cc(520)`; `CheckFeatureSupport` also answers shader model **0x51** to
+  DirectML's **0x66** ask, so its DXIL shaders would not compile even past that.
+  **vkd3d-proton hosts it** — upstream still ships an `x86/` pair in the release tarball, and
+  **every Steam Proton carries one** at `files/lib/wine/vkd3d-proton/i386-windows`, which is
+  the copy `tacli` reaches for first (measured identical, and Proton Experimental's builds the
+  session faster: 1.0 s against pinned 3.0.1's 1.4–1.9 s).
+  `WINEDEBUG=+dxgi,+d3d12,+vkd3d` names the stub directly; that is how this was found.
+  [VERIFIED 2026-09-04]
+- **A DXGI/D3D12 probe needs a live `DISPLAY` even when it draws nothing.** With no display the
+  factory dies at `CreateDXGIFactory2` → `wined3d_caps_gl_ctx_create Failed to create a window`
+  → `dxgi_factory_create ... hr 0x887a0004` (`DXGI_ERROR_UNSUPPORTED`), which reads like "this
+  GPU cannot do D3D12" and is not. An agent shell's inherited `DISPLAY=:0` is usually the wrong
+  one — check `/tmp/.X11-unix` and `xdpyinfo` (this machine's live session is `:1`). [VERIFIED]
 
 
 ## G2 state-read — findings (2026-08-31)

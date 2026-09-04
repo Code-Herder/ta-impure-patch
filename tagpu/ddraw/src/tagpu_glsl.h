@@ -93,6 +93,14 @@
    name of the int index variable. */
 #define TAGPU_GLSL_FOG_SHADE(I) \
     "  if (taFogC.y >= 0.5) " I " = int(texelFetch(uFogLUT, ivec2(" I ", 0), 0).r * 255.0 + 0.5);\n"
+/* The Classic++ edition of the same band (renderers.md 2.6): a restored texel
+   has no palette index to remap, so the LIT colour is replaced by its own
+   R+G+B mean -- which is exactly what the engine's grey table computes
+   before it quantises to the palette (0x4BAD30: avg RGB/3, then nearest).
+   Takes the name of a vec3 variable. Applied after lighting, so shadows
+   and relief survive as darker grey. */
+#define TAGPU_GLSL_FOG_GREY_RGB(V) \
+    "  if (taFogC.y >= 0.5) " V " = vec3(dot(" V ", vec3(1.0/3.0)));\n"
 
 /* ---- the sub-pixel edge nudge -----------------------------------------
    Quads are emitted on exact integer game-pixel boundaries, so at some zooms

@@ -46,6 +46,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
+| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04), **on the GPU** (G14b, 2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 **inside the DLL**, once per map on a worker thread, cached under `gamedir/tagpu_cache`; `tagpu_terr.c` uploads a second atlas and samples it under `tagpu_classicpp.on`. The provider is DirectML where it loads (Wine needs vkd3d-proton for the D3D12 under it), the CPU where it does not. The restorer engine decision for [Classic and Classic++](renderers.html) §2.5 | Two Continents: runtime 11–13 ms, session 21 ms CPU / 1.0–1.9 s DirectML, 5062 tiles cold in **1.83 s on DirectML against 20.8 s on 4 CPU threads — 11×** (standalone, model alone, 34–42×) / 24–29 ms cached; the two providers' atlases differ in 61 of 20.7 M bytes, all by 1 level; Classic baselines unchanged; **two 15-min 200v200 soaks, runtime then D3D12 device resident: alive, no GL or restore errors** |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
@@ -77,6 +78,90 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G14b — the restorer runs on the GPU.** The owner's question about G14a: why is the model on
+the CPU? Because the pinned ONNX Runtime package is CPU-only and its CUDA provider is x64. The
+answer is Microsoft's **DirectML** flavour, which *does* ship a win-x86 runtime, and which
+`tagpu_restore.c` now appends when its export is present — falling back to the CPU provider
+on any refusal, which is what a runtime without it, a machine without a suitable D3D12, and
+`tagpu_restorecpu.on` all produce. Ordinary DLL-load discipline throughout; no engine address
+is touched and no sim state is read or written.
+
+**Under Wine that needed vkd3d-proton.** Wine 9's built-in `vkd3d` builds the D3D12 device on
+the RTX 4070 and then refuses DirectML: `ID3D12Device5::EnumerateMetaCommands` is a stub, so
+the provider append returns `E_NOTIMPL`, and `CheckFeatureSupport` answers shader model 5.1 to
+DirectML's 6.6 ask. vkd3d-proton's 32-bit `d3d12.dll`/`d3d12core.dll` host it, and `tacli`
+finds them itself: **Steam's own Proton first** (every Proton ships a 32-bit build at
+`files/lib/wine/vkd3d-proton/i386-windows`, so a machine with Proton needs no download), then
+the hash-pinned 3.0.1 copy beside the runtime, with `TA_VKD3D_PROTON` overriding both. It sets
+`WINEDLLOVERRIDES=d3d12,d3d12core=n,b` for an instance that has the pair and leaves it off for
+one that does not — which keeps wine's built-in and puts the restorer on the CPU. Preloading
+them by full path from our own thread is not a substitute — Wine keys modules by path. On real
+Windows the system D3D12 hosts DirectML directly.
+
+**A bug the review found, and what it did to these numbers.** `tagpu_terr.c` kept a
+set-identity check meant to preserve a restore across a GL context reset, but `glreset` and
+`init_gl` both cleared the very fields it compared, so the check could never match: the reset
+the game does at startup — every launch — threw the restore away and started a second one. The
+fix is to let the identity survive (zeroing `s_atlasTex` is what forces the atlas rebuild, and
+it already did). Confirmed by the log: one `terrain gen 1 started` per launch now, where every
+previous run showed `gen 1` abandoned and `gen 2` doing the work. **This invalidated the
+headline measurement**, because the number recorded was that second generation, running after
+the map was live; with one generation the work overlaps map load.
+
+**Measured, Two Continents, in the running game, cold and single-generation:** 5062 tiles in 80
+batches, **1.83–1.84 s on DirectML against 20,777 ms on four CPU threads — 11×**. Standalone,
+model alone, the per-batch gap is 34–37× at 32×32 and 41–42× at the wrap-padded 56×56, and
+those rates predict 0.55 s / 19.4 s for this batch mix — the CPU lands within 7 % of its
+prediction, DirectML at 3.3× its own. That gap is measured and **not explained**; the plausible
+cause, that DirectML's per-batch submission is CPU-side work now competing with map load, is
+`[INFERRED]` and untested. It costs a one-time **1.0–1.9 s session build**, depending on the vkd3d-proton build (21 ms
+on the CPU) — which made a cached map cost more to reach the runtime than to read its atlas,
+so the job now reads the cache *before* loading any runtime and a restored map builds no
+session at all. The pre-warm idea is worth more, not less. **Correctness**: restoring the map
+on each provider and diffing the two cache files, **61 of 20,733,952 bytes differ, every one by
+exactly 1 level** — fp32 rounding, so a cache written by either provider is valid for the other.
+A 15-minute 200v200 match ran with the D3D12 device resident beside our GL context: alive, no
+GL or restore errors in 13,514 log lines. **Cost: +160 MiB of VRAM** while the session lives
+(160 MiB GL-only against 320 with DirectML), which a cached map does not pay at all — it never
+loads the runtime. `assets`: none.
+
+**G14a — the Classic++ restorer runs inside the game.** The first engine step of the
+Classic++ port ([Classic and Classic++ renderers](renderers.html) §2.5), built as a spike to
+answer one question: can Microsoft's ONNX Runtime run the unditherer's full model inside
+TotalA.exe under Wine, at map load, without touching the game. It can.
+
+**What it does.** `tagpu_restore.c` loads `onnxruntime.dll` (1.20.1, x86) lazily from a worker
+thread of its own, copies the tile set and the live palette into the job, runs the model over
+the tiles in batches of 64 by input shape (56×56 wrap-padded for the 400 tiles whose opposite
+edges agree within 12 levels, plain 32×32 for the rest — the Python path's own gates), caches
+the RGBA under `gamedir/tagpu_cache/terr_<crc32>_<count>.rgba`, and `tagpu_terr.c` uploads a
+second atlas in the same cell layout and samples it when `tagpu_classicpp.on` exists. Restored
+texels take the new `TAGPU_GLSL_FOG_GREY_RGB` grey band. Classic's own path is untouched: the
+parity baselines re-shot after the shader change are byte-identical.
+
+**Measured, Two Continents, 1024×768, in the running game:** runtime load 11–13 ms, env and
+session 23–25 ms, first restore 22.6 s at 4 intra-op threads (off both the game and the render
+thread; the terrain draws indexed meanwhile and switches when the atlas lands), 29–33 ms from
+the cache on every later load. A 200v200 match ran on it for 15 minutes with the runtime resident: alive throughout, no GL
+error and no restore line after the load. `assets`: none yet; the on/off pair was inspected live (grass loses its dither,
+everything else identical).
+
+**Two corrections the spike forced.** (1) **1.20.1, not 1.22.1.** The 1.21.0 and 1.22.1 x86
+builds call `std::_Throw_Cpp_error`, which Wine 9.0's built-in `msvcp140` lacks; standalone
+they abort, inside the game the worker never returns from `CreateEnv` with no fault and no
+log line — the stub's exception passes the fork's filter. So the fetch script pins 1.20.1 by
+hash ([field notes](field-notes.html) G1 gotchas). (2) **The "no runtime LoadLibrary" rule was
+a confounded experiment**: the G1 crash it rests on was a NULL `glGetIntegerv`, and a 10 MB
+runtime loaded from our own thread ran a whole match. The surviving rules: your own thread,
+never DllMain or mid-present, and `real_LoadLibraryA` so the fork's `hook=4` hook does not
+re-scan the new module tree.
+
+**What this gate did not close.** Features and units are still indexed under Classic++ — the
+same job restores them next, and they carry colour keys, so the inpaint stand-in arrives with
+them. The first restore is visible for 22 s as indexed terrain; a pre-warm or a loading hook
+would hide it. `tacli arm` on a not-yet-created instance failed on the gamedir and was fixed in
+passing. The GL context request is still 3.2 while the shaders are 330 (renderers §3).
 
 **G13m — the cursor stopped skipping to the side bar, and the engine got its own mouse point
 back.** Reported from play: *"with a unit selected, zoomed fully out, sweep the mouse right to

@@ -1,18 +1,185 @@
 <!DOCTYPE html>
 <!-- tascene-view.html — the browser half of the tascene lab.
 
-     Draws a scene pack built by `tools/tascene build` in WebGL2, using tagpu's
-     OWN shaders (pack/shaders/*, extracted from the C sources at export time).
+     Draws a scene pack built by `tools/tascene build` in WebGL2. There are two
+     renderers and they do not blend (research/notes/tascene-design.md):
 
-     Query parameters (all optional):
-       shot=1        hide the UI, render one frame, then set document.title
-                     to "tascene-ready" so a screenshotter knows it is done
-       pass=<list>   comma-separated passes to draw: terrain,features,units
-                     (default: every pass the pack carries)
+       (nothing)       BOTH — the wipe, Classic left, Classic++ right. A
+                       bare page, or one with only eye/zoom/ss, shows both;
+                       naming a renderer, a preset or any Classic++ parameter
+                       shows that one look alone. Under shot=1 a bare query
+                       is Classic alone: `tascene shot pack` with no options
+                       is the parity ritual's baseline, and a shot measures
+       lane=classic    "Classic" — tagpu's OWN shaders, extracted
+                       from the C sources at export time into pack/shaders/*.
+                       Flat 32-px grid, R8 palette indices, the engine's
+                       PALETTE.SHD LUT. The only renderer that carries a
+                       pixel claim against the game. Was `parity`, which is
+                       still accepted — the code and the notes call it the
+                       parity lane, because that is its property.
+       lane=classicpp  "Classic++" — the LAB shaders below: restored colour,
+                       a level-normalised per-pixel sun, trilinear textures,
+                       cast shadows. Makes no parity claim at all. Was
+                       `explore`, still accepted; `classic++` cannot be spelled
+                       in a query string, where a + is a space.
+
+     THE RENDERER BUTTONS in the status bar toggle the two. One selected shows
+     that look alone; both selected shows the wipe with its divider. They
+     rewrite the query and reload: the current eye, ss and wipe are kept, and
+     a renderer that is already on screen keeps every parameter its side has.
+
+     LIVE RELOAD. Under `tascene serve` this file is re-staged into the pack
+     whenever the checked-in source changes, and the open page polls `__reload`
+     and refreshes itself — so editing the viewer updates the browser with no
+     server restart and no manual reload. `serve --no-reload` turns both halves
+     off. Never active under shot=1. See the poll at the bottom of this file.
+
+     Query parameters. Global (top level only):
+       shot=1        hide the UI, render one frame, then set document.title to
+                     "tascene-ready" so a screenshotter knows it is done
+       zoom=<z>      view zoom, 0.25..8, default 1 — tagpu_zoom.c's range.
+                     The viewport shows vw/z x vh/z world units centred where
+                     the zoom-1 view is centred; the eye stays the zoom-1
+                     top-left, as in the game. The WHEEL changes it live,
+                     x1.1 per notch like the game, landing exactly on 1.
+                     Both renderers zoom; only zoom 1 carries a parity claim
+                     (tagpu resamples differently at other zooms — no A/B
+                     has been done there)
+       ss=<n>        supersample factor for the offscreen. DEFAULT 2, THE
+                     GAME'S OWN: tagpu renders its native unit FBO at 2x and
+                     box-downsamples (tagpu_native.c, `tagpu_ss.off` turns it
+                     off), so at 1 the unit textures alias where the game's
+                     do not — the kbot lab's roof shimmers. The composite is
+                     an exact n x n box for any n; 1 = raw. Terrain and
+                     sprites are 1:1 texel-to-pixel and do not change with it
        eye=<x,y>     override the pack's eye (viewport top-left, world units)
-       ss=<n>        supersample factor for the offscreen (default 1)
-       feat=<what>   features: both (default), body, shadow — a debug split,
-                     because "is the shadow drawing at all" is not eye-answerable
+       a=<query>     the WIPE: render two looks into the same frame and split
+       b=<query>     them at `wipe`, so the difference between two parameter
+       wipe=<0..1>   sets is read off at identical pixel coordinates. A value
+                     with no "=" in it names a preset: a=engine&b=relief-sun.
+       debug=shadow  show side A's shadow depth map instead of the frame
+                     (near = bright), for "is the caster in the map at all"
+
+     Per side (spell them at the top level for one look, or inside a= / b=):
+       preset=<name> a named look from tascene-presets.json; anything you also
+                     spell out wins over it
+       pass=<list>   comma-separated passes: terrain,features,units
+       feat=<what>   features: both (default), body, shadow — a debug split
+       lane=<lane>   classic | classicpp (parity | explore still accepted)
+       relief=<k>    EXPLORE: displacement scale. DEFAULT 0 — the art left
+                     exactly where the engine paints it, lit by the real
+                     gradient. 1 = the engine's own h/2, which MISREGISTERS
+                     the art: the tiles are already the oblique projection of
+                     the hill, so displacing them applies it twice. Measured on
+                     Two Continents, relief=1 moves the terrain 41-94 px away
+                     from the engine's frame while the features do not move at
+                     all. Keep it for the double-count experiment; do not
+                     mistake it for a better picture
+       datum=<h>     EXPLORE: the height a NON-ZERO relief pivots about, so a
+                     cell moves by relief*(h-datum)/2 and a cell AT the datum
+                     stays where the engine paints it. Default is the map's
+                     own sealevel, which removes the constant part of the
+                     slide (66 px of it here); datum=0 is the un-pivoted h/2.
+                     It cannot remove the part that varies with the terrain,
+                     which is why relief itself defaults to 0
+       sun=<az,el>   EXPLORE: sun in degrees, or `off`. The default 324,53 IS
+                     tagpu_render3do.c's own model light re-expressed as a
+                     direction, so terrain and units share one sun by default.
+                     LEVEL GROUND ALWAYS TAKES EXACTLY 1.0: the art is already
+                     lit (artlight), so the sun only modulates by how far a
+                     surface tilts from level — sunward slopes brighten past
+                     the painted colour, leeward ones darken. Before this
+                     normalisation level ground took 0.870, a second sun on
+                     top of the artist's, and the whole lane read 13 % dark.
+                     Terrain, feature sprites and unit faces take the one
+                     rule (LAB_LIGHT), evaluated per pixel where there is a
+                     normal to evaluate it on
+       amb=<a>       EXPLORE: ambient floor, default 0.35 — relative to level
+                     ground, so a face turned fully away from the sun takes
+                     amb / (amb + (1-amb)·sin(el)) = 0.40 at the defaults
+       slope=<k>     EXPLORE: exaggerate the heightfield's gradient, default 1
+       filter=<f>    EXPLORE: how the RESTORED unit textures are sampled.
+                     linear = trilinear (bilinear + mipmaps, levels 0..2)
+                     with `aniso` taps — what the game's own hires path does
+                     (tagpu_hires.c: GL_LINEAR_MIPMAP_LINEAR). nearest = one
+                     texel, the stock look. DEFAULT linear when the pack's
+                     unit atlas is padded for it (`build` since UNIT_PAD),
+                     nearest otherwise; filter=linear on an unpadded pack
+                     fails loudly, because its mips would bleed neighbours.
+                     Indexed colour is always nearest: an index cannot be
+                     averaged
+       aniso=<n>     EXPLORE: anisotropic taps for filter=linear, default 4.
+                     TA's projection foreshortens every vertical face 2:1,
+                     which trilinear alone over-blurs. 0 or 1 = off. The
+                     status bar says what the GPU allows; none = unsupported
+       shadows=<b>   EXPLORE: cast shadows from the sun, default 1. A depth
+                     map of every 3DO (units, wrecks, buildings) rendered
+                     along the sun, read back by terrain and units with a
+                     Poisson PCF kernel — self-shadowing and unit-on-unit
+                     included. Sprites neither cast nor receive (a billboard
+                     has no geometry; a tree's shadow is in its own frames).
+                     0 = off. Off whenever the sun is
+       penumbra=<k>  EXPLORE: PCSS-lite — the penumbra widens by k world
+                     units per world unit between blocker and receiver, so a
+                     track is sharp where it meets the ground and a turret's
+                     shadow is soft. Default 0.05 — TA's casters are 11-60
+                     units tall, so 0.25 was all penumbra and 0.1 still
+                     washed a low building's rim out; 0 = hard
+       unitsun=<az,el>   EXPLORE: see THREE SUNS above
+       shadowsun=<az,el> EXPLORE: see THREE SUNS above
+       shadowlen=<a>,<b>  EXPLORE: how long a 3DO's shadow is, in world
+                     units: a + b * the model's height. Default 14,0.25 —
+                     a Flash (8.5 tall) gets 16, the kbot lab (11) 17, a
+                     Peewee (26) 21, the laser tower (47) 26. The base term
+                     is what a LOW unit shows: a Flash is 28 wide, so of a
+                     12-unit shadow almost nothing cleared its own body.
+                     A parallel light makes length
+                     proportional to height, and what reads on TA's low
+                     buildings is three times too long on its kbots; the
+                     engine does not project mobile units at all (a flat
+                     5-px drop). Implemented as a per-caster vertical scale
+                     in the depth pass, the unit's own shadow lookup scaled
+                     with it; hills are unscaled. off = physical
+       shade=<s>     EXPLORE: the fraction of the DIRECT light a shadow
+                     removes, default 1 (ambient only in full shadow, which
+                     is amb/level = 0.40 at the defaults). Lower for a
+                     lighter shadow
+       terrainshadow=<b>  EXPLORE: the heightfield casts too (hills shadow
+                     the valley), default 1. The art has slope shading but
+                     no cast shadows, so this adds and does not double-count
+       shadowres=<n> EXPLORE: depth map size, default 2048 (about half a
+                     world unit per texel over the view plus its margin)
+       undither=<b>  EXPLORE: 1 = the pack's restored true-colour atlases,
+                     0 = the palette indices. DEFAULT: restored when the pack
+                     carries them (`tascene build --undither`), indexed
+                     otherwise — so on an indexed pack the lane's defaults
+                     still reduce to parity, and on a restored pack they show
+                     the colour it was built for. undither=1 on an indexed
+                     pack fails loudly rather than drawing something plausible
+
+     THREE SUNS, BECAUSE THE ENGINE HAS THREE. All in map space (x east,
+     y up, z south), all in degrees as az,el, all EXPLORE-only:
+       sun        the terrain's, default 324.5,53.1 — north-west, the side
+                  the tile art is painted from (artlight). It is SH_L below
+                  mirrored north-south, which is what an earlier note called
+                  "the engine's light re-expressed"; it is not
+       unitsun    the units', default 215.5,53.1 — tagpu_render3do.c:250's
+                  SH_L = (-0.35, 0.80, -0.49) taken out of 3DO model space
+                  (z north) into map space. South-west: the camera light,
+                  fronts lit, which is how the engine's LUT shades a unit
+       shadowsun  the shadows', default 225,40 — the engine's own slant
+                  (shadows-cloak.md: gx = x + y/4, gy = -z - y/4, a
+                  parallel light at 225,70.5 leaning every shadow up-right
+                  by a quarter of the height) with the elevation lowered
+                  so a shadow is 1.2x the height instead of 0.35x. TA's
+                  buildings are LOW — the kbot lab is 11 units tall over a
+                  95-unit footprint — so the engine's stub is a 3-px rim
+                  and at 60 it was still only 6; at 40 it reads. Same
+                  lean. shadowsun=225,70.5 is the engine's exactly;
+                  215.5,53.1 makes the shadow fall away from the light the
+                  unit is shaded by
+     Unit normals are dotted in map space (3DO z flipped), so unitsun and
+     sun mean the same compass. sun=off turns all three off.
 
      THE COORDINATE CONVENTION IS TAGPU'S, DELIBERATELY. The extracted vertex
      shader maps game py 0 -> NDC -1, i.e. the offscreen's row 0 is the game
@@ -33,11 +200,22 @@
   body.shot { background: #000; }
   body.shot #bar, body.shot #err { display: none; }
   #bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 10px;
-         display: flex; gap: 8px; align-items: center; padding: 6px 10px;
+         display: flex; flex-direction: column; gap: 3px; padding: 6px 10px;
          border-radius: 10px; background: #1e232bee; border: 1px solid #2c333d;
          font-variant-numeric: tabular-nums; }
+  #bar .row { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline;
+              max-width: 96vw; }
+  #bar b, #bar span { white-space: nowrap; }
   #bar b { color: #e6ecf5; font-weight: 600; }
   #bar span { color: #8b95a4; }
+  #bar .tag { color: #14171c; background: #d8b24a; border-radius: 4px;
+              padding: 0 5px; font-weight: 700; }
+  #bar .tag.b { background: #6aa8d8; }
+  #bar .modes button { font: inherit; color: #8b95a4; background: #14171c;
+                       border: 1px solid #2c333d; border-radius: 5px; padding: 1px 9px;
+                       cursor: pointer; }
+  #bar .modes button.on { color: #e6ecf5; background: #2c333d; border-color: #6aa8d8; }
+  #bar .modes button:hover { border-color: #d8b24a; }
   #err { position: fixed; top: 10px; left: 10px; right: 10px; padding: 8px 10px;
          border-radius: 8px; background: #40222a; border: 1px solid #6b3540;
          color: #f0c8ce; white-space: pre-wrap; display: none; font-family: ui-monospace, monospace; }
@@ -49,12 +227,16 @@
 <script type="module">
 const Q = new URLSearchParams(location.search);
 const SHOT = Q.get("shot") === "1";
-const SS   = Math.max(1, parseInt(Q.get("ss") || "1", 10));
+const SS   = Math.max(1, parseInt(Q.get("ss") || "2", 10));
 const err  = document.getElementById("err");
 const bar  = document.getElementById("bar");
 if (SHOT) document.body.classList.add("shot");
 
 function fail(msg) {
+  // drop the shot class first: `body.shot #err` hides the banner, and a
+  // headless shot of a mistyped parameter would otherwise be a black frame
+  // with nothing to read
+  document.body.classList.remove("shot");
   err.style.display = "block";
   err.textContent = String(msg && msg.stack || msg);
   document.title = "tascene-error";
@@ -74,8 +256,152 @@ async function fetchBin(u) {
 // reproduced deliberately, not cleaned up, because a cell boundary landing one
 // pixel differently is exactly what the parity diff exists to catch.
 const div32trunc = (v) => (v + (v < 0 ? 31 : 0)) >> 5;
+const TILE_PX = 32;
 const UNIT_STRIDE = 7;             // the mesh .bin's own stride: x,y,z,u,v,fc,ck
 const ceil32 = (v) => { const q = div32trunc(v); return (v - q * 32) ? q + 1 : q; };
+
+// ---------------------------------------------------------------------------
+// PARAMETERS. Two scopes: a handful are global to the frame, the rest describe
+// ONE LOOK and so exist once per wipe side. A side's parameters are the
+// top-level query overridden by its own a= / b= query overridden by nothing —
+// which is what makes `?eye=X,Y&a=engine&b=relief` share the camera and differ
+// only in the look, i.e. the same pixel coordinates on both sides.
+const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b", "debug", "zoom"]);
+const zoomClamp = (z) => (Number.isNaN(z) ? 1 : Math.max(0.25, Math.min(8, z)));
+let zoom = zoomClamp(parseFloat(Q.get("zoom") || "1"));
+const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
+// naming any of these IS choosing the exploration lane; saying lane=parity as
+// well is a contradiction and an error rather than a silent winner
+const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither",
+                      "filter", "aniso", "shadows", "penumbra", "shade",
+                      "terrainshadow", "shadowres", "unitsun", "shadowsun",
+                      "shadowlen"];
+
+function sideQuery(side, presets) {
+  const p = new URLSearchParams();
+  for (const [k, v] of Q) if (!GLOBAL.has(k)) p.set(k, v);
+  if (side !== null) {
+    const q = side.includes("=") ? side : "preset=" + side;
+    for (const [k, v] of new URLSearchParams(q)) p.set(k, v);
+  }
+  const name = p.get("preset");
+  if (!name) return p;
+  const preset = presets[name];
+  if (!preset)
+    fail(`no preset named "${name}" — have: ${Object.keys(presets).join(", ")}`);
+  if (/(^|&)preset=/.test(preset.q))
+    fail(`preset "${name}" names another preset; presets do not nest`);
+  const merged = new URLSearchParams(preset.q);
+  for (const [k, v] of p) merged.set(k, v);      // spelled out beats the preset
+  return merged;
+}
+
+// The three suns (header, THREE SUNS). SH_L = (-0.35, 0.80, -0.49) is
+// tagpu_render3do.c:250's model light; in map space its z flips, which is
+// UNITSUN_DEFAULT (round-trips to within 0.0013 per component). SUN_DEFAULT
+// is that vector mirrored north-south — the side the art is painted from.
+// The engine's slant (x + y/4, -z - y/4) as a direction is (-1, 4, 1)/sqrt(18),
+// az 225, el atan(4/sqrt(2)) = 70.53; SHADOWSUN_DEFAULT keeps its azimuth and
+// drops to 40 so a shadow is 1.2x the height rather than 0.35x (header).
+const SUN_DEFAULT = [324.5, 53.1];
+const UNITSUN_DEFAULT = [215.5, 53.1];
+const SHADOWSUN_DEFAULT = [225, 40];
+
+function sunVector(az, el) {
+  const a = az * Math.PI / 180, e = el * Math.PI / 180;
+  return [Math.sin(a) * Math.cos(e), Math.sin(e), -Math.cos(a) * Math.cos(e)];
+}
+
+function readLook(p, label) {
+  const num = (k, d) => (p.get(k) === null ? d : parseFloat(p.get(k)));
+  const named = EXPLORE_ONLY.filter((k) => p.get(k) !== null);
+  // the renderers' names, and the lane names the code and the notes use
+  const LANE = { classic: "parity", parity: "parity",
+                 classicpp: "explore", "classic++": "explore", explore: "explore" };
+  let lane = p.get("lane");
+  if (lane !== null && !(lane in LANE))
+    fail(`${label}: lane must be classic or classicpp (parity / explore still ` +
+         `accepted), not "${lane}"`);
+  if (lane !== null) lane = LANE[lane];
+  if (lane === "parity" && named.length)
+    fail(`${label}: ${named.join(", ")} ${named.length > 1 ? "are" : "is a"} ` +
+         `Classic++ parameter${named.length > 1 ? "s" : ""}, but lane=classic ` +
+         `was asked for. Drop one of the two — the renderers do not blend.`);
+  if (!lane) lane = named.length ? "explore" : "parity";
+
+  const passes = (p.get("pass") || "terrain,features,units").split(",").map((s) => s.trim());
+  const sunRaw = p.get("sun");
+  const lit = lane === "explore" && sunRaw !== "off";
+  let sun = SUN_DEFAULT;
+  if (lit && sunRaw) {
+    const v = sunRaw.split(",").map(Number);
+    if (v.length !== 2 || v.some(Number.isNaN))
+      fail(`${label}: sun must be "<azimuth>,<elevation>" in degrees, or "off"`);
+    sun = v;
+  }
+  const angles = (key, dflt) => {
+    const raw = p.get(key);
+    if (!lit || raw === null) return dflt;
+    const v = raw.split(",").map(Number);
+    if (v.length !== 2 || v.some(Number.isNaN))
+      fail(`${label}: ${key} must be "<azimuth>,<elevation>" in degrees`);
+    return v;
+  };
+  const unitAE = angles("unitsun", UNITSUN_DEFAULT);
+  let shadowlen = [14, 0.25];                         // a + b * height, or null
+  const slRaw = p.get("shadowlen");
+  if (slRaw === "off") shadowlen = null;
+  else if (slRaw !== null) {
+    shadowlen = slRaw.split(",").map(Number);
+    if (shadowlen.length !== 2 || shadowlen.some(Number.isNaN))
+      fail(`${label}: shadowlen must be "<a>,<b>" (length = a + b*height) or off`);
+  }
+  const shadowAE = angles("shadowsun", SHADOWSUN_DEFAULT);
+  // amb >= 1 is how "no sun" reaches the shaders: one uniform, no branch
+  const amb = lit ? Math.min(1, Math.max(0, num("amb", 0.35))) : 1;
+  const sunV = sunVector(sun[0], sun[1]), unitV = sunVector(unitAE[0], unitAE[1]);
+  // Level ground takes exactly 1.0. The art is already lit (artlight), so the
+  // sun may only modulate by the tilt from level: every lambert is divided by
+  // the one a level normal (0,1,0) gets, whose N.L is the sun's y. The floor
+  // keeps amb=0 with the sun on the horizon finite instead of 1/0. Units get
+  // the same rule under their own sun.
+  const level = (v) => 1 / Math.max(amb + (1 - amb) * Math.max(v[1], 0), 1e-3);
+  const norm = level(sunV), unitNorm = level(unitV);
+  const filter = p.get("filter");
+  if (filter !== null && filter !== "linear" && filter !== "nearest")
+    fail(`${label}: filter must be linear or nearest, not "${filter}"`);
+  return {
+    label, lane, name: lane === "parity" ? "Classic" : "Classic++",
+    preset: p.get("preset") || null, query: p.toString(),
+    terrain: passes.includes("terrain"),
+    features: passes.includes("features"),
+    units: passes.includes("units"),
+    feat: p.get("feat") || "both",
+    relief: lane === "explore" ? num("relief", 0) : 0,
+    // null = "not named", resolved against the map's sealevel once the scene
+    // is loaded; readLook only sees the query, so it cannot know the map yet
+    datum: lane === "explore" && p.get("datum") !== null ? num("datum", 0) : null,
+    slope: num("slope", 1),
+    amb, norm, unitNorm,
+    sun: sunV, sunAE: lit ? sun : null,
+    unitSun: unitV, unitSunAE: unitAE,
+    shadowSun: sunVector(shadowAE[0], shadowAE[1]), shadowSunAE: shadowAE,
+    shadowlen,
+    // null = "not named": restored if the pack carries the atlases, resolved
+    // once the scene is loaded, like datum
+    undither: lane !== "explore" ? false
+            : p.get("undither") === null ? null : p.get("undither") !== "0",
+    // null = "not named": linear if the pack's unit atlas is padded for mips
+    filter: lane !== "explore" ? "nearest" : filter,
+    aniso: Math.max(1, Math.floor(num("aniso", 4))),
+    shadows: lit && p.get("shadows") !== "0",
+    penumbra: Math.max(0, num("penumbra", 0.05)),
+    shade: Math.min(1, Math.max(0, num("shade", 1))),
+    terrainshadow: p.get("terrainshadow") !== "0",
+    shadowres: Math.max(256, Math.min(4096, num("shadowres", 2048) | 0)),
+    stats: {},
+  };
+}
 
 // ---- GL helpers -----------------------------------------------------------
 function shader(gl, type, src, label) {
@@ -95,6 +421,11 @@ function program(gl, vs, fs, label) {
     fail(`${label}: ${gl.getProgramInfoLog(p)}`);
   return p;
 }
+function uniforms(gl, prog, names) {
+  const U = {};
+  for (const n of names) U[n] = gl.getUniformLocation(prog, n);
+  return U;
+}
 function tex2D(gl, unit, internal, w, h, format, type, data, filter) {
   const t = gl.createTexture();
   gl.activeTexture(gl.TEXTURE0 + unit);
@@ -109,7 +440,234 @@ function tex2D(gl, unit, internal, w, h, format, type, data, filter) {
   return t;
 }
 
-// ---- the composite: FBO -> canvas, flipped ---------------------------------
+// ---------------------------------------------------------------------------
+// LAB SHADERS. These are NOT tagpu's and make no parity claim; they are the
+// exploration lane, kept here (checked in, outside the generated pack) exactly
+// as tascene-design.md says lab-only shaders must be. They are written to stay
+// portable back into tagpu_glsl.h if one of them wins: same uniform names, same
+// premultiplied output, no zoom (the lab runs at zoom 1 by construction).
+const LAB_TERR_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;    // game px x, game px y, depth key
+layout(location=1) in vec2 aUV;
+layout(location=2) in vec3 aNrm;    // heightfield normal, world (x, elev, z)
+layout(location=7) in vec3 aWorld;  // the world point this vertex DEPICTS
+uniform vec2 uGame;
+uniform float uDepthScale;
+uniform float uZoom; uniform vec2 uZoomC;   // tagpu's own: scale about uZoomC
+out vec2 vUV; out vec3 vNrm; out vec3 vWorld;
+void main(){
+  vec2 p = (aPos.xy - uZoomC) * uZoom + uZoomC;
+  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,
+                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);
+  vUV = aUV; vNrm = aNrm; vWorld = aWorld;
+}`;
+// The exploration lane's ONE lighting rule, spliced into every lab fragment
+// shader that has a normal to evaluate it on (terrain, units; sprites have
+// none and take the ground's value from lambertAt, the JS twin of this). An
+// ambient-floored lambert, divided by what LEVEL ground takes, so level is
+// exactly 1.0 and the sun only modulates by the tilt from level — the art is
+// already lit, the sun must not light it twice. Per pixel, because that is
+// where a local light (a laser, an explosion) will join it: a term that varies
+// across one face, which no per-vertex shade could carry.
+//
+// The shadow term is a depth map along the sun (SHADOW_VS/FS, one pass per
+// side over every 3DO and, by default, the heightfield), read back with a
+// 16-tap Poisson PCF whose radius PCSS-lite sets from the blocker distance:
+// 8 raw taps find the average blocker, the receiver-blocker distance times
+// `penumbra` is the kernel radius. Bilinear compare (sampler2DShadow) inside
+// every tap. Only the DIRECT light is shadowed; the ambient floor stays.
+const LAB_LIGHT = `
+uniform vec3 uSun;          // unit vector TOWARD the light
+uniform float uAmb;         // ambient floor; 1.0 means "no sun at all"
+uniform float uNorm;        // 1 / the lambert of level ground
+uniform int uShadowOn;
+uniform vec3 uShadowSun;    // unit vector toward the light the SHADOWS fall from
+uniform mat4 uShadowMat;    // world -> light clip, orthographic along uShadowSun
+uniform highp sampler2DShadow uShadowCmp;  // depth map, compare + bilinear
+uniform highp sampler2D uShadowRaw;        // the same map, raw depths
+uniform vec3 uShScale;      // world per texel, world per depth unit, 1/res
+uniform float uPenumbra;    // penumbra width per world unit of blocker distance
+uniform float uShade;       // fraction of the direct light a shadow removes
+const vec2 POISSON[16] = vec2[16](
+  vec2(-0.94201624,-0.39906216), vec2( 0.94558609,-0.76890725),
+  vec2(-0.09418410,-0.92938870), vec2( 0.34495938, 0.29387760),
+  vec2(-0.91588581, 0.45771432), vec2(-0.81544232,-0.87912464),
+  vec2(-0.38277543, 0.27676845), vec2( 0.97484398, 0.75648379),
+  vec2( 0.44323325,-0.97511554), vec2( 0.53742981,-0.47373420),
+  vec2(-0.26496911,-0.41893023), vec2( 0.79197514, 0.19090188),
+  vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590),
+  vec2( 0.19984126, 0.78641367), vec2( 0.14383161,-0.14100790));
+float shadowAt(vec3 W, vec3 n) {
+  if (uShadowOn == 0) return 1.0;
+  // 1.5 texels of normal offset, then a slope-scaled bias in depth units
+  float nl = dot(n, uShadowSun);
+  vec3 p = (uShadowMat * vec4(W + n * uShScale.x * 1.5, 1.0)).xyz * 0.5 + 0.5;
+  // Receiver-plane depth bias: the receiver's own depth gradient across the
+  // map, from the screen-space derivatives (taken before any early return,
+  // where the flow is still uniform). Every tap compares against the plane's
+  // depth AT THE TAP, so a slope's own upslope texels are not its blockers —
+  // without this the blocker search found the hill under every hill pixel.
+  vec3 dpdx = dFdx(p), dpdy = dFdy(p);
+  float det = dpdx.x * dpdy.y - dpdx.y * dpdy.x;
+  vec2 dzduv = abs(det) > 1e-14
+    ? vec2(dpdy.y * dpdx.z - dpdx.y * dpdy.z, dpdx.x * dpdy.z - dpdy.x * dpdx.z) / det
+    : vec2(0.0);
+  dzduv = clamp(dzduv, vec2(-4.0), vec2(4.0));       // a grazing receiver stays finite
+  if (nl <= 0.0) return 1.0;                 // faces away from the shadow light
+  if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
+  float z = p.z - (1.0 + 2.0 * (1.0 - nl)) * uShScale.x / uShScale.y;
+  float search = 24.0 / uShScale.x * uShScale.z;   // 24 world units, in uv
+  float sum = 0.0; int nb = 0;
+  for (int i = 0; i < 8; i++) {
+    vec2 o = POISSON[i] * search;
+    float d = texture(uShadowRaw, p.xy + o).r;
+    if (d < z + dot(o, dzduv)) { sum += d; nb++; }
+  }
+  if (nb == 0) return 1.0;
+  float dist = (z - sum / float(nb)) * uShScale.y;   // receiver - blocker, world
+  float r = max(uPenumbra * dist, 0.5 * uShScale.x) / uShScale.x * uShScale.z;
+  float lit = 0.0;
+  for (int i = 0; i < 16; i++) {
+    vec2 o = POISSON[i] * r;
+    lit += texture(uShadowCmp, vec3(p.xy + o, z + dot(o, dzduv)));
+  }
+  return 1.0 - uShade * (1.0 - lit / 16.0);
+}
+float lambert(vec3 n, vec3 W) {
+  n = normalize(n);
+  return (uAmb + (1.0 - uAmb) * max(dot(n, uSun), 0.0) * shadowAt(W, n)) * uNorm;
+}`;
+
+// the uniforms LAB_LIGHT's shadow term adds to every lab program
+const SHADOW_U = ["uShadowOn", "uShadowSun", "uShadowMat", "uShadowCmp",
+                  "uShadowRaw", "uShScale", "uPenumbra", "uShade"];
+
+// The depth pass: one attribute, the world point, at location 7 in BOTH the
+// terrain and the unit VAO, so one program renders both into the map.
+const SHADOW_VS = `#version 300 es
+precision highp float;
+layout(location=7) in vec3 aWorld;
+uniform mat4 uShadowMat;
+void main(){ gl_Position = uShadowMat * vec4(aWorld, 1.0); }`;
+const SHADOW_FS = `#version 300 es
+precision highp float;
+void main(){}`;
+
+const LAB_TERR_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; in vec3 vNrm; in vec3 vWorld;
+out vec4 frag;
+uniform sampler2D uAtlas;   // R8 palette indices
+uniform sampler2D uRGB;     // restored true colour, same layout
+uniform sampler2D uPal;
+uniform int uUndither;
+${LAB_LIGHT}
+void main(){
+  vec3 rgb;
+  if (uUndither == 1) rgb = texture(uRGB, vUV).rgb;
+  else {
+    int pi = int(texture(uAtlas, vUV).r * 255.0 + 0.5);
+    rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;
+  }
+  frag = vec4(rgb * lambert(vNrm, vWorld), 1.0);
+}`;
+
+// Features are billboards, so there is no normal to light them by; they take
+// the GROUND's lambert at their own anchor cell instead, which is what makes a
+// tree on a shadowed slope sit in the shadow rather than on top of it.
+const LAB_SPR_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec2 aUV;
+layout(location=2) in vec2 aCM;     // colour key /255, mode
+layout(location=3) in vec2 aWorld;  // unused here; kept so one build fills both
+layout(location=4) in float aLam;   // ground lambert at the anchor
+uniform vec2 uGame;
+uniform float uDepthScale;
+uniform float uZoom; uniform vec2 uZoomC;
+out vec2 vUV; flat out vec2 vCM; flat out float vLam;
+void main(){
+  vec2 p = (aPos.xy - uZoomC) * uZoom + uZoomC;
+  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,
+                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);
+  vUV = aUV; vCM = aCM; vLam = aLam;
+}`;
+const LAB_SPR_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; flat in vec2 vCM; flat in float vLam;
+out vec4 frag;
+uniform sampler2D uAtlas;
+uniform sampler2D uRGB;
+uniform sampler2D uPal;
+uniform int uUndither;
+void main(){
+  vec3 rgb;
+  if (uUndither == 1) {
+    // the restorer inpaints the colour key and keeps its alpha, so the hole
+    // arrives as alpha and not as an index compare
+    vec4 t = texture(uRGB, vUV);
+    if (t.a < 0.5) discard;
+    rgb = t.rgb;
+  } else {
+    float idx = texture(uAtlas, vUV).r;
+    if (abs(idx - vCM.x) < 0.5/255.0) discard;
+    rgb = texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb;
+  }
+  float a = (int(vCM.y + 0.5) == 2) ? 0.5 : 1.0;
+  frag = vec4(rgb * vLam * a, a);
+}`;
+
+// The unit lab shader ignores slot 3 (tagpu's PALETTE.SHD row / 31) and lights
+// from slot 6, the posed face normal, per PIXEL through LAB_LIGHT. Same buffer,
+// same stride, one attribute more — which is the whole difference between the
+// two shading philosophies: a 32-row LUT looked up per face, or a lambert
+// evaluated at every fragment, where a local light can vary across the face.
+const LAB_UNIT_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec2 aUV;
+layout(location=2) in vec2 aFC;     // flat idx/255, tex colour key/255
+layout(location=4) in vec2 aWorld;
+layout(location=5) in float aVY;
+layout(location=6) in vec3 aNrm;    // posed, map space, unit length; flat per face
+layout(location=7) in vec3 aWorld3; // posed world position, map space
+uniform vec2 uGame;
+uniform float uDepthScale;
+uniform float uZoom; uniform vec2 uZoomC;
+out vec2 vUV; flat out vec2 vFC; out vec3 vNrm; out vec3 vWorld;
+void main(){
+  vec2 p = (aPos.xy - uZoomC) * uZoom + uZoomC;
+  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,
+                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);
+  vUV = aUV; vFC = aFC; vNrm = aNrm; vWorld = aWorld3;
+}`;
+const LAB_UNIT_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; flat in vec2 vFC; in vec3 vNrm; in vec3 vWorld;
+out vec4 frag;
+uniform sampler2D uAtlas;
+uniform sampler2D uRGB;
+uniform sampler2D uPal;
+uniform int uUndither;
+${LAB_LIGHT}
+void main(){
+  vec3 rgb;
+  if (vUV.x < 0.0) {                          // untextured face: one index
+    rgb = texelFetch(uPal, ivec2(int(vFC.x*255.0+0.5), 0), 0).rgb;
+  } else if (uUndither == 1) {
+    vec4 t = texture(uRGB, vUV);
+    if (t.a < 0.5) discard;
+    rgb = t.rgb;
+  } else {
+    float idx = texture(uAtlas, vUV).r;
+    if (abs(idx - vFC.y) < 0.5/255.0) discard;
+    rgb = texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb;
+  }
+  frag = vec4(rgb * lambert(vNrm, vWorld), 1.0);
+}`;
+
+// ---- the composite: FBO -> canvas, flipped, and the wipe --------------------
 // The offscreen holds the game frame with row 0 at the BOTTOM (see the header
 // comment). Canvas NDC +1 is the top, so the top of the canvas samples v = 0.
 const BLIT_VS = `#version 300 es
@@ -120,40 +678,149 @@ void main(){
   vUV = vec2(p.x, 1.0 - p.y);
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
+const DEBUG_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; out vec4 frag;
+uniform highp sampler2D uShadowRaw;
+void main(){
+  float d = texture(uShadowRaw, vec2(vUV.x, 1.0 - vUV.y)).r;   // light-space v up
+  frag = vec4(vec3(1.0 - d), 1.0);                             // near = bright
+}`;
 const BLIT_FS = `#version 300 es
 precision highp float;
 in vec2 vUV; out vec4 frag;
-uniform sampler2D uSrc;
-void main(){ frag = vec4(texture(uSrc, vUV).rgb, 1.0); }`;
+uniform sampler2D uA;
+uniform sampler2D uB;
+uniform float uWipe;      // split position in canvas x; > 1 = side A only
+uniform float uWidth;     // canvas width in px, so the divider is one pixel
+uniform int uSS;          // the offscreen is uSS x the canvas: exact box filter
+void main(){
+  ivec2 sz = textureSize(uA, 0);
+  ivec2 base = ivec2(floor(vUV * vec2(sz) / float(uSS))) * uSS;
+  vec3 c = vec3(0.0);
+  for (int j = 0; j < uSS; j++)
+    for (int i = 0; i < uSS; i++)
+      c += (vUV.x < uWipe) ? texelFetch(uA, base + ivec2(i, j), 0).rgb
+                           : texelFetch(uB, base + ivec2(i, j), 0).rgb;
+  c /= float(uSS * uSS);
+  if (uWipe <= 1.0 && abs(vUV.x - uWipe) * uWidth < 1.0) c = vec3(0.85, 0.70, 0.29);
+  frag = vec4(c, 1.0);
+}`;
 
 // ---------------------------------------------------------------------------
 async function main() {
   const scene = await fetchJSON("scene.json");
+  let presets = {};
+  try {
+    presets = (await fetchJSON("tascene-presets.json")).presets || {};
+  } catch (e) { presets = {}; }        // a pack served without the presets file
+
+  // NOTHING NAMED SHOWS BOTH: a bare page (or eye/zoom/ss alone) is the wipe,
+  // Classic on the left, Classic++ on the right. A renderer, a preset or any
+  // Classic++ parameter at the top level names one look and shows it alone.
+  // Under shot=1 nothing named is Classic alone: a shot is a measurement, and
+  // `tascene shot pack` with no options is the parity ritual's baseline.
+  const NAMES = new Set(["lane", "preset", ...EXPLORE_ONLY]);
+  const nothingNamed = Q.get("a") === null && Q.get("b") === null &&
+                       ![...Q.keys()].some((k) => NAMES.has(k));
+  const sides = nothingNamed && !SHOT
+    ? [readLook(sideQuery("lane=classic", presets), "a"),
+       readLook(sideQuery("lane=classicpp", presets), "b")]
+    : [readLook(sideQuery(Q.get("a"), presets), "a")];
+  if (sides.length === 1 && Q.get("b") !== null)
+    sides.push(readLook(sideQuery(Q.get("b"), presets), "b"));
+  let wipe = sides.length > 1 ? Math.min(1, Math.max(0, parseFloat(Q.get("wipe") ?? "0.5")))
+                              : 2.0;
+
+  // The displacement pivots about a reference height rather than about 0. The
+  // engine's tile art is ALREADY the oblique projection of the hill, so any
+  // displacement re-applies it; the part of h/2 that is common to the whole
+  // viewport is pure misregistration carrying no shape at all. Pivoting about
+  // the map's own sealevel removes it — on Two Continents that is 66.4 px of
+  // mean slide down to 28.9 px, and a cell at the waterline lands exactly
+  // where the engine paints it. datum=0 restores the un-pivoted behaviour.
+  for (const L of sides) if (L.datum === null) L.datum = scene.map.sealevel || 0;
+  // undither not named: restored when the pack carries the atlases
+  for (const L of sides) if (L.undither === null) L.undither = !!scene.map.atlas.rgba;
+  // filter not named: linear where the unit atlas can be mipmapped without
+  // bleeding, i.e. a pack built with the padded layout
+  const unitPad = (scene.units && scene.units.atlas.pad) || 0;
+  for (const L of sides) {
+    if (L.filter === null) L.filter = unitPad >= 4 ? "linear" : "nearest";
+    else if (L.filter === "linear" && L.lane === "explore" && scene.units && unitPad < 4)
+      fail("filter=linear, but this pack's unit atlas is not padded for mipmaps.\n" +
+           "Rebuild it with:  tools/tascene build <scenario> -o <pack> --undither");
+  }
+
   const view = scene.view, map = scene.map;
   const [GW, GH] = view.res;
   const [vpL, vpT, vw, vh] = view.vp;
+  // THE ZOOMED VIEW. The viewport shows vw/zoom x vh/zoom world units centred
+  // where the zoom-1 view is centred; E is that region's top-left and W its
+  // size, both integer. Every builder sweeps from E over W and places its
+  // vertices relative to E at scale 1; the shaders scale about (vpL, vpT) by
+  // uZoom — tagpu's own transform with its centre moved to the corner, the
+  // same picture. At zoom 1, E is the eye and W the viewport: byte-identical.
+  let E = [0, 0], W = [vw, vh];                   // set by zoomView() before every draw
+  function zoomView() {
+    const ww = vw / zoom, wh = vh / zoom;
+    E = [Math.floor(eye[0] + (vw - ww) / 2), Math.floor(eye[1] + (vh - wh) / 2)];
+    W = [Math.ceil(ww) + (zoom === 1 ? 0 : 1), Math.ceil(wh) + (zoom === 1 ? 0 : 1)];
+  }
+  const ZOOM_C = [vpL, vpT];
   let eye = view.eye.slice();
   if (Q.get("eye")) eye = Q.get("eye").split(",").map(Number);
 
   const cv = document.getElementById("cv");
   cv.width = GW; cv.height = GH;
+  // The canvas must land on device pixels 1:1 or at an integer multiple. A
+  // non-integer nearest-neighbour upscale duplicates every Nth row and column,
+  // and WHICH ones shifts as the content pans — a shimmer on any fine texture
+  // (the kbot lab's roof) that the game, drawing 1:1, never shows. Measured at
+  // devicePixelRatio 1.1: 1024 backing px drawn onto 1126 device px. Browser
+  // zoom changes the ratio live, so refit on resize.
+  const fit = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const k = Math.max(1, Math.floor(dpr + 1e-6));
+    cv.style.width = `${GW * k / dpr}px`;
+    cv.style.height = `${GH * k / dpr}px`;
+    cv.dataset.device = `${k}:1 @ ${dpr.toFixed(2)}`;
+  };
+  fit();
+  addEventListener("resize", () => { fit(); if (!SHOT) report(); });
   cv.style.width = GW + "px"; cv.style.height = GH + "px";
   const gl = cv.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
   if (!gl) fail("no WebGL2 context");
 
-  // ---- data
-  const want = (Q.get("pass") || "terrain,features,units").split(",").map((s) => s.trim());
-  const hasFeat = !!scene.features && want.includes("features");
-  const hasUnit = !!scene.units && want.includes("units");
-  const hasTerr = want.includes("terrain");
+  // ---- what the union of the sides actually needs
+  const any = (f) => sides.some(f);
+  const hasFeat = !!scene.features && any((L) => L.features);
+  const hasUnit = !!scene.units && any((L) => L.units);
+  const hasTerr = any((L) => L.terrain);
+  const wantParity = any((L) => L.lane === "parity");
+  const wantLab = any((L) => L.lane === "explore");
+  const wantRGB = any((L) => L.undither);
+  const labD = scene.labDepth || { terrain: 0.10, flat: 0.50, tallCol: 0.9 };
+  // tagpu_terr.c's guard rail: cells sit CELL_PITCH apart and the border texel
+  // is a COPY of the cell's edge, so a fragment landing exactly on a quad's far
+  // edge resolves to the right colour instead of the first texel of the NEXT
+  // cell. Packs built before the guard have neither field — fall back to the
+  // old flush 32-px layout rather than reading one cell to the left.
+  const PITCH = map.atlas.pitch || TILE_PX;
+  const BORDER = map.atlas.border || 0;
+
+  if (wantRGB && !map.atlas.rgba)
+    fail("undither=1, but this pack has no restored atlases.\n" +
+         "Rebuild it with:  tools/tascene build <scenario> -o <pack> --undither");
 
   const [atlasBuf, tilemapBuf, heightBuf, palBuf, terrVS, terrFS, sprVS, sprFS] =
     await Promise.all([
       fetchBin(map.atlas.file), fetchBin(map.tilemap.file), fetchBin(map.height.file),
       fetchBin(scene.palette.file),
-      fetchText("shaders/terrain.vert"), fetchText("shaders/terrain.frag"),
-      hasFeat ? fetchText("shaders/sprite.vert") : "",
-      hasFeat ? fetchText("shaders/sprite.frag") : "",
+      wantParity ? fetchText("shaders/terrain.vert") : "",
+      wantParity ? fetchText("shaders/terrain.frag") : "",
+      hasFeat && wantParity ? fetchText("shaders/sprite.vert") : "",
+      hasFeat && wantParity ? fetchText("shaders/sprite.frag") : "",
     ]);
   const [featAtlas, featInst] = hasFeat ? await Promise.all([
     fetchBin(scene.features.atlas.file), fetchBin(scene.features.instances),
@@ -163,132 +830,359 @@ async function main() {
   if (hasUnit) {
     [unitAtlas, shdBuf, unitVS, unitFS] = await Promise.all([
       fetchBin(scene.units.atlas.file), fetchBin(scene.palette.shd),
-      fetchText("shaders/unit.vert"), fetchText("shaders/unit.frag"),
+      wantParity ? fetchText("shaders/unit.vert") : "",
+      wantParity ? fetchText("shaders/unit.frag") : "",
     ]);
     await Promise.all(Object.entries(scene.units.meshes).map(async ([k, m]) => {
       const b = await fetchBin(m.file);
       meshData[k] = new Float32Array(b.buffer, b.byteOffset, b.byteLength >> 2);
     }));
   }
+  const [terrRGB, featRGB, unitRGB] = wantRGB ? await Promise.all([
+    fetchBin(map.atlas.rgba),
+    hasFeat && scene.features.atlas.rgba ? fetchBin(scene.features.atlas.rgba) : null,
+    hasUnit && scene.units.atlas.rgba ? fetchBin(scene.units.atlas.rgba) : null,
+  ]) : [null, null, null];
+
   const tilemap = new Uint16Array(tilemapBuf.buffer, tilemapBuf.byteOffset,
                                   tilemapBuf.byteLength >> 1);
 
   // Raw bytes straight to texImage2D: no image decode path, so nothing
   // colour-manages or premultiplies the palette INDICES (tascene-design.md).
+  // The restored atlases go the same way for the same reason — a browser is
+  // free to rewrite a PNG's colours and would do it silently.
   tex2D(gl, 0, gl.R8, map.atlas.w, map.atlas.h, gl.RED, gl.UNSIGNED_BYTE, atlasBuf);
   tex2D(gl, 1, gl.RGBA8, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, palBuf);
   // fog is off in the parity fixture, but the samplers must still be bound
   tex2D(gl, 2, gl.RG8, 1, 1, gl.RG, gl.UNSIGNED_BYTE, new Uint8Array([0, 0]));
   tex2D(gl, 3, gl.R8, 256, 1, gl.RED, gl.UNSIGNED_BYTE,
         Uint8Array.from({ length: 256 }, (_, i) => i));
+  const DUMMY = new Uint8Array([0, 0, 0, 0]);
+  const rgbaTex = (unit, buf, w, h) =>
+    tex2D(gl, unit, gl.RGBA8, buf ? w : 1, buf ? h : 1, gl.RGBA, gl.UNSIGNED_BYTE,
+          buf || DUMMY);
+  rgbaTex(8, terrRGB, map.atlas.w, map.atlas.h);
 
-  // ---- offscreen at game resolution (x SS)
+  // ---- offscreen(s) at game resolution (x SS). One per wipe side, because the
+  // wipe compares two whole frames, not two halves of one.
   const FW = GW * SS, FH = GH * SS;
-  const colour = gl.createTexture();
-  gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, colour);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, FW, FH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, SS > 1 ? gl.LINEAR : gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, SS > 1 ? gl.LINEAR : gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  const depth = gl.createRenderbuffer();
-  gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
-  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, FW, FH);
-  const fbo = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colour, 0);
-  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
-  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
-    fail("offscreen framebuffer incomplete");
-
-  // ---- terrain pass
-  const terrProg = program(gl, terrVS, terrFS, "terrain");
-  const terrVAO = gl.createVertexArray();
-  const terrVBO = gl.createBuffer();
-  gl.bindVertexArray(terrVAO);
-  gl.bindBuffer(gl.ARRAY_BUFFER, terrVBO);
-  const TVST = 6;                                   // x,y, u,v, wx,wz
-  for (let i = 0; i < 3; i++) {
-    gl.enableVertexAttribArray(i);
-    gl.vertexAttribPointer(i, 2, gl.FLOAT, false, TVST * 4, i * 8);
+  function offscreen() {
+    const colour = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, colour);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, FW, FH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    // the composite texelFetches its SS x SS box, so no filter is involved
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const depth = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, FW, FH);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colour, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+      fail("offscreen framebuffer incomplete");
+    return { colour, fbo };
   }
-  gl.bindVertexArray(null);
+  const targets = sides.map(offscreen);
 
-  const U = {};
-  for (const n of ["uGame", "uZoom", "uZoomC", "uDepthScale", "uEnc",
-                   "uAtlas", "uPal", "uFogGrid", "uFogLUT", "uFogOrg", "uFogDim", "uFog"])
-    U[n] = gl.getUniformLocation(terrProg, n);
+  // ---- terrain, parity: tagpu's own shaders and the 32-px grid
+  const TVST = 6;                                   // x,y, u,v, wx,wz
+  let terrProg = null, terrVAO = null, terrVBO = null, U = {};
+  if (wantParity) {
+    terrProg = program(gl, terrVS, terrFS, "terrain");
+    terrVAO = gl.createVertexArray();
+    terrVBO = gl.createBuffer();
+    gl.bindVertexArray(terrVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, terrVBO);
+    for (let i = 0; i < 3; i++) {
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, 2, gl.FLOAT, false, TVST * 4, i * 8);
+    }
+    gl.bindVertexArray(null);
+    U = uniforms(gl, terrProg, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uEnc",
+                                "uAtlas", "uPal", "uFogGrid", "uFogLUT", "uFogOrg",
+                                "uFogDim", "uFog"]);
+  }
 
-  // ---- feature (sprite) pass — tagpu_feat.c's shaders and vertex format
-  let sprProg = null, sprVAO = null, sprVBO = null, SU = {}, anchors = [];
+  // ---- terrain, exploration: the 16-px heightfield
+  const LTVST = 11;                     // x,y,enc, u,v, nx,ny,nz, WX,WY,WZ
+  let ltProg = null, ltVAO = null, ltVBO = null, LTU = {};
+  let ltVerts = new Float32Array(1);
+  if (wantLab) {
+    ltProg = program(gl, LAB_TERR_VS, LAB_TERR_FS, "lab-terrain");
+    ltVAO = gl.createVertexArray();
+    ltVBO = gl.createBuffer();
+    gl.bindVertexArray(ltVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, ltVBO);
+    // the world point at location 7, where SHADOW_VS reads it in every VAO
+    const sizes = [3, 2, 3, 3], offs = [0, 12, 20, 32], locs = [0, 1, 2, 7];
+    for (let i = 0; i < 4; i++) {
+      gl.enableVertexAttribArray(locs[i]);
+      gl.vertexAttribPointer(locs[i], sizes[i], gl.FLOAT, false, LTVST * 4, offs[i]);
+    }
+    gl.bindVertexArray(null);
+    LTU = uniforms(gl, ltProg, ["uGame", "uDepthScale", "uAtlas", "uRGB", "uPal",
+                                "uUndither", "uSun", "uAmb", "uNorm", "uZoom", "uZoomC",
+                                ...SHADOW_U]);
+  }
+
+  // ---- feature (sprite) pass — tagpu_feat.c's shaders and vertex format, plus
+  // the lab's one extra float (the anchor's ground lambert)
   const SVST = 9;                                   // x,y,enc, u,v, ck,mode, wx,wz
+  const LSVST = 10;                                 // ... + lam
+  let sprProg = null, sprVAO = null, lsProg = null, lsVAO = null, sprVBO = null;
+  let SU = {}, LSU = {}, anchors = [];
   let sprVerts = null;
   if (hasFeat) {
     tex2D(gl, 5, gl.R8, scene.features.atlas.w, scene.features.atlas.h,
           gl.RED, gl.UNSIGNED_BYTE, featAtlas);
-    sprProg = program(gl, sprVS, sprFS, "sprite");
-    sprVAO = gl.createVertexArray();
+    rgbaTex(9, featRGB, scene.features.atlas.w, scene.features.atlas.h);
     sprVBO = gl.createBuffer();
-    gl.bindVertexArray(sprVAO);
-    gl.bindBuffer(gl.ARRAY_BUFFER, sprVBO);
-    const sizes = [3, 2, 2, 2], offs = [0, 12, 20, 28];
-    for (let i = 0; i < 4; i++) {
-      gl.enableVertexAttribArray(i);
-      gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, SVST * 4, offs[i]);
+    if (wantParity) {
+      sprProg = program(gl, sprVS, sprFS, "sprite");
+      sprVAO = gl.createVertexArray();
+      gl.bindVertexArray(sprVAO);
+      gl.bindBuffer(gl.ARRAY_BUFFER, sprVBO);
+      const sizes = [3, 2, 2, 2], offs = [0, 12, 20, 28];
+      for (let i = 0; i < 4; i++) {
+        gl.enableVertexAttribArray(i);
+        gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, SVST * 4, offs[i]);
+      }
+      gl.bindVertexArray(null);
+      SU = uniforms(gl, sprProg, ["uGame", "uZoom", "uZoomC", "uDepthScale",
+                                  "uAtlas", "uPal", "uFogGrid", "uFogLUT",
+                                  "uFogOrg", "uFogDim", "uFog"]);
     }
-    gl.bindVertexArray(null);
-    for (const n of ["uGame", "uZoom", "uZoomC", "uDepthScale",
-                     "uAtlas", "uPal", "uFogGrid", "uFogLUT", "uFogOrg", "uFogDim", "uFog"])
-      SU[n] = gl.getUniformLocation(sprProg, n);
+    if (wantLab) {
+      lsProg = program(gl, LAB_SPR_VS, LAB_SPR_FS, "lab-sprite");
+      lsVAO = gl.createVertexArray();
+      gl.bindVertexArray(lsVAO);
+      gl.bindBuffer(gl.ARRAY_BUFFER, sprVBO);
+      const sizes = [3, 2, 2, 2, 1], offs = [0, 12, 20, 28, 36];
+      for (let i = 0; i < 5; i++) {
+        gl.enableVertexAttribArray(i);
+        gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, LSVST * 4, offs[i]);
+      }
+      gl.bindVertexArray(null);
+      LSU = uniforms(gl, lsProg, ["uGame", "uDepthScale", "uAtlas", "uRGB",
+                                  "uPal", "uUndither", "uZoom", "uZoomC"]);
+    }
     // cell -> anchor, so the sweep can look features up in its own order
     const inst = new Uint16Array(featInst.buffer, featInst.byteOffset,
                                  featInst.byteLength >> 1);
     for (let i = 0; i < inst.length; i += 3)
       anchors[inst[i + 1] * map.w16 + inst[i]] = inst[i + 2];
-    sprVerts = new Float32Array(65536 * SVST);
+    sprVerts = new Float32Array(65536 * LSVST);
   }
 
   // ---- unit pass — tagpu_native.c's shaders, tagpu_render3do.c's geometry rule
-  let uProg = null, uVAO = null, uVBO = null, UU = {}, uVerts = null;
-  const UVST = 11;                                  // x,y,enc, u,v, fc,ck, shade, wx,wz, vy
+  const UVST = 17;      // x,y,enc, u,v, fc,ck, shade, wx,wz, vy, nx,ny,nz, WX,WY,WZ
+  let uProg = null, uVAO = null, uVBO = null, luProg = null, UU = {}, LUU = {};
+  let uVerts = null;
+  const meshTop = {};                 // model height (max y) per unit type
   // tagpu_render3do.c: the model-space toward-camera axis and the light
   const SH_V = [0.0, 0.8944, -0.4472], SH_L = [-0.35, 0.80, -0.49];
+  let unitRGBTex = null;
+  const ANISO = gl.getExtension("EXT_texture_filter_anisotropic");
+  const ANISO_MAX = ANISO ? gl.getParameter(ANISO.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : 0;
   const [SH_NEUTRAL, SH_DIR] = scene.palette.neutral;
   if (hasUnit) {
     tex2D(gl, 6, gl.R8, scene.units.atlas.w, scene.units.atlas.h,
           gl.RED, gl.UNSIGNED_BYTE, unitAtlas);
     tex2D(gl, 7, gl.R8, 256, scene.palette.shdRows, gl.RED, gl.UNSIGNED_BYTE, shdBuf);
-    uProg = program(gl, unitVS, unitFS, "unit");
+    unitRGBTex = rgbaTex(10, unitRGB, scene.units.atlas.w, scene.units.atlas.h);
+    if (unitRGB && unitPad >= 4) {
+      // levels 0..log2(pad) are bleed-free by construction; never go deeper
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameterf(gl.TEXTURE_2D, gl.TEXTURE_MAX_LOD, Math.log2(unitPad));
+    }
     uVAO = gl.createVertexArray(); uVBO = gl.createBuffer();
     gl.bindVertexArray(uVAO);
     gl.bindBuffer(gl.ARRAY_BUFFER, uVBO);
-    const sizes = [3, 2, 2, 1, 2, 1], offs = [0, 12, 20, 28, 32, 40];
-    for (let i = 0; i < 6; i++) {
+    // slots 6 (normal) and 7 (world) are only the lab programs'; the parity
+    // program leaves them enabled and unread, which GL allows as long as the
+    // buffer covers them
+    const sizes = [3, 2, 2, 1, 2, 1, 3, 3], offs = [0, 12, 20, 28, 32, 40, 44, 56];
+    for (let i = 0; i < 8; i++) {
       gl.enableVertexAttribArray(i);
       gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, UVST * 4, offs[i]);
     }
     gl.bindVertexArray(null);
-    for (const n of ["uGame", "uOffset", "uZoom", "uZoomC", "uDepthScale",
-                     "uAtlas", "uLUT", "uPal", "uShadow", "uAlpha",
-                     "uWaterT", "uWaterMode", "uDigT",
-                     "uScaf", "uScafOn", "uScafP", "uSS", "uZoomF", "uZoomCF",
-                     "uFogGrid", "uFogLUT", "uFogOrg", "uFogDim", "uFog"])
-      UU[n] = gl.getUniformLocation(uProg, n);
+    if (wantParity) {
+      uProg = program(gl, unitVS, unitFS, "unit");
+      UU = uniforms(gl, uProg, ["uGame", "uOffset", "uZoom", "uZoomC", "uDepthScale",
+                                "uAtlas", "uLUT", "uPal", "uShadow", "uAlpha",
+                                "uWaterT", "uWaterMode", "uDigT",
+                                "uScaf", "uScafOn", "uScafP", "uSS", "uZoomF",
+                                "uZoomCF", "uFogGrid", "uFogLUT", "uFogOrg",
+                                "uFogDim", "uFog"]);
+    }
+    if (wantLab) {
+      luProg = program(gl, LAB_UNIT_VS, LAB_UNIT_FS, "lab-unit");
+      LUU = uniforms(gl, luProg, ["uGame", "uDepthScale", "uAtlas", "uRGB",
+                                  "uPal", "uUndither", "uSun", "uAmb", "uNorm",
+                                  "uZoom", "uZoomC", ...SHADOW_U]);
+    }
     uVerts = new Float32Array(65536 * UVST);
   }
 
+  // ---- the shadow map: one depth texture, re-rendered per side, read through
+  // two sampler objects (compare+bilinear for PCF, raw for the blocker search)
+  let shProg = null, shFBO = null, shTex = null, shCmp = null, shRaw = null, SHU = {};
+  const SH_RES = Math.max(...sides.map((L) => L.shadowres || 0), 0);
+  if (wantLab && SH_RES) {
+    shProg = program(gl, SHADOW_VS, SHADOW_FS, "shadow");
+    SHU = uniforms(gl, shProg, ["uShadowMat"]);
+    shTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, shTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, SH_RES, SH_RES, 0,
+                  gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.activeTexture(gl.TEXTURE13); gl.bindTexture(gl.TEXTURE_2D, shTex);
+    shFBO = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shFBO);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, shTex, 0);
+    gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+      fail("the shadow map framebuffer is incomplete on this GPU");
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    shCmp = gl.createSampler();
+    gl.samplerParameteri(shCmp, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+    gl.samplerParameteri(shCmp, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+    gl.samplerParameteri(shCmp, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.samplerParameteri(shCmp, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.samplerParameteri(shCmp, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.samplerParameteri(shCmp, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    shRaw = gl.createSampler();
+    gl.samplerParameteri(shRaw, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.samplerParameteri(shRaw, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.samplerParameteri(shRaw, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.samplerParameteri(shRaw, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindSampler(12, shCmp); gl.bindSampler(13, shRaw);
+  }
+
+  // Orthographic light space over the world box the view can see shadows in:
+  // the viewport plus a margin for casters outside it (shadows are at most
+  // Y/tan(el) long) and for the depicted Z reaching G + h/2. Depth increases
+  // away from the light. Returns the matrix and the world-per-texel scales.
+  function shadowFrame(L) {
+    const lz = L.shadowSun;
+    let lx = [lz[2], 0, -lz[0]];                      // up x sun, then normalise
+    let ll = Math.hypot(lx[0], lx[2]);
+    lx = ll < 1e-4 ? [1, 0, 0] : [lx[0] / ll, 0, lx[2] / ll];
+    const ly = [lz[1] * lx[2] - lz[2] * lx[1], lz[2] * lx[0] - lz[0] * lx[2],
+                lz[0] * lx[1] - lz[1] * lx[0]];
+    // the height range the view can hold, not the byte's: it sets the u/v
+    // extent and so the texel density, which halves for every 128 wasted
+    const M = 192;
+    let h0 = 255, h1 = 0;
+    const c0 = Math.max(0, (E[0] - M) >> 4), c1 = Math.min(w16 - 1, (E[0] + W[0] + M) >> 4);
+    const r0 = Math.max(0, (E[1] - M) >> 4), r1 = Math.min(h16 - 1, (E[1] + W[1] + 128 + M) >> 4);
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+      const h = heightBuf[r * w16 + c];
+      if (h < h0) h0 = h; if (h > h1) h1 = h;
+    }
+    const bx = [E[0] - M, E[0] + W[0] + M], by = [h0, h1 + 128],
+          bz = [E[1] - M, E[1] + W[1] + 128 + M];
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity,
+        d0 = Infinity, d1 = -Infinity;
+    for (const X of bx) for (const Y of by) for (const Z of bz) {
+      const u = X * lx[0] + Y * lx[1] + Z * lx[2];
+      const v = X * ly[0] + Y * ly[1] + Z * ly[2];
+      const d = -(X * lz[0] + Y * lz[1] + Z * lz[2]);
+      u0 = Math.min(u0, u); u1 = Math.max(u1, u);
+      v0 = Math.min(v0, v); v1 = Math.max(v1, v);
+      d0 = Math.min(d0, d); d1 = Math.max(d1, d);
+    }
+    const du = u1 - u0, dv = v1 - v0, dd = d1 - d0;
+    const m = new Float32Array(16);                   // column-major
+    const row = (r, a, s, lo) => {                    // ndc = 2(a.W - lo)/s - 1
+      m[r] = 2 * a[0] / s; m[4 + r] = 2 * a[1] / s; m[8 + r] = 2 * a[2] / s;
+      m[12 + r] = -1 - 2 * lo / s;
+    };
+    row(0, lx, du, u0); row(1, ly, dv, v0);
+    row(2, [-lz[0], -lz[1], -lz[2]], dd, d0);
+    m[15] = 1;
+    return { m, texel: Math.max(du, dv) / SH_RES, depth: dd };
+  }
+
+  function setShadowUniforms(U, L, frame) {
+    gl.uniform1i(U.uShadowOn, frame ? 1 : 0);
+    // the two samplers are set even with shadows off: left at unit 0 they
+    // would be two sampler TYPES on one unit, and GL drops the whole draw
+    gl.uniform1i(U.uShadowCmp, 12); gl.uniform1i(U.uShadowRaw, 13);
+    if (!frame) return;
+    gl.uniformMatrix4fv(U.uShadowMat, false, frame.m);
+    gl.uniform3f(U.uShadowSun, L.shadowSun[0], L.shadowSun[1], L.shadowSun[2]);
+    gl.uniform3f(U.uShScale, frame.texel, frame.depth, 1 / SH_RES);
+    gl.uniform1f(U.uPenumbra, L.penumbra); gl.uniform1f(U.uShade, L.shade);
+  }
+
+  // The depth pass: everything with geometry, along the sun, into the map
+  function shadowPass(L, nterr, nu) {
+    const frame = shadowFrame(L);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shFBO);
+    gl.viewport(0, 0, SH_RES, SH_RES);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true);
+    gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+    gl.clearDepth(1.0); gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(shProg);
+    gl.uniformMatrix4fv(SHU.uShadowMat, false, frame.m);
+    if (L.terrainshadow && nterr) {
+      gl.bindVertexArray(ltVAO); gl.drawArrays(gl.TRIANGLES, 0, nterr);
+    }
+    if (nu) { gl.bindVertexArray(uVAO); gl.drawArrays(gl.TRIANGLES, 0, nu); }
+    gl.bindVertexArray(null);
+    return frame;
+  }
+
   const blitProg = program(gl, BLIT_VS, BLIT_FS, "blit");
+  const dbgProg = DEBUG === "shadow" && shProg ? program(gl, BLIT_VS, DEBUG_FS, "debug") : null;
+  const DBU = dbgProg ? uniforms(gl, dbgProg, ["uShadowRaw"]) : {};
   const blitVAO = gl.createVertexArray();
+  const BU = uniforms(gl, blitProg, ["uA", "uB", "uWipe", "uWidth", "uSS"]);
 
   const verts = new Float32Array(32768 * 6 * TVST);
-  let stats = {};
 
-  function buildTerrain() {
+  // ---- the heightfield, read the way the engine reads it -------------------
+  // mapattr byte 0 is one height per 16-px cell; the engine treats those as
+  // samples at the GRID VERTICES (its own feature anchor averages the four
+  // around a cell and halves the sum: (h00+h01+h10+h11) >> 3), so a vertex at
+  // world (col*16, row*16) carries height[row][col] and the surface between
+  // them is the bilinear patch. Elevation and x/z are the SAME world units;
+  // the oblique shear of 0.5 is what turns an elevation into screen pixels.
+  const w16 = map.w16, h16 = map.h16;
+  const H = (c, r) => heightBuf[(r < 0 ? 0 : r >= h16 ? h16 - 1 : r) * w16 +
+                                (c < 0 ? 0 : c >= w16 ? w16 - 1 : c)];
+  function normalAt(c, r, slope, out, o) {
+    // central differences over 32 world units, so dh/dx = (h[c+1]-h[c-1])/32
+    const dx = slope * (H(c + 1, r) - H(c - 1, r)) / 32;
+    const dz = slope * (H(c, r + 1) - H(c, r - 1)) / 32;
+    const inv = 1 / Math.hypot(dx, 1, dz);
+    out[o] = -dx * inv; out[o + 1] = inv; out[o + 2] = -dz * inv;
+  }
+  // LAB_LIGHT's JS twin, for the sprites, which have no normal of their own
+  function lambertAt(c, r, L) {
+    if (L.amb >= 1) return 1;
+    const n = [0, 0, 0];
+    normalAt(c, r, L.slope, n, 0);
+    const d = n[0] * L.sun[0] + n[1] * L.sun[1] + n[2] * L.sun[2];
+    return (L.amb + (1 - L.amb) * Math.max(d, 0)) * L.norm;
+  }
+  // the row the depth keys are relative to — one definition, used by every pass
+  const rowBase = () => (E[1] >> 4) - 16;
+
+  function buildTerrain(L) {
     // tagpu_terr.c's emit loop, line for line.
     const stride = map.tilemap.w, mrows = map.tilemap.h;
-    const tx0 = div32trunc(eye[0]), fx = eye[0] - tx0 * 32;
-    const ty0 = div32trunc(eye[1]), fy = eye[1] - ty0 * 32;
-    const cols = ceil32(vw + fx), rows = ceil32(vh + fy);
+    const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
+    const ty0 = div32trunc(E[1]), fy = E[1] - ty0 * 32;
+    const cols = ceil32(W[0] + fx), rows = ceil32(W[1] + fy);
     const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
     let n = 0, skipped = 0, junk = 0;
     const put = (x, y, u, v, wx, wz) => {
@@ -305,8 +1199,11 @@ async function main() {
         const idx = tilemap[my * stride + mx];
         if (idx >= map.atlas.tiles) { junk++; continue; }
         const cx = idx % map.atlas.cols, cy = (idx / map.atlas.cols) | 0;
-        const u0 = cx * 32 * iw, u1 = (cx * 32 + 32) * iw;
-        const v0 = cy * 32 * ih, v1 = (cy * 32 + 32) * ih;
+        // the quad still spans exactly TILE_PX texels; u1 lands ON the guard
+        // column, which is a copy of the last real one (tagpu_terr.c)
+        const tu = cx * PITCH + BORDER, tv = cy * PITCH + BORDER;
+        const u0 = tu * iw, u1 = (tu + TILE_PX) * iw;
+        const v0 = tv * ih, v1 = (tv + TILE_PX) * ih;
         const x0 = vpL + c * 32 - fx, y0 = vpT + r * 32 - fy;
         const wx0 = mx * 32, wz0 = my * 32;
         put(x0,      y0,      u0, v0, wx0,      wz0);
@@ -319,7 +1216,96 @@ async function main() {
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, terrVBO);
     gl.bufferData(gl.ARRAY_BUFFER, verts.subarray(0, n * TVST), gl.DYNAMIC_DRAW);
-    stats = { cols, rows, tx0, ty0, fx, fy, cells: n / 6, skipped, junk };
+    L.stats = { cols, rows, tx0, ty0, fx, fy, cells: n / 6, skipped, junk };
+    return n;
+  }
+
+  // The exploration lane's terrain: the SAME 32-px tile grid, but each cell is
+  // four 16-px quads so every heightmap sample gets a vertex. The tile's UVs
+  // are quartered with it, so nothing about the art's mapping changes — only
+  // where its corners land, and that is exactly the double-count question the
+  // lab exists to answer (tascene-design.md: "the art already contains the
+  // hill"). relief=0 keeps the art where it is painted and still lights it by
+  // the real gradient, which is the control.
+  function buildTerrainLab(L) {
+    const stride = map.tilemap.w, mrows = map.tilemap.h;
+    const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
+    const ty0 = div32trunc(E[1]), fy = E[1] - ty0 * 32;
+    // a cell rises by relief*(h-datum)/2 <= 128 px, so cells up to 4 more 32-px
+    // rows BELOW the viewport can still reach into it. With a datum a cell
+    // BELOW it also SINKS, by up to relief*datum/2, so rows ABOVE the viewport
+    // now reach in too — which they could not before and is why this scan runs
+    // from a negative row. (rowBase() already leaves 16 rows of depth-key
+    // headroom above the eye, so the keys of those rows stay positive.)
+    const cols = ceil32(W[0] + fx) + 1;
+    const rows = ceil32(W[1] + fy) + (L.relief > 0 ? 5 : 1);
+    const rAbove = L.relief > 0 && L.datum > 0
+                 ? Math.ceil(L.relief * L.datum * 0.5 / 32) + 1 : 0;
+    const need = cols * (rows + rAbove) * 24 * LTVST;
+    if (ltVerts.length < need) ltVerts = new Float32Array(need);
+    const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
+    const D = scene.depth, r0 = rowBase(), relMax = (W[1] >> 4) + 40;
+    const k = L.relief * 0.5, dat = L.datum;
+    let n = 0, skipped = 0, junk = 0;
+    const nrm = [0, 0, 0];
+    const put = (gc, gr, u, v) => {
+      const o = n * LTVST;
+      let rel = gr - r0;
+      if (rel < 0) rel = 0; else if (rel > relMax) rel = relMax;
+      const h = H(gc, gr);
+      ltVerts[o]     = vpL + gc * 16 - E[0];
+      ltVerts[o + 1] = vpT + gr * 16 - k * (h - dat) - E[1];
+      // Per-row keys only when relief can lift a southern cell over a
+      // northern unit. With relief=0 nothing rises, and per-row keys would
+      // put the ground of every row south of a unit's anchor IN FRONT of the
+      // unit's parts that reach into those rows — the kbot lab lost its
+      // whole south wall to the grass (found by the shadow the roof cast on
+      // that grass). Flat, the terrain is parity's one band behind everything.
+      ltVerts[o + 2] = L.relief > 0 ? labD.terrain + rel * D.rowStep : labD.terrain;
+      ltVerts[o + 3] = u; ltVerts[o + 4] = v;
+      normalAt(gc, gr, L.slope, ltVerts, o + 5);
+      // The world point this vertex DEPICTS, not where it is drawn: the art
+      // at grid row G shows the ground the engine projects there, and the
+      // engine projects world Z at screen Z - Y/2, so the depicted point is
+      // Z = G + h/2 (less whatever relief already moved the vertex). A unit
+      // standing at wz is drawn at wz - wy/2, i.e. on the art of grid row
+      // wz - wy/2, which depicts Z = wz: its shadow lands at its feet.
+      ltVerts[o + 8] = gc * 16;
+      ltVerts[o + 9] = h;
+      ltVerts[o + 10] = gr * 16 + h * 0.5 - k * (h - dat);
+      n++;
+    };
+    for (let r = -rAbove; r < rows; r++) {
+      const my = ty0 + r;
+      if (my < 0 || my >= mrows) { skipped += cols; continue; }
+      for (let c = 0; c < cols; c++) {
+        const mx = tx0 + c;
+        if (mx < 0 || mx >= stride) { skipped++; continue; }
+        const idx = tilemap[my * stride + mx];
+        if (idx >= map.atlas.tiles) { junk++; continue; }
+        const cx = idx % map.atlas.cols, cy = (idx / map.atlas.cols) | 0;
+        const tu = cx * PITCH + BORDER, tv = cy * PITCH + BORDER;
+        for (let sy = 0; sy < 2; sy++) {
+          for (let sx = 0; sx < 2; sx++) {
+            const gc = mx * 2 + sx, gr = my * 2 + sy;
+            // the OUTER edges land on the guard; the interior boundary between
+            // two quadrants is inside the same tile, so it needs none
+            const u0 = (tu + sx * 16) * iw, u1 = u0 + 16 * iw;
+            const v0 = (tv + sy * 16) * ih, v1 = v0 + 16 * ih;
+            put(gc,     gr,     u0, v0);
+            put(gc + 1, gr,     u1, v0);
+            put(gc,     gr + 1, u0, v1);
+            put(gc + 1, gr,     u1, v0);
+            put(gc + 1, gr + 1, u1, v1);
+            put(gc,     gr + 1, u0, v1);
+          }
+        }
+      }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, ltVBO);
+    gl.bufferData(gl.ARRAY_BUFFER, ltVerts.subarray(0, n * LTVST), gl.DYNAMIC_DRAW);
+    L.stats = { cols, rows: rows + rAbove, tx0, ty0, fx, fy,
+                cells: n / 24, skipped, junk };
     return n;
   }
 
@@ -327,11 +1313,16 @@ async function main() {
   // +128/+32 baked in, and the depth keys the painter's order implies.
   // Shadows and bodies go to separate buckets because the shadow is drawn with
   // depth writes OFF (a shadow occludes nothing) — G13a's rule.
-  function buildFeatures() {
+  //
+  // The exploration lane keeps all of that and changes only the DEPTH KEYS,
+  // because it has to: with a per-row heightfield under it, the parity lane's
+  // global 0.40-0.50 band for flat features would sit behind the ground.
+  function buildFeatures(L) {
+    const lab = L.lane === "explore";
+    const VST = lab ? LSVST : SVST;
     const D = scene.depth, defs = scene.features.defs;
-    const w16 = map.w16, h16 = map.h16;
-    let r0 = (eye[1] >> 4) - 16, nRows = (vh >> 4) + 32;
-    let c0 = (eye[0] >> 4) - 10, nCols = (vw >> 4) + 12;
+    let r0 = rowBase(), nRows = (W[1] >> 4) + 32;
+    let c0 = (E[0] >> 4) - 10, nCols = (W[0] >> 4) + 12;
     if (r0 < 0) { nRows += r0; r0 = 0; }
     if (r0 + nRows > h16 - 1) nRows = h16 - r0 - 1;
     if (c0 < 0) { nCols += c0; c0 = 0; }
@@ -340,15 +1331,17 @@ async function main() {
     const flatSpan = nRows * nCols;
     const iw = 1 / scene.features.atlas.w, ih = 1 / scene.features.atlas.h;
     const shadow = [], body = [];
-    const quad = (into, rect, sx, sy, enc, mode, wax, waz) => {
+    const quad = (into, rect, sx, sy, enc, mode, wax, waz, lam) => {
       const x0 = sx - rect.hx, y0 = sy - rect.hy;
       const x1 = x0 + rect.w,  y1 = y0 + rect.h;
       const u0 = rect.x * iw,  u1 = (rect.x + rect.w) * iw;
       const v0 = rect.y * ih,  v1 = (rect.y + rect.h) * ih;
       const ck = rect.ck / 255;
       for (const [x, y, u, v] of [[x0, y0, u0, v0], [x1, y0, u1, v0], [x0, y1, u0, v1],
-                                  [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]])
+                                  [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]]) {
         into.push(x, y, enc, u, v, ck, mode, wax, waz);
+        if (lab) into.push(lam);
+      }
     };
     for (let row = r0; row < r0 + nRows; row++) {
       for (let col = c0; col < c0 + nCols; col++) {
@@ -366,21 +1359,27 @@ async function main() {
         // the engine's projection: screenY is worldZ minus half the height
         const wax = col * 16 + ((d.footx * 16) / 2 | 0);
         const waz = row * 16 + ((d.footz * 16) / 2 | 0) - ((h00 + h01 + h10 + h11) >> 3);
-        const sx = wax + 128 - eye[0], sy = waz + 32 - eye[1];
+        const sx = wax + 128 - E[0], sy = waz + 32 - E[1];
+        const rel0 = row - r0;
         let enc;
         if (d.flat) {
-          enc = D.flat0 + D.flatSpan * (((row - r0) * nCols + (col - c0)) / flatSpan);
+          enc = lab ? labD.flat + rel0 * D.rowStep
+                    : D.flat0 + D.flatSpan * (rel0 * nCols + (col - c0)) / flatSpan;
         } else {
-          let rel = row - r0;
+          let rel = rel0;
           if (rel < 0) rel = 0;
           if (rel > nRows + 8) rel = nRows + 8;
-          enc = D.tall0 + rel * D.rowStep + 1.5 * ((col - c0) / nCols);
+          // the column term breaks ties inside a row. The lab narrows it so a
+          // tall feature cannot reach past the NEXT row's ground (rowStep-0.1).
+          enc = D.tall0 + rel * D.rowStep +
+                (lab ? labD.tallCol : 1.5) * ((col - c0) / nCols);
         }
+        const lam = lab ? lambertAt(col, row, L) : 1;
         if (d.shadow)
           quad(shadow, d.shadow, sx, sy, enc - (d.flat ? D.shadowFlat : D.shadowTall),
-               d.shadtrans ? 2 : 1, wax, waz);
+               d.shadtrans ? 2 : 1, wax, waz, lam);
         if (d.body)
-          quad(body, d.body, sx, sy, enc, d.animtrans ? 2 : 1, wax, waz);
+          quad(body, d.body, sx, sy, enc, d.animtrans ? 2 : 1, wax, waz, lam);
       }
     }
     const all = shadow.concat(body);
@@ -388,23 +1387,32 @@ async function main() {
     sprVerts.set(all);
     gl.bindBuffer(gl.ARRAY_BUFFER, sprVBO);
     gl.bufferData(gl.ARRAY_BUFFER, sprVerts.subarray(0, all.length), gl.DYNAMIC_DRAW);
-    stats.feat = (shadow.length + body.length) / 6 / SVST;
-    return [shadow.length / SVST, body.length / SVST];
+    L.stats.feat = (shadow.length + body.length) / 6 / VST;
+    return [shadow.length / VST, body.length / VST];
   }
 
-  function drawSprites(nShadow, nBody, bodyBase) {
-    gl.useProgram(sprProg);
-    gl.uniform2f(SU.uGame, GW, GH);
-    gl.uniform1f(SU.uZoom, 1.0);
-    gl.uniform2f(SU.uZoomC, vpL + vw * 0.5, vpT + vh * 0.5);
-    gl.uniform1f(SU.uDepthScale, scene.depth.scale);
-    gl.uniform1i(SU.uAtlas, 5); gl.uniform1i(SU.uPal, 1);
-    gl.uniform1i(SU.uFogGrid, 2); gl.uniform1i(SU.uFogLUT, 3);
-    gl.uniform2f(SU.uFogOrg, 0, 0); gl.uniform2f(SU.uFogDim, 1, 1);
-    gl.uniform1i(SU.uFog, 0);
+  function drawSprites(L, nShadow, nBody, bodyBase) {
+    const lab = L.lane === "explore";
+    gl.useProgram(lab ? lsProg : sprProg);
+    if (lab) {
+      gl.uniform2f(LSU.uGame, GW, GH);
+      gl.uniform1f(LSU.uDepthScale, scene.depth.scale);
+      gl.uniform1i(LSU.uAtlas, 5); gl.uniform1i(LSU.uRGB, 9);
+      gl.uniform1i(LSU.uPal, 1); gl.uniform1i(LSU.uUndither, L.undither ? 1 : 0);
+      gl.uniform1f(LSU.uZoom, zoom); gl.uniform2f(LSU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
+    } else {
+      gl.uniform2f(SU.uGame, GW, GH);
+      gl.uniform1f(SU.uZoom, zoom);
+      gl.uniform2f(SU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
+      gl.uniform1f(SU.uDepthScale, scene.depth.scale);
+      gl.uniform1i(SU.uAtlas, 5); gl.uniform1i(SU.uPal, 1);
+      gl.uniform1i(SU.uFogGrid, 2); gl.uniform1i(SU.uFogLUT, 3);
+      gl.uniform2f(SU.uFogOrg, 0, 0); gl.uniform2f(SU.uFogDim, 1, 1);
+      gl.uniform1i(SU.uFog, 0);
+    }
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);   // the shader premultiplies
-    gl.bindVertexArray(sprVAO);
+    gl.bindVertexArray(lab ? lsVAO : sprVAO);
     if (nShadow) { gl.depthMask(false); gl.drawArrays(gl.TRIANGLES, 0, nShadow); }
     if (nBody)   { gl.depthMask(true);  gl.drawArrays(gl.TRIANGLES, bodyBase, nBody); }
     gl.bindVertexArray(null);
@@ -414,14 +1422,33 @@ async function main() {
   // One unit instance: yaw the bind pose, project with the engine's rule, and
   // take the shade row from the POSED normal — rotating before shading is what
   // makes the LUT row the same one the engine's own pass would pick.
-  function buildUnits() {
-    const U = scene.units, D = scene.depth, w16 = map.w16, h16 = map.h16;
-    let r0 = (eye[1] >> 4) - 16, nRows = (vh >> 4) + 32;
+  //
+  // In the exploration lane slot 3 is left at 1.0 and slot 6 carries the same
+  // POSED face normal, so LAB_UNIT_FS can light every pixel by (by default)
+  // the same light with the 32-row quantisation taken out. That is the whole
+  // "free lighting" half of the undithered decision — there is no SHD LUT to
+  // look a restored colour up in.
+  function buildUnits(L) {
+    const lab = L.lane === "explore";
+    const U = scene.units, D = scene.depth;
+    let r0 = rowBase(), nRows = (W[1] >> 4) + 32;
     if (r0 < 0) { nRows += r0; r0 = 0; }
     let n = 0;
+    // shadowlen: the shadow's length is a + b*height instead of the parallel
+    // light's height/tan(el), done as a vertical scale on the caster in the
+    // shadow map. sv = height ONLY along the shadow sun's ground direction
+    const cot = Math.hypot(L.shadowSun[0], L.shadowSun[2]) / Math.max(L.shadowSun[1], 1e-3);
     for (const inst of U.instances) {
       const mesh = meshData[inst.type];
       if (!mesh) continue;
+      if (meshTop[inst.type] === undefined) {
+        let top = 0;
+        for (let i = 1; i < mesh.length; i += UNIT_STRIDE) if (mesh[i] > top) top = mesh[i];
+        meshTop[inst.type] = top;
+      }
+      const top = meshTop[inst.type];
+      const sv = L.shadowlen && top > 0 && cot > 1e-3
+               ? (L.shadowlen[0] + L.shadowlen[1] * top) / (top * cot) : 1;
       // scenario facing 0 is TA's default build heading 0x8000, i.e. half a turn
       const yaw = (inst.facing + 180) * Math.PI / 180;
       const cs = Math.cos(yaw), sn = Math.sin(yaw);
@@ -429,8 +1456,8 @@ async function main() {
       const col = Math.min(w16 - 1, Math.max(0, wx >> 4));
       const row = Math.min(h16 - 1, Math.max(0, wz >> 4));
       const wy = heightBuf[row * w16 + col];          // the engine snaps to terrain
-      const hotX = wx - eye[0] + vpL;
-      const hotY = wz - (wy >> 1) - eye[1] + vpT;
+      const hotX = wx - E[0] + vpL;
+      const hotY = wz - (wy >> 1) - E[1] + vpT;
       let rel = row - r0;
       if (rel < 0) rel = 0;
       if (rel > nRows + 8) rel = nRows + 8;
@@ -446,7 +1473,8 @@ async function main() {
           P[t2][2] = -x * sn + z * cs;
         }
         // per-face flat shading, tagpu_render3do.c line for line
-        let shade = SH_NEUTRAL / 31;
+        let shade = lab ? 1.0 : SH_NEUTRAL / 31;
+        let ux = 0, uy = 1, uz = 0;               // the lab's normal; level if degenerate
         const e1 = [P[1][0] - P[0][0], P[1][1] - P[0][1], P[1][2] - P[0][2]];
         const e2 = [P[2][0] - P[0][0], P[2][1] - P[0][1], P[2][2] - P[0][2]];
         let nx = e1[1] * e2[2] - e1[2] * e2[1];
@@ -455,10 +1483,19 @@ async function main() {
         if (nx * SH_V[0] + ny * SH_V[1] + nz * SH_V[2] < 0) { nx = -nx; ny = -ny; nz = -nz; }
         const nl = Math.hypot(nx, ny, nz);
         if (nl > 1e-6) {
-          const I = (nx * SH_L[0] + ny * SH_L[1] + nz * SH_L[2]) / nl;
-          let rr = SH_NEUTRAL + SH_DIR * Math.floor(I * 12 + 0.5);
-          rr = Math.max(0, Math.min(31, rr));
-          shade = rr / 31;
+          if (lab) {
+            // lit per pixel in LAB_UNIT_FS; the face only supplies its normal,
+            // in MAP space (z south), where the terrain's already is and the
+            // shadow falls — 3DO z points north, hence the flip. Flat, as a
+            // 3DO is — a smooth model would put a different one on each
+            // vertex right here and nothing downstream changes
+            ux = nx / nl; uy = ny / nl; uz = -nz / nl;
+          } else {
+            const I = (nx * SH_L[0] + ny * SH_L[1] + nz * SH_L[2]) / nl;
+            let rr = SH_NEUTRAL + SH_DIR * Math.floor(I * 12 + 0.5);
+            rr = Math.max(0, Math.min(31, rr));
+            shade = rr / 31;
+          }
         }
         for (let t2 = 0; t2 < 3; t2++) {
           const o = i + t2 * UNIT_STRIDE, q = n * UVST;
@@ -478,36 +1515,62 @@ async function main() {
           uVerts[q + 8] = wldX + x;                 // per-vertex, as the engine
           uVerts[q + 9] = wldZ + (-z - y * 0.5);
           uVerts[q + 10] = y;
+          uVerts[q + 11] = ux; uVerts[q + 12] = uy; uVerts[q + 13] = uz;
+          // the SHADOW position: real x/z, height scaled by sv. The depth pass
+          // casts from it and LAB_UNIT_FS looks its own shadow up at it, so a
+          // unit is consistent with itself; only the ground sees the real world
+          uVerts[q + 14] = wx + x; uVerts[q + 15] = wy + sv * y; uVerts[q + 16] = wz - z;
           n++;
         }
       }
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, uVBO);
     gl.bufferData(gl.ARRAY_BUFFER, uVerts.subarray(0, n * UVST), gl.DYNAMIC_DRAW);
-    stats.units = n / 3;
+    L.stats.units = n / 3;
     return n;
   }
 
-  function drawUnits(n) {
+  function drawUnits(L, n) {
     if (!n) return;
-    gl.useProgram(uProg);
-    gl.uniform2f(UU.uGame, GW, GH);
-    gl.uniform2f(UU.uOffset, 0, 0);
-    gl.uniform1f(UU.uZoom, 1.0);
-    gl.uniform2f(UU.uZoomC, vpL + vw * 0.5, vpT + vh * 0.5);
-    gl.uniform1f(UU.uDepthScale, scene.depth.scale);
-    gl.uniform1i(UU.uAtlas, 6); gl.uniform1i(UU.uLUT, 7); gl.uniform1i(UU.uPal, 1);
-    gl.uniform1i(UU.uShadow, 0); gl.uniform1f(UU.uAlpha, 1.0);
-    // the water/dig tests are `vVY <= threshold`; -1e9 disables both
-    gl.uniform1f(UU.uWaterT, -1e9); gl.uniform1i(UU.uWaterMode, 0);
-    gl.uniform1f(UU.uDigT, -1e9);
-    gl.uniform1i(UU.uScaf, 2); gl.uniform1i(UU.uScafOn, 0);
-    gl.uniform4f(UU.uScafP, vpL, vpT, vw, vh);
-    gl.uniform1f(UU.uSS, SS); gl.uniform1f(UU.uZoomF, 1.0);
-    gl.uniform2f(UU.uZoomCF, vpL + vw * 0.5, vpT + vh * 0.5);
-    gl.uniform1i(UU.uFogGrid, 2); gl.uniform1i(UU.uFogLUT, 3);
-    gl.uniform2f(UU.uFogOrg, 0, 0); gl.uniform2f(UU.uFogDim, 1, 1);
-    gl.uniform1i(UU.uFog, 0);
+    if (L.lane === "explore") {
+      gl.useProgram(luProg);
+      gl.uniform2f(LUU.uGame, GW, GH);
+      gl.uniform1f(LUU.uDepthScale, scene.depth.scale);
+      gl.uniform1i(LUU.uAtlas, 6); gl.uniform1i(LUU.uRGB, 10);
+      gl.uniform1i(LUU.uPal, 1); gl.uniform1i(LUU.uUndither, L.undither ? 1 : 0);
+      gl.uniform3f(LUU.uSun, L.unitSun[0], L.unitSun[1], L.unitSun[2]);
+      gl.uniform1f(LUU.uAmb, L.amb); gl.uniform1f(LUU.uNorm, L.unitNorm);
+      gl.uniform1f(LUU.uZoom, zoom); gl.uniform2f(LUU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
+      setShadowUniforms(LUU, L, L.shadowFrame);
+      // the sampler state is per side, because the two sides of a wipe may
+      // sample the one restored atlas differently
+      const lin = L.filter === "linear";
+      gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, unitRGBTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER,
+                       lin ? gl.LINEAR_MIPMAP_LINEAR : gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, lin ? gl.LINEAR : gl.NEAREST);
+      if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO.TEXTURE_MAX_ANISOTROPY_EXT,
+                                  lin ? Math.min(L.aniso, ANISO_MAX) : 1);
+    } else {
+      gl.useProgram(uProg);
+      gl.uniform2f(UU.uGame, GW, GH);
+      gl.uniform2f(UU.uOffset, 0, 0);
+      gl.uniform1f(UU.uZoom, zoom);
+      gl.uniform2f(UU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
+      gl.uniform1f(UU.uDepthScale, scene.depth.scale);
+      gl.uniform1i(UU.uAtlas, 6); gl.uniform1i(UU.uLUT, 7); gl.uniform1i(UU.uPal, 1);
+      gl.uniform1i(UU.uShadow, 0); gl.uniform1f(UU.uAlpha, 1.0);
+      // the water/dig tests are `vVY <= threshold`; -1e9 disables both
+      gl.uniform1f(UU.uWaterT, -1e9); gl.uniform1i(UU.uWaterMode, 0);
+      gl.uniform1f(UU.uDigT, -1e9);
+      gl.uniform1i(UU.uScaf, 2); gl.uniform1i(UU.uScafOn, 0);
+      gl.uniform4f(UU.uScafP, vpL, vpT, vw, vh);
+      gl.uniform1f(UU.uSS, SS); gl.uniform1f(UU.uZoomF, zoom);
+      gl.uniform2f(UU.uZoomCF, ZOOM_C[0], ZOOM_C[1]);
+      gl.uniform1i(UU.uFogGrid, 2); gl.uniform1i(UU.uFogLUT, 3);
+      gl.uniform2f(UU.uFogOrg, 0, 0); gl.uniform2f(UU.uFogDim, 1, 1);
+      gl.uniform1i(UU.uFog, 0);
+    }
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(true);
@@ -517,9 +1580,13 @@ async function main() {
     gl.disable(gl.BLEND);
   }
 
-  function draw() {
-    const nverts = buildTerrain();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  function drawSide(L, target) {
+    const nterr = L.lane === "explore" ? buildTerrainLab(L) : buildTerrain(L);
+    // units are built before the depth pass needs them and drawn after it
+    const nu = hasUnit && L.units ? buildUnits(L) : 0;
+    L.shadowFrame = L.lane === "explore" && L.shadows && shProg
+                  ? shadowPass(L, nterr, nu) : null;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo);
     gl.viewport(0, 0, FW, FH);
     gl.disable(gl.SCISSOR_TEST);
     gl.clearColor(0, 0, 0, 1);
@@ -534,26 +1601,58 @@ async function main() {
     gl.depthMask(true);
     gl.disable(gl.BLEND);
 
-    gl.useProgram(terrProg);
-    gl.uniform2f(U.uGame, GW, GH);
-    gl.uniform1f(U.uZoom, 1.0);
-    gl.uniform2f(U.uZoomC, vpL + vw * 0.5, vpT + vh * 0.5);
-    gl.uniform1f(U.uDepthScale, scene.depth.scale);
-    gl.uniform1f(U.uEnc, scene.depth.terrain);
-    gl.uniform1i(U.uAtlas, 0); gl.uniform1i(U.uPal, 1);
-    gl.uniform1i(U.uFogGrid, 2); gl.uniform1i(U.uFogLUT, 3);
-    gl.uniform2f(U.uFogOrg, 0, 0); gl.uniform2f(U.uFogDim, 1, 1);
-    gl.uniform1i(U.uFog, 0);
-    gl.bindVertexArray(terrVAO);
-    if (hasTerr) gl.drawArrays(gl.TRIANGLES, 0, nverts);
-    gl.bindVertexArray(null);
-
-    if (hasFeat) {
-      const [ns, nb] = buildFeatures();
-      const which = Q.get("feat") || "both";
-      drawSprites(which === "body" ? 0 : ns, which === "shadow" ? 0 : nb, ns);
+    if (L.terrain) {
+      if (L.lane === "explore") {
+        gl.useProgram(ltProg);
+        gl.uniform2f(LTU.uGame, GW, GH);
+        gl.uniform1f(LTU.uDepthScale, scene.depth.scale);
+        gl.uniform1i(LTU.uAtlas, 0); gl.uniform1i(LTU.uRGB, 8);
+        gl.uniform1i(LTU.uPal, 1);
+        gl.uniform1i(LTU.uUndither, L.undither ? 1 : 0);
+        gl.uniform3f(LTU.uSun, L.sun[0], L.sun[1], L.sun[2]);
+        gl.uniform1f(LTU.uAmb, L.amb);
+        gl.uniform1f(LTU.uNorm, L.norm);
+        gl.uniform1f(LTU.uZoom, zoom); gl.uniform2f(LTU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
+        setShadowUniforms(LTU, L, L.shadowFrame);
+        gl.bindVertexArray(ltVAO);
+      } else {
+        gl.useProgram(terrProg);
+        gl.uniform2f(U.uGame, GW, GH);
+        gl.uniform1f(U.uZoom, zoom);
+        gl.uniform2f(U.uZoomC, ZOOM_C[0], ZOOM_C[1]);
+        gl.uniform1f(U.uDepthScale, scene.depth.scale);
+        gl.uniform1f(U.uEnc, scene.depth.terrain);
+        gl.uniform1i(U.uAtlas, 0); gl.uniform1i(U.uPal, 1);
+        gl.uniform1i(U.uFogGrid, 2); gl.uniform1i(U.uFogLUT, 3);
+        gl.uniform2f(U.uFogOrg, 0, 0); gl.uniform2f(U.uFogDim, 1, 1);
+        gl.uniform1i(U.uFog, 0);
+        gl.bindVertexArray(terrVAO);
+      }
+      gl.drawArrays(gl.TRIANGLES, 0, nterr);
+      gl.bindVertexArray(null);
     }
-    if (hasUnit) drawUnits(buildUnits());
+
+    if (hasFeat && L.features) {
+      const [ns, nb] = buildFeatures(L);
+      drawSprites(L, L.feat === "body" ? 0 : ns, L.feat === "shadow" ? 0 : nb, ns);
+    }
+    if (nu) drawUnits(L, nu);
+  }
+
+  function draw() {
+    zoomView();
+    for (let i = 0; i < sides.length; i++) drawSide(sides[i], targets[i]);
+    if (dbgProg) {                        // side A's depth map, as it was left
+      if (sides.length > 1) shadowPass(sides[0], buildTerrainLab(sides[0]), buildUnits(sides[0]));
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.disable(gl.SCISSOR_TEST); gl.disable(gl.DEPTH_TEST);
+      gl.viewport(0, 0, GW, GH);
+      gl.useProgram(dbgProg); gl.uniform1i(DBU.uShadowRaw, 13);
+      gl.bindVertexArray(blitVAO); gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindVertexArray(null);
+      if (!SHOT) report();
+      return;
+    }
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.disable(gl.SCISSOR_TEST);
@@ -562,32 +1661,112 @@ async function main() {
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(blitProg);
-    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, colour);
-    gl.uniform1i(gl.getUniformLocation(blitProg, "uSrc"), 4);
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, targets[0].colour);
+    gl.activeTexture(gl.TEXTURE11);
+    gl.bindTexture(gl.TEXTURE_2D, (targets[1] || targets[0]).colour);
+    gl.uniform1i(BU.uA, 4); gl.uniform1i(BU.uB, 11);
+    gl.uniform1f(BU.uWipe, wipe); gl.uniform1f(BU.uWidth, GW); gl.uniform1i(BU.uSS, SS);
     gl.bindVertexArray(blitVAO);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
 
-    if (!SHOT) {
-      bar.innerHTML =
-        `<b>${map.name}</b> <span>${map.w16}x${map.h16} cells</span>` +
-        `<span>eye</span><b>${eye[0]},${eye[1]}</b>` +
-        `<span>grid</span><b>${stats.cols}x${stats.rows}</b>` +
-        `<span>frac</span><b>${stats.fx},${stats.fy}</b>` +
-        `<span>cells</span><b>${stats.cells}</b>` +
-        `<span>off-map</span><b>${stats.skipped}</b>` +
-        (stats.feat !== undefined ? `<span>features</span><b>${stats.feat}</b>` : "") +
-        (stats.units !== undefined ? `<span>unit tris</span><b>${stats.units}</b>` : "");
-    }
+    if (!SHOT) report();
   }
 
-  // ---- interaction (serve only): pan the eye, which is what the engine scrolls
+  function report() {
+    const s0 = sides[0].stats, on = new Set(sides.map((L) => L.lane));
+    const rows = [
+      `<div class="row modes"><span>renderers</span>` +
+      `<button data-mode="parity" class="${on.has("parity") ? "on" : ""}">Classic</button>` +
+      `<button data-mode="explore" class="${on.has("explore") ? "on" : ""}">Classic++</button>` +
+      `</div>`,
+      `<div class="row"><b>${map.name}</b> <span>${map.w16}x${map.h16} cells</span>` +
+      `<span>eye</span><b>${eye[0]},${eye[1]}</b>` +
+      `<span>grid</span><b>${s0.cols}x${s0.rows}</b>` +
+      `<span>frac</span><b>${s0.fx},${s0.fy}</b>` +
+      (sides.length > 1 ? `<span>wipe</span><b>${wipe.toFixed(2)}</b>` : "") +
+      `<span>zoom</span><b>${zoom === 1 ? "1" : zoom.toFixed(3).replace(/0+$/, "")}</b>` +
+      `<span>ss</span><b>${SS}</b><span>aniso</span><b>${ANISO_MAX || "none"}</b>` +
+      `<span>device</span><b>${cv.dataset.device}</b>` +
+      `</div>`];
+    for (let i = 0; i < sides.length; i++) {
+      const L = sides[i], st = L.stats;
+      rows.push(
+        `<div class="row">` +
+        (sides.length > 1 ? `<span class="tag ${i ? "b" : "a"}">${L.label}</span>` : "") +
+        `<b>${L.name}</b>` +
+        (L.preset ? `<span>preset</span><b>${L.preset}</b>` : "") +
+        (L.lane === "explore"
+          ? `<span>relief</span><b>${L.relief}</b>` +
+            (L.relief > 0 ? `<span>datum</span><b>${L.datum}</b>` : "") +
+            `<span>sun</span><b>${L.sunAE ? L.sunAE.join(",") : "off"}</b>` +
+            (L.sunAE ? `<span>unitsun</span><b>${L.unitSunAE.join(",")}</b>` +
+                       `<span>shadowsun</span><b>${L.shadowSunAE.join(",")}</b>` : "") +
+            `<span>amb</span><b>${L.amb.toFixed(2)}</b>` +
+            `<span>slope</span><b>${L.slope}</b>` +
+            `<span>colour</span><b>${L.undither ? "restored" : "indexed"}</b>` +
+            `<span>filter</span><b>${L.filter}${L.filter === "linear" && L.aniso > 1
+                ? ` ·${Math.min(L.aniso, ANISO_MAX || 1)}x` : ""}</b>` +
+            `<span>shadows</span><b>${L.shadows
+                ? `pen ${L.penumbra} shade ${L.shade}${L.terrainshadow ? " +hills" : ""}` +
+                  (L.shadowlen ? ` len ${L.shadowlen[0]}+${L.shadowlen[1]}h` : " len physical")
+                : "off"}</b>`
+          : "") +
+        `<span>cells</span><b>${st.cells}</b>` +
+        `<span>off-map</span><b>${st.skipped}</b>` +
+        (st.feat !== undefined ? `<span>features</span><b>${st.feat}</b>` : "") +
+        (st.units !== undefined ? `<span>unit tris</span><b>${st.units}</b>` : "") +
+        `</div>`);
+    }
+    bar.innerHTML = rows.join("");
+  }
+
+  // ---- interaction (serve only): pan the eye, which is what the engine
+  // scrolls, and drag the wipe divider when the pointer is on it
   if (!SHOT) {
-    const maxX = Math.max(0, map.w16 * 16 - vw), maxY = Math.max(0, map.h16 * 16 - vh);
+    // The renderer buttons rewrite the query and reload. A renderer already
+    // on screen keeps its side's own parameters; a new one comes in at its
+    // defaults; the live eye, ss, debug and the wipe position carry over.
+    bar.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-mode]");
+      if (!btn) return;
+      const want = new Set(sides.map((L) => L.lane)), mode = btn.dataset.mode;
+      if (want.has(mode)) { if (want.size === 1) return; want.delete(mode); }
+      else want.add(mode);
+      const own = (lane) => {
+        const L = sides.find((s) => s.lane === lane);
+        return L ? L.query : (lane === "parity" ? "lane=classic" : "lane=classicpp");
+      };
+      const q = new URLSearchParams();
+      for (const k of ["ss", "debug"]) if (Q.get(k) !== null) q.set(k, Q.get(k));
+      q.set("eye", `${eye[0]},${eye[1]}`);
+      if (zoom !== 1) q.set("zoom", String(zoom));
+      const modes = ["parity", "explore"].filter((m) => want.has(m));
+      if (modes.length === 1) {
+        for (const [k, v] of new URLSearchParams(own(modes[0]))) q.set(k, v);
+      } else {
+        q.set("a", own(modes[0])); q.set("b", own(modes[1]));
+        q.set("wipe", (wipe > 1 ? 0.5 : wipe).toFixed(2));
+      }
+      location.search = "?" + q.toString();
+    });
+    // keep the ZOOMED view on the map: E >= 0 and E + W <= the map, in eye terms
     const clamp = () => {
-      eye[0] = Math.max(0, Math.min(eye[0], maxX));
-      eye[1] = Math.max(0, Math.min(eye[1], maxY));
+      const mx = (vw - vw / zoom) / 2, my = (vh - vh / zoom) / 2;
+      const maxX = map.w16 * 16 - vw + mx, maxY = map.h16 * 16 - vh + my;
+      eye[0] = Math.round(Math.max(-mx, Math.min(eye[0], maxX)));
+      eye[1] = Math.round(Math.max(-my, Math.min(eye[1], maxY)));
     };
+    // tagpu_zoom.c's wheel: geometric, 1.1 per notch, 0.25..8, and land
+    // exactly on 1 when the notches cancel (1x is what the parity claim
+    // tests by equality). No easing here — a lab wants the level it asked for
+    cv.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      let z = zoomClamp(zoom * Math.pow(1.1, -e.deltaY / 100));
+      if (z > 0.999 && z < 1.001) z = 1;
+      zoom = z; clamp(); draw();
+    }, { passive: false });
     addEventListener("keydown", (e) => {
       const step = e.shiftKey ? 256 : 32;
       if (e.key === "ArrowLeft")  eye[0] -= step;
@@ -597,16 +1776,31 @@ async function main() {
       else return;
       e.preventDefault(); clamp(); draw();
     });
+    const canvasX = (e) => {
+      const r = cv.getBoundingClientRect();
+      return (e.clientX - r.left) / r.width;
+    };
     let drag = null;
     cv.addEventListener("pointerdown", (e) => {
-      drag = { x: e.clientX, y: e.clientY, ex: eye[0], ey: eye[1] };
+      if (sides.length > 1 && Math.abs(canvasX(e) - wipe) * GW < 8) drag = { wipe: true };
+      else drag = { x: e.clientX, y: e.clientY, ex: eye[0], ey: eye[1] };
       cv.setPointerCapture(e.pointerId);
     });
     cv.addEventListener("pointermove", (e) => {
-      if (!drag) return;
-      eye[0] = drag.ex - (e.clientX - drag.x);
-      eye[1] = drag.ey - (e.clientY - drag.y);
-      clamp(); draw();
+      if (!drag) {
+        if (sides.length > 1)
+          cv.style.cursor = Math.abs(canvasX(e) - wipe) * GW < 8 ? "col-resize" : "";
+        return;
+      }
+      if (drag.wipe) wipe = Math.min(1, Math.max(0, canvasX(e)));
+      else {
+        // pointer deltas are CSS px; one canvas px is k/dpr of those
+        const s = GW / cv.getBoundingClientRect().width;
+        eye[0] = drag.ex - Math.round((e.clientX - drag.x) * s);
+        eye[1] = drag.ey - Math.round((e.clientY - drag.y) * s);
+        clamp();
+      }
+      draw();
     });
     cv.addEventListener("pointerup", () => { drag = null; });
   }
@@ -616,4 +1810,25 @@ async function main() {
 }
 
 main().catch(fail);
+
+// LIVE RELOAD. `tascene serve` re-stages this file into the pack whenever the
+// checked-in source changes and writes its mtime token to __reload; we poll
+// that and reload when it moves, so editing the viewer updates the open tab
+// without a server restart or a manual refresh. Never under shot=1 — the
+// headless shooter must render exactly one frame and stop. Any failure (an old
+// pack with no token, a server that is not tascene's) silently stops the poll
+// rather than logging once a second.
+if (!SHOT) {
+  (async () => {
+    const read = async () => (await fetch("__reload", { cache: "no-store" })).text();
+    let seen;
+    try { seen = await read(); } catch (e) { return; }
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 700));
+      let now;
+      try { now = await read(); } catch (e) { return; }
+      if (now !== seen) { location.reload(); return; }
+    }
+  })();
+}
 </script>
