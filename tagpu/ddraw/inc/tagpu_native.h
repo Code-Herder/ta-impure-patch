@@ -12,4 +12,10 @@ int  tagpu_native_wrecks_armed(void);
    tagpu_markown.c suppresses the engine's per unit, and must hand them all back
    when this is 0 or a selected unit ends up with no box at all. */
 int  tagpu_native_selbox_complete(void);
+/* One unit's world position for a marker anchored to it: the sub-pixel
+   interpolated sample when this frame's unit gather produced one for that
+   slot, the raw 16.16 otherwise. x = world x, y = ALTITUDE, z = map depth
+   (the engine's own order at unit+0x6A). 0 = no position; do not use the
+   outputs. Read-only, render thread. */
+int  tagpu_native_unit_pos(const char* unit, float* x, float* y, float* z);
 #endif

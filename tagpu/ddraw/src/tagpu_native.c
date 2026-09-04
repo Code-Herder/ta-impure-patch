@@ -72,6 +72,7 @@
 #include "tagpu_terrown.h"
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
+#include "tagpu_order.h"
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_structshadow_ours: who draws a building's shadow */
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
@@ -196,6 +197,59 @@
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 static void pose_dump(const char* u, const char* o3);
+
+/* ---- sub-pixel motion, and why the table is file-static ----------------
+   The engine keeps 16.16 fixed-point unit positions (the roster shorts are
+   just their high words) and steps them once per SIM tick, while we present
+   far more often than that. Keeping the last two samples per unit SLOT and
+   interpolating between them is what makes an owned unit's body slide rather
+   than step.
+
+   The table used to be a function-local static inside tagpu_native_frame,
+   because the unit pass was its only reader. It is not any more: a marker
+   drawn at native resolution — a crisp range circle centred on a walking
+   unit — steps once per tick against a body that slides, and the step is
+   plainly visible where the 1997 art's own blockiness hid it. So the read
+   half is factored out and published as tagpu_native_unit_pos().
+
+   ONLY THE UNIT PASS WRITES IT, and only for units it owns, so a unit the
+   pass does not gather has no sample and every reader falls back to the raw
+   16.16. Slot reuse (a dead unit's slot handed to a new one) is caught by the
+   same distance snap the pass has always used, plus — for the accessor — a
+   check that the stored sample still describes the unit being asked about. */
+typedef struct { int x, z, y; int px, pz, py; unsigned tc, tp; } SPX;
+static SPX      s_spx[8192];
+static unsigned s_spxFrame;     /* the frame the pass last refreshed it in */
+
+/* The read half. 1, and the three outputs filled, when slot `slot` carries a
+   usable pair of samples for frame `fc`; 0 leaves them untouched, which is why
+   every caller seeds them with the raw fixed-point position first. */
+static int spx_sample(size_t slot, unsigned fc, float* fx, float* fz, float* fy)
+{
+    const SPX* e;
+    unsigned dt, el;
+    float dx, dz, dy, a;
+    if (slot >= 8192) return 0;
+    e = &s_spx[slot];
+    if (e->tp == 0) return 0;
+    dt = e->tc - e->tp;
+    el = fc - e->tc;
+    dx = (float)(e->x - e->px) / 65536.0f;
+    dz = (float)(e->z - e->pz) / 65536.0f;
+    dy = (float)(e->y - e->py) / 65536.0f;
+    /* dt in [1,30]: a longer gap is a unit that stood still and started again,
+       not a tick. el < dt: never extrapolate past the next expected sample.
+       The distance bound is the slot-reuse snap — a teleport-sized "step" is a
+       different unit in a recycled slot, and interpolating it would draw the
+       marker somewhere between two unrelated places. */
+    if (dt < 1 || dt > 30 || el >= dt ||
+        dx * dx + dy * dy + dz * dz > 1024.0f) return 0;
+    a = (float)el / (float)dt;
+    *fx = (float)e->px / 65536.0f + dx * a;
+    *fz = (float)e->pz / 65536.0f + dz * a;
+    *fy = (float)e->py / 65536.0f + dy * a;
+    return 1;
+}
 
 static void nlog(const char* s)
 {
@@ -1344,6 +1398,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int featOn = tagpu_feat_armed(f->frame_counter);
     int terrOn = tagpu_terr_armed(f->frame_counter);
     int markOn = tagpu_mark_armed(f->frame_counter);
+    /* polled unconditionally, not behind markOn: tagpu_order.c hands the
+       engine's driver back from its own disarm path, and it can only do that
+       if it is still being asked */
+    tagpu_order_armed(f->frame_counter);
     if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn && !markOn) return;
     if (s_state == 0) init_gl();
     if (s_state != 1 || !tagpu_r3d_ensure()) return;
@@ -1506,12 +1564,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                      float waterT, digT; int waterMode;
                      int nanoOn; float nanoT, nanoC[3], nanoWire; } NU;
     static NU units[MAXU];
-    /* sub-pixel motion: the engine keeps 16.16 fixed-point positions (the
-       roster shorts are just their high words) — read the true fractions and
-       interpolate between the last two sim samples per unit SLOT for
-       present-rate smoothness (slot reuse is caught by the distance snap) */
-    typedef struct { int x, z, y; int px, pz, py; unsigned tc, tp; } SPX;
-    static SPX spx[8192];
+    /* sub-pixel motion: see the SPX block at the top of this file for the
+       table, the read half and why both are file-static now */
+    s_spxFrame = f->frame_counter;
     int nu = 0, nv = 0, nwr = 0, nsel = 0;
     unsigned uiGates = *(unsigned char*)(ta + OFF_UIGATES);
     if (s_armed) {                 /* units are gathered only by the unit pass */
@@ -1527,22 +1582,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (s_subpix) {
             size_t slot = (size_t)(u - beg) / UNIT_STRIDE;
             if (slot < 8192) {
-                SPX* e = &spx[slot];
+                SPX* e = &s_spx[slot];
                 if (e->tc == 0 || e->x != ix || e->z != iz || e->y != iy) {
                     e->px = e->x; e->pz = e->z; e->py = e->y; e->tp = e->tc;
                     e->x = ix; e->z = iz; e->y = iy; e->tc = f->frame_counter;
                 }
-                unsigned dt = e->tc - e->tp, el = f->frame_counter - e->tc;
-                float dx = (float)(e->x - e->px) / 65536.0f;
-                float dz = (float)(e->z - e->pz) / 65536.0f;
-                float dy = (float)(e->y - e->py) / 65536.0f;
-                if (e->tp != 0 && dt >= 1 && dt <= 30 && el < dt &&
-                    dx * dx + dy * dy + dz * dz <= 1024.0f) {
-                    float a = (float)el / (float)dt;
-                    fx = (float)e->px / 65536.0f + dx * a;
-                    fz = (float)e->pz / 65536.0f + dz * a;
-                    fy = (float)e->py / 65536.0f + dy * a;
-                }
+                spx_sample(slot, f->frame_counter, &fx, &fz, &fy);
             }
         }
         float ax = fx - (float)eyeX + (float)vpL;
@@ -2394,3 +2439,52 @@ int tagpu_native_wrecks_armed(void)
 }
 
 int tagpu_native_selbox_complete(void) { return s_selComplete; }
+
+/* One unit's world position for a pass that draws something ANCHORED to it —
+   the interpolated sample when this frame's unit gather produced one, the raw
+   16.16 otherwise. Outputs are world units: x = world x, y = ALTITUDE,
+   z = map depth, i.e. the same triple the engine keeps at unit+0x6A and the
+   same order its order-list walker copies into `pos`.
+
+   Honours tagpu_subpix.off, because it goes through the same table the lever
+   controls: with sub-pixel off nothing is ever written, `tp` stays 0 and every
+   call falls through to the raw read.
+
+   THE SLOT CHECK IS NOT OPTIONAL. `s_spx` is indexed by array slot, and a slot
+   outlives the unit that filled it: a sample belonging to a dead unit would be
+   handed to whatever the engine put in its place. `spx_sample`'s distance snap
+   catches the large jump, and the equality test below catches the rest by
+   refusing any sample that does not still describe THIS unit's current
+   position. 0 means "no position" — callers must not use the outputs. */
+int tagpu_native_unit_pos(const char* u, float* x, float* y, float* z)
+{
+    const char* ta;
+    const char* beg;
+    size_t off;
+    int ix, iz, iy;
+    float fx, fz, fy;
+
+    if (!u || !x || !y || !z) return 0;
+    if (!ptr_ok(u)) return 0;
+    ta = *(const char* const*)TA_MAINPP;
+    if (!ptr_ok(ta)) return 0;
+    beg = *(const char* const*)(ta + OFF_BEGIN);
+    if (!ptr_ok(beg) || u < beg) return 0;
+
+    ix = *(const int*)(u + U_XFIX);
+    iz = *(const int*)(u + U_ZFIX);
+    iy = *(const int*)(u + U_YFIX);
+    fx = (float)ix / 65536.0f;
+    fz = (float)iz / 65536.0f;
+    fy = (float)iy / 65536.0f;
+
+    off = (size_t)(u - beg);
+    if (off % UNIT_STRIDE == 0) {
+        size_t slot = off / UNIT_STRIDE;
+        if (slot < 8192 && s_spx[slot].x == ix && s_spx[slot].z == iz &&
+            s_spx[slot].y == iy)
+            spx_sample(slot, s_spxFrame, &fx, &fz, &fy);
+    }
+    *x = fx; *y = fz; *z = fy;
+    return 1;
+}

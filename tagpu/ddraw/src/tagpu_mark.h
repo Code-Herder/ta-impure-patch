@@ -36,8 +36,24 @@
 #include "tagpu_fx.h"
 
 int  tagpu_mark_armed(unsigned frame_counter);   /* re-reads tagpu_mark.on (30f) */
-/* build this frame's health-bar quads; returns the number of bars */
+/* build this frame's health-bar quads; returns the number of bars. Also runs
+   the order-marker gather (tagpu_order.c), which emits through the two
+   functions below — that pass's geometry belongs in THIS pass's buckets,
+   because its draw slot is the engine's own: markers first, health bars over
+   them (`0x469BFC` before `0x469CB9`). */
 int  tagpu_mark_gather(const TAGPU_FXVIEW* v);
+
+/* Emission API for tagpu_order.c: flat-coloured geometry in game-frame
+   coordinates, fogged at the world point (wx,wz) the caller names. `colidx` is
+   a PALETTE index, as gui[] holds — not a GUI slot number. 0 = the bucket is
+   full and nothing was emitted, so the caller can count the drop.
+
+   Lines are drawn GL_LINES at glLineWidth(ss), i.e. one SCREEN pixel at any
+   zoom; triangles carry no such trick and must be sized by the caller. */
+int  tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
+                          int colidx, float wx, float wz);
+int  tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
+                         float x2, float y2, int colidx, float wx, float wz);
 /* draw into the currently bound FBO. Expects depth test and blending OFF (the
    markers are the frame's top layer and every fragment is opaque); own
    program/VAO, leaves program, VAO and texture bindings dirty. */

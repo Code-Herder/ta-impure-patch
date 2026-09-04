@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_markown.h"
+#include "tagpu_order.h"
 #include "tagpu_terr.h"
 #include "tagpu_native.h"
 #include "tagpu_detour.h"
@@ -41,6 +42,26 @@
 #define SITE_TSPRITE1_VA 0x00439516u
 #define SITE_TSPRITE2_VA 0x00439C7Du
 #define LEAF_TSPRITE_VA  0x00439740u
+
+/* The order-marker driver and its sole call site, behind the SHIFT probe at
+   `0x469BE1`. Redirecting the SITE rather than detouring the driver is what
+   lets the snapshot run on the game thread with the driver's own arguments in
+   hand — see tagpu_order.h for why the walk cannot happen on the present
+   thread at all. */
+#define SITE_ORDERS_VA   0x00469BFCu   /* call 0x48CC30(ctx, main+0x142F3)   */
+#define PASS_ORDERS_VA   0x0048CC30u
+/* The walker's three remaining leaf call sites. They are redirected only so
+   `order.on=trace` can log the ENGINE's node list beside ours; with trace off
+   each is a call straight through. (Bits 3 and 1's delegation to it already
+   come through mark_tsprite.) */
+#define SITE_DBUILD_VA   0x00439BACu   /* call 0x438C00 — build site, bit 0  */
+#define SITE_DDOTS_VA    0x00439BF2u   /* call 0x4394E0 — route dots, bit 1  */
+#define SITE_DCIRC_VA    0x00439C37u   /* call 0x4399F0 — target circle, b2  */
+#define SITE_DRANGE_VA   0x00439CBEu   /* call 0x4390A0 — range circles, b4  */
+#define LEAF_DBUILD_VA   0x00438C00u
+#define LEAF_DDOTS_VA    0x004394E0u
+#define LEAF_DCIRC_VA    0x004399F0u
+#define LEAF_DRANGE_VA   0x004390A0u
 
 /* `83 EC 10 | 53 | 55` = sub esp,0x10; push ebx; push ebp — five
    position-independent bytes ending on an instruction boundary (0x46A435) */
@@ -128,6 +149,7 @@ static int g_installed = 0;
 static int g_capture = 0;                 /* follows tagpu_mark.on           */
 static int g_selbox = 0;                  /* ours redraws the selection rect */
 static int g_cursor = 0;                  /* ours redraws the build cursor   */
+static int g_orders = 0;                  /* ours redraws the order markers  */
 static unsigned g_beat = 0, g_last = 0;
 
 /* One layer, double-buffered. The game thread fills one buffer while the GL
@@ -408,7 +430,13 @@ static int prefog_wanted(const char* ta)
     const char *units, *end;
     int n, i, watched;
 
-    if (((int (__stdcall *)(int))HOTKEY_VA)(SHIFT_HOTKEY)) return 1;
+    /* SHIFT only opens the window while the ENGINE still draws the order
+       markers. Once tagpu_order.c owns them (G13o) the block's only remaining
+       engine primitive is the group digit, which needs `damagebars` AND a
+       squad tag — a default install has neither, so the common frame stops
+       paying for a capture nothing can land in. Under `passive` and `trace`
+       the engine is drawing again and this reverts to the old rule. */
+    if (!g_orders && ((int (__stdcall *)(int))HOTKEY_VA)(SHIFT_HOTKEY)) return 1;
     if (!(*(const unsigned char*)(ta + OFF_GAMEOPT) & 1)) return 0;
     ids   = *(const unsigned short* const*)(ta + OFF_HOTIDS);
     units = *(const char* const*)(ta + OFF_UNITS);
@@ -480,6 +508,11 @@ static void __stdcall mark_hook8(void* ctx, int n)
     P->tried = 0;
     P->opened = 0;
 
+    /* and the order arena's own block: the snapshot only runs when the SHIFT
+       gate at `0x469BE1` opens, so "no snapshot in this block" is the only
+       signal that the markers should come off the screen */
+    tagpu_order_block_begin();
+
     /* The engine's markers land in our buffer or in its own frame; there is no
        third option, so every path that does not open a window has to give the
        last capture up. Opening one does not: it fills the OTHER buffer and
@@ -498,6 +531,7 @@ static void __stdcall mark_hook9(void* ctx, int n)
        drawUnits == 0, which only the movie recorder passes (see hook 8) — and
        `opens == ends` over ~50 000 blocks of live play says so. */
     layer_end(&g_L[TAGPU_MARK_PREFOG], 1);
+    tagpu_order_block_end();
     if (g_tabSlot) alpha_opaque_off();   /* same reason as hook 8, layer 9 */
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
 }
@@ -563,15 +597,86 @@ static void __stdcall mark_selbox(void* ctx, void* unit)
 
 /* The waypoint star, and the only place the blend LUT is touched. Bracketing
    the call rather than the frame is what keeps our pointer out of a slot the
-   engine owns (see the note above). */
-static void __stdcall mark_tsprite(void* ctx, void* view, void* node,
-                                   void* pos, int flag)
+   engine owns (see the note above). Also the trace tap for capability bit 3;
+   its two call sites get separate stubs only so the diff can tell bit 3 from
+   bit 1's unconditional delegation to the same drawer (logged as bit 5). */
+static void tsprite(int bit, void* ctx, void* view, void* node,
+                    void* pos, int flag)
 {
     int mine = g_L[TAGPU_MARK_PREFOG].active;
+    tagpu_order_trace_drawer(bit, node, (const int*)pos, flag);
     if (mine) alpha_opaque_on();
     ((void (__stdcall *)(void*, void*, void*, void*, int))LEAF_TSPRITE_VA)
         (ctx, view, node, pos, flag);
     if (mine) alpha_opaque_off();
+}
+
+static void __stdcall mark_tsprite(void* ctx, void* view, void* node,
+                                   void* pos, int flag)
+{
+    tsprite(3, ctx, view, node, pos, flag);
+}
+
+static void __stdcall mark_tsprite_dot(void* ctx, void* view, void* node,
+                                       void* pos, int flag)
+{
+    tsprite(5, ctx, view, node, pos, flag);
+}
+
+/* THE ORDER MARKERS. The stub runs the snapshot on the game thread with the
+   driver's own arguments, and skips the engine's driver entirely when that
+   snapshot is complete and ours is the one drawing. `passive` and `trace`
+   both make the snapshot return 0, so the engine draws its own beside ours.
+
+   Skipping rather than capturing is the whole point: the engine's drawers clip
+   to the OFFSCREEN's own width and height, and the offscreen is screen-sized
+   while `vpwide` lets the projection reach far outside it, so at zoom < 1 a
+   captured marker layer stops dead at the surface bound and the outer ring is
+   bare (tagpu_order.h). */
+static void __stdcall mark_orders(void* ctx, void* view)
+{
+    /* The snapshot runs FIRST and unconditionally — `passive` and `trace` both
+       need it to publish (trace logs our node list beside the engine's) and
+       both make it return 0, which is how the engine keeps the draw. `g_orders`
+       is the separate question of whether the present thread has actually taken
+       the markers over yet; until it has, the engine draws them. */
+    if (tagpu_order_snapshot(ctx, view) && g_orders) return;
+    ((void (__stdcall *)(void*, void*))PASS_ORDERS_VA)(ctx, view);
+}
+
+/* The three remaining leaf call sites inside the walker. They exist for the
+   trace and nothing else; with `order.on=trace` off, each is one compare and a
+   call through. */
+static void __stdcall mark_dbuild(void* ctx, void* view, void* node,
+                                  void* pos, int flag)
+{
+    tagpu_order_trace_drawer(0, node, (const int*)pos, flag);
+    ((void (__stdcall *)(void*, void*, void*, void*, int))LEAF_DBUILD_VA)
+        (ctx, view, node, pos, flag);
+}
+
+static void __stdcall mark_ddots(void* ctx, void* view, void* node,
+                                 void* pos, int flag)
+{
+    tagpu_order_trace_drawer(1, node, (const int*)pos, flag);
+    ((void (__stdcall *)(void*, void*, void*, void*, int))LEAF_DDOTS_VA)
+        (ctx, view, node, pos, flag);
+}
+
+static void __stdcall mark_dcirc(void* ctx, void* view, void* node,
+                                 void* pos, int flag)
+{
+    tagpu_order_trace_drawer(2, node, (const int*)pos, flag);
+    ((void (__stdcall *)(void*, void*, void*, void*, int))LEAF_DCIRC_VA)
+        (ctx, view, node, pos, flag);
+}
+
+static void __stdcall mark_drange(void* ctx, void* view, void* node,
+                                  void* pos, int flag)
+{
+    tagpu_order_trace_drawer(4, node, (const int*)pos, flag);
+    ((void (__stdcall *)(void*, void*, void*, void*, int))LEAF_DRANGE_VA)
+        (ctx, view, node, pos, flag);
 }
 
 /* ---- install ---------------------------------------------------------- */
@@ -610,10 +715,15 @@ void tagpu_markown_init(void)
         !site_is(SITE_SELBOX2_VA, LEAF_SELBOX_VA)  ||
         !site_is(SITE_TSPRITE1_VA, LEAF_TSPRITE_VA) ||
         !site_is(SITE_TSPRITE2_VA, LEAF_TSPRITE_VA) ||
+        !site_is(SITE_ORDERS_VA,  PASS_ORDERS_VA)  ||
+        !site_is(SITE_DBUILD_VA,  LEAF_DBUILD_VA)  ||
+        !site_is(SITE_DDOTS_VA,   LEAF_DDOTS_VA)   ||
+        !site_is(SITE_DCIRC_VA,   LEAF_DCIRC_VA)   ||
+        !site_is(SITE_DRANGE_VA,  LEAF_DRANGE_VA)  ||
         memcmp((void*)LEAF_BARS_VA, BARS_STOLEN, 5) != 0) {
         flog("markown: NOT armed — engine bytes differ at one of "
-             "0x4699EB/0x469B8A/0x469BD7/0x469D2C/0x469EC5/0x469F1E/0x46A430/"
-             "0x439516/0x439C7D");
+             "0x4699EB/0x469B8A/0x469BD7/0x469BFC/0x469D2C/0x469EC5/0x469F1E/"
+             "0x46A430/0x439516/0x439BAC/0x439BF2/0x439C37/0x439C7D/0x439CBE");
         return;
     }
 
@@ -625,16 +735,31 @@ void tagpu_markown_init(void)
     ok &= redirect(SITE_TRANSP2_VA, (void*)mark_transp);
     ok &= redirect(SITE_SELBOX1_VA, (void*)mark_selbox);
     ok &= redirect(SITE_SELBOX2_VA, (void*)mark_selbox);
-    ok &= redirect(SITE_TSPRITE1_VA, (void*)mark_tsprite);
+    ok &= redirect(SITE_TSPRITE1_VA, (void*)mark_tsprite_dot);
     ok &= redirect(SITE_TSPRITE2_VA, (void*)mark_tsprite);
+    ok &= redirect(SITE_ORDERS_VA,  (void*)mark_orders);
+    ok &= redirect(SITE_DBUILD_VA,  (void*)mark_dbuild);
+    ok &= redirect(SITE_DDOTS_VA,   (void*)mark_ddots);
+    ok &= redirect(SITE_DCIRC_VA,   (void*)mark_dcirc);
+    ok &= redirect(SITE_DRANGE_VA,  (void*)mark_drange);
     ok &= tagpu_detour_leaf(LEAF_BARS_VA, BARS_STOLEN, 5,
                             &g_markown_skipBars, 0x10);
     g_installed = ok;
     _snprintf(b, sizeof b,
-        "markown: %s (hook8/hook9/transp x2/selbox x2/tsprite x2 redirected, "
-        "bars@0x46A430 detoured; all follow tagpu_mark.on)",
+        "markown: %s (hook8/hook9/transp x2/selbox x2/tsprite x2/orders/"
+        "drawers x4 redirected, bars@0x46A430 detoured; all follow "
+        "tagpu_mark.on and tagpu_order.on)",
         ok ? "ARMED" : "PARTIAL — see above");
     flog(b);
+}
+
+void tagpu_markown_set_orders(int ours)
+{
+    int v = ours && g_installed;
+    if (v == g_orders) return;
+    g_orders = v;
+    flog(v ? "markown: engine order markers SKIPPED (ours live)"
+           : "markown: engine order markers restored");
 }
 
 void tagpu_markown_set_bars(int ours)
@@ -700,20 +825,22 @@ void tagpu_markown_flush(unsigned int frame_counter)
     /* if the native pass stops running (overlay off, GL failure, a frame path
        that never reaches it) the engine's markers come back rather than the
        health bars and order lines simply vanishing */
-    if ((g_capture || g_markown_skipBars || g_selbox || g_cursor) &&
+    if ((g_capture || g_markown_skipBars || g_selbox || g_cursor || g_orders) &&
         frame_counter - g_beat > 90) {
         flog("markown: marker pass silent for 90 frames");
         tagpu_markown_set_capture(0);
         tagpu_markown_set_bars(0);
         tagpu_markown_set_selbox(0);
         tagpu_markown_set_cursor(0);
+        tagpu_markown_set_orders(0);
     }
     if (frame_counter - g_last >= 300) {
-        char b[96];
+        char b[128];
         g_last = frame_counter;
         _snprintf(b, sizeof b,
-                  "MARKOWN capture=%d bars-skipped=%u selbox=%d cursor=%d",
-                  g_capture, (unsigned)g_markown_skipBars, g_selbox, g_cursor);
+                  "MARKOWN capture=%d bars-skipped=%u selbox=%d cursor=%d orders=%d",
+                  g_capture, (unsigned)g_markown_skipBars, g_selbox, g_cursor,
+                  g_orders);
         flog(b);
     }
 }

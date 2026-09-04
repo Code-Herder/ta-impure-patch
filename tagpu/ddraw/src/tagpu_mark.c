@@ -71,6 +71,7 @@
 #include "opengl_utils.h"
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
+#include "tagpu_order.h"
 #include "tagpu_glsl.h"
 
 /* ---- engine layout ---- */
@@ -117,6 +118,13 @@
 #define MAXCURSV     (8 * QUADV)             /* two rects, four edges each    */
 #define BARBASE      (CURSBASE + MAXCURSV)   /* and the bars after those      */
 #define MAXMV        (BARBASE + MAXBAR * 2 * QUADV)
+/* The order-marker buckets (tagpu_order.c). Separate arrays rather than more
+   regions of s_verts: the bar region's length is decided at gather time, so
+   anything at a FIXED offset behind it would have to be uploaded across the
+   whole unused bar budget every frame. Uploaded contiguously after the
+   triangles instead, with the draw offsets computed at render. */
+#define MAXORDT      12000                   /* order triangle verts (dots)  */
+#define MAXORDL      12000                   /* order line verts (2 per line)*/
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
@@ -130,10 +138,12 @@ typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum,GLint,GLsizei);
 typedef void (APIENTRY *PFN_UNIFORM1F)(GLint,GLfloat);
 typedef void (APIENTRY *PFN_UNIFORM2F)(GLint,GLfloat,GLfloat);
 typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
+typedef void (APIENTRY *PFN_LINEWIDTH)(GLfloat);
 static PFN_DRAWARRAYS x_glDrawArrays;
 static PFN_UNIFORM1F  x_glUniform1f;
 static PFN_UNIFORM2F  x_glUniform2f;
 static PFN_ACTIVETEX  x_glActiveTexture;
+static PFN_LINEWIDTH  x_glLineWidth;
 
 static void* getgl(const char* n)
 {
@@ -164,6 +174,10 @@ int tagpu_mark_armed(unsigned frame_counter)
         tagpu_markown_set_bars(0);
         tagpu_markown_set_selbox(0);
         tagpu_markown_set_cursor(0);
+        /* the order markers draw in THIS pass's buckets, so a disarmed mark
+           pass has to hand them back at once rather than wait 90 frames for
+           the watchdog to notice nothing is being drawn */
+        tagpu_markown_set_orders(0);
         if (was > 0) flog("mark: disarmed");
         return 0;
     }
@@ -224,9 +238,12 @@ static int    s_texW[TAGPU_MARK_NLAYER], s_texH[TAGPU_MARK_NLAYER];
 static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uKey;
 
 static float s_verts[MAXMV * MVST];
+static float s_ordt[MAXORDT * MVST];   /* order markers: filled triangles     */
+static float s_ordl[MAXORDL * MVST];   /* order markers: GL_LINES             */
 static int   s_nbar;                   /* bars gathered (2 quads each)        */
 static int   s_cBar;                   /* counted, whether emitted or not     */
 static int   s_ncurs;                  /* build cursor / band box verts       */
+static int   s_nordt, s_nordl;         /* order marker verts, this frame      */
 
 static const char* VS =
     "#version 330 core\n"
@@ -295,6 +312,7 @@ static void init_gl(void)
     x_glUniform1f  = (PFN_UNIFORM1F) getgl("glUniform1f");
     x_glUniform2f  = (PFN_UNIFORM2F) getgl("glUniform2f");
     x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
+    x_glLineWidth  = (PFN_LINEWIDTH) getgl("glLineWidth");
     if (!x_glDrawArrays || !x_glUniform1f || !x_glUniform2f || !x_glActiveTexture) {
         flog("mark: missing GL proc"); s_state = 2; return;
     }
@@ -354,6 +372,39 @@ static void put_vert(int i, float x, float y, float u, float v, float wx, float 
 {
     float* o = s_verts + (size_t)i * MVST;
     o[0] = x; o[1] = y; o[2] = u; o[3] = v; o[4] = wx; o[5] = wz; o[6] = col;
+}
+
+/* the order buckets' own writer: same vertex, a different array */
+static void put_ord(float* base, int i, float x, float y, float wx, float wz,
+                    float col)
+{
+    float* o = base + (size_t)i * MVST;
+    /* u < 0 is the flat path — the vertex carries a palette index rather than
+       a texel, the convention the health bars and the effects lines share */
+    o[0] = x; o[1] = y; o[2] = -1.0f; o[3] = -1.0f; o[4] = wx; o[5] = wz; o[6] = col;
+}
+
+int tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
+                         int colidx, float wx, float wz)
+{
+    float c = (float)colidx / 255.0f;
+    if (s_nordl + 2 > MAXORDL) return 0;
+    put_ord(s_ordl, s_nordl + 0, x0, y0, wx, wz, c);
+    put_ord(s_ordl, s_nordl + 1, x1, y1, wx, wz, c);
+    s_nordl += 2;
+    return 1;
+}
+
+int tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
+                        float x2, float y2, int colidx, float wx, float wz)
+{
+    float c = (float)colidx / 255.0f;
+    if (s_nordt + 3 > MAXORDT) return 0;
+    put_ord(s_ordt, s_nordt + 0, x0, y0, wx, wz, c);
+    put_ord(s_ordt, s_nordt + 1, x1, y1, wx, wz, c);
+    put_ord(s_ordt, s_nordt + 2, x2, y2, wx, wz, c);
+    s_nordt += 3;
+    return 1;
 }
 
 /* one DrawBar rect, edges INCLUSIVE — so the quad's far edge is +1 */
@@ -456,10 +507,14 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     const unsigned char* gui;
     int watched, nv = BARBASE;
 
-    s_nbar = 0; s_cBar = 0;
-    /* first, and outside every gate below: the cursor is not a health bar and
-       neither `damagebars` nor `nobars` has anything to say about it */
+    s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0;
+    /* first, and outside every gate below: neither the cursor nor the order
+       markers are health bars, and neither `damagebars` nor `nobars` has
+       anything to say about them */
     gather_cursor(v);
+    if (s_armed == 1 && !s_passive) tagpu_order_gather(v);
+    else if (s_passive) tagpu_markown_set_orders(0);
+    tagpu_order_frame_done(v);
     if (s_armed != 1 || !s_bars) return 0;
     /* The bar skip is a byte in the engine's code path; without the patch the
        engine is still drawing bars itself and ours would be a second set at a
@@ -597,7 +652,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         if (have[i]) have[i] = upload_layer(i, &lay[i]);
         if (have[i]) layer_quad(v, i * QUADV, &lay[i]);
     }
-    if (!have[0] && !have[1] && s_nbar == 0 && s_ncurs == 0) return;
+    if (!have[0] && !have[1] && s_nbar == 0 && s_ncurs == 0 &&
+        s_nordt == 0 && s_nordl == 0) return;
 
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
@@ -614,8 +670,19 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     total = BARBASE + s_nbar;
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)total * MVST * 4, s_verts,
+    /* one orphan, then each bucket at its own offset: the order buckets live
+       in their own arrays (see MAXORDT) and are packed in behind the
+       triangles, so their first vertex moves with the bar count */
+    glBufferData(GL_ARRAY_BUFFER,
+                 (GLsizeiptr)(total + s_nordt + s_nordl) * MVST * 4, NULL,
                  GL_STREAM_DRAW);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)total * MVST * 4, s_verts);
+    if (s_nordt)
+        glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)total * MVST * 4,
+                        (GLsizeiptr)s_nordt * MVST * 4, s_ordt);
+    if (s_nordl)
+        glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)(total + s_nordt) * MVST * 4,
+                        (GLsizeiptr)s_nordl * MVST * 4, s_ordl);
 
     /* the engine's own order inside the block: order markers first, then the
        health bars over them (0x469BFC before 0x469CB9), and the build cursor
@@ -624,6 +691,18 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         glUniform1i(s_uFog, v->fogMode & 1);
         glBindTexture(GL_TEXTURE_2D, s_tex[TAGPU_MARK_PREFOG]);
         x_glDrawArrays(GL_TRIANGLES, TAGPU_MARK_PREFOG * QUADV, QUADV);
+    }
+    if (s_nordt || s_nordl) {
+        /* one SCREEN pixel of line, which is `ss` device pixels of the
+           supersampled target — the same rule the effects pass uses, and what
+           keeps a native-res marker a hairline at 4x instead of a 1997 pixel
+           blown up to sixteen */
+        glUniform1i(s_uFog, v->fogMode & 1);
+        if (s_nordt) x_glDrawArrays(GL_TRIANGLES, total, s_nordt);
+        if (s_nordl) {
+            if (x_glLineWidth) x_glLineWidth((GLfloat)(v->ss > 0 ? v->ss : 1));
+            x_glDrawArrays(GL_LINES, total + s_nordt, s_nordl);
+        }
     }
     if (s_nbar) {
         glUniform1i(s_uFog, v->fogMode & 1);
@@ -645,12 +724,12 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     if (s_log) {
         static unsigned last = 0;
         if (v->frame_counter - last >= 120) {
-            char b[224];
+            char b[288];
             last = v->frame_counter;
             _snprintf(b, sizeof b,
-                "mark: bars=%d cursor=%d prefog=%s postfog=%s key=%d "
+                "mark: bars=%d cursor=%d ordtri=%d ordline=%d prefog=%s postfog=%s key=%d "
                 "vp=(%d,%d %dx%d) zoom=%.2f%s",
-                s_cBar, s_ncurs / QUADV,
+                s_cBar, s_ncurs / QUADV, s_nordt / 3, s_nordl / 2,
                 have[TAGPU_MARK_PREFOG] ? "captured" : "-",
                 have[TAGPU_MARK_POSTFOG] ? "captured" : "-",
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,

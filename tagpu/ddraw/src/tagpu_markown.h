@@ -116,6 +116,13 @@ void tagpu_markown_set_selbox(int ours);
    own pair of `DrawTranspRectangle` calls is skipped outright — not captured —
    because `tagpu_mark.c` re-draws both from the same globals */
 void tagpu_markown_set_cursor(int ours);
+/* the shift-held order markers: with this set the engine's own driver call at
+   `0x469BFC` is skipped, after our stub has snapshotted the order lists on the
+   game thread for tagpu_order.c to draw from. Same reason as the cursor — a
+   capture cannot reach past the offscreen's own bound, so at zoom < 1 the
+   engine's clipper throws the outer ring's markers away before we ever see
+   them (tagpu_order.h). */
+void tagpu_markown_set_orders(int ours);
 void tagpu_markown_beat(unsigned int frame_counter);   /* "we drew this frame" */
 int  tagpu_markown_installed(void);
 
