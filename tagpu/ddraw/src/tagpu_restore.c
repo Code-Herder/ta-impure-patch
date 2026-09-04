@@ -23,11 +23,12 @@
    THE PROVIDER. The DirectML flavour of the same 1.20.1 package (a superset:
    its DLL runs the CPU provider at the same speed) puts the model on the GPU,
    and try_dml() below takes it whenever the append succeeds. Standalone under
-   Wine 9 on an RTX 4070, batches of 64 as this module issues them: 0.094 ms
-   per 32x32 tile and 0.241 ms per 56x56 tile against 3.16 / 9.95 ms on four
-   CPU threads — 34x and 41x — and the two agree to 4.8e-7 (0.0001 of an 8-bit
-   level), so DirectML is running the same fp32 graph, not a half-precision
-   one. It needs vkd3d-proton for its D3D12; see try_dml().
+   Wine 9 on an RTX 4070, batches of 64 as this module issues them, over two
+   runs: 0.087-0.094 ms per 32x32 tile and 0.239-0.241 ms per 56x56 tile
+   against 3.16-3.19 / 9.95-10.08 ms on four CPU threads — 34-37x and 41-42x —
+   and the two agree to 4.8e-7 (0.0001 of an 8-bit level), so DirectML is
+   running the same fp32 graph, not a half-precision one. It needs
+   vkd3d-proton for its D3D12; see try_dml().
 
    THE MODEL. full.onnx: 12 3x3 convolutions, BatchNorm folded, output =
    input - net(input); the graph is Conv/Relu/Sub only, input "rgb" as

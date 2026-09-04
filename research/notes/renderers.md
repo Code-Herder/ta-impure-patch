@@ -92,7 +92,7 @@ model is in scope** (decided before the engine question was settled).
 | onnxruntime 1.29, Linux x64, 1 thread | 5.1 ms | 20 ms | the lab's own path |
 | **onnxruntime 1.20.1, Windows x86 DLL, under Wine 9.0, 1 thread / all** | **10.5 / 4.1 ms** | **42 / 11 ms** | 32-bit test exe, fresh prefix, Wine's built-in `msvcp140`/`vcruntime140`, nothing installed |
 | naive C loops (libonnx class), 1 thread | 286 ms | 1180 ms | `gcc -O2`, same shape; libonnx's `Conv` is plain loops, no SIMD, no threads |
-| **onnxruntime 1.20.1 x86 + DirectML, under Wine 9.0 on vkd3d-proton, RTX 4070** | **0.094 ms** | **0.24 ms at 56×56** | per tile in batches of 64, as the module issues them — the measured GPU path, below |
+| **onnxruntime 1.20.1 x86 + DirectML, under Wine 9.0 on vkd3d-proton, RTX 4070** | **0.087–0.094 ms** | **0.239–0.241 ms at 56×56** | per tile in batches of 64, as the module issues them — the measured GPU path, below |
 | GLSL passes on the GPU (estimate) | ≪ 1 ms | ≪ 1 ms | ~750 k FLOPs per texel |
 
 So at load, batched by frame size and threaded, Two Continents' tiles are roughly 7–10 s
@@ -169,8 +169,9 @@ question the owner asked — why not the GPU — has three answers stacked on ea
 
 **What the GPU is worth, in the running game on Two Continents** **[MEASURED 2026-09-04]**:
 the same 5062 tiles in 80 batches take **589–662 ms on DirectML against 19.2 s on four CPU
-threads — 29–33×**; standalone the per-batch gap is 34× at 32×32 (0.094 vs 3.16 ms/tile) and
-41× at 56×56 (0.237 vs 9.95). The GPU's cost is a **one-time ~1.9 s session build** (against
+threads — 29–33×**; standalone the per-batch gap over two runs is **34–37×** at 32×32
+(0.087–0.094 against 3.16–3.19 ms/tile) and **41–42×** at the wrap-padded 56×56 (0.239–0.241
+against 9.95–10.08). The GPU's cost is a **one-time ~1.9 s session build** (against
 21 ms on the CPU) on the worker thread — which made a *cached* map cost more to reach the
 runtime than to read its atlas, so the job now **reads the cache before it loads any runtime**
 and a restored map never builds a session at all. The pre-warm idea in §4 is worth more, not

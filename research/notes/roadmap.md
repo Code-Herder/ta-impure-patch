@@ -97,8 +97,8 @@ Preloading them by full path from our own thread is not a substitute — Wine ke
 path. On real Windows the system D3D12 hosts DirectML directly.
 
 **Measured, Two Continents, in the running game:** 5062 tiles in 80 batches, **589–662 ms on
-DirectML against 19,211 ms on four CPU threads — 29–33×**; standalone the per-batch gap is 34×
-at 32×32 and 41× at the wrap-padded 56×56. It costs a one-time **1.9 s session build** (21 ms
+DirectML against 19,211 ms on four CPU threads — 29–33×**; standalone the per-batch gap is
+34–37× at 32×32 and 41–42× at the wrap-padded 56×56. It costs a one-time **1.9 s session build** (21 ms
 on the CPU) — which made a cached map cost more to reach the runtime than to read its atlas,
 so the job now reads the cache *before* loading any runtime and a restored map builds no
 session at all. The pre-warm idea is worth more, not less. **Correctness**: restoring the map
