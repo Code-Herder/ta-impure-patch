@@ -279,8 +279,10 @@ static void nano_stage(int p, float b1, float b2, float* t, float c[3])
    whose `Nanoframe` (+0x104, the fraction of the build REMAINING) is 0.
 
    Deliberately does NOT test tagpu_nano.off: each caller reads that flag at
-   its own cadence (the native pass once per arm poll, not once per unit per
-   frame). build-state.md 0x458DD0 / 0x458D30. */
+   its own cadence (the native pass once per arm poll; the composite path only
+   after this function has said the unit is a nanoframe at all, so the stat
+   costs nothing on the units that are not). build-state.md 0x458DD0 /
+   0x458D30. */
 int tagpu_r3d_nano_state(const char* unit, float* t, float c[3], float* wire)
 {
     if (!ptr_ok(unit) || IsBadReadPtr(unit, 0x108)) return 0;
@@ -691,8 +693,11 @@ int tagpu_render3do(const TAGPU_FRAME* f, const char* unit, const char* obj3do,
        our written pixels — live-verified — so we own the look). */
     float nanoT = 0.0f, nanoC[3] = { -1.0f, -1.0f, -1.0f }, blue2f = 0.0f;
     int   nlv = 0;
-    int   nanoOn = GetFileAttributesA("tagpu_nano.off") == INVALID_FILE_ATTRIBUTES &&
-                   tagpu_r3d_nano_state(unit, &nanoT, nanoC, &blue2f);
+    /* nano_state FIRST: it early-outs on Nanoframe == 0, which is nearly every
+       unit, and the lever is a disk stat. Testing the file first ran that stat
+       once per unit per frame for the whole roster writeback_paint walks. */
+    int   nanoOn = tagpu_r3d_nano_state(unit, &nanoT, nanoC, &blue2f) &&
+                   GetFileAttributesA("tagpu_nano.off") == INVALID_FILE_ATTRIBUTES;
     r3d_diag(obj3do, nparts);
 
     if (s_diff_state == 0 &&

@@ -45,7 +45,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | What the engine used to draw | State | Owned how | Verified how |
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
-| Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key the way the engine's z-merge does | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab |
+| Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
@@ -97,9 +97,7 @@ a solid fill, then the texture.
 **The fix owns it.** Ownership no longer stops at `Nanoframe > 0`; the recolour is three per-unit
 uniforms in the unit shader (engine `0x458D30` semantics: erase / band / fill by the composite
 depth byte) and the wireframe (`0x458FA0`) a second line range per unit, biased one notch nearer
-than the skin it traces. An **erased fragment is emitted transparent rather than discarded**, so
-it changes no pixel and still writes depth — which is what hides the wireframe's back edges, the
-job the engine's own height plane does. The stage table and the two oscillators moved into one
+than the skin it traces. An **erased fragment discards** — see the gap below. The stage table and the two oscillators moved into one
 shared function, `tagpu_r3d_nano_state()`, which the composite path calls too. A third `owndraw`
 detour, on `0x458DD0` itself (6 stolen bytes, `xor eax,eax; ret 8` — the callee's own early-out),
 stops the engine stamping its copy at the 1× position.
@@ -110,13 +108,27 @@ sorts it at all: the blit's cargo loop z-merges the cargo composite INTO the fac
 per pixel (`0x4B90A0`, the two height planes offset by the position delta), while a separate
 sprite lands on its own tile row — measured one 16-unit row apart on an ARM lab building a
 Hammer, four whole depth keys behind it. The gather now walks `unit+0x8A`/`+0x8E` and hands
-every chain member the parent's row and band.
+every chain member the parent's row and band. That **approximates** the merge rather than porting
+it: `0x4B90A0` compares a *height* biased by the world height delta, our `md` is model-local, and
+the two agree only while parent and cargo are level — which every factory pad is.
 
 **And a unit under construction casts no shadow**, which ours had to learn or the erased body
 showed our slant projection through as a black silhouette. Measured against the stock renderer on
 one solar at one spot with only the build state varying: over the pixels the completed unit
 darkens by half, the lobe reads 1.00 of bare terrain at 25 % built, 0.87 at 89 %, 0.70 at 95 % and
 0.48 complete. We draw none of it while `Nanoframe != 0` — right to 89 %, conservative after.
+
+**What this gate did not close.** The **wireframe's back edges show through the unbuilt part of
+the model**, where the engine's do not. The engine hides them against the composite's own height
+plane, which keeps the whole model's heights even where the colour was erased; that plane is per
+sprite, ours is the one shared GL depth buffer. Writing depth from an erased fragment bought the
+hidden-line removal and cost an invisible occluder — nearly the whole model for the first fifth
+of a build, taking a factory's own far wall against the unit on its pad, plus the nanolathe
+spray, later-indexed units and hires bodies. The erased fragment now discards; getting the back
+edges back needs a stencil pass per nanoframe. **The new look has not yet been confirmed by eye
+in a running game.** Still open from before: the mechanism by which the engine drops a
+nanoframe's shadow, the last few per cent where it has something and we draw nothing, and
+replacement (glTF) meshes under construction, which draw unstaged.
 
 **Verified live at 1024×768** against an unarmed control instance on the same scenario: the
 5/25/50/75/95/100 % ladder reproduces the engine's own progression and its pulse; a

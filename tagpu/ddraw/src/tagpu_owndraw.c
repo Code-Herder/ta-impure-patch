@@ -237,7 +237,10 @@ static int install_buildfx(void)
     *p++ = 0x33; *p++ = 0xC0;                               /* skip: xor eax,eax */
     *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;                  /*       ret 8       */
 
-    if (!VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    if (!VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &old)) {
+        VirtualFree(s, 0, MEM_RELEASE);   /* nothing points at it yet */
+        return 0;
+    }
     t[0] = 0xE9;
     rel = (int32_t)((unsigned int)s - (BUILDFX_VA + 5));
     memcpy(t + 1, &rel, 4);
@@ -245,6 +248,15 @@ static int install_buildfx(void)
     FlushInstructionCache(GetCurrentProcess(), t, 5);
     return 1;
 }
+
+/* Whether the 0x458DD0 detour is actually in place. The native pass may only
+   claim a unit under construction while it is: without the detour the engine
+   still stamps its own recolour and wireframe onto the composite, at the
+   unzoomed 1x projection, which is precisely the drift this pass exists to
+   remove. install_buildfx() can fail (a build whose bytes do not match, or a
+   VirtualAlloc/VirtualProtect refusal) long after the two rasteriser detours
+   went in, so "owndraw is armed" is not the same question. */
+int tagpu_owndraw_buildfx_armed(void) { return g_buildfx; }
 
 /* Build one classify-then-skip stub and detour `va` onto it. */
 static int install_one(unsigned int va, unsigned int resume,

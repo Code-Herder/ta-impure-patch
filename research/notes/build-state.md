@@ -504,18 +504,36 @@ commander or factory building it. Reported from play, reproduced on a scripted
 - **The formulas live once.** `tagpu_r3d_nano_state(unit, &t, c, &wire)` in
   `tagpu_render3do.c` is §3's stage table plus the two oscillators; the composite
   path (`tagpu_render3do`) and the native pass both call it. `tagpu_nano.off`
-  still disables the staging, read once per arm poll rather than per unit.
+  still disables the staging: the native pass reads it once per arm poll, the
+  composite path only after `nano_state` has said the unit is a nanoframe at
+  all. With the lever set, a nanoframe goes back to the engine entirely —
+  `tagpu_native_owns_unit()` declines it — so the lever stays a real A/B
+  instead of showing a finished-looking unit with the engine's copy suppressed.
 - **The recolour** is three per-unit uniforms in the native fragment shader
   (`uNanoOn`, `uNanoT`, `uNanoC`), classifying by `vVY + 50` exactly as §1.2.
-  An **erased fragment is emitted transparent (`vec4(0.0)`) rather than
-  discarded**, because the FBO is premultiplied so it changes no pixel while it
-  still **writes depth** — which is what hides the wireframe's back edges, the
-  job the engine's own height plane does (§1: erased pixels keep their height).
+  An **erased fragment discards**, and that is a deliberate divergence — see
+  the gap below.
 - **The wireframe** is a second line range per unit (`emit_wire`), every face of
   every visible piece, in the second oscillator's colour, biased 0.15 depth-key
-  units nearer than the skin it traces. It is not decoration: at the top of a
-  build the recolour erases the whole model and the skeleton is the only thing
-  on screen.
+  units nearer than the skin it traces (1.8 + 0.15 = 1.95 against the 2.0
+  half-gap between row keys — inside it, with 0.05 to spare). It is not
+  decoration: at the top of a build the recolour erases the whole model and the
+  skeleton is the only thing on screen.
+- **GAP — the wireframe's back edges show through the unbuilt part, and the
+  engine's do not.** The engine hides them by testing each outline pixel
+  against the composite's own height plane, which keeps the whole model's
+  heights even where the colour was erased (§1). That plane is **per sprite**;
+  ours is the one shared GL depth buffer. An erased fragment that wrote depth
+  would hide the back edges correctly *and* become an invisible occluder for
+  everything drawn after it — and since `nano_stage` erases all but a thin band
+  at `p >= 201`, that occluder is nearly the whole model for the first fifth of
+  every build. It took a factory's own far wall against the unit on its pad
+  (the cargo is given the parent's `encBase`, so the two sort by `md` alone),
+  and the nanolathe spray, later-indexed units and hires bodies with it. So the
+  erased fragment discards and the extra edges are accepted. Closing this
+  properly needs per-sprite isolation — a stencil pass around each nanoframe —
+  which this landing did not attempt. **Not yet confirmed by eye in a running
+  game.**
 - **The engine's own copy had to be stopped.** Wiping the composite does not do
   it — `0x458DD0` runs on a scratch COPY every frame, so with the rasterise
   skipped it recoloured nothing and stamped its **wireframe alone**, at the 1×
@@ -533,8 +551,14 @@ commander or factory building it. Reported from play, reproduced on a scripted
   the lab", reported from play against the first cut of this gate). The gather
   now walks `unit+0x8A` / `+0x8E` and gives every chain member the parent's row
   and band, mirroring the engine's own skip on `state & 0x20000`, so the two
-  models sort against each other by the same intra-model view depth the engine's
-  height compare is doing.
+  models sort against each other by `md`, our intra-model view depth. **That is
+  an approximation of the merge, not a port of it.** `0x4B90A0` compares
+  `dstDepth` against `srcDepth + HIWORD(dy)`: its depth plane is a *height*,
+  biased by the world height delta between the two origins, and it samples at
+  the projected offset. `md = (2y − z)/256` is model-local and carries neither.
+  They agree while parent and cargo are at the same height — every factory pad —
+  and diverge for a cargo whose origin sits above or below its parent, which
+  this landing did not cover.
 - **A unit under construction casts no shadow — nearly to the end.** Ours had to
   drop it or the erased body showed our slant projection through as a black
   silhouette. Measured against the stock renderer on ONE solar at one spot, only

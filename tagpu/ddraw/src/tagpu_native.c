@@ -350,15 +350,26 @@ static const char* FS =
        (build-state.md): classify the fragment by its composite DEPTH byte —
        the model height plus 0x32 — against the threshold that sweeps with the
        build, then erase it, keep the texture, or paint one of the two animated
-       blues. An ERASED fragment is emitted fully transparent rather than
-       discarded so that it still writes DEPTH: the engine keeps the whole
-       model's heights in the depth plane whatever the fill has reached, and
-       the wireframe pass is tested against them. */
+       blues. An ERASED fragment is DISCARDED, and that is a deliberate
+       divergence from the engine, which keeps the whole model's heights in
+       the depth plane whatever the fill has reached and tests the wireframe
+       against them, so its back edges do not show. We cannot have both: the
+       engine's depth plane is PER SPRITE, ours is the one shared GL depth
+       buffer, so an erased fragment that writes depth is an invisible
+       occluder for everything drawn after it -- and at p >= 201, the first
+       fifth of every build, nano_stage erases all but a thin band, so that
+       occluder is very nearly the whole model. It cost a factory its own far
+       wall against the unit on its pad (the cargo is given the parent's
+       encBase, so the two sort by md alone), and it culled the nanolathe
+       spray, later-indexed units and hires bodies the same way. Losing the
+       wireframe's hidden-line removal is the smaller of the two errors;
+       getting it back needs per-sprite isolation (a stencil pass), which this
+       landing did not do. */
     "  if (uNanoOn == 1) {\n"
     "    float nd = vVY + 50.0;\n"
     "    float nc = (nd < uNanoT - 4.0) ? uNanoC.z\n"
     "             : (nd < uNanoT)       ? uNanoC.y : uNanoC.x;\n"
-    "    if (nc < -1.5) { frag = vec4(0.0); return; }\n"
+    "    if (nc < -1.5) discard;\n"
     "    if (nc > -0.5) idx = nc;\n"
     "  }\n"
     "  int pi = int(idx*255.0+0.5);\n"
@@ -706,7 +717,23 @@ int tagpu_native_owns_unit(const char* u)
     if (s_armed != 1) return 0;
     const char* def = *(const char* const*)(u + U_TYPE);
     if (!ptr_ok(def)) return 0;
-    return type_match(def);
+    if (!type_match(def)) return 0;
+    /* ...but a unit UNDER CONSTRUCTION only while we can actually take the
+       whole of it over. Claiming one means the engine's blit-time build-state
+       effect (0x458DD0) must be detoured away and we must stage the look
+       ourselves; if either half is missing the engine stamps its recolour and
+       wireframe at the unzoomed 1x projection and the two fight. Failing back
+       to "the engine owns nanoframes" is the pre-G13l behaviour: the scaffold
+       drifts at zoom != 1, which is a known bug, where a half-armed state is
+       an unknown one. Costs one float read per candidate and only when the
+       detour is absent or the tagpu_nano.off lever is set. */
+    {
+        extern int tagpu_owndraw_buildfx_armed(void);
+        if ((!s_nano || !tagpu_owndraw_buildfx_armed()) &&
+            !IsBadReadPtr(u, 0x108) &&
+            *(const float*)(u + U_NANO) > 0.0f) return 0;
+    }
+    return 1;
 }
 
 int tagpu_native_owns_obj(unsigned int obj3do)
@@ -939,12 +966,16 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
    only thing on screen, so it is not decoration and cannot be left out.
 
    The engine depth-tests each outline pixel against the composite's own height
-   plane, which is why its back edges do not show through. Here the model's own
-   faces are already in the GL depth buffer (an erased fragment still writes
-   depth, see the FS), so the outline is emitted one notch NEARER than the
-   surface it traces and the depth buffer does the same job. The bias stays far
-   inside the +-2 gap between row keys, so nothing changes about how the unit
-   sorts against terrain, features or other units. */
+   plane, which is why its back edges do not show through. We get that only
+   where the model's SOLID fragments are in the GL depth buffer: an erased one
+   discards (see the FS for why), so through the not-yet-built part of the
+   model every edge shows, front and back -- the known divergence from the
+   engine's look, and the price of not making the erased silhouette an
+   invisible occluder. The outline is emitted one notch NEARER than the
+   surface it traces so it wins against the solid part. md is clamped to
+   +-1.8 and the bias is 0.15, so an outline reaches 1.95 against the 2.0
+   half-gap between row keys: inside it, but with 0.05 to spare, not "far".
+   Anything that widens either number starts merging adjacent rows. */
 static int emit_wire(const char* o3, int nv, float ax, float ay,
                      float wx0, float wz0, float encBase, int owner, float wire)
 {
@@ -972,9 +1003,17 @@ static int emit_wire(const char* o3, int nv, float ax, float ay,
             const unsigned short* idx = *(const unsigned short* const*)(fa + F_INDICES);
             if (fvc < 3 || fvc > 32 || !ptr_ok(idx)) continue;
             if (IsBadReadPtr(idx, (SIZE_T)fvc * 2)) continue;
-            /* a face the engine paints nothing for gets no outline either */
-            if (!tagpu_r3d_face_texframe(fa, owner) &&
-                tagpu_r3d_face_colour(fa) < 0) continue;
+            /* a face the engine paints nothing for gets no outline either --
+               the same test emit_node applies, atlas lookup included: a
+               texframe that is not IN the atlas falls back to the face
+               colour there, so a face with neither would be outlined with
+               no surface behind it (and no depth to hide its far edge) */
+            {
+                float wuv[4], wck = -1.0f;
+                const char* wtg = tagpu_r3d_face_texframe(fa, owner);
+                if (!(wtg && tagpu_r3d_atlas_uv(wtg, wuv, &wck)) &&
+                    tagpu_r3d_face_colour(fa) < 0) continue;
+            }
             int e;
             for (e = 0; e < fvc; e++) {
                 unsigned short pa = idx[e], pb = idx[(e + 1) % fvc];
@@ -1720,8 +1759,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        apart, so four whole depth keys behind the lab, which then covered it at
        every pixel it filled (reported from play: "the unit is being built
        UNDER the lab"). Giving the cargo the parent's row and band leaves the
-       two models to sort against each other by the same intra-model view depth
-       the engine's height compare is doing. The engine's own chain skip
+       two models to sort against each other by md, our intra-model view depth.
+       That is an APPROXIMATION of the merge, not a port of it: 0x4B90A0
+       compares dstDepth against srcDepth + HIWORD(dy) -- the engine's depth
+       plane is a HEIGHT, biased by the world height delta between the two
+       origins -- while md = (2y - z)/256 is model-local and carries neither
+       that bias nor the positional term. The two agree while parent and cargo
+       sit at the same height, which is every factory pad; a cargo whose origin
+       is offset in height sorts here as though it were level with its parent.
+       The engine's own chain skip
        (0x459657, state & 0x20000) is mirrored so a member it does not draw
        does not get moved either. */
     for (int a = 0; a < nu; a++) {

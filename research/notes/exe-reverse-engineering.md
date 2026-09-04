@@ -519,8 +519,11 @@ The whole nanoframe look — the height-threshold recolour `0x458D30` and the wi
 Our detour (`tagpu_owndraw.c`, the third one) replays those six bytes after `popad` — at the
 entry `esp`, so the esp-relative `mov` reads what it always read — and takes `xor eax,0; ret 8`
 for units the native pass owns, which is the callee's own "did nothing" return. Call sites:
-`0x4589C0` tail-calls it for the unit's own scratch, `0x459686` for each cargo composite, so a
-factory's unit-in-progress is covered by the same skip.
+`0x458D0E` (the last `call` in `0x4589C0`, followed by that function's own
+`pop edi/esi/ebp/ebx; add esp,0x68; ret 8` — a plain call, not a tail call) for the unit's own
+scratch, and `0x459686` for each cargo composite, so a factory's unit-in-progress is covered by
+the same skip. Both call sites discard `eax`, so the stub's `xor eax,eax` cannot be observed even
+where the real function would have returned 1 (`0x458F88`).
 
 The resume address is **`0x458DD6`**; the six stolen bytes end exactly on an instruction
 boundary there.
@@ -575,7 +578,11 @@ the colour and sets `dstDepth = srcDepth + dbias`.
 which put it on its own tile row — an ARM lab at world y 1072 building a Hammer at 1068 is one
 16-unit row apart, four whole depth keys behind the lab, which then covered it at every pixel.
 Matching the engine means giving every chain member the parent's row and band and letting the
-two models sort against each other by view depth, which is what the height compare above does.
+two models sort against each other by `md`, our intra-model view depth. That **approximates** the
+merge rather than porting it: `0x4B90A0` compares a *height* biased by `HIWORD(dy)` and samples
+at the projected offset, while `md = (2y − z)/256` is model-local and carries neither term. They
+agree while parent and cargo are level, which is every factory pad, and diverge for a cargo whose
+origin sits above or below its parent.
 
 ## The cursor chain — mapped by us
 
