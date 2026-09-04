@@ -259,6 +259,15 @@ The page renders into an FBO exactly as tagpu does and flips only in the final c
 canvas. Do not "fix" the flip in the vertex shader: it would silently invert every screen-space
 rule the shaders carry.
 
+**The canvas lands on device pixels 1:1, or at an integer multiple.** `image-rendering:
+pixelated` through a non-integer `devicePixelRatio` duplicates every Nth row and column, and
+*which* ones shifts as the content pans — a shimmer on any fine texture that the game, drawing
+1:1, never shows. Measured 2026-09-03 at ratio 1.1 (display scaling or browser zoom): 1024
+backing px drawn onto 1126 device px, and the kbot lab's roof crawled on the page and not in the
+game. The page sizes the canvas to `GW·k/dpr` CSS px with `k = ⌊dpr⌋`, refits on resize, and
+scales pointer drags to canvas pixels so a pan is still a whole pixel; the status bar's `device`
+field shows the mapping. The headless shooter runs at ratio 1, so no baseline moved.
+
 ---
 
 ## Gaps this design does not close  [state them, don't paper over them]

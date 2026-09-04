@@ -520,6 +520,21 @@ async function main() {
 
   const cv = document.getElementById("cv");
   cv.width = GW; cv.height = GH;
+  // The canvas must land on device pixels 1:1 or at an integer multiple. A
+  // non-integer nearest-neighbour upscale duplicates every Nth row and column,
+  // and WHICH ones shifts as the content pans — a shimmer on any fine texture
+  // (the kbot lab's roof) that the game, drawing 1:1, never shows. Measured at
+  // devicePixelRatio 1.1: 1024 backing px drawn onto 1126 device px. Browser
+  // zoom changes the ratio live, so refit on resize.
+  const fit = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const k = Math.max(1, Math.floor(dpr + 1e-6));
+    cv.style.width = `${GW * k / dpr}px`;
+    cv.style.height = `${GH * k / dpr}px`;
+    cv.dataset.device = `${k}:1 @ ${dpr.toFixed(2)}`;
+  };
+  fit();
+  addEventListener("resize", () => { fit(); if (!SHOT) report(); });
   cv.style.width = GW + "px"; cv.style.height = GH + "px";
   const gl = cv.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
   if (!gl) fail("no WebGL2 context");
@@ -1241,6 +1256,7 @@ async function main() {
       `<span>frac</span><b>${s0.fx},${s0.fy}</b>` +
       (sides.length > 1 ? `<span>wipe</span><b>${wipe.toFixed(2)}</b>` : "") +
       `<span>ss</span><b>${SS}</b><span>aniso</span><b>${ANISO_MAX || "none"}</b>` +
+      `<span>device</span><b>${cv.dataset.device}</b>` +
       `</div>`];
     for (let i = 0; i < sides.length; i++) {
       const L = sides[i], st = L.stats;
@@ -1303,8 +1319,10 @@ async function main() {
       }
       if (drag.wipe) wipe = Math.min(1, Math.max(0, canvasX(e)));
       else {
-        eye[0] = drag.ex - (e.clientX - drag.x);
-        eye[1] = drag.ey - (e.clientY - drag.y);
+        // pointer deltas are CSS px; one canvas px is k/dpr of those
+        const s = GW / cv.getBoundingClientRect().width;
+        eye[0] = drag.ex - Math.round((e.clientX - drag.x) * s);
+        eye[1] = drag.ey - Math.round((e.clientY - drag.y) * s);
         clamp();
       }
       draw();
