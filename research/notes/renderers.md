@@ -339,8 +339,9 @@ Why it fits:
   *between* maps. Loading the maps in name order, the median map adds 1,611 new tiles
   (mean 2,011) and 76 maps add under 10 % — several variants share a whole tile set. So
   the cache should be a **content-keyed tile bank shared by every map**, not a file per
-  map: each load restores only the tiles the bank lacks (a median map ≈ 7 s at the
-  measured 4.5 ms/tile, a variant ≈ 0), and the whole game's ceiling is the unique count:
+  map: each load restores only the tiles the bank lacks (a median map's 1,611 new tiles
+  ≈ 0.2 s on DirectML at the measured 0.12 ms/tile, ≈ 6 s on four CPU threads at 3.8;
+  a variant ≈ 0), and the whole game's ceiling is the unique count:
   raw RGBA 2.2 GB, zstd 0.93 GB, BC7 0.54 GB, BC1 0.27 GB. The palette is one for all
   maps, so a content key is valid across them.
 - **Definition → loaded model → texture frames**: the walk the load-time atlas build needs,
