@@ -325,7 +325,7 @@ So `u` now reaches the engine in exactly two places, and neither is a poll:
 | Path | Where | Why there |
 |---|---|---|
 | a **button** message's `lParam` | `tagpu_zoom_mouse_lparam()`, at the three `CallWindowProcA` doors | a button is queued on the engine's own event ring (`0x4B5EB2`/`0x4B5EFE` → `0x4C2E30`) and dispatched whenever the game loop reaches it. Its position is where the press was MADE, and no later pointer sample can reconstruct that |
-| the **dispatched record**, at the mouse→world conversion | `vpw_mouse_world()`, our redirect of `0x498DA0` at `0x499221` | this is the one place the 1:1 arithmetic happens. It recomputes `u` from a single `g_ddraw.cursor` sample and writes it into `main+0x2C76` as well as the stack copy it is handed, because `GetUnitAtMouse 0x48CD80` (`0x499283`) and the routing test at `0x469DE1` read the field |
+| the **dispatched record**, at the mouse→world conversion | `vpw_mouse_world()`, our redirect of `0x498DA0` at `0x499221` | this is the one place the 1:1 arithmetic happens. It recomputes `u` from a single `g_ddraw.cursor` sample and writes it into `main+0x2C76` as well as the stack copy it is handed, because `GetUnitAtMouse 0x48CD80` (called at `0x499278`) and the routing test at `0x469DE1` read the field |
 
 **A MOVE message must NOT be rewritten, and that is the half that took a measurement to find.**
 `0x4B5E51` does not queue: it copies its record into `[obj+0x196]` through `0x4C2360`, and
@@ -336,16 +336,31 @@ whichever ran last decided where the sprite appeared: measured at 1920×1080 / 0
 tracked `u` across the frame at 4× the pointer's speed and off the left edge — the very artefact
 this set out to remove. `carries_point()` is now the button messages only.
 
-**Records that came off the ring are left alone.** `vpw_mouse_world()` reads the record's message
-id (`+0x10`) and repairs only what is not `0x201..0x206`; a button record already holds the
-message's own `u`, and recomputing it would replace where the player pressed with where the
-pointer is now.
+**Records that came off the ring are left alone, and it takes TWO tests to know which those
+are.** The message id at `+0x10` is the obvious one, and on its own it is not safe: the input
+reset `0x4B5A88` zeroes only the first three dwords of the record it writes to `[obj+0x196]`, so
+time, msg and the double-click flag are left as stack garbage while the drawing polls put a real
+pointer back in x and y. A garbage msg landing in `0x201..0x206` would make a poll record look
+like a press and skip the repair — `main+0x2C76` left holding a SCREEN position while zoomed. So
+the record must also **differ from `[obj+0x196]`**: the fallback is a `rep movsd` of those same
+six dwords, garbage included, and can never differ from them, while a real ring entry differs in
+at least its timestamp. *(Found by the landing review, not by the change.)*
 
-**Armed by `tagpu_zoom.on` as well as `tagpu_vpwide.on`.** The repair is not optional once the
-engine is told the truth, and the zoom transform goes live from its own lever — `tagpu_zoom.txt`
-or the wheel — with no arm file at all. So `zoom.on` installs the `0x499221` redirect **and
-nothing else**: no rect is ever widened, no other byte written. Verified live at 0.25× with
-`vpwide.on` absent: the viewport rect stays `(128 … 1919)`, the log reads
+**Armed by `tagpu_zoom.on` as well as `tagpu_vpwide.on`, and WITHOUT EITHER THERE IS NO ZOOM.**
+The repair is not optional once the engine is told the truth — and the zoom's own levers,
+`tagpu_zoom.txt` and the wheel, are gated by no arm file at all (`zoom.on` installs the
+minimap/`ScrollSpeed`/camera-range patches and nothing more; the lever is read by
+`tagpu_zoom_read_lever()` and the view published by the native pass, neither of which consults an
+arm file). A build with `native.on` and `terr.on` but no `zoom.on` could therefore be wheeled to
+0.5× into exactly the state this section exists to prevent: clicks landing correctly, because the
+message carries `u`, while hover, the cursor-shape choice, build placement, `GetUnitAtMouse` and
+the routing test all name the world under the SCREEN position. **So `tagpu_zoom_read_lever()`
+asks `tagpu_vpwide_mouse_world_live()` and pins the level at 1.0 when the redirect is not in,
+logging `zoom: PINNED AT 1.0` once.** The invariant is structural rather than documented, which
+is what it needed to be — *found by the landing review, not by the change.*
+
+With `zoom.on` and no `vpwide.on`, the redirect goes in and **nothing else does**: no rect is
+ever widened, no other byte written. Verified live at 0.25× with `vpwide.on` absent: the viewport rect stays `(128 … 1919)`, the log reads
 `vpwide: mouse->world repair only (0x498DA0)`, hover in the band is correct, and the ring stays
 display-only exactly as §2.3b describes it without `vpwide`. At zoom 1
 `tagpu_zoom_to_engine()` reports "nothing to do" and the stub writes nothing.
@@ -378,6 +393,16 @@ Statically the sprite sits exactly under the pointer at (1100,570), (1600,600), 
 (300,500). Screen space is byte-identical at 1×, 0.25× and 2× — same `main+0x2C76`, same map
 cell, same `main+0x2CC6` — over the minimap, the side panel and below the bottom bar. Box select
 and click-select both pick the commander in the band at 0.25×, in the ring at 0.25×, and at 2×.
+
+**Two gaps the landing review found and this did NOT close**, both pre-existing and neither
+touched by the change:
+
+- **The drag-scroll anchor drifts at zoom != 1.** `0x41CD50` subtracts a *screen*-space centre
+  (`main+0x2CE3`/`+0x2CE7`) from a record that now reliably holds `u`, so the anchor is off by
+  `64·(1 − 1/z)` px in x. It was equally wrong before, from a record that held whichever of `s`
+  or `u` had landed last; the repair makes it *consistently* wrong rather than intermittently.
+- **The whole repair is skipped when `[[main+0xC]+0xF1] & 8` is set**, because that bit gates
+  `0x499A1C`, the call to the input-mode handler. What the bit means was not established.
 
 **What it did not close.** In the ring the engine's own build-placement footprint is not drawn at
 all: the engine projects it to a `u` off the surface and the clip discards it, so `markown` has
@@ -416,7 +441,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA30` eases the eye toward it. **WRITTEN by `apply_eye_range()` only**, clamped to the same range as the eye and for the same frame, because a disagreement between the two costs the fog grid its is-current flag every frame (§2.3c). The replacement clamp deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
 | `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so `apply_eye_range()` recomputes it through the same wrapper on the frames it corrects the eye. The one **render-thread** write of it; a game thread drawing the minimap in that instant sees a one-frame torn box, the same standing as the published view |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live** (§2.3b); every pass that means the true 1× rect must call `tagpu_vpwide_true_rect()` rather than read the field |
-| `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) — the x and y of the 6-dword record the dispatch fills. **WRITTEN by `vpw_mouse_world()` while the zoom transform is live** (§2.3d): the engine is polled with the true pointer now, so the unzoomed `u` is put back here, where `GetUnitAtMouse 0x48CD80` and the routing test at `0x469DE1` read it. Untouched at zoom 1, on the screen-space UI, and for a record that came off the event ring |
+| `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) — the x and y of the 6-dword record the dispatch fills. **WRITTEN by `vpw_mouse_world()` while the zoom transform is live** (§2.3d): the engine is polled with the true pointer now, so the unzoomed `u` is put back here, where `GetUnitAtMouse 0x48CD80` and the routing test at `0x469DE1` read it. Untouched at zoom 1, on the screen-space UI, and for a record that came off the event ring. **Local, but NOT inert:** all three fillers (`0x4999C4`, `0x4999E7`, `0x4999F9`) and our write sit inside one game-thread tick, before the first reader, so nothing races — but the readers include the order dispatchers `0x419BE0`/`0x41A490`, so a wrong value here becomes a wrong **replicated order**, not just a wrong highlight. That is why the ring test above has to be exact |
 | `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index) |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F2F` bit2 | `SelBoxes` |

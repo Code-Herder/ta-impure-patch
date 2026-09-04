@@ -18,7 +18,6 @@ static volatile LONG  s_vpL, s_vpT, s_vw, s_vh;
 static volatile LONG  s_live;          /* a zoomed world is on screen right now */
 static volatile LONG  s_fresh;         /* the pass published during this frame     */
 static int            g_mmInstalled;   /* tagpu_zoom_init() patched the engine     */
-static void zlog(const char* m);   /* defined with the minimap patch below */
 
 /* The range BOTH levers share. The transform is fine outside it; these are the
    levels the rest of the stack has been checked at. */
@@ -141,6 +140,37 @@ static float wheel_level(void)
 
 float tagpu_zoom_read_lever(void)
 {
+    /* NO ZOOM WITHOUT THE MOUSE-WORLD REPAIR, and this is the gate that makes
+       that structural rather than merely documented.
+
+       `fake_GetCursorPos` answers the engine the TRUE pointer at every zoom, so
+       the only thing that still hands its 1:1 screen->world arithmetic the
+       unzoomed `u` is tagpu_vpwide's redirect of `0x498DA0`. Without that
+       redirect a zoomed world would name the world point under the SCREEN
+       position: hover, the cursor-shape choice, build placement, the routing
+       test at `0x469DE1` and `GetUnitAtMouse` all wrong, silently, while clicks
+       (which carry `u` in the message) still land correctly — half broken and
+       hard to see.
+
+       BOTH LEVERS ARE UNGATED BY ANY ARM FILE. `tagpu_zoom.on` installs the
+       minimap/ScrollSpeed/camera-range patches and nothing else; the file and
+       the wheel are read here, and the native pass publishes the view, with no
+       arm file consulted at all. So a build with `native.on` and `terr.on` but
+       no `zoom.on` could be wheeled to 0.5x and reach exactly that state. Pin
+       to 1.0 instead, and say so once. */
+    if (!tagpu_vpwide_mouse_world_live()) {
+        static LONG said;
+        if (InterlockedCompareExchange(&said, 1, 0) == 0)
+            zlog("zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not "
+                 "installed, so a zoomed world would name the point under the "
+                 "SCREEN position. Arm tagpu_zoom.on (or tagpu_vpwide.on).");
+        InterlockedExchange(&s_wheelAccum, 0);
+        s_wheelTgt = s_wheelCur = 1.0f;
+        s_wheelPend = 0;
+        s_zoom = 1.0f;
+        return 1.0f;
+    }
+
     /* Re-read EVERY frame: this is a continuous control, so a 30-frame poll
        would quantise a ramp to 2 Hz and make a smooth renderer look like a
        staircase on video. On a bad parse the LAST GOOD value is kept rather

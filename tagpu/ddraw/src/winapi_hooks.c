@@ -41,10 +41,10 @@
    (`vpw_mouse_world()` in tagpu_vpwide.c, our redirect of `0x498DA0`), and this
    hook answers `s`. The engine blits its sprite under the pointer by itself, at
    any zoom and any frame rate; the screen-space readers of this poll — the edge
-   scroll's equality on the outermost screen pixel (`0x41CF10` via
-   `[obj+0x196]`), the off-screen warp-back at `0x41CEE7` — get the screen
-   position they were always asking for. */
-static BOOL cursorpos(LPPOINT lpPoint)
+   scroll's equality on the outermost screen pixel (`0x41CE90`, which takes the
+   position from `[obj+0x196]`), the off-screen warp-back at `0x41CEE7` — get the
+   screen position they were always asking for. */
+BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 {
     if (!g_ddraw.ref || !g_ddraw.hwnd || !g_ddraw.width)
         return real_GetCursorPos(lpPoint);
@@ -119,11 +119,6 @@ static BOOL cursorpos(LPPOINT lpPoint)
     }
 
     return TRUE;
-}
-
-BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
-{
-    return cursorpos(lpPoint);
 }
 
 BOOL WINAPI fake_ClipCursor(const RECT* lpRect)

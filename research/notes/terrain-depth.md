@@ -926,15 +926,17 @@ the right place by construction.
 
 The capture route was ruled out first, and that part still holds: **the cursor is the one
 thing in the frame that does not go through `DrawGameScreen`'s OFFSCREEN.** `0x4C2870`
-(the engine's show-cursor, called at `0x46A3C7` after everything else in the frame) and
-`0x4C67C0` (the present path's draw-from-record, [exe
-RE](exe-reverse-engineering.html)) blit it with a **NULL context**, and a NULL context
-makes `0x4B7F90`/`0x4C6B70` build their own default offscreen over the primary surface —
-so swapping a pixel base cannot reach it. That was measured, not assumed: a capture
-window bracketing the widget-tree draw at `0x46A303` opens fine and catches **zero**
-non-key texels. *[CORRECTION: this named `0x4C2380` as the second blitter; that function
-has no call site and no address literal anywhere in the image. The live one is
-`0x4C67C0`.]*
+(the engine's show-cursor, called at `0x46A3C7` after everything else in the frame) blits
+it with a **NULL context** — `push 0` at `0x4C297C` — and a NULL context makes
+`0x4B7F90`/`0x4C6B70` build their own default offscreen over the primary surface, so
+swapping a pixel base cannot reach it. That was measured, not assumed: a capture window
+bracketing the widget-tree draw at `0x46A303` opens fine and catches **zero** non-key
+texels. *[TWO CORRECTIONS, 2026-09-04: this named `0x4C2380` as the second blitter — that
+function has no call site and no address literal anywhere in the image, and the live
+draw-from-record path is `0x4C67C0` ([exe RE](exe-reverse-engineering.html)). And
+`0x4C67C0` does **not** use a NULL context: it passes its own second argument to both
+`0x4C6B70` and `0x4B7F90`. The NULL-context argument holds for `0x4C2870` alone, which is
+enough for the conclusion but is not the blanket claim this made.]*
 
 One known deviation from suppressing `0x4848E0`: the engine used to shade-remap its
 *own* overlays under the grey band, and we no longer do — visible only if a health bar

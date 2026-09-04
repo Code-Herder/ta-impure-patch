@@ -95,6 +95,15 @@ void tagpu_vpwide_frame(float z);
    so it is exactly today's behaviour with the module disarmed. */
 void tagpu_vpwide_true_rect(const char* ta, int* L, int* T, int* W, int* H);
 
+/* Is the `0x498DA0` mouse->world repair INSTALLED? The zoom transform may not go
+   live without it: `fake_GetCursorPos` answers the true pointer, so the engine's
+   1:1 screen->world arithmetic is only handed the unzoomed `u` because this
+   redirect puts it back (see "the mouse point" in tagpu_vpwide.c). Nothing here
+   is armed by default, and the zoom's own levers — `tagpu_zoom.txt` and the
+   wheel — are gated by no arm file at all, so tagpu_zoom_read_lever() asks this
+   before it will leave 1.0. */
+int  tagpu_vpwide_mouse_world_live(void);
+
 /* The rect the engine can currently NAME, as L/T/W/H. Returns 0 — and leaves
    the outputs alone — when that is just the true viewport, which is the case
    at zoom >= 1, with the module disarmed, and at the menus. */

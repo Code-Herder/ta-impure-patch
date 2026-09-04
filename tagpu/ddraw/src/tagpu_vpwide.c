@@ -43,13 +43,16 @@
 #define OFF_MM_Y     0x142E9
 #define OFF_MM_W     0x142EB
 #define OFF_MM_H     0x142ED
-/* The dispatched mouse record, 6 dwords: x, y, wParam, time, msg, down-flag.
+/* The dispatched mouse record, 6 dwords: x, y, wParam, time, msg, dblclk-flag.
    0x499200 copies it to the stack and hands that copy to 0x498DA0, but
    GetUnitAtMouse 0x48CD80 (0x499278) and the routing test at 0x469DE1 read the
    FIELD, so a repair has to be written back here as well as into the copy. */
 #define OFF_MOUSE_X  0x2C76
 #define OFF_MOUSE_Y  0x2C7A
 #define REC_MSG      4           /* dword index of the message id in the record */
+#define MREC_BYTES   24          /* the record is 6 dwords, ring entry and all  */
+#define TA_MOUSEPP   0x0051FBD0u /* the mouse/UI object; 0x4B6220 returns it    */
+#define OFF_MREC     0x196       /* its copy of the current record              */
 #define OFF_MOUSEFL  0x2CC6      /* bit0 on minimap, bit1 on world, bit2 either */
 #define OFF_TPOS     0x2CAA      /* GetTPosition output: x,y,z in 20.12       */
 #define OFF_GRIDXY   0x2C8E      /* two i16: the map cell under the cursor    */
@@ -176,8 +179,8 @@ static void __thiscall vpw_setclip(void* self, int l, int t, int r, int b)
    the dispatch at `main+0x2C76`, is then in SCREEN space, and the arithmetic
    below is 1:1. So the unzoomed `u` is computed here, from that one pointer
    sample, and written back into `main+0x2C76` as well as into the copy we were
-   passed: GetUnitAtMouse `0x48CD80` (called at `0x499283`) and the routing test
-   at `0x469DE1` read the field, not the copy. Records that came off the event
+   passed: GetUnitAtMouse `0x48CD80` (called at `0x499278`; `0x499283` is where its answer
+   is stored) and the routing test at `0x469DE1` read the field, not the copy. Records that came off the event
    ring already carry the message's own `u` and are left alone
    (record_is_message below).
 
@@ -199,18 +202,38 @@ static void __thiscall vpw_setclip(void* self, int l, int t, int r, int b)
 /* Was this record pushed on the engine's own event RING, or is it the
    `[obj+0x196]` fallback the GetCursorPos polls keep?
 
-   Only the two BUTTON arms of TA's window procedure push (`0x4B5EB2` and
-   `0x4B5EFE`, both through `0x4C2E30`), and they push the message's own
-   position — which tagpu_zoom_mouse_lparam already rewrote to `u`, from the
-   pointer sample the press was actually made at. The move arm `0x4B5E51`
-   instead copies its record into `[obj+0x196]` (`0x4C2360`), where the next
-   drawing poll overwrites x and y; so a record carrying WM_MOUSEMOVE is one
-   whose position came from the poll and needs the repair, and a record carrying
-   a button message already holds the right `u` and must be left alone — redoing
-   it would replace where the player pressed with where the pointer is now. */
-static int record_is_message(int msg)
+   It matters because a RING record already carries the right `u`:
+   tagpu_zoom_mouse_lparam rewrote it at the door, from the pointer sample the
+   press was actually made at, and recomputing it here would replace where the
+   player pressed with where the pointer is now. Only the button arms of TA's
+   window procedure push — `0x4B5EB2` for the four single presses and releases,
+   `0x4B5EFE` for the two double-clicks, both through `0x4C2E30`; the move arm
+   `0x4B5E51` copies its record into `[obj+0x196]` instead (`0x4C2360`), where
+   the next drawing poll overwrites x and y.
+
+   TWO TESTS, BECAUSE THE MESSAGE ID ALONE CANNOT BE TRUSTED. `[obj+0x196]` has
+   a second writer: the input reset at `0x4B5A88` zeroes only the first three
+   dwords of the record it hands `0x4C2360`, leaving time, msg and the
+   double-click flag as stack garbage. The drawing polls then put a REAL pointer
+   back in x and y while msg stays garbage — so a msg that happens to land in
+   0x201..0x206 would make a poll record look like a press and skip the repair,
+   leaving `main+0x2C76` holding a SCREEN position while zoomed, which at 0.25x
+   is most of the frame out. The record must therefore ALSO differ from
+   `[obj+0x196]` to count as a ring record: the fallback is a `rep movsd` of
+   those very six dwords, garbage included, so it can never differ from them,
+   while a real ring entry differs in at least its timestamp. Neither test alone
+   is enough; the pair cannot be fooled by uninitialised data. */
+static int record_is_message(const int* pos)
 {
-    return msg >= WM_LBUTTONDOWN && msg <= WM_RBUTTONDBLCLK;   /* 0x201..0x206 */
+    const void* obj;
+
+    if (pos[REC_MSG] < WM_LBUTTONDOWN || pos[REC_MSG] > WM_RBUTTONDBLCLK)
+        return 0;                       /* a move, or the reset's own garbage */
+
+    obj = *(const void* const*)TA_MOUSEPP;
+    if (!ptr_ok(obj) || IsBadReadPtr((char*)obj + OFF_MREC, MREC_BYTES))
+        return 1;                       /* no object to check against         */
+    return memcmp(pos, (const char*)obj + OFF_MREC, MREC_BYTES) != 0;
 }
 
 static void __stdcall vpw_mouse_world(int* pos)
@@ -242,7 +265,7 @@ static void __stdcall vpw_mouse_world(int* pos)
        answer stands, which is what the identity there always was. */
     {
         int ux = sx, uy = sy;
-        if (tagpu_zoom_to_engine(&ux, &uy) && !record_is_message(pos[REC_MSG])) {
+        if (tagpu_zoom_to_engine(&ux, &uy) && !record_is_message(pos)) {
             pos[0] = ux;
             pos[1] = uy;
             *(volatile int*)(ta + OFF_MOUSE_X) = ux;
@@ -357,6 +380,11 @@ void tagpu_vpwide_true_rect(const char* ta, int* L, int* T, int* W, int* H)
     *T = *(const int*)(ta + OFF_VP_T);
     *W = *(const int*)(ta + OFF_VIEW_W);
     *H = *(const int*)(ta + OFF_VIEW_H);
+}
+
+int tagpu_vpwide_mouse_world_live(void)
+{
+    return s_installed;
 }
 
 int tagpu_vpwide_addressable(int* L, int* T, int* W, int* H)

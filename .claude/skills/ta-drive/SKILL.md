@@ -796,6 +796,12 @@ where you used to see no `vpwide:` line at all. Nothing is written to the viewpo
 mode; the ring is still display-only. `vpwide.on` upgrades the same line to the full
 `vpwide: ARMED (…)`.
 
+**And with NEITHER armed there is now no zoom at all.** The lever used to work with no arm file,
+which since G13m would mean a zoomed world whose *hover* named the point under the screen
+position (clicks were fine, which made it worse). The level is pinned at 1.0 instead and says so
+once: `zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not installed`. If the wheel and
+`tagpu_zoom.txt` both appear dead, that log line is why — arm `zoom.on`.
+
 **Particles (smoke, fire, wakes, nanolathe) are `sfx.on`** — tokens `log`, `passive`,
 `nosmoke`, `nofire`, `nowake`, `nonano` — on the same `fxown.on` patch set (tacli auto-arms
 it when either `fx.on` or `sfx.on` exists), with its own live skip: `arm sfx.on="log
