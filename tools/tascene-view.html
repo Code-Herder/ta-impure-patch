@@ -99,6 +99,8 @@
                      track is sharp where it meets the ground and a turret's
                      shadow is soft. Default 0.1 — TA's casters are 20-60
                      units tall, so 0.25 was all penumbra; 0 = hard
+       unitsun=<az,el>   EXPLORE: see THREE SUNS above
+       shadowsun=<az,el> EXPLORE: see THREE SUNS above
        shade=<s>     EXPLORE: the fraction of the DIRECT light a shadow
                      removes, default 1 (ambient only in full shadow, which
                      is amb/level = 0.40 at the defaults). Lower for a
@@ -116,14 +118,23 @@
                      the colour it was built for. undither=1 on an indexed
                      pack fails loudly rather than drawing something plausible
 
-     ONE SUN, IN MAP SPACE (x east, y up, z south), FOR EVERYTHING LIT. The
-     terrain normal was always in that space; unit normals used to be dotted
-     in 3DO model space (z north), which mirrored the units' sun to the
-     south-west — the engine's camera light, and the "units and terrain
-     disagree" the artlight study measured. A cast shadow has to fall away
-     from the one sun the ground is lit by, so unit normals are flipped into
-     map space now: tops take 1.0, west faces are lit, camera-facing fronts
-     are in ambient. sun=<az,el> moves all of it together.
+     THREE SUNS, BECAUSE THE ENGINE HAS THREE. All in map space (x east,
+     y up, z south), all in degrees as az,el, all EXPLORE-only:
+       sun        the terrain's, default 324.5,53.1 — north-west, the side
+                  the tile art is painted from (artlight). It is SH_L below
+                  mirrored north-south, which is what an earlier note called
+                  "the engine's light re-expressed"; it is not
+       unitsun    the units', default 215.5,53.1 — tagpu_render3do.c:250's
+                  SH_L = (-0.35, 0.80, -0.49) taken out of 3DO model space
+                  (z north) into map space. South-west: the camera light,
+                  fronts lit, which is how the engine's LUT shades a unit
+       shadowsun  the shadows', default 225,70.5 — the engine's own slant
+                  projection, shadows-cloak.md: gx = x + y/4, gy = -z - y/4,
+                  a parallel light that leans every shadow up-right by a
+                  quarter of the height. shadowsun=215.5,53.1 makes the
+                  shadow fall away from the light the unit is shaded by
+     Unit normals are dotted in map space (3DO z flipped), so unitsun and
+     sun mean the same compass. sun=off turns all three off.
 
      THE COORDINATE CONVENTION IS TAGPU'S, DELIBERATELY. The extracted vertex
      shader maps game py 0 -> NDC -1, i.e. the offscreen's row 0 is the game
@@ -211,7 +222,7 @@ const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 // well is a contradiction and an error rather than a silent winner
 const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither",
                       "filter", "aniso", "shadows", "penumbra", "shade",
-                      "terrainshadow", "shadowres"];
+                      "terrainshadow", "shadowres", "unitsun", "shadowsun"];
 
 function sideQuery(side, presets) {
   const p = new URLSearchParams();
@@ -232,11 +243,15 @@ function sideQuery(side, presets) {
   return merged;
 }
 
-// tagpu_render3do.c:250's own model light, SH_L = (-0.35, 0.80, -0.49), as an
-// azimuth/elevation (it round-trips to within 0.0013 per component): the lab's
-// default sun is the engine's, so switching lanes changes the shading MODEL
-// (32 LUT rows -> continuous) and not the direction.
+// The three suns (header, THREE SUNS). SH_L = (-0.35, 0.80, -0.49) is
+// tagpu_render3do.c:250's model light; in map space its z flips, which is
+// UNITSUN_DEFAULT (round-trips to within 0.0013 per component). SUN_DEFAULT
+// is that vector mirrored north-south — the side the art is painted from.
+// SHADOWSUN_DEFAULT is the engine's slant (x + y/4, -z - y/4) as a direction:
+// (-1, 4, 1)/sqrt(18), i.e. az 225, el atan(4/sqrt(2)) = 70.53.
 const SUN_DEFAULT = [324.5, 53.1];
+const UNITSUN_DEFAULT = [215.5, 53.1];
+const SHADOWSUN_DEFAULT = [225, 70.53];
 
 function sunVector(az, el) {
   const a = az * Math.PI / 180, e = el * Math.PI / 180;
@@ -265,14 +280,26 @@ function readLook(p, label) {
       fail(`${label}: sun must be "<azimuth>,<elevation>" in degrees, or "off"`);
     sun = v;
   }
+  const angles = (key, dflt) => {
+    const raw = p.get(key);
+    if (!lit || raw === null) return dflt;
+    const v = raw.split(",").map(Number);
+    if (v.length !== 2 || v.some(Number.isNaN))
+      fail(`${label}: ${key} must be "<azimuth>,<elevation>" in degrees`);
+    return v;
+  };
+  const unitAE = angles("unitsun", UNITSUN_DEFAULT);
+  const shadowAE = angles("shadowsun", SHADOWSUN_DEFAULT);
   // amb >= 1 is how "no sun" reaches the shaders: one uniform, no branch
   const amb = lit ? Math.min(1, Math.max(0, num("amb", 0.35))) : 1;
-  const sunV = sunVector(sun[0], sun[1]);
+  const sunV = sunVector(sun[0], sun[1]), unitV = sunVector(unitAE[0], unitAE[1]);
   // Level ground takes exactly 1.0. The art is already lit (artlight), so the
   // sun may only modulate by the tilt from level: every lambert is divided by
-  // the one a level normal (0,1,0) gets, whose N.L is sunV[1]. The floor keeps
-  // amb=0 with the sun on the horizon finite instead of 1/0.
-  const norm = 1 / Math.max(amb + (1 - amb) * Math.max(sunV[1], 0), 1e-3);
+  // the one a level normal (0,1,0) gets, whose N.L is the sun's y. The floor
+  // keeps amb=0 with the sun on the horizon finite instead of 1/0. Units get
+  // the same rule under their own sun.
+  const level = (v) => 1 / Math.max(amb + (1 - amb) * Math.max(v[1], 0), 1e-3);
+  const norm = level(sunV), unitNorm = level(unitV);
   const filter = p.get("filter");
   if (filter !== null && filter !== "linear" && filter !== "nearest")
     fail(`${label}: filter must be linear or nearest, not "${filter}"`);
@@ -287,8 +314,10 @@ function readLook(p, label) {
     // is loaded; readLook only sees the query, so it cannot know the map yet
     datum: lane === "explore" && p.get("datum") !== null ? num("datum", 0) : null,
     slope: num("slope", 1),
-    amb, norm,
+    amb, norm, unitNorm,
     sun: sunV, sunAE: lit ? sun : null,
+    unitSun: unitV, unitSunAE: unitAE,
+    shadowSun: sunVector(shadowAE[0], shadowAE[1]), shadowSunAE: shadowAE,
     // null = "not named": restored if the pack carries the atlases, resolved
     // once the scene is loaded, like datum
     undither: lane !== "explore" ? false
@@ -382,7 +411,8 @@ uniform vec3 uSun;          // unit vector TOWARD the light
 uniform float uAmb;         // ambient floor; 1.0 means "no sun at all"
 uniform float uNorm;        // 1 / the lambert of level ground
 uniform int uShadowOn;
-uniform mat4 uShadowMat;    // world -> light clip, orthographic along uSun
+uniform vec3 uShadowSun;    // unit vector toward the light the SHADOWS fall from
+uniform mat4 uShadowMat;    // world -> light clip, orthographic along uShadowSun
 uniform highp sampler2DShadow uShadowCmp;  // depth map, compare + bilinear
 uniform highp sampler2D uShadowRaw;        // the same map, raw depths
 uniform vec3 uShScale;      // world per texel, world per depth unit, 1/res
@@ -400,7 +430,7 @@ const vec2 POISSON[16] = vec2[16](
 float shadowAt(vec3 W, vec3 n) {
   if (uShadowOn == 0) return 1.0;
   // 1.5 texels of normal offset, then a slope-scaled bias in depth units
-  float nl = dot(n, uSun);
+  float nl = dot(n, uShadowSun);
   vec3 p = (uShadowMat * vec4(W + n * uShScale.x * 1.5, 1.0)).xyz * 0.5 + 0.5;
   // Receiver-plane depth bias: the receiver's own depth gradient across the
   // map, from the screen-space derivatives (taken before any early return,
@@ -413,7 +443,7 @@ float shadowAt(vec3 W, vec3 n) {
     ? vec2(dpdy.y * dpdx.z - dpdx.y * dpdy.z, dpdx.x * dpdy.z - dpdy.x * dpdx.z) / det
     : vec2(0.0);
   dzduv = clamp(dzduv, vec2(-4.0), vec2(4.0));       // a grazing receiver stays finite
-  if (nl <= 0.0) return 1.0;                 // faces away: no direct light to shadow
+  if (nl <= 0.0) return 1.0;                 // faces away from the shadow light
   if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
   float z = p.z - (1.0 + 2.0 * (1.0 - nl)) * uShScale.x / uShScale.y;
   float search = 24.0 / uShScale.x * uShScale.z;   // 24 world units, in uv
@@ -439,8 +469,8 @@ float lambert(vec3 n, vec3 W) {
 }`;
 
 // the uniforms LAB_LIGHT's shadow term adds to every lab program
-const SHADOW_U = ["uShadowOn", "uShadowMat", "uShadowCmp", "uShadowRaw",
-                  "uShScale", "uPenumbra", "uShade"];
+const SHADOW_U = ["uShadowOn", "uShadowSun", "uShadowMat", "uShadowCmp",
+                  "uShadowRaw", "uShScale", "uPenumbra", "uShade"];
 
 // The depth pass: one attribute, the world point, at location 7 in BOTH the
 // terrain and the unit VAO, so one program renders both into the map.
@@ -939,7 +969,7 @@ async function main() {
   // Y/tan(el) long) and for the depicted Z reaching G + h/2. Depth increases
   // away from the light. Returns the matrix and the world-per-texel scales.
   function shadowFrame(L) {
-    const lz = L.sun;
+    const lz = L.shadowSun;
     let lx = [lz[2], 0, -lz[0]];                      // up x sun, then normalise
     let ll = Math.hypot(lx[0], lx[2]);
     lx = ll < 1e-4 ? [1, 0, 0] : [lx[0] / ll, 0, lx[2] / ll];
@@ -986,6 +1016,7 @@ async function main() {
     gl.uniform1i(U.uShadowCmp, 12); gl.uniform1i(U.uShadowRaw, 13);
     if (!frame) return;
     gl.uniformMatrix4fv(U.uShadowMat, false, frame.m);
+    gl.uniform3f(U.uShadowSun, L.shadowSun[0], L.shadowSun[1], L.shadowSun[2]);
     gl.uniform3f(U.uShScale, frame.texel, frame.depth, 1 / SH_RES);
     gl.uniform1f(U.uPenumbra, L.penumbra); gl.uniform1f(U.uShade, L.shade);
   }
@@ -1384,8 +1415,8 @@ async function main() {
       gl.uniform1f(LUU.uDepthScale, scene.depth.scale);
       gl.uniform1i(LUU.uAtlas, 6); gl.uniform1i(LUU.uRGB, 10);
       gl.uniform1i(LUU.uPal, 1); gl.uniform1i(LUU.uUndither, L.undither ? 1 : 0);
-      gl.uniform3f(LUU.uSun, L.sun[0], L.sun[1], L.sun[2]);
-      gl.uniform1f(LUU.uAmb, L.amb); gl.uniform1f(LUU.uNorm, L.norm);
+      gl.uniform3f(LUU.uSun, L.unitSun[0], L.unitSun[1], L.unitSun[2]);
+      gl.uniform1f(LUU.uAmb, L.amb); gl.uniform1f(LUU.uNorm, L.unitNorm);
       setShadowUniforms(LUU, L, L.shadowFrame);
       // the sampler state is per side, because the two sides of a wipe may
       // sample the one restored atlas differently
@@ -1539,6 +1570,8 @@ async function main() {
           ? `<span>relief</span><b>${L.relief}</b>` +
             (L.relief > 0 ? `<span>datum</span><b>${L.datum}</b>` : "") +
             `<span>sun</span><b>${L.sunAE ? L.sunAE.join(",") : "off"}</b>` +
+            (L.sunAE ? `<span>unitsun</span><b>${L.unitSunAE.join(",")}</b>` +
+                       `<span>shadowsun</span><b>${L.shadowSunAE.join(",")}</b>` : "") +
             `<span>amb</span><b>${L.amb.toFixed(2)}</b>` +
             `<span>slope</span><b>${L.slope}</b>` +
             `<span>colour</span><b>${L.undither ? "restored" : "indexed"}</b>` +

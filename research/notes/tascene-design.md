@@ -207,7 +207,9 @@ These exist only in `lane=explore`, and they are what landing 2 added.
 |---|---|
 | `relief=<k>` | displacement scale, **default 0** (`dd5e739`): the art stays exactly where it is painted and is still lit by the real gradient. **1 = the engine's own `h/2`**, which misregisters the art — the tiles are already the oblique projection of the hill, so displacing them applies it twice; measured on Two Continents it moves the terrain 41–94 px off the engine's frame while the features do not move at all. Kept as the double-count experiment |
 | `datum=<h>` | the height a non-zero `relief` pivots about (`8b73f50`): a cell moves by `relief·(h − datum)/2`, so a cell at the datum stays where the engine paints it. Default the map's own sealevel, which removes the constant part of the slide (66 px of it on Two Continents) and cannot remove the part that varies with the terrain — which is why `relief` itself defaults to 0 |
-| `sun=<az,el>` | the sun in degrees, or `off`. The default **`324.5,53.1` is `tagpu_render3do.c:250`'s own model light** `SH_L = {-0.35f, 0.80f, -0.49f}` re-expressed as a direction (it round-trips to within **0.0013 per component**), and the lab applies it **in map space (x east, y up, z south) to terrain and units alike** — so switching lanes changes the shading *model* (32 `PALETTE.SHD` rows → continuous lambert) and not the light. Until the shadows landed (2026-09-03) unit normals were dotted in 3DO model space, whose z points north, which mirrored the units' sun to the south-west — the engine's camera light, and exactly the "units and terrain disagree" the artlight study measured. A cast shadow has to fall away from the one sun the ground is lit by, so the normals are flipped into map space now: tops take 1.0, west faces are lit, camera-facing fronts sit in ambient. **Level ground always takes exactly 1.0** — see "Level ground takes exactly 1.0" under landing 2 |
+| `sun=<az,el>` | the **terrain's** sun in degrees, or `off` (which turns all three suns off). Default `324.5,53.1`, **north-west, the side the tile art is painted from** (artlight). Earlier notes called this "`tagpu_render3do.c:250`'s own model light re-expressed"; it is that light **mirrored north-south** — `SH_L = {-0.35, 0.80, -0.49}` lives in 3DO model space, whose z points north, and taken into map space (x east, y up, z south) it is `unitsun` below. The mistake was harmless for a year because it happened to agree with the art. **Level ground always takes exactly 1.0** — see "Level ground takes exactly 1.0" under landing 2 |
+| `unitsun=<az,el>` | the **units'** sun, default `215.5,53.1` = `SH_L` in map space (round-trips to within 0.0013 per component): south-west, the camera light, fronts lit — how the engine's LUT shades a unit, minus the 32-row quantisation. Unit normals are dotted in map space (3DO z flipped), so `unitsun` and `sun` mean the same compass and setting both equal gives one physical sun |
+| `shadowsun=<az,el>` | the **shadows'** sun, default `225,70.53` = the engine's own slant projection as a parallel light: `shadows-cloak.md` has it binary-verified as `gx = x + y/4, gy = −z − y/4`, i.e. direction `(−1, 4, 1)/√18`, every shadow leaning **up-right** by a quarter of the caster's height. The engine's shading light and its shadow light differ by 17° of elevation and 10° of azimuth; the lab reproduces both rather than one of them. `shadowsun=215.5,53.1` makes the shadow fall away from the light the unit is shaded by |
 | `amb=<a>` | ambient floor, default `0.35`, **relative to level ground**: the shading is `(amb + (1−amb)·max(N·L, 0)) / (amb + (1−amb)·sin(el))` for terrain, unit faces and feature sprites alike, so a face turned fully away from the sun takes `0.40` at the defaults |
 | `slope=<k>` | exaggerate the heightfield's gradient before normalising, default 1 |
 | `filter=<f>` | how the exploration lane samples the **restored unit textures**. `linear` = trilinear (bilinear + mipmaps, levels 0–2) with `aniso` taps — what the game's own hires path does (`tagpu_hires.c:1142`, `GL_LINEAR_MIPMAP_LINEAR`); `nearest` = one texel, the stock look. **Default `linear` when the pack's unit atlas is padded** (`pad` ≥ 4 in the manifest, every `build` since 2026-09-03), `nearest` otherwise; `filter=linear` on an unpadded pack fails loudly because its mips would bleed. Indexed colour is always nearest — an index cannot be averaged. Measured on the base fixture: 13 740 pixels differ from `nearest`, all units |
@@ -484,11 +486,17 @@ names, same premultiplied output).
   tilt itself — a tilted normal's N·L averages a little under level's). Unit
   faces take the same factor: their shade is the old one × 1.1505 (median over
   325 unit pixels; predicted 1/0.870 = 1.1494).
-- **Cast shadows** (2026-09-03), a depth map along the sun with a PCF/PCSS-lite
-  read-back inside `LAB_LIGHT`, on the base fixture at the defaults: **10 259
-  pixels** change against `shadows=0`, of which the unit casters alone are
-  9 101 with a fully dark core (p10 of shadowed/lit = 0.405) and a soft edge
-  (median 0.737); hard (`penumbra=0`) they are 6 966 pixels at median 0.556.
+- **Cast shadows** (2026-09-03), a depth map along `shadowsun` with a
+  PCF/PCSS-lite read-back inside `LAB_LIGHT`. The first cut cast them from
+  the terrain's north-west sun, down-right — physically consistent and wrong:
+  the engine leans every shadow **up-right** (`shadowsun`, above), which is the
+  look, so the lab now runs the engine's three suns. At the defaults on the
+  base fixture **5 586 pixels** change against `shadows=0` — short shadows, a
+  quarter of the height, mostly under the caster; a Peewee's visible sliver
+  sits +4 px right of its feet. From the north-west sun they were 10 259, the
+  unit casters alone 9 101 with a fully dark core (p10 of shadowed/lit =
+  0.405) and a soft edge (median 0.737), hard (`penumbra=0`) 6 966 at median
+  0.556.
   The **receiver-plane depth bias** is what makes the heightfield usable as a
   caster: the blocker search's own upslope texels were 57 920 pixels of haze on
   the hill before it and are 786 after. Every receiver's world point is the
