@@ -672,16 +672,17 @@ changing it live hands the draw back for one frame so the fill and the composite
 disagree about which index they mean.
 
 **The world-space UI markers are `mark.on`** — tokens `log`, `passive`, `nobars`,
-`nocapture`, `noselbox` — on its own patch, `markown.on`, which tacli auto-arms at launch
-when `mark.on` exists. It covers health bars, group digits, order/waypoint/build-queue
+`nocapture`, `noselbox`, `nocursor` — on its own patch, `markown.on`, which tacli auto-arms at
+launch when `mark.on` exists. It covers health bars, group digits, order/waypoint/build-queue
 markers, range circles, the build-cursor footprint and the drag band box, and it stops the
 engine drawing its own copy of the selection rect underneath ours. Two mechanisms:
-**health bars are re-drawn** from unit state (the engine's own loop walks HotUnits, culled
-to the *unzoomed* viewport, so a capture would leave a zoomed-out view's outer ring bare),
-**everything else is captured** — the engine draws it into a scratch buffer of ours and we
-replay that buffer through the zoom transform, so parity is exact including text. Verify
-`markown: ARMED (hook8/hook9/transp x2/selbox x2 redirected …)`, `MARKOWN capture=1
-bars-skipped=1 selbox=1`, and `mark: bars=N prefog=… postfog=…` (`log`).
+**health bars, the selection rect and the build cursor / band box are re-drawn** from engine
+state (a capture cannot reach any of them at zoom < 1 — the bar loop walks HotUnits, culled to
+the *unzoomed* viewport, and the cursor's rasteriser clips to the offscreen's own width and
+height), **the order-marker block is captured** — the engine draws it into a scratch buffer of
+ours and we replay that buffer through the zoom transform, so parity is exact including text.
+Verify `markown: ARMED (hook8/hook9/transp x2/selbox x2 redirected …)`, `MARKOWN capture=1
+bars-skipped=1 selbox=1 cursor=1`, and `mark: bars=N cursor=N prefog=… postfog=…` (`log`).
 
 Three things to know:
 
@@ -693,8 +694,14 @@ Three things to know:
   `0x4C1C48`, verified). `tacli keys <i> down:shift` … `up:shift` around a shot. We call
   the engine's sampler rather than reading the key ourselves, so a different keymap cannot
   make us disagree with it.
-- **`passive` is the A/B lever** and hands *everything* back — bars, capture and the
-  selection rect — so the engine draws the lot while we still gather and count.
+- **`passive` is the A/B lever** and hands *everything* back — bars, capture, the selection
+  rect and the build cursor — so the engine draws the lot while we still gather and count.
+  `nocursor` alone hands back just the build cursor and band box, which is the A/B for those:
+  at zoom < 1 the engine's own are **clipped away** wherever the placement's engine coordinate
+  leaves the screen-sized offscreen (at 0.467× on 1024×768, everything outside screen
+  `[307,785]×[205,563]`), so `nocursor` is a way to see the bug, not a baseline for the look.
+- **The captured half still stops at that same offscreen bound.** A queued build-site rect or
+  a waypoint out in the zoomed-out ring is not drawn at all — known, and not closed.
 
 **Zoom has two levers, and the file wins.**
 

@@ -127,6 +127,7 @@ volatile unsigned char g_markown_skipBars = 0;
 static int g_installed = 0;
 static int g_capture = 0;                 /* follows tagpu_mark.on           */
 static int g_selbox = 0;                  /* ours redraws the selection rect */
+static int g_cursor = 0;                  /* ours redraws the build cursor   */
 static unsigned g_beat = 0, g_last = 0;
 
 /* One layer, double-buffered. The game thread fills one buffer while the GL
@@ -508,6 +509,15 @@ static void __stdcall mark_transp(void* ctx, void* rect, int colour)
 {
     LAYER* L = &g_L[TAGPU_MARK_POSTFOG];
     int opened = 0;
+    /* OURS DRAWS BOTH OF THIS BLOCK'S PRIMITIVES, so the engine's pair is not
+       drawn at all — capturing them could never carry them into the outer ring.
+       The engine clips these rects to the OFFSCREEN, which is screen-sized,
+       while the position it projects them at is the addressable coordinate
+       `vpwide` widened to; at zoom < 1 the two disagree and the whole rect is
+       clipped away long before our buffer sees it. Skipping is also what stops
+       an engine-drawn rect standing in our frame as a ghost at the unzoomed
+       position, exactly as for the selection rect above. */
+    if (g_cursor) return;
     if (g_capture) {
         /* `tried` and `opened` are separate on purpose: if the FIRST of the two
            calls is refused (a clip rect that will not validate, an allocation
@@ -645,6 +655,19 @@ void tagpu_markown_set_selbox(int ours)
            : "markown: engine selection rects restored");
 }
 
+void tagpu_markown_set_cursor(int ours)
+{
+    int v = ours && g_installed;
+    if (v == g_cursor) return;
+    g_cursor = v;
+    /* the post-fog window can never open again while this is set, so its last
+       publication would stand behind ours forever; give it up here. One
+       volatile store, which is why this is safe from the present thread. */
+    if (v) layer_clear(&g_L[TAGPU_MARK_POSTFOG]);
+    flog(v ? "markown: engine build cursor/band box SKIPPED (ours live)"
+           : "markown: engine build cursor/band box restored");
+}
+
 void tagpu_markown_set_capture(int on)
 {
     int v = on && g_installed;
@@ -677,18 +700,20 @@ void tagpu_markown_flush(unsigned int frame_counter)
     /* if the native pass stops running (overlay off, GL failure, a frame path
        that never reaches it) the engine's markers come back rather than the
        health bars and order lines simply vanishing */
-    if ((g_capture || g_markown_skipBars || g_selbox) &&
+    if ((g_capture || g_markown_skipBars || g_selbox || g_cursor) &&
         frame_counter - g_beat > 90) {
         flog("markown: marker pass silent for 90 frames");
         tagpu_markown_set_capture(0);
         tagpu_markown_set_bars(0);
         tagpu_markown_set_selbox(0);
+        tagpu_markown_set_cursor(0);
     }
     if (frame_counter - g_last >= 300) {
         char b[96];
         g_last = frame_counter;
-        _snprintf(b, sizeof b, "MARKOWN capture=%d bars-skipped=%u selbox=%d",
-                  g_capture, (unsigned)g_markown_skipBars, g_selbox);
+        _snprintf(b, sizeof b,
+                  "MARKOWN capture=%d bars-skipped=%u selbox=%d cursor=%d",
+                  g_capture, (unsigned)g_markown_skipBars, g_selbox, g_cursor);
         flog(b);
     }
 }

@@ -13,15 +13,23 @@
      health bars   re-gathered here from the engine's own unit state and drawn
                    as flat quads, so they follow the ZOOM's wider rect instead
                    of the engine's HotUnits list, which is culled at 1x
+     build cursor  likewise re-drawn, from the six world globals the engine
+     + band box    projects at 0x469E13 — a capture cannot reach them at all
+                   at zoom < 1, because it is bounded by the screen-sized
+                   offscreen and their engine position is not (see the header
+                   comment in tagpu_mark.c)
      everything    captured 8bpp, exactly as the engine drew it, and uploaded
      else          as two layers — one from before the fog overlay (darkened
-                   like the engine's) and one from after it (never darkened)
+                   like the engine's) and one from after it (never darkened).
+                   The post-fog layer is now always empty and is kept only for
+                   `passive`, where the engine draws its own again
 
    Both are drawn through the same zoom transform as the world, so a marker
    stays over its unit at any zoom and scales with it — the tile art, the unit
    sprites and the markers magnify together rather than sliding apart.
 
-   Armed by tagpu_mark.on (tokens: log, passive, nobars, nocapture). Refuses to
+   Armed by tagpu_mark.on (tokens: log, passive, nobars, nocapture, noselbox,
+   nocursor). Refuses to
    emit unless tagpu_markown.c actually installed its patches — without them the
    engine is still drawing these markers itself and ours would be a double
    draw at the wrong place. */

@@ -31,7 +31,39 @@
    interpolates its body between ticks. We keep the engine's arithmetic rather
    than smoothing it — a bar is 35 px of flat colour over a unit that moves a
    couple of pixels per frame, and the alternative is a second, differently
-   sourced anchor that can disagree with the body's. */
+   sourced anchor that can disagree with the body's.
+
+   THE BUILD CURSOR and the drag band box are re-drawn for the same reason,
+   and it is the reason a captured layer can never fix them: the capture is
+   bounded by the OFFSCREEN, which is the size of the screen, while the engine
+   projects these two rects at the coordinates `vpwide` made addressable. At
+   zoom < 1 those run far past the surface, the engine's own clipper drops the
+   rect whole, and nothing reaches our buffer. The band that survived is the
+   surface mapped back through the zoom, which on a 1024x768 frame at 0.467x is
+   screen [307,785]x[205,563] out of an 896x704 viewport (measured) — pick a
+   metal extractor, zoom out, and the green footprint exists nowhere else.
+   Both rects are re-derived here from the
+   globals the engine reads at `0x469DB4..0x469F23`, byte for byte:
+
+     if (!drawUnits) return;                      // movie recorder only
+     if (!(main[0x2CC6] & 8)                      // bit3: band box forced on
+         && !(main[0x2CC3] == 0x0E                // cursor mode 14 = placement
+              && IsPositionInRect(main+0x37E27,   // the WIDENED viewport rect
+                                  main[0x2C76], main[0x2C7A]))) return;
+     l = main[0x2C92] - eyeX + 0x80;   r = main[0x2C9E] - eyeX + 0x80;
+     t = main[0x2C9A] - (main[0x2C96] >> 1) - eyeY + 0x20;
+     b = main[0x2CA6] - (main[0x2CA2] >> 1) - eyeY + 0x20;   // all six DWORDs
+     if (r < l) swap;  if (b < t) swap;
+     i = main[0x2CC3] == 0x0E ? ((main[0x2CC6] & 0x40) ? 0xA : 4) : 0xF;
+     DrawTranspRectangle({l,t,r,b},                 gui[i]);
+     DrawTranspRectangle({l+1,t+1,r-1,b-1}, main[0x2CC3] == 0x0E ? gui[i]
+                                                                : gui[0]);
+
+   `DrawTranspRectangle 0x4BF8C0` is named for its hollow centre: it is four
+   1-px edges through `0x4CC7AB`, a store-only Bresenham whose axis-aligned
+   runs count both endpoints, so each edge is one inclusive `put_bar`. The
+   `drawUnits` arm is not reproduced — the only caller that passes 0 is TA's
+   own movie recorder (`0x4962C2`), which this pass never runs under. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -56,17 +88,34 @@
 #define U_STATE      0x110       /* bit28 alive, bit14 excluded               */
 #define U_OWNER      0xFF        /* u8 player id                              */
 #define UD_MAXHP     0x1FA       /* read as a DWORD, as the engine's div does */
+/* the build cursor / band box block, all DWORDs unless noted (0x469E13) */
+#define OFF_CURMODE  0x2CC3      /* u8 order/cursor mode; 0x0E = build placement */
+#define OFF_MOUSEFL  0x2CC6      /* u8 region flags; bit3 band box, bit6 site OK */
+#define OFF_MOUSE_X  0x2C76      /* the dispatched mouse point vpwide repairs  */
+#define OFF_MOUSE_Y  0x2C7A
+#define OFF_CUR_X1   0x2C92      /* world x of one corner                      */
+#define OFF_CUR_H1   0x2C96      /* its altitude — projected as z - alt/2      */
+#define OFF_CUR_Z1   0x2C9A      /* its world z                                */
+#define OFF_CUR_X2   0x2C9E      /* and the same three for the other corner    */
+#define OFF_CUR_H2   0x2CA2
+#define OFF_CUR_Z2   0x2CA6
+#define OFF_VPRECT   0x37E27     /* L,T,R,B — WIDENED by vpwide at zoom < 1    */
+#define CUR_BUILD    0x0E        /* the cursor mode the footprint belongs to   */
 
 #define GUI_BLACK    0x00
+#define GUI_BLOCKED  0x04
 #define GUI_GREEN    0x0A
 #define GUI_RED      0x0C
 #define GUI_YELLOW   0x0E
+#define GUI_WHITE    0x0F
 
 #define MAXBAR       2048                    /* bars per frame               */
 #define MVST         7                       /* x,y, u,v, wx,wz, colour      */
 #define QUADV        6
-#define BARBASE      (2 * QUADV)             /* verts 0..11 are the two layer
-                                                quads; bars follow            */
+#define CURSBASE     (2 * QUADV)             /* verts 0..11 are the two layer
+                                                quads; the build cursor next  */
+#define MAXCURSV     (8 * QUADV)             /* two rects, four edges each    */
+#define BARBASE      (CURSBASE + MAXCURSV)   /* and the bars after those      */
 #define MAXMV        (BARBASE + MAXBAR * 2 * QUADV)
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
@@ -97,6 +146,7 @@ static void* getgl(const char* n)
 /* ---- arming ---- */
 static int s_armed = -1;
 static int s_log = 0, s_passive = 0, s_bars = 1, s_capture = 1, s_selbox = 1;
+static int s_cursor = 1;
 static unsigned s_armCheck = 0;
 
 int tagpu_mark_armed(unsigned frame_counter)
@@ -113,12 +163,14 @@ int tagpu_mark_armed(unsigned frame_counter)
         tagpu_markown_set_capture(0);
         tagpu_markown_set_bars(0);
         tagpu_markown_set_selbox(0);
+        tagpu_markown_set_cursor(0);
         if (was > 0) flog("mark: disarmed");
         return 0;
     }
     {
         char buf[128]; DWORD n = 0;
         s_log = 0; s_passive = 0; s_bars = 1; s_capture = 1; s_selbox = 1;
+        s_cursor = 1;
         if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
             char* p = buf;
             buf[n] = 0;
@@ -135,6 +187,7 @@ int tagpu_mark_armed(unsigned frame_counter)
                 else if (!lstrcmpiA(p, "nobars")) s_bars = 0;
                 else if (!lstrcmpiA(p, "nocapture")) s_capture = 0;
                 else if (!lstrcmpiA(p, "noselbox")) s_selbox = 0;
+                else if (!lstrcmpiA(p, "nocursor")) s_cursor = 0;
                 if (last) break;
                 p = q + 1;
             }
@@ -153,11 +206,12 @@ int tagpu_mark_armed(unsigned frame_counter)
     if (s_passive || !s_capture) tagpu_markown_set_capture(0);
     if (s_passive || !s_bars) tagpu_markown_set_bars(0);
     if (s_passive || !s_selbox) tagpu_markown_set_selbox(0);
+    if (s_passive || !s_cursor) tagpu_markown_set_cursor(0);
     if (was != 1) {
-        char b[160];
+        char b[176];
         _snprintf(b, sizeof b, "mark: ARMED (log=%d passive=%d bars=%d capture=%d "
-                  "selbox=%d patched=%d)", s_log, s_passive, s_bars, s_capture,
-                  s_selbox, tagpu_markown_installed());
+                  "selbox=%d cursor=%d patched=%d)", s_log, s_passive, s_bars,
+                  s_capture, s_selbox, s_cursor, tagpu_markown_installed());
         flog(b);
     }
     return 1;
@@ -172,6 +226,7 @@ static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uKey;
 static float s_verts[MAXMV * MVST];
 static int   s_nbar;                   /* bars gathered (2 quads each)        */
 static int   s_cBar;                   /* counted, whether emitted or not     */
+static int   s_ncurs;                  /* build cursor / band box verts       */
 
 static const char* VS =
     "#version 330 core\n"
@@ -317,6 +372,83 @@ static void put_bar(int* nv, int l, int t, int r, int b, int colidx,
     *nv = i + QUADV;
 }
 
+/* one DrawTranspRectangle: the four 1-px edges of the rect in one flat colour,
+   every corner inclusive. Normalised because the inner rect is the outer inset
+   by 1 and a footprint under 3 px across inverts it — which the engine's own
+   line drawer also resolves by swapping the endpoints. */
+static void put_outline(int* nv, int l, int t, int r, int b, int col,
+                        float wx, float wz)
+{
+    int k;
+    if (r < l) { k = l; l = r; r = k; }
+    if (b < t) { k = t; t = b; b = k; }
+    put_bar(nv, l, t, r, t, col, wx, wz);          /* top    */
+    put_bar(nv, l, b, r, b, col, wx, wz);          /* bottom */
+    put_bar(nv, l, t, l, b, col, wx, wz);          /* left   */
+    put_bar(nv, r, t, r, b, col, wx, wz);          /* right  */
+}
+
+/* the build-cursor footprint and the drag band box — the whole of
+   `0x469DB4..0x469F23`, transcribed in the header comment */
+static void gather_cursor(const TAGPU_FXVIEW* v)
+{
+    const char* ta = v->ta;
+    const unsigned char* gui = (const unsigned char*)(ta + OFF_GUICOL);
+    const int* vp = (const int*)(ta + OFF_VPRECT);
+    int mode, fl, l, t, r, b, idx, outer, inner, nv = CURSBASE;
+    float wx, wz;
+
+    s_ncurs = 0;
+    if (s_armed != 1 || !s_cursor || s_passive) return;
+    /* Without the redirect the engine is still drawing its own pair and ours
+       would be a second, differently placed one. Refuse rather than double. */
+    if (!tagpu_markown_installed()) return;
+
+    fl   = *(const unsigned char*)(ta + OFF_MOUSEFL);
+    mode = *(const unsigned char*)(ta + OFF_CURMODE);
+    if (!(fl & 8)) {
+        int mx, my;
+        if (mode != CUR_BUILD) return;
+        mx = *(const int*)(ta + OFF_MOUSE_X);
+        my = *(const int*)(ta + OFF_MOUSE_Y);
+        /* IsPositionInRect 0x4B6720 — inclusive on all four edges. Read the
+           FIELD, not tagpu_vpwide_true_rect: while zoomed out that field is
+           deliberately wider, and it is exactly that width which lets a
+           placement in the outer ring pass the gate at all. */
+        if (mx < vp[0] || mx > vp[2] || my < vp[1] || my > vp[3]) return;
+    }
+
+    l = *(const int*)(ta + OFF_CUR_X1) - v->eyeX + 0x80;
+    r = *(const int*)(ta + OFF_CUR_X2) - v->eyeX + 0x80;
+    t = *(const int*)(ta + OFF_CUR_Z1) - (*(const int*)(ta + OFF_CUR_H1) >> 1)
+        - v->eyeY + 0x20;
+    b = *(const int*)(ta + OFF_CUR_Z2) - (*(const int*)(ta + OFF_CUR_H2) >> 1)
+        - v->eyeY + 0x20;
+    /* the globals are live sim state read from the render thread, so a rect
+       that could not be one is dropped rather than turned into a quad */
+    if (l < -0x100000 || l > 0x100000 || r < -0x100000 || r > 0x100000 ||
+        t < -0x100000 || t > 0x100000 || b < -0x100000 || b > 0x100000) return;
+
+    /* the colour pair keys off the MODE, not off which arm of the gate let it
+       through — the engine picks it from main+0x2CC3 both times */
+    if (mode == CUR_BUILD) {
+        idx   = (fl & 0x40) ? GUI_GREEN : GUI_BLOCKED;
+        outer = gui[idx];
+        inner = outer;
+    } else {
+        outer = gui[GUI_WHITE];
+        inner = gui[GUI_BLACK];
+    }
+
+    /* the layer is drawn with the fog off, so this is only the world point the
+       rect's own corner maps to — the same projection layer_quad uses */
+    wx = (float)(l - v->vpL + v->eyeX);
+    wz = (float)(t - v->vpT + v->eyeY);
+    put_outline(&nv, l, t, r, b, outer, wx, wz);
+    put_outline(&nv, l + 1, t + 1, r - 1, b - 1, inner, wx, wz);
+    s_ncurs = nv - CURSBASE;
+}
+
 int tagpu_mark_gather(const TAGPU_FXVIEW* v)
 {
     const char* ta = v->ta;
@@ -325,6 +457,9 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     int watched, nv = BARBASE;
 
     s_nbar = 0; s_cBar = 0;
+    /* first, and outside every gate below: the cursor is not a health bar and
+       neither `damagebars` nor `nobars` has anything to say about it */
+    gather_cursor(v);
     if (s_armed != 1 || !s_bars) return 0;
     /* The bar skip is a byte in the engine's code path; without the patch the
        engine is still drawing bars itself and ours would be a second set at a
@@ -453,6 +588,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         tagpu_markown_set_capture(s_capture);
         tagpu_markown_set_bars(s_bars);
         tagpu_markown_set_selbox(s_selbox);
+        tagpu_markown_set_cursor(s_cursor);
     }
 
     x_glActiveTexture(GL_TEXTURE0);
@@ -461,7 +597,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         if (have[i]) have[i] = upload_layer(i, &lay[i]);
         if (have[i]) layer_quad(v, i * QUADV, &lay[i]);
     }
-    if (!have[0] && !have[1] && s_nbar == 0) return;
+    if (!have[0] && !have[1] && s_nbar == 0 && s_ncurs == 0) return;
 
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
@@ -498,15 +634,23 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         glBindTexture(GL_TEXTURE_2D, s_tex[TAGPU_MARK_POSTFOG]);
         x_glDrawArrays(GL_TRIANGLES, TAGPU_MARK_POSTFOG * QUADV, QUADV);
     }
+    /* last, and with the fog off for the same reason the layer above has it
+       off: the engine draws these two rects after its fog overlay and never
+       darkens them */
+    if (s_ncurs) {
+        glUniform1i(s_uFog, 0);
+        x_glDrawArrays(GL_TRIANGLES, CURSBASE, s_ncurs);
+    }
 
     if (s_log) {
         static unsigned last = 0;
         if (v->frame_counter - last >= 120) {
-            char b[192];
+            char b[224];
             last = v->frame_counter;
             _snprintf(b, sizeof b,
-                "mark: bars=%d prefog=%s postfog=%s key=%d vp=(%d,%d %dx%d) zoom=%.2f%s",
-                s_cBar,
+                "mark: bars=%d cursor=%d prefog=%s postfog=%s key=%d "
+                "vp=(%d,%d %dx%d) zoom=%.2f%s",
+                s_cBar, s_ncurs / QUADV,
                 have[TAGPU_MARK_PREFOG] ? "captured" : "-",
                 have[TAGPU_MARK_POSTFOG] ? "captured" : "-",
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,

@@ -326,10 +326,16 @@ Colours: build mode (`0x2CC3==0xE`) → both rects GUI[`(main+0x2CC6 & 0x40) ?
 0xA : 4`] — bit6 = placement valid → green, else colour 4 (blocked). Other gate
 (bit3 of `0x2CC6`) → outer GUI[0xF] (white), inner GUI[0] (black) — the
 white/black double outline of the **drag band box** [mechanics BINARY-VERIFIED;
-band-box identification INFERRED — the rect globals are world-anchored, which
-matches the band box scrolling with the map]. `DrawTranspRectangle 0x4BF8C0`
-(symbol) draws the 4 edges with `DrawLine2 0x4CC7AB`/`DrawLine` — a hollow
-rect, two edges through the "transparent" line variant.
+band-box identification confirmed live 2026-09-04 — a held-button drag sets
+`main+0x2CC6` to 0x4E, bit3 included, and paints exactly this outline].
+`DrawTranspRectangle 0x4BF8C0` draws the 4 edges through **one** writer, the
+store-only Bresenham `0x4CC7AB`: top and right reach it directly (`0x4BFC93`,
+`0x4BFCF5` clip through `0x4BEA20` first), bottom and left through
+`DrawLine 0x4BE950`, which does the same two calls internally. [CORRECTED
+2026-09-04 — this said "two edges through the transparent line variant"; there
+is no variant, only one more frame on two of the four. Full argument lists and
+the surface bound that clips them: `exe-reverse-engineering.md`,
+"the post-fog build cursor and band box".]
 
 The rest of the post-fog tail is HUD, not world markers: spectate vcall
 `0x469D80`, dialogs (`GetGameingType 0x435100` state 2/3 → `0x4C69C0` +
@@ -358,8 +364,8 @@ everything from `0x469BD7` on. Under that split:
 | Target circle | `0x4399F0` | same | target def+0x178 radius; GUI[0xC]; terrain heights (GetPosHeight) | **survives** |
 | Build-site rect (queued) | `0x438C00` | same | node+0x36 type → footprint def+0x15E..0x172; issue time node+0x46; builder-selected colour switch | **survives** |
 | Range circles (cloak/kamikaze/ShowRanges) | `0x4390A0` | same | def ranges 0x202..0x218, weapons; toggles main+0x391BF | **survives** |
-| Build cursor footprint | `0x469EC5` | **after fog** | mode main+0x2CC3==0xE, valid bit main+0x2CC6&0x40, rect main+0x2C92..0x2CA6 | **survives** (also never fogged) |
-| Band box (drag) | `0x469F1E` path | after fog | main+0x2CC6&8 + same rect globals | **survives** |
+| Build cursor footprint | `0x469EC5` | **after fog** | mode main+0x2CC3==0xE, valid bit main+0x2CC6&0x40, rect main+0x2C92..0x2CA6 | **must be re-drawn by us** [CORRECTED 2026-09-04 — see §6.3; "survives" was true at 1× and false at every zoom < 1] |
+| Band box (drag) | `0x469F1E` path | after fog | main+0x2CC6&8 + same rect globals | **must be re-drawn by us** (same block, same reason) |
 | Chat/clock/HUD/minimap | `0x469FCB`+ | after fog | — | **survives** |
 
 Caveats for the native pass:
@@ -419,7 +425,7 @@ the length of a block redirects every clipped blit inside it.
 | Health bar | re-drawn from unit state | `0x46A430` prologue detour |
 | Group digit | captured (window A) | rides the same block |
 | Order markers, route dots, target sprite/circle, build-site rect, range circles | captured (window A) | ride the same block |
-| Build-cursor footprint, drag band box | captured (window B) | the two `0x4BF8C0` call sites redirected |
+| Build-cursor footprint, drag band box | **re-drawn** from the six rect globals (G13n) | the two `0x4BF8C0` call sites redirected and the engine's pair SKIPPED |
 | Selection rect | already native since G12b | `0x4699EB`/`0x469B8A` redirected through a **per-unit** test — a unit `tagpu_native_owns_unit` does not own keeps the engine's |
 
 **Two capture windows, because fog divides them.** Window A is hook 8 `0x469BD7` →
@@ -498,9 +504,9 @@ squad tag with `damagebars` on. With `damagebars` off — the default when the r
 value is missing — the common frame costs nothing at all.
 
 **The gap: the captured layers are clipped to the offscreen.** The engine's drawers clip
-to the OFFSCREEN's own rect, so at zoom < 1 order markers and group digits stop while the
-world carries on past them. Health bars, which are the always-on markers, do not have this
-limit because they are re-drawn.
+to the OFFSCREEN, so at zoom < 1 order markers and group digits stop while the world carries
+on past them. Health bars, which are the always-on markers, do not have this limit because
+they are re-drawn.
 
 **G13f moved that edge but did not remove it.** `vpwide` widens the engine's addressable
 viewport rect, and the same rect is what `DrawGameScreen` copies into the offscreen's clip
@@ -508,12 +514,35 @@ viewport rect, and the same rect is what `DrawGameScreen` copies into the offscr
 viewport (at 0.5× on a 1024×768 frame, screen `[288,863]×[192,575]` instead of
 `[352,799]×[208,559]`; confirmed with a waypoint at `s=(318,542)` that used to be clipped).
 `layer_begin` asks for the addressable rect for exactly this reason, and the intersection
-with the context clip is what keeps it inside our scratch. Beyond the surface the engine
-would have to draw at a negative position into a screen-sized buffer, which it cannot:
-closing that last part means giving the capture window its own wider buffer and offsetting
-the base so negative engine coordinates land inside it — `markown` already owns
-`ctx[CTX_BASE]`, so it would also have to own `CTX_PITCH` and the clip fields. Possible,
-and deliberately not done here.
+with the context clip is what keeps it inside our scratch. [The **right** edge of that G13f
+figure does not follow from the mapping and is probably a slip: the surface's engine column
+1023 maps to `(1023 − 576)·0.5 + 576 = 799`, not 863, about the same centre the left edge's
+288 is exact for. Re-derived and re-measured at 0.467× in G13n as `[307,785]×[205,563]`,
+which does match. Not re-taken at 0.5×.]
+
+**And the surface bound is not the clip rect — it is `ctx+0x00`/`ctx+0x04`**
+[MEASURED 2026-09-04]. The line writer `0x4CC7AB` opens by calling `0x4CC650`, which reads
+the context's WIDTH and HEIGHT and rejects a line wholly outside `[0,w)×[0,h)` before the
+clip rect at `+0x1C..+0x28` is consulted at all. So the wider-buffer idea this note used to
+propose — give the window its own buffer and own `CTX_PITCH` and the clip fields — would
+also have to lie about `+0x00`/`+0x04`, and every drawer in the window would then be
+rasterising against a geometry the *engine's* frame does not have. That is why the fix for
+window B was not a bigger buffer.
+
+**G13n closes window B by re-drawing it instead.** The build cursor and the band box are one
+rectangle from six world globals and one flat GUI colour (§4), so `tagpu_mark.c` derives them
+and the engine's two `DrawTranspRectangle` calls are skipped outright. Measured before the
+change, 1024×768 at 0.467×: pointer at screen (880,400) → engine point (1228,418), mode 14,
+rect globals populated, **nothing drawn**; at (170,250) → engine point (−294,97), same. After
+it, both draw. Parity checked as a pixel diff against the captured path with the same frame:
+**zero differing pixels** at 1× and at 2.144× outside the animated minimap and cursor sprite,
+for the green footprint, the blocked-red footprint and the white/black band box.
+
+**Window A is still bounded**, and that is the part not closed: order markers, group digits
+and the queued build-site rect `0x438C00` still stop at the offscreen. Re-drawing them is a
+much larger job (five drawers, GAF sprites, a growth animation and text), and widening the
+buffer runs into both the `+0x00`/`+0x04` bound above and the cost: the window opens ~83× per
+presented frame (§6.2), so its key fill would scale as 1/z² against that multiplier.
 
 **The input half of the same boundary IS closed.** G13e named it — the engine can only
 *name* screen positions inside its own viewport, and a click outside it does nothing at all
@@ -548,13 +577,15 @@ Two consequences, both measured with SHIFT held:
   `glTexSubImage2D` finishing inside two of the engine's blocks that makes that true, so it
   is the number to re-take if the layer ever grows much faster than the block does.
 
-The post-fog window (build cursor, band box) has the same shape with one twist: its "there
+The post-fog window (build cursor, band box) had the same shape with one twist: its "there
 was nothing to draw" is only knowable *in arrears*, because no `DrawTranspRectangle` came.
-It is therefore decided at the **next** frame's hook 8, about the frame that just ended —
-a one-block ghost where the old code had a hole most of a frame wide. Two residuals are
-known and deliberately left: the block in which a drag ends still carries its last rect,
-and the second of the two `DrawTranspRectangle` calls continues into the buffer the first
-one published, so a present between them shows the outer outline without the inner.
+It was therefore decided at the **next** frame's hook 8, about the frame that just ended —
+a one-block ghost where the older code had a hole most of a frame wide. Two residuals came
+with that: the block in which a drag ended still carried its last rect, and the second of
+the two calls continued into the buffer the first had published, so a present between them
+showed the outer outline without the inner. **G13n removes all of it** — the window is never
+opened, because both its primitives are re-drawn (§6.1) — and the machinery is kept only for
+`passive`, where the engine draws its own again.
 
 ---
 

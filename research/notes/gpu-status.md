@@ -29,7 +29,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Features (trees, rocks, splats, wreckage) | G13a | `featown`: one detour on the feature leaf |
 | Terrain tiles + the fog overlay | G13b | `terrown`: two detours; the terrain skip path key-fills the viewport |
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
-| Health bars, order markers, group digits, build cursor, band box, selection rect | G13d | `markown`: 8 call-site redirects + 1 detour; bars re-drawn, the rest captured and replayed. The waypoint star's two sites are wrapped with an identity blend LUT so it composites opaque instead of against the fill key (§2.2) |
+| Health bars, order markers, group digits, build cursor, band box, selection rect | G13d, cursor G13n | `markown`: 8 call-site redirects + 1 detour. Health bars, the selection rect and — since G13n — **the build cursor and drag band box** are re-drawn from engine state; the order-marker block is captured and replayed. The waypoint star's two sites are wrapped with an identity blend LUT so it composites opaque instead of against the fill key (§2.2) |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e, cured G13m | `tagpu_zoom.c`; the cursor is the engine's own again — the composite no longer touches it (§2.3d) |
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + a 3-site byte patch behind `vpwide.on`, plus the `0x499221` redirect that also carries the zoom's mouse-point repair and is armed by `zoom.on` too (§2.3d) |
@@ -148,8 +148,8 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x469B8A` | `call 0x46A530` — selection rect, air sweep | call-site redirect, per-unit test |
 | `0x469BD7` | `call 0x471F90(ctx,8)` — hook 8, opens capture window A | call-site redirect |
 | `0x469D2C` | `call 0x471F90(ctx,9)` — hook 9, closes window A | call-site redirect |
-| `0x469EC5` | `call 0x4BF8C0` — build-cursor rect (window B) | call-site redirect |
-| `0x469F1E` | `call 0x4BF8C0` — drag band box (window B) | call-site redirect |
+| `0x469EC5` | `call 0x4BF8C0` — build-cursor rect | call-site redirect; the engine's call is **skipped** and the rect re-drawn (G13n) |
+| `0x469F1E` | `call 0x4BF8C0` — drag band box | call-site redirect, same — one rect, one gate, both re-drawn |
 | `0x439516` | `call 0x439740` — target sprite, from the route-dot drawer | call-site redirect; brackets the call with an identity blend LUT |
 | `0x439C7D` | `call 0x439740` — target sprite, from the walker's bit-3 dispatch | call-site redirect, same wrapper |
 | `0x46A430` | `DrawHealthBars` (`ret 0x10`) | prologue detour, 5 stolen — bars are **re-drawn**, not captured |
@@ -443,7 +443,9 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so `apply_eye_range()` recomputes it through the same wrapper on the frames it corrects the eye. The one **render-thread** write of it; a game thread drawing the minimap in that instant sees a one-frame torn box, the same standing as the published view |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live** (§2.3b); every pass that means the true 1× rect must call `tagpu_vpwide_true_rect()` rather than read the field |
 | `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) — the x and y of the 6-dword record the dispatch fills. **WRITTEN by `vpw_mouse_world()` while the zoom transform is live** (§2.3d): the engine is polled with the true pointer now, so the unzoomed `u` is put back here, where `GetUnitAtMouse 0x48CD80` and the routing test at `0x469DE1` read it. Untouched at zoom 1, on the screen-space UI, and for a record that came off the event ring. **Local, but NOT inert:** all three fillers (`0x4999C4`, `0x4999E7`, `0x4999F9`) and our write sit inside one game-thread tick, before the first reader, so nothing races — but the readers include the order dispatchers `0x419BE0`/`0x41A490`, so a wrong value here becomes a wrong **replicated order**, not just a wrong highlight. That is why the ring test above has to be exact |
-| `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index) |
+| `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index). `DrawGameScreen` caches it in a local at `0x468D49`/`0x468D51`, which is the `[esp+0x74]` the build-cursor block indexes |
+| `main+0x2CC3` / `+0x2CC6` | cursor/order mode byte and the mouse-region flags. Read only. The build-cursor draw keys off `0x2CC3 == 0x0E` (placement) or `0x2CC6 & 8` (band drag), and picks green vs blocked from `0x2CC6 & 0x40` |
+| `main+0x2C92`, `+0x2C96`, `+0x2C9A`, `+0x2C9E`, `+0x2CA2`, `+0x2CA6` | the build-cursor / band-box rect: two corners as (world x, altitude, world z) DWORDs. Read only, once a frame on the render thread, and projected with the engine's own baked `+0x80`/`+0x20` origin — **not** `main+0x37E27`'s L/T, which `vpwide` widens |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F2F` bit2 | `SelBoxes` |
 | `main+0x142E7..0x142ED` | minimap rect on screen |

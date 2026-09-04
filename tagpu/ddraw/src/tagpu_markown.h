@@ -68,6 +68,20 @@
      B  the two `DrawTranspRectangle 0x4BF8C0` calls at `0x469EC5`/`0x469F1E`
                                                  build cursor + band box, drawn
                                                  AFTER fog and never darkened
+                                                 — RETIRED, see below
+
+   WINDOW B IS NO LONGER CAPTURED; its two primitives are re-drawn, for the same
+   reason the health bars are. A capture can only ever reach the OFFSCREEN's own
+   bound, and the offscreen is the size of the screen — so at zoom < 1, where the
+   engine projects these rects with the true `+0x80`/`+0x20` origin onto the
+   coordinates `vpwide` made addressable, a build cursor whose engine position
+   falls outside that screen-sized surface is clipped away by the engine's own
+   clipper and there is nothing left to capture. On a 1024x768 frame at 0.5x
+   that is everything outside screen `[288,863]x[192,575]`: pick a metal
+   extractor and zoom out and the green footprint disappears for most of the
+   viewport. Both rects come from six world globals and one flat GUI colour
+   (`tagpu_mark.c`, "THE BUILD CURSOR"), so re-drawing them is exact and costs
+   no buffer, no key fill and no upload at all.
 
    And one marker sits outside both windows: the SELECTION RECTANGLE, which the
    engine draws per unit inside the sweeps, immediately before that unit's own
@@ -98,6 +112,10 @@ void tagpu_markown_set_bars(int ours);
    the engine drawing its own underneath, per unit and only for units the native
    pass actually owns */
 void tagpu_markown_set_selbox(int ours);
+/* the build-cursor footprint and the drag band box: with this set the engine's
+   own pair of `DrawTranspRectangle` calls is skipped outright — not captured —
+   because `tagpu_mark.c` re-draws both from the same globals */
+void tagpu_markown_set_cursor(int ours);
 void tagpu_markown_beat(unsigned int frame_counter);   /* "we drew this frame" */
 int  tagpu_markown_installed(void);
 

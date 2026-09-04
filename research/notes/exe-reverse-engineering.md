@@ -380,7 +380,7 @@ because this survey is the evidence that a bracketed swap cannot be observed by 
 | --- | --- |
 | **`0x439740`** | **The order pass's target sprite** — the pulsing star at a move/attack waypoint, and the only alpha-composited marker. `stdcall(ctx, view, node, pos, flag)`, `ret 0x14`. Two direct `E8` callers: `0x439516` (inside the route-dot drawer `0x4394E0`) and `0x439C7D` (the walker `0x439B30`'s bit-3 dispatch). Its address is **also** in `.rdata` 19 times as the `+8` field of the 25-byte order-descriptor records behind `*(u32*)0x512344` — first occurrences `0x4FC4B1`, then `0x4FC754`/`0x4FC76D`/`0x4FC786`/`0x4FC79F` at stride 25. That field is reported unread in this build (the dispatcher loading only `+0`, `+4`, `+0xC`, `+0x10`, `+0x14`, `+0x15`) — *that* half is [FROM REVIEW, not re-derived here]; the 19 records and the stride are measured. If it were ever brought into use, a wrapper on the two `E8` sites would be bypassed silently. |
 | `0x4B7F90` | `CopyGafToContext` — the route dots' blitter, and **usually** a masked copy. But `0x4B7FF7` reads each sub-frame's byte at `+0xB` and `jbe`-skips only when it is zero: non-zero routes into `0x4B8500` at `0x4B7FFE`. So whether the dots blend is a property of the **GAF data**, not of the code. Stock `pathicon` frames do not carry it, which is why they render solid. |
-| `0x4BF8C0` | `DrawTranspRectangle` — named for its hollow centre, **not** for translucency. Clips through `0x4C5E70` and draws edge runs via `0x4BEA20`; it reaches no alpha composite. Corrects a long-standing claim in `ui-markers.md` and `tagpu_markown.h` that its "transparent edges" read the destination. [The store-only inner writer `0x4CC7AB` is FROM REVIEW; independently confirmed on screen — the drag band box renders as a clean white outline instead of washing out to teal the way the star did.] |
+| `0x4BF8C0` | `DrawTranspRectangle` — named for its hollow centre, **not** for translucency. Four edges, each clipped by `0x4BEA20` and written by the store-only `0x4CC7AB`; it reaches no alpha composite. Corrects a long-standing claim in `ui-markers.md` and `tagpu_markown.h` that its "transparent edges" read the destination. [The store-only writer was FROM REVIEW and is now disassembled — see "the post-fog build cursor and band box" below, which also has the argument list, the edge split and the surface bound that clips it.] |
 | `0x4C14F0` | `DrawTextCustomFont` (the group digits, drawn inside the same window). Calls `0x4B6220`, `0x4B6750`, `0x4C5E70`, `0x4C5FA0`, `0x4C6AE0`, `0x4CCF60`, `0x4E4760` — it blits through `0x4CCF60` and never touches the LUT, so an identity table cannot affect it. |
 
 ### `DrawGameScreen 0x468CF0` — its arguments, and the branch that skips hook 9
@@ -403,6 +403,96 @@ state a capture opens at hook 8 must be able to survive not being closed.
 
 Live counter-check on the played path: hook-8 opens and hook-9 closes were equal across
 ~50 000 blocks of a skirmish, so nothing in normal play takes the `drawUnits == 0` route.
+
+### `0x469DB4..0x469F23` — the post-fog build cursor and band box, and why no capture can reach them
+
+[MEASURED 2026-09-04, this project — disassembly of the pristine Steam build, plus a live A/B
+at 1x, 2.144x and 0.467x. This is the block `tagpu_mark.c` now re-draws.]
+
+The last world-anchored thing `DrawGameScreen` paints, after its fog overlay: one
+double-outlined rectangle that is *either* the build-placement footprint *or* the drag band
+box. One gate, one projection, two `DrawTranspRectangle` calls.
+
+**The gate** (`ebx` is the `drawUnits` argument — `0x469DB4 test ebx,ebx`):
+
+```
+0x469DC2  test byte [main+0x2CC6],8   -> non-zero: draw  (the band box, forced on)
+0x469DD8  cmp  byte [main+0x2CC3],0xE -> not 14: do not draw
+0x469DE1  IsPositionInRect(main+0x37E27, main[0x2C76], main[0x2C7A])
+0x469E0B  test eax,eax / je 0x469F30
+```
+
+`IsPositionInRect 0x4B6720` is `stdcall(RECT*, x, y) ret 0xC` and is **inclusive on all four
+edges**: `x < r[0]` or `x > r[2]` or `y < r[1]` or `y > r[3]` returns 0, else 1. The rect it
+reads is the viewport rect — the field `tagpu_vpwide` deliberately widens at zoom < 1, which
+is why a placement out in the ring passes this gate at all.
+
+**The projection** (`0x469E13..0x469E68`), all six source fields read as DWORDs:
+
+```
+l = main[0x2C92] - eyeX + 0x80              eyeX = main[0x1431F]
+r = main[0x2C9E] - eyeX + 0x80              eyeY = main[0x14323]
+t = main[0x2C9A] - (main[0x2C96] >> 1) - eyeY + 0x20      (SAR, signed)
+b = main[0x2CA6] - (main[0x2CA2] >> 1) - eyeY + 0x20
+if (r < l) swap;  if (b < t) swap           0x469E92 / 0x469EA0
+```
+
+`+0x80`/`+0x20` are **baked immediates** — the TRUE viewport origin, not a read of `L`/`T`.
+So the block projects against the true origin while its gate tests the widened rect; that
+combination is what makes the rect correct in the ring and is why `tagpu_vpwide`'s `0x498DA0`
+stub redoes the mouse conversion with the true origin and the wide clamp.
+
+**The colours.** `[esp+0x74]` is `main+0xDCB`, the GUI colour byte array — written once in the
+prologue, `0x468D49 lea ebx,[eax+0xDCB]` / `0x468D51 mov [esp+0x74],ebx`. The outer index is
+picked at `0x469E6B` from the MODE (not from which arm of the gate fired):
+
+```
+mode == 0xE:  and cl,0x40 / neg cl / sbb ecx,ecx / and ecx,6 / add ecx,4
+              -> 0xA when main[0x2CC6] & 0x40 (site OK, green), else 4 (blocked)
+otherwise:    0xF
+```
+
+and the inner rect, `{l+1, t+1, r-1, b-1}`, re-tests `main[0x2CC3]` at `0x469EF4`: build mode
+reuses the same colour byte, anything else takes `gui[0]`. So build placement is a 2 px
+single-colour outline and the band box is white over black.
+
+**`DrawTranspRectangle 0x4BF8C0`** — `stdcall(ctx, RECT*, colour) ret 0xC`. Two paths on
+`ctx == NULL` (`0x4BF8C6`): the null path fetches a global draw context through `0x4C5E70`
+(which copies 12 dwords out of `[globals+0xBC]` or `globals+0x50`); the one `DrawGameScreen`
+takes is `0x4BFC5F`, with the caller's context. Its four edges do **not** all go the same way:
+
+| Edge | From | Via |
+| --- | --- | --- |
+| top `(l,t)-(r,t)` | `0x4BFC93` | `0x4BEA20` (clip) then `0x4CC7AB` directly |
+| right `(r,t)-(r,b)` | `0x4BFCF5` | the same pair |
+| bottom `(l,b)-(r,b)` | `0x4BFD2D` | `DrawLine 0x4BE950`, which does the same `0x4BEA20`+`0x4CC7AB` internally |
+| left `(l,t)-(l,b)` | `0x4BFD40` | `DrawLine 0x4BE950` |
+
+That asymmetry is a code-generation artefact, not a difference in output: all four reach the
+same writer. `ui-markers.md` used to call two of them a "transparent line variant"; they are
+the same line through one more frame. The two `test eax,eax / jne` on a `lea` of a stack slot
+(`0x4BF905`, `0x4BF9CF`) are always taken, so the null-context arms below them are dead in
+this build.
+
+**`0x4CC7AB`** is `cdecl(ctx, x0, y0, x1, y1, colour)` and it is a **store-only Bresenham**:
+`stos byte` with no read of the destination, so nothing here touches the blend LUT. Its two
+axis-aligned special cases count **both endpoints** — `0x4CC83B` (dx == 0) does
+`sub ecx,eax / inc ecx`, `0x4CC866` (dy == 0) the same — so a rect edge is inclusive at every
+corner. `ctx+0x08` is the pitch and `ctx+0x0C` the pixel base, the same two fields
+`tagpu_markown.c` swaps.
+
+**THE NEGATIVE RESULT, and it is the load-bearing one.** `0x4CC7AB` opens by calling
+**`0x4CC650`**, which reads `edi = [ctx+0x00]` and `esi = [ctx+0x04]` — the surface's WIDTH and
+HEIGHT — and clips the line to `[0,w) x [0,h)`, returning 0 for a line wholly outside; the
+caller then `je`s past the draw (`0x4CC7DD`). **The bound is the surface's own dimensions, read
+below the clip rect at `+0x1C..+0x28`, so nothing done to the clip rect can widen it.** The
+offscreen is screen-sized, and at zoom < 1 the rect above is projected at coordinates
+`vpwide` made addressable — which run far past it. Measured on a 1024x768 frame at 0.467x:
+with the pointer at screen (880,400) the engine's own mouse point is (1228,418), the six rect
+globals are populated and `main[0x2CC3]` is 14, and **not one pixel is drawn**; at screen
+(170,250) the engine point is (-294,97), same result. A capture window can therefore never
+carry this rect into the outer ring, however wide its own buffer is — which is why it is
+re-drawn instead (`tagpu_mark.c`, "THE BUILD CURSOR").
 
 ### `KeyboardHotkeySampler 0x4C1B80` — why polling it twice is safe
 

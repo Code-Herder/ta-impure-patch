@@ -55,7 +55,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02) | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid | done — [Features](features.html) §9 |
 | Terrain tiles | ● native (G13b) | `terrown`: one detour on `0x483FA0`, whose skip path key-fills the viewport | 0-px parity vs the engine's own blit, engine surface 99.9 % key, in-process map change |
 | Fog overlay | ● native (G13b) | `terrown` detours `0x4848E0` too, replicating only its lazy grid rebuild | 99.06–99.39 % lit-vs-grey agreement with the engine's own overlay |
-| Health bars, order markers, group digits, build cursor, band box | ● native (G13d, corrected G13h) | `markown`: eight call-site redirects + one detour on `0x46A430`; bars re-drawn, the rest captured out of the engine's own draw and replayed. G13h fixed the capture's publication discipline and gave the waypoint star an identity blend LUT | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5×; **0 overlay dropouts in 840 held-SHIFT frames** (was 13 in 120) and **0 % cyan** on the star (was 17.6 %) |
+| Health bars, order markers, group digits, build cursor, band box | ● native (G13d, corrected G13h, cursor re-drawn G13n) | `markown`: eight call-site redirects + one detour on `0x46A430`. Health bars and — since G13n — the build cursor and drag band box are re-drawn; the order-marker block is captured out of the engine's own draw and replayed. G13h fixed the capture's publication discipline and gave the waypoint star an identity blend LUT | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x), markers scale with the world at 0.5×; **0 overlay dropouts in 840 held-SHIFT frames** (was 13 in 120) and **0 % cyan** on the star (was 17.6 %); the build cursor **0-px against the captured path** at 1× and 2.144×, and present in the ring at 0.467× where the capture drew nothing. **Still open: the order-marker block itself stops at the offscreen bound** — a queued build-site rect out in the ring is not drawn |
 | Chat, dialogs, side panel, minimap, top bar | ○ engine 8bpp, through the composite key | — | stays engine-side: screen-space, correct at 1:1 at any zoom |
 | Mouse cursor | ● the engine's own, under the pointer (G13e, cured G13m) | `fake_GetCursorPos` answers the TRUE pointer, so the engine blits its sprite where the player is looking; the unzoomed `u` reaches it only through a button message and through the `0x498DA0` mouse→world repair. The composite no longer touches the cursor | 0 % of motion frames left behind at `u` across three runs at 1920×1080 / 0.25× with a real pointer (was 10–11 %); exact at four static positions; box- and click-select in the band, in the ring and at 2× |
 | Contextual order cursors | ● restored by patch (G13j) | `tagpu_patches.c`: six NOPs over the `je` at `0x43E50C`, the `Interface Type == 1` branch inside `0x43E490` — whose only caller is `CorretCursor_InGame 0x48D220`, so it is the sprite and nothing else | at Interface Type 1, commander selected: ground 14 `cursormove`, wreck 11 `cursorreclamate`, own unit 15 `cursorselect`, nothing selected 19 `cursornormal`; right-click still orders; sprites read out of the GL framebuffer; unchanged at zoom 1/2/0.5 |
@@ -78,6 +78,49 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G13n — the build footprint survives zooming out.** Reported from play: *"select a building
+to build (click a metal extractor on the commander build menu) and zoom out, and the green
+selection rectangle disappears; queueing with shift-click looks like it has the same
+problem."* Both halves are one bound, and it is lower than anyone had written down.
+
+**The cause.** The build cursor and the drag band box are one double-outlined rectangle drawn
+after the fog overlay (`0x469EC5`/`0x469F1E`), and G13d took them by *capture* — the engine
+draws into a buffer of ours and we replay it through the zoom. A capture can only ever reach
+as far as the engine's own drawer will write, and `DrawTranspRectangle`'s line writer
+`0x4CC7AB` opens by calling `0x4CC650`, which reads the context's **width and height** at
+`ctx+0x00`/`ctx+0x04` and rejects a line wholly outside `[0,w)×[0,h)` — *below* the clip rect
+at `+0x1C..+0x28` that `vpwide` widens. The offscreen is screen-sized; the rect is projected
+at the coordinates `vpwide` made addressable. At zoom < 1 the two disagree and the whole
+rectangle is dropped. Measured on 1024×768 at 0.467×: pointer at screen (880,400) gives the
+engine mouse point (1228,418), `main+0x2CC3` is 14, the six rect globals are populated, and
+not one pixel is drawn. The live band was screen `[307,785]×[205,563]` out of a 896×704
+viewport — most of the frame had no footprint at all.
+
+**The fix is to stop capturing it.** The rectangle is six world globals, one gate and one flat
+GUI colour, so `tagpu_mark.c` derives it the way it already derives health bars, and the two
+engine calls are skipped outright instead of captured (`tagpu_markown_set_cursor`, the same
+shape as the selection-rect lever). Window B is retired: no key fill, no upload, and no
+1024×768 `memset` on each of the ~83 captures a presented frame used to make while a cursor
+or a drag was live. `nocursor` in `tagpu_mark.on` restores the engine's own for an A/B.
+
+**Verified by A/B on one live frame, not by reading it.** Against the captured path, pixel
+diff of the whole frame: **0 differing pixels** at 1× and at 2.144× outside the animated
+minimap and cursor sprite — for the green footprint, the blocked-red one (`main+0x2CC6` bit 6
+clear) and the white/black band box. At 0.467× the same positions that drew nothing now draw:
+screen (880,400) with engine point (1228,418), and (170,250) with engine point **(−294,97)**,
+scissored correctly at the viewport's left edge. The band box drawn across the ring is whole,
+where the capture showed a truncated top edge and no left edge at all.
+
+**What this gate did not close.** The *other* capture window — order markers, group digits and
+the queued build-site rect `0x438C00` — has the same bound and keeps it, which is the second
+half of the report. Re-drawing that block is a much larger job (five drawers, GAF sprites, a
+ten-tick growth animation and text labels), and a wider buffer runs into the `+0x00`/`+0x04`
+bound above as well as the cost: the window opens ~83× per presented frame, so its key fill
+would scale as 1/z² against that multiplier. Also corrected in passing: `ui-markers.md` said
+`DrawTranspRectangle` drew "two edges through the transparent line variant" — there is no
+variant; top and right reach `0x4CC7AB` directly and bottom and left go through
+`DrawLine 0x4BE950`, which makes the same two calls.
 
 **G14b — the restorer runs on the GPU.** The owner's question about G14a: why is the model on
 the CPU? Because the pinned ONNX Runtime package is CPU-only and its CUDA provider is x64. The
