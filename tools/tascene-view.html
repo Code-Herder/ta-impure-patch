@@ -275,7 +275,7 @@ const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither",
                       "filter", "aniso", "shadows", "penumbra", "shade",
                       "terrainshadow", "shadowres", "unitsun", "shadowsun",
-                      "shadowlen"];
+                      "shadowlen", "airshadow"];
 
 function sideQuery(side, presets) {
   const p = new URLSearchParams();
@@ -395,10 +395,20 @@ function readLook(p, label) {
     filter: lane !== "explore" ? "nearest" : filter,
     aniso: Math.max(1, Math.floor(num("aniso", 4))),
     shadows: lit && p.get("shadows") !== "0",
+    // CLASSIC only: the silhouette drop shadow. A debug split like `feat=`,
+    // because "is the shadow drawing at all" is not eye-answerable, and the
+    // one way to reproduce the pre-2026-09-04 Classic baseline
+    unitShadows: p.get("unitshadow") !== "0",
     penumbra: Math.max(0, num("penumbra", 0.05)),
     shade: Math.min(1, Math.max(0, num("shade", 1))),
     terrainshadow: p.get("terrainshadow") !== "0",
     shadowres: Math.max(256, Math.min(4096, num("shadowres", 2048) | 0)),
+    airshadow: (() => {
+      const v = p.get("airshadow") || "len";
+      if (!["drop", "len", "physical"].includes(v))
+        fail(`${label}: airshadow must be drop, len or physical`);
+      return v;
+    })(),
     stats: {},
   };
 }
@@ -799,6 +809,10 @@ async function main() {
   const hasTerr = any((L) => L.terrain);
   const wantParity = any((L) => L.lane === "parity");
   const wantLab = any((L) => L.lane === "explore");
+  // `airshadow=drop` asks the Classic++ lane for a CLASSIC silhouette under its
+  // aircraft, so that lane needs the parity unit program compiled as well
+  const wantUnitClassic = wantParity || any(
+    (L) => L.lane === "explore" && L.airshadow === "drop" && L.unitShadows);
   const wantRGB = any((L) => L.undither);
   const labD = scene.labDepth || { terrain: 0.10, flat: 0.50, tallCol: 0.9 };
   // tagpu_terr.c's guard rail: cells sit CELL_PITCH apart and the border texel
@@ -830,8 +844,8 @@ async function main() {
   if (hasUnit) {
     [unitAtlas, shdBuf, unitVS, unitFS] = await Promise.all([
       fetchBin(scene.units.atlas.file), fetchBin(scene.palette.shd),
-      wantParity ? fetchText("shaders/unit.vert") : "",
-      wantParity ? fetchText("shaders/unit.frag") : "",
+      wantUnitClassic ? fetchText("shaders/unit.vert") : "",
+      wantUnitClassic ? fetchText("shaders/unit.frag") : "",
     ]);
     await Promise.all(Object.entries(scene.units.meshes).map(async ([k, m]) => {
       const b = await fetchBin(m.file);
@@ -875,13 +889,15 @@ async function main() {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    // DEPTH24_STENCIL8, not DEPTH_COMPONENT24: the Classic silhouette shadow
+    // needs a stencil to blend each shadow exactly once (see drawUnits)
     const depth = gl.createRenderbuffer();
     gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
-    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, FW, FH);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH24_STENCIL8, FW, FH);
     const fbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colour, 0);
-    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, depth);
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
       fail("offscreen framebuffer incomplete");
     return { colour, fbo };
@@ -1011,7 +1027,7 @@ async function main() {
       gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, UVST * 4, offs[i]);
     }
     gl.bindVertexArray(null);
-    if (wantParity) {
+    if (wantUnitClassic) {
       uProg = program(gl, unitVS, unitFS, "unit");
       UU = uniforms(gl, uProg, ["uGame", "uOffset", "uZoom", "uZoomC", "uDepthScale",
                                 "uAtlas", "uLUT", "uPal", "uShadow", "uAlpha",
@@ -1136,7 +1152,23 @@ async function main() {
     if (L.terrainshadow && nterr) {
       gl.bindVertexArray(ltVAO); gl.drawArrays(gl.TRIANGLES, 0, nterr);
     }
-    if (nu) { gl.bindVertexArray(uVAO); gl.drawArrays(gl.TRIANGLES, 0, nu); }
+    if (nu) {
+      gl.bindVertexArray(uVAO);
+      if (L.airshadow === "drop" && L.unitRanges.some((r) => r.air)) {
+        // an airborne unit casts NOTHING into the map: its shadow is the
+        // Classic silhouette, drawn in drawUnits. Everything else still casts,
+        // so walk the ranges and draw the gaps between the aircraft.
+        let at = 0;
+        for (const r of L.unitRanges) {
+          if (!r.air) continue;
+          if (r.first > at) gl.drawArrays(gl.TRIANGLES, at, r.first - at);
+          at = r.first + r.count;
+        }
+        if (nu > at) gl.drawArrays(gl.TRIANGLES, at, nu - at);
+      } else {
+        gl.drawArrays(gl.TRIANGLES, 0, nu);
+      }
+    }
     gl.bindVertexArray(null);
     return frame;
   }
@@ -1433,7 +1465,8 @@ async function main() {
     const U = scene.units, D = scene.depth;
     let r0 = rowBase(), nRows = (W[1] >> 4) + 32;
     if (r0 < 0) { nRows += r0; r0 = 0; }
-    let n = 0;
+    let n = 0, nAir = 0;
+    L.unitRanges = [];
     // shadowlen: the shadow's length is a + b*height instead of the parallel
     // light's height/tan(el), done as a vertical scale on the caster in the
     // shadow map. sv = height ONLY along the shadow sun's ground direction
@@ -1455,15 +1488,54 @@ async function main() {
       const wx = inst.pos[0], wz = inst.pos[1];
       const col = Math.min(w16 - 1, Math.max(0, wx >> 4));
       const row = Math.min(h16 - 1, Math.max(0, wz >> 4));
-      const wy = heightBuf[row * w16 + col];          // the engine snaps to terrain
+      const gnd = heightBuf[row * w16 + col];         // the engine snaps to terrain
+      // ALTITUDE. A ground unit is on the terrain, as the engine puts it; an
+      // aircraft is `agl` above it -- the FBI's CruiseAlt, carried in the pack
+      // (tascene `unit_facts`). A scenario `height` is an ABSOLUTE altitude, so
+      // it is measured from the ground the lab actually has under the unit.
+      const agl = Math.max(0, inst.alt !== undefined ? inst.alt - gnd
+                                                     : (inst.agl || 0));
+      const wy = gnd + agl;
       const hotX = wx - E[0] + vpL;
       const hotY = wz - (wy >> 1) - E[1] + vpT;
+      // the SHADOW is at the GROUND under the unit, so it trails the body down
+      // the screen by half the altitude -- 0 for anything on the ground
+      // (0x459228: bodyY uses altitude>>1, shadowY GetPosHeight()>>1)
+      const shadowDy = (wy >> 1) - (gnd >> 1);
+      // CLASSIC++ AIRBORNE CASTER (renderers.md §2.2). At the shadow sun's 40°
+      // a plane's shadow lands about 1.2x its altitude up-right — the lab
+      // throws a Thunder's clean off the frame — so `airshadow` picks one of:
+      //   len       shadowlen's own rule extended to the ALTITUDE, so the throw
+      //             is a + b*(agl + model height) rather than (agl + h)*cot el:
+      //             67 world units for a Thunder at 200 instead of 250
+      //   physical  cast from the true altitude and live with it
+      //   drop      do not cast at all — draw the Classic silhouette instead,
+      //             which is what the engine itself does
+      const svAir = agl > 0 && L.shadowlen && cot > 1e-3
+                  ? (L.shadowlen[0] + L.shadowlen[1] * (agl + top)) / ((agl + top) * cot)
+                  : sv;
+      const airLen = agl > 0 && L.airshadow === "len";
+      const shAgl = airLen ? agl * svAir : agl;    // `drop` never reaches the map,
+      const shSv  = airLen ? svAir : sv;           // so it keeps the true position
+                                                   // and its own lookup reads lit
       let rel = row - r0;
       if (rel < 0) rel = 0;
       if (rel > nRows + 8) rel = nRows + 8;
-      const enc = D.unit0 + rel * D.rowStep;
+      // AIRBORNE UNITS ARE A BAND ABOVE EVERY ROW, which is what the engine's
+      // second DrawUnit sweep amounts to: site B 0x469BA3 runs over ALL rows
+      // with no depth sorting, after the ground units, the features, the
+      // weapons and the explosions, so an aircraft and its shadow composite on
+      // top of the lot (shadows-cloak.md 4). Within the band they are keyed by
+      // the order they appear in, not by row -- site B has no sorting either,
+      // so the later one wins -- and a whole rowStep apart, because the
+      // intra-model term below spans +-1.8 and would otherwise interleave two
+      // aircraft face by face. A row-keyed air band would not fit: the top row
+      // is already ~355 of the 512 the depth scale allows.
+      const enc = agl > 0 ? D.unit0 + (nRows + 12 + nAir++) * D.rowStep
+                          : D.unit0 + rel * D.rowStep;
       const wldX = wx, wldZ = wz - (wy >> 1);
       const P = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      const first = n;
       for (let i = 0; i + 3 * UNIT_STRIDE <= mesh.length; i += 3 * UNIT_STRIDE) {
         for (let t2 = 0; t2 < 3; t2++) {
           const o = i + t2 * UNIT_STRIDE;
@@ -1519,10 +1591,16 @@ async function main() {
           // the SHADOW position: real x/z, height scaled by sv. The depth pass
           // casts from it and LAB_UNIT_FS looks its own shadow up at it, so a
           // unit is consistent with itself; only the ground sees the real world
-          uVerts[q + 14] = wx + x; uVerts[q + 15] = wy + sv * y; uVerts[q + 16] = wz - z;
+          uVerts[q + 14] = wx + x; uVerts[q + 15] = gnd + shAgl + shSv * y;
+          uVerts[q + 16] = wz - z;
           n++;
         }
       }
+      // the engine draws a unit's shadow inside that unit's own blit, so the
+      // silhouette pass needs each unit's own vertex range, offset and gate
+      if (n > first)
+        L.unitRanges.push({ first, count: n - first, air: agl > 0,
+                            shadow: !!inst.shadow, dy: shadowDy });
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, uVBO);
     gl.bufferData(gl.ARRAY_BUFFER, uVerts.subarray(0, n * UVST), gl.DYNAMIC_DRAW);
@@ -1530,9 +1608,83 @@ async function main() {
     return n;
   }
 
+  // the CLASSIC unit program's uniforms. The explore lane borrows them too,
+  // when `airshadow=drop` asks it for a Classic silhouette under an aircraft.
+  function classicUnitUniforms() {
+    gl.useProgram(uProg);
+    gl.uniform2f(UU.uGame, GW, GH);
+    gl.uniform2f(UU.uOffset, 0, 0);
+    gl.uniform1f(UU.uZoom, zoom);
+    gl.uniform2f(UU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
+    gl.uniform1f(UU.uDepthScale, scene.depth.scale);
+    gl.uniform1i(UU.uAtlas, 6); gl.uniform1i(UU.uLUT, 7); gl.uniform1i(UU.uPal, 1);
+    gl.uniform1i(UU.uShadow, 0); gl.uniform1f(UU.uAlpha, 1.0);
+    // the water/dig tests are `vVY <= threshold`; -1e9 disables both
+    gl.uniform1f(UU.uWaterT, -1e9); gl.uniform1i(UU.uWaterMode, 0);
+    gl.uniform1f(UU.uDigT, -1e9);
+    gl.uniform1i(UU.uScaf, 2); gl.uniform1i(UU.uScafOn, 0);
+    gl.uniform4f(UU.uScafP, vpL, vpT, vw, vh);
+    gl.uniform1f(UU.uSS, SS); gl.uniform1f(UU.uZoomF, zoom);
+    gl.uniform2f(UU.uZoomCF, ZOOM_C[0], ZOOM_C[1]);
+    gl.uniform1i(UU.uFogGrid, 2); gl.uniform1i(UU.uFogLUT, 3);
+    gl.uniform2f(UU.uFogOrg, 0, 0); gl.uniform2f(UU.uFogDim, 1, 1);
+    gl.uniform1i(UU.uFog, 0);
+  }
+
+  // THE CLASSIC SILHOUETTE DROP SHADOW, drawn before the bodies as the engine
+  // draws it (shadows-cloak.md §3): the unit's own shape filled with palette
+  // index 0 and blitted through PALETTE.ALP at (sx+5, groundY) — 5 px right of
+  // the body, at the ground under the unit, so an aircraft's trails half its
+  // altitude below it.
+  //
+  // Blended ONCE PER PIXEL through the stencil, not once per surface the view
+  // ray crosses: the engine blits ONE blackened copy of the composite, so a
+  // pixel the model covers twice is still darkened once — and from above an
+  // aircraft is a two-sided shell over its whole area, which is where this
+  // showed up in the game. Marking with colour writes off and then blending
+  // with the op that ZEROES the mark makes the second fragment on a pixel fail
+  // EQUAL 1; both draws see the same depth buffer (writes are off), so they
+  // cover the same fragments and leave no mark behind. Clearing per unit keeps
+  // two units' shadows stacking the way the engine's two separate blits do.
+  // The same scheme as tagpu_native.c, which this lane exists to mirror.
+  function silhouettes(L, want) {
+    gl.depthMask(false);
+    gl.enable(gl.STENCIL_TEST);
+    gl.uniform1i(UU.uShadow, 1);
+    for (const r of L.unitRanges) {
+      if (!r.shadow || !want(r)) continue;
+      gl.uniform2f(UU.uOffset, 5, r.dy);
+      gl.stencilFunc(gl.ALWAYS, 1, 0xFF);
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+      gl.colorMask(false, false, false, false);
+      gl.drawArrays(gl.TRIANGLES, r.first, r.count);
+      gl.stencilFunc(gl.EQUAL, 1, 0xFF);
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.ZERO);
+      gl.colorMask(true, true, true, true);
+      gl.drawArrays(gl.TRIANGLES, r.first, r.count);
+    }
+    gl.colorMask(true, true, true, true);
+    gl.disable(gl.STENCIL_TEST);
+    gl.uniform1i(UU.uShadow, 0);
+    gl.uniform2f(UU.uOffset, 0, 0);
+  }
+
   function drawUnits(L, n) {
     if (!n) return;
-    if (L.lane === "explore") {
+    const lab = L.lane === "explore";
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.bindVertexArray(uVAO);
+
+    // shadows first, as the engine emits them inside each unit's own draw.
+    // Classic draws every unit's; Classic++ only borrows one for an aircraft,
+    // and only under `airshadow=drop` — everything else it has is cast.
+    if (L.unitShadows && (!lab || L.airshadow === "drop")) {
+      classicUnitUniforms();
+      silhouettes(L, lab ? (r) => r.air : () => true);
+    }
+
+    if (lab) {
       gl.useProgram(luProg);
       gl.uniform2f(LUU.uGame, GW, GH);
       gl.uniform1f(LUU.uDepthScale, scene.depth.scale);
@@ -1551,30 +1703,11 @@ async function main() {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, lin ? gl.LINEAR : gl.NEAREST);
       if (ANISO) gl.texParameterf(gl.TEXTURE_2D, ANISO.TEXTURE_MAX_ANISOTROPY_EXT,
                                   lin ? Math.min(L.aniso, ANISO_MAX) : 1);
-    } else {
-      gl.useProgram(uProg);
-      gl.uniform2f(UU.uGame, GW, GH);
-      gl.uniform2f(UU.uOffset, 0, 0);
-      gl.uniform1f(UU.uZoom, zoom);
-      gl.uniform2f(UU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
-      gl.uniform1f(UU.uDepthScale, scene.depth.scale);
-      gl.uniform1i(UU.uAtlas, 6); gl.uniform1i(UU.uLUT, 7); gl.uniform1i(UU.uPal, 1);
-      gl.uniform1i(UU.uShadow, 0); gl.uniform1f(UU.uAlpha, 1.0);
-      // the water/dig tests are `vVY <= threshold`; -1e9 disables both
-      gl.uniform1f(UU.uWaterT, -1e9); gl.uniform1i(UU.uWaterMode, 0);
-      gl.uniform1f(UU.uDigT, -1e9);
-      gl.uniform1i(UU.uScaf, 2); gl.uniform1i(UU.uScafOn, 0);
-      gl.uniform4f(UU.uScafP, vpL, vpT, vw, vh);
-      gl.uniform1f(UU.uSS, SS); gl.uniform1f(UU.uZoomF, zoom);
-      gl.uniform2f(UU.uZoomCF, ZOOM_C[0], ZOOM_C[1]);
-      gl.uniform1i(UU.uFogGrid, 2); gl.uniform1i(UU.uFogLUT, 3);
-      gl.uniform2f(UU.uFogOrg, 0, 0); gl.uniform2f(UU.uFogDim, 1, 1);
-      gl.uniform1i(UU.uFog, 0);
+    } else if (!L.unitShadows) {
+      classicUnitUniforms();
     }
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
     gl.depthMask(true);
-    gl.bindVertexArray(uVAO);
     gl.drawArrays(gl.TRIANGLES, 0, n);
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
@@ -1591,7 +1724,8 @@ async function main() {
     gl.disable(gl.SCISSOR_TEST);
     gl.clearColor(0, 0, 0, 1);
     gl.clearDepth(1.0);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.clearStencil(0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
     // The play area is the engine's viewport rect; the HUD around it is not
     // ours to draw. FBO y == game py here, so the scissor needs no flip.
     gl.enable(gl.SCISSOR_TEST);
