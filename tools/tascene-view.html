@@ -1154,7 +1154,13 @@ async function main() {
       const h = H(gc, gr);
       ltVerts[o]     = vpL + gc * 16 - eye[0];
       ltVerts[o + 1] = vpT + gr * 16 - k * (h - dat) - eye[1];
-      ltVerts[o + 2] = labD.terrain + rel * D.rowStep;
+      // Per-row keys only when relief can lift a southern cell over a
+      // northern unit. With relief=0 nothing rises, and per-row keys would
+      // put the ground of every row south of a unit's anchor IN FRONT of the
+      // unit's parts that reach into those rows — the kbot lab lost its
+      // whole south wall to the grass (found by the shadow the roof cast on
+      // that grass). Flat, the terrain is parity's one band behind everything.
+      ltVerts[o + 2] = L.relief > 0 ? labD.terrain + rel * D.rowStep : labD.terrain;
       ltVerts[o + 3] = u; ltVerts[o + 4] = v;
       normalAt(gc, gr, L.slope, ltVerts, o + 5);
       // The world point this vertex DEPICTS, not where it is drawn: the art

@@ -497,6 +497,24 @@ names, same premultiplied output).
   unit casters alone 9 101 with a fully dark core (p10 of shadowed/lit =
   0.405) and a soft edge (median 0.737), hard (`penumbra=0`) 6 966 at median
   0.556.
+- **The shadow found a missing wall.** With the engine's slant the kbot lab
+  showed a hard dark block exactly the pad's width below the pad, soft or
+  hard, where the engine capture shows the pad's south wall. The wall was
+  drawn and then lost: the exploration lane's terrain carried **per-row
+  depth keys** (`labD.terrain + rel·rowStep`, step 4) so that a relief-lifted
+  southern cell could cover a northern unit, while a unit's vertices all carry
+  its anchor row's key ±1.8 — so every terrain row south of the anchor sat in
+  front of the parts of the unit reaching into it, and a building six rows
+  deep lost its south wall to the grass. Invisible until the roof's shadow
+  fell on that grass. At `relief=0` nothing rises, so the terrain now takes
+  parity's one flat band and the per-row keys only when relief is on; the
+  `relief` preset is unchanged. Parity itself never had the problem, which is
+  why the wall is in every engine capture. What the engine actually does with
+  a **mobile** unit's shadow, for the record (`shadows-cloak.md`): the unit's
+  own silhouette, blackened, blitted **5 px to the right** at ground height —
+  not a projection at all; only structures and wrecks get the slant. The lab
+  projects everything; `shadowsun=270,79` leans a 26-unit Peewee's shadow
+  about 5 px due right if that drop-shadow look is wanted.
   The **receiver-plane depth bias** is what makes the heightfield usable as a
   caster: the blocker search's own upslope texels were 57 920 pixels of haze on
   the hill before it and are 786 after. Every receiver's world point is the
