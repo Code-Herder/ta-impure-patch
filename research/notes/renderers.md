@@ -290,6 +290,16 @@ Why it fits:
   already unique), RGB565 (banding back). Lossless tops out near 40 %; only block
   compression goes further. Also on the table: cap the cache to the newest N maps, or
   move it to the user's profile.
+  **Maps share tiles** (the owner's point, measured 2026-09-04 over all 275 stock TNTs, every
+  32×32 tile hashed): 1,118,476 tile slots hold **553,094 distinct tiles (49.5 %)**; inside
+  one map the compiler already de-duplicates (Two Continents 5054 of 5062), the sharing is
+  *between* maps. Loading the maps in name order, the median map adds 1,611 new tiles
+  (mean 2,011) and 76 maps add under 10 % — several variants share a whole tile set. So
+  the cache should be a **content-keyed tile bank shared by every map**, not a file per
+  map: each load restores only the tiles the bank lacks (a median map ≈ 7 s at the
+  measured 4.5 ms/tile, a variant ≈ 0), and the whole game's ceiling is the unique count:
+  raw RGBA 2.2 GB, zstd 0.93 GB, BC7 0.54 GB, BC1 0.27 GB. The palette is one for all
+  maps, so a content key is valid across them.
 - **Definition → loaded model → texture frames**: the walk the load-time atlas build needs,
   to be established from the binary and written into
   [the engine map](exe-reverse-engineering.html).
