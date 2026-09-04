@@ -557,14 +557,32 @@ def paint_rgba(frames, place, aw, ah, restore, path: Path):
     return str(path.relative_to(path.parent.parent)).replace(os.sep, "/")
 
 
-def build_features(tnt, defs, gafs, out, restore=None):
-    """Every feature the map anchors: sprite atlas, instance list, def table."""
+def build_features(tnt, defs, gafs, out, restore=None, scenario=None):
+    """Every feature the map anchors, plus the scenario's GAF ones: sprite
+    atlas, instance list, def table. A scenario feature whose def names an
+    `object` instead of a `seqname` is a 3DO (every wreck is) and is drawn by
+    build_units, exactly as the engine hands it to its 3DO renderer."""
     names = tnt.feature_names()
-    anchors = tnt.feature_indices()
+    anchors = list(tnt.feature_indices())
     used = {}                                  # def index -> name
     for _col, _row, idx in anchors:
         if idx < len(names):
             used.setdefault(idx, names[idx])
+    # the scenario's sprite features anchor at their cell, like the map's own;
+    # a def the map's table does not carry gets an index past its end
+    lower = {n.lower(): i for i, n in enumerate(names)}
+    for feat in (scenario or {}).get("features", []):
+        name = (feat.get("type") or "").lower()
+        body = defs.get(name)
+        if not body or not isinstance(feat.get("pos"), list):
+            continue
+        if not (body.get("seqname") or "").strip():
+            continue                           # a 3DO feature: build_units draws it
+        idx = lower.get(name)
+        if idx is None:
+            idx = lower[name] = len(lower)
+        used.setdefault(idx, name)
+        anchors.append((int(feat["pos"][0]) >> 4, int(feat["pos"][1]) >> 4, idx))
 
     frames, hotspots, table = {}, {}, {}
     for idx, name in sorted(used.items()):
@@ -669,7 +687,14 @@ def shd_neutral(shd: bytes, palette):
 UNIT_VSTRIDE = 7                       # x,y,z, u,v, flatCol, colourKey
 
 
-def build_units(scenario, assets, out, restore=None):
+def feature_object(defs, feat):
+    """The 3DO a scenario feature is drawn with (a wreck's `object=`), or None."""
+    body = defs.get(feat.get("type") or "") if defs else None
+    obj = ((body or {}).get("object") or "").strip().lower()
+    return obj or None
+
+
+def build_units(scenario, assets, out, restore=None, defs=None):
     types = []
     for unit in scenario.get("units", []):
         if unit.get("type") and unit["type"].lower() not in types:
@@ -678,6 +703,12 @@ def build_units(scenario, assets, out, restore=None):
         for comp in group.get("composition", []):
             if comp.get("type") and comp["type"].lower() not in types:
                 types.append(comp["type"].lower())
+    # 3DO features (wrecks) ride the unit path: same models3d/ 3DOs, same
+    # renderer in the engine, posed by their facing and snapped to the ground
+    for feat in scenario.get("features", []):
+        obj = feature_object(defs, feat)
+        if obj and obj not in types:
+            types.append(obj)
     if not types:
         return None
 
@@ -772,6 +803,13 @@ def build_units(scenario, assets, out, restore=None):
         instances.append({"type": key, "pos": [int(unit["pos"][0]), int(unit["pos"][1])],
                           "facing": float(unit.get("facing", 0) or 0),
                           "id": unit.get("id")})
+    for feat in scenario.get("features", []):
+        obj = feature_object(defs, feat)
+        if obj not in meshes or not isinstance(feat.get("pos"), list):
+            continue
+        instances.append({"type": obj, "pos": [int(feat["pos"][0]), int(feat["pos"][1])],
+                          "facing": float(feat.get("facing", 0) or 0),
+                          "id": feat.get("id"), "feature": feat.get("type")})
     return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin",
                       "rgba": rgba_file},
             "stride": UNIT_VSTRIDE, "meshes": meshes, "instances": instances}
@@ -1003,11 +1041,11 @@ def cmd_build(args):
     for name, src in extract_shaders(SHADER_SET).items():
         (out / "shaders" / name).write_text(src)
 
+    defs = FeatureDefs(assets)
     features = None
     if not args.no_features:
-        features = build_features(tnt, FeatureDefs(assets), GafBank(assets), out,
-                                  restore)
-    units = None if args.no_units else build_units(scenario, assets, out, restore)
+        features = build_features(tnt, defs, GafBank(assets), out, restore, scenario)
+    units = None if args.no_units else build_units(scenario, assets, out, restore, defs)
 
     manifest = {
         "format": "ta-scene/1",

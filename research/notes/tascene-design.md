@@ -132,9 +132,13 @@ pack/
   terrain/height.r8.bin    one byte per 16-px cell, straight from mapattr
   palette/pal.bin          256 x RGBA      palette/shd.bin  32 x 256 shade table
   features/atlas.r8.bin    every GAF sprite the map's features name, shelf-packed
-  features/instances.bin   u16 col, u16 row, u16 def -- one per anchor
+  features/instances.bin   u16 col, u16 row, u16 def -- one per anchor, the map's
+                           own and then the scenario's GAF features at pos>>4
   units/atlas.r8.bin       the 3DO textures, shelf-packed
-  units/<type>.bin         bind-pose mesh: x,y,z, u,v, flatColour, colourKey
+  units/<type>.bin         bind-pose mesh: x,y,z, u,v, flatColour, colourKey --
+                           scenario units AND its 3DO features (every wreck is
+                           `object=<name>_dead` in features/*.tdf): same
+                           models, same path, the instance tagged `feature`
   shaders/terrain.*        extracted from tagpu_terr.c
   shaders/sprite.*         extracted from tagpu_feat.c
   shaders/unit.*           extracted from tagpu_native.c
@@ -306,6 +310,18 @@ rule the shaders carry.
   and diffs inside the viewport rect.
 - **`scenarios/tascene-parity.json`** — the fog-off fixture (`--los 0
   --mapping 1`), fixed camera, two still units, nothing that moves or burns.
+- **`scenarios/tascene-base.json`** — the *lighting* fixture (2026-09-03): a
+  small ARM base on the open grass at eye (5888, 11840), chosen by scanning the
+  map for the land-only 64×48-cell window with the fewest feature anchors (35;
+  the flat east candidate had 40 and no relief). A hill at the top-left of the
+  frame for slopes, a kbot lab, two extractors, a laser tower, Peewees and
+  Flashes at facings that are not multiples of 90, and wrecks on the hill's
+  foot. `build` only placed the map's own features until this fixture needed
+  wrecks: a scenario feature with a GAF `seqname` now joins the anchor list,
+  and one whose def names a 3DO `object` rides the unit mesh path posed by its
+  facing — the engine draws it with the same 3DO renderer. Not A/B'd against
+  the game yet: the wrecks' depth keys are a unit's, where the engine sorts
+  them as features.
 
 Cross-checks that passed without a game running: the unit exporter produces
 **189 triangles for ARMCOM, the same count `ta3do render` reports**, and the

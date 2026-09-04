@@ -1,0 +1,40 @@
+{
+  "format": "ta-scenario/1",
+  "description": "The tascene lighting fixture: a small ARM base on the open grass of Two Continents, south-west continent, with the hill at the top-left of the frame for slopes and few enough trees that the units are what you look at. Two metal extractors, a kbot lab, a light laser tower, Peewees and Flashes at facings that are not multiples of 90, and wrecks on the hill's foot. Everything holds so nothing fires or moves; the camera is pinned. Built for `tascene build --undither` and the exploration lane — this is the scene to judge lighting and shadows in.",
+  "seed": 20260903,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": { "shootall": false, "noshake": true },
+    "players": [
+      { "slot": 0, "controller": "human", "side": "arm", "color": 0 },
+      { "slot": 1, "controller": "ai", "side": "core", "color": 1 }
+    ]
+  },
+
+  "units": [
+    { "id": "lab",  "type": "ARMLAB",   "owner": 0, "pos": [6560, 12330] },
+    { "id": "mex1", "type": "ARMMEX",   "owner": 0, "pos": [6300, 12470] },
+    { "id": "mex2", "type": "ARMMEX",   "owner": 0, "pos": [6720, 12440] },
+    { "id": "llt",  "type": "ARMLLT",   "owner": 0, "pos": [6640, 12060] },
+    { "id": "pw1",  "type": "ARMPW",    "owner": 0, "pos": [6380, 12300], "facing": 30,  "stance": "hold" },
+    { "id": "pw2",  "type": "ARMPW",    "owner": 0, "pos": [6440, 12330], "facing": 135, "stance": "hold" },
+    { "id": "pw3",  "type": "ARMPW",    "owner": 0, "pos": [6400, 12390], "facing": 225, "stance": "hold" },
+    { "id": "pw4",  "type": "ARMPW",    "owner": 0, "pos": [6470, 12420], "facing": 300, "stance": "hold" },
+    { "id": "fl1",  "type": "ARMFLASH", "owner": 0, "pos": [6250, 12300], "facing": 60,  "stance": "hold" },
+    { "id": "fl2",  "type": "ARMFLASH", "owner": 0, "pos": [6300, 12360], "facing": 170, "stance": "hold" },
+    { "id": "fl3",  "type": "ARMFLASH", "owner": 0, "pos": [6180, 12330], "facing": 290, "stance": "hold" }
+  ],
+
+  "features": [
+    { "id": "w_pw1",   "type": "armpw_dead",    "pos": [6360, 12060], "facing": 45 },
+    { "id": "w_pw2",   "type": "armpw_dead",    "pos": [6400, 12120], "facing": 200 },
+    { "id": "w_flash", "type": "armflash_dead", "pos": [6480, 12080], "facing": 120 },
+    { "id": "w_mex",   "type": "armmex_dead",   "pos": [6200, 12500] }
+  ],
+
+  "camera": { "at": [6336, 12192], "pin": true }
+}
