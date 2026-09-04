@@ -181,7 +181,16 @@ bytes differ and every one by exactly 1 level** — fp32 rounding, so DirectML i
 same graph and not a half-precision one, and a cache written by either is valid for the
 other (the key is the tile content, not the provider). `tagpu_restorecpu.on` forces the CPU
 side for that A/B. A 15-minute 200v200 match ran with the D3D12 device resident beside our GL
-context: alive, no GL or restore errors.
+context: alive, no GL or restore errors, 13,514 log lines and none of them an error.
+
+**What the GPU path costs** **[MEASURED 2026-09-04]**: **+160 MiB of VRAM** — the game holds
+160 MiB as a pure graphics process and 320 MiB with the D3D12 device and DirectML session
+alive (`nvidia-smi` also reclassifies it `G` → `C+G`). The session is never released, so that
+is held for the whole run, not just the restore; releasing it after the last atlas would give
+it back at the price of a 1.4–1.9 s rebuild on the next map. Irrelevant on a 12 GB card,
+worth a thought on a small one. **A cached map pays none of it**: since the job reads the
+cache first, `onnxruntime.dll` is not loaded at all and the process stays at the 160 MiB
+graphics figure.
 
 **Not 1.22.1 — 1.20.1.** The 1.21.0 and 1.22.1 x86 builds call `std::_Throw_Cpp_error`,
 which Wine 9.0's built-in `msvcp140` does not implement: standalone in the instance prefix

@@ -105,7 +105,9 @@ session at all. The pre-warm idea is worth more, not less. **Correctness**: rest
 on each provider and diffing the two cache files, **61 of 20,733,952 bytes differ, every one by
 exactly 1 level** — fp32 rounding, so a cache written by either provider is valid for the other.
 A 15-minute 200v200 match ran with the D3D12 device resident beside our GL context: alive, no
-GL or restore errors. `assets`: none.
+GL or restore errors in 13,514 log lines. **Cost: +160 MiB of VRAM** while the session lives
+(160 MiB GL-only against 320 with DirectML), which a cached map does not pay at all — it never
+loads the runtime. `assets`: none.
 
 **G14a — the Classic++ restorer runs inside the game.** The first engine step of the
 Classic++ port ([Classic and Classic++ renderers](renderers.html) §2.5), built as a spike to
