@@ -16,7 +16,10 @@
      - fog: per-fragment sample of the LOS counter map + MAPPED bits
        (32-px tiles, uploaded as R8 textures each frame), LosType-aware;
      - shadow: engine rules (shadows-cloak.md): the unit silhouette, 50%
-       black, +5px x, at ground height, options-gated, drawn before the body
+       black, +5px x, at ground height, options-gated, drawn before the body,
+       and blended ONCE PER SILHOUETTE PIXEL through a stencil mask -- the
+       engine blits one blackened copy of the composite, so a pixel the model
+       covers twice is still darkened once (see the shadow loop)
        -- but ONLY for units whose engine shadow came from the composite we
        wipe (mobile units). Units on the engine's 0x20000000 path (structures)
        and wrecks keep the engine's CACHED slant-projected shadow, which is
@@ -216,6 +219,9 @@ typedef void (APIENTRY *PFN_CLEARBUFFERFV)(GLenum,GLint,const GLfloat*);
 typedef void (APIENTRY *PFN_DEPTHMASK)(GLboolean);
 typedef void (APIENTRY *PFN_SCISSOR)(GLint,GLint,GLsizei,GLsizei);
 typedef void (APIENTRY *PFN_LINEWIDTH)(GLfloat);
+typedef void (APIENTRY *PFN_STENCILFUNC)(GLenum,GLint,GLuint);
+typedef void (APIENTRY *PFN_STENCILOP)(GLenum,GLenum,GLenum);
+typedef void (APIENTRY *PFN_COLORMASK)(GLboolean,GLboolean,GLboolean,GLboolean);
 static PFN_DRAWARRAYS x_glDrawArrays;
 static PFN_DEPTHFUNC  x_glDepthFunc;
 static PFN_DISABLE    x_glDisable;
@@ -229,6 +235,9 @@ static PFN_CLEARBUFFERFV x_glClearBufferfv;
 static PFN_DEPTHMASK  x_glDepthMask;
 static PFN_SCISSOR    x_glScissor;
 static PFN_LINEWIDTH  x_glLineWidth;
+static PFN_STENCILFUNC x_glStencilFunc;
+static PFN_STENCILOP   x_glStencilOp;
+static PFN_COLORMASK   x_glColorMask;
 
 static void* getgl(const char* n)
 {
@@ -486,9 +495,13 @@ static void init_gl(void)
     x_glDepthMask  = (PFN_DEPTHMASK) getgl("glDepthMask");
     x_glScissor    = (PFN_SCISSOR)   getgl("glScissor");
     x_glLineWidth  = (PFN_LINEWIDTH) getgl("glLineWidth");
+    x_glStencilFunc = (PFN_STENCILFUNC)getgl("glStencilFunc");
+    x_glStencilOp   = (PFN_STENCILOP)  getgl("glStencilOp");
+    x_glColorMask   = (PFN_COLORMASK)  getgl("glColorMask");
     if (!x_glDrawArrays || !x_glDepthFunc || !x_glDisable || !x_glBlendFunc ||
         !x_glUniform1f || !x_glUniform2f || !x_glUniform4f || !x_glActiveTexture ||
-        !x_glClearBufferfv || !x_glDepthMask)
+        !x_glClearBufferfv || !x_glDepthMask ||
+        !x_glStencilFunc || !x_glStencilOp || !x_glColorMask)
     { nlog("native: missing GL proc"); s_state = 2; return; }
 
     GLuint vs = mksh(GL_VERTEX_SHADER, VS), fs = mksh(GL_FRAGMENT_SHADER, FS);
@@ -602,12 +615,16 @@ static void fbo_size(int w, int h, int ss)
     glBindTexture(GL_TEXTURE_2D, s_colTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glBindTexture(GL_TEXTURE_2D, s_depTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0,
-                 GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+    /* DEPTH24_STENCIL8, not DEPTH_COMPONENT24: the shadow pass needs a stencil
+       to blend each silhouette exactly once (see the shadow loop). The depth
+       texture is an attachment only -- nothing samples it -- so the packed
+       format costs nothing but the byte. */
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, w, h, 0,
+                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, NULL);
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_colTex, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_depTex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, s_depTex, 0);
     GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     GLenum st2 = 0;
     if (ss > 1) {
@@ -615,12 +632,12 @@ static void fbo_size(int w, int h, int ss)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w * ss, h * ss, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, NULL);
         glBindTexture(GL_TEXTURE_2D, s_depTex2);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w * ss, h * ss, 0,
-                     GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, w * ss, h * ss, 0,
+                     GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, NULL);
         glBindTexture(GL_TEXTURE_2D, 0);
         glBindFramebuffer(GL_FRAMEBUFFER, s_fbo2);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_colTex2, 0);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, s_depTex2, 0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, s_depTex2, 0);
         st2 = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
@@ -2033,7 +2050,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     glBindFramebuffer(GL_FRAMEBUFFER, ss > 1 ? s_fbo2 : s_fbo);
     glViewport(0, 0, gw * ss, gh * ss);
     { const GLfloat cl[4] = { 0, 0, 0, 0 }; x_glClearBufferfv(GL_COLOR, 0, cl); }
-    glClear(GL_DEPTH_BUFFER_BIT);
+    glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     x_glDepthFunc(GL_LESS);
     /* engine clips unit blits to the viewport rect — so do we (in this FBO
@@ -2149,18 +2166,48 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         glUniform1i(s_uShadow, 1);
         x_glUniform1f(s_uAlpha, 0.5f);
         x_glDepthMask(GL_FALSE);
+        /* ONE 50% BLEND PER SILHOUETTE PIXEL, not one per surface the ray
+           crosses. The engine blackens a copy of the unit's COMPOSITE and
+           blits that ONCE (shadows-cloak.md 3), so a pixel the model covers
+           twice is still darkened once. We re-use the body's 3-D geometry, so
+           without a mask the blend compounds -- and from above an aircraft is
+           a two-sided shell over its whole area, which is where this showed
+           up. Measured 2026-09-04, engine vs ours on the same fixture and
+           camera: the engine's shadow is a single sharp mode at 0.44-0.52 of
+           the bare ground, ours was BIMODAL at 0.25 (two surfaces) and 0.50
+           (one), with a 0.125 tail for three; four airframes all read 0.252-
+           0.255 against the engine's 0.487. Ground units had it too, milder.
+           Two draws per unit fix it: mark the silhouette into the stencil with
+           colour writes off, then blend where the mark is with the op that
+           ZEROES it, so the next fragment on that pixel fails EQUAL 1. Both
+           draws see the same depth buffer (depth writes are off), so they
+           cover exactly the same fragments and no mark is left behind. The
+           mark is per unit and cleared by that unit's own second draw, so two
+           DIFFERENT units' shadows still stack, exactly as the engine's two
+           separate blits do. */
+        glEnable(GL_STENCIL_TEST);
         for (i = 0; i < nu; i++) {
+            GLint  first;
+            GLsizei count;
             if (!units[i].shadow) continue;
             if (!units[i].slant && !(gfx & 8)) continue;
             glUniform1i(s_uFog, FOGW(i));
             x_glUniform2f(s_uOffset, 5.0f, (float)(units[i].gy - units[i].ay));
             x_glUniform1f(s_uWaterT, units[i].waterT);
             x_glUniform1f(s_uDigT, units[i].digT);
-            if (units[i].slant)
-                x_glDrawArrays(GL_TRIANGLES, sfirst[i], sfirst[i+1] - sfirst[i]);
-            else
-                x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i+1] - firstv[i]);
+            if (units[i].slant) { first = sfirst[i]; count = sfirst[i+1] - sfirst[i]; }
+            else                { first = firstv[i]; count = firstv[i+1] - firstv[i]; }
+            x_glStencilFunc(GL_ALWAYS, 1, 0xFF);
+            x_glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+            x_glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+            x_glDrawArrays(GL_TRIANGLES, first, count);
+            x_glStencilFunc(GL_EQUAL, 1, 0xFF);
+            x_glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+            x_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            x_glDrawArrays(GL_TRIANGLES, first, count);
         }
+        x_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        x_glDisable(GL_STENCIL_TEST);
         if (nhi) {
             tagpu_hires_draw(&hv, hunits, nhi, 1, f->frame_counter);
             HIRES_RESTORE();
