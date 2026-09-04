@@ -81,6 +81,7 @@ PAGES = [
     ("exe-reverse-engineering",   "Reverse-engineering the exe","Mechanism"),
     ("runtime-injection",         "Injection & hooking",       "Mechanism"),
     ("api-wrappers",              "The DirectDraw boundary",   "Mechanism"),
+    ("memory-manager-investigation","Memory Manager Investigation","Mechanism"),
     ("deep-plugin-abi-and-corpus","Cavedog's plugin ABI",      "Mechanism"),
     ("extra-weapons",             "More weapons per unit",     "Mechanism"),
     ("line-of-sight",             "Line of sight & fog",       "Mechanism"),
