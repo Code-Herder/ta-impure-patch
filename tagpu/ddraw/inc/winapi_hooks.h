@@ -6,10 +6,6 @@
 
 
 BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint);
-/* fake_GetCursorPos for cnc-ddraw's OWN reads of the pointer: identical, except
-   that it is not recorded as the position the engine drew its cursor from
-   (tagpu_zoom.h). */
-BOOL cursorpos_internal(LPPOINT lpPoint);
 BOOL WINAPI fake_ClipCursor(const RECT* lpRect);
 int WINAPI fake_ShowCursor(BOOL bShow);
 HCURSOR WINAPI fake_SetCursor(HCURSOR hCursor);

@@ -14,8 +14,15 @@
 
    where `s` is the REAL screen position of the pointer (what the player is
    looking at) and `u` is the unzoomed position to hand the engine so its 1:1
-   maths lands on the world point actually under `s`. Its inverse puts the
-   engine's own cursor sprite back where the pointer is.
+   maths lands on the world point actually under `s`.
+
+   `u` REACHES THE ENGINE IN EXACTLY TWO PLACES, and neither is the cursor.
+   Mouse messages carry it (tagpu_zoom_mouse_lparam below), and the mouse->world
+   conversion at `0x498DA0` recomputes it for the record the engine dispatches
+   (vpw_mouse_world() in tagpu_vpwide.c). `GetCursorPos` answers `s` — the truth
+   — so the engine blits its own cursor sprite under the pointer and its
+   screen-space readers of that poll (the edge scroll's equality on the
+   outermost screen pixel) keep working at every zoom.
 
    Two threads share this: the render thread publishes the live view once a
    frame (it is the one that reads the zoom lever and the engine's viewport),
@@ -27,9 +34,8 @@
    OUTSIDE THE WORLD VIEWPORT THE TRANSFORM IS THE IDENTITY. The side panel,
    minimap, top bar, chat and every dialog are screen-space: they are drawn by
    the engine at 1:1 at any zoom, which is the whole point of the key-fill, and
-   a click on them must arrive unmodified. The gate is on `s` for input (where
-   the player actually clicked) and on `u` for the cursor (where the engine
-   actually drew it). */
+   a click on them must arrive unmodified. The gate is always on `s`, where the
+   player actually clicked. */
 
 /* Install the engine patches the zoom needs. DllMain only, byte-matched,
    all-or-nothing, armed by tagpu_zoom.on, and every one of them inert at zoom 1.
@@ -156,67 +162,27 @@ int   tagpu_zoom_eye_range(int* loX, int* hiX, int* loY, int* hiY);
    wider addressable rect, or shifting its eye for the duration of a click. */
 int   tagpu_zoom_to_engine(int* x, int* y);
 
-/* The same, for the position the engine DRAWS its mouse cursor at (what
-   GetCursorPos reports). Identical at zoom >= 1 and inside the viewport; the
-   difference is the ring, where this keeps handing the pointer through
-   unchanged even when tagpu_vpwide has made the ring addressable. The engine
-   can NAME more than it can DRAW ON: see tagpu_zoom.c. */
-int   tagpu_zoom_to_engine_draw(int* x, int* y);
-
 /* 1 when this mouse message must not reach the engine at all: a BUTTON event in
    the display-only ring above. Take the screen-space lParam, before the
    rewrite. Dropping is the honest answer — the click has no world point the
    engine can name, and the clamped one is somewhere the player did not click. */
 int   tagpu_zoom_drop_mouse(UINT msg, LPARAM lparam);
 
-/* The pointer position the engine was last HANDED, and the `u` we answered it
-   with. Called from fake_GetCursorPos, which is the engine's only source for
-   where it draws its cursor: `0x4C2870` polls it, stores the answer in the
-   mouse object at `+0x196` and blits the sprite from there in the same call.
+/* Rewrite a BUTTON message's lParam on its way into the engine's own window
+   procedure, leaving every other message — a move above all — untouched. A
+   button is the one event whose position cannot be recovered later: it is
+   queued on the engine's event ring and dispatched whenever the game loop gets
+   to it, so the transform is applied here, at the press. A move is not queued —
+   it lands in `[obj+0x196]`, which is also where the cursor sprite is drawn
+   from — and rewriting it is what used to throw the sprite across the frame
+   (see carries_point() in tagpu_zoom.c).
 
-   Recording the pair is what makes the composite able to move that sprite.
-   Reading `g_ddraw.cursor` again when the frame is composited samples a MOVING
-   pointer a second time, on a different thread, and the two samples differ by
-   however far the pointer travelled in between — which at zoom z puts the
-   sprite `1/z` times that far from where the composite looks for it. Measured
-   at 0.25x with a real mouse: a 26 px sampling skew placed the sprite 104 px
-   out, past the 64 px box the composite moves, so it was neither covered at `u`
-   nor painted at `s` and stayed where the engine had put it — crossing the
-   frame at 4x the pointer's speed and into the side panel.
-
-   `ret` is the caller's return address, and it is what says whether THIS poll
-   moved the sprite: the engine reaches GetCursorPos from six places and only
-   three of them draw from the answer (see tagpu_zoom.c). Pass NULL for
-   cnc-ddraw's own internal reads of the pointer — the WH_MOUSE hook and the two
-   adjmouse/vhack paths — which run on the message thread and would otherwise
-   publish a newer sample than the sprite was drawn from, the same skew again. */
-void  tagpu_zoom_note_cursor(const void* ret, int sx, int sy, int ux, int uy);
-
-/* Take the pair belonging to the engine surface just uploaded. Render thread,
-   at that upload and nowhere else: the texture the composite samples the cursor
-   OUT of is only replaced when the game flipped, so pinning the pair to it is
-   closer than using whatever the engine has polled since. */
-void  tagpu_zoom_latch_cursor(void);
-
-/* How far the engine's own cursor sprite has to be moved to sit back under the
-   pointer: (s - u), plus `u` itself, which is where the engine drew it and
-   therefore the box worth capturing. The engine draws its cursor wherever it
-   thinks the mouse is, which is `u`, so without this the sprite detaches from
-   the pointer at any zoom != 1. BOTH come from the pair
-   tagpu_zoom_note_cursor() recorded, never from a fresh read of the pointer —
-   see there for why that distinction is the whole correctness of this.
-   Returns 0 — and leaves every output at zero — when there is nothing to move,
-   which is the common case: zoom 1, or a pointer on the screen-space UI. Any
-   output pointer may be NULL. */
-int   tagpu_zoom_cursor_shift(int* dx, int* dy, int* ux, int* uy);
-
-/* Rewrite a mouse message's lParam on its way into the engine's own window
-   procedure, leaving every other message untouched. THIS is where the transform
-   lives, not at the many places that write g_ddraw.cursor: cnc-ddraw's
-   PeekMessage rewriter and its wndproc both normalise the same event, so a
-   transform applied at a write site would be applied twice. CallWindowProcA on
-   g_ddraw.wndproc is the single door into the engine, and there are exactly
-   three of them (wndproc.c x2, the shield's to_game). */
+   The rewrite belongs at the door and not at the many places that write
+   g_ddraw.cursor: cnc-ddraw's PeekMessage rewriter and its wndproc both
+   normalise the same event, so a transform applied at a write site would be
+   applied twice. CallWindowProcA on g_ddraw.wndproc is the single door into the
+   engine, and there are exactly three of them (wndproc.c x2, the shield's
+   to_game). */
 LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam);
 
 #endif

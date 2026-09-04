@@ -109,7 +109,7 @@ LRESULT CALLBACK mouse_hook_proc(int Code, WPARAM wParam, LPARAM lParam)
     if (Code < 0 || (!g_config.devmode && !g_mouse_locked))
         return CallNextHookEx(g_mouse_hook, Code, wParam, lParam);
 
-    cursorpos_internal(&((MOUSEHOOKSTRUCT*)lParam)->pt);
+    fake_GetCursorPos(&((MOUSEHOOKSTRUCT*)lParam)->pt);
 
     return g_mouse_proc(Code, wParam, lParam);
 }

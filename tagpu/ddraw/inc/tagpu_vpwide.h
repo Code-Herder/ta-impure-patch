@@ -26,7 +26,9 @@
        L and T are the origin there, not a bound. Measured: moving L 128->0 and
        T 32->0 shifts the map cell under the cursor by exactly (+8, +2) cells.
        Its one call site is redirected below and the conversion redone against
-       the TRUE origin while honouring the WIDE clamp.
+       the TRUE origin while honouring the WIDE clamp. That same redirect also
+       carries the ZOOM's own repair of the mouse point, which is why it is
+       armed by `tagpu_zoom.on` as well — see THE CURSOR below.
 
      CLIP: three sites in `DrawGameScreen` copy the rect into the offscreen
        surface's clip rect through `0x4C6B10`, which is a bare four-dword store
@@ -38,15 +40,16 @@
        negative maxEye makes it alternate between 0 and a negative eye every
        call. W and H are therefore never DRIVEN — only repaired, see below.
 
-     THE CURSOR is NOT a reader of this rect, and that is the point: the engine
-       draws its sprite wherever `GetCursorPos` reports, and the composite moves
-       it back under the pointer from there — which only works while that
-       position is inside the engine's own viewport, over the terrain key fill.
-       Widening what the engine can NAME must therefore not widen what it draws
-       ON, so `tagpu_zoom_to_engine_draw()` keeps the ring identity for that one
-       poll while the messages carry the widened `u`. Measured before the split:
-       at 0.5× with the pointer at screen (320,400) there was no cursor at the
-       pointer and a ghost one on the build panel.
+     THE CURSOR is NOT a reader of this rect and no longer needs to be. The
+       engine draws its sprite wherever `GetCursorPos` reports, and that hook
+       reports the TRUE pointer at every zoom, so the sprite lands under the
+       pointer with nothing to move it afterwards and the question of what the
+       engine may draw ON does not arise. What it costs is that the record the
+       poll leaves at `[obj+0x196]`, and through the dispatch at `main+0x2C76`,
+       is then in SCREEN space where the arithmetic above is 1:1 — so the
+       `0x498DA0` stub recomputes `u` there and writes it back. That repair is
+       what the zoom needs whether or not anything is widened, which is why
+       `tagpu_zoom.on` arms the redirect on its own.
 
    The one engine WRITE to the rect, `0x49821D`, mostly is not a fight: it lives
    in the game-screen enter callback `0x497F40` and recomputes all six from the
@@ -64,11 +67,16 @@
 
    Armed by `tagpu_vpwide.on` at DLL attach, like every other code-patching
    pass. Nothing is written to the rect unless the patches installed AND the
-   true rect verified AND a zoomed-out view is live. */
+   true rect verified AND a zoomed-out view is live. `tagpu_zoom.on` arms the
+   `0x498DA0` redirect ALONE — the mouse-point repair, no rect ever widened —
+   because the zoom transform goes live from its own lever with no arm file at
+   all, and once the engine is told the truth about the pointer that repair is
+   what keeps its world point right. */
 
-/* Install the four call-site redirects and the wndproc lParam patch. DllMain
-   only, byte-matched, all-or-nothing; a no-op unless tagpu_vpwide.on exists
-   then. (The lParam patch: TA unpacks the mouse position with `AND 0xffff` /
+/* Install the call-site redirects and the wndproc lParam patch. DllMain only,
+   byte-matched; the widening half is all-or-nothing and needs
+   `tagpu_vpwide.on`, while the `0x498DA0` redirect goes in for either arm file.
+   (The lParam patch: TA unpacks the mouse position with `AND 0xffff` /
    `SHR 0x10`, which is zero-extending, so a client x of -20 arrived as 65516
    and the event was lost — half the ring. It becomes `MOVSX`/`SAR`, which is
    Microsoft's own GET_X_LPARAM and identical for any position a real mouse can

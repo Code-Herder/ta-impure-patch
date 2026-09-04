@@ -8,6 +8,7 @@
 #include "dd.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_detour.h"
+#include "tagpu_zoom.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -42,6 +43,13 @@
 #define OFF_MM_Y     0x142E9
 #define OFF_MM_W     0x142EB
 #define OFF_MM_H     0x142ED
+/* The dispatched mouse record, 6 dwords: x, y, wParam, time, msg, down-flag.
+   0x499200 copies it to the stack and hands that copy to 0x498DA0, but
+   GetUnitAtMouse 0x48CD80 (0x499278) and the routing test at 0x469DE1 read the
+   FIELD, so a repair has to be written back here as well as into the copy. */
+#define OFF_MOUSE_X  0x2C76
+#define OFF_MOUSE_Y  0x2C7A
+#define REC_MSG      4           /* dword index of the message id in the record */
 #define OFF_MOUSEFL  0x2CC6      /* bit0 on minimap, bit1 on world, bit2 either */
 #define OFF_TPOS     0x2CAA      /* GetTPosition output: x,y,z in 20.12       */
 #define OFF_GRIDXY   0x2C8E      /* two i16: the map cell under the cursor    */
@@ -111,7 +119,8 @@ static int clampi(int v, int lo, int hi)
     return v;
 }
 
-static int  s_installed;        /* the four redirects went in                */
+static int  s_installed;        /* the mouse->world redirect went in         */
+static int  s_widenArmed;       /* ...and tagpu_vpwide.on, so the rect widens */
 static int  s_verified;         /* the rect matched what 0x497F40 builds     */
 static int  s_saidUnverified;   /* the diagnostic is one-shot                */
 static int  s_saidRepair;       /* the W/H repair diagnostic is one-shot     */
@@ -155,33 +164,97 @@ static void __thiscall vpw_setclip(void* self, int l, int t, int r, int b)
     ((PFN_SETCLIP)VA_SETCLIP)(self, l, t, r, b);
 }
 
-/* ---- the origin fix -------------------------------------------------------
+/* ---- the mouse point ------------------------------------------------------
 
    0x498DA0 turns the mouse position into the world point, the map cell and the
-   feature under the cursor, and it is the ONE reader that uses L and T as the
-   screen->world ORIGIN rather than as bounds:
+   feature under the cursor. It is the ONE place either of the two things this
+   stub does can be done, and it does them in this order.
+
+   FIRST, THE ZOOM. `fake_GetCursorPos` answers the TRUE pointer, so the engine
+   draws its cursor sprite under it and its screen-space readers of that poll
+   keep working — but the record the poll leaves at `[obj+0x196]`, and through
+   the dispatch at `main+0x2C76`, is then in SCREEN space, and the arithmetic
+   below is 1:1. So the unzoomed `u` is computed here, from that one pointer
+   sample, and written back into `main+0x2C76` as well as into the copy we were
+   passed: GetUnitAtMouse `0x48CD80` (called at `0x499283`) and the routing test
+   at `0x469DE1` read the field, not the copy. Records that came off the event
+   ring already carry the message's own `u` and are left alone
+   (record_is_message below).
+
+   SECOND, THE ORIGIN, and only while the rect is ours. 0x498DA0 is the ONE
+   reader that uses L and T as the screen->world ORIGIN rather than as bounds:
 
        world = eye + clamp(pos, L, R) - L
 
    With the rect widened that reads the origin off by (0x80 - L), which would
    offset every ground order, build placement and feature hover by the same
    amount. This redoes the same computation with the TRUE origin and the WIDE
-   clamp — the only two things that differ — and is a straight pass-through
-   whenever we are not writing the rect, so zoom >= 1 is byte-identical.
+   clamp — the only two things that differ — and hands anything else to the
+   engine's own function, which is then running on a repaired position.
 
    Redoing it rather than biasing the eye across the call is deliberate: the
    engine runs this on the game thread while our overlay reads the eye on
    cnc-ddraw's render thread, so a transient bias would be a visible one-frame
    jump every few thousand frames. */
+/* Was this record pushed on the engine's own event RING, or is it the
+   `[obj+0x196]` fallback the GetCursorPos polls keep?
+
+   Only the two BUTTON arms of TA's window procedure push (`0x4B5EB2` and
+   `0x4B5EFE`, both through `0x4C2E30`), and they push the message's own
+   position — which tagpu_zoom_mouse_lparam already rewrote to `u`, from the
+   pointer sample the press was actually made at. The move arm `0x4B5E51`
+   instead copies its record into `[obj+0x196]` (`0x4C2360`), where the next
+   drawing poll overwrites x and y; so a record carrying WM_MOUSEMOVE is one
+   whose position came from the poll and needs the repair, and a record carrying
+   a button message already holds the right `u` and must be left alone — redoing
+   it would replace where the player pressed with where the pointer is now. */
+static int record_is_message(int msg)
+{
+    return msg >= WM_LBUTTONDOWN && msg <= WM_RBUTTONDBLCLK;   /* 0x201..0x206 */
+}
+
 static void __stdcall vpw_mouse_world(int* pos)
 {
     char* ta;
     unsigned char* fl;
-    int x, y, wx, wy, gx, gy;
+    int x, y, sx, sy, wx, wy, gx, gy;
     int tR = 0, tB = 0, tW = 0, tH = 0, cL, cT, cR, cB, inWorld = 0;
 
     ta = *(char**)TA_MAINPP;
-    if (!s_wide || !pos || !ptr_ok(ta)) { ((PFN_MOUSEWORLD)VA_MOUSEWORLD)(pos); return; }
+    if (!pos || !ptr_ok(ta) || !true_rect_of(ta, &tR, &tB, &tW, &tH)) {
+        ((PFN_MOUSEWORLD)VA_MOUSEWORLD)(pos); return;
+    }
+
+    /* The true pointer, and the same `g_ddraw.cursor` the composite trusts. */
+    sx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
+    sy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+
+    /* GIVE THE ENGINE ITS `u` BACK. `fake_GetCursorPos` answers the TRUE
+       pointer now, so the engine blits its cursor sprite under it — and the
+       record the poll left at `[obj+0x196]` is in screen space, which is the
+       one number the engine's 1:1 screen->world arithmetic must not be handed.
+       This is the place that arithmetic happens, so the transform belongs here:
+       one sample of the pointer, converted once, written into both the copy we
+       were passed and the field the readers just after this call read directly.
+
+       At zoom 1 tagpu_zoom_to_engine() reports "nothing to do" and not a byte
+       moves; on the screen-space UI it reports the same and the poll's own
+       answer stands, which is what the identity there always was. */
+    {
+        int ux = sx, uy = sy;
+        if (tagpu_zoom_to_engine(&ux, &uy) && !record_is_message(pos[REC_MSG])) {
+            pos[0] = ux;
+            pos[1] = uy;
+            *(volatile int*)(ta + OFF_MOUSE_X) = ux;
+            *(volatile int*)(ta + OFF_MOUSE_Y) = uy;
+        }
+    }
+
+    /* Whenever the rect is not ours the engine's own conversion is the right
+       one — it is the true origin and the true bounds — and it now runs on a
+       repaired position. That covers zoom 1, zoom > 1 (where `u` is always
+       inside the viewport) and vpwide disarmed. */
+    if (!s_wide) { ((PFN_MOUSEWORLD)VA_MOUSEWORLD)(pos); return; }
 
     x = pos[0];
     y = pos[1];
@@ -204,11 +277,6 @@ static void __stdcall vpw_mouse_world(int* pos)
            coordinates. Without this gate a click out in the world would jump
            the camera as though the minimap had been clicked. */
     {
-        int sx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
-        int sy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
-        if (!true_rect_of(ta, &tR, &tB, &tW, &tH)) {
-            ((PFN_MOUSEWORLD)VA_MOUSEWORLD)(pos); return;
-        }
         inWorld = sx >= VP_TRUE_L && sy >= VP_TRUE_T && sx <= tR && sy <= tB;
         if (inWorld) {
             cL = *(const int*)(ta + OFF_VP_L); cT = *(const int*)(ta + OFF_VP_T);
@@ -327,7 +395,9 @@ void tagpu_vpwide_frame(float z)
     int tR, tB, tW, tH, aL, aT, aR, aB;
     float cx, cy;
 
-    if (!s_installed) return;            /* disarmed: not one byte is written */
+    if (!s_installed || !s_widenArmed) return;   /* the repair-only arm writes
+                                                    no rect, so it verifies
+                                                    nothing and repairs nothing */
     ta = *(char**)TA_MAINPP;
     if (!ptr_ok(ta)) return;
     if (!true_rect_of(ta, &tR, &tB, &tW, &tH)) { restore(ta); return; }
@@ -447,31 +517,53 @@ void tagpu_vpwide_init(void)
 {
     int ok;
 
-    if (GetFileAttributesA("tagpu_vpwide.on") == INVALID_FILE_ATTRIBUTES) return;
+    /* TWO ARM FILES, BECAUSE THE STUB HAS TWO JOBS (see "the mouse point").
+       Widening the rect is what `tagpu_vpwide.on` buys. The mouse->world repair
+       is not optional once `fake_GetCursorPos` answers the true pointer — the
+       engine would otherwise name the world under the SCREEN position — and the
+       zoom transform goes live from the lever alone, which `tagpu_zoom.on` does
+       not gate. So `zoom.on` arms the repair by itself, and nothing else:
+       one call-site redirect, no rect ever written. */
+    s_widenArmed = GetFileAttributesA("tagpu_vpwide.on") != INVALID_FILE_ATTRIBUTES;
+    if (!s_widenArmed &&
+        GetFileAttributesA("tagpu_zoom.on") == INVALID_FILE_ATTRIBUTES) return;
 
-    /* all-or-nothing: every byte is checked before any of them is written */
-    if (!site_is(SITE_SETCLIP1, VA_SETCLIP) ||
-        !site_is(SITE_SETCLIP2, VA_SETCLIP) ||
-        !site_is(SITE_SETCLIP3, VA_SETCLIP) ||
-        !site_is(SITE_MOUSEWORLD, VA_MOUSEWORLD) ||
-        !bytes_are(SITE_UNPACK1, UNPACK_WAS) ||
-        !bytes_are(SITE_UNPACK2, UNPACK_WAS) ||
-        !bytes_are(SITE_UNPACK3, UNPACK_WAS)) {
-        flog("vpwide: NOT armed — engine bytes differ at one of "
-             "0x468D85/0x46964F/0x469F95/0x499221/"
-             "0x4B5E5F/0x4B5EC0/0x4B5F0C");
+    if (!site_is(SITE_MOUSEWORLD, VA_MOUSEWORLD)) {
+        flog("vpwide: NOT armed — 0x499221 is not a call to 0x498DA0");
+        s_widenArmed = 0;
         return;
     }
-    ok  = redirect(SITE_SETCLIP1, (void*)vpw_setclip);
-    ok &= redirect(SITE_SETCLIP2, (void*)vpw_setclip);
-    ok &= redirect(SITE_SETCLIP3, (void*)vpw_setclip);
-    ok &= redirect(SITE_MOUSEWORLD, (void*)vpw_mouse_world);
-    ok &= tagpu_detour_write(SITE_UNPACK1, UNPACK_NOW, 9);
-    ok &= tagpu_detour_write(SITE_UNPACK2, UNPACK_NOW, 9);
-    ok &= tagpu_detour_write(SITE_UNPACK3, UNPACK_NOW, 9);
+
+    /* all-or-nothing for the WIDENING half: every byte is checked before any of
+       them is written, and a build that fails it still gets the repair below —
+       which is one redirect on a site already matched, and which the true
+       pointer reaching the engine now depends on. */
+    if (s_widenArmed &&
+        (!site_is(SITE_SETCLIP1, VA_SETCLIP) ||
+         !site_is(SITE_SETCLIP2, VA_SETCLIP) ||
+         !site_is(SITE_SETCLIP3, VA_SETCLIP) ||
+         !bytes_are(SITE_UNPACK1, UNPACK_WAS) ||
+         !bytes_are(SITE_UNPACK2, UNPACK_WAS) ||
+         !bytes_are(SITE_UNPACK3, UNPACK_WAS))) {
+        flog("vpwide: NOT widening — engine bytes differ at one of "
+             "0x468D85/0x46964F/0x469F95/"
+             "0x4B5E5F/0x4B5EC0/0x4B5F0C");
+        s_widenArmed = 0;
+    }
+    ok = redirect(SITE_MOUSEWORLD, (void*)vpw_mouse_world);
+    if (s_widenArmed) {
+        ok &= redirect(SITE_SETCLIP1, (void*)vpw_setclip);
+        ok &= redirect(SITE_SETCLIP2, (void*)vpw_setclip);
+        ok &= redirect(SITE_SETCLIP3, (void*)vpw_setclip);
+        ok &= tagpu_detour_write(SITE_UNPACK1, UNPACK_NOW, 9);
+        ok &= tagpu_detour_write(SITE_UNPACK2, UNPACK_NOW, 9);
+        ok &= tagpu_detour_write(SITE_UNPACK3, UNPACK_NOW, 9);
+    }
     s_installed = ok;
-    flog(ok ? "vpwide: ARMED (surface clip 0x4C6B10 x3, mouse->world 0x498DA0, "
-              "wndproc lParam sign-extend x3); "
-              "the rect only widens while zoom < 1"
-            : "vpwide: PARTIAL — see above");
+    if (!ok)             flog("vpwide: PARTIAL — see above");
+    else if (s_widenArmed) flog("vpwide: ARMED (mouse->world 0x498DA0, surface "
+                                "clip 0x4C6B10 x3, wndproc lParam sign-extend "
+                                "x3); the rect only widens while zoom < 1");
+    else                 flog("vpwide: mouse->world repair only (0x498DA0) — "
+                              "the viewport rect is never widened");
 }

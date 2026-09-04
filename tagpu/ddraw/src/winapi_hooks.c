@@ -28,10 +28,23 @@
 #include "tagpu_shield.h"
 
 
-/* `ret` is the engine's return address, or NULL for cnc-ddraw's OWN calls
-   below: only what the engine is told, from the polls it actually draws from,
-   may be recorded as where the cursor sprite is (tagpu_zoom.h). */
-static BOOL cursorpos(LPPOINT lpPoint, const void* ret)
+/* THE ENGINE IS TOLD THE TRUTH ABOUT WHERE THE POINTER IS, at every zoom.
+
+   It used to be handed the unzoomed `u` here, because its 1:1 screen->world
+   arithmetic needs that number — and the cost was that it also DREW its cursor
+   sprite at `u`, which the composite then had to move back under the pointer.
+   That move can never be exact: the texture the composite samples is only
+   replaced when the game flipped, and the engine draws its cursor several times
+   per flip, so any mismatch is multiplied by 1/z.
+
+   So the transform moved to the one place the world point is actually computed
+   (`vpw_mouse_world()` in tagpu_vpwide.c, our redirect of `0x498DA0`), and this
+   hook answers `s`. The engine blits its sprite under the pointer by itself, at
+   any zoom and any frame rate; the screen-space readers of this poll — the edge
+   scroll's equality on the outermost screen pixel (`0x41CF10` via
+   `[obj+0x196]`), the off-screen warp-back at `0x41CEE7` — get the screen
+   position they were always asking for. */
+static BOOL cursorpos(LPPOINT lpPoint)
 {
     if (!g_ddraw.ref || !g_ddraw.hwnd || !g_ddraw.width)
         return real_GetCursorPos(lpPoint);
@@ -92,11 +105,6 @@ static BOOL cursorpos(LPPOINT lpPoint, const void* ret)
 
         if (lpPoint)
         {
-            /* g_ddraw.cursor keeps the TRUE pointer position; only what leaves
-               for the engine is unzoomed (tagpu_zoom.h). */
-            int sx = x, sy = y;
-            tagpu_zoom_to_engine_draw(&x, &y);
-            if (ret) tagpu_zoom_note_cursor(ret, sx, sy, x, y);
             lpPoint->x = x;
             lpPoint->y = y;
         }
@@ -106,14 +114,8 @@ static BOOL cursorpos(LPPOINT lpPoint, const void* ret)
 
     if (lpPoint)
     {
-        int cx = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
-        int cy = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
-        int sx = cx, sy = cy;
-
-        tagpu_zoom_to_engine_draw(&cx, &cy);
-        if (ret) tagpu_zoom_note_cursor(ret, sx, sy, cx, cy);
-        lpPoint->x = cx;
-        lpPoint->y = cy;
+        lpPoint->x = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
+        lpPoint->y = InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
     }
 
     return TRUE;
@@ -121,14 +123,7 @@ static BOOL cursorpos(LPPOINT lpPoint, const void* ret)
 
 BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 {
-    return cursorpos(lpPoint, __builtin_return_address(0));
-}
-
-/* cnc-ddraw's own reads of the pointer, which must not be mistaken for the
-   engine's (tagpu_zoom.h). */
-BOOL cursorpos_internal(LPPOINT lpPoint)
-{
-    return cursorpos(lpPoint, NULL);
+    return cursorpos(lpPoint);
 }
 
 BOOL WINAPI fake_ClipCursor(const RECT* lpRect)
@@ -781,7 +776,7 @@ void HandleMessage(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMa
                 if (g_config.vhack && !g_config.devmode)
                 {
                     POINT pt = { 0, 0 };
-                    cursorpos_internal(&pt);
+                    fake_GetCursorPos(&pt);
 
                     x = pt.x;
                     y = pt.y;
