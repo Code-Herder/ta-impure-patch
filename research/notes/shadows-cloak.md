@@ -409,11 +409,14 @@ i.e. composited above projectiles — engine quirk, reproduce or knowingly fix.)
    body covers the shadow from `+0`, the engine erases it from `+5`. Not
    closed: a replacement (glTF) structure casts every piece (no per-piece
    bit1 on that side). **A nanoframe casting nothing is now the correct
-   behaviour, not a gap** — measured 2026-09-03 against the stock renderer on
-   one solar held at 25/50/75/100 % built on the same ground: over the pixels
-   the completed unit darkens by half, the 50 %-built frame reads 0.99 of bare
-   terrain and the complete one 0.48, so the engine draws no shadow for a unit
-   under construction either. The native pass suppresses it on `Nanoframe != 0`
+   behaviour for most of a build** — measured 2026-09-03 against the stock
+   renderer on one solar at one spot with only the build state varying: over the
+   pixels the completed unit darkens by half, the lobe reads 1.00 of bare terrain
+   at 25 % built, 0.87 at 89 %, 0.70 at 95 % and 0.48 complete. So the engine
+   draws no shadow for a unit under construction until the last few per cent,
+   where something partial appears — and the fixture back-dates a completed unit
+   rather than lathing one, so that tail is not trustworthy
+   ([build-state](build-state.html) §7). The native pass suppresses it on `Nanoframe != 0`
    (G13l), which it has to: the scaffold's erased parts would otherwise show
    our slant projection through as a black silhouette. Why the engine's own
    structure branch — which has no nanoframe test and does blit

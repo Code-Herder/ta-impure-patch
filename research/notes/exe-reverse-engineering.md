@@ -470,18 +470,24 @@ altitude with sea level, which is what the native pass's `fz` gate does.
 **Negative results.** The body punch-out `0x4B9D70(body, scratch, 5, 0)` inside `0x45A790` was read, not
 replicated. `0x459200` itself was not disassembled past `0x459900`.
 
-**A unit under construction casts no shadow, and this tree does not say why.**
-[MEASURED 2026-09-03] One ARM solar, same ground, same camera, held at 25 / 50 / 75 / 100 %
-built by the scenario applier and captured off the stock renderer (no passes armed). Taking the
-pixels the *completed* unit darkens by half as the shadow lobe, the mean luminance over that
-lobe reads **0.99** of bare terrain at 50 % built, **0.82** at 75 %, and **0.48** when complete
-— i.e. no shadow at all until the build is nearly done. Nothing in the branch table above tests
+**A unit under construction casts no shadow until it is nearly finished, and this tree does not
+say why.** [MEASURED 2026-09-03] One ARM solar, same ground, same camera, held at 25 / 50 / 75 /
+85 / 89 / 95 / 99 / 100 % built by the scenario applier and captured off the stock renderer (no
+passes armed). Taking the pixels the *completed* unit darkens by half as the shadow lobe, and its
+own 25 % frame as the bare-terrain reference, the mean luminance over that lobe reads **1.00** at
+25 %, **0.82** at 75 %, **0.84** at 85 %, **0.87** at 89 %, **0.70** at 95 %, **0.71** at 99 % and
+**0.48** complete — no shadow for most of a build, something partial in the last few per cent.
+**Caveat on the fixture:** the applier creates the unit complete and then writes `+0x104`, so its
+composite and cached shadow have a history a lathed unit's does not; the recolour classifies this
+model identically at `p` 28 and 12, so the 89→95 % step is not explained by the staging and may
+be an artefact of that history. Nothing in the branch table above tests
 `Nanoframe`: a building is a structure whether finished or not (see the state-bit measurement
 below), so it reaches `0x45955B`/`0x4592FE` and blits `Object3do+0x14` either way. The
 resolution is therefore in what that cached sprite CONTAINS while the unit is a nanoframe —
 whose composite the dispatch `0x458810` throws away on every progress pulse
 ([build-state](build-state.html) §1) — and that was not chased. Recorded as behaviour: our own
-pass suppresses the shadow on `Nanoframe != 0` to match it.
+pass suppresses the shadow on `Nanoframe != 0`, which matches every row to 89 % and is
+conservative for the last two.
 
 **`unit+0x110 & 0x20000000` is the STRUCTURE bit.** [MEASURED 2026-09-03] Read live in one game
 from `*(main+0x14357) + idx*0x118 + 0x110`: complete mobile ARMCOM `0x91600371` (clear),

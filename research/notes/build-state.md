@@ -535,15 +535,36 @@ commander or factory building it. Reported from play, reproduced on a scripted
   and band, mirroring the engine's own skip on `state & 0x20000`, so the two
   models sort against each other by the same intra-model view depth the engine's
   height compare is doing.
-- **A unit under construction casts NO shadow**, and ours had to learn that or
-  the erased body showed our slant projection through as a black silhouette.
-  Measured against the engine on one solar held at 25/50/75/100 % built on the
-  same ground: over the pixels the completed unit darkens by half, the 50 %-built
-  frame reads **0.99** of bare terrain and the complete one **0.48**. The
-  mechanism is NOT settled — the blit's shadow tree has no nanoframe test and
-  does blit `Object3do+0x14` for a structure (shadows & cloak) — so what that
-  branch has to blit is evidently empty while the composite is being thrown away
-  on every progress pulse (§1). Recorded as behaviour, not as a cause.
+- **A unit under construction casts no shadow — nearly to the end.** Ours had to
+  drop it or the erased body showed our slant projection through as a black
+  silhouette. Measured against the stock renderer on ONE solar at one spot, only
+  the build state varying, taking the pixels the completed unit darkens by half
+  as the lobe and its own 25 % frame as the bare-terrain reference:
+
+  | built | `p` | lobe / terrain | reads as |
+  |---|---|---|---|
+  | 25 % | 191 | 1.00 | no shadow |
+  | 75 % | 63 | 0.82 | no shadow (the body itself covers part of the lobe) |
+  | 85 % | 38 | 0.84 | no shadow |
+  | 89 % | 28 | 0.87 | no shadow |
+  | 95 % | 12 | 0.70 | *something* |
+  | 99 % | 2 | 0.71 | *something* |
+  | 100 % | 0 | 0.48 | the full shadow |
+
+  **We draw none of it while `Nanoframe != 0`**, which matches every row up to
+  89 % and is conservative for the last two — a missing shadow rather than a
+  wrong black one.
+
+  **Two things this does NOT establish.** The mechanism: the blit's shadow tree
+  has no nanoframe test and does blit `Object3do+0x14` for a structure
+  ([shadows & cloak](shadows-cloak.html)), so what that branch has to blit is
+  evidently empty for most of a build, and why is unknown. And the fixture is
+  not a real build: `scenario`'s `nanoframe` creates the unit COMPLETE and then
+  writes `+0x104`, so its composite and its cached shadow have a history a
+  lathed unit's does not — which is the likeliest reason the 95/99 % rows differ
+  from 89 % at all, since the recolour classifies this model identically at
+  `p` 28 and 12. A real build watched through those last percentages is the
+  measurement that would settle it.
 
 **Verified** at 1024×768 against an unarmed control instance on the same
 scenario: the 5/25/50/75/95/100 % ladder reproduces the engine's own progression

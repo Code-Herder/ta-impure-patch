@@ -1677,16 +1677,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 if (mask & UD_DIGGER) n2->digT = 0.0f;
             }
         }
-        /* A UNIT UNDER CONSTRUCTION CASTS NO SHADOW, measured against the
-           engine on one solar held at 25/50/75/100 % built on the same ground
-           (2026-09-03): over the pixels the completed unit darkens by half,
-           the 50 %-built frame reads 0.99 of the bare terrain and the complete
-           one 0.48. The mechanism is not settled — the blit's structure branch
-           (shadows-cloak.md) has no nanoframe test and does blit the cached
-           slant projection, but a nanoframe throws its composite away on every
-           progress pulse (build-state.md 1), so what that branch has to blit is
-           evidently empty. Ours has to go the same way or the scaffold's erased
-           parts show it: a black silhouette where the engine shows grass. */
+        /* A UNIT UNDER CONSTRUCTION CASTS NO SHADOW — measured against the
+           engine on one solar at one spot with only the build state varying
+           (2026-09-03, build-state.md 7): over the pixels the completed unit
+           darkens by half, the lobe reads 1.00 of bare terrain at 25 % built,
+           0.82 at 75 %, 0.87 at 89 %, 0.70 at 95 % and 0.48 complete. Dropping
+           it for the whole build matches every reading to 89 % and leaves the
+           last few per cent short of a shadow the engine part-draws — the
+           conservative way round, because the alternative is what this line
+           was written for: the scaffold erases most of the model early on, and
+           without it our slant projection shows through the hole as a black
+           silhouette where the engine shows grass. */
         if (n2->nanoOn) n2->shadow = 0;
         n2->air = ((st & 3) != 1);
         n2->feat = 0;

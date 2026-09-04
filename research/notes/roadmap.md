@@ -114,9 +114,9 @@ every chain member the parent's row and band.
 
 **And a unit under construction casts no shadow**, which ours had to learn or the erased body
 showed our slant projection through as a black silhouette. Measured against the stock renderer on
-one solar held at 25/50/75/100 % built on the same ground: over the pixels the completed unit
-darkens by half, the 50 %-built frame reads **0.99** of bare terrain and the complete one
-**0.48**.
+one solar at one spot with only the build state varying: over the pixels the completed unit
+darkens by half, the lobe reads 1.00 of bare terrain at 25 % built, 0.87 at 89 %, 0.70 at 95 % and
+0.48 complete. We draw none of it while `Nanoframe != 0` — right to 89 %, conservative after.
 
 **Verified live at 1024×768** against an unarmed control instance on the same scenario: the
 5/25/50/75/95/100 % ladder reproduces the engine's own progression and its pulse; a
@@ -129,7 +129,10 @@ construction set) — so `0x459C70` is the *structure* Gouraud rasteriser, and t
 means under construction is `Nanoframe` at `+0x104`. And the `0xA0..0xAF` ramp the scaffold
 animates over is **green** in the live palette, not blue as [build-state](build-state.html) said.
 
-**What this gate did not close.** A replacement (glTF) mesh under construction draws unstaged —
+**What this gate did not close.** The shadow's last few per cent: the engine has *something*
+there and we have nothing, and the fixture that measured it back-dates a completed unit rather
+than lathing one, so the tail wants a real build watched through it. A replacement (glTF) mesh
+under construction draws unstaged —
 the hires pass has no build-state uniforms, though its wireframe still comes off the 3DO tree.
 Why the engine's own shadow branch draws nothing for a nanoframe is unresolved: it has no
 nanoframe test and does blit `Object3do+0x14`, so the answer is in what that sprite holds while
