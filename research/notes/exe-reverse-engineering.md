@@ -684,6 +684,44 @@ differently on the input path (`gpu-status.md` §2.3d).
 | `0x4C2DE0(rec*)` | the same **without** advancing the tail — a peek. Returns 1 when it took a real ring entry, 0 when it fell back to `[obj+0x196]` |
 | `0x4C2340(rec*)` | copy 6 dwords **out of** `[obj+0x196]`, no ring, no poll. 5 call sites |
 
+**The lParam unpack, per arm.** Each of the three arms above unpacks the position with the same
+two instructions, and they are the bytes `vpwide` patches to `MOVSX ECX,CX` / `SAR EAX,0x10`:
+
+| arm | unpack at | bytes |
+| --- | --- | --- |
+| `0x4B5E51` move | `0x4B5E5F` | `81 E1 FF FF 00 00` `C1 E8 10` — `AND ECX,0xffff` + `SHR EAX,0x10` |
+| `0x4B5EB2` button up / single | `0x4B5EC0` | the same nine bytes |
+| `0x4B5EFE` button down / dblclk | `0x4B5F0C` | the same nine bytes |
+
+`LOWORD`/`HIWORD` is zero-extending, so a client x of −20 arrives as 65516 and the event is lost
+— see `gpu-status.md` §2.3b for why that is half the addressable ring at zoom < 1.
+
+**`0x4C6B10` — the surface clip-rect store, and it clamps nothing.**
+
+```
+4c6b10  mov eax,[esp+4] ; l          add ecx,0x1c            ; this + 0x1C
+4c6b14  mov edx,[esp+8] ; t          mov [ecx],eax           ; +0x1C  l
+4c6b18                               mov [ecx+4],edx         ; +0x20  t
+4c6b1d  mov eax,[esp+0xC]; r         mov [ecx+8],eax         ; +0x24  r
+4c6b24  mov edx,[esp+0x10]; b        mov [ecx+0xC],edx       ; +0x28  b
+4c6b2e  ret 0x10                                             ; __thiscall(self,l,t,r,b)
+```
+
+Four dwords into the surface's clip rect at `+0x1C..+0x28` and not one bound check —
+`SurfaceCreateNamed` initialises the same field to `(0, 0, w-1, h-1)`, which is the bound a
+caller is expected to respect.
+
+**Six call sites, and `vpwide` redirects three.** `0x468D85`, `0x46964F` and `0x469F95` are the
+`DrawGameScreen` sites that feed it the viewport rect `main+0x37E27`, so those are the ones that
+would hand it a widened rect; they are redirected and clamped (`gpu-status.md` §2.3b). The other
+three are `0x495CAC`, `0x4A20A1` and `0x4A22DF`. **Whether any of those three can also be
+reached with the viewport rect is NOT established**: `0x495CAC` sits in a function that does read
+`main+0x37E27`/`+0x37E2B` (at `0x495A9B`/`0x495AAB`, some 0x210 bytes earlier, alongside two
+`shl 4` scalings), and the argument block at `0x495C91..0x495CA9` is built from registers this
+pass did not trace back. `0x4A20A1` and `0x4A22DF` take theirs from their own callers' stack
+arguments and neither function references `+0x37E27`. Written down as an open question rather
+than as a clean bill.
+
 **`GetCursorPos` is the IAT slot `ds:0x4FC2E4`, reached from six places, and only three of them
 move the cursor.**
 
