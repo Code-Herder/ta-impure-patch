@@ -97,8 +97,9 @@
        penumbra=<k>  EXPLORE: PCSS-lite — the penumbra widens by k world
                      units per world unit between blocker and receiver, so a
                      track is sharp where it meets the ground and a turret's
-                     shadow is soft. Default 0.1 — TA's casters are 20-60
-                     units tall, so 0.25 was all penumbra; 0 = hard
+                     shadow is soft. Default 0.05 — TA's casters are 11-60
+                     units tall, so 0.25 was all penumbra and 0.1 still
+                     washed a low building's rim out; 0 = hard
        unitsun=<az,el>   EXPLORE: see THREE SUNS above
        shadowsun=<az,el> EXPLORE: see THREE SUNS above
        shade=<s>     EXPLORE: the fraction of the DIRECT light a shadow
@@ -128,12 +129,14 @@
                   SH_L = (-0.35, 0.80, -0.49) taken out of 3DO model space
                   (z north) into map space. South-west: the camera light,
                   fronts lit, which is how the engine's LUT shades a unit
-       shadowsun  the shadows', default 225,60 — the engine's own slant
+       shadowsun  the shadows', default 225,40 — the engine's own slant
                   (shadows-cloak.md: gx = x + y/4, gy = -z - y/4, a
                   parallel light at 225,70.5 leaning every shadow up-right
                   by a quarter of the height) with the elevation lowered
-                  to 60 so a shadow is 0.58 of the height instead of 0.35:
-                  the engine's stubs read as too short in the lab. Same
+                  so a shadow is 1.2x the height instead of 0.35x. TA's
+                  buildings are LOW — the kbot lab is 11 units tall over a
+                  95-unit footprint — so the engine's stub is a 3-px rim
+                  and at 60 it was still only 6; at 40 it reads. Same
                   lean. shadowsun=225,70.5 is the engine's exactly;
                   215.5,53.1 makes the shadow fall away from the light the
                   unit is shaded by
@@ -253,10 +256,10 @@ function sideQuery(side, presets) {
 // is that vector mirrored north-south — the side the art is painted from.
 // The engine's slant (x + y/4, -z - y/4) as a direction is (-1, 4, 1)/sqrt(18),
 // az 225, el atan(4/sqrt(2)) = 70.53; SHADOWSUN_DEFAULT keeps its azimuth and
-// drops to 60 so a shadow is 0.58 of the height rather than 0.35 (header).
+// drops to 40 so a shadow is 1.2x the height rather than 0.35x (header).
 const SUN_DEFAULT = [324.5, 53.1];
 const UNITSUN_DEFAULT = [215.5, 53.1];
-const SHADOWSUN_DEFAULT = [225, 60];
+const SHADOWSUN_DEFAULT = [225, 40];
 
 function sunVector(az, el) {
   const a = az * Math.PI / 180, e = el * Math.PI / 180;
@@ -331,7 +334,7 @@ function readLook(p, label) {
     filter: lane !== "explore" ? "nearest" : filter,
     aniso: Math.max(1, Math.floor(num("aniso", 4))),
     shadows: lit && p.get("shadows") !== "0",
-    penumbra: Math.max(0, num("penumbra", 0.1)),
+    penumbra: Math.max(0, num("penumbra", 0.05)),
     shade: Math.min(1, Math.max(0, num("shade", 1))),
     terrainshadow: p.get("terrainshadow") !== "0",
     shadowres: Math.max(256, Math.min(4096, num("shadowres", 2048) | 0)),
