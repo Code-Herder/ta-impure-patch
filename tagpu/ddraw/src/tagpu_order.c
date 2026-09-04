@@ -169,6 +169,7 @@
 #define OFF_GAMETIME  0x38A47
 #define OFF_SHOWRANGE 0x391BF
 #define OFF_GUICOL    0x0DCB
+#define OFF_PALETTE   0x143A7        /* the live palette, RGBx per index      */
 #define OFF_PATHICON  0x148D3        /* GAF sequence* for the route dots      */
 #define OFF_CURSORARY 0x1487F        /* GAF sequence*[0x15]                   */
 
@@ -228,6 +229,16 @@
 #define GUI_WHITE     0x0F
 
 #define DOT_STEP      0x300000       /* 48.0 world units between route dots   */
+/* Screen-constant marker weights, set against the art they replace: the
+   engine's `pathicon` dot reads about five pixels across at 1x and its
+   `cursor_ary` waypoint star about eleven, so a 2.4-px-radius disc and a
+   crosshair whose arms breathe out to 9 px carry the same weight without ever
+   being a magnified sprite. */
+#define DOT_R         2.4f
+#define CROSS_R0      4.0            /* arm length, first frame .. last       */
+#define CROSS_R1      5.0
+#define CROSS_G0      1.5            /* and the gap at the centre             */
+#define CROSS_G1      2.0
 #define GROW_TICKS    10
 #define CIRCLE_SQUASH 0.89           /* the double at 0x4FD2C0                */
 
@@ -660,6 +671,7 @@ void tagpu_order_trace_drawer(int bit, const void* node, const int* pos, int fla
 
 /* the frame's derived constants, set once per gather */
 static const TAGPU_FXVIEW* s_v;
+static ORDREC s_rec[MAXORD];     /* the present thread's private copy       */
 static const unsigned char* s_gui;
 static double s_px;              /* one SCREEN pixel, in game-frame units    */
 static int    s_nrec, s_nline, s_ndot, s_nover;
@@ -739,10 +751,14 @@ static void oline(float x0, float y0, float x1, float y1, int col)
         s_nline++;
 }
 
-/* a filled disc of a constant SCREEN radius — the route dot */
+/* A filled disc of a constant SCREEN radius — the route dot. Constant in
+   SCREEN units, not world: the thing it replaces is a fixed-size sprite, so a
+   dot that grew with the zoom would be a magnified 1997 pixel by another
+   route. The radius is set against the engine's own `pathicon` frame, which
+   reads as about five pixels across at 1x (measured off the A/B capture). */
 static void odot(float cx, float cy, float rScreen, int col)
 {
-    const int N = 8;
+    const int N = 10;
     float r = (float)(rScreen * s_px);
     float wx, wz, px, py;
     int i;
@@ -790,9 +806,17 @@ static void oellipse(double wx, double walt, double wz, double rx, double ry,
     }
 }
 
-/* The ink a procedurally drawn marker inherits from the art it replaces: the
-   most common non-transparent index in the sequence's first frame. Cached on
-   the sequence pointer, because it is a decode and this runs per dot. */
+/* The ink a procedurally drawn marker inherits from the art it replaces.
+
+   NOT the most common index, which is what this did first and it drew every
+   route dot in (11,11,0) — near-black, invisible against grass. A `pathicon`
+   dot and a `cursor_ary` crosshair are both a small bright core inside a dark
+   outline, and the outline is the bigger half by area, so "most common" picks
+   exactly the colour the sprite uses to HIDE its edge. The core is what the
+   eye reads as the marker, so: among the indices that make up a real share of
+   the frame, take the BRIGHTEST, through the live palette rather than a
+   guess at what the index means. Cached on the sequence pointer — it is a
+   decode, and this is asked per dot. */
 typedef struct { const void* seq; int ink; } INKENT;
 static INKENT s_ink[16];
 static int    s_nink;
@@ -801,22 +825,33 @@ static int seq_ink(const char* seq, int fallback)
 {
     static unsigned char pix[128 * 128];
     const unsigned char* g;
-    int i, w, h, best = -1, bestn = 0, ck;
+    const unsigned char* pal;
+    int i, w, h, ck, n, floor_, best = -1, bestlum = -1;
     int hist[256];
 
-    if (!seq) return fallback;
+    if (!seq || !s_v) return fallback;
     for (i = 0; i < s_nink; i++) if (s_ink[i].seq == (const void*)seq) return s_ink[i].ink;
     g = tagpu_gaf_seq_frame(seq, 0);
     if (!g) return fallback;
     w = *(const unsigned short*)(g + TAGPU_GF_W);
     h = *(const unsigned short*)(g + TAGPU_GF_H);
     ck = *(const unsigned char*)(g + TAGPU_GF_CK);
+    pal = (const unsigned char*)(s_v->ta + OFF_PALETTE);
     if (w > 0 && h > 0 && w <= 128 && h <= 128 &&
         tagpu_gaf_decode(g, w, h, pix)) {
         memset(hist, 0, sizeof hist);
-        for (i = 0; i < w * h; i++) hist[pix[i]]++;
-        for (i = 0; i < 256; i++)
-            if (i != ck && hist[i] > bestn) { bestn = hist[i]; best = i; }
+        n = 0;
+        for (i = 0; i < w * h; i++) { hist[pix[i]]++; if (pix[i] != ck) n++; }
+        /* a twentieth of the sprite's opaque area keeps a stray anti-aliasing
+           pixel from deciding the colour of every dot on the map */
+        floor_ = n / 20;
+        if (floor_ < 1) floor_ = 1;
+        for (i = 0; i < 256; i++) {
+            int lum;
+            if (i == ck || hist[i] < floor_) continue;
+            lum = 2 * pal[i * 4 + 0] + 5 * pal[i * 4 + 1] + pal[i * 4 + 2];
+            if (lum > bestlum) { bestlum = lum; best = i; }
+        }
     }
     if (best < 0) best = fallback;
     if (s_nink < 16) { s_ink[s_nink].seq = seq; s_ink[s_nink].ink = best; s_nink++; }
@@ -904,8 +939,8 @@ static void draw_sprite(const ORDREC* r, int gameTime)
        it carries no isometric squash and no zoom scale — only the arms
        breathe, on the sequence's own frame index. */
     a = nfr > 1 ? (double)frame / (double)(nfr - 1) : 0.0;
-    outer = (3.0 + 5.0 * a) * s_px;
-    inner = (1.0 + 2.0 * a) * s_px;
+    outer = (CROSS_R0 + CROSS_R1 * a) * s_px;
+    inner = (CROSS_G0 + CROSS_G1 * a) * s_px;
     oline(cx - (float)outer, cy, cx - (float)inner, cy, ink);
     oline(cx + (float)inner, cy, cx + (float)outer, cy, ink);
     oline(cx, cy - (float)outer, cx, cy - (float)inner, ink);
@@ -942,7 +977,7 @@ static void draw_dots(const ORDREC* r, int gameTime)
         double f = cursor / len;
         float sx, sy;
         project(ax + dx * f, ay + dy * f, az + dz * f, &sx, &sy);
-        odot(sx, sy, 1.6f, ink);
+        odot(sx, sy, DOT_R, ink);
     }
 }
 
@@ -1060,29 +1095,50 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
     tagpu_markown_set_orders(1);
     slot = g_pub;
     if (slot != 0 && slot != 1) return 0;
+    /* TAKE A PRIVATE COPY FIRST, and walk that.
+
+       The game thread republishes this arena once per DrawGameScreen marker
+       block, which is ~83 times per presented frame (ui-markers.md 6.2) —
+       two buffers are only enough while the READER outruns them, and building
+       a frame's marker geometry does not: measured mid-bring-up, a seven-record
+       arena was lapped part way through and three markers went missing from
+       that frame. So the only thing that runs against the live arena is a
+       memcpy of the records actually in use, which is microseconds; everything
+       after it reads storage nobody else can touch.
+
+       The re-read afterwards is what makes the copy trustworthy rather than
+       merely fast: `g_pub` moving during it means the copy may straddle two
+       publications, so it is taken again. Once, not in a loop — a second miss
+       is drawn anyway, because every field in a record is a plain value, every
+       unit pointer goes through sane_unit() and every primitive is culled
+       against the viewport, so the worst a straddled copy can produce is one
+       frame of a marker in the wrong place. */
     A = &g_arena[slot];
-    n = A->n;
-    gameTime = A->gameTime;
-    showRanges = A->showRanges;
-    if (n <= 0 || n > MAXORD) return 0;
+    for (i = 0; i < 2; i++) {
+        n = A->n;
+        gameTime = A->gameTime;
+        showRanges = A->showRanges;
+        if (n < 0) n = 0;
+        if (n > MAXORD) n = MAXORD;
+        if (n) memcpy(s_rec, A->rec, (size_t)n * sizeof s_rec[0]);
+        if (g_pub == slot) break;
+        slot = g_pub;
+        if (slot != 0 && slot != 1) return 0;
+        A = &g_arena[slot];
+    }
+    if (n <= 0) return 0;
 
     s_v   = v;
     s_gui = (const unsigned char*)(v->ta + OFF_GUICOL);
     s_px  = 1.0 / (double)(v->zoom > 0.0f ? v->zoom : 1.0f);
 
     for (i = 0; i < n; i++) {
-        /* Copy the record BEFORE reading any of it, then check the publication
-           has not moved. The writer alternates slots, so `g_pub != slot` means
-           one publication has landed and the NEXT one overwrites what we are
-           reading — stopping there is a frame short of the markers rather than
-           a frame of torn ones. */
-        ORDREC r = A->rec[i];
-        if (g_pub != slot) break;
-        if (r.mask & 0x01) draw_build(&r, gameTime);
-        if (r.mask & 0x02) { draw_sprite(&r, gameTime); draw_dots(&r, gameTime); }
-        if (r.mask & 0x04) draw_circle(&r);
-        if (r.mask & 0x08) draw_sprite(&r, gameTime);
-        if (r.mask & 0x10) draw_ranges(&r, gameTime, showRanges);
+        const ORDREC* r = &s_rec[i];
+        if (r->mask & 0x01) draw_build(r, gameTime);
+        if (r->mask & 0x02) { draw_sprite(r, gameTime); draw_dots(r, gameTime); }
+        if (r->mask & 0x04) draw_circle(r);
+        if (r->mask & 0x08) draw_sprite(r, gameTime);
+        if (r->mask & 0x10) draw_ranges(r, gameTime, showRanges);
         s_nrec++;
     }
     return s_nrec;
