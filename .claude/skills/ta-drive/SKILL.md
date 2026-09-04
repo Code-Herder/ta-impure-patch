@@ -46,6 +46,11 @@ Capture and video work: the **ta-capture** skill.
    before handing it over — see *Where the window lands*. A game that is running
    perfectly but sits off-screen still answers every `tacli` command and shows
    them nothing, which is indistinguishable from a launch that failed.
+7. **Arm every pass, unless the launch is a measurement.** "Launch the game" means
+   the game with the work in it, not the 1997 renderer — see *The default arm set*.
+   A bare `tacli launch` gives the stock engine with none of our passes, which is a
+   control, not a demo. The exception is the A/B: an instance that exists to measure
+   one pass arms only that pass.
 
 ## Where the window lands
 
@@ -521,6 +526,56 @@ tools/tacli arm t1 native.on=off           # clear one
 ```
 
 Any `tagpu_<x>` trigger file works; value goes into the file (e.g. `all`, `armcom`).
+
+### The default arm set
+
+**Unless the launch is a measurement, arm all of it.** Most of these install engine
+detours at DLL attach and cannot be armed afterwards, so this runs *before* the launch
+that matters — and `launch` auto-arms each pass's `*own.on` patch half for you:
+
+```bash
+tools/tacli arm <i> 'native.on=all wrecks' terr.on feat.on fx.on sfx.on \
+                    mark.on zoom.on vpwide.on
+tools/tacli launch <i> --no-shield --res 1920x1080
+```
+
+Units and wrecks, terrain, features, weapon effects, particles, world-space markers,
+zoom (wheel live, camera range widened) and the wide viewport that makes zoomed-out
+clicks land. `launch` then prints `auto-armed owndraw.on=all / fxown.on / featown.on /
+terrown.on / markown.on`, and `tagpu.log` carries one `ARMED` line per pass — read them,
+because a missing one is the whole pass silently absent.
+
+**Health bars are a registry value, not a trigger**, and `tacli` does not set it, so
+the mark pass draws no bars until you do (`tagpu_mark.c:333` gates on `main+0x37F06`
+bit0):
+
+```bash
+WINEPREFIX=<inst>/prefix wine reg add \
+  "HKCU\Software\Cavedog Entertainment\Total Annihilation" \
+  /v damagebars /t REG_DWORD /d 1 /f
+```
+
+**Deliberately NOT in the set**, so that "everything" stays a decision and not a sweep:
+
+- `scaffold.on` — superseded by `feat.on` (features write real depth now) and its debug
+  overlay tints every tall feature purple.
+- `writeback.on` — the older per-type sprite composite, targeted at one unit name;
+  `native.on=all` + `owndraw.on` is the path that replaced it.
+- `weapons.on` — sim-changing, and inert without `.ufo` content built for it. Arm it
+  for the extra-weapons work, not for a play session.
+- The `.off` flags (`curs.off`, `wheel.off`, `zoomedge.off`, `ss.off`, `shade.off`,
+  `subpix.off`, `nano.off`, `r3dcache.off`, `overlay.off`) — these **disable** features.
+  Arming everything means leaving all of them absent.
+- The instrumentation triggers (`suppress.on`, `tracer.on`, `gldbg.on`, `posedump.on`,
+  `spxlog.on`, `fpsosd.on`) — debugging, not features.
+- `hires.on` only carries the hires renderer's *tweaks* (`anchor=`, sun, ambient,
+  normal maps). What turns hires models on is a `gamedir/hires/<unit>.glb` existing.
+
+**Two things this set changes about how you observe.** `terr.on` makes `tacli shot`
+inside the viewport ~99.9 % one flat palette index (that is the ownership proof, not a
+bug) — judge the picture with `glshot`. And `mark.on`'s order markers only draw while
+SHIFT is held, which needs the **shield on**, so measure the markers before handing the
+instance over.
 
 **A stale `owndraw.on` is worse than none.** Its detours skip the engine's unit rasterisers,
 so with `native.on` cleared but `owndraw.on` still armed the engine draws **no units at all**
