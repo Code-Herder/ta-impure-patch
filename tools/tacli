@@ -1230,6 +1230,10 @@ def cmd_shield(args):
 
 def cmd_arm(args):
     inst = Instance(args.name)
+    # `arm` is documented to run BEFORE the first launch (the detours install
+    # at DLL attach), so the instance may not exist yet: make its gamedir, and
+    # mirror_gamedir() will fill the rest in around the trigger files.
+    inst.gamedir.mkdir(parents=True, exist_ok=True)
     results = {}
     for spec in args.flags:
         name, _, value = spec.partition("=")

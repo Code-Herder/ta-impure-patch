@@ -19,7 +19,7 @@ date; **[OPEN]** = not settled.
 |---|---|---|
 | What it is | what tagpu draws today; the lab's `lane=classic` | the lab's `lane=classicpp` at its current defaults |
 | Claim | **pixel parity** with itself: it must not move by a pixel, and the lab's parity ritual is the proof | none against the engine; it is judged by eye and measured against the lab |
-| Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST` |
+| Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game so far: the terrain (G14a).* |
 | Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit) |
 | Units | per-face shade row from `SH_L` through the 32-row LUT | per-pixel lambert in map space from the posed face normal, same level normalisation |
 | Shadows | the engine's rules: 5-px silhouette drop for mobiles, the cached slant for structures | a depth map along `shadowsun`, PCSS-lite (8-tap blocker search, 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive |
@@ -121,15 +121,39 @@ The module load was never isolated as the cause. onnxruntime.dll is nevertheless
 DLL with its own thread pool and a VC++ 2019 runtime dependency inside the game's process,
 which the standalone test did not exercise.
 
-**Decided: spike ONNX Runtime 1.22.1 x86 inside TA first; the GLSL passes are the
-fallback.** The spike: the DLL loads `onnxruntime.dll` from the game thread at map load (not
-from the render thread mid-present), restores the tile set batched by size, writes a disk
-cache, and is watched for stability and time on Two Continents and through one long session.
-If it holds, it is the engine: official, the same runtime family as the lab so the two agree
-by construction, no port, a few seconds on a map's first load. If Wine or the game misbehaves,
-the GLSL port replaces it and the lab's Classic++ lane moves to that port. Rejected: libonnx
-(minutes per map, threading and SIMD would be ours), a 64-bit helper process (exact and fast,
-but IPC, process lifecycle and a Windows x64 helper to ship).
+**Decided: spike ONNX Runtime x86 inside TA first; the GLSL passes are the fallback.**
+Rejected: libonnx (minutes per map, threading and SIMD would be ours), a 64-bit helper
+process (exact and fast, but IPC, process lifecycle and a Windows x64 helper to ship).
+
+**The spike ran, 2026-09-04 — it is the engine** (`tagpu_restore.c`, `4b2cbdf`). What it
+does: the DLL loads `onnxruntime.dll` lazily from a worker thread it creates (never from
+DllMain, never from the render thread mid-present), copies the tile set and the live palette
+into the job, runs the full model in batches of 64 by input shape, writes
+`gamedir/tagpu_cache/terr_<crc32>_<count>.rgba`, and the terrain pass uploads the result as a
+second atlas in the same cell layout and samples it under `tagpu_classicpp.on`.
+Measured in the running game under Wine 9 on Two Continents **[MEASURED]**:
+
+| Step | Cost |
+|---|---|
+| `LoadLibrary` of the 10 MB runtime, inside TotalA.exe | 11–13 ms |
+| `CreateEnv` + `CreateSession` on `full.onnx` | 23–25 ms |
+| first restore of 5062 tiles, 4 intra-op threads (400 tiles wrap-padded at 56×56, 80 batches) | 22.6 s, off both game threads |
+| the same map from the cache | 29–33 ms |
+| Classic parity baselines after the shader change | unchanged, `6f7ad6b1` / `9c9ab215` |
+
+**Not 1.22.1 — 1.20.1.** The 1.21.0 and 1.22.1 x86 builds call `std::_Throw_Cpp_error`,
+which Wine 9.0's built-in `msvcp140` does not implement: standalone in the instance prefix
+they abort with "unimplemented function … aborting", and inside the game the worker thread
+never returns from `CreateEnv` — no fault, no log line, because Wine's stub exception passes
+the fork's filter and the thread simply stops **[MEASURED 2026-09-04]**. 1.20.1 is the last
+x86 build that runs on the built-in runtime, so `tools/fetch_onnxruntime.sh` pins it by
+hash; a prefix with the native VC++ 2019 runtime (winetricks) could take 1.22.1. On Windows
+the redistributable is the requirement either way.
+
+**The module-load rule is settled**: a second DLL loaded at runtime from our own thread ran
+the whole match with the game untouched (the soak result is on the roadmap's G14a row). The
+fork's `LoadLibrary` hook (`hook=4`) is bypassed with `real_LoadLibraryA` so `hook_init()`
+does not re-scan the runtime's module tree — a precaution, not a measured fault.
 
 **Rules that are ours in C whichever engine runs** **[SOURCE `unditherer/restore.py`,
 `infer.py`, `classical.py`]**: colour-key texels are inpainted before the network (OpenCV
@@ -246,9 +270,12 @@ Why it fits:
 
 ## 4. Open  [OPEN]
 
-- **The onnxruntime spike** of §2.5: does the 1.22.1 x86 DLL load and run inside TotalA.exe
-  under Wine without destabilising it, and what does a first load of Two Continents cost.
-  Its answer chooses the engine.
+- **The restorer is terrain-only so far.** Feature sprites and unit textures go through the
+  same job next (they have colour keys, so the inpaint stand-in of §2.5 lands with them), and
+  the unit atlas needs its 4-texel pad, alignment and mips.
+- **The first restore blocks nothing but is visible**: 22.6 s during which Classic++ terrain
+  draws indexed, then switches. Acceptable for a spike; a loading-screen hook or a tacli
+  pre-warm of the cache would hide it.
 - **Definition → loaded model → texture frames**: the walk the load-time atlas build needs,
   to be established from the binary and written into
   [the engine map](exe-reverse-engineering.html).
@@ -266,10 +293,11 @@ Why it fits:
 
 ## 5. Order of work
 
-1. **The restorer spike**: onnxruntime 1.22.1 x86 loaded at map load, tiles restored
-   batched, disk cache, stability watched; fall back to the GLSL passes if it fails.
-2. **The three restored atlases at load**: the definition → model → frames walk, pad and
-   align, mips 0–2; the shaders' restored-texture branch.
+1. ~~**The restorer spike**~~ — done 2026-09-04: onnxruntime 1.20.1 x86 in the DLL, tiles
+   restored at map load, cached, the terrain drawn from it under `tagpu_classicpp.on`.
+2. **The other two restored atlases at load**: the definition → model → frames walk, the
+   colour-key inpaint stand-in, pad and align, mips 0–2; the unit and feature shaders'
+   restored-texture branch.
 3. **Unit shading** in map space: normal and world height per vertex, `LAB_LIGHT` into
    `tagpu_glsl.h` with the viewer's uniform names.
 4. **Terrain lighting** from the height texture, level-normalised.

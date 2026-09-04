@@ -135,9 +135,25 @@ cost time; each is a landmine for the next GL-hook we add.
   directly. No second module, no loader interaction, no crash. [VERIFIED]
   *2026-09-04, re-read for the Classic++ restorer:* the crash described here is the null
   `glGetIntegerv` two bullets down — the companion called a NULL GL pointer — so the module
-  load itself was never isolated as the cause. The rule stands as a caution, not a proof;
-  the onnxruntime spike on [Classic and Classic++ renderers](renderers.html) §2.5 loads a
-  DLL from the game thread at map load and will settle it either way.
+  load itself was never isolated as the cause. **Settled the same day:** `tagpu_restore.c`
+  loads the 10 MB `onnxruntime.dll` at runtime from a worker thread of its own, and the game
+  ran a 200v200 match with it in the process ([renderers](renderers.html) §2.5, roadmap
+  G14a). The surviving rules: load from your own thread, never from DllMain or mid-present,
+  and go through `real_LoadLibraryA` so the fork's `hook=4` `LoadLibrary` hook does not
+  re-scan the new module tree.
+- **Wine 9's built-in `msvcp140` is not the real one, and a missing export hangs your
+  thread silently.** onnxruntime 1.21.0 and 1.22.1 (x86) call `std::_Throw_Cpp_error`, which
+  Wine 9.0's `msvcp140` lacks. Standalone the process aborts with `unimplemented function
+  msvcp140.dll.?_Throw_Cpp_error@std@@YAXH@Z`; **inside TA the worker thread simply never
+  returned from `CreateEnv`** — no fault, no log line, the game unaffected — because the
+  stub's exception passes the fork's filter (`debug.c` continues only on privileged
+  instructions). Before trusting a third-party DLL in the process, run it in a standalone
+  32-bit exe **under the instance's own prefix**: `WINEPREFIX=<instance>/prefix wine
+  test.exe`. 1.20.1 is the last onnxruntime x86 build that runs on the built-in runtime.
+  [VERIFIED 2026-09-04]
+- **`tacli arm` on a not-yet-created instance** used to fail with `FileNotFoundError` on the
+  gamedir, although the skill documents arming *before* the first launch. Fixed 2026-09-04:
+  `cmd_arm` creates the gamedir; `mirror_gamedir()` fills in around the trigger files.
 - **`0x004D94E0` is TA's crash-report writer, not your bug.** If you ever see `c0000005 @ 0x4d94e0`,
   an *earlier* exception already happened and TA is dying while trying to report it. Re-run with
   `WINEDEBUG=+seh` and read the **first** `dispatch_exception`, not the unhandled one. [VERIFIED]
