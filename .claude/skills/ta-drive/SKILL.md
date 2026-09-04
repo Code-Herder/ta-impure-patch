@@ -556,6 +556,17 @@ this is for timing the two, not for choosing a look. Read the result in `tagpu.l
 line. A map already in `gamedir/tagpu_cache/` is read back in ~30 ms and no model runs at all —
 delete the `.rgba` to re-measure.
 
+**The restorer's GPU path needs a vkd3d-proton `d3d12`, and `tacli` sources it for you.**
+Wine's own vkd3d cannot host DirectML, so `launch` links a 32-bit `d3d12.dll`/`d3d12core.dll`
+into the gamedir and sets `WINEDLLOVERRIDES=d3d12,d3d12core=n,b` — **only when the pair is
+really there**, so an instance without it just runs the model on the CPU. It looks in **a
+Steam Proton install first** (`files/lib/wine/vkd3d-proton/i386-windows`, so no download is
+needed on a machine with Proton), then the hash-pinned copy `tools/fetch_onnxruntime.sh` puts
+in the template gamedir; `TA_VKD3D_PROTON=<dir>` overrides both and is how you pin a build,
+since Steam's Proton updates itself. `launch` and `scenario load` print
+`vkd3d-proton ... from <dir>` whenever it is not the pinned copy — if that line is absent and
+`tagpu.log` says `DirectML unavailable`, the pair is what is missing.
+
 **Health bars are a registry value, not a trigger**, and `tacli` does not set it, so
 the mark pass draws no bars until you do (`tagpu_mark.c:333` gates on `main+0x37F06`
 bit0):

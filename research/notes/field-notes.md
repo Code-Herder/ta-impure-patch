@@ -192,8 +192,10 @@ cost time; each is a landmine for the next GL-hook we add.
   the ONNX Runtime DirectML provider append fails with `E_NOTIMPL` at
   `dml_provider_factory.cc(520)`; `CheckFeatureSupport` also answers shader model **0x51** to
   DirectML's **0x66** ask, so its DXIL shaders would not compile even past that.
-  **vkd3d-proton 3.0.1 hosts it** — upstream still ships an `x86/` pair in the release tarball
-  (Proton's own copy under `files/lib/wine/vkd3d-proton/i386-windows` works identically).
+  **vkd3d-proton hosts it** — upstream still ships an `x86/` pair in the release tarball, and
+  **every Steam Proton carries one** at `files/lib/wine/vkd3d-proton/i386-windows`, which is
+  the copy `tacli` reaches for first (measured identical, and Proton Experimental's builds the
+  session faster: 1.0 s against pinned 3.0.1's 1.4–1.9 s).
   `WINEDEBUG=+dxgi,+d3d12,+vkd3d` names the stub directly; that is how this was found.
   [VERIFIED 2026-09-04]
 - **A DXGI/D3D12 probe needs a live `DISPLAY` even when it draws nothing.** With no display the

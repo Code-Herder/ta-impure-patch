@@ -90,11 +90,14 @@ is touched and no sim state is read or written.
 **Under Wine that needed vkd3d-proton.** Wine 9's built-in `vkd3d` builds the D3D12 device on
 the RTX 4070 and then refuses DirectML: `ID3D12Device5::EnumerateMetaCommands` is a stub, so
 the provider append returns `E_NOTIMPL`, and `CheckFeatureSupport` answers shader model 5.1 to
-DirectML's 6.6 ask. vkd3d-proton 3.0.1's 32-bit `d3d12.dll`/`d3d12core.dll` host it; they are
-pinned by hash beside the runtime and `tacli` sets `WINEDLLOVERRIDES=d3d12,d3d12core=n,b` so
-they win over the built-in (an instance without them keeps it, and the restorer takes the CPU).
-Preloading them by full path from our own thread is not a substitute — Wine keys modules by
-path. On real Windows the system D3D12 hosts DirectML directly.
+DirectML's 6.6 ask. vkd3d-proton's 32-bit `d3d12.dll`/`d3d12core.dll` host it, and `tacli`
+finds them itself: **Steam's own Proton first** (every Proton ships a 32-bit build at
+`files/lib/wine/vkd3d-proton/i386-windows`, so a machine with Proton needs no download), then
+the hash-pinned 3.0.1 copy beside the runtime, with `TA_VKD3D_PROTON` overriding both. It sets
+`WINEDLLOVERRIDES=d3d12,d3d12core=n,b` for an instance that has the pair and leaves it off for
+one that does not — which keeps wine's built-in and puts the restorer on the CPU. Preloading
+them by full path from our own thread is not a substitute — Wine keys modules by path. On real
+Windows the system D3D12 hosts DirectML directly.
 
 **Measured, Two Continents, in the running game:** 5062 tiles in 80 batches, **589–662 ms on
 DirectML against 19,211 ms on four CPU threads — 29–33×**; standalone the per-batch gap is

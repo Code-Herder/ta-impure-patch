@@ -160,12 +160,20 @@ question the owner asked — why not the GPU — has three answers stacked on ea
   `OrtSessionOptionsAppendExecutionProvider_DML` returns `E_NOTIMPL` at
   `dml_provider_factory.cc(520)` — and behind it `CheckFeatureSupport` answers **shader
   model 0x51 to DirectML's 0x66 ask**, so its DXIL shaders would not compile either.
-  **vkd3d-proton 3.0.1's 32-bit `d3d12.dll`/`d3d12core.dll` host it**, and are pinned by
-  hash in `tools/fetch_onnxruntime.sh`. They must be *preferred over the built-in*:
-  `WINEDLLOVERRIDES=d3d12,d3d12core=n,b`, which `tacli` now sets for every instance. Loading
-  them by full path from our own thread first does **not** work as a substitute — Wine keys
-  loaded modules by path, so DirectML's later `d3d12.dll` by name still finds the built-in.
-  On real Windows none of this arises.
+  **vkd3d-proton's 32-bit `d3d12.dll`/`d3d12core.dll` host it.** They must be *preferred over
+  the built-in* — `WINEDLLOVERRIDES=d3d12,d3d12core=n,b` — which `tacli` sets for an instance
+  that actually has the pair. Loading them by full path from our own thread first does **not**
+  work as a substitute: Wine keys loaded modules by path, so DirectML's later `d3d12.dll` by
+  name still finds the built-in. On real Windows none of this arises.
+  **Where the pair comes from** is `tacli`'s `vkd3d_proton_dir()`: **Steam's own Proton
+  first** — every Proton ships a 32-bit vkd3d-proton at
+  `files/lib/wine/vkd3d-proton/i386-windows`, so a machine with Proton installed needs no
+  download at all — then the hash-pinned 3.0.1 copy `tools/fetch_onnxruntime.sh` puts in the
+  template gamedir, with `TA_VKD3D_PROTON` overriding both. Steam's Proton auto-updates, so
+  the pinned copy is the reproducible one and `TA_VKD3D_PROTON=<template gamedir>` holds a
+  version still. Both work: Proton Experimental's build (wine 11.0 tree) builds the session
+  in 1.0 s against pinned 3.0.1's 1.4–1.9 s, and restores at the same rate. `launch` and
+  `scenario load` print which one they linked whenever it is not the pinned copy.
 
 **What the GPU is worth, in the running game on Two Continents** **[MEASURED 2026-09-04]**:
 the same 5062 tiles in 80 batches take **589–662 ms on DirectML against 19.2 s on four CPU

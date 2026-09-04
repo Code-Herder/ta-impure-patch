@@ -17,6 +17,11 @@
 # the same speed when the GPU side is unavailable. On the GPU it is 34-41x the
 # four-thread CPU rate and agrees with it to 0.0001 of an 8-bit level.
 #
+# The vkd3d-proton download below is a FALLBACK: tacli prefers a 32-bit build from
+# a Steam Proton install when there is one (see its vkd3d_proton_dir()), so on a
+# machine with Proton this script's copy is only what TA_VKD3D_PROTON can pin to
+# when you want a version that does not move under you.
+#
 # DirectML is a Direct3D 12 stack, and Wine 9's built-in vkd3d cannot host it:
 # ID3D12Device5::EnumerateMetaCommands is a stub, so the provider append fails
 # with E_NOTIMPL, and CheckFeatureSupport answers shader model 5.1 to DirectML's
