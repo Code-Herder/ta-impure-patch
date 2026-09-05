@@ -475,6 +475,7 @@ over ping-pong FBOs, weights in a texture; 64 channels is 16 RGBA targets, so wi
   it stalls the game.
 - **Caveat**: compute shaders are GL 4.3; the context is requested at 3.2 core (§3), so this is
   fragment passes unless the context is bumped — a separate decision with its own risk.
+- **Being prototyped** — the mechanism and the plan are §4c, decided 2026-09-05.
 
 ### Option 4 — Hybrid: the terrain job stays whole-set, the GAF frames go lazy
 
@@ -508,6 +509,85 @@ raw, 0.93 GB zstd (§4). Recorded because the asymmetry is worth knowing; it is 
   the biggest maps.
 - **fp16 on DirectML.** Unmeasured; plausibly ~2×. The two providers already agree to 1 level in
   61 of 20.7 M bytes at fp32, so there is headroom to check.
+
+---
+
+## 4c. The GLSL restorer — how it works, and the prototype plan  [DECIDED 2026-09-05]
+
+*The decisions below were taken one branch at a time on 2026-09-05; each is marked with what
+it fixes. The mechanism comes first because the decisions refer to it.*
+
+### The mechanism
+
+**The model in shader terms** **[SOURCE `unditherer/model.py`, `models.json`]**: 3×3 conv
+3→64 + ReLU; ten × (3×3 conv 64→64 + BatchNorm + ReLU); 3×3 conv 64→3; `out = in − net(in)`,
+RGB in [0,1]. The ONNX export already folded the BatchNorms (the graph is only `Conv`/`Relu`/
+`Sub`), so it is **12 convolutions and one subtraction**; 372,096 MACs per texel (the ~750 kFLOP
+of §2.5); 1.5 MB of fp32 weights. The tiny model is the same shape at 6 × 24: 22,032 MACs,
+**17× less**, and its docstring says it was sized "small enough to consider porting to fragment
+shaders".
+
+**One conv layer = one fragment pass**: a full-screen quad into an FBO; each fragment computes its
+own output texel from 9 taps of the previous layer × all input channels × weights, plus bias,
+`max(0, ·)`. Activations live in float textures and ping-pong between two of them. 64 channels
+per texel against textures of 4 is the awkward part, and there are two layouts, **measured, not
+decided**: *channel-tiled* — one `RGBA32F` texture per layer holding a 4×4 grid of copies of the
+image, tile *k* = channels 4k..4k+3, one draw per layer, 144 `texelFetch` and 2,304 MACs per
+fragment, needing nothing beyond GL 3.0 — or *MRT*, 8 targets per draw, 2 draws per layer, fewer
+redundant fetches. Start channel-tiled; switch if fetch-bound. Weights go in a texture-buffer
+object (GL 3.1): a layer's 147 KB exceeds any UBO guarantee, and every fragment in a channel tile
+reads the same 2,304 of them, so a TBO caches perfectly.
+
+**The padding rule is what defines the pixels.** What the DLL feeds ONNX today **[SOURCE
+`tagpu_restore.c` `is_tileable`/`fill_tile`/`unpack_tile`]**: a tile whose opposite edges agree
+within 12 levels is wrap-padded by 12 to 56×56, convolved with zero padding at the 56 border and
+centre-cropped; every other tile runs at 32×32 with zero padding *at every layer*. In GLSL both
+are one rule — **every cell has a valid rect, and a tap outside it reads 0, at every layer** —
+which is a per-fragment rect test. The trap: zero-padding the *input* to 56 and running unmasked
+is not the same thing, because layer 2 would read layer 1's gutter, which is `relu(bias)`, not
+zero. The last pass computes `in − net`, rounds to 8 bits and renders **straight into the
+restored atlas** in its 34-px-pitch cell layout, border texels included, so `upload_rgb` and its
+CPU copy go.
+
+**Cost** **[ESTIMATED — the prototype exists to replace this line with a measurement]**: Two
+Continents is 4,662 cells at 32² + 400 at 56² ≈ 6.0 M texels ≈ 4.5 TFLOP; a 4070's fp32 peak is
+~29 TFLOPS and fragment-shader convolutions reach 15–30 % of it, with ~2.3 KB of fetches per
+fragment per layer (mostly cache hits — neighbours share 8 of 9 taps) as the likelier limiter:
+**0.5–2 s**, the same ballpark as DirectML's measured 1.83 s in-game. The win is not speed; it is
+deleting onnxruntime, vkd3d-proton, DirectML, the always-paid 1.0–1.9 s session build, the
+permanent +160 MiB and §4's "untested on other adapters" risk. The tiny model would be ~0.05–0.1 s.
+Transient memory: a 64-cell batch of 56² cells × 64 channels fp32 = 51 MB per ping-pong buffer,
+~100 MB during the restore, freed after; fp16 halves it.
+
+### The decisions
+
+| | Decided | What it fixes |
+|---|---|---|
+| **Q1 — what the prototype proves** | Correctness **and** an in-game bound: the full model restores Two Continents in **≤ 3 s** wall-clock, sliced, with the game rendering; the tiny model is timed in the same run | Two halves, in order: the browser proves the shader, the DLL proves it replaces |
+| **Q2 — the correctness bar** | The provider bar: **max 1 level, on < 0.01 % of bytes**, over **all 5,062 tiles** of Two Continents (both padding classes), against the pack's `terrain/atlas.rgba.bin` — the same reference the DirectML output was matched to at 0.006 levels; the two ONNX providers themselves differ in 61 of 20.7 M bytes, every one by 1 | Any 2-level texel is a bug — that is how a wrong tap or a wrong mask first shows |
+| **Q3 — where the bench lives** | A separate page, `tools/tascene-restore.html`, served from the pack: loads `atlas.r8.bin` + `pal.bin` + the weights, runs the passes, diffs against `atlas.rgba.bin`, reports the Q2 numbers and a per-batch wall time; headless through `shot`'s virtual-time machinery. The shader text is written **once**, in the lab's portable style (body shared, `#version` prefix swapped). **When it passes, the restore folds into the viewer as `restore=glsl`, the diff readout survives as a debug overlay or verb, and the bench page is deleted** | The viewer's parity lane is never touched by the bench; one page at the end; the shader that passes is byte-for-byte the shader that ships |
+| **Q4 — precision** | fp32 (`RGBA32F`) is what must pass; fp16 (`RGBA16F`, one enum) is reported alongside from the same bench and adopted only if it is what gets the full model under 3 s in the game — never for tiny. Fail loudly without `EXT_color_buffer_float` | The optimisation gets its own decision after its number exists |
+| **Q5 — sharing the render thread** | **Slice**: `restore_step()` in `tagpu_terr.c` issues batches with a budget in **milliseconds (~8 ms/frame)**, not cells — `GL_TIMESTAMP` queries (3.3) or a conservative wall clock. **No second GL context** (an unmeasured Wine risk of the second-DLL class) and **no CPU path** — the GPU is the only engine; a slow one restores slower, without stalling | A load-time event of a few seconds at 50 fps, on one thread where GL errors are attributable |
+| **Q6 — what the player sees** | **One flip** when the whole set is done, exactly today's `s_rgbState == 2`; batches are issued in **visibility order** regardless (visible cells first), so a progressive reveal costs only a per-cell flag later. Progressive is a follow-up whose trigger is a number: more than ~2 s of indexed terrain at load on the biggest maps | No random scatter of restored cells, no per-cell state before the lighting pass exists |
+| **Q7 — the ONNX path** | If GLSL passes, **delete it** as its own landing: `tagpu_restore.c`'s runtime half, `fetch_onnxruntime.sh`, `tacli`'s `vkd3d_proton_dir()` and `WINEDLLOVERRIDES`, `tagpu_restorecpu.on`, `onnxruntime.dll`/`full.onnx`/the d3d12 pair in gamedirs. §2.5's measurements stay as the superseded baseline. The reference oracle survives in the lab (`unditherer` on onnxruntime, `tascene build --undither`) | One engine; a fallback slower than the primary is dead code with a bill |
+| **Q8 — in-game proof** | A **dump trigger**, `tagpu_restoredump.on`: the finished atlas written once as raw RGBA, diffed by a `tascene` verb against the pack with the Q2 bar — same tiles, same 2176 × 34-pitch layout, same order. It is the restorer's **only disk write, and only under the trigger**, so "no cache" stays literally true. `tascene ab` remains the whole-frame ritual, not the restore's proof | Checks the bytes the game samples, in the context that matters, with a pass/fail number |
+| **Q9 — scope** | **Terrain only**, with the per-layer mask taking a per-cell **rect** (x, y, w, h) so a GAF frame is a driver change and not a shader change; one deliberately non-square cell in a debug run. The colour-key inpaint stand-in stays with the lazy GAF work | The go/no-go with the largest N and the only matched reference |
+| **Q10 — order of work** | GLSL **before** the lazy GAF atlases (the only step built *on* the engine); unit shading, terrain lighting and shadows proceed **alongside** in their own worktree — they sample an atlas and do not care what filled it | The engine question idles nothing but the one step that depends on it |
+| **Q11 — landings** | **Three.** (1) *Lab*: bench, weights verb, shader text, this section's numbers measured — lands whether or not the DLL half passes; no review. (2) *Engine*: the sliced restorer behind `restore_step()`, the dump trigger, in-game time and diff; ONNX stays compiled and reachable only through `tagpu_restoreonnx.on` for the same-map A/B; Opus review at medium. (3) *Deletion*, per Q7; review at medium. If full misses the bound, **tiny is judged by eye in the lab before landing 2 is written** | A negative result has somewhere to land; the engine review reads shader work, not `tacli` plumbing |
+
+**Placements settled from the code, not asked**: the weights export is an `unditherer export-weights`
+subcommand (that package owns `full.pt`/`full.onnx` and already has a `models` verb), writing the
+flat fp32 `.bin` in the shader's channel order; `tascene build --undither` copies it into the
+pack, and the DLL reads the identical file from the gamedir. In the DLL the restorer is its own
+module, one file per pass as the others are, with the shader body as a C string equal to the
+lab's.
+
+**Two contingencies, stated now**: if `RGBA32F` colour attachments misbehave in the 3.2 core
+context under Wine — the DLL has never rendered to a float target; its only non-8-bit attachment
+is a `GL_DEPTH_COMPONENT24` **[SOURCE `tagpu_render3do.c:452`]** — fp16 is the first thing to try
+(the bench already knows its error) and the 3.3 bump of §3 the second. And if fp32 GLSL cannot
+meet the Q2 bar at all, that is a shader bug until proven otherwise: the two ONNX providers show
+the graph itself is that stable.
 
 ---
 
@@ -558,9 +638,13 @@ raw, 0.93 GB zstd (§4). Recorded because the asymmetry is worth knowing; it is 
 
 1. ~~**The restorer spike**~~ — done 2026-09-04: onnxruntime 1.20.1 x86 in the DLL, tiles
    restored at map load, cached, the terrain drawn from it under `tagpu_classicpp.on`.
-2. **The other two restored atlases at load**: the definition → model → frames walk, the
-   colour-key inpaint stand-in, pad and align, mips 0–2; the unit and feature shaders'
-   restored-texture branch.
+1b. **The GLSL restorer prototype** (§4c) — three landings: lab bench, engine, ONNX deletion.
+   Goes before step 2 because step 2 is the only step built on the restore engine; steps 3–5
+   proceed alongside it in their own worktree.
+2. **The other two restored atlases**, lazily on first draw (§4b Option 4, on the GLSL
+   engine): the rect-masked driver over the two existing `atlas_get` sites, the colour-key
+   inpaint stand-in, pad and align, mips 0–2; the unit and feature shaders' restored-texture
+   branch. No cache (§2.5b).
 3. **Unit shading** in map space: normal and world height per vertex, `LAB_LIGHT` into
    `tagpu_glsl.h` with the viewer's uniform names.
 4. **Terrain lighting** from the height texture, level-normalised.
