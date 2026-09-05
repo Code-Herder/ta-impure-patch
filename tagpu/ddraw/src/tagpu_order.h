@@ -45,11 +45,19 @@
    frames the engine would have blitted. It is TA's iconography drawn properly,
    not a restyle; the rest of the HUD is still TA's art.
 
+   THE SHOWRANGES LABELS CAME WITH G13p. Every circle both limbs draw carries
+   the engine's own label string at the engine's own point on it, rasterised
+   through TA's blitter into tagpu_text.c's atlas — so `ShowRanges` is now whole
+   rather than a set of unnamed rings. The same landing found that G13o drew
+   every RANGE circle 11% flat: `DrawRangeCircle 0x438EA0` hands one radius to
+   both lookups and only the TARGET circle `0x4399F0` squashes its y by the 0.89
+   at `0x4FD2C0`.
+
    Armed by tagpu_order.on. Tokens: `log`, `passive` (gather and count, let the
    engine draw), `trace` (both sides run and both log their node lists, for the
    selection-rule diff), and `nobuild` / `nodots` / `nocircle` / `nosprite` /
-   `noranges`. Refuses to take the draw unless tagpu_markown.c actually
-   installed the `0x469BFC` redirect. */
+   `noranges` / `nolabels`. Refuses to take the draw unless tagpu_markown.c
+   actually installed the `0x469BFC` redirect. */
 #include "tagpu_fx.h"
 
 /* ---- arming (present thread) ---- */

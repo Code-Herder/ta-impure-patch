@@ -68,10 +68,12 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "opengl_utils.h"
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
 #include "tagpu_order.h"
+#include "tagpu_text.h"
 #include "tagpu_glsl.h"
 
 /* ---- engine layout ---- */
@@ -85,6 +87,7 @@
 #define U_ZPOS       0x70        /* s16 altitude                              */
 #define U_YPOS       0x74        /* s16 world z (map depth)                   */
 #define U_TYPE       0x92        /* UnitDefStruct*                            */
+#define U_SQUAD      0xAC        /* group digit; the engine tests all 4 bytes */
 #define U_HEALTH     0x108       /* s16                                       */
 #define U_STATE      0x110       /* bit28 alive, bit14 excluded               */
 #define U_OWNER      0xFF        /* u8 player id                              */
@@ -113,8 +116,8 @@
 #define MAXBAR       2048                    /* bars per frame               */
 #define MVST         7                       /* x,y, u,v, wx,wz, colour      */
 #define QUADV        6
-#define CURSBASE     (2 * QUADV)             /* verts 0..11 are the two layer
-                                                quads; the build cursor next  */
+#define CURSBASE     (TAGPU_MARK_NLAYER * QUADV)  /* the captured layer quad
+                                                comes first; the cursor next  */
 #define MAXCURSV     (8 * QUADV)             /* two rects, four edges each    */
 #define BARBASE      (CURSBASE + MAXCURSV)   /* and the bars after those      */
 #define MAXMV        (BARBASE + MAXBAR * 2 * QUADV)
@@ -125,6 +128,10 @@
    triangles instead, with the draw offsets computed at render. */
 #define MAXORDT      12000                   /* order triangle verts (dots)  */
 #define MAXORDL      12000                   /* order line verts (2 per line)*/
+/* text quads: the ShowRanges labels (up to twelve per unit with the toggle on)
+   and one group digit per watched unit. 400 quads is the same order of
+   magnitude as MAXBAR and costs 67 KB. */
+#define MAXORDX      2400                    /* text verts (6 per quad)      */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
@@ -156,7 +163,7 @@ static void* getgl(const char* n)
 /* ---- arming ---- */
 static int s_armed = -1;
 static int s_log = 0, s_passive = 0, s_bars = 1, s_capture = 1, s_selbox = 1;
-static int s_cursor = 1;
+static int s_cursor = 1, s_digits = 1;
 static unsigned s_armCheck = 0;
 
 int tagpu_mark_armed(unsigned frame_counter)
@@ -174,6 +181,7 @@ int tagpu_mark_armed(unsigned frame_counter)
         tagpu_markown_set_bars(0);
         tagpu_markown_set_selbox(0);
         tagpu_markown_set_cursor(0);
+        tagpu_markown_set_digits(0);
         /* the order markers draw in THIS pass's buckets, so a disarmed mark
            pass has to hand them back at once rather than wait 90 frames for
            the watchdog to notice nothing is being drawn */
@@ -184,7 +192,7 @@ int tagpu_mark_armed(unsigned frame_counter)
     {
         char buf[128]; DWORD n = 0;
         s_log = 0; s_passive = 0; s_bars = 1; s_capture = 1; s_selbox = 1;
-        s_cursor = 1;
+        s_cursor = 1; s_digits = 1;
         if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
             char* p = buf;
             buf[n] = 0;
@@ -202,6 +210,7 @@ int tagpu_mark_armed(unsigned frame_counter)
                 else if (!lstrcmpiA(p, "nocapture")) s_capture = 0;
                 else if (!lstrcmpiA(p, "noselbox")) s_selbox = 0;
                 else if (!lstrcmpiA(p, "nocursor")) s_cursor = 0;
+                else if (!lstrcmpiA(p, "nodigits")) s_digits = 0;
                 if (last) break;
                 p = q + 1;
             }
@@ -221,11 +230,13 @@ int tagpu_mark_armed(unsigned frame_counter)
     if (s_passive || !s_bars) tagpu_markown_set_bars(0);
     if (s_passive || !s_selbox) tagpu_markown_set_selbox(0);
     if (s_passive || !s_cursor) tagpu_markown_set_cursor(0);
+    if (s_passive || !s_digits) tagpu_markown_set_digits(0);
     if (was != 1) {
         char b[176];
         _snprintf(b, sizeof b, "mark: ARMED (log=%d passive=%d bars=%d capture=%d "
-                  "selbox=%d cursor=%d patched=%d)", s_log, s_passive, s_bars,
-                  s_capture, s_selbox, s_cursor, tagpu_markown_installed());
+                  "selbox=%d cursor=%d digits=%d patched=%d)", s_log, s_passive,
+                  s_bars, s_capture, s_selbox, s_cursor, s_digits,
+                  tagpu_markown_installed());
         flog(b);
     }
     return 1;
@@ -236,14 +247,27 @@ static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
 static GLuint s_prog, s_vao, s_vbo, s_tex[TAGPU_MARK_NLAYER];
 static int    s_texW[TAGPU_MARK_NLAYER], s_texH[TAGPU_MARK_NLAYER];
 static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uKey;
+static GLint  s_uTextM;
 
 static float s_verts[MAXMV * MVST];
 static float s_ordt[MAXORDT * MVST];   /* order markers: filled triangles     */
 static float s_ordl[MAXORDL * MVST];   /* order markers: GL_LINES             */
+static float s_ordx[MAXORDX * MVST];   /* text quads: labels, then digits     */
 static int   s_nbar;                   /* bars gathered (2 quads each)        */
 static int   s_cBar;                   /* counted, whether emitted or not     */
 static int   s_ncurs;                  /* build cursor / band box verts       */
 static int   s_nordt, s_nordl;         /* order marker verts, this frame      */
+static int   s_nordx;                  /* text verts, this frame              */
+/* Where the ShowRanges labels end and the group digits begin. The engine draws
+   the labels from inside the order driver at `0x469BFC` and the digit at
+   `0x469CF9`, i.e. on either side of the health bars, so the bucket is drawn as
+   two ranges rather than one. The order gather runs first, so the split is just
+   the count after it. */
+static int   s_nordxOrd;
+static double s_px;                    /* one SCREEN pixel in game-frame units */
+static double s_zoom, s_zcx, s_zcy;    /* the transform the text snap inverts  */
+static int    s_ss;
+static int   s_ntext, s_xover;         /* strings drawn / quads refused        */
 
 static const char* VS =
     "#version 330 core\n"
@@ -270,6 +294,7 @@ static const char* FS =
     "uniform sampler2D uLayer;\n"
     "uniform sampler2D uPal;\n"
     "uniform int uKey;\n"
+    "uniform int uText;\n"
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
@@ -280,10 +305,18 @@ static const char* FS =
        darkens the build cursor. */
     TAGPU_GLSL_FOG_DISCARD
     "  int pi;\n"
+    /* Text is a COVERAGE mask, not a palette image: tagpu_text.c rasterises TA's
+       glyphs with (fg,bg,transparent) = (255,0,0), so the texel says only whether
+       the glyph covers this fragment and the colour comes from the vertex — one
+       raster then serves every colour the same string is drawn in, which the
+       weapon-range labels need because theirs flashes every game tick. */
+    "  if (uText != 0) {\n"
+    "    if (texture(uLayer, vUV).r < 0.5) discard;\n"
+    "    pi = int(vCol * 255.0 + 0.5);\n"
     /* a negative u marks the flat path: the vertex carries a palette index
        instead of a texel (health bars), the same convention the effects pass
        uses for its lines */
-    "  if (vUV.x < 0.0) {\n"
+    "  } else if (vUV.x < 0.0) {\n"
     "    pi = int(vCol * 255.0 + 0.5);\n"
     "  } else {\n"
     "    pi = int(texture(uLayer, vUV).r * 255.0 + 0.5);\n"
@@ -330,6 +363,7 @@ static void init_gl(void)
     s_uZoom   = glGetUniformLocation(s_prog, "uZoom");
     s_uZoomC  = glGetUniformLocation(s_prog, "uZoomC");
     s_uKey    = glGetUniformLocation(s_prog, "uKey");
+    s_uTextM  = glGetUniformLocation(s_prog, "uText");
     glUseProgram(s_prog);
     glUniform1i(glGetUniformLocation(s_prog, "uLayer"),   0);
     glUniform1i(glGetUniformLocation(s_prog, "uPal"),     1);
@@ -360,6 +394,7 @@ static void init_gl(void)
 void tagpu_mark_glreset(void)
 {
     s_state = 0;
+    tagpu_text_glreset();
     memset(s_tex, 0, sizeof s_tex);      /* the ids died with the context */
     memset(s_texW, 0, sizeof s_texW);
     memset(s_texH, 0, sizeof s_texH);
@@ -375,13 +410,19 @@ static void put_vert(int i, float x, float y, float u, float v, float wx, float 
 }
 
 /* the order buckets' own writer: same vertex, a different array */
+static void put_at(float* base, int i, float x, float y, float u, float v,
+                   float wx, float wz, float col)
+{
+    float* o = base + (size_t)i * MVST;
+    o[0] = x; o[1] = y; o[2] = u; o[3] = v; o[4] = wx; o[5] = wz; o[6] = col;
+}
+
 static void put_ord(float* base, int i, float x, float y, float wx, float wz,
                     float col)
 {
-    float* o = base + (size_t)i * MVST;
     /* u < 0 is the flat path — the vertex carries a palette index rather than
        a texel, the convention the health bars and the effects lines share */
-    o[0] = x; o[1] = y; o[2] = -1.0f; o[3] = -1.0f; o[4] = wx; o[5] = wz; o[6] = col;
+    put_at(base, i, x, y, -1.0f, -1.0f, wx, wz, col);
 }
 
 int tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
@@ -404,6 +445,67 @@ int tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
     put_ord(s_ordt, s_nordt + 1, x1, y1, wx, wz, c);
     put_ord(s_ordt, s_nordt + 2, x2, y2, wx, wz, c);
     s_nordt += 3;
+    return 1;
+}
+
+/* One string, in the palette index the caller names, anchored at the (x, y) the
+   engine would have passed `DrawTextCustomFont`.
+
+   CONSTANT SCREEN SIZE, like the waypoint crosshair and unlike the health bars:
+   the glyphs are a bitmap font, so scaling the quad with the zoom would be the
+   magnified 1997 art this port exists to stop — a label two pixels tall at
+   0.25x and a blocky one at 4x. `s_px` is one screen pixel in game-frame units,
+   and the vertex shader's zoom multiplies it back out.
+
+   The vertical anchor is the engine's: `0x4CCF60` puts the string's first pixel
+   row at `y - (s8)font+0x02`, not at y. */
+int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
+                         float wx, float wz)
+{
+    int ax, ay, w, h, yoff, aw = 1, ah = 1;
+    float u0, v0, u1, v1, x1, y0, y1, c;
+    int i = s_nordx;
+
+    if (s_nordx + QUADV > MAXORDX) return 0;
+    if (!tagpu_text_place(s, &ax, &ay, &w, &h, &yoff)) return 0;
+    tagpu_text_dims(&aw, &ah);
+    u0 = (float)ax / (float)aw;          v0 = (float)ay / (float)ah;
+    u1 = (float)(ax + w) / (float)aw;    v1 = (float)(ay + h) / (float)ah;
+    y0 = y - (float)((double)yoff * s_px);
+
+    /* SNAP TO THE DEVICE PIXEL GRID, and do it by pre-image rather than by
+       rounding the vertex. Text is the one thing in this pass that is a bitmap:
+       every other primitive here is geometry and wants its fraction, but a
+       glyph whose quad starts half a pixel off has each 1-px stroke resolved
+       across two device pixels and reads as a grey smear. (Measured against the
+       engine's own label at 1x, ss=2: 66 pure-white pixels in "build distance"
+       against its 183, at the same position and size.)
+
+       The vertex shader will apply `(p - zoomC) * zoom + zoomC` and then a
+       viewport `ss` device pixels to the game-frame unit, so the snap is: take
+       the post-zoom position, round it onto the 1/ss grid, and hand back the
+       point that transforms to it. The quad's SIZE needs no such care — the
+       text is constant screen size, so it is `w` game-frame units after the
+       zoom whatever the zoom is, and `w * ss` device pixels is an integer. */
+    {
+        double gx = ((double)x  - s_zcx) * s_zoom + s_zcx;
+        double gy = ((double)y0 - s_zcy) * s_zoom + s_zcy;
+        gx = floor(gx * s_ss + 0.5) / s_ss;
+        gy = floor(gy * s_ss + 0.5) / s_ss;
+        x  = (float)((gx - s_zcx) / s_zoom + s_zcx);
+        y0 = (float)((gy - s_zcy) / s_zoom + s_zcy);
+    }
+    x1 = x + (float)((double)w * s_px);
+    y1 = y0 + (float)((double)h * s_px);
+    c  = (float)colidx / 255.0f;
+    put_at(s_ordx, i + 0, x,  y0, u0, v0, wx, wz, c);
+    put_at(s_ordx, i + 1, x1, y0, u1, v0, wx, wz, c);
+    put_at(s_ordx, i + 2, x,  y1, u0, v1, wx, wz, c);
+    put_at(s_ordx, i + 3, x1, y0, u1, v0, wx, wz, c);
+    put_at(s_ordx, i + 4, x1, y1, u1, v1, wx, wz, c);
+    put_at(s_ordx, i + 5, x,  y1, u0, v1, wx, wz, c);
+    s_nordx += QUADV;
+    s_ntext++;
     return 1;
 }
 
@@ -518,7 +620,14 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     const unsigned char* gui;
     int watched, nv = BARBASE;
 
-    s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0;
+    s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0; s_nordx = 0;
+    s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
+    /* before anything emits: tagpu_order.c's labels come through
+       tagpu_mark_emit_text, which sizes its quads with this */
+    s_px  = 1.0 / (double)(v->zoom > 0.0f ? v->zoom : 1.0f);
+    s_zoom = v->zoom > 0.0f ? (double)v->zoom : 1.0;
+    s_zcx = (double)v->zoomCx; s_zcy = (double)v->zoomCy;
+    s_ss  = v->ss > 0 ? v->ss : 1;
     /* first, and outside every gate below: neither the cursor nor the order
        markers are health bars, and neither `damagebars` nor `nobars` has
        anything to say about them */
@@ -526,10 +635,17 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     if (s_armed == 1 && !s_passive) tagpu_order_gather(v);
     else if (s_passive) tagpu_markown_set_orders(0);
     tagpu_order_frame_done(v);
-    if (s_armed != 1 || !s_bars) return 0;
-    /* The bar skip is a byte in the engine's code path; without the patch the
-       engine is still drawing bars itself and ours would be a second set at a
-       second position. Refuse rather than double-draw. */
+    /* everything emitted so far is a ShowRanges label, and the engine draws
+       those UNDER the health bars */
+    s_nordxOrd = s_nordx;
+    /* One walk for both: the engine draws the bar and the group digit from the
+       SAME loop (`0x469CB9` then `0x469CF9`), behind the same `damagebars`
+       gate, so `nobars` may not take the digits with it. */
+    if (s_armed != 1 || (!s_bars && !s_digits)) return 0;
+    /* The bar skip is a byte in the engine's code path and the digit skip is a
+       redirected call site; without the patches the engine is still drawing
+       both itself and ours would be a second set at a second position. Refuse
+       rather than double-draw. */
     if (!tagpu_markown_installed()) return 0;
     if (!(*(const unsigned char*)(ta + OFF_GAMEOPT) & 1)) return 0;  /* damagebars */
 
@@ -547,12 +663,6 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         float wx, wz;
         if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
         if (*(const unsigned char*)(u + U_OWNER) != (unsigned)watched) continue;
-        hp = *(const short*)(u + U_HEALTH);
-        if (hp <= 0) continue;
-        def = *(const char* const*)(u + U_TYPE);
-        if (!ptr_ok(def)) continue;
-        maxhp = *(const int*)(def + UD_MAXHP);
-        if (maxhp <= 0) continue;                 /* the engine's div would trap */
 
         x = *(const short*)(u + U_XPOS) - v->eyeX + 0x80;
         y = *(const short*)(u + U_YPOS) - v->eyeY
@@ -561,13 +671,42 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
            shows units the engine's own HotUnits list has already dropped */
         if (x + 0x12 < v->evpL || x - 0x12 > v->evpL + v->evw ||
             y + 3 < v->evpT || y - 3 > v->evpT + v->evh) continue;
-        s_cBar++;
-        if (s_passive) continue;      /* the A/B lever: count, let the engine draw */
 
         /* the fog is sampled at the unit's own anchor, in the projected world
            space the engine's screen grid is built in (tagpu_fx.h) */
         wx = (float)*(const short*)(u + U_XPOS);
         wz = (float)(*(const short*)(u + U_YPOS) - (*(const short*)(u + U_ZPOS) >> 1));
+
+        /* THE GROUP DIGIT, `0x469CD1..0x469CF9`. Two things about it are the
+           engine's and neither is obvious: the squad tag is tested as a DWORD
+           (`mov ecx,[edi+0xac]; test ecx,ecx`) and only then used as a byte, so
+           a unit whose 0xAD..0xAF are set shows a '0'; and the digit sits at
+           `sy + 0x0E` where the BAR is at `sy + 0x0A`, i.e. four rows lower
+           than `y` here. No health test — the engine's leaf returns early on a
+           dead unit but the digit is drawn from the caller. */
+        if (s_digits && !s_passive) {
+            unsigned squad = *(const unsigned*)(u + U_SQUAD);
+            if (squad) {
+                char d[2];
+                int tc = tagpu_text_colour();
+                d[0] = (char)('0' + (unsigned char)squad);
+                d[1] = 0;
+                if (!tagpu_mark_emit_text((float)x, (float)(y + 4), d,
+                                          (tc >= 0 && tc < 256) ? tc : gui[GUI_WHITE],
+                                          wx, wz))
+                    s_xover++;
+            }
+        }
+        if (!s_bars) continue;
+
+        hp = *(const short*)(u + U_HEALTH);
+        if (hp <= 0) continue;
+        def = *(const char* const*)(u + U_TYPE);
+        if (!ptr_ok(def)) continue;
+        maxhp = *(const int*)(def + UD_MAXHP);
+        if (maxhp <= 0) continue;                 /* the engine's div would trap */
+        s_cBar++;
+        if (s_passive) continue;      /* the A/B lever: count, let the engine draw */
 
         put_bar(&nv, x - 0x11, y - 2, x + 0x11, y + 2, gui[GUI_BLACK], wx, wz);
         /* (Health << 5) / maxHP as an UNSIGNED divide, and the thirds through
@@ -641,7 +780,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
 {
     TAGPU_MARKLAYER lay[TAGPU_MARK_NLAYER];
     int have[TAGPU_MARK_NLAYER];
-    int i, total;
+    int i, total, textBase = 0;
+    unsigned int textTex = 0;
 
     if (s_state == 0) init_gl();
     if (s_state != 1 || s_armed != 1) return;
@@ -655,6 +795,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         tagpu_markown_set_bars(s_bars);
         tagpu_markown_set_selbox(s_selbox);
         tagpu_markown_set_cursor(s_cursor);
+        tagpu_markown_set_digits(s_digits);
     }
 
     x_glActiveTexture(GL_TEXTURE0);
@@ -663,8 +804,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         if (have[i]) have[i] = upload_layer(i, &lay[i]);
         if (have[i]) layer_quad(v, i * QUADV, &lay[i]);
     }
-    if (!have[0] && !have[1] && s_nbar == 0 && s_ncurs == 0 &&
-        s_nordt == 0 && s_nordl == 0) return;
+    if (!have[TAGPU_MARK_POSTFOG] && s_nbar == 0 && s_ncurs == 0 &&
+        s_nordt == 0 && s_nordl == 0 && s_nordx == 0) return;
 
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
@@ -673,6 +814,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
     if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
     glUniform1i(s_uKey, tagpu_markown_key());
+    glUniform1i(s_uTextM, 0);
     x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
     x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
@@ -685,8 +827,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
        in their own arrays (see MAXORDT) and are packed in behind the
        triangles, so their first vertex moves with the bar count */
     glBufferData(GL_ARRAY_BUFFER,
-                 (GLsizeiptr)(total + s_nordt + s_nordl) * MVST * 4, NULL,
-                 GL_STREAM_DRAW);
+                 (GLsizeiptr)(total + s_nordt + s_nordl + s_nordx) * MVST * 4,
+                 NULL, GL_STREAM_DRAW);
     glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)total * MVST * 4, s_verts);
     if (s_nordt)
         glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)total * MVST * 4,
@@ -694,15 +836,17 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     if (s_nordl)
         glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)(total + s_nordt) * MVST * 4,
                         (GLsizeiptr)s_nordl * MVST * 4, s_ordl);
+    if (s_nordx)
+        glBufferSubData(GL_ARRAY_BUFFER,
+                        (GLintptr)(total + s_nordt + s_nordl) * MVST * 4,
+                        (GLsizeiptr)s_nordx * MVST * 4, s_ordx);
+    textBase = total + s_nordt + s_nordl;
 
-    /* the engine's own order inside the block: order markers first, then the
-       health bars over them (0x469BFC before 0x469CB9), and the build cursor
-       last of all — after the fog overlay, which is why it carries no fog */
-    if (have[TAGPU_MARK_PREFOG]) {
-        glUniform1i(s_uFog, v->fogMode & 1);
-        glBindTexture(GL_TEXTURE_2D, s_tex[TAGPU_MARK_PREFOG]);
-        x_glDrawArrays(GL_TRIANGLES, TAGPU_MARK_PREFOG * QUADV, QUADV);
-    }
+    /* The engine's own order inside the block: order markers and their
+       ShowRanges labels first (`0x469BFC`), then the health bars over them
+       (`0x469CB9`), then the group digit over those (`0x469CF9`), and the build
+       cursor last of all — after the fog overlay, which is why it carries no
+       fog. */
     if (s_nordt || s_nordl) {
         /* one SCREEN pixel of line, which is `ss` device pixels of the
            supersampled target — the same rule the effects pass uses, and what
@@ -715,10 +859,29 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
             x_glDrawArrays(GL_LINES, total + s_nordt, s_nordl);
         }
     }
+    if (s_nordx) {
+        textTex = tagpu_text_tex();       /* binds it, and uploads if dirty */
+        if (textTex) {
+            glUniform1i(s_uFog, v->fogMode & 1);
+            glUniform1i(s_uTextM, 1);
+            if (s_nordxOrd)
+                x_glDrawArrays(GL_TRIANGLES, textBase, s_nordxOrd);
+        }
+    }
     if (s_nbar) {
+        glUniform1i(s_uTextM, 0);
         glUniform1i(s_uFog, v->fogMode & 1);
         x_glDrawArrays(GL_TRIANGLES, BARBASE, s_nbar);
     }
+    if (textTex && s_nordx > s_nordxOrd) {
+        /* the digits, over the bars, out of the same atlas — bound again
+           because the bar draw above did not touch unit 0's binding but the
+           mode uniform did */
+        glUniform1i(s_uTextM, 1);
+        glUniform1i(s_uFog, v->fogMode & 1);
+        x_glDrawArrays(GL_TRIANGLES, textBase + s_nordxOrd, s_nordx - s_nordxOrd);
+    }
+    glUniform1i(s_uTextM, 0);
     if (have[TAGPU_MARK_POSTFOG]) {
         glUniform1i(s_uFog, 0);
         glBindTexture(GL_TEXTURE_2D, s_tex[TAGPU_MARK_POSTFOG]);
@@ -735,13 +898,16 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     if (s_log) {
         static unsigned last = 0;
         if (v->frame_counter - last >= 120) {
-            char b[288];
+            char b[320];
+            int nstr = 0, ndrop = 0;
             last = v->frame_counter;
+            tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
-                "mark: bars=%d cursor=%d ordtri=%d ordline=%d prefog=%s postfog=%s key=%d "
-                "vp=(%d,%d %dx%d) zoom=%.2f%s",
+                "mark: bars=%d cursor=%d ordtri=%d ordline=%d text=%d(lab=%d) "
+                "atlas=%d/%d over=%d postfog=%s key=%d vp=(%d,%d %dx%d) "
+                "zoom=%.2f%s",
                 s_cBar, s_ncurs / QUADV, s_nordt / 3, s_nordl / 2,
-                have[TAGPU_MARK_PREFOG] ? "captured" : "-",
+                s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 have[TAGPU_MARK_POSTFOG] ? "captured" : "-",
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,
                 s_passive ? " (passive: engine still drawing)" : "");

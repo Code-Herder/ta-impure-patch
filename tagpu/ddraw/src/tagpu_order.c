@@ -133,12 +133,14 @@
    - Unit-anchored positions ride tagpu_native_unit_pos(), the sub-pixel
      interpolated sample: a crisp circle centred on a walking unit would
      otherwise step once per sim tick against a body that slides.
-   - ShowRanges' text LABELS are not drawn. Every circle of both limbs is —
-     including the cloak radius that opens the set and the sprite drawer's own
-     AoE ring, each of which was missed on the first pass and caught by the
-     landing review. The labels are text, and text is the L2 half of this port
-     (`0x4CCF60` into a buffer of ours). Group digits are likewise still
-     engine-drawn and still clipped in the ring.
+   - ShowRanges' text LABELS are drawn as of G13p, through tagpu_text.c: TA's
+     own glyphs, rasterised by the engine's own blitter into an atlas of ours,
+     at the point on the circle `0x438EA0` would have put them and at a constant
+     SCREEN size. Every circle of both limbs is there too — including the cloak
+     radius that opens the set and the sprite drawer's own AoE ring, each of
+     which was missed on the first pass and caught by the landing review.
+   - RANGE CIRCLES ARE ROUND. G13o drew them through the target circle's 0.89
+     squash; `0x438EA0` has no squash at all (see `ocircle`).
 
    Read-only over the sim with ONE deliberate exception, on the game thread and
    at exactly the instant the engine did it: the target sprite's last-seen
@@ -152,6 +154,7 @@
 #include <math.h>
 #include "tagpu_order.h"
 #include "tagpu_mark.h"
+#include "tagpu_text.h"
 #include "tagpu_markown.h"
 #include "tagpu_gaf.h"
 #include "tagpu_native.h"
@@ -274,6 +277,7 @@ static void flog(const char* s)
 static int s_armed = -1;
 static int s_log = 0, s_passive = 0, s_trace = 0;
 static int s_build = 1, s_dots = 1, s_circle = 1, s_sprite = 1, s_ranges = 1;
+static int s_labels = 1;
 static unsigned s_armCheck = 0;
 
 int tagpu_order_on(void) { return s_armed == 1; }
@@ -308,6 +312,7 @@ int tagpu_order_armed(unsigned frame_counter)
            a file read */
         int log_ = 0, passive_ = 0, trace_ = 0;
         int build_ = 1, dots_ = 1, circle_ = 1, sprite_ = 1, ranges_ = 1;
+        int labels_ = 1;
         if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
             char* p = buf;
             buf[n] = 0;
@@ -327,13 +332,14 @@ int tagpu_order_armed(unsigned frame_counter)
                 else if (!lstrcmpiA(p, "nocircle")) circle_ = 0;
                 else if (!lstrcmpiA(p, "nosprite")) sprite_ = 0;
                 else if (!lstrcmpiA(p, "noranges")) ranges_ = 0;
+                else if (!lstrcmpiA(p, "nolabels")) labels_ = 0;
                 if (last) break;
                 p = q + 1;
             }
         }
         s_log = log_; s_passive = passive_; s_trace = trace_;
         s_build = build_; s_dots = dots_; s_circle = circle_;
-        s_sprite = sprite_; s_ranges = ranges_;
+        s_sprite = sprite_; s_ranges = ranges_; s_labels = labels_;
     }
     CloseHandle(h);
     s_armed = 1;
@@ -346,9 +352,9 @@ int tagpu_order_armed(unsigned frame_counter)
     if (was != 1) {
         char b[192];
         _snprintf(b, sizeof b, "order: ARMED (log=%d passive=%d trace=%d build=%d "
-                  "dots=%d circle=%d sprite=%d ranges=%d patched=%d)",
+                  "dots=%d circle=%d sprite=%d ranges=%d labels=%d patched=%d)",
                   s_log, s_passive, s_trace, s_build, s_dots, s_circle,
-                  s_sprite, s_ranges, tagpu_markown_installed());
+                  s_sprite, s_ranges, s_labels, tagpu_markown_installed());
         flog(b);
     }
     return 1;
@@ -719,7 +725,7 @@ static const TAGPU_FXVIEW* s_v;
 static ORDREC s_rec[MAXORD];     /* the present thread's private copy       */
 static const unsigned char* s_gui;
 static double s_px;              /* one SCREEN pixel, in game-frame units    */
-static int    s_nrec, s_nline, s_ndot, s_nover;
+static int    s_nrec, s_nline, s_ndot, s_nover, s_nlabel;
 
 /* the engine's projection, with the +0x80/+0x20 baked immediates the rest of
    this pass uses (tagpu_mark.c, the health bar). The engine halves the
@@ -849,6 +855,93 @@ static void oellipse(double wx, double walt, double wz, double rx, double ry,
         if (i) oline(px, py, qx, qy, col);
         px = qx; py = qy;
     }
+}
+
+/* The LABEL `DrawRangeCircle` puts beside its circle, at the engine's own point
+   on it.
+
+   `0x438EA0` walks i = 0..N with N = (int)(radius x 2pi x 0.125) and an angle
+   step of 0x10000/N, and remembers the SECOND endpoint of the segment whose
+   index equals `labelSlot * 3` (`lea eax,[eax+eax*2]` at `0x438EFF`, compared
+   against the loop counter at `0x43902E`) — so the anchor is the point at angle
+   (slot*3 + 1) * step, terrain-raised like every other vertex, and the string
+   is drawn at y + 4 (`0x43907D`). When slot*3 exceeds N no segment matches and
+   the engine falls back to the LAST endpoint it computed, which is i = N's.
+
+   Its parameterisation is the mirror of ours — `p.x = centre.x +
+   TurnXLookup(a)` and `p.z = centre.z + TurnZLookup(a)`, and the shared sine
+   table at `0x509F00` makes TurnX a sine and TurnZ a cosine (`0x4B7123` adds a
+   quarter turn to the index) — so the point is taken with sin on x and cos on
+   z. On a round circle that is the same circle, entered at a different place,
+   and this puts the label where the engine put it rather than a quarter turn
+   away. [BINARY-VERIFIED]
+
+   The +4 is in SCREEN pixels here, because the text is: tagpu_text.c draws at a
+   constant screen size, so an offset that scaled with the zoom would part the
+   label from its circle at 4x and bury it at 0.25x. */
+static void range_label(double wx, double walt, double wz, double rad,
+                        const char* label, int slot)
+{
+    double a, vx, vz, va;
+    int n, step, k, p[3], h, col;
+    float sx, sy;
+
+    if (!s_labels || !label || !*label || rad <= 0.0) return;
+    n = (int)(rad * 6.283185307179586 * 0.125);
+    /* The engine divides 0x10000 by this with an `idiv` and no zero test
+       (`0x438EEE`), so a radius under about 1.3 world units faults inside TA
+       itself. Nothing in stock content is that small; we simply have no label
+       to place. */
+    if (n <= 0) return;
+    step = 65536 / n;
+    k = slot * 3;
+    if (k > n) k = n;
+    a = (double)((k + 1) * step) * 6.283185307179586 / 65536.0;
+    vx = wx + rad * sin(a);
+    vz = wz + rad * cos(a);
+    va = walt;
+    p[0] = (int)(vx * 65536.0); p[1] = 0; p[2] = (int)(vz * 65536.0);
+    h = ((int (__stdcall *)(const int*))POSHEIGHT_VA)(p);
+    if ((double)h > va) va = (double)h;
+    project(vx, va, vz, &sx, &sy);
+    /* a whole label can hang well off its anchor, so the slack is a label's
+       width rather than a marker's */
+    if (!on_screen(sx, sy, 64.0f)) return;
+    col = tagpu_text_colour();
+    if (col < 0 || col > 255) col = s_gui[GUI_WHITE];
+    if (!tagpu_mark_emit_text(sx, sy + (float)(4.0 * s_px), label, col,
+                              sx - (float)s_v->vpL + (float)s_v->eyeX,
+                              sy - (float)s_v->vpT + (float)s_v->eyeY))
+        s_nover++;
+    else
+        s_nlabel++;
+}
+
+/* one DrawRangeCircle: a terrain-following circle of world radius `rad`, and
+   its label if it has one.
+
+   ROUND, NOT SQUASHED. `0x438EA0` hands the SAME `radius<<16` to TurnXLookup
+   and TurnZLookup (`ebx` is reloaded from `[esp+0x18]` each iteration and used
+   for both), and the projection maps world z to screen y 1:1, so the circle is
+   a circle on screen. The 0.89 at `0x4FD2C0` belongs to the TARGET circle
+   `0x4399F0`, which multiplies only its y radius by it (`[esp+0x18]` there) —
+   a different drawer and a deliberate difference. G13o applied the squash to
+   both and drew every range circle 11% flat. */
+static void ocircle(double wx, double walt, double wz, double rad, int col,
+                    const char* label, int slot)
+{
+    if (rad <= 0.0) return;
+    oellipse(wx, walt, wz, rad, rad, col, 1);
+    range_label(wx, walt, wz, rad, label, slot);
+}
+
+static void range_circle(const char* unit, int fx, int fy, int fz, double rad,
+                         int col, const char* label, int slot)
+{
+    double wx, wy, wz;
+    if (rad <= 0.0) return;
+    rec_pos(unit, fx, fy, fz, &wx, &wy, &wz);
+    ocircle(wx, wy, wz, rad, col, label, slot);
 }
 
 /* The ink a procedurally drawn marker inherits from the art it replaces.
@@ -984,6 +1077,7 @@ static void draw_sprite(const ORDREC* r, int gameTime, int showRanges)
         int flash = s_gui[(gameTime & 1) ? GUI_FLASH : GUI_RED];
         if (u) {
             const char* def = *(const char* const*)(u + U_TYPE);
+            char lab[40];
             int i, v;
             for (i = 0; i < 3; i++) {
                 const char* w;
@@ -991,13 +1085,21 @@ static void draw_sprite(const ORDREC* r, int gameTime, int showRanges)
                 w = *(const char* const*)(u + U_WEAP0 + i * 0x1C);
                 if (!ptr_ok(w)) continue;
                 v = *(const unsigned short*)(w + W_AOE);
-                if (v) oellipse(wx, wy, wz, (double)v, (double)v * CIRCLE_SQUASH, flash, 1);
+                if (v) {
+                    /* `0x5051C4` through the engine's own sprintf at `0x43989B`,
+                       with the weapon INDEX (0..2), and label slot 0 */
+                    _snprintf(lab, sizeof lab, "weapon %d - area of effect", i);
+                    ocircle(wx, wy, wz, (double)v, flash, lab, 0);
+                }
                 v = *(const int*)(w + W_ATTACKRUN);
-                if (v) oellipse(wx, wy, wz, (double)v, (double)v * CIRCLE_SQUASH, flash, 1);
+                if (v) {
+                    _snprintf(lab, sizeof lab, "weapon %d - coverage", i);
+                    ocircle(wx, wy, wz, (double)v, flash, lab, 1);
+                }
             }
             if (ptr_ok(def)) {
                 v = *(const unsigned short*)(def + UD_ATTACKRUN);
-                if (v) oellipse(wx, wy, wz, (double)v, (double)v * CIRCLE_SQUASH, flash, 1);
+                if (v) ocircle(wx, wy, wz, (double)v, flash, "attack length", 2);
             }
         }
     }
@@ -1071,22 +1173,12 @@ static void draw_circle(const ORDREC* r)
     oellipse(wx, wy, wz, rr, rr * CIRCLE_SQUASH, s_gui[GUI_RED], 0);
 }
 
-/* one DrawRangeCircle: a terrain-following circle of world radius `rad` about
-   the unit, at the isometric squash the projection already applies */
-static void range_circle(const char* unit, int fx, int fy, int fz, double rad, int col)
-{
-    double wx, wy, wz;
-    if (rad <= 0.0) return;
-    rec_pos(unit, fx, fy, fz, &wx, &wy, &wz);
-    oellipse(wx, wy, wz, rad, rad * CIRCLE_SQUASH, col, 1);
-}
-
 /* --- bit 4: the per-unit range circles --- */
 static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
 {
     const char* u = sane_unit(r->owner);
     const char* def;
-    int ux, uy, uz;
+    int ux, uy, uz, nslot = 0;
 
     if (!s_ranges || !u) return;
     def = *(const char* const*)(u + U_TYPE);
@@ -1101,7 +1193,8 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
         if (*(const unsigned short*)(def + UD_CLOAKDIST) &&
             (*(const unsigned char*)(u + U_CLOAKF) & 4))
             range_circle(u, ux, uy, uz,
-                         (double)*(const short*)(def + UD_CLOAKDIST), s_gui[GUI_WHITE]);
+                         (double)*(const short*)(def + UD_CLOAKDIST),
+                         s_gui[GUI_WHITE], NULL, 0);
         if (!(*(const unsigned*)(def + UD_TYPEMASK0) & 0x10000000u)) return;
         weap = *(const char* const*)(def + UD_EXPLODEAS);
         if (!ptr_ok(weap)) return;
@@ -1112,14 +1205,16 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
         rr = (int)(((unsigned)t * (unsigned)aoe * 2u) / 60u);
         if (rr < 8) rr = 8;
         if (rr > aoe) rr = aoe;
-        range_circle(u, ux, uy, uz, (double)rr, s_gui[GUI_RED]);
+        range_circle(u, ux, uy, uz, (double)rr, s_gui[GUI_RED], NULL, 0);
         /* and the engine picks between kamikazedistance and sight on unit+0x0 */
         if (*(const unsigned*)u)
             range_circle(u, ux, uy, uz,
-                         (double)*(const unsigned short*)(def + UD_KAMIDIST), s_gui[GUI_RED]);
+                         (double)*(const unsigned short*)(def + UD_KAMIDIST),
+                         s_gui[GUI_RED], NULL, 0);
         else
             range_circle(u, ux, uy, uz,
-                         (double)*(const short*)(def + UD_SIGHT), s_gui[GUI_RED]);
+                         (double)*(const short*)(def + UD_SIGHT),
+                         s_gui[GUI_RED], NULL, 0);
         return;
     }
 
@@ -1139,19 +1234,31 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
            kamikazedistance (`0x43937A`, `0x4393B7`, `0x439404`). Inert for any
            value under 32768, which all of them are in stock content — recorded
            because a blanket cast either way is a guess, and this one is free. */
-        static const struct { int off; int sgn; } rng[9] = {
-            { UD_CLOAKDIST, 1 }, { UD_SIGHT,    1 }, { UD_RADAR,     1 },
-            { UD_SONAR,     1 }, { UD_RJAM,     1 }, { UD_SJAM,      1 },
-            { UD_BUILDDIST, 0 }, { UD_MANEUVER, 0 }, { UD_KAMIDIST,  0 },
+        static const struct { int off; int sgn; const char* name; } rng[9] = {
+            { UD_CLOAKDIST, 1, "mincloak"  }, { UD_SIGHT,    1, "sight"    },
+            { UD_RADAR,     1, "radar"     }, { UD_SONAR,    1, "sonar"    },
+            { UD_RJAM,      1, "radarjam"  }, { UD_SJAM,     1, "sonarjam" },
+            { UD_BUILDDIST, 0, "build distance" },
+            { UD_MANEUVER,  0, "maneuver"  },
+            { UD_KAMIDIST,  0, "kamikazedistance" },
         };
         int i;
+        /* The label SLOT is the number of circles drawn so far, which is what
+           the engine's own `esi` holds: it starts at 0, the cloak circle pushes
+           a literal 0 and then sets it to 1 (`0x439236`), each of the next
+           seven pushes it and increments, and kamikazedistance — the last —
+           pushes it without incrementing. The strings are the engine's own,
+           at `0x505190/88/80/78/6C/60/50/44` and `0x503A0C`. */
         for (i = 0; i < 9; i++) {
             int v = rng[i].sgn ? (int)*(const short*)(def + rng[i].off)
                                : (int)*(const unsigned short*)(def + rng[i].off);
-            if (v) range_circle(u, ux, uy, uz, (double)v, s_gui[GUI_YELLOW]);
+            if (v) range_circle(u, ux, uy, uz, (double)v, s_gui[GUI_YELLOW],
+                                rng[i].name, nslot++);
         }
     }
     {
+        static const char* const wname[3] =
+            { "weapon1 range", "weapon2 range", "weapon3 range" };
         int flash = s_gui[(gameTime & 1) ? GUI_FLASH : GUI_RED];
         int i;
         for (i = 0; i < 3; i++) {
@@ -1166,7 +1273,9 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
             w = *(const char* const*)(u + U_WEAP0 + i * 0x1C);
             if (!ptr_ok(w)) continue;
             rng = *(const int*)(w + W_RANGE);
-            if (rng) range_circle(u, ux, uy, uz, (double)rng, flash);
+            /* the weapon labels carry the slot as a LITERAL 0/1/2
+               (`0x439457`, `0x439485`, `0x4394B0`), not the running count */
+            if (rng) range_circle(u, ux, uy, uz, (double)rng, flash, wname[i], i);
         }
     }
 }
@@ -1176,7 +1285,7 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
     const ORDARENA* A;
     int slot, i, n, gameTime, showRanges;
 
-    s_nrec = s_nline = s_ndot = s_nover = 0;
+    s_nrec = s_nline = s_ndot = s_nover = s_nlabel = 0;
     /* `passive` and `trace` both leave the draw with the engine, so ours must
        not also run — under trace the artifact is the two logged node lists,
        not a doubled screen. */
@@ -1256,9 +1365,9 @@ void tagpu_order_frame_done(const TAGPU_FXVIEW* v)
     {
         char b[224];
         _snprintf(b, sizeof b,
-            "order: arena=%d recs=%d drawn=%d lines=%d dots=%d over=%d "
-            "dropped=%d zoom=%.2f%s%s",
-            slot, A ? A->n : -1, s_nrec, s_nline, s_ndot, s_nover,
+            "order: arena=%d recs=%d drawn=%d lines=%d dots=%d labels=%d "
+            "over=%d dropped=%d zoom=%.2f%s%s",
+            slot, A ? A->n : -1, s_nrec, s_nline, s_ndot, s_nlabel, s_nover,
             A ? A->dropped : 0, v->zoom,
             s_passive ? " (passive)" : "", s_trace ? " (trace)" : "");
         flog(b);

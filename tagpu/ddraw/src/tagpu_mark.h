@@ -1,8 +1,9 @@
 #ifndef TAGPU_MARK_H
 #define TAGPU_MARK_H
-/* UI marker pass (G13d) — the world-space markers the engine used to draw over
-   the viewport: health bars, group digits, order/waypoint/build-queue markers,
-   range circles, the build-cursor footprint and the drag band box.
+/* UI marker pass (G13d..G13p) — the world-space markers the engine used to draw
+   over the viewport: health bars, group digits, order/waypoint/build-queue
+   markers, range circles and their labels, the build-cursor footprint and the
+   drag band box.
 
    They are the last engine pixels inside the viewport that are anchored to a
    WORLD position, so they are what stands between us and a free view zoom —
@@ -18,18 +19,22 @@
                    at zoom < 1, because it is bounded by the screen-sized
                    offscreen and their engine position is not (see the header
                    comment in tagpu_mark.c)
-     everything    captured 8bpp, exactly as the engine drew it, and uploaded
-     else          as two layers — one from before the fog overlay (darkened
-                   like the engine's) and one from after it (never darkened).
-                   The post-fog layer is now always empty and is kept only for
-                   `passive`, where the engine draws its own again
+     group digit   TA's own glyphs, rasterised through the engine's own blitter
+     + ShowRanges  into an atlas of ours (tagpu_text.h) and drawn at a constant
+     labels        SCREEN size, because a bitmap glyph magnified with the zoom
+                   is the 1997 art this pass exists to stop
+     order markers ported whole in tagpu_order.c, emitted through the two
+                   buckets below
+
+   NOTHING IS CAPTURED ANY MORE except the post-fog build-cursor window, which
+   only `nocursor` opens (see tagpu_markown.h for why the capture died)
 
    Both are drawn through the same zoom transform as the world, so a marker
    stays over its unit at any zoom and scales with it — the tile art, the unit
    sprites and the markers magnify together rather than sliding apart.
 
    Armed by tagpu_mark.on (tokens: log, passive, nobars, nocapture, noselbox,
-   nocursor). Refuses to
+   nocursor, nodigits). Refuses to
    emit unless tagpu_markown.c actually installed its patches — without them the
    engine is still drawing these markers itself and ours would be a double
    draw at the wrong place. */
@@ -54,6 +59,11 @@ int  tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
                           int colidx, float wx, float wz);
 int  tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
                          float x2, float y2, int colidx, float wx, float wz);
+/* One string at the (x, y) the engine would have handed DrawTextCustomFont,
+   drawn out of tagpu_text.c's atlas in palette index `colidx` at a constant
+   SCREEN size. 0 = the atlas refused the string or the bucket is full. */
+int  tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
+                          float wx, float wz);
 /* draw into the currently bound FBO. Expects depth test and blending OFF (the
    markers are the frame's top layer and every fragment is opaque); own
    program/VAO, leaves program, VAO and texture bindings dirty. */
