@@ -570,14 +570,16 @@ Knobs go in **`tagpu_restoreglsl.on`**, read once per job, so arm them before th
 before the map change) you are measuring: `tacli arm <i> 'restoreglsl.on=log tiny'` — `tiny`
 (the 6×24 model), `fp16`, `nk=N` (output tiles per conv draw), `budget=MS` (GPU ms per frame,
 default 12), `log` (a line per batch). **`tagpu_restoredump.on`** makes the DLL write the finished
-atlas once to `gamedir/tagpu_restore.rgba` — the only file the restorer ever writes — and
+atlas once to `gamedir/tagpu_restore.rgba` — the only file the GLSL restorer ever writes — and
 `tools/tascene restorediff <pack> <that file>` holds it to a pack built with `--undither` of the
 same map (max 1 level on < 0.01 % of bytes is the bar; Two Continents measures 0.0012 %).
 **`tagpu_restoreonnx.on`** routes the job through the old ONNX Runtime path instead, for a
 same-map A/B, until landing 3 of renderers.md §4c deletes it; that path still needs
 `onnxruntime.dll`/`full.onnx` beside the exe and, for its GPU provider, a vkd3d-proton `d3d12`
 pair that `launch` links from a Steam Proton install or the hash-pinned copy
-(`tools/fetch_onnxruntime.sh`, `TA_VKD3D_PROTON=<dir>` to pin one).
+(`tools/fetch_onnxruntime.sh`, `TA_VKD3D_PROTON=<dir>` to pin one). **It also still reads and
+writes `gamedir/tagpu_cache/terr_*.rgba`** — a map it has restored once is read back in ~30 ms
+with no runtime loaded and nothing timed, so delete that `.rgba` before an ONNX measurement.
 
 **Health bars are a registry value, not a trigger**, and `tacli` does not set it, so
 the mark pass draws no bars until you do (`tagpu_mark.c:333` gates on `main+0x37F06`

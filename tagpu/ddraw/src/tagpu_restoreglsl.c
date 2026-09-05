@@ -30,7 +30,9 @@
    gather, before anything renders. Each call issues draws until an estimate
    of their GPU time reaches the budget (12 ms by default), the estimate being
    the previous slice's GL_TIME_ELAPSED query divided by the work it carried.
-   Draws are the unit: a 64-tile batch is 1 + ceil(16/NK) x 12 + 1 of them.
+   Draws are the unit: a 64-tile batch of the full model is 1 (fill) +
+   ceil(16/NK) x 11 (the conv layers with 16 output tiles) + 1 (the last
+   layer has one) + 1 (out) = 47 of them at NK=4.
    Without ARB_timer_query (a 3.2 context is not promised it, though NVIDIA
    and Mesa both expose it) the slice is a fixed, conservative draw count.
    No second context, no worker thread: the GPU is the only engine, and a slow
@@ -232,9 +234,14 @@ static int load_weights(const char* model)
     s_w.depth = (int)depth; s_w.ch = (int)ch; s_w.ntex = (int)ntex; s_w.kmax = 0;
     for (l = 0; l < depth; l++) {
         if (fread(&s_w.layer[l], 1, 16, f) != 16) { rlog("restoreglsl: weight header truncated"); fclose(f); return 0; }
-        if (s_w.layer[l].offset + s_w.layer[l].kout * s_w.layer[l].kstride > ntex ||
-            s_w.layer[l].jin == 0 || s_w.layer[l].kout == 0 || (s_w.layer[l].kstride & 15)) {
-            rlog("restoreglsl: weight layer table inconsistent"); fclose(f); return 0;
+        {
+            const Layer* L = &s_w.layer[l];
+            /* every product in 64 bits: a corrupt header must not wrap its way past the bound */
+            unsigned long long end = (unsigned long long)L->offset + (unsigned long long)L->kout * L->kstride;
+            if (L->jin == 0 || L->kout == 0 || L->kstride == 0 || (L->kstride & 15) ||
+                L->kstride > ntex || L->kout > ntex || end > ntex || L->jin > 64) {
+                rlog("restoreglsl: weight layer table inconsistent"); fclose(f); return 0;
+            }
         }
         if ((int)(s_w.layer[l].kstride / 4) > s_w.kmax) s_w.kmax = (int)(s_w.layer[l].kstride / 4);
     }
@@ -804,6 +811,7 @@ int tagpu_rglsl_step(void)
     glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
     glUseProgram(0);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fbo);
     glViewport(vp[0], vp[1], vp[2], vp[3]);

@@ -835,7 +835,7 @@ async function main() {
   // aircraft, so that lane needs the parity unit program compiled as well
   const wantUnitClassic = wantParity || any(
     (L) => L.lane === "explore" && L.airshadow === "drop" && L.unitShadows);
-  const wantRGB = any((L) => L.undither);
+  let wantRGB = any((L) => L.undither);
   const labD = scene.labDepth || { terrain: 0.10, flat: 0.50, tallCol: 0.9 };
   // tagpu_terr.c's guard rail: cells sit CELL_PITCH apart and the border texel
   // is a COPY of the cell's edge, so a fragment landing exactly on a quad's far
@@ -848,7 +848,7 @@ async function main() {
   // restore=glsl on any Classic++ side restores the terrain HERE, from the R8
   // atlas; the side that names it decides model/precision/nk for the one atlas
   const glslSide = sides.find((L) => L.lane === "explore" && L.restore === "glsl") || null;
-  if (glslSide) for (const L of sides) if (L.lane === "explore") L.undither = true;
+  if (glslSide) { for (const L of sides) if (L.lane === "explore") L.undither = true; wantRGB = true; }
   if (wantRGB && !map.atlas.rgba && !glslSide)
     fail("undither=1, but this pack has no restored atlases.\n" +
          "Rebuild it with:  tools/tascene build <scenario> -o <pack> --undither");

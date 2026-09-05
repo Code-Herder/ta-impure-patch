@@ -37,8 +37,11 @@ int  tagpu_rglsl_begin(const TAGPU_RGLSL_FRAME* frames, int count,
                        unsigned int destTex, int destW, int destH);
 /* Issue this frame's slice. 0 = still running, 1 = the last draw has been
    issued (the destination is complete once the GPU drains, i.e. before any
-   later draw samples it), -1 = failed. Leaves the framebuffer, viewport and
-   enables as it found them; program 0, VAO 0, texture unit 0 active. */
+   later draw samples it), -1 = failed. Leaves the framebuffer, viewport,
+   enables and write masks as it found them; program 0, VAO 0, no array
+   buffer, texture unit 0 active. Left DIRTY, as every tagpu pass leaves
+   them and every pass rebinds before drawing: the 2D bindings of units 0-3,
+   uniform binding point 0, GL_UNPACK_ALIGNMENT = 1. */
 int  tagpu_rglsl_step(void);
 /* Drop a job and its GL objects (a new map). */
 void tagpu_rglsl_abort(void);

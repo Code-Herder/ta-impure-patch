@@ -290,7 +290,9 @@ levels 0–2.
 ### 2.5b No cache for any image map — everything is restored in the running game  [DECIDED 2026-09-05]
 
 **The disk cache goes, for all three atlases.** `gamedir/tagpu_cache/` and
-`cache_read`/`cache_write` come out of `tagpu_restore.c`; nothing restored is ever written to
+`cache_read`/`cache_write` come out of `tagpu_restore.c` (landing 3 of §4c does the deletion;
+until then the ONNX path behind `tagpu_restoreonnx.on` still reads and writes `tagpu_cache/`,
+and the GLSL restorer never has); nothing restored is ever written to
 disk, and every session restores what it draws. §4's whole "the cache's format is undecided"
 bullet — the compression survey, the 4.4 GB ceiling, the content-keyed tile bank — is **closed
 by this decision, not by an answer**.

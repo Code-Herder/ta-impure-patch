@@ -98,7 +98,7 @@ export class Restorer {
     if (align > 256) throw new Error(`UNIFORM_BUFFER_OFFSET_ALIGNMENT ${align} > 256: the weight file's padding is too small`);
     const kbytes = weights.kmax * 64;                       // one k-block, bytes
     let nk = Math.min(maxDraw, Math.floor(maxUBO / kbytes), 8);
-    nk = nk >= 8 ? 8 : nk >= 4 ? 4 : nk >= 2 ? 2 : 1;       // a power of two: divides 16 and 6 (with a spare)
+    nk = nk >= 8 ? 8 : nk >= 4 ? 4 : nk >= 2 ? 2 : nk >= 1 ? 1 : 0;   // a power of two: divides 16 and 6 (with a spare)
     if (nk < 1) throw new Error(`MAX_UNIFORM_BLOCK_SIZE ${maxUBO} < one k-block (${kbytes} bytes)`);
     if (opts.nk) {
       if (opts.nk > nk) throw new Error(`nk=${opts.nk}: this device allows ${nk} (MAX_UNIFORM_BLOCK_SIZE ${maxUBO}, draw buffers ${maxDraw})`);
