@@ -31,20 +31,67 @@
    interpolates its body between ticks. We keep the engine's arithmetic rather
    than smoothing it — a bar is 35 px of flat colour over a unit that moves a
    couple of pixels per frame, and the alternative is a second, differently
-   sourced anchor that can disagree with the body's. */
+   sourced anchor that can disagree with the body's.
+
+   THE BUILD CURSOR and the drag band box are re-drawn for the same reason,
+   and it is the reason a captured layer can never fix them: the capture is
+   bounded by the OFFSCREEN, which is the size of the screen, while the engine
+   projects these two rects at the coordinates `vpwide` made addressable. At
+   zoom < 1 those run far past the surface, the engine's own clipper drops the
+   rect whole, and nothing reaches our buffer. The band that survived is the
+   surface mapped back through the zoom, which on a 1024x768 frame at 0.467x is
+   screen [307,785]x[205,563] out of an 896x704 viewport (measured) — pick a
+   metal extractor, zoom out, and the green footprint exists nowhere else.
+   Both rects are re-derived here from the
+   globals the engine reads at `0x469DB4..0x469F23`, byte for byte:
+
+     if (!drawUnits) return;                      // movie recorder only
+     if (!(main[0x2CC6] & 8)                      // bit3: band box forced on
+         && !(main[0x2CC3] == 0x0E                // cursor mode 14 = placement
+              && IsPositionInRect(main+0x37E27,   // the WIDENED viewport rect
+                                  main[0x2C76], main[0x2C7A]))) return;
+     l = main[0x2C92] - eyeX + 0x80;   r = main[0x2C9E] - eyeX + 0x80;
+     t = main[0x2C9A] - (main[0x2C96] >> 1) - eyeY + 0x20;
+     b = main[0x2CA6] - (main[0x2CA2] >> 1) - eyeY + 0x20;   // all six DWORDs
+     if (r < l) swap;  if (b < t) swap;
+     i = main[0x2CC3] == 0x0E ? ((main[0x2CC6] & 0x40) ? 0xA : 4) : 0xF;
+     DrawTranspRectangle({l,t,r,b},                 gui[i]);
+     DrawTranspRectangle({l+1,t+1,r-1,b-1}, main[0x2CC3] == 0x0E ? gui[i]
+                                                                : gui[0]);
+
+   `DrawTranspRectangle 0x4BF8C0` is named for its hollow centre: it is four
+   1-px edges through `0x4CC7AB`, a store-only Bresenham whose axis-aligned
+   runs count both endpoints, so each edge is one inclusive `put_bar`. The
+   `drawUnits` arm is not reproduced — the only caller that passes 0 is TA's
+   own movie recorder (`0x4962C2`), which this pass never runs under. */
 
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "opengl_utils.h"
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
+#include "tagpu_order.h"
+#include "tagpu_text.h"
 #include "tagpu_glsl.h"
 
 /* ---- engine layout ---- */
 #define OFF_BEGIN    0x14357     /* unit array base / end (stride 0x118)      */
 #define OFF_END      0x1435B
-#define OFF_WATCHED  0x2A42      /* u8 watched player id                      */
+/* THE OWNER TEST'S PLAYER ID, and it is NOT the one the order driver uses.
+   `DrawGameScreen` loads `main+0x2A43` into a local at `0x46967D`/`0x469689` and
+   both the health bar (`0x469CA6`) and the group digit (`0x469CC9`) compare the
+   unit's `owner->id` against THAT — while the order-marker driver `0x48CC30`
+   picks its player range from `main+0x2A42` (`0x48CC3B`). Two different bytes,
+   two loops, one block. They are written independently (`0x416B25` and
+   `0x416B38`, from two separate reads in the same loader function), so they can
+   differ, and G13d had this loop on `0x2A42` from the start — meaning our bars
+   were drawn for a different player's units than the engine's whenever the two
+   disagree. Which of the pair is "watched" and which "local" is NOT established
+   here and the notes disagree with each other about it, so they are named by
+   address. [BINARY-VERIFIED 2026-09-05] */
+#define OFF_BAROWNER 0x2A43      /* u8, the id the bar/digit loop compares to  */
 #define OFF_GAMEOPT  0x37F06     /* bit0 = the registry option "damagebars"   */
 #define OFF_GUICOL   0x0DCB      /* GUI colour byte array (GetGuiPaletteColor)*/
 #define UNIT_STRIDE  0x118
@@ -52,22 +99,55 @@
 #define U_ZPOS       0x70        /* s16 altitude                              */
 #define U_YPOS       0x74        /* s16 world z (map depth)                   */
 #define U_TYPE       0x92        /* UnitDefStruct*                            */
+#define U_SQUAD      0xAC        /* group digit; the engine tests all 4 bytes */
 #define U_HEALTH     0x108       /* s16                                       */
 #define U_STATE      0x110       /* bit28 alive, bit14 excluded               */
 #define U_OWNER      0xFF        /* u8 player id                              */
 #define UD_MAXHP     0x1FA       /* read as a DWORD, as the engine's div does */
+/* the build cursor / band box block, all DWORDs unless noted (0x469E13) */
+#define OFF_CURMODE  0x2CC3      /* u8 order/cursor mode; 0x0E = build placement */
+#define OFF_MOUSEFL  0x2CC6      /* u8 region flags; bit3 band box, bit6 site OK */
+#define OFF_MOUSE_X  0x2C76      /* the dispatched mouse point vpwide repairs  */
+#define OFF_MOUSE_Y  0x2C7A
+#define OFF_CUR_X1   0x2C92      /* world x of one corner                      */
+#define OFF_CUR_H1   0x2C96      /* its altitude — projected as z - alt/2      */
+#define OFF_CUR_Z1   0x2C9A      /* its world z                                */
+#define OFF_CUR_X2   0x2C9E      /* and the same three for the other corner    */
+#define OFF_CUR_H2   0x2CA2
+#define OFF_CUR_Z2   0x2CA6
+#define OFF_VPRECT   0x37E27     /* L,T,R,B — WIDENED by vpwide at zoom < 1    */
+#define CUR_BUILD    0x0E        /* the cursor mode the footprint belongs to   */
 
 #define GUI_BLACK    0x00
+#define GUI_BLOCKED  0x04
 #define GUI_GREEN    0x0A
 #define GUI_RED      0x0C
 #define GUI_YELLOW   0x0E
+#define GUI_WHITE    0x0F
 
 #define MAXBAR       2048                    /* bars per frame               */
 #define MVST         7                       /* x,y, u,v, wx,wz, colour      */
 #define QUADV        6
-#define BARBASE      (2 * QUADV)             /* verts 0..11 are the two layer
-                                                quads; bars follow            */
+#define CURSBASE     (TAGPU_MARK_NLAYER * QUADV)  /* the captured layer quad
+                                                comes first; the cursor next  */
+#define MAXCURSV     (8 * QUADV)             /* two rects, four edges each    */
+#define BARBASE      (CURSBASE + MAXCURSV)   /* and the bars after those      */
 #define MAXMV        (BARBASE + MAXBAR * 2 * QUADV)
+/* The order-marker buckets (tagpu_order.c). Separate arrays rather than more
+   regions of s_verts: the bar region's length is decided at gather time, so
+   anything at a FIXED offset behind it would have to be uploaded across the
+   whole unused bar budget every frame. Uploaded contiguously after the
+   triangles instead, with the draw offsets computed at render. */
+#define MAXORDT      12000                   /* order triangle verts (dots)  */
+#define MAXORDL      12000                   /* order line verts (2 per line)*/
+/* Text quads: the ShowRanges labels (up to twelve per SELECTED unit with the
+   toggle on) and one group digit per watched unit, in ONE bucket — 800 quads,
+   134 KB. The order gather runs first, so a frame that overruns this loses the
+   digits rather than the labels; `s_xover` counts it and `mark: … over=N` says
+   so. That ordering is deliberate (it is the engine's own draw order) but it is
+   the failure mode to know: ShowRanges over a large selection is the only thing
+   that can reach the cap, and it costs the digits first. */
+#define MAXORDX      4800                    /* text verts (6 per quad)      */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
@@ -81,10 +161,12 @@ typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum,GLint,GLsizei);
 typedef void (APIENTRY *PFN_UNIFORM1F)(GLint,GLfloat);
 typedef void (APIENTRY *PFN_UNIFORM2F)(GLint,GLfloat,GLfloat);
 typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
+typedef void (APIENTRY *PFN_LINEWIDTH)(GLfloat);
 static PFN_DRAWARRAYS x_glDrawArrays;
 static PFN_UNIFORM1F  x_glUniform1f;
 static PFN_UNIFORM2F  x_glUniform2f;
 static PFN_ACTIVETEX  x_glActiveTexture;
+static PFN_LINEWIDTH  x_glLineWidth;
 
 static void* getgl(const char* n)
 {
@@ -97,6 +179,7 @@ static void* getgl(const char* n)
 /* ---- arming ---- */
 static int s_armed = -1;
 static int s_log = 0, s_passive = 0, s_bars = 1, s_capture = 1, s_selbox = 1;
+static int s_cursor = 1, s_digits = 1;
 static unsigned s_armCheck = 0;
 
 int tagpu_mark_armed(unsigned frame_counter)
@@ -113,12 +196,19 @@ int tagpu_mark_armed(unsigned frame_counter)
         tagpu_markown_set_capture(0);
         tagpu_markown_set_bars(0);
         tagpu_markown_set_selbox(0);
+        tagpu_markown_set_cursor(0);
+        tagpu_markown_set_digits(0);
+        /* the order markers draw in THIS pass's buckets, so a disarmed mark
+           pass has to hand them back at once rather than wait 90 frames for
+           the watchdog to notice nothing is being drawn */
+        tagpu_markown_set_orders(0);
         if (was > 0) flog("mark: disarmed");
         return 0;
     }
     {
         char buf[128]; DWORD n = 0;
         s_log = 0; s_passive = 0; s_bars = 1; s_capture = 1; s_selbox = 1;
+        s_cursor = 1; s_digits = 1;
         if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
             char* p = buf;
             buf[n] = 0;
@@ -135,6 +225,8 @@ int tagpu_mark_armed(unsigned frame_counter)
                 else if (!lstrcmpiA(p, "nobars")) s_bars = 0;
                 else if (!lstrcmpiA(p, "nocapture")) s_capture = 0;
                 else if (!lstrcmpiA(p, "noselbox")) s_selbox = 0;
+                else if (!lstrcmpiA(p, "nocursor")) s_cursor = 0;
+                else if (!lstrcmpiA(p, "nodigits")) s_digits = 0;
                 if (last) break;
                 p = q + 1;
             }
@@ -153,11 +245,14 @@ int tagpu_mark_armed(unsigned frame_counter)
     if (s_passive || !s_capture) tagpu_markown_set_capture(0);
     if (s_passive || !s_bars) tagpu_markown_set_bars(0);
     if (s_passive || !s_selbox) tagpu_markown_set_selbox(0);
+    if (s_passive || !s_cursor) tagpu_markown_set_cursor(0);
+    if (s_passive || !s_digits) tagpu_markown_set_digits(0);
     if (was != 1) {
-        char b[160];
+        char b[176];
         _snprintf(b, sizeof b, "mark: ARMED (log=%d passive=%d bars=%d capture=%d "
-                  "selbox=%d patched=%d)", s_log, s_passive, s_bars, s_capture,
-                  s_selbox, tagpu_markown_installed());
+                  "selbox=%d cursor=%d digits=%d patched=%d)", s_log, s_passive,
+                  s_bars, s_capture, s_selbox, s_cursor, s_digits,
+                  tagpu_markown_installed());
         flog(b);
     }
     return 1;
@@ -168,10 +263,27 @@ static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
 static GLuint s_prog, s_vao, s_vbo, s_tex[TAGPU_MARK_NLAYER];
 static int    s_texW[TAGPU_MARK_NLAYER], s_texH[TAGPU_MARK_NLAYER];
 static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uKey;
+static GLint  s_uTextM;
 
 static float s_verts[MAXMV * MVST];
+static float s_ordt[MAXORDT * MVST];   /* order markers: filled triangles     */
+static float s_ordl[MAXORDL * MVST];   /* order markers: GL_LINES             */
+static float s_ordx[MAXORDX * MVST];   /* text quads: labels, then digits     */
 static int   s_nbar;                   /* bars gathered (2 quads each)        */
 static int   s_cBar;                   /* counted, whether emitted or not     */
+static int   s_ncurs;                  /* build cursor / band box verts       */
+static int   s_nordt, s_nordl;         /* order marker verts, this frame      */
+static int   s_nordx;                  /* text verts, this frame              */
+/* Where the ShowRanges labels end and the group digits begin. The engine draws
+   the labels from inside the order driver at `0x469BFC` and the digit at
+   `0x469CF9`, i.e. on either side of the health bars, so the bucket is drawn as
+   two ranges rather than one. The order gather runs first, so the split is just
+   the count after it. */
+static int   s_nordxOrd;
+static double s_px;                    /* one SCREEN pixel in game-frame units */
+static double s_zoom, s_zcx, s_zcy;    /* the transform the text snap inverts  */
+static int    s_ss;
+static int   s_ntext, s_xover;         /* strings drawn / quads refused        */
 
 static const char* VS =
     "#version 330 core\n"
@@ -198,6 +310,7 @@ static const char* FS =
     "uniform sampler2D uLayer;\n"
     "uniform sampler2D uPal;\n"
     "uniform int uKey;\n"
+    "uniform int uText;\n"
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
@@ -208,10 +321,18 @@ static const char* FS =
        darkens the build cursor. */
     TAGPU_GLSL_FOG_DISCARD
     "  int pi;\n"
+    /* Text is a COVERAGE mask, not a palette image: tagpu_text.c rasterises TA's
+       glyphs with (fg,bg,transparent) = (255,0,0), so the texel says only whether
+       the glyph covers this fragment and the colour comes from the vertex — which
+       keeps the atlas colour-free and lets the same string be drawn in any
+       colour for one raster. */
+    "  if (uText != 0) {\n"
+    "    if (texture(uLayer, vUV).r < 0.5) discard;\n"
+    "    pi = int(vCol * 255.0 + 0.5);\n"
     /* a negative u marks the flat path: the vertex carries a palette index
        instead of a texel (health bars), the same convention the effects pass
        uses for its lines */
-    "  if (vUV.x < 0.0) {\n"
+    "  } else if (vUV.x < 0.0) {\n"
     "    pi = int(vCol * 255.0 + 0.5);\n"
     "  } else {\n"
     "    pi = int(texture(uLayer, vUV).r * 255.0 + 0.5);\n"
@@ -240,6 +361,7 @@ static void init_gl(void)
     x_glUniform1f  = (PFN_UNIFORM1F) getgl("glUniform1f");
     x_glUniform2f  = (PFN_UNIFORM2F) getgl("glUniform2f");
     x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
+    x_glLineWidth  = (PFN_LINEWIDTH) getgl("glLineWidth");
     if (!x_glDrawArrays || !x_glUniform1f || !x_glUniform2f || !x_glActiveTexture) {
         flog("mark: missing GL proc"); s_state = 2; return;
     }
@@ -257,6 +379,7 @@ static void init_gl(void)
     s_uZoom   = glGetUniformLocation(s_prog, "uZoom");
     s_uZoomC  = glGetUniformLocation(s_prog, "uZoomC");
     s_uKey    = glGetUniformLocation(s_prog, "uKey");
+    s_uTextM  = glGetUniformLocation(s_prog, "uText");
     glUseProgram(s_prog);
     glUniform1i(glGetUniformLocation(s_prog, "uLayer"),   0);
     glUniform1i(glGetUniformLocation(s_prog, "uPal"),     1);
@@ -287,6 +410,7 @@ static void init_gl(void)
 void tagpu_mark_glreset(void)
 {
     s_state = 0;
+    tagpu_text_glreset();
     memset(s_tex, 0, sizeof s_tex);      /* the ids died with the context */
     memset(s_texW, 0, sizeof s_texW);
     memset(s_texH, 0, sizeof s_texH);
@@ -299,6 +423,106 @@ static void put_vert(int i, float x, float y, float u, float v, float wx, float 
 {
     float* o = s_verts + (size_t)i * MVST;
     o[0] = x; o[1] = y; o[2] = u; o[3] = v; o[4] = wx; o[5] = wz; o[6] = col;
+}
+
+/* the order buckets' own writer: same vertex, a different array */
+static void put_at(float* base, int i, float x, float y, float u, float v,
+                   float wx, float wz, float col)
+{
+    float* o = base + (size_t)i * MVST;
+    o[0] = x; o[1] = y; o[2] = u; o[3] = v; o[4] = wx; o[5] = wz; o[6] = col;
+}
+
+static void put_ord(float* base, int i, float x, float y, float wx, float wz,
+                    float col)
+{
+    /* u < 0 is the flat path — the vertex carries a palette index rather than
+       a texel, the convention the health bars and the effects lines share */
+    put_at(base, i, x, y, -1.0f, -1.0f, wx, wz, col);
+}
+
+int tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
+                         int colidx, float wx, float wz)
+{
+    float c = (float)colidx / 255.0f;
+    if (s_nordl + 2 > MAXORDL) return 0;
+    put_ord(s_ordl, s_nordl + 0, x0, y0, wx, wz, c);
+    put_ord(s_ordl, s_nordl + 1, x1, y1, wx, wz, c);
+    s_nordl += 2;
+    return 1;
+}
+
+int tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
+                        float x2, float y2, int colidx, float wx, float wz)
+{
+    float c = (float)colidx / 255.0f;
+    if (s_nordt + 3 > MAXORDT) return 0;
+    put_ord(s_ordt, s_nordt + 0, x0, y0, wx, wz, c);
+    put_ord(s_ordt, s_nordt + 1, x1, y1, wx, wz, c);
+    put_ord(s_ordt, s_nordt + 2, x2, y2, wx, wz, c);
+    s_nordt += 3;
+    return 1;
+}
+
+/* One string, in the palette index the caller names, anchored at the (x, y) the
+   engine would have passed `DrawTextCustomFont`.
+
+   CONSTANT SCREEN SIZE, like the waypoint crosshair and unlike the health bars:
+   the glyphs are a bitmap font, so scaling the quad with the zoom would be the
+   magnified 1997 art this port exists to stop — a label two pixels tall at
+   0.25x and a blocky one at 4x. `s_px` is one screen pixel in game-frame units,
+   and the vertex shader's zoom multiplies it back out.
+
+   The vertical anchor is the engine's: `0x4CCF60` puts the string's first pixel
+   row at `y - (s8)font+0x02`, not at y. */
+int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
+                         float wx, float wz)
+{
+    int ax, ay, w, h, yoff, aw = 1, ah = 1;
+    float u0, v0, u1, v1, x1, y0, y1, c;
+    int i = s_nordx;
+
+    if (s_nordx + QUADV > MAXORDX) return 0;
+    if (!tagpu_text_place(s, &ax, &ay, &w, &h, &yoff)) return 0;
+    tagpu_text_dims(&aw, &ah);
+    u0 = (float)ax / (float)aw;          v0 = (float)ay / (float)ah;
+    u1 = (float)(ax + w) / (float)aw;    v1 = (float)(ay + h) / (float)ah;
+    y0 = y - (float)((double)yoff * s_px);
+
+    /* SNAP TO THE DEVICE PIXEL GRID, and do it by pre-image rather than by
+       rounding the vertex. Text is the one thing in this pass that is a bitmap:
+       every other primitive here is geometry and wants its fraction, but a
+       glyph whose quad starts half a pixel off has each 1-px stroke resolved
+       across two device pixels and reads as a grey smear. (Measured against the
+       engine's own label at 1x, ss=2: 66 pure-white pixels in "build distance"
+       against its 183, at the same position and size.)
+
+       The vertex shader will apply `(p - zoomC) * zoom + zoomC` and then a
+       viewport `ss` device pixels to the game-frame unit, so the snap is: take
+       the post-zoom position, round it onto the 1/ss grid, and hand back the
+       point that transforms to it. The quad's SIZE needs no such care — the
+       text is constant screen size, so it is `w` game-frame units after the
+       zoom whatever the zoom is, and `w * ss` device pixels is an integer. */
+    {
+        double gx = ((double)x  - s_zcx) * s_zoom + s_zcx;
+        double gy = ((double)y0 - s_zcy) * s_zoom + s_zcy;
+        gx = floor(gx * s_ss + 0.5) / s_ss;
+        gy = floor(gy * s_ss + 0.5) / s_ss;
+        x  = (float)((gx - s_zcx) / s_zoom + s_zcx);
+        y0 = (float)((gy - s_zcy) / s_zoom + s_zcy);
+    }
+    x1 = x + (float)((double)w * s_px);
+    y1 = y0 + (float)((double)h * s_px);
+    c  = (float)colidx / 255.0f;
+    put_at(s_ordx, i + 0, x,  y0, u0, v0, wx, wz, c);
+    put_at(s_ordx, i + 1, x1, y0, u1, v0, wx, wz, c);
+    put_at(s_ordx, i + 2, x,  y1, u0, v1, wx, wz, c);
+    put_at(s_ordx, i + 3, x1, y0, u1, v0, wx, wz, c);
+    put_at(s_ordx, i + 4, x1, y1, u1, v1, wx, wz, c);
+    put_at(s_ordx, i + 5, x,  y1, u0, v1, wx, wz, c);
+    s_nordx += QUADV;
+    s_ntext++;
+    return 1;
 }
 
 /* one DrawBar rect, edges INCLUSIVE — so the quad's far edge is +1 */
@@ -317,6 +541,94 @@ static void put_bar(int* nv, int l, int t, int r, int b, int colidx,
     *nv = i + QUADV;
 }
 
+/* one DrawTranspRectangle: the four 1-px edges of the rect in one flat colour,
+   every corner inclusive. Normalised because the inner rect is the outer inset
+   by 1 and a footprint under 3 px across inverts it — which the engine's own
+   line drawer also resolves by swapping the endpoints. */
+static void put_outline(int* nv, int l, int t, int r, int b, int col,
+                        float wx, float wz)
+{
+    int k;
+    if (r < l) { k = l; l = r; r = k; }
+    if (b < t) { k = t; t = b; b = k; }
+    put_bar(nv, l, t, r, t, col, wx, wz);          /* top    */
+    put_bar(nv, l, b, r, b, col, wx, wz);          /* bottom */
+    put_bar(nv, l, t, l, b, col, wx, wz);          /* left   */
+    put_bar(nv, r, t, r, b, col, wx, wz);          /* right  */
+}
+
+/* the build-cursor footprint and the drag band box — the whole of
+   `0x469DB4..0x469F23`, transcribed in the header comment */
+static void gather_cursor(const TAGPU_FXVIEW* v)
+{
+    const char* ta = v->ta;
+    const unsigned char* gui = (const unsigned char*)(ta + OFF_GUICOL);
+    const int* vp = (const int*)(ta + OFF_VPRECT);
+    int mode, fl, l, t, r, b, idx, outer, inner, nv = CURSBASE;
+    float wx, wz;
+
+    s_ncurs = 0;
+    if (s_armed != 1 || !s_cursor || s_passive) return;
+    /* Without the redirect the engine is still drawing its own pair and ours
+       would be a second, differently placed one. Refuse rather than double. */
+    if (!tagpu_markown_installed()) return;
+
+    fl   = *(const unsigned char*)(ta + OFF_MOUSEFL);
+    mode = *(const unsigned char*)(ta + OFF_CURMODE);
+    if (!(fl & 8)) {
+        int mx, my;
+        if (mode != CUR_BUILD) return;
+        mx = *(const int*)(ta + OFF_MOUSE_X);
+        my = *(const int*)(ta + OFF_MOUSE_Y);
+        /* IsPositionInRect 0x4B6720 — inclusive on all four edges. Read the
+           FIELD, not tagpu_vpwide_true_rect: while zoomed out that field is
+           deliberately wider, and it is exactly that width which lets a
+           placement in the outer ring pass the gate at all. */
+        if (mx < vp[0] || mx > vp[2] || my < vp[1] || my > vp[3]) return;
+    }
+
+    l = *(const int*)(ta + OFF_CUR_X1) - v->eyeX + 0x80;
+    r = *(const int*)(ta + OFF_CUR_X2) - v->eyeX + 0x80;
+    t = *(const int*)(ta + OFF_CUR_Z1) - (*(const int*)(ta + OFF_CUR_H1) >> 1)
+        - v->eyeY + 0x20;
+    b = *(const int*)(ta + OFF_CUR_Z2) - (*(const int*)(ta + OFF_CUR_H2) >> 1)
+        - v->eyeY + 0x20;
+    /* the globals are live sim state read from the render thread, so a rect
+       that could not be one is dropped rather than turned into a quad */
+    if (l < -0x100000 || l > 0x100000 || r < -0x100000 || r > 0x100000 ||
+        t < -0x100000 || t > 0x100000 || b < -0x100000 || b > 0x100000) return;
+
+    /* the colour pair keys off the MODE, not off which arm of the gate let it
+       through — the engine picks it from main+0x2CC3 both times */
+    if (mode == CUR_BUILD) {
+        idx   = (fl & 0x40) ? GUI_GREEN : GUI_BLOCKED;
+        outer = gui[idx];
+        inner = outer;
+    } else {
+        outer = gui[GUI_WHITE];
+        inner = gui[GUI_BLACK];
+    }
+
+    /* NORMALISE FIRST, THEN INSET — the engine's order, and the two are not
+       interchangeable. `0x469E92`/`0x469EA0` swap the pairs and only then does
+       `0x469ECA..0x469EDD` inc/dec the SWAPPED values for the inner rect. Insetting
+       first and letting put_outline swap afterwards turns the inset into an
+       OUTSET whenever the stored rect runs right-to-left or bottom-to-top —
+       the black inner outline lands one pixel outside the white one. A band box
+       dragged up-left is exactly that case, and the G13n A/B only covered a
+       down-right drag. */
+    if (r < l) { int k = l; l = r; r = k; }
+    if (b < t) { int k = t; t = b; b = k; }
+
+    /* the layer is drawn with the fog off, so this is only the world point the
+       rect's own corner maps to — the same projection layer_quad uses */
+    wx = (float)(l - v->vpL + v->eyeX);
+    wz = (float)(t - v->vpT + v->eyeY);
+    put_outline(&nv, l, t, r, b, outer, wx, wz);
+    put_outline(&nv, l + 1, t + 1, r - 1, b - 1, inner, wx, wz);
+    s_ncurs = nv - CURSBASE;
+}
+
 int tagpu_mark_gather(const TAGPU_FXVIEW* v)
 {
     const char* ta = v->ta;
@@ -324,11 +636,34 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     const unsigned char* gui;
     int watched, nv = BARBASE;
 
-    s_nbar = 0; s_cBar = 0;
-    if (s_armed != 1 || !s_bars) return 0;
-    /* The bar skip is a byte in the engine's code path; without the patch the
-       engine is still drawing bars itself and ours would be a second set at a
-       second position. Refuse rather than double-draw. */
+    s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0; s_nordx = 0;
+    s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
+    /* before anything emits: tagpu_order.c's labels come through
+       tagpu_mark_emit_text, which sizes its quads with this */
+    /* one font for the whole frame, before anything asks the atlas for a string */
+    tagpu_text_frame();
+    s_px  = 1.0 / (double)(v->zoom > 0.0f ? v->zoom : 1.0f);
+    s_zoom = v->zoom > 0.0f ? (double)v->zoom : 1.0;
+    s_zcx = (double)v->zoomCx; s_zcy = (double)v->zoomCy;
+    s_ss  = v->ss > 0 ? v->ss : 1;
+    /* first, and outside every gate below: neither the cursor nor the order
+       markers are health bars, and neither `damagebars` nor `nobars` has
+       anything to say about them */
+    gather_cursor(v);
+    if (s_armed == 1 && !s_passive) tagpu_order_gather(v);
+    else if (s_passive) tagpu_markown_set_orders(0);
+    tagpu_order_frame_done(v);
+    /* everything emitted so far is a ShowRanges label, and the engine draws
+       those UNDER the health bars */
+    s_nordxOrd = s_nordx;
+    /* One walk for both: the engine draws the bar and the group digit from the
+       SAME loop (`0x469CB9` then `0x469CF9`), behind the same `damagebars`
+       gate, so `nobars` may not take the digits with it. */
+    if (s_armed != 1 || (!s_bars && !s_digits)) return 0;
+    /* The bar skip is a byte in the engine's code path and the digit skip is a
+       redirected call site; without the patches the engine is still drawing
+       both itself and ours would be a second set at a second position. Refuse
+       rather than double-draw. */
     if (!tagpu_markown_installed()) return 0;
     if (!(*(const unsigned char*)(ta + OFF_GAMEOPT) & 1)) return 0;  /* damagebars */
 
@@ -336,7 +671,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     end = *(const char* const*)(ta + OFF_END);
     if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return 0;
     if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return 0;
-    watched = *(const unsigned char*)(ta + OFF_WATCHED);
+    watched = *(const unsigned char*)(ta + OFF_BAROWNER);
     gui = (const unsigned char*)(ta + OFF_GUICOL);
 
     for (u = beg + UNIT_STRIDE; u < end && s_cBar < MAXBAR; u += UNIT_STRIDE) {
@@ -346,12 +681,6 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         float wx, wz;
         if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
         if (*(const unsigned char*)(u + U_OWNER) != (unsigned)watched) continue;
-        hp = *(const short*)(u + U_HEALTH);
-        if (hp <= 0) continue;
-        def = *(const char* const*)(u + U_TYPE);
-        if (!ptr_ok(def)) continue;
-        maxhp = *(const int*)(def + UD_MAXHP);
-        if (maxhp <= 0) continue;                 /* the engine's div would trap */
 
         x = *(const short*)(u + U_XPOS) - v->eyeX + 0x80;
         y = *(const short*)(u + U_YPOS) - v->eyeY
@@ -360,13 +689,42 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
            shows units the engine's own HotUnits list has already dropped */
         if (x + 0x12 < v->evpL || x - 0x12 > v->evpL + v->evw ||
             y + 3 < v->evpT || y - 3 > v->evpT + v->evh) continue;
-        s_cBar++;
-        if (s_passive) continue;      /* the A/B lever: count, let the engine draw */
 
         /* the fog is sampled at the unit's own anchor, in the projected world
            space the engine's screen grid is built in (tagpu_fx.h) */
         wx = (float)*(const short*)(u + U_XPOS);
         wz = (float)(*(const short*)(u + U_YPOS) - (*(const short*)(u + U_ZPOS) >> 1));
+
+        /* THE GROUP DIGIT, `0x469CD1..0x469CF9`. Two things about it are the
+           engine's and neither is obvious: the squad tag is tested as a DWORD
+           (`mov ecx,[edi+0xac]; test ecx,ecx`) and only then used as a byte, so
+           a unit whose 0xAD..0xAF are set shows a '0'; and the digit sits at
+           `sy + 0x0E` where the BAR is at `sy + 0x0A`, i.e. four rows lower
+           than `y` here. No health test — the engine's leaf returns early on a
+           dead unit but the digit is drawn from the caller. */
+        if (s_digits && !s_passive) {
+            unsigned squad = *(const unsigned*)(u + U_SQUAD);
+            if (squad) {
+                char d[2];
+                int tc = tagpu_text_colour();
+                d[0] = (char)('0' + (unsigned char)squad);
+                d[1] = 0;
+                if (!tagpu_mark_emit_text((float)x, (float)(y + 4), d,
+                                          (tc >= 0 && tc < 256) ? tc : gui[GUI_WHITE],
+                                          wx, wz))
+                    s_xover++;
+            }
+        }
+        if (!s_bars) continue;
+
+        hp = *(const short*)(u + U_HEALTH);
+        if (hp <= 0) continue;
+        def = *(const char* const*)(u + U_TYPE);
+        if (!ptr_ok(def)) continue;
+        maxhp = *(const int*)(def + UD_MAXHP);
+        if (maxhp <= 0) continue;                 /* the engine's div would trap */
+        s_cBar++;
+        if (s_passive) continue;      /* the A/B lever: count, let the engine draw */
 
         put_bar(&nv, x - 0x11, y - 2, x + 0x11, y + 2, gui[GUI_BLACK], wx, wz);
         /* (Health << 5) / maxHP as an UNSIGNED divide, and the thirds through
@@ -440,7 +798,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
 {
     TAGPU_MARKLAYER lay[TAGPU_MARK_NLAYER];
     int have[TAGPU_MARK_NLAYER];
-    int i, total;
+    int i, total, textBase = 0;
+    unsigned int textTex = 0;
 
     if (s_state == 0) init_gl();
     if (s_state != 1 || s_armed != 1) return;
@@ -453,6 +812,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         tagpu_markown_set_capture(s_capture);
         tagpu_markown_set_bars(s_bars);
         tagpu_markown_set_selbox(s_selbox);
+        tagpu_markown_set_cursor(s_cursor);
+        tagpu_markown_set_digits(s_digits);
     }
 
     x_glActiveTexture(GL_TEXTURE0);
@@ -461,7 +822,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
         if (have[i]) have[i] = upload_layer(i, &lay[i]);
         if (have[i]) layer_quad(v, i * QUADV, &lay[i]);
     }
-    if (!have[0] && !have[1] && s_nbar == 0) return;
+    if (!have[TAGPU_MARK_POSTFOG] && s_nbar == 0 && s_ncurs == 0 &&
+        s_nordt == 0 && s_nordl == 0 && s_nordx == 0) return;
 
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
@@ -470,6 +832,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     if (s_uFogOrg >= 0) x_glUniform2f(s_uFogOrg, (float)v->fogOrgX, (float)v->fogOrgY);
     if (s_uFogDim >= 0) x_glUniform2f(s_uFogDim, (float)v->fogCols, (float)v->fogRows);
     glUniform1i(s_uKey, tagpu_markown_key());
+    glUniform1i(s_uTextM, 0);
     x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
     x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
@@ -478,36 +841,91 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     total = BARBASE + s_nbar;
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)total * MVST * 4, s_verts,
-                 GL_STREAM_DRAW);
+    /* one orphan, then each bucket at its own offset: the order buckets live
+       in their own arrays (see MAXORDT) and are packed in behind the
+       triangles, so their first vertex moves with the bar count */
+    glBufferData(GL_ARRAY_BUFFER,
+                 (GLsizeiptr)(total + s_nordt + s_nordl + s_nordx) * MVST * 4,
+                 NULL, GL_STREAM_DRAW);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)total * MVST * 4, s_verts);
+    if (s_nordt)
+        glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)total * MVST * 4,
+                        (GLsizeiptr)s_nordt * MVST * 4, s_ordt);
+    if (s_nordl)
+        glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)(total + s_nordt) * MVST * 4,
+                        (GLsizeiptr)s_nordl * MVST * 4, s_ordl);
+    if (s_nordx)
+        glBufferSubData(GL_ARRAY_BUFFER,
+                        (GLintptr)(total + s_nordt + s_nordl) * MVST * 4,
+                        (GLsizeiptr)s_nordx * MVST * 4, s_ordx);
+    textBase = total + s_nordt + s_nordl;
 
-    /* the engine's own order inside the block: order markers first, then the
-       health bars over them (0x469BFC before 0x469CB9), and the build cursor
-       last of all — after the fog overlay, which is why it carries no fog */
-    if (have[TAGPU_MARK_PREFOG]) {
+    /* The engine's own order inside the block: order markers and their
+       ShowRanges labels first (`0x469BFC`), then the health bars over them
+       (`0x469CB9`), then the group digit over those (`0x469CF9`), and the build
+       cursor last of all — after the fog overlay, which is why it carries no
+       fog. */
+    if (s_nordt || s_nordl) {
+        /* one SCREEN pixel of line, which is `ss` device pixels of the
+           supersampled target — the same rule the effects pass uses, and what
+           keeps a native-res marker a hairline at 4x instead of a 1997 pixel
+           blown up to sixteen */
         glUniform1i(s_uFog, v->fogMode & 1);
-        glBindTexture(GL_TEXTURE_2D, s_tex[TAGPU_MARK_PREFOG]);
-        x_glDrawArrays(GL_TRIANGLES, TAGPU_MARK_PREFOG * QUADV, QUADV);
+        if (s_nordt) x_glDrawArrays(GL_TRIANGLES, total, s_nordt);
+        if (s_nordl) {
+            if (x_glLineWidth) x_glLineWidth((GLfloat)(v->ss > 0 ? v->ss : 1));
+            x_glDrawArrays(GL_LINES, total + s_nordt, s_nordl);
+        }
+    }
+    if (s_nordx) {
+        textTex = tagpu_text_tex();       /* binds it, and uploads if dirty */
+        if (textTex) {
+            glUniform1i(s_uFog, v->fogMode & 1);
+            glUniform1i(s_uTextM, 1);
+            if (s_nordxOrd)
+                x_glDrawArrays(GL_TRIANGLES, textBase, s_nordxOrd);
+        }
     }
     if (s_nbar) {
+        glUniform1i(s_uTextM, 0);
         glUniform1i(s_uFog, v->fogMode & 1);
         x_glDrawArrays(GL_TRIANGLES, BARBASE, s_nbar);
     }
+    if (textTex && s_nordx > s_nordxOrd) {
+        /* the digits, over the bars, out of the same atlas — bound again
+           because the bar draw above did not touch unit 0's binding but the
+           mode uniform did */
+        glUniform1i(s_uTextM, 1);
+        glUniform1i(s_uFog, v->fogMode & 1);
+        x_glDrawArrays(GL_TRIANGLES, textBase + s_nordxOrd, s_nordx - s_nordxOrd);
+    }
+    glUniform1i(s_uTextM, 0);
     if (have[TAGPU_MARK_POSTFOG]) {
         glUniform1i(s_uFog, 0);
         glBindTexture(GL_TEXTURE_2D, s_tex[TAGPU_MARK_POSTFOG]);
         x_glDrawArrays(GL_TRIANGLES, TAGPU_MARK_POSTFOG * QUADV, QUADV);
     }
+    /* last, and with the fog off for the same reason the layer above has it
+       off: the engine draws these two rects after its fog overlay and never
+       darkens them */
+    if (s_ncurs) {
+        glUniform1i(s_uFog, 0);
+        x_glDrawArrays(GL_TRIANGLES, CURSBASE, s_ncurs);
+    }
 
     if (s_log) {
         static unsigned last = 0;
         if (v->frame_counter - last >= 120) {
-            char b[192];
+            char b[320];
+            int nstr = 0, ndrop = 0;
             last = v->frame_counter;
+            tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
-                "mark: bars=%d prefog=%s postfog=%s key=%d vp=(%d,%d %dx%d) zoom=%.2f%s",
-                s_cBar,
-                have[TAGPU_MARK_PREFOG] ? "captured" : "-",
+                "mark: bars=%d cursor=%d ordtri=%d ordline=%d text=%d(lab=%d) "
+                "atlas=%d/%d over=%d postfog=%s key=%d vp=(%d,%d %dx%d) "
+                "zoom=%.2f%s",
+                s_cBar, s_ncurs / QUADV, s_nordt / 3, s_nordl / 2,
+                s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 have[TAGPU_MARK_POSTFOG] ? "captured" : "-",
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,
                 s_passive ? " (passive: engine still drawing)" : "");

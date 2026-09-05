@@ -13,12 +13,13 @@ decompiler output read for this build this session. **[CORPUS]** = TADR/`tamem.h
 name cross-checked against our bytes. **[INFERRED]** = my reading, not yet
 runtime-confirmed. `main` = `*(void**)0x511DE8` (the `TAdynmemStruct`).
 
-> **Status after G13d (2026-09-02): TAKEN.** Every marker on this page is now ours,
+> **Status after G13p (2026-09-05): TAKEN, PORTED WHOLE, and the capture is gone (§6.4).**
+> Every marker on this page is ours,
 > and the engine's 8bpp surface inside the viewport is **99.98 % key with nothing left
 > on it but the mouse cursor** (measured, 112 px of 630 784). `tagpu_markown.c` +
-> `tagpu_mark.c`; what follows is still the RE this page always was, and it is what
-> those two modules were written from — but read §6 first for which half of it we
-> reproduce and which half we let the engine draw for us.
+> `tagpu_mark.c` + `tagpu_order.c`; what follows is still the RE this page always was, and
+> it is what those three modules were written from — but read §6 first for which half of it
+> we reproduce and which half we let the engine draw for us.
 >
 > The gate was not "draw markers", it was **free view zoom**. These were the last
 > engine pixels anchored to a WORLD position; everything else in the frame is either
@@ -145,7 +146,8 @@ cell granularity like everything else under the overlay). Block layout
   0x469C63   sx = (s16)unit->0x6C − eyeX + 0x80
              sy = (s16)unit->0x74 − eyeY − ((s16)unit->0x70 >> 1) + 0x20   // feet, alt-corrected
   0x469C97   if (!(main+0x37F06 & 1)) continue;               // "damagebars" master gate
-  0x469CA6   if (unit->Owner(0x96)->id(+0x146) == watchedPlayer([esp+0x70]))
+  0x469CA6   if (unit->Owner(0x96)->id(+0x146) == [esp+0x70])   // = main+0x2A43,
+             //   NOT the main+0x2A42 the order driver uses — see the appendix
   0x469CB9       DrawHealthBars(ctx, unit, sx, sy + 0xA);     // bar centre 10px below feet
   0x469CC9   if (same owner && unit->0xAC != 0)
   0x469CF9       DrawTextCustomFont(ctx, {'0'+unit->0xAC, 0}, sx, sy + 0xE, -1);  // group digit
@@ -188,9 +190,18 @@ DrawBar(ctx, &r, Health > 2*maxHP/3 ? guiCol[0xA]  // green
 
 `unit+0xAC` (byte, inside tamem's `data9` blob) is the squad tag — 0 = none.
 Drawn as a 1-character string `'0'+value` via `DrawTextCustomFont 0x4C14F0` at
-`(sx, sy+14)`, same owner + damagebars gates as the bar. (The squad-assign
+`(sx, sy+0x0E)`, four rows below the bar's `sy+0x0A`, same owner + damagebars
+gates as the bar but **no health test** (the bar's leaf returns early on a dead
+unit; the digit is drawn from the caller). (The squad-assign
 handler cluster at `0x4960xx` references sound/GUI id "SelectSquad"
 `0x50951C`.) No other per-unit decal exists in the block.
+
+**The tag is tested as a DWORD** and only then used as a byte — `mov ecx,[edi+0xac];
+test ecx,ecx` at both `0x469C55` and `0x469CD1` [BINARY-VERIFIED 2026-09-05] — so a
+unit whose `0xAD..0xAF` are non-zero shows a `'0'`. Reproduced rather than tidied.
+
+**Ours since G13p** (§6.4): the `0x469CF9` call site is skipped and `tagpu_mark.c`
+draws the digit from `tagpu_text.c`'s atlas, in the same loop as the bar.
 
 ---
 
@@ -237,8 +248,21 @@ the caller mask:
 | 3 | `0x439740` | animated sprite at the order target |
 | 4 | `0x4390A0` | range circles — once per unit (guard flag) |
 
-Each drawer receives `(ctx, viewStruct, node, &pos[, flag])` and **writes the
+Each drawer receives `(ctx, viewStruct, node, &pos, flag)` and **writes the
 order's target into `pos`**, so consecutive orders chain unit → wp1 → wp2 …
+
+**`pos` is RESTORED to the node's entry value before bits 0..3, and NOT before bit 4**
+[BINARY-VERIFIED 2026-09-04]. The walker keeps the node-entry position in `edi`/`ebp`/`ebx`
+(reloaded from `pos` at `0x439CCB..0x439CD3`, at the *end* of each node) and writes it back
+with the three stores `mov [esp+0x24],edi` / `[esp+0x28],ebp` / `[esp+0x2c],ebx` immediately
+ahead of the calls at `0x439BAC`, `0x439BF2`, `0x439C37` and `0x439C7D` — and there is no
+such triple ahead of `0x439CBE`. So every one of bits 0..3 starts from the same point, the
+chain advances by whichever of them ran LAST (bit 3 if present, else bit 2, else bit 1's
+delegation to bit 3, else bit 0), and the range-circle drawer sees whatever they left.
+G13o's trace checks exactly this against the engine and it holds over 16 650 records.
+
+The walker also **reuses its own `unit` argument slot as the bit-4 guard byte** (cleared at
+`0x439B47`, set at `0x439CC3`), which is why that guard is per unit rather than per node.
 
 Order-node fields used [BINARY-VERIFIED]: `+0x4` type, `+0xE` owning unit,
 `+0x16` target UnitStruct* (0 = ground target), `+0x22/0x26/0x2A` target x/y/z
@@ -252,10 +276,19 @@ order-issue game time.
 (`node+0x36` = target type): corners = target pos ± UnitDef footprint extents
 (dwords at UnitDef `+0x15E/+0x162/+0x166/+0x16A/+0x172` — the load-time world
 half-extents around tamem's `__X_Width`/`Z_Width`), projected with the target
-tile's stored height. Draws **8 `DrawLine` segments in two colours**: an inner
-rect that *grows over the first 10 game ticks* after the order is issued
-(`t = clamp(gameTime(main+0x38A47) − node->issueTime, 0, 10)`, corner offsets
-scaled `t/10`) plus outer edge lines. Colour pair by whether the issuing unit
+tile's stored height (`P0`'s altitude is used for both corners, and
+`UnitDef+0x16E` — `P1`'s — is never read). Draws **8 `DrawLine` segments in two colours**,
+and the ten-tick animation **SWEEPS THE FOUR EDGES INWARD — it does not grow an inner
+rect** [CORRECTED 2026-09-04 against `0x438CB7..0x438D3D`; this said "an inner rect that
+*grows*"]. With `t = gameTime(main+0x38A47) − node->issueTime` clamped
+`((unsigned)t >= 10) ? 10 : t` — **unsigned, so a negative age reads as FINISHED rather than
+as not-started** — and `dxg = (x1−x0)·t/10`, `dzg = (z1−z0)·t/10`, the animated positions
+`xg0 = x0+dxg` and `xg1 = x1−dxg`
+sit on the rect's own edges at `t=0` and have swapped to the *opposite* edges exactly
+(`xg0 = x1`, `xg1 = x0`) at `t=10`. Four lines are drawn in colour A one pixel outside those
+positions and spanning one pixel past the corners, four in colour B exactly on them — so at
+`t=10` it is the colour-B pair that lands on the opposite edges and the colour-A pair one
+pixel inside them. Colour pair by whether the issuing unit
 (`node+0xE`) is currently selected: selected → GUI[3] + GUI[0xA]; not →
 GUI[1] + GUI[9]. Chains `pos` to the site.
 
@@ -270,7 +303,9 @@ index cycling — the classic marching dotted order line.
 0x4B7123`/`TurnXLookup 0x4B70EF`, angle step 0x1000 of 0x10000) around the
 target, radius = target unit's size field (`UnitDef+0x178`, upper half of
 tamem `data_10` [INFERRED name]) or 0x20 for ground targets, colour GUI[0xC]
-(red), flat at the target's altitude-corrected screen pos.
+(red), flat at the target's altitude-corrected screen pos. The y radius is
+`(int)(R × 0.89)` — the double at `0x4FD2C0`; both lookups are **cdecl**. Chains `pos` to
+the centre.
 
 **Target sprite `0x439740`** [BINARY-VERIFIED]: resolves the target position —
 live target unit if `UnitInPlayerLOS 0x465AC0(owner->player, target)`, else the
@@ -293,10 +328,16 @@ for sight/radar/sonar/jammers/builddistance/maneuver/kamikaze (GUI[0xE]) and
 weapon1-3 ranges (flashing GUI[4]/GUI[0xC] on `gameTime&1`), labels via
 `DrawTextCustomFont`.
 
-`DrawRangeCircle 0x438EA0` (symbol) is the shared circle rasteriser: segments
-of `DrawLine`, each endpoint's y corrected by `max(centreY, GetPosHeight
-0x485070(x,z))/2` — **circles follow the terrain**, with an optional label
-drawn at a slot-dependent point on the circumference.
+`DrawRangeCircle 0x438EA0` (symbol) is the shared circle rasteriser,
+`ret 0x1C` = `(ctx, view, POS16_16* centre, radius, colour, char* label, labelSlot)`:
+`(int)(radius × 2π × 0.125)` segments of `DrawLine` — the doubles at `0x4FD2B0` and
+`0x4FD2B8`, i.e. one segment per 8 world units of circumference — each endpoint's altitude
+raised to `max(centreY, GetPosHeight 0x485070(&p))` before the usual `− alt/2` projection, so
+**circles follow the terrain**, with an optional label at the vertex whose index is
+`labelSlot × 3`. `GetPosHeight` is `stdcall(POS16_16*)`, `ret 4`, reads only the two high
+words `[p+2]`/`[p+0xA]`, and is a pure read of the height grid at `main+0x14287` — no writes,
+no state, which is why a render thread may call it. `DrawLine 0x4BE950` is
+`stdcall(ctx, x0, y0, x1, y1, colour)`, fixed by the build rect's eight call sites.
 
 **Frame position of all of §3: after every unit and projectile, before fog** —
 the engine's order markers are fog-darkened where they cross unlit cells, and
@@ -326,10 +367,16 @@ Colours: build mode (`0x2CC3==0xE`) → both rects GUI[`(main+0x2CC6 & 0x40) ?
 0xA : 4`] — bit6 = placement valid → green, else colour 4 (blocked). Other gate
 (bit3 of `0x2CC6`) → outer GUI[0xF] (white), inner GUI[0] (black) — the
 white/black double outline of the **drag band box** [mechanics BINARY-VERIFIED;
-band-box identification INFERRED — the rect globals are world-anchored, which
-matches the band box scrolling with the map]. `DrawTranspRectangle 0x4BF8C0`
-(symbol) draws the 4 edges with `DrawLine2 0x4CC7AB`/`DrawLine` — a hollow
-rect, two edges through the "transparent" line variant.
+band-box identification confirmed live 2026-09-04 — a held-button drag sets
+`main+0x2CC6` to 0x4E, bit3 included, and paints exactly this outline].
+`DrawTranspRectangle 0x4BF8C0` draws the 4 edges through **one** writer, the
+store-only Bresenham `0x4CC7AB`: top and right reach it directly (`0x4BFC93`,
+`0x4BFCF5` clip through `0x4BEA20` first), bottom and left through
+`DrawLine 0x4BE950`, which does the same two calls internally. [CORRECTED
+2026-09-04 — this said "two edges through the transparent line variant"; there
+is no variant, only one more frame on two of the four. Full argument lists and
+the surface bound that clips them: `exe-reverse-engineering.md`,
+"the post-fog build cursor and band box".]
 
 The rest of the post-fog tail is HUD, not world markers: spectate vcall
 `0x469D80`, dialogs (`GetGameingType 0x435100` state 2/3 → `0x4C69C0` +
@@ -351,15 +398,16 @@ everything from `0x469BD7` on. Under that split:
 | Marker | Drawn at | Frame position | State to redraw from | Verdict |
 |---|---|---|---|---|
 | Selection rect | `0x4699EB`/`0x469B8A` → `0x46A530` | **interleaved** — before each unit, inside both sweeps | `stateMask&0x10` @unit+0x110; pos +0x6A/6E/72; rot +0x64; model AABB via `MODEL_PTRS[unit+0xA6]` (or our own mesh bounds); gate `main+0x37F2F`&4; colour GUI[0xA] | **must be re-drawn by us** (engine's is under our unit pixels and under wrong neighbours) |
-| Health bar | `0x469CB9` → `0x46A430` | after all units, before fog | HotUnits list; Health u+0x108, maxHP def+0x1FA; owner u+0x96→+0x146 == main+0x2A42; option `main+0x37F06`&1; colours GUI[0,0xA,0xE,0xC]; pos = feet −alt/2 +(0,10) | **survives** our overdraw |
+| Health bar | `0x469CB9` → `0x46A430` | after all units, before fog | HotUnits list; Health u+0x108, maxHP def+0x1FA; owner u+0x96→+0x146 == **main+0x2A43** (via `[esp+0x70]`, stored at `0x469689`) —
+not `main+0x2A42`, which is what the order driver uses; option `main+0x37F06`&1; colours GUI[0,0xA,0xE,0xC]; pos = feet −alt/2 +(0,10) | **survives** our overdraw |
 | Group digit | `0x469CF9` | same block | u+0xAC byte; same gates; text at feet+(0,14) | **survives** |
 | Order route dots | `0x4394E0` (SHIFT pass) | after units, before fog (fog-darkened; bars paint over) | SHIFT key; order list u+0x5C (§3.2 fields); `pathicon` GAF main+0x148D3; hover ids main+0x2CBA/0x37E9C/CameraToUnit main+0x142F3 | **survives** |
 | Order target sprite | `0x439740` | same | cursor GAF `main+0x1487F+idx·4`, idx = `(*(0x512344))[type·0x19+0x10]`; LOS cache node+0x32/42 | **survives** |
 | Target circle | `0x4399F0` | same | target def+0x178 radius; GUI[0xC]; terrain heights (GetPosHeight) | **survives** |
 | Build-site rect (queued) | `0x438C00` | same | node+0x36 type → footprint def+0x15E..0x172; issue time node+0x46; builder-selected colour switch | **survives** |
 | Range circles (cloak/kamikaze/ShowRanges) | `0x4390A0` | same | def ranges 0x202..0x218, weapons; toggles main+0x391BF | **survives** |
-| Build cursor footprint | `0x469EC5` | **after fog** | mode main+0x2CC3==0xE, valid bit main+0x2CC6&0x40, rect main+0x2C92..0x2CA6 | **survives** (also never fogged) |
-| Band box (drag) | `0x469F1E` path | after fog | main+0x2CC6&8 + same rect globals | **survives** |
+| Build cursor footprint | `0x469EC5` | **after fog** | mode main+0x2CC3==0xE, valid bit main+0x2CC6&0x40, rect main+0x2C92..0x2CA6 | **must be re-drawn by us** [CORRECTED 2026-09-04 — see §6.3; "survives" was true at 1× and false at every zoom < 1] |
+| Band box (drag) | `0x469F1E` path | after fog | main+0x2CC6&8 + same rect globals | **must be re-drawn by us** (same block, same reason) |
 | Chat/clock/HUD/minimap | `0x469FCB`+ | after fog | — | **survives** |
 
 Caveats for the native pass:
@@ -404,32 +452,45 @@ through `gui[i] = *(u8*)(main+0xDCB+i)` rather than being used as palette indice
 > drew the box in a dark colour and nobody saw it, because the engine was still
 > painting its own green one over the top. Suppressing the engine's is what exposed it.
 
-**Everything else is CAPTURED AND REPLAYED.** The order-marker pass alone is five
-drawers over the order list, with a build rect that grows over ten ticks, a marching
-dot phase, a last-seen LOS cache and `ShowRanges`' text labels — a lot of arithmetic
-to get subtly wrong. So the engine draws it, into a scratch 8bpp buffer of ours
-instead of into its frame, and we upload that buffer and draw it as one quad through
-the same zoom transform the world uses. Parity is exact by construction, text
-included. The capture is a pointer swap and nothing else: the OFFSCREEN is a stack
-local in `DrawGameScreen`, so pointing its pixel base (+0x0C) at our own buffer for
-the length of a block redirects every clipped blit inside it.
+**Everything else WAS CAPTURED AND REPLAYED**, and the capture is a pointer swap and
+nothing else: the OFFSCREEN is a stack local in `DrawGameScreen`, so pointing its pixel base
+(+0x0C) at our own buffer for the length of a block redirects every clipped blit inside it.
+The argument for capturing rather than porting was that the order-marker pass is five drawers
+over a linked list, with an animated build rect, a marching dot phase, a last-seen LOS cache
+and `ShowRanges`' text labels — a lot of arithmetic to get subtly wrong — against which a
+capture is exact by construction, text included.
+
+**G13o ended that for the order markers** (§6.3) and **G13p for the text** (§6.4). The
+pre-fog window — window A — is gone: its last engine primitive was the group digit, and that
+is ours now, so the window is never opened and the 64 KB identity blend LUT that existed only
+to protect the target sprite inside it went with it. What survives is the POST-fog window,
+opened by nothing in normal play and kept so `mark.on=nocursor` can still put the engine's
+own build cursor through our frame for an A/B. What was decisive throughout is not the
+arithmetic but the bound — §6.1's gap is not something a wider buffer can close.
 
 | Marker | Ours how | Engine side |
 |---|---|---|
 | Health bar | re-drawn from unit state | `0x46A430` prologue detour |
-| Group digit | captured (window A) | rides the same block |
-| Order markers, route dots, target sprite/circle, build-site rect, range circles | captured (window A) | ride the same block |
-| Build-cursor footprint, drag band box | captured (window B) | the two `0x4BF8C0` call sites redirected |
+| Group digit | **re-drawn** as one glyph out of our own text atlas (G13p, §6.4) | the `0x469CF9` `DrawTextCustomFont` call SKIPPED |
+| ShowRanges labels | **re-drawn** the same way, at the engine's own point on each circle | ride the skipped order driver |
+| Order markers, route dots, target sprite/circle, build-site rect, range circles | **re-drawn** at native resolution from a game-thread snapshot of the order lists (G13o, §6.3) | the driver call `0x469BFC` SKIPPED |
+| Build-cursor footprint, drag band box | **re-drawn** from the six rect globals (G13n) | the two `0x4BF8C0` call sites redirected and the engine's pair SKIPPED |
 | Selection rect | already native since G12b | `0x4699EB`/`0x469B8A` redirected through a **per-unit** test — a unit `tagpu_native_owns_unit` does not own keeps the engine's |
 
-**Two capture windows, because fog divides them.** Window A is hook 8 `0x469BD7` →
-hook 9 `0x469D2C` and is drawn with the fog rule applied (the engine's block runs
-*before* `0x4848E0` and is darkened by it). Window B is the two `DrawTranspRectangle`
-calls, drawn with fog off, because the engine never darkens the build cursor. Layer A
-draws first, then our bars over it, then layer B — the engine's own order inside the
-block (`0x469BFC` markers, `0x469CB9` bars, and the cursor after fog).
+**There were two capture windows, because fog divides the block.** Window A was hook 8
+`0x469BD7` → hook 9 `0x469D2C`, drawn with the fog rule applied (the engine's block runs
+*before* `0x4848E0` and is darkened by it); window B is the two `DrawTranspRectangle` calls,
+drawn with fog off, because the engine never darkens the build cursor. **Window A is gone as
+of G13p** and window B is opened by nothing in normal play — only `mark.on=nocursor` opens it,
+so the engine's own build cursor can be put through our frame for an A/B. Everything from
+here to §6.1 is therefore the history of a mechanism we no longer run, kept because the
+addresses and the blend argument in it are still the map.
 
-Eight call-site redirects and one prologue detour. **No collision with the other passes**:
+The draw order our pass keeps is the engine's own order inside the block: order markers and
+their `ShowRanges` labels (`0x469BFC`), then the health bars over them (`0x469CB9`), then the
+group digit over those (`0x469CF9`), and the build cursor last of all, after fog.
+
+Fourteen call-site redirects and one prologue detour. **No collision with the other passes**:
 the redirects *call* `0x471F90` and `0x4BF8C0`, so whatever `fxown` and `terrown`
 installed on those still runs.
 
@@ -453,10 +514,12 @@ stock TA renders it olive over grass. Measured in a 32x32 box on the sprite: **1
 pixels cyan-family before, 0 % after** (an earlier "14 % -> 1 %" in this branch used a
 palette-index set that also caught tree-canopy greens; this colour-based measure is the one).
 
-**The fix: an identity LUT around the drawer.** `tab[(s<<8)|d] = s` for every pair makes
+**The fix was an identity LUT around the drawer.** `tab[(s<<8)|d] = s` for every pair makes
 the composite a plain copy, so the sprite lands in our buffer as its own palette indices.
-The replay then draws it **opaque**, a deliberate departure from stock's blend; re-blending
-it against our own scene instead would now be a shader change, not another capture change.
+**Retired with window A in G13p** — the star is ours now and the engine's has no buffer of
+ours to read, so it composites against the engine's own frame exactly as stock does. Under
+`passive` and `trace`, where the engine draws into its key-filled surface and we composite
+that surface, the star is teal again; that is a debug mode's business.
 
 > **Do NOT install this at hook 8 and restore it at hook 9.** The first revision did, on
 > the reasoning that a *global* can safely be put back a frame late, and that is wrong —
@@ -464,8 +527,8 @@ it against our own scene instead would now be a shader change, not another captu
 > all. The star is drawn at `0x469BFC`, which is *before* the `0x469C03` drawUnits early
 > exit, so an abandoned frame really does reach the sprite with the swap live.
 
-What else draws in the window cannot reach the LUT, with one data-gated caveat: the rects
-and circles are `DrawLine`, the group digits' `DrawTextCustomFont 0x4C14F0` blits through
+What else drew in the window could not reach the LUT, with one data-gated caveat: the rects
+and circles are `DrawLine`, the group digit's `DrawTextCustomFont 0x4C14F0` blits through
 `0x4CCF60`, and the health bars are ours. The route dots go through `CopyGafToContext
 0x4B7F90`, which is *usually* a masked copy — but `0x4B7FF7` reads the sub-frame byte at
 `+0xB` and routes anything non-zero into `AlphaCompsteBuf2OFFScreen 0x4B8500` itself
@@ -498,9 +561,9 @@ squad tag with `damagebars` on. With `damagebars` off — the default when the r
 value is missing — the common frame costs nothing at all.
 
 **The gap: the captured layers are clipped to the offscreen.** The engine's drawers clip
-to the OFFSCREEN's own rect, so at zoom < 1 order markers and group digits stop while the
-world carries on past them. Health bars, which are the always-on markers, do not have this
-limit because they are re-drawn.
+to the OFFSCREEN, so at zoom < 1 order markers and group digits stop while the world carries
+on past them. Health bars, which are the always-on markers, do not have this limit because
+they are re-drawn.
 
 **G13f moved that edge but did not remove it.** `vpwide` widens the engine's addressable
 viewport rect, and the same rect is what `DrawGameScreen` copies into the offscreen's clip
@@ -508,12 +571,47 @@ viewport rect, and the same rect is what `DrawGameScreen` copies into the offscr
 viewport (at 0.5× on a 1024×768 frame, screen `[288,863]×[192,575]` instead of
 `[352,799]×[208,559]`; confirmed with a waypoint at `s=(318,542)` that used to be clipped).
 `layer_begin` asks for the addressable rect for exactly this reason, and the intersection
-with the context clip is what keeps it inside our scratch. Beyond the surface the engine
-would have to draw at a negative position into a screen-sized buffer, which it cannot:
-closing that last part means giving the capture window its own wider buffer and offsetting
-the base so negative engine coordinates land inside it — `markown` already owns
-`ctx[CTX_BASE]`, so it would also have to own `CTX_PITCH` and the clip fields. Possible,
-and deliberately not done here.
+with the context clip is what keeps it inside our scratch. [The **right** edge of that G13f
+figure does not follow from the mapping and is probably a slip: the surface's engine column
+1023 maps to `(1023 − 576)·0.5 + 576 = 799`, not 863, about the same centre the left edge's
+288 is exact for. Re-derived and re-measured at 0.467× in G13n as `[307,785]×[205,563]`,
+which does match. Not re-taken at 0.5×.]
+
+**And the surface bound is not the clip rect — it is `ctx+0x00`/`ctx+0x04`**
+[MEASURED 2026-09-04]. The line writer `0x4CC7AB` opens by calling `0x4CC650`, which reads
+the context's WIDTH and HEIGHT and rejects a line wholly outside `[0,w)×[0,h)` before the
+clip rect at `+0x1C..+0x28` is consulted at all. So the wider-buffer idea this note used to
+propose — give the window its own buffer and own `CTX_PITCH` and the clip fields — would
+also have to lie about `+0x00`/`+0x04`, and every drawer in the window would then be
+rasterising against a geometry the *engine's* frame does not have. That is why the fix for
+window B was not a bigger buffer.
+
+**G13n closes window B by re-drawing it instead.** The build cursor and the band box are one
+rectangle from six world globals and one flat GUI colour (§4), so `tagpu_mark.c` derives them
+and the engine's two `DrawTranspRectangle` calls are skipped outright. Measured before the
+change, 1024×768 at 0.467×: pointer at screen (880,400) → engine point (1228,418), mode 14,
+rect globals populated, **nothing drawn**; at (170,250) → engine point (−294,97), same. After
+it, both draw. Parity checked as a pixel diff against the captured path with the same frame:
+**zero differing pixels** at 1× and at 2.144× outside the animated minimap and cursor sprite,
+for the green footprint, the blocked-red footprint and the white/black band box.
+
+**Window A was still bounded, and G13o closes the order half of it by porting** (§6.3).
+Widening the buffer was the alternative and it is not one: it runs into both the
+`+0x00`/`+0x04` bound above — every drawer in the window would then be rasterising against a
+geometry the *engine's* frame does not have — and the cost, since the window opens ~83× per
+presented frame (§6.2) and its key fill would scale as 1/z² against that multiplier.
+
+**G13p closes window A** (§6.4). Its last engine primitive was the group digit — which needs
+`damagebars` AND a squad tag (`0x469C50` lets a unit through on either, but `0x469C97` then
+skips the whole unit when `damagebars` is clear), so a default install opened the window on no
+frame at all — and that digit is now drawn out of our own text atlas. Nothing the engine draws
+lands in a buffer of ours any more.
+
+**And the text bound is not the same one as the line drawers'.** `DrawTextCustomFont 0x4C14F0`
+does not clip a string, it **rejects** it: `0x4C6AE0` copies the context's clip rect and
+`0x4B6750` is a full-CONTAINMENT test, so a string whose measured box is not entirely inside
+that rect is not drawn at all. [BINARY-VERIFIED 2026-09-05] A digit or a label in the outer
+ring at zoom < 1 therefore did not stop short, it disappeared — which is what the A/B shows.
 
 **The input half of the same boundary IS closed.** G13e named it — the engine can only
 *name* screen positions inside its own viewport, and a click outside it does nothing at all
@@ -548,15 +646,141 @@ Two consequences, both measured with SHIFT held:
   `glTexSubImage2D` finishing inside two of the engine's blocks that makes that true, so it
   is the number to re-take if the layer ever grows much faster than the block does.
 
-The post-fog window (build cursor, band box) has the same shape with one twist: its "there
+The post-fog window (build cursor, band box) had the same shape with one twist: its "there
 was nothing to draw" is only knowable *in arrears*, because no `DrawTranspRectangle` came.
-It is therefore decided at the **next** frame's hook 8, about the frame that just ended —
-a one-block ghost where the old code had a hole most of a frame wide. Two residuals are
-known and deliberately left: the block in which a drag ends still carries its last rect,
-and the second of the two `DrawTranspRectangle` calls continues into the buffer the first
-one published, so a present between them shows the outer outline without the inner.
+It was therefore decided at the **next** frame's hook 8, about the frame that just ended —
+a one-block ghost where the older code had a hole most of a frame wide. Two residuals came
+with that: the block in which a drag ended still carried its last rect, and the second of
+the two calls continued into the buffer the first had published, so a present between them
+showed the outer outline without the inner. **G13n removes all of it** — the window is never
+opened, because both its primitives are re-drawn (§6.1) — and the machinery is kept only for
+`passive`, where the engine draws its own again.
 
 ---
+
+### 6.3 G13o — the order block, ported (2026-09-04)
+
+`tagpu_order.c`. The engine's driver call at `0x469BFC` is redirected to a stub that runs on
+the **game thread**, applies §3.1's selection rules itself, walks each chosen unit's order
+list exactly as §3.2 does, copies what the drawers need into an arena and returns without
+letting the engine draw. The present thread only ever walks the arena.
+
+**Why the game thread.** The order list is a linked list whose nodes the sim frees
+(`unit+0x5C`, `node+0x4A`), unlike the unit array, which is stable storage a render thread
+may read at any time. A present-thread walk can follow a pointer into a recycled block (still
+mapped, still readable, now someone else's data — `IsBadReadPtr` does not catch that), into a
+cycle, or into a freed page. The snapshot runs at the instant the engine's own driver did,
+with its own arguments in hand.
+
+**The one sim-side write is reproduced, deliberately.** The target sprite `0x439740` writes
+its last-seen cache (`node+0x32/0x34`, flag `0x200000`) whenever it takes the live branch —
+and that cache is what stops a waypoint marker following a target the player can no longer
+see. A port that drops it leaks the target's live position.
+
+**Native resolution, on purpose.** Real arcs at a segment count chosen for the zoom rather
+than sixteen chords; one SCREEN pixel of line width at any zoom (`glLineWidth(ss)`); a round
+dot where `pathicon` put one and a crosshair on the engine's own frame phase where
+`cursor_ary` put one, both in the ink read out of the GAF frame that would have been blitted
+— **the brightest index making up at least a twentieth of the frame, not the most common
+one**, which is the dark outline and drew every dot in (11,11,0). Spacing (48 world units),
+phase (+48 per 30 ticks) and colours are the engine's.
+
+**Publication.** Two arenas, the index stored last, only ever replaced. Two are NOT enough on
+their own here: the block republishes ~83× per presented frame (§6.2) and building a frame's
+marker geometry does not outrun that — measured, a seven-record arena was lapped part way
+through and three markers went missing from the frame. The gather therefore takes a private
+`memcpy` of the records in use and walks that, re-taken once if the published index moves
+under it.
+
+**The gate is a node-list diff, not a pixel diff.** Native resolution means the frames
+deliberately differ, so `order.on=trace` runs both sides in one pass: our snapshot logs its
+node list, and four more call-site redirects inside the walker (`0x439BAC`, `0x439BF2`,
+`0x439C37`, `0x439CBE`, plus the two `0x439740` sites `markown` already owned) log the
+engine's. **16 650 records over 1 665 complete blocks, 10 distinct nodes, both driver flags
+and four distinct capability masks: zero disagreements** on the node set, the dispatched mask
+bits, the flag, or the chained `pos` — including bit 4's not-restored rule. (Seven further
+blocks were sliced short by the log reader, never by the engine: in each the engine's list
+was a truncated prefix of ours and `eng-only` was empty.)
+
+**And the visual pass**, 1024×768, a construction vehicle with six queued build sites and a
+route: at **1×** ours and the engine's put the site rects on the same corners in the same
+colours and the dots on the same points at the same spacing; at **0.25×** with four sites
+queued out in the ring, the engine draws none of them and no route at all while ours draws
+every one, out to the map's north-west corner and the east edge; at **2×** the lines are
+hairlines one screen pixel wide rather than magnified 1997 pixels.
+
+**Not closed by G13o**: `ShowRanges`' text LABELS (the circles are there), the group digit,
+and window A's remaining life for that digit. All three are text, and text is L2 — §6.4.
+
+### 6.4 G13p — the text, and the end of the capture (2026-09-05)
+
+`tagpu_text.c`. The two remaining engine-drawn world-anchored things in the frame were both
+strings: the group digit at `0x469CF9` and the labels `DrawRangeCircle 0x438EA0` writes beside
+each `ShowRanges` circle. Both are now ours, and window A is retired with them.
+
+**No font was reverse-engineered.** `DrawTextCustomFont 0x4C14F0` blits through
+`0x4CCF60(base, pitch, font, str, x, y, fg, bg, transparent)`, **cdecl, nine arguments, taking
+its destination directly** — the first two are its own OFFSCREEN's `+0x0C` and `+0x08`
+(`0x4C173E`/`0x4C1738`). No context, no clip rect, no bound of any kind: it writes exactly
+`sum(widths) × font[0]` pixels wherever it is pointed. So we point it at a buffer of ours and
+TA rasterises its own glyphs into it. Called with `(fg,bg,transparent) = (255,0,0)` the store
+`if (colour != transparent)` keeps only the set bits, which makes the result a **1-bit coverage
+mask** rather than a coloured sprite — the atlas is colour-free, so one raster serves the same
+string in any colour and a colour change costs nothing. (An earlier draft of this section said
+the weapon-range labels *need* that because theirs flashes every game tick. They do not:
+`0x438EA0` hands the flashing colour to the LINE drawer only, and the label goes to
+`DrawTextCustomFont`, whose foreground is `[globals+0x208]` — set once at `0x4696E7` and
+untouched inside the block, which is what §"The text globals" of the engine map says. The
+design stands; that reason for it did not.) Field
+map and evidence: `exe-reverse-engineering.md` §"The in-game bitmap font".
+
+**The font and the colour are latched on the GAME thread, at hook 8.** `SetFont 0x4C1420`
+runs many times a frame, so a present-thread read of `[globals+0x204]` gets the side panel's
+font as often as the game's; between hook 8 and `0x469CF9` nothing calls `0x4C1420` or
+`0x4C13A0` (full-image scan of both call-site sets), so one latch is exactly what the digit
+and the labels would have drawn with. `[globals+0x208]` is their colour — `gui[0xF]`, set at
+`0x4696E7`.
+
+**Constant SCREEN size, snapped to the device grid.** A bitmap glyph magnified with the zoom
+is the 1997 art this pass exists to stop — two pixels tall at 0.25×, blocky at 4× — so the
+quad is sized by `1/zoom` like the waypoint crosshair. And it is snapped: the vertex shader
+applies the zoom, so the snap takes the post-zoom position, rounds it onto the `1/ss` grid and
+hands back the point that transforms to it. Without that the anchor arrives fractional from
+the marker pass's own `project()` and each 1-px stroke is resolved across two device pixels —
+**measured at 1×, ss=2: 66 pure-white pixels in "build distance" against the engine's 183;
+209 against 205 once snapped.**
+
+**The label's anchor is the engine's.** `0x438EA0` remembers the second endpoint of the
+segment whose index is `labelSlot·3` and draws the string at `y + 4`; the slots are a running
+count for the nine def ranges and a literal 0/1/2 for the three weapon ranges
+(`exe-reverse-engineering.md` §`0x4390A0`). Our circle is a smooth arc rather than the
+engine's chords, so the anchor is computed from the engine's own angle
+`(slot·3 + 1)·(0x10000/N)` and placed on OUR circle.
+
+**And the range circles are round again.** Reading `0x438EA0` for that anchor showed it hands
+one `radius<<16` to both `TurnXLookup` and `TurnZLookup`: the 0.89 at `0x4FD2C0` is the TARGET
+circle `0x4399F0`'s, applied to its y radius only. G13o squashed both drawers and drew every
+range circle 11 % flat.
+
+**The gates, all live at 1024×768, ss=2, `shadow-struct`, a squad-tagged commander with
+`ShowRanges` on:**
+
+- **The group digit is PIXEL-IDENTICAL to the engine's at 1×** — 0 differing pixels in a
+  45×30 box around it, 19 bright pixels each way, ours against the engine's own with
+  `mark.on=nodigits`.
+- **At 0.25× ours draws it out in the ring and the engine draws nothing** (16 bright pixels
+  against the engine's 10, and those ten are the health bar): the unit's 1× projection is
+  screen x=1672, i.e. x=850 at that zoom, well outside the `[432,688]` band the screen-sized
+  offscreen leaves addressable.
+- **The eight labels land on the engine's own pixels** — `"weapon1 range"` 209 bright against
+  its 205, same position, same glyphs — and at 2× the text stays one screen size while the
+  circles thin to hairlines.
+- `order.on=trace` still logs both node lists in agreement, and `mark.on=nocursor` still
+  opens the post-fog capture.
+
+**Not closed by G13p**: nothing world-anchored is left engine-drawn. What remains engine-side
+inside the viewport is the mouse cursor sprite, which is screen-space and correct at 1:1 at
+any zoom.
 
 ## Appendix — addresses & offsets
 
@@ -570,21 +794,26 @@ one published, so a present between them shows the outer outline without the inn
 | `0x4B6CC0` | rotate vector by unit rotation | (corner,out,&rot) |
 | `0x46A430` | **DrawHealthBars** (one unit's bar) — sole caller `0x469CB9` | stdcall(ctx,unit,x,y), ret 0x10 |
 | `0x4BF6F0` | **DrawBar** — clipped solid fill, edges inclusive (worker `0x4CCDEA`) | stdcall(ctx,RECT*,u8), [CORPUS TADR] |
-| `0x4C14F0` | DrawTextCustomFont (group digit, labels, clock) | (ctx,str,x,y,-1) |
+| `0x4C14F0` | DrawTextCustomFont (group digit, labels, clock). **Rejects** a string whose box is not wholly inside the ctx clip rect (`0x4C6AE0` + `0x4B6750`); `ctx` may be NULL | stdcall(ctx,str,x,y,maxW), ret 0x14 |
+| `0x4CCF60` | the glyph blitter — **takes base and pitch directly**, no ctx, no clip, no bound | **cdecl**(base,pitch,font,str,x,y,fg,bg,transparent) |
+| `0x4C6AE0` | `OFFSCREEN::GetClipRect` — 4 dwords from `this+0x1C` | thiscall(RECT*), ret 4 |
+| `0x4B6750` | RECT **containment** (inner wholly inside outer), not intersection | stdcall(RECT*,RECT*), ret 8 |
+| `0x4C1420` / `0x4C13A0` / `0x4C13D0` | SetFont → `[globals+0x204]`; SetTextColors(fg,bg) → `+0x208`/`+0x20C`, each skipped on −1; SetTextTransparentColor → `+0x210` | — |
 | `0x4C1B80` | KeyboardHotkeySampler — id `0xF9` → GetAsyncKeyState(VK_SHIFT) | (keyId), ret 4 |
 | `0x48CC30` | order-marker driver (per player unit, mask/flag rules §3.1) — sole caller `0x469BFC` | stdcall(ctx,&main+0x142F3), ret 8 |
-| `0x439B30` | order-list walker, dispatch by mask `(*(0x512344))[type*0x19+0xC]` | (unit,mask,ctx,view,flag), ret 0x14 |
+| `0x439B30` | order-list walker, dispatch by mask `(*(0x512344))[type*0x19+0xC]`; restores `pos` before bits 0..3 and not before bit 4 | (unit,mask,ctx,view,flag), ret 0x14 |
 | `0x438C00` | build-site rect (TADR `ADDR_DrawBuildSpotQueue`) | ret 0x14 |
 | `0x4394E0` | route dots (pathicon GAF, flag-gated) + target sprite | ret 0x14 |
-| `0x4399F0` | target circle (16 chords, GUI[0xC]) | ret 0x14 |
+| `0x4399F0` | target circle (16 chords, GUI[0xC]); **the only drawer that squashes** — y radius × the 0.89 at `0x4FD2C0` | ret 0x14 |
 | `0x439740` | animated target sprite (`cursor_ary` GAF, alpha blit) + debug AoE circles | ret 0x14 |
 | `0x4390A0` | per-unit range circles (cloak/kamikaze; all with ShowRanges) | — |
-| `0x438EA0` | **DrawRangeCircle** (symbol) — terrain-following segmented circle + label | ret 0x1C |
-| `0x465AC0` | UnitInPlayerLOS | — |
-| `0x485070` | GetPosHeight (terrain height at world x,z) | — |
-| `0x4B70EF`/`0x4B7123` | TurnXLookup / TurnZLookup (sin/cos LUT) | — |
+| `0x438EA0` | **DrawRangeCircle** (symbol) — terrain-following segmented circle + label; `(int)(r×2π×0.125)` segments, **no squash** (one radius to both lookups), label at the second endpoint of segment `slot×3`, drawn at `y+4` | (ctx,view,centre,radius,colour,label,slot), ret 0x1C |
+| `0x465AC0` | UnitInPlayerLOS | stdcall(player, unit), ret 8 |
+| `0x485070` | GetPosHeight — pure read of `main+0x14287`, high words `[p+2]`/`[p+0xA]` only | stdcall(POS16_16*), ret 4 |
+| `0x4B70EF`/`0x4B7123` | TurnXLookup / TurnZLookup — TurnX is the **sine** and TurnZ the **cosine**, off one table at `0x509F00` (512 × s16, `8192 = 1.0`), TurnZ adding a quarter turn to the index | **cdecl** — the callers `add esp,8` |
+| `0x4FD2B0` / `0x4FD2B8` / `0x4FD2C0` | the three doubles: 2π, 0.125, 0.89 (the target circle's y/x radius ratio) | `.rdata` |
 | `0x4BF8C0` | **DrawTranspRectangle** — hollow rect (build cursor / band box) | (ctx,RECT*,colour) |
-| `0x4BE950` | DrawLine; `0x4CC7AB` DrawLine2 | — |
+| `0x4BE950` | DrawLine; `0x4CC7AB` DrawLine2 | stdcall(ctx,x0,y0,x1,y1,colour) |
 | `0x416E00` | "SelBoxes" toggle (bit2 of main+0x37F2F); default set @`0x430E84` | — |
 | `0x4194C5` | "ShowRanges" toggle (`xor dword[main+0x391BF],1`) | — |
 | `0x42FD42` | load registry "damagebars" → main+0x37F06 bit0; live toggle `0x496058` | — |
@@ -608,7 +837,7 @@ clock text.
 | `main+0x1439B` | UnitDef array base (stride 0x249) |
 | `main+0x1487F` | `cursor_ary[0x15]` GAF sequences (order-target sprites, and every mouse cursor) [CORPUS]; the index → name table is in `exe-reverse-engineering.md` §"The cursor chain" |
 | `main+0x148D3` | `pathicon` GAF sequence (route dots) [CORPUS] |
-| `main+0x2A42/0x2A43` | watched / local player id |
+| `main+0x2A42` / `+0x2A43` | two player-id bytes, written independently at `0x416B25`/`0x416B38`. **The order driver `0x48CC30` picks its player range from `+0x2A42` (`0x48CC3B`); the health-bar and group-digit loop compares owners against `+0x2A43` (`0x46967D` → `[esp+0x70]`).** Which is "watched" and which "local" is [INFERRED] and this project's notes contradict each other — `effects.md`, `features.md` and `line-of-sight.md` call `+0x2A43` local, `exe-reverse-engineering.md`'s structures table calls `+0x2A42` local. Use the address the loop you are porting uses |
 | `main+0x2C76` | mouse pos (POINT). **SCREEN space, not world** — measured 2026-09-03: an injected pointer at screen (400,300) reads back 400 / 300, and `0x498DA0` is what converts it to the world point at `main+0x2CAA`. (An earlier line here said world-space; that was wrong.) `0x2CBA` unit-under-cursor id; `0x2CBC` **feature**-under-cursor id (`0xFFFF` = none); `0x2CBE` the cursor index currently installed; `0x37E9C` tracked-unit id [INFERRED names] |
 | `main+0x2C92..0x2CA6` | build/band rect: x1,h1,z1,x2,h2,z2 (world) |
 | `main+0x2CC3` | current order byte (0xE = build; 1 = contextual, 2 Move, 3 Attack, 7 Guard, 8 Repair, 9 Patrol, 12 Reclaim, 13 Capture — measured); `0x2CC6` flags: bit0 pointer on the minimap, bit1 pointer on the world viewport, bit2 either, bit3 rect-forced, bit6 placement-valid |
@@ -616,7 +845,7 @@ clock text.
 | `main+0x37F2F` | display/debug word: **bit2 = SelBoxes** (default on), bit3 TreeDeath, bit4 NoShake |
 | `main+0x38A47` | GameTime (marker animation clock) |
 | `main+0x391BF` | ShowRanges toggle |
-| `0x512344` | → order/script handler table, stride 0x19: +0xC marker mask (bits per §3.2), +0x10 cursor_ary index |
+| `0x512344` | → order/script handler table, **end at `0x512348`, capacity `0x51234C`** (ctor `0x438450`, dtor `0x438480`), stride 0x19: +0x8 the target-sprite drawer's own address (never read), +0xC marker mask (bits per §3.2), +0x10 cursor_ary index, +0x15 `char*` name (`strcmp` at `0x4387A9`) |
 | `PlayerStruct+0x67/+0x6B` | first/last unit ptr (order-marker walk, and the selected-unit walk in `CorretCursor_InGame 0x48D220`); `+0x146` player id |
 | UnitStruct | +0x5C order list head; +0x64 rotation; +0x6A/6E/72 pos (16.16); +0x92 UnitType; +0x96 owner PlayerStruct*; +0xA6 UnitID (type); +0xA8 UnitInGameIndex; +0xAC squad digit; +0x108 Health (s16); +0x10E cloak flags; +0x110 stateMask (0x10 selected, 0x10000000 alive) |
 | UnitDefStruct | +0x156 CANBUILD_ptr; +0x15E..0x172 footprint extents; +0x178 size (circle radius); +0x1FA maxHP (read as u32); +0x202..0x218 ranges; +0x220 ExplodeAs; +0x241 UnitTypeMask_0 (bit28 kamikaze [INFERRED]) |

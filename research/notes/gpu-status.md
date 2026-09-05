@@ -29,7 +29,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Features (trees, rocks, splats, wreckage) | G13a | `featown`: one detour on the feature leaf |
 | Terrain tiles + the fog overlay | G13b | `terrown`: two detours; the terrain skip path key-fills the viewport |
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
-| Health bars, order markers, group digits, build cursor, band box, selection rect | G13d | `markown`: 8 call-site redirects + 1 detour; bars re-drawn, the rest captured and replayed. The waypoint star's two sites are wrapped with an identity blend LUT so it composites opaque instead of against the fill key (§2.2) |
+| Health bars, order markers, group digits, ShowRanges labels, build cursor, band box, selection rect | G13d, cursor G13n, order block G13o, text G13p | `markown`: 14 call-site redirects + 1 detour, and **nothing world-anchored is captured any more**. Health bars, the selection rect, the build cursor and drag band box are re-drawn from engine state; **G13o ported the order-marker block** (`tagpu_order.c`) as a game-thread snapshot of the order lists at `0x469BFC`; **G13p ported the text** (`tagpu_text.c`) — the group digit at `0x469CF9` and the `ShowRanges` labels — by calling TA's own glyph blitter `0x4CCF60` with a buffer of ours. Window A is retired and the identity blend LUT with it; the post-fog capture survives only for `mark.on=nocursor` (§2.2) |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e, cured G13m | `tagpu_zoom.c`; the cursor is the engine's own again — the composite no longer touches it (§2.3d) |
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + a 3-site byte patch behind `vpwide.on`, plus the `0x499221` redirect that also carries the zoom's mouse-point repair and is armed by `zoom.on` too (§2.3d) |
@@ -146,22 +146,54 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 |---|---|---|
 | `0x4699EB` | `call 0x46A530` — selection rect, ground sweep | call-site redirect, **per-unit** test |
 | `0x469B8A` | `call 0x46A530` — selection rect, air sweep | call-site redirect, per-unit test |
-| `0x469BD7` | `call 0x471F90(ctx,8)` — hook 8, opens capture window A | call-site redirect |
-| `0x469D2C` | `call 0x471F90(ctx,9)` — hook 9, closes window A | call-site redirect |
-| `0x469EC5` | `call 0x4BF8C0` — build-cursor rect (window B) | call-site redirect |
-| `0x469F1E` | `call 0x4BF8C0` — drag band box (window B) | call-site redirect |
-| `0x439516` | `call 0x439740` — target sprite, from the route-dot drawer | call-site redirect; brackets the call with an identity blend LUT |
-| `0x439C7D` | `call 0x439740` — target sprite, from the walker's bit-3 dispatch | call-site redirect, same wrapper |
+| `0x469BD7` | `call 0x471F90(ctx,8)` — hook 8, the marker block's start | call-site redirect; since G13p it opens no capture — it brackets the order arena's block and **latches `[globals+0x204]`/`+0x208`**, the font and text colour the block's own text would use |
+| `0x469D2C` | `call 0x471F90(ctx,9)` — hook 9, the block's end | call-site redirect; closes the order arena's block |
+| `0x469CF9` | `call 0x4C14F0` — the group digit | call-site redirect; the engine's call is **skipped** and the digit re-drawn out of our text atlas (G13p) |
+| `0x469EC5` | `call 0x4BF8C0` — build-cursor rect | call-site redirect; the engine's call is **skipped** and the rect re-drawn (G13n) |
+| `0x469F1E` | `call 0x4BF8C0` — drag band box | call-site redirect, same — one rect, one gate, both re-drawn |
+| `0x439516` | `call 0x439740` — target sprite, from the route-dot drawer | call-site redirect, **trace only** since G13p (the identity blend LUT went with window A) |
+| `0x439C7D` | `call 0x439740` — target sprite, from the walker's bit-3 dispatch | call-site redirect, same |
 | `0x46A430` | `DrawHealthBars` (`ret 0x10`) | prologue detour, 5 stolen — bars are **re-drawn**, not captured |
 | `0x4C1B80` | `KeyboardHotkeySampler(id)` (`ret 4`) | *called by us* — we sample the engine's own SHIFT gate (`0xF9`) rather than reading the key |
+| `0x469BFC` | `call 0x48CC30(ctx, main+0x142F3)` — the order-marker driver, SHIFT-gated | call-site redirect; our stub **snapshots the order lists on the game thread** and the engine's driver is then **skipped** (G13o). `passive`/`trace` make the snapshot decline, so the engine draws its own |
+| `0x439BAC` | `call 0x438C00` — build-site rect, from the walker's bit-0 dispatch | call-site redirect, **trace only**: logs the engine's node list under `order.on=trace`, otherwise a compare and a call through |
+| `0x439BF2` | `call 0x4394E0` — route dots, bit 1 | call-site redirect, trace only |
+| `0x439C37` | `call 0x4399F0` — target circle, bit 2 | call-site redirect, trace only |
+| `0x439CBE` | `call 0x4390A0` — range circles, bit 4 | call-site redirect, trace only |
+| `0x465AC0` | `UnitInPlayerLOS(player, unit)` (`ret 8`) | *called by us*, on the game thread, to reproduce the target sprite's LOS rule and its last-seen cache write |
+| `0x485070` | `GetPosHeight(POS16_16*)` (`ret 4`) | *called by us*, on the render thread — a pure read of the height grid, which is what makes a range circle follow the terrain |
+| `0x4CCF60` | the glyph blitter (**cdecl**, 9 args, base and pitch taken directly) | *called by us*, on the present thread, once per distinct string — it reads the font object and writes our atlas and touches no engine state at all (`tagpu_text.c`) |
 
-**Why the star needs a wrapper at all.** `0x439740` is the only alpha-composited marker: it
-reads the destination pixel through `tab[(src<<8)|dst]`, and inside our viewport the
-destination is the fill key, so it blended the waypoint star with palette 254's bright cyan
-and rendered it teal. Wrapping the two call sites with an identity LUT turns that one
-composite into a copy. The swap is scoped to the **call**, never the frame, because
-`[globals+0xC0]` owns a heap buffer the engine allocates, frees and refills — full
-derivation in `exe-reverse-engineering.md` §"The blend LUT and the marker composites".
+**The order block is PORTED, not captured, since G13o.** `tagpu_order.c` re-derives §3 of
+[UI markers](ui-markers.html) — the driver's three selection rules, the walker's
+capability-mask dispatch and its `pos` chaining, and all five leaf drawers — and draws them
+at native resolution in `tagpu_mark.c`'s pass. A capture could never reach past the
+OFFSCREEN's own width and height, and the offscreen is screen-sized while `vpwide` lets the
+projection run far outside it, so at zoom < 1 the engine's own clipper threw the outer ring's
+markers away before our buffer saw them.
+
+**And the text went the same way in G13p.** The bound on a string is not even a clip:
+`DrawTextCustomFont 0x4C14F0` measures the whole box, tests it for CONTAINMENT in the
+context's clip rect (`0x4C6AE0` + `0x4B6750`) and draws nothing at all if it does not fit. So
+a group digit or a `ShowRanges` label in the outer ring at zoom < 1 vanished rather than
+stopping short. `tagpu_text.c` calls the blitter underneath, `0x4CCF60`, which takes a base
+and a pitch directly and has no bound of any kind, with `(fg,bg,transparent) = (255,0,0)` —
+that turns it into a 1-bit coverage mask, so one raster per string serves every colour it is
+drawn in. Each string lands once in a shelf-packed 512×256 atlas; the quads are constant
+SCREEN size and snapped to the device pixel grid by pre-image, because a bitmap glyph at a
+fractional anchor resolves each 1-px stroke across two device pixels.
+
+**Window A is retired, and the identity blend LUT with it.** `0x439740` is the only
+alpha-composited marker: it reads the destination pixel through `tab[(src<<8)|dst]`, and while
+we captured the block into a buffer of ours that destination was the fill key, so the waypoint
+star blended with palette 254's bright cyan and rendered teal. The two call sites were
+therefore bracketed with an identity LUT — a 64 KB table and a pointer swap scoped to the call
+because `[globals+0xC0]` owns a heap buffer the engine allocates, frees and refills
+(`exe-reverse-engineering.md` §"The blend LUT and the marker composites"). With nothing of the
+engine's landing in a buffer of ours, the star composites against the engine's own frame again,
+exactly as stock does, and all of that machinery is gone. Under `passive` and `trace`, where
+the engine draws its markers into its own key-filled surface and we composite that surface,
+the star is teal — a debug mode's business, not the shipped frame's.
 
 ### 2.3 Zoom (`tagpu_zoom.c`, `zoom.on`)
 
@@ -443,7 +475,17 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so `apply_eye_range()` recomputes it through the same wrapper on the frames it corrects the eye. The one **render-thread** write of it; a game thread drawing the minimap in that instant sees a one-frame torn box, the same standing as the published view |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live** (§2.3b); every pass that means the true 1× rect must call `tagpu_vpwide_true_rect()` rather than read the field |
 | `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) — the x and y of the 6-dword record the dispatch fills. **WRITTEN by `vpw_mouse_world()` while the zoom transform is live** (§2.3d): the engine is polled with the true pointer now, so the unzoomed `u` is put back here, where `GetUnitAtMouse 0x48CD80` and the routing test at `0x469DE1` read it. Untouched at zoom 1, on the screen-space UI, and for a record that came off the event ring. **Local, but NOT inert:** all three fillers (`0x4999C4`, `0x4999E7`, `0x4999F9`) and our write sit inside one game-thread tick, before the first reader, so nothing races — but the readers include the order dispatchers `0x419BE0`/`0x41A490`, so a wrong value here becomes a wrong **replicated order**, not just a wrong highlight. That is why the ring test above has to be exact |
-| `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index) |
+| `main+0x0DCB` | GUI colour byte array (`gui[i]` is an INDEX INTO this, not a palette index). `DrawGameScreen` caches it in a local at `0x468D49`/`0x468D51`, which is the `[esp+0x74]` the build-cursor block indexes |
+| `main+0x2CC3` / `+0x2CC6` | cursor/order mode byte and the mouse-region flags. Read only. The build-cursor draw keys off `0x2CC3 == 0x0E` (placement) or `0x2CC6 & 8` (band drag), and picks green vs blocked from `0x2CC6 & 0x40` |
+| `main+0x2C92`, `+0x2C96`, `+0x2C9A`, `+0x2C9E`, `+0x2CA2`, `+0x2CA6` | the build-cursor / band-box rect: two corners as (world x, altitude, world z) DWORDs. Read only, once a frame on the render thread, and projected with the engine's own baked `+0x80`/`+0x20` origin — **not** `main+0x37E27`'s L/T, which `vpwide` widens |
+| `main+0x1B63` (+ watched × `0x14B`) | PlayerStruct; `+0x67`/`+0x6B` its first/last unit pointer — the range the order-marker driver walks. Read only, game thread |
+| `main+0x37E9C` / `main+0x2CBA` | tracked / hovered unit id. Read only; with `viewStruct+0` (`CameraToUnit`) these are the three units the order-marker driver's selection rules key off |
+| `main+0x1487F` / `main+0x148D3` | `cursor_ary[0x15]` and the `pathicon` GAF sequence. Read only, once each per session — the order pass decodes frame 0 of each for the ink its procedural dot and crosshair inherit |
+| `0x512344` / `0x512348` | the order-descriptor array and its end: `+0xC` is the type's marker-capability mask and `+0x10` its `cursor_ary` index. Read only; the end pointer is what lets us bound an index the engine does not |
+| `unit+0xAC` | the squad tag. Read only — and read as a **DWORD** and then used as a byte, because that is what `0x469C55`/`0x469CD1` do |
+| `main+0x2A43` | the player id the health-bar and group-digit loop compares unit owners against (`0x46967D` → `[esp+0x70]`, read at `0x469CA6`/`0x469CC9`). Read only. **Not `main+0x2A42`**, which is what the order-marker driver `0x48CC30` uses for its player range — two bytes, two loops, one block, written independently at `0x416B25`/`0x416B38`. `tagpu_mark.c` was on `0x2A42` from G13d until G13p corrected it |
+| `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with (`tagpu_text.c`) |
+| **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F2F` bit2 | `SelBoxes` |
 | `main+0x142E7..0x142ED` | minimap rect on screen |
