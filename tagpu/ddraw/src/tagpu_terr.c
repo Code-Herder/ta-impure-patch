@@ -189,8 +189,14 @@ static int    s_maxTex;
 /* Classic++ (tagpu_classicpp.on): the RESTORED copy of the atlas -- the same
    cells on the same pitch, true colour from the unditherer's model run as
    fragment passes by tagpu_restoreglsl.c straight into this texture -- so the
-   one set of UVs serves both looks. Built once per map, a slice per frame;
-   until it is complete the pass draws indexed. */
+   one set of UVs serves both looks. Built once per map, a slice per frame,
+   and the cells SHOW AS THEY LAND (renderers.md 4c Q6): the restorer clears
+   the texture to alpha 0 when the job starts and its out pass writes alpha 1
+   over every cell it paints, guard ring included, so the shader's alpha test
+   is the per-cell flag -- no second texture, no upload, and a cell's samples
+   are all-or-nothing because one quad paints its interior and its ring.
+   Draws issued in the same frame are in order, so a cell whose out pass was
+   issued by this frame's slice is restored in this frame's terrain draw. */
 static GLuint s_rgbTex;
 static int    s_rgbState = 0;      /* 0 none, 1 restoring, 2 complete, -1 failed */
 static GLint  s_uRestored;
@@ -226,7 +232,8 @@ static const char* FS =
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uPal;\n"
     "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the restored atlas    */
-    "uniform int uRestored;\n"         /* 1 = sample it instead of the LUT */
+    "uniform int uRestored;\n"         /* 1 = a restore is running or done:
+                                          sample it where its alpha says so */
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
@@ -239,11 +246,16 @@ static const char* FS =
        replicated guard texel rather than the next cell (CELL_PITCH). */
     /* Classic++: true colour, so the grey band is the RGB rule (renderers.md
        2.6) rather than the index LUT; the lighting multiply will sit between
-       the sample and the fog when it lands */
+       the sample and the fog when it lands. Alpha is the restorer's own
+       "painted" mark (see s_rgbTex): a cell it has not reached yet is alpha 0
+       and draws indexed below, which is the progressive reveal */
     "  if (uRestored == 1) {\n"
-    "    vec3 c = texture(uAtlasRGB, vUV).rgb;\n"
+    "    vec4 t = texture(uAtlasRGB, vUV);\n"
+    "    if (t.a > 0.5) {\n"
+    "      vec3 c = t.rgb;\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
-    "    frag = vec4(c, 1.0); return;\n"
+    "      frag = vec4(c, 1.0); return;\n"
+    "    }\n"
     "  }\n"
     "  int pi = int(texture(uAtlas, vUV).r * 255.0 + 0.5);\n"
     TAGPU_GLSL_FOG_SHADE("pi")
@@ -438,25 +450,31 @@ static int ensure_atlas(const char* ta)
 }
 
 /* ---- Classic++: the GLSL restorer, straight into s_rgbTex ----
-   Every tile of the set as a frame, visible ones first: a tile's rank is the
-   Chebyshev distance in cells from the last gathered rect to the nearest map
-   cell that uses it (0 under the camera), and frames go out in rank order.
-   The set holds every tile the map references and nothing else, so no tile is
-   left unranked, but an unreferenced one would simply go last. */
+   Every tile of the set as a frame, visible ones first, and since the cells
+   show as they land (s_rgbTex) the order is what the player watches: a tile's
+   rank is the Chebyshev distance in cells from the CENTRE of the last gathered
+   rect to the nearest map cell that uses it, so the reveal radiates from the
+   middle of the screen, reaches the viewport's edge at rank ~half its span and
+   carries on outward across the map at the same pace. (Ranking the whole rect
+   0, as the one-flip version did, restored the visible cells in tile-index
+   order -- a scatter.) The set holds every tile the map references and nothing
+   else, so no tile is left unranked, but an unreferenced one would simply go
+   last. */
 static int* restore_order(const char* ta, int count)
 {
     const unsigned short* tmap = *(const unsigned short* const*)(ta + OFF_TILEMAP);
     int mapW16 = *(const int*)(ta + OFF_MAPW16), mapH16 = *(const int*)(ta + OFF_MAPH16);
     int stride = mapW16 / 2, mrows = mapH16 / 2, my, mx, i, maxRank = 0, *rank, *order, *bucket, *next;
+    int cx = s_rectTx0 + s_rectCols / 2, cy = s_rectTy0 + s_rectRows / 2;
     if (!ptr_ok(tmap) || stride <= 0 || mrows <= 0 || stride > 2048 || mrows > 2048) return NULL;
     rank = (int*)malloc((size_t)count * sizeof *rank);
     order = (int*)malloc((size_t)count * sizeof *order);
     if (!rank || !order) { free(rank); free(order); return NULL; }
-    for (i = 0; i < count; i++) rank[i] = 4096;
+    for (i = 0; i < count; i++) rank[i] = 8192;
     for (my = 0; my < mrows; my++) {
-        int dy = my < s_rectTy0 ? s_rectTy0 - my : my >= s_rectTy0 + s_rectRows ? my - (s_rectTy0 + s_rectRows - 1) : 0;
+        int dy = my < cy ? cy - my : my - cy;
         for (mx = 0; mx < stride; mx++) {
-            int dx = mx < s_rectTx0 ? s_rectTx0 - mx : mx >= s_rectTx0 + s_rectCols ? mx - (s_rectTx0 + s_rectCols - 1) : 0;
+            int dx = mx < cx ? cx - mx : mx - cx;
             int d = dx > dy ? dx : dy, idx = tmap[(size_t)my * stride + mx];
             if (idx < count && d < rank[idx]) rank[idx] = d;
         }
@@ -534,8 +552,10 @@ static void dump_if_armed(void)
 
 /* Once per frame after the atlas is known: start the restore when the switch
    is on and none exists for this set, then drive it one slice per frame until
-   the atlas is complete. The switch going off mid-restore pauses the job (its
-   scratch stays allocated) and leaves a finished texture in place, unsampled. */
+   the atlas is complete; the cells already painted are sampled from the first
+   slice on. The switch going off mid-restore pauses the job (its scratch stays
+   allocated) and leaves the texture in place, unsampled, restored as far as it
+   got. */
 static void restore_step(const char* ta)
 {
     if (!tagpu_classicpp_on() || !s_atlasTex || !s_setPix) return;
@@ -758,7 +778,10 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
     x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_rgbTex);
     x_glActiveTexture(GL_TEXTURE0);
-    glUniform1i(s_uRestored, (s_rgbState == 2 && tagpu_classicpp_on()) ? 1 : 0);
+    /* running OR complete: while the job runs the alpha test in the shader
+       reveals each cell as its out pass lands (and stays indexed elsewhere);
+       a failed or absent job never samples the texture */
+    glUniform1i(s_uRestored, ((s_rgbState == 1 || s_rgbState == 2) && tagpu_classicpp_on()) ? 1 : 0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     /* orphan and upload in one call, sized to what this frame USES. The staging
