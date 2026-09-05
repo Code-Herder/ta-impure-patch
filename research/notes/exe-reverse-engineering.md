@@ -961,13 +961,31 @@ site outside `0x4696E7..0x469CF9`, the order driver, the walker, the five leaf d
           sy = (s16)unit[0x74] - main[0x14323] - ((s16)unit[0x70] >> 1) + 0x20
 0x469C6B  buf[1] = 0                                   the string's terminator
 0x469C97  if (!(main[0x37F06] & 1)) continue;           "damagebars" gates the WHOLE unit
-0x469CB9  if (unit[0x96]->id == watched) DrawHealthBars(ctx, unit, sx, sy + 0x0A)
-0x469CD1  if (unit[0x96]->id == watched && *(u32*)(unit+0xAC))
+0x469CB9  if (unit[0x96]->id == p) DrawHealthBars(ctx, unit, sx, sy + 0x0A)
+0x469CD1  if (unit[0x96]->id == p && *(u32*)(unit+0xAC))
 0x469CF9      DrawTextCustomFont(ctx, {'0' + (u8)unit[0xAC], 0}, sx, sy + 0x0E, -1)
 ```
 
-Two things in that are not obvious and both matter to a port. **The squad tag is tested as a
-DWORD** — `mov ecx,[edi+0xac]; test ecx,ecx` at both `0x469C55` and `0x469CD1` — and only
+**`p` is `main+0x2A43`, and it is NOT the byte the order driver uses**
+[BINARY-VERIFIED 2026-09-05]. `DrawGameScreen` loads it into a local at
+`0x46967D` (`mov al,[edx+0x2a43]`) and stores it at `0x469689`; both the bar
+(`0x469CA6`) and the digit (`0x469CC9`) compare `[[unit+0x96]+0x146]` against
+that `[esp+0x70]`. The order-marker driver `0x48CC30`, in the same block, picks
+its player range from **`main+0x2A42`** instead (`0x48CC3B`). The pair is written
+independently — `0x416B25` and `0x416B38`, from two separate calls in one loader
+function — so the two can hold different values, and code that reproduces either
+loop has to use the byte that loop uses.
+
+**Which of the pair is "watched" and which "local" is NOT established here, and
+this note's own pages disagree** [INFERRED, unresolved]: `ui-markers.md`'s
+appendix calls `+0x2A42` watched and `+0x2A43` local, while `effects.md`,
+`features.md` and `line-of-sight.md` all call `+0x2A43` the local player and the
+"Mapped internal data structures" table below calls `+0x2A42` the local player
+index. Nothing in this landing needed the names — only the addresses — so the
+question is left open rather than guessed at.
+
+Two further things are not obvious and both matter to a port. **The squad tag is
+tested as a DWORD** — `mov ecx,[edi+0xac]; test ecx,ecx` at both `0x469C55` and `0x469CD1` — and only
 then used as a byte, so a unit whose `0xAD..0xAF` are non-zero draws a `'0'`. And **the digit
 sits four rows below the bar**, `sy + 0x0E` against the bar's `sy + 0x0A`. There is no health
 test on the digit: `DrawHealthBars` returns early on a dead unit, but the digit is drawn from

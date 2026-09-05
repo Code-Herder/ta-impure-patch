@@ -91,9 +91,12 @@ static int   s_shelfX, s_shelfY, s_shelfH;
    name so a repeat is not counted twice */
 #define MAXDROP  16
 static char  s_drop[MAXDROP][STRMAX];
-static int   s_ndrop;
-static const unsigned char* s_builtWith;   /* the font the atlas holds         */
+static int   s_ndrop;                      /* distinct strings refused         */
+static int   s_nremem;                     /* ...of which we remember the text */
+static unsigned s_builtGen;                /* the font generation it holds     */
 static const unsigned char* s_fontOk;      /* ...and the one already validated */
+static unsigned char s_fontOkSig[3];       /* its rows/yoff/first, as validated */
+static unsigned s_fontGen;                 /* bumped whenever those change      */
 static const char*          s_gfxOk;       /* globals block already probed     */
 static unsigned char s_atlas[ATLAS_W * ATLAS_H];
 static int   s_dirty;
@@ -105,9 +108,11 @@ void tagpu_text_snapshot(void)
     if (!ptr_ok(g)) return;
     /* ONE SEH-guarded probe per distinct globals block, and the cache is what
        makes that true: this runs at every hook 8, i.e. ~83 times per presented
-       frame, and IsBadReadPtr is not free — it probes with a read-modify-write
-       into engine memory. markown's alpha table learned exactly this and grew a
-       `g_gfxOk` for it; the first revision here wrote the comment and left the
+       frame, and an SEH-guarded probe is not free. markown's alpha table
+       learned exactly this and grew a `g_gfxOk` for it — there the probe was
+       IsBad*Write*Ptr, which really does read-modify-write the page it tests;
+       this one only reads, and the cost is the guard, not a write into engine
+       memory; the first revision here wrote the comment and left the
        probe unconditional, which is worse than the "one per frame" it disclaims.
        The probe spans BOTH fields we read (`+0x204` and `+0x208`), so a block
        whose 0x204 sits on the previous page is refused rather than faulted. */
@@ -132,22 +137,40 @@ static const unsigned char* s_frameFont;
 
 void tagpu_text_frame(void) { s_frameFont = g_font; }
 
-/* The font, validated as far as we will index it. `first` is read before the
-   probe because the probe's length depends on it — so that first byte is
-   covered by a probe of its own. */
+/* The font's HEADER and offset table, validated. Not the glyphs: an entry in
+   that table is an unbounded `u16`, so `f + off` reaches up to 64 KB past `f`
+   and no probe here could cover it. `measure()` probes each glyph it accepts
+   instead, which is the only place that knows how long one is.
+
+   `first` is read before the table probe because the probe's length depends on
+   it, so that byte gets a probe of its own.
+
+   THE CACHE IS BY POINTER PLUS A HEADER FINGERPRINT. Pointer identity alone is
+   what an allocator recycles: a different font object at the same address would
+   otherwise skip both this validation and the atlas reset, and be drawn with the
+   previous font's metrics out of the previous font's texels. The three header
+   bytes are a weak check and are honestly weak — they catch a font of a
+   different size or range, not a different font of the same shape — but they
+   cost nothing and the alternative is trusting an address. */
 static const unsigned char* font_ok(void)
 {
     const unsigned char* f = s_frameFont;
+    unsigned char sig[3];
     int first, need;
+
     if (!ptr_ok(f)) return NULL;
-    if (f == s_fontOk) return f;
     if (IsBadReadPtr((void*)f, F_TAB)) return NULL;
-    first = f[F_FIRST];
+    sig[0] = f[F_ROWS]; sig[1] = f[F_YOFF]; sig[2] = f[F_FIRST];
+    if (f == s_fontOk && !memcmp(sig, s_fontOkSig, sizeof sig)) return f;
+
+    first = sig[2];
     if (first > CH_HI) return NULL;
     need = F_TAB + (CH_HI + 1 - first) * 2;
     if (IsBadReadPtr((void*)f, (UINT_PTR)need)) return NULL;
-    if (f[F_ROWS] == 0 || f[F_ROWS] > ATLAS_H) return NULL;
+    if (sig[0] == 0 || sig[0] > ATLAS_H) return NULL;
     s_fontOk = f;
+    memcpy(s_fontOkSig, sig, sizeof sig);
+    s_fontGen++;                  /* a different font, whatever its address */
     return f;
 }
 
@@ -172,21 +195,40 @@ static int measure(const unsigned char* f, const char* s, char* out, size_t outs
 {
     const unsigned short* tab = (const unsigned short*)(f + F_TAB);
     int first = f[F_FIRST];
+    int rows = f[F_ROWS];
     int total = 0;
     size_t n = 0;
     for (; *s && n + 1 < outsz; s++) {
         unsigned c = (unsigned char)*s;
         unsigned off;
+        int gw;
         if (c == '\n') break;
         if (c < (unsigned)first || c < CH_LO || c > CH_HI) continue;
         off = tab[c - first];
         if (!off) continue;
-        total += f[off];
+        /* The glyph is at an unbounded u16 offset, so this is the first read of
+           it and the only place its length is known: probe the width byte, then
+           the bitstream the blit will walk (rows x width bits, one byte per
+           eight, restarted per glyph). A glyph that will not read is dropped
+           from `out` and therefore never reaches the blitter. */
+        if (IsBadReadPtr((void*)(f + off), 1)) continue;
+        gw = f[off];
+        /* A ZERO WIDTH IS NOT A ZERO-WIDTH GLYPH — it writes 256 columns. The
+           blit's per-row counter is a do-while: `mov ch,cl` at `0x4CCFCA` and
+           `dec ch; je` at `0x4CCFE9`, so `cl == 0` wraps to 255 and runs 256
+           times, on every row, while this measure would have reserved nothing.
+           The subsequence filter below is what keeps measure and blit agreeing
+           about the CHARACTER SET; this is the same class one level down, and
+           the guard is one compare. [BINARY-VERIFIED] */
+        if (gw <= 0) continue;
+        if (IsBadReadPtr((void*)(f + off + 1), (UINT_PTR)((rows * gw + 7) / 8)))
+            continue;
+        total += gw;
         out[n++] = (char)c;
     }
     out[n] = 0;
     *w = total;
-    *h = f[F_ROWS];
+    *h = rows;
     return total > 0;
 }
 
@@ -198,12 +240,16 @@ static void drop(const char* s)
 {
     char b[96];
     int i;
-    for (i = 0; i < s_ndrop && i < MAXDROP; i++)
+    for (i = 0; i < s_nremem; i++)
         if (!strcmp(s_drop[i], s)) return;                 /* already counted */
-    if (s_ndrop < MAXDROP) {
-        _snprintf(s_drop[s_ndrop], STRMAX, "%.*s", STRMAX - 1, s);
-        s_drop[s_ndrop][STRMAX - 1] = 0;
-    }
+    /* A string we cannot remember is not counted either. Remembering is what
+       makes the count DISTINCT strings, so incrementing past the memory would
+       put the per-frame call tally back — which is the defect this counter was
+       rewritten to remove, reappearing only in the degraded state where nobody
+       would look for it. Two strings that do not fit in the memory are reported
+       as one; that is a known undercount and it is the honest half. */
+    if (s_nremem >= MAXDROP || strlen(s) >= STRMAX) return;
+    strcpy(s_drop[s_nremem++], s);
     if (!s_ndrop++) {
         _snprintf(b, sizeof b, "text: atlas FULL, dropping \"%.48s\" (%d strings)",
                   s, s_nent);
@@ -219,11 +265,14 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
 
     if (!f || !s || !*s) return 0;
     /* A new font is a new atlas: the glyphs in it are that font's, and the
-       shelves are sized by its row count. */
-    if (f != s_builtWith) {
-        s_nent = 0; s_shelfX = 0; s_shelfY = 0; s_shelfH = 0; s_ndrop = 0;
+       shelves are sized by its row count. Keyed on the GENERATION, not on the
+       pointer — an allocator that hands the same address to a different font
+       would otherwise leave the old glyphs in place and the old rects cached. */
+    if (s_builtGen != s_fontGen) {
+        s_nent = 0; s_shelfX = 0; s_shelfY = 0; s_shelfH = 0;
+        s_ndrop = 0; s_nremem = 0;
         memset(s_atlas, 0, sizeof s_atlas);
-        s_builtWith = f;
+        s_builtGen = s_fontGen;
         s_dirty = 1;
         flog("text: atlas reset (font changed)");
     }

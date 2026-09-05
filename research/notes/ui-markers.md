@@ -146,7 +146,8 @@ cell granularity like everything else under the overlay). Block layout
   0x469C63   sx = (s16)unit->0x6C − eyeX + 0x80
              sy = (s16)unit->0x74 − eyeY − ((s16)unit->0x70 >> 1) + 0x20   // feet, alt-corrected
   0x469C97   if (!(main+0x37F06 & 1)) continue;               // "damagebars" master gate
-  0x469CA6   if (unit->Owner(0x96)->id(+0x146) == watchedPlayer([esp+0x70]))
+  0x469CA6   if (unit->Owner(0x96)->id(+0x146) == [esp+0x70])   // = main+0x2A43,
+             //   NOT the main+0x2A42 the order driver uses — see the appendix
   0x469CB9       DrawHealthBars(ctx, unit, sx, sy + 0xA);     // bar centre 10px below feet
   0x469CC9   if (same owner && unit->0xAC != 0)
   0x469CF9       DrawTextCustomFont(ctx, {'0'+unit->0xAC, 0}, sx, sy + 0xE, -1);  // group digit
@@ -397,7 +398,8 @@ everything from `0x469BD7` on. Under that split:
 | Marker | Drawn at | Frame position | State to redraw from | Verdict |
 |---|---|---|---|---|
 | Selection rect | `0x4699EB`/`0x469B8A` → `0x46A530` | **interleaved** — before each unit, inside both sweeps | `stateMask&0x10` @unit+0x110; pos +0x6A/6E/72; rot +0x64; model AABB via `MODEL_PTRS[unit+0xA6]` (or our own mesh bounds); gate `main+0x37F2F`&4; colour GUI[0xA] | **must be re-drawn by us** (engine's is under our unit pixels and under wrong neighbours) |
-| Health bar | `0x469CB9` → `0x46A430` | after all units, before fog | HotUnits list; Health u+0x108, maxHP def+0x1FA; owner u+0x96→+0x146 == main+0x2A42; option `main+0x37F06`&1; colours GUI[0,0xA,0xE,0xC]; pos = feet −alt/2 +(0,10) | **survives** our overdraw |
+| Health bar | `0x469CB9` → `0x46A430` | after all units, before fog | HotUnits list; Health u+0x108, maxHP def+0x1FA; owner u+0x96→+0x146 == **main+0x2A43** (via `[esp+0x70]`, stored at `0x469689`) —
+not `main+0x2A42`, which is what the order driver uses; option `main+0x37F06`&1; colours GUI[0,0xA,0xE,0xC]; pos = feet −alt/2 +(0,10) | **survives** our overdraw |
 | Group digit | `0x469CF9` | same block | u+0xAC byte; same gates; text at feet+(0,14) | **survives** |
 | Order route dots | `0x4394E0` (SHIFT pass) | after units, before fog (fog-darkened; bars paint over) | SHIFT key; order list u+0x5C (§3.2 fields); `pathicon` GAF main+0x148D3; hover ids main+0x2CBA/0x37E9C/CameraToUnit main+0x142F3 | **survives** |
 | Order target sprite | `0x439740` | same | cursor GAF `main+0x1487F+idx·4`, idx = `(*(0x512344))[type·0x19+0x10]`; LOS cache node+0x32/42 | **survives** |
@@ -835,7 +837,7 @@ clock text.
 | `main+0x1439B` | UnitDef array base (stride 0x249) |
 | `main+0x1487F` | `cursor_ary[0x15]` GAF sequences (order-target sprites, and every mouse cursor) [CORPUS]; the index → name table is in `exe-reverse-engineering.md` §"The cursor chain" |
 | `main+0x148D3` | `pathicon` GAF sequence (route dots) [CORPUS] |
-| `main+0x2A42/0x2A43` | watched / local player id |
+| `main+0x2A42` / `+0x2A43` | two player-id bytes, written independently at `0x416B25`/`0x416B38`. **The order driver `0x48CC30` picks its player range from `+0x2A42` (`0x48CC3B`); the health-bar and group-digit loop compares owners against `+0x2A43` (`0x46967D` → `[esp+0x70]`).** Which is "watched" and which "local" is [INFERRED] and this project's notes contradict each other — `effects.md`, `features.md` and `line-of-sight.md` call `+0x2A43` local, `exe-reverse-engineering.md`'s structures table calls `+0x2A42` local. Use the address the loop you are porting uses |
 | `main+0x2C76` | mouse pos (POINT). **SCREEN space, not world** — measured 2026-09-03: an injected pointer at screen (400,300) reads back 400 / 300, and `0x498DA0` is what converts it to the world point at `main+0x2CAA`. (An earlier line here said world-space; that was wrong.) `0x2CBA` unit-under-cursor id; `0x2CBC` **feature**-under-cursor id (`0xFFFF` = none); `0x2CBE` the cursor index currently installed; `0x37E9C` tracked-unit id [INFERRED names] |
 | `main+0x2C92..0x2CA6` | build/band rect: x1,h1,z1,x2,h2,z2 (world) |
 | `main+0x2CC3` | current order byte (0xE = build; 1 = contextual, 2 Move, 3 Attack, 7 Guard, 8 Repair, 9 Patrol, 12 Reclaim, 13 Capture — measured); `0x2CC6` flags: bit0 pointer on the minimap, bit1 pointer on the world viewport, bit2 either, bit3 rect-forced, bit6 placement-valid |

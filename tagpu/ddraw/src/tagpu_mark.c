@@ -79,7 +79,19 @@
 /* ---- engine layout ---- */
 #define OFF_BEGIN    0x14357     /* unit array base / end (stride 0x118)      */
 #define OFF_END      0x1435B
-#define OFF_WATCHED  0x2A42      /* u8 watched player id                      */
+/* THE OWNER TEST'S PLAYER ID, and it is NOT the one the order driver uses.
+   `DrawGameScreen` loads `main+0x2A43` into a local at `0x46967D`/`0x469689` and
+   both the health bar (`0x469CA6`) and the group digit (`0x469CC9`) compare the
+   unit's `owner->id` against THAT — while the order-marker driver `0x48CC30`
+   picks its player range from `main+0x2A42` (`0x48CC3B`). Two different bytes,
+   two loops, one block. They are written independently (`0x416B25` and
+   `0x416B38`, from two separate reads in the same loader function), so they can
+   differ, and G13d had this loop on `0x2A42` from the start — meaning our bars
+   were drawn for a different player's units than the engine's whenever the two
+   disagree. Which of the pair is "watched" and which "local" is NOT established
+   here and the notes disagree with each other about it, so they are named by
+   address. [BINARY-VERIFIED 2026-09-05] */
+#define OFF_BAROWNER 0x2A43      /* u8, the id the bar/digit loop compares to  */
 #define OFF_GAMEOPT  0x37F06     /* bit0 = the registry option "damagebars"   */
 #define OFF_GUICOL   0x0DCB      /* GUI colour byte array (GetGuiPaletteColor)*/
 #define UNIT_STRIDE  0x118
@@ -659,7 +671,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     end = *(const char* const*)(ta + OFF_END);
     if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return 0;
     if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return 0;
-    watched = *(const unsigned char*)(ta + OFF_WATCHED);
+    watched = *(const unsigned char*)(ta + OFF_BAROWNER);
     gui = (const unsigned char*)(ta + OFF_GUICOL);
 
     for (u = beg + UNIT_STRIDE; u < end && s_cBar < MAXBAR; u += UNIT_STRIDE) {

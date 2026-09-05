@@ -292,9 +292,10 @@ int tagpu_order_armed(unsigned frame_counter)
     /* `s_armed` is NOT cleared for the length of the file read. It used to be,
        and that opened a window — tens of microseconds, every 30 frames — in
        which the game thread's snapshot declined (not armed) while `g_orders`
-       was still set, so `mark_orders` let the ENGINE's driver run with
-       `prefog_wanted` closed against it: one block of engine markers landing in
-       its own frame, i.e. a ghost at the unzoomed position at any zoom but 1.
+       was still set, so `mark_orders` let the ENGINE's driver run: one block of
+       engine markers landing in its own frame, i.e. a ghost at the unzoomed
+       position at any zoom but 1. (The capture window that used to be closed
+       against it went with G13p; the ghost is the same either way.)
        Parse into locals and commit at the end instead. */
     h = CreateFileA("tagpu_order.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);

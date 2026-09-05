@@ -55,7 +55,7 @@
    come off the screen; and hook 8 is where tagpu_text.c latches the font and
    text colour the engine's own digit and labels would have used.
 
-   Twelve call-site redirects and one prologue detour, so nothing here collides
+   Fourteen call-site redirects and one prologue detour, so nothing here collides
    with fxown's detour on `0x471F90` or terrown's on `0x4848E0` — our stubs call
    straight through to those addresses and whatever is installed there runs.
 

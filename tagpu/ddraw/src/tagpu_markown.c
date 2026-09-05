@@ -1,4 +1,4 @@
-/* tagpu_markown.c — the twelve call-site redirects, the prologue detour and
+/* tagpu_markown.c — the fourteen call-site redirects, the prologue detour and
    the one capture window that is left. See tagpu_markown.h for what this owns,
    what became a re-draw, and why the pre-fog window is gone. */
 
