@@ -13,8 +13,8 @@ decompiler output read for this build this session. **[CORPUS]** = TADR/`tamem.h
 name cross-checked against our bytes. **[INFERRED]** = my reading, not yet
 runtime-confirmed. `main` = `*(void**)0x511DE8` (the `TAdynmemStruct`).
 
-> **Status after G13o (2026-09-04): TAKEN, and the order block is now PORTED rather than
-> captured (§6.3).** Every marker on this page is ours,
+> **Status after G13p (2026-09-05): TAKEN, PORTED WHOLE, and the capture is gone (§6.4).**
+> Every marker on this page is ours,
 > and the engine's 8bpp surface inside the viewport is **99.98 % key with nothing left
 > on it but the mouse cursor** (measured, 112 px of 630 784). `tagpu_markown.c` +
 > `tagpu_mark.c` + `tagpu_order.c`; what follows is still the RE this page always was, and
@@ -189,9 +189,18 @@ DrawBar(ctx, &r, Health > 2*maxHP/3 ? guiCol[0xA]  // green
 
 `unit+0xAC` (byte, inside tamem's `data9` blob) is the squad tag — 0 = none.
 Drawn as a 1-character string `'0'+value` via `DrawTextCustomFont 0x4C14F0` at
-`(sx, sy+14)`, same owner + damagebars gates as the bar. (The squad-assign
+`(sx, sy+0x0E)`, four rows below the bar's `sy+0x0A`, same owner + damagebars
+gates as the bar but **no health test** (the bar's leaf returns early on a dead
+unit; the digit is drawn from the caller). (The squad-assign
 handler cluster at `0x4960xx` references sound/GUI id "SelectSquad"
 `0x50951C`.) No other per-unit decal exists in the block.
+
+**The tag is tested as a DWORD** and only then used as a byte — `mov ecx,[edi+0xac];
+test ecx,ecx` at both `0x469C55` and `0x469CD1` [BINARY-VERIFIED 2026-09-05] — so a
+unit whose `0xAD..0xAF` are non-zero shows a `'0'`. Reproduced rather than tidied.
+
+**Ours since G13p** (§6.4): the `0x469CF9` call site is skipped and `tagpu_mark.c`
+draws the digit from `tagpu_text.c`'s atlas, in the same loop as the bar.
 
 ---
 
@@ -449,28 +458,37 @@ over a linked list, with an animated build rect, a marching dot phase, a last-se
 and `ShowRanges`' text labels — a lot of arithmetic to get subtly wrong — against which a
 capture is exact by construction, text included.
 
-**G13o ends that for the order markers** (§6.3): they are ported, the driver call at
-`0x469BFC` is skipped, and window A is left open only for the group digit. The capture
-machinery stays for `passive`, for the digit, and as the thing the port is diffed against.
-What was decisive is not the arithmetic but the bound — §6.1's gap is not something a wider
-buffer can close.
+**G13o ended that for the order markers** (§6.3) and **G13p for the text** (§6.4). The
+pre-fog window — window A — is gone: its last engine primitive was the group digit, and that
+is ours now, so the window is never opened and the 64 KB identity blend LUT that existed only
+to protect the target sprite inside it went with it. What survives is the POST-fog window,
+opened by nothing in normal play and kept so `mark.on=nocursor` can still put the engine's
+own build cursor through our frame for an A/B. What was decisive throughout is not the
+arithmetic but the bound — §6.1's gap is not something a wider buffer can close.
 
 | Marker | Ours how | Engine side |
 |---|---|---|
 | Health bar | re-drawn from unit state | `0x46A430` prologue detour |
-| Group digit | captured (window A) | rides the same block |
+| Group digit | **re-drawn** as one glyph out of our own text atlas (G13p, §6.4) | the `0x469CF9` `DrawTextCustomFont` call SKIPPED |
+| ShowRanges labels | **re-drawn** the same way, at the engine's own point on each circle | ride the skipped order driver |
 | Order markers, route dots, target sprite/circle, build-site rect, range circles | **re-drawn** at native resolution from a game-thread snapshot of the order lists (G13o, §6.3) | the driver call `0x469BFC` SKIPPED |
 | Build-cursor footprint, drag band box | **re-drawn** from the six rect globals (G13n) | the two `0x4BF8C0` call sites redirected and the engine's pair SKIPPED |
 | Selection rect | already native since G12b | `0x4699EB`/`0x469B8A` redirected through a **per-unit** test — a unit `tagpu_native_owns_unit` does not own keeps the engine's |
 
-**Two capture windows, because fog divides them.** Window A is hook 8 `0x469BD7` →
-hook 9 `0x469D2C` and is drawn with the fog rule applied (the engine's block runs
-*before* `0x4848E0` and is darkened by it). Window B is the two `DrawTranspRectangle`
-calls, drawn with fog off, because the engine never darkens the build cursor. Layer A
-draws first, then our bars over it, then layer B — the engine's own order inside the
-block (`0x469BFC` markers, `0x469CB9` bars, and the cursor after fog).
+**There were two capture windows, because fog divides the block.** Window A was hook 8
+`0x469BD7` → hook 9 `0x469D2C`, drawn with the fog rule applied (the engine's block runs
+*before* `0x4848E0` and is darkened by it); window B is the two `DrawTranspRectangle` calls,
+drawn with fog off, because the engine never darkens the build cursor. **Window A is gone as
+of G13p** and window B is opened by nothing in normal play — only `mark.on=nocursor` opens it,
+so the engine's own build cursor can be put through our frame for an A/B. Everything from
+here to §6.1 is therefore the history of a mechanism we no longer run, kept because the
+addresses and the blend argument in it are still the map.
 
-Thirteen call-site redirects and one prologue detour. **No collision with the other passes**:
+The draw order our pass keeps is the engine's own order inside the block: order markers and
+their `ShowRanges` labels (`0x469BFC`), then the health bars over them (`0x469CB9`), then the
+group digit over those (`0x469CF9`), and the build cursor last of all, after fog.
+
+Fourteen call-site redirects and one prologue detour. **No collision with the other passes**:
 the redirects *call* `0x471F90` and `0x4BF8C0`, so whatever `fxown` and `terrown`
 installed on those still runs.
 
@@ -494,10 +512,12 @@ stock TA renders it olive over grass. Measured in a 32x32 box on the sprite: **1
 pixels cyan-family before, 0 % after** (an earlier "14 % -> 1 %" in this branch used a
 palette-index set that also caught tree-canopy greens; this colour-based measure is the one).
 
-**The fix: an identity LUT around the drawer.** `tab[(s<<8)|d] = s` for every pair makes
+**The fix was an identity LUT around the drawer.** `tab[(s<<8)|d] = s` for every pair makes
 the composite a plain copy, so the sprite lands in our buffer as its own palette indices.
-The replay then draws it **opaque**, a deliberate departure from stock's blend; re-blending
-it against our own scene instead would now be a shader change, not another capture change.
+**Retired with window A in G13p** — the star is ours now and the engine's has no buffer of
+ours to read, so it composites against the engine's own frame exactly as stock does. Under
+`passive` and `trace`, where the engine draws into its key-filled surface and we composite
+that surface, the star is teal again; that is a debug mode's business.
 
 > **Do NOT install this at hook 8 and restore it at hook 9.** The first revision did, on
 > the reasoning that a *global* can safely be put back a frame late, and that is wrong —
@@ -505,8 +525,8 @@ it against our own scene instead would now be a shader change, not another captu
 > all. The star is drawn at `0x469BFC`, which is *before* the `0x469C03` drawUnits early
 > exit, so an abandoned frame really does reach the sprite with the swap live.
 
-What else draws in the window cannot reach the LUT, with one data-gated caveat: the rects
-and circles are `DrawLine`, the group digits' `DrawTextCustomFont 0x4C14F0` blits through
+What else drew in the window could not reach the LUT, with one data-gated caveat: the rects
+and circles are `DrawLine`, the group digit's `DrawTextCustomFont 0x4C14F0` blits through
 `0x4CCF60`, and the health bars are ours. The route dots go through `CopyGafToContext
 0x4B7F90`, which is *usually* a masked copy — but `0x4B7FF7` reads the sub-frame byte at
 `+0xB` and routes anything non-zero into `AlphaCompsteBuf2OFFScreen 0x4B8500` itself
@@ -579,12 +599,17 @@ Widening the buffer was the alternative and it is not one: it runs into both the
 geometry the *engine's* frame does not have — and the cost, since the window opens ~83× per
 presented frame (§6.2) and its key fill would scale as 1/z² against that multiplier.
 
-**What is left in window A is the GROUP DIGIT**, which is text and belongs to the same L2
-half as `ShowRanges`' labels. It needs `damagebars` AND a squad tag (`0x469C50` lets a unit
-through on either, but `0x469C97` then skips the whole unit when `damagebars` is clear), so a
-default install opens the window on no frame at all; with it open, the digit still stops at
-the offscreen in the ring. `prefog_wanted` no longer opens the window on held SHIFT while
-the order markers are ours.
+**G13p closes window A** (§6.4). Its last engine primitive was the group digit — which needs
+`damagebars` AND a squad tag (`0x469C50` lets a unit through on either, but `0x469C97` then
+skips the whole unit when `damagebars` is clear), so a default install opened the window on no
+frame at all — and that digit is now drawn out of our own text atlas. Nothing the engine draws
+lands in a buffer of ours any more.
+
+**And the text bound is not the same one as the line drawers'.** `DrawTextCustomFont 0x4C14F0`
+does not clip a string, it **rejects** it: `0x4C6AE0` copies the context's clip rect and
+`0x4B6750` is a full-CONTAINMENT test, so a string whose measured box is not entirely inside
+that rect is not drawn at all. [BINARY-VERIFIED 2026-09-05] A digit or a label in the outer
+ring at zoom < 1 therefore did not stop short, it disappeared — which is what the A/B shows.
 
 **The input half of the same boundary IS closed.** G13e named it — the engine can only
 *name* screen positions inside its own viewport, and a click outside it does nothing at all
@@ -683,7 +708,72 @@ every one, out to the map's north-west corner and the east edge; at **2×** the 
 hairlines one screen pixel wide rather than magnified 1997 pixels.
 
 **Not closed by G13o**: `ShowRanges`' text LABELS (the circles are there), the group digit,
-and window A's remaining life for that digit. All three are text, and text is L2.
+and window A's remaining life for that digit. All three are text, and text is L2 — §6.4.
+
+### 6.4 G13p — the text, and the end of the capture (2026-09-05)
+
+`tagpu_text.c`. The two remaining engine-drawn world-anchored things in the frame were both
+strings: the group digit at `0x469CF9` and the labels `DrawRangeCircle 0x438EA0` writes beside
+each `ShowRanges` circle. Both are now ours, and window A is retired with them.
+
+**No font was reverse-engineered.** `DrawTextCustomFont 0x4C14F0` blits through
+`0x4CCF60(base, pitch, font, str, x, y, fg, bg, transparent)`, **cdecl, nine arguments, taking
+its destination directly** — the first two are its own OFFSCREEN's `+0x0C` and `+0x08`
+(`0x4C173E`/`0x4C1738`). No context, no clip rect, no bound of any kind: it writes exactly
+`sum(widths) × font[0]` pixels wherever it is pointed. So we point it at a buffer of ours and
+TA rasterises its own glyphs into it. Called with `(fg,bg,transparent) = (255,0,0)` the store
+`if (colour != transparent)` keeps only the set bits, which makes the result a **1-bit coverage
+mask** rather than a coloured sprite — one raster then serves every colour the same string is
+ever drawn in, and the weapon-range labels need that, theirs flashing every game tick. Field
+map and evidence: `exe-reverse-engineering.md` §"The in-game bitmap font".
+
+**The font and the colour are latched on the GAME thread, at hook 8.** `SetFont 0x4C1420`
+runs many times a frame, so a present-thread read of `[globals+0x204]` gets the side panel's
+font as often as the game's; between hook 8 and `0x469CF9` nothing calls `0x4C1420` or
+`0x4C13A0` (full-image scan of both call-site sets), so one latch is exactly what the digit
+and the labels would have drawn with. `[globals+0x208]` is their colour — `gui[0xF]`, set at
+`0x4696E7`.
+
+**Constant SCREEN size, snapped to the device grid.** A bitmap glyph magnified with the zoom
+is the 1997 art this pass exists to stop — two pixels tall at 0.25×, blocky at 4× — so the
+quad is sized by `1/zoom` like the waypoint crosshair. And it is snapped: the vertex shader
+applies the zoom, so the snap takes the post-zoom position, rounds it onto the `1/ss` grid and
+hands back the point that transforms to it. Without that the anchor arrives fractional from
+the marker pass's own `project()` and each 1-px stroke is resolved across two device pixels —
+**measured at 1×, ss=2: 66 pure-white pixels in "build distance" against the engine's 183;
+209 against 205 once snapped.**
+
+**The label's anchor is the engine's.** `0x438EA0` remembers the second endpoint of the
+segment whose index is `labelSlot·3` and draws the string at `y + 4`; the slots are a running
+count for the nine def ranges and a literal 0/1/2 for the three weapon ranges
+(`exe-reverse-engineering.md` §`0x4390A0`). Our circle is a smooth arc rather than the
+engine's chords, so the anchor is computed from the engine's own angle
+`(slot·3 + 1)·(0x10000/N)` and placed on OUR circle.
+
+**And the range circles are round again.** Reading `0x438EA0` for that anchor showed it hands
+one `radius<<16` to both `TurnXLookup` and `TurnZLookup`: the 0.89 at `0x4FD2C0` is the TARGET
+circle `0x4399F0`'s, applied to its y radius only. G13o squashed both drawers and drew every
+range circle 11 % flat.
+
+**The gates, all live at 1024×768, ss=2, `shadow-struct`, a squad-tagged commander with
+`ShowRanges` on:**
+
+- **The group digit is PIXEL-IDENTICAL to the engine's at 1×** — 0 differing pixels in a
+  45×30 box around it, 19 bright pixels each way, ours against the engine's own with
+  `mark.on=nodigits`.
+- **At 0.25× ours draws it out in the ring and the engine draws nothing** (16 bright pixels
+  against the engine's 10, and those ten are the health bar): the unit's 1× projection is
+  screen x=1672, i.e. x=850 at that zoom, well outside the `[432,688]` band the screen-sized
+  offscreen leaves addressable.
+- **The eight labels land on the engine's own pixels** — `"weapon1 range"` 209 bright against
+  its 205, same position, same glyphs — and at 2× the text stays one screen size while the
+  circles thin to hairlines.
+- `order.on=trace` still logs both node lists in agreement, and `mark.on=nocursor` still
+  opens the post-fog capture.
+
+**Not closed by G13p**: nothing world-anchored is left engine-drawn. What remains engine-side
+inside the viewport is the mouse cursor sprite, which is screen-space and correct at 1:1 at
+any zoom.
 
 ## Appendix — addresses & offsets
 
@@ -697,16 +787,21 @@ and window A's remaining life for that digit. All three are text, and text is L2
 | `0x4B6CC0` | rotate vector by unit rotation | (corner,out,&rot) |
 | `0x46A430` | **DrawHealthBars** (one unit's bar) — sole caller `0x469CB9` | stdcall(ctx,unit,x,y), ret 0x10 |
 | `0x4BF6F0` | **DrawBar** — clipped solid fill, edges inclusive (worker `0x4CCDEA`) | stdcall(ctx,RECT*,u8), [CORPUS TADR] |
-| `0x4C14F0` | DrawTextCustomFont (group digit, labels, clock) | (ctx,str,x,y,-1) |
+| `0x4C14F0` | DrawTextCustomFont (group digit, labels, clock). **Rejects** a string whose box is not wholly inside the ctx clip rect (`0x4C6AE0` + `0x4B6750`); `ctx` may be NULL | stdcall(ctx,str,x,y,maxW), ret 0x14 |
+| `0x4CCF60` | the glyph blitter — **takes base and pitch directly**, no ctx, no clip, no bound | **cdecl**(base,pitch,font,str,x,y,fg,bg,transparent) |
+| `0x4C6AE0` | `OFFSCREEN::GetClipRect` — 4 dwords from `this+0x1C` | thiscall(RECT*), ret 4 |
+| `0x4B6750` | RECT **containment** (inner wholly inside outer), not intersection | stdcall(RECT*,RECT*), ret 8 |
+| `0x4C1420` / `0x4C13A0` / `0x4C13D0` | SetFont → `[globals+0x204]`; SetTextColors(fg,bg) → `+0x208`/`+0x20C`, each skipped on −1; SetTextTransparentColor → `+0x210` | — |
+| `0x4B70EF` / `0x4B7123` | TurnX = **sine**, TurnZ = **cosine**, one table at `0x509F00` (512 × s16, 8192 = 1.0) | cdecl(angle, value) |
 | `0x4C1B80` | KeyboardHotkeySampler — id `0xF9` → GetAsyncKeyState(VK_SHIFT) | (keyId), ret 4 |
 | `0x48CC30` | order-marker driver (per player unit, mask/flag rules §3.1) — sole caller `0x469BFC` | stdcall(ctx,&main+0x142F3), ret 8 |
 | `0x439B30` | order-list walker, dispatch by mask `(*(0x512344))[type*0x19+0xC]`; restores `pos` before bits 0..3 and not before bit 4 | (unit,mask,ctx,view,flag), ret 0x14 |
 | `0x438C00` | build-site rect (TADR `ADDR_DrawBuildSpotQueue`) | ret 0x14 |
 | `0x4394E0` | route dots (pathicon GAF, flag-gated) + target sprite | ret 0x14 |
-| `0x4399F0` | target circle (16 chords, GUI[0xC]) | ret 0x14 |
+| `0x4399F0` | target circle (16 chords, GUI[0xC]); **the only drawer that squashes** — y radius × the 0.89 at `0x4FD2C0` | ret 0x14 |
 | `0x439740` | animated target sprite (`cursor_ary` GAF, alpha blit) + debug AoE circles | ret 0x14 |
 | `0x4390A0` | per-unit range circles (cloak/kamikaze; all with ShowRanges) | — |
-| `0x438EA0` | **DrawRangeCircle** (symbol) — terrain-following segmented circle + label; `(int)(r×2π×0.125)` segments | (ctx,view,centre,radius,colour,label,slot), ret 0x1C |
+| `0x438EA0` | **DrawRangeCircle** (symbol) — terrain-following segmented circle + label; `(int)(r×2π×0.125)` segments, **no squash** (one radius to both lookups), label at the second endpoint of segment `slot×3`, drawn at `y+4` | (ctx,view,centre,radius,colour,label,slot), ret 0x1C |
 | `0x465AC0` | UnitInPlayerLOS | stdcall(player, unit), ret 8 |
 | `0x485070` | GetPosHeight — pure read of `main+0x14287`, high words `[p+2]`/`[p+0xA]` only | stdcall(POS16_16*), ret 4 |
 | `0x4B70EF`/`0x4B7123` | TurnXLookup / TurnZLookup (sin/cos LUT) | **cdecl** — the callers `add esp,8` |

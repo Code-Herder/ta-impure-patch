@@ -679,20 +679,22 @@ changing it live hands the draw back for one frame so the fill and the composite
 disagree about which index they mean.
 
 **The world-space UI markers are `mark.on`** — tokens `log`, `passive`, `nobars`,
-`nocapture`, `noselbox`, `nocursor` — on its own patch, `markown.on`, which tacli auto-arms at
-launch when `mark.on` exists. It covers health bars, group digits, order/waypoint/build-queue
-markers, range circles, the build-cursor footprint and the drag band box, and it stops the
-engine drawing its own copy of the selection rect underneath ours. Two mechanisms:
-**health bars, the selection rect and the build cursor / band box are re-drawn** from engine
-state (a capture cannot reach any of them at zoom < 1 — the bar loop walks HotUnits, culled to
-the *unzoomed* viewport, and the cursor's rasteriser clips to the offscreen's own width and
-height), and **only the group digit is still captured**. Verify
-`markown: ARMED (hook8/hook9/transp x2/selbox x2/tsprite x2/orders/drawers x4 redirected …)`,
-`MARKOWN capture=1 bars-skipped=1 selbox=1 cursor=1 orders=1`, and
-`mark: bars=N cursor=N ordtri=N ordline=N prefog=… postfog=…` (`log`).
+`nocapture`, `noselbox`, `nocursor`, `nodigits` — on its own patch, `markown.on`, which tacli
+auto-arms at launch when `mark.on` exists. It covers health bars, group digits,
+order/waypoint/build-queue markers, range circles and their `ShowRanges` labels, the
+build-cursor footprint and the drag band box, and it stops the engine drawing its own copy of
+the selection rect underneath ours. **Nothing world-anchored is captured any more** (G13p):
+every one of them is re-drawn from engine state, because a capture cannot reach any of them at
+zoom < 1 — the bar loop walks HotUnits, culled to the *unzoomed* viewport; the line drawers
+clip to the offscreen's own width and height; and `DrawTextCustomFont` does not clip a string
+at all, it **rejects** it whole when the box does not fit. The one capture window left is the
+post-fog build cursor, and only `nocursor` opens it. Verify
+`markown: ARMED (hook8/hook9/transp x2/selbox x2/tsprite x2/orders/digit/drawers x4 redirected …)`,
+`MARKOWN capture=1 bars-skipped=1 selbox=1 cursor=1 orders=1 digits=1`, and
+`mark: bars=N cursor=N ordtri=N ordline=N text=N(lab=N) atlas=N/N …` (`log`).
 
 **The order markers are their own pass, `order.on`** (G13o) — tokens `log`, `passive`,
-`trace`, `nobuild`, `nodots`, `nocircle`, `nosprite`, `noranges` — riding the same
+`trace`, `nobuild`, `nodots`, `nocircle`, `nosprite`, `noranges`, `nolabels` — riding the same
 `markown.on` patch set. It walks the order lists **on the game thread** at the engine's own
 driver call site and draws them at native resolution, so a queued build site or a waypoint out
 in the zoomed-out ring is drawn where the capture reached nothing at all. It needs `mark.on`:
@@ -705,7 +707,10 @@ Three things to know:
 
 - **Health bars need the `damagebars` registry option**, which is *off* when the value is
   missing — that is the engine's own gate (`main+0x37F06` bit0) and we honour it. Set it
-  before launch under `HKCU\Software\Cavedog Entertainment\Total Annihilation`.
+  before launch under `HKCU\Software\Cavedog Entertainment\Total Annihilation`. **The group
+  digit needs it too**: `0x469C97` skips the whole unit when the bit is clear, so with
+  `damagebars` off a squad-tagged unit shows no digit in stock TA either. Assign a tag with
+  `tacli keys <i> ctrl+1` on a selected unit.
 - **Order markers only draw while SHIFT is HELD** — the engine samples its own hotkey
   `0xF9`, which this build resolves to `GetAsyncKeyState(VK_SHIFT)` (jump table at
   `0x4C1C48`, verified). `tacli keys <i> down:shift` … `up:shift` around a shot. We call
@@ -724,8 +729,18 @@ Three things to know:
   (`order TRACE own:` / `order TRACE eng:`), which is the correctness gate — a pixel diff is
   unavailable, because native resolution means the frames deliberately differ. Diff them per
   block: the own-phase always precedes the eng-phase.
-- **Still not closed: text.** `ShowRanges`' labels are absent (the circles are there) and the
-  group digit is still engine-drawn and still clipped in the ring.
+- **`ShowRanges` is a typed cheat, not a switch.** `tacli switches` only reaches
+  SoftwareDebugMode; this one lives at `main+0x391BF`. Open the chat with `return`, type it
+  with `char:` tokens and press `return` again:
+  `tacli keys <i> return`, `tacli keys <i> char:+ char:s char:h char:o char:w char:r char:a
+  char:n char:g char:e char:s`, `tacli keys <i> return`, then confirm with
+  `tacli peek <i> '*0x511DE8+0x391BF:4'`. With it on, a selected unit draws nine def-range
+  circles and three weapon ones, each labelled.
+- **Text is closed too, as of G13p.** The group digit and the `ShowRanges` labels are ours —
+  TA's own glyphs, rasterised through `0x4CCF60` into an atlas of ours and drawn at a constant
+  SCREEN size. `mark.on=nodigits` hands the digit back for an A/B (at 1× the two are
+  pixel-identical; at 0.25× in the ring the engine's is absent), and `order.on=nolabels` hands
+  back the labels.
 
 **Zoom has two levers, and the file wins.**
 

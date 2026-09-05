@@ -381,7 +381,7 @@ because this survey is the evidence that a bracketed swap cannot be observed by 
 | **`0x439740`** | **The order pass's target sprite** — the pulsing star at a move/attack waypoint, and the only alpha-composited marker. `stdcall(ctx, view, node, pos, flag)`, `ret 0x14`. Two direct `E8` callers: `0x439516` (inside the route-dot drawer `0x4394E0`) and `0x439C7D` (the walker `0x439B30`'s bit-3 dispatch). Its address is **also** in `.rdata` 19 times as the `+8` field of the 25-byte order-descriptor records behind `*(u32*)0x512344` — first occurrences `0x4FC4B1`, then `0x4FC754`/`0x4FC76D`/`0x4FC786`/`0x4FC79F` at stride 25. That field is reported unread in this build (the dispatcher loading only `+0`, `+4`, `+0xC`, `+0x10`, `+0x14`, `+0x15`) — *that* half is [FROM REVIEW, not re-derived here]; the 19 records and the stride are measured. If it were ever brought into use, a wrapper on the two `E8` sites would be bypassed silently. |
 | `0x4B7F90` | `CopyGafToContext` — the route dots' blitter, and **usually** a masked copy. But `0x4B7FF7` reads each sub-frame's byte at `+0xB` and `jbe`-skips only when it is zero: non-zero routes into `0x4B8500` at `0x4B7FFE`. So whether the dots blend is a property of the **GAF data**, not of the code. Stock `pathicon` frames do not carry it, which is why they render solid. |
 | `0x4BF8C0` | `DrawTranspRectangle` — named for its hollow centre, **not** for translucency. It opens by acquiring a drawing context through `0x4C5E70` (`ret 4`: calls `0x4B6220` for the graphics globals, and when `globals+0xDC` is set copies 0xC dwords from `globals+0xBC` into the caller's stack block and returns 1) and **abandons the whole draw when that returns 0** (`0x4BF8D7`, `je 0x4BFD49`); the companion release is `0x4C5FA0`. Then four edges, each clipped by `0x4BEA20` and written by the store-only `0x4CC7AB` — ten calls to each across the body — and it reaches no alpha composite. Corrects a long-standing claim in `ui-markers.md` and `tagpu_markown.h` that its "transparent edges" read the destination. [The store-only writer was FROM REVIEW and is now disassembled — see "the post-fog build cursor and band box" below, which also has the argument list, the edge split and the surface bound that clips it. The `0x4C5E70`/`0x4C5FA0` pair came from the aircraft-shadow landing's own read of this function and is kept here rather than lost to the merge.] |
-| `0x4C14F0` | `DrawTextCustomFont` (the group digits, drawn inside the same window). Calls `0x4B6220`, `0x4B6750`, `0x4C5E70`, `0x4C5FA0`, `0x4C6AE0`, `0x4CCF60`, `0x4E4760` — it blits through `0x4CCF60` and never touches the LUT, so an identity table cannot affect it. |
+| `0x4C14F0` | `DrawTextCustomFont` (the group digit and the range labels, drawn inside the same block). Calls `0x4B6220`, `0x4B6750`, `0x4C5E70`, `0x4C5FA0`, `0x4C6AE0`, `0x4CCF60`, `0x4E4760` — it blits through `0x4CCF60` and never touches the LUT, so an identity table cannot affect it. Full anatomy in §"The in-game bitmap font". |
 
 ### `DrawGameScreen 0x468CF0` — its arguments, and the branch that skips hook 9
 
@@ -546,12 +546,15 @@ a single call site inside `DrawGameScreen`.
 ```
 0x4699EB  call 0x46A530                             selection rect, ground sweep
 0x469B8A  call 0x46A530                             selection rect, air sweep
-0x469BD7  hook 8                                    (capture window A opens)
+0x469BD7  hook 8                                    (was capture window A; G13p
+                                                     retired it — the hook now only
+                                                     brackets our order arena's block
+                                                     and latches the text font)
 0x469BE1  KeyboardHotkeySampler(0xF9)  -> SHIFT?    (0x469BE8 je 0x469C01)
 0x469BFC  call 0x48CC30(ctx, main+0x142F3)          <- the driver, SHIFT-gated
 0x469C03  je 0x469D38                               (drawUnits == 0 exits past hook 9)
 0x469CB9  call 0x46A430                             health bars, AFTER the markers
-0x469CF9  call 0x4C14F0                             group digits
+0x469CF9  call 0x4C14F0                             group digits (G13p: SKIPPED)
 0x469D2C  hook 9
 0x469EC5  call 0x4BF8C0                             build cursor / band box, outer
 0x469F1E  call 0x4BF8C0                             ...and the inner rect, after fog
@@ -758,6 +761,11 @@ position**, each live weapon's AoE (`w+0xD6`) and `attackrunlength` (`w+0xE0`) p
 `0x1F + i·0x1C` (`0x439879`), so this drawer does **not** carry `0x4390A0`'s third-slot quirk
 — the two disagree about the same question in the same build.
 
+Its labels are **formatted at draw time**, through the engine's own `sprintf 0x4E42B0`:
+`"weapon %d - area of effect"` (`0x5051C4`, at label slot 0) and `"weapon %d - coverage"`
+(`0x5051AC`, slot 1), both taking the weapon INDEX 0..2, plus the literal `"attack length"`
+(`0x50519C`, slot 2) for `def[0x216]`. [BINARY-VERIFIED 2026-09-05]
+
 ### `0x4390A0` — the per-unit range circles
 
 `ret 0x14`. `unit = node+0xE`, `def = unit[0x92]`. With `ShowRanges` (`main+0x391BF`) clear:
@@ -780,9 +788,19 @@ not on the unit's cloak flag**, which is the normal branch's rule and not this o
 `def[0x202]` sight, `+0x204` radar,
 `+0x206` sonar, `+0x20A` radar jam, `+0x20C` sonar jam, `+0x212` builddistance, `+0x214`
 maneuver, `+0x218` kamikazedistance, all in `main[0xDD9]` (gui 0xE) with label strings at
-`0x505190/88/80/78/6C/60/50/44` and `0x503A0C`; then the three weapon ranges (`unit+0x10`,
+`0x505190/88/80/78/6C/60/50/44` and `0x503A0C` — `"mincloak"`, `"sight"`, `"radar"`,
+`"sonar"`, `"radarjam"`, `"sonarjam"`, `"build distance"`, `"maneuver"`,
+`"kamikazedistance"`; then the three weapon ranges (`unit+0x10`,
 `+0x2C`, `+0x48`, each `+0xDC`) flashing `main[0xDCF]`/`main[0xDD7]` on `gameTime & 1`, the
-first gated at `0x439443`.
+first gated at `0x439443`, labelled `"weapon1 range"` `0x505134`, `"weapon2 range"`
+`0x505124`, `"weapon3 range"` `0x505114`.
+
+**The `labelSlot` each one passes** [BINARY-VERIFIED 2026-09-05]: for the nine it is `esi`,
+a running count of the circles actually drawn — 0 for the cloak radius (a literal, with
+`mov esi,1` after it at `0x439236`), then `mov eax,esi; inc esi` for each of the next seven,
+and a bare `push esi` for kamikazedistance because it is the last. For the three weapon
+ranges it is a **literal 0, 1, 2** (`0x439457`, `0x439485`, `0x4394B0`), so a unit with all
+twelve draws two labels at slot 0, two at 1 and two at 2.
 
 **Those nine radii are read with MIXED sign, and the mix is not tidy** — worth having written
 down, because a blanket cast either way is a guess: `movsx` for cloak `0x439229`, sight
@@ -798,10 +816,31 @@ rather than corrected — a "fix" would draw a circle the engine never draws.
 
 ### `DrawRangeCircle 0x438EA0` — the terrain-following circle
 
-`ret 0x1C`: `(ctx, view, POS16_16* centre, radius, colour, char* label, labelSlot)`. The
+`ret 0x1C`: `(ctx, view, POS16_16* centre, radius, colour, char* label, labelSlot)`. A zero
+radius returns at once (`0x438EAE`). The
 segment count is `(int)(radius · 2π · 0.125)` — the doubles at **`0x4FD2B0`** (2π) and
 **`0x4FD2B8`** (0.125) — i.e. one segment per 8 world units of circumference, and the loop
-runs `i = 0..N` inclusive.
+runs `i = 0..N` inclusive, stepping `0x10000/N` in angle units per segment.
+
+**It is a ROUND circle — there is no isometric squash here** [BINARY-VERIFIED 2026-09-05].
+`ebx` is reloaded with `radius<<16` at the top of every iteration (`0x438F08` from
+`[esp+0x18]`) and handed to **both** `TurnXLookup` and `TurnZLookup`. The 0.89 at `0x4FD2C0`
+belongs to the TARGET circle `0x4399F0`, which multiplies **only** its y radius by it
+(`[esp+0x18]` there, against the unsquashed `[esp+0x34]` on x). G13o applied the squash to
+both drawers and drew every range circle 11 % flat until G13p; the projection maps world z to
+screen y 1:1, so a round circle in world space is a round circle on screen.
+
+**And it can divide by zero.** `0x438EE4` does `mov eax,0x10000; cdq; idiv ecx` with `ecx` =
+N, guarded only by `jl` against a *negative* N (`0x438EDE`). A radius of 1 gives
+`(int)(1 · 0.7854) == 0` and faults inside TA. Nothing in stock content is that small.
+
+**`TurnXLookup 0x4B70EF` is a SINE and `TurnZLookup 0x4B7123` a COSINE**, off one shared
+table at **`0x509F00`**: 512 `s16` entries, `8192 = 1.0` (`shrd …,0xD` after a `+0x1000`
+round), indexed `((angle + 0x20) >> 6) & 0x3FE`, and TurnZ adds a quarter turn (`+0x4020`)
+before the same shift. Both are **cdecl** — the callers `add esp,8`. So the engine's
+parameterisation is `p.x = centre.x + r·sin(a)`, `p.z = centre.z + r·cos(a)`, which is the
+mirror of the usual cos/sin pair: on a round circle it is the same circle entered a quarter
+turn along, and it matters only when you want a point on it at the engine's own angle.
 
 Each endpoint is `centre ± TurnX/TurnZLookup(angle, radius<<16)` and then, and this is what
 makes these circles hug the ground, its altitude is raised:
@@ -814,41 +853,118 @@ before the standard `- alt/2 - eyeY + 0x20` projection. `GetPosHeight` is
 `stdcall(POS16_16*)`, `ret 4`, and reads only the two high words `[p+2]` and `[p+0xA]`; it is
 a pure bilinear read of the height grid at `main+0x14287` with dims `main+0x14233` /
 `main+0x14237`, no writes and no globals of its own, which is why our render thread may call
-it directly. The label (when `label != 0`) is `DrawTextCustomFont 0x4C14F0(ctx, str, x, y+4,
--1)` at the vertex whose index equals `labelSlot·3`.
+it directly.
 
-### The in-game bitmap font — read, not yet used
+**The label's anchor, exactly** [BINARY-VERIFIED 2026-09-05]. `labelSlot` is multiplied by
+three once, before the loop (`lea eax,[eax+eax*2]` at `0x438EFF`), and the loop remembers
+`(x1, y1)` — the **second** endpoint, at angle `(i+1)·step` — of the iteration whose index
+equals it (`0x43902E`). So the anchor is the point at angle `(labelSlot·3 + 1)·(0x10000/N)`.
+If nothing matched (`labelSlot·3 > N`) both remembered values are still 0 and `0x43906D`
+falls back to the LAST endpoint computed, i.e. `(N+1)·step`. The string is then
+`DrawTextCustomFont 0x4C14F0(ctx, str, x, y + 4, -1)` — `add edx,0x4` at `0x43907D` — in
+whatever colour `SetTextColors` last set, **not** the circle's.
 
-[Read for this landing while scoping the L2 text half; nothing here is patched yet.]
+### The in-game bitmap font, and how to rasterise TA's glyphs into a buffer of your own
 
-`DrawTextCustomFont 0x4C14F0` takes its font object from `[globals+0x204]` (`0x4B6220` is
-just `mov eax,ds:0x51FBD0; ret`). Its measure loop at `0x4C1527`:
+[BINARY-VERIFIED 2026-09-05, this project. Read while scoping the text half of the marker
+port and then USED by it — `tagpu_text.c` calls `0x4CCF60` directly. An earlier revision of
+this section, written from the measure loop alone, called `font+0x00` a "baseline offset";
+it is the glyph ROW COUNT, and `font+0x02` is the offset it was confused with.]
+
+`DrawTextCustomFont 0x4C14F0` is `stdcall(OFFSCREEN* ctx, const char* str, int x, int y,
+int maxWidth)`, `ret 0x14`. Its font object is `[globals+0x204]` (`0x4B6220` is just
+`mov eax,ds:0x51FBD0; ret`), and the layout both its measure loop at `0x4C1527` and the
+blitter read is:
 
 ```
-font+0x00   u8    baseline offset, added to y            (read at 0x4C1659)
+font+0x00   u8    glyph height in ROWS       (also y+this = the measured box's bottom, 0x4C1659)
+font+0x02   s8    a row offset the BLITTER SUBTRACTS from the y it is given
 font+0x03   u8    first character code
-font+0x04   u16[] offset table, indexed by (char - first); 0 = glyph absent
-font+off    u8    that glyph's advance width
+font+0x04   u16[] per-character offset, indexed by (char - first); 0 = glyph absent
+font+off    u8    that glyph's width, in pixels AND in bits
+font+off+1  ...   the glyph: rows x width bits, MSB first, packed ACROSS row boundaries
 ```
 
-and the blit at `0x4C16D4` is **one call per string**. `DrawTextCustomFont` itself is
-`stdcall(ctx, str, x, y, ?)`, `ret 0x14`; the blit it makes is **cdecl with nine arguments**
-(`add esp,0x24` at `0x4C16D9`), pushed at `0x4C16B0..0x4C16D3` as:
+Neither the measure nor the blit bounds the index against the table's length — a character
+past its end reads whatever follows — and both skip a code below `first` and a zero offset
+**without advancing the cursor**.
+
+**`ctx` may be NULL**, in which case `0x4C14F0` locks the screen surface itself
+(`0x4C5E70(&localOFFSCREEN)`, `0x4C5FA0` to release) and draws into that.
+
+**It does not clip the string — it REJECTS it.** `0x4C6AE0` is
+`OFFSCREEN::GetClipRect(RECT* out)`, thiscall, `ret 4`: four dwords copied from `this+0x1C`.
+`0x4B6750(RECT* inner, RECT* outer)` is a **containment** test — eight compares, `0` unless
+every edge of `inner` lies inside `outer` — and `0x4C169E`/`0x4C1710` skip the blit entirely
+when it fails. So a string whose measured box `{x, y, x+width, y+font[0]}` is not wholly
+inside the context's clip rect is not drawn short: it is not drawn at all. That is why the
+group digit and the `ShowRanges` labels vanished in the outer ring at zoom < 1, and why
+G13p ports them rather than widening anything.
+
+#### `0x4CCF60` — the blitter, which takes its destination directly
+
+**cdecl, nine arguments** (`add esp,0x24` at `0x4C16D9`):
 
 ```
-0x4CCF60(local[esp-0x150], local[esp-0x154], font, string, esi, ebp,
-         [globals+0x208], [globals+0x20C], [globals+0x210])
+0x4CCF60(u8* base, int pitch, void* font, const char* str, int x, int y,
+         int fg, int bg, int transparent)
 ```
 
-**No OFFSCREEN pointer reaches it, and neither does a clip rect** — so none of the
-`0x4CC650` surface bound that clips the line drawers applies, which is the whole reason the
-L2 text half can rasterise TA's own glyphs into a buffer of ours at any size without
-decoding the font. Arguments 1 and 2 are two of `0x4C14F0`'s own locals, and the natural
-reading of a destination taken directly is a base pointer and a pitch — but **the stores
-that fill them have not been traced**, so that is inference, not a read; the three
-`[globals+0x208..0x210]` aux values are likewise unidentified. Both are the L2 work's to
-close. This is a **different font object** from the GUI one `tagpu_ui.c` measures with
-(`gfx+0x14` → fontset `+0x0C` → glyph pointer array at `font+0x28`).
+and `0x4C14F0` fills the first two from **its OFFSCREEN's own pixel base and pitch** —
+`push [edi+0xC]` / `push [edi+0x8]` at `0x4C173E`/`0x4C1738` on the ctx path, and the same
+two fields of the locally locked surface at `0x4C16A0`. Arguments 7, 8 and 9 are
+`[globals+0x208]`, `[globals+0x20C]`, `[globals+0x210]`. **No OFFSCREEN reaches it, no clip
+rect, not even a width or a height** — it writes exactly `sum(widths) × font[0]` pixels at
+`base + (y − (s8)font[0x02]) · pitch + x` and it is the caller's business to have measured
+that. Which is the whole reason a port needs no font RE at all: hand it a buffer of yours
+and TA rasterises its own glyphs into it, at any size, with none of the `0x4CC650` surface
+bound that clips the line drawers.
+
+Per pixel it is `colour = bit ? fg : bg; if (colour != transparent) *dst = colour` — a
+transparent equal to `bg` makes the background bits no-ops, so `(255, 0, 0)` turns the call
+into a **1-bit coverage mask** rather than a coloured sprite. The bit counter (`dl`) is reset
+per GLYPH at `0x4CCFC8` and not per row, so only each glyph starts on a byte boundary.
+
+#### The text globals, and who sets them
+
+| VA | What |
+| --- | --- |
+| `0x4C1420` | `SetFont(font)` → `[globals+0x204]`, ignoring NULL; `ret 4` |
+| `0x4C13A0` | `SetTextColors(fg, bg)` → `[globals+0x208]` / `[globals+0x20C]`, each **skipped when the argument is −1**; `ret 8` |
+| `0x4C13D0` | `SetTextTransparentColor(c)` → `[globals+0x210]`; `ret 4` |
+| `0x4C13F0` / `0x4C1400` / `0x4C1410` | the three getters |
+
+All three are process-global and the engine re-points them many times a frame, so anything
+reading them off another thread gets whatever the game thread last drew with. Inside
+`DrawGameScreen` the last pair before the marker block is **`0x4696CD`/`0x4696E7`**:
+`SetFont` from a table at `main+0x3816B`, then `SetTextColors(gui[0xF], GetTextTransparentColor())`
+— i.e. the in-game text is `main[0xDDA]` on a background equal to the transparent index, so
+its background bits store nothing. Between that pair and the group digit at `0x469CF9`
+nothing calls either function: a full-image scan puts every `0x4C1420` and `0x4C13A0` call
+site outside `0x4696E7..0x469CF9`, the order driver, the walker, the five leaf drawers and
+`DrawHealthBars` included. One latch at hook 8 therefore holds for the whole block.
+
+### `0x469CD1..0x469CF9` — the group digit
+
+[BINARY-VERIFIED 2026-09-05. The block `tagpu_mark.c` now draws.]
+
+```
+0x469C4A  if (!(main[0x37F06] & 1) && *(u32*)(unit+0xAC) == 0) continue;
+0x469C63  sx = (s16)unit[0x6C] - main[0x1431F] + 0x80
+          sy = (s16)unit[0x74] - main[0x14323] - ((s16)unit[0x70] >> 1) + 0x20
+0x469C6B  buf[1] = 0                                   the string's terminator
+0x469C97  if (!(main[0x37F06] & 1)) continue;           "damagebars" gates the WHOLE unit
+0x469CB9  if (unit[0x96]->id == watched) DrawHealthBars(ctx, unit, sx, sy + 0x0A)
+0x469CD1  if (unit[0x96]->id == watched && *(u32*)(unit+0xAC))
+0x469CF9      DrawTextCustomFont(ctx, {'0' + (u8)unit[0xAC], 0}, sx, sy + 0x0E, -1)
+```
+
+Two things in that are not obvious and both matter to a port. **The squad tag is tested as a
+DWORD** — `mov ecx,[edi+0xac]; test ecx,ecx` at both `0x469C55` and `0x469CD1` — and only
+then used as a byte, so a unit whose `0xAD..0xAF` are non-zero draws a `'0'`. And **the digit
+sits four rows below the bar**, `sy + 0x0E` against the bar's `sy + 0x0A`. There is no health
+test on the digit: `DrawHealthBars` returns early on a dead unit, but the digit is drawn from
+the caller and does not care.
 
 ## The unit blit's shadow branches — mapped by us
 
