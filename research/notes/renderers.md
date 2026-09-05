@@ -107,6 +107,10 @@ after the port.
 
 ### 2.5 The restorer runs at map load, inside the DLL, through ONNX Runtime — spike first
 
+*Superseded 2026-09-05 by §4c: the restorer is fragment passes in the game's own GL context now,
+and the ONNX Runtime path below is reachable only under `tagpu_restoreonnx.on` until landing 3
+deletes it. The measurements here stay as the baseline the GLSL numbers are judged against.*
+
 **Static atlases, built once per map.** Everything Classic++ restores is in memory when a
 map loads: the tile set is built by `LoadMap` and never changes after (tagpu already builds
 its terrain atlas once per map for that reason **[SOURCE `tagpu_terr.c`]**), and every unit
@@ -573,7 +577,29 @@ Transient memory: two 448² × 16-layer RGBA32F arrays = 103 MB during the resto
 The win stays what it was: deleting onnxruntime, vkd3d-proton, DirectML, the always-paid 1.0–1.9 s
 session build and the permanent +160 MiB.
 
-**In the running game** **[IN-GAME: pending — filled in by landing 2]**.
+**In the running game — MEASURED 2026-09-05** (RTX 4070, Wine 9, 1024×768, the parity scenario
+loaded with `tacli scenario load`, `tagpu_restoreglsl.on=log`), sliced from `restore_step()` at
+**12 ms of GPU time per frame**, visible tiles first:
+
+| map | tiles (wrapped) | batches / draws | frames | wall | fps held | GPU time |
+|---|---|---|---|---|---|---|
+| Two Continents | 5,062 (400) | 80 / 3,760 | 128 | **2.14 s** | 59.7 | 1.49 s |
+| Two Continents, 8 ms budget | 5,062 (400) | 80 / 3,760 | 191 | 3.19 s | 59.8 | 1.53 s |
+| Lava & Two Hills (the biggest stock map) | 11,561 (467) | 182 / 8,554 | 251 | **4.21 s** | 59.7 | 3.0 s |
+| Two Continents, tiny 6×24 | 5,062 (400) | 80 / 640 | 16 | **0.25 s** | 63.8 | 0.14 s |
+| Lava & Two Hills, tiny | 11,561 (467) | 182 / 1,456 | 30 | 0.48 s | 62.0 | 0.31 s |
+
+The wall time is frame-bound: a 12 ms slice of a 16.7 ms vsync frame, so the budget sets the
+elapsed time and the fps column says the game paid nothing for it. **Q1 is met** — the full model,
+Two Continents, under 3 s, with the game rendering. In-game GPU time is 1.3× the browser's for
+the same draws (1.49 against 1.15 s); not explained, plausibly the slices' queries bracketing
+state changes the browser issues once **[INFERRED]**. **Q8, the in-game proof**: the atlas dumped
+under `tagpu_restoredump.on` against the pack's fp32 reference is **max 1 level on 179 of
+15,550,464 interior bytes (0.0012 %)**, the guard ring a copy of the edge in every cell — the same
+179 bytes the browser bench differs on, so the DLL and the lab agree byte for byte. The
+biggest map's 4.2 s is past the ~2 s trigger Q6 set for the progressive reveal, which is
+therefore the next thing this engine owes; the ONNX path is kept behind `tagpu_restoreonnx.on`
+until landing 3.
 
 **What the bench changed on the way** (each a fact, not a decision):
 
@@ -641,11 +667,11 @@ the graph itself is that stable.
   same job next (they have colour keys, so the inpaint stand-in of §2.5 lands with them), and
   the unit atlas needs its 4-texel pad, alignment and mips.
 - **The first restore blocks nothing but is visible**, and since §2.5b it happens on **every**
-  map load: on the CPU ~21 s during which Classic++ terrain draws indexed, then switches; **on
-  DirectML 1.8 s (2.9–3.7 s from map load, including the runtime and the always-paid session
-  build)**. A loading-screen hook or a tacli pre-warm still pays on the CPU
-  fallback and on the largest maps (11561 tiles ≈ 4 s GPU, 47 s CPU at the measured in-game
-  rates).
+  map load: **2.1 s of indexed Classic++ terrain on Two Continents, 4.2 s on the biggest stock
+  map** at 60 fps with the GLSL restorer (§4c, measured 2026-09-05) — no runtime, no session
+  build, no CPU fallback any more. The biggest map is past the ~2 s trigger Q6 set for the
+  progressive reveal (visible cells first is already the issue order; what is missing is the
+  per-cell flag so restored cells show as they land).
 - ~~**The cache's format is undecided.**~~ **Moot since 2026-09-05** — §2.5b removes the cache
   entirely, so the compression survey, the 4.4 GB ceiling and the content-keyed tile bank are all
   closed by the decision rather than by an answer. The measurements are kept in the git history
@@ -664,17 +690,11 @@ the graph itself is that stable.
   visible in motion anyway, so that one wants a capture in the game.
 - **Nanoframe wireframe back edges** show through the unbuilt part — inherited from G13l,
   needs a stencil pass per nanoframe.
-- **Windows users** need the VC++ 2019 redistributable for onnxruntime.dll; under Wine the
-  built-in runtime sufficed.
-- **The GPU path's shape on other machines is untested.** DirectML was measured on one
-  adapter (RTX 4070, NVIDIA 595.84, vkd3d-proton 3.0.1) and picks device 0 unconditionally —
-  a laptop whose device 0 is an integrated GPU would get that one, and no fallback compares
-  the two. Nothing has run on AMD or Intel, on real Windows, or on Wine's built-in D3D12
-  once it grows `EnumerateMetaCommands`. Every failure falls back to the CPU provider, so
-  the risk is speed, not correctness.
-- **The GLSL conv passes are now a fallback, not the plan.** DirectML reaches the GPU with no
-  shader of ours, so the hand-written passes are only worth building if the vkd3d-proton
-  dependency has to go.
+- **The restorer has run on one adapter.** The GLSL passes need GL 3.0 array textures, 3.1
+  uniform blocks and `RGBA32F` colour attachments; NK adapts to `MAX_UNIFORM_BLOCK_SIZE` and
+  `ARB_timer_query` is optional. Nothing has run on AMD, Intel or real Windows; the risk is
+  speed (a slow GPU restores slower, at the same fps), not correctness. The ONNX path's
+  "Windows needs the VC++ redistributable" and "DirectML picks device 0" go with it in landing 3.
 
 ---
 
@@ -682,9 +702,10 @@ the graph itself is that stable.
 
 1. ~~**The restorer spike**~~ — done 2026-09-04: onnxruntime 1.20.1 x86 in the DLL, tiles
    restored at map load, cached, the terrain drawn from it under `tagpu_classicpp.on`.
-1b. **The GLSL restorer prototype** (§4c) — three landings: lab bench, engine, ONNX deletion.
-   Goes before step 2 because step 2 is the only step built on the restore engine; steps 3–5
-   proceed alongside it in their own worktree.
+1b. **The GLSL restorer** (§4c) — three landings: ~~lab bench~~ (2026-09-05: the Q2 bar met,
+   1.15 s GPU), ~~engine~~ (2026-09-05: 2.14 s at 59.7 fps in the game, the dump byte-identical
+   to the lab), ONNX deletion (landing 3). Goes before step 2 because step 2 is the only step
+   built on the restore engine; steps 3–5 proceed alongside it in their own worktree.
 2. **The other two restored atlases**, lazily on first draw (§4b Option 4, on the GLSL
    engine): the rect-masked driver over the two existing `atlas_get` sites, the colour-key
    inpaint stand-in, pad and align, mips 0–2; the unit and feature shaders' restored-texture

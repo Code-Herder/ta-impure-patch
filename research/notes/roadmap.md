@@ -46,7 +46,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
-| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04), **on the GPU** (G14b, 2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 **inside the DLL**, once per map on a worker thread, cached under `gamedir/tagpu_cache`; `tagpu_terr.c` uploads a second atlas and samples it under `tagpu_classicpp.on`. The provider is DirectML where it loads (Wine needs vkd3d-proton for the D3D12 under it), the CPU where it does not. The restorer engine decision for [Classic and Classic++](renderers.html) §2.5 | Two Continents: runtime 11–13 ms, session 21 ms CPU / 1.0–1.9 s DirectML, 5062 tiles cold in **1.83 s on DirectML against 20.8 s on 4 CPU threads — 11×** (standalone, model alone, 34–42×) / 24–29 ms cached; the two providers' atlases differ in 61 of 20.7 M bytes, all by 1 level; Classic baselines unchanged; **two 15-min 200v200 soaks, runtime then D3D12 device resident: alive, no GL or restore errors** |
+| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b). The ONNX Runtime path stays compiled and reachable only under `tagpu_restoreonnx.on` for the same-map A/B until landing 3 removes it. The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k; one blend per silhouette pixel since G13n | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain; **aircraft** measured against the engine on `shadow-air` — offset `(+5, (alt−ground)/2)` on four airframes, darkening 0.487 engine vs 0.25 ours before the stencil and 0.44–0.52 after |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
@@ -78,6 +78,58 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G14c — the restorer is fragment shaders in our own context.** Landing 2 of the three that
+[Classic and Classic++](renderers.html) §4c decided on 2026-09-05: the unditherer's 12×64 residual
+CNN as GLSL passes in the game's GL context, replacing ONNX Runtime, DirectML and vkd3d-proton
+(landing 3 deletes them). No engine address is touched; the module reads what the terrain pass
+already reads.
+
+**What it does.** `tagpu_restoreglsl.c` is the driver, `tagpu_restore_glsl.h` the one copy of
+the shader text (the browser lab compiles the same bytes under `#version 300 es`), and
+`<model>.w32.bin` — `unditherer export-weights` — the model laid out as the conv pass indexes
+it: one std140 block of `mat4` per output channel-tile, bound as a uniform range per draw.
+Activations live four channels per layer of two ping-pong `GL_TEXTURE_2D_ARRAY`s; a conv draw
+writes NK layers through NK colour attachments, and NK is chosen per device from
+`MAX_UNIFORM_BLOCK_SIZE` (4 on the 4070). Every slot has a rect and a tap outside it reads 0 at
+every layer — the zero padding the model was trained with, and the reason "pad the input and run
+unmasked" is wrong (layer 2 would read layer 1's `relu(bias)` gutter). A tile whose opposite edges
+agree within 12 levels is wrap-padded by the fill pass and centre-cropped by the out pass, the
+rule `tagpu_restore.c` fed ONNX. The out pass renders into `tagpu_terr.c`'s RGBA atlas in its own
+34-pitch bordered layout, so `upload_rgb` and the CPU copy are gone from this path; the R8 atlas
+the terrain pass built is the source. **Sliced**: `restore_step()` calls the module once per frame
+from the gather, and each call issues draws until the previous slice's `GL_TIME_ELAPSED` says the
+budget (12 ms) is spent — `ARB_timer_query` is checked for by name because the context is 3.2 and
+a query on an unsupported target would never signal; without it the slice is a fixed draw count.
+Batches go out **visible tiles first**: each tile is ranked by its Chebyshev distance in cells from
+the last gathered rect, one pass over the tile map at job start. One flip at the end (Q6).
+`tagpu_restoreglsl.on` carries the knobs (`tiny`, `fp16`, `nk=`, `budget=`, `log`);
+`tagpu_restoredump.on` writes the finished atlas once as raw RGBA — the module's only disk write —
+and `tascene restorediff` holds it to the pack.
+
+**Measured, in the running game (RTX 4070, Wine 9, 1024×768, `tacli scenario load`):**
+Two Continents, 5062 tiles (400 wrap-padded), 80 batches, 3760 draws: **128 frames = 2.14 s wall
+at 59.7 fps, 1.49 s of GPU time** at the 12 ms budget (191 frames / 3.19 s at 8 ms, the same GPU
+time). Lava & Two Hills, the biggest stock map at 11,561 tiles (467 wrap-padded, atlas
+2176×6154): 182 batches, 8554 draws, **251 frames = 4.21 s at 59.7 fps, 3.0 s of GPU time**.
+Tiny model (`restoreglsl.on=tiny`): Two Continents in **16 frames = 0.25 s** (0.14 s GPU), the biggest map in 30 frames = 0.48 s (0.31 s GPU) — 8–9× cheaper than full in the game, and the by-eye A/B the plan reserved for the human is only needed if full's 4.2 s on the biggest maps is judged too long. The Q1 bound (full model, Two Continents, ≤ 3 s, sliced, with the
+game rendering) is met. **Correctness in the game**: the dumped atlas against the pack's strict-fp32
+reference is max 1 level on **179 of 15,550,464 interior bytes (0.0012 %)**, the guard ring a copy of
+the edge in all 5062 cells — the identical count the browser bench reports, so the DLL and the lab
+agree byte for byte with each other. The first restore of every launch is abandoned by the GL
+reset the game does at startup and restarted, as the ONNX path's was (G14b's review found that);
+the second is the one measured. VRAM during the restore: 98 MB of activations plus the 1.5 MB
+weight block, freed at the end; the RGBA atlas (23.7 MB on Two Continents, 54 MB on the biggest
+map) is the only thing that stays.
+
+**What this landing did not close.** Features and units are still indexed under Classic++ — the
+lazy GAF atlases are §4b Option 4, built on this engine next, and the rect mask is already per
+slot so a GAF frame is a driver change. The **progressive reveal** (Q6) is now triggered by its
+own number: the biggest map shows 4.2 s of indexed terrain at load, over the ~2 s the plan set,
+so per-cell flags are the follow-up. A GL context reset mid-restore restarts the job rather than
+resuming it (the scratch died with the context; the result had not been written). The wall time
+is frame-bound — 12 ms of a 16.7 ms frame — so a machine without vsync would finish in the GPU
+time alone; nothing was measured on any adapter but the 4070.
 
 **G14b — the restorer runs on the GPU.** The owner's question about G14a: why is the model on
 the CPU? Because the pinned ONNX Runtime package is CPU-only and its CUDA provider is x64. The

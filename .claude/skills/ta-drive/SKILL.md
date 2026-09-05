@@ -545,27 +545,31 @@ clicks land. `launch` then prints `auto-armed owndraw.on=all / fxown.on / featow
 terrown.on / markown.on`, and `tagpu.log` carries one `ARMED` line per pass — read them,
 because a missing one is the whole pass silently absent.
 
-**Classic++ is a separate switch, and its restorer has a launch-time one.**
+**Classic++ is a separate switch; its restorer runs as GLSL in the game's own context.**
 `tacli arm <i> classicpp.on` turns on the restored true-colour terrain; it is *polled* twice
-a second, so it flips live for an A/B. **`tagpu_restorecpu.on` is not** — it is read once,
-when the inference runtime is first loaded, so arm it **before** the launch you are measuring.
-It keeps the model on the CPU provider where DirectML would otherwise take the GPU (1.8 s
-against 21 s for Two Continents' 5062 tiles, cold); the restored pixels are the same either way, so
-this is for timing the two, not for choosing a look. Read the result in `tagpu.log`:
-`restore: ... on DirectML` or `on the CPU`, then the per-map `N tiles ... in M batches on ...`
-line. A map already in `gamedir/tagpu_cache/` is read back in ~30 ms and no model runs at all —
-delete the `.rgba` to re-measure.
+a second, so it flips live for an A/B. The restore itself is `tagpu_restoreglsl.c` — fragment
+passes sliced at 12 ms of GPU time per frame, visible tiles first — and needs nothing but the
+weight files `full.w32.bin`/`tiny.w32.bin`, which `launch` links beside `TotalA.exe` from
+`unditherer/models/` (the tree tacli runs from first). Read the result in `tagpu.log`:
+`restoreglsl: 12x64 fp32, NK=4 ...` then `restoreglsl: job started: N frames ...` and finally
+`restoreglsl: done: ... over F frames = W ms wall since begin (X fps while restoring); GPU G ms`
+— **that `fps` is the frame rate the game held during the restore**, frames over wall time, and
+the one to quote. Two Continents: 2.1 s at 59.7 fps; the biggest stock map (Lava & Two Hills,
+11,561 tiles) 4.2 s. The first job of every launch is abandoned by the startup GL reset and
+restarted; the `done` line is the second job's.
 
-**The restorer's GPU path needs a vkd3d-proton `d3d12`, and `tacli` sources it for you.**
-Wine's own vkd3d cannot host DirectML, so `launch` links a 32-bit `d3d12.dll`/`d3d12core.dll`
-into the gamedir and sets `WINEDLLOVERRIDES=d3d12,d3d12core=n,b` — **only when the pair is
-really there**, so an instance without it just runs the model on the CPU. It looks in **a
-Steam Proton install first** (`files/lib/wine/vkd3d-proton/i386-windows`, so no download is
-needed on a machine with Proton), then the hash-pinned copy `tools/fetch_onnxruntime.sh` puts
-in the template gamedir; `TA_VKD3D_PROTON=<dir>` overrides both and is how you pin a build,
-since Steam's Proton updates itself. `launch` and `scenario load` print
-`vkd3d-proton ... from <dir>` whenever it is not the pinned copy — if that line is absent and
-`tagpu.log` says `DirectML unavailable`, the pair is what is missing.
+Knobs go in **`tagpu_restoreglsl.on`**, read once per job, so arm them before the launch (or
+before the map change) you are measuring: `tacli arm <i> 'restoreglsl.on=log tiny'` — `tiny`
+(the 6×24 model), `fp16`, `nk=N` (output tiles per conv draw), `budget=MS` (GPU ms per frame,
+default 12), `log` (a line per batch). **`tagpu_restoredump.on`** makes the DLL write the finished
+atlas once to `gamedir/tagpu_restore.rgba` — the only file the restorer ever writes — and
+`tools/tascene restorediff <pack> <that file>` holds it to a pack built with `--undither` of the
+same map (max 1 level on < 0.01 % of bytes is the bar; Two Continents measures 0.0012 %).
+**`tagpu_restoreonnx.on`** routes the job through the old ONNX Runtime path instead, for a
+same-map A/B, until landing 3 of renderers.md §4c deletes it; that path still needs
+`onnxruntime.dll`/`full.onnx` beside the exe and, for its GPU provider, a vkd3d-proton `d3d12`
+pair that `launch` links from a Steam Proton install or the hash-pinned copy
+(`tools/fetch_onnxruntime.sh`, `TA_VKD3D_PROTON=<dir>` to pin one).
 
 **Health bars are a registry value, not a trigger**, and `tacli` does not set it, so
 the mark pass draws no bars until you do (`tagpu_mark.c:333` gates on `main+0x37F06`
