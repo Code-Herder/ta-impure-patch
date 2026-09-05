@@ -153,7 +153,11 @@ pack/
 A **unit instance** in `scene.json` carries `type`, `pos`, `facing`, `id`, and since
 2026-09-04 three more read from the unit's FBI at build time (`tascene`'s `unit_facts`):
 
-- **`shadow`** — does it get the Classic silhouette? `BMcode` gives mobile-vs-structure and
+- **`shadow`** — does it get the Classic silhouette? Defaults to TRUE when the FBI cannot be
+  read or has no `BMcode` (every stock unit has one), so a modded structure with a missing
+  field would get a silhouette where the engine gives it the slant — the safe default for the
+  common case, wrong for a rare one, and stated rather than hidden. `BMcode` gives
+  mobile-vs-structure and
   stands in for the engine's runtime `0x20000000` structure bit (checked on the fixtures:
   ARMSOLAR and ARMMEX read 0, ARMCOM and ARMPW read 1), then `noshadow` / `canhover` /
   `floater` as `shadows-cloak.md` §3 gates it. A 3DO **feature** always reads false: a wreck
@@ -211,7 +215,7 @@ The page's whole state is the query string — that is the point: a look is a li
 | `eye=<x,y>` | override the pack's eye (viewport top-left, world units) |
 | `ss=<n>` | supersample factor for the offscreen. **Default 2, the game's own**: `tagpu_native.c` renders its native unit FBO at 2× and box-downsamples (`tagpu_ss.off` turns it off), so at `ss=1` the unit textures alias where the game's do not — the kbot lab's roof shimmered in both lanes until the default followed the game. The composite is an exact n×n `texelFetch` box for any n (a single bilinear tap, which it was, is only a box at n = 2). Terrain and sprites are 1:1 texel-to-pixel and are **0 differing pixels** at any factor; on the base fixture `ss=2` changes 12 883 parity pixels, all units, and in the exploration lane 19 939 more by ±2, the per-pixel lambert averaged over its sub-samples |
 | `feat=<what>` | features: `both` (default), `body`, `shadow`. A debug split, because "is the shadow drawing at all" is not eye-answerable — it was 152 133 differing pixels, i.e. yes |
-| `unitshadow=<b>` | **CLASSIC only.** The silhouette drop shadow, default on. A debug split like `feat=`, and the one way to reproduce the pre-2026-09-04 Classic baseline — `unitshadow=0` returns both recorded md5s byte for byte, which is what made the re-baseline checkable rather than asserted |
+| `unitshadow=<b>` | The silhouette drop shadow, default on. **Mostly Classic**, but not only: it also gates the silhouette the Classic++ lane borrows under `airshadow=drop`. A debug split like `feat=`, and the one way to reproduce the pre-2026-09-04 Classic baseline — `unitshadow=0` returns both recorded md5s byte for byte, which is what made the re-baseline checkable rather than asserted. **That equivalence holds for a scene with no aircraft and no `height`**: unit altitude is applied in `buildUnits` regardless of this flag, so a scene with either would differ in the bodies too. `tascene-parity.json` has neither |
 | `airshadow=<how>` | **CLASSIC++ only.** What an AIRBORNE caster does: `len` (default — `shadowlen`'s rule extended to the altitude, throw `a + b·(agl + model height)`), `physical` (cast from the true altitude; the shadow detaches and reads as a cloud), `drop` (do not cast — draw the Classic silhouette instead, as the engine does). At the 40° shadow sun a Thunder at CruiseAlt 200 throws 211 px right and 91 px up of itself, which is why the knob exists — [renderers](renderers.html) §2.2 |
 | `preset=<name>` | a named look from `tascene-presets.json`; anything else you spell out wins over it. A preset may not name another preset |
 | `a=<query>` `b=<query>` `wipe=<0..1>` | **the wipe** — see below |

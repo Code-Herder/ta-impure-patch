@@ -1531,8 +1531,15 @@ async function main() {
       // intra-model term below spans +-1.8 and would otherwise interleave two
       // aircraft face by face. A row-keyed air band would not fit: the top row
       // is already ~355 of the 512 the depth scale allows.
-      const enc = agl > 0 ? D.unit0 + (nRows + 12 + nAir++) * D.rowStep
-                          : D.unit0 + rel * D.rowStep;
+      // CAPPED: past the depth scale the shared VS clamps `1 - z/scale` to 0 and
+      // every aircraft after that pins to the near plane and silently stops
+      // sorting. The band starts above the top row (~355 of 512 on a 768-tall
+      // view), so there is room for a few dozen; beyond that they share the last
+      // key and interleave, which is wrong but visible rather than mysterious.
+      const airMax = Math.floor((D.scale - D.unit0) / D.rowStep) - 1;
+      const enc = agl > 0
+        ? D.unit0 + Math.min(nRows + 12 + nAir++, airMax) * D.rowStep
+        : D.unit0 + rel * D.rowStep;
       const wldX = wx, wldZ = wz - (wy >> 1);
       const P = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
       const first = n;

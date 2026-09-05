@@ -2207,11 +2207,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             x_glDrawArrays(GL_TRIANGLES, first, count);
         }
         x_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-        x_glDisable(GL_STENCIL_TEST);
+        /* the stencil stays ON for the hires shadow: a replacement mesh needs
+           the same one-blend-per-pixel mask and does it per unit itself */
         if (nhi) {
             tagpu_hires_draw(&hv, hunits, nhi, 1, f->frame_counter);
             HIRES_RESTORE();
         }
+        x_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        x_glDisable(GL_STENCIL_TEST);
         x_glDepthMask(GL_TRUE);
     }
     /* bodies */

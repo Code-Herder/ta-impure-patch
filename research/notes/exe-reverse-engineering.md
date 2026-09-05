@@ -499,9 +499,11 @@ evidence and the classify-then-`ret 0x10` stub: `own-the-draw.md`, `tagpu_owndra
 459252  call 0x485070       ; GetPosHeight(&pos) -> eax = the GROUND under the unit
 459257  movsx edx,[esp+0x42]  ; altitude, high word = whole world units
 45925c  movsx ecx,[esp+0x46]  ; (Z - eyeY) high word
-459263  mov [esp+0x14],edx    ; the altitude the waterline code re-reads at 0x45959F
-459267  sar ebx,1             ; altitude / 2
-45926b  sar eax,1             ; GROUND / 2
+459261  mov ebx,edx           ; ebx := altitude       <- these two copies are what
+459263  mov [esp+0x14],edx    ;   the altitude the waterline code re-reads at 0x45959F
+459267  sar ebx,1             ; ebx := altitude / 2
+459269  mov edx,ecx           ; edx := (Z - eyeY)     <- ...make the next lines read right
+45926b  sar eax,1             ; eax := GROUND / 2   (0x485070's return)
 45926d  sub edx,ebx  / 459274 add edx,0x20    ; bodyY   = (Z-eyeY) - altitude/2 + 0x20
 45926f  sub ecx,eax  / 459277 add ecx,0x20    ; shadowY = (Z-eyeY) - ground/2   + 0x20
 ```
@@ -560,11 +562,38 @@ map origin.]
 
 **`ORDERS_NewMainOrder2Unit 0x43AFC0`** — stdcall, `ret 0x1C`, seven args
 `(actionIndex, shift, unit, target, pos, p1, p2)`; `pos` is a pointer to **three 16.16
-dwords**. It first walks the unit's existing order list from `unit+0x5C` (or `+0x60` when the
-order's flag word `+0x42` has `0x40000` set) looking for one it can merge with, and if none
-matches falls through to `0x43B08A`, which re-pushes the arguments and calls the allocator
-**`0x43ADC0`**. That allocates `0x56` bytes (`push 0x56; call 0x4B4F10` at `0x43ADC4`) and
-constructs the order in place with **`0x43A0C0`** (`thiscall`, `ecx` = the new order).
+dwords**.
+
+**Its first branch is on `shift`, and with `shift = 0` almost none of the function runs**
+[BINARY-VERIFIED, corrected by the landing review — the first draft of this section described
+the scan as unconditional]:
+
+```
+43afc0  mov  eax,[esp+0x8]      ; arg2 = shift
+43afd4  test eax,eax
+43afda  je   0x43b08a           ; shift == 0 -> straight to the allocator
+43afe0  mov  esi,[edi+0x5c]     ; else walk the order list, head ALWAYS +0x5C
+```
+
+`0x43B08A` re-pushes the arguments and calls the allocator **`0x43ADC0`**, which takes `0x56`
+bytes (`push 0x56; call 0x4B4F10` at `0x43ADC4`) and constructs the order in place with
+**`0x43A0C0`** (`thiscall`, `ecx` = the new order). The scenario applier passes `shift = 0`, so
+**that is the whole of its path** and everything below about the scan is context, not
+description of what we do.
+
+**What the `shift != 0` scan does when it matches is CANCEL, not merge**
+[BINARY-VERIFIED `0x43B034..0x43B087`]: `0x43B03D` picks `unit+0x60` over `+0x5C` as the list
+head to unlink from when the matched order's flag word `+0x42` has `0x40000` (this is the
+*unlink* head — the walk itself started unconditionally at `+0x5C`), `0x43B05B..0x43B05E`
+unlinks it, `0x43B075 call 0x43A1F0` destructs it, `0x43B07B call 0x4B4F20` frees it, and
+`0x43B087 ret 0x1C` returns **without creating anything**. That is TA's shift-click-a-waypoint-
+to-remove-it behaviour, not a merge.
+
+**And `0x43ADC0` wipes the queue on the way in.** `0x43AE02..0x43AE59` walks `unit+0x5C` and
+destroys every existing order that lacks flag bit `0x4` before linking the new one — so with
+`shift = 0` an order REPLACES the unit's orders rather than queueing. The applier's `orders`
+array therefore only ever takes effect in its last element; recorded in
+[scenario format](scenario-format.html).
 
 **The position is copied verbatim, which is why a read-back probe cannot check it**
 [BINARY-VERIFIED `0x43A164..0x43A177`]:
@@ -583,8 +612,28 @@ Three dwords, no scaling and no reordering. So writing the position and reading
 and the applier's phase-C "measurement" that concluded whole world units was reading exactly
 that tautology.
 
-**What settles the scale is the duplicate-order test at `0x43B006..0x43B029`, inside
-`0x43AFC0`** [BINARY-VERIFIED]:
+**What settles the scale, directly.** `0x4815A0` takes a `pos` pointer and turns it into a
+map cell [BINARY-VERIFIED, and this is the strongest evidence — it is a consumer, not an
+inference]:
+
+```
+4815a0  mov eax,[esp+0x4]    ; the pos pointer
+4815a5  mov ecx,[eax]        ; pos[0]
+4815a7  mov eax,[eax+0x8]    ; pos[2]
+4815aa  sar ecx,0x14         ; >> 20 = 16.16 -> world, then / 16 -> a CELL
+4815ad  sar eax,0x14
+4815b4..c8  bounds-check against main+0x14233 / +0x14237, the map's size IN CELLS
+```
+
+`sar 0x14` is only a cell index if the input is 16.16, and the two components it takes are
+**0 and 2**, bounds-checked against the cell dimensions — so those are the ground plane and
+the middle one is the altitude. `ScriptAction_Type2Index` agrees from the other side: at
+`0x43FF5B..0x43FF6F` it reads the three HIGH words (`[esi+0x2]`, `[esi+0x6]`, `[esi+0xA]`) and
+does `sar ebx,1` on the middle one before subtracting it from the third — altitude/2 against
+depth, the engine's own screen-y term.
+
+**The duplicate-order test at `0x43B006..0x43B029` corroborates it** (on the `shift != 0` path,
+so not on ours) [BINARY-VERIFIED]:
 
 ```
 43b004  mov ebp,[eax]          ; caller pos[0]
@@ -600,9 +649,8 @@ that tautology.
 ```
 
 A tolerance of **±0x100000, which is ±16.0 in 16.16 — one map cell**. In whole world units it
-would be ±1 048 576, i.e. the whole map and then some, which is not a tolerance at all. The
-same block compares components **0 and 2** and never component 1, so those two are the ground
-plane and the middle one is the altitude: the order position is the same
+would be ±1 048 576, i.e. the whole map and then some, which is not a tolerance at all; and it
+too compares components **0 and 2** and never 1. The order position is therefore the same
 `TPosition {x, altitude, depth}` that `UNITS_CreateUnit 0x485F50` takes. **There is no
 create/order asymmetry**; `scenario-format.md` §"The coordinate asymmetry" claimed one from
 TADR's `ConstructionKickout` and was wrong, and is corrected there.
@@ -614,10 +662,14 @@ ended stacked in the north-west corner, one of them reading world `(1, 0)`. With
 Peewee stops at `1902` and every aircraft reaches `4200`. `patrol` was broken the same way and
 now loops its lane; it had looked like a separate defect and was not.
 
-**Negative results.** `0x43A1F0` (called at `0x43B073` on the merge path) and `0x4B4F20`
-(`0x43B07B`) were not chased. The order-list walk's flag word `unit_order+0x42` is read at
-`0x43B034` (`test …,0x40000` selects `unit+0x60` over `+0x5C`) and `0x43B068`
-(`or …,0x10000`); neither bit's meaning is established. `0x43B0B0` is a **different** function
+**Negative results.** `0x43A1F0` (the order destructor, called at `0x43B075`) and `0x4B4F20`
+(the free, `0x43B07B`) were not chased further. Three bits of the order flag word
+`unit_order+0x42` appear and none is named: `0x40000` picks the `+0x60` unlink head
+(`0x43B034`), `0x10000` is OR-ed in at `0x43B068` when the cancelled order is not the one the
+caller passed, and `0x4` exempts an order from `0x43ADC0`'s wipe. `0x41074A` reads
+`order+0x22`/`+0x2A`/`+0x26` and tests each against zero — an "is the position set" check, in
+that order, which is itself consistent with 0 and 2 being the ground plane; what the caller
+does with the answer was not chased. `0x43B0B0` is a **different** function
 that also calls `0x43ADC0` — do not read the `call 0x43adc0` at `0x43B09D` and the one at
 `0x43B120` as the same site.
 
