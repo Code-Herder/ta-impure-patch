@@ -347,13 +347,13 @@ void tagpu_terr_glreset(void)
     s_atlasTex = 0;                     /* the id died with the context */
     s_rgbTex = 0;
     s_rectValid = 0;
-    /* The set identity (s_setPtr/s_setCount/s_setPix) is deliberately LEFT ALONE:
-       zeroing s_atlasTex already forces the atlas rebuild, and ensure_atlas
-       compares that identity to decide whether the restore survives. Clearing it
-       here made the comparison always differ, so every mode change restarted the
-       whole restore -- the case this function exists to avoid. */
-    /* the result lived only in s_rgbTex, which died with the context: restore
-       again (two seconds, on the GPU) rather than keep a 23 MB copy of it */
+    /* The set identity (s_setPtr/s_setCount/s_setPix) is LEFT ALONE: zeroing
+       s_atlasTex is what forces the atlas rebuild, and the identity's job is to
+       tell a NEW MAP from the same set (ensure_atlas aborts a running restore
+       on a new map). The restore itself does not survive a reset: its result
+       lived only in s_rgbTex, which died with the context, so it is run again
+       (two seconds, on the GPU) rather than kept as a 23 MB copy. Until
+       2026-09-05 the ONNX path kept its CPU result here and re-uploaded it. */
     tagpu_rglsl_glreset();
     s_rgbState = 0;
 }
@@ -423,10 +423,9 @@ static int ensure_atlas(const char* ta)
 
     s_atlasH = h;
     s_atlasN = count < rows * ATLAS_COLS ? count : rows * ATLAS_COLS;
-    /* a different set is a new map: drop the restore and start over. (A GL
-       reset reaches here with the SAME set, and glreset has already restarted
-       the restore -- the identity test is what keeps that from being a third
-       start.) */
+    /* a different set is a new map: drop a restore still running on the old
+       one and start over. (A GL reset reaches here with the SAME set, after
+       glreset has already reset the restore, so both calls are no-ops then.) */
     if (s_setPtr != (const void*)set || s_setCount != count || s_setPix != pix) {
         tagpu_rglsl_abort();
         s_rgbState = 0;

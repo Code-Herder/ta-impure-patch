@@ -19,7 +19,8 @@
    EVERY layer, which is the zero padding the model was trained with. A frame
    that tiles (tagpu_rglsl_tileable) is wrap-padded by the model's
    depth inside its rect by the fill pass and centre-cropped by the out pass,
-   the unditherer's own rule (infer.py). The weights are unditherer/weights.py's
+   the unditherer's own rule (classical.is_tileable's 12-level test, infer.py's
+   wrap-pad by the depth). The weights are unditherer/weights.py's
    layout: per output tile k one std140 block of mat4 -- bias in column 0 of
    mat4 0, then mat4 1 + t*Jin + j for tap t (offset (t%3-1, t/3-1)) and input
    tile j -- and a conv draw binds NK consecutive k-blocks as one uniform range.

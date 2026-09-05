@@ -575,7 +575,7 @@ atlas once to `gamedir/tagpu_restore.rgba` — the only file the GLSL restorer e
 same map (max 1 level on < 0.01 % of bytes is the bar; Two Continents measures 0.0012 %).
 The ONNX Runtime path — `onnxruntime.dll`, DirectML, the vkd3d-proton `d3d12` pair, `tagpu_cache/`,
 `tagpu_restorecpu.on`, `tagpu_restoreonnx.on` — was deleted on 2026-09-05; a `restore:` line in
-`tagpu.log` or a `vkd3d-proton ... from` line at launch means an old DLL.
+`tagpu.log` means an old DLL; a `vkd3d-proton ... from` line at launch means a stale `tools/tacli`.
 
 **Health bars are a registry value, not a trigger**, and `tacli` does not set it, so
 the mark pass draws no bars until you do (`tagpu_mark.c:333` gates on `main+0x37F06`

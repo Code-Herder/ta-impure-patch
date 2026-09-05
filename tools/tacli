@@ -15,7 +15,6 @@ Everything is stdlib-only and every subcommand can print JSON (--json) for agent
 
 import argparse
 import difflib
-import glob
 import hashlib
 import bisect
 import json
