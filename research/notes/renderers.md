@@ -107,9 +107,11 @@ after the port.
 
 ### 2.5 The restorer runs at map load, inside the DLL, through ONNX Runtime — spike first
 
-*Superseded 2026-09-05 by §4c: the restorer is fragment passes in the game's own GL context now,
-and the ONNX Runtime path below is reachable only under `tagpu_restoreonnx.on` until landing 3
-deletes it. The measurements here stay as the baseline the GLSL numbers are judged against.*
+*Superseded 2026-09-05 by §4c: the restorer is fragment passes in the game's own GL context, and
+the ONNX Runtime path below was deleted the same day (landing 3 — `tagpu_restore.c`, the
+`onnxruntime_c_api.h` header, `tools/fetch_onnxruntime.sh`, tacli's vkd3d-proton plumbing and the
+runtime files in the game directory; it survives in git history at `fab2247`). The measurements
+here stay as the baseline the GLSL numbers are judged against.*
 
 **Static atlases, built once per map.** Everything Classic++ restores is in memory when a
 map loads: the tile set is built by `LoadMap` and never changes after (tagpu already builds
@@ -290,9 +292,8 @@ levels 0–2.
 ### 2.5b No cache for any image map — everything is restored in the running game  [DECIDED 2026-09-05]
 
 **The disk cache goes, for all three atlases.** `gamedir/tagpu_cache/` and
-`cache_read`/`cache_write` come out of `tagpu_restore.c` (landing 3 of §4c does the deletion;
-until then the ONNX path behind `tagpu_restoreonnx.on` still reads and writes `tagpu_cache/`,
-and the GLSL restorer never has); nothing restored is ever written to
+`cache_read`/`cache_write` went with `tagpu_restore.c` (landing 3 of §4c, 2026-09-05; the GLSL
+restorer never had a cache); nothing restored is ever written to
 disk, and every session restores what it draws. §4's whole "the cache's format is undecided"
 bullet — the compression survey, the 4.4 GB ceiling, the content-keyed tile bank — is **closed
 by this decision, not by an answer**.
@@ -600,8 +601,9 @@ under `tagpu_restoredump.on` against the pack's fp32 reference is **max 1 level 
 15,550,464 interior bytes (0.0012 %)**, the guard ring a copy of the edge in every cell — the same
 179 bytes the browser bench differs on, so the DLL and the lab agree byte for byte. The
 biggest map's 4.2 s is past the ~2 s trigger Q6 set for the progressive reveal, which is
-therefore the next thing this engine owes; the ONNX path is kept behind `tagpu_restoreonnx.on`
-until landing 3.
+therefore the next thing this engine owes. Landing 3 followed the same day: the ONNX path, its
+header, the fetch script, tacli's vkd3d-proton and DirectML plumbing, `tagpu_restoreonnx.on` and
+`tagpu_restorecpu.on` are gone, and `tagpu_classicpp_on()` lives in `tagpu_restoreglsl.c`.
 
 **What the bench changed on the way** (each a fact, not a decision):
 
@@ -641,7 +643,7 @@ until landing 3.
 | **Q4 — precision** | fp32 (`RGBA32F`) is what must pass; fp16 (`RGBA16F`, one enum) is reported alongside from the same bench and adopted only if it is what gets the full model under 3 s in the game — never for tiny. Fail loudly without `EXT_color_buffer_float` | The optimisation gets its own decision after its number exists |
 | **Q5 — sharing the render thread** | **Slice**: `restore_step()` in `tagpu_terr.c` issues batches with a budget in **milliseconds (~8 ms/frame)**, not cells — `GL_TIMESTAMP` queries (3.3) or a conservative wall clock. **No second GL context** (an unmeasured Wine risk of the second-DLL class) and **no CPU path** — the GPU is the only engine; a slow one restores slower, without stalling | A load-time event of a few seconds at 50 fps, on one thread where GL errors are attributable |
 | **Q6 — what the player sees** | **One flip** when the whole set is done, exactly today's `s_rgbState == 2`; batches are issued in **visibility order** regardless (visible cells first), so a progressive reveal costs only a per-cell flag later. Progressive is a follow-up whose trigger is a number: more than ~2 s of indexed terrain at load on the biggest maps | No random scatter of restored cells, no per-cell state before the lighting pass exists |
-| **Q7 — the ONNX path** | If GLSL passes, **delete it** as its own landing: `tagpu_restore.c`'s runtime half, `fetch_onnxruntime.sh`, `tacli`'s `vkd3d_proton_dir()` and `WINEDLLOVERRIDES`, `tagpu_restorecpu.on`, `onnxruntime.dll`/`full.onnx`/the d3d12 pair in gamedirs. §2.5's measurements stay as the superseded baseline. The reference oracle survives in the lab (`unditherer` on onnxruntime, `tascene build --undither`) | One engine; a fallback slower than the primary is dead code with a bill |
+| **Q7 — the ONNX path** | **Done 2026-09-05.** If GLSL passes, **delete it** as its own landing: `tagpu_restore.c`'s runtime half, `fetch_onnxruntime.sh`, `tacli`'s `vkd3d_proton_dir()` and `WINEDLLOVERRIDES`, `tagpu_restorecpu.on`, `onnxruntime.dll`/`full.onnx`/the d3d12 pair in gamedirs. §2.5's measurements stay as the superseded baseline. The reference oracle survives in the lab (`unditherer` on onnxruntime, `tascene build --undither`) | One engine; a fallback slower than the primary is dead code with a bill |
 | **Q8 — in-game proof** | A **dump trigger**, `tagpu_restoredump.on`: the finished atlas written once as raw RGBA, diffed by a `tascene` verb against the pack with the Q2 bar — same tiles, same 2176 × 34-pitch layout, same order. It is the restorer's **only disk write, and only under the trigger**, so "no cache" stays literally true. `tascene ab` remains the whole-frame ritual, not the restore's proof | Checks the bytes the game samples, in the context that matters, with a pass/fail number |
 | **Q9 — scope** | **Terrain only**, with the per-layer mask taking a per-cell **rect** (x, y, w, h) so a GAF frame is a driver change and not a shader change; one deliberately non-square cell in a debug run. The colour-key inpaint stand-in stays with the lazy GAF work | The go/no-go with the largest N and the only matched reference |
 | **Q10 — order of work** | GLSL **before** the lazy GAF atlases (the only step built *on* the engine); unit shading, terrain lighting and shadows proceed **alongside** in their own worktree — they sample an atlas and do not care what filled it | The engine question idles nothing but the one step that depends on it |
@@ -704,10 +706,9 @@ the graph itself is that stable.
 
 1. ~~**The restorer spike**~~ — done 2026-09-04: onnxruntime 1.20.1 x86 in the DLL, tiles
    restored at map load, cached, the terrain drawn from it under `tagpu_classicpp.on`.
-1b. **The GLSL restorer** (§4c) — three landings: ~~lab bench~~ (2026-09-05: the Q2 bar met,
-   1.15 s GPU), ~~engine~~ (2026-09-05: 2.14 s at 59.7 fps in the game, the dump byte-identical
-   to the lab), ONNX deletion (landing 3). Goes before step 2 because step 2 is the only step
-   built on the restore engine; steps 3–5 proceed alongside it in their own worktree.
+1b. ~~**The GLSL restorer** (§4c)~~ — done 2026-09-05 in three landings: the lab bench (the Q2
+   bar met, 1.15 s GPU), the engine (2.14 s at 59.7 fps in the game, the dump byte-identical to
+   the lab), and the ONNX deletion. Steps 3–5 proceed alongside in their own worktree.
 2. **The other two restored atlases**, lazily on first draw (§4b Option 4, on the GLSL
    engine): the rect-masked driver over the two existing `atlas_get` sites, the colour-key
    inpaint stand-in, pad and align, mips 0–2; the unit and feature shaders' restored-texture

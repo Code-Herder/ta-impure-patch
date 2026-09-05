@@ -17,10 +17,11 @@
    four times less -- the browser measured the layouts and the DLL takes the
    widest one the device's MAX_UNIFORM_BLOCK_SIZE allows.
 
-   THE PADDING RULE, the thing that defines the pixels. tagpu_restore.c fed
-   ONNX a tile whose opposite edges agree within 12 levels wrap-padded by 12 to
-   56x56 and centre-cropped, and every other tile at 32x32 with zero padding
-   at every layer. Here both are one mechanism: every slot has a valid rect and
+   THE PADDING RULE, the thing that defines the pixels. The unditherer (and
+   the ONNX Runtime path this module replaced, 2026-09-04/05) runs a tile whose
+   opposite edges agree within 12 levels wrap-padded by 12 to 56x56 and
+   centre-cropped, and every other tile at 32x32 with zero padding at every
+   layer. Here both are one mechanism: every slot has a valid rect and
    a tap outside it reads 0, at every layer (the rect test in the conv shader)
    -- because zero-padding only the INPUT and running unmasked is a different
    network: layer 2 would read layer 1's gutter, which is relu(bias), not 0.
@@ -86,6 +87,18 @@ static double now_ms(void)
     LARGE_INTEGER f, c;
     QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c);
     return 1000.0 * (double)c.QuadPart / (double)f.QuadPart;
+}
+
+/* ---- the switch ---- */
+int tagpu_classicpp_on(void)
+{
+    static DWORD last = 0; static int on = 0;
+    DWORD t = GetTickCount();
+    if (last == 0 || t - last > 500) {
+        last = t;
+        on = GetFileAttributesA("tagpu_classicpp.on") != INVALID_FILE_ATTRIBUTES;
+    }
+    return on;
 }
 
 /* ---- GL entry points this module needs beyond opengl_utils ---- */

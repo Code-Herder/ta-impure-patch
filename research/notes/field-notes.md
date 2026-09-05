@@ -136,7 +136,7 @@ cost time; each is a landmine for the next GL-hook we add.
   *2026-09-04, re-read for the Classic++ restorer:* the crash described here is the null
   `glGetIntegerv` two bullets down — the companion called a NULL GL pointer — so the module
   load itself was never isolated as the cause. **Settled the same day:** `tagpu_restore.c`
-  loads the 10 MB `onnxruntime.dll` at runtime from a worker thread of its own, and the game
+  loaded (until 2026-09-05, when the GLSL restorer replaced it) the 10 MB `onnxruntime.dll` at runtime from a worker thread of its own, and the game
   ran a 200v200 match with it in the process ([renderers](renderers.html) §2.5, roadmap
   G14a). The surviving rules: load from your own thread, never from DllMain or mid-present,
   and go through `real_LoadLibraryA` so the fork's `hook=4` `LoadLibrary` hook does not

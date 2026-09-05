@@ -46,7 +46,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
-| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b). The ONNX Runtime path stays compiled and reachable only under `tagpu_restoreonnx.on` for the same-map A/B until landing 3 removes it. The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
+| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05), the ONNX stack deleted (G14d, 2026-09-05) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b); the ONNX Runtime path is gone (G14d). The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k; one blend per silhouette pixel since G13n | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain; **aircraft** measured against the engine on `shadow-air` — offset `(+5, (alt−ground)/2)` on four airframes, darkening 0.487 engine vs 0.25 ours before the stencil and 0.44–0.52 after |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
@@ -79,6 +79,19 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 
 ### Awaiting review
 
+**G14d — the ONNX stack is deleted.** Landing 3 of [Classic and Classic++](renderers.html) §4c
+(Q7), the same day as G14c: `tagpu_restore.c`/`.h` (the ONNX Runtime job, its DirectML provider,
+the `tagpu_cache/` reader and writer, `tagpu_restorecpu.on`), `tagpu/ddraw/inc/onnxruntime_c_api.h`,
+`tools/fetch_onnxruntime.sh`, and in `tacli` the vkd3d-proton search, the `d3d12,d3d12core=n,b`
+override and the runtime-file linking; `tagpu_terr.c` lost its ONNX branch, `upload_rgb` and the
+`tagpu_restoreonnx.on` fork; `tagpu_classicpp_on()` moved into `tagpu_restoreglsl.c`. The
+untracked runtime files in the template game directory (`onnxruntime.dll`, `full.onnx`,
+`DirectML.dll`, the d3d12 pair, their licences) were removed too; instance game directories keep
+dangling links to them, which nothing opens. One engine, one code path: what §2.5 measured is
+history (`fab2247` has the last tree with it), and the +160 MiB, the session build and the
+"which D3D12" question are gone with it. Verified by running it: the same parity scenario
+restores Two Continents in 2.0 s at 59.8 fps on the tree without the module.
+
 **G14c — the restorer is fragment shaders in our own context.** Landing 2 of the three that
 [Classic and Classic++](renderers.html) §4c decided on 2026-09-05: the unditherer's 12×64 residual
 CNN as GLSL passes in the game's GL context, replacing ONNX Runtime, DirectML and vkd3d-proton
@@ -105,7 +118,8 @@ Batches go out **visible tiles first**: each tile is ranked by its Chebyshev dis
 the last gathered rect, one pass over the tile map at job start. One flip at the end (Q6).
 `tagpu_restoreglsl.on` carries the knobs (`tiny`, `fp16`, `nk=`, `budget=`, `log`);
 `tagpu_restoredump.on` writes the finished atlas once as raw RGBA — the module's only disk write —
-and `tascene restorediff` holds it to the pack.
+and `tascene restorediff` holds it to the pack. (`tagpu_restoreonnx.on`, the same-map A/B against
+the ONNX path, existed for this landing only; G14d removed both.)
 
 **Measured, in the running game (RTX 4070, Wine 9, 1024×768, `tacli scenario load`):**
 Two Continents, 5062 tiles (400 wrap-padded), 80 batches, 3760 draws: **128 frames = 2.14 s wall

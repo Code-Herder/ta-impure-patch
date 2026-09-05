@@ -43,7 +43,6 @@
 #include <string.h>
 #include "opengl_utils.h"
 #include "tagpu_terr.h"
-#include "tagpu_restore.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_glsl.h"
 #include "tagpu_terrown.h"
@@ -188,15 +187,12 @@ static const void* s_setPtr;           /* the TILE_SET we built from          */
 static int    s_setCount;
 static int    s_maxTex;
 /* Classic++ (tagpu_classicpp.on): the RESTORED copy of the atlas -- the same
-   cells on the same pitch, true colour from the unditherer through
-   tagpu_restore.c -- so the one set of UVs serves both looks. Built once per
-   map, off-thread; until it lands the pass draws indexed. */
+   cells on the same pitch, true colour from the unditherer's model run as
+   fragment passes by tagpu_restoreglsl.c straight into this texture -- so the
+   one set of UVs serves both looks. Built once per map, a slice per frame;
+   until it is complete the pass draws indexed. */
 static GLuint s_rgbTex;
-static int    s_rgbGen = 0;        /* restore job for the current tile set */
-static int    s_rgbState = 0;      /* 0 none, 1 running, 2 uploaded, -1 failed */
-/* which engine holds the job: the GLSL passes (tagpu_restoreglsl.c) unless
-   tagpu_restoreonnx.on names the ONNX Runtime path for a same-map A/B */
-static int    s_rgbMode = 0;       /* 0 none, 1 ONNX, 2 GLSL              */
+static int    s_rgbState = 0;      /* 0 none, 1 restoring, 2 complete, -1 failed */
 static GLint  s_uRestored;
 static const unsigned char* s_setPix;   /* the current set's tile pixels     */
 /* the last gathered rect, in 32-px cells: the GLSL job restores the tiles
@@ -356,12 +352,10 @@ void tagpu_terr_glreset(void)
        compares that identity to decide whether the restore survives. Clearing it
        here made the comparison always differ, so every mode change restarted the
        whole restore -- the case this function exists to avoid. */
-    if (s_rgbMode == 2) {
-        /* the GLSL result lived only in s_rgbTex, which died with the context:
-           restore again (seconds, on the GPU) rather than keep a 23 MB copy */
-        tagpu_rglsl_glreset();
-        s_rgbState = 0;
-    } else if (s_rgbState == 2) s_rgbState = 1;   /* ONNX: the result is kept, re-upload */
+    /* the result lived only in s_rgbTex, which died with the context: restore
+       again (two seconds, on the GPU) rather than keep a 23 MB copy of it */
+    tagpu_rglsl_glreset();
+    s_rgbState = 0;
 }
 
 /* ---- the atlas: built once per map, never per frame ---- */
@@ -429,61 +423,19 @@ static int ensure_atlas(const char* ta)
 
     s_atlasH = h;
     s_atlasN = count < rows * ATLAS_COLS ? count : rows * ATLAS_COLS;
-    /* a GL reset rebuilds the atlas for the SAME set: keep the restore job and
-       its result (glreset already asks for a re-upload); only a different set
-       starts over -- the first run restored Two Continents twice for this */
+    /* a different set is a new map: drop the restore and start over. (A GL
+       reset reaches here with the SAME set, and glreset has already restarted
+       the restore -- the identity test is what keeps that from being a third
+       start.) */
     if (s_setPtr != (const void*)set || s_setCount != count || s_setPix != pix) {
-        if (s_rgbMode == 2) tagpu_rglsl_abort();
-        s_rgbGen = 0; s_rgbState = 0; s_rgbMode = 0;
+        tagpu_rglsl_abort();
+        s_rgbState = 0;
     }
     s_setPtr = (const void*)set; s_setCount = count; s_setPix = pix;
     _snprintf(b, sizeof b, "terr: atlas built %dx%d for %d tiles (set=%p pix=%p, %d KB)",
               ATLAS_W, h, count, (void*)set, (void*)pix, (count * TILE_BYTES) >> 10);
     flog(b);
     return 1;
-}
-
-/* ---- Classic++: the restored atlas, same layout, RGBA8 ---- */
-static void upload_rgb(const unsigned char* rgba, int count)
-{
-    unsigned char* buf;
-    int rows = s_atlasH / CELL_PITCH, i;
-    char b[160];
-    buf = (unsigned char*)calloc((size_t)ATLAS_W * (size_t)s_atlasH, 4);
-    if (!buf) { flog("terr: rgb atlas alloc failed"); s_rgbState = -1; return; }
-    for (i = 0; i < count && i < rows * ATLAS_COLS; i++) {
-        const unsigned char* src = rgba + (size_t)i * TILE_PX * TILE_PX * 4;
-        unsigned char* cell = buf + ((size_t)(i / ATLAS_COLS) * CELL_PITCH * ATLAS_W
-                                  + (size_t)(i % ATLAS_COLS) * CELL_PITCH) * 4;
-        unsigned char* dst = cell + ((size_t)CELL_BORDER * ATLAS_W + CELL_BORDER) * 4;
-        int r;
-        for (r = 0; r < TILE_PX; r++) {
-            unsigned char* row = dst + (size_t)r * ATLAS_W * 4;
-            memcpy(row, src + (size_t)r * TILE_PX * 4, TILE_PX * 4);
-            memcpy(row - 4, row, 4);                             /* left  guard */
-            memcpy(row + TILE_PX * 4, row + (TILE_PX - 1) * 4, 4); /* right guard */
-        }
-        memcpy(cell, dst - CELL_BORDER * 4, CELL_PITCH * 4);                   /* top    */
-        memcpy(cell + (size_t)(CELL_PITCH - 1) * ATLAS_W * 4,                   /* bottom */
-               dst + ((size_t)(TILE_PX - 1) * ATLAS_W - CELL_BORDER) * 4, CELL_PITCH * 4);
-    }
-    if (!s_rgbTex) {
-        glGenTextures(1, &s_rgbTex);
-        glBindTexture(GL_TEXTURE_2D, s_rgbTex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    } else {
-        glBindTexture(GL_TEXTURE_2D, s_rgbTex);
-    }
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, ATLAS_W, s_atlasH, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    free(buf);
-    s_rgbState = 2;
-    _snprintf(b, sizeof b, "terr: restored atlas uploaded %dx%d RGBA for %d tiles", ATLAS_W, s_atlasH, count);
-    flog(b);
 }
 
 /* ---- Classic++: the GLSL restorer, straight into s_rgbTex ----
@@ -582,42 +534,27 @@ static void dump_if_armed(void)
 }
 
 /* Once per frame after the atlas is known: start the restore when the switch
-   is on and none exists for this set; drive it (GLSL: one slice per frame) or
-   poll it (ONNX) until the atlas is complete. The switch going off leaves the
-   texture in place and stops sampling it. */
+   is on and none exists for this set, then drive it one slice per frame until
+   the atlas is complete. The switch going off mid-restore pauses the job (its
+   scratch stays allocated) and leaves a finished texture in place, unsampled. */
 static void restore_step(const char* ta)
 {
     if (!tagpu_classicpp_on() || !s_atlasTex || !s_setPix) return;
     if (s_rgbState == 0) {
-        if (GetFileAttributesA("tagpu_restoreonnx.on") != INVALID_FILE_ATTRIBUTES) {
-            s_rgbMode = 1;
-            s_rgbGen = tagpu_restore_terrain_begin(s_setPix, s_setCount,
-                                                   (const unsigned char*)(ta + 0x143A7));
-            s_rgbState = s_rgbGen > 0 ? 1 : -1;
-            return;
-        }
         if (!s_rectValid) return;          /* the order wants a viewport: next frame */
-        s_rgbMode = 2;
         if (!glsl_begin(ta)) { s_rgbState = -1; flog("terr: GLSL restore could not start; Classic++ terrain stays indexed"); return; }
         s_rgbState = 1;
         return;
     }
     if (s_rgbState == 1) {
-        if (s_rgbMode == 1) {
-            const unsigned char* rgba; int n;
-            int st = tagpu_restore_state(s_rgbGen);
-            if (st < 0) { s_rgbState = -1; flog("terr: restore failed; Classic++ terrain stays indexed"); return; }
-            if (st == 1 && tagpu_restore_terrain_result(s_rgbGen, &rgba, &n)) upload_rgb(rgba, n);
-        } else {
-            int st = tagpu_rglsl_step();
-            if (st < 0) { s_rgbState = -1; flog("terr: GLSL restore failed; Classic++ terrain stays indexed"); return; }
-            if (st == 1) {
-                char b[128];
-                s_rgbState = 2;
-                _snprintf(b, sizeof b, "terr: restored atlas complete (GLSL) %dx%d for %d tiles", ATLAS_W, s_atlasH, s_atlasN);
-                flog(b);
-                dump_if_armed();
-            }
+        int st = tagpu_rglsl_step();
+        if (st < 0) { s_rgbState = -1; flog("terr: GLSL restore failed; Classic++ terrain stays indexed"); return; }
+        if (st == 1) {
+            char b[128];
+            s_rgbState = 2;
+            _snprintf(b, sizeof b, "terr: restored atlas complete (GLSL) %dx%d for %d tiles", ATLAS_W, s_atlasH, s_atlasN);
+            flog(b);
+            dump_if_armed();
         }
     }
 }

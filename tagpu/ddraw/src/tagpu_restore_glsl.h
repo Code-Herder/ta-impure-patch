@@ -17,9 +17,9 @@
    SLOTS, uSlot texels apart, one frame per slot; every slot has a valid RECT
    (x0, y0, w, h, slot-local) and a tap that lands outside it reads 0 -- at
    EVERY layer, which is the zero padding the model was trained with. A frame
-   that tiles (tagpu_restoreglsl.c: is_tileable) is wrap-padded by the model's
+   that tiles (tagpu_rglsl_tileable) is wrap-padded by the model's
    depth inside its rect by the fill pass and centre-cropped by the out pass,
-   the same rule tagpu_restore.c fed ONNX. The weights are unditherer/weights.py's
+   the unditherer's own rule (infer.py). The weights are unditherer/weights.py's
    layout: per output tile k one std140 block of mat4 -- bias in column 0 of
    mat4 0, then mat4 1 + t*Jin + j for tap t (offset (t%3-1, t/3-1)) and input
    tile j -- and a conv draw binds NK consecutive k-blocks as one uniform range.
