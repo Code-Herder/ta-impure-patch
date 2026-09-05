@@ -18,8 +18,13 @@
    * Terrain is the frame's implicit far plane, so it draws at a depth key
      BELOW every other band — under the flat-feature band (0.40), not merely
      under the row sweep.
-   * Water animates for free: it is palette cycling, and the native pass
-     re-uploads the live palette every frame.
+   * Water does not animate, so a still atlas loses nothing. MEASURED
+     2026-09-05, not assumed: camera pinned over open water on Anteer Strait
+     and over Ring Atoll's lagoon, NOT ONE PIXEL of the viewport changed over
+     10 s, nor over 30 s at +10 game speed, and NOT ONE BYTE of the 256-entry
+     live palette changed across 24 samples. The minimap kept changing in the
+     same frames, which is what says the capture was live. Earlier comments
+     here claimed the engine cycles the palette for water; it does not.
    * Fog is a straight import of the shared rule (tagpu_glsl.h) — with one
      change that owning the bottom layer forces. Terrain must PAINT the fog's
      solid black in unexplored cells rather than discard: nothing is behind it

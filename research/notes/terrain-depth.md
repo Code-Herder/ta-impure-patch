@@ -568,8 +568,21 @@ one quad per visible cell. Three things fall out of §2 exactly as predicted:
 - **Terrain is the frame's far plane**, so it draws at depth key `0.10` — under the
   flat-feature band (`0.40`) and under particle layers 0..2 (`0.30`), i.e. under
   everything, and it writes depth so nothing has to be ordered against it again.
-- **Water animates for free.** It is palette cycling and the native pass already
-  re-uploads the live palette every frame; sampling it is the whole implementation.
+- **Water does not animate at all.** [MEASURED 2026-09-05] The note here used to say
+  water animates for free because the engine cycles the palette. **It does not cycle.**
+  Camera pinned with `tacli eye` over open sea on **Anteer Strait** and over **Ring
+  Atoll**'s lagoon (a 100 %-water viewport), stock engine, no passes armed: **0 of
+  630 784 viewport pixels changed** across 4 frames over 10 s and across 12 frames over
+  30 s at +10 game speed, while the minimap changed 32-88 px in the same frames --
+  which is the liveness control, and the reason 0 means static rather than "the capture
+  froze". The palette itself was read straight out of the process (`tacli peek
+  '*0x511DE8+0x143A7'`): **all 1024 bytes identical** across 16 samples over 8 s, and
+  entries 0..63 identical across 24 samples over 10 s. So the per-frame palette
+  re-upload is cheap insurance against a palette write we have not seen, not the
+  mechanism behind an animation -- and **Classic++'s restored RGB atlas, which is a
+  snapshot taken once per map, loses nothing by being static**. What this does *not*
+  prove: that the palette never changes anywhere (a mission script or a menu
+  transition was not tested), only that nothing cycles in play on these two maps.
 - **The engine's arithmetic is reproduced, not corrected.** `cdq; and edx,0x1f;
   add; sar 5` is a division *toward zero*, and `cols` is `ceil((viewW+fracX)/32)`
   with the remainder test the engine does at `0x48403E`. `div32_trunc`/`ceil32`

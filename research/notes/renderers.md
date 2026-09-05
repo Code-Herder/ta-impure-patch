@@ -81,6 +81,23 @@ in its lighting or shadow receivers **[SOURCE `tools/tascene-view.html`]**. **De
 it** — it is part of the approved look. Boats go into the same viewer prototype as aircraft,
 so the shadow of a hull on the seabed is seen before it is built.
 
+**And the water does not move, so a restored atlas may be a still snapshot** **[MEASURED
+2026-09-05]**. This was raised as a hazard: Classic++ samples an RGBA atlas baked once per map
+against the palette as it stood when the job started, so anything the engine animated *through*
+the palette would freeze — and `tagpu_terr.c`, `tagpu_native.c` and
+[the engine map](exe-reverse-engineering.html) all said the engine cycles the palette for water.
+**None of them had measured it, and it is false.** Stock engine, no passes armed, camera pinned
+with `tacli eye` over open sea on **Anteer Strait** and over **Ring Atoll**'s lagoon (a
+100 %-water viewport): **0 of 630 784 viewport pixels changed** over 10 s, and **0** again over
+30 s at **+10 game speed**, while the minimap changed 32–88 px in the same frames — the liveness
+control, without which 0 would only mean the capture had frozen. The palette read straight out
+of the process (`tacli peek '*0x511DE8+0x143A7'`) was **identical in all 1024 bytes across 16
+samples**. So there is nothing to lose: the snapshot is exact. The claim is corrected in the
+six files that carried it (`tagpu_native.c` twice, `tagpu_terr.c`, terrain & depth, the lab
+design page, the engine map, the roadmap's G13b row). **What this does not prove**: that the palette never changes
+anywhere — a mission script or a menu transition was not tested — only that nothing cycles in
+play. The per-frame re-upload stays, as insurance rather than as a mechanism.
+
 ### 2.4 Hires glb units are out of scope
 `tagpu_hires_draw.c` lights in linear space with a GGX lobe; Classic++ is a lambert in sRGB
 space, and hires meshes are in no depth pass. **Decided: not a Classic++ concern.** Revisit
@@ -264,6 +281,28 @@ padding); output is clipped to 8 bits. The restored RGBA atlases are new objects
 Classic's indexed ones, which do not change: units 4-texel replicated pad, 4-aligned, mip
 levels 0–2.
 
+### 2.5b The GAF-derived atlases are restored at load, with **no cache**  [DECIDED 2026-09-05]
+
+The terrain tile cache under `gamedir/tagpu_cache/` stays as §2.5 built it. **The unit and
+feature atlases get none**: their frames are restored into memory every time the game starts,
+and nothing is written to disk. Affordable at the measured rates — the whole install's
+`textures/*.gaf` is 753 frames / 1.35 M texels, about **2 s on the x86 CPU runtime** and well
+under a second on DirectML (§2.5), once per session rather than once per map.
+
+**The consequence is that the enumeration cannot come from the filesystem.** The textures are
+inside `tactics*.hpi` and the `.ufo` archives, not loose files **[MEASURED — the gamedir has no
+`textures/` tree]**, so the DLL would need an HPI reader to restore them from disk; the frames
+it can reach are the ones the engine has already decompressed into memory. That makes the
+**definition → loaded model → texture frames walk** (§4) load-bearing rather than an
+optimisation, and it is still unwritten. Two cheaper routes to weigh against it before
+disassembling the object graph, neither yet probed: **detour the GAF loader** and record every
+frame pointer as the game loads them at startup (`0x429700` opens the `cursors` GAF and parks
+its handle at `main+0x14903`, so the loader is reachable **[SOURCE
+[engine map](exe-reverse-engineering.html)]**), or find **the engine's own table of loaded
+texture anims**, if one exists — a face reaches its frames through a pointer at `+0x18` with an
+inline frame table at `+0x28` **[SOURCE `tagpu_render3do.c face_texframe`]**, which the loader
+must have resolved from a name somewhere.
+
 ### 2.6 Fog of war: one RGB rule after lighting
 The engine's grey band remaps each palette index to the palette entry nearest its own
 R+G+B mean (`*(TAProgram+0xCC)`, [shadows & cloaking](shadows-cloak.html) §1) and Classic
@@ -408,8 +447,12 @@ Why it fits:
 - **Aircraft and boats** — the viewer prototype of §2.2/§2.3 has not been built.
 - **Hires glb under Classic++** — lighting model, depth pass, shadow read-back, silhouette
   shadow off; deferred by §2.4.
-- **The lab's Classic++ lane is zoom 1 only**, so the zoom-out look of §2.9 has no lab
-  reference until the lane gains `uZoom`.
+- ~~**The lab's Classic++ lane is zoom 1 only**~~ — **stale, it zooms** since `7b45ee1`: all
+  three lab shaders take `uZoom`/`uZoomC` (`tascene-view.html` 467, 598, 647) and the lab draws
+  set them, and `shadowFrame` derives its bounds from the zoomed viewport extent, so the
+  zoom-out look of §2.9 *can* be looked at today. What the lab still cannot show is §2.7's
+  map-anchored texel grid: it rebuilds light-space bounds every frame, and crawl is only
+  visible in motion anyway, so that one wants a capture in the game.
 - **Nanoframe wireframe back edges** show through the unbuilt part — inherited from G13l,
   needs a stencil pass per nanoframe.
 - **Windows users** need the VC++ 2019 redistributable for onnxruntime.dll; under Wine the

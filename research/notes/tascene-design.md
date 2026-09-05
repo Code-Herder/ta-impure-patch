@@ -314,10 +314,12 @@ field shows the mapping. The headless shooter runs at ratio 1, so no baseline mo
 
 ## Gaps this design does not close  [state them, don't paper over them]
 
-- **Animated water.** The engine animates water by cycling palette entries at runtime;
-  `tagpu_terr.c` gets it free because it re-uploads the live palette every frame. Which indices
-  cycle, and at what rate, is **not established** — and is not in the TNT. Offline water will be
-  static until that is found (or until the live-snapshot path supplies the palette per frame).
+- ~~**Animated water.**~~ **Closed by measurement, 2026-09-05 — there is no animation to
+  reproduce.** This gap used to say the engine cycles palette entries for water and that offline
+  water would be static until we found which ones. Measured in the running game on two maps:
+  no viewport pixel and no palette byte changes over open water, at normal speed or at +10
+  ([terrain & depth](terrain-depth.html) §7). The lab's static water is **correct**, not a
+  limitation.
 - **No posed units.** Bind pose only. Anything about walking, aiming, recoil or sub-pixel motion
   cannot be judged in the lab as designed.
 - **No fog.** G13c proved the fog shape is the engine's view-anchored corner-mask grid and

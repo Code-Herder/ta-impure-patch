@@ -8,8 +8,9 @@
      - geometry: the same engine-posed PrimitiveStruct walk as render3do,
        positioned in VIEWPORT coordinates with the live viewport rect;
      - materials: the shared 8bpp atlas + engine SHD shade rows, lifted to RGB
-       through the live palette (256x1 RGBA texture, refreshed per frame —
-       palette cycling stays correct);
+       through the live palette (256x1 RGBA texture, refreshed per frame — not
+       because it cycles: it does NOT cycle in play, measured 2026-09-05, see
+       tagpu_terr.c. Re-reading it is free and survives whatever does write it);
      - occlusion: per-fragment test against the G12a scene-depth scaffold
        (painter's row keys; a tall feature in a nearer row hides the unit),
        plus a real GL depth buffer for self/inter-unit occlusion;
@@ -1500,7 +1501,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
     }
 
-    /* ---- live palette (cycles!) ---- */
+    /* ---- live palette (re-read per frame; it does NOT cycle -- terr.c) ---- */
     {
         const unsigned char* pal = (const unsigned char*)(ta + 0x143A7);
         static unsigned char rgba[256 * 4];
