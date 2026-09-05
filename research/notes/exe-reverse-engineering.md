@@ -761,7 +761,8 @@ position**, each live weapon's AoE (`w+0xD6`) and `attackrunlength` (`w+0xE0`) p
 `0x1F + i·0x1C` (`0x439879`), so this drawer does **not** carry `0x4390A0`'s third-slot quirk
 — the two disagree about the same question in the same build.
 
-Its labels are **formatted at draw time**, through the engine's own `sprintf 0x4E42B0`:
+Its labels are **formatted at draw time**, through the engine's own `sprintf 0x4E42B0`
+(called at `0x43989B` and `0x4398DE`):
 `"weapon %d - area of effect"` (`0x5051C4`, at label slot 0) and `"weapon %d - coverage"`
 (`0x5051AC`, slot 1), both taking the weapon INDEX 0..2, plus the literal `"attack length"`
 (`0x50519C`, slot 2) for `def[0x216]`. [BINARY-VERIFIED 2026-09-05]
@@ -830,9 +831,10 @@ belongs to the TARGET circle `0x4399F0`, which multiplies **only** its y radius 
 both drawers and drew every range circle 11 % flat until G13p; the projection maps world z to
 screen y 1:1, so a round circle in world space is a round circle on screen.
 
-**And it can divide by zero.** `0x438EE4` does `mov eax,0x10000; cdq; idiv ecx` with `ecx` =
-N, guarded only by `jl` against a *negative* N (`0x438EDE`). A radius of 1 gives
-`(int)(1 · 0.7854) == 0` and faults inside TA. Nothing in stock content is that small.
+**And it can divide by zero.** `mov eax,0x10000` at `0x438EE4`, `cdq`, then **`idiv ecx` at
+`0x438EEE`** with `ecx` = N, guarded only by `jl` against a *negative* N (`0x438EDE`). A radius
+of 1 gives `(int)(1 · 0.7854) == 0` and faults inside TA. Nothing in stock content is that
+small.
 
 **`TurnXLookup 0x4B70EF` is a SINE and `TurnZLookup 0x4B7123` a COSINE**, off one shared
 table at **`0x509F00`**: 512 `s16` entries, `8192 = 1.0` (`shrd …,0xD` after a `+0x1000`
@@ -887,7 +889,11 @@ font+off+1  ...   the glyph: rows x width bits, MSB first, packed ACROSS row bou
 
 Neither the measure nor the blit bounds the index against the table's length — a character
 past its end reads whatever follows — and both skip a code below `first` and a zero offset
-**without advancing the cursor**.
+**without advancing the cursor**. Those two are the ONLY characters the blit skips: `sub
+ebx,[ebp-0x8]` at **`0x4CCFAA`** with `jb 0x4CCF91` at `0x4CCFAD`, and `or ebx,ebx` at
+**`0x4CCFB9`** with `je 0x4CCF91` at `0x4CCFBB`. There is no upper bound anywhere, so anything
+calling `0x4CCF60` has to make its own measure agree with that character for character or the
+blit runs past the width the caller reserved.
 
 **`ctx` may be NULL**, in which case `0x4C14F0` locks the screen surface itself
 (`0x4C5E70(&localOFFSCREEN)`, `0x4C5FA0` to release) and draws into that.
@@ -895,8 +901,8 @@ past its end reads whatever follows — and both skip a code below `first` and a
 **It does not clip the string — it REJECTS it.** `0x4C6AE0` is
 `OFFSCREEN::GetClipRect(RECT* out)`, thiscall, `ret 4`: four dwords copied from `this+0x1C`.
 `0x4B6750(RECT* inner, RECT* outer)` is a **containment** test — eight compares, `0` unless
-every edge of `inner` lies inside `outer` — and `0x4C169E`/`0x4C1710` skip the blit entirely
-when it fails. So a string whose measured box `{x, y, x+width, y+font[0]}` is not wholly
+every edge of `inner` lies inside `outer` — called at `0x4C1697` (ctx == NULL arm) and
+`0x4C1709`, with `0x4C169E`/`0x4C1710` skipping the blit entirely when it fails. So a string whose measured box `{x, y, x+width, y+font[0]}` is not wholly
 inside the context's clip rect is not drawn short: it is not drawn at all. That is why the
 group digit and the `ShowRanges` labels vanished in the outer ring at zoom < 1, and why
 G13p ports them rather than widening anything.
@@ -915,7 +921,8 @@ and `0x4C14F0` fills the first two from **its OFFSCREEN's own pixel base and pit
 two fields of the locally locked surface at `0x4C16A0`. Arguments 7, 8 and 9 are
 `[globals+0x208]`, `[globals+0x20C]`, `[globals+0x210]`. **No OFFSCREEN reaches it, no clip
 rect, not even a width or a height** — it writes exactly `sum(widths) × font[0]` pixels at
-`base + (y − (s8)font[0x02]) · pitch + x` and it is the caller's business to have measured
+`base + (y − (s8)font[0x02]) · pitch + x` (`sub eax,ebx` at **`0x4CCF87`**, then an
+**unsigned** `mul` by the pitch at `0x4CCF89`) and it is the caller's business to have measured
 that. Which is the whole reason a port needs no font RE at all: hand it a buffer of yours
 and TA rasterises its own glyphs into it, at any size, with none of the `0x4CC650` surface
 bound that clips the line drawers.
