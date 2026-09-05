@@ -491,6 +491,17 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
         inner = gui[GUI_BLACK];
     }
 
+    /* NORMALISE FIRST, THEN INSET — the engine's order, and the two are not
+       interchangeable. `0x469E92`/`0x469EA0` swap the pairs and only then does
+       `0x469ECA..0x469EDD` inc/dec the SWAPPED values for the inner rect. Insetting
+       first and letting put_outline swap afterwards turns the inset into an
+       OUTSET whenever the stored rect runs right-to-left or bottom-to-top —
+       the black inner outline lands one pixel outside the white one. A band box
+       dragged up-left is exactly that case, and the G13n A/B only covered a
+       down-right drag. */
+    if (r < l) { int k = l; l = r; r = k; }
+    if (b < t) { int k = t; t = b; b = k; }
+
     /* the layer is drawn with the fog off, so this is only the world point the
        rect's own corner maps to — the same projection layer_quad uses */
     wx = (float)(l - v->vpL + v->eyeX);

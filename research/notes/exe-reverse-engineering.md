@@ -642,8 +642,10 @@ dxg = (x1-x0)*t/10        dzg = (z1-z0)*t/10        both /10 by the 0x66666667 m
 xg0 = x0+dxg   xg1 = x1-dxg   zg0 = z0+dzg   zg1 = z1-dzg
 ```
 
-At `t=0` the four animated lines sit exactly on the rect; at `t=10` they have crossed to one
-pixel inside the OPPOSITE edges. Colour pair from the ISSUING unit `node+0xE`'s
+At `t=0` the animated positions sit on the rect's own edges; at `t=10` they have swapped to
+the opposite ones exactly — `xg0 = x1` and `xg1 = x0` — so the colour-B lines land ON those
+edges and the colour-A pair, drawn one pixel outside each animated position, lands one pixel
+inside them. Colour pair from the ISSUING unit `node+0xE`'s
 `stateMask & 0x10` (`0x438D41..0x438D85`): selected → `main[0xDCE]`(gui 3) + `main[0xDD5]`
 (gui 0xA), not → `main[0xDCC]`(gui 1) + `main[0xDD4]`(gui 9).
 
@@ -714,8 +716,12 @@ chains `pos` and returns), frame `(gameTime / (2·period)) % nframes` of
 `cursor_ary[idx]` = `*(main+0x1487F + idx*4)` is alpha-blitted through
 `AlphaCompsteBuf2OFFScreen 0x4B8500` (`0x4399BB`). `pos ← p`.
 
-`0x439811..0x439948` is a `ShowRanges`-only debug limb: for descriptor cursor index 1 or 2 it
-labels each weapon's AoE (`w+0xD6`) and `attackrunlength` (`w+0xE0`) and `def[0x216]`.
+`0x439811..0x439948` is a `ShowRanges`-only limb, and it draws CIRCLES as well as labels: for
+descriptor cursor index 1 or 2 it emits, through `0x438EA0` and **at the resolved target
+position**, each live weapon's AoE (`w+0xD6`) and `attackrunlength` (`w+0xE0`) plus
+`def[0x216]`, in the same `gameTime & 1` flash colour. Its weapon-slot flags are the regular
+`0x1F + i·0x1C` (`0x439879`), so this drawer does **not** carry `0x4390A0`'s third-slot quirk
+— the two disagree about the same question in the same build.
 
 ### `0x4390A0` — the per-unit range circles
 
@@ -733,7 +739,10 @@ DrawRangeCircle(..., r,                       main[0xDD7], 0, 0)
 DrawRangeCircle(..., unit[0x0] ? (u16)def[0x218] : (s16)def[0x202], main[0xDD7], 0, 0)
 ```
 
-With `ShowRanges` set it draws the labelled set instead: `def[0x202]` sight, `+0x204` radar,
+With `ShowRanges` set it draws a labelled set of NINE instead, and the first of them is
+`def[0x208]` — the cloak radius — at `0x43921A`, gated **only on the value being non-zero and
+not on the unit's cloak flag**, which is the normal branch's rule and not this one. Then
+`def[0x202]` sight, `+0x204` radar,
 `+0x206` sonar, `+0x20A` radar jam, `+0x20C` sonar jam, `+0x212` builddistance, `+0x214`
 maneuver, `+0x218` kamikazedistance, all in `main[0xDD9]` (gui 0xE) with label strings at
 `0x505190/88/80/78/6C/60/50/44` and `0x503A0C`; then the three weapon ranges (`unit+0x10`,

@@ -2460,6 +2460,7 @@ int tagpu_native_unit_pos(const char* u, float* x, float* y, float* z)
 {
     const char* ta;
     const char* beg;
+    const char* end;
     size_t off;
     int ix, iz, iy;
     float fx, fz, fy;
@@ -2469,7 +2470,12 @@ int tagpu_native_unit_pos(const char* u, float* x, float* y, float* z)
     ta = *(const char* const*)TA_MAINPP;
     if (!ptr_ok(ta)) return 0;
     beg = *(const char* const*)(ta + OFF_BEGIN);
-    if (!ptr_ok(beg) || u < beg) return 0;
+    end = *(const char* const*)(ta + OFF_END);
+    /* BOTH ends, and the stride. Callers today pre-filter, but this is a
+       published accessor and its contract is "one unit's position" — a pointer
+       past the array's end, or one landing mid-slot, is not that. */
+    if (!ptr_ok(beg) || !ptr_ok(end) || u < beg || u >= end) return 0;
+    if ((size_t)(u - beg) % UNIT_STRIDE) return 0;
 
     ix = *(const int*)(u + U_XFIX);
     iz = *(const int*)(u + U_ZFIX);
@@ -2479,7 +2485,7 @@ int tagpu_native_unit_pos(const char* u, float* x, float* y, float* z)
     fy = (float)iy / 65536.0f;
 
     off = (size_t)(u - beg);
-    if (off % UNIT_STRIDE == 0) {
+    {
         size_t slot = off / UNIT_STRIDE;
         if (slot < 8192 && s_spx[slot].x == ix && s_spx[slot].z == iz &&
             s_spx[slot].y == iy)

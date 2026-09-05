@@ -105,9 +105,15 @@
 
    plus either def[0x218] (kamikazedistance) or def[0x202] (sight) — the engine
    picks between them on unit[0x0] being non-zero — both in gui[0xC]. With the
-   `ShowRanges` console toggle (main+0x391BF) it instead draws the labelled set
-   in gui[0xE], and the three weapon ranges flashing gui[4]/gui[0xC] on
-   gameTime&1.
+   `ShowRanges` console toggle (main+0x391BF) it instead draws a labelled set of
+   NINE in gui[0xE] — and the FIRST is def[0x208], the cloak radius, gated only
+   on the value being non-zero and NOT on the cloak flag, which is the normal
+   branch's rule and not this one — then the three weapon ranges flashing
+   gui[4]/gui[0xC] on gameTime&1.
+
+   `0x439740` has a ShowRanges limb of its own, and it is circles too, not only
+   labels: each live weapon's AoE and attackrunlength plus def[0x216], at the
+   order target. Both limbs are ported; only their TEXT is not.
 
    Every one of those circles goes through `DrawRangeCircle 0x438EA0`, which
    FOLLOWS THE TERRAIN: one segment per 8 world units of circumference
@@ -127,10 +133,12 @@
    - Unit-anchored positions ride tagpu_native_unit_pos(), the sub-pixel
      interpolated sample: a crisp circle centred on a walking unit would
      otherwise step once per sim tick against a body that slides.
-   - ShowRanges' text labels are NOT drawn. The circles are; the labels are
-     text, and text is the L2 half of this port (`0x4CCF60` into a buffer of
-     ours). Group digits are likewise still engine-drawn and still clipped in
-     the ring.
+   - ShowRanges' text LABELS are not drawn. Every circle of both limbs is —
+     including the cloak radius that opens the set and the sprite drawer's own
+     AoE ring, each of which was missed on the first pass and caught by the
+     landing review. The labels are text, and text is the L2 half of this port
+     (`0x4CCF60` into a buffer of ours). Group digits are likewise still
+     engine-drawn and still clipped in the ring.
 
    Read-only over the sim with ONE deliberate exception, on the game thread and
    at exactly the instant the engine did it: the target sprite's last-seen
@@ -162,6 +170,7 @@
 #define OFF_UNITS     0x14357        /* unit array base, stride 0x118         */
 #define OFF_UNITEND   0x1435B        /* one past its last slot                */
 #define OFF_UNITDEFS  0x1439B        /* UnitDef array base, stride 0x249      */
+#define OFF_UDEFCOUNT 0x1438F        /* u32 UNITINFOCount — the array's length */
 #define OFF_PLAYERS   0x1B63         /* player array base, stride 0x14B       */
 #define OFF_WATCHED   0x2A42         /* u8 watched player id                  */
 #define OFF_HOVERED   0x2CBA         /* u16 unit under the mouse cursor       */
@@ -203,10 +212,12 @@
 #define UD_BUILDDIST  0x212
 #define UD_MANEUVER   0x214
 #define UD_KAMIDIST   0x218
+#define UD_ATTACKRUN  0x216          /* the def's own run length (ShowRanges) */
 #define UD_EXPLODEAS  0x220          /* WeaponDef*                            */
 #define UD_TYPEMASK0  0x241          /* bit28 = kamikaze                      */
 #define W_AOE         0xD6           /* u16 area of effect                    */
 #define W_RANGE       0xDC           /* the live weapon object's range        */
+#define W_ATTACKRUN   0xE0           /* attackrunlength (ShowRanges only)     */
 #define N_TYPE        0x04
 #define N_OWNER       0x0E           /* issuing unit                          */
 #define N_TARGET      0x16           /* target unit, 0 = ground target        */
@@ -274,18 +285,29 @@ int tagpu_order_armed(unsigned frame_counter)
     if (s_armed >= 0 && frame_counter - s_armCheck < 30) return s_armed > 0;
     s_armCheck = frame_counter;
     was = s_armed;
-    s_armed = 0;
+    /* `s_armed` is NOT cleared for the length of the file read. It used to be,
+       and that opened a window — tens of microseconds, every 30 frames — in
+       which the game thread's snapshot declined (not armed) while `g_orders`
+       was still set, so `mark_orders` let the ENGINE's driver run with
+       `prefog_wanted` closed against it: one block of engine markers landing in
+       its own frame, i.e. a ghost at the unzoomed position at any zoom but 1.
+       Parse into locals and commit at the end instead. */
     h = CreateFileA("tagpu_order.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (h == INVALID_HANDLE_VALUE) {
+        s_armed = 0;
         tagpu_markown_set_orders(0);
         if (was > 0) flog("order: disarmed");
         return 0;
     }
     {
         char buf[128]; DWORD n = 0;
-        s_log = 0; s_passive = 0; s_trace = 0;
-        s_build = 1; s_dots = 1; s_circle = 1; s_sprite = 1; s_ranges = 1;
+        /* every token into a LOCAL, committed together below — the game thread
+           reads s_passive/s_trace through tagpu_order_snapshot's return value,
+           and a reset-then-parse would hand it "not passive" for the length of
+           a file read */
+        int log_ = 0, passive_ = 0, trace_ = 0;
+        int build_ = 1, dots_ = 1, circle_ = 1, sprite_ = 1, ranges_ = 1;
         if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
             char* p = buf;
             buf[n] = 0;
@@ -297,18 +319,21 @@ int tagpu_order_armed(unsigned frame_counter)
                 while (*q && *q > ' ') q++;
                 last = (*q == 0);
                 *q = 0;
-                if (!lstrcmpiA(p, "log")) s_log = 1;
-                else if (!lstrcmpiA(p, "passive")) s_passive = 1;
-                else if (!lstrcmpiA(p, "trace")) { s_trace = 1; s_log = 1; }
-                else if (!lstrcmpiA(p, "nobuild")) s_build = 0;
-                else if (!lstrcmpiA(p, "nodots")) s_dots = 0;
-                else if (!lstrcmpiA(p, "nocircle")) s_circle = 0;
-                else if (!lstrcmpiA(p, "nosprite")) s_sprite = 0;
-                else if (!lstrcmpiA(p, "noranges")) s_ranges = 0;
+                if (!lstrcmpiA(p, "log")) log_ = 1;
+                else if (!lstrcmpiA(p, "passive")) passive_ = 1;
+                else if (!lstrcmpiA(p, "trace")) { trace_ = 1; log_ = 1; }
+                else if (!lstrcmpiA(p, "nobuild")) build_ = 0;
+                else if (!lstrcmpiA(p, "nodots")) dots_ = 0;
+                else if (!lstrcmpiA(p, "nocircle")) circle_ = 0;
+                else if (!lstrcmpiA(p, "nosprite")) sprite_ = 0;
+                else if (!lstrcmpiA(p, "noranges")) ranges_ = 0;
                 if (last) break;
                 p = q + 1;
             }
         }
+        s_log = log_; s_passive = passive_; s_trace = trace_;
+        s_build = build_; s_dots = dots_; s_circle = circle_;
+        s_sprite = sprite_; s_ranges = ranges_;
     }
     CloseHandle(h);
     s_armed = 1;
@@ -375,9 +400,17 @@ typedef struct ORDARENA {
    show says so by publishing an EMPTY arena, not by blanking the live one. */
 static ORDARENA     g_arena[2];
 static volatile int g_pub = -1;
+/* Bumped on every publication AND every clear, and never reused. A SLOT INDEX
+   CANNOT BE THE READER'S GUARD: it takes two values, so two publications during
+   one read return it to where it started and the reader accepts a copy the
+   writer was overwriting — and the clear/publish pair does it in ONE step,
+   because `arena_clear` leaves `g_pub` at -1 and the next snapshot then picks
+   slot 0 again, which is the slot a reader that sampled 0 is copying. A
+   monotonic counter has no such value to return to. */
+static volatile unsigned g_gen;
 static int          g_ran;            /* a snapshot ran in this engine block  */
 
-static void arena_clear(void) { g_pub = -1; }
+static void arena_clear(void) { g_pub = -1; g_gen++; }
 
 /* ---- game thread: the snapshot --------------------------------------- */
 
@@ -479,6 +512,11 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* unit,
 
             chain++;
             (*budget)--;
+            /* the caps are drops too: a queue longer than MAXCHAIN, or a
+               snapshot that runs out of MAXWALK, loses markers exactly as the
+               MAXORD cap does, and a counter that only saw one of the three
+               reported a clean frame while markers went missing */
+            if (chain >= MAXCHAIN || *budget <= 0) A->dropped++;
             type = *(unsigned char*)(node + N_TYPE);
             d = desc_entry(type);
             mask = d ? (*(const unsigned*)(d + DESC_MASK) & callerMask) : 0u;
@@ -511,12 +549,18 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* unit,
             /* bit 0 — the build site. Nothing at all without a build target
                type, chains pos to the node's own target when there is one.
                The DEF POINTER is resolved here rather than on the present
-               thread: `btype * 0x249` off a base is an unbounded multiply, and
-               the game thread is where the type is known good. */
+               thread, and BOUNDED AGAINST THE ARRAY'S OWN LENGTH: `btype` is a
+               u16 the engine indexes with no check at all, so `btype*0x249` off
+               a base reaches ~38 MB past it, and `ptr_ok` alone would let a
+               corrupt or torn value through to a dereference on the present
+               thread. `main+0x1438F` is the count (`UNITINFOCount`, the same
+               field tagpu_cat.c walks the array with), so the bound is two
+               loads — the price desc_entry already pays for the same reason. */
             if (mask & 0x01) {
                 if (r->btype) {
                     const char* base = *(const char* const*)(ta + OFF_UNITDEFS);
-                    if (ptr_ok(base)) {
+                    unsigned ndef = *(const unsigned*)(ta + OFF_UDEFCOUNT);
+                    if (ptr_ok(base) && ndef <= 16384u && (unsigned)r->btype < ndef) {
                         const char* d2 = base + (size_t)r->btype * UDEF_STRIDE;
                         if (ptr_ok(d2)) r->bdef = d2;
                     }
@@ -639,6 +683,7 @@ int tagpu_order_snapshot(void* ctx, void* view)
     }
 
     g_pub = slot;                 /* moved last: the arena is whole */
+    g_gen++;                      /* ...and the generation last of all */
     /* passive and trace both leave the draw with the engine; everything else
        has a complete publication and may skip it */
     return !s_passive && !s_trace;
@@ -911,7 +956,7 @@ static void draw_build(const ORDREC* r, int gameTime)
    own ink. Opaque, deliberately: TA's "alpha" is a palette-pair lookup rather
    than alpha, what this pass already ships is opaque, and a waypoint is
    information — translucency costs legibility. */
-static void draw_sprite(const ORDREC* r, int gameTime)
+static void draw_sprite(const ORDREC* r, int gameTime, int showRanges)
 {
     const char* ta = s_v->ta;
     const char* seq;
@@ -920,8 +965,45 @@ static void draw_sprite(const ORDREC* r, int gameTime)
     int nfr, period, frame, ink;
     double a, outer, inner;
 
-    if (!s_sprite || !r->cursor) return;
-    if (r->cursor >= 0x15) return;
+    /* the descriptor's cursor index gates the whole drawer, ShowRanges limb
+       included — `0x4397F9` returns before `0x439811` ever reads the toggle */
+    if (!s_sprite || !r->cursor || r->cursor >= 0x15) return;
+
+    rec_pos(r->endU, r->ex, r->ey, r->ez, &wx, &wy, &wz);
+    project(wx, wy, wz, &cx, &cy);
+
+    /* `0x439740` has a ShowRanges limb of its own (`0x439811..0x439948`), and it
+       is circles, not labels: with the toggle on and the descriptor's cursor
+       index 1 or 2 it draws each live weapon's AoE (`w+0xD6`) and
+       `attackrunlength` (`w+0xE0`) plus `def+0x216`, AT THE ORDER TARGET, in the
+       same gameTime&1 flash colour the range drawer uses. Note the weapon-slot
+       flags here are the regular `0x1F + i*0x1C` — this drawer does NOT carry
+       `0x4390A0`'s third-slot quirk. */
+    if (showRanges && (r->cursor == 1 || r->cursor == 2)) {
+        const char* u = sane_unit(r->owner);
+        int flash = s_gui[(gameTime & 1) ? GUI_FLASH : GUI_RED];
+        if (u) {
+            const char* def = *(const char* const*)(u + U_TYPE);
+            int i, v;
+            for (i = 0; i < 3; i++) {
+                const char* w;
+                if (!(*(const unsigned char*)(u + U_WEAPFLAGS + i * 0x1C) & 2)) continue;
+                w = *(const char* const*)(u + U_WEAP0 + i * 0x1C);
+                if (!ptr_ok(w)) continue;
+                v = *(const unsigned short*)(w + W_AOE);
+                if (v) oellipse(wx, wy, wz, (double)v, (double)v * CIRCLE_SQUASH, flash, 1);
+                v = *(const int*)(w + W_ATTACKRUN);
+                if (v) oellipse(wx, wy, wz, (double)v, (double)v * CIRCLE_SQUASH, flash, 1);
+            }
+            if (ptr_ok(def)) {
+                v = *(const unsigned short*)(def + UD_ATTACKRUN);
+                if (v) oellipse(wx, wy, wz, (double)v, (double)v * CIRCLE_SQUASH, flash, 1);
+            }
+        }
+    }
+
+    /* the sprite itself, and only now: the engine reaches its own sequence
+       lookup at `0x439952`, after the limb above */
     seq = *(const char* const*)(ta + OFF_CURSORARY + (size_t)r->cursor * 4);
     if (!ptr_ok(seq)) return;
     nfr = *(const unsigned short*)seq;
@@ -929,9 +1011,6 @@ static void draw_sprite(const ORDREC* r, int gameTime)
     if (nfr <= 0) return;
     if (period <= 0) period = 1;
     frame = (int)(((unsigned)gameTime / (unsigned)(2 * period)) % (unsigned)nfr);
-
-    rec_pos(r->endU, r->ex, r->ey, r->ez, &wx, &wy, &wz);
-    project(wx, wy, wz, &cx, &cy);
     if (!on_screen(cx, cy, 32.0f)) return;
 
     ink = seq_ink(seq, s_gui[GUI_WHITE]);
@@ -1045,13 +1124,30 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
     }
 
     /* ShowRanges: the labelled set, circles only — the labels are text and
-       text is the L2 half of this port */
+       text is the L2 half of this port.
+
+       `UD_CLOAKDIST` IS IN THIS SET AND IS DRAWN FIRST, gated only on the value
+       being non-zero — NOT on the unit's cloak flag, which is the normal path's
+       rule and not this one (`0x43921A`, ahead of the sight circle at
+       `0x43924A`). Leaving it out cost a circle the engine draws whenever
+       ShowRanges is on and the unit is cloakable at all. */
     {
-        static const int off[8] = { UD_SIGHT, UD_RADAR, UD_SONAR, UD_RJAM,
-                                    UD_SJAM, UD_BUILDDIST, UD_MANEUVER, UD_KAMIDIST };
+        /* The engine's own reads are MIXED, and the table carries which is
+           which: `movsx` for the cloak/sight/radar/sonar/jammer group
+           (`0x439229`, `0x439267`, `0x4392A1`, `0x4392DB`, `0x439315`,
+           `0x43934F`) and `and 0xffff` for builddistance, maneuver and
+           kamikazedistance (`0x43937A`, `0x4393B7`, `0x439404`). Inert for any
+           value under 32768, which all of them are in stock content — recorded
+           because a blanket cast either way is a guess, and this one is free. */
+        static const struct { int off; int sgn; } rng[9] = {
+            { UD_CLOAKDIST, 1 }, { UD_SIGHT,    1 }, { UD_RADAR,     1 },
+            { UD_SONAR,     1 }, { UD_RJAM,     1 }, { UD_SJAM,      1 },
+            { UD_BUILDDIST, 0 }, { UD_MANEUVER, 0 }, { UD_KAMIDIST,  0 },
+        };
         int i;
-        for (i = 0; i < 8; i++) {
-            int v = *(const unsigned short*)(def + off[i]);
+        for (i = 0; i < 9; i++) {
+            int v = rng[i].sgn ? (int)*(const short*)(def + rng[i].off)
+                               : (int)*(const unsigned short*)(def + rng[i].off);
             if (v) range_circle(u, ux, uy, uz, (double)v, s_gui[GUI_YELLOW]);
         }
     }
@@ -1106,25 +1202,28 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
        memcpy of the records actually in use, which is microseconds; everything
        after it reads storage nobody else can touch.
 
-       The re-read afterwards is what makes the copy trustworthy rather than
-       merely fast: `g_pub` moving during it means the copy may straddle two
+       The generation re-read afterwards is what makes the copy trustworthy
+       rather than merely fast: `g_gen` moving means the copy may straddle two
        publications, so it is taken again. Once, not in a loop — a second miss
        is drawn anyway, because every field in a record is a plain value, every
-       unit pointer goes through sane_unit() and every primitive is culled
-       against the viewport, so the worst a straddled copy can produce is one
-       frame of a marker in the wrong place. */
-    A = &g_arena[slot];
+       unit pointer goes through sane_unit(), `bdef` is bounded against the
+       UnitDef array, and every primitive is culled against the viewport, so the
+       worst a straddled copy can produce is one frame of a marker in the wrong
+       place. */
     for (i = 0; i < 2; i++) {
+        /* Sample the generation BEFORE the slot, so a publication that lands
+           between the two is seen as well as one that lands during the copy. */
+        unsigned gen = g_gen;
+        slot = g_pub;
+        if (slot != 0 && slot != 1) return 0;
+        A = &g_arena[slot];
         n = A->n;
         gameTime = A->gameTime;
         showRanges = A->showRanges;
         if (n < 0) n = 0;
         if (n > MAXORD) n = MAXORD;
         if (n) memcpy(s_rec, A->rec, (size_t)n * sizeof s_rec[0]);
-        if (g_pub == slot) break;
-        slot = g_pub;
-        if (slot != 0 && slot != 1) return 0;
-        A = &g_arena[slot];
+        if (g_gen == gen) break;      /* nothing was published under us */
     }
     if (n <= 0) return 0;
 
@@ -1135,9 +1234,9 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
     for (i = 0; i < n; i++) {
         const ORDREC* r = &s_rec[i];
         if (r->mask & 0x01) draw_build(r, gameTime);
-        if (r->mask & 0x02) { draw_sprite(r, gameTime); draw_dots(r, gameTime); }
+        if (r->mask & 0x02) { draw_sprite(r, gameTime, showRanges); draw_dots(r, gameTime); }
         if (r->mask & 0x04) draw_circle(r);
-        if (r->mask & 0x08) draw_sprite(r, gameTime);
+        if (r->mask & 0x08) draw_sprite(r, gameTime, showRanges);
         if (r->mask & 0x10) draw_ranges(r, gameTime, showRanges);
         s_nrec++;
     }

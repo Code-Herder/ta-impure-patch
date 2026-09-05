@@ -272,10 +272,13 @@ and the ten-tick animation **SWEEPS THE FOUR EDGES INWARD — it does not grow a
 rect** [CORRECTED 2026-09-04 against `0x438CB7..0x438D3D`; this said "an inner rect that
 *grows*"]. With `t = gameTime(main+0x38A47) − node->issueTime` clamped
 `((unsigned)t >= 10) ? 10 : t` — **unsigned, so a negative age reads as FINISHED rather than
-as not-started** — and `dxg = (x1−x0)·t/10`, `dzg = (z1−z0)·t/10`, the four animated lines
-sit exactly on the rect at `t=0` and have crossed to one pixel inside the *opposite* edges
-at `t=10`. Four are drawn in colour A one pixel outside those positions and spanning one
-pixel past the corners, four in colour B exactly on them. Colour pair by whether the issuing unit
+as not-started** — and `dxg = (x1−x0)·t/10`, `dzg = (z1−z0)·t/10`, the animated positions
+`xg0 = x0+dxg` and `xg1 = x1−dxg`
+sit on the rect's own edges at `t=0` and have swapped to the *opposite* edges exactly
+(`xg0 = x1`, `xg1 = x0`) at `t=10`. Four lines are drawn in colour A one pixel outside those
+positions and spanning one pixel past the corners, four in colour B exactly on them — so at
+`t=10` it is the colour-B pair that lands on the opposite edges and the colour-A pair one
+pixel inside them. Colour pair by whether the issuing unit
 (`node+0xE`) is currently selected: selected → GUI[3] + GUI[0xA]; not →
 GUI[1] + GUI[9]. Chains `pos` to the site.
 
