@@ -1198,7 +1198,7 @@ def cmd_serve(args):
     if not (pack / "scene.json").exists():
         die(f"{pack} has no scene.json (run `tascene build` first)")
     _stage_viewer(pack)
-    server = ta3do.Viewer(pack, port=args.port)
+    server = ta3do.Viewer(pack, port=args.port, host=args.host)
     url = f"{server.base}/{VIEWER.name}"
     watching = "" if args.no_reload else "  (live: edit the viewer and the page reloads)"
     print(f"serving {pack} at {url}  (ctrl-c to stop){watching}", flush=True)
@@ -1475,6 +1475,10 @@ def main(argv=None):
     s = sub.add_parser("serve", help="serve a pack for interactive viewing")
     s.add_argument("pack")
     s.add_argument("--port", type=int, default=0)
+    s.add_argument("--host", default="127.0.0.1",
+                   help="interface to bind (default loopback). Name ONE interface "
+                        "to reach the page from another machine — a Tailscale "
+                        "100.x address, say — rather than 0.0.0.0")
     s.add_argument("--no-reload", action="store_true",
                    help="do not re-stage the viewer on edit, and do not let the "
                         "page reload itself (the pre-live-reload behaviour)")
