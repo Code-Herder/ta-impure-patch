@@ -270,16 +270,39 @@ on a one-way state machine (`IDLE → ARMED → APPLYING → DONE`) with an inte
 hand-off, not on a call count — and "one tick" in this design means **one visit**, which
 is the stronger guarantee.
 
-### The coordinate asymmetry
+### There is no coordinate asymmetry — creating and ordering speak the same language
 
-Creating and ordering do not speak the same language, and the two vendored corpora
-disagree about the second one. `TA_MemUnits.pas` reads the order position's *high word*,
-implying 16.16; TADR's C++ `ConstructionKickout` feeds `ORDERS_NewMainOrder2Unit` the
-unit's whole-unit `XPos`/`YPos` words and divides `orders->Pos.X` by 16 to get a tile.
-Phase C settled it by measurement rather than by choosing a source: the applier reads
-`UnitOrders->Pos` (`+0x22`) back after issuing the first order and reports both numbers.
-Live, `passed [3800, 1200, 84]` came back as `stored [3800, 1200, 84]` — **whole world
-units, screen convention, stored verbatim**. TADR's C++ reading is correct.
+**Corrected 2026-09-04. What this section said before was wrong**, and every scenario's orders
+were wrong with it: `ORDERS_NewMainOrder2Unit` takes **three 16.16 dwords in the 3-D convention
+`{x, altitude, depth}`**, exactly as `UNITS_CreateUnit` does. `TA_MemUnits.pas`, which reads
+the order position's high word, was right; TADR's C++ `ConstructionKickout` reading was not.
+
+**Why the read-back probe could not catch it.** The order constructor `0x43A0C0` copies the
+caller's three dwords into `UnitOrders->Pos` verbatim (`0x43A164..0x43A177`, no scaling and no
+reordering), so `passed == stored` is a tautology and proves only that nothing mangled the
+value on the way. The old reading — `passed [3800, 1200, 84]` back as `stored [3800, 1200,
+84]` — is exactly that tautology, and it was recorded here as if it had settled the units.
+
+**What actually settles them** is the duplicate-order test inside `0x43AFC0`
+(`0x43B006..0x43B029`): `sub ebp,[esi+0x22]; add ebp,0x100000; cmp ebp,0x200000` — a tolerance
+of ±0x100000, which is ±16.0 in 16.16, **one map cell**. In whole world units that would be a
+tolerance of ±1 048 576, wider than any map. The same block compares components 0 and 2 and
+never component 1, which is what fixes the component ORDER too: 0 and 2 are the ground plane,
+1 is the altitude. Full derivation:
+[exe-reverse-engineering](exe-reverse-engineering.html) §"The order module".
+
+**Measured live 2026-09-04** on Two Continents: with whole world units `1900 >> 16 == 0`, so
+every ordered unit set off for the map origin — a Peewee told to `move` to `(1900, 1450)`
+walked north-west, and five aircraft told to fly east ended stacked in the north-west corner,
+one reading world `(1, 0)`. With the shift the Peewee stops at `1902` and every aircraft
+reaches `4200`.
+
+**What this means for the fixtures that already existed.** `200v200.json` and the
+`warlordex-*` files have never had their `attack` orders land where the file says: their units
+advanced toward the origin and fought whatever they met on the way, which looks enough like the
+intended behaviour that nobody caught it for a month. Re-read any conclusion drawn from those
+runs about *where* a fight happened. `patrol` had looked separately broken — it was the same
+bug, and it loops its lane now.
 
 **Unit fields written after creation** (`vendor/TADR/src/DDraw/tamem.h:986-1103`):
 
@@ -553,8 +576,14 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   timeout. There is now a 600-frame watchdog in the present path that gives up and says
   *"the game's main loop never reached the apply point — apply needs a running game, not
   the menus, the mission-end screen or a paused one"*.
-- **Order positions are whole world units in the screen convention**, stored verbatim —
-  measured, not chosen between two disagreeing sources. See *The coordinate asymmetry*.
+- **Order positions are 16.16 in the 3-D convention `{x, altitude, depth}`** — the same
+  language `UNITS_CreateUnit` speaks. This line used to say the opposite ("whole world units
+  in the screen convention, stored verbatim — measured"), and the measurement behind it was a
+  tautology: the constructor copies the caller's dwords unchanged, so a read-back can never
+  check the scale. Corrected 2026-09-04 off the duplicate-order tolerance; see *There is no
+  coordinate asymmetry*. **Lesson worth more than the fix**: a probe that reads back what it
+  just wrote tests the plumbing, not the units — the check has to be whether the unit went
+  where the file said.
 - **The camera must subtract half the target's altitude.** `sy = wy - altitude/2 - eyeY
   + 32`, so a target on 90-unit ground sat 45 px above the middle of the window until the
   inverse carried the height term. With it, `roster` reports the target at exactly

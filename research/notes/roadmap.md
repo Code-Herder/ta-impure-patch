@@ -48,7 +48,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
 | Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04), **on the GPU** (G14b, 2026-09-04) | `tagpu_restore.c` runs the unditherer's full model through ONNX Runtime 1.20.1 x86 **inside the DLL**, once per map on a worker thread, cached under `gamedir/tagpu_cache`; `tagpu_terr.c` uploads a second atlas and samples it under `tagpu_classicpp.on`. The provider is DirectML where it loads (Wine needs vkd3d-proton for the D3D12 under it), the CPU where it does not. The restorer engine decision for [Classic and Classic++](renderers.html) §2.5 | Two Continents: runtime 11–13 ms, session 21 ms CPU / 1.0–1.9 s DirectML, 5062 tiles cold in **1.83 s on DirectML against 20.8 s on 4 CPU threads — 11×** (standalone, model alone, 34–42×) / 24–29 ms cached; the two providers' atlases differ in 61 of 20.7 M bytes, all by 1 level; Classic baselines unchanged; **two 15-min 200v200 soaks, runtime then D3D12 device resident: alive, no GL or restore errors** |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
-| Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain |
+| Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k; one blend per silhouette pixel since G13n | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain; **aircraft** measured against the engine on `shadow-air` — offset `(+5, (alt−ground)/2)` on four airframes, darkening 0.487 engine vs 0.25 ours before the stencil and 0.44–0.52 after |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
 | Smoke, fire, wakes, nanolathe | ● native (G12f) | one detour on the layer walker `0x471F90` | A/B `sfx-strait`, engine surface empty of particles |
 | Features (trees, rocks, splats, wreckage) | ● native (G13a) | `featown`: one detour on the leaf `0x46A610` | occlusion parity vs the engine's own draw, engine surface empty of features, `feat-forest` |
@@ -162,6 +162,59 @@ same job restores them next, and they carry colour keys, so the inpaint stand-in
 them. The first restore is visible for 22 s as indexed terrain; a pre-warm or a loading hook
 would hide it. `tacli arm` on a not-yet-created instance failed on the gamedir and was fixed in
 passing. The GL context request is still 3.2 while the shaders are 330 (renderers §3).
+
+**G13n — aircraft shadows, and the two things measuring them found.** No bug report; the
+aircraft prototype `renderers.md` §2.2 had been waiting for. The engine's rule for a flying unit
+was already written down from disassembly and is now measured in play
+([shadows & cloak](shadows-cloak.html) §4b): the shadow is the plane's own silhouette, `+5 px`
+in x and **`(altitude − ground) / 2` px straight DOWN** — it sits on the ground under the plane
+and separates downward as altitude grows, rather than leaning up-right the way a parallel light
+would put it. Four airframes matched the prediction to the pixel; the blend is one 50 % pass
+(median 0.487 of the bare ground); it darkens ground units and trees, not just terrain; over
+water it lands on the seabed, unclipped and *further* below the plane, because a lower receiver
+draws lower.
+
+**The measurement needed two fixes before it could be made at all.**
+
+*The scenario applier's orders had never worked.* `ORDERS_NewMainOrder2Unit` takes three 16.16
+dwords in `{x, altitude, depth}` — the same convention `CreateUnit` takes — and we passed whole
+world units in `{x, depth, altitude}`, so `1900 >> 16 == 0` and **every ordered unit in every
+fixture set off for the map origin**. The read-back probe that had "settled" the convention was
+a tautology: the order constructor `0x43A0C0` copies the caller's dwords verbatim, so
+`passed == stored` tests the plumbing and not the units. What settles it is the duplicate-order
+tolerance at `0x43B006` — `±0x100000`, which is `±16.0` in 16.16, one map cell — and the same
+block compares components 0 and 2 and never 1, which fixes the ORDER as well as the scale.
+Consequence worth carrying: `200v200` and the `warlordex-*` fixtures never had their `attack`
+orders land where the file says, and any conclusion about *where* those fights happened should
+be re-read.
+
+*Our silhouette shadow was twice as dark as the engine's.* It re-used the body's 3-D geometry
+with depth writes off and the shader blended 50 % **per fragment**, so every surface the view ray
+crossed darkened the ground again. Aircraft made it unmissable — from above a plane is a
+two-sided shell over its whole area — and ours read 0.25 where the engine reads 0.49, bimodal at
+0.25/0.50 with a 0.125 tail. Both FBOs now carry a stencil and each silhouette is marked with
+colour writes off and then blended with the op that zeroes the mark, so a pixel is darkened once
+however many surfaces cover it, while two *different* units' shadows still stack as the engine's
+separate blits do. The four Peewees on the fixture are bit-identical before and after — they were
+already one layer — and the Commander moved by 175 px.
+
+**The lab got the same shadow, and aircraft.** `tascene`'s Classic lane claimed the engine's
+shadow rules and drew none at all; it now draws the silhouette under the same stencil scheme,
+gated off the FBI (`BMcode`, then `noshadow`/`canhover`/`floater`) read at build time. Units
+carry an altitude — the FBI's `CruiseAlt` — so §2.2's question could finally be looked at:
+at the 40° shadow sun a Thunder's shadow lands 211 px right and 91 px *up* of it and two of five
+went off the frame. `airshadow=` now picks `len` (shadowlen's rule extended to the altitude),
+`physical` or `drop`. Fixture `scenarios/tascene-air.json`; the Classic baselines were re-shot,
+and `unitshadow=0` reproduces both old md5s byte for byte, which is the proof that the shadow is
+the only thing that moved.
+
+**What this gate did not close.** The map edge was never tested, in the game or the lab. No still
+was caught with a shadow lying across a fireball — the layering rests on the call order in
+`DrawGameScreen` (re-verified by disassembly) and on `0x4B8500` having no depth test, not on a
+photograph. **Structures still cast no shadow in the lab** — the engine gives them the cached
+slant projection and that lane does not draw it. Our aircraft *bodies* read noticeably whiter
+than the engine's; not investigated. And the `airshadow` default is provisional: §2.2's rule is
+that the viewer decides, and the viewer has now shown it but nobody has chosen.
 
 **G13m — the cursor stopped skipping to the side bar, and the engine got its own mouse point
 back.** Reported from play: *"with a unit selected, zoomed fully out, sweep the mouse right to

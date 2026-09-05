@@ -328,6 +328,55 @@ i.e. composited above projectiles — engine quirk, reproduce or knowingly fix.)
 
 ---
 
+## 4b. Aircraft, measured
+
+[MEASURED 2026-09-04, this project. Fixture `scenarios/shadow-air.json` on Two Continents,
+engine pixels only — no passes armed — with `glshot`. Offsets by cross-correlating each unit's
+body mask against its shadow mask inside one frame, which is immune to the roster lagging the
+capture; altitude from `roster --json`, ground from the feature-map height byte read with
+`tacli peek`.]
+
+Everything §3 predicts for an aircraft holds, and the numbers are worth having because §2.2 of
+[renderers](renderers.html) had to choose a Classic++ behaviour against them.
+
+- **It is the silhouette, not a projection.** The shadow is the plane's own sprite shape.
+- **Offset `+5 px` in x and `(altitude − ground) / 2` px straight DOWN the screen.** The
+  confident matches (mask overlap > 300 px): ARMBRAWL alt 192 / ground 84 → measured
+  `(+5, 54)` against 54.0 predicted; ARMPEEP 312 / 84 → `(+5, 114)` against 114.0; ARMFIG
+  240 / 84 → `(+6, 78)` against 78.0; ARMATLAS 181 / 84 → `(−1, 47)` against 48.5. So the
+  shadow sits on the ground under the plane and **separates downward as altitude grows** — it
+  does not lean up-right the way a 40° parallel light would put it. Register-level derivation
+  of the two Y values: [exe-reverse-engineering](exe-reverse-engineering.html)
+  §"The unit blit's shadow branches", `0x459228..0x45927A`.
+- **One 50 % blend.** Luminance ratio against the bare ground: median **0.487**, and the
+  histogram is a single sharp mode at 0.44–0.52 with a shoulder to 0.60 — the shoulder is the
+  ALP table snapping to the nearest palette entry, not a second blend. Per channel the medians
+  are R 0.55, G 0.48, B 0.21: the halving happens in **palette space** and then snaps, so it is
+  not a clean per-channel halving in RGB.
+- **It darkens units and features, not just terrain.** Watching the four Peewees' own pixels
+  across a 40-frame burst, one dropped to **0.532** of its baseline on the two frames a
+  fighter's shadow crossed it, and the tree behind it darkened with it. Panel:
+  the shadow lies across both.
+- **Over water it lands on the SEABED.** The height byte there is below sea level (51–68 on the
+  fixture's northern lanes against sea level 75), so the shadow is drawn *further* below the
+  plane than on land — a lower receiver is a lower screen row — as an unclipped plane-shaped
+  patch on the sea. The completed-unit waterline clip never fires for an aircraft because it is
+  gated on `seaLevel > altitude`.
+- **Aircraft LAND unless they are given an order**, which is a fixture fact that cost an hour:
+  a plane spawned with `height` set simply sinks to the ground and sits there at
+  `(state&3) != 2`. Every lane in the fixture is a `patrol` for that reason.
+- **CruiseAlt is the still-frame model.** The FBI's own value — ARMBRAWL 60, ARMATLAS 90,
+  ARMFIG 110, ARMPEEP 180, ARMTHUND 200 — plus the ground under the unit lands within the
+  band the live altitudes bob through (a Freedom Fighter reads 198–240 over ground 67–84).
+
+**Not closed.** The map edge was not tested. And no still was ever caught with a shadow lying
+across a fireball: the layering in §4 rests on the call order in `DrawGameScreen`, re-verified
+by disassembly 2026-09-04 (features `0x46A610`, site A `0x469A00`, weapons `0x469B22`,
+explosions `0x469B2C`, then site B `0x469BA3`) and on `0x4B8500` having no depth test — not on
+a photograph. Four staged attempts to line the two up (bombers on a high-HP building, a 20v20
+firefight, gunships hovering over it, damaged buildings that turned out not to smoke) all
+failed to coincide.
+
 ## 5. Cloak — end-to-end
 
 - **`unit+0x10E`** (tamem `cIsCloaked`, ushort): bit0 = cloak enabled/ordered
@@ -371,6 +420,23 @@ i.e. composited above projectiles — engine quirk, reproduce or knowingly fix.)
    - *Clipping*: erase shadow/body pixels below the waterline for units above
      water (`seaLevel − altitude` in elevation units, bias `0x32`); `digger`
      units clip everything below ground (depth ≤ `0x7D`).
+   **ONE BLEND PER SILHOUETTE PIXEL, not one per surface the view ray crosses**
+   (implemented 2026-09-04, G13n). The engine blackens a *copy of the composite* and blits it
+   ONCE, so a pixel the model covers twice is still darkened once. A GL pass that re-uses the
+   body's 3-D geometry with depth writes off does not get that for free: every surface blends
+   again. Aircraft are where it became unmissable — from above a plane is a two-sided shell
+   over its whole area, so ours came out at **0.25** of the ground where the engine is
+   **0.49**, and the histogram was bimodal at 0.25/0.50 (two layers / one) with a 0.125 tail
+   for three. Per airframe before the fix: ARMFIG 0.252, ARMPEEP 0.254, ARMATLAS 0.253,
+   ARMBRAWL 0.253. Ground units had it too, milder. Both renderers now mark the silhouette
+   into a **stencil** with colour writes off and then blend where the mark is with the op that
+   ZEROES it, so the second fragment on a pixel fails `EQUAL 1`; both draws see the same depth
+   buffer, so they cover the same fragments and leave no stale mark, and the mark is cleared
+   per unit so two DIFFERENT units' shadows still stack the way the engine's two separate blits
+   do. After: the peak moved to 0.44–0.52 (77 % of shadow pixels, against the engine's 55 %).
+   The four Peewees on the fixture are **bit-identical** before and after — their silhouette
+   was already one layer — and the Commander changed in 175 px.
+
    **Ownership split, measured 2026-09-02 (native pass armed, composite wiped):**
    the engine's *completed-unit* shadow is built from the composite, so for a
    natively-owned mobile unit it comes out empty — that shadow is ours to draw.

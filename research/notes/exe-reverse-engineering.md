@@ -404,6 +404,26 @@ state a capture opens at hook 8 must be able to survive not being closed.
 Live counter-check on the played path: hook-8 opens and hook-9 closes were equal across
 ~50 000 blocks of a skirmish, so nothing in normal play takes the `drawUnits == 0` route.
 
+### The sweep order inside `DrawGameScreen`, by call site
+
+[BINARY-VERIFIED 2026-09-04 — an `objdump` of `0x468CF0..0x469C60` filtered for these four
+targets, re-read for the aircraft work rather than taken from the earlier note.]
+
+| VA | Calls | What |
+| --- | --- | --- |
+| `0x469920`, `0x46992F`, `0x469ABB` | `0x46A610` | features |
+| `0x469A00` | `0x45AC20` DrawUnit | **site A** — ground units, `(state&3)==1`, per sort row |
+| `0x469B22` | `0x49BE60` | weapons: laser lines and projectile GAFs |
+| `0x469B2C` | `0x420B00` | explosions and effects |
+| `0x469BA3` | `0x45AC20` DrawUnit | **site B** — everything `(state&3) != 1`, over ALL rows |
+
+Site B is last, and a unit's shadow is blitted inside that same `DrawUnit` call (the branch
+table above), through `0x4B8500`, which has **no depth test** — the ALP blit writes every
+non-key pixel of its source. So an aircraft's ground shadow composites **above** the ground
+units, the features, the projectiles and the explosions. That is the engine quirk
+`shadows-cloak.md` §4 flags; it is settled by this ordering, and not by a screenshot — several
+staged attempts to catch a shadow lying across a fireball never lined the two up.
+
 ### `KeyboardHotkeySampler 0x4C1B80` — why polling it twice is safe
 
 `ui-markers.md` relies on this and it is worth having in the map. The function is a jump table
@@ -467,6 +487,31 @@ build-state path `0x459641`) and `0x459C70` (nanoframe, called from the builder 
 Both open `mov eax,imm32` (5 bytes) before `call __chkstk`, which is the detour boundary;
 evidence and the classify-then-`ret 0x10` stub: `own-the-draw.md`, `tagpu_owndraw.c`.
 
+**`0x459228..0x45927A` — where the body and the shadow are placed, register by register.**
+[BINARY-VERIFIED 2026-09-04, read for the aircraft work.] `[ebp+0xc]` is the unit; `+0x6A`,
+`+0x6E`, `+0x72` are X, altitude and depth as 16.16.
+
+```
+459233  mov ebx,[eax+0x6a]  / 459239 sub ebx,[esp+0x3c]   ; X - eyeX
+45923d  push ecx            ; ecx = &unit.position (eax+0x6a)
+459242  mov ebx,[eax+0x6e]  ; altitude          -> saved
+459245  mov eax,[eax+0x72]  / 45924c sub eax,edx          ; Z - eyeY
+459252  call 0x485070       ; GetPosHeight(&pos) -> eax = the GROUND under the unit
+459257  movsx edx,[esp+0x42]  ; altitude, high word = whole world units
+45925c  movsx ecx,[esp+0x46]  ; (Z - eyeY) high word
+459263  mov [esp+0x14],edx    ; the altitude the waterline code re-reads at 0x45959F
+459267  sar ebx,1             ; altitude / 2
+45926b  sar eax,1             ; GROUND / 2
+45926d  sub edx,ebx  / 459274 add edx,0x20    ; bodyY   = (Z-eyeY) - altitude/2 + 0x20
+45926f  sub ecx,eax  / 459277 add ecx,0x20    ; shadowY = (Z-eyeY) - ground/2   + 0x20
+```
+
+So the two Y values differ **only** in which height is halved, and the shadow's x is the body's
+`sx + 0x80` plus 5 (`add edx,0x85` in the branch table above). For anything on the ground
+`GetPosHeight` returns the unit's own altitude and the two coincide; for an aircraft the shadow
+stays on the ground and trails the body down the screen by exactly `(altitude − ground) / 2`.
+Measured in play the same day — see [shadows & cloak](shadows-cloak.html) §"Aircraft, measured".
+
 **`[esp+0x42]` is the altitude.** `0x459257 movsx edx,word [esp+0x42]` is stored at
 `0x459263 mov [esp+0x14],edx`, and `[esp+0x14]` is what the waterline code subtracts from sea
 level at `0x45959F` — the same word, sign-extended (the first draft of this section called them
@@ -506,6 +551,75 @@ larger than a name: `0x45873C` selects the Gouraud rasteriser `0x459C70` for **s
 for nanoframes, and the only state that means *under construction* is `Nanoframe != 0` at
 `+0x104`. The spawn site `0x485AFE..0x485B03`, which that page cited as where the bit is set,
 computes `(UnitDef+0x241 & 0x200) << 0x15` = bit **`0x40000000`** and writes only that.
+
+## The order module — where an order's position lives, and in what units — mapped by us
+
+[MEASURED 2026-09-04, this project — `objdump` of the pristine Steam build, plus a live A/B on
+Two Continents. Established while fixing the scenario applier, whose orders all walked to the
+map origin.]
+
+**`ORDERS_NewMainOrder2Unit 0x43AFC0`** — stdcall, `ret 0x1C`, seven args
+`(actionIndex, shift, unit, target, pos, p1, p2)`; `pos` is a pointer to **three 16.16
+dwords**. It first walks the unit's existing order list from `unit+0x5C` (or `+0x60` when the
+order's flag word `+0x42` has `0x40000` set) looking for one it can merge with, and if none
+matches falls through to `0x43B08A`, which re-pushes the arguments and calls the allocator
+**`0x43ADC0`**. That allocates `0x56` bytes (`push 0x56; call 0x4B4F10` at `0x43ADC4`) and
+constructs the order in place with **`0x43A0C0`** (`thiscall`, `ecx` = the new order).
+
+**The position is copied verbatim, which is why a read-back probe cannot check it**
+[BINARY-VERIFIED `0x43A164..0x43A177`]:
+
+```
+43a164  mov ecx,[eax]        ; eax = the caller's pos[]
+43a169  mov [esi+0x22],ecx   ; Pos.X
+43a16c  mov ecx,[eax+0x4]
+43a16f  mov [edx+0x4],ecx    ; edx = esi+0x22  -> +0x26
+43a172  mov eax,[eax+0x8]
+43a175  mov [edx+0x8],eax    ;                 -> +0x2A
+```
+
+Three dwords, no scaling and no reordering. So writing the position and reading
+`UnitOrders->Pos` back proves only that nothing mangled it — `passed == stored` is a tautology,
+and the applier's phase-C "measurement" that concluded whole world units was reading exactly
+that tautology.
+
+**What settles the scale is the duplicate-order test at `0x43B006..0x43B029`, inside
+`0x43AFC0`** [BINARY-VERIFIED]:
+
+```
+43b004  mov ebp,[eax]          ; caller pos[0]
+43b006  sub ebp,[esi+0x22]     ; minus the candidate order's Pos.X
+43b009  add ebp,0x100000
+43b00f  cmp ebp,0x200000
+43b015  ja  0x43b02b           ; too far -> not the same order
+43b017  mov ebp,[eax+0x8]      ; caller pos[2]
+43b01a  sub ebp,[esi+0x2a]     ; minus Pos.Z
+43b01d  add ebp,0x100000
+43b023  cmp ebp,0x200000
+43b029  jbe 0x43b034           ; near enough -> merge
+```
+
+A tolerance of **±0x100000, which is ±16.0 in 16.16 — one map cell**. In whole world units it
+would be ±1 048 576, i.e. the whole map and then some, which is not a tolerance at all. The
+same block compares components **0 and 2** and never component 1, so those two are the ground
+plane and the middle one is the altitude: the order position is the same
+`TPosition {x, altitude, depth}` that `UNITS_CreateUnit 0x485F50` takes. **There is no
+create/order asymmetry**; `scenario-format.md` §"The coordinate asymmetry" claimed one from
+TADR's `ConstructionKickout` and was wrong, and is corrected there.
+
+**Live confirmation** [MEASURED 2026-09-04, `scenarios/shadow-air.json`, Two Continents]: with
+whole world units, `1900 >> 16 == 0`, and every ordered unit set off for the map origin — a
+Peewee told to `move` to `(1900, 1450)` walked north-west and five aircraft told to fly east
+ended stacked in the north-west corner, one of them reading world `(1, 0)`. With the shift the
+Peewee stops at `1902` and every aircraft reaches `4200`. `patrol` was broken the same way and
+now loops its lane; it had looked like a separate defect and was not.
+
+**Negative results.** `0x43A1F0` (called at `0x43B073` on the merge path) and `0x4B4F20`
+(`0x43B07B`) were not chased. The order-list walk's flag word `unit_order+0x42` is read at
+`0x43B034` (`test …,0x40000` selects `unit+0x60` over `+0x5C`) and `0x43B068`
+(`or …,0x10000`); neither bit's meaning is established. `0x43B0B0` is a **different** function
+that also calls `0x43ADC0` — do not read the `call 0x43adc0` at `0x43B09D` and the one at
+`0x43B120` as the same site.
 
 ## `0x458DD0` — the blit-time build-state effect — mapped by us
 
