@@ -71,9 +71,11 @@ the frame. The cue under the plane is lost exactly as this section said it would
 | `physical` | cast from the true altitude | detached; reads as a cloud shadow that happens to be nearby |
 | `drop` | do not cast at all — draw the Classic silhouette instead, which is what the engine does | exact, but puts a hard-edged 1997 silhouette into a soft-shadow scene for one object class |
 
-**Not decided.** `len` is the default because it keeps the lane coherent, but the rule of this
-section is that the viewer decides and nobody has chosen yet. Boats (§2.3) still have no
-prototype.
+**Decided 2026-09-05: `len`.** The owner looked at it in the viewer and settled on what the
+lane already defaults to — the throw stays with the plane, the altitude cue survives, and every
+shadow in the frame still comes from one light. `physical` and `drop` stay in the viewer as
+queries, not as options to ship. Boats (§2.3) still have no prototype, and the decision above
+does not pre-empt them: a hull sits ON the water, so it is the ordinary ground case.
 
 ### 2.3 Water: the seabed stays shaded and shadowed
 The viewer lights and shadows underwater cells by the seabed, and never reads the sea level
@@ -281,27 +283,28 @@ padding); output is clipped to 8 bits. The restored RGBA atlases are new objects
 Classic's indexed ones, which do not change: units 4-texel replicated pad, 4-aligned, mip
 levels 0–2.
 
-### 2.5b The GAF-derived atlases are restored at load, with **no cache**  [DECIDED 2026-09-05]
+### 2.5b No cache for any image map — everything is restored in the running game  [DECIDED 2026-09-05]
 
-The terrain tile cache under `gamedir/tagpu_cache/` stays as §2.5 built it. **The unit and
-feature atlases get none**: their frames are restored into memory every time the game starts,
-and nothing is written to disk. Affordable at the measured rates — the whole install's
-`textures/*.gaf` is 753 frames / 1.35 M texels, about **2 s on the x86 CPU runtime** and well
-under a second on DirectML (§2.5), once per session rather than once per map.
+**The disk cache goes, for all three atlases.** `gamedir/tagpu_cache/` and
+`cache_read`/`cache_write` come out of `tagpu_restore.c`; nothing restored is ever written to
+disk, and every session restores what it draws. §4's whole "the cache's format is undecided"
+bullet — the compression survey, the 4.4 GB ceiling, the content-keyed tile bank — is **closed
+by this decision, not by an answer**.
 
-**The consequence is that the enumeration cannot come from the filesystem.** The textures are
-inside `tactics*.hpi` and the `.ufo` archives, not loose files **[MEASURED — the gamedir has no
-`textures/` tree]**, so the DLL would need an HPI reader to restore them from disk; the frames
-it can reach are the ones the engine has already decompressed into memory. That makes the
-**definition → loaded model → texture frames walk** (§4) load-bearing rather than an
-optimisation, and it is still unwritten. Two cheaper routes to weigh against it before
-disassembling the object graph, neither yet probed: **detour the GAF loader** and record every
-frame pointer as the game loads them at startup (`0x429700` opens the `cursors` GAF and parks
-its handle at `main+0x14903`, so the loader is reachable **[SOURCE
-[engine map](exe-reverse-engineering.html)]**), or find **the engine's own table of loaded
-texture anims**, if one exists — a face reaches its frames through a pointer at `+0x18` with an
-inline frame table at `+0x28` **[SOURCE `tagpu_render3do.c face_texframe`]**, which the loader
-must have resolved from a name somewhere.
+Two consequences to hold on to, both measured:
+
+- **Every map load now builds an inference session**, because the old fast path ("read the
+  cache before loading any runtime") no longer exists: `LoadLibrary` 11–13 ms, then **1.0–1.9 s
+  on DirectML** (23–25 ms on the CPU provider) on the worker thread, once per process.
+- **The +160 MiB of VRAM is now permanent**, not conditional. A cached map used to pay none of
+  it; there are no cached maps any more.
+
+**Terrain needs no discovery; the GAF frames do.** `tagpu_terr.c` already holds the whole tile
+set (`s_setPix`, `s_setCount`) — that is what it hands to `tagpu_restore_terrain_begin` today
+**[SOURCE]**. The unit and feature textures are the opposite: they are inside `tactics*.hpi`
+and the `.ufo` archives, not loose files **[MEASURED — the gamedir has no `textures/` tree]**,
+so the DLL can only reach frames the engine has already decompressed into memory, and something
+has to name them. The routes are enumerated in §4b.
 
 ### 2.6 Fog of war: one RGB rule after lighting
 The engine's grey band remaps each palette index to the palette entry nearest its own
@@ -407,43 +410,125 @@ Why it fits:
 
 ---
 
+## 4b. How the restored textures get into the game, with no cache  [OPTIONS, 2026-09-05]
+
+*Written to be decided from, not re-derived. Rates below are the ones measured **inside the
+running game** (§2.5), not the standalone ones: **0.36 ms per 32×32 tile on DirectML** and
+**4.1 ms on four CPU threads** — 0.35 and 4.0 µs per texel. Workloads: Two Continents 5062
+tiles = 5.2 M texels, the biggest stock map 11561 tiles; the whole install's `textures/*.gaf`
+753 frames = 1.35 M texels, median entry 32×64 (2048 texels ⇒ **0.7 ms GPU / 8 ms CPU per
+frame**). Feature frames are small beside both.*
+
+### Option 1 — Lazy: restore each frame the first time it is drawn
+
+Both lazy atlases already exist and are the natural hook: `atlas_get` in
+`tagpu_render3do.c` (units, 1024², 256 entries) and `tagpu_gaf_atlas_get` in `tagpu_gaf.c`
+(shared by `tagpu_feat.c` and `tagpu_fx.c`) **[SOURCE]**. On a miss each decodes one frame and
+uploads it into a shelf slot; the change is to copy that decoded frame and its shelf rect onto a
+queue, let the worker restore queued frames in shape-grouped batches, and have the render thread
+blit each result into an RGBA twin atlas at the same rect, flipping a per-entry `restored` flag
+the shader reads — the same two-atlas shape `tagpu_terr.c` already has.
+
+- **Discovery needed: none.** This is the option that does not touch the engine's object graph.
+- **Build**: the queue, the twin atlas per lazy atlas, the shader branch, and **W×H batching** —
+  `run_batch`/`fill_tile`/`unpack_tile` are square-only (`H`) today because tiles are 32×32, and
+  GAF frames are not square **[SOURCE `tagpu_restore.c`]**. That last piece is needed by every
+  option that restores GAF frames, so it is not a differentiator.
+- **Cost**: ~0.7 ms GPU for a median frame; a unit type appearing for the first time is 1–3
+  frames ≈ **2 ms of worker time**. Everything the session ever sees ≤ **0.47 s GPU / 5.4 s CPU**,
+  spread across play instead of spent at load.
+- **Visible behaviour**: a frame draws indexed for the frame or two before its restore lands.
+  The bad case is a mass reveal — 200 units of unseen types at once queues ~100 frames ≈ 70 ms
+  GPU (invisible, off-thread) or ~0.8 s CPU (a fade-in, not a stall).
+- **Risks**: mixed-mode atlases are the normal state, not an edge case; a GL reset has to re-queue
+  everything; the unit atlas's 256-entry cap and its 1-texel border both need revisiting for
+  §1's 4-texel pad and mips 0–2 anyway.
+
+### Option 2 — Enumerate at load, then restore in one batch
+
+The original §5 step 2, minus the cache. Same code as Option 1 without the laziness, plus a way
+to name every frame up front. Three routes, none yet probed:
+
+| | what it is | what it costs to find | what it covers |
+|---|---|---|---|
+| **2a** definition → loaded model → faces → frames | the walk §4 has always named: unit defs at `main+0x1439B` stride `0x249`, feature defs at `main+0x1426F` stride `0x100` **[SOURCE `tagpu_cat.c`]**, then each definition's model root, its node tree, its face records, and the frame pointers a face reaches at `+0x10`/`+0x18` **[SOURCE `tagpu_render3do.c face_texframe`]** | the most disassembly: the def→model field and the loaded-3DO tree layout are both unwritten | units and features; **not** effects GAFs |
+| **2b** detour the GAF loader and record what it loads | we already have the detour machinery, and `0x429700` opens the `cursors` GAF and parks its handle at `main+0x14903` **[SOURCE engine map]**, so a loader of this shape is reachable | one function to identify and one detour to write | **everything the game loads**, mod `.ufo` content included |
+| **2c** find the engine's own table of loaded texture anims | a face reaches frames through a pointer at `+0x18` with an inline frame table at `+0x28`, which the loader resolved from a name — so a registry probably exists | cheapest if it exists, unbounded if it does not | everything, if it exists |
+
+- **Cost**: 0.47 s GPU / 5.4 s CPU at load for **all** textures, whether or not they are ever
+  drawn — against Option 1's "only what you see, when you see it".
+- **Benefit**: no mixed-mode branch and no first-draw latency at all.
+
+### Option 3 — Drop ONNX: run the model as GLSL passes in our own context
+
+The standing fallback of §4, promoted to a real option by the no-cache decision, because with no
+cache the runtime is now loaded on **every** session. 12 layers × 64 channels as fragment passes
+over ping-pong FBOs, weights in a texture; 64 channels is 16 RGBA targets, so with 8 MRT that is
+2 passes per layer, ~24 passes total.
+
+- **What it deletes**: `onnxruntime.dll` (10 MB), the vkd3d-proton dependency, DirectML, the
+  +160 MiB, the 1.0–1.9 s session build, the worker thread and its copies, the 20.8 s CPU
+  fallback, *and* §4's "untested on other adapters" risk — one code path on every machine.
+- **Cost**: ~750 kFLOP per texel (§2.5) ⇒ ~3.9 TFLOP for a whole map's tiles, sub-second on a
+  4070 in theory. **Unmeasured**, and fragment-shader efficiency on 3×3×64×64 convolutions is
+  exactly the unknown. It also runs on the render thread, so it must be sliced across frames or
+  it stalls the game.
+- **Caveat**: compute shaders are GL 4.3; the context is requested at 3.2 core (§3), so this is
+  fragment passes unless the context is bumped — a separate decision with its own risk.
+
+### Option 4 — Hybrid: the terrain job stays whole-set, the GAF frames go lazy
+
+Terrain is already enumerated and batches efficiently; GAF frames are the ones that would need
+archaeology, and are the ones laziness suits. So: keep `tagpu_restore_terrain_begin` exactly as
+it is minus the cache, and give the two lazy atlases Option 1.
+
+- **Discovery needed: none.** No route from §2 is needed at all.
+- **Map load**: session 1.0–1.9 s + restore 1.83 s ≈ **2.9–3.7 s of indexed terrain, then a
+  pop**, on DirectML; ~21 s on the CPU fallback; ~4.2 s / 47 s on the biggest stock map.
+- **Everything else** costs what Option 1 costs, i.e. milliseconds nobody sees.
+
+### Option 5 — Ship the stock textures pre-restored  [conflicts with the decision; listed for completeness]
+
+The GAF half is small: 1.35 M texels is **4 MB raw, ~2 MB compressed**, so the stock unit and
+feature textures *could* ship as data and skip the runtime entirely, with anything unknown (mod
+`.ufo` content) restored on the fly. The terrain half cannot — all stock maps' tiles are 2.2 GB
+raw, 0.93 GB zstd (§4). Recorded because the asymmetry is worth knowing; it is not what
+"no cache, we load on the fly" asks for.
+
+### Three levers, orthogonal to the choice above
+
+- **The tiny model.** 6 × 24 against 12 × 64 is **7 % of the FLOPs — ~14× cheaper** — for
+  **29.79 dB against 30.48** **[SOURCE `unditherer/models/models.json`]**. §2.5 put only the
+  full model in scope, and it decided that when a cache meant the cost was paid once ever. With
+  no cache it is paid every session, which makes this the single biggest cost lever in the
+  system: it would put a Two Continents terrain restore at ~0.13 s on the GPU and ~1.5 s on the
+  CPU fallback. Worth an A/B by eye before it is dismissed.
+- **Visibility-ordered batches.** Restore the tiles under the camera first so the pop starts
+  where the player is looking and the rest fills in behind. Matters most on the CPU fallback and
+  the biggest maps.
+- **fp16 on DirectML.** Unmeasured; plausibly ~2×. The two providers already agree to 1 level in
+  61 of 20.7 M bytes at fp32, so there is headroom to check.
+
+---
+
 ## 4. Open  [OPEN]
 
 - **The restorer is terrain-only so far.** Feature sprites and unit textures go through the
   same job next (they have colour keys, so the inpaint stand-in of §2.5 lands with them), and
   the unit atlas needs its 4-texel pad, alignment and mips.
-- **The first restore blocks nothing but is visible**: on the CPU ~21 s during which Classic++
-  terrain draws indexed, then switches; **on DirectML 1.8 s (2.9 s from map load, including the
-  runtime and the session)**. A loading-screen hook or a tacli pre-warm still pays on the CPU
+- **The first restore blocks nothing but is visible**, and since §2.5b it happens on **every**
+  map load: on the CPU ~21 s during which Classic++ terrain draws indexed, then switches; **on
+  DirectML 1.8 s (2.9–3.7 s from map load, including the runtime and the always-paid session
+  build)**. A loading-screen hook or a tacli pre-warm still pays on the CPU
   fallback and on the largest maps (11561 tiles ≈ 4 s GPU, 47 s CPU at the measured in-game
   rates).
-- **The cache's format is undecided.** Today it is raw RGBA, 19.8 MB for Two Continents and
-  4.4 GB if every stock map were played (275 maps, 1.12 M tiles, median 3218, largest 11561).
-  Measured on the real cache **[MEASURED 2026-09-04]**, per Two Continents / all maps:
-  RGB+gzip 11.2 MB / 2.5 GB (zlib is in the DLL); one PNG sheet 8.7 / 1.9; RGB+zstd-19
-  8.5 / 1.9 (one BSD file to drop in); xz 7.8 / 1.7; lossless WebP 7.1 / 1.6; zlib per
-  tile 11.9 / 2.6; BC7 4.9 / 1.1 and BC1 2.5 / 0.5 (GPU formats: lossy, upload as-is,
-  4–8× less VRAM; a crude BC1 sits at ~35 dB against the restored art, above the
-  restorer's own 30.5 dB). Rejected by measurement: the residual against the palette
-  colour (7.9 MB — the residual *is* the dither noise), tile de-duplication (5054 of 5062
-  already unique), RGB565 (banding back). Lossless tops out near 40 %; only block
-  compression goes further. Also on the table: cap the cache to the newest N maps, or
-  move it to the user's profile.
-  **Maps share tiles** (the owner's point, measured 2026-09-04 over all 275 stock TNTs, every
-  32×32 tile hashed): 1,118,476 tile slots hold **553,094 distinct tiles (49.5 %)**; inside
-  one map the compiler already de-duplicates (Two Continents 5054 of 5062), the sharing is
-  *between* maps. Loading the maps in name order, the median map adds 1,611 new tiles
-  (mean 2,011) and 76 maps add under 10 % — several variants share a whole tile set. So
-  the cache should be a **content-keyed tile bank shared by every map**, not a file per
-  map: each load restores only the tiles the bank lacks (a median map's 1,611 new tiles ≈ 0.6 s
-  on DirectML at the measured in-game 0.36 ms/tile, ≈ 6.6 s on four CPU threads at 4.1 — both
-  rates carry this map's fixed warm-up, so a small batch is pessimistic here; a variant ≈ 0),
-  and the whole game's ceiling is the unique count:
-  raw RGBA 2.2 GB, zstd 0.93 GB, BC7 0.54 GB, BC1 0.27 GB. The palette is one for all
-  maps, so a content key is valid across them.
-- **Definition → loaded model → texture frames**: the walk the load-time atlas build needs,
-  to be established from the binary and written into
-  [the engine map](exe-reverse-engineering.html).
+- ~~**The cache's format is undecided.**~~ **Moot since 2026-09-05** — §2.5b removes the cache
+  entirely, so the compression survey, the 4.4 GB ceiling and the content-keyed tile bank are all
+  closed by the decision rather than by an answer. The measurements are kept in the git history
+  if a cache ever comes back.
+- **Definition → loaded model → texture frames**: still unwritten, but **no longer necessarily
+  needed** — it is route 2a of §4b, and Options 1 and 4 there require no discovery at all. If it
+  is ever established, it goes in [the engine map](exe-reverse-engineering.html).
 - **Aircraft and boats** — the viewer prototype of §2.2/§2.3 has not been built.
 - **Hires glb under Classic++** — lighting model, depth pass, shadow read-back, silhouette
   shadow off; deferred by §2.4.
