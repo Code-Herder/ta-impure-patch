@@ -715,6 +715,46 @@ def feature_object(defs, feat):
     return obj or None
 
 
+def unit_facts(assets, key, cache):
+    """The engine's silhouette-shadow gate and the cruise altitude, from the FBI.
+
+    `shadows-cloak.md` §3: a completed unit gets the silhouette drop shadow
+    unless its FBI says `noshadow`, `canhover` or `floater`; a STRUCTURE takes
+    the cached slant projection instead, which the lab does not draw at all --
+    so a building gets no shadow here and that is a stated gap, not a claim.
+    `BMcode` is TA's own mobile flag and stands in for the engine's runtime
+    `0x20000000` structure bit: checked on the fixtures, ARMSOLAR and ARMMEX
+    read 0, ARMCOM and ARMPW read 1.
+
+    `agl` is how far off the ground the unit sits. Aircraft are the only units
+    with one, and it is the FBI's own `CruiseAlt` -- ARMFIG 110, ARMTHUND 200,
+    ARMPEEP 180, ARMATLAS 90, ARMBRAWL 60. Measured in the game the same day,
+    a patrolling Freedom Fighter reads altitude 198-240 over ground 67-84, so
+    ground + CruiseAlt is the right still-frame model for a lab that has no
+    flight dynamics.
+    """
+    if key in cache:
+        return cache[key]
+    try:
+        fbi = ta3do.fbi_fields(assets, key)
+    except Exception:
+        fbi = {}
+
+    def flag(name):
+        return (fbi.get(name, "0") or "0").strip() not in ("", "0")
+
+    mobile = (fbi.get("bmcode", "1") or "1").strip() != "0"
+    try:
+        cruise = int(float((fbi.get("cruisealt", "0") or "0").strip()))
+    except ValueError:
+        cruise = 0
+    fact = {"shadow": bool(mobile and not flag("noshadow")
+                           and not flag("canhover") and not flag("floater")),
+            "agl": cruise if flag("canfly") else 0}
+    cache[key] = fact
+    return fact
+
+
 def build_units(scenario, assets, out, restore=None, defs=None):
     types = []
     for unit in scenario.get("units", []):
@@ -816,20 +856,32 @@ def build_units(scenario, assets, out, restore=None, defs=None):
                         "label": label, "stats": stats}
 
     instances = []
+    fbi_cache = {}
     for unit in scenario.get("units", []):
         key = (unit.get("type") or "").lower()
         if key not in meshes or not isinstance(unit.get("pos"), list):
             continue
-        instances.append({"type": key, "pos": [int(unit["pos"][0]), int(unit["pos"][1])],
-                          "facing": float(unit.get("facing", 0) or 0),
-                          "id": unit.get("id")})
+        f = unit_facts(assets, key, fbi_cache)
+        inst = {"type": key, "pos": [int(unit["pos"][0]), int(unit["pos"][1])],
+                "facing": float(unit.get("facing", 0) or 0),
+                "id": unit.get("id"), "shadow": f["shadow"], "agl": f["agl"]}
+        # a scenario `height` is an ABSOLUTE altitude and the lab snaps to the
+        # terrain it has, so hand the number over and let the viewer subtract
+        # the ground under the unit -- the builder never reads the height map
+        if isinstance(unit.get("height"), (int, float)):
+            inst["alt"] = int(unit["height"])
+        instances.append(inst)
     for feat in scenario.get("features", []):
         obj = feature_object(defs, feat)
         if obj not in meshes or not isinstance(feat.get("pos"), list):
             continue
+        # a 3DO wreck keeps the ENGINE's FShadow feature shadow, which is in the
+        # feature's own frames; the native pass draws it none (shadows-cloak.md
+        # "What our GL renderer must do"), so neither does the lab
         instances.append({"type": obj, "pos": [int(feat["pos"][0]), int(feat["pos"][1])],
                           "facing": float(feat.get("facing", 0) or 0),
-                          "id": feat.get("id"), "feature": feat.get("type")})
+                          "id": feat.get("id"), "feature": feat.get("type"),
+                          "shadow": False, "agl": 0})
     return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin",
                       "rgba": rgba_file, "pad": UNIT_PAD},
             "stride": UNIT_VSTRIDE, "meshes": meshes, "instances": instances}
@@ -1146,7 +1198,7 @@ def cmd_serve(args):
     if not (pack / "scene.json").exists():
         die(f"{pack} has no scene.json (run `tascene build` first)")
     _stage_viewer(pack)
-    server = ta3do.Viewer(pack, port=args.port)
+    server = ta3do.Viewer(pack, port=args.port, host=args.host)
     url = f"{server.base}/{VIEWER.name}"
     watching = "" if args.no_reload else "  (live: edit the viewer and the page reloads)"
     print(f"serving {pack} at {url}  (ctrl-c to stop){watching}", flush=True)
@@ -1423,6 +1475,10 @@ def main(argv=None):
     s = sub.add_parser("serve", help="serve a pack for interactive viewing")
     s.add_argument("pack")
     s.add_argument("--port", type=int, default=0)
+    s.add_argument("--host", default="127.0.0.1",
+                   help="interface to bind (default loopback). Name ONE interface "
+                        "to reach the page from another machine — a Tailscale "
+                        "100.x address, say — rather than 0.0.0.0")
     s.add_argument("--no-reload", action="store_true",
                    help="do not re-stage the viewer on edit, and do not let the "
                         "page reload itself (the pre-live-reload behaviour)")

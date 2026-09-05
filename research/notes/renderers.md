@@ -22,14 +22,22 @@ date; **[OPEN]** = not settled.
 | Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game so far: the terrain (G14a).* |
 | Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit) |
 | Units | per-face shade row from `SH_L` through the 32-row LUT | per-pixel lambert in map space from the posed face normal, same level normalisation |
-| Shadows | the engine's rules: 5-px silhouette drop for mobiles, the cached slant for structures | a depth map along `shadowsun`, PCSS-lite (8-tap blocker search, 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive |
+| Shadows | the engine's rules. **In the game**: the 5-px silhouette drop for mobiles and the cached slant for structures, each blended once per silhouette pixel (G13n). **In the lab**: the silhouette only — a structure casts NOTHING there, because that lane does not draw the slant projection. This row claimed the lab had both until 2026-09-04; it did not have either, and now has one | a depth map along `shadowsun`, PCSS-lite (8-tap blocker search, 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive; an airborne caster follows `airshadow` (§2.2) |
 | Suns | one, `SH_L = (−0.35, 0.80, −0.49)` in model space | **three** knobs: `sun=324.5,53.1` (terrain), `unitsun=215.5,53.1` (= `SH_L` in map space), `shadowsun=225,40` |
 | Fog of war | the engine's per-index grey LUT | one RGB rule after lighting (§2.6) |
 | Supersampling | 2× box, `tagpu_ss.off` | the same |
 
-The Classic baselines, re-shot 2026-09-04 from the merged tree after `main` came in at
-`1696be2`: `tascene-parity.json`, default `md5 6f7ad6b122591d6db2a2b028938be5b3`, `ss=1`
-`md5 9c9ab215099e581288b24cc47d41f9be` — both unchanged **[MEASURED]**.
+**The Classic baselines moved on 2026-09-04, deliberately**, when the lane gained the
+silhouette drop shadow it had always claimed. `tascene-parity.json`: default
+`md5 f42f300a69f843a669d64fc30deb08e2`, `ss=1` `md5 59482d4d2519801fbc41b7d33510b471`
+**[MEASURED]**.
+
+**The re-baseline is checkable, and that is the point of it.** `unitshadow=0` reproduces the
+previous pair — `6f7ad6b122591d6db2a2b028938be5b3` and `9c9ab215099e581288b24cc47d41f9be` —
+**byte for byte**, so the shadow is provably the only thing that moved; the change itself is
+225 px at a median darkening of 0.515 of the bare ground. A lane whose claim is "it must not
+move by a pixel" can only be re-baselined this way: with a switch that puts the old pixels back
+and a diff that says what the new ones are.
 
 ---
 
@@ -43,12 +51,29 @@ ship the constant and look.** The engine itself lights units and casts shadows f
 directions whatever the map, and the per-map option (`artlight`'s peak azimuth) stays on the
 shelf until a map actually reads wrong.
 
-### 2.2 Aircraft: prototype before engine work
-The lab has no aircraft. A parallel light at 40° elevation drops a plane's shadow about
-1.2× its altitude away, up-right, so the cue under the plane is lost. **Decided: prototype
-in the viewer first** — the candidates are the Classic drop shadow for airborne units, or
-`shadowlen`'s vertical scale applied to altitude too. Nothing is coded until the viewer
-shows it.
+### 2.2 Aircraft: prototyped, and what the viewer showed  [MEASURED 2026-09-04]
+The lab has aircraft now — units carry an altitude, the FBI's own `CruiseAlt` (ARMBRAWL 60,
+ARMATLAS 90, ARMFIG 110, ARMPEEP 180, ARMTHUND 200), fixture `scenarios/tascene-air.json`.
+
+**The engine's own answer, measured first** ([shadows & cloak](shadows-cloak.html) §4b): the
+shadow is the plane's silhouette, `+5 px` in x and `(altitude − ground)/2` **straight down** —
+on the ground under the plane, separating downward as it climbs.
+
+**The prediction held.** At `shadowsun`'s 40° a Thunder at CruiseAlt 200 throws its shadow
+**211 px right and 91 px up** of its body, and two of the five airframes threw theirs clean off
+the frame. The cue under the plane is lost exactly as this section said it would be.
+
+`airshadow=<how>` now picks, and all three are one query apart in the lab:
+
+| | what it does | how it reads |
+|---|---|---|
+| `len` *(default, provisional)* | `shadowlen`'s own rule extended to the ALTITUDE: the throw is `a + b·(agl + model height)` rather than `(agl + h)·cot el` — 67 world units for a Thunder at 200 instead of 250 | stays with the plane, keeps the altitude cue, and every shadow in the frame still comes from one light |
+| `physical` | cast from the true altitude | detached; reads as a cloud shadow that happens to be nearby |
+| `drop` | do not cast at all — draw the Classic silhouette instead, which is what the engine does | exact, but puts a hard-edged 1997 silhouette into a soft-shadow scene for one object class |
+
+**Not decided.** `len` is the default because it keeps the lane coherent, but the rule of this
+section is that the viewer decides and nobody has chosen yet. Boats (§2.3) still have no
+prototype.
 
 ### 2.3 Water: the seabed stays shaded and shadowed
 The viewer lights and shadows underwater cells by the seabed, and never reads the sea level

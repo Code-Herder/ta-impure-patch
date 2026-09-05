@@ -125,6 +125,15 @@ unit names by scanning the live definition table. This design follows its recipe
 - `orders` at group level apply to every member; a unit-level `orders` overrides. Targets
   are a coordinate (`to`) or a handle (`target`) — a unit **or a feature** (that is how a
   wreck gets reclaimed), never a group.
+- **Only the LAST order of a list takes effect today.** The applier issues each with
+  `shift = 0`, and `ORDERS_NewMainOrder2Unit`'s allocator walks the unit's order list and
+  destroys every entry lacking flag bit `0x4` before linking the new one
+  (`0x43ADC0`, `0x43AE02..0x43AE59`) — so a list is a replacement, not a queue.
+  [BINARY-VERIFIED 2026-09-04, found by the landing review; no shipped fixture uses more than
+  one order per entity, so nothing depends on it yet.] Making the array a real queue means
+  passing `shift = 1` for the second and later orders, and that path is the one whose
+  duplicate scan *cancels* a matching order rather than adding one — it needs a live test
+  before it is used.
 - Every per-entity attribute (`facing`, `height`, `health`, `nanoframe`, `stance`,
   `orders`) may sit on a group, where it applies to every member.
 - **`at` is the *centre* of a formation**, not its corner — the same thing `at` means for
@@ -242,7 +251,7 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | feature grid cell | `GetGridPosPLOT(x/16, z/16)` → `PlotGrid*` | `0x481550` | `SpawnFeatureOnMap` wants the cell, not the coordinate. |
 | place a feature | `SpawnFeatureOnMap(gridPlot, defIdx, position, volume, playerId)` | `0x423C50` | Silent and instant. `position` is 16.16 `(x, altitude, depth)`; `volume` is the `{bank, pitch, heading}` word triple; `playerId = 10` is what TADR passes for a map feature. [VERIFIED live] |
 | order name → script index | `ScriptAction_Type2Index(&idx, orderType, unit, target, pos)` → `char*` | `0x43F0E0` | **Not** `ScriptAction_Name2Index`. TADR's `SendOrder` resolves the *per-unit* script index from the order type, the unit and its target; the returned `char*` points at the byte to pass on, and `NULL` means this unit cannot take that order. Its `ScriptAction_Index2Handler` (`0x438830`) call is dead — that function is a pure `base + *ecx*25` address computation whose result TADR discards. |
-| issue an order | `ORDERS_NewMainOrder2Unit(*scriptIdx, shift, unit, target, position, 0, 0)` | `0x43AFC0` | `position` is **whole world units** in the screen convention `(x, depth, altitude)` — *not* 16.16, and transposed against the create call. See the asymmetry note below. [VERIFIED live] |
+| issue an order | `ORDERS_NewMainOrder2Unit(*scriptIdx, shift, unit, target, position, 0, 0)` | `0x43AFC0` | `position` is **three 16.16 dwords in `(x, altitude, depth)`** — the SAME convention as the create call, no transpose. This row said the opposite until 2026-09-04 and every scenario's orders were wrong with it; see *There is no coordinate asymmetry*. **`shift = 0` also DELETES the unit's existing orders** before linking (`0x43ADC0`, `0x43AE02..0x43AE59`), so only the last order per entity survives. [BINARY-VERIFIED] |
 | remove a unit silently | `UNITS_KillUnit(unit, 0)` | `0x4864B0` | Mode `0` = the "recreate proc" path (no explosion). Mode `3` is a normal death **with** wreckage. Park `ActiveCommanderDeath` at 0 across the sweep — see below. |
 | commander-death gate | `ActiveCommanderDeath` | `main+0x37EF6` | `0x486688` compares it against zero and only then calls `UNITS_KillAllForPlayer`. [VERIFIED, binary] |
 | apply point | `Game_MainLoopTick` detour | `0x4969D2` | See *The apply point* below. |
@@ -270,16 +279,39 @@ on a one-way state machine (`IDLE → ARMED → APPLYING → DONE`) with an inte
 hand-off, not on a call count — and "one tick" in this design means **one visit**, which
 is the stronger guarantee.
 
-### The coordinate asymmetry
+### There is no coordinate asymmetry — creating and ordering speak the same language
 
-Creating and ordering do not speak the same language, and the two vendored corpora
-disagree about the second one. `TA_MemUnits.pas` reads the order position's *high word*,
-implying 16.16; TADR's C++ `ConstructionKickout` feeds `ORDERS_NewMainOrder2Unit` the
-unit's whole-unit `XPos`/`YPos` words and divides `orders->Pos.X` by 16 to get a tile.
-Phase C settled it by measurement rather than by choosing a source: the applier reads
-`UnitOrders->Pos` (`+0x22`) back after issuing the first order and reports both numbers.
-Live, `passed [3800, 1200, 84]` came back as `stored [3800, 1200, 84]` — **whole world
-units, screen convention, stored verbatim**. TADR's C++ reading is correct.
+**Corrected 2026-09-04. What this section said before was wrong**, and every scenario's orders
+were wrong with it: `ORDERS_NewMainOrder2Unit` takes **three 16.16 dwords in the 3-D convention
+`{x, altitude, depth}`**, exactly as `UNITS_CreateUnit` does. `TA_MemUnits.pas`, which reads
+the order position's high word, was right; TADR's C++ `ConstructionKickout` reading was not.
+
+**Why the read-back probe could not catch it.** The order constructor `0x43A0C0` copies the
+caller's three dwords into `UnitOrders->Pos` verbatim (`0x43A164..0x43A177`, no scaling and no
+reordering), so `passed == stored` is a tautology and proves only that nothing mangled the
+value on the way. The old reading — `passed [3800, 1200, 84]` back as `stored [3800, 1200,
+84]` — is exactly that tautology, and it was recorded here as if it had settled the units.
+
+**What actually settles them** is the duplicate-order test inside `0x43AFC0`
+(`0x43B006..0x43B029`): `sub ebp,[esi+0x22]; add ebp,0x100000; cmp ebp,0x200000` — a tolerance
+of ±0x100000, which is ±16.0 in 16.16, **one map cell**. In whole world units that would be a
+tolerance of ±1 048 576, wider than any map. The same block compares components 0 and 2 and
+never component 1, which is what fixes the component ORDER too: 0 and 2 are the ground plane,
+1 is the altitude. Full derivation:
+[exe-reverse-engineering](exe-reverse-engineering.html) §"The order module".
+
+**Measured live 2026-09-04** on Two Continents: with whole world units `1900 >> 16 == 0`, so
+every ordered unit set off for the map origin — a Peewee told to `move` to `(1900, 1450)`
+walked north-west, and five aircraft told to fly east ended stacked in the north-west corner,
+one reading world `(1, 0)`. With the shift the Peewee stops at `1902` and every aircraft
+reaches `4200`.
+
+**What this means for the fixtures that already existed.** `200v200.json` and the
+`warlordex-*` files have never had their `attack` orders land where the file says: their units
+advanced toward the origin and fought whatever they met on the way, which looks enough like the
+intended behaviour that nobody caught it for a month. Re-read any conclusion drawn from those
+runs about *where* a fight happened. `patrol` had looked separately broken — it was the same
+bug, and it loops its lane now.
 
 **Unit fields written after creation** (`vendor/TADR/src/DDraw/tamem.h:986-1103`):
 
@@ -378,9 +410,12 @@ handles back before an agent sees it:
 ```
 
 `actual` carries three components — the two the file asked for plus the terrain snap the
-engine chose. `order_probe` is the applier reading `UnitOrders->Pos` straight back after
-the first order, so the coordinate convention is a measurement in every result rather than
-a decision made once. `errors` is capped at 24 entries with an `errors_dropped` count, and
+engine chose. `order_probe` is the applier reading `UnitOrders->Pos` straight back after the
+first order, **reported in whole world units**. It does NOT check the coordinate convention and
+never could: the order constructor copies the caller's three dwords verbatim, so `passed ==
+stored` is a tautology — which is exactly how the wrong convention survived a month of
+"measured" results. What it is still good for is catching the engine RELOCATING or clamping a
+target. `errors` is capped at 24 entries with an `errors_dropped` count, and
 a failure that names no entity (a truncated file, a tick that never came) reports there
 with `applied: 0`.
 
@@ -553,8 +588,14 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   timeout. There is now a 600-frame watchdog in the present path that gives up and says
   *"the game's main loop never reached the apply point — apply needs a running game, not
   the menus, the mission-end screen or a paused one"*.
-- **Order positions are whole world units in the screen convention**, stored verbatim —
-  measured, not chosen between two disagreeing sources. See *The coordinate asymmetry*.
+- **Order positions are 16.16 in the 3-D convention `{x, altitude, depth}`** — the same
+  language `UNITS_CreateUnit` speaks. This line used to say the opposite ("whole world units
+  in the screen convention, stored verbatim — measured"), and the measurement behind it was a
+  tautology: the constructor copies the caller's dwords unchanged, so a read-back can never
+  check the scale. Corrected 2026-09-04 off the duplicate-order tolerance; see *There is no
+  coordinate asymmetry*. **Lesson worth more than the fix**: a probe that reads back what it
+  just wrote tests the plumbing, not the units — the check has to be whether the unit went
+  where the file said.
 - **The camera must subtract half the target's altitude.** `sy = wy - altitude/2 - eyeY
   + 32`, so a target on 90-unit ground sat 45 px above the middle of the window until the
   inverse carried the height term. With it, `roster` reports the target at exactly
@@ -676,8 +717,12 @@ situation snapshot for a savegame.
 2. **The FBI `Corpse=` offset** inside `UnitDefStruct+0xA8..0x13D` — unlocks
    `{"type": "ARMCOM", "as": "wreck"}` without a corpse-name lookup.
 3. **`UnitOrders` layout** (`+0x5C`) — gates order round-tripping in `scenario dump`.
-   Phase C pinned one field of it: `Pos` is a `Position_Dword` at `+0x22`, whole world
-   units, screen convention, written verbatim from the order call.
+   `Pos` is three 16.16 dwords at `+0x22`/`+0x26`/`+0x2A` in `(x, altitude, depth)`, written
+   verbatim from the order call (corrected 2026-09-04; phase C had recorded whole world units
+   in the screen convention, which was wrong). The flag word at `+0x42` is the other field
+   that matters and only two of its bits are known: `0x40000` picks the `unit+0x60` list head
+   over `+0x5C` when an order is unlinked, and `0x4` exempts an order from the wipe `0x43ADC0`
+   does on a `shift = 0` call. Neither is named.
 4. ~~**Spawn hitch at 400 units**~~ — **ANSWERED, phase C.** 402 creations and 400 orders
    in one visit to the detour: no visible stall, no dropped frame, 0.2 s of CLI round trip
    including the poll. `stagger_ticks` is not needed and is not being added.

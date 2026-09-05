@@ -239,8 +239,14 @@ static const char* FS =
 
 typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum, GLint, GLsizei);
 typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
-static PFN_DRAWARRAYS x_glDrawArrays;
-static PFN_ACTIVETEX  x_glActiveTexture;
+typedef void (APIENTRY *PFN_STENCILFUNC)(GLenum, GLint, GLuint);
+typedef void (APIENTRY *PFN_STENCILOP)(GLenum, GLenum, GLenum);
+typedef void (APIENTRY *PFN_COLORMASK)(GLboolean, GLboolean, GLboolean, GLboolean);
+static PFN_DRAWARRAYS  x_glDrawArrays;
+static PFN_ACTIVETEX   x_glActiveTexture;
+static PFN_STENCILFUNC x_glStencilFunc;
+static PFN_STENCILOP   x_glStencilOp;
+static PFN_COLORMASK   x_glColorMask;
 
 static int    s_state = 0;                 /* 0 unloaded, 1 ready, 2 failed */
 static GLuint s_prog;
@@ -289,7 +295,11 @@ static void ensure(void)
     if (s_state) return;
     x_glDrawArrays    = (PFN_DRAWARRAYS)getgl("glDrawArrays");
     x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
-    if (!x_glDrawArrays || !x_glActiveTexture) {
+    x_glStencilFunc   = (PFN_STENCILFUNC)getgl("glStencilFunc");
+    x_glStencilOp     = (PFN_STENCILOP)getgl("glStencilOp");
+    x_glColorMask     = (PFN_COLORMASK)getgl("glColorMask");
+    if (!x_glDrawArrays || !x_glActiveTexture ||
+        !x_glStencilFunc || !x_glStencilOp || !x_glColorMask) {
         dlog("hires draw: missing GL proc"); s_state = 2; return;
     }
     GLuint vs = mksh(GL_VERTEX_SHADER, VS), fs = mksh(GL_FRAGMENT_SHADER, FS);
@@ -490,25 +500,51 @@ void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
             glUniform1f(u_digT, h->digT);
             glUniform1i(u_waterMode, shadowPass ? 0 : h->waterMode);
         }
-        for (k = 0; k < ng; k++) {
-            TAGPU_HGROUP g;
-            if (!tagpu_hires_group(h->mesh, k, &g)) continue;
-            /* the shadow is a silhouette: it still needs the material's alpha
-               cutout, to punch the same holes, and nothing else it carries */
-            glUniform4fv(u_base, 1, g.base);
-            glUniform1f(u_cutoff, g.cutoff);
-            glBindTexture(GL_TEXTURE_2D, g.albedo);          /* unit 6 */
-            if (!shadowPass) {
-                float mr[2]; mr[0] = g.metal; mr[1] = g.rough;
-                glUniform2fv(u_mr, 1, mr);
-                glUniform1i(u_hasNrm, (s_normalMaps && g.normal) ? 1 : 0);
-                x_glActiveTexture(GL_TEXTURE7);
-                glBindTexture(GL_TEXTURE_2D, g.normal ? g.normal : g.albedo);
-                x_glActiveTexture(GL_TEXTURE6);
+        /* ONE 50% BLEND PER SILHOUETTE PIXEL, exactly as tagpu_native.c does it
+           for a 3DO: the engine blits one blackened copy of the composite, so a
+           pixel the model covers twice is still darkened once. A replacement
+           mesh is worse than a 3DO here -- it is denser and its groups overlap
+           -- so without the mask a hires unit's shadow came out at 0.25 of the
+           ground beside a stock unit's 0.50 in the same frame. Pass 0 marks the
+           whole unit (every material group) into the stencil with colour writes
+           off; pass 1 blends where the mark is with the op that ZEROES it, so a
+           second fragment on that pixel fails EQUAL 1. Both passes issue the
+           same draws with the same discards, so no mark is left behind, and
+           clearing per unit keeps two units' shadows stacking as the engine's
+           separate blits do. The caller leaves GL_STENCIL_TEST enabled for the
+           shadow pass and turns it off after us. */
+        int pass, npass = shadowPass ? 2 : 1;
+        for (pass = 0; pass < npass; pass++) {
+            if (shadowPass) {
+                if (pass == 0) {
+                    x_glStencilFunc(GL_ALWAYS, 1, 0xFF);
+                    x_glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+                    x_glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+                } else {
+                    x_glStencilFunc(GL_EQUAL, 1, 0xFF);
+                    x_glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+                    x_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                }
             }
-            x_glDrawArrays(GL_TRIANGLES, g.first, g.count);
-            drawn++;
-            tris += g.count / 3;
+            for (k = 0; k < ng; k++) {
+                TAGPU_HGROUP g;
+                if (!tagpu_hires_group(h->mesh, k, &g)) continue;
+                /* the shadow is a silhouette: it still needs the material's alpha
+                   cutout, to punch the same holes, and nothing else it carries */
+                glUniform4fv(u_base, 1, g.base);
+                glUniform1f(u_cutoff, g.cutoff);
+                glBindTexture(GL_TEXTURE_2D, g.albedo);          /* unit 6 */
+                if (!shadowPass) {
+                    float mr[2]; mr[0] = g.metal; mr[1] = g.rough;
+                    glUniform2fv(u_mr, 1, mr);
+                    glUniform1i(u_hasNrm, (s_normalMaps && g.normal) ? 1 : 0);
+                    x_glActiveTexture(GL_TEXTURE7);
+                    glBindTexture(GL_TEXTURE_2D, g.normal ? g.normal : g.albedo);
+                    x_glActiveTexture(GL_TEXTURE6);
+                }
+                x_glDrawArrays(GL_TRIANGLES, g.first, g.count);
+                if (pass == npass - 1) { drawn++; tris += g.count / 3; }
+            }
         }
     }
     glBindVertexArray(0);

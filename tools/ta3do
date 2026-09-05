@@ -1508,9 +1508,14 @@ class Display:
 
 
 class Viewer:
-    """Serves an export directory over loopback so the page can fetch the .glb."""
+    """Serves an export directory over HTTP so the page can fetch the .glb.
 
-    def __init__(self, directory: Path, port: int = 0):
+    Loopback by default. `host` is for reaching the page from another machine —
+    give it a specific interface address (a Tailscale 100.x, say) rather than
+    0.0.0.0, so the pack is exposed to that network and no other.
+    """
+
+    def __init__(self, directory: Path, port: int = 0, host: str = "127.0.0.1"):
         from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
         import threading
 
@@ -1520,16 +1525,17 @@ class Viewer:
 
         handler = lambda *a, **k: Quiet(*a, directory=str(directory), **k)  # noqa: E731
         try:
-            self.server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+            self.server = ThreadingHTTPServer((host, port), handler)
         except OSError as err:
-            die(f"cannot serve on port {port}: {err}")
+            die(f"cannot serve {host} port {port}: {err}")
+        self.host = host
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
     @property
     def base(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+        return f"http://{self.host}:{self.port}"
 
     def close(self):
         self.server.shutdown()

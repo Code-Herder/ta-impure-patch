@@ -380,7 +380,7 @@ because this survey is the evidence that a bracketed swap cannot be observed by 
 | --- | --- |
 | **`0x439740`** | **The order pass's target sprite** — the pulsing star at a move/attack waypoint, and the only alpha-composited marker. `stdcall(ctx, view, node, pos, flag)`, `ret 0x14`. Two direct `E8` callers: `0x439516` (inside the route-dot drawer `0x4394E0`) and `0x439C7D` (the walker `0x439B30`'s bit-3 dispatch). Its address is **also** in `.rdata` 19 times as the `+8` field of the 25-byte order-descriptor records behind `*(u32*)0x512344` — first occurrences `0x4FC4B1`, then `0x4FC754`/`0x4FC76D`/`0x4FC786`/`0x4FC79F` at stride 25. That field is reported unread in this build (the dispatcher loading only `+0`, `+4`, `+0xC`, `+0x10`, `+0x14`, `+0x15`) — *that* half is [FROM REVIEW, not re-derived here]; the 19 records and the stride are measured. If it were ever brought into use, a wrapper on the two `E8` sites would be bypassed silently. |
 | `0x4B7F90` | `CopyGafToContext` — the route dots' blitter, and **usually** a masked copy. But `0x4B7FF7` reads each sub-frame's byte at `+0xB` and `jbe`-skips only when it is zero: non-zero routes into `0x4B8500` at `0x4B7FFE`. So whether the dots blend is a property of the **GAF data**, not of the code. Stock `pathicon` frames do not carry it, which is why they render solid. |
-| `0x4BF8C0` | `DrawTranspRectangle` — named for its hollow centre, **not** for translucency. Four edges, each clipped by `0x4BEA20` and written by the store-only `0x4CC7AB`; it reaches no alpha composite. Corrects a long-standing claim in `ui-markers.md` and `tagpu_markown.h` that its "transparent edges" read the destination. [The store-only writer was FROM REVIEW and is now disassembled — see "the post-fog build cursor and band box" below, which also has the argument list, the edge split and the surface bound that clips it.] |
+| `0x4BF8C0` | `DrawTranspRectangle` — named for its hollow centre, **not** for translucency. It opens by acquiring a drawing context through `0x4C5E70` (`ret 4`: calls `0x4B6220` for the graphics globals, and when `globals+0xDC` is set copies 0xC dwords from `globals+0xBC` into the caller's stack block and returns 1) and **abandons the whole draw when that returns 0** (`0x4BF8D7`, `je 0x4BFD49`); the companion release is `0x4C5FA0`. Then four edges, each clipped by `0x4BEA20` and written by the store-only `0x4CC7AB` — ten calls to each across the body — and it reaches no alpha composite. Corrects a long-standing claim in `ui-markers.md` and `tagpu_markown.h` that its "transparent edges" read the destination. [The store-only writer was FROM REVIEW and is now disassembled — see "the post-fog build cursor and band box" below, which also has the argument list, the edge split and the surface bound that clips it. The `0x4C5E70`/`0x4C5FA0` pair came from the aircraft-shadow landing's own read of this function and is kept here rather than lost to the merge.] |
 | `0x4C14F0` | `DrawTextCustomFont` (the group digits, drawn inside the same window). Calls `0x4B6220`, `0x4B6750`, `0x4C5E70`, `0x4C5FA0`, `0x4C6AE0`, `0x4CCF60`, `0x4E4760` — it blits through `0x4CCF60` and never touches the LUT, so an identity table cannot affect it. |
 
 ### `DrawGameScreen 0x468CF0` — its arguments, and the branch that skips hook 9
@@ -404,6 +404,25 @@ state a capture opens at hook 8 must be able to survive not being closed.
 Live counter-check on the played path: hook-8 opens and hook-9 closes were equal across
 ~50 000 blocks of a skirmish, so nothing in normal play takes the `drawUnits == 0` route.
 
+### The sweep order inside `DrawGameScreen`, by call site
+
+[BINARY-VERIFIED 2026-09-04 — an `objdump` of `0x468CF0..0x469C60` filtered for these four
+targets, re-read for the aircraft work rather than taken from the earlier note.]
+
+| VA | Calls | What |
+| --- | --- | --- |
+| `0x469920`, `0x46992F`, `0x469ABB` | `0x46A610` | features |
+| `0x469A00` | `0x45AC20` DrawUnit | **site A** — ground units, `(state&3)==1`, per sort row |
+| `0x469B22` | `0x49BE60` | weapons: laser lines and projectile GAFs |
+| `0x469B2C` | `0x420B00` | explosions and effects |
+| `0x469BA3` | `0x45AC20` DrawUnit | **site B** — everything `(state&3) != 1`, over ALL rows |
+
+Site B is last, and a unit's shadow is blitted inside that same `DrawUnit` call (the branch
+table above), through `0x4B8500`, which has **no depth test** — the ALP blit writes every
+non-key pixel of its source. So an aircraft's ground shadow composites **above** the ground
+units, the features, the projectiles and the explosions. That is the engine quirk
+`shadows-cloak.md` §4 flags; it is settled by this ordering, and not by a screenshot — several
+staged attempts to catch a shadow lying across a fireball never lined the two up.
 ### `0x469DB4..0x469F23` — the post-fog build cursor and band box, and why no capture can reach them
 
 [MEASURED 2026-09-04, this project — disassembly of the pristine Steam build, plus a live A/B
@@ -494,6 +513,16 @@ globals are populated and `main[0x2CC3]` is 14, and **not one pixel is drawn**; 
 carry this rect into the outer ring, however wide its own buffer is — which is why it is
 re-drawn instead (`tagpu_mark.c`, "THE BUILD CURSOR").
 
+**And it NORMALISES BEFORE IT INSETS, which is not interchangeable.** `0x469E92`
+(`cmp edi,esi / jge`) and `0x469EA0` (`cmp edx,eax / jge`) swap the x and y pairs, the swapped
+values are what gets stored, and only then does `0x469ECA..0x469EDD` read them back and
+`inc edi / inc esi / dec edx / dec ecx` for the inner rect. Insetting first and normalising
+afterwards turns the inset into an OUTSET for any rect stored right-to-left or bottom-to-top —
+a band box dragged up or left — where the inner outline then lands one pixel *outside* the
+outer one. Ours had exactly that bug until the G13o landing review; the G13n A/B that passed
+"0 differing pixels" had only ever dragged down-right. [FROM REVIEW, then confirmed against the
+disassembly and re-measured: an up-left drag now diffs to 0 px against the engine's own.]
+
 ### `KeyboardHotkeySampler 0x4C1B80` — why polling it twice is safe
 
 `ui-markers.md` relies on this and it is worth having in the map. The function is a jump table
@@ -515,6 +544,8 @@ The shift-held overlay is one driver, one list walker and five leaf drawers, rea
 a single call site inside `DrawGameScreen`.
 
 ```
+0x4699EB  call 0x46A530                             selection rect, ground sweep
+0x469B8A  call 0x46A530                             selection rect, air sweep
 0x469BD7  hook 8                                    (capture window A opens)
 0x469BE1  KeyboardHotkeySampler(0xF9)  -> SHIFT?    (0x469BE8 je 0x469C01)
 0x469BFC  call 0x48CC30(ctx, main+0x142F3)          <- the driver, SHIFT-gated
@@ -522,6 +553,8 @@ a single call site inside `DrawGameScreen`.
 0x469CB9  call 0x46A430                             health bars, AFTER the markers
 0x469CF9  call 0x4C14F0                             group digits
 0x469D2C  hook 9
+0x469EC5  call 0x4BF8C0                             build cursor / band box, outer
+0x469F1E  call 0x4BF8C0                             ...and the inner rect, after fog
 ```
 
 ### `0x48CC30` — the driver, and the three selection rules
@@ -711,8 +744,10 @@ and it is what stops a waypoint marker following a target the player can no long
 port that drops it leaks the target's live position; ours reproduces it on the game thread
 at the same instant (`tagpu_order.c`, `resolve_sprite`).
 
-Then, only if the descriptor's `+0x10` cursor index is non-zero (`0x4397F7` — a zero index
-chains `pos` and returns), frame `(gameTime / (2·period)) % nframes` of
+Then, only if the descriptor's `+0x10` cursor index is non-zero (tested at `0x4397F7`, with
+`0x4397F9` the branch past the early exit that otherwise chains `pos` and returns — so a zero
+index skips the ShowRanges limb below as well as the sprite), and reaching its own sequence
+lookup at `0x439952`, frame `(gameTime / (2·period)) % nframes` of
 `cursor_ary[idx]` = `*(main+0x1487F + idx*4)` is alpha-blitted through
 `AlphaCompsteBuf2OFFScreen 0x4B8500` (`0x4399BB`). `pos ← p`.
 
@@ -746,7 +781,15 @@ not on the unit's cloak flag**, which is the normal branch's rule and not this o
 `+0x206` sonar, `+0x20A` radar jam, `+0x20C` sonar jam, `+0x212` builddistance, `+0x214`
 maneuver, `+0x218` kamikazedistance, all in `main[0xDD9]` (gui 0xE) with label strings at
 `0x505190/88/80/78/6C/60/50/44` and `0x503A0C`; then the three weapon ranges (`unit+0x10`,
-`+0x2C`, `+0x48`, each `+0xDC`) flashing `main[0xDCF]`/`main[0xDD7]` on `gameTime & 1`.
+`+0x2C`, `+0x48`, each `+0xDC`) flashing `main[0xDCF]`/`main[0xDD7]` on `gameTime & 1`, the
+first gated at `0x439443`.
+
+**Those nine radii are read with MIXED sign, and the mix is not tidy** — worth having written
+down, because a blanket cast either way is a guess: `movsx` for cloak `0x439229`, sight
+`0x439267`, radar `0x4392A1`, sonar `0x4392DB`, radar-jam `0x439315` and sonar-jam `0x43934F`
+(each after a `mov dx,WORD PTR [eax+…]` at `0x43924A`, `0x439284`, `0x4392BE`, `0x4392F8`,
+`0x439332`), and `and 0xffff` for builddistance `0x43937A`, maneuver `0x4393B7` and
+kamikazedistance `0x439404`. Inert for any value below 32768, which every stock one is.
 
 **An engine quirk worth knowing before it looks like a bug in a port:** weapon 1 is gated on
 `unit[0x1F] & 2` and weapon 2 on `unit[0x3B] & 2` (= `0x1F + 0x1C`), but weapon 3 is gated on
@@ -861,6 +904,33 @@ build-state path `0x459641`) and `0x459C70` (nanoframe, called from the builder 
 Both open `mov eax,imm32` (5 bytes) before `call __chkstk`, which is the detour boundary;
 evidence and the classify-then-`ret 0x10` stub: `own-the-draw.md`, `tagpu_owndraw.c`.
 
+**`0x459228..0x45927A` — where the body and the shadow are placed, register by register.**
+[BINARY-VERIFIED 2026-09-04, read for the aircraft work.] `[ebp+0xc]` is the unit; `+0x6A`,
+`+0x6E`, `+0x72` are X, altitude and depth as 16.16.
+
+```
+459233  mov ebx,[eax+0x6a]  / 459239 sub ebx,[esp+0x3c]   ; X - eyeX
+45923d  push ecx            ; ecx = &unit.position (eax+0x6a)
+459242  mov ebx,[eax+0x6e]  ; altitude          -> saved
+459245  mov eax,[eax+0x72]  / 45924c sub eax,edx          ; Z - eyeY
+459252  call 0x485070       ; GetPosHeight(&pos) -> eax = the GROUND under the unit
+459257  movsx edx,[esp+0x42]  ; altitude, high word = whole world units
+45925c  movsx ecx,[esp+0x46]  ; (Z - eyeY) high word
+459261  mov ebx,edx           ; ebx := altitude       <- these two copies are what
+459263  mov [esp+0x14],edx    ;   the altitude the waterline code re-reads at 0x45959F
+459267  sar ebx,1             ; ebx := altitude / 2
+459269  mov edx,ecx           ; edx := (Z - eyeY)     <- ...make the next lines read right
+45926b  sar eax,1             ; eax := GROUND / 2   (0x485070's return)
+45926d  sub edx,ebx  / 459274 add edx,0x20    ; bodyY   = (Z-eyeY) - altitude/2 + 0x20
+45926f  sub ecx,eax  / 459277 add ecx,0x20    ; shadowY = (Z-eyeY) - ground/2   + 0x20
+```
+
+So the two Y values differ **only** in which height is halved, and the shadow's x is the body's
+`sx + 0x80` plus 5 (`add edx,0x85` in the branch table above). For anything on the ground
+`GetPosHeight` returns the unit's own altitude and the two coincide; for an aircraft the shadow
+stays on the ground and trails the body down the screen by exactly `(altitude − ground) / 2`.
+Measured in play the same day — see [shadows & cloak](shadows-cloak.html) §"Aircraft, measured".
+
 **`[esp+0x42]` is the altitude.** `0x459257 movsx edx,word [esp+0x42]` is stored at
 `0x459263 mov [esp+0x14],edx`, and `[esp+0x14]` is what the waterline code subtracts from sea
 level at `0x45959F` — the same word, sign-extended (the first draft of this section called them
@@ -900,6 +970,125 @@ larger than a name: `0x45873C` selects the Gouraud rasteriser `0x459C70` for **s
 for nanoframes, and the only state that means *under construction* is `Nanoframe != 0` at
 `+0x104`. The spawn site `0x485AFE..0x485B03`, which that page cited as where the bit is set,
 computes `(UnitDef+0x241 & 0x200) << 0x15` = bit **`0x40000000`** and writes only that.
+
+## The order module — where an order's position lives, and in what units — mapped by us
+
+[MEASURED 2026-09-04, this project — `objdump` of the pristine Steam build, plus a live A/B on
+Two Continents. Established while fixing the scenario applier, whose orders all walked to the
+map origin.]
+
+**`ORDERS_NewMainOrder2Unit 0x43AFC0`** — stdcall, `ret 0x1C`, seven args
+`(actionIndex, shift, unit, target, pos, p1, p2)`; `pos` is a pointer to **three 16.16
+dwords**.
+
+**Its first branch is on `shift`, and with `shift = 0` almost none of the function runs**
+[BINARY-VERIFIED, corrected by the landing review — the first draft of this section described
+the scan as unconditional]:
+
+```
+43afc0  mov  eax,[esp+0x8]      ; arg2 = shift
+43afd4  test eax,eax
+43afda  je   0x43b08a           ; shift == 0 -> straight to the allocator
+43afe0  mov  esi,[edi+0x5c]     ; else walk the order list, head ALWAYS +0x5C
+```
+
+`0x43B08A` re-pushes the arguments and calls the allocator **`0x43ADC0`**, which takes `0x56`
+bytes (`push 0x56; call 0x4B4F10` at `0x43ADC4`) and constructs the order in place with
+**`0x43A0C0`** (`thiscall`, `ecx` = the new order). The scenario applier passes `shift = 0`, so
+**that is the whole of its path** and everything below about the scan is context, not
+description of what we do.
+
+**What the `shift != 0` scan does when it matches is CANCEL, not merge**
+[BINARY-VERIFIED `0x43B034..0x43B087`]: `0x43B03D` picks `unit+0x60` over `+0x5C` as the list
+head to unlink from when the matched order's flag word `+0x42` has `0x40000` (this is the
+*unlink* head — the walk itself started unconditionally at `+0x5C`), `0x43B05B..0x43B05E`
+unlinks it, `0x43B075 call 0x43A1F0` destructs it, `0x43B07B call 0x4B4F20` frees it, and
+`0x43B087 ret 0x1C` returns **without creating anything**. That is TA's shift-click-a-waypoint-
+to-remove-it behaviour, not a merge.
+
+**And `0x43ADC0` wipes the queue on the way in.** `0x43AE02..0x43AE59` walks `unit+0x5C` and
+destroys every existing order that lacks flag bit `0x4` before linking the new one — so with
+`shift = 0` an order REPLACES the unit's orders rather than queueing. The applier's `orders`
+array therefore only ever takes effect in its last element; recorded in
+[scenario format](scenario-format.html).
+
+**The position is copied verbatim, which is why a read-back probe cannot check it**
+[BINARY-VERIFIED `0x43A164..0x43A177`]:
+
+```
+43a164  mov ecx,[eax]        ; eax = the caller's pos[]
+43a169  mov [esi+0x22],ecx   ; Pos.X
+43a16c  mov ecx,[eax+0x4]
+43a16f  mov [edx+0x4],ecx    ; edx = esi+0x22  -> +0x26
+43a172  mov eax,[eax+0x8]
+43a175  mov [edx+0x8],eax    ;                 -> +0x2A
+```
+
+Three dwords, no scaling and no reordering. So writing the position and reading
+`UnitOrders->Pos` back proves only that nothing mangled it — `passed == stored` is a tautology,
+and the applier's phase-C "measurement" that concluded whole world units was reading exactly
+that tautology.
+
+**What settles the scale, directly.** `0x4815A0` takes a `pos` pointer and turns it into a
+map cell [BINARY-VERIFIED, and this is the strongest evidence — it is a consumer, not an
+inference]:
+
+```
+4815a0  mov eax,[esp+0x4]    ; the pos pointer
+4815a5  mov ecx,[eax]        ; pos[0]
+4815a7  mov eax,[eax+0x8]    ; pos[2]
+4815aa  sar ecx,0x14         ; >> 20 = 16.16 -> world, then / 16 -> a CELL
+4815ad  sar eax,0x14
+4815b4..c8  bounds-check against main+0x14233 / +0x14237, the map's size IN CELLS
+```
+
+`sar 0x14` is only a cell index if the input is 16.16, and the two components it takes are
+**0 and 2**, bounds-checked against the cell dimensions — so those are the ground plane and
+the middle one is the altitude. `ScriptAction_Type2Index` agrees from the other side: at
+`0x43FF5B..0x43FF6F` it reads the three HIGH words (`[esi+0x2]`, `[esi+0x6]`, `[esi+0xA]`) and
+does `sar ebx,1` on the middle one before subtracting it from the third — altitude/2 against
+depth, the engine's own screen-y term.
+
+**The duplicate-order test at `0x43B006..0x43B029` corroborates it** (on the `shift != 0` path,
+so not on ours) [BINARY-VERIFIED]:
+
+```
+43b004  mov ebp,[eax]          ; caller pos[0]
+43b006  sub ebp,[esi+0x22]     ; minus the candidate order's Pos.X
+43b009  add ebp,0x100000
+43b00f  cmp ebp,0x200000
+43b015  ja  0x43b02b           ; too far -> not the same order
+43b017  mov ebp,[eax+0x8]      ; caller pos[2]
+43b01a  sub ebp,[esi+0x2a]     ; minus Pos.Z
+43b01d  add ebp,0x100000
+43b023  cmp ebp,0x200000
+43b029  jbe 0x43b034           ; near enough -> merge
+```
+
+A tolerance of **±0x100000, which is ±16.0 in 16.16 — one map cell**. In whole world units it
+would be ±1 048 576, i.e. the whole map and then some, which is not a tolerance at all; and it
+too compares components **0 and 2** and never 1. The order position is therefore the same
+`TPosition {x, altitude, depth}` that `UNITS_CreateUnit 0x485F50` takes. **There is no
+create/order asymmetry**; `scenario-format.md` §"The coordinate asymmetry" claimed one from
+TADR's `ConstructionKickout` and was wrong, and is corrected there.
+
+**Live confirmation** [MEASURED 2026-09-04, `scenarios/shadow-air.json`, Two Continents]: with
+whole world units, `1900 >> 16 == 0`, and every ordered unit set off for the map origin — a
+Peewee told to `move` to `(1900, 1450)` walked north-west and five aircraft told to fly east
+ended stacked in the north-west corner, one of them reading world `(1, 0)`. With the shift the
+Peewee stops at `1902` and every aircraft reaches `4200`. `patrol` was broken the same way and
+now loops its lane; it had looked like a separate defect and was not.
+
+**Negative results.** `0x43A1F0` (the order destructor, called at `0x43B075`) and `0x4B4F20`
+(the free, `0x43B07B`) were not chased further. Three bits of the order flag word
+`unit_order+0x42` appear and none is named: `0x40000` picks the `+0x60` unlink head
+(`0x43B034`), `0x10000` is OR-ed in at `0x43B068` when the cancelled order is not the one the
+caller passed, and `0x4` exempts an order from `0x43ADC0`'s wipe. `0x41074A` reads
+`order+0x22`/`+0x2A`/`+0x26` and tests each against zero — an "is the position set" check, in
+that order, which is itself consistent with 0 and 2 being the ground plane; what the caller
+does with the answer was not chased. `0x43B0B0` is a **different** function
+that also calls `0x43ADC0` — do not read the `call 0x43adc0` at `0x43B09D` and the one at
+`0x43B120` as the same site.
 
 ## `0x458DD0` — the blit-time build-state effect — mapped by us
 
