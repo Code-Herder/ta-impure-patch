@@ -723,8 +723,13 @@ its destination directly** — the first two are its own OFFSCREEN's `+0x0C` and
 `sum(widths) × font[0]` pixels wherever it is pointed. So we point it at a buffer of ours and
 TA rasterises its own glyphs into it. Called with `(fg,bg,transparent) = (255,0,0)` the store
 `if (colour != transparent)` keeps only the set bits, which makes the result a **1-bit coverage
-mask** rather than a coloured sprite — one raster then serves every colour the same string is
-ever drawn in, and the weapon-range labels need that, theirs flashing every game tick. Field
+mask** rather than a coloured sprite — the atlas is colour-free, so one raster serves the same
+string in any colour and a colour change costs nothing. (An earlier draft of this section said
+the weapon-range labels *need* that because theirs flashes every game tick. They do not:
+`0x438EA0` hands the flashing colour to the LINE drawer only, and the label goes to
+`DrawTextCustomFont`, whose foreground is `[globals+0x208]` — set once at `0x4696E7` and
+untouched inside the block, which is what §"The text globals" of the engine map says. The
+design stands; that reason for it did not.) Field
 map and evidence: `exe-reverse-engineering.md` §"The in-game bitmap font".
 
 **The font and the colour are latched on the GAME thread, at hook 8.** `SetFont 0x4C1420`
@@ -792,7 +797,6 @@ any zoom.
 | `0x4C6AE0` | `OFFSCREEN::GetClipRect` — 4 dwords from `this+0x1C` | thiscall(RECT*), ret 4 |
 | `0x4B6750` | RECT **containment** (inner wholly inside outer), not intersection | stdcall(RECT*,RECT*), ret 8 |
 | `0x4C1420` / `0x4C13A0` / `0x4C13D0` | SetFont → `[globals+0x204]`; SetTextColors(fg,bg) → `+0x208`/`+0x20C`, each skipped on −1; SetTextTransparentColor → `+0x210` | — |
-| `0x4B70EF` / `0x4B7123` | TurnX = **sine**, TurnZ = **cosine**, one table at `0x509F00` (512 × s16, 8192 = 1.0) | cdecl(angle, value) |
 | `0x4C1B80` | KeyboardHotkeySampler — id `0xF9` → GetAsyncKeyState(VK_SHIFT) | (keyId), ret 4 |
 | `0x48CC30` | order-marker driver (per player unit, mask/flag rules §3.1) — sole caller `0x469BFC` | stdcall(ctx,&main+0x142F3), ret 8 |
 | `0x439B30` | order-list walker, dispatch by mask `(*(0x512344))[type*0x19+0xC]`; restores `pos` before bits 0..3 and not before bit 4 | (unit,mask,ctx,view,flag), ret 0x14 |
@@ -804,7 +808,7 @@ any zoom.
 | `0x438EA0` | **DrawRangeCircle** (symbol) — terrain-following segmented circle + label; `(int)(r×2π×0.125)` segments, **no squash** (one radius to both lookups), label at the second endpoint of segment `slot×3`, drawn at `y+4` | (ctx,view,centre,radius,colour,label,slot), ret 0x1C |
 | `0x465AC0` | UnitInPlayerLOS | stdcall(player, unit), ret 8 |
 | `0x485070` | GetPosHeight — pure read of `main+0x14287`, high words `[p+2]`/`[p+0xA]` only | stdcall(POS16_16*), ret 4 |
-| `0x4B70EF`/`0x4B7123` | TurnXLookup / TurnZLookup (sin/cos LUT) | **cdecl** — the callers `add esp,8` |
+| `0x4B70EF`/`0x4B7123` | TurnXLookup / TurnZLookup — TurnX is the **sine** and TurnZ the **cosine**, off one table at `0x509F00` (512 × s16, `8192 = 1.0`), TurnZ adding a quarter turn to the index | **cdecl** — the callers `add esp,8` |
 | `0x4FD2B0` / `0x4FD2B8` / `0x4FD2C0` | the three doubles: 2π, 0.125, 0.89 (the target circle's y/x radius ratio) | `.rdata` |
 | `0x4BF8C0` | **DrawTranspRectangle** — hollow rect (build cursor / band box) | (ctx,RECT*,colour) |
 | `0x4BE950` | DrawLine; `0x4CC7AB` DrawLine2 | stdcall(ctx,x0,y0,x1,y1,colour) |

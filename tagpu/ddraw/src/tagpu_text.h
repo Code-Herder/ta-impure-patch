@@ -28,9 +28,13 @@
    `0x4C16A0` pushes the same two fields of a locally locked surface.] We call it
    with `fg=255, bg=0, transparent=0`, which makes the store `if (colour !=
    transparent)` keep only the set bits: the result is a 1-bit COVERAGE MASK, not
-   a coloured sprite, so one raster serves every colour the same string is ever
-   drawn in — which matters, because the weapon-range labels flash their colour
-   every game tick.
+   a coloured sprite, so the atlas is colour-free and one raster serves the same
+   string in any colour, at no cost when a colour changes. (An earlier revision
+   justified this by saying the weapon-range labels flash their colour every game
+   tick. They do not: `0x438EA0` hands the flashing colour to the LINE drawer
+   only, and the string goes to `DrawTextCustomFont`, whose foreground is
+   `[globals+0x208]` — set once at `0x4696E7` and untouched inside the block. The
+   design is right; that reason for it was wrong.)
 
    Each distinct string is rasterised ONCE into a shelf-packed 8bpp atlas, and
    tagpu_mark.c draws it as a quad in the palette index the engine would have
@@ -66,6 +70,11 @@
 void tagpu_text_snapshot(void);
 
 /* ---- present thread ---- */
+/* Latch the font this frame's rasters will use. Called once per gather, BEFORE
+   any tagpu_text_place: the game thread republishes the snapshot ~83 times per
+   present, and a font change re-packs the atlas, which must not happen between
+   two quads of the same frame. */
+void tagpu_text_frame(void);
 /* The palette index the engine would draw this block's text in; -1 if nothing
    has been snapshotted yet (no in-game frame has run). */
 int  tagpu_text_colour(void);

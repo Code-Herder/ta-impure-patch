@@ -817,7 +817,7 @@ rather than corrected — a "fix" would draw a circle the engine never draws.
 ### `DrawRangeCircle 0x438EA0` — the terrain-following circle
 
 `ret 0x1C`: `(ctx, view, POS16_16* centre, radius, colour, char* label, labelSlot)`. A zero
-radius returns at once (`0x438EAE`). The
+radius returns at once (`cmp ebx,ebp` at `0x438EAC`, `je 0x43908F` at `0x438EAF`). The
 segment count is `(int)(radius · 2π · 0.125)` — the doubles at **`0x4FD2B0`** (2π) and
 **`0x4FD2B8`** (0.125) — i.e. one segment per 8 world units of circumference, and the loop
 runs `i = 0..N` inclusive, stepping `0x10000/N` in angle units per segment.

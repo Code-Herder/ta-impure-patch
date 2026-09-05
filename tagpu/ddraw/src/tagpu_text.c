@@ -87,9 +87,14 @@ typedef struct { char s[STRMAX]; short ax, ay, w, h; } TXENT;
 static TXENT s_ent[MAXSTR];
 static int   s_nent;
 static int   s_shelfX, s_shelfY, s_shelfH;
-static int   s_dropped;
+/* the distinct strings the atlas refused; the first MAXDROP are remembered by
+   name so a repeat is not counted twice */
+#define MAXDROP  16
+static char  s_drop[MAXDROP][STRMAX];
+static int   s_ndrop;
 static const unsigned char* s_builtWith;   /* the font the atlas holds         */
 static const unsigned char* s_fontOk;      /* ...and the one already validated */
+static const char*          s_gfxOk;       /* globals block already probed     */
 static unsigned char s_atlas[ATLAS_W * ATLAS_H];
 static int   s_dirty;
 static GLuint s_tex;
@@ -98,22 +103,41 @@ void tagpu_text_snapshot(void)
 {
     const char* g = *(const char* const*)GFX_GLOBALS_PP;
     if (!ptr_ok(g)) return;
-    /* One SEH-guarded probe per distinct globals block, not one per frame: this
-       runs at every hook 8, i.e. ~83 times per presented frame, and
-       IsBadReadPtr is not free (markown's alpha table learned the same lesson). */
-    if (IsBadReadPtr((void*)(g + GFX_FG), 4)) return;
+    /* ONE SEH-guarded probe per distinct globals block, and the cache is what
+       makes that true: this runs at every hook 8, i.e. ~83 times per presented
+       frame, and IsBadReadPtr is not free — it probes with a read-modify-write
+       into engine memory. markown's alpha table learned exactly this and grew a
+       `g_gfxOk` for it; the first revision here wrote the comment and left the
+       probe unconditional, which is worse than the "one per frame" it disclaims.
+       The probe spans BOTH fields we read (`+0x204` and `+0x208`), so a block
+       whose 0x204 sits on the previous page is refused rather than faulted. */
+    if (g != s_gfxOk) {
+        if (IsBadReadPtr((void*)(g + GFX_FONT), GFX_FG + 4 - GFX_FONT)) return;
+        s_gfxOk = g;
+    }
     g_font = *(const unsigned char* const*)(g + GFX_FONT);
     g_fg   = *(const int*)(g + GFX_FG);
 }
 
 int tagpu_text_colour(void) { return g_fg; }
 
+/* The font this FRAME rasterises with. The game thread republishes `g_font` at
+   every hook 8, ~83 times per present, so reading it per string would let a font
+   change land between the ShowRanges labels and the group digit — and a change
+   re-packs the atlas from scratch, which would leave the quads already emitted
+   into tagpu_mark.c's bucket naming texels that have just been cleared. Every
+   one of those labels would sample 0 and discard every fragment. Latched once
+   per gather instead, so within a frame the atlas cannot move under anyone. */
+static const unsigned char* s_frameFont;
+
+void tagpu_text_frame(void) { s_frameFont = g_font; }
+
 /* The font, validated as far as we will index it. `first` is read before the
    probe because the probe's length depends on it — so that first byte is
    covered by a probe of its own. */
 static const unsigned char* font_ok(void)
 {
-    const unsigned char* f = g_font;
+    const unsigned char* f = s_frameFont;
     int first, need;
     if (!ptr_ok(f)) return NULL;
     if (f == s_fontOk) return f;
@@ -127,15 +151,30 @@ static const unsigned char* font_ok(void)
     return f;
 }
 
-/* `0x4C1527`, character for character: a code below `first` and a glyph whose
-   offset is 0 are both skipped WITHOUT advancing, and a NUL or a newline ends
-   the string. */
-static int measure(const unsigned char* f, const char* s, int* w, int* h)
+/* THE STRING WE WILL ACTUALLY RASTERISE, and the measure of it, from one pass.
+
+   These two must agree about every character or the blit writes past the width
+   we reserved — and they cannot be made to agree by bounding the CHARACTER on
+   our side alone, which is what the first revision did: `0x4CCF60` skips a code
+   below `first` and a zero table entry and NOTHING ELSE (`0x4CCFAA`,
+   `0x4CCFB9`), so a byte outside our `[CH_LO, CH_HI]` window with a non-zero
+   offset entry is measured as nothing here and blitted as a glyph there. Every
+   string this pass has is an ASCII literal, so it was not reachable — but the
+   invariant was held by the call sites rather than by the code, in a function
+   whose contract is "hand me any string".
+
+   So the filter is applied to the STRING: `out` is the subsequence the blitter
+   will draw, and `total` is its width. Rasterise `out`, not `s`, and the two
+   cannot disagree. `0x4C1527`, character for character otherwise: a NUL or a
+   newline ends it, and a skipped code does not advance the cursor. */
+static int measure(const unsigned char* f, const char* s, char* out, size_t outsz,
+                   int* w, int* h)
 {
     const unsigned short* tab = (const unsigned short*)(f + F_TAB);
     int first = f[F_FIRST];
     int total = 0;
-    for (; *s; s++) {
+    size_t n = 0;
+    for (; *s && n + 1 < outsz; s++) {
         unsigned c = (unsigned char)*s;
         unsigned off;
         if (c == '\n') break;
@@ -143,32 +182,46 @@ static int measure(const unsigned char* f, const char* s, int* w, int* h)
         off = tab[c - first];
         if (!off) continue;
         total += f[off];
+        out[n++] = (char)c;
     }
+    out[n] = 0;
     *w = total;
     *h = f[F_ROWS];
     return total > 0;
 }
 
-/* A string the atlas could not take. Logged ONCE — the caller asks again every
-   frame, and a per-frame line would bury the log it is meant to explain. */
+/* A string the atlas could not take. Counted as DISTINCT strings, not as calls:
+   the caller asks again every frame, so a per-call tally would report the frame
+   rate rather than what was lost — in the one log line somebody reads when text
+   goes missing. Logged once for the same reason. */
 static void drop(const char* s)
 {
     char b[96];
-    if (s_dropped++) return;
-    _snprintf(b, sizeof b, "text: atlas FULL, dropping \"%.48s\" (%d strings)", s, s_nent);
-    flog(b);
+    int i;
+    for (i = 0; i < s_ndrop && i < MAXDROP; i++)
+        if (!strcmp(s_drop[i], s)) return;                 /* already counted */
+    if (s_ndrop < MAXDROP) {
+        _snprintf(s_drop[s_ndrop], STRMAX, "%.*s", STRMAX - 1, s);
+        s_drop[s_ndrop][STRMAX - 1] = 0;
+    }
+    if (!s_ndrop++) {
+        _snprintf(b, sizeof b, "text: atlas FULL, dropping \"%.48s\" (%d strings)",
+                  s, s_nent);
+        flog(b);
+    }
 }
 
 int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
 {
     const unsigned char* f = font_ok();
+    char draw[STRMAX];
     int i, sw, sh, y;
 
     if (!f || !s || !*s) return 0;
     /* A new font is a new atlas: the glyphs in it are that font's, and the
        shelves are sized by its row count. */
     if (f != s_builtWith) {
-        s_nent = 0; s_shelfX = 0; s_shelfY = 0; s_shelfH = 0; s_dropped = 0;
+        s_nent = 0; s_shelfX = 0; s_shelfY = 0; s_shelfH = 0; s_ndrop = 0;
         memset(s_atlas, 0, sizeof s_atlas);
         s_builtWith = f;
         s_dirty = 1;
@@ -184,7 +237,7 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
         }
     }
     if (s_nent >= MAXSTR || strlen(s) >= STRMAX) { drop(s); return 0; }
-    if (!measure(f, s, &sw, &sh)) return 0;
+    if (!measure(f, s, draw, sizeof draw, &sw, &sh)) return 0;
     if (sw > ATLAS_W || sh > ATLAS_H) { drop(s); return 0; }
 
     if (s_shelfX + sw > ATLAS_W) { s_shelfY += s_shelfH; s_shelfX = 0; s_shelfH = 0; }
@@ -197,7 +250,7 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
     /* x=0 and y=font+0x02 put the string's first pixel at the sub-rect's own
        origin, because the blitter's destination is base + (y - font[2])*pitch + x */
     ((PFN_BLIT)BLIT_VA)(s_atlas + (size_t)s_shelfY * ATLAS_W + s_shelfX, ATLAS_W,
-                        f, s, 0, (int)(signed char)f[F_YOFF], INK, 0, 0);
+                        f, draw, 0, (int)(signed char)f[F_YOFF], INK, 0, 0);
 
     strcpy(s_ent[s_nent].s, s);
     s_ent[s_nent].ax = (short)s_shelfX;
@@ -252,6 +305,6 @@ void tagpu_text_glreset(void)
 int tagpu_text_stats(int* strings, int* dropped)
 {
     if (strings) *strings = s_nent;
-    if (dropped) *dropped = s_dropped;
+    if (dropped) *dropped = s_ndrop;
     return s_nent;
 }

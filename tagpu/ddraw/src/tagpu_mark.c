@@ -128,10 +128,14 @@
    triangles instead, with the draw offsets computed at render. */
 #define MAXORDT      12000                   /* order triangle verts (dots)  */
 #define MAXORDL      12000                   /* order line verts (2 per line)*/
-/* text quads: the ShowRanges labels (up to twelve per unit with the toggle on)
-   and one group digit per watched unit. 400 quads is the same order of
-   magnitude as MAXBAR and costs 67 KB. */
-#define MAXORDX      2400                    /* text verts (6 per quad)      */
+/* Text quads: the ShowRanges labels (up to twelve per SELECTED unit with the
+   toggle on) and one group digit per watched unit, in ONE bucket — 800 quads,
+   134 KB. The order gather runs first, so a frame that overruns this loses the
+   digits rather than the labels; `s_xover` counts it and `mark: … over=N` says
+   so. That ordering is deliberate (it is the engine's own draw order) but it is
+   the failure mode to know: ShowRanges over a large selection is the only thing
+   that can reach the cap, and it costs the digits first. */
+#define MAXORDX      4800                    /* text verts (6 per quad)      */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
@@ -307,9 +311,9 @@ static const char* FS =
     "  int pi;\n"
     /* Text is a COVERAGE mask, not a palette image: tagpu_text.c rasterises TA's
        glyphs with (fg,bg,transparent) = (255,0,0), so the texel says only whether
-       the glyph covers this fragment and the colour comes from the vertex — one
-       raster then serves every colour the same string is drawn in, which the
-       weapon-range labels need because theirs flashes every game tick. */
+       the glyph covers this fragment and the colour comes from the vertex — which
+       keeps the atlas colour-free and lets the same string be drawn in any
+       colour for one raster. */
     "  if (uText != 0) {\n"
     "    if (texture(uLayer, vUV).r < 0.5) discard;\n"
     "    pi = int(vCol * 255.0 + 0.5);\n"
@@ -624,6 +628,8 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     /* before anything emits: tagpu_order.c's labels come through
        tagpu_mark_emit_text, which sizes its quads with this */
+    /* one font for the whole frame, before anything asks the atlas for a string */
+    tagpu_text_frame();
     s_px  = 1.0 / (double)(v->zoom > 0.0f ? v->zoom : 1.0f);
     s_zoom = v->zoom > 0.0f ? (double)v->zoom : 1.0;
     s_zcx = (double)v->zoomCx; s_zcy = (double)v->zoomCy;

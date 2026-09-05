@@ -904,9 +904,13 @@ static void range_label(double wx, double walt, double wz, double rad,
     h = ((int (__stdcall *)(const int*))POSHEIGHT_VA)(p);
     if ((double)h > va) va = (double)h;
     project(vx, va, vz, &sx, &sy);
-    /* a whole label can hang well off its anchor, so the slack is a label's
-       width rather than a marker's */
-    if (!on_screen(sx, sy, 64.0f)) return;
+    /* A whole label hangs off its anchor to the right and below, so the slack is
+       a label's width rather than a marker's — and it is in GAME-FRAME units
+       while the label is a constant SCREEN size, so it has to scale by `s_px`
+       like the quad does. A flat 64 is a quarter of a label at 0.25x, and the
+       symptom is labels popping in and out along the left and top edges of the
+       zoomed-out ring. */
+    if (!on_screen(sx, sy, (float)(64.0 * s_px))) return;
     col = tagpu_text_colour();
     if (col < 0 || col > 255) col = s_gui[GUI_WHITE];
     if (!tagpu_mark_emit_text(sx, sy + (float)(4.0 * s_px), label, col,

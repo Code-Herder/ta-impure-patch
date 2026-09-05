@@ -189,8 +189,8 @@ arguments and no context, no clip rect and no bound of any kind — `0x4C14F0` f
 two from its own OFFSCREEN's `+0x0C` and `+0x08`. Point it at a buffer of ours and TA
 rasterises its own glyphs into it. Called with `(255, 0, 0)` the store `if (colour !=
 transparent)` keeps only the set bits, which makes the result a **1-bit coverage mask** rather
-than a coloured sprite: one raster per string then serves every colour it is ever drawn in, and
-the weapon-range labels need exactly that, theirs flashing every game tick. Each distinct
+than a coloured sprite: the atlas is colour-free, so one raster per string serves it in any
+colour and a colour change costs nothing. Each distinct
 string lands once in a shelf-packed 512×256 atlas (`tagpu_text.c`).
 
 **The font and colour are latched on the GAME thread, at hook 8.** `SetFont 0x4C1420` runs many
