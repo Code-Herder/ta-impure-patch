@@ -44,6 +44,7 @@ python -m unditherer restore INPUT [INPUT …] [-o OUT] [options]
 python -m unditherer analyze INPUT [--json]
 python -m unditherer presets [--json]
 python -m unditherer models  [--json]
+python -m unditherer export-weights [--model full|tiny] [-o OUT] [--json]
 ```
 
 `restore` reads indexed PNGs (the game's frames and textures) or any RGB
@@ -126,6 +127,23 @@ A summary line per file goes to stderr:
 ```
 water-world.png: q=33.3 step=44.9->3.6 tuned 5x5 disc x2 l1 sigma_r=43.3 undither=True deband=False edges=0.99 hf_red=0.94 shift=1.30 1.69s -> /tmp/ww.png
 ```
+
+`export-weights` writes a shipped model as **the GLSL restorer's weight file**,
+`models/<name>.w32.bin` — the same convolutions, BatchNorm folded, laid out as
+the fragment shaders in `tagpu/ddraw/src/tagpu_restore_glsl.h` index them (a
+std140 block of `mat4` per output channel-tile; `weights.py` documents the
+layout). It refuses to write anything that disagrees: the ONNX initializers
+are checked against an independent fold of the `.pt` checkpoint, and the
+packed blocks are run through `weights.run_reference` (numpy, tap by tap, as
+the shader does it) against onnxruntime on a random tile in both padding
+classes, square and not — 2.7e-7 for `full`. Both files are committed beside
+the models they came from; `tools/tascene build` copies them into a pack and
+`tools/tacli` links them into a game's directory.
+
+The torch backend runs **strict fp32**: cuDNN's default TF32 convolutions
+flip about 0.6 % of the rounded bytes by one level against an fp32 run, which
+matters because this restorer is the reference other implementations are
+diffed against (`infer.py` pins `allow_tf32 = False`).
 
 `edges` is edge retention (Canny edges of the input that survive), `hf_red`
 the reduction of high-frequency energy in flat regions, `shift` the largest

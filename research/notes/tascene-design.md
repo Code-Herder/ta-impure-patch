@@ -201,6 +201,8 @@ the visible cell count, off-map cells, features and unit triangles.
 | `serve <pack>` | the lab on loopback. `--port` (default: an ephemeral one) |
 | `shot <pack> -o <png>` | one deterministic headless frame. `--opts '<query>'` passes the viewer parameters below; `--timeout`, `--budget` (Chrome's `--virtual-time-budget`, ms); `--json` |
 | `artlight` | **is the map art already painted lit?** `--map <name>` or `--all`; `--steep` (default 0.25 ≈ 14°), `--elevation` (default 53.1, the engine's own), `--json` for the whole azimuth curve. Needs no pack and no game — it reads the TNT. See "Does the art already contain the hill" below |
+| `restore <pack>` | **the GLSL restorer's bench** ([renderers](renderers.html) §4c): the viewer under `restore=glsl&restorediff=1` in headless Chrome, its report read out of the DOM. `--model full\|tiny`, `--precision fp32\|fp16`, `--nk N` (output channel-tiles per conv draw; default the device's most), `--no-diff` to time only, **`--gpu vulkan`** for ANGLE on the real adapter (SwiftShader is the default: deterministic, and ~10 min for Two Continents against 1.2 s on the 4070), `--opts`, `--timeout`, `--budget`, `--json`. Exit 1 when the diff fails the bar |
+| `restorediff <pack> <dump.rgba>` | the in-game proof: the DLL's `tagpu_restore.rgba` (written once under `tagpu_restoredump.on`, the same 2176-wide 34-pitch layout as the pack's `terrain/atlas.rgba.bin`) diffed against the pack with the same bar. Exit 1 on failure |
 | `ab <scenario.json>` | drive both sides and diff. `--name` the instance (default `tascene`), `--no-launch` to use one already running, `--eye X,Y` to pin the camera, `--los`/`--mapping` for the SKIRMISH fog toggles (defaults `0`/`1` = no fog), `--settle` seconds to wait for a roster with units and a real eye, `--opts`, `--launch-timeout`, `--json` |
 
 ### Viewer query parameters
@@ -244,6 +246,7 @@ These exist only in `lane=explore`, and they are what landing 2 added.
 | `terrainshadow=<b>` | the heightfield casts too, default 1. The art has slope shading but no cast shadows, so this adds and does not double-count the way relief did; on Two Continents' 53° sun it amounts to 786 pixels |
 | `shadowres=<n>` | depth map size, default 2048. The light-space bounds are the view plus a 192-unit margin and the height range actually in view, about 0.7 world units per texel |
 | `debug=shadow` | (global) show side A's depth map instead of the frame, near = bright |
+| `restore=<how>` | **CLASSIC++ only.** Where the terrain's restored colour comes from: `pack` (default — `terrain/atlas.rgba.bin`, restored offline by the unditherer at build time) or **`glsl`** — the GLSL restorer (`tascene-restore.js`, the shaders extracted from `tagpu_restore_glsl.h`, the weights from `restore/<model>.w32.bin`) run in the page on the pack's own R8 atlas, which is what the game does. Implies `undither=1`. With `model=full\|tiny`, `precision=fp32\|fp16`, `nk=N`; **`restorediff=1`** reads the result back and diffs it against the pack's atlas (the Q2 bar: max 1 level, < 0.01 % of interior RGB bytes, the guard ring a copy of the edge), in the status bar and as a hidden `<pre id="restore-report">` for `tascene restore` |
 | `undither=<b>` | `1` = the pack's restored atlases, `0` = the palette indices. **Default: restored when the pack carries them** (`build --undither`), indexed otherwise — so the lane's defaults still reduce to parity on an indexed pack, and show the colour a restored pack was built for. `undither=1` on a pack built without `--undither` says so instead of drawing something plausible |
 
 ### The renderer buttons
@@ -602,6 +605,18 @@ Two lane differences remain by construction, both located rather than guessed:
   31 — same buffer, same stride, one float re-meant. That is the whole
   difference between the two shading philosophies, and it is the decision
   ("undithered drops the LUT") made visible.
+
+### The restorer's reference was TF32 until 2026-09-05
+
+The pack's `atlas.rgba.bin` is the reference the game's restorer is diffed against, and until
+2026-09-05 it was computed by torch on CUDA with cuDNN's **default TF32 convolutions**. That is
+invisible in PSNR and visible in bytes: the first fp32 GLSL run differed from it on 0.63 % of
+interior bytes, all by one level — the same 0.006-level figure §2.5 of [renderers](renderers.html)
+had recorded for DirectML against the same pack, so the ONNX path had been measured against TF32
+too. `unditherer/infer.py` now pins `allow_tf32 = False` for both cuDNN and matmul, and the
+undither cache's magic went `TSU1 → TSU2` so every cached frame was recomputed (5,154 frames,
+a couple of minutes on the 4070). Against the strict reference the GLSL restorer differs on
+0.0012 % (179 bytes of 15.5 M, max 1 level) on the GPU and 0.0011 % on SwiftShader.
 
 ### The restorer, cached  [VERIFIED 2026-09-03]
 

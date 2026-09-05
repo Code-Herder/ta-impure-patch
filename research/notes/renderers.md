@@ -549,15 +549,59 @@ zero. The last pass computes `in − net`, rounds to 8 bits and renders **straig
 restored atlas** in its 34-px-pitch cell layout, border texels included, so `upload_rgb` and its
 CPU copy go.
 
-**Cost** **[ESTIMATED — the prototype exists to replace this line with a measurement]**: Two
-Continents is 4,662 cells at 32² + 400 at 56² ≈ 6.0 M texels ≈ 4.5 TFLOP; a 4070's fp32 peak is
-~29 TFLOPS and fragment-shader convolutions reach 15–30 % of it, with ~2.3 KB of fetches per
-fragment per layer (mostly cache hits — neighbours share 8 of 9 taps) as the likelier limiter:
-**0.5–2 s**, the same ballpark as DirectML's measured 1.83 s in-game. The win is not speed; it is
-deleting onnxruntime, vkd3d-proton, DirectML, the always-paid 1.0–1.9 s session build, the
-permanent +160 MiB and §4's "untested on other adapters" risk. The tiny model would be ~0.05–0.1 s.
-Transient memory: a 64-cell batch of 56² cells × 64 channels fp32 = 51 MB per ping-pong buffer,
-~100 MB during the restore, freed after; fp16 halves it.
+**Cost — MEASURED 2026-09-05, in the browser lab on the RTX 4070 (headless Chrome, ANGLE over
+Vulkan, `tools/tascene restore`), Two Continents' 5,062 tiles = 4,662 cells at 32² + 400 wrap-padded
+at 56², GPU time from `EXT_disjoint_timer_query_webgl2`, all against the pack's strict-fp32 reference:**
+
+| model | precision | NK | draws | GPU time | Q2 diff (interior RGB bytes) |
+|---|---|---|---|---|---|
+| full 12×64 | fp32 | 4 | 3,760 | **1.15 s** (S32 0.90 s, S56 0.24 s) | **max 1 level, 179 of 15,550,464 = 0.0012 %, guard ring 0 — PASS** |
+| full | fp32 | 2 | 7,280 | 1.08 s | same 179 bytes |
+| full | fp32 | 1 (= channel-tiled) | 14,320 | 1.85 s | same 179 bytes |
+| full | fp16 | 4 | 3,760 | 1.12 s | max 1 level on 722,948 = **4.65 %** — no faster, rejected (Q4) |
+| tiny 6×24 | fp32 | 8 | 640 | 0.13 s | not diffed (a different model) |
+| tiny | fp32 | 1 | 2,640 | 0.10 s | — |
+
+Three runs of the headline row agree to 1 % (1,141–1,148 ms). The estimate this replaced said
+0.5–2 s; 4.5 TFLOP in 1.15 s is ~4 TFLOPS sustained, 14 % of the card's fp32 peak. The **layout
+question is settled by the NK column**: one output tile per draw (the channel-tiled cost) is
+1.6× slower than two or four, and four is no better than two, so the pass is not fetch-bound past
+NK=2 — it is arithmetic. fp16 storage buys nothing because the activation fetches were never the
+limit, and it costs 4.65 % of bytes — so fp32 is what ships, and there is no precision decision
+left to take. The tiny model is 9–11× cheaper than full here, not the 17× of the MAC count.
+Transient memory: two 448² × 16-layer RGBA32F arrays = 103 MB during the restore, freed after.
+The win stays what it was: deleting onnxruntime, vkd3d-proton, DirectML, the always-paid 1.0–1.9 s
+session build and the permanent +160 MiB.
+
+**In the running game** **[IN-GAME: pending — filled in by landing 2]**.
+
+**What the bench changed on the way** (each a fact, not a decision):
+
+- **The pack's reference was TF32.** `unditherer`'s torch backend ran on CUDA with cuDNN's
+  default TF32 convolutions; against that reference the first fp32 GLSL run differed on **0.63 %
+  of bytes** (mean 0.0063 levels) — the very figure §2.5 recorded for DirectML against the same
+  pack, which means the ONNX path was measured against a TF32 reference too. `infer.py` now
+  pins `allow_tf32 = False`, `tascene`'s undither cache magic went `TSU1 → TSU2` to drop the old
+  entries, and the strict reference is what the table above is against.
+- **Activations are array layers, not a channel-tiled sheet.** One `GL_TEXTURE_2D_ARRAY` layer
+  per four channels lets a conv draw write NK layers through NK colour attachments, which is
+  the MRT variant of the mechanism above with no k arithmetic in the shader; NK=1 *is* the
+  channel-tiled cost. NK is chosen per device from `MAX_UNIFORM_BLOCK_SIZE` (one k-block of the
+  full model is 9,472 bytes; the 16 KB WebGL2 minimum allows 1, NVIDIA's 64 KB allows 4).
+- **Weights are a std140 uniform block, not a texture buffer.** The plan said a TBO; WebGL2 has
+  none, and a texture of weights costs 4 fetches per activation fetch. A block of `mat4` bound
+  per (layer, k-group) with `glBindBufferRange` is a broadcast read, reads the same on both
+  sides, and keeps the shader body byte-identical — `unditherer/weights.py` writes the blocks
+  padded to 256 bytes (the largest offset alignment any driver reports) with the layout in its
+  docstring, and `run_reference` runs the model *from the packed blocks* in numpy against
+  onnxruntime (2.7e-7 max) before any shader sees them.
+- **The rounding writes `(k + 0.25) / 255`**, so a driver that truncates the float-to-unorm
+  conversion and one that rounds both store exactly `k` — the GL 3.3 spec only *prefers*
+  rounding.
+- **Headless Chrome's clocks stand still** under `--virtual-time-budget`, and its `gl.finish()`
+  returns before ANGLE/Vulkan is done (5,062 tiles "in 20 ms"): the bench takes its wall time
+  from the server (`tascene` serves `__now`) across a one-texel `readPixels`, and its GPU time
+  from timer queries collected after the run, because every task boundary costs virtual time.
 
 ### The decisions
 

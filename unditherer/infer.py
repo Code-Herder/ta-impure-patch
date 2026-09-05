@@ -89,6 +89,14 @@ class LearnedRestorer:
     def _init_torch(self, device):
         import torch
         from .model import Restorer, count_params
+        # Strict fp32. cuDNN runs convolutions in TF32 by default on Ampere and
+        # later (10-bit mantissa inputs), which is invisible in PSNR terms but
+        # flips ~0.6 % of the rounded bytes by one level against an fp32 run
+        # (measured 2026-09-05: the GLSL restorer against a TF32 reference).
+        # This restorer is the reference other implementations are diffed
+        # against, so it must be the arithmetic the model file actually says.
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cuda.matmul.allow_tf32 = False
         dev = torch.device("cuda" if torch.cuda.is_available() else "cpu") if device == "auto" else torch.device(device)
         ck = torch.load(self.path, map_location=dev, weights_only=False)
         m = Restorer(ck["depth"], ck["ch"]).to(dev)

@@ -225,6 +225,8 @@
 <div id="err"></div>
 
 <script type="module">
+import { RESTORE_SHADERS, Restorer, parseWeights, terrainFrames, readTexture, diffAtlas }
+  from "./tascene-restore.js";
 const Q = new URLSearchParams(location.search);
 const SHOT = Q.get("shot") === "1";
 const SS   = Math.max(1, parseInt(Q.get("ss") || "2", 10));
@@ -275,7 +277,8 @@ const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither",
                       "filter", "aniso", "shadows", "penumbra", "shade",
                       "terrainshadow", "shadowres", "unitsun", "shadowsun",
-                      "shadowlen", "airshadow"];
+                      "shadowlen", "airshadow", "restore", "model", "precision",
+                      "nk", "restorediff"];
 
 function sideQuery(side, presets) {
   const p = new URLSearchParams();
@@ -409,6 +412,25 @@ function readLook(p, label) {
         fail(`${label}: airshadow must be drop, len or physical`);
       return v;
     })(),
+    // the terrain's restored colour: the pack's pre-restored atlas, or the
+    // GLSL restorer run here on the pack's R8 atlas (tascene-restore.js)
+    restore: (() => {
+      const v = p.get("restore") || "pack";
+      if (!["pack", "glsl"].includes(v)) fail(`${label}: restore must be pack or glsl`);
+      return v;
+    })(),
+    model: (() => {
+      const v = p.get("model") || "full";
+      if (!["full", "tiny"].includes(v)) fail(`${label}: model must be full or tiny`);
+      return v;
+    })(),
+    precision: (() => {
+      const v = p.get("precision") || "fp32";
+      if (!["fp32", "fp16"].includes(v)) fail(`${label}: precision must be fp32 or fp16`);
+      return v;
+    })(),
+    nk: p.get("nk") === null ? null : Math.max(1, num("nk", 1) | 0),
+    restorediff: p.get("restorediff") === "1",
     stats: {},
   };
 }
@@ -823,8 +845,18 @@ async function main() {
   const PITCH = map.atlas.pitch || TILE_PX;
   const BORDER = map.atlas.border || 0;
 
-  if (wantRGB && !map.atlas.rgba)
+  // restore=glsl on any Classic++ side restores the terrain HERE, from the R8
+  // atlas; the side that names it decides model/precision/nk for the one atlas
+  const glslSide = sides.find((L) => L.lane === "explore" && L.restore === "glsl") || null;
+  if (glslSide) for (const L of sides) if (L.lane === "explore") L.undither = true;
+  if (wantRGB && !map.atlas.rgba && !glslSide)
     fail("undither=1, but this pack has no restored atlases.\n" +
+         "Rebuild it with:  tools/tascene build <scenario> -o <pack> --undither");
+  if (glslSide && !(scene.restore && scene.restore.weights && scene.restore.weights[glslSide.model]))
+    fail(`restore=glsl, but this pack carries no ${glslSide.model} weights.\n` +
+         "Rebuild it with:  tools/tascene build <scenario> -o <pack>");
+  if (glslSide && glslSide.restorediff && !map.atlas.rgba)
+    fail("restorediff=1 needs the pack's own restored atlas to diff against.\n" +
          "Rebuild it with:  tools/tascene build <scenario> -o <pack> --undither");
 
   const [atlasBuf, tilemapBuf, heightBuf, palBuf, terrVS, terrFS, sprVS, sprFS] =
@@ -853,7 +885,7 @@ async function main() {
     }));
   }
   const [terrRGB, featRGB, unitRGB] = wantRGB ? await Promise.all([
-    fetchBin(map.atlas.rgba),
+    map.atlas.rgba && (!glslSide || glslSide.restorediff) ? fetchBin(map.atlas.rgba) : null,
     hasFeat && scene.features.atlas.rgba ? fetchBin(scene.features.atlas.rgba) : null,
     hasUnit && scene.units.atlas.rgba ? fetchBin(scene.units.atlas.rgba) : null,
   ]) : [null, null, null];
@@ -875,7 +907,46 @@ async function main() {
   const rgbaTex = (unit, buf, w, h) =>
     tex2D(gl, unit, gl.RGBA8, buf ? w : 1, buf ? h : 1, gl.RGBA, gl.UNSIGNED_BYTE,
           buf || DUMMY);
-  rgbaTex(8, terrRGB, map.atlas.w, map.atlas.h);
+  let restoreReport = null;
+  if (glslSide) {
+    // the GLSL restorer, on the very R8 atlas texture bound on unit 0
+    const [wBytes, ...bodies] = await Promise.all([
+      fetchBin(scene.restore.weights[glslSide.model]),
+      ...RESTORE_SHADERS.map((n) => fetchText("shaders/" + n)),
+    ]);
+    const shaders = Object.fromEntries(RESTORE_SHADERS.map((n, i) => [n, bodies[i]]));
+    gl.activeTexture(gl.TEXTURE0);
+    const atlasTex = gl.getParameter(gl.TEXTURE_BINDING_2D);   // unit 0: the R8 atlas
+    gl.activeTexture(gl.TEXTURE1);
+    const palTex = gl.getParameter(gl.TEXTURE_BINDING_2D);      // unit 1: the palette
+    const dest = { tex: gl.createTexture(), w: map.atlas.w, h: map.atlas.h };
+    gl.activeTexture(gl.TEXTURE8);
+    gl.bindTexture(gl.TEXTURE_2D, dest.tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, dest.w, dest.h);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const restorer = new Restorer(gl, shaders, parseWeights(wBytes),
+                                  { precision: glslSide.precision, nk: glslSide.nk });
+    const frames = terrainFrames(map, atlasBuf, palBuf);
+    const stats = await restorer.restore(frames, atlasTex, palTex, dest);
+    restoreReport = { model: glslSide.model, ...stats };
+    if (glslSide.restorediff) {
+      const got = readTexture(gl, dest.tex, dest.w, dest.h);
+      restoreReport.diff = diffAtlas(got, terrRGB, map);
+    }
+    restorer.dispose();
+    // the report is DOM text so a headless run (`tascene restore`) can read it
+    const pre = document.createElement("pre");
+    pre.id = "restore-report"; pre.hidden = true;
+    pre.textContent = JSON.stringify(restoreReport);
+    document.body.appendChild(pre);
+    gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, dest.tex);
+    gl.activeTexture(gl.TEXTURE0);
+  } else {
+    rgbaTex(8, terrRGB, map.atlas.w, map.atlas.h);
+  }
 
   // ---- offscreen(s) at game resolution (x SS). One per wipe side, because the
   // wipe compares two whole frames, not two halves of one.
@@ -1846,7 +1917,16 @@ async function main() {
                        `<span>shadowsun</span><b>${L.shadowSunAE.join(",")}</b>` : "") +
             `<span>amb</span><b>${L.amb.toFixed(2)}</b>` +
             `<span>slope</span><b>${L.slope}</b>` +
-            `<span>colour</span><b>${L.undither ? "restored" : "indexed"}</b>` +
+            `<span>colour</span><b>${L.undither ? "restored" : "indexed"}` +
+            (restoreReport && L === glslSide
+              ? ` (glsl ${restoreReport.model} ${restoreReport.precision} nk${restoreReport.nk}` +
+                ` ${restoreReport.ms.toFixed(0)} ms` +
+                (restoreReport.diff
+                  ? `; diff ${restoreReport.diff.pass ? "PASS" : "FAIL"} max ${restoreReport.diff.max}` +
+                    ` ${restoreReport.diff.differing}/${restoreReport.diff.bytes} bytes` +
+                    ` ${restoreReport.diff.pct.toFixed(4)}% ring ${restoreReport.diff.ring}`
+                  : "") + ")"
+              : "") + `</b>` +
             `<span>filter</span><b>${L.filter}${L.filter === "linear" && L.aniso > 1
                 ? ` ·${Math.min(L.aniso, ANISO_MAX || 1)}x` : ""}</b>` +
             `<span>shadows</span><b>${L.shadows

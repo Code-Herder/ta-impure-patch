@@ -22,6 +22,7 @@ as a module the way tools/test_ta3do.py already loads it.
 
 import argparse
 import hashlib
+import html
 import json
 import math
 import os
@@ -30,6 +31,7 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.parse
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -418,6 +420,47 @@ SHADER_SET = [("tagpu_terr.c", {"terrain.vert": "VS", "terrain.frag": "FS"}),
               ("tagpu_feat.c", {"sprite.vert": "VS", "sprite.frag": "FS"}),
               ("tagpu_native.c", {"unit.vert": "VS", "unit.frag": "FS"})]
 
+# The GLSL restorer's shaders (renderers.md 4c) live as macros in their own
+# header, with no #version line: the DLL prefixes "#version 330 core" and the
+# lab "#version 300 es" plus the NK/WMAX defines, and the body is the same
+# bytes on both sides -- that is the whole point of extracting rather than
+# copying (tascene-restore.js is the driver, not a second shader).
+RESTORE_HEADER = "tagpu_restore_glsl.h"
+RESTORE_SHADERS = {"restore_fs.vert": "TAGPU_RESTORE_FS_VS",
+                   "restore_fill.frag": "TAGPU_RESTORE_FILL_FS",
+                   "restore_conv.frag": "TAGPU_RESTORE_CONV_FS",
+                   "restore_out.vert": "TAGPU_RESTORE_OUT_VS",
+                   "restore_out.frag": "TAGPU_RESTORE_OUT_FS"}
+RESTORE_MODELS = ("full", "tiny")
+
+
+def extract_restore_shaders():
+    """{glsl_name: body} from tagpu_restore_glsl.h, bodies without a #version."""
+    header = SRC_ROOT / "tagpu/ddraw/src" / RESTORE_HEADER
+    if not header.exists():
+        die(f"no such tagpu header: {header}")
+    macros = read_glsl_macros(header)
+    out = {}
+    for glsl_name, symbol in RESTORE_SHADERS.items():
+        if symbol not in macros:
+            die(f"{RESTORE_HEADER}: no macro {symbol}")
+        params, body = macros[symbol]
+        text = _macro_body(body, params, [])
+        if not text.strip():
+            die(f"{RESTORE_HEADER}: {symbol} is empty")
+        out[glsl_name] = text
+    return out
+
+
+def restore_weights():
+    """{model: path} of the shipped weight files (unditherer export-weights)."""
+    found = {}
+    for name in RESTORE_MODELS:
+        path = SRC_ROOT / "unditherer/models" / f"{name}.w32.bin"
+        if path.exists():
+            found[name] = path
+    return found
+
 
 # --------------------------------------------------------------------------- undither
 
@@ -433,7 +476,10 @@ SHADER_SET = [("tagpu_terr.c", {"terrain.vert": "VS", "terrain.frag": "FS"}),
 
 CACHE_ENV = "TASCENE_CACHE"
 UNDITHER_BATCH = 256                  # frames per unditherer process
-CACHE_MAGIC = b"TSU1"
+# TSU2 since 2026-09-05: TSU1 entries were restored by torch on CUDA with
+# cuDNN's default TF32 convolutions, which differ from fp32 by one level on
+# ~0.6 % of bytes (unditherer/infer.py); bumping the magic makes them misses.
+CACHE_MAGIC = b"TSU2"
 
 
 def cache_root(explicit=None) -> Path:
@@ -1112,6 +1158,14 @@ def cmd_build(args):
 
     for name, src in extract_shaders(SHADER_SET).items():
         (out / "shaders" / name).write_text(src)
+    for name, src in extract_restore_shaders().items():
+        (out / "shaders" / name).write_text(src)
+    weights = restore_weights()
+    if not weights:
+        die("no restorer weights in unditherer/models (run: python -m unditherer export-weights)")
+    (out / "restore").mkdir(exist_ok=True)
+    for name, path in weights.items():
+        (out / "restore" / path.name).write_bytes(path.read_bytes())
 
     defs = FeatureDefs(assets)
     features = None
@@ -1142,7 +1196,11 @@ def cmd_build(args):
         "depth": {"terrain": 0.10, "scale": 512.0,
                   "flat0": 0.40, "flatSpan": 0.10, "tall0": 3.0, "rowStep": 4.0,
                   "unit0": 1.0, "shadowTall": 0.30, "shadowFlat": 0.03},
-        "shaders": sorted(n for n in extract_shaders(SHADER_SET)),
+        "shaders": sorted(list(extract_shaders(SHADER_SET)) + list(RESTORE_SHADERS)),
+        # the GLSL restorer: the viewer's restore=glsl runs these shaders with
+        # these weights on terrain/atlas.r8.bin (tascene-restore.js)
+        "restore": {"weights": {n: f"restore/{p.name}" for n, p in weights.items()},
+                    "shaders": sorted(RESTORE_SHADERS)},
         # the exploration lane's own depth keys: with a HEIGHTFIELD the ground
         # is per-row, so the parity lane's one global terrain key (and the flat
         # features' global 0.40-0.50 band, which would then sit behind it) do
@@ -1191,6 +1249,7 @@ def scenario_centre(scenario, tnt):
 
 VIEWER = HERE / "tascene-view.html"
 PRESETS = HERE / "tascene-presets.json"
+RESTORE_JS = HERE / "tascene-restore.js"
 
 
 def cmd_serve(args):
@@ -1226,7 +1285,7 @@ RELOAD_TOKEN = "__reload"
 def _source_token() -> str:
     """mtime+size of every checked-in file the served page is built from."""
     parts = []
-    for f in (VIEWER, PRESETS):
+    for f in (VIEWER, PRESETS, RESTORE_JS):
         st = f.stat() if f.exists() else None
         parts.append(f"{f.name}:{st.st_mtime_ns}:{st.st_size}" if st else f"{f.name}:-")
     return " ".join(parts)
@@ -1259,6 +1318,7 @@ def _stage_viewer(pack: Path):
     if not VIEWER.exists():
         die(f"viewer missing: {VIEWER}")
     (pack / VIEWER.name).write_text(VIEWER.read_text())
+    (pack / RESTORE_JS.name).write_text(RESTORE_JS.read_text())
     if PRESETS.exists():
         (pack / PRESETS.name).write_text(PRESETS.read_text())
 
@@ -1288,6 +1348,138 @@ def cmd_shot(args):
         server.close()
         display.close()
     ta3do.out({"png": str(png), "size": [w, h]}, args.json, human=str(png))
+
+
+# --------------------------------------------------------------------------- restore
+
+# The GLSL restorer's bench (renderers.md 4c, Q2/Q3): the viewer under
+# restore=glsl&restorediff=1 in headless Chrome, its report read out of the DOM.
+# SwiftShader is the default renderer (deterministic, slow); --gpu vulkan asks
+# ANGLE for the real adapter, which is where the wall times mean anything.
+
+def cmd_restore(args):
+    pack = Path(args.pack).resolve()
+    if not (pack / "scene.json").exists():
+        die(f"{pack} has no scene.json (run `tascene build` first)")
+    _stage_viewer(pack)
+    scene = json.loads((pack / "scene.json").read_text())
+    if not scene.get("restore"):
+        die(f"{pack} was built before the restorer: rebuild it")
+    if args.diff and not scene["map"]["atlas"].get("rgba"):
+        die(f"{pack} has no terrain/atlas.rgba.bin to diff against: rebuild with --undither")
+    w, h = scene["view"]["res"]
+    q = {"shot": "1", "lane": "classicpp", "restore": "glsl", "model": args.model,
+         "precision": args.precision, "restorediff": "1" if args.diff else "0",
+         "pass": "terrain"}
+    if args.nk:
+        q["nk"] = str(args.nk)
+    if args.opts:
+        for k, v in urllib.parse.parse_qsl(args.opts):
+            q[k] = v
+    chrome = ta3do.find_chrome()
+    display = ta3do.Display()
+    server = ta3do.Viewer(pack)
+    try:
+        url = f"{server.base}/{VIEWER.name}?" + urllib.parse.urlencode(q)
+        dom, error = ta3do.dump_dom(chrome, display.name, url, (w, h), args.timeout,
+                                    args.budget, gpu=args.gpu)
+        if error:
+            die(error)
+    finally:
+        server.close()
+        display.close()
+    m = re.search(r'<pre id="restore-report"[^>]*>(.*?)</pre>', dom, flags=re.S)
+    if not m:
+        err = re.search(r'<pre id="err"[^>]*>(.*?)</pre>', dom, flags=re.S)
+        die("the page produced no restore report" +
+            (": " + html.unescape(err.group(1)).strip()[:600] if err else " (and no error banner)"))
+    rep = json.loads(html.unescape(m.group(1)))
+    rep["renderer"] = args.gpu or "swiftshader"
+    verdict = None
+    if args.diff:
+        d = rep["diff"]
+        verdict = (f"{'PASS' if d['pass'] else 'FAIL'}: max {d['max']} level(s), "
+                   f"{d['differing']}/{d['bytes']} interior bytes differ ({d['pct']:.4f}%), "
+                   f"guard ring {d['ring']}/{d['ring_bytes']} not a copy of the edge, "
+                   f"worst tile {d['worst']} ({d['worst_bytes']} bytes)")
+    gpu = rep.get("gpu_ms")
+    ms = lambda v: f"{v['gpu_ms']:.0f} ms GPU" if gpu is not None else f"{v['ms']:.0f} ms wall"
+    by = ", ".join(f"S{k}: {v['frames']} frames in {v['batches']} batches {ms(v)}"
+                   for k, v in rep["by_slot"].items())
+    total = (f"{rep['wall_ms']:.0f} ms wall" +
+             (f", {gpu:.0f} ms GPU (first batch {rep['first_gpu_ms']:.0f} ms)" if gpu is not None
+              else " (no GPU timer)"))
+    human = (f"{rep['model']} {rep['precision']} nk={rep['nk']} on {rep['renderer']}: "
+             f"{rep['frames']} frames ({rep['wrapped']} wrap-padded), {rep['draws']} draws, "
+             f"{total}; {by}"
+             + (f"\n{verdict}" if verdict else "") + (f"\nGL error 0x{rep['gl_error']:x}" if rep.get("gl_error") else ""))
+    ta3do.out(rep, args.json, human=human)
+    if args.diff and not rep["diff"]["pass"]:
+        sys.exit(1)
+
+
+# The in-game proof (renderers.md 4c Q8): tagpu_restoredump.on makes the DLL
+# write its finished atlas once, as raw RGBA in the terrain pass's layout, and
+# this holds it to the pack's atlas with the same bar as `restore` -- same
+# tiles, same 2176-wide 34-pitch cells, same order, so the file diffs byte for
+# byte with no re-layout.
+
+def cmd_restorediff(args):
+    pack = Path(args.pack).resolve()
+    if not (pack / "scene.json").exists():
+        die(f"{pack} has no scene.json (run `tascene build` first)")
+    scene = json.loads((pack / "scene.json").read_text())
+    atlas = scene["map"]["atlas"]
+    if not atlas.get("rgba"):
+        die(f"{pack} has no terrain/atlas.rgba.bin: rebuild with --undither")
+    ref = (pack / atlas["rgba"]).read_bytes()
+    dump = Path(args.dump).expanduser()
+    got = dump.read_bytes()
+    W, H = atlas["w"], atlas["h"]
+    if len(got) != W * H * 4:
+        die(f"{dump}: {len(got)} bytes, but the pack's atlas is {W}x{H} RGBA = {W * H * 4} bytes "
+            f"(a different map, or a different tile count: the dump names its size in tagpu.log)")
+    pitch, border, cols, tiles = atlas.get("pitch", 32), atlas.get("border", 0), atlas["cols"], atlas["tiles"]
+    hist = [0] * 256
+    inner = differing = ring = ring_bytes = 0
+    worst, worst_n = -1, 0
+    for i in range(tiles):
+        ax, ay = (i % cols) * pitch + border, (i // cols) * pitch + border
+        n = 0
+        for y in range(-border, 32 + border):
+            row = (ay + y) * W
+            ey = min(max(y, 0), 31)
+            for x in range(-border, 32 + border):
+                o = (row + ax + x) * 4
+                if 0 <= x < 32 and 0 <= y < 32:
+                    for c in range(3):
+                        d = abs(got[o + c] - ref[o + c])
+                        inner += 1
+                        if d:
+                            differing += 1
+                            n += 1
+                            hist[d] += 1
+                else:
+                    e = ((ay + ey) * W + ax + min(max(x, 0), 31)) * 4
+                    for c in range(3):
+                        ring_bytes += 1
+                        if got[o + c] != got[e + c]:
+                            ring += 1
+        if n > worst_n:
+            worst, worst_n = i, n
+    mx = max((d for d in range(1, 256) if hist[d]), default=0)
+    pct = 100.0 * differing / max(1, inner)
+    ok = mx <= 1 and pct < 0.01 and ring == 0
+    rep = {"pack": str(pack), "dump": str(dump), "tiles": tiles, "bytes": inner, "differing": differing,
+           "pct": pct, "max": mx, "hist": hist[1:mx + 1], "ring": ring, "ring_bytes": ring_bytes,
+           "worst": worst, "worst_bytes": worst_n, "pass": ok}
+    ta3do.out(rep, args.json,
+              human=(f"{'PASS' if ok else 'FAIL'}: {tiles} tiles, max {mx} level(s), "
+                     f"{differing}/{inner} interior bytes differ ({pct:.4f}%), "
+                     f"guard ring {ring}/{ring_bytes} not a copy of the edge, "
+                     f"worst tile {worst} ({worst_n} bytes)"))
+    if not ok:
+        sys.exit(1)
 
 
 # --------------------------------------------------------------------------- ab
@@ -1494,6 +1686,30 @@ def main(argv=None):
                    help="chrome --virtual-time-budget in ms")
     t.add_argument("--json", action="store_true")
     t.set_defaults(func=cmd_shot)
+
+    rs = sub.add_parser("restore", help="run the GLSL restorer on a pack's terrain in headless "
+                                          "Chrome and diff it against the pack's restored atlas")
+    rs.add_argument("pack")
+    rs.add_argument("--model", choices=("full", "tiny"), default="full")
+    rs.add_argument("--precision", choices=("fp32", "fp16"), default="fp32")
+    rs.add_argument("--nk", type=int, help="output channel-tiles per conv draw (default: the device's max)")
+    rs.add_argument("--no-diff", dest="diff", action="store_false",
+                    help="time it only; do not diff against terrain/atlas.rgba.bin")
+    rs.add_argument("--gpu", choices=("vulkan", "gl"),
+                    help="ANGLE backend on the real adapter instead of SwiftShader")
+    rs.add_argument("--opts", help="extra viewer query, e.g. 'eye=0,0'")
+    rs.add_argument("--timeout", type=float, default=900.0)
+    rs.add_argument("--budget", type=int, default=60000,
+                    help="chrome --virtual-time-budget in ms")
+    rs.add_argument("--json", action="store_true")
+    rs.set_defaults(func=cmd_restore)
+
+    rd = sub.add_parser("restorediff", help="diff the DLL's tagpu_restore.rgba dump against a "
+                                              "pack's restored terrain atlas (the in-game proof)")
+    rd.add_argument("pack")
+    rd.add_argument("dump", help="gamedir/tagpu_restore.rgba, written under tagpu_restoredump.on")
+    rd.add_argument("--json", action="store_true")
+    rd.set_defaults(func=cmd_restorediff)
 
     al = sub.add_parser("artlight",
                         help="is the map art already painted lit? sweep the sun "

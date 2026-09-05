@@ -6,6 +6,7 @@
     python -m unditherer restore frame.png --kernel 5x5 --metric rgb-l1 --passes 3 --k 1.1
     python -m unditherer analyze frame.png
     python -m unditherer presets
+    python -m unditherer export-weights --model full    # the GLSL restorer's weight file
 
 See README.md for the full parameter reference.
 """
@@ -13,6 +14,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+import numpy as np
 
 from . import __version__
 from . import classical as C
@@ -206,6 +209,66 @@ def cmd_models(a):
     return 0
 
 
+def cmd_export_weights(a):
+    """models/<name>.onnx -> models/<name>.w32.bin, the fragment shaders' layout
+    (weights.py).  Checked three ways before it is written: the ONNX initializers
+    against an independent fold of the .pt checkpoint, then the packed blocks run
+    through weights.run_reference against onnxruntime on a random tile in both
+    padding classes."""
+    from .infer import resolve_model
+    from .paths import MODELS
+    from . import weights as W
+    onnx_path, _ = resolve_model(a.model, "onnx")
+    layers = W.read_onnx_layers(onnx_path)
+    pt_path = onnx_path.with_suffix(".pt")
+    fold_diff = None
+    if pt_path.exists():
+        folded = W.read_pt_layers(pt_path)
+        if len(folded) != len(layers):
+            print(f"error: {pt_path.name} folds to {len(folded)} convs, {onnx_path.name} has {len(layers)}",
+                  file=sys.stderr)
+            return 1
+        fold_diff = max(max(float(np.abs(w1 - w2).max()), float(np.abs(b1 - b2).max()))
+                        for (w1, b1), (w2, b2) in zip(layers, folded))
+        if fold_diff > a.tolerance:
+            print(f"error: ONNX weights differ from the folded checkpoint by {fold_diff:g} "
+                  f"(> {a.tolerance:g})", file=sys.stderr)
+            return 1
+    out = Path(a.out) if a.out else MODELS / f"{Path(onnx_path).stem}.w32.bin"
+    meta = W.write(out, layers)
+    # the packed blocks against onnxruntime, both padding classes
+    import onnxruntime as ort
+    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    rng = np.random.default_rng(1234)
+    hdr, body = W.read(out)
+    checks = {}
+    for wrap in (False, True):
+        for (h, w) in ((32, 32), (24, 40)):
+            x = rng.random((h, w, 3), dtype=np.float32)
+            got = W.run_reference(hdr, body, x, wrap)
+            if wrap:
+                d = hdr["depth"]
+                xp = np.pad(x, ((d, d), (d, d), (0, 0)), mode="wrap")
+                ref = sess.run(None, {"rgb": xp.transpose(2, 0, 1)[None]})[0][0].transpose(1, 2, 0)
+                ref = ref[d:d + h, d:d + w]
+            else:
+                ref = sess.run(None, {"rgb": x.transpose(2, 0, 1)[None]})[0][0].transpose(1, 2, 0)
+            checks[f"{'wrap' if wrap else 'zero'}_{h}x{w}"] = float(np.abs(got - ref).max())
+    worst = max(checks.values())
+    meta.update({"fold_max_abs_diff": fold_diff, "reference_max_abs_diff": checks, "source": str(onnx_path)})
+    if worst > a.tolerance:
+        print(f"error: packed layout disagrees with onnxruntime by {worst:g} (> {a.tolerance:g}): {checks}",
+              file=sys.stderr)
+        return 1
+    if a.json:
+        print(json.dumps(meta, indent=2))
+    else:
+        print(f"{out}: depth {meta['depth']} x {meta['ch']} ch, {meta['texels']} vec4 ({meta['bytes'] / 1e6:.2f} MB); "
+              f"fold {_fmt(fold_diff, 9) if fold_diff is not None else 'no .pt'}, "
+              f"reference vs onnxruntime max {worst:.3g} over {', '.join(checks)}")
+    return 0
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="unditherer", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -225,6 +288,13 @@ def build_parser():
     mo = sub.add_parser("models", help="list the shipped models and their provenance")
     mo.add_argument("--json", action="store_true")
     mo.set_defaults(fn=cmd_models)
+    ew = sub.add_parser("export-weights", help="write a shipped model as the GLSL restorer's weight file")
+    ew.add_argument("--model", default="full", help="shipped name (full, tiny) or a .onnx path")
+    ew.add_argument("-o", "--out", help="output path (default models/<name>.w32.bin)")
+    ew.add_argument("--tolerance", type=float, default=2e-5,
+                    help="max abs difference tolerated against the folded checkpoint and onnxruntime")
+    ew.add_argument("--json", action="store_true")
+    ew.set_defaults(fn=cmd_export_weights)
     return ap
 
 
