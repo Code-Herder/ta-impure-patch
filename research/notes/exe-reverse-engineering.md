@@ -1826,8 +1826,8 @@ same free-before-unlink shape as the unit path.
 
 **No stack arguments, plain `ret` at `0x491C59`**; six bare call sites (`0x460630`, `0x491C6A`,
 `0x49262C`, `0x4996AA`, `0x49971D`, `0x4997AF`), none pushing for it; first five bytes
-`A1 E8 1D 51 00` (`mov eax,[0x511DE8]`), no branch into `0x491B61..64` — wrappable with a
-`call` through the stolen tail so code can run after it returns. The body clears
+`A1 E8 1D 51 00` (`mov eax,[0x511DE8]`), no branch into `0x491B61..64`, resume at `0x491B65` —
+wrappable with a `call` through the stolen tail so code can run after it returns. The body clears
 `main+0x2A44 & ~4`, then the cascade: `0x4CED40`, `0x4CE690(4)`, `0x41DC20`, `0x437D30`,
 **`0x485980`** (the unit teardown: three `MEM_Free`s of the unit arrays — it **never** calls
 `FreeObjectState`), `0x471DE0` (destroy every sfx layer), `0x420960`, `0x44F6E0`, `0x464A00`,
