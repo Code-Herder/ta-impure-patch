@@ -84,15 +84,32 @@ deferring the one function keeps everything the emit reads alive together.
 3. After its last dereference of any gathered object, the pass is done reading; the queue is drained,
    freeing (through the trampoline) every entry whose epoch is far enough behind the current one.
 
-**Why it is correct (the grace-period fencepost).** The render thread is the only reader, and reads
-gathered objects only inside one pass (`tagpu_native_frame`); the gather buffer is refilled every
-pass, so no pointer survives into a later pass. An object retired at epoch `e` was unlinked by the
-engine right after the free returned, so any pass that *starts gathering* after that cannot see it.
-The only pass that can hold it is the one already in flight at retirement. Freeing entries with
-`epoch < current − 1` waits for that pass to finish and also absorbs a full frame of game-thread
-preemption at the one-instruction gap between the free and the null. No reader can ever hold a
-pointer the drain frees. The proof needs only that the epoch has a single writer and that the model
-object is read solely inside the pass — both verified.
+**Why it is correct (quiescence, not a fixed pass count).** The render thread is the only reader, and
+reads gathered objects only inside one pass (`tagpu_native_frame`); the gather buffer is refilled
+every pass, so no pointer survives into a later pass. The object becomes unreachable to new gathers
+at the engine's null of the record (`unit+0x9E` / `feat+0x4`), just after the free returns. The
+rigorous rule is to free an object only once the reader has *published completion* of every pass that
+could still hold it — an observation of the reader's own progress, never a wall-clock or fixed-count
+assumption. Concretely, the reader publishes two monotone counters, **pass-started** and
+**pass-completed**; between them it may hold pointers it gathered this pass, outside them it holds
+none. The drain runs on the game thread, so it executes *after* the null; it snapshots pass-started,
+and frees the object only once pass-completed has moved past that snapshot. A pass that starts after
+the snapshot began gathering after the null and cannot have the object; every earlier pass is
+finished once completion passes the snapshot. So no reader can hold a pointer the drain frees —
+regardless of how late either thread runs.
+
+**If either thread is late it stays safe.** A stalled reader simply freezes pass-completed, so
+nothing is freed; the ring fills and the overflow leaks, which is harmless. The design never frees
+under doubt. That is the guarantee: correctness rests on observing the reader's actual progress, not
+on anyone being on time.
+
+**Why a fixed "free N passes behind" is *not* a proof.** It starts the grace clock at the wrong
+moment — when we intercept the free, one instruction before the engine's null — and it assumes the
+null lands within N−1 reader passes of the stamp. The failure is on the producer, not the GPU: if
+the game thread is preempted at the free-to-null gap while the render thread races ahead more than
+N−1 passes, a later pass gathers the object after the fixed grace has expired, and the drain frees it
+underneath that pass — the use-after-free again. Use the published-completion snapshot above, which
+carries no timing assumption; a fixed count is at best a probabilistic margin.
 
 **No hot-path locks, one fence total.** On x86 the ring is a standard single-producer /
 single-consumer queue needing only a compiler barrier: the producer writes the slot then publishes
@@ -184,8 +201,10 @@ silent, so it must clear these gates before landing:
 
 - Disassemble the composite-detach helper `0x437c90` to confirm it is what forces the game-thread
   drain, then adopt the game-thread drain so the point is moot.
-- Ship the grace as `epoch < current − 1` rather than `< current`, retiring the free-to-null
-  instruction-gap assumption for free.
+- Reclaim by **quiescence**, never by a fixed pass count: the reader publishes pass-started and
+  pass-completed counters; the game-thread drain snapshots pass-started *after* the object is
+  unreachable and frees only once pass-completed has passed the snapshot. This removes the
+  free-to-null bounded-preemption assumption entirely (§4).
 - Size the ring well above the worst death rate (a thousand slots is two orders of headroom) and
   make the full-ring fallback a leak, never a sync-free and never a spin.
 - Fold in the two particle heap surfaces as a second Mode A client once the model-object fix is
@@ -207,3 +226,7 @@ the simulation.
 
 - **2026-09-06** — first draft. Design synthesised from six investigations; not yet landed. Crash
   root cause is recorded in **GPU status, hooks & limits** §3.2.
+- **2026-09-06** — corrected the grace argument (§4, §9). Reclamation is **quiescence-based**: free
+  only once the reader has published completion of the passes that could hold the object. The
+  earlier "free N passes behind" wording was a probabilistic margin, not a proof — it assumed the
+  engine's null landed within N−1 reader passes, which a preempted game thread can violate.
