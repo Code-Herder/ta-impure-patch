@@ -36,12 +36,13 @@
 
 /* One frame to restore: w x h palette indices at (ax, ay) of the R8 atlas,
    painted at (dx, dy) of the destination with `border` replicated edge texels
-   around it. `wrap` = tile it (tagpu_rglsl_tileable) -- the caller decides.
-   `key` = the frame's colour key index, or -1 for an opaque frame: keyed
-   texels are inpainted before the model and written (0, 0, 0, 0) after
-   (tagpu_restore_glsl.h). */
+   around it, and `padR` / `padB` more past the right and bottom border (an
+   aligned atlas's cell slack, tagpu_gaf.h `align`; 0 elsewhere). `wrap` =
+   tile it (tagpu_rglsl_tileable) -- the caller decides. `key` = the frame's
+   colour key index, or -1 for an opaque frame: keyed texels are inpainted
+   before the model and written (0, 0, 0, 0) after (tagpu_restore_glsl.h). */
 typedef struct {
-    int ax, ay, w, h, wrap, dx, dy, border, key;
+    int ax, ay, w, h, wrap, dx, dy, border, key, padR, padB;
 } TAGPU_RGLSL_FRAME;
 
 typedef struct TAGPU_RGLSL_JOB TAGPU_RGLSL_JOB;

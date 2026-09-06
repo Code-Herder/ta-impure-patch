@@ -1531,7 +1531,8 @@ def cmd_restorediff(args):
 # a copy of the edge.
 
 def _frame_bands(got, ref, r8, W, x, y, w, h, key, wrap, border, radius, acc):
-    """one frame's bytes into acc (far/near/alpha/ring tallies)"""
+    """one frame's bytes into acc (far/near/alpha/ring tallies); `border` is
+    the replicated ring around the frame the dump is expected to carry"""
     keyed = [[r8[(y + j) * W + x + i] == key for i in range(w)] for j in range(h)] if key >= 0 else None
     def dist(i, j):
         if keyed is None:

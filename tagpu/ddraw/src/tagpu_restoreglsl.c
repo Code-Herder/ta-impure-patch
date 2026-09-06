@@ -861,7 +861,7 @@ static double issue_draw(struct TAGPU_RGLSL_JOB* j)
         for (s = 0; s < j->bn; s++) {
             const TAGPU_RGLSL_FRAME* f = &j->bf[s].f;
             float x0 = (float)(f->dx - f->border), y0 = (float)(f->dy - f->border);
-            float x1 = (float)(f->dx + f->w + f->border), y1 = (float)(f->dy + f->h + f->border);
+            float x1 = (float)(f->dx + f->w + f->border + f->padR), y1 = (float)(f->dy + f->h + f->border + f->padB);
             float sc = (float)(s % cols), sr = (float)(s / cols);
             float xs[6] = { x0, x1, x0, x1, x1, x0 }, ys[6] = { y0, y0, y1, y0, y1, y1 };
             int k;

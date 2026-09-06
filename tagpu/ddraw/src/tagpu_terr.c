@@ -635,6 +635,7 @@ static int glsl_begin(const char* ta)
         f->ax = f->dx = (t % ATLAS_COLS) * CELL_PITCH + CELL_BORDER;
         f->ay = f->dy = (t / ATLAS_COLS) * CELL_PITCH + CELL_BORDER;
         f->w = f->h = TILE_PX; f->border = CELL_BORDER; f->key = -1;   /* tiles are opaque */
+        f->padR = f->padB = 0;                                          /* no alignment slack */
         f->wrap = tagpu_rglsl_tileable(s_setPix + (size_t)t * TILE_BYTES, TILE_PX, TILE_PX, pal, -1);
     }
     free(order);

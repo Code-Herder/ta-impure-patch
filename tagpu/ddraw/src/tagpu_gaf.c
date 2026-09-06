@@ -204,12 +204,15 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
 }
 
 /* one frame onto the restore queue: the R8 atlas is the source, the twin the
-   destination, same rect, the border painted as a copy of the edge */
+   destination, same rect, the border -- and the cell's alignment slack past
+   it -- painted as a copy of the edge, as the R8 upload painted them */
 static void restore_enqueue(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
 {
     TAGPU_RGLSL_FRAME f;
     f.ax = f.dx = e->x; f.ay = f.dy = e->y;
     f.w = e->w; f.h = e->h; f.wrap = e->wrap; f.border = a->pad; f.key = e->ck;
+    f.padR = cell_up(a, e->w + 2 * a->pad) - (e->w + 2 * a->pad);
+    f.padB = cell_up(a, e->h + 2 * a->pad) - (e->h + 2 * a->pad);
     tagpu_rglsl_job_add(a->job, &f, 1);
 }
 
@@ -417,21 +420,27 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
            is why the border is on all four sides and not just the two the
            shelf packer used to leave spare; under a mipmapped one it is the
            whole 4-texel ring (tagpu_gaf.h `pad`). The cell's slack past the
-           border (alignment) stays unwritten: no sample of the frame's own UV
-           range reaches it, on any level the twin keeps. */
+           border, where the alignment rounds up (0..align-1 texels on the
+           right and bottom), is filled with the same edge: at level 2 the
+           far-edge sample of a frame whose width is 3 mod 4 takes a quarter
+           of its weight from the level-2 texel that covers the slack, so
+           unwritten slack would darken that column by a sixteenth. The whole
+           cell is uploaded, and restore_enqueue has the OUT pass paint the
+           twin's slack the same way. */
         {
-            const int pw = w + 2 * p;
+            const int pw = cw, pr = cw - p - w, pb = ch - p - h;   /* right/bottom: p + slack */
             int k;
             for (i = 0; i < h; i++) {
                 unsigned char* row = s_pad + (size_t)(i + p) * pw + p;
                 memcpy(row, s_dec + (size_t)i * w, (size_t)w);
-                for (k = 1; k <= p; k++) { row[-k] = row[0]; row[w - 1 + k] = row[w - 1]; }
+                for (k = 1; k <= p; k++) row[-k] = row[0];
+                for (k = 0; k < pr; k++) row[w + k] = row[w - 1];
             }
-            for (k = 1; k <= p; k++) {
+            for (k = 1; k <= p; k++)
                 memcpy(s_pad + (size_t)(p - k) * pw, s_pad + (size_t)p * pw, (size_t)pw);
-                memcpy(s_pad + (size_t)(p + h - 1 + k) * pw, s_pad + (size_t)(p + h - 1) * pw, (size_t)pw);
-            }
-            glTexSubImage2D(GL_TEXTURE_2D, 0, x - p, y - p, pw, h + 2 * p,
+            for (k = 0; k < pb; k++)
+                memcpy(s_pad + (size_t)(p + h + k) * pw, s_pad + (size_t)(p + h - 1) * pw, (size_t)pw);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, x - p, y - p, cw, ch,
                             GL_RED, GL_UNSIGNED_BYTE, s_pad);
         }
         glBindTexture(GL_TEXTURE_2D, 0);
