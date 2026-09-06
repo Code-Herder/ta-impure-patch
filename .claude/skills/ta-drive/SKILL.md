@@ -640,6 +640,12 @@ WINEPREFIX=<inst>/prefix wine reg add \
 - The `.off` flags (`curs.off`, `wheel.off`, `zoomedge.off`, `ss.off`, `shade.off`,
   `subpix.off`, `nano.off`, `r3dcache.off`, `overlay.off`) — these **disable** features.
   Arming everything means leaving all of them absent.
+- **`reclaim.off` disables a crash fix, not a feature** (G14h): `tagpu_reclaim` defers the
+  engine's model-object frees so the render thread cannot read a freed unit or wreck — the
+  `200v200` fault at ~95 s. It is on by default with no arm file; `tacli arm <i> reclaim.off`
+  is the A/B lever back to the racing build. Read `reclaim: ARMED …` at launch and the
+  `reclaim: def=… drn=… ovf=0 …` line every 300 frames (`ovf` must stay 0); a level change logs
+  `reclaim: level teardown: flushed N …`.
 - The instrumentation triggers (`suppress.on`, `tracer.on`, `gldbg.on`, `posedump.on`,
   `spxlog.on`, `fpsosd.on`) — debugging, not features.
 - `hires.on` only carries the hires renderer's *tweaks* (`anchor=`, sun, ambient,

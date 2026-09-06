@@ -515,6 +515,46 @@ itself — the composite only moves it (§1); what the patch changes is which se
 
 ---
 
+### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
+
+The one module that patches nothing the engine *draws* with: it changes **when** a freed block
+goes back to the heap, and nothing else. The render thread gathers a unit's or wreck's
+`Object3do` and dereferences it later in the same frame; the game thread frees it on death —
+`200v200` faulted about 95 s in, two runs in three (`0x486D9E`: the object is freed one
+instruction *before* its pointer is nulled and well before the alive bit is cleared, so the
+gather's alive gate cannot help). Two sites, byte-matched, all-or-nothing, installed at
+`DllMain`, disjoint from every detour above:
+
+| site | mechanism | what |
+|---|---|---|
+| `FreeObjectState 0x45AAA0` | prologue detour, `tagpu_detour_leaf_call` shape built by hand so the stolen tail is also a callable trampoline | while armed the call **enqueues** the object and returns (`ret 4`); the engine's own null of `unit+0x9E` / `rec+4` and its alive-bit clear run unchanged. Every `Object3do` free — unit death, wreck destroy, the bulk teardown loop — goes through this one entry |
+| level teardown `0x491B60` | **wrap**: `pushad; call pre; popad; call <stolen tail>; pushad; call post; popad; ret` (the routine takes no stack args and returns with a plain `ret`, so its body can be called) | pre: raise a flag (fenced), wait ≤ 100 ms for the render thread to leave its pass, **flush** the queue through the real destructor while the composite registry it walks is still alive, then let the cascade free synchronously; post: deferral back on, flag down |
+
+**The reclamation rule is quiescence, never a count.** `render_ogl.c` brackets
+`tagpu_overlay_draw` — the render thread's only reader of these objects — with
+`tagpu_reclaim_pass_begin` / `pass_end`, one unconditional pair so every early return inside the
+overlay closes it. The reader publishes *pass-started* (an `InterlockedIncrement` before its first
+engine read) and *pass-completed* (after its last). The real free runs on the **game thread**, from
+the next `FreeObjectState` call: every entry already queued has had its record nulled since
+(program order), so after a full fence the drain stamps them with pass-started and frees each
+once pass-completed has reached its stamp. An idle reader passes at once; a reader mid-pass makes
+the entry wait for that pass; a stuck reader freezes reclamation and the 1024-entry ring leaks
+on overflow — never a synchronous free, never a spin. Measured on `200v200`: high-water 3,
+overflow 0, every free drained within a frame or two. The engine sees no different value: the
+sim never reads the object or its posed geometry back, and two stock peers already stay in
+lockstep with different heap layouts. `tagpu_native.c` keeps a belt-and-braces re-read of the
+record pointer before each emit (wrecks included: the record is kept in the gather now) and skips
+a unit whose object moved (`reread=N` on the `native:` line).
+
+Read it in `tagpu.log`: `reclaim: ARMED FreeObjectState@0x45AAA0 -> deferred …` at launch, then
+every 300 frames `reclaim: def=… drn=… queued=… hw=… ovf=… foreign=… flushed=… dropped=…
+teardowns=… pass=…` (`def` deferred, `drn` drained, `ovf` must stay 0, `foreign` a call from a
+thread other than the game thread — freed synchronously and counted, never seen), and at a level
+change `reclaim: level teardown: flushed N queued object(s), reader idle`.
+`tagpu_reclaim.off` in the gamedir disables the whole module at launch (the A/B lever, and the
+way back to the racing build). Design, proof and the object catalogue:
+[Thread-safe destruction](thread-safe-destruction.html).
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
@@ -594,21 +634,18 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 ### 3.2 Smaller, known, and cheap to close
 
-- **The native pass can fault on a unit freed mid-frame** (found 2026-09-05 measuring G14g,
-  present on the G14f DLL too). `200v200` about 95 s into the fight, twice in three runs, on
-  both DLLs: an access violation at the first instruction of `emit_geom` (`tagpu_native.c`),
-  `movzx esi, word [eax]` with `eax` = the unit's 3DO object — RVA `0x3EB99` of the G14g
-  `ddraw.dll`, `0x3E7A9` of G14f's, the same sixteen bytes at EIP in both reports — at data
-  address `0x02868B40` on the G14g run (EBP, the caller's unit index, `0xE4`) and `0x027E3400`
-  on the G14f run (`0x3E`): a different unit each time. TA *appends* to `ErrorLog.txt` and
-  `tacli crash` prints the first report in the file, so read the file's tail after a second
-  crash. The gather reads
-  `unit+U_OBJ3DO` through `ptr_ok` only (~line 1657) and the emit dereferences it later in the
-  same frame; the game thread frees a dying unit's object in between. Closing it means either
-  reading everything the emit needs while the pointer is checked (and still racing), an
-  `IsBadReadPtr` at the emit (narrows the window, does not close it), or a structured exception
-  handler around the emit that drops the unit for the frame — the last is the only one that is
-  actually safe against a free on another thread.
+- **CLOSED (G14h, 2026-09-06): the native pass faulted on a unit or wreck freed mid-frame.**
+  Found 2026-09-05 measuring G14g, present on the G14f DLL too: `200v200` about 95 s in, twice
+  in three runs, an access violation at the first instruction of `emit_geom` reading a model
+  object the game thread had freed between the gather and the emit. Instrumentation put the
+  race at 43 deaths inside the gather-to-emit window over two 210 s fights (12 units, 26 wrecks
+  in the second), the fault needing the extra step of the freed page becoming unreadable — the
+  CRT small-block heap decommits pages inside a free, and the one-piece wreck objects live there
+  (the crash's faulting index was a wreck). The engine frees the object *before* it nulls its
+  pointer and clears the alive bit (`0x486D9E → 0x486DA3 → 0x486DCE`), so no read-side gate could
+  close it; `tagpu_reclaim.c` (§2.7) defers the free itself behind the render thread's published
+  quiescence. `tacli crash` prints the *first* report in `ErrorLog.txt` (TA appends), so read the
+  file's tail after a second crash.
 
 | Limit | Where | What it needs |
 |---|---|---|

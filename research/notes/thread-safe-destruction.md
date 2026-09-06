@@ -3,8 +3,8 @@
 *An evolving reference for one recurring hazard: the fork's async GL render thread dereferences an
 engine object that the game thread frees underneath it. This page records the confirmed crash, the
 reusable pattern that closes it, the object catalogue it applies to, and the gates it must pass
-before landing. It is a **design**, not yet in the tree — update it as the pattern is built and
-measured. Engine addresses are* <span class="pill pill-ok">VERIFIED</span> *from `TotalA.exe`
+before landing. The first client is **built and measured** (G14h); the page stays the reference
+for the pattern and its next clients — update it as they land. Engine addresses are* <span class="pill pill-ok">VERIFIED</span> *from `TotalA.exe`
 (ImageBase `0x400000`) unless marked* <span class="pill pill-warn">INFERRED</span>*. First written
 2026-09-06 from six parallel investigations; see also **GPU status, hooks & limits** §3.2 (the crash
 as a known limit), **Memory Manager Investigation** (the heap this reclaims into), **Own the draw**
@@ -16,8 +16,8 @@ thread reads).*
 | | |
 |---|---|
 | **Problem** | <span class="pill pill-ok">CONFIRMED</span> cross-thread use-after-free, `200v200` ~95 s in, ~2 of 3 runs |
-| **Pattern** | designed, **not landed** — a separate task, from a fresh worktree, reviewed on Opus at `high` (sim-adjacent) |
-| **First client** | the model object `Object3do` (units + wrecks + features), via `FreeObjectState 0x45AAA0` |
+| **Pattern** | **built** 2026-09-06 as `tagpu/ddraw/src/tagpu_reclaim.c` (G14h), on by default, `tagpu_reclaim.off` disables — see **GPU status, hooks & limits** §2.7 for the landed shape and the log lines |
+| **First client** | the model object `Object3do` (units + wrecks + features), via `FreeObjectState 0x45AAA0` — landed |
 | **Next clients** | the two particle heap surfaces (sub-vector, layer array); the fog grid separately |
 
 ## 1. The answer in one paragraph
@@ -149,9 +149,21 @@ death frees synchronously, which is safe because the reader is quiesced.
 
 ## 7. The reusable module
 
-Package it as one small module (`tagpu_reclaim` <span class="pill pill-warn">INFERRED name</span>)
-beside the existing detour helper, so any own-the-draw module makes an object type safe by
-registering its destructor once:
+**As built (G14h, `tagpu_reclaim.c`).** One class today — `FreeObjectState` — so the module is
+deliberately smaller than the sketch below: the drain runs on the game thread **inside the
+destructor detour itself** (every call first stamps and frees what became safe, then queues its
+own object), which needs no tick hook — the engine's tick detour at `0x4969D2` is installed only
+while a scenario is being applied, so it could not host the drain. The reader's bracket is one
+unconditional `pass_begin` / `pass_end` pair around `tagpu_overlay_draw` in `render_ogl.c`, which
+also puts the debug probes inside it. Level teardown `0x491B60` is wrapped (pre: fenced flag, wait
+≤ 100 ms for the reader to leave its pass, flush; post: release). It is on by default,
+`tagpu_reclaim.off` disables, and it logs `reclaim: def=… drn=… queued=… hw=… ovf=… foreign=…
+flushed=… dropped=… teardowns=… pass=…` every 300 frames. The composite frames are **not** freed by
+the destructor (`0x437C90` only unregisters a slot — see §3), so they are not covered and not
+needed for the crash.
+
+The generalisation, when a second client arrives — register a destructor by address, one ring
+tagged by class, a shared bracket:
 
 ```c
 int  tagpu_reclaim_arm(const char* on_file, unsigned dtor_va,
@@ -251,9 +263,13 @@ and silent to break, so the landing must check every one.
   belongs to the composite draw context at `*(TA+0x1437B)`. Establish whether that owner frees or
   recycles frames (Mode A needs its own client; Mode B needs nothing) — see **Composite buffer (G6)**
   for the frame format and the owner's blit path.
-- Move `probe_unit_model` and `pose_dump` inside the bracket, or keep them disabled (§9).
-- Publish pass-completed from the overlay driver, not from inside the pass, so every early return
-  closes the bracket (§9).
+- ~~Move `probe_unit_model` and `pose_dump` inside the bracket~~ — done: the bracket wraps the
+  whole overlay driver in `render_ogl.c`, so every render-thread read is inside it.
+- ~~Publish pass-completed from the overlay driver~~ — done: one unconditional pair in
+  `render_ogl.c` around `tagpu_overlay_draw`.
+- ~~Classify the composite frame's lifetime before landing~~ — **still open**, but not needed for
+  the crash: the emit reads `obj+0x10` only for the waterline depth-plane test, and the frame's
+  owner is the composite draw context (`main+0x1437B`, nulled at teardown `0x42DCA3`).
 
 ## 11. Bottom line
 
@@ -273,6 +289,11 @@ the simulation.
   only once the reader has published completion of the passes that could hold the object. The
   earlier "free N passes behind" wording was a probabilistic margin, not a proof — it assumed the
   engine's null landed within N−1 reader passes, which a preempted game thread can violate.
+- **2026-09-06** — **built and measured** as G14h (`tagpu_reclaim.c`): drain inside the destructor
+  detour on the game thread (no tick hook available), teardown wrapped, bracket around the whole
+  overlay driver, on by default with `tagpu_reclaim.off`. First `200v200` fight: `ARMED` on both
+  sites, 147 deferred / 145 drained at the 2700-frame mark, high-water 3, overflow 0, no foreign
+  thread, no fault.
 - **2026-09-06** — audit for missing elements. Added §9 *Invariants* (bracket closes on every exit
   or reclamation halts; every read inside the bracket, which the debug probes currently violate;
   single reader; wrap-safe compares; snapshot after unreachability; ABA closed by construction).
