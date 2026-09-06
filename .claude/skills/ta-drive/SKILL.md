@@ -583,6 +583,23 @@ default 12), `log` (a line per batch). **`tagpu_restoredump.on`** makes the DLL 
 terrain atlas once to `gamedir/tagpu_restore.rgba`, and each sprite atlas's restored twin once its
 queue drains — `tagpu_restore_feat.{r8,rgba,idx}`, `tagpu_restore_fx.{...}` (re-written when the
 atlas has grown; the `.idx` lists every entry) — the only files the GLSL restorer ever writes.
+
+**Classic++ lighting knobs go in `tagpu_classicpp.cfg`** (G14f), and unlike the restorer's
+they are **live**: the file is re-read on the switch's own twice-a-second poll whenever its
+write time or size changes. `tacli arm <i> 'classicpp.cfg=sun=off'` writes it (tokens
+`sun=AZ,EL` | `sun=off`, `unitsun=AZ,EL`, `amb=A`, several separated by spaces in one quoted
+value), `tacli arm <i> classicpp.cfg=off` removes it (= the lab's defaults `324.5,53.1` /
+`215.5,53.1` / `0.35`). The DLL answers every read with one line, `classicpp: light sun=…
+unitsun=… amb=… level=…/… (tagpu_classicpp.cfg)` — or `(no cfg: defaults)` — so
+`tacli log <i> -g 'classicpp: light' | tail -1` says what the frame is lit by; allow ~1.5 s
+after arming before a shot. `terr: height grid WxH uploaded …` is the terrain's height
+texture, once per map; without it (an unreadable grid, logged) Classic++ terrain draws unlit.
+**The level-ground test** is a sun on/off pair of `glshot`s with `feat.on=passive` (so the
+engine draws the sprites, identical in both): every pixel whose 16-px cell has zero gradient
+at all four corners must be byte-identical — 0 of 162,828 on the parity fixture — while the
+sloped ones move. `sun=off` also draws the units without their LUT row (the lab's meaning of
+"no sun"), so it is not a Classic frame: compare it to a Classic++ shot of the previous DLL,
+not to Classic.
 `tools/tascene restorediff <pack> <the .rgba>` holds the terrain to a pack built with `--undither`
 of the same map (max 1 level on < 0.01 % of bytes is the bar; Two Continents measures 0.0012 %),
 and `tools/tascene featdiff <pack> <gamedir>/tagpu_restore_feat` the feature twin (the far band

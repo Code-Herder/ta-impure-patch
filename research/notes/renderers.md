@@ -20,8 +20,8 @@ date; **[OPEN]** = not settled.
 | What it is | what tagpu draws today; the lab's `lane=classic` | the lab's `lane=classicpp` at its current defaults |
 | Claim | **pixel parity** with itself: it must not move by a pixel, and the lab's parity ritual is the proof | none against the engine; it is judged by eye and measured against the lab |
 | Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game: the terrain (G14c) and the feature and effect sprites (G14e, lazily on first draw); unit textures not yet.* |
-| Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit) |
-| Units | per-face shade row from `SH_L` through the 32-row LUT | per-pixel lambert in map space from the posed face normal, same level normalisation |
+| Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit). *In the game since G14f (2026-09-05): the engine's height grid as an R8 texture per map, the lab's 16-px grid normals evaluated per fragment; feature sprites take the ground's lambert at their anchor as the lab's do* |
+| Units | per-face shade row from `SH_L` through the 32-row LUT | per-pixel lambert in map space from the posed face normal, same level normalisation. *In the game since G14f: the face normal rides the vertex stream and replaces the LUT row under the switch; pieces the engine draws unshaded stay at exactly 1.0 (the lab lights every face)* |
 | Shadows | the engine's rules. **In the game**: the 5-px silhouette drop for mobiles and the cached slant for structures, each blended once per silhouette pixel (G13n). **In the lab**: the silhouette only — a structure casts NOTHING there, because that lane does not draw the slant projection. This row claimed the lab had both until 2026-09-04; it did not have either, and now has one | a depth map along `shadowsun`, PCSS-lite (8-tap blocker search, 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive; an airborne caster follows `airshadow` (§2.2) |
 | Suns | one, `SH_L = (−0.35, 0.80, −0.49)` in model space | **three** knobs: `sun=324.5,53.1` (terrain), `unitsun=215.5,53.1` (= `SH_L` in map space), `shadowsun=225,40` |
 | Fog of war | the engine's per-index grey LUT | one RGB rule after lighting (§2.6) |
@@ -50,6 +50,16 @@ opposite side on 23 of them, so a constant sun will fight the painting somewhere
 ship the constant and look.** The engine itself lights units and casts shadows from fixed
 directions whatever the map, and the per-map option (`artlight`'s peak azimuth) stays on the
 shelf until a map actually reads wrong.
+
+**Looked at, 2026-09-05 (G14f)** **[MEASURED, by eye]**: Two Continents (`artlight` r +0.014,
+art nearly unlit) takes the constant sun well — the ridges and the pond's basin read as relief
+on `feat-forest` at zoom 1 and 0.25, and trees on a slope sit in the slope's light
+([classicpp-light-two-continents.png](assets/shots/classicpp-light-two-continents.png), sun
+on beside sun off). Metal Heck (r +0.659, the art painted from the engine's own azimuth)
+barely changes: the sun adds a little relief to what the art already carries, no fight. Coast
+to Coast (peak az 195, the art's light from the opposite side) shows nothing wrong on the
+*land* at its steepest viewport — what it shows is the seabed, §2.3. No map has yet read wrong
+because of the azimuth; the per-map option stays on the shelf.
 
 ### 2.2 Aircraft: prototyped, and what the viewer showed  [MEASURED 2026-09-04]
 The lab has aircraft now — units carry an altitude, the FBI's own `CruiseAlt` (ARMBRAWL 60,
@@ -82,6 +92,16 @@ The viewer lights and shadows underwater cells by the seabed, and never reads th
 in its lighting or shadow receivers **[SOURCE `tools/tascene-view.html`]**. **Decided: keep
 it** — it is part of the approved look. Boats go into the same viewer prototype as aircraft,
 so the shadow of a hull on the seabed is seen before it is built.
+
+**What it looks like in the game, and the owner has not seen it** **[MEASURED 2026-09-05,
+by eye — OPEN]**: Two Continents' sea is flat, so the decision never showed there. On Coast
+to Coast, whose seabed has relief, the lit water carries large dark patches where the seabed
+slopes away from the sun — the shore's own gradient continued under the surface
+([classicpp-light-coast-to-coast.png](assets/shots/classicpp-light-coast-to-coast.png), sun
+on beside sun off, eye 2176,1152). The water tiles are painted flat, so the lambert is the only
+thing shaping them, and it reads as stains rather than as depth. Whether that is the look or
+whether the seabed should take level ground's 1.0 (the lab knows the sea level as
+`scene.map.sealevel`; where the engine keeps it has not been located) is the owner's call.
 
 **And the water does not move, so a restored atlas may be a still snapshot** **[MEASURED
 2026-09-05]**. This was raised as a hazard: Classic++ samples an RGBA atlas baked once per map
@@ -378,7 +398,10 @@ Why it fits:
 - **The unit vertex stream** grows from 11 to 15 floats: the map-space normal and the
   world height join `x, y, depthEnc, u, v, flat, ck, shadeRow, wx, wzp, vy`. Face normals are
   already computed on the CPU for the shade row **[SOURCE `tagpu_render3do.c` ~794]**, so
-  this is plumbing; about 2.9 MB per frame at the 49 152-vertex cap.
+  this is plumbing; about 2.9 MB per frame at the 49 152-vertex cap. **Built as 14 (G14f)**:
+  the normal joined (`NVST` 14, `tagpu_native.c` — the native pass's own `emit_node`, not
+  `tagpu_render3do.c`, which is the blit path's twin); the world height has no reader until
+  the shadow pass and joins with it (§5 step 5).
 - **Nanoframes** go through the same unit shader (G13l), so they are lit and shadowed for
   free. Their band and fill colours are palette indices, so the restored-texture branch looks
   them up through the palette texture; and they cast nothing, as the native pass already
@@ -394,7 +417,13 @@ Why it fits:
 - **The heightmap is already read.** `FeatureStruct+0x04` is the per-16-px-tile height byte,
   the grid is `*(main+0x14287)` with stride `0xD`; `tagpu_feat.c` reads four of them for every
   feature anchor **[SOURCE]**. The terrain shader already carries world x and z per vertex.
-  The work is one R8 height texture per map plus a sampler.
+  **Done (G14f)**: `tagpu_terr.c` copies the byte of every cell into one R8 texture when it
+  builds the atlas (once per map, unit 5), and the fragment shader takes the lab's normal at
+  the four grid points of the 16-px cell under the fragment and interpolates them as the lab's
+  two triangles per cell do — per fragment rather than per vertex because the lab's vertices
+  are four sub-quads per tile, 4× the terrain stream and 29 MB a frame at the zoom floor, for
+  the same field. Sixteen `texelFetch`es of a byte per fragment (twelve distinct texels); the
+  parity fixture's frame rate did not move (59.7 fps during the restore against G14e's 59.4).
 - **The definition tables are known.** Unit definitions: count `main+0x1438F`, table
   `main+0x1439B`, stride `0x249`; feature definitions: count `main+0x14253`, table
   `main+0x1426F`, stride `0x100` **[SOURCE `tagpu_cat.c`]**. The load-time atlas walk starts
@@ -745,8 +774,17 @@ the graph itself is that stable.
 
 - **The restorer covers terrain, features and effects; unit textures are next.** The unit
   atlas (`tagpu_render3do.c atlas_get`) needs its 4-texel pad, alignment and mips 0–2 and the
-  unit shader's restored branch, and it waits for the unit-shading work in the other worktree,
-  which edits the same fragment shader (§5 step 2).
+  unit shader's restored branch. It waited for the unit-shading work; that landed (G14f), so
+  nothing blocks it now (§5 step 2).
+- **The seabed under open water** — the lit look of §2.3 on a map with a sloped seabed
+  (Coast to Coast) has not been judged by the owner; the shot is in §2.3.
+- **The whole-frame Classic++ residual against the lab is unexplained in one number.** With
+  every sun off on both sides, the game and the lab differ on 130,997 of 630,784 viewport
+  pixels (mean 0.22 levels; 94,631 of them by one level, 18,564 by two), where Classic's
+  residual is ~7,300. The keyed sprites' near band (§4c: 27 % of its bytes differ, by 0.41
+  levels) on a viewport full of trees, the two units' restored-against-indexed texels, the
+  chat and the cursor account for it **[INFERRED — not isolated]**; the lighting itself adds
+  6 pixels past one level (§5 step 8).
 - ~~**The near-key band's bar is the owner's call.**~~ **Decided 2026-09-05**: the Q2 bar on
   opaque texels farther than the model's depth from any keyed texel, the rest reported and judged
   by eye (mean 0.41 levels, 92 % within 1 — §4c); the owner accepted it on the four worst frames.
@@ -796,16 +834,38 @@ the graph itself is that stable.
    (Q6). **Still to do: the unit atlas** — pad and align, mips 0–2, the unit shader's branch —
    after the unit-shading worktree lands, since both edit `tagpu_native.c`'s unit FS. No cache
    (§2.5b).
-3. **Unit shading** in map space: normal and world height per vertex, `LAB_LIGHT` into
-   `tagpu_glsl.h` with the viewer's uniform names.
-4. **Terrain lighting** from the height texture, level-normalised.
+3. ~~**Unit shading** in map space: normal and world height per vertex, `LAB_LIGHT` into
+   `tagpu_glsl.h` with the viewer's uniform names.~~ — done 2026-09-05 (G14f): the normal per
+   vertex (§2.11), `TAGPU_GLSL_LIGHT_FN` with `uSun`/`uAmb`/`uNorm`, the LUT row skipped
+   under the switch; the world height waits for step 5.
+4. ~~**Terrain lighting** from the height texture, level-normalised.~~ — done 2026-09-05
+   (G14f): the R8 height grid per map, the normal per fragment (§3), **level ground exactly
+   1.0** — 0 of 162,828 flat terrain pixels moved between sun on and off, terrain alone, on
+   the parity fixture; and the feature sprites take the ground's lambert at their anchor.
+   The knobs are §2.10's `tagpu_classicpp.cfg` (`sun`, `unitsun`, `amb`; `sun=off` puts
+   every sun out and reproduces G14e's Classic++ pixels byte for byte outside the units).
 5. **Shadows**: the map-anchored grid, the depth pass over units and the heightfield mesh,
    the read-back in terrain and unit shaders, the two Classic shadow sub-passes off.
-6. **Fog** rule of §2.6.
+6. **Fog** rule of §2.6 — in the terrain, feature and unit passes since G14f (the RGB mean
+   after the lambert, under the switch); the effects pass hides in grey and needs none.
 7. **Switch and cfg**, then the **menu** of §2.10.
 8. **Verify by running it**: `tascene ab` in Classic against `lane=classic` (nothing moved),
    in Classic++ against `lane=classicpp` (the port measured). Engine code triggers the Opus
    review at `medium` and the documentation pass; a human declares it ready.
+   **G14f, measured 2026-09-05** (parity fixture, eye 2320,720, the lab pack built with
+   `--undither`, shot with `lane=classicpp&shadows=0`): Classic `tascene ab` 7,602 of 630,784
+   (chat lines that fade with time, the units, the cursor — the terrain and features
+   bit-exact, and G14e's Classic++ frame is byte-identical to the new one at `sun=off`
+   outside the chat and the commander). Classic++ against the lab: of the **55,469 pixels the
+   sun changes in the game, 6 differ from the lab by more than one level and none by more than
+   three** ([classicpp-light-ridge-game-lab.png](assets/shots/classicpp-light-ridge-game-lab.png):
+   game, lab, difference ×8 over the ridge). The whole-frame residual with the suns off is the
+   open item in §4. Frame rates during the restore: parity 59.7 fps, `feat-forest` 54.3,
+   `fx-mix` 54.0, `200v200` 54.0 with 179 units on screen — G14e's figures. `200v200` a
+   minute into the fight (255 units, 50 wrecks, the vertex cap hit) logs 6 sixty-frame lines
+   in 30 s on **every** combination of the G14e and G14f DLLs with the switch on or off, so
+   that is the scenario, not the lighting; the G12f "28 lines in 30 s" was 217 units at
+   sim +3 and was not re-established.
 
 The handoff that preceded this page, and the 22 lab commits it rests on, are on the
 `worktree-gpu_render` branch; the lab commits land first as one finished unit.

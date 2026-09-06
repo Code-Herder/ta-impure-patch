@@ -46,7 +46,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
-| Terrain in restored true colour (Classic++), and since G14e the feature and effect sprites | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05), the ONNX stack deleted (G14d, 2026-09-05), **the reveal progressive and the two sprite atlases restored lazily** (G14e, 2026-09-05) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b); the ONNX Runtime path is gone (G14d). The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
+| Terrain in restored true colour (Classic++), and since G14e the feature and effect sprites; **lit since G14f** — terrain, units and sprites | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05), the ONNX stack deleted (G14d, 2026-09-05), **the reveal progressive and the two sprite atlases restored lazily** (G14e, 2026-09-05), **lit by the lab's rule** (G14f, 2026-09-05: the height grid as an R8 texture, the face normal in the unit stream, the ground's lambert per sprite; `tagpu_classicpp.cfg` for `sun`/`unitsun`/`amb`) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b); the ONNX Runtime path is gone (G14d). The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k; one blend per silhouette pixel since G13n | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain; **aircraft** measured against the engine on `shadow-air` — offset `(+5, (alt−ground)/2)` on four airframes, darkening 0.487 engine vs 0.25 ours before the stencil and 0.44–0.52 after |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
@@ -78,6 +78,76 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G14f — Classic++ lighting: the terrain from the height grid, the units from the face
+normal, the sprites from the ground.** Steps 3 and 4 of [Classic and Classic++](renderers.html)
+§5 on 2026-09-05, one landing; no engine address is patched, and the one newly read whole is
+the `FeatureStruct` grid at `main+0x14287` (the height byte of every cell, once per map, by
+`tagpu_terr.c`; `tagpu_feat.c` already read it per anchor).
+
+**One rule.** The lab's `LAB_LIGHT` is `tagpu_glsl.h`'s `TAGPU_GLSL_LIGHT_FN`: an
+ambient-floored lambert divided by what level ground receives, so level is exactly 1.0 and
+the sun only modulates by the tilt from level — the art is already lit. The suns and the
+floor come from `tagpu_classicpp.c`, which now owns the switch (`tagpu_classicpp.on`, moved
+out of the restorer) and its knobs: `tagpu_classicpp.cfg`, `key=value` tokens, re-read on
+mtime change on the same twice-a-second poll — `sun=AZ,EL` or `sun=off`, `unitsun=AZ,EL`,
+`amb=A`, defaults the lab's (`324.5,53.1`, `215.5,53.1`, `0.35`). `sun=off` is amb 1: the
+rule is exactly 1.0 with no branch, so it reproduces G14e's Classic++ pixels byte for byte
+outside the units, which it draws unshaded, as the lab does.
+
+**Terrain.** `tagpu_terr.c` builds one R8 texture per map from the height byte of every cell
+when it builds the atlas (unit 5; it joins the reset protocol), and the fragment shader takes
+the lab's normal — central differences over 32 world units — at the four grid points of the
+16-px cell under the fragment and interpolates them exactly as the lab's two triangles per
+cell do. Per fragment rather than per vertex because the lab's vertices are four sub-quads
+per tile: 4× the terrain stream and 29 MB a frame at the zoom floor for the same field. Under
+the switch the branch takes the restored colour where the reveal has painted it and the
+palette's elsewhere (so the reveal goes lit-indexed to lit-restored), multiplies the lambert,
+then the RGB grey rule (§2.6); Classic's path is untouched below it.
+
+**Units.** `NVST` 11 → 14: the outward face normal the shade row is already quantised from,
+unit length, in map space (3DO z flipped), flat per face, at attribute 6 — from the native
+pass's own `emit_node`; the wireframe, the selection rects, degenerate faces and pieces the
+engine draws unshaded carry the level normal, so they take exactly 1.0 as the neutral row is
+the identity (the lab lights every face; the game honours the piece's shade flag). The FS
+skips the LUT row under the switch and multiplies the lambert on the palette colour, nanoframe
+band colours included (§2.11), then the RGB grey rule. §2.11's fifteenth float, the world
+height, waits for the shadow pass, its only reader.
+
+**Sprites.** `FVST` 9 → 10: the ground's lambert at the anchor, the lab's `lambertAt`, from
+the four central-difference neighbours of the anchor cell, computed on the CPU by the same
+function that computes the level divisor so a flat anchor is exactly `x/x`; the feature FS
+multiplies it in its Classic++ branch, shadows and bodies alike. Effects are unlit — the lab
+has none.
+
+**Measured** (parity fixture, eye 2320,720; the lab pack built `--undither`, shot
+`lane=classicpp&shadows=0`): **level ground exactly 1.0** — with the feature pass passive, 0
+of 162,828 flat terrain pixels moved between sun on and off, 194,535 of 432,156 sloped ones
+did; two runs of the lit frame agree on every pixel outside the fading chat and the
+commander. **Against the lab**: of the 55,469 pixels the sun changes in the game, 6 differ
+from the lab by more than one level, none by more than three
+([the ridge, game / lab / ×8](assets/shots/classicpp-light-ridge-game-lab.png)). **Classic
+untouched**: `tascene ab` with the switch off 7,602 of 630,784 (the fading chat, the units,
+the cursor — the terrain and features bit-exact; 7,298 on G14e's run, the chat at another
+age); G14e's own Classic++ frame is byte-identical to the new DLL's at `sun=off` outside the
+chat and the commander. **Frame rates during the restore**: parity 59.7, `feat-forest` 54.3,
+`fx-mix` 54.0, `200v200` 54.0 (179 units on screen) — G14e's figures; `200v200` a minute in
+(255 units, 50 wrecks, the vertex cap hit) logs 6 sixty-frame lines in 30 s on every
+combination of the two DLLs and the switch, so that is the scenario. **By eye**: `feat-forest`
+at zoom 1 and 0.25 — relief on the ridges, trees in their slope's light, no cell edges
+([two-continents](assets/shots/classicpp-light-two-continents.png)); Metal Heck (art lit
+from the engine's azimuth) barely changes; Coast to Coast's land is fine and its **sea is
+not judged** — the lit seabed shows as dark patches under open water
+([coast-to-coast](assets/shots/classicpp-light-coast-to-coast.png)), §2.3's decision made
+visible on a map with a sloped seabed. The restorer's "1 GL error(s) were pending before
+slice 2 (not ours)" line is in G14e's log too: pre-existing, not isolated.
+
+**What it did not close.** The seabed question above; the whole-frame Classic++ residual
+against the lab with the suns off (130,997 pixels, one and two levels, attributed to the
+sprites' near band and the units' restored-against-indexed texels but not isolated — §4);
+the unit atlas (pad, align, mips, the unit shader's restored branch) is unblocked and next;
+shadows (§5 step 5) and the menu (§2.10) are where they were; the 3.2-core context is
+unchanged, nothing here needs 3.3.
 
 **G14e — the progressive reveal, and the feature and effects atlases restored lazily.** Two
 units of [Classic and Classic++](renderers.html) §4c on 2026-09-05, one landing. No engine
