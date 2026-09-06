@@ -596,9 +596,13 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 - **The native pass can fault on a unit freed mid-frame** (found 2026-09-05 measuring G14g,
   present on the G14f DLL too). `200v200` about 95 s into the fight, twice in three runs, on
-  both DLLs: an access violation at RVA `0x3EB99` of `ddraw.dll` = the first instruction of
-  `emit_geom` (`tagpu_native.c`), `movzx esi, word [eax]` with `eax` = the unit's 3DO object,
-  the same address `0x02868B40` every time (the fight is deterministic). The gather reads
+  both DLLs: an access violation at the first instruction of `emit_geom` (`tagpu_native.c`),
+  `movzx esi, word [eax]` with `eax` = the unit's 3DO object — RVA `0x3EB99` of the G14g
+  `ddraw.dll`, `0x3E7A9` of G14f's, the same sixteen bytes at EIP in both reports — at data
+  address `0x02868B40` on the G14g run (EBP, the caller's unit index, `0xE4`) and `0x027E3400`
+  on the G14f run (`0x3E`): a different unit each time. TA *appends* to `ErrorLog.txt` and
+  `tacli crash` prints the first report in the file, so read the file's tail after a second
+  crash. The gather reads
   `unit+U_OBJ3DO` through `ptr_ok` only (~line 1657) and the emit dereferences it later in the
   same frame; the game thread frees a dying unit's object in between. Closing it means either
   reading everything the emit needs while the pointer is checked (and still racing), an

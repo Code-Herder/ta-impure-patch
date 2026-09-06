@@ -135,8 +135,10 @@ restore timing (2.7 s, 1.9 s GPU on the first run); the figures above are from c
 this one alike** (once each in three runs; the third survived 208 s): an access violation at
 `emit_geom`'s first read in `tagpu_native.c` — the unit's 3DO object, read with a range check
 only at gather time (`ptr_ok`, `tagpu_native.c` ~1657) and dereferenced at emit time, freed by
-the game thread in between; the same data address on both DLLs, the fight being deterministic.
-It predates this landing and is recorded in [GPU status](gpu-status.html) §3.2. Compressed
+the game thread in between; the same sixteen bytes at EIP in both reports, a different unit and
+a different data address each time. It predates this landing and is recorded in
+[GPU status](gpu-status.html) §3.2, with the crash file's one trap (TA appends to
+`ErrorLog.txt`; `tacli crash` shows the first report). Compressed
 unit frames (none seen) still draw flat, unverified against the engine. The whole-frame
 residual against the lab stays where §4 leaves it. Shadows (§5 step 5) and the menu (§2.10)
 are where they were; the 3.2-core context is unchanged (`glGenerateMipmap` is 3.0).
