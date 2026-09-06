@@ -317,7 +317,8 @@ class GafBank:
 GLSL_ES_HEADER = ("#version 300 es\n"
                   "precision highp float;\n"
                   "precision highp int;\n"
-                  "precision highp sampler2D;\n")
+                  "precision highp sampler2D;\n"
+                  "precision highp sampler2DShadow;\n")   # the Classic++ shadow map's compare view (G14h)
 
 
 def _unescape(lit: str) -> str:

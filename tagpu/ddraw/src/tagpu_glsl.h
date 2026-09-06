@@ -108,8 +108,20 @@
    ground receives, so level is exactly 1.0 and the sun only modulates by the
    tilt from level -- the art is already lit (artlight) and must not be lit
    twice. Evaluated per fragment, because that is where a local light will
-   join it. The shadow half of the lab's rule (shadowAt) is not here yet:
-   renderers.md 5 step 5.
+   join it. The shadow half of the lab's rule (shadowAt) is here since G14h,
+   text for text but for one thing: the receiver-plane derivatives arrive as
+   arguments, taken by the caller at the top of its main() before any
+   discard -- the derivative of a varying is only defined while every fragment
+   of the quad is still running (G14g's lesson on the mipped sample). A
+   face's normal is flat, so dFdx(p) is exactly 0.5 * mat3(M) * dFdx(W), and
+   the arithmetic below is the lab's with the derivative supplied.
+   One tap the lab did not have until G14h, in both copies: the receiver's
+   own texel opens the blocker search -- the eight ring taps sit 12-28
+   texels out and missed the commander's head and gun (30 texels across)
+   on every frame, so they cast nothing; a caster on the receiver's own ray
+   is the one blocker that must not go unfound.
+   The map, its samplers on units 12 and 13, and the uniforms' values are
+   tagpu_shadow.c's (tagpu_shadow_locate / _apply).
 
    uSun is the unit vector TOWARD the light in map space (x east, y up,
    z south); uAmb 1.0 is "no sun" -- the rule is then exactly 1.0 with no
@@ -122,10 +134,59 @@
     "uniform vec3 uSun;\n" \
     "uniform float uAmb;\n" \
     "uniform float uNorm;\n"
+#define TAGPU_GLSL_SHADOW_UNIFORMS \
+    "uniform int uShadowOn;\n" \
+    "uniform vec3 uShadowSun;\n"    /* toward the light the SHADOWS fall from */ \
+    "uniform mat4 uShadowMat;\n"    /* world -> light clip, orthographic       */ \
+    "uniform sampler2DShadow uShadowCmp;\n"  /* the map, compare + bilinear    */ \
+    "uniform sampler2D uShadowRaw;\n"        /* the same map, raw depths       */ \
+    "uniform vec3 uShScale;\n"      /* world per texel, world per depth unit, 1/res */ \
+    "uniform float uPenumbra;\n"    /* penumbra width per world unit of blocker distance */ \
+    "uniform float uShade;\n"       /* fraction of the direct light a shadow removes */
 #define TAGPU_GLSL_LIGHT_FN \
-    "float taLambert(vec3 n){\n" \
+    "const vec2 taPoisson[16] = vec2[16](\n" \
+    "  vec2(-0.94201624,-0.39906216), vec2( 0.94558609,-0.76890725),\n" \
+    "  vec2(-0.09418410,-0.92938870), vec2( 0.34495938, 0.29387760),\n" \
+    "  vec2(-0.91588581, 0.45771432), vec2(-0.81544232,-0.87912464),\n" \
+    "  vec2(-0.38277543, 0.27676845), vec2( 0.97484398, 0.75648379),\n" \
+    "  vec2( 0.44323325,-0.97511554), vec2( 0.53742981,-0.47373420),\n" \
+    "  vec2(-0.26496911,-0.41893023), vec2( 0.79197514, 0.19090188),\n" \
+    "  vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590),\n" \
+    "  vec2( 0.19984126, 0.78641367), vec2( 0.14383161,-0.14100790));\n" \
+    "float taShadowAt(vec3 W, vec3 n, vec3 dWdx, vec3 dWdy){\n" \
+    "  if (uShadowOn == 0) return 1.0;\n" \
+    "  float nl = dot(n, uShadowSun);\n" \
+    "  vec3 p = (uShadowMat * vec4(W + n * uShScale.x * 1.5, 1.0)).xyz * 0.5 + 0.5;\n" \
+    "  vec3 dpdx = mat3(uShadowMat) * dWdx * 0.5, dpdy = mat3(uShadowMat) * dWdy * 0.5;\n" \
+    "  float det = dpdx.x * dpdy.y - dpdx.y * dpdy.x;\n" \
+    "  vec2 dzduv = abs(det) > 1e-14\n" \
+    "    ? vec2(dpdy.y * dpdx.z - dpdx.y * dpdy.z, dpdx.x * dpdy.z - dpdy.x * dpdx.z) / det\n" \
+    "    : vec2(0.0);\n" \
+    "  dzduv = clamp(dzduv, vec2(-4.0), vec2(4.0));\n" \
+    "  if (nl <= 0.0) return 1.0;\n" \
+    "  if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;\n" \
+    "  float z = p.z - (1.0 + 2.0 * (1.0 - nl)) * uShScale.x / uShScale.y;\n" \
+    "  float search = 24.0 / uShScale.x * uShScale.z;\n" \
+    "  float sum = 0.0; int nb = 0;\n" \
+    "  { float d = texture(uShadowRaw, p.xy).r; if (d < z) { sum += d; nb++; } }\n" \
+    "  for (int i = 0; i < 16; i++) {\n" \
+    "    vec2 o = taPoisson[i] * search;\n" \
+    "    float d = texture(uShadowRaw, p.xy + o).r;\n" \
+    "    if (d < z + dot(o, dzduv)) { sum += d; nb++; }\n" \
+    "  }\n" \
+    "  if (nb == 0) return 1.0;\n" \
+    "  float dist = (z - sum / float(nb)) * uShScale.y;\n" \
+    "  float r = max(uPenumbra * dist, 0.5 * uShScale.x) / uShScale.x * uShScale.z;\n" \
+    "  float lit = 0.0;\n" \
+    "  for (int i = 0; i < 16; i++) {\n" \
+    "    vec2 o = taPoisson[i] * r;\n" \
+    "    lit += texture(uShadowCmp, vec3(p.xy + o, z + dot(o, dzduv)));\n" \
+    "  }\n" \
+    "  return 1.0 - uShade * (1.0 - lit / 16.0);\n" \
+    "}\n" \
+    "float taLambert(vec3 n, vec3 W, vec3 dWdx, vec3 dWdy){\n" \
     "  n = normalize(n);\n" \
-    "  return (uAmb + (1.0 - uAmb) * max(dot(n, uSun), 0.0)) * uNorm;\n" \
+    "  return (uAmb + (1.0 - uAmb) * max(dot(n, uSun), 0.0) * taShadowAt(W, n, dWdx, dWdy)) * uNorm;\n" \
     "}\n"
 
 /* ---- the sub-pixel edge nudge -----------------------------------------

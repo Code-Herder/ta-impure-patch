@@ -186,8 +186,11 @@ static HGLRC ogl_create_core_context(HDC hdc)
         return g_ogl.context;
 
     int attribs[] = {
+        /* 3.3, not 3.2, since G14h: the Classic++ shadow map reads one depth
+           texture through two sampler objects (tagpu_shadow.c), a 3.3 feature;
+           every driver that has 3.2 core has 3.3 (renderers.md 2.12) */
         WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
-        WGL_CONTEXT_MINOR_VERSION_ARB, 2,
+        WGL_CONTEXT_MINOR_VERSION_ARB, 3,
         WGL_CONTEXT_FLAGS_ARB, WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB,
         WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
         0 };

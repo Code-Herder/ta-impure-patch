@@ -46,6 +46,13 @@ typedef struct {
     int   slant;                /* ...the structure kind: the engine's ground
                                    projection x+y/4, -z-y/4 instead of the
                                    body's silhouette (tagpu_native.c)         */
+    /* Classic++ shadows (G14h): the caster's three numbers for the depth
+       pass -- altitude, ground + throw, the length rule's scale -- and
+       whether this unit stays out of it (a nanoframe, an aircraft under
+       airshadow=drop); `air` for the silhouette that `drop` keeps */
+    float cast[3];
+    int   castSkip;
+    int   air;
 } TAGPU_HUNIT;
 
 /* 0 when the pass cannot draw, so the caller can leave those units to the
@@ -57,4 +64,10 @@ int  tagpu_hires_draw_ready(void);
 void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
                       int shadowPass, unsigned frame_counter);
 void tagpu_hires_draw_glreset(void);
+/* Classic++ shadows: the replacement meshes into the shadow map along
+   `shadowMat` (tagpu_shadow.c's), posed as the body would be, the material's
+   alpha cutout kept; the caller has the shadow FBO bound and takes the
+   program back afterwards */
+void tagpu_hires_depth(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
+                       const float* shadowMat);
 #endif

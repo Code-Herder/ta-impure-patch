@@ -48,6 +48,7 @@
 #include "tagpu_glsl.h"
 #include "tagpu_terrown.h"
 #include "tagpu_native.h"
+#include "tagpu_shadow.h"
 
 /* ---- engine layout (terrain-depth.md 1, byte-confirmed) ---- */
 #define OFF_TILEMAP  0x1428B   /* u16 per 32-px cell, stride mapW16/2         */
@@ -224,6 +225,8 @@ static const void* s_hGrid;            /* the inputs the texture was built  */
 static const void* s_hSet;             /* from, or last attempted from      */
 static unsigned s_hFrame;              /* the frame of that attempt          */
 static GLint  s_uHDim, s_uLit, s_uSun, s_uAmb, s_uNorm;
+static GLuint s_hVao, s_hVbo, s_hIbo;  /* the heightfield caster mesh (G14h)  */
+static TAGPU_SHADOWU s_shU;            /* the shadow read-back uniforms      */
 
 static float s_verts[MAXCELL * 6 * TVST];
 static int   s_nv;
@@ -259,6 +262,7 @@ static const char* FS =
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
+    TAGPU_GLSL_SHADOW_UNIFORMS
     TAGPU_GLSL_LIGHT_FN
     /* the lab's normalAt (tascene-view.html): at a grid point, central
        differences of the height over 32 world units, coordinates clamped to
@@ -287,7 +291,40 @@ static const char* FS =
     "    ? n00 + t.x * (n10 - n00) + t.y * (n01 - n00)\n"
     "    : n11 + (1.0 - t.x) * (n01 - n11) + (1.0 - t.y) * (n10 - n11);\n"
     "}\n"
+    /* the world point THIS FRAGMENT depicts -- (x, h, z + h/2), the lab's
+       terrain vertex (tascene-view.html buildTerrainLab), h the height at
+       the fragment over the same two triangles -- and its screen derivatives
+       for the shadow's receiver-plane bias. The derivatives are ANALYTIC:
+       the height is reconstructed here from the grid, so a dFdx() of it
+       would jump at every cell edge (the lab interpolates the point as a
+       varying, whose derivative is exact per triangle); the gradient of the
+       triangle the fragment is in, times the derivative of vWorld, which IS
+       a varying, is the same clean number. */
+    "vec3 taTerrW(vec2 w, out vec3 dWdx, out vec3 dWdy){\n"
+    "  vec2 g = w * (1.0/16.0);\n"
+    "  vec2 f = floor(g), t = g - f;\n"
+    "  ivec2 c = ivec2(f);\n"
+    "  float h00 = taH(c), h10 = taH(c + ivec2(1, 0));\n"
+    "  float h01 = taH(c + ivec2(0, 1)), h11 = taH(c + ivec2(1, 1));\n"
+    "  float h, gx, gz;\n"
+    "  if (t.x + t.y <= 1.0) {\n"
+    "    h = h00 + t.x * (h10 - h00) + t.y * (h01 - h00);\n"
+    "    gx = (h10 - h00) * (1.0/16.0); gz = (h01 - h00) * (1.0/16.0);\n"
+    "  } else {\n"
+    "    h = h11 + (1.0 - t.x) * (h01 - h11) + (1.0 - t.y) * (h10 - h11);\n"
+    "    gx = (h11 - h01) * (1.0/16.0); gz = (h11 - h10) * (1.0/16.0);\n"
+    "  }\n"
+    "  vec2 sx = dFdx(w), sy = dFdy(w);\n"
+    "  float hx = gx * sx.x + gz * sx.y, hy = gx * sy.x + gz * sy.y;\n"
+    "  dWdx = vec3(sx.x, hx, sx.y + 0.5 * hx);\n"
+    "  dWdy = vec3(sy.x, hy, sy.y + 0.5 * hy);\n"
+    "  return vec3(w.x, h, w.y + 0.5 * h);\n"
+    "}\n"
     "void main(){\n"
+    /* the depicted world point and its derivatives FIRST, while the flow is
+       still uniform (tagpu_glsl.h, the shadow half) */
+    "  vec3 taWx = vec3(0.0), taWy = vec3(0.0);\n"
+    "  vec3 taW = uHDim.x > 0.5 ? taTerrW(vWorld, taWx, taWy) : vec3(vWorld.x, 0.0, vWorld.y);\n"
     /* terrain is the bottom layer: it paints the fog's black instead of
        discarding, and it darkens (never hides) in grey — the engine's rule */
     TAGPU_GLSL_FOG_TERRAIN
@@ -302,7 +339,7 @@ static const char* FS =
     "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
     "    vec3 c = t.a > 0.5 ? t.rgb\n"
     "           : texelFetch(uPal, ivec2(int(texture(uAtlas, vUV).r * 255.0 + 0.5), 0), 0).rgb;\n"
-    "    if (uHDim.x > 0.5) c *= taLambert(taTerrN(vWorld));\n"
+    "    if (uHDim.x > 0.5) c *= taLambert(taTerrN(vWorld), taW, taWx, taWy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
     "    frag = vec4(c, 1.0); return;\n"
     "  }\n"
@@ -368,6 +405,7 @@ static void init_gl(void)
     s_uSun  = glGetUniformLocation(s_prog, "uSun");
     s_uAmb  = glGetUniformLocation(s_prog, "uAmb");
     s_uNorm = glGetUniformLocation(s_prog, "uNorm");
+    tagpu_shadow_locate(s_prog, &s_shU);
     glUseProgram(0);
 
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
@@ -420,6 +458,7 @@ void tagpu_terr_glreset(void)
     s_atlasTex = 0;                     /* the id died with the context */
     s_rgbTex = 0;
     s_hTex = 0;                         /* the id died; ensure_height rebuilds */
+    s_hVao = s_hVbo = s_hIbo = 0;       /* ...and the caster mesh with it      */
     s_hW = s_hH = 0; s_hGrid = NULL; s_hFrame = 0;
     s_rectValid = 0;
     /* The set identity (s_setPtr/s_setCount/s_setPix) is LEFT ALONE: zeroing
@@ -445,6 +484,7 @@ void tagpu_terr_glreset(void)
    until it succeeds or the inputs change. Without a grid Classic++ terrain
    draws UNLIT -- the restored colour and the grey rule stay, only the
    lambert is skipped (uHDim 0 in the shader). */
+static void build_hills(const unsigned char* buf, int w, int h);
 static void build_height(const char* ta, unsigned frame)
 {
     const char* grid = *(const char* const*)(ta + OFF_FEATMAP);
@@ -479,11 +519,76 @@ static void build_height(const char* ta, unsigned frame)
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
     glBindTexture(GL_TEXTURE_2D, 0);
+    build_hills(buf, w, h);
     free(buf);
     s_hW = w; s_hH = h;
     _snprintf(b, sizeof b, "terr: height grid %dx%d uploaded from %p (Classic++ lighting)",
               w, h, (const void*)grid);
     flog(b);
+}
+
+/* ---- the heightfield as a caster (G14h, renderers.md 2.8, 2.12) ----
+   One vertex per grid point at the world point the lab's terrain vertex
+   depicts -- (c*16, h, r*16 + h/2) -- and two triangles per cell on the
+   diagonal taTerrN interpolates across ((1,0)-(0,1)), indices ordered by
+   cell row so the rows under the light window are one contiguous range.
+   Static: the map's heights never change. Two Continents: 537,600 vertices
+   (6.4 MB), 3.2 M indices (12.9 MB), once per map. */
+static void build_hills(const unsigned char* buf, int w, int h)
+{
+    size_t nv = (size_t)w * (size_t)h, ni = (size_t)(w - 1) * (size_t)(h - 1) * 6, k = 0;
+    float* vb; unsigned* ib;
+    int r, c;
+    char b[160];
+    if (w < 2 || h < 2) return;
+    vb = (float*)malloc(nv * 3 * sizeof(float));
+    ib = (unsigned*)malloc(ni * sizeof(unsigned));
+    if (!vb || !ib) { free(vb); free(ib); flog("terr: hills: out of memory"); return; }
+    for (r = 0; r < h; r++)
+        for (c = 0; c < w; c++) {
+            float hh = (float)buf[(size_t)r * w + c];
+            float* o = vb + ((size_t)r * w + c) * 3;
+            o[0] = (float)(c * 16); o[1] = hh; o[2] = (float)(r * 16) + hh * 0.5f;
+        }
+    for (r = 0; r < h - 1; r++)
+        for (c = 0; c < w - 1; c++) {
+            unsigned i00 = (unsigned)(r * w + c), i10 = i00 + 1u;
+            unsigned i01 = i00 + (unsigned)w, i11 = i01 + 1u;
+            ib[k++] = i00; ib[k++] = i10; ib[k++] = i01;
+            ib[k++] = i11; ib[k++] = i01; ib[k++] = i10;
+        }
+    if (!s_hVao) {
+        glGenVertexArrays(1, &s_hVao);
+        glGenBuffers(1, &s_hVbo);
+        glGenBuffers(1, &s_hIbo);
+    }
+    glBindVertexArray(s_hVao);
+    glBindBuffer(GL_ARRAY_BUFFER, s_hVbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(nv * 3 * sizeof(float)), vb, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, (void*)0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s_hIbo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(ni * sizeof(unsigned)), ib, GL_STATIC_DRAW);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    free(vb); free(ib);
+    _snprintf(b, sizeof b, "terr: hills mesh %dx%d grid points, %u cells (Classic++ shadows)",
+              w, h, (unsigned)((w - 1) * (h - 1)));
+    flog(b);
+}
+
+int tagpu_terr_hills_draw(int r0, int r1)
+{
+    int cells = s_hW - 1, rows = s_hH - 1;
+    if (!s_hVao || s_hW < 2 || s_hH < 2) return 0;
+    if (r0 < 0) r0 = 0;
+    if (r1 > rows - 1) r1 = rows - 1;
+    if (r1 < r0) return 0;
+    glBindVertexArray(s_hVao);
+    glDrawElements(GL_TRIANGLES, (GLsizei)((r1 - r0 + 1) * cells * 6), GL_UNSIGNED_INT,
+                   (const void*)(size_t)((size_t)r0 * (size_t)cells * 6u * 4u));
+    glBindVertexArray(0);
+    return 1;
 }
 
 /* once per frame after the atlas is known: (re)build when the inputs moved,
@@ -921,6 +1026,7 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
        reveals each cell as its out pass lands (and stays indexed elsewhere);
        a failed or absent job never samples the texture */
     glUniform1i(s_uRestored, ((s_rgbState == 1 || s_rgbState == 2) && tagpu_classicpp_on()) ? 1 : 0);
+    tagpu_shadow_apply(&s_shU);            /* this frame's map, or uShadowOn 0 */
     /* the lighting: the terrain's sun. uLit is the switch alone (the Classic++
        colour path); uHDim is 0 while there is no usable grid, and the shader
        then skips the lambert rather than sample a dead or stale texture */
