@@ -44,6 +44,7 @@
 #include "opengl_utils.h"
 #include "tagpu_terr.h"
 #include "tagpu_restoreglsl.h"
+#include "tagpu_classicpp.h"
 #include "tagpu_glsl.h"
 #include "tagpu_terrown.h"
 #include "tagpu_native.h"
@@ -53,6 +54,9 @@
 #define OFF_TILESET  0x14283   /* -> {u32 count; u8* pixels}                  */
 #define OFF_MAPW16   0x14233   /* map W/H in 16-px tiles                      */
 #define OFF_MAPH16   0x14237
+#define OFF_FEATMAP  0x14287   /* FeatureStruct grid, stride 0xD, one per     */
+#define FT_STRIDE    0x0D      /* 16-px cell; the height byte at +4 is what   */
+#define FT_HEIGHT    0x04      /* Classic++ lights the terrain from           */
 
 #define TILE_PX      32
 #define TILE_BYTES   0x400
@@ -93,11 +97,13 @@ static void flog(const char* s)
 typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum,GLint,GLsizei);
 typedef void (APIENTRY *PFN_UNIFORM1F)(GLint,GLfloat);
 typedef void (APIENTRY *PFN_UNIFORM2F)(GLint,GLfloat,GLfloat);
+typedef void (APIENTRY *PFN_UNIFORM3F)(GLint,GLfloat,GLfloat,GLfloat);
 typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
 typedef void (APIENTRY *PFN_GETINTEGERV)(GLenum,GLint*);
 static PFN_DRAWARRAYS x_glDrawArrays;
 static PFN_UNIFORM1F  x_glUniform1f;
 static PFN_UNIFORM2F  x_glUniform2f;
+static PFN_UNIFORM3F  x_glUniform3f;
 static PFN_ACTIVETEX  x_glActiveTexture;
 static PFN_GETINTEGERV x_glGetIntegerv;
 
@@ -205,6 +211,16 @@ static const unsigned char* s_setPix;   /* the current set's tile pixels     */
 /* the last gathered rect, in 32-px cells: the GLSL job restores the tiles
    under it first (renderers.md 4c Q6), so it starts one frame after the atlas */
 static int    s_rectTx0, s_rectTy0, s_rectCols, s_rectRows, s_rectValid;
+/* Classic++ lighting: the engine's height grid as one R8 texel per 16-px
+   cell, built with the atlas (once per map, from FeatureStruct+4 -- the byte
+   tagpu_feat.c reads per anchor) so the fragment shader can take the lab's
+   normal at any point of the map without a vertex stream growing: the
+   heightfield normal is per fragment here, from the grid, where the lab
+   computes it per vertex on 16-px sub-quads -- 4x the terrain vertices,
+   29 MB a frame at the zoom floor, for the same field. Unit 5. */
+static GLuint s_hTex;
+static int    s_hW, s_hH;
+static GLint  s_uHDim, s_uLit, s_uSun, s_uAmb, s_uNorm;
 
 static float s_verts[MAXCELL * 6 * TVST];
 static int   s_nv;
@@ -235,29 +251,62 @@ static const char* FS =
     "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the restored atlas    */
     "uniform int uRestored;\n"         /* 1 = a restore is running or done:
                                           sample it where its alpha says so */
+    "uniform sampler2D uHeight;\n"     /* Classic++: R8 height per 16-px cell */
+    "uniform vec2 uHDim;\n"            /* its size: mapW16, mapH16          */
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_FOG_FN
+    TAGPU_GLSL_LIGHT_UNIFORMS
+    TAGPU_GLSL_LIGHT_FN
+    /* the lab's normalAt (tascene-view.html): at a grid point, central
+       differences of the height over 32 world units, coordinates clamped to
+       the map; elevation and x/z are the same world units. The height is the
+       engine's byte, so `* 255.0` gives it back exactly. */
+    "float taH(ivec2 p){\n"
+    "  p = clamp(p, ivec2(0), ivec2(uHDim) - 1);\n"
+    "  return texelFetch(uHeight, p, 0).r * 255.0;\n"
+    "}\n"
+    "vec3 taGridN(ivec2 p){\n"
+    "  float dx = (taH(p + ivec2(1, 0)) - taH(p - ivec2(1, 0))) * (1.0/32.0);\n"
+    "  float dz = (taH(p + ivec2(0, 1)) - taH(p - ivec2(0, 1))) * (1.0/32.0);\n"
+    "  return normalize(vec3(-dx, 1.0, -dz));\n"
+    "}\n"
+    /* the lab's terrain normal AT THIS FRAGMENT: the four grid-point normals
+       of the 16-px cell it is in, interpolated exactly as the lab's two
+       triangles per cell interpolate them (the diagonal runs (1,0)-(0,1)),
+       so the field is the one the owner looked at, not a bilinear cousin */
+    "vec3 taTerrN(vec2 w){\n"
+    "  vec2 g = w * (1.0/16.0);\n"
+    "  vec2 f = floor(g), t = g - f;\n"
+    "  ivec2 c = ivec2(f);\n"
+    "  vec3 n00 = taGridN(c), n10 = taGridN(c + ivec2(1, 0));\n"
+    "  vec3 n01 = taGridN(c + ivec2(0, 1)), n11 = taGridN(c + ivec2(1, 1));\n"
+    "  return t.x + t.y <= 1.0\n"
+    "    ? n00 + t.x * (n10 - n00) + t.y * (n01 - n00)\n"
+    "    : n11 + (1.0 - t.x) * (n01 - n11) + (1.0 - t.y) * (n10 - n11);\n"
+    "}\n"
     "void main(){\n"
     /* terrain is the bottom layer: it paints the fog's black instead of
        discarding, and it darkens (never hides) in grey — the engine's rule */
     TAGPU_GLSL_FOG_TERRAIN
+    /* Classic++ (uLit): the restored colour where the reveal has painted it
+       -- alpha is the restorer's own "painted" mark (see s_rgbTex), a cell it
+       has not reached yet is alpha 0 -- and the palette's colour elsewhere,
+       so the reveal goes lit-indexed to lit-restored; lit by the lab's rule
+       from the heightfield normal; then the grey band as the RGB rule
+       (renderers.md 2.6) rather than the index LUT. Nothing below this
+       branch runs under Classic++, nothing in it runs under Classic. */
+    "  if (uLit == 1) {\n"
+    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "    vec3 c = t.a > 0.5 ? t.rgb\n"
+    "           : texelFetch(uPal, ivec2(int(texture(uAtlas, vUV).r * 255.0 + 0.5), 0), 0).rgb;\n"
+    "    c *= taLambert(taTerrN(vWorld));\n"
+    TAGPU_GLSL_FOG_GREY_RGB("c")
+    "    frag = vec4(c, 1.0); return;\n"
+    "  }\n"
     /* NEAREST on an R8 atlas: the texel IS the palette index, and the quad
        spans exactly the tile's 32 texels, so no colour key and no filtering to
        get wrong. A fragment landing exactly on the far edge reads the cell's
        replicated guard texel rather than the next cell (CELL_PITCH). */
-    /* Classic++: true colour, so the grey band is the RGB rule (renderers.md
-       2.6) rather than the index LUT; the lighting multiply will sit between
-       the sample and the fog when it lands. Alpha is the restorer's own
-       "painted" mark (see s_rgbTex): a cell it has not reached yet is alpha 0
-       and draws indexed below, which is the progressive reveal */
-    "  if (uRestored == 1) {\n"
-    "    vec4 t = texture(uAtlasRGB, vUV);\n"
-    "    if (t.a > 0.5) {\n"
-    "      vec3 c = t.rgb;\n"
-    TAGPU_GLSL_FOG_GREY_RGB("c")
-    "      frag = vec4(c, 1.0); return;\n"
-    "    }\n"
-    "  }\n"
     "  int pi = int(texture(uAtlas, vUV).r * 255.0 + 0.5);\n"
     TAGPU_GLSL_FOG_SHADE("pi")
     "  frag = vec4(texelFetch(uPal, ivec2(pi, 0), 0).rgb, 1.0);\n"
@@ -281,9 +330,11 @@ static void init_gl(void)
     x_glDrawArrays = (PFN_DRAWARRAYS)getgl("glDrawArrays");
     x_glUniform1f  = (PFN_UNIFORM1F) getgl("glUniform1f");
     x_glUniform2f  = (PFN_UNIFORM2F) getgl("glUniform2f");
+    x_glUniform3f  = (PFN_UNIFORM3F) getgl("glUniform3f");
     x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
     x_glGetIntegerv = (PFN_GETINTEGERV)getgl("glGetIntegerv");
-    if (!x_glDrawArrays || !x_glUniform1f || !x_glUniform2f || !x_glActiveTexture) {
+    if (!x_glDrawArrays || !x_glUniform1f || !x_glUniform2f || !x_glUniform3f ||
+        !x_glActiveTexture) {
         flog("terr: missing GL proc"); s_state = 2; return;
     }
     vs = mksh(GL_VERTEX_SHADER, VS); fs = mksh(GL_FRAGMENT_SHADER, FS);
@@ -308,6 +359,12 @@ static void init_gl(void)
     glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 4);
     s_uRestored = glGetUniformLocation(s_prog, "uRestored");
     glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  3);
+    glUniform1i(glGetUniformLocation(s_prog, "uHeight"),  5);
+    s_uHDim = glGetUniformLocation(s_prog, "uHDim");
+    s_uLit  = glGetUniformLocation(s_prog, "uLit");
+    s_uSun  = glGetUniformLocation(s_prog, "uSun");
+    s_uAmb  = glGetUniformLocation(s_prog, "uAmb");
+    s_uNorm = glGetUniformLocation(s_prog, "uNorm");
     glUseProgram(0);
 
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
@@ -359,6 +416,7 @@ void tagpu_terr_glreset(void)
     s_state = 0;
     s_atlasTex = 0;                     /* the id died with the context */
     s_rgbTex = 0;
+    s_hTex = 0;                         /* rebuilt with the atlas */
     s_rectValid = 0;
     /* The set identity (s_setPtr/s_setCount/s_setPix) is LEFT ALONE: zeroing
        s_atlasTex is what forces the atlas rebuild, and the identity's job is to
@@ -370,6 +428,49 @@ void tagpu_terr_glreset(void)
        The job is already gone: tagpu_native_glreset resets the restorer first. */
     s_job = NULL;
     s_rgbState = 0;
+}
+
+/* ---- the height grid, with the atlas: one R8 texel per 16-px cell ----
+   Keyed on the atlas rebuild rather than on the grid pointer: LoadMap could
+   hand a same-sized map the same allocation, and the tile set's identity is
+   what this module already trusts to say "new map". A grid that cannot be
+   read leaves s_hTex 0, and the render then draws Classic++ unlit rather than
+   sampling a dead texture. */
+static void build_height(const char* ta)
+{
+    const char* grid = *(const char* const*)(ta + OFF_FEATMAP);
+    int w = *(const int*)(ta + OFF_MAPW16), h = *(const int*)(ta + OFF_MAPH16);
+    unsigned char* buf;
+    int r, c;
+    char b[160];
+    s_hW = s_hH = 0;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || w > s_maxTex || h > s_maxTex) return;
+    if (!ptr_ok(grid) || IsBadReadPtr(grid, (SIZE_T)w * (SIZE_T)h * FT_STRIDE)) {
+        flog("terr: height grid unreadable -- Classic++ terrain draws unlit");
+        return;
+    }
+    buf = (unsigned char*)malloc((size_t)w * (size_t)h);
+    if (!buf) return;
+    for (r = 0; r < h; r++)
+        for (c = 0; c < w; c++)
+            buf[(size_t)r * w + c] =
+                *(const unsigned char*)(grid + ((size_t)r * w + c) * FT_STRIDE + FT_HEIGHT);
+    if (!s_hTex) {
+        glGenTextures(1, &s_hTex);
+        glBindTexture(GL_TEXTURE_2D, s_hTex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else glBindTexture(GL_TEXTURE_2D, s_hTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    free(buf);
+    s_hW = w; s_hH = h;
+    _snprintf(b, sizeof b, "terr: height grid %dx%d uploaded from %p (Classic++ lighting)",
+              w, h, (const void*)grid);
+    flog(b);
 }
 
 /* ---- the atlas: built once per map, never per frame ---- */
@@ -448,6 +549,7 @@ static int ensure_atlas(const char* ta)
     _snprintf(b, sizeof b, "terr: atlas built %dx%d for %d tiles (set=%p pix=%p, %d KB)",
               ATLAS_W, h, count, (void*)set, (void*)pix, (count * TILE_BYTES) >> 10);
     flog(b);
+    build_height(ta);
     return 1;
 }
 
@@ -787,11 +889,23 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
     x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
     x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_rgbTex);
+    x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, s_hTex);
     x_glActiveTexture(GL_TEXTURE0);
     /* running OR complete: while the job runs the alpha test in the shader
        reveals each cell as its out pass lands (and stays indexed elsewhere);
        a failed or absent job never samples the texture */
     glUniform1i(s_uRestored, ((s_rgbState == 1 || s_rgbState == 2) && tagpu_classicpp_on()) ? 1 : 0);
+    /* the lighting: the terrain's sun, and only with a height grid to light
+       from -- without one the Classic++ branch would sample texture 0 */
+    {
+        const TAGPU_LIGHT* L = tagpu_classicpp_light();
+        int lit = tagpu_classicpp_on() && s_hTex;
+        glUniform1i(s_uLit, lit ? 1 : 0);
+        x_glUniform3f(s_uSun, L->sun[0], L->sun[1], L->sun[2]);
+        x_glUniform1f(s_uAmb, lit ? L->amb : 1.0f);
+        x_glUniform1f(s_uNorm, lit ? 1.0f / L->level : 1.0f);
+        x_glUniform2f(s_uHDim, (float)s_hW, (float)s_hH);
+    }
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     /* orphan and upload in one call, sized to what this frame USES. The staging

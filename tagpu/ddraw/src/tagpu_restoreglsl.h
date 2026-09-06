@@ -32,9 +32,7 @@
      budget=MS   GPU milliseconds per frame (default 12)
      log         a line per batch in tagpu.log */
 
-/* gamedir/tagpu_classicpp.on -- the renderer switch, polled at most twice a
-   second. Absent = Classic, exactly today's pixels; the jobs pause. */
-int  tagpu_classicpp_on(void);
+/* The renderer switch the jobs pause under is tagpu_classicpp.h's. */
 
 /* One frame to restore: w x h palette indices at (ax, ay) of the R8 atlas,
    painted at (dx, dy) of the destination with `border` replicated edge texels

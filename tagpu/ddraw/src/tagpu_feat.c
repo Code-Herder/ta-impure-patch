@@ -62,12 +62,14 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <math.h>
 #include "opengl_utils.h"
 #include "tagpu_feat.h"
 #include "tagpu_glsl.h"
 #include "tagpu_featown.h"
 #include "tagpu_gaf.h"
 #include "tagpu_restoreglsl.h"
+#include "tagpu_classicpp.h"
 #include "tagpu_native.h"
 
 /* ---- engine layout (terrain-depth.md appendix, byte-confirmed) ---- */
@@ -110,7 +112,7 @@
 
 #define MAXBV_BODY   32768     /* vertices per bucket per frame (6 = one quad)*/
 #define MAXBV_SHAD   16384
-#define FVST         9         /* x,y,enc, u,v, ck,mode, wx,wz                */
+#define FVST         10        /* x,y,enc, u,v, ck,mode, wx,wz, lam           */
 #define ATLAS_DIM    2048
 #define ATLAS_MAX    4096      /* a map's feature frames: a body and a shadow */
                                /* per def, plus every frame of the animating  */
@@ -226,7 +228,7 @@ int tagpu_feat_on(void) { return s_armed > 0; }
 static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
 static GLuint s_prog, s_vao, s_vbo;
 static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uDepthScale,
-              s_uRestored;
+              s_uRestored, s_uLit;
 static TAGPU_GAFENT   s_atlasEnts[ATLAS_MAX];
 static TAGPU_GAFATLAS s_atlas;
 
@@ -243,25 +245,27 @@ static const char* VS =
     "layout(location=1) in vec2 aUV;\n"
     "layout(location=2) in vec2 aCM;\n"       /* colour key /255, mode        */
     "layout(location=3) in vec2 aWorld;\n"
+    "layout(location=4) in float aLam;\n"   /* Classic++: the ground's lambert */
     "uniform vec2 uGame;\n"
     "uniform float uZoom;\n"
     "uniform vec2 uZoomC;\n"
     "uniform float uDepthScale;\n"
-    "out vec2 vUV; flat out vec2 vCM; out vec2 vWorld;\n"
+    "out vec2 vUV; flat out vec2 vCM; out vec2 vWorld; flat out float vLam;\n"
     "void main(){\n"
     "  vec2 p = (aPos.xy - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);\n"
-    "  vUV = aUV; vCM = aCM; vWorld = aWorld;\n"
+    "  vUV = aUV; vCM = aCM; vWorld = aWorld; vLam = aLam;\n"
     "}\n";
 static const char* FS =
     "#version 330 core\n"
-    "in vec2 vUV; flat in vec2 vCM; in vec2 vWorld;\n"
+    "in vec2 vUV; flat in vec2 vCM; in vec2 vWorld; flat in float vLam;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uPal;\n"
     "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the atlas's restored twin */
     "uniform int uRestored;\n"         /* 1 = sample it where its alpha says so */
+    "uniform int uLit;\n"              /* 1 = Classic++: lit, RGB fog rule     */
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
@@ -273,17 +277,18 @@ static const char* FS =
        the depth buffer too — a tree occludes only where it has pixels */
     "  if (abs(idx - vCM.x) < 0.5/255.0) discard;\n"
     "  float a = (int(vCM.y + 0.5) == 2) ? 0.5 : 1.0;\n"
-    /* Classic++: the twin's colour where the lazy restore has painted it
-       (alpha 1 -- tagpu_gaf.h), the grey band as the RGB rule (renderers.md
-       2.6); a frame not yet restored, or a texel the restore has not reached,
-       falls through to the index below. The hole stays the index test above */
-    "  if (uRestored == 1) {\n"
-    "    vec4 t = texture(uAtlasRGB, vUV);\n"
-    "    if (t.a > 0.5) {\n"
-    "      vec3 c = t.rgb;\n"
+    /* Classic++ (uLit): the twin's colour where the lazy restore has painted
+       it (alpha 1 -- tagpu_gaf.h), the palette's for a frame not yet
+       restored, times the GROUND's lambert at the anchor (a billboard has no
+       normal of its own; the lab's lambertAt -- a tree on a shaded slope sits
+       in the shade rather than on top of it), then the grey band as the RGB
+       rule (renderers.md 2.6). The hole stays the index test above. */
+    "  if (uLit == 1) {\n"
+    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "    vec3 c = t.a > 0.5 ? t.rgb : texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb;\n"
+    "    c *= vLam;\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
-    "      frag = vec4(c * a, a); return;\n"
-    "    }\n"
+    "    frag = vec4(c * a, a); return;\n"
     "  }\n"
     "  int pi = int(idx*255.0+0.5);\n"
     TAGPU_GLSL_FOG_SHADE("pi")
@@ -337,6 +342,7 @@ static void init_gl(void)
     glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  3);
     glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 4);
     s_uRestored = glGetUniformLocation(s_prog, "uRestored");
+    s_uLit = glGetUniformLocation(s_prog, "uLit");
     glUseProgram(0);
 
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
@@ -351,6 +357,8 @@ static void init_gl(void)
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, FVST * 4, (void*)20);
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, FVST * 4, (void*)28);
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, FVST * 4, (void*)36);
     glBindVertexArray(0);
 
     tagpu_gaf_atlas_lost(&s_atlas);          /* its texture is made on first use */
@@ -376,11 +384,11 @@ static int   s_cBody, s_cShadow, s_cAtlasFail, s_cOverflow;
 static int   s_ownable = 0;            /* the wreck pass is up: we may own it  */
 
 static void put_vert(int b, float x, float y, float u, float v, float c, int mode,
-                     float wx, float wz)
+                     float wx, float wz, float lam)
 {
     float* o = s_verts[b] + (size_t)s_nv[b] * FVST;
     o[0] = x; o[1] = y; o[2] = s_encCur; o[3] = u; o[4] = v;
-    o[5] = c; o[6] = (float)mode; o[7] = wx; o[8] = wz;
+    o[5] = c; o[6] = (float)mode; o[7] = wx; o[8] = wz; o[9] = lam;
     s_nv[b]++;
 }
 
@@ -391,7 +399,7 @@ static void put_vert(int b, float x, float y, float u, float v, float c, int mod
    also makes a tree straddling the fog edge fade across it like the engine's
    per-cell overlay rather than all at once. */
 static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, int sy,
-                       int wax, int waz, int mode, int depth)
+                       int wax, int waz, int mode, float lam, int depth)
 {
     int b = s_bucketCur, w, h;
     float x0, y0, x1, y1, c;
@@ -411,7 +419,7 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
                 int m = mode;
                 if (!sg) continue;
                 if (mode == MODE_OPAQUE && sg[TAGPU_GF_SUBALP]) m = MODE_ALPHA;
-                emit_frame(v, sg, sx, sy, wax, waz, m, depth + 1);
+                emit_frame(v, sg, sx, sy, wax, waz, m, lam, depth + 1);
             }
             return;
         }
@@ -433,12 +441,12 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
            from the projected anchor (screen px and world px are 1:1 here) */
         float wx0 = (float)wax + (x0 - (float)sx), wx1 = (float)wax + (x1 - (float)sx);
         float wz0 = (float)waz + (y0 - (float)sy), wz1 = (float)waz + (y1 - (float)sy);
-        put_vert(b, x0, y0, e->u0, e->v0, c, mode, wx0, wz0);
-        put_vert(b, x1, y0, e->u1, e->v0, c, mode, wx1, wz0);
-        put_vert(b, x0, y1, e->u0, e->v1, c, mode, wx0, wz1);
-        put_vert(b, x1, y0, e->u1, e->v0, c, mode, wx1, wz0);
-        put_vert(b, x1, y1, e->u1, e->v1, c, mode, wx1, wz1);
-        put_vert(b, x0, y1, e->u0, e->v1, c, mode, wx0, wz1);
+        put_vert(b, x0, y0, e->u0, e->v0, c, mode, wx0, wz0, lam);
+        put_vert(b, x1, y0, e->u1, e->v0, c, mode, wx1, wz0, lam);
+        put_vert(b, x0, y1, e->u0, e->v1, c, mode, wx0, wz1, lam);
+        put_vert(b, x1, y0, e->u1, e->v0, c, mode, wx1, wz0, lam);
+        put_vert(b, x1, y1, e->u1, e->v1, c, mode, wx1, wz1, lam);
+        put_vert(b, x0, y1, e->u0, e->v1, c, mode, wx0, wz1, lam);
     }
 }
 
@@ -458,6 +466,26 @@ typedef struct {
 } FEATC;
 static FEATC s_c;
 static int s_logged;
+static int s_lit;                       /* Classic++ this frame: anchors take the ground's light */
+
+/* Classic++: the ground's lambert at an anchor -- the lab's lambertAt(col,
+   row): central differences of the height over 32 world units at the anchor
+   cell, coordinates clamped to the map, normal (-dx, 1, -dz), then the one
+   lighting rule (tagpu_classicpp.c). Every corner of every quad the anchor
+   emits takes this one value, as the lab's do. */
+static float ground_lambert(const char* fmap, int col, int row, unsigned mapW, unsigned mapH)
+{
+#define HAT(c, r) ((int)*(const unsigned char*)(fmap + ((size_t)(r) * mapW + (size_t)(c)) * FT_STRIDE + FT_HEIGHT))
+    int cl = col > 0 ? col - 1 : 0, cr = (unsigned)(col + 1) < mapW ? col + 1 : (int)mapW - 1;
+    int ru = row > 0 ? row - 1 : 0, rd = (unsigned)(row + 1) < mapH ? row + 1 : (int)mapH - 1;
+    float dx = (float)(HAT(cr, row) - HAT(cl, row)) / 32.0f;
+    float dz = (float)(HAT(col, rd) - HAT(col, ru)) / 32.0f;
+    float inv = 1.0f / sqrtf(dx * dx + 1.0f + dz * dz);
+    float n[3];
+    n[0] = -dx * inv; n[1] = inv; n[2] = -dz * inv;
+    return tagpu_classicpp_ground(n);
+#undef HAT
+}
 
 /* FeatureDef.Name is an inline char[0x20] (tagpu_cat.c reads the same field
    for `tacli features`), so it needs no dereference — only a NUL somewhere */
@@ -481,6 +509,7 @@ static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile
     unsigned flags = *(const unsigned char*)(tile + FT_FLAGS);
     unsigned mask  = *(const unsigned char*)(def + FD_MASK);
     int h00, h01, h10, h11, sx, sy, wax, waz;
+    float lam;
     const unsigned char* g;
     /* junk defs hold wild footprints; they only move our quad, but an
        unclamped one once hung the render thread (terrain-depth Corrections) */
@@ -500,6 +529,8 @@ static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile
     waz = row * 16 + (fz * 16) / 2 - ((h00 + h01 + h10 + h11) >> 3);
     sx = wax + 128 - v->eyeX;
     sy = waz + 32 - v->eyeY;
+    lam = s_lit ? ground_lambert(*(const char* const*)(ta + OFF_FEATMAP), col, row, mapW, mapH)
+                : 1.0f;
 
     if (flags & 1) {                                  /* wreckage on this tile */
         const char* recs = *(const char* const*)(ta + OFF_WRECKS);
@@ -517,14 +548,14 @@ static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile
             g = tagpu_gaf_state_frame(rec + WR_SHADANIM);
             if (g) {
                 s_bucketCur = B_SHADOW; s_encCur = encBody - 0.3f;
-                emit_frame(v, g, sx, sy, wax, waz, MODE_OPAQUE, 0);
+                emit_frame(v, g, sx, sy, wax, waz, MODE_OPAQUE, lam, 0);
                 s_c.shadows++;
             }
         }
         g = tagpu_gaf_state_frame(rec + WR_BODYANIM);
         if (g) {
             s_bucketCur = B_BODY; s_encCur = encBody;
-            emit_frame(v, g, sx, sy, wax, waz, MODE_OPAQUE, 0);
+            emit_frame(v, g, sx, sy, wax, waz, MODE_OPAQUE, lam, 0);
         }
         return;
     }
@@ -541,7 +572,7 @@ static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile
             if (g) {
                 s_bucketCur = B_SHADOW;
                 s_encCur = encBody - (flat ? 0.03f : 0.3f);
-                emit_frame(v, g, sx, sy, wax, waz, (mask & 8) ? MODE_ALPHA : MODE_OPAQUE, 0);
+                emit_frame(v, g, sx, sy, wax, waz, (mask & 8) ? MODE_ALPHA : MODE_OPAQUE, lam, 0);
                 s_c.shadows++;
             }
         }
@@ -551,7 +582,7 @@ static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile
                       : tagpu_gaf_seq_frame(bodySeq, 0);
         if (!g) return;
         s_bucketCur = B_BODY; s_encCur = encBody;
-        emit_frame(v, g, sx, sy, wax, waz, (mask & 4) ? MODE_ALPHA : MODE_OPAQUE, 0);
+        emit_frame(v, g, sx, sy, wax, waz, (mask & 4) ? MODE_ALPHA : MODE_OPAQUE, lam, 0);
         if (s_log && s_logged < 8 &&
             sx >= v->vpL && sx < v->vpL + v->vw && sy >= v->vpT && sy < v->vpT + v->vh) {
             char b[256];
@@ -607,6 +638,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
        double draw, with the occlusion this pass exists for silently inert. */
     s_ownable = tagpu_native_wrecks_armed();
     s_mute = s_passive || !s_ownable;
+    s_lit = tagpu_classicpp_on();
 
     fmap  = *(const char* const*)(ta + OFF_FEATMAP);
     fdefs = *(const char* const*)(ta + OFF_FEATDEF);
@@ -756,6 +788,7 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_atlas.rgb);
     x_glActiveTexture(GL_TEXTURE0);
     glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_on()) ? 1 : 0);
+    glUniform1i(s_uLit, s_lit ? 1 : 0);    /* the lambert the gather baked in */
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof s_vShadow + (GLsizeiptr)sizeof s_vBody,

@@ -74,6 +74,7 @@
 #include "tagpu_feat.h"
 #include "tagpu_terr.h"
 #include "tagpu_restoreglsl.h"
+#include "tagpu_classicpp.h"
 #include "tagpu_terrown.h"
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
@@ -191,7 +192,10 @@
    floor). MAXNV is the real budget and truncates gracefully; this one must not
    be what runs out first. */
 #define MAXU   2048
-#define NVST   11              /* x,y,depthEnc, u,v, flat,ck, shadeRow, wx,wzp, vy */
+#define NVST   14              /* x,y,depthEnc, u,v, flat,ck, shadeRow, wx,wzp, vy,
+                                  nx,ny,nz (Classic++: the posed face normal in
+                                  map space, unit length, flat per face; level
+                                  for lines and unshaded pieces) */
 /* depth keys: ground rows encode as (feat?3:1) + rel*4 (rel = row − r0, up
    to the sweep's row count plus the ±256 px gather slack); the engine draws
    projectiles/explosions after every ground row and before the airborne sweep
@@ -318,6 +322,7 @@ static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
               s_uScafOn, s_uScafP;
 static GLint  s_uWaterT, s_uWaterMode, s_uDigT;
 static GLint  s_uNanoOn, s_uNanoT, s_uNanoC;
+static GLint  s_uLit, s_uSun, s_uAmb, s_uNorm;      /* Classic++ lighting */
 static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepthScale;
 static GLint  s_uCKey = -1, s_uCSurfSz = -1, s_uCVp = -1;  /* composite: the key */
 static float  s_zoom = 1.0f;
@@ -352,24 +357,25 @@ static const char* VS =
     "layout(location=3) in float aShade;\n"  /* LUT row / 31                   */
     "layout(location=4) in vec2 aWorld;\n"   /* world x, projected world z     */
     "layout(location=5) in float aVY;\n"     /* posed model height, elev units */
+    "layout(location=6) in vec3 aNrm;\n"     /* posed face normal, map space   */
     "uniform vec2 uGame;\n"                  /* game_width, game_height        */
     "uniform vec2 uOffset;\n"                /* shadow pass shift, px          */
     "uniform float uZoom;\n"                 /* G12d partial-zoom demo         */
     "uniform vec2 uZoomC;\n"                 /* zoom centre, game px           */
     "uniform float uDepthScale;\n"           /* > every key in use this frame  */
     "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
-    "out float vEnc; out float vVY;\n"
+    "out float vEnc; out float vVY; flat out vec3 vNrm;\n"
     "void main(){\n"
     "  vec2 p = (aPos.xy + uOffset - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);\n"
     "  vUV = aUV; vFC = aFC; vShade = aShade; vWorld = aWorld; vEnc = aPos.z;\n"
-    "  vVY = aVY;\n"
+    "  vVY = aVY; vNrm = aNrm;\n"
     "}\n";
 static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; flat in vec2 vFC; flat in float vShade; in vec2 vWorld;\n"
-    "in float vEnc; in float vVY;\n"
+    "in float vEnc; in float vVY; flat in vec3 vNrm;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uLUT;\n"
@@ -385,6 +391,8 @@ static const char* FS =
     "uniform float uNanoT;\n"               /* height threshold, depth bytes  */
     "uniform vec3 uNanoC;\n"                /* cAbove, cBand, cBelow          */
     TAGPU_GLSL_FOG_FN
+    TAGPU_GLSL_LIGHT_UNIFORMS
+    TAGPU_GLSL_LIGHT_FN
     "void main(){\n"
     "  float idx;\n"
     "  if (vUV.x < 0.0) { idx = vFC.x; }\n"
@@ -404,7 +412,12 @@ static const char* FS =
     "  if (vVY <= uDigT) discard;\n"
     "  if (uShadow == 1) { if (vVY <= uWaterT) discard;\n"
     "                      frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
-    "  idx = texelFetch(uLUT, ivec2(int(idx*255.0+0.5), int(vShade*31.0+0.5)), 0).r;\n"
+    /* Classic: the per-face shade row through the 32-row PALETTE.SHD LUT.
+       Classic++ (uLit) skips it and lights the resolved colour per fragment
+       below, from the face normal -- the same light with the 32-row
+       quantisation taken out (renderers.md 1, Units row) */
+    "  if (uLit == 0)\n"
+    "    idx = texelFetch(uLUT, ivec2(int(idx*255.0+0.5), int(vShade*31.0+0.5)), 0).r;\n"
     /* build-state (nanoframe) recolour, engine 0x458D30 semantics
        (build-state.md): classify the fragment by its composite DEPTH byte —
        the model height plus 0x32 — against the threshold that sweeps with the
@@ -432,8 +445,18 @@ static const char* FS =
     "    if (nc > -0.5) idx = nc;\n"
     "  }\n"
     "  int pi = int(idx*255.0+0.5);\n"
+    "  vec3 rgb;\n"
+    /* Classic++: the lab's lambert on the palette colour (a nanoframe's band
+       colours are palette indices too, so they are lit the same way --
+       renderers.md 2.11), then the grey band as the RGB rule (2.6). Classic:
+       the index remap, as the engine does it. */
+    "  if (uLit == 1) {\n"
+    "    rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb * taLambert(vNrm);\n"
+    TAGPU_GLSL_FOG_GREY_RGB("rgb")
+    "  } else {\n"
     TAGPU_GLSL_FOG_SHADE("pi")
-    "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
+    "    rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
+    "  }\n"
     /* engine water table (prog+0xD0): r/2, g/2, b/2+0x32 */
     "  if (vVY <= uWaterT) {\n"
     "    if (uWaterMode == 1) discard;\n"
@@ -574,6 +597,10 @@ static void init_gl(void)
     s_uWaterMode = glGetUniformLocation(s_prog, "uWaterMode");
     s_uDigT      = glGetUniformLocation(s_prog, "uDigT");
     s_uNanoOn    = glGetUniformLocation(s_prog, "uNanoOn");
+    s_uLit       = glGetUniformLocation(s_prog, "uLit");
+    s_uSun       = glGetUniformLocation(s_prog, "uSun");
+    s_uAmb       = glGetUniformLocation(s_prog, "uAmb");
+    s_uNorm      = glGetUniformLocation(s_prog, "uNorm");
     s_uNanoT     = glGetUniformLocation(s_prog, "uNanoT");
     s_uNanoC     = glGetUniformLocation(s_prog, "uNanoC");
     s_uAlpha  = glGetUniformLocation(s_prog, "uAlpha");
@@ -642,6 +669,8 @@ static void init_gl(void)
     glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, NVST * 4, (void*)32);
     glEnableVertexAttribArray(5);
     glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, NVST * 4, (void*)40);
+    glEnableVertexAttribArray(6);
+    glVertexAttribPointer(6, 3, GL_FLOAT, GL_FALSE, NVST * 4, (void*)44);
     glBindVertexArray(0);
 
     const float quad[] = { 0,0, 1,0, 0,1, 1,1 };
@@ -897,6 +926,14 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
                 V[t][0] = v[0]; V[t][1] = v[1]; V[t][2] = v[2];
             }
             float shade = (float)shNeutral / 31.0f;
+            /* Classic++ lights the fragment from the same outward normal the
+               shade row is quantised from, carried in MAP space (x east, y up,
+               z south -- 3DO z points north, hence the flip; tascene-view.html
+               buildUnits does the same). Level where the engine draws the
+               piece unshaded (no shade flag, a degenerate face, the slant
+               shadow), so the lambert is exactly 1.0 there, as the neutral
+               row is the identity. */
+            float un[3] = { 0.0f, 1.0f, 0.0f };
             if (pieceShaded) {
                 float e1x = V[1][0]-V[0][0], e1y = V[1][1]-V[0][1], e1z = V[1][2]-V[0][2];
                 float e2x = V[2][0]-V[0][0], e2y = V[2][1]-V[0][1], e2z = V[2][2]-V[0][2];
@@ -908,6 +945,7 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
                     int rr = shNeutral + shDir * (int)floorf(I * 12.0f + 0.5f);
                     if (rr < 0) rr = 0; else if (rr > 31) rr = 31;
                     shade = (float)rr / 31.0f;
+                    un[0] = nx / nl; un[1] = ny / nl; un[2] = -nz / nl;
                 }
             }
             for (t = 0; t < 3; t++) {
@@ -935,6 +973,7 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
                 o[8] = wx0 + px;
                 o[9] = wz0 + py;
                 o[10] = y;
+                o[11] = un[0]; o[12] = un[1]; o[13] = un[2];
                 nv++;
             }
         }
@@ -1058,6 +1097,7 @@ static int emit_wire(const char* o3, int nv, float ax, float ay,
                     o[8] = wx0 + px;
                     o[9] = wz0 + py;
                     o[10] = y;
+                    o[11] = 0.0f; o[12] = 1.0f; o[13] = 0.0f;   /* level: lit 1.0 */
                     nv++;
                 }
             }
@@ -2047,6 +2087,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     o[7] = (float)tagpu_r3d_shade_neutral() / 31.0f;
                     o[8] = units[i].wx0; o[9] = units[i].wz0;
                     o[10] = 1e9f;                               /* never clipped */
+                    o[11] = 0.0f; o[12] = 1.0f; o[13] = 0.0f;   /* level: lit 1.0 */
                     nv++;
                 }
             }
@@ -2141,6 +2182,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     x_glUniform1f(s_uDepthScale, depthScale);
     glUniform1i(s_uScafOn, scafOn ? 1 : 0);
     x_glUniform4f(s_uScafP, (float)vpL, (float)vpT, (float)vw, (float)vh);
+    /* Classic++ lighting: the units' sun (tagpu_classicpp.c), once a frame */
+    {
+        const TAGPU_LIGHT* L = tagpu_classicpp_light();
+        glUniform1i(s_uLit, tagpu_classicpp_on() ? 1 : 0);
+        x_glUniform3f(s_uSun, L->unitSun[0], L->unitSun[1], L->unitSun[2]);
+        x_glUniform1f(s_uAmb, L->amb);
+        x_glUniform1f(s_uNorm, 1.0f / L->unitLevel);
+    }
     x_glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tagpu_r3d_atlas_texref());
     x_glActiveTexture(GL_TEXTURE1);

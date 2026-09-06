@@ -102,6 +102,32 @@
 #define TAGPU_GLSL_FOG_GREY_RGB(V) \
     "  if (taFogC.y >= 0.5) " V " = vec3(dot(" V ", vec3(1.0/3.0)));\n"
 
+/* ---- Classic++ lighting: the lab's one rule ---------------------------
+   tascene-view.html LAB_LIGHT, renderers.md 1, tascene-design.md "Level
+   ground takes exactly 1.0": an ambient-floored lambert divided by what LEVEL
+   ground receives, so level is exactly 1.0 and the sun only modulates by the
+   tilt from level -- the art is already lit (artlight) and must not be lit
+   twice. Evaluated per fragment, because that is where a local light will
+   join it. The shadow half of the lab's rule (shadowAt) is not here yet:
+   renderers.md 5 step 5.
+
+   uSun is the unit vector TOWARD the light in map space (x east, y up,
+   z south); uAmb 1.0 is "no sun" -- the rule is then exactly 1.0 with no
+   branch; uNorm = 1/level, level = uAmb + (1-uAmb)*max(uSun.y, 0), both
+   from tagpu_classicpp.c. uLit = 1 selects the Classic++ colour path in the
+   shader that carries it (light, then the RGB grey band); 0 is Classic,
+   byte for byte. */
+#define TAGPU_GLSL_LIGHT_UNIFORMS \
+    "uniform int uLit;\n" \
+    "uniform vec3 uSun;\n" \
+    "uniform float uAmb;\n" \
+    "uniform float uNorm;\n"
+#define TAGPU_GLSL_LIGHT_FN \
+    "float taLambert(vec3 n){\n" \
+    "  n = normalize(n);\n" \
+    "  return (uAmb + (1.0 - uAmb) * max(dot(n, uSun), 0.0)) * uNorm;\n" \
+    "}\n"
+
 /* ---- the sub-pixel edge nudge -----------------------------------------
    Quads are emitted on exact integer game-pixel boundaries, so at some zooms
    a quad's far edge lands EXACTLY on a fragment centre. The rasteriser gives

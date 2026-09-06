@@ -64,6 +64,7 @@
 #include "opengl_utils.h"
 #include "tagpu_restore_glsl.h"
 #include "tagpu_restoreglsl.h"
+#include "tagpu_classicpp.h"
 
 #define SLOT_COLS    8
 #define SLOT_ROWS    8
@@ -106,18 +107,6 @@ static double now_ms(void)
     LARGE_INTEGER f, c;
     QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c);
     return 1000.0 * (double)c.QuadPart / (double)f.QuadPart;
-}
-
-/* ---- the switch ---- */
-int tagpu_classicpp_on(void)
-{
-    static DWORD last = 0; static int on = 0;
-    DWORD t = GetTickCount();
-    if (last == 0 || t - last > 500) {
-        last = t;
-        on = GetFileAttributesA("tagpu_classicpp.on") != INVALID_FILE_ATTRIBUTES;
-    }
-    return on;
 }
 
 /* ---- GL entry points this module needs beyond opengl_utils ---- */

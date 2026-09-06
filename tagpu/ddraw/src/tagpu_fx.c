@@ -55,6 +55,7 @@
 #include "tagpu_glsl.h"
 #include "tagpu_gaf.h"
 #include "tagpu_restoreglsl.h"
+#include "tagpu_classicpp.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define TAPROG_PP     0x0051FBD0u

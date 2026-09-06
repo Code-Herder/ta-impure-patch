@@ -18,6 +18,7 @@
 #include "opengl_utils.h"
 #include "tagpu_gaf.h"
 #include "tagpu_restoreglsl.h"
+#include "tagpu_classicpp.h"
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 
