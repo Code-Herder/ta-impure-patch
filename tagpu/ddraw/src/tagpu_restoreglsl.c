@@ -30,8 +30,10 @@
    batchFrames): a frame's padded edge S is max(w, h) + 2 x depth if it
    wraps. A job's queue is taken in order; a batch holds frames of one SIZE
    CLASS (the ladder below) up to a square slot grid of min(8, ACT_MAX /
-   class) per side, and its slot pitch is its largest S. Every slot has its
-   own rect, so a 30x25 tree and a 63x60 rock share a batch. Activations are
+   class) per side -- then shrunk to the smallest square that holds what was
+   taken, since the passes cost by the fragment -- and its slot pitch is its
+   largest S. Every slot has its own rect, so a 30x25 tree and a 63x60 rock
+   share a batch. Activations are
    sized to the largest cols x S seen, never above ACT_MAX (a 512-px frame
    restores alone in a 1x1 grid), and are freed after IDLE_FRAMES without work
    -- the queues live as long as the map, the 100 MB does not.
@@ -778,6 +780,9 @@ static int form_batch(struct TAGPU_RGLSL_JOB* j)
         } else j->q[k++] = j->q[i];
     }
     j->qn = k;
+    /* the grid is the smallest square that holds the batch: the passes cost
+       by the fragment, and a queue's two-frame batch must not pay for 64 */
+    for (cols = 1; cols * cols < j->bn; cols++) ;
     j->bS = S; j->bcols = cols;
     j->pass = 0; j->group = 0; j->srcAct = 0;
     if (!ensure_act(cols * S)) { j->failed = 1; job_drop_work(j); return 0; }

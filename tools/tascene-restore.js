@@ -14,9 +14,10 @@
 // BATCHING, shared with the C driver byte for byte: a frame's padded edge S is
 // max(w, h) + 2·depth if it wraps; frames are taken in the order given, a
 // batch holding frames of one SIZE CLASS (the ladder below), up to a square
-// slot grid of min(8, floor(ACT_MAX / class)) per side; the batch's slot pitch
-// is its largest S. Activations are sized to the largest cols·S of the run,
-// never above ACT_MAX.
+// slot grid of min(8, floor(ACT_MAX / class)) per side, then on the smallest
+// square grid that holds what was taken; the batch's slot pitch is its
+// largest S. Activations are sized to the largest cols·S of the run, never
+// above ACT_MAX.
 
 export const RESTORE_SHADERS = ["restore_fs.vert", "restore_fill.frag", "restore_conv.frag",
                                 "restore_out.vert", "restore_out.frag"];
@@ -124,7 +125,11 @@ export function batchFrames(frames, depth) {
     const cols = Math.min(SLOT_COLS, Math.floor(ACT_MAX / cls)), cap = cols * cols;
     const take = [], keep = [];
     for (const p of rest) (p.cls === cls && take.length < cap ? take : keep).push(p);
-    batches.push({ S: Math.max(...take.map((p) => p.S)), cols, frames: take.map((p) => p.f) });
+    // the grid is the smallest square that holds the batch: the passes cost by
+    // the fragment, and a two-frame batch must not pay for 64
+    let grid = 1;
+    while (grid * grid < take.length) grid++;
+    batches.push({ S: Math.max(...take.map((p) => p.S)), cols: grid, frames: take.map((p) => p.f) });
     rest = keep;
   }
   return batches;
