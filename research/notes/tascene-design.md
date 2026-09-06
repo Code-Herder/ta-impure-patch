@@ -201,8 +201,9 @@ the visible cell count, off-map cells, features and unit triangles.
 | `serve <pack>` | the lab on loopback. `--port` (default: an ephemeral one) |
 | `shot <pack> -o <png>` | one deterministic headless frame. `--opts '<query>'` passes the viewer parameters below; `--timeout`, `--budget` (Chrome's `--virtual-time-budget`, ms); `--json` |
 | `artlight` | **is the map art already painted lit?** `--map <name>` or `--all`; `--steep` (default 0.25 ≈ 14°), `--elevation` (default 53.1, the engine's own), `--json` for the whole azimuth curve. Needs no pack and no game — it reads the TNT. See "Does the art already contain the hill" below |
-| `restore <pack>` | **the GLSL restorer's bench** ([renderers](renderers.html) §4c): the viewer under `restore=glsl&restorediff=1` in headless Chrome, its report read out of the DOM. `--model full\|tiny`, `--precision fp32\|fp16`, `--nk N` (output channel-tiles per conv draw; default the device's most), `--no-diff` to time only, **`--gpu vulkan`** for ANGLE on the real adapter (SwiftShader is the default: deterministic, and ~10 min for Two Continents against 1.2 s on the 4070), `--opts`, `--timeout`, `--budget`, `--json`. Exit 1 when the diff fails the bar |
+| `restore <pack>` | **the GLSL restorer's bench** ([renderers](renderers.html) §4c): the viewer under `restore=glsl&restorediff=1` in headless Chrome, its report read out of the DOM — the terrain atlas **and the feature atlas** (colour-keyed, non-square: since 2026-09-05). `--model full\|tiny`, `--precision fp32\|fp16`, `--nk N` (output channel-tiles per conv draw; default the device's most), `--no-diff` to time only, **`--gpu vulkan`** for ANGLE on the real adapter (SwiftShader is the default: deterministic, and ~10 min for Two Continents against 1.2 s on the 4070), **`--save-features <rgba>`** to write the restored feature atlas (the pack's layout), `--opts`, `--timeout`, `--budget`, `--json`. Exit 1 when either diff fails its bar: the terrain's is Q2; the features' is Q2 on the *far band* (opaque texels farther than the model's depth from any keyed texel) with the near band reported — max, mean, differing — for the eye |
 | `restorediff <pack> <dump.rgba>` | the in-game proof: the DLL's `tagpu_restore.rgba` (written once under `tagpu_restoredump.on`, the same 2176-wide 34-pitch layout as the pack's `terrain/atlas.rgba.bin`) diffed against the pack with the same bar. Exit 1 on failure |
+| `featdiff <pack> <prefix>` | the in-game proof for a GAF atlas's restored twin: `tagpu_restoredump.on` also makes the DLL write `tagpu_restore_feat.{r8,rgba,idx}` (and `_fx`) once the queue drains — the source atlas, the twin and a line per entry `x y w h key wrap` — and this finds each entry's frame in the pack (same size, identical indices) and applies the two-band bar, plus alpha 0 on the key and the 1-texel border a copy of the edge. `--radius` (default 12, the model's depth). Entries the pack does not carry (effects: the pack has no weapon or build sprites) are counted, not diffed; exit 1 on failure or when nothing matched |
 | `ab <scenario.json>` | drive both sides and diff. `--name` the instance (default `tascene`), `--no-launch` to use one already running, `--eye X,Y` to pin the camera, `--los`/`--mapping` for the SKIRMISH fog toggles (defaults `0`/`1` = no fog), `--settle` seconds to wait for a roster with units and a real eye, `--opts`, `--launch-timeout`, `--json` |
 
 ### Viewer query parameters
@@ -246,7 +247,7 @@ These exist only in `lane=explore`, and they are what landing 2 added.
 | `terrainshadow=<b>` | the heightfield casts too, default 1. The art has slope shading but no cast shadows, so this adds and does not double-count the way relief did; on Two Continents' 53° sun it amounts to 786 pixels |
 | `shadowres=<n>` | depth map size, default 2048. The light-space bounds are the view plus a 192-unit margin and the height range actually in view, about 0.7 world units per texel |
 | `debug=shadow` | (global) show side A's depth map instead of the frame, near = bright |
-| `restore=<how>` | **CLASSIC++ only.** Where the terrain's restored colour comes from: `pack` (default — `terrain/atlas.rgba.bin`, restored offline by the unditherer at build time) or **`glsl`** — the GLSL restorer (`tascene-restore.js`, the shaders extracted from `tagpu_restore_glsl.h`, the weights from `restore/<model>.w32.bin`) run in the page on the pack's own R8 atlas, which is what the game does. Implies `undither=1`. With `model=full\|tiny`, `precision=fp32\|fp16`, `nk=N`; **`restorediff=1`** reads the result back and diffs it against the pack's atlas (the Q2 bar: max 1 level, < 0.01 % of interior RGB bytes, the guard ring a copy of the edge), in the status bar and as a hidden `<pre id="restore-report">` for `tascene restore` |
+| `restore=<how>` | **CLASSIC++ only.** Where the terrain's and the features' restored colour comes from: `pack` (default — `terrain/atlas.rgba.bin` and `features/atlas.rgba.bin`, restored offline by the unditherer at build time) or **`glsl`** — the GLSL restorer (`tascene-restore.js`, the shaders extracted from `tagpu_restore_glsl.h`, the weights from `restore/<model>.w32.bin`) run in the page on the pack's own R8 atlases, which is what the game does; the feature frames go through with their colour key (the FILL pass's nearest-ring stand-in for the reference's TELEA inpaint, alpha 0 written at the key). Implies `undither=1`. With `model=full\|tiny`, `precision=fp32\|fp16`, `nk=N`; **`restorediff=1`** reads both results back and diffs them against the pack's atlases (terrain: the Q2 bar — max 1 level, < 0.01 % of interior RGB bytes, the guard ring a copy of the edge; features: Q2 on the far band, the near band reported), in the status bar and as a hidden `<pre id="restore-report">` for `tascene restore`, with the restored feature atlas as base64 in `<pre id="restore-features">` for `--save-features` |
 | `undither=<b>` | `1` = the pack's restored atlases, `0` = the palette indices. **Default: restored when the pack carries them** (`build --undither`), indexed otherwise — so the lane's defaults still reduce to parity on an indexed pack, and show the colour a restored pack was built for. `undither=1` on a pack built without `--undither` says so instead of drawing something plausible |
 
 ### The renderer buttons
@@ -617,6 +618,20 @@ too. `unditherer/infer.py` now pins `allow_tf32 = False` for both cuDNN and matm
 undither cache's magic went `TSU1 → TSU2` so every cached frame was recomputed (5,154 frames,
 a couple of minutes on the 4070). Against the strict reference the GLSL restorer differs on
 0.0012 % (179 bytes of 15.5 M, max 1 level) on the GPU and 0.0011 % on SwiftShader.
+
+### The colour key in the lab  [MEASURED 2026-09-05]
+
+`restore=glsl` also restores the pack's feature atlas (51 keyed, non-square frames on Two
+Continents' fixture) through the very shaders the DLL runs, and it is where the lazy GAF restore's
+two open questions were answered before the engine half was written: the batcher that mixes sizes
+in one batch (the lab's `batchFrames` is the DLL's `form_batch`, class ladder and slot grid
+included — four batches here, one of them a 5×5 grid) and the colour-key stand-in. Against the
+pack's TELEA-inpainted reference the far band — opaque texels beyond the model's depth of any
+keyed texel — is **exact (max 0)**, and the near band differs by a **mean of 0.41 levels, 92 % of
+bytes within 1, one byte at 23**; the numbers, the picture and the bar proposed for it are in
+[renderers](renderers.html) §4c. The bench pays 22 ms of GPU for the features against 1.15 s for
+the tiles. `restore=glsl` puts the viewer's unit-0…5 bindings back as it found them, which the
+first version did not (its slot tables sat on the fog units, its key table on the feature atlas).
 
 ### The restorer, cached  [VERIFIED 2026-09-03]
 

@@ -554,25 +554,39 @@ terrown.on / markown.on`, and `tagpu.log` carries one `ARMED` line per pass — 
 because a missing one is the whole pass silently absent.
 
 **Classic++ is a separate switch; its restorer runs as GLSL in the game's own context.**
-`tacli arm <i> classicpp.on` turns on the restored true-colour terrain; it is *polled* twice
-a second, so it flips live for an A/B. The restore itself is `tagpu_restoreglsl.c` — fragment
-passes sliced at 12 ms of GPU time per frame, visible tiles first — and needs nothing but the
-weight files `full.w32.bin`/`tiny.w32.bin`, which `launch` links beside `TotalA.exe` from
+`tacli arm <i> classicpp.on` turns on the restored true-colour terrain, features and effects;
+it is *polled* twice a second, so it flips live for an A/B, and arming it mid-play restores
+everything already on screen (the terrain radiating from the screen centre, the sprites within
+a slice or two after it). The restore itself is `tagpu_restoreglsl.c` — fragment passes sliced
+at 12 ms of GPU time per frame, the terrain's tiles nearest the screen centre first, then the
+feature and effects atlases' queues — and needs nothing but the weight files
+`full.w32.bin`/`tiny.w32.bin`, which `launch` links beside `TotalA.exe` from
 `unditherer/models/` (the tree tacli runs from first). Read the result in `tagpu.log`:
-`restoreglsl: 12x64 fp32, NK=4 ...` then `restoreglsl: job started: N frames ...` and finally
-`restoreglsl: done: ... over F frames = W ms wall since begin (X fps while restoring); GPU G ms`
-— **that `fps` is the frame rate the game held during the restore**, frames over wall time, and
-the one to quote. Two Continents: 2.1 s at 59.7 fps; the biggest stock map (Lava & Two Hills,
-11,561 tiles) 4.2 s. The first job of every launch is abandoned by the startup GL reset and
-restarted; the `done` line is the second job's.
+`restoreglsl: 12x64 fp32, NK=4 ...` then `restoreglsl: terr: job started: N frames ...` and
+finally `restoreglsl: terr: done: ... in S of F frames = W ms wall since begin (X fps while
+restoring); GPU G ms` — **that `fps` is the frame rate the game held during the restore**, every
+frame over wall time (S is the frames the terrain drew in; the rest went to a sprite batch or a
+query wait), and the one to quote. Two Continents: 2.35 s at 59.1 fps with the sprite queues
+live (2.1 s without); the biggest stock map (Lava & Two Hills, 11,561 tiles) 4.6 s, its viewport
+complete in 1.9 s. The sprites' lines are `restoreglsl: feat: lazy restore armed ...` /
+`restoreglsl: fx: ...` and a `queue drained: N frames in B batches this run, F frames from the
+first queued to the last painted` tally (under `log`, or at most one per 300 frames). The first
+job of every launch is abandoned by the startup GL reset and restarted; the `done` line is the
+second job's. Cells and sprites show as they land, so a shot taken during the restore is a
+mixed frame — wait for the `done` line before a parity capture.
 
 Knobs go in **`tagpu_restoreglsl.on`**, read once per job, so arm them before the launch (or
 before the map change) you are measuring: `tacli arm <i> 'restoreglsl.on=log tiny'` — `tiny`
 (the 6×24 model), `fp16`, `nk=N` (output tiles per conv draw), `budget=MS` (GPU ms per frame,
 default 12), `log` (a line per batch). **`tagpu_restoredump.on`** makes the DLL write the finished
-atlas once to `gamedir/tagpu_restore.rgba` — the only file the GLSL restorer ever writes — and
-`tools/tascene restorediff <pack> <that file>` holds it to a pack built with `--undither` of the
-same map (max 1 level on < 0.01 % of bytes is the bar; Two Continents measures 0.0012 %).
+terrain atlas once to `gamedir/tagpu_restore.rgba`, and each sprite atlas's restored twin once its
+queue drains — `tagpu_restore_feat.{r8,rgba,idx}`, `tagpu_restore_fx.{...}` (re-written when the
+atlas has grown; the `.idx` lists every entry) — the only files the GLSL restorer ever writes.
+`tools/tascene restorediff <pack> <the .rgba>` holds the terrain to a pack built with `--undither`
+of the same map (max 1 level on < 0.01 % of bytes is the bar; Two Continents measures 0.0012 %),
+and `tools/tascene featdiff <pack> <gamedir>/tagpu_restore_feat` the feature twin (the far band
+exact, the near band reported; 24 of 24 frames matched on the parity scenario). The effects
+twin has no pack reference: judge it by eye (`fx-mix`).
 The ONNX Runtime path — `onnxruntime.dll`, DirectML, the vkd3d-proton `d3d12` pair, `tagpu_cache/`,
 `tagpu_restorecpu.on`, `tagpu_restoreonnx.on` — was deleted on 2026-09-05; a `restore:` line in
 `tagpu.log` means an old DLL; a `vkd3d-proton ... from` line at launch means a stale `tools/tacli`.

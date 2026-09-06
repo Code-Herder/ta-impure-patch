@@ -46,7 +46,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
-| Terrain in restored true colour (Classic++) | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05), the ONNX stack deleted (G14d, 2026-09-05) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b); the ONNX Runtime path is gone (G14d). The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
+| Terrain in restored true colour (Classic++), and since G14e the feature and effect sprites | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05), the ONNX stack deleted (G14d, 2026-09-05), **the reveal progressive and the two sprite atlases restored lazily** (G14e, 2026-09-05) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b); the ONNX Runtime path is gone (G14d). The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k; one blend per silhouette pixel since G13n | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain; **aircraft** measured against the engine on `shadow-air` — offset `(+5, (alt−ground)/2)` on four airframes, darkening 0.487 engine vs 0.25 ours before the stencil and 0.44–0.52 after |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
@@ -78,6 +78,49 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G14e — the progressive reveal, and the feature and effects atlases restored lazily.** Two
+units of [Classic and Classic++](renderers.html) §4c on 2026-09-05, one landing. No engine
+address is touched; `tagpu_feat.c`/`tagpu_fx.c` now read the live palette (`main+0x143A7`) for
+the restorer as the terrain pass already did.
+
+**The reveal (Q6).** The restored atlas's alpha is the per-cell flag: the restorer clears its
+destination to 0 and its out pass writes alpha 1 over every cell it paints, so the terrain shader
+samples the restored colour where the alpha says so and draws indexed elsewhere — no flag texture,
+no upload; `uRestored` means "a restore is running or done". Tiles are ranked from the *centre* of
+the gathered rect, so the reveal radiates from the middle of the screen. **Measured**: Two
+Continents at map load, the first batch in slice 4; Lava & Two Hills with the switch flipped
+mid-play, the viewport 68 % restored 0.94 s after arming, 98 % at 1.25 s, complete at 1.9 s, the
+whole 11,561-tile set in 4.6 s at 58.6 fps; `restorediff` unchanged at 179 bytes.
+
+**The sprites (§4b Option 4).** `tagpu_restoreglsl.c` is a pool of jobs sharing one set of GL
+objects and one per-frame budget, stepped once per frame by `tagpu_native.c` between the gathers
+and the renders; the job with a batch in flight keeps it, otherwise the lowest priority number
+runs (terrain 0, features 1, effects 2). Each `TAGPU_GAFATLAS` carries an RGBA8 twin and a queue
+that every miss feeds; the sprite shaders sample the twin where its alpha is 1 and stay on the
+index elsewhere, the colour-key test unchanged; a recycle clears the twin, a context loss forgets
+everything, arming the switch mid-play queues what the atlas holds. Batches hold frames of one
+size class on the smallest square slot grid that fits them (the terrain's two classes come out as
+before). Keyed texels are inpainted by the FILL pass's nearest-ring mean within the model's depth
+(the stand-in for the reference's TELEA) and written `(0,0,0,0)` by the OUT pass. **Lab first**:
+`tascene restore` now restores the pack's feature atlas too — 51 keyed non-square frames, 4
+batches, 20 ms of GPU — and diffs it in two bands: opaque texels beyond the model's depth of any
+key **exact (max 0)**; the near band mean 0.41 levels, 92 % within 1, judged by eye
+(`assets/shots/restore-features-nearband.png`). **In the game**: Two Continents at map load with
+both queues live, the terrain in **139 frames = 2.35 s at 59.1 fps**, the 24 feature and 10
+effect frames drained two slices after it; the feature twin dumped under `tagpu_restoredump.on`
+and matched to the pack by `tascene featdiff`: 24 of 24 found, far band exact, the near band the
+lab's profile. `feat-forest` and `fx-mix` by eye at zoom 1 and 0.25: fire, smoke, explosions,
+trees and wrecks restored, no hairlines; `fx-mix` grew the feature atlas to 1,298 entries as the
+forest burned, each restored two or three frames after its first draw. Activations are freed
+after 3 s idle (98–128 MB), the two twins (16 MB each) stay for the map.
+
+**What it did not close.** The near-key band's bar is proposed, not approved (renderers §4 Open);
+the effects twin has no lab reference; the unit atlas (pad, align, mips, the unit shader's
+branch) waits for the unit-shading worktree; the 54 fps the terrain restore held on the busy
+scenarios (59 on the parity fixture) is measured, not explained; a frame drawn indexed for the
+frame or two before its restore lands is the design, and while the terrain job runs at map load
+every feature waits behind it (146 frames on Two Continents).
 
 **G14d — the ONNX stack is deleted.** Landing 3 of [Classic and Classic++](renderers.html) §4c
 (Q7), the same day as G14c: `tagpu_restore.c`/`.h` (the ONNX Runtime job, its DirectML provider,
@@ -115,7 +158,8 @@ from the gather, and each call issues draws until the previous slice's `GL_TIME_
 budget (12 ms) is spent — `ARB_timer_query` is checked for by name because the context is 3.2 and
 a query on an unsupported target would never signal; without it the slice is a fixed draw count.
 Batches go out **visible tiles first**: each tile is ranked by its Chebyshev distance in cells from
-the last gathered rect, one pass over the tile map at job start. One flip at the end (Q6).
+the last gathered rect, one pass over the tile map at job start. One flip at the end (Q6 — made
+progressive and centre-out by G14e).
 `tagpu_restoreglsl.on` carries the knobs (`tiny`, `fp16`, `nk=`, `budget=`, `log`);
 `tagpu_restoredump.on` writes the finished atlas once as raw RGBA — the module's only disk write —
 and `tascene restorediff` holds it to the pack. (`tagpu_restoreonnx.on`, the same-map A/B against
@@ -136,11 +180,10 @@ the second is the one measured. VRAM during the restore: 98 MB of activations pl
 weight block, freed at the end; the RGBA atlas (23.7 MB on Two Continents, 54 MB on the biggest
 map) is the only thing that stays.
 
-**What this landing did not close.** Features and units are still indexed under Classic++ — the
-lazy GAF atlases are §4b Option 4, built on this engine next, and the rect mask is already per
-slot so a GAF frame is a driver change. The **progressive reveal** (Q6) is now triggered by its
-own number: the biggest map shows 4.2 s of indexed terrain at load, over the ~2 s the plan set,
-so per-cell flags are the follow-up. A GL context reset mid-restore restarts the job rather than
+**What this landing did not close.** ~~Features and units are still indexed under Classic++~~ —
+features and effects restore lazily since G14e (§4b Option 4 on this engine, the rect mask per
+slot as planned); units remain. ~~The **progressive reveal** (Q6) is now triggered by its own
+number~~ — done in G14e, centre-out. A GL context reset mid-restore restarts the job rather than
 resuming it (the scratch died with the context; the result had not been written). The wall time
 is frame-bound — 12 ms of a 16.7 ms frame — so a machine without vsync would finish in the GPU
 time alone; nothing was measured on any adapter but the 4070.

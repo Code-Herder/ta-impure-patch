@@ -19,7 +19,7 @@ date; **[OPEN]** = not settled.
 |---|---|---|
 | What it is | what tagpu draws today; the lab's `lane=classic` | the lab's `lane=classicpp` at its current defaults |
 | Claim | **pixel parity** with itself: it must not move by a pixel, and the lab's parity ritual is the proof | none against the engine; it is judged by eye and measured against the lab |
-| Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game so far: the terrain (G14a).* |
+| Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game: the terrain (G14c) and the feature and effect sprites (G14e, lazily on first draw); unit textures not yet.* |
 | Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit) |
 | Units | per-face shade row from `SH_L` through the 32-row LUT | per-pixel lambert in map space from the posed face normal, same level normalisation |
 | Shadows | the engine's rules. **In the game**: the 5-px silhouette drop for mobiles and the cached slant for structures, each blended once per silhouette pixel (G13n). **In the lab**: the silhouette only — a structure casts NOTHING there, because that lane does not draw the slant projection. This row claimed the lab had both until 2026-09-04; it did not have either, and now has one | a depth map along `shadowsun`, PCSS-lite (8-tap blocker search, 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive; an airborne caster follows `airshadow` (§2.2) |
@@ -282,7 +282,7 @@ does not re-scan the runtime's module tree — a precaution, not a measured faul
 
 **Rules that are ours in C whichever engine runs** **[SOURCE `unditherer/restore.py`,
 `infer.py`, `classical.py`]**: colour-key texels are inpainted before the network (OpenCV
-Telea, radius 3 — no C twin, a few dilation passes stand in) and alpha is restored from the
+Telea, radius 3 — no shader twin; the FILL pass's nearest-ring mean stands in, §4c) and alpha is restored from the
 key mask after; a frame whose opposite edges agree within 12 levels (`is_tileable`) is
 wrap-padded by the depth, every other frame is zero-padded (the convolutions' own `zeros`
 padding); output is clipped to 8 bits. The restored RGBA atlases are new objects beside
@@ -484,11 +484,14 @@ over ping-pong FBOs, weights in a texture; 64 channels is 16 RGBA targets, so wi
   fragment passes unless the context is bumped — a separate decision with its own risk.
 - **Being prototyped** — the mechanism and the plan are §4c, decided 2026-09-05.
 
-### Option 4 — Hybrid: the terrain job stays whole-set, the GAF frames go lazy
+### Option 4 — Hybrid: the terrain job stays whole-set, the GAF frames go lazy  [BUILT 2026-09-05, G14e]
 
 Terrain is already enumerated and batches efficiently; GAF frames are the ones that would need
 archaeology, and are the ones laziness suits. So: keep `tagpu_restore_terrain_begin` exactly as
-it is minus the cache, and give the two lazy atlases Option 1.
+it is minus the cache, and give the two lazy atlases Option 1. **This is what shipped**, on the
+GLSL engine rather than ONNX: `tagpu_gaf.c` feeds a queue on every atlas miss, and the feature
+and effects atlases each carry an RGBA8 twin the sprite shaders sample where its alpha is 1 —
+the mechanism and the numbers are in §4c below.
 
 - **Discovery needed: none.** No route from §2 is needed at all.
 - **Map load**: session 1.0–1.9 s + restore 1.83 s ≈ **2.9–3.7 s of indexed terrain, then a
@@ -605,6 +608,77 @@ therefore the next thing this engine owes. Landing 3 followed the same day: the 
 header, the fetch script, tacli's vkd3d-proton and DirectML plumbing, `tagpu_restoreonnx.on` and
 `tagpu_restorecpu.on` are gone, and `tagpu_classicpp_on()` lives in `tagpu_restoreglsl.c`.
 
+### The reveal, the colour key and the queues  [MEASURED 2026-09-05, G14e]
+
+**The progressive reveal (Q6, done).** The restored atlas's *alpha* is the per-cell flag: the
+restorer clears its destination to 0 when a job starts and the OUT pass writes alpha 1 over every
+texel it paints, guard ring included, so the terrain shader samples the restored colour where
+`a > 0.5` and draws indexed elsewhere — no flag texture, no upload, and a cell's samples are
+all-or-nothing because one quad paints its interior and its ring **[SOURCE `tagpu_terr.c`,
+`tagpu_restore_glsl.h` OUT]**. Draws in one frame are in order, so a cell whose OUT pass a slice
+issued is restored in that frame's terrain draw. The tiles are ranked by Chebyshev distance from
+the **centre** of the gathered rect (ranking the whole rect 0 restored the visible cells in
+tile-index order, a scatter), so the reveal radiates from the middle of the screen and carries on
+outward. Measured in the game: Two Continents at map load, the first 64-tile batch is issued in
+slice 4 (~80 ms after the job began); Lava & Two Hills with the switch flipped mid-play (so the
+0.5 s poll is in the figures), the viewport is 68 % restored 0.94 s after arming, 98 % at 1.25 s
+and complete at 1.9 s, while the whole 11,561-tile set takes 4.6 s at 58.6 fps — the per-cell map
+of a shot at 0.94 s is a block growing from the screen centre. `restorediff` on the finished atlas
+is unchanged: the same 179 bytes.
+
+**Keyed frames (Q9, the GAF half).** The reference inpaints keyed texels with OpenCV's TELEA
+before the network and restores the key's alpha after (`unditherer/restore.py`); a shader cannot
+reproduce TELEA, so the FILL pass stands in with **the mean palette colour of the opaque texels on
+the nearest ring (Chebyshev) within the model's depth** of the keyed texel — depth, because a
+keyed texel farther than the receptive radius from every opaque one influences no opaque output —
+and the OUT pass writes `(0, 0, 0, 0)` at the key, which is what the reference's save writes
+**[SOURCE `tagpu_restore_glsl.h`]**. A frame with the key on an edge is never wrap-padded (the
+reference decides tileability on the inpainted image, a coin toss a shader cannot call), a key in
+the interior only leaves the 12-level test as it was. **The bar for keyed frames, and the
+proposal put to the owner**: the Q2 bar applies to opaque texels *farther than the depth from any
+keyed texel* (the far band); the near band differs from TELEA by construction and is reported and
+judged by eye. Lab, the pack's 51 feature frames (all keyed, all non-square, 18 to 71 px), full
+model, ANGLE/Vulkan on the 4070: **188 draws in 4 batches, 20 ms of GPU; far band max 0 on 1,287
+bytes; near band 93,408 bytes, 27 % differing, mean 0.41 levels, 92 % within 1, 99.3 % within 4,
+about 100 bytes over 8, one at 23** — ours and the reference are indistinguishable by eye, the
+difference an outline at the silhouette (the four worst frames, indexed / ours / reference /
+difference ×8: [restore-features-nearband.png](assets/shots/restore-features-nearband.png)). In the game the feature twin dumped under
+`tagpu_restoredump.on` and matched frame by frame to the pack (`tascene featdiff`): 24 of 24
+found, far band max 0, near band mean 0.412 — the same profile.
+
+**Mixed sizes in one batch (the packer of Q9)**: a frame's padded edge S is `max(w, h) + 2·depth`
+if it wraps; a batch takes frames of one *size class* (32, 48, 64, 96, 128, 192, 256, 384, 512)
+in queue order, up to a square slot grid of `min(8, 512 / class)` per side — then on the smallest
+square grid that holds what was taken, since the passes cost by the fragment and a queue's
+two-frame batch must not pay for sixty-four — and its slot pitch is its largest S: a 30×25 tree
+shares a batch with a 63×60 rock, a 512-px frame restores alone, and the lab's four feature batches
+run on 5×5, 4×4, 4×4 and 3×3 grids.
+Activations are sized to the largest `cols × S` seen, never past 512² (128 MB at fp32), and freed
+after 3 s without work. The lab and the DLL run the identical batcher (`tascene-restore.js`
+`batchFrames`, `tagpu_restoreglsl.c` `form_batch`); the terrain's two classes come out as before.
+
+**The queues.** `tagpu_restoreglsl.c` is a pool of jobs sharing one set of GL objects and one
+per-frame budget, stepped once per frame by `tagpu_native.c` *after the gathers* (so a frame missed
+this frame is queued) and *before the renders* (so what it paints is sampled this frame). The job
+with a batch in flight keeps it; otherwise the lowest priority runs — terrain 0, features 1,
+effects 2 — re-picked at every batch boundary. Each `TAGPU_GAFATLAS` carries its twin and its
+job; `tagpu_gaf_atlas_get` queues every new entry (tileability decided at upload, while the
+pixels are still on the CPU), a recycle clears the twin and drops the queue, a context loss forgets
+everything, and arming the switch mid-play queues what the atlas already holds. Measured, Two
+Continents at map load with both queues live: the terrain's 5,062 tiles in **139 frames = 2.35 s
+at 59.1 fps** (the first feature batch was in flight when the terrain job began and landed in
+slice 11; 15 of the 139 frames were not the terrain's); the 24 feature frames in 5 batches and the
+10 effect frames in 1 drained **two slices after the terrain**. The effects twin has no reference
+in the pack (its frames are the units' build and weapon sprites) and is judged by eye only.
+By eye, `feat-forest` and `fx-mix` at zoom 1 and 0.25: trees, rocks, dead trees, fire, smoke and
+explosions restored, no hairlines at the sprite edges (the twin's border is the edge's copy, as the
+R8's is), the units still indexed. `fx-mix` is also the stress case: the fight burns the forest,
+and every burning tree cycles fire frames and then becomes a wreck, each a new body and shadow —
+the feature atlas grew from 13 to 1,298 entries in a minute, every one restored two or three
+frames after its first draw, with no atlas recycle. The terrain restore ran at 54 fps in both
+scenarios against 59 on the parity fixture; whether that is the sprite volume or the restore is
+not isolated.
+
 **What the bench changed on the way** (each a fact, not a decision):
 
 - **The pack's reference was TF32.** `unditherer`'s torch backend ran on CUDA with cuDNN's
@@ -642,10 +716,10 @@ header, the fetch script, tacli's vkd3d-proton and DirectML plumbing, `tagpu_res
 | **Q3 — where the bench lives** | A separate page, `tools/tascene-restore.html`, served from the pack: loads `atlas.r8.bin` + `pal.bin` + the weights, runs the passes, diffs against `atlas.rgba.bin`, reports the Q2 numbers and a per-batch wall time; headless through `shot`'s virtual-time machinery. The shader text is written **once**, in the lab's portable style (body shared, `#version` prefix swapped). **When it passes, the restore folds into the viewer as `restore=glsl`, the diff readout survives as a debug overlay or verb, and the bench page is deleted** | The viewer's parity lane is never touched by the bench; one page at the end; the shader that passes is byte-for-byte the shader that ships |
 | **Q4 — precision** | fp32 (`RGBA32F`) is what must pass; fp16 (`RGBA16F`, one enum) is reported alongside from the same bench and adopted only if it is what gets the full model under 3 s in the game — never for tiny. Fail loudly without `EXT_color_buffer_float` | The optimisation gets its own decision after its number exists |
 | **Q5 — sharing the render thread** | **Slice**: `restore_step()` in `tagpu_terr.c` issues batches with a budget in **milliseconds (~8 ms/frame)**, not cells — `GL_TIMESTAMP` queries (3.3) or a conservative wall clock. **No second GL context** (an unmeasured Wine risk of the second-DLL class) and **no CPU path** — the GPU is the only engine; a slow one restores slower, without stalling | A load-time event of a few seconds at 50 fps, on one thread where GL errors are attributable |
-| **Q6 — what the player sees** | **One flip** when the whole set is done, exactly today's `s_rgbState == 2`; batches are issued in **visibility order** regardless (visible cells first), so a progressive reveal costs only a per-cell flag later. Progressive is a follow-up whose trigger is a number: more than ~2 s of indexed terrain at load on the biggest maps | No random scatter of restored cells, no per-cell state before the lighting pass exists |
+| **Q6 — what the player sees** | ~~**One flip** when the whole set is done~~ — **the trigger fired** (4.2 s on the biggest map) and the reveal is **progressive since 2026-09-05 (G14e)**: cells show as they land, centre-out, the flag being the restored atlas's own alpha (above). The one-flip behaviour survives as the alpha being 1 everywhere at completion | No random scatter: the order radiates from the screen centre; the biggest map's viewport is complete in 1.9 s of a 4.6 s restore |
 | **Q7 — the ONNX path** | **Done 2026-09-05.** If GLSL passes, **delete it** as its own landing: `tagpu_restore.c`'s runtime half, `fetch_onnxruntime.sh`, `tacli`'s `vkd3d_proton_dir()` and `WINEDLLOVERRIDES`, `tagpu_restorecpu.on`, `onnxruntime.dll`/`full.onnx`/the d3d12 pair in gamedirs. §2.5's measurements stay as the superseded baseline. The reference oracle survives in the lab (`unditherer` on onnxruntime, `tascene build --undither`) | One engine; a fallback slower than the primary is dead code with a bill |
 | **Q8 — in-game proof** | A **dump trigger**, `tagpu_restoredump.on`: the finished atlas written once as raw RGBA, diffed by a `tascene` verb against the pack with the Q2 bar — same tiles, same 2176 × 34-pitch layout, same order. It is the restorer's **only disk write, and only under the trigger**, so "no cache" stays literally true. `tascene ab` remains the whole-frame ritual, not the restore's proof | Checks the bytes the game samples, in the context that matters, with a pass/fail number |
-| **Q9 — scope** | **Terrain only**, with the per-layer mask taking a per-cell **rect** (x, y, w, h) so a GAF frame is a driver change and not a shader change; one deliberately non-square cell in a debug run. The colour-key inpaint stand-in stays with the lazy GAF work | The go/no-go with the largest N and the only matched reference |
+| **Q9 — scope** | **Terrain only** for the prototype, with the per-layer mask taking a per-cell **rect** (x, y, w, h) so a GAF frame is a driver change and not a shader change. **Done 2026-09-05 (G14e)**: the driver change (size classes, the slot grid) and the colour-key stand-in landed with the lazy GAF work, proven on the pack's 51 non-square keyed feature frames rather than one debug cell | The go/no-go with the largest N and the only matched reference |
 | **Q10 — order of work** | GLSL **before** the lazy GAF atlases (the only step built *on* the engine); unit shading, terrain lighting and shadows proceed **alongside** in their own worktree — they sample an atlas and do not care what filled it | The engine question idles nothing but the one step that depends on it |
 | **Q11 — landings** | **Three.** (1) *Lab*: bench, weights verb, shader text, this section's numbers measured — lands whether or not the DLL half passes; no review. (2) *Engine*: the sliced restorer behind `restore_step()`, the dump trigger, in-game time and diff; ONNX stays compiled and reachable only through `tagpu_restoreonnx.on` for the same-map A/B; Opus review at medium. (3) *Deletion*, per Q7; review at medium. If full misses the bound, **tiny is judged by eye in the lab before landing 2 is written** | A negative result has somewhere to land; the engine review reads shader work, not `tacli` plumbing |
 
@@ -667,15 +741,20 @@ the graph itself is that stable.
 
 ## 4. Open  [OPEN]
 
-- **The restorer is terrain-only so far.** Feature sprites and unit textures go through the
-  same job next (they have colour keys, so the inpaint stand-in of §2.5 lands with them), and
-  the unit atlas needs its 4-texel pad, alignment and mips.
-- **The first restore blocks nothing but is visible**, and since §2.5b it happens on **every**
-  map load: **2.1 s of indexed Classic++ terrain on Two Continents, 4.2 s on the biggest stock
-  map** at 60 fps with the GLSL restorer (§4c, measured 2026-09-05) — no runtime, no session
-  build, no CPU fallback any more. The biggest map is past the ~2 s trigger Q6 set for the
-  progressive reveal (visible cells first is already the issue order; what is missing is the
-  per-cell flag so restored cells show as they land).
+- **The restorer covers terrain, features and effects; unit textures are next.** The unit
+  atlas (`tagpu_render3do.c atlas_get`) needs its 4-texel pad, alignment and mips 0–2 and the
+  unit shader's restored branch, and it waits for the unit-shading work in the other worktree,
+  which edits the same fragment shader (§5 step 2).
+- **The near-key band's bar is the owner's call.** G14e applied the Q2 bar to opaque texels
+  farther than the model's depth from any keyed texel and reported the rest (mean 0.41 levels,
+  92 % within 1, judged by eye — §4c); that split was proposed, not yet approved. The effects
+  twin has no lab reference at all.
+- ~~**The first restore blocks nothing but is visible**~~ — **the reveal is progressive since
+  2026-09-05 (G14e)**: the viewport of the biggest stock map is restored within 1.9 s of a 4.6 s
+  whole-map job, centre-out (§4c). What remains visible is the first two seconds' worth of
+  indexed cells filling in, and a feature drawing indexed for the frame or two before its
+  restore lands — plus, while the terrain job runs at map load, every feature (its queue waits
+  for the terrain's; on Two Continents that was 146 frames from first queued to painted).
 - ~~**The cache's format is undecided.**~~ **Moot since 2026-09-05** — §2.5b removes the cache
   entirely, so the compression survey, the 4.4 GB ceiling and the content-keyed tile bank are all
   closed by the decision rather than by an answer. The measurements are kept in the git history
@@ -709,10 +788,12 @@ the graph itself is that stable.
 1b. ~~**The GLSL restorer** (§4c)~~ — done 2026-09-05 in three landings: the lab bench (the Q2
    bar met, 1.15 s GPU), the engine (2.14 s at 59.7 fps in the game, the dump byte-identical to
    the lab), and the ONNX deletion. Steps 3–5 proceed alongside in their own worktree.
-2. **The other two restored atlases**, lazily on first draw (§4b Option 4, on the GLSL
-   engine): the rect-masked driver over the two existing `atlas_get` sites, the colour-key
-   inpaint stand-in, pad and align, mips 0–2; the unit and feature shaders' restored-texture
-   branch. No cache (§2.5b).
+2. ~~**The feature and effects atlases**, lazily on first draw~~ — done 2026-09-05 (G14e):
+   the size-class driver over `tagpu_gaf_atlas_get`, the colour-key stand-in, the twin per
+   atlas, the two sprite shaders' restored branch; and the progressive reveal of the terrain
+   (Q6). **Still to do: the unit atlas** — pad and align, mips 0–2, the unit shader's branch —
+   after the unit-shading worktree lands, since both edit `tagpu_native.c`'s unit FS. No cache
+   (§2.5b).
 3. **Unit shading** in map space: normal and world height per vertex, `LAB_LIGHT` into
    `tagpu_glsl.h` with the viewer's uniform names.
 4. **Terrain lighting** from the height texture, level-normalised.
