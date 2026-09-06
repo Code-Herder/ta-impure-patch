@@ -87,6 +87,12 @@ shadow in the frame still comes from one light. `physical` and `drop` stay in th
 queries, not as options to ship. Boats (§2.3) still have no prototype, and the decision above
 does not pre-empt them: a hull sits ON the water, so it is the ordinary ground case.
 
+**In the game (decided 2026-09-06, §2.12): all three are ported**, as `airshadow=len|physical|drop`
+in `tagpu_classicpp.cfg`, default `len`, with the lab's semantics — so the judgement this section
+defers to the game can be made in the game, live. `drop` is the one thing that keeps the Classic
+silhouette alive under the switch: an air unit under `drop` is left out of the depth pass and
+gets the stencil silhouette from the per-unit loop instead, exactly as the lab's `drawUnits` does.
+
 ### 2.3 Water: the seabed stays shaded and shadowed
 The viewer lights and shadows underwater cells by the seabed, and never reads the sea level
 in its lighting or shadow receivers **[SOURCE `tools/tascene-view.html`]**. **Decided: keep
@@ -120,10 +126,18 @@ design page, the engine map, the roadmap's G13b row). **What this does not prove
 anywhere — a mission script or a menu transition was not tested — only that nothing cycles in
 play. The per-frame re-upload stays, as insurance rather than as a mechanism.
 
-### 2.4 Hires glb units are out of scope
+### 2.4 Hires glb units: they cast, they do not receive
 `tagpu_hires_draw.c` lights in linear space with a GGX lobe; Classic++ is a lambert in sRGB
-space, and hires meshes are in no depth pass. **Decided: not a Classic++ concern.** Revisit
-after the port.
+space, and hires meshes were in no depth pass. ~~**Decided: not a Classic++ concern.** Revisit
+after the port.~~ **Revised 2026-09-06 (the owner: "if it's not going to be too expensive —
+units are going to be between 2k and 3k" triangles): a hires unit CASTS.** Its vertex shader
+already computes the posed model-space position before the engine projection, so the depth
+variant is that same program behind a uniform switch, the same pose upload, the same
+per-material draws and no fragment work — 2–3 k depth-only triangles per unit is under a
+millisecond for a couple of hundred casters — and the model height for the length rule is the
+replaced 3DO's AABB, which the gather already has. Its stencil silhouette goes off under the
+switch with the 3DO ones. **It still does not receive**: the GGX lighting is untouched, so a
+hires body standing in a cast shadow is lit as though it were not. That half stays deferred.
 
 ### 2.5 The restorer runs at map load, inside the DLL, through ONNX Runtime — spike first
 
@@ -353,6 +367,19 @@ window over the grid moves by whole texels, and the depth range is the map's ful
 range plus the caster allowance, held constant — so the per-frame height scan goes too.
 The blocker search and the PCF kernel stay in world units as the lab has them.
 
+**The texel rule, refined 2026-09-06 (§2.12).** The zoom is continuous and eased
+(`tagpu_zoom.c`: 10 % geometric notches, 0.25..8, eased over frames), so a texel that is a
+smooth function of zoom would re-anchor the grid every frame of an ease. **Decided: octaves.**
+The *base* texel is the lab's density at 1× — the light-space extent of the 1× window plus the
+caster margins, over `shadowres`; the texel is `base·2^k` with the smallest integer `k`
+(negative allowed, zoomed in) whose map of `res` texels covers the zoomed window plus the
+margin; `res` is `shadowres` at zoom ≥ 1 and twice it, capped at 4096, below. So the grid
+changes only at octave boundaries (about 1× and 0.42× at the defaults), an ease between them
+moves the window by whole texels, and the density is never worse than §2.9's original sketch.
+The depth range is the map's full 0..255 plus a 256-unit caster allowance (an aircraft under
+`physical` at CruiseAlt 200 still fits), constant per map; the window's depth *offset* moves
+with the window, which is a translation both sides of every compare share.
+
 ### 2.8 Hills cast: a static per-map heightfield mesh
 The terrain gather emits screen-space quads with no height **[SOURCE `tagpu_terr.c`]**, so
 the depth pass has nothing of the ground to draw. **Decided: one world-space VBO of the whole
@@ -362,8 +389,9 @@ feature pass already reads (§3), drawn once per frame in the depth pass. Two Co
 
 ### 2.9 Classic++ applies at every zoom
 Under `vpwide` the view reaches 16× the area at the 0.25 floor. **Decided: all zooms.** The
-shadow map's world-per-texel follows the zoom: 2048² at zoom ≥ 0.5, 4096² below; the PCF
-minimum radius follows the texel. Restored textures are mipmapped to level 2, which covers
+shadow map's world-per-texel follows the zoom: ~~2048² at zoom ≥ 0.5, 4096² below~~ **2048² at
+zoom ≥ 1, 4096² below, the texel by octave (§2.7, refined 2026-09-06)**; the PCF minimum
+radius follows the texel. Restored textures are mipmapped to level 2, which covers
 0.25 at `ss=2`. The unit vertex cap is unchanged because the depth pass reuses the frame's
 one vertex buffer. The softer shadows at the floor are judged in play — the lab's Classic++
 lane runs at zoom 1 by construction and cannot show them (§4).
@@ -391,7 +419,13 @@ Why it fits:
   live in `gamedir/tagpu_classicpp.cfg` as `key=value` lines re-read on mtime change, keyed
   like the lab's URL parameters (`sun`, `unitsun`, `shadowsun`, `amb`, `penumbra`,
   `shadowlen`, `shade`, `aniso`, `shadows`). A human editing files, a tacli verb and the menu
-  drive the same state. The model `full.onnx` and `onnxruntime.dll` (1.22.1 x86) ship in
+  drive the same state. **The shadow keys (decided 2026-09-06, §2.12)**: `shadows`,
+  `shadowsun`, `penumbra`, `shadowlen`, `shade`, `terrainshadow`, `shadowres`, `airshadow`,
+  each with the lab's default, and the map runs only when `shadows=1` **and** the engine's own
+  Shadow option bit is set (`main+0x37F06` bit 2 — the player's in-game Shadows toggle keeps
+  its meaning under Classic++, off = no depth pass and no read-back, as it kills the
+  silhouettes today); TShadow (bit 3) is ignored, it only tells the silhouette from the slant
+  in the engine and Classic++ draws neither. The model `full.onnx` and `onnxruntime.dll` (1.22.1 x86) ship in
   gamedir beside them.
 
 ### 2.11 Two small calls made by the implementer
@@ -400,12 +434,68 @@ Why it fits:
   already computed on the CPU for the shade row **[SOURCE `tagpu_render3do.c` ~794]**, so
   this is plumbing; about 2.9 MB per frame at the 49 152-vertex cap. **Built as 14 (G14f)**:
   the normal joined (`NVST` 14, `tagpu_native.c` — the native pass's own `emit_node`, not
-  `tagpu_render3do.c`, which is the blit path's twin); the world height has no reader until
-  the shadow pass and joins with it (§5 step 5).
+  `tagpu_render3do.c`, which is the blit path's twin); ~~the world height has no reader until
+  the shadow pass and joins with it (§5 step 5)~~ **the stream stays at 14 (decided
+  2026-09-06)**: the lab bakes each caster's shadow-space position (world x, ground + scaled
+  height, real z) into three floats, but the stream already carries world x, the *projected* z
+  and the posed height, and real z = projected z + (altitude + height)/2 — `wz0 = fy − fz/2`
+  and `o[9] = wz0 − z − y/2` in `emit_node` — so the same position is derived in the vertex
+  shader from three per-unit uniforms (altitude, ground + air throw, the length rule's scale),
+  set in the per-unit loops that already set `uWaterT`/`uDigT`. Nothing in `emit_node` or the
+  buffer moves.
 - **Nanoframes** go through the same unit shader (G13l), so they are lit and shadowed for
   free. Their band and fill colours are palette indices, so the restored-texture branch looks
   them up through the palette texture; and they cast nothing, as the native pass already
   rules **[MEASURED, build-state §7]**.
+
+### 2.12 Shadows in the game: the decisions of 2026-09-06
+Grilled with the owner before any code, one branch at a time; the ones above (§2.2, §2.4,
+§2.7, §2.9, §2.10, §2.11) are amended in place. The rest:
+
+- **Landing shape: one landing, two stages.** Units and wrecks cast first, A/B'd against the
+  lab at `terrainshadow=0`; then the heightfield mesh, at `terrainshadow=1`. Both land together
+  — one review, one docs pass, no intermediate `main` where hills receive and do not cast.
+- **Sampler objects, so the context request goes 3.2 → 3.3 core** (§3's own advice): one depth
+  texture read through a compare+bilinear sampler for the PCF taps and a raw one for the
+  blocker search, on texture units 12 and 13 as the lab binds them. Every driver with 3.2 core
+  has 3.3 (they shipped together), so the fork's legacy fallback is not reached. The two
+  samplers stay bound and named even with shadows off — left at unit 0 they are two sampler
+  *types* on one unit and GL drops the whole draw (the lab's blank afternoon).
+- **Placement.** The frame's unit geometry is complete before the frame FBO is bound and the
+  VBO upload sat after the terrain render; the upload moves up and the depth pass runs there,
+  so the terrain read-back is this frame's, not last frame's.
+- **What casts: the lab's rule.** Every gathered unit and wreck, cloaked or not; nanoframes
+  excluded (§2.11); the FBI silhouette gates (`noshadow`, `canhover`, `floater`) ignored — a
+  hovercraft over water does cast, and those bits are 1997 workarounds for the silhouette
+  blit; effects models (missiles, shells, debris, in the same buffer) do **not** — the lab has
+  none, and a shell's shadow flickering at sim rate under smooth bodies is noise. **Cloaked
+  units cast exactly for whoever can see them**, the owner's condition: the gather drops a
+  cloaked enemy before any vertex exists (`tagpu_native.c`, "enemies never see cloak") and
+  keeps the watched player's own, so the buffer the depth pass draws *is* what the viewer sees.
+- **The hill mesh**: indexed, one vertex per grid point, indices ordered by cell row, built in
+  `tagpu_terr.c` beside the R8 upload from the same byte copy under the same key and retry; the
+  depth pass draws the contiguous row span the light window covers plus the margin, so the
+  biggest stock map costs what the smallest does. Two Continents: 539 k vertices, 3.2 M
+  indices, under 20 MB. The cell's diagonal is the one `taTerrN` interpolates across.
+- **Sub-passes off under the switch**: the per-unit stencil silhouette and the slant range are
+  not emitted or drawn under Classic++ (air units under `airshadow=drop` excepted); the hires
+  silhouette likewise (§2.4).
+- **Modules**: `tagpu_shadow.c/h` owns the map, the samplers, the FBO, the light-space frame
+  and texel rule, the depth program for the 3DO stream, the per-frame pass and the read-back
+  uniforms, and joins the GL reset; the mesh is the terrain module's; the eight keys are parsed
+  by `tagpu_classicpp.c` into the light struct; `shadowAt` is the second half of `taLambert` in
+  `tagpu_glsl.h`, once, for the terrain and unit shaders. The hires pass gets its depth entry.
+- **The receiver-plane derivatives are taken at the top of the fragment shader**, before any
+  `discard`, and handed to `shadowAt` — G14g's mipped-sample lesson applied to `dFdx`. Since a
+  face's normal is flat, `dFdx(p)` is exactly `½·M₃·dFdx(W)`, so the function's arithmetic is
+  the lab's with the derivative supplied rather than taken.
+- **The bar for "verified by running it"**: G14f's within-a-level bar cannot hold on a
+  map-anchored grid against a view-anchored one (the edges differ by up to a texel by
+  construction), so: Classic `tascene ab` unchanged; Classic++'s shadow on-minus-off against the
+  lab's `shadows=1` minus `shadows=0`, at `terrainshadow` 0 then 1, **shadowed-pixel counts
+  within 5 %** (any change, and darker than 0.7× lit) with the two difference images looked at
+  side by side; fps within 1 of G14g's on the four fixtures; one x11grab scroll under Classic++
+  stepped frame by frame for crawl. The zoom-floor look is the owner's, in play.
 
 ---
 
@@ -895,7 +985,8 @@ the graph itself is that stable.
    be read draws Classic++ *unlit*: the restored colour and the grey rule stay, the lambert
    is skipped, and the build is retried every 60 frames.
 5. **Shadows**: the map-anchored grid, the depth pass over units and the heightfield mesh,
-   the read-back in terrain and unit shaders, the two Classic shadow sub-passes off.
+   the read-back in terrain and unit shaders, the two Classic shadow sub-passes off. **Decided
+   in full 2026-09-06 (§2.12), being built on `worktree-soft_shadows` as G14h.**
 6. **Fog** rule of §2.6 — in the terrain, feature and unit passes since G14f (the RGB mean
    after the lambert, under the switch); the effects pass hides in grey and needs none.
 7. **Switch and cfg**, then the **menu** of §2.10.
