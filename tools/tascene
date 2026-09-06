@@ -929,8 +929,13 @@ def build_units(scenario, assets, out, restore=None, defs=None):
                           "facing": float(feat.get("facing", 0) or 0),
                           "id": feat.get("id"), "feature": feat.get("type"),
                           "shadow": False, "agl": 0})
+    # every frame's own rect (inside its pad) and colour key, so `tascene
+    # unitdiff` can find the DLL's dumped twin entries in this atlas
+    frame_rects = {key: {"x": x, "y": y, "w": frames[key].width, "h": frames[key].height,
+                         "key": -1 if frames[key].transparent is None else frames[key].transparent}
+                   for key, (x, y) in place.items()}
     return {"atlas": {"w": aw, "h": ah, "file": "units/atlas.r8.bin",
-                      "rgba": rgba_file, "pad": UNIT_PAD},
+                      "rgba": rgba_file, "pad": UNIT_PAD, "frames": frame_rects},
             "stride": UNIT_VSTRIDE, "meshes": meshes, "instances": instances}
 
 
@@ -1574,26 +1579,24 @@ def _frame_bands(got, ref, r8, W, x, y, w, h, key, wrap, border, radius, acc):
     return n
 
 
-def cmd_featdiff(args):
+def _pack_atlas(args, section, what):
+    """(pack, section dict, W, H, r8 bytes, rgba bytes) of one restored atlas"""
     pack = Path(args.pack).resolve()
     if not (pack / "scene.json").exists():
         die(f"{pack} has no scene.json (run `tascene build` first)")
     scene = json.loads((pack / "scene.json").read_text())
-    feat = scene.get("features")
-    if not feat or not feat["atlas"].get("rgba"):
-        die(f"{pack} has no features/atlas.rgba.bin: rebuild with --undither")
-    PW, PH = feat["atlas"]["w"], feat["atlas"]["h"]
-    pr8 = (pack / feat["atlas"]["file"]).read_bytes()
-    prgba = (pack / feat["atlas"]["rgba"]).read_bytes()
-    # the pack's frames, keyed on (w, h, the R8 bytes)
-    frames = {}
-    for d in feat["defs"].values():
-        for slot in ("body", "shadow"):
-            r = d.get(slot)
-            if not r:
-                continue
-            px = b"".join(pr8[(r["y"] + j) * PW + r["x"]:(r["y"] + j) * PW + r["x"] + r["w"]] for j in range(r["h"]))
-            frames[(r["w"], r["h"], px)] = (r, d["name"])
+    sec = scene.get(section)
+    if not sec or not sec["atlas"].get("rgba"):
+        die(f"{pack} has no {what}: rebuild with --undither")
+    return (pack, sec, sec["atlas"]["w"], sec["atlas"]["h"],
+            (pack / sec["atlas"]["file"]).read_bytes(), (pack / sec["atlas"]["rgba"]).read_bytes())
+
+
+def _atlasdiff(args, pack, PW, PH, pr8, prgba, frames, border):
+    """Hold a DLL-dumped atlas twin (prefix.{r8,rgba,idx}) to the pack's, frame
+    by frame: `frames` maps (w, h, R8 bytes) -> (rect, name); `border` is the
+    replicated ring each dumped entry carries (1 for the sprite atlases, the
+    pack's pad for units)."""
     prefix = Path(args.prefix).expanduser()
     idx = [tuple(int(v) for v in line.split()) for line in (prefix.with_suffix(".idx")).read_text().split("\n") if line.strip()]
     gr8 = prefix.with_suffix(".r8").read_bytes()
@@ -1621,7 +1624,7 @@ def cmd_featdiff(args):
            "keyed": 0, "opaque": 0, "alpha_bad": 0, "ring": 0, "ring_bytes": 0}
     worst, worst_n = None, 0
     for (x, y, w, h, key, wrap, name) in matched:
-        n = _frame_bands(grgba, ref, gr8, dim, x, y, w, h, key, wrap, 1, radius, acc)
+        n = _frame_bands(grgba, ref, gr8, dim, x, y, w, h, key, wrap, border, radius, acc)
         if n > worst_n:
             worst, worst_n = name, n
     far, near = acc["far"], acc["near"]
@@ -1647,6 +1650,35 @@ def cmd_featdiff(args):
     ta3do.out(rep, args.json, human=human)
     if not ok:
         sys.exit(1)
+
+
+def cmd_featdiff(args):
+    pack, feat, PW, PH, pr8, prgba = _pack_atlas(args, "features", "features/atlas.rgba.bin")
+    # the pack's frames, keyed on (w, h, the R8 bytes)
+    frames = {}
+    for d in feat["defs"].values():
+        for slot in ("body", "shadow"):
+            r = d.get(slot)
+            if not r:
+                continue
+            px = b"".join(pr8[(r["y"] + j) * PW + r["x"]:(r["y"] + j) * PW + r["x"] + r["w"]] for j in range(r["h"]))
+            frames[(r["w"], r["h"], px)] = (r, d["name"])
+    _atlasdiff(args, pack, PW, PH, pr8, prgba, frames, 1)
+
+
+def cmd_unitdiff(args):
+    """The unit atlas's twin (tagpu_render3do.c, G14g) against the pack's
+    units/atlas.rgba.bin. The DLL pads every unit frame by the same UNIT_PAD
+    the pack does, so the ring check covers the whole 4-texel border."""
+    pack, units, PW, PH, pr8, prgba = _pack_atlas(args, "units", "units/atlas.rgba.bin")
+    rects = units["atlas"].get("frames")
+    if not rects:
+        die(f"{pack}: units/atlas has no per-frame rects (rebuild with a tascene that writes them)")
+    frames = {}
+    for name, r in rects.items():
+        px = b"".join(pr8[(r["y"] + j) * PW + r["x"]:(r["y"] + j) * PW + r["x"] + r["w"]] for j in range(r["h"]))
+        frames[(r["w"], r["h"], px)] = (r, name)
+    _atlasdiff(args, pack, PW, PH, pr8, prgba, frames, units["atlas"].get("pad", UNIT_PAD))
 
 
 # --------------------------------------------------------------------------- ab
@@ -1886,6 +1918,13 @@ def main(argv=None):
     fd.add_argument("--radius", type=int, default=12, help="the model's depth: the far band starts past it")
     fd.add_argument("--json", action="store_true")
     fd.set_defaults(func=cmd_featdiff)
+    ud = sub.add_parser("unitdiff", help="hold the unit atlas's restored twin dumped by the DLL "
+                                           "(tagpu_restoredump.on) to the pack's restored unit atlas")
+    ud.add_argument("pack")
+    ud.add_argument("prefix", help="the dump's path without its extension, e.g. <gamedir>/tagpu_restore_unit")
+    ud.add_argument("--radius", type=int, default=12, help="the model's depth: the far band starts past it")
+    ud.add_argument("--json", action="store_true")
+    ud.set_defaults(func=cmd_unitdiff)
 
     al = sub.add_parser("artlight",
                         help="is the map art already painted lit? sweep the sun "

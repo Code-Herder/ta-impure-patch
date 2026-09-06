@@ -323,6 +323,7 @@ static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
 static GLint  s_uWaterT, s_uWaterMode, s_uDigT;
 static GLint  s_uNanoOn, s_uNanoT, s_uNanoC;
 static GLint  s_uLit, s_uSun, s_uAmb, s_uNorm;      /* Classic++ lighting */
+static GLint  s_uRestored;                          /* Classic++: the unit atlas's twin */
 static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepthScale;
 static GLint  s_uCKey = -1, s_uCSurfSz = -1, s_uCVp = -1;  /* composite: the key */
 static float  s_zoom = 1.0f;
@@ -380,6 +381,8 @@ static const char* FS =
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uLUT;\n"
     "uniform sampler2D uPal;\n"              /* 256x1 RGBA live palette        */
+    "uniform sampler2D uAtlasRGB;\n"         /* Classic++: the atlas's restored twin, mipped */
+    "uniform int uRestored;\n"               /* 1 = sample it where its alpha says so */
     TAGPU_GLSL_SCAF_UNIFORMS                  /* G12a scaffold, R8, viewport    */
     TAGPU_GLSL_FOG_UNIFORMS
     "uniform int uShadow;\n"
@@ -437,21 +440,31 @@ static const char* FS =
        wireframe's hidden-line removal is the smaller of the two errors;
        getting it back needs per-sprite isolation (a stencil pass), which this
        landing did not do. */
+    "  bool band = false;\n"
     "  if (uNanoOn == 1) {\n"
     "    float nd = vVY + 50.0;\n"
     "    float nc = (nd < uNanoT - 4.0) ? uNanoC.z\n"
     "             : (nd < uNanoT)       ? uNanoC.y : uNanoC.x;\n"
     "    if (nc < -1.5) discard;\n"
-    "    if (nc > -0.5) idx = nc;\n"
+    "    if (nc > -0.5) { idx = nc; band = true; }\n"
     "  }\n"
     "  int pi = int(idx*255.0+0.5);\n"
     "  vec3 rgb;\n"
-    /* Classic++: the lab's lambert on the palette colour (a nanoframe's band
-       colours are palette indices too, so they are lit the same way --
-       renderers.md 2.11), then the grey band as the RGB rule (2.6). Classic:
-       the index remap, as the engine does it. */
+    /* Classic++: the restored texel where the lazy restore has painted it
+       (alpha 1 -- tagpu_gaf.h; the twin is sampled trilinear with its mips,
+       the lab's LAB_UNIT_FS uUndither branch), the palette's colour for a
+       flat face, a nanoframe band or a texel not yet restored, then the lab's
+       lambert on either (renderers.md 2.11) and the grey band as the RGB rule
+       (2.6). The hole stays the index test above: the twin's alpha is 0 at a
+       keyed texel too, but the index compare is what keeps it out of the
+       depth buffer. The sample sits outside the varying branches so its
+       derivatives (the mip level) are defined. Classic: the index remap, as
+       the engine does it. */
     "  if (uLit == 1) {\n"
-    "    rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb * taLambert(vNrm);\n"
+    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "    rgb = (t.a > 0.5 && vUV.x >= 0.0 && !band) ? t.rgb\n"
+    "        : texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
+    "    rgb *= taLambert(vNrm);\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
     "  } else {\n"
     TAGPU_GLSL_FOG_SHADE("pi")
@@ -615,6 +628,7 @@ static void init_gl(void)
     s_uZoomF  = glGetUniformLocation(s_prog, "uZoomF");
     s_uZoomCF = glGetUniformLocation(s_prog, "uZoomCF");
     s_uDepthScale = glGetUniformLocation(s_prog, "uDepthScale");
+    s_uRestored   = glGetUniformLocation(s_prog, "uRestored");
     glUseProgram(s_prog);
     glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
     glUniform1i(glGetUniformLocation(s_prog, "uLUT"),   1);
@@ -622,6 +636,9 @@ static void init_gl(void)
     glUniform1i(glGetUniformLocation(s_prog, "uScaf"),  3);
     glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 4);
     glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  5);
+    /* unit 8: the hires pass binds its own textures on 6 and 7 between the
+       shadow and body draws (tagpu_hires_draw.c) and restores only unit 0 */
+    glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 8);
     glUseProgram(0);
 
     GLuint cvs = mksh(GL_VERTEX_SHADER, CVS), cfs = mksh(GL_FRAGMENT_SHADER, CFS);
@@ -1467,6 +1484,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 
     char* ta = *(char**)TA_MAINPP;
     if (!ptr_ok(ta)) return;
+    /* the unit atlas's frame: recycle if full, arm and step its Classic++
+       restore -- before any face asks it for a UV (main+0x143A7 is the live
+       palette, the one uploaded to uPal below) */
+    tagpu_r3d_atlas_frame((const unsigned char*)(ta + 0x143A7));
     char* beg = *(char**)(ta + OFF_BEGIN);
     char* end = *(char**)(ta + OFF_END);
     if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return;
@@ -2202,7 +2223,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     glBindTexture(GL_TEXTURE_2D, s_fogTex);
     x_glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
+    x_glActiveTexture(GL_TEXTURE8);
+    glBindTexture(GL_TEXTURE_2D, tagpu_r3d_atlas_rgbref());
     x_glActiveTexture(GL_TEXTURE0);
+    /* Classic++: the twin exists and the switch is on; a job may still be
+       running, and the shader's alpha test is what says a texel is ready */
+    glUniform1i(s_uRestored, (tagpu_r3d_atlas_rgbref() && tagpu_classicpp_on()) ? 1 : 0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);

@@ -68,6 +68,11 @@ void tagpu_rglsl_job_clear(TAGPU_RGLSL_JOB* j);
 int  tagpu_rglsl_job_idle(const TAGPU_RGLSL_JOB* j);
 /* 1 when the job can do no more (a GL failure): its destination stays as it is */
 int  tagpu_rglsl_job_failed(const TAGPU_RGLSL_JOB* j);
+/* Frames painted so far -- the OUT draw issued -- over the job's life: a
+   counter for a consumer that must do something to the destination after
+   each batch (the unit atlas rebuilds its mip levels). Never reset by a
+   clear; compare it for change, not for a value. */
+int  tagpu_rglsl_job_painted(const TAGPU_RGLSL_JOB* j);
 /* Forget the job; the destination is the caller's. */
 void tagpu_rglsl_job_free(TAGPU_RGLSL_JOB* j);
 

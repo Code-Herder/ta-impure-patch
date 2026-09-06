@@ -22,6 +22,7 @@
 #include <math.h>
 #include "opengl_utils.h"
 #include "tagpu_render3do.h"
+#include "tagpu_gaf.h"
 #include "tagpu_r3dcache.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
 
@@ -94,7 +95,7 @@ static void* getgl(const char* n)
 
 static int    s_state = 0;         /* 0=unloaded 1=ready 2=failed */
 void tagpu_r3d_glreset(void);
-static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_atlasTex, s_dplTex;
+static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_dplTex;
 static GLint  s_uWH, s_uShadeOn, s_uNanoOn, s_uNanoT, s_uNanoC;
 static GLuint s_lutTex;
 static int    s_lutBuilt = 0;
@@ -105,54 +106,38 @@ static unsigned char s_depth [FBO_DIM * FBO_DIM]; /* depth-plane scratch */
 static unsigned char s_hi    [FBO_DIM * FBO_DIM]; /* 2x supersample colour   */
 static unsigned char s_hidep [FBO_DIM * FBO_DIM]; /* 2x supersample depth    */
 
-/* ---- 8bpp texture atlas: GAF texture planes uploaded verbatim (palette
-   indices in an R8 texture, NEAREST-sampled => the FBO stays index-exact).
-   Simple shelf packer; entries keyed by the live GAFFrame*.  ---- */
-#define ATLAS_DIM  1024
-#define ATLAS_MAX  256
-typedef struct { const void* frame; float u0, v0, u1, v1; unsigned char ck; char ok; } AtlasEnt;
-static AtlasEnt s_atlas[ATLAS_MAX];
-static int s_atlasN = 0, s_shelfX = 0, s_shelfY = 0, s_shelfH = 0;
+/* ---- 8bpp texture atlas: the unit textures' GAF frames as palette indices
+   in an R8 texture, NEAREST-sampled => the FBO stays index-exact. Since G14g
+   it is a TAGPU_GAFATLAS (tagpu_gaf.c), the same shelf atlas the feature and
+   effects passes use, with the unit layout renderers.md 2.5 decided: every
+   frame in a cell with a 4-texel replicated border, 4-aligned, so the
+   Classic++ twin can be mipmapped to level 2 without one frame bleeding into
+   the next (tagpu_gaf.h `pad`/`align`/`mip`). The entry's u0..v1 are still
+   the frame's OWN texels, edge-mapped (TA maps quad corners to texture
+   edges; a centre inset shifts every interior sample half a texel and flips
+   ~50% of NEAREST lookups on noisy textures), so Classic's samples never
+   reach the border and its pixels do not move. Recycled when full, at the
+   start of a frame (tagpu_r3d_atlas_frame) or of a blit-path render, never
+   between an emit and its draw. 2048^2 holds ~1,400 median cells (32x64
+   frames become 40x72); the old 1024^2 with a 1-texel gap held 256 entries
+   and drew a 257th flat. ---- */
+#define ATLAS_DIM  2048
+#define ATLAS_MAX  2048
+#define ATLAS_PAD  4                      /* tools/tascene UNIT_PAD          */
+#define ATLAS_MIP  2                      /* renderers.md 2.9: covers 0.25   */
+static TAGPU_GAFENT  s_atlasEnts[ATLAS_MAX];
+static TAGPU_GAFATLAS s_atlas;
 
-/* Upload one GAFFrame's colour plane into the atlas (once). Returns entry or
-   NULL if the frame is invalid/atlas full. */
-static const AtlasEnt* atlas_get(const char* g)
+/* The atlas entry for a unit texture frame, uploading it on first sight.
+   NULL for an unreadable frame, a compressed one (the engine's 3DO textures
+   are raw planes; a compressed frame drew flat before G14g too, kept so
+   Classic does not move -- whether the engine would texture it is not
+   established) or a full atlas (recycled next frame). */
+static const TAGPU_GAFENT* atlas_get(const char* g)
 {
-    int i;
-    for (i = 0; i < s_atlasN; i++)
-        if (s_atlas[i].frame == g) return s_atlas[i].ok ? &s_atlas[i] : NULL;
-    if (s_atlasN >= ATLAS_MAX) return NULL;
-
-    AtlasEnt* e = &s_atlas[s_atlasN++];
-    e->frame = g; e->ok = 0;
-    if (!ptr_ok(g) || IsBadReadPtr(g, 0x18)) return NULL;
-    int w = *(const unsigned short*)(g + 0x00);
-    int h = *(const unsigned short*)(g + 0x02);
-    unsigned char ck   = *(const unsigned char*)(g + 0x08);
-    unsigned char comp = *(const unsigned char*)(g + 0x09);
-    const unsigned char* px = *(const unsigned char* const*)(g + 0x10);
-    if (w <= 0 || h <= 0 || w > 512 || h > 512 || comp != 0) return NULL;
-    if (!ptr_ok(px) || IsBadReadPtr(px, (SIZE_T)w * h)) return NULL;
-
-    if (s_shelfX + w + 1 > ATLAS_DIM) { s_shelfY += s_shelfH + 1; s_shelfX = 0; s_shelfH = 0; }
-    if (s_shelfY + h + 1 > ATLAS_DIM) return NULL;
-    int x = s_shelfX, y = s_shelfY;
-    s_shelfX += w + 1; if (h > s_shelfH) s_shelfH = h;   /* 1px gap vs bleed */
-
-    glBindTexture(GL_TEXTURE_2D, s_atlasTex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RED, GL_UNSIGNED_BYTE, px);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    /* texel-EDGE mapping (TA maps quad corners to texture edges; a centre
-       inset shifts every interior sample half a texel and flips ~50% of
-       NEAREST lookups on noisy textures) */
-    e->u0 = (float)x / ATLAS_DIM;       e->v0 = (float)y / ATLAS_DIM;
-    e->u1 = (float)(x + w) / ATLAS_DIM; e->v1 = (float)(y + h) / ATLAS_DIM;
-    e->ck = ck; e->ok = 1;
-    { char b[96]; _snprintf(b, sizeof b, "r3d atlas: %dx%d ck=%d at (%d,%d) n=%d",
-                            w, h, ck, x, y, s_atlasN); rlog(b); }
-    return e;
+    const unsigned char* f = tagpu_gaf_frame_sane(g);
+    if (!f || f[TAGPU_GF_COMP] != 0) return NULL;
+    return tagpu_gaf_atlas_get(&s_atlas, f);
 }
 
 /* ---- per-face directional shading (G10): palette-aware shade LUT ----
@@ -411,16 +396,14 @@ static void r3d_init(void)
                           (void*)(8 * sizeof(float)));
     glBindVertexArray(0);
 
-    /* 8bpp index atlas (R8, NEAREST both ways: sampled texel == palette index) */
-    glGenTextures(1, &s_atlasTex);
-    glBindTexture(GL_TEXTURE_2D, s_atlasTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ATLAS_DIM, ATLAS_DIM, 0,
-                 GL_RED, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    /* 8bpp index atlas (R8, NEAREST both ways: sampled texel == palette
+       index), created now so the unit program never samples texture 0 */
+    tagpu_gaf_atlas_lost(&s_atlas);
+    s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
+    s_atlas.ents = s_atlasEnts; s_atlas.tag = "unit";
+    s_atlas.pad = ATLAS_PAD; s_atlas.align = ATLAS_PAD; s_atlas.mip = ATLAS_MIP;
+    s_atlas.prio = 3;                 /* restored after terrain, features, effects */
+    if (!tagpu_gaf_atlas_create(&s_atlas)) { rlog("render3do: atlas texture FAILED"); s_state = 2; return; }
 
     /* shade LUT texture (built lazily from the live palette on first use) */
     glGenTextures(1, &s_lutTex);
@@ -671,6 +654,11 @@ int tagpu_render3do(const TAGPU_FRAME* f, const char* unit, const char* obj3do,
 {
     if (s_state == 0) r3d_init();
     if (s_state != 1) return 0;
+    /* a full atlas recycles here, before this unit's faces are emitted: every
+       emit-to-draw of the blit path is inside this call, and the native pass
+       gathers and draws inside its own frame call, so neither holds a UV
+       across it */
+    if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
 
     int W = *(unsigned short*)(gafframe + GF_WIDTH);
     int H = *(unsigned short*)(gafframe + GF_HEIGHT);
@@ -762,7 +750,7 @@ int tagpu_render3do(const TAGPU_FRAME* f, const char* unit, const char* obj3do,
             if (IsBadReadPtr(idx, (SIZE_T)fvc * 2)) continue;
             /* material: real texture (atlas) or flat palette colour or skip */
             const char* texg = face_texframe(fa, owner);
-            const AtlasEnt* ae = texg ? atlas_get(texg) : NULL;
+            const TAGPU_GAFENT* ae = texg ? atlas_get(texg) : NULL;
             float colv = 0.0f;
             if (!ae) {
                 int fcol = face_colour(fa);
@@ -884,7 +872,7 @@ int tagpu_render3do(const TAGPU_FRAME* f, const char* unit, const char* obj3do,
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, s_lutTex);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, s_atlasTex);
+    glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);  /* orphan */
@@ -981,13 +969,13 @@ int tagpu_render3do(const TAGPU_FRAME* f, const char* unit, const char* obj3do,
         char hb[96]; _snprintf(hb, sizeof hb, "r3d diff: our plane saved, fnv=%08x", hsum);
         rlog(hb);
         /* also dump the atlas so texture uploads/packing can be inspected */
-        unsigned char* ab = (unsigned char*)malloc(ATLAS_DIM * ATLAS_DIM);
+        unsigned char* ab = (unsigned char*)malloc((size_t)s_atlas.dim * s_atlas.dim);
         if (ab) {
-            glBindTexture(GL_TEXTURE_2D, s_atlasTex);
+            glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
             glPixelStorei(GL_PACK_ALIGNMENT, 1);
             glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, ab);
             glBindTexture(GL_TEXTURE_2D, 0);
-            save_pgm("tagpu_atlas.pgm", ab, ATLAS_DIM, ATLAS_DIM);
+            save_pgm("tagpu_atlas.pgm", ab, s_atlas.dim, s_atlas.dim);
             free(ab);
         }
     }
@@ -1021,7 +1009,14 @@ int tagpu_render3do(const TAGPU_FRAME* f, const char* unit, const char* obj3do,
 
 /* ---- exports for the native pass (G12b, tagpu_native.c): share the atlas,
    shade LUT and calibration so both paths draw identical materials ---- */
-GLuint tagpu_r3d_atlas_texref(void) { return s_atlasTex; }
+GLuint tagpu_r3d_atlas_texref(void) { return s_atlas.tex; }
+GLuint tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
+void tagpu_r3d_atlas_frame(const unsigned char* pal)
+{
+    if (s_state != 1) return;
+    if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
+    tagpu_gaf_atlas_restore(&s_atlas, pal);
+}
 GLuint tagpu_r3d_lut_texref(void)
 {
     if (!s_lutBuilt && s_state == 1) shade_build_lut();
@@ -1032,7 +1027,7 @@ int tagpu_r3d_shade_dir(void)     { return s_shDir; }
 int tagpu_r3d_atlas_uv(const char* g, float uv[4], float* ck)
 {
     if (s_state != 1) return 0;
-    const AtlasEnt* e = atlas_get(g);
+    const TAGPU_GAFENT* e = atlas_get(g);
     if (!e) return 0;
     uv[0] = e->u0; uv[1] = e->v0; uv[2] = e->u1; uv[3] = e->v1;
     *ck = (float)e->ck / 255.0f;
@@ -1050,8 +1045,10 @@ int tagpu_r3d_face_colour(const char* fa) { return face_colour(fa); }
 void tagpu_r3d_glreset(void)
 {
     /* fresh GL context: the new atlas/LUT textures are EMPTY — the CPU-side
-       caches must forget what was uploaded or everything samples black */
+       caches must forget what was uploaded or everything samples black. The
+       atlas's twin and job died with the context too (tagpu_native_glreset
+       has already run tagpu_rglsl_glreset: tagpu_overlay.c orders them) */
     s_state = 0;
     s_lutBuilt = 0;
-    s_atlasN = 0; s_shelfX = 0; s_shelfY = 0; s_shelfH = 0;
+    tagpu_gaf_atlas_lost(&s_atlas);
 }

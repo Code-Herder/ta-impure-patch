@@ -740,6 +740,11 @@ int tagpu_rglsl_job_failed(const TAGPU_RGLSL_JOB* j)
     return j && j->used && j->failed;
 }
 
+int tagpu_rglsl_job_painted(const TAGPU_RGLSL_JOB* j)
+{
+    return (j && j->used) ? j->tframes : 0;
+}
+
 void tagpu_rglsl_job_free(TAGPU_RGLSL_JOB* j)
 {
     int i, any = 0;

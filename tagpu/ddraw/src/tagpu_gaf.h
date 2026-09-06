@@ -39,6 +39,7 @@
 #define TAGPU_AS_SEQ    0x08    /* sequence*                                */
 
 #define TAGPU_GAF_DECMAX 512    /* largest frame edge the decoder accepts    */
+#define TAGPU_GAF_PADMAX 4      /* widest replicated border an atlas may ask  */
 
 typedef struct TAGPU_GAFENT {
     const void*    frame;       /* keyed on the header AND its pixel ptr:    */
@@ -65,6 +66,20 @@ typedef struct TAGPU_GAFATLAS {
     int           n, shelfX, shelfY, shelfH;
     int           full;         /* no room: reset deferred to the next frame */
     const char*   tag;          /* log prefix, e.g. "fx" / "feat"            */
+    /* The cell layout (renderers.md 2.5, the unit atlas): every frame is
+       uploaded with `pad` replicated edge texels on all four sides and its
+       cell -- frame plus border -- is allocated at a multiple of `align`
+       texels in both origin and size. 0 for either means 1, the sprite
+       atlases' layout (one texel of border, G13i). The unit atlas asks for
+       4 and 4 so the twin can be MIPMAPPED to `mip` levels: with cells
+       4-aligned and 4 texels of the frame's own edge around it, a mip texel
+       at level <= 2 that touches a frame is made only of that frame's texels
+       (tools/tascene UNIT_PAD says the same). `mip` > 0 makes the twin
+       trilinear (GL_LINEAR_MIPMAP_LINEAR, MAX_LEVEL = mip, 4x anisotropic
+       where the extension answers) and its levels are regenerated after
+       every batch the restorer paints; 0 keeps it NEAREST, 1:1. */
+    int           pad, align, mip;
+    int           mippedN;      /* frames painted when the mips were last built */
     /* Classic++ (renderers.md 4b Option 4): the RESTORED TWIN -- same dim,
        same shelf, GL_RGBA8 -- painted lazily by tagpu_restoreglsl.c from a
        queue that every miss feeds, so a frame draws indexed for the frame or

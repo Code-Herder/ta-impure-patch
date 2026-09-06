@@ -11,6 +11,15 @@ int tagpu_render3do(const TAGPU_FRAME* f, const char* unit, const char* obj3do,
 
 /* shared material resources for the native pass (G12b) */
 unsigned int tagpu_r3d_atlas_texref(void);
+/* Classic++ (G14g): the unit atlas's restored RGBA8 twin, mipmapped to
+   level 2 -- 0 until the switch has been seen on and the restorer's job
+   made; a shader samples it only where its alpha says the texel is painted */
+unsigned int tagpu_r3d_atlas_rgbref(void);
+/* Once per frame from the native pass, before its first tagpu_r3d_atlas_uv,
+   with the live palette (main+0x143A7): recycles a full atlas (never between
+   an emit and its draw) and drives the lazy restore -- arming it the first
+   time the switch is on, rebuilding the twin's mips after each painted batch */
+void tagpu_r3d_atlas_frame(const unsigned char* pal);
 unsigned int tagpu_r3d_lut_texref(void);
 int tagpu_r3d_shade_neutral(void);
 int tagpu_r3d_shade_dir(void);

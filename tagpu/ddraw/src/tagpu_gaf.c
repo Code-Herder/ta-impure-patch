@@ -28,12 +28,67 @@ static void glog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
+/* GL 3.0's mip generation and GL 1.1's float texture parameter are not in
+   opengl_utils.h; fetched once, the way every tagpu module fetches what the
+   fork does not export (wglGetProcAddress first, then opengl32 itself) */
+typedef void (APIENTRY* PFN_GENERATEMIPMAP)(GLenum);
+typedef void (APIENTRY* PFN_TEXPARAMETERF)(GLenum, GLenum, GLfloat);
+static PFN_GENERATEMIPMAP x_glGenerateMipmap;
+static PFN_TEXPARAMETERF  x_glTexParameterf;
+static int s_glFetched;
+#ifndef GL_TEXTURE_MAX_LEVEL
+#define GL_TEXTURE_MAX_LEVEL 0x813D
+#endif
+#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
+#endif
+#define TWIN_ANISO 4.0f         /* the lab's default (tascene-view.html aniso) */
+
+static void* getgl(const char* n)
+{
+    void* p = xwglGetProcAddress ? (void*)xwglGetProcAddress(n) : NULL;
+    if (!p) {
+        HMODULE gl = GetModuleHandleA("opengl32.dll");
+        if (gl) p = (void*)GetProcAddress(gl, n);
+    }
+    return p;
+}
+
+static void fetch_gl(void)
+{
+    if (s_glFetched) return;
+    s_glFetched = 1;
+    x_glGenerateMipmap = (PFN_GENERATEMIPMAP)getgl("glGenerateMipmap");
+    x_glTexParameterf  = (PFN_TEXPARAMETERF)getgl("glTexParameterf");
+}
+
 /* one scratch plane for every atlas: decoding happens only inside
    tagpu_gaf_atlas_get, on the render thread, and the bytes are consumed by
    the upload before the call returns */
 static unsigned char s_dec[TAGPU_GAF_DECMAX * TAGPU_GAF_DECMAX];
-/* the frame re-emitted with a 1-texel replicated border on all four sides */
-static unsigned char s_pad[(TAGPU_GAF_DECMAX + 2) * (TAGPU_GAF_DECMAX + 2)];
+/* the frame re-emitted with its replicated border (up to PADMAX texels) on
+   all four sides */
+static unsigned char s_pad[(TAGPU_GAF_DECMAX + 2 * TAGPU_GAF_PADMAX) * (TAGPU_GAF_DECMAX + 2 * TAGPU_GAF_PADMAX)];
+
+/* the cell's edge rounded up to the atlas's alignment */
+static int cell_up(const TAGPU_GAFATLAS* a, int v)
+{
+    return (v + a->align - 1) / a->align * a->align;
+}
+
+/* Rebuild the twin's mip levels 1..mip from level 0 -- after every batch the
+   restorer painted, after a recycle cleared level 0 (the restorer clears
+   only that level: tagpu_restoreglsl.c clear_dest), and once when the twin
+   is made, so it is never sampled incomplete (an incomplete texture reads
+   as opaque black, which the shader would take for a restored texel). */
+static void twin_mips(TAGPU_GAFATLAS* a)
+{
+    if (!a->mip || !a->rgb || !x_glGenerateMipmap) return;
+    glBindTexture(GL_TEXTURE_2D, a->rgb);
+    x_glGenerateMipmap(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    a->mippedN = tagpu_rglsl_job_painted(a->job);
+}
 
 const unsigned char* tagpu_gaf_frame_sane(const void* g0)
 {
@@ -133,7 +188,7 @@ void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a)
     memset(a->hash, 0, sizeof a->hash);
     /* the twin's rects are about to be re-used by other frames: back to
        unpainted, and whatever was queued is dropped (it re-queues on its miss) */
-    if (a->job) tagpu_rglsl_job_clear(a->job);
+    if (a->job) { tagpu_rglsl_job_clear(a->job); twin_mips(a); }
     _snprintf(b, sizeof b, "%s: atlas reset (full) — frames re-decode on demand",
               a->tag ? a->tag : "gaf");
     glog(b);
@@ -145,16 +200,16 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     memset(a->hash, 0, sizeof a->hash);
     /* the twin and the job died with the context (tagpu_rglsl_glreset has
        already forgotten the job: it runs first); re-armed on the next frame */
-    a->rgb = 0; a->job = NULL; a->restoreFailed = 0;
+    a->rgb = 0; a->job = NULL; a->restoreFailed = 0; a->mippedN = 0;
 }
 
 /* one frame onto the restore queue: the R8 atlas is the source, the twin the
-   destination, same rect, the 1-texel border painted as a copy of the edge */
+   destination, same rect, the border painted as a copy of the edge */
 static void restore_enqueue(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
 {
     TAGPU_RGLSL_FRAME f;
     f.ax = f.dx = e->x; f.ay = f.dy = e->y;
-    f.w = e->w; f.h = e->h; f.wrap = e->wrap; f.border = 1; f.key = e->ck;
+    f.w = e->w; f.h = e->h; f.wrap = e->wrap; f.border = a->pad; f.key = e->ck;
     tagpu_rglsl_job_add(a->job, &f, 1);
 }
 
@@ -208,16 +263,50 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
 {
     int i;
     a->pal = pal;
-    if (a->job) { dump_if_armed(a); return; }
+    if (a->job) {
+        /* a mipped twin: its levels follow level 0 one frame behind the
+           batch that painted it (the OUT draw is issued after this call,
+           in tagpu_rglsl_step; the next frame's call sees the count move) */
+        if (a->mip && tagpu_rglsl_job_painted(a->job) != a->mippedN) twin_mips(a);
+        dump_if_armed(a);
+        return;
+    }
     if (a->restoreFailed || !a->tex || !pal) return;
     if (!tagpu_classicpp_on()) return;
+    fetch_gl();
+    if (a->mip && (!x_glGenerateMipmap || !x_glTexParameterf)) {
+        char b[128];
+        _snprintf(b, sizeof b, "%s: no glGenerateMipmap/glTexParameterf: twin left unmipped, NEAREST", a->tag);
+        glog(b);
+        a->mip = 0;
+    }
     if (!a->rgb) {
         GLuint t = 0;
         glGenTextures(1, &t);
         if (!t) { a->restoreFailed = 1; return; }
         glBindTexture(GL_TEXTURE_2D, t);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        if (a->mip) {
+            /* renderers.md 1: trilinear to level `mip`, anisotropic where the
+               extension answers -- a driver without it raises INVALID_ENUM
+               on the parameter and is otherwise unaffected, so try it and
+               read the error flag, drained first because it is process-wide */
+            char b[160];
+            int pending = 0;
+            GLenum err;
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, a->mip);
+            while (glGetError() != GL_NO_ERROR && pending < 16) pending++;
+            x_glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, TWIN_ANISO);
+            err = glGetError();
+            _snprintf(b, sizeof b, "%s: restored twin %dx%d, trilinear to mip level %d, %s",
+                      a->tag, a->dim, a->dim, a->mip,
+                      err == GL_NO_ERROR ? "4x anisotropic" : "no anisotropic filtering (extension absent)");
+            glog(b);
+        } else {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        }
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, a->dim, a->dim, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
@@ -235,6 +324,9 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
         a->restoreFailed = 1;
         return;
     }
+    /* the job cleared level 0 to alpha 0: the mip levels must say the same
+       before anything samples them */
+    twin_mips(a);
     /* what is already in the atlas was uploaded before the switch: queue it,
        in upload order, so nothing stays indexed for want of a miss */
     for (i = 0; i < a->n; i++) if (a->ents[i].ok) restore_enqueue(a, &a->ents[i]);
@@ -266,6 +358,11 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
     a->tex = t;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     memset(a->hash, 0, sizeof a->hash);
+    /* the layout parameters: unset is the sprite atlases' one-texel border */
+    if (a->pad < 1) a->pad = 1;
+    if (a->pad > TAGPU_GAF_PADMAX) a->pad = TAGPU_GAF_PADMAX;
+    if (a->align < 1) a->align = 1;
+    if (a->mip < 0) a->mip = 0;
     return 1;
 }
 
@@ -286,49 +383,59 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
         if (c->frame == g && c->pix == pix && c->w == w && c->h == h)
             return c->ok ? c : NULL;
     }
-    /* every frame carries its OWN 1-texel border, so the shelf advances by
-       w+2 / h+2 rather than sharing one gutter between two neighbours */
-    if (a->full || h + 2 > a->dim) return NULL;
-    if (a->n >= a->max) { a->full = 1; return NULL; }
-    if (a->shelfX + w + 2 > a->dim) { a->shelfY += a->shelfH + 2; a->shelfX = 0; a->shelfH = 0; }
-    if (a->shelfY + h + 2 > a->dim) { a->full = 1; return NULL; }
-    e = &a->ents[a->n];
-    e->frame = g; e->pix = pix;
-    e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0;
-    /* a frame whose pixels are momentarily unreadable must stay retryable:
-       claiming the slot here would cache the failure for the atlas's whole
-       life, and the feature atlas is meant to live as long as the map */
-    if (!tagpu_gaf_decode(g, w, h, s_dec)) return NULL;
-    a->hash[slot] = ++a->n;
-    x = a->shelfX + 1; y = a->shelfY + 1;          /* inside the border */
-    a->shelfX += w + 2;
-    if (h > a->shelfH) a->shelfH = h;
-    glBindTexture(GL_TEXTURE_2D, a->tex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    /* Re-emit the frame with its outermost row and column repeated all round.
-       The border is what any sampler that reaches past the frame must land on:
-       under GL_NEAREST that is the fragment whose centre falls exactly on the
-       quad's far edge (its u interpolates to exactly u1, and floor(u1*dim) is
-       one texel past the frame) — left unwritten that texel is whatever
-       glTexImage2D(NULL) leaves, i.e. index 0, a real palette entry (black)
-       rather than the frame's colour key, which is the black hairline down the
-       right of every tree at zoom 0.25. Under a filtered sampler it is every
-       edge fragment, which is why the border is on all four sides and not just
-       the two the shelf packer used to leave spare. */
+    /* every frame carries its OWN border of `pad` texels, so the shelf
+       advances by the whole cell (w+2p / h+2p, rounded up to the alignment)
+       rather than sharing one gutter between two neighbours */
     {
-        const int pw = w + 2;
-        for (i = 0; i < h; i++) {
-            unsigned char* row = s_pad + (size_t)(i + 1) * pw + 1;
-            memcpy(row, s_dec + (size_t)i * w, (size_t)w);
-            row[-1] = row[0];
-            row[w]  = row[w - 1];
+        const int p = a->pad, cw = cell_up(a, w + 2 * p), ch = cell_up(a, h + 2 * p);
+        if (a->full || ch > a->dim) return NULL;
+        if (a->n >= a->max) { a->full = 1; return NULL; }
+        if (a->shelfX + cw > a->dim) { a->shelfY += a->shelfH; a->shelfX = 0; a->shelfH = 0; }
+        if (a->shelfY + ch > a->dim) { a->full = 1; return NULL; }
+        e = &a->ents[a->n];
+        e->frame = g; e->pix = pix;
+        e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0;
+        /* a frame whose pixels are momentarily unreadable must stay retryable:
+           claiming the slot here would cache the failure for the atlas's whole
+           life, and the feature atlas is meant to live as long as the map */
+        if (!tagpu_gaf_decode(g, w, h, s_dec)) return NULL;
+        a->hash[slot] = ++a->n;
+        x = a->shelfX + p; y = a->shelfY + p;          /* inside the border */
+        a->shelfX += cw;
+        if (ch > a->shelfH) a->shelfH = ch;
+        glBindTexture(GL_TEXTURE_2D, a->tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        /* Re-emit the frame with its outermost row and column repeated all
+           round, `pad` deep. The border is what any sampler that reaches past
+           the frame must land on: under GL_NEAREST that is the fragment whose
+           centre falls exactly on the quad's far edge (its u interpolates to
+           exactly u1, and floor(u1*dim) is one texel past the frame) — left
+           unwritten that texel is whatever glTexImage2D(NULL) leaves, i.e.
+           index 0, a real palette entry (black) rather than the frame's colour
+           key, which is the black hairline down the right of every tree at
+           zoom 0.25. Under a filtered sampler it is every edge fragment, which
+           is why the border is on all four sides and not just the two the
+           shelf packer used to leave spare; under a mipmapped one it is the
+           whole 4-texel ring (tagpu_gaf.h `pad`). The cell's slack past the
+           border (alignment) stays unwritten: no sample of the frame's own UV
+           range reaches it, on any level the twin keeps. */
+        {
+            const int pw = w + 2 * p;
+            int k;
+            for (i = 0; i < h; i++) {
+                unsigned char* row = s_pad + (size_t)(i + p) * pw + p;
+                memcpy(row, s_dec + (size_t)i * w, (size_t)w);
+                for (k = 1; k <= p; k++) { row[-k] = row[0]; row[w - 1 + k] = row[w - 1]; }
+            }
+            for (k = 1; k <= p; k++) {
+                memcpy(s_pad + (size_t)(p - k) * pw, s_pad + (size_t)p * pw, (size_t)pw);
+                memcpy(s_pad + (size_t)(p + h - 1 + k) * pw, s_pad + (size_t)(p + h - 1) * pw, (size_t)pw);
+            }
+            glTexSubImage2D(GL_TEXTURE_2D, 0, x - p, y - p, pw, h + 2 * p,
+                            GL_RED, GL_UNSIGNED_BYTE, s_pad);
         }
-        memcpy(s_pad, s_pad + (size_t)pw, (size_t)pw);
-        memcpy(s_pad + (size_t)(h + 1) * pw, s_pad + (size_t)h * pw, (size_t)pw);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, x - 1, y - 1, pw, h + 2,
-                        GL_RED, GL_UNSIGNED_BYTE, s_pad);
+        glBindTexture(GL_TEXTURE_2D, 0);
     }
-    glBindTexture(GL_TEXTURE_2D, 0);
     e->u0 = (float)x / (float)a->dim;         e->v0 = (float)y / (float)a->dim;
     e->u1 = (float)(x + w) / (float)a->dim;   e->v1 = (float)(y + h) / (float)a->dim;
     e->x = (unsigned short)x; e->y = (unsigned short)y;
