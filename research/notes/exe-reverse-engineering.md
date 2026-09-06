@@ -1846,6 +1846,15 @@ the game-state arrays (`0x491BC5`, `0x491BD9`, `0x491BED`). **The fork wraps thi
 flush the deferred queue while the registry is alive — or, if it does not leave within a second,
 keep the queue and keep deferring through the cascade) and a post hook (release it).
 
+### Why the drain has no tick to ride — `0x4969D2`
+
+The only game-thread hook the fork owns is the scenario applier's `Game_MainLoopTick` detour at
+`0x4969D2` (stolen `A1 E8 1D 51 00`, `tagpu_scenario.c`), and it is installed **only while a
+scenario is being applied**, then left to its one-shot state machine — it cannot host a per-tick
+drain, and two detours cannot share the site. So `tagpu_reclaim.c` drains from inside
+`FreeObjectState` itself (every death first frees what became safe), which is why the most recent
+death's object is held until the next death or the level ends.
+
 ### The allocator, from the free side
 
 `MEM_Free 0x4D85A0` → `0x4D85B0`: `EnterCriticalSection` (IAT `0x4FC198`) … `LeaveCriticalSection`
