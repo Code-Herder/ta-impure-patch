@@ -71,7 +71,9 @@ typedef struct TAGPU_GAFATLAS {
        two before its restore lands. A sprite shader samples the twin where its
        alpha is 1 and stays on the index elsewhere; a recycle clears it. `prio`
        orders the queue against the other jobs (the terrain's is 0). Created by
-       tagpu_gaf_atlas_restore; `rgb` is 0 until then and after a context loss. */
+       tagpu_gaf_atlas_restore, and `rgb` is non-zero exactly while `job` is:
+       both are made together, and both go when the job cannot be made or the
+       context is lost -- a pass gates its restored branch on `rgb`. */
     unsigned int  rgb;
     struct TAGPU_RGLSL_JOB* job;
     int           prio;

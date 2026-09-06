@@ -575,8 +575,9 @@ job of every launch is abandoned by the startup GL reset and restarted; the `don
 second job's. Cells and sprites show as they land, so a shot taken during the restore is a
 mixed frame — wait for the `done` line before a parity capture.
 
-Knobs go in **`tagpu_restoreglsl.on`**, read once per job, so arm them before the launch (or
-before the map change) you are measuring: `tacli arm <i> 'restoreglsl.on=log tiny'` — `tiny`
+Knobs go in **`tagpu_restoreglsl.on`**, read **once per GL context** (since G14e the restorer's
+programs are shared by every job), so arm them before the launch you are measuring — the
+startup GL reset re-reads them once, a map change does not: `tacli arm <i> 'restoreglsl.on=log tiny'` — `tiny`
 (the 6×24 model), `fp16`, `nk=N` (output tiles per conv draw), `budget=MS` (GPU ms per frame,
 default 12), `log` (a line per batch). **`tagpu_restoredump.on`** makes the DLL write the finished
 terrain atlas once to `gamedir/tagpu_restore.rgba`, and each sprite atlas's restored twin once its

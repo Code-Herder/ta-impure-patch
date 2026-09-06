@@ -113,7 +113,11 @@ and matched to the pack by `tascene featdiff`: 24 of 24 found, far band exact, t
 lab's profile. `feat-forest` and `fx-mix` by eye at zoom 1 and 0.25: fire, smoke, explosions,
 trees and wrecks restored, no hairlines; `fx-mix` grew the feature atlas to 1,298 entries as the
 forest burned, each restored two or three frames after its first draw. Activations are freed
-after 3 s idle (98–128 MB), the two twins (16 MB each) stay for the map.
+after 3 s idle (98–128 MB), the two twins (16 MB each) stay for the map. **Classic is untouched**:
+`tascene ab` on the parity scenario with the switch off differs from the lab on 7,298 of 630,784
+viewport pixels, all of them the applier's chat lines, the two units and the cursor — the same
+ritual measured 75,672 on 2026-09-03 — and the three restored branches sit behind `uRestored`,
+which is 0 with the switch off.
 
 **What it did not close.** The near-key band's bar is proposed, not approved (renderers §4 Open);
 the effects twin has no lab reference; the unit atlas (pad, align, mips, the unit shader's

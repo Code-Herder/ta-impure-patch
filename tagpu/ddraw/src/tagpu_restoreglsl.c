@@ -757,6 +757,9 @@ void tagpu_rglsl_job_free(TAGPU_RGLSL_JOB* j)
     if (!j || !j->used) return;
     if (j->palTex) glDeleteTextures(1, &j->palTex);
     free(j->q);
+    /* a query still in flight must not credit its time to whoever takes
+       this slot next */
+    for (i = 0; i < 2; i++) if (s_qJob[i] == j) s_qJob[i] = NULL;
     memset(j, 0, sizeof *j);
     for (i = 0; i < MAX_JOBS; i++) any |= s_jobs[i].used;
     /* the last job takes the scratch with it; the programs stay for the next map */

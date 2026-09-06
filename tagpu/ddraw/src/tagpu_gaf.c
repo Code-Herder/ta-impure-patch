@@ -225,7 +225,15 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
     }
     a->job = tagpu_rglsl_job_new(a->tag ? a->tag : "gaf", a->prio, 0,
                                  a->tex, a->dim, a->dim, pal, a->rgb, a->dim, a->dim);
-    if (!a->job) { a->restoreFailed = 1; return; }     /* the reason is in tagpu.log */
+    if (!a->job) {
+        /* the reason is in tagpu.log. The twin goes with the job: the passes
+           gate their restored branch on `rgb`, and a twin nothing has cleared
+           is 16 MB of whatever the driver left there, alpha included */
+        glDeleteTextures(1, &a->rgb);
+        a->rgb = 0;
+        a->restoreFailed = 1;
+        return;
+    }
     /* what is already in the atlas was uploaded before the switch: queue it,
        in upload order, so nothing stays indexed for want of a miss */
     for (i = 0; i < a->n; i++) if (a->ents[i].ok) restore_enqueue(a, &a->ents[i]);
