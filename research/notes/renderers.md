@@ -634,10 +634,11 @@ keyed texel farther than the receptive radius from every opaque one influences n
 and the OUT pass writes `(0, 0, 0, 0)` at the key, which is what the reference's save writes
 **[SOURCE `tagpu_restore_glsl.h`]**. A frame with the key on an edge is never wrap-padded (the
 reference decides tileability on the inpainted image, a coin toss a shader cannot call), a key in
-the interior only leaves the 12-level test as it was. **The bar for keyed frames, and the
-proposal put to the owner**: the Q2 bar applies to opaque texels *farther than the depth from any
-keyed texel* (the far band); the near band differs from TELEA by construction and is reported and
-judged by eye. Lab, the pack's 51 feature frames (all keyed, all non-square, 18 to 71 px), full
+the interior only leaves the 12-level test as it was. **The bar for keyed frames [DECIDED
+2026-09-05]**: the Q2 bar applies to opaque texels *farther than the depth from any keyed texel*
+(the far band); the near band differs from TELEA by construction and is reported and judged by
+eye — the owner looked at the four worst frames beside the reference (the strip below) and
+accepted column 2. Lab, the pack's 51 feature frames (all keyed, all non-square, 18 to 71 px), full
 model, ANGLE/Vulkan on the 4070: **188 draws in 4 batches, 20 ms of GPU; far band max 0 on 1,287
 bytes; near band 93,408 bytes, 27 % differing, mean 0.41 levels, 92 % within 1, 99.3 % within 4,
 about 100 bytes over 8, one at 23** — ours and the reference are indistinguishable by eye, the
@@ -746,10 +747,10 @@ the graph itself is that stable.
   atlas (`tagpu_render3do.c atlas_get`) needs its 4-texel pad, alignment and mips 0–2 and the
   unit shader's restored branch, and it waits for the unit-shading work in the other worktree,
   which edits the same fragment shader (§5 step 2).
-- **The near-key band's bar is the owner's call.** G14e applied the Q2 bar to opaque texels
-  farther than the model's depth from any keyed texel and reported the rest (mean 0.41 levels,
-  92 % within 1, judged by eye — §4c); that split was proposed, not yet approved. The effects
-  twin has no lab reference at all.
+- ~~**The near-key band's bar is the owner's call.**~~ **Decided 2026-09-05**: the Q2 bar on
+  opaque texels farther than the model's depth from any keyed texel, the rest reported and judged
+  by eye (mean 0.41 levels, 92 % within 1 — §4c); the owner accepted it on the four worst frames.
+  The effects twin still has no lab reference at all.
 - ~~**The first restore blocks nothing but is visible**~~ — **the reveal is progressive since
   2026-09-05 (G14e)**: the viewport of the biggest stock map is restored within 1.9 s of a 4.6 s
   whole-map job, centre-out (§4c). What remains visible is the first two seconds' worth of

@@ -119,8 +119,8 @@ viewport pixels, all of them the applier's chat lines, the two units and the cur
 ritual measured 75,672 on 2026-09-03 — and the three restored branches sit behind `uRestored`,
 which is 0 with the switch off.
 
-**What it did not close.** The near-key band's bar is proposed, not approved (renderers §4 Open);
-the effects twin has no lab reference; the unit atlas (pad, align, mips, the unit shader's
+**What it did not close.** The near-key band's bar, proposed here, was approved by the owner on
+2026-09-05 after the landing (renderers §4c); the effects twin has no lab reference; the unit atlas (pad, align, mips, the unit shader's
 branch) waits for the unit-shading worktree; the 54 fps the terrain restore held on the busy
 scenarios (59 on the parity fixture) is measured, not explained; a frame drawn indexed for the
 frame or two before its restore lands is the design, and while the terrain job runs at map load

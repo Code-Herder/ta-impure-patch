@@ -628,7 +628,7 @@ in one batch (the lab's `batchFrames` is the DLL's `form_batch`, class ladder an
 included — four batches here, one of them a 5×5 grid) and the colour-key stand-in. Against the
 pack's TELEA-inpainted reference the far band — opaque texels beyond the model's depth of any
 keyed texel — is **exact (max 0)**, and the near band differs by a **mean of 0.41 levels, 92 % of
-bytes within 1, one byte at 23**; the numbers, the picture and the bar proposed for it are in
+bytes within 1, one byte at 23**; the numbers, the picture and the bar decided for it are in
 [renderers](renderers.html) §4c. The bench pays 22 ms of GPU for the features against 1.15 s for
 the tiles. `restore=glsl` puts the viewer's unit-0…5 bindings back as it found them, which the
 first version did not (its slot tables sat on the fog units, its key table on the feature atlas).
