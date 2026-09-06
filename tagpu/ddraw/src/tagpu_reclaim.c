@@ -4,13 +4,14 @@
 
    THREADS. Two, and only these two touch the shared state:
      producer/owner = the engine's game thread: every FreeObjectState call
-                      (unit death 0x486D9E, wreck destroy 0x42474F, bulk
-                      teardown 0x4221C4) and the level teardown 0x491B60.
-                      It owns the ring outright — enqueue AND drain run here,
-                      so the ring itself is single-threaded.
-     reader         = the fork's GL render thread: publishes s_started at the
-                      top of its pass and s_completed after its last engine
-                      read (render_ogl.c brackets tagpu_overlay_draw).
+                      (unit death 0x486D9E, wreck destroy 0x42474F, the bulk
+                      loop 0x4221C4) and the level teardown 0x491B60. It owns
+                      the ring outright — enqueue AND drain run here, so the
+                      ring itself is single-threaded.
+     reader         = the fork's GL render thread: publishes s_started before
+                      the overlay driver and s_completed after it returns
+                      (render_ogl.c brackets tagpu_overlay_draw), and skips the
+                      driver's engine reads while a teardown is in progress.
    The only words that cross threads are the two pass counters and the
    teardown flag, all 32-bit aligned, all written through lock-prefixed
    Interlocked ops on the side that needs the fence (§ORDERING below).
@@ -33,23 +34,33 @@
    load->store order is kept by the hardware, and the lock prefix fences it
    anyway. Teardown uses the same shape (set flag, fence, wait for the reader
    to leave) — the Dekker pair that makes "the reader is not inside a pass"
-   a fact and not a hope. */
+   a fact and not a hope.
+
+   LIVENESS. The drain runs only from FreeObjectState itself (the engine's
+   tick detour at 0x4969D2 exists only while a scenario is being applied, so it
+   cannot host one), so the most recent death's object is held until the next
+   death or the level ends — one object, and its composite-registry slot,
+   for the length of a lull. Harmless: the engine draws from the unit array,
+   not from the registry, and the teardown wrap flushes it. */
 
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_reclaim.h"
 #include "tagpu_detour.h"
+#include "dd.h"                            /* g_ddraw.gui_thread_id: the game thread */
 
 #define FREEOBJ_VA    0x0045AAA0u          /* FreeObjectState: stdcall, 1 arg, ret 4      */
 #define FREEOBJ_RESUME (FREEOBJ_VA + 5u)
-#define TEARDOWN_VA   0x00491B60u          /* level teardown: no args, plain ret          */
+#define TEARDOWN_VA   0x00491B60u          /* level teardown: no stack args               */
 #define TEARDOWN_RESUME (TEARDOWN_VA + 5u)
 static const unsigned char FREEOBJ_STOLEN[5]  = { 0x53, 0x8B, 0x5C, 0x24, 0x08 }; /* push ebx; mov ebx,[esp+8] */
 static const unsigned char TEARDOWN_STOLEN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }; /* mov eax,[0x511DE8]        */
 
-#define RC_RING_SIZE 1024u
+#define RC_RING_SIZE 4096u                 /* a whole level's objects fit, for the case
+                                              where the teardown keeps deferring (below) */
 #define RC_RING_MASK (RC_RING_SIZE - 1u)
+#define RC_TEARDOWN_WAIT_MS 1000u
 
 typedef struct { void* obj; LONG stamp; int stamped; } RC_ENTRY;
 
@@ -60,11 +71,13 @@ static volatile LONG s_started, s_completed;   /* reader publishes; game thread 
 static volatile LONG s_teardown;           /* game thread sets; reader reads              */
 static void (__stdcall *s_real_free)(void*);   /* trampoline into the real body           */
 static int   s_installed;
-static DWORD s_owner_tid;                  /* the thread that first freed = the game thread */
+static volatile DWORD s_owner_tid;         /* the game thread, when the fork has not
+                                              recorded it yet: the first caller           */
+static int   s_foreign_logged;
 
 /* counters: written on the game thread, read racily by the render thread's log */
 static volatile unsigned s_cDeferred, s_cDrained, s_cOverflow, s_cForeign,
-                         s_cFlushed, s_cDropped, s_cHigh, s_cTeardowns;
+                         s_cFlushed, s_cHeld, s_cHigh, s_cTeardowns;
 
 static void rlog(const char* s)
 {
@@ -79,14 +92,27 @@ static void rlog(const char* s)
 static void __cdecl reclaim_enqueue(void* obj)
 {
     DWORD tid = GetCurrentThreadId();
+    DWORD owner = g_ddraw.gui_thread_id;   /* the fork records the game (GUI) thread at
+                                              window creation, long before any death   */
     LONG  snap;
     unsigned i;
 
-    if (!s_owner_tid) s_owner_tid = tid;
-    if (tid != s_owner_tid) {
+    if (!owner) {                          /* not yet known: the first caller is it     */
+        if (!s_owner_tid) s_owner_tid = tid;
+        owner = s_owner_tid;
+    }
+    if (tid != owner) {
         /* not the game thread: the ring is single-threaded, so this one object
-           takes the stock path (freed now). Counted; never seen in stock TA. */
+           takes the stock path (freed now). Counted and logged once; never seen
+           in stock TA — every caller is a sim or teardown path. */
         s_cForeign++;
+        if (!s_foreign_logged) {
+            char b[120];
+            s_foreign_logged = 1;
+            _snprintf(b, sizeof b, "reclaim: FreeObjectState from thread %lu (game thread %lu): freed synchronously",
+                      (unsigned long)tid, (unsigned long)owner);
+            rlog(b);
+        }
         s_real_free(obj);
         return;
     }
@@ -126,39 +152,47 @@ static void __cdecl reclaim_enqueue(void* obj)
     }
 }
 
-/* Level teardown, on entry to 0x491B60 (game thread). Hold the reader off,
-   wait for it to leave its pass, free everything queued while the composite
-   registry those frees walk is still alive, then let the cascade free
-   synchronously (the reader stays held off until the post hook). */
+/* Level teardown, on entry to 0x491B60 (game thread). Hold the reader off and
+   wait for it to leave its pass. If it does: free everything queued while the
+   composite registry those frees walk is still alive, and let the cascade —
+   hundreds of frees, every unit through 0x485980 -> 0x4864B0 -> 0x4866D0 and
+   the wreck loop 0x4221C4 — free synchronously, which is safe because the
+   reader is refused a pass until the post hook. If it does NOT leave in time
+   (a frame over a second, or a stuck render thread) the reader may still hold
+   pointers, so nothing may be freed: the queue is KEPT and deferral stays on
+   through the cascade. Those objects drain at the next game's first deaths;
+   that is safe because FreeObjectState skips the registry walk once the
+   teardown has nulled *(main+0x1437B) (0x42DCA3), and a held block cannot be
+   recycled to a new object while we still hold it. */
 static void __cdecl reclaim_teardown_pre(void)
 {
     DWORD t0;
-    unsigned n = 0, dropped = 0;
-    char b[160];
+    unsigned n = 0, busy = 0;
+    char b[200];
 
     InterlockedExchange(&s_teardown, 1);       /* fence: visible before we look */
     t0 = GetTickCount();
     while (s_completed != s_started) {         /* the reader is inside a pass */
-        if (GetTickCount() - t0 > 100) { dropped = 1; break; }
+        if (GetTickCount() - t0 > RC_TEARDOWN_WAIT_MS) { busy = 1; break; }
         Sleep(0);
     }
-    if (!dropped) {
+    if (!busy) {
         while (s_head != s_tail) { s_real_free(s_ring[s_head & RC_RING_MASK].obj); s_head++; n++; }
         s_cFlushed += n;
+        s_defer = 0;                           /* the cascade frees synchronously */
     } else {
-        /* a reader stuck mid-pass may still hold these: leak them, never free */
-        s_cDropped += s_tail - s_head;
-        s_head = s_tail;
+        s_cHeld++;                             /* deferral stays on; nothing is freed */
     }
-    s_defer = 0;                               /* the cascade frees synchronously */
     s_cTeardowns++;
-    _snprintf(b, sizeof b, "reclaim: level teardown: %s %u queued object(s), reader %s",
-              dropped ? "DROPPED" : "flushed", dropped ? (unsigned)(s_cDropped) : n,
-              dropped ? "did not leave its pass in 100 ms" : "idle");
+    _snprintf(b, sizeof b,
+              busy ? "reclaim: level teardown: reader still in its pass after %u ms — %u queued object(s) KEPT, the cascade's frees deferred"
+                   : "reclaim: level teardown: flushed %u queued object(s), reader idle; the cascade frees synchronously",
+              busy ? RC_TEARDOWN_WAIT_MS : n, (unsigned)(s_tail - s_head));
     rlog(b);
 }
 
-/* After 0x491B60 returns: deferral back on, then release the reader. */
+/* After 0x491B60 returns (or tail-jumps to 0x450DD0, which also returns with
+   a plain ret): deferral back on, then release the reader. */
 static void __cdecl reclaim_teardown_post(void)
 {
     s_defer = s_installed ? 1 : 0;
@@ -172,7 +206,7 @@ int tagpu_reclaim_pass_begin(void)
     if (!s_installed) return 1;
     InterlockedIncrement(&s_started);          /* fence: "in a pass" before we look */
     if (s_teardown) {
-        InterlockedExchange(&s_completed, s_started);   /* not this frame */
+        InterlockedExchange(&s_completed, s_started);   /* no engine reads this frame */
         return 0;
     }
     return 1;
@@ -187,12 +221,14 @@ void tagpu_reclaim_pass_end(unsigned frame_counter)
         char b[200];
         last = frame_counter;
         _snprintf(b, sizeof b,
-                  "reclaim: def=%u drn=%u queued=%u hw=%u ovf=%u foreign=%u flushed=%u dropped=%u teardowns=%u pass=%ld",
+                  "reclaim: def=%u drn=%u queued=%u hw=%u ovf=%u foreign=%u flushed=%u held=%u teardowns=%u pass=%ld",
                   s_cDeferred, s_cDrained, (unsigned)(s_tail - s_head), s_cHigh, s_cOverflow,
-                  s_cForeign, s_cFlushed, s_cDropped, s_cTeardowns, (long)s_completed);
+                  s_cForeign, s_cFlushed, s_cHeld, s_cTeardowns, (long)s_completed);
         rlog(b);
     }
 }
+
+int tagpu_reclaim_teardown_active(void) { return s_installed && s_teardown; }
 
 int tagpu_reclaim_armed(void) { return s_installed; }
 
@@ -227,9 +263,11 @@ static unsigned char* build_free_stub(void)
     return s;
 }
 
-/* The teardown wrap. 0x491B60 takes nothing on the stack and returns with a
-   plain `ret` (0x491C59; six bare `call` sites), so we can CALL its body
-   through the stolen tail and run code after it returns:
+/* The teardown wrap. 0x491B60 takes nothing on the stack (six bare `call`
+   sites) and has two exits — `ret` at 0x491C59, and a tail-jump at 0x491C54
+   to 0x450DD0 when 0x435100 returns 3, which itself reads no stack argument
+   and returns with a plain `ret` at 0x450E19 — so its body can be CALLed
+   through the stolen tail and code run after it returns either way:
        pushad ; call pre ; popad                 (1+5+1)
        call tail                                 (5)   the real teardown
        pushad ; call post ; popad                (1+5+1)
@@ -282,5 +320,5 @@ void tagpu_reclaim_init(void)
     s_installed = 1;
     s_defer = 1;
     rlog("reclaim: ARMED FreeObjectState@0x45AAA0 -> deferred (quiescence, game-thread drain), "
-         "teardown@0x491B60 -> hold reader + flush; ring=1024");
+         "teardown@0x491B60 -> hold reader + flush; ring=4096");
 }

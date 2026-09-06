@@ -20,18 +20,24 @@
 
    Installed once at DllMain, byte-matched, all-or-nothing; a different exe
    arms nothing and `tagpu_reclaim.off` disables it. The render thread brackets
-   its engine reads with pass_begin / pass_end around the overlay driver. */
+   the overlay driver with pass_begin / pass_end (render_ogl.c), and the
+   driver skips its engine reads while teardown_active() says a level is
+   being freed. */
 
 void tagpu_reclaim_init(void);
 
-/* Render thread, before the overlay's engine reads. Returns 0 when a level
-   teardown is in progress and the overlay must not read engine state this
-   frame (the caller skips it); 1 otherwise. */
+/* Render thread, before the overlay driver. Publishes "in a pass". Returns 0
+   while a level teardown is in progress (the driver will skip its engine
+   reads this frame), 1 otherwise. */
 int  tagpu_reclaim_pass_begin(void);
 
-/* Render thread, after the overlay returns — UNCONDITIONALLY, on every path,
-   or the reader looks busy for ever and reclamation halts. */
+/* Render thread, after the overlay driver returns — UNCONDITIONALLY, on every
+   path, or the reader looks busy for ever and reclamation halts. */
 void tagpu_reclaim_pass_end(unsigned frame_counter);
+
+/* Render thread, inside the overlay driver, before its first read of an
+   engine object: 1 while a level teardown is freeing them — skip the reads. */
+int  tagpu_reclaim_teardown_active(void);
 
 int  tagpu_reclaim_armed(void);
 #endif

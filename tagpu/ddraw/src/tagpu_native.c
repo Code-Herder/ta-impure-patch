@@ -2027,18 +2027,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            the null lands the instruction after the free returns, so a block
            that could fault has already changed here
            (thread-safe-destruction.md). Wrecks re-read their record. */
+        /* airborne units draw in a second, un-rowed sweep above everything
+           (terrain-depth 3.3) -> the air band above the effects band; wrecks
+           sit at FEATURE depth (3+rel*4, terrain-depth 3.4) */
+        float encBase = units[i].air ? airKey
+                      : (units[i].feat ? 3.0f : 1.0f) + (float)units[i].rel * 4.0f;
+        encb[i] = encBase;                    /* before the dead check: encb is
+                                                 static, and every later loop
+                                                 indexes it by i */
         {
             const char* now = units[i].o3;
             if (units[i].feat) { if (units[i].rec) now = *(const char* const*)(units[i].rec + WR_OBJ3DO); }
             else if (units[i].u) now = *(const char* const*)(units[i].u + U_OBJ3DO);
             if (now != units[i].o3) { units[i].dead = 1; s_reread++; continue; }
         }
-        /* airborne units draw in a second, un-rowed sweep above everything
-           (terrain-depth 3.3) -> the air band above the effects band; wrecks
-           sit at FEATURE depth (3+rel*4, terrain-depth 3.4) */
-        float encBase = units[i].air ? airKey
-                      : (units[i].feat ? 3.0f : 1.0f) + (float)units[i].rel * 4.0f;
-        encb[i] = encBase;
         if (units[i].hires) {
             /* no vertices here: this unit is the other pass's, and leaving
                firstv[i] == firstv[i+1] makes its draws below empty */
@@ -2099,7 +2101,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (nsel) {
         const char* mptrs = *(const char* const*)(ta + OFF_MODELPTRS);
         for (i = 0; i < nu && nv + 8 <= MAXNV; i++) {
-            if (!units[i].sel || !units[i].u) continue;
+            if (units[i].dead || !units[i].sel || !units[i].u) continue;
             unsigned mid = *(const unsigned short*)(units[i].u + U_MODELID);
             if (!ptr_ok(mptrs)) break;
             const char* root = *(const char* const*)(mptrs + (size_t)mid * 4);

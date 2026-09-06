@@ -1576,9 +1576,12 @@ static void ogl_render()
                    engine objects the game thread frees. Publish "in a pass" before
                    its first engine read and "done" after its last, unconditionally
                    (thread-safe-destruction.md §9: a pass that never completes halts
-                   reclamation for the session). pass_begin says 0 only while a level
-                   teardown is running, when there is nothing to read. */
-                if (tagpu_reclaim_pass_begin()) tagpu_overlay_draw(&f);
+                   reclamation for the session). The driver still runs every frame —
+                   input injection, the GL-context-change detection and the flushes
+                   must — and skips only its engine reads while a level teardown is
+                   in progress (tagpu_reclaim_teardown_active, tagpu_overlay.c). */
+                tagpu_reclaim_pass_begin();
+                tagpu_overlay_draw(&f);
                 tagpu_reclaim_pass_end(f.frame_counter);
                 gldbg("E-tagpu");
 

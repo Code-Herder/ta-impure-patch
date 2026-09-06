@@ -30,6 +30,7 @@
 #include "tagpu_scenario.h"
 #include "tagpu_weapons.h"
 #include "tagpu_zoom.h"
+#include "tagpu_reclaim.h"
 
 /* GL entry points the fork does not already expose — load once ourselves. */
 typedef void (APIENTRY *PFN_READPIXELS)(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,void*);
@@ -575,6 +576,11 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
         { tagpu_zoom_frame_end(); writeback_paint(f); return; }
     if (s_state==0) init_overlay();
     if (s_state!=1) { tagpu_zoom_frame_end(); writeback_paint(f); return; }
+    /* tagpu_reclaim: a level teardown is freeing the objects everything below
+       reads (units, wrecks, their 3DO objects); sit the rest of this frame
+       out. Not the writeback either — its opt-in 3DO path reads them too.
+       The pass bracket's end stays in the caller (render_ogl.c). */
+    if (tagpu_reclaim_teardown_active()) { tagpu_zoom_frame_end(); return; }
 
     /* live-state logs tacli depends on (roster, units:, mouse:) + the 3DO probe */
     log_units(f);
