@@ -554,7 +554,7 @@ terrown.on / markown.on`, and `tagpu.log` carries one `ARMED` line per pass — 
 because a missing one is the whole pass silently absent.
 
 **Classic++ is a separate switch; its restorer runs as GLSL in the game's own context.**
-`tacli arm <i> classicpp.on` turns on the restored true-colour terrain, features and effects;
+`tacli arm <i> classicpp.on` turns on the restored true-colour terrain, features, effects and (since G14g) unit textures;
 it is *polled* twice a second, so it flips live for an A/B, and arming it mid-play restores
 everything already on screen (the terrain radiating from the screen centre, the sprites within
 a slice or two after it). The restore itself is `tagpu_restoreglsl.c` — fragment passes sliced
@@ -580,9 +580,15 @@ programs are shared by every job), so arm them before the launch you are measuri
 startup GL reset re-reads them once, a map change does not: `tacli arm <i> 'restoreglsl.on=log tiny'` — `tiny`
 (the 6×24 model), `fp16`, `nk=N` (output tiles per conv draw), `budget=MS` (GPU ms per frame,
 default 12), `log` (a line per batch). **`tagpu_restoredump.on`** makes the DLL write the finished
-terrain atlas once to `gamedir/tagpu_restore.rgba`, and each sprite atlas's restored twin once its
-queue drains — `tagpu_restore_feat.{r8,rgba,idx}`, `tagpu_restore_fx.{...}` (re-written when the
-atlas has grown; the `.idx` lists every entry) — the only files the GLSL restorer ever writes.
+terrain atlas once to `gamedir/tagpu_restore.rgba`, and each lazy atlas's restored twin once its
+queue drains — `tagpu_restore_feat.{r8,rgba,idx}`, `tagpu_restore_fx.{...}`, and since G14g
+`tagpu_restore_unit.{...}` (re-written when the atlas has grown; the `.idx` lists every entry) —
+the only files the GLSL restorer ever writes. The unit atlas's lines are `unit: restored twin
+2048x2048, trilinear to mip level 2, 4x anisotropic` (or `no anisotropic filtering (extension
+absent)`) and `restoreglsl: unit: lazy restore armed …`; its queue's `queue drained` tally obeys
+the same once-per-300-slices rule as the sprites', so a small burst that drains right after the
+terrain logs nothing — `restoreglsl.on=log` for its per-batch lines, or the dump line's entry
+count.
 
 **Classic++ lighting knobs go in `tagpu_classicpp.cfg`** (G14f), and unlike the restorer's
 they are **live**: the file is re-read on the switch's own twice-a-second poll whenever its
@@ -604,7 +610,10 @@ not to Classic.
 `tools/tascene restorediff <pack> <the .rgba>` holds the terrain to a pack built with `--undither`
 of the same map (max 1 level on < 0.01 % of bytes is the bar; Two Continents measures 0.0012 %),
 and `tools/tascene featdiff <pack> <gamedir>/tagpu_restore_feat` the feature twin (the far band
-exact, the near band reported; 24 of 24 frames matched on the parity scenario). The effects
+exact, the near band reported; 24 of 24 frames matched on the parity scenario);
+`tools/tascene unitdiff <pack> <gamedir>/tagpu_restore_unit` holds the unit twin to the pack's
+`units/atlas.rgba.bin` the same way, with the ring check over the whole 4-texel border (25 of 25
+on the parity scenario, far band max 1 level on 2 bytes, the ring exact). The effects
 twin has no pack reference: judge it by eye (`fx-mix`).
 The ONNX Runtime path — `onnxruntime.dll`, DirectML, the vkd3d-proton `d3d12` pair, `tagpu_cache/`,
 `tagpu_restorecpu.on`, `tagpu_restoreonnx.on` — was deleted on 2026-09-05; a `restore:` line in

@@ -19,7 +19,7 @@ date; **[OPEN]** = not settled.
 |---|---|---|
 | What it is | what tagpu draws today; the lab's `lane=classic` | the lab's `lane=classicpp` at its current defaults |
 | Claim | **pixel parity** with itself: it must not move by a pixel, and the lab's parity ritual is the proof | none against the engine; it is judged by eye and measured against the lab |
-| Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game: the terrain (G14c) and the feature and effect sprites (G14e, lazily on first draw); unit textures not yet.* |
+| Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game: the terrain (G14c), the feature and effect sprites (G14e) and the unit textures (G14g, 2026-09-05) — the sprites and the units lazily on first draw; the unit atlas padded, aligned and mipped as this row says (§5 step 2).* |
 | Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit). *In the game since G14f (2026-09-05): the engine's height grid as an R8 texture per map, the lab's 16-px grid normals evaluated per fragment; feature sprites take the ground's lambert at their anchor as the lab's do* |
 | Units | per-face shade row from `SH_L` through the 32-row LUT | per-pixel lambert in map space from the posed face normal, same level normalisation. *In the game since G14f: the face normal rides the vertex stream and replaces the LUT row under the switch; pieces the engine draws unshaded stay at exactly 1.0 (the lab lights every face)* |
 | Shadows | the engine's rules. **In the game**: the 5-px silhouette drop for mobiles and the cached slant for structures, each blended once per silhouette pixel (G13n). **In the lab**: the silhouette only — a structure casts NOTHING there, because that lane does not draw the slant projection. This row claimed the lab had both until 2026-09-04; it did not have either, and now has one | a depth map along `shadowsun`, PCSS-lite (8-tap blocker search, 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive; an airborne caster follows `airshadow` (§2.2) |
@@ -478,7 +478,8 @@ the shader reads — the same two-atlas shape `tagpu_terr.c` already has.
   GPU (invisible, off-thread) or ~0.8 s CPU (a fade-in, not a stall).
 - **Risks**: mixed-mode atlases are the normal state, not an edge case; a GL reset has to re-queue
   everything; the unit atlas's 256-entry cap and its 1-texel border both need revisiting for
-  §1's 4-texel pad and mips 0–2 anyway.
+  §1's 4-texel pad and mips 0–2 anyway *(done in G14g: the unit atlas is a `TAGPU_GAFATLAS`
+  with a 4-texel pad, 4-aligned cells, 2048 entries in 2048², recycled when full)*.
 
 ### Option 2 — Enumerate at load, then restore in one batch
 
@@ -691,10 +692,35 @@ after 3 s without work. The lab and the DLL run the identical batcher (`tascene-
 per-frame budget, stepped once per frame by `tagpu_native.c` *after the gathers* (so a frame missed
 this frame is queued) and *before the renders* (so what it paints is sampled this frame). The job
 with a batch in flight keeps it; otherwise the lowest priority runs — terrain 0, features 1,
-effects 2 — re-picked at every batch boundary. Each `TAGPU_GAFATLAS` carries its twin and its
+effects 2, units 3 (G14g) — re-picked at every batch boundary. Each `TAGPU_GAFATLAS` carries its twin and its
 job; `tagpu_gaf_atlas_get` queues every new entry (tileability decided at upload, while the
 pixels are still on the CPU), a recycle clears the twin and drops the queue, a context loss forgets
-everything, and arming the switch mid-play queues what the atlas already holds. Measured, Two
+everything, and arming the switch mid-play queues what the atlas already holds. **The unit atlas
+(G14g, 2026-09-05)** is the same object since `tagpu_render3do.c` ported onto it, with the layout
+§2.5 decided: every frame's cell carries a **4-texel replicated border** and is **4-aligned** in
+origin and size (`tagpu_gaf.h` `pad`/`align`), so the twin can be **mipmapped to level 2**
+without a level-≤2 texel that touches a frame holding another frame's texels — the lab's
+`UNIT_PAD` rule, layout for layout. The twin is `GL_LINEAR_MIPMAP_LINEAR`/`GL_LINEAR`,
+`MAX_LEVEL 2`, 4× anisotropic when `GL_TEXTURE_MAX_ANISOTROPY_EXT` takes (the driver's error flag
+says, and the log says which), and its two mip levels are regenerated with `glGenerateMipmap`
+**one frame after every batch the restorer paints** (the OUT draw is issued after the gathers, the
+atlas compares the job's painted count on the next frame's gather), once when the twin is made
+(so it is never sampled incomplete — an incomplete texture reads opaque black, which the alpha
+test would take for a restored texel) and after a recycle (the restorer clears only level 0).
+The cell's slack past the border, where the alignment rounds up, is never written and never
+sampled: no sample inside a frame's own UV range reaches it on levels 0–2. Classic's R8 atlas
+gets the same cell layout and the same 4-texel border, sampled `NEAREST` on the frame's own
+texels as before, so its pixels do not move — `tascene ab` measured it. The unit FS samples the
+twin trilinear, takes `t.rgb` where `t.a > 0.5`, the palette's colour for a flat face, a
+nanoframe band or a texel not yet restored, then the lambert (§2.11) and the grey rule (§2.6);
+the colour-key hole stays the index compare, which is what keeps a keyed texel out of the depth
+buffer. **The unit atlas's compressed frames** (`comp != 0`, none seen) still draw flat, as they
+did before the port — whether the engine would texture them is not established, and Classic
+must not move. Measured on the parity fixture: the twin dumped under `tagpu_restoredump.on` and
+held to the pack's `units/atlas.rgba.bin` by `tascene unitdiff` — **25 of 25 entries found, far
+band max 1 level on 2 of 116,736 bytes (0.0017 %), no keyed texels, the 4-texel ring an exact
+copy of the edge on all 66,816 bytes** (the unit textures have no key on this fixture, so the
+near band is empty). Measured, Two
 Continents at map load with both queues live: the terrain's 5,062 tiles in **141 frames = 2.37 s
 at 59.4 fps, 1.56 s of GPU** (a first feature batch of a few frames on a 2×2 grid was in flight
 when the terrain job began; 13 of the 141 frames were not the terrain's); the 24 feature frames in
@@ -772,10 +798,17 @@ the graph itself is that stable.
 
 ## 4. Open  [OPEN]
 
-- **The restorer covers terrain, features and effects; unit textures are next.** The unit
-  atlas (`tagpu_render3do.c atlas_get`) needs its 4-texel pad, alignment and mips 0–2 and the
-  unit shader's restored branch. It waited for the unit-shading work; that landed (G14f), so
-  nothing blocks it now (§5 step 2).
+- ~~**The restorer covers terrain, features and effects; unit textures are next.**~~ **Done
+  2026-09-05 (G14g)**: the unit atlas is a `TAGPU_GAFATLAS` with the 4-texel pad, 4-aligned
+  cells and a twin mipped to level 2, and the unit shader samples it (§4c, §5 step 2). Every
+  atlas the game draws from is restored. What G14g did not close: the whole-frame residual
+  below is not the units' (one commander on the fixture), and the atlas's entries are keyed on
+  the frame header's address, its pixel pointer and its size — a later map that reuses all
+  three for a different plane would draw the old texels, the same exposure the sprite atlases
+  and the old unit atlas (keyed on the address alone) have. An in-process map change through
+  the menu replaces the GL context (`tagpu: GL CONTEXT CHANGED`), so the atlas is rebuilt from
+  nothing and the exposure does not arise there; a map change that kept the context would
+  carry it.
 - **The seabed under open water** — the lit look of §2.3 on a map with a sloped seabed
   (Coast to Coast) has not been judged by the owner; the shot is in §2.3.
 - **The whole-frame Classic++ residual against the lab is unexplained in one number.** With
@@ -831,9 +864,11 @@ the graph itself is that stable.
 2. ~~**The feature and effects atlases**, lazily on first draw~~ — done 2026-09-05 (G14e):
    the size-class driver over `tagpu_gaf_atlas_get`, the colour-key stand-in, the twin per
    atlas, the two sprite shaders' restored branch; and the progressive reveal of the terrain
-   (Q6). **Still to do: the unit atlas** — pad and align, mips 0–2, the unit shader's branch —
-   after the unit-shading worktree lands, since both edit `tagpu_native.c`'s unit FS. No cache
-   (§2.5b).
+   (Q6). ~~**Still to do: the unit atlas** — pad and align, mips 0–2, the unit shader's branch —
+   after the unit-shading worktree lands, since both edit `tagpu_native.c`'s unit FS.~~ **Done
+   2026-09-05 (G14g)**: `tagpu_render3do.c`'s atlas ported onto `TAGPU_GAFATLAS` with
+   `pad`/`align`/`mip` (4, 4, 2), the twin regenerated per painted batch, the unit FS's restored
+   branch on texture unit 8 (§4c "The queues"). No cache (§2.5b).
 3. ~~**Unit shading** in map space: normal and world height per vertex, `LAB_LIGHT` into
    `tagpu_glsl.h` with the viewer's uniform names.~~ — done 2026-09-05 (G14f): the normal per
    vertex (§2.11), `TAGPU_GLSL_LIGHT_FN` with `uSun`/`uAmb`/`uNorm`, the LUT row skipped

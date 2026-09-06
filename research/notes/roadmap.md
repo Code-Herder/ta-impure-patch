@@ -46,7 +46,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 |---|---|---|---|
 | Units (every complete unit) | ● native RGB, `tagpu_native.c` | `owndraw` detours skip the software rasterisers | same-fight A/B, 200v200 at 60 fps |
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
-| Terrain in restored true colour (Classic++), and since G14e the feature and effect sprites; **lit since G14f** — terrain, units and sprites | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05), the ONNX stack deleted (G14d, 2026-09-05), **the reveal progressive and the two sprite atlases restored lazily** (G14e, 2026-09-05), **lit by the lab's rule** (G14f, 2026-09-05: the height grid as an R8 texture, the face normal in the unit stream, the ground's lambert per sprite; `tagpu_classicpp.cfg` for `sun`/`unitsun`/`amb`) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b); the ONNX Runtime path is gone (G14d). The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
+| Terrain in restored true colour (Classic++), since G14e the feature and effect sprites, **since G14g the unit textures**; **lit since G14f** — terrain, units and sprites | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05), the ONNX stack deleted (G14d, 2026-09-05), **the reveal progressive and the two sprite atlases restored lazily** (G14e, 2026-09-05), **lit by the lab's rule** (G14f, 2026-09-05: the height grid as an R8 texture, the face normal in the unit stream, the ground's lambert per sprite; `tagpu_classicpp.cfg` for `sun`/`unitsun`/`amb`), **the unit atlas restored, padded and mipped** (G14g, 2026-09-05: `tagpu_render3do.c` on `TAGPU_GAFATLAS`, 4-texel pad, 4-aligned, the twin trilinear to level 2 and 4× anisotropic, the unit FS's restored branch) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b); the ONNX Runtime path is gone (G14d). The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k; one blend per silhouette pixel since G13n | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain; **aircraft** measured against the engine on `shadow-air` — offset `(+5, (alt−ground)/2)` on four airframes, darkening 0.487 engine vs 0.25 ours before the stencil and 0.44–0.52 after |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
@@ -78,6 +78,68 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G14g — Classic++ unit atlas: the unit textures restored, padded, aligned and mipped.**
+Step 2's last piece of [Classic and Classic++](renderers.html) §5 on 2026-09-05, one landing; no
+engine address is patched or newly read (the frames come from the decoded GAF memory the atlas
+already read, the palette from `main+0x143A7` as the sprite atlases take it).
+
+**One atlas implementation.** `tagpu_render3do.c`'s private shelf atlas — 1024², 256 entries, a
+1-texel *gap* that was whatever the previous upload left, no twin, no recycle (a 257th frame drew
+flat for the rest of the session) — is a `TAGPU_GAFATLAS` now, the object the feature and
+effects passes already draw from, so the unit textures get the same lazy restore for free: a
+twin the restorer paints from a queue every miss feeds (priority 3, after the terrain, features
+and effects), recycled when full (2048² and 2048 entries; the recycle runs at the start of the
+native pass's frame or of a blit-path render, never between an emit and its draw), forgotten on
+a context loss, dumped under `tagpu_restoredump.on` as `tagpu_restore_unit.{r8,rgba,idx}`. The
+atlas gained the layout §2.5 decided for units — `pad`, `align` and `mip` on the struct, 4, 4
+and 2 for units, 0 (= the 1-texel border of G13i) for the sprites: every frame's cell carries a
+4-texel replicated border and is 4-aligned in origin and size, so a mip texel at level ≤ 2 that
+touches a frame is made only of that frame's own texels — the lab's `UNIT_PAD` rule, layout for
+layout. The twin is trilinear (`GL_LINEAR_MIPMAP_LINEAR`, `MAX_LEVEL 2`) and 4× anisotropic
+where `GL_TEXTURE_MAX_ANISOTROPY_EXT` takes (tried, the error flag read, the answer logged), and
+its two levels are regenerated with `glGenerateMipmap` one frame after every batch the restorer
+paints (a painted-frames counter on the job, `tagpu_rglsl_job_painted`), when the twin is made
+(an incomplete texture reads opaque black, which the alpha test would take for a restored
+texel) and after a recycle (the restorer clears only level 0). The unit FS samples it on texture
+unit 8 (6 and 7 are the hires pass's, rebound between the shadow and body draws), takes the
+restored colour where the alpha says the texel is painted, the palette's for a flat face, a
+nanoframe band or a texel not yet restored, then the lambert and the grey rule; the colour-key
+hole stays the index compare. Classic's R8 atlas has the same cells and its UVs still land on
+the frame's own texels, edge-mapped as before; compressed frames still draw flat, as they did.
+
+**Measured** (parity fixture, eye 2320,720). **Classic untouched**: `tascene ab` 7,206 of
+630,784 on the new DLL and 7,297 on G14f's the same evening (the fading chat, the commander,
+the cursor); **the two DLLs' engine shots differ on 2,902 pixels, every one in the chat lines
+at the top of the viewport, none near the commander**. **The twin against the lab**: `tascene
+unitdiff` on the dumped twin and the pack built `--undither` — **25 of 25 entries found, far
+band max 1 level on 2 of 116,736 bytes (0.0017 %), no keyed texels, the 4-texel ring an exact
+copy of the edge on all 66,816 bytes**. **Classic++ against G14f's DLL, suns off**: the two
+frames differ on **278 pixels, all inside the commander's box** (mean 6.4 levels, max 28: the
+restored texels against the indexed ones), byte-identical elsewhere; against the lab the
+whole-frame residual is 130,945 (G14f: 130,997, reproduced the same evening) — the sprites'
+near band, not the units, as §4 says. **The restore with the unit queue live**: Two Continents
+5,062 tiles in **2.28 s at 59.6 fps** (1.52 s GPU), the 25 unit frames in 2 batches two slices
+after the terrain; `feat-forest` 54.2 fps, 47 frames at load, and the zoom-out to 0.263 that
+revealed more units queued 16 frames restored **within 226 ms**; `200v200` 54.2 fps, 51 frames
+at load then bursts of 1 to 16 frames restored within 14–62 ms, 79 entries after three and a
+half minutes of the fight. **By eye** at zoom 1 and 0.263 on `feat-forest` and `200v200`: units
+and wrecks restored, the minified ones smooth through the mips, no hairline at any frame edge.
+**An in-process map change** (Tab → `EXIT` → `MAINMENU` → `CHOICE1`, then Skirmish → Start)
+replaces the GL context, so the atlas and its twin are rebuilt from nothing: the new map's
+terrain restored in 2.34 s at 59.1 fps and the commanders' 25 frames right after it, the
+commander drawn restored. A lab `tascene shot` rendering on the same GPU inflates the game's
+restore timing (2.7 s, 1.9 s GPU on the first run); the figures above are from clean runs.
+
+**What it did not close.** **`200v200` crashes about 95 s into the fight, on G14f's DLL and on
+this one alike** (once each in three runs; the third survived 208 s): an access violation at
+`emit_geom`'s first read in `tagpu_native.c` — the unit's 3DO object, read with a range check
+only at gather time (`ptr_ok`, `tagpu_native.c` ~1657) and dereferenced at emit time, freed by
+the game thread in between; the same data address on both DLLs, the fight being deterministic.
+It predates this landing and is recorded in [GPU status](gpu-status.html) §3.2. Compressed
+unit frames (none seen) still draw flat, unverified against the engine. The whole-frame
+residual against the lab stays where §4 leaves it. Shadows (§5 step 5) and the menu (§2.10)
+are where they were; the 3.2-core context is unchanged (`glGenerateMipmap` is 3.0).
 
 **G14f — Classic++ lighting: the terrain from the height grid, the units from the face
 normal, the sprites from the ground.** Steps 3 and 4 of [Classic and Classic++](renderers.html)
