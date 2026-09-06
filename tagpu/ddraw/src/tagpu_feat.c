@@ -67,6 +67,7 @@
 #include "tagpu_glsl.h"
 #include "tagpu_featown.h"
 #include "tagpu_gaf.h"
+#include "tagpu_restoreglsl.h"
 #include "tagpu_native.h"
 
 /* ---- engine layout (terrain-depth.md appendix, byte-confirmed) ---- */
@@ -224,7 +225,8 @@ int tagpu_feat_on(void) { return s_armed > 0; }
 /* ---- GL ---- */
 static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
 static GLuint s_prog, s_vao, s_vbo;
-static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uDepthScale;
+static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uDepthScale,
+              s_uRestored;
 static TAGPU_GAFENT   s_atlasEnts[ATLAS_MAX];
 static TAGPU_GAFATLAS s_atlas;
 
@@ -258,6 +260,8 @@ static const char* FS =
     "out vec4 frag;\n"
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uPal;\n"
+    "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the atlas's restored twin */
+    "uniform int uRestored;\n"         /* 1 = sample it where its alpha says so */
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
@@ -268,10 +272,22 @@ static const char* FS =
     /* colour-keyed: the key texel is a hole, and discarding keeps it out of
        the depth buffer too — a tree occludes only where it has pixels */
     "  if (abs(idx - vCM.x) < 0.5/255.0) discard;\n"
+    "  float a = (int(vCM.y + 0.5) == 2) ? 0.5 : 1.0;\n"
+    /* Classic++: the twin's colour where the lazy restore has painted it
+       (alpha 1 -- tagpu_gaf.h), the grey band as the RGB rule (renderers.md
+       2.6); a frame not yet restored, or a texel the restore has not reached,
+       falls through to the index below. The hole stays the index test above */
+    "  if (uRestored == 1) {\n"
+    "    vec4 t = texture(uAtlasRGB, vUV);\n"
+    "    if (t.a > 0.5) {\n"
+    "      vec3 c = t.rgb;\n"
+    TAGPU_GLSL_FOG_GREY_RGB("c")
+    "      frag = vec4(c * a, a); return;\n"
+    "    }\n"
+    "  }\n"
     "  int pi = int(idx*255.0+0.5);\n"
     TAGPU_GLSL_FOG_SHADE("pi")
     "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
-    "  float a = (int(vCM.y + 0.5) == 2) ? 0.5 : 1.0;\n"
     "  frag = vec4(rgb * a, a);\n"           /* premultiplied, like the FBO */
     "}\n";
 
@@ -319,6 +335,8 @@ static void init_gl(void)
     glUniform1i(glGetUniformLocation(s_prog, "uPal"),   1);
     glUniform1i(glGetUniformLocation(s_prog, "uFogGrid"), 2);
     glUniform1i(glGetUniformLocation(s_prog, "uFogLUT"),  3);
+    glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 4);
+    s_uRestored = glGetUniformLocation(s_prog, "uRestored");
     glUseProgram(0);
 
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
@@ -338,6 +356,7 @@ static void init_gl(void)
     tagpu_gaf_atlas_lost(&s_atlas);          /* its texture is made on first use */
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "feat";
+    s_atlas.prio = 1;                        /* restored after the terrain, before effects */
     tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
     s_state = 1;
     flog("feat: GL ready");
@@ -574,6 +593,9 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     if (s_state == 0) init_gl();
     if (s_state != 1) return feat_bail();
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
+    /* Classic++: the lazy restore of this atlas, armed once the switch is on
+       (main+0x143A7 is the live palette, the same one the native pass uploads) */
+    tagpu_gaf_atlas_restore(&s_atlas, (const unsigned char*)(ta + 0x143A7));
 
     memset(s_nv, 0, sizeof s_nv);
     memset(&s_c, 0, sizeof s_c);
@@ -731,7 +753,9 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
     x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
+    x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_atlas.rgb);
     x_glActiveTexture(GL_TEXTURE0);
+    glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_on()) ? 1 : 0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof s_vShadow + (GLsizeiptr)sizeof s_vBody,

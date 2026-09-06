@@ -23,6 +23,7 @@ as a module the way tools/test_ta3do.py already loads it.
 import argparse
 import hashlib
 import html
+import base64
 import json
 import math
 import os
@@ -1370,7 +1371,7 @@ def cmd_restore(args):
     w, h = scene["view"]["res"]
     q = {"shot": "1", "lane": "classicpp", "restore": "glsl", "model": args.model,
          "precision": args.precision, "restorediff": "1" if args.diff else "0",
-         "pass": "terrain"}
+         "pass": "terrain,features"}      # both restored atlases; units are not restored in the page
     if args.nk:
         q["nk"] = str(args.nk)
     if args.opts:
@@ -1395,6 +1396,12 @@ def cmd_restore(args):
             (": " + html.unescape(err.group(1)).strip()[:600] if err else " (and no error banner)"))
     rep = json.loads(html.unescape(m.group(1)))
     rep["renderer"] = args.gpu or "swiftshader"
+    if args.save_features:
+        fm = re.search(r'<pre id="restore-features"[^>]*>(.*?)</pre>', dom, flags=re.S)
+        if not fm:
+            die("--save-features needs --diff and a pack with features")
+        Path(args.save_features).expanduser().write_bytes(base64.b64decode(html.unescape(fm.group(1)).strip()))
+        rep["saved_features"] = str(args.save_features)
     verdict = None
     if args.diff:
         d = rep["diff"]
@@ -1413,8 +1420,35 @@ def cmd_restore(args):
              f"{rep['frames']} frames ({rep['wrapped']} wrap-padded), {rep['draws']} draws, "
              f"{total}; {by}"
              + (f"\n{verdict}" if verdict else "") + (f"\nGL error 0x{rep['gl_error']:x}" if rep.get("gl_error") else ""))
+    # the feature atlas: colour-keyed frames, two bands (renderers.md 4c). The
+    # bar applies to `far` -- opaque texels beyond the model's reach of any
+    # keyed texel; `near` is where the inpaint stand-in differs from TELEA by
+    # construction, reported for the eye
+    feat = rep.get("features")
+    failed = bool(args.diff and not rep["diff"]["pass"])
+    if feat:
+        fb = ", ".join(f"S{k}: {v['frames']} in {v['batches']} batch{'es' if v['batches'] != 1 else ''}"
+                       f" ({v['cols']}x{v['cols']} slots) {ms(v)}"
+                       for k, v in feat["by_slot"].items())
+        human += (f"\nfeatures: {feat['frames']} frames ({feat['keyed']} keyed, {feat['wrapped']} wrap-padded), "
+                  f"{feat['draws']} draws, {feat['wall_ms']:.0f} ms wall"
+                  + (f", {feat['gpu_ms']:.0f} ms GPU" if feat.get("gpu_ms") is not None else "")
+                  + f"; {fb}")
+        d = feat.get("diff")
+        if d:
+            human += (f"\n  far band (> {d['radius']} px from any key): "
+                      f"{'PASS' if d['far']['pass'] else 'FAIL'}: max {d['far']['max']} level(s), "
+                      f"{d['far']['differing']}/{d['far']['bytes']} bytes differ ({d['far']['pct']:.4f}%)"
+                      f"\n  near band: max {d['near']['max']} level(s), mean {d['near']['mean']:.3f}, "
+                      f"{d['near']['differing']}/{d['near']['bytes']} bytes differ ({d['near']['pct']:.2f}%); "
+                      f"{d['keyed_texels']} keyed texels, alpha wrong on {d['alpha_bad']}, "
+                      f"worst frame {d['worst']} ({d['worst_bytes']} bytes)")
+            if not d["pass"]:
+                failed = True
+        elif args.diff:
+            human += "\n  (no features/atlas.rgba.bin in the pack: not diffed)"
     ta3do.out(rep, args.json, human=human)
-    if args.diff and not rep["diff"]["pass"]:
+    if failed:
         sys.exit(1)
 
 
@@ -1478,6 +1512,139 @@ def cmd_restorediff(args):
                      f"{differing}/{inner} interior bytes differ ({pct:.4f}%), "
                      f"guard ring {ring}/{ring_bytes} not a copy of the edge, "
                      f"worst tile {worst} ({worst_n} bytes)"))
+    if not ok:
+        sys.exit(1)
+
+
+# The lazy GAF restore's in-game proof (renderers.md 4b Option 4 / 4c):
+# tagpu_restoredump.on makes the DLL write each GAF atlas's restored twin
+# once (tagpu_gaf.c dump_if_armed) -- <prefix>.r8, .rgba and .idx -- and this
+# finds every dumped entry's frame in the pack (same size, identical palette
+# indices) and holds the twin to the two-band bar tascene-restore.js
+# diffFrames applies in the lab: the Q2 bar beyond the model's reach of any
+# keyed texel, the near band reported; alpha 0 on the key, the 1-texel border
+# a copy of the edge.
+
+def _frame_bands(got, ref, r8, W, x, y, w, h, key, wrap, border, radius, acc):
+    """one frame's bytes into acc (far/near/alpha/ring tallies)"""
+    keyed = [[r8[(y + j) * W + x + i] == key for i in range(w)] for j in range(h)] if key >= 0 else None
+    def dist(i, j):
+        if keyed is None:
+            return radius + 1
+        for r in range(1, radius + 1):
+            for t in range(-r, r):
+                for dx, dy in ((t, -r), (r, t), (-t, r), (-r, -t)):
+                    tx, ty = i + dx, j + dy
+                    if wrap:
+                        tx %= w; ty %= h
+                    elif tx < 0 or ty < 0 or tx >= w or ty >= h:
+                        continue
+                    if keyed[ty][tx]:
+                        return r
+        return radius + 1
+    n = 0
+    for j in range(-border, h + border):
+        for i in range(-border, w + border):
+            o = ((y + j) * W + x + i) * 4
+            if not (0 <= i < w and 0 <= j < h):
+                ci, cj = min(max(i, 0), w - 1), min(max(j, 0), h - 1)
+                e = ((y + cj) * W + x + ci) * 4
+                for c in range(4):
+                    acc["ring_bytes"] += 1
+                    if got[o + c] != got[e + c]:
+                        acc["ring"] += 1
+                continue
+            if keyed is not None and keyed[j][i]:
+                acc["keyed"] += 1
+                if got[o + 3] != 0:
+                    acc["alpha_bad"] += 1
+                continue
+            acc["opaque"] += 1
+            if got[o + 3] != 255:
+                acc["alpha_bad"] += 1
+            band = acc["far"] if dist(i, j) > radius else acc["near"]
+            for c in range(3):
+                d = abs(got[o + c] - ref[o + c])
+                band["bytes"] += 1
+                if d:
+                    band["differing"] += 1; n += 1
+                    band["hist"][d] += 1
+                    band["max"] = max(band["max"], d)
+                    band["sum"] += d
+    return n
+
+
+def cmd_featdiff(args):
+    pack = Path(args.pack).resolve()
+    if not (pack / "scene.json").exists():
+        die(f"{pack} has no scene.json (run `tascene build` first)")
+    scene = json.loads((pack / "scene.json").read_text())
+    feat = scene.get("features")
+    if not feat or not feat["atlas"].get("rgba"):
+        die(f"{pack} has no features/atlas.rgba.bin: rebuild with --undither")
+    PW, PH = feat["atlas"]["w"], feat["atlas"]["h"]
+    pr8 = (pack / feat["atlas"]["file"]).read_bytes()
+    prgba = (pack / feat["atlas"]["rgba"]).read_bytes()
+    # the pack's frames, keyed on (w, h, the R8 bytes)
+    frames = {}
+    for d in feat["defs"].values():
+        for slot in ("body", "shadow"):
+            r = d.get(slot)
+            if not r:
+                continue
+            px = b"".join(pr8[(r["y"] + j) * PW + r["x"]:(r["y"] + j) * PW + r["x"] + r["w"]] for j in range(r["h"]))
+            frames[(r["w"], r["h"], px)] = (r, d["name"])
+    prefix = Path(args.prefix).expanduser()
+    idx = [tuple(int(v) for v in line.split()) for line in (prefix.with_suffix(".idx")).read_text().split("\n") if line.strip()]
+    gr8 = prefix.with_suffix(".r8").read_bytes()
+    grgba = prefix.with_suffix(".rgba").read_bytes()
+    dim = int(round(len(gr8) ** 0.5))
+    if dim * dim != len(gr8) or len(grgba) != dim * dim * 4:
+        die(f"{prefix}: .r8 is {len(gr8)} bytes and .rgba {len(grgba)}: not one square atlas and its twin")
+    depth = args.radius
+    # the reference from the pack, laid out at the dump's rects
+    ref = bytearray(len(grgba))
+    matched, unmatched, radius = [], [], depth
+    for (x, y, w, h, key, wrap) in idx:
+        px = b"".join(gr8[(y + j) * dim + x:(y + j) * dim + x + w] for j in range(h))
+        hit = frames.get((w, h, px))
+        if not hit:
+            unmatched.append((x, y, w, h)); continue
+        r, name = hit
+        for j in range(h):
+            so = ((r["y"] + j) * PW + r["x"]) * 4
+            do = ((y + j) * dim + x) * 4
+            ref[do:do + w * 4] = prgba[so:so + w * 4]
+        matched.append((x, y, w, h, key, wrap, name))
+    acc = {"far": {"bytes": 0, "differing": 0, "max": 0, "sum": 0, "hist": [0] * 256},
+           "near": {"bytes": 0, "differing": 0, "max": 0, "sum": 0, "hist": [0] * 256},
+           "keyed": 0, "opaque": 0, "alpha_bad": 0, "ring": 0, "ring_bytes": 0}
+    worst, worst_n = None, 0
+    for (x, y, w, h, key, wrap, name) in matched:
+        n = _frame_bands(grgba, ref, gr8, dim, x, y, w, h, key, wrap, 1, radius, acc)
+        if n > worst_n:
+            worst, worst_n = name, n
+    far, near = acc["far"], acc["near"]
+    pct = lambda b: 100.0 * b["differing"] / max(1, b["bytes"])
+    far_pass = far["max"] <= 1 and pct(far) < 0.01
+    ok = far_pass and acc["alpha_bad"] == 0 and acc["ring"] == 0 and bool(matched)
+    rep = {"pack": str(pack), "dump": str(prefix), "atlas": dim, "entries": len(idx), "matched": len(matched),
+           "unmatched": unmatched, "radius": radius,
+           "far": {"bytes": far["bytes"], "differing": far["differing"], "pct": pct(far), "max": far["max"],
+                   "hist": far["hist"][1:far["max"] + 1], "pass": far_pass},
+           "near": {"bytes": near["bytes"], "differing": near["differing"], "pct": pct(near), "max": near["max"],
+                    "mean": near["sum"] / max(1, near["bytes"]), "hist": near["hist"][1:near["max"] + 1]},
+           "keyed_texels": acc["keyed"], "opaque_texels": acc["opaque"], "alpha_bad": acc["alpha_bad"],
+           "ring": acc["ring"], "ring_bytes": acc["ring_bytes"], "worst": worst, "worst_bytes": worst_n, "pass": ok}
+    human = (f"{'PASS' if ok else 'FAIL'}: {len(matched)} of {len(idx)} dumped entries found in the pack"
+             + (f" ({len(unmatched)} not in the pack: not diffed)" if unmatched else "") +
+             f"\n  far band (> {radius} px from any key): {'PASS' if far_pass else 'FAIL'}: max {far['max']} level(s), "
+             f"{far['differing']}/{far['bytes']} bytes differ ({pct(far):.4f}%)"
+             f"\n  near band: max {near['max']} level(s), mean {rep['near']['mean']:.3f}, "
+             f"{near['differing']}/{near['bytes']} bytes differ ({pct(near):.2f}%); "
+             f"{acc['keyed']} keyed texels, alpha wrong on {acc['alpha_bad']}, "
+             f"border {acc['ring']}/{acc['ring_bytes']} not a copy of the edge, worst frame {worst} ({worst_n} bytes)")
+    ta3do.out(rep, args.json, human=human)
     if not ok:
         sys.exit(1)
 
@@ -1687,14 +1854,16 @@ def main(argv=None):
     t.add_argument("--json", action="store_true")
     t.set_defaults(func=cmd_shot)
 
-    rs = sub.add_parser("restore", help="run the GLSL restorer on a pack's terrain in headless "
-                                          "Chrome and diff it against the pack's restored atlas")
+    rs = sub.add_parser("restore", help="run the GLSL restorer on a pack's terrain and feature "
+                                          "atlases in headless Chrome and diff them against the pack's")
     rs.add_argument("pack")
     rs.add_argument("--model", choices=("full", "tiny"), default="full")
     rs.add_argument("--precision", choices=("fp32", "fp16"), default="fp32")
     rs.add_argument("--nk", type=int, help="output channel-tiles per conv draw (default: the device's max)")
     rs.add_argument("--no-diff", dest="diff", action="store_false",
                     help="time it only; do not diff against terrain/atlas.rgba.bin")
+    rs.add_argument("--save-features", metavar="RGBA",
+                    help="write the restored feature atlas (raw RGBA, the pack's layout) here")
     rs.add_argument("--gpu", choices=("vulkan", "gl"),
                     help="ANGLE backend on the real adapter instead of SwiftShader")
     rs.add_argument("--opts", help="extra viewer query, e.g. 'eye=0,0'")
@@ -1710,6 +1879,13 @@ def main(argv=None):
     rd.add_argument("dump", help="gamedir/tagpu_restore.rgba, written under tagpu_restoredump.on")
     rd.add_argument("--json", action="store_true")
     rd.set_defaults(func=cmd_restorediff)
+    fd = sub.add_parser("featdiff", help="hold a GAF atlas's restored twin dumped by the DLL "
+                                           "(tagpu_restoredump.on) to the pack's restored feature atlas")
+    fd.add_argument("pack")
+    fd.add_argument("prefix", help="the dump's path without its extension, e.g. <gamedir>/tagpu_restore_feat")
+    fd.add_argument("--radius", type=int, default=12, help="the model's depth: the far band starts past it")
+    fd.add_argument("--json", action="store_true")
+    fd.set_defaults(func=cmd_featdiff)
 
     al = sub.add_parser("artlight",
                         help="is the map art already painted lit? sweep the sun "

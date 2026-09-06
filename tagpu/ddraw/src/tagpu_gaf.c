@@ -13,9 +13,11 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "opengl_utils.h"
 #include "tagpu_gaf.h"
+#include "tagpu_restoreglsl.h"
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 
@@ -128,6 +130,9 @@ void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a)
     char b[128];
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     memset(a->hash, 0, sizeof a->hash);
+    /* the twin's rects are about to be re-used by other frames: back to
+       unpainted, and whatever was queued is dropped (it re-queues on its miss) */
+    if (a->job) tagpu_rglsl_job_clear(a->job);
     _snprintf(b, sizeof b, "%s: atlas reset (full) — frames re-decode on demand",
               a->tag ? a->tag : "gaf");
     glog(b);
@@ -137,6 +142,93 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
 {
     a->tex = 0; a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     memset(a->hash, 0, sizeof a->hash);
+    /* the twin and the job died with the context (tagpu_rglsl_glreset has
+       already forgotten the job: it runs first); re-armed on the next frame */
+    a->rgb = 0; a->job = NULL; a->restoreFailed = 0;
+}
+
+/* one frame onto the restore queue: the R8 atlas is the source, the twin the
+   destination, same rect, the 1-texel border painted as a copy of the edge */
+static void restore_enqueue(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
+{
+    TAGPU_RGLSL_FRAME f;
+    f.ax = f.dx = e->x; f.ay = f.dy = e->y;
+    f.w = e->w; f.h = e->h; f.wrap = e->wrap; f.border = 1; f.key = e->ck;
+    tagpu_rglsl_job_add(a->job, &f, 1);
+}
+
+/* tagpu_restoredump.on: the twin as the shader samples it, once per fill of
+   the atlas, as raw bytes -- the restorer's only disk write, and only under
+   the trigger (the terrain pass writes its own). Three files per atlas:
+   tagpu_restore_<tag>.r8 (the source, dim x dim), .rgba (the twin, dim x dim
+   x 4) and .idx (a line per entry: x y w h key wrap), so `tascene featdiff`
+   can find each frame in both and hold the twin to the lab's bar. */
+static void dump_if_armed(TAGPU_GAFATLAS* a)
+{
+    static unsigned s_check;
+    char name[64], b[160];
+    unsigned char* buf;
+    FILE* f;
+    int i;
+    if (!a->job || a->n == 0 || a->n == a->dumpedN) return;
+    if (!tagpu_rglsl_job_idle(a->job)) return;
+    if (++s_check % 60) return;                    /* one attribute read a second */
+    if (GetFileAttributesA("tagpu_restoredump.on") == INVALID_FILE_ATTRIBUTES) return;
+    buf = (unsigned char*)malloc((size_t)a->dim * a->dim * 4);
+    if (!buf) return;
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    _snprintf(name, sizeof name, "tagpu_restore_%s.r8", a->tag);
+    glBindTexture(GL_TEXTURE_2D, a->tex);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
+    f = fopen(name, "wb");
+    if (f) { fwrite(buf, 1, (size_t)a->dim * a->dim, f); fclose(f); }
+    _snprintf(name, sizeof name, "tagpu_restore_%s.rgba", a->tag);
+    glBindTexture(GL_TEXTURE_2D, a->rgb);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    f = fopen(name, "wb");
+    if (f) { fwrite(buf, 1, (size_t)a->dim * a->dim * 4, f); fclose(f); }
+    free(buf);
+    _snprintf(name, sizeof name, "tagpu_restore_%s.idx", a->tag);
+    f = fopen(name, "w");
+    if (f) {
+        for (i = 0; i < a->n; i++) if (a->ents[i].ok)
+            fprintf(f, "%d %d %d %d %d %d\n", a->ents[i].x, a->ents[i].y, a->ents[i].w, a->ents[i].h,
+                    a->ents[i].ck, a->ents[i].wrap);
+        fclose(f);
+    }
+    a->dumpedN = a->n;
+    _snprintf(b, sizeof b, "%s: restored twin dumped to tagpu_restore_%s.{r8,rgba,idx} (%dx%d, %d entries)%s",
+              a->tag, a->tag, a->dim, a->dim, a->n, f ? "" : " -- WRITE FAILED");
+    glog(b);
+}
+
+void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
+{
+    int i;
+    a->pal = pal;
+    if (a->job) { dump_if_armed(a); return; }
+    if (a->restoreFailed || !a->tex || !pal) return;
+    if (!tagpu_classicpp_on()) return;
+    if (!a->rgb) {
+        GLuint t = 0;
+        glGenTextures(1, &t);
+        if (!t) { a->restoreFailed = 1; return; }
+        glBindTexture(GL_TEXTURE_2D, t);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, a->dim, a->dim, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        a->rgb = t;
+    }
+    a->job = tagpu_rglsl_job_new(a->tag ? a->tag : "gaf", a->prio, 0,
+                                 a->tex, a->dim, a->dim, pal, a->rgb, a->dim, a->dim);
+    if (!a->job) { a->restoreFailed = 1; return; }     /* the reason is in tagpu.log */
+    /* what is already in the atlas was uploaded before the switch: queue it,
+       in upload order, so nothing stays indexed for want of a miss */
+    for (i = 0; i < a->n; i++) if (a->ents[i].ok) restore_enqueue(a, &a->ents[i]);
 }
 
 /* frame headers are heap pointers: mix the high bits down so the low-order
@@ -230,7 +322,12 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
     glBindTexture(GL_TEXTURE_2D, 0);
     e->u0 = (float)x / (float)a->dim;         e->v0 = (float)y / (float)a->dim;
     e->u1 = (float)(x + w) / (float)a->dim;   e->v1 = (float)(y + h) / (float)a->dim;
+    e->x = (unsigned short)x; e->y = (unsigned short)y;
     e->ck = g[TAGPU_GF_CK];
+    /* decided here, while the pixels are still in s_dec: the tileability the
+       restorer wrap-pads by (a key on an edge says no) */
+    e->wrap = a->pal ? (char)tagpu_rglsl_tileable(s_dec, w, h, a->pal, e->ck) : 0;
     e->ok = 1;
+    if (a->job) restore_enqueue(a, e);
     return e;
 }

@@ -225,7 +225,8 @@
 <div id="err"></div>
 
 <script type="module">
-import { RESTORE_SHADERS, Restorer, parseWeights, terrainFrames, readTexture, diffAtlas }
+import { RESTORE_SHADERS, Restorer, parseWeights, terrainFrames, featureFrames, readTexture,
+         diffAtlas, diffFrames }
   from "./tascene-restore.js";
 const Q = new URLSearchParams(location.search);
 const SHOT = Q.get("shot") === "1";
@@ -907,9 +908,22 @@ async function main() {
   const rgbaTex = (unit, buf, w, h) =>
     tex2D(gl, unit, gl.RGBA8, buf ? w : 1, buf ? h : 1, gl.RGBA, gl.UNSIGNED_BYTE,
           buf || DUMMY);
-  let restoreReport = null;
+  let restoreReport = null, restorer = null, palTexObj = null;
+  // an RGBA8 destination for the restorer, bound on `unit`
+  const restoreDest = (unit, w, h) => {
+    const dest = { tex: gl.createTexture(), w, h };
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, dest.tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return dest;
+  };
   if (glslSide) {
-    // the GLSL restorer, on the very R8 atlas texture bound on unit 0
+    // the GLSL restorer, on the very R8 atlas texture bound on unit 0; the
+    // same restorer runs the feature atlas below, once that is uploaded
     const [wBytes, ...bodies] = await Promise.all([
       fetchBin(scene.restore.weights[glslSide.model]),
       ...RESTORE_SHADERS.map((n) => fetchText("shaders/" + n)),
@@ -918,30 +932,17 @@ async function main() {
     gl.activeTexture(gl.TEXTURE0);
     const atlasTex = gl.getParameter(gl.TEXTURE_BINDING_2D);   // unit 0: the R8 atlas
     gl.activeTexture(gl.TEXTURE1);
-    const palTex = gl.getParameter(gl.TEXTURE_BINDING_2D);      // unit 1: the palette
-    const dest = { tex: gl.createTexture(), w: map.atlas.w, h: map.atlas.h };
-    gl.activeTexture(gl.TEXTURE8);
-    gl.bindTexture(gl.TEXTURE_2D, dest.tex);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, dest.w, dest.h);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    const restorer = new Restorer(gl, shaders, parseWeights(wBytes),
-                                  { precision: glslSide.precision, nk: glslSide.nk });
+    palTexObj = gl.getParameter(gl.TEXTURE_BINDING_2D);         // unit 1: the palette
+    const dest = restoreDest(8, map.atlas.w, map.atlas.h);
+    restorer = new Restorer(gl, shaders, parseWeights(wBytes),
+                            { precision: glslSide.precision, nk: glslSide.nk });
     const frames = terrainFrames(map, atlasBuf, palBuf);
-    const stats = await restorer.restore(frames, atlasTex, palTex, dest);
+    const stats = await restorer.restore(frames, atlasTex, palTexObj, dest);
     restoreReport = { model: glslSide.model, ...stats };
     if (glslSide.restorediff) {
       const got = readTexture(gl, dest.tex, dest.w, dest.h);
       restoreReport.diff = diffAtlas(got, terrRGB, map);
     }
-    restorer.dispose();
-    // the report is DOM text so a headless run (`tascene restore`) can read it
-    const pre = document.createElement("pre");
-    pre.id = "restore-report"; pre.hidden = true;
-    pre.textContent = JSON.stringify(restoreReport);
-    document.body.appendChild(pre);
     gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, dest.tex);
     gl.activeTexture(gl.TEXTURE0);
   } else {
@@ -1024,9 +1025,37 @@ async function main() {
   let SU = {}, LSU = {}, anchors = [];
   let sprVerts = null;
   if (hasFeat) {
-    tex2D(gl, 5, gl.R8, scene.features.atlas.w, scene.features.atlas.h,
-          gl.RED, gl.UNSIGNED_BYTE, featAtlas);
-    rgbaTex(9, featRGB, scene.features.atlas.w, scene.features.atlas.h);
+    const featTex = tex2D(gl, 5, gl.R8, scene.features.atlas.w, scene.features.atlas.h,
+                          gl.RED, gl.UNSIGNED_BYTE, featAtlas);
+    if (restorer) {
+      // the feature atlas through the same restorer: colour-keyed, non-square
+      // frames of many sizes in one shelf — the shape of the game's lazy GAF
+      // restore (renderers.md 4b Option 4). Its diff has two bands, see
+      // diffFrames.
+      const dest = restoreDest(9, scene.features.atlas.w, scene.features.atlas.h);
+      const frames = featureFrames(scene.features, featAtlas, palBuf);
+      const stats = await restorer.restore(frames, featTex, palTexObj, dest);
+      restoreReport.features = { ...stats };
+      if (glslSide.restorediff && featRGB) {
+        const got = readTexture(gl, dest.tex, dest.w, dest.h);
+        restoreReport.features.diff = diffFrames(got, featRGB, frames, featAtlas,
+                                                 scene.features.atlas.w, restorer.W.depth);
+        restoreReport.features.frames_list = frames.map((f) => ({ id: f.id, name: f.name, x: f.ax, y: f.ay, w: f.w, h: f.h, wrap: f.wrap, key: f.key }));
+        // the restored atlas itself, for `tascene restore --save-features`:
+        // base64 in a hidden element, the way the report travels
+        let bin = "";
+        for (let i = 0; i < got.length; i += 0x8000)
+          bin += String.fromCharCode.apply(null, got.subarray(i, Math.min(i + 0x8000, got.length)));
+        const pre = document.createElement("pre");
+        pre.id = "restore-features"; pre.hidden = true;
+        pre.textContent = btoa(bin);
+        document.body.appendChild(pre);
+      }
+      gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, dest.tex);
+      gl.activeTexture(gl.TEXTURE0);
+    } else {
+      rgbaTex(9, featRGB, scene.features.atlas.w, scene.features.atlas.h);
+    }
     sprVBO = gl.createBuffer();
     if (wantParity) {
       sprProg = program(gl, sprVS, sprFS, "sprite");
@@ -1063,6 +1092,14 @@ async function main() {
     for (let i = 0; i < inst.length; i += 3)
       anchors[inst[i + 1] * map.w16 + inst[i]] = inst[i + 2];
     sprVerts = new Float32Array(65536 * LSVST);
+  }
+  if (restorer) {
+    restorer.dispose();
+    // the report is DOM text so a headless run (`tascene restore`) can read it
+    const pre = document.createElement("pre");
+    pre.id = "restore-report"; pre.hidden = true;
+    pre.textContent = JSON.stringify(restoreReport);
+    document.body.appendChild(pre);
   }
 
   // ---- unit pass — tagpu_native.c's shaders, tagpu_render3do.c's geometry rule
@@ -1925,6 +1962,17 @@ async function main() {
                   ? `; diff ${restoreReport.diff.pass ? "PASS" : "FAIL"} max ${restoreReport.diff.max}` +
                     ` ${restoreReport.diff.differing}/${restoreReport.diff.bytes} bytes` +
                     ` ${restoreReport.diff.pct.toFixed(4)}% ring ${restoreReport.diff.ring}`
+                  : "") +
+                (restoreReport.features
+                  ? `; features ${restoreReport.features.frames} frames ${restoreReport.features.ms.toFixed(0)} ms` +
+                    (restoreReport.features.diff
+                      ? ` far ${restoreReport.features.diff.far.pass ? "PASS" : "FAIL"}` +
+                        ` max ${restoreReport.features.diff.far.max}` +
+                        ` ${restoreReport.features.diff.far.pct.toFixed(4)}%,` +
+                        ` near max ${restoreReport.features.diff.near.max}` +
+                        ` mean ${restoreReport.features.diff.near.mean.toFixed(3)}` +
+                        ` alpha-bad ${restoreReport.features.diff.alpha_bad}`
+                      : "")
                   : "") + ")"
               : "") + `</b>` +
             `<span>filter</span><b>${L.filter}${L.filter === "linear" && L.aniso > 1

@@ -199,6 +199,7 @@ static int    s_maxTex;
    issued by this frame's slice is restored in this frame's terrain draw. */
 static GLuint s_rgbTex;
 static int    s_rgbState = 0;      /* 0 none, 1 restoring, 2 complete, -1 failed */
+static TAGPU_RGLSL_JOB* s_job;     /* the restorer's job while state is 1     */
 static GLint  s_uRestored;
 static const unsigned char* s_setPix;   /* the current set's tile pixels     */
 /* the last gathered rect, in 32-px cells: the GLSL job restores the tiles
@@ -365,8 +366,9 @@ void tagpu_terr_glreset(void)
        on a new map). The restore itself does not survive a reset: its result
        lived only in s_rgbTex, which died with the context, so it is run again
        (two seconds, on the GPU) rather than kept as a 23 MB copy. Until
-       2026-09-05 the ONNX path kept its CPU result here and re-uploaded it. */
-    tagpu_rglsl_glreset();
+       2026-09-05 the ONNX path kept its CPU result here and re-uploaded it.
+       The job is already gone: tagpu_native_glreset resets the restorer first. */
+    s_job = NULL;
     s_rgbState = 0;
 }
 
@@ -439,7 +441,7 @@ static int ensure_atlas(const char* ta)
        one and start over. (A GL reset reaches here with the SAME set, after
        glreset has already reset the restore, so both calls are no-ops then.) */
     if (s_setPtr != (const void*)set || s_setCount != count || s_setPix != pix) {
-        tagpu_rglsl_abort();
+        if (s_job) { tagpu_rglsl_job_free(s_job); s_job = NULL; }
         s_rgbState = 0;
     }
     s_setPtr = (const void*)set; s_setCount = count; s_setPix = pix;
@@ -506,8 +508,8 @@ static int glsl_begin(const char* ta)
         TAGPU_RGLSL_FRAME* f = &frames[i];
         f->ax = f->dx = (t % ATLAS_COLS) * CELL_PITCH + CELL_BORDER;
         f->ay = f->dy = (t / ATLAS_COLS) * CELL_PITCH + CELL_BORDER;
-        f->w = f->h = TILE_PX; f->border = CELL_BORDER;
-        f->wrap = tagpu_rglsl_tileable(s_setPix + (size_t)t * TILE_BYTES, TILE_PX, TILE_PX, pal);
+        f->w = f->h = TILE_PX; f->border = CELL_BORDER; f->key = -1;   /* tiles are opaque */
+        f->wrap = tagpu_rglsl_tileable(s_setPix + (size_t)t * TILE_BYTES, TILE_PX, TILE_PX, pal, -1);
     }
     free(order);
     /* the destination, re-specified per map: the same layout as s_atlasTex */
@@ -521,7 +523,11 @@ static int glsl_begin(const char* ta)
     } else glBindTexture(GL_TEXTURE_2D, s_rgbTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, ATLAS_W, s_atlasH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glBindTexture(GL_TEXTURE_2D, 0);
-    ok = tagpu_rglsl_begin(frames, n, s_atlasTex, ATLAS_W, s_atlasH, pal, s_rgbTex, ATLAS_W, s_atlasH);
+    /* a one-shot job at the head of the queue: the terrain restores before
+       any GAF atlas, and its done line is the restore's measurement */
+    s_job = tagpu_rglsl_job_new("terr", 0, 1, s_atlasTex, ATLAS_W, s_atlasH, pal, s_rgbTex, ATLAS_W, s_atlasH);
+    ok = s_job && tagpu_rglsl_job_add(s_job, frames, n) > 0;
+    if (!ok && s_job) { tagpu_rglsl_job_free(s_job); s_job = NULL; }
     free(frames);
     return ok;
 }
@@ -551,11 +557,11 @@ static void dump_if_armed(void)
 }
 
 /* Once per frame after the atlas is known: start the restore when the switch
-   is on and none exists for this set, then drive it one slice per frame until
-   the atlas is complete; the cells already painted are sampled from the first
-   slice on. The switch going off mid-restore pauses the job (its scratch stays
-   allocated) and leaves the texture in place, unsampled, restored as far as it
-   got. */
+   is on and none exists for this set, then watch the job the frame driver
+   slices (tagpu_native.c calls tagpu_rglsl_step after the gathers) until it
+   drains; the cells already painted are sampled from the first slice on. The
+   switch going off mid-restore pauses the job (its scratch stays allocated)
+   and leaves the texture in place, unsampled, restored as far as it got. */
 static void restore_step(const char* ta)
 {
     if (!tagpu_classicpp_on() || !s_atlasTex || !s_setPix) return;
@@ -566,11 +572,15 @@ static void restore_step(const char* ta)
         return;
     }
     if (s_rgbState == 1) {
-        int st = tagpu_rglsl_step();
-        if (st < 0) { s_rgbState = -1; flog("terr: GLSL restore failed; Classic++ terrain stays indexed"); return; }
-        if (st == 1) {
+        if (tagpu_rglsl_job_failed(s_job)) {
+            s_rgbState = -1; flog("terr: GLSL restore failed; Classic++ terrain stays indexed");
+            tagpu_rglsl_job_free(s_job); s_job = NULL;
+            return;
+        }
+        if (tagpu_rglsl_job_idle(s_job)) {
             char b[128];
             s_rgbState = 2;
+            tagpu_rglsl_job_free(s_job); s_job = NULL;     /* the texture is ours */
             _snprintf(b, sizeof b, "terr: restored atlas complete (GLSL) %dx%d for %d tiles", ATLAS_W, s_atlasH, s_atlasN);
             flog(b);
             dump_if_armed();

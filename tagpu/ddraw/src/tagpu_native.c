@@ -73,6 +73,7 @@
 #include "tagpu_sfx.h"
 #include "tagpu_feat.h"
 #include "tagpu_terr.h"
+#include "tagpu_restoreglsl.h"
 #include "tagpu_terrown.h"
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
@@ -1915,6 +1916,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (featOn) nfeat = tagpu_feat_gather(&fv);
         if (fxOn || sfxOn) nfx = tagpu_fx_gather(&fv);
         if (markOn) nmark = tagpu_mark_gather(&fv);
+        /* Classic++: one slice of the restorer, after the gathers (so the
+           frames they missed this frame are queued) and before the renders
+           (so what it paints is sampled this frame) */
+        tagpu_rglsl_step();
     }
     /* NEVER return early while we own the terrain: the engine's frame is a
        flat key fill inside the viewport, and only the composite below turns it
@@ -2477,6 +2482,7 @@ void tagpu_native_glreset(void)
 {
     s_state = 0; s_fboW = s_fboH = s_fboSS = 0; s_palInit = 0;
     s_fogCols = s_fogRows = 0; s_fogGrid = NULL; s_fogLut = 0;
+    tagpu_rglsl_glreset();      /* first: the passes below forget their jobs */
     tagpu_fx_glreset();
     tagpu_feat_glreset();
     tagpu_terr_glreset();

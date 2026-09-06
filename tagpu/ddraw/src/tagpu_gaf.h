@@ -44,10 +44,14 @@ typedef struct TAGPU_GAFENT {
     const void*    frame;       /* keyed on the header AND its pixel ptr:    */
     const void*    pix;         /* freed sequences get their address reused  */
     unsigned short w, h;
+    unsigned short x, y;        /* its first texel in the atlas (inside the border) */
     float          u0, v0, u1, v1;
     unsigned char  ck;
     char           ok;
+    char           wrap;        /* tagpu_rglsl_tileable said so at upload    */
 } TAGPU_GAFENT;
+
+struct TAGPU_RGLSL_JOB;
 
 /* Caller-owned atlas. Zero it, then point `ents`/`max` at your storage and
    set `dim` and `tag` before the first tagpu_gaf_atlas_get. */
@@ -61,6 +65,19 @@ typedef struct TAGPU_GAFATLAS {
     int           n, shelfX, shelfY, shelfH;
     int           full;         /* no room: reset deferred to the next frame */
     const char*   tag;          /* log prefix, e.g. "fx" / "feat"            */
+    /* Classic++ (renderers.md 4b Option 4): the RESTORED TWIN -- same dim,
+       same shelf, GL_RGBA8 -- painted lazily by tagpu_restoreglsl.c from a
+       queue that every miss feeds, so a frame draws indexed for the frame or
+       two before its restore lands. A sprite shader samples the twin where its
+       alpha is 1 and stays on the index elsewhere; a recycle clears it. `prio`
+       orders the queue against the other jobs (the terrain's is 0). Created by
+       tagpu_gaf_atlas_restore; `rgb` is 0 until then and after a context loss. */
+    unsigned int  rgb;
+    struct TAGPU_RGLSL_JOB* job;
+    int           prio;
+    int           restoreFailed;
+    int           dumpedN;      /* entries when tagpu_restoredump.on last wrote */
+    const unsigned char* pal;   /* the live palette, for the tileability test */
     /* open-addressed index over `ents`, keyed on the frame header address:
        the lookup runs once per emitted sprite and the feature pass emits
        hundreds per frame against a four-figure entry count, which a linear
@@ -89,4 +106,9 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a);       /* GL context replaced   */
 /* create the GL texture now rather than on the first frame that atlases a
    sprite — a pass whose shader samples the atlas must never bind texture 0 */
 int  tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a);
+/* Once per frame from the owning pass, before its atlas_get calls, with the
+   live palette (main+0x143A7). Arms the lazy restore the first time the
+   Classic++ switch is seen on: creates the twin and the queue and queues
+   every frame already in the atlas. A no-op after that; render thread only. */
+void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal);
 #endif

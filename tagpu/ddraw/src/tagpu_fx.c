@@ -54,6 +54,7 @@
 #include "tagpu_sfx.h"
 #include "tagpu_glsl.h"
 #include "tagpu_gaf.h"
+#include "tagpu_restoreglsl.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define TAPROG_PP     0x0051FBD0u
@@ -220,6 +221,7 @@ static int    s_state = 0;              /* 0 unloaded, 1 ready, 2 failed     */
 static GLuint s_prog, s_vao, s_vbo, s_lhtTex;
 static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uDepthScale;
 static GLint  s_uScafOn, s_uScafP, s_uSS, s_uZoomF, s_uZoomCF;
+static GLint  s_uRestored;
 /* four buckets, drawn in this order: the particle layers the engine draws
    BEFORE its projectile pass (0..6: wake foam, feature smoke, trail puffs,
    nanolathe), lines, flashes (additive), sprites (weapon sprites, explosions,
@@ -267,6 +269,8 @@ static const char* FS =
     "uniform sampler2D uAtlas;\n"
     "uniform sampler2D uPal;\n"
     "uniform sampler2D uLht;\n"              /* 32x1 RGB additive per level  */
+    "uniform sampler2D uAtlasRGB;\n"         /* Classic++: the atlas's restored twin */
+    "uniform int uRestored;\n"               /* 1 = sample it where its alpha says so */
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_SCAF_UNIFORMS
     TAGPU_GLSL_FOG_FN
@@ -289,7 +293,12 @@ static const char* FS =
     "      int lv = clamp(ii - 79, 0, 31);\n"
     "      rgb = texelFetch(uLht, ivec2(lv, 0), 0).rgb;\n"
     "    } else {\n"
-    "      rgb = texelFetch(uPal, ivec2(ii, 0), 0).rgb;\n"
+    /* Classic++: the twin's colour where the lazy restore has painted it
+       (alpha 1 -- tagpu_gaf.h), the index otherwise; the flash mode above
+       keeps its index-driven light table. Effects hide in grey, so no RGB
+       fog rule is needed here */
+    "      vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "      rgb = t.a > 0.5 ? t.rgb : texelFetch(uPal, ivec2(ii, 0), 0).rgb;\n"
     "      if (mode == 2) a = 0.5;\n"
     "    }\n"
     "  }\n"
@@ -347,6 +356,8 @@ static void init_gl(void)
         FOG_SHADE in this pass off unit 0 (the atlas) */
     glUniform1i(glGetUniformLocation(s_prog, "uLht"),   4);
     glUniform1i(glGetUniformLocation(s_prog, "uScaf"),  5);
+    glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 6);
+    s_uRestored = glGetUniformLocation(s_prog, "uRestored");
     glUseProgram(0);
 
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
@@ -365,6 +376,7 @@ static void init_gl(void)
     tagpu_gaf_atlas_lost(&s_atlas);      /* its texture is made on first use */
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "fx";
+    s_atlas.prio = 2;                   /* restored after terrain and features */
     tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
     glGenTextures(1, &s_lhtTex);
     glBindTexture(GL_TEXTURE_2D, s_lhtTex);
@@ -948,6 +960,8 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         return 0;
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
+    /* Classic++: the lazy restore of this atlas (main+0x143A7: the live palette) */
+    tagpu_gaf_atlas_restore(&s_atlas, (const unsigned char*)(v->ta + 0x143A7));
     memset(s_nv, 0, sizeof s_nv); s_nm = 0;
     s_cLines = s_cSprites = s_cFlash = s_cAtlasFail = s_cOverflow = s_cQuads = 0;
     memset(&s_c, 0, sizeof s_c);
@@ -994,7 +1008,9 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
     x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_lhtTex);
     x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, scafTex);
+    x_glActiveTexture(GL_TEXTURE6); glBindTexture(GL_TEXTURE_2D, s_atlas.rgb);
     x_glActiveTexture(GL_TEXTURE0);
+    glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_on()) ? 1 : 0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);

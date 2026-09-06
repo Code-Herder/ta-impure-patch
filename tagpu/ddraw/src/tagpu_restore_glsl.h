@@ -20,10 +20,26 @@
    that tiles (tagpu_rglsl_tileable) is wrap-padded by the model's
    depth inside its rect by the fill pass and centre-cropped by the out pass,
    the unditherer's own rule (classical.is_tileable's 12-level test, infer.py's
-   wrap-pad by the depth). The weights are unditherer/weights.py's
+   wrap-pad by the depth). Frames of different sizes share a batch: the slot
+   pitch is the batch's largest padded edge and each slot's rect is its own.
+   The weights are unditherer/weights.py's
    layout: per output tile k one std140 block of mat4 -- bias in column 0 of
    mat4 0, then mat4 1 + t*Jin + j for tap t (offset (t%3-1, t/3-1)) and input
    tile j -- and a conv draw binds NK consecutive k-blocks as one uniform range.
+
+   THE COLOUR KEY (GAF frames). The reference inpaints keyed texels with
+   OpenCV's TELEA before the network and restores the key's alpha after
+   (unditherer/restore.py load_image / save_image); a shader cannot reproduce
+   TELEA, so the FILL pass stands in with the mean palette colour of the
+   opaque texels in the nearest ring (Chebyshev) within uKeyR of the keyed
+   texel -- uKeyR is the model's depth, its receptive radius, because a keyed
+   texel farther than that from every opaque one influences no opaque output.
+   The OUT pass writes (0, 0, 0, 0) at a keyed texel, which is what save_image
+   writes (alpha 0, RGB zeroed). uKey per slot = the key index, or -1 for a
+   frame with no key (terrain). The correctness bar for keyed frames is the
+   opaque texels farther than uKeyR from any keyed texel (renderers.md 4c);
+   the band nearer than that differs from the reference by construction and
+   is reported separately.
 
    PASSES per batch: FILL (palette lookup into layer 0 of the ping-pong array),
    depth x CONV (each in ceil(tiles/NK) draws, MRT over the destination's
@@ -40,29 +56,59 @@
     "}\n"
 
 /* FILL: the model's input. uSrc per slot = (ax, ay, sw, sh): the frame's
-   first texel in the R8 atlas and its size; uRect per slot = the valid rect.
-   pad = (rect - size)/2 is the wrap radius (0 for a zero-padded frame), and
-   the source texel wraps by floor division so a pad wider than the frame is
-   still right. Alpha 0: the 4th input channel has zero weights anyway. */
+   first texel in the R8 atlas and its size; uRect per slot = the valid rect;
+   uKey per slot = (key index or -1, 0, 0, 0). pad = (rect - size)/2 is the
+   wrap radius (0 for a zero-padded frame), and the source texel wraps by
+   floor division so a pad wider than the frame is still right. A keyed texel
+   takes the stand-in described above, searched inside the frame (wrapped
+   when the frame wraps, clipped when it does not). Alpha 0: the 4th input
+   channel has zero weights anyway. */
 #define TAGPU_RESTORE_FILL_FS \
     "uniform sampler2D uAtlas;\n" \
     "uniform sampler2D uPal;\n" \
     "uniform sampler2D uRect;\n" \
     "uniform sampler2D uSrc;\n" \
+    "uniform sampler2D uKey;\n" \
     "uniform int uSlot;\n" \
+    "uniform int uKeyR;\n" \
     "out vec4 frag;\n" \
+    "int idxAt(ivec2 o, ivec2 t) { return int(texelFetch(uAtlas, o + t, 0).r * 255.0 + 0.5); }\n" \
+    "void tap(ivec2 t, ivec2 o, ivec2 sz, bool wrap, int key, inout vec3 acc, inout int n) {\n" \
+    "  if (wrap) t -= sz * ivec2(floor(vec2(t) / vec2(sz)));\n" \
+    "  else if (t.x < 0 || t.y < 0 || t.x >= sz.x || t.y >= sz.y) return;\n" \
+    "  int q = idxAt(o, t);\n" \
+    "  if (q == key) return;\n" \
+    "  acc += texelFetch(uPal, ivec2(q, 0), 0).rgb; n++;\n" \
+    "}\n" \
     "void main(){\n" \
     "  ivec2 f = ivec2(gl_FragCoord.xy);\n" \
     "  ivec2 slot = f / uSlot;\n" \
     "  ivec2 sl = f - slot * uSlot;\n" \
     "  vec4 rect = texelFetch(uRect, slot, 0);\n" \
     "  vec4 src = texelFetch(uSrc, slot, 0);\n" \
+    "  int key = int(texelFetch(uKey, slot, 0).x);\n" \
     "  ivec2 sz = ivec2(src.zw);\n" \
     "  if (sz.x <= 0 || sz.y <= 0) { frag = vec4(0.0); return; }\n" \
     "  ivec2 pad = (ivec2(rect.zw) - sz) / 2;\n" \
     "  ivec2 s = sl - ivec2(rect.xy) - pad;\n" \
     "  s -= sz * ivec2(floor(vec2(s) / vec2(sz)));\n" \
-    "  int pi = int(texelFetch(uAtlas, ivec2(src.xy) + s, 0).r * 255.0 + 0.5);\n" \
+    "  ivec2 o = ivec2(src.xy);\n" \
+    "  int pi = idxAt(o, s);\n" \
+    "  if (key >= 0 && pi == key) {\n" \
+    "    bool wrap = pad.x > 0 || pad.y > 0;\n" \
+    "    vec3 acc = vec3(0.0); int n = 0;\n" \
+    "    for (int r = 1; r <= uKeyR; r++) {\n" \
+    "      for (int i = -r; i < r; i++) {\n" \
+    "        tap(s + ivec2(i, -r), o, sz, wrap, key, acc, n);\n" \
+    "        tap(s + ivec2(r, i), o, sz, wrap, key, acc, n);\n" \
+    "        tap(s + ivec2(-i, r), o, sz, wrap, key, acc, n);\n" \
+    "        tap(s + ivec2(-r, -i), o, sz, wrap, key, acc, n);\n" \
+    "      }\n" \
+    "      if (n > 0) break;\n" \
+    "    }\n" \
+    "    frag = vec4(n > 0 ? acc / float(n) : vec3(0.0), 0.0);\n" \
+    "    return;\n" \
+    "  }\n" \
     "  frag = vec4(texelFetch(uPal, ivec2(pi, 0), 0).rgb, 0.0);\n" \
     "}\n"
 
@@ -132,7 +178,9 @@
    what makes the border a copy of the edge, reads the residual at the slot's
    matching texel (pad undoes the wrap padding: a centre crop) and the input
    colour from the atlas at the destination coordinate itself -- the source R8
-   atlas and the RGBA destination share one layout. */
+   atlas and the RGBA destination share one layout. A keyed texel is written
+   (0, 0, 0, 0): alpha 0 is the hole, and the atlas's alpha is also how a
+   consumer tells a painted cell from one the job has not reached. */
 #define TAGPU_RESTORE_OUT_VS \
     "layout(location = 0) in vec2 aPos;\n" \
     "layout(location = 1) in vec4 aCell;\n" \
@@ -149,6 +197,7 @@
     "uniform sampler2D uAtlas;\n" \
     "uniform sampler2D uPal;\n" \
     "uniform sampler2D uRect;\n" \
+    "uniform sampler2D uKey;\n" \
     "uniform int uSlot;\n" \
     "flat in vec4 vCell;\n" \
     "flat in vec2 vSize;\n" \
@@ -158,10 +207,12 @@
     "  ivec2 cell = ivec2(vCell.xy), slot = ivec2(vCell.zw), size = ivec2(vSize);\n" \
     "  ivec2 d = clamp(f - cell, ivec2(0), size - 1);\n" \
     "  vec4 rect = texelFetch(uRect, slot, 0);\n" \
+    "  int key = int(texelFetch(uKey, slot, 0).x);\n" \
+    "  int pi = int(texelFetch(uAtlas, cell + d, 0).r * 255.0 + 0.5);\n" \
+    "  if (key >= 0 && pi == key) { frag = vec4(0.0); return; }\n" \
     "  ivec2 pad = (ivec2(rect.zw) - size) / 2;\n" \
     "  ivec2 q = slot * uSlot + ivec2(rect.xy) + pad + d;\n" \
     "  vec3 net = texelFetch(uAct, ivec3(q, 0), 0).rgb;\n" \
-    "  int pi = int(texelFetch(uAtlas, cell + d, 0).r * 255.0 + 0.5);\n" \
     "  vec3 c = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n" \
     "  vec3 k = clamp(floor((c - net) * 255.0 + 0.5), 0.0, 255.0);\n" \
     "  frag = vec4((k + 0.25) / 255.0, 1.0);\n" \
