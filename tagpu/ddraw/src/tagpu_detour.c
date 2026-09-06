@@ -47,7 +47,7 @@ int tagpu_detour_write(unsigned int va, const unsigned char* bytes, int n)
 }
 
 /* land the 5-byte jmp on `va` and NOP whatever is left of the stolen bytes */
-static int detour_land(unsigned int va, const unsigned char* stub, int nst)
+int tagpu_detour_land(unsigned int va, const unsigned char* stub, int nst)
 {
     unsigned char jmp5[5];
     unsigned char nops[16];
@@ -72,7 +72,7 @@ int tagpu_detour_leaf(unsigned int va, const unsigned char* stolen, int nst,
     *p++ = 0xC2; *p++ = retn; *p++ = 0x00;             /* ret n                */
     memcpy(p, stolen, (size_t)nst); p += nst;
     *p++ = 0xE9; tagpu_detour_rel(p, va + (unsigned)nst); p += 4;
-    return detour_land(va, s, nst);
+    return tagpu_detour_land(va, s, nst);
 }
 
 int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst,
@@ -95,5 +95,5 @@ int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst
     *p++ = 0xC2; *p++ = retn; *p++ = 0x00;             /* ret n                */
     memcpy(p, stolen, (size_t)nst); p += nst;
     *p++ = 0xE9; tagpu_detour_rel(p, va + (unsigned)nst); p += 4;
-    return detour_land(va, s, nst);
+    return tagpu_detour_land(va, s, nst);
 }

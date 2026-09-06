@@ -266,6 +266,10 @@ static void nlog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
+/* units skipped because their object pointer moved between gather and emit
+   (a death landed inside the frame); per 300-frame window, on the native: line */
+static unsigned s_reread = 0;
+
 typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum,GLint,GLsizei);
 typedef void (APIENTRY *PFN_DEPTHFUNC)(GLenum);
 typedef void (APIENTRY *PFN_DISABLE)(GLenum);
@@ -1645,6 +1649,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 
     /* ---- gather native-owned on-screen units ---- */
     typedef struct { const char* o3; const char* u; const void* hires;
+                     const char* rec;       /* the wreck record (feat), else NULL */
+                     int dead;              /* object pointer moved since the gather */
                      float ax, ay, gy, wx0, wz0;
                      int rel, owner, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
                      float waterT, digT; int waterMode;
@@ -1704,7 +1710,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         if (nu == 0) pose_dump(u, o3);
         NU* n2 = &units[nu++];
-        n2->o3 = o3; n2->u = u; n2->ax = ax; n2->ay = ay;
+        n2->o3 = o3; n2->u = u; n2->ax = ax; n2->ay = ay; n2->rec = NULL; n2->dead = 0;
         n2->wx0 = fx; n2->wz0 = fy - fz * 0.5f;
         n2->yaw = *(const unsigned short*)(u + U_YAW);
         n2->hires = NULL;
@@ -1922,6 +1928,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     continue;
                 NU* n2 = &units[nu++];
                 n2->o3 = o3; n2->u = NULL; n2->ax = ax; n2->ay = ay; n2->gy = ay;
+                n2->rec = rec; n2->dead = 0;
                 n2->wx0 = (float)rx; n2->wz0 = (float)(ry - rz / 2);
                 n2->rel = (ry >> 4) - r0;
                 n2->owner = 0; n2->cloaked = 0; n2->air = 0; n2->feat = 1; n2->sel = 0;
@@ -2012,6 +2019,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     s_hposeN = 0;
     for (i = 0; i < nu; i++) {
         firstv[i] = nv;
+        /* The object pointer was captured at gather time. If the engine has
+           since nulled or replaced it (unit death, wreck destroyed), the old
+           object is on tagpu_reclaim's queue and still readable — but drawing
+           a dead unit's last pose is pointless, so skip it. On an exe where
+           reclaim could not arm this is the narrow-window guard on its own:
+           the null lands the instruction after the free returns, so a block
+           that could fault has already changed here
+           (thread-safe-destruction.md). Wrecks re-read their record. */
+        {
+            const char* now = units[i].o3;
+            if (units[i].feat) { if (units[i].rec) now = *(const char* const*)(units[i].rec + WR_OBJ3DO); }
+            else if (units[i].u) now = *(const char* const*)(units[i].u + U_OBJ3DO);
+            if (now != units[i].o3) { units[i].dead = 1; s_reread++; continue; }
+        }
         /* airborne units draw in a second, un-rowed sweep above everything
            (terrain-depth 3.3) -> the air band above the effects band; wrecks
            sit at FEATURE depth (3+rel*4, terrain-depth 3.4) */
@@ -2139,7 +2160,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int nwire = 0;
     for (i = 0; i < nu; i++) {
         wfirst[i] = nv;
-        if (!units[i].nanoOn) continue;
+        if (units[i].dead || !units[i].nanoOn) continue;
         nv = emit_wire(units[i].o3, nv, units[i].ax, units[i].ay,
                        units[i].wx0, units[i].wz0, encb[i], units[i].owner,
                        units[i].nanoWire);
@@ -2156,7 +2177,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int nslant = 0;
     for (i = 0; i < nu; i++) {
         sfirst[i] = nv;
-        if (!units[i].slant || !units[i].shadow || units[i].hires) continue;
+        if (units[i].dead || !units[i].slant || !units[i].shadow || units[i].hires) continue;
         nv = emit_geom(units[i].o3, nv, units[i].ax, units[i].ay,
                        units[i].wx0, units[i].wz0, encb[i], units[i].owner, 1);
         nslant++;
@@ -2467,12 +2488,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     static unsigned last = 0;
     if (f->frame_counter - last >= 300) {
         last = f->frame_counter;
-        char b[192];
+        char b[224];
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d%s",
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s",
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
-                  lostype, s_fogLut, keyOn, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
+                  lostype, s_fogLut, keyOn, s_reread, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
+        s_reread = 0;
     }
     s_vtrunc = 0;
 }
