@@ -596,6 +596,18 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 ### 3.2 Smaller, known, and cheap to close
 
+- **The Kbot lab's Classic slant shadow is mostly missing** (found 2026-09-06 while answering
+  whether the engine draws one at all; present on the G14g DLL, so not G14h's). Measured with
+  the engine's own Shadows toggle (`VISUALRT.GUI` `BSHADOWS`) on the `shadow-struct` fixture
+  plus an ARMLAB, same eye, three DLL states: pixels the toggle changes in a 200×140 box around
+  each building — **Kbot lab: stock engine 959, G14g 517, G14h 515**; solar 1228 / 1278 / 1278;
+  ARM extractor 2095 / 2347 / 2348; COR wind 3264 / 3795 / 3509 (the rotor's phase); commander
+  997 / 1035 / 1035. The other buildings match the engine within the +5 px strip below; the
+  lab's rim along its up-right edges is absent and one small block remains. Hypothesis, not
+  probed: the native pass reads the prims' flag bits 0|1 live each frame while the engine's
+  cache (`0x45A790`, `Object3do+0x14`) holds the silhouette from when it was built, and the
+  lab's script hides or shows pieces afterwards. **The lab's Classic lane draws no structure
+  shadow at all** ([renderers](renderers.html) §1), which is a separate, older gap.
 - **A replacement mesh casts a Classic++ shadow and does not receive one** (G14h,
   [renderers](renderers.html) §2.4): `tagpu_hires_draw.c` lights with its own GGX rule and has no
   shadow read-back, so a glb body standing in a cast shadow is lit as though it were not. The

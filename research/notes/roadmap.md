@@ -125,7 +125,10 @@ within 2 levels along sprite edges; and **against the G14g DLL's own Classic fra
 **Hires**: on `hires-one` the replacement Peewee casts — a core at 0.64 of lit to its right with the map on, gone with it off — beside the 3DO AK's shadow.
 
 **What it did not close.** A replacement mesh does not *receive* (§2.4); the soft edge and the
-ridge haze are lattice noise on both sides (§4); the zoom-floor look and `airshadow`'s default
+ridge haze are lattice noise on both sides (§4); **the Kbot lab's Classic slant is mostly
+missing on G14g and G14h alike** (959 px of engine shadow, 517 / 515 of ours — measured with
+the engine's own Shadows toggle, [gpu-status](gpu-status.html) §3.2), a G13k gap this landing
+found and did not touch; the zoom-floor look and `airshadow`'s default
 are the owner's, in play; the seabed under water (§2.3) stands as before. Traps met: the
 scenario's `center_on` parks the pointer on the anchor and its crosshair covered the shadow's
 root in the first captures; a caster log line reset by the startup GL reset logged the boot
