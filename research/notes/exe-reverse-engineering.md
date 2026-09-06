@@ -1824,19 +1824,27 @@ same free-before-unlink shape as the unit path.
 
 ### `0x491B60` — the level teardown
 
-**No stack arguments, plain `ret` at `0x491C59`**; six bare call sites (`0x460630`, `0x491C6A`,
-`0x49262C`, `0x4996AA`, `0x49971D`, `0x4997AF`), none pushing for it; first five bytes
-`A1 E8 1D 51 00` (`mov eax,[0x511DE8]`), no branch into `0x491B61..64`, resume at `0x491B65` —
-wrappable with a `call` through the stolen tail so code can run after it returns. The body clears
+**No stack arguments**; six bare call sites (`0x460630`, `0x491C6A`, `0x49262C`, `0x4996AA`,
+`0x49971D`, `0x4997AF`), none pushing for it; first five bytes `A1 E8 1D 51 00`
+(`mov eax,[0x511DE8]`), no branch into `0x491B61..64`, resume at `0x491B65`. **Two exits**: `ret`
+at `0x491C59`, and a tail-jump at `0x491C54` (`jmp 0x450DD0`, taken when `0x435100` returns 3)
+— `0x450DD0` reads no stack argument either and returns with a plain `ret` at `0x450E19`, so a
+`call` through the stolen tail returns to the caller on both paths and code can run after it
+(the review caught the first draft of this note claiming a single exit). The body clears
 `main+0x2A44 & ~4`, then the cascade: `0x4CED40`, `0x4CE690(4)`, `0x41DC20`, `0x437D30`,
-**`0x485980`** (the unit teardown: three `MEM_Free`s of the unit arrays — it **never** calls
-`FreeObjectState`), `0x471DE0` (destroy every sfx layer), `0x420960`, `0x44F6E0`, `0x464A00`,
-`0x466AA0`, **`0x483DD0`** (→ `0x422170` → the bulk `FreeObjectState` loop at `0x4221C4`;
-`0x483DD0`'s only caller is `0x491BB3` and `0x422170`'s only caller is `0x483DE6`, so this is
-the sole path to that third caller), then `MEM_Free` of the game-state arrays
-(`0x491BC5`, `0x491BD9`, `0x491BED`). **The fork wraps this entry** (`tagpu_reclaim.c`) with a
-pre hook (hold the render thread off, flush the deferred queue while the registry is alive) and a
-post hook (release it).
+**`0x485980`** — the unit teardown: it walks the unit array (`main+0x14357..+0x1435B`, stride
+`0x118`, `0x48599B..0x4859A8`) and calls `Send_UnitDeath 0x4864B0(unit, 8)` for **every unit
+whose model index `[unit+0xA6]` is non-zero**, i.e. every live unit's object is freed through the
+death routine `0x4866D0 → 0x486D9E` — hundreds of `FreeObjectState` calls — then three
+`MEM_Free`s of the unit arrays (the first draft of this note said it never reached
+`FreeObjectState`; the review disproved that) — then `0x471DE0` (destroy every sfx layer),
+`0x420960`, `0x44F6E0`, `0x464A00`, `0x466AA0`, **`0x483DD0`** (→ `0x422170` → the bulk wreck
+`FreeObjectState` loop at `0x4221C4`; `0x483DD0`'s only caller is `0x491BB3` and `0x422170`'s
+only caller is `0x483DE6`, so this is the sole path to that third caller), then `MEM_Free` of
+the game-state arrays (`0x491BC5`, `0x491BD9`, `0x491BED`). **The fork wraps this entry**
+(`tagpu_reclaim.c`) with a pre hook (hold the render thread off, wait for it to leave its pass,
+flush the deferred queue while the registry is alive — or, if it does not leave within a second,
+keep the queue and keep deferring through the cascade) and a post hook (release it).
 
 ### The allocator, from the free side
 

@@ -155,10 +155,13 @@ destructor detour itself** (every call first stamps and frees what became safe, 
 own object), which needs no tick hook — the engine's tick detour at `0x4969D2` is installed only
 while a scenario is being applied, so it could not host the drain. The reader's bracket is one
 unconditional `pass_begin` / `pass_end` pair around `tagpu_overlay_draw` in `render_ogl.c`, which
-also puts the debug probes inside it. Level teardown `0x491B60` is wrapped (pre: fenced flag, wait
-≤ 100 ms for the reader to leave its pass, flush; post: release). It is on by default,
-`tagpu_reclaim.off` disables, and it logs `reclaim: def=… drn=… queued=… hw=… ovf=… foreign=…
-flushed=… dropped=… teardowns=… pass=…` every 300 frames. The composite frames are **not** freed by
+also puts the debug probes inside it; while a teardown is in progress the driver skips only its
+engine-reading half, so input injection and the GL-context detection keep running. Level teardown
+`0x491B60` is wrapped (pre: fenced flag, wait ≤ 1 s for the reader to leave its pass, then flush and
+let the cascade free synchronously — or, if the reader is still busy, free **nothing**: keep the queue
+and keep deferring through the cascade; post: release). It is on by default, `tagpu_reclaim.off`
+disables, and it logs `reclaim: def=… drn=… queued=… hw=… ovf=… foreign=… flushed=… held=…
+teardowns=… pass=…` every 300 frames (ring 4096). The composite frames are **not** freed by
 the destructor (`0x437C90` only unregisters a slot — see §3), so they are not covered and not
 needed for the crash.
 
@@ -267,6 +270,10 @@ and silent to break, so the landing must check every one.
   whole overlay driver in `render_ogl.c`, so every render-thread read is inside it.
 - ~~Publish pass-completed from the overlay driver~~ — done: one unconditional pair in
   `render_ogl.c` around `tagpu_overlay_draw`.
+- **The drain is pumped only by frees** (no game-thread tick hook exists outside a scenario apply),
+  so the most recent death's object and its composite-registry slot are held until the next death or
+  the level ends. Accepted for one object per lull — the engine draws from the unit array, not the
+  registry — and flagged by the review; a periodic game-thread drain point would close it.
 - ~~Classify the composite frame's lifetime before landing~~ — **still open**, but not needed for
   the crash: the emit reads `obj+0x10` only for the waterline depth-plane test, and the frame's
   owner is the composite draw context (`main+0x1437B`, nulled at teardown `0x42DCA3`).
@@ -289,6 +296,14 @@ the simulation.
   only once the reader has published completion of the passes that could hold the object. The
   earlier "free N passes behind" wording was a probabilistic margin, not a proof — it assumed the
   engine's null landed within N−1 reader passes, which a preempted game thread can violate.
+- **2026-09-06** — **reviewed** (two Opus reviewers at high, ten findings, eight acted on). The
+  serious one: on the teardown wait's timeout the code leaked the queue and then switched
+  deferral *off* for the cascade — hundreds of synchronous frees (`0x485980` frees every unit
+  through the death routine, which this page's first draft denied) under a reader that might
+  still be in its pass. Now the queue is kept and deferral stays on. Also: the teardown routine has
+  two exits (a tail-jump to `0x450DD0`, itself argument-free); the refused pass no longer skips the
+  whole overlay driver; the dead-unit skip ran before the depth key was stored; the owner thread is
+  the fork's recorded game thread, not the first caller.
 - **2026-09-06** — **built and measured** as G14h (`tagpu_reclaim.c`): drain inside the destructor
   detour on the game thread (no tick hook available), teardown wrapped, bracket around the whole
   overlay driver, on by default with `tagpu_reclaim.off`. First `200v200` fight: `ARMED` on both
