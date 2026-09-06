@@ -138,7 +138,23 @@ only at gather time (`ptr_ok`, `tagpu_native.c` ~1657) and dereferenced at emit 
 the game thread in between; the same sixteen bytes at EIP in both reports, a different unit and
 a different data address each time. It predates this landing and is recorded in
 [GPU status](gpu-status.html) §3.2, with the crash file's one trap (TA appends to
-`ErrorLog.txt`; `tacli crash` shows the first report). Compressed
+`ErrorLog.txt`; `tacli crash` shows the first report).
+
+**Acted on from the review** (Opus, medium, 3 findings, 3 acted on, none rejected): the
+cell's alignment slack was unwritten and the docs said it was never sampled — at level 2 a
+frame whose width or height is 3 mod 4 samples a quarter of its far-edge weight from the
+level-2 texel over the slack (a sixteenth of darkening; no such texture seen, the lab's pack
+has the same gap) — so the upload now fills the whole cell with the edge and the OUT pass
+paints the twin's slack too (`padR`/`padB` on the restorer's frame); the mipped twin was
+sampled after five `discard`s, where implicit derivatives are not guaranteed, so it is sampled
+before the colour-key test now; and a bilinear sample beside a keyed texel is premultiplied by
+its coverage (the twin is `(0,0,0,0)` there), so the shader divides by the alpha — the lab's
+shader does not and draws a one-texel dark ring at a keyed edge, a documented divergence
+(§4c). Verified by running it: Classic's engine shot differs from the measured DLL's only in
+the chat lines (`tascene ab` 7,071); the Classic++ suns-off frame differs from the measured one
+on **2 pixels by one level**, both inside the commander (the division's rounding), the lab
+residual count unchanged at 130,945; `unitdiff` 25 of 25 as before; the restore 2.46 s at
+58.8 fps. Compressed
 unit frames (none seen) still draw flat, unverified against the engine. The whole-frame
 residual against the lab stays where §4 leaves it. Shadows (§5 step 5) and the menu (§2.10)
 are where they were; the 3.2-core context is unchanged (`glGenerateMipmap` is 3.0).

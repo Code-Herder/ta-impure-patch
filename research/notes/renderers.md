@@ -707,11 +707,22 @@ says, and the log says which), and its two mip levels are regenerated with `glGe
 atlas compares the job's painted count on the next frame's gather), once when the twin is made
 (so it is never sampled incomplete — an incomplete texture reads opaque black, which the alpha
 test would take for a restored texel) and after a recycle (the restorer clears only level 0).
-The cell's slack past the border, where the alignment rounds up, is never written and never
-sampled: no sample inside a frame's own UV range reaches it on levels 0–2. Classic's R8 atlas
+The cell's slack past the border, where the alignment rounds up (0–3 texels on the right and
+bottom), is filled with the replicated edge as well — in the R8 by the upload, in the twin by
+the OUT pass (`padR`/`padB` on the restorer's frame): the review showed that at level 2 the
+far-edge sample of a frame whose width or height is 3 mod 4 takes a quarter of its weight from
+the level-2 texel that covers the slack, which unwritten would darken that column by a
+sixteenth (no stock unit texture seen so far has such a size — 104 entries across the fixture's
+and `200v200`'s atlases, all multiples of 4 — and the lab's pack leaves its slack at zero, so
+the lab has the flaw where the game no longer does). Classic's R8 atlas
 gets the same cell layout and the same 4-texel border, sampled `NEAREST` on the frame's own
 texels as before, so its pixels do not move — `tascene ab` measured it. The unit FS samples the
-twin trilinear, takes `t.rgb` where `t.a > 0.5`, the palette's colour for a flat face, a
+twin **before the colour-key discard** (a mipmapped sample's implicit derivatives are only
+defined while every fragment of the quad is still running; the R8's NEAREST sample never
+cared), takes `t.rgb / t.a` where `t.a > 0.5` — the twin is `(0,0,0,0)` at a keyed texel, so a
+bilinear sample beside one is premultiplied by its coverage, and the lab's `LAB_UNIT_FS`, which
+takes `t.rgb` as is, draws a one-texel dark ring there that the game does not (unexercised on
+the fixture: its unit textures have no keyed texel) — the palette's colour for a flat face, a
 nanoframe band or a texel not yet restored, then the lambert (§2.11) and the grey rule (§2.6);
 the colour-key hole stays the index compare, which is what keeps a keyed texel out of the depth
 buffer. **The unit atlas's compressed frames** (`comp != 0`, none seen) still draw flat, as they
