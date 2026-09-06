@@ -92,8 +92,11 @@ floor come from `tagpu_classicpp.c`, which now owns the switch (`tagpu_classicpp
 out of the restorer) and its knobs: `tagpu_classicpp.cfg`, `key=value` tokens, re-read on
 mtime change on the same twice-a-second poll — `sun=AZ,EL` or `sun=off`, `unitsun=AZ,EL`,
 `amb=A`, defaults the lab's (`324.5,53.1`, `215.5,53.1`, `0.35`). `sun=off` is amb 1: the
-rule is exactly 1.0 with no branch, so it reproduces G14e's Classic++ pixels byte for byte
-outside the units, which it draws unshaded, as the lab does.
+rule is exactly 1.0 with no branch, so with the restore settled and no grey fog band in view
+it reproduces G14e's Classic++ pixels byte for byte outside the units, which it draws
+unshaded, as the lab does. (A texel not yet restored inside the explored-but-unseen band is
+the one place they differ: G14e remapped its *index* through the fog LUT there, the
+Classic++ branch now applies §2.6's RGB mean to it — the rule, not a slip.)
 
 **Terrain.** `tagpu_terr.c` builds one R8 texture per map from the height byte of every cell
 when it builds the atlas (unit 5; it joins the reset protocol), and the fragment shader takes
@@ -130,7 +133,7 @@ from the lab by more than one level, none by more than three
 untouched**: `tascene ab` with the switch off 7,602 of 630,784 (the fading chat, the units,
 the cursor — the terrain and features bit-exact; 7,298 on G14e's run, the chat at another
 age); G14e's own Classic++ frame is byte-identical to the new DLL's at `sun=off` outside the
-chat and the commander. **Frame rates during the restore**: parity 59.7, `feat-forest` 54.3,
+chat and the commander (restore settled, LOS permanent — see the qualifier above). **Frame rates during the restore**: parity 59.7, `feat-forest` 54.3,
 `fx-mix` 54.0, `200v200` 54.0 (179 units on screen) — G14e's figures; `200v200` a minute in
 (255 units, 50 wrecks, the vertex cap hit) logs 6 sixty-frame lines in 30 s on every
 combination of the two DLLs and the switch, so that is the scenario. **By eye**: `feat-forest`
@@ -141,6 +144,18 @@ not judged** — the lit seabed shows as dark patches under open water
 ([coast-to-coast](assets/shots/classicpp-light-coast-to-coast.png)), §2.3's decision made
 visible on a map with a sloped seabed. The restorer's "1 GL error(s) were pending before
 slice 2 (not ours)" line is in G14e's log too: pre-existing, not isolated.
+
+**Acted on from the review** (Opus, medium, 4 findings, 4 real): the height texture was
+built inside the atlas's identity-gated path, so a failed build was never retried and a
+later map's failure left the previous map's texture live with a zero `uHDim` (an undefined
+`clamp`) — it is now keyed on its own inputs, retried every 60 frames, and the lambert is
+gated on a valid size while the restored colour and the grey rule stay; the feature VBO now
+orphans to the frame's size rather than its 7.9 MB staging arrays; the `sun=off` claim
+above carries its qualifier. Verified by running it: the fixed DLL's lit and `sun=off`
+frames are byte-identical to the measured ones outside the fading chat, and an in-process
+map change (Tab → `EXIT` → `MAINMENU` → `CHOICE1`, then Skirmish → Start) gave a new tile
+set and a new grid pointer, the height grid re-uploaded on the new identity, the restore
+done at 59.6 fps.
 
 **What it did not close.** The seabed question above; the whole-frame Classic++ residual
 against the lab with the suns off (130,997 pixels, one and two levels, attributed to the

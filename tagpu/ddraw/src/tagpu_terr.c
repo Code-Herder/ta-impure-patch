@@ -219,7 +219,10 @@ static int    s_rectTx0, s_rectTy0, s_rectCols, s_rectRows, s_rectValid;
    computes it per vertex on 16-px sub-quads -- 4x the terrain vertices,
    29 MB a frame at the zoom floor, for the same field. Unit 5. */
 static GLuint s_hTex;
-static int    s_hW, s_hH;
+static int    s_hW, s_hH;              /* 0 while there is no usable grid    */
+static const void* s_hGrid;            /* the inputs the texture was built  */
+static const void* s_hSet;             /* from, or last attempted from      */
+static unsigned s_hFrame;              /* the frame of that attempt          */
 static GLint  s_uHDim, s_uLit, s_uSun, s_uAmb, s_uNorm;
 
 static float s_verts[MAXCELL * 6 * TVST];
@@ -252,7 +255,7 @@ static const char* FS =
     "uniform int uRestored;\n"         /* 1 = a restore is running or done:
                                           sample it where its alpha says so */
     "uniform sampler2D uHeight;\n"     /* Classic++: R8 height per 16-px cell */
-    "uniform vec2 uHDim;\n"            /* its size: mapW16, mapH16          */
+    "uniform vec2 uHDim;\n"            /* its size: mapW16, mapH16; 0 = none */
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
@@ -299,7 +302,7 @@ static const char* FS =
     "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
     "    vec3 c = t.a > 0.5 ? t.rgb\n"
     "           : texelFetch(uPal, ivec2(int(texture(uAtlas, vUV).r * 255.0 + 0.5), 0), 0).rgb;\n"
-    "    c *= taLambert(taTerrN(vWorld));\n"
+    "    if (uHDim.x > 0.5) c *= taLambert(taTerrN(vWorld));\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
     "    frag = vec4(c, 1.0); return;\n"
     "  }\n"
@@ -416,7 +419,8 @@ void tagpu_terr_glreset(void)
     s_state = 0;
     s_atlasTex = 0;                     /* the id died with the context */
     s_rgbTex = 0;
-    s_hTex = 0;                         /* rebuilt with the atlas */
+    s_hTex = 0;                         /* the id died; ensure_height rebuilds */
+    s_hW = s_hH = 0; s_hGrid = NULL; s_hFrame = 0;
     s_rectValid = 0;
     /* The set identity (s_setPtr/s_setCount/s_setPix) is LEFT ALONE: zeroing
        s_atlasTex is what forces the atlas rebuild, and the identity's job is to
@@ -430,13 +434,18 @@ void tagpu_terr_glreset(void)
     s_rgbState = 0;
 }
 
-/* ---- the height grid, with the atlas: one R8 texel per 16-px cell ----
-   Keyed on the atlas rebuild rather than on the grid pointer: LoadMap could
-   hand a same-sized map the same allocation, and the tile set's identity is
-   what this module already trusts to say "new map". A grid that cannot be
-   read leaves s_hTex 0, and the render then draws Classic++ unlit rather than
-   sampling a dead texture. */
-static void build_height(const char* ta)
+/* ---- the height grid: one R8 texel per 16-px cell, once per map ----
+   Keyed on ITS OWN inputs -- the grid pointer, the dims, and the tile set the
+   atlas was built from (LoadMap could hand a same-sized map the same
+   allocation, and the set's identity is what this module already trusts to
+   say "new map") -- and re-checked every frame by ensure_height, because the
+   set can be ready a frame before the grid is. A build that fails leaves
+   s_hW 0, which is what the render gates the lambert on (never s_hTex: a
+   previous map's texture is still a live id), and is retried every 60 frames
+   until it succeeds or the inputs change. Without a grid Classic++ terrain
+   draws UNLIT -- the restored colour and the grey rule stay, only the
+   lambert is skipped (uHDim 0 in the shader). */
+static void build_height(const char* ta, unsigned frame)
 {
     const char* grid = *(const char* const*)(ta + OFF_FEATMAP);
     int w = *(const int*)(ta + OFF_MAPW16), h = *(const int*)(ta + OFF_MAPH16);
@@ -444,9 +453,13 @@ static void build_height(const char* ta)
     int r, c;
     char b[160];
     s_hW = s_hH = 0;
-    if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || w > s_maxTex || h > s_maxTex) return;
+    s_hGrid = grid; s_hSet = s_setPtr; s_hFrame = frame;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || w > s_maxTex || h > s_maxTex) {
+        flog("terr: height grid dims out of range -- Classic++ terrain draws unlit");
+        return;
+    }
     if (!ptr_ok(grid) || IsBadReadPtr(grid, (SIZE_T)w * (SIZE_T)h * FT_STRIDE)) {
-        flog("terr: height grid unreadable -- Classic++ terrain draws unlit");
+        flog("terr: height grid unreadable -- Classic++ terrain draws unlit (retried)");
         return;
     }
     buf = (unsigned char*)malloc((size_t)w * (size_t)h);
@@ -471,6 +484,18 @@ static void build_height(const char* ta)
     _snprintf(b, sizeof b, "terr: height grid %dx%d uploaded from %p (Classic++ lighting)",
               w, h, (const void*)grid);
     flog(b);
+}
+
+/* once per frame after the atlas is known: (re)build when the inputs moved,
+   or when the last attempt failed and 60 frames have passed */
+static void ensure_height(const char* ta, unsigned frame)
+{
+    const char* grid = *(const char* const*)(ta + OFF_FEATMAP);
+    int w = *(const int*)(ta + OFF_MAPW16), h = *(const int*)(ta + OFF_MAPH16);
+    int same = s_hGrid == (const void*)grid && s_hSet == s_setPtr;
+    if (s_hW > 0 && same && s_hW == w && s_hH == h) return;
+    if (s_hW == 0 && same && s_hFrame != 0 && frame - s_hFrame < 60) return;
+    build_height(ta, frame);
 }
 
 /* ---- the atlas: built once per map, never per frame ---- */
@@ -549,7 +574,6 @@ static int ensure_atlas(const char* ta)
     _snprintf(b, sizeof b, "terr: atlas built %dx%d for %d tiles (set=%p pix=%p, %d KB)",
               ATLAS_W, h, count, (void*)set, (void*)pix, (count * TILE_BYTES) >> 10);
     flog(b);
-    build_height(ta);
     return 1;
 }
 
@@ -754,6 +778,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     if (s_state == 0) init_gl();
     if (s_state != 1) return terr_bail();
     if (!ensure_atlas(ta)) return terr_bail();
+    ensure_height(ta, v->frame_counter);
     restore_step(ta);
 
     s_nv = 0;
@@ -895,15 +920,15 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
        reveals each cell as its out pass lands (and stays indexed elsewhere);
        a failed or absent job never samples the texture */
     glUniform1i(s_uRestored, ((s_rgbState == 1 || s_rgbState == 2) && tagpu_classicpp_on()) ? 1 : 0);
-    /* the lighting: the terrain's sun, and only with a height grid to light
-       from -- without one the Classic++ branch would sample texture 0 */
+    /* the lighting: the terrain's sun. uLit is the switch alone (the Classic++
+       colour path); uHDim is 0 while there is no usable grid, and the shader
+       then skips the lambert rather than sample a dead or stale texture */
     {
         const TAGPU_LIGHT* L = tagpu_classicpp_light();
-        int lit = tagpu_classicpp_on() && s_hTex;
-        glUniform1i(s_uLit, lit ? 1 : 0);
+        glUniform1i(s_uLit, tagpu_classicpp_on() ? 1 : 0);
         x_glUniform3f(s_uSun, L->sun[0], L->sun[1], L->sun[2]);
-        x_glUniform1f(s_uAmb, lit ? L->amb : 1.0f);
-        x_glUniform1f(s_uNorm, lit ? 1.0f / L->level : 1.0f);
+        x_glUniform1f(s_uAmb, L->amb);
+        x_glUniform1f(s_uNorm, 1.0f / L->level);
         x_glUniform2f(s_uHDim, (float)s_hW, (float)s_hH);
     }
     glBindVertexArray(s_vao);

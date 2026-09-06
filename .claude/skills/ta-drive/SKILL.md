@@ -593,7 +593,8 @@ value), `tacli arm <i> classicpp.cfg=off` removes it (= the lab's defaults `324.
 unitsun=… amb=… level=…/… (tagpu_classicpp.cfg)` — or `(no cfg: defaults)` — so
 `tacli log <i> -g 'classicpp: light' | tail -1` says what the frame is lit by; allow ~1.5 s
 after arming before a shot. `terr: height grid WxH uploaded …` is the terrain's height
-texture, once per map; without it (an unreadable grid, logged) Classic++ terrain draws unlit.
+texture, once per map; without it (an unreadable grid, logged and retried every 60 frames)
+Classic++ terrain draws unlit — still restored, still the RGB grey rule, no lambert.
 **The level-ground test** is a sun on/off pair of `glshot`s with `feat.on=passive` (so the
 engine draws the sprites, identical in both): every pixel whose 16-px cell has zero gradient
 at all four corners must be byte-identical — 0 of 162,828 on the parity fixture — while the

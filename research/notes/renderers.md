@@ -843,7 +843,11 @@ the graph itself is that stable.
    1.0** — 0 of 162,828 flat terrain pixels moved between sun on and off, terrain alone, on
    the parity fixture; and the feature sprites take the ground's lambert at their anchor.
    The knobs are §2.10's `tagpu_classicpp.cfg` (`sun`, `unitsun`, `amb`; `sun=off` puts
-   every sun out and reproduces G14e's Classic++ pixels byte for byte outside the units).
+   every sun out and, with the restore settled and no grey fog band in view, reproduces
+   G14e's Classic++ pixels byte for byte outside the units — an unrestored texel in the grey
+   band takes §2.6's RGB mean where G14e remapped its index). A map whose height grid cannot
+   be read draws Classic++ *unlit*: the restored colour and the grey rule stay, the lambert
+   is skipped, and the build is retried every 60 frames.
 5. **Shadows**: the map-anchored grid, the depth pass over units and the heightfield mesh,
    the read-back in terrain and unit shaders, the two Classic shadow sub-passes off.
 6. **Fog** rule of §2.6 — in the terrain, feature and unit passes since G14f (the RGB mean

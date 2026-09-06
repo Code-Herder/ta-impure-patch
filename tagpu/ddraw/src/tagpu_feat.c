@@ -791,8 +791,9 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     glUniform1i(s_uLit, s_lit ? 1 : 0);    /* the lambert the gather baked in */
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof s_vShadow + (GLsizeiptr)sizeof s_vBody,
-                 NULL, GL_STREAM_DRAW);
+    /* orphan and size to what this frame USES (shadow then body, contiguous),
+       not the two staging arrays' 7.9 MB -- as tagpu_terr.c does */
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)total * FVST * 4, NULL, GL_STREAM_DRAW);
     if (s_nv[B_SHADOW])
         glBufferSubData(GL_ARRAY_BUFFER, 0,
                         (GLsizeiptr)s_nv[B_SHADOW] * FVST * 4, s_vShadow);
