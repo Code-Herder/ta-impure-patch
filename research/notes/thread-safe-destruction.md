@@ -51,7 +51,8 @@ That single rule tells you, per object type, whether it needs the pattern.
 | Object | Class | Destroyer | Status |
 |---|---|---|---|
 | **Model object (`Object3do`) — units + wrecks + features** | A | `FreeObjectState 0x45AAA0` (callers `0x486D9E` unit, `0x42474F` wreck, `0x4221C4` bulk) | the confirmed crash — fix first |
-| Its posed vertex buffers and composite frames | A | freed *inside* `FreeObjectState` | covered for free by deferring `FreeObjectState` |
+| Its posed vertex buffers | A | freed *inside* `FreeObjectState` (per-prim loop at `0x45AAB2`) | covered for free by deferring `FreeObjectState` |
+| Its composite frame (`obj+0x10`, read at `tagpu_native.c:1786`) | **unclassified** | **not** freed by `FreeObjectState` — `0x437C90` only zeroes a registry entry and makes no call; the frame's owner is the composite draw context at `*(TA+0x1437B)` <span class="pill pill-warn">INFERRED</span> | separate lifetime — classify Mode A/B before landing (§10) |
 | **Particle sub-vector** (smoke/fire/nano per-object point list) | A | each particle destructor `MEM_Free`s `obj+0x10` (nano `0x471560`, fire `0x4716A0`, smoke2 `0x474D10`, smoke1 `0x475110`, flare `0x471430`, wake `0x4717E0`) | latent UAF — same mechanism, fold in next |
 | **Particle layer pointer-array** (during growth) | A | `std::vector` grow `0x4732E0` frees the old array | latent UAF, only while a layer grows |
 | **Screen fog grid** | A | reallocated mid-frame; the indexed read has no `IsBadReadPtr` | second, independent hazard — wants a per-frame snapshot, not this detour |
@@ -69,9 +70,12 @@ feature teardown all call `FreeObjectState 0x45AAA0`. It is `__stdcall`, one arg
 (`ret 4`), and its first five bytes `53 8B 5C 24 08` are a clean steal ending on an instruction
 boundary (resume at `0x45AAA5`); nothing branches into that range and the body never re-enters
 itself. A single detour at its entry catches every caller, and a trampoline over the stolen bytes is
-how the drain calls the real free without re-entering the detour. It frees the whole subtree — each
-prim's posed vertex buffer, the composite frames at `obj+0x10`/`obj+0x14`, then the block — so
-deferring the one function keeps everything the emit reads alive together.
+how the drain calls the real free without re-entering the detour. It frees each prim's posed vertex
+buffer (the loop at `0x45AAB2`) and then the block itself, so deferring the one function keeps the
+object and its posed geometry alive together. It does **not** free the composite frames: the two
+calls to `0x437C90` on `obj+0x10`/`obj+0x14` walk a `{ptr,size}` registry at `*(TA+0x1437B)` and
+zero the matching entry — the routine contains no call at all. The frame memory has a separate owner
+(the composite draw context), so its lifetime is a distinct question (§10).
 
 **The flow.**
 
@@ -93,7 +97,9 @@ could still hold it — an observation of the reader's own progress, never a wal
 assumption. Concretely, the reader publishes two monotone counters, **pass-started** and
 **pass-completed**; between them it may hold pointers it gathered this pass, outside them it holds
 none. The drain runs on the game thread, so it executes *after* the null; it snapshots pass-started,
-and frees the object only once pass-completed has moved past that snapshot. A pass that starts after
+and frees the object only once pass-completed has **reached** that snapshot (`completed ≥ snapshot`,
+not `>`: an idle reader has `completed == started`, so it satisfies the test at once — with a strict
+`>` every death would leak while the game sits idle or minimised). A pass that starts after
 the snapshot began gathering after the null and cannot have the object; every earlier pass is
 finished once completion passes the snapshot. So no reader can hold a pointer the drain frees —
 regardless of how late either thread runs.
@@ -197,7 +203,36 @@ silent, so it must clear these gates before landing:
   versus unarmed over a full fight and an AI skirmish, and the G9 replay byte-diff when an
   interactive session is available. Both must be identical.
 
-## 9. Open items to settle during the landing
+## 9. Invariants the implementation must hold
+
+These are the correctness and liveness conditions the mechanism rests on. Each is cheap to keep
+and silent to break, so the landing must check every one.
+
+- **The bracket closes on every exit path.** Every path that publishes pass-started must publish
+  pass-completed, including the six early `return`s in `tagpu_native_frame` and the
+  `tagpu_overlay.off` path. A pass that starts and never completes leaves the reader permanently
+  "busy": the drain's `completed ≥ snapshot` test never passes and **all reclamation halts** for the
+  rest of the session — a leak of every death, not a crash. Put pass-completed in the *caller*
+  (the overlay driver, after the pass returns) so one unconditional statement covers all exits.
+- **Every read of a registered class sits inside the bracket.** The proof covers only reads between
+  pass-started and pass-completed. Today the debug probes read the model object *outside* it:
+  `probe_unit_model` (`tagpu_overlay.c:231`, runs before the native pass) and `pose_dump`. Move
+  them inside the bracket or leave them disabled; do not add new out-of-bracket reads.
+- **Single reader.** The two counters assume one reader thread. If a second reader ever
+  dereferences a registered class (a worker thread, a second render pass on another thread), each
+  reader needs its own pair and the drain must wait on all of them.
+- **Wrap-safe comparisons.** The counters are 32-bit and monotone; compare with
+  `(int)(completed − snapshot) >= 0`, never with `<`/`>=` on the raw values, or the first wrap
+  frees everything early.
+- **Snapshot after unreachability.** The snapshot of pass-started must be taken after the object is
+  unreachable to new gathers (after the engine's null). The game-thread drain gives this for free by
+  program order; a render-thread drain does not.
+- **No address reuse while held.** Because the block is not returned to the heap until quiescence,
+  the allocator cannot hand its address to a new object while a reader may still hold it, so the
+  ABA hazard is closed by construction — provided *every* free of the class goes through the
+  detour (it does: the three callers all reach `0x45AAA0`).
+
+## 10. Open items to settle during the landing
 
 - Disassemble the composite-detach helper `0x437c90` to confirm it is what forces the game-thread
   drain, then adopt the game-thread drain so the point is moot.
@@ -211,8 +246,16 @@ silent, so it must clear these gates before landing:
   proven; handle the fog grid separately with a per-frame snapshot.
 - Store the wreck record in the gather record so the cheap pointer re-read (the belt-and-suspenders
   companion) works for wrecks as well as units.
+- **Classify the composite frame's lifetime.** The render thread reads `obj+0x10` and then the
+  frame header at `tagpu_native.c:1786`, but `FreeObjectState` only unregisters that slot; the frame
+  belongs to the composite draw context at `*(TA+0x1437B)`. Establish whether that owner frees or
+  recycles frames (Mode A needs its own client; Mode B needs nothing) — see **Composite buffer (G6)**
+  for the frame format and the owner's blit path.
+- Move `probe_unit_model` and `pose_dump` inside the bracket, or keep them disabled (§9).
+- Publish pass-completed from the overlay driver, not from inside the pass, so every early return
+  closes the bracket (§9).
 
-## 10. Bottom line
+## 11. Bottom line
 
 Classify each render-read object by how the engine reclaims it; for heap-freed objects, detour the
 destructor to defer the free behind a render-pass grace period and drain on the game thread; for
@@ -230,3 +273,10 @@ the simulation.
   only once the reader has published completion of the passes that could hold the object. The
   earlier "free N passes behind" wording was a probabilistic margin, not a proof — it assumed the
   engine's null landed within N−1 reader passes, which a preempted game thread can violate.
+- **2026-09-06** — audit for missing elements. Added §9 *Invariants* (bracket closes on every exit
+  or reclamation halts; every read inside the bracket, which the debug probes currently violate;
+  single reader; wrap-safe compares; snapshot after unreachability; ABA closed by construction).
+  Fixed the free test to `completed ≥ snapshot` (a strict `>` leaks every death while idle).
+  **Corrected a factual error:** `FreeObjectState` does not free the composite frames — `0x437C90`
+  zeroes a registry entry and makes no call — so the frame at `obj+0x10` has a separate owner and
+  its lifetime is now an open item, not "covered for free".
