@@ -665,10 +665,11 @@ effects 2 — re-picked at every batch boundary. Each `TAGPU_GAFATLAS` carries i
 job; `tagpu_gaf_atlas_get` queues every new entry (tileability decided at upload, while the
 pixels are still on the CPU), a recycle clears the twin and drops the queue, a context loss forgets
 everything, and arming the switch mid-play queues what the atlas already holds. Measured, Two
-Continents at map load with both queues live: the terrain's 5,062 tiles in **139 frames = 2.35 s
-at 59.1 fps** (the first feature batch was in flight when the terrain job began and landed in
-slice 11; 15 of the 139 frames were not the terrain's); the 24 feature frames in 5 batches and the
-10 effect frames in 1 drained **two slices after the terrain**. The effects twin has no reference
+Continents at map load with both queues live: the terrain's 5,062 tiles in **141 frames = 2.37 s
+at 59.4 fps, 1.56 s of GPU** (a first feature batch of a few frames on a 2×2 grid was in flight
+when the terrain job began; 13 of the 141 frames were not the terrain's); the 24 feature frames in
+5 batches and the 10 effect frames in 1 drained **two slices after the terrain**, 143 frames from
+the first queued. The effects twin has no reference
 in the pack (its frames are the units' build and weapon sprites) and is judged by eye only.
 By eye, `feat-forest` and `fx-mix` at zoom 1 and 0.25: trees, rocks, dead trees, fire, smoke and
 explosions restored, no hairlines at the sprite edges (the twin's border is the edge's copy, as the

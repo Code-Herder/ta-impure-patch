@@ -566,7 +566,7 @@ feature and effects atlases' queues — and needs nothing but the weight files
 finally `restoreglsl: terr: done: ... in S of F frames = W ms wall since begin (X fps while
 restoring); GPU G ms` — **that `fps` is the frame rate the game held during the restore**, every
 frame over wall time (S is the frames the terrain drew in; the rest went to a sprite batch or a
-query wait), and the one to quote. Two Continents: 2.35 s at 59.1 fps with the sprite queues
+query wait), and the one to quote. Two Continents: 2.37 s at 59.4 fps with the sprite queues
 live (2.1 s without); the biggest stock map (Lava & Two Hills, 11,561 tiles) 4.6 s, its viewport
 complete in 1.9 s. The sprites' lines are `restoreglsl: feat: lazy restore armed ...` /
 `restoreglsl: fx: ...` and a `queue drained: N frames in B batches this run, F frames from the

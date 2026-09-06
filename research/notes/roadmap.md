@@ -107,8 +107,8 @@ before). Keyed texels are inpainted by the FILL pass's nearest-ring mean within 
 batches, 20 ms of GPU — and diffs it in two bands: opaque texels beyond the model's depth of any
 key **exact (max 0)**; the near band mean 0.41 levels, 92 % within 1, judged by eye
 (`assets/shots/restore-features-nearband.png`). **In the game**: Two Continents at map load with
-both queues live, the terrain in **139 frames = 2.35 s at 59.1 fps**, the 24 feature and 10
-effect frames drained two slices after it; the feature twin dumped under `tagpu_restoredump.on`
+both queues live, the terrain in **141 frames = 2.37 s at 59.4 fps** (1.56 s of GPU), the 24
+feature and 10 effect frames drained two slices after it, 143 frames from the first queued; the feature twin dumped under `tagpu_restoredump.on`
 and matched to the pack by `tascene featdiff`: 24 of 24 found, far band exact, the near band the
 lab's profile. `feat-forest` and `fx-mix` by eye at zoom 1 and 0.25: fire, smoke, explosions,
 trees and wrecks restored, no hairlines; `fx-mix` grew the feature atlas to 1,298 entries as the
