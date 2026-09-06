@@ -169,9 +169,11 @@ cost time; each is a landmine for the next GL-hook we add.
   re-sets the viewport at the top of the next frame. The overlay just cleans up after itself
   (`glUseProgram(0)`, `glBindVertexArray(0)`, `glDisable(GL_BLEND)`). Trying to save state with
   `glGetIntegerv` was itself the crash (previous point).
-- **`renderer=openglcore` gives a guaranteed 3.2-core context** (verified: `GL_VERSION 3.2.0 core`
-  on the 4070). Use it so our modern-GL code never lands on a compatibility context where the
-  fork's legacy `glBegin` path would run instead.
+- **`renderer=openglcore` gives a guaranteed core context** — 3.2 until G14h, **3.3 since**
+  (`render_ogl.c`; verified 2026-09-06: `tagpu.log` `shadow: GL ready (GL_VERSION 3.3.0 NVIDIA
+  595.84 …)`, wine 9 on the 4070; the Classic++ shadow map's sampler objects need it). Use it
+  so our modern-GL code never lands on a compatibility context where the fork's legacy
+  `glBegin` path would run instead.
 - **Two capture paths, and they see different things.** cnc-ddraw's built-in screenshot reads the
   **8bpp DirectDraw surface** — it shows the game but NOT our GL overlay (the overlay is drawn after
   the surface upload). To review anything we draw in GL, capture the **composited GL framebuffer**

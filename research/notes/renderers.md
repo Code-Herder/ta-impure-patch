@@ -22,7 +22,7 @@ date; **[OPEN]** = not settled.
 | Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game: the terrain (G14c), the feature and effect sprites (G14e) and the unit textures (G14g, 2026-09-05) — the sprites and the units lazily on first draw; the unit atlas padded, aligned and mipped as this row says (§5 step 2).* |
 | Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit). *In the game since G14f (2026-09-05): the engine's height grid as an R8 texture per map, the lab's 16-px grid normals evaluated per fragment; feature sprites take the ground's lambert at their anchor as the lab's do* |
 | Units | per-face shade row from `SH_L` through the 32-row LUT | per-pixel lambert in map space from the posed face normal, same level normalisation. *In the game since G14f: the face normal rides the vertex stream and replaces the LUT row under the switch; pieces the engine draws unshaded stay at exactly 1.0 (the lab lights every face)* |
-| Shadows | the engine's rules. **In the game**: the 5-px silhouette drop for mobiles and the cached slant for structures, each blended once per silhouette pixel (G13n). **In the lab**: the silhouette only — a structure casts NOTHING there, because that lane does not draw the slant projection. This row claimed the lab had both until 2026-09-04; it did not have either, and now has one | a depth map along `shadowsun`, PCSS-lite (8-tap blocker search, 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive; an airborne caster follows `airshadow` (§2.2) |
+| Shadows | the engine's rules. **In the game**: the 5-px silhouette drop for mobiles and the cached slant for structures, each blended once per silhouette pixel (G13n). **In the lab**: the silhouette only — a structure casts NOTHING there, because that lane does not draw the slant projection. This row claimed the lab had both until 2026-09-04; it did not have either, and now has one | a depth map along `shadowsun`, PCSS-lite (the blocker search: the receiver's own texel and the 16 Poisson taps since G14h, 8 ring taps before; 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive; an airborne caster follows `airshadow` (§2.2). *In the game since G14h (2026-09-06): `tagpu_shadow.c`'s map-anchored depth map, the read-back in the terrain and unit shaders, the hills from a static mesh, the replacement meshes casting, the two Classic sub-passes off under the switch; measured against the lab in §5 step 5* |
 | Suns | one, `SH_L = (−0.35, 0.80, −0.49)` in model space | **three** knobs: `sun=324.5,53.1` (terrain), `unitsun=215.5,53.1` (= `SH_L` in map space), `shadowsun=225,40` |
 | Fog of war | the engine's per-index grey LUT | one RGB rule after lighting (§2.6) |
 | Supersampling | 2× box, `tagpu_ss.off` | the same |
@@ -380,6 +380,17 @@ The depth range is the map's full 0..255 plus a 256-unit caster allowance (an ai
 `physical` at CruiseAlt 200 still fits), constant per map; the window's depth *offset* moves
 with the window, which is a translation both sides of every compare share.
 
+**Measured (G14h, 1024×768, the 896×704 viewport)**: the base texel is **0.862 world units**
+(the light-space extent of the 1× window with the lab's margins is 1765 along `u`, and `u`
+is what the height range does not enter — so the lab's "about 0.7 world units per texel" was
+a guess and this is the number, the lab's too), `res` 2048 at zoom ≥ 1 and 4096 below it with
+the texel unchanged down to 0.42× (`k = 0` logged at 0.83, 0.72, 0.64), `k = 1` and a
+1.724-unit texel at the 0.25 floor with the map spanning 7060 units over a 3595×2838 window.
+**The anchoring holds**: twelve `tacli eye` steps of (3, 2) px with a `glshot` each, the
+shadow crop re-registered by the known scroll, differ by **0.00 levels on every consecutive
+pair** (the frames differ on 630,626 px before re-registration) — the shadow moves rigidly
+with the ground under it.
+
 ### 2.8 Hills cast: a static per-map heightfield mesh
 The terrain gather emits screen-space quads with no height **[SOURCE `tagpu_terr.c`]**, so
 the depth pass has nothing of the ground to draw. **Decided: one world-space VBO of the whole
@@ -489,6 +500,17 @@ Grilled with the owner before any code, one branch at a time; the ones above (§
   `discard`, and handed to `shadowAt` — G14g's mipped-sample lesson applied to `dFdx`. Since a
   face's normal is flat, `dFdx(p)` is exactly `½·M₃·dFdx(W)`, so the function's arithmetic is
   the lab's with the derivative supplied rather than taken.
+- **What building it changed in the lab's shader, in both copies (2026-09-06).** The blocker
+  search opened with eight ring taps 12–28 texels out and nothing nearer, so a caster the
+  size of the commander's head — 30 texels across at this density — could hold the
+  receiver's own texel and be missed by every tap: in the game the head's and gun's shadows
+  cast nothing on every frame (520 changed px against the lab's 773 on the parity fixture)
+  while the lab's view-anchored lattice happened to land a tap on the body. **The receiver's
+  own texel now opens the search** (741 / 896), and **all 16 Poisson taps follow** rather than
+  8, so the blocker-distance estimate — the penumbra's width — stops depending on which taps
+  the lattice happens to put on the caster (961 / 918). `tascene-view.html` `LAB_LIGHT` and
+  `tagpu_glsl.h` carry the same text; the Classic lane's md5s are untouched, `LAB_LIGHT` is
+  the exploration lane's alone. Eight raw fetches more per lit fragment.
 - **The bar for "verified by running it"**: G14f's within-a-level bar cannot hold on a
   map-anchored grid against a view-anchored one (the edges differ by up to a texel by
   construction), so: Classic `tascene ab` unchanged; Classic++'s shadow on-minus-off against the
@@ -518,10 +540,13 @@ Grilled with the owner before any code, one branch at a time; the ones above (§
   `main+0x1439B`, stride `0x249`; feature definitions: count `main+0x14253`, table
   `main+0x1426F`, stride `0x100` **[SOURCE `tagpu_cat.c`]**. The load-time atlas walk starts
   there; the path from a definition to its loaded model's faces is not yet written down (§4).
-- **The GL context is requested at 3.2 core** (`render_ogl.c` 189–192) and the field notes
+- ~~**The GL context is requested at 3.2 core** (`render_ogl.c` 189–192) and the field notes
   record `GL_VERSION 3.2.0 core` on the 4070. The native shaders are `#version 330 core` and
   compile, which is the NVIDIA driver being lenient, not a guarantee; sampler objects are a
-  3.3 feature. **Bump the request to 3.3** before relying on either **[SOURCE, field notes]**.
+  3.3 feature. **Bump the request to 3.3** before relying on either **[SOURCE, field notes]**.~~
+  **Done in G14h**: the request is 3.3 core, `tagpu.log` reads `shadow: GL ready (GL_VERSION
+  3.3.0 NVIDIA 595.84, max texture 32768)`, and the shadow map's two sampler objects run on it
+  **[MEASURED 2026-09-06]**.
 - **Fog cannot leak through shadows.** The unit gather drops units whose anchor tile is
   unexplored or unseen, and cloaked enemies, before anything is emitted; its rect has 256 px
   of slack on every side, more than the lab's 192-unit caster margin **[SOURCE
@@ -937,8 +962,25 @@ the graph itself is that stable.
   needed** — it is route 2a of §4b, and Options 1 and 4 there require no discovery at all. If it
   is ever established, it goes in [the engine map](exe-reverse-engineering.html).
 - **Aircraft and boats** — the viewer prototype of §2.2/§2.3 has not been built.
-- **Hires glb under Classic++** — lighting model, depth pass, shadow read-back, silhouette
-  shadow off; deferred by §2.4.
+- **Hires glb under Classic++** — ~~lighting model, depth pass, shadow read-back, silhouette
+  shadow off; deferred by §2.4~~ **the depth pass and the silhouette are done (G14h, §2.4)**;
+  the lighting model and the shadow read-back stay deferred — a replacement mesh casts and
+  does not receive.
+- **The soft edge and the ridge haze are lattice noise, on both sides** (G14h). The two
+  lattices — the lab's view-anchored, the game's map-anchored — put texel centres in
+  different places, so the PCF's bilinear compares round differently along every shadow edge
+  and on every near-grazing slope: on the parity fixture the hills stage has 156 game-only
+  pixels (11 of them darker than 5 %, 1 darker than 10 %) and 60 lab-only ones of the same
+  kind at 0.988. Invisible, counted, not closed; a larger constant bias would trade it for
+  peter-panning at the shadow's root.
+- **A ground unit's caster sits on the height byte, not on the engine's own y** (G14h,
+  `tagpu_native.c`): the engine interpolates the ground under a unit, the receiver is drawn
+  from the byte, and a caster floating the difference above its receiver throws a shadow
+  detached by that times cot el. Only an airborne unit has an altitude in the map. The body
+  is still drawn at the engine's y.
+- **A wreck's model height for the length rule is its posed top** (there is no unit record to
+  reach the rest AABB through); a unit's is the whole-tree AABB at rest, cached per model
+  (256 models, then the posed top).
 - ~~**The lab's Classic++ lane is zoom 1 only**~~ — **stale, it zooms** since `7b45ee1`: all
   three lab shaders take `uZoom`/`uZoomC` (`tascene-view.html` 467, 598, 647) and the lab draws
   set them, and `shadowFrame` derives its bounds from the zoomed viewport extent, so the
@@ -984,9 +1026,28 @@ the graph itself is that stable.
    band takes §2.6's RGB mean where G14e remapped its index). A map whose height grid cannot
    be read draws Classic++ *unlit*: the restored colour and the grey rule stay, the lambert
    is skipped, and the build is retried every 60 frames.
-5. **Shadows**: the map-anchored grid, the depth pass over units and the heightfield mesh,
-   the read-back in terrain and unit shaders, the two Classic shadow sub-passes off. **Decided
-   in full 2026-09-06 (§2.12), being built on `worktree-soft_shadows` as G14h.**
+5. ~~**Shadows**: the map-anchored grid, the depth pass over units and the heightfield mesh,
+   the read-back in terrain and unit shaders, the two Classic shadow sub-passes off.~~ **Done
+   2026-09-06 (G14h)**, decided in full first (§2.12): `tagpu_shadow.c` (the map, the
+   samplers on units 12/13, the frame and its octave rule, the depth program for the 3DO
+   stream, the read-back uniforms), the hill mesh in `tagpu_terr.c`, the eight cfg keys in
+   `tagpu_classicpp.c`, `taShadowAt` as the second half of `taLambert` in `tagpu_glsl.h`, the
+   replacement meshes' depth entry in `tagpu_hires_draw.c`, the context at 3.3 core.
+   **Measured** (parity fixture, eye 2320,720, the pack built `--undither`, the pointer parked
+   off the commander — the scenario's `center_on` leaves it ON the anchor, and its crosshair
+   covered the shadow's root in the first captures; the engine's health bar masked on both
+   sides, 139 px): shadowed-pixel counts, game against the lab, **units only** (`terrainshadow
+   0`) 961 / 918 changed (**1.047**), 628 / 615 darker than 0.7× (**1.021**); **hard**
+   (`penumbra 0`) 796 / 773 (**1.030**), 629 / 623 (**1.010**); **with the hills** 1442 / 1346
+   (**1.071**, the 156 haze px of §4), 632 / 619 (**1.021**). The caster's numbers are the
+   lab's to the digit (`shadow: caster model=34 top=40.0 … gnd=96.0 sv=0.503`, the pack's
+   mesh 40.0). The dumped map (`tagpu_shadowdump.on`) holds the commander in 496 texels
+   against the lab's ~490 in its `debug=shadow` view, and the frame's matrix rows are the
+   lab's basis to five digits. **Classic**: `tascene ab` 747 of 630,784 (the commander's box,
+   the parked pointer's arrow, and 417 px within 2 levels along sprite edges — the chat lines
+   had faded; and **against the G14g DLL's own Classic frame** — a second instance launched from the main checkout on the same fixture, eye and pointer — **0 of 630,784 pixels differ**, the whole frame, commander and all). **Frame rates** during the restore: parity 59.4 fps (G14g 59.6),
+   feat-forest 53.3 (54.2), fx-mix 53.7 (54.0), 200v200 54.1 (53.9).
+   **Hires**: on `hires-one` the replacement Peewee casts — a core at 0.64 of lit to its right with the map on, gone with it off — beside the 3DO AK's shadow. The zoom-floor look is the owner's, in play.
 6. **Fog** rule of §2.6 — in the terrain, feature and unit passes since G14f (the RGB mean
    after the lambert, under the switch); the effects pass hides in grey and needs none.
 7. **Switch and cfg**, then the **menu** of §2.10.

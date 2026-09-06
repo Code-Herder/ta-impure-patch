@@ -598,7 +598,18 @@ value), `tacli arm <i> classicpp.cfg=off` removes it (= the lab's defaults `324.
 `215.5,53.1` / `0.35`). The DLL answers every read with one line, `classicpp: light sun=…
 unitsun=… amb=… level=…/… (tagpu_classicpp.cfg)` — or `(no cfg: defaults)` — so
 `tacli log <i> -g 'classicpp: light' | tail -1` says what the frame is lit by; allow ~1.5 s
-after arming before a shot. `terr: height grid WxH uploaded …` is the terrain's height
+after arming before a shot. **The shadow keys** (G14h) ride the same file — `shadows=0|1`,
+`shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B|off`, `shade=S`, `terrainshadow=0|1`,
+`shadowres=N`, `airshadow=len|physical|drop`, the lab's defaults — and answer on a second
+line, `classicpp: shadows=1 shadowsun=225.0,40.0 …`; the map also needs the engine's own
+Shadows option on. `tagpu.log` says `shadow: GL ready (GL_VERSION 3.3.0 …)` once per context,
+`shadow: frame zoom=… res=… k=… texel=…` whenever the lattice changes (zoom), and one
+`shadow: caster model=… top=… gnd=… sv=…` line per caster position seen (16 at most) — the
+numbers the length rule used. **`tacli arm <i> shadowdump.on`** writes the map once as
+`tagpu_shadow.pgm` and removes itself (`shadow: dumped …` carries the matrix). **A shadow A/B
+against the lab needs the pointer parked off the units**: `scenario load`'s `center_on` leaves
+it ON the anchor, the engine draws its crosshair there, and those pixels are identical in an
+on/off pair, so `tacli keys <i> mouse:200,700` first. `terr: height grid WxH uploaded …` is the terrain's height
 texture, once per map; without it (an unreadable grid, logged and retried every 60 frames)
 Classic++ terrain draws unlit — still restored, still the RGB grey rule, no lambert.
 **The level-ground test** is a sun on/off pair of `glshot`s with `feat.on=passive` (so the
