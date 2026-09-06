@@ -56,7 +56,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Terrain tiles | ● native (G13b) | `terrown`: one detour on `0x483FA0`, whose skip path key-fills the viewport | 0-px parity vs the engine's own blit, engine surface 99.9 % key, in-process map change |
 | Fog overlay | ● native (G13b) | `terrown` detours `0x4848E0` too, replicating only its lazy grid rebuild | 99.06–99.39 % lit-vs-grey agreement with the engine's own overlay |
 | Health bars, order markers, group digits, ShowRanges labels, build cursor, band box | ● native and **nothing captured** (G13d, corrected G13h, cursor re-drawn G13n, order block ported G13o, **text ported G13p**) | `markown`: 14 call-site redirects + one detour on `0x46A430`. Health bars, the build cursor and the drag band box are re-drawn from engine state; the order-marker block is a game-thread snapshot drawn as geometry (`tagpu_order.c`); the group digit and the `ShowRanges` labels are TA's own glyphs rasterised into an atlas of ours through `0x4CCF60` (`tagpu_text.c`). Window A and the identity blend LUT are gone | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x); the build cursor **0-px against the captured path** at 1× and 2.144×, and present in the ring at 0.467× where the capture drew nothing; the order block's node-list diff against the engine clean over **16 650 records / 1 665 blocks**, and at 0.25× four build sites queued in the ring draw where the engine draws none. G13p: the group digit **PIXEL-IDENTICAL to the engine's at 1×** (0 differing pixels, 19 bright each way) and drawn out in the ring at 0.25× where the engine draws nothing at all; the eight `ShowRanges` labels on the engine's own pixels ("weapon1 range" 209 bright against 205) |
-| Chat, dialogs, side panel, minimap, top bar | ○ engine 8bpp, through the composite key | — | stays engine-side: screen-space, correct at 1:1 at any zoom |
+| Chat, dialogs, side panel, minimap, top bar — and the whole shell | ○ engine 8bpp, through the composite key; **planned: Phase E** ([GL UI renderer](gui-renderer.html), decided 2026-09-06) | — | engine-side today: screen-space, correct at 1:1 at any zoom. Phase E mirrors the engine's own UI draws into GL twins of its surfaces, the engine's surface staying the oracle and the fallback |
 | Mouse cursor | ● the engine's own, under the pointer (G13e, cured G13m) | `fake_GetCursorPos` answers the TRUE pointer, so the engine blits its sprite where the player is looking; the unzoomed `u` reaches it only through a button message and through the `0x498DA0` mouse→world repair. The composite no longer touches the cursor | 0 % of motion frames left behind at `u` across three runs at 1920×1080 / 0.25× with a real pointer (was 10–11 %); exact at four static positions; box- and click-select in the band, in the ring and at 2× |
 | Contextual order cursors | ● restored by patch (G13j) | `tagpu_patches.c`: six NOPs over the `je` at `0x43E50C`, the `Interface Type == 1` branch inside `0x43E490` — whose only caller is `CorretCursor_InGame 0x48D220`, so it is the sprite and nothing else | at Interface Type 1, commander selected: ground 14 `cursormove`, wreck 11 `cursorreclamate`, own unit 15 `cursorselect`, nothing selected 19 `cursornormal`; right-click still orders; sprites read out of the GL framebuffer; unchanged at zoom 1/2/0.5 |
 | Click → world point | ● transformed (G13e) | `tagpu_zoom.c`: one rewrite at the three doors into the engine's own wndproc, plus `fake_GetCursorPos` | at 0.5× the commander selects at its DRAWN position (394,427) and no longer at its 1× one (212,470); the side panel still clicks 1:1 |
@@ -1558,12 +1558,37 @@ what remains, cheapest-win-first; each row is a discussable unit of work:
 | 3 | **Resolution live test** (the constraint's payoff): registry `DisplaymodeWidth/Height` → e.g. 1024×768 from our fork's mode list → verify viewport rect/native pass/scaffold at the new mode; recalibrate session tooling; empirically check the flagged HUD-art risks | the same skirmish, playable at a higher requested resolution, all passes correct |
 | 4 | **G12d freedoms**: sub-pixel motion (render-side interpolation of integer engine positions), true-alpha cloak polish, first **hi-res model experiment** (feeds G11's glTF pipeline), smooth-zoom prototype on the ortho transform | one visibly-better-than-1997 clip per freedom |
 | 5 | **G11 — replacement pipeline**: glTF convention + loader + ONE exemplar unit driven by live COB state | the exemplar in-game |
-| 6 | **G13 — full scene takeover**: ~~features → GL sprites~~ (done, G13a — and they write the depth the scaffold used to fake), ~~terrain tiles → GL~~ (done, G13b — TNT tile atlas, and the composite inverted with it), ~~projectiles/explosions native~~ (done, G12e), ~~particle sfx native~~ (done, G12f), ~~fog native~~ (done, G13b — the overlay is suppressed and ours replaces it), ~~health bars / order markers / build cursor~~ (done, G13d — re-drawn and captured-and-replayed), ~~free zoom~~ (done, G13e — the world, the click, the cursor, the minimap box and the scroll rate all scale together); UI/minimap stay engine-side by design | ✅ engine software frame = UI only, and the zoom it was the entry condition for is finished |
+| 6 | **G13 — full scene takeover**: ~~features → GL sprites~~ (done, G13a — and they write the depth the scaffold used to fake), ~~terrain tiles → GL~~ (done, G13b — TNT tile atlas, and the composite inverted with it), ~~projectiles/explosions native~~ (done, G12e), ~~particle sfx native~~ (done, G12f), ~~fog native~~ (done, G13b — the overlay is suppressed and ours replaces it), ~~health bars / order markers / build cursor~~ (done, G13d — re-drawn and captured-and-replayed), ~~free zoom~~ (done, G13e — the world, the click, the cursor, the minimap box and the scroll rate all scale together); UI/minimap stayed engine-side by design until 2026-09-06 — now [Phase E](gui-renderer.html) | ✅ engine software frame = UI only, and the zoom it was the entry condition for is finished |
 | 7 | **Cross-cutting, ongoing**: MP-safety formal replay byte-diff (unlocked session), packaging/distribution story (drop-in ddraw.dll + config), TADR-chain coexistence check | — |
 
 **G13 — Full-frame ownership.** The engine's software frame becomes data only (GUI/minimap still
 sampled from it); we draw terrain, features, units and effects; ortho + free zoom; assess
-coexistence with the TADR chain for a distributable build.
+coexistence with the TADR chain for a distributable build. *"GUI/minimap still sampled from it"
+was the design until 2026-09-06; Phase E below and [GL UI renderer](gui-renderer.html) take
+the UI too.*
+
+## Phase E — the UI, ours (planned 2026-09-06)
+
+Design: [GL UI renderer](gui-renderer.html) — decided in one interview on 2026-09-06, nothing
+built as of that date. The engine's own UI draws are **mirrored** into GL twins of its surfaces
+(the main offscreen, each `.GUI` screen's cached surface at `panel+0xBC`, the minimap picture)
+by observer detours on the pixel-writing leaves; the engine keeps drawing its own surface, which
+stays the **oracle** every gate diffs against and the **fallback** for anything unmirrored. Only
+GAF blits are recorded by identity; text, lines and every gadget handler's output are captured
+as the residual pixels of a bracket, so no font or Bresenham is ported. An index twin resolves
+through the live palette (Classic, fades correct by construction); a colour twin from the
+restored UI atlas rides beside it under Classic++. One module, `tagpu_gui_*`, one trigger,
+`tagpu_gui.on`, one seam into the composite. **Phase 1 is parity at 1:1; phase 2 (scale, the
+cursor, the shell scaled to the window) gets its own interview.**
+
+| Gate | Status | Exit |
+|---|---|---|
+| G15-0 — offline art spike: the restorer on shell backgrounds, HUD art, buttons, `unitpics`, cursors; contact sheets + dither-consistency | ○ planned | the owner's per-class verdict; the default `uirestore` exclude list |
+| G15a — the census: observer detours on every pixel-writing leaf and the gadget dispatcher, the flip marker, the whole-surface diff; no drawing | ○ planned | writer table in the engine map; unexplained pixels < 1 % on every inventory screen or every writer named; the minimap's draw path located |
+| G15b — the twins, in game, Classic: the module, the ring, seed, the three op kinds, the composite seam, `strict`, tacli | ○ planned | side panel, build pages, top and bottom bars at 1024×768 under `strict`: 0 differing px outside the cursor, 0 holes; fps fixtures within half a frame; parity md5 unchanged with the trigger absent |
+| G15c — the rest of the in-game frame: chat, dialogs, `ARMOPT` over the viewport, HUD text, minimap, `LIGHTBAR`, the panel painter | ○ planned | the whole in-game inventory clean under `strict`, ARM and CORE; dialogs over the viewport verified at 0.5× and 2× |
+| G15d — the shell across the 640×480 context switch, the loading screen, the palette measured | ○ planned | shell inventory clean under `strict` at 640×480; three entry/exit cycles with twin and atlas counts flat |
+| G15e — Classic++ UI: the UI atlas's restored twin, the palette-validity rule, `uirestore` | ○ planned | Q2 bar against G15-0's offline output; sheets judged by the owner; fps unchanged |
 
 ## Standing rules
 
