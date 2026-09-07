@@ -77,6 +77,7 @@ PAGES = [
     ("gui-gadgets",                "GUI gadgets",                 "Tooling"),
     ("scenario-format",            "JSON scenarios",              "Tooling"),
     ("tascene-design",             "tascene — browser render lab", "Tooling"),
+    ("tacob-design",               "tacob — BOS/COB editor",      "Tooling"),
     ("windowed-mode",              "Windowed mode",               "Tooling"),
 
     ("binary-patches",            "The core mechanism",        "Mechanism"),
