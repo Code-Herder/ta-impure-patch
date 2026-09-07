@@ -581,14 +581,15 @@ that matters — and `launch` auto-arms each pass's `*own.on` patch half for you
 
 ```bash
 tools/tacli arm <i> 'native.on=all wrecks' terr.on feat.on fx.on sfx.on \
-                    mark.on order.on zoom.on vpwide.on
+                    mark.on order.on zoom.on vpwide.on gui.on
 tools/tacli launch <i> --no-shield --res 1920x1080
 ```
 
 Units and wrecks, terrain, features, weapon effects, particles, world-space markers and
 the shift-held order overlay,
-zoom (wheel live, camera range widened) and the wide viewport that makes zoomed-out
-clicks land. `launch` then prints `auto-armed owndraw.on=all / fxown.on / featown.on /
+zoom (wheel live, camera range widened), the wide viewport that makes zoomed-out
+clicks land, and **the GL UI layer** (`gui.on`, since G15b — the panel, bars, dialogs and the
+shell drawn by us at 1:1, the engine's surface the fallback; *The GL UI layer* below). `launch` then prints `auto-armed owndraw.on=all / fxown.on / featown.on /
 terrown.on / markown.on`, and `tagpu.log` carries one `ARMED` line per pass — read them,
 because a missing one is the whole pass silently absent.
 
@@ -1067,3 +1068,60 @@ Three lobby facts that are not guessable, all encoded in `mp_lobby.sh`:
   one peer only; both peers then see the units.
 
 Do not `pkill -x dplaysvr.exe` by hand while another agent's game is hosting.
+
+## The GL UI layer (Phase E — `tagpu_gui.on`, `tacli gui`)
+
+Since G15b the UI — the in-game panel, build pages, bars, option screens, chat, the popups
+and the whole shell — is drawn by our GL layer from the engine's own draw calls, replayed into
+twins of its surfaces (`research/notes/gui-renderer.md` §10). The engine still draws its
+surface, which stays the fallback beneath; with the trigger absent the DLL is byte-identical
+to main's (parity md5 measured equal, §10). **`gui.on` is part of the default arm set** now.
+
+```bash
+tools/tacli gui <i> on            # arm BEFORE launch (the detours install at DLL attach); the draw follows the file live
+tools/tacli gui <i> off           # keep the detours, stop the draw — the live A/B, 500 ms poll
+tools/tacli gui <i> strict        # the harness's mode: fallback off, a miss painted magenta (never for a player)
+tools/tacli gui <i> remove        # un-arm entirely at the next launch
+tools/tacli gui <i>               # report
+tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= fps=
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --layer --out /tmp/uiwalk
+```
+
+- `uiwalk.py --layer` arms `strict`, walks the shell and a game by gadget name, and at every
+  stop takes the engine's surface and our GL frame and counts differing pixels (outside the
+  world viewport in game, the cursor rect excluded) and magenta holes; `report.md` has one row
+  per stop with the heartbeat's fps/resets/overflows. The bar is **0 and 0 on every stop** —
+  except `MAINMENU`, whose ~185 differing pixels are its sparkle animation between the two
+  shots, single scattered pixels in the sky. Run it with the venv's python (numpy + PIL).
+- Read `gui: ARMED flip@0x4C63A0=1 leaves=16/16` at launch, then `gui: layer ON` and
+  `gui: GL ready`. `resets=` counts fresh starts (3 per launch is normal: the arm, the shell→game
+  context switch, the game's mode switch); `overflows=` must stay 0; `lost=` sprites whose bytes
+  never arrived (each forces a reseed) should be 0.
+- **A frame rate for any DLL, the module's own heartbeat aside**: the overlay logs a `units:`
+  line every 30 presented frames, so timing their arrival in `tagpu.log` from outside is an
+  fps meter that needs no code — `30 × intervals / elapsed` (the G15b measurement used exactly
+  that against main's DLL).
+- The census below still works and is still the regression for "a writer we do not observe".
+
+### The UI census (G15a)
+
+```bash
+tools/tacli gui <i> census                            # = 'gui.on=census log pgm trace', at launch
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --out /tmp/uiwalk   # the inventory walk + report
+tools/tacli arm <i> gui_census.trigger              # the accumulated residual mask -> gamedir/tagpu_gui_census.pgm
+tools/tacli log <i> -g 'gui census:'                # per-window lines: changed=, unexplained=, box=, ops=[…]
+```
+
+- Read `gui: ARMED flip@0x4C63A0=1 leaves=N/N` first; `NOT armed — engine bytes differ` means a
+  site is owned by a module that installed after it (the observer chains onto `fxown`'s
+  `0x4B7F90` stub, so the default arm set is fine).
+- `changed`/`unexplained` on a `gui census:` line are the **window's totals since the previous
+  line**, not one census; a residual > 256 px logs at once with the ops that intersect it
+  (`trace`). Surfaces other than the presented one are reported only when they have a residual
+  — the PCX backgrounds and the `SAVEMOUSE` buffers always do (the loader and cursor code write
+  them directly), which is expected.
+- `uiwalk.py` drives the shell and a game by gadget name and writes `report.md` with one row
+  per stop; it needs no shots to work, but takes the engine surface at every stop.
+- **`tacli shot` works in game again** since 2026-09-07: the window title's `wt:… | tacli:…`
+  label put `:` and `|` into the PNG filename, which is why the surface shot silently never
+  appeared in game while the shell's bare title was fine (`screenshot.c` now sanitises it).

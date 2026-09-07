@@ -34,7 +34,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + a 3-site byte patch behind `vpwide.on`, plus the `0x499221` redirect that also carries the zoom's mouse-point repair and is armed by `zoom.on` too (§2.3d) |
 | Terrain in **restored true colour** (Classic++, `tagpu_classicpp.on`) | G14a (spike, 2026-09-04); GPU G14b (2026-09-04); **GLSL G14c (2026-09-05)** | `tagpu_restoreglsl.c` runs the unditherer's full model as **fragment passes in the game's own GL context** — the shaders of `tagpu_restore_glsl.h`, the weights of `<model>.w32.bin` — sliced from `tagpu_terr.c`'s gather at 12 ms of GPU time per frame under a `GL_TIME_ELAPSED` budget, visible tiles first, painting straight into the terrain pass's RGBA atlas: Two Continents' 5062 tiles in 2.1 s at 59.7 fps, the biggest stock map's 11,561 in 4.2 s, no worker thread, no runtime, no disk. The ONNX Runtime path (`tagpu_restore.c`, G14a/b) was deleted the same day (G14d). **G14e (2026-09-05)**: the cells show as they land, centre-out (the restored atlas's alpha is the flag), and the **feature and effects atlases restore lazily** — `tagpu_gaf.c` queues every atlas miss to the same restorer, each atlas carries an RGBA8 twin the sprite shaders sample where its alpha is 1, keyed texels inpainted by a nearest-ring stand-in in the FILL pass. **G14f (2026-09-05): lit** — the terrain from the engine's height grid (`main+0x14287`, one R8 texture per map, the lab's grid normal per fragment), the units from the posed face normal carried in the vertex stream, the feature sprites from the ground's lambert at their anchor; one rule, `tagpu_glsl.h` `TAGPU_GLSL_LIGHT_FN`, level ground exactly 1.0; the knobs in `tagpu_classicpp.cfg` (`tagpu_classicpp.c`). **G14g (2026-09-05): the unit textures** — `tagpu_render3do.c`'s atlas is a `TAGPU_GAFATLAS` now, every frame in a 4-texel-padded, 4-aligned cell, its RGBA8 twin restored lazily like the sprites' (priority 3) and **mipmapped to level 2**, trilinear and 4× anisotropic, the mips regenerated after each painted batch; the unit shader samples it where its alpha says so. Classic's R8 atlas has the same cells and does not move a pixel (`tascene ab`, and the engine shot byte-identical to G14f's outside the chat). Reads only — see [Classic and Classic++ renderers](renderers.html) §4c and §5 |
-| **Chat, dialogs, side panel, minimap, top bar** | **— never** | screen-space and correct at 1:1 at any zoom; they come through the composite key by design |
+| **Chat, dialogs, side panel, minimap, top bar, the shell** | **Phase E, in progress** ([GL UI renderer](gui-renderer.html), decided 2026-09-06). **G15a done 2026-09-07**: every UI pixel-writing leaf is observed and the census explains 100 % of what changes on the presented surface across the screen inventory. **G15b done 2026-09-07**: the observed ops are replayed into GL twins of the engine's surfaces and the presented surface's twin is drawn over the world composite — the in-game panel, build pages, bars, option screens, chat and the F4 popup, and the whole shell, at 1:1 Classic; **0 differing pixels and 0 holes under `strict` on every in-game stop of the inventory at 1024×768 and at 1920×1080** (§2.3e) | the engine's surface is still drawn and still the fallback beneath the twin (nothing is suppressed in phase 1); the cursor stays the engine's; Classic++ art (G15e) and the shell across the context switch (G15d) are the next gates; behind one trigger, `tagpu_gui.on` |
 
 **Phases.** Phase 0 (foothold) is complete and Phase B (blit-level GPU units) is verified
 complete. Phase D's scene takeover — G13a through G13e — has landed, which is what the table
@@ -444,6 +444,103 @@ right and the preview is absent; closing that means drawing the footprint oursel
 answer `ui-markers.md` §6.1 gives for everything else outside the 1× viewport. **Dialogs drawn
 over the viewport** (`ARMOPT`, `EXITMENU`) are unchanged and still take the transform as though
 they were world, which was already true before this and is not verified either way here.
+
+### 2.3e The GL UI layer — observers, publisher, twins (`tagpu_gui_hook.c`, `tagpu_gui_surf.c`, `gui.on`, Phase E G15a + G15b)
+
+Nothing here changes what the engine draws. Every site is an **observer detour**
+(`tagpu_detour_observe`): the original runs unchanged, we read its arguments on the way in and,
+for the allocator, its result on the way out; every register and EFLAGS are saved around both
+calls (`pushfd/pushad … popad/popfd`, since the 2026-09-07 review). Installed once at DllMain when `tagpu_gui.on`
+exists, byte-matched, all-or-nothing — 17 sites. **One site was already owned**: `fxown` holds
+`CopyGafToContext 0x4B7F90`, so the observer **chains** onto fxown's stub (the shared detour code
+now records every landed stub and hooks the earlier stub's copy of the stolen bytes; `own the
+draw` §"chaining") rather than overwriting its jmp — fxown's skip still wins, and the observer
+sees only the blits that really draw. Full argument lists, boxes and evidence: the engine map's
+"The UI surfaces and their writers".
+
+| VA | What it is | Stolen | Observer records |
+|---|---|---|---|
+| `0x4C63A0` | `FlipOffscreenToPrimary` — the engine's "this frame is complete"; the census runs here | 6 | the frame marker; diffs `*(globals+0xBC)` and every surface an op named |
+| `0x4B7F90` | `CopyGafToContext(ctx, frame, x, y)` — **chained onto fxown's stub** | 6 | a sprite box at `(x−HotX, y−HotY)`, clipped |
+| `0x4B8500`, `0x4B8310` | the shaded blit and DrawText's alternate blit, same shape | 6 | same |
+| `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)` — listbox, textfield | 7 | `*dst` |
+| `0x4C7580` | the textured-triangle stamp `(ctx, src, xy[6], uv[6])` — the option screens' wide backdrop | 5 | the vertices' bounding box |
+| `0x4CCF60` | the glyph blitter, cdecl 9 args | 6 | the string's box from the font's width table |
+| `0x4BE950`, `0x4BF6F0`, `0x4BF8C0`, `0x4BF7B0`, `0x4BF4D0` | line, bar, hollow rect, focus rect, framed box | 8/7/6/7/7 | the rect, clipped |
+| `0x4C6890` | `SurfaceFill(surface, colour)` | 7 | the whole surface |
+| `0x4C6B70` | surface → surface `(dst, src, x, y)` — the GUI panel reaching the frame | 8 | the source's box at `(x−originX, y−originY)`, clipped |
+| `0x4C69F0` | `SurfaceCreateNamed(tag, w, h)` — return hijacked | 6 | registers the surface, seeds its copy so its build is diffed |
+| `0x4C6AC0` | `SurfaceFree(surface)` | 6 | forgets it |
+| `0x4A81E0` | `GUI_StageUpdateDraw(gi, flags)` | 10 | a build/redraw event for the log |
+
+Tokens in `tagpu_gui.on`: `strict` (the fallback off, a miss painted magenta, the cursor rect
+exempt — the harness's mode), `off` (the detours stay installed for the next launch, nothing is
+published or drawn — the live A/B lever), `census` (the G15a diff), `log` (a census line per 50
+censuses and on any residual), `pgm` (`tagpu_gui_census.trigger` → `tagpu_gui_census.pgm`, the
+accumulated unexplained mask), `trace` (the ops intersecting a residual, the first blits after a
+build, every allocation with its tag), `probe=x,y` (with `trace`: every published op touching
+that pixel of the presented surface), `key=N`. **MEASURED** 0 unexplained of 3 710 035 changed
+pixels across the inventory (engine map, "What the census measured").
+
+**The layer (G15b).** Nothing is patched beyond the observers above; the drawing is a second
+half on the render thread, and the two halves meet only in a lock-free SPSC queue
+(`tagpu_gui_int.h`: 65 536 ops and a 16 MB byte arena).
+
+- *Game thread, inside the flip observer, at the census cadence (≤ 1 per 5 ms):* the ring of
+  ops since the last publish becomes queue ops. A **seed** (the surface's bytes, whole) for
+  every surface first seen since the last reset; a **sprite** for a plain keyed `0x4B7F90`
+  blit of a frame ≤ 512 px with no sub-frames — the frame identity `(header, pixel pointer)`
+  plus, on first sight, its pixels decoded here by `tagpu_gaf_decode` (the shell frees a
+  popped screen's art under the render thread, so the pointer must not be read there); a
+  twin-to-twin **copy** for `0x4C6B70` when the source is twinned; a **clear** of the true
+  viewport rect at every flip after which `terrown`'s fill sequence advanced (the terrain skip's
+  key fill is the engine's per-frame erase, mirrored); and for everything else — text, lines,
+  rects, fills, the descriptor blit, the textured triangles, the shaded and sub-frame GAF
+  variants, a copy from an untwinned source — **pixels**: the box's bytes as they stand at
+  publish time, so a pixel op is the final state of its box and the twin converges on the
+  engine's surface whatever order the writers ran in. **Identical ops within one batch collapse
+  to their last occurrence** (the shell redraws every gadget on every flip — ~41 ops at ~12 000
+  flips/s on `MAINMENU` — and without this the queue overflowed into a reseed storm).
+  Excluded, on the return address: the unit composite blit, the cursor code, the flip's own
+  blits (engine map, "What the twin layer excludes, tests and reads"). Three rules from the
+  landing review: a sprite's identity is the frame's addresses **plus a hash of its plane's
+  first bytes** (a popped screen's art is freed and the heap reuses the addresses); the batch
+  dedup **never moves a write past a copy that read it** — an earlier duplicate is dropped only
+  when no `0x4C6B70` reading its surface lies between the two, or one follows the survivor
+  (a per-surface epoch bumped by every copy was tried first and re-created the shell's reseed
+  storm, since the shell copies its panel to the frame on every flip); and `SurfaceFree` **zeroes the
+  ring's ops on the freed base**, so a surface re-allocated over the same bytes before the next
+  census is never diffed or replayed against an old box.
+- *Render thread, inside `tagpu_overlay_draw` after `tagpu_native_frame`:* poll the trigger
+  (500 ms), drain the queue (20 000 ops per present at most), then draw. Every seeded surface
+  has a **twin**: an `RG8` texture its size (R = the palette index, G = coverage) behind an FBO,
+  1:1 and `NEAREST`; sprites are quads from a `TAGPU_GAFATLAS` of the UI frames (2048², `pad 0
+  align 0 mip 0`, colour key discarded in the fragment), copies are quads sampling the source
+  twin, pixels and seeds are `glTexSubImage2D`, clears are scissored `glClear`s to coverage 0.
+  **The seam is one draw**: the presented surface's twin over the whole frame, into the
+  overlay's target FBO with blending and depth off, `discard` where coverage is 0 — so the
+  native composite's key rule beneath is unchanged and the engine's pixels remain the
+  fallback wherever a twin has nothing. The index is resolved through the live palette
+  (`main+0x143A7`, re-uploaded when it moves). The cursor's rect (`*(0x51FBD0)+0x1B2/+0x1B6/
+  +0x1BA`) is left to the engine's frame. `strict` paints a miss magenta instead of falling
+  back, outside the viewport or on a non-key pixel inside it.
+- *Fresh starts:* the trigger reappearing, a GL context change (`tagpu_gui_glreset` from the
+  overlay's reset), a queue or arena overflow, a sprite whose bytes never arrived, and a copy
+  from a source with no twin all raise `reseed`; the next publish sends a **reset** and seeds
+  every surface again from the engine's bytes. Nothing is reconstructed from history.
+
+**MEASURED 2026-09-07** (`tools/uiwalk.py --layer`, `strict`, every world pass armed): **0
+differing pixels outside the viewport and 0 holes on every in-game stop** — `ARMMAIN2`,
+`ARMCOM1`, its second page, `ARMOPT`, `PREFS`, `VISUALRT`, back out, chat, the F4 popup — at
+**1024×768 and at 1920×1080**; every shell stop 0 except `MAINMENU`, whose ~185 differing
+pixels are its sparkle animation between the two shots (the diff is single scattered pixels
+in the sky, none on a gadget). Resets 3 per run (the arm, the shell→game context switch, the
+game's mode switch), overflows 0, the atlas at 123 of 4 096 entries after the whole
+inventory. Frame rates and the parity md5 with the trigger absent: [GL UI renderer](gui-renderer.html) §10.
+
+**Fields we write: none.** The module reads the engine's surfaces, the palette and the mouse
+object and writes GL objects of its own; the engine's behaviour is byte-identical with it
+armed, on or off.
 
 ### 2.4 Tooling (not part of the render path)
 

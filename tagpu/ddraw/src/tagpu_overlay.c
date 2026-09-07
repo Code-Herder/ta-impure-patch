@@ -20,6 +20,7 @@
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
 #include "tagpu_terrown.h"
+#include "tagpu_gui.h"
 #include "tagpu_markown.h"
 #include "tagpu_scaffold.h"
 #include "tagpu_input.h"
@@ -551,6 +552,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
                 tagpu_native_glreset();
                 tagpu_scaffold_glreset();
                 tagpu_r3d_glreset();
+                tagpu_gui_glreset();
                 olog("tagpu: GL CONTEXT CHANGED - all modules reset");
             }
             s_ctx = cur;
@@ -568,6 +570,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_featown_flush(f->frame_counter);
     tagpu_terrown_flush(f->frame_counter);
     tagpu_markown_flush(f->frame_counter);
+    tagpu_gui_flush(f->frame_counter);
     /* On EVERY path out of here, including these two: a frame that drew nothing
        zoomed must take the input transform back to 1:1, or `tagpu_overlay.off`
        (or a GL context change) would leave it bending clicks against the last
@@ -595,6 +598,13 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     /* G12b: native unit pass (tagpu_native.on) — needs this frame's scaffold */
     tagpu_native_frame(f);
     oerr("native");
+
+    /* Phase E: the UI layer — the presented surface's twin, drawn over the
+       world's composite (UI above the world; the engine's own pixels stay
+       the fallback beneath). Runs in the shell too: the native pass returns
+       early there, this does not. */
+    tagpu_gui_present(f);
+    oerr("gui");
 
     /* If the native pass did not publish a view this frame, nothing zoomed was
        drawn, so the input path goes back to 1:1 (tagpu_zoom.h). Every early

@@ -1791,6 +1791,281 @@ seven by driving the game and reading `main+0x2CBE` back, and `cursormove` and
   … reach their cases without consulting `main+0x37EFA`, so the Move/Attack/Patrol/Reclaim/Guard
   buttons produced correct cursors at Interface Type 1 before the patch. Measured.
 
+## The UI surfaces and their writers — mapped by us (Phase E, G15a, 2026-09-07)
+
+*Everything the engine draws into an 8bpp surface on the UI path — the shell screens, the
+in-game side panel and its option screens, the bars, the minimap, chat and the popups — and
+the surfaces those pixels land in. Established for [the GL UI renderer](gui-renderer.html):
+static reading of the pristine binary (objdump, md5 `8e74a1dffa1f5988624c52048f5b20cd`),
+then MEASURED by a census that observes every leaf below and diffs every surface at every
+flip (`tagpu_gui_hook.c`, `tagpu_gui.on=census`). The census explains 100 % of the pixels
+that change on the presented surface across the whole screen inventory (§ "What the census
+measured"); the leaves below are therefore the complete set for the UI, and the exceptions
+are named.*
+
+### The graphics globals block — `globals = *(void**)0x51FBD0` [VERIFIED]
+
+`0x4B6220` is `mov eax,[0x51FBD0]; ret`. The fields the UI path uses:
+
+| Offset | Meaning | Evidence |
+|---|---|---|
+| `+0x44` | non-zero ⇒ GDI/windowed present; `+0x50..+0x7F` is then an inline OFFSCREEN over the DIB | `0x4C5EA4..0x4C5EC3`, `0x4C63C0` |
+| `+0x88` | `IDirectDrawSurface*` primary (`Lock` vtbl+0x64 at `0x4C6509`, `Unlock` vtbl+0x80 at `0x4C6595`, `Flip` vtbl+0x2C at `0x4C6682`) | `0x4C64E7`, `0x4C658A`, `0x4C6676` |
+| `+0x8C` | `IDirectDrawSurface*` used when there is no system back buffer | `0x4C5EC6..0x4C5F92` |
+| `+0x98` | OFFSCREEN\* written by `0x4C61F0(surface)`; read **only** on the flip's `DDERR_SURFACELOST` restore paths (`0x4C65E3`, `0x4C675B`). Not the normal source | `0x4C61F0..0x4C61FF` |
+| `+0xA0..+0xAF` | clip rect copied into the context `0x4C5E70` builds over a locked DD surface | `0x4C5F53..0x4C5F6A` |
+| **`+0xBC`** | **OFFSCREEN\* system-memory back buffer — what every flip presents and every NULL-context blit draws into.** Written by `0x4C69A0(surface)` together with `+0xDC = 1` | `0x4C69A0..0x4C69B9`; read at `0x4C6405`, `0x4C6485`, `0x4C5E86`, `0x4C68B5` |
+| `+0xC0` / `+0xC8` | blend LUT / shade table (the ALP remap) | `0x4B8665`, `0x4B847A` |
+| `+0xD4` / `+0xD8` | screen width / height (`0x4B6700` / `0x4B6710`) | `0x4B6700..0x4B671B` |
+| **`+0xDC`** | 1 ⇒ `+0xBC` is valid; set by `0x4C69A0`, cleared at `0x4C638C` | |
+| `+0xF0` bit 1 | DirectDraw present (clear ⇒ GDI); bits 5 / 7 gate `0x4B8500` / `0x4B8310` | `0x4C63B8`, `0x4B8519`, `0x4B8329` |
+
+`0x4C69A0` has 28 callers; **`0x468D30` inside `DrawGameScreen` makes `*(main+0x37E1B)` the
+back buffer every frame**, and `0x467D7F` (the HUD painter) does the same. **In the shell the
+back buffer is the startup `"OFFSCREEN" 640×480`**, a different object; the census confirmed
+both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 game).
+
+### The OFFSCREEN object [VERIFIED, `0x4C69F0`]
+
+```
++0x00 width   +0x04 height   +0x08 pitch (= width)   +0x0C pixel base (= this + 0x30, inline)
++0x10 0x2710  +0x14 -1       +0x18 s16 originX  +0x1A s16 originY   (0 on create; the GAF
+                                                  hotspot when 0x4B8A80 built the header
+                                                  over a GAF frame)
++0x1C..+0x28  clip L,T,R,B, INCLUSIVE, (0,0,w-1,h-1) on create
++0x2C         flags: bit0 = heap object, freed by 0x4D85A0
++0x30..       pixels, w*h bytes;  allocation = w*h + 0x30 via 0x4D83B0(tag, size)
+```
+
+- **`SurfaceCreateNamed 0x4C69F0(const char* tag, int w, int h)`** — `stdcall`, `ret 0xC`,
+  returns the object. Prologue `53 56 8B 74 24 10`. 18 callers; the GUI's are `0x4A907C`
+  (the screen's own surface, tagged with the screen's name) and `0x4A90B5` (its `"SAVE UNDER"`
+  snapshot); `0x498407` creates the game offscreen `main+0x37E1B`; the minimap's are
+  `0x466823`, `0x466881`, `0x4669CF`, `0x4669FA`. **The tags name the surfaces**, and a
+  session's inventory reads (MEASURED): `"OFFSCREEN" 640×480` (shell) and `1024×768` (game),
+  one `"<SCREEN>.GUI"` per pushed screen (`MAINMENU.GUI 640×480`, `ARMCOM1.GUI 128×352`,
+  `PREFS.GUI 128×354`, **`VISUALRT.GUI 278×354`**, `TALK.GUI 512×33`, …), a `"SAVE UNDER"` per
+  screen, `"SAVEMOUSE 1..3"`, `"FLIPSURFACE" 128×352`, `"BKUPSURFACE" 300×480`, and one
+  `"bitmaps\<name>.PCX" 640×480` per shell background loaded.
+- **`SurfaceFree 0x4C6AC0(OFFSCREEN*)`** — `stdcall`, `ret 4`: `if (p && p[+0x2C] & 1)
+  0x4D85A0(p)`. Prologue `8B 44 24 04 85 C0`. 23 callers; the GUI's are `0x4A9537`
+  (`panel+0xB8`) and `0x4A9549` (`panel+0xBC`) in the teardown arm.
+- **`SurfaceFill 0x4C6890(surface, colour)`** — `stdcall`, `ret 8`: fills `h·pitch` bytes at
+  `+0xC`; `NULL` ⇒ the back buffer. Prologue `83 EC 64 53 55 56 57`.
+- **`GetContext 0x4C5E70(OFFSCREEN* out)`** — `stdcall`, `ret 4`, prologue `83 EC 6C 56 57`
+  (then `E8`): the NULL-context path every blitter takes. Arm 1, `[globals+0xDC] != 0` →
+  `rep movs 0xC` from `*(globals+0xBC)`, return 1 — **the arm taken in game and in the shell**;
+  arm 2 the GDI block; arm 3 locks `[globals+0x8C]`. `0x4C5FA0(ctx)` releases arm 3 only. 51
+  call sites each. **So a blitter given `ctx == NULL` draws into the system back buffer.**
+- `0x4C6AE0 GetClipRect` — `thiscall(ecx = ctx, RECT* out)`, `ret 4`, four dwords from
+  `ctx+0x1C`. `0x4B7E60 ClipRectPair(dst, src, clip)` — `stdcall`, `ret 0xC`.
+
+### `FlipOffscreenToPrimary 0x4C63A0` — no arguments, and where the cursor goes [VERIFIED]
+
+`void (void)`, plain `ret`; prologue `81 EC F4 00 00 00` (6, or 10 with the four pushes). 44
+`call`s and 3 tail `jmp`s (`0x4257BA`, `0x425B7B`, `0x45CFB8`): `0x46A3DB` in DrawGameScreen,
+`0x49FA32` in the shell's modal loop `0x49F9C0`, `0x467E41` in the HUD painter, and 41 more.
+The DirectDraw arm (`0x4C6475`) requires `[globals+0xDC]`, takes **`edi = *(globals+0xBC)`** as
+the source, checks it against the screen size, locks the primary, builds a context over it at
+`[esp+0x38]`, **draws the cursor into the back buffer with `0x4C67C0(globals, edi)`**, copies
+back buffer → primary with `0x4CBBE0(&ctx, edi, 0, 0)`, **restores the cursor's background
+with `0x4C6B70(edi, [globals+0x1BE], [globals+0x1B6], [globals+0x1BA])`**, and unlocks. So the
+back buffer holds the cursor only between two calls inside the flip: at the flip's entry it
+does not, and a diff taken there never sees the cursor. The surface-lost arm re-copies
+`[globals+0x98]`; the GDI arm copies into `globals+0x50` and presents with `StretchDIBits`
+[INFERRED from the IAT slot]. **MEASURED: the shell flips about 5 000 times a second** on this
+machine (31 678 flips in the first 6 s of a launch); in game once per `DrawGameScreen`.
+
+### The GUI is retained: `GUI_StageUpdateDraw 0x4A81E0` builds, `0x4AB0B0` blits [VERIFIED]
+
+**`0x4A81E0(GUIInfo* gi, int flags)`** — `stdcall`, `ret 8`; prologue
+`8B 44 24 04 81 EC C0 03 00 00` (10). The dispatcher at `0x4A9176` (table `0x4A962C`) is
+inside it. Flags: `0x1` **build** (surfaces are created only under it), `0x2` **teardown**,
+`0x40` redraw, `0x8` buttons only (`test …,0x48` at `0x4A91AD`), `0x4/0x40/0x80` background
+variants, `0x20` skip the snapshot, `0x100/0x1000` recentre. Observed callers: `push 2` in
+`GUI_Pop 0x4A968E`, `push 1` in `TA_DialogBox_fn 0x4ABD90` (`0x4AC01B`, `0x4AC198`),
+`esi|0x40` at `0x494210` (the in-game panel loader). 76 sites, **none in DrawGameScreen**.
+
+**The build sequence (`0x4A905E..0x4A9135`, read 2026-09-07):**
+
+```
+panel+0xBC = 0x4C69F0(panel->name /* or 0x509920 */, w, h)   ; the screen's own surface
+0x4C6B70(panel+0xBC, NULL, -xpos, -ypos)                     ; the screen UNDER it, copied in
+unless flags&0x20:
+  panel+0xB8 = 0x4C69F0("SAVE UNDER" @0x509914, w, h)        ; and kept aside…
+  0x4C6B70(panel+0xB8, panel+0xBC, 0, 0)                     ; …for the teardown restore
+background: 0x4C6B70(panel+0xBC, *(GUIMEM+0x24), 0, 0)        ; the PCX background surface
+        or  0x4B0230(gi, 0, panel+0xC4)                      ; or the tiled texture
+then the gadget loop 0x4A9135..0x4A942E over EVERY gadget 1..totalgadgets,
+skipping only active == 0 — there is no per-gadget dirty flag
+```
+
+Every handler draws into `[panel+0xBC]` with that object as its context (`ebx=[panel+0xBC]` at
+`0x4A6056` in the button handler, and so on). Teardown (`flags&2`, `0x4A950A..`) copies
+`panel+0xB8` back to the screen, frees both, and `GUI_Pop 0x4A9660` frees the GUIMEMSTRUCT.
+**`*(GUIMEM+0x24)` is the screen's background PCX decoded into a surface** — filled by the
+loader, not by any draw leaf (MEASURED: 307 072 unexplained bytes on `MAINMENU.GUI`'s
+`03D51178 640×480`, zero ops), and read only as a copy source.
+
+| `id` | handler | `ret` | prologue (steal) | draws through |
+|---|---|---|---|---|
+| 1 button | `0x4A5F40` | 8 | `81 EC D8 00 00 00 53 55` (8) | `0x4B7F90(ctx, frame, x+HotX, y+HotY)` at `0x4A61BE`, `DrawText 0x4A50E0`, `0x4BE950`, `0x4B8310`; sets `TheActive_GUIMEM+0x14 = 1` at `0x4A5F5E` |
+| 2 listbox | `0x4A1B40` | 8 | `81 EC BC 00 00 00 53 55` (8) | `0x4C6D20` at `0x4A1C01`, `0x4B0230(gi, idx, 0)`, rows via `0x4A23B0..0x4A2BE0` (`0x4B7F90` ×13), clip save/restore `0x4A2068` |
+| 3 textfield | `0x4A4D70` | 8 | `83 EC 18 8B 54 24 1C` (7) | `0x4BF6F0`, `0x4C6D20`, `0x4BE950`, DrawText |
+| 4 slider | `0x4A3EF0` | 8 | `8B 44 24 04 83 EC 08` (7) | nothing itself; `0x4A2580` paints |
+| 5 label | `0x4A56B0` | 8 | `81 EC AC 00 00 00` (6) | `0x4BF6F0`, `0x4C14F0` / DrawText, `0x4BE950` |
+| 6 surface | `0x4A4980` | 8 | `83 EC 50 53 55` (5) | **`0x4C7580`** (the textured-triangle stamp, below), `0x4B7F90`, `0x4BF6F0` |
+| 10 | `0x4A4C90` | **0xC** `(gi, idx, flags)` | `8B 54 24 04 83 EC 10` (7) | `0x4BE950` ×2 |
+| 11 picture / panel bg | `0x4B0230` | **0xC** `(gi, idx, GAFFrame*)` | `83 EC 24 8B 54 24 2C` (7) | NULL frame: the texture from `0x4A18C0` tiled with `0x4C6B70(panel+0xBC, tex, x, y)` + bevel `0x4B0160`; else `0x4B7F90` |
+| **12** | **`0x4A5E50`** — not `0x4A5F40` as [GUI gadgets](gui-gadgets.html) §3 said; corrected there | | | |
+| 13 timer | `0x4A4660` | 8 | `83 EC 24 53 55` (5) | `0x4C5E70(ebx)` over `[panel+0xBC]` or `[gi+0xCD2]`, then `0x4BF6F0`, `0x4B7F90`, DrawText, `0x4C5FA0` — i.e. into the back buffer |
+
+`DrawText 0x4A50E0(ctx, str, x, y, maxW, shade)` — `stdcall`, `ret 0x18`: with no GUI font
+set, `0x4C14F0(ctx, s, x, y, -1)`; else per character `0x4B7F30([[0x51FBA4]+0x14]+0xC, ch)` →
+`0x4B7F90(ctx, glyph, x, y)` (`0x4A5185`) or `0x4B8310` (`0x4A5191`). **So GUI text is GAF
+glyph blits, and `0x4CCF60` is only reached through `DrawTextCustomFont 0x4C14F0`** (its two
+callers `0x4C16D4`, `0x4C1744`); MEASURED, in-game option screens still take that path for some
+labels (`text 1572` ops on `PREFS.GUI`).
+
+**How a screen reaches the frame: `0x4AB0B0(GUIMEMSTRUCT*, OFFSCREEN* dst, RECT* dirty)`** —
+`stdcall`, `ret 0xC`, prologue `83 EC 10 57 8B 7C 24 18` (8): recurses bottom-to-top over
+`per_active`, and blits **`0x4C6B70(dst, panel+0xBC, xpos, ypos)`** (`0x4AB158`) only if
+`mem+0x14 == 1` (cleared after) or `0x4B67D0(&panelRect, dirty)` [INFERRED name] says the rect
+overlaps. Two callers: `0x49FA28` in the **shell modal loop `0x49F9C0(gi, untilScreen)`** —
+`{pump messages; 0x4A9FD0(gi); 0x4AB0B0(top, NULL, NULL); 0x4C2870; 0x4C63A0}` — and
+`0x4AB182` in the thunk **`0x4AB170(gi, ctx, dirty)`** (`ret 0xC`, prologue
+`8B 44 24 0C 8B 54 24 04 8B 4C 24 08`), called once per frame from DrawGameScreen at
+`0x46A303` with `(main+0x519, &[esp+0x34], main+0x37E27)` after `0x4C69C0(&ctx)` resets the
+clip.
+
+### The leaves — every function that writes UI pixels [VERIFIED; MEASURED complete]
+
+| VA | name | convention, `ret` | arguments | destination and box | prologue stolen |
+|---|---|---|---|---|---|
+| `0x4B7F90` | `CopyGafToContext` | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` | `{x−HotX, y−HotY, +w−1, +h−1}`, hotspot **signed** (`movsx` at `0x4B802C/0x4B803F`), clipped by `0x4C6AE0`+`0x4B7E60`; sub-frames route to `0x4B8500` when `+0xB` is set; leaf `0x4CBE70` (raw), `0x4CC51D` (RLE) | `81 EC 94 00 00 00` (6) |
+| `0x4B8500` | `AlphaCompsteBuf2OFFScreen` | stdcall `0x10` | same | same, blended through `[globals+0xC0]`; 24 callers, none in the GUI | `81 EC 94 00 00 00` (6) |
+| `0x4B8310` | the blit `DrawText` takes under `globals+0xF0` bit 7 | stdcall `0x10` [INFERRED from the call site] | same shape | same | `81 EC 94 00 00 00` (6) |
+| `0x4B8150` | opaque GAF blit | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` — a **frame**, not a descriptor | leaf `0x4CBDD1`, no key; 4 callers, **all terrain** (`0x484110`, `0x48415C`, `0x484228`, `0x484274`) — not a UI leaf | |
+| `0x4C6D20` | descriptor blit | stdcall `0x10` | `(ctx, desc {w,h,stride,pixels}, RECT* src, RECT* dst)` | `*dst`; GUI callers `0x4A1C08` (listbox), `0x4A4EC0` (textfield); `0x4C6DC0` is the keyed twin with no callers | `8B 44 24 04 83 EC 30` (7) |
+| **`0x4C7580`** | **textured-triangle stamp** (`GAF_DrawTransformed` [CORPUS]) | stdcall `0x10` | `(ctx, src, int xy[6], int uv[6])` — three screen vertices and their texture coordinates, **MEASURED** `(214,94)(233,94)(233,113)` with uv `(1,1)(31,1)(31,31)` | the vertices' bounding box; **the in-game option screens' wide dark backdrop right of the 128-px panel is drawn as these** (13–37 per build), which is why that region has slanted edges | `B8 8C 7D 00 00` (5, the stack probe) |
+| `0x4CCF60` | glyph blitter | cdecl, 9 args | `(base, pitch, font, str, x, y, fg, bg, transparent)` | row `y − (s8)font[2]`, width the sum of `font[off]` per glyph, stops at `\0` **or `\n`**; 2 callers, both in `0x4C14F0` | `55 8B EC 83 C4 F0` (6) |
+| `0x4BE950` | `DrawLine` | stdcall `0x18` | `(ctx, x0, y0, x1, y1, colour)` | bbox after `0x4BEA20`; 83 callers | `83 EC 30 56 8B 74 24 38` (8) |
+| `0x4BF6F0` | `DrawBar` | stdcall `0xC` | `(ctx, RECT*, colour)` | the rect, inclusive, via `0x4BF620` + `0x4CCDEA`; 47 callers | `83 EC 40 8B 44 24 48` (7) |
+| `0x4BF8C0` | `DrawTranspRectangle` | stdcall `0xC` | `(ctx, RECT*, colour)` | hollow rect; 12 callers incl. the minimap view box `0x466B5E`, the HUD `0x467F6C` | `83 EC 68 53 56 57` (6) |
+| `0x4BF7B0` | the focus rectangle | stdcall `0xC` | `(ctx, RECT*, colour)` | drawn last by `GUI_StageUpdateDraw` via `0x4A16F0(gi, idx, 8)` | `83 EC 30 53 55 56 57` (7) |
+| `0x4BF4D0` | framed box | stdcall `0xC` | `(ctx, RECT*, colour)` | three clipped fills (`0x4BF620` ×3, `0x4CCDEA` ×2); **what `DrawPopupF4Dialog 0x4948E0` draws its border with** (×3) | `83 EC 40 53 55 56 57` (7) |
+| `0x4C6890` | `SurfaceFill` | stdcall `8` | `(surface, colour)` | the whole surface | `83 EC 64 53 55 56 57` (7) |
+| `0x4C6B70` | surface → surface | stdcall `0x10` | `(dst, src, x, y)` | `0x4CBBE0(dst, src, x − (s16)src[+0x18], y − (s16)src[+0x1A])`; `dst == NULL` ⇒ the back buffer, `src == NULL` ⇒ the screen; 23 callers — the GUI blit `0x4AB158`, the build's snapshot `0x4A9098`, `0x4A90CC`, `0x4A9111`, the teardown `0x4A952B`, the picture tiler `0x4B02DF`, the minimap `0x466B44`, cursor save/restore | `83 EC 30 56 8B 74 24 38` (8) |
+| `0x4CBBE0` | `CopyScreenContext` | cdecl | `(dst, src, x, y)` | the whole `src` at `dst+0xC + y·pitch + x`, clipped by `dst+0/+4` only — **reads neither clip rect**; 17 callers: three in the flip, two in `0x4C6B70`, **ten in cursor code** (the `SAVEMOUSE` buffers are written through it directly) | `55 8B EC 83 C4 E4` (6) |
+
+Not drawers, checked because the popups call them: `0x47F1A0` (helpers `0x47F0C0`, `0x44FDB0`,
+`0x451DF0`, …, no pixel write), `0x4B6560` (`jmp [0x4FC0DC]`, an import thunk), `0x4A5030`
+(text measure, calls `DrawText`). `0x4C69A0`, `0x4C61F0` and `0x4C5FA0` begin with `E8` and
+cannot be prologue-detoured without relocating the call.
+
+### The popups, chat and the HUD painter [VERIFIED call graphs]
+
+- `DrawPopupF4Dialog 0x4948E0`: `DrawText 0x4A50E0` ×5, `0x4BF4D0` ×3 (the frame), `0x4C7580`
+  ×1, `0x4B7F30`. `DrawPopupButtomDialog 0x4689C0`: `DrawText` ×3, `0x4B7F90` ×1, `0x4C6AE0`.
+  `DrawChatText 0x464060`: `DrawText` ×1, `0x467C00` ×1 (a message-box painter that also calls
+  `0x4C6890`, `0x4C69A0` and the flip itself), `SetFont`/`SetTextColors`.
+- **`0x467D70` the HUD panel painter**, `void (void)`, one caller `0x49842A`, prologue
+  `A1 E8 1D 51 00` (5): `esi = *(main+0x37E1B)`; `0x4C69A0(esi)`; `0x4C6890(esi, 0)`; three
+  side-specific GAF frames (`main + side·4 + 0x1481F / 0x14833 / 0x14847`, side from
+  `[[main+0x1B8A+player·0x1A2]+0x95]`) via `0x4B7F30(seq, 0)` → **`0x4B7F90(esi, f, HotX+0x81,
+  HotY)`** (top bar), `(HotX+0x81, HotY+screenH−0x20)` (bottom bar), `(HotX, HotY)` (side
+  panel); then `0x4C63A0()`.
+- The `LIGHTBAR` slide `0x45FFB0`: `0x4B8D40`, `0x4B7F30`, `0x4B7F90`, `0x47F1A0`.
+
+### The minimap, located [VERIFIED]
+
+`main+0x1426B` (`TED_GENERATED_PIC`) is consumed once, at `0x46684F` in
+**`BuildMinimapSurface 0x466780`** (no args, prologue `83 EC 40 53 8B 1D E8 1D 51 00`): it
+fits a 126-px box (`main+0x142EB/+0x142ED` size, `+0x142E7/+0x142E9` offsets), creates
+`main+0x142E3 = 0x4C69F0(0x5074F8, w, h)` and scales the picture into it (`0x4B8AE0` + `0x4B95A0`
+[INFERRED stretch]). Three surfaces: `+0x142E3` the scaled map; `+0x142DF` the fog composite,
+rebuilt by `0x466C20` with **direct byte writes** (callers `0x465572`, `0x48191A`); `+0x142DB`
+the composite plus radar dots, rebuilt by `0x466DC0` (`0x4C6B70([0x142DB],[0x142DF],0,0)` then
+unit dots through `0x4B7F90` of `main+0x147DF/+0x147E3`, `0x4C0070` arcs, `0x4BEE60 DrawPoint`;
+callers `0x465072`, `0x48191F`). **Per frame, `DrawMinimap 0x466B00(ctx)`** (`stdcall`, `ret 4`,
+prologue `8B 0D E8 1D 51 00`, gated on `main+0x142F1 & 2`) does
+`0x4C6B70(ctx, [main+0x142DB], main+0x142E7, main+0x142E9)` at `0x466B44` and the view box
+`0x4BF8C0(ctx, main+0x142CB, main+0xDD9)` at `0x466B5E`; **one caller, `0x46961F` in
+DrawGameScreen, with the game offscreen's context.** The minimap never goes through the GUI
+surfaces. The map loader builds `main+0x1426B` at `0x483900..0x483936` as a GAF frame
+(`0x4B8DA0(0x508B6C, w, h)`, filled via `0x4B8A80` + `0x4B7F90`) and frees it at
+`0x483DF3`/`0x483E0B`.
+
+### What the census measured [MEASURED 2026-09-07, `tools/uiwalk.py`, 1024×768]
+
+With every leaf above observed and every surface diffed at every flip (`CENSUS_MS 5`, so at
+most 200 diffs a second against the shell's ~5 000 flips), across the inventory — `MAINMENU`,
+`SINGLE`, `SKIRMISH`, `SELMAP`, `STARTOPT`, `VISUALS`, and in game `ARMMAIN2`, `ARMCOM1/2`,
+`ARMOPT`, `PREFS`, `VISUALRT`, `TALK` (chat), the F4 popup — **3 710 035 pixels changed on the
+presented surface and 0 were unexplained**; a screen transition in the shell is 614 400
+changed pixels (the whole 640×480) explained by ~50 000–150 000 GAF blits and a few thousand
+lines, rects and copies. The unexplained changes on *other* surfaces, all outside the frame:
+
+- the PCX backgrounds decoded into their `"bitmaps\…PCX"` surfaces by the loader (~300 000
+  bytes each, zero ops) — assets, read only as copy sources;
+- the `"SAVEMOUSE"` buffers, written by `0x4CBBE0` directly from cursor code;
+- **the startup `"OFFSCREEN" 640×480` keeps being written in game** by an unobserved path at
+  in-game screen builds (185 942 bytes when `ARMCOM1` appears, 43 869–83 573 in rows 226–479
+  on `ARMOPT`/`TALK`/`ARMCOM1` pages), and **`"FLIPSURFACE" 128×352`** is filled whole
+  (43 519 bytes) when `PREFS` opens — neither is ever presented, and anything reaching the
+  frame from them goes through an observed copy [OPEN: the writer of each].
+
+The census also fixed three claims elsewhere in this wiki: the nine `0x46B900` calls in
+DrawGameScreen's tail are the **debug profiler bars**, not "side panel / minimap"
+([UI markers](ui-markers.html) §4); the minimap is not `0x48CC30`/`0x46A430`
+([frame composition](frame-composition.html) §1); and `id 12` dispatches to `0x4A5E50`.
+
+### What the twin layer excludes, tests and reads [VERIFIED 2026-09-07, Phase E G15b]
+
+The layer (`tagpu_gui_surf.c`) replays the observed ops into GL twins; three facts it leans on
+were read for it, none of them patched.
+
+**Observed but not published — the leaf calls that are not UI, matched on the return address**
+(`excluded_caller()` in `tagpu_gui_leaves.h`). The ranges are the callers' extents, read from
+the disassembly (`ret`/`ret n` boundaries):
+
+| range | what | its leaf calls (return address = call + 5) | ends |
+|---|---|---|---|
+| `0x459200..0x459800` | the unit composite blit (`0x459200`, [GPU status](gpu-status.html) §2.4) — the engine still calls it while `owndraw` skips the rasterisers, and the composites it blits are all key | `0x4B8500` at `0x459319`, `0x459353`, `0x4593BA`, `0x4595E9`, `0x4597D3`; `0x4B7F90` at `0x4593A4`, `0x4597AB` | `ret` at `0x4597DF`; `0x45982A` is the next function |
+| `0x4C2380..0x4C2A00` | the cursor code — `0x4C2380` (dead), `0x4C24B0`, `0x4C25E0`, `0x4C2870` and the `SAVEMOUSE` copies (§ "The mouse object") | `0x4B7F90` ×4 (`0x4C23C9`, `0x4C258C`, `0x4C2732`, `0x4C297E`), `0x4C6B70` ×2 (`0x4C24A8`, `0x4C2937`), `0x4CBBE0` ×9 (`0x4C241B`..`0x4C2835`) | `0x4C2870` ends at `0x4C2989`; the last function in the range at `0x4C2A74` |
+| `0x4C6300..0x4C6890` | the flip `0x4C63A0` — **three exits**, each `pop edi/esi/ebp/ebx; add esp,0xF4; ret` at `0x4C6669`, `0x4C668F` and `0x4C67BA` (a backward `jne 0x4C66EB` at `0x4C67AA` keeps the last arm inside), so it spans `0x4C63A0..0x4C67BA` — and the in-flip cursor draw `0x4C67C0` (ends `0x4C6884`) | the flip: `0x4C6B70` at `0x4C6414`, `0x4C6585`, `0x4CBBE0` at `0x4C6553`, `0x4C65F3`, `0x4C6769`; `0x4C67C0`: `0x4C6B70` at `0x4C6862`, `0x4B7F90` at `0x4C687D` | — |
+
+**`0x4C67C0` has exactly two callers, `0x4C641B` and `0x4C6544`, both inside the flip** — so
+every blit it makes is also under the observer's `s_inFlip` (set between the flip's entry and
+its return), which is the guard that actually excludes them; the range only has to be honest
+about where the function ends. Until 2026-09-07 the code's bound was `0x4C6800`, short of
+those two calls; harmless for that reason, corrected anyway.
+
+**Which flip is a game frame**: `DrawGameScreen`'s `call 0x4C63A0` is at `0x46A3DB`, so the
+flip observer reads its own return address and compares it with **`0x46A3E0`**; a match means
+the frame is the game's (the viewport is the terrain skip's key fill, subtracted by the census,
+cleared by the layer), anything else is the shell's, whose flip runs from the modal loop
+`0x49F9C0` and 41 other sites.
+
+**Read on the render thread, never written** (both already in this map; listed because the
+layer is a new reader on the other thread):
+
+- `main+0x143A7`, the live RGB palette (`256 × {R,G,B,pad}`, 1024 bytes) — compared with the
+  last copy at every present and re-uploaded as a `256×1 RGBA8` texture when it moved, so the
+  index twin resolves through the palette the engine is presenting with.
+- the mouse object `*(0x51FBD0)`: `+0x1B2` → the current sprite record (`u16 w, u16 h` at
+  `+0`/`+2`), `+0x1B6`/`+0x1BA` the position it was last drawn at. That rect is the one place
+  the layer does not draw and `strict` does not count: the cursor is the engine's in phase 1
+  ([GL UI renderer](gui-renderer.html) §3.7). A torn read here costs one frame of a
+  misplaced exemption, nothing else.
+
+**Read on the game thread at publish, guarded** (`IsBadReadPtr`, like the first-sight decode):
+the first bytes of a GAF frame's pixel plane — up to 64, the row lengths and data of the first
+rows for an RLE frame — go into the sprite's identity beside the header and plane addresses,
+because the shell frees a popped screen's art and the heap hands the same addresses to the
+next screen's (the 2026-09-07 review). `0x4CCF60`'s `'\n'` stop (`cmp al,0xA; je 0x4CD008` at
+`0x4CCFA0`) is honoured by the glyph observer's width since the same review.
+
 ## The unit-death path, the object destructor and the level teardown — mapped by us
 
 Mapped 2026-09-06 to close the render thread's use-after-free on a dying unit's model object

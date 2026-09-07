@@ -118,6 +118,15 @@ int tagpu_gaf_decode(const unsigned char* g, int w, int h, unsigned char* out);
    the next tagpu_gaf_atlas_reset recycles it — never mid-frame, or quads
    already emitted would point at re-used texels). */
 const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* g);
+/* The same entry from PRE-DECODED pixels (w*h bytes, colour key `ck`), keyed
+   like atlas_get on (frame, pix, w, h) but never reading either pointer: the
+   GL UI renderer's sprite ops carry their bytes across the thread boundary
+   because the shell frees a popped screen's art under the render thread
+   (gui-renderer.md 3.5). `find` is the lookup alone, NULL when absent. */
+const TAGPU_GAFENT* tagpu_gaf_atlas_put(TAGPU_GAFATLAS* a, const void* frame, const void* pix,
+                                        int w, int h, unsigned char ck, const unsigned char* pixels);
+const TAGPU_GAFENT* tagpu_gaf_atlas_find(const TAGPU_GAFATLAS* a, const void* frame, const void* pix,
+                                         int w, int h);
 void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a);      /* recycle when full     */
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a);       /* GL context replaced   */
 /* create the GL texture now rather than on the first frame that atlases a
