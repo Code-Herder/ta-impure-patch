@@ -2078,10 +2078,10 @@ The tail: `0x4B1BD5` pc++, `0x4B1BD9` writes pc back, `0x4B1BDC` loops while the
 
 | VA | Bytes stolen | Captures |
 |---|---|---|
-| `0x4B08C0` | `56 8B 74 24 08` | a wrapper: calls the original through the stolen prologue, then latches (cob, slot, index, tick, source); source from the return address — `0x4B18C0` = START, `0x4B192D` = CALL, anything else = the engine — and for the two opcodes the parent record (`esi`) and slot (`ebp`), whose `code[pc+2]` is the argument count |
-| `0x4B0DA0` | `83 EC 20 53 55` | the runner's entry: the latched start is written here, before its thread's first step (a `Query*` overwrites its own first argument on that step) |
+| `0x4B08C0` | `56 8B 74 24 08` | a wrapper, the stolen prologue resuming at `0x4B08C5`: calls the original through the stolen prologue, then latches (cob, slot, index, tick, source); source from the return address — `0x4B18C0` = START, `0x4B192D` = CALL, anything else = the engine — and for the two opcodes the parent record (`esi`) and slot (`ebp`), whose `code[pc+2]` is the argument count |
+| `0x4B0DA0` | `83 EC 20 53 55` | the runner's entry, resuming at `0x4B0DA5`: the latched start is written here, before its thread's first step (a `Query*` overwrites its own first argument on that step) |
 | `0x4B19D0` | `8B 4E 20 85 C9` | RETURN: `esi` record, `ebp` slot, `ecx` pc, the value at `stack[sp]`; the stolen `test` still sets the flags the `je` at `0x4B19D5` reads |
-| `0x4B1A99` | `C7 01 00 00 00 00` | SIGNAL's kill: `ecx` the record, `ebx` its slot, `[esp+0x34]` the signaller |
+| `0x4B1A99` | `C7 01 00 00 00 00` | SIGNAL's kill, resuming at `0x4B1A9F` (the sixth stolen byte is NOPped): `ecx` the record, `ebx` its slot, `[esp+0x34]` the signaller |
 | `0x4B15E0` | `E8 4B 56 00 00` | the RNG call, redirected: the stub calls `0x4B6C30` itself and logs `lo + result` (`ebx` = lo, `ebp` = slot) |
 
 Reads only: the tick `main+0x38A47`, the in-game index `unit+0xA8` (`i16`), the def name
@@ -2108,6 +2108,27 @@ run-now start (`StartMoving`, `0x4B0940` with `runNow = 1`) returns inside its o
 walk cycle (`MotionControl` `call-script`ing `walk`) is 19 ticks; the skirmish's own
 commanders run `Create` at tick 0. The posedump header now carries `tick=` and `idx=` so the
 two logs join.
+
+**[LIVE] the other class fixtures (`research/notes/evidence/cobtrace/`)**, each read back
+against the disassembly above: the tank's `RestoreAfterDelay` is killed by the next
+`AimPrimary`'s `signal` (`K` lines, six in one run — the SIGNAL path `0x4B1A99` fires on stock
+scripts every few seconds, not only in extra-weapons content); `SmokeUnit` below 66 % health
+draws `rand` every few hundred ms (`D` lines, 29 in one run — every one a call through
+`0x4B15E0`); a script without a trailing return runs into the next script's words exactly as
+§2.8 predicted — ARMSTUMP's `HitByWeapon` (started at `0x489F43` with two arguments) ends
+under `SweetSpot`'s name (its `R` line names the script whose body holds the `RETURN`);
+`Send_UnitDeath`'s `Killed` query carries the caller's uninitialised local as its second
+argument (`46379093` = `0x02C3A0D5`, inside `TAdynmem`, on that run); the `X` line has not
+been observed — no stock fixture fills eight records. A death does not break the trace:
+the ARMPW's `Killed` returns at tick 126 and the sim ticks on (593 → 803 measured after).
+**Two things that are not the oracle's:** `0x43A164` (`ORDERS_CreateObject+0xA4` by the
+symbol file) faults with `eax = 0x6A` — a target unit pointer of NULL plus the position
+offset — when the fighter fixture gave a Hawk an `attack` order on a Vamp that then died,
+with the oracle armed *and* in the control run without it (patrol orders avoid it; not
+chased further); and an `E8` whose rel32 is computed against the wrong base is not a crash
+but a *freeze* — the engine's own handler reports `Access Violation … at 014b227d` once per
+attempt and every thread then waits on the wineserver, which is what the first tank runs
+looked like before the site's displacement was fixed.
 
 ## Hard-coded limits & constants
 

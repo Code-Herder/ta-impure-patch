@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "5 fighter: ARMHAWK ordered to attack an enemy Vamp patrolling 400 units east (a Hawk is air-to-air, so the target must fly) \u2014 Activate at takeoff, aim from a banking frame, FirePrimary. tacob landing 2 fixture (research/notes/tacob-design.md, the nine gate scenarios). One unit of the class under test, owned by the human seat, traced with tagpu_cobtrace.on=<type> and one posedump; the AI seat holds a distant unit so the mission does not end. Run all nine with tools/cobtrace_fixtures.py.",
+  "description": "5 fighter: ARMHAWK patrolling a lane towards a distant enemy Valkyrie transport \u2014 Activate at takeoff, the banking flight, and the first air-to-air shots (QueryPrimary/QuerySecondary per missile; a Hawk has no Aim* script). Kept short on purpose: an air-to-air engagement faults the engine in ORDERS_CreateObject (0x43A164, a null unit's position) within a few seconds of the first shot, with and without the oracle armed (2026-09-07), so the pose dump is taken in flight before the shooting and the run is kept short; the shipped fixture happened not to fault. The target is unarmed and tough so nothing dies in the run: with a Vamp, either aircraft's death faulted the engine in ORDERS_CreateObject (0x43A164, a null target's position) with and without the oracle armed (2026-09-07). Both fly patrols, not attack orders: an `attack` on a unit that then dies faulted the engine in ORDERS_CreateObject (0x43A164, a null target's position) with and without the oracle armed (2026-09-07). tacob landing 2 fixture (research/notes/tacob-design.md, the nine gate scenarios). One unit of the class under test, owned by the human seat, traced with tagpu_cobtrace.on=<type> and one posedump; the AI seat holds a distant unit so the mission does not end. Run all nine with tools/cobtrace_fixtures.py.",
   "seed": 7,
   "on_error": "abort",
   "setup": {
@@ -39,26 +39,29 @@
       "facing": 90,
       "orders": [
         {
-          "cmd": "attack",
-          "target": "vamp"
+          "cmd": "patrol",
+          "to": [
+            3400,
+            1200
+          ]
         }
       ]
     },
     {
-      "id": "vamp",
-      "type": "CORVAMP",
+      "id": "valk",
+      "type": "CORVALK",
       "owner": 1,
       "pos": [
-        3000,
-        1200
+        3700,
+        1000
       ],
       "facing": 180,
       "orders": [
         {
           "cmd": "patrol",
           "to": [
-            3000,
-            1600
+            3700,
+            1500
           ]
         }
       ]

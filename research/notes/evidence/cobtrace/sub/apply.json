@@ -1,0 +1,156 @@
+{
+  "ok": 1,
+  "frame": 465,
+  "gametime": 93,
+  "seed": 7,
+  "requested": {
+    "units": 3,
+    "features": 0,
+    "orders": 1
+  },
+  "applied": 3,
+  "failed": 0,
+  "cleared": 3,
+  "orders": {
+    "issued": 1,
+    "failed": 0
+  },
+  "map": {
+    "name": "Anteer Strait",
+    "world": [
+      9248,
+      9344
+    ],
+    "tiles": [
+      578,
+      584
+    ]
+  },
+  "limit": {
+    "requested": 0,
+    "total": 0,
+    "per_player": 500,
+    "array_slots": 5000
+  },
+  "limit_requested": 500,
+  "switches": {
+    "before": 12,
+    "after": 28,
+    "bits": {
+      "drop": false,
+      "cheats": false,
+      "selboxes": true,
+      "invulnfeatures": true,
+      "noshake": true,
+      "clock": false,
+      "doubleshot": false,
+      "halfshot": false,
+      "radar": false,
+      "shootall": false
+    }
+  },
+  "units": {
+    "sub": {
+      "engine_index": 1,
+      "owner": 0,
+      "type": "CORSUB",
+      "requested": [
+        2900,
+        1950
+      ],
+      "actual": [
+        2900,
+        1950,
+        29
+      ],
+      "ordinal": 0
+    },
+    "roy": {
+      "engine_index": 501,
+      "owner": 1,
+      "type": "ARMROY",
+      "requested": [
+        3500,
+        1950
+      ],
+      "actual": [
+        3500,
+        1950,
+        75
+      ],
+      "ordinal": 1
+    },
+    "far": {
+      "engine_index": 502,
+      "owner": 1,
+      "type": "ARMSOLAR",
+      "requested": [
+        3300,
+        1440
+      ],
+      "actual": [
+        3300,
+        1440,
+        73
+      ],
+      "ordinal": 2
+    }
+  },
+  "features": {},
+  "order_probe": {
+    "passed": [
+      3500,
+      75,
+      1950
+    ],
+    "stored": [
+      3500,
+      75,
+      1950
+    ]
+  },
+  "camera": [
+    2900,
+    1950
+  ],
+  "pin": 0,
+  "eye": [
+    2516,
+    1584
+  ],
+  "errors": [],
+  "name": "cob1",
+  "scenario": "cob-sub",
+  "catalogue": null,
+  "loaded": {
+    "steps": [
+      "launched 1024x768, map 'Anteer Strait', unit limit 500",
+      "clicked SINGLE on MAINMENU.GUI \u2014 screen MAINMENU.GUI -> SINGLE.GUI",
+      "clicked Skirmish on SINGLE.GUI \u2014 engine confirmed",
+      "map unmapped -> mapped",
+      "clicked Start on SKIRMISH.GUI",
+      "live with 3 units",
+      "map Maps\\Anteer Strait.TNT"
+    ],
+    "map_file": "Maps\\Anteer Strait.TNT",
+    "map_requested": "Anteer Strait",
+    "res": [
+      1024,
+      768
+    ],
+    "unit_limit": 500,
+    "players": [
+      "0:1:1:0",
+      "1:2:0:1"
+    ],
+    "alive_before_apply": 3,
+    "window": [
+      234881027,
+      3206,
+      118,
+      640,
+      480
+    ],
+    "pid": 877189
+  }
+}

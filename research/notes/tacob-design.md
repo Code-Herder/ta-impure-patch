@@ -278,6 +278,50 @@ a line in `file-formats.md` §2.8:
 The decompiled stock scripts read like the community's BOS (ARMSTUMP's `AimPrimary` comes back
 as the eight lines every modder knows), which is the readability the gate cannot measure.
 
+## Landing 2 — built 2026-09-07
+
+`tagpu/ddraw/src/tagpu_cobtrace.c` (the hook, §"The `tagpu_cobtrace.on` hook" above),
+`scenarios/cob-*.json` (the nine class scenarios), `tools/cobtrace_fixtures.py` (runs them,
+parks the camera, drops the posedump, keeps the files), and the fixtures with a per-class
+table in `research/notes/evidence/cobtrace/README.md`. Verified by running it: every class
+produced a trace and a posedump (the README records the fighter shape the engine's own
+`ORDERS_CreateObject` fault ruled out, with and without the oracle), the tick advances
+across a traced death, and the kbot trace was read line by line against the disassembly.
+
+What the engine taught that the interview did not know, each now a rule landing 3's VM
+follows (the addresses are in `exe-reverse-engineering.md` §"The COB engine"):
+
+- **There is one allocator and the arguments come after it.** Every start — engine or
+  script — goes through `0x4B08C0`, and every caller writes the arguments onto the new
+  record only after it returns; the trace latches the start and writes it at the next hook
+  event, always before the thread's first step.
+- **Run-later starts step at the next tick; run-now starts finish inside their tick.**
+  `SetMaxReloadTime` (started with `runNow = 0`) is logged at tick 117 and returns at 118;
+  `StartMoving` and `Create` (`runNow = 1`) return in their own tick — and a run-now start
+  runs *every* runnable record of that unit, with `dt = 0`, not only the new one.
+- **`sleep` is `ms × 30 / 1000` ticks, truncated** (`sleep 150` = 4 ticks); the per-unit tick
+  passes `dt = 1` and a sleeper wakes when its count reaches zero; the animation stepper
+  runs after the eight records each tick.
+- **`call-script` blocks the caller until the child's `RETURN`** (`L:<n>` lines: the kbot's
+  `walk` is a 19-tick loop under `MotionControl`); a child refused by a full pool parks the
+  caller for ever. `start-script` children inherit the parent's signal mask; a thread
+  killed by `signal` never runs its `RETURN` (a `K` line, no `R`).
+- **Locals are not zeroed.** `CREATE_LOCAL_VAR` only bumps the stack index; a script that
+  creates more locals than it received arguments reads the record's previous words.
+- **A script with no trailing `RETURN` runs into the next script's words** — measured, not
+  only read off the bytecode: ARMSTUMP's `HitByWeapon` ends under `SweetSpot`'s name.
+- **`Killed` is a query.** `Send_UnitDeath` runs it through `QueryScript` with two locals, so
+  its second argument is uninitialised stack and the corpse type is read back from the
+  record; the replay masks that argument.
+- **`rand` is the sim RNG** (`0x4B6C30`, shared with 129 other call sites), one draw per
+  `rand`, so the `D` line is the only way to replay it — and the draws are frequent:
+  `SmokeUnit` under 66 % health draws every few hundred ms.
+- **The effect opcodes reach vtable slots** — `EMIT_SFX` → `vt+0x30` (`0x480EB0`), `EXPLODE`
+  → `vt+0x34` (`0x481140`) — so the shipped constants can now be verified against code, which
+  is landing 3's or 4's job, not done here.
+- **Stock scripts never fill the pool**: no fixture produced an `X` line. The refusal
+  path is exercised only by extended-weapons content (`extra-weapons.md` snag 10).
+
 ## Gaps this design does not close
 
 - **Scriptor compatibility of hand-written literals** is unproven until the binary is found:

@@ -36,10 +36,10 @@ CLASSES = [("kbot",     "ARMPW",     8,  3),
            ("tank",     "ARMSTUMP",  8,  3),
            ("building", "ARMWIN",    8,  3),
            ("death",    "ARMPW",     3,  3),
-           ("fighter",  "ARMHAWK",  10,  3),
+           ("fighter",  "ARMHAWK",   3,  4),   # in flight before the first shot: the engine faults soon after (README)
            ("gunship",  "ARMBRAWL", 10,  3),
            ("bomber",   "ARMTHUND", 12,  3),
-           ("ship",     "CORBATS",  10,  3),
+           ("ship",     "CORBATS",   7,  3),
            ("sub",      "CORSUB",   10,  3)]
 
 

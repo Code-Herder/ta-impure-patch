@@ -1,0 +1,61 @@
+posedump: tick=585 idx=1 unit=04AC0138 o3=04525C30 nparts=15 yaw=50451
+posedump: p0 torso off=(0,-35566,296209) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(132710,827026,-116909) vbuf=(-99519,1729457,-146204)
+posedump:   v1 node=(201719,417595,233715) vbuf=(256962,1320026,-171125)
+posedump:   v2 node=(201719,502273,-201914) vbuf=(-175293,1404704,-225238)
+posedump: p1 ruparm off=(291962,398131,-53083) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(0,0,0) vbuf=(-16405,1300562,-296295)
+posedump:   v1 node=(458646,-159252,194288) vbuf=(233351,1141310,-727254)
+posedump:   v2 node=(56533,-212335,194288) vbuf=(183401,1088227,-328256)
+posedump: p2 luparm off=(-291962,398131,-53083) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(-56533,-212335,194288) vbuf=(96822,1088227,363336)
+posedump:   v1 node=(-53083,159252,-159252) vbuf=(-253551,1459814,315997)
+posedump:   v2 node=(-53083,159252,159252) vbuf=(62486,1459814,355561)
+posedump: p3 rfire HIDDEN off=(6717,249200,977961) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(0,-94234,247150) vbuf=(113290,-151631,-554320)
+posedump:   v1 node=(0,91917,245280) vbuf=(297999,-149761,-531196)
+posedump:   v2 node=(0,-405,5740) vbuf=(206392,89779,-542664)
+posedump: p4 lfire HIDDEN off=(7372,249200,977961) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(0,-94234,247150) vbuf=(-25103,-151631,551161)
+posedump:   v1 node=(0,91917,245280) vbuf=(159607,-149761,574284)
+posedump:   v2 node=(0,-405,5740) vbuf=(68000,89779,562816)
+posedump: p5 rloarm off=(265420,-227082,-58327) move=(0,0,0) turn=(16384,0,0) err=0.00
+posedump:   v0 node=(0,0,0) vbuf=(-41310,1073480,-566904)
+posedump:   v1 node=(-50960,371589,888628) vbuf=(321071,184852,-470181)
+posedump:   v2 node=(-106167,132710,955513) vbuf=(77184,117967,-445074)
+posedump: p6 lloarm off=(-265420,-227082,-58327) move=(0,0,0) turn=(16384,0,0) err=0.00
+posedump:   v0 node=(106167,132710,477756) vbuf=(-34914,595724,450366)
+posedump:   v1 node=(106167,-106167,26541) vbuf=(-271941,1046939,420693)
+posedump:   v2 node=(106167,132710,26541) vbuf=(-34914,1046939,450366)
+posedump: p7 pelvis off=(0,937997,-296209) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(0,-5450,123420) vbuf=(-171451,932547,-21464)
+posedump:   v1 node=(-106885,-5450,-117249) vbuf=(-423533,932547,54698)
+posedump:   v2 node=(106885,-5450,-117249) vbuf=(-396979,932547,-157416)
+posedump: p8 rthigh off=(106167,-141734,296209) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(0,0,0) vbuf=(13188,796263,-105345)
+posedump:   v1 node=(58392,-177693,156067) vbuf=(175299,618570,-143898)
+posedump:   v2 node=(26541,-181547,-156067) vbuf=(-138373,614716,-151067)
+posedump: p9 lthigh off=(-106167,-141734,296209) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(-58392,-177693,156067) vbuf=(134417,618570,182671)
+posedump:   v1 node=(-26541,57868,-156067) vbuf=(-171343,854131,112294)
+posedump:   v2 node=(-58392,54540,156067) vbuf=(134417,850803,182671)
+posedump: p10 lleg off=(-159252,-185794,0) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(149166,-461831,159252) vbuf=(143578,148638,135135)
+posedump:   v1 node=(185794,0,-159252) vbuf=(-167909,610469,59226)
+posedump:   v2 node=(149166,7431,159252) vbuf=(143578,617900,135135)
+posedump: p11 rleg off=(159252,-185794,0) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(0,0,0) vbuf=(32970,610469,-263363)
+posedump:   v1 node=(78298,16045,301579) vbuf=(341939,626514,-303593)
+posedump:   v2 node=(-131382,16045,301579) vbuf=(315893,626514,-95537)
+posedump: p12 rfoot off=(0,-398131,0) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(0,0,0) vbuf=(32970,212338,-263363)
+posedump:   v1 node=(-154209,-215520,371589) vbuf=(382525,-3182,-64190)
+posedump:   v2 node=(-154209,-215520,-238878) vbuf=(-223214,-3182,-140022)
+posedump: p13 lfoot off=(0,-398131,0) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(154209,-215520,371589) vbuf=(354897,-3182,156507)
+posedump:   v1 node=(130417,29726,-165622) vbuf=(-181109,242064,113383)
+posedump:   v2 node=(130417,-102982,271790) vbuf=(252915,109356,167718)
+posedump: p14 ground off=(0,0,0) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(1048576,0,1048576) vbuf=(1170707,0,-910202)
+posedump:   v1 node=(-1048576,0,-1048576) vbuf=(-1170707,0,910202)
+posedump:   v2 node=(1048576,0,-1048576) vbuf=(-910202,0,-1170707)
