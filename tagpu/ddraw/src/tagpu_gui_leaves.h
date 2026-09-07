@@ -44,15 +44,20 @@ static const int* ctx_or_back(unsigned ctxArg)
    (composite-buffer.md §3). 0x4B8500 is the shaded twin with the same shape. */
 /* Blits that are not UI although they land in the back buffer: the unit
    composite blit inside 0x459200 (the engine draws its all-key composites
-   while owndraw skips the rasterisers), and the cursor's four draw paths
-   (exe map "the two ways the cursor gets drawn"). Anything recorded while the
-   flip is running is the cursor too (s_inFlip). Matched on the return address. */
+   while owndraw skips the rasterisers), and the cursor's draw paths (exe map
+   "the two ways the cursor gets drawn"). Anything recorded while the flip is
+   running is the cursor too (s_inFlip). Matched on the return address; the
+   ranges are the functions' extents read from the disassembly (2026-09-07):
+   0x459200's seven leaf calls return inside 0x459319..0x4597D8 and it ends at
+   0x4597DF; the cursor code's fifteen (0x4C23C9..0x4C297E) end at 0x4C2989;
+   the flip 0x4C63A0 ends at 0x4C6669, and 0x4C67C0 — its two callers are
+   0x4C641B and 0x4C6544, both inside the flip — ends at 0x4C6884. */
 static int excluded_caller(unsigned ret)
 {
     if (s_inFlip) return 1;
     if (ret >= 0x00459200u && ret < 0x00459800u) return 1;   /* the unit blit    */
     if (ret >= 0x004C2380u && ret < 0x004C2A00u) return 1;   /* cursor draws     */
-    if (ret >= 0x004C6300u && ret < 0x004C6800u) return 1;   /* flip + 0x4C67C0  */
+    if (ret >= 0x004C6300u && ret < 0x004C6890u) return 1;   /* flip + 0x4C67C0  */
     return 0;
 }
 

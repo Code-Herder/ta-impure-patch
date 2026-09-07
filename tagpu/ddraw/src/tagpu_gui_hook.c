@@ -1,9 +1,19 @@
-/* tagpu_gui_hook.c — the observers and the census (Phase E, G15a).
-   Contract: inc/tagpu_gui.h. Design: research/notes/gui-renderer.md 3.5, 3.6.
+/* tagpu_gui_hook.c — the observers, the census and the publisher (Phase E,
+   G15a + G15b). Contract: inc/tagpu_gui.h. Design: research/notes/gui-renderer.md
+   3.5, 3.6, 10.
 
    NOTHING HERE CHANGES WHAT THE ENGINE DRAWS. Every detour is an observer
    (tagpu_detour_observe): the original runs unchanged, we read its arguments
    off the stack on the way in and, where we need its result, on the way out.
+
+   THE PUBLISHER (G15b). While the layer is on (g_gui_draw, the render thread's
+   poll of tagpu_gui.on), the same ring the census reads is turned into queue
+   ops for tagpu_gui_surf.c at the census cadence, inside the flip observer:
+   a seed for every surface first seen, a sprite for a plain keyed GAF blit
+   (its bytes decoded here on first sight), a twin-to-twin copy for 0x4C6B70
+   from a twinned source, the viewport clear at the terrain key fill, and the
+   box's bytes — read NOW, the frame complete — for everything else. See
+   publish() and the dedup note above it.
 
    THE CENSUS. The engine's UI is retained: each .GUI screen owns a surface at
    panel+0xBC that the gadget handlers draw into, and the per-frame draw blits
@@ -739,7 +749,7 @@ void tagpu_gui_init(void)
     ok = tagpu_detour_observe(FLIP_VA, FLIP_STOLEN, sizeof FLIP_STOLEN, before_flip, after_flip);
     n = leaves_install();
     s_installed = ok && n == LEAF_COUNT;
-    _snprintf(b, sizeof b, "gui: %s flip@0x4C63A0=%d leaves=%d/%d census=%d log=%d pgm=%d key=%d (Phase E G15a: observers only, nothing drawn)",
+    _snprintf(b, sizeof b, "gui: %s flip@0x4C63A0=%d leaves=%d/%d census=%d log=%d pgm=%d key=%d (Phase E: observers on the game thread; the layer follows the trigger, tagpu_gui_surf.c)",
               s_installed ? "ARMED" : "FAILED", ok, n, LEAF_COUNT, s_census, s_log, s_pgm, s_key);
     glog(b);
 }

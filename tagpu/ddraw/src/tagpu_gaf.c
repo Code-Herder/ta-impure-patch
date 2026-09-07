@@ -184,13 +184,16 @@ int tagpu_gaf_decode(const unsigned char* g, int w, int h, unsigned char* out)
 void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a)
 {
     char b[128];
+    int wasFull = a->full;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     memset(a->hash, 0, sizeof a->hash);
     /* the twin's rects are about to be re-used by other frames: back to
        unpainted, and whatever was queued is dropped (it re-queues on its miss) */
     if (a->job) { tagpu_rglsl_job_clear(a->job); twin_mips(a); }
-    _snprintf(b, sizeof b, "%s: atlas reset (full) — frames re-decode on demand",
-              a->tag ? a->tag : "gaf");
+    /* the sprite atlases reset when full; the UI atlas also on a re-arm or a
+       GL context change (tagpu_gui_surf.c twins_reset), which is not "full" */
+    _snprintf(b, sizeof b, "%s: atlas reset (%s) — frames re-decode on demand",
+              a->tag ? a->tag : "gaf", wasFull ? "full" : "restart");
     glog(b);
 }
 

@@ -2,14 +2,23 @@
 """uiwalk — drive one instance through the UI screen inventory and collect the
 Phase E measurements at every stop (research/notes/gui-renderer.md 3.11).
 
-G15a (this version): the CENSUS. The DLL is armed with `tagpu_gui.on=census log pgm trace`,
+Two modes:
+
+G15a, the CENSUS (default). The DLL is armed with `tagpu_gui.on=census log pgm trace`,
 so at every engine flip it diffs the flipped surface against its previous copy,
 subtracts every recorded op and the world viewport, and logs what nobody explained.
 At each screen the walk lets the census run, pulls its lines, asks for the PGM of
 the last flip and the engine's surface shot, and writes a report.
 
+G15b, the LAYER (`--layer`). The DLL is armed with `tagpu_gui.on=strict log`: the GL
+UI layer draws with the fallback off, and at each stop the walk takes the engine's
+surface and our GL frame and counts differing pixels (outside the world viewport in
+game, the cursor rect excluded) and magenta holes, plus the layer's heartbeat (fps,
+resets, overflows, atlas). Needs numpy and PIL: run it with the venv's python.
+
     tools/uiwalk.py --inst uiw --res 1024x768 --out /tmp/uiwalk
     tools/uiwalk.py --inst uiw --shell-only
+    ../.venv-undither/bin/python tools/uiwalk.py --inst uiw --res 1920x1080 --layer --out /tmp/layer
 
 The instance is created if needed and STOPPED at the end (kept for inspection with
 --keep). Everything goes through tacli; nothing here touches X.
@@ -111,21 +120,54 @@ class Walk:
         self.log_seen = size
         return [l for l in data.decode("latin-1", "replace").splitlines() if "gui census:" in l]
 
+    def top_gui(self):
+        rc, uiout = tacli("ui", self.inst)
+        first = uiout.splitlines()[0].strip() if uiout.strip() else ""
+        return first.split()[1] if first.startswith("gui ") and len(first.split()) > 1 else "?"
+
+    def select_commander(self, label):
+        """Click the human player's commander so its build page comes up. The roster's
+        `screen=` is the engine's 1x projection, which is where to click at zoom 1; `me=`
+        is on the `units:` line, not in the roster JSON. Every candidate is tried until
+        the top screen changes off the bare in-game panel."""
+        me = 0
+        rc, out = tacli("log", self.inst, "-g", r"^units: ")
+        import re
+        m = re.search(r"me=(\d+)", out.strip().splitlines()[-1] if out.strip() else "")
+        if m:
+            me = int(m.group(1))
+        cands = []
+        try:
+            rc, out = tacli("roster", self.inst, "--json")
+            units = json.loads(out).get("units", [])
+            mine = [u for u in units if u.get("owner") == me]
+            cands = sorted(mine, key=lambda u: 0 if u["type"].upper().endswith("COM") else 1)
+        except Exception as e:
+            print(f"  [{label}] roster unreadable: {e}", file=sys.stderr)
+        before = self.top_gui()
+        for u in cands:
+            sx, sy = u["screen"]
+            tacli("click", self.inst, str(int(sx)), str(int(sy)))
+            time.sleep(0.6)
+            after = self.top_gui()
+            if after != before:
+                return True
+        print(f"  [{label}] no build page opened (top gui {before}, {len(cands)} candidates for me={me})", file=sys.stderr)
+        return False
+
+    def heartbeat(self):
+        """The layer's newest `gui: twins=` line, parsed."""
+        rc, out = tacli("log", self.inst, "-g", r"^gui: twins=")
+        line = out.strip().splitlines()[-1] if out.strip() else ""
+        import re
+        return {k: (float(v) if "." in v else int(v)) for k, v in re.findall(r"(\w+)=([0-9.]+)", line)}
+
     def stop_at(self, label, actions, in_game=False):
         if not self.rows:
             self.census_lines()             # start the first window here
         for a in actions:
             if a == "select-commander":
-                rc, out = tacli("roster", self.inst, "--json")
-                try:
-                    units = json.loads(out)
-                    me = [u for u in (units.get("units") if isinstance(units, dict) else units) if u.get("mine") or u.get("owner") == units.get("me")]
-                    u = me[0] if me else None
-                    sx, sy = u["screen"] if u else (512, 384)
-                except Exception:
-                    sx, sy = 512, 384
-                tacli("click", self.inst, str(int(sx)), str(int(sy)))
-                time.sleep(0.5)
+                self.select_commander(label)
                 continue
             if a[0] == "ui" and a[1] == "click" and len(a) > 3:
                 # alternatives: click the first gadget that exists on this screen
@@ -172,9 +214,12 @@ class Walk:
             parity = frame_parity(self.out / f"{label}-gl.ppm", self.out / f"{label}-surface.png",
                                   self.gamedir, in_game, self.res)
         summary = parse_census(lines)
-        self.rows.append({"label": label, "screen": screen, "in_game": in_game, "lines": lines, **summary, **parity})
+        hb = self.heartbeat() if self.parity else {}
+        self.rows.append({"label": label, "screen": screen, "in_game": in_game, "lines": lines, **summary, **parity,
+                          "heartbeat": hb})
         extra = (f" | parity: differing={parity.get('differing', '-')} holes={parity.get('holes', '-')}"
-                 f" {parity.get('bbox', '')}" if parity else "")
+                 f" {parity.get('bbox', '')} | fps={hb.get('fps', '-')} resets={hb.get('resets', '-')}"
+                 f" overflows={hb.get('overflows', '-')} atlas={hb.get('atlas', '-')}" if parity else "")
         print(f"  {label:14s} {screen:40s} flips={summary['flips']:4d} changed={summary['changed']:7d} "
               f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{extra}", file=sys.stderr)
 
@@ -183,10 +228,12 @@ class Walk:
         with p.open("w") as f:
             f.write(f"# uiwalk census — {self.inst} at {self.res}\n\n")
             if self.parity:
-                f.write("| stop | screen | game | differing px (outside the viewport in game) | strict holes | box |\n|---|---|---|---|---|---|\n")
+                f.write("| stop | screen | game | differing px (outside the viewport in game) | strict holes | box | fps | resets | overflows | twins | atlas |\n|---|---|---|---|---|---|---|---|---|---|---|\n")
                 for r in self.rows:
+                    hb = r.get("heartbeat", {})
                     f.write(f"| {r['label']} | {r['screen']} | {'y' if r['in_game'] else ''} | {r.get('differing', '-')} | "
-                            f"{r.get('holes', '-')} | {r.get('bbox', '')} |\n")
+                            f"{r.get('holes', '-')} | {r.get('bbox', '')} | {hb.get('fps', '-')} | {hb.get('resets', '-')} | "
+                            f"{hb.get('overflows', '-')} | {hb.get('twins', '-')} | {hb.get('atlas', '-')} |\n")
                 f.write("\n")
             f.write("| stop | screen | game | censuses | changed px | unexplained px | worst census box | ops in the window |\n|---|---|---|---|---|---|---|---|\n")
             for r in self.rows:
