@@ -195,6 +195,17 @@ game; the registry is only where TA saves the last one. So:
   (`field-notes.md` patch 2); `tacli arm <i> curs.off` before launch restores the engine's own
   behaviour for an A/B. The explicit order buttons (Move/Attack/Patrol/Reclaim/Guard) were
   never affected either way.
+- **At type 1 a plain `click` on the world DESELECTS** — that is the engine's own rule, and the
+  reason `--right` is how you order. `click` selects only when something selectable is under the
+  pointer. Between G13j and G13q the cursor patch broke that and a left click ordered as well,
+  so a recipe written in that window may have been ordering where it meant to clear the
+  selection; `field-notes.md` patch 2b is the fix. At type 0 the scheme is the mirror image —
+  left orders, right deselects — which is why posted right-clicks order nothing there.
+- **The pointer must be parked before a click that depends on context.** The engine decides what
+  a click does from the cursor index it installed on the last mouse *move* (`main+0x2CBE`), so a
+  bare `tacli click X Y` acts on wherever the pointer last was: send `keys <i> mouse:X,Y` first,
+  then `click`. The symptom otherwise is a click that re-selects the old target, or orders to
+  the old point, with no error anywhere.
 - **Ctrl/Shift/Alt combos land** (since phase 1.1): `tacli keys t1 ctrl+d`,
   `shift+2`, `ctrl+shift+a`. The modifier is held 150 ms because TA *polls* it.
   If a combo does nothing, read the diagnostic the shield logs when the hold expires —

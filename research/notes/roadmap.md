@@ -59,7 +59,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Health bars, order markers, group digits, ShowRanges labels, build cursor, band box | ● native and **nothing captured** (G13d, corrected G13h, cursor re-drawn G13n, order block ported G13o, **text ported G13p**) | `markown`: 14 call-site redirects + one detour on `0x46A430`. Health bars, the build cursor and the drag band box are re-drawn from engine state; the order-marker block is a game-thread snapshot drawn as geometry (`tagpu_order.c`); the group digit and the `ShowRanges` labels are TA's own glyphs rasterised into an atlas of ours through `0x4CCF60` (`tagpu_text.c`). Window A and the identity blend LUT are gone | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x); the build cursor **0-px against the captured path** at 1× and 2.144×, and present in the ring at 0.467× where the capture drew nothing; the order block's node-list diff against the engine clean over **16 650 records / 1 665 blocks**, and at 0.25× four build sites queued in the ring draw where the engine draws none. G13p: the group digit **PIXEL-IDENTICAL to the engine's at 1×** (0 differing pixels, 19 bright each way) and drawn out in the ring at 0.25× where the engine draws nothing at all; the eight `ShowRanges` labels on the engine's own pixels ("weapon1 range" 209 bright against 205) |
 | Chat, dialogs, side panel, minimap, top bar | ○ engine 8bpp, through the composite key | — | stays engine-side: screen-space, correct at 1:1 at any zoom |
 | Mouse cursor | ● the engine's own, under the pointer (G13e, cured G13m) | `fake_GetCursorPos` answers the TRUE pointer, so the engine blits its sprite where the player is looking; the unzoomed `u` reaches it only through a button message and through the `0x498DA0` mouse→world repair. The composite no longer touches the cursor | 0 % of motion frames left behind at `u` across three runs at 1920×1080 / 0.25× with a real pointer (was 10–11 %); exact at four static positions; box- and click-select in the band, in the ring and at 2× |
-| Contextual order cursors | ● restored by patch (G13j) | `tagpu_patches.c`: six NOPs over the `je` at `0x43E50C`, the `Interface Type == 1` branch inside `0x43E490` — whose only caller is `CorretCursor_InGame 0x48D220`, so it is the sprite and nothing else | at Interface Type 1, commander selected: ground 14 `cursormove`, wreck 11 `cursorreclamate`, own unit 15 `cursorselect`, nothing selected 19 `cursornormal`; right-click still orders; sprites read out of the GL framebuffer; unchanged at zoom 1/2/0.5 |
+| Contextual order cursors | ● restored by patch (G13j), **and the left button given back (G13q)** | `tagpu_patches.c`: six NOPs over the `je` at `0x43E50C`, the `Interface Type == 1` branch inside `0x43E490` — plus 27 bytes at `0x499041`, the left click's own dispatch, which read the very index those NOPs change | at Interface Type 1, commander selected: ground 14 `cursormove`, wreck 11 `cursorreclamate`, own unit 15 `cursorselect`, nothing selected 19 `cursornormal`; sprites read out of the GL framebuffer; unchanged at zoom 1/2/0.5. G13q: at type 1 a left click deselects and only the right one orders, at type 0 the reverse, with own-unit select and the Move button unchanged at both |
 | Click → world point | ● transformed (G13e) | `tagpu_zoom.c`: one rewrite at the three doors into the engine's own wndproc, plus `fake_GetCursorPos` | at 0.5× the commander selects at its DRAWN position (394,427) and no longer at its 1× one (212,470); the side panel still clicks 1:1 |
 | Minimap view rectangle, scroll rate | ● zoom-aware (G13e) | `0x466B70` ×2 redirected and its rect rescaled by 1/z; `ScrollSpeed` (`main+0x1434D`) driven at base/z | minimap box doubles at 0.5× and quadruples at 0.25×; ScrollSpeed 32 → 64 → 128 → 16 at 2×, and restores |
 | The camera's range at zoom > 1 | ● follows the zoom (G13g) | `tagpu_zoom.c`: the eye clamp `0x41C3C0` replaced by a `leaf_call` detour while zoom > 1, widening `[0, map − W]` by `d = (W/2)(1 − 1/z)`, plus a map clamp on the `GetTPosition` inside `0x498DA0` | measured on Two Continents at 1024×768: (−224,−176) at 2×, (−392,−308) at 8×, (10048,12144) at the far corner, all exact; 1× and 0.5× land on the engine's own (0,0)/(9824,11968) |
@@ -79,6 +79,44 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G13q — the left mouse button stopped issuing orders.** Reported from play: *"when I have a
+unit selected, right click/left click both issue a move order. I believe that was not the
+original game behavior."* It was not: at `Interface Type = 1` — right-mouse orders, the value
+`tacli` writes into every instance — a left click on the world deselects, and it was **our own
+G13j cursor patch** that turned it into a second order button.
+
+**The index is the state, not the picture.** `0x4992AD` stores the cursor index `0x43E490`
+picked into `main+0x2CBE`, and the left click's action `0x498F70` dispatches on that byte at
+`0x499027`: `0x0F` selects the unit under the pointer, anything **below `0x11`** is read as "an
+action cursor" and issues the order, and the rest deselects when no command button is pressed.
+At type 1 the engine's own contextual arm `0x43EB02` returns only 15/17/18/19 — verified by
+collecting the returns of all 220 blocks reachable from it — so `< 0x11` never happened and that
+compare *was* the type-1 rule. G13j feeds it the classic 14 `cursormove` and the rule collapses.
+
+The fix is 27 bytes for 27 at `0x499041`, deciding the contextual left click on `main+0x37EFA`
+and the order byte directly instead of on the index that used to stand in for them. It is
+equivalent to stock on a stock cursor state: at type 0 it is the original test unchanged, and at
+type 1 the only indexes the engine can leave in `main+0x2CBE` are 15, 17, 18, 19 and the
+hourglass 20 — all of which stock deselects. It is armed only when the G13j patch itself took,
+and `tagpu_curs.off` still turns off both.
+
+Measured live on `one-unit` / Two Continents, commander selected, before and after: at type 1 a
+left click on ground walked the unit to the clicked point and kept it selected (the bug), then
+deselected it and moved nothing (`ARMCOM1.GUI` → `ARMMAIN2.GUI`); a right click still walks it;
+a left click on the unit still selects it; the Move button followed by a left click still
+orders; a left click on a wreck deselects where a right click reclaims. Switched to type 0
+through TA's own `SPEEDSRT.GUI` `LEFTCLICK` toggle, the classic scheme is back untouched — left
+orders, right deselects — and the contextual cursors stay 14 over ground and 11 over a wreck
+throughout.
+
+**What this gate did not close.** The other three ordering readers of `main+0x37EFA`
+(`0x499162`, `0x499352`, `0x499567`) were read and documented but not patched, and none of them
+consults the cursor index. `0x41D0F0` (the minimap drag's per-message call) and `0x41CD50` are
+named by their call sites only. Nothing here changes `tacli`'s `Interface Type = 1`, so every
+scripted recipe in the repo still orders with `click --right`. Full path:
+[exe-reverse-engineering](exe-reverse-engineering.html) §"The in-game mouse buttons — what a
+click actually does".
 
 **G14j — the Classic structure shadow at parity, in the game and in the lab.** Found on
 2026-09-06 while answering whether the engine draws the Kbot lab a shadow at all (G14i's "did
@@ -957,6 +995,12 @@ address appears nowhere in the image as a literal**: the compare governs the spr
 reach ordering, which lives at four other readers of `main+0x37EFA` (`0x499046`, `0x499162`,
 `0x499352`, `0x499567`). Verified by right-clicking a move order through after the patch.
 `tagpu_curs.off` opts out, read once at attach like every byte patch.
+
+*[CORRECTED 2026-09-07 by G13q: the sentence above is wrong, and it shipped a bug for four
+days. The compare governs the sprite, but the index it picks is stored in `main+0x2CBE` and the
+left click reads that byte to decide what to do — `0x499046` is one of those four readers and
+sits behind the index test. So the patch did reach ordering: from G13j until G13q a **left**
+click at Interface Type 1 issued a move order instead of deselecting.]*
 
 **What this gate did not close.** The **explicit** order-button cursors (Move, Attack, Patrol,
 Reclaim, Guard) were never affected — their order bytes reach their cases without consulting
