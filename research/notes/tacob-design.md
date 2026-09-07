@@ -30,6 +30,8 @@ diff against the real game.
 
 ## What exists today — the premise corrected
 
+*Landing 1 has since built the compiler, the decompiler and the gate (§Landing 1, below); this section records the starting point.*
+
 The interview opened on "we already have a compiler/decompiler". We do not. `[VERIFIED — the
 repo and `vendor/` searched 2026-09-07]`
 
@@ -204,17 +206,49 @@ Right, bottom: tabs — unit state, weapon slots, console, trace. Across the top
 
 | # | Landing | Gate |
 |---|---|---|
-| 1 | Compiler + decompiler, CLI only (`compile`, `decompile`, `dump`), preprocessor, shipped headers | every stock COB round-trips byte-identical; `test_tacob.py` green |
+| 1 | Compiler + decompiler, CLI only (`compile`, `decompile`, `dump`), preprocessor, shipped headers | **built 2026-09-07** — 278 of 278 stock COBs round-trip byte-identical as whole files; 26 offline tests green |
 | 2 | The `tagpu_cobtrace.on` hook | the nine scenarios each produce a cobtrace log and a posedump; reviewed as an engine change |
 | 3 | VM + director, headless `tacob run` | trace and pose diffs empty against landing 2's logs; the pool refuses the ninth thread |
 | 4 | The editor page, lints, slot template | driven by hand: open a stock unit, edit, restart, see the change, pack a UFO that `tacli` loads |
 | 5 | Packaging: pywebview launcher, browser fallback, game-folder picker, PyInstaller onedir | the built folder runs on a machine with no Python |
 | 6 | Scriptor as oracle (whenever the binary turns up) | probe corpus compiled by both, bytes identical or every difference explained here |
 
+## Landing 1 — built 2026-09-07
+
+`tools/tacob` (compile · decompile · dump · roundtrip), `tools/tacob-include/` (`exptype.h`,
+`sfxtype.h`, `smokeunit.h`), `tools/test_tacob.py` (26 offline tests, hand-built COBs and
+BOS). Gate: `tools/tacob roundtrip --all` → **278 of 278 byte-identical**, and the identity is
+the *whole file*, not only the code words — Scriptor's layout turned out fully regular
+(`file-formats.md` §2.8), so the stronger claim came free.
+
+What the corpus taught that the interview did not know, each now a rule the tool follows and
+a line in `file-formats.md` §2.8:
+
+- **The implicit return is decided by the last opcode, not the last statement.** A script
+  ending `if( x ) { …; return (0); }` gets no trailing return and falls through into the next
+  script — the engine really runs that way for ARMPW's `FirePrimary`. My first rule ("append
+  unless the last statement is a return") broke on it, and the second ("last emitted opcode")
+  broke on an empty `Create()` because it looked at the *previous* script's opcode.
+- **No stock script uses `else`.** Every one of the 848 JUMPs is a loop back-edge. The `else`
+  shape is compiled the community way and covered by a unit test, not by the corpus.
+- **Literals truncate toward zero** — Scriptor's own output settles the direction the
+  interview left open. What stays open is only float precision on hand-written decimals.
+- **`speed` is a legal identifier** (`SetSpeed(speed)` in twelve stock units): the clause
+  words are soft keywords.
+- **`attach-unit` pushes three values**; the third is 0 in every stock use.
+- **Names the decompiler can recover**: piece names in `Query*`/`AimFrom*` results, in
+  `attach-unit`, and as the first argument of `PIECE_XZ`/`PIECE_Y`; flag names in `explode`;
+  SFX names in `emit-sfx`; the engine's parameter names for the scripts it calls; callers'
+  argument counts for the rest. Statics stay `static_var_N`, locals `varN`.
+
+The decompiled stock scripts read like the community's BOS (ARMSTUMP's `AimPrimary` comes back
+as the eight lines every modder knows), which is the readability the gate cannot measure.
+
 ## Gaps this design does not close
 
-- **Scriptor compatibility of literals** is unproven until the binary is found. Our compiler is
-  self-consistent, not proven identical.
+- **Scriptor compatibility of hand-written literals** is unproven until the binary is found:
+  truncation is established from its output, but not whether it computes in single precision
+  (`<12.5>` sits on a boundary either way). Our compiler is self-consistent, not proven identical.
 - **The effect constants** (`SFXTYPE_*`, the explosion flags) are the community's values until
   the `EMIT_SFX`/`EXPLODE` handlers are located in the exe.
 - **`rand`** cannot be replayed from posedump; it depends on whether cobtrace can log the draws.

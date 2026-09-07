@@ -1,0 +1,1786 @@
+#!/usr/bin/env python3
+"""tacob — compile BOS to COB, decompile COB to BOS, and prove the round trip.
+
+    tools/tacob compile   unit.bos -o unit.cob [-I dir]
+    tools/tacob decompile unit.cob -o unit.bos           # or a stock unit: armpw
+    tools/tacob dump      unit.cob [Script]              # opcode listing
+    tools/tacob roundtrip --all [--out DIR] [--json]     # the landing-1 gate
+
+BOS is the source and COB the build artifact (research/notes/tacob-design.md).
+Formats: research/notes/file-formats.md §2. The code shapes below were
+measured over the 278 stock COBs on 2026-09-07 and are what `roundtrip`
+proves — every stock script decompiles to BOS that compiles back to the
+identical file:
+
+  * layout: header(44) · code · entry table · script-name table · piece-name
+    table · strings (script names, then piece names, contiguous, no padding,
+    EOF at the last NUL); header word 10 is the strings offset
+  * every local is created at script entry (parameters first, `var`s after,
+    hoisted); every script ends `PUSH k; RETURN` — the implicit `return (0)`
+    is appended only when the last statement is not a return
+  * literals truncate toward zero: <20> = 3640, <105> = 19114, <-100> = -18204
+  * `get X` with no arguments is GET_UNIT_VALUE; with arguments it pushes the
+    id and four arguments, zero-padded, then GET
+  * operands are pushed trailing clause first: `turn … to D speed S` pushes S
+    then D; `spin … speed S accelerate A` pushes A then S; `set V to E` pushes
+    the id then E; `attach-unit U to P` pushes U, P, 0
+  * `&&` / `||` evaluate both sides (no short circuit); unary minus on a
+    non-literal is `0 - x`; no constant folding (`if( TRUE )` stays)
+  * the stock corpus has no `else` and no forward JUMP; `else` is compiled the
+    community way — `JNE else; then; JUMP end; else: …; end:`
+
+Everything is stdlib-only. Reading stock units out of the game's archives
+goes through `tools/ta3do`, loaded as a module the way tools/tascene does.
+"""
+
+import argparse
+import json
+import math
+import re
+import struct
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+INCLUDE_DIR = HERE / "tacob-include"
+
+
+class TacobError(Exception):
+    pass
+
+
+class CompileError(TacobError):
+    pass
+
+
+class DecompileError(TacobError):
+    pass
+
+
+# --------------------------------------------------------------------------- opcodes
+
+# (mnemonic, word, inline operand words). Values: file-formats.md §2.4.
+OPCODES = [
+    ("MOVE", 0x10001000, 2), ("TURN", 0x10002000, 2), ("SPIN", 0x10003000, 2),
+    ("STOP_SPIN", 0x10004000, 2), ("SHOW", 0x10005000, 1), ("HIDE", 0x10006000, 1),
+    ("CACHE", 0x10007000, 1), ("DONT_CACHE", 0x10008000, 1), ("MOVE_NOW", 0x1000B000, 2),
+    ("TURN_NOW", 0x1000C000, 2), ("SHADE", 0x1000D000, 1), ("DONT_SHADE", 0x1000E000, 1),
+    ("EMIT_SFX", 0x1000F000, 1), ("WAIT_FOR_TURN", 0x10011000, 2),
+    ("WAIT_FOR_MOVE", 0x10012000, 2), ("SLEEP", 0x10013000, 0),
+    ("PUSH_CONSTANT", 0x10021001, 1), ("PUSH_LOCAL_VAR", 0x10021002, 1),
+    ("PUSH_STATIC_VAR", 0x10021004, 1), ("CREATE_LOCAL_VAR", 0x10022000, 0),
+    ("POP_LOCAL_VAR", 0x10023002, 1), ("POP_STATIC_VAR", 0x10023004, 1),
+    ("POP_STACK", 0x10024000, 0),
+    ("ADD", 0x10031000, 0), ("SUB", 0x10032000, 0), ("MUL", 0x10033000, 0),
+    ("DIV", 0x10034000, 0), ("MOD", 0x10034001, 0), ("BITWISE_AND", 0x10035000, 0),
+    ("BITWISE_OR", 0x10036000, 0), ("BITWISE_XOR", 0x10037000, 0), ("BITWISE_NOT", 0x10038000, 0),
+    ("RAND", 0x10041000, 0), ("GET_UNIT_VALUE", 0x10042000, 0), ("GET", 0x10043000, 0),
+    ("LESS", 0x10051000, 0), ("LESS_EQUAL", 0x10052000, 0), ("GREATER", 0x10053000, 0),
+    ("GREATER_EQUAL", 0x10054000, 0), ("EQUAL", 0x10055000, 0), ("NOT_EQUAL", 0x10056000, 0),
+    ("AND", 0x10057000, 0), ("OR", 0x10058000, 0), ("XOR", 0x10059000, 0), ("NOT", 0x1005A000, 0),
+    ("START_SCRIPT", 0x10061000, 2), ("CALL_SCRIPT", 0x10062000, 2), ("JUMP", 0x10064000, 1),
+    ("RETURN", 0x10065000, 0), ("JUMP_NOT_EQUAL", 0x10066000, 1), ("SIGNAL", 0x10067000, 0),
+    ("SET_SIGNAL_MASK", 0x10068000, 0), ("EXPLODE", 0x10071000, 1), ("PLAY_SOUND", 0x10072000, 1),
+    ("MAP_COMMAND", 0x10073000, 2), ("SET", 0x10082000, 0), ("ATTACH_UNIT", 0x10083000, 0),
+    ("DROP_UNIT", 0x10084000, 0),
+]
+OP = {name: word for name, word, _ in OPCODES}
+INLINE = {word: n for _, word, n in OPCODES}
+MNEMONIC = {word: name for name, word, _ in OPCODES}
+
+BINARY_OPS = {  # BOS operator -> opcode; precedence climbs with the number
+    "||": "OR", "&&": "AND", "|": "BITWISE_OR", "^": "BITWISE_XOR", "&": "BITWISE_AND",
+    "==": "EQUAL", "!=": "NOT_EQUAL", "<": "LESS", "<=": "LESS_EQUAL", ">": "GREATER",
+    ">=": "GREATER_EQUAL", "+": "ADD", "-": "SUB", "*": "MUL", "/": "DIV", "%": "MOD",
+}
+PRECEDENCE = {"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5, "==": 6, "!=": 6,
+              "<": 7, "<=": 7, ">": 7, ">=": 7, "+": 8, "-": 8, "*": 9, "/": 9, "%": 9}
+UNARY_PRECEDENCE = 10
+OPCODE_TO_OPERATOR = {v: k for k, v in BINARY_OPS.items()}
+
+AXES = {"x-axis": 0, "y-axis": 1, "z-axis": 2}
+AXIS_NAMES = {v: k for k, v in AXES.items()}
+
+PIECE_OPS = {"show": "SHOW", "hide": "HIDE", "cache": "CACHE", "dont-cache": "DONT_CACHE",
+             "shade": "SHADE", "dont-shade": "DONT_SHADE"}
+PIECE_OP_KEYWORDS = {v: k for k, v in PIECE_OPS.items()}
+
+# GET/SET value ids, retail set (file-formats.md §2.5); 17, 4, 5, 18, 7, 8, 11 confirmed
+# against stock scripts (SmokeUnit, StartBuilding, OpenYard, BoomCalc).
+VALUE_IDS = {
+    "ACTIVATION": 1, "STANDINGMOVEORDERS": 2, "STANDINGFIREORDERS": 3, "HEALTH": 4,
+    "INBUILDSTANCE": 5, "BUSY": 6, "PIECE_XZ": 7, "PIECE_Y": 8, "UNIT_XZ": 9, "UNIT_Y": 10,
+    "UNIT_HEIGHT": 11, "XZ_ATAN": 12, "XZ_HYPOT": 13, "ATAN": 14, "HYPOT": 15,
+    "GROUND_HEIGHT": 16, "BUILD_PERCENT_LEFT": 17, "YARD_OPEN": 18, "BUGGER_OFF": 19,
+    "ARMORED": 20,
+}
+VALUE_NAMES = {v: k for k, v in VALUE_IDS.items()}
+PIECE_ARG_VALUES = {VALUE_IDS["PIECE_XZ"], VALUE_IDS["PIECE_Y"]}  # first argument is a piece
+
+# The shipped headers say the same thing in BOS; test_tacob checks they agree.
+EXPLODE_FLAGS = {
+    "SHATTER": 1, "EXPLODE_ON_HIT": 2, "FALL": 4, "SMOKE": 8, "FIRE": 16, "BITMAPONLY": 32,
+    "BITMAP1": 256, "BITMAP2": 512, "BITMAP3": 1024, "BITMAP4": 2048, "BITMAP5": 4096,
+    "BITMAPNUKE": 8192,
+}
+EXPLODE_NAMES = {v: k for k, v in EXPLODE_FLAGS.items()}
+SFX_TYPES = {
+    "SFXTYPE_VTOL": 0, "SFXTYPE_THRUST": 1, "SFXTYPE_WAKE1": 2, "SFXTYPE_WAKE2": 3,
+    "SFXTYPE_REVERSEWAKE1": 4, "SFXTYPE_REVERSEWAKE2": 5, "SFXTYPE_WHITESMOKE": 257,
+    "SFXTYPE_BLACKSMOKE": 258, "SFXTYPE_SUBBUBBLES": 259,
+}
+SFX_NAMES = {v: k for k, v in SFX_TYPES.items()}
+BUILTINS = {"TRUE": 1, "FALSE": 0}
+
+# Parameter names the engine's own calls imply (the COB keeps none).
+PARAM_NAMES = {
+    "setspeed": ["speed"], "setdirection": ["heading"], "setmaxreloadtime": ["reloadtime"],
+    "hitbyweapon": ["anglex", "anglez"], "rockunit": ["anglex", "anglez"],
+    "killed": ["severity", "corpsetype"], "sweetspot": ["piecenum"],
+    "querynanopiece": ["piecenum"], "querybuildinfo": ["piecenum"], "querytransport": ["piecenum"],
+    "querylandingpad": ["piecenum1", "piecenum2"], "startbuilding": ["heading", "pitch"],
+    "begintransport": ["height"], "transportpickup": ["unitid"], "transportdrop": ["unitid", "position"],
+    "setsfxoccupy": ["state"], "requeststate": ["requestedstate", "currentstate"],
+    "targetcleared": ["weapon"], "smokeunit": ["healthpercent", "sleeptime", "smoketype"],
+}
+LOCAL_NAMES = {"motioncontrol": ["moving", "aiming", "justmoved"]}
+PIECE_RESULT_SCRIPTS = re.compile(r"^(query|aimfrom|sweetspot)", re.I)
+
+
+def weapon_params(name: str):
+    n = name.lower()
+    if re.match(r"^aim(primary|secondary|tertiary|weapon\d+)$", n):
+        return ["heading", "pitch"]
+    if re.match(r"^(query|aimfrom)(primary|secondary|tertiary|weapon\d+)$", n):
+        return ["piecenum"]
+    if re.match(r"^fire(primary|secondary|tertiary|weapon\d+)$", n):
+        return []
+    return None
+
+
+# --------------------------------------------------------------------------- the container
+
+class Cob:
+    """A parsed COB: scripts [(name, entry word)], piece names, static count, code words."""
+
+    def __init__(self, scripts, pieces, statics, code):
+        self.scripts = list(scripts)
+        self.pieces = list(pieces)
+        self.statics = statics
+        self.code = list(code)
+
+
+HEADER = struct.Struct("<11I")
+
+
+def _cstring(blob: bytes, off: int) -> str:
+    end = blob.index(b"\0", off)
+    return blob[off:end].decode("latin-1")
+
+
+def read_cob(blob: bytes) -> Cob:
+    if len(blob) < HEADER.size:
+        raise TacobError("not a COB: shorter than its header")
+    (version, nscr, npc, codelen, nstat, _zero, o_cidx, o_snames, o_pnames, o_code,
+     _o_str) = HEADER.unpack_from(blob, 0)
+    if version != 4:
+        raise TacobError(f"not a retail TA COB: version {version} (TA:Kingdoms is out of scope)")
+    try:
+        entries = struct.unpack_from(f"<{nscr}I", blob, o_cidx)
+        snames = [_cstring(blob, o) for o in struct.unpack_from(f"<{nscr}I", blob, o_snames)]
+        pieces = [_cstring(blob, o) for o in struct.unpack_from(f"<{npc}I", blob, o_pnames)]
+        code = struct.unpack_from(f"<{codelen}I", blob, o_code)
+    except (struct.error, ValueError) as e:
+        raise TacobError(f"truncated COB: {e}")
+    return Cob(list(zip(snames, entries)), pieces, nstat, code)
+
+
+def write_cob(cob: Cob) -> bytes:
+    """Scriptor's layout, byte for byte (see the module docstring)."""
+    code = struct.pack(f"<{len(cob.code)}I", *(w & 0xFFFFFFFF for w in cob.code))
+    nscr, npc = len(cob.scripts), len(cob.pieces)
+    o_code = HEADER.size
+    o_cidx = o_code + len(code)
+    o_snames = o_cidx + 4 * nscr
+    o_pnames = o_snames + 4 * nscr
+    o_str = o_pnames + 4 * npc
+    strings = bytearray()
+    offsets = []
+    for name in [n for n, _ in cob.scripts] + cob.pieces:
+        offsets.append(o_str + len(strings))
+        strings += name.encode("latin-1") + b"\0"
+    header = HEADER.pack(4, nscr, npc, len(cob.code), cob.statics, 0,
+                         o_cidx, o_snames, o_pnames, o_code, o_str)
+    tables = struct.pack(f"<{nscr}I", *(e for _, e in cob.scripts))
+    tables += struct.pack(f"<{nscr}I", *offsets[:nscr])
+    tables += struct.pack(f"<{npc}I", *offsets[nscr:])
+    return header + code + tables + bytes(strings)
+
+
+def signed(w: int) -> int:
+    w &= 0xFFFFFFFF
+    return w - (1 << 32) if w & 0x80000000 else w
+
+
+class Op:
+    __slots__ = ("pc", "name", "args", "end")
+
+    def __init__(self, pc, name, args, end):
+        self.pc, self.name, self.args, self.end = pc, name, args, end
+
+    def __repr__(self):
+        return f"{self.pc}:{self.name}{self.args}"
+
+
+def script_ranges(cob: Cob):
+    """[(name, start, end)] in code order; a script ends where the next begins."""
+    starts = sorted((entry, name) for name, entry in cob.scripts)
+    total = len(cob.code)
+    out = []
+    for i, (start, name) in enumerate(starts):
+        end = starts[i + 1][0] if i + 1 < len(starts) else total
+        out.append((name, start, end))
+    return out
+
+
+def decode(code, start, end):
+    """The ops of one script; unknown words stop the decode with a DecompileError."""
+    ops = []
+    pc = start
+    while pc < end:
+        word = code[pc] & 0xFFFFFFFF
+        name = MNEMONIC.get(word)
+        if name is None:
+            raise DecompileError(f"unknown opcode 0x{word:08X} at word {pc}")
+        n = INLINE[word]
+        if pc + n >= end + (1 if n == 0 else 0) and pc + 1 + n > end:
+            raise DecompileError(f"{name} at word {pc} runs past the end of the script")
+        args = [signed(code[pc + 1 + k]) if name == "PUSH_CONSTANT" else code[pc + 1 + k]
+                for k in range(n)]
+        ops.append(Op(pc, name, args, pc + 1 + n))
+        pc += 1 + n
+    return ops
+
+
+# --------------------------------------------------------------------------- literals
+
+def linear_word(x: float) -> int:
+    return int(x * 65536)
+
+
+def angular_word(x: float) -> int:
+    return int(x * 65536 / 360)
+
+
+def _format_literal(word: int, to_word) -> str:
+    """The shortest decimal that our own conversion truncates back to `word`."""
+    base = word / 65536 if to_word is linear_word else word * 360 / 65536
+    for places in range(0, 10):
+        for cand in (round(base, places), round(base + 10 ** -places / 2, places),
+                     round(base - 10 ** -places / 2, places)):
+            if to_word(cand) == word:
+                text = f"{cand:.{places}f}"
+                return text
+    raise DecompileError(f"no decimal literal reproduces word {word}")
+
+
+def format_linear(word: int) -> str:
+    return "[" + _format_literal(word, linear_word) + "]"
+
+
+def format_angular(word: int) -> str:
+    return "<" + _format_literal(word, angular_word) + ">"
+
+
+# --------------------------------------------------------------------------- lexer + preprocessor
+
+HYPHEN_KEYWORDS = [
+    "set-signal-mask", "wait-for-turn", "wait-for-move", "static-var", "stop-spin",
+    "dont-cache", "dont-shade", "emit-sfx", "start-script", "call-script", "attach-unit",
+    "drop-unit", "play-sound", "x-axis", "y-axis", "z-axis",
+]
+SOFT_KEYWORDS = {"speed", "type", "to", "from", "now", "around", "along", "accelerate",
+                 "decelerate"}  # clause words that may also name a var: SetSpeed(speed)
+KEYWORDS = set(HYPHEN_KEYWORDS) | {
+    "piece", "var", "move", "turn", "spin", "to", "from", "speed", "now", "accelerate",
+    "decelerate", "around", "along", "sleep", "show", "hide", "cache", "shade", "explode",
+    "type", "signal", "get", "set", "rand", "if", "else", "while", "return", "for",
+}
+
+TOKEN_RE = re.compile(r"""
+    (?P<ws>\s+)
+  | (?P<lin>\[\s*[-+]?(?:\d+\.?\d*|\.\d+)\s*\])
+  | (?P<ang><\s*[-+]?(?:\d+\.?\d*|\.\d+)\s*>)
+  | (?P<hex>0[xX][0-9A-Fa-f]+)
+  | (?P<int>\d+)
+  | (?P<str>"[^"\n]*")
+  | (?P<name>[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z_][A-Za-z0-9_]*)*)
+  | (?P<op>\|\||&&|==|!=|<=|>=|[-+*/%&|^~!<>=(){};,])
+""", re.X)
+
+
+class Token:
+    __slots__ = ("kind", "value", "file", "line")
+
+    def __init__(self, kind, value, file, line):
+        self.kind, self.value, self.file, self.line = kind, value, file, line
+
+    def __repr__(self):
+        return f"{self.kind}:{self.value!r}"
+
+    @property
+    def where(self):
+        return f"{self.file}:{self.line}"
+
+
+def strip_comments(text: str) -> str:
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            if j < 0:
+                raise CompileError("unterminated /* comment")
+            out.append("\n" * text.count("\n", i, j + 2))
+            i = j + 2
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def lex_line(line: str, file: str, lineno: int):
+    tokens = []
+    pos = 0
+    while pos < len(line):
+        m = TOKEN_RE.match(line, pos)
+        if not m:
+            raise CompileError(f"{file}:{lineno}: cannot read {line[pos:pos + 12]!r}")
+        kind = m.lastgroup
+        text = m.group(kind)
+        if kind == "ws":
+            pos = m.end()
+            continue
+        if kind == "name":
+            low = text.lower()
+            if "-" in text and low not in KEYWORDS:
+                # `heading-pitch` is a subtraction: keep the first identifier only
+                text = text.split("-", 1)[0]
+                low = text.lower()
+                m_end = pos + len(text)
+            else:
+                m_end = m.end()
+            tokens.append(Token("kw" if low in KEYWORDS else "name",
+                                low if low in KEYWORDS else text, file, lineno))
+            pos = m_end
+            continue
+        if kind == "int":
+            tokens.append(Token("int", int(text), file, lineno))
+        elif kind == "hex":
+            tokens.append(Token("int", int(text, 16), file, lineno))
+        elif kind == "lin":
+            tokens.append(Token("lin", float(text[1:-1]), file, lineno))
+        elif kind == "ang":
+            tokens.append(Token("ang", float(text[1:-1]), file, lineno))
+        elif kind == "str":
+            tokens.append(Token("str", text[1:-1], file, lineno))
+        else:
+            tokens.append(Token("op", text, file, lineno))
+        pos = m.end()
+    return tokens
+
+
+class Preprocessor:
+    """#include, object-like #define, #ifdef/#ifndef/#else/#endif, #undef. Nothing else."""
+
+    MAX_DEPTH = 64
+
+    def __init__(self, include_dirs=(), reader=None):
+        self.include_dirs = [Path(d) for d in include_dirs]
+        self.macros = {}
+        self.tokens = []
+        self.reader = reader  # name -> text, for tests and archives
+        self.depth = 0
+
+    def run(self, text: str, file: str = "<bos>"):
+        self.depth += 1
+        if self.depth > self.MAX_DEPTH:
+            raise CompileError(f"{file}: includes nest deeper than {self.MAX_DEPTH}")
+        try:
+            self._run(strip_comments(text), file)
+        finally:
+            self.depth -= 1
+        return self.tokens
+
+    def _run(self, text, file):
+        stack = []  # [active_before, active_now, seen_else]
+        for lineno, line in enumerate(text.split("\n"), 1):
+            stripped = line.strip()
+            active = all(frame[1] for frame in stack)
+            if stripped.startswith("#"):
+                parts = stripped[1:].strip().split(None, 1)
+                directive = parts[0].lower() if parts else ""
+                rest = parts[1].strip() if len(parts) > 1 else ""
+                where = f"{file}:{lineno}"
+                if directive in ("ifdef", "ifndef"):
+                    if not rest:
+                        raise CompileError(f"{where}: #{directive} needs a name")
+                    cond = (rest.split()[0] in self.macros) == (directive == "ifdef")
+                    stack.append([active, cond, False])
+                elif directive == "else":
+                    if not stack or stack[-1][2]:
+                        raise CompileError(f"{where}: #else without #if")
+                    stack[-1][1] = not stack[-1][1]
+                    stack[-1][2] = True
+                elif directive == "endif":
+                    if not stack:
+                        raise CompileError(f"{where}: #endif without #if")
+                    stack.pop()
+                elif not active:
+                    continue
+                elif directive == "define":
+                    self._define(rest, where)
+                elif directive == "undef":
+                    self.macros.pop(rest.split()[0], None) if rest else None
+                elif directive == "include":
+                    self._include(rest, where)
+                elif directive in ("if", "elif"):
+                    raise CompileError(f"{where}: #{directive} is not supported (use #ifdef)")
+                else:
+                    raise CompileError(f"{where}: unknown directive #{directive}")
+                continue
+            if not active:
+                continue
+            for tok in lex_line(line, file, lineno):
+                self._emit(tok, 0)
+        if stack:
+            raise CompileError(f"{file}: #ifdef without #endif")
+
+    def _define(self, rest, where):
+        m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)(\(?)(.*)$", rest)
+        if not m:
+            raise CompileError(f"{where}: bad #define")
+        name, paren, body = m.group(1), m.group(2), m.group(3)
+        if paren:
+            raise CompileError(f"{where}: function-like macro {name} is not supported")
+        self.macros[name] = lex_line(body, where.split(":")[0], int(where.rsplit(":", 1)[1]))
+
+    def _include(self, rest, where):
+        m = re.match(r'"([^"]+)"|<([^>]+)>', rest)
+        if not m:
+            raise CompileError(f"{where}: #include needs a quoted file name")
+        name = m.group(1) or m.group(2)
+        text = self.reader(name) if self.reader else None
+        if text is None:
+            for d in self.include_dirs + [INCLUDE_DIR]:
+                path = d / name
+                if path.is_file():
+                    text = path.read_text(encoding="latin-1")
+                    break
+                for cand in d.iterdir() if d.is_dir() else ():
+                    if cand.name.lower() == name.lower() and cand.is_file():
+                        text = cand.read_text(encoding="latin-1")
+                        break
+                if text is not None:
+                    break
+        if text is None:
+            raise CompileError(f"{where}: cannot find include {name!r}")
+        self.run(text, name)
+
+    def _emit(self, tok, depth):
+        if tok.kind == "name" and tok.value in self.macros:
+            if depth > self.MAX_DEPTH:
+                raise CompileError(f"{tok.where}: macro {tok.value} expands forever")
+            for sub in self.macros[tok.value]:
+                self._emit(Token(sub.kind, sub.value, tok.file, tok.line), depth + 1)
+            return
+        self.tokens.append(tok)
+
+
+# --------------------------------------------------------------------------- AST + parser
+
+class Node:
+    def __init__(self, kind, **fields):
+        self.kind = kind
+        self.__dict__.update(fields)
+
+    def __repr__(self):
+        return f"Node({self.kind}, {', '.join(f'{k}={v!r}' for k, v in self.__dict__.items() if k != 'kind')})"
+
+
+class Function:
+    def __init__(self, name, params, tok=None):
+        self.name = name
+        self.params = list(params)
+        self.locals = []
+        self.body = []
+        self.tok = tok
+
+
+class Program:
+    def __init__(self):
+        self.pieces = []
+        self.statics = []
+        self.functions = []
+
+
+class Parser:
+    def __init__(self, tokens):
+        self.toks = tokens + [Token("eof", None, tokens[-1].file if tokens else "<bos>",
+                                    tokens[-1].line if tokens else 0)]
+        self.i = 0
+        self.program = Program()
+        self.fn = None
+
+    # -- token helpers
+    def peek(self, k=0):
+        return self.toks[min(self.i + k, len(self.toks) - 1)]
+
+    def next(self):
+        tok = self.toks[self.i]
+        self.i += 1
+        return tok
+
+    def at(self, kind, value=None):
+        tok = self.peek()
+        return tok.kind == kind and (value is None or tok.value == value)
+
+    def accept(self, kind, value=None):
+        if self.at(kind, value):
+            return self.next()
+        return None
+
+    def expect(self, kind, value=None, what=None):
+        tok = self.peek()
+        if not self.at(kind, value):
+            want = what or (value if value is not None else kind)
+            raise CompileError(f"{tok.where}: expected {want}, found {self._show(tok)}")
+        return self.next()
+
+    @staticmethod
+    def _show(tok):
+        if tok.kind == "eof":
+            return "end of file"
+        return repr(tok.value)
+
+    def name(self, what="a name"):
+        tok = self.peek()
+        if tok.kind == "kw" and tok.value in SOFT_KEYWORDS:
+            return self.next().value
+        if tok.kind != "name":
+            raise CompileError(f"{tok.where}: expected {what}, found {self._show(tok)}")
+        return self.next().value
+
+    # -- top level
+    def parse(self) -> Program:
+        while not self.at("eof"):
+            if self.accept("kw", "piece"):
+                self.program.pieces += self.name_list()
+            elif self.accept("kw", "static-var"):
+                self.program.statics += self.name_list()
+            elif self.at("name"):
+                self.program.functions.append(self.function())
+            elif self.accept("op", ";"):
+                continue
+            else:
+                tok = self.peek()
+                raise CompileError(f"{tok.where}: expected a declaration or a script, found {self._show(tok)}")
+        return self.program
+
+    def name_list(self):
+        names = [self.name()]
+        while self.accept("op", ","):
+            names.append(self.name())
+        self.expect("op", ";")
+        return names
+
+    def function(self):
+        tok = self.peek()
+        name = self.name("a script name")
+        self.expect("op", "(")
+        params = []
+        if not self.at("op", ")"):
+            params.append(self.name("a parameter name"))
+            while self.accept("op", ","):
+                params.append(self.name("a parameter name"))
+        self.expect("op", ")")
+        fn = Function(name, params, tok)
+        self.fn = fn
+        self.expect("op", "{")
+        fn.body = self.statements_until("}")
+        self.fn = None
+        return fn
+
+    # -- statements
+    def statements_until(self, closer):
+        stmts = []
+        while not self.at("op", closer):
+            if self.at("eof"):
+                raise CompileError(f"{self.peek().where}: missing '{closer}'")
+            stmt = self.statement()
+            if stmt is not None:
+                stmts.append(stmt)
+        self.next()
+        return stmts
+
+    def block_or_statement(self):
+        if self.accept("op", "{"):
+            return self.statements_until("}")
+        stmt = self.statement()
+        return [] if stmt is None else [stmt]
+
+    def statement(self):
+        tok = self.peek()
+        if tok.kind == "op":
+            if tok.value == ";":
+                self.next()
+                return None
+            if tok.value == "{":
+                self.next()
+                return Node("block", body=self.statements_until("}"))
+            raise CompileError(f"{tok.where}: unexpected {tok.value!r}")
+        if tok.kind == "name" or (tok.kind == "kw" and tok.value in SOFT_KEYWORDS
+                                  and self.peek(1).kind == "op" and self.peek(1).value == "="):
+            target = self.next().value
+            self.expect("op", "=", "'='")
+            expr = self.expression()
+            self.expect("op", ";")
+            return Node("assign", target=target, expr=expr, tok=tok)
+        if tok.kind != "kw":
+            raise CompileError(f"{tok.where}: unexpected {self._show(tok)}")
+        kw = self.next().value
+        method = getattr(self, "stmt_" + kw.replace("-", "_"), None)
+        if method is None:
+            raise CompileError(f"{tok.where}: '{kw}' cannot start a statement")
+        return method(tok)
+
+    def stmt_var(self, tok):
+        names = self.name_list()
+        self.fn.locals += names
+        return None
+
+    def stmt_if(self, tok):
+        self.expect("op", "(")
+        cond = self.expression()
+        self.expect("op", ")")
+        then = self.block_or_statement()
+        other = None
+        if self.accept("kw", "else"):
+            other = self.block_or_statement()
+        return Node("if", cond=cond, then=then, other=other)
+
+    def stmt_while(self, tok):
+        self.expect("op", "(")
+        cond = self.expression()
+        self.expect("op", ")")
+        return Node("while", cond=cond, body=self.block_or_statement())
+
+    def stmt_for(self, tok):
+        raise CompileError(f"{tok.where}: 'for' is not BOS — use while")
+
+    def stmt_else(self, tok):
+        raise CompileError(f"{tok.where}: 'else' without 'if'")
+
+    def stmt_return(self, tok):
+        expr = None
+        if not self.at("op", ";"):
+            expr = self.expression()
+        self.expect("op", ";")
+        return Node("return", expr=expr)
+
+    def piece_axis(self, link):
+        piece = self.name("a piece name")
+        self.expect("kw", link)
+        axis = self.expect("kw", None, "x-axis, y-axis or z-axis")
+        if axis.value not in AXES:
+            raise CompileError(f"{axis.where}: expected an axis, found {axis.value!r}")
+        return piece, AXES[axis.value]
+
+    def _move_turn(self, tok, kind):
+        piece, axis = self.piece_axis("to")
+        dest = self.expression()
+        if self.accept("kw", "now"):
+            self.expect("op", ";")
+            return Node(kind, piece=piece, axis=axis, dest=dest, speed=None, tok=tok)
+        self.expect("kw", "speed")
+        speed = self.expression()
+        self.expect("op", ";")
+        return Node(kind, piece=piece, axis=axis, dest=dest, speed=speed, tok=tok)
+
+    def stmt_move(self, tok):
+        return self._move_turn(tok, "move")
+
+    def stmt_turn(self, tok):
+        return self._move_turn(tok, "turn")
+
+    def stmt_spin(self, tok):
+        piece, axis = self.piece_axis("around")
+        self.expect("kw", "speed")
+        speed = self.expression()
+        accel = None
+        if self.accept("kw", "accelerate"):
+            accel = self.expression()
+        self.expect("op", ";")
+        return Node("spin", piece=piece, axis=axis, speed=speed, accel=accel, tok=tok)
+
+    def stmt_stop_spin(self, tok):
+        piece, axis = self.piece_axis("around")
+        decel = None
+        if self.accept("kw", "decelerate"):
+            decel = self.expression()
+        self.expect("op", ";")
+        return Node("stop-spin", piece=piece, axis=axis, decel=decel, tok=tok)
+
+    def stmt_wait_for_turn(self, tok):
+        piece, axis = self.piece_axis("around")
+        self.expect("op", ";")
+        return Node("wait-for-turn", piece=piece, axis=axis, tok=tok)
+
+    def stmt_wait_for_move(self, tok):
+        piece, axis = self.piece_axis("along")
+        self.expect("op", ";")
+        return Node("wait-for-move", piece=piece, axis=axis, tok=tok)
+
+    def _piece_op(self, tok, kw):
+        piece = self.name("a piece name")
+        self.expect("op", ";")
+        return Node("piece-op", op=PIECE_OPS[kw], piece=piece, tok=tok)
+
+    def stmt_show(self, tok):
+        return self._piece_op(tok, "show")
+
+    def stmt_hide(self, tok):
+        return self._piece_op(tok, "hide")
+
+    def stmt_cache(self, tok):
+        return self._piece_op(tok, "cache")
+
+    def stmt_dont_cache(self, tok):
+        return self._piece_op(tok, "dont-cache")
+
+    def stmt_shade(self, tok):
+        return self._piece_op(tok, "shade")
+
+    def stmt_dont_shade(self, tok):
+        return self._piece_op(tok, "dont-shade")
+
+    def stmt_emit_sfx(self, tok):
+        sfx = self.expression()
+        self.expect("kw", "from")
+        piece = self.name("a piece name")
+        self.expect("op", ";")
+        return Node("emit-sfx", sfx=sfx, piece=piece, tok=tok)
+
+    def stmt_explode(self, tok):
+        piece = self.name("a piece name")
+        self.expect("kw", "type")
+        flags = self.expression()
+        self.expect("op", ";")
+        return Node("explode", piece=piece, flags=flags, tok=tok)
+
+    def _one_expr(self, tok, kind):
+        expr = self.expression()
+        self.expect("op", ";")
+        return Node(kind, expr=expr, tok=tok)
+
+    def stmt_sleep(self, tok):
+        return self._one_expr(tok, "sleep")
+
+    def stmt_signal(self, tok):
+        return self._one_expr(tok, "signal")
+
+    def stmt_set_signal_mask(self, tok):
+        return self._one_expr(tok, "set-signal-mask")
+
+    def stmt_drop_unit(self, tok):
+        return self._one_expr(tok, "drop-unit")
+
+    def _call(self, tok, kind):
+        name = self.name("a script name")
+        self.expect("op", "(")
+        args = []
+        if not self.at("op", ")"):
+            args.append(self.expression())
+            while self.accept("op", ","):
+                args.append(self.expression())
+        self.expect("op", ")")
+        self.expect("op", ";")
+        return Node(kind, name=name, args=args, tok=tok)
+
+    def stmt_start_script(self, tok):
+        return self._call(tok, "start-script")
+
+    def stmt_call_script(self, tok):
+        return self._call(tok, "call-script")
+
+    def stmt_set(self, tok):
+        value_id = self.value_id()
+        self.expect("kw", "to")
+        expr = self.expression()
+        self.expect("op", ";")
+        return Node("set", value_id=value_id, expr=expr, tok=tok)
+
+    def stmt_attach_unit(self, tok):
+        unit = self.expression()
+        self.expect("kw", "to")
+        piece = self.expression()
+        pos = None
+        if not self.at("op", ";"):
+            pos = self.expression()
+        self.expect("op", ";")
+        return Node("attach-unit", unit=unit, piece=piece, pos=pos, tok=tok)
+
+    def stmt_play_sound(self, tok):
+        raise CompileError(f"{tok.where}: play-sound appears in no retail script and its encoding is unverified")
+
+    def value_id(self):
+        tok = self.peek()
+        if tok.kind == "int":
+            return self.next().value
+        name = self.name("a value name such as HEALTH")
+        if name.upper() in VALUE_IDS:
+            return VALUE_IDS[name.upper()]
+        raise CompileError(f"{tok.where}: unknown value {name!r} (retail ids are HEALTH, ACTIVATION, ... or a number)")
+
+    # -- expressions (precedence climbing)
+    def expression(self, min_prec=1):
+        left = self.unary()
+        while True:
+            tok = self.peek()
+            if tok.kind != "op" or tok.value not in PRECEDENCE or PRECEDENCE[tok.value] < min_prec:
+                return left
+            op = self.next().value
+            right = self.expression(PRECEDENCE[op] + 1)
+            left = Node("bin", op=op, left=left, right=right)
+
+    def unary(self):
+        tok = self.peek()
+        if tok.kind == "op" and tok.value in ("!", "~", "-", "+"):
+            self.next()
+            operand = self.unary()
+            if tok.value == "+":
+                return operand
+            if tok.value == "-":
+                if operand.kind == "int" and operand.name is None:
+                    operand.value = -operand.value
+                    return operand
+                return Node("neg", expr=operand)
+            return Node("not" if tok.value == "!" else "bnot", expr=operand)
+        return self.primary()
+
+    def primary(self):
+        tok = self.next()
+        if tok.kind == "int":
+            return Node("int", value=tok.value, fmt="int", name=None)
+        if tok.kind == "lin":
+            return Node("int", value=linear_word(tok.value), fmt="lin", name=None)
+        if tok.kind == "ang":
+            return Node("int", value=angular_word(tok.value), fmt="ang", name=None)
+        if tok.kind == "op" and tok.value == "(":
+            expr = self.expression()
+            self.expect("op", ")")
+            return expr
+        if tok.kind == "kw" and tok.value == "get":
+            value_id = self.value_id()
+            args = []
+            if self.accept("op", "("):
+                if not self.at("op", ")"):
+                    args.append(self.expression())
+                    while self.accept("op", ","):
+                        args.append(self.expression())
+                self.expect("op", ")")
+            if len(args) > 4:
+                raise CompileError(f"{tok.where}: get takes at most four arguments")
+            return Node("get", value_id=value_id, args=args, tok=tok)
+        if tok.kind == "kw" and tok.value == "rand":
+            self.expect("op", "(")
+            lo = self.expression()
+            self.expect("op", ",")
+            hi = self.expression()
+            self.expect("op", ")")
+            return Node("rand", lo=lo, hi=hi)
+        if tok.kind == "name" or (tok.kind == "kw" and tok.value in SOFT_KEYWORDS):
+            return Node("name", name=tok.value, tok=tok)
+        raise CompileError(f"{tok.where}: expected a value, found {self._show(tok)}")
+
+
+# --------------------------------------------------------------------------- compiler
+
+class Assembler:
+    def __init__(self):
+        self.words = []
+        self.fixups = []  # (word index, label)
+        self.labels = {}
+        self.last_op = -1
+
+    def emit(self, name, *args):
+        self.last_op = len(self.words)
+        self.words.append(OP[name])
+        self.words.extend(a & 0xFFFFFFFF for a in args)
+
+    def last_inline(self):
+        """True when the final word is an inline operand rather than an opcode."""
+        return self.last_op != len(self.words) - 1
+
+    def new_label(self):
+        return object()
+
+    def place(self, label):
+        self.labels[label] = len(self.words)
+
+    def jump(self, name, label):
+        self.last_op = len(self.words)
+        self.words.append(OP[name])
+        self.fixups.append((len(self.words), label))
+        self.words.append(0)
+
+    def resolve(self):
+        for index, label in self.fixups:
+            self.words[index] = self.labels[label]
+        self.fixups = []
+
+
+class Compiler:
+    def __init__(self, program: Program):
+        self.program = program
+        self.pieces = {}
+        for i, name in enumerate(program.pieces):
+            if name.lower() in self.pieces:
+                raise CompileError(f"piece {name!r} declared twice")
+            self.pieces[name.lower()] = i
+        self.statics = {}
+        for i, name in enumerate(program.statics):
+            if name.lower() in self.statics:
+                raise CompileError(f"static-var {name!r} declared twice")
+            self.statics[name.lower()] = i
+        self.functions = {}
+        for i, fn in enumerate(program.functions):
+            if fn.name.lower() in self.functions:
+                raise CompileError(f"{fn.tok.where}: script {fn.name!r} defined twice")
+            self.functions[fn.name.lower()] = i
+        self.asm = Assembler()
+        self.locals = {}
+
+    def compile(self) -> Cob:
+        entries = []
+        for fn in self.program.functions:
+            entries.append(len(self.asm.words))
+            self.function(fn)
+        self.asm.resolve()
+        scripts = [(fn.name, entry) for fn, entry in zip(self.program.functions, entries)]
+        return Cob(scripts, self.program.pieces, len(self.program.statics), self.asm.words)
+
+    def function(self, fn: Function):
+        self.locals = {}
+        for name in fn.params + fn.locals:
+            if name.lower() in self.locals:
+                raise CompileError(f"{fn.tok.where}: {fn.name}: local {name!r} declared twice")
+            self.locals[name.lower()] = len(self.locals)
+        start = len(self.asm.words)
+        for _ in self.locals:
+            self.asm.emit("CREATE_LOCAL_VAR")
+        self.statements(fn.body)
+        # Scriptor's implicit `return (0)`: appended unless this script's last opcode is
+        # already a RETURN — a script ending in `if( x ) { ...; return (0); }` gets none,
+        # and falls through into the next script when the condition fails (ARMPW FirePrimary).
+        words = self.asm.words
+        if len(words) == start or words[-1] != OP["RETURN"] or self.asm.last_inline():
+            self.asm.emit("PUSH_CONSTANT", 0)
+            self.asm.emit("RETURN")
+
+    def piece(self, name, tok):
+        index = self.pieces.get(name.lower())
+        if index is None:
+            raise CompileError(f"{tok.where}: unknown piece {name!r}")
+        return index
+
+    def statements(self, stmts):
+        for stmt in stmts:
+            self.statement(stmt)
+
+    def statement(self, s: Node):
+        asm = self.asm
+        k = s.kind
+        if k == "block":
+            self.statements(s.body)
+        elif k == "assign":
+            self.expr(s.expr)
+            low = s.target.lower()
+            if low in self.locals:
+                asm.emit("POP_LOCAL_VAR", self.locals[low])
+            elif low in self.statics:
+                asm.emit("POP_STATIC_VAR", self.statics[low])
+            else:
+                raise CompileError(f"{s.tok.where}: cannot assign to {s.target!r} (not a var or static-var)")
+        elif k in ("move", "turn"):
+            piece = self.piece(s.piece, s.tok)
+            if s.speed is None:
+                self.expr(s.dest)
+                asm.emit("MOVE_NOW" if k == "move" else "TURN_NOW", piece, s.axis)
+            else:
+                self.expr(s.speed)
+                self.expr(s.dest)
+                asm.emit("MOVE" if k == "move" else "TURN", piece, s.axis)
+        elif k == "spin":
+            piece = self.piece(s.piece, s.tok)
+            self.expr(s.accel) if s.accel is not None else asm.emit("PUSH_CONSTANT", 0)
+            self.expr(s.speed)
+            asm.emit("SPIN", piece, s.axis)
+        elif k == "stop-spin":
+            piece = self.piece(s.piece, s.tok)
+            self.expr(s.decel) if s.decel is not None else asm.emit("PUSH_CONSTANT", 0)
+            asm.emit("STOP_SPIN", piece, s.axis)
+        elif k == "wait-for-turn":
+            asm.emit("WAIT_FOR_TURN", self.piece(s.piece, s.tok), s.axis)
+        elif k == "wait-for-move":
+            asm.emit("WAIT_FOR_MOVE", self.piece(s.piece, s.tok), s.axis)
+        elif k == "piece-op":
+            asm.emit(s.op, self.piece(s.piece, s.tok))
+        elif k == "emit-sfx":
+            self.expr(s.sfx)
+            asm.emit("EMIT_SFX", self.piece(s.piece, s.tok))
+        elif k == "explode":
+            self.expr(s.flags)
+            asm.emit("EXPLODE", self.piece(s.piece, s.tok))
+        elif k in ("sleep", "signal", "set-signal-mask", "drop-unit"):
+            self.expr(s.expr)
+            asm.emit({"sleep": "SLEEP", "signal": "SIGNAL", "set-signal-mask": "SET_SIGNAL_MASK",
+                      "drop-unit": "DROP_UNIT"}[k])
+        elif k in ("start-script", "call-script"):
+            index = self.functions.get(s.name.lower())
+            if index is None:
+                raise CompileError(f"{s.tok.where}: unknown script {s.name!r}")
+            for arg in s.args:
+                self.expr(arg)
+            asm.emit("START_SCRIPT" if k == "start-script" else "CALL_SCRIPT", index, len(s.args))
+        elif k == "set":
+            asm.emit("PUSH_CONSTANT", s.value_id)
+            self.expr(s.expr)
+            asm.emit("SET")
+        elif k == "attach-unit":
+            self.expr(s.unit)
+            self.expr(s.piece)
+            self.expr(s.pos) if s.pos is not None else asm.emit("PUSH_CONSTANT", 0)
+            asm.emit("ATTACH_UNIT")
+        elif k == "return":
+            if s.expr is None:
+                asm.emit("PUSH_CONSTANT", 0)
+            else:
+                self.expr(s.expr)
+            asm.emit("RETURN")
+        elif k == "if":
+            self.expr(s.cond)
+            end = asm.new_label()
+            if s.other is None:
+                asm.jump("JUMP_NOT_EQUAL", end)
+                self.statements(s.then)
+            else:
+                other = asm.new_label()
+                asm.jump("JUMP_NOT_EQUAL", other)
+                self.statements(s.then)
+                asm.jump("JUMP", end)
+                asm.place(other)
+                self.statements(s.other)
+            asm.place(end)
+        elif k == "while":
+            top, end = asm.new_label(), asm.new_label()
+            asm.place(top)
+            self.expr(s.cond)
+            asm.jump("JUMP_NOT_EQUAL", end)
+            self.statements(s.body)
+            asm.jump("JUMP", top)
+            asm.place(end)
+        else:
+            raise CompileError(f"internal: unknown statement {k}")
+
+    def expr(self, e: Node):
+        asm = self.asm
+        k = e.kind
+        if k == "int":
+            asm.emit("PUSH_CONSTANT", e.value)
+        elif k == "name":
+            low = e.name.lower()
+            if low in self.locals:
+                asm.emit("PUSH_LOCAL_VAR", self.locals[low])
+            elif low in self.statics:
+                asm.emit("PUSH_STATIC_VAR", self.statics[low])
+            elif low in self.pieces:
+                asm.emit("PUSH_CONSTANT", self.pieces[low])
+            elif e.name.upper() in BUILTINS:
+                asm.emit("PUSH_CONSTANT", BUILTINS[e.name.upper()])
+            else:
+                raise CompileError(f"{e.tok.where}: unknown name {e.name!r} (not a var, static-var, piece or #define)")
+        elif k == "bin":
+            self.expr(e.left)
+            self.expr(e.right)
+            asm.emit(BINARY_OPS[e.op])
+        elif k == "neg":
+            asm.emit("PUSH_CONSTANT", 0)
+            self.expr(e.expr)
+            asm.emit("SUB")
+        elif k == "not":
+            self.expr(e.expr)
+            asm.emit("NOT")
+        elif k == "bnot":
+            self.expr(e.expr)
+            asm.emit("BITWISE_NOT")
+        elif k == "get":
+            asm.emit("PUSH_CONSTANT", e.value_id)
+            if not e.args:
+                asm.emit("GET_UNIT_VALUE")
+            else:
+                for arg in e.args:
+                    self.expr(arg)
+                for _ in range(4 - len(e.args)):
+                    asm.emit("PUSH_CONSTANT", 0)
+                asm.emit("GET")
+        elif k == "rand":
+            self.expr(e.lo)
+            self.expr(e.hi)
+            asm.emit("RAND")
+        else:
+            raise CompileError(f"internal: unknown expression {k}")
+
+
+def compile_bos(text: str, file: str = "<bos>", include_dirs=(), reader=None) -> Cob:
+    tokens = Preprocessor(include_dirs, reader).run(text, file)
+    program = Parser(tokens).parse()
+    return Compiler(program).compile()
+
+
+# --------------------------------------------------------------------------- decompiler
+
+class Value:
+    """An expression on the decompiler's stack, with the word where it started."""
+    __slots__ = ("node", "start")
+
+    def __init__(self, node, start):
+        self.node, self.start = node, start
+
+
+def const(value, fmt="int", name=None):
+    return Node("int", value=value, fmt=fmt, name=name)
+
+
+class ScriptDecompiler:
+    def __init__(self, cob: Cob, name, start, end, params, local_names):
+        self.cob = cob
+        self.name = name
+        self.start, self.end = start, end
+        self.ops = decode(cob.code, start, end)
+        self.by_pc = {op.pc: i for i, op in enumerate(self.ops)}
+        self.params = params
+        self.local_names = local_names
+        self.script_names = [n for n, _ in cob.scripts]
+        self.piece_result = bool(PIECE_RESULT_SCRIPTS.match(name))
+
+    def fail(self, pc, msg):
+        raise DecompileError(f"{self.name} at word {pc}: {msg}")
+
+    def run(self):
+        i = 0
+        ncreate = 0
+        while i < len(self.ops) and self.ops[i].name == "CREATE_LOCAL_VAR":
+            ncreate += 1
+            i += 1
+        if len(self.local_names) != ncreate:
+            self.fail(self.start, f"internal: {ncreate} locals but {len(self.local_names)} names")
+        body, i = self.statements(i, self.end)
+        if i != len(self.ops):
+            self.fail(self.ops[i].pc, "code after the script's last statement")
+        # Scriptor's implicit return: the last opcode is always a RETURN, and a trailing
+        # `return (0)` at top level is the one it appended (dropping it is exact either way).
+        if not self.ops or self.ops[-1].name != "RETURN":
+            self.fail(self.end - 1, "script does not end with a return")
+        if body and body[-1].kind == "return" and body[-1].expr.kind == "int" \
+                and body[-1].expr.value == 0 and body[-1].expr.name is None:
+            body.pop()
+        return body
+
+    def piece_name(self, index, pc):
+        if not 0 <= index < len(self.cob.pieces):
+            self.fail(pc, f"piece index {index} out of range")
+        return self.cob.pieces[index]
+
+    def local(self, index, pc):
+        if not 0 <= index < len(self.local_names):
+            self.fail(pc, f"local {index} was never created")
+        return self.local_names[index]
+
+    def static(self, index, pc):
+        if not 0 <= index < self.cob.statics:
+            self.fail(pc, f"static {index} beyond the declared {self.cob.statics}")
+        return f"static_var_{index + 1}"
+
+    def index_of(self, target, pc):
+        i = self.by_pc.get(target)
+        if i is None:
+            if target == self.end:
+                return len(self.ops)
+            self.fail(pc, f"jump to word {target}, which is not an instruction boundary")
+        return i
+
+    def statements(self, i, end_pc):
+        """Parse ops[i:] while their pc < end_pc; returns (statements, next index)."""
+        stmts = []
+        stack = []
+
+        def pop(pc):
+            if not stack:
+                self.fail(pc, "operand stack empty")
+            return stack.pop()
+
+        def push(node, start):
+            stack.append(Value(node, start))
+
+        def stmt(node):
+            if stack:
+                self.fail(op.pc, "a value is left on the stack before a statement")
+            stmts.append(node)
+
+        while i < len(self.ops) and self.ops[i].pc < end_pc:
+            op = self.ops[i]
+            n = op.name
+            a = op.args
+            if n == "PUSH_CONSTANT":
+                push(const(a[0]), op.pc)
+            elif n == "PUSH_LOCAL_VAR":
+                push(Node("name", name=self.local(a[0], op.pc)), op.pc)
+            elif n == "PUSH_STATIC_VAR":
+                push(Node("name", name=self.static(a[0], op.pc)), op.pc)
+            elif n in OPCODE_TO_OPERATOR:
+                r = pop(op.pc)
+                l = pop(op.pc)
+                push(Node("bin", op=OPCODE_TO_OPERATOR[n], left=l.node, right=r.node), l.start)
+            elif n == "NOT":
+                v = pop(op.pc)
+                push(Node("not", expr=v.node), v.start)
+            elif n == "BITWISE_NOT":
+                v = pop(op.pc)
+                push(Node("bnot", expr=v.node), v.start)
+            elif n == "RAND":
+                hi = pop(op.pc)
+                lo = pop(op.pc)
+                push(Node("rand", lo=lo.node, hi=hi.node), lo.start)
+            elif n == "GET_UNIT_VALUE":
+                vid = pop(op.pc)
+                push(Node("get", value_id=self.value_id(vid.node, op.pc), args=[]), vid.start)
+            elif n == "GET":
+                args = [pop(op.pc) for _ in range(4)][::-1]
+                vid = pop(op.pc)
+                nodes = [v.node for v in args]
+                while nodes and nodes[-1].kind == "int" and nodes[-1].value == 0:
+                    nodes.pop()
+                value_id = self.value_id(vid.node, op.pc)
+                if value_id in PIECE_ARG_VALUES and nodes and nodes[0].kind == "int" \
+                        and nodes[0].name is None and 0 <= nodes[0].value < len(self.cob.pieces):
+                    nodes[0] = const(nodes[0].value, "piece", self.cob.pieces[nodes[0].value])
+                push(Node("get", value_id=value_id, args=nodes), vid.start)
+            elif n == "POP_LOCAL_VAR":
+                v = pop(op.pc)
+                node = v.node
+                if self.piece_result and node.kind == "int" and 0 <= node.value < len(self.cob.pieces) \
+                        and a[0] < len(self.params):
+                    node = const(node.value, "piece", self.cob.pieces[node.value])
+                stmt(Node("assign", target=self.local(a[0], op.pc), expr=node))
+            elif n == "POP_STATIC_VAR":
+                v = pop(op.pc)
+                stmt(Node("assign", target=self.static(a[0], op.pc), expr=v.node))
+            elif n in ("MOVE", "TURN"):
+                dest = pop(op.pc)
+                speed = pop(op.pc)
+                fmt = "lin" if n == "MOVE" else "ang"
+                stmt(Node(n.lower(), piece=self.piece_name(a[0], op.pc), axis=a[1],
+                          dest=self.tag(dest.node, fmt), speed=self.tag(speed.node, fmt)))
+            elif n in ("MOVE_NOW", "TURN_NOW"):
+                dest = pop(op.pc)
+                fmt = "lin" if n == "MOVE_NOW" else "ang"
+                stmt(Node(n[:4].lower(), piece=self.piece_name(a[0], op.pc), axis=a[1],
+                          dest=self.tag(dest.node, fmt), speed=None))
+            elif n == "SPIN":
+                speed = pop(op.pc)
+                accel = pop(op.pc)
+                acc = self.tag(accel.node, "ang")
+                if acc.kind == "int" and acc.value == 0:
+                    acc = None
+                stmt(Node("spin", piece=self.piece_name(a[0], op.pc), axis=a[1],
+                          speed=self.tag(speed.node, "ang"), accel=acc))
+            elif n == "STOP_SPIN":
+                decel = self.tag(pop(op.pc).node, "ang")
+                if decel.kind == "int" and decel.value == 0:
+                    decel = None
+                stmt(Node("stop-spin", piece=self.piece_name(a[0], op.pc), axis=a[1], decel=decel))
+            elif n in ("WAIT_FOR_TURN", "WAIT_FOR_MOVE"):
+                stmt(Node(n.lower().replace("_", "-"), piece=self.piece_name(a[0], op.pc), axis=a[1]))
+            elif n in PIECE_OP_KEYWORDS:
+                stmt(Node("piece-op", op=n, piece=self.piece_name(a[0], op.pc)))
+            elif n == "EMIT_SFX":
+                sfx = pop(op.pc)
+                stmt(Node("emit-sfx", sfx=self.tag(sfx.node, "sfx"), piece=self.piece_name(a[0], op.pc)))
+            elif n == "EXPLODE":
+                flags = pop(op.pc)
+                stmt(Node("explode", piece=self.piece_name(a[0], op.pc), flags=self.tag(flags.node, "explode")))
+            elif n in ("SLEEP", "SIGNAL", "SET_SIGNAL_MASK", "DROP_UNIT"):
+                v = pop(op.pc)
+                stmt(Node(n.lower().replace("_", "-"), expr=v.node))
+            elif n in ("START_SCRIPT", "CALL_SCRIPT"):
+                if not 0 <= a[0] < len(self.script_names):
+                    self.fail(op.pc, f"script index {a[0]} out of range")
+                args = [pop(op.pc) for _ in range(a[1])][::-1]
+                stmt(Node(n.lower().replace("_", "-"), name=self.script_names[a[0]],
+                          args=[v.node for v in args]))
+            elif n == "SET":
+                value = pop(op.pc)
+                vid = pop(op.pc)
+                stmt(Node("set", value_id=self.value_id(vid.node, op.pc), expr=value.node))
+            elif n == "ATTACH_UNIT":
+                pos = pop(op.pc)
+                piece = pop(op.pc)
+                unit = pop(op.pc)
+                pnode = piece.node
+                if pnode.kind == "int" and 0 <= pnode.value < len(self.cob.pieces) and pnode.name is None:
+                    pnode = const(pnode.value, "piece", self.cob.pieces[pnode.value])
+                pos_node = pos.node
+                if pos_node.kind == "int" and pos_node.value == 0:
+                    pos_node = None
+                stmt(Node("attach-unit", unit=unit.node, piece=pnode, pos=pos_node))
+            elif n == "RETURN":
+                v = pop(op.pc)
+                stmt(Node("return", expr=v.node))
+            elif n == "JUMP_NOT_EQUAL":
+                cond = pop(op.pc)
+                if stack:
+                    self.fail(op.pc, "a value is left on the stack under an if/while condition")
+                target = a[0]
+                if target <= op.pc or target > end_pc:
+                    self.fail(op.pc, f"conditional jump to word {target} leaves the block")
+                j = self.index_of(target, op.pc)
+                prev = self.ops[j - 1]
+                if prev.name == "JUMP" and prev.args[0] == cond.start and j - 1 > i:
+                    body, k = self.statements(i + 1, prev.pc)
+                    if k != j - 1:
+                        self.fail(prev.pc, "while body does not end at its back-jump")
+                    stmts.append(Node("while", cond=cond.node, body=body))
+                    i = j
+                    continue
+                if prev.name == "JUMP" and prev.args[0] > target and j - 1 > i:
+                    if prev.args[0] > end_pc:
+                        self.fail(prev.pc, f"else-jump to word {prev.args[0]} leaves the block")
+                    then, k = self.statements(i + 1, prev.pc)
+                    if k != j - 1:
+                        self.fail(prev.pc, "then-branch does not end at its jump")
+                    other_end = self.index_of(prev.args[0], prev.pc)
+                    other, k = self.statements(j, prev.args[0])
+                    if k != other_end:
+                        self.fail(prev.args[0], "else-branch does not end at its target")
+                    stmts.append(Node("if", cond=cond.node, then=then, other=other))
+                    i = other_end
+                    continue
+                then, k = self.statements(i + 1, target)
+                if k != j:
+                    self.fail(op.pc, "if body does not end at its target")
+                stmts.append(Node("if", cond=cond.node, then=then, other=None))
+                i = j
+                continue
+            elif n == "JUMP":
+                self.fail(op.pc, "a jump that is not the end of a while or an if/else")
+            elif n == "CREATE_LOCAL_VAR":
+                self.fail(op.pc, "a local created after the prologue")
+            else:
+                self.fail(op.pc, f"{n} has no BOS statement")
+            i += 1
+        if stack:
+            self.fail(self.ops[i - 1].pc if i else self.start, "a value is left on the stack at the end of a block")
+        return stmts, i
+
+    def value_id(self, node, pc):
+        if node.kind != "int":
+            self.fail(pc, "get/set with a computed value id")
+        return node.value
+
+    def tag(self, node, fmt):
+        """Format the constant leaves of an operand as linear/angular/flag names."""
+        if node.kind == "int" and node.name is None:
+            if fmt in ("lin", "ang"):
+                return const(node.value, fmt)
+            if fmt == "explode" and node.value in EXPLODE_NAMES:
+                return const(node.value, "int", EXPLODE_NAMES[node.value])
+            if fmt == "sfx" and node.value in SFX_NAMES:
+                return const(node.value, "int", SFX_NAMES[node.value])
+            return node
+        if node.kind == "bin":
+            return Node("bin", op=node.op, left=self.tag(node.left, fmt), right=self.tag(node.right, fmt))
+        if node.kind in ("neg", "not", "bnot"):
+            return Node(node.kind, expr=self.tag(node.expr, fmt))
+        return node
+
+
+class Writer:
+    """BOS text in the Cavedog layout: tabs, `if( cond )`, one statement per line."""
+
+    def __init__(self):
+        self.lines = []
+
+    def out(self, depth, text):
+        self.lines.append("\t" * depth + text)
+
+    def expr(self, e, parent_prec=0, right=False):
+        k = e.kind
+        if k == "int":
+            if e.name is not None:
+                return e.name
+            if e.fmt == "lin":
+                return format_linear(e.value)
+            if e.fmt == "ang":
+                return format_angular(e.value)
+            return str(e.value)
+        if k == "name":
+            return e.name
+        if k == "get":
+            name = VALUE_NAMES.get(e.value_id, str(e.value_id))
+            if e.args:
+                return f"get {name}( {', '.join(self.expr(a) for a in e.args)} )"
+            return f"get {name}"
+        if k == "rand":
+            return f"rand( {self.expr(e.lo)}, {self.expr(e.hi)} )"
+        if k in ("not", "bnot", "neg"):
+            sym = {"not": "!", "bnot": "~", "neg": "-"}[k]
+            return sym + self.expr(e.expr, UNARY_PRECEDENCE)
+        if k == "bin":
+            prec = PRECEDENCE[e.op]
+            text = f"{self.expr(e.left, prec)} {e.op} {self.expr(e.right, prec, right=True)}"
+            if prec < parent_prec or (right and prec == parent_prec):
+                return f"({text})"
+            return text
+        raise DecompileError(f"internal: cannot print {k}")
+
+    def block(self, depth, stmts):
+        self.out(depth, "{")
+        for s in stmts:
+            self.statement(depth + 1, s)
+        self.out(depth, "}")
+
+    def statement(self, depth, s):
+        k = s.kind
+        ex = self.expr
+        if k == "assign":
+            self.out(depth, f"{s.target} = {ex(s.expr)};")
+        elif k in ("move", "turn"):
+            axis = AXIS_NAMES[s.axis]
+            if s.speed is None:
+                self.out(depth, f"{k} {s.piece} to {axis} {ex(s.dest)} now;")
+            else:
+                self.out(depth, f"{k} {s.piece} to {axis} {ex(s.dest)} speed {ex(s.speed)};")
+        elif k == "spin":
+            tail = f" accelerate {ex(s.accel)}" if s.accel is not None else ""
+            self.out(depth, f"spin {s.piece} around {AXIS_NAMES[s.axis]} speed {ex(s.speed)}{tail};")
+        elif k == "stop-spin":
+            tail = f" decelerate {ex(s.decel)}" if s.decel is not None else ""
+            self.out(depth, f"stop-spin {s.piece} around {AXIS_NAMES[s.axis]}{tail};")
+        elif k == "wait-for-turn":
+            self.out(depth, f"wait-for-turn {s.piece} around {AXIS_NAMES[s.axis]};")
+        elif k == "wait-for-move":
+            self.out(depth, f"wait-for-move {s.piece} along {AXIS_NAMES[s.axis]};")
+        elif k == "piece-op":
+            self.out(depth, f"{PIECE_OP_KEYWORDS[s.op]} {s.piece};")
+        elif k == "emit-sfx":
+            self.out(depth, f"emit-sfx {ex(s.sfx)} from {s.piece};")
+        elif k == "explode":
+            self.out(depth, f"explode {s.piece} type {ex(s.flags)};")
+        elif k in ("sleep", "signal", "set-signal-mask", "drop-unit"):
+            self.out(depth, f"{k} {ex(s.expr)};")
+        elif k in ("start-script", "call-script"):
+            self.out(depth, f"{k} {s.name}({', '.join(ex(a) for a in s.args)});")
+        elif k == "set":
+            self.out(depth, f"set {VALUE_NAMES.get(s.value_id, str(s.value_id))} to {ex(s.expr)};")
+        elif k == "attach-unit":
+            tail = f" {ex(s.pos)}" if s.pos is not None else ""
+            self.out(depth, f"attach-unit {ex(s.unit)} to {ex(s.piece)}{tail};")
+        elif k == "return":
+            self.out(depth, f"return ({ex(s.expr)});" if s.expr is not None else "return;")
+        elif k == "if":
+            self.out(depth, f"if( {ex(s.cond)} )")
+            self.block(depth, s.then)
+            if s.other is not None:
+                self.out(depth, "else")
+                self.block(depth, s.other)
+        elif k == "while":
+            self.out(depth, f"while( {ex(s.cond)} )")
+            self.block(depth, s.body)
+        elif k == "block":
+            self.block(depth, s.body)
+        else:
+            raise DecompileError(f"internal: cannot print statement {k}")
+
+
+def infer_params(cob: Cob):
+    """Parameter names per script: the engine's conventions, else the callers' arg counts."""
+    names = [n for n, _ in cob.scripts]
+    called_with = {n: 0 for n in names}
+    ranges = script_ranges(cob)
+    for name, start, end in ranges:
+        try:
+            ops = decode(cob.code, start, end)
+        except DecompileError:
+            continue
+        for op in ops:
+            if op.name in ("START_SCRIPT", "CALL_SCRIPT") and 0 <= op.args[0] < len(names):
+                callee = names[op.args[0]]
+                called_with[callee] = max(called_with[callee], op.args[1])
+    return called_with
+
+
+def decompile_cob(cob: Cob, unit: str = None):
+    """(bos text, failures) — failures is [(script, message)]; failed scripts are listed as comments."""
+    w = Writer()
+    w.out(0, f"// {unit or 'unit'} - decompiled by tools/tacob; compiles back byte-identical")
+    w.out(0, '#include "exptype.h"')
+    w.out(0, '#include "sfxtype.h"')
+    w.out(0, "")
+    if cob.pieces:
+        w.out(0, f"piece {', '.join(cob.pieces)};")
+        w.out(0, "")
+    if cob.statics:
+        w.out(0, f"static-var {', '.join(f'static_var_{i + 1}' for i in range(cob.statics))};")
+        w.out(0, "")
+    called_with = infer_params(cob)
+    failures = []
+    for name, start, end in script_ranges(cob):
+        try:
+            ops = decode(cob.code, start, end)
+            ncreate = 0
+            for op in ops:
+                if op.name != "CREATE_LOCAL_VAR":
+                    break
+                ncreate += 1
+            params = PARAM_NAMES.get(name.lower()) or weapon_params(name)
+            if params is None:
+                params = [f"arg{k + 1}" for k in range(called_with[name])]
+            params = params[:ncreate]
+            hinted = LOCAL_NAMES.get(name.lower(), [])
+            local_names = list(params)
+            for k in range(ncreate - len(params)):
+                local_names.append(hinted[k] if k < len(hinted) else f"var{k + 1}")
+            body = ScriptDecompiler(cob, name, start, end, params, local_names).run()
+        except DecompileError as e:
+            failures.append((name, str(e)))
+            w.out(0, f"// tacob: could not decompile {name}: {e}")
+            w.out(0, "// " + " / ".join(f"{op.pc}:{op.name}{tuple(op.args) if op.args else ''}"
+                                        for op in _safe_decode(cob, start, end)))
+            w.out(0, "")
+            continue
+        w.out(0, f"{name}({', '.join(params)})")
+        w.out(0, "{")
+        extra = local_names[len(params):]
+        if extra:
+            w.out(1, f"var {', '.join(extra)};")
+        for s in body:
+            w.statement(1, s)
+        w.out(0, "}")
+        w.out(0, "")
+    return "\n".join(w.lines).rstrip("\n") + "\n", failures
+
+
+def _safe_decode(cob, start, end):
+    try:
+        return decode(cob.code, start, end)
+    except DecompileError:
+        return []
+
+
+def listing(cob: Cob, only: str = None):
+    names = [n for n, _ in cob.scripts]
+    lines = [f"{len(cob.scripts)} scripts, {len(cob.pieces)} pieces, {len(cob.code)} words, "
+             f"{cob.statics} statics",
+             "pieces: " + " ".join(f"{i}={p}" for i, p in enumerate(cob.pieces))]
+    for name, start, end in script_ranges(cob):
+        if only and name.lower() != only.lower():
+            continue
+        lines.append(f"--- {name} @{start}")
+        try:
+            ops = decode(cob.code, start, end)
+        except DecompileError as e:
+            lines.append(f"    ?? {e}")
+            continue
+        for op in ops:
+            a = op.args
+            if op.name in ("MOVE", "TURN", "SPIN", "STOP_SPIN", "MOVE_NOW", "TURN_NOW",
+                           "WAIT_FOR_TURN", "WAIT_FOR_MOVE"):
+                text = f"{_piece(cob, a[0])} {AXIS_NAMES.get(a[1], a[1])}"
+            elif op.name in ("SHOW", "HIDE", "CACHE", "DONT_CACHE", "SHADE", "DONT_SHADE",
+                             "EMIT_SFX", "EXPLODE"):
+                text = _piece(cob, a[0])
+            elif op.name in ("START_SCRIPT", "CALL_SCRIPT"):
+                text = f"{names[a[0]] if 0 <= a[0] < len(names) else a[0]} nargs={a[1]}"
+            else:
+                text = " ".join(str(x) for x in a)
+            lines.append(f"  {op.pc:5d}  {op.name:16s} {text}")
+    return "\n".join(lines)
+
+
+def _piece(cob, index):
+    return cob.pieces[index] if 0 <= index < len(cob.pieces) else f"piece#{index}"
+
+
+# --------------------------------------------------------------------------- game assets
+
+def load_ta3do():
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    loader = SourceFileLoader("ta3do", str(HERE / "ta3do"))
+    spec = importlib.util.spec_from_loader("ta3do", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def read_cob_source(spec: str, gamedir=None):
+    """A .cob path, or a stock unit name read out of the game's archives."""
+    path = Path(spec)
+    if path.is_file():
+        return path.read_bytes(), path.stem
+    ta3do = load_ta3do()
+    assets = ta3do.Assets(gamedir)
+    name = f"scripts/{path.stem.lower()}.cob"
+    if not assets.has(name):
+        raise TacobError(f"{spec}: not a file, and no {name} in the game's archives")
+    return assets.read(name), path.stem.lower()
+
+
+# --------------------------------------------------------------------------- commands
+
+def cmd_compile(args):
+    text = Path(args.source).read_text(encoding="latin-1")
+    cob = compile_bos(text, args.source, args.include or ())
+    blob = write_cob(cob)
+    out = Path(args.output) if args.output else Path(args.source).with_suffix(".cob")
+    out.write_bytes(blob)
+    print(f"{out}: {len(cob.scripts)} scripts, {len(cob.pieces)} pieces, {len(cob.code)} words, "
+          f"{cob.statics} statics, {len(blob)} bytes")
+
+
+def cmd_decompile(args):
+    blob, unit = read_cob_source(args.source, args.gamedir)
+    cob = read_cob(blob)
+    text, failures = decompile_cob(cob, unit)
+    if args.output:
+        Path(args.output).write_text(text, encoding="latin-1")
+    else:
+        sys.stdout.write(text)
+    for name, msg in failures:
+        print(f"tacob: {unit}: {msg}", file=sys.stderr)
+    if failures:
+        raise SystemExit(1)
+
+
+def cmd_dump(args):
+    blob, _unit = read_cob_source(args.source, args.gamedir)
+    print(listing(read_cob(blob), args.script))
+
+
+def roundtrip_one(blob: bytes, unit: str):
+    """One unit through decompile → compile; a dict the gate and the tests both read."""
+    result = {"unit": unit, "ok": False}
+    try:
+        cob = read_cob(blob)
+    except TacobError as e:
+        result["error"] = f"read: {e}"
+        return result, None
+    text, failures = decompile_cob(cob, unit)
+    result["scripts"] = len(cob.scripts)
+    if failures:
+        result["error"] = "decompile: " + "; ".join(f"{n}: {m}" for n, m in failures)
+        return result, text
+    try:
+        rebuilt = write_cob(compile_bos(text, f"{unit}.bos"))
+    except CompileError as e:
+        result["error"] = f"compile: {e}"
+        return result, text
+    if rebuilt == blob:
+        result["ok"] = True
+        return result, text
+    n = min(len(rebuilt), len(blob))
+    diff = next((k for k in range(n) if rebuilt[k] != blob[k]), n)
+    result["error"] = f"bytes differ at offset {diff} (sizes {len(blob)} vs {len(rebuilt)})"
+    if HEADER.size <= diff < HEADER.size + 4 * len(cob.code):
+        word = (diff - HEADER.size) // 4
+        script = next((nm for nm, s, e in script_ranges(cob) if s <= word < e), "?")
+        result["error"] += f"; code word {word} in {script}"
+    return result, text
+
+
+def cmd_roundtrip(args):
+    units = []
+    if args.all:
+        ta3do = load_ta3do()
+        assets = ta3do.Assets(args.gamedir)
+        for path in assets.glob("scripts/*.cob"):
+            units.append((assets.read(path), Path(path).stem))
+    for spec in args.units:
+        units.append(read_cob_source(spec, args.gamedir))
+    if not units:
+        raise TacobError("nothing to round-trip: give unit names or --all")
+    out_dir = Path(args.out) if args.out else None
+    if out_dir:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    for blob, unit in units:
+        result, text = roundtrip_one(blob, unit)
+        results.append(result)
+        if out_dir and text is not None:
+            (out_dir / f"{unit}.bos").write_text(text, encoding="latin-1")
+        if not args.json:
+            print(f"{'ok  ' if result['ok'] else 'FAIL'} {unit:<12} {result.get('error', '')}")
+    failed = [r for r in results if not r["ok"]]
+    summary = {"units": len(results), "identical": len(results) - len(failed), "failed": failed}
+    if args.json:
+        print(json.dumps(summary, indent=1))
+    else:
+        print(f"{summary['identical']} of {summary['units']} byte-identical")
+    if failed:
+        raise SystemExit(1)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="tacob", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("compile", help="BOS -> COB")
+    p.add_argument("source")
+    p.add_argument("-o", "--output")
+    p.add_argument("-I", "--include", action="append", help="include search directory")
+    p.set_defaults(fn=cmd_compile)
+
+    p = sub.add_parser("decompile", help="COB -> BOS (a file, or a stock unit name)")
+    p.add_argument("source")
+    p.add_argument("-o", "--output")
+    p.add_argument("--gamedir")
+    p.set_defaults(fn=cmd_decompile)
+
+    p = sub.add_parser("dump", help="opcode listing")
+    p.add_argument("source")
+    p.add_argument("script", nargs="?")
+    p.add_argument("--gamedir")
+    p.set_defaults(fn=cmd_dump)
+
+    p = sub.add_parser("roundtrip", help="decompile, recompile, compare bytes")
+    p.add_argument("units", nargs="*")
+    p.add_argument("--all", action="store_true", help="every scripts/*.cob in the game's archives")
+    p.add_argument("--out", help="write the decompiled BOS files here")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--gamedir")
+    p.set_defaults(fn=cmd_roundtrip)
+
+    args = ap.parse_args(argv)
+    try:
+        args.fn(args)
+    except TacobError as e:
+        print(f"tacob: {e}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

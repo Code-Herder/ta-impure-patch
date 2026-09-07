@@ -285,12 +285,12 @@ noted. [VERIFIED]
 | 0x08 | `NumberOfPieces`               | Count of model pieces the script addresses. |
 | 0x0C | `TotalScriptLen`               | Length of the bytecode, **in 32-bit words** (see 2.3). |
 | 0x10 | `NumberOfStaticVars`           | Count of unit-persistent static variables. |
-| 0x14 | `Unknown_2` / `Always_0`       | Reserved. |
+| 0x14 | `Unknown_2` / `Always_0`       | Reserved — `0` in all 278 stock COBs [VERIFIED 2026-09-07, `tools/tacob`]. |
 | 0x18 | `OffsetToScriptCodeIndexArray` | → `NumberOfScripts` × `int32`: each script's **entry point** (a **word index** into the code, not a byte offset). |
 | 0x1C | `OffsetToScriptNameOffsetArray`| → `NumberOfScripts` × `int32`: each → a NUL-terminated **script name**. |
 | 0x20 | `OffsetToPieceNameOffsetArray` | → `NumberOfPieces` × `int32`: each → a NUL-terminated **piece name**. |
 | 0x24 | `OffsetToScriptCode`           | → start of the bytecode (array of `int32` words). |
-| 0x28 | `Unknown_3`                    | Usually points at the first script name. |
+| 0x28 | `Unknown_3`                    | The **strings offset**: it equals the first script name's offset in all 278 stock COBs, and the string area runs from here to EOF [VERIFIED 2026-09-07]. |
 | 0x2C | `OffsetToSoundNameArray`       | **TA:Kingdoms only.** |
 | 0x30 | `NumberOfSounds`               | **TA:Kingdoms only.** |
 
@@ -481,6 +481,64 @@ scene-graph application.]
   lineage) for reading shipped scripts.
 - **Our vendored TADR** — `COB_extensions.pas`, `ScriptCallsExtend.pas` (adds `GET`/`SET` IDs
   by hooking TA's COB call dispatcher `0x4FD6xx`), `CobHeader` in `tamem.h`.
+- **`tools/tacob`** (ours, stdlib Python) — BOS→COB compiler, COB→BOS decompiler, `dump`, and
+  the `roundtrip` gate: every stock COB decompiles to BOS that compiles back **byte-identical
+  to the whole file** (278 of 278, 2026-09-07). §2.8 is what building it established.
+  Design: `tacob-design.md`.
+
+### 2.8 What Scriptor emits — measured over the 278 stock COBs [VERIFIED 2026-09-07]
+
+Everything here was read off the stock bytecode with `tools/tacob dump` and is enforced by
+`tools/tacob roundtrip --all` (a wrong claim would break byte identity somewhere in 278 files).
+
+**File layout.** `header(44) · code · entry table · script-name table · piece-name table ·
+strings`. Offsets are exactly `o_code = 44`, `o_cidx = 44 + 4·codelen`, `o_snames = o_cidx +
+4·nscr`, `o_pnames = o_snames + 4·nscr`, `o_str = o_pnames + 4·npc`; strings are the script
+names then the piece names, in table order, NUL-terminated, contiguous, no alignment padding,
+EOF at the last NUL. Entry points are strictly increasing, the first is `0`, no two scripts
+share code, and a script ends where the next begins. Piece names keep their case (18 files have
+upper-case pieces); script names are mixed case. Seven files declare more statics than the code
+touches, so the count is a declaration, not a census.
+
+**Script shape.**
+- Every local — parameters first, then `var`s — is created by `CREATE_LOCAL_VAR` at the top of
+  the script (0 mid-script creations in 3,446 scripts). Arguments arrive on the stack and the
+  first N creations bind them; a script called with fewer arguments than it creates reads zeros
+  (`start-script SmokeUnit()` for a three-parameter `SmokeUnit`). The COB stores no arity.
+- Every script's last opcode is `RETURN` (3,306 end `PUSH 0; RETURN`, 140 `PUSH 1; RETURN`).
+  **The implicit `return (0)` is appended only when the last opcode emitted is not already a
+  `RETURN`** — a script ending `if( x ) { …; return (0); }` gets none and, when the condition
+  fails, falls through into the next script's code (ARMPW `FirePrimary` → `AimPrimary`). An
+  empty script is exactly `PUSH 0; RETURN`.
+- **Literals truncate toward zero**: `<20>` = 3640 (3640.9), `<105>` = 19114 (19114.7),
+  `<-100>` = −18204 (−18204.4). Keyframed kbot walks carry `[-1.374985]`-style values next to
+  `[-1.375]`, i.e. the exporter's six-decimal text truncated, not rounded.
+- **No constant folding**: `if( TRUE )` compiles to `PUSH 1; JUMP_NOT_EQUAL`, `256 | 2` to two
+  pushes and an OR. `&&`/`||` evaluate both sides (no short circuit). Unary minus on a
+  non-literal is `0 - x`.
+- **`JUMP_NOT_EQUAL` jumps when the popped value is zero** (the `while` exit / `if` skip).
+  `while` is `cond; JNE end; body; JUMP cond`. **The stock corpus contains no `else` and no
+  forward `JUMP` at all** (848 JUMPs, every one a loop back-edge); Cavedog wrote `if( !x )`
+  instead.
+- Operand pushes, trailing clause first: `turn P to D speed S` = `S, D, TURN p axis`; `move`
+  likewise; `spin P around A speed S accelerate X` = `X, S, SPIN` (X = 0 when absent);
+  `stop-spin … decelerate X` = `X, STOP_SPIN`; `move/turn … now` = `D, MOVE_NOW/TURN_NOW`;
+  axes x/y/z = 0/1/2 inline after the piece.
+- `get V` = `PUSH id; GET_UNIT_VALUE`; `get V(a…)` = `PUSH id; four args zero-padded; GET`
+  (`get PIECE_XZ( link )` pushes the piece index as arg 1). `set V to E` = `PUSH id; E; SET`.
+  `rand( lo, hi )` = `lo, hi, RAND`. `attach-unit U to P` = `U, P, 0, ATTACH_UNIT` (three
+  pops; the third is always 0 in stock, −1 as the piece is written `0 - 1`). `emit-sfx T from
+  P` = `T, EMIT_SFX p`; `explode P type F` = `F, EXPLODE p`.
+- Value ids confirmed by use: `HEALTH` 4, `INBUILDSTANCE` 5, `PIECE_XZ` 7, `PIECE_Y` 8,
+  `UNIT_XZ` 9, `UNIT_Y` 10, `UNIT_HEIGHT` 11, `XZ_ATAN` 12, `XZ_HYPOT` 13, `ATAN` 14, `HYPOT`
+  15, `BUILD_PERCENT_LEFT` 17, `YARD_OPEN` 18, `BUSY` 6.
+- Explosion flags by use: `BITMAPONLY` 32, `BITMAP1..4` 256..2048, and the death mix
+  `4 | 8 | 16 | 2` (`FALL | SMOKE | FIRE | EXPLODE_ON_HIT`); SFX 257/258 are `SmokeUnit`'s
+  `256 | 1` / `256 | 2`. Names beyond these are the community's, unverified in the engine.
+- **Never used by any stock script**: `POP_STACK`, `MOD`, logical `XOR`, `BITWISE_AND/XOR/NOT`,
+  `GREATER`, `GREATER_EQUAL`, `SHADE`, `PLAY_SOUND`, `MAP_COMMAND`. `CALL_SCRIPT` never leaves
+  a value to pop, so a call is a statement, never an expression.
+- Scriptor accepts clause words as identifiers: stock `SetSpeed(speed)`.
 
 ---
 
