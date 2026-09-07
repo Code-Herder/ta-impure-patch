@@ -48,8 +48,9 @@ static const int* ctx_or_back(unsigned ctxArg)
    "the two ways the cursor gets drawn"). Anything recorded while the flip is
    running is the cursor too (s_inFlip). Matched on the return address; the
    ranges are the functions' extents read from the disassembly (2026-09-07):
-   0x459200's seven leaf calls return inside 0x459319..0x4597D8 and it ends at
-   0x4597DF; the cursor code's fifteen (0x4C23C9..0x4C297E) end at 0x4C2989;
+   0x459200's seven leaf calls sit at 0x459319..0x4597D3 (each return address
+   five bytes on) and it ends at 0x4597DF; the cursor code's fifteen
+   (0x4C23C9..0x4C297E) end at 0x4C2989;
    the flip 0x4C63A0 ends at 0x4C6669, and 0x4C67C0 — its two callers are
    0x4C641B and 0x4C6544, both inside the flip — ends at 0x4C6884. */
 static int excluded_caller(unsigned ret)

@@ -294,7 +294,12 @@ static SURF* surf_by_base(unsigned base)
    keeps only the LAST of any run of identical ops: the final state of the
    surface is the same, because an op's replay is idempotent and the last
    occurrence is the one whose position in the order matters. */
-#define DUP_TAB 16384
+/* open addressing over the batch: 2x the ring's capacity keeps the load
+   under a half, and a probe that runs long stops and calls the op distinct
+   (a stray duplicate costs one idempotent replay, not a stall on the game
+   thread inside the flip) */
+#define DUP_TAB (MAX_OPS * 2)
+#define DUP_PROBE_MAX 64
 static int s_dupTab[DUP_TAB];
 static unsigned op_hash(const OP* o)
 {
@@ -321,7 +326,7 @@ static void dedup(void)
         o->dup = 0;
         if (o->kind == OP_FLIP) continue;
         slot = op_hash(o);
-        for (n = 0; n < DUP_TAB; n++, slot = (slot + 1) & (DUP_TAB - 1)) {
+        for (n = 0; n < DUP_PROBE_MAX; n++, slot = (slot + 1) & (DUP_TAB - 1)) {
             if (!s_dupTab[slot]) { s_dupTab[slot] = i + 1; break; }
             if (op_same(&s_ops[s_dupTab[slot] - 1], o)) { s_ops[s_dupTab[slot] - 1].dup = 1; s_dupTab[slot] = i + 1; break; }
         }
