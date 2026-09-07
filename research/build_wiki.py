@@ -68,6 +68,7 @@ PAGES = [
     ("ui-markers",                 "UI markers",                  "Renderer"),
     ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
     ("renderers",                  "Classic and Classic++ renderers", "Renderer"),
+    ("thread-safe-destruction",    "Thread-safe destruction",     "Renderer"),
 
     ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
     ("model-export",               "Model export (3DO → glTF)",   "Tooling"),

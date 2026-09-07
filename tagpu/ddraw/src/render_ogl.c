@@ -14,6 +14,7 @@
 #include "hook.h"
 #include "tagpu.h"
 #include "tagpu_overlay.h"
+#include "tagpu_reclaim.h"
 
 
 static HGLRC ogl_create_core_context(HDC hdc);
@@ -1574,7 +1575,17 @@ static void ogl_render()
                    re-establishes program/VAO/viewport at the top of the next frame.
                    (Deliberately avoid glGetIntegerv — under wine the fork loads it via
                    wglGetProcAddress, which returns NULL for GL 1.1 entry points.) */
+                /* tagpu_reclaim: the overlay is the render thread's only reader of
+                   engine objects the game thread frees. Publish "in a pass" before
+                   its first engine read and "done" after its last, unconditionally
+                   (thread-safe-destruction.md §9: a pass that never completes halts
+                   reclamation for the session). The driver still runs every frame —
+                   input injection, the GL-context-change detection and the flushes
+                   must — and skips only its engine reads while a level teardown is
+                   in progress (tagpu_reclaim_teardown_active, tagpu_overlay.c). */
+                tagpu_reclaim_pass_begin();
                 tagpu_overlay_draw(&f);
+                tagpu_reclaim_pass_end(f.frame_counter);
                 gldbg("E-tagpu");
 
                 if (tagpu_capturing)

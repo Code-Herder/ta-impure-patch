@@ -21,6 +21,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_weapons.h"
+#include "tagpu_reclaim.h"
 #include "utils.h"
 #include "versionhelpers.h"
 #include "delay_imports.h"
@@ -129,6 +130,15 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            "tagpu_weapons.on" exists; every site byte-matched, all-or-nothing;
            stock units trampoline to the untouched engine functions. */
         tagpu_weapons_init();
+
+        /* tagpu: deferred reclamation of the engine's Object3do (the render
+           thread's cross-thread use-after-free, thread-safe-destruction.md).
+           Two sites, disjoint from every detour above: FreeObjectState
+           0x45AAA0 (the one funnel every Object3do free takes) and the level
+           teardown 0x491B60. Byte-matched, all-or-nothing; on by default,
+           `tagpu_reclaim.off` disables. Changes only WHEN a freed block
+           returns to the heap; the sim reads nothing different. */
+        tagpu_reclaim_init();
 
         PVOID(WINAPI * add_handler)(ULONG, PVECTORED_EXCEPTION_HANDLER) =
             (void*)real_GetProcAddress(GetModuleHandleA("Kernel32.dll"), "AddVectoredExceptionHandler");

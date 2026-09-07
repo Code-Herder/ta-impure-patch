@@ -48,6 +48,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
 | Terrain in restored true colour (Classic++), since G14e the feature and effect sprites, **since G14g the unit textures**; **lit since G14f** — terrain, units and sprites; **cast shadows since G14h** | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05), the ONNX stack deleted (G14d, 2026-09-05), **the reveal progressive and the two sprite atlases restored lazily** (G14e, 2026-09-05), **lit by the lab's rule** (G14f, 2026-09-05: the height grid as an R8 texture, the face normal in the unit stream, the ground's lambert per sprite; `tagpu_classicpp.cfg` for `sun`/`unitsun`/`amb`), **the unit atlas restored, padded and mipped** (G14g, 2026-09-05: `tagpu_render3do.c` on `TAGPU_GAFATLAS`, 4-texel pad, 4-aligned, the twin trilinear to level 2 and 4× anisotropic, the unit FS's restored branch), **soft shadows** (G14h, 2026-09-06: `tagpu_shadow.c` — a depth map along `shadowsun` anchored to the map, PCSS-lite read back in the terrain and unit shaders, the hills casting from a static mesh in `tagpu_terr.c`, the replacement meshes casting, the Classic silhouette and slant off under the switch; eight more cfg keys; the context at 3.3 core) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b); the ONNX Runtime path is gone (G14d). The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
+| The model objects of units and wrecks, freed by the game thread while the render thread still reads them (the `200v200` fault at ~95 s) | ● closed (G14h, 2026-09-06) | `tagpu_reclaim.c` defers the engine's own destructor `FreeObjectState 0x45AAA0` behind the render pass's published quiescence and drains on the game thread; the level teardown `0x491B60` is wrapped so the queue is flushed first | seven `200v200` fights of 240–300 s clean where two in three used to fault (five consecutive at 300 s, two on the post-review DLL), an in-process level exit and second game clean; `reclaim:` counters `ovf=0`, `foreign=0`, drained tracking deferred within a frame or two, high-water 3–6; the engine's Classic surface byte-identical with the module on and off outside the top-of-viewport text strip that differs between any two launches |
 | Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k, by the engine's own raster rules since G14i (every face, flat, no waterline erase); one blend per silhouette pixel since G13n | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain; **aircraft** measured against the engine on `shadow-air` — offset `(+5, (alt−ground)/2)` on four airframes, darkening 0.487 engine vs 0.25 ours before the stencil and 0.44–0.52 after |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
 | Smoke, fire, wakes, nanolathe | ● native (G12f) | one detour on the layer walker `0x471F90` | A/B `sfx-strait`, engine surface empty of particles |
@@ -157,6 +158,45 @@ root in the first captures; a caster log line reset by the startup GL reset logg
 screen's commander eight times and the placed one never; the lab's Classic lane compiles
 tagpu's shaders and needed an ES precision for `sampler2DShadow` and its two shadow samplers
 named to distinct units, or WebGL dropped the terrain draw (0 → 100 % of pixels differing).
+
+**G14h — thread-safe destruction: the engine's model-object frees deferred behind the render
+thread's quiescence.** Found measuring G14g, present on the G14f DLL too: `200v200` faulted about
+95 s into the fight, two runs in three, at the first instruction of `emit_geom` reading a unit's
+or wreck's `Object3do` that the game thread had freed between the gather and the emit. The
+investigation (six parallel passes over the binary and the fork, 2026-09-06) settled three things
+no read-side guard could get around: the engine frees the object one instruction **before** it
+nulls the pointer and well before it clears the alive bit (`0x486D9E → 0x486DA3 → 0x486DCE`), so
+the gather's alive gate is no protection; the fault needs the freed page to become unreadable,
+which the CRT small-block heap does *inside the free* for blocks ≤ 480 bytes (the one-piece wreck
+objects, 88 bytes — the crash's faulting index was a wreck) and wine's heap does for a subheap's
+freed tail; and every `Object3do` free in the engine goes through one function, `FreeObjectState
+0x45AAA0`. So the fix cooperates with that destructor instead of guarding every read:
+`tagpu_reclaim.c` detours its entry to **enqueue** the object; the engine's own null and alive-bit
+clear run unchanged, so the sim reads nothing different; the real free runs on the game thread,
+from the next call, once the render thread — which brackets its whole overlay pass with a
+pass-started / pass-completed pair in `render_ogl.c` — has **published completion** of every pass
+that could hold the pointer. Quiescence, never a fixed count: an idle reader passes at once, a
+stalled one freezes reclamation and the 1024-entry ring leaks on overflow; there is no
+synchronous free and no spin on the hot path. Level teardown `0x491B60` (no stack args, plain
+`ret`) is wrapped so the queue is flushed through the real destructor while the composite registry
+it walks is still alive, with the reader held off behind a fenced flag. On by default,
+`tagpu_reclaim.off` disables; `tagpu_native.c` keeps a belt-and-braces re-read of the record
+pointer (wrecks too) before each emit. **Measured** on the crash recipe: `reclaim: ARMED` on both
+sites, deferred tracking drained within a frame or two, queue high-water 3 to 6, overflow 0, no
+foreign thread ever calling; seven fights clean, five of them consecutive at 300 s, plus an
+in-process level exit (the wrap flushed the queue with the reader idle) and a second game. The
+control with the module off survived its one run — with the belt-and-braces re-read still compiled
+in, so that run measured the narrow-window guard, not the original build. What the roster
+timelines could not show: fights differ run to run on the same build, so a per-frame `alive`
+comparison is not a determinism test; the replay byte-diff remains the gate for that.
+Engine map: the death routine, the destructor and what it frees (the composite frames are *not*
+among them — `0x437C90` only unregisters a slot), the builders, the wreck path, the teardown and
+its callers, the allocator's locks and the small-block heap's decommit are all in
+[Reverse-engineering the exe](exe-reverse-engineering.html) §"The unit-death path". What it did
+not close: the composite frame at `obj+0x10` has a separate owner and its lifetime is not yet
+classified; the particle sub-vectors and layer arrays are the same hazard class and wait for a
+second client of the same primitive; the screen fog grid wants a per-frame snapshot instead —
+[Thread-safe destruction](thread-safe-destruction.html) §10.
 
 **G14g — Classic++ unit atlas: the unit textures restored, padded, aligned and mipped.**
 Step 2's last piece of [Classic and Classic++](renderers.html) §5 on 2026-09-05, one landing; no

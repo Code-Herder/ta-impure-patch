@@ -1791,6 +1791,149 @@ seven by driving the game and reading `main+0x2CBE` back, and `cursormove` and
   … reach their cases without consulting `main+0x37EFA`, so the Move/Attack/Patrol/Reclaim/Guard
   buttons produced correct cursors at Interface Type 1 before the patch. Measured.
 
+## The unit-death path, the object destructor and the level teardown — mapped by us
+
+Mapped 2026-09-06 to close the render thread's use-after-free on a dying unit's model object
+([Thread-safe destruction](thread-safe-destruction.html)). Everything here is **[VERIFIED]** by
+disassembly of the retail exe unless marked `[INFERRED]`; the fork's `tagpu_reclaim.c` patches
+exactly two of these addresses (`0x45AAA0`, `0x491B60`) and reads none of the others at runtime.
+
+### `0x4866D0` — the unit destructor `[INFERRED name: UNITS_Destroy]`
+
+Frame `sub esp,0x68`, two stack args (a death-message record, a mode), `ret 8` at `0x486E60`.
+Two callers: `0x486679` inside `Send_UnitDeath 0x4864B0` (mode 1) and `0x455423` in the
+message dispatcher `[INFERRED]` (mode 0). At entry `[rec+1]` (word) is the unit id and the unit is
+`main+0x14357` base `+ id·0x118` (`0x4866EE..0x486703`); id 0 makes `esi = 0`, which is what the
+fork's `NullUnitDeathVictim` patch at `0x4866E8` skips to the epilogue. `0x486706` tests the
+alive bit (`[esi+0x110] & 0x10000000`) and skips a dead unit. The tail runs, in this order:
+
+| addr | instruction | what |
+|---|---|---|
+| `0x486D75` | `call 0x489740` | `FreeUnitOrders` |
+| `0x486D8A` | `call [vt+0x50]` (1) | delete the COB script object `unit+0x9A`; nulled at `0x486D8D` |
+| **`0x486D9E`** | `call 0x45AAA0` | **`FreeObjectState(unit+0x9E)` — the model object is freed here** |
+| **`0x486DA3`** | `mov [esi+0x9E],ebx` (0) | **the pointer is nulled — the instruction after the free returns** |
+| `0x486DB1` / `0x486DB7` | `call 0x43DD10`; `call 0x4B4F20` | `FreeMoveClass` + free of `[unit+0]` |
+| `0x486DC7` | `mov word [esi+0xA6],0` | model index cleared |
+| **`0x486DCE`** | `and ebp,0xEFFFFFFF` → `[esi+0x110]` | **the alive bit `0x10000000` cleared — after the free** |
+| `0x486DE8` | `and al,0xCF` → `[esi+0x110]` | bits 4 and 5 (selected …) cleared |
+| `0x486DF6` | `mov [esi+0x92],[main+0x1439B]` | the type def reset to a default |
+| `0x486DFC` | `dec word [player+0x144]` | the owner's unit count |
+
+So a reader that gates on the alive bit sees the object freed while the bit still reads set
+(measured live: dead units logged `st=80284101` with `unit+0x9E` already null). Re-reading
+`unit+0x9E` is the correct guard; re-reading the bit is not.
+
+### `0x45AAA0` `FreeObjectState` — the `Object3do` destructor
+
+`__stdcall`, one argument (the object), single exit `ret 4` at `0x45AB01`; the body is
+`0x45AAA0..0x45AB01` (`0x45AB10` is a different function). Prologue `53 8B 5C 24 08`
+(`push ebx; mov ebx,[esp+8]`): five bytes ending on an instruction boundary at `0x45AAA5`, no
+branch into `0x45AAA1..A4`, and the body never calls `0x45AAA0` — cleanly detourable at entry.
+
+What it frees: the loop at `0x45AAB2` runs `MEM_Free 0x4D85A0` on `[obj+0x44 + i·0x36]` for
+each of `[obj+0]` prims — every prim's **posed vertex buffer** (prim 0 at `obj+0x22`, the buffer
+at prim`+0x22`); then, if `[main+0x1437B]` is non-null, `0x437C90(&obj+0x10)` and
+`0x437C90(&obj+0x14)`, which **do not free** (next entry); then `MEM_Free(obj)` at `0x45AAF6`.
+
+Exactly three callers, each pushing the object:
+
+| caller | path | after the call |
+|---|---|---|
+| `0x486D9E` | unit death (above) | `[unit+0x9E] = 0` |
+| `0x42474F` | `FEATURES_Destroy 0x4246B0`, a 3DO wreck | `[rec+4] = 0` at `0x424754` |
+| `0x4221C4` | the bulk feature purge inside `0x422170` — **reachable only from the level teardown** (below) | nothing nulled |
+
+**The fork detours this entry** (`tagpu_reclaim.c`): while armed the call enqueues the object
+instead of freeing it; the real body runs later through a trampoline over the stolen five bytes.
+
+### `0x437C90` — unregister a slot from the composite registry `[INFERRED role]`
+
+`thiscall`, `ecx = *(main+0x1437B)` (the composite draw context, the `this` of `0x458810` —
+frame-composition.md), one argument: a slot address. It walks `[ecx+4]`'s `{ptr, size}` entries
+(advancing by `size`, `[ecx]` the total) and zeroes `entry.ptr` where it equals the argument.
+**The routine contains no `call` — it frees nothing.** The composite frame at `obj+0x10` therefore
+has an owner other than `FreeObjectState`; that frame's lifetime is an open item
+([Thread-safe destruction](thread-safe-destruction.html) §10). The registry pointer
+`main+0x1437B` is written at `0x42D3DD` (set) and `0x42DCA3` (`mov [ecx+0x1437B],ebx`, `ebx = 0`
+`[INFERRED]` — the teardown nulls it, and `FreeObjectState`'s guard then skips the walk).
+
+### `0x45A8D0` / `0x45A950` — the `Object3do` builders
+
+Size `0x22 + 0x36·n`, `n = 1 + children(node+0x30) + siblings(node+0x2C)` counted by `0x45AE80`
+— ARMPW 15 parts = 844 bytes, CORAK 16 = 898, ARMROCK 13 = 736, the one-piece `armpw_dead` /
+`corak_dead` = 88. Allocated by `0x4D83B0(tag "Object State" @0x506614, size)` and zeroed;
+`+0x08 = 1`, `+0x0C` = the unit (`0x45A9C8`, the scripted builder only), `+0x1E` = the prim tree
+root from `0x45AEC0` / `0x45AF90`. Callers: `0x45A950` from `0x485DC0`
+(`UNITS_CreateModelScripts 0x485D40`), `0x45A8D0` from `0x485E09` (a unit without a script) and
+`0x423EC2` (features: a 3DO wreck record's object). **No per-frame temporaries** — objects are
+built at creation and freed at death only.
+
+### `0x4246B0` `FEATURES_Destroy` — the wreck path
+
+Args (a tile pointer, a flag). `0x42472D` loads the wreck pool `main+0x1420B`, record = pool
+`+ FT_WIDX·0x30`; `test [def+0xFE],1` splits GAF from 3DO wrecks; a 3DO wreck's object is freed
+at `0x42474F` and nulled at `0x424754`; `0x4232F0` runs; then the tile's def index is set to
+`0xFFFF` and its flags bit 0 cleared (`0x42477C` / `0x424780`) — **the tile is unlinked last**,
+so the fork's wreck gather (which reads the tile, then the record, then the object) sees the
+same free-before-unlink shape as the unit path.
+
+### `0x491B60` — the level teardown
+
+**No stack arguments**; six bare call sites (`0x460630`, `0x491C6A`, `0x49262C`, `0x4996AA`,
+`0x49971D`, `0x4997AF`), none pushing for it; first five bytes `A1 E8 1D 51 00`
+(`mov eax,[0x511DE8]`), no branch into `0x491B61..64`, resume at `0x491B65`. **Two exits**: `ret`
+at `0x491C59`, and a tail-jump at `0x491C54` (`jmp 0x450DD0`, taken when `0x435100` returns 3)
+— `0x450DD0` reads no stack argument either and returns with a plain `ret` at `0x450E19`, so a
+`call` through the stolen tail returns to the caller on both paths and code can run after it
+(the review caught the first draft of this note claiming a single exit). The body clears
+`main+0x2A44 & ~4`, then the cascade: `0x4CED40`, `0x4CE690(4)`, `0x41DC20`, `0x437D30`,
+**`0x485980`** — the unit teardown: it walks the unit array (`main+0x14357..+0x1435B`, stride
+`0x118`, `0x48599B..0x4859A8`) and calls `Send_UnitDeath 0x4864B0(unit, 8)` for **every unit
+whose model index `[unit+0xA6]` is non-zero**, i.e. every live unit's object is freed through the
+death routine `0x4866D0 → 0x486D9E` — hundreds of `FreeObjectState` calls — then three
+`MEM_Free`s of the unit arrays (the first draft of this note said it never reached
+`FreeObjectState`; the review disproved that) — then `0x471DE0` (destroy every sfx layer),
+`0x420960`, `0x44F6E0`, `0x464A00`, `0x466AA0`, **`0x483DD0`** (→ `0x422170` → the bulk wreck
+`FreeObjectState` loop at `0x4221C4`; `0x483DD0`'s only caller is `0x491BB3` and `0x422170`'s
+only caller is `0x483DE6`, so this is the sole path to that third caller), then `MEM_Free` of
+the game-state arrays (`0x491BC5`, `0x491BD9`, `0x491BED`). **The fork wraps this entry**
+(`tagpu_reclaim.c`) with a pre hook (hold the render thread off, wait for it to leave its pass,
+flush the deferred queue while the registry is alive — or, if it does not leave within a second,
+keep the queue and keep deferring through the cascade) and a post hook (release it).
+
+### Why the drain has no tick to ride — `0x4969D2`
+
+The only game-thread hook the fork owns is the scenario applier's `Game_MainLoopTick` detour at
+`0x4969D2` (stolen `A1 E8 1D 51 00`, `tagpu_scenario.c`), and it is installed **only while a
+scenario is being applied**, then left to its one-shot state machine — it cannot host a per-tick
+drain, and two detours cannot share the site. So `tagpu_reclaim.c` drains from inside
+`FreeObjectState` itself (every death first frees what became safe), which is why the most recent
+death's object is held until the next death or the level ends.
+
+### The allocator, from the free side
+
+`MEM_Free 0x4D85A0` → `0x4D85B0`: `EnterCriticalSection` (IAT `0x4FC198`) … `LeaveCriticalSection`
+(`0x4FC194`) around either the "fussy" heap `0x4DB7D0` (byte `0x5289A4`, set by the command-line
+switches `-memfussy` / `-memnofussy` / `-memfrontalign` parsed at `0x4D80D0`) or, by default, the
+CRT `free 0x4E8820`, which itself brackets with `_lock(9)` / `_unlock(9)` (`0x4EAC60` /
+`0x4EACE0`, a lazily created critical section) — **thread-safe from any thread**. `MEM_Alloc
+0x4B4F10` → `0x4D8660` → `0x4D83C0` takes the same section. The CRT `_heap_alloc 0x4E8900` sends
+`(size+15) & ~15 <= __sbh_threshold` (`[0x5109EC] = 0x1E0`, 480 bytes; `_set_sbh_threshold
+0x4F2280` has no callers) to the **small-block heap** `__sbh_alloc_block 0x4F2600` (4 KB pages in
+4 MB regions) and everything larger to `HeapAlloc(_crtheap [0x52B524])`; `_heap_init 0x4F1830`
+creates that heap with `HeapCreate(0, 0x1000, 0)` — serialised.
+
+**The small-block heap decommits pages inside a free.** `__sbh_free_block 0x4F25A0` counts wholly
+free pages (`[0x52A42C]`); when the count reaches 32 it calls `0x4F2470(0x10)`, which walks the
+region's page table from the top and `VirtualFree(page, 0x1000, MEM_DECOMMIT)`s up to sixteen
+wholly free pages (`0x4F24A9`), and `0x4F2410` releases a region whose `0x400` pages are all gone
+(`VirtualFree(base, 0, MEM_RELEASE)`). A freed block of ≤ 480 bytes can therefore become
+**unreadable in the very free that returned it** — which is where the one-piece wreck objects
+(88 bytes) live. Unit objects (736–898 bytes) are wine-heap blocks, whose pages go only when
+wine 9.0's `heap_free_block` decommits a subheap's free tail past its `0x10000` hysteresis or
+releases a subheap that has emptied.
+
 ## Hard-coded limits & constants
 
 [VERIFIED unless noted — from `EngineLimits.cpp`/`.h` and `tamem.h`]
