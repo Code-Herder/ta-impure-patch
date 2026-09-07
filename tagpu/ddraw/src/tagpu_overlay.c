@@ -20,6 +20,7 @@
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
 #include "tagpu_terrown.h"
+#include "tagpu_gui.h"
 #include "tagpu_markown.h"
 #include "tagpu_scaffold.h"
 #include "tagpu_input.h"
@@ -567,6 +568,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_featown_flush(f->frame_counter);
     tagpu_terrown_flush(f->frame_counter);
     tagpu_markown_flush(f->frame_counter);
+    tagpu_gui_flush(f->frame_counter);
     /* On EVERY path out of here, including these two: a frame that drew nothing
        zoomed must take the input transform back to 1:1, or `tagpu_overlay.off`
        (or a GL context change) would leave it bending clicks against the last

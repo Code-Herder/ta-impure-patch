@@ -1569,8 +1569,8 @@ the UI too.*
 
 ## Phase E — the UI, ours (planned 2026-09-06)
 
-Design: [GL UI renderer](gui-renderer.html) — decided in one interview on 2026-09-06, nothing
-built as of that date. The engine's own UI draws are **mirrored** into GL twins of its surfaces
+Design: [GL UI renderer](gui-renderer.html) — decided in one interview on 2026-09-06; the spike
+and the census (G15-0, G15a) are built and measured on the branch, the twins are not. The engine's own UI draws are **mirrored** into GL twins of its surfaces
 (the main offscreen, each `.GUI` screen's cached surface at `panel+0xBC`, the minimap picture)
 by observer detours on the pixel-writing leaves; the engine keeps drawing its own surface, which
 stays the **oracle** every gate diffs against and the **fallback** for anything unmirrored. Only
@@ -1584,7 +1584,7 @@ cursor, the shell scaled to the window) gets its own interview.**
 | Gate | Status | Exit |
 |---|---|---|
 | G15-0 — offline art spike: the restorer on shell backgrounds, HUD art, buttons, `unitpics`, cursors; contact sheets + dither-consistency | ● run 2026-09-07 ([§8](gui-renderer.html)): 224 frames, seven sheets; `unitpics` and the panels pass on sight, cursors gain nothing, baked-in button labels soften slightly, text softens (designed out); **owner's verdict pending** | the owner's per-class verdict; the default `uirestore` exclude list |
-| G15a — the census: observer detours on every pixel-writing leaf and the gadget dispatcher, the flip marker, the whole-surface diff; no drawing | ○ planned | writer table in the engine map; unexplained pixels < 1 % on every inventory screen or every writer named; the minimap's draw path located |
+| G15a — the census: observer detours on every pixel-writing leaf, the flip marker, the whole-surface diff; no drawing | ● **done 2026-09-07** (on the branch, unlanded): `tagpu_gui_hook.c` + `tagpu_gui_leaves.h`, 17 observed sites, `tools/uiwalk.py`; **0 unexplained of 3 710 035 changed pixels** on the presented surface across the shell and in-game inventory at 1024×768; the minimap located (`0x466B00` at `0x46961F`), the option screens' wide backdrop found to be textured triangles (`0x4C7580`), the retained-GUI build sequence read; three wiki claims corrected | writer table in the engine map; unexplained pixels < 1 % on every inventory screen or every writer named; the minimap's draw path located |
 | G15b — the twins, in game, Classic: the module, the ring, seed, the three op kinds, the composite seam, `strict`, tacli | ○ planned | side panel, build pages, top and bottom bars at 1024×768 under `strict`: 0 differing px outside the cursor, 0 holes; fps fixtures within half a frame; parity md5 unchanged with the trigger absent |
 | G15c — the rest of the in-game frame: chat, dialogs, `ARMOPT` over the viewport, HUD text, minimap, `LIGHTBAR`, the panel painter | ○ planned | the whole in-game inventory clean under `strict`, ARM and CORE; dialogs over the viewport verified at 0.5× and 2× |
 | G15d — the shell across the 640×480 context switch, the loading screen, the palette measured | ○ planned | shell inventory clean under `strict` at 640×480; three entry/exit cycles with twin and atlas counts flat |

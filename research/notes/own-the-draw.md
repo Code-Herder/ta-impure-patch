@@ -566,3 +566,29 @@ per-face calls during idle-anim rebuilds) yet the sprite never blanks — the bu
 appears to reuse the same-size allocation without re-clearing, so our pixels persist
 across rebuilds; only the trigger's full invalidation produced a cleared plane. Worth
 pinning down when we characterise rebuild cadence for moving units.
+
+## Observing without owning, and chaining onto a landed stub  [Phase E, 2026-09-07]
+
+The four ways above all *take* a draw. The GL UI renderer's census needed a fifth thing: to
+**watch** a leaf without changing it — read its arguments on the way in, its result on the way
+out, and let it run exactly as before. `tagpu_detour_observe(va, stolen, nst, before, after)` in
+`tagpu_detour.c` is that: a prologue jmp into a stub that `pushad`s, calls `before(entry_esp)`
+with a pointer to the engine's own stack frame (`[0]` the return address, `[1..]` the
+arguments), `popad`s, runs the stolen bytes and jumps back. If `before` returns non-zero the
+return address on the stack is replaced by a trampoline that, when the callee `ret n`s, saves
+every register, calls `after(regs)` (`regs[7]` is the callee's EAX) and `ret`s into the real
+return address `after` hands back — no static scratch, so nested and re-entrant use is safe.
+Every observer calls the original, so the engine's behaviour is byte-identical with it
+installed; only timing moves.
+
+**Chaining.** Two modules cannot both land a jmp on the same prologue, and the census had to
+watch `CopyGafToContext 0x4B7F90`, which `fxown` already owns. The shared detour code now
+**records every stub it lands** (`va`, stub, the offset of the stolen bytes inside it), and an
+observer on an owned site hooks the *earlier stub's copy of the stolen bytes* — that region
+becomes `jmp observer` + NOPs, the observer's own stolen bytes are the same ones, and it resumes
+at `va + nst` as the earlier stub would have. The earlier module's skip path is untouched, so
+its decision still wins and the observer sees only the calls that really run. Install-time
+byte-matching uses `tagpu_detour_bytes_ok()`, which accepts either the pristine bytes at `va` or
+the same bytes inside a stub that already owns `va`; the stolen bytes must agree exactly or the
+observer refuses. Order matters only in that the owner must have installed first — DllMain's
+sequence puts `tagpu_gui_init()` after every owning module.

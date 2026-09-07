@@ -383,9 +383,14 @@ The rest of the post-fog tail is HUD, not world markers: spectate vcall
 `DrawPopupF4Dialog 0x4948E0`), `DrawPopupButtomDialog 0x4689C0`,
 `kDrawBps 0x468380` (gated `main+0x391C3`), `DrawChatText 0x464060`
 (drawUnits-gated), the clock/frame debug text (`main+0x3923B` bit1,
-`DrawTextCustomFont` at fixed x=0x83/0xBC, GUI colour 0xF), then side panel /
-minimap (`0x46B900` ×9, GAF blits) down to present `0x46A3DB`. No further
-unit-anchored decals exist. [BINARY-VERIFIED call survey]
+`DrawTextCustomFont` at fixed x=0x83/0xBC, GUI colour 0xF), then the nine
+`0x46B900` calls at `0x46A330..0x46A3B8` — **the debug profiler bars** (gated `main+0x38DD5`,
+labels `Network`/`Units`/`Logic`/`Render Static`/…), *not* the side panel or the minimap as
+this passage said until 2026-09-07: the side panel is `0x46A303 → 0x4AB170`, the minimap
+`0x46961F → 0x466B00`, both mapped in [the engine map](exe-reverse-engineering.html) "The UI
+surfaces and their writers" — then the `LIGHTBAR` slide `0x45FFB0`, the cursor `0x4C2870`
+and the present `0x46A3DB`. No further unit-anchored decals exist. [BINARY-VERIFIED call
+survey; corrected by objdump 2026-09-07]
 
 ---
 

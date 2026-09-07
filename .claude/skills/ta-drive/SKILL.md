@@ -1004,3 +1004,31 @@ Three lobby facts that are not guessable, all encoded in `mp_lobby.sh`:
   one peer only; both peers then see the units.
 
 Do not `pkill -x dplaysvr.exe` by hand while another agent's game is hosting.
+
+## The UI census (Phase E, G15a — `tagpu_gui.on`)
+
+The GL UI renderer's first gate is a measurement: observer detours on every engine function
+that writes UI pixels, and a diff of every surface at every flip that subtracts what they
+recorded (`research/notes/gui-renderer.md` §9). Nothing is drawn; the engine's frame is
+byte-identical with it armed.
+
+```bash
+tools/tacli arm <i> 'gui.on=census log pgm trace'   # at launch: the detours install at DLL attach
+tools/uiwalk.py --inst <i> --res 1024x768 --out /tmp/uiwalk   # the inventory walk + report
+tools/tacli arm <i> gui_census.trigger              # the accumulated residual mask -> gamedir/tagpu_gui_census.pgm
+tools/tacli log <i> -g 'gui census:'                # per-window lines: changed=, unexplained=, box=, ops=[…]
+```
+
+- Read `gui: ARMED flip@0x4C63A0=1 leaves=N/N` first; `NOT armed — engine bytes differ` means a
+  site is owned by a module that installed after it (the observer chains onto `fxown`'s
+  `0x4B7F90` stub, so the default arm set is fine).
+- `changed`/`unexplained` on a `gui census:` line are the **window's totals since the previous
+  line**, not one census; a residual > 256 px logs at once with the ops that intersect it
+  (`trace`). Surfaces other than the presented one are reported only when they have a residual
+  — the PCX backgrounds and the `SAVEMOUSE` buffers always do (the loader and cursor code write
+  them directly), which is expected.
+- `uiwalk.py` drives the shell and a game by gadget name and writes `report.md` with one row
+  per stop; it needs no shots to work, but takes the engine surface at every stop.
+- **`tacli shot` works in game again** since 2026-09-07: the window title's `wt:… | tacli:…`
+  label put `:` and `|` into the PNG filename, which is why the surface shot silently never
+  appeared in game while the shell's bare title was fine (`screenshot.c` now sanitises it).

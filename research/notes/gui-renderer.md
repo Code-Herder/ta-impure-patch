@@ -5,8 +5,8 @@ ours too — the side panel, the top and bottom bars, the minimap, chat and dial
 every screen of the shell outside it — drawn by OpenGL from the engine's own draw calls, with
 the same Classic / Classic++ split the world has. It records the decisions of the 2026-09-06
 design interview with their reasons, the engine facts they rest on, the module boundary, the
-gates with their exits and kill rules, and what a later phase must find intact. Nothing on this
-page is built as of its date; the gadget-tree facts it leans on are on
+gates with their exits and kill rules, and what a later phase must find intact. G15-0 (§8) and
+G15a (§9) are built and measured; the twins are not. The gadget-tree facts it leans on are on
 [GUI gadgets](gui-gadgets.html), the composite on [terrain & depth](terrain-depth.html) §7, and
 the restorer on [Classic and Classic++](renderers.html) §4c.*
 
@@ -72,10 +72,11 @@ is painted once per mode switch by `0x467D70` at `0x49842A`, the bottom bar anch
 `ScreenH − 0x20`.
 
 **The minimap** picture is `TED_GENERATED_PIC *(main+0x1426B)`, its rect `main+0x142E7..0x142ED`,
-its view box `main+0x142CB` (filled by `0x466B70`, already ours at zoom). Where the picture and
-the radar dots are drawn has **not** been located — it is not in `DrawGameScreen`'s tail, so it is
-most likely a `surface` gadget region drawn into the side-panel screen's own surface [INFERRED;
-G15a's census settles it].
+its view box `main+0x142CB` (filled by `0x466B70`, already ours at zoom). **Located by G15a
+[VERIFIED 2026-09-07]**: `DrawMinimap 0x466B00(ctx)` at `0x46961F` in DrawGameScreen copies the
+composite surface `main+0x142DB` into the frame with `0x4C6B70` and draws the view box with
+`0x4BF8C0`; the composite itself (picture plus radar dots) is rebuilt from the sim side by
+`0x466DC0`/`0x466C20`, not per frame. It never goes through the GUI surfaces.
 
 **The pixel-writing leaves are known** **[VERIFIED, appendix]**: the GAF blits (`CopyGafToContext
 0x4B7F90`, its shaded twin `0x4B8500`, the clipped descriptor blit `0x4B8150`, the tile copy
@@ -83,8 +84,11 @@ G15a's census settles it].
 pointer directly**, no context and no clip — `tagpu_text.c` already calls it), the line, bar
 and hollow-rect drawers (`0x4BE950`, `0x4BF6F0`, `0x4BF8C0`, all through the store-only Bresenham
 `0x4CC7AB` and the bar worker `0x4CCDEA`), and the surface copy `0x4C6B70` over
-`CopyScreenContext 0x4CBBE0`. Surfaces come from the allocator `0x4C69F0("OFFSCREEN", w, h)`; its
-free routine is not yet named [OPEN, G15a].
+`CopyScreenContext 0x4CBBE0`. Surfaces come from `SurfaceCreateNamed 0x4C69F0(tag, w, h)` and go
+back through `SurfaceFree 0x4C6AC0` **[VERIFIED 2026-09-07]**; G15a added the descriptor blit
+`0x4C6D20`, the textured-triangle stamp `0x4C7580`, the framed box `0x4BF4D0`, the focus rect
+`0x4BF7B0` and `SurfaceFill 0x4C6890` to the set, and found `0x4B8150` to be terrain-only
+(engine map, "The UI surfaces and their writers").
 
 **The shell is the same gadget system at 640×480**, atom-locked (`0x498025..0x498108`,
 `0x491ADC..`) whatever the registry says; the requested mode is applied at game entry and undone
@@ -95,10 +99,12 @@ Under tacli's windowed config the window is literally 640×480 in the menus. Gam
 `palette.pal`; whether the shell fades or swaps palettes has **never been measured** — only that
 nothing cycles in play [MEASURED, terrain-depth §7; OPEN here].
 
-**The cursor never touches an offscreen.** `0x4C2870` at `0x46A3C7` blits it with a NULL context
-(the callee builds an offscreen over the primary), and `0x4C67C0` blits it twice **inside** the
-flip, onto the primary **[VERIFIED, exe map "the cursor chain"]**. Since G13m it sits under the
-true pointer with 0 % of motion frames left behind [MEASURED].
+**The cursor is in the back buffer only inside the flip.** `0x4C2870` at `0x46A3C7` blits it with
+a NULL context — which resolves to the back buffer — and the flip itself draws it into the back
+buffer with `0x4C67C0`, copies to the primary, and **restores the background** with `0x4C6B70`
+before unlocking **[VERIFIED 2026-09-07, engine map "FlipOffscreenToPrimary"]**; at the flip's
+entry the buffer holds no cursor, which is why a diff taken there never sees one. Since G13m it
+sits under the true pointer with 0 % of motion frames left behind [MEASURED].
 
 **The engine free-runs.** Its frame loop ran ~83 `DrawGameScreen` passes per presented frame at
 1024×768 in the G13d capture (9 300–10 200 blocks per 120 presents) **[MEASURED, ui-markers
@@ -317,7 +323,7 @@ One finished unit each; the engine's surface is the oracle throughout.
 | gate | builds | exit (measured) | kill / pivot |
 |---|---|---|---|
 | **G15-0** offline art spike — **run 2026-09-07, §8; verdict pending** | `tools/undither/uiart.py`, seven contact sheets, the consistency table | the owner's per-class verdict; the default `uirestore` exclude list written down | no class passes → Classic++ UI dropped from phase 1, UI-aware fine-tune filed as a candidate; the Classic half unaffected |
-| **G15a** census | observer detours on every candidate leaf and the gadget dispatcher, the flip marker, the whole-surface diff, the allocator/free pair, the strict-walk script; **no drawing** | writer table in [the engine map](exe-reverse-engineering.html) (leaf, convention, call sites, surfaces written); unexplained pixels under 1 % on every inventory screen or every remaining writer named; the minimap's draw path located; the two stale claims in `ui-markers.md` §4 and `frame-composition.md` §1 corrected | a core screen with a large untraceable writer → that surface is seed-only, the plan proceeds |
+| **G15a** census — **done 2026-09-07, §9** | observer detours on every pixel-writing leaf, the flip marker, the whole-surface diff, the allocator/free pair, the walk script (`tools/uiwalk.py`); **no drawing** | writer table in [the engine map](exe-reverse-engineering.html) (leaf, convention, call sites, surfaces written); unexplained pixels under 1 % on every inventory screen or every remaining writer named; the minimap's draw path located; the two stale claims in `ui-markers.md` §4 and `frame-composition.md` §1 corrected | a core screen with a large untraceable writer → that surface is seed-only, the plan proceeds |
 | **G15b** twins, in game, Classic | the `tagpu_gui_*` module: registry, seed, ring, replay, the three op kinds, index and colour twins, the composite seam, `strict`, trigger, tacli verb, auto-arm, the transient viewport clear | side panel, build pages, top and bottom bars at 1024×768: 0 differing pixels outside the cursor, 0 holes; fps fixtures within half a frame; ring peak and overflows logged; parity md5 unchanged with the trigger absent; 1080p run and recorded | replay cannot hold 60 fps at `200v200` → collapse identical per-frame ops before anything else |
 | **G15c** the rest of the frame | chat, F4 and bottom dialogs, `ARMOPT` over the viewport, HUD text and clock, minimap picture, dots and box, `LIGHTBAR`, the mode-switch panel painter | whole in-game inventory clean under `strict`, ARM and CORE; dialogs over the viewport verified at 0.5× and 2× | — |
 | **G15d** the shell | registry reset and re-seed across the 640×480 context switch, the shell inventory, the loading screen, palette behaviour measured (`guipal`, fades) | shell inventory clean under `strict` at 640×480; three entry/exit cycles with twin and atlas counts flat; any fade visually identical to the engine's | — |
@@ -353,11 +359,19 @@ shell scaling and in-game scaling.
 
 - Whether the shell changes the palette: `guipal` at game entry is verified, fades are a corpus
   gloss (`main+0x3907F..0x3908B` "menu fades") with no disassembly behind it. G15d measures.
-- Where the minimap picture and radar dots are drawn (§2). G15a.
-- The `OFFSCREEN` free routine; whether GUI screens allocate their `+0xBC` surface through
-  `0x4C69F0` or another path. G15a.
-- What `GUI_BlitToFramebuffer 0x4B0230` and the `id 10` handler `0x4A4C90` do internally —
-  bracketed, so not blocking; named here so nobody thinks they are known.
+- ~~Where the minimap picture and radar dots are drawn~~ — **G15a**: `DrawMinimap 0x466B00`
+  at `0x46961F`, a copy of `main+0x142DB` plus the view box; the dots are drawn into that
+  composite by `0x466DC0` from the sim side (engine map, "The minimap, located").
+- ~~The `OFFSCREEN` free routine~~ — **G15a**: `0x4C6AC0`; the GUI's surfaces come from
+  `0x4C69F0` with the screen's name as tag, plus a `"SAVE UNDER"` snapshot each.
+- ~~What `GUI_BlitToFramebuffer 0x4B0230` and the `id 10` handler `0x4A4C90` do~~ — **G15a**:
+  read (engine map, the handler table); both draw through observed leaves.
+- **Two engine surfaces are written by a path no leaf observes** — the startup
+  `"OFFSCREEN" 640×480`, still written in game at in-game screen builds (rows 226–479, up to
+  185 942 bytes), and `"FLIPSURFACE" 128×352`, filled whole when `PREFS` opens. Neither is
+  presented; whatever reaches the frame from them goes through an observed copy, so the twin
+  layer treats a copy from a dirty source as a pixel op (§3.6). The writer of each is still
+  to be named.
 - The top-bar art at 1920×1080 (tiled by `0x467D70`): fine at 1024×768, uncharacterised wider.
 - Whether the shell draws anything outside the gadget dispatcher besides the loading screen and
   Smacker frames (which reach the frame through the fallback and are excluded from `strict`).
@@ -378,10 +392,21 @@ they carry there; G15a adds the new ones.
 | `0x4C6B70` | surface→surface blit `stdcall(dst, src, x, y)`, `ret 0x10`, over `0x4CBBE0` | VERIFIED (ui-markers §6.4 session) |
 | `0x4CBBE0` | `CopyScreenContext`, raw 8bpp clipped rect copy | VERIFIED |
 | `0x4C63A0` | `FlipOffscreenToPrimary`, 44 callers | VERIFIED |
-| `0x4C69F0` | `("OFFSCREEN", w, h)` allocator | VERIFIED (resolution §3) |
+| `0x4C69F0` | `SurfaceCreateNamed(tag, w, h)`, `ret 0xC`; pixels inline at `+0x30`; the tag names the surface | VERIFIED |
+| `0x4C6AC0` | `SurfaceFree(surface)`, `ret 4` | VERIFIED 2026-09-07 |
+| `0x4C6890` | `SurfaceFill(surface, colour)`, `ret 8` | VERIFIED 2026-09-07 |
+| `0x4C5E70` | `GetContext(out)`: NULL-context path, arm 1 = `*(globals+0xBC)` | VERIFIED 2026-09-07 |
+| `*(0x51FBD0)+0xBC` / `+0xDC` | the system back buffer every flip presents / its valid flag | VERIFIED 2026-09-07 |
+| `0x4C7580` | textured-triangle stamp `(ctx, src, xy[6], uv[6])` | VERIFIED; args MEASURED 2026-09-07 |
+| `0x4C6D20` | descriptor blit `(ctx, desc, src, dst)`, `ret 0x10` | VERIFIED 2026-09-07 |
+| `0x4BF4D0` | framed box `(ctx, RECT*, colour)`, `ret 0xC` — the F4 popup's border | VERIFIED 2026-09-07 |
+| `0x4BF7B0` | the focus rectangle, `(ctx, RECT*, colour)` | VERIFIED 2026-09-07 |
+| `0x4A81E0` | `GUI_StageUpdateDraw(gi, flags)`, `ret 8`; flags `1` build, `2` teardown, `0x40` redraw | VERIFIED 2026-09-07 |
+| `0x466B00` | `DrawMinimap(ctx)`, `ret 4`, one caller `0x46961F` | VERIFIED 2026-09-07 |
 | `0x4A9176` / `0x4A962C` | gadget type switch / 13-entry table | VERIFIED (gui-gadgets §3) |
-| `0x4A5F40`, `0x4A1B40`, `0x4A4D70`, `0x4A3EF0`, `0x4A56B0`, `0x4A4980`, `0x4B0230`, `0x4A4660` | the per-type handlers | VERIFIED sites; `0x4B0230`'s name is [CORPUS] |
-| `0x4A4C90` | `id 10` handler | [INFERRED] |
+| `0x4A5F40`, `0x4A1B40`, `0x4A4D70`, `0x4A3EF0`, `0x4A56B0`, `0x4A4980`, `0x4B0230`, `0x4A4660` | the per-type handlers, `ret 8` (`0x4B0230` and `0x4A4C90` `ret 0xC`), all drawing into `[panel+0xBC]` | VERIFIED 2026-09-07 |
+| `0x4A4C90` | `id 10` handler `(gi, idx, flags)`: two lines | VERIFIED 2026-09-07 |
+| `0x4A5E50` | the `id 12` handler (the type table's entry 11; `gui-gadgets.md` said `0x4A5F40`) | VERIFIED 2026-09-07 |
 | `0x4B7F90` | `CopyGafToContext stdcall(OFFSCREEN*, GAFFrame*, x, y)` | VERIFIED |
 | `0x4B8500` | `AlphaCompsteBuf2OFFScreen`, the shaded variant | VERIFIED |
 | `0x4B8150` | clipped GAF-descriptor blit, raw/RLE | VERIFIED |
@@ -484,3 +509,71 @@ measure the halo the *game* path produces at a keyed edge (§4c's near band, 0.4
 features) on UI frames, which G15e's `featdiff`-style check will. The `oldmain.gaf` dissolve
 frames (`intro`, `multi`, `exit`) are noise by design and score low for it; they are animation,
 not art, and the default policy treats them like any frame.
+
+
+---
+
+## 9. G15a — the census  [MEASURED 2026-09-07]
+
+**Built** (`tagpu_gui_hook.c`, `tagpu_gui_leaves.h`, `tagpu_gui.h`; `tagpu_detour_observe`
+and stub chaining in the shared detour code; `tools/uiwalk.py`): an observer detour on every
+function that writes UI pixels — the GAF blits `0x4B7F90`/`0x4B8500`/`0x4B8310`, the descriptor
+blit `0x4C6D20`, the textured-triangle stamp `0x4C7580`, the glyph blitter `0x4CCF60`, the line,
+bar, hollow-rect, focus-rect and framed-box drawers, `SurfaceFill`, the surface copy
+`0x4C6B70`, the allocator (its return hijacked) and the free, `GUI_StageUpdateDraw` as an event —
+and on the flip. At every flip, throttled to one census per 5 ms, the presented surface is
+diffed against its copy, every recorded op's box is subtracted, and inside the world viewport a
+changed pixel that is now the key is the terrain skip's erase; what is left is a writer nobody
+named. Every surface an op has named is diffed the same way, seeded at its allocation so a
+screen's *build* is diffed and not adopted. Nothing is drawn; the engine's behaviour is
+byte-identical with the module armed (every observer calls the original).
+
+**The result: 0 unexplained of 3 710 035 changed pixels on the presented surface across the
+inventory** — `MAINMENU`, `SINGLE`, `SKIRMISH`, `SELMAP`, `STARTOPT`, `VISUALS` and back, then
+`ARMMAIN2`, `ARMCOM1` and its second page, `ARMOPT`, `PREFS`, `VISUALRT`, the chat (`TALK`), the
+F4 popup — at 1024×768 with every world pass armed (`tools/uiwalk.py --inst g15a`). A shell
+transition changes the whole 640×480 and is explained by tens of thousands of GAF blits plus a
+few thousand lines, rects and copies; an in-game screen build by hundreds to a few thousand.
+
+**What it found, in the order the residuals fell:**
+
+1. **The flip presents `*(globals+0xBC)`**, not `main+0x37E1B` (the same object in game, a
+   different one in the shell), and a NULL context draws there too — the first census diffed
+   the wrong surface in the shell and every shell change was "unexplained".
+2. **Inside the viewport only the key is the erase.** Subtracting the whole viewport hid the
+   in-game dialogs, which are drawn over the world: `ARMOPT`, `PREFS`, `VISUALRT`, `TALK`.
+3. **The option screens' wide dark backdrop is textured triangles.** `PREFS` left a 149×351
+   block with slanted edges right of the 128-px panel; `0x4C7580` takes three screen vertices
+   and three texture coordinates, and 13–37 of them per build paint that backdrop.
+4. **The F4 popup's border is `0x4BF4D0`**, a three-fill framed box no note named.
+5. **The shell flips ~5 000 times a second**, so the census is throttled and its log reports
+   window totals rather than single censuses (a changed-but-explained census between two
+   quiet ones was invisible until it did).
+6. **The startup splash is drawn before the first flip**, so the game thread has to be taken at
+   DllMain rather than at the first flip.
+
+**What stays outside the leaves, all of it off the presented surface** (engine map, "What the
+census measured"): the PCX backgrounds decoded into their own surfaces by the loader (read only
+as copy sources); the `SAVEMOUSE` buffers, written through `0x4CBBE0` directly by cursor code;
+and two engine scratch surfaces — the startup `"OFFSCREEN" 640×480`, still written in game at
+screen builds, and `"FLIPSURFACE" 128×352`, filled when `PREFS` opens — whose writers are
+[OPEN] and whose content only reaches the frame through an observed copy. For the twin layer
+this means one rule: **a copy op whose source has no twin, or whose source changed by no
+observed op, is replayed as a pixel op from the source's bytes** (§3.5's seed, applied to a
+source).
+
+**Two things the gate corrected along the way**: `tacli shot` had been silently broken in game
+since the window-title landing (the title's `:` and `|` made an illegal PNG filename;
+`screenshot.c` sanitises it now), and three wiki claims — the profiler bars called "side panel /
+minimap" in `ui-markers.md` §4, the minimap row of `frame-composition.md` §1, and `id 12`'s
+handler in `gui-gadgets.md` §3.
+
+**Cost, measured on the game thread**: one 1024×768 diff (768 KB compare, the changed rows
+copied) per census at ≤200 censuses a second; the parity fixture's frame rate did not move
+(the walk ran at the fixture's usual 59–60 fps with `native terr feat fx sfx mark order zoom`
+armed). The op ring (65 536 entries) never overflowed (`dropped=0` throughout).
+
+**Exit**: the writer table is in the engine map, unexplained is 0 % on every inventory screen,
+the minimap's draw path is located, and the three corrections are made. **Not done here**:
+1920×1080 (the census is resolution-independent by construction, but the run is owed at every
+gate); the census in the multiplayer lobby screens, out of the inventory by decision.

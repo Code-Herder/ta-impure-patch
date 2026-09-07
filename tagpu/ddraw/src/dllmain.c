@@ -17,6 +17,7 @@
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
 #include "tagpu_terrown.h"
+#include "tagpu_gui.h"
 #include "tagpu_markown.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
@@ -107,6 +108,14 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            above (the redirects CALL 0x471F90 and 0x4BF8C0, so whatever fxown
            installed on them still runs). */
         tagpu_markown_init();
+
+        /* tagpu: the GL UI renderer's observers (Phase E, tagpu_gui.h). No-op
+           unless "tagpu_gui.on" exists; byte-matched, all-or-nothing; every
+           detour calls the original, so the engine draws exactly as before —
+           we only watch. Disjoint from every detour above (the leaves it
+           watches are the GAF blits, the glyph blitter, the line drawers, the
+           surface copy and the flip). */
+        tagpu_gui_init();
 
         /* zoom: the minimap's view rectangle, computed from the 1x view and so a
            lie at any other (tagpu_zoom.h). Inert at zoom 1. */

@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <time.h>
 #include "dd.h"
@@ -136,15 +137,20 @@ BOOL ss_take_screenshot(IDirectDrawSurfaceImpl* src)
 
     strncpy(title, g_ddraw.title, sizeof(g_ddraw.title));
 
+    /* tagpu: the title carries the tree and instance labels ("wt:… | tacli:…",
+       tagpu_title.c), and ':' and '|' are not legal in a filename — with them
+       the PNG silently never appeared in game (the shell's bare title was
+       fine). Anything but a letter, digit, '-' or '_' becomes '_'. */
     for (int i = 0; i < strlen(title); i++)
     {
-        if (title[i] == ' ')
+        unsigned char c = (unsigned char)title[i];
+        if (isalnum(c) || c == '-' || c == '_')
         {
-            title[i] = '_';
+            title[i] = tolower(c);
         }
         else
         {
-            title[i] = tolower(title[i]);
+            title[i] = '_';
         }
     }
 

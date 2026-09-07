@@ -41,4 +41,28 @@ int tagpu_detour_leaf(unsigned int va, const unsigned char* stolen, int nst,
 int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst,
                            volatile unsigned char* flag, unsigned char retn,
                            void (__cdecl *fn)(void*));
+
+/* Observer detour (Phase E, tagpu_gui_hook.c): the function runs UNCHANGED, we
+   only watch it. `before(entry_esp)` is called on entry with a pointer to the
+   engine's own stack frame — `((void**)entry_esp)[0]` is the return address,
+   `[1]` the first stack argument, and so on — with every register preserved
+   around the call (pushad/popad). If it returns non-zero the return address is
+   replaced by a trampoline that calls `after(regs)` when the function returns:
+   `regs` is the pushad frame, so `regs[7]` is the callee's EAX (its return
+   value), and `after` must hand back the real return address it was given by
+   `before` (the caller keeps that LIFO stack; `before` reads it at
+   `((void**)entry_esp)[0]`). Nothing here is skipped and no flag is consulted,
+   so the engine's behaviour is byte-identical with the observer installed. */
+/* A site another module already landed on is CHAINED, not overwritten: the
+   observer hooks that stub's copy of the stolen bytes, so the earlier module's
+   skip still wins and the observer sees only the calls that really draw. The
+   stolen bytes must agree. `tagpu_detour_bytes_ok` is the byte-match to use
+   at install time — it accepts either the pristine bytes at `va` or the same
+   bytes inside a stub that already owns `va`. */
+unsigned char* tagpu_detour_landed(unsigned int va, int* stolenOff, int* nst);
+int tagpu_detour_bytes_ok(unsigned int va, const unsigned char* stolen, int nst);
+typedef int   (__cdecl *tagpu_detour_before_fn)(void* entry_esp);
+typedef void* (__cdecl *tagpu_detour_after_fn)(unsigned int* regs);
+int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
+                         tagpu_detour_before_fn before, tagpu_detour_after_fn after);
 #endif
