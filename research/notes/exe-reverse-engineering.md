@@ -2020,6 +2020,45 @@ DrawGameScreen's tail are the **debug profiler bars**, not "side panel / minimap
 ([UI markers](ui-markers.html) §4); the minimap is not `0x48CC30`/`0x46A430`
 ([frame composition](frame-composition.html) §1); and `id 12` dispatches to `0x4A5E50`.
 
+### What the twin layer excludes, tests and reads [VERIFIED 2026-09-07, Phase E G15b]
+
+The layer (`tagpu_gui_surf.c`) replays the observed ops into GL twins; three facts it leans on
+were read for it, none of them patched.
+
+**Observed but not published — the leaf calls that are not UI, matched on the return address**
+(`excluded_caller()` in `tagpu_gui_leaves.h`). The ranges are the callers' extents, read from
+the disassembly (`ret`/`ret n` boundaries):
+
+| range | what | its leaf calls (return address = call + 5) | ends |
+|---|---|---|---|
+| `0x459200..0x459800` | the unit composite blit (`0x459200`, [GPU status](gpu-status.html) §2.4) — the engine still calls it while `owndraw` skips the rasterisers, and the composites it blits are all key | `0x4B8500` at `0x459319`, `0x459353`, `0x4593BA`, `0x4595E9`, `0x4597D3`; `0x4B7F90` at `0x4593A4`, `0x4597AB` | `ret` at `0x4597DF`; `0x45982A` is the next function |
+| `0x4C2380..0x4C2A00` | the cursor code — `0x4C2380` (dead), `0x4C24B0`, `0x4C25E0`, `0x4C2870` and the `SAVEMOUSE` copies (§ "The mouse object") | `0x4B7F90` ×4 (`0x4C23C9`, `0x4C258C`, `0x4C2732`, `0x4C297E`), `0x4C6B70` ×2 (`0x4C24A8`, `0x4C2937`), `0x4CBBE0` ×9 (`0x4C241B`..`0x4C2835`) | `0x4C2870` ends at `0x4C2989`; the last function in the range at `0x4C2A74` |
+| `0x4C6300..0x4C6890` | the flip `0x4C63A0` (ends `0x4C6669`) and the in-flip cursor draw `0x4C67C0` (ends `0x4C6884`) | the flip: `0x4C6B70` at `0x4C6414`, `0x4C6585`, `0x4CBBE0` at `0x4C6553`, `0x4C65F3`; `0x4C67C0`: `0x4C6B70` at `0x4C6862`, `0x4B7F90` at `0x4C687D` | — |
+
+**`0x4C67C0` has exactly two callers, `0x4C641B` and `0x4C6544`, both inside the flip** — so
+every blit it makes is also under the observer's `s_inFlip` (set between the flip's entry and
+its return), which is the guard that actually excludes them; the range only has to be honest
+about where the function ends. Until 2026-09-07 the code's bound was `0x4C6800`, short of
+those two calls; harmless for that reason, corrected anyway.
+
+**Which flip is a game frame**: `DrawGameScreen`'s `call 0x4C63A0` is at `0x46A3DB`, so the
+flip observer reads its own return address and compares it with **`0x46A3E0`**; a match means
+the frame is the game's (the viewport is the terrain skip's key fill, subtracted by the census,
+cleared by the layer), anything else is the shell's, whose flip runs from the modal loop
+`0x49F9C0` and 41 other sites.
+
+**Read on the render thread, never written** (both already in this map; listed because the
+layer is a new reader on the other thread):
+
+- `main+0x143A7`, the live RGB palette (`256 × {R,G,B,pad}`, 1024 bytes) — compared with the
+  last copy at every present and re-uploaded as a `256×1 RGBA8` texture when it moved, so the
+  index twin resolves through the palette the engine is presenting with.
+- the mouse object `*(0x51FBD0)`: `+0x1B2` → the current sprite record (`u16 w, u16 h` at
+  `+0`/`+2`), `+0x1B6`/`+0x1BA` the position it was last drawn at. That rect is the one place
+  the layer does not draw and `strict` does not count: the cursor is the engine's in phase 1
+  ([GL UI renderer](gui-renderer.html) §3.7). A torn read here costs one frame of a
+  misplaced exemption, nothing else.
+
 ## The unit-death path, the object destructor and the level teardown — mapped by us
 
 Mapped 2026-09-06 to close the render thread's use-after-free on a dying unit's model object

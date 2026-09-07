@@ -5,8 +5,9 @@ ours too — the side panel, the top and bottom bars, the minimap, chat and dial
 every screen of the shell outside it — drawn by OpenGL from the engine's own draw calls, with
 the same Classic / Classic++ split the world has. It records the decisions of the 2026-09-06
 design interview with their reasons, the engine facts they rest on, the module boundary, the
-gates with their exits and kill rules, and what a later phase must find intact. G15-0 (§8) and
-G15a (§9) are built and measured; the twins are not. The gadget-tree facts it leans on are on
+gates with their exits and kill rules, and what a later phase must find intact. G15-0 (§8),
+G15a (§9) and G15b (§10) are built and measured — G15b is the twins, drawing the in-game UI and
+the shell at 1:1 under Classic — and the three land together. The gadget-tree facts it leans on are on
 [GUI gadgets](gui-gadgets.html), the composite on [terrain & depth](terrain-depth.html) §7, and
 the restorer on [Classic and Classic++](renderers.html) §4c.*
 
@@ -170,7 +171,11 @@ measured inside the viewport, not on GAF art.
   prologue detour on `FlipOffscreenToPrimary 0x4C63A0` appends a **frame marker**, the engine's
   own "this frame is complete" point.
 - **Replay all, in order, at our present** — not "the last engine frame only": a panel redraw in
-  engine frame 37 of 80 must not be dropped, because the panel twin is retained.
+  engine frame 37 of 80 must not be dropped, because the panel twin is retained. *As built
+  (G15b, §10)*: all in order, with two refinements the run forced — identical ops within one
+  published batch collapse to their last occurrence (the shell redraws every gadget on every
+  one of its ~12 000 flips a second), and a pixel op carries its box's bytes as they stand at
+  publish time, so it is the final state of that box whatever wrote it.
 - **Seed, do not reconstruct.** A twin created for a surface that already exists takes a copy of
   the engine's bytes, made on the game thread at the flip marker where the frame is quiet. The
   same path is the **overflow policy**: a full ring stops recording, marks every surface for
@@ -254,7 +259,9 @@ The restorer was trained on ground textures and has never seen a bevel, a button
 
 ### 3.10 One module, one trigger, one seam
 The UI is a subsystem, not a surface. Family `tagpu_gui_*.c`, contract `tagpu_gui.h`, trigger
-`gamedir/tagpu_gui.on` with tokens (`strict` now; `scale=`, `nocursor` in phase 2). §4.
+`gamedir/tagpu_gui.on` with tokens (`strict` and `off` now — `off` keeps the detours installed
+for the next launch while nothing is published or drawn, the live A/B; `scale=`, `nocursor` in
+phase 2). §4.
 
 - The detours install once at DLL attach if the trigger exists then, per the arming rule in
   [own the draw](own-the-draw.html), and are safe to leave resident: every one calls the original,
@@ -266,8 +273,8 @@ The UI is a subsystem, not a surface. Family `tagpu_gui_*.c`, contract `tagpu_gu
   our Classic UI, pixel-identical; both on → restored art under `uirestore`. The §2.10 Options
   menu of [renderers](renderers.html) later gets an "engine / GL" UI switch that creates or
   deletes the trigger — front end, not store.
-- **tacli**: a `gui on|off|strict` verb and an entry in the auto-arm list, so the pass is armed
-  at launch for anyone using the driver.
+- **tacli**: a `gui on|strict|census|off|remove` verb (G15b) and `gui.on` in the default arm
+  set of the ta-drive skill, so the pass is armed at launch for anyone using the driver.
 
 ### 3.11 Verification: the engine's surface is the oracle
 - **The strict walk.** A script under `tools/` drives one instance through a fixed screen
@@ -300,9 +307,10 @@ The UI is a subsystem, not a surface. Family `tagpu_gui_*.c`, contract `tagpu_gu
 | file | role | when |
 |---|---|---|
 | `tagpu_gui.h` | the only public contract: install, per-present step, GL reset, and `tagpu_gui_layer()` handing the composite its two textures and one flag | phase 1 |
-| `tagpu_gui_surf.c` | twin registry, ring replay, seed | phase 1 |
-| `tagpu_gui_hook.c` | the observer detours and brackets, the census | phase 1 |
-| `tagpu_gui_art.c` | the UI GAF atlas (an instance of the shared `TAGPU_GAFATLAS`), the sequence-name registry, the `uirestore` policy | phase 1 |
+| `tagpu_gui_surf.c` | the twins, the queue replay, seed, **the UI GAF atlas** (an instance of the shared `TAGPU_GAFATLAS`), the layer draw, the trigger poll, `strict` | phase 1 — **built, G15b** |
+| `tagpu_gui_int.h` | the SPSC queue between the two halves: 65 536 ops and a 16 MB arena, private to the family | phase 1 — **built, G15b** |
+| `tagpu_gui_hook.c` | the observer detours, the census, the publisher | phase 1 — **built, G15a + G15b** |
+| `tagpu_gui_art.c` | the sequence-name registry and the `uirestore` policy — G15e; the atlas the plan put here lives in `tagpu_gui_surf.c` as built, and G15e may split it back out | G15e |
 | `tagpu_gui_snap.c` | today's `tagpu_ui.c`, moved in unchanged; its `tagpu_ui.trigger`/`.json` names stay so tacli is untouched | phase 1 |
 | `tagpu_gui_cursor.c` | our cursor | phase 2 |
 | `tagpu_gui_scale.c` | the scale factor, logical-to-device mapping | phase 2 |
@@ -324,7 +332,7 @@ One finished unit each; the engine's surface is the oracle throughout.
 |---|---|---|---|
 | **G15-0** offline art spike — **run 2026-09-07, §8; verdict pending** | `tools/undither/uiart.py`, seven contact sheets, the consistency table | the owner's per-class verdict; the default `uirestore` exclude list written down | no class passes → Classic++ UI dropped from phase 1, UI-aware fine-tune filed as a candidate; the Classic half unaffected |
 | **G15a** census — **done 2026-09-07, §9** | observer detours on every pixel-writing leaf, the flip marker, the whole-surface diff, the allocator/free pair, the walk script (`tools/uiwalk.py`); **no drawing** | writer table in [the engine map](exe-reverse-engineering.html) (leaf, convention, call sites, surfaces written); unexplained pixels under 1 % on every inventory screen or every remaining writer named; the minimap's draw path located; the two stale claims in `ui-markers.md` §4 and `frame-composition.md` §1 corrected | a core screen with a large untraceable writer → that surface is seed-only, the plan proceeds |
-| **G15b** twins, in game, Classic | the `tagpu_gui_*` module: registry, seed, ring, replay, the three op kinds, index and colour twins, the composite seam, `strict`, trigger, tacli verb, auto-arm, the transient viewport clear | side panel, build pages, top and bottom bars at 1024×768: 0 differing pixels outside the cursor, 0 holes; fps fixtures within half a frame; ring peak and overflows logged; parity md5 unchanged with the trigger absent; 1080p run and recorded | replay cannot hold 60 fps at `200v200` → collapse identical per-frame ops before anything else |
+| **G15b** twins, in game, Classic — **done 2026-09-07, §10** | the `tagpu_gui_*` module: registry, seed, queue, replay, the three op kinds, the index twin (the colour twin is G15e's), the composite seam, `strict`, trigger, tacli verb, the default arm set, the transient viewport clear | side panel, build pages, top and bottom bars at 1024×768: 0 differing pixels outside the cursor, 0 holes; fps fixtures within half a frame; ring peak and overflows logged; parity md5 unchanged with the trigger absent; 1080p run and recorded | replay cannot hold 60 fps at `200v200` → collapse identical per-frame ops before anything else (**it happened, for a different reason — §10**) |
 | **G15c** the rest of the frame | chat, F4 and bottom dialogs, `ARMOPT` over the viewport, HUD text and clock, minimap picture, dots and box, `LIGHTBAR`, the mode-switch panel painter | whole in-game inventory clean under `strict`, ARM and CORE; dialogs over the viewport verified at 0.5× and 2× | — |
 | **G15d** the shell | registry reset and re-seed across the 640×480 context switch, the shell inventory, the loading screen, palette behaviour measured (`guipal`, fades) | shell inventory clean under `strict` at 640×480; three entry/exit cycles with twin and atlas counts flat; any fade visually identical to the engine's | — |
 | **G15e** Classic++ UI | the UI atlas's restored twin (job priority 4, lazy on first draw), the palette-validity rule, the `uirestore` policy, the twin dump and diff | Q2 bar against G15-0's offline output on every frame the walk draws; sheets judged by the owner; fps unchanged; a fade shows indexed art, never wrong colour | per-class exclusion per G15-0 |
@@ -372,7 +380,13 @@ shell scaling and in-game scaling.
   presented; whatever reaches the frame from them goes through an observed copy, so the twin
   layer treats a copy from a dirty source as a pixel op (§3.6). The writer of each is still
   to be named.
-- The top-bar art at 1920×1080 (tiled by `0x467D70`): fine at 1024×768, uncharacterised wider.
+- The top-bar art at 1920×1080 (tiled by `0x467D70`): fine at 1024×768, uncharacterised wider
+  — though G15b's 1080p walk found it drawn pixel-exact by the twin, so whatever the tiler does
+  is a plain GAF blit the sprite op reproduces.
+- `scenarios/tascene-parity.json` is static only at its own 1024×768: at 1920×1080 a geo-vent
+  smoke puff is in view (§10), so a whole-frame md5 there is meaningless and every 1080p parity
+  measure has to name the puff's box. A 1080p-static fixture, or an exclusion in `tascene ab`,
+  is owed to whichever gate first needs a bare number at 1080p.
 - Whether the shell draws anything outside the gadget dispatcher besides the loading screen and
   Smacker frames (which reach the frame through the fallback and are excluded from `strict`).
 
@@ -577,3 +591,159 @@ armed). The op ring (65 536 entries) never overflowed (`dropped=0` throughout).
 the minimap's draw path is located, and the three corrections are made. **Not done here**:
 1920×1080 (the census is resolution-independent by construction, but the run is owed at every
 gate); the census in the multiplayer lobby screens, out of the inventory by decision.
+
+---
+
+## 10. G15b — the twins, in game, Classic  [MEASURED 2026-09-07]
+
+**Built.** The second half of the module, on the render thread, and the publisher that feeds
+it: `tagpu_gui_int.h` (the queue), `tagpu_gui_surf.c` (twins, atlas, replay, the layer),
+the publisher in `tagpu_gui_hook.c`, `tagpu_gaf_atlas_put`/`_find` in the shared GAF code,
+two lines in `tagpu_overlay.c` (the seam and the GL reset), `tacli gui`, and
+`tools/uiwalk.py --layer`, the strict walk of §3.11. Nothing is patched beyond G15a's
+observers; with the trigger absent the DLL's frame is main's byte for byte (below).
+
+### How it works as built
+
+The census ring of §3.6 is the record. **Inside the flip observer, at the census cadence (at
+most one publish per 5 ms), the ring since the last publish becomes queue ops** — the queue is
+a lock-free single-producer, single-consumer ring of 65 536 ops with a 16 MB byte arena, the
+only thing the two threads share:
+
+| ring op | published as | carries |
+|---|---|---|
+| a surface first seen since the last reset | **seed** | the surface's bytes, whole, read now |
+| `0x4B7F90` of a frame ≤ 512 px, no sub-frames | **sprite** | the frame identity `(header, pixel pointer)`, the destination, the colour key; on first sight the frame's pixels, decoded on the game thread |
+| `0x4C6B70` from a twinned source | **copy** | source, box, source top-left |
+| a flip after which `terrown`'s fill sequence advanced | **clear** | the true viewport rect |
+| everything else — text, lines, rects, fills, the descriptor blit, the textured triangles, the shaded and sub-frame GAF variants, a copy from an untwinned source | **pixels** | the box's bytes **as they stand at publish time** |
+
+Three things the run settled, none of them in the plan:
+
+- **A pixel op is the final state of its box, not the op's own output.** Reading the bytes at
+  publish time — the frame is complete, the flip is running — makes the twin converge on the
+  engine's surface whatever order the writers ran in, and retires the CPU shadow-write of §3.6
+  for the non-sprite ops: the residual is simply the bytes.
+- **Sprite pixels cross the thread boundary in the op** (§3.5 said so, and it bit at once):
+  the shell frees a popped screen's art while the render thread is still behind, so the atlas
+  is fed from the arena by `tagpu_gaf_atlas_put`, never from the frame pointer.
+- **The shell redraws every gadget on every flip** — ~41 ops at ~12 000 flips a second on
+  `MAINMENU`, the same with the layer on or off — and every one of those redraws is identical.
+  Unthrottled that flooded the queue into a reseed storm (10 000 resets in two minutes); the
+  gate's kill rule ("collapse identical per-frame ops") was needed on day one, for the shell,
+  not for `200v200`. Within one published batch, identical ops keep only their last
+  occurrence, which is the one whose position in the order matters; a replayed op is
+  idempotent, so the final state is unchanged. After it: resets 1 in the shell, overflows 0.
+
+On the render thread, inside `tagpu_overlay_draw` right after `tagpu_native_frame`: poll the
+trigger (500 ms), drain (up to 20 000 ops a present — a burst is many engine flips), draw.
+Every seeded surface has a **twin**: an `RG8` texture its size (R = the palette index, G =
+coverage) behind an FBO, 1:1, `NEAREST`. Sprites are quads from a `TAGPU_GAFATLAS` of UI
+frames (2048², `pad 0 align 0 mip 0`, the key discarded per fragment), copies are quads
+sampling the source twin at an offset, seeds and pixels are `glTexSubImage2D`, clears are
+scissored `glClear`s to coverage 0. **The seam is one draw**: the presented surface's twin over
+the whole frame into the overlay's target, blending and depth off, `discard` where coverage is
+0 — the native composite's key rule beneath is untouched, so the engine's pixels remain the
+fallback everywhere a twin has nothing, which is §3.3's three layers without a third texture
+in the composite. The index resolves through the live palette (`main+0x143A7`, re-uploaded on
+change). The cursor's rect (the mouse object's sprite record and last-drawn position) is left
+to the engine's frame and exempted from `strict`; it was a 10×20 diff over the panel until it
+was. Excluded at the source, on the return address: the unit composite blit, the cursor code,
+the flip's own blits ([engine map](exe-reverse-engineering.html), "What the twin layer
+excludes, tests and reads").
+
+**Fresh starts**: the trigger reappearing, a GL context change, a queue or arena overflow, a
+sprite whose bytes never arrived, a copy from an untwinned source — all raise one flag, the
+next publish sends a reset and re-seeds every surface from the engine's bytes. Three per launch
+is the normal count (the arm, the shell→game context switch, the game's mode switch).
+
+### What the walk found
+
+The strict walk was the gate's instrument and it found the one real bug: `op_add()` returned
+early on a fully clipped box or a NULL surface **without clearing "the op just recorded"**, so
+the caller then wrote its frame identity — or a copy's source and offset — into the *previous*
+op. Symptom at both resolutions: the last letter of `ARMOPT`'s "Exit" label missing in the
+twin (67 px, a glyph whose frame had become the fully clipped blit that followed it), and at
+1920×1080, after `ARMOPT` closed, the whole side panel wrong (43 602 px: the `SAVE UNDER`
+restore copy carrying the next clipped copy's source offset). One line fixed both.
+
+### Measured
+
+`tools/uiwalk.py --layer` (`strict`, every world pass armed), the engine's surface against our
+GL frame at every stop, differing pixels outside the world viewport in game with the cursor
+rect excluded, and magenta holes:
+
+| stop | 1024×768 | 1920×1080 |
+|---|---|---|
+| `MAINMENU` (4 visits) | 183–192 / 0 | 184–188 / 0 |
+| `SINGLE`, `SKIRMISH`, `SELMAP`, `STARTOPT`, `VISUALS`, and back (9 stops) | 0 / 0 | 0 / 0 |
+| `ARMMAIN2`, `ARMCOM1`, `ARMCOM2`, back | 0 / 0 | 0 / 0 |
+| `ARMOPT`, `PREFS`, `VISUALRT`, back, back | 0 / 0 | 0 / 0 |
+| chat, F4, F4 closed | 0 / 0 | 0 / 0 |
+
+`MAINMENU`'s differing pixels are its sparkle animation between the two shots — single
+scattered pixels in the sky, none on a gadget (the diff image is in the walk's output);
+GL-against-GL a second apart on a static screen differs by 0–1 px. Resets 3 per run, overflows
+0, `lost` 0, the atlas at 123 of 4 096 entries after the whole inventory, twins 2–10 live.
+
+**Parity with the trigger absent, and with the layer on.** The parity fixture at 1024×768
+(`scenarios/tascene-parity.json`, every world pass armed, the eye pinned), `glshot` md5:
+
+| build | `tagpu_gui.on` | md5 |
+|---|---|---|
+| main (`2b83b12`) | — | `568cc55c4301ab88f166282f969e18b9` |
+| this branch | absent | `568cc55c4301ab88f166282f969e18b9` |
+| this branch | present, layer on (fallback mode) | `568cc55c4301ab88f166282f969e18b9` |
+
+The third row is the gate's real proof: with the layer drawing the panel, the bars and the
+resource text, the presented frame is main's byte for byte.
+
+**At 1920×1080 the same fixture is not static**, so a whole-frame md5 is not a measure there:
+the wider view brings a geothermal vent's smoke into frame at screen `(1523..1563, 420..459)`
+(world x ≈ 3292, off-screen at 1024×768), and main's DLL differs from *itself* across two
+launches by 606 px, all inside that puff. So the 1080p test is a pixel diff with that box
+named — every pair differs **only inside it**:
+
+| pair (1920×1080, `glshot` ~10 s after load) | differing px | outside the smoke box |
+|---|---|---|
+| main, launch 1 vs launch 2 | 606 | 0 |
+| main vs this branch, trigger absent | 482 | 0 |
+| this branch, trigger absent vs layer on | 503 | 0 |
+| main vs layer on | 689 | 0 |
+| main, the same launch 5 s apart | 358 | 1 (at the cursor, `(960,540)`) |
+
+A future 1080p md5 wants a fixture with the eye a few hundred world units left of this one,
+or the puff's box excluded; neither is done here.
+
+**Frame rates**, from the arrival cadence of the overlay's roster line (every 30 presented
+frames, timed from outside the process — the one meter that works for main's DLL too), 40
+intervals each, the fixture fresh after `scenario load`, the same three other instances idle
+in the background for every row:
+
+| fixture | resolution | main (`2b83b12`) | this branch, trigger absent | layer on | armed, `off` |
+|---|---|---|---|---|---|
+| `tascene-parity` | 1024×768 | 60.00 | 60.00 | 60.00 | 60.00 |
+| `200v200` | 1024×768 | 59.81 | — | 59.81 | 59.85 |
+| `fx-mix` | 1024×768 | 60.00 | — | 59.99 | 59.99 |
+| `tascene-parity` | 1920×1080 | 60.01 | 60.00 | 59.99 | 60.00 |
+| `200v200` | 1920×1080 | 59.78 | — | 59.77 | 59.86 |
+| `fx-mix` | 1920×1080 | 60.00 | — | 59.99 | 60.00 |
+
+Within 0.1 fps of main everywhere, at both resolutions — the layer's cost is below the
+meter's resolution at the 60 fps cap. (The 1080p walk's own heartbeat had read 28 fps while
+the two walks ran concurrently beside three other instances; on a lone instance it is 60.)
+The heartbeat's queue figures on the parity fixture at 1024×768 after 20 s: 2 twins, 14
+seeds, 154 575 sprites, 2 002 copies, 20 729 pixel ops, 328 547 clears, 24 atlas entries,
+0 lost, 0 overflows.
+
+### Not closed here
+
+- The shell is measured clean at every stop but its entry/exit cycles (twin and atlas counts
+  flat across three context switches, the loading screen, the palette) are G15d's; the
+  whole-inventory run on CORE and the dialogs over the viewport at 0.5× and 2× are G15c's.
+- A **clear is published per engine flip** the fill sequence advanced on, and the engine
+  free-runs its flip — in a batch of *n* flips only the last clear can matter for the final
+  state, so *n−1* of them are wasted scissored clears of the viewport. Cheap at 1024×768;
+  see the 1080p row above for whether it is cheap there.
+- `tagpu_gui_snap.c` (the gadget snapshot behind `tacli ui`) was moved into the family by G15a
+  unchanged; `tagpu_gui_art.c` does not exist yet — the atlas lives in `tagpu_gui_surf.c` (§4).
