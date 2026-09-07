@@ -1,0 +1,1592 @@
+# tagpu_cobtrace v1	filter=,CORBATS,	columns: S tick unit type script slot source args… | R tick unit slot script value | X tick unit script source | K tick unit slot script by | D tick unit slot value
+S	93	1	CORBATS	Create	0	E	
+S	93	1	CORBATS	SmokeUnit	1	C:0	
+R	93	1	0	Create	0
+S	93	1	CORBATS	QueryPrimary	0	E	0,0,0,0
+R	93	1	0	QueryPrimary	0
+S	93	1	CORBATS	AimFromPrimary	0	E	-1,0,0,0
+R	93	1	0	AimFromPrimary	0
+S	93	1	CORBATS	QuerySecondary	0	E	0,0,0,0
+R	93	1	0	QuerySecondary	0
+S	93	1	CORBATS	AimFromSecondary	0	E	-1,0,0,0
+R	93	1	0	AimFromSecondary	0
+S	93	1	CORBATS	SetMaxReloadTime	0	E	2433
+R	94	1	0	SetMaxReloadTime	0
+S	118	1	CORBATS	AimFromPrimary	0	E	-1,0,0,0
+R	118	1	0	AimFromPrimary	0
+S	118	1	CORBATS	AimPrimary	0	E	0,65471
+S	118	1	CORBATS	AimFromSecondary	2	E	-1,0,0,0
+R	118	1	2	AimFromSecondary	0
+S	118	1	CORBATS	AimSecondary	2	E	0,2375
+S	118	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	118	1	3	SweetSpot	0
+S	119	1	CORBATS	RestoreAfterDelay	3	C:0	
+R	119	1	0	AimPrimary	1
+S	119	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	119	1	0	SweetSpot	0
+S	120	1	CORBATS	AimFromPrimary	0	E	-1,0,0,0
+R	120	1	0	AimFromPrimary	0
+S	120	1	CORBATS	QueryPrimary	0	E	0,0,0,0
+R	120	1	0	QueryPrimary	0
+S	120	1	CORBATS	QueryPrimary	0	E	0,0,0,0
+R	120	1	0	QueryPrimary	0
+S	120	1	CORBATS	FirePrimary	0	E	
+S	120	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	120	1	4	SweetSpot	0
+S	121	1	CORBATS	AimFromPrimary	4	E	-1,0,0,0
+R	121	1	4	AimFromPrimary	0
+S	121	1	CORBATS	AimPrimary	4	E	0,65471
+K	121	1	3	RestoreAfterDelay	4
+S	121	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	121	1	3	SweetSpot	0
+S	122	1	CORBATS	RestoreAfterDelay	3	C:4	
+R	122	1	4	AimPrimary	1
+S	122	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	122	1	4	SweetSpot	0
+S	123	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	123	1	4	SweetSpot	0
+S	124	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	124	1	4	SweetSpot	0
+S	125	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	125	1	4	SweetSpot	0
+S	126	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	126	1	4	SweetSpot	0
+S	127	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	127	1	4	SweetSpot	0
+S	128	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	128	1	4	SweetSpot	0
+S	129	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	129	1	4	SweetSpot	0
+S	130	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	130	1	4	SweetSpot	0
+S	131	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	131	1	4	SweetSpot	0
+S	132	1	CORBATS	RestoreAfterDelay	4	C:2	
+R	132	1	2	AimSecondary	1
+S	132	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	132	1	2	SweetSpot	0
+S	133	1	CORBATS	AimFromSecondary	2	E	-1,0,0,0
+R	133	1	2	AimFromSecondary	0
+S	133	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	133	1	2	QuerySecondary	0
+S	133	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	133	1	2	QuerySecondary	0
+S	133	1	CORBATS	FireSecondary	2	E	
+S	133	1	CORBATS	SweetSpot	5	E	0,0,0,0
+R	133	1	5	SweetSpot	0
+S	134	1	CORBATS	AimFromSecondary	5	E	-1,0,0,0
+R	134	1	5	AimFromSecondary	0
+S	134	1	CORBATS	AimSecondary	5	E	0,2375
+K	134	1	4	RestoreAfterDelay	5
+S	134	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	134	1	4	SweetSpot	0
+S	135	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	135	1	4	SweetSpot	0
+S	136	1	CORBATS	RestoreAfterDelay	4	C:5	
+R	136	1	5	AimSecondary	1
+S	136	1	CORBATS	SweetSpot	5	E	0,0,0,0
+R	136	1	5	SweetSpot	0
+R	137	1	0	FirePrimary	0
+S	137	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	137	1	0	SweetSpot	0
+R	138	1	2	FireSecondary	0
+S	138	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	138	1	0	SweetSpot	0
+S	139	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	139	1	0	SweetSpot	0
+S	140	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	140	1	0	SweetSpot	0
+S	141	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	141	1	0	SweetSpot	0
+S	142	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	142	1	0	SweetSpot	0
+S	143	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	143	1	0	SweetSpot	0
+S	144	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	144	1	0	SweetSpot	0
+S	145	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	145	1	0	SweetSpot	0
+S	146	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	146	1	0	SweetSpot	0
+S	147	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	147	1	0	SweetSpot	0
+S	148	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	148	1	0	SweetSpot	0
+S	149	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	149	1	0	SweetSpot	0
+S	150	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	150	1	0	SweetSpot	0
+S	151	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	151	1	0	SweetSpot	0
+S	152	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	152	1	0	SweetSpot	0
+S	153	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	153	1	0	SweetSpot	0
+S	154	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	154	1	0	SweetSpot	0
+S	155	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	155	1	0	SweetSpot	0
+S	156	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	156	1	0	SweetSpot	0
+S	157	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	157	1	0	SweetSpot	0
+S	158	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	158	1	0	SweetSpot	0
+S	159	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	159	1	0	SweetSpot	0
+S	160	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	160	1	0	SweetSpot	0
+S	161	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	161	1	0	SweetSpot	0
+S	162	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	162	1	0	SweetSpot	0
+S	163	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	163	1	0	SweetSpot	0
+S	164	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	164	1	0	SweetSpot	0
+S	165	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	165	1	0	SweetSpot	0
+S	166	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	166	1	0	SweetSpot	0
+S	167	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	167	1	0	SweetSpot	0
+S	168	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	168	1	0	SweetSpot	0
+S	169	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	169	1	0	SweetSpot	0
+S	170	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	170	1	0	SweetSpot	0
+S	171	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	171	1	0	SweetSpot	0
+S	172	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	172	1	0	SweetSpot	0
+S	173	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	173	1	0	SweetSpot	0
+S	174	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	174	1	0	SweetSpot	0
+S	175	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	175	1	0	SweetSpot	0
+S	176	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	176	1	0	SweetSpot	0
+S	177	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	177	1	0	SweetSpot	0
+S	178	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	178	1	0	SweetSpot	0
+S	179	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	179	1	0	SweetSpot	0
+S	180	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	180	1	0	SweetSpot	0
+S	181	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	181	1	0	SweetSpot	0
+S	182	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	182	1	0	SweetSpot	0
+S	183	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	183	1	0	SweetSpot	0
+S	184	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	184	1	0	SweetSpot	0
+S	185	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	185	1	0	SweetSpot	0
+S	186	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	186	1	0	SweetSpot	0
+S	187	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	187	1	0	SweetSpot	0
+S	188	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	188	1	0	SweetSpot	0
+S	189	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	189	1	0	SweetSpot	0
+S	190	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	190	1	0	SweetSpot	0
+S	191	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	191	1	0	SweetSpot	0
+S	192	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	192	1	0	SweetSpot	0
+S	193	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	193	1	0	SweetSpot	0
+S	194	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	194	1	0	SweetSpot	0
+S	195	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	195	1	0	SweetSpot	0
+S	196	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	196	1	0	SweetSpot	0
+S	197	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	197	1	0	SweetSpot	0
+S	198	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	198	1	0	SweetSpot	0
+S	199	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	199	1	0	SweetSpot	0
+S	200	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	200	1	0	SweetSpot	0
+S	201	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	201	1	0	SweetSpot	0
+S	202	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	202	1	0	SweetSpot	0
+S	203	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	203	1	0	SweetSpot	0
+S	204	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	204	1	0	SweetSpot	0
+S	205	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	205	1	0	SweetSpot	0
+S	206	1	CORBATS	AimFromSecondary	0	E	-1,0,0,0
+R	206	1	0	AimFromSecondary	0
+S	206	1	CORBATS	QuerySecondary	0	E	0,0,0,0
+R	206	1	0	QuerySecondary	0
+S	206	1	CORBATS	QuerySecondary	0	E	0,0,0,0
+R	206	1	0	QuerySecondary	0
+S	206	1	CORBATS	FireSecondary	0	E	
+S	206	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	206	1	2	SweetSpot	0
+S	207	1	CORBATS	AimFromSecondary	2	E	-1,0,0,0
+R	207	1	2	AimFromSecondary	0
+S	207	1	CORBATS	AimSecondary	2	E	0,2375
+K	207	1	4	RestoreAfterDelay	2
+S	207	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	207	1	4	SweetSpot	0
+S	208	1	CORBATS	SweetSpot	4	E	0,0,0,0
+R	208	1	4	SweetSpot	0
+S	209	1	CORBATS	RestoreAfterDelay	4	C:2	
+R	209	1	2	AimSecondary	1
+S	209	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	209	1	2	SweetSpot	0
+S	210	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	210	1	2	SweetSpot	0
+R	211	1	0	FireSecondary	0
+S	211	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	211	1	0	SweetSpot	0
+S	212	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	212	1	0	SweetSpot	0
+S	213	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	213	1	0	SweetSpot	0
+S	214	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	214	1	0	SweetSpot	0
+S	215	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	215	1	0	SweetSpot	0
+S	216	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	216	1	0	SweetSpot	0
+S	217	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	217	1	0	SweetSpot	0
+S	218	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	218	1	0	SweetSpot	0
+S	219	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	219	1	0	SweetSpot	0
+S	220	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	220	1	0	SweetSpot	0
+S	221	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	221	1	0	SweetSpot	0
+S	222	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	222	1	0	SweetSpot	0
+S	223	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	223	1	0	SweetSpot	0
+S	224	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	224	1	0	SweetSpot	0
+S	225	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	225	1	0	SweetSpot	0
+S	226	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	226	1	0	SweetSpot	0
+S	227	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	227	1	0	SweetSpot	0
+S	228	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	228	1	0	SweetSpot	0
+S	229	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	229	1	0	SweetSpot	0
+S	230	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	230	1	0	SweetSpot	0
+S	231	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	231	1	0	SweetSpot	0
+S	232	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	232	1	0	SweetSpot	0
+S	233	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	233	1	0	SweetSpot	0
+S	234	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	234	1	0	SweetSpot	0
+S	235	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	235	1	0	SweetSpot	0
+S	236	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	236	1	0	SweetSpot	0
+S	237	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	237	1	0	SweetSpot	0
+S	238	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	238	1	0	SweetSpot	0
+S	239	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	239	1	0	SweetSpot	0
+S	240	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	240	1	0	SweetSpot	0
+S	241	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	241	1	0	SweetSpot	0
+S	242	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	242	1	0	SweetSpot	0
+S	243	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	243	1	0	SweetSpot	0
+S	244	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	244	1	0	SweetSpot	0
+S	245	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	245	1	0	SweetSpot	0
+S	246	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	246	1	0	SweetSpot	0
+S	247	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	247	1	0	SweetSpot	0
+S	248	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	248	1	0	SweetSpot	0
+S	249	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	249	1	0	SweetSpot	0
+S	250	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	250	1	0	SweetSpot	0
+S	251	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	251	1	0	SweetSpot	0
+S	252	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	252	1	0	SweetSpot	0
+S	253	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	253	1	0	SweetSpot	0
+S	254	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	254	1	0	SweetSpot	0
+S	255	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	255	1	0	SweetSpot	0
+S	256	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	256	1	0	SweetSpot	0
+S	257	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	257	1	0	SweetSpot	0
+S	258	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	258	1	0	SweetSpot	0
+S	259	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	259	1	0	SweetSpot	0
+S	260	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	260	1	0	SweetSpot	0
+S	261	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	261	1	0	SweetSpot	0
+S	262	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	262	1	0	SweetSpot	0
+S	263	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	263	1	0	SweetSpot	0
+S	264	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	264	1	0	SweetSpot	0
+S	265	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	265	1	0	SweetSpot	0
+S	266	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	266	1	0	SweetSpot	0
+S	267	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	267	1	0	SweetSpot	0
+R	268	1	3	RestoreAfterDelay	0
+S	268	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	268	1	0	SweetSpot	0
+S	269	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	269	1	0	SweetSpot	0
+S	270	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	270	1	0	SweetSpot	0
+S	271	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	271	1	0	SweetSpot	0
+S	272	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	272	1	0	SweetSpot	0
+S	273	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	273	1	0	SweetSpot	0
+S	274	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	274	1	0	SweetSpot	0
+S	275	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	275	1	0	SweetSpot	0
+S	276	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	276	1	0	SweetSpot	0
+S	277	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	277	1	0	SweetSpot	0
+S	278	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	278	1	0	SweetSpot	0
+S	279	1	CORBATS	AimFromSecondary	0	E	-1,0,0,0
+R	279	1	0	AimFromSecondary	0
+S	279	1	CORBATS	QuerySecondary	0	E	0,0,0,0
+R	279	1	0	QuerySecondary	0
+S	279	1	CORBATS	QuerySecondary	0	E	0,0,0,0
+R	279	1	0	QuerySecondary	0
+S	279	1	CORBATS	FireSecondary	0	E	
+S	279	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	279	1	2	SweetSpot	0
+S	280	1	CORBATS	AimFromSecondary	2	E	-1,0,0,0
+R	280	1	2	AimFromSecondary	0
+S	280	1	CORBATS	AimSecondary	2	E	0,2375
+K	280	1	4	RestoreAfterDelay	2
+S	280	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	280	1	3	SweetSpot	0
+S	281	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	281	1	3	SweetSpot	0
+S	282	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	282	1	3	SweetSpot	0
+S	283	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	283	1	3	SweetSpot	0
+R	284	1	0	FireSecondary	0
+S	284	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	284	1	0	SweetSpot	0
+S	285	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	285	1	0	SweetSpot	0
+S	286	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	286	1	0	SweetSpot	0
+S	287	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	287	1	0	SweetSpot	0
+S	288	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	288	1	0	SweetSpot	0
+S	289	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	289	1	0	SweetSpot	0
+S	290	1	CORBATS	RestoreAfterDelay	0	C:2	
+R	290	1	2	AimSecondary	1
+S	290	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	290	1	2	SweetSpot	0
+S	291	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	291	1	2	SweetSpot	0
+S	292	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	292	1	2	SweetSpot	0
+S	293	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	293	1	2	SweetSpot	0
+S	294	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	294	1	2	SweetSpot	0
+S	295	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	295	1	2	SweetSpot	0
+S	296	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	296	1	2	SweetSpot	0
+S	297	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	297	1	2	SweetSpot	0
+S	298	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	298	1	2	SweetSpot	0
+S	299	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	299	1	2	SweetSpot	0
+S	300	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	300	1	2	SweetSpot	0
+S	320	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	320	1	2	SweetSpot	0
+S	321	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	321	1	2	SweetSpot	0
+S	322	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	322	1	2	SweetSpot	0
+S	323	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	323	1	2	SweetSpot	0
+S	324	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	324	1	2	SweetSpot	0
+S	325	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	325	1	2	SweetSpot	0
+S	326	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	326	1	2	SweetSpot	0
+S	327	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	327	1	2	SweetSpot	0
+S	328	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	328	1	2	SweetSpot	0
+S	329	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	329	1	2	SweetSpot	0
+S	330	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	330	1	2	SweetSpot	0
+S	331	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	331	1	2	SweetSpot	0
+S	332	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	332	1	2	SweetSpot	0
+S	333	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	333	1	2	SweetSpot	0
+S	334	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	334	1	2	SweetSpot	0
+S	335	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	335	1	2	SweetSpot	0
+S	336	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	336	1	2	SweetSpot	0
+S	337	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	337	1	2	SweetSpot	0
+S	338	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	338	1	2	SweetSpot	0
+S	339	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	339	1	2	SweetSpot	0
+S	340	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	340	1	2	SweetSpot	0
+S	341	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	341	1	2	SweetSpot	0
+S	342	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	342	1	2	SweetSpot	0
+S	343	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	343	1	2	SweetSpot	0
+S	344	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	344	1	2	SweetSpot	0
+S	345	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	345	1	2	SweetSpot	0
+S	346	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	346	1	2	SweetSpot	0
+S	347	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	347	1	2	SweetSpot	0
+S	348	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	348	1	2	SweetSpot	0
+S	349	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	349	1	2	SweetSpot	0
+S	350	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	350	1	2	SweetSpot	0
+S	351	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	351	1	2	SweetSpot	0
+S	352	1	CORBATS	AimFromSecondary	2	E	-1,0,0,0
+R	352	1	2	AimFromSecondary	0
+S	352	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	352	1	2	QuerySecondary	0
+S	352	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	352	1	2	QuerySecondary	0
+S	352	1	CORBATS	FireSecondary	2	E	
+S	352	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	352	1	3	SweetSpot	0
+S	353	1	CORBATS	AimFromSecondary	3	E	-1,0,0,0
+R	353	1	3	AimFromSecondary	0
+S	353	1	CORBATS	AimSecondary	3	E	0,2374
+K	353	1	0	RestoreAfterDelay	3
+S	353	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	353	1	0	SweetSpot	0
+S	354	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	354	1	0	SweetSpot	0
+S	355	1	CORBATS	RestoreAfterDelay	0	C:3	
+R	355	1	3	AimSecondary	1
+S	355	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	355	1	3	SweetSpot	0
+S	356	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	356	1	3	SweetSpot	0
+R	357	1	2	FireSecondary	0
+S	357	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	357	1	2	SweetSpot	0
+S	358	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	358	1	2	SweetSpot	0
+S	359	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	359	1	2	SweetSpot	0
+S	360	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	360	1	2	SweetSpot	0
+S	361	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	361	1	2	SweetSpot	0
+S	362	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	362	1	2	SweetSpot	0
+S	363	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	363	1	2	SweetSpot	0
+S	364	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	364	1	2	SweetSpot	0
+S	365	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	365	1	2	SweetSpot	0
+S	366	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	366	1	2	SweetSpot	0
+S	367	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	367	1	2	SweetSpot	0
+S	368	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	368	1	2	SweetSpot	0
+S	369	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	369	1	2	SweetSpot	0
+S	370	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	370	1	2	SweetSpot	0
+S	371	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	371	1	2	SweetSpot	0
+S	372	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	372	1	2	SweetSpot	0
+S	373	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	373	1	2	SweetSpot	0
+S	374	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	374	1	2	SweetSpot	0
+S	375	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	375	1	2	SweetSpot	0
+S	376	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	376	1	2	SweetSpot	0
+S	377	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	377	1	2	SweetSpot	0
+S	378	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	378	1	2	SweetSpot	0
+S	379	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	379	1	2	SweetSpot	0
+S	380	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	380	1	2	SweetSpot	0
+S	381	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	381	1	2	SweetSpot	0
+S	382	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	382	1	2	SweetSpot	0
+S	383	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	383	1	2	SweetSpot	0
+S	384	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	384	1	2	SweetSpot	0
+S	385	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	385	1	2	SweetSpot	0
+S	386	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	386	1	2	SweetSpot	0
+S	387	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	387	1	2	SweetSpot	0
+S	388	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	388	1	2	SweetSpot	0
+S	389	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	389	1	2	SweetSpot	0
+S	390	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	390	1	2	SweetSpot	0
+S	391	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	391	1	2	SweetSpot	0
+S	392	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	392	1	2	SweetSpot	0
+S	393	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	393	1	2	SweetSpot	0
+S	394	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	394	1	2	SweetSpot	0
+S	395	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	395	1	2	SweetSpot	0
+S	396	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	396	1	2	SweetSpot	0
+S	397	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	397	1	2	SweetSpot	0
+S	398	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	398	1	2	SweetSpot	0
+S	399	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	399	1	2	SweetSpot	0
+S	400	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	400	1	2	SweetSpot	0
+S	401	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	401	1	2	SweetSpot	0
+S	402	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	402	1	2	SweetSpot	0
+S	403	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	403	1	2	SweetSpot	0
+S	404	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	404	1	2	SweetSpot	0
+S	405	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	405	1	2	SweetSpot	0
+S	406	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	406	1	2	SweetSpot	0
+S	407	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	407	1	2	SweetSpot	0
+S	408	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	408	1	2	SweetSpot	0
+S	409	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	409	1	2	SweetSpot	0
+S	410	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	410	1	2	SweetSpot	0
+S	411	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	411	1	2	SweetSpot	0
+S	412	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	412	1	2	SweetSpot	0
+S	413	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	413	1	2	SweetSpot	0
+S	414	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	414	1	2	SweetSpot	0
+S	415	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	415	1	2	SweetSpot	0
+S	416	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	416	1	2	SweetSpot	0
+S	417	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	417	1	2	SweetSpot	0
+S	418	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	418	1	2	SweetSpot	0
+S	419	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	419	1	2	SweetSpot	0
+S	420	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	420	1	2	SweetSpot	0
+S	421	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	421	1	2	SweetSpot	0
+S	422	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	422	1	2	SweetSpot	0
+S	423	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	423	1	2	SweetSpot	0
+S	424	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	424	1	2	SweetSpot	0
+S	425	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	425	1	2	SweetSpot	0
+S	426	1	CORBATS	AimFromSecondary	2	E	-1,0,0,0
+R	426	1	2	AimFromSecondary	0
+S	426	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	426	1	2	QuerySecondary	0
+S	426	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	426	1	2	QuerySecondary	0
+S	426	1	CORBATS	FireSecondary	2	E	
+S	426	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	426	1	3	SweetSpot	0
+S	427	1	CORBATS	AimFromSecondary	3	E	-1,0,0,0
+R	427	1	3	AimFromSecondary	0
+S	427	1	CORBATS	AimSecondary	3	E	0,2374
+K	427	1	0	RestoreAfterDelay	3
+S	427	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	427	1	0	SweetSpot	0
+S	428	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	428	1	0	SweetSpot	0
+S	429	1	CORBATS	RestoreAfterDelay	0	C:3	
+R	429	1	3	AimSecondary	1
+S	429	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	429	1	3	SweetSpot	0
+S	430	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	430	1	3	SweetSpot	0
+R	431	1	2	FireSecondary	0
+S	431	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	431	1	2	SweetSpot	0
+S	432	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	432	1	2	SweetSpot	0
+S	433	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	433	1	2	SweetSpot	0
+S	434	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	434	1	2	SweetSpot	0
+S	435	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	435	1	2	SweetSpot	0
+S	436	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	436	1	2	SweetSpot	0
+S	437	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	437	1	2	SweetSpot	0
+S	438	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	438	1	2	SweetSpot	0
+S	439	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	439	1	2	SweetSpot	0
+S	440	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	440	1	2	SweetSpot	0
+S	441	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	441	1	2	SweetSpot	0
+S	442	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	442	1	2	SweetSpot	0
+S	443	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	443	1	2	SweetSpot	0
+S	444	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	444	1	2	SweetSpot	0
+S	445	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	445	1	2	SweetSpot	0
+S	446	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	446	1	2	SweetSpot	0
+S	447	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	447	1	2	SweetSpot	0
+S	448	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	448	1	2	SweetSpot	0
+S	449	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	449	1	2	SweetSpot	0
+S	450	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	450	1	2	SweetSpot	0
+S	451	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	451	1	2	SweetSpot	0
+S	452	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	452	1	2	SweetSpot	0
+S	453	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	453	1	2	SweetSpot	0
+S	454	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	454	1	2	SweetSpot	0
+S	455	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	455	1	2	SweetSpot	0
+S	456	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	456	1	2	SweetSpot	0
+S	457	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	457	1	2	SweetSpot	0
+S	458	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	458	1	2	SweetSpot	0
+S	459	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	459	1	2	SweetSpot	0
+S	460	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	460	1	2	SweetSpot	0
+S	461	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	461	1	2	SweetSpot	0
+S	462	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	462	1	2	SweetSpot	0
+S	463	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	463	1	2	SweetSpot	0
+S	464	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	464	1	2	SweetSpot	0
+S	465	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	465	1	2	SweetSpot	0
+S	466	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	466	1	2	SweetSpot	0
+S	467	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	467	1	2	SweetSpot	0
+S	468	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	468	1	2	SweetSpot	0
+S	469	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	469	1	2	SweetSpot	0
+S	470	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	470	1	2	SweetSpot	0
+S	471	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	471	1	2	SweetSpot	0
+S	472	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	472	1	2	SweetSpot	0
+S	473	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	473	1	2	SweetSpot	0
+S	474	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	474	1	2	SweetSpot	0
+S	475	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	475	1	2	SweetSpot	0
+S	476	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	476	1	2	SweetSpot	0
+S	477	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	477	1	2	SweetSpot	0
+S	478	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	478	1	2	SweetSpot	0
+S	479	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	479	1	2	SweetSpot	0
+S	480	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	480	1	2	SweetSpot	0
+S	481	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	481	1	2	SweetSpot	0
+S	482	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	482	1	2	SweetSpot	0
+S	483	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	483	1	2	SweetSpot	0
+S	484	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	484	1	2	SweetSpot	0
+S	485	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	485	1	2	SweetSpot	0
+S	486	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	486	1	2	SweetSpot	0
+S	487	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	487	1	2	SweetSpot	0
+S	488	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	488	1	2	SweetSpot	0
+S	489	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	489	1	2	SweetSpot	0
+S	490	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	490	1	2	SweetSpot	0
+S	491	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	491	1	2	SweetSpot	0
+S	492	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	492	1	2	SweetSpot	0
+S	493	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	493	1	2	SweetSpot	0
+S	494	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	494	1	2	SweetSpot	0
+S	495	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	495	1	2	SweetSpot	0
+S	496	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	496	1	2	SweetSpot	0
+S	497	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	497	1	2	SweetSpot	0
+S	498	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	498	1	2	SweetSpot	0
+S	499	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	499	1	2	SweetSpot	0
+S	500	1	CORBATS	AimFromSecondary	2	E	-1,0,0,0
+R	500	1	2	AimFromSecondary	0
+S	500	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	500	1	2	QuerySecondary	0
+S	500	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	500	1	2	QuerySecondary	0
+S	500	1	CORBATS	FireSecondary	2	E	
+S	500	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	500	1	3	SweetSpot	0
+S	501	1	CORBATS	AimFromSecondary	3	E	-1,0,0,0
+R	501	1	3	AimFromSecondary	0
+S	501	1	CORBATS	AimSecondary	3	E	0,2374
+K	501	1	0	RestoreAfterDelay	3
+S	501	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	501	1	0	SweetSpot	0
+S	502	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	502	1	0	SweetSpot	0
+S	503	1	CORBATS	RestoreAfterDelay	0	C:3	
+R	503	1	3	AimSecondary	1
+S	503	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	503	1	3	SweetSpot	0
+S	504	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	504	1	3	SweetSpot	0
+R	505	1	2	FireSecondary	0
+S	505	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	505	1	2	SweetSpot	0
+S	506	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	506	1	2	SweetSpot	0
+S	507	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	507	1	2	SweetSpot	0
+S	508	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	508	1	2	SweetSpot	0
+S	509	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	509	1	2	SweetSpot	0
+S	510	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	510	1	2	SweetSpot	0
+S	511	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	511	1	2	SweetSpot	0
+S	512	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	512	1	2	SweetSpot	0
+S	513	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	513	1	2	SweetSpot	0
+S	514	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	514	1	2	SweetSpot	0
+S	515	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	515	1	2	SweetSpot	0
+S	516	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	516	1	2	SweetSpot	0
+S	517	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	517	1	2	SweetSpot	0
+S	518	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	518	1	2	SweetSpot	0
+S	519	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	519	1	2	SweetSpot	0
+S	520	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	520	1	2	SweetSpot	0
+S	521	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	521	1	2	SweetSpot	0
+S	522	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	522	1	2	SweetSpot	0
+S	523	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	523	1	2	SweetSpot	0
+S	524	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	524	1	2	SweetSpot	0
+S	525	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	525	1	2	SweetSpot	0
+S	526	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	526	1	2	SweetSpot	0
+S	527	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	527	1	2	SweetSpot	0
+S	528	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	528	1	2	SweetSpot	0
+S	529	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	529	1	2	SweetSpot	0
+S	530	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	530	1	2	SweetSpot	0
+S	531	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	531	1	2	SweetSpot	0
+S	532	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	532	1	2	SweetSpot	0
+S	533	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	533	1	2	SweetSpot	0
+S	534	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	534	1	2	SweetSpot	0
+S	535	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	535	1	2	SweetSpot	0
+S	536	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	536	1	2	SweetSpot	0
+S	537	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	537	1	2	SweetSpot	0
+S	538	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	538	1	2	SweetSpot	0
+S	539	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	539	1	2	SweetSpot	0
+S	540	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	540	1	2	SweetSpot	0
+S	541	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	541	1	2	SweetSpot	0
+S	542	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	542	1	2	SweetSpot	0
+S	543	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	543	1	2	SweetSpot	0
+S	544	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	544	1	2	SweetSpot	0
+S	545	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	545	1	2	SweetSpot	0
+S	546	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	546	1	2	SweetSpot	0
+S	547	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	547	1	2	SweetSpot	0
+S	548	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	548	1	2	SweetSpot	0
+S	549	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	549	1	2	SweetSpot	0
+S	550	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	550	1	2	SweetSpot	0
+S	551	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	551	1	2	SweetSpot	0
+S	552	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	552	1	2	SweetSpot	0
+S	553	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	553	1	2	SweetSpot	0
+S	554	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	554	1	2	SweetSpot	0
+S	555	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	555	1	2	SweetSpot	0
+S	556	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	556	1	2	SweetSpot	0
+S	557	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	557	1	2	SweetSpot	0
+S	558	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	558	1	2	SweetSpot	0
+S	559	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	559	1	2	SweetSpot	0
+S	560	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	560	1	2	SweetSpot	0
+S	561	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	561	1	2	SweetSpot	0
+S	562	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	562	1	2	SweetSpot	0
+S	563	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	563	1	2	SweetSpot	0
+S	564	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	564	1	2	SweetSpot	0
+S	565	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	565	1	2	SweetSpot	0
+S	566	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	566	1	2	SweetSpot	0
+S	567	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	567	1	2	SweetSpot	0
+S	568	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	568	1	2	SweetSpot	0
+S	569	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	569	1	2	SweetSpot	0
+S	570	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	570	1	2	SweetSpot	0
+S	571	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	571	1	2	SweetSpot	0
+S	572	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	572	1	2	SweetSpot	0
+S	573	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	573	1	2	SweetSpot	0
+S	574	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	574	1	2	SweetSpot	0
+S	575	1	CORBATS	AimFromSecondary	2	E	-1,0,0,0
+R	575	1	2	AimFromSecondary	0
+S	575	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	575	1	2	QuerySecondary	0
+S	575	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	575	1	2	QuerySecondary	0
+S	575	1	CORBATS	FireSecondary	2	E	
+S	575	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	575	1	3	SweetSpot	0
+S	576	1	CORBATS	AimFromSecondary	3	E	-1,0,0,0
+R	576	1	3	AimFromSecondary	0
+S	576	1	CORBATS	AimSecondary	3	E	0,2374
+K	576	1	0	RestoreAfterDelay	3
+S	576	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	576	1	0	SweetSpot	0
+S	577	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	577	1	0	SweetSpot	0
+S	578	1	CORBATS	RestoreAfterDelay	0	C:3	
+R	578	1	3	AimSecondary	1
+S	578	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	578	1	3	SweetSpot	0
+S	579	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	579	1	3	SweetSpot	0
+R	580	1	2	FireSecondary	0
+S	580	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	580	1	2	SweetSpot	0
+S	581	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	581	1	2	SweetSpot	0
+S	582	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	582	1	2	SweetSpot	0
+S	583	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	583	1	2	SweetSpot	0
+S	584	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	584	1	2	SweetSpot	0
+S	585	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	585	1	2	SweetSpot	0
+S	586	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	586	1	2	SweetSpot	0
+S	587	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	587	1	2	SweetSpot	0
+S	588	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	588	1	2	SweetSpot	0
+S	589	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	589	1	2	SweetSpot	0
+S	590	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	590	1	2	SweetSpot	0
+S	591	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	591	1	2	SweetSpot	0
+S	592	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	592	1	2	SweetSpot	0
+S	593	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	593	1	2	SweetSpot	0
+S	594	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	594	1	2	SweetSpot	0
+S	595	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	595	1	2	SweetSpot	0
+S	596	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	596	1	2	SweetSpot	0
+S	597	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	597	1	2	SweetSpot	0
+S	598	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	598	1	2	SweetSpot	0
+S	599	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	599	1	2	SweetSpot	0
+S	600	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	600	1	2	SweetSpot	0
+S	601	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	601	1	2	SweetSpot	0
+S	602	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	602	1	2	SweetSpot	0
+S	603	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	603	1	2	SweetSpot	0
+S	604	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	604	1	2	SweetSpot	0
+S	605	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	605	1	2	SweetSpot	0
+S	606	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	606	1	2	SweetSpot	0
+S	607	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	607	1	2	SweetSpot	0
+S	608	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	608	1	2	SweetSpot	0
+S	609	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	609	1	2	SweetSpot	0
+S	610	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	610	1	2	SweetSpot	0
+S	611	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	611	1	2	SweetSpot	0
+S	612	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	612	1	2	SweetSpot	0
+S	613	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	613	1	2	SweetSpot	0
+S	614	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	614	1	2	SweetSpot	0
+S	615	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	615	1	2	SweetSpot	0
+S	616	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	616	1	2	SweetSpot	0
+S	617	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	617	1	2	SweetSpot	0
+S	618	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	618	1	2	SweetSpot	0
+S	619	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	619	1	2	SweetSpot	0
+S	620	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	620	1	2	SweetSpot	0
+S	621	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	621	1	2	SweetSpot	0
+S	622	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	622	1	2	SweetSpot	0
+S	623	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	623	1	2	SweetSpot	0
+S	624	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	624	1	2	SweetSpot	0
+S	625	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	625	1	2	SweetSpot	0
+S	626	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	626	1	2	SweetSpot	0
+S	627	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	627	1	2	SweetSpot	0
+S	628	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	628	1	2	SweetSpot	0
+S	629	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	629	1	2	SweetSpot	0
+S	630	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	630	1	2	SweetSpot	0
+S	631	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	631	1	2	SweetSpot	0
+S	632	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	632	1	2	SweetSpot	0
+S	633	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	633	1	2	SweetSpot	0
+S	634	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	634	1	2	SweetSpot	0
+S	635	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	635	1	2	SweetSpot	0
+S	636	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	636	1	2	SweetSpot	0
+S	637	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	637	1	2	SweetSpot	0
+S	638	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	638	1	2	SweetSpot	0
+S	639	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	639	1	2	SweetSpot	0
+S	640	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	640	1	2	SweetSpot	0
+S	641	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	641	1	2	SweetSpot	0
+S	642	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	642	1	2	SweetSpot	0
+S	643	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	643	1	2	SweetSpot	0
+S	644	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	644	1	2	SweetSpot	0
+S	645	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	645	1	2	SweetSpot	0
+S	646	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	646	1	2	SweetSpot	0
+S	647	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	647	1	2	SweetSpot	0
+S	648	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	648	1	2	SweetSpot	0
+S	649	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	649	1	2	SweetSpot	0
+S	650	1	CORBATS	AimFromSecondary	2	E	-1,0,0,0
+R	650	1	2	AimFromSecondary	0
+S	650	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	650	1	2	QuerySecondary	0
+S	650	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	650	1	2	QuerySecondary	0
+S	650	1	CORBATS	FireSecondary	2	E	
+S	650	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	650	1	3	SweetSpot	0
+S	651	1	CORBATS	AimFromSecondary	3	E	-1,0,0,0
+R	651	1	3	AimFromSecondary	0
+S	651	1	CORBATS	AimSecondary	3	E	0,2373
+K	651	1	0	RestoreAfterDelay	3
+S	651	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	651	1	0	SweetSpot	0
+S	652	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	652	1	0	SweetSpot	0
+S	653	1	CORBATS	RestoreAfterDelay	0	C:3	
+R	653	1	3	AimSecondary	1
+S	653	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	653	1	3	SweetSpot	0
+S	654	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	654	1	3	SweetSpot	0
+R	655	1	2	FireSecondary	0
+S	655	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	655	1	2	SweetSpot	0
+S	656	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	656	1	2	SweetSpot	0
+S	657	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	657	1	2	SweetSpot	0
+S	658	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	658	1	2	SweetSpot	0
+S	659	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	659	1	2	SweetSpot	0
+S	660	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	660	1	2	SweetSpot	0
+S	661	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	661	1	2	SweetSpot	0
+S	662	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	662	1	2	SweetSpot	0
+S	663	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	663	1	2	SweetSpot	0
+S	664	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	664	1	2	SweetSpot	0
+S	665	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	665	1	2	SweetSpot	0
+S	666	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	666	1	2	SweetSpot	0
+S	667	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	667	1	2	SweetSpot	0
+S	668	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	668	1	2	SweetSpot	0
+S	669	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	669	1	2	SweetSpot	0
+S	670	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	670	1	2	SweetSpot	0
+S	671	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	671	1	2	SweetSpot	0
+S	672	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	672	1	2	SweetSpot	0
+S	673	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	673	1	2	SweetSpot	0
+S	674	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	674	1	2	SweetSpot	0
+S	675	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	675	1	2	SweetSpot	0
+S	676	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	676	1	2	SweetSpot	0
+S	677	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	677	1	2	SweetSpot	0
+S	678	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	678	1	2	SweetSpot	0
+S	679	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	679	1	2	SweetSpot	0
+S	680	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	680	1	2	SweetSpot	0
+S	681	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	681	1	2	SweetSpot	0
+S	682	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	682	1	2	SweetSpot	0
+S	683	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	683	1	2	SweetSpot	0
+S	684	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	684	1	2	SweetSpot	0
+S	685	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	685	1	2	SweetSpot	0
+S	686	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	686	1	2	SweetSpot	0
+S	687	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	687	1	2	SweetSpot	0
+S	688	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	688	1	2	SweetSpot	0
+S	689	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	689	1	2	SweetSpot	0
+S	690	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	690	1	2	SweetSpot	0
+S	691	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	691	1	2	SweetSpot	0
+S	692	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	692	1	2	SweetSpot	0
+S	693	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	693	1	2	SweetSpot	0
+S	694	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	694	1	2	SweetSpot	0
+S	695	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	695	1	2	SweetSpot	0
+S	696	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	696	1	2	SweetSpot	0
+S	697	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	697	1	2	SweetSpot	0
+S	698	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	698	1	2	SweetSpot	0
+S	699	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	699	1	2	SweetSpot	0
+S	700	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	700	1	2	SweetSpot	0
+S	701	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	701	1	2	SweetSpot	0
+S	702	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	702	1	2	SweetSpot	0
+S	703	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	703	1	2	SweetSpot	0
+S	704	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	704	1	2	SweetSpot	0
+S	705	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	705	1	2	SweetSpot	0
+S	706	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	706	1	2	SweetSpot	0
+S	707	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	707	1	2	SweetSpot	0
+S	708	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	708	1	2	SweetSpot	0
+S	709	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	709	1	2	SweetSpot	0
+S	710	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	710	1	2	SweetSpot	0
+S	711	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	711	1	2	SweetSpot	0
+S	712	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	712	1	2	SweetSpot	0
+S	713	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	713	1	2	SweetSpot	0
+S	714	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	714	1	2	SweetSpot	0
+S	715	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	715	1	2	SweetSpot	0
+S	716	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	716	1	2	SweetSpot	0
+S	717	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	717	1	2	SweetSpot	0
+S	718	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	718	1	2	SweetSpot	0
+S	719	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	719	1	2	SweetSpot	0
+S	720	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	720	1	2	SweetSpot	0
+S	721	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	721	1	2	SweetSpot	0
+S	722	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	722	1	2	SweetSpot	0
+S	723	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	723	1	2	SweetSpot	0
+S	724	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	724	1	2	SweetSpot	0
+S	725	1	CORBATS	AimFromSecondary	2	E	-1,0,0,0
+R	725	1	2	AimFromSecondary	0
+S	725	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	725	1	2	QuerySecondary	0
+S	725	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	725	1	2	QuerySecondary	0
+S	725	1	CORBATS	FireSecondary	2	E	
+S	725	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	725	1	3	SweetSpot	0
+S	726	1	CORBATS	AimFromSecondary	3	E	-1,0,0,0
+R	726	1	3	AimFromSecondary	0
+S	726	1	CORBATS	AimSecondary	3	E	0,2373
+K	726	1	0	RestoreAfterDelay	3
+S	726	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	726	1	0	SweetSpot	0
+S	727	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	727	1	0	SweetSpot	0
+S	728	1	CORBATS	RestoreAfterDelay	0	C:3	
+R	728	1	3	AimSecondary	1
+S	728	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	728	1	3	SweetSpot	0
+S	729	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	729	1	3	SweetSpot	0
+R	730	1	2	FireSecondary	0
+S	730	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	730	1	2	SweetSpot	0
+S	731	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	731	1	2	SweetSpot	0
+S	732	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	732	1	2	SweetSpot	0
+S	733	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	733	1	2	SweetSpot	0
+S	734	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	734	1	2	SweetSpot	0
+S	735	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	735	1	2	SweetSpot	0
+S	736	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	736	1	2	SweetSpot	0
+S	737	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	737	1	2	SweetSpot	0
+S	738	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	738	1	2	SweetSpot	0
+S	739	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	739	1	2	SweetSpot	0
+S	740	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	740	1	2	SweetSpot	0
+S	741	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	741	1	2	SweetSpot	0
+S	742	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	742	1	2	SweetSpot	0
+S	743	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	743	1	2	SweetSpot	0
+S	744	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	744	1	2	SweetSpot	0
+S	745	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	745	1	2	SweetSpot	0
+S	746	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	746	1	2	SweetSpot	0
+S	747	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	747	1	2	SweetSpot	0
+S	748	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	748	1	2	SweetSpot	0
+S	749	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	749	1	2	SweetSpot	0
+S	750	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	750	1	2	SweetSpot	0
+S	751	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	751	1	2	SweetSpot	0
+S	752	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	752	1	2	SweetSpot	0
+S	753	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	753	1	2	SweetSpot	0
+S	754	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	754	1	2	SweetSpot	0
+S	755	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	755	1	2	SweetSpot	0
+S	756	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	756	1	2	SweetSpot	0
+S	757	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	757	1	2	SweetSpot	0
+S	758	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	758	1	2	SweetSpot	0
+S	759	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	759	1	2	SweetSpot	0
+S	760	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	760	1	2	SweetSpot	0
+S	761	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	761	1	2	SweetSpot	0
+S	762	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	762	1	2	SweetSpot	0
+S	763	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	763	1	2	SweetSpot	0
+S	764	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	764	1	2	SweetSpot	0
+S	765	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	765	1	2	SweetSpot	0
+S	766	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	766	1	2	SweetSpot	0
+S	767	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	767	1	2	SweetSpot	0
+S	768	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	768	1	2	SweetSpot	0
+S	769	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	769	1	2	SweetSpot	0
+S	770	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	770	1	2	SweetSpot	0
+S	771	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	771	1	2	SweetSpot	0
+S	772	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	772	1	2	SweetSpot	0
+S	773	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	773	1	2	SweetSpot	0
+S	774	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	774	1	2	SweetSpot	0
+S	775	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	775	1	2	SweetSpot	0
+S	776	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	776	1	2	SweetSpot	0
+S	777	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	777	1	2	SweetSpot	0
+S	778	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	778	1	2	SweetSpot	0
+S	779	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	779	1	2	SweetSpot	0
+S	780	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	780	1	2	SweetSpot	0
+S	781	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	781	1	2	SweetSpot	0
+S	782	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	782	1	2	SweetSpot	0
+S	783	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	783	1	2	SweetSpot	0
+S	784	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	784	1	2	SweetSpot	0
+S	785	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	785	1	2	SweetSpot	0
+S	786	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	786	1	2	SweetSpot	0
+S	787	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	787	1	2	SweetSpot	0
+S	788	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	788	1	2	SweetSpot	0
+S	789	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	789	1	2	SweetSpot	0
+S	790	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	790	1	2	SweetSpot	0
+S	791	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	791	1	2	SweetSpot	0
+S	792	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	792	1	2	SweetSpot	0
+S	793	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	793	1	2	SweetSpot	0
+S	794	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	794	1	2	SweetSpot	0
+S	795	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	795	1	2	SweetSpot	0
+S	796	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	796	1	2	SweetSpot	0
+S	797	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	797	1	2	SweetSpot	0
+S	798	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	798	1	2	SweetSpot	0
+S	799	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	799	1	2	SweetSpot	0
+S	800	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	800	1	2	SweetSpot	0
+S	801	1	CORBATS	AimFromSecondary	2	E	-1,0,0,0
+R	801	1	2	AimFromSecondary	0
+S	801	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	801	1	2	QuerySecondary	0
+S	801	1	CORBATS	QuerySecondary	2	E	0,0,0,0
+R	801	1	2	QuerySecondary	0
+S	801	1	CORBATS	FireSecondary	2	E	
+S	801	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	801	1	3	SweetSpot	0
+S	802	1	CORBATS	AimFromSecondary	3	E	-1,0,0,0
+R	802	1	3	AimFromSecondary	0
+S	802	1	CORBATS	AimSecondary	3	E	0,2373
+K	802	1	0	RestoreAfterDelay	3
+S	802	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	802	1	0	SweetSpot	0
+S	803	1	CORBATS	SweetSpot	0	E	0,0,0,0
+R	803	1	0	SweetSpot	0
+S	804	1	CORBATS	RestoreAfterDelay	0	C:3	
+R	804	1	3	AimSecondary	1
+S	804	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	804	1	3	SweetSpot	0
+S	805	1	CORBATS	SweetSpot	3	E	0,0,0,0
+R	805	1	3	SweetSpot	0
+R	806	1	2	FireSecondary	0
+S	806	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	806	1	2	SweetSpot	0
+S	807	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	807	1	2	SweetSpot	0
+S	808	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	808	1	2	SweetSpot	0
+S	809	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	809	1	2	SweetSpot	0
+S	810	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	810	1	2	SweetSpot	0
+S	811	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	811	1	2	SweetSpot	0
+S	812	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	812	1	2	SweetSpot	0
+S	813	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	813	1	2	SweetSpot	0
+S	814	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	814	1	2	SweetSpot	0
+S	815	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	815	1	2	SweetSpot	0
+S	816	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	816	1	2	SweetSpot	0
+S	817	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	817	1	2	SweetSpot	0
+S	818	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	818	1	2	SweetSpot	0
+S	819	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	819	1	2	SweetSpot	0
+S	820	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	820	1	2	SweetSpot	0
+S	821	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	821	1	2	SweetSpot	0
+S	822	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	822	1	2	SweetSpot	0
+S	823	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	823	1	2	SweetSpot	0
+S	824	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	824	1	2	SweetSpot	0
+S	825	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	825	1	2	SweetSpot	0
+S	826	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	826	1	2	SweetSpot	0
+S	827	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	827	1	2	SweetSpot	0
+S	828	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	828	1	2	SweetSpot	0
+S	829	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	829	1	2	SweetSpot	0
+S	830	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	830	1	2	SweetSpot	0
+S	831	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	831	1	2	SweetSpot	0
+S	832	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	832	1	2	SweetSpot	0
+S	833	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	833	1	2	SweetSpot	0
+S	834	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	834	1	2	SweetSpot	0
+S	835	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	835	1	2	SweetSpot	0
+S	836	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	836	1	2	SweetSpot	0
+S	837	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	837	1	2	SweetSpot	0
+S	838	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	838	1	2	SweetSpot	0
+S	839	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	839	1	2	SweetSpot	0
+S	840	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	840	1	2	SweetSpot	0
+S	841	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	841	1	2	SweetSpot	0
+S	842	1	CORBATS	SweetSpot	2	E	0,0,0,0
+R	842	1	2	SweetSpot	0
+R	950	1	0	RestoreAfterDelay	0

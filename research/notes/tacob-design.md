@@ -119,9 +119,10 @@ anything pasted from it.
   `BITMAPONLY`, `BITMAP1..5`, `BITMAPNUKE`), the SFX types (`SFXTYPE_VTOL`, `_THRUST`, `_WAKE1/2`,
   `_REVERSEWAKE1/2`, `_WHITESMOKE`, `_BLACKSMOKE`, `_SUBBUBBLES`), and the usual snippets
   (`smokeunit`, `hitweap`, `killhelp`, `StateChg`). **Every value gets verified against the
-  engine's `EMIT_SFX` and `EXPLODE` handlers before it ships** — the exe map records that the
-  opcode reaching the effect handlers is still unidentified (`exe-reverse-engineering.md`), so
-  this is research, not transcription. The decompiler emits these names, so a stock `Killed`
+  engine's `EMIT_SFX` and `EXPLODE` handlers before it ships** — landing 2 located them
+  (`EMIT_SFX` → the COB object's `vt+0x30` = `0x480EB0`, `EXPLODE` → `vt+0x34` = `0x481140`,
+  `exe-reverse-engineering.md` §"The COB engine"), but their type and flag tables have not
+  been read yet, so this is still research, not transcription. The decompiler emits these names, so a stock `Killed`
   comes back as `explode base type SHATTER | BITMAP1;`.
 
 ## The VM and the director
@@ -141,11 +142,49 @@ release; `sleep` milliseconds onto 30 Hz ticks; the order threads run within a t
 thread does at its `RETURN` when it was `start-script`ed. Spring's `CobThread` supplies the first
 draft; every difference the traces show becomes a line in this section with the numbers.
 
-**The `tagpu_cobtrace.on` hook** `[PLANNED — engine change, lands under the review rules]`: at the
-script-start path (the allocator `0x4B08C0` and the query entry `0x4B0BC0` are the known seams)
-log `tick, unit index, unit type, script name, args…, return, thread slot` to `tagpu_cobtrace.log`.
-If the VM's `RAND` handler can be reached cheaply, log its draws too, so a replay can feed them
-back; otherwise the gate scenarios avoid rand-driven pieces.
+**The `tagpu_cobtrace.on` hook** `[BUILT 2026-09-07 — landing 2; the engine seam is
+exe-reverse-engineering.md §"The COB engine"]`: `tagpu_cobtrace.c` hooks five sites inside the
+COB engine — the one allocator every thread start takes (`0x4B08C0`), the thread runner's entry
+(`0x4B0DA0`), the `RETURN` handler (`0x4B19D0`), the `signal` kill (`0x4B1A99`) and the `rand`
+handler's call into the sim RNG (`0x4B15E0`) — byte-matched, all-or-nothing, reading only. The
+`rand` draws turned out cheap: the handler calls the shared sim RNG `0x4B6C30` from one site,
+so the `D` line exists and the gate scenarios need not avoid rand-driven pieces.
+
+**The trace contract** `[BUILT — landing 2 writes it, landing 3 parses it; a field the engine
+cannot supply is removed from *this table* in the same commit, never silently left blank]`.
+`tagpu_cobtrace.on` in the instance's game dir (the other oracles' idiom; its contents are an
+optional type filter, `ARMPW,CORAK`, empty or `all` for every unit) makes the fork write
+tab-separated lines to `tagpu_cobtrace.log`, flushed whenever the tick changes; the editor's
+trace tab prints the same lines:
+
+| Line | Fields | When |
+|---|---|---|
+| `S` | `tick  unit  type  script  slot  source  args…` | a thread starts (a record was allocated). `source` = `E` (the engine called it through one of its by-name entries), `C:<n>` (a script's `start-script`, issued by thread `n`) or `L:<n>` (`call-script` from thread `n`, which then blocks until this thread returns); `slot` = the record 0..7; `args` comma-separated, the words on the new thread's stack in the order the caller pushed them, read before its first step |
+| `R` | `tick  unit  slot  script  value` | a thread's `RETURN`; `value` = the word on its stack top (`?` if the stack is empty) |
+| `X` | `tick  unit  script  source` | a start was **refused** — the eight records were all busy (the silent failure); `source` as above without the slot |
+| `K` | `tick  unit  slot  script  by` | a thread killed by another thread's `signal`; `by` = the signalling slot. Its `RETURN` never runs, so no `R` follows |
+| `D` | `tick  unit  slot  value` | a `rand( lo, hi )` draw; `value` = what the script received (`lo + result`) |
+| `#` | free text | the header (version, filter, the columns); a parser skips it |
+
+Lines are in event order. An `S` line is written at the first hook event after its
+allocation (the arguments arrive on the record only then), so it can sit after lines of its own
+tick but never after a line of a later one — a parser may still sort on the tick column. The
+file is created afresh at every attach and flushed per line, so a killed process loses nothing.
+A `# start dropped` line marks the one case a start is not written: the unit died between the
+allocation and the next event (or the match ended), and its COB object is gone. `tick` is the sim tick `*(main+0x38A47)`, which
+`tagpu_posedump.on`'s header line now stamps too (`posedump: tick=N idx=U …`), so the two logs join on `(tick, unit)`; `unit` is the in-game
+index `*(i16*)(unit+0xA8)` — `tacli roster`'s `idx=` — and `type` the unit-def name, the
+identifiers `tacli weapons` already prints. The headless replay writes lines with the same
+fields, and the gate is `diff`. What the trace does **not** carry: the engine's asks for a
+script the unit lacks (only an index of `-1` reaches the allocator), which engine function
+issued an `E` start, and the `emit-sfx`/`explode`/`set`/`get` traffic (those are the VM's own
+business). Two things the first traces taught about the *arguments*: a `Query*` script — and
+`Killed`, which `Send_UnitDeath` runs through `QueryScript` with the caller's two locals —
+carries the current values of the caller's out-slots, so `Killed`'s second argument is an
+**uninitialised stack word** (a different number every run) that the replay must treat as
+opaque; and an unwritten local reads whatever the record last held (`CREATE_LOCAL_VAR` only
+bumps the stack index), so a script started with fewer arguments than it creates does not
+read zeros — it reads the previous occupant's stack.
 
 **The nine gate scenarios** — one run each in the real game with both oracles on, replayed by
 `tacob run` with the same director events, the diff must be empty:
@@ -207,7 +246,7 @@ Right, bottom: tabs — unit state, weapon slots, console, trace. Across the top
 | # | Landing | Gate |
 |---|---|---|
 | 1 | Compiler + decompiler, CLI only (`compile`, `decompile`, `dump`), preprocessor, shipped headers | **built 2026-09-07** — 278 of 278 stock COBs round-trip byte-identical as whole files; 26 offline tests green |
-| 2 | The `tagpu_cobtrace.on` hook | the nine scenarios each produce a cobtrace log and a posedump; reviewed as an engine change |
+| 2 | The `tagpu_cobtrace.on` hook | **built 2026-09-07** (§Landing 2) — the nine scenarios each produce a cobtrace log and a posedump, kept under `research/notes/evidence/cobtrace/`; reviewed as an engine change |
 | 3 | VM + director, headless `tacob run` | trace and pose diffs empty against landing 2's logs; the pool refuses the ninth thread |
 | 4 | The editor page, lints, slot template | driven by hand: open a stock unit, edit, restart, see the change, pack a UFO that `tacli` loads |
 | 5 | Packaging: pywebview launcher, browser fallback, game-folder picker, PyInstaller onedir | the built folder runs on a machine with no Python |
@@ -244,13 +283,58 @@ a line in `file-formats.md` §2.8:
 The decompiled stock scripts read like the community's BOS (ARMSTUMP's `AimPrimary` comes back
 as the eight lines every modder knows), which is the readability the gate cannot measure.
 
+## Landing 2 — built 2026-09-07
+
+`tagpu/ddraw/src/tagpu_cobtrace.c` (the hook, §"The `tagpu_cobtrace.on` hook" above),
+`scenarios/cob-*.json` (the nine class scenarios), `tools/cobtrace_fixtures.py` (runs them,
+parks the camera, drops the posedump, keeps the files), and the fixtures with a per-class
+table in `research/notes/evidence/cobtrace/README.md`. Verified by running it: every class
+produced a trace and a posedump (the README records the fighter shape the engine's own
+`ORDERS_CreateObject` fault ruled out, with and without the oracle), the tick advances
+across a traced death, and the kbot trace was read line by line against the disassembly.
+
+What the engine taught that the interview did not know, each now a rule landing 3's VM
+follows (the addresses are in `exe-reverse-engineering.md` §"The COB engine"):
+
+- **There is one allocator and the arguments come after it.** Every start — engine or
+  script — goes through `0x4B08C0`, and every caller writes the arguments onto the new
+  record only after it returns; the trace latches the start and writes it at the next hook
+  event, always before the thread's first step.
+- **Run-later starts step at the next tick; run-now starts finish inside their tick.**
+  `SetMaxReloadTime` (started with `runNow = 0`) is logged at tick 117 and returns at 118;
+  `StartMoving` and `Create` (`runNow = 1`) return in their own tick — and a run-now start
+  runs *every* runnable record of that unit, with `dt = 0`, not only the new one.
+- **`sleep` is `ms × 30 / 1000` ticks, truncated** (`sleep 150` = 4 ticks); the per-unit tick
+  passes `dt = 1` and a sleeper wakes when its count reaches zero; the animation stepper
+  runs after the eight records each tick.
+- **`call-script` blocks the caller until the child's `RETURN`** (`L:<n>` lines: the kbot's
+  `walk` is a 19-tick loop under `MotionControl`); a child refused by a full pool parks the
+  caller for ever. `start-script` children inherit the parent's signal mask; a thread
+  killed by `signal` never runs its `RETURN` (a `K` line, no `R`).
+- **Locals are not zeroed.** `CREATE_LOCAL_VAR` only bumps the stack index; a script that
+  creates more locals than it received arguments reads the record's previous words.
+- **A script with no trailing `RETURN` runs into the next script's words** — measured, not
+  only read off the bytecode: ARMSTUMP's `HitByWeapon` ends under `SweetSpot`'s name.
+- **`Killed` is a query.** `Send_UnitDeath` runs it through `QueryScript` with two locals, so
+  its second argument is uninitialised stack and the corpse type is read back from the
+  record; the replay masks that argument.
+- **`rand` is the sim RNG** (`0x4B6C30`, shared with 129 other call sites), one draw per
+  `rand`, so the `D` line is the only way to replay it — and the draws are frequent:
+  `SmokeUnit` under 66 % health draws every few hundred ms.
+- **The effect opcodes reach vtable slots** — `EMIT_SFX` → `vt+0x30` (`0x480EB0`), `EXPLODE`
+  → `vt+0x34` (`0x481140`) — so the shipped constants can now be verified against code, which
+  is landing 3's or 4's job, not done here.
+- **Stock scripts never fill the pool**: no fixture produced an `X` line. The refusal
+  path is exercised only by extended-weapons content (`extra-weapons.md` snag 10).
+
 ## Gaps this design does not close
 
 - **Scriptor compatibility of hand-written literals** is unproven until the binary is found:
   truncation is established from its output, but not whether it computes in single precision
   (`<12.5>` sits on a boundary either way). Our compiler is self-consistent, not proven identical.
 - **The effect constants** (`SFXTYPE_*`, the explosion flags) are the community's values until
-  the `EMIT_SFX`/`EXPLODE` handlers are located in the exe.
-- **`rand`** cannot be replayed from posedump; it depends on whether cobtrace can log the draws.
+  the `EMIT_SFX`/`EXPLODE` handlers' tables are read — the handlers themselves are located
+  (`0x480EB0`, `0x481140`, landing 2).
+- ~~**`rand`** cannot be replayed from posedump~~ — cobtrace logs every draw as a `D` line (landing 2).
 - **Flight, sailing and diving** are sketches. The events they generate are exact; the path is not.
 - **The interpolation rules** (§The VM) are unknown until the first traces are diffed.

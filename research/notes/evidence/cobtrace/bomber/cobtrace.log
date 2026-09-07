@@ -1,0 +1,56 @@
+# tagpu_cobtrace v1	filter=,ARMTHUND,	columns: S tick unit type script slot source args… | R tick unit slot script value | X tick unit script source | K tick unit slot script by | D tick unit slot value
+S	95	1	ARMTHUND	Create	0	E	
+S	95	1	ARMTHUND	InitState	1	L:0	
+R	95	1	1	InitState	0
+S	95	1	ARMTHUND	QueryPrimary	1	E	0,0,0,0
+R	95	1	1	QueryPrimary	0
+S	95	1	ARMTHUND	QueryPrimary	1	E	0,0,0,0
+R	95	1	1	QueryPrimary	0
+S	96	1	ARMTHUND	SmokeUnit	1	C:0	
+R	96	1	0	Create	0
+S	96	1	ARMTHUND	Activate	0	E	
+S	97	1	ARMTHUND	RequestState	2	C:0	0
+R	97	1	0	Activate	0
+S	97	1	ARMTHUND	activatescr	0	L:2	
+R	142	1	0	activatescr	0
+R	142	1	2	RequestState	0
+S	286	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	286	1	0	QueryPrimary	0
+S	286	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	286	1	0	QueryPrimary	0
+S	291	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	291	1	0	QueryPrimary	0
+S	291	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	291	1	0	QueryPrimary	0
+S	296	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	296	1	0	QueryPrimary	0
+S	296	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	296	1	0	QueryPrimary	0
+S	301	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	301	1	0	QueryPrimary	0
+S	301	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	301	1	0	QueryPrimary	0
+S	306	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	306	1	0	QueryPrimary	0
+S	306	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	306	1	0	QueryPrimary	0
+S	311	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	311	1	0	QueryPrimary	0
+S	311	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	311	1	0	QueryPrimary	0
+S	733	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	733	1	0	QueryPrimary	0
+S	733	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	733	1	0	QueryPrimary	0
+S	738	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	738	1	0	QueryPrimary	0
+S	738	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	738	1	0	QueryPrimary	0
+S	743	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	743	1	0	QueryPrimary	0
+S	743	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	743	1	0	QueryPrimary	0
+S	748	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	748	1	0	QueryPrimary	0
+S	748	1	ARMTHUND	QueryPrimary	0	E	0,0,0,0
+R	748	1	0	QueryPrimary	0

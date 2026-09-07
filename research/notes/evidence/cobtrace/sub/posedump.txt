@@ -1,0 +1,11 @@
+posedump: tick=703 idx=1 unit=04AC0138 o3=028077B0 nparts=4 yaw=50174
+posedump: p0 tube1 HIDDEN off=(696320,520191,173055) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(0,0,0) vbuf=(240408,520191,-676028)
+posedump: p1 tube2 HIDDEN off=(-696320,520191,173055) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(0,0,0) vbuf=(104038,520191,709919)
+posedump: p2 base off=(0,0,0) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(284670,110592,1388270) vbuf=(1409474,110592,-147360)
+posedump:   v1 node=(-235692,271794,1302126) vbuf=(1272789,271794,362066)
+posedump:   v2 node=(-284670,110592,1388270) vbuf=(1353723,110592,419244)
+posedump: p3 wake HIDDEN off=(0,245760,-1474560) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(0,0,0) vbuf=(-1467473,245760,-144391)

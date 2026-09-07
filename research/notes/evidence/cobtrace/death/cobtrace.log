@@ -1,0 +1,32 @@
+# tagpu_cobtrace v1	filter=,ARMPW,	columns: S tick unit type script slot source args… | R tick unit slot script value | X tick unit script source | K tick unit slot script by | D tick unit slot value
+S	97	1	ARMPW	Create	0	E	
+S	97	1	ARMPW	MotionControl	1	C:0	
+S	97	1	ARMPW	SmokeUnit	2	C:0	
+R	97	1	0	Create	0
+S	97	1	ARMPW	QueryPrimary	0	E	0,0,0,0
+R	97	1	0	QueryPrimary	0
+S	97	1	ARMPW	AimFromPrimary	0	E	-1,0,0,0
+R	97	1	0	AimFromPrimary	0
+S	97	1	ARMPW	SetMaxReloadTime	0	E	400
+R	98	1	0	SetMaxReloadTime	0
+S	118	1	ARMPW	AimFromPrimary	0	E	-1,0,0,0
+R	118	1	0	AimFromPrimary	0
+S	118	1	ARMPW	AimPrimary	0	E	289,62798
+S	118	1	ARMPW	SweetSpot	3	E	0,0,0,0
+R	118	1	3	SweetSpot	0
+S	119	1	ARMPW	SweetSpot	3	E	0,0,0,0
+R	119	1	3	SweetSpot	0
+S	120	1	ARMPW	SweetSpot	3	E	0,0,0,0
+R	120	1	3	SweetSpot	0
+S	121	1	ARMPW	SweetSpot	3	E	0,0,0,0
+R	121	1	3	SweetSpot	0
+S	122	1	ARMPW	SweetSpot	3	E	0,0,0,0
+R	122	1	3	SweetSpot	0
+S	123	1	ARMPW	SweetSpot	3	E	0,0,0,0
+R	123	1	3	SweetSpot	0
+S	124	1	ARMPW	SweetSpot	3	E	0,0,0,0
+R	124	1	3	SweetSpot	0
+S	125	1	ARMPW	SweetSpot	3	E	0,0,0,0
+R	125	1	3	SweetSpot	0
+S	126	1	ARMPW	Killed	3	E	12,46379093,0,0
+R	126	1	3	Killed	0

@@ -1,0 +1,142 @@
+{
+  "ok": 1,
+  "frame": 405,
+  "gametime": 93,
+  "seed": 7,
+  "requested": {
+    "units": 2,
+    "features": 0,
+    "orders": 1
+  },
+  "applied": 2,
+  "failed": 0,
+  "cleared": 3,
+  "orders": {
+    "issued": 1,
+    "failed": 0
+  },
+  "map": {
+    "name": "Two Continents",
+    "world": [
+      10752,
+      12800
+    ],
+    "tiles": [
+      672,
+      800
+    ]
+  },
+  "limit": {
+    "requested": 0,
+    "total": 0,
+    "per_player": 500,
+    "array_slots": 5000
+  },
+  "limit_requested": 500,
+  "switches": {
+    "before": 12,
+    "after": 28,
+    "bits": {
+      "drop": false,
+      "cheats": false,
+      "selboxes": true,
+      "invulnfeatures": true,
+      "noshake": true,
+      "clock": false,
+      "doubleshot": false,
+      "halfshot": false,
+      "radar": false,
+      "shootall": false
+    }
+  },
+  "units": {
+    "pw": {
+      "engine_index": 1,
+      "owner": 0,
+      "type": "ARMPW",
+      "requested": [
+        2600,
+        1200
+      ],
+      "actual": [
+        2600,
+        1200,
+        127
+      ],
+      "ordinal": 0
+    },
+    "far": {
+      "engine_index": 501,
+      "owner": 1,
+      "type": "CORAK",
+      "requested": [
+        4200,
+        2400
+      ],
+      "actual": [
+        4200,
+        2400,
+        0
+      ],
+      "ordinal": 1
+    }
+  },
+  "features": {},
+  "order_probe": {
+    "passed": [
+      2900,
+      85,
+      1200
+    ],
+    "stored": [
+      2900,
+      85,
+      1200
+    ]
+  },
+  "camera": [
+    2600,
+    1200
+  ],
+  "pin": 0,
+  "eye": [
+    2216,
+    785
+  ],
+  "errors": [],
+  "name": "cob1",
+  "scenario": "cob-kbot",
+  "catalogue": null,
+  "loaded": {
+    "steps": [
+      "stopped the game that was running (--restart)",
+      "launched 1024x768, map 'Two Continents', unit limit 500",
+      "clicked SINGLE on MAINMENU.GUI \u2014 screen MAINMENU.GUI -> SINGLE.GUI",
+      "clicked Skirmish on SINGLE.GUI \u2014 engine confirmed",
+      "map unmapped -> mapped",
+      "clicked Start on SKIRMISH.GUI",
+      "live with 3 units",
+      "map Maps\\Two Continents.TNT"
+    ],
+    "map_file": "Maps\\Two Continents.TNT",
+    "map_requested": "Two Continents",
+    "res": [
+      1024,
+      768
+    ],
+    "unit_limit": 500,
+    "players": [
+      "0:1:0:0",
+      "1:2:1:1"
+    ],
+    "alive_before_apply": 3,
+    "window": [
+      232783875,
+      3206,
+      118,
+      640,
+      480
+    ],
+    "pid": 851796
+  }
+}

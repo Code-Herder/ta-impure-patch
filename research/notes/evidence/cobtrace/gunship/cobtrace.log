@@ -1,0 +1,100 @@
+# tagpu_cobtrace v1	filter=,ARMBRAWL,	columns: S tick unit type script slot source args… | R tick unit slot script value | X tick unit script source | K tick unit slot script by | D tick unit slot value
+S	97	1	ARMBRAWL	Create	0	E	
+S	97	1	ARMBRAWL	InitState	1	L:0	
+R	97	1	1	InitState	0
+S	97	1	ARMBRAWL	QueryPrimary	1	E	0,0,0,0
+R	97	1	1	QueryPrimary	0
+S	97	1	ARMBRAWL	QueryPrimary	1	E	0,0,0,0
+R	97	1	1	QueryPrimary	0
+S	98	1	ARMBRAWL	SmokeUnit	1	C:0	
+R	98	1	0	Create	0
+S	98	1	ARMBRAWL	Activate	0	E	
+S	99	1	ARMBRAWL	RequestState	2	C:0	0
+R	99	1	0	Activate	0
+S	99	1	ARMBRAWL	activatescr	0	L:2	
+R	162	1	0	activatescr	0
+R	162	1	2	RequestState	0
+S	170	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	170	1	0	QueryPrimary	0
+S	170	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	170	1	0	QueryPrimary	0
+S	170	1	ARMBRAWL	FirePrimary	0	E	
+R	170	1	0	FirePrimary	0
+S	188	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	188	1	0	QueryPrimary	0
+S	188	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	188	1	0	QueryPrimary	0
+S	188	1	ARMBRAWL	FirePrimary	0	E	
+R	188	1	0	FirePrimary	0
+S	206	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	206	1	0	QueryPrimary	0
+S	206	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	206	1	0	QueryPrimary	0
+S	206	1	ARMBRAWL	FirePrimary	0	E	
+R	206	1	0	FirePrimary	0
+S	224	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	224	1	0	QueryPrimary	0
+S	224	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	224	1	0	QueryPrimary	0
+S	224	1	ARMBRAWL	FirePrimary	0	E	
+R	224	1	0	FirePrimary	0
+S	242	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	242	1	0	QueryPrimary	0
+S	242	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	242	1	0	QueryPrimary	0
+S	242	1	ARMBRAWL	FirePrimary	0	E	
+R	242	1	0	FirePrimary	0
+S	260	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	260	1	0	QueryPrimary	0
+S	260	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	260	1	0	QueryPrimary	0
+S	260	1	ARMBRAWL	FirePrimary	0	E	
+R	260	1	0	FirePrimary	0
+S	278	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	278	1	0	QueryPrimary	0
+S	278	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	278	1	0	QueryPrimary	0
+S	278	1	ARMBRAWL	FirePrimary	0	E	
+R	278	1	0	FirePrimary	0
+S	296	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	296	1	0	QueryPrimary	0
+S	296	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	296	1	0	QueryPrimary	0
+S	296	1	ARMBRAWL	FirePrimary	0	E	
+R	296	1	0	FirePrimary	0
+S	314	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	314	1	0	QueryPrimary	0
+S	314	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	314	1	0	QueryPrimary	0
+S	314	1	ARMBRAWL	FirePrimary	0	E	
+R	314	1	0	FirePrimary	0
+S	332	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	332	1	0	QueryPrimary	0
+S	332	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	332	1	0	QueryPrimary	0
+S	332	1	ARMBRAWL	FirePrimary	0	E	
+R	332	1	0	FirePrimary	0
+S	350	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	350	1	0	QueryPrimary	0
+S	350	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	350	1	0	QueryPrimary	0
+S	350	1	ARMBRAWL	FirePrimary	0	E	
+R	350	1	0	FirePrimary	0
+S	368	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	368	1	0	QueryPrimary	0
+S	368	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	368	1	0	QueryPrimary	0
+S	368	1	ARMBRAWL	FirePrimary	0	E	
+R	368	1	0	FirePrimary	0
+S	386	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	386	1	0	QueryPrimary	0
+S	386	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	386	1	0	QueryPrimary	0
+S	386	1	ARMBRAWL	FirePrimary	0	E	
+R	386	1	0	FirePrimary	0
+S	404	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	404	1	0	QueryPrimary	0
+S	404	1	ARMBRAWL	QueryPrimary	0	E	0,0,0,0
+R	404	1	0	QueryPrimary	0
+S	404	1	ARMBRAWL	FirePrimary	0	E	
+R	404	1	0	FirePrimary	0

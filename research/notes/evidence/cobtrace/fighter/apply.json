@@ -1,0 +1,157 @@
+{
+  "ok": 1,
+  "frame": 435,
+  "gametime": 91,
+  "seed": 7,
+  "requested": {
+    "units": 3,
+    "features": 0,
+    "orders": 2
+  },
+  "applied": 3,
+  "failed": 0,
+  "cleared": 3,
+  "orders": {
+    "issued": 2,
+    "failed": 0
+  },
+  "map": {
+    "name": "Two Continents",
+    "world": [
+      10752,
+      12800
+    ],
+    "tiles": [
+      672,
+      800
+    ]
+  },
+  "limit": {
+    "requested": 0,
+    "total": 0,
+    "per_player": 500,
+    "array_slots": 5000
+  },
+  "limit_requested": 500,
+  "switches": {
+    "before": 12,
+    "after": 28,
+    "bits": {
+      "drop": false,
+      "cheats": false,
+      "selboxes": true,
+      "invulnfeatures": true,
+      "noshake": true,
+      "clock": false,
+      "doubleshot": false,
+      "halfshot": false,
+      "radar": false,
+      "shootall": false
+    }
+  },
+  "units": {
+    "hawk": {
+      "engine_index": 1,
+      "owner": 0,
+      "type": "ARMHAWK",
+      "requested": [
+        2600,
+        1200
+      ],
+      "actual": [
+        2600,
+        1200,
+        124
+      ],
+      "ordinal": 0
+    },
+    "valk": {
+      "engine_index": 501,
+      "owner": 1,
+      "type": "CORVALK",
+      "requested": [
+        3700,
+        1000
+      ],
+      "actual": [
+        3700,
+        1000,
+        86
+      ],
+      "ordinal": 1
+    },
+    "far": {
+      "engine_index": 502,
+      "owner": 1,
+      "type": "CORAK",
+      "requested": [
+        4200,
+        2400
+      ],
+      "actual": [
+        4200,
+        2400,
+        0
+      ],
+      "ordinal": 2
+    }
+  },
+  "features": {},
+  "order_probe": {
+    "passed": [
+      3400,
+      84,
+      1200
+    ],
+    "stored": [
+      3400,
+      84,
+      1200
+    ]
+  },
+  "camera": [
+    2600,
+    1200
+  ],
+  "pin": 0,
+  "eye": [
+    2216,
+    786
+  ],
+  "errors": [],
+  "name": "cob1",
+  "scenario": "cob-fighter",
+  "catalogue": null,
+  "loaded": {
+    "steps": [
+      "launched 1024x768, map 'Two Continents', unit limit 500",
+      "auto-armed owndraw.on=all (native.on is set and owndraw must be installed at launch, not after)",
+      "clicked SINGLE on MAINMENU.GUI \u2014 screen MAINMENU.GUI -> SINGLE.GUI",
+      "clicked Skirmish on SINGLE.GUI \u2014 engine confirmed",
+      "map unmapped -> mapped",
+      "clicked Start on SKIRMISH.GUI",
+      "live with 3 units",
+      "map Maps\\Two Continents.TNT"
+    ],
+    "map_file": "Maps\\Two Continents.TNT",
+    "map_requested": "Two Continents",
+    "res": [
+      1024,
+      768
+    ],
+    "unit_limit": 500,
+    "players": [
+      "0:1:0:0",
+      "1:2:1:1"
+    ],
+    "alive_before_apply": 3,
+    "window": [
+      232783875,
+      3206,
+      118,
+      640,
+      480
+    ],
+    "pid": 1088619
+  }
+}
