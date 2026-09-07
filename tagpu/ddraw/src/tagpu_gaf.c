@@ -369,18 +369,13 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
     return 1;
 }
 
-const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* g)
+/* the insertion shared by atlas_get (which decodes into s_dec first) and
+   atlas_put (which is handed the bytes): `pixels` holds w*h indices */
+static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const void* pix,
+                                        int w, int h, unsigned char ck, const unsigned char* pixels)
 {
-    int w, h, x, y, slot, i;
-    const void* pix;
+    int x, y, slot, i;
     TAGPU_GAFENT* e;
-    if (!tagpu_gaf_atlas_create(a)) return NULL;
-    w = *(const unsigned short*)(g + TAGPU_GF_W);
-    h = *(const unsigned short*)(g + TAGPU_GF_H);
-    /* tagpu_gaf_frame_sane already promises this of every caller's frame; the
-       decode into s_dec and the guard-rail copy below both index off it */
-    if (w <= 0 || h <= 0 || w > TAGPU_GAF_DECMAX || h > TAGPU_GAF_DECMAX) return NULL;
-    pix = *(const void* const*)(g + TAGPU_GF_PIX);
     for (slot = (int)gaf_hash(g); a->hash[slot]; slot = (slot + 1) & (TAGPU_GAF_HASH - 1)) {
         TAGPU_GAFENT* c = &a->ents[a->hash[slot] - 1];
         if (c->frame == g && c->pix == pix && c->w == w && c->h == h)
@@ -398,10 +393,6 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
         e = &a->ents[a->n];
         e->frame = g; e->pix = pix;
         e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0;
-        /* a frame whose pixels are momentarily unreadable must stay retryable:
-           claiming the slot here would cache the failure for the atlas's whole
-           life, and the feature atlas is meant to live as long as the map */
-        if (!tagpu_gaf_decode(g, w, h, s_dec)) return NULL;
         a->hash[slot] = ++a->n;
         x = a->shelfX + p; y = a->shelfY + p;          /* inside the border */
         a->shelfX += cw;
@@ -432,7 +423,7 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
             int k;
             for (i = 0; i < h; i++) {
                 unsigned char* row = s_pad + (size_t)(i + p) * pw + p;
-                memcpy(row, s_dec + (size_t)i * w, (size_t)w);
+                memcpy(row, pixels + (size_t)i * w, (size_t)w);
                 for (k = 1; k <= p; k++) row[-k] = row[0];
                 for (k = 0; k < pr; k++) row[w + k] = row[w - 1];
             }
@@ -448,11 +439,53 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
     e->u0 = (float)x / (float)a->dim;         e->v0 = (float)y / (float)a->dim;
     e->u1 = (float)(x + w) / (float)a->dim;   e->v1 = (float)(y + h) / (float)a->dim;
     e->x = (unsigned short)x; e->y = (unsigned short)y;
-    e->ck = g[TAGPU_GF_CK];
-    /* decided here, while the pixels are still in s_dec: the tileability the
+    e->ck = ck;
+    /* decided here, while the pixels are still at hand: the tileability the
        restorer wrap-pads by (a key on an edge says no) */
-    e->wrap = a->pal ? (char)tagpu_rglsl_tileable(s_dec, w, h, a->pal, e->ck) : 0;
+    e->wrap = a->pal ? (char)tagpu_rglsl_tileable(pixels, w, h, a->pal, e->ck) : 0;
     e->ok = 1;
     if (a->job) restore_enqueue(a, e);
     return e;
+}
+
+const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* g)
+{
+    int w, h;
+    const void* pix;
+    const TAGPU_GAFENT* hit;
+    if (!tagpu_gaf_atlas_create(a)) return NULL;
+    w = *(const unsigned short*)(g + TAGPU_GF_W);
+    h = *(const unsigned short*)(g + TAGPU_GF_H);
+    /* tagpu_gaf_frame_sane already promises this of every caller's frame; the
+       decode into s_dec and the guard-rail copy below both index off it */
+    if (w <= 0 || h <= 0 || w > TAGPU_GAF_DECMAX || h > TAGPU_GAF_DECMAX) return NULL;
+    pix = *(const void* const*)(g + TAGPU_GF_PIX);
+    hit = tagpu_gaf_atlas_find(a, g, pix, w, h);
+    if (hit) return hit;
+    /* a frame whose pixels are momentarily unreadable must stay retryable:
+       claiming the slot here would cache the failure for the atlas's whole
+       life, and the feature atlas is meant to live as long as the map */
+    if (!tagpu_gaf_decode(g, w, h, s_dec)) return NULL;
+    return atlas_insert(a, g, pix, w, h, g[TAGPU_GF_CK], s_dec);
+}
+
+const TAGPU_GAFENT* tagpu_gaf_atlas_put(TAGPU_GAFATLAS* a, const void* frame, const void* pix,
+                                        int w, int h, unsigned char ck, const unsigned char* pixels)
+{
+    if (!tagpu_gaf_atlas_create(a)) return NULL;
+    if (w <= 0 || h <= 0 || w > TAGPU_GAF_DECMAX || h > TAGPU_GAF_DECMAX || !pixels) return NULL;
+    return atlas_insert(a, frame, pix, w, h, ck, pixels);
+}
+
+const TAGPU_GAFENT* tagpu_gaf_atlas_find(const TAGPU_GAFATLAS* a, const void* frame, const void* pix,
+                                         int w, int h)
+{
+    int slot;
+    if (!a->ents || !a->n) return NULL;
+    for (slot = (int)gaf_hash(frame); a->hash[slot]; slot = (slot + 1) & (TAGPU_GAF_HASH - 1)) {
+        const TAGPU_GAFENT* c = &a->ents[a->hash[slot] - 1];
+        if (c->frame == frame && c->pix == pix && c->w == w && c->h == h)
+            return c->ok ? c : NULL;
+    }
+    return NULL;
 }

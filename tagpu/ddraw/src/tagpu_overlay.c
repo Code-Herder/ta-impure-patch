@@ -551,6 +551,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
                 tagpu_native_glreset();
                 tagpu_scaffold_glreset();
                 tagpu_r3d_glreset();
+                tagpu_gui_glreset();
                 olog("tagpu: GL CONTEXT CHANGED - all modules reset");
             }
             s_ctx = cur;
@@ -591,6 +592,13 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     /* G12b: native unit pass (tagpu_native.on) — needs this frame's scaffold */
     tagpu_native_frame(f);
     oerr("native");
+
+    /* Phase E: the UI layer — the presented surface's twin, drawn over the
+       world's composite (UI above the world; the engine's own pixels stay
+       the fallback beneath). Runs in the shell too: the native pass returns
+       early there, this does not. */
+    tagpu_gui_present(f);
+    oerr("gui");
 
     /* If the native pass did not publish a view this frame, nothing zoomed was
        drawn, so the input path goes back to 1:1 (tagpu_zoom.h). Every early

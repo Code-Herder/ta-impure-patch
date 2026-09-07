@@ -1280,6 +1280,31 @@ def cmd_shield(args):
                f"reach the game"))
 
 
+def cmd_gui(args):
+    """The GL UI renderer (Phase E): arm before launch (its detours install at DLL attach),
+    then flip the draw live — the file is polled twice a second in the DLL."""
+    inst = Instance(args.name)
+    inst.gamedir.mkdir(parents=True, exist_ok=True)
+    path = inst.gamedir / "tagpu_gui.on"
+    if args.state is not None:
+        if args.state == "off":
+            # `off` INSIDE the file keeps the detours installed at the next launch while
+            # the layer is not drawn; removing the file would un-arm the module entirely
+            path.write_text("off\n")
+        elif args.state == "remove":
+            path.unlink(missing_ok=True)
+        else:
+            tokens = {"on": "", "strict": "strict", "census": "census log pgm trace"}[args.state]
+            extra = " ".join(args.tokens or [])
+            path.write_text((tokens + " " + extra).strip() + "\n")
+    present = path.exists()
+    content = path.read_text().strip() if present else ""
+    state = "absent (module not armed)" if not present else ("armed, draw OFF" if "off" in content.split() else
+            f"armed, draw ON{' STRICT' if 'strict' in content else ''}{' + census' if 'census' in content else ''}")
+    out({"name": args.name, "gui": present, "tokens": content}, args.json,
+        human=f"{args.name}: tagpu_gui.on {state}" + (f" [{content}]" if content else ""))
+
+
 def cmd_arm(args):
     inst = Instance(args.name)
     # `arm` is documented to run BEFORE the first launch (the detours install
@@ -4131,6 +4156,14 @@ def build_parser():
     e.add_argument("y", type=int, nargs="?", default=0)
     e.add_argument("--release", action="store_true")
     e.set_defaults(func=cmd_eye)
+
+    gu = sub.add_parser("gui", help="the GL UI renderer: on | strict | census | off | remove (Phase E)")
+    add_common(gu)
+    gu.add_argument("name")
+    gu.add_argument("state", nargs="?", choices=["on", "strict", "census", "off", "remove"],
+                    help="omit to report; `off` keeps the detours armed but stops the draw")
+    gu.add_argument("tokens", nargs="*", help="extra tokens for the file (log, pgm, trace, key=N)")
+    gu.set_defaults(func=cmd_gui)
 
     sd = sub.add_parser("shield", help="input firewall: block the hardware keyboard/mouse")
     add_common(sd)

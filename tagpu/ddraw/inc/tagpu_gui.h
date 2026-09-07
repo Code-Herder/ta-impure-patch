@@ -7,34 +7,40 @@
    shell — is mirrored into GL twins of the engine's own surfaces: observer
    detours on the pixel-writing leaves record what was drawn, the engine keeps
    drawing its own 8bpp surface (which stays the oracle and the fallback), and
-   the render thread replays the ops into retained twins the composite draws.
+   the render thread replays the ops into retained twins that are drawn over
+   the frame after the world's composite.
 
-   Family: tagpu_gui_hook.c (the observers, the brackets, the census),
-   tagpu_gui_surf.c (twins, ring, seed), tagpu_gui_art.c (the UI GAF atlas and
-   the uirestore policy), tagpu_gui_snap.c (the gadget-tree snapshot behind
-   `tacli ui`, was tagpu_ui.c, contract inc/tagpu_ui.h). One trigger,
-   gamedir/tagpu_gui.on; one seam into the composite, tagpu_gui_layer().
+   Family: tagpu_gui_hook.c (the observers, the census, the publisher),
+   tagpu_gui_surf.c (the twins, the UI atlas, the replay, the layer draw),
+   tagpu_gui_snap.c (the gadget-tree snapshot behind `tacli ui`, was
+   tagpu_ui.c, contract inc/tagpu_ui.h). One trigger, gamedir/tagpu_gui.on;
+   the detours install at DllMain when it exists then; the DRAW follows the
+   file live (polled twice a second): delete it and the frame is today's,
+   recreate it and every twin re-seeds from the engine's surfaces at the next
+   flip. Off also stops publishing, so an idle module is a few ifs.
 
-   G15a — THE CENSUS (this header's first life). No drawing. The observers
-   record every op into a game-thread ring, and at every engine flip
-   (FlipOffscreenToPrimary 0x4C63A0) the flipped surface is diffed against its
-   previous copy; every recorded op's box is subtracted; what remains is a
-   writer we have not named, counted and logged per screen. Tokens in
-   tagpu_gui.on: `census` (run the diff), `log` (a line per 50 censuses and
-   on any residual, window totals), `pgm` (tagpu_gui_census.trigger writes
-   tagpu_gui_census.pgm: 0 = unchanged, 128 = explained, 255 = unexplained
-   since the last dump), `trace` (the ops intersecting a residual, the first
-   blits after a screen build, every surface allocation with its tag),
-   `key=N` (the terrain key, 254). MEASURED 2026-09-07: 0 unexplained of
-   3 710 035 changed pixels across the shell and in-game inventory.
+   Tokens in tagpu_gui.on: `census` (the G15a diff; costs a 1024x768 compare
+   per 5 ms), `strict` (the fallback off: a UI pixel the engine drew that we
+   have not is painted magenta, the cursor's rect exempt — the harness's mode),
+   `log`, `pgm`, `trace`, `key=N` (census diagnostics, tagpu_gui_hook.c).
 
-   Arming: installed ONCE at DllMain and only if tagpu_gui.on exists then, per
-   the arming rule (own-the-draw.md); every detour is byte-matched and the set
-   is all-or-nothing. Every observer calls the original, so the engine's
-   behaviour is byte-identical with the module armed. */
+   THREADS. The observers and the publisher run on the game thread inside the
+   engine's own calls; the twins, the atlas and the draw run on the render
+   thread inside the present. They meet only in the queue (tagpu_gui_int.h).
+
+   Every observer calls the original, so the engine's behaviour is
+   byte-identical with the module armed. G15b draws the INDEX twin: Classic,
+   1:1, palette-resolved at present; the colour twin is G15e. */
 #include <windows.h>
+#include "tagpu.h"
 
 void tagpu_gui_init(void);                          /* DllMain                */
-void tagpu_gui_flush(unsigned int frame_counter);   /* render thread, per present */
+/* render thread, per present, GL current: poll the trigger, drain the queue
+   into the twins, then draw the presented surface's twin over the frame
+   (after the world's composite, so UI is above the world) */
+void tagpu_gui_present(const TAGPU_FRAME* f);
+void tagpu_gui_flush(unsigned int frame_counter);   /* render thread: the heartbeat line */
+void tagpu_gui_glreset(void);                       /* the GL context changed */
 int  tagpu_gui_installed(void);
+int  tagpu_gui_drawing(void);                       /* the trigger says draw  */
 #endif

@@ -83,12 +83,13 @@ def instance_dir(inst):
 
 
 class Walk:
-    def __init__(self, inst, out, res):
+    def __init__(self, inst, out, res, parity=False):
         self.inst, self.out, self.res = inst, Path(out), res
         self.out.mkdir(parents=True, exist_ok=True)
         self.rows = []
         self.gamedir = None
         self.log_seen = 0
+        self.parity = parity
 
     def t(self, *args, **kw):
         return tacli(self.inst, *args, **kw) if args and args[0] not in ("launch", "stop", "arm", "scenario") else tacli(*args, **kw)
@@ -163,15 +164,30 @@ class Walk:
         rc, out = tacli("shot", self.inst, "-o", str(self.out / f"{label}-surface.png"))
         if rc != 0 or not (self.out / f"{label}-surface.png").exists():
             print(f"  [{label}] shot failed rc={rc}: {out.strip().splitlines()[-1] if out.strip() else ''}", file=sys.stderr)
+        parity = {}
+        if self.parity:
+            # the GL frame right after the surface: the two are a few frames apart, so an
+            # animated screen (MAINMENU's sparkles) differs by the animation's motion
+            rc, out = tacli("glshot", self.inst, "-o", str(self.out / f"{label}-gl.ppm"))
+            parity = frame_parity(self.out / f"{label}-gl.ppm", self.out / f"{label}-surface.png",
+                                  self.gamedir, in_game, self.res)
         summary = parse_census(lines)
-        self.rows.append({"label": label, "screen": screen, "in_game": in_game, "lines": lines, **summary})
+        self.rows.append({"label": label, "screen": screen, "in_game": in_game, "lines": lines, **summary, **parity})
+        extra = (f" | parity: differing={parity.get('differing', '-')} holes={parity.get('holes', '-')}"
+                 f" {parity.get('bbox', '')}" if parity else "")
         print(f"  {label:14s} {screen:40s} flips={summary['flips']:4d} changed={summary['changed']:7d} "
-              f"unexplained={summary['unexplained']:7d} worst={summary['worst']}", file=sys.stderr)
+              f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{extra}", file=sys.stderr)
 
     def report(self):
         p = self.out / "report.md"
         with p.open("w") as f:
             f.write(f"# uiwalk census — {self.inst} at {self.res}\n\n")
+            if self.parity:
+                f.write("| stop | screen | game | differing px (outside the viewport in game) | strict holes | box |\n|---|---|---|---|---|---|\n")
+                for r in self.rows:
+                    f.write(f"| {r['label']} | {r['screen']} | {'y' if r['in_game'] else ''} | {r.get('differing', '-')} | "
+                            f"{r.get('holes', '-')} | {r.get('bbox', '')} |\n")
+                f.write("\n")
             f.write("| stop | screen | game | censuses | changed px | unexplained px | worst census box | ops in the window |\n|---|---|---|---|---|---|---|---|\n")
             for r in self.rows:
                 f.write(f"| {r['label']} | {r['screen']} | {'y' if r['in_game'] else ''} | {r['flips']} | {r['changed']} | "
@@ -181,6 +197,47 @@ class Walk:
                 f.write(f"### {r['label']} — {r['screen']}\n\n```\n" + "\n".join(r["lines"][-12:]) + "\n```\n\n")
         (self.out / "report.json").write_text(json.dumps(self.rows, indent=1))
         print(f"report: {p}", file=sys.stderr)
+
+
+def cursor_rect(inst):
+    """The engine's cursor rect from the mouse object: our layer leaves it to the engine."""
+    try:
+        g = tacli("peek", inst, "*0x51FBD0+0x1B6:4", "*0x51FBD0+0x1BA:4", "*0x51FBD0+0x1B2:4")[1]
+        vals = [int(l.split()[-1].strip("()"), 16) for l in g.splitlines() if l.startswith("peek:")]
+        x, y, rec = vals[0], vals[1], vals[2]
+        wh = tacli("peek", inst, f"0x{rec:08X}:2", f"0x{rec + 2:08X}:2")[1]
+        sz = [int(l.split()[-1].strip("()"), 16) for l in wh.splitlines() if l.startswith("peek:")]
+        return (x, y, sz[0], sz[1])
+    except Exception:
+        return None
+
+
+def frame_parity(gl_path, surf_path, gamedir, in_game, res):
+    """Our presented frame against the engine's surface: differing pixels (outside the
+    world viewport in game, the cursor rect excluded) and strict holes (magenta)."""
+    try:
+        import numpy as np
+        from PIL import Image
+        gl = np.asarray(Image.open(gl_path).convert("RGB")).astype(int)
+        su = np.asarray(Image.open(surf_path).convert("RGB")).astype(int)
+        if gl.shape != su.shape:
+            return {"differing": -1, "holes": -1, "bbox": f"size mismatch {gl.shape} vs {su.shape}"}
+        d = np.abs(gl - su).max(axis=2)
+        mag = (gl[..., 0] > 200) & (gl[..., 1] < 60) & (gl[..., 2] > 200)
+        mask = np.ones(d.shape, bool)
+        if in_game:
+            W, H = [int(v) for v in res.lower().split("x")]
+            mask[32:H - 32, 128:W] = False           # the true viewport: the world, ours
+        holes = int(mag.sum())
+        n = int(((d > 0) & mask).sum())
+        out = {"differing": n, "holes": holes, "bbox": ""}
+        if n:
+            ys, xs = np.nonzero((d > 0) & mask)
+            out["bbox"] = f"({xs.min()},{ys.min()})-({xs.max()},{ys.max()})"
+            Image.fromarray(((d > 0) & mask).astype(np.uint8) * 255).save(str(gl_path).replace("-gl.ppm", "-diff.png"))
+        return out
+    except Exception as e:
+        return {"differing": -1, "holes": -1, "bbox": f"diff failed: {e}"}
 
 
 def parse_census(lines):
@@ -217,11 +274,14 @@ def main():
     ap.add_argument("--game-only", action="store_true")
     ap.add_argument("--keep", action="store_true", help="leave the instance running")
     ap.add_argument("--no-passes", action="store_true", help="do not arm the world passes (engine draws the world)")
+    ap.add_argument("--layer", action="store_true",
+                    help="G15b: draw the GL UI layer (strict) instead of running the census, and diff our frame "
+                         "against the engine's surface at every stop")
     a = ap.parse_args()
-    w = Walk(a.inst, a.out, a.res)
+    w = Walk(a.inst, a.out, a.res, parity=a.layer)
 
     tacli("stop", a.inst)
-    tacli("arm", a.inst, "gui.on=census log pgm trace", check=True)
+    tacli("arm", a.inst, "gui.on=strict log" if a.layer else "gui.on=census log pgm trace", check=True)
     if not a.no_passes:
         tacli("arm", a.inst, *ARM_SET, check=True)
     if not a.game_only:

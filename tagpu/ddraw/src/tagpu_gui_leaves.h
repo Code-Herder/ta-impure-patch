@@ -42,6 +42,20 @@ static const int* ctx_or_back(unsigned ctxArg)
 /* ---- 0x4B7F90 CopyGafToContext(ctx, frame, x, y) stdcall ret 0x10 ------
    lands the frame at (x - HotX, y - HotY), clipped to ctx's clip rect
    (composite-buffer.md §3). 0x4B8500 is the shaded twin with the same shape. */
+/* Blits that are not UI although they land in the back buffer: the unit
+   composite blit inside 0x459200 (the engine draws its all-key composites
+   while owndraw skips the rasterisers), and the cursor's four draw paths
+   (exe map "the two ways the cursor gets drawn"). Anything recorded while the
+   flip is running is the cursor too (s_inFlip). Matched on the return address. */
+static int excluded_caller(unsigned ret)
+{
+    if (s_inFlip) return 1;
+    if (ret >= 0x00459200u && ret < 0x00459800u) return 1;   /* the unit blit    */
+    if (ret >= 0x004C2380u && ret < 0x004C2A00u) return 1;   /* cursor draws     */
+    if (ret >= 0x004C6300u && ret < 0x004C6800u) return 1;   /* flip + 0x4C67C0  */
+    return 0;
+}
+
 static int s_gafDbg = 0;          /* trace: the first blits after a build */
 static void gaf_box(void* e, int kind)
 {
@@ -49,7 +63,9 @@ static void gaf_box(void* e, int kind)
     const unsigned char* fr = (const unsigned char*)(size_t)ARG(e, 2);
     int x = SARG(e, 3), y = SARG(e, 4);
     int l, t, r, b;
-    SURF* s = surf_of_ctx(ctx);
+    SURF* s;
+    if (excluded_caller(ARG(e, 0))) return;
+    s = surf_of_ctx(ctx);
     if (s_trace && s_gafDbg > 0 && ptr_ok(ctx)) {
         const char* ta = *(const char* const*)TA_MAINPP;
         const char* top = ptr_ok(ta) ? *(const char* const*)(ta + OFF_GUI_TOP) : NULL;
@@ -66,6 +82,15 @@ static void gaf_box(void* e, int kind)
     r = l + GF_W(fr) - 1; b = t + GF_H(fr) - 1;
     if (s) clip_ctx(ctx, &l, &t, &r, &b);
     op_add(kind, s, l, t, r, b);
+    if (s_lastOp) {
+        /* a plain keyed blit of an uncompressed-or-RLE frame with no sub-frames
+           is the sprite the twin replays by identity; anything else (sub-frame
+           stacks, the blended variants) is published as pixels */
+        s_lastOp->frame = fr; s_lastOp->pix = *(const void* const*)(fr + 0x10);
+        s_lastOp->fw = GF_W(fr); s_lastOp->fh = GF_H(fr); s_lastOp->ck = fr[0x08];
+        s_lastOp->dx = (short)(x - GF_HX(fr)); s_lastOp->dy = (short)(y - GF_HY(fr));
+        if (kind == OP_GAF && fr[0x0A] != 0) s_lastOp->kind = OP_GAFA;   /* sub-frames: pixels */
+    }
 }
 static int __cdecl before_gaf(void* e)  { if (on_game_thread()) gaf_box(e, OP_GAF);  return 0; }
 static int __cdecl before_gafa(void* e) { if (on_game_thread()) gaf_box(e, OP_GAFA); return 0; }
@@ -79,6 +104,7 @@ static int __cdecl before_gafb(void* e) { if (on_game_thread()) gaf_box(e, OP_GA
    glyph's own byte (exe-reverse-engineering.md "The in-game bitmap font"). */
 static int __cdecl before_text(void* e)
 {
+    if (s_inFlip) return 0;
     const unsigned char* base = (const unsigned char*)(size_t)ARG(e, 1);
     const unsigned char* font = (const unsigned char*)(size_t)ARG(e, 3);
     const unsigned char* str  = (const unsigned char*)(size_t)ARG(e, 4);
@@ -104,6 +130,7 @@ static int __cdecl before_text(void* e)
 /* ---- 0x4BE950 DrawLine(ctx, x0, y0, x1, y1, colour) stdcall ----------- */
 static int __cdecl before_line(void* e)
 {
+    if (s_inFlip) return 0;
     const int* ctx = ctx_or_back(ARG(e, 1));
     int x0 = SARG(e, 2), y0 = SARG(e, 3), x1 = SARG(e, 4), y1 = SARG(e, 5);
     int l = x0 < x1 ? x0 : x1, r = x0 < x1 ? x1 : x0;
@@ -122,6 +149,7 @@ static int __cdecl before_line(void* e)
 static void rect_box(void* e, int kind)
 {
     const int* ctx = ctx_or_back(ARG(e, 1));
+    if (s_inFlip) return;
     const int* rc  = (const int*)(size_t)ARG(e, 2);
     int l, t, r, b;
     SURF* s;
@@ -150,7 +178,7 @@ static int __cdecl before_copy(void* e)
     int x = SARG(e, 3), y = SARG(e, 4);
     int l, t, r, b;
     SURF* s;
-    if (!on_game_thread()) return 0;
+    if (!on_game_thread() || excluded_caller(ARG(e, 0))) return 0;
     if (ptr_ok(src)) surf_of_ctx(src);            /* the source is a surface too */
     s = surf_of_ctx(dst);
     if (!ptr_ok(src)) { op_add(OP_COPY, NULL, 0, 0, 0, 0); return 0; }
@@ -160,20 +188,22 @@ static int __cdecl before_copy(void* e)
     l = x; t = y; r = x + src[CTX_W] - 1; b = y + src[CTX_H] - 1;
     if (s) clip_ctx(dst, &l, &t, &r, &b);
     op_add(OP_COPY, s, l, t, r, b);
+    if (s_lastOp) {
+        s_lastOp->src = (unsigned)src[CTX_BASE];
+        s_lastOp->sl = (short)(l - x); s_lastOp->st = (short)(t - y);   /* source top-left of the box */
+    }
     return 0;
 }
 
-/* the return-address stack for hijacked calls (game thread, LIFO) */
-#define ALLOC_DEPTH 16
-static void*       s_allocRet[ALLOC_DEPTH];
-static const char* s_allocTag[ALLOC_DEPTH];
-static int         s_allocDepth = 0;
+/* the allocation's tag rides beside the shared return stack (s_retStack) */
+static const char* s_allocTag[32];
 
 /* ---- 0x4C6D20(ctx, desc, RECT* src, RECT* dst) stdcall ret 0x10 — the
         descriptor blit the listbox and textfield handlers use; the box is the
         destination rect (edges inclusive, like every RECT here) ------------ */
 static int __cdecl before_gafd(void* e)
 {
+    if (s_inFlip) return 0;
     const int* ctx = ctx_or_back(ARG(e, 1));
     const int* rc  = (const int*)(size_t)ARG(e, 4);
     int l, t, r, b;
@@ -199,7 +229,7 @@ static int __cdecl before_scale(void* e)
     const int* xy = (const int*)(size_t)ARG(e, 3);
     int l, t, r, b, i;
     SURF* s;
-    if (!on_game_thread()) return 0;
+    if (!on_game_thread() || s_inFlip) return 0;
     if (!ptr_ok(xy)) { op_add(OP_SCALE, NULL, 0, 0, 0, 0); return 0; }
     l = r = xy[0]; t = b = xy[1];
     for (i = 1; i < 3; i++) {
@@ -218,6 +248,7 @@ static int __cdecl before_scale(void* e)
         surface (NULL = the back buffer) ----------------------------------- */
 static int __cdecl before_fill(void* e)
 {
+    if (s_inFlip) return 0;
     const int* ctx = ctx_or_back(ARG(e, 1));
     SURF* s;
     if (!on_game_thread()) return 0;
@@ -234,6 +265,10 @@ static int __cdecl before_free(void* e)
     if (!on_game_thread() || !ptr_ok(obj)) return 0;
     for (i = 0; i < s_nsurf; i++)
         if (s_surf[i].base == (unsigned)obj[CTX_BASE]) {
+            if (s_surf[i].seeded && g_gui_draw) {
+                TAGPU_PUBOP* o = pub_op(PK_FREE, s_surf[i].base);
+                if (o) pub_commit();
+            }
             free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
             s_surf[i] = s_surf[--s_nsurf];
             break;
@@ -263,8 +298,8 @@ static int __cdecl before_alloc(void* e)
 static void* __cdecl after_alloc(unsigned int* regs)
 {
     const int* obj = (const int*)(size_t)regs[7];        /* eax */
-    void* ret = s_allocRet[--s_allocDepth];
-    const char* tag = s_allocTag[s_allocDepth];
+    void* ret = s_retDepth > 0 ? s_retStack[--s_retDepth] : NULL;
+    const char* tag = s_allocTag[s_retDepth];
     SURF* s = ptr_ok(obj) ? surf_of_ctx(obj) : NULL;
     if (s && s_trace) {
         char b[200];
@@ -272,7 +307,8 @@ static void* __cdecl after_alloc(unsigned int* regs)
                   ptr_ok(tag) ? tag : "?", s->w, s->h, s->base, top_screen_name());
         glog(b);
     }
-    if (s && s_census) {
+    if (s && (s_census || g_gui_draw)) {
+        s->seeded = 0;                       /* a fresh surface: the twin must be re-seeded */
         /* seed NOW, while the surface is blank, so the first census after a
            screen's build diffs the build itself rather than adopting it */
         const unsigned char* cur = (const unsigned char*)(size_t)s->base;
@@ -290,9 +326,9 @@ static void* __cdecl after_alloc(unsigned int* regs)
 
 static int __cdecl before_alloc_push(void* e)
 {
-    if (!before_alloc(e) || s_allocDepth >= ALLOC_DEPTH) return 0;
-    s_allocTag[s_allocDepth] = (const char*)(size_t)ARG(e, 1);
-    s_allocRet[s_allocDepth++] = (void*)(size_t)ARG(e, 0);
+    if (!before_alloc(e) || s_retDepth >= 32) return 0;
+    s_allocTag[s_retDepth] = (const char*)(size_t)ARG(e, 1);
+    s_retStack[s_retDepth++] = (void*)(size_t)ARG(e, 0);
     return 1;
 }
 
