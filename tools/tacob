@@ -5,6 +5,7 @@
     tools/tacob decompile unit.cob -o unit.bos           # or a stock unit: armpw
     tools/tacob dump      unit.cob [Script]              # opcode listing
     tools/tacob roundtrip --all [--out DIR] [--json]     # the landing-1 gate
+    tools/tacob run       --all                          # the landing-3 gate (VM + director)
 
 BOS is the source and COB the build artifact (research/notes/tacob-design.md).
 Formats: research/notes/file-formats.md §2. The code shapes below were
@@ -1625,6 +1626,1056 @@ def _piece(cob, index):
     return cob.pieces[index] if 0 <= index < len(cob.pieces) else f"piece#{index}"
 
 
+# --------------------------------------------------------------------------- the virtual machine
+
+# Every constant and rule below was read out of the retail binary; the addresses
+# are in research/notes/exe-reverse-engineering.md §"The COB engine". The engine
+# is the reference, not Spring: where the two differ this follows the engine.
+
+SIM_RATE = 30                 # cob+0x04 (0x4B0641); sleep ticks and MOVE/TURN speeds divide by it
+
+ST_FREE      = 0x00000000     # the eight status words (alloc 0x4B08F9, dispatch 0x4B0DBF)
+ST_RUN       = 0x01000000
+ST_WAIT_TURN = 0x02100000
+ST_WAIT_MOVE = 0x02200000
+ST_SLEEP     = 0x02400000
+ST_CALL      = 0x02800000
+
+REC_WORDS = 32                # the record's stack, +0x24 to the end of the 0xA4 bytes
+NRECORDS = 8
+
+# the piece animation array (cob+0x14): 19 dwords per piece, three axes per group
+PIECE_FIELDS = 19
+F_DIRTY, F_MOVE_TARGET, F_MOVE_SPEED = 0, 1, 4
+F_TURN_TARGET, F_TURN_SPEED, F_SPIN_TARGET, F_SPIN_ACCEL = 7, 10, 13, 16
+
+
+def i32(v):
+    v &= 0xFFFFFFFF
+    return v - (1 << 32) if v & 0x80000000 else v
+
+
+def idiv(a, b):
+    """C's idiv: truncate toward zero (Python's // floors)."""
+    q = abs(a) // abs(b)
+    return -q if (a < 0) != (b < 0) else q
+
+
+class Thread:
+    """One 0xA4-byte record. Nothing clears it on free — an unwritten local reads
+    whatever the record last held there (CREATE_LOCAL_VAR only bumps the index)."""
+
+    __slots__ = ("status", "pc", "sp", "sleep", "piece", "axis", "child", "mask", "cb", "stack")
+
+    def __init__(self):
+        self.status = ST_FREE
+        self.pc = 0
+        self.sp = -1
+        self.sleep = 0
+        self.piece = 0
+        self.axis = 0
+        self.child = -1
+        self.mask = 1
+        self.cb = None
+        self.stack = [0] * REC_WORDS
+
+
+class AimCallback:
+    """The completion object the engine hands an Aim* start (vtable 0x4FD6F0):
+    `if (value) slot->aimed = 1`, and a refused start gets called with 0 at once."""
+
+    def __init__(self):
+        self.aimed = 0
+        self.calls = []
+
+    def __call__(self, value):
+        self.calls.append(value)
+        if value:
+            self.aimed = 1
+
+
+class UnitWorld:
+    """Everything `get`, `set` and the effect opcodes reach: the twenty stock value
+    ids (file-formats.md §2.5), the RNG, and a log of the effects the script asks for.
+    The cobtrace oracle carries none of this traffic, so it is the replay's input."""
+
+    def __init__(self, values=None, rands=None):
+        self.values = {VALUE_IDS["ACTIVATION"]: 0, VALUE_IDS["HEALTH"]: 100,
+                       VALUE_IDS["BUILD_PERCENT_LEFT"]: 0}
+        if values:
+            self.values.update(values)
+        self.rands = list(rands or ())      # the draws to hand back, in order
+        self.draws = 0
+        self.effects = []                   # (tick, kind, piece, arg)
+        self.unknown = set()
+
+    def get(self, vid, a, b, c, d):
+        if vid in self.values:
+            return self.values[vid]
+        if vid > 20:                        # TADR/ProTA extensions this engine lacks
+            self.unknown.add(vid)
+            return 0
+        self.unknown.add(vid)
+        return 0
+
+    def set(self, vid, value):
+        self.values[vid] = value
+
+    def rand(self, n, lo):
+        """`0x4B6C30(n)` — the shared sim RNG; it returns 0 for n < 2. `lo` is only
+        here because the oracle records `lo + r`, which is what a replay hands back."""
+        r = 0 if n < 2 else self.draws
+        self.draws += 1
+        return r
+
+    def effect(self, tick, kind, piece, arg=None):
+        self.effects.append((tick, kind, piece, arg))
+
+
+class CobVM:
+    """The eight-record thread pool of one unit, running its COB the way
+    0x4B0DA0 and 0x4B1C00 do. `tick` is set by whoever drives it."""
+
+    def __init__(self, cob, world=None, trace=None, unit=1, type_name="?", visible=None):
+        self.cob = cob
+        self.code = [w & 0xFFFFFFFF for w in cob.code]
+        self.names = [n for n, _ in cob.scripts]
+        self.entries = [e for _, e in cob.scripts]
+        self.world = world if world is not None else UnitWorld()
+        self.trace = trace
+        self.unit = unit
+        self.type = type_name
+        self.tick = 0
+        self.threads = [Thread() for _ in range(NRECORDS)]
+        self.running = 0                                  # cob+0x53C
+        self.statics = [0] * cob.statics                  # cob+0x10, zero-filled
+        self.anim = [0] * (PIECE_FIELDS * len(cob.pieces))  # cob+0x14, zero-filled
+        self.dirty = 0                                    # cob+0x18
+        self.pos = [[0, 0, 0] for _ in cob.pieces]        # PrimitiveStruct XPos/ZPos/YPos, 16.16
+        self.ang = [[0, 0, 0] for _ in cob.pieces]        # XTurn/ZTurn/YTurn, uint16
+        # 0x45AF1B: the model builder clears PrimitiveStruct+0x28 bit 0 for a piece
+        # whose 3DO node has fewer than three vertices — every flare, wake, tube and
+        # thrust anchor starts invisible without the script hiding it
+        self.visible = list(visible) if visible else [True] * len(cob.pieces)
+        self.cached = [True] * len(cob.pieces)
+        self.shaded = [True] * len(cob.pieces)
+        self._pend = None                                 # the latched start, as the oracle latches it
+
+    # -- names ------------------------------------------------------------
+    def index_of(self, name):
+        """Name2Index 0x4B07C0: the first entry whose name matches."""
+        try:
+            return self.names.index(name)
+        except ValueError:
+            return -1
+
+    def script_of_pc(self, pc):
+        """The script whose body holds pc — the largest entry <= pc, ties to the
+        last index (tagpu_cobtrace.c script_of_pc, which the R and K lines use)."""
+        best = -1
+        for i, e in enumerate(self.entries):
+            if e <= pc and (best < 0 or e >= self.entries[best]):
+                best = i
+        return self.names[best] if best >= 0 else "?"
+
+    # -- the trace's latch ------------------------------------------------
+    def _flush(self):
+        """The oracle writes a start at the next hook event, reading the record's
+        stack then: the callers write the arguments only after the allocator returns."""
+        p = self._pend
+        if p is None:
+            return
+        self._pend = None
+        if self.trace is None:
+            return
+        slot, idx, tick, src, parent, argc = p
+        rec = self.threads[slot]
+        if argc < 0:
+            argc = rec.sp + 1
+        argc = max(0, min(argc, REC_WORDS))
+        args = ",".join(str(i32(rec.stack[i])) for i in range(argc))
+        where = "E" if src == "E" else "%s:%d" % (src, parent)
+        self.trace("S\t%d\t%d\t%s\t%s\t%d\t%s\t%s"
+                   % (tick, self.unit, self.type, self.names[idx], slot, where, args))
+
+    def _emit(self, line):
+        if self.trace is not None:
+            self.trace(line)
+
+    # -- the pool ---------------------------------------------------------
+    def alloc(self, idx, src="E", parent=-1, argc=-1):
+        """COBEngine_AllocThread 0x4B08C0. -1 for a script the file lacks and for a
+        full pool alike; the first free slot from 0, and the record is not cleared."""
+        self._flush()
+        if idx < 0 or idx >= len(self.names):
+            return -1
+        for slot in range(NRECORDS):
+            rec = self.threads[slot]
+            if rec.status == ST_FREE:
+                rec.status = ST_RUN
+                rec.pc = self.entries[idx]
+                rec.sp = -1
+                rec.cb = None
+                rec.mask = 1
+                self.running += 1
+                self._pend = (slot, idx, self.tick, src, parent, argc)
+                return slot
+        self._emit("X\t%d\t%d\t%s\t%s" % (self.tick, self.unit, self.names[idx], src))
+        return -1
+
+    def free(self, slot):
+        self.threads[slot].status = ST_FREE
+        self.running -= 1
+
+    def wake_callers(self, slot):
+        """Every record blocked in a call on `slot` goes runnable (0x4B19FF, 0x4B1AB1)."""
+        for rec in self.threads:
+            if (rec.status & 0xFFF00000) == ST_CALL and rec.child == slot:
+                rec.status = ST_RUN
+
+    # -- the engine's entries ---------------------------------------------
+    def start_script(self, name, run_now=False, args=(), cb=None, argwords=False):
+        """0x4B0B00 (by index, four argument words, `sp = argc-1`) when `argwords`,
+        else 0x4B0940 (no arguments at all, `sp` stays -1)."""
+        slot = self.alloc(self.index_of(name), argc=len(args) if argwords else -1)
+        if slot < 0:
+            if argwords and cb is not None:
+                cb(0)                       # 0x4B0B11: a refused Aim* reports "not aimed" at once
+            return 0
+        rec = self.threads[slot]
+        rec.cb = cb
+        if argwords:
+            for i in range(4):              # a0..a3 land on the record whatever argc says
+                rec.stack[i] = i32(args[i]) if i < len(args) else 0
+            rec.sp = len(args) - 1
+        if run_now:
+            if self.running:
+                for s in range(NRECORDS):
+                    self.run_thread(s, 0)
+            self.step_anim(0)
+        return 1
+
+    def query_script(self, name, args):
+        """COBEngine_QueryScript 0x4B0C40: four words in, `sp = 3`, the thread runs
+        to its first block inside the call, then stack[0..3] comes back out."""
+        slot = self.alloc(self.index_of(name))
+        if slot < 0:
+            return None                     # the silent failure: the out-slots stay untouched
+        rec = self.threads[slot]
+        rec.cb = None
+        for i in range(4):
+            rec.stack[i] = i32(args[i]) if i < len(args) else 0
+        rec.sp = 3
+        self.run_thread(slot, 0)
+        return [i32(rec.stack[i]) for i in range(4)]
+
+    def do_scripts_now(self, dt):
+        """COBEngine_DoScriptsNow 0x4B0D60 — the per-unit tick, called with dt = 1."""
+        for slot in range(NRECORDS):
+            self.run_thread(slot, dt)
+        self.step_anim(dt)
+
+    # -- the runner -------------------------------------------------------
+    def run_thread(self, slot, dt):
+        """0x4B0DA0: wake the record if its block has cleared, then execute
+        opcodes back to back until one blocks it or ends it."""
+        self._flush()
+        rec = self.threads[slot]
+        top = rec.status & 0xFF000000
+        if top == 0:
+            return
+        if top == 0x02000000:
+            sub = rec.status & 0x00F00000
+            if sub == 0x100000:                     # wait-for-turn
+                base = rec.piece * PIECE_FIELDS
+                if self.anim[base + F_TURN_SPEED + rec.axis] == 0:
+                    rec.status = ST_RUN
+            elif sub == 0x200000:                   # wait-for-move
+                base = rec.piece * PIECE_FIELDS
+                if self.anim[base + F_MOVE_SPEED + rec.axis] == 0:
+                    rec.status = ST_RUN
+            elif sub == 0x400000:                   # sleeping
+                rec.sleep -= dt
+                if rec.sleep <= 0:
+                    rec.status = ST_RUN
+            # 0x800000 (blocked in a call) is never woken here — only the child's
+            # RETURN or a signal that kills the child does that
+        if (rec.status & 0xFF000000) != ST_RUN:
+            return
+        self.exec_thread(slot)
+
+    def exec_thread(self, slot):
+        """The opcode loop. `pc` stays on the executing word until the tail advances
+        it (0x4B1BD5/0x4B1BD9), which is the pc a K line reports."""
+        rec = self.threads[slot]
+        code, anim = self.code, self.anim
+        while True:
+            pc = rec.pc
+            word = code[pc]
+            op = word & 0x100FF000
+            nxt = None                      # None = the tail's pc+1; False = stop
+
+            if op == 0x10001000:            # MOVE piece axis; pops target then speed
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                target = i32(rec.stack[rec.sp]); rec.sp -= 1
+                anim[base + F_MOVE_TARGET + axis] = target
+                speed = i32(rec.stack[rec.sp]); rec.sp -= 1
+                speed = idiv(speed, SIM_RATE)
+                if target < self.pos[piece][axis]:
+                    speed = -speed
+                anim[base + F_MOVE_SPEED + axis] = speed
+                anim[base + F_DIRTY] = 1
+                self.dirty = 1
+                nxt = pc + 3
+            elif op == 0x10002000:          # TURN piece axis; the short way round
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                target = i32(rec.stack[rec.sp]) & 0xFFFF; rec.sp -= 1
+                anim[base + F_TURN_TARGET + axis] = target
+                anim[base + F_SPIN_ACCEL + axis] = 0
+                speed = idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
+                delta = target - self.ang[piece][axis]
+                if delta == 0:
+                    speed = 0
+                elif (abs(delta) > 0x8000) != (delta < 0):
+                    speed = -speed
+                anim[base + F_TURN_SPEED + axis] = speed
+                anim[base + F_DIRTY] = 1
+                self.dirty = 1
+                nxt = pc + 3
+            elif op == 0x10003000:          # SPIN piece axis; pops speed then acceleration
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                anim[base + F_TURN_TARGET + axis] = -1     # "no target": the stepper never arrives
+                anim[base + F_SPIN_TARGET + axis] = idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
+                anim[base + F_SPIN_ACCEL + axis] = idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
+                if anim[base + F_SPIN_ACCEL + axis] == 0:
+                    anim[base + F_TURN_SPEED + axis] = anim[base + F_SPIN_TARGET + axis]
+                anim[base + F_DIRTY] = 1
+                self.dirty = 1
+                nxt = pc + 3
+            elif op == 0x10004000:          # STOP_SPIN piece axis; pops the deceleration
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                anim[base + F_SPIN_TARGET + axis] = 0
+                accel = -idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
+                anim[base + F_SPIN_ACCEL + axis] = accel
+                if accel == 0:
+                    anim[base + F_TURN_SPEED + axis] = 0
+                nxt = pc + 3                # 0x4B18F8: neither the dirty flag nor cob+0x18 is set
+            elif op in (0x10005000, 0x10006000):    # SHOW / HIDE
+                self.visible[code[pc + 1]] = (op == 0x10005000)
+                nxt = pc + 2
+            elif op in (0x10007000, 0x10008000):    # CACHE / DONT_CACHE
+                self.cached[code[pc + 1]] = (op == 0x10007000)
+                nxt = pc + 2
+            elif op == 0x10009000:          # two pops through vt+0x28 [unknown]
+                rec.sp -= 2
+                nxt = pc + 2
+            elif op == 0x1000A000:          # vt+0x2C(piece) [unknown]
+                nxt = pc + 2
+            elif op == 0x1000B000:          # MOVE_NOW piece axis
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                target = i32(rec.stack[rec.sp]); rec.sp -= 1
+                anim[base + F_MOVE_TARGET + axis] = target
+                anim[base + F_MOVE_SPEED + axis] = 0
+                self.pos[piece][axis] = target
+                nxt = pc + 3
+            elif op == 0x1000C000:          # TURN_NOW piece axis
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                angle = i32(rec.stack[rec.sp]) & 0xFFFF; rec.sp -= 1
+                anim[base + F_TURN_TARGET + axis] = angle
+                anim[base + F_SPIN_ACCEL + axis] = 0
+                anim[base + F_TURN_SPEED + axis] = 0
+                self.ang[piece][axis] = angle
+                nxt = pc + 3
+            elif op in (0x1000D000, 0x1000E000):    # SHADE / DONT_SHADE
+                self.shaded[code[pc + 1]] = (op == 0x1000D000)
+                nxt = pc + 2
+            elif op == 0x1000F000:          # EMIT_SFX piece; pops the type
+                sfx = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self.world.effect(self.tick, "emit-sfx", code[pc + 1], sfx)
+                nxt = pc + 2
+            elif op == 0x10011000:          # WAIT_FOR_TURN piece axis
+                rec.piece, rec.axis = code[pc + 1], code[pc + 2]
+                rec.status = ST_WAIT_TURN
+                rec.pc = pc + 3
+                return
+            elif op == 0x10012000:          # WAIT_FOR_MOVE piece axis
+                rec.piece, rec.axis = code[pc + 1], code[pc + 2]
+                rec.status = ST_WAIT_MOVE
+                rec.pc = pc + 3
+                return
+            elif op == 0x10013000:          # SLEEP; ms x rate / 1000, truncated
+                ms = i32(rec.stack[rec.sp]); rec.sp -= 1
+                rec.sleep = idiv(ms * SIM_RATE, 1000)
+                rec.status = ST_SLEEP
+                rec.pc = pc + 1
+                return
+            elif op == 0x10021000:          # PUSH constant / local / static
+                sel = word & 7
+                if sel == 1:
+                    value = i32(code[pc + 1])
+                elif sel == 2:
+                    value = rec.stack[code[pc + 1]]
+                elif sel == 4:
+                    value = self.statics[code[pc + 1]]
+                else:
+                    value = 0
+                rec.sp += 1
+                rec.stack[rec.sp] = value
+                nxt = pc + 2
+            elif op == 0x10022000:          # CREATE_LOCAL_VAR: the index moves, nothing is written
+                rec.sp += 1
+                rec.pc = pc + 1
+                continue
+            elif op == 0x10023000:          # POP into a local or a static
+                value = rec.stack[rec.sp]; rec.sp -= 1
+                sel = word & 7
+                if sel == 2:
+                    rec.stack[code[pc + 1]] = value
+                elif sel == 4:
+                    self.statics[code[pc + 1]] = value
+                nxt = pc + 2
+            elif op == 0x10024000:          # POP_STACK
+                rec.sp -= 1
+                rec.pc = pc + 1
+                continue
+            elif 0x10031000 <= op <= 0x10038000 or 0x10051000 <= op <= 0x1005A000:
+                self.arith(rec, op)
+            elif op == 0x10041000:          # RAND: pops hi then lo, pushes lo + rng(hi-lo+1)
+                hi = i32(rec.stack[rec.sp]); rec.sp -= 1
+                lo = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self._flush()
+                r = self.world.rand(hi - lo + 1, lo)
+                value = i32(lo + r)
+                rec.sp += 1
+                rec.stack[rec.sp] = value
+                self._emit("D\t%d\t%d\t%d\t%d" % (self.tick, self.unit, slot, value))
+            elif op == 0x10042000:          # GET_UNIT_VALUE: pops the id
+                vid = i32(rec.stack[rec.sp]); rec.sp -= 1
+                rec.sp += 1
+                rec.stack[rec.sp] = i32(self.world.get(vid, 0, 0, 0, 0))
+            elif op == 0x10044000:          # vt+0x48(x) [unknown], one pop
+                rec.stack[rec.sp] = 0
+            elif op == 0x10045000:          # vt+0x4C() [unknown], no pops
+                rec.sp += 1
+                rec.stack[rec.sp] = 0
+            elif op == 0x10043000:          # GET id, a, b, c, d
+                d = i32(rec.stack[rec.sp]); rec.sp -= 1
+                c = i32(rec.stack[rec.sp]); rec.sp -= 1
+                b = i32(rec.stack[rec.sp]); rec.sp -= 1
+                a = i32(rec.stack[rec.sp]); rec.sp -= 1
+                vid = i32(rec.stack[rec.sp]); rec.sp -= 1
+                rec.sp += 1
+                rec.stack[rec.sp] = i32(self.world.get(vid, a, b, c, d))
+            elif op == 0x10061000:          # START_SCRIPT index argc
+                idx, argc = code[pc + 1], i32(code[pc + 2])
+                child = self.alloc(idx, "C", slot, argc)
+                if child >= 0:
+                    ch = self.threads[child]
+                    for k in range(argc - 1, -1, -1):
+                        ch.stack[k] = rec.stack[rec.sp]
+                        rec.sp -= 1
+                    ch.mask = rec.mask
+                nxt = pc + 3                # a refused start leaves the argc words on our stack
+            elif op == 0x10062000:          # CALL_SCRIPT index argc
+                idx, argc = code[pc + 1], i32(code[pc + 2])
+                child = self.alloc(idx, "L", slot, argc)
+                if child >= 0:
+                    ch = self.threads[child]
+                    for k in range(argc - 1, -1, -1):
+                        ch.stack[k] = rec.stack[rec.sp]
+                        rec.sp -= 1
+                    ch.mask = rec.mask
+                rec.child = child           # written even when it is -1: nothing wakes that caller
+                rec.pc = pc + 3
+                rec.status = ST_CALL
+                return
+            elif op == 0x10063000:          # pops [pc+2] words into the runner's frame [unknown]
+                rec.sp -= i32(code[pc + 2])
+                rec.pc = pc + 3
+                continue
+            elif op == 0x10064000:          # JUMP
+                nxt = code[pc + 1]
+            elif op == 0x10065000:          # RETURN
+                self._flush()
+                sp = rec.sp
+                value = str(i32(rec.stack[sp])) if 0 <= sp < REC_WORDS else "?"
+                self._emit("R\t%d\t%d\t%d\t%s\t%s"
+                           % (self.tick, self.unit, slot, self.script_of_pc(pc), value))
+                if rec.cb is not None:
+                    rec.cb(i32(rec.stack[rec.sp]))
+                    rec.sp -= 1
+                self.free(slot)
+                self.wake_callers(slot)
+                return
+            elif op == 0x10066000:          # JUMP_NOT_EQUAL: jumps when the value is zero
+                value = rec.stack[rec.sp]; rec.sp -= 1
+                nxt = code[pc + 1] if value == 0 else pc + 2
+            elif op == 0x10067000:          # SIGNAL
+                mask = i32(rec.stack[rec.sp]); rec.sp -= 1
+                stop = False
+                for k in range(NRECORDS):
+                    other = self.threads[k]
+                    if other.status == ST_FREE or not (other.mask & mask):
+                        continue
+                    self._flush()
+                    self._emit("K\t%d\t%d\t%d\t%s\t%d"
+                               % (self.tick, self.unit, k, self.script_of_pc(other.pc), slot))
+                    self.free(k)            # its RETURN never runs, so no callback either
+                    self.wake_callers(k)
+                    if k == slot:
+                        stop = True
+                if stop:
+                    rec.pc = pc + 1
+                    return
+                nxt = pc + 1
+            elif op == 0x10068000:          # SET_SIGNAL_MASK
+                rec.mask = i32(rec.stack[rec.sp]); rec.sp -= 1
+                rec.pc = pc + 1
+                continue
+            elif op == 0x10071000:          # EXPLODE piece; pops the flags
+                flags = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self.world.effect(self.tick, "explode", code[pc + 1], flags)
+                nxt = pc + 2
+            elif op == 0x10082000:          # SET id value
+                value = i32(rec.stack[rec.sp]); rec.sp -= 1
+                vid = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self.world.set(vid, value)
+            elif op == 0x10083000:          # ATTACH_UNIT: three pops
+                a = i32(rec.stack[rec.sp]); rec.sp -= 1
+                b = i32(rec.stack[rec.sp]); rec.sp -= 1
+                c = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self.world.effect(self.tick, "attach-unit", None, (c, b, a))
+            elif op == 0x10084000:          # DROP_UNIT: one pop
+                a = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self.world.effect(self.tick, "drop-unit", None, a)
+            else:                           # 0x4B1B60: an unknown opcode kills the thread silently
+                self.free(slot)
+                return
+
+            rec.pc = (pc + 1) if nxt is None else nxt
+
+    def arith(self, rec, op):
+        """The two-operand words (0x4B1479..0x4B18AB). `b` is the top of the stack."""
+        if op == 0x10038000:                # BITWISE_NOT: neither pops nor pushes
+            rec.stack[rec.sp] = i32(~rec.stack[rec.sp])
+            return
+        if op == 0x1005A000:                # NOT (logical): the same, as a 0/1
+            rec.stack[rec.sp] = 1 if rec.stack[rec.sp] == 0 else 0
+            return
+        b = i32(rec.stack[rec.sp]); rec.sp -= 1
+        a = i32(rec.stack[rec.sp])
+        if op == 0x10031000:   v = a + b
+        elif op == 0x10032000: v = a - b
+        elif op == 0x10033000: v = a * b
+        elif op == 0x10034000: v = idiv(a, b) if b else 0   # MOD shares this handler: op & mask
+        elif op == 0x10035000: v = a & b
+        elif op == 0x10036000: v = a | b
+        elif op == 0x10037000: v = a ^ b
+        elif op == 0x10051000: v = 1 if a < b else 0
+        elif op == 0x10052000: v = 1 if a <= b else 0
+        elif op == 0x10053000: v = 1 if a > b else 0
+        elif op == 0x10054000: v = 1 if a >= b else 0
+        elif op == 0x10055000: v = 1 if a == b else 0
+        elif op == 0x10056000: v = 1 if a != b else 0
+        elif op == 0x10057000: v = 1 if (a and b) else 0
+        elif op == 0x10058000: v = 1 if (a or b) else 0     # 0x4B1829 pushes a, which is 0 there
+        elif op == 0x10059000: v = a ^ b                    # 0x4B1875: XOR is the bitwise word
+        else: v = a
+        rec.stack[rec.sp] = i32(v)
+
+    # -- the animation stepper --------------------------------------------
+    def step_anim(self, dt):
+        """0x4B1C00. Returns at once on dt == 0 or with nothing animating; else clears
+        each piece's flag, advances its three axes, and re-sets the flag if any is
+        still travelling — which is exactly what wait-for-turn/-move test."""
+        if dt == 0 or not self.dirty:
+            return
+        self.dirty = 0
+        anim = self.anim
+        for piece in range(len(self.pos)):
+            base = piece * PIECE_FIELDS
+            if anim[base + F_DIRTY] == 0:
+                continue
+            anim[base + F_DIRTY] = 0
+            for axis in range(3):
+                speed = anim[base + F_MOVE_SPEED + axis]
+                if speed:
+                    target = anim[base + F_MOVE_TARGET + axis]
+                    value = self.pos[piece][axis] + dt * speed
+                    if (speed > 0 and value >= target) or (speed < 0 and value <= target):
+                        value = target
+                        anim[base + F_MOVE_SPEED + axis] = 0
+                    else:
+                        anim[base + F_DIRTY] = 1
+                    self.pos[piece][axis] = i32(value)
+                accel = anim[base + F_SPIN_ACCEL + axis]
+                if accel:
+                    anim[base + F_TURN_SPEED + axis] += accel
+                    target = anim[base + F_SPIN_TARGET + axis]
+                    speed = anim[base + F_TURN_SPEED + axis]
+                    if (accel > 0 and speed >= target) or (accel < 0 and speed <= target):
+                        anim[base + F_TURN_SPEED + axis] = target
+                        anim[base + F_SPIN_ACCEL + axis] = 0
+                speed = anim[base + F_TURN_SPEED + axis]
+                if speed == 0:
+                    continue
+                cur = self.ang[piece][axis]
+                step = dt * speed
+                value = cur + step
+                target = anim[base + F_TURN_TARGET + axis]
+                if target == -1:                        # a spin: it never arrives
+                    anim[base + F_DIRTY] = 1
+                elif speed > 0:
+                    left = (target - cur + 0x10000) & 0xFFFF
+                    if left > step:
+                        anim[base + F_DIRTY] = 1
+                    else:
+                        value = target
+                        anim[base + F_TURN_SPEED + axis] = 0
+                else:
+                    left = (cur - target + 0x10000) & 0xFFFF
+                    if left > -step:
+                        anim[base + F_DIRTY] = 1
+                    else:
+                        value = target
+                        anim[base + F_TURN_SPEED + axis] = 0
+                self.ang[piece][axis] = value & 0xFFFF
+            if anim[base + F_DIRTY]:
+                self.dirty = 1
+
+
+# --------------------------------------------------------------------------- the director
+
+# How the engine reaches each script it calls by name, read off every call site of
+# 0x4B0940 / 0x4B0A70 / 0x4B0BC0 (exe-reverse-engineering.md §"The COB engine"):
+#
+#   "query"  COBEngine_QueryScript 0x4B0BC0 -> 0x4B0C40: four words in, sp = 3, runs
+#            inside the call, the four words come back out
+#   "now"    0x4B0940 with runNow = 1 (no argument words at all)
+#   "later"  runNow = 0: the thread takes its first step at the next DoScriptsNow
+#
+# `phase` is where in the sim frame the call sits relative to *this* unit's own
+# DoScriptsNow: "pre" for the unit's own tick (its movement, state and weapon
+# updates, AutoAim last), "post" for what another unit's code does to it —
+# damage, death and targeting, which run in the attacker's tick.
+ENGINE_STARTS = {
+    # the unit's own update
+    "create":           ("now",   "pre"),    # 0x485DE6, runNow 1
+    # the movement pass 0x43DD20 -> 0x43DA70/0x43DB50 is called at 0x48AFAA, *after*
+    # DoScriptsNow at 0x48ADEB, so everything it starts lands after the unit's own tick
+    "startmoving":      ("now",   "post"),   # 0x43DAF2, runNow 1
+    "stopmoving":       ("now",   "post"),   # 0x43DAF2, runNow 1
+    "moverate1":        ("now",   "post"),   # 0x43DB27, runNow 1
+    "moverate2":        ("now",   "post"),
+    "moverate3":        ("now",   "post"),
+    "setsfxoccupy":     ("now",   "post"),   # 0x43DBE8, runNow 1, argc 1
+    "setspeed":         ("later", "pre"),    # 0x437902, runNow 0, argc 1
+    "setdirection":     ("later", "pre"),    # 0x43795E/0x43798A, runNow 0, argc 1
+    # UNITS_SetStateMask 0x48B0A0 is not in the per-unit tick function (which ends at
+    # 0x48B080), and the fighter, gunship and bomber fixtures all show its Activate
+    # landing after that unit's DoScriptsNow — it first steps the tick after
+    "activate":         ("later", "post"),   # 0x48B106/0x48B12B, runNow 0
+    "deactivate":       ("later", "post"),   # 0x48B12B/0x48B14E, runNow 0
+    "startbuilding":    ("later", "post"),   # 0x48B14E/0x48B169, runNow 0
+    "stopbuilding":     ("later", "post"),   # 0x48B169, runNow 0
+    "setmaxreloadtime": ("later", "pre"),    # 0x49E186 UNITS_StartWeaponsScripts, runNow 0, argc 1
+    "endtransport":     ("later", "pre"),
+    # the weapons, all in the unit's own tick ahead of DoScriptsNow
+    "aimprimary":       ("later", "pre"),    # 0x49E31C / 0x49E386 AutoAim, runNow 0, argc 2
+    "aimsecondary":     ("later", "pre"),
+    "aimtertiary":      ("later", "pre"),
+    "fireprimary":      ("later", "pre"),    # 0x49CB94 etc. through 0x4B0940, runNow 0
+    "firesecondary":    ("later", "pre"),
+    "firetertiary":     ("later", "pre"),
+    "rockunit":         ("later", "pre"),    # 0x49CBEB / 0x499C5C, runNow 0, argc 2 — the recoil
+    # the queries (0x4B0C40): four words in and out, synchronous
+    "queryprimary":     ("query", "pre"),    # 0x43E227/0x43E291 UNITS_QueryWeaponPosition
+    "querysecondary":   ("query", "pre"),
+    "querytertiary":    ("query", "pre"),
+    "aimfromprimary":   ("query", "pre"),    # 0x43E32C/0x43E370
+    "aimfromsecondary": ("query", "pre"),
+    "aimfromtertiary":  ("query", "pre"),
+    "querynanopiece":   ("query", "pre"),    # 0x43E427 UNITS_CallAimScripts
+    "querybuildinfo":   ("query", "pre"),    # 0x4027FB
+    "querytransport":   ("query", "pre"),    # 0x4113B1
+    "querylandingpad":  ("query", "pre"),    # 0x41189C and four more
+    # what other units do to this one, after its own tick
+    "sweetspot":        ("query", "post"),   # 0x43E3E4, the shooter's aim
+    "killed":           ("query", "post"),   # 0x4865C3 Send_UnitDeath
+    "hitbyweapon":      ("later", "post"),   # 0x489F43, runNow 0, argc 2
+    "takedamage":       ("later", "post"),   # 0x489F8E, runNow 0, argc 1
+    "targetcleared":    ("later", "post"),   # 0x489898 and three more
+}
+
+TRACE_HEADER = ("# tagpu_cobtrace v1\tfilter=%s\tcolumns: S tick unit type script slot source args… | "
+                "R tick unit slot script value | X tick unit script source | K tick unit slot script by | "
+                "D tick unit slot value")
+
+
+class TraceLine:
+    __slots__ = ("kind", "tick", "unit", "fields", "raw")
+
+    def __init__(self, raw):
+        self.raw = raw
+        f = raw.split("\t")
+        self.kind = f[0]
+        self.tick = int(f[1])
+        self.unit = int(f[2])
+        self.fields = f
+
+
+def read_cobtrace(path):
+    """The oracle's log: the header, then S/R/X/K/D lines in event order."""
+    header, lines = None, []
+    # the hook writes UTF-8 (its header carries a literal "…"); surrogateescape keeps
+    # the round trip byte-exact whatever the log actually holds
+    for raw in Path(path).read_text(encoding="utf-8", errors="surrogateescape").splitlines():
+        if not raw.strip():
+            continue
+        if raw.startswith("#"):
+            if header is None:
+                header = raw
+            continue
+        lines.append(TraceLine(raw))
+    return header, lines
+
+
+class Event:
+    """One engine-issued start, as the replay will re-issue it."""
+    __slots__ = ("tick", "script", "args", "kind", "phase")
+
+    def __init__(self, tick, script, args, kind, phase):
+        self.tick, self.script, self.args = tick, script, args
+        self.kind, self.phase = kind, phase
+
+
+def events_from_trace(lines):
+    """Every `S … E` line becomes a replay event. Its `kind` and `phase` come from
+    the call-site table above; an argument-less line took the no-argument entry
+    0x4B0940, which writes nothing onto the record at all."""
+    out, unknown = [], set()
+    for ln in lines:
+        if ln.kind != "S" or ln.fields[6] != "E":
+            continue
+        script = ln.fields[4]
+        args = [int(x) for x in ln.fields[7].split(",")] if len(ln.fields) > 7 and ln.fields[7] else []
+        kind, phase = ENGINE_STARTS.get(script.lower(), (None, None))
+        if kind is None:
+            unknown.add(script)
+            kind, phase = ("query" if len(args) == 4 else "later"), "pre"
+        out.append(Event(ln.tick, script, args, kind, phase))
+    return out, sorted(unknown)
+
+
+def replay(cob, lines, world_values=None, type_name="?", unit=1, until=None, snap=(),
+           visible=None):
+    """Run the VM through the fixture's engine events and return the lines it writes.
+
+    The replay supplies exactly what the trace cannot: which engine entry issued each
+    start (the table above), the `rand` results (the D lines), and the unit-state
+    values the scripts read (`get`). Everything else — slots, ticks, the call and
+    return structure, the signal kills, the wait releases — is the VM's own answer."""
+    events, unknown = events_from_trace(lines)
+    if not events:
+        raise TacobError("no engine starts in the trace: nothing to replay")
+    rands = [int(ln.fields[4]) for ln in lines if ln.kind == "D"]
+    # the D line is `lo + r`; the lo is the script's, so the VM asks for r and the
+    # world hands back what the engine's RNG gave, in draw order
+    out = []
+    world = ReplayWorld(world_values, rands)
+    vm = CobVM(cob, world, out.append, unit=unit, type_name=type_name, visible=visible)
+    by_tick = {}
+    for ev in events:
+        by_tick.setdefault(ev.tick, []).append(ev)
+    create_tick = events[0].tick
+    last = until if until is not None else max(ln.tick for ln in lines)
+    snap, snaps = set(snap), {}
+    for tick in range(create_tick, last + 1):
+        vm.tick = world.tick = tick
+        here = by_tick.get(tick, ())
+        for ev in here:
+            if ev.phase == "pre":
+                dispatch(vm, ev)
+        if tick > create_tick:
+            vm.do_scripts_now(1)
+        for ev in here:
+            if ev.phase == "post":
+                dispatch(vm, ev)
+        if tick in snap:
+            snaps[tick] = ([list(p) for p in vm.pos], [list(a) for a in vm.ang],
+                           list(vm.visible))
+    vm._flush()
+    return vm, out, unknown, snaps
+
+
+def dispatch(vm, ev):
+    if ev.kind == "query":
+        vm.query_script(ev.script, ev.args)
+    elif ev.kind == "now":
+        vm.start_script(ev.script, run_now=True, args=ev.args, argwords=bool(ev.args))
+    else:
+        cb = AimCallback() if ev.script.lower().startswith("aim") else None
+        vm.start_script(ev.script, run_now=False, args=ev.args, argwords=bool(ev.args), cb=cb)
+
+
+class ReplayWorld(UnitWorld):
+    """`get` over a timeline: {value id: [(tick, value), …]}. The cobtrace log carries
+    no `get` traffic, so these are the replay's inputs — see the note beside the
+    fixture's replay.json for where each timeline came from."""
+
+    def __init__(self, timelines=None, rands=None):
+        UnitWorld.__init__(self, rands=rands)
+        self.timelines = {int(k): sorted(v) for k, v in (timelines or {}).items()}
+        self.tick = 0
+
+    def rand(self, n, lo):
+        """What the engine's RNG gave, in draw order — the D lines record `lo + r`."""
+        if self.draws < len(self.rands):
+            r = self.rands[self.draws] - lo
+        else:
+            r = 0
+        self.draws += 1
+        return 0 if n < 2 else r
+
+    def get(self, vid, a, b, c, d):
+        tl = self.timelines.get(vid)
+        if tl:
+            value = tl[0][1]
+            for t, v in tl:
+                if t <= self.tick:
+                    value = v
+            return value
+        return UnitWorld.get(self, vid, a, b, c, d)
+
+
+# --------------------------------------------------------------------------- the gate
+
+FIXTURES = Path(__file__).resolve().parent.parent / "research/notes/evidence/cobtrace"
+CLASSES = ["kbot", "tank", "building", "death", "fighter", "gunship", "bomber", "ship", "sub"]
+
+
+def read_posedump(path):
+    """The pose oracle's dump: (tick, unit, [(name, hidden, move, turn)])."""
+    tick = unit = None
+    pieces = []
+    for line in Path(path).read_text(encoding="latin-1").splitlines():
+        line = line.strip()
+        if line.startswith("posedump: tick="):
+            for part in line[len("posedump: "):].split():
+                k, _, v = part.partition("=")
+                if k == "tick": tick = int(v)
+                elif k == "idx": unit = int(v)
+        m = re.match(r"posedump: p(\d+) (\S+)( HIDDEN)? off=\(([-\d,]+)\) move=\(([-\d,]+)\) "
+                     r"turn=\((\d+),(\d+),(\d+)\)", line)
+        if m:
+            pieces.append((int(m.group(1)), m.group(2), bool(m.group(3)),
+                           [int(x) for x in m.group(5).split(",")],
+                           [int(m.group(6)), int(m.group(7)), int(m.group(8))]))
+    return tick, unit, pieces
+
+
+def piece_visibility(unit, pieces):
+    """The pose the model builder hands the VM: `0x45AF1B` clears the visible bit of
+    a piece whose 3DO node carries fewer than three vertices. Measured against all
+    eight fixtures with a posedump — every HIDDEN piece is either that or one the
+    unit's own `Create` hides."""
+    ta3do = load_ta3do()
+    assets = ta3do.Assets(None)
+    try:
+        _label, blob = ta3do.resolve_model(assets, unit)
+    except Exception:
+        return None
+    counts = {p.name.lower(): len(p.vertices) for p, _ in ta3do.parse_3do(blob).walk()}
+    return [counts.get(name.lower(), 3) >= 3 for name in pieces]
+
+
+def replay_inputs(cls):
+    """The per-class world timelines, and where each came from (replay.json)."""
+    path = FIXTURES / "replay.json"
+    if not path.is_file():
+        return {}
+    return json.loads(path.read_text()).get(cls, {})
+
+
+def run_class(cls, pose=True):
+    """Replay one fixture and diff both oracles. Returns a report dict."""
+    folder = FIXTURES / cls
+    header, lines = read_cobtrace(folder / "cobtrace.log")
+    if not lines:
+        raise TacobError(f"{cls}: the fixture's cobtrace.log has no lines")
+    type_name = lines[0].fields[3] if lines[0].kind == "S" else "?"
+    unit = lines[0].unit
+    spec = replay_inputs(cls)
+    blob, _ = read_cob_source(type_name.lower())
+    cob = read_cob(blob)
+    visible = piece_visibility(type_name.lower(), cob.pieces)
+    pose_tick, pose_unit, pieces = (None, None, [])
+    if pose and (folder / "posedump.txt").is_file():
+        pose_tick, pose_unit, pieces = read_posedump(folder / "posedump.txt")
+    if pose_unit is not None and pose_unit != unit:
+        # the death fixture's dump is of another unit: its Peewee was gone by then
+        report_note = f"posedump is unit idx={pose_unit}, the trace is idx={unit} — not compared"
+        pieces, pose_tick = [], None
+    else:
+        report_note = None
+    until = max([ln.tick for ln in lines] + ([pose_tick] if pose_tick else []))
+    timelines = {int(k): [tuple(p) for p in v] for k, v in (spec.get("get") or {}).items()}
+    # the pose is sampled on the render thread, so the dump's tick may name the sim
+    # tick before or after the pass that filled it (tagpu_native.c, the posedump header)
+    want_ticks = [pose_tick + d for d in (0, -1, 1)] if pose_tick else []
+    vm, out, unknown, snaps = replay(cob, lines, timelines, type_name, unit,
+                                     until=until, snap=want_ticks, visible=visible)
+    out.insert(0, header if header else TRACE_HEADER % (",%s," % type_name))
+    report = {"class": cls, "unit": type_name, "lines": len(lines), "unknown_starts": unknown}
+    if report_note:
+        report["pose_note"] = report_note
+
+    end = max(ln.tick for ln in lines)
+    # nothing is masked: `Killed`'s uninitialised second argument (the design note
+    # expected to mask it) is one of the E line's own words, so it replays verbatim
+    want = [ln.raw for ln in lines]
+    got = [l for l in out[1:] if int(l.split("\t")[1]) <= end]
+    report["trace_diff"] = first_diff(want, got)
+    report["trace_ok"] = report["trace_diff"] is None and len(want) == len(got)
+    report["want_lines"], report["got_lines"] = len(want), len(got)
+    out = out[:1] + got            # what `--trace-out` writes: the fixture's own span
+
+    if pieces:
+        best, best_tick = None, None
+        for t in want_ticks:
+            if t not in snaps:
+                continue
+            pos, ang, vis = snaps[t]
+            bad = []
+            for idx, name, hidden, move, turn in pieces:
+                if idx >= len(pos):
+                    continue
+                if pos[idx] != move or ang[idx] != turn or (not vis[idx]) != hidden:
+                    bad.append({"piece": idx, "name": name,
+                                "want": {"move": move, "turn": turn, "hidden": hidden},
+                                "got": {"move": pos[idx], "turn": ang[idx],
+                                        "hidden": not vis[idx]}})
+            if best is None or len(bad) < len(best):
+                best, best_tick = bad, t
+        report["pose_tick"] = pose_tick
+        report["pose_matched_tick"] = best_tick
+        report["pose_pieces"] = len(pieces)
+        report["pose_bad"] = best or []
+        report["pose_ok"] = not best
+    return report, vm, out
+
+
+def first_diff(want, got):
+    for i in range(max(len(want), len(got))):
+        w = want[i] if i < len(want) else "<end>"
+        g = got[i] if i < len(got) else "<end>"
+        if w != g:
+            return {"line": i + 1, "want": w, "got": g}
+    return None
+
+
+# The one engine value the fixtures' scripts branch on that the oracle does not
+# carry. `SmokeUnit` (the shipped snippet every stock unit starts) draws
+# `rand(1, 66)` only while `get HEALTH` is under 66 and then sleeps
+# `healthpercent * 50` ms, so the gap between two of its draws names the health it
+# read at the first of them: ticks = trunc(h * 50 * SIM_RATE / 1000). Deriving the
+# timeline that way makes those D lines' *ticks* an input rather than a prediction —
+# see research/notes/tacob-design.md §"What the replay supplies". Nothing else in
+# any of the nine logs depends on it: the first draw's tick is still predicted (health
+# starts at 100), and the fighter's draws are `MoveRate2`'s `rand(1, 10)`, not health.
+
+def smoke_slots(lines):
+    """{slot: True} for the records a `SmokeUnit` is running, as the log walks by."""
+    owner, out = {}, []
+    for ln in lines:
+        if ln.kind == "S":
+            owner[int(ln.fields[5])] = ln.fields[4]
+        elif ln.kind in ("R", "K"):
+            owner.pop(int(ln.fields[3]), None)
+        elif ln.kind == "D":
+            out.append((ln.tick, owner.get(int(ln.fields[3]))))
+    return [tick for tick, script in out if script == "SmokeUnit"]
+
+
+def fit_health(lines):
+    """[(tick, health)] — 100 until the first SmokeUnit draw, then one value per gap."""
+    draws = smoke_slots(lines)
+    if not draws:
+        return [], []
+    timeline, gaps = [(0, 100)], []
+    for i, tick in enumerate(draws[:-1]):
+        gap = draws[i + 1] - tick
+        found = [h for h in range(1, 66) if idiv(max(200, h * 50) * SIM_RATE, 1000) == gap]
+        if len(found) != 1:
+            gaps.append((tick, gap, found))
+            continue
+        timeline.append((tick, found[0]))
+    if len(timeline) > 1:                       # the last draw has no gap to name it
+        timeline.append((draws[-1], timeline[-1][1]))
+    return timeline, gaps
+
+
+def cmd_fit(args):
+    """Write the world timelines the replay needs, derived from the fixtures."""
+    path = FIXTURES / "replay.json"
+    data = json.loads(path.read_text()) if path.is_file() else {}
+    for cls in (CLASSES if args.all else args.classes):
+        _header, lines = read_cobtrace(FIXTURES / cls / "cobtrace.log")
+        timeline, gaps = fit_health(lines)
+        entry = {"note": "get timelines the cobtrace log cannot carry; HEALTH is derived "
+                         "from SmokeUnit's rand spacing (tacob fit-world)"}
+        if timeline:
+            entry["get"] = {str(VALUE_IDS["HEALTH"]): [list(x) for x in timeline]}
+            data[cls] = entry
+        else:
+            data.pop(cls, None)
+        print(f"{cls}: {len(timeline)} HEALTH samples"
+              + (f", {len(gaps)} gaps with no single health: {gaps}" if gaps else ""))
+    path.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+    print(f"wrote {path}")
+
+
+def cmd_run(args):
+    classes = CLASSES if args.all else (args.classes or [])
+    if not classes:
+        raise TacobError("nothing to run: give a class name or --all")
+    reports = []
+    failed = False
+    for cls in classes:
+        report, vm, out = run_class(cls, pose=not args.no_pose)
+        reports.append(report)
+        if args.trace_out:
+            Path(args.trace_out).write_text("\n".join(out) + "\n",
+                                            encoding="utf-8", errors="surrogateescape")
+        elif args.print_trace:
+            sys.stdout.write("\n".join(out) + "\n")
+        ok = report["trace_ok"] and report.get("pose_ok", True)
+        failed = failed or not ok
+        if not args.json:
+            d = report["trace_diff"]
+            print(f"{'ok  ' if ok else 'FAIL'} {cls:<9} {report['unit']:<9} "
+                  f"trace {report['got_lines']}/{report['want_lines']}"
+                  + (f"  pose {report['pose_pieces'] - len(report['pose_bad'])}/{report['pose_pieces']}"
+                     if "pose_pieces" in report else ""))
+            if d:
+                print(f"       line {d['line']}\n         want {d['want']}\n         got  {d['got']}")
+            for bad in report.get("pose_bad", [])[:4]:
+                print(f"       p{bad['piece']} {bad['name']}: want {bad['want']} got {bad['got']}")
+            if report["unknown_starts"]:
+                print(f"       engine starts not in the call-site table: "
+                      f"{', '.join(report['unknown_starts'])}")
+    if args.json:
+        print(json.dumps(reports, indent=1))
+    if failed:
+        raise SystemExit(1)
+
+
 # --------------------------------------------------------------------------- game assets
 
 def load_ta3do():
@@ -1773,6 +2824,21 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p.add_argument("--gamedir")
     p.set_defaults(fn=cmd_roundtrip)
+
+    p = sub.add_parser("run", help="replay a landing-2 fixture on the VM and diff both oracles")
+    p.add_argument("classes", nargs="*", help="kbot, tank, building, death, fighter, gunship, "
+                                              "bomber, ship, sub")
+    p.add_argument("--all", action="store_true", help="every fixture — the landing-3 gate")
+    p.add_argument("--print-trace", action="store_true", help="write the replayed lines to stdout")
+    p.add_argument("--trace-out", help="write the replayed lines to this file")
+    p.add_argument("--no-pose", action="store_true", help="skip the posedump comparison")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_run)
+
+    p = sub.add_parser("fit-world", help="derive replay.json's get timelines from the fixtures")
+    p.add_argument("classes", nargs="*")
+    p.add_argument("--all", action="store_true")
+    p.set_defaults(fn=cmd_fit)
 
     args = ap.parse_args(argv)
     try:
