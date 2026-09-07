@@ -2415,7 +2415,10 @@ Read off each caller listed above; the name is the string it pushes, and the arg
 `0x4B0A70` is `name, cb, runNow, argc, a0..a3` (pushed in reverse). **`0x4B0B00` writes
 `a0..a3` into `stack[0..3]` whatever `argc` says and only then sets `sp = argc−1`**
 (`0x4B0B37..0x4B0B7B`), so an engine start does *not* leave the record's stale words under the
-arguments it did not pass — a script start (the START opcode) does.
+arguments it did not pass — a script start (the START opcode `0x4B18EB` reads the parent's mask
+and copies only `argc` words) does. Its run-now tail is `0x4B0B86`: **only when
+`cob+0x53C != 0`** does it run the eight records with `dt = 0`, and the stepper `0x4B1C00(cob, 0)`
+runs either way (and returns at once on `dt == 0`).
 
 | Script | Site | Entry | `runNow` | `argc` |
 |---|---|---|---|---|
@@ -2468,6 +2471,15 @@ nor push — they rewrite the top of the stack in place (`0x4B159E`, `0x4B1896`)
 (two pops → `vt+0x28`), `0x1000A000` (`vt+0x2C`), `0x10044000` (one pop → `vt+0x48`),
 `0x10045000` (no pops → `vt+0x4C`) and `0x10063000` (pops `[pc+2]` words into the runner's own
 frame) are handled but unused by the stock corpus and their vtable slots are unread.
+
+**Handler bodies the VM had to match** (the table above lists each opcode's `cmp`; these are the
+bodies whose stack effect is not obvious from it): the two-operand arithmetic and comparison
+words run `0x4B1479..0x4B18AB`, popping `b` then reading `a` in place and writing the result over
+`a`; the logical `OR 0x4B1829` pushes `a` when both sides are zero (so its result is 0/1 anyway)
+and `XOR 0x4B1875` is the plain bitwise word; the logical `NOT` body ends at `0x4B18AB`. Waking a
+blocked caller is the same eight-record scan in two places — `0x4B19FF` after a `RETURN` and
+`0x4B1AB1` after a `signal` kill — each testing `status & 0xFFF00000 == 0x2800000` and
+`+0x18 == the freed slot`.
 
 ### The posed model the opcodes write into — `0x45A950` and `0x45AEC0`
 
