@@ -764,12 +764,13 @@ def feature_object(defs, feat):
 
 
 def unit_facts(assets, key, cache):
-    """The engine's silhouette-shadow gate and the cruise altitude, from the FBI.
+    """The engine's shadow branch, its gate and the cruise altitude, from the FBI.
 
-    `shadows-cloak.md` §3: a completed unit gets the silhouette drop shadow
-    unless its FBI says `noshadow`, `canhover` or `floater`; a STRUCTURE takes
-    the cached slant projection instead, which the lab does not draw at all --
-    so a building gets no shadow here and that is a stated gap, not a claim.
+    `shadows-cloak.md` §3: a completed MOBILE unit gets the silhouette drop
+    shadow unless its FBI says `noshadow`, `canhover` or `floater`; a STRUCTURE
+    (`slant`) takes the engine's cached slant projection, gated by `noshadow`
+    alone -- that branch tests neither `canhover` nor `floater` -- except a
+    `digger` structure, which the engine sends down the silhouette branch.
     `BMcode` is TA's own mobile flag and stands in for the engine's runtime
     `0x20000000` structure bit: checked on the fixtures, ARMSOLAR and ARMMEX
     read 0, ARMCOM and ARMPW read 1.
@@ -796,8 +797,10 @@ def unit_facts(assets, key, cache):
         cruise = int(float((fbi.get("cruisealt", "0") or "0").strip()))
     except ValueError:
         cruise = 0
-    fact = {"shadow": bool(mobile and not flag("noshadow")
-                           and not flag("canhover") and not flag("floater")),
+    slant = not mobile and not flag("digger")
+    fact = {"shadow": bool(not flag("noshadow") and
+                           (slant or (not flag("canhover") and not flag("floater")))),
+            "slant": slant,
             "agl": cruise if flag("canfly") else 0}
     cache[key] = fact
     return fact
@@ -832,7 +835,10 @@ def build_units(scenario, assets, out, restore=None, defs=None):
         except Exception:
             continue
         hidden = {h.lower() for h in ta3do.script_hidden(assets, label) or ()}
-        models[name] = (label, root, hidden)
+        # the pieces the script marks dont-cache at Create: visible, but they
+        # cast no structure shadow (the engine's flag bit1, `slant` below)
+        uncached = {h.lower() for h in ta3do.script_dontcache(assets, label) or ()}
+        models[name] = (label, root, hidden, uncached)
         for key, frame in ta3do.model_textures(root, bank).items():
             frames.setdefault(key, frame)
 
@@ -856,14 +862,35 @@ def build_units(scenario, assets, out, restore=None, defs=None):
                            out / "units/atlas.rgba.bin", UNIT_PAD)
 
     meshes = {}
-    for name, (label, root, hidden) in models.items():
+    for name, (label, root, hidden, uncached) in models.items():
         verts = []
-        stats = {"pieces": 0, "faces": 0, "tris": 0, "textured": 0, "flat": 0}
+        slant = []
+        stats = {"pieces": 0, "faces": 0, "tris": 0, "textured": 0, "flat": 0,
+                 "slantTris": 0}
 
         def emit(piece, ox, oy, oz):
             px, py, pz = ox + piece.offset[0], oy + piece.offset[1], oz + piece.offset[2]
             if piece.name.lower() not in hidden:
                 stats["pieces"] += 1
+                # THE STRUCTURE SHADOW'S CASTERS, by the engine's own raster
+                # (`0x45A610`, shadows-cloak.md 3): a piece with its visible and
+                # cached bits, EVERY face of it -- no material, no quad rule,
+                # no texture key -- and only face 0 skipped, when the piece
+                # has a selection primitive. Model space; the viewer projects
+                # (x + y/4, -z - y/4) with the engine's integer snapping.
+                if piece.name.lower() not in uncached:
+                    for i, prim in enumerate(piece.primitives):
+                        if (i == 0 and piece.sel_prim != -1) or len(prim.indices) < 3:
+                            continue
+                        n = len(prim.indices)
+                        for k in range(1, n - 1):
+                            slots = (0, k, k + 1)
+                            if any(prim.indices[s] >= len(piece.vertices) for s in slots):
+                                continue
+                            for slot in slots:
+                                vx, vy, vz = piece.vertices[prim.indices[slot]]
+                                slant.extend((px + vx, py + vy, pz + vz))
+                            stats["slantTris"] += 1
                 for prim in piece.primitives:
                     if prim.is_selection or len(prim.indices) < 3:
                         continue
@@ -900,7 +927,9 @@ def build_units(scenario, assets, out, restore=None, defs=None):
         emit(root, 0.0, 0.0, 0.0)
         blob = struct.pack(f"<{len(verts)}f", *verts)
         (out / f"units/{name}.bin").write_bytes(blob)
+        (out / f"units/{name}.slant.bin").write_bytes(struct.pack(f"<{len(slant)}f", *slant))
         meshes[name] = {"file": f"units/{name}.bin", "verts": len(verts) // UNIT_VSTRIDE,
+                        "slant": {"file": f"units/{name}.slant.bin", "verts": len(slant) // 3},
                         "label": label, "stats": stats}
 
     instances = []
@@ -912,7 +941,8 @@ def build_units(scenario, assets, out, restore=None, defs=None):
         f = unit_facts(assets, key, fbi_cache)
         inst = {"type": key, "pos": [int(unit["pos"][0]), int(unit["pos"][1])],
                 "facing": float(unit.get("facing", 0) or 0),
-                "id": unit.get("id"), "shadow": f["shadow"], "agl": f["agl"]}
+                "id": unit.get("id"), "shadow": f["shadow"], "slant": f["slant"],
+                "agl": f["agl"]}
         # a scenario `height` is an ABSOLUTE altitude and the lab snaps to the
         # terrain it has, so hand the number over and let the viewer subtract
         # the ground under the unit -- the builder never reads the height map
@@ -929,7 +959,7 @@ def build_units(scenario, assets, out, restore=None, defs=None):
         instances.append({"type": obj, "pos": [int(feat["pos"][0]), int(feat["pos"][1])],
                           "facing": float(feat.get("facing", 0) or 0),
                           "id": feat.get("id"), "feature": feat.get("type"),
-                          "shadow": False, "agl": 0})
+                          "shadow": False, "slant": False, "agl": 0})
     # every frame's own rect (inside its pad) and colour key, so `tascene
     # unitdiff` can find the DLL's dumped twin entries in this atlas
     frame_rects = {key: {"x": x, "y": y, "w": frames[key].width, "h": frames[key].height,

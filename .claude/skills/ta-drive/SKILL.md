@@ -609,7 +609,14 @@ numbers the length rule used. **`tacli arm <i> shadowdump.on`** writes the map o
 `tagpu_shadow.pgm` and removes itself (`shadow: dumped …` carries the matrix). **A shadow A/B
 against the lab needs the pointer parked off the units**: `scenario load`'s `center_on` leaves
 it ON the anchor, the engine draws its crosshair there, and those pixels are identical in an
-on/off pair, so `tacli keys <i> mouse:200,700` first. `terr: height grid WxH uploaded …` is the terrain's height
+on/off pair, so `tacli keys <i> mouse:200,700` first. **The engine's own Shadows toggle is the
+parity oracle for a Classic shadow**: `tacli keys <i> tab`, `ui <i> click PREFS`, `ui <i> click
+VISUALS`, `ui <i> set BSHADOWS 0` (or `1`), `ui <i> click PREV`, `ui <i> click OK`. It clears and
+sets BOTH option bits (`main+0x37F06` reads `0x3F` on, `0x23` off) — **read the word back with
+`tacli peek <i> '*0x511DE8+0x37F06:2'` before the shot**: one run of those same clicks on a stock
+instance reported `stage 0` and changed nothing, and its on/off pair differed only by the drill
+arms. A shadow's pixels are then `glshot` on minus `glshot` off, counted in 200×140 around each
+roster screen position (the G13k / G14i numbers). `terr: height grid WxH uploaded …` is the terrain's height
 texture, once per map; without it (an unreadable grid, logged and retried every 60 frames)
 Classic++ terrain draws unlit — still restored, still the RGB grey rule, no lambert.
 **The level-ground test** is a sun on/off pair of `glshot`s with `feat.on=passive` (so the

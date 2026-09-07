@@ -153,15 +153,34 @@ pack/
 A **unit instance** in `scene.json` carries `type`, `pos`, `facing`, `id`, and since
 2026-09-04 three more read from the unit's FBI at build time (`tascene`'s `unit_facts`):
 
-- **`shadow`** — does it get the Classic silhouette? Defaults to TRUE when the FBI cannot be
-  read or has no `BMcode` (every stock unit has one), so a modded structure with a missing
-  field would get a silhouette where the engine gives it the slant — the safe default for the
-  common case, wrong for a rare one, and stated rather than hidden. `BMcode` gives
-  mobile-vs-structure and
-  stands in for the engine's runtime `0x20000000` structure bit (checked on the fixtures:
-  ARMSOLAR and ARMMEX read 0, ARMCOM and ARMPW read 1), then `noshadow` / `canhover` /
-  `floater` as `shadows-cloak.md` §3 gates it. A 3DO **feature** always reads false: a wreck
-  keeps the engine's own `FShadow` frames and the native pass draws it none either.
+- **`shadow`** — does the engine draw it a shadow at all: `noshadow` clears it for everyone,
+  `canhover` / `floater` for a mobile unit only (the structure branch never tests them —
+  `shadows-cloak.md` §3). Defaults to TRUE when the FBI cannot be read or has no `BMcode`
+  (every stock unit has one), so a modded structure with a missing field would get a
+  silhouette where the engine gives it the slant — the safe default for the common case,
+  wrong for a rare one, and stated rather than hidden. A 3DO **feature** always reads false: a
+  wreck keeps the engine's own `FShadow` frames and the native pass draws it none either.
+- **`slant`** (since G14i, 2026-09-07) — a structure: the engine's cached slant projection in
+  place of the silhouette. `BMcode` gives mobile-vs-structure and stands in for the engine's
+  runtime `0x20000000` structure bit (checked on the fixtures: ARMSOLAR and ARMMEX read 0,
+  ARMCOM and ARMPW read 1); a `digger` structure takes the silhouette, as the engine sends it
+  down that branch. The casters are a second mesh per model, `units/<name>.slant.bin`
+  (model-space x,y,z triangles, `meshes[].slant`): every face of every piece the script
+  neither hides nor marks `dont-cache` at Create (`ta3do.script_dontcache` — CORWIN's `cradle`
+  and `fan`, ARMMEX's `arms`), whatever its material, face 0 skipped when the piece has a
+  selection primitive — the engine raster's own rules (`0x45A610`,
+  [exe-reverse-engineering](exe-reverse-engineering.html) §"The slant builders"). The viewer
+  projects them `(x + y/4, −z − y/4)` from the yawed coordinates snapped to whole units the
+  engine's way, flat (the unit shader's flat path, so no texture key), appends the range after
+  the body's, and `silhouettes()` blends it once per pixel through the stencil at +5 px as it
+  does a mobile unit's body; `drawUnits` draws the bodies range by range so the casters never
+  render as geometry. A pack built before G14i carries no caster mesh and its structures draw
+  no shadow, as before. Measured on `scenarios/shadow-lab.json` (`shadow-struct` plus an ARMLAB on the shore), the lab's own
+  `unitshadow=0|1` pair against the game's Shadows toggle at the same eye: the Kbot lab's rim is
+  the engine's three strips, 692 px against the game's 1094 and the stock engine's 997 (the
+  lab's rest-pose body is 2 px narrower on the right and shorter at the top than the engine's
+  live one — no script posing here); the solar, extractors and wind generator stand in poses
+  the lab does not have, so their rims were not compared ([roadmap](roadmap.html) G14i).
 - **`agl`** — how far off the ground it sits, the FBI's own `CruiseAlt` for anything `canfly`
   and 0 otherwise. The lab has no flight dynamics, so an aircraft is at ground + CruiseAlt;
   in the game it bobs a little above that (a Freedom Fighter measured 198–240 over ground

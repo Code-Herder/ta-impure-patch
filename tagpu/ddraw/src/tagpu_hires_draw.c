@@ -513,8 +513,11 @@ void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
             glUniform1i(u_slant, (shadowPass && h->slant) ? 1 : 0);
             glUniform1f(u_alpha, shadowPass ? 0.5f : h->alpha);
             glUniform1i(u_fog, h->fog);
-            glUniform1f(u_waterT, h->waterT);
-            glUniform1f(u_digT, h->digT);
+            /* a structure's slant shadow is never erased at the waterline:
+               the engine blits its cached sprite as built (tagpu_native.c
+               emit_slant); the erase is the silhouette's and the body's */
+            glUniform1f(u_waterT, (shadowPass && h->slant) ? -1e9f : h->waterT);
+            glUniform1f(u_digT,   (shadowPass && h->slant) ? -1e9f : h->digT);
             glUniform1i(u_waterMode, shadowPass ? 0 : h->waterMode);
         }
         /* ONE 50% BLEND PER SILHOUETTE PIXEL, exactly as tagpu_native.c does it

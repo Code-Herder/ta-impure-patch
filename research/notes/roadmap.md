@@ -48,7 +48,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Units under construction (the nanoframe scaffold) | ● native (G13l) | the same pass; a third `owndraw` detour on the blit-time effect `0x458DD0` stops the engine's own copy, and a factory's cargo takes the factory's depth key, approximating the engine's z-merge (level parent/cargo only) | the 5/25/50/75/95/100 % ladder against an unarmed control; a commander-built solar tracked at 0.6/1.0/1.8; a factory's cargo staged inside an ARM lab. **Open:** the wireframe's back edges show through the unbuilt part (the engine hides them with a per-sprite height plane; see [build-state](build-state.html) §7) |
 | Terrain in restored true colour (Classic++), since G14e the feature and effect sprites, **since G14g the unit textures**; **lit since G14f** — terrain, units and sprites; **cast shadows since G14h** | ● spike (G14a, 2026-09-04), on the GPU (G14b, 2026-09-04), **as GLSL passes in our own context** (G14c, 2026-09-05), the ONNX stack deleted (G14d, 2026-09-05), **the reveal progressive and the two sprite atlases restored lazily** (G14e, 2026-09-05), **lit by the lab's rule** (G14f, 2026-09-05: the height grid as an R8 texture, the face normal in the unit stream, the ground's lambert per sprite; `tagpu_classicpp.cfg` for `sun`/`unitsun`/`amb`), **the unit atlas restored, padded and mipped** (G14g, 2026-09-05: `tagpu_render3do.c` on `TAGPU_GAFATLAS`, 4-texel pad, 4-aligned, the twin trilinear to level 2 and 4× anisotropic, the unit FS's restored branch), **soft shadows** (G14h, 2026-09-06: `tagpu_shadow.c` — a depth map along `shadowsun` anchored to the map, PCSS-lite read back in the terrain and unit shaders, the hills casting from a static mesh in `tagpu_terr.c`, the replacement meshes casting, the Classic silhouette and slant off under the switch; eight more cfg keys; the context at 3.3 core) | `tagpu_restoreglsl.c` runs the unditherer's full model as fragment passes — `tagpu_restore_glsl.h`'s shaders, `<model>.w32.bin`'s weights — sliced from `tagpu_terr.c`'s gather under a `GL_TIME_ELAPSED` budget of 12 ms per frame, visible tiles first, straight into the terrain pass's RGBA atlas; no worker thread, no runtime, no cache (renderers.md §2.5b); the ONNX Runtime path is gone (G14d). The mechanism and its eleven decisions: [Classic and Classic++](renderers.html) §4c | Two Continents: 5062 tiles in **2.14 s wall at 59.7 fps** (1.49 s of GPU time, 128 frames); the biggest stock map (Lava & Two Hills, 11,561 tiles) in 4.21 s at 59.7 fps; `tagpu_restoredump.on`'s atlas against the lab's fp32 reference: **max 1 level on 179 of 15.5 M bytes (0.0012 %)** — the same 179 bytes the browser bench differs on; the lab bench: 1.15 s GPU, NK=1 1.6× slower, fp16 no faster and 4.65 % of bytes off, tiny 0.1 s |
 | Wrecks (3DO husks) | ● native | scratch-unit draw suppressed by the owndraw classifier | A/B on `one-wreck` / `shadow-mix` |
-| Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k; one blend per silhouette pixel since G13n | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain; **aircraft** measured against the engine on `shadow-air` — offset `(+5, (alt−ground)/2)` on four airframes, darkening 0.487 engine vs 0.25 ours before the stencil and 0.44–0.52 after |
+| Unit shadows, cloak, waterline | ● native, engine rules incl. FBI gates; structure shadows since G13k, by the engine's own raster rules since G14i (every face, flat, no waterline erase); one blend per silhouette pixel since G13n | part of the unit pass; `owndraw all` also flips the blit's two structure-shadow `je`s (`0x4592C6`, `0x45952C`) and the pass emits the slant projection | A/B `shadow-mix`, `waterline` (Anteer Strait), `shadow-struct` diffed against the engine's cached shadow over engine terrain; **aircraft** measured against the engine on `shadow-air` — offset `(+5, (alt−ground)/2)` on four airframes, darkening 0.487 engine vs 0.25 ours before the stencil and 0.44–0.52 after |
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
 | Smoke, fire, wakes, nanolathe | ● native (G12f) | one detour on the layer walker `0x471F90` | A/B `sfx-strait`, engine surface empty of particles |
 | Features (trees, rocks, splats, wreckage) | ● native (G13a) | `featown`: one detour on the leaf `0x46A610` | occlusion parity vs the engine's own draw, engine surface empty of features, `feat-forest` |
@@ -78,6 +78,29 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 **Phase C is underway** (2026-08-31): three static-RE agents run in parallel — build-state/nanoframe internals (`0x459C70`, the rasteriser `mode` arg, the build-progress field), shadows/cloak (`0x4B8500` shade tables, the never-firing second DrawUnit site `0x469BA3`), and terrain/feature depth (`0x418310`, the row sweep, the z-merge destination) to unblock the native-res design (G12). All three RE notes are back ([build-state](build-state.html), [shadows & cloak](shadows-cloak.html), [terrain & depth](terrain-depth.html) — the latter corrects the frame map: real terrain `0x483FA0`, real fog `0x4848E0`, and **no screen depth plane exists**), and the native-res architecture is drafted ([native-res design](native-res-design.html)). Main session shipped G10 shading + 2x supersampled edges same day.
 
 ### Awaiting review
+
+**G14i — the Classic structure shadow at parity, in the game and in the lab.** Found on
+2026-09-06 while answering whether the engine draws the Kbot lab a shadow at all (G14h's "did
+not close"), fixed 2026-09-07, landing with G14h. The native pass had drawn the owned slant
+(G13k) through the body emitter with the projection swapped in, so it kept the body's material
+rules and, in the draw, the silhouette's waterline erase — and the fixture's lab on the shore
+(altitude 63, sea level 75, a path-B composite) lost every shadow fragment below model height
+12, everything but the nano arms' tops. The engine's raster `0x45A610` has none of that: every
+face of every visible+cached piece, flat-filled, integer-snapped, face 0 under the selection
+rule, and the sprite blitted as built on both paths — read in full and written up
+([exe-reverse-engineering](exe-reverse-engineering.html) §"The slant builders": the cache
+refreshed by every composite rebake, the punch-out aligned, bit1 = `cached` with the COB walk
+that proves it). `emit_slant` in `tagpu_native.c` follows it; `tagpu_hires_draw.c` exempts a
+replacement structure's slant from the erase the same way. **Measured** on `scenarios/shadow-lab.json` with the engine's own
+Shadows toggle, stock engine / ours, 200×140 px around each building: Kbot lab **997 / 1094**
+(was 515), solar 1228 / 1246, ARM extractor 2406 / 2442, COR extractor 618 / 859, COR wind
+2273 / 3169 (drill and rotor phases), commander 1060 / 1098 —
+`assets/shots/g14i-slant-toggle.png`. **The lab** (`tascene`) draws the slant for structures
+for the first time: `ta3do.script_dontcache` walks Create for `dont-cache` (CORWIN's
+`cradle`/`fan`, ARMMEX's `arms`), the pack carries a `units/<name>.slant.bin` caster mesh and
+a `slant` instance fact, the viewer projects it the engine's way and blends it in
+`silhouettes()`. **In the lab**, measured the same way — its own `unitshadow=0` against `1` on the same pack, eye and fixture: the Kbot lab's rim is the same three strips, 692 px against the game's 1094 and the engine's 997, the crossbar strip 2 px left and 12 rows shorter at the top where the lab's rest-pose body differs from the engine's live one; the solar, the extractors and the wind generator stand in poses the lab does not have (no script animation: the solar closed, the drills and the rotor at rest), so their rims were not compared. **A seam the engine never has**, in the game and the lab alike: the body is drawn from float vertices while the engine snaps its composite and its shadow to whole units alike, so along a body edge that falls on a fractional row the snapped shadow shows as a 1-px line beside it — about a hundred pixels of the Kbot lab's 1094. Snapping the body the engine's way is the fix; it moves every body edge and is not this landing's. No byte patch; no engine address written.
+
 
 **G14h — Classic++ soft shadows: the lab's depth map in the game, anchored to the map.**
 Step 5 of [Classic and Classic++](renderers.html) §5 on 2026-09-06, one landing, every decision
@@ -125,10 +148,9 @@ within 2 levels along sprite edges; and **against the G14g DLL's own Classic fra
 **Hires**: on `hires-one` the replacement Peewee casts — a core at 0.64 of lit to its right with the map on, gone with it off — beside the 3DO AK's shadow.
 
 **What it did not close.** A replacement mesh does not *receive* (§2.4); the soft edge and the
-ridge haze are lattice noise on both sides (§4); **the Kbot lab's Classic slant is mostly
-missing on G14g and G14h alike** (959 px of engine shadow, 517 / 515 of ours — measured with
-the engine's own Shadows toggle, [gpu-status](gpu-status.html) §3.2), a G13k gap this landing
-found and did not touch; the zoom-floor look and `airshadow`'s default
+ridge haze are lattice noise on both sides (§4); the Kbot lab's Classic slant, found mostly
+missing here on G14g and G14h alike (959 px of engine shadow, 517 / 515 of ours, the engine's
+own Shadows toggle), is **G14i's, landing with this**; the zoom-floor look and `airshadow`'s default
 are the owner's, in play; the seabed under water (§2.3) stands as before. Traps met: the
 scenario's `center_on` parks the pointer on the anchor and its crosshair covered the shadow's
 root in the first captures; a caster log line reset by the startup GL reset logged the boot

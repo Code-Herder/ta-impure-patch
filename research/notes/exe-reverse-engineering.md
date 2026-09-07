@@ -1028,14 +1028,70 @@ So the five "unit row sweep" call sites of `0x4B8500` in the blend-LUT survey ab
 `0x459319` structure shadow (A), `0x459353` completed shadow (A), `0x4593BA` body (A),
 `0x4595E9` every shadow (B), `0x4597D3` body (B).
 
-**The slant builders.** `0x45A510` (ground-projection AABB) walks the prims at stride `0x36`
-from `Object3do+0x22` and tests only flag bit0 (`test byte [ecx+0x28],1` at `0x45A55B`).
-`0x45A610` (the silhouette raster) tests **bit0 and bit1** (`test cl,1; je` at `0x45A64C`,
-`test cl,2; je` at `0x45A655`) and flat-fills each face through `0x4C1000` at `0x45A750`. The
-projection is `gx = x + y/4`, `gy = −z − y/4` against the body's `−z − y/2`, so a point at
-height `y` casts `y/4` right of and `y/4` below its drawn position. Bit1's meaning is open:
-a completed CORE wind generator's mast and rotor lack it (they cast nothing in the engine)
-while its base pieces carry it.
+**The slant builders.** [BINARY-VERIFIED 2026-09-03; read in full 2026-09-07 for G14i —
+`0x45A470..0x45A8A0`, `0x4B9D70..0x4B9E60`, `0x4C1000..0x4C1180`, `0x480D60..0x480E30`,
+`0x458880..0x458930`.] `0x45A510` (the ground-projection AABB, `ret 0x14`: the object and four
+out-pointers — width, height, hot X, hot Y) walks the prims at stride `0x36` from
+`Object3do+0x22` and tests only flag bit0 (`test byte [ecx+0x28],1` at `0x45A55B`). It takes
+the posed 16.16 verts at `prim+0x22`, snaps each to whole units by its high word (`sar 0x10;
+movsx`), forms `gx = x + (y >> 2)` and `gy = (−z) − (y >> 2)` — the `neg` comes *before* the
+shift, so it is floor(−z), and the quarter is an arithmetic shift of the whole-unit y — pads
+the box by 2 on every side and returns `W = maxX − minX + 4`, `hot = 2 − min`. `0x45A610` (the
+silhouette raster, `ret 8`: object, frame) tests **bit0 and bit1** (`test cl,1; je` at
+`0x45A64C`, `test cl,2; je` at `0x45A655`), projects every vertex the same way plus the frame's
+hot X/Y (`0x45A672..0x45A6CA`; a third component `y + 0x19` that the fill ignores), then walks
+the node's face records (`node+0x28`, stride `0x20`) **from face 1 when `node+0x0C`, the
+selection primitive, is not −1** and from face 0 otherwise (`0x45A6D4..0x45A6E9` — the same
+rule as the body rasterisers and the effects renderer), copies each face's vertex list
+(`face+0x04` count, `face+0x08` indices) and flat-fills it through `0x4C1000(frame, verts,
+count, 0)` at `0x45A750`. **No material is consulted**: a textured face, a face with neither
+colour nor texture (the footprint quad the body rasteriser skips), an n-gon — all filled, so
+the cached shadow has no texture-key holes and no quad-only rule. `0x4C1000` takes the
+polygon's integer bounding box, returns 0 without drawing when it lies outside the frame
+(`minX > W−1`, `maxY < 0`, `minY > H−1`) or when `minY == maxY` (a flat row fills nothing),
+clamps it and scan-converts with 16.16 edge steps rounded up (`add ecx,0xffff` at `0x4C1162`).
+The projection is `gx = x + y/4`, `gy = −z − y/4` against the body's `−z − y/2`, so a point at
+height `y` casts `y/4` right of and `y/4` below its drawn position.
+
+**Bit1 is the piece's `cached` flag** ([build-state](build-state.html) §4: on by default at
+`0x45AED4`, cleared by the COB `dont-cache` handler `0x480DB0`, which masks the word at
+`prim+0x28` — `obj + 0x4A + piece·0x36` — with `0xFFFD` and ORs the argument in, then nulls
+`Object3do+0x10`; `0x480DF0` does the same for bit2 with `0xFFFB`; neither touches `+0x14`).
+That is why a completed CORE wind generator's mast and rotor cast nothing: its script marks
+`cradle` and `fan` dont-cache at Create — `tools/ta3do`'s `script_dontcache` walks the same
+Create prologue as `script_hidden` and finds them, ARMMEX's `arms` likewise, and nothing on
+ARMLAB, whose Create is fifteen `dont-shade`s. (Open until 2026-09-07 in this note; the
+build-state page had it from its own reading.)
+
+**The cache follows every composite rebake.** `0x458905` in the dispatch `0x458810` stores 0 to
+`Object3do+0x14` immediately before calling the builder `0x4586A0` at `0x45890C`, on every
+path that rebuilds the composite — so the shadow at `+0x14` is never older than the
+composite, and a cached piece turning 8 angle units (the pose-sync at `0x45ADBA`), a
+`show`/`hide`, a `cache`/`dont-cache` or a nanoframe pulse all refresh it at the next blit
+through `0x45A790`. Reading the prims' bits live every frame, as the native pass does, is the
+same rule. (The old `+0x14` block is not freed there; whether the builder frees it was not
+read.)
+
+**The punch-out `0x4B9D70(body, scratch, dx, dy)`** (`ret 0x10`) is aligned in screen space:
+the column shift is `dx + (body.hotX − scratch.hotX)`, the row shift `scratch.hotY −
+body.hotY − dy`, both clipped to the two frames, and for every body pixel that is not the
+body's key it writes the scratch's key at the shifted position. With `dx = 5` and the shadow
+blitted at `sx+0x85` against the body's `sx+0x80`, a body pixel and the scratch pixel it
+erases land on the same screen pixel — the body's own footprint is cut out of the shadow
+exactly where the body is then drawn. [DERIVED from the disassembly, not measured on its own;
+the G13k note's "the engine erases it from +5" does not follow from these operands, and the
+2026-09-07 toggle masks show no strip.]
+
+**Neither path erases a structure's shadow at the waterline.** `0x459319` (A) and `0x4595E9`
+via `0x459576` (B) blit `Object3do+0x14` straight after `0x45A790` returns; the `0x4BA1B0`
+erase belongs to the COMPLETED branch (`sub + 0x32`) and the digger's inline branch (`0x7D`)
+only. [MEASURED 2026-09-07: an applier-created, complete ARMLAB at altitude 63 on Two
+Continents, sea level `TA+0x1427F` = 75 — its composite 102×114 **with** a depth plane, so
+path B, which the "colour-only for stationary buildings" reading of the split above does not
+predict — casts its whole slant in the stock engine (997 px in its own Shadows-toggle mask);
+the native pass, which erased every shadow fragment at model height ≤ 12 as it does the
+silhouette's, kept the nano arms' tops (515 px), and reads 1094 once the slant is exempt —
+[shadows & cloak](shadows-cloak.html) §"Structure shadows, parity".]
 
 **Why the branch flip is safe.** Both `je`s are 2-byte short jumps whose fall-through and
 target both continue with `eax` still holding the option word the target tests (`shr al,3`),

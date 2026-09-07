@@ -20,12 +20,13 @@
        black, +5px x, at ground height, options-gated, drawn before the body,
        and blended ONCE PER SILHOUETTE PIXEL through a stencil mask -- the
        engine blits one blackened copy of the composite, so a pixel the model
-       covers twice is still darkened once (see the shadow loop)
-       -- but ONLY for units whose engine shadow came from the composite we
-       wipe (mobile units). Units on the engine's 0x20000000 path (structures)
-       and wrecks keep the engine's CACHED slant-projected shadow, which is
-       built from the posed prims and survives the wipe; drawing ours too gave
-       them two shadows. FBI noshadow/canhover/floater gates mirror the engine;
+       covers twice is still darkened once (see the shadow loop). A mobile
+       unit's is its body silhouette; a structure's is the engine's cached
+       SLANT projection, which owndraw "all" stops the engine from blitting
+       (G13k) and emit_slant draws from the live posed prims by the engine's
+       own raster rules -- every face, flat, no waterline erase (G14i). A 3DO
+       wreck keeps the engine's FShadow feature shadow. FBI
+       noshadow/canhover/floater gates mirror the engine;
      - cloak (unit+0x10E bit2): true translucency (alpha 0.5); cloaked
        enemies are skipped entirely (engine parity);
      - waterline / digger (shadows-cloak.md §3, path-B units only): parts
@@ -919,13 +920,9 @@ static int   s_castLogged = 0;      /* the first casters' numbers, once per sess
 static float s_castLogX = -1.0f;    /* ...one line per caster position seen */
 #define MAXNODEV 4096               /* verts of one node staged for emission */
 
-/* slant: emit the engine's ground-projected slant shadow (0x45A510/0x45A610:
-   gx = x + y/4, gy = -z - y/4) instead of the body projection -- the
-   structure shadow the cached-shadow branch would have built */
 static int emit_node(const char* nd, const float* P, int nvert, int nv,
                      float ax, float ay, float wx0, float wz0, float encBase,
-                     int owner, int pieceShaded, int skipFace, int quadOnly,
-                     int slant)
+                     int owner, int pieceShaded, int skipFace, int quadOnly)
 {
     int shNeutral = tagpu_r3d_shade_neutral(), shDir = tagpu_r3d_shade_dir();
     int nface = *(const int*)(nd + N_FCOUNT);
@@ -974,9 +971,9 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
                shade row is quantised from, carried in MAP space (x east, y up,
                z south -- 3DO z points north, hence the flip; tascene-view.html
                buildUnits does the same). Level where the engine draws the
-               piece unshaded (no shade flag, a degenerate face, the slant
-               shadow), so the lambert is exactly 1.0 there, as the neutral
-               row is the identity. */
+               piece unshaded (no shade flag, a degenerate face), so the
+               lambert is exactly 1.0 there, as the neutral row is the
+               identity. */
             float un[3] = { 0.0f, 1.0f, 0.0f };
             if (pieceShaded) {
                 float e1x = V[1][0]-V[0][0], e1y = V[1][1]-V[0][1], e1z = V[1][2]-V[0][2];
@@ -995,9 +992,9 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
             for (t = 0; t < 3; t++) {
                 float x = V[t][0], y = V[t][1], z = V[t][2];
                 float* o = s_verts + nv * NVST;
-                float px = slant ? x + y * 0.25f      : x;
-                if (!slant && y > s_emitTop) s_emitTop = y;
-                float py = slant ? (-z - y * 0.25f)   : (-z - y * 0.5f);
+                float px = x;
+                if (y > s_emitTop) s_emitTop = y;
+                float py = -z - y * 0.5f;
                 o[0] = ax + px;
                 o[1] = ay + py;
                 /* depth enc: row base +- intra-model view depth (2y-z),
@@ -1029,7 +1026,7 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
 static float s_P[MAXNODEV * 3];     /* one node's model-space vertices */
 
 static int emit_geom(const char* o3, int nv, float ax, float ay,
-                     float wx0, float wz0, float encBase, int owner, int slant)
+                     float wx0, float wz0, float encBase, int owner)
 {
     s_emitTop = -1e9f;
     int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
@@ -1044,13 +1041,7 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
         const char* pr = o3 + O3_PRIM0 + p * PRIM_STRIDE;
         unsigned char pflags = *(const unsigned char*)(pr + P_FLAGS);
         if (!(pflags & 1)) continue;
-        /* the engine's slant raster 0x45A610 takes a piece only when flag
-           bit1 is set as well (test cl,1 at 0x45A64C, test cl,2 at 0x45A655;
-           its AABB pass 0x45A510 tests bit0 alone) -- a wind generator's mast
-           and rotor carry bit0 only and cast nothing in the engine */
-        if (slant && !(pflags & 2)) continue;
         int pieceShaded = anyShadeFlag ? ((pflags & 4) != 0) : 1;
-        if (slant) pieceShaded = 0;  /* a shadow fragment returns before shade */
         const char* nd = *(const char* const*)(pr + P_NODE);
         const int*  vb = *(const int* const*)(pr + P_VBUF);
         if (!ptr_ok(nd) || !ptr_ok(vb)) continue;
@@ -1059,7 +1050,92 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
         int i;
         for (i = 0; i < nvert * 3; i++) s_P[i] = (float)vb[i] / 65536.0f;
         nv = emit_node(nd, s_P, nvert, nv, ax, ay, wx0, wz0, encBase, owner,
-                       pieceShaded, -1, 0, slant);
+                       pieceShaded, -1, 0);
+    }
+    return nv;
+}
+
+/* ---- the structure shadow: the engine's cached slant projection --------
+   What 0x45A790 rasterises into Object3do+0x14 the first time a structure
+   is blitted, and again after every composite rebake (0x458905 nulls the
+   cache before the builder runs, so a piece that turns or is re-cached
+   refreshes both): shadows-cloak.md 3, exe-reverse-engineering.md "The slant
+   builders". Its raster 0x45A610 differs from the body's in every rule that
+   matters here, and this emitter follows IT, not emit_node:
+     - a piece casts when flag bit0 AND bit1 are set (visible, and `cached`:
+       COB dont-cache clears bit1 -- a wind generator's mast and rotor);
+     - EVERY face is flat-filled through 0x4C1000: no material lookup, no
+       quad-only rule, no texture and so no colour-key holes. The faces the
+       body rasteriser has no material for (the footprint quad) are filled
+       too, and only face 0 is skipped, when the node has a selection
+       primitive (N_SELPRIM != -1: the same rule as the body rasterisers and
+       the effects renderer);
+     - the vertex lands at (x + y/4, -z - y/4) from the posed 16.16 verts
+       snapped to whole units the engine's way: the high word of x, of y and
+       of -z (floor), then an arithmetic shift for the quarter.
+   The sprite is blitted as is: the waterline and digger erases are the
+   COMPLETED branch's (and the digger's inline branch), never the structure
+   branch's, on either path -- the draw below passes -1e9 for both, which is
+   what left the Kbot lab on the shore with its shadow erased below the
+   waterline until G14i. Flat vertices (uv -1), so the FS takes the flat path
+   and never samples the atlas for them; the shade is the neutral row. */
+static int emit_slant(const char* o3, int nv, float ax, float ay,
+                      float wx0, float wz0, float encBase)
+{
+    int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
+    if (nparts <= 0 || nparts > 64) return nv;
+    float shade = (float)tagpu_r3d_shade_neutral() / 31.0f;
+    int p;
+    for (p = 0; p < nparts; p++) {
+        const char* pr = o3 + O3_PRIM0 + p * PRIM_STRIDE;
+        unsigned char pflags = *(const unsigned char*)(pr + P_FLAGS);
+        if ((pflags & 3) != 3) continue;
+        const char* nd = *(const char* const*)(pr + P_NODE);
+        const int*  vb = *(const int* const*)(pr + P_VBUF);
+        if (!ptr_ok(nd) || !ptr_ok(vb)) continue;
+        int nvert = *(const int*)(nd + N_VCOUNT);
+        int nface = *(const int*)(nd + N_FCOUNT);
+        const char* faces = *(const char* const*)(nd + N_FACES);
+        if (nvert <= 0 || nvert > MAXNODEV || IsBadReadPtr(vb, (SIZE_T)nvert * 12)) continue;
+        if (nface <= 0 || nface > 512 || !ptr_ok(faces)) continue;
+        if (IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) continue;
+        int j = *(const int*)(nd + N_SELPRIM) != -1 ? 1 : 0;
+        for (; j < nface; j++) {
+            const char* fa = faces + j * FACE_STRIDE;
+            int fvc = *(const int*)(fa + F_VCOUNT);
+            const unsigned short* idx = *(const unsigned short* const*)(fa + F_INDICES);
+            if (fvc < 3 || fvc > 32 || !ptr_ok(idx)) continue;
+            if (IsBadReadPtr(idx, (SIZE_T)fvc * 2)) continue;
+            int k;
+            for (k = 1; k + 1 < fvc; k++) {
+                unsigned short tri[3];
+                tri[0] = idx[0]; tri[1] = idx[k]; tri[2] = idx[k+1];
+                if (tri[0] >= nvert || tri[1] >= nvert || tri[2] >= nvert) continue;
+                if (nv + 3 > MAXNV) { s_vtrunc = 1; return nv; }
+                int t;
+                for (t = 0; t < 3; t++) {
+                    const int* v = vb + tri[t] * 3;
+                    int xi = v[0] >> 16, yi = v[1] >> 16, nzi = (-v[2]) >> 16;
+                    int q = yi >> 2;
+                    float px = (float)(xi + q), py = (float)(nzi - q);
+                    float y = (float)v[1] / 65536.0f, z = (float)v[2] / 65536.0f;
+                    float* o = s_verts + nv * NVST;
+                    o[0] = ax + px;
+                    o[1] = ay + py;
+                    float md = (2.0f * y - z) / 256.0f;
+                    if (md > 1.8f) md = 1.8f;
+                    if (md < -1.8f) md = -1.8f;
+                    o[2] = encBase + md;
+                    o[3] = -1.0f; o[4] = -1.0f; o[5] = 0.0f; o[6] = -1.0f;
+                    o[7] = shade;
+                    o[8] = wx0 + px;
+                    o[9] = wz0 + py;
+                    o[10] = y;
+                    o[11] = 0.0f; o[12] = 1.0f; o[13] = 0.0f;
+                    nv++;
+                }
+            }
+        }
     }
     return nv;
 }
@@ -1187,7 +1263,7 @@ static int emit_fx_model(const TAGPU_FXMODEL* m, int nv, float fxKey)
     }
     int selprim = *(const int*)(nd + N_SELPRIM);
     return emit_node(nd, s_P, nvert, nv, m->ax, m->ay, m->wx, m->wz, fxKey,
-                     m->owner, 0, selprim != -1 ? 0 : -1, 1, 0);
+                     m->owner, 0, selprim != -1 ? 0 : -1, 1);
 }
 
 /* ------------------------------------------------------- replacement pose --
@@ -2084,7 +2160,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             h->cast[0] = h->cast[1] = 0.0f; h->cast[2] = 1.0f; h->castSkip = 1;
         } else {
             nv = emit_geom(units[i].o3, nv, units[i].ax, units[i].ay,
-                           units[i].wx0, units[i].wz0, encBase, units[i].owner, 0);
+                           units[i].wx0, units[i].wz0, encBase, units[i].owner);
             hidx[i] = -1; topv[i] = s_emitTop > 0.0f ? s_emitTop : 0.0f;
         }
     }
@@ -2194,8 +2270,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     for (i = 0; i < nu; i++) {
         sfirst[i] = nv;
         if (cpp || !units[i].slant || !units[i].shadow || units[i].hires) continue;
-        nv = emit_geom(units[i].o3, nv, units[i].ax, units[i].ay,
-                       units[i].wx0, units[i].wz0, encb[i], units[i].owner, 1);
+        nv = emit_slant(units[i].o3, nv, units[i].ax, units[i].ay,
+                        units[i].wx0, units[i].wz0, encb[i]);
         nslant++;
     }
     sfirst[nu] = nv;
@@ -2437,8 +2513,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             if (!units[i].slant && !(gfx & 8)) continue;
             glUniform1i(s_uFog, FOGW(i));
             x_glUniform2f(s_uOffset, 5.0f, (float)(units[i].gy - units[i].ay));
-            x_glUniform1f(s_uWaterT, units[i].waterT);
-            x_glUniform1f(s_uDigT, units[i].digT);
+            /* the STRUCTURE branch blits its cached sprite as built, on both
+               paths (0x459319, 0x4595E9 straight after 0x45A790): the
+               waterline erase 0x4BA1B0 belongs to the COMPLETED branch and
+               the digger's inline branch only, so a building on the shore
+               keeps the whole slant (emit_slant) */
+            x_glUniform1f(s_uWaterT, units[i].slant ? -1e9f : units[i].waterT);
+            x_glUniform1f(s_uDigT,   units[i].slant ? -1e9f : units[i].digT);
             if (units[i].slant) { first = sfirst[i]; count = sfirst[i+1] - sfirst[i]; }
             else                { first = firstv[i]; count = firstv[i+1] - firstv[i]; }
             x_glStencilFunc(GL_ALWAYS, 1, 0xFF);
