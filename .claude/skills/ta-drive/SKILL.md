@@ -539,8 +539,7 @@ cut -f1-8 tagpu/instances/c1/gamedir/tagpu_cobtrace.log | head
   could see the other. Put the target inside the shooter's `SightDistance`, not just its range.
 - **A Hawk is air-to-air**; ordered at a ground unit it flies over it and does nothing. Give it
   a patrolling enemy aircraft.
-- The file is truncated at every launch; the last partial tick may be unflushed when the
-  process is killed, so `tacli stop` a run only after the behaviour you wanted has ended.
+- The file is truncated at every launch and flushed per line, so `tacli stop` loses nothing.
 
 ## The input firewall (on by default)
 

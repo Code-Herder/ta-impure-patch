@@ -166,8 +166,13 @@ trace tab prints the same lines:
 | `D` | `tick  unit  slot  value` | a `rand( lo, hi )` draw; `value` = what the script received (`lo + result`) |
 | `#` | free text | the header (version, filter, the columns); a parser skips it |
 
-`tick` is the sim tick `*(main+0x38A47)`, which `tagpu_posedump.on`'s header line now stamps
-too (`posedump: tick=N idx=U …`), so the two logs join on `(tick, unit)`; `unit` is the in-game
+Lines are in event order. An `S` line is written at the first hook event after its
+allocation (the arguments arrive on the record only then), so it can sit after lines of its own
+tick but never after a line of a later one — a parser may still sort on the tick column. The
+file is created afresh at every attach and flushed per line, so a killed process loses nothing.
+A `# start dropped` line marks the one case a start is not written: the unit died between the
+allocation and the next event (or the match ended), and its COB object is gone. `tick` is the sim tick `*(main+0x38A47)`, which
+`tagpu_posedump.on`'s header line now stamps too (`posedump: tick=N idx=U …`), so the two logs join on `(tick, unit)`; `unit` is the in-game
 index `*(i16*)(unit+0xA8)` — `tacli roster`'s `idx=` — and `type` the unit-def name, the
 identifiers `tacli weapons` already prints. The headless replay writes lines with the same
 fields, and the gate is `diff`. What the trace does **not** carry: the engine's asks for a

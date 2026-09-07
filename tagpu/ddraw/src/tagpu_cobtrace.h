@@ -14,5 +14,4 @@
    `ARMPW,CORAK` logs only those unit types; empty or `all` logs every unit. */
 
 void tagpu_cobtrace_init(void);      /* DllMain: arm if the flag file exists */
-int  tagpu_cobtrace_armed(void);
 #endif

@@ -1,8 +1,9 @@
 /* tagpu_cobtrace.c — the COB script-call oracle (tacob landing 2).
 
-   WHAT IT LOGS. One tab-separated line per event on the game thread, appended to
-   `tagpu_cobtrace.log` in the game dir (the process cwd) and flushed whenever
-   the sim tick changes:
+   WHAT IT LOGS. One tab-separated line per event on the game thread, written to
+   `tagpu_cobtrace.log` in the game dir (the process cwd) — created afresh at
+   every attach (a previous run's file is truncated) and flushed per line, so a
+   killed process (`tacli stop`) loses nothing:
 
      S  tick unit type script slot source args…   a thread starts (allocated)
      R  tick unit slot script value               a thread's RETURN, the value it popped
@@ -58,6 +59,8 @@
 #define UDEF(u)     (*(char**)((u) + 0x92))
 
 /* the COB engine object and its records */
+#define COB_VTABLE    0x004FD698u          /* the unit script class; a freed block loses it */
+#define COB_SIZE      0x544
 #define COB_FILE(c)   (*(char**)((c) + 0x08))
 #define COB_O3(c)     (*(char**)((c) + 0x540))
 #define COB_REC(c, i) ((c) + 0x1C + (i) * 0xA4)
@@ -91,11 +94,8 @@ static const unsigned char RAND_STOLEN[5]  = { 0xE8, 0x4B, 0x56, 0x00, 0x00 };
 
 typedef int (__thiscall *PFN_Alloc)(void* cob, int idx);
 
-static int       s_armed;
 static FILE*     s_f;
-static int       s_lasttick = -1;
 static PFN_Alloc s_real_alloc;               /* the stolen prologue + jmp back */
-static unsigned  s_n[5];                     /* S R X K D counts, for the log line */
 static char      s_filter[256];              /* upper-cased, comma-separated, or "" */
 static unsigned  s_skip;                     /* diagnostic: sites left unhooked (bit per site) */
 enum { SK_ALLOC = 1, SK_RUN = 2, SK_RET = 4, SK_KILL = 8, SK_RAND = 16 };
@@ -131,7 +131,7 @@ static int unit_index(char* u) { return u ? (int)*(short*)(u + 0xA8) : -1; }
 
 static void unit_type(char* u, char* out, int cap)
 {
-    const char* s = u ? UDEF(u) + 0x20 : "?";
+    const char* s = (u && UDEF(u)) ? UDEF(u) + 0x20 : "?";
     int i;
     for (i = 0; i < cap - 1 && s[i] && s[i] != ' '; i++) out[i] = s[i];
     out[i] = 0;
@@ -143,8 +143,8 @@ static int wanted(char* u)
     char t[40];
     char key[44];
     int  i;
+    if (!u) return 0;                 /* no unit behind the object: not a trace line, filter or not */
     if (!s_filter[0]) return 1;
-    if (!u) return 0;
     unit_type(u, t, sizeof t);
     key[0] = ',';
     for (i = 0; t[i] && i < 40; i++) key[i + 1] = (char)toupper((unsigned char)t[i]);
@@ -167,20 +167,17 @@ static const char* script_of_pc(char* cob, int pc)
     int   i, best = -1, n;
     if (!sf) return "?";
     n = SF_NSCRIPTS(sf);
-    for (i = 0; i < n; i++) {
-        if (SF_ENTRY(sf)[i] <= pc) best = i; else break;
-    }
+    for (i = 0; i < n; i++)                       /* the largest entry <= pc; no order assumed */
+        if (SF_ENTRY(sf)[i] <= pc && (best < 0 || SF_ENTRY(sf)[i] >= SF_ENTRY(sf)[best])) best = i;
     return best >= 0 ? SF_NAMES(sf)[best] : "?";
 }
 
 static void emit(const char* line)
 {
-    int t;
     if (!s_f) return;
     fputs(line, s_f);
     fputc('\n', s_f);
-    t = tick();
-    if (t != s_lasttick) { fflush(s_f); s_lasttick = t; }
+    fflush(s_f);      /* per line: the process is killed, never detached, at `tacli stop` */
 }
 
 static void flush_pending(void)
@@ -191,6 +188,22 @@ static void flush_pending(void)
     int   argc, i, n = 0;
     if (!s_pend.valid) return;
     s_pend.valid = 0;
+    /* one event can separate the allocation from this flush, and a unit can
+       die inside it: FreeUnitScriptData 0x485E30 frees the 0x544-byte object.
+       A freed block keeps its pages (it is above the small-block threshold)
+       but loses its vtable word to the heap's free-list links, so that word is
+       the check; IsBadReadPtr covers the block being unmapped altogether. */
+    if (IsBadReadPtr(s_pend.cob, COB_SIZE) || *(unsigned*)s_pend.cob != COB_VTABLE) {
+        emit("# start dropped: its COB object was freed before the next event");
+        return;
+    }
+    /* and the deferral is bounded in time: with any unit alive the runner is
+       entered every tick, so a latch older than one tick — or from a previous
+       match, whose counter restarted — belongs to an object that is gone */
+    if (tick() != s_pend.tick && tick() != s_pend.tick + 1) {
+        emit("# start dropped: latched more than one tick ago");
+        return;
+    }
     rec  = COB_REC(s_pend.cob, s_pend.slot);
     u    = cob_unit(s_pend.cob);
     argc = s_pend.argc >= 0 ? s_pend.argc : REC_SP(rec) + 1;
@@ -209,7 +222,6 @@ static void flush_pending(void)
                   s_pend.src, s_pend.parent, args);
     line[sizeof line - 1] = 0;
     emit(line);
-    s_n[0]++;
 }
 
 /* ---- the five hook bodies (game thread) ------------------------------------ */
@@ -230,13 +242,11 @@ static int __stdcall my_alloc(char* cob, int idx, unsigned ret, char* vm_rec, in
            the unit does not define); only a valid index is a refused start */
         char* sf = COB_FILE(cob);
         if (sf && idx >= 0 && idx < SF_NSCRIPTS(sf)) {
-            char line[200], t[40];
-            unit_type(u, t, sizeof t);
+            char line[200];
             _snprintf(line, sizeof line, "X\t%d\t%d\t%s\t%s", tick(), unit_index(u),
                       script_name(cob, idx), ret == START_RET ? "C" : ret == CALL_RET ? "L" : "E");
             line[sizeof line - 1] = 0;
             emit(line);
-            s_n[2]++;
         }
         return slot;
     }
@@ -270,14 +280,13 @@ static void __stdcall my_run(char* cob, int slot, int dt)
 /* RETURN: esi = the record, ebp = its slot, ecx = the pc of the RETURN word */
 static void __stdcall my_return(char* cob, char* rec, int slot, int pc)
 {
-    char  line[200], t[40];
+    char  line[200];
     char* u;
     int   sp;
     flush_pending();
     u = cob_unit(cob);
     if (!wanted(u)) return;
     sp = REC_SP(rec);
-    unit_type(u, t, sizeof t);
     if (sp >= 0 && sp < REC_WORDS)
         _snprintf(line, sizeof line, "R\t%d\t%d\t%d\t%s\t%d", tick(), unit_index(u), slot,
                   script_of_pc(cob, pc), REC_STACK(rec)[sp]);
@@ -286,38 +295,33 @@ static void __stdcall my_return(char* cob, char* rec, int slot, int pc)
                   script_of_pc(cob, pc));
     line[sizeof line - 1] = 0;
     emit(line);
-    s_n[1]++;
 }
 
 /* SIGNAL: ecx = the record being freed, ebx = its slot, [esp+0x34] = the signaller */
 static void __stdcall my_kill(char* cob, char* rec, int slot, int by)
 {
-    char  line[200], t[40];
+    char  line[200];
     char* u;
     flush_pending();
     u = cob_unit(cob);
     if (!wanted(u)) return;
-    unit_type(u, t, sizeof t);
     _snprintf(line, sizeof line, "K\t%d\t%d\t%d\t%s\t%d", tick(), unit_index(u), slot,
               script_of_pc(cob, REC_PC(rec)), by);
     line[sizeof line - 1] = 0;
     emit(line);
-    s_n[3]++;
 }
 
 /* RAND: ebx = lo, ebp = the slot, r = what 0x4B6C30 returned; the script gets lo + r */
 static void __stdcall my_rand(char* cob, int slot, int lo, int r)
 {
-    char  line[200], t[40];
+    char  line[200];
     char* u;
     flush_pending();
     u = cob_unit(cob);
     if (!wanted(u)) return;
-    unit_type(u, t, sizeof t);
     _snprintf(line, sizeof line, "D\t%d\t%d\t%d\t%d", tick(), unit_index(u), slot, lo + r);
     line[sizeof line - 1] = 0;
     emit(line);
-    s_n[4]++;
 }
 
 /* ---- the stubs ------------------------------------------------------------- */
@@ -447,15 +451,23 @@ static void read_filter(void)
     if (n <= 0) return;
     raw[n] = 0;
     /* `-alloc -run -ret -kill -rand`: leave that site unhooked (bisection aid;
-       the trace is then partial and says so in its header) */
+       the trace is then partial and says so in its header — and with -run the
+       S line's arguments may already have been stepped over by the thread) */
     for (i = 0; i + 1 < n; i++) {
+        static const struct { const char* w; int len; unsigned bit; } tok[5] = {
+            { "alloc", 5, SK_ALLOC }, { "run", 3, SK_RUN }, { "ret", 3, SK_RET },
+            { "kill", 4, SK_KILL }, { "rand", 4, SK_RAND } };
+        int k, hit = 0;
         if (raw[i] != '-' || (i && (isalnum((unsigned char)raw[i - 1]) || raw[i - 1] == '_'))) continue;
-        if (!_strnicmp(raw + i + 1, "alloc", 5)) s_skip |= SK_ALLOC;
-        else if (!_strnicmp(raw + i + 1, "run", 3))  s_skip |= SK_RUN;
-        else if (!_strnicmp(raw + i + 1, "ret", 3))  s_skip |= SK_RET;
-        else if (!_strnicmp(raw + i + 1, "kill", 4)) s_skip |= SK_KILL;
-        else if (!_strnicmp(raw + i + 1, "rand", 4)) s_skip |= SK_RAND;
-        for (raw[i] = ' '; i + 1 < n && (isalnum((unsigned char)raw[i + 1]) || raw[i + 1] == '_'); i++) raw[i + 1] = ' ';
+        for (k = 0; k < 5 && !hit; k++) {
+            int e = i + 1 + tok[k].len;             /* the word must end there */
+            if (e <= n && !_strnicmp(raw + i + 1, tok[k].w, tok[k].len) &&
+                !(e < n && (isalnum((unsigned char)raw[e]) || raw[e] == '_'))) {
+                s_skip |= tok[k].bit;
+                for (; i < e; i++) raw[i] = ' ';     /* strip only a recognised token */
+                hit = 1;
+            }
+        }
     }
     s_filter[j++] = ',';
     for (i = 0; i < n && j < (int)sizeof s_filter - 2; i++) {
@@ -485,7 +497,6 @@ void tagpu_cobtrace_init(void)
     read_filter();
     s_f = fopen(LOG_FILE, "wb");
     if (!s_f) { tlog("NOT armed — cannot create " LOG_FILE); return; }
-    setvbuf(s_f, NULL, _IOFBF, 1 << 16);
     fprintf(s_f, "# tagpu_cobtrace v1\tfilter=%s\tcolumns: S tick unit type script slot source args… | "
                  "R tick unit slot script value | X tick unit script source | K tick unit slot script by | "
                  "D tick unit slot value\n", s_filter[0] ? s_filter : "all");
@@ -502,9 +513,10 @@ void tagpu_cobtrace_init(void)
     }
     if (s_skip) {
         char b[120];
-        _snprintf(b, sizeof b, "diagnostic: sites skipped%s%s%s%s%s — the trace is partial",
+        _snprintf(b, sizeof b, "diagnostic: sites skipped%s%s%s%s%s — the trace is partial%s",
                   s_skip & SK_ALLOC ? " alloc" : "", s_skip & SK_RUN ? " run" : "", s_skip & SK_RET ? " ret" : "",
-                  s_skip & SK_KILL ? " kill" : "", s_skip & SK_RAND ? " rand" : "");
+                  s_skip & SK_KILL ? " kill" : "", s_skip & SK_RAND ? " rand" : "",
+                  s_skip & SK_RUN ? " (S arguments may be stale without the runner hook)" : "");
         tlog(b);
         fprintf(s_f, "# %s\n", b);
     }
@@ -522,10 +534,8 @@ void tagpu_cobtrace_init(void)
         fclose(s_f); s_f = NULL;
         return;
     }
-    s_armed = 1;
     _snprintf(b, sizeof b, "ARMED (" FLAG_FILE " present): 0x4B08C0 0x4B0DA0 0x4B19D0 0x4B1A99 + the call at 0x4B15E0 -> "
               LOG_FILE ", filter=%s", s_filter[0] ? s_filter : "all");
     tlog(b);
 }
 
-int tagpu_cobtrace_armed(void) { return s_armed; }
