@@ -15,6 +15,22 @@
                                             turns every sun off
                              unitsun=AZ,EL  the units' sun
                              amb=A          the ambient floor, 0..1
+                           and the shadows' (renderers.md 2.12; tagpu_shadow.c):
+                             shadows=0|1        cast shadows, default 1; the map
+                                                also needs the engine's own
+                                                Shadow option bit (+0x37F06 bit2)
+                             shadowsun=AZ,EL    the shadows' light, 225,40
+                             penumbra=K         kernel radius per world unit of
+                                                blocker distance, 0.05; 0 = hard
+                             shadowlen=A,B|off  a caster's length a + b*height,
+                                                14,0.25; off = physical
+                             shade=S            the direct light a shadow
+                                                removes, 1
+                             terrainshadow=0|1  the hills cast too, 1
+                             shadowres=N        the map's edge at zoom >= 1,
+                                                2048 (256..4096)
+                             airshadow=len|physical|drop   an airborne caster
+                                                (2.2), len
                            A missing file or key is the lab's default.
 
    Both are polled at most twice a second; the cfg is re-read when its write
@@ -31,11 +47,24 @@ int tagpu_classicpp_on(void);
    already lit; the sun may only modulate by the tilt from level). The
    shaders take 1/level as uNorm (tagpu_glsl.h TAGPU_GLSL_LIGHT_FN).
    `sun=off` is amb = 1: the rule is then exactly 1.0 with no branch. */
+#define TAGPU_AIRSHADOW_LEN      0
+#define TAGPU_AIRSHADOW_PHYSICAL 1
+#define TAGPU_AIRSHADOW_DROP     2
 typedef struct {
     float sun[3];
     float unitSun[3];
     float amb;
     float level, unitLevel;
+    /* the shadows (renderers.md 2.12): the lab's knobs at the lab's defaults */
+    int   shadows;          /* shadows=; sun=off puts them out as well    */
+    float shadowSun[3];     /* toward the light the shadows fall from     */
+    float penumbra;
+    int   shadowlenOn;      /* 0 = shadowlen=off, the physical length     */
+    float shadowlen[2];     /* a + b * model height                       */
+    float shade;
+    int   terrainshadow;
+    int   shadowres;
+    int   airshadow;        /* TAGPU_AIRSHADOW_*                          */
 } TAGPU_LIGHT;
 const TAGPU_LIGHT* tagpu_classicpp_light(void);
 

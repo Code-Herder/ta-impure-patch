@@ -450,14 +450,15 @@ class Primitive:
 
 
 class Piece:
-    __slots__ = ("name", "offset", "vertices", "primitives", "children")
+    __slots__ = ("name", "offset", "vertices", "primitives", "children", "sel_prim")
 
-    def __init__(self, name, offset, vertices, primitives, children):
+    def __init__(self, name, offset, vertices, primitives, children, sel_prim=-1):
         self.name = name
         self.offset = offset          # (x, y, z) from parent, model units
         self.vertices = vertices      # [(x, y, z)] model units
         self.primitives = primitives
         self.children = children
+        self.sel_prim = sel_prim      # the header's SelectionPrimitive, -1 = none
 
     def walk(self, depth=0):
         yield self, depth
@@ -502,7 +503,8 @@ def parse_3do(blob: bytes, offset: int = 0, is_root: bool = True) -> Piece:
             children.append(parse_3do(blob, sib, is_root=False))
             sib = struct.unpack_from("<i", blob, sib + 44)[0]
 
-    piece = Piece(name, (x / FIXED, y / FIXED, z / FIXED), verts, prims, children)
+    piece = Piece(name, (x / FIXED, y / FIXED, z / FIXED), verts, prims, children,
+                  sel_prim)
     piece_sibling = sibling_off  # noqa: F841 — handled by the caller's sibling walk
     return piece
 
@@ -1092,6 +1094,8 @@ def write_glb(doc, blob: bytes) -> bytes:
 COB_HEADER = struct.Struct("<11i")
 OP_HIDE = 0x10006000
 OP_SHOW = 0x10005000
+OP_CACHE = 0x10007000
+OP_DONT_CACHE = 0x10008000
 # opcode -> inline operand words; anything absent ends the scan
 COB_PROLOGUE = {
     OP_SHOW: 1, OP_HIDE: 1,
@@ -1145,6 +1149,36 @@ def hidden_at_create(blob: bytes):
                 (hidden.add if op == OP_HIDE else hidden.discard)(pieces[index])
         pc += 1 + inline
     return hidden
+
+
+def dontcached_at_create(blob: bytes):
+    """Piece names the script marks `dont-cache` as soon as it exists (lower case).
+
+    The engine keeps a per-piece `cached` flag (`prim+0x28` bit1, on by default;
+    `build-state.md`): DONT_CACHE clears it, CACHE sets it back, and the
+    structure shadow's raster (`0x45A610`) takes only the pieces that carry it,
+    which is why a wind generator's spinning rotor casts nothing. The same
+    prologue walk as `hidden_at_create`, for the same reason.
+    """
+    parsed = _cob_read(blob)
+    if parsed is None:
+        return set()
+    entries, names, pieces, code = parsed
+    if "create" not in names:
+        return set()
+    pc = entries[names.index("create")]
+    uncached = set()
+    while 0 <= pc < len(code):
+        op = code[pc] & 0xFFFFFFFF
+        inline = COB_PROLOGUE.get(op)
+        if inline is None:
+            break
+        if op in (OP_DONT_CACHE, OP_CACHE) and pc + 1 < len(code):
+            index = code[pc + 1]
+            if 0 <= index < len(pieces):
+                (uncached.add if op == OP_DONT_CACHE else uncached.discard)(pieces[index])
+        pc += 1 + inline
+    return uncached
 
 
 def shown_after_create(blob: bytes):
@@ -1372,6 +1406,12 @@ def script_hidden(assets: Assets, label: str):
     """Pieces `scripts/<label>.cob` hides at Create, if the unit has a script."""
     blob = script_cob(assets, label)
     return frozenset(hidden_at_create(blob)) if blob is not None else frozenset()
+
+
+def script_dontcache(assets: Assets, label: str):
+    """Pieces `scripts/<label>.cob` marks dont-cache at Create -- they cast no structure shadow."""
+    blob = script_cob(assets, label)
+    return frozenset(dontcached_at_create(blob)) if blob is not None else frozenset()
 
 
 def script_flares(assets: Assets, label: str):

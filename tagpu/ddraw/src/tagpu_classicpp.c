@@ -64,22 +64,51 @@ static float level_of(const float sun[3], float amb)
     return l > 1e-3f ? l : 1e-3f;
 }
 
-static void apply(float sunAz, float sunEl, float usunAz, float usunEl, float amb, int off,
-                  const char* how)
+/* the shadows' defaults: the lab's readLook (tascene-view.html), SHADOWSUN_DEFAULT
+   225,40 -- the engine's slant azimuth, lowered so a shadow is 1.2x the height */
+#define DEF_SSUN_AZ 225.0f
+#define DEF_SSUN_EL 40.0f
+static void shadow_defaults(TAGPU_LIGHT* L)
 {
-    char b[200];
+    L->shadows = 1;
+    L->penumbra = 0.05f;
+    L->shadowlenOn = 1; L->shadowlen[0] = 14.0f; L->shadowlen[1] = 0.25f;
+    L->shade = 1.0f;
+    L->terrainshadow = 1;
+    L->shadowres = 2048;
+    L->airshadow = TAGPU_AIRSHADOW_LEN;
+}
+
+static void apply(float sunAz, float sunEl, float usunAz, float usunEl, float amb,
+                  float ssunAz, float ssunEl, int off, const char* how)
+{
+    char b[240];
+    static const char* const air[3] = { "len", "physical", "drop" };
     if (amb < 0.0f) amb = 0.0f;
     if (amb > 1.0f) amb = 1.0f;
     if (off) amb = 1.0f;                  /* every sun off: the rule is exactly 1.0 */
     sun_vector(sunAz, sunEl, s_light.sun);
     sun_vector(usunAz, usunEl, s_light.unitSun);
+    sun_vector(ssunAz, ssunEl, s_light.shadowSun);
     s_light.amb = amb;
     s_light.level = level_of(s_light.sun, amb);
     s_light.unitLevel = level_of(s_light.unitSun, amb);
+    if (off) s_light.shadows = 0;         /* the lab: no sun, no shadows */
     _snprintf(b, sizeof b, "classicpp: light sun=%s%.1f,%.1f unitsun=%.1f,%.1f amb=%.2f level=%.4f/%.4f (%s)",
               off ? "off " : "", sunAz, sunEl, usunAz, usunEl, amb,
               s_light.level, s_light.unitLevel, how);
     cplog(b);
+    _snprintf(b, sizeof b, "classicpp: shadows=%d shadowsun=%.1f,%.1f penumbra=%.3f shadowlen=%s%.1f,%.2f"
+              " shade=%.2f terrainshadow=%d shadowres=%d airshadow=%s",
+              s_light.shadows, ssunAz, ssunEl, s_light.penumbra,
+              s_light.shadowlenOn ? "" : "off:", s_light.shadowlen[0], s_light.shadowlen[1],
+              s_light.shade, s_light.terrainshadow, s_light.shadowres, air[s_light.airshadow]);
+    cplog(b);
+}
+
+static void bad(const char* p)
+{
+    char b[160]; _snprintf(b, sizeof b, "classicpp: cfg: bad token \"%s\" ignored", p); cplog(b);
 }
 
 /* the cfg: whitespace-separated key=value tokens, unknown keys reported once */
@@ -89,10 +118,12 @@ static void read_cfg(void)
     char buf[1024]; DWORD n = 0;
     float sunAz = DEF_SUN_AZ, sunEl = DEF_SUN_EL, usunAz = DEF_USUN_AZ, usunEl = DEF_USUN_EL;
     float amb = DEF_AMB;
+    float ssunAz = DEF_SSUN_AZ, ssunEl = DEF_SSUN_EL;
     int off = 0;
+    shadow_defaults(&s_light);
     h = CreateFileA(CFG_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) { apply(sunAz, sunEl, usunAz, usunEl, amb, 0, "no cfg: defaults"); return; }
+    if (h == INVALID_HANDLE_VALUE) { apply(sunAz, sunEl, usunAz, usunEl, amb, ssunAz, ssunEl, 0, "no cfg: defaults"); return; }
     if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
         char* p = buf;
         buf[n] = 0;
@@ -115,6 +146,35 @@ static void read_cfg(void)
                 else { char b[160]; _snprintf(b, sizeof b, "classicpp: cfg: bad token \"%s\" ignored", p); cplog(b); }
             } else if (!_strnicmp(p, "amb=", 4)) {
                 amb = (float)atof(p + 4);
+            } else if (!_strnicmp(p, "shadows=", 8)) {
+                s_light.shadows = atoi(p + 8) != 0;
+            } else if (!_strnicmp(p, "shadowsun=", 10)) {
+                if (sscanf(p + 10, "%f,%f", &a, &e) == 2) { ssunAz = a; ssunEl = e; }
+                else bad(p);
+            } else if (!_strnicmp(p, "penumbra=", 9)) {
+                s_light.penumbra = (float)atof(p + 9);
+                if (s_light.penumbra < 0.0f) s_light.penumbra = 0.0f;
+            } else if (!_strnicmp(p, "shadowlen=", 10)) {
+                if (!lstrcmpiA(p + 10, "off")) s_light.shadowlenOn = 0;
+                else if (sscanf(p + 10, "%f,%f", &a, &e) == 2) {
+                    s_light.shadowlenOn = 1; s_light.shadowlen[0] = a; s_light.shadowlen[1] = e;
+                } else bad(p);
+            } else if (!_strnicmp(p, "shade=", 6)) {
+                s_light.shade = (float)atof(p + 6);
+                if (s_light.shade < 0.0f) s_light.shade = 0.0f;
+                if (s_light.shade > 1.0f) s_light.shade = 1.0f;
+            } else if (!_strnicmp(p, "terrainshadow=", 14)) {
+                s_light.terrainshadow = atoi(p + 14) != 0;
+            } else if (!_strnicmp(p, "shadowres=", 10)) {
+                int r = atoi(p + 10);
+                if (r < 256) r = 256;
+                if (r > 4096) r = 4096;
+                s_light.shadowres = r;
+            } else if (!_strnicmp(p, "airshadow=", 10)) {
+                if (!lstrcmpiA(p + 10, "len")) s_light.airshadow = TAGPU_AIRSHADOW_LEN;
+                else if (!lstrcmpiA(p + 10, "physical")) s_light.airshadow = TAGPU_AIRSHADOW_PHYSICAL;
+                else if (!lstrcmpiA(p + 10, "drop")) s_light.airshadow = TAGPU_AIRSHADOW_DROP;
+                else bad(p);
             } else {
                 char b[160]; _snprintf(b, sizeof b, "classicpp: cfg: unknown token \"%s\" ignored", p); cplog(b);
             }
@@ -123,7 +183,7 @@ static void read_cfg(void)
         }
     }
     CloseHandle(h);
-    apply(sunAz, sunEl, usunAz, usunEl, amb, off, CFG_FILE);
+    apply(sunAz, sunEl, usunAz, usunEl, amb, ssunAz, ssunEl, off, CFG_FILE);
 }
 
 static void poll(void)
