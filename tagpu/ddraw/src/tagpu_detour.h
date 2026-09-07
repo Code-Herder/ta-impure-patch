@@ -28,7 +28,9 @@ int tagpu_detour_write(unsigned int va, const unsigned char* bytes, int n);
 /* land the 5-byte jmp to `stub` on `va` and NOP the rest of the `nst` stolen
    bytes. For a module that builds its own stub shape (tagpu_reclaim.c: it
    needs the stolen tail's address as a trampoline) and wants to build every
-   stub before landing any. 1 on success. */
+   stub before landing any. 1 on success. A stub landed this way is NOT
+   recorded for chaining (tagpu_detour_landed below): an observer cannot be
+   stacked on it, and tagpu_detour_bytes_ok on its site sees the jmp. */
 int tagpu_detour_land(unsigned int va, const unsigned char* stub, int nst);
 
 /* Prologue detour: while *flag is set the function returns at once with

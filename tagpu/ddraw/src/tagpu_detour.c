@@ -191,5 +191,5 @@ int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
         FlushInstructionCache(GetCurrentProcess(), q, (SIZE_T)nst + 5);
         return 1;
     }
-    return detour_land(va, s, nst);
+    return tagpu_detour_land(va, s, nst);
 }
