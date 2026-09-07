@@ -1,0 +1,81 @@
+{
+  "format": "ta-scenario/1",
+  "description": "5 fighter: ARMHAWK ordered to attack an enemy Vamp patrolling 400 units east (a Hawk is air-to-air, so the target must fly) \u2014 Activate at takeoff, aim from a banking frame, FirePrimary. tacob landing 2 fixture (research/notes/tacob-design.md, the nine gate scenarios). One unit of the class under test, owned by the human seat, traced with tagpu_cobtrace.on=<type> and one posedump; the AI seat holds a distant unit so the mission does not end. Run all nine with tools/cobtrace_fixtures.py.",
+  "seed": 7,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "hawk",
+      "type": "ARMHAWK",
+      "owner": 0,
+      "pos": [
+        2600,
+        1200
+      ],
+      "facing": 90,
+      "orders": [
+        {
+          "cmd": "attack",
+          "target": "vamp"
+        }
+      ]
+    },
+    {
+      "id": "vamp",
+      "type": "CORVAMP",
+      "owner": 1,
+      "pos": [
+        3000,
+        1200
+      ],
+      "facing": 180,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            3000,
+            1600
+          ]
+        }
+      ]
+    },
+    {
+      "id": "far",
+      "type": "CORAK",
+      "owner": 1,
+      "pos": [
+        4200,
+        2400
+      ],
+      "facing": 45,
+      "stance": "hold"
+    }
+  ],
+  "camera": {
+    "center_on": "hawk"
+  }
+}

@@ -2726,7 +2726,13 @@ static void pose_dump(const char* u, const char* o3)
     HPOSE h;
     int nparts = pose_accum(o3, &h);
     char b[256];
-    _snprintf(b, sizeof b, "posedump: unit=%p o3=%p nparts=%d yaw=%u", u, o3,
+    /* tick and in-game index first, so the line joins tagpu_cobtrace.log's
+       (tick, unit) columns; the tick is read here on the render thread, so
+       it names the sim tick this pass sampled, which may be the one before
+       the pose's last update or the one after */
+    _snprintf(b, sizeof b, "posedump: tick=%d idx=%d unit=%p o3=%p nparts=%d yaw=%u",
+              *(const int*)(*(const char* const*)TA_MAINPP + 0x38A47),
+              (int)*(const short*)(u + 0xA8), u, o3,
               (int)*(const unsigned short*)(o3 + O3_NUMPARTS),
               (unsigned)*(const unsigned short*)(u + U_YAW));
     nlog(b);

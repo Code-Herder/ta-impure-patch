@@ -329,7 +329,10 @@ how `MOVE`/`TURN` take a piece operand.]
 
 ### 2.4 Opcode set — exact values
 
-Every opcode is a full **32-bit word**. Values from Spring `CobThread.cpp`. [VERIFIED]
+Every opcode is a full **32-bit word**. Values from Spring `CobThread.cpp`. [VERIFIED — and
+since 2026-09-07 against this engine's own dispatcher: the runner `0x4B0DA0` compares
+`op & 0x100FF000` against every value below, and `exe-reverse-engineering.md` §"The COB
+engine" lists the handler each reaches, what it pops, and the thread-record fields it writes.]
 
 **Model / piece animation**
 

@@ -442,6 +442,16 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
   **`ErrorLog.txt` is shared between instances** (the gamedir symlinks it), which
   is why the report matches the crashing exe's path against the instance before
   claiming the crash is yours.
+- **A game whose sim tick stops while every thread sleeps, with no `ErrorLog.txt`, is not
+  paused — it may be a wild jump.** `tacli peek <i> '*0x511DE8+0x38A47:4'` twice, four
+  seconds apart, is the test (the sim tick; 30 per second); `tacli shot` failing and the
+  periodic `native:`/`reclaim:` lines stopping say the render thread went with it, and every
+  `TotalA.exe` thread reading `anon_pipe_read` in `/proc/<pid>/task/*/wchan` is a wineserver
+  wait, not a spin. Measured 2026-09-07: a call-site redirect whose rel32 was computed against
+  the wrong address froze the tank fixture at tick 244 every run, deterministically, and
+  looked exactly like a hang. ptrace is off on this machine, so there is no backtrace to be
+  had — bisect the change instead (the cobtrace module's `-alloc -run -ret -kill -rand`
+  tokens exist for that).
 - **Cursor and hover state, without a screenshot**: `main+0x2CBE` is the cursor index the
   engine currently has installed, `+0x2CBA` the unit under the pointer (0 = none), `+0x2CBC`
   the feature under it (`0xFFFF` = none), `+0x2CC3` the current order byte (1 = contextual,
@@ -501,6 +511,36 @@ tools/tacli log w1 -g "weapons: (loader|VIOL|MISM)"
   After adding or removing archives, delete the instance's `catalogue.json` or
   `scenario load` refuses the new type at validation.
 - `tacli log -g` takes a Python regex: alternate with `(a|b)`, not `a\|b`.
+
+## The COB script trace (tacob's oracle)
+
+`tagpu_cobtrace.on` at DLL attach makes the fork log every COB thread the engine starts,
+refuses, returns, kills or draws a random number for — one tab-separated line each, stamped
+with the sim tick — to `gamedir/tagpu_cobtrace.log`. The line contract and what the first
+traces taught: `research/notes/tacob-design.md` §"The trace contract"; the engine seam:
+`exe-reverse-engineering.md` §"The COB engine". Reads only; arm it like `weapons.on`, before
+the launch, and read the file straight from the gamedir (`tacli ls --json` names it):
+
+```bash
+tools/tacli arm c1 cobtrace.on=ARMPW native.on=all   # the value is a type filter; native.on
+                                                     # because the pose oracle lives in that pass
+tools/tacli scenario load c1 cob-kbot --restart
+sleep 8; tools/tacli arm c1 posedump.on              # one pose dump, header `posedump: tick= idx=`
+grep -a 'cobtrace:' tagpu/instances/c1/gamedir/tagpu.log      # ARMED … filter=,ARMPW,
+cut -f1-8 tagpu/instances/c1/gamedir/tagpu_cobtrace.log | head
+```
+
+- **`tools/cobtrace_fixtures.py`** runs the nine class scenarios (`scenarios/cob-*.json`) this
+  way and keeps `cobtrace.log`, `posedump.txt` and tacli's `apply.json` per class under
+  `research/notes/evidence/cobtrace/`. It parks the camera on the traced unit (`tacli eye`)
+  before dropping `posedump.on`: the pose oracle dumps the first unit the native pass draws,
+  and an aircraft or a ship has left the spawn view by the time it has done anything.
+- **Sight radius before weapon range.** A Stumpy 250 units from an AK never aimed: neither
+  could see the other. Put the target inside the shooter's `SightDistance`, not just its range.
+- **A Hawk is air-to-air**; ordered at a ground unit it flies over it and does nothing. Give it
+  a patrolling enemy aircraft.
+- The file is truncated at every launch; the last partial tick may be unflushed when the
+  process is killed, so `tacli stop` a run only after the behaviour you wanted has ended.
 
 ## The input firewall (on by default)
 
@@ -665,7 +705,7 @@ WINEPREFIX=<inst>/prefix wine reg add \
   `reclaim: def=… drn=… ovf=0 …` line every 300 frames (`ovf` must stay 0); a level change logs
   `reclaim: level teardown: flushed N …`.
 - The instrumentation triggers (`suppress.on`, `tracer.on`, `gldbg.on`, `posedump.on`,
-  `spxlog.on`, `fpsosd.on`) — debugging, not features.
+  `cobtrace.on`, `spxlog.on`, `fpsosd.on`) — debugging, not features.
 - `hires.on` only carries the hires renderer's *tweaks* (`anchor=`, sun, ambient,
   normal maps). What turns hires models on is a `gamedir/hires/<unit>.glb` existing.
 
