@@ -316,7 +316,7 @@ One finished unit each; the engine's surface is the oracle throughout.
 
 | gate | builds | exit (measured) | kill / pivot |
 |---|---|---|---|
-| **G15-0** offline art spike | `tools/undither/uiart.py`, four contact sheets, the consistency table | the owner's per-class verdict; the default `uirestore` exclude list written down | no class passes → Classic++ UI dropped from phase 1, UI-aware fine-tune filed as a candidate; the Classic half unaffected |
+| **G15-0** offline art spike — **run 2026-09-07, §8; verdict pending** | `tools/undither/uiart.py`, seven contact sheets, the consistency table | the owner's per-class verdict; the default `uirestore` exclude list written down | no class passes → Classic++ UI dropped from phase 1, UI-aware fine-tune filed as a candidate; the Classic half unaffected |
 | **G15a** census | observer detours on every candidate leaf and the gadget dispatcher, the flip marker, the whole-surface diff, the allocator/free pair, the strict-walk script; **no drawing** | writer table in [the engine map](exe-reverse-engineering.html) (leaf, convention, call sites, surfaces written); unexplained pixels under 1 % on every inventory screen or every remaining writer named; the minimap's draw path located; the two stale claims in `ui-markers.md` §4 and `frame-composition.md` §1 corrected | a core screen with a large untraceable writer → that surface is seed-only, the plan proceeds |
 | **G15b** twins, in game, Classic | the `tagpu_gui_*` module: registry, seed, ring, replay, the three op kinds, index and colour twins, the composite seam, `strict`, trigger, tacli verb, auto-arm, the transient viewport clear | side panel, build pages, top and bottom bars at 1024×768: 0 differing pixels outside the cursor, 0 holes; fps fixtures within half a frame; ring peak and overflows logged; parity md5 unchanged with the trigger absent; 1080p run and recorded | replay cannot hold 60 fps at `200v200` → collapse identical per-frame ops before anything else |
 | **G15c** the rest of the frame | chat, F4 and bottom dialogs, `ARMOPT` over the viewport, HUD text and clock, minimap picture, dots and box, `LIGHTBAR`, the mode-switch panel painter | whole in-game inventory clean under `strict`, ARM and CORE; dialogs over the viewport verified at 0.5× and 2× | — |
@@ -401,3 +401,86 @@ they carry there; G15a adds the new ones.
 | `main+0x1426B` | `TED_GENERATED_PIC`, the minimap picture | CORPUS name, address used by `tagpu_zoom.c` |
 | `main+0x143A7` / `main+0xDCB` | the live RGB palette / the 16-entry GUI colour LUT | VERIFIED |
 | `main+0x3907F..0x3908B` | `Palette`/`currentPalette`/`desiredPalette`/`FadeTable` | CORPUS; "menu fades" [INFERRED] |
+
+---
+
+## 8. G15-0 — the offline art spike  [MEASURED 2026-09-07]
+
+`tools/undither/uiart.py` pulls the UI art out of the archives with no game running, restores
+it with the shipped `full` model through the unditherer CLI (`--preset learned --report
+--consistency`), and lays original beside restored on one contact sheet per class, worst
+dither-consistency first. 224 frames in seven classes; the sheets are in
+`assets/shots/uiart/`, the per-frame numbers in `uiart-report.json` beside them. **The owner's
+verdict per class is pending; what follows is the run and a first reading of it.**
+
+Two facts the run established before it restored anything:
+
+- **The shell runs on `palette.pal`, not `guipal.pal`.** Every shell PCX carries a palette that
+  differs from `palette.pal` in 4–32 reserved entries and from `guipal.pal` in 254–256, and
+  `guipal.pal` differs from `palette.pal` in 254 of 256 entries. So `guipal` is the loading
+  screen's palette (loaded at `0x498109`), and a GAF frame drawn in the shell resolves through
+  the same palette as in the game — which is what §3.4's index twin assumed **[MEASURED]**.
+- **The six `bitmaps/*gui*tile.pcx` files are not the panel art.** Each is a 640×480 canvas that
+  is 98.6 % one fill index around a single 129×33 strip — the piece `0x467D70` tiles along a
+  bar. The side panel proper is `ARMPAN`/`CORPAN` in `anims/commongui.gaf` (128×352), and each
+  screen's buttons are in `anims/<screen>.gaf` (118 of 188 screens have one; `MAINMENU`'s
+  buttons are in `oldmain.gaf`). The spike marks a PCX sheet's fill as its colour key so the
+  restorer inpaints it, as the game's GLSL path inpaints keyed texels; fed as content it produced
+  a halo along every panel edge, which is the first run's lesson and not a property of the art.
+
+| class | what | frames | q median | shift median | consistency match min / median | hist median |
+|---|---|---|---|---|---|---|
+| bg | shell backgrounds, dialogs, sprite sheets (`bitmaps/*.pcx` ≥ 320 wide) | 73 | 2.9 | 0.20 | 0.438 / 0.684 | 0.885 |
+| gaf | `commongui.gaf` panels and order buttons, the shell and in-game screens' `anims/<screen>.gaf` | 92 | 33.3 | 1.18 | 0.313 / 0.626 | 0.779 |
+| unitpics | a sample of `unitpics/*.pcx` (24 of 282) | 24 | 40.2 | 0.11 | 0.422 / 0.701 | 0.891 |
+| hud | the six bar strips, cropped | 6 | 20.9 | 0.07 | 0.302 / 0.451 | 0.733 |
+| small | `bitmaps/*.pcx` under 320 wide (logos, `gamesettings`) | 6 | 5.8 | 0.90 | 0.374 / 0.631 | 0.792 |
+| cursors | `anims/cursors.gaf`, the expected exclusion | 20 | 11.0 | 1.47 | 0.331 / 0.462 | 0.594 |
+| screens | three captured 640×480 menu surfaces, text included — the cautionary column | 3 | 11.6 | 0.09 | 0.548 / 0.616 | 0.874 |
+
+`q` is the unditherer's measured dither amplitude (0 = it found no dither), `shift` the mean
+colour shift in levels, `match` the fraction of pixels that land back on their source index
+when the output is Floyd–Steinberg re-quantised, `hist` the histogram overlap. The scores are
+not comparable across classes: a flat-colour logo re-dithers to itself (high match, nothing
+restored), a 10×20 cursor cannot (low match, nothing to restore either). They rank frames
+*within* a class for the sheet; the sheet is the evidence.
+
+<figure style="margin:0"><img src="assets/shots/uiart/uiart-unitpics.webp" alt="G15-0: unit pictures, original beside restored at 3x"><figcaption><code>unitpics</code>, original left, restored right, 3×. The model's home ground — a rendered model on dithered terrain — and it shows: the terrain dither and the sky banding resolve, the model's edges hold (edge retention 0.99–1.0 on every frame), mean shift 0.08–0.43 levels.</figcaption></figure>
+
+<figure style="margin:0"><img src="assets/shots/uiart/uiart-gaf-panels.webp" alt="G15-0: the side panels and the shell panels, a 96x96 window at 3x and a micro crop at 8x"><figcaption><code>ARMPAN</code>, <code>ARMPAN2</code>, <code>FRONTPAN</code>, <code>CORPAN</code> and the option panels: the busiest 96×96 window at 3×, then a 24×18 micro crop at 8×. The dark panel grain — a two-index dither in the original — becomes a smooth dark surface; the bevel lines, grooves and <code>FRONTPAN</code>'s diagonal stripes survive at full contrast.</figcaption></figure>
+
+<figure style="margin:0"><img src="assets/shots/uiart/uiart-screens.webp" alt="G15-0: three captured menu screens with their text, restored whole"><figcaption>The cautionary column: whole captured menus, text included. The button faces come out clean; the glyphs come out softened, the dark outline bleeding a fraction of a pixel into the light stroke (the micro crops). This is why §3.6 keeps text as captured indices the restorer never sees.</figcaption></figure>
+
+The other sheets: [`uiart-bg.webp`](assets/shots/uiart/uiart-bg.webp) (the twelve lowest-scoring
+backgrounds, a 160×120 window at 3×), [`uiart-gaf.webp`](assets/shots/uiart/uiart-gaf.webp) (the
+60 lowest-scoring GAF frames whole, 3×), [`uiart-hud.webp`](assets/shots/uiart/uiart-hud.webp),
+[`uiart-small.webp`](assets/shots/uiart/uiart-small.webp),
+[`uiart-cursors.webp`](assets/shots/uiart/uiart-cursors.webp).
+
+**A first reading, for the owner to confirm or overrule:**
+
+- **`unitpics` and the panels pass on sight.** The build icons are exactly what the model was
+  trained on; the panels lose their grain and keep their geometry.
+- **The order buttons (`ATTACK`, `PATROL`, `REPAIR`…) are the one judgement call.** Their labels
+  are baked into the GAF frame, not drawn as text, so they *are* fed to the model. On the sheet
+  the metal face smooths and the letters stay legible with slightly rounded corners (mean shift
+  2.5–3.7 levels, the highest in the class). Whether that softening is acceptable, or those
+  frames join the exclude list by name, is the owner's call; both are one glob.
+- **Cursors change little and gain nothing** — hard-edged 10–33 px sprites under a 25-px
+  receptive field; `cursormove` shifts 4.1 levels for no visible reason to. Excluded as planned.
+- **Backgrounds are mixed by kind, not by quality**: painted scenes (`mission02win`, the water)
+  and the metal title art restore cleanly; the flat logos (`armbkg`, `corebkg`) barely change;
+  the sprite sheets (`grommets`, `loadbar`, `stagebuttons`) are keyed fill around small pieces
+  and are judged through the pieces, which look like the GAF buttons above.
+- **Text softens** (the `screens` column): confirmed, and already designed out.
+
+**Proposed default for `uirestore` pending the verdict**: `all` minus `cursor*`, `pathicon`,
+anything under 12×12, and — if the owner rules the label softening out — the order-button
+sequences of `commongui.gaf` by name. Nothing in the run argues for dropping the Classic++
+half: the kill rule of §3.9 is not triggered.
+
+**What the spike did not do.** It restored frames in isolation, as the game will; it did not
+measure the halo the *game* path produces at a keyed edge (§4c's near band, 0.41 levels on
+features) on UI frames, which G15e's `featdiff`-style check will. The `oldmain.gaf` dissolve
+frames (`intro`, `multi`, `exit`) are noise by design and score low for it; they are animation,
+not art, and the default policy treats them like any frame.

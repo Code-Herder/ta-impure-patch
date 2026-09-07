@@ -1583,7 +1583,7 @@ cursor, the shell scaled to the window) gets its own interview.**
 
 | Gate | Status | Exit |
 |---|---|---|
-| G15-0 — offline art spike: the restorer on shell backgrounds, HUD art, buttons, `unitpics`, cursors; contact sheets + dither-consistency | ○ planned | the owner's per-class verdict; the default `uirestore` exclude list |
+| G15-0 — offline art spike: the restorer on shell backgrounds, HUD art, buttons, `unitpics`, cursors; contact sheets + dither-consistency | ● run 2026-09-07 ([§8](gui-renderer.html)): 224 frames, seven sheets; `unitpics` and the panels pass on sight, cursors gain nothing, baked-in button labels soften slightly, text softens (designed out); **owner's verdict pending** | the owner's per-class verdict; the default `uirestore` exclude list |
 | G15a — the census: observer detours on every pixel-writing leaf and the gadget dispatcher, the flip marker, the whole-surface diff; no drawing | ○ planned | writer table in the engine map; unexplained pixels < 1 % on every inventory screen or every writer named; the minimap's draw path located |
 | G15b — the twins, in game, Classic: the module, the ring, seed, the three op kinds, the composite seam, `strict`, tacli | ○ planned | side panel, build pages, top and bottom bars at 1024×768 under `strict`: 0 differing px outside the cursor, 0 holes; fps fixtures within half a frame; parity md5 unchanged with the trigger absent |
 | G15c — the rest of the in-game frame: chat, dialogs, `ARMOPT` over the viewport, HUD text, minimap, `LIGHTBAR`, the panel painter | ○ planned | the whole in-game inventory clean under `strict`, ARM and CORE; dialogs over the viewport verified at 0.5× and 2× |

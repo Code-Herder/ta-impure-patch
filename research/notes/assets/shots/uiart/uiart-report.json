@@ -1,0 +1,2994 @@
+{
+  "preset": "learned",
+  "classes": {
+    "small": {
+      "frames": [
+        {
+          "name": "corecamp0",
+          "source": "bitmaps/corecamp0.pcx",
+          "size": [
+            160,
+            160
+          ],
+          "q": 16.74,
+          "edges": 0.984,
+          "shift": 0.49,
+          "match": 0.374,
+          "hist": 0.642
+        },
+        {
+          "name": "corecamp1",
+          "source": "bitmaps/corecamp1.pcx",
+          "size": [
+            160,
+            160
+          ],
+          "q": 8.88,
+          "edges": 0.0,
+          "shift": 0.09,
+          "match": 0.581,
+          "hist": 0.804
+        },
+        {
+          "name": "gamesettings",
+          "source": "bitmaps/gamesettings.pcx",
+          "size": [
+            270,
+            352
+          ],
+          "q": 10.25,
+          "edges": 0.995,
+          "shift": 0.07,
+          "match": 0.588,
+          "hist": 0.831
+        },
+        {
+          "name": "armbkg",
+          "source": "bitmaps/armbkg.pcx",
+          "size": [
+            256,
+            256
+          ],
+          "q": 2.62,
+          "edges": 0.0,
+          "shift": 4.37,
+          "match": 0.675,
+          "hist": 0.753
+        },
+        {
+          "name": "corebkg",
+          "source": "bitmaps/corebkg.pcx",
+          "size": [
+            256,
+            256
+          ],
+          "q": 2.51,
+          "edges": 0.0,
+          "shift": 4.29,
+          "match": 0.753,
+          "hist": 0.781
+        },
+        {
+          "name": "small_cavedog_logo",
+          "source": "bitmaps/small_cavedog_logo.pcx",
+          "size": [
+            128,
+            85
+          ],
+          "q": 1.91,
+          "edges": 0.992,
+          "shift": 1.3,
+          "match": 0.786,
+          "hist": 0.952
+        }
+      ],
+      "sheet": "research/notes/assets/shots/uiart/uiart-small.webp",
+      "sheet_size": [
+        2930,
+        848
+      ],
+      "match_min": 0.374,
+      "match_median": 0.6315
+    },
+    "hud": {
+      "frames": [
+        {
+          "name": "armguitoptile",
+          "source": "bitmaps/armguitoptile.pcx",
+          "size": [
+            129,
+            33
+          ],
+          "q": 25.22,
+          "edges": 0.0,
+          "shift": 0.06,
+          "match": 0.302,
+          "hist": 0.679
+        },
+        {
+          "name": "armguibottile",
+          "source": "bitmaps/armguibottile.pcx",
+          "size": [
+            129,
+            33
+          ],
+          "q": 23.43,
+          "edges": 0.0,
+          "shift": 0.12,
+          "match": 0.346,
+          "hist": 0.574
+        },
+        {
+          "name": "armguisidetile",
+          "source": "bitmaps/armguisidetile.pcx",
+          "size": [
+            129,
+            33
+          ],
+          "q": 23.88,
+          "edges": 0.0,
+          "shift": 0.05,
+          "match": 0.35,
+          "hist": 0.583
+        },
+        {
+          "name": "corguibottile",
+          "source": "bitmaps/corguibottile.pcx",
+          "size": [
+            129,
+            33
+          ],
+          "q": 17.99,
+          "edges": 0.0,
+          "shift": 0.07,
+          "match": 0.552,
+          "hist": 0.786
+        },
+        {
+          "name": "corguisidetile",
+          "source": "bitmaps/corguisidetile.pcx",
+          "size": [
+            129,
+            33
+          ],
+          "q": 18.31,
+          "edges": 0.0,
+          "shift": 0.03,
+          "match": 0.568,
+          "hist": 0.804
+        },
+        {
+          "name": "corguitoptile",
+          "source": "bitmaps/corguitoptile.pcx",
+          "size": [
+            129,
+            32
+          ],
+          "q": 12.05,
+          "edges": 0.0,
+          "shift": 0.13,
+          "match": 0.584,
+          "hist": 0.8
+        }
+      ],
+      "sheet": "research/notes/assets/shots/uiart/uiart-hud.webp",
+      "sheet_size": [
+        2372,
+        310
+      ],
+      "match_min": 0.302,
+      "match_median": 0.451
+    },
+    "bg": {
+      "frames": [
+        {
+          "name": "pressedbone",
+          "source": "bitmaps/pressedbone.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.94,
+          "edges": 0.0,
+          "shift": 1.15,
+          "match": 0.438,
+          "hist": 0.695
+        },
+        {
+          "name": "newcamplogos",
+          "source": "bitmaps/newcamplogos.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 3.05,
+          "edges": 1.0,
+          "shift": 0.84,
+          "match": 0.466,
+          "hist": 0.767
+        },
+        {
+          "name": "mission02win2",
+          "source": "bitmaps/mission02win2.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 34.61,
+          "edges": 0.996,
+          "shift": 0.07,
+          "match": 0.5,
+          "hist": 0.776
+        },
+        {
+          "name": "igpatch",
+          "source": "bitmaps/igpatch.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.87,
+          "edges": 0.972,
+          "shift": 1.22,
+          "match": 0.503,
+          "hist": 0.762
+        },
+        {
+          "name": "mission02win",
+          "source": "bitmaps/mission02win.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 34.33,
+          "edges": 0.996,
+          "shift": 0.07,
+          "match": 0.504,
+          "hist": 0.78
+        },
+        {
+          "name": "loadbar",
+          "source": "bitmaps/loadbar.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 1.0,
+          "shift": 0.02,
+          "match": 0.505,
+          "hist": 0.506
+        },
+        {
+          "name": "star",
+          "source": "bitmaps/star.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.71,
+          "edges": 0.905,
+          "shift": 7.56,
+          "match": 0.528,
+          "hist": 0.732
+        },
+        {
+          "name": "temptrans",
+          "source": "bitmaps/temptrans.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.69,
+          "edges": 0.995,
+          "shift": 1.65,
+          "match": 0.529,
+          "hist": 0.802
+        },
+        {
+          "name": "hattfont10",
+          "source": "bitmaps/hattfont10.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.86,
+          "edges": 0.984,
+          "shift": 1.75,
+          "match": 0.547,
+          "hist": 0.854
+        },
+        {
+          "name": "frontendx",
+          "source": "bitmaps/frontendx.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 10.68,
+          "edges": 0.996,
+          "shift": 0.05,
+          "match": 0.551,
+          "hist": 0.766
+        },
+        {
+          "name": "cdlog256",
+          "source": "bitmaps/cdlog256.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.89,
+          "edges": 0.998,
+          "shift": 1.52,
+          "match": 0.554,
+          "hist": 0.807
+        },
+        {
+          "name": "stagebuttons",
+          "source": "bitmaps/stagebuttons.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.92,
+          "edges": 0.968,
+          "shift": 1.29,
+          "match": 0.556,
+          "hist": 0.758
+        },
+        {
+          "name": "temp",
+          "source": "bitmaps/temp.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.87,
+          "edges": 0.987,
+          "shift": 1.88,
+          "match": 0.569,
+          "hist": 0.842
+        },
+        {
+          "name": "titlscrn",
+          "source": "bitmaps/titlscrn.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 10.85,
+          "edges": 0.997,
+          "shift": 0.12,
+          "match": 0.582,
+          "hist": 0.79
+        },
+        {
+          "name": "frontbg",
+          "source": "bitmaps/frontbg.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 14.08,
+          "edges": 0.0,
+          "shift": 0.07,
+          "match": 0.6,
+          "hist": 0.865
+        },
+        {
+          "name": "loadgame2bg",
+          "source": "bitmaps/loadgame2bg.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 14.36,
+          "edges": 0.998,
+          "shift": 0.07,
+          "match": 0.601,
+          "hist": 0.87
+        },
+        {
+          "name": "grommets",
+          "source": "bitmaps/grommets.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.7,
+          "edges": 0.988,
+          "shift": 1.97,
+          "match": 0.604,
+          "hist": 0.793
+        },
+        {
+          "name": "igbuttons",
+          "source": "bitmaps/igbuttons.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.72,
+          "edges": 0.998,
+          "shift": 1.89,
+          "match": 0.607,
+          "hist": 0.865
+        },
+        {
+          "name": "frontend1f",
+          "source": "bitmaps/frontend1f.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 12.3,
+          "edges": 0.996,
+          "shift": 0.07,
+          "match": 0.61,
+          "hist": 0.841
+        },
+        {
+          "name": "singlebg",
+          "source": "bitmaps/singlebg.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 14.05,
+          "edges": 0.998,
+          "shift": 0.07,
+          "match": 0.626,
+          "hist": 0.878
+        },
+        {
+          "name": "options4x",
+          "source": "bitmaps/options4x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 13.93,
+          "edges": 0.994,
+          "shift": 0.06,
+          "match": 0.631,
+          "hist": 0.877
+        },
+        {
+          "name": "hattfont11",
+          "source": "bitmaps/hattfont11.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.88,
+          "edges": 0.993,
+          "shift": 1.37,
+          "match": 0.633,
+          "hist": 0.861
+        },
+        {
+          "name": "battleroom",
+          "source": "bitmaps/battleroom.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.996,
+          "shift": 2.41,
+          "match": 0.635,
+          "hist": 0.726
+        },
+        {
+          "name": "battleroom2",
+          "source": "bitmaps/battleroom2.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.996,
+          "shift": 2.32,
+          "match": 0.635,
+          "hist": 0.733
+        },
+        {
+          "name": "installgame",
+          "source": "bitmaps/installgame.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 12.81,
+          "edges": 0.997,
+          "shift": 0.17,
+          "match": 0.646,
+          "hist": 0.891
+        },
+        {
+          "name": "optinterface4x",
+          "source": "bitmaps/optinterface4x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 13.48,
+          "edges": 0.995,
+          "shift": 0.22,
+          "match": 0.649,
+          "hist": 0.878
+        },
+        {
+          "name": "playgame2",
+          "source": "bitmaps/playgame2.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 12.14,
+          "edges": 0.996,
+          "shift": 0.09,
+          "match": 0.652,
+          "hist": 0.885
+        },
+        {
+          "name": "optvisual4x",
+          "source": "bitmaps/optvisual4x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 13.38,
+          "edges": 0.994,
+          "shift": 0.16,
+          "match": 0.654,
+          "hist": 0.883
+        },
+        {
+          "name": "playgame2j",
+          "source": "bitmaps/playgame2j.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 12.01,
+          "edges": 0.997,
+          "shift": 0.07,
+          "match": 0.655,
+          "hist": 0.887
+        },
+        {
+          "name": "installglam",
+          "source": "bitmaps/installglam.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 12.52,
+          "edges": 0.998,
+          "shift": 0.14,
+          "match": 0.657,
+          "hist": 0.881
+        },
+        {
+          "name": "optsound4x",
+          "source": "bitmaps/optsound4x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 13.49,
+          "edges": 0.994,
+          "shift": 0.07,
+          "match": 0.658,
+          "hist": 0.886
+        },
+        {
+          "name": "optmusic4x",
+          "source": "bitmaps/optmusic4x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 13.46,
+          "edges": 0.994,
+          "shift": 0.07,
+          "match": 0.661,
+          "hist": 0.888
+        },
+        {
+          "name": "installgamej",
+          "source": "bitmaps/installgamej.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 12.4,
+          "edges": 0.998,
+          "shift": 0.07,
+          "match": 0.666,
+          "hist": 0.891
+        },
+        {
+          "name": "selectgame2x",
+          "source": "bitmaps/selectgame2x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.92,
+          "edges": 0.998,
+          "shift": 0.95,
+          "match": 0.667,
+          "hist": 0.808
+        },
+        {
+          "name": "buttons2",
+          "source": "bitmaps/buttons2.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.69,
+          "edges": 0.941,
+          "shift": 1.95,
+          "match": 0.681,
+          "hist": 0.891
+        },
+        {
+          "name": "createnew",
+          "source": "bitmaps/createnew.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 11.32,
+          "edges": 0.999,
+          "shift": 0.13,
+          "match": 0.683,
+          "hist": 0.898
+        },
+        {
+          "name": "unitrestrict",
+          "source": "bitmaps/unitrestrict.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 3.78,
+          "edges": 0.997,
+          "shift": 0.96,
+          "match": 0.684,
+          "hist": 0.832
+        },
+        {
+          "name": "frontbgold",
+          "source": "bitmaps/frontbgold.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 3.51,
+          "edges": 1.0,
+          "shift": 0.06,
+          "match": 0.693,
+          "hist": 0.92
+        },
+        {
+          "name": "newcampaign4x",
+          "source": "bitmaps/newcampaign4x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 9.5,
+          "edges": 0.992,
+          "shift": 0.08,
+          "match": 0.706,
+          "hist": 0.907
+        },
+        {
+          "name": "selconnect2",
+          "source": "bitmaps/selconnect2.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 9.36,
+          "edges": 0.998,
+          "shift": 0.27,
+          "match": 0.707,
+          "hist": 0.899
+        },
+        {
+          "name": "igmbrief",
+          "source": "bitmaps/igmbrief.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.51,
+          "edges": 0.998,
+          "shift": 1.28,
+          "match": 0.716,
+          "hist": 0.89
+        },
+        {
+          "name": "mbriefcor",
+          "source": "bitmaps/mbriefcor.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.998,
+          "shift": 1.48,
+          "match": 0.717,
+          "hist": 0.835
+        },
+        {
+          "name": "failure",
+          "source": "bitmaps/failure.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.79,
+          "edges": 0.999,
+          "shift": 1.03,
+          "match": 0.724,
+          "hist": 0.889
+        },
+        {
+          "name": "endcamp",
+          "source": "bitmaps/endcamp.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.78,
+          "edges": 0.999,
+          "shift": 1.01,
+          "match": 0.731,
+          "hist": 0.891
+        },
+        {
+          "name": "battlestart",
+          "source": "bitmaps/battlestart.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 2.67,
+          "edges": 0.994,
+          "shift": 1.14,
+          "match": 0.739,
+          "hist": 0.953
+        },
+        {
+          "name": "igoptintx",
+          "source": "bitmaps/igoptintx.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.996,
+          "shift": 2.37,
+          "match": 0.741,
+          "hist": 0.761
+        },
+        {
+          "name": "playanygame4",
+          "source": "bitmaps/playanygame4.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 5.61,
+          "edges": 0.996,
+          "shift": 0.11,
+          "match": 0.741,
+          "hist": 0.912
+        },
+        {
+          "name": "igoptsoux",
+          "source": "bitmaps/igoptsoux.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 1.0,
+          "shift": 2.39,
+          "match": 0.745,
+          "hist": 0.767
+        },
+        {
+          "name": "igoptvisx",
+          "source": "bitmaps/igoptvisx.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 1.0,
+          "shift": 2.39,
+          "match": 0.745,
+          "hist": 0.767
+        },
+        {
+          "name": "igoptmusx",
+          "source": "bitmaps/igoptmusx.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 1.0,
+          "shift": 2.36,
+          "match": 0.746,
+          "hist": 0.765
+        },
+        {
+          "name": "newcampaign4",
+          "source": "bitmaps/newcampaign4.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 4.69,
+          "edges": 0.993,
+          "shift": 0.08,
+          "match": 0.752,
+          "hist": 0.921
+        },
+        {
+          "name": "drestart",
+          "source": "bitmaps/drestart.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.999,
+          "shift": 2.42,
+          "match": 0.755,
+          "hist": 0.783
+        },
+        {
+          "name": "mbriefarm",
+          "source": "bitmaps/mbriefarm.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.998,
+          "shift": 1.55,
+          "match": 0.763,
+          "hist": 0.864
+        },
+        {
+          "name": "skirmsetup4x",
+          "source": "bitmaps/skirmsetup4x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 7.55,
+          "edges": 0.997,
+          "shift": 0.12,
+          "match": 0.769,
+          "hist": 0.927
+        },
+        {
+          "name": "dloadlist",
+          "source": "bitmaps/dloadlist.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.998,
+          "shift": 0.11,
+          "match": 0.793,
+          "hist": 0.921
+        },
+        {
+          "name": "outcome0",
+          "source": "bitmaps/outcome0.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 4.69,
+          "edges": 0.999,
+          "shift": 0.09,
+          "match": 0.795,
+          "hist": 0.934
+        },
+        {
+          "name": "dsavelist",
+          "source": "bitmaps/dsavelist.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.998,
+          "shift": 0.11,
+          "match": 0.803,
+          "hist": 0.926
+        },
+        {
+          "name": "dsavegame2",
+          "source": "bitmaps/dsavegame2.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.999,
+          "shift": 0.52,
+          "match": 0.806,
+          "hist": 0.903
+        },
+        {
+          "name": "unitrestrict4x",
+          "source": "bitmaps/unitrestrict4x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 4.01,
+          "edges": 1.0,
+          "shift": 0.2,
+          "match": 0.809,
+          "hist": 0.926
+        },
+        {
+          "name": "unitrestrict5x",
+          "source": "bitmaps/unitrestrict5x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.8,
+          "edges": 0.999,
+          "shift": 0.2,
+          "match": 0.817,
+          "hist": 0.928
+        },
+        {
+          "name": "scorebg",
+          "source": "bitmaps/scorebg.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.993,
+          "shift": 0.66,
+          "match": 0.818,
+          "hist": 0.897
+        },
+        {
+          "name": "outcome1",
+          "source": "bitmaps/outcome1.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.999,
+          "shift": 0.11,
+          "match": 0.823,
+          "hist": 0.944
+        },
+        {
+          "name": "savegame",
+          "source": "bitmaps/savegame.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.999,
+          "shift": 0.13,
+          "match": 0.825,
+          "hist": 0.932
+        },
+        {
+          "name": "dhelp",
+          "source": "bitmaps/dhelp.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.997,
+          "shift": 0.94,
+          "match": 0.831,
+          "hist": 0.888
+        },
+        {
+          "name": "dloadgame2",
+          "source": "bitmaps/dloadgame2.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.999,
+          "shift": 0.27,
+          "match": 0.832,
+          "hist": 0.941
+        },
+        {
+          "name": "dselectmap2",
+          "source": "bitmaps/dselectmap2.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.998,
+          "shift": 0.13,
+          "match": 0.834,
+          "hist": 0.937
+        },
+        {
+          "name": "dviewmap",
+          "source": "bitmaps/dviewmap.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 0.998,
+          "shift": 0.12,
+          "match": 0.877,
+          "hist": 0.954
+        },
+        {
+          "name": "mission02winbw",
+          "source": "bitmaps/mission02winbw.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 13.05,
+          "edges": 0.995,
+          "shift": 0.2,
+          "match": 0.907,
+          "hist": 0.975
+        },
+        {
+          "name": "console",
+          "source": "bitmaps/console.pcx",
+          "size": [
+            512,
+            33
+          ],
+          "q": 0.0,
+          "edges": 1.0,
+          "shift": 0.09,
+          "match": 0.916,
+          "hist": 0.951
+        },
+        {
+          "name": "igoptionstemp",
+          "source": "bitmaps/igoptionstemp.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 1.0,
+          "shift": 0.05,
+          "match": 0.923,
+          "hist": 0.958
+        },
+        {
+          "name": "igopttemp",
+          "source": "bitmaps/igopttemp.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 1.0,
+          "shift": 0.24,
+          "match": 0.949,
+          "hist": 0.979
+        },
+        {
+          "name": "igopt1x",
+          "source": "bitmaps/igopt1x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 1.0,
+          "shift": 0.29,
+          "match": 0.953,
+          "hist": 0.982
+        },
+        {
+          "name": "igopt0x",
+          "source": "bitmaps/igopt0x.pcx",
+          "size": [
+            640,
+            480
+          ],
+          "q": 0.0,
+          "edges": 1.0,
+          "shift": 0.2,
+          "match": 0.965,
+          "hist": 0.978
+        }
+      ],
+      "sheet": "research/notes/assets/shots/uiart/uiart-bg.webp",
+      "sheet_size": [
+        1674,
+        4976
+      ],
+      "match_min": 0.438,
+      "match_median": 0.684
+    },
+    "gaf": {
+      "frames": [
+        {
+          "name": "commongui.armpan",
+          "source": "anims/commongui.gaf",
+          "size": [
+            128,
+            352
+          ],
+          "q": 23.32,
+          "edges": 0.0,
+          "shift": 0.05,
+          "match": 0.313,
+          "hist": 0.665
+        },
+        {
+          "name": "commongui.armpan2",
+          "source": "anims/commongui.gaf",
+          "size": [
+            128,
+            352
+          ],
+          "q": 22.83,
+          "edges": 0.0,
+          "shift": 0.06,
+          "match": 0.33,
+          "hist": 0.705
+        },
+        {
+          "name": "oldmain.intro",
+          "source": "anims/oldmain.gaf",
+          "size": [
+            96,
+            64
+          ],
+          "q": 160.18,
+          "edges": 0.998,
+          "shift": 0.62,
+          "match": 0.452,
+          "hist": 0.513
+        },
+        {
+          "name": "commongui.corattack",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 34.3,
+          "edges": 0.992,
+          "shift": 3.56,
+          "match": 0.504,
+          "hist": 0.674
+        },
+        {
+          "name": "corcom1.corsolar",
+          "source": "anims/corcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 63.65,
+          "edges": 1.0,
+          "shift": 0.15,
+          "match": 0.521,
+          "hist": 0.893
+        },
+        {
+          "name": "commongui.armpatrol",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 42.27,
+          "edges": 0.996,
+          "shift": 3.62,
+          "match": 0.522,
+          "hist": 0.667
+        },
+        {
+          "name": "commongui.correpair",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 20.14,
+          "edges": 1.0,
+          "shift": 3.47,
+          "match": 0.524,
+          "hist": 0.676
+        },
+        {
+          "name": "commongui.armrepair",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 24.94,
+          "edges": 1.0,
+          "shift": 3.68,
+          "match": 0.533,
+          "hist": 0.678
+        },
+        {
+          "name": "commongui.stagebuttn2",
+          "source": "anims/commongui.gaf",
+          "size": [
+            120,
+            20
+          ],
+          "q": 38.97,
+          "edges": 1.0,
+          "shift": 0.22,
+          "match": 0.54,
+          "hist": 0.693
+        },
+        {
+          "name": "commongui.stagebuttn1",
+          "source": "anims/commongui.gaf",
+          "size": [
+            120,
+            20
+          ],
+          "q": 39.69,
+          "edges": 1.0,
+          "shift": 0.15,
+          "match": 0.545,
+          "hist": 0.688
+        },
+        {
+          "name": "armcom1.armsolar",
+          "source": "anims/armcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 72.03,
+          "edges": 0.989,
+          "shift": 0.22,
+          "match": 0.546,
+          "hist": 0.875
+        },
+        {
+          "name": "commongui.backtile",
+          "source": "anims/commongui.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 13.07,
+          "edges": 0.99,
+          "shift": 0.06,
+          "match": 0.548,
+          "hist": 0.754
+        },
+        {
+          "name": "commongui.stagebuttn4",
+          "source": "anims/commongui.gaf",
+          "size": [
+            120,
+            20
+          ],
+          "q": 38.76,
+          "edges": 1.0,
+          "shift": 0.21,
+          "match": 0.55,
+          "hist": 0.698
+        },
+        {
+          "name": "commongui.corpatrol",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 42.0,
+          "edges": 1.0,
+          "shift": 3.45,
+          "match": 0.551,
+          "hist": 0.683
+        },
+        {
+          "name": "commongui.armcapture",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 30.16,
+          "edges": 0.992,
+          "shift": 3.3,
+          "match": 0.551,
+          "hist": 0.689
+        },
+        {
+          "name": "skirmish.skirmname",
+          "source": "anims/skirmish.gaf",
+          "size": [
+            112,
+            20
+          ],
+          "q": 40.79,
+          "edges": 1.0,
+          "shift": 0.2,
+          "match": 0.553,
+          "hist": 0.717
+        },
+        {
+          "name": "commongui.stagebuttn3",
+          "source": "anims/commongui.gaf",
+          "size": [
+            120,
+            20
+          ],
+          "q": 38.24,
+          "edges": 1.0,
+          "shift": 0.21,
+          "match": 0.555,
+          "hist": 0.71
+        },
+        {
+          "name": "commongui.armreclaim",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 43.13,
+          "edges": 0.996,
+          "shift": 3.22,
+          "match": 0.556,
+          "hist": 0.675
+        },
+        {
+          "name": "oldmain.multi",
+          "source": "anims/oldmain.gaf",
+          "size": [
+            96,
+            64
+          ],
+          "q": 162.52,
+          "edges": 0.997,
+          "shift": 0.62,
+          "match": 0.557,
+          "hist": 0.636
+        },
+        {
+          "name": "commongui.corspecial",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 21.05,
+          "edges": 0.962,
+          "shift": 3.24,
+          "match": 0.559,
+          "hist": 0.708
+        },
+        {
+          "name": "commongui.armcloak",
+          "source": "anims/commongui.gaf",
+          "size": [
+            113,
+            21
+          ],
+          "q": 3.46,
+          "edges": 1.0,
+          "shift": 2.59,
+          "match": 0.562,
+          "hist": 0.696
+        },
+        {
+          "name": "commongui.armmove",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 24.01,
+          "edges": 1.0,
+          "shift": 3.0,
+          "match": 0.565,
+          "hist": 0.743
+        },
+        {
+          "name": "commongui.corload",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 2.43,
+          "edges": 0.995,
+          "shift": 2.63,
+          "match": 0.565,
+          "hist": 0.762
+        },
+        {
+          "name": "oldmain.exit",
+          "source": "anims/oldmain.gaf",
+          "size": [
+            96,
+            64
+          ],
+          "q": 152.34,
+          "edges": 0.998,
+          "shift": 0.44,
+          "match": 0.567,
+          "hist": 0.629
+        },
+        {
+          "name": "commongui.correclaim",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 37.41,
+          "edges": 1.0,
+          "shift": 3.07,
+          "match": 0.569,
+          "hist": 0.693
+        },
+        {
+          "name": "commongui.frontpan",
+          "source": "anims/commongui.gaf",
+          "size": [
+            129,
+            352
+          ],
+          "q": 26.2,
+          "edges": 0.0,
+          "shift": 0.07,
+          "match": 0.57,
+          "hist": 0.862
+        },
+        {
+          "name": "commongui.corstop",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 29.76,
+          "edges": 1.0,
+          "shift": 2.48,
+          "match": 0.572,
+          "hist": 0.751
+        },
+        {
+          "name": "commongui.armblast",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 12.96,
+          "edges": 1.0,
+          "shift": 2.83,
+          "match": 0.577,
+          "hist": 0.734
+        },
+        {
+          "name": "commongui.cormove",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 10.28,
+          "edges": 0.943,
+          "shift": 2.68,
+          "match": 0.577,
+          "hist": 0.738
+        },
+        {
+          "name": "commongui.speedsrt",
+          "source": "anims/commongui.gaf",
+          "size": [
+            149,
+            354
+          ],
+          "q": 16.2,
+          "edges": 0.993,
+          "shift": 1.41,
+          "match": 0.579,
+          "hist": 0.692
+        },
+        {
+          "name": "commongui.armstop",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 9.56,
+          "edges": 0.957,
+          "shift": 2.67,
+          "match": 0.582,
+          "hist": 0.735
+        },
+        {
+          "name": "oldmain.single",
+          "source": "anims/oldmain.gaf",
+          "size": [
+            96,
+            64
+          ],
+          "q": 152.64,
+          "edges": 0.999,
+          "shift": 0.66,
+          "match": 0.591,
+          "hist": 0.641
+        },
+        {
+          "name": "commongui.armunload",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 5.27,
+          "edges": 0.992,
+          "shift": 2.49,
+          "match": 0.591,
+          "hist": 0.76
+        },
+        {
+          "name": "commongui.armattack",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 34.04,
+          "edges": 0.965,
+          "shift": 2.69,
+          "match": 0.596,
+          "hist": 0.729
+        },
+        {
+          "name": "commongui.armdefend",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 30.16,
+          "edges": 1.0,
+          "shift": 2.41,
+          "match": 0.598,
+          "hist": 0.775
+        },
+        {
+          "name": "commongui.corpan2",
+          "source": "anims/commongui.gaf",
+          "size": [
+            128,
+            352
+          ],
+          "q": 14.61,
+          "edges": 0.0,
+          "shift": 0.13,
+          "match": 0.599,
+          "hist": 0.871
+        },
+        {
+          "name": "commongui.armmoveord",
+          "source": "anims/commongui.gaf",
+          "size": [
+            113,
+            21
+          ],
+          "q": 26.51,
+          "edges": 0.995,
+          "shift": 3.14,
+          "match": 0.601,
+          "hist": 0.717
+        },
+        {
+          "name": "commongui.cordefend",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 49.5,
+          "edges": 0.995,
+          "shift": 2.46,
+          "match": 0.604,
+          "hist": 0.773
+        },
+        {
+          "name": "commongui.armfireord",
+          "source": "anims/commongui.gaf",
+          "size": [
+            113,
+            21
+          ],
+          "q": 43.67,
+          "edges": 1.0,
+          "shift": 2.77,
+          "match": 0.608,
+          "hist": 0.759
+        },
+        {
+          "name": "commongui.cororders",
+          "source": "anims/commongui.gaf",
+          "size": [
+            58,
+            18
+          ],
+          "q": 44.16,
+          "edges": 1.0,
+          "shift": 3.11,
+          "match": 0.61,
+          "hist": 0.701
+        },
+        {
+          "name": "commongui.corfireord",
+          "source": "anims/commongui.gaf",
+          "size": [
+            113,
+            21
+          ],
+          "q": 34.67,
+          "edges": 1.0,
+          "shift": 2.75,
+          "match": 0.614,
+          "hist": 0.766
+        },
+        {
+          "name": "commongui.armload",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 2.82,
+          "edges": 0.988,
+          "shift": 2.49,
+          "match": 0.615,
+          "hist": 0.771
+        },
+        {
+          "name": "commongui.corcapture",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 30.16,
+          "edges": 0.992,
+          "shift": 2.95,
+          "match": 0.622,
+          "hist": 0.737
+        },
+        {
+          "name": "commongui.armspecial",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 18.15,
+          "edges": 1.0,
+          "shift": 2.45,
+          "match": 0.622,
+          "hist": 0.751
+        },
+        {
+          "name": "commongui.corunload",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 49.11,
+          "edges": 0.996,
+          "shift": 2.24,
+          "match": 0.623,
+          "hist": 0.779
+        },
+        {
+          "name": "commongui.coractivate",
+          "source": "anims/commongui.gaf",
+          "size": [
+            113,
+            21
+          ],
+          "q": 6.41,
+          "edges": 0.969,
+          "shift": 2.89,
+          "match": 0.625,
+          "hist": 0.764
+        },
+        {
+          "name": "commongui.cormoveord",
+          "source": "anims/commongui.gaf",
+          "size": [
+            113,
+            21
+          ],
+          "q": 32.61,
+          "edges": 1.0,
+          "shift": 2.89,
+          "match": 0.627,
+          "hist": 0.76
+        },
+        {
+          "name": "commongui.corblast",
+          "source": "anims/commongui.gaf",
+          "size": [
+            54,
+            30
+          ],
+          "q": 22.83,
+          "edges": 1.0,
+          "shift": 2.38,
+          "match": 0.627,
+          "hist": 0.779
+        },
+        {
+          "name": "commongui.corpan",
+          "source": "anims/commongui.gaf",
+          "size": [
+            128,
+            352
+          ],
+          "q": 15.53,
+          "edges": 0.0,
+          "shift": 0.18,
+          "match": 0.632,
+          "hist": 0.856
+        },
+        {
+          "name": "loadgame.loadgame",
+          "source": "anims/loadgame.gaf",
+          "size": [
+            134,
+            38
+          ],
+          "q": 2.39,
+          "edges": 0.998,
+          "shift": 1.74,
+          "match": 0.647,
+          "hist": 0.903
+        },
+        {
+          "name": "commongui.armorders",
+          "source": "anims/commongui.gaf",
+          "size": [
+            58,
+            18
+          ],
+          "q": 30.5,
+          "edges": 1.0,
+          "shift": 2.33,
+          "match": 0.652,
+          "hist": 0.734
+        },
+        {
+          "name": "single.anymsn",
+          "source": "anims/single.gaf",
+          "size": [
+            48,
+            44
+          ],
+          "q": 15.61,
+          "edges": 0.0,
+          "shift": 0.05,
+          "match": 0.653,
+          "hist": 0.836
+        },
+        {
+          "name": "commongui.textinput",
+          "source": "anims/commongui.gaf",
+          "size": [
+            16,
+            32
+          ],
+          "q": 283.09,
+          "edges": 1.0,
+          "shift": 4.19,
+          "match": 0.654,
+          "hist": 0.748
+        },
+        {
+          "name": "commongui.armactivate",
+          "source": "anims/commongui.gaf",
+          "size": [
+            114,
+            21
+          ],
+          "q": 2.91,
+          "edges": 0.984,
+          "shift": 2.51,
+          "match": 0.661,
+          "hist": 0.76
+        },
+        {
+          "name": "corcom1.cormex",
+          "source": "anims/corcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 78.1,
+          "edges": 0.992,
+          "shift": 0.15,
+          "match": 0.664,
+          "hist": 0.915
+        },
+        {
+          "name": "commongui.corcloak",
+          "source": "anims/commongui.gaf",
+          "size": [
+            114,
+            21
+          ],
+          "q": 15.57,
+          "edges": 1.0,
+          "shift": 2.47,
+          "match": 0.67,
+          "hist": 0.797
+        },
+        {
+          "name": "commongui.armonoff",
+          "source": "anims/commongui.gaf",
+          "size": [
+            113,
+            21
+          ],
+          "q": 4.1,
+          "edges": 0.982,
+          "shift": 2.41,
+          "match": 0.677,
+          "hist": 0.819
+        },
+        {
+          "name": "commongui.igopt",
+          "source": "anims/commongui.gaf",
+          "size": [
+            128,
+            354
+          ],
+          "q": 13.19,
+          "edges": 1.0,
+          "shift": 1.84,
+          "match": 0.683,
+          "hist": 0.888
+        },
+        {
+          "name": "armaap1.armaca",
+          "source": "anims/armaap1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 100.42,
+          "edges": 0.987,
+          "shift": 0.27,
+          "match": 0.689,
+          "hist": 0.873
+        },
+        {
+          "name": "commongui.corbuild",
+          "source": "anims/commongui.gaf",
+          "size": [
+            58,
+            18
+          ],
+          "q": 38.13,
+          "edges": 1.0,
+          "shift": 2.04,
+          "match": 0.692,
+          "hist": 0.809
+        },
+        {
+          "name": "commongui.soundsrt",
+          "source": "anims/commongui.gaf",
+          "size": [
+            149,
+            354
+          ],
+          "q": 17.4,
+          "edges": 1.0,
+          "shift": 0.11,
+          "match": 0.695,
+          "hist": 0.836
+        },
+        {
+          "name": "armopt.optbg",
+          "source": "anims/armopt.gaf",
+          "size": [
+            128,
+            354
+          ],
+          "q": 6.57,
+          "edges": 1.0,
+          "shift": 2.21,
+          "match": 0.697,
+          "hist": 0.867
+        },
+        {
+          "name": "commongui.visualsrt",
+          "source": "anims/commongui.gaf",
+          "size": [
+            149,
+            354
+          ],
+          "q": 17.39,
+          "edges": 1.0,
+          "shift": 0.12,
+          "match": 0.698,
+          "hist": 0.835
+        },
+        {
+          "name": "armaap1.armlance",
+          "source": "anims/armaap1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 123.28,
+          "edges": 0.984,
+          "shift": 0.34,
+          "match": 0.7,
+          "hist": 0.845
+        },
+        {
+          "name": "armaap1.armhawk",
+          "source": "anims/armaap1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 177.2,
+          "edges": 0.996,
+          "shift": 1.41,
+          "match": 0.704,
+          "hist": 0.821
+        },
+        {
+          "name": "armaap1.armpnix",
+          "source": "anims/armaap1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 236.89,
+          "edges": 0.958,
+          "shift": 0.5,
+          "match": 0.724,
+          "hist": 0.838
+        },
+        {
+          "name": "armcom1.armmstor",
+          "source": "anims/armcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 55.06,
+          "edges": 1.0,
+          "shift": 0.12,
+          "match": 0.727,
+          "hist": 0.858
+        },
+        {
+          "name": "commongui.musicrt",
+          "source": "anims/commongui.gaf",
+          "size": [
+            149,
+            354
+          ],
+          "q": 16.9,
+          "edges": 1.0,
+          "shift": 0.15,
+          "match": 0.731,
+          "hist": 0.855
+        },
+        {
+          "name": "skirmish.skirmmet",
+          "source": "anims/skirmish.gaf",
+          "size": [
+            46,
+            20
+          ],
+          "q": 59.48,
+          "edges": 1.0,
+          "shift": 0.12,
+          "match": 0.736,
+          "hist": 0.921
+        },
+        {
+          "name": "commongui.coronoff",
+          "source": "anims/commongui.gaf",
+          "size": [
+            114,
+            21
+          ],
+          "q": 8.18,
+          "edges": 0.986,
+          "shift": 1.69,
+          "match": 0.738,
+          "hist": 0.891
+        },
+        {
+          "name": "commongui.igpatch",
+          "source": "anims/commongui.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 15.82,
+          "edges": 1.0,
+          "shift": 0.3,
+          "match": 0.756,
+          "hist": 0.908
+        },
+        {
+          "name": "armcom1.armmakr",
+          "source": "anims/armcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 41.91,
+          "edges": 0.994,
+          "shift": 0.16,
+          "match": 0.761,
+          "hist": 0.877
+        },
+        {
+          "name": "commongui.armnext",
+          "source": "anims/commongui.gaf",
+          "size": [
+            45,
+            17
+          ],
+          "q": 2.92,
+          "edges": 1.0,
+          "shift": 1.26,
+          "match": 0.762,
+          "hist": 0.933
+        },
+        {
+          "name": "armcom1.armwin",
+          "source": "anims/armcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 77.96,
+          "edges": 0.995,
+          "shift": 0.09,
+          "match": 0.765,
+          "hist": 0.888
+        },
+        {
+          "name": "commongui.armprev",
+          "source": "anims/commongui.gaf",
+          "size": [
+            45,
+            17
+          ],
+          "q": 3.94,
+          "edges": 1.0,
+          "shift": 1.77,
+          "match": 0.765,
+          "hist": 0.919
+        },
+        {
+          "name": "commongui.cornext",
+          "source": "anims/commongui.gaf",
+          "size": [
+            45,
+            17
+          ],
+          "q": 6.86,
+          "edges": 0.973,
+          "shift": 1.09,
+          "match": 0.773,
+          "hist": 0.925
+        },
+        {
+          "name": "commongui.armbuild",
+          "source": "anims/commongui.gaf",
+          "size": [
+            58,
+            18
+          ],
+          "q": 48.78,
+          "edges": 0.995,
+          "shift": 0.58,
+          "match": 0.778,
+          "hist": 0.885
+        },
+        {
+          "name": "commongui.corprev",
+          "source": "anims/commongui.gaf",
+          "size": [
+            45,
+            17
+          ],
+          "q": 12.72,
+          "edges": 0.986,
+          "shift": 2.15,
+          "match": 0.788,
+          "hist": 0.899
+        },
+        {
+          "name": "skirmish.sidex",
+          "source": "anims/skirmish.gaf",
+          "size": [
+            44,
+            20
+          ],
+          "q": 62.6,
+          "edges": 0.99,
+          "shift": 1.02,
+          "match": 0.798,
+          "hist": 0.895
+        },
+        {
+          "name": "armaap1.armbrawl",
+          "source": "anims/armaap1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 102.34,
+          "edges": 0.987,
+          "shift": 0.33,
+          "match": 0.804,
+          "hist": 0.87
+        },
+        {
+          "name": "skirmish.teamiconsx",
+          "source": "anims/skirmish.gaf",
+          "size": [
+            38,
+            20
+          ],
+          "q": 107.05,
+          "edges": 1.0,
+          "shift": 0.1,
+          "match": 0.821,
+          "hist": 0.936
+        },
+        {
+          "name": "skirmish.ally icons",
+          "source": "anims/skirmish.gaf",
+          "size": [
+            38,
+            20
+          ],
+          "q": 101.35,
+          "edges": 1.0,
+          "shift": 0.19,
+          "match": 0.83,
+          "hist": 0.938
+        },
+        {
+          "name": "commongui.sliders",
+          "source": "anims/commongui.gaf",
+          "size": [
+            16,
+            16
+          ],
+          "q": 109.85,
+          "edges": 1.0,
+          "shift": 0.23,
+          "match": 0.867,
+          "hist": 0.918
+        },
+        {
+          "name": "commongui.checkbox",
+          "source": "anims/commongui.gaf",
+          "size": [
+            16,
+            16
+          ],
+          "q": 122.86,
+          "edges": 1.0,
+          "shift": 0.22,
+          "match": 0.871,
+          "hist": 0.898
+        },
+        {
+          "name": "armcom1.armmex",
+          "source": "anims/armcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 69.68,
+          "edges": 0.988,
+          "shift": 0.22,
+          "match": 0.879,
+          "hist": 0.928
+        },
+        {
+          "name": "corcom1.corwin",
+          "source": "anims/corcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 69.95,
+          "edges": 0.996,
+          "shift": 0.11,
+          "match": 0.894,
+          "hist": 0.928
+        },
+        {
+          "name": "corcom1.corestor",
+          "source": "anims/corcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 166.16,
+          "edges": 0.995,
+          "shift": 0.25,
+          "match": 0.903,
+          "hist": 0.923
+        },
+        {
+          "name": "commongui.lightbar",
+          "source": "anims/commongui.gaf",
+          "size": [
+            351,
+            21
+          ],
+          "q": 10.51,
+          "edges": 1.0,
+          "shift": 0.07,
+          "match": 0.91,
+          "hist": 0.934
+        },
+        {
+          "name": "corcom1.cormakr",
+          "source": "anims/corcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 150.57,
+          "edges": 0.997,
+          "shift": 0.18,
+          "match": 0.921,
+          "hist": 0.941
+        },
+        {
+          "name": "armcom1.armestor",
+          "source": "anims/armcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 146.72,
+          "edges": 0.997,
+          "shift": 0.16,
+          "match": 0.921,
+          "hist": 0.946
+        },
+        {
+          "name": "corcom1.cormstor",
+          "source": "anims/corcom1.gaf",
+          "size": [
+            64,
+            64
+          ],
+          "q": 151.18,
+          "edges": 0.996,
+          "shift": 0.13,
+          "match": 0.933,
+          "hist": 0.951
+        },
+        {
+          "name": "commongui.listbox",
+          "source": "anims/commongui.gaf",
+          "size": [
+            16,
+            16
+          ],
+          "q": 0.0,
+          "edges": 1.0,
+          "shift": 0.23,
+          "match": 0.965,
+          "hist": 0.969
+        }
+      ],
+      "sheet": "research/notes/assets/shots/uiart/uiart-gaf.webp",
+      "sheet_size": [
+        3280,
+        4224
+      ],
+      "match_min": 0.313,
+      "match_median": 0.626
+    },
+    "cursors": {
+      "frames": [
+        {
+          "name": "cursors.pathicon",
+          "source": "anims/cursors.gaf",
+          "size": [
+            11,
+            11
+          ],
+          "q": 52.36,
+          "edges": 0.0,
+          "shift": 0.61,
+          "match": 0.331,
+          "hist": 0.421
+        },
+        {
+          "name": "cursors.cursorreclamate",
+          "source": "anims/cursors.gaf",
+          "size": [
+            27,
+            27
+          ],
+          "q": 7.16,
+          "edges": 0.978,
+          "shift": 1.18,
+          "match": 0.344,
+          "hist": 0.513
+        },
+        {
+          "name": "cursors.cursormove",
+          "source": "anims/cursors.gaf",
+          "size": [
+            27,
+            27
+          ],
+          "q": 2.5,
+          "edges": 1.0,
+          "shift": 4.11,
+          "match": 0.358,
+          "hist": 0.491
+        },
+        {
+          "name": "cursors.cursorselect",
+          "source": "anims/cursors.gaf",
+          "size": [
+            21,
+            23
+          ],
+          "q": 130.32,
+          "edges": 1.0,
+          "shift": 1.47,
+          "match": 0.36,
+          "hist": 0.586
+        },
+        {
+          "name": "cursors.cursorprotect",
+          "source": "anims/cursors.gaf",
+          "size": [
+            51,
+            51
+          ],
+          "q": 2.24,
+          "edges": 0.987,
+          "shift": 1.47,
+          "match": 0.376,
+          "hist": 0.619
+        },
+        {
+          "name": "cursors.cursordefend",
+          "source": "anims/cursors.gaf",
+          "size": [
+            15,
+            21
+          ],
+          "q": 303.57,
+          "edges": 1.0,
+          "shift": 3.76,
+          "match": 0.403,
+          "hist": 0.498
+        },
+        {
+          "name": "cursors.cursorrevive",
+          "source": "anims/cursors.gaf",
+          "size": [
+            15,
+            21
+          ],
+          "q": 182.75,
+          "edges": 1.0,
+          "shift": 2.03,
+          "match": 0.432,
+          "hist": 0.492
+        },
+        {
+          "name": "cursors.cursorpickup",
+          "source": "anims/cursors.gaf",
+          "size": [
+            15,
+            29
+          ],
+          "q": 17.83,
+          "edges": 1.0,
+          "shift": 3.3,
+          "match": 0.451,
+          "hist": 0.563
+        },
+        {
+          "name": "cursors.cursorhourglass",
+          "source": "anims/cursors.gaf",
+          "size": [
+            13,
+            19
+          ],
+          "q": 102.34,
+          "edges": 1.0,
+          "shift": 0.31,
+          "match": 0.457,
+          "hist": 0.575
+        },
+        {
+          "name": "cursors.cursorload",
+          "source": "anims/cursors.gaf",
+          "size": [
+            31,
+            15
+          ],
+          "q": 80.9,
+          "edges": 1.0,
+          "shift": 3.52,
+          "match": 0.458,
+          "hist": 0.583
+        },
+        {
+          "name": "cursors.cursorred",
+          "source": "anims/cursors.gaf",
+          "size": [
+            10,
+            20
+          ],
+          "q": 3.07,
+          "edges": 0.966,
+          "shift": 0.2,
+          "match": 0.465,
+          "hist": 0.525
+        },
+        {
+          "name": "cursors.cursorpatrol",
+          "source": "anims/cursors.gaf",
+          "size": [
+            23,
+            20
+          ],
+          "q": 5.45,
+          "edges": 0.988,
+          "shift": 2.11,
+          "match": 0.485,
+          "hist": 0.633
+        },
+        {
+          "name": "cursors.cursorcapture",
+          "source": "anims/cursors.gaf",
+          "size": [
+            31,
+            15
+          ],
+          "q": 5.04,
+          "edges": 1.0,
+          "shift": 2.19,
+          "match": 0.486,
+          "hist": 0.602
+        },
+        {
+          "name": "cursors.cursorattack",
+          "source": "anims/cursors.gaf",
+          "size": [
+            33,
+            33
+          ],
+          "q": 7.05,
+          "edges": 0.982,
+          "shift": 0.87,
+          "match": 0.488,
+          "hist": 0.609
+        },
+        {
+          "name": "cursors.cursorgrn",
+          "source": "anims/cursors.gaf",
+          "size": [
+            10,
+            20
+          ],
+          "q": 3.35,
+          "edges": 1.0,
+          "shift": 0.83,
+          "match": 0.5,
+          "hist": 0.65
+        },
+        {
+          "name": "cursors.cursorteleport",
+          "source": "anims/cursors.gaf",
+          "size": [
+            23,
+            15
+          ],
+          "q": 14.76,
+          "edges": 1.0,
+          "shift": 1.96,
+          "match": 0.525,
+          "hist": 0.626
+        },
+        {
+          "name": "cursors.cursortoofar",
+          "source": "anims/cursors.gaf",
+          "size": [
+            29,
+            29
+          ],
+          "q": 22.0,
+          "edges": 1.0,
+          "shift": 0.61,
+          "match": 0.568,
+          "hist": 0.66
+        },
+        {
+          "name": "cursors.cursorairstrike",
+          "source": "anims/cursors.gaf",
+          "size": [
+            27,
+            34
+          ],
+          "q": 2.7,
+          "edges": 1.0,
+          "shift": 0.65,
+          "match": 0.574,
+          "hist": 0.685
+        },
+        {
+          "name": "cursors.cursorrepair",
+          "source": "anims/cursors.gaf",
+          "size": [
+            33,
+            15
+          ],
+          "q": 178.38,
+          "edges": 1.0,
+          "shift": 1.78,
+          "match": 0.604,
+          "hist": 0.657
+        },
+        {
+          "name": "cursors.cursornormal",
+          "source": "anims/cursors.gaf",
+          "size": [
+            10,
+            20
+          ],
+          "q": 4.47,
+          "edges": 1.0,
+          "shift": 0.5,
+          "match": 0.725,
+          "hist": 0.825
+        }
+      ],
+      "sheet": "research/notes/assets/shots/uiart/uiart-cursors.webp",
+      "sheet_size": [
+        968,
+        1014
+      ],
+      "match_min": 0.331,
+      "match_median": 0.4615
+    },
+    "unitpics": {
+      "frames": [
+        {
+          "name": "armvader",
+          "source": "unitpics/armvader.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 62.13,
+          "edges": 1.0,
+          "shift": 0.11,
+          "match": 0.422,
+          "hist": 0.888
+        },
+        {
+          "name": "armrock",
+          "source": "unitpics/armrock.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 60.69,
+          "edges": 0.992,
+          "shift": 0.09,
+          "match": 0.476,
+          "hist": 0.892
+        },
+        {
+          "name": "armjam",
+          "source": "unitpics/armjam.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 60.86,
+          "edges": 0.992,
+          "shift": 0.1,
+          "match": 0.48,
+          "hist": 0.892
+        },
+        {
+          "name": "corllt",
+          "source": "unitpics/corllt.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 60.76,
+          "edges": 0.994,
+          "shift": 0.1,
+          "match": 0.522,
+          "hist": 0.882
+        },
+        {
+          "name": "armavp",
+          "source": "unitpics/armavp.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 60.04,
+          "edges": 0.99,
+          "shift": 0.09,
+          "match": 0.552,
+          "hist": 0.897
+        },
+        {
+          "name": "corfing",
+          "source": "unitpics/corfing.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 58.57,
+          "edges": 0.999,
+          "shift": 0.11,
+          "match": 0.573,
+          "hist": 0.891
+        },
+        {
+          "name": "armaap",
+          "source": "unitpics/armaap.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 58.63,
+          "edges": 0.998,
+          "shift": 0.08,
+          "match": 0.58,
+          "hist": 0.914
+        },
+        {
+          "name": "corseap",
+          "source": "unitpics/corseap.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 29.34,
+          "edges": 0.997,
+          "shift": 0.11,
+          "match": 0.626,
+          "hist": 0.807
+        },
+        {
+          "name": "corcarry",
+          "source": "unitpics/corcarry.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 65.09,
+          "edges": 0.999,
+          "shift": 0.14,
+          "match": 0.669,
+          "hist": 0.869
+        },
+        {
+          "name": "armtarg",
+          "source": "unitpics/armtarg.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 38.4,
+          "edges": 0.997,
+          "shift": 0.11,
+          "match": 0.687,
+          "hist": 0.888
+        },
+        {
+          "name": "corpt",
+          "source": "unitpics/corpt.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 66.05,
+          "edges": 0.993,
+          "shift": 0.11,
+          "match": 0.691,
+          "hist": 0.877
+        },
+        {
+          "name": "cordev1",
+          "source": "unitpics/cordev1.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 35.08,
+          "edges": 0.998,
+          "shift": 0.12,
+          "match": 0.692,
+          "hist": 0.852
+        },
+        {
+          "name": "armamph",
+          "source": "unitpics/armamph.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 7.07,
+          "edges": 0.998,
+          "shift": 0.9,
+          "match": 0.71,
+          "hist": 0.889
+        },
+        {
+          "name": "armckfus",
+          "source": "unitpics/armckfus.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 25.02,
+          "edges": 1.0,
+          "shift": 0.16,
+          "match": 0.758,
+          "hist": 0.891
+        },
+        {
+          "name": "corason",
+          "source": "unitpics/corason.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 8.24,
+          "edges": 0.992,
+          "shift": 0.43,
+          "match": 0.766,
+          "hist": 0.882
+        },
+        {
+          "name": "armmerl",
+          "source": "unitpics/armmerl.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 38.65,
+          "edges": 0.999,
+          "shift": 0.26,
+          "match": 0.767,
+          "hist": 0.91
+        },
+        {
+          "name": "corack",
+          "source": "unitpics/corack.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 39.99,
+          "edges": 0.993,
+          "shift": 0.29,
+          "match": 0.768,
+          "hist": 0.925
+        },
+        {
+          "name": "cormine6",
+          "source": "unitpics/cormine6.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 41.22,
+          "edges": 0.993,
+          "shift": 0.11,
+          "match": 0.775,
+          "hist": 0.906
+        },
+        {
+          "name": "corspec",
+          "source": "unitpics/corspec.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 35.85,
+          "edges": 0.999,
+          "shift": 0.17,
+          "match": 0.775,
+          "hist": 0.914
+        },
+        {
+          "name": "armfmkr",
+          "source": "unitpics/armfmkr.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 30.18,
+          "edges": 0.997,
+          "shift": 0.29,
+          "match": 0.785,
+          "hist": 0.86
+        },
+        {
+          "name": "armsjam",
+          "source": "unitpics/armsjam.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 7.57,
+          "edges": 0.997,
+          "shift": 0.41,
+          "match": 0.795,
+          "hist": 0.854
+        },
+        {
+          "name": "armmoho",
+          "source": "unitpics/armmoho.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 35.98,
+          "edges": 0.995,
+          "shift": 0.15,
+          "match": 0.871,
+          "hist": 0.91
+        },
+        {
+          "name": "corgeo",
+          "source": "unitpics/corgeo.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 44.2,
+          "edges": 1.0,
+          "shift": 0.08,
+          "match": 0.898,
+          "hist": 0.924
+        },
+        {
+          "name": "armestor",
+          "source": "unitpics/armestor.pcx",
+          "size": [
+            96,
+            96
+          ],
+          "q": 40.43,
+          "edges": 0.997,
+          "shift": 0.19,
+          "match": 0.906,
+          "hist": 0.937
+        }
+      ],
+      "sheet": "research/notes/assets/shots/uiart/uiart-unitpics.webp",
+      "sheet_size": [
+        1778,
+        2728
+      ],
+      "match_min": 0.422,
+      "match_median": 0.701
+    },
+    "screens": {
+      "frames": [
+        {
+          "name": "main",
+          "source": "tools/undither/screens/main.png",
+          "size": [
+            640,
+            480
+          ],
+          "q": 11.03,
+          "edges": 0.996,
+          "shift": 0.06,
+          "match": 0.548,
+          "hist": 0.763
+        },
+        {
+          "name": "single",
+          "source": "tools/undither/screens/single.png",
+          "size": [
+            640,
+            480
+          ],
+          "q": 14.38,
+          "edges": 0.999,
+          "shift": 0.09,
+          "match": 0.616,
+          "hist": 0.874
+        },
+        {
+          "name": "setup",
+          "source": "tools/undither/screens/setup.png",
+          "size": [
+            640,
+            480
+          ],
+          "q": 11.57,
+          "edges": 0.996,
+          "shift": 0.2,
+          "match": 0.728,
+          "hist": 0.905
+        }
+      ],
+      "sheet": "research/notes/assets/shots/uiart/uiart-screens.webp",
+      "sheet_size": [
+        1674,
+        1250
+      ],
+      "match_min": 0.548,
+      "match_median": 0.616
+    }
+  }
+}
