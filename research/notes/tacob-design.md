@@ -147,6 +147,22 @@ log `tick, unit index, unit type, script name, args…, return, thread slot` to 
 If the VM's `RAND` handler can be reached cheaply, log its draws too, so a replay can feed them
 back; otherwise the gate scenarios avoid rand-driven pieces.
 
+**The trace contract** `[PLANNED — landing 2 writes it, landing 3 parses it; a field the engine
+cannot supply is removed from *this table* in the same commit, never silently left blank]`.
+`tagpu_cobtrace.on` in the instance's game dir (the other oracles' idiom) makes the fork append
+tab-separated lines to `tagpu_cobtrace.log`; the editor's trace tab prints the same lines:
+
+| Line | Fields | When |
+|---|---|---|
+| `S` | `tick  unit  type  script  slot  source  args…` | a thread starts. `source` = `E` (the engine called it) or `C` (a script's `start-script`/`call-script`); `slot` = the thread record 0..7; `args` comma-separated as the engine pushed them |
+| `R` | `tick  unit  slot  script  value` | a thread returns; `value` = what its `RETURN` popped |
+| `X` | `tick  unit  script  source` | a start was **refused** — the pool was full (the silent failure) |
+| `D` | `tick  unit  slot  value` | a `rand` draw, if the handler can be reached cheaply (optional) |
+
+`tick` is the sim frame counter `tagpu_posedump.on` stamps, so the two logs join on it; `unit`
+is the roster index and `type` the unit-def name, the identifiers `tacli weapons` already prints.
+The headless replay writes lines with the same fields, and the gate is `diff`.
+
 **The nine gate scenarios** — one run each in the real game with both oracles on, replayed by
 `tacob run` with the same director events, the diff must be empty:
 
