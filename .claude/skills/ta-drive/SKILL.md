@@ -201,11 +201,18 @@ game; the registry is only where TA saves the last one. So:
   so a recipe written in that window may have been ordering where it meant to clear the
   selection; `field-notes.md` patch 2b is the fix. At type 0 the scheme is the mirror image —
   left orders, right deselects — which is why posted right-clicks order nothing there.
-- **The pointer must be parked before a click that depends on context.** The engine decides what
-  a click does from the cursor index it installed on the last mouse *move* (`main+0x2CBE`), so a
-  bare `tacli click X Y` acts on wherever the pointer last was: send `keys <i> mouse:X,Y` first,
-  then `click`. The symptom otherwise is a click that re-selects the old target, or orders to
-  the old point, with no error anywhere.
+- **`tacli click X Y` is positionally correct on its own — you do not need to park the pointer
+  first.** `inject_click` (`tagpu_input.c`) posts MOVE(x,y), the button down/up, then a MOVE back
+  to the screen centre, and both halves of a click honour the target: measured 2026-09-07 with
+  the pointer sitting at the centre beforehand, a bare `click --right` at (700,500) walked the
+  unit to the world point under (700,500) and not to the one under the centre, and a bare `click`
+  on a unit 377 px from the pointer selected it. *[This bullet first said the opposite. It came
+  from one bad reading: the bare click HAD ordered, the commander just had not visibly moved 3 s
+  later, and adding a `mouse:` park "confirmed" a rule that was never there.]*
+- **What the trailing recentre does affect is anything aimed at the pointer afterwards.** After
+  any `click`, the pointer is at the screen centre — so `wheel:` notches and the position-less
+  `click` / `rclick` tokens land there unless you `pmove:X,Y` first. That is what `pmove` is for
+  (`hover` in the `ui` layer).
 - **Ctrl/Shift/Alt combos land** (since phase 1.1): `tacli keys t1 ctrl+d`,
   `shift+2`, `ctrl+shift+a`. The modifier is held 150 ms because TA *polls* it.
   If a combo does nothing, read the diagnostic the shield logs when the hold expires —
