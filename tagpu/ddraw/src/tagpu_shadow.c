@@ -7,8 +7,9 @@
    per unit so the caster's own length rule can scale it), the replacement
    meshes (tagpu_hires_draw.c), and the heightfield mesh the terrain module
    keeps (tagpu_terr.c) -- and read back by the terrain and unit fragment
-   shaders through tagpu_glsl.h's taShadowAt: an 8-tap blocker search on the
-   raw depths, a 16-tap Poisson PCF through a compare sampler, receiver-plane
+   shaders through tagpu_glsl.h's taShadowAt: a blocker search from the
+   receiver's own texel and 16 Poisson taps on the raw depths, a 16-tap
+   Poisson PCF through a compare sampler, receiver-plane
    bias, the penumbra from the blocker distance. The two views of the one
    texture are sampler objects (GL 3.3 -- render_ogl.c asks for 3.3 core since
    this landing) on texture units 12 (compare + bilinear) and 13 (raw,

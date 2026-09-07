@@ -2143,7 +2143,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             const char* now = units[i].o3;
             if (units[i].feat) { if (units[i].rec) now = *(const char* const*)(units[i].rec + WR_OBJ3DO); }
             else if (units[i].u) now = *(const char* const*)(units[i].u + U_OBJ3DO);
-            if (now != units[i].o3) { units[i].dead = 1; s_reread++; continue; }
+            if (now != units[i].o3) {
+                units[i].dead = 1; s_reread++;
+                hidx[i] = -1; topv[i] = 0.0f;   /* static: the depth pass reads them too */
+                continue;
+            }
         }
         if (units[i].hires) {
             /* no vertices here: this unit is the other pass's, and leaving
@@ -2346,6 +2350,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         for (i = 0; i < nu; i++) {
             float agl, throw_, sv, top = 0.0f, amn = 0.0f;
             int skip;
+            /* its object moved since the gather (the body loop above):
+               nothing in its record is its own any more, and its hires
+               index would be last frame's slot -- another unit's entry */
+            if (units[i].dead) continue;
             /* the model height at rest, the lab's meshTop: the whole-tree
                AABB for a unit (constant per type, so an animating piece does
                not make its shadow breathe); a wreck has no unit record and

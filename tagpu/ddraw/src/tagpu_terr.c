@@ -226,6 +226,9 @@ static const void* s_hSet;             /* from, or last attempted from      */
 static unsigned s_hFrame;              /* the frame of that attempt          */
 static GLint  s_uHDim, s_uLit, s_uSun, s_uAmb, s_uNorm;
 static GLuint s_hVao, s_hVbo, s_hIbo;  /* the heightfield caster mesh (G14i)  */
+static int    s_hMeshW, s_hMeshH;      /* the grid it was built from: a failed
+                                          rebuild leaves the old mesh, and this
+                                          is what keeps it undrawn (review) */
 static TAGPU_SHADOWU s_shU;            /* the shadow read-back uniforms      */
 
 static float s_verts[MAXCELL * 6 * TVST];
@@ -459,6 +462,7 @@ void tagpu_terr_glreset(void)
     s_rgbTex = 0;
     s_hTex = 0;                         /* the id died; ensure_height rebuilds */
     s_hVao = s_hVbo = s_hIbo = 0;       /* ...and the caster mesh with it      */
+    s_hMeshW = s_hMeshH = 0;
     s_hW = s_hH = 0; s_hGrid = NULL; s_hFrame = 0;
     s_rectValid = 0;
     /* The set identity (s_setPtr/s_setCount/s_setPix) is LEFT ALONE: zeroing
@@ -572,6 +576,7 @@ static void build_hills(const unsigned char* buf, int w, int h)
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     free(vb); free(ib);
+    s_hMeshW = w; s_hMeshH = h;
     _snprintf(b, sizeof b, "terr: hills mesh %dx%d grid points, %u cells (Classic++ shadows)",
               w, h, (unsigned)((w - 1) * (h - 1)));
     flog(b);
@@ -579,8 +584,12 @@ static void build_hills(const unsigned char* buf, int w, int h)
 
 int tagpu_terr_hills_draw(int r0, int r1)
 {
-    int cells = s_hW - 1, rows = s_hH - 1;
-    if (!s_hVao || s_hW < 2 || s_hH < 2) return 0;
+    int cells = s_hMeshW - 1, rows = s_hMeshH - 1;
+    /* only the mesh built from THIS grid: after a map change whose rebuild
+       failed (too small, out of memory) the old mesh is still bound and
+       the new grid's size would index past it */
+    if (!s_hVao || s_hMeshW < 2 || s_hMeshH < 2) return 0;
+    if (s_hMeshW != s_hW || s_hMeshH != s_hH) return 0;
     if (r0 < 0) r0 = 0;
     if (r1 > rows - 1) r1 = rows - 1;
     if (r1 < r0) return 0;
