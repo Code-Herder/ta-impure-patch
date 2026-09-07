@@ -21,7 +21,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 
 | What the engine used to draw | Ours since | Owned how |
 |---|---|---|
-| Units, wrecks, shadows, cloak, waterline | G12a–c, G13n | `owndraw` skips the software rasterisers; `tagpu_native.c` draws them. **The silhouette shadow blends once per silhouette PIXEL through a stencil** (G13n) — the engine blits one blackened copy of the composite, so re-using the body's 3-D geometry with depth writes off darkened once per surface the ray crossed: aircraft came out at 0.25 of the ground against the engine's 0.49. Both FBOs are `DEPTH24_STENCIL8` for it — [shadows & cloak](shadows-cloak.html) §"What our GL renderer must do" |
+| Units, wrecks, shadows, cloak, waterline | G12a–c, G13n | `owndraw` skips the software rasterisers; `tagpu_native.c` draws them. **Under Classic++ (G14i) neither Classic shadow is drawn: `tagpu_shadow.c`'s depth map replaces the silhouette and the slant, and an aircraft under `airshadow=drop` alone keeps its silhouette.** **The silhouette shadow blends once per silhouette PIXEL through a stencil** (G13n) — the engine blits one blackened copy of the composite, so re-using the body's 3-D geometry with depth writes off darkened once per surface the ray crossed: aircraft came out at 0.25 of the ground against the engine's 0.49. Both FBOs are `DEPTH24_STENCIL8` for it — [shadows & cloak](shadows-cloak.html) §"What our GL renderer must do" |
 | **Units under construction** — the nanoframe scaffold, its fill and its wireframe | G13l | the same pass: ownership no longer stops at `Nanoframe > 0`, the recolour is three per-unit uniforms in the unit shader and the wireframe a line range per unit; a third `owndraw` detour (`0x458DD0`) stops the engine stamping its own copy at the 1× position. A unit under construction casts no shadow, as the engine's does not, and a factory's cargo takes the FACTORY's depth key — the engine z-merges it into the factory's sprite (`0x4B90A0`) rather than sorting it, and on its own tile row it disappeared under the lab. The carry relationship itself — attach/detach `0x48AB70`, and why a *released* unit appears to walk under the plant (stock, measured) — is on [factories](factory-build.html) |
 | Structure shadows (the cached slant projection) | G13k | `owndraw all` flips the blit's two structure-shadow `je`s; the native pass emits the slant projection from the posed prims — see §2.1 and [shadows & cloak](shadows-cloak.html) §"Structure shadows, owned" |
 | Weapon fire, explosions, debris | G12e | `fxown`: 2 call-site redirects + 4 leaf detours |
@@ -487,6 +487,7 @@ the census measured"). Fields we write: none.
 | `0x459200` | composite sprite → screen blit | `tracer` |
 | `0x469A05` / `0x469BA8` | the two `DrawUnit` return sites | `tracer` |
 | `0x4969D2` | the sim tick site (5 stolen) | `scenario` — applies a situation on the game thread |
+| — | `tagpu_shadowdump.on`: the Classic++ shadow map written once as a 16-bit PGM, `tagpu_shadow.pgm` (near = small), with its matrix on the `shadow: dumped` log line — the lab's `debug=shadow` for the game; how a caster's silhouette in light space is checked instead of guessed (G14i) | `tagpu_shadow.c`, no engine address |
 | `0x485F50` `0x4864B0` `0x422DD0` `0x4224B0` `0x481550` `0x423C50` `0x43F0E0` `0x43AFC0` | `CreateUnit`, `KillUnit`, `FeatureName2ID`, `LoadFeature`, `GetGridPosPLOT`, `SpawnFeatureOnMap`, `ScriptAction_Type2Index`, `NewMainOrder2Unit` | `scenario` — *called by us*, never patched. **`NewMainOrder2Unit` takes 16.16 in `{x, altitude, depth}`**, the same convention as `CreateUnit`; we passed whole units in `{x, depth, altitude}` until 2026-09-04 and every ordered unit walked to the map origin — [exe-reverse-engineering](exe-reverse-engineering.html) §"The order module" |
 
 **The window title** (`tagpu_title.c`) patches no engine address at all: it is a
@@ -521,6 +522,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with (`tagpu_text.c`) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | `main+0x37F06` bit0 | `damagebars` registry option |
+| `main+0x37F06` bit2 / bit3 | the graphics options `Shadow` / `TShadow` (the blit tests `al,4` at `0x45928E`, [shadows & cloak](shadows-cloak.html) §2). Read only, per frame. The Classic silhouette needs both, the slant only bit2 — and **since G14i bit2 also gates the Classic++ shadow map** (with `shadows=1` in the cfg), so the player's in-game Shadows toggle keeps its meaning under the switch; bit3 is ignored there |
 | `main+0x37F2F` bit2 | `SelBoxes` |
 | `main+0x142E7..0x142ED` | minimap rect on screen |
 | `main+0x1423B` / `+0x1423F` | view size in map cells (the minimap rect's size comes from here) |
@@ -548,6 +550,52 @@ itself — the composite only moves it (§1); what the patch changes is which se
 `cursor_ary` (`main+0x1487F + idx*4`) the engine hands to `SetUICursor 0x4AB400`.
 
 ---
+
+### 2.7 Deferred reclamation of the engine's model objects (`tagpu_reclaim.c`, on by default, `tagpu_reclaim.off`)
+
+The one module that patches nothing the engine *draws* with: it changes **when** a freed block
+goes back to the heap, and nothing else. The render thread gathers a unit's or wreck's
+`Object3do` and dereferences it later in the same frame; the game thread frees it on death —
+`200v200` faulted about 95 s in, two runs in three (`0x486D9E`: the object is freed one
+instruction *before* its pointer is nulled and well before the alive bit is cleared, so the
+gather's alive gate cannot help). Two sites, byte-matched, all-or-nothing, installed at
+`DllMain`, disjoint from every detour above:
+
+| site | mechanism | what |
+|---|---|---|
+| `FreeObjectState 0x45AAA0` | prologue detour, `tagpu_detour_leaf_call` shape built by hand so the stolen tail is also a callable trampoline | while armed the call **enqueues** the object and returns (`ret 4`); the engine's own null of `unit+0x9E` / `rec+4` and its alive-bit clear run unchanged. Every `Object3do` free — unit death, wreck destroy, the bulk teardown loop — goes through this one entry |
+| level teardown `0x491B60` | **wrap**: `pushad; call pre; popad; call <stolen tail>; pushad; call post; popad; ret` (no stack args; two exits — `ret` at `0x491C59` and a tail-jump to `0x450DD0`, which also takes nothing and returns with `ret` — so its body can be called and returns to us either way) | pre: raise a flag (fenced), wait ≤ 1 s for the render thread to leave its pass; if it does, **flush** the queue through the real destructor while the composite registry it walks is still alive and let the cascade (every unit, through `0x485980 → 0x4864B0 → 0x4866D0`, plus the wreck loop) free synchronously; if it does not, **nothing is freed** — the queue is kept and deferral stays on through the cascade (`held=`), draining at the next game's first deaths; post: deferral back on, flag down |
+
+**The reclamation rule is quiescence, never a count.** `render_ogl.c` brackets
+`tagpu_overlay_draw` — the render thread's only reader of these objects — with
+`tagpu_reclaim_pass_begin` / `pass_end`, one unconditional pair so every early return inside the
+overlay closes it. The reader publishes *pass-started* (an `InterlockedIncrement` before its first
+engine read) and *pass-completed* (after its last). The real free runs on the **game thread**, from
+the next `FreeObjectState` call: every entry already queued has had its record nulled since
+(program order), so after a full fence the drain stamps them with pass-started and frees each
+once pass-completed has reached its stamp. An idle reader passes at once; a reader mid-pass makes
+the entry wait for that pass; a stuck reader freezes reclamation and the 4096-entry ring leaks
+on overflow — never a synchronous free, never a spin. The drain is pumped only by frees, so the
+most recent death's object (and its composite-registry slot) is held until the next death or the
+level ends — one object for the length of a lull, harmless: the engine draws from the unit array.
+While a teardown is in progress the driver skips only its engine-reading half (input injection,
+the GL-context-change detection and the flushes still run). Measured on `200v200`: high-water 6,
+overflow 0, every free drained within a frame or two. The engine sees no different value: the
+sim never reads the object or its posed geometry back, and two stock peers already stay in
+lockstep with different heap layouts. `tagpu_native.c` keeps a belt-and-braces re-read of the
+record pointer before each emit (wrecks included: the record is kept in the gather now) and skips
+a unit whose object moved (`reread=N` on the `native:` line).
+
+Read it in `tagpu.log`: `reclaim: ARMED FreeObjectState@0x45AAA0 -> deferred …` at launch, then
+every 300 frames `reclaim: def=… drn=… queued=… hw=… ovf=… foreign=… flushed=… held=…
+teardowns=… pass=…` (`def` deferred, `drn` drained, `ovf` must stay 0, `foreign` a call from a
+thread other than the game thread — freed synchronously and counted, never seen; `held` the
+teardowns where the reader did not leave its pass in time), and at a level change either
+`reclaim: level teardown: flushed N queued object(s), reader idle; the cascade frees synchronously`
+or `… reader still in its pass after 1000 ms — N queued object(s) KEPT, the cascade's frees deferred`.
+`tagpu_reclaim.off` in the gamedir disables the whole module at launch (the A/B lever, and the
+way back to the racing build). Design, proof and the object catalogue:
+[Thread-safe destruction](thread-safe-destruction.html).
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 
@@ -628,21 +676,36 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 ### 3.2 Smaller, known, and cheap to close
 
-- **The native pass can fault on a unit freed mid-frame** (found 2026-09-05 measuring G14g,
-  present on the G14f DLL too). `200v200` about 95 s into the fight, twice in three runs, on
-  both DLLs: an access violation at the first instruction of `emit_geom` (`tagpu_native.c`),
-  `movzx esi, word [eax]` with `eax` = the unit's 3DO object — RVA `0x3EB99` of the G14g
-  `ddraw.dll`, `0x3E7A9` of G14f's, the same sixteen bytes at EIP in both reports — at data
-  address `0x02868B40` on the G14g run (EBP, the caller's unit index, `0xE4`) and `0x027E3400`
-  on the G14f run (`0x3E`): a different unit each time. TA *appends* to `ErrorLog.txt` and
-  `tacli crash` prints the first report in the file, so read the file's tail after a second
-  crash. The gather reads
-  `unit+U_OBJ3DO` through `ptr_ok` only (~line 1657) and the emit dereferences it later in the
-  same frame; the game thread frees a dying unit's object in between. Closing it means either
-  reading everything the emit needs while the pointer is checked (and still racing), an
-  `IsBadReadPtr` at the emit (narrows the window, does not close it), or a structured exception
-  handler around the emit that drops the unit for the frame — the last is the only one that is
-  actually safe against a free on another thread.
+- **The Kbot lab's Classic slant shadow — found mostly missing on 2026-09-06, closed 2026-09-07
+  (G14j).** Not the piece flags: the slant was drawn through the silhouette's waterline erase,
+  and the fixture's lab on the shore (altitude 63, sea level 75, a path-B composite) lost every
+  shadow fragment below model height 12. `emit_slant` now follows the engine's raster and the
+  draw exempts a slant unit from the erase; the engine's own Shadows-toggle mask reads **1094 px
+  against the stock engine's 997** (was 515 / 959), the other buildings as before —
+  [shadows & cloak](shadows-cloak.html) §"Structure shadows, parity". The lab's Classic lane
+  draws the slant for structures since the same day ([renderers](renderers.html) §1).
+- **A replacement mesh casts a Classic++ shadow and does not receive one** (G14i,
+  [renderers](renderers.html) §2.4): `tagpu_hires_draw.c` lights with its own GGX rule and has no
+  shadow read-back, so a glb body standing in a cast shadow is lit as though it were not. The
+  depth-pass half is done; the read-back waits on the hires lighting decision.
+- **The Classic++ shadow's soft edge and the ridge haze are lattice noise** (G14i): the
+  PCF's bilinear compares round differently wherever texel centres fall, and the game's
+  map-anchored lattice is not the lab's view-anchored one — 156 game-only pixels within 2 %
+  on the parity fixture's hills stage (11 within 5 %), 60 lab-only of the same kind. Invisible;
+  a larger constant bias would trade it for peter-panning at the shadow's root.
+
+- **CLOSED (G14h, 2026-09-06): the native pass faulted on a unit or wreck freed mid-frame.**
+  Found 2026-09-05 measuring G14g, present on the G14f DLL too: `200v200` about 95 s in, twice
+  in three runs, an access violation at the first instruction of `emit_geom` reading a model
+  object the game thread had freed between the gather and the emit. Instrumentation put the
+  race at 43 deaths inside the gather-to-emit window over two 210 s fights (12 units, 26 wrecks
+  in the second), the fault needing the extra step of the freed page becoming unreadable — the
+  CRT small-block heap decommits pages inside a free, and the one-piece wreck objects live there
+  (the crash's faulting index was a wreck). The engine frees the object *before* it nulls its
+  pointer and clears the alive bit (`0x486D9E → 0x486DA3 → 0x486DCE`), so no read-side gate could
+  close it; `tagpu_reclaim.c` (§2.7) defers the free itself behind the render thread's published
+  quiescence. `tacli crash` prints the *first* report in `ErrorLog.txt` (TA appends), so read the
+  file's tail after a second crash.
 
 | Limit | Where | What it needs |
 |---|---|---|

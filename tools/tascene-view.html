@@ -454,6 +454,16 @@ function program(gl, vs, fs, label) {
     fail(`${label}: ${gl.getProgramInfoLog(p)}`);
   return p;
 }
+// tagpu's terrain and unit shaders carry the Classic++ shadow map's two
+// samplers since G14i (tagpu_glsl.h), even in the Classic lane where uShadowOn
+// stays 0: two sampler TYPES left on unit 0 make GL drop the whole draw, so
+// their units are named at link, exactly as tagpu_shadow.c names them
+function nameShadowUnits(gl, prog) {
+  gl.useProgram(prog);
+  const c = gl.getUniformLocation(prog, "uShadowCmp"), r = gl.getUniformLocation(prog, "uShadowRaw");
+  if (c) gl.uniform1i(c, 12);
+  if (r) gl.uniform1i(r, 13);
+}
 function uniforms(gl, prog, names) {
   const U = {};
   for (const n of names) U[n] = gl.getUniformLocation(prog, n);
@@ -552,8 +562,16 @@ float shadowAt(vec3 W, vec3 n) {
   float z = p.z - (1.0 + 2.0 * (1.0 - nl)) * uShScale.x / uShScale.y;
   float search = 24.0 / uShScale.x * uShScale.z;   // 24 world units, in uv
   float sum = 0.0; int nb = 0;
-  for (int i = 0; i < 8; i++) {
-    vec2 o = POISSON[i] * search;
+  // The receiver's OWN texel first (G14i, 2026-09-06). The eight ring taps
+  // all sit 12-28 texels out, so a caster the size of a kbot's head -- 30
+  // texels across at this density -- can hold the receiver's texel and still
+  // be missed by every tap: the commander's head and gun cast nothing in the
+  // game while the view-anchored lattice here happened to land a tap on the
+  // body. A caster on the receiver's own ray is the one blocker that cannot
+  // be allowed to go unfound.
+  { float d = texture(uShadowRaw, p.xy).r; if (d < z) { sum += d; nb++; } }
+  for (int i = 0; i < 16; i++) {                   // all 16 (G14i): 8 left the
+    vec2 o = POISSON[i] * search;                  // estimate to lattice luck
     float d = texture(uShadowRaw, p.xy + o).r;
     if (d < z + dot(o, dzduv)) { sum += d; nb++; }
   }
@@ -874,6 +892,9 @@ async function main() {
   ]) : [null, null];
 
   let unitAtlas = null, shdBuf = null, unitVS = "", unitFS = "", meshData = {};
+  // the structure shadow's casters (tascene: the engine's own piece rule),
+  // model-space x,y,z triangles; a pack built before it has none
+  const slantData = {};
   if (hasUnit) {
     [unitAtlas, shdBuf, unitVS, unitFS] = await Promise.all([
       fetchBin(scene.units.atlas.file), fetchBin(scene.palette.shd),
@@ -883,6 +904,10 @@ async function main() {
     await Promise.all(Object.entries(scene.units.meshes).map(async ([k, m]) => {
       const b = await fetchBin(m.file);
       meshData[k] = new Float32Array(b.buffer, b.byteOffset, b.byteLength >> 2);
+      if (m.slant && m.slant.verts > 0) {
+        const c = await fetchBin(m.slant.file);
+        slantData[k] = new Float32Array(c.buffer, c.byteOffset, c.byteLength >> 2);
+      }
     }));
   }
   const [terrRGB, featRGB, unitRGB] = wantRGB ? await Promise.all([
@@ -993,6 +1018,7 @@ async function main() {
     U = uniforms(gl, terrProg, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uEnc",
                                 "uAtlas", "uPal", "uFogGrid", "uFogLUT", "uFogOrg",
                                 "uFogDim", "uFog"]);
+    nameShadowUnits(gl, terrProg);
   }
 
   // ---- terrain, exploration: the 16-px heightfield
@@ -1143,6 +1169,7 @@ async function main() {
                                 "uScaf", "uScafOn", "uScafP", "uSS", "uZoomF",
                                 "uZoomCF", "uFogGrid", "uFogLUT", "uFogOrg",
                                 "uFogDim", "uFog"]);
+      nameShadowUnits(gl, uProg);
     }
     if (wantLab) {
       luProg = program(gl, LAB_UNIT_VS, LAB_UNIT_FS, "lab-unit");
@@ -1573,7 +1600,7 @@ async function main() {
     const U = scene.units, D = scene.depth;
     let r0 = rowBase(), nRows = (W[1] >> 4) + 32;
     if (r0 < 0) { nRows += r0; r0 = 0; }
-    let n = 0, nAir = 0;
+    let n = 0, nAir = 0, nSlant = 0;
     L.unitRanges = [];
     // shadowlen: the shadow's length is a + b*height instead of the parallel
     // light's height/tan(el), done as a vertical scale on the caster in the
@@ -1711,15 +1738,54 @@ async function main() {
           n++;
         }
       }
+      // THE STRUCTURE SHADOW: the engine's cached slant projection
+      // (shadows-cloak.md 3, 0x45A790), a second range after the body's,
+      // drawn in its place by silhouettes(). The casters are the pack's
+      // (tascene: every face of every visible, cached piece, the selection
+      // quad alone skipped); each vertex lands at (x + y/4, -z - y/4) from
+      // the posed coordinates snapped to whole units the engine's way (the
+      // 16.16 high word of x, y and -z, then an arithmetic shift), flat, so
+      // the unit shader takes the flat path and never samples the atlas --
+      // the engine flat-fills, and a texture key punches no hole. The same
+      // rule as tagpu_native.c's emit_slant, which this lane mirrors.
+      const slantFirst = n;
+      const cast = slantData[inst.type];
+      if (inst.slant && inst.shadow && cast && !lab) {
+        for (let i = 0; i + 3 <= cast.length; i += 3) {
+          const x0 = cast[i], y = cast[i + 1], z0 = cast[i + 2];
+          const x = x0 * cs + z0 * sn, z = -x0 * sn + z0 * cs;
+          const xi = Math.floor(x), yi = Math.floor(y), nzi = Math.floor(-z);
+          const q = yi >> 2;
+          const px = xi + q, py = nzi - q;
+          let md = (2 * y - z) / 256;
+          if (md > 1.8) md = 1.8; else if (md < -1.8) md = -1.8;
+          const o = n * UVST;
+          uVerts[o]     = px + hotX;
+          uVerts[o + 1] = py + hotY;
+          uVerts[o + 2] = enc + md;
+          uVerts[o + 3] = -1; uVerts[o + 4] = -1;
+          uVerts[o + 5] = 0;  uVerts[o + 6] = -1;
+          uVerts[o + 7] = SH_NEUTRAL / 31;
+          uVerts[o + 8] = wldX + px;
+          uVerts[o + 9] = wldZ + py;
+          uVerts[o + 10] = y;
+          uVerts[o + 11] = 0; uVerts[o + 12] = 1; uVerts[o + 13] = 0;
+          uVerts[o + 14] = wx + x; uVerts[o + 15] = gnd + y; uVerts[o + 16] = wz - z;
+          n++; nSlant++;
+        }
+      }
       // the engine draws a unit's shadow inside that unit's own blit, so the
-      // silhouette pass needs each unit's own vertex range, offset and gate
+      // silhouette pass needs each unit's own vertex range, offset and gate:
+      // a mobile unit's is its body range, a structure's the slant range
       if (n > first)
-        L.unitRanges.push({ first, count: n - first, air: agl > 0,
-                            shadow: !!inst.shadow, dy: shadowDy });
+        L.unitRanges.push({ first, count: slantFirst - first, air: agl > 0,
+                            shadow: !!inst.shadow, dy: shadowDy,
+                            slant: !!inst.slant,
+                            slantFirst, slantCount: n - slantFirst });
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, uVBO);
     gl.bufferData(gl.ARRAY_BUFFER, uVerts.subarray(0, n * UVST), gl.DYNAMIC_DRAW);
-    L.stats.units = n / 3;
+    L.stats.units = (n - nSlant) / 3;
     return n;
   }
 
@@ -1768,15 +1834,21 @@ async function main() {
     gl.uniform1i(UU.uShadow, 1);
     for (const r of L.unitRanges) {
       if (!r.shadow || !want(r)) continue;
+      // a structure's shadow is the slant range (buildUnits), a mobile
+      // unit's its own body; a structure whose pack carries no casters
+      // (built before the slant, or every piece dont-cache) draws none
+      const first = r.slant ? r.slantFirst : r.first;
+      const count = r.slant ? r.slantCount : r.count;
+      if (!count) continue;
       gl.uniform2f(UU.uOffset, 5, r.dy);
       gl.stencilFunc(gl.ALWAYS, 1, 0xFF);
       gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
       gl.colorMask(false, false, false, false);
-      gl.drawArrays(gl.TRIANGLES, r.first, r.count);
+      gl.drawArrays(gl.TRIANGLES, first, count);
       gl.stencilFunc(gl.EQUAL, 1, 0xFF);
       gl.stencilOp(gl.KEEP, gl.KEEP, gl.ZERO);
       gl.colorMask(true, true, true, true);
-      gl.drawArrays(gl.TRIANGLES, r.first, r.count);
+      gl.drawArrays(gl.TRIANGLES, first, count);
     }
     gl.colorMask(true, true, true, true);
     gl.disable(gl.STENCIL_TEST);
@@ -1823,7 +1895,10 @@ async function main() {
     }
 
     gl.depthMask(true);
-    gl.drawArrays(gl.TRIANGLES, 0, n);
+    // the bodies, range by range: a structure's slant casters sit in the
+    // same buffer after its body and are the shadow pass's alone
+    for (const r of L.unitRanges)
+      if (r.count) gl.drawArrays(gl.TRIANGLES, r.first, r.count);
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
   }

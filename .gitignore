@@ -16,6 +16,9 @@
 # ta3do output: models and pictures derived from the game's own assets
 /renders/
 
+# tacob projects: decompiled stock BOS and built COBs (game content, never tracked)
+/projects/
+
 # Build artifacts
 *.o
 *.obj

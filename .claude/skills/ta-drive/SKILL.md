@@ -598,7 +598,25 @@ value), `tacli arm <i> classicpp.cfg=off` removes it (= the lab's defaults `324.
 `215.5,53.1` / `0.35`). The DLL answers every read with one line, `classicpp: light sun=…
 unitsun=… amb=… level=…/… (tagpu_classicpp.cfg)` — or `(no cfg: defaults)` — so
 `tacli log <i> -g 'classicpp: light' | tail -1` says what the frame is lit by; allow ~1.5 s
-after arming before a shot. `terr: height grid WxH uploaded …` is the terrain's height
+after arming before a shot. **The shadow keys** (G14i) ride the same file — `shadows=0|1`,
+`shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B|off`, `shade=S`, `terrainshadow=0|1`,
+`shadowres=N`, `airshadow=len|physical|drop`, the lab's defaults — and answer on a second
+line, `classicpp: shadows=1 shadowsun=225.0,40.0 …`; the map also needs the engine's own
+Shadows option on. `tagpu.log` says `shadow: GL ready (GL_VERSION 3.3.0 …)` once per context,
+`shadow: frame zoom=… res=… k=… texel=…` whenever the lattice changes (zoom), and one
+`shadow: caster model=… top=… gnd=… sv=…` line per caster position seen (16 at most) — the
+numbers the length rule used. **`tacli arm <i> shadowdump.on`** writes the map once as
+`tagpu_shadow.pgm` and removes itself (`shadow: dumped …` carries the matrix). **A shadow A/B
+against the lab needs the pointer parked off the units**: `scenario load`'s `center_on` leaves
+it ON the anchor, the engine draws its crosshair there, and those pixels are identical in an
+on/off pair, so `tacli keys <i> mouse:200,700` first. **The engine's own Shadows toggle is the
+parity oracle for a Classic shadow**: `tacli keys <i> tab`, `ui <i> click PREFS`, `ui <i> click
+VISUALS`, `ui <i> set BSHADOWS 0` (or `1`), `ui <i> click PREV`, `ui <i> click OK`. It clears and
+sets BOTH option bits (`main+0x37F06` reads `0x3F` on, `0x23` off) — **read the word back with
+`tacli peek <i> '*0x511DE8+0x37F06:2'` before the shot**: one run of those same clicks on a stock
+instance reported `stage 0` and changed nothing, and its on/off pair differed only by the drill
+arms. A shadow's pixels are then `glshot` on minus `glshot` off, counted in 200×140 around each
+roster screen position (the G13k / G14j numbers). `terr: height grid WxH uploaded …` is the terrain's height
 texture, once per map; without it (an unreadable grid, logged and retried every 60 frames)
 Classic++ terrain draws unlit — still restored, still the RGB grey rule, no lambert.
 **The level-ground test** is a sun on/off pair of `glshot`s with `feat.on=passive` (so the
@@ -640,6 +658,12 @@ WINEPREFIX=<inst>/prefix wine reg add \
 - The `.off` flags (`curs.off`, `wheel.off`, `zoomedge.off`, `ss.off`, `shade.off`,
   `subpix.off`, `nano.off`, `r3dcache.off`, `overlay.off`) — these **disable** features.
   Arming everything means leaving all of them absent.
+- **`reclaim.off` disables a crash fix, not a feature** (G14h): `tagpu_reclaim` defers the
+  engine's model-object frees so the render thread cannot read a freed unit or wreck — the
+  `200v200` fault at ~95 s. It is on by default with no arm file; `tacli arm <i> reclaim.off`
+  is the A/B lever back to the racing build. Read `reclaim: ARMED …` at launch and the
+  `reclaim: def=… drn=… ovf=0 …` line every 300 frames (`ovf` must stay 0); a level change logs
+  `reclaim: level teardown: flushed N …`.
 - The instrumentation triggers (`suppress.on`, `tracer.on`, `gldbg.on`, `posedump.on`,
   `spxlog.on`, `fpsosd.on`) — debugging, not features.
 - `hires.on` only carries the hires renderer's *tweaks* (`anchor=`, sun, ambient,

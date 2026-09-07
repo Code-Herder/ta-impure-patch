@@ -211,6 +211,7 @@ if (TA+0x37F06 & 4)                        ; option "Shadow"
         skip if (unit+0xA6 model index == 0 && altitude<seaLevel)
         if (obj+0x14 == 0)  0x45A790(this, obj, composite)    ; build cached shadow
         0x4B8500(ctx, obj+0x14frame, sx+0x85, shadowY)        ; RLE path 0x4CC057
+        (blitted as built on BOTH paths: no waterline erase, no digger erase)
 ```
 (`seaLevel` = byte `TA+0x1427F`; `state` = `unit+0x110`; the structure test is
 `byte[unit+0x113] & 0x20` in path A at `0x4592BF` and `test dword [ecx+0x110],
@@ -262,6 +263,19 @@ A **true slant-projected** shadow [BINARY-VERIFIED]:
 5. `0x4B9E60` — RLE-compress the silhouette (per row: `u16 len` + RLE via
    `0x4BA000`), `0x437B50` allocates `obj+0x14`, header copied,
    **`+0x09 Compressed = 1`** — so the blit takes the `0x4CC057` RLE-alpha path.
+
+**What the raster takes, settled 2026-09-07 (G14j):** every face of every piece with bits 0
+and 1, whatever its material — the body rasteriser's colour-fill / quad-only dispatch is not
+consulted, so the footprint quad it skips is in the shadow and a texture key punches no hole
+— face 0 skipped when the node's selection primitive is not −1, each vertex snapped to whole
+units by the 16.16 high word of x, of y and of −z before the quarter is taken by an arithmetic
+shift. **Bit1 is the piece's `cached` flag**, cleared by COB `dont-cache` (`0x480DB0`): a
+wind generator's `cradle` and `fan`, an ARM extractor's `arms`. The cached sprite is rebuilt
+with every composite rebake (`0x458905` nulls `+0x14` before the builder runs) and blitted as
+built on both paths — **no waterline or digger erase for a structure**. The punch-out (step 4)
+is aligned with the body on screen. Addresses and the reading:
+[exe-reverse-engineering](exe-reverse-engineering.html) §"The slant builders".
+
 
 ### Depth bias & waterline clipping (path B bodies AND shadows)
 The rasteriser writes per-pixel depth = **`vertexY + 0x32 (+0x4B if digger)`**
@@ -471,9 +485,12 @@ failed to coincide.
    same frame position, four buildings: the only differences are the rotating
    pieces (drill arms, rotor) caught at other animation phases and a **strip
    up to 5 px wide along each body's right edge**, which is the engine's
-   punch-out (`0x4B9D70(body, scratch, 5, 0)`) that we do not replicate — our
-   body covers the shadow from `+0`, the engine erases it from `+5`. Not
-   closed: a replacement (glTF) structure casts every piece (no per-piece
+   punch-out (`0x4B9D70(body, scratch, 5, 0)`) that we do not replicate.
+   (Re-read 2026-09-07: the punch-out's shift arithmetic puts the body's pixels
+   on the shadow's own screen pixels, so it cannot erase a strip beside the
+   body; the strip is not in that day's toggle masks either, and its cause is
+   open — [exe-reverse-engineering](exe-reverse-engineering.html) §"The slant
+   builders".) Not closed: a replacement (glTF) structure casts every piece (no per-piece
    bit1 on that side). **A nanoframe casting nothing is now the correct
    behaviour for most of a build** — measured 2026-09-03 against the stock
    renderer on one solar at one spot with only the build state varying: over the
@@ -495,6 +512,35 @@ failed to coincide.
    the bit marks structures (and nanoframes), not only "under construction",
    and the ownership rule holds in a real game (panel
    `assets/shots/g12c-factory-built-shadow.png`).
+   **Structure shadows, parity (G14j, 2026-09-07).** The owned slant was drawn
+   by the body emitter with the projection swapped in, so it inherited the
+   body's rules — the material lookup (a face with neither texture nor colour
+   skipped, a texture's key discarded per fragment) and, in the draw, the
+   silhouette's waterline and digger erase. The engine's raster has none of
+   them (§3), and the erase is what emptied the Kbot lab's shadow on the shore:
+   the applier-created lab sits at altitude 63 under a sea level of 75 with a
+   depth plane on its composite (path B), so every shadow fragment at model
+   height ≤ 12 was erased and only the nano arms' tops (14.7) survived — 515 px
+   in the engine's own Shadows-toggle mask against the stock engine's 959.
+   `emit_slant` in `tagpu_native.c` now follows `0x45A610` rule for rule (every
+   face of every visible+cached piece, flat, integer-snapped, face 0 under the
+   selection rule) and the draw passes −1e9 for both erases on a slant unit
+   (`tagpu_hires_draw.c` does the same for a replacement structure's). Measured
+   with the engine's toggle on `scenarios/shadow-lab.json`, same eye, 200×140 px around each
+   building, stock engine / ours: Kbot lab **997 / 1094**, solar 1228 / 1246,
+   ARM extractor 2406 / 2442, COR extractor 618 / 859 and COR wind 2273 / 3169
+   (the drill arms and the rotor caught at other phases), commander 1060 /
+   1098 — panel `assets/shots/g14j-slant-toggle.png`. The lab's Classic lane
+   draws the same slant since the same day ([tascene design](tascene-design.html)):
+   its own toggle gives the Kbot lab the same three strips, 692 px against the
+   game's 1094 and the engine's 997 (the lab's rest-pose body is 2 px narrower
+   on the right and shorter at the top than the engine's live one). One seam the
+   engine never has, in the game and the lab alike: the body is drawn from float
+   vertices while the engine snaps composite and shadow to whole units alike,
+   so along a body edge on a fractional row the snapped shadow shows as a 1-px
+   line beside it — about a hundred of the Kbot lab's 1094. Snapping the body
+   the engine's way would close it and moves every body edge; not this landing's.
+
    **Waterline / digger clipping, implemented 2026-09-02** in the native
    pass, mirroring the rules above: per-vertex model height in the vertex
    stream; per unit, only when the composite has a depth plane (path B),

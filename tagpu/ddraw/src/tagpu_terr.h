@@ -27,6 +27,13 @@ int  tagpu_terr_gather(const TAGPU_FXVIEW* v);
 void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex);
 void tagpu_terr_glreset(void);
 
+/* Classic++ shadows (tagpu_shadow.c, renderers.md 2.8): the heightfield as a
+   caster. One world-space vertex per 16-px grid point of the height grid,
+   built with it, row-major indices; draws the cell rows r0..r1 (inclusive,
+   clamped) with the CALLER's program in use, attribute 0 = the world point.
+   Returns 1 if anything was drawn. */
+int  tagpu_terr_hills_draw(int r0, int r1);
+
 /* Trim a would-be gather rect (in game px) to what this pass can actually draw
    in one frame. The zoomed-out viewport is the only thing that ever exceeds the
    budget, and a gather that bails hands the draw back for a frame — so the rect

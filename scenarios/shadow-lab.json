@@ -1,0 +1,78 @@
+{
+ "format": "ta-scenario/1",
+ "description": "shadow-struct plus a Kbot lab on the shore (altitude 63, sea level 75): the structure shadows of the stock engine beside ours, G14j",
+ "on_error": "abort",
+ "setup": {
+  "clear_existing": false,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "map": "Two Continents",
+  "res": "1024x768"
+ },
+ "units": [
+  {
+   "id": "hero",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    1600,
+    1600
+   ],
+   "facing": 90
+  },
+  {
+   "id": "solar",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    1760,
+    1600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "armmex",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    1440,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "cormex",
+   "type": "CORMEX",
+   "owner": 1,
+   "pos": [
+    1600,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "corwin",
+   "type": "CORWIN",
+   "owner": 1,
+   "pos": [
+    1760,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "lab",
+   "type": "ARMLAB",
+   "owner": 0,
+   "pos": [
+    1400,
+    1470
+   ]
+  }
+ ],
+ "camera": {
+  "center_on": "hero"
+ }
+}

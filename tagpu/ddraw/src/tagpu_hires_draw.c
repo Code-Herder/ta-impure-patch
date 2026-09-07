@@ -100,6 +100,9 @@ static const char* VS =
     "uniform vec4 uAnchor;\n"                 /* ax, ay, world x, world z     */
     "uniform vec3 uYawEnc;\n"                 /* cos yaw, sin yaw, depth key  */
     "uniform int uSlant;\n"                   /* 1: structure shadow slant    */
+    "uniform int uDepthPass;\n"               /* 1: into the shadow map (G14i) */
+    "uniform mat4 uShadowMat;\n"
+    "uniform vec3 uCast;\n"                   /* altitude, ground + throw, sv */
     "out vec3 vPos; out vec3 vNrm; out vec2 vUV;\n"
     "out vec2 vWorld; out float vEnc; out float vVY;\n"
     "void main(){\n"
@@ -127,6 +130,16 @@ static const char* VS =
     "  vPos = m; vNrm = n; vUV = aUV;\n"
     "  vWorld = uAnchor.zw + pm;\n"
     "  vEnc = enc; vVY = m.y;\n"
+    /* Classic++ shadows: the depth pass takes the posed point in the WORLD --
+       real z = projected z + (altitude + height)/2, the height the ground
+       plus the throw plus the scaled model height -- the expression
+       tagpu_shadow.c's program uses for a 3DO, so a replacement mesh casts
+       from where its 3DO would (renderers.md 2.4, 2.11) */
+    "  if (uDepthPass == 1) {\n"
+    "    vec3 W = vec3(uAnchor.z + m.x, uCast.y + uCast.z * m.y,\n"
+    "                  uAnchor.w + pm.y + (uCast.x + m.y) * 0.5);\n"
+    "    gl_Position = uShadowMat * vec4(W, 1.0);\n"
+    "  }\n"
     "}\n";
 
 static const char* FS =
@@ -144,6 +157,7 @@ static const char* FS =
     "uniform vec4 uBase;\n"                   /* baseColorFactor, linear      */
     "uniform vec2 uMR;\n"                     /* metallic, roughness          */
     "uniform float uCutoff;\n"                /* < 0 = opaque                 */
+    "uniform int uDepthPass;\n"               /* 1: depth only, after the cutout */
     "uniform int uShadow;\n"
     "uniform float uAlpha;\n"
     "uniform float uWaterT;\n"
@@ -201,6 +215,7 @@ static const char* FS =
     "void main(){\n"
     "  vec4 tex = texture(uAlbedo, vUV);\n"
     "  if (uCutoff >= 0.0 && tex.a * uBase.a < uCutoff) discard;\n"
+    "  if (uDepthPass == 1) { frag = vec4(0.0); return; }\n"
     TAGPU_GLSL_SCAF_TEST
     TAGPU_GLSL_FOG_DISCARD
     "  if (vVY <= uDigT) discard;\n"
@@ -256,6 +271,7 @@ static GLint  u_hasNrm, u_base, u_mr, u_cutoff, u_shadow, u_alpha, u_slant;
 static GLint  u_waterT, u_waterMode, u_digT, u_light, u_view, u_sunAmb;
 static GLint  u_anchorMix, u_shade, u_fog, u_fogOrg, u_fogDim;
 static GLint  u_scafOn, u_scafP, u_ss, u_zoomF, u_zoomCF;
+static GLint  u_depthPass, u_shadowMat, u_cast;    /* the depth pass (G14i) */
 
 /* tagpu_hires.on tweaks, re-read on the same 30-frame cadence as the rest */
 static float s_anchorMix = 0.0f;
@@ -339,6 +355,7 @@ static void ensure(void)
     u_fogDim = U("uFogDim");    u_scafOn = U("uScafOn");
     u_scafP = U("uScafP");      u_ss = U("uSS");
     u_zoomF = U("uZoomF");      u_zoomCF = U("uZoomCF");
+    u_depthPass = U("uDepthPass"); u_shadowMat = U("uShadowMat"); u_cast = U("uCast");
     glUseProgram(s_prog);
     /* the shared textures keep the unit numbers tagpu_native.c bound them to,
        so its binds are still live when we run; ours take the two above them */
@@ -496,8 +513,11 @@ void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
             glUniform1i(u_slant, (shadowPass && h->slant) ? 1 : 0);
             glUniform1f(u_alpha, shadowPass ? 0.5f : h->alpha);
             glUniform1i(u_fog, h->fog);
-            glUniform1f(u_waterT, h->waterT);
-            glUniform1f(u_digT, h->digT);
+            /* a structure's slant shadow is never erased at the waterline:
+               the engine blits its cached sprite as built (tagpu_native.c
+               emit_slant); the erase is the silhouette's and the body's */
+            glUniform1f(u_waterT, (shadowPass && h->slant) ? -1e9f : h->waterT);
+            glUniform1f(u_digT,   (shadowPass && h->slant) ? -1e9f : h->digT);
             glUniform1i(u_waterMode, shadowPass ? 0 : h->waterMode);
         }
         /* ONE 50% BLEND PER SILHOUETTE PIXEL, exactly as tagpu_native.c does it
@@ -561,6 +581,62 @@ void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
                   u[0].ax, u[0].ay, u[0].enc, u[0].fog, (unsigned)glGetError());
         dlog(b);
     }
+}
+
+/* Classic++ shadows: the same program, the same pose upload and per-material
+   draws as the body, the vertex shader's uDepthPass branch putting the posed
+   point through the light matrix and the fragment shader stopping after the
+   alpha cutout. 2-3 k depth-only triangles per unit: a few microseconds. */
+void tagpu_hires_depth(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
+                       const float* shadowMat)
+{
+    int i, k;
+    (void)v;
+    ensure();
+    if (s_state != 1 || n <= 0) return;
+    glUseProgram(s_prog);
+    glUniform1i(u_depthPass, 1);
+    glUniformMatrix4fv(u_shadowMat, 1, GL_FALSE, shadowMat);
+    glUniform1i(u_slant, 0);
+    glUniform1i(u_shadow, 0);
+    x_glActiveTexture(GL_TEXTURE6);
+    for (i = 0; i < n; i++) {
+        const TAGPU_HUNIT* h = &u[i];
+        GLuint vao;
+        int ng;
+        if (h->castSkip) continue;
+        vao = tagpu_hires_vao(h->mesh);
+        if (!vao) continue;
+        ng = tagpu_hires_ngroup(h->mesh);
+        glBindVertexArray(vao);
+        {
+            int np = tagpu_hires_npiece(h->mesh);
+            if (np > TAGPU_HMAXPIECE) np = TAGPU_HMAXPIECE;
+            if (np > 0)
+                glUniform4fv(u_piece, np * 3,
+                             (h->pose && h->npose >= np) ? h->pose : ident_pose());
+        }
+        {
+            float anc[4]; anc[0] = h->ax; anc[1] = h->ay; anc[2] = h->wx0; anc[3] = h->wz0;
+            float ang = (float)h->yaw * 6.2831853f / 65536.0f;
+            float ye[3]; ye[0] = cosf(ang); ye[1] = sinf(ang); ye[2] = h->enc;
+            glUniform4fv(u_anchor, 1, anc);
+            glUniform3fv(u_yawEnc, 1, ye);
+            glUniform3fv(u_cast, 1, h->cast);
+        }
+        for (k = 0; k < ng; k++) {
+            TAGPU_HGROUP g;
+            if (!tagpu_hires_group(h->mesh, k, &g)) continue;
+            /* the material's alpha cutout punches the same holes in the map */
+            glUniform4fv(u_base, 1, g.base);
+            glUniform1f(u_cutoff, g.cutoff);
+            glBindTexture(GL_TEXTURE_2D, g.albedo);          /* unit 6 */
+            x_glDrawArrays(GL_TRIANGLES, g.first, g.count);
+        }
+    }
+    glUniform1i(u_depthPass, 0);
+    glBindVertexArray(0);
+    x_glActiveTexture(GL_TEXTURE0);
 }
 
 void tagpu_hires_draw_glreset(void)
