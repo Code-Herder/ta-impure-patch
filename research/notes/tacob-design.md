@@ -105,7 +105,11 @@ anything pasted from it.
 - Control: `sleep ms;`, `signal m;`, `set-signal-mask m;`, `start-script S(args);`,
   `call-script S(args);`, `return (expr);`, `if`/`else`, `while`.
 - Engine: `get VALUE`, `get VALUE(a, b, c, d)`, `set VALUE to expr;`, `rand(lo, hi)`,
-  `attach-unit`, `drop-unit`, `play-sound`.
+  `attach-unit`, `drop-unit`, `play-sound`. **`play-sound` compiles but is fatal on retail TA**
+  `[VERIFIED 2026-09-07]`: `0x10072000` is not in the dispatcher's chain and reaches the silent
+  kill, so the thread that runs it ends there. No stock script uses it (all 278 decoded). The
+  editor lints it; the compiler still emits it, because a mod built for an engine that does
+  implement it must round-trip.
 - Expressions: C arithmetic, comparison, `&&`/`||`/`!`, `&`/`|`/`^`/`~`; out-parameters by
   assignment (`piecenum = flare;`).
 - Literals: `[x]` linear = x × 65536; `<x>` angular = x × 65536 / 360; plain integers as-is.
@@ -136,11 +140,43 @@ anything pasted from it.
 | Silent failure | `COBEngine_QueryScript 0x4B0BC0 → 0x4B0C40` opens with that allocation and returns without writing its result on a full pool — `AimFromWeaponN`/`QueryWeaponN` fall back to piece 0 |
 | Pose fields | `PrimitiveStruct` `XPos/ZPos/YPos` 16.16, `XTurn/ZTurn/YTurn` `uint16` TAang, `Visible` bit (`file-formats.md` §2.6) |
 
-**Rules to be measured, not assumed** `[PLANNED]`: units advanced per tick by `move` at a given
-speed; whether `turn` takes the short way; `spin` acceleration; when `wait-for-turn`/`wait-for-move`
-release; `sleep` milliseconds onto 30 Hz ticks; the order threads run within a tick; what a
-thread does at its `RETURN` when it was `start-script`ed. Spring's `CobThread` supplies the first
-draft; every difference the traces show becomes a line in this section with the numbers.
+**The rules, measured** `[VERIFIED 2026-09-07 — landing 3; every one read out of the binary at
+the addresses in exe-reverse-engineering.md §"The COB engine", and every one exercised by the
+nine byte-identical replays]`. The list the interview left open, answered:
+
+| Question | Answer |
+|---|---|
+| Units advanced per tick by `move` at a given speed | `speed / 30`, `idiv` (truncating toward zero), added per tick; arrival snaps to the target exactly and zeroes the speed. `[1250]` = 81920000 becomes 2730666 a tick — a stock recoil crosses `[6]` in one tick |
+| Does `turn` take the short way | **Yes, always.** The speed is negated when `(abs(target − current) > 0x8000) XOR (target < current)`; there is no flag and no long-way form |
+| `spin` acceleration | Per tick, `accel / 30`, added to the axis's turn speed and clamped to the spin target; `spin` with acceleration 0 jumps to the target speed, `stop-spin` writes `-decel / 30` |
+| When `wait-for-turn`/`wait-for-move` release | On the **tick after** the stepper zeroes that axis's speed field — the runner runs the eight records first and the stepper last, so an axis that arrives during tick *N* wakes its waiter at *N+1* |
+| `sleep` milliseconds onto ticks | `ms × 30 / 1000`, truncated: `sleep 150` is 4 ticks, `sleep 100` is 3 |
+| The order threads run within a tick | Slot 0 to 7, then the animation stepper. A thread woken by a lower slot's `RETURN` in the same pass does not run until the next tick; one woken by a *higher* slot has already had its turn |
+| What a thread does at its `RETURN` when it was `start-script`ed | Nothing: the value stays on its stack, because only a start with a completion object (the engine's `Aim*`) has one to call. The record goes free and every thread blocked on it in a `call-script` goes runnable |
+| Where in the frame the engine's calls land | The unit's own tick is `[weapons and AutoAim] → DoScriptsNow → [the movement pass]`; `SweetSpot` and `Killed` come from the attacker's tick, later still. This decides whether a run-later start steps in its own tick or the next one — see the call-site table in the engine map |
+
+**Rules that surprised the design**: `play-sound` is not an opcode this engine implements (it
+falls into the silent kill, so a script that uses it ends there); `%` compiles to a word the
+dispatch cannot tell from `/`; a piece whose 3DO node has fewer than three vertices starts
+**invisible** without any `hide` (`0x45AF1B`), which is every flare, wake and thrust anchor; and
+an engine start writes all four argument words onto the record whatever its `argc`, so only a
+*script* start leaves stale words under the locals it did not pass.
+
+**What the replay supplies** `[landing 3]` — the honest boundary of the gate. `tacob run`
+re-issues the fixture's `E` lines and is told, per start, three things the log does not carry:
+which engine entry issued it (`QueryScript`, a run-now start or a run-later one) and where in
+the frame it sits, both from the call-site table in the engine map, read off the binary; the
+`rand` results, from the `D` lines; and the one `get` value a stock script branches on. That
+last is `HEALTH`, and only the tank fixture needs it: `SmokeUnit` draws `rand(1,66)` only under
+66 % and then sleeps `healthpercent × 50` ms, so the gap between two of its draws names the
+health it read at the first — which makes **the tank's `D`-line ticks an input rather than a
+prediction**, though not the first one (health starts at 100, so the VM predicts the tick of the
+first draw from `Create`'s own arithmetic). The fighter's six `D` lines are `MoveRate2`'s
+`rand(1,10)`, not health, and the other seven fixtures read no engine value at all. Everything
+else in all nine logs — the slot each start lands in, the tick of every return, every signal
+kill, every `call-script` block, the fall-through, the walk cycle's 19 ticks — is the VM's own
+answer. The `Killed` mask this note planned turned out to be unnecessary: the uninitialised word
+is one of the `E` line's own arguments, so it replays verbatim.
 
 **The `tagpu_cobtrace.on` hook** `[BUILT 2026-09-07 — landing 2; the engine seam is
 exe-reverse-engineering.md §"The COB engine"]`: `tagpu_cobtrace.c` hooks five sites inside the
@@ -224,7 +260,8 @@ The editor's slot list comes from the FBI (`Weapon1..3` stock keys, `Weapon4..N`
 range and reload from its weapon TDF, both read through the `ta3do` asset layer. A slot with a
 missing script is flagged before play.
 
-**Lints** (each is a snag that cost a live run): `wait-for-turn` inside `AimWeaponN`; an aim
+**Lints** (each is a snag that cost a live run): `play-sound` and `map-command`, which retail TA
+kills the thread on (§The BOS dialect); `wait-for-turn` inside `AimWeaponN`; an aim
 script without the `signal` / `set-signal-mask` pair; a static peak-thread estimate (SmokeUnit +
 walk + one per aim and fire script) above eight; a `Query` piece that `Create` never hides.
 
@@ -247,7 +284,7 @@ Right, bottom: tabs — unit state, weapon slots, console, trace. Across the top
 |---|---|---|
 | 1 | Compiler + decompiler, CLI only (`compile`, `decompile`, `dump`), preprocessor, shipped headers | **built 2026-09-07** — 278 of 278 stock COBs round-trip byte-identical as whole files; 26 offline tests green |
 | 2 | The `tagpu_cobtrace.on` hook | **built 2026-09-07** (§Landing 2) — the nine scenarios each produce a cobtrace log and a posedump, kept under `research/notes/evidence/cobtrace/`; reviewed as an engine change |
-| 3 | VM + director, headless `tacob run` | trace and pose diffs empty against landing 2's logs; the pool refuses the ninth thread |
+| 3 | VM + director, headless `tacob run` | **built 2026-09-07** (§Landing 3) — all nine replays byte-identical to the game's own logs, all eight posedumps of the traced unit matching, the ninth thread refused |
 | 4 | The editor page, lints, slot template | driven by hand: open a stock unit, edit, restart, see the change, pack a UFO that `tacli` loads |
 | 5 | Packaging: pywebview launcher, browser fallback, game-folder picker, PyInstaller onedir | the built folder runs on a machine with no Python |
 | 6 | Scriptor as oracle (whenever the binary turns up) | probe corpus compiled by both, bytes identical or every difference explained here |
@@ -327,6 +364,35 @@ follows (the addresses are in `exe-reverse-engineering.md` §"The COB engine"):
 - **Stock scripts never fill the pool**: no fixture produced an `X` line. The refusal
   path is exercised only by extended-weapons content (`extra-weapons.md` snag 10).
 
+## Landing 3 — built 2026-09-07
+
+The VM and the director in `tools/tacob` (`run`, `fit-world`), the world timelines in
+`research/notes/evidence/cobtrace/replay.json`, and thirteen more offline tests. Gate:
+`tools/tacob run --all` → **nine of nine**, each replay's `--trace-out` file byte-identical to
+the log the game wrote (4272 lines) and every piece of the eight usable posedumps matching on
+`move=`, `turn=` and `HIDDEN`.
+
+What it took that the design did not foresee:
+
+- **The frame position of an engine start matters as much as its `runNow` flag.** A run-later
+  start issued before the unit's `DoScriptsNow` steps in its own tick; one issued after it waits
+  a tick. Getting `StartMoving` on the wrong side of that line moved one line of the kbot log.
+  The per-unit tick's call order (`0x48ADC4` … `0x48ADEB` … `0x48AFAA`) settles it for the
+  movement pass; `Activate` is measured rather than derived, because `UNITS_SetStateMask` is not
+  in that function.
+- **The oracle's deferral is part of the contract.** `tagpu_cobtrace.c` writes a start at the
+  next hook event, reading the record's stack then; the VM latches and flushes at the same five
+  points, or the `S` lines land in the wrong place.
+- **The initial pose is the model builder's, not the script's.** Until `0x45AF1B` was read, every
+  aircraft's flares and thrust anchors were "visible" in the replay and hidden in the game.
+- **The gate got stronger than the row asked for.** "Trace and pose diffs empty" became whole
+  files identical byte for byte, header included, so `diff` is the literal check and a modder can
+  run the same one.
+
+The refusal path (`X`) has no stock fixture — `tools/test_tacob.py` covers it with a synthetic
+COB that starts nine sleepers, and with the `call-script` on a full pool that parks its caller
+for ever.
+
 ## Gaps this design does not close
 
 - **Scriptor compatibility of hand-written literals** is unproven until the binary is found:
@@ -337,4 +403,15 @@ follows (the addresses are in `exe-reverse-engineering.md` §"The COB engine"):
   (`0x480EB0`, `0x481140`, landing 2).
 - ~~**`rand`** cannot be replayed from posedump~~ — cobtrace logs every draw as a `D` line (landing 2).
 - **Flight, sailing and diving** are sketches. The events they generate are exact; the path is not.
-- **The interpolation rules** (§The VM) are unknown until the first traces are diffed.
+- ~~**The interpolation rules** (§The VM) are unknown until the first traces are diffed~~ —
+  measured in landing 3, §The VM's table.
+- **The replay's inputs are not all predictions** — §"What the replay supplies" names the three
+  the director is given, and the tank's `D`-line ticks are the one place a fixture's own numbers
+  come back out of it.
+- **The unit-state panel is one value deep.** `HEALTH` and `BUILD_PERCENT_LEFT` are all the stock
+  fixtures read; the other eighteen ids are modelled as a dictionary the panel will edit, with no
+  engine behind them, and `PIECE_XZ`/`PIECE_Y`/`UNIT_*`/`XZ_ATAN`/`HYPOT` will need real
+  arithmetic before a script that navigates by them runs true.
+- **The effect opcodes are logged, not simulated.** `emit-sfx` and `explode` record
+  `(tick, piece, argument)`; their handlers' constant tables are still unread, so the shipped
+  `SFXTYPE_*` and explosion-flag values remain the community's.

@@ -324,8 +324,11 @@ how `MOVE`/`TURN` take a piece operand.]
 - **Cooperative threading.** `START` spins a new thread; `WAIT_TURN`/`WAIT_MOVE`/`SLEEP`
   block the *calling* thread until an animation on a piece/axis finishes or a timer elapses;
   `SIGNAL`/`SET_SIGNAL_MASK` kill sibling threads (used to cancel a walk cycle when a unit
-  stops). Linear operands are 16.16, angular are TAang (§0). [VERIFIED opcodes; mechanics per
-  Spring `CobThread`.]
+  stops). Linear operands are 16.16, angular are TAang (§0). [VERIFIED opcodes; **mechanics
+  measured against this engine 2026-09-07**, not taken from Spring — the eight `0xA4` records,
+  the wake tests, `sleep` = `ms × 30 / 1000` truncated, and the tick order (slots 0..7 then the
+  animation stepper) are in `exe-reverse-engineering.md` §"The COB engine", and
+  `tools/tacob run --all` replays nine traced units byte-identically on them.]
 
 ### 2.4 Opcode set — exact values
 
@@ -382,6 +385,12 @@ engine" lists the handler each reaches, what it pops, and the thread-record fiel
 | `DIV` | `0x10034000` | | `BITWISE_NOT` | `0x10038000` |
 | `MOD` | `0x10034001` | | | |
 
+**`MOD` is `DIV` in retail TA** — the dispatcher masks `op & 0x100FF000`, which erases the low
+`1`, so both reach the handler at `0x4B14FD` and `%` performs integer division.
+[VERIFIED 2026-09-07 — `exe-reverse-engineering.md` §"Opcodes this engine does not implement".]
+`BITWISE_NOT` (and the logical `NOT`) rewrite the top of the stack in place: neither moves the
+stack index.
+
 **Native / queries**
 
 | Opcode | Value | Effect |
@@ -429,7 +438,19 @@ engine" lists the handler each reaches, what it pops, and the thread-record fiel
 | Opcode | Value |
 |--------|-------|
 | `EXPLODE`    | `0x10071000` | Detonate a piece (death animation debris). |
-| `PLAY_SOUND` | `0x10072000` |
+| `PLAY_SOUND` | `0x10072000` | **Not implemented by retail TA** — see below. |
+
+**Opcodes retail TA does not implement.** The dispatcher's last compare chain (`0x4B1B48`)
+tests only `SET`, `ATTACH` and `DROP` above `EXPLODE`, so **`PLAY_SOUND 0x10072000` and
+`MAP_COMMAND 0x10073000` fall into the unknown-opcode path `0x4B1B60` and kill the running
+thread silently.** A script that calls `play-sound` ends there, with no error and no `RETURN`.
+**No stock script uses either** — all 278 corpus COBs decoded, 2026-09-07 — which is consistent:
+Cavedog's own scripts never call an opcode their engine drops.
+[VERIFIED 2026-09-07 — the dispatch read word by word; `tools/tacob`'s VM reproduces the kill and
+`tools/test_tacob.py` pins it.] Five more words *are* handled but unused by the stock corpus and
+their vtable slots unread: `0x10009000` (two pops → `vt+0x28`), `0x1000A000` (`vt+0x2C`),
+`0x10044000` (one pop → `vt+0x48`), `0x10045000` (no pops → `vt+0x4C`) and `0x10063000` (pops
+`[pc+2]` words into the runner's own stack frame).
 
 ### 2.5 `GET`/`SET` value IDs (engine queries)
 
@@ -462,7 +483,22 @@ Those land in `PrimitiveStruct` (`tamem.h:1116-1133`):
 |-------------------------|-----|------------|-------|
 | `XPos`,`ZPos`,`YPos`    | 0x04/0x08/0x0C | `MOVE`/`MOVE_NOW` | 16.16 (add to the 3DO's static `OffsetX/Y/Z`) |
 | `XTurn`,`ZTurn`,`YTurn` | 0x10/0x12/0x14 | `TURN`/`SPIN`/`TURN_NOW` | `uint16` TAang (65536 = 360°) |
-| `Visible` (bit)         | 0x28 | `SHOW`/`HIDE` | 1 = drawn |
+| `Visible` (bit 0)       | 0x28 | `SHOW`/`HIDE`; **initialised by the model builder** | 1 = drawn |
+| `cached` (bit 1)        | 0x28 | `CACHE`/`DONT_CACHE`; set for every piece at build | 1 = casts the structure shadow |
+
+`0x45AEC0` sets `Visible` **only when the piece's 3DO node has three or more vertices**
+(`0x45AF1B`); a one- or two-vertex marker node — every flare, wake, thrust anchor and torpedo
+tube — starts hidden with no `hide` in the script. And `0x45A950` lays the `PrimitiveStruct`
+array out in the **COB's piece order**, not the 3DO's tree order: it binds by name (the compare
+at `0x45A9FD`), so the array index a `MOVE`'s piece operand uses is the COB piece-name table's
+index. [VERIFIED 2026-09-07 — read from the binary and checked against all eight posedump
+fixtures in `evidence/cobtrace/`.]
+
+The interpolation those fields get is `0x4B1C00`, the animation stepper, which runs after the
+eight thread records every tick: per axis it adds `dt × (speed / 30)`, snaps to the target on
+arrival and zeroes the speed — which is what `wait-for-move`/`wait-for-turn` test, so a waiter
+resumes the tick *after* its axis arrives. `TURN` always takes the short way round. Full rules:
+`exe-reverse-engineering.md` §"The piece animation array".
 
 **Renderer recipe:** for each piece build a local matrix
 `L = T(OffsetX+XPos, OffsetY+YPos, OffsetZ+ZPos) · R(XTurn,YTurn,ZTurn)` (mind TA's axis

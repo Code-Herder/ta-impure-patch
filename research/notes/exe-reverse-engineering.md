@@ -2074,6 +2074,154 @@ value; the handler follows each compare):
 The tail: `0x4B1BD5` pc++, `0x4B1BD9` writes pc back, `0x4B1BDC` loops while the flag is set,
 `0x4B1BE8` unwinds.
 
+### The piece animation array `cob+0x14` and the stepper `0x4B1C00` (tacob landing 3)
+
+`0x4B0756` allocates `npieces × 19` dwords, zero-filled, tag `0x509C84`. **Nineteen dwords
+per piece, six three-axis groups and a flag**, and the axis operand of MOVE/TURN indexes
+each group directly (`slot = piece × 19 + axis`):
+
+| Dword | Field | Written by | Read by |
+|---|---|---|---|
+| `+0` | "this piece is animating" | MOVE/TURN/SPIN (`0x4B0F13`, `0x4B106D`), the stepper re-sets it while any axis is still travelling | the stepper's per-piece skip (`0x4B1C4F`) |
+| `+1..3` | MOVE target, 16.16 | MOVE (`0x4B0EC3`), MOVE_NOW (`0x4B11E2`) | the stepper's arrival test |
+| `+4..6` | MOVE speed **per tick** = `speed / (cob+4)`, signed | MOVE (`0x4B0EE4`), zeroed by MOVE_NOW and on arrival | **`wait-for-move` releases when this is 0** (`0x4B0E03..0x4B0E1A`) |
+| `+7..9` | TURN target, `& 0xFFFF`; **`-1` means "no target"** — what SPIN writes (`0x4B101D`) so the stepper never arrives | TURN (`0x4B0F5A`), TURN_NOW (`0x4B123F`), SPIN | the stepper |
+| `+10..12` | TURN speed **per tick**, signed | TURN (`0x4B0F85`), SPIN when the acceleration is 0 (`0x4B1060`), the stepper's acceleration step | **`wait-for-turn` releases when this is 0** (`0x4B0E1E..0x4B0E35`) |
+| `+13..15` | SPIN target speed per tick | SPIN (`0x4B1037`), STOP_SPIN writes 0 (`0x4B109B`) | the stepper's acceleration step |
+| `+16..18` | SPIN acceleration per tick | SPIN (`0x4B104D`), STOP_SPIN writes **`-decel/rate`** (`0x4B10B3`), TURN and TURN_NOW clear it | the stepper |
+
+**The four movement opcodes, exactly** (all divide by `cob+4` with `idiv`, so the per-tick step
+truncates toward zero — `<90>` = 16384 becomes 546, `<50>` = 9102 becomes 303):
+
+- **MOVE `0x4B0E8F`** pops the target then the speed, stores both, calls `vt+0x14(piece, axis)`
+  for the piece's current position and **negates the speed when the target is below it**
+  (`0x4B0EFB`). It does not test for "already there".
+- **TURN `0x4B0F2C`** masks the target to 16 bits, clears the axis's spin acceleration, pops the
+  speed, then calls `vt+0x18(piece, axis)` for the current angle. `delta == 0` → the speed is
+  written as 0 (the wait releases on the next tick anyway); otherwise the speed is negated when
+  `(|delta| > 0x8000) XOR (delta < 0)` (`0x4B0FBA..0x4B0FE7`) — **`turn` always takes the short
+  way round**, and that is the whole rule; there is no "shortest arc" flag anywhere.
+- **SPIN `0x4B100A`** pops the speed then the acceleration (BOS pushes them the other way), and
+  with a zero acceleration puts the piece at its target speed at once.
+- **STOP_SPIN `0x4B1086`** pops the deceleration, negates it into the acceleration field, and
+  with a zero deceleration stops the axis dead. It is the one movement opcode that sets neither
+  the piece's flag nor `cob+0x18` (`0x4B10BE` jumps to `0x4B18F8`, the bare `pc += 3` tail) —
+  harmless only because the axis it stops was already spinning and so already flagged.
+- **MOVE_NOW `0x4B11B6` / TURN_NOW `0x4B1210`** write the value through `vt+0x00` / `vt+0x04`,
+  zero the axis's speed, and flag nothing.
+
+**The stepper `0x4B1C00`** `thiscall(cob, dt)`, called at the end of `DoScriptsNow` with the
+tick's `dt` and by every run-now start with `dt = 0`. It returns immediately on `dt == 0` or
+`cob+0x18 == 0`; otherwise it clears `cob+0x18`, and for each piece whose flag is set: clears
+the flag, walks the three axes, and re-sets the flag (and `cob+0x18`) if any axis is still
+travelling. Per axis, in this order:
+
+1. **Move**: `new = vt+0x14(piece, axis) + dt × speed`; arrived when `new >= target` for a
+   positive speed or `new <= target` for a negative one, and arriving snaps to the target and
+   zeroes the speed (`0x4B1CA1`, `0x4B1CB3`). The new value goes through `vt+0x00` either way.
+2. **Spin acceleration**: `turnspeed += accel`, clamped to the spin target speed, and the
+   acceleration is zeroed on arrival (`0x4B1D08`).
+3. **Turn**: with the *post-acceleration* speed, `remaining = (target − cur + 0x10000) & 0xFFFF`
+   for a positive speed and `(cur − target + 0x10000) & 0xFFFF` for a negative one; the axis
+   arrives when `remaining <= |dt × speed|`, snapping to the target and zeroing the speed
+   (`0x4B1D78`, `0x4B1DB1`). A target of `-1` (a spin) never arrives. The angle goes through
+   `vt+0x04` masked to 16 bits.
+
+So **the wait opcodes release on the tick *after* the stepper zeroes the speed**: the runner
+runs the eight records first and the stepper last, so a thread blocked on an axis that arrives
+during tick *N* resumes at tick *N+1*. Measured end to end on ARMSTUMP's `AimPrimary(33, 1066)`:
+started at tick 118, turret (speed 546, 33 to go) arrives in the tick-118 stepper, barrel
+(speed −303, 1066 to go) takes four, and the script's `start-script RestoreAfterDelay` and
+`return (1)` land at tick 122 — which is what the fixture logged.
+
+### The by-name starts: every call site, its entry and its `runNow` (tacob landing 3)
+
+Read off each caller listed above; the name is the string it pushes, and the argument order for
+`0x4B0A70` is `name, cb, runNow, argc, a0..a3` (pushed in reverse). **`0x4B0B00` writes
+`a0..a3` into `stack[0..3]` whatever `argc` says and only then sets `sp = argc−1`**
+(`0x4B0B37..0x4B0B7B`), so an engine start does *not* leave the record's stale words under the
+arguments it did not pass — a script start (the START opcode) does.
+
+| Script | Site | Entry | `runNow` | `argc` |
+|---|---|---|---|---|
+| `Create` | `0x485DE6` | `0x4B0940` | **1** | – |
+| `StartMoving`, `StopMoving` | `0x43DAF2` | `0x4B0940` | **1** | – |
+| `MoveRate1/2/3` | `0x43DB27` | `0x4B0940` | **1** | – |
+| `setSFXoccupy` | `0x43DBE8` | `0x4B0A70` | **1** | 1 |
+| `Killed` (the second death path) | `0x486877` | `0x4B0A70` | **1** | 1 |
+| `Activate`, `Deactivate`, `StartBuilding`, `StopBuilding` | `0x48B106`, `0x48B12B`, `0x48B14E`, `0x48B169` | `0x4B0940` | 0 | – |
+| `FirePrimary/Secondary/Tertiary` (table `0x509678`) | `0x49CB94`, `0x49CD4F`, `0x49CF73` | `0x4B0940` | 0 | – |
+| `AimPrimary/Secondary/Tertiary` (table `0x509688`) | `0x49E31C` (heading, pitch, with the aim callback), `0x49E386` (`AutoAim`, all four words 0) | `0x4B0A70` | 0 | 2 |
+| `SetMaxReloadTime` | `0x49E186` | `0x4B0A70` | 0 | 1 |
+| `SetSpeed`, `SetDirection` | `0x437902`, `0x43795E`, `0x43798A` | `0x4B0A70` | 0 | 1 |
+| `RockUnit` | `0x499C5C`, `0x49CBEB`, `0x49CDA6`, `0x49CFCA` | `0x4B0A70` | 0 | 2 |
+| `HitByWeapon` | `0x489F43` | `0x4B0A70` | 0 | 2 |
+| `TakeDamage` | `0x489F8E` | `0x4B0A70` | 0 | 1 |
+| `TargetCleared` | `0x489898`, `0x489948`, `0x48A149`, `0x48A2E0` | `0x4B0A70` | 0 | – |
+| `EndTransport` | `0x40F433`, `0x41148D`, `0x411794`, `0x411DA1`, `0x411E2B` | `0x4B0940` | 0 | – |
+| `TransportPickup`, `TransportDrop`, `BeginTransport` | `0x406834`, `0x4069BF`, `0x4113EF` | `0x4B0A70` | 0 | – |
+| `Query*`/`AimFrom*` (tables), `QueryNanoPiece`, `SweetSpot`, `QueryBuildInfo`, `QueryTransport`, `QueryLandingPad`, `Killed` (`Send_UnitDeath`) | `0x43E227`, `0x43E291`, `0x43E32C`, `0x43E370`, `0x43E3E4`, `0x43E427`, `0x4027FB`, `0x4113B1`, `0x41189C`+4, `0x4865C3` | `0x4B0BC0` | query | 4 in, 4 out |
+
+`0x509678` = `{FirePrimary, FireSecondary, FireTertiary, NULL, AimPrimary, AimSecondary,
+AimTertiary, NULL}`; `0x509688` = `{AimPrimary, AimSecondary, AimTertiary, NULL, …}` — both
+indexed by `(weaponbits >> 2) & 3`, which is why the stock engine stops at three weapons.
+
+**Where each of those sits in the frame** matters as much as `runNow`, because a run-later start
+issued before the unit's own `DoScriptsNow` still takes its first step in the same tick. The
+per-unit tick function (it ends at `0x48B080`) runs, in order: `0x437910` (`0x48ADC4`),
+`AutoAim 0x49E1A0` (`0x48ADDA`, only when `unit+0x73 ∈ {1,2}`), **`DoScriptsNow(1)`
+(`0x48ADEB`)**, then `0x489BB0`, `0x41BD10`, `0x43B7C0`, `0x43BAD0`, **the movement pass
+`0x43DD20` (`0x48AFAA`)**, `0x48A870`, `0x4864B0`, `0x48B710`. `0x43DD20` calls `0x43DA70` and
+`0x43DB50`, which hold the `StartMoving`/`StopMoving`/`MoveRate*` sites — so **those land after
+the unit's own script tick**, while the weapon and aim traffic lands before it.
+`UNITS_SetStateMask` (`Activate`/`Deactivate`, `0x48B0A0`) is *not* in that function; measured,
+its starts land after `DoScriptsNow` too (the fighter, gunship and bomber fixtures each start
+`Activate` one tick after `Create` and it first steps the tick after that). `SweetSpot` and
+`Killed` come from the *attacker's* tick and so land after this unit's as well, when the
+attacker's index is the higher one — which it is in all nine fixtures.
+
+### Opcodes this engine does not implement (tacob landing 3)
+
+The dispatch's last compare chain (`0x4B1B48`) tests only `SET 0x10082000`, `ATTACH 0x10083000`
+and `DROP 0x10084000` above `EXPLODE`, so **`PLAY_SOUND 0x10072000` and `MAP_COMMAND
+0x10073000` fall into `0x4B1B60` and kill the thread silently.** `play-sound` is in the BOS
+dialect the community writes and in our compiler, and in retail TA it ends the script that uses
+it — a lint, not an opcode. Two more shapes worth recording: **`MOD 0x10034001` reaches the same
+handler as `DIV`** (the dispatch masks `op & 0x100FF000`, which erases the `1`), so `%` *is*
+integer division here; and `BITWISE_NOT 0x10038000` and the logical `NOT 0x1005A000` neither pop
+nor push — they rewrite the top of the stack in place (`0x4B159E`, `0x4B1896`). `0x10009000`
+(two pops → `vt+0x28`), `0x1000A000` (`vt+0x2C`), `0x10044000` (one pop → `vt+0x48`),
+`0x10045000` (no pops → `vt+0x4C`) and `0x10063000` (pops `[pc+2]` words into the runner's own
+frame) are handled but unused by the stock corpus and their vtable slots are unread.
+
+### The posed model the opcodes write into — `0x45A950` and `0x45AEC0`
+
+`0x45A950(model, scriptfile, unit)` builds the `Object3do` at `unit+0x9E`. It binds the model's
+nodes to the COB's **piece-name table** (the name compare at `0x45A9FD` → `0x4F8A70`), so the
+`PrimitiveStruct` array is in the COB's piece order, not the 3DO's tree order — ARMPW's array
+slot 0 is `torso`, its COB piece 0, while the 3DO's root node is `ground`. `0x45AEC0` then walks
+the tree and initialises each `PrimitiveStruct` (stride `0x36`, first at `o3+0x22`):
+
+- `+0x22` a private copy of the node's vertices, `count × 12` bytes (tag `0x506624`)
+- `+0x28` flags: **bit 1 set for every piece** (`0x45AED4` — the `cached` bit `DONT_CACHE`
+  clears), bit 2 set for every piece (`0x45AF31`, unread), and **bit 0 — `Visible` — set only
+  when the node has three or more vertices** (`0x45AF1B`: `cmp [node+4], 3` / `jl` →
+  `and [prim+0x28], 0xFFFE`).
+
+That last line is why a unit's flares, wakes, thrust anchors and torpedo tubes are hidden
+without any `hide` in its script: they are one- and two-vertex marker nodes. Measured against
+all eight fixtures that dumped a pose of their own unit — every `HIDDEN` piece is either such a
+node or one the unit's `Create` hides, with no exceptions and no false positives.
+
+### [REPLAY] The nine fixtures, re-run offline (tacob landing 3, 2026-09-07)
+
+`tools/tacob run --all` runs the model above against landing 2's nine logs. Each replay's
+`tacob run <class> --trace-out …` output is **byte-identical to the file the game wrote** —
+4272 lines across the nine, including every slot number, every `K`, every `D` and the tick of
+every `R` — and every piece of the eight posedumps of the traced unit matches on `move=`,
+`turn=` and `HIDDEN`. What the replay is *given* is listed in `tacob-design.md` §"What the
+replay supplies"; the rules above are what it had to get right to produce the rest.
+
 ### The oracle's five sites (`tagpu_cobtrace.c`, armed by `tagpu_cobtrace.on`)
 
 | VA | Bytes stolen | Captures |

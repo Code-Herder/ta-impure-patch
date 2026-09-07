@@ -8,7 +8,11 @@
     tools/tacob run       --all                          # the landing-3 gate (VM + director)
 
 BOS is the source and COB the build artifact (research/notes/tacob-design.md).
-Formats: research/notes/file-formats.md §2. The code shapes below were
+Formats: research/notes/file-formats.md §2; the engine the VM reproduces is
+research/notes/exe-reverse-engineering.md §"The COB engine", every rule read
+out of the retail binary. `run` replays landing 2's fixtures under
+research/notes/evidence/cobtrace/ and diffs both oracles — the output file is
+byte-identical to the log the game wrote. The code shapes below were
 measured over the 278 stock COBs on 2026-09-07 and are what `roundtrip`
 proves — every stock script decompiles to BOS that compiles back to the
 identical file:
@@ -1779,7 +1783,7 @@ class CobVM:
         return self.names[best] if best >= 0 else "?"
 
     # -- the trace's latch ------------------------------------------------
-    def _flush(self):
+    def flush_start(self):
         """The oracle writes a start at the next hook event, reading the record's
         stack then: the callers write the arguments only after the allocator returns."""
         p = self._pend
@@ -1806,7 +1810,7 @@ class CobVM:
     def alloc(self, idx, src="E", parent=-1, argc=-1):
         """COBEngine_AllocThread 0x4B08C0. -1 for a script the file lacks and for a
         full pool alike; the first free slot from 0, and the record is not cleared."""
-        self._flush()
+        self.flush_start()
         if idx < 0 or idx >= len(self.names):
             return -1
         for slot in range(NRECORDS):
@@ -1879,7 +1883,7 @@ class CobVM:
     def run_thread(self, slot, dt):
         """0x4B0DA0: wake the record if its block has cleared, then execute
         opcodes back to back until one blocks it or ends it."""
-        self._flush()
+        self.flush_start()
         rec = self.threads[slot]
         top = rec.status & 0xFF000000
         if top == 0:
@@ -2049,7 +2053,7 @@ class CobVM:
             elif op == 0x10041000:          # RAND: pops hi then lo, pushes lo + rng(hi-lo+1)
                 hi = i32(rec.stack[rec.sp]); rec.sp -= 1
                 lo = i32(rec.stack[rec.sp]); rec.sp -= 1
-                self._flush()
+                self.flush_start()
                 r = self.world.rand(hi - lo + 1, lo)
                 value = i32(lo + r)
                 rec.sp += 1
@@ -2102,7 +2106,7 @@ class CobVM:
             elif op == 0x10064000:          # JUMP
                 nxt = code[pc + 1]
             elif op == 0x10065000:          # RETURN
-                self._flush()
+                self.flush_start()
                 sp = rec.sp
                 value = str(i32(rec.stack[sp])) if 0 <= sp < REC_WORDS else "?"
                 self._emit("R\t%d\t%d\t%d\t%s\t%s"
@@ -2123,7 +2127,7 @@ class CobVM:
                     other = self.threads[k]
                     if other.status == ST_FREE or not (other.mask & mask):
                         continue
-                    self._flush()
+                    self.flush_start()
                     self._emit("K\t%d\t%d\t%d\t%s\t%d"
                                % (self.tick, self.unit, k, self.script_of_pc(other.pc), slot))
                     self.free(k)            # its RETURN never runs, so no callback either
@@ -2410,7 +2414,7 @@ def replay(cob, lines, world_values=None, type_name="?", unit=1, until=None, sna
         if tick in snap:
             snaps[tick] = ([list(p) for p in vm.pos], [list(a) for a in vm.ang],
                            list(vm.visible))
-    vm._flush()
+    vm.flush_start()
     return vm, out, unknown, snaps
 
 
@@ -2667,6 +2671,8 @@ def cmd_run(args):
                 print(f"       line {d['line']}\n         want {d['want']}\n         got  {d['got']}")
             for bad in report.get("pose_bad", [])[:4]:
                 print(f"       p{bad['piece']} {bad['name']}: want {bad['want']} got {bad['got']}")
+            if report.get("pose_note"):
+                print(f"       {report['pose_note']}")
             if report["unknown_starts"]:
                 print(f"       engine starts not in the call-site table: "
                       f"{', '.join(report['unknown_starts'])}")
