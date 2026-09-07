@@ -2033,7 +2033,7 @@ the disassembly (`ret`/`ret n` boundaries):
 |---|---|---|---|
 | `0x459200..0x459800` | the unit composite blit (`0x459200`, [GPU status](gpu-status.html) §2.4) — the engine still calls it while `owndraw` skips the rasterisers, and the composites it blits are all key | `0x4B8500` at `0x459319`, `0x459353`, `0x4593BA`, `0x4595E9`, `0x4597D3`; `0x4B7F90` at `0x4593A4`, `0x4597AB` | `ret` at `0x4597DF`; `0x45982A` is the next function |
 | `0x4C2380..0x4C2A00` | the cursor code — `0x4C2380` (dead), `0x4C24B0`, `0x4C25E0`, `0x4C2870` and the `SAVEMOUSE` copies (§ "The mouse object") | `0x4B7F90` ×4 (`0x4C23C9`, `0x4C258C`, `0x4C2732`, `0x4C297E`), `0x4C6B70` ×2 (`0x4C24A8`, `0x4C2937`), `0x4CBBE0` ×9 (`0x4C241B`..`0x4C2835`) | `0x4C2870` ends at `0x4C2989`; the last function in the range at `0x4C2A74` |
-| `0x4C6300..0x4C6890` | the flip `0x4C63A0` (ends `0x4C6669`) and the in-flip cursor draw `0x4C67C0` (ends `0x4C6884`) | the flip: `0x4C6B70` at `0x4C6414`, `0x4C6585`, `0x4CBBE0` at `0x4C6553`, `0x4C65F3`; `0x4C67C0`: `0x4C6B70` at `0x4C6862`, `0x4B7F90` at `0x4C687D` | — |
+| `0x4C6300..0x4C6890` | the flip `0x4C63A0` — **three exits**, each `pop edi/esi/ebp/ebx; add esp,0xF4; ret` at `0x4C6669`, `0x4C668F` and `0x4C67BA` (a backward `jne 0x4C66EB` at `0x4C67AA` keeps the last arm inside), so it spans `0x4C63A0..0x4C67BA` — and the in-flip cursor draw `0x4C67C0` (ends `0x4C6884`) | the flip: `0x4C6B70` at `0x4C6414`, `0x4C6585`, `0x4CBBE0` at `0x4C6553`, `0x4C65F3`, `0x4C6769`; `0x4C67C0`: `0x4C6B70` at `0x4C6862`, `0x4B7F90` at `0x4C687D` | — |
 
 **`0x4C67C0` has exactly two callers, `0x4C641B` and `0x4C6544`, both inside the flip** — so
 every blit it makes is also under the observer's `s_inFlip` (set between the flip's entry and
@@ -2058,6 +2058,13 @@ layer is a new reader on the other thread):
   the layer does not draw and `strict` does not count: the cursor is the engine's in phase 1
   ([GL UI renderer](gui-renderer.html) §3.7). A torn read here costs one frame of a
   misplaced exemption, nothing else.
+
+**Read on the game thread at publish, guarded** (`IsBadReadPtr`, like the first-sight decode):
+the first bytes of a GAF frame's pixel plane — up to 64, the row lengths and data of the first
+rows for an RLE frame — go into the sprite's identity beside the header and plane addresses,
+because the shell frees a popped screen's art and the heap hands the same addresses to the
+next screen's (the 2026-09-07 review). `0x4CCF60`'s `'\n'` stop (`cmp al,0xA; je 0x4CD008` at
+`0x4CCFA0`) is honoured by the glyph observer's width since the same review.
 
 ## The unit-death path, the object destructor and the level teardown — mapped by us
 

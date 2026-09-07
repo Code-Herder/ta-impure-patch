@@ -502,12 +502,17 @@ static void draw_layer(const TAGPU_FRAME* f)
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
     x_glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+/* leave nothing of ours bound: the drain binds twin FBOs, the atlas, the
+   copy source and our VAO/program, and draw_layer may not have run */
+static void unbind_all(void)
+{
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, 0);
-    x_glActiveTexture(GL_TEXTURE0);
+    x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
+    x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, 0);
     glUseProgram(0);
 }
 
@@ -550,6 +555,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     if (!init_gl()) return;
     drain();
     draw_layer(f);
+    unbind_all();
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
     if (f->frame_counter - last >= 300) {

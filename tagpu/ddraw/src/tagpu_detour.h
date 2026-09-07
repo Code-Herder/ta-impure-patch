@@ -52,8 +52,8 @@ int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst
 /* Observer detour (Phase E, tagpu_gui_hook.c): the function runs UNCHANGED, we
    only watch it. `before(entry_esp)` is called on entry with a pointer to the
    engine's own stack frame — `((void**)entry_esp)[0]` is the return address,
-   `[1]` the first stack argument, and so on — with every register preserved
-   around the call (pushad/popad). If it returns non-zero the return address is
+   `[1]` the first stack argument, and so on — with every register and the
+   flags preserved around the call (pushfd/pushad ... popad/popfd). If it returns non-zero the return address is
    replaced by a trampoline that calls `after(regs)` when the function returns:
    `regs` is the pushad frame, so `regs[7]` is the callee's EAX (its return
    value), and `after` must hand back the real return address it was given by

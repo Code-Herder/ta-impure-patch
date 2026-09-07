@@ -149,35 +149,43 @@ int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
     if (!s || !before || nst < 5 || nst > 16) return 0;
     prev = tagpu_detour_landed(va, &prevOff, &prevN);
     if (prev && (prevN != nst || memcmp(prev + prevOff, stolen, (size_t)nst) != 0)) return 0;
-    /* entry: [esp]=retaddr, [esp+4..]=args. pushad puts esp at E-0x20. */
+    /* entry: [esp]=retaddr, [esp+4..]=args. pushfd then pushad put esp at
+       E-0x24; the flags go back exactly as they came, so a caller that tests
+       them after the call (none found, but the claim is "byte-identical")
+       and the callee's prologue both see the engine's own EFLAGS. */
+    *p++ = 0x9C;                                       /* pushfd               */
     *p++ = 0x60;                                       /* pushad               */
-    *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x20;/* lea eax,[esp+0x20]   */
+    *p++ = 0x8D; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;/* lea eax,[esp+0x24]   */
     *p++ = 0x50;                                       /* push eax  (entry esp)*/
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)before); p += 4;
     *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;             /* add esp,4            */
     *p++ = 0x85; *p++ = 0xC0;                          /* test eax,eax         */
-    *p++ = 0x61;                                       /* popad (flags kept)   */
+    *p++ = 0x61;                                       /* popad (ZF kept)      */
     if (after) {
-        *p++ = 0x74; *p++ = 0x07;                      /* jz +7: keep the ret  */
-        *p++ = 0xC7; *p++ = 0x04; *p++ = 0x24;         /* mov [esp], imm32     */
-        tramp = p + 4 + nst + 5;                       /* the trampoline below */
+        *p++ = 0x74; *p++ = 0x08;                      /* jz +8: keep the ret  */
+        *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x04; /* mov [esp+4], imm32 (the return slot, above the saved flags) */
+        tramp = p + 4 + 1 + nst + 5;                   /* past imm32, popfd, stolen, jmp */
         { unsigned int t = (unsigned int)(size_t)tramp; memcpy(p, &t, 4); p += 4; }
     }
+    *p++ = 0x9D;                                       /* popfd                */
     detour_record(va, s, (int)(p - s), nst);
     memcpy(p, stolen, (size_t)nst); p += nst;
     *p++ = 0xE9; tagpu_detour_rel(p, va + (unsigned)nst); p += 4;
     if (after) {
         /* the callee has `ret n`-ed here with the caller's esp restored and its
-           result in eax. Reserve one slot, save every register, ask `after`
-           for the real return address, park it in the slot, restore, `ret`
-           into it. No static scratch, so nested and re-entrant use is safe. */
+           result in eax. Reserve one slot, save the flags and every register,
+           ask `after` for the real return address, park it in the slot,
+           restore, `ret` into it. No static scratch, so nested and re-entrant
+           use is safe. */
         *p++ = 0x50;                                   /* push eax  (the slot) */
+        *p++ = 0x9C;                                   /* pushfd               */
         *p++ = 0x60;                                   /* pushad               */
         *p++ = 0x54;                                   /* push esp  (regs*)    */
         *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)after); p += 4;
         *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;         /* add esp,4            */
-        *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x20; /* mov [esp+0x20],eax */
+        *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24; /* mov [esp+0x24],eax: the slot above pushad+pushfd */
         *p++ = 0x61;                                   /* popad                */
+        *p++ = 0x9D;                                   /* popfd                */
         *p++ = 0xC3;                                   /* ret -> real return   */
     }
     if (prev) {

@@ -51,8 +51,9 @@ static const int* ctx_or_back(unsigned ctxArg)
    0x459200's seven leaf calls sit at 0x459319..0x4597D3 (each return address
    five bytes on) and it ends at 0x4597DF; the cursor code's fifteen
    (0x4C23C9..0x4C297E) end at 0x4C2989;
-   the flip 0x4C63A0 ends at 0x4C6669, and 0x4C67C0 — its two callers are
-   0x4C641B and 0x4C6544, both inside the flip — ends at 0x4C6884. */
+   the flip 0x4C63A0 has three epilogues (0x4C6669, 0x4C668F, 0x4C67BA) and
+   0x4C67C0 — its two callers are 0x4C641B and 0x4C6544, both inside the
+   flip — ends at 0x4C6884. */
 static int excluded_caller(unsigned ret)
 {
     if (s_inFlip) return 1;
@@ -121,7 +122,7 @@ static int __cdecl before_text(void* e)
     if (!ptr_ok(font) || !ptr_ok(str)) { op_add(OP_TEXT, NULL, 0, 0, 0, 0); return 0; }
     rows = font[0];
     top  = y - (signed char)font[2];
-    for (i = 0; i < 256 && str[i]; i++) {
+    for (i = 0; i < 256 && str[i] && str[i] != '\n'; i++) {   /* 0x4CCFA0: '\n' ends the draw */
         int c = (int)str[i] - (int)font[3];
         unsigned off;
         if (c < 0) continue;
@@ -277,6 +278,10 @@ static int __cdecl before_free(void* e)
             }
             free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
             s_surf[i] = s_surf[--s_nsurf];
+            /* ops recorded against it are dead: a new surface may be allocated
+               over the same bytes before the next census, and neither the
+               census nor the publisher may apply an old box to it */
+            { int k; for (k = 0; k < s_nops; k++) if (s_ops[k].base == (unsigned)obj[CTX_BASE]) s_ops[k].base = 0; }
             break;
         }
     return 0;

@@ -449,7 +449,8 @@ they were world, which was already true before this and is not verified either w
 
 Nothing here changes what the engine draws. Every site is an **observer detour**
 (`tagpu_detour_observe`): the original runs unchanged, we read its arguments on the way in and,
-for the allocator, its result on the way out. Installed once at DllMain when `tagpu_gui.on`
+for the allocator, its result on the way out; every register and EFLAGS are saved around both
+calls (`pushfd/pushad … popad/popfd`, since the 2026-09-07 review). Installed once at DllMain when `tagpu_gui.on`
 exists, byte-matched, all-or-nothing — 17 sites. **One site was already owned**: `fxown` holds
 `CopyGafToContext 0x4B7F90`, so the observer **chains** onto fxown's stub (the shared detour code
 now records every landed stub and hooks the earlier stub's copy of the stolen bytes; `own the
@@ -501,7 +502,15 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   to their last occurrence** (the shell redraws every gadget on every flip — ~41 ops at ~12 000
   flips/s on `MAINMENU` — and without this the queue overflowed into a reseed storm).
   Excluded, on the return address: the unit composite blit, the cursor code, the flip's own
-  blits (engine map, "What the twin layer excludes, tests and reads").
+  blits (engine map, "What the twin layer excludes, tests and reads"). Three rules from the
+  landing review: a sprite's identity is the frame's addresses **plus a hash of its plane's
+  first bytes** (a popped screen's art is freed and the heap reuses the addresses); the batch
+  dedup **never moves a write past a copy that read it** — an earlier duplicate is dropped only
+  when no `0x4C6B70` reading its surface lies between the two, or one follows the survivor
+  (a per-surface epoch bumped by every copy was tried first and re-created the shell's reseed
+  storm, since the shell copies its panel to the frame on every flip); and `SurfaceFree` **zeroes the
+  ring's ops on the freed base**, so a surface re-allocated over the same bytes before the next
+  census is never diffed or replayed against an old box.
 - *Render thread, inside `tagpu_overlay_draw` after `tagpu_native_frame`:* poll the trigger
   (500 ms), drain the queue (20 000 ops per present at most), then draw. Every seeded surface
   has a **twin**: an `RG8` texture its size (R = the palette index, G = coverage) behind an FBO,

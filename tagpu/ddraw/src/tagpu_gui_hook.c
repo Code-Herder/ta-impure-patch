@@ -101,6 +101,8 @@ typedef struct SURF {
     unsigned changed, explained, unexplained;   /* running totals            */
     int bl, bt, br, bb;               /* worst unexplained box last flip     */
     int seeded;                       /* a PK_SEED was published for it      */
+    int lastCopyFrom;                 /* dedup(): position in the batch of the last
+                                         COPY that read this surface, -1 if none  */
 } SURF;
 #define MAX_SURF 24
 static SURF s_surf[MAX_SURF];
@@ -116,6 +118,7 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch)
                 /* the object was re-allocated over the same bytes: start over */
                 s_surf[i].w = w; s_surf[i].h = h; s_surf[i].pitch = pitch;
                 s_surf[i].copyValid = 0;
+                s_surf[i].seeded = 0;          /* the twin is the old size: re-make it */
                 free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
                 s_surf[i].copy = s_surf[i].mask = s_surf[i].acc = NULL;
             }
@@ -257,7 +260,13 @@ static int pub_surface_bytes(SURF* s, int l, int t, int r, int b, TAGPU_PUBOP* o
     unsigned w = (unsigned)(r - l + 1), hh = (unsigned)(b - t + 1);
     unsigned char* dst;
     int y;
-    if (!ptr_ok(cur) || l < 0 || t < 0 || r >= s->w || b >= s->h || l > r || t > b) return 0;
+    if (!ptr_ok(cur) || l < 0 || t < 0 || r >= s->w || b >= s->h || l > r || t > b) {
+        /* a box recorded against a surface that has since changed size (or a
+           base we cannot read): the batch stops here and the next publish
+           starts fresh — never a silent drop that leaves a twin stale */
+        s_pubOverflow = 1;
+        return 0;
+    }
     dst = pub_bytes(o, w * hh);
     if (!dst) return 0;
     for (y = 0; y < (int)hh; y++)
@@ -277,6 +286,41 @@ static int pub_seed(SURF* s)
     return 1;
 }
 
+/* THE SPRITE IDENTITY. The atlas and the seen table key a frame on its
+   header and pixel-plane addresses, and the shell frees a popped screen's
+   art and hands the same addresses to the next screen's: the same key would
+   then name different pixels. So the key also carries a hash of the plane's
+   first bytes (the row lengths and data of the first rows, up to 64 bytes),
+   read here at publish time under the same guard the first-sight decode
+   uses. NULL = the plane cannot be read now: the caller publishes the box's
+   bytes instead, as it does when the decode fails. */
+static const void* frame_key(const unsigned char* fr, const void* pix, int w, int h)
+{
+    const unsigned char* px = (const unsigned char*)pix;
+    unsigned hh = 2166136261u, i, n = 0;
+    if (!ptr_ok(px)) return NULL;
+    if (fr[0x09] == 0) {                             /* raw: w*h bytes exist */
+        n = (unsigned)w * (unsigned)h; if (n > 64) n = 64;
+        if (IsBadReadPtr(px, n)) return NULL;
+        for (i = 0; i < n; i++) hh = (hh ^ px[i]) * 16777619u;
+    } else {                                         /* RLE: [len][data] per row */
+        const unsigned char* q = px;
+        int row;
+        for (row = 0; row < h && n < 64; row++) {
+            unsigned len, k;
+            if (IsBadReadPtr(q, 2)) return NULL;
+            len = *(const unsigned short*)q;
+            if (len > 8192 || IsBadReadPtr(q, 2 + len)) return NULL;
+            for (k = 0; k < 2 + len && n < 64; k++, n++) hh = (hh ^ q[k]) * 16777619u;
+            q += 2 + len;
+        }
+    }
+    hh ^= (unsigned)(size_t)pix * 2654435761u;
+    hh ^= (unsigned)(unsigned short)*(const short*)(fr + 0x04) << 16;     /* the hotspot */
+    hh ^= (unsigned)(unsigned short)*(const short*)(fr + 0x06);
+    return (const void*)(size_t)(hh ? hh : 1u);
+}
+
 static SURF* surf_by_base(unsigned base)
 {
     int i;
@@ -293,7 +337,13 @@ static SURF* surf_by_base(unsigned base)
    or off), and every one of those redraws is identical. A batch therefore
    keeps only the LAST of any run of identical ops: the final state of the
    surface is the same, because an op's replay is idempotent and the last
-   occurrence is the one whose position in the order matters. */
+   occurrence is the one whose position in the order matters. The one reader
+   in the op set is the COPY: dropping an earlier duplicate is safe unless a
+   copy that READ its surface lies between the two with none after the
+   survivor — then the replay would run the copy before the write it read.
+   (A per-surface epoch bumped by every copy was tried first and defeated the
+   whole dedup in the shell, whose panel is copied to the frame on every one
+   of its ~12 000 flips a second: a reseed storm, 2 749 resets in one walk.) */
 /* open addressing over the batch: 2x the ring's capacity keeps the load
    under a half, and a probe that runs long stops and calls the op distinct
    (a stray duplicate costs one idempotent replay, not a stall on the game
@@ -320,6 +370,10 @@ static void dedup(void)
 {
     int i;
     memset(s_dupTab, 0, sizeof s_dupTab);
+    /* where the last copy that reads each surface sits in this batch */
+    for (i = 0; i < s_nsurf; i++) s_surf[i].lastCopyFrom = -1;
+    for (i = 0; i < s_nops; i++)
+        if (s_ops[i].kind == OP_COPY) { SURF* src = surf_by_base(s_ops[i].src); if (src) src->lastCopyFrom = i; }
     for (i = 0; i < s_nops; i++) {
         OP* o = &s_ops[i];
         unsigned slot, n;
@@ -328,7 +382,14 @@ static void dedup(void)
         slot = op_hash(o);
         for (n = 0; n < DUP_PROBE_MAX; n++, slot = (slot + 1) & (DUP_TAB - 1)) {
             if (!s_dupTab[slot]) { s_dupTab[slot] = i + 1; break; }
-            if (op_same(&s_ops[s_dupTab[slot] - 1], o)) { s_ops[s_dupTab[slot] - 1].dup = 1; s_dupTab[slot] = i + 1; break; }
+            if (op_same(&s_ops[s_dupTab[slot] - 1], o)) {
+                int j = s_dupTab[slot] - 1;
+                SURF* d = surf_by_base(o->base);
+                int lc = d ? d->lastCopyFrom : -1;
+                if (lc < j || lc > i) s_ops[j].dup = 1;      /* no copy read the surface between, or one follows */
+                s_dupTab[slot] = i + 1;
+                break;
+            }
         }
     }
 }
@@ -401,22 +462,25 @@ static void publish(unsigned flipSurf)
            art) is its box's bytes like everything else */
         if (op->kind == OP_GAF && op->frame && op->fw && op->fh &&
             op->fw <= TAGPU_GAF_DECMAX && op->fh <= TAGPU_GAF_DECMAX) {
+            const void* key = frame_key((const unsigned char*)op->frame, op->pix, op->fw, op->fh);
+            if (!key) goto as_pixels;                  /* the art is not readable now */
             o = pub_op(PK_SPRITE, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
             o->sl = op->dx; o->st = op->dy; o->fw = op->fw; o->fh = op->fh; o->ck = op->ck;
-            o->frame = op->frame; o->pix = op->pix;
-            if (!seen_frame(op->frame, op->pix, 0)) {
+            o->frame = op->frame; o->pix = key;
+            if (!seen_frame(op->frame, key, 0)) {
                 unsigned char* dst = pub_bytes(o, (unsigned)op->fw * op->fh);
                 if (!dst) return;
                 if (!tagpu_gaf_decode((const unsigned char*)op->frame, op->fw, op->fh, dst)) {
                     /* unreadable art: the box's bytes instead, exact if dull */
                     o->kind = PK_PIXELS; o->alen = 0;
                     if (!pub_surface_bytes(s, op->l, op->t, op->r, op->b, o)) return;
-                } else seen_frame(op->frame, op->pix, 1);
+                } else seen_frame(op->frame, key, 1);
             }
             pub_commit();
             continue;
         }
+    as_pixels:
         if (op->kind == OP_COPY) {
             SURF* src = surf_by_base(op->src);
             if (src && src->seeded) {
@@ -483,10 +547,17 @@ static void census_surface(SURF* s, int isGame, int subtractVp, int vl, int vt, 
     /* 2. subtract every op that named this surface */
     for (i = 0; i < s_nops; i++) {
         const OP* o = &s_ops[i];
+        int r, b;
         if (o->base != s->base || o->kind == OP_FLIP) continue;
-        for (y = o->t; y <= o->b; y++) {
+        /* the box was clamped to the surface's size WHEN RECORDED; the surface
+           may have been re-made smaller since (before_free zeroes the ops of a
+           freed base, but a same-base re-allocation of a different size goes
+           through surf_get) — never index the mask past it */
+        r = o->r < s->w - 1 ? o->r : s->w - 1;
+        b = o->b < s->h - 1 ? o->b : s->h - 1;
+        for (y = o->t; y <= b; y++) {
             unsigned char* m = s->mask + (size_t)y * s->w;
-            for (x = o->l; x <= o->r; x++) if (m[x] == 255) m[x] = 128;
+            for (x = o->l; x <= r; x++) if (m[x] == 255) m[x] = 128;
         }
     }
     /* 3. on a game frame the world viewport is ours: the terrain skip fills it

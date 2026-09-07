@@ -1284,9 +1284,11 @@ def cmd_gui(args):
     """The GL UI renderer (Phase E): arm before launch (its detours install at DLL attach),
     then flip the draw live — the file is polled twice a second in the DLL."""
     inst = Instance(args.name)
-    inst.gamedir.mkdir(parents=True, exist_ok=True)
     path = inst.gamedir / "tagpu_gui.on"
     if args.state is not None:
+        # only a state change creates the gamedir; a bare query of a mistyped
+        # name must not leave an instance tree behind
+        inst.gamedir.mkdir(parents=True, exist_ok=True)
         if args.state == "off":
             # `off` INSIDE the file keeps the detours installed at the next launch while
             # the layer is not drawn; removing the file would un-arm the module entirely

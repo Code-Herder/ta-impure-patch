@@ -736,6 +736,46 @@ The heartbeat's queue figures on the parity fixture at 1024×768 after 20 s: 2 t
 seeds, 154 575 sprites, 2 002 copies, 20 729 pixel ops, 328 547 clears, 24 atlas entries,
 0 lost, 0 overflows.
 
+### After the review
+
+Two Opus reviewers at `high` on the landing diff, fourteen findings between them, eleven
+distinct; acted on eight, all re-verified against the code or the disassembly first:
+
+- **`census_surface` could write past the mask** when a surface was freed and another
+  allocated over the same bytes with a smaller size inside one 5 ms window — the ring still
+  held the old surface's boxes. `SurfaceFree` now zeroes the ring's ops on the freed base and
+  the subtract loop clamps to the surface as it is now. (Both reviewers; the one real memory
+  bug.)
+- **A publish that hit a box no longer inside its surface stopped the batch silently**, leaving
+  the twin stale until something unrelated redrew; it now raises the reseed flag like every
+  other early exit. A surface re-registered at a new size also re-makes its twin.
+- **Dedup versus a copy**: an earlier duplicate of a write is now dropped only when no
+  `0x4C6B70` reading its surface lies between the two, or one follows the survivor (the copy
+  then reads the final state either way). The engine's per-flip order — redraws, then the copy,
+  then the flip — never produced the unsafe shape, but nothing enforced it. The first fix tried
+  was a per-surface epoch bumped by every copy: it re-created the reseed storm (2 749 resets in
+  one walk), because the shell copies its panel to the frame on every flip, so every flip's
+  identical redraws became distinct — the rule above keeps them collapsing.
+- **The glyph observer measured past `'\n'`**, where `0x4CCF60` stops (`0x4CCFA0`); the
+  engine map said so and the code did not.
+- **The sprite identity was two addresses** the shell reuses after freeing a popped screen's
+  art; it now carries a hash of the plane's first bytes, read at publish time under the same
+  guard as the first-sight decode.
+- **The observer stubs did not preserve EFLAGS** around `before` and `after`; no engine caller
+  of the observed functions reads flags after the call (checked at every `call 0x4C69F0` and
+  `call 0x4C63A0`), but "byte-identical" now holds for the flags too.
+- **`tacli gui <name>` created a gamedir on a bare query**; only a state change does now.
+- **GL bindings** are dropped after the drain whether or not the layer drew.
+
+Rejected or accepted as designed: a `ret` to 0 if an observer's return hijack is ever
+unpaired (only an exception unwind through the flip or the allocator does that, after which the
+engine's own handler exits); the byte arena stranding `[aTail, end)` after a wrap until the
+consumer catches up (a spurious reseed at worst, the ring's design). Corrected in the notes:
+the flip `0x4C63A0` has three exits, not one (`0x4C6669`, `0x4C668F`, `0x4C67BA`), and a
+`0x4CBBE0` at `0x4C6769` the table had missed. The fixes were verified by re-running the
+1024×768 walk and the parity fixture with the layer on (below the walk tables' numbers stand;
+the smoke test's frame differs from the reference by the one cursor pixel main itself flickers).
+
 ### Not closed here
 
 - The shell is measured clean at every stop but its entry/exit cycles (twin and atlas counts
