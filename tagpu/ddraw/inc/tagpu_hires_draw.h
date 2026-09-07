@@ -46,7 +46,7 @@ typedef struct {
     int   slant;                /* ...the structure kind: the engine's ground
                                    projection x+y/4, -z-y/4 instead of the
                                    body's silhouette (tagpu_native.c)         */
-    /* Classic++ shadows (G14h): the caster's three numbers for the depth
+    /* Classic++ shadows (G14i): the caster's three numbers for the depth
        pass -- altitude, ground + throw, the length rule's scale -- and
        whether this unit stays out of it (a nanoframe, an aircraft under
        airshadow=drop); `air` for the silhouette that `drop` keeps */

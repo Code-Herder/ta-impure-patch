@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "shadow-struct plus a Kbot lab on the shore (altitude 63, sea level 75): the structure shadows of the stock engine beside ours, G14i",
+ "description": "shadow-struct plus a Kbot lab on the shore (altitude 63, sea level 75): the structure shadows of the stock engine beside ours, G14j",
  "on_error": "abort",
  "setup": {
   "clear_existing": false,

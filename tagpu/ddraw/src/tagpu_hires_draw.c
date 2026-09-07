@@ -100,7 +100,7 @@ static const char* VS =
     "uniform vec4 uAnchor;\n"                 /* ax, ay, world x, world z     */
     "uniform vec3 uYawEnc;\n"                 /* cos yaw, sin yaw, depth key  */
     "uniform int uSlant;\n"                   /* 1: structure shadow slant    */
-    "uniform int uDepthPass;\n"               /* 1: into the shadow map (G14h) */
+    "uniform int uDepthPass;\n"               /* 1: into the shadow map (G14i) */
     "uniform mat4 uShadowMat;\n"
     "uniform vec3 uCast;\n"                   /* altitude, ground + throw, sv */
     "out vec3 vPos; out vec3 vNrm; out vec2 vUV;\n"
@@ -271,7 +271,7 @@ static GLint  u_hasNrm, u_base, u_mr, u_cutoff, u_shadow, u_alpha, u_slant;
 static GLint  u_waterT, u_waterMode, u_digT, u_light, u_view, u_sunAmb;
 static GLint  u_anchorMix, u_shade, u_fog, u_fogOrg, u_fogDim;
 static GLint  u_scafOn, u_scafP, u_ss, u_zoomF, u_zoomCF;
-static GLint  u_depthPass, u_shadowMat, u_cast;    /* the depth pass (G14h) */
+static GLint  u_depthPass, u_shadowMat, u_cast;    /* the depth pass (G14i) */
 
 /* tagpu_hires.on tweaks, re-read on the same 30-frame cadence as the rest */
 static float s_anchorMix = 0.0f;

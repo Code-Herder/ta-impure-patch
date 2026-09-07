@@ -455,7 +455,7 @@ function program(gl, vs, fs, label) {
   return p;
 }
 // tagpu's terrain and unit shaders carry the Classic++ shadow map's two
-// samplers since G14h (tagpu_glsl.h), even in the Classic lane where uShadowOn
+// samplers since G14i (tagpu_glsl.h), even in the Classic lane where uShadowOn
 // stays 0: two sampler TYPES left on unit 0 make GL drop the whole draw, so
 // their units are named at link, exactly as tagpu_shadow.c names them
 function nameShadowUnits(gl, prog) {
@@ -562,7 +562,7 @@ float shadowAt(vec3 W, vec3 n) {
   float z = p.z - (1.0 + 2.0 * (1.0 - nl)) * uShScale.x / uShScale.y;
   float search = 24.0 / uShScale.x * uShScale.z;   // 24 world units, in uv
   float sum = 0.0; int nb = 0;
-  // The receiver's OWN texel first (G14h, 2026-09-06). The eight ring taps
+  // The receiver's OWN texel first (G14i, 2026-09-06). The eight ring taps
   // all sit 12-28 texels out, so a caster the size of a kbot's head -- 30
   // texels across at this density -- can hold the receiver's texel and still
   // be missed by every tap: the commander's head and gun cast nothing in the
@@ -570,7 +570,7 @@ float shadowAt(vec3 W, vec3 n) {
   // body. A caster on the receiver's own ray is the one blocker that cannot
   // be allowed to go unfound.
   { float d = texture(uShadowRaw, p.xy).r; if (d < z) { sum += d; nb++; } }
-  for (int i = 0; i < 16; i++) {                   // all 16 (G14h): 8 left the
+  for (int i = 0; i < 16; i++) {                   // all 16 (G14i): 8 left the
     vec2 o = POISSON[i] * search;                  // estimate to lattice luck
     float d = texture(uShadowRaw, p.xy + o).r;
     if (d < z + dot(o, dzduv)) { sum += d; nb++; }

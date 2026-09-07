@@ -22,7 +22,7 @@ date; **[OPEN]** = not settled.
 | Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game: the terrain (G14c), the feature and effect sprites (G14e) and the unit textures (G14g, 2026-09-05) — the sprites and the units lazily on first draw; the unit atlas padded, aligned and mipped as this row says (§5 step 2).* |
 | Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit). *In the game since G14f (2026-09-05): the engine's height grid as an R8 texture per map, the lab's 16-px grid normals evaluated per fragment; feature sprites take the ground's lambert at their anchor as the lab's do* |
 | Units | per-face shade row from `SH_L` through the 32-row LUT | per-pixel lambert in map space from the posed face normal, same level normalisation. *In the game since G14f: the face normal rides the vertex stream and replaces the LUT row under the switch; pieces the engine draws unshaded stay at exactly 1.0 (the lab lights every face)* |
-| Shadows | the engine's rules. **In the game**: the 5-px silhouette drop for mobiles and the cached slant for structures, each blended once per silhouette pixel (G13n). **In the lab**: both since G14i (2026-09-07) — the silhouette for a mobile unit and, for a structure, the slant from the pack's caster mesh (every face of every visible, cached piece), projected and blended the way `tagpu_native.c`'s `emit_slant` does it. The silhouette only from 2026-09-04 to then; this row claimed the lab had both before that, when it had neither | a depth map along `shadowsun`, PCSS-lite (the blocker search: the receiver's own texel and the 16 Poisson taps since G14h, 8 ring taps before; 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive; an airborne caster follows `airshadow` (§2.2). *In the game since G14h (2026-09-06): `tagpu_shadow.c`'s map-anchored depth map, the read-back in the terrain and unit shaders, the hills from a static mesh, the replacement meshes casting, the two Classic sub-passes off under the switch; measured against the lab in §5 step 5* |
+| Shadows | the engine's rules. **In the game**: the 5-px silhouette drop for mobiles and the cached slant for structures, each blended once per silhouette pixel (G13n). **In the lab**: both since G14j (2026-09-07) — the silhouette for a mobile unit and, for a structure, the slant from the pack's caster mesh (every face of every visible, cached piece), projected and blended the way `tagpu_native.c`'s `emit_slant` does it. The silhouette only from 2026-09-04 to then; this row claimed the lab had both before that, when it had neither | a depth map along `shadowsun`, PCSS-lite (the blocker search: the receiver's own texel and the 16 Poisson taps since G14i, 8 ring taps before; 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive; an airborne caster follows `airshadow` (§2.2). *In the game since G14i (2026-09-06): `tagpu_shadow.c`'s map-anchored depth map, the read-back in the terrain and unit shaders, the hills from a static mesh, the replacement meshes casting, the two Classic sub-passes off under the switch; measured against the lab in §5 step 5* |
 | Suns | one, `SH_L = (−0.35, 0.80, −0.49)` in model space | **three** knobs: `sun=324.5,53.1` (terrain), `unitsun=215.5,53.1` (= `SH_L` in map space), `shadowsun=225,40` |
 | Fog of war | the engine's per-index grey LUT | one RGB rule after lighting (§2.6) |
 | Supersampling | 2× box, `tagpu_ss.off` | the same |
@@ -380,7 +380,7 @@ The depth range is the map's full 0..255 plus a 256-unit caster allowance (an ai
 `physical` at CruiseAlt 200 still fits), constant per map; the window's depth *offset* moves
 with the window, which is a translation both sides of every compare share.
 
-**Measured (G14h, 1024×768, the 896×704 viewport)**: the base texel is **0.862 world units**
+**Measured (G14i, 1024×768, the 896×704 viewport)**: the base texel is **0.862 world units**
 (the light-space extent of the 1× window with the lab's margins is 1765 along `u`, and `u`
 is what the height range does not enter — so the lab's "about 0.7 world units per texel" was
 a guess and this is the number, the lab's too), `res` 2048 at zoom ≥ 1 and 4096 below it with
@@ -544,7 +544,7 @@ Grilled with the owner before any code, one branch at a time; the ones above (§
   record `GL_VERSION 3.2.0 core` on the 4070. The native shaders are `#version 330 core` and
   compile, which is the NVIDIA driver being lenient, not a guarantee; sampler objects are a
   3.3 feature. **Bump the request to 3.3** before relying on either **[SOURCE, field notes]**.~~
-  **Done in G14h**: the request is 3.3 core, `tagpu.log` reads `shadow: GL ready (GL_VERSION
+  **Done in G14i**: the request is 3.3 core, `tagpu.log` reads `shadow: GL ready (GL_VERSION
   3.3.0 NVIDIA 595.84, max texture 32768)`, and the shadow map's two sampler objects run on it
   **[MEASURED 2026-09-06]**.
 - **Fog cannot leak through shadows.** The unit gather drops units whose anchor tile is
@@ -963,17 +963,17 @@ the graph itself is that stable.
   is ever established, it goes in [the engine map](exe-reverse-engineering.html).
 - **Aircraft and boats** — the viewer prototype of §2.2/§2.3 has not been built.
 - **Hires glb under Classic++** — ~~lighting model, depth pass, shadow read-back, silhouette
-  shadow off; deferred by §2.4~~ **the depth pass and the silhouette are done (G14h, §2.4)**;
+  shadow off; deferred by §2.4~~ **the depth pass and the silhouette are done (G14i, §2.4)**;
   the lighting model and the shadow read-back stay deferred — a replacement mesh casts and
   does not receive.
-- **The soft edge and the ridge haze are lattice noise, on both sides** (G14h). The two
+- **The soft edge and the ridge haze are lattice noise, on both sides** (G14i). The two
   lattices — the lab's view-anchored, the game's map-anchored — put texel centres in
   different places, so the PCF's bilinear compares round differently along every shadow edge
   and on every near-grazing slope: on the parity fixture the hills stage has 156 game-only
   pixels (11 of them darker than 5 %, 1 darker than 10 %) and 60 lab-only ones of the same
   kind at 0.988. Invisible, counted, not closed; a larger constant bias would trade it for
   peter-panning at the shadow's root.
-- **A ground unit's caster sits on the height byte, not on the engine's own y** (G14h,
+- **A ground unit's caster sits on the height byte, not on the engine's own y** (G14i,
   `tagpu_native.c`): the engine interpolates the ground under a unit, the receiver is drawn
   from the byte, and a caster floating the difference above its receiver throws a shadow
   detached by that times cot el. Only an airborne unit has an altitude in the map. The body
@@ -1028,7 +1028,7 @@ the graph itself is that stable.
    is skipped, and the build is retried every 60 frames.
 5. ~~**Shadows**: the map-anchored grid, the depth pass over units and the heightfield mesh,
    the read-back in terrain and unit shaders, the two Classic shadow sub-passes off.~~ **Done
-   2026-09-06 (G14h)**, decided in full first (§2.12): `tagpu_shadow.c` (the map, the
+   2026-09-06 (G14i)**, decided in full first (§2.12): `tagpu_shadow.c` (the map, the
    samplers on units 12/13, the frame and its octave rule, the depth program for the 3DO
    stream, the read-back uniforms), the hill mesh in `tagpu_terr.c`, the eight cfg keys in
    `tagpu_classicpp.c`, `taShadowAt` as the second half of `taLambert` in `tagpu_glsl.h`, the

@@ -169,7 +169,7 @@ cost time; each is a landmine for the next GL-hook we add.
   re-sets the viewport at the top of the next frame. The overlay just cleans up after itself
   (`glUseProgram(0)`, `glBindVertexArray(0)`, `glDisable(GL_BLEND)`). Trying to save state with
   `glGetIntegerv` was itself the crash (previous point).
-- **`renderer=openglcore` gives a guaranteed core context** — 3.2 until G14h, **3.3 since**
+- **`renderer=openglcore` gives a guaranteed core context** — 3.2 until G14i, **3.3 since**
   (`render_ogl.c`; verified 2026-09-06: `tagpu.log` `shadow: GL ready (GL_VERSION 3.3.0 NVIDIA
   595.84 …)`, wine 9 on the 4070; the Classic++ shadow map's sampler objects need it). Use it
   so our modern-GL code never lands on a compatibility context where the fork's legacy

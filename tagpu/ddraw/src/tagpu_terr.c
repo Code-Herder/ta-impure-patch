@@ -225,7 +225,7 @@ static const void* s_hGrid;            /* the inputs the texture was built  */
 static const void* s_hSet;             /* from, or last attempted from      */
 static unsigned s_hFrame;              /* the frame of that attempt          */
 static GLint  s_uHDim, s_uLit, s_uSun, s_uAmb, s_uNorm;
-static GLuint s_hVao, s_hVbo, s_hIbo;  /* the heightfield caster mesh (G14h)  */
+static GLuint s_hVao, s_hVbo, s_hIbo;  /* the heightfield caster mesh (G14i)  */
 static TAGPU_SHADOWU s_shU;            /* the shadow read-back uniforms      */
 
 static float s_verts[MAXCELL * 6 * TVST];
@@ -527,7 +527,7 @@ static void build_height(const char* ta, unsigned frame)
     flog(b);
 }
 
-/* ---- the heightfield as a caster (G14h, renderers.md 2.8, 2.12) ----
+/* ---- the heightfield as a caster (G14i, renderers.md 2.8, 2.12) ----
    One vertex per grid point at the world point the lab's terrain vertex
    depicts -- (c*16, h, r*16 + h/2) -- and two triangles per cell on the
    diagonal taTerrN interpolates across ((1,0)-(0,1)), indices ordered by

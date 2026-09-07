@@ -1,6 +1,6 @@
 #ifndef TAGPU_SHADOW_H
 #define TAGPU_SHADOW_H
-/* Classic++ cast shadows (G14h): the lab's depth map along `shadowsun`, drawn
+/* Classic++ cast shadows (G14i): the lab's depth map along `shadowsun`, drawn
    once per frame from everything with geometry and read back by the terrain
    and unit fragment shaders through tagpu_glsl.h's taShadowAt. Design:
    renderers.md 2.7-2.9 and 2.12; the lab it ports: tascene-view.html

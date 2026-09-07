@@ -24,7 +24,7 @@
        unit's is its body silhouette; a structure's is the engine's cached
        SLANT projection, which owndraw "all" stops the engine from blitting
        (G13k) and emit_slant draws from the live posed prims by the engine's
-       own raster rules -- every face, flat, no waterline erase (G14i). A 3DO
+       own raster rules -- every face, flat, no waterline erase (G14j). A 3DO
        wreck keeps the engine's FShadow feature shadow. FBI
        noshadow/canhover/floater gates mirror the engine;
      - cloak (unit+0x10E bit2): true translucency (alpha 0.5); cloaked
@@ -85,7 +85,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
 #include "tagpu_vpwide.h"
-#include "tagpu_shadow.h"    /* Classic++ cast shadows: the depth pass + read-back (G14h) */
+#include "tagpu_shadow.h"    /* Classic++ cast shadows: the depth pass + read-back (G14i) */
 
 /* ---- engine layout (all binary-verified in earlier phases) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -347,7 +347,7 @@ static int      s_fillStall = 0;
    division, so a floor-based remainder would disagree with the engine for a
    negative eye (eye = -20: engine origin -16, floor would say -48). */
 static int fog_org(int eye) { int r = eye % 32; return eye + (r > 15 ? 16 : -16) - r; }
-static GLint  s_uCast;                 /* the caster's three numbers (G14h) */
+static GLint  s_uCast;                 /* the caster's three numbers (G14i) */
 static TAGPU_SHADOWU s_shU;            /* the shadow read-back uniforms      */
 static float  s_verts[MAXNV * NVST];
 /* set by the frame, read by tagpu_markown.c on the game thread: 1 while every
@@ -856,7 +856,7 @@ int tagpu_native_owns_obj(unsigned int obj3do)
    walked over the raw Model3DONode template (verts 16.16, child offsets
    accumulate); cached per root node. Feeds the native selection rect. */
 typedef struct { const char* node; float mn[3], mx[3]; } MAABB;
-static MAABB s_aabb[256];              /* every caster asks, once per model (G14h) */
+static MAABB s_aabb[256];              /* every caster asks, once per model (G14i) */
 static int   s_naabb = 0;
 
 static void aabb_walk(const char* nd, float ox, float oy, float oz,
@@ -1081,7 +1081,7 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
    COMPLETED branch's (and the digger's inline branch), never the structure
    branch's, on either path -- the draw below passes -1e9 for both, which is
    what left the Kbot lab on the shore with its shadow erased below the
-   waterline until G14i. Flat vertices (uv -1), so the FS takes the flat path
+   waterline until G14j. Flat vertices (uv -1), so the FS takes the flat path
    and never samples the atlas for them; the shade is the neutral row. */
 static int emit_slant(const char* o3, int nv, float ax, float ay,
                       float wx0, float wz0, float encBase)
@@ -2324,7 +2324,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         hv.shDir = tagpu_r3d_shade_dir();
     }
 
-    /* ---- Classic++ shadows: the depth pass, before the frame FBO (G14h) ----
+    /* ---- Classic++ shadows: the depth pass, before the frame FBO (G14i) ----
        The stream is complete, so it is uploaded here -- every pass after this
        reads the same buffer -- and, when the map is on, drawn once more along
        the shadow sun into tagpu_shadow.c's depth texture: per unit, so the

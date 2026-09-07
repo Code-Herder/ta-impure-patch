@@ -108,14 +108,14 @@
    ground receives, so level is exactly 1.0 and the sun only modulates by the
    tilt from level -- the art is already lit (artlight) and must not be lit
    twice. Evaluated per fragment, because that is where a local light will
-   join it. The shadow half of the lab's rule (shadowAt) is here since G14h,
+   join it. The shadow half of the lab's rule (shadowAt) is here since G14i,
    text for text but for one thing: the receiver-plane derivatives arrive as
    arguments, taken by the caller at the top of its main() before any
    discard -- the derivative of a varying is only defined while every fragment
    of the quad is still running (G14g's lesson on the mipped sample). A
    face's normal is flat, so dFdx(p) is exactly 0.5 * mat3(M) * dFdx(W), and
    the arithmetic below is the lab's with the derivative supplied.
-   One tap the lab did not have until G14h, in both copies: the receiver's
+   One tap the lab did not have until G14i, in both copies: the receiver's
    own texel opens the blocker search -- the eight ring taps sit 12-28
    texels out and missed the commander's head and gun (30 texels across)
    on every frame, so they cast nothing; a caster on the receiver's own ray

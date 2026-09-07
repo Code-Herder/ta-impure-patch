@@ -264,7 +264,7 @@ A **true slant-projected** shadow [BINARY-VERIFIED]:
    `0x4BA000`), `0x437B50` allocates `obj+0x14`, header copied,
    **`+0x09 Compressed = 1`** — so the blit takes the `0x4CC057` RLE-alpha path.
 
-**What the raster takes, settled 2026-09-07 (G14i):** every face of every piece with bits 0
+**What the raster takes, settled 2026-09-07 (G14j):** every face of every piece with bits 0
 and 1, whatever its material — the body rasteriser's colour-fill / quad-only dispatch is not
 consulted, so the footprint quad it skips is in the shadow and a texture key punches no hole
 — face 0 skipped when the node's selection primitive is not −1, each vertex snapped to whole
@@ -512,7 +512,7 @@ failed to coincide.
    the bit marks structures (and nanoframes), not only "under construction",
    and the ownership rule holds in a real game (panel
    `assets/shots/g12c-factory-built-shadow.png`).
-   **Structure shadows, parity (G14i, 2026-09-07).** The owned slant was drawn
+   **Structure shadows, parity (G14j, 2026-09-07).** The owned slant was drawn
    by the body emitter with the projection swapped in, so it inherited the
    body's rules — the material lookup (a face with neither texture nor colour
    skipped, a texture's key discarded per fragment) and, in the draw, the
@@ -530,7 +530,7 @@ failed to coincide.
    building, stock engine / ours: Kbot lab **997 / 1094**, solar 1228 / 1246,
    ARM extractor 2406 / 2442, COR extractor 618 / 859 and COR wind 2273 / 3169
    (the drill arms and the rotor caught at other phases), commander 1060 /
-   1098 — panel `assets/shots/g14i-slant-toggle.png`. The lab's Classic lane
+   1098 — panel `assets/shots/g14j-slant-toggle.png`. The lab's Classic lane
    draws the same slant since the same day ([tascene design](tascene-design.html)):
    its own toggle gives the Kbot lab the same three strips, 692 px against the
    game's 1094 and the engine's 997 (the lab's rest-pose body is 2 px narrower

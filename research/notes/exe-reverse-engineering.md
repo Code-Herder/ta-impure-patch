@@ -1028,7 +1028,7 @@ So the five "unit row sweep" call sites of `0x4B8500` in the blend-LUT survey ab
 `0x459319` structure shadow (A), `0x459353` completed shadow (A), `0x4593BA` body (A),
 `0x4595E9` every shadow (B), `0x4597D3` body (B).
 
-**The slant builders.** [BINARY-VERIFIED 2026-09-03; read in full 2026-09-07 for G14i —
+**The slant builders.** [BINARY-VERIFIED 2026-09-03; read in full 2026-09-07 for G14j —
 `0x45A470..0x45A8A0`, `0x4B9D70..0x4B9E60`, `0x4C1000..0x4C1180`, `0x480D60..0x480E30`,
 `0x458880..0x458930`.] `0x45A510` (the ground-projection AABB, `ret 0x14`: the object and four
 out-pointers — width, height, hot X, hot Y) walks the prims at stride `0x36` from

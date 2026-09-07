@@ -598,7 +598,7 @@ value), `tacli arm <i> classicpp.cfg=off` removes it (= the lab's defaults `324.
 `215.5,53.1` / `0.35`). The DLL answers every read with one line, `classicpp: light sun=…
 unitsun=… amb=… level=…/… (tagpu_classicpp.cfg)` — or `(no cfg: defaults)` — so
 `tacli log <i> -g 'classicpp: light' | tail -1` says what the frame is lit by; allow ~1.5 s
-after arming before a shot. **The shadow keys** (G14h) ride the same file — `shadows=0|1`,
+after arming before a shot. **The shadow keys** (G14i) ride the same file — `shadows=0|1`,
 `shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B|off`, `shade=S`, `terrainshadow=0|1`,
 `shadowres=N`, `airshadow=len|physical|drop`, the lab's defaults — and answer on a second
 line, `classicpp: shadows=1 shadowsun=225.0,40.0 …`; the map also needs the engine's own
@@ -616,7 +616,7 @@ sets BOTH option bits (`main+0x37F06` reads `0x3F` on, `0x23` off) — **read th
 `tacli peek <i> '*0x511DE8+0x37F06:2'` before the shot**: one run of those same clicks on a stock
 instance reported `stage 0` and changed nothing, and its on/off pair differed only by the drill
 arms. A shadow's pixels are then `glshot` on minus `glshot` off, counted in 200×140 around each
-roster screen position (the G13k / G14i numbers). `terr: height grid WxH uploaded …` is the terrain's height
+roster screen position (the G13k / G14j numbers). `terr: height grid WxH uploaded …` is the terrain's height
 texture, once per map; without it (an unreadable grid, logged and retried every 60 frames)
 Classic++ terrain draws unlit — still restored, still the RGB grey rule, no lambert.
 **The level-ground test** is a sun on/off pair of `glshot`s with `feat.on=passive` (so the
