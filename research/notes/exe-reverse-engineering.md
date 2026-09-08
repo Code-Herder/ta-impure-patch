@@ -1787,9 +1787,206 @@ seven by driving the game and reading `main+0x2CBE` back, and `cursormove` and
 - **Interface Type is not one switch with one meaning.** It gates the cursor at exactly one
   site and ordering at four others, and those are independent — which is why the game can be
   left on right-mouse orders and still show the classic cursors.
+  *[CORRECTED 2026-09-07: independent is exactly what they are NOT. The cursor site chooses the
+  index, `0x4992AD` stores it in `main+0x2CBE`, and the left click's own dispatch reads that
+  byte at `0x499027` — so changing the sprite changed the button. The section below is the
+  path this line missed, and it cost a shipped bug: from G13j until 2026-09-07 a left click at
+  Interface Type 1 issued a move order instead of deselecting.]*
 - **The contextual cursor is the only one the interface type touches.** Order bytes 2, 3, 9, 12
   … reach their cases without consulting `main+0x37EFA`, so the Move/Attack/Patrol/Reclaim/Guard
   buttons produced correct cursors at Interface Type 1 before the patch. Measured.
+
+## The in-game mouse buttons — what a click actually does — mapped by us
+
+[MEASURED 2026-09-07, this project — `objdump -d -M intel` of the pristine Steam build, plus a
+live A/B on `tacli` instance `clickfix` (Two Continents, one commander, Interface Type 1 and 0).
+Established while fixing "left click and right click both issue a move order", which turned out
+to be our own contextual-cursor patch (`field-notes.md` patch 2) reaching further than its
+licence said. Read together with the cursor chain above: this is the same handler's tail.]
+
+**`main+0x2CBE` is not a picture, it is the click's state.** That is the whole finding. The
+cursor index the chain above computes is stored at `0x4992AD` and then *dispatched on* by the
+left button, so "which sprite is shown" and "what the left button does" are one decision in
+this engine, made once per mouse move and consumed on the next press.
+
+**The dispatch.** `0x499200` — the mode-6 handler, whose head chooses the cursor — carries on
+past `0x4992CD` into the button handling, with the **message id in `[esp+0x1C]`** (`0x201`
+`WM_LBUTTONDOWN` … `0x205` `WM_RBUTTONUP`) and the region/drag flags in `main+0x2CC6`:
+
+```
+0x499348  al = main[0x2CC6]
+          if (al & 0x10) {                       ; a button is held on the minimap
+0x499352      it = main[0x37EFA]                 ; Interface Type
+              if (msg == (it ? 0x202 : 0x205))   ; ITS release: left at type 1, right at type 0
+                  { main[0x2CC6] &= ~0x10; }     ; drag over
+              else call 0x41D0F0                 ; keep dragging  [INFERRED: the view scroll]
+              done
+          }
+0x499387  if (main[0x2CDF]) { call 0x41CD50; done }         ; another mode owns the mouse
+0x49939B  if (msg == 0x204) { call 0x499100(&rec); done }   ; RBUTTONDOWN — below
+0x4993B6  if (main[0x2CC3] != 1)                            ; a command button is pressed
+              { if (msg == 0x201) call 0x498F70(&rec); done }   ; LBUTTONDOWN executes it
+0x4993D5  if (al & 0x08) {                        ; a drag-select box is open
+              if (msg != 0x202) { update the box corners; done }
+0x4993E9      main[0x2CC6] &= ~0x08
+              if (now < main[0x2CB6] + 0x19 && |dx| < 0x20 && |dy| < 0x20)
+                  call 0x498F70(&rec)             ; short and still: a CLICK, not a drag
+              else if (!0x48C390(&rec))           ; box select; nothing caught ->
+                  { 0x48BD00(); 0x491D70(1); }    ; deselect everything
+              done
+          }
+0x4994A0  if (msg != 0x201) done                  ; from here: LBUTTONDOWN, contextual order
+0x4994AC  if (al & 0x02)                          ; on the world viewport
+              { main[0x2CC6] |= 0x08;             ; open a drag-select box, remember when/where
+                main[0x2CB6] = 0x4B6340(); … ; cursor 0x13; done }
+0x499567  if (main[0x37EFA] == 1)
+              { if (al & 0x01) main[0x2CC6] |= 0x10; done }   ; minimap: start the drag
+0x4995AA  if (al & 0x01) call 0x498F70(&rec)      ; type 0, minimap: act on it
+```
+
+So **`main+0x2CC6` bit 3 (`0x08`) is "a drag-select box is open"** — set on `WM_LBUTTONDOWN`
+over the viewport at `0x4994B4`, cleared on the release at `0x4993E9` — and **bit 4 (`0x10`) is
+"a button is held on the minimap"**, set at `0x49957x` / `0x49919D` and cleared only by that
+button's own release. Both extend the bit table in the cursor section above; bit 3 agrees with
+`ui-markers.md` §4's "drag/band rect forced on".
+
+**A left click is a short, still drag.** There is no click event: the press opens a box and the
+release decides. `0x4B6340` is the clock it times that with — `GetTickCount()` (import
+`0x4FC0DC`, resolved from the import table) multiplied by `*(0x51FBD0)+0xE8` and divided by
+1000, so it counts game time, not wall time *[the multiplier's own meaning was not chased]*.
+`0x19` = 25 of those units, and 0x20 = 32 pixels on each axis.
+
+**`0x498F70` — the left click's action, and the only reader of `main+0x2CBE` that is not a
+change test.** One call site, `0x4995B3`, which every left-button path above jumps to.
+
+```
+0x498F70  cl = main[0x2CC3]                       ; the order byte
+          if (cl == 0x0E) { …build placement…; done }
+0x499027  dl = main[0x2CBE]                       ; THE INSTALLED CURSOR INDEX
+0x49902D  if (dl == 0x0F) { 0x48C7F0(&rec); done }        ; cursorselect -> select that unit
+0x499041  if (dl < 0x11) goto act                         ; an ACTION cursor -> issue the order
+0x499046  if (main[0x37EFA] == 1 && cl == 1)
+0x49905C      { 0x48BD00(); 0x491D70(1); done }           ; -> deselect everything
+          done                                            ; -> nothing at all
+0x49906D  act: 0x48CF30(&rec, cl, main+0x2CAA, 0, 0, 0)   ; issue order `cl` at the world point
+          main[0x2CC3] = 1; play 0x502714; clear 0x2CC6 bit 5
+```
+
+`cmp dl, 0x11` is the whole of the left button's interface-type behaviour, standing on the fact
+that **`0x43EB02` — the Interface Type 1 arm of the contextual case — returns 15, 17, 18 or 19
+and nothing else**. Verified by walking every branch reachable from `0x43EB02` (220 blocks) and
+collecting the returns: `0x43EB56` → 15, `0x43EB67` → 17, `0x43EB78` → 18, `0x43EC8D` → 18,
+`0x43EDA9` → 18, `0x43EE42` → 15, `0x43F09B` → 19. The action indexes (`0x43EDDF` → 6 repair,
+`0x43EF5B` → 10 revive, `0x43F06F` → 11 reclaim, and the computed 14-or-19 at `0x43F07C`) all
+belong to the classic arm and are **not reachable** from `0x43EB02`. So at type 1 the engine's
+own rule is exactly "15 selects the unit, everything else deselects", and the compare expresses
+it without a second interface-type read.
+
+**`0x499100` — the right button down.** Also one call site, `0x49939B`.
+
+```
+0x499100  if (main[0x2CC3] != 1)                  ; a command button is pressed ->
+              { main[0x2CC3] = 1; play 0x502714; done }   ; right click CANCELS it
+0x499162  if (main[0x37EFA] != 0) {               ; Interface Type 1: right orders
+0x4991D5      if (main[0x2CC6] & 0x04)            ; pointer on the viewport or the minimap
+                  0x48CF30(&rec, 1, main+0x2CAA, 0, 0, 0)   ; issue the contextual order
+              done
+          }
+0x499172  if (al & 0x02)                          ; type 0, on the world:
+              { (rec[8] & 8) ? 0x41CC60() : (0x48BD00(), 0x491D70(1)); done }  ; deselect
+0x499199  if (al & 0x01) main[0x2CC6] |= 0x10     ; type 0, on the minimap: start the drag
+```
+
+Note the asymmetry: the right button issues its order with a **hard-coded order byte 1**, the
+left button with `main+0x2CC3`. The right button therefore never executes a pressed command
+button — it cancels it — while the left button always does.
+
+**The helpers, and how each was established.**
+
+| VA | What | How |
+| --- | --- | --- |
+| `0x48CF30` | issue the order — `(rec, orderByte, &worldPoint, 0, 0, 0)`, the one call both buttons make | **16 call sites in the image**; the two on this path are `0x499087` (left) and `0x4991F5` (right). Plus live: the click that reaches it walks the unit to the point clicked. *[The count was “two call sites” until the 2026-09-07 review; two is how many are in THIS path, not in the image.]* |
+| `0x48BD00` | **deselect everything** — walks the whole unit array `main+0x14357 .. main+0x1435B` in `0x118` steps clearing bits `0xD0` of `[unit+0x110]`, whose bit 4 is "selected" | disassembly; live, the selection drops (`ARMCOM1.GUI` → `ARMMAIN2.GUI`) |
+| `0x491D70(1)` | the selection-changed UI refresh *[INFERRED]*; reads the GUI-variant word `main+0x37EBE`. Always called immediately after `0x48BD00` | call sites |
+| `0x48C7F0` | select the unit under the cursor *[INFERRED]* — reached only from the `0x0F` arm | call site + live: a left click on an own unit selects it at either interface type |
+| `0x48C390` | the drag-box selection *[INFERRED]*; returns 0 when the box caught nothing, which is what turns an empty drag into a deselect | call site |
+| `0x4B6340` | `GetTickCount() * (*(0x51FBD0)+0xE8) / 1000` — the click/drag timer | disassembly + the import table |
+
+**The behaviour table, measured live** on `clickfix` (commander selected, `one-unit` on Two
+Continents), with our contextual-cursor patch armed *and* the companion patch below:
+
+| | Interface Type 1 | Interface Type 0 |
+| --- | --- | --- |
+| left click, empty ground | deselects, no order | **issues the move order** |
+| left click, own unit | selects it | selects it |
+| left click, wreck | deselects, no reclaim | reclaims |
+| right click, empty ground | **issues the move order** | deselects |
+| right click, wreck | reclaims | deselects |
+| Move button, then left click | issues the move order | issues the move order |
+
+**Our patch — 27 bytes at `0x499041`,** armed with the cursor patch and under the same
+`tagpu_curs.off`. It decides the *contextual* left click on the interface type directly instead
+of on the cursor index that used to stand in for it, in the same 27 bytes
+(`0x499041..0x49905B`, the three destinations all pre-existing):
+
+```
+00499041  cmp dword [eax+0x37EFA], 1      ; Interface Type
+00499048  jne 0x499051                    ; type 0: classic, decide on dl
+0049904A  cmp cl, 1                       ; order byte: contextual?
+0049904D  jne 0x499051                    ; a pressed command button acts
+0049904F  jmp 0x49905C                    ; -> deselect  (the engine's own arm)
+00499051  cmp dl, 0x11                    ; the classic test, unchanged
+00499054  jl  0x49906D                    ; -> issue the order
+00499056  jmp 0x4990F6                    ; -> nothing; 0x4990F6 is `pop esi / pop
+0049905B  nop                             ;    ecx / ret 4`, this function's exit
+```
+
+`0x49905C`, `0x49906D` and `0x4990F6` are the same three destinations the stock code branches
+to; only which test picks them changes, and `0x499051` is the one new label — the stock `cmp
+dl,0x11` moved 16 bytes down. Equivalent
+to stock on a stock cursor state — at type 0 it is the original test unchanged, and at type 1
+the only indexes the engine can leave in `main+0x2CBE` are 15 (taken above it), 17, 18, 19 and
+the hourglass 20, and all of those stock deselects when the order byte is 1.
+
+**What makes that enumeration sound is not the list of stores — it is that the click always
+reads an index this same message just produced.** *[CORRECTED 2026-09-07 by review: the first
+version of this paragraph argued from a list of the direct stores to `main+0x2CBE`, which is not
+a closed set — `0x491C80` is a generic `SetCursor(idx)` with **42 call sites**, two of which
+(`0x491C95`, `0x491D4C`) store a caller-supplied index. The list also omitted `0x491CF8` and
+`0x4991B4`, and filed `0x492593` under 19 when `0x492589` loads `cl` with `0x14`.]* The real
+guarantee is structural, and it is in `0x499200`'s head: every message that can reach the click
+passes through it first, and it has exactly three exits —
+
+| head exit | what it leaves in `main+0x2CBE` | why the click is safe |
+| --- | --- | --- |
+| build placement (`0x499238`: region bit 1 and order byte `0x0E`) | untouched | `0x498F70` returns at `0x498F80` on order `0x0E`, before the read |
+| pointer on neither region (`0x49924B`) | `0x13`, stored at `0x49925D` | ≥ `0x11` |
+| otherwise (`0x499278`) | `CorretCursor_InGame`'s return, stored at `0x4992AD` | the type-1 arm returns only 15/17/18/19 |
+
+So whatever any other setter in the image left there is overwritten before the button tail runs,
+and only these three sources can be what `0x499027` reads.
+
+**Negative results worth the line.**
+
+- **`main+0x2CBE` has exactly one behavioural reader.** It has **28** `.text` references: 13
+  stores, 13 store-if-changed tests immediately in front of one (`0x491C8A`, `0x491CEC`,
+  `0x491D41`, `0x49258B`, `0x496A67`, `0x497F94`, `0x4991AC`, `0x499254`, `0x4992A2`,
+  `0x49953E`, `0x499581`, `0x49964B`, `0x4997D5`), the save at `0x443702` that `0x4437B5`
+  restores through `0x491C80`, and `0x499027` — the one place the value decides anything.
+  **Two of the 13 stores take a caller's index rather than a literal** (`0x491C95`,
+  `0x491D4C`, both inside `SetCursor 0x491C80`), so the set of *values* is not closed by this
+  census; what closes it for the click is the table above. Of the literal stores, `0x49925D`,
+  `0x499547`, `0x49958A`, `0x499654`, `0x491CF8` and `0x4991B4` write 19 and `0x492593`,
+  `0x496A6F`, `0x497F9C`, `0x4997DE` write the hourglass 20. That is why the bug had a
+  single 27-byte fix and not a rewrite.
+- **`0x498F70` and `0x499100` have one call site each** (`0x4995B3`, `0x4993AC`), both inside
+  `0x499200`. Neither address appears as a literal elsewhere. *[`0x499100`'s was written
+  `0x49939B` until the 2026-09-07 review — that is the head of the block that tests the message,
+  not the `call`.]*
+- **There is no click message.** Nothing in this path handles `WM_LBUTTONDBLCLK` either; the
+  engine's own dispatch covers `0x200..0x206` and the double-click arrives as another down.
+- **The right button cannot execute a command button, by construction** — `0x499100` returns at
+  its first test whenever `main+0x2CC3 != 1`, and its order call passes the literal 1.
 
 ## The UI surfaces and their writers — mapped by us (Phase E, G15a, 2026-09-07)
 
@@ -2636,7 +2833,8 @@ per-unit tick function (it ends at `0x48B080`) runs, in order: `0x437910` (`0x48
 `0x43DD20` (`0x48AFAA`)**, `0x48A870`, `0x4864B0`, `0x48B710`. `0x43DD20` calls `0x43DA70` and
 `0x43DB50`, which hold the `StartMoving`/`StopMoving`/`MoveRate*` sites — so **those land after
 the unit's own script tick**, while the weapon and aim traffic lands before it.
-`UNITS_SetStateMask` (`Activate`/`Deactivate`, `0x48B0A0`) is *not* in that function; measured,
+`UNITS_SetStateMask` (`Activate`/`Deactivate`, `0x48B090` — landing 3 wrote `0x48B0A0`, which is
+0x10 past its entry; `tools/ta_symbols.txt:284`) is *not* in that function; measured,
 its starts land after `DoScriptsNow` too (the fighter, gunship and bomber fixtures each start
 `Activate` one tick after `Create` and it first steps the tick after that). `SweetSpot` and
 `Killed` come from the *attacker's* tick and so land after this unit's as well, when the
@@ -2683,6 +2881,156 @@ That last line is why a unit's flares, wakes, thrust anchors and torpedo tubes a
 without any `hide` in its script: they are one- and two-vertex marker nodes. Measured against
 all eight fixtures that dumped a pose of their own unit — every `HIDDEN` piece is either such a
 node or one the unit's `Create` hides, with no exceptions and no false positives.
+
+### `get` and `set` — the twenty value ids (tacob landing 4, 2026-09-07)
+
+`GET_UNIT_VALUE` and `GET` reach `vt+0x44` = **`0x480770`**, `SET` reaches `vt+0x40` =
+**`0x480B20`**. Both are `thiscall(cob, id, a, b, c, d)` / `thiscall(cob, id, value)` and both
+open with `lea eax,[ecx-1]; cmp eax,0x13; ja` — so **the value ids really are 1..20** and
+anything else returns 0 / does nothing. `esi` is the unit, taken as `[[cob+0x540]+0x0C]`.
+Read out of the binary at the addresses below; the arithmetic is what `tools/tacob`'s
+`EditorWorld` reproduces, and `tools/test_tacob.py` §`ValueIds` pins it.
+
+**GET — the jump table is `0x480AC4`, indexed by `id − 1`** (20 dwords; out of range →
+`0x480ABB`, `xor eax,eax`).
+
+| id | Name | Handler | What it computes |
+|---|---|---|---|
+| 1 | `ACTIVATION` | `0x480794` | `unit+0x10E` bit 0 |
+| 2 | `STANDINGMOVEORDERS` | `0x4807A4` | `(unit+0x110 >> 18) & 3` |
+| 3 | `STANDINGFIREORDERS` | `0x4807B7` | `(unit+0x110 >> 20) & 3` |
+| 4 | `HEALTH` | `0x4807CA` | `(i16)(unit+0x108) × 100 / (def+0x1FA)`, unsigned `div` — a **percent**, 0..100 |
+| 5 | `INBUILDSTANCE` | `0x4807EF` | `unit+0x10F` bit 0 |
+| 6 | `BUSY` | `0x4807FF` | `unit+0x10F` bit 1 |
+| 7 | `PIECE_XZ` | `0x480811` | `0x43E060(&v, unit, a)`, then `(v.x & 0xFFFF0000) + (v.z >> 16)` |
+| 8 | `PIECE_Y` | `0x48083F` | the same call; `v.y` **raw 16.16**, not an integer |
+| 9 | `UNIT_XZ` | `0x480868` | that unit's `+0x6A`/`+0x72` packed the same way |
+| 10 | `UNIT_Y` | `0x4808C2` | that unit's `+0x6E`, raw 16.16 |
+| 11 | `UNIT_HEIGHT` | `0x48090F` | `[[unit+0x92]+0x16E]` — a unit-**definition** field |
+| 12 | `XZ_ATAN` | `0x480965` | `0x4B715A(x, z)` **minus the unit's own heading `+0x66`**, `& 0xFFFF` |
+| 13 | `XZ_HYPOT` | `0x480994` | `_hypot` of the unpacked 16.16 pair → `_ftol` → 16.16 |
+| 14 | `ATAN` | `0x4809C7` | `0x4B715A(a, b)`, `& 0xFFFF` — **no** heading subtraction |
+| 15 | `HYPOT` | `0x4809E5` | `_hypot(a, b)` on the raw arguments, `_ftol` |
+| 16 | `GROUND_HEIGHT` | `0x480A0D` | `0x485070(&v)` on the unpacked pair, result `<< 16` |
+| 17 | `BUILD_PERCENT_LEFT` | `0x480A44` | `0` when `unit+0x104 == 0.0f` (`ds:0x4FD668`), else `1 − (int)(unit+0x104 × −99.0f)` (`ds:0x4FD66C`) — the field is `Nanoframe`, and that it holds the fraction *still to go* is read off the arithmetic, not the writer `[INFERRED]` |
+| 18 | `YARD_OPEN` | `0x480A83` | `unit+0x10F` bit 2 |
+| 19 | `BUGGER_OFF` | `0x480A96` | `unit+0x10F` bit 3 |
+| 20 | `ARMORED` | `0x480AA9` | `unit+0x10E` bit 1 |
+
+Four things in that table are not folklore and cost scripts real bugs:
+
+- **The XZ packing *adds* rather than or-s.** `0x480821` builds `(x & 0xFFFF0000) + (z >> 16)`
+  from two 16.16 world coordinates, so a negative z **borrows from x** — and every handler
+  that unpacks one (`0x480965`, `0x480994`, `0x480A0D`) undoes it with the same three
+  instructions: `x = v & 0xFFFF0000`, `z = v << 16`, and `if (z < 0) x += 0x10000`.
+- **`XZ_ATAN` is relative, `ATAN` is absolute.** Only the first subtracts `unit+0x66`, so
+  `get XZ_ATAN(…)` answers "how far round from where I am pointing" and `get ATAN(dx, dz)`
+  answers a world bearing. Both come back as `uint16` TAang.
+- **The distances are 16.16, not world units.** `PIECE_Y`, `UNIT_Y`, both hypots and
+  `GROUND_HEIGHT` are all `world × 65536`; only `PIECE_XZ`/`UNIT_XZ` hold integers, and only
+  because the packing shifts them.
+- **`BUILD_PERCENT_LEFT` is never 0 while a unit is building.** Read the constants back and
+  `unit+0x104` has to be the fraction still to go: `1 − trunc(frac × −99)` gives 100 at the
+  start and 1 just before the end, and
+  the id returns a true 0 only on the `frac == 0.0f` early out — so `while( get
+  BUILD_PERCENT_LEFT )` terminates exactly at completion.
+
+**SET — a byte table at `0x480C18` (20 bytes, `id − 1`) selects one of seven cases from the
+jump table at `0x480BFC`.** The bytes are `00 06 06 06 01 02 06 06 06 06 06 06 06 06 06 06 06
+03 04 05`, and **case 6 is the shared default `0x480BF1`, which only ORs `unit+0xBA |= 4` and
+returns.** So:
+
+| Case | ids | Handler | What it writes |
+|---|---|---|---|
+| 0 | `ACTIVATION` | `0x480B49` | `UNITS_SetStateMask 0x48B090(unit, 1, value)` — the same call `Activate`/`Deactivate` take |
+| 1 | `INBUILDSTANCE` | `0x480B62` | `unit+0x10F` bit 0 |
+| 2 | `BUSY` | `0x480B84` | `unit+0x10F` bit 1 |
+| 3 | `YARD_OPEN` | `0x480BA8` | `0x47DAC0(unit, value)` |
+| 4 | `BUGGER_OFF` | `0x480BBE` | `unit+0x10F` bit 3 |
+| 5 | `ARMORED` | `0x480BE3` | `0x48B090(unit, 2, value)` — which is how TA:ESC's COB "shields" work |
+| 6 | the other **fourteen** | `0x480BF1` | nothing but the dirty bit |
+
+**`set HEALTH to 50` is a measured no-op on retail TA**, and so is every other write to ids
+2, 3, 4 and 7..17. The editor lints it (`set-ignored`) rather than modelling a write that the
+engine does not make.
+
+Helpers the ids reach, all read this session:
+
+- **`0x4B715A`** `cdecl(a, b)` — `fild a; fild b; fpatan` (so `atan2(a, b)`, +x measured from
+  +z), `fmul qword ds:0x509EF0` = **65536 / 2π = 10430.37835047**, then a **bare `fistp`**, so
+  this one rounds to nearest. `ds:0x509EF8` is its inverse, 2π/65536.
+- **`0x4E43A0`** is MSVC's `_ftol`: `fstcw`, `or ah,0x0C`, `fldcw` — the mode is forced to
+  chop, so every other float→int here **truncates toward zero**. `0x4FB440` is the two-double
+  entry of the C runtime's mode-dispatched math routine (`push 0x18; call 0x4FB480`); the mode
+  table is unread, so "hypot" is from the id it serves and the shape of the call, not from the
+  callee `[INFERRED]`.
+- **`0x485070(vec3*)`** reads the *high halves* of the struct's `+0x00` and `+0x08` dwords
+  (`movsx eax, word [ecx+2]` / `[ecx+0xA]`), i.e. the integer world x and z, then `>> 4` for
+  the heightmap cell and `& 0xF` for the sub-cell — 16 world units to a cell.
+- **`0x4B6C30(n)`** — the sim RNG, and it is **Park–Miller by Schrage's trick**: state at
+  `ds:0x51FC88`, `q = s / 127773` computed with the magic multiply `0x69C16BD` at `0x4B6C47`,
+  then `s = 16807·s − q·0x7FFFFFFF` (which is `16807·(s mod 127773) − 2836·q`), `s += 0x7FFFFFFF`
+  when the result is `<= 0`, and the draw is `s % n`. `n < 2` returns 0 **without touching the
+  state** (`0x4B6C38`). `tools/tacob`'s `SimRandom` is that recurrence; what the game seeds it
+  with at match start is still unread.
+
+### The piece transform — `0x43DEF0`, `0x43E060` and `0x4B6CC0` (tacob landing 4)
+
+`PIECE_XZ` and `PIECE_Y` are the only place a script can see the composed pose, so their
+helpers settle the rules the renderer needs as well.
+
+**`0x43E060(out, unit, piece)`**, `stdcall`, `ret 0xC`: calls `0x43DEF0` for the piece's offset
+in the unit's own frame and adds the unit's world position — `+0x6A` x, `+0x6E` altitude,
+`+0x72` map depth, all 16.16 — writing `(x, y, z)` to `out`.
+
+**`0x43DEF0(out, unit, piece)`**, `ret 0xC`, is the composition:
+
+- `o3 = unit+0x9E`; a piece `< 0` or `>= [o3]` returns `(0,0,0)`, and so does a null model.
+- The accumulator starts at the piece's own **node offset plus its `PrimitiveStruct` position**:
+  `0x43DF2A..0x43DF55` pairs `prim+0x04/+0x08/+0x0C` with the node's `+0x10/+0x14/+0x18` in
+  that order. **So the COB's three axis operands are plain X, Y and Z** — the `XPos/ZPos/YPos`
+  naming in `tamem.h` is TA's screen convention, not a transposition — and **`MOVE` is a delta
+  in the parent's frame, added to the rest offset before any rotation.**
+- Then, for each ancestor up the `prim+0x32` parent chain: rotate what is under it by that
+  ancestor's three angle words through `0x4B6CC0`, **then** add that ancestor's own
+  offset+position. The requested piece's own angles are never applied — turning a piece does
+  not move its origin.
+- At the **root** (`prim+0x32 == 0`) the unit's body turn is added to the angle triple first:
+  `+0x64` to the z-axis word, `+0x66` (the heading) to the y-axis word, `+0x68` to the x-axis
+  word. Because Y is the outermost factor, that is the same thing as applying the yaw last.
+- The returned z is **negated** (`neg ecx` at `0x43E00A`), which is what puts it on the world's
+  map-depth axis.
+
+**`0x4B6CC0(out, in, angles)`** rotates one vector by the three words, and **fixes the order**:
+
+| Order | Pair rotated | `PrimitiveStruct` word | COB axis operand |
+|---|---|---|---|
+| first | `(x, y)` | `+0x14` | `z-axis` (2) |
+| second | `(y, z)` | `+0x10` | `x-axis` (0) |
+| third | `(x, z)` | `+0x12` | `y-axis` (1) |
+
+so the local matrix is **`Ry · Rx · Rz`**. Each step is `0x4B7173(angle, pair)`: it returns
+untouched on a zero angle word (`cmp word [ebp+8],0`), else `p0' = p0·cos − p1·sin`,
+`p1' = p1·cos + p0·sin` with the angle read as a **signed** 16-bit through `fild word`, scaled
+by `ds:0x509EF8`, and stored back with a bare `fistp` (round to nearest).
+
+**The 3DO loader negates X and Z.** Every offset and every vertex of the `Model3DONode` the
+engine holds is `(−x, y, −z)` of the same field in the `.3do` — a half turn about Y, baked in
+at load. `[MEASURED 2026-09-07]` against all eight `posedump.txt` fixtures, which print the
+engine's own `N_OFF` and vertex array beside the file's: every piece of all eight units, x and
+z flipped, y kept, no exceptions. The site that does it is **not located**; the fact is read
+off the two arrays, not off code.
+
+**Checked against the engine's own vertex buffer.** `tools/tacob pose-check --all` rebuilds
+each fixture's posed vertices from the rules above and diffs them against `P_VBUF`, which
+`tagpu_native.c`'s posedump prints beside the model-space vertex it came from. The residual is
+**exactly 0** on the kbot (45 points, 15 pieces, two turned), the building, the ship (40 points,
+a turned turret) and 0.002 on the submarine; the tank, fighter, gunship and bomber come out at
+4.1, 7.0, 48.4 and 77.2 world units — and `tagpu_native.c`'s own `err=` on the very same dump
+lines reads 5.45, 7.31, 48.37 and 77.19, i.e. **the vertex buffer is a frame or two behind the
+pose the dump sampled** and neither implementation can do anything about it. That also settles
+the two questions `model-import.md` left open: the composition order, and `MOVE` being a delta
+added before the rotation.
 
 ### [REPLAY] The nine fixtures, re-run offline (tacob landing 3, 2026-09-07)
 

@@ -153,14 +153,20 @@ Measured against `pr + 0x22`:
   **positive** angle through the same `rot2` the effects path uses. This is **not** the index
   order `emit_fx_model` uses (`turn[0]` about Z there) — that reads a different struct, and the
   two should not be assumed to share a convention.
-- **The order the three compose in is not settled.** Every piece in every sample turned about
-  one axis only, so the sample cannot distinguish the six orders. `Z, X, Y` is used, that being
-  the plane order of the engine's own transform at `0x4B6CC0`. A unit whose script turns one
-  piece about two axes at once would settle it — and would say so through `err=` below rather
-  than just rendering a little wrong.
-- **`MOVE` is untested.** `pr + 0x04` read `(0,0,0)` on every piece of every sample, a Peewee
-  mid-stride included, so it is taken as a delta in the parent's frame. That a *walking* unit
-  reads zero there is what argues it is a `MOVE` delta and not a velocity or a target.
+- **The order is `Z, X, Y`, and that is now read, not guessed.** [VERIFIED 2026-09-07, tacob
+  landing 4.] `UNITS_PieceOffset 0x43DEF0` composes through `0x4B6CC0`, which rotates the
+  `(x,y)` pair by the `+0x14` word first, then `(y,z)` by `+0x10`, then `(x,z)` by `+0x12` —
+  exactly the order this pass uses, and the pairing of word to axis with it. The sample could
+  not distinguish the six orders because every piece in it turned about one axis; the
+  disassembly can. `exe-reverse-engineering.md` §"The piece transform".
+- **`MOVE` is a delta in the parent's frame, added to the rest offset before the rotation** —
+  also read rather than inferred. `0x43DF2A..0x43DF55` adds `prim+0x04/+0x08/+0x0C` to the
+  node's `+0x10/+0x14/+0x18` and only then walks up the chain, which is what this pass's `d`
+  already does. The live check is `tools/tacob pose-check --all`, which rebuilds the eight
+  cobtrace fixtures' posed vertices from those rules and diffs them against `P_VBUF`: exactly
+  0 on the kbot, the building and the ship, and on the four fast movers a residual that equals
+  this pass's own `err=` on the same dump line (the vertex buffer being a frame behind the
+  pose the dump sampled).
 
 ### Hidden pieces
 
