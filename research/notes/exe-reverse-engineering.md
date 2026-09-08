@@ -3008,6 +3008,20 @@ in the unit's own frame and adds the unit's world position — `+0x6A` x, `+0x6E
   selection rect did until 2026-09-08, `ui-markers.md` §1) is therefore right on level ground
   and a few pixels out on a hillside. `+0x66` alone stays correct for the *body* geometry only
   because the engine bakes just the yaw into `vbuf` (`pose_dump`, err 0.00).
+- **`0x467A50(ctx, &pos, pts4, &angles)` — rotate four points, project them, draw the loop.**
+  `[BINARY-VERIFIED 2026-09-08]` `ret 0x10`; one caller, `0x46A5FB` inside
+  `DrawUnitSelectBoxRect`. Per point it calls `0x4B6CC0(pts[i], scratch, angles)` and then
+  projects with the **standard rule, one term at a time**:
+  `sx = ((rot.x + pos.x) >> 16) + 0x80` and
+  `sy = ((pos.z − rot.z) >> 16) − (((rot.y + pos.y) >> 16) >> 1) + 0x20` (`0x467A8C`..`0x467AC7`).
+  Both `>>` are arithmetic — floors — and the `sar 1` at `0x467AB5` halves the **already
+  truncated** height, so it is `floor(a) − floor(floor(b)/2)` and not `floor(a − b/2)`; the two
+  differ by a pixel on some edges. Each component is also narrowed through `movswl` before use.
+  The colour byte is read once from `main+0xDD5` and the four lines go out through
+  `DrawLine 0x4BE950` as `p0→p1→p2→p3→p0`. **Both scratch buffers are globals and therefore
+  peekable**: `*(main+0x14383)` holds the four rotated vectors (three 16.16 dwords each) and
+  `*(main+0x14387)` the four screen points (two ints each), for the **last box drawn** — which
+  is how our own redraw was held to the engine's own corner integers rather than to its pixels.
 - **`0x4CB650(model, &min, &max, flag)` is not a whole-tree AABB unless you ask for one.**
   `[BINARY-VERIFIED 2026-09-08]` It seeds both vectors with `{0,0,0}` (`0x4CB65D`..`0x4CB675`)
   and calls `0x4CB6A0(node, offset, min, max, flag)`, which accumulates the node's own vertices
