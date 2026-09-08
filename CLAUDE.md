@@ -125,7 +125,9 @@ per-machine hooks rather than assumed:
   ignore rule is enforced for free); any file over 8 MB; any blob byte-identical to a file of
   the original game; and any binary whose path matches no glob in `.publish-allow`.
 - `pre-push` refuses any remote that is not this repository's HTTPS URL, re-checks the author
-  and committer of every commit in the range, and refuses if any `_local/` path is tracked.
+  and committer of every commit in the range, refuses if any `_local/` path is tracked, and then
+  runs the full content scan — every revision, every worktree, every blob against the manifest —
+  so a plain `git push` cannot skip it.
 
 The hooks live in `.githooks/` (untracked, per machine), enabled through an **absolute**
 `core.hooksPath` so that every worktree runs them. A hook failure is a real problem with the
