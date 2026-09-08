@@ -1977,6 +1977,81 @@ cannot be prologue-detoured without relocating the call.
   panel); then `0x4C63A0()`.
 - The `LIGHTBAR` slide `0x45FFB0`: `0x4B8D40`, `0x4B7F30`, `0x4B7F90`, `0x47F1A0`.
 
+### The frame's HUD extras — what gates each, what it draws, where [VERIFIED 2026-09-07, Phase E G15c]
+
+Read for G15c so the strict walk could *reach* every writer of the in-game frame that the
+screen inventory does not open by itself. `DrawGameScreen`'s tail, `0x469F40..0x46A3E0`, in
+call order, with each gate (`ebx` is the function's `drawUnits` argument):
+
+| site | gate | draws |
+|---|---|---|
+| `0x469F65` `DrawPopupF4Dialog 0x4948E0` | `0x435100([main+0x391E9]) == 2` [INFERRED: a mode query; 2 while the F4 popup is up] | the Kills/Losses box top-right of the viewport; the draw context is re-seeded from `main+0x37E27` after it (`0x4C6B10` at `0x469F95`) |
+| `0x469F9F` `DrawPopupButtomDialog 0x4689C0` | called every frame; inside, throttled to one pass per 15 ms by **`GetTickCount`** (`0x4B6560` is `jmp [0x4FC0DC]`, the KERNEL32 import; next time in `0x51E544`), then **`0x4C1B80(0x20)`** — TA's key-id poll: id `0x20` → `GetAsyncKeyState(VK_SPACE)` (index table `0x4C1C6C`, jump table `0x4C1C48`, the case at `0x4C1C2D`; the same switch resolves the SHIFT hotkey `0xF9`) | **the same Kills/Losses box as F4, held while SPACE is down** — MEASURED: 21 382 non-key pixels in the viewport with F4, 21 382 with SPACE held over the commander, 0 with it released. "Buttom" in the corpus symbol is the space *button*, not the bottom of the screen |
+| `0x469FB8` `0x468380` | `[main+0x391C3] != 0` — the **`+bps`** cheat's flag (handler `0x419540`: `xor [main+0x391C3],1`) | `"Receive - %1.1f K/s"` / `"Send - %1.1f K/s"` (`0x5076A4`, `0x5076B8`), two `DrawTextCustomFont` lines at x `0x81`, y `[main+0x37E23] − 0x5F` and `+8` (the prologue). **Not `+netstats`**: its handler `0x417570` only zeroes the counters `0x511A60..0x511C64` |
+| `0x469FCB` `DrawChatText 0x464060` | `ebx` | the chat lines |
+| `0x469FD5..0x46A102` | `[main+0x3923B] & 2` and `ebx` | the debug line: `"FRATE: %d"`, `"%.1f"`, `"MODE %s INFO %s"` with `NORMAL`/`DEBUG` and `[Release]` (`0x507828..0x50781C`, `0x5077FC`, `0x50780C..0x507814`, `0x502558/0x50255C`) at x `0x83`, `0xBC`, `0x1EE`, plus a fourth string from `0x415FA0` under `[main+0x2A44] & 1`. **Negative result**: bit 1 of `main+0x3923B` is flipped only at `0x49631B`, behind `main+0x37F2F` bit 1 (`0x4962F8..0x496303`), the engine's debug mode (set at `0x417009`, `0x430E68`); it is cleared at game entry (`0x49128E`) and no cheat in the NORMAL table sets it — not reachable in play, not exercised |
+| `0x46A107..0x46A1CB` | `[main+0x38A51] & 1` → the GAF `main+0x1481B` frame 0 at (`[esp+0xAC]`, `[esp+0xB0]`); else, unless the local player's `[player+0x9B] & 0x40`, `main+0x3923B` bit 5 → `main+0x14813`, bit 6 → `main+0x14817` | status icons [INFERRED: pause/speed indicators]; not exercised |
+| **`0x46A1D0..0x46A2A3`** | **`main+0x37F2F` bit 6 — the `+clock` cheat** (handler `0x417300`: the bit flipped, then `0x430F00`) | the sim tick `main+0x38A47` split into h:m:s (÷108 000, ÷1 800, ÷30 — 30 ticks a second), `"%s : %02d:%02d:%02d"` (`0x507794`) with `"Game Time"` (`0x504910`, through `0x4C5740` [INFERRED: the string table]); `DrawTextCustomFont 0x4C14F0` at x `0x82`, y `[gfx+0xD8]` (`0x4B6710` [INFERRED: the primary's height]) `− 0x22 −` the font height (`0x4C1450`): the viewport's bottom-left, just above the bottom bar. **The seconds tick between two shots** — the walk measures it with the in-game menu open, which pauses the sim and the clock with it |
+| `0x46A2A8` | `[main+0x38A51] & 2` | the GAF `main+0x148CF` frame 0 at (`screenW − 0x10`, `screenH − 0x50`); not exercised |
+| `0x46A2E7`, `0x46A303` | — | clip reset `0x4C69C0`, then the retained GUI blit `0x4AB170` |
+| `0x46A308..0x46A3B8` | `[main+0x38DD5]` and `ebx` | the nine profiler bars `0x46B900` |
+| `0x46A3C2` **`DrawOptionsTab 0x45FFB0`** (the symbol's name; the `LIGHTBAR` wipe) | `0x512FE4 != 0` | below |
+| `0x46A3C7` `0x4C2870` | — | the cursor, back buffer only |
+| `0x46A3DB` `0x4C63A0` | `ebx` and `[esp+0x22C]` (`blitScreen`) | the flip |
+
+**The `LIGHTBAR` wipe, `0x45FFB0`** — the in-game menu's opening animation, a bright bar sweeping
+the panel's width while the panel is revealed behind it: the opener **`0x460160`** (`ret 4`, the
+panel's `GUIMEMSTRUCT*` at `[ebp+4]`) snapshots the panel's surface (`[panel+0xBC]`, `w×h` from
+`+0x17/+0x19`) into `0x512FE8`, scales it with `0x4B8AE0` into `0x512EF8`, zeroes the slide
+`0x512FEC`, stores the panel's `width − 1` in `0x512F14` and its `y` in `0x512F10`, and sets
+**`0x512FE4 = 1`** (`0x460204`). Each call of `0x45FFB0` then advances `0x512FEC` by `0x15` up
+to `0x115` (fourteen steps), draws the `LIGHTBAR` frame — `0x4B8D40([main+0x51D], "LIGHTBAR")`
+then `0x4B7F30(seq, 2)` — with `0x4B7F90`, and reveals the panel to the left of the bar with
+`0x4C7580` stamps (the textured-triangle stamp, at `0x46012A`); the closer **`0x4609B0`** clears
+`0x512FE4` (`0x4609D4`). The opener's callers: `0x427459`, `0x427906`, `0x44444D`, `0x460ABD`
+(inside the closer) and `0x4776D8`, each right after `0x47F1A0("Options"|"Menu", 0)` [INFERRED:
+a screen lookup by name — it walks the table at `main+0x33E13`]. Every pixel the wipe writes goes
+through two observed leaves (`0x4B7F90`, `0x4C7580`), which is why the census explains it and the
+twin follows it; the engine free-runs its frame loop, so at 60 presented frames a second the
+fourteen steps are over within a present or two.
+
+**`0x4C7580` runs in the steady game frame too** — MEASURED (the CORE census, `CORMAIN2`, nothing
+selected, no popup): `scale` 208–240 ops per 50 flips, about four a frame; its ten call sites
+are `0x42136C`, `0x458664`, `0x46012A` (the wipe), `0x46675E`, `0x467CA1`, `0x46BC1E`
+(`drawKillsAddr+0x918`, the F4 box), `0x494CBB` (`DrawPopupF4Dialog+0x3DB`), `0x4A21C8`
+(`GUI_ListboxBuild+0x688`) and `0x4A4A81`/`0x4A4B1B` (`GUI_HotspotDraw+0x101/+0x19B`, corpus
+names; the per-frame ones by the neighbourhood [INFERRED]). So "no `scale` op in a window" is
+only evidence of the wipe's absence while the game is paused, which the menu does.
+
+**What the census logged as unexplained on *other* surfaces, on the CORE run**: the startup
+`OFFSCREEN` 640×480 (`03D30560`, the shell's own surface, tagged by whatever GUI is on top)
+written whole at every in-game screen build — `changed=192015 unexplained=192015
+box=(0,4)-(639,479) ops_on_it=0` — the item already open above; and a 128×352 surface
+(`04E2B850`, the menu's rect) written whole when `PREFS` opens, its `SAVE UNDER` snapshot
+[INFERRED]. Neither is presented; the presented surface's total was 0 unexplained of 1 717 044.
+
+**`ARMOPT.GUI` is not over the viewport.** Its `[COMMON]` record is `xpos=0 ypos=128 width=128
+height=352` — the side panel's own rect; the in-game menu *replaces* the build panel. Opening it
+pauses the game and draws `PAUSED` in the middle of the world (the 2 621–2 938 non-key viewport
+pixels the walk counts on that stop). The screens that do lie over the world are `PREFS.GUI` and
+`VISUALRT.GUI` (~55 000 px each at 1024×768), the F4 / SPACE box (~21 000), the chat (~800), the
+clock and the `+bps` lines.
+
+**The NORMAL cheat table at `0x501D38`** (43 `{name, handler, runLevel}` entries, the one
+`InitInternalCommand 0x4B7760` registers at `0x4195A7`), name → handler, read for the two the
+walk types: NoShake `0x416E60`, Contour `0x416DB0`, ScrollSpeed `0x416CF0`, IFace `0x416D20`,
+Give `0x416BD0`, CDPlay `0x4167F0`, CDStop `0x416810`, Sound3D `0x416820`, Shading `0x416420`,
+AntiAlias `0x416510`, Shadow `0x416550`, Dither `0x416590`, SwitchAlt `0x4165C0`, TShadow
+`0x416630`, FShadow `0x416660`, LOSType `0x416690`, Light `0x4166C0`, RCache `0x416710`,
+Selectable `0x416460`, MusicMode `0x4175E0`, Logo `0x4168D0`, ScreenChat `0x417130`, Gamma
+`0x417290`, **Clock `0x417300`**, NetStats `0x417570`, Sing `0x4172E0`, NoMetal `0x417150`,
+NoEnergy `0x4171F0`, BigBrother `0x4174E0`, Now `0x416E90`, Drop `0x4177A0`, ShootAll
+`0x418CA0`, ShareMetal `0x418CD0`, ShareEnergy `0x418D90`, ShareMapping `0x418E50`, ShareRadar
+`0x418FD0`, ShareAll `0x419090`, ShowRanges `0x4194C0`, SetShareMetal `0x419340`,
+SetShareEnergy `0x419400`, Compression `0x4194D0`, **BPS `0x419540`**, SFX `0x419550`. The
+handlers are `stdcall(argv)`, `ret 4`; `+showranges`'s writes `main+0x391BF`, as the ta-drive
+skill says.
+
 ### The minimap, located [VERIFIED]
 
 `main+0x1426B` (`TED_GENERATED_PIC`) is consumed once, at `0x46684F` in
