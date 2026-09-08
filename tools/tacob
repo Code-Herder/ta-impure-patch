@@ -6,6 +6,8 @@
     tools/tacob dump      unit.cob [Script]              # opcode listing
     tools/tacob roundtrip --all [--out DIR] [--json]     # the landing-1 gate
     tools/tacob run       --all                          # the landing-3 gate (VM + director)
+    tools/tacob serve     armpw                          # the editor, on a port of its own
+    tools/tacob gui       [unit]                         # the same page in a window
 
 BOS is the source and COB the build artifact (research/notes/tacob-design.md).
 Formats: research/notes/file-formats.md §2; the engine the VM reproduces is
@@ -41,6 +43,7 @@ goes through `tools/ta3do`, loaded as a module the way tools/tascene does.
 import argparse
 import json
 import math
+import os
 import re
 import struct
 import sys
@@ -49,8 +52,63 @@ import time
 import urllib.parse
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-INCLUDE_DIR = HERE / "tacob-include"
+# --------------------------------------------------------------------------- where things are
+#
+# Two layouts. In the checkout this file sits next to everything it ships and
+# one directory below what it writes. In the packaged folder (PyInstaller
+# onedir, landing 5) the shipped files are extracted beside the executable and
+# `sys._MEIPASS` names that directory, while a project written under
+# `Program Files` would not be writable at all. So: everything the tool *ships*
+# hangs off HERE, everything the *user* writes hangs off `user_dir()`.
+
+BUNDLED = bool(getattr(sys, "frozen", False))
+
+
+def _here() -> Path:
+    if BUNDLED:
+        meipass = getattr(sys, "_MEIPASS", None)
+        return Path(meipass) if meipass else Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+HERE = _here()
+INCLUDE_DIR = HERE / "tacob-include"    # the shipped headers
+EDITOR_HTML = HERE / "tacob-edit.html"  # the editor page
+SETUP_HTML = HERE / "tacob-setup.html"  # the first-run game-folder picker
+VENDOR_DIR = HERE / "vendor"            # the pinned JavaScript, when the build fetched it
+
+CONFIG_FILE = "config.json"
+
+
+def user_dir() -> Path:
+    """Where the tool keeps what the user owns: the config and, when packaged,
+    the projects. `TACOB_HOME` overrides it — that is what the tests set."""
+    env = os.environ.get("TACOB_HOME")
+    if env:
+        return Path(env).expanduser()
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "tacob"
+
+
+def read_config() -> dict:
+    """The per-user config: the game folder and the unit last opened. Never in the
+    repo — `tacob-design.md` §"Decisions locked": the game folder lives in
+    per-user config outside any repo."""
+    try:
+        data = json.loads((user_dir() / CONFIG_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_config(config: dict) -> Path:
+    path = user_dir() / CONFIG_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    return path
 
 
 class TacobError(Exception):
@@ -3431,8 +3489,22 @@ class Director:
 
 # --------------------------------------------------------------------------- the gate
 
-FIXTURES = Path(__file__).resolve().parent.parent / "research/notes/evidence/cobtrace"
+FIXTURES = HERE.parent / "research/notes/evidence/cobtrace"
 CLASSES = ["kbot", "tank", "building", "death", "fighter", "gunship", "bomber", "ship", "sub"]
+
+
+def fixtures_dir() -> Path:
+    """Landing 2's traces, which `run`, `fit-world` and `pose-check` diff against.
+
+    They are a *developer* gate: they live in the checkout and the packaged folder
+    does not carry them (they are the game's own output, tens of megabytes, and a
+    modder has no use for them). Say that in one sentence rather than raising a
+    `FileNotFoundError` three frames deep."""
+    if not FIXTURES.is_dir():
+        raise TacobError(
+            f"no cobtrace fixtures at {FIXTURES} — `run`, `fit-world` and `pose-check` "
+            "are the checkout's own gates and the packaged folder does not ship them")
+    return FIXTURES
 
 
 def read_posedump(path):
@@ -3461,7 +3533,7 @@ def piece_visibility(unit, pieces):
     eight fixtures with a posedump — every HIDDEN piece is either that or one the
     unit's own `Create` hides."""
     ta3do = load_ta3do()
-    assets = ta3do.Assets(None)
+    assets = load_assets()
     try:
         _label, blob = ta3do.resolve_model(assets, unit)
     except Exception:
@@ -3480,7 +3552,7 @@ def replay_inputs(cls):
 
 def run_class(cls, pose=True):
     """Replay one fixture and diff both oracles. Returns a report dict."""
-    folder = FIXTURES / cls
+    folder = fixtures_dir() / cls
     header, lines = read_cobtrace(folder / "cobtrace.log")
     if not lines:
         raise TacobError(f"{cls}: the fixture's cobtrace.log has no lines")
@@ -3598,7 +3670,7 @@ def fit_health(lines):
 
 def cmd_fit(args):
     """Write the world timelines the replay needs, derived from the fixtures."""
-    path = FIXTURES / "replay.json"
+    path = fixtures_dir() / "replay.json"
     data = json.loads(path.read_text()) if path.is_file() else {}
     for cls in (CLASSES if args.all else args.classes):
         _header, lines = read_cobtrace(FIXTURES / cls / "cobtrace.log")
@@ -3665,13 +3737,107 @@ def load_ta3do():
     return mod
 
 
+# The game folder. `ta3do.game_dir()` guesses it from the checkout — it walks
+# parents for a directory holding both `tagpu/` and `pristine/` — and the packaged
+# folder is not in a checkout, so there the guess is meaningless and a saved
+# answer is the only one there is. Order: the flag, the environment, the saved
+# config, then ta3do's guess.
+
+GAME_MARKERS = ("totala1.hpi", "totala2.hpi", "rev31.gp3")
+
+
+def looks_like_gamedir(path) -> bool:
+    """One of the retail archives is present. Cheap, and it is what `Assets` will
+    read: a folder with none of them merges to an empty index and every unit
+    lookup then fails one at a time instead of once, here."""
+    try:
+        names = {c.name.lower() for c in Path(path).iterdir()}
+    except OSError:
+        return False
+    return any(marker in names for marker in GAME_MARKERS)
+
+
+def resolve_gamedir(explicit=None):
+    """Where the archives are, or None to let `ta3do` guess (right in a checkout)."""
+    if explicit:
+        return str(Path(explicit).expanduser())
+    if os.environ.get("TA3DO_GAMEDIR"):
+        return None                      # ta3do reads it itself; do not second-guess
+    saved = read_config().get("gamedir")
+    return saved or None
+
+
+def gamedir_candidates():
+    """Folders that look like an install, for the picker to offer. A short fixed
+    list — this is a hint, not a search of the disk."""
+    seen, found = set(), []
+    # The folder the tool was unzipped into, and the one above it: dropping
+    # `tacob/` inside the game's own directory is the obvious thing to do with a
+    # folder, and then the answer is already here.
+    roots = [Path.cwd()]
+    if BUNDLED:
+        beside = Path(sys.executable).resolve().parent
+        roots += [beside, beside.parent]
+    if sys.platform == "win32":
+        for letter in "CDEFG":
+            drive = Path(f"{letter}:/")
+            for tail in ("Cavedog/Total Annihilation",
+                         "Program Files (x86)/Cavedog/Total Annihilation",
+                         "Program Files/Cavedog/Total Annihilation",
+                         "Program Files (x86)/Steam/steamapps/common/Total Annihilation",
+                         "GOG Games/Total Annihilation",
+                         "Games/Total Annihilation", "TA", "Total Annihilation"):
+                roots.append(drive / tail)
+    else:
+        home = Path.home()
+        roots += [home / ".wine/drive_c/Cavedog/Total Annihilation",
+                  home / "Games/Total Annihilation"]
+        try:
+            roots.append(Path(load_ta3do().game_dir()))
+        except Exception:
+            pass
+    saved = read_config().get("gamedir")
+    if saved:
+        roots.insert(0, Path(saved))
+    for root in roots:
+        key = str(root).lower()
+        if key not in seen and looks_like_gamedir(root):
+            seen.add(key)
+            found.append(root)
+    return found
+
+
+def load_assets(gamedir=None):
+    """`ta3do.Assets`, with our own sentence when the folder is not a game.
+
+    `ta3do.die()` prints and raises `SystemExit`, and in the packaged folder the
+    path it would name is a guess about a checkout that is not there — so say
+    what to do instead of where we looked."""
+    fix = "pass --gamedir, or pick the folder in the window"
+    if not gamedir and BUNDLED:
+        # `ta3do.game_dir()` would answer with a guess about a checkout that is
+        # not there, and naming that path is worse than naming none.
+        raise TacobError(f"no game folder chosen yet — {fix}")
+    ta3do = load_ta3do()
+    root = Path(gamedir).expanduser() if gamedir else Path(ta3do.game_dir())
+    if not root.is_dir():
+        raise TacobError(f"no game folder at {root} — {fix}")
+    try:
+        assets = ta3do.Assets(root)
+    except SystemExit:
+        raise TacobError(f"{root} is not readable as a game folder — {fix}")
+    if not assets.archives:
+        raise TacobError(f"{root} holds no Total Annihilation archives "
+                         f"(no {', '.join(GAME_MARKERS)}) — {fix}")
+    return assets
+
+
 def read_cob_source(spec: str, gamedir=None):
     """A .cob path, or a stock unit name read out of the game's archives."""
     path = Path(spec)
     if path.is_file():
         return path.read_bytes(), path.stem
-    ta3do = load_ta3do()
-    assets = ta3do.Assets(gamedir)
+    assets = load_assets(gamedir)
     name = f"scripts/{path.stem.lower()}.cob"
     if not assets.has(name):
         raise TacobError(f"{spec}: not a file, and no {name} in the game's archives")
@@ -3684,8 +3850,18 @@ def read_cob_source(spec: str, gamedir=None):
 # artifact (tacob-design.md §"Decisions locked"). `/projects/` is gitignored:
 # decompiled stock BOS and built COBs are game content and are never tracked.
 
-PROJECTS = HERE.parent / "projects"
 PROJECT_FILE = "project.json"
+
+
+def projects_dir() -> Path:
+    """Where projects live. In the checkout that is `/projects/`, which
+    `.gitignore` keeps out of the repo — decompiled stock BOS and built COBs are
+    game content. In the packaged folder it is the user's own directory, because
+    a project written next to an executable in `Program Files` is not writable."""
+    if BUNDLED or os.environ.get("TACOB_HOME"):
+        return user_dir() / "projects"
+    return HERE.parent / "projects"
+
 
 # What the FBI says about how a unit moves, turned into the director's sketch.
 # A guess, and the page can override it — nothing here is measured.
@@ -3853,9 +4029,9 @@ class Project:
         with **every** piece kept — the VM decides visibility per tick and a
         script can `show` a flare later, so `--show-hidden` is not optional here."""
         unit = unit.lower()
-        path = Path(root) if root else PROJECTS / unit
+        path = Path(root) if root else projects_dir() / unit
         ta3do = load_ta3do()
-        assets = ta3do.Assets(gamedir)
+        assets = load_assets(gamedir)
         blob, label = read_cob_source(unit, gamedir)
         cob = read_cob(blob)
         text, failures = decompile_cob(cob, label)
@@ -3977,7 +4153,7 @@ class Session:
             # what it said; it is the only explanation of why there is no model.
             with contextlib.redirect_stderr(said):
                 ta3do = load_ta3do()
-                assets = ta3do.Assets(self.gamedir)
+                assets = load_assets(self.gamedir)
                 _label, blob = ta3do.resolve_model(assets, self.project.unit)
                 self.root3do = ta3do.parse_3do(blob)
                 self.weapons = weapon_table(assets)
@@ -4165,12 +4341,69 @@ class Session:
 # which is why the VM lives here and not in JavaScript (tacob-design.md
 # §"Decisions locked": two implementations of the opcode semantics would drift).
 
-EDITOR_HTML = HERE / "tacob-edit.html"
-STATIC = {"/": EDITOR_HTML, "/tacob-edit.html": EDITOR_HTML}
+IMPORT_MAP = re.compile(r'(<script\s+type="importmap"\s*>)(.*?)(</script>)', re.S)
+CDN = "https://cdn.jsdelivr.net/"
+
+
+def local_js(url: str, vendor=VENDOR_DIR):
+    """The vendored copy of one import-map entry, or None if it was not fetched.
+
+    `tacob-build.py vendor` mirrors the CDN's own path under `vendor/`, so the
+    rewrite is a prefix swap and the *directory* entry (`three/addons/`, which a
+    map resolves by prefix) rewrites by the same rule as a file entry."""
+    if not url.startswith(CDN):
+        return None
+    rest = url[len(CDN):]
+    target = vendor / rest.rstrip("/")
+    if url.endswith("/"):
+        return "/vendor/" + rest if target.is_dir() else None
+    return "/vendor/" + rest if target.is_file() else None
+
+
+def rewrite_import_map(text: str, vendor=VENDOR_DIR) -> str:
+    """Point the page's import map at `vendor/` for every module actually there.
+
+    The page ships with CDN URLs (the `ta3do-view.html` idiom) and the packaged
+    build has no network, so the build fetches pinned, checksummed copies and the
+    server rewrites the map on the way out — one page, two homes, nothing
+    vendored into git (tacob-design.md §"Decisions locked", the JavaScript row).
+    An entry with no local copy keeps its CDN URL, so a half-vendored tree still
+    loads when there *is* a network."""
+    if not vendor.is_dir():
+        return text
+    match = IMPORT_MAP.search(text)
+    if not match:
+        return text
+    try:
+        spec = json.loads(match.group(2))
+        imports = spec["imports"]
+    except (ValueError, KeyError, TypeError):
+        return text
+    spec["imports"] = {k: (local_js(v, vendor) or v) for k, v in imports.items()}
+    body = json.dumps(spec, indent=1)
+    return text[:match.start(2)] + "\n" + body + "\n" + text[match.end(2):]
+
+
+def editor_html() -> str:
+    return rewrite_import_map(EDITOR_HTML.read_text(encoding="utf-8"))
+
+
+def setup_html() -> str:
+    return SETUP_HTML.read_text(encoding="utf-8")
+
+
+PAGES = ("/", "/tacob-edit.html")
 
 
 class Server:
-    def __init__(self, session, host="127.0.0.1", port=0, gamedir=None):
+    """The editor's server, and — before there is a session — the picker's.
+
+    `session` may be None: that is the packaged tool's first run, where nothing
+    is known yet about where the game is installed. The port stays the same
+    through the picker, so answering it is a reload rather than a second URL."""
+
+    def __init__(self, session, host="127.0.0.1", port=0, gamedir=None, unit=None,
+                 follow_gamedir=False):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         outer = self
 
@@ -4197,6 +4430,8 @@ class Server:
                 args = dict(urllib.parse.parse_qsl(query))
                 try:
                     self.route_get(path, args)
+                except TacobError as err:               # the operator's mistake: say it plainly
+                    self.send({"error": str(err)}, code=400)
                 except Exception as err:                # never take the server down
                     self.send({"error": f"{type(err).__name__}: {err}"}, code=500)
 
@@ -4219,16 +4454,30 @@ class Server:
                     body = {}
                 try:
                     self.route_post(self.path.partition("?")[0], body)
+                except TacobError as err:
+                    self.send({"error": str(err)}, code=400)
                 except Exception as err:
                     self.send({"error": f"{type(err).__name__}: {err}"}, code=500)
 
             # -- the five endpoints the design names, plus what drives them --
             def route_get(self, path, args):
                 s = outer.session
-                if path in STATIC:
-                    self.send(STATIC[path].read_text(encoding="utf-8"),
-                              "text/html; charset=utf-8")
-                elif path == "/model.glb":
+                if path in PAGES:
+                    # No session means no game folder yet: the first thing the
+                    # window shows is the picker, at the same URL, so picking one
+                    # is a reload and not a second port.
+                    page = editor_html() if s else setup_html()
+                    return self.send(page, "text/html; charset=utf-8")
+                if path == "/setup.html":
+                    return self.send(setup_html(), "text/html; charset=utf-8")
+                if path == "/setup":
+                    return self.send(outer.setup_state())
+                if path.startswith("/vendor/"):
+                    return self.serve_vendor(path)
+                if s is None:
+                    return self.send({"error": "no game folder yet — pick one at "
+                                               "/setup.html"}, code=503)
+                if path == "/model.glb":
                     if not s.project.glb.is_file():
                         return self.send({"error": "no model exported"}, code=404)
                     self.send(s.project.glb.read_bytes(), "model/gltf-binary")
@@ -4254,8 +4503,28 @@ class Server:
                 else:
                     self.send({"error": f"no route {path}"}, code=404)
 
+            def serve_vendor(self, path):
+                """The pinned JavaScript the build fetched. Only files under
+                `vendor/`, resolved before the test, because the path comes off
+                the wire."""
+                rel = urllib.parse.unquote(path[len("/vendor/"):])
+                root = VENDOR_DIR.resolve()
+                target = (root / rel).resolve()
+                if not target.is_file() or root not in target.parents:
+                    return self.send({"error": f"no route {path}"}, code=404)
+                ctype = {".js": "text/javascript", ".mjs": "text/javascript",
+                         ".json": "application/json", ".map": "application/json",
+                         ".css": "text/css"}.get(target.suffix.lower(),
+                                                 "application/octet-stream")
+                self.send(target.read_bytes(), f"{ctype}; charset=utf-8")
+
             def route_post(self, path, body):
                 s = outer.session
+                if path == "/setup":
+                    return self.send(outer.apply_setup(body))
+                if s is None:
+                    return self.send({"error": "no game folder yet — pick one at "
+                                               "/setup.html"}, code=503)
                 if path == "/build":
                     self.send(s.build(body.get("source") or "",
                                       restart=body.get("restart", True)))
@@ -4294,6 +4563,12 @@ class Server:
 
         self.session = session
         self.gamedir = gamedir          # where "pack" installs, when one was given
+        self.unit = unit                # what the picker opens, when it has to open one
+        # Whether the picker's answer also becomes the install target. The *page*
+        # may say which game folder (a real install, checked before anything is
+        # saved); whether `pack` installs into it at all stays the operator's,
+        # which is landing 4's rule that a request may not name where we write.
+        self.follow_gamedir = follow_gamedir
         self.httpd = ThreadingHTTPServer((host, port), Handler)
         self.host, self.port = host, self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -4320,11 +4595,56 @@ class Server:
         self.httpd.shutdown()
         self.httpd.server_close()
 
+    def setup_state(self):
+        """What the picker draws: where we would look, what we already know, and
+        whether anything is running yet."""
+        config = read_config()
+        session = self.session
+        return {"needed": session is None,
+                "gamedir": config.get("gamedir"),
+                "unit": self.unit or config.get("unit") or "armpw",
+                "candidates": [str(p) for p in gamedir_candidates()],
+                "config": str(user_dir() / CONFIG_FILE),
+                "projects": str(projects_dir()),
+                "open": session.project.unit if session else None,
+                "packaged": BUNDLED}
+
+    def apply_setup(self, body):
+        """The picker's answer. Validate *before* saving: the whole point of the
+        first run is that a wrong folder says so here, instead of becoming a
+        session with no model and a puzzle about why every piece sits at the
+        origin."""
+        gamedir = (body.get("gamedir") or "").strip()
+        unit = (body.get("unit") or "").strip().lower() or "armpw"
+        if not gamedir:
+            raise TacobError("give the folder Total Annihilation is installed in")
+        assets = load_assets(gamedir)
+        name = f"scripts/{unit}.cob"
+        if not assets.has(name):
+            raise TacobError(f"no {name} in {gamedir} — is `{unit}` the unit's own name?")
+        config = read_config()
+        config.update({"gamedir": str(Path(gamedir).expanduser()), "unit": unit})
+        write_config(config)
+        path = projects_dir() / unit
+        if not (path / PROJECT_FILE).is_file():
+            Project.open_unit(unit, path, config["gamedir"])
+        session = Session(Project(path), config["gamedir"])
+        old, self.session, self.unit = self.session, session, unit
+        if old is not None:
+            old.playing = False
+        if self.follow_gamedir and not self.gamedir:
+            self.gamedir = config["gamedir"]
+        return {"ok": True, "unit": unit, "gamedir": config["gamedir"],
+                "project": str(path), "config": str(user_dir() / CONFIG_FILE),
+                "url": self.base, "error": session.error}
+
     def _tick_loop(self):
         """The sim clock. Real time, so the page can just draw what it is given."""
         while self.running:
             s = self.session
-            if s.playing:
+            if s is None:
+                time.sleep(0.05)
+            elif s.playing:
                 s.step(1)
                 time.sleep(max(0.001, 1.0 / (SIM_RATE * max(0.05, s.speed))))
             else:
@@ -4442,8 +4762,7 @@ def roundtrip_one(blob: bytes, unit: str):
 def cmd_roundtrip(args):
     units = []
     if args.all:
-        ta3do = load_ta3do()
-        assets = ta3do.Assets(args.gamedir)
+        assets = load_assets(args.gamedir)
         for path in assets.glob("scripts/*.cob"):
             units.append((assets.read(path), Path(path).stem))
     for spec in args.units:
@@ -4520,14 +4839,14 @@ def pose_check(cls):
     the same staleness against the same buffer — the vertex buffer is a frame or
     two behind the pose the dump sampled, and neither implementation can do
     anything about that."""
-    folder = FIXTURES / cls
+    folder = fixtures_dir() / cls
     _header, lines = read_cobtrace(folder / "cobtrace.log")
     unit = (lines[0].fields[3] if lines and lines[0].kind == "S" else cls).lower()
     yaw, pieces = read_posedump_vertices(folder / "posedump.txt")
     blob, _ = read_cob_source(unit)
     cob = read_cob(blob)
     ta3do = load_ta3do()
-    _label, model = ta3do.resolve_model(ta3do.Assets(None), unit)
+    _label, model = ta3do.resolve_model(load_assets(), unit)
     frame = PieceFrame.from_3do(cob.pieces, ta3do.parse_3do(model))
     pos = [[0, 0, 0] for _ in cob.pieces]
     ang = [[0, 0, 0] for _ in cob.pieces]
@@ -4568,6 +4887,7 @@ def pose_check(cls):
 
 
 def cmd_pose_check(args):
+    fixtures_dir()
     reports = []
     for cls in (CLASSES if args.all else args.classes):
         if not (FIXTURES / cls / "posedump.txt").is_file():
@@ -4601,7 +4921,7 @@ def cmd_lint(args):
     frame = None
     if args.unit:
         ta3do = load_ta3do()
-        assets = ta3do.Assets(args.gamedir)
+        assets = load_assets(args.gamedir)
         _label, blob = ta3do.resolve_model(assets, args.unit)
         program = parse_bos(path.read_text(encoding="latin-1"), str(path),
                             (str(path.parent), str(INCLUDE_DIR)))
@@ -4637,14 +4957,145 @@ def cmd_pack(args):
     print(f"{out} ({out.stat().st_size} bytes): {', '.join(names)}")
 
 
+# --------------------------------------------------------------------------- the window
+#
+# The packaged tool is a folder a modder double-clicks, and what it has to open
+# is this same page over this same loopback server — never `file://`, because
+# every POST here checks the Origin and a `file://` page sends `null`
+# (`Server.is_ours`). So the launcher's whole job is: start the server, put a
+# window on `server.base`, and stay alive while it is up.
+
+WEBVIEW2_KEY = (r"SOFTWARE\Microsoft\EdgeUpdate\Clients"
+                r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}")
+
+
+def webview2_present() -> bool:
+    """Is the WebView2 runtime installed?
+
+    pywebview's Windows backend renders in WebView2 and silently falls back to
+    MSHTML when it is missing — and MSHTML has no ES modules, so the page's
+    import map would produce a blank window and no error anywhere. Detect it
+    ourselves and prefer the browser when it is absent."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+    except ImportError:
+        return False
+    for root, extra in ((winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY),
+                        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
+                        (winreg.HKEY_CURRENT_USER, 0)):
+        try:
+            with winreg.OpenKey(root, WEBVIEW2_KEY, 0, winreg.KEY_READ | extra) as key:
+                version, _kind = winreg.QueryValueEx(key, "pv")
+                if version and version != "0.0.0.0":
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def open_window(url, title="tacob", prefer_browser=False):
+    """Show the page, and say how. Returns `(how, why)`.
+
+    `how` is "webview" (a window of our own — and this call *blocks* until the
+    user closes it), "browser" (handed to the default browser, and the caller
+    keeps the process alive) or "none" (nothing opened; the URL is all the user
+    gets). `why` explains anything but the first."""
+    why = None
+    if prefer_browser:
+        why = "asked for the browser"
+    elif sys.platform == "win32" and not webview2_present():
+        why = "no WebView2 runtime — the page needs ES modules and MSHTML has none"
+    else:
+        try:
+            import webview
+        except ImportError:
+            why = "pywebview is not installed"
+    if why is None:
+        import webview
+        webview.create_window(title, url, width=1440, height=920)
+        webview.start()
+        return "webview", None
+    import webbrowser
+    return ("browser" if webbrowser.open(url) else "none"), why
+
+
+def wait_for_stop(note="  ctrl-c to stop"):
+    print(note, flush=True)
+    try:
+        while True:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+
+
+def open_session(unit, gamedir, project=None):
+    """The project for one unit, opening it from the archives the first time."""
+    path = Path(project) if project else projects_dir() / unit.lower()
+    if not (path / PROJECT_FILE).is_file():
+        Project.open_unit(unit, path, gamedir)
+    return Session(Project(path), gamedir)
+
+
+def cmd_gui(args):
+    """The packaged tool's front door: a window on the editor, and the picker
+    first when the game folder or the unit is not known yet."""
+    config = read_config()
+    unit = (args.unit or config.get("unit") or "").strip().lower()
+    session, why = None, None
+    try:
+        load_assets(args.gamedir)
+    except TacobError as err:
+        why = str(err)
+    if why is None and unit:
+        try:
+            session = open_session(unit, args.gamedir)
+        except (TacobError, SystemExit) as err:
+            why, session = str(err) or f"{unit} would not open", None
+    elif why is None:
+        why = "no unit chosen yet"
+    # `gui` installs into the game folder by default — that is what the window is
+    # for — and `serve` keeps its explicit flag. Either way the *operator* decides
+    # it: `--no-install` turns it off, and the picker only ever supplies the value.
+    install = None if args.no_install else (args.install or args.gamedir)
+    server = Server(session, args.host, args.port, install, unit=unit or None,
+                    follow_gamedir=not (args.no_install or args.install))
+    server.start()
+    try:
+        if session:
+            print(f"tacob: {session.project.unit} at {server.base}  "
+                  f"({len(session.cob.scripts)} scripts, {len(session.cob.pieces)} pieces)")
+            for d in session.diagnostics:
+                print(f"  {d['level']}: [{d['rule']}] {d['message'][:110]}")
+        else:
+            print(f"tacob: {server.base}")
+            print(f"  {why}")
+            print("  the page is asking where the game is installed")
+        if install:
+            print(f"  `pack` installs into {install}")
+        if args.no_open:
+            return wait_for_stop()
+        how, reason = open_window(server.base, "tacob — BOS/COB editor", args.browser)
+        if how == "webview":
+            return                                   # the window closed; so do we
+        if how == "browser":
+            print(f"  opened in your browser ({reason})" if reason else "  opened")
+        else:
+            print(f"  no window and no browser ({reason}) — open {server.base} yourself")
+        wait_for_stop("  this window keeps tacob running; close it to stop")
+    finally:
+        server.close()
+
+
 def cmd_serve(args):
     if args.unit:
-        path = Path(args.project) if args.project else PROJECTS / args.unit.lower()
+        path = Path(args.project) if args.project else projects_dir() / args.unit.lower()
         if not (path / PROJECT_FILE).is_file():
             Project.open_unit(args.unit, path, args.gamedir)
         project = Project(path)
     else:
-        project = Project(args.project or PROJECTS)
+        project = Project(args.project or projects_dir())
     session = Session(project, args.gamedir)
     server = Server(session, args.host, args.port, args.install)
     server.start()
@@ -4660,12 +5111,8 @@ def cmd_serve(args):
         print(f"  stepped {args.ticks} ticks, {len(session.trace)} trace lines")
         server.close()
         return
-    print("  ctrl-c to stop")
     try:
-        while True:
-            time.sleep(0.5)
-    except KeyboardInterrupt:
-        pass
+        wait_for_stop()
     finally:
         server.close()
 
@@ -4728,6 +5175,21 @@ def main(argv=None):
     p.add_argument("--force", action="store_true", help="overwrite an existing BOS")
     p.set_defaults(fn=cmd_open)
 
+    p = sub.add_parser("gui", help="the editor in a window — the packaged tool's front door")
+    p.add_argument("unit", nargs="?", help="a stock unit; the picker asks when it is new")
+    p.add_argument("--gamedir")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=0)
+    p.add_argument("--browser", action="store_true",
+                   help="the default browser, never a window of our own")
+    p.add_argument("--no-open", action="store_true",
+                   help="serve only and print the URL (what the gate drives)")
+    p.add_argument("--install", metavar="GAMEDIR",
+                   help="where `pack` installs (default: the game folder itself)")
+    p.add_argument("--no-install", action="store_true",
+                   help="`pack` writes the .ufo into the project and installs nothing")
+    p.set_defaults(fn=cmd_gui)
+
     p = sub.add_parser("serve", help="the editor page and the VM behind it")
     p.add_argument("unit", nargs="?", help="a stock unit; opens the project if new")
     p.add_argument("--project")
@@ -4763,6 +5225,12 @@ def main(argv=None):
     p.set_defaults(fn=cmd_template)
 
     args = ap.parse_args(argv)
+    # One place decides where the game is: the flag, then $TA3DO_GAMEDIR (which
+    # `ta3do` reads for itself), then the folder the picker saved. Without this
+    # the packaged tool would fall back to `ta3do.repo_root()`, which looks for a
+    # checkout that is not there.
+    if hasattr(args, "gamedir"):
+        args.gamedir = resolve_gamedir(args.gamedir)
     try:
         args.fn(args)
     except TacobError as e:

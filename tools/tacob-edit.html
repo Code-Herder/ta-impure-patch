@@ -12,8 +12,15 @@
      the POSTs /build /transport /event /world /pack /template.
 
      JavaScript comes from a CDN through the import map below, the ta3do-view.html
-     idiom; nothing is vendored into git. If CodeMirror will not load the editor
-     falls back to a plain textarea and everything else still works. -->
+     idiom; nothing is vendored into git. The packaged folder has no network, so
+     `tools/tacob-build.py vendor` fetches pinned, checksummed copies into
+     `tools/vendor/` and the *server* rewrites this map on the way out
+     (`tacob.rewrite_import_map`) — which is why every entry here must be a
+     cdn.jsdelivr.net URL, and why the CodeMirror entries point at each package's
+     own `dist/index.js` with its bare imports rather than at a `+esm` bundle:
+     those inline their dependencies, and two copies of @codemirror/state break
+     CodeMirror. If CodeMirror will not load the editor falls back to a plain
+     textarea and everything else still works. -->
 <meta charset="utf-8">
 <title>tacob</title>
 <style>
