@@ -15,8 +15,8 @@ when frozen — which is this spec's `.` destination. `tools/tacob_app.py` is th
 only real entry point, and its import block is what puts the standard library
 those three use into the bundle.
 
-Paths are derived from `SPECPATH`, never written down: nothing about this
-machine belongs in a tracked file.
+Paths are derived from `SPECPATH`, never written down: nothing about the
+build host belongs in a tracked file.
 """
 
 from pathlib import Path

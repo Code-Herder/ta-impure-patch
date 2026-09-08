@@ -357,7 +357,7 @@ joiner to connect back. Nothing upstream appears to be in progress on it.
 ### The IPX branch is closed, for two independent reasons
 
 1. **The kernel no longer has IPX.** `CONFIG_IPX` was dropped in Linux **5.15**;
-   this machine runs 7.0 and `/boot/config` has `CONFIG_ATALK` and
+   the reference setup runs 7.0 and `/boot/config` has `CONFIG_ATALK` and
    `CONFIG_NETROM` but no `CONFIG_IPX`, and `modinfo ipx` finds nothing. Wine's
    IPX support needs `AF_IPX` sockets from the kernel.
 2. **It would not help anyway.** `loader/wine.inf.in` registers *both* providers
@@ -394,7 +394,7 @@ archive.org copy is unmodified.
 Extraction needed no new packages: the outer cabinet is **LZX**, which no
 installed tool handled, so `tools/dptest/`'s sibling trick was used — a small
 mingw program driving `cabinet.dll`'s FDI API under wine, i.e. wine's own LZX
-decoder. (`cabextract`, `7z`, `bsdtar` and `gcab` are all absent on this box, and
+decoder. (`cabextract`, `7z`, `bsdtar` and `gcab` are all absent on the reference setup, and
 wine's `expand` only does `infile outfile`.)
 
 **The original framing, kept because it is still true of Feb 2010:**
@@ -432,14 +432,14 @@ November 2024 and no MR for host support was found.
 
 ### Practical notes for whoever picks this up
 
-- **A wine 11 is already on this machine, with nothing to download**:
+- **A wine 11 is already on the reference setup, with nothing to download**:
   `~/.steam/steam/steamapps/common/Proton - Experimental/files/bin/wine` reports
   `wine-11.0` (build `experimental-11.0-20260826`) and runs 32-bit PEs from a
   plain `WINEPREFIX` with no Steam runtime — that is how the table above was
   measured. It ships i386 `dplayx.dll`, `dpwsockx.dll`, `dplaysvr.exe`.
   **Whether TA + the tagpu `ddraw` override run under it is untested.**
 - Ubuntu 24.04's `wine` is pinned at 9.0 in `noble/universe`; WineHQ's own repo
-  is not configured on this box. WineHQ packages install under `/opt/wine-*`, so
+  is not configured on the reference setup. WineHQ packages install under `/opt/wine-*`, so
   a newer wine can coexist with the distro one rather than replacing it.
 - **`tacli` drives this now** (2026-09-02). `tacli launch <inst> --dplay` installs
   native DirectPlay into that instance's prefix and appends

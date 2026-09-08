@@ -43,7 +43,7 @@ repo and `vendor/` searched 2026-09-07]`
 | The format | header, opcode values, GET/SET IDs 1–20, piece-name binding, thread pool | `file-formats.md` §2 |
 | The assets | HPI/UFO/CCX archives, 3DO tree, GAF textures, palette, FBI fields, glTF export with **one node per 3DO piece, named after it, children kept** | `tools/ta3do` (`model_to_gltf` docstring) |
 
-Not present anywhere on this machine: a BOS→COB compiler, a COB→BOS decompiler, a COB VM
+Not present anywhere on the reference setup: a BOS→COB compiler, a COB→BOS decompiler, a COB VM
 (`tascene` is bind-pose *by design* — "offline there is no COB VM"), Cavedog's Scriptor, or any
 `.bos` source `[VERIFIED — `find` over the checkout, `vendor/`, the game dir and the Wine
 prefix]`. The owner cannot obtain the Cavedog BOS sources.

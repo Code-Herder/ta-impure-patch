@@ -2070,8 +2070,8 @@ with `0x4C6B70(edi, [globals+0x1BE], [globals+0x1B6], [globals+0x1BA])`**, and u
 back buffer holds the cursor only between two calls inside the flip: at the flip's entry it
 does not, and a diff taken there never sees the cursor. The surface-lost arm re-copies
 `[globals+0x98]`; the GDI arm copies into `globals+0x50` and presents with `StretchDIBits`
-[INFERRED from the IAT slot]. **MEASURED: the shell flips about 5 000 times a second** on this
-machine (31 678 flips in the first 6 s of a launch); in game once per `DrawGameScreen`.
+[INFERRED from the IAT slot]. **MEASURED: the shell flips about 5 000 times a second** on the
+reference setup (31 678 flips in the first 6 s of a launch); in game once per `DrawGameScreen`.
 
 ### The GUI is retained: `GUI_StageUpdateDraw 0x4A81E0` builds, `0x4AB0B0` blits [VERIFIED]
 

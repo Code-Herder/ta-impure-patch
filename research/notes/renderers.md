@@ -169,7 +169,7 @@ BatchNorm folded at export, output = input − net(input). The exported graph is
 22,251 parameters, 29.79 dB **[SOURCE `unditherer/models/models.json`]**. **Only the full
 model is in scope** (decided before the engine question was settled).
 
-**Engines measured, full model, this machine (Ryzen + RTX 4070)** **[MEASURED 2026-09-04]**:
+**Engines measured, full model, the reference setup (Ryzen + RTX 4070)** **[MEASURED 2026-09-04]**:
 
 | Engine | 32×32 | 64×64 | Notes |
 |---|---|---|---|

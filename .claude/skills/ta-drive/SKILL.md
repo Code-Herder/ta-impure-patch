@@ -532,7 +532,7 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
   `TotalA.exe` thread reading `anon_pipe_read` in `/proc/<pid>/task/*/wchan` is a wineserver
   wait, not a spin. Measured 2026-09-07: a call-site redirect whose rel32 was computed against
   the wrong address froze the tank fixture at tick 244 every run, deterministically, and
-  looked exactly like a hang. ptrace is off on this machine, so there is no backtrace to be
+  looked exactly like a hang. ptrace is off on the reference setup, so there is no backtrace to be
   had — bisect the change instead (the cobtrace module's `-alloc -run -ret -kill -rand`
   tokens exist for that).
 - **Cursor and hover state, without a screenshot**: `main+0x2CBE` is the cursor index the

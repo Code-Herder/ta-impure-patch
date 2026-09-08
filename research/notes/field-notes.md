@@ -57,7 +57,7 @@ lock-screen gotcha below.
   0x401000; `.data` @ 0xFF600 / VA 0x501000), the `teleporter` FBI tag (VA 0x503BA4), and
   `InitInternalCommand` (VA 0x4B7760) are all exactly where the community corpus says. **The entire
   ~470-address corpus therefore applies to our binary verbatim.** [VERIFIED]
-- **2026-08-31 — Display is `:1`, not `:0`.** This box is X11 (`XDG_SESSION_TYPE=x11`) but the live
+- **2026-08-31 — Display is `:1`, not `:0`.** The reference setup is X11 (`XDG_SESSION_TYPE=x11`) but the live
   server socket is `/tmp/.X11-unix/X1`; `:0` has no socket. Anything GUI (wine, screenshots) needs
   `DISPLAY=:1`. The agent sandbox also blocks X entirely — GUI launches must run unsandboxed.
 - **2026-08-31 — Dedicated wine prefix**, not Proton, for fast iteration:
@@ -204,7 +204,7 @@ cost time; each is a landmine for the next GL-hook we add.
   factory dies at `CreateDXGIFactory2` → `wined3d_caps_gl_ctx_create Failed to create a window`
   → `dxgi_factory_create ... hr 0x887a0004` (`DXGI_ERROR_UNSUPPORTED`), which reads like "this
   GPU cannot do D3D12" and is not. An agent shell's inherited `DISPLAY=:0` is usually the wrong
-  one — check `/tmp/.X11-unix` and `xdpyinfo` (this machine's live session is `:1`). [VERIFIED]
+  one — check `/tmp/.X11-unix` and `xdpyinfo` (the reference setup's live session is `:1`). [VERIFIED]
 
 
 ## G2 state-read — findings (2026-08-31)

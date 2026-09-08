@@ -5,7 +5,7 @@ description: Capture screenshots and video of Total Annihilation on the tagpu st
 
 # TA capture (tagpu project)
 
-Adapted from an earlier capture skill; TA-specific rules earned in the Phase B-D
+TA-specific rules earned in the Phase B-D
 sessions. **Fold new lessons back into this file.**
 
 **Launching and driving the game is the `ta-drive` skill** (`tools/tacli`): instances,

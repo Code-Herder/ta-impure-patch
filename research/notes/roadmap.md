@@ -11,7 +11,7 @@ into its OpenGL present loop, and load a companion DLL that hooks the engine, re
 through the community's verified struct map, suppresses the engine's software unit blits, and draws
 real 3D in their place — original 3DO geometry first, enhanced materials next, replacement glTF
 models later, and a full GPU scene (terrain + features + units) as the endgame. Proton-first on
-this machine; the Steam exe is stock 3.1 layout, so the entire researched address corpus applies.
+the reference setup; the Steam exe is stock 3.1 layout, so the entire researched address corpus applies.
 
 > **Looking for the current state rather than the history?**
 > [GPU status, hooks & limits](gpu-status.html) is the one-page view: what is ours today, every
