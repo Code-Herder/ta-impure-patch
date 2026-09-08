@@ -164,17 +164,41 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x485070` | `GetPosHeight(POS16_16*)` (`ret 4`) | *called by us*, on the render thread — a pure read of the height grid, which is what makes a range circle follow the terrain |
 | `0x4CCF60` | the glyph blitter (**cdecl**, 9 args, base and pitch taken directly) | *called by us*, on the present thread, once per distinct string — it reads the font object and writes our atlas and touches no engine state at all (`tagpu_text.c`) |
 
-**The selection rect turns with its unit's whole angle triple.** The four model-space corners
-take `Rz(u+0x64)`, `Rx(u+0x68)`, `Ry(u+0x66)` — `0x4B6CC0`'s order and `rot2`'s sense, which is
-what `0x467A50` does to the same four points. Until 2026-09-08 the loop used the *transposed*
-yaw, a rotation by −heading, so a unit turning on the spot had its box turning the other way
-(2× the heading off, so invisible at every multiple of 45° and obvious between them); the tilt
-words were dropped entirely, which is worth a further 5–10 px on a hillside, where a tank
-carries up to 17° of bank and 31° of pitch. The engine's own box is the oracle: `mark.on=noselbox`
-hands the rect back while everything else stays ours, so at 1× both boxes land in one `glshot`
-and even a moving unit compares cleanly. **Open**: ours is still ~11 px taller than the engine's
-at 1× — `aabb_walk` and `0x4CB650` do not agree about the model's bounding box
-([UI markers](ui-markers.html) §1).
+**The selection rect is drawn at 1x, after the downsample, and matches the engine's pixels.**
+Four things had to be right and none of them was ([UI markers](ui-markers.html) §1, all measured
+2026-09-08 against the engine's own rect — `mark.on=noselbox` hands it back while everything
+else stays ours, so both boxes land in one `glshot`):
+
+1. **The rotation.** The four corners take `0x4B6CC0`'s triple — `Rz(u+0x64)` on `(x,y)`,
+   `Rx(u+0x68)` on `(y,z)`, `Ry(u+0x66)` on `(x,z)` — which is what `0x467A50` does to these
+   same points. The loop used the *transposed* yaw until 2026-09-08: a rotation by −heading, so
+   a unit turning on the spot had its box turning the other way (2× the heading off — invisible
+   at every multiple of 45°, obvious between them). The tilt words are not decoration either: a
+   tank on a hillside carries up to 17° of bank and 31° of pitch.
+2. **The bounds.** `0x4CB650(model,&min,&max,**0**)` seeds min and max with the ORIGIN, skips
+   any node with fewer than three vertices, and with that last argument 0 never leaves the root
+   node — so the rect is the root piece's own vertices, not the whole tree. Ours was the whole
+   tree and stood ~11 px taller with the bottoms aligned. `aabb_walk` is unchanged (it is the
+   shadow pass's model height); the rect has its own `selbox_aabb`.
+3. **The arithmetic.** The engine truncates each term of the projection separately and halves
+   the height with `sar 1` *after* truncating it. One float expression instead is a pixel out on
+   some edges: 46 of ~110 box pixels differed until that was reproduced, 7 after.
+4. **The line.** The engine's is Bresenham (`0x4BE950`): one fully coloured pixel per major-axis
+   step. Ours was a GL line in the 2x supersampled FBO, and **the driver clamps aliased line
+   width to 1** — `glLineWidth(ss*3)` was measured to draw pixel-identically to
+   `glLineWidth(ss)` — so it was one SUPERSAMPLE wide and resolved to about half the engine's
+   colour, (66,136,56) against a flat (83,223,79). It is now drawn into the **1x FBO right after
+   the box-downsample**, with the supersampled depth blitted down (`GL_NEAREST`, the only filter
+   a depth blit takes) so it still sits under its own unit. 100 % of our box pixels are then
+   exactly the engine's colour, and its own box differs from ours on 5–18 pixels of ~110 — a
+   Bresenham step landing on the other neighbour, or a pixel where ours is correctly occluded
+   and the A/B's engine box (which composites over our whole world) is not.
+
+Two consequences worth knowing. The rect now draws **after** the marker layer, so where a box
+edge crosses a health bar our line wins where the engine's bar would; the bars sit inside the box
+on every stock unit measured. And the same supersampling that dimmed the rect dims **every line
+and glyph the marker layer draws** — bars, order lines, range circles, the text atlas — which is
+the same fix one layer up, and is not done.
 
 **The order block is PORTED, not captured, since G13o.** `tagpu_order.c` re-derives §3 of
 [UI markers](ui-markers.html) — the driver's three selection rules, the walker's

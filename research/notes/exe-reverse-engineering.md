@@ -3008,8 +3008,24 @@ in the unit's own frame and adds the unit's world position — `+0x6A` x, `+0x6E
   selection rect did until 2026-09-08, `ui-markers.md` §1) is therefore right on level ground
   and a few pixels out on a hillside. `+0x66` alone stays correct for the *body* geometry only
   because the engine bakes just the yaw into `vbuf` (`pose_dump`, err 0.00).
+- **`0x4CB650(model, &min, &max, flag)` is not a whole-tree AABB unless you ask for one.**
+  `[BINARY-VERIFIED 2026-09-08]` It seeds both vectors with `{0,0,0}` (`0x4CB65D`..`0x4CB675`)
+  and calls `0x4CB6A0(node, offset, min, max, flag)`, which accumulates the node's own vertices
+  (`node+0x24`, count `node+0x04`, offset `node+0x10/14/18` added and passed down to the child)
+  — but **skips a node with fewer than three vertices** (`0x4CB6D9` `cmp $2,eax; jle`, the
+  `0x45AF1B` threshold again) and **recurses into the child (`+0x30`) and the sibling (`+0x2C`)
+  only when `flag` is non-zero** (`0x4CB780` `test ebp,ebp; je`). The sibling is walked with the
+  *caller's* offset, the child with the accumulated one. `DrawUnitSelectBoxRect` passes
+  `flag = 0` (`push $0` @`0x46A55A`), so a selection box is the ROOT PIECE's vertices unioned
+  with the model origin — which is what makes it smaller than the model.
 
-**`0x4B6CC0(out, in, angles)`** rotates one vector by the three words, and **fixes the order**:
+**`0x4B6CC0(in, out, angles)`** rotates one vector by the three words, and **fixes the order**.
+*[CORRECTED 2026-09-08: the argument order is `(in, out, angles)` — `0x4B6CC4` takes arg1 as the
+source and `0x4B6D09` writes arg2 — which is what `effects.md` says.]* The rotation reads its
+angle words at `angles+0x00` for the `(x,y)` pair (`0x4B6CD6`), `angles+0x04` for `(y,z)`
+(`0x4B6CF6`) and `angles+0x02` for `(x,z)` (`0x4B6D1B`) — so for a caller passing a bare triple,
+word[0] drives the FIRST rotation and word[2] the second. Against a `PrimitiveStruct`, whose
+angle words sit at `+0x10/12/14`, that is:
 
 | Order | Pair rotated | `PrimitiveStruct` word | COB axis operand |
 |---|---|---|---|
