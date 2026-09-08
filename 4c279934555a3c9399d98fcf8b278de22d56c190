@@ -1,0 +1,2 @@
+landing-review: model=opus effort=high range=main..4c27993 findings=9 acted=9 rejected=0 deferred=2 date=2026-09-03
+deferred: per-sprite stencil isolation for the nanoframe wireframe's hidden-line removal; the cargo merge's height bias for a cargo not level with its parent. Both documented as gaps.

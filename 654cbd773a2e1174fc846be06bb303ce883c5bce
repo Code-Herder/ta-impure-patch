@@ -1,0 +1,1 @@
+landing-review: model=opus effort=high range=main..654cbd7 findings=13 acted=9 rejected=4 date=2026-09-04 note=two agents in parallel; rejected: 0x41074A characterisation (unverifiable at that VA), SCN_WORLD_MAX overflow (unreachable, in_map gates it), unit_facts bmcode default (documented not changed), shift=0 queue wipe (documented, latent, no fixture affected)
