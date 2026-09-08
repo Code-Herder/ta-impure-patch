@@ -174,7 +174,28 @@ the delta (`~1400 px/s`, clamp 0.15–3 s) → park → re-read. Break when with
    and |r−b|<60` on every 3rd pixel), then flag frames <70% of the average;
    assemble suspect±1 frames into a strip with Pillow and eyeball them.
 4. A unit vanishing = empty-composite flicker (see r3dcache); pieces missing =
-   partial render; pose jumps = temporal aliasing (one-frame lag, cosmetic).
+   partial render; a pose that is **wrong for one frame and right on both
+   neighbours** is the render thread reading the engine's posed vertex buffer
+   while the game thread rewrites it (gpu-status §2.9) — not aliasing, and not
+   cosmetic: at rest orientation it is ~1400 changed pixels at 2× zoom.
+
+5. **A transient-ranked frame is a candidate, not a finding.** The useful
+   detector is "differs from both neighbours while the neighbours agree with
+   each other" — it rejects smooth motion and animated water — but a unit
+   *rotating* passes it too, because frame k−1 and k+1 can resemble each other
+   while k sits between them. Every ranked frame up to ~600 changed pixels on a
+   walking commander at 2× turned out to be ordinary yaw or a leg swing. Open
+   the strip before believing the number, and prefer an in-DLL oracle over a
+   pixel threshold whenever the bug has one.
+
+6. **A race needs scheduling pressure, not a longer run.** A window that is
+   microseconds wide and opens tens of times a second is essentially never
+   sampled on an idle 32-core box: a minute of walking caught it zero times
+   over four runs. `taskset -acp 0 <pid>` on the game plus two or three
+   spinners pinned to the same core makes its own render and game threads
+   timeshare — which is what a loaded machine does to a player — and brought
+   the same walk to five to twelve catches a minute. One core of the box, and
+   nothing else on it touched; unpin afterwards.
 
 ## Launching (see the ta-drive skill for the full driving surface)
 

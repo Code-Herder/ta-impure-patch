@@ -164,7 +164,24 @@
 #define WR_ZPOS      0x0C      /* i32 16.16 altitude  (>>16 = world units)   */
 #define WR_YPOS      0x10      /* i32 16.16 world z   (>>16 = map depth)     */
 #define O3_NUMPARTS  0x00
+#define O3_POSEDIRTY 0x08      /* i32: the posed vertex buffers are stale or */
+                               /* being rewritten. Set before the rewrite    */
+                               /* (0x45AC89 / 0x45AB6C, and by the COB piece */
+                               /* MOVE/TURN setters 0x480C90 / 0x480D22),    */
+                               /* cleared only after the compose returns     */
+                               /* (0x45AD28 / 0x45AC0A) -- and the rewrite is */
+                               /* ENTERED only when it is non-zero, so zero   */
+                               /* on both sides of a read means the engine    */
+                               /* was not touching the buffer                */
 #define O3_THISUNIT  0x0C
+#define O3_BTURN     0x18      /* u16[3] the body turn the compose folds into */
+                               /* the BASE piece's own turn (0x45B0DB): +0x18 */
+                               /* <- unit+0x64 (about Z), +0x1A <- unit+0x66  */
+                               /* (the yaw, about Y), +0x1C <- unit+0x68      */
+                               /* (about X). The cached copy, up to 8 behind  */
+                               /* the live unit -- and it is what was baked   */
+#define O3_BASEPRIM  0x1E      /* PrimitiveStruct* the reset walk and the     */
+                               /* compose both start from                     */
 #define O3_PRIM0     0x22
 #define PRIM_STRIDE  0x36
 #define P_NODE       0x00
@@ -321,6 +338,12 @@ static int    s_wrecks = 0;            /* "wrecks" token present            */
 static int    s_ss     = 1;            /* 2x supersample (tagpu_ss.off)     */
 static int    s_subpix = 1;            /* sub-pixel motion (tagpu_subpix.off)*/
 static int    s_spxlog = 0;            /* anchor filmstrip (tagpu_spxlog.on) */
+static int    s_posefix  = 1;          /* pose-race guard (tagpu_posefix.off) */
+static int    s_posewatch = 0;         /* the guard's evidence (posewatch.on) */
+static int    s_poserecon = 0;         /* force the fallback (poserecon.on)   */
+static unsigned s_poseGuard = 0;       /* reads the guard refused, per log line */
+static unsigned s_poseNorecon = 0;     /* ... of those, with no reconstruction  */
+static float  s_poseErrMax = 0.0f;     /* worst |engine - fields|, per log line */
 static int    s_nano   = 1;            /* build-state look (tagpu_nano.off)  */
 static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_palTex;
 static GLuint s_fogTex, s_fogLutTex, s_cprog, s_cvao, s_cvbo;
@@ -1030,8 +1053,55 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
 
 static float s_P[MAXNODEV * 3];     /* one node's model-space vertices */
 
-static int emit_geom(const char* o3, int nv, float ax, float ay,
-                     float wx0, float wz0, float encBase, int owner)
+/* ---- the pose race, and the guard that closes it ----------------------
+   THE ENGINE REWRITES EVERY POSED VERTEX BUFFER IN PLACE, ON THE GAME
+   THREAD, AND IN TWO STAGES. `DrawUnit 0x45AC20` (and the COB's own
+   `0x45AB10`) first copy each piece's REST vertices back over `prim+0x22`
+   -- `rep movs` at 0x45ACDD for the base piece and inside 0x45B030 for the
+   rest of the tree -- and only then compose the piece turns and the body
+   turn into them (0x45B0A0 -> 0x45B150, which rotates each vertex where it
+   lies and then adds the parent origin to it). This pass gathers on the
+   RENDER thread. A read landing between the two stages draws the unit at
+   REST: upright, front-on, no body yaw -- the one-frame pose pop a walking
+   commander showed at ~1400 changed pixels at 2x zoom, three frames of a
+   62-second walk (research/notes/gpu-status.md, the pose-race row).
+
+   `Object3do+0x08` brackets that window exactly. It is set to 1 before the
+   reset -- 0x45AC89 and 0x45AB6C when the body turn moved, 0x480C90 and
+   0x480D22 when a COB `move`/`turn` opcode writes a piece -- and cleared
+   only after the compose returns (0x45AD28 / 0x45AC0A); the rewrite is
+   entered ONLY when it is non-zero. So a piece read with the flag zero on
+   both sides of the read is a piece the engine was not rewriting.
+
+   The flag is also 1 while the buffers are merely STALE (a COB write the
+   next DrawUnit has not composed yet), which is most of what trips the
+   guard and would be perfectly safe to draw. We do not try to tell the two
+   apart -- nothing in the struct does -- and instead emit the unit from the
+   pose FIELDS: `pose_accum`'s reconstruction, the one `pose_dump`'s `err=`
+   and `tools/tacob pose-check --all` check the engine's own buffer against
+   (residual 2e-5 model units). That is the pose the engine is on its way
+   to, it is built from fields no one is rewriting behind us, and it lands
+   in the same 16.16 representation, so the two paths cannot disagree about
+   anything but the tick. `tagpu_posefix.off` takes the guard out.
+
+   x86 does not reorder loads with loads, so only the COMPILER has to be
+   kept from moving the vertex copy across the flag reads. */
+#define POSE_BARRIER() __asm__ __volatile__("" ::: "memory")
+
+static int         recon_begin(const char* o3);
+static const int*  recon_prim(int p, const char* nd, int nvert);
+
+/* `torn` non-NULL arms the guard: it is set to 1 if any piece was read while
+   the engine held the pose dirty. THE WALK STILL FINISHES — the emission this
+   produces has to be exactly the one the pass made before the guard existed,
+   or `tagpu_posefix.off` would silently be a second fix (detect, then read
+   again a few microseconds later, by which time the repose has finished) and
+   there would be no baseline to measure the fix against. `recon` takes the
+   vertices from the reconstruction instead of the engine, and the caller must
+   have had recon_begin() succeed for this Object3do. */
+static int emit_geom_at(const char* o3, int nv, float ax, float ay,
+                        float wx0, float wz0, float encBase, int owner,
+                        int* torn, int recon)
 {
     s_emitTop = -1e9f;
     int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
@@ -1048,16 +1118,66 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
         if (!(pflags & 1)) continue;
         int pieceShaded = anyShadeFlag ? ((pflags & 4) != 0) : 1;
         const char* nd = *(const char* const*)(pr + P_NODE);
-        const int*  vb = *(const int* const*)(pr + P_VBUF);
-        if (!ptr_ok(nd) || !ptr_ok(vb)) continue;
+        if (!ptr_ok(nd)) continue;
         int nvert = *(const int*)(nd + N_VCOUNT);
-        if (nvert <= 0 || nvert > MAXNODEV || IsBadReadPtr(vb, (SIZE_T)nvert * 12)) continue;
+        if (nvert <= 0 || nvert > MAXNODEV) continue;
+        const int* vb;
+        if (recon) {
+            vb = recon_prim(p, nd, nvert);
+            if (!vb) continue;
+        } else {
+            vb = *(const int* const*)(pr + P_VBUF);
+            if (!ptr_ok(vb) || IsBadReadPtr(vb, (SIZE_T)nvert * 12)) continue;
+        }
         int i;
-        for (i = 0; i < nvert * 3; i++) s_P[i] = (float)vb[i] / 65536.0f;
+        if (torn) {
+            int d0 = *(const volatile int*)(o3 + O3_POSEDIRTY);
+            POSE_BARRIER();
+            for (i = 0; i < nvert * 3; i++) s_P[i] = (float)vb[i] / 65536.0f;
+            POSE_BARRIER();
+            if (d0 || *(const volatile int*)(o3 + O3_POSEDIRTY)) *torn = 1;
+        } else {
+            for (i = 0; i < nvert * 3; i++) s_P[i] = (float)vb[i] / 65536.0f;
+        }
         nv = emit_node(nd, s_P, nvert, nv, ax, ay, wx0, wz0, encBase, owner,
                        pieceShaded, -1, 0);
     }
     return nv;
+}
+
+static void recon_watch(const char* o3, const char* why);
+
+static int emit_geom(const char* o3, int nv, float ax, float ay,
+                     float wx0, float wz0, float encBase, int owner)
+{
+    int nv0 = nv, torn = 0;
+    /* tagpu_poserecon.on takes the fallback for EVERY unit on every frame. It
+       is not a play setting: it is how the fallback is checked against the
+       path it replaces -- same scene, same pose, the two renders diffed. */
+    if (s_poserecon && recon_begin(o3))
+        return emit_geom_at(o3, nv0, ax, ay, wx0, wz0, encBase, owner, NULL, 1);
+    if (!s_posefix && !s_posewatch)
+        return emit_geom_at(o3, nv0, ax, ay, wx0, wz0, encBase, owner, NULL, 0);
+    /* the oracle runs on EVERY frame, before the guard, so that a frame the
+       guard let through is measured too — otherwise the two could never be
+       told apart */
+    if (s_posewatch) recon_watch(o3, "poll");
+    nv = emit_geom_at(o3, nv0, ax, ay, wx0, wz0, encBase, owner, &torn, 0);
+    if (!torn) return nv;
+    s_poseGuard++;
+    if (recon_begin(o3)) {
+        if (s_posewatch) recon_watch(o3, "guard");
+        if (s_posefix)
+            return emit_geom_at(o3, nv0, ax, ay, wx0, wz0, encBase, owner, NULL, 1);
+    } else if (s_posefix) {
+        s_poseNorecon++;
+    }
+    /* the guard measuring only (tagpu_posefix.off, which still runs it so the
+       watch can say what the fix WOULD have refused), or a model with no
+       reconstruction to be had -- a broken piece tree, an unreadable vertex
+       list. Either way the engine's buffer as it stands, which is what this
+       pass did before the guard, rather than dropping the unit for a frame. */
+    return emit_geom_at(o3, nv0, ax, ay, wx0, wz0, encBase, owner, NULL, 0);
 }
 
 /* ---- the structure shadow: the engine's cached slant projection --------
@@ -1084,8 +1204,9 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
    what left the Kbot lab on the shore with its shadow erased below the
    waterline until G14j. Flat vertices (uv -1), so the FS takes the flat path
    and never samples the atlas for them; the shade is the neutral row. */
-static int emit_slant(const char* o3, int nv, float ax, float ay,
-                      float wx0, float wz0, float encBase)
+static int emit_slant_at(const char* o3, int nv, float ax, float ay,
+                         float wx0, float wz0, float encBase,
+                         int* torn, int recon)
 {
     int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
     if (nparts <= 0 || nparts > 64) return nv;
@@ -1096,12 +1217,21 @@ static int emit_slant(const char* o3, int nv, float ax, float ay,
         unsigned char pflags = *(const unsigned char*)(pr + P_FLAGS);
         if ((pflags & 3) != 3) continue;
         const char* nd = *(const char* const*)(pr + P_NODE);
-        const int*  vb = *(const int* const*)(pr + P_VBUF);
-        if (!ptr_ok(nd) || !ptr_ok(vb)) continue;
+        if (!ptr_ok(nd)) continue;
         int nvert = *(const int*)(nd + N_VCOUNT);
         int nface = *(const int*)(nd + N_FCOUNT);
         const char* faces = *(const char* const*)(nd + N_FACES);
-        if (nvert <= 0 || nvert > MAXNODEV || IsBadReadPtr(vb, (SIZE_T)nvert * 12)) continue;
+        if (nvert <= 0 || nvert > MAXNODEV) continue;
+        const int* vb;
+        int d0 = 0;
+        if (recon) {
+            vb = recon_prim(p, nd, nvert);
+            if (!vb) continue;
+        } else {
+            vb = *(const int* const*)(pr + P_VBUF);
+            if (!ptr_ok(vb) || IsBadReadPtr(vb, (SIZE_T)nvert * 12)) continue;
+            if (torn) { d0 = *(const volatile int*)(o3 + O3_POSEDIRTY); POSE_BARRIER(); }
+        }
         if (nface <= 0 || nface > 512 || !ptr_ok(faces)) continue;
         if (IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) continue;
         int j = *(const int*)(nd + N_SELPRIM) != -1 ? 1 : 0;
@@ -1141,8 +1271,36 @@ static int emit_slant(const char* o3, int nv, float ax, float ay,
                 }
             }
         }
+        if (torn && !recon) {
+            POSE_BARRIER();
+            if (d0 || *(const volatile int*)(o3 + O3_POSEDIRTY)) *torn = 1;
+        }
     }
     return nv;
+}
+
+/* Same three attempts as emit_geom's: the engine's buffer under the guard,
+   the reconstruction when the guard trips, and the engine's buffer as it
+   stands if there is no reconstruction to be had. A structure's pose dirties
+   whenever its script animates -- a radar dish, a solar rotor, a factory
+   door -- so the cached slant projection is exposed to the same race the
+   body was, and a rest-pose shadow is as wrong there as anywhere. */
+static int emit_slant(const char* o3, int nv, float ax, float ay,
+                      float wx0, float wz0, float encBase)
+{
+    int nv0 = nv, torn = 0;
+    if (s_poserecon && recon_begin(o3))
+        return emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, NULL, 1);
+    if (!s_posefix) return emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, NULL, 0);
+    nv = emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, &torn, 0);
+    if (!torn) return nv;
+    s_poseGuard++;
+    if (recon_begin(o3))
+        return emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, NULL, 1);
+    /* the body pass runs first for the same unit and logs the watch line, so
+       there is nothing to add here beyond the counter */
+    s_poseNorecon++;
+    return emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, NULL, 0);
 }
 
 /* ---- nanoframe wireframe (engine 0x458FA0, build-state.md) ----------------
@@ -1435,9 +1593,14 @@ typedef struct {
     unsigned char done[64];     /* 0 = tree link broken, piece left at rest  */
 } HPOSE;
 
-static int pose_accum(const char* o3, HPOSE* h)
+/* `bt` non-NULL folds the body turn into the BASE piece's own turn, exactly
+   where the compose adds it (0x45B0DB, only on the top-level call) -- the
+   reconstruction needs it because P_VBUF holds the body-rotated pose, while
+   hires_pose and pose_dump want model space and pass NULL. */
+static int pose_accum_body(const char* o3, HPOSE* h, const unsigned short* bt)
 {
     short parent[64];
+    const char* basePrim = bt ? *(const char* const*)(o3 + O3_BASEPRIM) : NULL;
     int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
     const char** nd = h->nd;
     const char** pr = h->pr;
@@ -1471,11 +1634,18 @@ static int pose_accum(const char* o3, HPOSE* h)
             {
                 const int* off = (const int*)(nd[i] + N_OFF);
                 const int* mv  = (const int*)(pr[i] + P_POS);
+                const unsigned short* tn = (const unsigned short*)(pr[i] + P_TURN);
+                unsigned short bturn[3];
                 float d[3], loc[12];
                 int k;
                 for (k = 0; k < 3; k++)
                     d[k] = (float)off[k] / 65536.0f + (float)mv[k] / 65536.0f;
-                piece_local((const unsigned short*)(pr[i] + P_TURN), d, loc);
+                if (basePrim && pr[i] == basePrim) {
+                    for (k = 0; k < 3; k++)
+                        bturn[k] = (unsigned short)(tn[k] + bt[k]);
+                    tn = bturn;
+                }
+                piece_local(tn, d, loc);
                 if (parent[i] < 0) {
                     memcpy(h->acc[i], loc, sizeof loc);
                     for (k = 0; k < 3; k++)
@@ -1491,6 +1661,124 @@ static int pose_accum(const char* o3, HPOSE* h)
         }
     }
     return nparts;
+}
+
+static int pose_accum(const char* o3, HPOSE* h)
+{
+    return pose_accum_body(o3, h, NULL);
+}
+
+/* ---- the reconstruction emit_geom/emit_slant fall back to ---------------
+   One Object3do's whole pose, rebuilt from the fields and written out in the
+   SAME 16.16 representation P_VBUF holds, so the two emit paths consume it
+   with the arithmetic they already had. recon_begin() refuses a model whose
+   piece tree did not come out whole -- there is nothing to reconstruct then,
+   and the caller keeps the engine's buffer rather than dropping the unit. */
+static HPOSE s_recon;                       /* render thread only */
+static int   s_reconParts;
+static int   s_reconV[MAXNODEV * 3];
+
+static int recon_begin(const char* o3)
+{
+    const unsigned short* bturn;
+    unsigned short bt[3];
+    int i;
+    s_reconParts = 0;
+    if (!ptr_ok(o3) || IsBadReadPtr(o3, O3_PRIM0)) return 0;
+    bturn = (const unsigned short*)(o3 + O3_BTURN);
+    bt[0] = bturn[2];                       /* +0x1C = unit+0x68, about X */
+    bt[1] = bturn[1];                       /* +0x1A = unit+0x66, about Y */
+    bt[2] = bturn[0];                       /* +0x18 = unit+0x64, about Z */
+    s_reconParts = pose_accum_body(o3, &s_recon, bt);
+    if (!s_reconParts) return 0;
+    for (i = 0; i < s_reconParts; i++)
+        if (!s_recon.done[i]) { s_reconParts = 0; return 0; }
+    return 1;
+}
+
+static const int* recon_prim(int p, const char* nd, int nvert)
+{
+    const int* rv;
+    int k, r;
+    if (p < 0 || p >= s_reconParts) return NULL;
+    if (s_recon.nd[p] != nd) return NULL;   /* the walk and the pose disagree */
+    rv = *(const int* const*)(nd + N_VERTS);
+    if (!ptr_ok(rv) || nvert <= 0 || nvert > MAXNODEV) return NULL;
+    if (IsBadReadPtr(rv, (SIZE_T)nvert * 12)) return NULL;
+    for (k = 0; k < nvert; k++) {
+        float v[3], g[3];
+        for (r = 0; r < 3; r++) v[r] = (float)rv[k * 3 + r] / 65536.0f;
+        for (r = 0; r < 3; r++) {
+            const float* m = s_recon.acc[p] + r * 4;
+            g[r] = m[0] * v[0] + m[1] * v[1] + m[2] * v[2] + m[3];
+        }
+        for (r = 0; r < 3; r++)
+            s_reconV[k * 3 + r] = (int)floorf(g[r] * 65536.0f + 0.5f);
+    }
+    return s_reconV;
+}
+
+/* The evidence, armed by tagpu_posewatch.on: how far the engine's posed
+   buffer is from the pose its own fields describe, in model units, over
+   every visible piece. A buffer caught between the reset and the compose is
+   the model's own size out (tens of units -- the ARMCOM stands 38 high); a
+   merely stale one is a tick of animation out, a unit or two. That is the
+   whole oracle: it says which of the two a frame saw, from inside the DLL,
+   with the frame number, and it does not care whether the guard tripped --
+   which is what makes it able to answer whether the guard tripping is the
+   SAME event as the artifact. Call it only with recon_begin() already true
+   for this Object3do; -1 means nothing could be compared. */
+static float recon_err(const char* o3, int* worstPiece)
+{
+    float worst = 0.0f;
+    int p, worstP = -1;
+    for (p = 0; p < s_reconParts; p++) {
+        const char* pr = s_recon.pr[p];
+        const char* nd = s_recon.nd[p];
+        const int*  vb = *(const int* const*)(pr + P_VBUF);
+        const int*  rc;
+        int nvert = *(const int*)(nd + N_VCOUNT), k;
+        if (!(*(const unsigned char*)(pr + P_FLAGS) & 1)) continue;
+        if (!ptr_ok(vb) || nvert <= 0 || nvert > MAXNODEV) continue;
+        if (IsBadReadPtr(vb, (SIZE_T)nvert * 12)) continue;
+        rc = recon_prim(p, nd, nvert);
+        if (!rc) continue;
+        for (k = 0; k < nvert * 3; k++) {
+            float d = (float)(rc[k] - vb[k]) / 65536.0f;
+            if (d < 0.0f) d = -d;
+            if (d > worst) { worst = d; worstP = p; }
+        }
+    }
+    if (worstPiece) *worstPiece = worstP;
+    return worstP < 0 ? -1.0f : worst;
+}
+
+/* One frame's reading for one unit, logged when the buffer disagrees with
+   the fields by more than a tick of animation could account for. `dirty` is
+   the pose flag read on either side of the comparison -- if a frame ever
+   shows a large err with the flag clear both times, the guard's bracket is
+   not the whole window and the fix is incomplete, which is the one thing
+   this has to be able to say. */
+static void recon_watch(const char* o3, const char* why)
+{
+    int d0, d1, worstP = -1;
+    float e;
+    d0 = *(const volatile int*)(o3 + O3_POSEDIRTY);
+    POSE_BARRIER();
+    if (!recon_begin(o3)) return;
+    e = recon_err(o3, &worstP);
+    POSE_BARRIER();
+    d1 = *(const volatile int*)(o3 + O3_POSEDIRTY);
+    if (e > s_poseErrMax) s_poseErrMax = e;
+    if (e < 4.0f) return;
+    {
+        char b[160];
+        _snprintf(b, sizeof b,
+                  "posewatch: f=%u t=%u o3=%p err=%.2f piece=%d/%d dirty=%d/%d %s",
+                  s_spxFrame, (unsigned)GetTickCount(), o3, e, worstP,
+                  s_reconParts, d0, d1, why);
+        nlog(b);
+    }
 }
 
 /* Fill out[npiece*12] for `mesh` from the unit's Object3do. 0 = leave it all
@@ -1566,6 +1854,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         s_ss     = (GetFileAttributesA("tagpu_ss.off")     == INVALID_FILE_ATTRIBUTES);
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
+        s_posefix = (GetFileAttributesA("tagpu_posefix.off") == INVALID_FILE_ATTRIBUTES);
+        s_posewatch = (GetFileAttributesA("tagpu_posewatch.on") != INVALID_FILE_ATTRIBUTES);
+        s_poserecon = (GetFileAttributesA("tagpu_poserecon.on") != INVALID_FILE_ATTRIBUTES);
         s_nano   = (GetFileAttributesA("tagpu_nano.off")   == INVALID_FILE_ATTRIBUTES);
         if (s_armed != was && was >= 0) {
             char b[96]; _snprintf(b, sizeof b, "native: %s (type=%s wrecks=%d ss=%d subpix=%d)",
@@ -1810,6 +2101,22 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             char b[96];
             _snprintf(b, sizeof b, "spx: f=%u fix=(%d,%d) a=(%.3f,%.3f)",
                       f->frame_counter, ix, iy, ax, ay);
+            nlog(b);
+        }
+        /* the anchor filmstrip the pose watch adds: every owned unit, every
+           present frame, the engine's own 16.16 position and roster shorts
+           beside the anchor we derived from them and the eye we derived it
+           against -- so a one-frame jump can be attributed to the engine,
+           to the eye or to this pass without going back to the video */
+        if (s_posewatch) {
+            char b[176];
+            _snprintf(b, sizeof b,
+                      "posewatch: f=%u t=%u u=%p fix=(%d,%d,%d) short=(%d,%d,%d) "
+                      "eye=(%d,%d) a=(%.3f,%.3f) yaw=%u",
+                      f->frame_counter, (unsigned)GetTickCount(),
+                      u, ix, iz, iy, (int)wx, (int)wz, (int)wy,
+                      eyeX, eyeY, ax, ay,
+                      (unsigned)*(const unsigned short*)(u + U_YAW));
             nlog(b);
         }
         if (nu == 0) pose_dump(u, o3);
@@ -2703,13 +3010,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     static unsigned last = 0;
     if (f->frame_counter - last >= 300) {
         last = f->frame_counter;
-        char b[224];
+        char b[288], emax[16];
+        /* the worst |engine - fields| of the window, and "off" rather than
+           0.00 when nothing measured it — a number nobody took reads as a
+           measurement that came out clean */
+        if (s_posewatch) _snprintf(emax, sizeof emax, "%.2f", s_poseErrMax);
+        else             lstrcpynA(emax, "off", sizeof emax);
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s",
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u posefix=%d guard=%u norecon=%u errmax=%s%s",
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
-                  lostype, s_fogLut, keyOn, s_reread, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
+                  lostype, s_fogLut, keyOn, s_reread, s_posefix, s_poseGuard, s_poseNorecon,
+                  emax, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
         s_reread = 0;
+        s_poseGuard = 0; s_poseNorecon = 0; s_poseErrMax = 0.0f;
     }
     s_vtrunc = 0;
 }

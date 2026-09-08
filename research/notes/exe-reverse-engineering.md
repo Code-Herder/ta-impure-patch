@@ -2882,6 +2882,69 @@ without any `hide` in its script: they are one- and two-vertex marker nodes. Mea
 all eight fixtures that dumped a pose of their own unit — every `HIDDEN` piece is either such a
 node or one the unit's `Create` hides, with no exceptions and no false positives.
 
+### The repose, and the window it leaves open — `0x45AC20`, `0x45AB10`, `0x45B030`, `0x45B0A0`
+
+The posed vertex buffers (`prim+0x22`) are not built once. **They are rewritten in place, on the
+game thread, every time the pose is dirty — and the rewrite has two stages, with the buffer
+holding the model's REST vertices in between.** Read out of the binary 2026-09-08; this is the
+mechanism behind the one-frame pose pop the native pass showed on a walking commander
+(`gpu-status.md`, the pose-race row).
+
+**`Object3do+0x08` is the dirty flag, and it brackets the rewrite exactly.** Written 1 at:
+
+| site | when |
+|---|---|
+| `0x45AC89` (inside `DrawUnit 0x45AC20`) | the cached body turn `o3+0x18/+0x1A/+0x1C` differs from the live `unit+0x64/+0x66/+0x68` by ≥ 8 on any axis |
+| `0x45AB6C` (`0x45AB10`, the same test, called from the COB at `0x480EFC`) | as above |
+| `0x45ADA5` | the same test again, for each attached unit in `DrawUnit`'s cargo chain |
+| `0x480C90` | a COB `move` writes a piece position (`0x480C60`, the `MOVE` setter) |
+| `0x480D22` | a COB `turn` writes a piece angle (`0x480CE0`, the `TURN` setter) |
+
+and written 0 at `0x45AD28` and `0x45AC0A` only — the last thing each repose does. The repose is
+**entered only when the flag is non-zero** (`0x45ACB1` / `0x45AB94`), so the flag is 1 for the
+whole of it. It is also 1 while the buffers are merely *stale* — a COB write the next `DrawUnit`
+has not composed yet — which is the common case and is perfectly consistent to read.
+
+**Stage 1, the reset.** `0x45ACC1..0x45ACF3` (and the identical `0x45ABA4..0x45ABD5` in
+`0x45AB10`) `rep movs` the node's own vertex array `node+0x24` back over the base piece's
+`prim+0x22`, `[node+0x04] × 12` bytes, and zero `prim+0x16/+0x1A/+0x1E` (the piece origin) and
+`prim+0x26`. **`0x45B030`** then does the same for the whole tree, recursing on `prim+0x2E`
+(child) and looping on `prim+0x2A` (sibling); a piece with `prim+0x26 != 0` is skipped unless it
+is the top-level call. At the end of this walk **every piece's posed buffer holds its rest
+vertices** — unrotated, unposed, no body turn.
+
+**Stage 2, the compose.** `0x45B0A0(ecx = Object3do, edx = base piece, [esp+4] = isChild)`:
+
+- on the **top-level call only** (`isChild == 0`, `0x45B0DB`) it adds the cached body turn into
+  the piece's own angle triple before using it — `o3+0x18` onto `prim+0x14` (the Z word),
+  `o3+0x1A` (the heading) onto `prim+0x12` (Y), `o3+0x1C` onto `prim+0x10` (X). **The body turn
+  is folded into the base piece's turn, not applied as an outer rotation**, which is only the
+  same thing when the base piece's own turn is zero — it is on every stock unit measured
+  (ARMCOM's base piece is `ground`, turn `(0,0,0)`).
+- it builds the origin triple as `prim+0x04/+0x08/+0x0C` (the COB `MOVE` delta) plus the node's
+  `+0x10/+0x14/+0x18` (the rest offset) — the same pair `0x43DEF0` uses — and calls
+  **`0x45B150`**, which for each piece rotates `prim+0x16` and then **every vertex of
+  `prim+0x22`, in place, one at a time, last to first** (`0x45B18C..0x45B1AA`) through
+  `0x4B6CC0`, and then adds the parent origin to the piece origin and to every vertex, again in
+  place (`0x45B1AC..0x45B204`). A piece with `prim+0x26 != 0` is left alone entirely.
+- `0x45B150` recurses on the child (`prim+0x2E`) and loops on the sibling (`prim+0x2A`), so the
+  tree is composed piece by piece.
+
+**The window.** Between the last `rep movs` of stage 1 and the moment stage 2 reaches a given
+piece, that piece's `prim+0x22` holds rest vertices; between the rotate loop and the translate
+loop it holds rotated-but-unmoved ones. Anything reading `prim+0x22` from another thread can
+see either. The whole rewrite is only microseconds for a 15-piece unit, which is why the pop is
+rare on an idle machine and clusters into bursts when the game thread is preempted inside it —
+and why `Object3do+0x08` is the only usable interlock: it is the one field that is set before
+the first write and cleared after the last.
+
+**The rebuild that leads to it is a different question.** `0x458810`'s dirty test
+(`[esp+0x10]`, built at `0x458870..0x4588F2`) is `drawCount == 0`, plus three structure /
+nanoframe / `unit+0x114` bit0 cases that all also require the composite cache `o3+0x10` to be
+null — it is **not** "the pose changed". A walking unit's composite is rebuilt because something
+else nulls `o3+0x10`, not because this test fires; the repose above runs in `DrawUnit`, before
+`0x458810` is called at all.
+
 ### `get` and `set` — the twenty value ids (tacob landing 4, 2026-09-07)
 
 `GET_UNIT_VALUE` and `GET` reach `vt+0x44` = **`0x480770`**, `SET` reaches `vt+0x40` =

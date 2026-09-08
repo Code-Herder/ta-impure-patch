@@ -686,6 +686,18 @@ configuration and the one to test a release with. Under it a pass is turned off 
 `native.off` takes `owndraw` with it, `zoom.off` takes `vpwide`. `tagpu.log`'s first `opt:`
 line says which way the instance went.
 
+**The pose-race levers** (`tagpu_native.c`, gpu-status §2.9) are measuring tools, not play
+settings; all three are off unless the file is there.
+
+| file | what it does |
+|---|---|
+| `tagpu_posefix.off` | leaves the guard *measuring* but draws the engine's live posed buffer anyway — the baseline the fix is measured against, and the only way to see the artifact |
+| `tagpu_posewatch.on` | the oracle: per unit per frame, `posewatch: f=… err=… piece=…/… dirty=…/… poll|guard` — the largest disagreement in **model units** between the engine's posed buffer and the pose rebuilt from the fields, with the pose-dirty flag either side of the read. A unit or two out is a stale buffer; the model's own height out (an ARMCOM is 34) is a buffer caught mid-rewrite. Also adds a 60 Hz anchor filmstrip per owned unit — raw 16.16 position, roster shorts, the eye and the anchor we derived, which is what attributes a one-frame jump to the engine, the eye or this pass |
+| `tagpu_poserecon.on` | forces the reconstruction for **every** unit every frame. The A/B for the fallback: against the engine-buffer path it renders 0 differing pixels of 1920×1080 |
+
+The `native:` line carries `posefix=`, `guard=` (reads refused since the last line, 300 frames)
+and `errmax=` (the worst disagreement in the same window) whether or not the watch is armed.
+
 **Classic++ is a separate switch; its restorer runs as GLSL in the game's own context.**
 `tacli arm <i> classicpp.on` turns on the restored true-colour terrain, features, effects and (since G14g) unit textures;
 it is *polled* twice a second, so it flips live for an A/B, and arming it mid-play restores
