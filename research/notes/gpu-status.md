@@ -836,6 +836,8 @@ produced the largest transient of one capture without a unit ever being drawn wr
 | guard on, run 1 | 7 | 0 | 0 | 475 px |
 | guard on, run 2 | 7 | 0 | 0 | 492 px |
 | guard on, run 3 | 0 | 0 | 0 | 294 px |
+| + rest-equality, run 1 | 0 | 0 | 0 | — |
+| + rest-equality, run 2 | 0 | 0 | 0 | — |
 
 The `> 350` band does not move and is not meant to: it is the walk itself — a leg swing or a fast
 yaw passes the "differs from both neighbours while the neighbours agree" test, and every ranked
@@ -859,15 +861,47 @@ through is benign anyway, two composed poses one tick apart mixed together. The 
 specifically needs the stall in the gap between a piece's last vertex load and the flag load,
 with the entire remaining compose finishing in it.
 
-Closing it outright needs one of two things, neither of them free: a **sequence counter**, which
-the engine does not keep and which we would have to synthesise with detours on all three repose
-sites (two are inlined mid-function, at `0x45ACB6` and `0x45ADA5`, so they are byte patches
-rather than prologue detours); or a **content check** — compare the copied vertices against the
-reconstruction on every frame instead of only on a trip, which has no timing hole at all but
-pays a `pose_accum` per unit per frame. A cheap middle exists and is not built: a piece whose
-posed buffer byte-equals its own rest vertices (`node+0x24`) is either mid-reset or genuinely at
-rest with the body yaw zero, and taking the reconstruction in both cases costs nothing but the
-reconstruction.
+**The second detector, which has no timing hole — rest-equality.** The reset copies `node+0x24`
+over `prim+0x22` **verbatim** (`rep movs`), so mid-reset a piece *is* its node's vertex array;
+composed, it is that array through the accumulated transform. A piece that compares byte-equal is
+therefore either mid-reset or standing at an exactly identity transform — and the reconstruction
+is right for both, because at identity it reproduces the array itself. This tests the data rather
+than the clock, so no scheduling behaviour changes its answer. The compare folds into the copy
+loop the pass already runs (one more load and an OR per component, both arrays streamed once).
+
+It is applied only where equality would be a **contradiction** — the body turn, the piece's own
+`TURN` or `MOVE`, or its rest offset from its parent is non-zero, so the accumulated transform
+cannot be the identity. Without that gate a model facing exactly north whose base piece sits at
+the origin would compare equal every frame and take the reconstruction forever: correct output,
+for no reason. The gate reads local fields only, so it is conservative by construction — a piece
+whose own fields are all zero under a rotated parent is skipped and left to the flag. It catches
+what the flag can miss, never the reverse, and the two run together.
+
+**Measured, and it is specific.** Under the amplifier with the fix off and the oracle armed, a
+62-second walk tripped the guard 16 times; the **one** window whose oracle reading was a
+mid-rewrite buffer (`err=22.23` model units, `dirty=1/1`) is the **only** window where the
+rest-equality counter moved (`rest=1`). The other fifteen trips were stale buffers — validly
+posed, one tick old, not byte-equal to rest — and it stayed at 0 on every one. In steady play it
+does not fire at all: 19 of 20 five-second windows at `rest=0` across two shipping-configuration
+runs, at facing 90 and at facing 0, standing and walking. The twentieth is the scenario load,
+where `0x45AEC0` initialises `prim+0x22` as a copy of the node's array and it genuinely is
+unposed until the first repose — the substitution is right there too. `rest=` rides the `native:`
+line beside `guard=`, and it is the useful number of the two: it says how much of what the guard
+caught was the dangerous kind.
+
+**What is still not closed by either detector**: the "rotated but not yet translated" intermediate
+(`0x45B150` rotates every vertex of a piece before adding the parent origin to any of them) is
+neither byte-equal to rest nor flagged if both flag reads miss it — it is displaced by the parent
+origin rather than collapsed, so it is a much smaller error, but it is not detected on the data
+side. Closing everything outright still needs one of the two expensive options: a **sequence
+counter**, which the engine does not keep and which we would have to synthesise with detours on
+all three repose sites (two are inlined mid-function, at `0x45ACB6` and `0x45ADA5`, so byte
+patches rather than prologue detours); or a **full content check** — compare against the
+reconstruction on every frame instead of only on a trip, which has no timing hole anywhere but
+pays a `pose_accum` per unit per frame. The architecture that removes the question entirely is
+**G16** in the roadmap: pose 3DOs on the GPU from a static mesh, the way `tagpu_hires_draw.c`
+already poses replacement models — that path never reads `prim+0x22` and the race cannot happen
+to it.
 
 **Not closed by this.** The same live read is made by `tagpu_hires_draw`'s replacement-mesh path
 through `hires_pose`, which reads the pose *fields* rather than the buffer and so cannot show the

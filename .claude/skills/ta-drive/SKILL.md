@@ -695,8 +695,12 @@ settings; all three are off unless the file is there.
 | `tagpu_posewatch.on` | the oracle: per unit per frame, `posewatch: f=… err=… piece=…/… dirty=…/… poll|guard` — the largest disagreement in **model units** between the engine's posed buffer and the pose rebuilt from the fields, with the pose-dirty flag either side of the read. A unit or two out is a stale buffer; the model's own height out (an ARMCOM is 34) is a buffer caught mid-rewrite. Also adds a 60 Hz anchor filmstrip per owned unit — raw 16.16 position, roster shorts, the eye and the anchor we derived, which is what attributes a one-frame jump to the engine, the eye or this pass |
 | `tagpu_poserecon.on` | forces the reconstruction for **every** unit every frame. The A/B for the fallback: against the engine-buffer path it renders 0 differing pixels of 1920×1080 |
 
-The `native:` line carries `posefix=`, `guard=` (reads refused since the last line, 300 frames)
-and `errmax=` (the worst disagreement in the same window) whether or not the watch is armed.
+The `native:` line carries `posefix=`, `guard=` (reads refused since the last line, 300 frames),
+`rest=` and `errmax=` whether or not the watch is armed. **`rest=` is the useful one**: the guard
+trips on any dirty pose, most of which are a merely stale buffer that was safe to draw, while
+`rest=` counts only the reads that caught the buffer byte-equal to the model's rest vertices —
+the state that actually draws a collapsed unit. In play it reads 0; a burst at a scenario load is
+the unit's buffer before its first repose and is expected.
 
 **Classic++ is a separate switch; its restorer runs as GLSL in the game's own context.**
 `tacli arm <i> classicpp.on` turns on the restored true-colour terrain, features, effects and (since G14g) unit textures;

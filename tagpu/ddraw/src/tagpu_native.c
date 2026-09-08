@@ -342,6 +342,7 @@ static int    s_posefix  = 1;          /* pose-race guard (tagpu_posefix.off) */
 static int    s_posewatch = 0;         /* the guard's evidence (posewatch.on) */
 static int    s_poserecon = 0;         /* force the fallback (poserecon.on)   */
 static unsigned s_poseGuard = 0;       /* reads the guard refused, per log line */
+static unsigned s_poseRest = 0;        /* ... of those, caught by rest-equality */
 static unsigned s_poseNorecon = 0;     /* ... of those, with no reconstruction  */
 static float  s_poseErrMax = 0.0f;     /* worst |engine - fields|, per log line */
 static int    s_nano   = 1;            /* build-state look (tagpu_nano.off)  */
@@ -1089,6 +1090,27 @@ static float s_P[MAXNODEV * 3];     /* one node's model-space vertices */
    against the reconstruction on every frame rather than only on a trip --
    research/notes/gpu-status.md 2.9, "Not closed by this".
 
+   SO THERE IS A SECOND DETECTOR, and this one has no timing hole at all
+   because it tests the data rather than the clock: THE RESET LEAVES A PIECE
+   BYTE-EQUAL TO ITS OWN REST VERTEX ARRAY. `rep movs` copies node+0x24 over
+   prim+0x22 verbatim, so mid-reset every piece IS its node's array; composed,
+   it is that array through the accumulated transform. A piece that compares
+   equal is therefore either mid-reset or standing at an exactly identity
+   transform -- and the reconstruction is correct for both, since at identity
+   it reproduces the array itself. The compare folds into the copy loop we
+   already run (one more load and an OR per component, both arrays streamed
+   once) and it costs nothing on the common path but that.
+
+   It is applied only where equality would be a CONTRADICTION -- the body turn,
+   the piece's own turn or MOVE, or its rest offset from its parent is
+   non-zero, so the accumulated transform cannot be the identity. Without that
+   gate a model facing exactly north whose base piece sits at the origin would
+   compare equal every frame and take the reconstruction forever: correct
+   output (identical, measured) for no reason. The gate is local, so it is
+   conservative: a piece whose own fields are all zero under a rotated parent
+   is skipped and left to the flag. It catches misses the flag cannot, not the
+   other way round, and the two run together.
+
    The flag is also 1 while the buffers are merely STALE (a COB write the
    next DrawUnit has not composed yet), which is most of what trips the
    guard and would be perfectly safe to draw. We do not try to tell the two
@@ -1107,6 +1129,28 @@ static float s_P[MAXNODEV * 3];     /* one node's model-space vertices */
 static int         recon_begin(const char* o3);
 static const int*  recon_prim(int p, const char* nd, int nvert);
 
+/* The node's own vertex array, but ONLY when this piece being byte-equal to it
+   would be a contradiction — i.e. something in the chain rotates or moves it,
+   so its accumulated transform cannot be the identity. NULL turns the
+   rest-equality test off for the piece. The three fields tested are local, so
+   this is conservative by design: it never claims a contradiction that is not
+   one, and a piece whose own fields are zero under a rotated parent is simply
+   left to the flag guard. */
+static const int* rest_if_moved(const char* pr, const char* nd, int nvert, int btNZ)
+{
+    const int* off = (const int*)(nd + N_OFF);
+    const int* rv;
+    if (!btNZ) {
+        const unsigned short* tn = (const unsigned short*)(pr + P_TURN);
+        const int* mv = (const int*)(pr + P_POS);
+        if (!(tn[0] | tn[1] | tn[2]) && !(mv[0] | mv[1] | mv[2]) &&
+            !(off[0] | off[1] | off[2])) return NULL;
+    }
+    rv = *(const int* const*)(nd + N_VERTS);
+    if (!ptr_ok(rv) || IsBadReadPtr(rv, (SIZE_T)nvert * 12)) return NULL;
+    return rv;
+}
+
 /* `torn` non-NULL arms the guard: it is set to 1 if any piece was read while
    the engine held the pose dirty. THE WALK STILL FINISHES — the emission this
    produces has to be exactly the one the pass made before the guard existed,
@@ -1124,6 +1168,8 @@ static int emit_geom_at(const char* o3, int nv, float ax, float ay,
     if (nparts <= 0 || nparts > 64) return nv;
 
     int anyShadeFlag = 0, p;
+    const unsigned short* bt = (const unsigned short*)(o3 + O3_BTURN);
+    int btNZ = (bt[0] | bt[1] | bt[2]) != 0;
     for (p = 0; p < nparts; p++) {
         unsigned char fl = *(const unsigned char*)(o3 + O3_PRIM0 + p * PRIM_STRIDE + P_FLAGS);
         if ((fl & 1) && (fl & 4)) anyShadeFlag = 1;
@@ -1147,10 +1193,22 @@ static int emit_geom_at(const char* o3, int nv, float ax, float ay,
         }
         int i;
         if (torn) {
+            const int* rv = rest_if_moved(pr, nd, nvert, btNZ);
+            unsigned diff = 0;
             int d0 = *(const volatile int*)(o3 + O3_POSEDIRTY);
             POSE_BARRIER();
-            for (i = 0; i < nvert * 3; i++) s_P[i] = (float)vb[i] / 65536.0f;
+            for (i = 0; i < nvert * 3; i++) {
+                int w = vb[i];
+                if (rv) diff |= (unsigned)(w ^ rv[i]);
+                s_P[i] = (float)w / 65536.0f;
+            }
             POSE_BARRIER();
+            /* both, unconditionally: the flag catches nearly everything and
+               would mask the second detector's count, and `rest=` is worth
+               having as a statistic -- it says how much of what the flag
+               caught was a genuine mid-reset rather than a stale buffer, and
+               it is the only number that would move if the flag ever missed */
+            if (rv && !diff) { *torn = 1; s_poseRest++; }
             if (d0 || *(const volatile int*)(o3 + O3_POSEDIRTY)) *torn = 1;
         } else {
             for (i = 0; i < nvert * 3; i++) s_P[i] = (float)vb[i] / 65536.0f;
@@ -1227,6 +1285,8 @@ static int emit_slant_at(const char* o3, int nv, float ax, float ay,
     int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
     if (nparts <= 0 || nparts > 64) return nv;
     float shade = (float)tagpu_r3d_shade_neutral() / 31.0f;
+    const unsigned short* bt = (const unsigned short*)(o3 + O3_BTURN);
+    int btNZ = (bt[0] | bt[1] | bt[2]) != 0;
     int p;
     for (p = 0; p < nparts; p++) {
         const char* pr = o3 + O3_PRIM0 + p * PRIM_STRIDE;
@@ -1246,7 +1306,17 @@ static int emit_slant_at(const char* o3, int nv, float ax, float ay,
         } else {
             vb = *(const int* const*)(pr + P_VBUF);
             if (!ptr_ok(vb) || IsBadReadPtr(vb, (SIZE_T)nvert * 12)) continue;
-            if (torn) { d0 = *(const volatile int*)(o3 + O3_POSEDIRTY); POSE_BARRIER(); }
+            if (torn) {
+                const int* rv = rest_if_moved(pr, nd, nvert, btNZ);
+                d0 = *(const volatile int*)(o3 + O3_POSEDIRTY);
+                POSE_BARRIER();
+                if (rv) {                       /* the same rest-equality test */
+                    unsigned diff = 0;
+                    int i;
+                    for (i = 0; i < nvert * 3; i++) diff |= (unsigned)(vb[i] ^ rv[i]);
+                    if (!diff) { *torn = 1; s_poseRest++; }
+                }
+            }
         }
         if (nface <= 0 || nface > 512 || !ptr_ok(faces)) continue;
         if (IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) continue;
@@ -3033,13 +3103,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (s_posewatch) _snprintf(emax, sizeof emax, "%.2f", s_poseErrMax);
         else             lstrcpynA(emax, "off", sizeof emax);
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u posefix=%d guard=%u norecon=%u errmax=%s%s",
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u posefix=%d guard=%u rest=%u norecon=%u errmax=%s%s",
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
-                  lostype, s_fogLut, keyOn, s_reread, s_posefix, s_poseGuard, s_poseNorecon,
+                  lostype, s_fogLut, keyOn, s_reread, s_posefix, s_poseGuard, s_poseRest, s_poseNorecon,
                   emax, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
         s_reread = 0;
-        s_poseGuard = 0; s_poseNorecon = 0; s_poseErrMax = 0.0f;
+        s_poseGuard = 0; s_poseRest = 0; s_poseNorecon = 0; s_poseErrMax = 0.0f;
     }
     s_vtrunc = 0;
 }
