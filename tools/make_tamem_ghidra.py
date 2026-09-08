@@ -15,7 +15,7 @@ Transforms applied so Ghidra's CParser (C, not C++) can digest it:
 import re
 from pathlib import Path
 
-ROOT = Path("<repo>")
+ROOT = Path(__file__).resolve().parents[1]   # the repository root
 SRC = ROOT / "vendor/TADR/src/DDraw/tamem.h"
 DST = ROOT / "tools/tamem_ghidra.h"
 

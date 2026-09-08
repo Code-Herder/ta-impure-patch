@@ -10,10 +10,23 @@ on this tree's `ddraw.dll` with `tagpu_cobtrace.on=<type>` (only that unit type 
 | `posedump.txt` | the one `tagpu_posedump.on` dump taken after the behaviour, camera parked on the unit; its header `posedump: tick=N idx=U` joins `cobtrace.log`'s `(tick, unit)` |
 | `apply.json` | tacli's load report: engine indices, requested and actual positions, the switches, the camera |
 
-These are landing 3's gate: `tacob run` replays the director's events and the diff of its
-lines against `cobtrace.log` must be empty (with `Killed`'s second argument masked — it is the
-caller's uninitialised local, a different number every run — and `D` lines fed back as the
-`rand` results). A few seconds of one unit each, so the files stay small. Regenerate with
+and one shared file:
+
+| File | What |
+|---|---|
+| `replay.json` | the `get` timelines the replay needs and the log cannot carry, per class, written by `tools/tacob fit-world`. Only the tank has one (`HEALTH`, derived from `SmokeUnit`'s `rand` spacing — see `tacob-design.md` §"What the replay supplies"); every other class reads no engine value |
+
+These are landing 3's gate, and it is met `[2026-09-07]`:
+
+```
+tools/tacob run --all                       # nine of nine, trace and pose
+tools/tacob run kbot --trace-out /tmp/k.log && diff /tmp/k.log kbot/cobtrace.log
+```
+
+Every replay is **byte-identical** to the log the game wrote, header included — nothing is
+masked. (`Killed`'s uninitialised second argument, which the design expected to mask, is one of
+the `E` line's own arguments and so replays verbatim.) A few seconds of one unit each, so the
+files stay small. Regenerate with
 `tools/cobtrace_fixtures.py [class…]` after any engine-side change to the oracle; the seed is
 fixed (7) so a run repeats, but the AI seat's decisions and the wall clock are not part of
 the seed, so a regenerated file is *equivalent*, not byte-identical.
@@ -32,7 +45,10 @@ Produced 2026-09-07 (the table is `tools/cobtrace_fixtures.py`'s output summaris
 | 8 | ship | CORBATS | 1591 | 796 | 784 | 0 | 11 | 0 | 93..950 | tick=597 (54 pieces/verts lines) | AimFromPrimary, AimFromSecondary, AimPrimary, AimSecondary, CORBATS, Create, FirePrimary, FireSecondary, QueryPrimary, QuerySecondary, RestoreAfterDelay, SetMaxReloadTime, SweetSpot |
 | 9 | sub | CORSUB | 1320 | 660 | 659 | 0 | 1 | 0 | 93..954 | tick=703 (10 pieces/verts lines) | CORSUB, Create, FirePrimary, QueryPrimary, StartMoving, StopMoving, SweetSpot |
 
-The **fighter** run is short by design: an air-to-air engagement faults the engine in `ORDERS_CreateObject` (`0x43A164`, `mov ecx,[eax]` with `eax` = a null unit pointer + the position offset) within seconds of the first shots — measured with the oracle armed *and* in a control run without it, with a Vamp and with an unarmed Valkyrie as the target, so it is the engine's, not the trace's — and the pose dump is taken in flight before the shooting. The shipped run happened not to fault: it holds the takeoff, the flight, the dump at tick 353 and 91 shots (a `QueryPrimary`/`QuerySecondary` pair each), and ends at `tacli stop` at tick 765; a regenerated file may be cut short by that fault. The **death** run ends when the Peewee dies (its `Killed` line is the point). Every other run ends at `tacli stop`.
+The **fighter** run is short by design: an air-to-air engagement faults the engine in `ORDERS_CreateObject` (`0x43A164`, `mov ecx,[eax]` with `eax` = a null unit pointer + the position offset) within seconds of the first shots — measured with the oracle armed *and* in a control run without it, with a Vamp and with an unarmed Valkyrie as the target, so it is the engine's, not the trace's — and the pose dump is taken in flight before the shooting. The shipped run happened not to fault: it holds the takeoff, the flight, the dump at tick 353 and 91 shots (a `QueryPrimary`/`QuerySecondary` pair each), and ends at `tacli stop` at tick 765; a regenerated file may be cut short by that fault. The **death** run ends when the Peewee dies (its `Killed` line is the point) — and its
+`posedump.txt` is of **another unit** (`idx=2`, at tick 287, long after the Peewee was gone),
+so it is the one fixture with no pose to compare; `tacob run death` says so and checks the trace
+only. Every other run ends at `tacli stop`.
 
 What each run shows, briefly — the skill's "what the first traces taught" and the design
 note's contract carry the details: a run-later start (`SetMaxReloadTime`) first steps at the
@@ -44,4 +60,8 @@ under 66 % health (`D`); `HitByWeapon` has no trailing return and its thread end
 `AimSecondary`/`AimFromSecondary`/`QuerySecondary` while a Roy shells it (`SweetSpot` every
 tick); the sub fires eight torpedoes (`FirePrimary`, `QueryPrimary`) without an aim script;
 aircraft answer `QueryPrimary`/`QuerySecondary` per shot and never run an `Aim*` script of
-their own. No fixture refuses a start (`X`): stock scripts never fill the eight records.
+their own. No fixture refuses a start (`X`): stock scripts never fill the eight records, so that path is
+covered by a synthetic COB in `tools/test_tacob.py` instead. Every posedump also shows pieces
+`HIDDEN` that no script hides — the aircraft's flares and thrust anchors, the ship's wakes, the
+sub's tubes: the model builder clears a piece's visible bit when its 3DO node has fewer than
+three vertices (`0x45AF1B`), which the replay reproduces.

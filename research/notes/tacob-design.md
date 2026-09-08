@@ -43,7 +43,7 @@ repo and `vendor/` searched 2026-09-07]`
 | The format | header, opcode values, GET/SET IDs 1–20, piece-name binding, thread pool | `file-formats.md` §2 |
 | The assets | HPI/UFO/CCX archives, 3DO tree, GAF textures, palette, FBI fields, glTF export with **one node per 3DO piece, named after it, children kept** | `tools/ta3do` (`model_to_gltf` docstring) |
 
-Not present anywhere on this machine: a BOS→COB compiler, a COB→BOS decompiler, a COB VM
+Not present anywhere on the reference setup: a BOS→COB compiler, a COB→BOS decompiler, a COB VM
 (`tascene` is bind-pose *by design* — "offline there is no COB VM"), Cavedog's Scriptor, or any
 `.bos` source `[VERIFIED — `find` over the checkout, `vendor/`, the game dir and the Wine
 prefix]`. The owner cannot obtain the Cavedog BOS sources.
@@ -64,10 +64,10 @@ prefix]`. The owner cannot obtain the Cavedog BOS sources.
 | Edit vs play | **Separate states.** Typing re-parses for diagnostics only. Save or "Build and restart" recompiles and restarts from `Create`: running threads point into old code and a hot swap would show behaviour no game shows. |
 | Timeline | **Recorded.** Every tick's poses and events are kept; pause, step and scrub backwards while the live head continues. |
 | Trace format | **The trace tab uses the cobtrace hook's format exactly**, so the gate is a diff and a modder can diff the same way. |
-| Files | Open a stock unit by name, a loose mod folder, or a `.ufo`, all through the `ta3do` asset layer; a hires GLB may replace the 3DO (posed by node name, as the game does). A **project is a folder**: BOS, built COB, FBI, model reference. Export = `tools/hpipack.py` → `.ufo`, verified by loading it with `tacli`. The game folder lives in per-user config outside any repo. |
-| Repo placement | `tools/tacob` (CLI: `compile`, `decompile`, `dump`, `run`, `edit`), `tools/tacob-edit.html`, `tools/test_tacob.py` (stdlib `unittest`, hand-built fixtures, the `test_ta3do.py` idiom), shipped headers under `tools/tacob-include/`. `/projects/` is gitignored so decompiled stock BOS is never tracked. |
-| JavaScript libraries | **CDN through an import map in development** (the `ta3do-view.html` idiom); the exe build fetches pinned, checksummed copies into a gitignored folder and rewrites the import map. Nothing vendored into git. |
-| The exe | **pywebview + PyInstaller onedir**, built with a Windows Python installed into the Wine prefix (no remote, no CI). WebView2 detected, default browser as the fallback. The heavy venv (torch, onnxruntime) stays out. First-run game-folder picker. |
+| Files | Open a stock unit by name, a loose mod folder, or a `.ufo`, all through the `ta3do` asset layer; a hires GLB may replace the 3DO (posed by node name, as the game does). A **project is a folder**: BOS, built COB, FBI, model reference. Export = `tools/hpipack.py` → `.ufo` — but landing 4 measured that a `.ufo` **does not override a path a stock archive already has** and a loose file does, so `tacob pack --install <gamedir>` writes both (`file-formats.md` §5). The game folder lives in per-user config outside any repo. |
+| Repo placement | `tools/tacob` (CLI: `compile`, `decompile`, `dump`, `roundtrip`, `run`, `fit-world`, `pose-check`, `open`, `gui`, `serve`, `lint`, `pack`, `weapon`), `tools/tacob-edit.html`, `tools/tacob-setup.html`, `tools/test_tacob.py` (stdlib `unittest`, hand-built fixtures, the `test_ta3do.py` idiom), shipped headers under `tools/tacob-include/`; the packaging in `tools/tacob_app.py`, `tools/tacob.spec` and `tools/tacob-build.py`. `/projects/`, `/tools/vendor/`, `/dist/` and `/build/` are gitignored so decompiled stock BOS, fetched JavaScript and build output are never tracked. |
+| JavaScript libraries | **CDN through an import map in development** (the `ta3do-view.html` idiom); the exe build fetches pinned, checksummed copies into a gitignored folder and rewrites the import map. Nothing vendored into git. **Built (landing 5)**: `tools/tacob-build.py vendor` → `tools/vendor/` (gitignored) + `tools/tacob-vendor.json` (the manifest, tracked); the *server* rewrites the map on the way out, so one page has two homes. |
+| The exe | **pywebview + PyInstaller onedir**, built with a Windows Python installed into the Wine prefix (no remote, no CI). WebView2 detected, default browser as the fallback. The heavy venv (torch, onnxruntime) stays out. First-run game-folder picker. **Built (landing 5)** — all of it, and the folder runs in a Wine prefix with no Python in it. |
 | Decompiler failure | **Refuse loudly, per script.** Scriptor emits only structured `if`/`else`/`while`, so stock COBs recover; a COB from another compiler or a `cobclone` output may not. Name the offending word address, show the script as a listing, never emit `goto` or a raw block — BOS has none and it would not recompile. |
 | Lost names | Customary parameters for known scripts (`AimPrimary(heading, pitch)`, `Killed(severity, corpsetype)`, `QueryPrimary(piecenum)`, `SetSpeed(speed)`, `RockUnit(anglex, anglez)`, the `WeaponN` family alike); otherwise `arg1`, `var1`, `static1`; signal masks numeric. |
 | Order | Five landings, each with its gate — §Landings. |
@@ -81,10 +81,16 @@ tools/tacob                      stdlib-only Python
   cob: assembler (AST -> words), disassembler (words -> ops), decompiler (ops -> AST -> BOS)
   vm : threads, pieces, statics, the eight-record pool, tick stepping
   director: per-class scenarios, the weapon-slot protocols, the unit state record
-  serve: local HTTP (stdlib) -> /pose, /trace, /state, /build, /events
+  serve: local HTTP (stdlib) -> /state /pose /trace /events /source, and the POSTs
+          /build /transport /event /world /pack /template
 tools/tacob-edit.html            CodeMirror 6 + three.js, loads the project's GLB (ta3do export)
+tools/tacob-setup.html           the first-run picker: the game folder and the unit
 tools/tacob-include/*.h          our own standard headers, values verified against the engine
-tools/test_tacob.py              unittest: hand-built COBs, round trips, VM stepping
+tools/test_tacob.py              unittest: hand-built COBs, round trips, VM stepping, the paths
+
+tools/tacob_app.py               the packaged entry point (`gui` is the default subcommand)
+tools/tacob.spec                 PyInstaller onedir; the three scripts ship as *data*
+tools/tacob-build.py             vendor · verify · wine-setup · build · check   (host side)
 ```
 
 The page never reads a COB. It gets the piece tree from the GLB (node names = 3DO piece names,
@@ -105,7 +111,11 @@ anything pasted from it.
 - Control: `sleep ms;`, `signal m;`, `set-signal-mask m;`, `start-script S(args);`,
   `call-script S(args);`, `return (expr);`, `if`/`else`, `while`.
 - Engine: `get VALUE`, `get VALUE(a, b, c, d)`, `set VALUE to expr;`, `rand(lo, hi)`,
-  `attach-unit`, `drop-unit`, `play-sound`.
+  `attach-unit`, `drop-unit`, `play-sound`. **`play-sound` compiles but is fatal on retail TA**
+  `[VERIFIED 2026-09-07]`: `0x10072000` is not in the dispatcher's chain and reaches the silent
+  kill, so the thread that runs it ends there. No stock script uses it (all 278 decoded). The
+  editor lints it; the compiler still emits it, because a mod built for an engine that does
+  implement it must round-trip.
 - Expressions: C arithmetic, comparison, `&&`/`||`/`!`, `&`/`|`/`^`/`~`; out-parameters by
   assignment (`piecenum = flare;`).
 - Literals: `[x]` linear = x × 65536; `<x>` angular = x × 65536 / 360; plain integers as-is.
@@ -136,11 +146,43 @@ anything pasted from it.
 | Silent failure | `COBEngine_QueryScript 0x4B0BC0 → 0x4B0C40` opens with that allocation and returns without writing its result on a full pool — `AimFromWeaponN`/`QueryWeaponN` fall back to piece 0 |
 | Pose fields | `PrimitiveStruct` `XPos/ZPos/YPos` 16.16, `XTurn/ZTurn/YTurn` `uint16` TAang, `Visible` bit (`file-formats.md` §2.6) |
 
-**Rules to be measured, not assumed** `[PLANNED]`: units advanced per tick by `move` at a given
-speed; whether `turn` takes the short way; `spin` acceleration; when `wait-for-turn`/`wait-for-move`
-release; `sleep` milliseconds onto 30 Hz ticks; the order threads run within a tick; what a
-thread does at its `RETURN` when it was `start-script`ed. Spring's `CobThread` supplies the first
-draft; every difference the traces show becomes a line in this section with the numbers.
+**The rules, measured** `[VERIFIED 2026-09-07 — landing 3; every one read out of the binary at
+the addresses in exe-reverse-engineering.md §"The COB engine", and every one exercised by the
+nine byte-identical replays]`. The list the interview left open, answered:
+
+| Question | Answer |
+|---|---|
+| Units advanced per tick by `move` at a given speed | `speed / 30`, `idiv` (truncating toward zero), added per tick; arrival snaps to the target exactly and zeroes the speed. `[1250]` = 81920000 becomes 2730666 a tick — a stock recoil crosses `[6]` in one tick |
+| Does `turn` take the short way | **Yes, always.** The speed is negated when `(abs(target − current) > 0x8000) XOR (target < current)`; there is no flag and no long-way form |
+| `spin` acceleration | Per tick, `accel / 30`, added to the axis's turn speed and clamped to the spin target; `spin` with acceleration 0 jumps to the target speed, `stop-spin` writes `-decel / 30` |
+| When `wait-for-turn`/`wait-for-move` release | On the **tick after** the stepper zeroes that axis's speed field — the runner runs the eight records first and the stepper last, so an axis that arrives during tick *N* wakes its waiter at *N+1* |
+| `sleep` milliseconds onto ticks | `ms × 30 / 1000`, truncated: `sleep 150` is 4 ticks, `sleep 100` is 3 |
+| The order threads run within a tick | Slot 0 to 7, then the animation stepper. A thread woken by a lower slot's `RETURN` in the same pass does not run until the next tick; one woken by a *higher* slot has already had its turn |
+| What a thread does at its `RETURN` when it was `start-script`ed | Nothing: the value stays on its stack, because only a start with a completion object (the engine's `Aim*`) has one to call. The record goes free and every thread blocked on it in a `call-script` goes runnable |
+| Where in the frame the engine's calls land | The unit's own tick is `[weapons and AutoAim] → DoScriptsNow → [the movement pass]`; `SweetSpot` and `Killed` come from the attacker's tick, later still. This decides whether a run-later start steps in its own tick or the next one — see the call-site table in the engine map |
+
+**Rules that surprised the design**: `play-sound` is not an opcode this engine implements (it
+falls into the silent kill, so a script that uses it ends there); `%` compiles to a word the
+dispatch cannot tell from `/`; a piece whose 3DO node has fewer than three vertices starts
+**invisible** without any `hide` (`0x45AF1B`), which is every flare, wake and thrust anchor; and
+an engine start writes all four argument words onto the record whatever its `argc`, so only a
+*script* start leaves stale words under the locals it did not pass.
+
+**What the replay supplies** `[landing 3]` — the honest boundary of the gate. `tacob run`
+re-issues the fixture's `E` lines and is told, per start, three things the log does not carry:
+which engine entry issued it (`QueryScript`, a run-now start or a run-later one) and where in
+the frame it sits, both from the call-site table in the engine map, read off the binary; the
+`rand` results, from the `D` lines; and the one `get` value a stock script branches on. That
+last is `HEALTH`, and only the tank fixture needs it: `SmokeUnit` draws `rand(1,66)` only under
+66 % and then sleeps `healthpercent × 50` ms, so the gap between two of its draws names the
+health it read at the first — which makes **the tank's `D`-line ticks an input rather than a
+prediction**, though not the first one (health starts at 100, so the VM predicts the tick of the
+first draw from `Create`'s own arithmetic). The fighter's six `D` lines are `MoveRate2`'s
+`rand(1,10)`, not health, and the other seven fixtures read no engine value at all. Everything
+else in all nine logs — the slot each start lands in, the tick of every return, every signal
+kill, every `call-script` block, the fall-through, the walk cycle's 19 ticks — is the VM's own
+answer. The `Killed` mask this note planned turned out to be unnecessary: the uninitialised word
+is one of the `E` line's own arguments, so it replays verbatim.
 
 **The `tagpu_cobtrace.on` hook** `[BUILT 2026-09-07 — landing 2; the engine seam is
 exe-reverse-engineering.md §"The COB engine"]`: `tagpu_cobtrace.c` hooks five sites inside the
@@ -224,22 +266,55 @@ The editor's slot list comes from the FBI (`Weapon1..3` stock keys, `Weapon4..N`
 range and reload from its weapon TDF, both read through the `ta3do` asset layer. A slot with a
 missing script is flagged before play.
 
-**Lints** (each is a snag that cost a live run): `wait-for-turn` inside `AimWeaponN`; an aim
-script without the `signal` / `set-signal-mask` pair; a static peak-thread estimate (SmokeUnit +
-walk + one per aim and fire script) above eight; a `Query` piece that `Create` never hides.
+**Lints** `[BUILT — landing 4; `tools/tacob lint`, and the editor's gutter]`. Each is a snag
+that cost a live run, and each message says which note holds the measurement:
+
+| Rule | Level | What it catches |
+|---|---|---|
+| `aim-waits` | error | `wait-for-turn`/`-move` inside an `AimWeaponN`, N ≥ 4 — the slot is aimed by `tagpu_weapons.c`, which needs the script back inside its tick (snag 1: 0/2/0/6 shots against 19/18/25/19) |
+| `aim-no-signal` | warning | an aim script that waits without the `signal` / `set-signal-mask` pair: every re-aim leaks a record and the pool of eight empties in seconds |
+| `thread-peak` | warning | a static estimate of concurrently live records above eight — per script, itself if it can block plus everything it starts or calls |
+| `query-piece-shown` | warning | the muzzle a `Query*` hands back that neither `Create` nor `0x45AF1B` hides: the flare cone stuck on the hull |
+| `set-ignored` | warning | a `set` retail TA drops — only six of the twenty ids have a case in `0x480B20` |
+| `get-extension` | warning | a value id above 20: the jump table at `0x480AC4` stops there and returns 0 |
+| `piece-unknown` | warning | a declared piece the model has no node for, so every move and hide on it moves nothing |
+
+`play-sound` and `map-command` are **compile errors**, not lints: the compiler refuses them and
+names `0x4B1B60`, because their operand encodings are the community's too and a file that
+round-trips a guess is worse than one that will not build.
 
 **Template**: "add weapon N" writes the four scripts in the slew-and-return shape — the only one
 of the four measured bodies that fired evenly (19/18/25/19 shots on slots 4..7, `extra-weapons.md`).
 
-## The editor page
+## The editor page — built 2026-09-07
 
-Left: the BOS editor — CodeMirror, live diagnostics from the parser, completion from the 3DO's
-piece names and the file's script names. Right, top: the viewport — posed model on a ground
-plane, orbit/zoom as in `ta3do-view.html`, a draggable target marker, effect markers, and the
-eight-thread monitor as a strip (owner script, state, and the tick a request was refused).
-Right, bottom: tabs — unit state, weapon slots, console, trace. Across the top: the director bar
-(scenario picker per class, raw event buttons with argument fields) and the transport
-(play/pause/step, tick counter, scrub).
+`tools/tacob-edit.html`, served by `tools/tacob serve <unit>`. Left: the BOS editor —
+CodeMirror 6 through the import map, a BOS `StreamLanguage`, a lint gutter fed by the
+server's findings, and completion over the unit's piece names, its script names and the
+twenty value ids; under it the findings list, each row clicking through to its line. Right,
+top: the viewport — the `ta3do` glTF on a grid, orbit/zoom as in `ta3do-view.html`, the target
+marker, effect markers, and the camera following the unit; under it the **eight-record strip**,
+one cell per `0xA4` record with its script and state (`run` / `wait-turn` / `wait-move` /
+`sleep` / `call` / free) and the pc, sp, mask and blocked-on slot in its tooltip. Right,
+bottom: tabs — **state** (every field a value-id handler reads, editable, and all twenty ids
+with their live value and whether `set` writes them), **slots** (the FBI's weapons with range,
+reload, which protocol drives them, shots and held shots, and the "add weapon N" template),
+**events** (a button per by-name engine start, each issued through the call-site table),
+**console** and **trace** (the cobtrace lines verbatim, so a modder can `diff` them against the
+game's own log). Across the top: the class picker, the transport (restart, play/pause, step,
+speed, tick, a scrub over the recorded timeline) and **build & restart** and **pack .ufo**.
+
+**The page never interprets COB.** Each tick it asks for one pose frame and sets, per piece,
+a translation, three Euler angles and a visibility flag on the glTF node **of the same name** —
+0x45A950 binds by name and the COB's piece order is not the 3DO's tree order (ARMPW's COB piece
+0 is `torso`; the 3DO's root is `ground`). The one conversion the server does for it: `ta3do`
+writes glTF with the file's z negated and the engine's loaded model has the file's x *and* z
+negated, so glTF is the engine's frame with x negated — which turns `Ry·Rx·Rz` into three.js's
+`YXZ` Euler `(ax, ay, −az)` and a local offset into `(−x, y, z)`. At rest that reproduces the
+exporter's own node translation exactly, which is the check that it is right.
+
+If CodeMirror will not load, the page falls back to a plain textarea, says so in the findings
+list, and everything else keeps working.
 
 ## Landings
 
@@ -247,9 +322,9 @@ Right, bottom: tabs — unit state, weapon slots, console, trace. Across the top
 |---|---|---|
 | 1 | Compiler + decompiler, CLI only (`compile`, `decompile`, `dump`), preprocessor, shipped headers | **built 2026-09-07** — 278 of 278 stock COBs round-trip byte-identical as whole files; 26 offline tests green |
 | 2 | The `tagpu_cobtrace.on` hook | **built 2026-09-07** (§Landing 2) — the nine scenarios each produce a cobtrace log and a posedump, kept under `research/notes/evidence/cobtrace/`; reviewed as an engine change |
-| 3 | VM + director, headless `tacob run` | trace and pose diffs empty against landing 2's logs; the pool refuses the ninth thread |
-| 4 | The editor page, lints, slot template | driven by hand: open a stock unit, edit, restart, see the change, pack a UFO that `tacli` loads |
-| 5 | Packaging: pywebview launcher, browser fallback, game-folder picker, PyInstaller onedir | the built folder runs on a machine with no Python |
+| 3 | VM + director, headless `tacob run` | **built 2026-09-07** (§Landing 3) — all nine replays byte-identical to the game's own logs, all eight posedumps of the traced unit matching, the ninth thread refused |
+| 4 | The editor page, lints, slot template | **built 2026-09-07** (§Landing 4) — driven by hand end to end: ARMPW opened, `Create` edited to hide its torso, rebuilt, restarted, the change seen in the viewport, packed and installed, and the game drew the Peewee without its torso (232 pixels of its own 52×56 box) |
+| 5 | Packaging: pywebview launcher, browser fallback, game-folder picker, PyInstaller onedir | **built 2026-09-07** (§Landing 5) — `dist/tacob/`, 172 files and 29.7 MB, run in a Wine prefix with no `python*.exe` anywhere under `drive_c`: it decompiled ARMPW out of the game's archives, stepped the VM 30 ticks, and served the editor to headless Chrome **with the network cut off** — CodeMirror alive, the model on the canvas, the eight-record strip filled |
 | 6 | Scriptor as oracle (whenever the binary turns up) | probe corpus compiled by both, bytes identical or every difference explained here |
 
 ## Landing 1 — built 2026-09-07
@@ -327,6 +402,206 @@ follows (the addresses are in `exe-reverse-engineering.md` §"The COB engine"):
 - **Stock scripts never fill the pool**: no fixture produced an `X` line. The refusal
   path is exercised only by extended-weapons content (`extra-weapons.md` snag 10).
 
+## Landing 3 — built 2026-09-07
+
+The VM and the director in `tools/tacob` (`run`, `fit-world`), the world timelines in
+`research/notes/evidence/cobtrace/replay.json`, and thirteen more offline tests. Gate:
+`tools/tacob run --all` → **nine of nine**, each replay's `--trace-out` file byte-identical to
+the log the game wrote (4272 lines) and every piece of the eight usable posedumps matching on
+`move=`, `turn=` and `HIDDEN`.
+
+What it took that the design did not foresee:
+
+- **The frame position of an engine start matters as much as its `runNow` flag.** A run-later
+  start issued before the unit's `DoScriptsNow` steps in its own tick; one issued after it waits
+  a tick. Getting `StartMoving` on the wrong side of that line moved one line of the kbot log.
+  The per-unit tick's call order (`0x48ADC4` … `0x48ADEB` … `0x48AFAA`) settles it for the
+  movement pass; `Activate` is measured rather than derived, because `UNITS_SetStateMask` is not
+  in that function.
+- **The oracle's deferral is part of the contract.** `tagpu_cobtrace.c` writes a start at the
+  next hook event, reading the record's stack then; the VM latches and flushes at the same five
+  points, or the `S` lines land in the wrong place.
+- **The initial pose is the model builder's, not the script's.** Until `0x45AF1B` was read, every
+  aircraft's flares and thrust anchors were "visible" in the replay and hidden in the game.
+- **The gate got stronger than the row asked for.** "Trace and pose diffs empty" became whole
+  files identical byte for byte, header included, so `diff` is the literal check and a modder can
+  run the same one.
+
+The refusal path (`X`) has no stock fixture — `tools/test_tacob.py` covers it with a synthetic
+COB that starts nine sleepers, and with the `call-script` on a full pool that parks its caller
+for ever.
+
+## Landing 4 — built 2026-09-07
+
+`tools/tacob serve` and `tools/tacob-edit.html` (§The editor page), the world the script sees,
+a live director, the lints, the slot template, and four new commands: `open` (a stock unit into
+`projects/<unit>/` — BOS, COB, FBI and the glTF with **every** piece kept), `lint`, `pack`
+(`--install <gamedir>`) and `pose-check`. Twenty-four more offline tests, 63 in all.
+
+**Gate, driven by hand**: ARMPW opened, `Create` edited to `hide torso`, built (the page's
+findings list stayed clean, the viewport's Peewee lost its torso), packed and installed into a
+`tacli` instance, `scenario load cob-kbot --restart`, and the game drew a Peewee with no torso
+— **232 of the 2912 pixels** in its own 52×56 box, against 0 for the same shot with the
+override removed. A bad edit was refused and left the running unit alone; an `AimWeapon4` with
+a `wait-for-turn` produced the two lints it should.
+
+What the landing had to read out of the binary, because the design had modelled it as a
+dictionary:
+
+- **`get` and `set` are `0x480770` and `0x480B20`**, and the twenty ids are now arithmetic
+  rather than a table of zeros (`exe-reverse-engineering.md` §"`get` and `set`"). Three of
+  them changed what the tool does: the XZ packing **adds** the z integer, so a negative z
+  borrows from x and every unpacking handler adds the 1 back; `XZ_ATAN` subtracts the unit's
+  own heading and `ATAN` does not; and **fourteen of the twenty ids have no `set` case at
+  all**, which is a lint (`set-ignored`) rather than a modelling gap.
+- **The piece transform is `0x43DEF0` composed through `0x4B6CC0`**, which fixes the rotation
+  order (`Ry · Rx · Rz`), settles that the COB's axis operands are plain X, Y, Z, and shows
+  `MOVE` to be a delta added before the rotation. Both of those were open questions in
+  `model-import.md`; the disassembly closes them and `tools/tacob pose-check --all` checks the
+  result against the engine's own posed vertex buffer — **exactly 0** on the kbot, the
+  building and the ship, and on the four fast movers the same residual `tagpu_native.c`'s own
+  `err=` reports on the same dump line.
+- **The 3DO loader negates X and Z.** Every offset and vertex the engine holds is `(−x, y, −z)`
+  of the file's. Until that was measured the composed pose was mirrored, and `PIECE_XZ` with
+  it.
+- **`rand` is Park–Miller**, `s = 16807·s mod 2^31−1` by Schrage's trick at `0x4B6C30`, so the
+  editor's `rand` is the game's recurrence with a seed you can set, not a stand-in.
+
+What the live runs taught, each now a rule the director follows:
+
+- **Starting a stock aim every tick is the bug the lints are about.** Cavedog's `AimPrimary`
+  opens with `signal`, so a fresh copy each tick kills the one still slewing and the turret
+  never arrives — `K` lines all the way down, and 0 shots. The director keeps one in flight and
+  re-issues only when the solution has moved further than the module's own `AIM_TOLERANCE`, or
+  after ten seconds. That is `extra-weapons.md` snag 1's `full` row, reproduced by accident.
+- **Most aircraft and the submarine have no `Aim*` script at all** — ARMHAWK, ARMBRAWL,
+  ARMTHUND and CORSUB carry `QueryPrimary` and sometimes `FirePrimary`, nothing else. The
+  engine aims them; a director that waits for an aim script to return 1 gets no shots for ever.
+- **A unit carries only the `MoveRate` scripts its animation needs**, so the director drops to
+  the nearest one that exists (ARMHAWK has `MoveRate2` and no others).
+- **The FBI's `category` is a word list.** `ARM KBOT LEVEL1 WEAPON NOTAIR NOTSUB CTRL_W`
+  contains the substring `SUB`, and the first version of the class guess called a Peewee a
+  submarine.
+- **A `.ufo` does not override a stock path; a loose file does.** Measured three ways
+  (`file-formats.md` §5): the same COB as `ztacob-armpw.ufo` and as `aaa-tacob.ufo` — the two
+  ends of the directory listing — changed **0 pixels**, and the loose
+  `gamedir/scripts/armpw.cob` changed 232. `pack --install` writes both, and says why.
+
+**What the director does not do**: it generates the events, and the path is still a sketch —
+bounded loops per class (shuttle, circuit, hover, run-in) scaled to the unit's own weapon reach
+so the target marker stays in range. Nothing about the motion was measured against a moving
+unit, and it is not the engine's movement model.
+
+## Landing 5 — built 2026-09-07
+
+The Windows folder a modder unzips and runs. `tools/tacob_app.py` (the entry point),
+`tools/tacob.spec` (PyInstaller onedir), `tools/tacob-build.py` (`vendor` · `verify` ·
+`wine-setup` · `build` · `check`), `tools/tacob-setup.html` (the first-run picker), a `gui`
+subcommand, and the path/config layer underneath all of it. Twenty-one more offline tests, 84
+in all.
+
+**Gate**: `tools/tacob-build.py check` — the built folder run inside a Wine prefix the check
+first proves has **no `python*.exe` anywhere under `drive_c`**. Two runs there. `tacob.exe serve
+armpw --ticks 30` read the game's archives, decompiled ARMPW, compiled it back and stepped the
+VM (24 trace lines). Then `tacob.exe gui armpw --no-open`, driven by headless Chrome with
+`--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1` — every host but loopback
+unresolvable, so a CDN cannot answer for the folder — and the page came up with CodeMirror
+alive (not the textarea fallback), a `<canvas>` with the Peewee on it, the eight-record strip
+filled and `#status` reading `15 scripts, 15 pieces, 5 statics`. A `dist/tacob/` of 172 files
+and 29.7 MB.
+
+### What the packaging changed in the tool
+
+The program is the same three stdlib-only scripts; what moved is **where they look**.
+
+- **`HERE` is `sys._MEIPASS` when frozen** (`tacob._here()`). Everything the tool *ships* —
+  `tacob-include/`, `tacob-edit.html`, `tacob-setup.html`, `vendor/`, and `ta3do` and
+  `hpipack.py` themselves — hangs off it, and the spec's `.` destination is exactly that
+  directory, so the two `SourceFileLoader` calls that let the three scripts find each other keep
+  working unchanged.
+- **What the *user* writes hangs off `user_dir()`** — `%APPDATA%\tacob` on Windows,
+  `$XDG_DATA_HOME/tacob` elsewhere, `$TACOB_HOME` over both (that is what the tests set).
+  `projects_dir()` is the checkout's gitignored `/projects/` in a checkout and `user_dir() /
+  "projects"` in the bundle, because a project folder inside `Program Files` is not writable.
+- **The game folder is decided in one place** (`resolve_gamedir`, called once in `main()`): the
+  flag, then `$TA3DO_GAMEDIR` — which `ta3do` reads for itself, so the answer there is "do not
+  override it" — then the saved config. `ta3do.repo_root()` walks parents for a directory
+  holding both `tagpu/` and `pristine/`, which in a packaged folder finds nothing meaningful, so
+  `load_assets()` refuses with a sentence rather than naming that guess.
+- **`ta3do.die()` prints and raises `SystemExit`**, which `except Exception` lets straight past.
+  `load_assets()` is the one door to the asset layer now: it checks the folder holds one of
+  `totala1.hpi` / `totala2.hpi` / `rev31.gp3` first, and turns everything else into a
+  `TacobError` — which the server answers as a 400 with the sentence in it, not a 500 with a
+  type name.
+- **`run`, `fit-world` and `pose-check` are developer gates** and the folder does not ship
+  landing 2's fixtures. `fixtures_dir()` says that in one sentence instead of raising a
+  `FileNotFoundError` three frames deep.
+
+### The first run
+
+`tacob gui` with nothing configured starts the server anyway and serves **the picker** at `/`,
+on the same port the editor will use — so answering it is a reload, not a second URL. It asks
+two things (the game folder, with any folder that looks like an install offered as a button, and
+the unit), validates *before* it saves (`no scripts/armpw.cob in …` beats a session whose every
+piece silently sits at the origin), writes `config.json`, opens the project and swaps the
+session in. Until then every other route answers **503** with the same sentence. Measured in the
+packaged folder: `/setup` answered `"needed": true` with its config at
+`C:\users\…\AppData\Roaming\tacob\config.json`, and `/` served
+`<title>tacob — set up</title>`.
+
+The one thing the picker deliberately does *not* decide: **whether `pack` installs into that
+folder**. `gui` defaults it on because that is what the window is for and `serve` leaves it off,
+but either way the flag is the operator's (`--install` / `--no-install`) and the page only ever
+supplies the value — landing 4's review's rule, that a request may not name where the tool
+writes, with the Origin check still in front of it.
+
+### The window
+
+`open_window()` picks one of three and says which. **pywebview** when it can render;
+**the default browser** otherwise; nothing but a printed URL if even that fails. The test that
+decides is not "is pywebview installed" but **is WebView2 installed** — pywebview's Windows
+backend silently falls back to MSHTML, which has no ES modules, so the page's import map would
+produce a blank window and no error anywhere. `webview2_present()` reads
+`SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}\pv` under
+HKLM (both registry views) and HKCU. The exe is built **with a console** on purpose: the browser
+fallback has no window of its own to close, so the console is what stops the server, and it is
+where the URL and the lint findings appear.
+
+### The JavaScript
+
+`tools/tacob-build.py vendor` reads the page's own import map, fetches every entry, and follows
+each file's **relative** imports transitively — which is how `BufferGeometryUtils.js` came along
+(GLTFLoader imports it; nothing in the map names it). Sixteen files, 2.5 MB, mirrored under
+`tools/vendor/` at the CDN's own paths, with `tools/tacob-vendor.json` recording each URL and
+sha256. A later fetch whose bytes differ **stops the build** rather than shipping. Nothing is
+vendored into git.
+
+The rewrite is at *serve* time, not build time: `rewrite_import_map()` parses the map and swaps
+each URL for `/vendor/<same path>` **only when that file (or, for `three/addons/`, that
+directory) is actually there**, so one page works from a checkout with a network and from the
+folder without one, and a half-vendored tree still loads. Mirroring the CDN's paths is what makes
+the prefix entry work by the same rule as a file entry — and the CodeMirror files keep their
+**bare** imports, resolved by the map, because jsdelivr's `+esm` bundles inline their
+dependencies and two copies of `@codemirror/state` break CodeMirror.
+
+### What the build environment taught
+
+- **A Windows Python under Wine dies if its stdout is a plain file.** `Fatal Python error:
+  init_sys_streams: can't initialize sys standard streams / OSError: [WinError 6] Invalid
+  handle`, before it runs a line — which is what happens the moment a build is logged with `>`.
+  Every Wine call in `tacob-build.py` therefore reads through a **pipe** and re-prints, and
+  stdin is `/dev/null`. Hit twice: on `pip install`, then again on the build itself.
+- **The frozen tool must not trust the console's encoding.** With output redirected, Python
+  encodes with the machine's legacy code page and a single em dash in a message is a
+  `UnicodeEncodeError` that kills the tool while it prints its own greeting. `tacob_app.py`
+  reconfigures both streams to UTF-8 with `errors="replace"` before anything else.
+- **Only the entry script needs a rebuild.** `tacob`, `ta3do`, `hpipack.py` and both HTML pages
+  ship as *data*, so editing them is a copy into `dist/tacob/_internal/`, not a PyInstaller run.
+- Python 3.11.9 amd64 installs into a `win64` prefix from the ordinary python.org installer
+  (`/quiet InstallAllUsers=0 … TargetDir=C:\Python311`), and `pip install pyinstaller pywebview`
+  brings pythonnet 3.1.0 in with it — all three are in the bundle. What Wine cannot supply is
+  WebView2 or .NET, so **the window itself is the one path this gate does not exercise**.
+
 ## Gaps this design does not close
 
 - **Scriptor compatibility of hand-written literals** is unproven until the binary is found:
@@ -336,5 +611,42 @@ follows (the addresses are in `exe-reverse-engineering.md` §"The COB engine"):
   the `EMIT_SFX`/`EXPLODE` handlers' tables are read — the handlers themselves are located
   (`0x480EB0`, `0x481140`, landing 2).
 - ~~**`rand`** cannot be replayed from posedump~~ — cobtrace logs every draw as a `D` line (landing 2).
-- **Flight, sailing and diving** are sketches. The events they generate are exact; the path is not.
-- **The interpolation rules** (§The VM) are unknown until the first traces are diffed.
+- **Flight, sailing and diving** are sketches, and so is walking. Landing 4's director
+  *generates* the events rather than replaying them, and each is issued through the call-site
+  table with the entry and frame position the engine uses — but the paths are bounded loops
+  (shuttle, circuit, hover, run-in) scaled to the unit's own weapon reach, and **nothing about
+  the motion has been measured against a moving unit**.
+- ~~**The interpolation rules** (§The VM) are unknown until the first traces are diffed~~ —
+  measured in landing 3, §The VM's table.
+- **The replay's inputs are not all predictions** — §"What the replay supplies" names the three
+  the director is given, and the tank's `D`-line ticks are the one place a fixture's own numbers
+  come back out of it.
+- ~~**The unit-state panel is one value deep.**~~ — closed in landing 4: all twenty ids are the
+  retail handlers' own arithmetic (`0x480770`), including the composed piece transform
+  `PIECE_XZ`/`PIECE_Y` need, and `set` writes only the six ids the engine writes. **What is
+  still missing behind them**: the map is *flat* at a settable height, so `GROUND_HEIGHT`
+  answers one number for the whole world; the only other unit `UNIT_XZ`/`UNIT_Y`/`UNIT_HEIGHT`
+  can see is the target marker; and the seed `rand` starts a match with is unread, so the
+  editor picks one and says which.
+- **The replay gate and the live director are separate paths.** `tacob run --all` still proves
+  the VM against the game's own logs; nothing proves the *director's* generated events against a
+  game, because there is no oracle for "what the engine would have called here". The events are
+  each issued correctly; that they are the ones the engine would issue, in that order, is not
+  gated.
+- **The effect opcodes are logged, not simulated.** `emit-sfx` and `explode` record
+  `(tick, piece, argument)` and now also **where the piece was**, so the page draws a marker
+  there; their handlers' constant tables are still unread, so the shipped `SFXTYPE_*` and
+  explosion-flag values remain the community's and the editor prints the community's names.
+- **The pywebview window has never been opened.** Wine supplies neither WebView2 nor .NET, so
+  landing 5's gate exercised the *browser* fallback and the WebView2 probe's negative answer.
+  `webview`, `pythonnet` and `clr_loader` are in the bundle and `open_window()`'s three branches
+  are written, but "a window of our own on a real Windows machine" is claimed from the library's
+  contract, not measured.
+- **The packaged folder is unsigned and has no installer.** It is a folder to unzip; Windows
+  will warn about it, and nothing updates it.
+- **The picker's candidate list is a short fixed list**, not a search: the working directory,
+  the folder the tool sits in and its parent, and the usual Cavedog/Steam/GOG paths on each of
+  five drive letters. A game installed anywhere else is typed in, not offered.
+- **Landing 4 ships no `.fbi` editing.** A project carries the FBI it was opened with and packs
+  it if one is present, but nothing edits it, so "add weapon 4" writes the four scripts and
+  leaves `Weapon4=` to the modder. Editing FBI and weapon TDF was out of scope by decision.

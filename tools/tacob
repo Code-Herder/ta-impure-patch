@@ -5,9 +5,16 @@
     tools/tacob decompile unit.cob -o unit.bos           # or a stock unit: armpw
     tools/tacob dump      unit.cob [Script]              # opcode listing
     tools/tacob roundtrip --all [--out DIR] [--json]     # the landing-1 gate
+    tools/tacob run       --all                          # the landing-3 gate (VM + director)
+    tools/tacob serve     armpw                          # the editor, on a port of its own
+    tools/tacob gui       [unit]                         # the same page in a window
 
 BOS is the source and COB the build artifact (research/notes/tacob-design.md).
-Formats: research/notes/file-formats.md §2. The code shapes below were
+Formats: research/notes/file-formats.md §2; the engine the VM reproduces is
+research/notes/exe-reverse-engineering.md §"The COB engine", every rule read
+out of the retail binary. `run` replays landing 2's fixtures under
+research/notes/evidence/cobtrace/ and diffs both oracles — the output file is
+byte-identical to the log the game wrote. The code shapes below were
 measured over the 278 stock COBs on 2026-09-07 and are what `roundtrip`
 proves — every stock script decompiles to BOS that compiles back to the
 identical file:
@@ -36,13 +43,72 @@ goes through `tools/ta3do`, loaded as a module the way tools/tascene does.
 import argparse
 import json
 import math
+import os
 import re
 import struct
 import sys
+import threading
+import time
+import urllib.parse
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-INCLUDE_DIR = HERE / "tacob-include"
+# --------------------------------------------------------------------------- where things are
+#
+# Two layouts. In the checkout this file sits next to everything it ships and
+# one directory below what it writes. In the packaged folder (PyInstaller
+# onedir, landing 5) the shipped files are extracted beside the executable and
+# `sys._MEIPASS` names that directory, while a project written under
+# `Program Files` would not be writable at all. So: everything the tool *ships*
+# hangs off HERE, everything the *user* writes hangs off `user_dir()`.
+
+BUNDLED = bool(getattr(sys, "frozen", False))
+
+
+def _here() -> Path:
+    if BUNDLED:
+        meipass = getattr(sys, "_MEIPASS", None)
+        return Path(meipass) if meipass else Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+HERE = _here()
+INCLUDE_DIR = HERE / "tacob-include"    # the shipped headers
+EDITOR_HTML = HERE / "tacob-edit.html"  # the editor page
+SETUP_HTML = HERE / "tacob-setup.html"  # the first-run game-folder picker
+VENDOR_DIR = HERE / "vendor"            # the pinned JavaScript, when the build fetched it
+
+CONFIG_FILE = "config.json"
+
+
+def user_dir() -> Path:
+    """Where the tool keeps what the user owns: the config and, when packaged,
+    the projects. `TACOB_HOME` overrides it — that is what the tests set."""
+    env = os.environ.get("TACOB_HOME")
+    if env:
+        return Path(env).expanduser()
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "tacob"
+
+
+def read_config() -> dict:
+    """The per-user config: the game folder and the unit last opened. Never in the
+    repo — `tacob-design.md` §"Decisions locked": the game folder lives in
+    per-user config outside any repo."""
+    try:
+        data = json.loads((user_dir() / CONFIG_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_config(config: dict) -> Path:
+    path = user_dir() / CONFIG_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    return path
 
 
 class TacobError(Exception):
@@ -297,7 +363,7 @@ def format_angular(word: int) -> str:
 HYPHEN_KEYWORDS = [
     "set-signal-mask", "wait-for-turn", "wait-for-move", "static-var", "stop-spin",
     "dont-cache", "dont-shade", "emit-sfx", "start-script", "call-script", "attach-unit",
-    "drop-unit", "play-sound", "x-axis", "y-axis", "z-axis",
+    "drop-unit", "play-sound", "map-command", "x-axis", "y-axis", "z-axis",
 ]
 SOFT_KEYWORDS = {"speed", "type", "to", "from", "now", "around", "along", "accelerate",
                  "decelerate"}  # clause words that may also name a var: SetSpeed(speed)
@@ -833,8 +899,25 @@ class Parser:
         self.expect("op", ";")
         return Node("attach-unit", unit=unit, piece=piece, pos=pos, tok=tok)
 
+    # The two the community's BOS has and this engine does not run. `0x10072000`
+    # and `0x10073000` are missing from the dispatch chain at 0x4B1B48..0x4B1B60,
+    # so the *thread* dies there, silently, and everything after the statement
+    # never runs (exe-reverse-engineering.md §"Opcodes this engine does not
+    # implement"). Refusing beats emitting: the operand encodings are the
+    # community's too, and a file that round-trips a guess is worse than one that
+    # will not build. No stock script uses either — all 278 decoded.
+    def _unimplemented(self, tok, name):
+        raise CompileError(
+            f"{tok.where}: {name} is not an opcode retail TA dispatches — the thread "
+            f"that runs it is killed on the spot (0x4B1B60) and the rest of the script "
+            f"never happens. No stock script uses it; its operand encoding is the "
+            f"community's and unverified here, so tacob will not emit one.")
+
     def stmt_play_sound(self, tok):
-        raise CompileError(f"{tok.where}: play-sound appears in no retail script and its encoding is unverified")
+        self._unimplemented(tok, "play-sound")
+
+    def stmt_map_command(self, tok):
+        self._unimplemented(tok, "map-command")
 
     def value_id(self):
         tok = self.peek()
@@ -1145,10 +1228,13 @@ class Compiler:
             raise CompileError(f"internal: unknown expression {k}")
 
 
+def parse_bos(text: str, file: str = "<bos>", include_dirs=(), reader=None) -> Program:
+    """Preprocess and parse. The editor stops here to lint; the compiler goes on."""
+    return Parser(Preprocessor(include_dirs, reader).run(text, file)).parse()
+
+
 def compile_bos(text: str, file: str = "<bos>", include_dirs=(), reader=None) -> Cob:
-    tokens = Preprocessor(include_dirs, reader).run(text, file)
-    program = Parser(tokens).parse()
-    return Compiler(program).compile()
+    return Compiler(parse_bos(text, file, include_dirs, reader)).compile()
 
 
 # --------------------------------------------------------------------------- decompiler
@@ -1625,6 +1711,2020 @@ def _piece(cob, index):
     return cob.pieces[index] if 0 <= index < len(cob.pieces) else f"piece#{index}"
 
 
+# --------------------------------------------------------------------------- the virtual machine
+
+# Every constant and rule below was read out of the retail binary; the addresses
+# are in research/notes/exe-reverse-engineering.md §"The COB engine". The engine
+# is the reference, not Spring: where the two differ this follows the engine.
+
+SIM_RATE = 30                 # cob+0x04 (0x4B0641); sleep ticks and MOVE/TURN speeds divide by it
+
+ST_FREE      = 0x00000000     # the eight status words (alloc 0x4B08F9, dispatch 0x4B0DBF)
+ST_RUN       = 0x01000000
+ST_WAIT_TURN = 0x02100000
+ST_WAIT_MOVE = 0x02200000
+ST_SLEEP     = 0x02400000
+ST_CALL      = 0x02800000
+
+REC_WORDS = 32                # the record's stack, +0x24 to the end of the 0xA4 bytes
+NRECORDS = 8
+
+# the piece animation array (cob+0x14): 19 dwords per piece, three axes per group
+PIECE_FIELDS = 19
+F_DIRTY, F_MOVE_TARGET, F_MOVE_SPEED = 0, 1, 4
+F_TURN_TARGET, F_TURN_SPEED, F_SPIN_TARGET, F_SPIN_ACCEL = 7, 10, 13, 16
+
+
+def i32(v):
+    v &= 0xFFFFFFFF
+    return v - (1 << 32) if v & 0x80000000 else v
+
+
+def idiv(a, b):
+    """C's idiv: truncate toward zero (Python's // floors)."""
+    q = abs(a) // abs(b)
+    return -q if (a < 0) != (b < 0) else q
+
+
+class Thread:
+    """One 0xA4-byte record. Nothing clears it on free — an unwritten local reads
+    whatever the record last held there (CREATE_LOCAL_VAR only bumps the index)."""
+
+    __slots__ = ("status", "pc", "sp", "sleep", "piece", "axis", "child", "mask", "cb", "stack")
+
+    def __init__(self):
+        self.status = ST_FREE
+        self.pc = 0
+        self.sp = -1
+        self.sleep = 0
+        self.piece = 0
+        self.axis = 0
+        self.child = -1
+        self.mask = 1
+        self.cb = None
+        self.stack = [0] * REC_WORDS
+
+
+class AimCallback:
+    """The completion object the engine hands an Aim* start (vtable 0x4FD6F0):
+    `if (value) slot->aimed = 1`, and a refused start gets called with 0 at once."""
+
+    def __init__(self):
+        self.aimed = 0
+        self.calls = []
+
+    def __call__(self, value):
+        self.calls.append(value)
+        if value:
+            self.aimed = 1
+
+
+class UnitWorld:
+    """Everything `get`, `set` and the effect opcodes reach: the twenty stock value
+    ids (file-formats.md §2.5), the RNG, and a log of the effects the script asks for.
+    The cobtrace oracle carries none of this traffic, so it is the replay's input."""
+
+    def __init__(self, values=None, rands=None):
+        self.values = {VALUE_IDS["ACTIVATION"]: 0, VALUE_IDS["HEALTH"]: 100,
+                       VALUE_IDS["BUILD_PERCENT_LEFT"]: 0}
+        if values:
+            self.values.update(values)
+        self.rands = list(rands or ())      # the draws to hand back, in order
+        self.draws = 0
+        self.effects = []                   # (tick, kind, piece, arg)
+        self.unknown = set()
+
+    def get(self, vid, a, b, c, d):
+        if vid in self.values:
+            return self.values[vid]
+        if vid > 20:                        # TADR/ProTA extensions this engine lacks
+            self.unknown.add(vid)
+            return 0
+        self.unknown.add(vid)
+        return 0
+
+    def set(self, vid, value):
+        self.values[vid] = value
+
+    def rand(self, n, lo):
+        """`0x4B6C30(n)` — the shared sim RNG; it returns 0 for n < 2. `lo` is only
+        here because the oracle records `lo + r`, which is what a replay hands back."""
+        r = 0 if n < 2 else self.draws
+        self.draws += 1
+        return r
+
+    def effect(self, tick, kind, piece, arg=None):
+        self.effects.append((tick, kind, piece, arg))
+
+
+class CobVM:
+    """The eight-record thread pool of one unit, running its COB the way
+    0x4B0DA0 and 0x4B1C00 do. `tick` is set by whoever drives it."""
+
+    def __init__(self, cob, world=None, trace=None, unit=1, type_name="?", visible=None):
+        self.cob = cob
+        self.code = [w & 0xFFFFFFFF for w in cob.code]
+        self.names = [n for n, _ in cob.scripts]
+        self.entries = [e for _, e in cob.scripts]
+        self.world = world if world is not None else UnitWorld()
+        self.trace = trace
+        self.unit = unit
+        self.type = type_name
+        self.tick = 0
+        self.threads = [Thread() for _ in range(NRECORDS)]
+        self.running = 0                                  # cob+0x53C
+        self.statics = [0] * cob.statics                  # cob+0x10, zero-filled
+        self.anim = [0] * (PIECE_FIELDS * len(cob.pieces))  # cob+0x14, zero-filled
+        self.dirty = 0                                    # cob+0x18
+        self.pos = [[0, 0, 0] for _ in cob.pieces]        # PrimitiveStruct XPos/ZPos/YPos, 16.16
+        self.ang = [[0, 0, 0] for _ in cob.pieces]        # XTurn/ZTurn/YTurn, uint16
+        # 0x45AF1B: the model builder clears PrimitiveStruct+0x28 bit 0 for a piece
+        # whose 3DO node has fewer than three vertices — every flare, wake, tube and
+        # thrust anchor starts invisible without the script hiding it
+        self.visible = list(visible) if visible else [True] * len(cob.pieces)
+        self.cached = [True] * len(cob.pieces)
+        self.shaded = [True] * len(cob.pieces)
+        self._pend = None                                 # the latched start, as the oracle latches it
+
+    # -- names ------------------------------------------------------------
+    def index_of(self, name):
+        """Name2Index 0x4B07C0: the first entry whose name matches."""
+        try:
+            return self.names.index(name)
+        except ValueError:
+            return -1
+
+    def script_of_pc(self, pc):
+        """The script whose body holds pc — the largest entry <= pc, ties to the
+        last index (tagpu_cobtrace.c script_of_pc, which the R and K lines use)."""
+        best = -1
+        for i, e in enumerate(self.entries):
+            if e <= pc and (best < 0 or e >= self.entries[best]):
+                best = i
+        return self.names[best] if best >= 0 else "?"
+
+    # -- the trace's latch ------------------------------------------------
+    def flush_start(self):
+        """The oracle writes a start at the next hook event, reading the record's
+        stack then: the callers write the arguments only after the allocator returns."""
+        p = self._pend
+        if p is None:
+            return
+        self._pend = None
+        if self.trace is None:
+            return
+        slot, idx, tick, src, parent, argc = p
+        rec = self.threads[slot]
+        if argc < 0:
+            argc = rec.sp + 1
+        argc = max(0, min(argc, REC_WORDS))
+        args = ",".join(str(i32(rec.stack[i])) for i in range(argc))
+        where = "E" if src == "E" else "%s:%d" % (src, parent)
+        self.trace("S\t%d\t%d\t%s\t%s\t%d\t%s\t%s"
+                   % (tick, self.unit, self.type, self.names[idx], slot, where, args))
+
+    def _emit(self, line):
+        if self.trace is not None:
+            self.trace(line)
+
+    # -- the pool ---------------------------------------------------------
+    def alloc(self, idx, src="E", parent=-1, argc=-1):
+        """COBEngine_AllocThread 0x4B08C0. -1 for a script the file lacks and for a
+        full pool alike; the first free slot from 0, and the record is not cleared."""
+        self.flush_start()
+        if idx < 0 or idx >= len(self.names):
+            return -1
+        for slot in range(NRECORDS):
+            rec = self.threads[slot]
+            if rec.status == ST_FREE:
+                rec.status = ST_RUN
+                rec.pc = self.entries[idx]
+                rec.sp = -1
+                rec.cb = None
+                rec.mask = 1
+                self.running += 1
+                self._pend = (slot, idx, self.tick, src, parent, argc)
+                return slot
+        self._emit("X\t%d\t%d\t%s\t%s" % (self.tick, self.unit, self.names[idx], src))
+        return -1
+
+    def free(self, slot):
+        self.threads[slot].status = ST_FREE
+        self.running -= 1
+
+    def wake_callers(self, slot):
+        """Every record blocked in a call on `slot` goes runnable (0x4B19FF, 0x4B1AB1)."""
+        for rec in self.threads:
+            if (rec.status & 0xFFF00000) == ST_CALL and rec.child == slot:
+                rec.status = ST_RUN
+
+    # -- the engine's entries ---------------------------------------------
+    def start_script(self, name, run_now=False, args=(), cb=None, argwords=False):
+        """0x4B0B00 (by index, four argument words, `sp = argc-1`) when `argwords`,
+        else 0x4B0940 (no arguments at all, `sp` stays -1)."""
+        slot = self.alloc(self.index_of(name), argc=len(args) if argwords else -1)
+        if slot < 0:
+            if argwords and cb is not None:
+                cb(0)                       # 0x4B0B11: a refused Aim* reports "not aimed" at once
+            return 0
+        rec = self.threads[slot]
+        rec.cb = cb
+        if argwords:
+            for i in range(4):              # a0..a3 land on the record whatever argc says
+                rec.stack[i] = i32(args[i]) if i < len(args) else 0
+            rec.sp = len(args) - 1
+        if run_now:
+            if self.running:
+                for s in range(NRECORDS):
+                    self.run_thread(s, 0)
+            self.step_anim(0)
+        return 1
+
+    def query_script(self, name, args):
+        """COBEngine_QueryScript 0x4B0C40: four words in, `sp = 3`, the thread runs
+        to its first block inside the call, then stack[0..3] comes back out."""
+        slot = self.alloc(self.index_of(name))
+        if slot < 0:
+            return None                     # the silent failure: the out-slots stay untouched
+        rec = self.threads[slot]
+        rec.cb = None
+        for i in range(4):
+            rec.stack[i] = i32(args[i]) if i < len(args) else 0
+        rec.sp = 3
+        self.run_thread(slot, 0)
+        return [i32(rec.stack[i]) for i in range(4)]
+
+    def do_scripts_now(self, dt):
+        """COBEngine_DoScriptsNow 0x4B0D60 — the per-unit tick, called with dt = 1."""
+        for slot in range(NRECORDS):
+            self.run_thread(slot, dt)
+        self.step_anim(dt)
+
+    # -- the runner -------------------------------------------------------
+    def run_thread(self, slot, dt):
+        """0x4B0DA0: wake the record if its block has cleared, then execute
+        opcodes back to back until one blocks it or ends it."""
+        self.flush_start()
+        rec = self.threads[slot]
+        top = rec.status & 0xFF000000
+        if top == 0:
+            return
+        if top == 0x02000000:
+            sub = rec.status & 0x00F00000
+            if sub == 0x100000:                     # wait-for-turn
+                base = rec.piece * PIECE_FIELDS
+                if self.anim[base + F_TURN_SPEED + rec.axis] == 0:
+                    rec.status = ST_RUN
+            elif sub == 0x200000:                   # wait-for-move
+                base = rec.piece * PIECE_FIELDS
+                if self.anim[base + F_MOVE_SPEED + rec.axis] == 0:
+                    rec.status = ST_RUN
+            elif sub == 0x400000:                   # sleeping
+                rec.sleep -= dt
+                if rec.sleep <= 0:
+                    rec.status = ST_RUN
+            # 0x800000 (blocked in a call) is never woken here — only the child's
+            # RETURN or a signal that kills the child does that
+        if (rec.status & 0xFF000000) != ST_RUN:
+            return
+        self.exec_thread(slot)
+
+    def exec_thread(self, slot):
+        """The opcode loop. `pc` stays on the executing word until the tail advances
+        it (0x4B1BD5/0x4B1BD9), which is the pc a K line reports."""
+        rec = self.threads[slot]
+        code, anim = self.code, self.anim
+        while True:
+            pc = rec.pc
+            word = code[pc]
+            op = word & 0x100FF000
+            nxt = None                      # None = the tail's pc+1; False = stop
+
+            if op == 0x10001000:            # MOVE piece axis; pops target then speed
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                target = i32(rec.stack[rec.sp]); rec.sp -= 1
+                anim[base + F_MOVE_TARGET + axis] = target
+                speed = i32(rec.stack[rec.sp]); rec.sp -= 1
+                speed = idiv(speed, SIM_RATE)
+                if target < self.pos[piece][axis]:
+                    speed = -speed
+                anim[base + F_MOVE_SPEED + axis] = speed
+                anim[base + F_DIRTY] = 1
+                self.dirty = 1
+                nxt = pc + 3
+            elif op == 0x10002000:          # TURN piece axis; the short way round
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                target = i32(rec.stack[rec.sp]) & 0xFFFF; rec.sp -= 1
+                anim[base + F_TURN_TARGET + axis] = target
+                anim[base + F_SPIN_ACCEL + axis] = 0
+                speed = idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
+                delta = target - self.ang[piece][axis]
+                if delta == 0:
+                    speed = 0
+                elif (abs(delta) > 0x8000) != (delta < 0):
+                    speed = -speed
+                anim[base + F_TURN_SPEED + axis] = speed
+                anim[base + F_DIRTY] = 1
+                self.dirty = 1
+                nxt = pc + 3
+            elif op == 0x10003000:          # SPIN piece axis; pops speed then acceleration
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                anim[base + F_TURN_TARGET + axis] = -1     # "no target": the stepper never arrives
+                anim[base + F_SPIN_TARGET + axis] = idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
+                anim[base + F_SPIN_ACCEL + axis] = idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
+                if anim[base + F_SPIN_ACCEL + axis] == 0:
+                    anim[base + F_TURN_SPEED + axis] = anim[base + F_SPIN_TARGET + axis]
+                anim[base + F_DIRTY] = 1
+                self.dirty = 1
+                nxt = pc + 3
+            elif op == 0x10004000:          # STOP_SPIN piece axis; pops the deceleration
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                anim[base + F_SPIN_TARGET + axis] = 0
+                accel = -idiv(i32(rec.stack[rec.sp]), SIM_RATE); rec.sp -= 1
+                anim[base + F_SPIN_ACCEL + axis] = accel
+                if accel == 0:
+                    anim[base + F_TURN_SPEED + axis] = 0
+                nxt = pc + 3                # 0x4B18F8: neither the dirty flag nor cob+0x18 is set
+            elif op in (0x10005000, 0x10006000):    # SHOW / HIDE
+                self.visible[code[pc + 1]] = (op == 0x10005000)
+                nxt = pc + 2
+            elif op in (0x10007000, 0x10008000):    # CACHE / DONT_CACHE
+                self.cached[code[pc + 1]] = (op == 0x10007000)
+                nxt = pc + 2
+            elif op == 0x10009000:          # two pops through vt+0x28 [unknown]
+                rec.sp -= 2
+                nxt = pc + 2
+            elif op == 0x1000A000:          # vt+0x2C(piece) [unknown]
+                nxt = pc + 2
+            elif op == 0x1000B000:          # MOVE_NOW piece axis
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                target = i32(rec.stack[rec.sp]); rec.sp -= 1
+                anim[base + F_MOVE_TARGET + axis] = target
+                anim[base + F_MOVE_SPEED + axis] = 0
+                self.pos[piece][axis] = target
+                nxt = pc + 3
+            elif op == 0x1000C000:          # TURN_NOW piece axis
+                piece, axis = code[pc + 1], code[pc + 2]
+                base = piece * PIECE_FIELDS
+                angle = i32(rec.stack[rec.sp]) & 0xFFFF; rec.sp -= 1
+                anim[base + F_TURN_TARGET + axis] = angle
+                anim[base + F_SPIN_ACCEL + axis] = 0
+                anim[base + F_TURN_SPEED + axis] = 0
+                self.ang[piece][axis] = angle
+                nxt = pc + 3
+            elif op in (0x1000D000, 0x1000E000):    # SHADE / DONT_SHADE
+                self.shaded[code[pc + 1]] = (op == 0x1000D000)
+                nxt = pc + 2
+            elif op == 0x1000F000:          # EMIT_SFX piece; pops the type
+                sfx = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self.world.effect(self.tick, "emit-sfx", code[pc + 1], sfx)
+                nxt = pc + 2
+            elif op == 0x10011000:          # WAIT_FOR_TURN piece axis
+                rec.piece, rec.axis = code[pc + 1], code[pc + 2]
+                rec.status = ST_WAIT_TURN
+                rec.pc = pc + 3
+                return
+            elif op == 0x10012000:          # WAIT_FOR_MOVE piece axis
+                rec.piece, rec.axis = code[pc + 1], code[pc + 2]
+                rec.status = ST_WAIT_MOVE
+                rec.pc = pc + 3
+                return
+            elif op == 0x10013000:          # SLEEP; ms x rate / 1000, truncated
+                ms = i32(rec.stack[rec.sp]); rec.sp -= 1
+                rec.sleep = idiv(ms * SIM_RATE, 1000)
+                rec.status = ST_SLEEP
+                rec.pc = pc + 1
+                return
+            elif op == 0x10021000:          # PUSH constant / local / static
+                sel = word & 7
+                if sel == 1:
+                    value = i32(code[pc + 1])
+                elif sel == 2:
+                    value = rec.stack[code[pc + 1]]
+                elif sel == 4:
+                    value = self.statics[code[pc + 1]]
+                else:
+                    value = 0
+                rec.sp += 1
+                rec.stack[rec.sp] = value
+                nxt = pc + 2
+            elif op == 0x10022000:          # CREATE_LOCAL_VAR: the index moves, nothing is written
+                rec.sp += 1
+                rec.pc = pc + 1
+                continue
+            elif op == 0x10023000:          # POP into a local or a static
+                value = rec.stack[rec.sp]; rec.sp -= 1
+                sel = word & 7
+                if sel == 2:
+                    rec.stack[code[pc + 1]] = value
+                elif sel == 4:
+                    self.statics[code[pc + 1]] = value
+                nxt = pc + 2
+            elif op == 0x10024000:          # POP_STACK
+                rec.sp -= 1
+                rec.pc = pc + 1
+                continue
+            elif 0x10031000 <= op <= 0x10038000 or 0x10051000 <= op <= 0x1005A000:
+                self.arith(rec, op)
+            elif op == 0x10041000:          # RAND: pops hi then lo, pushes lo + rng(hi-lo+1)
+                hi = i32(rec.stack[rec.sp]); rec.sp -= 1
+                lo = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self.flush_start()
+                r = self.world.rand(hi - lo + 1, lo)
+                value = i32(lo + r)
+                rec.sp += 1
+                rec.stack[rec.sp] = value
+                self._emit("D\t%d\t%d\t%d\t%d" % (self.tick, self.unit, slot, value))
+            elif op == 0x10042000:          # GET_UNIT_VALUE: pops the id
+                vid = i32(rec.stack[rec.sp]); rec.sp -= 1
+                rec.sp += 1
+                rec.stack[rec.sp] = i32(self.world.get(vid, 0, 0, 0, 0))
+            elif op == 0x10044000:          # vt+0x48(x) [unknown], one pop
+                rec.stack[rec.sp] = 0
+            elif op == 0x10045000:          # vt+0x4C() [unknown], no pops
+                rec.sp += 1
+                rec.stack[rec.sp] = 0
+            elif op == 0x10043000:          # GET id, a, b, c, d
+                d = i32(rec.stack[rec.sp]); rec.sp -= 1
+                c = i32(rec.stack[rec.sp]); rec.sp -= 1
+                b = i32(rec.stack[rec.sp]); rec.sp -= 1
+                a = i32(rec.stack[rec.sp]); rec.sp -= 1
+                vid = i32(rec.stack[rec.sp]); rec.sp -= 1
+                rec.sp += 1
+                rec.stack[rec.sp] = i32(self.world.get(vid, a, b, c, d))
+            elif op == 0x10061000:          # START_SCRIPT index argc
+                idx, argc = code[pc + 1], i32(code[pc + 2])
+                child = self.alloc(idx, "C", slot, argc)
+                if child >= 0:
+                    ch = self.threads[child]
+                    for k in range(argc - 1, -1, -1):
+                        ch.stack[k] = rec.stack[rec.sp]
+                        rec.sp -= 1
+                    ch.mask = rec.mask
+                nxt = pc + 3                # a refused start leaves the argc words on our stack
+            elif op == 0x10062000:          # CALL_SCRIPT index argc
+                idx, argc = code[pc + 1], i32(code[pc + 2])
+                child = self.alloc(idx, "L", slot, argc)
+                if child >= 0:
+                    ch = self.threads[child]
+                    for k in range(argc - 1, -1, -1):
+                        ch.stack[k] = rec.stack[rec.sp]
+                        rec.sp -= 1
+                    ch.mask = rec.mask
+                rec.child = child           # written even when it is -1: nothing wakes that caller
+                rec.pc = pc + 3
+                rec.status = ST_CALL
+                return
+            elif op == 0x10063000:          # pops [pc+2] words into the runner's frame [unknown]
+                rec.sp -= i32(code[pc + 2])
+                rec.pc = pc + 3
+                continue
+            elif op == 0x10064000:          # JUMP
+                nxt = code[pc + 1]
+            elif op == 0x10065000:          # RETURN
+                self.flush_start()
+                sp = rec.sp
+                value = str(i32(rec.stack[sp])) if 0 <= sp < REC_WORDS else "?"
+                self._emit("R\t%d\t%d\t%d\t%s\t%s"
+                           % (self.tick, self.unit, slot, self.script_of_pc(pc), value))
+                if rec.cb is not None:
+                    rec.cb(i32(rec.stack[rec.sp]))
+                    rec.sp -= 1
+                self.free(slot)
+                self.wake_callers(slot)
+                return
+            elif op == 0x10066000:          # JUMP_NOT_EQUAL: jumps when the value is zero
+                value = rec.stack[rec.sp]; rec.sp -= 1
+                nxt = code[pc + 1] if value == 0 else pc + 2
+            elif op == 0x10067000:          # SIGNAL
+                mask = i32(rec.stack[rec.sp]); rec.sp -= 1
+                stop = False
+                for k in range(NRECORDS):
+                    other = self.threads[k]
+                    if other.status == ST_FREE or not (other.mask & mask):
+                        continue
+                    self.flush_start()
+                    self._emit("K\t%d\t%d\t%d\t%s\t%d"
+                               % (self.tick, self.unit, k, self.script_of_pc(other.pc), slot))
+                    self.free(k)            # its RETURN never runs, so no callback either
+                    self.wake_callers(k)
+                    if k == slot:
+                        stop = True
+                if stop:
+                    rec.pc = pc + 1
+                    return
+                nxt = pc + 1
+            elif op == 0x10068000:          # SET_SIGNAL_MASK
+                rec.mask = i32(rec.stack[rec.sp]); rec.sp -= 1
+                rec.pc = pc + 1
+                continue
+            elif op == 0x10071000:          # EXPLODE piece; pops the flags
+                flags = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self.world.effect(self.tick, "explode", code[pc + 1], flags)
+                nxt = pc + 2
+            elif op == 0x10082000:          # SET id value
+                value = i32(rec.stack[rec.sp]); rec.sp -= 1
+                vid = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self.world.set(vid, value)
+            elif op == 0x10083000:          # ATTACH_UNIT: three pops
+                a = i32(rec.stack[rec.sp]); rec.sp -= 1
+                b = i32(rec.stack[rec.sp]); rec.sp -= 1
+                c = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self.world.effect(self.tick, "attach-unit", None, (c, b, a))
+            elif op == 0x10084000:          # DROP_UNIT: one pop
+                a = i32(rec.stack[rec.sp]); rec.sp -= 1
+                self.world.effect(self.tick, "drop-unit", None, a)
+            else:                           # 0x4B1B60: an unknown opcode kills the thread silently
+                self.free(slot)
+                return
+
+            rec.pc = (pc + 1) if nxt is None else nxt
+
+    def arith(self, rec, op):
+        """The two-operand words (0x4B1479..0x4B18AB). `b` is the top of the stack."""
+        if op == 0x10038000:                # BITWISE_NOT: neither pops nor pushes
+            rec.stack[rec.sp] = i32(~rec.stack[rec.sp])
+            return
+        if op == 0x1005A000:                # NOT (logical): the same, as a 0/1
+            rec.stack[rec.sp] = 1 if rec.stack[rec.sp] == 0 else 0
+            return
+        b = i32(rec.stack[rec.sp]); rec.sp -= 1
+        a = i32(rec.stack[rec.sp])
+        if op == 0x10031000:   v = a + b
+        elif op == 0x10032000: v = a - b
+        elif op == 0x10033000: v = a * b
+        elif op == 0x10034000: v = idiv(a, b) if b else 0   # MOD shares this handler: op & mask
+        elif op == 0x10035000: v = a & b
+        elif op == 0x10036000: v = a | b
+        elif op == 0x10037000: v = a ^ b
+        elif op == 0x10051000: v = 1 if a < b else 0
+        elif op == 0x10052000: v = 1 if a <= b else 0
+        elif op == 0x10053000: v = 1 if a > b else 0
+        elif op == 0x10054000: v = 1 if a >= b else 0
+        elif op == 0x10055000: v = 1 if a == b else 0
+        elif op == 0x10056000: v = 1 if a != b else 0
+        elif op == 0x10057000: v = 1 if (a and b) else 0
+        elif op == 0x10058000: v = 1 if (a or b) else 0     # 0x4B1829 pushes a, which is 0 there
+        elif op == 0x10059000: v = a ^ b                    # 0x4B1875: XOR is the bitwise word
+        else: v = a
+        rec.stack[rec.sp] = i32(v)
+
+    # -- the animation stepper --------------------------------------------
+    def step_anim(self, dt):
+        """0x4B1C00. Returns at once on dt == 0 or with nothing animating; else clears
+        each piece's flag, advances its three axes, and re-sets the flag if any is
+        still travelling — which is exactly what wait-for-turn/-move test."""
+        if dt == 0 or not self.dirty:
+            return
+        self.dirty = 0
+        anim = self.anim
+        for piece in range(len(self.pos)):
+            base = piece * PIECE_FIELDS
+            if anim[base + F_DIRTY] == 0:
+                continue
+            anim[base + F_DIRTY] = 0
+            for axis in range(3):
+                speed = anim[base + F_MOVE_SPEED + axis]
+                if speed:
+                    target = anim[base + F_MOVE_TARGET + axis]
+                    value = self.pos[piece][axis] + dt * speed
+                    if (speed > 0 and value >= target) or (speed < 0 and value <= target):
+                        value = target
+                        anim[base + F_MOVE_SPEED + axis] = 0
+                    else:
+                        anim[base + F_DIRTY] = 1
+                    self.pos[piece][axis] = i32(value)
+                accel = anim[base + F_SPIN_ACCEL + axis]
+                if accel:
+                    anim[base + F_TURN_SPEED + axis] += accel
+                    target = anim[base + F_SPIN_TARGET + axis]
+                    speed = anim[base + F_TURN_SPEED + axis]
+                    if (accel > 0 and speed >= target) or (accel < 0 and speed <= target):
+                        anim[base + F_TURN_SPEED + axis] = target
+                        anim[base + F_SPIN_ACCEL + axis] = 0
+                speed = anim[base + F_TURN_SPEED + axis]
+                if speed == 0:
+                    continue
+                cur = self.ang[piece][axis]
+                step = dt * speed
+                value = cur + step
+                target = anim[base + F_TURN_TARGET + axis]
+                if target == -1:                        # a spin: it never arrives
+                    anim[base + F_DIRTY] = 1
+                elif speed > 0:
+                    left = (target - cur + 0x10000) & 0xFFFF
+                    if left > step:
+                        anim[base + F_DIRTY] = 1
+                    else:
+                        value = target
+                        anim[base + F_TURN_SPEED + axis] = 0
+                else:
+                    left = (cur - target + 0x10000) & 0xFFFF
+                    if left > -step:
+                        anim[base + F_DIRTY] = 1
+                    else:
+                        value = target
+                        anim[base + F_TURN_SPEED + axis] = 0
+                self.ang[piece][axis] = value & 0xFFFF
+            if anim[base + F_DIRTY]:
+                self.dirty = 1
+
+
+# --------------------------------------------------------------------------- the director
+
+# How the engine reaches each script it calls by name, read off every call site of
+# 0x4B0940 / 0x4B0A70 / 0x4B0BC0 (exe-reverse-engineering.md §"The COB engine"):
+#
+#   "query"  COBEngine_QueryScript 0x4B0BC0 -> 0x4B0C40: four words in, sp = 3, runs
+#            inside the call, the four words come back out
+#   "now"    0x4B0940 with runNow = 1 (no argument words at all)
+#   "later"  runNow = 0: the thread takes its first step at the next DoScriptsNow
+#
+# `phase` is where in the sim frame the call sits relative to *this* unit's own
+# DoScriptsNow: "pre" for the unit's own tick (its movement, state and weapon
+# updates, AutoAim last), "post" for what another unit's code does to it —
+# damage, death and targeting, which run in the attacker's tick.
+ENGINE_STARTS = {
+    # the unit's own update
+    "create":           ("now",   "pre"),    # 0x485DE6, runNow 1
+    # the movement pass 0x43DD20 -> 0x43DA70/0x43DB50 is called at 0x48AFAA, *after*
+    # DoScriptsNow at 0x48ADEB, so everything it starts lands after the unit's own tick
+    "startmoving":      ("now",   "post"),   # 0x43DAF2, runNow 1
+    "stopmoving":       ("now",   "post"),   # 0x43DAF2, runNow 1
+    "moverate1":        ("now",   "post"),   # 0x43DB27, runNow 1
+    "moverate2":        ("now",   "post"),
+    "moverate3":        ("now",   "post"),
+    "setsfxoccupy":     ("now",   "post"),   # 0x43DBE8, runNow 1, argc 1
+    "setspeed":         ("later", "pre"),    # 0x437902, runNow 0, argc 1
+    "setdirection":     ("later", "pre"),    # 0x43795E/0x43798A, runNow 0, argc 1
+    # UNITS_SetStateMask 0x48B090 is not in the per-unit tick function (which ends at
+    # 0x48B080), and the fighter, gunship and bomber fixtures all show its Activate
+    # landing after that unit's DoScriptsNow — it first steps the tick after
+    "activate":         ("later", "post"),   # 0x48B106/0x48B12B, runNow 0
+    "deactivate":       ("later", "post"),   # 0x48B12B/0x48B14E, runNow 0
+    "startbuilding":    ("later", "post"),   # 0x48B14E/0x48B169, runNow 0
+    "stopbuilding":     ("later", "post"),   # 0x48B169, runNow 0
+    "setmaxreloadtime": ("later", "pre"),    # 0x49E186 UNITS_StartWeaponsScripts, runNow 0, argc 1
+    "endtransport":     ("later", "pre"),
+    # the weapons, all in the unit's own tick ahead of DoScriptsNow
+    "aimprimary":       ("later", "pre"),    # 0x49E31C / 0x49E386 AutoAim, runNow 0, argc 2
+    "aimsecondary":     ("later", "pre"),
+    "aimtertiary":      ("later", "pre"),
+    "fireprimary":      ("later", "pre"),    # 0x49CB94 etc. through 0x4B0940, runNow 0
+    "firesecondary":    ("later", "pre"),
+    "firetertiary":     ("later", "pre"),
+    "rockunit":         ("later", "pre"),    # 0x49CBEB / 0x499C5C, runNow 0, argc 2 — the recoil
+    # the queries (0x4B0C40): four words in and out, synchronous
+    "queryprimary":     ("query", "pre"),    # 0x43E227/0x43E291 UNITS_QueryWeaponPosition
+    "querysecondary":   ("query", "pre"),
+    "querytertiary":    ("query", "pre"),
+    "aimfromprimary":   ("query", "pre"),    # 0x43E32C/0x43E370
+    "aimfromsecondary": ("query", "pre"),
+    "aimfromtertiary":  ("query", "pre"),
+    "querynanopiece":   ("query", "pre"),    # 0x43E427 UNITS_CallAimScripts
+    "querybuildinfo":   ("query", "pre"),    # 0x4027FB
+    "querytransport":   ("query", "pre"),    # 0x4113B1
+    "querylandingpad":  ("query", "pre"),    # 0x41189C and four more
+    # what other units do to this one, after its own tick
+    "sweetspot":        ("query", "post"),   # 0x43E3E4, the shooter's aim
+    "killed":           ("query", "post"),   # 0x4865C3 Send_UnitDeath
+    "hitbyweapon":      ("later", "post"),   # 0x489F43, runNow 0, argc 2
+    "takedamage":       ("later", "post"),   # 0x489F8E, runNow 0, argc 1
+    "targetcleared":    ("later", "post"),   # 0x489898 and three more
+}
+
+TRACE_HEADER = ("# tagpu_cobtrace v1\tfilter=%s\tcolumns: S tick unit type script slot source args… | "
+                "R tick unit slot script value | X tick unit script source | K tick unit slot script by | "
+                "D tick unit slot value")
+
+
+class TraceLine:
+    __slots__ = ("kind", "tick", "unit", "fields", "raw")
+
+    def __init__(self, raw):
+        self.raw = raw
+        f = raw.split("\t")
+        self.kind = f[0]
+        self.tick = int(f[1])
+        self.unit = int(f[2])
+        self.fields = f
+
+
+def read_cobtrace(path):
+    """The oracle's log: the header, then S/R/X/K/D lines in event order."""
+    header, lines = None, []
+    # the hook writes UTF-8 (its header carries a literal "…"); surrogateescape keeps
+    # the round trip byte-exact whatever the log actually holds
+    for raw in Path(path).read_text(encoding="utf-8", errors="surrogateescape").splitlines():
+        if not raw.strip():
+            continue
+        if raw.startswith("#"):
+            if header is None:
+                header = raw
+            continue
+        lines.append(TraceLine(raw))
+    return header, lines
+
+
+class Event:
+    """One engine-issued start, as the replay will re-issue it."""
+    __slots__ = ("tick", "script", "args", "kind", "phase")
+
+    def __init__(self, tick, script, args, kind, phase):
+        self.tick, self.script, self.args = tick, script, args
+        self.kind, self.phase = kind, phase
+
+
+def events_from_trace(lines):
+    """Every `S … E` line becomes a replay event. Its `kind` and `phase` come from
+    the call-site table above; an argument-less line took the no-argument entry
+    0x4B0940, which writes nothing onto the record at all."""
+    out, unknown = [], set()
+    for ln in lines:
+        if ln.kind != "S" or ln.fields[6] != "E":
+            continue
+        script = ln.fields[4]
+        args = [int(x) for x in ln.fields[7].split(",")] if len(ln.fields) > 7 and ln.fields[7] else []
+        kind, phase = ENGINE_STARTS.get(script.lower(), (None, None))
+        if kind is None:
+            unknown.add(script)
+            kind, phase = ("query" if len(args) == 4 else "later"), "pre"
+        out.append(Event(ln.tick, script, args, kind, phase))
+    return out, sorted(unknown)
+
+
+def replay(cob, lines, world_values=None, type_name="?", unit=1, until=None, snap=(),
+           visible=None):
+    """Run the VM through the fixture's engine events and return the lines it writes.
+
+    The replay supplies exactly what the trace cannot: which engine entry issued each
+    start (the table above), the `rand` results (the D lines), and the unit-state
+    values the scripts read (`get`). Everything else — slots, ticks, the call and
+    return structure, the signal kills, the wait releases — is the VM's own answer."""
+    events, unknown = events_from_trace(lines)
+    if not events:
+        raise TacobError("no engine starts in the trace: nothing to replay")
+    rands = [int(ln.fields[4]) for ln in lines if ln.kind == "D"]
+    # the D line is `lo + r`; the lo is the script's, so the VM asks for r and the
+    # world hands back what the engine's RNG gave, in draw order
+    out = []
+    world = ReplayWorld(world_values, rands)
+    vm = CobVM(cob, world, out.append, unit=unit, type_name=type_name, visible=visible)
+    by_tick = {}
+    for ev in events:
+        by_tick.setdefault(ev.tick, []).append(ev)
+    create_tick = events[0].tick
+    last = until if until is not None else max(ln.tick for ln in lines)
+    snap, snaps = set(snap), {}
+    for tick in range(create_tick, last + 1):
+        vm.tick = world.tick = tick
+        here = by_tick.get(tick, ())
+        for ev in here:
+            if ev.phase == "pre":
+                dispatch(vm, ev)
+        if tick > create_tick:
+            vm.do_scripts_now(1)
+        for ev in here:
+            if ev.phase == "post":
+                dispatch(vm, ev)
+        if tick in snap:
+            snaps[tick] = ([list(p) for p in vm.pos], [list(a) for a in vm.ang],
+                           list(vm.visible))
+    vm.flush_start()
+    return vm, out, unknown, snaps
+
+
+def dispatch(vm, ev):
+    if ev.kind == "query":
+        vm.query_script(ev.script, ev.args)
+    elif ev.kind == "now":
+        vm.start_script(ev.script, run_now=True, args=ev.args, argwords=bool(ev.args))
+    else:
+        cb = AimCallback() if ev.script.lower().startswith("aim") else None
+        vm.start_script(ev.script, run_now=False, args=ev.args, argwords=bool(ev.args), cb=cb)
+
+
+class ReplayWorld(UnitWorld):
+    """`get` over a timeline: {value id: [(tick, value), …]}. The cobtrace log carries
+    no `get` traffic, so these are the replay's inputs — see the note beside the
+    fixture's replay.json for where each timeline came from."""
+
+    def __init__(self, timelines=None, rands=None):
+        UnitWorld.__init__(self, rands=rands)
+        self.timelines = {int(k): sorted(v) for k, v in (timelines or {}).items()}
+        self.tick = 0
+
+    def rand(self, n, lo):
+        """What the engine's RNG gave, in draw order — the D lines record `lo + r`."""
+        if self.draws < len(self.rands):
+            r = self.rands[self.draws] - lo
+        else:
+            r = 0
+        self.draws += 1
+        return 0 if n < 2 else r
+
+    def get(self, vid, a, b, c, d):
+        tl = self.timelines.get(vid)
+        if tl:
+            value = tl[0][1]
+            for t, v in tl:
+                if t <= self.tick:
+                    value = v
+            return value
+        return UnitWorld.get(self, vid, a, b, c, d)
+
+
+# --------------------------------------------------------------------------- the world the script sees
+
+# `get` reaches the COB object's `vt+0x44` = 0x480770 and `set` its `vt+0x40` =
+# 0x480B20. Both open with `id - 1 > 0x13 -> return`, so the value ids really are
+# 1..20 and anything else is 0 (get) or nothing at all (set). Every rule below was
+# read out of the retail binary this landing; the per-id arithmetic, the field
+# offsets and the helper addresses are in exe-reverse-engineering.md
+# §"`get` and `set` — the twenty value ids".
+
+TAANG_PER_RAD = 10430.37835047     # ds:0x509EF0, the scale fpatan's result is given
+FIXED = 65536                      # 16.16, the units every position id speaks in
+
+# The six ids SET has a case for. The byte table at 0x480C18 sends the other
+# fourteen to the shared default 0x480BF1, which only marks the unit dirty — so
+# `set HEALTH to 50` is a measured no-op on retail TA, not a gap in this model.
+SET_HANDLED = {VALUE_IDS[n] for n in ("ACTIVATION", "INBUILDSTANCE", "BUSY",
+                                      "YARD_OPEN", "BUGGER_OFF", "ARMORED")}
+
+
+def ftol(x):
+    """`_ftol` 0x4E43A0 forces the FPU to chop, so every float->int the value ids
+    take truncates toward zero. The one exception is the piece rotation's bare
+    `fistp` (0x4B71A0), which keeps the default round-to-nearest."""
+    return int(x)
+
+
+def s16(v):
+    v &= 0xFFFF
+    return v - 0x10000 if v & 0x8000 else v
+
+
+def ta_atan(a, b):
+    """0x4B715A: `fild a; fild b; fpatan` — atan2(a, b) — scaled by 65536/2pi and
+    stored with a bare `fistp`, so this one rounds to nearest, not toward zero."""
+    return int(round(math.atan2(a, b) * TAANG_PER_RAD))
+
+
+def ta_hypot(a, b):
+    """0x4809F3: `_hypot` on the two arguments as doubles, then `_ftol`."""
+    return ftol(math.hypot(a, b))
+
+
+def pack_xz(x, z):
+    """What 0x480821 builds out of a piece's world position: the x dword's high
+    half left in place plus the z dword's *signed* integer part **added** — not
+    or-ed, which is why every handler that unpacks one adds 1 back to x when the
+    z half came out negative."""
+    return i32((x & 0xFFFF0000) + (z >> 16))
+
+
+def unpack_xz(v):
+    """The same three instructions in XZ_ATAN, XZ_HYPOT and GROUND_HEIGHT
+    (0x480965, 0x480994, 0x480A0D): x back into 16.16, z shifted up out of the low
+    half, and the borrow undone."""
+    x = i32(v & 0xFFFF0000)
+    z = i32((v & 0xFFFF) << 16)
+    if z < 0:
+        x = i32(x + 0x10000)
+    return x, z
+
+
+class SimRandom:
+    """`0x4B6C30`, the sim RNG the `rand` opcode calls (state at `0x51FC88`, 129
+    call sites across the sim): Park-Miller `s = 16807 s mod 2^31-1` by Schrage's
+    trick, `s <= 0` corrected by `+= 0x7FFFFFFF`, and the draw is `s % n`. Returns
+    0 for `n < 2` without touching the state. The seed the game starts a match
+    with is not ours to know, so the editor picks one and says which."""
+
+    def __init__(self, seed=1):
+        self.seed = seed & 0x7FFFFFFF or 1
+
+    def draw(self, n):
+        if n < 2:
+            return 0
+        s = self.seed
+        q = s // 127773
+        s = i32(16807 * (s % 127773) - 2836 * q)
+        if s <= 0:
+            s += 0x7FFFFFFF
+        self.seed = s
+        return s % n
+
+
+class PieceFrame:
+    """The static half of the pose: the model's tree, and where the COB's pieces sit in it.
+
+    `0x45A950` binds the model's nodes to the COB's piece-name table **by name**
+    (the compare at `0x45A9FD`), so the `PrimitiveStruct` array a MOVE's piece
+    operand indexes is in the *COB's* order — and it still has a slot for every
+    node the COB does **not** name (ARMBRAWL's model has fourteen nodes and its
+    COB eleven pieces; the three thrust anchors sit past the end). Those slots
+    matter here because they can be a named piece's *parent*, and dropping them
+    would break the chain. So this indexes the model, and `of_cob` maps the other
+    way.
+
+    **The loader negates X and Z.** Every offset and every vertex of the
+    `Model3DONode` the engine holds is `(-x, y, -z)` of the same field in the
+    `.3do` — a half turn about Y, baked in at load. Measured 2026-09-07 against
+    the eight `posedump.txt` fixtures, which print the engine's own `N_OFF` beside
+    the file's: every piece of all eight units, x and z flipped, y kept. The
+    offsets here are therefore the engine's, so `piece_offset` composes in the
+    frame `PIECE_XZ` and the vertex buffer speak."""
+
+    def __init__(self, names, cob_names=None):
+        self.names = list(names)                 # model nodes, or the COB's own
+        n = len(self.names)
+        self.offset = [[0, 0, 0] for _ in range(n)]
+        self.parent = [-1] * n
+        self.vertices = [3] * n
+        self.cob = list(range(n))                # node -> COB piece, -1 if unnamed
+        cob_names = list(cob_names if cob_names is not None else names)
+        self.cob_names = cob_names
+        self.of_cob = list(range(len(cob_names)))
+        self.bound = [True] * len(cob_names)
+
+    @classmethod
+    def from_3do(cls, cob_names, root):
+        """`root` is a `tools/ta3do` `Piece` tree; binding is by lower-cased name."""
+        nodes = [piece for piece, _ in root.walk()]
+        frame = cls([p.name for p in nodes], cob_names)
+        at = {id(p): i for i, p in enumerate(nodes)}
+        index = {}
+        for i, name in enumerate(cob_names):
+            index.setdefault(name.lower(), i)
+        frame.cob = [-1] * len(nodes)
+        frame.of_cob = [-1] * len(cob_names)
+        for i, piece in enumerate(nodes):
+            frame.offset[i] = [-int(round(piece.offset[0] * FIXED)),
+                               int(round(piece.offset[1] * FIXED)),
+                               -int(round(piece.offset[2] * FIXED))]
+            frame.vertices[i] = len(piece.vertices)
+            for child in piece.children:
+                frame.parent[at[id(child)]] = i
+            c = index.get(piece.name.lower(), -1)
+            if c >= 0 and frame.of_cob[c] < 0:   # the engine takes the first match
+                frame.cob[i] = c
+                frame.of_cob[c] = i
+        frame.bound = [n >= 0 for n in frame.of_cob]
+        return frame
+
+    def visibility(self):
+        """Per COB piece. 0x45AF1B: fewer than three vertices and the model builder
+        never sets the visible bit — every flare, wake, tube and thrust anchor
+        starts hidden with no `hide` in the script."""
+        out = []
+        for node in self.of_cob:
+            out.append(True if node < 0 else self.vertices[node] >= 3)
+        return out
+
+
+def rotate2(angle, p0, p1):
+    """`0x4B7173`: returns untouched on a zero angle word, else rotates the pair by
+    `+angle` (p0 toward p1) and stores it back with `fistp` — round to nearest."""
+    if (angle & 0xFFFF) == 0:
+        return p0, p1
+    rad = s16(angle) * (2 * math.pi / 65536.0)
+    sin, cos = math.sin(rad), math.cos(rad)
+    return int(round(p0 * cos - p1 * sin)), int(round(p1 * cos + p0 * sin))
+
+
+def piece_local(frame, pos, node):
+    """A model node's origin in its parent's frame, 16.16. `0x43DF2A..0x43DF55`
+    pairs `PrimitiveStruct+0x04/+0x08/+0x0C` with the node's own X/Y/Z in that
+    order, so the COB's three axis operands are plain X, Y and Z — no
+    transposition — and MOVE's delta is added to the rest offset *before* any
+    rotation, which is what settles it as a delta in the parent's frame."""
+    off = frame.offset[node]
+    c = frame.cob[node]
+    if c < 0:
+        return list(off)
+    return [off[k] + pos[c][k] for k in range(3)]
+
+
+def _compose(frame, pos, ang, node, acc, body):
+    """The ancestor walk of `0x43DEF0`: rotate what is under this node by its three
+    angle words, **then** add its own offset, and climb.
+
+    The order is fixed by `0x4B6CC0`: the z-axis word first (it turns the x/y
+    pair), then the x-axis word (y/z), then the y-axis word (x/z) — so the local
+    matrix is `Ry · Rx · Rz`. At the root the unit's body turn goes on
+    (`+0x68` pitch, `+0x66` heading, `+0x64` roll, in the same axis order as
+    `ang`), which is the same thing as applying the yaw outermost because Y is the
+    outermost factor."""
+    seen = 0
+    while node >= 0 and seen <= len(frame.names):
+        c = frame.cob[node]
+        a = list(ang[c]) if c >= 0 else [0, 0, 0]
+        if frame.parent[node] < 0:
+            a = [a[k] + body[k] for k in range(3)]
+        acc[0], acc[1] = rotate2(a[2], acc[0], acc[1])
+        acc[1], acc[2] = rotate2(a[0], acc[1], acc[2])
+        acc[0], acc[2] = rotate2(a[1], acc[0], acc[2])
+        local = piece_local(frame, pos, node)
+        for k in range(3):
+            acc[k] += local[k]
+        node = frame.parent[node]
+        seen += 1
+    return acc
+
+
+def piece_vertex(frame, pos, ang, piece, vertex, body=(0, 0, 0)):
+    """A point of the piece's own mesh, in the unit's model frame — which *does*
+    take the piece's own angles. This is the form the engine's posed vertex buffer
+    holds, and `tacob pose-check` diffs it against the eight posedump fixtures."""
+    node = frame.of_cob[piece] if 0 <= piece < len(frame.of_cob) else -1
+    if node < 0:
+        return list(vertex)
+    return _compose(frame, pos, ang, node, list(vertex), body)
+
+
+def piece_offset(frame, pos, ang, piece, body=(0, 0, 0)):
+    """`UNITS_PieceOffset 0x43DEF0`: a COB piece's **origin** in the unit's frame.
+
+    The piece's own angles are never applied here — turning a piece does not move
+    its own origin — and the returned z is negated, as `0x43E00A` does, which is
+    what puts it on the world's map-depth axis."""
+    node = frame.of_cob[piece] if 0 <= piece < len(frame.of_cob) else -1
+    if node < 0:
+        return [0, 0, 0]
+    acc = _compose(frame, pos, ang, frame.parent[node],
+                   piece_local(frame, pos, node), body)
+    return [i32(acc[0]), i32(acc[1]), i32(-acc[2])]
+
+
+def piece_world(frame, pos, ang, piece, unit_pos, body=(0, 0, 0)):
+    """`0x43E060`: that offset plus the unit's own position (`+0x6A` x, `+0x6E`
+    altitude, `+0x72` map depth), all 16.16 — what PIECE_XZ and PIECE_Y read."""
+    v = piece_offset(frame, pos, ang, piece, body)
+    return [i32(unit_pos[k] + v[k]) for k in range(3)]
+
+
+class EditorWorld(UnitWorld):
+    """Everything `get` and `set` touch, computed the way the retail handlers do.
+
+    One unit is the script's own (`self.unit_id`); others live in `self.units` so
+    UNIT_XZ/UNIT_Y/UNIT_HEIGHT have something to answer with. The map is flat at
+    `self.ground` — the editor has no heightmap, and a `get GROUND_HEIGHT` says so
+    rather than pretending. Every field here is what the unit-state panel edits."""
+
+    def __init__(self, frame=None, vm=None, seed=1):
+        UnitWorld.__init__(self)
+        self.frame = frame
+        self.vm = vm
+        self.tick = 0
+        self.rng = SimRandom(seed)
+        self.seed0 = seed
+        self.pos = [0, 0, 0]              # unit +0x6A / +0x6E / +0x72, 16.16
+        self.body = [0, 0x8000, 0]        # +0x68 pitch, +0x66 heading, +0x64 roll
+        self.target = [0, 0, 0]           # the draggable marker, 16.16
+        self.velocity = [0, 0, 0]
+        self.ground = 0                   # world units, the flat map's height
+        self.water = 0
+        self.hp = 100
+        self.maxhp = 100
+        self.height = 0                   # def+0x16E, what UNIT_HEIGHT hands back
+        self.build_left = 0.0             # unit+0x104, the remaining build fraction
+        self.bits = {"activation": 0, "inbuildstance": 0, "busy": 0,
+                     "yard_open": 0, "bugger_off": 0, "armored": 0,
+                     "standingmoveorders": 0, "standingfireorders": 0}
+        self.unit_id = 1
+        self.units = {}
+        self.ignored_sets = []            # (tick, id) — the fourteen SET drops
+        self.effects = []
+
+    # -- the panel --------------------------------------------------------
+    def snapshot(self):
+        return {"pos": list(self.pos), "body": list(self.body),
+                "target": list(self.target), "ground": self.ground,
+                "water": self.water, "hp": self.hp, "maxhp": self.maxhp,
+                "height": self.height, "build_left": self.build_left,
+                "bits": dict(self.bits), "seed": self.rng.seed,
+                "values": {str(k): self.get(k, 0, 0, 0, 0) for k in range(1, 21)}}
+
+    def rand(self, n, lo):
+        """The `rand` opcode's own call: `0x4B6C30(hi - lo + 1)`, and the trace
+        records `lo + result`."""
+        self.draws += 1
+        return self.rng.draw(n)
+
+    def effect(self, tick, kind, piece, arg=None):
+        """emit-sfx / explode / attach-unit / drop-unit, with where the piece is —
+        the page draws a marker there. The handlers themselves (`0x480EB0`,
+        `0x481140`) are located but their constant tables are still unread, so the
+        type and flag *names* the editor prints are the community's, not ours."""
+        where = None
+        if piece is not None and self.frame is not None and self.vm is not None:
+            if 0 <= piece < len(self.vm.pos):
+                where = piece_world(self.frame, self.vm.pos, self.vm.ang, piece,
+                                    self.pos, self.body)
+        self.effects.append((tick, kind, piece, arg, where))
+        if len(self.effects) > 4096:
+            del self.effects[:2048]
+
+    # -- get, id by id ----------------------------------------------------
+    def _piece_xyz(self, piece):
+        if self.frame is None or self.vm is None or not (0 <= piece < len(self.vm.pos)):
+            return [self.pos[0], self.pos[1], self.pos[2]]
+        return piece_world(self.frame, self.vm.pos, self.vm.ang, piece,
+                           self.pos, self.body)
+
+    def _other(self, uid):
+        """0x480868's lookup: id 0 is nothing, and a unit that is not alive
+        (`+0x110 & 0x10000000` clear) makes the handler return 0."""
+        if not (uid & 0xFFFF):
+            return None
+        if (uid & 0xFFFF) == self.unit_id:
+            return {"pos": self.pos, "height": self.height}
+        return self.units.get(uid & 0xFFFF)
+
+    def get(self, vid, a, b, c, d):
+        v = VALUE_NAMES.get(vid)
+        if v is None:                       # `id - 1 > 0x13` -> 0x480ABB, plain 0
+            self.unknown.add(vid)
+            return 0
+        if v == "ACTIVATION":
+            return self.bits["activation"] & 1
+        if v == "STANDINGMOVEORDERS":
+            return self.bits["standingmoveorders"] & 3
+        if v == "STANDINGFIREORDERS":
+            return self.bits["standingfireorders"] & 3
+        if v == "HEALTH":                   # 0x4807CA: hp * 100 / def+0x1FA
+            return (self.hp * 100) // self.maxhp if self.maxhp else 0
+        if v == "INBUILDSTANCE":
+            return self.bits["inbuildstance"] & 1
+        if v == "BUSY":
+            return self.bits["busy"] & 1
+        if v == "PIECE_XZ":
+            p = self._piece_xyz(a)
+            return pack_xz(p[0], p[2])
+        if v == "PIECE_Y":
+            return self._piece_xyz(a)[1]
+        if v == "UNIT_XZ":
+            other = self._other(a)
+            return 0 if other is None else pack_xz(other["pos"][0], other["pos"][2])
+        if v == "UNIT_Y":
+            other = self._other(a)
+            return 0 if other is None else other["pos"][1]
+        if v == "UNIT_HEIGHT":
+            other = self._other(a)
+            return 0 if other is None else other["height"]
+        if v == "XZ_ATAN":                  # 0x480965 — **minus the unit's heading**
+            x, z = unpack_xz(a)
+            return (ta_atan(x, z) - self.body[1]) & 0xFFFF
+        if v == "XZ_HYPOT":
+            x, z = unpack_xz(a)
+            return ta_hypot(x, z)
+        if v == "ATAN":                     # 0x4809C7 — no heading subtraction
+            return ta_atan(a, b) & 0xFFFF
+        if v == "HYPOT":
+            return ta_hypot(a, b)
+        if v == "GROUND_HEIGHT":            # 0x480A0D: 0x485070(x, z) << 16
+            return i32(self.ground << 16)
+        if v == "BUILD_PERCENT_LEFT":       # 0x480A44: 0, or 1 - (int)(frac * -99)
+            if self.build_left == 0.0:
+                return 0
+            return 1 - ftol(self.build_left * -99.0)
+        if v == "YARD_OPEN":
+            return self.bits["yard_open"] & 1
+        if v == "BUGGER_OFF":
+            return self.bits["bugger_off"] & 1
+        if v == "ARMORED":
+            return self.bits["armored"] & 1
+        return 0
+
+    def set(self, vid, value):
+        """0x480B20. Six ids have a case; the other fourteen reach the shared
+        default and change nothing — the editor records those so the panel can say
+        so instead of the script's author wondering why the write vanished."""
+        if vid not in SET_HANDLED:
+            self.ignored_sets.append((self.tick, vid))
+            self.unknown.add(vid)
+            return
+        # every id with a case is a single bit; the two 2-bit ids (STANDINGMOVE /
+        # STANDINGFIREORDERS) are read-only, so there is no 2-bit write to make
+        self.bits[VALUE_NAMES[vid].lower()] = value & 1
+# --------------------------------------------------------------------------- the lints
+
+# Every rule here is a snag that cost a live run, and each says which note holds
+# the measurement. They run on the AST, so they see the source the modder typed,
+# not the bytecode; the two the compiler itself refuses (`play-sound`,
+# `map-command`) arrive as errors instead and are listed in LINT_RULES for the
+# page's own help text.
+
+LINT_RULES = {
+    "unimplemented": "an opcode retail TA does not dispatch — the thread dies there",
+    "aim-waits": "an AimWeaponN that waits holds one of the eight records for the whole slew",
+    "aim-no-signal": "a waiting aim script without the signal / set-signal-mask pair leaks a record",
+    "thread-peak": "more records can be live at once than the pool's eight",
+    "query-piece-shown": "a muzzle piece a Query script hands back that Create never hides",
+    "set-ignored": "a `set` retail TA drops: only six of the twenty ids have a handler",
+    "get-extension": "a value id above 20: this engine's jump table stops there and returns 0",
+    "piece-unknown": "a piece the model has no node for — it is declared, but nothing moves",
+}
+
+AIM_RE = re.compile(r"^aim(primary|secondary|tertiary|weapon(\d+))$", re.I)
+QUERY_RE = re.compile(r"^(query|aimfrom)(primary|secondary|tertiary|weapon\d+)$", re.I)
+MUZZLE_RE = re.compile(r"^query(primary|secondary|tertiary|weapon\d+)$", re.I)
+BLOCKING = {"sleep", "wait-for-turn", "wait-for-move"}
+
+
+def walk_nodes(body):
+    """Every statement node in a script body, blocks and branches included."""
+    for stmt in body:
+        yield stmt
+        for key in ("body", "then", "other"):
+            inner = getattr(stmt, key, None)
+            if isinstance(inner, list):
+                yield from walk_nodes(inner)
+
+
+def walk_exprs(node):
+    """Every expression node under a statement (or an expression)."""
+    if not isinstance(node, Node):
+        return
+    yield node
+    for key, value in node.__dict__.items():
+        if key in ("body", "then", "other"):
+            continue
+        if isinstance(value, Node):
+            yield from walk_exprs(value)
+        elif isinstance(value, list):
+            for item in value:
+                yield from walk_exprs(item)
+
+
+class Linter:
+    """The static checks the editor runs on every parse.
+
+    `frame` (a PieceFrame) is optional: without a model the two rules that need
+    one — the unknown piece and the flare a Create never hides — are skipped
+    rather than guessed at."""
+
+    def __init__(self, program, frame=None):
+        self.program = program
+        self.frame = frame
+        self.by_name = {fn.name.lower(): fn for fn in program.functions}
+        self.pieces = {p.lower(): i for i, p in enumerate(program.pieces)}
+        self.out = []
+
+    def add(self, rule, level, node, script, message):
+        tok = getattr(node, "tok", None) if node is not None else None
+        self.out.append({"rule": rule, "level": level, "script": script,
+                         "line": tok.line if tok else 0,
+                         "file": tok.file if tok else "",
+                         "message": message})
+
+    # -- helpers ----------------------------------------------------------
+    def blocks(self, name, seen=None):
+        """True when a record running this script can still be busy next tick."""
+        seen = seen or set()
+        key = name.lower()
+        if key in seen or key not in self.by_name:
+            return False
+        seen.add(key)
+        for stmt in walk_nodes(self.by_name[key].body):
+            if stmt.kind in BLOCKING:
+                return True
+            if stmt.kind == "call-script" and self.blocks(stmt.name, seen):
+                return True
+        return False
+
+    def live(self, name, seen=None):
+        """Records this script holds while it runs: itself if it can block, plus
+        every child it starts or calls. `start-script` children outlive the
+        parent, `call-script` children hold the parent's record as well."""
+        seen = seen or set()
+        key = name.lower()
+        if key in seen or key not in self.by_name:
+            return 0
+        seen = seen | {key}
+        total = 1 if self.blocks(name) else 0
+        for stmt in walk_nodes(self.by_name[key].body):
+            if stmt.kind in ("start-script", "call-script"):
+                total += self.live(stmt.name, seen)
+        return total
+
+    def hides(self, name, seen=None):
+        """Every piece this script hides, following the scripts it starts and calls
+        to any depth — Cavedog's own `Create` routinely goes through `InitState`
+        before it reaches the run of `hide`s, and a one-level walk misses those."""
+        seen = seen or set()
+        key = name.lower()
+        if key in seen or key not in self.by_name:
+            return set()
+        seen.add(key)
+        out = set()
+        for stmt in walk_nodes(self.by_name[key].body):
+            if stmt.kind == "piece-op" and stmt.op == "HIDE":
+                out.add(stmt.piece.lower())
+            elif stmt.kind in ("start-script", "call-script"):
+                out |= self.hides(stmt.name, seen)
+        return out
+
+    def hidden_at_create(self):
+        """(what the script hides, what the model builder hides) — kept apart so
+        the message can only claim the second when a model was actually bound."""
+        script = self.hides("create")
+        builder = set()
+        if self.frame is not None:                          # 0x45AF1B does the rest
+            for i, visible in enumerate(self.frame.visibility()):
+                if not visible:
+                    builder.add(self.frame.cob_names[i].lower())
+        return script, builder
+
+    # -- the rules --------------------------------------------------------
+    def run(self):
+        for fn in self.program.functions:
+            self.script(fn)
+        self.thread_peak()
+        self.query_pieces()
+        self.unknown_pieces()
+        self.out.sort(key=lambda d: (d["line"], d["rule"]))
+        return self.out
+
+    def script(self, fn):
+        name = fn.name
+        aim = AIM_RE.match(name)
+        waits = [s for s in walk_nodes(fn.body)
+                 if s.kind in ("wait-for-turn", "wait-for-move")]
+        if aim and aim.group(2) and int(aim.group(2)) >= 4 and waits:
+            self.add("aim-waits", "error", waits[0], name,
+                     f"{name} waits for the turn. Slots 4 and up are aimed by "
+                     "tagpu_weapons.c, which needs the script to return inside its own "
+                     "tick; a wait parks one of the eight records for the whole slew and "
+                     "the pool runs out (extra-weapons.md snag 1: 0/2/0/6 shots against "
+                     "19/18/25/19 for the slew shape). Turn and return 1 — the module's "
+                     "own arrival gate holds fire until the barrel is on target.")
+        if aim and waits:
+            has_signal = any(s.kind == "signal" for s in walk_nodes(fn.body))
+            has_mask = any(s.kind == "set-signal-mask" for s in walk_nodes(fn.body))
+            if not (has_signal and has_mask):
+                self.add("aim-no-signal", "warning", waits[0], name,
+                         f"{name} waits but has no signal / set-signal-mask pair. Every "
+                         "re-aim starts another copy and the old one keeps its record; "
+                         "the pool is eight and it empties in seconds "
+                         "(extra-weapons.md snag 1, the `track` row).")
+        for stmt in walk_nodes(fn.body):
+            for node in walk_exprs(stmt):
+                if node.kind == "get" and node.value_id > 20:
+                    self.add("get-extension", "warning", node, name,
+                             f"get {node.value_id} is a TADR/ProTA extension id. Retail "
+                             "TA's jump table (0x480AC4) covers 1..20 and everything else "
+                             "returns 0 without a word of complaint.")
+            if stmt.kind == "set":
+                if stmt.value_id > 20 or stmt.value_id not in SET_HANDLED:
+                    what = VALUE_NAMES.get(stmt.value_id, str(stmt.value_id))
+                    self.add("set-ignored", "warning", stmt, name,
+                             f"set {what} does nothing on retail TA. Only ACTIVATION, "
+                             "INBUILDSTANCE, BUSY, YARD_OPEN, BUGGER_OFF and ARMORED have "
+                             "a case in 0x480B20; the other fourteen ids fall into the "
+                             "shared default, which only marks the unit dirty.")
+
+    def thread_peak(self):
+        roots, peak = [], 0
+        for fn in self.program.functions:
+            key = fn.name.lower()
+            engine = key in ENGINE_STARTS or AIM_RE.match(fn.name) or QUERY_RE.match(fn.name) \
+                or re.match(r"^fireweapon\d+$", key)
+            if not engine:
+                continue
+            cost = self.live(fn.name)
+            if cost:
+                roots.append((fn.name, cost))
+                peak += cost
+        if peak > NRECORDS:
+            worst = ", ".join(f"{n} ({c})" for n, c in sorted(roots, key=lambda r: -r[1])[:6])
+            self.add("thread-peak", "warning", None, "",
+                     f"a static estimate of {peak} records live at once, and the pool is "
+                     f"{NRECORDS} (0x4B08C0 returns -1 for the ninth). Worst holders: "
+                     f"{worst}. The estimate assumes every engine-called script can be "
+                     "live together, which is the case a fight actually reaches; the "
+                     "failure is silent — a refused Query leaves the slot aiming from "
+                     "piece 0 (extra-weapons.md snag 10).")
+
+    def query_pieces(self):
+        script_hides, builder_hides = self.hidden_at_create()
+        hidden = script_hides | builder_hides
+        for fn in self.program.functions:
+            if not MUZZLE_RE.match(fn.name) or not fn.params:
+                continue
+            out = fn.params[0].lower()
+            for stmt in walk_nodes(fn.body):
+                if stmt.kind != "assign" or stmt.target.lower() != out:
+                    continue
+                expr = stmt.expr
+                if expr.kind != "name" or expr.name.lower() not in self.pieces:
+                    continue
+                if expr.name.lower() in hidden:
+                    continue
+                # only claim what was actually looked at: without a model bound
+                # the vertex count was never read, so 0x45AF1B cannot be quoted
+                builder = ("and the model builder does not hide it either (it has three or "
+                           "more vertices, so 0x45AF1B leaves it visible)"
+                           if self.frame is not None else
+                           "and no model was bound, so whether 0x45AF1B hides it — fewer "
+                           "than three vertices — was not checked")
+                self.add("query-piece-shown", "warning", stmt, fn.name,
+                         f"{fn.name} hands back the muzzle {expr.name}, which nothing "
+                         f"reachable from Create hides {builder}. A muzzle flare left "
+                         "showing is the cone every modder sees stuck on the hull.")
+
+    def unknown_pieces(self):
+        if self.frame is None:
+            return
+        known = {n.lower() for i, n in enumerate(self.frame.cob_names) if self.frame.bound[i]}
+        for i, name in enumerate(self.program.pieces):
+            if name.lower() not in known:
+                self.add("piece-unknown", "warning", None, "",
+                         f"piece {name} has no node in the model. It compiles and it takes "
+                         "a piece index, but 0x45A950 binds by name, so every move, turn "
+                         "and hide on it moves nothing.")
+
+
+def lint_bos(text, file="<bos>", include_dirs=(), reader=None, frame=None):
+    """Parse and lint. Returns (program, diagnostics) — a parse error becomes one
+    diagnostic at its own line, so the editor shows both kinds in one gutter."""
+    try:
+        program = parse_bos(text, file, include_dirs, reader)
+    except TacobError as err:
+        return None, [{"rule": "parse", "level": "error", "script": "",
+                       "line": _err_line(err), "file": file, "message": str(err)}]
+    return program, Linter(program, frame).run()
+
+
+def _err_line(err):
+    match = re.search(r":(\d+):", str(err))
+    return int(match.group(1)) if match else 0
+# --------------------------------------------------------------------------- the live director
+
+# Landing 3's director *replays* a fixture's E lines. This one *generates* them:
+# a per-class motion sketch drives the unit, and every event it produces is
+# issued through ENGINE_STARTS above, so a synthesised `StartMoving` takes the
+# same entry, with the same runNow, at the same point in the frame as the
+# engine's own. **The events are exact; the path is a sketch** and is never the
+# engine's movement model — nothing here was measured against a moving unit.
+
+MOTIONS = ("ground", "static", "circuit", "hover", "runin", "glide", "dive")
+
+# range and reload come from the weapon TDF; these are the fallbacks for a slot
+# whose weapon we cannot read, in world units and ticks.
+DEFAULT_RANGE, DEFAULT_RELOAD = 400, 30
+AIM_TOLERANCE = 1024            # tagpu_weapons.c, 1024 of 65536 = 5.6 degrees, yaw only
+AIM_RESOLVE = 1024              # a stock aim is re-issued when the solution moves this far
+AIM_RESTART = 300               # ...or after ten seconds, for an aim that never came back
+
+
+class WeaponSlot:
+    """One weapon of the unit, driven the way its slot number is driven.
+
+    Slots 1..3 are the engine's: `Aim*` is started every tick until it returns 1,
+    and only then does the shot go. Slots 4 and up are `tagpu_weapons.c`'s:
+    `AimWeaponN` is expected back inside its tick, the muzzle and mount pieces are
+    cached after the first `Query`/`AimFrom`, and the module's own `barrel_on_target`
+    holds fire until the muzzle really points at the target — yaw only, to
+    AIM_TOLERANCE (extra-weapons.md §"Per-weapon behaviour on slots 4..N")."""
+
+    def __init__(self, index, weapon="", rng=DEFAULT_RANGE, reload_ticks=DEFAULT_RELOAD):
+        self.index = index                      # 0-based, as the module counts
+        self.weapon = weapon
+        self.range = rng
+        self.reload = reload_ticks
+        self.stock = index < 3
+        n = index + 1
+        base = ("Primary", "Secondary", "Tertiary")[index] if self.stock else f"Weapon{n}"
+        self.aim = "Aim" + base
+        self.fire = "Fire" + base
+        self.query = "Query" + base
+        self.aim_from = "AimFrom" + base
+        self.reset()
+
+    def reset(self):
+        self.cb = None
+        self.aimed = 0
+        self.cooldown = 0
+        self.pc_query = None
+        self.pc_aimfrom = None
+        self.shots = 0
+        self.hold_fire = 0
+        self.aiming = False
+        self.aim_tick = -10000
+        self.aim_head = 0
+
+    def info(self):
+        return {"index": self.index, "n": self.index + 1, "weapon": self.weapon,
+                "range": self.range, "reload": self.reload, "stock": self.stock,
+                "scripts": [self.aim, self.fire, self.query, self.aim_from],
+                "aimed": self.aimed, "cooldown": self.cooldown, "shots": self.shots,
+                "hold_fire": self.hold_fire, "muzzle": self.pc_query,
+                "mount": self.pc_aimfrom}
+
+
+class Director:
+    """Plays the engine's part for one unit: moves it, and calls its scripts.
+
+    Everything it issues goes through `dispatch`, so the entry (`query` / run-now /
+    run-later) and the frame position come from the call-site table, not from
+    this class's own idea of them."""
+
+    def __init__(self, vm, world, motion="ground", slots=(), speed=60, alt=0,
+                 radius=480, sfx_occupy=False, activates=False):
+        self.vm, self.world = vm, world
+        self.motion = motion if motion in MOTIONS else "ground"
+        self.slots = list(slots)
+        self.speed = speed                       # world units a second
+        self.alt = alt
+        self.radius = radius
+        self.sfx_occupy = sfx_occupy
+        self.activates = activates
+        self.reset()
+
+    def reset(self):
+        self.started = False
+        self.moving = False
+        self.rate = 0
+        self.active = 0
+        self.tick0 = None
+        self.pending = []
+        self.log = []
+        self.fired = []
+        for slot in self.slots:
+            slot.reset()
+
+    # -- the raw event buttons -------------------------------------------
+    def issue(self, script, args=()):
+        """One engine start, exactly as the engine would make it. Queued so it
+        lands on the right side of DoScriptsNow."""
+        kind, phase = ENGINE_STARTS.get(script.lower(), (None, None))
+        if kind is None:
+            kind, phase = ("query" if len(args) == 4 else "later"), "pre"
+        ev = Event(self.vm.tick, script, [int(a) for a in args], kind, phase)
+        self.pending.append(ev)
+        return ev
+
+    def flush(self, phase):
+        for ev in [e for e in self.pending if e.phase == phase]:
+            self.pending.remove(ev)
+            if self.vm.index_of(ev.script) < 0:
+                self.log.append((self.vm.tick, "missing", ev.script))
+                continue
+            self.log.append((self.vm.tick, phase, ev.script))
+            if ev.kind == "later" and ev.script.lower().startswith("aim"):
+                slot = next((s for s in self.slots if s.aim.lower() == ev.script.lower()), None)
+                cb = AimCallback()
+                if slot is not None:
+                    slot.cb = cb
+                self.vm.start_script(ev.script, run_now=False, args=ev.args,
+                                     argwords=bool(ev.args), cb=cb)
+            else:
+                dispatch(self.vm, ev)
+
+    # -- the motion sketch ------------------------------------------------
+    def step_motion(self, tick):
+        """Where the unit is this tick.
+
+        Every path is a **bounded loop**, so the unit stays in front of the camera
+        and in range of the target marker instead of walking off the map: ground,
+        ship and submarine shuttle out and back, the fighter flies a circuit, the
+        gunship hovers and slowly turns, the bomber runs in and goes round again.
+        The events these transitions fire are the engine's exact ones; the path
+        itself is a sketch and was never measured against a moving unit."""
+        w = self.world
+        if self.tick0 is None:
+            self.tick0 = tick
+        t = (tick - self.tick0) / float(SIM_RATE)           # seconds since Create
+        per = self.speed / float(SIM_RATE)                  # world units a tick
+        x, y, z = (v / float(FIXED) for v in w.pos)
+        moving = True
+        if self.motion == "static":
+            moving = False
+        elif self.motion in ("ground", "glide", "dive"):
+            leg = self.radius / max(self.speed, 1.0)        # seconds to the far end
+            cycle = 2 * (leg + 1.0)
+            phase = t % cycle
+            if phase < leg:
+                z += per
+                w.body[1] = 0
+            elif phase < leg + 1.0:
+                moving = False
+            elif phase < 2 * leg + 1.0:
+                z -= per
+                w.body[1] = 0x8000
+            else:
+                moving = False
+            if self.motion == "glide":
+                y = w.water / float(FIXED)
+            elif self.motion == "dive":
+                y = -18.0 * (0.5 - 0.5 * math.cos(t * 0.7))
+        elif self.motion == "circuit":
+            a = t * self.speed / max(self.radius, 1.0)
+            x = self.radius * math.sin(a)
+            z = self.radius * math.cos(a)
+            y = self.alt
+            w.body[1] = int(round(a * 65536 / (2 * math.pi))) & 0xFFFF
+            w.body[2] = int(round(-0.35 * 65536 / (2 * math.pi))) & 0xFFFF   # the bank
+        elif self.motion == "hover":
+            y = self.alt + 4.0 * math.sin(t * 1.6)
+            w.body[1] = int(round(t * 0.25 * 65536 / (2 * math.pi))) & 0xFFFF
+            moving = False
+        elif self.motion == "runin":
+            z = -self.radius + t * self.speed
+            y = self.alt if abs(z) > self.radius * 0.25 else self.alt * 0.6
+            w.body[1] = 0
+            if z > self.radius:
+                self.tick0 = tick                           # round again
+        w.pos = [int(round(x * FIXED)), int(round(y * FIXED)), int(round(z * FIXED))]
+        return moving
+
+    def motion_events(self, moving):
+        """`StartMoving` / `StopMoving` / `MoveRateN` — the movement pass's own
+        starts (0x43DAF2, 0x43DB27), so they land after this unit's DoScriptsNow."""
+        if moving and not self.moving:
+            self.issue("StartMoving")
+        elif self.moving and not moving:
+            self.issue("StopMoving")
+        self.moving = moving
+        want = 0 if not moving else min(3, 1 + int(self.speed // 100))
+        # a unit carries only the MoveRate scripts its animation needs — ARMHAWK has
+        # MoveRate2 and nothing else — so drop to the nearest one it actually has
+        rate = next((n for n in range(want, 0, -1)
+                     if self.vm.index_of(f"MoveRate{n}") >= 0), 0)
+        if rate != self.rate:
+            self.rate = rate
+            if rate:
+                self.issue(f"MoveRate{rate}")
+
+    # -- the weapons ------------------------------------------------------
+    def aim_solution(self, slot):
+        """Heading and pitch as the engine hands them to an aim script: heading
+        relative to the unit's own facing, pitch from the mount to the target."""
+        w = self.world
+        origin = list(w.pos)
+        if slot.pc_aimfrom is not None and w.frame is not None:
+            origin = piece_world(w.frame, self.vm.pos, self.vm.ang, slot.pc_aimfrom,
+                                 w.pos, w.body)
+        dx = w.target[0] - origin[0]
+        dy = w.target[1] - origin[1]
+        dz = w.target[2] - origin[2]
+        heading = (ta_atan(dx, dz) - w.body[1]) & 0xFFFF
+        flat = math.hypot(dx / float(FIXED), dz / float(FIXED))
+        pitch = ta_atan(int(dy), int(flat * FIXED)) & 0xFFFF
+        return heading, pitch, math.hypot(flat, dy / float(FIXED))
+
+    def barrel_on_target(self, slot, heading):
+        """`tagpu_weapons.c`: mount -> muzzle against mount -> target, yaw only,
+        to AIM_TOLERANCE. Without both cached pieces the module lets the shot go."""
+        w = self.world
+        if w.frame is None or slot.pc_query is None or slot.pc_aimfrom is None:
+            return True
+        mount = piece_world(w.frame, self.vm.pos, self.vm.ang, slot.pc_aimfrom, w.pos, w.body)
+        muzzle = piece_world(w.frame, self.vm.pos, self.vm.ang, slot.pc_query, w.pos, w.body)
+        barrel = ta_atan(muzzle[0] - mount[0], muzzle[2] - mount[2])
+        want = ta_atan(w.target[0] - mount[0], w.target[2] - mount[2])
+        delta = (barrel - want) & 0xFFFF
+        return min(delta, 0x10000 - delta) <= AIM_TOLERANCE
+
+    def weapon_events(self, tick):
+        for slot in self.slots:
+            if slot.cooldown > 0:
+                slot.cooldown -= 1
+            heading, pitch, dist = self.aim_solution(slot)
+            if dist > slot.range:
+                slot.aimed, slot.aiming = 0, False
+                continue
+            has_aim = self.vm.index_of(slot.aim) >= 0
+            if not has_aim:
+                # Most aircraft and the submarine have no Aim script at all —
+                # ARMHAWK, ARMBRAWL, ARMTHUND and CORSUB carry only `QueryPrimary`
+                # and (sometimes) `FirePrimary`. The engine aims those itself and
+                # the script exists only to point at the muzzle and flash it, so
+                # the slot is always "aimed" and the shot goes on reload alone.
+                slot.aimed = 1
+            elif slot.stock:
+                # Cavedog's shape waits for the turn, so the aim holds a record for
+                # the whole slew — and its own `signal` kills any earlier copy. Start
+                # one every tick and each new one kills the last before it can arrive,
+                # which is the `full` row of extra-weapons.md snag 1 reproduced
+                # exactly (and what an earlier version of this director did). So:
+                # one in flight at a time, and a fresh one only once it has answered —
+                # or once the solution has moved further than the module's own
+                # tolerance, which is what AutoAim re-calls the script for. A slow
+                # turret on a still target slews for as long as it needs.
+                if slot.cb is not None and slot.cb.calls:
+                    slot.aiming = False
+                    slot.aimed = slot.cb.aimed
+                if not slot.aimed:
+                    moved = abs(((heading - slot.aim_head + 0x8000) & 0xFFFF) - 0x8000)
+                    if (not slot.aiming or moved > AIM_RESOLVE
+                            or tick - slot.aim_tick > AIM_RESTART):
+                        self.issue(slot.aim, (heading, pitch))
+                        slot.aiming, slot.aim_tick, slot.aim_head = True, tick, heading
+                    continue
+            else:
+                self.issue(slot.aim, (heading, pitch))          # every tick, and it returns
+                if slot.pc_aimfrom is None and self.vm.index_of(slot.aim_from) >= 0:
+                    out = self.vm.query_script(slot.aim_from, (0, 0, 0, 0))
+                    slot.pc_aimfrom = out[0] if out else None
+                if slot.pc_query is None and self.vm.index_of(slot.query) >= 0:
+                    out = self.vm.query_script(slot.query, (0, 0, 0, 0))
+                    slot.pc_query = out[0] if out else None
+                if not self.barrel_on_target(slot, heading):
+                    slot.hold_fire += 1
+                    continue
+            if slot.cooldown > 0:
+                continue
+            if slot.stock and self.vm.index_of(slot.query) >= 0:
+                out = self.vm.query_script(slot.query, (0, 0, 0, 0))
+                slot.pc_query = out[0] if out else slot.pc_query
+            self.issue(slot.fire)
+            self.issue("RockUnit", (0, angular_word(2)))
+            slot.cooldown = slot.reload
+            slot.shots += 1
+            slot.aimed = 0
+            if slot.cb is not None:
+                slot.cb.aimed = 0
+            self.fired.append((tick, slot.index))
+
+    # -- one tick ---------------------------------------------------------
+    def step(self, tick):
+        """The unit's own frame: what the engine does before DoScriptsNow, the
+        script pass itself, then what the movement pass and other units do after."""
+        vm, w = self.vm, self.world
+        vm.tick = w.tick = tick
+        if not self.started:
+            self.started = True
+            self.tick0 = tick
+            self.issue("Create")
+            self.issue("SetMaxReloadTime", (max((s.reload for s in self.slots),
+                                                default=DEFAULT_RELOAD) * 33,))
+            if self.sfx_occupy:
+                self.issue("SetSFXOccupy", (2,))
+            self.flush("pre")
+            self.flush("post")
+            return
+        moving = self.step_motion(tick)
+        self.motion_events(moving)
+        if self.activates:
+            # a building's idle animation is the Activate/Deactivate pair, so cycle
+            # it; an aircraft activates once, at take-off, and stays that way
+            want = 1 if self.motion != "static" else int((tick // (10 * SIM_RATE)) % 2)
+            if want != self.active:
+                self.active = want
+                w.bits["activation"] = want
+                self.issue("Activate" if want else "Deactivate")
+        self.weapon_events(tick)
+        self.flush("pre")
+        vm.do_scripts_now(1)
+        self.flush("post")
+
+# --------------------------------------------------------------------------- the gate
+
+FIXTURES = HERE.parent / "research/notes/evidence/cobtrace"
+CLASSES = ["kbot", "tank", "building", "death", "fighter", "gunship", "bomber", "ship", "sub"]
+
+
+def fixtures_dir() -> Path:
+    """Landing 2's traces, which `run`, `fit-world` and `pose-check` diff against.
+
+    They are a *developer* gate: they live in the checkout and the packaged folder
+    does not carry them (they are the game's own output, tens of megabytes, and a
+    modder has no use for them). Say that in one sentence rather than raising a
+    `FileNotFoundError` three frames deep."""
+    if not FIXTURES.is_dir():
+        raise TacobError(
+            f"no cobtrace fixtures at {FIXTURES} — `run`, `fit-world` and `pose-check` "
+            "are the checkout's own gates and the packaged folder does not ship them")
+    return FIXTURES
+
+
+def read_posedump(path):
+    """The pose oracle's dump: (tick, unit, [(name, hidden, move, turn)])."""
+    tick = unit = None
+    pieces = []
+    for line in Path(path).read_text(encoding="latin-1").splitlines():
+        line = line.strip()
+        if line.startswith("posedump: tick="):
+            for part in line[len("posedump: "):].split():
+                k, _, v = part.partition("=")
+                if k == "tick": tick = int(v)
+                elif k == "idx": unit = int(v)
+        m = re.match(r"posedump: p(\d+) (\S+)( HIDDEN)? off=\(([-\d,]+)\) move=\(([-\d,]+)\) "
+                     r"turn=\((\d+),(\d+),(\d+)\)", line)
+        if m:
+            pieces.append((int(m.group(1)), m.group(2), bool(m.group(3)),
+                           [int(x) for x in m.group(5).split(",")],
+                           [int(m.group(6)), int(m.group(7)), int(m.group(8))]))
+    return tick, unit, pieces
+
+
+def piece_visibility(unit, pieces):
+    """The pose the model builder hands the VM: `0x45AF1B` clears the visible bit of
+    a piece whose 3DO node carries fewer than three vertices. Measured against all
+    eight fixtures with a posedump — every HIDDEN piece is either that or one the
+    unit's own `Create` hides."""
+    ta3do = load_ta3do()
+    assets = load_assets()
+    try:
+        _label, blob = ta3do.resolve_model(assets, unit)
+    except Exception:
+        return None
+    counts = {p.name.lower(): len(p.vertices) for p, _ in ta3do.parse_3do(blob).walk()}
+    return [counts.get(name.lower(), 3) >= 3 for name in pieces]
+
+
+def replay_inputs(cls):
+    """The per-class world timelines, and where each came from (replay.json)."""
+    path = FIXTURES / "replay.json"
+    if not path.is_file():
+        return {}
+    return json.loads(path.read_text()).get(cls, {})
+
+
+def run_class(cls, pose=True):
+    """Replay one fixture and diff both oracles. Returns a report dict."""
+    folder = fixtures_dir() / cls
+    header, lines = read_cobtrace(folder / "cobtrace.log")
+    if not lines:
+        raise TacobError(f"{cls}: the fixture's cobtrace.log has no lines")
+    type_name = lines[0].fields[3] if lines[0].kind == "S" else "?"
+    unit = lines[0].unit
+    spec = replay_inputs(cls)
+    blob, _ = read_cob_source(type_name.lower())
+    cob = read_cob(blob)
+    visible = piece_visibility(type_name.lower(), cob.pieces)
+    pose_tick, pose_unit, pieces = (None, None, [])
+    if pose and (folder / "posedump.txt").is_file():
+        pose_tick, pose_unit, pieces = read_posedump(folder / "posedump.txt")
+    if pose_unit is not None and pose_unit != unit:
+        # the death fixture's dump is of another unit: its Peewee was gone by then
+        report_note = f"posedump is unit idx={pose_unit}, the trace is idx={unit} — not compared"
+        pieces, pose_tick = [], None
+    else:
+        report_note = None
+    until = max([ln.tick for ln in lines] + ([pose_tick] if pose_tick else []))
+    timelines = {int(k): [tuple(p) for p in v] for k, v in (spec.get("get") or {}).items()}
+    # the pose is sampled on the render thread, so the dump's tick may name the sim
+    # tick before or after the pass that filled it (tagpu_native.c, the posedump header)
+    want_ticks = [pose_tick + d for d in (0, -1, 1)] if pose_tick else []
+    vm, out, unknown, snaps = replay(cob, lines, timelines, type_name, unit,
+                                     until=until, snap=want_ticks, visible=visible)
+    out.insert(0, header if header else TRACE_HEADER % (",%s," % type_name))
+    report = {"class": cls, "unit": type_name, "lines": len(lines), "unknown_starts": unknown}
+    if report_note:
+        report["pose_note"] = report_note
+
+    end = max(ln.tick for ln in lines)
+    # nothing is masked: `Killed`'s uninitialised second argument (the design note
+    # expected to mask it) is one of the E line's own words, so it replays verbatim
+    want = [ln.raw for ln in lines]
+    got = [l for l in out[1:] if int(l.split("\t")[1]) <= end]
+    report["trace_diff"] = first_diff(want, got)
+    report["trace_ok"] = report["trace_diff"] is None and len(want) == len(got)
+    report["want_lines"], report["got_lines"] = len(want), len(got)
+    out = out[:1] + got            # what `--trace-out` writes: the fixture's own span
+
+    if pieces:
+        best, best_tick = None, None
+        for t in want_ticks:
+            if t not in snaps:
+                continue
+            pos, ang, vis = snaps[t]
+            bad = []
+            for idx, name, hidden, move, turn in pieces:
+                if idx >= len(pos):
+                    continue
+                if pos[idx] != move or ang[idx] != turn or (not vis[idx]) != hidden:
+                    bad.append({"piece": idx, "name": name,
+                                "want": {"move": move, "turn": turn, "hidden": hidden},
+                                "got": {"move": pos[idx], "turn": ang[idx],
+                                        "hidden": not vis[idx]}})
+            if best is None or len(bad) < len(best):
+                best, best_tick = bad, t
+        report["pose_tick"] = pose_tick
+        report["pose_matched_tick"] = best_tick
+        report["pose_pieces"] = len(pieces)
+        report["pose_bad"] = best or []
+        report["pose_ok"] = not best
+    return report, vm, out
+
+
+def first_diff(want, got):
+    for i in range(max(len(want), len(got))):
+        w = want[i] if i < len(want) else "<end>"
+        g = got[i] if i < len(got) else "<end>"
+        if w != g:
+            return {"line": i + 1, "want": w, "got": g}
+    return None
+
+
+# The one engine value the fixtures' scripts branch on that the oracle does not
+# carry. `SmokeUnit` (the shipped snippet every stock unit starts) draws
+# `rand(1, 66)` only while `get HEALTH` is under 66 and then sleeps
+# `healthpercent * 50` ms, so the gap between two of its draws names the health it
+# read at the first of them: ticks = trunc(h * 50 * SIM_RATE / 1000). Deriving the
+# timeline that way makes those D lines' *ticks* an input rather than a prediction —
+# see research/notes/tacob-design.md §"What the replay supplies". Nothing else in
+# any of the nine logs depends on it: the first draw's tick is still predicted (health
+# starts at 100), and the fighter's draws are `MoveRate2`'s `rand(1, 10)`, not health.
+
+def smoke_slots(lines):
+    """{slot: True} for the records a `SmokeUnit` is running, as the log walks by."""
+    owner, out = {}, []
+    for ln in lines:
+        if ln.kind == "S":
+            owner[int(ln.fields[5])] = ln.fields[4]
+        elif ln.kind in ("R", "K"):
+            owner.pop(int(ln.fields[3]), None)
+        elif ln.kind == "D":
+            out.append((ln.tick, owner.get(int(ln.fields[3]))))
+    return [tick for tick, script in out if script == "SmokeUnit"]
+
+
+def fit_health(lines):
+    """[(tick, health)] — 100 until the first SmokeUnit draw, then one value per gap."""
+    draws = smoke_slots(lines)
+    if not draws:
+        return [], []
+    timeline, gaps = [(0, 100)], []
+    for i, tick in enumerate(draws[:-1]):
+        gap = draws[i + 1] - tick
+        found = [h for h in range(1, 66) if idiv(max(200, h * 50) * SIM_RATE, 1000) == gap]
+        if len(found) != 1:
+            gaps.append((tick, gap, found))
+            continue
+        timeline.append((tick, found[0]))
+    if len(timeline) > 1:                       # the last draw has no gap to name it
+        timeline.append((draws[-1], timeline[-1][1]))
+    return timeline, gaps
+
+
+def cmd_fit(args):
+    """Write the world timelines the replay needs, derived from the fixtures."""
+    path = fixtures_dir() / "replay.json"
+    data = json.loads(path.read_text()) if path.is_file() else {}
+    for cls in (CLASSES if args.all else args.classes):
+        _header, lines = read_cobtrace(FIXTURES / cls / "cobtrace.log")
+        timeline, gaps = fit_health(lines)
+        entry = {"note": "get timelines the cobtrace log cannot carry; HEALTH is derived "
+                         "from SmokeUnit's rand spacing (tacob fit-world)"}
+        if timeline:
+            entry["get"] = {str(VALUE_IDS["HEALTH"]): [list(x) for x in timeline]}
+            data[cls] = entry
+        else:
+            data.pop(cls, None)
+        print(f"{cls}: {len(timeline)} HEALTH samples"
+              + (f", {len(gaps)} gaps with no single health: {gaps}" if gaps else ""))
+    path.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+    print(f"wrote {path}")
+
+
+def cmd_run(args):
+    classes = CLASSES if args.all else (args.classes or [])
+    if not classes:
+        raise TacobError("nothing to run: give a class name or --all")
+    reports = []
+    failed = False
+    for cls in classes:
+        report, vm, out = run_class(cls, pose=not args.no_pose)
+        reports.append(report)
+        if args.trace_out:
+            Path(args.trace_out).write_text("\n".join(out) + "\n",
+                                            encoding="utf-8", errors="surrogateescape")
+        elif args.print_trace:
+            sys.stdout.write("\n".join(out) + "\n")
+        ok = report["trace_ok"] and report.get("pose_ok", True)
+        failed = failed or not ok
+        if not args.json:
+            d = report["trace_diff"]
+            print(f"{'ok  ' if ok else 'FAIL'} {cls:<9} {report['unit']:<9} "
+                  f"trace {report['got_lines']}/{report['want_lines']}"
+                  + (f"  pose {report['pose_pieces'] - len(report['pose_bad'])}/{report['pose_pieces']}"
+                     if "pose_pieces" in report else ""))
+            if d:
+                print(f"       line {d['line']}\n         want {d['want']}\n         got  {d['got']}")
+            for bad in report.get("pose_bad", [])[:4]:
+                print(f"       p{bad['piece']} {bad['name']}: want {bad['want']} got {bad['got']}")
+            if report.get("pose_note"):
+                print(f"       {report['pose_note']}")
+            if report["unknown_starts"]:
+                print(f"       engine starts not in the call-site table: "
+                      f"{', '.join(report['unknown_starts'])}")
+    if args.json:
+        print(json.dumps(reports, indent=1))
+    if failed:
+        raise SystemExit(1)
+
+
 # --------------------------------------------------------------------------- game assets
 
 def load_ta3do():
@@ -1637,17 +3737,964 @@ def load_ta3do():
     return mod
 
 
+# The game folder. `ta3do.game_dir()` guesses it from the checkout — it walks
+# parents for a directory holding both `tagpu/` and `pristine/` — and the packaged
+# folder is not in a checkout, so there the guess is meaningless and a saved
+# answer is the only one there is. Order: the flag, the environment, the saved
+# config, then ta3do's guess.
+
+GAME_MARKERS = ("totala1.hpi", "totala2.hpi", "rev31.gp3")
+
+
+def looks_like_gamedir(path) -> bool:
+    """One of the retail archives is present. Cheap, and it is what `Assets` will
+    read: a folder with none of them merges to an empty index and every unit
+    lookup then fails one at a time instead of once, here."""
+    try:
+        names = {c.name.lower() for c in Path(path).iterdir()}
+    except OSError:
+        return False
+    return any(marker in names for marker in GAME_MARKERS)
+
+
+def resolve_gamedir(explicit=None):
+    """Where the archives are, or None to let `ta3do` guess (right in a checkout)."""
+    if explicit:
+        return str(Path(explicit).expanduser())
+    if os.environ.get("TA3DO_GAMEDIR"):
+        return None                      # ta3do reads it itself; do not second-guess
+    saved = read_config().get("gamedir")
+    return saved or None
+
+
+def gamedir_candidates():
+    """Folders that look like an install, for the picker to offer. A short fixed
+    list — this is a hint, not a search of the disk."""
+    seen, found = set(), []
+    # The folder the tool was unzipped into, and the one above it: dropping
+    # `tacob/` inside the game's own directory is the obvious thing to do with a
+    # folder, and then the answer is already here.
+    roots = [Path.cwd()]
+    if BUNDLED:
+        beside = Path(sys.executable).resolve().parent
+        roots += [beside, beside.parent]
+    if sys.platform == "win32":
+        for letter in "CDEFG":
+            drive = Path(f"{letter}:/")
+            for tail in ("Cavedog/Total Annihilation",
+                         "Program Files (x86)/Cavedog/Total Annihilation",
+                         "Program Files/Cavedog/Total Annihilation",
+                         "Program Files (x86)/Steam/steamapps/common/Total Annihilation",
+                         "GOG Games/Total Annihilation",
+                         "Games/Total Annihilation", "TA", "Total Annihilation"):
+                roots.append(drive / tail)
+    else:
+        home = Path.home()
+        roots += [home / ".wine/drive_c/Cavedog/Total Annihilation",
+                  home / "Games/Total Annihilation"]
+        try:
+            roots.append(Path(load_ta3do().game_dir()))
+        except Exception:
+            pass
+    saved = read_config().get("gamedir")
+    if saved:
+        roots.insert(0, Path(saved))
+    for root in roots:
+        key = str(root).lower()
+        if key not in seen and looks_like_gamedir(root):
+            seen.add(key)
+            found.append(root)
+    return found
+
+
+def load_assets(gamedir=None):
+    """`ta3do.Assets`, with our own sentence when the folder is not a game.
+
+    `ta3do.die()` prints and raises `SystemExit`, and in the packaged folder the
+    path it would name is a guess about a checkout that is not there — so say
+    what to do instead of where we looked."""
+    fix = "pass --gamedir, or pick the folder in the window"
+    if not gamedir and BUNDLED:
+        # `ta3do.game_dir()` would answer with a guess about a checkout that is
+        # not there, and naming that path is worse than naming none.
+        raise TacobError(f"no game folder chosen yet — {fix}")
+    ta3do = load_ta3do()
+    root = Path(gamedir).expanduser() if gamedir else Path(ta3do.game_dir())
+    if not root.is_dir():
+        raise TacobError(f"no game folder at {root} — {fix}")
+    try:
+        assets = ta3do.Assets(root)
+    except SystemExit:
+        raise TacobError(f"{root} is not readable as a game folder — {fix}")
+    if not assets.archives:
+        raise TacobError(f"{root} holds no Total Annihilation archives "
+                         f"(no {', '.join(GAME_MARKERS)}) — {fix}")
+    return assets
+
+
 def read_cob_source(spec: str, gamedir=None):
     """A .cob path, or a stock unit name read out of the game's archives."""
     path = Path(spec)
     if path.is_file():
         return path.read_bytes(), path.stem
-    ta3do = load_ta3do()
-    assets = ta3do.Assets(gamedir)
+    assets = load_assets(gamedir)
     name = f"scripts/{path.stem.lower()}.cob"
     if not assets.has(name):
         raise TacobError(f"{spec}: not a file, and no {name} in the game's archives")
     return assets.read(name), path.stem.lower()
+
+
+# --------------------------------------------------------------------------- the project
+
+# A project is a folder, because BOS is the source and the COB is the build
+# artifact (tacob-design.md §"Decisions locked"). `/projects/` is gitignored:
+# decompiled stock BOS and built COBs are game content and are never tracked.
+
+PROJECT_FILE = "project.json"
+
+
+def projects_dir() -> Path:
+    """Where projects live. In the checkout that is `/projects/`, which
+    `.gitignore` keeps out of the repo — decompiled stock BOS and built COBs are
+    game content. In the packaged folder it is the user's own directory, because
+    a project written next to an executable in `Program Files` is not writable."""
+    if BUNDLED or os.environ.get("TACOB_HOME"):
+        return user_dir() / "projects"
+    return HERE.parent / "projects"
+
+
+# What the FBI says about how a unit moves, turned into the director's sketch.
+# A guess, and the page can override it — nothing here is measured.
+def classify(fbi):
+    """The category field is a *word list* — ARMPW's reads
+    `ARM KBOT LEVEL1 WEAPON NOTAIR NOTSUB CTRL_W`, so a substring test for "SUB"
+    calls a Peewee a submarine. Split it."""
+    cat = set((fbi.get("category") or "").upper().split())
+    def on(key):
+        return (fbi.get(key) or "0").strip() not in ("0", "")
+    if on("canfly"):
+        if on("hoverattack"):
+            return "gunship"
+        if "BOMB" in (fbi.get("weapon1") or "").upper():
+            return "bomber"
+        return "fighter"
+    if not on("bmcode") or not on("canmove"):
+        return "building"
+    if on("candive") or {"SUB", "UNDERWATER"} & cat:   # CORSUB reads UNDERWATER
+        return "sub"
+    if on("floater") or on("waterline") or "SHIP" in cat:
+        return "ship"
+    if "KBOT" in cat:
+        return "kbot"
+    return "tank"
+
+
+CLASS_PLANS = {
+    "kbot":     {"motion": "ground",  "speed": 60,  "alt": 0},
+    "tank":     {"motion": "ground",  "speed": 90,  "alt": 0},
+    "building": {"motion": "static",  "speed": 0,   "alt": 0, "activates": True},
+    "fighter":  {"motion": "circuit", "speed": 300, "alt": 220, "radius": 520,
+                 "activates": True},
+    "gunship":  {"motion": "hover",   "speed": 90,  "alt": 90, "activates": True},
+    "bomber":   {"motion": "runin",   "speed": 260, "alt": 200, "radius": 640,
+                 "activates": True},
+    "ship":     {"motion": "glide",   "speed": 80,  "alt": 0, "sfx_occupy": True},
+    "sub":      {"motion": "dive",    "speed": 70,  "alt": 0, "sfx_occupy": True},
+}
+
+
+def read_tdf_blocks(text):
+    """The weapon TDFs' block form: `[NAME] { key=value; ... }`, one level deep."""
+    out, name, depth, fields = {}, None, 0, {}
+    for raw in text.splitlines():
+        line = re.sub(r"//.*", "", raw).strip()
+        if not line:
+            continue
+        head = re.match(r"^\[([^\]]+)\]", line)
+        if head:
+            name, fields = head.group(1).strip().lower(), {}
+            out[name] = fields
+            continue
+        depth += line.count("{") - line.count("}")
+        for m in re.finditer(r"([A-Za-z0-9_]+)\s*=\s*([^;]*);", line):
+            if name is not None and depth <= 1:
+                fields[m.group(1).lower()] = m.group(2).strip()
+    return out
+
+
+def weapon_table(assets):
+    """{weapon id: {range, reloadtime, ...}} out of every weapons/*.tdf."""
+    table = {}
+    for path in assets.glob("weapons/*.tdf"):
+        try:
+            text = assets.read(path).decode("latin-1", "replace")
+        except Exception:
+            continue
+        table.update(read_tdf_blocks(text))
+    return table
+
+
+def slots_from_fbi(fbi, weapons):
+    """The FBI's `Weapon1..N` keys as slots. 1..3 are the engine's; 4 and up are
+    tagpu_weapons.c's, and read exactly the same way (extra-weapons.md)."""
+    out = []
+    for n in range(1, 17):
+        name = (fbi.get(f"weapon{n}") or "").strip()
+        if not name:
+            continue
+        spec = weapons.get(name.lower(), {})
+        try:
+            rng = int(float(spec.get("range", DEFAULT_RANGE)))
+        except ValueError:
+            rng = DEFAULT_RANGE
+        try:
+            reload_ticks = max(1, int(float(spec.get("reloadtime", 1.0)) * SIM_RATE))
+        except ValueError:
+            reload_ticks = DEFAULT_RELOAD
+        out.append(WeaponSlot(n - 1, name, rng, reload_ticks))
+    return out
+
+
+def weapon_template(n, mount, gun, flare, yaw="<300>", pitch="<200>", flash=150):
+    """The four scripts of one extra weapon, in the only body shape that fired
+    evenly on slots 4..7 (19/18/25/19 shots; extra-weapons.md snag 1).
+
+    It turns and returns inside its own tick — no `wait-for-turn`, and therefore
+    no `signal` pair to protect a thread that is not there. The guarantee the wait
+    used to give is `tagpu_weapons.c`'s own arrival gate, which holds fire until
+    the muzzle piece really points at the target."""
+    return f"""
+// Weapon {n} — the slew-and-return shape (research/notes/extra-weapons.md snag 1).
+// AimWeapon{n} must return inside its tick: a wait here parks one of the eight
+// records for the whole slew and the pool runs out.
+AimWeapon{n}(heading, pitch)
+{{
+\tturn {mount} to y-axis heading speed {yaw};
+\tturn {gun} to x-axis <0> - pitch speed {pitch};
+\treturn (1);
+}}
+
+FireWeapon{n}()
+{{
+\tshow {flare};
+\tsleep {flash};
+\thide {flare};
+\treturn (0);
+}}
+
+AimFromWeapon{n}(piecenum)
+{{
+\tpiecenum = {mount};
+\treturn (0);
+}}
+
+QueryWeapon{n}(piecenum)
+{{
+\tpiecenum = {flare};
+\treturn (0);
+}}
+"""
+
+
+class Project:
+    """BOS, the built COB, the FBI, and the glTF the viewer poses."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.meta = {}
+        if (self.path / PROJECT_FILE).is_file():
+            self.meta = json.loads((self.path / PROJECT_FILE).read_text())
+        self.unit = self.meta.get("unit") or self.path.name
+
+    @property
+    def bos(self):
+        return self.path / f"{self.unit}.bos"
+
+    @property
+    def cob(self):
+        return self.path / f"{self.unit}.cob"
+
+    @property
+    def glb(self):
+        name = self.meta.get("model") or self.unit
+        return self.path / "model" / f"{name}.glb"
+
+    def save_meta(self):
+        (self.path / PROJECT_FILE).write_text(json.dumps(self.meta, indent=1,
+                                                         sort_keys=True) + "\n")
+
+    @classmethod
+    def open_unit(cls, unit, root=None, gamedir=None, force=False):
+        """Decompile a stock unit into a fresh project: BOS, FBI, and the glTF
+        with **every** piece kept — the VM decides visibility per tick and a
+        script can `show` a flare later, so `--show-hidden` is not optional here."""
+        unit = unit.lower()
+        path = Path(root) if root else projects_dir() / unit
+        ta3do = load_ta3do()
+        assets = load_assets(gamedir)
+        blob, label = read_cob_source(unit, gamedir)
+        cob = read_cob(blob)
+        text, failures = decompile_cob(cob, label)
+        if failures:
+            raise TacobError(f"{unit}: " + "; ".join(f"{n}: {m}" for n, m in failures))
+        path.mkdir(parents=True, exist_ok=True)
+        project = cls(path)
+        project.unit = label
+        if project.bos.is_file() and not force:
+            raise TacobError(f"{project.bos} exists — pass --force to overwrite it")
+        project.bos.write_text(text, encoding="latin-1")
+        project.cob.write_bytes(blob)
+        fbi = {}
+        try:
+            fbi = ta3do.fbi_fields(assets, label)
+        except Exception:
+            pass
+        model = ta3do.load_model(assets, label, show_hidden=True, keep_flares=True)
+        ta3do.export_model(model, path / "model")
+        project.meta = {"unit": label, "model": model.name, "fbi": fbi,
+                        "class": classify(fbi),
+                        "note": "written by `tacob open`; BOS is the source, the COB "
+                                "is a build artifact, and model/ is `ta3do export "
+                                "--show-hidden` so every piece is present"}
+        project.save_meta()
+        return project
+
+    def pack(self, out=None):
+        """The project as a .ufo: the COB, and the FBI when the project carries one.
+
+        `tools/hpipack.py` writes the archive. **A `.ufo` adds content; it does not
+        override a path a stock archive already has** — measured 2026-09-07 by
+        packing an ARMPW whose `Create` hides its torso and loading it three ways
+        on one instance: as `ztacob-armpw.ufo` and as `aaa-tacob.ufo` (a name that
+        sorts before every stock archive) the unit was **pixel-identical** to
+        stock, and as a loose `gamedir/scripts/armpw.cob` the torso was gone. So
+        `install()` writes both, and overriding a stock unit is the loose file's
+        job. See file-formats.md §5."""
+        import importlib.util
+        from importlib.machinery import SourceFileLoader
+        loader = SourceFileLoader("hpipack", str(HERE / "hpipack.py"))
+        spec = importlib.util.spec_from_loader("hpipack", loader)
+        hpipack = importlib.util.module_from_spec(spec)
+        loader.exec_module(hpipack)
+        if not self.cob.is_file():
+            raise TacobError(f"{self.cob} is not built yet — build it first")
+        tree = {}
+        hpipack.insert(tree, f"scripts/{self.unit}.cob", self.cob.read_bytes())
+        fbi = self.path / f"{self.unit}.fbi"
+        if fbi.is_file():
+            hpipack.insert(tree, f"units/{self.unit}.fbi", fbi.read_bytes())
+        out = Path(out) if out else self.path / f"{self.unit}.ufo"
+        out.write_bytes(hpipack.build(tree))
+        return out, sorted(hpipack.walk(tree))
+
+    def install(self, gamedir, out=None):
+        """Put the build where a game will actually run it: the `.ufo` for anything
+        new, and the loose `scripts/<unit>.cob` for the override, because that is
+        the copy the engine opens first (§pack). Returns what it wrote."""
+        gamedir = Path(gamedir)
+        if not gamedir.is_dir():
+            raise TacobError(f"{gamedir} is not a directory")
+        ufo, entries = self.pack(out)
+        written = [gamedir / ufo.name]
+        written[0].write_bytes(ufo.read_bytes())
+        loose = gamedir / "scripts" / f"{self.unit}.cob"
+        loose.parent.mkdir(parents=True, exist_ok=True)
+        loose.write_bytes(self.cob.read_bytes())
+        written.append(loose)
+        return ufo, entries, written
+
+
+# --------------------------------------------------------------------------- the session
+
+MAX_FRAMES = 9000               # five minutes of recorded timeline, then the head rolls
+MAX_TRACE = 60000               # trace lines kept; a stock unit writes a few a second
+
+
+class Session:
+    """One unit, running. Owns the VM, the world, the director and the timeline.
+
+    Edit and play are separate states: typing only re-parses for diagnostics, and
+    a build recompiles and restarts from `Create`. A hot swap would leave running
+    threads pointing into old code and show behaviour no game shows
+    (tacob-design.md §"Decisions locked")."""
+
+    def __init__(self, project, gamedir=None):
+        self.project = project
+        self.gamedir = gamedir
+        self.lock = threading.RLock()
+        self.source = project.bos.read_text(encoding="latin-1") if project.bos.is_file() else ""
+        self.frame = None
+        self.slots = []
+        self.error = None
+        self.diagnostics = []
+        self.playing = False
+        self.speed = 1.0
+        self.frames = []
+        self.frames_from = 0
+        self.trace = []
+        self.cls = project.meta.get("class") or "tank"
+        self.cob = None
+        self.build_id = 0
+        self._load_model()
+        self.build(self.source, restart=True)
+
+    # -- assets -----------------------------------------------------------
+    def _load_model(self):
+        """The piece frame the pose and every position `get` need. Without the
+        game's archives the session still runs — the pieces just have no offsets,
+        and `get PIECE_XZ` says so by answering from the unit's own origin."""
+        import contextlib
+        import io
+        said = io.StringIO()
+        try:
+            # `ta3do.die()` prints to stderr and raises SystemExit, which
+            # `except Exception` lets straight past — so a missing game directory or
+            # an unresolvable model used to take `tacob serve` down with it. Keep
+            # what it said; it is the only explanation of why there is no model.
+            with contextlib.redirect_stderr(said):
+                ta3do = load_ta3do()
+                assets = load_assets(self.gamedir)
+                _label, blob = ta3do.resolve_model(assets, self.project.unit)
+                self.root3do = ta3do.parse_3do(blob)
+                self.weapons = weapon_table(assets)
+        except (Exception, SystemExit) as err:
+            self.root3do, self.weapons = None, {}
+            why = said.getvalue().strip() or str(err) or "no game directory"
+            self.error = f"assets: {why.splitlines()[-1]}"
+
+    # -- build ------------------------------------------------------------
+    def _diag(self, rule, err):
+        return [{"rule": rule, "level": "error", "script": "", "line": _err_line(err),
+                 "file": self.project.bos.name, "message": str(err)}]
+
+    def build(self, source, restart=True):
+        """Parse, compile, lint, and restart from `Create`.
+
+        The lints come last because two of them need the piece frame, and the
+        frame is only known once the compile has fixed the piece order. A parse or
+        compile error changes nothing: the unit that is running keeps running."""
+        with self.lock:
+            self.source = source
+            include = (str(self.project.path), str(INCLUDE_DIR))
+            try:
+                program = parse_bos(source, self.project.bos.name, include)
+            except TacobError as err:
+                self.diagnostics = self._diag("parse", err)
+                return {"ok": False, "diagnostics": self.diagnostics}
+            try:
+                cob = Compiler(program).compile()
+            except TacobError as err:
+                self.diagnostics = self._diag("compile", err)
+                return {"ok": False, "diagnostics": self.diagnostics}
+            self.cob = cob
+            self.build_id += 1
+            self.frame = (PieceFrame.from_3do(cob.pieces, self.root3do)
+                          if self.root3do is not None else PieceFrame(cob.pieces))
+            self.diagnostics = Linter(program, self.frame).run()
+            self.project.cob.write_bytes(write_cob(cob))
+            self.project.bos.write_text(source, encoding="latin-1")
+            if restart:
+                self.restart()
+            return {"ok": True, "diagnostics": self.diagnostics, "build": self.build_id,
+                    "scripts": [n for n, _ in cob.scripts], "pieces": list(cob.pieces),
+                    "statics": cob.statics, "words": len(cob.code)}
+
+    def restart(self):
+        """Back to tick 0 with a fresh pool, a fresh world and an empty timeline."""
+        with self.lock:
+            fbi = self.project.meta.get("fbi") or {}
+            self.slots = slots_from_fbi(fbi, self.weapons)
+            self.trace = []
+            self.frames = []
+            self.frames_from = 0
+            world = EditorWorld(self.frame, None, seed=self.project.meta.get("seed", 1))
+            world.maxhp = int(float(fbi.get("maxdamage", 100) or 100))
+            world.hp = world.maxhp
+            world.height = int(float(fbi.get("height", 0) or 0))
+            # The marker starts where this unit's own longest weapon can reach it,
+            # and the patrol is scaled to the same number — a 240-range cannon on a
+            # 480-unit shuttle would spend the whole run out of range and look broken.
+            reach = max([s.range for s in self.slots] or [DEFAULT_RANGE])
+            world.target = [int(0.35 * reach * FIXED), 0, int(0.35 * reach * FIXED)]
+            world.units = {2: {"pos": world.target, "height": 30}}
+            vm = CobVM(self.cob, world, self.trace.append, unit=1,
+                       type_name=self.project.unit.upper(),
+                       visible=self.frame.visibility())
+            world.vm = vm
+            self.vm, self.world = vm, world
+            plan = dict(CLASS_PLANS.get(self.cls, CLASS_PLANS["tank"]))
+            motion = plan.get("motion", "ground")
+            radius = plan.get("radius", 480)
+            if motion in ("ground", "glide", "dive"):
+                radius = max(60.0, min(radius, 0.5 * reach))
+            elif motion in ("circuit", "runin"):
+                radius = max(120.0, 0.55 * reach)
+            self.director = Director(vm, world, motion=motion, slots=self.slots,
+                                     speed=plan.get("speed", 60),
+                                     alt=min(plan.get("alt", 0), 0.3 * reach),
+                                     radius=radius,
+                                     sfx_occupy=plan.get("sfx_occupy", False),
+                                     activates=plan.get("activates", False))
+            self.tick = 0
+            self.director.step(0)   # Create, at the tick the page shows first
+            self.record()
+
+    # -- the tick loop ----------------------------------------------------
+    def step(self, n=1):
+        with self.lock:
+            for _ in range(n):
+                self.tick += 1
+                self.director.step(self.tick)
+                self.record()
+
+    def record(self):
+        vm, w = self.vm, self.world
+        pos, ang = [], []
+        for p in range(len(vm.pos)):
+            pos += vm.pos[p]
+            ang += vm.ang[p]
+        threads = []
+        for i, rec in enumerate(vm.threads):
+            threads.append({"slot": i, "status": rec.status, "pc": rec.pc,
+                            "sp": rec.sp, "mask": rec.mask, "child": rec.child,
+                            "script": vm.script_of_pc(rec.pc) if rec.status else ""})
+        # What the page actually sets on the glTF nodes. The conversion lives here,
+        # in one place, because it is the only part of the pose that is not the
+        # engine's own arithmetic: `tools/ta3do` writes glTF with the file's z
+        # negated, and the engine's loaded model has the file's x *and* z negated,
+        # so glTF = engine with x negated. That substitution turns the engine's
+        # `Ry(ay)·Rx(ax)·Rz(az)` into three.js's YXZ Euler (ax, ay, -az), and a
+        # local offset into (-x, y, z). At rest it reproduces the exporter's own
+        # node translation exactly, which is the check that it is right.
+        gt, gr = [], []
+        K = 2 * math.pi / 65536.0
+        for p in range(len(vm.pos)):
+            node = self.frame.of_cob[p] if p < len(self.frame.of_cob) else -1
+            off = self.frame.offset[node] if node >= 0 else [0, 0, 0]
+            gt += [-(off[0] + vm.pos[p][0]) / float(FIXED),
+                   (off[1] + vm.pos[p][1]) / float(FIXED),
+                   (off[2] + vm.pos[p][2]) / float(FIXED)]
+            a = vm.ang[p]
+            gr += [s16(a[0]) * K, s16(a[1]) * K, -s16(a[2]) * K]
+        frame = {"tick": self.tick, "pos": pos, "ang": ang, "gl": {"t": gt, "r": gr},
+                 "visible": [1 if v else 0 for v in vm.visible],
+                 "threads": threads, "running": vm.running,
+                 "statics": list(vm.statics),
+                 "unit": {"pos": list(w.pos), "body": list(w.body),
+                          "target": list(w.target)},
+                 "effects": [{"tick": t, "kind": k, "piece": p, "arg": a, "at": at}
+                             for (t, k, p, a, at) in w.effects[-24:]],
+                 "slots": [s.info() for s in self.slots],
+                 "trace": len(self.trace)}
+        self.frames.append(frame)
+        if len(self.frames) > MAX_FRAMES:
+            drop = len(self.frames) - MAX_FRAMES
+            del self.frames[:drop]
+            self.frames_from += drop
+        if len(self.trace) > MAX_TRACE:                 # the tab keeps the tail
+            del self.trace[:len(self.trace) - MAX_TRACE]
+
+    def frame_at(self, tick):
+        if not self.frames:
+            return None
+        index = tick - self.frames[0]["tick"]
+        index = max(0, min(len(self.frames) - 1, index))
+        return self.frames[index]
+
+    # -- what the page asks for -------------------------------------------
+    def state(self):
+        with self.lock:
+            cob = self.cob
+            return {
+                "unit": self.project.unit,
+                "class": self.cls,
+                "classes": sorted(CLASS_PLANS),
+                "model": self.project.glb.name if self.project.glb.is_file() else None,
+                "pieces": list(cob.pieces) if cob else [],
+                "bound": list(self.frame.bound) if self.frame else [],
+                "offsets": [list(o) for o in self.frame.offset] if self.frame else [],
+                "parents": list(self.frame.parent) if self.frame else [],
+                "scripts": [n for n, _ in cob.scripts] if cob else [],
+                "statics": cob.statics if cob else 0,
+                "slots": [s.info() for s in self.slots],
+                "diagnostics": self.diagnostics,
+                "tick": self.tick,
+                "head": self.tick,
+                "first": self.frames[0]["tick"] if self.frames else 0,
+                "playing": self.playing,
+                "speed": self.speed,
+                "build": self.build_id,
+                "trace": len(self.trace),
+                "world": self.world.snapshot(),
+                "ignored_sets": self.world.ignored_sets[-8:],
+                "fbi": self.project.meta.get("fbi") or {},
+                "error": self.error,
+                "rules": LINT_RULES,
+                "engine_starts": {k: list(v) for k, v in ENGINE_STARTS.items()},
+            }
+
+
+# --------------------------------------------------------------------------- the server
+
+# Stdlib only, loopback only. The page is a thin client: it edits and draws, and
+# it never interprets COB. One pose frame a tick, about a millisecond a call —
+# which is why the VM lives here and not in JavaScript (tacob-design.md
+# §"Decisions locked": two implementations of the opcode semantics would drift).
+
+IMPORT_MAP = re.compile(r'(<script\s+type="importmap"\s*>)(.*?)(</script>)', re.S)
+CDN = "https://cdn.jsdelivr.net/"
+
+
+def local_js(url: str, vendor=VENDOR_DIR):
+    """The vendored copy of one import-map entry, or None if it was not fetched.
+
+    `tacob-build.py vendor` mirrors the CDN's own path under `vendor/`, so the
+    rewrite is a prefix swap and the *directory* entry (`three/addons/`, which a
+    map resolves by prefix) rewrites by the same rule as a file entry."""
+    if not url.startswith(CDN):
+        return None
+    rest = url[len(CDN):]
+    target = vendor / rest.rstrip("/")
+    if url.endswith("/"):
+        return "/vendor/" + rest if target.is_dir() else None
+    return "/vendor/" + rest if target.is_file() else None
+
+
+def rewrite_import_map(text: str, vendor=VENDOR_DIR) -> str:
+    """Point the page's import map at `vendor/` for every module actually there.
+
+    The page ships with CDN URLs (the `ta3do-view.html` idiom) and the packaged
+    build has no network, so the build fetches pinned, checksummed copies and the
+    server rewrites the map on the way out — one page, two homes, nothing
+    vendored into git (tacob-design.md §"Decisions locked", the JavaScript row).
+    An entry with no local copy keeps its CDN URL, so a half-vendored tree still
+    loads when there *is* a network."""
+    if not vendor.is_dir():
+        return text
+    match = IMPORT_MAP.search(text)
+    if not match:
+        return text
+    try:
+        spec = json.loads(match.group(2))
+        imports = spec["imports"]
+    except (ValueError, KeyError, TypeError):
+        return text
+    spec["imports"] = {k: (local_js(v, vendor) or v) for k, v in imports.items()}
+    body = json.dumps(spec, indent=1)
+    return text[:match.start(2)] + "\n" + body + "\n" + text[match.end(2):]
+
+
+def editor_html() -> str:
+    return rewrite_import_map(EDITOR_HTML.read_text(encoding="utf-8"))
+
+
+def setup_html() -> str:
+    return SETUP_HTML.read_text(encoding="utf-8")
+
+
+PAGES = ("/", "/tacob-edit.html")
+
+
+class Server:
+    """The editor's server, and — before there is a session — the picker's.
+
+    `session` may be None: that is the packaged tool's first run, where nothing
+    is known yet about where the game is installed. The port stays the same
+    through the picker, so answering it is a reload rather than a second URL."""
+
+    def __init__(self, session, host="127.0.0.1", port=0, gamedir=None, unit=None,
+                 follow_gamedir=False):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_args):
+                pass
+
+            def send(self, body, ctype="application/json", code=200):
+                if isinstance(body, (dict, list)):
+                    body = json.dumps(body).encode()
+                elif isinstance(body, str):
+                    body = body.encode("utf-8", "replace")
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                path, _, query = self.path.partition("?")
+                args = dict(urllib.parse.parse_qsl(query))
+                try:
+                    self.route_get(path, args)
+                except TacobError as err:               # the operator's mistake: say it plainly
+                    self.send({"error": str(err)}, code=400)
+                except Exception as err:                # never take the server down
+                    self.send({"error": f"{type(err).__name__}: {err}"}, code=500)
+
+            def do_POST(self):
+                # Every POST here changes something — it builds, restarts, writes the
+                # project's BOS and COB, or packs. `Content-Type: text/plain` makes a
+                # cross-origin POST a *simple* request with no preflight, so a page
+                # in the user's browser that guessed this ephemeral port could drive
+                # it. A same-origin `fetch` sends no Origin header at all (or ours),
+                # so refusing a foreign one costs the page nothing.
+                origin = self.headers.get("Origin")
+                if origin and not outer.is_ours(origin):
+                    return self.send({"error": f"refused: cross-origin POST from {origin}"},
+                                     code=403)
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b"{}"
+                try:
+                    body = json.loads(raw.decode("utf-8") or "{}")
+                except ValueError:
+                    body = {}
+                try:
+                    self.route_post(self.path.partition("?")[0], body)
+                except TacobError as err:
+                    self.send({"error": str(err)}, code=400)
+                except Exception as err:
+                    self.send({"error": f"{type(err).__name__}: {err}"}, code=500)
+
+            # -- the five endpoints the design names, plus what drives them --
+            def route_get(self, path, args):
+                s = outer.session
+                if path in PAGES:
+                    # No session means no game folder yet: the first thing the
+                    # window shows is the picker, at the same URL, so picking one
+                    # is a reload and not a second port.
+                    page = editor_html() if s else setup_html()
+                    return self.send(page, "text/html; charset=utf-8")
+                if path == "/setup.html":
+                    return self.send(setup_html(), "text/html; charset=utf-8")
+                if path == "/setup":
+                    return self.send(outer.setup_state())
+                if path.startswith("/vendor/"):
+                    return self.serve_vendor(path)
+                if s is None:
+                    return self.send({"error": "no game folder yet — pick one at "
+                                               "/setup.html"}, code=503)
+                if path == "/model.glb":
+                    if not s.project.glb.is_file():
+                        return self.send({"error": "no model exported"}, code=404)
+                    self.send(s.project.glb.read_bytes(), "model/gltf-binary")
+                elif path == "/state":
+                    self.send(s.state())
+                elif path == "/source":
+                    self.send(s.source, "text/plain; charset=utf-8")
+                elif path == "/pose":
+                    want = args.get("tick")
+                    with s.lock:
+                        frame = s.frame_at(int(want)) if want not in (None, "", "head") \
+                            else (s.frames[-1] if s.frames else None)
+                        self.send(frame or {"error": "no frames"})
+                elif path == "/trace":
+                    start = int(args.get("from") or 0)
+                    with s.lock:
+                        lines = s.trace[start:start + int(args.get("limit") or 2000)]
+                        self.send({"from": start, "total": len(s.trace), "lines": lines})
+                elif path == "/events":
+                    self.send({"starts": {k: list(v) for k, v in ENGINE_STARTS.items()},
+                               "params": PARAM_NAMES,
+                               "scripts": [n for n, _ in s.cob.scripts] if s.cob else []})
+                else:
+                    self.send({"error": f"no route {path}"}, code=404)
+
+            def serve_vendor(self, path):
+                """The pinned JavaScript the build fetched. Only files under
+                `vendor/`, resolved before the test, because the path comes off
+                the wire."""
+                rel = urllib.parse.unquote(path[len("/vendor/"):])
+                root = VENDOR_DIR.resolve()
+                target = (root / rel).resolve()
+                if not target.is_file() or root not in target.parents:
+                    return self.send({"error": f"no route {path}"}, code=404)
+                ctype = {".js": "text/javascript", ".mjs": "text/javascript",
+                         ".json": "application/json", ".map": "application/json",
+                         ".css": "text/css"}.get(target.suffix.lower(),
+                                                 "application/octet-stream")
+                self.send(target.read_bytes(), f"{ctype}; charset=utf-8")
+
+            def route_post(self, path, body):
+                s = outer.session
+                if path == "/setup":
+                    return self.send(outer.apply_setup(body))
+                if s is None:
+                    return self.send({"error": "no game folder yet — pick one at "
+                                               "/setup.html"}, code=503)
+                if path == "/build":
+                    self.send(s.build(body.get("source") or "",
+                                      restart=body.get("restart", True)))
+                elif path == "/transport":
+                    self.send(outer.transport(body))
+                elif path == "/event":
+                    with s.lock:
+                        ev = s.director.issue(body.get("script") or "",
+                                              body.get("args") or ())
+                        self.send({"queued": ev.script, "kind": ev.kind,
+                                   "phase": ev.phase, "tick": s.tick})
+                elif path == "/world":
+                    self.send(outer.set_world(body))
+                elif path == "/pack":
+                    # Where it writes is the *operator's* choice (`serve --install`),
+                    # never the request's: the body cannot name a path. A POST here
+                    # is a simple cross-origin request — `text/plain` needs no
+                    # preflight and this handler parses any body as JSON — so a page
+                    # that guessed the port could otherwise have written a file
+                    # anywhere the user can write.
+                    if outer.gamedir:
+                        out, names, written = s.project.install(outer.gamedir)
+                        self.send({"path": str(out), "entries": names,
+                                   "bytes": out.stat().st_size,
+                                   "installed": [str(w) for w in written]})
+                    else:
+                        out, names = s.project.pack()
+                        self.send({"path": str(out), "entries": names,
+                                   "bytes": out.stat().st_size})
+                elif path == "/template":
+                    self.send({"bos": weapon_template(
+                        int(body.get("n") or 4), body.get("mount") or "turret",
+                        body.get("gun") or "sleeve", body.get("flare") or "flare")})
+                else:
+                    self.send({"error": f"no route {path}"}, code=404)
+
+        self.session = session
+        self.gamedir = gamedir          # where "pack" installs, when one was given
+        self.unit = unit                # what the picker opens, when it has to open one
+        # Whether the picker's answer also becomes the install target. The *page*
+        # may say which game folder (a real install, checked before anything is
+        # saved); whether `pack` installs into it at all stays the operator's,
+        # which is landing 4's rule that a request may not name where we write.
+        self.follow_gamedir = follow_gamedir
+        self.httpd = ThreadingHTTPServer((host, port), Handler)
+        self.host, self.port = host, self.httpd.server_address[1]
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.ticker = threading.Thread(target=self._tick_loop, daemon=True)
+        self.running = True
+
+    @property
+    def base(self):
+        return f"http://{self.host}:{self.port}"
+
+    def is_ours(self, origin):
+        """Our own page, however the operator spelled the loopback host. `null` is
+        what a `file://` page sends, and this server is never opened from one."""
+        parsed = urllib.parse.urlsplit(origin)
+        return (parsed.scheme == "http" and parsed.port == self.port
+                and parsed.hostname in ("127.0.0.1", "localhost", "::1", self.host))
+
+    def start(self):
+        self.thread.start()
+        self.ticker.start()
+
+    def close(self):
+        self.running = False
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+    def setup_state(self):
+        """What the picker draws: where we would look, what we already know, and
+        whether anything is running yet."""
+        config = read_config()
+        session = self.session
+        return {"needed": session is None,
+                "gamedir": config.get("gamedir"),
+                "unit": self.unit or config.get("unit") or "armpw",
+                "candidates": [str(p) for p in gamedir_candidates()],
+                "config": str(user_dir() / CONFIG_FILE),
+                "projects": str(projects_dir()),
+                "open": session.project.unit if session else None,
+                "packaged": BUNDLED}
+
+    def apply_setup(self, body):
+        """The picker's answer. Validate *before* saving: the whole point of the
+        first run is that a wrong folder says so here, instead of becoming a
+        session with no model and a puzzle about why every piece sits at the
+        origin."""
+        gamedir = (body.get("gamedir") or "").strip()
+        unit = (body.get("unit") or "").strip().lower() or "armpw"
+        if not gamedir:
+            raise TacobError("give the folder Total Annihilation is installed in")
+        assets = load_assets(gamedir)
+        name = f"scripts/{unit}.cob"
+        if not assets.has(name):
+            raise TacobError(f"no {name} in {gamedir} — is `{unit}` the unit's own name?")
+        config = read_config()
+        config.update({"gamedir": str(Path(gamedir).expanduser()), "unit": unit})
+        write_config(config)
+        path = projects_dir() / unit
+        if not (path / PROJECT_FILE).is_file():
+            Project.open_unit(unit, path, config["gamedir"])
+        session = Session(Project(path), config["gamedir"])
+        old, self.session, self.unit = self.session, session, unit
+        if old is not None:
+            old.playing = False
+        if self.follow_gamedir and not self.gamedir:
+            self.gamedir = config["gamedir"]
+        return {"ok": True, "unit": unit, "gamedir": config["gamedir"],
+                "project": str(path), "config": str(user_dir() / CONFIG_FILE),
+                "url": self.base, "error": session.error}
+
+    def _tick_loop(self):
+        """The sim clock. Real time, so the page can just draw what it is given."""
+        while self.running:
+            s = self.session
+            if s is None:
+                time.sleep(0.05)
+            elif s.playing:
+                s.step(1)
+                time.sleep(max(0.001, 1.0 / (SIM_RATE * max(0.05, s.speed))))
+            else:
+                time.sleep(0.02)
+
+    def transport(self, body):
+        s = self.session
+        action = body.get("action") or "pause"
+        with s.lock:
+            if action == "play":
+                s.playing = True
+            elif action == "pause":
+                s.playing = False
+            elif action == "step":
+                s.playing = False
+                s.step(max(1, int(body.get("n") or 1)))
+            elif action == "restart":
+                s.playing = False
+                s.restart()
+            elif action == "speed":
+                s.speed = max(0.05, min(8.0, float(body.get("speed") or 1.0)))
+            elif action == "class":
+                s.cls = body.get("class") or s.cls
+                s.project.meta["class"] = s.cls
+                s.project.save_meta()
+                s.restart()
+            return {"playing": s.playing, "tick": s.tick, "speed": s.speed,
+                    "class": s.cls, "first": s.frames[0]["tick"] if s.frames else 0}
+
+    def set_world(self, body):
+        """The unit-state panel. Everything here is a field one of the twenty
+        value-id handlers reads — nothing else is settable, because nothing else
+        is what a script can see."""
+        s = self.session
+        with s.lock:
+            w = s.world
+            for key in ("pos", "body", "target"):
+                if key in body:
+                    setattr(w, key, [int(v) for v in body[key]][:3])
+            for key in ("ground", "water", "hp", "maxhp", "height"):
+                if key in body:
+                    setattr(w, key, int(body[key]))
+            if "build_left" in body:
+                w.build_left = float(body["build_left"])
+            for name, value in (body.get("bits") or {}).items():
+                if name in w.bits:
+                    w.bits[name] = int(value)
+            if "seed" in body:
+                w.rng.seed = int(body["seed"]) & 0x7FFFFFFF or 1
+            return w.snapshot()
 
 
 # --------------------------------------------------------------------------- commands
@@ -1715,8 +4762,7 @@ def roundtrip_one(blob: bytes, unit: str):
 def cmd_roundtrip(args):
     units = []
     if args.all:
-        ta3do = load_ta3do()
-        assets = ta3do.Assets(args.gamedir)
+        assets = load_assets(args.gamedir)
         for path in assets.glob("scripts/*.cob"):
             units.append((assets.read(path), Path(path).stem))
     for spec in args.units:
@@ -1742,6 +4788,333 @@ def cmd_roundtrip(args):
         print(f"{summary['identical']} of {summary['units']} byte-identical")
     if failed:
         raise SystemExit(1)
+
+
+# The pose oracle, read the other way round. `read_posedump` above takes the
+# per-piece `move=`/`turn=` the trace gate diffs; these two take the *vertex*
+# lines, which carry the engine's own posed vertex buffer (`P_VBUF`) beside the
+# model-space vertex it came from. Composing one from the other is the only check
+# there is on `piece_offset`'s rotation order and its handling of MOVE, because
+# the disassembly says what the engine does and only the vertex buffer says
+# whether we read it right.
+
+POSE_VERTEX_RE = re.compile(r"posedump:\s+v(\d+) node=\(([-\d,]+)\) vbuf=\(([-\d,]+)\)")
+POSE_PIECE_RE = re.compile(r"posedump: p(\d+) (\S+)( HIDDEN)? off=\(([-\d,]+)\) "
+                           r"move=\(([-\d,]+)\) turn=\((\d+),(\d+),(\d+)\)")
+
+
+def read_posedump_vertices(path):
+    """(yaw, [{i, name, off, move, turn, err, v: [(node, vbuf)]}]) — the dump's
+    other half. `yaw` is the unit's `+0x66` from the header line."""
+    yaw, pieces, cur = 0, [], None
+    for line in Path(path).read_text(encoding="latin-1").splitlines():
+        line = line.strip()
+        if line.startswith("posedump: tick="):
+            for part in line.split():
+                if part.startswith("yaw="):
+                    yaw = int(part[4:])
+        m = POSE_PIECE_RE.match(line)
+        if m:
+            cur = {"i": int(m.group(1)), "name": m.group(2),
+                   "off": [int(x) for x in m.group(4).split(",")],
+                   "move": [int(x) for x in m.group(5).split(",")],
+                   "turn": [int(m.group(6)), int(m.group(7)), int(m.group(8))],
+                   "err": float(line.rsplit("err=", 1)[1]) if "err=" in line else None,
+                   "v": []}
+            pieces.append(cur)
+            continue
+        m = POSE_VERTEX_RE.match(line)
+        if m and cur is not None:
+            cur["v"].append(([int(x) for x in m.group(2).split(",")],
+                             [int(x) for x in m.group(3).split(",")]))
+    return yaw, pieces
+
+
+def pose_check(cls):
+    """Rebuild the fixture's posed vertices and diff them against the engine's own.
+
+    The residual is in world units. Where the vertex buffer is fresh it is
+    **zero**; on the three fast movers it is a few units and matches
+    `tagpu_native.c`'s own `err=` on the same line, which is that pass measuring
+    the same staleness against the same buffer — the vertex buffer is a frame or
+    two behind the pose the dump sampled, and neither implementation can do
+    anything about that."""
+    folder = fixtures_dir() / cls
+    _header, lines = read_cobtrace(folder / "cobtrace.log")
+    unit = (lines[0].fields[3] if lines and lines[0].kind == "S" else cls).lower()
+    yaw, pieces = read_posedump_vertices(folder / "posedump.txt")
+    blob, _ = read_cob_source(unit)
+    cob = read_cob(blob)
+    ta3do = load_ta3do()
+    _label, model = ta3do.resolve_model(load_assets(), unit)
+    frame = PieceFrame.from_3do(cob.pieces, ta3do.parse_3do(model))
+    pos = [[0, 0, 0] for _ in cob.pieces]
+    ang = [[0, 0, 0] for _ in cob.pieces]
+    # the dump's `pN` is the PrimitiveStruct index, which 0x45A950 lays out in the
+    # COB's piece order — the nodes the COB does not name sit past the end of it
+    offsets = addressable = 0
+    for p in pieces:
+        c = p["i"] if p["i"] < len(cob.pieces) else -1
+        node = frame.of_cob[c] if c >= 0 else -1
+        if node < 0:
+            continue
+        if p["name"].lower() != cob.pieces[c].lower():
+            # the death fixture's dump is of a different unit that happened to be
+            # on screen; its pieces are not this COB's and there is nothing to diff
+            return {"class": cls, "unit": unit.upper(), "yaw": yaw, "pieces": 0,
+                    "offsets_matched": 0, "points": 0, "worst": 0.0,
+                    "engine_pass_worst": 0.0, "turned": 0, "moved": 0,
+                    "note": f"the dump's p{p['i']} is {p['name']}, this COB's is "
+                            f"{cob.pieces[c]} — a different unit, not compared"}
+        addressable += 1
+        offsets += frame.offset[node] == p["off"]
+        pos[c], ang[c] = p["move"], p["turn"]
+    worst, points, theirs = 0.0, 0, 0.0
+    for p in pieces:
+        c = p["i"] if p["i"] < len(cob.pieces) else -1
+        if c < 0 or frame.of_cob[c] < 0:
+            continue
+        theirs = max(theirs, p["err"] or 0.0)
+        for node, vbuf in p["v"]:
+            got = piece_vertex(frame, pos, ang, c, list(node), (0, yaw, 0))
+            worst = max(worst, max(abs(got[k] - vbuf[k]) for k in range(3)) / float(FIXED))
+            points += 1
+    return {"class": cls, "unit": unit.upper(), "yaw": yaw, "pieces": addressable,
+            "offsets_matched": offsets, "points": points,
+            "worst": round(worst, 5), "engine_pass_worst": round(theirs, 2),
+            "turned": sum(1 for p in pieces if any(p["turn"])),
+            "moved": sum(1 for p in pieces if any(p["move"]))}
+
+
+def cmd_pose_check(args):
+    fixtures_dir()
+    reports = []
+    for cls in (CLASSES if args.all else args.classes):
+        if not (FIXTURES / cls / "posedump.txt").is_file():
+            continue
+        report = pose_check(cls)
+        reports.append(report)
+        if not args.json:
+            if report.get("note"):
+                print(f"{report['class']:<9} {report['unit']:<9} {report['note']}")
+            else:
+                print(f"{report['class']:<9} {report['unit']:<9} yaw={report['yaw']:<6} "
+                      f"offsets {report['offsets_matched']}/{report['pieces']}  "
+                      f"points {report['points']:<3} worst {report['worst']:<9} "
+                      f"(tagpu_native's own on the same dump: {report['engine_pass_worst']})")
+    if args.json:
+        print(json.dumps(reports, indent=1))
+    bad = [r for r in reports if r["worst"] > r["engine_pass_worst"] + 0.01]
+    if bad:
+        raise SystemExit(1)
+
+
+def cmd_open(args):
+    project = Project.open_unit(args.unit, args.project, args.gamedir, args.force)
+    print(f"{project.path}: {project.bos.name}, {project.cob.name}, "
+          f"model/{project.glb.name}, class {project.meta['class']}")
+
+
+def cmd_lint(args):
+    """Parse and lint one BOS file — the same checks the editor shows in its gutter."""
+    path = Path(args.source)
+    frame = None
+    if args.unit:
+        ta3do = load_ta3do()
+        assets = load_assets(args.gamedir)
+        _label, blob = ta3do.resolve_model(assets, args.unit)
+        program = parse_bos(path.read_text(encoding="latin-1"), str(path),
+                            (str(path.parent), str(INCLUDE_DIR)))
+        frame = PieceFrame.from_3do(program.pieces, ta3do.parse_3do(blob))
+    program, diags = lint_bos(path.read_text(encoding="latin-1"), str(path),
+                              (str(path.parent), str(INCLUDE_DIR)), frame=frame)
+    if args.json:
+        print(json.dumps(diags, indent=1))
+    else:
+        for d in diags:
+            where = f"{Path(d['file']).name}:{d['line']}" if d["file"] else str(path.name)
+            print(f"{where}: {d['level']}: [{d['rule']}] {d['message']}")
+        print(f"{len(diags)} finding(s)")
+    if any(d["level"] == "error" for d in diags):
+        raise SystemExit(1)
+
+
+def cmd_template(args):
+    print(weapon_template(args.n, args.mount, args.gun, args.flare).strip())
+
+
+def cmd_pack(args):
+    project = Project(args.project)
+    if args.install:
+        out, names, written = project.install(args.install, args.output)
+        print(f"{out} ({out.stat().st_size} bytes): {', '.join(names)}")
+        for path in written:
+            print(f"  -> {path}")
+        print("  the .ufo carries anything new; the loose scripts/*.cob is what "
+              "overrides a stock unit (file-formats.md §5)")
+        return
+    out, names = project.pack(args.output)
+    print(f"{out} ({out.stat().st_size} bytes): {', '.join(names)}")
+
+
+# --------------------------------------------------------------------------- the window
+#
+# The packaged tool is a folder a modder double-clicks, and what it has to open
+# is this same page over this same loopback server — never `file://`, because
+# every POST here checks the Origin and a `file://` page sends `null`
+# (`Server.is_ours`). So the launcher's whole job is: start the server, put a
+# window on `server.base`, and stay alive while it is up.
+
+WEBVIEW2_KEY = (r"SOFTWARE\Microsoft\EdgeUpdate\Clients"
+                r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}")
+
+
+def webview2_present() -> bool:
+    """Is the WebView2 runtime installed?
+
+    pywebview's Windows backend renders in WebView2 and silently falls back to
+    MSHTML when it is missing — and MSHTML has no ES modules, so the page's
+    import map would produce a blank window and no error anywhere. Detect it
+    ourselves and prefer the browser when it is absent."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+    except ImportError:
+        return False
+    for root, extra in ((winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY),
+                        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
+                        (winreg.HKEY_CURRENT_USER, 0)):
+        try:
+            with winreg.OpenKey(root, WEBVIEW2_KEY, 0, winreg.KEY_READ | extra) as key:
+                version, _kind = winreg.QueryValueEx(key, "pv")
+                if version and version != "0.0.0.0":
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def open_window(url, title="tacob", prefer_browser=False):
+    """Show the page, and say how. Returns `(how, why)`.
+
+    `how` is "webview" (a window of our own — and this call *blocks* until the
+    user closes it), "browser" (handed to the default browser, and the caller
+    keeps the process alive) or "none" (nothing opened; the URL is all the user
+    gets). `why` explains anything but the first."""
+    why = None
+    if prefer_browser:
+        why = "asked for the browser"
+    elif sys.platform == "win32" and not webview2_present():
+        why = "no WebView2 runtime — the page needs ES modules and MSHTML has none"
+    else:
+        try:
+            import webview
+        except ImportError:
+            why = "pywebview is not installed"
+    if why is None:
+        import webview
+        webview.create_window(title, url, width=1440, height=920)
+        webview.start()
+        return "webview", None
+    import webbrowser
+    return ("browser" if webbrowser.open(url) else "none"), why
+
+
+def wait_for_stop(note="  ctrl-c to stop"):
+    print(note, flush=True)
+    try:
+        while True:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+
+
+def open_session(unit, gamedir, project=None):
+    """The project for one unit, opening it from the archives the first time."""
+    path = Path(project) if project else projects_dir() / unit.lower()
+    if not (path / PROJECT_FILE).is_file():
+        Project.open_unit(unit, path, gamedir)
+    return Session(Project(path), gamedir)
+
+
+def cmd_gui(args):
+    """The packaged tool's front door: a window on the editor, and the picker
+    first when the game folder or the unit is not known yet."""
+    config = read_config()
+    unit = (args.unit or config.get("unit") or "").strip().lower()
+    session, why = None, None
+    try:
+        load_assets(args.gamedir)
+    except TacobError as err:
+        why = str(err)
+    if why is None and unit:
+        try:
+            session = open_session(unit, args.gamedir)
+        except (TacobError, SystemExit) as err:
+            why, session = str(err) or f"{unit} would not open", None
+    elif why is None:
+        why = "no unit chosen yet"
+    # `gui` installs into the game folder by default — that is what the window is
+    # for — and `serve` keeps its explicit flag. Either way the *operator* decides
+    # it: `--no-install` turns it off, and the picker only ever supplies the value.
+    install = None if args.no_install else (args.install or args.gamedir)
+    server = Server(session, args.host, args.port, install, unit=unit or None,
+                    follow_gamedir=not (args.no_install or args.install))
+    server.start()
+    try:
+        if session:
+            print(f"tacob: {session.project.unit} at {server.base}  "
+                  f"({len(session.cob.scripts)} scripts, {len(session.cob.pieces)} pieces)")
+            for d in session.diagnostics:
+                print(f"  {d['level']}: [{d['rule']}] {d['message'][:110]}")
+        else:
+            print(f"tacob: {server.base}")
+            print(f"  {why}")
+            print("  the page is asking where the game is installed")
+        if install:
+            print(f"  `pack` installs into {install}")
+        if args.no_open:
+            return wait_for_stop()
+        how, reason = open_window(server.base, "tacob — BOS/COB editor", args.browser)
+        if how == "webview":
+            return                                   # the window closed; so do we
+        if how == "browser":
+            print(f"  opened in your browser ({reason})" if reason else "  opened")
+        else:
+            print(f"  no window and no browser ({reason}) — open {server.base} yourself")
+        wait_for_stop("  this window keeps tacob running; close it to stop")
+    finally:
+        server.close()
+
+
+def cmd_serve(args):
+    if args.unit:
+        path = Path(args.project) if args.project else projects_dir() / args.unit.lower()
+        if not (path / PROJECT_FILE).is_file():
+            Project.open_unit(args.unit, path, args.gamedir)
+        project = Project(path)
+    else:
+        project = Project(args.project or projects_dir())
+    session = Session(project, args.gamedir)
+    server = Server(session, args.host, args.port, args.install)
+    server.start()
+    print(f"tacob: {project.unit} at {server.base}  ({len(session.cob.scripts)} scripts, "
+          f"{len(session.cob.pieces)} pieces)")
+    for d in session.diagnostics:
+        print(f"  {d['level']}: [{d['rule']}] {d['message'][:110]}")
+    if args.open:
+        import webbrowser
+        webbrowser.open(server.base)
+    if args.ticks:
+        session.step(args.ticks)
+        print(f"  stepped {args.ticks} ticks, {len(session.trace)} trace lines")
+        server.close()
+        return
+    try:
+        wait_for_stop()
+    finally:
+        server.close()
 
 
 def main(argv=None):
@@ -1774,7 +5147,90 @@ def main(argv=None):
     p.add_argument("--gamedir")
     p.set_defaults(fn=cmd_roundtrip)
 
+    p = sub.add_parser("run", help="replay a landing-2 fixture on the VM and diff both oracles")
+    p.add_argument("classes", nargs="*", help="kbot, tank, building, death, fighter, gunship, "
+                                              "bomber, ship, sub")
+    p.add_argument("--all", action="store_true", help="every fixture — the landing-3 gate")
+    p.add_argument("--print-trace", action="store_true", help="write the replayed lines to stdout")
+    p.add_argument("--trace-out", help="write the replayed lines to this file")
+    p.add_argument("--no-pose", action="store_true", help="skip the posedump comparison")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_run)
+
+    p = sub.add_parser("fit-world", help="derive replay.json's get timelines from the fixtures")
+    p.add_argument("classes", nargs="*")
+    p.add_argument("--all", action="store_true")
+    p.set_defaults(fn=cmd_fit)
+
+    p = sub.add_parser("pose-check", help="rebuild the fixtures' posed vertices and diff")
+    p.add_argument("classes", nargs="*")
+    p.add_argument("--all", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_pose_check)
+
+    p = sub.add_parser("open", help="decompile a stock unit into projects/<unit>/")
+    p.add_argument("unit")
+    p.add_argument("--project", help="the folder to write (default projects/<unit>)")
+    p.add_argument("--gamedir")
+    p.add_argument("--force", action="store_true", help="overwrite an existing BOS")
+    p.set_defaults(fn=cmd_open)
+
+    p = sub.add_parser("gui", help="the editor in a window — the packaged tool's front door")
+    p.add_argument("unit", nargs="?", help="a stock unit; the picker asks when it is new")
+    p.add_argument("--gamedir")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=0)
+    p.add_argument("--browser", action="store_true",
+                   help="the default browser, never a window of our own")
+    p.add_argument("--no-open", action="store_true",
+                   help="serve only and print the URL (what the gate drives)")
+    p.add_argument("--install", metavar="GAMEDIR",
+                   help="where `pack` installs (default: the game folder itself)")
+    p.add_argument("--no-install", action="store_true",
+                   help="`pack` writes the .ufo into the project and installs nothing")
+    p.set_defaults(fn=cmd_gui)
+
+    p = sub.add_parser("serve", help="the editor page and the VM behind it")
+    p.add_argument("unit", nargs="?", help="a stock unit; opens the project if new")
+    p.add_argument("--project")
+    p.add_argument("--gamedir")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=0)
+    p.add_argument("--open", action="store_true", help="open a browser on it")
+    p.add_argument("--ticks", type=int, help="run this many ticks and exit (a smoke test)")
+    p.add_argument("--install", metavar="GAMEDIR",
+                   help="the game directory the page's `pack` button installs into")
+    p.set_defaults(fn=cmd_serve)
+
+    p = sub.add_parser("lint", help="the editor's static checks on a BOS file")
+    p.add_argument("source")
+    p.add_argument("--unit", help="bind the pieces to this unit's model")
+    p.add_argument("--gamedir")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_lint)
+
+    p = sub.add_parser("pack", help="the project as a .ufo the game loads")
+    p.add_argument("project")
+    p.add_argument("-o", "--output")
+    p.add_argument("--install", metavar="GAMEDIR",
+                   help="also drop it into a game directory: the .ufo, and the loose "
+                        "scripts/<unit>.cob that is what overrides a stock unit")
+    p.set_defaults(fn=cmd_pack)
+
+    p = sub.add_parser("weapon", help="the four scripts of one extra weapon slot")
+    p.add_argument("n", type=int)
+    p.add_argument("mount")
+    p.add_argument("gun")
+    p.add_argument("flare")
+    p.set_defaults(fn=cmd_template)
+
     args = ap.parse_args(argv)
+    # One place decides where the game is: the flag, then $TA3DO_GAMEDIR (which
+    # `ta3do` reads for itself), then the folder the picker saved. Without this
+    # the packaged tool would fall back to `ta3do.repo_root()`, which looks for a
+    # checkout that is not there.
+    if hasattr(args, "gamedir"):
+        args.gamedir = resolve_gamedir(args.gamedir)
     try:
         args.fn(args)
     except TacobError as e:

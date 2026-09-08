@@ -81,7 +81,7 @@ frame's structure:
 | **hot-unit binning** | `0x48BAE0` | rebuilds `HotUnits`/`NumHotUnits` (`TA+0x1435F/14367`) and bins each into per-tile-row buckets `[edi+…]` | — |
 | **features + units** | row sweep `0x4697CF`..`0x469AF0` calling `0x4658E0`, **`0x46A610`** (feature), **`0x45AC20`** (unit) | the interleaved painter's-algorithm pass — see §2 | "Render Stuff" |
 | **fog of war** | `0x49BE60` (see-projectiles), **`0x420B00`** | LOS/fog overlay over the drawn scene | "Render Fog" (`0x5077B8`) |
-| minimap/radar | `0x48CC30`, `0x46A430` (health bars) | | — |
+| minimap/radar | **`0x466B00` at `0x46961F`** — corrected 2026-09-07: this row said `0x48CC30`/`0x46A430`, which are the order-marker driver and `DrawHealthBars` ([UI markers](ui-markers.html)); the minimap blits `main+0x142DB` with `0x4C6B70` and draws the view box with `0x4BF8C0` ([engine map](exe-reverse-engineering.html), "The minimap, located") | the composite the sim-side rebuilds keep current | — |
 | selection & UI-world | `0x46A530` (select boxes), name/rank text `0x4C14F0` | drawn per hot-unit | — |
 | screen HUD/GUI | `0x46A308` post-GUI hook pt [CORPUS], `0x45FFB0` (options), `0x464060` (chat), `0x46B900` ×9 | | "SFX/Weapon/Misc/Logic/Units/Network" bars |
 | **present** | **`0x4C63A0`** at `0x46A3DB` | blit offscreen → primary, **Lock/Unlock heartbeat** | — |

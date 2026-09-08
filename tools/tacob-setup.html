@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<!-- tacob-setup.html — the first-run picker (research/notes/tacob-design.md §Landing 5).
+
+     `tools/tacob gui` serves this at "/" while there is no session: the packaged
+     folder cannot guess where Total Annihilation is installed, because
+     `ta3do.repo_root()` looks for a checkout that is not there. Two questions —
+     the game folder and the unit to open — answered into the same loopback
+     server on the same port, so accepting them is a reload and not a second URL.
+
+     Plain HTML and one inline script: this page is what a modder sees *before*
+     anything else works, so it must not depend on the import map, a CDN, or the
+     vendored JavaScript. -->
+<meta charset="utf-8">
+<title>tacob — set up</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #14171c; --panel: #1a1e25; --line: #2c333d; --ink: #c8ced8;
+    --dim: #8b93a1; --accent: #4d84c2; --warn: #d8a657; --err: #e07a7a; --ok: #7fb069;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink);
+               font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 28px 20px 40px; }
+  h1 { font-size: 19px; margin: 0 0 4px; letter-spacing: .3px; }
+  p.lead { color: var(--dim); margin: 0 0 22px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
+            padding: 14px 16px; margin-bottom: 14px; }
+  h2 { font-size: 13px; margin: 0 0 8px; letter-spacing: .4px; text-transform: uppercase;
+       color: var(--dim); font-weight: 600; }
+  label { display: block; margin-bottom: 6px; color: var(--dim); }
+  input[type=text] { width: 100%; font: 12px/1.4 ui-monospace, "DejaVu Sans Mono", monospace;
+           color: var(--ink); background: #12151a; border: 1px solid #39414d;
+           border-radius: 5px; padding: 6px 8px; }
+  input[type=text]#unit { width: 160px; }
+  button { font: inherit; color: var(--ink); background: #262c35; border: 1px solid #39414d;
+           border-radius: 5px; padding: 5px 12px; cursor: pointer; }
+  button:hover { background: #2f3742; }
+  button.go { background: var(--accent); border-color: #6ea0d8; color: #fff; font-weight: 600; }
+  button:disabled { opacity: .55; cursor: default; }
+  .cands { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .cands button { text-align: left; font: 12px/1.4 ui-monospace, "DejaVu Sans Mono", monospace; }
+  .row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .note { color: var(--dim); margin: 8px 0 0; }
+  .paths { color: var(--dim); font: 11px/1.6 ui-monospace, "DejaVu Sans Mono", monospace;
+           word-break: break-all; white-space: pre-line; margin: 0; }
+  #msg { margin-top: 14px; padding: 9px 11px; border-radius: 6px; display: none;
+         border: 1px solid var(--line); background: #12151a; }
+  #msg.err { border-color: var(--err); color: var(--err); display: block; }
+  #msg.ok { border-color: var(--ok); color: var(--ok); display: block; }
+  #msg.busy { display: block; color: var(--dim); }
+  code { color: var(--ink); }
+</style>
+
+<main>
+  <h1>tacob</h1>
+  <p class="lead">Write a unit script in BOS and watch it run on the unit's own model.
+     Two things first.</p>
+
+  <section>
+    <h2>1 · Where Total Annihilation is installed</h2>
+    <label for="gamedir">The folder holding <code>totala1.hpi</code> — tacob reads the
+      archives in place and never unpacks them.</label>
+    <input type="text" id="gamedir" spellcheck="false"
+           placeholder="C:\Cavedog\Total Annihilation">
+    <div class="cands" id="cands"></div>
+  </section>
+
+  <section>
+    <h2>2 · The unit to open</h2>
+    <div class="row">
+      <div>
+        <label for="unit">Its own name, as the game spells it.</label>
+        <input type="text" id="unit" spellcheck="false" placeholder="armpw">
+      </div>
+      <button class="go" id="go">Open it</button>
+    </div>
+    <p class="note">The first time, tacob decompiles the stock COB into a project of its
+      own — BOS, the built COB and the model — and from then on the BOS is the source.</p>
+  </section>
+
+  <div id="msg"></div>
+
+  <section>
+    <h2>Where this goes</h2>
+    <p class="paths" id="paths"></p>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const say = (text, kind) => { const m = $('msg'); m.className = kind || ''; m.textContent = text; };
+
+async function load() {
+  const state = await (await fetch('/setup')).json();
+  $('gamedir').value = state.gamedir || (state.candidates[0] || '');
+  $('unit').value = state.unit || '';
+  $('paths').textContent = `config  ${state.config}\nprojects  ${state.projects}`;
+  const box = $('cands');
+  box.textContent = '';
+  for (const path of state.candidates) {
+    const b = document.createElement('button');
+    b.textContent = path;
+    b.onclick = () => { $('gamedir').value = path; };
+    box.appendChild(b);
+  }
+  if (!state.needed && state.open) {
+    say(`${state.open} is already open — answering here switches to another unit.`, 'ok');
+  }
+}
+
+async function go() {
+  $('go').disabled = true;
+  say('opening…', 'busy');
+  try {
+    const res = await fetch('/setup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gamedir: $('gamedir').value, unit: $('unit').value }) });
+    const out = await res.json();
+    if (!res.ok || out.error) { say(out.error || res.statusText, 'err'); $('go').disabled = false; return; }
+    say('opened — loading the editor…', 'ok');
+    location.href = '/';
+  } catch (err) {
+    say(String(err), 'err');
+    $('go').disabled = false;
+  }
+}
+
+$('go').onclick = go;
+$('unit').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+$('gamedir').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('unit').focus(); });
+load();
+</script>

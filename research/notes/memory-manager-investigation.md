@@ -4,13 +4,13 @@
 process can address?** The answer is no — and the more useful finding is where the low 2 GB
 actually goes, which is neither TA nor us.*
 
-Every number here was measured on this machine in one session, against the live stack
+Every number here was measured on the reference setup in one session, against the live stack
 (wine-9.0, NVIDIA 595.84 on an RTX 4070, `tacli` instance `spike1`, pid 1446775, windowed
 `renderer=openglcore`, game resolution 1024×768, native pass at `ss=2`). The exe is the
 untouched Steam build — 1,178,624 bytes, md5 `8e74a1dffa1f5988624c52048f5b20cd`, matching
 `pristine/manifest.md5`.
 
-Evidence tags: **[MEASURED]** = observed live on this machine, command given. **[PE-VERIFIED]** =
+Evidence tags: **[MEASURED]** = observed live on the reference setup, command given. **[PE-VERIFIED]** =
 read out of the PE header. **[CORPUS]** = read from the TADR clone at `13d71dd` (2026-08-31).
 **[UNTESTED]** = stated as an open question, not a claim.
 

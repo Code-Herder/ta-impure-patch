@@ -34,7 +34,7 @@ python3 -m venv .venv-undither && .venv-undither/bin/pip install -r unditherer/r
 
 Everything runs as a module from the repository root: `python -m unditherer …`.
 In this repository the environment already exists at
-`<repo>/.venv-undither` (Python
+`.venv-undither/` at the repository root (Python
 3.12, torch 2.13 + CUDA 13, OpenCV 5, onnxruntime 1.29).
 
 ## The command-line tool

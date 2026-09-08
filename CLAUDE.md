@@ -112,3 +112,52 @@ exactly this reason, and duplicating a CUDA torch install per ephemeral worktree
 The system `python3` is PEP 668 externally-managed, so it will refuse installs and has none of
 this — **a bare `python3 research/build_wiki.py` fails at `import markdown`**. Name the venv's
 interpreter, as above.
+
+## Publishing
+
+This repository is public on GitHub as `Code-Herder/ta-impure-patch`. Everything in it is
+committed as **`Code-Herder <5179440+Code-Herder@users.noreply.github.com>`** and pushed over
+**HTTPS through the `gh` credential helper**, never over SSH. Both facts are pinned by
+per-machine hooks rather than assumed:
+
+- `pre-commit` refuses a commit whose `user.name`/`user.email` differ from the pin; anything
+  staged under `_local/`; anything `.gitignore` refuses (it asks `git check-ignore`, so every
+  ignore rule is enforced for free); any file over 8 MB; any blob byte-identical to a file of
+  the original game; and any binary whose path matches no glob in `.publish-allow`.
+- `pre-push` refuses any remote that is not this repository's HTTPS URL, re-checks the author
+  and committer of every commit in the range, and refuses if any `_local/` path is tracked.
+
+The hooks live in `.githooks/` (untracked, per machine), enabled through an **absolute**
+`core.hooksPath` so that every worktree runs them. A hook failure is a real problem with the
+change: fix it and commit again, never `--no-verify`.
+
+### Nothing from the original game, ever
+
+`.gitignore` bans the game's file formats and its archives; that is the outer layer. The inner
+one is content: `_local/original-manifest.tsv` holds the hash of every file of the retail
+install, including everything inside its archives, and both the hook and the publish scan refuse
+a match whatever the file is called. Derived work — screenshots of our renderer, figures we
+generated, models we built or trained — is allowed only **by class**, listed in
+`.publish-allow`. Adding a class is a one-line diff a review can see; a binary outside the list
+does not commit.
+
+### Landing is local; publishing is `/git_publish`
+
+`/git_commit_merge_wt` ends at the local `main` fast-forward and never pushes. `/git_publish` is
+the separate act: it runs the setup check, then the full content scan (every revision, every
+worktree, every blob against the manifest), and pushes `main` only when both are clean. Anything
+already pushed is permanent — fix forward.
+
+### The local half: `CLAUDE.local.md`
+
+The rules that name what must never be published — the strings, the paths, the scan and its
+allow-list — live in `_local/CLAUDE.local.md`, reached through a gitignored symlink at the
+repository root so that it loads together with this file. **Read it at the start of a session
+and before every publish.** It loads in every worktree under `.claude/worktrees/` as well
+(measured 2026-09-07: memory files are read from the working directory and every directory above
+it, and the symlink is followed). If it is not present on your machine you do not have the
+rules: work freely, commit freely, do not publish.
+
+In tracked content, paths are repo-relative or go through a documented variable, and facts true
+of one desktop only (display, hardware, what is installed) are attributed to *the reference
+setup*, never to a named or implied host.

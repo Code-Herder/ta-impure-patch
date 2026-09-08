@@ -373,7 +373,7 @@ and is never drawn. The gadget is skipped outright if `active (+0x29)` is zero
 | 8–9 | `0x4A940C` | — | not drawn, and absent from the stock corpus |
 | 10 | `0x4A93EB` | `0x4A4C90` | [INFERRED] |
 | 11 | `0x4A9186` | `GUI_BlitToFramebuffer 0x4B0230` | picture |
-| 12 | `0x4A9199` | `0x4A5F40` | button-like |
+| 12 | `0x4A9199` | `0x4A5E50` — **corrected 2026-09-07**: this row said `0x4A5F40` (the button handler); the table at `0x4A962C` entry 11 holds `0x4A5E50` ([engine map](exe-reverse-engineering.html), "The UI surfaces and their writers") | button-like |
 | 13 | `0x4A93AB` | `GUI_TimerState 0x4A4660` | timer / animation |
 
 **`id 7` is how a screen declares its fonts and button art.** It is never drawn;

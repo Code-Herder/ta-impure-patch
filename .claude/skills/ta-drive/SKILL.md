@@ -119,10 +119,66 @@ tools/tacli ls                              # names, pids, windows
 tools/tacli keys t1 space                   # menu accelerators
 tools/tacli ui t1                           # what gadgets are on screen (preferred)
 tools/tacli shot t1 -o /tmp/where.png       # engine surface: see where you are
-tools/tacli click t1 320 240                # game coords; --right for orders
+tools/tacli order t1 --sel move pos 1988 1716   # orders: world coords, no mouse
+tools/tacli click t1 320 240                # game coords; the UI, not orders
 tools/tacli roster t1 --json                # units + camera eye
 tools/tacli stop t1
 ```
+
+## Ordering units: `tacli order`, not clicks
+
+**`tacli order` is the way to command units. Reach for a click only when the thing
+you are testing IS the mouse.** The verb names the order and the target outright and
+goes to the engine's own order constructor through the scenario applier
+(`ScriptAction_Type2Index` → `ORDERS_NewMainOrder2Unit`), so there is no screen in
+it anywhere:
+
+```bash
+tools/tacli order t1 --sel move pos 1988 1716          # everything selected
+tools/tacli order t1 --unit 2 --expect ARMCOM attack pos 3160 1200
+tools/tacli order t1 --unit 2 --expect-target CORCOM attack unit 251
+tools/tacli order t1 --unit 2 reclaim pos 1700 1500    # a wreck: name where it is
+tools/tacli order t1 --unit 2 stop
+```
+
+Why this and not `click --right`:
+
+- **World coordinates, not pixels.** Immune to zoom, resolution, the camera, the
+  letterbox and the addressable ring — the four things that silently move a click.
+  A target off-screen or under fog is the same as one in the middle of the view.
+- **No selection dance and no camera work.** `--unit` orders one unit wherever it is;
+  nothing has to be selected and nothing has to be on screen.
+- **The order type is yours, not a guess.** A contextual click asks the engine to
+  infer the order from whatever the cursor is over; here `attack` means attack.
+- **No `Interface Type` in the question at all** — the left/right scheme simply does
+  not enter into it.
+- **Orders: `move attack defend`(=`guard`)` repair patrol reclaim capture load unload
+  blast stop mobilebuild`.** There is no attack-move in TA; `attack pos <x> <y>` is
+  the idiom, and the CLI says so if you try.
+
+Two things it is **not**:
+
+- **Not a validator.** `ScriptAction_Type2Index` is documented to return NULL for "this
+  unit cannot take that order" and the fork reports that — but measured 2026-09-07 it
+  refused nothing: `capture`, `mobilebuild`, `unload`, `blast`, `repair` and `load` were
+  all accepted on a commander with a bare position and did nothing at all. A nonsense
+  order is issued, not caught, so `1 issued` is not evidence the unit did anything —
+  read the roster.
+- **Not ownership-checked.** The applier hands the engine whatever unit you named, which
+  is how a scenario orders units it spawned for another player. Ordering an enemy unit
+  is accepted; whether its AI immediately overrides you was not measured.
+
+**Naming the unit.** `--unit` takes the `engine_index` from `tacli roster`, which is
+`UnitInGameIndex` — and the engine **recycles** it when a unit dies, which is why
+`scenario-format.md` refuses it as a public identity. `--expect ARMCOM` is what makes it
+safe: the fork checks the slot still holds that type, on the game thread, before it
+orders, so a recycled index is an error and not an order to a stranger. **Pass `--expect`
+whenever you pass `--unit`** — the roster hands you the type in the same row.
+`--expect-target` is the same guard for a `unit` target. `--sel` sidesteps identity
+entirely by asking the engine what the player has selected right now.
+
+Failures are loud and the exit code is non-zero: `nothing alive in that slot`, `the slot
+holds a different unit than expected (the index was recycled)`, `nothing is selected`.
 
 **Drive menus by name, not by keystroke.** `tacli ui` reads the actual gadgets on
 screen (see *Driving the UI* below), so the known-good path from a fresh launch is:
@@ -183,9 +239,11 @@ game; the registry is only where TA saves the last one. So:
 
 - Clicks need `Interface Type=1` (right-mouse orders) — tacli sets it, on **every** launch
   (`apply_prefix_settings`), so there is no instance anywhere that runs TA's own default.
-  Select with `click`, order with `click --right`. Classic left-click-order resists posted
-  clicks, and at `Interface Type=0` a posted **right**-click orders nothing at all (measured
-  2026-09-03: the unit carried on to the earlier left-click target).
+  Select with `click`, and order with **`tacli order`** (above) rather than `click --right`,
+  which is scheme-bound: at `Interface Type=0` a posted **right**-click orders nothing at all,
+  because there the right button deselects and the left one orders. `click --right` still
+  works at type 1 and is the way to test *that the mouse orders*; it is not the way to give a
+  unit an order.
 - **`Interface Type=1` is not neutral — it changes what the game does.** TA switches its
   *contextual* cursor off at type 1: with a unit selected, hovering ground gives `cursornormal`
   and hovering a wreck gives `cursorgrn`, where stock TA at type 0 gives `cursormove` and
@@ -195,6 +253,24 @@ game; the registry is only where TA saves the last one. So:
   (`field-notes.md` patch 2); `tacli arm <i> curs.off` before launch restores the engine's own
   behaviour for an A/B. The explicit order buttons (Move/Attack/Patrol/Reclaim/Guard) were
   never affected either way.
+- **At type 1 a plain `click` on the world DESELECTS** — that is the engine's own rule, and the
+  reason `--right` is how you order. `click` selects only when something selectable is under the
+  pointer. Between G13j and G13q the cursor patch broke that and a left click ordered as well,
+  so a recipe written in that window may have been ordering where it meant to clear the
+  selection; `field-notes.md` patch 2b is the fix. At type 0 the scheme is the mirror image —
+  left orders, right deselects — which is why posted right-clicks order nothing there.
+- **`tacli click X Y` is positionally correct on its own — you do not need to park the pointer
+  first.** `inject_click` (`tagpu_input.c`) posts MOVE(x,y), the button down/up, then a MOVE back
+  to the screen centre, and both halves of a click honour the target: measured 2026-09-07 with
+  the pointer sitting at the centre beforehand, a bare `click --right` at (700,500) walked the
+  unit to the world point under (700,500) and not to the one under the centre, and a bare `click`
+  on a unit 377 px from the pointer selected it. *[This bullet first said the opposite. It came
+  from one bad reading: the bare click HAD ordered, the commander just had not visibly moved 3 s
+  later, and adding a `mouse:` park "confirmed" a rule that was never there.]*
+- **What the trailing recentre does affect is anything aimed at the pointer afterwards.** After
+  any `click`, the pointer is at the screen centre — so `wheel:` notches and the position-less
+  `click` / `rclick` tokens land there unless you `pmove:X,Y` first. That is what `pmove` is for
+  (`hover` in the `ui` layer).
 - **Ctrl/Shift/Alt combos land** (since phase 1.1): `tacli keys t1 ctrl+d`,
   `shift+2`, `ctrl+shift+a`. The modifier is held 150 ms because TA *polls* it.
   If a combo does nothing, read the diagnostic the shield logs when the hold expires —
@@ -223,6 +299,11 @@ game; the registry is only where TA saves the last one. So:
   unzoomed one. At 0.25x a unit the roster puts at (512,384) is hovered at (560,382), and a
   click at the roster's figure silently selects nothing. Either drive at 1x, or find the
   unit by parking the pointer and reading `main+0x2CBA` (0 = nothing under it).
+- **`roster` is empty for a second or two right after `scenario load`**, and a script that
+  reads it immediately gets `units: []` and blames the load. It parses the newest `units:`
+  block in `tagpu.log`, which the overlay writes every 30 presented frames, so its `eye` also
+  lags a `tacli eye` by up to that long — read it in a retry loop, and re-read after moving the
+  camera rather than assuming the first answer.
 - **A moving unit invalidates `roster`'s `screen=` before your click lands.** A unit
   with a move order walks between the read and the injected click, and a selection
   click that misses is silent — the symptom is `native: … 0 sel` in the log and every
@@ -232,7 +313,9 @@ game; the registry is only where TA saves the last one. So:
 - **A right-click on water is rejected for a ground unit**, so it queues nothing and
   draws no order markers — which looks exactly like a broken marker pass. Sample the
   frame for grass before picking a waypoint (green-dominant, `g > b + 30`) rather than
-  guessing an offset from the unit.
+  guessing an offset from the unit. (`tacli order … move pos` has the same constraint for
+  a different reason: it is *issued* either way — see "not a validator" above — so check
+  the roster moved, not the `1 issued`.)
 - Game speed: `keys <name> plus` / `minus` (TA's own feature, up to +10, and negative
   below normal — invaluable for catching fast events or slowing them for capture).
 
@@ -449,7 +532,7 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
   `TotalA.exe` thread reading `anon_pipe_read` in `/proc/<pid>/task/*/wchan` is a wineserver
   wait, not a spin. Measured 2026-09-07: a call-site redirect whose rel32 was computed against
   the wrong address froze the tank fixture at tick 244 every run, deterministically, and
-  looked exactly like a hang. ptrace is off on this machine, so there is no backtrace to be
+  looked exactly like a hang. ptrace is off on the reference setup, so there is no backtrace to be
   had — bisect the change instead (the cobtrace module's `-alloc -run -ret -kill -rand`
   tokens exist for that).
 - **Cursor and hover state, without a screenshot**: `main+0x2CBE` is the cursor index the
@@ -581,14 +664,15 @@ that matters — and `launch` auto-arms each pass's `*own.on` patch half for you
 
 ```bash
 tools/tacli arm <i> 'native.on=all wrecks' terr.on feat.on fx.on sfx.on \
-                    mark.on order.on zoom.on vpwide.on
+                    mark.on order.on zoom.on vpwide.on gui.on
 tools/tacli launch <i> --no-shield --res 1920x1080
 ```
 
 Units and wrecks, terrain, features, weapon effects, particles, world-space markers and
 the shift-held order overlay,
-zoom (wheel live, camera range widened) and the wide viewport that makes zoomed-out
-clicks land. `launch` then prints `auto-armed owndraw.on=all / fxown.on / featown.on /
+zoom (wheel live, camera range widened), the wide viewport that makes zoomed-out
+clicks land, and **the GL UI layer** (`gui.on`, since G15b — the panel, bars, dialogs and the
+shell drawn by us at 1:1, the engine's surface the fallback; *The GL UI layer* below). `launch` then prints `auto-armed owndraw.on=all / fxown.on / featown.on /
 terrown.on / markown.on`, and `tagpu.log` carries one `ARMED` line per pass — read them,
 because a missing one is the whole pass silently absent.
 
@@ -1067,3 +1151,107 @@ Three lobby facts that are not guessable, all encoded in `mp_lobby.sh`:
   one peer only; both peers then see the units.
 
 Do not `pkill -x dplaysvr.exe` by hand while another agent's game is hosting.
+
+## The GL UI layer (Phase E — `tagpu_gui.on`, `tacli gui`)
+
+Since G15b the UI — the in-game panel, build pages, bars, option screens, chat, the popups
+and the whole shell — is drawn by our GL layer from the engine's own draw calls, replayed into
+twins of its surfaces (`research/notes/gui-renderer.md` §10). The engine still draws its
+surface, which stays the fallback beneath; with the trigger absent the DLL is byte-identical
+to main's (parity md5 measured equal, §10). **`gui.on` is part of the default arm set** now.
+
+```bash
+tools/tacli gui <i> on            # arm BEFORE launch (the detours install at DLL attach); the draw follows the file live
+tools/tacli gui <i> off           # keep the detours, stop the draw — the live A/B, 500 ms poll
+tools/tacli gui <i> strict        # the harness's mode: fallback off, a miss painted magenta (never for a player)
+tools/tacli gui <i> remove        # un-arm entirely at the next launch
+tools/tacli gui <i>               # report
+tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= fps=
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --layer --out /tmp/uiwalk
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --side core --layer --game-only --out /tmp/uiwalk-core
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --layer --cycles 3 --out /tmp/uiwalk-cycles   # G15d: three game->shell->game cycles
+```
+
+- `uiwalk.py --layer` arms `strict`, walks the shell and a game by gadget name, and at every
+  stop takes the engine's surface and our GL frame and counts differing pixels (outside the
+  world viewport in game, and inside it where the engine drew a non-key pixel; the cursor rect
+  excluded) and magenta holes; `report.md` has one row per stop with the heartbeat's
+  fps/resets/overflows. The bar is **0, 0 and 0 on every stop** — except `MAINMENU`, whose
+  ~185 differing pixels are its sparkle animation between the two shots, single scattered
+  pixels in the sky. Run it with the venv's python (numpy + PIL).
+- **The in-game walk is side-aware and reaches the HUD extras (G15c).** `--side core` runs the
+  CORE parity fixture (`scenarios/tascene-parity-core.json`) and walks `CORMAIN2`/`CORCOM1`/`2`
+  with the `COR*` pagers; the in-game menu is `ARMOPT.GUI` on both sides. After the screens the
+  walk types `+clock` and `+bps` in chat, holds SPACE over the commander (the Kills/Losses box,
+  F4's twin), opens the menu, PREFS and F4 at 1x and then zooms them to 0.5x and 2x by writing
+  `tagpu_zoom.txt` (so no click is bent), walks the commander for the minimap's dot, and
+  releases the eye and edge-scrolls for the view box. `--screens-only` stops after the G15b
+  inventory. Inside the viewport the walk compares only where the engine's surface is not the
+  terrain key (index 254 in the 8-bit PNG `tacli shot` writes) — that is what `strict` calls a
+  UI pixel there — and reports `vpdiff/vpui` per stop; the cursor rect (`*0x51FBD0+0x1B6/+0x1BA`,
+  size from the record at `+0x1B2`), padded 8 px because the sprite animates between the two
+  shots, is excluded everywhere. The clock stop is taken with the menu open: `ARMOPT` pauses
+  the sim and the seconds with it (the game clock is the tick `main+0x38A47` ÷ 30).
+- **`ARMOPT` is not over the viewport** — its record is `xpos=0 ypos=128 128×352`, the side
+  panel's rect; it replaces the build panel and pauses the game (`PAUSED` in the middle of
+  the world). The screens over the world are `PREFS`, `VISUALRT`, the F4/SPACE box and the chat.
+- **The live zoom is readable from `mark.on=log`**: its line every 120 frames carries `zoom=`;
+  the file lever itself logs nothing. The walk arms `mark.on=log` for that and records the
+  level per stop.
+- Read `gui: ARMED flip@0x4C63A0=1 leaves=16/16` at launch, then `gui: layer ON` and
+  `gui: GL ready`. **`resets=` is 2 per launch (the arm, the shell→game switch) and +1 per
+  context switch after that** — each one is logged with its reason (`gui: reset #n: stall-over
+  …`; the other reasons are `arm`, `gl-context`, `queue-full`, `arena-full`,
+  `box-outside-surface`, `lost-sprite`, `atlas-full`, `untwinned-copy`) when `log` is in the
+  trigger, so a count that grows without a switch has a name. `overflows=` and `lost=` must stay
+  0; `stalls=` is 1 per context switch (the publisher dropping batches while the render thread
+  is dead or crawling — G15d), `skipped=` the stale ops the render thread stepped over after a
+  context change. `palchg=` counts palette uploads (a fade is a run of them; a switch costs a
+  few) and `paldiff=n@i` the entries where the presented palette differs from `main+0x143A7`
+  and the first of them: 0 in game, 1 (index 9) in the shell — and 255 after `+gamma 15`.
+- **The presented palette is not `main+0x143A7`**: the engine scales every palette it sets by
+  the Gamma option on the way to DirectDraw (`SetGamma 0x4BA590`, `0.5 + Gamma/24`, 1.0 at the
+  default 12) and never scales its table. **`+gamma N` typed in chat sets the factor to N/10 at
+  once** (`+gamma 15`, `+gamma 10` back) with no cheat bit, and is the lever that makes the two
+  differ in a skirmish; the UI layer follows the presented palette (cnc-ddraw's, also what
+  `tacli shot`'s PNG carries), the world passes read `+0x143A7` and go wrong by the factor.
+- **The cycles (G15d): `--cycles N`** runs, after the in-game stops, N times game → shell → game
+  in the same process: `park`, Tab, `EXIT`, `MAINMENU`, `CHOICE1` (the return: the game freed,
+  640×480 restored, a new GL context), `ui wait --gui MAINMENU`, the whole shell inventory
+  again, `SINGLE`, `Skirmish`, `ui set Mapping 1`, then **the loading screen held under
+  `strict`** (`Walk.stop_loading`: `Start`, then a bracketed surface/GL/surface triple every
+  second until `units: alive=` appears *after* the click — read the log by byte offset, a
+  `tacli log` grep sees the previous game's lines — the row is the worst sample and the count),
+  `scenario apply` of the fixture (works on a running game; the skirmish's own commanders are
+  cleared), the side's screens, `+gamma 15` and `+gamma 10`. `EXITMENU` and `YESORNO` sit over
+  the middle of the world, so the cycle runs at zoom 1. A full run — shell, 32 game stops, three
+  cycles — is ~110 stops and ~30 minutes: `setsid nohup … & disown` and poll the log; three
+  instances at once are fine for parity, not for the fps column.
+- **A frame rate for any DLL, the module's own heartbeat aside**: the overlay logs a `units:`
+  line every 30 presented frames, so timing their arrival in `tagpu.log` from outside is an
+  fps meter that needs no code — `30 × intervals / elapsed` (the G15b measurement used exactly
+  that against main's DLL).
+- The census below still works and is still the regression for "a writer we do not observe".
+
+### The UI census (G15a)
+
+```bash
+tools/tacli gui <i> census                            # = 'gui.on=census log pgm trace', at launch
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --out /tmp/uiwalk   # the inventory walk + report
+tools/tacli arm <i> gui_census.trigger              # the accumulated residual mask -> gamedir/tagpu_gui_census.pgm
+tools/tacli log <i> -g 'gui census:'                # per-window lines: changed=, unexplained=, box=, ops=[…]
+```
+
+- Read `gui: ARMED flip@0x4C63A0=1 leaves=N/N` first; `NOT armed — engine bytes differ` means a
+  site is owned by a module that installed after it (the observer chains onto `fxown`'s
+  `0x4B7F90` stub, so the default arm set is fine).
+- `changed`/`unexplained` on a `gui census:` line are the **window's totals since the previous
+  line**, not one census; a residual > 256 px logs at once with the ops that intersect it
+  (`trace`). Surfaces other than the presented one are reported only when they have a residual
+  — the PCX backgrounds and the `SAVEMOUSE` buffers always do (the loader and cursor code write
+  them directly), which is expected.
+- `uiwalk.py` drives the shell and a game by gadget name and writes `report.md` with one row
+  per stop; it needs no shots to work, but takes the engine surface at every stop.
+- **`tacli shot` works in game again** since 2026-09-07: the window title's `wt:… | tacli:…`
+  label put `:` and `|` into the PNG filename, which is why the surface shot silently never
+  appeared in game while the shell's bare title was fine (`screenshot.c` now sanitises it).

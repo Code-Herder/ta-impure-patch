@@ -5,7 +5,7 @@ description: Capture screenshots and video of Total Annihilation on the tagpu st
 
 # TA capture (tagpu project)
 
-Adapted from an earlier capture skill; TA-specific rules earned in the Phase B-D
+TA-specific rules earned in the Phase B-D
 sessions. **Fold new lessons back into this file.**
 
 **Launching and driving the game is the `ta-drive` skill** (`tools/tacli`): instances,
@@ -29,7 +29,7 @@ Two facts that shape every capture:
 
 | Path | Trigger | What it sees | Output |
 |---|---|---|---|
-| Surface shot | `tagpu_shot.trigger` | the 8bpp ENGINE frame only (pre-GL, no overlays) | `tagpu/gamedir/Screenshots/*.png`, 640×480 |
+| Surface shot | `tagpu_shot.trigger` | the 8bpp ENGINE frame only (pre-GL, no overlays) | `<gamedir>/Screenshots/*.png` at the surface size (640×480 in the shell, the game mode in play). **Broken in game between the window-title landing and 2026-09-07**: the title's `:` and `\|` made an illegal filename and the PNG never appeared; fixed in `screenshot.c` |
 | GL shot | `tagpu_glshot.trigger` | the composed GL frame incl. our overlays | `tagpu/gamedir/tagpu_gl.ppm`, window-sized |
 | Video | ffmpeg x11grab (below) | the live display incl. everything | mp4 |
 

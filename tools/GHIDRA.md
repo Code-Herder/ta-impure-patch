@@ -40,9 +40,11 @@ the `sun.misc.Unsafe` warnings on every launch are harmless).
 ## Exact working commands (run from `tools/`)
 
 ```bash
+REPO=$(git rev-parse --show-toplevel)   # analyzeHeadless wants absolute paths
+
 # 1. one-time import + auto-analysis (already done; re-running would duplicate the program)
 ./ghidra/support/analyzeHeadless ghidra-projects TA \
-    -import <repo>/pristine/TotalA.exe.pristine \
+    -import $REPO/pristine/TotalA.exe.pristine \
     -analysisTimeoutPerFile 3000
 
 # 2. regenerate the merged symbols file from the corpora
@@ -50,21 +52,21 @@ python3 extract_ta_symbols.py
 
 # 3. apply symbols to the existing program (idempotent)
 ./ghidra/support/analyzeHeadless ghidra-projects TA -process TotalA.exe.pristine -noanalysis \
-    -scriptPath <repo>/tools/ghidra-scripts \
-    -postScript ImportTASymbols.java <repo>/tools/ta_symbols.txt
+    -scriptPath $REPO/tools/ghidra-scripts \
+    -postScript ImportTASymbols.java $REPO/tools/ta_symbols.txt
 
 # 4. verify: export user symbols and diff against ta_symbols.txt
 ./ghidra/support/analyzeHeadless ghidra-projects TA -process TotalA.exe.pristine -noanalysis \
-    -scriptPath <repo>/tools/ghidra-scripts \
+    -scriptPath $REPO/tools/ghidra-scripts \
     -postScript ExportTASymbols.java /tmp/ta_symbols_export.txt
 
 # 5. structs: regenerate the C-only header, parse it into the DTM, verify sizes
 python3 make_tamem_ghidra.py
 ./ghidra/support/analyzeHeadless ghidra-projects TA -process TotalA.exe.pristine -noanalysis \
-    -scriptPath <repo>/tools/ghidra-scripts \
-    -postScript ImportTAStructs.java <repo>/tools/tamem_ghidra.h
+    -scriptPath $REPO/tools/ghidra-scripts \
+    -postScript ImportTAStructs.java $REPO/tools/tamem_ghidra.h
 ./ghidra/support/analyzeHeadless ghidra-projects TA -process TotalA.exe.pristine -noanalysis \
-    -scriptPath <repo>/tools/ghidra-scripts \
+    -scriptPath $REPO/tools/ghidra-scripts \
     -postScript VerifyTAStructs.java
 
 # GUI on the same project

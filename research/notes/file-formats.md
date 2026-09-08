@@ -324,8 +324,11 @@ how `MOVE`/`TURN` take a piece operand.]
 - **Cooperative threading.** `START` spins a new thread; `WAIT_TURN`/`WAIT_MOVE`/`SLEEP`
   block the *calling* thread until an animation on a piece/axis finishes or a timer elapses;
   `SIGNAL`/`SET_SIGNAL_MASK` kill sibling threads (used to cancel a walk cycle when a unit
-  stops). Linear operands are 16.16, angular are TAang (§0). [VERIFIED opcodes; mechanics per
-  Spring `CobThread`.]
+  stops). Linear operands are 16.16, angular are TAang (§0). [VERIFIED opcodes; **mechanics
+  measured against this engine 2026-09-07**, not taken from Spring — the eight `0xA4` records,
+  the wake tests, `sleep` = `ms × 30 / 1000` truncated, and the tick order (slots 0..7 then the
+  animation stepper) are in `exe-reverse-engineering.md` §"The COB engine", and
+  `tools/tacob run --all` replays nine traced units byte-identically on them.]
 
 ### 2.4 Opcode set — exact values
 
@@ -382,6 +385,12 @@ engine" lists the handler each reaches, what it pops, and the thread-record fiel
 | `DIV` | `0x10034000` | | `BITWISE_NOT` | `0x10038000` |
 | `MOD` | `0x10034001` | | | |
 
+**`MOD` is `DIV` in retail TA** — the dispatcher masks `op & 0x100FF000`, which erases the low
+`1`, so both reach the handler at `0x4B14FD` and `%` performs integer division.
+[VERIFIED 2026-09-07 — `exe-reverse-engineering.md` §"Opcodes this engine does not implement".]
+`BITWISE_NOT` (and the logical `NOT`) rewrite the top of the stack in place: neither moves the
+stack index.
+
 **Native / queries**
 
 | Opcode | Value | Effect |
@@ -429,15 +438,31 @@ engine" lists the handler each reaches, what it pops, and the thread-record fiel
 | Opcode | Value |
 |--------|-------|
 | `EXPLODE`    | `0x10071000` | Detonate a piece (death animation debris). |
-| `PLAY_SOUND` | `0x10072000` |
+| `PLAY_SOUND` | `0x10072000` | **Not implemented by retail TA** — see below. |
+
+**Opcodes retail TA does not implement.** The dispatcher's last compare chain (`0x4B1B48`)
+tests only `SET`, `ATTACH` and `DROP` above `EXPLODE`, so **`PLAY_SOUND 0x10072000` and
+`MAP_COMMAND 0x10073000` fall into the unknown-opcode path `0x4B1B60` and kill the running
+thread silently.** A script that calls `play-sound` ends there, with no error and no `RETURN`.
+**No stock script uses either** — all 278 corpus COBs decoded, 2026-09-07 — which is consistent:
+Cavedog's own scripts never call an opcode their engine drops.
+[VERIFIED 2026-09-07 — the dispatch read word by word; `tools/tacob`'s VM reproduces the kill and
+`tools/test_tacob.py` pins it.] Five more words *are* handled but unused by the stock corpus and
+their vtable slots unread: `0x10009000` (two pops → `vt+0x28`), `0x1000A000` (`vt+0x2C`),
+`0x10044000` (one pop → `vt+0x48`), `0x10045000` (no pops → `vt+0x4C`) and `0x10063000` (pops
+`[pc+2]` words into the runner's own stack frame).
 
 ### 2.5 `GET`/`SET` value IDs (engine queries)
 
 `GET`/`SET` take a **value-id** selecting what to read/write. **Standard retail-TA IDs are
 1–20** (below); community engines & mods extend from **21 up** (our vendored
 `COB_extensions.pas` defines the extension range — it explicitly sets `CUSTOM_LOW =
-WEAPON_AIM_ABORTED = 21`, so 1–20 are the original set). [CLAIMED for the 1–20 list — classic
-TA/Spring `CobInstance` enum; VERIFIED that 21+ are extensions, `COB_extensions.pas:22-186`.]
+WEAPON_AIM_ABORTED = 21`, so 1–20 are the original set). [VERIFIED 2026-09-07 — the `GET`
+handler `0x480770` bounds-checks `id − 1 <= 0x13` and dispatches through a **20-entry** jump
+table at `0x480AC4`; the `SET` handler `0x480B20` does the same through a byte table at
+`0x480C18`. Every id's arithmetic, its unit fields and the six ids `SET` actually writes are in
+`exe-reverse-engineering.md` §"`get` and `set` — the twenty value ids". VERIFIED that 21+ are
+extensions, `COB_extensions.pas:22-186`.]
 
 Standard (1–20): `ACTIVATION`(1), `STANDINGMOVEORDERS`(2), `STANDINGFIREORDERS`(3),
 `HEALTH`(4), `INBUILDSTANCE`(5), `BUSY`(6), `PIECE_XZ`(7), `PIECE_Y`(8), `UNIT_XZ`(9),
@@ -445,9 +470,18 @@ Standard (1–20): `ACTIVATION`(1), `STANDINGMOVEORDERS`(2), `STANDINGFIREORDERS
 `GROUND_HEIGHT`(16), `BUILD_PERCENT_LEFT`(17), `YARD_OPEN`(18), `BUGGER_OFF`(19),
 `ARMORED`(20).
 
+**Fourteen of the twenty are read-only in practice**: `SET` has a case for `ACTIVATION`,
+`INBUILDSTANCE`, `BUSY`, `YARD_OPEN`, `BUGGER_OFF` and `ARMORED` and sends every other id to a
+default that only marks the unit dirty, so `set HEALTH to 50` changes nothing at all. The
+units also surprise: `HEALTH` is a **percent**, `PIECE_XZ`/`UNIT_XZ` pack two integers into one
+dword by *addition* (a negative z borrows from x, and every unpacking handler adds the 1 back),
+`XZ_ATAN` subtracts the unit's own heading where `ATAN` does not, and `PIECE_Y`, `UNIT_Y`,
+both hypots and `GROUND_HEIGHT` are **16.16**, not world units.
+
 These are exactly the hooks mods exploit without engine patches — e.g. TA:ESC/TA Zero
 implement "shields" purely in COB by differencing `get HEALTH` and toggling `set ARMORED`
-(see `deep-ta-esc.md`, `_index.md`). Extension IDs of note from `COB_extensions.pas`:
+(see `deep-ta-esc.md`, `_index.md`) — and that one works because `set ARMORED` is one of the
+six, reaching `UNITS_SetStateMask 0x48B090` with selector 2. Extension IDs of note from `COB_extensions.pas`:
 `UNITX/UNITZ/UNITY`(100–102), `TURNX/TURNZ/TURNY`(103–105), `HEALTH_VAL`(107),
 `ATTACKER_ID`(134), `CREATE_UNIT`(151), `KILL_THIS_UNIT`(152) — all TADR/ProTA-era additions,
 not stock. [VERIFIED extension IDs.]
@@ -462,11 +496,40 @@ Those land in `PrimitiveStruct` (`tamem.h:1116-1133`):
 |-------------------------|-----|------------|-------|
 | `XPos`,`ZPos`,`YPos`    | 0x04/0x08/0x0C | `MOVE`/`MOVE_NOW` | 16.16 (add to the 3DO's static `OffsetX/Y/Z`) |
 | `XTurn`,`ZTurn`,`YTurn` | 0x10/0x12/0x14 | `TURN`/`SPIN`/`TURN_NOW` | `uint16` TAang (65536 = 360°) |
-| `Visible` (bit)         | 0x28 | `SHOW`/`HIDE` | 1 = drawn |
+| `Visible` (bit 0)       | 0x28 | `SHOW`/`HIDE`; **initialised by the model builder** | 1 = drawn |
+| `cached` (bit 1)        | 0x28 | `CACHE`/`DONT_CACHE`; set for every piece at build | 1 = casts the structure shadow |
+
+**The `tamem.h` names are TA's screen convention, not a transposition.** `0x43DF2A..0x43DF55`
+pairs `+0x04/+0x08/+0x0C` with the node's own `+0x10/+0x14/+0x18` in that order, so BOS's
+`x-axis`, `y-axis`, `z-axis` operands (0, 1, 2) really are the 3DO's X, Y and Z, and `MOVE`'s
+value is a **delta in the parent's frame added to the rest offset before any rotation**.
+[VERIFIED 2026-09-07 — `exe-reverse-engineering.md` §"The piece transform".]
+
+**The loader negates X and Z.** Every offset and every vertex of the `Model3DONode` the engine
+holds is `(−x, y, −z)` of the same field in the `.3do` — a half turn about Y, baked in at load,
+so a reader that wants the engine's own coordinates must flip both. [MEASURED 2026-09-07
+against all eight `posedump.txt` fixtures, which print the engine's arrays beside the file's;
+the site that does it is not located. `tools/tacob pose-check --all` is the standing check.]
+
+`0x45AEC0` sets `Visible` **only when the piece's 3DO node has three or more vertices**
+(`0x45AF1B`); a one- or two-vertex marker node — every flare, wake, thrust anchor and torpedo
+tube — starts hidden with no `hide` in the script. And `0x45A950` lays the `PrimitiveStruct`
+array out in the **COB's piece order**, not the 3DO's tree order: it binds by name (the compare
+at `0x45A9FD`), so the array index a `MOVE`'s piece operand uses is the COB piece-name table's
+index. [VERIFIED 2026-09-07 — read from the binary and checked against all eight posedump
+fixtures in `evidence/cobtrace/`.]
+
+The interpolation those fields get is `0x4B1C00`, the animation stepper, which runs after the
+eight thread records every tick: per axis it adds `dt × (speed / 30)`, snaps to the target on
+arrival and zeroes the speed — which is what `wait-for-move`/`wait-for-turn` test, so a waiter
+resumes the tick *after* its axis arrives. `TURN` always takes the short way round. Full rules:
+`exe-reverse-engineering.md` §"The piece animation array".
 
 **Renderer recipe:** for each piece build a local matrix
-`L = T(OffsetX+XPos, OffsetY+YPos, OffsetZ+ZPos) · R(XTurn,YTurn,ZTurn)` (mind TA's axis
-order/handedness, §0), compose down the child/sibling tree (`world = parent.world · L`), and
+`L = T(offset + pos) · R`, where **`R = Ry · Rx · Rz`** — the engine's own composer
+`0x4B6CC0` rotates the `(x,y)` pair by the `+0x14` word first, then `(y,z)` by `+0x10`, then
+`(x,z)` by `+0x12`, each `p0' = p0·cos − p1·sin`, `p1' = p1·cos + p0·sin` — compose down the
+child/sibling tree (`world = parent.world · L`), and
 draw the piece's triangulated primitives at `world`, skipping pieces whose `Visible` bit is
 clear. Static display (no scripting) = all `*Pos/*Turn = 0`, `Visible = 1`. Animated display =
 run the COB VM (or, in-process, read the engine's already-updated `PrimitiveStruct`s straight
@@ -717,10 +780,18 @@ by watching which archives `InitTAHPIAry` (`0x41D4C0`) accepts:
   `0x4BB650(handle)` ("came from an archive") and drops the type when it did not
   (with `0x50289C`/`0x511DE4` nonzero — the stock case). So a loose FBI does not
   override the archived one; it makes the unit vanish. Ship overrides in a `.ufo`.
-- Archive precedence for *duplicate* paths was not established (a `.ufo`, `.ccx`,
-  `.gp3` and `.hpi` copy of `units/ARMPW.fbi` all lost to `totala1.hpi`'s in the
-  same session, but those tests ran before the trailer fix and are not conclusive).
-  New unit names in a `.ufo` work; that is what the extra-weapons fixtures use.
+- **A `.ufo` does not override a path a stock archive already has, and a loose file
+  does** — for `scripts/*.cob`, the opposite of the `units/*.fbi` rule above.
+  [MEASURED 2026-09-07, tacob landing 4.] One ARMPW COB whose `Create` hides the
+  torso, three ways on one instance, same scenario, same camera, the unit's own
+  52×56 box compared: as `ztacob-armpw.ufo` **0 pixels** differed from stock; as
+  `aaa-tacob.ufo` — a name that comes **first** in the directory listing rather than
+  last, so this is not the alphabetical tie-break the lore describes — **0 pixels**;
+  as a loose `gamedir/scripts/armpw.cob`
+  **232 pixels**, and the torso is visibly gone. So `.ufo` load order is not the
+  lever some lore says it is: ship *new* names in a `.ufo` (what the extra-weapons
+  fixtures do) and *overrides* as loose files. `tools/tacob pack --install <gamedir>`
+  writes both for that reason.
 
 ## 6. `.TNT` / `.PCX` — maps & images
 

@@ -22,8 +22,8 @@ The gates, in order:
 4. Documentation gate — the pass CLAUDE.md requires, checked against the diff.
 5. Review gate — `medium` (or `high`) review **on Opus**, checked against a record of what was
    reviewed; findings verified and fixed as new commits; build re-run if anything changed.
-6. Fast-forward local `main` to this branch. (This repo has no remote — "shipping" means landing
-   on the local `main` ref. If a remote is ever added, add the push here.)
+6. Fast-forward local `main` to this branch. Landing is local: publishing to GitHub is the
+   separate `/git_publish`, with the content scan in front of it — this command never pushes.
 
 If any step produces an unexpected state (conflicts, non-fast-forward, detached HEAD, failing
 builds, a review you cannot verify) **STOP** and report the state. Never use `--force`,
@@ -80,7 +80,7 @@ Then:
     EOF
     )"
     ```
-  - If a pre-commit hook fails: investigate the root cause, fix it, re-stage, and create a NEW commit. **Do NOT** use `--amend` or `--no-verify`.
+  - If the pre-commit hook fails: investigate the root cause, fix it, re-stage, and create a NEW commit. **Do NOT** use `--amend` or `--no-verify`. The hook (`.githooks/`, per machine — CLAUDE.md *Publishing*) refuses the wrong git identity, anything under `_local/`, anything `.gitignore` refuses, any file over 8 MB, any blob byte-identical to a file of the original game, and any binary outside `.publish-allow`. Each of those is a real problem with the change, never something to route around.
 
 ## Step 2 — Merge main into this branch
 
@@ -253,9 +253,11 @@ The brief must contain, in the agent's own prompt (it starts with no context):
    correctness first, then clear reuse/simplification wins — fewer, high-confidence findings
    beat a long list; `high` = broader coverage, uncertain findings allowed but labelled.
    **Read-only: it must not modify files and must not run the game.**
-3. **How to verify**: the binary at
-   `"~/.local/share/Steam/steamapps/common/Total Annihilation/TotalA.exe"` (image base
-   `0x400000`, VAs map directly) and the disassembly command
+3. **How to verify**: the pristine binary, `pristine/TotalA.exe.pristine` in the **main
+   checkout** — it is gitignored, so a worktree does not carry it; from anywhere,
+   `"$(git rev-parse --git-common-dir)/../pristine/TotalA.exe.pristine"` resolves it. It is
+   byte-identical to the retail 3.1 exe (`pristine/manifest.md5` holds the hash; image base
+   `0x400000`, VAs map directly). The disassembly command is
    `i686-w64-mingw32-objdump -d -M intel --start-address=0x… --stop-address=0x… "<exe>"`;
    that patch-site bytes, branch targets and the registers the targets test must be checked
    against it; which notes hold the static context (`research/notes/exe-reverse-engineering.md`
