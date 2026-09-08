@@ -3763,7 +3763,8 @@ def _order_subject(args) -> str:
         return "sel"
     if args.unit < 0:
         die(f"--unit {args.unit}: an engine index is not negative")
-    return f"@{args.unit}" + (f":{args.expect}" if args.expect else "")
+    return f"@{args.unit}" + (f":{_order_type(args.expect, '--expect')}"
+                              if args.expect else "")
 
 
 def _order_cmd(raw: str) -> str:
@@ -3799,7 +3800,8 @@ def _order_target(cmd: str, words, expect_target: str) -> str:
     if kind == "unit":
         if len(rest) != 1 or not _is_int(rest[0]) or int(rest[0]) < 0:
             die("unit wants one engine index: unit <engine_index>")
-        return f"unit @{rest[0]}" + (f":{expect_target}" if expect_target else "")
+        return f"unit @{rest[0]}" + (
+            f":{_order_type(expect_target, '--expect-target')}" if expect_target else "")
     if kind == "feat":
         die("a feature that this session did not create is named by where it "
             "is: `reclaim pos <x> <y>`. TA reclaims through the map cell, so "
@@ -3808,11 +3810,28 @@ def _order_target(cmd: str, words, expect_target: str) -> str:
 
 
 def _is_int(w: str) -> bool:
-    try:
-        int(w)
-        return True
-    except ValueError:
-        return False
+    """Exactly what the fork's `req()` accepts: optional `-`, then digits.
+
+    Python's `int()` is looser — `+5`, ` 7 `, `1_0` all parse here and are then
+    refused by the fork with a message about the wire, which reads like a bug in
+    the verb. Refuse them where the user can see why. [FROM REVIEW 2026-09-07]
+    """
+    return bool(re.fullmatch(r"-?[0-9]+", w))
+
+
+def _order_type(name: str, flag: str) -> str:
+    """A unit type for a guard, checked before it becomes a wire token.
+
+    The wire is line- and space-delimited, so an unvalidated name is the one
+    place in this verb where input reaches the fork's parser unchecked: a
+    newline in `--expect` splits the order line into two the fork parses
+    separately. TA's unit names are letters, digits and underscore.
+    [FROM REVIEW 2026-09-07]
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_]{1,31}", name):
+        die(f"{flag} {name!r}: a unit type is 1-31 characters of letters, "
+            f"digits or underscore, e.g. ARMCOM")
+    return name
 
 
 def cmd_order(args):

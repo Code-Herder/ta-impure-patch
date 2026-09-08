@@ -206,11 +206,33 @@ order @2:ARMCOM  attack unit @251:CORCOM
   that a caught error rather than an order to whatever moved in. The fork compares against
   `*(unit+0x92)`'s `UnitDefStruct` name (`+0x20`), case-insensitively, at the apply point —
   on the game thread, so the answer cannot go stale between the check and the order.
-- **`sel` never names a slot at all.** It walks the watched player (`main+0x2A42`) unit range
+- **`sel` never names a slot at all.** It walks the watched player (`main+0x2A42`, **clamped to
+  the ten `Players[]` slots** — the field is a byte and nothing bounds it) unit range
   `PlayerStruct+0x67..+0x6B` **inclusive**, stepping `0x118`, keeping units that are alive
   (`+0x110 & 0x10000000`), not excluded (`& 0x4000`) and selected (`& 0x10`) — the same three
   tests `CorretCursor_InGame` and our order overlay make. One `order sel` line issues to every
-  one of them.
+  one of them, and a selection at the 512 ceiling is reported **and counted as a failure**, so a
+  truncated order cannot exit 0.
+- **Both resolvers contain their result to the unit array**, because every pointer they return is
+  handed to `ORDERS_NewMainOrder2Unit`: inside `[main+0x14357, main+0x1435B]` and on a `0x118`
+  boundary. The walk that only *reads* (`tagpu_order.c`) can be looser; this one cannot.
+  *[All three constraints — the player clamp, the containment and the excluded bit on the `@`
+  path — are FROM REVIEW 2026-09-07, as is the bound below.]*
+
+**`main+0x1435B` is INCLUSIVE, and the index bound must divide rather than multiply.** The
+engine's own sweep at `0x48BD22` reads `add eax,0x118 / cmp eax,[main+0x1435B] / jbe`, so the
+unit **at** `end` is a real unit and the array holds `(end−beg)/0x118 + 1` of them. Two
+consequences, both caught in review:
+
+- `(size_t)(idx + 1) * 0x118 > (size_t)(end − beg)` — the obvious bound — is wrong twice. It
+  **wraps** at `idx ≥ 15339168` on this 32-bit build (the product exceeds 2³²), so a large index
+  passed the test *and* `beg + idx*0x118` wrapped to a pointer below the array; and it refuses
+  the last valid slot. `(size_t)idx > (size_t)(end − beg) / 0x118` is both overflow-free and
+  correct at the end.
+- The module's own `snapshot_existing` walks `u + UNIT_STRIDE <= end`, which stops one unit
+  **short** of the array. Pre-existing and untouched by this landing; it means a
+  `clear_existing` scenario can leave the last unit alive. Not fixed here, and recorded so it is
+  not re-derived.
 - Live references are resolved at **apply** time, not validate time, so the wire's static
   checks skip them; a live subject that does not resolve is one failed order with a reason,
   not a rejected file.

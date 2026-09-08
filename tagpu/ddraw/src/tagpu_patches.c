@@ -159,10 +159,27 @@ void tagpu_apply_patches(void)
             };
             ok = patch_bytes(0x00499041, click_expect, click_patch,
                              sizeof click_expect);
-            plog(ok ? "curs: left click decided by Interface Type, not by the cursor "
-                      "index (0x499041, 27 bytes)"
-                    : "curs: LEFT-CLICK PATCH SKIPPED (byte mismatch at 0x499041) — "
-                      "contextual cursors are on and the left button will order");
+            if (ok)
+            {
+                plog("curs: left click decided by Interface Type, not by the "
+                     "cursor index (0x499041, 27 bytes)");
+            }
+            else
+            {
+                /* THE PAIR IS ARMED TOGETHER OR NOT AT ALL. The cursor patch on
+                   its own IS the bug — it feeds 14 to a click handler that reads
+                   anything under 0x11 as "issue the order". So if the companion
+                   will not take, put the cursor patch back and run stock rather
+                   than ship the thing this landing exists to fix.
+                   [FROM REVIEW 2026-09-07] */
+                int back = patch_bytes(0x0043E50C, six_nops, je_expect,
+                                       sizeof je_expect);
+                plog(back ? "curs: DISARMED — no left-click patch at 0x499041 "
+                            "(byte mismatch), so 0x43E50C was put back; stock "
+                            "cursors, stock buttons"
+                          : "curs: STUCK — 0x499041 would not take and 0x43E50C "
+                            "would not revert; the left button may issue orders");
+            }
         }
     }
 }

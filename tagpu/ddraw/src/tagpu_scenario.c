@@ -497,7 +497,7 @@ static void copy_name(char* dst, const char* src)
    left empty when no type was named. */
 static int live_ref(const char* t, int* idx, char* expect)
 {
-    char  num[16];
+    char  digits[16];
     int   i = 0;
     const char* p;
 
@@ -508,17 +508,17 @@ static int live_ref(const char* t, int* idx, char* expect)
 
     for (p = t + 1; *p && *p != ':'; p++)
     {
-        if (*p < '0' || *p > '9' || i >= (int)sizeof num - 1)
+        if (*p < '0' || *p > '9' || i >= (int)sizeof digits - 1)
             return 0;
-        num[i++] = *p;
+        digits[i++] = *p;
     }
 
     if (!i)
         return 0;
 
-    num[i] = 0;
+    digits[i] = 0;
 
-    if (!req(num, idx))
+    if (!req(digits, idx))
         return 0;
 
     if (*p == ':')
@@ -1501,7 +1501,13 @@ static char* live_by_index(char* ta, int idx, const char* expect, const char** w
         return 0;
     }
 
-    if (idx < 0 || (size_t)(idx + 1) * UNIT_STRIDE > (size_t)(end - beg))
+    /* Divide, never multiply: `(idx + 1) * UNIT_STRIDE` wraps at idx 15339168 on
+       this 32-bit build, and `beg + idx * UNIT_STRIDE` wraps with it — a caller
+       index that large passed the old test and produced a pointer BELOW the
+       array. `main+0x1435B` is also INCLUSIVE: the engine's own sweep at
+       0x48BD22 does `add eax,0x118 / cmp eax,[main+0x1435B] / jbe`, so the unit
+       AT `end` is real and `<=` is the right comparison. [FROM REVIEW 2026-09-07] */
+    if (idx < 0 || (size_t)idx > (size_t)(end - beg) / UNIT_STRIDE)
     {
         *why = "index is outside the unit array";
         return 0;
@@ -1515,10 +1521,24 @@ static char* live_by_index(char* ta, int idx, const char* expect, const char** w
         return 0;
     }
 
-    if (!(*(unsigned*)(u + U_STATE) & 0x10000000u))
     {
-        *why = "nothing alive in that slot";
-        return 0;
+        unsigned st = *(unsigned*)(u + U_STATE);
+
+        if (!(st & 0x10000000u))
+        {
+            *why = "nothing alive in that slot";
+            return 0;
+        }
+
+        /* The alive bit travels with the excluded bit everywhere else in this
+           fork (live_selected below, tagpu_order.c, mark, native, tracer), and
+           an order to a unit the engine has excluded is exactly as wrong from
+           this door as from those. [FROM REVIEW 2026-09-07] */
+        if (st & 0x4000u)
+        {
+            *why = "that unit is excluded (loaded or hidden)";
+            return 0;
+        }
     }
 
     if (expect && expect[0])
@@ -1549,11 +1569,23 @@ static char* live_by_index(char* ta, int idx, const char* expect, const char** w
 static int live_selected(char* ta, char** out, int max)
 {
     unsigned char watched = *(unsigned char*)(ta + OFF_WATCHED);
-    char* player = ta + OFF_PLAYERS + (size_t)watched * PL_STRIDE;
+    char* player;
+    char* beg = *(char**)(ta + OFF_BEGIN);
+    char* end = *(char**)(ta + OFF_END);
     char* first;
     char* last;
     char* u;
     int   n = 0;
+
+    /* `main+0x2A42` is a byte and nothing here has established a bound on it, so
+       bound it: Players[] is ten slots. Unbounded it would place `player` up to
+       84 KB past the array and read two pointers out of unrelated fields — which
+       this function then hands to the order constructor, where `tagpu_order.c`'s
+       identical idiom only ever reads. [FROM REVIEW 2026-09-07] */
+    if (watched >= 10)
+        return 0;
+
+    player = ta + OFF_PLAYERS + (size_t)watched * PL_STRIDE;
 
     if (!readable(player, PL_STRIDE))
         return 0;
@@ -1561,10 +1593,18 @@ static int live_selected(char* ta, char** out, int max)
     first = *(char**)(player + PL_FIRSTUNIT);
     last  = *(char**)(player + PL_LASTUNIT);
 
-    if (!readable(first, UNIT_STRIDE) || last < first)
+    if (!readable(beg, UNIT_STRIDE) || end < beg)
         return 0;
 
-    if ((size_t)(last - first) > (size_t)UNIT_STRIDE * 20000)
+    /* Containment, not just readability: every pointer this returns is passed to
+       ORDERS_NewMainOrder2Unit, so it has to be a unit — inside the array, and on
+       a stride boundary. [FROM REVIEW 2026-09-07] */
+    if (first < beg || last > end || last < first ||
+        (size_t)(first - beg) % UNIT_STRIDE != 0 ||
+        (size_t)(last - beg) % UNIT_STRIDE != 0)
+        return 0;
+
+    if (!readable(first, UNIT_STRIDE))
         return 0;
 
     for (u = first; u <= last && n < max; u += UNIT_STRIDE)
@@ -1589,9 +1629,11 @@ static int live_selected(char* ta, char** out, int max)
 /* WHERE a live unit is, in the whole world units the order path wants. */
 static void live_pos(char* u, int* x, int* alt, int* y)
 {
-    *x   = *(unsigned short*)(u + U_XPOS);
-    *alt = *(unsigned short*)(u + U_ZPOS);
-    *y   = *(unsigned short*)(u + U_YPOS);
+    /* Signed: field-notes.md and six other modules read these as short, and a
+       negative coordinate read unsigned becomes ~65535. [FROM REVIEW 2026-09-07] */
+    *x   = *(short*)(u + U_XPOS);
+    *alt = *(short*)(u + U_ZPOS);
+    *y   = *(short*)(u + U_YPOS);
 }
 
 #define SCN_MAX_SEL 512
@@ -1636,10 +1678,15 @@ static void issue_orders(void)
             if (!nsubj)
                 scn_err("order %d: nothing is selected", i);
             else if (nsubj == SCN_MAX_SEL)
+            {
                 /* A cap that swallows the overflow quietly would report a full
-                   success while ordering part of the selection. Say it. */
-                scn_err("order %d: more than %d units are selected; only the "
+                   success while ordering part of the selection. Say it, and
+                   COUNT it — the CLI's exit status reads g_ord_fail, so logging
+                   alone would still exit 0. [FROM REVIEW 2026-09-07] */
+                scn_err("order %d: %d or more units are selected; only the "
                         "first %d were ordered", i, SCN_MAX_SEL, SCN_MAX_SEL);
+                g_ord_fail++;
+            }
         }
 
         if (!nsubj)

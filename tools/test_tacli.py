@@ -1294,6 +1294,20 @@ class OrderVerb(unittest.TestCase):
         with refuses(self):
             tacli._order_target("reclaim", ["feat", "87"], "")
 
+    def test_a_type_guard_cannot_smuggle_a_second_wire_line(self):
+        """The wire is line-delimited, so a newline in --expect would split it."""
+        for bad in ("ARM\nCOM", "ARM COM", "ARM:COM", "", "A" * 32, "ARM\tCOM"):
+            with self.subTest(bad=bad), refuses(self):
+                tacli._order_type(bad, "--expect")
+        self.assertEqual(tacli._order_type("ARMCOM", "--expect"), "ARMCOM")
+        self.assertEqual(tacli._order_type("CORE_2b", "--expect"), "CORE_2b")
+
+    def test_integers_are_exactly_what_the_fork_accepts(self):
+        for good in ("0", "7", "-40", "1988"):
+            self.assertTrue(tacli._is_int(good), good)
+        for bad in ("+5", " 7 ", "1_0", "0x10", "", "7.0"):
+            self.assertFalse(tacli._is_int(bad), bad)
+
     def test_a_guard_on_a_position_is_refused(self):
         with refuses(self):
             tacli._order_target("move", ["pos", "10", "20"], "ARMCOM")
