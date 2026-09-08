@@ -519,5 +519,305 @@ class Director(unittest.TestCase):
         self.assertEqual(timeline, [])
 
 
+class ValueIds(unittest.TestCase):
+    """`get` and `set`, as 0x480770 and 0x480B20 compute them — read out of the
+    retail binary on 2026-09-07, exe-reverse-engineering.md §"`get` and `set`"."""
+
+    def world(self, **kw):
+        w = tacob.EditorWorld()
+        for key, value in kw.items():
+            setattr(w, key, value)
+        return w
+
+    def test_the_xz_pack_survives_a_negative_z(self):
+        # 0x480821 *adds* the z integer to the x half instead of or-ing it, so the
+        # borrow has to be undone on the way back — which every unpacking handler does
+        for x, z in ((100, 200), (100, -200), (-100, -200), (0, -1), (-1, 0)):
+            packed = tacob.pack_xz(x << 16, z << 16)
+            back = tacob.unpack_xz(packed)
+            self.assertEqual(back, (x << 16, z << 16), (x, z))
+
+    def test_xz_atan_subtracts_the_unit_heading_and_atan_does_not(self):
+        w = self.world()
+        w.body[1] = 0x4000                               # a quarter turn
+        packed = tacob.pack_xz(10 << 16, 0)              # due +x from the unit
+        self.assertEqual(w.get(tacob.VALUE_IDS["XZ_ATAN"], packed, 0, 0, 0), 0)
+        self.assertEqual(w.get(tacob.VALUE_IDS["ATAN"], 10 << 16, 0, 0, 0), 0x4000)
+
+    def test_hypot_truncates_and_piece_y_is_raw_fixed_point(self):
+        w = self.world()
+        # _ftol chops: hypot(3, 4) of 16.16 values is exactly 5 << 16, and a value
+        # just under it must come back one short, not rounded up
+        self.assertEqual(w.get(tacob.VALUE_IDS["HYPOT"], 3 << 16, 4 << 16, 0, 0), 5 << 16)
+        self.assertEqual(w.get(tacob.VALUE_IDS["HYPOT"], 1, 0, 0, 0), 1)
+        self.assertEqual(tacob.ta_hypot(65535.9, 0), 65535)
+
+    def test_build_percent_left_is_zero_only_when_it_is_finished(self):
+        w = self.world()
+        vid = tacob.VALUE_IDS["BUILD_PERCENT_LEFT"]
+        self.assertEqual(w.get(vid, 0, 0, 0, 0), 0)      # build_left 0.0 -> the early out
+        w.build_left = 1.0
+        self.assertEqual(w.get(vid, 0, 0, 0, 0), 100)    # 1 - (int)(1.0 * -99)
+        w.build_left = 0.5
+        self.assertEqual(w.get(vid, 0, 0, 0, 0), 50)     # 1 - (int)(-49.5), chopped
+        w.build_left = 0.001
+        self.assertEqual(w.get(vid, 0, 0, 0, 0), 1)      # never 0 while it is building
+
+    def test_health_is_a_percent_and_ids_over_twenty_are_zero(self):
+        w = self.world(hp=125, maxhp=250)
+        self.assertEqual(w.get(tacob.VALUE_IDS["HEALTH"], 0, 0, 0, 0), 50)
+        self.assertEqual(w.get(107, 0, 0, 0, 0), 0)      # HEALTH_VAL, a TADR extension
+        self.assertIn(107, w.unknown)
+
+    def test_set_writes_six_ids_and_silently_drops_the_other_fourteen(self):
+        w = self.world()
+        w.set(tacob.VALUE_IDS["ACTIVATION"], 1)
+        self.assertEqual(w.get(tacob.VALUE_IDS["ACTIVATION"], 0, 0, 0, 0), 1)
+        w.set(tacob.VALUE_IDS["HEALTH"], 7)              # no case in 0x480B20
+        self.assertEqual(w.get(tacob.VALUE_IDS["HEALTH"], 0, 0, 0, 0), 100)
+        self.assertEqual([vid for _tick, vid in w.ignored_sets],
+                         [tacob.VALUE_IDS["HEALTH"]])
+        self.assertEqual(len(tacob.SET_HANDLED), 6)
+
+    def test_the_sim_rng_is_park_miller_and_refuses_a_range_below_two(self):
+        rng = tacob.SimRandom(1)
+        self.assertEqual(rng.draw(1), 0)                 # 0x4B6C38: n < 2 -> 0, no draw
+        self.assertEqual(rng.seed, 1)
+        self.assertEqual(rng.draw(1000000), 16807 % 1000000)
+        self.assertEqual(rng.seed, 16807)
+        self.assertEqual(rng.draw(1000000), (16807 * 16807) % 2147483647 % 1000000)
+
+
+class PieceTransform(unittest.TestCase):
+    """`0x43DEF0` + `0x4B6CC0`: the composition the pose and PIECE_XZ both use.
+
+    `tools/tacob pose-check --all` is the live gate — it rebuilds the eight
+    fixtures' posed vertices and diffs them against the engine's own vertex
+    buffer. These pin the parts a fixture cannot: no stock unit in the corpus
+    turns one piece about two axes at once, so only a synthetic model can show
+    that the order is Z, X, Y and not one of the other five."""
+
+    def frame(self):
+        f = tacob.PieceFrame(["root", "arm"])
+        f.offset = [[0, 0, 0], [65536, 0, 0]]            # the arm one unit out on +x
+        f.parent = [-1, 0]
+        return f
+
+    def test_a_zero_angle_word_leaves_the_pair_untouched(self):
+        self.assertEqual(tacob.rotate2(0, 12345, -678), (12345, -678))
+
+    def test_the_order_is_z_then_x_then_y(self):
+        f = self.frame()
+        pos = [[0, 0, 0], [0, 0, 0]]
+        ang = [[0x4000, 0x4000, 0], [0, 0, 0]]           # the root turns about x and y
+        got = tacob.piece_offset(f, pos, ang, 1)
+        # Rz(0) then Rx(90) then Ry(90) on (1,0,0): x/y untouched, y/z untouched,
+        # then the x/z pair rotates x into z -> (0, 0, 1), and the return negates z
+        self.assertEqual(got, [0, 0, -65536])
+        # the other order (Y then X) would leave it at (0, -1, 0) instead
+        self.assertNotEqual(got, [0, -65536, 0])
+
+    def test_a_piece_s_own_turn_does_not_move_its_origin_but_moves_its_mesh(self):
+        f = self.frame()
+        pos = [[0, 0, 0], [0, 0, 0]]
+        ang = [[0, 0, 0], [0, 0x4000, 0]]                # the arm turns about y
+        self.assertEqual(tacob.piece_offset(f, pos, ang, 1), [65536, 0, 0])
+        # a point one unit along the arm's own +x does swing round to +z
+        self.assertEqual(tacob.piece_vertex(f, pos, ang, 1, [65536, 0, 0]),
+                         [65536, 0, 65536])
+
+    def test_move_is_a_delta_in_the_parent_frame_added_before_the_rotation(self):
+        f = self.frame()
+        ang = [[0, 0x4000, 0], [0, 0, 0]]                # the root turns a quarter
+        self.assertEqual(tacob.piece_offset(f, [[0, 0, 0], [0, 0, 0]], ang, 1),
+                         [0, 0, -65536])
+        # MOVE the arm another unit out: it must swing with the root, not stay on +x
+        self.assertEqual(tacob.piece_offset(f, [[0, 0, 0], [65536, 0, 0]], ang, 1),
+                         [0, 0, -131072])
+
+    def test_the_body_turn_goes_on_at_the_root_only(self):
+        f = self.frame()
+        pos = [[0, 0, 0], [0, 0, 0]]
+        ang = [[0, 0, 0], [0, 0, 0]]
+        self.assertEqual(tacob.piece_offset(f, pos, ang, 1, body=(0, 0x4000, 0)),
+                         [0, 0, -65536])
+        self.assertEqual(tacob.piece_offset(f, pos, ang, 0, body=(0, 0x4000, 0)),
+                         [0, 0, 0])          # the root's own origin does not move
+
+
+class Lints(unittest.TestCase):
+    """Each rule is a snag that cost a live run; the message says which note."""
+
+    def lint(self, source, frame=None):
+        program, diags = tacob.lint_bos(source, "test.bos", frame=frame)
+        self.assertIsNotNone(program, diags)
+        return {d["rule"]: d for d in diags}
+
+    def test_an_aim_script_for_slot_four_may_not_wait(self):
+        found = self.lint(PRELUDE + """
+        AimWeapon4(heading, pitch)
+        {
+            turn turret to y-axis heading speed <300>;
+            wait-for-turn turret around y-axis;
+            return (1);
+        }
+        """)
+        self.assertEqual(found["aim-waits"]["level"], "error")
+        self.assertIn("aim-no-signal", found)
+        self.assertIn("extra-weapons.md", found["aim-waits"]["message"])
+
+    def test_a_stock_aim_that_waits_wants_the_signal_pair(self):
+        body = """
+            %s
+            turn turret to y-axis heading speed <300>;
+            wait-for-turn turret around y-axis;
+            return (1);
+        """
+        pair = "signal SIG_AIM; set-signal-mask SIG_AIM;"
+        self.assertIn("aim-no-signal",
+                      self.lint(PRELUDE + "AimPrimary(heading, pitch)\n{" + body % "" + "}"))
+        self.assertNotIn("aim-no-signal",
+                         self.lint("#define SIG_AIM 2\n" + PRELUDE +
+                                   "AimPrimary(heading, pitch)\n{" + body % pair + "}"))
+
+    def test_a_set_the_engine_drops_and_a_value_id_it_does_not_have(self):
+        found = self.lint(PRELUDE + """
+        Create()
+        {
+            set HEALTH to 50;
+            static_1 = get 107;
+        }
+        """.replace("static_1", "s1"))
+        self.assertEqual(found["set-ignored"]["level"], "warning")
+        self.assertIn("0x480B20", found["set-ignored"]["message"])
+        self.assertIn("get-extension", found)
+
+    def test_a_muzzle_piece_create_never_hides(self):
+        source = PRELUDE + """
+        Create() { hide barrel; }
+        QueryPrimary(piecenum) { piecenum = flare; return (0); }
+        """
+        self.assertIn("query-piece-shown", self.lint(source))
+        # ... and not when Create does hide it
+        hidden = source.replace("hide barrel;", "hide barrel; hide flare;")
+        self.assertNotIn("query-piece-shown", self.lint(hidden))
+        # ... nor when the model builder hides it for us (0x45AF1B, under three vertices)
+        frame = tacob.PieceFrame(["base", "turret", "barrel", "flare"])
+        frame.vertices = [8, 8, 8, 1]
+        self.assertNotIn("query-piece-shown", self.lint(source, frame=frame))
+
+    def test_the_thread_peak_counts_what_can_be_live_together(self):
+        holder = """
+        %s()
+        {
+            turn turret to y-axis <0> speed <300>;
+            wait-for-turn turret around y-axis;
+            return (1);
+        }
+        """
+        names = ["AimPrimary", "AimSecondary", "AimTertiary"] + \
+                [f"AimWeapon{n}" for n in range(4, 12)]
+        found = self.lint(PRELUDE + "".join(holder % n for n in names))
+        self.assertIn("thread-peak", found)
+        self.assertIn("the pool is 8", found["thread-peak"]["message"])
+        self.assertNotIn("thread-peak", self.lint(PRELUDE + (holder % "AimPrimary")))
+
+    def test_a_piece_the_model_does_not_have(self):
+        frame = tacob.PieceFrame(["base", "turret", "barrel", "flare"])
+        frame.bound = [True, True, True, False]
+        found = self.lint(PRELUDE + "Create() { hide flare; }", frame=frame)
+        self.assertIn("piece-unknown", found)
+        self.assertIn("flare", found["piece-unknown"]["message"])
+
+    def test_the_two_opcodes_this_engine_kills_the_thread_on(self):
+        for statement in ("play-sound 1;", "map-command 1, 2;"):
+            with self.assertRaises(tacob.CompileError) as caught:
+                tacob.compile_bos(PRELUDE + "Create() { %s }" % statement, "t.bos")
+            self.assertIn("0x4B1B60", str(caught.exception))
+
+
+class Editor(unittest.TestCase):
+    """The template, the class guess, and the shape of a served frame."""
+
+    def test_the_weapon_template_compiles_and_lints_clean(self):
+        source = PRELUDE + tacob.weapon_template(4, "turret", "barrel", "flare")
+        cob = tacob.compile_bos(source, "t.bos")
+        self.assertEqual([n for n, _ in cob.scripts],
+                         ["AimWeapon4", "FireWeapon4", "AimFromWeapon4", "QueryWeapon4"])
+        _program, diags = tacob.lint_bos(source, "t.bos")
+        self.assertEqual([d for d in diags if d["level"] == "error"], [])
+        # the muzzle it hands back is a flare, so the lint asks Create to hide it
+        self.assertEqual([d["rule"] for d in diags], ["query-piece-shown"])
+
+    def test_the_template_returns_inside_its_own_tick(self):
+        cob = tacob.compile_bos(PRELUDE + tacob.weapon_template(4, "turret", "barrel", "flare"),
+                                "t.bos")
+        vm = tacob.CobVM(cob, tacob.UnitWorld())
+        vm.tick = 1
+        cb = tacob.AimCallback()
+        vm.start_script("AimWeapon4", run_now=True, args=(0, 0), argwords=True, cb=cb)
+        self.assertEqual(cb.aimed, 1)                    # aimed before the tick is out
+        self.assertEqual(vm.running, 0)                  # and holding no record
+
+    def test_the_category_field_is_a_word_list_not_a_substring(self):
+        peewee = {"category": "ARM KBOT LEVEL1 WEAPON NOTAIR NOTSUB CTRL_W",
+                  "bmcode": "1", "canmove": "1"}
+        self.assertEqual(tacob.classify(peewee), "kbot")     # "NOTSUB" is not a submarine
+        snake = {"category": "CORE UNDERWATER LEVEL1 TORP WEAPON NOTAIR CTRL_W",
+                 "bmcode": "1", "canmove": "1", "waterline": "20"}
+        self.assertEqual(tacob.classify(snake), "sub")
+        self.assertEqual(tacob.classify({"bmcode": "0"}), "building")
+        self.assertEqual(tacob.classify({"canfly": "1", "hoverattack": "1"}), "gunship")
+
+    def test_a_slot_with_no_aim_script_still_fires(self):
+        # ARMHAWK, ARMBRAWL, ARMTHUND and CORSUB carry no Aim* at all: the engine
+        # aims them and the script only points at the muzzle
+        source = PRELUDE + """
+        Create() { return (0); }
+        FirePrimary() { show flare; sleep 100; hide flare; return (0); }
+        QueryPrimary(piecenum) { piecenum = flare; return (0); }
+        """
+        cob = tacob.compile_bos(source, "t.bos")
+        world = tacob.EditorWorld(tacob.PieceFrame(cob.pieces))
+        vm = tacob.CobVM(cob, world)
+        world.vm = vm
+        slot = tacob.WeaponSlot(0, "TEST", 400, 10)
+        director = tacob.Director(vm, world, motion="static", slots=[slot])
+        world.target = [0, 0, 0]
+        for tick in range(60):
+            director.step(tick)
+        self.assertGreater(slot.shots, 1)
+
+    def test_a_stock_aim_is_not_restarted_while_one_is_still_slewing(self):
+        # start one every tick and each new signal kills the last before it can
+        # arrive — extra-weapons.md snag 1's `full` row, and what an early version
+        # of this director did
+        source = "#define SIG 2\n" + PRELUDE + """
+        Create() { return (0); }
+        AimPrimary(heading, pitch)
+        {
+            signal SIG;
+            set-signal-mask SIG;
+            turn turret to y-axis heading speed <60>;
+            wait-for-turn turret around y-axis;
+            return (1);
+        }
+        FirePrimary() { return (0); }
+        """
+        cob = tacob.compile_bos(source, "t.bos")
+        out = []
+        world = tacob.EditorWorld(tacob.PieceFrame(cob.pieces))
+        vm = tacob.CobVM(cob, world, out.append)
+        world.vm = vm
+        slot = tacob.WeaponSlot(0, "TEST", 4000, 10)
+        director = tacob.Director(vm, world, motion="static", slots=[slot])
+        world.target = [100 * 65536, 0, 100 * 65536]
+        for tick in range(120):
+            director.step(tick)
+        self.assertEqual([l for l in out if l.startswith("K")], [])
+        self.assertGreater(slot.shots, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
