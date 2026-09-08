@@ -1532,11 +1532,13 @@ static void ogl_render()
             glClear(GL_COLOR_BUFFER_BIT);
 
         /* tagpu: headless screenshot trigger. A sentinel file next to the exe lets us
-           capture the game's own surface (lock-screen-proof) without a keypress. */
+           capture the game's own surface (lock-screen-proof) without a keypress.
+           Polled every present, like the glshot trigger above: a frame the engine
+           presents only once — the loading screen, flipped by 0x4288D0 and then
+           left alone for the whole map load, nothing presenting behind it — must
+           be capturable by a trigger armed before it (G15d). */
         {
-            static int tagpu_ss_frame = 0;
-            if ((++tagpu_ss_frame & 7) == 0 &&
-                GetFileAttributesA("tagpu_shot.trigger") != INVALID_FILE_ATTRIBUTES)
+            if (GetFileAttributesA("tagpu_shot.trigger") != INVALID_FILE_ATTRIBUTES)
             {
                 DeleteFileA("tagpu_shot.trigger");
                 ss_take_screenshot(g_ddraw.primary);

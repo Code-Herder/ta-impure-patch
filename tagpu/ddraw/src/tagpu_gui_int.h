@@ -47,9 +47,36 @@ typedef struct TAGPU_GUIQ {
     volatile unsigned qHead, qTail;          /* producer writes head, consumer tail */
     volatile unsigned aHead, aTail;          /* arena bytes, same roles        */
     volatile unsigned reseed;                /* consumer asks the producer to seed everything */
+    volatile unsigned why;                   /* the last reason `reseed` (or an overflow) was raised: TAGPU_GUI_WHY_* */
     volatile unsigned overflows;             /* the producer ran out of queue or arena  */
     volatile unsigned resets;                /* fresh starts published (re-arm, GL, overflow, a lost frame) */
+    volatile unsigned stalls;                /* episodes where the consumer took nothing for TAGPU_GUI_STALL_MS
+                                                while work was queued (a display-mode switch kills the render
+                                                thread): the producer drops its batches until it moves again */
 } TAGPU_GUIQ;
+
+/* why a fresh start was raised — logged by the producer with every reset it
+   publishes (`log`), so a count of resets is never a mystery again */
+enum {
+    TAGPU_GUI_WHY_NONE = 0,
+    TAGPU_GUI_WHY_ARM,        /* the trigger (re)appeared: the twins start from the surfaces as they are */
+    TAGPU_GUI_WHY_GLCTX,      /* the GL context changed (a display-mode switch)                          */
+    TAGPU_GUI_WHY_QUEUE,      /* the op ring was full                                                    */
+    TAGPU_GUI_WHY_ARENA,      /* the byte arena was full                                                 */
+    TAGPU_GUI_WHY_BOX,        /* a recorded box no longer fits its surface                              */
+    TAGPU_GUI_WHY_LOST,       /* a sprite arrived without its bytes and the atlas had no entry           */
+    TAGPU_GUI_WHY_ATLAS,      /* the UI atlas was full                                                   */
+    TAGPU_GUI_WHY_COPY,       /* a copy from a source with no twin                                       */
+    TAGPU_GUI_WHY_STALL,      /* the consumer came back after a stall: what was dropped is re-seeded    */
+    TAGPU_GUI_WHY_N
+};
+/* a consumer that has taken nothing for this long while ops were queued is not
+   slow, it is gone (MEASURED 2026-09-07: cnc-ddraw stops its render thread
+   across every SetDisplayMode, and the shell flips ~5 000 times a second
+   meanwhile — without this the producer filled the arena, overflowed, reset,
+   re-seeded into the full arena and repeated at the publish cadence: 38
+   overflows and 39 resets per game -> shell switch). A frame hitch is shorter. */
+#define TAGPU_GUI_STALL_MS 250
 
 extern TAGPU_GUIQ g_guiq;                    /* owned by tagpu_gui_hook.c      */
 

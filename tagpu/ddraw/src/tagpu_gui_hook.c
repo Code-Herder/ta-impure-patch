@@ -90,6 +90,7 @@ static void glog(const char* s)
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
 /* ---- the surfaces we have seen (game thread only) ---------------------- */
+static void ops_forget_base(unsigned base);       /* below, with the ring */
 typedef struct SURF {
     unsigned base;                    /* pixel base — the identity           */
     int w, h, pitch;
@@ -103,10 +104,53 @@ typedef struct SURF {
     int seeded;                       /* a PK_SEED was published for it      */
     int lastCopyFrom;                 /* dedup(): position in the batch of the last
                                          COPY that read this surface, -1 if none  */
+    int isOffscreen;                  /* created with the tag "OFFSCREEN" (0x5091D4): THE
+                                         main offscreen, of which the engine has one at a
+                                         time — see surf_drop_offscreens             */
 } SURF;
 #define MAX_SURF 24
 static SURF s_surf[MAX_SURF];
 static int  s_nsurf = 0;
+#define TAG_OFFSCREEN 0x005091D4u     /* the "OFFSCREEN" string every 0x4C69F0 of the main
+                                         offscreen pushes: 0x490AD3, 0x491250, 0x491B23,
+                                         0x4980CF, 0x498402                              */
+
+static TAGPU_PUBOP* pub_op(int kind, unsigned surf);   /* below */
+static void pub_commit(void);
+static void ops_forget_base(unsigned base);
+extern volatile int g_gui_draw;
+
+/* forget a surface: its buffers, its recorded boxes, and the twin */
+static void surf_drop(int i)
+{
+    if (s_surf[i].seeded && g_gui_draw) {
+        TAGPU_PUBOP* o = pub_op(PK_FREE, s_surf[i].base);
+        if (o) pub_commit();
+    }
+    free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
+    ops_forget_base(s_surf[i].base);
+    s_surf[i] = s_surf[--s_nsurf];
+}
+
+/* THE MAIN OFFSCREEN IS FREED TO THE HEAP, NOT THROUGH SurfaceFree: MEM_Free
+   0x4D85A0 at 0x491AB8 (leaving a game) and 0x49838C (the game's mode switch),
+   and the next 0x4C69F0("OFFSCREEN", w, h) may land on the same base (a
+   same-base size change, surf_get) or on another (MEASURED 2026-09-07, both).
+   In the second case the old entry stayed: a dead 1024x768 the census walked
+   at every flip — an access violation at its base once the heap had returned
+   the block (the census run's crash on the first game -> shell switch) — and
+   one MAX_SURF slot leaked per cycle. The engine has exactly one main
+   offscreen at a time, so a new one retires every other. Keyed on the base,
+   NOT a SURF* — surf_drop swap-removes (s_surf[i] = s_surf[--s_nsurf]), so a
+   pointer to the kept entry moves if it was the last slot; the base is stable. */
+static void surf_drop_offscreens(unsigned keepBase)
+{
+    int i;
+    for (i = 0; i < s_nsurf; ) {
+        if (s_surf[i].base != keepBase && s_surf[i].isOffscreen) surf_drop(i);
+        else i++;
+    }
+}
 
 static SURF* surf_get(unsigned base, int w, int h, int pitch)
 {
@@ -115,7 +159,15 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch)
     for (i = 0; i < s_nsurf; i++)
         if (s_surf[i].base == base) {
             if (s_surf[i].w != w || s_surf[i].h != h || s_surf[i].pitch != pitch) {
-                /* the object was re-allocated over the same bytes: start over */
+                /* the object was re-allocated over the same bytes: start over.
+                   The ops already recorded against the base carry the OLD
+                   size's boxes, and nothing else drops them: the game's own
+                   OFFSCREEN is freed by 0x4D85A0 directly (0x491AB8 on the way
+                   back to the shell, 0x49838C at the game's mode switch), never
+                   through SurfaceFree 0x4C6AC0, so before_free never sees it —
+                   the next publish then found a box past the new surface and
+                   called it an overflow (MEASURED 2026-09-07, one per switch) */
+                ops_forget_base(base);
                 s_surf[i].w = w; s_surf[i].h = h; s_surf[i].pitch = pitch;
                 s_surf[i].copyValid = 0;
                 s_surf[i].seeded = 0;          /* the twin is the old size: re-make it */
@@ -157,6 +209,14 @@ static OP* s_lastOp = NULL;                     /* the op op_add just recorded *
 #define MAX_OPS 65536
 static OP       s_ops[MAX_OPS];
 static int      s_nops = 0;
+/* ops recorded against a base are dead once the object is gone or re-made: a
+   new surface may be allocated over the same bytes before the next census, and
+   neither the census nor the publisher may apply an old box to it */
+static void ops_forget_base(unsigned base)
+{
+    int k;
+    for (k = 0; k < s_nops; k++) if (s_ops[k].base == base) s_ops[k].base = 0;
+}
 static unsigned s_kindCount[OP_NKIND];
 static unsigned s_kindTotal[OP_NKIND];          /* cumulative, for the heartbeat */
 static unsigned s_nullCtx[OP_NKIND];        /* ops whose ctx was NULL/unknown */
@@ -234,7 +294,7 @@ static TAGPU_PUBOP* pub_op(int kind, unsigned surf)
 {
     unsigned head = g_guiq.qHead, tail = g_guiq.qTail;
     TAGPU_PUBOP* o;
-    if (head - tail >= TAGPU_GUI_QCAP - 1) { s_pubOverflow = 1; return NULL; }
+    if (head - tail >= TAGPU_GUI_QCAP - 1) { s_pubOverflow = 1; g_guiq.why = TAGPU_GUI_WHY_QUEUE; return NULL; }
     o = &s_qops[head & (TAGPU_GUI_QCAP - 1)];
     memset(o, 0, sizeof *o);
     o->kind = (unsigned char)kind; o->surf = surf; o->flip = s_flips;
@@ -246,7 +306,7 @@ static void pub_commit(void) { MemoryBarrier(); g_guiq.qHead++; s_pubOps++; }
 static unsigned char* pub_bytes(TAGPU_PUBOP* o, unsigned len)
 {
     unsigned at;
-    if (!tagpu_guiq_arena_room(&g_guiq, len, &at)) { s_pubOverflow = 1; return NULL; }
+    if (!tagpu_guiq_arena_room(&g_guiq, len, &at)) { s_pubOverflow = 1; g_guiq.why = TAGPU_GUI_WHY_ARENA; return NULL; }
     o->aoff = at; o->alen = len;
     g_guiq.aHead = at + len;
     s_pubBytes += len;
@@ -264,7 +324,7 @@ static int pub_surface_bytes(SURF* s, int l, int t, int r, int b, TAGPU_PUBOP* o
         /* a box recorded against a surface that has since changed size (or a
            base we cannot read): the batch stops here and the next publish
            starts fresh — never a silent drop that leaves a twin stale */
-        s_pubOverflow = 1;
+        s_pubOverflow = 1; g_guiq.why = TAGPU_GUI_WHY_BOX;
         return 0;
     }
     dst = pub_bytes(o, w * hh);
@@ -394,22 +454,81 @@ static void dedup(void)
     }
 }
 
+static const char* const WHY_NAME[TAGPU_GUI_WHY_N] =
+    { "?", "arm", "gl-context", "queue-full", "arena-full", "box-outside-surface", "lost-sprite", "atlas-full", "untwinned-copy", "stall-over" };
+
+/* THE CONSUMER CAN DIE, OR CRAWL. cnc-ddraw stops its render thread inside
+   every SetDisplayMode and starts a new one with a new GL context (dd.c);
+   between the two nothing drains the queue, and on the way out of a game the
+   old thread presents only every few hundred ms while the game thread is in
+   the exit path — and the game thread keeps flipping and this keeps
+   publishing: a batch every 5 ms carrying ~150 KB of pixel bytes in game
+   (the box bytes of every non-sprite op, re-read at each cadence), so the
+   16 MB arena is half a second of backlog. A queue nobody reads fills; the
+   overflow policy then resets and re-seeds into the full arena at every
+   publish (MEASURED 2026-09-07: 24 `arena-full` resets in the 120 ms after
+   the exit click, 3 643 ops queued, the tail still creeping — so a time rule
+   alone never fired). So two rules say the consumer is behind: the tail has
+   not moved for TAGPU_GUI_STALL_MS with work queued (dead), or the backlog
+   is past half the arena or a quarter of the ring (crawling). Either way the
+   batch is dropped — nothing is queued, no counter but `stalls` moves — until
+   the consumer has caught up (the queue empty, or the backlog under the
+   low-water marks), when one reseed brings the twins back from the surfaces
+   as they are then. Returns 1 to drop. */
+static unsigned arena_used(void)
+{
+    unsigned head = g_guiq.aHead, tail = g_guiq.aTail;     /* offsets, wrapping */
+    return head >= tail ? head - tail : TAGPU_GUI_ASIZE - (tail - head);
+}
+static int consumer_stalled(void)
+{
+    static unsigned s_tailSeen = 0;
+    static LARGE_INTEGER s_tailQpc, s_fq;
+    static int s_stalled = 0;
+    unsigned tail = g_guiq.qTail, head = g_guiq.qHead, queued = head - tail, used = arena_used();
+    LARGE_INTEGER now;
+    if (!s_fq.QuadPart) QueryPerformanceFrequency(&s_fq);
+    QueryPerformanceCounter(&now);
+    if (s_stalled) {
+        if (head == tail || (queued < TAGPU_GUI_QCAP / 16 && used < TAGPU_GUI_ASIZE / 8)) {
+            s_stalled = 0; s_tailSeen = tail; s_tailQpc = now;
+            g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_STALL;
+            return 0;
+        }
+        return 1;
+    }
+    if (queued >= TAGPU_GUI_QCAP / 4 || used >= TAGPU_GUI_ASIZE / 2) { s_stalled = 1; g_guiq.stalls++; return 1; }
+    if (tail != s_tailSeen || head == tail) { s_tailSeen = tail; s_tailQpc = now; return 0; }
+    if ((now.QuadPart - s_tailQpc.QuadPart) * 1000 < (LONGLONG)TAGPU_GUI_STALL_MS * s_fq.QuadPart) return 0;
+    s_stalled = 1; g_guiq.stalls++;
+    return 1;
+}
+
 static void publish(unsigned flipSurf)
 {
     int i;
     SURF* fs;
     int vl = 0, vt = 0, vr = -1, vb = -1;
     if (!g_gui_draw) return;
+    if (consumer_stalled()) return;
     dedup();
     if (g_guiq.reseed || s_pubOverflow) {
         TAGPU_PUBOP* o;
+        unsigned why = g_guiq.why;
         for (i = 0; i < s_nsurf; i++) s_surf[i].seeded = 0;
         memset(s_seenF, 0, sizeof s_seenF); memset(s_seenP, 0, sizeof s_seenP);
         /* an overflow drops the queue's tail too: what the consumer has not
            taken is stale against the fresh seeds */
         if (s_pubOverflow) g_guiq.overflows++;
         g_guiq.resets++;
-        g_guiq.reseed = 0; s_pubOverflow = 0;
+        g_guiq.reseed = 0; s_pubOverflow = 0; g_guiq.why = 0;
+        if (s_log) {
+            char b[200];
+            _snprintf(b, sizeof b, "gui: reset #%u: %s (queued=%u arena=%u/%u surfaces=%d)", g_guiq.resets,
+                      why < TAGPU_GUI_WHY_N ? WHY_NAME[why] : "?", g_guiq.qHead - g_guiq.qTail,
+                      arena_used(), TAGPU_GUI_ASIZE, s_nsurf);
+            glog(b);
+        }
         o = pub_op(PK_RESET, 0);
         if (!o) return;
         pub_commit();
@@ -523,6 +642,10 @@ static void census_surface(SURF* s, int isGame, int subtractVp, int vl, int vt, 
     int y, x, i;
     *outChanged = *outUnexpl = 0;
     if (!ptr_ok(cur)) return;
+    /* a surface the engine freed behind the observer's back (MEM_Free, not
+       SurfaceFree) may be unmapped by now: two page probes, first and last
+       row, before a whole-surface read. -1 = gone, the caller drops it. */
+    if (IsBadReadPtr(cur, 1) || IsBadReadPtr(cur + (size_t)(s->h - 1) * s->pitch, (size_t)s->w)) { *outUnexpl = (unsigned)-1; return; }
     if (!s->copy) s->copy = (unsigned char*)malloc((size_t)s->w * s->h);
     if (!s->mask) s->mask = (unsigned char*)malloc((size_t)s->w * s->h);
     if (!s->copy || !s->mask) return;
@@ -676,6 +799,7 @@ static int __cdecl before_flip(void* entry_esp)
         }
         s->seen++;
         census_surface(s, isGame, sub, vl, vt, vr, vb, &changed, &unexpl);
+        if (unexpl == (unsigned)-1) { changed = unexpl = 0; }      /* the flip's own surface cannot be gone; ignore */
         s_changedTotal += changed; s_unexplTotal += unexpl;
         s_winChanged += changed; s_winUnexpl += unexpl; s_winCensus++;
         if (unexpl) {
@@ -699,6 +823,14 @@ static int __cdecl before_flip(void* entry_esp)
             unsigned c2, u2;
             if (s && s_surf[i].base == s->base) continue;
             census_surface(&s_surf[i], 0, 0, 0, 0, 0, 0, &c2, &u2);
+            if (u2 == (unsigned)-1) {
+                if (s_log) {
+                    _snprintf(b, sizeof b, "gui census: surface %08X %dx%d is unmapped — freed behind the observer, dropped", s_surf[i].base, s_surf[i].w, s_surf[i].h);
+                    glog(b);
+                }
+                surf_drop(i); i--;
+                continue;
+            }
             if (u2 && s_log && s_surf[i].h > 1) {
                 int k, onThis = 0, shown = 0;
                 for (k = 0; k < s_nops; k++) if (s_ops[k].base == s_surf[i].base) onThis++;
@@ -839,9 +971,9 @@ void tagpu_gui_flush(unsigned int frame_counter)
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
-        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u draw=%d",
+        _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d",
                   s_flips, s_opsTotal, s_opsDropped, s_changedTotal, s_unexplTotal, s_nsurf,
-                  s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_gui_draw);
+                  s_pubOps, s_pubBytes, g_guiq.qHead - g_guiq.qTail, g_guiq.resets, g_guiq.overflows, g_guiq.stalls, g_gui_draw);
         glog(b);
         {
             int k, n = 0;

@@ -271,19 +271,7 @@ static int __cdecl before_free(void* e)
     int i;
     if (!on_game_thread() || !ptr_ok(obj)) return 0;
     for (i = 0; i < s_nsurf; i++)
-        if (s_surf[i].base == (unsigned)obj[CTX_BASE]) {
-            if (s_surf[i].seeded && g_gui_draw) {
-                TAGPU_PUBOP* o = pub_op(PK_FREE, s_surf[i].base);
-                if (o) pub_commit();
-            }
-            free(s_surf[i].copy); free(s_surf[i].mask); free(s_surf[i].acc);
-            s_surf[i] = s_surf[--s_nsurf];
-            /* ops recorded against it are dead: a new surface may be allocated
-               over the same bytes before the next census, and neither the
-               census nor the publisher may apply an old box to it */
-            { int k; for (k = 0; k < s_nops; k++) if (s_ops[k].base == (unsigned)obj[CTX_BASE]) s_ops[k].base = 0; }
-            break;
-        }
+        if (s_surf[i].base == (unsigned)obj[CTX_BASE]) { surf_drop(i); break; }
     return 0;
 }
 
@@ -312,6 +300,7 @@ static void* __cdecl after_alloc(unsigned int* regs)
     void* ret = s_retDepth > 0 ? s_retStack[--s_retDepth] : NULL;
     const char* tag = s_allocTag[s_retDepth];
     SURF* s = ptr_ok(obj) ? surf_of_ctx(obj) : NULL;
+    if (s && tag == (const char*)(size_t)TAG_OFFSCREEN) { s->isOffscreen = 1; surf_drop_offscreens(s->base); }
     if (s && s_trace) {
         char b[200];
         _snprintf(b, sizeof b, "gui trace: alloc \"%.32s\" %dx%d base %08X (screen %s)",

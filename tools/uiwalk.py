@@ -23,10 +23,21 @@ string, the `+bps` lines, the hold-space unit popup — then the dialogs over th
 viewport at zoom 0.5x and 2x (opened at 1x, zoomed by the file lever, so no click is
 bent), and finally a moving commander for the minimap's dots and box.
 
+The cycles (G15d, `--cycles N`): after the in-game stops, N times game -> shell -> game
+in ONE process (no relaunch): the exit dialogs over the world, the return to MAINMENU
+through the 640x480 context switch, the whole shell inventory again, the loading
+screen held under strict while the map loads (a burst of bracketed shots until the
+world is alive), the fixture re-applied, the side's screens, and `+gamma` at 1.5 and
+back — the one lever that makes the engine present a palette other than main+0x143A7.
+Every row carries the layer's health counters (resets, overflows, stalls, lost,
+skipped, palette uploads and the presented-vs-engine palette mismatch), so "twin and
+atlas counts flat across three cycles" is read straight off the report.
+
     tools/uiwalk.py --inst uiw --res 1024x768 --out /tmp/uiwalk
     tools/uiwalk.py --inst uiw --shell-only
     ../.venv-undither/bin/python tools/uiwalk.py --inst uiw --res 1920x1080 --layer --out /tmp/layer
     ../.venv-undither/bin/python tools/uiwalk.py --inst uiwc --side core --layer --game-only --out /tmp/layer-core
+    ../.venv-undither/bin/python tools/uiwalk.py --inst uiwd --layer --game-only --screens-only --cycles 3 --out /tmp/cycles
 
 The instance is created if needed and STOPPED at the end (kept for inspection with
 --keep). Everything goes through tacli; nothing here touches X.
@@ -71,8 +82,10 @@ SHELL_WALK = [
 
 
 def chat(text):
-    """Type a chat line (or a `+cheat`) the way a player does: Return, the characters, Return."""
-    return [["keys", "return"], ["keys", *[f"char:{c}" for c in text]], ["keys", "return"]]
+    """Type a chat line (or a `+cheat`) the way a player does: Return, the characters, Return.
+    A space goes as the `space` key token — `char: ` is dropped, and `+gamma 15` typed that
+    way is `+gamma15`, a command that does not exist (the G15d walk's first run)."""
+    return [["keys", "return"], ["keys", *["space" if c == " " else f"char:{c}" for c in text]], ["keys", "return"]]
 
 
 def game_walk(side):
@@ -122,6 +135,45 @@ def game_walk(side):
     ]
 
 
+def cycle_walk(side, k):
+    """One game -> shell -> game cycle (G15d), every label suffixed `#k`. Three lists:
+    the exit dialogs (in game), the shell after the return (the switch to 640x480 and
+    a new GL context happens at CHOICE1), and the game after the load — the loading
+    screen between the two is its own stop (Walk.stop_loading). `EXITMENU` and
+    `YESORNO` sit over the middle of the world, so the cycle runs at zoom 1."""
+    P = side[:3].upper()
+    sfx = f"#{k}"
+    exit_stops = [
+        (f"ARMOPT-exit{sfx}", ["park", ["keys", "tab"]]),
+        (f"EXITMENU{sfx}", [["ui", "click", "EXIT"]]),
+        (f"YESORNO{sfx}", [["ui", "click", "MAINMENU"]]),
+    ]
+    # CHOICE1 = "yes, to the main menu": the engine frees the game, restores 640x480
+    # (0x491ADC) and pushes MAINMENU; cnc-ddraw restarts its render thread on a new GL
+    # context on the way, which is the switch the counters are read across
+    shell_stops = [(f"MAINMENU{sfx}", [["ui", "click", "CHOICE1"],
+                                       ["ui", "wait", "--gui", "MAINMENU", "--timeout", "30"], "wait:3.0"])]
+    shell_stops += [(f"{lbl}{sfx}", acts) for lbl, acts in SHELL_WALK[1:]]
+    shell_stops += [(f"SINGLE{sfx}b", [["ui", "click", "SINGLE"]]),
+                    # Mapped, like `scenario load` sets it: the gadget decides, not the registry
+                    (f"SKIRMISH{sfx}b", [["ui", "click", "Skirmish"], ["ui", "set", "Mapping", "1"]])]
+    game_stops = [
+        (f"{P}MAIN2{sfx}", ["apply-fixture", "wait:3.0", "park"]),
+        (f"{P}COM1{sfx}", ["select-commander"]),
+        (f"ARMOPT{sfx}", [["keys", "tab"]]),
+        (f"game-back{sfx}", [["ui", "click", "PREV", "CANCEL", "PREVMENU", "OK"], "park"]),
+        # `+gamma N` (the NORMAL cheat table, handler 0x417290) is SetGamma(N/10): the
+        # engine keeps presenting through 0x4BA200, which scales every entry by the
+        # gamma on its way to SetEntries and never touches main+0x143A7 — so this is
+        # the one play-time lever that makes the presented palette differ from the
+        # engine's table (`paldiff` > 0), and the stop where the layer's palette
+        # source is proven. 10 puts it back.
+        (f"gamma15{sfx}", [*chat("+gamma 15"), "wait:4.0"]),     # the heartbeat is 5 s apart: let it catch the change
+        (f"gamma10{sfx}", [*chat("+gamma 10"), "wait:4.0"]),
+    ]
+    return exit_stops, shell_stops, game_stops
+
+
 def tacli(*args, check=False, timeout=180):
     cmd = [sys.executable, str(TACLI), *args]
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
@@ -142,14 +194,30 @@ def instance_dir(inst):
 
 
 class Walk:
-    def __init__(self, inst, out, res, parity=False):
+    def __init__(self, inst, out, res, parity=False, scenario=None):
         self.inst, self.out, self.res = inst, Path(out), res
         self.out.mkdir(parents=True, exist_ok=True)
         self.rows = []
         self.gamedir = None
         self.log_seen = 0
         self.parity = parity
+        self.scenario = scenario
         self.W, self.H = [int(v) for v in res.lower().split("x")]
+
+    def log_size(self):
+        p = self.gamedir / "tagpu.log" if self.gamedir else None
+        return p.stat().st_size if p and p.exists() else 0
+
+    def log_since(self, offset, rx):
+        """Lines matching `rx` written to the instance's tagpu.log after byte `offset`
+        (a `tacli log` grep sees the previous game's lines too)."""
+        p = self.gamedir / "tagpu.log" if self.gamedir else None
+        if not p or not p.exists():
+            return []
+        with p.open("rb") as f:
+            f.seek(offset)
+            data = f.read()
+        return [l for l in data.decode("latin-1", "replace").splitlines() if re.search(rx, l)]
 
     def t(self, *args, **kw):
         return tacli(self.inst, *args, **kw) if args and args[0] not in ("launch", "stop", "arm", "scenario") else tacli(*args, **kw)
@@ -272,6 +340,11 @@ class Walk:
                 tacli("keys", self.inst, f"mouse:{self.W - 1},{self.H // 2}")
             elif a.startswith("wait:"):
                 time.sleep(float(a.split(":", 1)[1]))
+            elif a == "apply-fixture":
+                # the fixture back onto the game the cycle just started: apply works on
+                # a running game and clears the skirmish's own commanders first
+                rc, out = tacli("scenario", "apply", self.inst, self.scenario, timeout=300)
+                print(f"  [{label}] {out.strip().splitlines()[-1] if out.strip() else 'apply: no output'}", file=sys.stderr)
             else:
                 print(f"  [{label}] unknown verb {a}", file=sys.stderr)
             return
@@ -296,7 +369,11 @@ class Walk:
         """The layer's newest `gui: twins=` line, parsed."""
         rc, out = tacli("log", self.inst, "-g", r"^gui: twins=")
         line = out.strip().splitlines()[-1] if out.strip() else ""
-        return {k: (float(v) if "." in v else int(v)) for k, v in re.findall(r"(\w+)=([0-9.]+)", line)}
+        hb = {k: (float(v) if "." in v else int(v)) for k, v in re.findall(r"(\w+)=([0-9.]+)", line)}
+        m = re.search(r"paldiff=(\d+)@(-?\d+)", line)      # `n@first`: entries that differ, the first of them
+        if m:
+            hb["paldiff"] = int(m.group(1)); hb["paldiffat"] = int(m.group(2))
+        return hb
 
     def zoom_level(self):
         """The DLL's live zoom: the file lever logs nothing, but the mark pass's periodic
@@ -364,24 +441,94 @@ class Walk:
                  f" {parity.get('bbox', '')}{parity.get('vpbbox', '')}"
                  f"{' self=' + str(parity['selfdiff']) if 'selfdiff' in parity else ''}"
                  f" | fps={hb.get('fps', '-')} resets={hb.get('resets', '-')}"
-                 f" overflows={hb.get('overflows', '-')} atlas={hb.get('atlas', '-')}" if parity else "")
+                 f" overflows={hb.get('overflows', '-')} stalls={hb.get('stalls', '-')} lost={hb.get('lost', '-')}"
+                 f" twins={hb.get('twins', '-')} atlas={hb.get('atlas', '-')} pal={hb.get('palchg', '-')}/{hb.get('paldiff', '-')}" if parity else "")
         print(f"  {label:14s} {screen:40s} flips={summary['flips']:4d} changed={summary['changed']:7d} "
               f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{extra}", file=sys.stderr)
+
+    def stop_loading(self, label, timeout=150.0):
+        """The loading screen, held under strict. It is presented exactly ONCE: the game
+        entry handler paints it (`0x4288D0("loadgame2bg")`) and flips, and nothing presents
+        again until the map is loaded and the mode switches — a shot asked for during the
+        load blocks until then (MEASURED 2026-09-07: one sample at t = 17 s, the game's first
+        frame). So both capture triggers are armed BEFORE the click and served by that one
+        present; the row is that frame, engine surface against GL frame at 640x480, with a
+        64x64 box around the Start button's click left to the engine's cursor (no peek can
+        run: the render thread is the one that answers it). Then the world is waited for."""
+        before = time.time()
+        start = self.log_size()
+        gl_path = self.gamedir / "tagpu_gl.ppm"
+        shots = self.gamedir / "Screenshots"
+        if self.parity:
+            (self.gamedir / "tagpu_glshot.trigger").write_text("")
+            (self.gamedir / "tagpu_shot.trigger").write_text("")
+        rc, out = tacli("ui", self.inst, "click", "Start")
+        m = re.search(r"clicked Start at (\d+),(\d+)", out)
+        click = (int(m.group(1)), int(m.group(2))) if m else None
+        if rc != 0:
+            print(f"  [{label}] Start -> rc={rc}: {out.strip().splitlines()[-1] if out.strip() else ''}", file=sys.stderr)
+        t0 = time.time()
+        gl = surf = None
+        alive = False
+        switched = None                  # log offset of the game's mode switch
+        while time.time() - t0 < timeout:
+            if self.parity and gl is None and gl_path.exists() and gl_path.stat().st_mtime > before:
+                gl = self.out / f"{label}-gl.ppm"
+                shutil.copy2(gl_path, gl)
+            if self.parity and surf is None and shots.exists():
+                cands = [p for p in shots.glob("*.png") if p.stat().st_mtime > before]
+                if cands:
+                    surf = self.out / f"{label}-surface.png"
+                    shutil.copy2(max(cands, key=lambda p: p.stat().st_mtime), surf)
+            # "alive" is read only after the game's mode switch: the overlay's `units:` line
+            # keeps reporting the dead game's array from the shell (MEASURED 2026-09-07:
+            # `alive=4` two seconds after Start), so the switch — a GL context change — is
+            # the first sign the map has loaded, and the roster after it the second
+            if switched is None and self.log_since(start, r"GL CONTEXT CHANGED"):
+                switched = self.log_size() - 4096
+            if switched is not None and self.log_since(max(switched, 0), r"units: alive=[1-9]"):
+                alive = True
+                break
+            time.sleep(0.5)
+        parity = {}
+        if self.parity:
+            if gl is not None and surf is not None:
+                cur = (click[0] - 32, click[1] - 32, 64, 64) if click else None
+                parity = frame_parity(gl, surf, False, self.res, cur)
+                parity["cursor_box"] = cur
+            else:
+                parity = {"differing": -1, "holes": -1,
+                          "bbox": f"no capture (gl={'yes' if gl else 'no'} surface={'yes' if surf else 'no'})"}
+            # the triggers may still be armed if the frame never came: disarm them
+            (self.gamedir / "tagpu_glshot.trigger").unlink(missing_ok=True)
+            (self.gamedir / "tagpu_shot.trigger").unlink(missing_ok=True)
+        lines = self.census_lines()
+        summary = parse_census(lines)
+        hb = self.heartbeat() if self.parity else {}
+        row = {"label": label, "screen": "loading", "in_game": False, "lines": lines, **summary, **parity,
+               "heartbeat": hb, "zoom": None, "alive": alive, "load_s": round(time.time() - t0, 1), "samples": 1 if parity.get("differing", -1) >= 0 else 0}
+        self.rows.append(row)
+        print(f"  {label:14s} {'loading (one presented frame)':40s} differing={parity.get('differing', '-')} "
+              f"holes={parity.get('holes', '-')} {parity.get('bbox', '')} alive={alive} in {row['load_s']}s"
+              f" | resets={hb.get('resets', '-')} overflows={hb.get('overflows', '-')} stalls={hb.get('stalls', '-')} "
+              f"lost={hb.get('lost', '-')} atlas={hb.get('atlas', '-')}", file=sys.stderr)
 
     def report(self):
         p = self.out / "report.md"
         with p.open("w") as f:
             f.write(f"# uiwalk — {self.inst} at {self.res}\n\n")
             if self.parity:
-                f.write("| stop | screen | game | zoom | differing px outside the viewport | inside it, engine non-key px: differing / total | strict holes | box | engine self-diff | fps | resets | overflows | twins | atlas |\n"
-                        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+                f.write("| stop | screen | game | zoom | differing px outside the viewport | inside it, engine non-key px: differing / total | strict holes | box | engine self-diff | fps | resets | overflows | stalls | lost | skipped | twins | atlas | palette uploads / presented-vs-engine entries |\n"
+                        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
                 for r in self.rows:
                     hb = r.get("heartbeat", {})
-                    f.write(f"| {r['label']} | {r['screen']} | {'y' if r['in_game'] else ''} | {r.get('zoom') or ''} | "
+                    extra = f" (the one presented frame; loaded in {r.get('load_s', '?')} s, alive={r.get('alive')})" if "samples" in r else ""
+                    f.write(f"| {r['label']} | {r['screen']}{extra} | {'y' if r['in_game'] else ''} | {r.get('zoom') or ''} | "
                             f"{r.get('differing', '-')} | {r.get('vpdiff', '-')} / {r.get('vpui', '-')} | "
                             f"{r.get('holes', '-')} | {r.get('bbox', '')} {r.get('vpbbox', '')} | {r.get('selfdiff', '')} | "
-                            f"{hb.get('fps', '-')} | {hb.get('resets', '-')} | "
-                            f"{hb.get('overflows', '-')} | {hb.get('twins', '-')} | {hb.get('atlas', '-')} |\n")
+                            f"{hb.get('fps', '-')} | {hb.get('resets', '-')} | {hb.get('overflows', '-')} | {hb.get('stalls', '-')} | "
+                            f"{hb.get('lost', '-')} | {hb.get('skipped', '-')} | {hb.get('twins', '-')} | {hb.get('atlas', '-')} | "
+                            f"{hb.get('palchg', '-')} / {hb.get('paldiff', '-')}{'@' + str(hb['paldiffat']) if hb.get('paldiff') else ''} |\n")
                 f.write("\n")
             f.write("| stop | screen | game | censuses | changed px | unexplained px | worst census box | ops in the window |\n|---|---|---|---|---|---|---|---|\n")
             for r in self.rows:
@@ -441,7 +588,12 @@ def frame_parity(gl_path, surf_path, in_game, res, cursor=None):
         gl = np.asarray(Image.open(gl_path).convert("RGB")).astype(int)
         su, idx = load_surface(surf_path)
         if gl.shape != su.shape:
-            return {"differing": -1, "holes": -1, "bbox": f"size mismatch {gl.shape} vs {su.shape}"}
+            # the fork did not resize its window to the surface (MEASURED 2026-09-07: from the
+            # second return to the shell at 1920x1080 the window stays game-sized and the
+            # 640x480 shell is scaled into it) — the twin goes through the same scale as the
+            # engine's frame, but a pixel compare needs 1:1, so the stop is not measurable
+            return {"differing": -1, "holes": -1,
+                    "bbox": f"not 1:1 — GL frame {gl.shape[1]}x{gl.shape[0]} vs surface {su.shape[1]}x{su.shape[0]} (window not resized)"}
         d = np.abs(gl - su).max(axis=2)
         mag = (gl[..., 0] > 200) & (gl[..., 1] < 60) & (gl[..., 2] > 200)
         outside = np.ones(d.shape, bool)
@@ -544,9 +696,12 @@ def main():
     ap.add_argument("--layer", action="store_true",
                     help="G15b/G15c: draw the GL UI layer (strict) instead of running the census, and diff our frame "
                          "against the engine's surface at every stop")
+    ap.add_argument("--cycles", type=int, default=0,
+                    help="G15d: after the in-game stops, this many game -> shell -> game cycles in one process "
+                         "(the exit dialogs, the shell inventory again, the loading screen held, the fixture re-applied)")
     a = ap.parse_args()
     scenario = a.scenario or ("tascene-parity-core" if a.side == "core" else "tascene-parity")
-    w = Walk(a.inst, a.out, a.res, parity=a.layer)
+    w = Walk(a.inst, a.out, a.res, parity=a.layer, scenario=scenario)
 
     tacli("stop", a.inst)
     tacli("arm", a.inst, "gui.on=strict log" if a.layer else "gui.on=census log pgm trace", check=True)
@@ -572,6 +727,18 @@ def main():
             walk = walk[:walk.index(next(s for s in walk if s[0] == "clock"))]
         for label, actions in walk:
             w.stop_at(label, actions, in_game=True)
+        for k in range(1, a.cycles + 1):
+            exit_stops, shell_stops, game_stops = cycle_walk(a.side, k)
+            for label, actions in exit_stops:
+                w.stop_at(label, actions, in_game=True)
+            for label, actions in shell_stops:
+                w.stop_at(label, actions)
+            w.stop_loading(f"loading#{k}")
+            w.log_seen = w.log_size()          # the census window restarts with the game
+            time.sleep(3.0)
+            for label, actions in game_stops:
+                w.stop_at(label, actions, in_game=True)
+            w.report()                          # a partial report survives a killed run
     w.report()
     if not a.keep:
         tacli("stop", a.inst)
