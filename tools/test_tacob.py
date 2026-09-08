@@ -16,6 +16,8 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 tacob = SourceFileLoader("tacob", str(Path(__file__).with_name("tacob"))).load_module()
+tacob_app = SourceFileLoader(
+    "tacob_app", str(Path(__file__).with_name("tacob_app.py"))).load_module()
 OP = tacob.OP
 
 
@@ -912,6 +914,238 @@ class Serve(unittest.TestCase):
             code, _out = self.post("/transport", {"action": "step"},
                                    origin=f"http://{host}:{self.server.port}")
             self.assertEqual(code, 200, host)
+
+
+class Packaging(unittest.TestCase):
+    """Landing 5: the paths, the config and the import map the packaged folder needs.
+
+    Every one of these is a *layout* rule rather than a behaviour, and layout is
+    what breaks when the same code runs out of a PyInstaller folder instead of a
+    checkout — so each is pinned here rather than found again in a bundle, where
+    the symptom is always a path and never says which one."""
+
+    def setUp(self):
+        import os
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory(prefix="tacob-pack-")
+        self.home = Path(self.tmp.name)
+        self.old = os.environ.get("TACOB_HOME")
+        os.environ["TACOB_HOME"] = str(self.home)
+
+    def tearDown(self):
+        import os
+        if self.old is None:
+            os.environ.pop("TACOB_HOME", None)
+        else:
+            os.environ["TACOB_HOME"] = self.old
+        self.tmp.cleanup()
+
+    def test_the_user_directory_is_where_projects_and_config_go(self):
+        self.assertEqual(tacob.user_dir(), self.home)
+        self.assertEqual(tacob.projects_dir(), self.home / "projects")
+        self.assertEqual(tacob.read_config(), {})
+        tacob.write_config({"gamedir": "/somewhere", "unit": "armpw"})
+        self.assertEqual(tacob.read_config()["unit"], "armpw")
+        self.assertTrue((self.home / "config.json").is_file())
+
+    def test_a_config_that_is_not_a_dict_is_no_config(self):
+        (self.home / "config.json").write_text("[1, 2]")
+        self.assertEqual(tacob.read_config(), {})
+        (self.home / "config.json").write_text("{oops")
+        self.assertEqual(tacob.read_config(), {})
+
+    def test_the_game_folder_comes_from_the_flag_then_the_config(self):
+        import os
+        self.assertIsNone(tacob.resolve_gamedir())
+        tacob.write_config({"gamedir": str(self.home / "saved")})
+        self.assertEqual(tacob.resolve_gamedir(), str(self.home / "saved"))
+        self.assertEqual(tacob.resolve_gamedir("/asked/for"), "/asked/for")
+        # $TA3DO_GAMEDIR wins over the config, and `ta3do` is what reads it — so
+        # the answer here is None, meaning "do not override what ta3do decides".
+        os.environ["TA3DO_GAMEDIR"] = str(self.home)
+        try:
+            self.assertIsNone(tacob.resolve_gamedir())
+            self.assertEqual(tacob.resolve_gamedir("/asked/for"), "/asked/for")
+        finally:
+            os.environ.pop("TA3DO_GAMEDIR")
+
+    def test_a_folder_is_a_game_folder_when_an_archive_is_in_it(self):
+        self.assertFalse(tacob.looks_like_gamedir(self.home))
+        self.assertFalse(tacob.looks_like_gamedir(self.home / "nothing-here"))
+        (self.home / "TOTALA1.HPI").write_bytes(b"not really, but named right")
+        self.assertTrue(tacob.looks_like_gamedir(self.home))
+
+    def test_a_folder_with_no_archives_says_so_instead_of_exiting(self):
+        # ta3do.die() raises SystemExit; the packaged tool must answer with a
+        # sentence a modder can act on, and the server must be able to 400 it.
+        with self.assertRaises(tacob.TacobError) as caught:
+            tacob.load_assets(str(self.home))
+        self.assertIn("no Total Annihilation archives", str(caught.exception))
+        with self.assertRaises(tacob.TacobError) as caught:
+            tacob.load_assets(str(self.home / "not-there"))
+        self.assertIn("no game folder at", str(caught.exception))
+
+    def test_the_developer_gates_say_they_are_not_shipped(self):
+        old = tacob.FIXTURES
+        tacob.FIXTURES = self.home / "no-fixtures"
+        try:
+            with self.assertRaises(tacob.TacobError) as caught:
+                tacob.fixtures_dir()
+        finally:
+            tacob.FIXTURES = old
+        self.assertIn("does not ship them", str(caught.exception))
+
+    def test_webview2_is_never_found_off_windows(self):
+        import sys
+        if sys.platform != "win32":
+            self.assertFalse(tacob.webview2_present())
+
+
+class ImportMap(unittest.TestCase):
+    """The one rewrite that makes the page work with no network: every CDN URL in
+    its import map swapped for the copy `tacob-build.py vendor` fetched."""
+
+    PAGE = ('<html>\n<script type="importmap">\n'
+            '{ "imports": {\n'
+            '  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",\n'
+            '  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",\n'
+            '  "crelt": "https://cdn.jsdelivr.net/npm/crelt@1.0.6/index.js"\n'
+            '} }\n</script>\n<body>x</body>\n')
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory(prefix="tacob-vendor-")
+        self.vendor = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def add(self, rel, body=b"//\n"):
+        path = self.vendor / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+
+    def imports(self, text):
+        import json
+        import re
+        block = re.search(r'<script type="importmap">(.*?)</script>', text, re.S)
+        return json.loads(block.group(1))["imports"]
+
+    def test_nothing_is_rewritten_without_a_vendor_directory(self):
+        out = tacob.rewrite_import_map(self.PAGE, self.vendor / "absent")
+        self.assertEqual(out, self.PAGE)
+
+    def test_a_file_entry_is_rewritten_only_when_the_file_is_there(self):
+        self.add("npm/crelt@1.0.6/index.js")
+        imports = self.imports(tacob.rewrite_import_map(self.PAGE, self.vendor))
+        self.assertEqual(imports["crelt"], "/vendor/npm/crelt@1.0.6/index.js")
+        # not fetched: keep the CDN URL, so a half-vendored tree still loads online
+        self.assertTrue(imports["three"].startswith("https://cdn.jsdelivr.net/"))
+
+    def test_a_prefix_entry_needs_a_directory_and_keeps_its_slash(self):
+        # `three/addons/` is a prefix mapping — the map resolves
+        # `three/addons/loaders/GLTFLoader.js` through it — so it must rewrite to
+        # a path that still ends in a slash, and only when the tree is there.
+        imports = self.imports(tacob.rewrite_import_map(self.PAGE, self.vendor))
+        self.assertTrue(imports["three/addons/"].startswith("https://"))
+        self.add("npm/three@0.169.0/examples/jsm/loaders/GLTFLoader.js")
+        imports = self.imports(tacob.rewrite_import_map(self.PAGE, self.vendor))
+        self.assertEqual(imports["three/addons/"],
+                         "/vendor/npm/three@0.169.0/examples/jsm/")
+
+    def test_the_page_that_ships_has_every_entry_on_the_one_cdn(self):
+        # `tacob-build.py vendor` only knows jsdelivr, and mirrors its paths; an
+        # entry from anywhere else would be fetched by nobody and silently stay
+        # a CDN URL in the packaged folder.
+        imports = self.imports(tacob.EDITOR_HTML.read_text(encoding="utf-8"))
+        for specifier, url in imports.items():
+            self.assertTrue(url.startswith(tacob.CDN), f"{specifier} -> {url}")
+
+
+class Launcher(unittest.TestCase):
+    """The entry point's one decision: which subcommand an empty command line means."""
+
+    def test_no_arguments_means_the_window(self):
+        self.assertEqual(tacob_app.command_line([]), ["gui"])
+        self.assertEqual(tacob_app.command_line(["--no-open"]), ["gui", "--no-open"])
+        self.assertEqual(tacob_app.command_line(["armpw"]), ["armpw"])
+        self.assertEqual(tacob_app.command_line(["roundtrip", "--all"]),
+                         ["roundtrip", "--all"])
+        for flag in ("-h", "--help"):
+            self.assertEqual(tacob_app.command_line([flag]), [flag])
+
+
+class FirstRun(unittest.TestCase):
+    """The server before there is a session: the packaged tool's first run, where
+    nothing is known yet about where the game is installed."""
+
+    def setUp(self):
+        import os
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory(prefix="tacob-first-")
+        self.old = os.environ.get("TACOB_HOME")
+        os.environ["TACOB_HOME"] = self.tmp.name
+        self.server = tacob.Server(None, port=0)
+        self.server.start()
+
+    def tearDown(self):
+        import os
+        self.server.close()
+        if self.old is None:
+            os.environ.pop("TACOB_HOME", None)
+        else:
+            os.environ["TACOB_HOME"] = self.old
+        self.tmp.cleanup()
+
+    def fetch(self, path, body=None):
+        import json
+        import urllib.error
+        import urllib.request
+        data = None if body is None else json.dumps(body).encode()
+        req = urllib.request.Request(self.server.base + path, data=data,
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as res:
+                return res.status, res.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as err:
+            return err.code, err.read().decode("utf-8", "replace")
+
+    def test_the_page_at_the_root_is_the_picker(self):
+        code, body = self.fetch("/")
+        self.assertEqual(code, 200)
+        self.assertIn("Where Total Annihilation is installed", body)
+        self.assertNotIn('id="threads"', body)
+
+    def test_the_picker_says_what_it_knows_and_where_it_will_write(self):
+        import json
+        code, body = self.fetch("/setup")
+        state = json.loads(body)
+        self.assertEqual(code, 200)
+        self.assertTrue(state["needed"])
+        self.assertIsNone(state["open"])
+        self.assertTrue(state["config"].endswith("config.json"))
+        self.assertIn("projects", state["projects"])
+
+    def test_every_other_route_says_why_it_cannot_answer(self):
+        import json
+        for path in ("/state", "/pose", "/trace", "/events", "/source"):
+            code, body = self.fetch(path)
+            self.assertEqual(code, 503, path)
+            self.assertIn("no game folder yet", json.loads(body)["error"])
+        code, body = self.fetch("/transport", {"action": "step"})
+        self.assertEqual(code, 503)
+
+    def test_a_folder_that_is_not_a_game_is_refused_with_a_sentence(self):
+        import json
+        code, body = self.fetch("/setup", {"gamedir": self.tmp.name, "unit": "armpw"})
+        self.assertEqual(code, 400)
+        self.assertIn("no Total Annihilation archives", json.loads(body)["error"])
+        code, body = self.fetch("/setup", {"gamedir": "", "unit": "armpw"})
+        self.assertEqual(code, 400)
+        self.assertIn("give the folder", json.loads(body)["error"])
+        # nothing was saved, and nothing is running
+        self.assertEqual(tacob.read_config(), {})
+        self.assertIsNone(self.server.session)
 
 
 if __name__ == "__main__":

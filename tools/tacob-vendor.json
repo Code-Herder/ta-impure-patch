@@ -1,0 +1,86 @@
+{
+ "note": "pinned copies of the editor page's JavaScript; the files themselves live in tools/vendor/, which is gitignored (tools/tacob-build.py vendor)",
+ "origin": "https://cdn.jsdelivr.net/",
+ "files": {
+  "npm/@codemirror/autocomplete@6.18.6/dist/index.js": {
+   "url": "https://cdn.jsdelivr.net/npm/@codemirror/autocomplete@6.18.6/dist/index.js",
+   "sha256": "d16cdc1d6775945edb6e9e5f3385f2cc2e236be202c305c16dcbc5ddb008f213",
+   "bytes": 87833
+  },
+  "npm/@codemirror/commands@6.8.0/dist/index.js": {
+   "url": "https://cdn.jsdelivr.net/npm/@codemirror/commands@6.8.0/dist/index.js",
+   "sha256": "a8741e3d22bf8eddb2de919df6c9cb7f053fd2fb3bf671914e073144964201bf",
+   "bytes": 80943
+  },
+  "npm/@codemirror/language@6.10.8/dist/index.js": {
+   "url": "https://cdn.jsdelivr.net/npm/@codemirror/language@6.10.8/dist/index.js",
+   "sha256": "b7920ac3b3eee0344a5a11e760c1c6e50badd32bead21880f00766fdf92c1954",
+   "bytes": 101235
+  },
+  "npm/@codemirror/lint@6.8.4/dist/index.js": {
+   "url": "https://cdn.jsdelivr.net/npm/@codemirror/lint@6.8.4/dist/index.js",
+   "sha256": "fa3a1a2f33c73a46e6ac9e903a5bec780f4dcdb6ea157c9dd6add9497099d63b",
+   "bytes": 34255
+  },
+  "npm/@codemirror/state@6.5.2/dist/index.js": {
+   "url": "https://cdn.jsdelivr.net/npm/@codemirror/state@6.5.2/dist/index.js",
+   "sha256": "5fd3894867384f7ecd1c13148abd01c1347c9796555e3ad8dbe41369328f2f37",
+   "bytes": 144541
+  },
+  "npm/@codemirror/view@6.36.4/dist/index.js": {
+   "url": "https://cdn.jsdelivr.net/npm/@codemirror/view@6.36.4/dist/index.js",
+   "sha256": "cc1101d8e5b534e10942fffe75529cd09eacdf684272e244a18b9ee9e3664044",
+   "bytes": 460508
+  },
+  "npm/@lezer/common@1.2.3/dist/index.js": {
+   "url": "https://cdn.jsdelivr.net/npm/@lezer/common@1.2.3/dist/index.js",
+   "sha256": "cb55187b5a7d83f02f7493e125b41653e1d7160e0dedf8761f44b6c6d2f8e08f",
+   "bytes": 81404
+  },
+  "npm/@lezer/highlight@1.2.1/dist/index.js": {
+   "url": "https://cdn.jsdelivr.net/npm/@lezer/highlight@1.2.1/dist/index.js",
+   "sha256": "c630530aa33c3e49544272f91f3a59b46602e5bbcc81e19750a825b1abb481a4",
+   "bytes": 29288
+  },
+  "npm/@marijn/find-cluster-break@1.0.4/src/index.js": {
+   "url": "https://cdn.jsdelivr.net/npm/@marijn/find-cluster-break@1.0.4/src/index.js",
+   "sha256": "4e9e441fac9db54e09e4e3b1cb0b0393da207ebe943f2ff9efc577821fc03751",
+   "bytes": 4270
+  },
+  "npm/crelt@1.0.6/index.js": {
+   "url": "https://cdn.jsdelivr.net/npm/crelt@1.0.6/index.js",
+   "sha256": "924800defa2bf95a0bfd16dde589ecebbcd9e36b03635274da84968c77a3721e",
+   "bytes": 951
+  },
+  "npm/style-mod@4.1.2/src/style-mod.js": {
+   "url": "https://cdn.jsdelivr.net/npm/style-mod@4.1.2/src/style-mod.js",
+   "sha256": "43690e452046d6a355a1a9211c1b48aab605613ab63c0aff13f585e742e66c83",
+   "bytes": 6935
+  },
+  "npm/three@0.169.0/build/three.module.js": {
+   "url": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+   "sha256": "0a3368c165eea773490aec7b77c22de70e3eac288503409256fdbf4d12578416",
+   "bytes": 1304820
+  },
+  "npm/three@0.169.0/examples/jsm/controls/OrbitControls.js": {
+   "url": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/controls/OrbitControls.js",
+   "sha256": "80efaadea4f8a636a65fb0bd08bfef62f3d93a0bb94e2e7500f23176c5c07f4e",
+   "bytes": 32134
+  },
+  "npm/three@0.169.0/examples/jsm/loaders/GLTFLoader.js": {
+   "url": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/loaders/GLTFLoader.js",
+   "sha256": "6f1719dcc6a179d30273dfb0de07a8c898a7981f7b08e600b446387f5967371f",
+   "bytes": 110029
+  },
+  "npm/three@0.169.0/examples/jsm/utils/BufferGeometryUtils.js": {
+   "url": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/utils/BufferGeometryUtils.js",
+   "sha256": "c25b7930e570e9ec56173cd3b866ec8d2e10016630db3937efb439daf1cedbf6",
+   "bytes": 31768
+  },
+  "npm/w3c-keyname@2.2.8/index.js": {
+   "url": "https://cdn.jsdelivr.net/npm/w3c-keyname@2.2.8/index.js",
+   "sha256": "b649dec4f01c7c5eb05be4641b5b698c6938231ee50b38e17a2f0f822ca3df2e",
+   "bytes": 2630
+  }
+ }
+}

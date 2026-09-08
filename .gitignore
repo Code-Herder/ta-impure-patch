@@ -19,6 +19,12 @@
 # tacob projects: decompiled stock BOS and built COBs (game content, never tracked)
 /projects/
 
+# tacob landing 5: the pinned JavaScript the exe build fetches (tools/tacob-vendor.json
+# is the manifest and IS tracked), and PyInstaller's output
+/tools/vendor/
+/dist/
+/build/
+
 # Build artifacts
 *.o
 *.obj
