@@ -496,14 +496,14 @@ Those land in `PrimitiveStruct` (`tamem.h:1116-1133`):
 |-------------------------|-----|------------|-------|
 | `XPos`,`ZPos`,`YPos`    | 0x04/0x08/0x0C | `MOVE`/`MOVE_NOW` | 16.16 (add to the 3DO's static `OffsetX/Y/Z`) |
 | `XTurn`,`ZTurn`,`YTurn` | 0x10/0x12/0x14 | `TURN`/`SPIN`/`TURN_NOW` | `uint16` TAang (65536 = 360°) |
+| `Visible` (bit 0)       | 0x28 | `SHOW`/`HIDE`; **initialised by the model builder** | 1 = drawn |
+| `cached` (bit 1)        | 0x28 | `CACHE`/`DONT_CACHE`; set for every piece at build | 1 = casts the structure shadow |
 
 **The `tamem.h` names are TA's screen convention, not a transposition.** `0x43DF2A..0x43DF55`
 pairs `+0x04/+0x08/+0x0C` with the node's own `+0x10/+0x14/+0x18` in that order, so BOS's
 `x-axis`, `y-axis`, `z-axis` operands (0, 1, 2) really are the 3DO's X, Y and Z, and `MOVE`'s
 value is a **delta in the parent's frame added to the rest offset before any rotation**.
 [VERIFIED 2026-09-07 — `exe-reverse-engineering.md` §"The piece transform".]
-| `Visible` (bit 0)       | 0x28 | `SHOW`/`HIDE`; **initialised by the model builder** | 1 = drawn |
-| `cached` (bit 1)        | 0x28 | `CACHE`/`DONT_CACHE`; set for every piece at build | 1 = casts the structure shadow |
 
 **The loader negates X and Z.** Every offset and every vertex of the `Model3DONode` the engine
 holds is `(−x, y, −z)` of the same field in the `.3do` — a half turn about Y, baked in at load,

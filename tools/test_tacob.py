@@ -818,6 +818,102 @@ class Editor(unittest.TestCase):
         self.assertGreater(slot.shots, 0)
 
 
+class Serve(unittest.TestCase):
+    """The server the page polls, on a temporary project and no game files.
+
+    It exists mostly for the two rules a route must not break: a POST may not
+    name where the tool writes, and a page from somewhere else may not drive it."""
+
+    SOURCE = (PRELUDE + "Create()\n{\n\tspin turret around y-axis speed <180>;\n}\n"
+              "AimPrimary(heading, pitch)\n{\n\treturn (1);\n}\n")
+
+    def setUp(self):
+        import json
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory(prefix="tacob-serve-")
+        root = Path(self.tmp.name) / "unitx"
+        root.mkdir()
+        (root / "unitx.bos").write_text(self.SOURCE, encoding="latin-1")
+        (root / "project.json").write_text(json.dumps({"unit": "unitx", "class": "tank",
+                                                       "fbi": {}}))
+        self.project = tacob.Project(root)
+        self.session = tacob.Session(self.project)
+        self.server = tacob.Server(self.session, port=0)
+        self.server.start()
+
+    def tearDown(self):
+        self.server.close()
+        self.tmp.cleanup()
+
+    def get(self, path):
+        import json
+        import urllib.request
+        with urllib.request.urlopen(self.server.base + path, timeout=5) as res:
+            return json.loads(res.read())
+
+    def post(self, path, body, origin=None):
+        import json
+        import urllib.error
+        import urllib.request
+        req = urllib.request.Request(self.server.base + path,
+                                     data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        if origin:
+            req.add_header("Origin", origin)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as res:
+                return res.status, json.loads(res.read())
+        except urllib.error.HTTPError as err:
+            return err.code, json.loads(err.read())
+
+    def test_a_session_survives_a_model_it_cannot_resolve(self):
+        # ta3do.die() prints and raises SystemExit, not Exception; the session must
+        # survive it and keep what it said — this is also the no-game-directory path
+        state = self.get("/state")
+        self.assertIn("no model called", state["error"] or "")
+        self.assertEqual(state["pieces"], ["base", "turret", "barrel", "flare"])
+        self.assertIsNone(state["model"])
+
+    def test_step_poses_the_model_and_the_trace_is_cobtrace(self):
+        code, out = self.post("/transport", {"action": "step", "n": 30})
+        self.assertEqual(code, 200)
+        frame = self.get("/pose?tick=head")
+        self.assertEqual(frame["tick"], 30)
+        self.assertNotEqual(frame["ang"][1 * 3 + 1], 0)      # the turret is spinning
+        self.assertEqual(len(frame["gl"]["t"]), 3 * 4)
+        lines = self.get("/trace?from=0")["lines"]
+        self.assertTrue(lines[0].startswith("S\t0\t1\tUNITX\tCreate\t0\tE"), lines[:2])
+
+    def test_a_build_restarts_and_a_bad_one_changes_nothing(self):
+        self.post("/transport", {"action": "step", "n": 10})
+        code, out = self.post("/build", {"source": self.SOURCE.replace("<180>", "<90>")})
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(self.get("/state")["tick"], 0)      # restarted from Create
+        code, bad = self.post("/build", {"source": "Broken(\n"})
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["diagnostics"][0]["rule"], "parse")
+        self.assertEqual(self.project.bos.read_text(encoding="latin-1").count("<90>"), 1)
+
+    def test_pack_writes_only_where_the_operator_said(self):
+        outside = Path(self.tmp.name) / "outside.ufo"
+        code, out = self.post("/pack", {"out": str(outside), "install": self.tmp.name})
+        self.assertEqual(code, 200, out)
+        self.assertFalse(outside.exists(), "the request body named the output path")
+        self.assertNotIn("installed", out, "the request body named an install directory")
+        self.assertEqual(Path(out["path"]), self.project.path / "unitx.ufo")
+
+    def test_a_page_from_somewhere_else_cannot_drive_it(self):
+        code, out = self.post("/transport", {"action": "step"},
+                              origin="http://evil.example")
+        self.assertEqual(code, 403)
+        self.assertIn("cross-origin", out["error"])
+        self.assertEqual(self.get("/state")["tick"], 0)
+        for host in ("127.0.0.1", "localhost"):
+            code, _out = self.post("/transport", {"action": "step"},
+                                   origin=f"http://{host}:{self.server.port}")
+            self.assertEqual(code, 200, host)
+
+
 if __name__ == "__main__":
     unittest.main()
 

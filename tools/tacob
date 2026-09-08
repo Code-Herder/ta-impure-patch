@@ -2853,8 +2853,9 @@ class EditorWorld(UnitWorld):
             self.ignored_sets.append((self.tick, vid))
             self.unknown.add(vid)
             return
-        name = VALUE_NAMES[vid].lower()
-        self.bits[name] = value & (3 if name.startswith("standing") else 1)
+        # every id with a case is a single bit; the two 2-bit ids (STANDINGMOVE /
+        # STANDINGFIREORDERS) are read-only, so there is no 2-bit write to make
+        self.bits[VALUE_NAMES[vid].lower()] = value & 1
 # --------------------------------------------------------------------------- the lints
 
 # Every rule here is a snag that cost a live run, and each says which note holds
@@ -2956,24 +2957,33 @@ class Linter:
                 total += self.live(stmt.name, seen)
         return total
 
+    def hides(self, name, seen=None):
+        """Every piece this script hides, following the scripts it starts and calls
+        to any depth — Cavedog's own `Create` routinely goes through `InitState`
+        before it reaches the run of `hide`s, and a one-level walk misses those."""
+        seen = seen or set()
+        key = name.lower()
+        if key in seen or key not in self.by_name:
+            return set()
+        seen.add(key)
+        out = set()
+        for stmt in walk_nodes(self.by_name[key].body):
+            if stmt.kind == "piece-op" and stmt.op == "HIDE":
+                out.add(stmt.piece.lower())
+            elif stmt.kind in ("start-script", "call-script"):
+                out |= self.hides(stmt.name, seen)
+        return out
+
     def hidden_at_create(self):
-        create = self.by_name.get("create")
-        hidden = set()
-        if create is not None:
-            for stmt in walk_nodes(create.body):
-                if stmt.kind == "piece-op" and stmt.op == "HIDE":
-                    hidden.add(stmt.piece.lower())
-                if stmt.kind in ("start-script", "call-script"):
-                    child = self.by_name.get(stmt.name.lower())
-                    if child is not None:
-                        for inner in walk_nodes(child.body):
-                            if inner.kind == "piece-op" and inner.op == "HIDE":
-                                hidden.add(inner.piece.lower())
+        """(what the script hides, what the model builder hides) — kept apart so
+        the message can only claim the second when a model was actually bound."""
+        script = self.hides("create")
+        builder = set()
         if self.frame is not None:                          # 0x45AF1B does the rest
             for i, visible in enumerate(self.frame.visibility()):
                 if not visible:
-                    hidden.add(self.frame.cob_names[i].lower())
-        return hidden
+                    builder.add(self.frame.cob_names[i].lower())
+        return script, builder
 
     # -- the rules --------------------------------------------------------
     def run(self):
@@ -3046,7 +3056,8 @@ class Linter:
                      "piece 0 (extra-weapons.md snag 10).")
 
     def query_pieces(self):
-        hidden = self.hidden_at_create()
+        script_hides, builder_hides = self.hidden_at_create()
+        hidden = script_hides | builder_hides
         for fn in self.program.functions:
             if not MUZZLE_RE.match(fn.name) or not fn.params:
                 continue
@@ -3059,11 +3070,16 @@ class Linter:
                     continue
                 if expr.name.lower() in hidden:
                     continue
+                # only claim what was actually looked at: without a model bound
+                # the vertex count was never read, so 0x45AF1B cannot be quoted
+                builder = ("and the model builder does not hide it either (it has three or "
+                           "more vertices, so 0x45AF1B leaves it visible)"
+                           if self.frame is not None else
+                           "and no model was bound, so whether 0x45AF1B hides it — fewer "
+                           "than three vertices — was not checked")
                 self.add("query-piece-shown", "warning", stmt, fn.name,
-                         f"{fn.name} hands back the muzzle {expr.name}, which Create never "
-                         f"hides and "
-                         "the model builder does not hide either (it has three or more "
-                         "vertices, so 0x45AF1B leaves it visible). A muzzle flare left "
+                         f"{fn.name} hands back the muzzle {expr.name}, which nothing "
+                         f"reachable from Create hides {builder}. A muzzle flare left "
                          "showing is the cone every modder sees stuck on the hull.")
 
     def unknown_pieces(self):
@@ -3951,15 +3967,24 @@ class Session:
         """The piece frame the pose and every position `get` need. Without the
         game's archives the session still runs — the pieces just have no offsets,
         and `get PIECE_XZ` says so by answering from the unit's own origin."""
+        import contextlib
+        import io
+        said = io.StringIO()
         try:
-            ta3do = load_ta3do()
-            assets = ta3do.Assets(self.gamedir)
-            _label, blob = ta3do.resolve_model(assets, self.project.unit)
-            self.root3do = ta3do.parse_3do(blob)
-            self.weapons = weapon_table(assets)
-        except Exception as err:                       # no game dir: keep going
+            # `ta3do.die()` prints to stderr and raises SystemExit, which
+            # `except Exception` lets straight past — so a missing game directory or
+            # an unresolvable model used to take `tacob serve` down with it. Keep
+            # what it said; it is the only explanation of why there is no model.
+            with contextlib.redirect_stderr(said):
+                ta3do = load_ta3do()
+                assets = ta3do.Assets(self.gamedir)
+                _label, blob = ta3do.resolve_model(assets, self.project.unit)
+                self.root3do = ta3do.parse_3do(blob)
+                self.weapons = weapon_table(assets)
+        except (Exception, SystemExit) as err:
             self.root3do, self.weapons = None, {}
-            self.error = f"assets: {err}"
+            why = said.getvalue().strip() or str(err) or "no game directory"
+            self.error = f"assets: {why.splitlines()[-1]}"
 
     # -- build ------------------------------------------------------------
     def _diag(self, rule, err):
@@ -4176,6 +4201,16 @@ class Server:
                     self.send({"error": f"{type(err).__name__}: {err}"}, code=500)
 
             def do_POST(self):
+                # Every POST here changes something — it builds, restarts, writes the
+                # project's BOS and COB, or packs. `Content-Type: text/plain` makes a
+                # cross-origin POST a *simple* request with no preflight, so a page
+                # in the user's browser that guessed this ephemeral port could drive
+                # it. A same-origin `fetch` sends no Origin header at all (or ours),
+                # so refusing a foreign one costs the page nothing.
+                origin = self.headers.get("Origin")
+                if origin and not outer.is_ours(origin):
+                    return self.send({"error": f"refused: cross-origin POST from {origin}"},
+                                     code=403)
                 length = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(length) if length else b"{}"
                 try:
@@ -4235,14 +4270,19 @@ class Server:
                 elif path == "/world":
                     self.send(outer.set_world(body))
                 elif path == "/pack":
-                    into = body.get("install") or outer.gamedir
-                    if into:
-                        out, names, written = s.project.install(into, body.get("out"))
+                    # Where it writes is the *operator's* choice (`serve --install`),
+                    # never the request's: the body cannot name a path. A POST here
+                    # is a simple cross-origin request — `text/plain` needs no
+                    # preflight and this handler parses any body as JSON — so a page
+                    # that guessed the port could otherwise have written a file
+                    # anywhere the user can write.
+                    if outer.gamedir:
+                        out, names, written = s.project.install(outer.gamedir)
                         self.send({"path": str(out), "entries": names,
                                    "bytes": out.stat().st_size,
                                    "installed": [str(w) for w in written]})
                     else:
-                        out, names = s.project.pack(body.get("out"))
+                        out, names = s.project.pack()
                         self.send({"path": str(out), "entries": names,
                                    "bytes": out.stat().st_size})
                 elif path == "/template":
@@ -4263,6 +4303,13 @@ class Server:
     @property
     def base(self):
         return f"http://{self.host}:{self.port}"
+
+    def is_ours(self, origin):
+        """Our own page, however the operator spelled the loopback host. `null` is
+        what a `file://` page sends, and this server is never opened from one."""
+        parsed = urllib.parse.urlsplit(origin)
+        return (parsed.scheme == "http" and parsed.port == self.port
+                and parsed.hostname in ("127.0.0.1", "localhost", "::1", self.host))
 
     def start(self):
         self.thread.start()
