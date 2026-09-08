@@ -238,7 +238,7 @@ def cmd_build(args):
     if args.clean and (dist / "tacob").is_dir():
         shutil.rmtree(dist / "tacob")
     # Relative paths, run from the checkout root: Wine maps the working directory,
-    # and nothing absolute from the build host ends up in the build log or the spec.
+    # so no absolute path of whoever built it reaches the build log or the spec.
     wine(WINE_PY, "-m", "PyInstaller", "--noconfirm", "--distpath", "dist",
          "--workpath", "build/pyinstaller", "tools/tacob.spec", cwd=ROOT)
     folder = dist / "tacob"
