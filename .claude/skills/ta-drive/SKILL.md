@@ -1086,6 +1086,7 @@ tools/tacli gui <i>               # report
 tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= fps=
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --layer --out /tmp/uiwalk
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --side core --layer --game-only --out /tmp/uiwalk-core
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --layer --cycles 3 --out /tmp/uiwalk-cycles   # G15d: three game->shell->game cycles
 ```
 
 - `uiwalk.py --layer` arms `strict`, walks the shell and a game by gadget name, and at every
@@ -1115,9 +1116,34 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
   the file lever itself logs nothing. The walk arms `mark.on=log` for that and records the
   level per stop.
 - Read `gui: ARMED flip@0x4C63A0=1 leaves=16/16` at launch, then `gui: layer ON` and
-  `gui: GL ready`. `resets=` counts fresh starts (3 per launch is normal: the arm, the shell→game
-  context switch, the game's mode switch); `overflows=` must stay 0; `lost=` sprites whose bytes
-  never arrived (each forces a reseed) should be 0.
+  `gui: GL ready`. **`resets=` is 2 per launch (the arm, the shell→game switch) and +1 per
+  context switch after that** — each one is logged with its reason (`gui: reset #n: stall-over
+  …`; the other reasons are `arm`, `gl-context`, `queue-full`, `arena-full`,
+  `box-outside-surface`, `lost-sprite`, `atlas-full`, `untwinned-copy`) when `log` is in the
+  trigger, so a count that grows without a switch has a name. `overflows=` and `lost=` must stay
+  0; `stalls=` is 1 per context switch (the publisher dropping batches while the render thread
+  is dead or crawling — G15d), `skipped=` the stale ops the render thread stepped over after a
+  context change. `palchg=` counts palette uploads (a fade is a run of them; a switch costs a
+  few) and `paldiff=n@i` the entries where the presented palette differs from `main+0x143A7`
+  and the first of them: 0 in game, 1 (index 9) in the shell — and 255 after `+gamma 15`.
+- **The presented palette is not `main+0x143A7`**: the engine scales every palette it sets by
+  the Gamma option on the way to DirectDraw (`SetGamma 0x4BA590`, `0.5 + Gamma/24`, 1.0 at the
+  default 12) and never scales its table. **`+gamma N` typed in chat sets the factor to N/10 at
+  once** (`+gamma 15`, `+gamma 10` back) with no cheat bit, and is the lever that makes the two
+  differ in a skirmish; the UI layer follows the presented palette (cnc-ddraw's, also what
+  `tacli shot`'s PNG carries), the world passes read `+0x143A7` and go wrong by the factor.
+- **The cycles (G15d): `--cycles N`** runs, after the in-game stops, N times game → shell → game
+  in the same process: `park`, Tab, `EXIT`, `MAINMENU`, `CHOICE1` (the return: the game freed,
+  640×480 restored, a new GL context), `ui wait --gui MAINMENU`, the whole shell inventory
+  again, `SINGLE`, `Skirmish`, `ui set Mapping 1`, then **the loading screen held under
+  `strict`** (`Walk.stop_loading`: `Start`, then a bracketed surface/GL/surface triple every
+  second until `units: alive=` appears *after* the click — read the log by byte offset, a
+  `tacli log` grep sees the previous game's lines — the row is the worst sample and the count),
+  `scenario apply` of the fixture (works on a running game; the skirmish's own commanders are
+  cleared), the side's screens, `+gamma 15` and `+gamma 10`. `EXITMENU` and `YESORNO` sit over
+  the middle of the world, so the cycle runs at zoom 1. A full run — shell, 32 game stops, three
+  cycles — is ~110 stops and ~30 minutes: `setsid nohup … & disown` and poll the log; three
+  instances at once are fine for parity, not for the fps column.
 - **A frame rate for any DLL, the module's own heartbeat aside**: the overlay logs a `units:`
   line every 30 presented frames, so timing their arrival in `tagpu.log` from outside is an
   fps meter that needs no code — `30 × intervals / elapsed` (the G15b measurement used exactly

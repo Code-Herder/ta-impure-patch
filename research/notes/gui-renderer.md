@@ -334,7 +334,7 @@ One finished unit each; the engine's surface is the oracle throughout.
 | **G15a** census — **done 2026-09-07, §9** | observer detours on every pixel-writing leaf, the flip marker, the whole-surface diff, the allocator/free pair, the walk script (`tools/uiwalk.py`); **no drawing** | writer table in [the engine map](exe-reverse-engineering.html) (leaf, convention, call sites, surfaces written); unexplained pixels under 1 % on every inventory screen or every remaining writer named; the minimap's draw path located; the two stale claims in `ui-markers.md` §4 and `frame-composition.md` §1 corrected | a core screen with a large untraceable writer → that surface is seed-only, the plan proceeds |
 | **G15b** twins, in game, Classic — **done 2026-09-07, §10** | the `tagpu_gui_*` module: registry, seed, queue, replay, the three op kinds, the index twin (the colour twin is G15e's), the composite seam, `strict`, trigger, tacli verb, the default arm set, the transient viewport clear | side panel, build pages, top and bottom bars at 1024×768: 0 differing pixels outside the cursor, 0 holes; fps fixtures within half a frame; ring peak and overflows logged; parity md5 unchanged with the trigger absent; 1080p run and recorded | replay cannot hold 60 fps at `200v200` → collapse identical per-frame ops before anything else (**it happened, for a different reason — §10**) |
 | **G15c** the rest of the frame — **done 2026-09-07, §11** | chat, the F4 and hold-SPACE box, the option screens over the viewport, the `+clock` and `+bps` strings, the minimap's picture, dots and box, the mode-switch panel painter at 1080p; the `LIGHTBAR` wipe located but not reached (§11); nothing new in the DLL — the walk gained a side switch, nineteen stops, the in-viewport measure and a bracketed shot, plus the CORE fixture | whole in-game inventory clean under `strict`, ARM and CORE, at 1024×768 and 1920×1080: 32 of 32 stops at 0/0/0 in all four runs; dialogs over the viewport exact at 0.5× and 2× | — |
-| **G15d** the shell | registry reset and re-seed across the 640×480 context switch, the shell inventory, the loading screen, palette behaviour measured (`guipal`, fades) | shell inventory clean under `strict` at 640×480; three entry/exit cycles with twin and atlas counts flat; any fade visually identical to the engine's | — |
+| **G15d** the shell — **done 2026-09-07, §12** | the publisher's stall guard and the render thread's skip-to-reset across the context switch (the storm the first cycle showed: 38 overflows, 39 resets, 705 lost sprites per return), the main offscreen's direct free handled, every reset logged with its reason, the twin resolved through the **presented** palette (gamma-scaled by the engine on its way to DirectDraw, never in `main+0x143A7`), the loading screen captured at its one present, the walk's `--cycles` | shell inventory clean under `strict` at 640×480 on every visit; three entry/exit cycles with twins and atlas back to the same counts, one reset per switch, 0 overflows, 0 lost; the loading screen exact; `+gamma 15` presented right while every `+0x143A7` reader is wrong | — |
 | **G15e** Classic++ UI | the UI atlas's restored twin (job priority 4, lazy on first draw), the palette-validity rule, the `uirestore` policy, the twin dump and diff | Q2 bar against G15-0's offline output on every frame the walk draws; sheets judged by the owner; fps unchanged; a fade shows indexed art, never wrong colour | per-class exclusion per G15-0 |
 
 **Landings and reviews** per the house rule: G15b and G15c land separately — G15b is the
@@ -365,8 +365,22 @@ shell scaling and in-game scaling.
 
 ## 7. Open  [OPEN]
 
-- Whether the shell changes the palette: `guipal` at game entry is verified, fades are a corpus
-  gloss (`main+0x3907F..0x3908B` "menu fades") with no disassembly behind it. G15d measures.
+- ~~Whether the shell changes the palette~~ — **G15d**: it does not, and `guipal` is the GUI's
+  *logical* palette (256 entries matched into `main+0xDCB`), never the live table; the corpus's
+  "menu fades" are the campaign glamour screen's (`0x41DA60`, `0x41DFC0`, `0x41E270`), which no
+  skirmish reaches. What *does* differ is the screen's palette: the engine scales every palette
+  it sets by the Gamma option on the way to DirectDraw and never scales `+0x143A7` — the twin
+  follows the presented one since G15d; **the world passes still read `+0x143A7` and are wrong
+  by the factor at any Gamma but 12** (engine map, "The palette the screen is presented with").
+- **The fork keeps the game-sized window on the second return to the shell** (G15d, MEASURED at
+  1920×1080: the first return gives a 640×480 window, the second and third a 1912×1040 client
+  with the 640×480 shell scaled into it) — cnc-ddraw's `WM_SIZE` → `dd_SetDisplayMode(0,0,0,0)`
+  path against the engine's `SetWindowPos(640,480)` at `0x491AFB`, not the layer (which draws
+  through the same viewport transform as the engine's frame). Those stops are reported "not
+  1:1" and not measured. Whose, and why only from the second time, is open.
+- The publisher's cadence is the census's 5 ms, three times the present rate in game, and every
+  batch re-reads the box bytes of every non-sprite op (~150 KB): a cadence tied to the present
+  would cut the arena traffic threefold and the stall guard's high-water marks with it.
 - ~~Where the minimap picture and radar dots are drawn~~ — **G15a**: `DrawMinimap 0x466B00`
   at `0x46961F`, a copy of `main+0x142DB` plus the view box; the dots are drawn into that
   composite by `0x466DC0` from the sim side (engine map, "The minimap, located").
@@ -899,3 +913,154 @@ binary is G15b's, byte for byte (`git diff main...HEAD -- tagpu` is empty).
   60 fps), the 1080p parity fixture not static (the geo-vent puff), `MAX_SURF 24` /
   `MAX_TWINS 32` never approached (twins peak at 10 in the inventory, the atlas at 132 of 4 096).
 - The shell's context-switch cycles are G15d's; Classic++ art G15e's.
+
+## 12. G15d — the shell across the context switch, the loading screen, the palette  [MEASURED 2026-09-07]
+
+**Built.** Four things in the DLL, none of them a patch: the publisher stops publishing while
+the render thread is dead or crawling, the render thread steps over the stale queue after a
+context change, the main offscreen's direct free is handled, and the twin resolves through the
+palette the engine's frame is *presented* with. Plus `tools/uiwalk.py --cycles N` — the exit
+dialogs, the return, the shell inventory again, the loading screen at its one present, the
+fixture re-applied, `+gamma` — and a heartbeat that names every reset. The engine facts are in
+the [engine map](exe-reverse-engineering.html), "The palette the screen is presented with, the
+way out of a game, and the loading screen".
+
+### What the first cycle showed
+
+`tacli`'s `EXIT → MAINMENU → CHOICE1` from a running game, three times in one process, on
+G15c's DLL: every return to the shell cost **38 overflows, 39 resets and 705 lost sprites**,
+the same three numbers each time, and every start of the next game 2 more resets. Twins and
+atlas came back to the same figures (the atlas is emptied by the context change anyway), so
+the gate's literal exit held while the layer thrashed through every switch. Three mechanisms,
+read from the code and then from the reset reasons once they were logged:
+
+- **The consumer dies, or crawls.** cnc-ddraw stops its render thread inside every
+  `SetDisplayMode` and starts a new one on a new GL context; on the way out of a game the old
+  thread's last presents come hundreds of milliseconds apart while the game thread is in the
+  exit path (`0x491AA0..`), and the shell is already flipping ~5 000 times a second. The
+  publisher kept publishing into a queue nobody drained — and it publishes a lot: a batch every
+  5 ms carrying the box bytes of every non-sprite op (~150 KB in game: the minimap copy, the
+  bars, the strings), so the 16 MB arena is **half a second** of backlog. Then the overflow
+  policy reset and re-seeded into the full arena at every cadence: `arena-full` 24 times in
+  120 ms, with 3 643 ops queued. A time rule alone never fired, because the tail *was* creeping.
+- **The stale queue was replayed into a fresh context.** The render thread's `glreset` emptied
+  the twins and the atlas, then drained ops published before the producer knew: every sprite
+  among them, whose bytes had been sent long ago, was `lost` — 705, deterministic, the shell's
+  first batches — and each raised `reseed` again.
+- **The main offscreen is freed to the heap, not through `SurfaceFree`** (`MEM_Free` at
+  `0x491AB8` and at `0x49838C`), and the next `"OFFSCREEN"` may land on the same base (a
+  same-base size change) or on another. In the first case the ring still held 1024-wide boxes
+  against a 640-wide surface — one `box-outside-surface` overflow per switch; in the second the
+  dead entry stayed registered — the census walked it and **crashed** on the first return
+  (an access violation at the old base, once the heap had returned the block), and one of the
+  24 surface slots leaked per cycle.
+
+### How it works as built
+
+- **The stall guard** (`consumer_stalled()`, game thread, at every publish): the batch is dropped
+  — nothing queued, no counter but `stalls=` moves, once per episode — when the tail has not
+  moved for 250 ms with work queued, *or* when the backlog is past half the arena or a quarter
+  of the ring; publishing resumes, with one reseed (`stall-over`), once the queue is empty or
+  the backlog under the low-water marks. A long render hitch (the terrain atlas at a map's first
+  frame, a screenshot) counts as a stall and costs one reseed, which is the cheap side.
+- **Skip to reset** (render thread): after `tagpu_gui_glreset` the drain takes the arena bytes of
+  every op and applies none until the producer's `RESET` arrives (`skipped=`).
+- **The offscreen's identity**: a surface created with the tag `"OFFSCREEN"` (`0x5091D4`, the
+  five sites) retires every other entry so tagged — the engine has one at a time — and a
+  same-base size change forgets the ring's boxes on that base. The census also probes a
+  surface's first and last row before diffing it and drops one that is unmapped.
+- **Every reset is logged with its reason** under `log` (`gui: reset #n: <why> (queued= arena=
+  surfaces=)`), and the heartbeat gained `stalls= skipped= palchg= paldiff=n@i palsrc=`.
+- **The palette.** Every palette the engine sets goes through `0x4BA200`, which keeps the
+  entries in the graphics globals and hands DirectDraw `min(255, entry × gamma)` with the gamma
+  from the Gamma option (`SetGamma 0x4BA590`, `0.5 + Gamma/24`, 1.0 at the default 12) — and
+  never scales `main+0x143A7`. The engine's own pixels beneath the twin are shown by cnc-ddraw
+  through the palette its `SetEntries` received, so that is what the twin resolves through now:
+  the primary's palette object in this DLL, read under the fork's lock, the engine's table the
+  fallback until a primary exists. `+gamma N` in chat (`0x417290`) sets the factor to N/10 from
+  any skirmish, which is how the walk proves it. `guipal`, loaded at game entry, turned out to
+  be the GUI's *logical* palette (256 entries nearest-matched into `main+0xDCB`), and the
+  "menu fades" of the corpus are the campaign glamour screen's palette stepper, which nothing a
+  skirmish does reaches — whatever runs it, each step is a `SetEntries` the twin's palette
+  texture is re-uploaded from at the next present.
+- **The loading screen is presented once.** Game entry paints `loadgame2bg` (`0x4288D0`, not the
+  palette init the resolution page called it) and flips; nothing presents again until the map
+  is loaded and the mode switches — a shot asked for during the load blocks until the game's
+  first frame. So the walk arms both capture triggers *before* clicking `Start`, and the fork's
+  surface-shot trigger is now polled every present like the GL one (it was every eighth, and
+  that frame is one). The world is then waited for after the mode switch, because the overlay's
+  `units:` line keeps reporting the dead game's array from the shell.
+
+### Measured
+
+`tools/uiwalk.py --layer --cycles 3` (`strict`, every world pass armed), a lone ARM instance at
+1024×768: the shell inventory, 32 in-game stops, then three game→shell→game cycles — the exit
+dialogs, the whole shell inventory again, the loading screen, the fixture re-applied, the side's
+screens, `+gamma`. **120 stops, every one clean**: 0 differing outside the viewport, 0 inside it
+(every non-key engine pixel matched), 0 holes — except the shell's `MAINMENU` and its two
+`-back` returns, whose 179–192 differing pixels are the sparkle animation between the two shots,
+as in G15b. Across the run: **`overflows` 0, `lost` 0, `resets` 10** (2 per launch + 1 per the 8
+context switches three cycles make), each logged with its reason — every one after the first two
+is `stall-over`; **`stalls` 9**, one per switch. Twins and the atlas returned to the same figures
+each cycle (the atlas is emptied by the context change regardless). The `stall-over` guard cost
+one reseed per switch where G15c's DLL cost **38 `arena-full` overflows, 39 resets and 705 lost
+sprites** — the storm the first cycle exposed, gone.
+
+| what | 1024×768, 3 cycles |
+|---|---|
+| stops clean (0 out / 0 in / 0 holes) | **120 of 120** (bar the sparkle skew on 3 shell stops) |
+| the loading screen, each cycle | 0 differing, 0 holes, engine surface = GL frame at 640×480 |
+| `+gamma 15` (in game) | 235 palette entries differ from `main+0x143A7` (first at index 1), and the twin still matches the engine's frame **0 / 0**; `+gamma 10` puts it back to 0 |
+| `overflows` / `lost` / `resets` / `stalls` | 0 / 0 / 10 (all but 2 `stall-over`) / 9 |
+
+**The census, over one full cycle** (`--game-only --screens-only --cycles 1`, no layer):
+**9 498 973 pixels changed on the presented surface across 38 stops, 0 unexplained** — the
+loading screen among them (1 638 444 changed, 0 unexplained, over its 9 flips before the mode
+switch). The residuals on *other* surfaces were the known ones (the startup `OFFSCREEN` written
+whole, the `SAVE UNDER` snapshots) plus, once, the line the fix added: `surface … is unmapped —
+freed behind the observer, dropped`, where the census retired the game's freed offscreen instead
+of faulting on it.
+
+**The palette proof.** `paldiff=n@i` in the heartbeat is the number of entries where the palette
+the engine presents with differs from `main+0x143A7`, and the first: **0 in game at the default
+Gamma, at most 1 (index 9) in the shell, 235 (from index 1) after `+gamma 15`** — and at every
+one the twin's own frame matched the engine's exactly, because both go through the presented
+palette. A pass reading `+0x143A7` would be wrong by those 235 entries; that is the open item
+below.
+
+**At 1920×1080, the same walk (game inventory + 3 cycles), a lone instance: 88 of 88 stops
+clean**, loading screen exact each cycle, `+gamma 15` = 235@1 each cycle, `overflows` 0,
+`lost` 0, `resets` 8, `stalls` 7. Two caveats, both run down:
+
+- **The holes are a concurrent-load artifact.** A first 1080p pass run *beside two other
+  instances* painted magenta at two stops — `YESORNO#1` (39 800 px) and `ARMOPT#3` (9 734 px),
+  the just-opened dialog — where a stall was in flight and the `glshot` caught the twin a frame
+  behind its reseed; `selfdiff` 0, so the engine's own frame had not moved. Alone, every one of
+  those stops is 0/0/0 (above). And it is a `strict`-only artifact: with the fallback on (a
+  player), a twin a frame behind shows the engine's own pixels, never magenta.
+- **One isolated pass lost its instance at the *third* in-process map load** (no `ErrorLog`, so
+  not a TA fault — the process exited). It did not reproduce: the 1024×768 run does three full
+  cycles, the loaded 1080p run did three, and this lone 1080p run on the landing DLL did three,
+  none dying. While chasing it a real bug was found and fixed — `surf_drop_offscreens` took a
+  `SURF*` that `surf_drop`'s swap-remove can move, so it now keys on the base — which is the DLL
+  these numbers are from; whether that was the cause is unproven, since the death never recurred
+  to test against.
+
+### Not closed here
+
+- **The world passes read `main+0x143A7`** and are wrong by the gamma factor at any Gamma but
+  12 (or after `+gamma`): the UI twin is right and the terrain, units, features and effects
+  beneath it are not. The fix is the same source, in `tagpu_native.c`'s palette upload; it is
+  not a UI change and was not made here.
+- **The fork keeps the game-sized window from the second return to the shell** (§7): at
+  1920×1080 the first return gives a 640×480 window and the next two a 1912×1040 client with the
+  shell scaled into it; those stops are reported "not 1:1" and not measured. The layer draws
+  through the same viewport transform as the engine's frame, so what the player sees is
+  consistent — but blurry, and it is cnc-ddraw's window policy that changed, not ours.
+- The shell's `SOUND` screen is still not reached (the button is not named `SOUND`/`SOUNDS`);
+  the walk reports it and moves on, as it did in G15b.
+- The `LIGHTBAR` wipe and the glamour fade are reached by the campaign flow only; neither is
+  captured frame by frame. The fade's every step is a `SetEntries` the layer follows by
+  construction, and its code is now read (engine map).
+- The publisher's 5 ms cadence, three times the present rate in game, and the per-flip clear:
+  §7.
