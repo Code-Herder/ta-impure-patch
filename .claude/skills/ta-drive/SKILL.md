@@ -1085,14 +1085,35 @@ tools/tacli gui <i> remove        # un-arm entirely at the next launch
 tools/tacli gui <i>               # report
 tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= fps=
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --layer --out /tmp/uiwalk
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --side core --layer --game-only --out /tmp/uiwalk-core
 ```
 
 - `uiwalk.py --layer` arms `strict`, walks the shell and a game by gadget name, and at every
   stop takes the engine's surface and our GL frame and counts differing pixels (outside the
-  world viewport in game, the cursor rect excluded) and magenta holes; `report.md` has one row
-  per stop with the heartbeat's fps/resets/overflows. The bar is **0 and 0 on every stop** —
-  except `MAINMENU`, whose ~185 differing pixels are its sparkle animation between the two
-  shots, single scattered pixels in the sky. Run it with the venv's python (numpy + PIL).
+  world viewport in game, and inside it where the engine drew a non-key pixel; the cursor rect
+  excluded) and magenta holes; `report.md` has one row per stop with the heartbeat's
+  fps/resets/overflows. The bar is **0, 0 and 0 on every stop** — except `MAINMENU`, whose
+  ~185 differing pixels are its sparkle animation between the two shots, single scattered
+  pixels in the sky. Run it with the venv's python (numpy + PIL).
+- **The in-game walk is side-aware and reaches the HUD extras (G15c).** `--side core` runs the
+  CORE parity fixture (`scenarios/tascene-parity-core.json`) and walks `CORMAIN2`/`CORCOM1`/`2`
+  with the `COR*` pagers; the in-game menu is `ARMOPT.GUI` on both sides. After the screens the
+  walk types `+clock` and `+bps` in chat, holds SPACE over the commander (the Kills/Losses box,
+  F4's twin), opens the menu, PREFS and F4 at 1x and then zooms them to 0.5x and 2x by writing
+  `tagpu_zoom.txt` (so no click is bent), walks the commander for the minimap's dot, and
+  releases the eye and edge-scrolls for the view box. `--screens-only` stops after the G15b
+  inventory. Inside the viewport the walk compares only where the engine's surface is not the
+  terrain key (index 254 in the 8-bit PNG `tacli shot` writes) — that is what `strict` calls a
+  UI pixel there — and reports `vpdiff/vpui` per stop; the cursor rect (`*0x51FBD0+0x1B6/+0x1BA`,
+  size from the record at `+0x1B2`), padded 8 px because the sprite animates between the two
+  shots, is excluded everywhere. The clock stop is taken with the menu open: `ARMOPT` pauses
+  the sim and the seconds with it (the game clock is the tick `main+0x38A47` ÷ 30).
+- **`ARMOPT` is not over the viewport** — its record is `xpos=0 ypos=128 128×352`, the side
+  panel's rect; it replaces the build panel and pauses the game (`PAUSED` in the middle of
+  the world). The screens over the world are `PREFS`, `VISUALRT`, the F4/SPACE box and the chat.
+- **The live zoom is readable from `mark.on=log`**: its line every 120 frames carries `zoom=`;
+  the file lever itself logs nothing. The walk arms `mark.on=log` for that and records the
+  level per stop.
 - Read `gui: ARMED flip@0x4C63A0=1 leaves=16/16` at launch, then `gui: layer ON` and
   `gui: GL ready`. `resets=` counts fresh starts (3 per launch is normal: the arm, the shell→game
   context switch, the game's mode switch); `overflows=` must stay 0; `lost=` sprites whose bytes

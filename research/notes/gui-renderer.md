@@ -333,7 +333,7 @@ One finished unit each; the engine's surface is the oracle throughout.
 | **G15-0** offline art spike — **run 2026-09-07, §8; verdict pending** | `tools/undither/uiart.py`, seven contact sheets, the consistency table | the owner's per-class verdict; the default `uirestore` exclude list written down | no class passes → Classic++ UI dropped from phase 1, UI-aware fine-tune filed as a candidate; the Classic half unaffected |
 | **G15a** census — **done 2026-09-07, §9** | observer detours on every pixel-writing leaf, the flip marker, the whole-surface diff, the allocator/free pair, the walk script (`tools/uiwalk.py`); **no drawing** | writer table in [the engine map](exe-reverse-engineering.html) (leaf, convention, call sites, surfaces written); unexplained pixels under 1 % on every inventory screen or every remaining writer named; the minimap's draw path located; the two stale claims in `ui-markers.md` §4 and `frame-composition.md` §1 corrected | a core screen with a large untraceable writer → that surface is seed-only, the plan proceeds |
 | **G15b** twins, in game, Classic — **done 2026-09-07, §10** | the `tagpu_gui_*` module: registry, seed, queue, replay, the three op kinds, the index twin (the colour twin is G15e's), the composite seam, `strict`, trigger, tacli verb, the default arm set, the transient viewport clear | side panel, build pages, top and bottom bars at 1024×768: 0 differing pixels outside the cursor, 0 holes; fps fixtures within half a frame; ring peak and overflows logged; parity md5 unchanged with the trigger absent; 1080p run and recorded | replay cannot hold 60 fps at `200v200` → collapse identical per-frame ops before anything else (**it happened, for a different reason — §10**) |
-| **G15c** the rest of the frame | chat, F4 and bottom dialogs, `ARMOPT` over the viewport, HUD text and clock, minimap picture, dots and box, `LIGHTBAR`, the mode-switch panel painter | whole in-game inventory clean under `strict`, ARM and CORE; dialogs over the viewport verified at 0.5× and 2× | — |
+| **G15c** the rest of the frame — **done 2026-09-07, §11** | chat, the F4 and hold-SPACE box, the option screens over the viewport, the `+clock` and `+bps` strings, the minimap's picture, dots and box, the mode-switch panel painter at 1080p; the `LIGHTBAR` wipe located but not reached (§11); nothing new in the DLL — the walk gained a side switch, nineteen stops, the in-viewport measure and a bracketed shot, plus the CORE fixture | whole in-game inventory clean under `strict`, ARM and CORE, at 1024×768 and 1920×1080: 32 of 32 stops at 0/0/0 in all four runs; dialogs over the viewport exact at 0.5× and 2× | — |
 | **G15d** the shell | registry reset and re-seed across the 640×480 context switch, the shell inventory, the loading screen, palette behaviour measured (`guipal`, fades) | shell inventory clean under `strict` at 640×480; three entry/exit cycles with twin and atlas counts flat; any fade visually identical to the engine's | — |
 | **G15e** Classic++ UI | the UI atlas's restored twin (job priority 4, lazy on first draw), the palette-validity rule, the `uirestore` policy, the twin dump and diff | Q2 bar against G15-0's offline output on every frame the walk draws; sheets judged by the owner; fps unchanged; a fade shows indexed art, never wrong colour | per-class exclusion per G15-0 |
 
@@ -780,10 +780,122 @@ the smoke test's frame differs from the reference by the one cursor pixel main i
 
 - The shell is measured clean at every stop but its entry/exit cycles (twin and atlas counts
   flat across three context switches, the loading screen, the palette) are G15d's; the
-  whole-inventory run on CORE and the dialogs over the viewport at 0.5× and 2× are G15c's.
+  whole-inventory run on CORE and the dialogs over the viewport at 0.5× and 2× were G15c's (§11, done).
 - A **clear is published per engine flip** the fill sequence advanced on, and the engine
   free-runs its flip — in a batch of *n* flips only the last clear can matter for the final
   state, so *n−1* of them are wasted scissored clears of the viewport. Cheap at 1024×768;
   see the 1080p row above for whether it is cheap there.
 - `tagpu_gui_snap.c` (the gadget snapshot behind `tacli ui`) was moved into the family by G15a
   unchanged; `tagpu_gui_art.c` does not exist yet — the atlas lives in `tagpu_gui_surf.c` (§4).
+
+## 11. G15c — the rest of the in-game frame  [MEASURED 2026-09-07]
+
+**Built: nothing in the DLL.** G15b's layer already carried every writer of the in-game frame;
+what G15c owed was to *reach* them and measure. So the landing is the instrument and the
+fixture: `tools/uiwalk.py` gained a side switch, twenty more in-game stops, a measure inside the
+viewport, and a bracketed shot; `scenarios/tascene-parity-core.json` is the parity fixture with
+the sides swapped (CORE human, a `CORCOM` on the anchor, an `ARMSOLAR` as the spare). The
+engine facts the stops needed — what gates each HUD extra and what it draws — are in the
+[engine map](exe-reverse-engineering.html), "The frame's HUD extras".
+
+### The measure, extended
+
+G15b compared the engine's surface with our frame **outside** the world viewport only, the
+world being ours. Inside it the engine still draws the dialogs, the chat, the popups and the
+clock over `terrown`'s key fill, and `strict` already defines what counts there: a pixel whose
+index is not the key. The walk now applies the same rule — `tacli shot` writes an 8-bit
+palette PNG, so the raw index is there to read — and reports, per stop, the non-key pixels the
+engine put inside the viewport and how many of them differ from ours. Three things the run
+taught about measuring, none about drawing:
+
+- **The cursor rect was never excluded.** `cursor_rect()` parsed `tacli peek`'s lines with a
+  prefix the command does not print, returned `None`, and G15b's zeros stood only because the
+  pointer sat inside the masked viewport. Read properly (`*0x51FBD0+0x1B6/+0x1BA`, the record
+  at `+0x1B2`), padded 8 px because the sprite animates and its record changes frame between
+  two shots, it removes the 1-pixel flicker at the screen centre that main itself shows.
+- **The clock ticks between the shots.** `+clock` prints the sim tick as h:m:s; the surface and
+  the GL frame are a second apart, so the seconds digit differed on every run. The stop is
+  taken with the in-game menu open: `ARMOPT` pauses the sim and the clock with it.
+- **The engine's frame moves on its own** — a chat line expiring and the log scrolling up, a
+  walking unit's minimap dot, the cursor's animation — and a single surface shot cannot tell
+  that from a layer error. Every in-game GL shot is now **bracketed** by a surface shot before
+  and one after: the diff is taken against the closer one, and the engine's own change between
+  the two is its own column. A layer error differs from *both*.
+
+`ARMOPT` turned out not to be "over the viewport" at all: its record is `xpos=0 ypos=128 128×352`,
+the side panel's rect, and it pauses the game with `PAUSED` in the middle of the world. The
+dialogs that do lie over the world are `PREFS`, `VISUALRT`, the F4 box, the chat and the HUD
+strings; the walk zooms those. It opens each at 1× and then writes `tagpu_zoom.txt` for 0.5×
+and 2× — at zoom ≠ 1 a click on a dialog inside the viewport is bent by the transform (the
+ta-drive skill), and the pixels do not care in which order the two happened. The live zoom is
+read back from `mark.on=log`'s periodic line, the file lever logging nothing.
+
+### The stops
+
+After G15b's thirteen (the side's `MAIN2`, `COM1`, `COM2`, back, `ARMOPT`, `PREFS`, `VISUALRT`,
+back, back, chat, F4, F4 closed):
+
+| stop | exercises | engine pixels inside the viewport (1024×768) |
+|---|---|---|
+| `clock` / `clock-off` | `+clock` typed in chat, the menu open (paused) | `Game Time : h:mm:ss` at (130, 723), the `PAUSED` label |
+| `bps` / `bps-off` | `+bps` typed | `Receive - … K/s` / `Send - … K/s` at (129, screenH−95) |
+| `space-popup` / `-up` | SPACE held with the pointer on the commander (`0x4689C0`) | the Kills/Losses box — F4's twin, 21 382 px both ways |
+| `ARMOPT@0.5`, `@2` | the menu (the side panel's rect) with the world at 0.5× and 2× | `PAUSED` |
+| `PREFS@1`, `@0.5`, `@2`, back | the options screen over the world at three zooms | ~55 000 px |
+| `F4@0.5`, `@2`, `chat@2`, close | the popup and a chat line over the zoomed world | ~21 000 / ~800 px |
+| `move`, `move-stop` | the commander ordered across the map and stopped | none (the unit and its bars are ours); the minimap's dot moves ~8 px between the first and last stop |
+| `scroll-box` | the eye released, one second of edge scroll, parked | none; the minimap's view box moves a box-width |
+
+### Measured
+
+`tools/uiwalk.py --layer --game-only` (`strict`, every world pass armed, `mark.on=log`), four
+runs, each a lone instance, 32 in-game stops each — G15b's thirteen and the nineteen above:
+
+| run | stops fully clean (0 outside / 0 inside / 0 holes) | twins ≤ | atlas ≤ | resets | overflows | fps (heartbeat) |
+|---|---|---|---|---|---|---|
+| ARM, 1024×768 | **32 of 32** | 10 | 130 | 3 | 0 | 60.0 |
+| CORE, 1024×768 | **32 of 32** | 10 | 132 | 3 | 0 | 59.9–60.0 |
+| ARM, 1920×1080 | **32 of 32** | 10 | 130 | 3 | 0 | 59.6–60.0 |
+| CORE, 1920×1080 | **32 of 32** | 10 | 132 | 3 | 0 | 59.6–60.0 |
+
+"Inside" is every non-key pixel the engine put in the viewport, and there were plenty to compare:
+`PAUSED` 2 443–2 750 px (4 133–4 160 with the clock), `PREFS` and `VISUALRT` 54 600–55 700, the F4 and
+SPACE box 21 187, the chat 811 (22 352 with the box open at 2×), the `+bps` lines with their chat
+echo 1 337. Every one of them matched byte for byte at 1×, 0.5× and 2×; the zoom column read
+back 0.5 / 2.0 / 1.0 at the stops that set it. **The bracket earned its place once per run**: at
+`clock-off` the chat log scrolled between the shots (846–847 px of the engine's own change) and
+the GL frame matched the later surface exactly; every other stop's engine self-change was 0. The
+minimap's dot moved 8 px between the first stop and the last (40 px differing between those two
+engine shots, all in the minimap) and the view box a box-width after the scroll (52 px), and
+both stops were exact against our frame.
+
+**The census, re-run on CORE at 1024×768** (`tools/uiwalk.py --game-only --side core`, no
+layer): **1 717 044 pixels changed on the presented surface across the 32 stops, 0 unexplained**.
+The residual lines it logged on *other* surfaces were the two known ones — the startup
+`OFFSCREEN` 640×480 written whole at in-game screen builds (§7, still open) and a 128×352
+buffer the size of the menu's rect, written whole when it opens (its `SAVE UNDER` snapshot
+[INFERRED]) — neither presented, both reaching the frame only through observed copies.
+
+**Nothing changed in the DLL, so the trigger-absent parity of §10 stands unmeasured here**: the
+binary is G15b's, byte for byte (`git diff main...HEAD -- tagpu` is empty).
+
+### Not closed here
+
+- The `LIGHTBAR` wipe (`0x45FFB0`) is measured through the census and its end state, not
+  frame by frame: its opener (`0x460160`) is not
+  reached by anything the skirmish inventory does. The census over the menu's opening recorded
+  no stamp op at all (`gaf 22 644, line 2 060, rect 1 765, copy 297` in that window; the wipe
+  stamps through `0x4C7580`, the census's `scale`), so **Tab does not play it**; its five callers
+  sit in the mission-start flow (`0x427459`, `0x427906`) and behind screens named `Options`,
+  `Menu` and `SETTINGS` (`0x44444D`, `0x4776D8`) — the multiplayer `TABMENU.GUI`'s buttons by
+  their names [INFERRED]. Both leaves it writes through are observed, so the twin will follow
+  it when it does run; a frame-by-frame capture of it is owed by whichever gate first reaches a
+  campaign start or the multiplayer Tab menu (G15d's context switches are the nearest).
+- The status icons at `0x46A107..0x46A1CB` and `0x46A2A8` (`main+0x38A51` bits 0 and 1,
+  `main+0x3923B` bits 5 and 6) and the profiler bars (`main+0x38DD5`) were not exercised — no
+  play-time control was found that sets them; the debug line at `0x469FD5` is unreachable in
+  play (engine map). All of them draw through observed leaves.
+- G15b's open items stand: a clear published per engine flip (*n−1* wasted per batch, free at
+  60 fps), the 1080p parity fixture not static (the geo-vent puff), `MAX_SURF 24` /
+  `MAX_TWINS 32` never approached (twins peak at 10 in the inventory, the atlas at 132 of 4 096).
+- The shell's context-switch cycles are G15d's; Classic++ art G15e's.
