@@ -119,6 +119,46 @@ void DrawUnitSelectBoxRect(ctx, unit) {
 No other marker is attached to selection inside the sweeps — the "circle" of TA
 is really this rotated square.
 
+### Our redraw of it — the rotation, and what still differs
+
+`tagpu_native.c` re-draws this rect (the only marker interleaved with the unit
+draws, so the engine's is under our pixels). Three things about matching it,
+**[MEASURED 2026-09-08]** against the engine's own box — `mark.on=noselbox`
+hands the rect back while everything else stays ours, so both boxes land in the
+**same** `glshot` and a moving unit is no obstacle:
+
+- **The corners take the unit's whole angle triple, in the engine's order.**
+  `0x467A50` rotates each one through `0x4B6CC0(corner, out, &unit->rot)`, i.e.
+  `Rz(+0x64)` on `(x,y)`, `Rx(+0x68)` on `(y,z)`, `Ry(+0x66)` on `(x,z)` — the
+  same call and the same order an effects model's vertices take, and the same
+  sense (`a' = a·cos − b·sin`) that `pose_dump` measures baked into a body's
+  `vbuf`. **The transposed form is a rotation by −heading**: the rect then turns
+  *against* the unit, which is what this loop did until 2026-09-08. At heading
+  20° (`facing 200`) the box's screen edges came out at 19.5°/111.8° where the
+  engine's were 159.2°/68.2° — an error of exactly 2×heading, invisible at any
+  multiple of 45° and unmistakable everywhere else.
+- **A ground unit is not level, so the heading alone is not enough.** `+0x64`
+  and `+0x68` carry the terrain's bank and pitch: 0 and ±1.8° on the flat, but
+  **17.4° of bank and −22.1° of pitch** on one Two Continents hillside, −30.7°
+  of pitch on the next tank along. Rotating by the heading alone put 15–36 % of
+  the engine's box pixels on ours there; the full triple puts 41–51 % of them
+  on ours, and neither is distinguishable on the flat (61 % vs 63 %).
+- **The fixtures are `scenarios/selbox-facings.json`** (three tanks at facings 45, 135 and
+  **200** — the 200 is the one that shows a wrong rotation *sense*, since ±45 and ±135 are the
+  same diamond) **and `scenarios/selbox-slope.json`** (the same three at 200 on a hillside,
+  where the tilt words are large). Select all three, `mark.on` for ours, `mark.on=noselbox` for
+  ours + the engine's in one frame.
+- **Our rect is still bigger than the engine's, and this is open.** At 1× on a
+  Stumpy the engine's rect measures 40–42 px wide and 41–47 px tall; ours
+  measures 44–46 × 52–58 with the *bottom* edges aligned, so our box overhangs
+  it at the top by ~11 px. Both are "the whole model's bounding box" — ours from
+  `aabb_walk` (`tagpu_native.c`), which accumulates each node's `+0x10/14/18`
+  offset down the tree, the engine's from `0x4CB650`. One of the two does not
+  accumulate what the other does, and which is not settled; `aabb_walk` is also
+  the shadow pass's model height (`mx[1]`), which was measured against the lab,
+  so the walker is not the thing to change on a guess. The centroids differ by
+  ~6 px of screen y and ~2 px of x for the same reason.
+
 ---
 
 ## 2. The health-bar block — hook 8 `0x469BD7` → hook 9 `0x469D2C`
@@ -422,7 +462,10 @@ Caveats for the native pass:
    flip to "must re-draw" for every row above the build cursor. The in-place
    split is what keeps this table cheap.
 2. Re-drawing the selection rect natively is ~40 lines: 4 model-space corners
-   from our own mesh AABB at min-Y, rotate by unit yaw, project with
+   from our own mesh AABB at min-Y, rotate by the unit's whole angle triple at
+   `+0x64` in the engine's own order (§1 *Our redraw* — the heading alone is a
+   few pixels out on any slope, and the transposed rotation turns the box the
+   wrong way), project with
    `sx = wx − eyeX + 128, sy = wz − alt/2 − eyeY + 32`, 1-px lines, colour =
    `GetGuiPaletteColor(main, 0xA)` resolved through the game palette. Honour
    `main+0x37F2F` bit2 so `SelBoxes` still works.

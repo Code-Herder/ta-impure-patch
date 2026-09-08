@@ -3000,6 +3000,14 @@ in the unit's own frame and adds the unit's world position — `+0x6A` x, `+0x6E
   word. Because Y is the outermost factor, that is the same thing as applying the yaw last.
 - The returned z is **negated** (`neg ecx` at `0x43E00A`), which is what puts it on the world's
   map-depth axis.
+- **All three of the unit's words are live on a ground unit, not just the heading.**
+  `[MEASURED 2026-09-08]` Three ARMSTUMPs parked on Two Continents grass read `+0x64` (bank) /
+  `+0x68` (pitch) as `0x0C57`/`0xF047` = **+17.4° / −22.1°**, `0`/`0xEA2B` = **0 / −30.7°** and
+  `0`/`0x0146` = **0 / +1.8°** — the terrain's tilt, not the flat 0 a "heading" reading of
+  `+0x66` would suggest. Anything that rotates a unit-space point by the heading alone (the
+  selection rect did until 2026-09-08, `ui-markers.md` §1) is therefore right on level ground
+  and a few pixels out on a hillside. `+0x66` alone stays correct for the *body* geometry only
+  because the engine bakes just the yaw into `vbuf` (`pose_dump`, err 0.00).
 
 **`0x4B6CC0(out, in, angles)`** rotates one vector by the three words, and **fixes the order**:
 

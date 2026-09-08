@@ -117,6 +117,7 @@
 #define U_XFIX       0x6A
 #define U_ZFIX       0x6E      /* altitude, 16.16                           */
 #define U_YFIX       0x72      /* map depth, 16.16                          */
+#define U_ROT        0x64      /* u16[3] {bank, heading, pitch}, 65536=360  */
 #define U_YAW        0x66      /* u16 body yaw, 65536 = 360 deg             */
 #define U_MODELID    0xA6      /* u16 index into MODEL_PTRS                 */
 #define OFF_MODELPTRS 0x14377  /* Model3DONode* [] (model templates)        */
@@ -2224,19 +2225,36 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             const char* root = *(const char* const*)(mptrs + (size_t)mid * 4);
             const MAABB* a = model_aabb(root);
             if (!a) continue;
-            float yawA = (float)*(const unsigned short*)(units[i].u + U_YAW)
-                         * 6.2831853f / 65536.0f;
-            float c = cosf(yawA), s2 = sinf(yawA);
+            /* the engine hands all THREE of the unit's angles to 0x4B6CC0
+               (bank, heading, pitch at u+0x64), so the corners take the same
+               triple an effects model does: Rz(bank) on (x,y), Rx(pitch) on
+               (y,z), Ry(heading) on (x,z) — emit_fx_model's order, rot2's
+               sense (x' = x c - z s). Yaw alone is right on the flat and
+               several pixels out on a slope, where a tank was measured
+               carrying 17 deg of bank and 31 of pitch; the TRANSPOSED yaw,
+               which this loop used until 2026-09-08, is a rotation by
+               -heading, so the rect turned against the unit it marks. */
+            const unsigned short* rot =
+                (const unsigned short*)(units[i].u + U_ROT);
+            const float K = 6.2831853f / 65536.0f;
+            float c0 = cosf((float)rot[0] * K), s0 = sinf((float)rot[0] * K);
+            float c1 = cosf((float)rot[1] * K), s1 = sinf((float)rot[1] * K);
+            float c2 = cosf((float)rot[2] * K), s2 = sinf((float)rot[2] * K);
             float y0 = a->mn[1];
             float cx[4] = { a->mn[0], a->mx[0], a->mx[0], a->mn[0] };
             float cz[4] = { a->mn[2], a->mn[2], a->mx[2], a->mx[2] };
             float px[4], py[4];
             int k;
             for (k = 0; k < 4; k++) {
-                float rx2 = cx[k] * c + cz[k] * s2;
-                float rz2 = -cx[k] * s2 + cz[k] * c;
-                px[k] = units[i].ax + rx2;
-                py[k] = units[i].ay + (-rz2 - y0 * 0.5f);
+                float x = cx[k], y = y0, z = cz[k];
+                if (rot[0]) rot2(c0, s0, &x, &y);
+                if (rot[2]) rot2(c2, s2, &y, &z);
+                if (rot[1]) rot2(c1, s1, &x, &z);
+                px[k] = units[i].ax + x;
+                /* the engine's own projection for this rect (0x467A50):
+                   sy = (pos.z - rot.z) - (rot.y + pos.y)/2 — the ROTATED y,
+                   which is the corner's own once bank or pitch is nonzero */
+                py[k] = units[i].ay + (-z - y * 0.5f);
             }
             float enc = encb[i] - 0.5f;
             selDrawn++;

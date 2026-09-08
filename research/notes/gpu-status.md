@@ -164,6 +164,18 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x485070` | `GetPosHeight(POS16_16*)` (`ret 4`) | *called by us*, on the render thread — a pure read of the height grid, which is what makes a range circle follow the terrain |
 | `0x4CCF60` | the glyph blitter (**cdecl**, 9 args, base and pitch taken directly) | *called by us*, on the present thread, once per distinct string — it reads the font object and writes our atlas and touches no engine state at all (`tagpu_text.c`) |
 
+**The selection rect turns with its unit's whole angle triple.** The four model-space corners
+take `Rz(u+0x64)`, `Rx(u+0x68)`, `Ry(u+0x66)` — `0x4B6CC0`'s order and `rot2`'s sense, which is
+what `0x467A50` does to the same four points. Until 2026-09-08 the loop used the *transposed*
+yaw, a rotation by −heading, so a unit turning on the spot had its box turning the other way
+(2× the heading off, so invisible at every multiple of 45° and obvious between them); the tilt
+words were dropped entirely, which is worth a further 5–10 px on a hillside, where a tank
+carries up to 17° of bank and 31° of pitch. The engine's own box is the oracle: `mark.on=noselbox`
+hands the rect back while everything else stays ours, so at 1× both boxes land in one `glshot`
+and even a moving unit compares cleanly. **Open**: ours is still ~11 px taller than the engine's
+at 1× — `aabb_walk` and `0x4CB650` do not agree about the model's bounding box
+([UI markers](ui-markers.html) §1).
+
 **The order block is PORTED, not captured, since G13o.** `tagpu_order.c` re-derives §3 of
 [UI markers](ui-markers.html) — the driver's three selection rules, the walker's
 capability-mask dispatch and its `pos` chaining, and all five leaf drawers — and draws them
