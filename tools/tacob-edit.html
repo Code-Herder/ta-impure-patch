@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<!-- tacob-edit.html — the editor half of tacob (research/notes/tacob-design.md).
+
+     Served by `tools/tacob serve <unit>`. The page edits BOS and draws the unit;
+     it never interprets COB. Every tick it asks the server for one pose frame —
+     per piece a translation, three Euler angles and a visibility flag — and sets
+     them on the glTF `tools/ta3do export` wrote, matching nodes to COB pieces
+     **by name**, because 0x45A950 binds by name and the COB's piece order is not
+     the 3DO's tree order.
+
+     Endpoints (all on the same origin): /state /pose /trace /events /source and
+     the POSTs /build /transport /event /world /pack /template.
+
+     JavaScript comes from a CDN through the import map below, the ta3do-view.html
+     idiom; nothing is vendored into git. If CodeMirror will not load the editor
+     falls back to a plain textarea and everything else still works. -->
+<meta charset="utf-8">
+<title>tacob</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #14171c; --panel: #1a1e25; --line: #2c333d; --ink: #c8ced8;
+    --dim: #8b93a1; --accent: #4d84c2; --warn: #d8a657; --err: #e07a7a;
+    --ok: #7fb069;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+               font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden; }
+  button, select, input { font: inherit; color: var(--ink); background: #262c35;
+           border: 1px solid #39414d; border-radius: 5px; padding: 3px 8px; }
+  button { cursor: pointer; }
+  button:hover { background: #2f3742; }
+  button.on { background: var(--accent); border-color: #6ea0d8; color: #fff; }
+  input[type=number], input[type=text] { width: 84px; }
+  code, pre, textarea, .mono { font-family: ui-monospace, "DejaVu Sans Mono", monospace; }
+
+  #bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+         padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #bar .sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+  #bar .name { font-weight: 600; letter-spacing: .3px; }
+  #bar .dim { color: var(--dim); }
+  #scrub { width: 260px; }
+
+  #main { display: grid; grid-template-columns: minmax(320px, 42fr) 58fr; min-height: 0; }
+  #left { display: grid; grid-template-rows: 1fr auto; min-height: 0;
+          border-right: 1px solid var(--line); }
+  #editor { overflow: auto; min-height: 0; }
+  #editor textarea { width: 100%; height: 100%; background: #12151a; color: var(--ink);
+                     border: 0; padding: 8px; resize: none; font-size: 12px; }
+  .cm-editor { height: 100%; }
+  .cm-scroller { font-family: ui-monospace, "DejaVu Sans Mono", monospace; font-size: 12px; }
+
+  #diags { max-height: 32vh; overflow: auto; border-top: 1px solid var(--line);
+           background: #171b21; }
+  #diags .d { padding: 4px 8px; border-bottom: 1px solid #22272f; cursor: pointer; }
+  #diags .d:hover { background: #1e242c; }
+  #diags .lv { font-weight: 600; margin-right: 6px; }
+  #diags .error .lv { color: var(--err); }
+  #diags .warning .lv { color: var(--warn); }
+  #diags .rule { color: var(--dim); }
+  #diags .none { padding: 4px 8px; color: var(--dim); }
+
+  #right { display: grid; grid-template-rows: 1fr auto minmax(180px, 34%); min-height: 0; }
+  #view { position: relative; min-height: 0; background: #0f1216; }
+  #view canvas { display: block; width: 100%; height: 100%; }
+  #hud { position: absolute; left: 8px; top: 8px; color: var(--dim); font-size: 11px;
+         pointer-events: none; white-space: pre; text-shadow: 0 1px 2px #000; }
+  #threads { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px;
+             padding: 4px; background: var(--panel); border-top: 1px solid var(--line); }
+  #threads .t { padding: 3px 4px; border-radius: 4px; background: #21262e; font-size: 11px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #threads .t.run { background: #24402c; }
+  #threads .t.wait { background: #3a3524; }
+  #threads .t.call { background: #2b3145; }
+  #threads .t .s { color: var(--dim); }
+
+  #tabs { display: grid; grid-template-rows: auto 1fr; min-height: 0;
+          border-top: 1px solid var(--line); background: #171b21; }
+  #tabhead { display: flex; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  #tabbody { overflow: auto; padding: 6px 8px; min-height: 0; }
+  #tabbody pre { margin: 0; font-size: 11px; white-space: pre; }
+  table.kv { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.kv td, table.kv th { padding: 2px 6px; border-bottom: 1px solid #22272f;
+                             text-align: left; vertical-align: top; }
+  table.kv th { color: var(--dim); font-weight: 500; }
+  .row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  .pill { border: 1px solid var(--line); border-radius: 10px; padding: 1px 7px;
+          color: var(--dim); font-size: 11px; }
+  .pill.ok { color: var(--ok); border-color: #365; }
+  .pill.warn { color: var(--warn); }
+</style>
+
+<div id="bar">
+  <span class="name" id="unitname">—</span>
+  <select id="cls" title="the director's motion sketch for this class"></select>
+  <span class="sep"></span>
+  <button id="restart" title="rebuild nothing, just run again from Create">⏮ restart</button>
+  <button id="play">▶ play</button>
+  <button id="step">⏭ step</button>
+  <select id="speed" title="sim speed">
+    <option value="0.25">¼×</option><option value="0.5">½×</option>
+    <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+  </select>
+  <span class="dim mono" id="tick">tick 0</span>
+  <input type="range" id="scrub" min="0" max="0" value="0" title="scrub the recorded timeline">
+  <span class="sep"></span>
+  <button id="build" title="compile and restart from Create (edit and play are separate states)">build &amp; restart</button>
+  <button id="pack" title="write the project as a .ufo the game loads">pack .ufo</button>
+  <span class="sep"></span>
+  <span class="dim" id="status">loading…</span>
+</div>
+
+<div id="main">
+  <div id="left">
+    <div id="editor"></div>
+    <div id="diags"></div>
+  </div>
+  <div id="right">
+    <div id="view"><div id="hud"></div></div>
+    <div id="threads"></div>
+    <div id="tabs">
+      <div id="tabhead"></div>
+      <div id="tabbody"></div>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+    "@codemirror/state": "https://cdn.jsdelivr.net/npm/@codemirror/state@6.5.2/dist/index.js",
+    "@marijn/find-cluster-break": "https://cdn.jsdelivr.net/npm/@marijn/find-cluster-break@1.0.4/src/index.js",
+    "@codemirror/view": "https://cdn.jsdelivr.net/npm/@codemirror/view@6.36.4/dist/index.js",
+    "@codemirror/language": "https://cdn.jsdelivr.net/npm/@codemirror/language@6.10.8/dist/index.js",
+    "@codemirror/commands": "https://cdn.jsdelivr.net/npm/@codemirror/commands@6.8.0/dist/index.js",
+    "@codemirror/lint": "https://cdn.jsdelivr.net/npm/@codemirror/lint@6.8.4/dist/index.js",
+    "@codemirror/autocomplete": "https://cdn.jsdelivr.net/npm/@codemirror/autocomplete@6.18.6/dist/index.js",
+    "@lezer/common": "https://cdn.jsdelivr.net/npm/@lezer/common@1.2.3/dist/index.js",
+    "@lezer/highlight": "https://cdn.jsdelivr.net/npm/@lezer/highlight@1.2.1/dist/index.js",
+    "style-mod": "https://cdn.jsdelivr.net/npm/style-mod@4.1.2/src/style-mod.js",
+    "w3c-keyname": "https://cdn.jsdelivr.net/npm/w3c-keyname@2.2.8/index.js",
+    "crelt": "https://cdn.jsdelivr.net/npm/crelt@1.0.6/index.js"
+} }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const $ = (id) => document.getElementById(id);
+const api = async (path, body) => {
+  const res = await fetch(path, body === undefined ? undefined : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body) });
+  if (!res.ok && res.status !== 200) return res.json().catch(() => ({ error: res.statusText }));
+  return res.json();
+};
+const say = (text, kind) => {
+  const el = $('status');
+  el.textContent = text;
+  el.style.color = kind === 'err' ? 'var(--err)' : kind === 'ok' ? 'var(--ok)' : 'var(--dim)';
+};
+
+// The world is 16.16 fixed point with x right, y up (altitude) and z the map's
+// depth axis. The scene is that world turned half a turn about Y — (-x, y, -z) —
+// because `tools/ta3do` writes glTF with the .3do's z negated while the engine's
+// own loaded model has its x *and* z negated, and this is the one substitution
+// that makes the exported mesh and the engine's coordinates agree. The server
+// sends every per-piece transform already converted; this is only for the things
+// the page places itself: the unit, the target and the effect markers.
+const FIXED = 65536;
+const scene3 = (w) => new THREE.Vector3(-w[0] / FIXED, w[1] / FIXED, -w[2] / FIXED);
+
+let state = null, pieceNodes = [], head = 0, scrubbing = false, live = true;
+let traceSeen = 0, traceText = [], tab = 'state';
+
+/* ------------------------------------------------------------------ viewport */
+const view = $('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f1216);
+const camera = new THREE.PerspectiveCamera(35, 1, 0.5, 20000);
+camera.position.set(120, 90, 180);
+const controls = new OrbitControls(camera, renderer.domElement);
+let follow = true;
+scene.add(new THREE.HemisphereLight(0xc4d4e8, 0x23262b, 0.7));
+const key = new THREE.DirectionalLight(0xfff4e6, 1.4); key.position.set(-90, 160, 120);
+scene.add(key);
+const grid = new THREE.GridHelper(1600, 40, 0x39414d, 0x252b33);
+scene.add(grid);
+const unit = new THREE.Group(); scene.add(unit);
+const marker = new THREE.Mesh(new THREE.SphereGeometry(6, 16, 12),
+                              new THREE.MeshBasicMaterial({ color: 0xd8a657, wireframe: true }));
+scene.add(marker);
+const fx = new THREE.Group(); scene.add(fx);
+
+function resize() {
+  const w = view.clientWidth || 640, h = view.clientHeight || 360;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view);
+
+function loadModel(name) {
+  if (!name) { say('no model exported for this unit', 'err'); return; }
+  new GLTFLoader().load('/model.glb', (gltf) => {
+    unit.clear();
+    unit.add(gltf.scene);
+    const byName = new Map();
+    gltf.scene.traverse((n) => { if (n.name) byName.set(n.name.toLowerCase(), n); });
+    // 0x45A950 binds by NAME, and the COB's piece order is not the 3DO's tree
+    // order — ARMPW's COB piece 0 is `torso` while the 3DO's root is `ground`.
+    pieceNodes = state.pieces.map((p) => byName.get(p.toLowerCase()) || null);
+    const box = new THREE.Box3().setFromObject(gltf.scene);
+    const size = box.getSize(new THREE.Vector3()).length() || 100;
+    camera.position.set(size * 0.9, size * 0.7, size * 1.3);
+    controls.target.set(0, size * 0.2, 0);
+    controls.update();
+    resize();
+  }, undefined, (err) => say('model: ' + err, 'err'));
+}
+
+function applyPose(frame) {
+  if (!frame || !frame.gl) return;
+  const t = frame.gl.t, r = frame.gl.r;
+  for (let i = 0; i < pieceNodes.length; i++) {
+    const node = pieceNodes[i];
+    if (!node) continue;
+    node.position.set(t[i * 3], t[i * 3 + 1], t[i * 3 + 2]);
+    node.rotation.set(r[i * 3], r[i * 3 + 1], r[i * 3 + 2], 'YXZ');
+    node.visible = !!frame.visible[i];
+  }
+  const u = frame.unit;
+  const was = unit.position.clone();
+  unit.position.copy(scene3(u.pos));
+  if (follow) {                       // keep the unit in frame; a drag turns this off
+    const move = unit.position.clone().sub(was);
+    controls.target.add(move);
+    camera.position.add(move);
+  }
+  unit.rotation.set(0, u.body[1] * Math.PI * 2 / 65536, 0);
+  marker.position.copy(scene3(u.target));
+  fx.clear();
+  for (const e of frame.effects || []) {
+    if (!e.at || frame.tick - e.tick > 12) continue;
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(2.4, 8, 6),
+      new THREE.MeshBasicMaterial({ color: e.kind === 'explode' ? 0xe07a7a : 0x7fb069 }));
+    dot.position.copy(scene3(e.at));
+    fx.add(dot);
+  }
+  $('hud').textContent =
+    `tick ${frame.tick}   records ${frame.running}/8   trace ${frame.trace}\n` +
+    `unit  (${(u.pos[0] / FIXED).toFixed(0)}, ${(u.pos[1] / FIXED).toFixed(0)}, ` +
+    `${(u.pos[2] / FIXED).toFixed(0)})  heading ${u.body[1]}`;
+  drawThreads(frame);
+  if (tab === 'slots') drawTab();
+}
+
+const STATUS = { 0: ['free', ''], 0x01000000: ['run', 'run'], 0x02100000: ['wait-turn', 'wait'],
+                 0x02200000: ['wait-move', 'wait'], 0x02400000: ['sleep', 'wait'],
+                 0x02800000: ['call', 'call'] };
+function drawThreads(frame) {
+  const box = $('threads');
+  box.innerHTML = '';
+  for (const t of frame.threads) {
+    const [label, cls] = STATUS[t.status >>> 0] || ['?', 'run'];
+    const el = document.createElement('div');
+    el.className = 't ' + cls;
+    el.title = `slot ${t.slot} · ${label} · pc ${t.pc} · sp ${t.sp} · mask ${t.mask}` +
+               (t.child >= 0 ? ` · waiting on ${t.child}` : '');
+    el.innerHTML = t.status ? `${t.script}<br><span class="s">${label}</span>`
+                            : `<span class="s">${t.slot} free</span>`;
+    box.appendChild(el);
+  }
+}
+
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+
+/* -------------------------------------------------------------------- editor */
+let getSource = () => '', setSource = () => {}, showDiags = () => {}, editorError = null;
+async function makeEditor(text) {
+  const area = document.createElement('textarea');
+  area.value = text; area.spellcheck = false;
+  $('editor').appendChild(area);
+  getSource = () => area.value;
+  setSource = (t) => { area.value = t; };
+  try {
+    const [{ EditorState }, cmView, { StreamLanguage, syntaxHighlighting, HighlightStyle,
+             bracketMatching, indentOnInput }, { defaultKeymap, history, historyKeymap },
+           { lintGutter, setDiagnostics }, { autocompletion, completionKeymap },
+           { tags }] =
+      await Promise.all([import('@codemirror/state'), import('@codemirror/view'),
+        import('@codemirror/language'), import('@codemirror/commands'),
+        import('@codemirror/lint'), import('@codemirror/autocomplete'),
+        import('@lezer/highlight')]);
+    const bosHighlight = HighlightStyle.define([
+      { tag: tags.keyword, color: '#7fb0d8' },
+      { tag: tags.comment, color: '#6b7280', fontStyle: 'italic' },
+      { tag: tags.number, color: '#d8a657' },
+      { tag: tags.atom, color: '#c8a2e0' },
+      { tag: tags.meta, color: '#7fb069' },
+      { tag: tags.variableName, color: '#c8ced8' },
+    ]);
+    const { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } = cmView;
+    const KEYWORDS = /^(piece|static-var|var|move|turn|spin|stop-spin|wait-for-turn|wait-for-move|show|hide|cache|dont-cache|shade|dont-shade|emit-sfx|explode|sleep|signal|set-signal-mask|start-script|call-script|return|if|else|while|get|set|rand|attach-unit|drop-unit|play-sound|map-command)$/;
+    const bos = StreamLanguage.define({
+      token(stream) {
+        if (stream.eatSpace()) return null;
+        if (stream.match(/^\/\/.*/)) return 'comment';
+        if (stream.match(/^\/\*/)) { stream.skipTo('*/'); stream.next(); stream.next(); return 'comment'; }
+        if (stream.match(/^#\w+/)) return 'meta';
+        if (stream.match(/^[<\[][-+]?[\d.]+[>\]]/)) return 'number';
+        if (stream.match(/^0[xX][0-9a-fA-F]+|^\d+/)) return 'number';
+        const word = stream.match(/^[A-Za-z_][\w]*(?:-[A-Za-z_][\w]*)*/);
+        if (word) return KEYWORDS.test(word[0]) ? 'keyword'
+                 : /^[A-Z_][A-Z_0-9]*$/.test(word[0]) ? 'atom' : 'variable';
+        stream.next();
+        return null;
+      },
+    });
+    const view = new EditorView({
+      doc: text, parent: $('editor'),
+      extensions: [lineNumbers(), lintGutter(), history(), drawSelection(),
+        highlightActiveLine(), bracketMatching(), indentOnInput(),
+        bos, syntaxHighlighting(bosHighlight, { fallback: true }),
+        autocompletion({ override: [completeNames] }),
+        keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap]),
+        EditorView.theme({ '&': { height: '100%', background: '#12151a' },
+                           '.cm-gutters': { background: '#171b21', border: 'none' },
+                           '.cm-activeLine': { background: '#191d24' } }, { dark: true })],
+    });
+    area.remove();
+    getSource = () => view.state.doc.toString();
+    setSource = (t) => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: t } });
+    showDiags = (list) => view.dispatch(setDiagnostics(view.state, list.map((d) => {
+      const line = view.state.doc.line(Math.min(Math.max(1, d.line || 1), view.state.doc.lines));
+      return { from: line.from, to: line.to, severity: d.level, message: d.message };
+    })));
+    window.__cmLine = (n) => {
+      const line = view.state.doc.line(Math.min(Math.max(1, n), view.state.doc.lines));
+      view.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
+      view.focus();
+    };
+  } catch (err) {
+    editorError = 'CodeMirror did not load (' + err + '). The plain editor still ' +
+      'builds and everything else on the page works; the import map at the top of ' +
+      'this file names the CDN files it needs.';
+  }
+}
+
+function completeNames(ctx) {
+  const before = ctx.matchBefore(/[\w-]+/);
+  if (!before && !ctx.explicit) return null;
+  const options = [];
+  for (const p of (state?.pieces || [])) options.push({ label: p, type: 'variable', detail: 'piece' });
+  for (const s of (state?.scripts || [])) options.push({ label: s, type: 'function', detail: 'script' });
+  for (const v of ['ACTIVATION', 'STANDINGMOVEORDERS', 'STANDINGFIREORDERS', 'HEALTH',
+    'INBUILDSTANCE', 'BUSY', 'PIECE_XZ', 'PIECE_Y', 'UNIT_XZ', 'UNIT_Y', 'UNIT_HEIGHT',
+    'XZ_ATAN', 'XZ_HYPOT', 'ATAN', 'HYPOT', 'GROUND_HEIGHT', 'BUILD_PERCENT_LEFT',
+    'YARD_OPEN', 'BUGGER_OFF', 'ARMORED']) options.push({ label: v, type: 'constant', detail: 'value id' });
+  return { from: before ? before.from : ctx.pos, options };
+}
+
+function paintDiags(list) {
+  const box = $('diags');
+  box.innerHTML = '';
+  if (editorError) list = [{ level: 'warning', rule: 'editor', line: 0, script: '',
+                             message: editorError }].concat(list);
+  if (!list.length) { box.innerHTML = '<div class="none">no findings</div>'; return; }
+  for (const d of list) {
+    const el = document.createElement('div');
+    el.className = 'd ' + d.level;
+    el.innerHTML = `<span class="lv">${d.level}</span>` +
+      `<span class="rule">[${d.rule}]${d.line ? ' line ' + d.line : ''}${d.script ? ' · ' + d.script : ''}</span><br>` +
+      d.message.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    el.onclick = () => window.__cmLine && d.line && window.__cmLine(d.line);
+    box.appendChild(el);
+  }
+  showDiags(list);
+}
+
+/* ---------------------------------------------------------------------- tabs */
+const TABS = ['state', 'slots', 'events', 'console', 'trace'];
+function drawTabHead() {
+  const head = $('tabhead'); head.innerHTML = '';
+  for (const name of TABS) {
+    const b = document.createElement('button');
+    b.textContent = name; b.className = tab === name ? 'on' : '';
+    b.onclick = () => { tab = name; drawTabHead(); drawTab(); };
+    head.appendChild(b);
+  }
+}
+
+const VALUE_NAMES = ['', 'ACTIVATION', 'STANDINGMOVEORDERS', 'STANDINGFIREORDERS', 'HEALTH',
+  'INBUILDSTANCE', 'BUSY', 'PIECE_XZ', 'PIECE_Y', 'UNIT_XZ', 'UNIT_Y', 'UNIT_HEIGHT',
+  'XZ_ATAN', 'XZ_HYPOT', 'ATAN', 'HYPOT', 'GROUND_HEIGHT', 'BUILD_PERCENT_LEFT',
+  'YARD_OPEN', 'BUGGER_OFF', 'ARMORED'];
+const SET_HANDLED = new Set([1, 5, 6, 18, 19, 20]);
+
+function drawTab() {
+  const body = $('tabbody');
+  if (tab === 'trace') {
+    body.innerHTML = '<pre id="tracepre"></pre>';
+    $('tracepre').textContent = traceText.join('\n');
+    body.scrollTop = body.scrollHeight;
+    return;
+  }
+  if (tab === 'console') {
+    const lines = (state?.ignored_sets || []).map(([t, id]) =>
+      `tick ${t}: set ${VALUE_NAMES[id] || id} was dropped — retail TA has no handler for that id`);
+    body.innerHTML = '<pre></pre>';
+    body.firstChild.textContent =
+      (state?.error ? state.error + '\n' : '') +
+      (lines.length ? lines.join('\n') : 'nothing dropped, nothing broken.') +
+      '\n\nlint rules:\n' +
+      Object.entries(state?.rules || {}).map(([k, v]) => `  ${k.padEnd(20)} ${v}`).join('\n');
+    return;
+  }
+  if (tab === 'slots') {
+    const frame = lastFrame;
+    const rows = (frame?.slots || state?.slots || []).map((s) => `
+      <tr><td>${s.n}</td><td>${s.weapon || '—'}</td><td>${s.range}</td>
+      <td>${s.reload}</td><td>${s.stock ? 'engine' : 'module'}</td>
+      <td>${s.scripts.join(', ')}</td><td>${s.shots}</td><td>${s.hold_fire}</td>
+      <td>${s.muzzle ?? '—'} / ${s.mount ?? '—'}</td></tr>`).join('');
+    body.innerHTML = `<div class="row"><span class="pill">slots 1–3 are the engine's:
+      the shot waits for the aim script to return 1</span>
+      <span class="pill">4 and up are tagpu_weapons.c's: return inside the tick,
+      the module holds fire until the barrel is on target</span></div>
+      <table class="kv"><tr><th>n</th><th>weapon</th><th>range</th><th>reload</th>
+      <th>driven by</th><th>scripts</th><th>shots</th><th>held</th><th>muzzle/mount</th></tr>
+      ${rows || '<tr><td colspan="9">no Weapon keys in the FBI</td></tr>'}</table>
+      <div class="row" style="margin-top:8px">
+        <span>add weapon</span><input type="number" id="wn" value="4" min="1" max="16">
+        <span>mount</span><input type="text" id="wmount" value="turret">
+        <span>gun</span><input type="text" id="wgun" value="sleeve">
+        <span>flare</span><input type="text" id="wflare" value="flare">
+        <button id="wadd">append the four scripts</button></div>`;
+    const add = document.getElementById('wadd');
+    if (add) add.onclick = async () => {
+      const out = await api('/template', { n: +$('wn').value, mount: $('wmount').value,
+        gun: $('wgun').value, flare: $('wflare').value });
+      if (out.bos) { setSource(getSource() + '\n' + out.bos); say('template appended — build to apply'); }
+    };
+    return;
+  }
+  if (tab === 'events') {
+    const starts = Object.entries(state?.engine_starts || {});
+    const have = new Set((state?.scripts || []).map((s) => s.toLowerCase()));
+    body.innerHTML = `<div class="row"><span class="pill">every button issues the start the
+      way the engine issues it — the entry and the frame position come from the call-site
+      table, not from the page</span></div><div class="row" id="evrow"></div>`;
+    const row = $('evrow');
+    for (const [name, [kind, phase]] of starts) {
+      const b = document.createElement('button');
+      b.textContent = name;
+      b.title = `${kind}, ${phase}${have.has(name) ? '' : ' — this unit has no such script'}`;
+      if (!have.has(name)) b.style.opacity = '.45';
+      b.onclick = async () => {
+        const script = (state.scripts.find((s) => s.toLowerCase() === name) || name);
+        const args = kind === 'query' ? [0, 0, 0, 0] : argsFor(name);
+        const out = await api('/event', { script, args });
+        say(out.error || `queued ${out.queued} (${out.kind}, ${out.phase}) at tick ${out.tick}`);
+      };
+      row.appendChild(b);
+    }
+    return;
+  }
+  const w = state?.world || {};
+  const bits = Object.entries(w.bits || {}).map(([k, v]) =>
+    `<label class="pill"><input type="checkbox" data-bit="${k}" ${v ? 'checked' : ''}> ${k}</label>`).join(' ');
+  const ids = VALUE_NAMES.slice(1).map((n, i) => {
+    const id = i + 1;
+    return `<tr><td>${id}</td><td>${n}</td><td class="mono">${(w.values || {})[id] ?? 0}</td>
+      <td class="${SET_HANDLED.has(id) ? '' : 'pill'}">${SET_HANDLED.has(id) ? 'set writes it' : 'set is dropped'}</td></tr>`;
+  }).join('');
+  body.innerHTML = `
+    <div class="row">
+      <span>hp</span><input type="number" id="w_hp" value="${w.hp}">
+      <span>/ ${w.maxhp}</span>
+      <span>ground</span><input type="number" id="w_ground" value="${w.ground}">
+      <span>water</span><input type="number" id="w_water" value="${w.water}">
+      <span>build left</span><input type="number" id="w_build" step="0.05" value="${w.build_left}">
+      <span>rng seed</span><input type="number" id="w_seed" value="${w.seed}">
+      <button id="w_apply">apply</button>
+    </div>
+    <div class="row">target x/z (world units)
+      <input type="number" id="t_x" value="${Math.round((w.target || [0,0,0])[0] / FIXED)}">
+      <input type="number" id="t_z" value="${Math.round((w.target || [0,0,0])[2] / FIXED)}">
+      <span>heading</span><input type="number" id="w_head" value="${(w.body || [0,0,0])[1]}">
+    </div>
+    <div class="row">${bits}</div>
+    <table class="kv"><tr><th>id</th><th>name</th><th>get</th><th>set</th></tr>${ids}</table>`;
+  $('w_apply').onclick = pushWorld;
+  for (const el of body.querySelectorAll('[data-bit]')) el.onchange = pushWorld;
+}
+
+function argsFor(name) {
+  const n = name.toLowerCase();
+  if (n.startsWith('aim') || n === 'rockunit' || n === 'hitbyweapon' || n === 'startbuilding')
+    return [0, 0];
+  if (n === 'killed') return [50, 0];
+  if (n === 'setspeed') return [100];
+  if (n === 'setdirection' || n === 'setsfxoccupy' || n === 'takedamage' ||
+      n === 'setmaxreloadtime' || n === 'targetcleared') return [0];
+  return [];
+}
+
+async function pushWorld() {
+  const bits = {};
+  for (const el of document.querySelectorAll('[data-bit]')) bits[el.dataset.bit] = el.checked ? 1 : 0;
+  const body = state.world.body.slice();
+  body[1] = +$('w_head').value;
+  const target = state.world.target.slice();
+  target[0] = Math.round(+$('t_x').value * FIXED);
+  target[2] = Math.round(+$('t_z').value * FIXED);
+  const out = await api('/world', { hp: +$('w_hp').value, ground: +$('w_ground').value,
+    water: +$('w_water').value, build_left: +$('w_build').value, seed: +$('w_seed').value,
+    bits, body, target });
+  if (out && !out.error) { state.world = out; if (tab === 'state') drawTab(); }
+}
+
+/* ----------------------------------------------------------------- transport */
+async function transport(action, extra) {
+  const out = await api('/transport', Object.assign({ action }, extra || {}));
+  if (out.error) return say(out.error, 'err');
+  live = out.playing || action === 'step' || action === 'restart';
+  $('play').textContent = out.playing ? '⏸ pause' : '▶ play';
+  $('play').className = out.playing ? 'on' : '';
+  if (action === 'restart') { traceSeen = 0; traceText = []; }
+  await refreshState();
+}
+
+$('play').onclick = () => transport(state && $('play').textContent.startsWith('⏸') ? 'pause' : 'play');
+$('step').onclick = () => transport('step', { n: 1 });
+$('restart').onclick = () => transport('restart');
+$('speed').onchange = () => transport('speed', { speed: +$('speed').value });
+$('cls').onchange = () => transport('class', { class: $('cls').value });
+$('scrub').oninput = async () => {
+  scrubbing = true; live = false;
+  const frame = await api('/pose?tick=' + $('scrub').value);
+  if (!frame.error) { lastFrame = frame; applyPose(frame); $('tick').textContent = 'tick ' + frame.tick; }
+};
+$('scrub').onchange = () => { scrubbing = false; };
+$('build').onclick = async () => {
+  say('building…');
+  const out = await api('/build', { source: getSource() });
+  paintDiags(out.diagnostics || []);
+  if (!out.ok) return say('build failed — see the findings', 'err');
+  traceSeen = 0; traceText = [];
+  await refreshState();
+  say(`built #${out.build}: ${out.scripts.length} scripts, ${out.pieces.length} pieces, ` +
+      `${out.words} words — restarted from Create`, 'ok');
+};
+$('pack').onclick = async () => {
+  const out = await api('/pack', {});
+  say(out.error ? out.error : `wrote ${out.path} (${out.bytes} bytes): ${out.entries.join(', ')}`,
+      out.error ? 'err' : 'ok');
+};
+
+/* ------------------------------------------------------------------ the loop */
+let lastFrame = null;
+async function refreshState() {
+  const next = await api('/state');
+  if (next.error) return say(next.error, 'err');
+  const first = !state;
+  state = next;
+  $('unitname').textContent = state.unit.toUpperCase();
+  if (first) {
+    $('cls').innerHTML = state.classes.map((c) =>
+      `<option${c === state.class ? ' selected' : ''}>${c}</option>`).join('');
+    loadModel(state.model);
+    await makeEditor(await (await fetch('/source')).text());
+    drawTabHead();
+  }
+  $('cls').value = state.class;
+  paintDiags(state.diagnostics || []);
+  drawTab();
+  if (first) say(`${state.scripts.length} scripts, ${state.pieces.length} pieces, ` +
+                 `${state.statics} statics`, 'ok');
+}
+
+async function poll() {
+  try {
+    if (!scrubbing) {
+      const frame = await api('/pose?tick=head');
+      if (!frame.error) {
+        lastFrame = frame;
+        head = frame.tick;
+        applyPose(frame);
+        $('tick').textContent = 'tick ' + frame.tick;
+        $('scrub').max = String(head);
+        if (live) $('scrub').value = String(head);
+        if (frame.trace > traceSeen) {
+          const out = await api(`/trace?from=${traceSeen}&limit=4000`);
+          if (out.lines) {
+            traceText = traceText.concat(out.lines).slice(-4000);
+            traceSeen = out.from + out.lines.length;
+            if (tab === 'trace') drawTab();
+          }
+        }
+      }
+    }
+  } catch (err) { /* the server is restarting a build; the next tick will do */ }
+  setTimeout(poll, 66);
+}
+
+refreshState().then(poll);
+</script>

@@ -1,0 +1,1321 @@
+# tagpu_cobtrace v1	filter=,CORSUB,	columns: S tick unit type script slot source args… | R tick unit slot script value | X tick unit script source | K tick unit slot script by | D tick unit slot value
+S	93	1	CORSUB	Create	0	E	
+R	93	1	0	Create	0
+S	93	1	CORSUB	QueryPrimary	0	E	0,0,0,0
+R	93	1	0	QueryPrimary	0
+S	93	1	CORSUB	QueryPrimary	0	E	0,0,0,0
+R	93	1	0	QueryPrimary	0
+S	94	1	CORSUB	StartMoving	0	E	
+S	324	1	CORSUB	QueryPrimary	1	E	0,0,0,0
+R	324	1	1	QueryPrimary	0
+S	324	1	CORSUB	QueryPrimary	1	E	0,0,0,0
+R	324	1	1	QueryPrimary	0
+S	324	1	CORSUB	FirePrimary	1	E	
+R	324	1	1	FirePrimary	0
+S	324	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	324	1	1	SweetSpot	0
+S	325	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	325	1	1	SweetSpot	0
+S	326	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	326	1	1	SweetSpot	0
+S	327	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	327	1	1	SweetSpot	0
+S	328	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	328	1	1	SweetSpot	0
+S	329	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	329	1	1	SweetSpot	0
+S	330	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	330	1	1	SweetSpot	0
+S	331	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	331	1	1	SweetSpot	0
+S	332	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	332	1	1	SweetSpot	0
+S	333	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	333	1	1	SweetSpot	0
+S	334	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	334	1	1	SweetSpot	0
+S	335	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	335	1	1	SweetSpot	0
+S	336	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	336	1	1	SweetSpot	0
+S	337	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	337	1	1	SweetSpot	0
+S	338	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	338	1	1	SweetSpot	0
+S	339	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	339	1	1	SweetSpot	0
+S	340	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	340	1	1	SweetSpot	0
+S	341	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	341	1	1	SweetSpot	0
+S	342	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	342	1	1	SweetSpot	0
+S	343	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	343	1	1	SweetSpot	0
+S	344	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	344	1	1	SweetSpot	0
+S	345	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	345	1	1	SweetSpot	0
+S	346	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	346	1	1	SweetSpot	0
+S	347	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	347	1	1	SweetSpot	0
+S	348	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	348	1	1	SweetSpot	0
+S	349	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	349	1	1	SweetSpot	0
+S	350	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	350	1	1	SweetSpot	0
+S	351	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	351	1	1	SweetSpot	0
+S	352	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	352	1	1	SweetSpot	0
+S	353	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	353	1	1	SweetSpot	0
+S	354	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	354	1	1	SweetSpot	0
+S	355	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	355	1	1	SweetSpot	0
+S	356	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	356	1	1	SweetSpot	0
+S	357	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	357	1	1	SweetSpot	0
+S	358	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	358	1	1	SweetSpot	0
+S	359	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	359	1	1	SweetSpot	0
+S	360	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	360	1	1	SweetSpot	0
+S	361	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	361	1	1	SweetSpot	0
+S	362	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	362	1	1	SweetSpot	0
+S	363	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	363	1	1	SweetSpot	0
+S	364	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	364	1	1	SweetSpot	0
+S	365	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	365	1	1	SweetSpot	0
+S	366	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	366	1	1	SweetSpot	0
+S	367	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	367	1	1	SweetSpot	0
+S	368	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	368	1	1	SweetSpot	0
+S	369	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	369	1	1	SweetSpot	0
+S	370	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	370	1	1	SweetSpot	0
+S	371	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	371	1	1	SweetSpot	0
+S	372	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	372	1	1	SweetSpot	0
+S	373	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	373	1	1	SweetSpot	0
+S	374	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	374	1	1	SweetSpot	0
+S	375	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	375	1	1	SweetSpot	0
+S	376	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	376	1	1	SweetSpot	0
+S	377	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	377	1	1	SweetSpot	0
+S	378	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	378	1	1	SweetSpot	0
+S	379	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	379	1	1	SweetSpot	0
+S	380	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	380	1	1	SweetSpot	0
+S	381	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	381	1	1	SweetSpot	0
+S	382	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	382	1	1	SweetSpot	0
+S	383	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	383	1	1	SweetSpot	0
+S	384	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	384	1	1	SweetSpot	0
+S	385	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	385	1	1	SweetSpot	0
+S	386	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	386	1	1	SweetSpot	0
+S	387	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	387	1	1	SweetSpot	0
+S	388	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	388	1	1	SweetSpot	0
+S	389	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	389	1	1	SweetSpot	0
+S	390	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	390	1	1	SweetSpot	0
+S	391	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	391	1	1	SweetSpot	0
+S	392	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	392	1	1	SweetSpot	0
+S	393	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	393	1	1	SweetSpot	0
+S	394	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	394	1	1	SweetSpot	0
+S	395	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	395	1	1	SweetSpot	0
+S	396	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	396	1	1	SweetSpot	0
+S	397	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	397	1	1	SweetSpot	0
+S	398	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	398	1	1	SweetSpot	0
+S	399	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	399	1	1	SweetSpot	0
+S	400	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	400	1	1	SweetSpot	0
+S	401	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	401	1	1	SweetSpot	0
+S	402	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	402	1	1	SweetSpot	0
+S	403	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	403	1	1	SweetSpot	0
+S	404	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	404	1	1	SweetSpot	0
+S	405	1	CORSUB	QueryPrimary	1	E	0,0,0,0
+R	405	1	1	QueryPrimary	0
+S	405	1	CORSUB	QueryPrimary	1	E	0,0,0,0
+R	405	1	1	QueryPrimary	0
+S	405	1	CORSUB	FirePrimary	1	E	
+R	405	1	1	FirePrimary	0
+S	405	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	405	1	1	SweetSpot	0
+S	406	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	406	1	1	SweetSpot	0
+S	407	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	407	1	1	SweetSpot	0
+S	408	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	408	1	1	SweetSpot	0
+S	409	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	409	1	1	SweetSpot	0
+S	410	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	410	1	1	SweetSpot	0
+S	411	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	411	1	1	SweetSpot	0
+S	412	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	412	1	1	SweetSpot	0
+S	413	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	413	1	1	SweetSpot	0
+S	414	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	414	1	1	SweetSpot	0
+S	415	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	415	1	1	SweetSpot	0
+S	416	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	416	1	1	SweetSpot	0
+S	417	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	417	1	1	SweetSpot	0
+S	418	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	418	1	1	SweetSpot	0
+S	419	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	419	1	1	SweetSpot	0
+S	420	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	420	1	1	SweetSpot	0
+S	421	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	421	1	1	SweetSpot	0
+S	422	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	422	1	1	SweetSpot	0
+S	423	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	423	1	1	SweetSpot	0
+S	424	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	424	1	1	SweetSpot	0
+S	425	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	425	1	1	SweetSpot	0
+S	426	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	426	1	1	SweetSpot	0
+S	427	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	427	1	1	SweetSpot	0
+S	428	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	428	1	1	SweetSpot	0
+S	429	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	429	1	1	SweetSpot	0
+S	430	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	430	1	1	SweetSpot	0
+S	431	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	431	1	1	SweetSpot	0
+S	432	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	432	1	1	SweetSpot	0
+S	433	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	433	1	1	SweetSpot	0
+S	434	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	434	1	1	SweetSpot	0
+S	435	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	435	1	1	SweetSpot	0
+S	436	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	436	1	1	SweetSpot	0
+S	437	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	437	1	1	SweetSpot	0
+S	438	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	438	1	1	SweetSpot	0
+S	439	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	439	1	1	SweetSpot	0
+S	440	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	440	1	1	SweetSpot	0
+S	441	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	441	1	1	SweetSpot	0
+S	442	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	442	1	1	SweetSpot	0
+S	443	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	443	1	1	SweetSpot	0
+S	444	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	444	1	1	SweetSpot	0
+S	445	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	445	1	1	SweetSpot	0
+S	446	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	446	1	1	SweetSpot	0
+S	447	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	447	1	1	SweetSpot	0
+S	448	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	448	1	1	SweetSpot	0
+S	449	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	449	1	1	SweetSpot	0
+S	450	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	450	1	1	SweetSpot	0
+S	451	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	451	1	1	SweetSpot	0
+S	452	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	452	1	1	SweetSpot	0
+S	453	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	453	1	1	SweetSpot	0
+S	454	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	454	1	1	SweetSpot	0
+S	455	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	455	1	1	SweetSpot	0
+S	456	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	456	1	1	SweetSpot	0
+S	457	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	457	1	1	SweetSpot	0
+S	458	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	458	1	1	SweetSpot	0
+S	459	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	459	1	1	SweetSpot	0
+S	460	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	460	1	1	SweetSpot	0
+S	461	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	461	1	1	SweetSpot	0
+S	462	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	462	1	1	SweetSpot	0
+S	463	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	463	1	1	SweetSpot	0
+S	464	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	464	1	1	SweetSpot	0
+S	465	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	465	1	1	SweetSpot	0
+S	466	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	466	1	1	SweetSpot	0
+S	467	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	467	1	1	SweetSpot	0
+S	468	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	468	1	1	SweetSpot	0
+S	469	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	469	1	1	SweetSpot	0
+S	470	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	470	1	1	SweetSpot	0
+S	471	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	471	1	1	SweetSpot	0
+S	472	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	472	1	1	SweetSpot	0
+S	473	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	473	1	1	SweetSpot	0
+S	474	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	474	1	1	SweetSpot	0
+S	475	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	475	1	1	SweetSpot	0
+S	476	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	476	1	1	SweetSpot	0
+S	477	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	477	1	1	SweetSpot	0
+S	478	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	478	1	1	SweetSpot	0
+S	479	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	479	1	1	SweetSpot	0
+S	480	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	480	1	1	SweetSpot	0
+S	481	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	481	1	1	SweetSpot	0
+S	482	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	482	1	1	SweetSpot	0
+S	483	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	483	1	1	SweetSpot	0
+S	484	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	484	1	1	SweetSpot	0
+S	485	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	485	1	1	SweetSpot	0
+S	486	1	CORSUB	QueryPrimary	1	E	0,0,0,0
+R	486	1	1	QueryPrimary	0
+S	486	1	CORSUB	QueryPrimary	1	E	0,0,0,0
+R	486	1	1	QueryPrimary	0
+S	486	1	CORSUB	FirePrimary	1	E	
+R	486	1	1	FirePrimary	0
+S	486	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	486	1	1	SweetSpot	0
+S	487	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	487	1	1	SweetSpot	0
+S	488	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	488	1	1	SweetSpot	0
+S	489	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	489	1	1	SweetSpot	0
+S	490	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	490	1	1	SweetSpot	0
+S	491	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	491	1	1	SweetSpot	0
+S	492	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	492	1	1	SweetSpot	0
+S	493	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	493	1	1	SweetSpot	0
+S	494	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	494	1	1	SweetSpot	0
+S	495	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	495	1	1	SweetSpot	0
+S	496	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	496	1	1	SweetSpot	0
+S	497	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	497	1	1	SweetSpot	0
+S	498	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	498	1	1	SweetSpot	0
+S	499	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	499	1	1	SweetSpot	0
+S	500	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	500	1	1	SweetSpot	0
+S	501	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	501	1	1	SweetSpot	0
+S	502	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	502	1	1	SweetSpot	0
+S	503	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	503	1	1	SweetSpot	0
+S	504	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	504	1	1	SweetSpot	0
+S	505	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	505	1	1	SweetSpot	0
+S	506	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	506	1	1	SweetSpot	0
+S	507	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	507	1	1	SweetSpot	0
+S	508	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	508	1	1	SweetSpot	0
+S	509	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	509	1	1	SweetSpot	0
+S	510	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	510	1	1	SweetSpot	0
+S	511	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	511	1	1	SweetSpot	0
+S	512	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	512	1	1	SweetSpot	0
+S	513	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	513	1	1	SweetSpot	0
+S	514	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	514	1	1	SweetSpot	0
+S	515	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	515	1	1	SweetSpot	0
+S	516	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	516	1	1	SweetSpot	0
+S	517	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	517	1	1	SweetSpot	0
+S	518	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	518	1	1	SweetSpot	0
+S	519	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	519	1	1	SweetSpot	0
+S	520	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	520	1	1	SweetSpot	0
+S	521	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	521	1	1	SweetSpot	0
+S	522	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	522	1	1	SweetSpot	0
+S	523	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	523	1	1	SweetSpot	0
+S	524	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	524	1	1	SweetSpot	0
+S	525	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	525	1	1	SweetSpot	0
+S	526	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	526	1	1	SweetSpot	0
+S	527	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	527	1	1	SweetSpot	0
+S	528	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	528	1	1	SweetSpot	0
+S	529	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	529	1	1	SweetSpot	0
+S	530	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	530	1	1	SweetSpot	0
+S	531	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	531	1	1	SweetSpot	0
+S	532	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	532	1	1	SweetSpot	0
+S	533	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	533	1	1	SweetSpot	0
+S	534	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	534	1	1	SweetSpot	0
+S	535	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	535	1	1	SweetSpot	0
+S	536	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	536	1	1	SweetSpot	0
+S	537	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	537	1	1	SweetSpot	0
+S	538	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	538	1	1	SweetSpot	0
+S	539	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	539	1	1	SweetSpot	0
+S	540	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	540	1	1	SweetSpot	0
+S	541	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	541	1	1	SweetSpot	0
+S	542	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	542	1	1	SweetSpot	0
+S	543	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	543	1	1	SweetSpot	0
+S	544	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	544	1	1	SweetSpot	0
+S	545	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	545	1	1	SweetSpot	0
+S	546	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	546	1	1	SweetSpot	0
+S	547	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	547	1	1	SweetSpot	0
+S	548	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	548	1	1	SweetSpot	0
+S	549	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	549	1	1	SweetSpot	0
+S	550	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	550	1	1	SweetSpot	0
+S	551	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	551	1	1	SweetSpot	0
+S	552	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	552	1	1	SweetSpot	0
+S	553	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	553	1	1	SweetSpot	0
+S	554	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	554	1	1	SweetSpot	0
+S	555	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	555	1	1	SweetSpot	0
+S	556	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	556	1	1	SweetSpot	0
+S	557	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	557	1	1	SweetSpot	0
+S	558	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	558	1	1	SweetSpot	0
+S	559	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	559	1	1	SweetSpot	0
+S	560	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	560	1	1	SweetSpot	0
+S	561	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	561	1	1	SweetSpot	0
+S	562	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	562	1	1	SweetSpot	0
+S	563	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	563	1	1	SweetSpot	0
+S	564	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	564	1	1	SweetSpot	0
+S	565	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	565	1	1	SweetSpot	0
+S	566	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	566	1	1	SweetSpot	0
+S	567	1	CORSUB	QueryPrimary	1	E	0,0,0,0
+R	567	1	1	QueryPrimary	0
+S	567	1	CORSUB	QueryPrimary	1	E	0,0,0,0
+R	567	1	1	QueryPrimary	0
+S	567	1	CORSUB	FirePrimary	1	E	
+R	567	1	1	FirePrimary	0
+S	567	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	567	1	1	SweetSpot	0
+S	568	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	568	1	1	SweetSpot	0
+S	569	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	569	1	1	SweetSpot	0
+S	570	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	570	1	1	SweetSpot	0
+S	571	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	571	1	1	SweetSpot	0
+S	572	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	572	1	1	SweetSpot	0
+S	573	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	573	1	1	SweetSpot	0
+S	574	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	574	1	1	SweetSpot	0
+S	575	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	575	1	1	SweetSpot	0
+S	576	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	576	1	1	SweetSpot	0
+S	577	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	577	1	1	SweetSpot	0
+S	578	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	578	1	1	SweetSpot	0
+S	579	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	579	1	1	SweetSpot	0
+S	580	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	580	1	1	SweetSpot	0
+S	581	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	581	1	1	SweetSpot	0
+S	582	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	582	1	1	SweetSpot	0
+S	583	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	583	1	1	SweetSpot	0
+S	584	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	584	1	1	SweetSpot	0
+S	585	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	585	1	1	SweetSpot	0
+S	586	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	586	1	1	SweetSpot	0
+S	587	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	587	1	1	SweetSpot	0
+S	588	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	588	1	1	SweetSpot	0
+S	589	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	589	1	1	SweetSpot	0
+S	590	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	590	1	1	SweetSpot	0
+S	591	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	591	1	1	SweetSpot	0
+S	592	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	592	1	1	SweetSpot	0
+S	593	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	593	1	1	SweetSpot	0
+S	594	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	594	1	1	SweetSpot	0
+S	595	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	595	1	1	SweetSpot	0
+S	596	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	596	1	1	SweetSpot	0
+S	597	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	597	1	1	SweetSpot	0
+S	598	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	598	1	1	SweetSpot	0
+S	599	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	599	1	1	SweetSpot	0
+S	600	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	600	1	1	SweetSpot	0
+S	601	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	601	1	1	SweetSpot	0
+S	602	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	602	1	1	SweetSpot	0
+S	603	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	603	1	1	SweetSpot	0
+S	604	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	604	1	1	SweetSpot	0
+S	605	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	605	1	1	SweetSpot	0
+S	606	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	606	1	1	SweetSpot	0
+S	607	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	607	1	1	SweetSpot	0
+S	608	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	608	1	1	SweetSpot	0
+S	609	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	609	1	1	SweetSpot	0
+S	610	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	610	1	1	SweetSpot	0
+S	611	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	611	1	1	SweetSpot	0
+S	612	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	612	1	1	SweetSpot	0
+S	613	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	613	1	1	SweetSpot	0
+S	614	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	614	1	1	SweetSpot	0
+S	615	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	615	1	1	SweetSpot	0
+S	616	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	616	1	1	SweetSpot	0
+S	617	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	617	1	1	SweetSpot	0
+S	618	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	618	1	1	SweetSpot	0
+S	619	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	619	1	1	SweetSpot	0
+S	620	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	620	1	1	SweetSpot	0
+S	621	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	621	1	1	SweetSpot	0
+S	622	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	622	1	1	SweetSpot	0
+S	623	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	623	1	1	SweetSpot	0
+S	624	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	624	1	1	SweetSpot	0
+S	625	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	625	1	1	SweetSpot	0
+S	626	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	626	1	1	SweetSpot	0
+S	627	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	627	1	1	SweetSpot	0
+S	628	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	628	1	1	SweetSpot	0
+S	629	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	629	1	1	SweetSpot	0
+S	630	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	630	1	1	SweetSpot	0
+S	631	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	631	1	1	SweetSpot	0
+S	632	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	632	1	1	SweetSpot	0
+S	633	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	633	1	1	SweetSpot	0
+S	634	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	634	1	1	SweetSpot	0
+S	635	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	635	1	1	SweetSpot	0
+S	636	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	636	1	1	SweetSpot	0
+S	637	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	637	1	1	SweetSpot	0
+S	638	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	638	1	1	SweetSpot	0
+S	639	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	639	1	1	SweetSpot	0
+S	640	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	640	1	1	SweetSpot	0
+S	641	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	641	1	1	SweetSpot	0
+S	642	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	642	1	1	SweetSpot	0
+S	643	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	643	1	1	SweetSpot	0
+S	644	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	644	1	1	SweetSpot	0
+S	645	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	645	1	1	SweetSpot	0
+S	646	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	646	1	1	SweetSpot	0
+S	647	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	647	1	1	SweetSpot	0
+S	648	1	CORSUB	QueryPrimary	1	E	0,0,0,0
+R	648	1	1	QueryPrimary	0
+S	648	1	CORSUB	QueryPrimary	1	E	0,0,0,0
+R	648	1	1	QueryPrimary	0
+S	648	1	CORSUB	FirePrimary	1	E	
+R	648	1	1	FirePrimary	0
+S	648	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	648	1	1	SweetSpot	0
+S	649	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	649	1	1	SweetSpot	0
+S	650	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	650	1	1	SweetSpot	0
+S	651	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	651	1	1	SweetSpot	0
+S	652	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	652	1	1	SweetSpot	0
+S	653	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	653	1	1	SweetSpot	0
+S	654	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	654	1	1	SweetSpot	0
+S	655	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	655	1	1	SweetSpot	0
+S	656	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	656	1	1	SweetSpot	0
+S	657	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	657	1	1	SweetSpot	0
+S	658	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	658	1	1	SweetSpot	0
+S	659	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	659	1	1	SweetSpot	0
+S	660	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	660	1	1	SweetSpot	0
+S	661	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	661	1	1	SweetSpot	0
+S	662	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	662	1	1	SweetSpot	0
+S	663	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	663	1	1	SweetSpot	0
+S	664	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	664	1	1	SweetSpot	0
+S	665	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	665	1	1	SweetSpot	0
+S	666	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	666	1	1	SweetSpot	0
+S	667	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	667	1	1	SweetSpot	0
+S	668	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	668	1	1	SweetSpot	0
+S	669	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	669	1	1	SweetSpot	0
+S	670	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	670	1	1	SweetSpot	0
+S	671	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	671	1	1	SweetSpot	0
+S	672	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	672	1	1	SweetSpot	0
+S	673	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	673	1	1	SweetSpot	0
+S	674	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	674	1	1	SweetSpot	0
+S	675	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	675	1	1	SweetSpot	0
+S	676	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	676	1	1	SweetSpot	0
+S	677	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	677	1	1	SweetSpot	0
+S	678	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	678	1	1	SweetSpot	0
+S	679	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	679	1	1	SweetSpot	0
+S	680	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	680	1	1	SweetSpot	0
+S	681	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	681	1	1	SweetSpot	0
+S	682	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	682	1	1	SweetSpot	0
+S	683	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	683	1	1	SweetSpot	0
+S	684	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	684	1	1	SweetSpot	0
+S	685	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	685	1	1	SweetSpot	0
+S	686	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	686	1	1	SweetSpot	0
+S	687	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	687	1	1	SweetSpot	0
+S	688	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	688	1	1	SweetSpot	0
+S	689	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	689	1	1	SweetSpot	0
+S	690	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	690	1	1	SweetSpot	0
+S	691	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	691	1	1	SweetSpot	0
+S	692	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	692	1	1	SweetSpot	0
+S	693	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	693	1	1	SweetSpot	0
+S	694	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	694	1	1	SweetSpot	0
+S	695	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	695	1	1	SweetSpot	0
+S	696	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	696	1	1	SweetSpot	0
+S	697	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	697	1	1	SweetSpot	0
+S	698	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	698	1	1	SweetSpot	0
+S	699	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	699	1	1	SweetSpot	0
+S	700	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	700	1	1	SweetSpot	0
+S	701	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	701	1	1	SweetSpot	0
+S	702	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	702	1	1	SweetSpot	0
+S	703	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	703	1	1	SweetSpot	0
+S	704	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	704	1	1	SweetSpot	0
+S	705	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	705	1	1	SweetSpot	0
+S	706	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	706	1	1	SweetSpot	0
+S	707	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	707	1	1	SweetSpot	0
+S	708	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	708	1	1	SweetSpot	0
+S	709	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	709	1	1	SweetSpot	0
+S	710	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	710	1	1	SweetSpot	0
+S	711	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	711	1	1	SweetSpot	0
+S	712	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	712	1	1	SweetSpot	0
+S	713	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	713	1	1	SweetSpot	0
+S	714	1	CORSUB	SweetSpot	1	E	0,0,0,0
+R	714	1	1	SweetSpot	0
+S	715	1	CORSUB	StopMoving	1	E	
+K	715	1	0	StartMoving	1
+R	715	1	1	StopMoving	0
+S	715	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	715	1	0	SweetSpot	0
+S	716	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	716	1	0	SweetSpot	0
+S	717	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	717	1	0	SweetSpot	0
+S	718	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	718	1	0	SweetSpot	0
+S	719	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	719	1	0	SweetSpot	0
+S	720	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	720	1	0	SweetSpot	0
+S	721	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	721	1	0	SweetSpot	0
+S	722	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	722	1	0	SweetSpot	0
+S	723	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	723	1	0	SweetSpot	0
+S	724	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	724	1	0	SweetSpot	0
+S	725	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	725	1	0	SweetSpot	0
+S	726	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	726	1	0	SweetSpot	0
+S	727	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	727	1	0	SweetSpot	0
+S	728	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	728	1	0	SweetSpot	0
+S	729	1	CORSUB	QueryPrimary	0	E	0,0,0,0
+R	729	1	0	QueryPrimary	0
+S	729	1	CORSUB	QueryPrimary	0	E	0,0,0,0
+R	729	1	0	QueryPrimary	0
+S	729	1	CORSUB	FirePrimary	0	E	
+R	729	1	0	FirePrimary	0
+S	729	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	729	1	0	SweetSpot	0
+S	730	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	730	1	0	SweetSpot	0
+S	731	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	731	1	0	SweetSpot	0
+S	732	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	732	1	0	SweetSpot	0
+S	733	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	733	1	0	SweetSpot	0
+S	734	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	734	1	0	SweetSpot	0
+S	735	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	735	1	0	SweetSpot	0
+S	736	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	736	1	0	SweetSpot	0
+S	737	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	737	1	0	SweetSpot	0
+S	738	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	738	1	0	SweetSpot	0
+S	739	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	739	1	0	SweetSpot	0
+S	740	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	740	1	0	SweetSpot	0
+S	741	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	741	1	0	SweetSpot	0
+S	742	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	742	1	0	SweetSpot	0
+S	743	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	743	1	0	SweetSpot	0
+S	744	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	744	1	0	SweetSpot	0
+S	745	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	745	1	0	SweetSpot	0
+S	746	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	746	1	0	SweetSpot	0
+S	747	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	747	1	0	SweetSpot	0
+S	748	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	748	1	0	SweetSpot	0
+S	749	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	749	1	0	SweetSpot	0
+S	750	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	750	1	0	SweetSpot	0
+S	751	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	751	1	0	SweetSpot	0
+S	752	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	752	1	0	SweetSpot	0
+S	753	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	753	1	0	SweetSpot	0
+S	754	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	754	1	0	SweetSpot	0
+S	755	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	755	1	0	SweetSpot	0
+S	756	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	756	1	0	SweetSpot	0
+S	757	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	757	1	0	SweetSpot	0
+S	758	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	758	1	0	SweetSpot	0
+S	759	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	759	1	0	SweetSpot	0
+S	760	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	760	1	0	SweetSpot	0
+S	761	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	761	1	0	SweetSpot	0
+S	762	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	762	1	0	SweetSpot	0
+S	763	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	763	1	0	SweetSpot	0
+S	764	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	764	1	0	SweetSpot	0
+S	765	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	765	1	0	SweetSpot	0
+S	766	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	766	1	0	SweetSpot	0
+S	767	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	767	1	0	SweetSpot	0
+S	768	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	768	1	0	SweetSpot	0
+S	769	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	769	1	0	SweetSpot	0
+S	770	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	770	1	0	SweetSpot	0
+S	771	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	771	1	0	SweetSpot	0
+S	772	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	772	1	0	SweetSpot	0
+S	773	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	773	1	0	SweetSpot	0
+S	774	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	774	1	0	SweetSpot	0
+S	775	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	775	1	0	SweetSpot	0
+S	776	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	776	1	0	SweetSpot	0
+S	777	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	777	1	0	SweetSpot	0
+S	778	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	778	1	0	SweetSpot	0
+S	779	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	779	1	0	SweetSpot	0
+S	780	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	780	1	0	SweetSpot	0
+S	781	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	781	1	0	SweetSpot	0
+S	782	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	782	1	0	SweetSpot	0
+S	783	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	783	1	0	SweetSpot	0
+S	784	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	784	1	0	SweetSpot	0
+S	785	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	785	1	0	SweetSpot	0
+S	786	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	786	1	0	SweetSpot	0
+S	787	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	787	1	0	SweetSpot	0
+S	788	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	788	1	0	SweetSpot	0
+S	789	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	789	1	0	SweetSpot	0
+S	790	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	790	1	0	SweetSpot	0
+S	791	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	791	1	0	SweetSpot	0
+S	792	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	792	1	0	SweetSpot	0
+S	793	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	793	1	0	SweetSpot	0
+S	794	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	794	1	0	SweetSpot	0
+S	795	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	795	1	0	SweetSpot	0
+S	796	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	796	1	0	SweetSpot	0
+S	797	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	797	1	0	SweetSpot	0
+S	798	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	798	1	0	SweetSpot	0
+S	799	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	799	1	0	SweetSpot	0
+S	800	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	800	1	0	SweetSpot	0
+S	801	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	801	1	0	SweetSpot	0
+S	802	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	802	1	0	SweetSpot	0
+S	803	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	803	1	0	SweetSpot	0
+S	804	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	804	1	0	SweetSpot	0
+S	805	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	805	1	0	SweetSpot	0
+S	806	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	806	1	0	SweetSpot	0
+S	807	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	807	1	0	SweetSpot	0
+S	808	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	808	1	0	SweetSpot	0
+S	809	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	809	1	0	SweetSpot	0
+S	810	1	CORSUB	QueryPrimary	0	E	0,0,0,0
+R	810	1	0	QueryPrimary	0
+S	810	1	CORSUB	QueryPrimary	0	E	0,0,0,0
+R	810	1	0	QueryPrimary	0
+S	810	1	CORSUB	FirePrimary	0	E	
+R	810	1	0	FirePrimary	0
+S	810	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	810	1	0	SweetSpot	0
+S	811	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	811	1	0	SweetSpot	0
+S	812	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	812	1	0	SweetSpot	0
+S	813	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	813	1	0	SweetSpot	0
+S	814	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	814	1	0	SweetSpot	0
+S	815	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	815	1	0	SweetSpot	0
+S	816	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	816	1	0	SweetSpot	0
+S	817	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	817	1	0	SweetSpot	0
+S	818	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	818	1	0	SweetSpot	0
+S	819	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	819	1	0	SweetSpot	0
+S	820	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	820	1	0	SweetSpot	0
+S	821	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	821	1	0	SweetSpot	0
+S	822	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	822	1	0	SweetSpot	0
+S	823	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	823	1	0	SweetSpot	0
+S	824	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	824	1	0	SweetSpot	0
+S	825	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	825	1	0	SweetSpot	0
+S	826	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	826	1	0	SweetSpot	0
+S	827	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	827	1	0	SweetSpot	0
+S	828	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	828	1	0	SweetSpot	0
+S	829	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	829	1	0	SweetSpot	0
+S	830	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	830	1	0	SweetSpot	0
+S	831	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	831	1	0	SweetSpot	0
+S	832	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	832	1	0	SweetSpot	0
+S	833	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	833	1	0	SweetSpot	0
+S	834	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	834	1	0	SweetSpot	0
+S	835	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	835	1	0	SweetSpot	0
+S	836	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	836	1	0	SweetSpot	0
+S	837	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	837	1	0	SweetSpot	0
+S	838	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	838	1	0	SweetSpot	0
+S	839	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	839	1	0	SweetSpot	0
+S	840	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	840	1	0	SweetSpot	0
+S	841	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	841	1	0	SweetSpot	0
+S	842	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	842	1	0	SweetSpot	0
+S	843	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	843	1	0	SweetSpot	0
+S	844	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	844	1	0	SweetSpot	0
+S	845	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	845	1	0	SweetSpot	0
+S	846	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	846	1	0	SweetSpot	0
+S	847	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	847	1	0	SweetSpot	0
+S	848	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	848	1	0	SweetSpot	0
+S	849	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	849	1	0	SweetSpot	0
+S	850	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	850	1	0	SweetSpot	0
+S	851	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	851	1	0	SweetSpot	0
+S	852	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	852	1	0	SweetSpot	0
+S	853	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	853	1	0	SweetSpot	0
+S	854	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	854	1	0	SweetSpot	0
+S	855	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	855	1	0	SweetSpot	0
+S	856	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	856	1	0	SweetSpot	0
+S	857	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	857	1	0	SweetSpot	0
+S	858	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	858	1	0	SweetSpot	0
+S	859	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	859	1	0	SweetSpot	0
+S	860	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	860	1	0	SweetSpot	0
+S	861	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	861	1	0	SweetSpot	0
+S	862	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	862	1	0	SweetSpot	0
+S	863	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	863	1	0	SweetSpot	0
+S	864	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	864	1	0	SweetSpot	0
+S	865	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	865	1	0	SweetSpot	0
+S	866	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	866	1	0	SweetSpot	0
+S	867	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	867	1	0	SweetSpot	0
+S	868	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	868	1	0	SweetSpot	0
+S	869	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	869	1	0	SweetSpot	0
+S	870	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	870	1	0	SweetSpot	0
+S	871	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	871	1	0	SweetSpot	0
+S	872	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	872	1	0	SweetSpot	0
+S	873	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	873	1	0	SweetSpot	0
+S	874	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	874	1	0	SweetSpot	0
+S	875	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	875	1	0	SweetSpot	0
+S	876	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	876	1	0	SweetSpot	0
+S	877	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	877	1	0	SweetSpot	0
+S	878	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	878	1	0	SweetSpot	0
+S	879	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	879	1	0	SweetSpot	0
+S	880	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	880	1	0	SweetSpot	0
+S	881	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	881	1	0	SweetSpot	0
+S	882	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	882	1	0	SweetSpot	0
+S	883	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	883	1	0	SweetSpot	0
+S	884	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	884	1	0	SweetSpot	0
+S	885	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	885	1	0	SweetSpot	0
+S	886	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	886	1	0	SweetSpot	0
+S	887	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	887	1	0	SweetSpot	0
+S	888	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	888	1	0	SweetSpot	0
+S	889	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	889	1	0	SweetSpot	0
+S	890	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	890	1	0	SweetSpot	0
+S	891	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	891	1	0	SweetSpot	0
+S	892	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	892	1	0	SweetSpot	0
+S	893	1	CORSUB	QueryPrimary	0	E	0,0,0,0
+R	893	1	0	QueryPrimary	0
+S	893	1	CORSUB	QueryPrimary	0	E	0,0,0,0
+R	893	1	0	QueryPrimary	0
+S	893	1	CORSUB	FirePrimary	0	E	
+R	893	1	0	FirePrimary	0
+S	893	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	893	1	0	SweetSpot	0
+S	894	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	894	1	0	SweetSpot	0
+S	895	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	895	1	0	SweetSpot	0
+S	896	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	896	1	0	SweetSpot	0
+S	897	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	897	1	0	SweetSpot	0
+S	898	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	898	1	0	SweetSpot	0
+S	899	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	899	1	0	SweetSpot	0
+S	900	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	900	1	0	SweetSpot	0
+S	901	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	901	1	0	SweetSpot	0
+S	902	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	902	1	0	SweetSpot	0
+S	903	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	903	1	0	SweetSpot	0
+S	904	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	904	1	0	SweetSpot	0
+S	905	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	905	1	0	SweetSpot	0
+S	906	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	906	1	0	SweetSpot	0
+S	907	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	907	1	0	SweetSpot	0
+S	908	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	908	1	0	SweetSpot	0
+S	909	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	909	1	0	SweetSpot	0
+S	910	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	910	1	0	SweetSpot	0
+S	911	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	911	1	0	SweetSpot	0
+S	912	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	912	1	0	SweetSpot	0
+S	913	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	913	1	0	SweetSpot	0
+S	914	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	914	1	0	SweetSpot	0
+S	915	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	915	1	0	SweetSpot	0
+S	916	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	916	1	0	SweetSpot	0
+S	917	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	917	1	0	SweetSpot	0
+S	918	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	918	1	0	SweetSpot	0
+S	919	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	919	1	0	SweetSpot	0
+S	920	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	920	1	0	SweetSpot	0
+S	921	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	921	1	0	SweetSpot	0
+S	922	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	922	1	0	SweetSpot	0
+S	923	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	923	1	0	SweetSpot	0
+S	924	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	924	1	0	SweetSpot	0
+S	925	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	925	1	0	SweetSpot	0
+S	926	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	926	1	0	SweetSpot	0
+S	927	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	927	1	0	SweetSpot	0
+S	928	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	928	1	0	SweetSpot	0
+S	929	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	929	1	0	SweetSpot	0
+S	930	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	930	1	0	SweetSpot	0
+S	931	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	931	1	0	SweetSpot	0
+S	932	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	932	1	0	SweetSpot	0
+S	933	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	933	1	0	SweetSpot	0
+S	934	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	934	1	0	SweetSpot	0
+S	935	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	935	1	0	SweetSpot	0
+S	936	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	936	1	0	SweetSpot	0
+S	937	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	937	1	0	SweetSpot	0
+S	938	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	938	1	0	SweetSpot	0
+S	939	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	939	1	0	SweetSpot	0
+S	940	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	940	1	0	SweetSpot	0
+S	941	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	941	1	0	SweetSpot	0
+S	942	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	942	1	0	SweetSpot	0
+S	943	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	943	1	0	SweetSpot	0
+S	944	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	944	1	0	SweetSpot	0
+S	945	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	945	1	0	SweetSpot	0
+S	946	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	946	1	0	SweetSpot	0
+S	947	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	947	1	0	SweetSpot	0
+S	948	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	948	1	0	SweetSpot	0
+S	949	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	949	1	0	SweetSpot	0
+S	950	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	950	1	0	SweetSpot	0
+S	951	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	951	1	0	SweetSpot	0
+S	952	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	952	1	0	SweetSpot	0
+S	953	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	953	1	0	SweetSpot	0
+S	954	1	CORSUB	SweetSpot	0	E	0,0,0,0
+R	954	1	0	SweetSpot	0

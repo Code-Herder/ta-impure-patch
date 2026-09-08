@@ -68,6 +68,7 @@ PAGES = [
     ("ui-markers",                 "UI markers",                  "Renderer"),
     ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
     ("renderers",                  "Classic and Classic++ renderers", "Renderer"),
+    ("gui-renderer",               "GL UI renderer (phase E)",    "Renderer"),
     ("thread-safe-destruction",    "Thread-safe destruction",     "Renderer"),
 
     ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
@@ -77,6 +78,7 @@ PAGES = [
     ("gui-gadgets",                "GUI gadgets",                 "Tooling"),
     ("scenario-format",            "JSON scenarios",              "Tooling"),
     ("tascene-design",             "tascene — browser render lab", "Tooling"),
+    ("tacob-design",               "tacob — BOS/COB editor",      "Tooling"),
     ("windowed-mode",              "Windowed mode",               "Tooling"),
 
     ("binary-patches",            "The core mechanism",        "Mechanism"),

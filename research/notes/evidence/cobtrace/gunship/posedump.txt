@@ -1,0 +1,46 @@
+posedump: tick=791 idx=1 unit=04AC0138 o3=0473AA08 nparts=14 yaw=45338
+posedump: p0 flare1B HIDDEN off=(0,-147455,-81920) move=(0,0,0) turn=(0,0,0) err=20.97
+posedump:   v0 node=(-770047,147455,499711) vbuf=(-465513,1046847,699291)
+posedump: p1 flare2B HIDDEN off=(222822,0,425983) move=(0,0,0) turn=(0,0,0) err=17.27
+posedump:   v0 node=(0,0,0) vbuf=(706780,-454935,284867)
+posedump: p2 base off=(0,0,0) move=(0,0,0) turn=(0,0,0) err=48.37
+posedump:   v0 node=(-1572864,0,-1572864) vbuf=(-1477471,1211524,-1138900)
+posedump:   v1 node=(1572864,0,1572864) vbuf=(1477471,-1211524,1138900)
+posedump:   v2 node=(-1572864,0,1572864) vbuf=(-409476,1211524,1819984)
+posedump: p3 wing1 off=(0,344063,0) move=(475135,0,0) turn=(0,0,0) err=33.66
+posedump:   v0 node=(1065287,-3276,-507903) vbuf=(998482,-969208,-900373)
+posedump:   v1 node=(327,-65536,966656) vbuf=(815186,-188609,733460)
+posedump:   v2 node=(327,65536,966656) vbuf=(910150,-105022,699183)
+posedump: p4 wing2 off=(0,344063,0) move=(-475136,0,0) turn=(0,0,0) err=34.16
+posedump:   v0 node=(-327,-65536,966656) vbuf=(244780,543856,939345)
+posedump:   v1 node=(-327,65536,-802816) vbuf=(-261004,627444,-759303)
+posedump:   v2 node=(-327,65536,966656) vbuf=(339743,627444,905069)
+posedump: p5 tail1 off=(163840,442368,-983040) move=(0,0,0) turn=(0,0,10184) err=27.79
+posedump:   v0 node=(376831,0,-245760) vbuf=(354374,192448,-1434305)
+posedump:   v1 node=(0,0,-229375) vbuf=(7159,155908,-1291559)
+posedump:   v2 node=(376831,0,-475135) vbuf=(276500,192448,-1650056)
+posedump: p6 tail2 off=(-163840,442368,-983040) move=(0,0,0) turn=(0,0,53581) err=35.51
+posedump:   v0 node=(-376831,0,-245760) vbuf=(-39312,746862,-1292205)
+posedump:   v1 node=(0,0,360448) vbuf=(10850,408308,-665823)
+posedump:   v2 node=(0,0,-229375) vbuf=(-189398,408308,-1220613)
+posedump: p7 weapon1 off=(0,147455,81920) move=(-466943,0,0) turn=(0,0,0) err=22.39
+posedump:   v0 node=(-24576,-114687,262144) vbuf=(-154282,399497,421478)
+posedump:   v1 node=(-24576,98304,-475136) vbuf=(-250278,535327,-327710)
+posedump:   v2 node=(-24576,98304,262144) vbuf=(33,535327,365779)
+posedump: p8 weapon2 off=(6552,147455,81920) move=(483328,0,0) turn=(0,0,0) err=23.45
+posedump:   v0 node=(1638,-131071,409600) vbuf=(473579,-368151,351622)
+posedump:   v1 node=(1638,114687,409600) vbuf=(651634,-211426,287354)
+posedump:   v2 node=(1638,114687,-491520) vbuf=(345698,-211426,-560243)
+posedump: p9 flare1A HIDDEN off=(-229375,0,417791) move=(0,0,0) turn=(0,0,0) err=13.07
+posedump:   v0 node=(0,0,0) vbuf=(-141194,630386,582229)
+posedump: p10 flare2A HIDDEN off=(763493,0,425983) move=(0,0,0) turn=(0,0,0) err=23.19
+posedump:   v0 node=(0,0,0) vbuf=(1031098,-871396,167806)
+posedump: p11 wing1thrust HIDDEN off=(0,-344063,0) move=(0,0,0) turn=(0,0,0) err=26.38
+posedump:   v0 node=(-819200,294910,-557056) vbuf=(-751857,1185054,-320853)
+posedump:   v1 node=(-819200,-32768,-557056) vbuf=(-989265,976087,-235162)
+posedump: p12 wing2thrust HIDDEN off=(0,-344063,0) move=(0,0,0) turn=(0,0,0) err=27.22
+posedump:   v0 node=(819200,294910,-557056) vbuf=(800942,-808912,-881329)
+posedump:   v1 node=(819200,-32768,-557056) vbuf=(563534,-1017880,-795637)
+posedump: p13 rearthrust HIDDEN off=(0,0,0) move=(0,0,0) turn=(0,0,0) err=30.78
+posedump:   v0 node=(0,311295,-1228800) vbuf=(-191647,198520,-1237221)
+posedump:   v1 node=(0,311295,-1490944) vbuf=(-280647,198520,-1483794)

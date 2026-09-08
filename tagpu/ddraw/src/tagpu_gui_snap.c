@@ -1,4 +1,5 @@
-/* tagpu_ui.c — on-demand snapshot of the live GUI gadget tree.
+/* tagpu_gui_snap.c — on-demand snapshot of the live GUI gadget tree (was tagpu_ui.c;
+   the read half of `tacli ui`, now part of the tagpu_gui_* family, gui-renderer.md 4).
    Contract: inc/tagpu_ui.h. Offsets and evidence: research/notes/gui-gadgets.md. */
 
 #include <windows.h>

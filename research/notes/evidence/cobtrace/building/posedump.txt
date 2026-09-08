@@ -1,0 +1,13 @@
+posedump: tick=583 idx=1 unit=04AC0138 o3=028085C0 nparts=3 yaw=32768
+posedump: p0 base off=(0,0,0) move=(0,0,0) turn=(0,0,0) err=0.00
+posedump:   v0 node=(2070937,0,2070937) vbuf=(-2070937,0,-2070937)
+posedump:   v1 node=(-2070937,0,-2070937) vbuf=(2070937,0,2070937)
+posedump:   v2 node=(2070937,0,-2070937) vbuf=(-2070937,0,2070937)
+posedump: p1 blades off=(17747,1061058,341704) move=(0,0,0) turn=(0,0,17356) err=0.00
+posedump:   v0 node=(-260485,0,458194) vbuf=(-392020,4749427,691458)
+posedump:   v1 node=(130242,225585,458194) vbuf=(-607068,5117467,543616)
+posedump:   v2 node=(130242,-225585,458194) vbuf=(-236895,5159451,798105)
+posedump: p2 post off=(-26541,3947724,-8519) move=(0,0,0) turn=(0,39050,0) err=0.00
+posedump:   v0 node=(-138035,1286570,322110) vbuf=(-269689,5234294,195753)
+posedump:   v1 node=(159537,1286570,113507) vbuf=(93703,5234294,192435)
+posedump:   v2 node=(159661,1286570,322110) vbuf=(-24373,5234294,364404)

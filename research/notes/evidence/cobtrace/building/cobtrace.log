@@ -1,0 +1,24 @@
+# tagpu_cobtrace v1	filter=,ARMWIN,	columns: S tick unit type script slot source args… | R tick unit slot script value | X tick unit script source | K tick unit slot script by | D tick unit slot value
+S	91	1	ARMWIN	Create	0	E	
+S	91	1	ARMWIN	InitState	1	L:0	
+R	91	1	1	InitState	0
+S	91	1	ARMWIN	Activate	1	E	
+S	92	1	ARMWIN	SmokeUnit	2	C:0	
+R	92	1	0	Create	0
+S	92	1	ARMWIN	RequestState	0	C:1	0
+R	92	1	1	Activate	0
+S	93	1	ARMWIN	Go	1	L:0	
+R	93	1	1	Go	0
+R	94	1	0	RequestState	0
+S	332	1	ARMWIN	SetDirection	0	E	40502
+S	332	1	ARMWIN	SetSpeed	1	E	39168
+R	332	1	0	SetDirection	0
+R	332	1	1	SetSpeed	0
+S	572	1	ARMWIN	SetDirection	0	E	30362
+S	572	1	ARMWIN	SetSpeed	1	E	43744
+R	572	1	0	SetDirection	0
+R	572	1	1	SetSpeed	0
+S	902	1	ARMWIN	SetDirection	0	E	35781
+S	902	1	ARMWIN	SetSpeed	1	E	33360
+R	902	1	0	SetDirection	0
+R	902	1	1	SetSpeed	0

@@ -1950,6 +1950,356 @@ which stock deselects when the order byte is 1.
 - **The right button cannot execute a command button, by construction** — `0x499100` returns at
   its first test whenever `main+0x2CC3 != 1`, and its order call passes the literal 1.
 
+## The UI surfaces and their writers — mapped by us (Phase E, G15a, 2026-09-07)
+
+*Everything the engine draws into an 8bpp surface on the UI path — the shell screens, the
+in-game side panel and its option screens, the bars, the minimap, chat and the popups — and
+the surfaces those pixels land in. Established for [the GL UI renderer](gui-renderer.html):
+static reading of the pristine binary (objdump, md5 `8e74a1dffa1f5988624c52048f5b20cd`),
+then MEASURED by a census that observes every leaf below and diffs every surface at every
+flip (`tagpu_gui_hook.c`, `tagpu_gui.on=census`). The census explains 100 % of the pixels
+that change on the presented surface across the whole screen inventory (§ "What the census
+measured"); the leaves below are therefore the complete set for the UI, and the exceptions
+are named.*
+
+### The graphics globals block — `globals = *(void**)0x51FBD0` [VERIFIED]
+
+`0x4B6220` is `mov eax,[0x51FBD0]; ret`. The fields the UI path uses:
+
+| Offset | Meaning | Evidence |
+|---|---|---|
+| `+0x44` | non-zero ⇒ GDI/windowed present; `+0x50..+0x7F` is then an inline OFFSCREEN over the DIB | `0x4C5EA4..0x4C5EC3`, `0x4C63C0` |
+| `+0x88` | `IDirectDrawSurface*` primary (`Lock` vtbl+0x64 at `0x4C6509`, `Unlock` vtbl+0x80 at `0x4C6595`, `Flip` vtbl+0x2C at `0x4C6682`) | `0x4C64E7`, `0x4C658A`, `0x4C6676` |
+| `+0x8C` | `IDirectDrawSurface*` used when there is no system back buffer | `0x4C5EC6..0x4C5F92` |
+| `+0x98` | OFFSCREEN\* written by `0x4C61F0(surface)`; read **only** on the flip's `DDERR_SURFACELOST` restore paths (`0x4C65E3`, `0x4C675B`). Not the normal source | `0x4C61F0..0x4C61FF` |
+| `+0xA0..+0xAF` | clip rect copied into the context `0x4C5E70` builds over a locked DD surface | `0x4C5F53..0x4C5F6A` |
+| **`+0xBC`** | **OFFSCREEN\* system-memory back buffer — what every flip presents and every NULL-context blit draws into.** Written by `0x4C69A0(surface)` together with `+0xDC = 1` | `0x4C69A0..0x4C69B9`; read at `0x4C6405`, `0x4C6485`, `0x4C5E86`, `0x4C68B5` |
+| `+0xC0` / `+0xC8` | blend LUT / shade table (the ALP remap) | `0x4B8665`, `0x4B847A` |
+| `+0xD4` / `+0xD8` | screen width / height (`0x4B6700` / `0x4B6710`) | `0x4B6700..0x4B671B` |
+| **`+0xDC`** | 1 ⇒ `+0xBC` is valid; set by `0x4C69A0`, cleared at `0x4C638C` | |
+| `+0xF0` bit 1 | DirectDraw present (clear ⇒ GDI); bits 5 / 7 gate `0x4B8500` / `0x4B8310` | `0x4C63B8`, `0x4B8519`, `0x4B8329` |
+
+`0x4C69A0` has 28 callers; **`0x468D30` inside `DrawGameScreen` makes `*(main+0x37E1B)` the
+back buffer every frame**, and `0x467D7F` (the HUD painter) does the same. **In the shell the
+back buffer is the startup `"OFFSCREEN" 640×480`**, a different object; the census confirmed
+both by address (`main+0x37E1B == *(globals+0xBC) == 0x04490020` in a 1024×768 game).
+
+### The OFFSCREEN object [VERIFIED, `0x4C69F0`]
+
+```
++0x00 width   +0x04 height   +0x08 pitch (= width)   +0x0C pixel base (= this + 0x30, inline)
++0x10 0x2710  +0x14 -1       +0x18 s16 originX  +0x1A s16 originY   (0 on create; the GAF
+                                                  hotspot when 0x4B8A80 built the header
+                                                  over a GAF frame)
++0x1C..+0x28  clip L,T,R,B, INCLUSIVE, (0,0,w-1,h-1) on create
++0x2C         flags: bit0 = heap object, freed by 0x4D85A0
++0x30..       pixels, w*h bytes;  allocation = w*h + 0x30 via 0x4D83B0(tag, size)
+```
+
+- **`SurfaceCreateNamed 0x4C69F0(const char* tag, int w, int h)`** — `stdcall`, `ret 0xC`,
+  returns the object. Prologue `53 56 8B 74 24 10`. 18 callers; the GUI's are `0x4A907C`
+  (the screen's own surface, tagged with the screen's name) and `0x4A90B5` (its `"SAVE UNDER"`
+  snapshot); `0x498407` creates the game offscreen `main+0x37E1B`; the minimap's are
+  `0x466823`, `0x466881`, `0x4669CF`, `0x4669FA`. **The tags name the surfaces**, and a
+  session's inventory reads (MEASURED): `"OFFSCREEN" 640×480` (shell) and `1024×768` (game),
+  one `"<SCREEN>.GUI"` per pushed screen (`MAINMENU.GUI 640×480`, `ARMCOM1.GUI 128×352`,
+  `PREFS.GUI 128×354`, **`VISUALRT.GUI 278×354`**, `TALK.GUI 512×33`, …), a `"SAVE UNDER"` per
+  screen, `"SAVEMOUSE 1..3"`, `"FLIPSURFACE" 128×352`, `"BKUPSURFACE" 300×480`, and one
+  `"bitmaps\<name>.PCX" 640×480` per shell background loaded.
+- **`SurfaceFree 0x4C6AC0(OFFSCREEN*)`** — `stdcall`, `ret 4`: `if (p && p[+0x2C] & 1)
+  0x4D85A0(p)`. Prologue `8B 44 24 04 85 C0`. 23 callers; the GUI's are `0x4A9537`
+  (`panel+0xB8`) and `0x4A9549` (`panel+0xBC`) in the teardown arm.
+- **`SurfaceFill 0x4C6890(surface, colour)`** — `stdcall`, `ret 8`: fills `h·pitch` bytes at
+  `+0xC`; `NULL` ⇒ the back buffer. Prologue `83 EC 64 53 55 56 57`.
+- **`GetContext 0x4C5E70(OFFSCREEN* out)`** — `stdcall`, `ret 4`, prologue `83 EC 6C 56 57`
+  (then `E8`): the NULL-context path every blitter takes. Arm 1, `[globals+0xDC] != 0` →
+  `rep movs 0xC` from `*(globals+0xBC)`, return 1 — **the arm taken in game and in the shell**;
+  arm 2 the GDI block; arm 3 locks `[globals+0x8C]`. `0x4C5FA0(ctx)` releases arm 3 only. 51
+  call sites each. **So a blitter given `ctx == NULL` draws into the system back buffer.**
+- `0x4C6AE0 GetClipRect` — `thiscall(ecx = ctx, RECT* out)`, `ret 4`, four dwords from
+  `ctx+0x1C`. `0x4B7E60 ClipRectPair(dst, src, clip)` — `stdcall`, `ret 0xC`.
+
+### `FlipOffscreenToPrimary 0x4C63A0` — no arguments, and where the cursor goes [VERIFIED]
+
+`void (void)`, plain `ret`; prologue `81 EC F4 00 00 00` (6, or 10 with the four pushes). 44
+`call`s and 3 tail `jmp`s (`0x4257BA`, `0x425B7B`, `0x45CFB8`): `0x46A3DB` in DrawGameScreen,
+`0x49FA32` in the shell's modal loop `0x49F9C0`, `0x467E41` in the HUD painter, and 41 more.
+The DirectDraw arm (`0x4C6475`) requires `[globals+0xDC]`, takes **`edi = *(globals+0xBC)`** as
+the source, checks it against the screen size, locks the primary, builds a context over it at
+`[esp+0x38]`, **draws the cursor into the back buffer with `0x4C67C0(globals, edi)`**, copies
+back buffer → primary with `0x4CBBE0(&ctx, edi, 0, 0)`, **restores the cursor's background
+with `0x4C6B70(edi, [globals+0x1BE], [globals+0x1B6], [globals+0x1BA])`**, and unlocks. So the
+back buffer holds the cursor only between two calls inside the flip: at the flip's entry it
+does not, and a diff taken there never sees the cursor. The surface-lost arm re-copies
+`[globals+0x98]`; the GDI arm copies into `globals+0x50` and presents with `StretchDIBits`
+[INFERRED from the IAT slot]. **MEASURED: the shell flips about 5 000 times a second** on this
+machine (31 678 flips in the first 6 s of a launch); in game once per `DrawGameScreen`.
+
+### The GUI is retained: `GUI_StageUpdateDraw 0x4A81E0` builds, `0x4AB0B0` blits [VERIFIED]
+
+**`0x4A81E0(GUIInfo* gi, int flags)`** — `stdcall`, `ret 8`; prologue
+`8B 44 24 04 81 EC C0 03 00 00` (10). The dispatcher at `0x4A9176` (table `0x4A962C`) is
+inside it. Flags: `0x1` **build** (surfaces are created only under it), `0x2` **teardown**,
+`0x40` redraw, `0x8` buttons only (`test …,0x48` at `0x4A91AD`), `0x4/0x40/0x80` background
+variants, `0x20` skip the snapshot, `0x100/0x1000` recentre. Observed callers: `push 2` in
+`GUI_Pop 0x4A968E`, `push 1` in `TA_DialogBox_fn 0x4ABD90` (`0x4AC01B`, `0x4AC198`),
+`esi|0x40` at `0x494210` (the in-game panel loader). 76 sites, **none in DrawGameScreen**.
+
+**The build sequence (`0x4A905E..0x4A9135`, read 2026-09-07):**
+
+```
+panel+0xBC = 0x4C69F0(panel->name /* or 0x509920 */, w, h)   ; the screen's own surface
+0x4C6B70(panel+0xBC, NULL, -xpos, -ypos)                     ; the screen UNDER it, copied in
+unless flags&0x20:
+  panel+0xB8 = 0x4C69F0("SAVE UNDER" @0x509914, w, h)        ; and kept aside…
+  0x4C6B70(panel+0xB8, panel+0xBC, 0, 0)                     ; …for the teardown restore
+background: 0x4C6B70(panel+0xBC, *(GUIMEM+0x24), 0, 0)        ; the PCX background surface
+        or  0x4B0230(gi, 0, panel+0xC4)                      ; or the tiled texture
+then the gadget loop 0x4A9135..0x4A942E over EVERY gadget 1..totalgadgets,
+skipping only active == 0 — there is no per-gadget dirty flag
+```
+
+Every handler draws into `[panel+0xBC]` with that object as its context (`ebx=[panel+0xBC]` at
+`0x4A6056` in the button handler, and so on). Teardown (`flags&2`, `0x4A950A..`) copies
+`panel+0xB8` back to the screen, frees both, and `GUI_Pop 0x4A9660` frees the GUIMEMSTRUCT.
+**`*(GUIMEM+0x24)` is the screen's background PCX decoded into a surface** — filled by the
+loader, not by any draw leaf (MEASURED: 307 072 unexplained bytes on `MAINMENU.GUI`'s
+`03D51178 640×480`, zero ops), and read only as a copy source.
+
+| `id` | handler | `ret` | prologue (steal) | draws through |
+|---|---|---|---|---|
+| 1 button | `0x4A5F40` | 8 | `81 EC D8 00 00 00 53 55` (8) | `0x4B7F90(ctx, frame, x+HotX, y+HotY)` at `0x4A61BE`, `DrawText 0x4A50E0`, `0x4BE950`, `0x4B8310`; sets `TheActive_GUIMEM+0x14 = 1` at `0x4A5F5E` |
+| 2 listbox | `0x4A1B40` | 8 | `81 EC BC 00 00 00 53 55` (8) | `0x4C6D20` at `0x4A1C01`, `0x4B0230(gi, idx, 0)`, rows via `0x4A23B0..0x4A2BE0` (`0x4B7F90` ×13), clip save/restore `0x4A2068` |
+| 3 textfield | `0x4A4D70` | 8 | `83 EC 18 8B 54 24 1C` (7) | `0x4BF6F0`, `0x4C6D20`, `0x4BE950`, DrawText |
+| 4 slider | `0x4A3EF0` | 8 | `8B 44 24 04 83 EC 08` (7) | nothing itself; `0x4A2580` paints |
+| 5 label | `0x4A56B0` | 8 | `81 EC AC 00 00 00` (6) | `0x4BF6F0`, `0x4C14F0` / DrawText, `0x4BE950` |
+| 6 surface | `0x4A4980` | 8 | `83 EC 50 53 55` (5) | **`0x4C7580`** (the textured-triangle stamp, below), `0x4B7F90`, `0x4BF6F0` |
+| 10 | `0x4A4C90` | **0xC** `(gi, idx, flags)` | `8B 54 24 04 83 EC 10` (7) | `0x4BE950` ×2 |
+| 11 picture / panel bg | `0x4B0230` | **0xC** `(gi, idx, GAFFrame*)` | `83 EC 24 8B 54 24 2C` (7) | NULL frame: the texture from `0x4A18C0` tiled with `0x4C6B70(panel+0xBC, tex, x, y)` + bevel `0x4B0160`; else `0x4B7F90` |
+| **12** | **`0x4A5E50`** — not `0x4A5F40` as [GUI gadgets](gui-gadgets.html) §3 said; corrected there | | | |
+| 13 timer | `0x4A4660` | 8 | `83 EC 24 53 55` (5) | `0x4C5E70(ebx)` over `[panel+0xBC]` or `[gi+0xCD2]`, then `0x4BF6F0`, `0x4B7F90`, DrawText, `0x4C5FA0` — i.e. into the back buffer |
+
+`DrawText 0x4A50E0(ctx, str, x, y, maxW, shade)` — `stdcall`, `ret 0x18`: with no GUI font
+set, `0x4C14F0(ctx, s, x, y, -1)`; else per character `0x4B7F30([[0x51FBA4]+0x14]+0xC, ch)` →
+`0x4B7F90(ctx, glyph, x, y)` (`0x4A5185`) or `0x4B8310` (`0x4A5191`). **So GUI text is GAF
+glyph blits, and `0x4CCF60` is only reached through `DrawTextCustomFont 0x4C14F0`** (its two
+callers `0x4C16D4`, `0x4C1744`); MEASURED, in-game option screens still take that path for some
+labels (`text 1572` ops on `PREFS.GUI`).
+
+**How a screen reaches the frame: `0x4AB0B0(GUIMEMSTRUCT*, OFFSCREEN* dst, RECT* dirty)`** —
+`stdcall`, `ret 0xC`, prologue `83 EC 10 57 8B 7C 24 18` (8): recurses bottom-to-top over
+`per_active`, and blits **`0x4C6B70(dst, panel+0xBC, xpos, ypos)`** (`0x4AB158`) only if
+`mem+0x14 == 1` (cleared after) or `0x4B67D0(&panelRect, dirty)` [INFERRED name] says the rect
+overlaps. Two callers: `0x49FA28` in the **shell modal loop `0x49F9C0(gi, untilScreen)`** —
+`{pump messages; 0x4A9FD0(gi); 0x4AB0B0(top, NULL, NULL); 0x4C2870; 0x4C63A0}` — and
+`0x4AB182` in the thunk **`0x4AB170(gi, ctx, dirty)`** (`ret 0xC`, prologue
+`8B 44 24 0C 8B 54 24 04 8B 4C 24 08`), called once per frame from DrawGameScreen at
+`0x46A303` with `(main+0x519, &[esp+0x34], main+0x37E27)` after `0x4C69C0(&ctx)` resets the
+clip.
+
+### The leaves — every function that writes UI pixels [VERIFIED; MEASURED complete]
+
+| VA | name | convention, `ret` | arguments | destination and box | prologue stolen |
+|---|---|---|---|---|---|
+| `0x4B7F90` | `CopyGafToContext` | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` | `{x−HotX, y−HotY, +w−1, +h−1}`, hotspot **signed** (`movsx` at `0x4B802C/0x4B803F`), clipped by `0x4C6AE0`+`0x4B7E60`; sub-frames route to `0x4B8500` when `+0xB` is set; leaf `0x4CBE70` (raw), `0x4CC51D` (RLE) | `81 EC 94 00 00 00` (6) |
+| `0x4B8500` | `AlphaCompsteBuf2OFFScreen` | stdcall `0x10` | same | same, blended through `[globals+0xC0]`; 24 callers, none in the GUI | `81 EC 94 00 00 00` (6) |
+| `0x4B8310` | the blit `DrawText` takes under `globals+0xF0` bit 7 | stdcall `0x10` [INFERRED from the call site] | same shape | same | `81 EC 94 00 00 00` (6) |
+| `0x4B8150` | opaque GAF blit | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` — a **frame**, not a descriptor | leaf `0x4CBDD1`, no key; 4 callers, **all terrain** (`0x484110`, `0x48415C`, `0x484228`, `0x484274`) — not a UI leaf | |
+| `0x4C6D20` | descriptor blit | stdcall `0x10` | `(ctx, desc {w,h,stride,pixels}, RECT* src, RECT* dst)` | `*dst`; GUI callers `0x4A1C08` (listbox), `0x4A4EC0` (textfield); `0x4C6DC0` is the keyed twin with no callers | `8B 44 24 04 83 EC 30` (7) |
+| **`0x4C7580`** | **textured-triangle stamp** (`GAF_DrawTransformed` [CORPUS]) | stdcall `0x10` | `(ctx, src, int xy[6], int uv[6])` — three screen vertices and their texture coordinates, **MEASURED** `(214,94)(233,94)(233,113)` with uv `(1,1)(31,1)(31,31)` | the vertices' bounding box; **the in-game option screens' wide dark backdrop right of the 128-px panel is drawn as these** (13–37 per build), which is why that region has slanted edges | `B8 8C 7D 00 00` (5, the stack probe) |
+| `0x4CCF60` | glyph blitter | cdecl, 9 args | `(base, pitch, font, str, x, y, fg, bg, transparent)` | row `y − (s8)font[2]`, width the sum of `font[off]` per glyph, stops at `\0` **or `\n`**; 2 callers, both in `0x4C14F0` | `55 8B EC 83 C4 F0` (6) |
+| `0x4BE950` | `DrawLine` | stdcall `0x18` | `(ctx, x0, y0, x1, y1, colour)` | bbox after `0x4BEA20`; 83 callers | `83 EC 30 56 8B 74 24 38` (8) |
+| `0x4BF6F0` | `DrawBar` | stdcall `0xC` | `(ctx, RECT*, colour)` | the rect, inclusive, via `0x4BF620` + `0x4CCDEA`; 47 callers | `83 EC 40 8B 44 24 48` (7) |
+| `0x4BF8C0` | `DrawTranspRectangle` | stdcall `0xC` | `(ctx, RECT*, colour)` | hollow rect; 12 callers incl. the minimap view box `0x466B5E`, the HUD `0x467F6C` | `83 EC 68 53 56 57` (6) |
+| `0x4BF7B0` | the focus rectangle | stdcall `0xC` | `(ctx, RECT*, colour)` | drawn last by `GUI_StageUpdateDraw` via `0x4A16F0(gi, idx, 8)` | `83 EC 30 53 55 56 57` (7) |
+| `0x4BF4D0` | framed box | stdcall `0xC` | `(ctx, RECT*, colour)` | three clipped fills (`0x4BF620` ×3, `0x4CCDEA` ×2); **what `DrawPopupF4Dialog 0x4948E0` draws its border with** (×3) | `83 EC 40 53 55 56 57` (7) |
+| `0x4C6890` | `SurfaceFill` | stdcall `8` | `(surface, colour)` | the whole surface | `83 EC 64 53 55 56 57` (7) |
+| `0x4C6B70` | surface → surface | stdcall `0x10` | `(dst, src, x, y)` | `0x4CBBE0(dst, src, x − (s16)src[+0x18], y − (s16)src[+0x1A])`; `dst == NULL` ⇒ the back buffer, `src == NULL` ⇒ the screen; 23 callers — the GUI blit `0x4AB158`, the build's snapshot `0x4A9098`, `0x4A90CC`, `0x4A9111`, the teardown `0x4A952B`, the picture tiler `0x4B02DF`, the minimap `0x466B44`, cursor save/restore | `83 EC 30 56 8B 74 24 38` (8) |
+| `0x4CBBE0` | `CopyScreenContext` | cdecl | `(dst, src, x, y)` | the whole `src` at `dst+0xC + y·pitch + x`, clipped by `dst+0/+4` only — **reads neither clip rect**; 17 callers: three in the flip, two in `0x4C6B70`, **ten in cursor code** (the `SAVEMOUSE` buffers are written through it directly) | `55 8B EC 83 C4 E4` (6) |
+
+Not drawers, checked because the popups call them: `0x47F1A0` (helpers `0x47F0C0`, `0x44FDB0`,
+`0x451DF0`, …, no pixel write), `0x4B6560` (`jmp [0x4FC0DC]`, an import thunk), `0x4A5030`
+(text measure, calls `DrawText`). `0x4C69A0`, `0x4C61F0` and `0x4C5FA0` begin with `E8` and
+cannot be prologue-detoured without relocating the call.
+
+### The popups, chat and the HUD painter [VERIFIED call graphs]
+
+- `DrawPopupF4Dialog 0x4948E0`: `DrawText 0x4A50E0` ×5, `0x4BF4D0` ×3 (the frame), `0x4C7580`
+  ×1, `0x4B7F30`. `DrawPopupButtomDialog 0x4689C0`: `DrawText` ×3, `0x4B7F90` ×1, `0x4C6AE0`.
+  `DrawChatText 0x464060`: `DrawText` ×1, `0x467C00` ×1 (a message-box painter that also calls
+  `0x4C6890`, `0x4C69A0` and the flip itself), `SetFont`/`SetTextColors`.
+- **`0x467D70` the HUD panel painter**, `void (void)`, one caller `0x49842A`, prologue
+  `A1 E8 1D 51 00` (5): `esi = *(main+0x37E1B)`; `0x4C69A0(esi)`; `0x4C6890(esi, 0)`; three
+  side-specific GAF frames (`main + side·4 + 0x1481F / 0x14833 / 0x14847`, side from
+  `[[main+0x1B8A+player·0x1A2]+0x95]`) via `0x4B7F30(seq, 0)` → **`0x4B7F90(esi, f, HotX+0x81,
+  HotY)`** (top bar), `(HotX+0x81, HotY+screenH−0x20)` (bottom bar), `(HotX, HotY)` (side
+  panel); then `0x4C63A0()`.
+- The `LIGHTBAR` slide `0x45FFB0`: `0x4B8D40`, `0x4B7F30`, `0x4B7F90`, `0x47F1A0`.
+
+### The frame's HUD extras — what gates each, what it draws, where [VERIFIED 2026-09-07, Phase E G15c]
+
+Read for G15c so the strict walk could *reach* every writer of the in-game frame that the
+screen inventory does not open by itself. `DrawGameScreen`'s tail, `0x469F40..0x46A3E0`, in
+call order, with each gate (`ebx` is the function's `drawUnits` argument):
+
+| site | gate | draws |
+|---|---|---|
+| `0x469F65` `DrawPopupF4Dialog 0x4948E0` | `0x435100([main+0x391E9]) == 2` [INFERRED: a mode query; 2 while the F4 popup is up] | the Kills/Losses box top-right of the viewport; the draw context is re-seeded from `main+0x37E27` after it (`0x4C6B10` at `0x469F95`) |
+| `0x469F9F` `DrawPopupButtomDialog 0x4689C0` | called every frame; inside, throttled to one pass per 15 ms by **`GetTickCount`** (`0x4B6560` is `jmp [0x4FC0DC]`, the KERNEL32 import; next time in `0x51E544`), then **`0x4C1B80(0x20)`** — TA's key-id poll: id `0x20` → `GetAsyncKeyState(VK_SPACE)` (index table `0x4C1C6C`, jump table `0x4C1C48`, the case at `0x4C1C2D`; the same switch resolves the SHIFT hotkey `0xF9`) | **the same Kills/Losses box as F4, held while SPACE is down** — MEASURED: 21 382 non-key pixels in the viewport with F4, 21 382 with SPACE held over the commander, 0 with it released. "Buttom" in the corpus symbol is the space *button*, not the bottom of the screen |
+| `0x469FB8` `0x468380` | `[main+0x391C3] != 0` — the **`+bps`** cheat's flag (handler `0x419540`: `xor [main+0x391C3],1`) | `"Receive - %1.1f K/s"` / `"Send - %1.1f K/s"` (`0x5076A4`, `0x5076B8`), two `DrawTextCustomFont` lines at x `0x81`, y `[main+0x37E23] − 0x5F` and `+8` (the prologue). **Not `+netstats`**: its handler `0x417570` only zeroes the counters `0x511A60..0x511C64` |
+| `0x469FCB` `DrawChatText 0x464060` | `ebx` | the chat lines |
+| `0x469FD5..0x46A102` | `[main+0x3923B] & 2` and `ebx` | the debug line: `"FRATE: %d"`, `"%.1f"`, `"MODE %s INFO %s"` with `NORMAL`/`DEBUG` and `[Release]` (`0x507828..0x50781C`, `0x5077FC`, `0x50780C..0x507814`, `0x502558/0x50255C`) at x `0x83`, `0xBC`, `0x1EE`, plus a fourth string from `0x415FA0` under `[main+0x2A44] & 1`. **Negative result**: bit 1 of `main+0x3923B` is flipped only at `0x49631B`, behind `main+0x37F2F` bit 1 (`0x4962F8..0x496303`), the engine's debug mode (set at `0x417009`, `0x430E68`); it is cleared at game entry (`0x49128E`) and no cheat in the NORMAL table sets it — not reachable in play, not exercised |
+| `0x46A107..0x46A1CB` | `[main+0x38A51] & 1` → the GAF `main+0x1481B` frame 0 at (`[esp+0xAC]`, `[esp+0xB0]`); else, unless the local player's `[player+0x9B] & 0x40`, `main+0x3923B` bit 5 → `main+0x14813`, bit 6 → `main+0x14817` | status icons [INFERRED: pause/speed indicators]; not exercised |
+| **`0x46A1D0..0x46A2A3`** | **`main+0x37F2F` bit 6 — the `+clock` cheat** (handler `0x417300`: the bit flipped, then `0x430F00`) | the sim tick `main+0x38A47` split into h:m:s (÷108 000, ÷1 800, ÷30 — 30 ticks a second), `"%s : %02d:%02d:%02d"` (`0x507794`) with `"Game Time"` (`0x504910`, through `0x4C5740` [INFERRED: the string table]); `DrawTextCustomFont 0x4C14F0` at x `0x82`, y `[gfx+0xD8]` (`0x4B6710` [INFERRED: the primary's height]) `− 0x22 −` the font height (`0x4C1450`): the viewport's bottom-left, just above the bottom bar. **The seconds tick between two shots** — the walk measures it with the in-game menu open, which pauses the sim and the clock with it |
+| `0x46A2A8` | `[main+0x38A51] & 2` | the GAF `main+0x148CF` frame 0 at (`screenW − 0x10`, `screenH − 0x50`); not exercised |
+| `0x46A2E7`, `0x46A303` | — | clip reset `0x4C69C0`, then the retained GUI blit `0x4AB170` |
+| `0x46A308..0x46A3B8` | `[main+0x38DD5]` and `ebx` | the nine profiler bars `0x46B900` |
+| `0x46A3C2` **`DrawOptionsTab 0x45FFB0`** (the symbol's name; the `LIGHTBAR` wipe) | `0x512FE4 != 0` | below |
+| `0x46A3C7` `0x4C2870` | — | the cursor, back buffer only |
+| `0x46A3DB` `0x4C63A0` | `ebx` and `[esp+0x22C]` (`blitScreen`) | the flip |
+
+**The `LIGHTBAR` wipe, `0x45FFB0`** — the in-game menu's opening animation, a bright bar sweeping
+the panel's width while the panel is revealed behind it: the opener **`0x460160`** (`ret 4`, the
+panel's `GUIMEMSTRUCT*` at `[ebp+4]`) snapshots the panel's surface (`[panel+0xBC]`, `w×h` from
+`+0x17/+0x19`) into `0x512FE8`, scales it with `0x4B8AE0` into `0x512EF8`, zeroes the slide
+`0x512FEC`, stores the panel's `width − 1` in `0x512F14` and its `y` in `0x512F10`, and sets
+**`0x512FE4 = 1`** (`0x460204`). Each call of `0x45FFB0` then advances `0x512FEC` by `0x15` up
+to `0x115` (fourteen steps), draws the `LIGHTBAR` frame — `0x4B8D40([main+0x51D], "LIGHTBAR")`
+then `0x4B7F30(seq, 2)` — with `0x4B7F90`, and reveals the panel to the left of the bar with
+`0x4C7580` stamps (the textured-triangle stamp, at `0x46012A`); the closer **`0x4609B0`** clears
+`0x512FE4` (`0x4609D4`). The opener's callers: `0x427459`, `0x427906`, `0x44444D`, `0x460ABD`
+(inside the closer) and `0x4776D8`, each right after `0x47F1A0("Options"|"Menu", 0)` [INFERRED:
+a screen lookup by name — it walks the table at `main+0x33E13`]. Every pixel the wipe writes goes
+through two observed leaves (`0x4B7F90`, `0x4C7580`), which is why the census explains it and the
+twin follows it; the engine free-runs its frame loop, so at 60 presented frames a second the
+fourteen steps are over within a present or two.
+
+**`0x4C7580` runs in the steady game frame too** — MEASURED (the CORE census, `CORMAIN2`, nothing
+selected, no popup): `scale` 208–240 ops per 50 flips, about four a frame; its ten call sites
+are `0x42136C`, `0x458664`, `0x46012A` (the wipe), `0x46675E`, `0x467CA1`, `0x46BC1E`
+(`drawKillsAddr+0x918`, the F4 box), `0x494CBB` (`DrawPopupF4Dialog+0x3DB`), `0x4A21C8`
+(`GUI_ListboxBuild+0x688`) and `0x4A4A81`/`0x4A4B1B` (`GUI_HotspotDraw+0x101/+0x19B`, corpus
+names; the per-frame ones by the neighbourhood [INFERRED]). So "no `scale` op in a window" is
+only evidence of the wipe's absence while the game is paused, which the menu does.
+
+**What the census logged as unexplained on *other* surfaces, on the CORE run**: the startup
+`OFFSCREEN` 640×480 (`03D30560`, the shell's own surface, tagged by whatever GUI is on top)
+written whole at every in-game screen build — `changed=192015 unexplained=192015
+box=(0,4)-(639,479) ops_on_it=0` — the item already open above; and a 128×352 surface
+(`04E2B850`, the menu's rect) written whole when `PREFS` opens, its `SAVE UNDER` snapshot
+[INFERRED]. Neither is presented; the presented surface's total was 0 unexplained of 1 717 044.
+
+**`ARMOPT.GUI` is not over the viewport.** Its `[COMMON]` record is `xpos=0 ypos=128 width=128
+height=352` — the side panel's own rect; the in-game menu *replaces* the build panel. Opening it
+pauses the game and draws `PAUSED` in the middle of the world (the 2 621–2 938 non-key viewport
+pixels the walk counts on that stop). The screens that do lie over the world are `PREFS.GUI` and
+`VISUALRT.GUI` (~55 000 px each at 1024×768), the F4 / SPACE box (~21 000), the chat (~800), the
+clock and the `+bps` lines.
+
+**The NORMAL cheat table at `0x501D38`** (43 `{name, handler, runLevel}` entries, the one
+`InitInternalCommand 0x4B7760` registers at `0x4195A7`), name → handler, read for the two the
+walk types: NoShake `0x416E60`, Contour `0x416DB0`, ScrollSpeed `0x416CF0`, IFace `0x416D20`,
+Give `0x416BD0`, CDPlay `0x4167F0`, CDStop `0x416810`, Sound3D `0x416820`, Shading `0x416420`,
+AntiAlias `0x416510`, Shadow `0x416550`, Dither `0x416590`, SwitchAlt `0x4165C0`, TShadow
+`0x416630`, FShadow `0x416660`, LOSType `0x416690`, Light `0x4166C0`, RCache `0x416710`,
+Selectable `0x416460`, MusicMode `0x4175E0`, Logo `0x4168D0`, ScreenChat `0x417130`, Gamma
+`0x417290`, **Clock `0x417300`**, NetStats `0x417570`, Sing `0x4172E0`, NoMetal `0x417150`,
+NoEnergy `0x4171F0`, BigBrother `0x4174E0`, Now `0x416E90`, Drop `0x4177A0`, ShootAll
+`0x418CA0`, ShareMetal `0x418CD0`, ShareEnergy `0x418D90`, ShareMapping `0x418E50`, ShareRadar
+`0x418FD0`, ShareAll `0x419090`, ShowRanges `0x4194C0`, SetShareMetal `0x419340`,
+SetShareEnergy `0x419400`, Compression `0x4194D0`, **BPS `0x419540`**, SFX `0x419550`. The
+handlers are `stdcall(argv)`, `ret 4`; `+showranges`'s writes `main+0x391BF`, as the ta-drive
+skill says.
+
+### The minimap, located [VERIFIED]
+
+`main+0x1426B` (`TED_GENERATED_PIC`) is consumed once, at `0x46684F` in
+**`BuildMinimapSurface 0x466780`** (no args, prologue `83 EC 40 53 8B 1D E8 1D 51 00`): it
+fits a 126-px box (`main+0x142EB/+0x142ED` size, `+0x142E7/+0x142E9` offsets), creates
+`main+0x142E3 = 0x4C69F0(0x5074F8, w, h)` and scales the picture into it (`0x4B8AE0` + `0x4B95A0`
+[INFERRED stretch]). Three surfaces: `+0x142E3` the scaled map; `+0x142DF` the fog composite,
+rebuilt by `0x466C20` with **direct byte writes** (callers `0x465572`, `0x48191A`); `+0x142DB`
+the composite plus radar dots, rebuilt by `0x466DC0` (`0x4C6B70([0x142DB],[0x142DF],0,0)` then
+unit dots through `0x4B7F90` of `main+0x147DF/+0x147E3`, `0x4C0070` arcs, `0x4BEE60 DrawPoint`;
+callers `0x465072`, `0x48191F`). **Per frame, `DrawMinimap 0x466B00(ctx)`** (`stdcall`, `ret 4`,
+prologue `8B 0D E8 1D 51 00`, gated on `main+0x142F1 & 2`) does
+`0x4C6B70(ctx, [main+0x142DB], main+0x142E7, main+0x142E9)` at `0x466B44` and the view box
+`0x4BF8C0(ctx, main+0x142CB, main+0xDD9)` at `0x466B5E`; **one caller, `0x46961F` in
+DrawGameScreen, with the game offscreen's context.** The minimap never goes through the GUI
+surfaces. The map loader builds `main+0x1426B` at `0x483900..0x483936` as a GAF frame
+(`0x4B8DA0(0x508B6C, w, h)`, filled via `0x4B8A80` + `0x4B7F90`) and frees it at
+`0x483DF3`/`0x483E0B`.
+
+### What the census measured [MEASURED 2026-09-07, `tools/uiwalk.py`, 1024×768]
+
+With every leaf above observed and every surface diffed at every flip (`CENSUS_MS 5`, so at
+most 200 diffs a second against the shell's ~5 000 flips), across the inventory — `MAINMENU`,
+`SINGLE`, `SKIRMISH`, `SELMAP`, `STARTOPT`, `VISUALS`, and in game `ARMMAIN2`, `ARMCOM1/2`,
+`ARMOPT`, `PREFS`, `VISUALRT`, `TALK` (chat), the F4 popup — **3 710 035 pixels changed on the
+presented surface and 0 were unexplained**; a screen transition in the shell is 614 400
+changed pixels (the whole 640×480) explained by ~50 000–150 000 GAF blits and a few thousand
+lines, rects and copies. The unexplained changes on *other* surfaces, all outside the frame:
+
+- the PCX backgrounds decoded into their `"bitmaps\…PCX"` surfaces by the loader (~300 000
+  bytes each, zero ops) — assets, read only as copy sources;
+- the `"SAVEMOUSE"` buffers, written by `0x4CBBE0` directly from cursor code;
+- **the startup `"OFFSCREEN" 640×480` keeps being written in game** by an unobserved path at
+  in-game screen builds (185 942 bytes when `ARMCOM1` appears, 43 869–83 573 in rows 226–479
+  on `ARMOPT`/`TALK`/`ARMCOM1` pages), and **`"FLIPSURFACE" 128×352`** is filled whole
+  (43 519 bytes) when `PREFS` opens — neither is ever presented, and anything reaching the
+  frame from them goes through an observed copy [OPEN: the writer of each].
+
+The census also fixed three claims elsewhere in this wiki: the nine `0x46B900` calls in
+DrawGameScreen's tail are the **debug profiler bars**, not "side panel / minimap"
+([UI markers](ui-markers.html) §4); the minimap is not `0x48CC30`/`0x46A430`
+([frame composition](frame-composition.html) §1); and `id 12` dispatches to `0x4A5E50`.
+
+### What the twin layer excludes, tests and reads [VERIFIED 2026-09-07, Phase E G15b]
+
+The layer (`tagpu_gui_surf.c`) replays the observed ops into GL twins; three facts it leans on
+were read for it, none of them patched.
+
+**Observed but not published — the leaf calls that are not UI, matched on the return address**
+(`excluded_caller()` in `tagpu_gui_leaves.h`). The ranges are the callers' extents, read from
+the disassembly (`ret`/`ret n` boundaries):
+
+| range | what | its leaf calls (return address = call + 5) | ends |
+|---|---|---|---|
+| `0x459200..0x459800` | the unit composite blit (`0x459200`, [GPU status](gpu-status.html) §2.4) — the engine still calls it while `owndraw` skips the rasterisers, and the composites it blits are all key | `0x4B8500` at `0x459319`, `0x459353`, `0x4593BA`, `0x4595E9`, `0x4597D3`; `0x4B7F90` at `0x4593A4`, `0x4597AB` | `ret` at `0x4597DF`; `0x45982A` is the next function |
+| `0x4C2380..0x4C2A00` | the cursor code — `0x4C2380` (dead), `0x4C24B0`, `0x4C25E0`, `0x4C2870` and the `SAVEMOUSE` copies (§ "The mouse object") | `0x4B7F90` ×4 (`0x4C23C9`, `0x4C258C`, `0x4C2732`, `0x4C297E`), `0x4C6B70` ×2 (`0x4C24A8`, `0x4C2937`), `0x4CBBE0` ×9 (`0x4C241B`..`0x4C2835`) | `0x4C2870` ends at `0x4C2989`; the last function in the range at `0x4C2A74` |
+| `0x4C6300..0x4C6890` | the flip `0x4C63A0` — **three exits**, each `pop edi/esi/ebp/ebx; add esp,0xF4; ret` at `0x4C6669`, `0x4C668F` and `0x4C67BA` (a backward `jne 0x4C66EB` at `0x4C67AA` keeps the last arm inside), so it spans `0x4C63A0..0x4C67BA` — and the in-flip cursor draw `0x4C67C0` (ends `0x4C6884`) | the flip: `0x4C6B70` at `0x4C6414`, `0x4C6585`, `0x4CBBE0` at `0x4C6553`, `0x4C65F3`, `0x4C6769`; `0x4C67C0`: `0x4C6B70` at `0x4C6862`, `0x4B7F90` at `0x4C687D` | — |
+
+**`0x4C67C0` has exactly two callers, `0x4C641B` and `0x4C6544`, both inside the flip** — so
+every blit it makes is also under the observer's `s_inFlip` (set between the flip's entry and
+its return), which is the guard that actually excludes them; the range only has to be honest
+about where the function ends. Until 2026-09-07 the code's bound was `0x4C6800`, short of
+those two calls; harmless for that reason, corrected anyway.
+
+**Which flip is a game frame**: `DrawGameScreen`'s `call 0x4C63A0` is at `0x46A3DB`, so the
+flip observer reads its own return address and compares it with **`0x46A3E0`**; a match means
+the frame is the game's (the viewport is the terrain skip's key fill, subtracted by the census,
+cleared by the layer), anything else is the shell's, whose flip runs from the modal loop
+`0x49F9C0` and 41 other sites.
+
+**Read on the render thread, never written** (both already in this map; listed because the
+layer is a new reader on the other thread):
+
+- `main+0x143A7`, the live RGB palette (`256 × {R,G,B,pad}`, 1024 bytes) — compared with the
+  last copy at every present and re-uploaded as a `256×1 RGBA8` texture when it moved, so the
+  index twin resolves through the palette the engine is presenting with.
+- the mouse object `*(0x51FBD0)`: `+0x1B2` → the current sprite record (`u16 w, u16 h` at
+  `+0`/`+2`), `+0x1B6`/`+0x1BA` the position it was last drawn at. That rect is the one place
+  the layer does not draw and `strict` does not count: the cursor is the engine's in phase 1
+  ([GL UI renderer](gui-renderer.html) §3.7). A torn read here costs one frame of a
+  misplaced exemption, nothing else.
+
+**Read on the game thread at publish, guarded** (`IsBadReadPtr`, like the first-sight decode):
+the first bytes of a GAF frame's pixel plane — up to 64, the row lengths and data of the first
+rows for an RLE frame — go into the sprite's identity beside the header and plane addresses,
+because the shell frees a popped screen's art and the heap hands the same addresses to the
+next screen's (the 2026-09-07 review). `0x4CCF60`'s `'\n'` stop (`cmp al,0xA; je 0x4CD008` at
+`0x4CCFA0`) is honoured by the glyph observer's width since the same review.
+
 ## The unit-death path, the object destructor and the level teardown — mapped by us
 
 Mapped 2026-09-06 to close the render thread's use-after-free on a dying unit's model object
@@ -2092,6 +2442,513 @@ wholly free pages (`0x4F24A9`), and `0x4F2410` releases a region whose `0x400` p
 (88 bytes) live. Unit objects (736–898 bytes) are wine-heap blocks, whose pages go only when
 wine 9.0's `heap_free_block` decommits a subheap's free tail past its `0x10000` hysteresis or
 releases a subheap that has emptied.
+
+## The COB engine — mapped by us (tacob landing 2, 2026-09-07)
+
+*Everything here is from `i686-w64-mingw32-objdump -d -M intel` of `pristine/TotalA.exe.pristine`
+unless marked **[LIVE]**. The fork's oracle `tagpu_cobtrace.c` hooks five of these sites and
+writes nothing into the engine; its line contract is [tacob-design](tacob-design.html) §"The
+trace contract", and `extra-weapons.md` snag 10 is the story that led here. Names marked
+`[INFERRED]` are ours; `COBEngine_*` names come from the community symbol file.*
+
+### The object — `unit+0x9A`, 0x544 bytes, vtable `0x4FD698`
+
+Built by `UNITS_CreateModelScripts 0x485D40` (`stdcall(unit)`, one caller each from the two
+create paths): when the def's script pointer `def+0x18E` is non-null it `MEM_Alloc(0x544)`s
+(`0x4B4F10`), runs the base constructor `0x4B0610` (vtable `0x4FDB00`; zeroes `+8`, `+0x10`,
+`+0x14`, the eight record status words and `+0x53C`; **`+4 = 0x4B6330()` = `[[0x51FBD0]+0xE8]`**,
+the sim rate the `sleep` conversion below divides by — 30 `[INFERRED from that use]`), sets the
+vtable to `0x4FD698`, stores the object at `unit+0x9A`, then `0x4B0720(cob, scriptfile)`
+attaches the loaded `.cob` at `+8` and allocates `+0x14` (`npieces × 19` dwords, tag string
+`0x509C84` — the per-piece animation state MOVE/TURN/SPIN drive) and `+0x10` (`nstatics × 4`,
+tag `0x509C74` — the static variables), `0x45A950(model, scriptfile, unit)` builds the posed
+model (`unit+0x9E`), `0x480D40(cob, o3)` stores that at **`cob+0x540`**, and finally
+`0x4B0940(cob, "Create" @0x508BE0, callback 0, run-now 1)`. A unit without a script (`0x485DFE`)
+gets `unit+0x9A = 0`, its model from `0x45A8D0`, and `o3+0xC = unit` written directly at
+`0x485E14` — so **the unit behind a COB object is `*(*(cob+0x540)+0xC)`**, the path every
+vtable handler takes (`0x480770`, `0x480C30`, `0x480EB0` all open with it).
+
+| Offset | Field | Established |
+|---|---|---|
+| `+0x00` | vtable (`0x4FDB00` base, `0x4FD698` the unit script class) | ctor `0x4B061A`, `0x485D8D` |
+| `+0x04` | sim rate (30) — `sleep` ticks = `ms × rate / 1000`, MOVE/TURN speeds `/ rate` | `0x4B0641`; `0x4B1363..0x4B1370`; `0x4B0EDE`, `0x4B0F7B` |
+| `+0x08` | the loaded `.cob`: `+4` script count, `+8` piece count, `+0x10` static count, `+0x18` entry table (word indices), `+0x1C` name pointers, `+0x24` code words — the on-disk header (`file-formats.md` §2.1) with the offsets relocated to pointers | `0x4B072A`, `0x4B08CA`, `0x4B0900`, `0x4B07D0`, `0x4B0E5D`, `0x4B073B`, `0x4B0759` |
+| `+0x0C` | `0x4B26F0(scriptfile)` result `[unknown]` | `0x4B0735` |
+| `+0x10` | static variables, `count × 4`, zero-filled | `0x4B076E`; read by `PUSH_STATIC` `0x4B13AA` |
+| `+0x14` | piece animation array, `19` dwords per piece, zero-filled | `0x4B0756`, `0x4B0777..0x4B0791` |
+| `+0x18` | "something is animating" — set by MOVE/TURN, cleared by the stepper | `0x4B0F1A`, `0x4B1C21` |
+| `+0x1C` | **eight thread records × `0xA4`** (below) | `0x4B08D4..0x4B08E6` |
+| `+0x53C` | running-thread count | `0x4B0921`, `0x4B19F9`, `0x4B1AAB` |
+| `+0x540` | the posed model `Object3do` (`unit+0x9E`); `+0xC` of it is the unit | `0x480D44`, `0x480EBB..0x480EC1` |
+
+**Vtable `0x4FD698`** (22 slots; the base `0x4FDB00` has slots 0–6 = `0x4E6110` (pure), 7–13 =
+`0x4B1E50..0x4B1EB0`, 14–20 = `0x4B0650..0x4B06B0`, the no-op bases, and `0x4B06B0` is the base
+destructor: frees `+0x14`, `+0x10`, then the object when the flag argument has bit 0). The
+slots the VM calls, with the handler each opcode reaches — this closes the "unidentified opcode
+reaching the effect handlers" gap: **`EMIT_SFX` → `vt+0x30` = `0x480EB0`, `EXPLODE` → `vt+0x34`
+= `0x481140`**, `ATTACH` → `vt+0x38` = `0x481340`, `DROP` → `vt+0x3C` = `0x4813B0`, `SET` →
+`vt+0x40` = `0x480B20`, `GET_UNIT_VALUE` → `vt+0x44` = `0x480770` (a 20-entry jump table at
+`0x480AC4` on `id-1`, so value ids run 1..20), `vt+0x14` = `0x480C30` = a piece's current
+position, `o3 + 0x22 + piece × 0x36 + axis × 4 + 4` (the `PrimitiveStruct` stride), read by
+MOVE/TURN for the sign of the travel; `vt+0x50` = `0x485E30` `FreeUnitScriptData`, the deleting
+destructor path (`call [vt+0x50]` at `0x486D8A`). Only the handlers named with an offset were
+read; the other slot addresses are from the table dump.
+
+**The "COB thread handle" the weapon slots preset to `0x4FD6F0` is a vtable pointer, not a
+thread.** `0x4FD6F0` holds two slots: `0x481490` `thiscall(this = &slot->thread, value)` —
+`if (value) *(this+4) = 1`, i.e. **the slot's `+0x08` aim result** — and `0x4814B0` (returns 0).
+A thread record's `+0x20` points at that `+0x04` field; when the thread's `RETURN` runs, the
+engine calls `(*cb)->slot0(cb, value)` (`0x4B19E2..0x4B19E5`), and when a start is *refused* on
+a full pool it calls the same with `0` at once (`0x4B0B11..0x4B0B1D`) — so a refused
+`AimPrimary` reports "not aimed" immediately, which is why the stock loop retries it.
+
+### The eight records — `cob+0x1C + slot × 0xA4`
+
+| Offset | Field | Established |
+|---|---|---|
+| `+0x00` | status: `0` free; `0x01000000` running; `0x02100000` wait-for-turn; `0x02200000` wait-for-move; `0x02400000` sleeping; `0x02800000` blocked in a `call-script`. The runner keys on the top byte, then bits 20–23 | alloc `0x4B08F9`; `0x4B12F1`, `0x4B132E`, `0x4B134D`, `0x4B196E`; dispatch `0x4B0DBF..0x4B0DED` |
+| `+0x04` | pc, a word index into the code; kept current in memory (`0x4B1BD9`), the handlers read it back (`0x4B0E60`) | |
+| `+0x08` | stack top index, `-1` empty | `0x4B090C`; every push/pop |
+| `+0x0C` | sleep ticks left, `-= dt` per run, wakes at `<= 0` | `0x4B1363..`, `0x4B0DEF..0x4B0DFF` |
+| `+0x10` / `+0x14` | piece and axis a wait blocks on | `0x4B12F7..0x4B12FA`, `0x4B0E1E..` |
+| `+0x18` | the child slot a `call-script` waits on — **`-1` when the child was refused** | `0x4B1965` |
+| `+0x1C` | signal mask; `1` at alloc, inherited from the parent by START/CALL | `0x4B091A`, `0x4B18F4`, `0x4B1961`, `0x4B1B14` |
+| `+0x20` | completion callback object pointer (above), `0` at alloc | `0x4B0913`, `0x4B0B37`, `0x4B0C69` |
+| `+0x24` | the stack, 32 words to the end of the record | every push |
+
+**`COBEngine_AllocThread 0x4B08C0`** — `thiscall(cob, scriptIndex)` → slot 0..7 or `-1`: rejects an
+index outside `0..nscripts-1` (`0x4B08C5..0x4B08D0`) — so **the engine asking for a script the
+unit does not define reaches here as `-1` and is indistinguishable from a full pool by return
+value**; scans the eight status words for `0`, and on the first free one writes status
+`0x1000000`, pc = `entry[idx]`, sp `-1`, callback `0`, mask `1`, and `+0x53C++`. It is the **single
+funnel every thread start takes**: callers `0x4B0896`/`0x4B08AA` (in `0x4B0830`, a by-name
+allocate-only entry — **no callers**), `0x4B099F` (`0x4B0940`), `0x4B0A18` (`0x4B0A10`, by-index
+no-args — **no callers**), `0x4B0B08` (`0x4B0B00`), `0x4B0C48` (`0x4B0C40`), `0x4B18BB` (the
+START opcode), `0x4B1928` (the CALL opcode). **Every caller pushes the arguments onto the new
+record only after it returns**, which is why the oracle latches the start here and writes the
+line at the next hook event.
+
+**The engine's entries** (the by-name ones inline the same two-byte-at-a-time `strcmp` walk over
+the name table; `0x4B07C0 Name2Index` is the standalone copy):
+
+| VA | Convention | What | Callers (`E8` scan) |
+|---|---|---|---|
+| `0x4B0A70` `COBEngine_StartScript` | `thiscall(cob, name, cb, runNow, argc, a0, a1, a2, a3)`, `ret 0x20` | name → index → `0x4B0B00` | 21: `0x406834` `0x4069BF` `0x4113EF` `0x437902` `0x43795E` `0x43798A` `0x43DBE8` `0x486877` `0x489898` `0x489948` `0x489F43` `0x489F8E` `0x48A149` `0x48A2E0` `0x499C5C` `0x49CBEB` `0x49CDA6` `0x49CFCA` `0x49E186` (`UNITS_StartWeaponsScripts`) `0x49E31C` `0x49E386` (`AutoAim`) |
+| `0x4B0B00` | `thiscall(cob, idx, cb, runNow, argc, a0..a3)`, `ret 0x20` | alloc; refused → `cb->slot0(0)` and return 0; else `+0x20 = cb`, `a0..a3` into `stack[0..3]`, **sp = argc−1** (`0x4B0B76..0x4B0B7B`); `runNow` → run all eight records with `dt = 0` then the stepper `0x4B1C00(cob, 0)`; returns 1 | `0x4385C7` `0x43862B` `0x43A251` (`ORDERS_CancelOrder+0x61`) `0x455551` (the network dispatcher's neighbourhood — the `0x10 UNIT_START_SCRIPT` packet carries this index `[INFERRED]`) `0x4B0AEE` |
+| `0x4B0940` | `thiscall(cob, name, cb, runNow)`, `ret 0xC` | no-argument start, same shape; refused → returns 0 *without* calling the callback | 15: `0x40F433` `0x41148D` `0x411794` `0x411DA1` `0x411E2B` `0x43DAF2` `0x43DB27` `0x485DE6` (`Create`) `0x48B106` `0x48B12B` `0x48B14E` `0x48B169` (`UNITS_SetStateMask`) `0x49CB94` `0x49CD4F` `0x49CF73` (the fire paths) |
+| `0x4B0BC0` `COBEngine_QueryScript` | `thiscall(cob, name, p0, p1, p2, p3)`, `ret 0x14` | → `0x4B0C40` | 14: `0x4027FB` `0x4113B1` `0x41189C` `0x411A35` `0x411AA6` `0x411BF5` `0x411CF1` `0x43E227` `0x43E291` (`UNITS_QueryWeaponPosition`) `0x43E32C` `0x43E370` `0x43E3E4` `0x43E427` (`UNITS_CallAimScripts`) `0x4865C3` |
+| `0x4B0C40` | `thiscall(cob, idx, p0..p3)` | alloc; **refused → returns 0 leaving `*p0..*p3` untouched** (the silent failure); else callback `0`, pushes `*p0..*p3` (`0` for a null pointer), **sp = 3**, runs that thread now (`0x4B0DA0(cob, slot, 0)`), then copies `stack[0..3]` back through the non-null pointers — a `Query*` script answers by assigning its parameter | `0x4B0C2F` |
+| `0x4B0D60` `COBEngine_DoScriptsNow` | `thiscall(cob, dt)` | runs the eight records, then `0x4B1C00(cob, dt)` | **one**: `0x48ADEB`, in the per-unit tick function, immediately after `AutoAim 0x49E1A0` (called when `unit+0x73 ∈ {1, 2}`), **with `dt = 1`** — so `+0x0C` counts ticks |
+| `0x4B0D20` | `thiscall(cob, cb)` | clears a matching callback pointer in every busy record | **no callers** |
+| `0x4B1C00` | `thiscall(cob, dt)` | the animation stepper: returns at once when `dt == 0` or `cob+0x18 == 0`; else walks `+0x14` and advances every MOVE/TURN/SPIN | `0x4B09E8` `0x4B0A5F` `0x4B0BA6` `0x4B0D88` |
+
+### The runner `0x4B0DA0` and the opcode handlers
+
+`thiscall(cob, slot, dt)`, `ret 8`. Frame: `sub esp,0x20` + four pushes, so `[esp+0x34]` is
+`slot` and `[esp+0x38]` the "keep running" flag; `edi` = cob, `esi` = the record, `ebp` = slot
+(reloaded at every loop head `0x4B0E59`), `ecx` = pc. Status dispatch at `0x4B0DBF..0x4B0E3D`:
+sleeping subtracts `dt` and wakes at `<= 0`; the two waits test the piece animation array; a
+thread blocked in a call is not touched here — **only the child's `RETURN` (or a `signal` that
+kills the child) wakes it**; a running thread then executes opcodes back to back until one
+blocks it or ends it. The dispatch is a compare chain on `op & 0x100FF000` (a `cmp edx, …` per
+value; the handler follows each compare):
+
+| Opcode | `cmp` at | What the handler does (the facts the VM needs) |
+|---|---|---|
+| MOVE `0x10001000` / TURN `0x10002000` | `0x4B0E83` / `0x4B0E71` | piece and axis inline; pops target then speed; speed `/ (cob+4)` per tick; `vt+0x14` for the current value (sign of travel); sets `cob+0x18` |
+| SPIN `…3000` / STOP_SPIN `…4000` | `0x4B0FFE` / `0x4B0FEC` | |
+| SHOW/HIDE/CACHE/DONT_CACHE/MOVE_NOW/TURN_NOW/SHADE/DONT_SHADE | `0x4B10DD` `0x4B10D3` `0x4B1112` `0x4B1108` `0x4B11AA` `0x4B119C` `0x4B127C` `0x4B1272` | |
+| EMIT_SFX `0x1000F000` | `0x4B12B1` | pops type; piece inline; `vt+0x30(piece, type)` → `0x480EB0`; pc += 2 |
+| WAIT_TURN `0x10011000` / WAIT_MOVE `…12000` | `0x4B12A7` / `0x4B1317` | piece, axis inline into `+0x10`/`+0x14`; status `0x2100000` / `0x2200000`; stop |
+| SLEEP `0x10013000` | `0x4B130D` | pops ms; **`+0x0C = ms × (cob+4) / 1000`** (the `0x10624DD3` magic, truncating: `sleep 150` = 4 ticks); status `0x2400000`; stop |
+| PUSH_* `0x10021xxx` | `0x4B1390` | `op & 7`: 1 constant inline, 2 `stack[inline]` (a local), 4 `statics[inline]` |
+| CREATE_LOCAL_VAR `0x10022000` | `0x4B1386` | **`sp++` and nothing written** — a local the caller did not pass reads whatever the record last held there; nothing zeroes a record between uses |
+| POP_* `0x10023xxx` / POP_STACK | `0x4B1402` / `0x4B13F8` | |
+| ADD SUB MUL DIV/MOD AND OR XOR NOT | `0x4B1483` `0x4B1479` `0x4B14D3` `0x4B14C9` `0x4B1525` `0x4B151B` `0x4B1575` `0x4B156B` | |
+| RAND `0x10041000` | `0x4B15BD` | pops hi, lo; **`call 0x4B6C30(hi − lo + 1)` at `0x4B15E0`** — the sim RNG (stdcall; returns 0 for `n < 2`; state at `0x51FC88`; 129 call sites across the sim), pushes `lo + result` |
+| GET_UNIT_VALUE `…42000` / GET `…43000` / `…44000` / `…45000` | `0x4B15B3` `0x4B1630` `0x4B1622` `0x4B16B8` | `vt+0x44(id, 0, 0, 0, 0)` for the first |
+| SET_LESS … LOGICAL_NOT | `0x4B16AE` `0x4B1707` `0x4B16FD` `0x4B1761` `0x4B1757` `0x4B17BB` `0x4B17B1` `0x4B181D` `0x4B1813` `0x4B188A` | |
+| START `0x10061000` | `0x4B1880` (body `0x4B18B0`) | inline `[pc+1]` script index, `[pc+2]` argc; alloc; **refused (`0x4B18C2`) → the argc words stay on the parent's stack** and pc += 3; else pops them into `child.stack[0..argc−1]` in push order **without setting the child's sp** (it stays `−1`; the child's `CREATE_LOCAL_VAR`s climb over them), `child.mask = parent.mask`; pc += 3 |
+| CALL `0x10062000` | `0x4B1911` (body `0x4B191D`) | as START, then `parent+0x18 = child slot`, parent status `0x2800000`, stop — **the child slot is written even when it is `−1`, and nothing ever wakes a thread waiting on `−1`: a `call-script` on a full pool blocks the caller for ever** (not yet seen live) |
+| `0x10063000` | `0x4B1903` (body `0x4B1984`) | pops `[pc+2]` words into the runner's own frame `[esp+0x20..]`, pc += 3 `[unknown use]` |
+| JUMP `0x10064000` | `0x4B19BB` | pc = inline |
+| RETURN `0x10065000` | `0x4B19B1` (body `0x4B19D0`) | if `+0x20`: pop → `cb->slot0(value)`; else the value stays on the stack; status `0`, `+0x53C--`; every record with status `0x2800000` and `+0x18 == this slot` → running; stop |
+| JUMP_NOT_EQUAL `0x10066000` | `0x4B1A40` | pops; jumps to the inline target when the value is **zero** |
+| SIGNAL `0x10067000` | `0x4B1A32` (body `0x4B1A75`) | pops mask; for each busy record with `+0x1C & mask`: status `0` (`0x4B1A99`), count--, its blocked callers woken, and if it is the running thread, stop — **no callback is called for a killed thread**, so an aim script killed by the next `AimPrimary`'s signal never reports |
+| SET_SIGNAL_MASK `0x10068000` | `0x4B1B00` | `+0x1C = pop` |
+| EXPLODE `0x10071000` | `0x4B1AF6` (body `0x4B1B1F`) | pops flags; piece inline; `vt+0x34(piece, flags)` → `0x481140` |
+| SET `0x10082000` / ATTACH `…83000` / DROP `…84000` | `0x4B1B48` `0x4B1B50` `0x4B1B58` | `vt+0x40` (2 pops) / `vt+0x38` (3 pops) / `vt+0x3C` (1 pop) |
+| anything else | `0x4B1B60` | **the thread is killed silently** (status `0`, count--) |
+
+The tail: `0x4B1BD5` pc++, `0x4B1BD9` writes pc back, `0x4B1BDC` loops while the flag is set,
+`0x4B1BE8` unwinds.
+
+### The piece animation array `cob+0x14` and the stepper `0x4B1C00` (tacob landing 3)
+
+`0x4B0756` allocates `npieces × 19` dwords, zero-filled, tag `0x509C84`. **Nineteen dwords
+per piece, six three-axis groups and a flag**, and the axis operand of MOVE/TURN indexes
+each group directly (`slot = piece × 19 + axis`):
+
+| Dword | Field | Written by | Read by |
+|---|---|---|---|
+| `+0` | "this piece is animating" | MOVE/TURN/SPIN (`0x4B0F13`, `0x4B106D`), the stepper re-sets it while any axis is still travelling | the stepper's per-piece skip (`0x4B1C4F`) |
+| `+1..3` | MOVE target, 16.16 | MOVE (`0x4B0EC3`), MOVE_NOW (`0x4B11E2`) | the stepper's arrival test |
+| `+4..6` | MOVE speed **per tick** = `speed / (cob+4)`, signed | MOVE (`0x4B0EE4`), zeroed by MOVE_NOW and on arrival | **`wait-for-move` releases when this is 0** (`0x4B0E03..0x4B0E1A`) |
+| `+7..9` | TURN target, `& 0xFFFF`; **`-1` means "no target"** — what SPIN writes (`0x4B101D`) so the stepper never arrives | TURN (`0x4B0F5A`), TURN_NOW (`0x4B123F`), SPIN | the stepper |
+| `+10..12` | TURN speed **per tick**, signed | TURN (`0x4B0F85`), SPIN when the acceleration is 0 (`0x4B1060`), the stepper's acceleration step | **`wait-for-turn` releases when this is 0** (`0x4B0E1E..0x4B0E35`) |
+| `+13..15` | SPIN target speed per tick | SPIN (`0x4B1037`), STOP_SPIN writes 0 (`0x4B109B`) | the stepper's acceleration step |
+| `+16..18` | SPIN acceleration per tick | SPIN (`0x4B104D`), STOP_SPIN writes **`-decel/rate`** (`0x4B10B3`), TURN and TURN_NOW clear it | the stepper |
+
+**The four movement opcodes, exactly** (all divide by `cob+4` with `idiv`, so the per-tick step
+truncates toward zero — `<90>` = 16384 becomes 546, `<50>` = 9102 becomes 303):
+
+- **MOVE `0x4B0E8F`** pops the target then the speed, stores both, calls `vt+0x14(piece, axis)`
+  for the piece's current position and **negates the speed when the target is below it**
+  (`0x4B0EFB`). It does not test for "already there".
+- **TURN `0x4B0F2C`** masks the target to 16 bits, clears the axis's spin acceleration, pops the
+  speed, then calls `vt+0x18(piece, axis)` for the current angle. `delta == 0` → the speed is
+  written as 0 (the wait releases on the next tick anyway); otherwise the speed is negated when
+  `(|delta| > 0x8000) XOR (delta < 0)` (`0x4B0FBA..0x4B0FE7`) — **`turn` always takes the short
+  way round**, and that is the whole rule; there is no "shortest arc" flag anywhere.
+- **SPIN `0x4B100A`** pops the speed then the acceleration (BOS pushes them the other way), and
+  with a zero acceleration puts the piece at its target speed at once.
+- **STOP_SPIN `0x4B1086`** pops the deceleration, negates it into the acceleration field, and
+  with a zero deceleration stops the axis dead. It is the one movement opcode that sets neither
+  the piece's flag nor `cob+0x18` (`0x4B10BE` jumps to `0x4B18F8`, the bare `pc += 3` tail) —
+  harmless only because the axis it stops was already spinning and so already flagged.
+- **MOVE_NOW `0x4B11B6` / TURN_NOW `0x4B1210`** write the value through `vt+0x00` / `vt+0x04`,
+  zero the axis's speed, and flag nothing.
+
+**The stepper `0x4B1C00`** `thiscall(cob, dt)`, called at the end of `DoScriptsNow` with the
+tick's `dt` and by every run-now start with `dt = 0`. It returns immediately on `dt == 0` or
+`cob+0x18 == 0`; otherwise it clears `cob+0x18`, and for each piece whose flag is set: clears
+the flag, walks the three axes, and re-sets the flag (and `cob+0x18`) if any axis is still
+travelling. Per axis, in this order:
+
+1. **Move**: `new = vt+0x14(piece, axis) + dt × speed`; arrived when `new >= target` for a
+   positive speed or `new <= target` for a negative one, and arriving snaps to the target and
+   zeroes the speed (`0x4B1CA1`, `0x4B1CB3`). The new value goes through `vt+0x00` either way.
+2. **Spin acceleration**: `turnspeed += accel`, clamped to the spin target speed, and the
+   acceleration is zeroed on arrival (`0x4B1D08`).
+3. **Turn**: with the *post-acceleration* speed, `remaining = (target − cur + 0x10000) & 0xFFFF`
+   for a positive speed and `(cur − target + 0x10000) & 0xFFFF` for a negative one; the axis
+   arrives when `remaining <= |dt × speed|`, snapping to the target and zeroing the speed
+   (`0x4B1D78`, `0x4B1DB1`). A target of `-1` (a spin) never arrives. The angle goes through
+   `vt+0x04` masked to 16 bits.
+
+So **the wait opcodes release on the tick *after* the stepper zeroes the speed**: the runner
+runs the eight records first and the stepper last, so a thread blocked on an axis that arrives
+during tick *N* resumes at tick *N+1*. Measured end to end on ARMSTUMP's `AimPrimary(33, 1066)`:
+started at tick 118, turret (speed 546, 33 to go) arrives in the tick-118 stepper, barrel
+(speed −303, 1066 to go) takes four, and the script's `start-script RestoreAfterDelay` and
+`return (1)` land at tick 122 — which is what the fixture logged.
+
+### The by-name starts: every call site, its entry and its `runNow` (tacob landing 3)
+
+Read off each caller listed above; the name is the string it pushes, and the argument order for
+`0x4B0A70` is `name, cb, runNow, argc, a0..a3` (pushed in reverse). **`0x4B0B00` writes
+`a0..a3` into `stack[0..3]` whatever `argc` says and only then sets `sp = argc−1`**
+(`0x4B0B37..0x4B0B7B`), so an engine start does *not* leave the record's stale words under the
+arguments it did not pass — a script start (the START opcode `0x4B18EB` reads the parent's mask
+and copies only `argc` words) does. Its run-now tail is `0x4B0B86`: **only when
+`cob+0x53C != 0`** does it run the eight records with `dt = 0`, and the stepper `0x4B1C00(cob, 0)`
+runs either way (and returns at once on `dt == 0`).
+
+| Script | Site | Entry | `runNow` | `argc` |
+|---|---|---|---|---|
+| `Create` | `0x485DE6` | `0x4B0940` | **1** | – |
+| `StartMoving`, `StopMoving` | `0x43DAF2` | `0x4B0940` | **1** | – |
+| `MoveRate1/2/3` | `0x43DB27` | `0x4B0940` | **1** | – |
+| `setSFXoccupy` | `0x43DBE8` | `0x4B0A70` | **1** | 1 |
+| `Killed` (the second death path) | `0x486877` | `0x4B0A70` | **1** | 1 |
+| `Activate`, `Deactivate`, `StartBuilding`, `StopBuilding` | `0x48B106`, `0x48B12B`, `0x48B14E`, `0x48B169` | `0x4B0940` | 0 | – |
+| `FirePrimary/Secondary/Tertiary` (table `0x509678`) | `0x49CB94`, `0x49CD4F`, `0x49CF73` | `0x4B0940` | 0 | – |
+| `AimPrimary/Secondary/Tertiary` (table `0x509688`) | `0x49E31C` (heading, pitch, with the aim callback), `0x49E386` (`AutoAim`, all four words 0) | `0x4B0A70` | 0 | 2 |
+| `SetMaxReloadTime` | `0x49E186` | `0x4B0A70` | 0 | 1 |
+| `SetSpeed`, `SetDirection` | `0x437902`, `0x43795E`, `0x43798A` | `0x4B0A70` | 0 | 1 |
+| `RockUnit` | `0x499C5C`, `0x49CBEB`, `0x49CDA6`, `0x49CFCA` | `0x4B0A70` | 0 | 2 |
+| `HitByWeapon` | `0x489F43` | `0x4B0A70` | 0 | 2 |
+| `TakeDamage` | `0x489F8E` | `0x4B0A70` | 0 | 1 |
+| `TargetCleared` | `0x489898`, `0x489948`, `0x48A149`, `0x48A2E0` | `0x4B0A70` | 0 | – |
+| `EndTransport` | `0x40F433`, `0x41148D`, `0x411794`, `0x411DA1`, `0x411E2B` | `0x4B0940` | 0 | – |
+| `TransportPickup`, `TransportDrop`, `BeginTransport` | `0x406834`, `0x4069BF`, `0x4113EF` | `0x4B0A70` | 0 | – |
+| `Query*`/`AimFrom*` (tables), `QueryNanoPiece`, `SweetSpot`, `QueryBuildInfo`, `QueryTransport`, `QueryLandingPad`, `Killed` (`Send_UnitDeath`) | `0x43E227`, `0x43E291`, `0x43E32C`, `0x43E370`, `0x43E3E4`, `0x43E427`, `0x4027FB`, `0x4113B1`, `0x41189C`+4, `0x4865C3` | `0x4B0BC0` | query | 4 in, 4 out |
+
+`0x509678` = `{FirePrimary, FireSecondary, FireTertiary, NULL, AimPrimary, AimSecondary,
+AimTertiary, NULL}`; `0x509688` = `{AimPrimary, AimSecondary, AimTertiary, NULL, …}` — both
+indexed by `(weaponbits >> 2) & 3`, which is why the stock engine stops at three weapons.
+
+**Where each of those sits in the frame** matters as much as `runNow`, because a run-later start
+issued before the unit's own `DoScriptsNow` still takes its first step in the same tick. The
+per-unit tick function (it ends at `0x48B080`) runs, in order: `0x437910` (`0x48ADC4`),
+`AutoAim 0x49E1A0` (`0x48ADDA`, only when `unit+0x73 ∈ {1,2}`), **`DoScriptsNow(1)`
+(`0x48ADEB`)**, then `0x489BB0`, `0x41BD10`, `0x43B7C0`, `0x43BAD0`, **the movement pass
+`0x43DD20` (`0x48AFAA`)**, `0x48A870`, `0x4864B0`, `0x48B710`. `0x43DD20` calls `0x43DA70` and
+`0x43DB50`, which hold the `StartMoving`/`StopMoving`/`MoveRate*` sites — so **those land after
+the unit's own script tick**, while the weapon and aim traffic lands before it.
+`UNITS_SetStateMask` (`Activate`/`Deactivate`, `0x48B090` — landing 3 wrote `0x48B0A0`, which is
+0x10 past its entry; `tools/ta_symbols.txt:284`) is *not* in that function; measured,
+its starts land after `DoScriptsNow` too (the fighter, gunship and bomber fixtures each start
+`Activate` one tick after `Create` and it first steps the tick after that). `SweetSpot` and
+`Killed` come from the *attacker's* tick and so land after this unit's as well, when the
+attacker's index is the higher one — which it is in all nine fixtures.
+
+### Opcodes this engine does not implement (tacob landing 3)
+
+The dispatch's last compare chain (`0x4B1B48`) tests only `SET 0x10082000`, `ATTACH 0x10083000`
+and `DROP 0x10084000` above `EXPLODE`, so **`PLAY_SOUND 0x10072000` and `MAP_COMMAND
+0x10073000` fall into `0x4B1B60` and kill the thread silently.** `play-sound` is in the BOS
+dialect the community writes and in our compiler, and in retail TA it ends the script that uses
+it — a lint, not an opcode. Two more shapes worth recording: **`MOD 0x10034001` reaches the same
+handler as `DIV`** (the dispatch masks `op & 0x100FF000`, which erases the `1`), so `%` *is*
+integer division here; and `BITWISE_NOT 0x10038000` and the logical `NOT 0x1005A000` neither pop
+nor push — they rewrite the top of the stack in place (`0x4B159E`, `0x4B1896`). `0x10009000`
+(two pops → `vt+0x28`), `0x1000A000` (`vt+0x2C`), `0x10044000` (one pop → `vt+0x48`),
+`0x10045000` (no pops → `vt+0x4C`) and `0x10063000` (pops `[pc+2]` words into the runner's own
+frame) are handled but unused by the stock corpus and their vtable slots are unread.
+
+**Handler bodies the VM had to match** (the table above lists each opcode's `cmp`; these are the
+bodies whose stack effect is not obvious from it): the two-operand arithmetic and comparison
+words run `0x4B1479..0x4B18AB`, popping `b` then reading `a` in place and writing the result over
+`a`; the logical `OR 0x4B1829` pushes `a` when both sides are zero (so its result is 0/1 anyway)
+and `XOR 0x4B1875` is the plain bitwise word; the logical `NOT` body ends at `0x4B18AB`. Waking a
+blocked caller is the same eight-record scan in two places — `0x4B19FF` after a `RETURN` and
+`0x4B1AB1` after a `signal` kill — each testing `status & 0xFFF00000 == 0x2800000` and
+`+0x18 == the freed slot`.
+
+### The posed model the opcodes write into — `0x45A950` and `0x45AEC0`
+
+`0x45A950(model, scriptfile, unit)` builds the `Object3do` at `unit+0x9E`. It binds the model's
+nodes to the COB's **piece-name table** (the name compare at `0x45A9FD` → `0x4F8A70`), so the
+`PrimitiveStruct` array is in the COB's piece order, not the 3DO's tree order — ARMPW's array
+slot 0 is `torso`, its COB piece 0, while the 3DO's root node is `ground`. `0x45AEC0` then walks
+the tree and initialises each `PrimitiveStruct` (stride `0x36`, first at `o3+0x22`):
+
+- `+0x22` a private copy of the node's vertices, `count × 12` bytes (tag `0x506624`)
+- `+0x28` flags: **bit 1 set for every piece** (`0x45AED4` — the `cached` bit `DONT_CACHE`
+  clears), bit 2 set for every piece (`0x45AF31`, unread), and **bit 0 — `Visible` — set only
+  when the node has three or more vertices** (`0x45AF1B`: `cmp [node+4], 3` / `jl` →
+  `and [prim+0x28], 0xFFFE`).
+
+That last line is why a unit's flares, wakes, thrust anchors and torpedo tubes are hidden
+without any `hide` in its script: they are one- and two-vertex marker nodes. Measured against
+all eight fixtures that dumped a pose of their own unit — every `HIDDEN` piece is either such a
+node or one the unit's `Create` hides, with no exceptions and no false positives.
+
+### `get` and `set` — the twenty value ids (tacob landing 4, 2026-09-07)
+
+`GET_UNIT_VALUE` and `GET` reach `vt+0x44` = **`0x480770`**, `SET` reaches `vt+0x40` =
+**`0x480B20`**. Both are `thiscall(cob, id, a, b, c, d)` / `thiscall(cob, id, value)` and both
+open with `lea eax,[ecx-1]; cmp eax,0x13; ja` — so **the value ids really are 1..20** and
+anything else returns 0 / does nothing. `esi` is the unit, taken as `[[cob+0x540]+0x0C]`.
+Read out of the binary at the addresses below; the arithmetic is what `tools/tacob`'s
+`EditorWorld` reproduces, and `tools/test_tacob.py` §`ValueIds` pins it.
+
+**GET — the jump table is `0x480AC4`, indexed by `id − 1`** (20 dwords; out of range →
+`0x480ABB`, `xor eax,eax`).
+
+| id | Name | Handler | What it computes |
+|---|---|---|---|
+| 1 | `ACTIVATION` | `0x480794` | `unit+0x10E` bit 0 |
+| 2 | `STANDINGMOVEORDERS` | `0x4807A4` | `(unit+0x110 >> 18) & 3` |
+| 3 | `STANDINGFIREORDERS` | `0x4807B7` | `(unit+0x110 >> 20) & 3` |
+| 4 | `HEALTH` | `0x4807CA` | `(i16)(unit+0x108) × 100 / (def+0x1FA)`, unsigned `div` — a **percent**, 0..100 |
+| 5 | `INBUILDSTANCE` | `0x4807EF` | `unit+0x10F` bit 0 |
+| 6 | `BUSY` | `0x4807FF` | `unit+0x10F` bit 1 |
+| 7 | `PIECE_XZ` | `0x480811` | `0x43E060(&v, unit, a)`, then `(v.x & 0xFFFF0000) + (v.z >> 16)` |
+| 8 | `PIECE_Y` | `0x48083F` | the same call; `v.y` **raw 16.16**, not an integer |
+| 9 | `UNIT_XZ` | `0x480868` | that unit's `+0x6A`/`+0x72` packed the same way |
+| 10 | `UNIT_Y` | `0x4808C2` | that unit's `+0x6E`, raw 16.16 |
+| 11 | `UNIT_HEIGHT` | `0x48090F` | `[[unit+0x92]+0x16E]` — a unit-**definition** field |
+| 12 | `XZ_ATAN` | `0x480965` | `0x4B715A(x, z)` **minus the unit's own heading `+0x66`**, `& 0xFFFF` |
+| 13 | `XZ_HYPOT` | `0x480994` | `_hypot` of the unpacked 16.16 pair → `_ftol` → 16.16 |
+| 14 | `ATAN` | `0x4809C7` | `0x4B715A(a, b)`, `& 0xFFFF` — **no** heading subtraction |
+| 15 | `HYPOT` | `0x4809E5` | `_hypot(a, b)` on the raw arguments, `_ftol` |
+| 16 | `GROUND_HEIGHT` | `0x480A0D` | `0x485070(&v)` on the unpacked pair, result `<< 16` |
+| 17 | `BUILD_PERCENT_LEFT` | `0x480A44` | `0` when `unit+0x104 == 0.0f` (`ds:0x4FD668`), else `1 − (int)(unit+0x104 × −99.0f)` (`ds:0x4FD66C`) — the field is `Nanoframe`, and that it holds the fraction *still to go* is read off the arithmetic, not the writer `[INFERRED]` |
+| 18 | `YARD_OPEN` | `0x480A83` | `unit+0x10F` bit 2 |
+| 19 | `BUGGER_OFF` | `0x480A96` | `unit+0x10F` bit 3 |
+| 20 | `ARMORED` | `0x480AA9` | `unit+0x10E` bit 1 |
+
+Four things in that table are not folklore and cost scripts real bugs:
+
+- **The XZ packing *adds* rather than or-s.** `0x480821` builds `(x & 0xFFFF0000) + (z >> 16)`
+  from two 16.16 world coordinates, so a negative z **borrows from x** — and every handler
+  that unpacks one (`0x480965`, `0x480994`, `0x480A0D`) undoes it with the same three
+  instructions: `x = v & 0xFFFF0000`, `z = v << 16`, and `if (z < 0) x += 0x10000`.
+- **`XZ_ATAN` is relative, `ATAN` is absolute.** Only the first subtracts `unit+0x66`, so
+  `get XZ_ATAN(…)` answers "how far round from where I am pointing" and `get ATAN(dx, dz)`
+  answers a world bearing. Both come back as `uint16` TAang.
+- **The distances are 16.16, not world units.** `PIECE_Y`, `UNIT_Y`, both hypots and
+  `GROUND_HEIGHT` are all `world × 65536`; only `PIECE_XZ`/`UNIT_XZ` hold integers, and only
+  because the packing shifts them.
+- **`BUILD_PERCENT_LEFT` is never 0 while a unit is building.** Read the constants back and
+  `unit+0x104` has to be the fraction still to go: `1 − trunc(frac × −99)` gives 100 at the
+  start and 1 just before the end, and
+  the id returns a true 0 only on the `frac == 0.0f` early out — so `while( get
+  BUILD_PERCENT_LEFT )` terminates exactly at completion.
+
+**SET — a byte table at `0x480C18` (20 bytes, `id − 1`) selects one of seven cases from the
+jump table at `0x480BFC`.** The bytes are `00 06 06 06 01 02 06 06 06 06 06 06 06 06 06 06 06
+03 04 05`, and **case 6 is the shared default `0x480BF1`, which only ORs `unit+0xBA |= 4` and
+returns.** So:
+
+| Case | ids | Handler | What it writes |
+|---|---|---|---|
+| 0 | `ACTIVATION` | `0x480B49` | `UNITS_SetStateMask 0x48B090(unit, 1, value)` — the same call `Activate`/`Deactivate` take |
+| 1 | `INBUILDSTANCE` | `0x480B62` | `unit+0x10F` bit 0 |
+| 2 | `BUSY` | `0x480B84` | `unit+0x10F` bit 1 |
+| 3 | `YARD_OPEN` | `0x480BA8` | `0x47DAC0(unit, value)` |
+| 4 | `BUGGER_OFF` | `0x480BBE` | `unit+0x10F` bit 3 |
+| 5 | `ARMORED` | `0x480BE3` | `0x48B090(unit, 2, value)` — which is how TA:ESC's COB "shields" work |
+| 6 | the other **fourteen** | `0x480BF1` | nothing but the dirty bit |
+
+**`set HEALTH to 50` is a measured no-op on retail TA**, and so is every other write to ids
+2, 3, 4 and 7..17. The editor lints it (`set-ignored`) rather than modelling a write that the
+engine does not make.
+
+Helpers the ids reach, all read this session:
+
+- **`0x4B715A`** `cdecl(a, b)` — `fild a; fild b; fpatan` (so `atan2(a, b)`, +x measured from
+  +z), `fmul qword ds:0x509EF0` = **65536 / 2π = 10430.37835047**, then a **bare `fistp`**, so
+  this one rounds to nearest. `ds:0x509EF8` is its inverse, 2π/65536.
+- **`0x4E43A0`** is MSVC's `_ftol`: `fstcw`, `or ah,0x0C`, `fldcw` — the mode is forced to
+  chop, so every other float→int here **truncates toward zero**. `0x4FB440` is the two-double
+  entry of the C runtime's mode-dispatched math routine (`push 0x18; call 0x4FB480`); the mode
+  table is unread, so "hypot" is from the id it serves and the shape of the call, not from the
+  callee `[INFERRED]`.
+- **`0x485070(vec3*)`** reads the *high halves* of the struct's `+0x00` and `+0x08` dwords
+  (`movsx eax, word [ecx+2]` / `[ecx+0xA]`), i.e. the integer world x and z, then `>> 4` for
+  the heightmap cell and `& 0xF` for the sub-cell — 16 world units to a cell.
+- **`0x4B6C30(n)`** — the sim RNG, and it is **Park–Miller by Schrage's trick**: state at
+  `ds:0x51FC88`, `q = s / 127773` computed with the magic multiply `0x69C16BD` at `0x4B6C47`,
+  then `s = 16807·s − q·0x7FFFFFFF` (which is `16807·(s mod 127773) − 2836·q`), `s += 0x7FFFFFFF`
+  when the result is `<= 0`, and the draw is `s % n`. `n < 2` returns 0 **without touching the
+  state** (`0x4B6C38`). `tools/tacob`'s `SimRandom` is that recurrence; what the game seeds it
+  with at match start is still unread.
+
+### The piece transform — `0x43DEF0`, `0x43E060` and `0x4B6CC0` (tacob landing 4)
+
+`PIECE_XZ` and `PIECE_Y` are the only place a script can see the composed pose, so their
+helpers settle the rules the renderer needs as well.
+
+**`0x43E060(out, unit, piece)`**, `stdcall`, `ret 0xC`: calls `0x43DEF0` for the piece's offset
+in the unit's own frame and adds the unit's world position — `+0x6A` x, `+0x6E` altitude,
+`+0x72` map depth, all 16.16 — writing `(x, y, z)` to `out`.
+
+**`0x43DEF0(out, unit, piece)`**, `ret 0xC`, is the composition:
+
+- `o3 = unit+0x9E`; a piece `< 0` or `>= [o3]` returns `(0,0,0)`, and so does a null model.
+- The accumulator starts at the piece's own **node offset plus its `PrimitiveStruct` position**:
+  `0x43DF2A..0x43DF55` pairs `prim+0x04/+0x08/+0x0C` with the node's `+0x10/+0x14/+0x18` in
+  that order. **So the COB's three axis operands are plain X, Y and Z** — the `XPos/ZPos/YPos`
+  naming in `tamem.h` is TA's screen convention, not a transposition — and **`MOVE` is a delta
+  in the parent's frame, added to the rest offset before any rotation.**
+- Then, for each ancestor up the `prim+0x32` parent chain: rotate what is under it by that
+  ancestor's three angle words through `0x4B6CC0`, **then** add that ancestor's own
+  offset+position. The requested piece's own angles are never applied — turning a piece does
+  not move its origin.
+- At the **root** (`prim+0x32 == 0`) the unit's body turn is added to the angle triple first:
+  `+0x64` to the z-axis word, `+0x66` (the heading) to the y-axis word, `+0x68` to the x-axis
+  word. Because Y is the outermost factor, that is the same thing as applying the yaw last.
+- The returned z is **negated** (`neg ecx` at `0x43E00A`), which is what puts it on the world's
+  map-depth axis.
+
+**`0x4B6CC0(out, in, angles)`** rotates one vector by the three words, and **fixes the order**:
+
+| Order | Pair rotated | `PrimitiveStruct` word | COB axis operand |
+|---|---|---|---|
+| first | `(x, y)` | `+0x14` | `z-axis` (2) |
+| second | `(y, z)` | `+0x10` | `x-axis` (0) |
+| third | `(x, z)` | `+0x12` | `y-axis` (1) |
+
+so the local matrix is **`Ry · Rx · Rz`**. Each step is `0x4B7173(angle, pair)`: it returns
+untouched on a zero angle word (`cmp word [ebp+8],0`), else `p0' = p0·cos − p1·sin`,
+`p1' = p1·cos + p0·sin` with the angle read as a **signed** 16-bit through `fild word`, scaled
+by `ds:0x509EF8`, and stored back with a bare `fistp` (round to nearest).
+
+**The 3DO loader negates X and Z.** Every offset and every vertex of the `Model3DONode` the
+engine holds is `(−x, y, −z)` of the same field in the `.3do` — a half turn about Y, baked in
+at load. `[MEASURED 2026-09-07]` against all eight `posedump.txt` fixtures, which print the
+engine's own `N_OFF` and vertex array beside the file's: every piece of all eight units, x and
+z flipped, y kept, no exceptions. The site that does it is **not located**; the fact is read
+off the two arrays, not off code.
+
+**Checked against the engine's own vertex buffer.** `tools/tacob pose-check --all` rebuilds
+each fixture's posed vertices from the rules above and diffs them against `P_VBUF`, which
+`tagpu_native.c`'s posedump prints beside the model-space vertex it came from. The residual is
+**exactly 0** on the kbot (45 points, 15 pieces, two turned), the building, the ship (40 points,
+a turned turret) and 0.002 on the submarine; the tank, fighter, gunship and bomber come out at
+4.1, 7.0, 48.4 and 77.2 world units — and `tagpu_native.c`'s own `err=` on the very same dump
+lines reads 5.45, 7.31, 48.37 and 77.19, i.e. **the vertex buffer is a frame or two behind the
+pose the dump sampled** and neither implementation can do anything about it. That also settles
+the two questions `model-import.md` left open: the composition order, and `MOVE` being a delta
+added before the rotation.
+
+### [REPLAY] The nine fixtures, re-run offline (tacob landing 3, 2026-09-07)
+
+`tools/tacob run --all` runs the model above against landing 2's nine logs. Each replay's
+`tacob run <class> --trace-out …` output is **byte-identical to the file the game wrote** —
+4272 lines across the nine, including every slot number, every `K`, every `D` and the tick of
+every `R` — and every piece of the eight posedumps of the traced unit matches on `move=`,
+`turn=` and `HIDDEN`. What the replay is *given* is listed in `tacob-design.md` §"What the
+replay supplies"; the rules above are what it had to get right to produce the rest.
+
+### The oracle's five sites (`tagpu_cobtrace.c`, armed by `tagpu_cobtrace.on`)
+
+| VA | Bytes stolen | Captures |
+|---|---|---|
+| `0x4B08C0` | `56 8B 74 24 08` | a wrapper, the stolen prologue resuming at `0x4B08C5`: calls the original through the stolen prologue, then latches (cob, slot, index, tick, source); source from the return address — `0x4B18C0` = START, `0x4B192D` = CALL, anything else = the engine — and for the two opcodes the parent record (`esi`) and slot (`ebp`), whose `code[pc+2]` is the argument count |
+| `0x4B0DA0` | `83 EC 20 53 55` | the runner's entry, resuming at `0x4B0DA5`: the latched start is written here, before its thread's first step (a `Query*` overwrites its own first argument on that step) |
+| `0x4B19D0` | `8B 4E 20 85 C9` | RETURN: `esi` record, `ebp` slot, `ecx` pc, the value at `stack[sp]`; the stolen `test` still sets the flags the `je` at `0x4B19D5` reads |
+| `0x4B1A99` | `C7 01 00 00 00 00` | SIGNAL's kill, resuming at `0x4B1A9F` (the sixth stolen byte is NOPped): `ecx` the record, `ebx` its slot, `[esp+0x34]` the signaller |
+| `0x4B15E0` | `E8 4B 56 00 00` | the RNG call, redirected: the stub calls `0x4B6C30` itself and logs `lo + result` (`ebx` = lo, `ebp` = slot) |
+
+Reads only: the tick `main+0x38A47`, the in-game index `unit+0xA8` (`i16`), the def name
+`def+0x20`, and the record/file fields above. All five run on the game thread — the only
+thread the engine calls the VM from — so the log needs no lock. Not traced: the engine's
+asks for a script the unit lacks (only `-1` reaches the allocator, the name is gone by then),
+and which engine function issued an `E` start (its return address is two frames up).
+
+**Three call sites read for the trace's sake** (the strings are the engine's own, in `.data`):
+`0x4865C3` (`Send_UnitDeath+0x113`) is **`QueryScript(cob, "Killed" @0x508BE8, &severity,
+&corpsetype, ebp, ebp)`** with both out-slots the caller's locals (`lea eax,[esp+0x14]`,
+`lea ecx,[esp+0x2C]`) — so `Killed` runs synchronously and its second argument is whatever the
+stack held (the death fixture shows `46379093`, an address inside `TAdynmem`), and the script's
+`corpsetype = …` is read back from the record; `0x486877` also starts `"Killed"` through
+`StartScript` with `argc = 1` (`severity` from `[ebx+9]`, `runNow = 1`) on another death path;
+`0x489F43` is `StartScript("HitByWeapon" @0x508D74, 0, runNow 0, argc 2, ebx, eax)` and
+`0x489F8E` `StartScript("TakeDamage" @0x508D68, 0, 0, argc 1, eax)`, both in the damage path
+(`takeDamageAddr+0x349`/`+0x394`); `"TargetCleared"` is `0x508D58`.
+
+**[LIVE] 2026-09-07, `scenarios/cob-kbot.json`, ARMPW walking 300 units:** a run-later start
+(`SetMaxReloadTime(400)` from `UNITS_StartWeaponsScripts`, `runNow = 0`) is logged at tick 117
+and returns at 118 — the thread takes its first step at the next tick's `DoScriptsNow`; a
+run-now start (`StartMoving`, `0x4B0940` with `runNow = 1`) returns inside its own tick; the
+walk cycle (`MotionControl` `call-script`ing `walk`) is 19 ticks; the skirmish's own
+commanders run `Create` at tick 0. The posedump header now carries `tick=` and `idx=` so the
+two logs join.
+
+**[LIVE] the other class fixtures (`research/notes/evidence/cobtrace/`)**, each read back
+against the disassembly above: the tank's `RestoreAfterDelay` is killed by the next
+`AimPrimary`'s `signal` (`K` lines, six in one run — the SIGNAL path `0x4B1A99` fires on stock
+scripts every few seconds, not only in extra-weapons content); `SmokeUnit` below 66 % health
+draws `rand` every few hundred ms (`D` lines, 29 in one run — every one a call through
+`0x4B15E0`); a script without a trailing return runs into the next script's words exactly as
+§2.8 predicted — ARMSTUMP's `HitByWeapon` (started at `0x489F43` with two arguments) ends
+under `SweetSpot`'s name (its `R` line names the script whose body holds the `RETURN`);
+`Send_UnitDeath`'s `Killed` query carries the caller's uninitialised local as its second
+argument (`46379093` = `0x02C3A0D5`, inside `TAdynmem`, on that run); the `X` line has not
+been observed — no stock fixture fills eight records. A death does not break the trace:
+the ARMPW's `Killed` returns at tick 126 and the sim ticks on (593 → 803 measured after).
+**Two things that are not the oracle's:** `0x43A164` (`ORDERS_CreateObject+0xA4` by the
+symbol file) faults with `eax = 0x6A` — a target unit pointer of NULL plus the position
+offset — when the fighter fixture gave a Hawk an `attack` order on a Vamp that then died,
+with the oracle armed *and* in the control run without it (patrol orders avoid it; not
+chased further); and an `E8` whose rel32 is computed against the wrong base is not a crash
+but a *freeze* — the engine's own handler reports `Access Violation … at 014b227d` once per
+attempt and every thread then waits on the wineserver, which is what the first tank runs
+looked like before the site's displacement was fixed.
 
 ## Hard-coded limits & constants
 

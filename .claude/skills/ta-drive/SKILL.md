@@ -299,6 +299,11 @@ game; the registry is only where TA saves the last one. So:
   unzoomed one. At 0.25x a unit the roster puts at (512,384) is hovered at (560,382), and a
   click at the roster's figure silently selects nothing. Either drive at 1x, or find the
   unit by parking the pointer and reading `main+0x2CBA` (0 = nothing under it).
+- **`roster` is empty for a second or two right after `scenario load`**, and a script that
+  reads it immediately gets `units: []` and blames the load. It parses the newest `units:`
+  block in `tagpu.log`, which the overlay writes every 30 presented frames, so its `eye` also
+  lags a `tacli eye` by up to that long — read it in a retry loop, and re-read after moving the
+  camera rather than assuming the first answer.
 - **A moving unit invalidates `roster`'s `screen=` before your click lands.** A unit
   with a move order walks between the read and the injected click, and a selection
   click that misses is silent — the symptom is `native: … 0 sel` in the log and every
@@ -520,6 +525,16 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
   **`ErrorLog.txt` is shared between instances** (the gamedir symlinks it), which
   is why the report matches the crashing exe's path against the instance before
   claiming the crash is yours.
+- **A game whose sim tick stops while every thread sleeps, with no `ErrorLog.txt`, is not
+  paused — it may be a wild jump.** `tacli peek <i> '*0x511DE8+0x38A47:4'` twice, four
+  seconds apart, is the test (the sim tick; 30 per second); `tacli shot` failing and the
+  periodic `native:`/`reclaim:` lines stopping say the render thread went with it, and every
+  `TotalA.exe` thread reading `anon_pipe_read` in `/proc/<pid>/task/*/wchan` is a wineserver
+  wait, not a spin. Measured 2026-09-07: a call-site redirect whose rel32 was computed against
+  the wrong address froze the tank fixture at tick 244 every run, deterministically, and
+  looked exactly like a hang. ptrace is off on this machine, so there is no backtrace to be
+  had — bisect the change instead (the cobtrace module's `-alloc -run -ret -kill -rand`
+  tokens exist for that).
 - **Cursor and hover state, without a screenshot**: `main+0x2CBE` is the cursor index the
   engine currently has installed, `+0x2CBA` the unit under the pointer (0 = none), `+0x2CBC`
   the feature under it (`0xFFFF` = none), `+0x2CC3` the current order byte (1 = contextual,
@@ -580,6 +595,35 @@ tools/tacli log w1 -g "weapons: (loader|VIOL|MISM)"
   `scenario load` refuses the new type at validation.
 - `tacli log -g` takes a Python regex: alternate with `(a|b)`, not `a\|b`.
 
+## The COB script trace (tacob's oracle)
+
+`tagpu_cobtrace.on` at DLL attach makes the fork log every COB thread the engine starts,
+refuses, returns, kills or draws a random number for — one tab-separated line each, stamped
+with the sim tick — to `gamedir/tagpu_cobtrace.log`. The line contract and what the first
+traces taught: `research/notes/tacob-design.md` §"The trace contract"; the engine seam:
+`exe-reverse-engineering.md` §"The COB engine". Reads only; arm it like `weapons.on`, before
+the launch, and read the file straight from the gamedir (`tacli ls --json` names it):
+
+```bash
+tools/tacli arm c1 cobtrace.on=ARMPW native.on=all   # the value is a type filter; native.on
+                                                     # because the pose oracle lives in that pass
+tools/tacli scenario load c1 cob-kbot --restart
+sleep 8; tools/tacli arm c1 posedump.on              # one pose dump, header `posedump: tick= idx=`
+grep -a 'cobtrace:' tagpu/instances/c1/gamedir/tagpu.log      # ARMED … filter=,ARMPW,
+cut -f1-8 tagpu/instances/c1/gamedir/tagpu_cobtrace.log | head
+```
+
+- **`tools/cobtrace_fixtures.py`** runs the nine class scenarios (`scenarios/cob-*.json`) this
+  way and keeps `cobtrace.log`, `posedump.txt` and tacli's `apply.json` per class under
+  `research/notes/evidence/cobtrace/`. It parks the camera on the traced unit (`tacli eye`)
+  before dropping `posedump.on`: the pose oracle dumps the first unit the native pass draws,
+  and an aircraft or a ship has left the spawn view by the time it has done anything.
+- **Sight radius before weapon range.** A Stumpy 250 units from an AK never aimed: neither
+  could see the other. Put the target inside the shooter's `SightDistance`, not just its range.
+- **A Hawk is air-to-air**; ordered at a ground unit it flies over it and does nothing. Give it
+  a patrolling enemy aircraft.
+- The file is truncated at every launch and flushed per line, so `tacli stop` loses nothing.
+
 ## The input firewall (on by default)
 
 **"Human controllable" / "let me play it" / "hand it to me" means SHIELD OFF.** That is the
@@ -620,14 +664,15 @@ that matters — and `launch` auto-arms each pass's `*own.on` patch half for you
 
 ```bash
 tools/tacli arm <i> 'native.on=all wrecks' terr.on feat.on fx.on sfx.on \
-                    mark.on order.on zoom.on vpwide.on
+                    mark.on order.on zoom.on vpwide.on gui.on
 tools/tacli launch <i> --no-shield --res 1920x1080
 ```
 
 Units and wrecks, terrain, features, weapon effects, particles, world-space markers and
 the shift-held order overlay,
-zoom (wheel live, camera range widened) and the wide viewport that makes zoomed-out
-clicks land. `launch` then prints `auto-armed owndraw.on=all / fxown.on / featown.on /
+zoom (wheel live, camera range widened), the wide viewport that makes zoomed-out
+clicks land, and **the GL UI layer** (`gui.on`, since G15b — the panel, bars, dialogs and the
+shell drawn by us at 1:1, the engine's surface the fallback; *The GL UI layer* below). `launch` then prints `auto-armed owndraw.on=all / fxown.on / featown.on /
 terrown.on / markown.on`, and `tagpu.log` carries one `ARMED` line per pass — read them,
 because a missing one is the whole pass silently absent.
 
@@ -743,7 +788,7 @@ WINEPREFIX=<inst>/prefix wine reg add \
   `reclaim: def=… drn=… ovf=0 …` line every 300 frames (`ovf` must stay 0); a level change logs
   `reclaim: level teardown: flushed N …`.
 - The instrumentation triggers (`suppress.on`, `tracer.on`, `gldbg.on`, `posedump.on`,
-  `spxlog.on`, `fpsosd.on`) — debugging, not features.
+  `cobtrace.on`, `spxlog.on`, `fpsosd.on`) — debugging, not features.
 - `hires.on` only carries the hires renderer's *tweaks* (`anchor=`, sun, ambient,
   normal maps). What turns hires models on is a `gamedir/hires/<unit>.glb` existing.
 
@@ -1106,3 +1151,81 @@ Three lobby facts that are not guessable, all encoded in `mp_lobby.sh`:
   one peer only; both peers then see the units.
 
 Do not `pkill -x dplaysvr.exe` by hand while another agent's game is hosting.
+
+## The GL UI layer (Phase E — `tagpu_gui.on`, `tacli gui`)
+
+Since G15b the UI — the in-game panel, build pages, bars, option screens, chat, the popups
+and the whole shell — is drawn by our GL layer from the engine's own draw calls, replayed into
+twins of its surfaces (`research/notes/gui-renderer.md` §10). The engine still draws its
+surface, which stays the fallback beneath; with the trigger absent the DLL is byte-identical
+to main's (parity md5 measured equal, §10). **`gui.on` is part of the default arm set** now.
+
+```bash
+tools/tacli gui <i> on            # arm BEFORE launch (the detours install at DLL attach); the draw follows the file live
+tools/tacli gui <i> off           # keep the detours, stop the draw — the live A/B, 500 ms poll
+tools/tacli gui <i> strict        # the harness's mode: fallback off, a miss painted magenta (never for a player)
+tools/tacli gui <i> remove        # un-arm entirely at the next launch
+tools/tacli gui <i>               # report
+tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= fps=
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --layer --out /tmp/uiwalk
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --side core --layer --game-only --out /tmp/uiwalk-core
+```
+
+- `uiwalk.py --layer` arms `strict`, walks the shell and a game by gadget name, and at every
+  stop takes the engine's surface and our GL frame and counts differing pixels (outside the
+  world viewport in game, and inside it where the engine drew a non-key pixel; the cursor rect
+  excluded) and magenta holes; `report.md` has one row per stop with the heartbeat's
+  fps/resets/overflows. The bar is **0, 0 and 0 on every stop** — except `MAINMENU`, whose
+  ~185 differing pixels are its sparkle animation between the two shots, single scattered
+  pixels in the sky. Run it with the venv's python (numpy + PIL).
+- **The in-game walk is side-aware and reaches the HUD extras (G15c).** `--side core` runs the
+  CORE parity fixture (`scenarios/tascene-parity-core.json`) and walks `CORMAIN2`/`CORCOM1`/`2`
+  with the `COR*` pagers; the in-game menu is `ARMOPT.GUI` on both sides. After the screens the
+  walk types `+clock` and `+bps` in chat, holds SPACE over the commander (the Kills/Losses box,
+  F4's twin), opens the menu, PREFS and F4 at 1x and then zooms them to 0.5x and 2x by writing
+  `tagpu_zoom.txt` (so no click is bent), walks the commander for the minimap's dot, and
+  releases the eye and edge-scrolls for the view box. `--screens-only` stops after the G15b
+  inventory. Inside the viewport the walk compares only where the engine's surface is not the
+  terrain key (index 254 in the 8-bit PNG `tacli shot` writes) — that is what `strict` calls a
+  UI pixel there — and reports `vpdiff/vpui` per stop; the cursor rect (`*0x51FBD0+0x1B6/+0x1BA`,
+  size from the record at `+0x1B2`), padded 8 px because the sprite animates between the two
+  shots, is excluded everywhere. The clock stop is taken with the menu open: `ARMOPT` pauses
+  the sim and the seconds with it (the game clock is the tick `main+0x38A47` ÷ 30).
+- **`ARMOPT` is not over the viewport** — its record is `xpos=0 ypos=128 128×352`, the side
+  panel's rect; it replaces the build panel and pauses the game (`PAUSED` in the middle of
+  the world). The screens over the world are `PREFS`, `VISUALRT`, the F4/SPACE box and the chat.
+- **The live zoom is readable from `mark.on=log`**: its line every 120 frames carries `zoom=`;
+  the file lever itself logs nothing. The walk arms `mark.on=log` for that and records the
+  level per stop.
+- Read `gui: ARMED flip@0x4C63A0=1 leaves=16/16` at launch, then `gui: layer ON` and
+  `gui: GL ready`. `resets=` counts fresh starts (3 per launch is normal: the arm, the shell→game
+  context switch, the game's mode switch); `overflows=` must stay 0; `lost=` sprites whose bytes
+  never arrived (each forces a reseed) should be 0.
+- **A frame rate for any DLL, the module's own heartbeat aside**: the overlay logs a `units:`
+  line every 30 presented frames, so timing their arrival in `tagpu.log` from outside is an
+  fps meter that needs no code — `30 × intervals / elapsed` (the G15b measurement used exactly
+  that against main's DLL).
+- The census below still works and is still the regression for "a writer we do not observe".
+
+### The UI census (G15a)
+
+```bash
+tools/tacli gui <i> census                            # = 'gui.on=census log pgm trace', at launch
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --out /tmp/uiwalk   # the inventory walk + report
+tools/tacli arm <i> gui_census.trigger              # the accumulated residual mask -> gamedir/tagpu_gui_census.pgm
+tools/tacli log <i> -g 'gui census:'                # per-window lines: changed=, unexplained=, box=, ops=[…]
+```
+
+- Read `gui: ARMED flip@0x4C63A0=1 leaves=N/N` first; `NOT armed — engine bytes differ` means a
+  site is owned by a module that installed after it (the observer chains onto `fxown`'s
+  `0x4B7F90` stub, so the default arm set is fine).
+- `changed`/`unexplained` on a `gui census:` line are the **window's totals since the previous
+  line**, not one census; a residual > 256 px logs at once with the ops that intersect it
+  (`trace`). Surfaces other than the presented one are reported only when they have a residual
+  — the PCX backgrounds and the `SAVEMOUSE` buffers always do (the loader and cursor code write
+  them directly), which is expected.
+- `uiwalk.py` drives the shell and a game by gadget name and writes `report.md` with one row
+  per stop; it needs no shots to work, but takes the engine surface at every stop.
+- **`tacli shot` works in game again** since 2026-09-07: the window title's `wt:… | tacli:…`
+  label put `:` and `|` into the PNG filename, which is why the surface shot silently never
+  appeared in game while the shell's bare title was fine (`screenshot.c` now sanitises it).

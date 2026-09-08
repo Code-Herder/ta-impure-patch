@@ -17,11 +17,13 @@
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
 #include "tagpu_terrown.h"
+#include "tagpu_gui.h"
 #include "tagpu_markown.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_weapons.h"
 #include "tagpu_reclaim.h"
+#include "tagpu_cobtrace.h"
 #include "utils.h"
 #include "versionhelpers.h"
 #include "delay_imports.h"
@@ -109,6 +111,14 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            installed on them still runs). */
         tagpu_markown_init();
 
+        /* tagpu: the GL UI renderer's observers (Phase E, tagpu_gui.h). No-op
+           unless "tagpu_gui.on" exists; byte-matched, all-or-nothing; every
+           detour calls the original, so the engine draws exactly as before —
+           we only watch. Disjoint from every detour above (the leaves it
+           watches are the GAF blits, the glyph blitter, the line drawers, the
+           surface copy and the flip). */
+        tagpu_gui_init();
+
         /* zoom: the minimap's view rectangle, computed from the 1x view and so a
            lie at any other (tagpu_zoom.h). Inert at zoom 1. */
         tagpu_zoom_init();
@@ -130,6 +140,13 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            "tagpu_weapons.on" exists; every site byte-matched, all-or-nothing;
            stock units trampoline to the untouched engine functions. */
         tagpu_weapons_init();
+
+        /* tagpu: the COB script-call oracle (tacob landing 2). No-op unless
+           "tagpu_cobtrace.on" exists; five sites inside the COB engine
+           (0x4B08C0, 0x4B0DA0, 0x4B19D0, 0x4B1A99 and the RNG call at
+           0x4B15E0), byte-matched, all-or-nothing, disjoint from every detour
+           above; reads only, writes tagpu_cobtrace.log on the game thread. */
+        tagpu_cobtrace_init();
 
         /* tagpu: deferred reclamation of the engine's Object3do (the render
            thread's cross-thread use-after-free, thread-safe-destruction.md).

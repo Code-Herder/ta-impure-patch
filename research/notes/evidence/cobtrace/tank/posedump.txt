@@ -1,0 +1,17 @@
+posedump: tick=657 idx=1 unit=04AF0138 o3=02808240 nparts=4 yaw=49152
+posedump: p0 base off=(0,0,0) move=(0,0,0) turn=(0,0,0) err=3.54
+posedump:   v0 node=(1048576,0,1048576) vbuf=(1024360,224052,-1048576)
+posedump:   v1 node=(-1048576,0,-1048576) vbuf=(-1024360,-224052,1048576)
+posedump:   v2 node=(1048576,0,-1048576) vbuf=(-1024360,-224052,-1048576)
+posedump: p1 flare HIDDEN off=(-142979,-12557,1526805) move=(0,0,0) turn=(0,0,0) err=5.45
+posedump:   v0 node=(-2766,-60595,266139) vbuf=(1157974,949877,244049)
+posedump:   v1 node=(6040,60526,264165) vbuf=(1130165,1067779,235243)
+posedump:   v2 node=(1664,759,11499) vbuf=(896105,955404,239619)
+posedump: p2 turret off=(32768,851967,-425983) move=(0,0,0) turn=(0,0,0) err=3.51
+posedump:   v0 node=(442368,-224460,262143) vbuf=(-294137,578007,-475136)
+posedump:   v1 node=(-125610,4915,262143) vbuf=(-343148,802085,92842)
+posedump:   v2 node=(-125610,-224460,262143) vbuf=(-294137,578007,92842)
+posedump: p3 barrel off=(-131072,-98302,-32768) move=(0,0,0) turn=(0,0,0) err=3.24
+posedump:   v0 node=(4095,-93387,147455) vbuf=(-445190,578514,94209)
+posedump:   v1 node=(-290815,103219,147455) vbuf=(-487199,770579,389119)
+posedump:   v2 node=(-290815,-93387,147455) vbuf=(-445190,578514,389119)

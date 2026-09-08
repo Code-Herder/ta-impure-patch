@@ -653,6 +653,16 @@ eight is a hard layout constant, not a tunable. Two callers matter:
   "one turret won't move to aim, and sometimes it starts working again" looks
   like from the outside.
 - any aim script that `wait-for-turn`s holds a thread for the whole slew.
+- **[added 2026-09-07, tacob landing 2 — `exe-reverse-engineering.md` §"The COB engine"]** three
+  more consequences of a full pool, all from the disassembly: a refused `AimN` reports "not
+  aimed" at once (`0x4B0B00` calls the slot's callback with 0 when the allocator says `-1`,
+  which is what keeps the stock loop retrying); a refused no-argument start (`0x4B0940`,
+  `Create`/`StartMoving`/the fire scripts' path) returns 0 and calls nothing; and **a
+  `call-script` inside a script whose child is refused blocks the caller for ever** — the CALL
+  opcode stores the child slot `-1` and parks the thread, and only a returning or signalled
+  child slot can wake it. Also: a thread killed by `signal` never runs its `RETURN`, so its
+  callback is never called — the aim result stays whatever `AutoAim` zeroed it to. The
+  `tagpu_cobtrace.on` oracle shows all of this as `X` and `K` lines.
 
 A warship spends most of the eight before the extra weapons arrive: `AimPrimary`,
 `AimSecondary`, the `RestoreAfterDelay` each of them starts, `SmokeUnit` once
