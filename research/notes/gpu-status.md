@@ -194,9 +194,10 @@ else stays ours, so both boxes land in one `glshot`):
    Bresenham step landing on the other neighbour, or a pixel where ours is correctly occluded
    and the A/B's engine box (which composites over our whole world) is not.
 
-Two consequences worth knowing. The rect now draws **after** the marker layer, so where a box
-edge crosses a health bar our line wins where the engine's bar would; the bars sit inside the box
-on every stock unit measured. And the same supersampling that dimmed the rect dims **every line
+Two consequences worth knowing. **Supersampled — the default — the rect draws after the marker
+layer**, so where a box edge crosses a health bar our line wins where the engine's bar would (the
+bars sit inside the box on every stock unit measured); the fallback site under `tagpu_ss.off`, or
+without `glBlitFramebuffer`, still draws it first, under them, so the two sites layer differently. And the same supersampling that dimmed the rect dims **every line
 and glyph the marker layer draws** — bars, order lines, range circles, the text atlas — which is
 the same fix one layer up, and is not done.
 

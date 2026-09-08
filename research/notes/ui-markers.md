@@ -191,9 +191,12 @@ difference:
   other neighbour, or a pixel where ours is correctly hidden behind the unit
   and the A/B's engine box (composited over our whole world) is not.
 
-**Still ours and not the engine's:** the rect now draws *after* the marker layer
-rather than before it, so where a box edge crosses a health bar our line wins
-and the engine's bar would. The bars sit inside the box on every stock unit
+**Still ours and not the engine's:** with the pass supersampled — the default —
+the rect draws *after* the marker layer rather than before it, so where a box
+edge crosses a health bar our line wins where the engine's bar would. (The
+fallback site, taken under `tagpu_ss.off` or without `glBlitFramebuffer`, still
+draws it first, under the bars as the engine does. The two sites therefore layer
+differently, which is a second reason the supersampled one is the one to trust.) The bars sit inside the box on every stock unit
 measured, so nothing was seen crossing; the real fix is the same one the rect
 just had — the marker layer is supersampled too, and every line and glyph in it
 is softer than the engine's for exactly the same reason.
@@ -500,14 +503,21 @@ Caveats for the native pass:
    in cnc-ddraw), *everything above* is under our unit pixels and the verdicts
    flip to "must re-draw" for every row above the build cursor. The in-place
    split is what keeps this table cheap.
-2. Re-drawing the selection rect natively is ~40 lines: 4 model-space corners
-   from our own mesh AABB at min-Y, rotate by the unit's whole angle triple at
-   `+0x64` in the engine's own order (§1 *Our redraw* — the heading alone is a
-   few pixels out on any slope, and the transposed rotation turns the box the
-   wrong way), project with
-   `sx = wx − eyeX + 128, sy = wz − alt/2 − eyeY + 32`, 1-px lines, colour =
-   `GetGuiPaletteColor(main, 0xA)` resolved through the game palette. Honour
-   `main+0x37F2F` bit2 so `SelBoxes` still works.
+2. Re-drawing the selection rect natively is ~40 lines, and every one of the
+   four quantities in it is the engine's, not a near-enough of ours (§1 *Our
+   redraw*): the 4 corners at min-Y come from the **root piece's own vertices
+   unioned with the origin**, not our whole-tree mesh AABB; they rotate by the
+   unit's whole angle triple at `+0x64` in `0x4B6CC0`'s order (the heading alone
+   is a few pixels out on any slope, and the transposed rotation turns the box
+   the wrong way); the projection is
+   `sx = floor(wx − eyeX + rot.x) + 128`,
+   `sy = floor(wz − eyeY − rot.z) − floor(floor(rot.y + alt)/2) + 32` — **each
+   term truncated on its own, and the height halved after truncating**, which is
+   a pixel's difference from `floor(wz − alt/2 − eyeY + 32 − …)`; 1-px lines,
+   colour = `GetGuiPaletteColor(main, 0xA)` resolved through the game palette.
+   Honour `main+0x37F2F` bit2 so `SelBoxes` still works.
+   *[CORRECTED 2026-09-08: this said "our own mesh AABB" and gave the folded
+   projection; both were what the native pass did, and both were wrong.]*
 3. If we want engine-parity layering, our redrawn select box must sit **under
    its own unit's pixels** and under later-row content — i.e. give it the same
    row-sort depth key as its unit minus an epsilon, not "always on top".

@@ -928,10 +928,20 @@ static const MAABB* selbox_aabb(const char* nd)
     {
         int nvert = *(const int*)(nd + N_VCOUNT);
         const int* vb = *(const int* const*)(nd + N_VERTS);
-        if (nvert > 2 && nvert <= 4096 && ptr_ok(vb) &&
-            !IsBadReadPtr(vb, (SIZE_T)nvert * 12)) {
+        /* Fewer than three vertices is the ENGINE'S OWN answer (0x4CB6D9) and
+           caches as the bare origin seed. An unreadable vertex array is not an
+           answer at all, and caching one would be permanent: the entry is keyed
+           by the node pointer and never re-tried, so that model would carry a
+           zero-size rect for the life of the process — and worse, silently,
+           because `selDrawn` would still count it and `s_selComplete` would
+           stay 1, leaving markown suppressing the engine's box over nothing.
+           Refuse instead: the caller skips the unit, the completeness flag goes
+           false, and the whole set goes back to the engine for that frame. */
+        if (nvert > 2) {
             const int* of = (const int*)(nd + N_OFF);
             int k, r;
+            if (nvert > 4096 || !ptr_ok(vb) ||
+                IsBadReadPtr(vb, (SIZE_T)nvert * 12)) return NULL;
             for (k = 0; k < nvert; k++)
                 for (r = 0; r < 3; r++) {
                     float v = (float)(of[r] + vb[k*3+r]) / 65536.0f;
@@ -2283,8 +2293,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                triple an effects model does: Rz(bank) on (x,y), Rx(pitch) on
                (y,z), Ry(heading) on (x,z) — emit_fx_model's order, rot2's
                sense (x' = x c - z s). Yaw alone is right on the flat and
-               several pixels out on a slope, where a tank was measured
-               carrying 17 deg of bank and 31 of pitch; the TRANSPOSED yaw,
+               several pixels out on a slope, where one tank was measured at
+               17.4 deg of bank and -22.1 of pitch and the next along at -30.7
+               of pitch; the TRANSPOSED yaw,
                which this loop used until 2026-09-08, is a rotation by
                -heading, so the rect turned against the unit it marks. */
             const unsigned short* rot =
@@ -2786,15 +2797,22 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             glBindVertexArray(s_vao);
             glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
             /* every texture unit this program reads, put back: the feature,
-               effects and marker passes in between bind their own, and with
-               the shade LUT (unit 1) and the palette (unit 2) pointing at
-               someone else's texture the rect draws BLACK — measured */
+               effects and marker passes in between bind their own — the marker
+               pass alone takes 1, 2 and 3 (`tagpu_mark.c`, palette/fog/fogLut)
+               — and with the shade LUT (unit 1) and the palette (unit 2)
+               pointing at someone else's texture the rect draws BLACK
+               (measured). Unit 3 is the scaffold, which the flat path reaches
+               through TAGPU_GLSL_SCAF_TEST whenever `tagpu_scaffold.on` is
+               armed: left as the marker pass had it, that test samples the fog
+               LUT and discards rect fragments at random. */
             x_glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, tagpu_r3d_atlas_texref());
             x_glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, tagpu_r3d_lut_texref());
             x_glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, s_palTex);
+            x_glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_2D, scafOn ? tagpu_scaffold_texref() : 0);
             x_glActiveTexture(GL_TEXTURE4);
             glBindTexture(GL_TEXTURE_2D, s_fogTex);
             x_glActiveTexture(GL_TEXTURE5);
@@ -2816,6 +2834,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             x_glUniform2f(s_uOffset, 0.0f, 0.0f);
             x_glUniform1f(s_uWaterT, -1e9f);
             x_glUniform1f(s_uDigT, -1e9f);
+            /* ...and the same test scales gl_FragCoord by uSS. These
+               fragments are already 1x, so it is 1 here, not ss. The next
+               frame sets it back with the rest of the pass's uniforms. */
+            x_glUniform1f(s_uSS, 1.0f);
             if (x_glLineWidth) x_glLineWidth(1.0f);
             x_glDrawArrays(GL_LINES, lineStart, lineEnd - lineStart);
             x_glDisable(GL_DEPTH_TEST);
