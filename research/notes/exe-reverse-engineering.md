@@ -2452,7 +2452,8 @@ per-unit tick function (it ends at `0x48B080`) runs, in order: `0x437910` (`0x48
 `0x43DD20` (`0x48AFAA`)**, `0x48A870`, `0x4864B0`, `0x48B710`. `0x43DD20` calls `0x43DA70` and
 `0x43DB50`, which hold the `StartMoving`/`StopMoving`/`MoveRate*` sites — so **those land after
 the unit's own script tick**, while the weapon and aim traffic lands before it.
-`UNITS_SetStateMask` (`Activate`/`Deactivate`, `0x48B0A0`) is *not* in that function; measured,
+`UNITS_SetStateMask` (`Activate`/`Deactivate`, `0x48B090` — landing 3 wrote `0x48B0A0`, which is
+0x10 past its entry; `tools/ta_symbols.txt:284`) is *not* in that function; measured,
 its starts land after `DoScriptsNow` too (the fighter, gunship and bomber fixtures each start
 `Activate` one tick after `Create` and it first steps the tick after that). `SweetSpot` and
 `Killed` come from the *attacker's* tick and so land after this unit's as well, when the
@@ -2499,6 +2500,156 @@ That last line is why a unit's flares, wakes, thrust anchors and torpedo tubes a
 without any `hide` in its script: they are one- and two-vertex marker nodes. Measured against
 all eight fixtures that dumped a pose of their own unit — every `HIDDEN` piece is either such a
 node or one the unit's `Create` hides, with no exceptions and no false positives.
+
+### `get` and `set` — the twenty value ids (tacob landing 4, 2026-09-07)
+
+`GET_UNIT_VALUE` and `GET` reach `vt+0x44` = **`0x480770`**, `SET` reaches `vt+0x40` =
+**`0x480B20`**. Both are `thiscall(cob, id, a, b, c, d)` / `thiscall(cob, id, value)` and both
+open with `lea eax,[ecx-1]; cmp eax,0x13; ja` — so **the value ids really are 1..20** and
+anything else returns 0 / does nothing. `esi` is the unit, taken as `[[cob+0x540]+0x0C]`.
+Read out of the binary at the addresses below; the arithmetic is what `tools/tacob`'s
+`EditorWorld` reproduces, and `tools/test_tacob.py` §`ValueIds` pins it.
+
+**GET — the jump table is `0x480AC4`, indexed by `id − 1`** (20 dwords; out of range →
+`0x480ABB`, `xor eax,eax`).
+
+| id | Name | Handler | What it computes |
+|---|---|---|---|
+| 1 | `ACTIVATION` | `0x480794` | `unit+0x10E` bit 0 |
+| 2 | `STANDINGMOVEORDERS` | `0x4807A4` | `(unit+0x110 >> 18) & 3` |
+| 3 | `STANDINGFIREORDERS` | `0x4807B7` | `(unit+0x110 >> 20) & 3` |
+| 4 | `HEALTH` | `0x4807CA` | `(i16)(unit+0x108) × 100 / (def+0x1FA)`, unsigned `div` — a **percent**, 0..100 |
+| 5 | `INBUILDSTANCE` | `0x4807EF` | `unit+0x10F` bit 0 |
+| 6 | `BUSY` | `0x4807FF` | `unit+0x10F` bit 1 |
+| 7 | `PIECE_XZ` | `0x480811` | `0x43E060(&v, unit, a)`, then `(v.x & 0xFFFF0000) + (v.z >> 16)` |
+| 8 | `PIECE_Y` | `0x48083F` | the same call; `v.y` **raw 16.16**, not an integer |
+| 9 | `UNIT_XZ` | `0x480868` | that unit's `+0x6A`/`+0x72` packed the same way |
+| 10 | `UNIT_Y` | `0x4808C2` | that unit's `+0x6E`, raw 16.16 |
+| 11 | `UNIT_HEIGHT` | `0x48090F` | `[[unit+0x92]+0x16E]` — a unit-**definition** field |
+| 12 | `XZ_ATAN` | `0x480965` | `0x4B715A(x, z)` **minus the unit's own heading `+0x66`**, `& 0xFFFF` |
+| 13 | `XZ_HYPOT` | `0x480994` | `_hypot` of the unpacked 16.16 pair → `_ftol` → 16.16 |
+| 14 | `ATAN` | `0x4809C7` | `0x4B715A(a, b)`, `& 0xFFFF` — **no** heading subtraction |
+| 15 | `HYPOT` | `0x4809E5` | `_hypot(a, b)` on the raw arguments, `_ftol` |
+| 16 | `GROUND_HEIGHT` | `0x480A0D` | `0x485070(&v)` on the unpacked pair, result `<< 16` |
+| 17 | `BUILD_PERCENT_LEFT` | `0x480A44` | `0` when `unit+0x104 == 0.0f` (`ds:0x4FD668`), else `1 − (int)(unit+0x104 × −99.0f)` (`ds:0x4FD66C`) — the field is `Nanoframe`, and that it holds the fraction *still to go* is read off the arithmetic, not the writer `[INFERRED]` |
+| 18 | `YARD_OPEN` | `0x480A83` | `unit+0x10F` bit 2 |
+| 19 | `BUGGER_OFF` | `0x480A96` | `unit+0x10F` bit 3 |
+| 20 | `ARMORED` | `0x480AA9` | `unit+0x10E` bit 1 |
+
+Four things in that table are not folklore and cost scripts real bugs:
+
+- **The XZ packing *adds* rather than or-s.** `0x480821` builds `(x & 0xFFFF0000) + (z >> 16)`
+  from two 16.16 world coordinates, so a negative z **borrows from x** — and every handler
+  that unpacks one (`0x480965`, `0x480994`, `0x480A0D`) undoes it with the same three
+  instructions: `x = v & 0xFFFF0000`, `z = v << 16`, and `if (z < 0) x += 0x10000`.
+- **`XZ_ATAN` is relative, `ATAN` is absolute.** Only the first subtracts `unit+0x66`, so
+  `get XZ_ATAN(…)` answers "how far round from where I am pointing" and `get ATAN(dx, dz)`
+  answers a world bearing. Both come back as `uint16` TAang.
+- **The distances are 16.16, not world units.** `PIECE_Y`, `UNIT_Y`, both hypots and
+  `GROUND_HEIGHT` are all `world × 65536`; only `PIECE_XZ`/`UNIT_XZ` hold integers, and only
+  because the packing shifts them.
+- **`BUILD_PERCENT_LEFT` is never 0 while a unit is building.** Read the constants back and
+  `unit+0x104` has to be the fraction still to go: `1 − trunc(frac × −99)` gives 100 at the
+  start and 1 just before the end, and
+  the id returns a true 0 only on the `frac == 0.0f` early out — so `while( get
+  BUILD_PERCENT_LEFT )` terminates exactly at completion.
+
+**SET — a byte table at `0x480C18` (20 bytes, `id − 1`) selects one of seven cases from the
+jump table at `0x480BFC`.** The bytes are `00 06 06 06 01 02 06 06 06 06 06 06 06 06 06 06 06
+03 04 05`, and **case 6 is the shared default `0x480BF1`, which only ORs `unit+0xBA |= 4` and
+returns.** So:
+
+| Case | ids | Handler | What it writes |
+|---|---|---|---|
+| 0 | `ACTIVATION` | `0x480B49` | `UNITS_SetStateMask 0x48B090(unit, 1, value)` — the same call `Activate`/`Deactivate` take |
+| 1 | `INBUILDSTANCE` | `0x480B62` | `unit+0x10F` bit 0 |
+| 2 | `BUSY` | `0x480B84` | `unit+0x10F` bit 1 |
+| 3 | `YARD_OPEN` | `0x480BA8` | `0x47DAC0(unit, value)` |
+| 4 | `BUGGER_OFF` | `0x480BBE` | `unit+0x10F` bit 3 |
+| 5 | `ARMORED` | `0x480BE3` | `0x48B090(unit, 2, value)` — which is how TA:ESC's COB "shields" work |
+| 6 | the other **fourteen** | `0x480BF1` | nothing but the dirty bit |
+
+**`set HEALTH to 50` is a measured no-op on retail TA**, and so is every other write to ids
+2, 3, 4 and 7..17. The editor lints it (`set-ignored`) rather than modelling a write that the
+engine does not make.
+
+Helpers the ids reach, all read this session:
+
+- **`0x4B715A`** `cdecl(a, b)` — `fild a; fild b; fpatan` (so `atan2(a, b)`, +x measured from
+  +z), `fmul qword ds:0x509EF0` = **65536 / 2π = 10430.37835047**, then a **bare `fistp`**, so
+  this one rounds to nearest. `ds:0x509EF8` is its inverse, 2π/65536.
+- **`0x4E43A0`** is MSVC's `_ftol`: `fstcw`, `or ah,0x0C`, `fldcw` — the mode is forced to
+  chop, so every other float→int here **truncates toward zero**. `0x4FB440` is the two-double
+  entry of the C runtime's mode-dispatched math routine (`push 0x18; call 0x4FB480`); the mode
+  table is unread, so "hypot" is from the id it serves and the shape of the call, not from the
+  callee `[INFERRED]`.
+- **`0x485070(vec3*)`** reads the *high halves* of the struct's `+0x00` and `+0x08` dwords
+  (`movsx eax, word [ecx+2]` / `[ecx+0xA]`), i.e. the integer world x and z, then `>> 4` for
+  the heightmap cell and `& 0xF` for the sub-cell — 16 world units to a cell.
+- **`0x4B6C30(n)`** — the sim RNG, and it is **Park–Miller by Schrage's trick**: state at
+  `ds:0x51FC88`, `q = s / 127773` computed with the magic multiply `0x69C16BD` at `0x4B6C47`,
+  then `s = 16807·s − q·0x7FFFFFFF` (which is `16807·(s mod 127773) − 2836·q`), `s += 0x7FFFFFFF`
+  when the result is `<= 0`, and the draw is `s % n`. `n < 2` returns 0 **without touching the
+  state** (`0x4B6C38`). `tools/tacob`'s `SimRandom` is that recurrence; what the game seeds it
+  with at match start is still unread.
+
+### The piece transform — `0x43DEF0`, `0x43E060` and `0x4B6CC0` (tacob landing 4)
+
+`PIECE_XZ` and `PIECE_Y` are the only place a script can see the composed pose, so their
+helpers settle the rules the renderer needs as well.
+
+**`0x43E060(out, unit, piece)`**, `stdcall`, `ret 0xC`: calls `0x43DEF0` for the piece's offset
+in the unit's own frame and adds the unit's world position — `+0x6A` x, `+0x6E` altitude,
+`+0x72` map depth, all 16.16 — writing `(x, y, z)` to `out`.
+
+**`0x43DEF0(out, unit, piece)`**, `ret 0xC`, is the composition:
+
+- `o3 = unit+0x9E`; a piece `< 0` or `>= [o3]` returns `(0,0,0)`, and so does a null model.
+- The accumulator starts at the piece's own **node offset plus its `PrimitiveStruct` position**:
+  `0x43DF2A..0x43DF55` pairs `prim+0x04/+0x08/+0x0C` with the node's `+0x10/+0x14/+0x18` in
+  that order. **So the COB's three axis operands are plain X, Y and Z** — the `XPos/ZPos/YPos`
+  naming in `tamem.h` is TA's screen convention, not a transposition — and **`MOVE` is a delta
+  in the parent's frame, added to the rest offset before any rotation.**
+- Then, for each ancestor up the `prim+0x32` parent chain: rotate what is under it by that
+  ancestor's three angle words through `0x4B6CC0`, **then** add that ancestor's own
+  offset+position. The requested piece's own angles are never applied — turning a piece does
+  not move its origin.
+- At the **root** (`prim+0x32 == 0`) the unit's body turn is added to the angle triple first:
+  `+0x64` to the z-axis word, `+0x66` (the heading) to the y-axis word, `+0x68` to the x-axis
+  word. Because Y is the outermost factor, that is the same thing as applying the yaw last.
+- The returned z is **negated** (`neg ecx` at `0x43E00A`), which is what puts it on the world's
+  map-depth axis.
+
+**`0x4B6CC0(out, in, angles)`** rotates one vector by the three words, and **fixes the order**:
+
+| Order | Pair rotated | `PrimitiveStruct` word | COB axis operand |
+|---|---|---|---|
+| first | `(x, y)` | `+0x14` | `z-axis` (2) |
+| second | `(y, z)` | `+0x10` | `x-axis` (0) |
+| third | `(x, z)` | `+0x12` | `y-axis` (1) |
+
+so the local matrix is **`Ry · Rx · Rz`**. Each step is `0x4B7173(angle, pair)`: it returns
+untouched on a zero angle word (`cmp word [ebp+8],0`), else `p0' = p0·cos − p1·sin`,
+`p1' = p1·cos + p0·sin` with the angle read as a **signed** 16-bit through `fild word`, scaled
+by `ds:0x509EF8`, and stored back with a bare `fistp` (round to nearest).
+
+**The 3DO loader negates X and Z.** Every offset and every vertex of the `Model3DONode` the
+engine holds is `(−x, y, −z)` of the same field in the `.3do` — a half turn about Y, baked in
+at load. `[MEASURED 2026-09-07]` against all eight `posedump.txt` fixtures, which print the
+engine's own `N_OFF` and vertex array beside the file's: every piece of all eight units, x and
+z flipped, y kept, no exceptions. The site that does it is **not located**; the fact is read
+off the two arrays, not off code.
+
+**Checked against the engine's own vertex buffer.** `tools/tacob pose-check --all` rebuilds
+each fixture's posed vertices from the rules above and diffs them against `P_VBUF`, which
+`tagpu_native.c`'s posedump prints beside the model-space vertex it came from. The residual is
+**exactly 0** on the kbot (45 points, 15 pieces, two turned), the building, the ship (40 points,
+a turned turret) and 0.002 on the submarine; the tank, fighter, gunship and bomber come out at
+4.1, 7.0, 48.4 and 77.2 world units — and `tagpu_native.c`'s own `err=` on the very same dump
+lines reads 5.45, 7.31, 48.37 and 77.19, i.e. **the vertex buffer is a frame or two behind the
+pose the dump sampled** and neither implementation can do anything about it. That also settles
+the two questions `model-import.md` left open: the composition order, and `MOVE` being a delta
+added before the rotation.
 
 ### [REPLAY] The nine fixtures, re-run offline (tacob landing 3, 2026-09-07)
 

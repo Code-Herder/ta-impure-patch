@@ -2304,7 +2304,7 @@ ENGINE_STARTS = {
     "setsfxoccupy":     ("now",   "post"),   # 0x43DBE8, runNow 1, argc 1
     "setspeed":         ("later", "pre"),    # 0x437902, runNow 0, argc 1
     "setdirection":     ("later", "pre"),    # 0x43795E/0x43798A, runNow 0, argc 1
-    # UNITS_SetStateMask 0x48B0A0 is not in the per-unit tick function (which ends at
+    # UNITS_SetStateMask 0x48B090 is not in the per-unit tick function (which ends at
     # 0x48B080), and the fighter, gunship and bomber fixtures all show its Activate
     # landing after that unit's DoScriptsNow — it first steps the tick after
     "activate":         ("later", "post"),   # 0x48B106/0x48B12B, runNow 0
@@ -3868,8 +3868,16 @@ class Project:
         return project
 
     def pack(self, out=None):
-        """The project as a .ufo the game loads: the COB, and the FBI when the
-        project carries one. `tools/hpipack.py` writes the archive."""
+        """The project as a .ufo: the COB, and the FBI when the project carries one.
+
+        `tools/hpipack.py` writes the archive. **A `.ufo` adds content; it does not
+        override a path a stock archive already has** — measured 2026-09-07 by
+        packing an ARMPW whose `Create` hides its torso and loading it three ways
+        on one instance: as `ztacob-armpw.ufo` and as `aaa-tacob.ufo` (a name that
+        sorts before every stock archive) the unit was **pixel-identical** to
+        stock, and as a loose `gamedir/scripts/armpw.cob` the torso was gone. So
+        `install()` writes both, and overriding a stock unit is the loose file's
+        job. See file-formats.md §5."""
         import importlib.util
         from importlib.machinery import SourceFileLoader
         loader = SourceFileLoader("hpipack", str(HERE / "hpipack.py"))
@@ -3886,6 +3894,22 @@ class Project:
         out = Path(out) if out else self.path / f"{self.unit}.ufo"
         out.write_bytes(hpipack.build(tree))
         return out, sorted(hpipack.walk(tree))
+
+    def install(self, gamedir, out=None):
+        """Put the build where a game will actually run it: the `.ufo` for anything
+        new, and the loose `scripts/<unit>.cob` for the override, because that is
+        the copy the engine opens first (§pack). Returns what it wrote."""
+        gamedir = Path(gamedir)
+        if not gamedir.is_dir():
+            raise TacobError(f"{gamedir} is not a directory")
+        ufo, entries = self.pack(out)
+        written = [gamedir / ufo.name]
+        written[0].write_bytes(ufo.read_bytes())
+        loose = gamedir / "scripts" / f"{self.unit}.cob"
+        loose.parent.mkdir(parents=True, exist_ok=True)
+        loose.write_bytes(self.cob.read_bytes())
+        written.append(loose)
+        return ufo, entries, written
 
 
 # --------------------------------------------------------------------------- the session
@@ -4121,7 +4145,7 @@ STATIC = {"/": EDITOR_HTML, "/tacob-edit.html": EDITOR_HTML}
 
 
 class Server:
-    def __init__(self, session, host="127.0.0.1", port=0):
+    def __init__(self, session, host="127.0.0.1", port=0, gamedir=None):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         outer = self
 
@@ -4211,9 +4235,16 @@ class Server:
                 elif path == "/world":
                     self.send(outer.set_world(body))
                 elif path == "/pack":
-                    out, names = s.project.pack(body.get("out"))
-                    self.send({"path": str(out), "entries": names,
-                               "bytes": out.stat().st_size})
+                    into = body.get("install") or outer.gamedir
+                    if into:
+                        out, names, written = s.project.install(into, body.get("out"))
+                        self.send({"path": str(out), "entries": names,
+                                   "bytes": out.stat().st_size,
+                                   "installed": [str(w) for w in written]})
+                    else:
+                        out, names = s.project.pack(body.get("out"))
+                        self.send({"path": str(out), "entries": names,
+                                   "bytes": out.stat().st_size})
                 elif path == "/template":
                     self.send({"bos": weapon_template(
                         int(body.get("n") or 4), body.get("mount") or "turret",
@@ -4222,6 +4253,7 @@ class Server:
                     self.send({"error": f"no route {path}"}, code=404)
 
         self.session = session
+        self.gamedir = gamedir          # where "pack" installs, when one was given
         self.httpd = ThreadingHTTPServer((host, port), Handler)
         self.host, self.port = host, self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -4546,6 +4578,14 @@ def cmd_template(args):
 
 def cmd_pack(args):
     project = Project(args.project)
+    if args.install:
+        out, names, written = project.install(args.install, args.output)
+        print(f"{out} ({out.stat().st_size} bytes): {', '.join(names)}")
+        for path in written:
+            print(f"  -> {path}")
+        print("  the .ufo carries anything new; the loose scripts/*.cob is what "
+              "overrides a stock unit (file-formats.md §5)")
+        return
     out, names = project.pack(args.output)
     print(f"{out} ({out.stat().st_size} bytes): {', '.join(names)}")
 
@@ -4559,7 +4599,7 @@ def cmd_serve(args):
     else:
         project = Project(args.project or PROJECTS)
     session = Session(project, args.gamedir)
-    server = Server(session, args.host, args.port)
+    server = Server(session, args.host, args.port, args.install)
     server.start()
     print(f"tacob: {project.unit} at {server.base}  ({len(session.cob.scripts)} scripts, "
           f"{len(session.cob.pieces)} pieces)")
@@ -4649,6 +4689,8 @@ def main(argv=None):
     p.add_argument("--port", type=int, default=0)
     p.add_argument("--open", action="store_true", help="open a browser on it")
     p.add_argument("--ticks", type=int, help="run this many ticks and exit (a smoke test)")
+    p.add_argument("--install", metavar="GAMEDIR",
+                   help="the game directory the page's `pack` button installs into")
     p.set_defaults(fn=cmd_serve)
 
     p = sub.add_parser("lint", help="the editor's static checks on a BOS file")
@@ -4661,6 +4703,9 @@ def main(argv=None):
     p = sub.add_parser("pack", help="the project as a .ufo the game loads")
     p.add_argument("project")
     p.add_argument("-o", "--output")
+    p.add_argument("--install", metavar="GAMEDIR",
+                   help="also drop it into a game directory: the .ufo, and the loose "
+                        "scripts/<unit>.cob that is what overrides a stock unit")
     p.set_defaults(fn=cmd_pack)
 
     p = sub.add_parser("weapon", help="the four scripts of one extra weapon slot")

@@ -1292,12 +1292,19 @@ static int emit_fx_model(const TAGPU_FXMODEL* m, int nv, float fxKey)
      - turn[0] rotates about X, turn[1] about Y, turn[2] about Z, each the
        positive-angle rot2 above at 65536 = 360 degrees. NOT the index order
        the effects models use (emit_fx_model reads a different struct);
-     - the sample could not settle the ORDER the three compose in, every piece
-       in it turning about one axis only. Z then X then Y is the plane order
-       the engine's own transform 0x4B6CC0 uses, so it is the one used here;
-     - `pos` read zero on every piece of every sample, a Peewee mid-stride
-       included, so it is taken as a MOVE delta in the parent's frame. It is
-       the one field here that no live data has yet exercised.
+     - the ORDER is Z, then X, then Y -- read out of the engine, not guessed
+       (tacob landing 4). UNITS_PieceOffset 0x43DEF0 composes through 0x4B6CC0,
+       which rotates the (x,y) pair by the +0x14 word, then (y,z) by +0x10, then
+       (x,z) by +0x12. An earlier note here said the sample could not settle it;
+       it could not, every piece in it turning about one axis only -- but the
+       disassembly can, and it picked the order this pass already used;
+     - `pos` is a MOVE delta in the parent's frame, added to the rest offset
+       BEFORE the rotation -- also read rather than inferred: 0x43DF2A..0x43DF55
+       adds PrimitiveStruct+0x04/+0x08/+0x0C to the node's +0x10/+0x14/+0x18 and
+       only then walks up the chain. It still reads zero in every sample here.
+       `tools/tacob pose-check --all` is the standing check on both: it rebuilds
+       the cobtrace fixtures' posed vertices from these rules and diffs them
+       against P_VBUF, and its residual equals this pass's own err= per dump.
 
    research/notes/model-import.md carries the derivation and the numbers. */
 

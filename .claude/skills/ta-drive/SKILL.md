@@ -223,6 +223,11 @@ game; the registry is only where TA saves the last one. So:
   unzoomed one. At 0.25x a unit the roster puts at (512,384) is hovered at (560,382), and a
   click at the roster's figure silently selects nothing. Either drive at 1x, or find the
   unit by parking the pointer and reading `main+0x2CBA` (0 = nothing under it).
+- **`roster` is empty for a second or two right after `scenario load`**, and a script that
+  reads it immediately gets `units: []` and blames the load. It parses the newest `units:`
+  block in `tagpu.log`, which the overlay writes every 30 presented frames, so its `eye` also
+  lags a `tacli eye` by up to that long — read it in a retry loop, and re-read after moving the
+  camera rather than assuming the first answer.
 - **A moving unit invalidates `roster`'s `screen=` before your click lands.** A unit
   with a move order walks between the read and the injected click, and a selection
   click that misses is silent — the symptom is `native: … 0 sel` in the log and every
