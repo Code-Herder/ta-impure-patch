@@ -109,21 +109,26 @@ static void olog(const char* s)
 
 void tagpu_opt_init(void)
 {
-    char b[512], off[64];
+    char b[512];
     int i, p;
     if (exists(MASTER_OFF)) {
         olog("opt: play defaults OFF (" MASTER_OFF " present): every pass is opt-in, by its .on file");
         return;
     }
     p = _snprintf(b, sizeof b, "opt: play defaults ON (no " MASTER_OFF "):");
-    for (i = 0; i < NDEFS && p > 0 && p < (int)sizeof b; i++) {
-        const char* name = s_defs[i].on + 6;              /* past "tagpu_" */
+    /* per pass, the answer the readers will get: =file (its .on exists), the
+       default's tokens, or =OFF -- by its .off file OR because the pass it
+       serves is off (the `needs` column), which is why applies() decides and
+       not the files alone */
+    for (i = 0; i < NDEFS; i++) {
+        const Def* d = &s_defs[i];
+        const char* name = d->on + 6;                     /* past "tagpu_" */
         int len = (int)strlen(name) - 3;                  /* before ".on"  */
-        const char* how = exists(s_defs[i].on) ? "=file"
-                        : (off_name(s_defs[i].on, off, sizeof off) && exists(off)) ? "=OFF"
-                        : s_defs[i].tokens[0] ? "=" : "";
-        p += _snprintf(b + p, sizeof b - p, " %.*s%s%s", len, name, how,
-                       (how[0] == '=' && how[1] == 0) ? s_defs[i].tokens : "");
+        const char* how = exists(d->on) ? "=file" : applies(d->on) ? (d->tokens[0] ? "=" : "") : "=OFF";
+        int k = _snprintf(b + p, sizeof b - p, " %.*s%s%s", len, name, how,
+                          (how[0] == '=' && how[1] == 0) ? d->tokens : "");
+        if (k < 0 || k >= (int)(sizeof b - p)) break;    /* truncated: stop, do not walk back */
+        p += k;
     }
     b[sizeof b - 1] = 0;
     olog(b);

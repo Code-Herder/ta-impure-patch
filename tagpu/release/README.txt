@@ -56,7 +56,15 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
 
   e.g. tagpu_classicpp.off for the classic look, tagpu_zoom.off for no zoom.
 
-  tagpu_defaults.off turns all of it off at once: the stock game through cnc-ddraw.
+  tagpu_defaults.off turns the whole list off at once. Two things stay on because
+  they are fixes rather than modes, each with its own switch:
+
+    tagpu_reclaim.off   a crash fix: the engine's model frees are deferred so the
+                        render thread never reads a freed unit or wreck
+    tagpu_curs.off      contextual cursors at any Interface Type, and the left
+                        click that goes with them
+
+  With all three files present the game is the stock one through cnc-ddraw.
   The same names with .on instead of .off are what the patch's own tooling writes;
   a .on file present wins over both the default and a .off.
 

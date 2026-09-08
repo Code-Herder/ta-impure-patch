@@ -24,6 +24,6 @@ cp "$here/ddraw.ini" "$out/ddraw.ini"
 sed "s/@VERSION@/$version/g" "$here/README.txt" > "$out/README.txt"
 cp "$root/unditherer/models/full.w32.bin" "$root/unditherer/models/tiny.w32.bin" "$out/"
 
-( cd "$root/dist" && rm -f "$name.zip" && zip -q -r "$name.zip" "$name" )
+( cd "$root/dist" && rm -f ta-impure-patch-*.zip && zip -q -r "$name.zip" "$name" )
 ls -l "$out"
 echo "$root/dist/$name.zip"

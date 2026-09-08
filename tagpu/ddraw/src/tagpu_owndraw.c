@@ -340,6 +340,19 @@ static void read_target(void)
              g_target[2] == 'l' && g_target[3] == 0);
 }
 
+/* install_one's write undone: the five stolen bytes back, for the one case
+   where the second site refuses after the first was written */
+static void restore_one(unsigned int va, const unsigned char* stolen)
+{
+    unsigned char* t = (unsigned char*)va;
+    DWORD old;
+    if (t[0] != 0xE9) return;
+    if (!VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &old)) return;
+    memcpy(t, stolen, 5);
+    VirtualProtect(t, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), t, 5);
+}
+
 void tagpu_owndraw_init(void)
 {
     char b[192];
@@ -347,9 +360,25 @@ void tagpu_owndraw_init(void)
 
     if (!tagpu_opt_on("tagpu_owndraw.on")) return;
 
+    /* all-or-nothing: both sites checked before either is written, so a
+       different build arms nothing rather than half of it. Half would be
+       worse than nothing here: a detoured opaque site with g_armed clear
+       still skips the engine's rasterise under "all" (classify never reads
+       g_armed) while buildfx and the structure shadows stay the engine's.
+       (The landing review of 2026-09-08, once owndraw was on by default.) */
+    if (memcmp((void*)RAST_OPAQUE_VA, OPQ_STOLEN, 5) != 0 ||
+        memcmp((void*)RAST_NANO_VA,   NANO_STOLEN, 5) != 0) {
+        olog2("owndraw: NOT armed -- engine bytes differ at 0x459830 / 0x459C70 (nothing written)");
+        return;
+    }
     read_target();
     a = install_one(RAST_OPAQUE_VA, RAST_OPAQUE_RES, OPQ_STOLEN);
     c = install_one(RAST_NANO_VA,   RAST_NANO_RES,   NANO_STOLEN);
+    if (a != c) {                       /* an allocation refused between the two */
+        if (a) restore_one(RAST_OPAQUE_VA, OPQ_STOLEN);
+        if (c) restore_one(RAST_NANO_VA,   NANO_STOLEN);
+        a = c = 0;
+    }
     g_armed = a && c;
     if (g_armed) g_buildfx = install_buildfx();
     /* structure shadows: only with "all" (every composite blank), and only
