@@ -65,9 +65,9 @@ prefix]`. The owner cannot obtain the Cavedog BOS sources.
 | Timeline | **Recorded.** Every tick's poses and events are kept; pause, step and scrub backwards while the live head continues. |
 | Trace format | **The trace tab uses the cobtrace hook's format exactly**, so the gate is a diff and a modder can diff the same way. |
 | Files | Open a stock unit by name, a loose mod folder, or a `.ufo`, all through the `ta3do` asset layer; a hires GLB may replace the 3DO (posed by node name, as the game does). A **project is a folder**: BOS, built COB, FBI, model reference. Export = `tools/hpipack.py` → `.ufo` — but landing 4 measured that a `.ufo` **does not override a path a stock archive already has** and a loose file does, so `tacob pack --install <gamedir>` writes both (`file-formats.md` §5). The game folder lives in per-user config outside any repo. |
-| Repo placement | `tools/tacob` (CLI: `compile`, `decompile`, `dump`, `roundtrip`, `run`, `fit-world`, `pose-check`, `open`, `serve`, `lint`, `pack`, `weapon`), `tools/tacob-edit.html`, `tools/test_tacob.py` (stdlib `unittest`, hand-built fixtures, the `test_ta3do.py` idiom), shipped headers under `tools/tacob-include/`. `/projects/` is gitignored so decompiled stock BOS is never tracked. |
-| JavaScript libraries | **CDN through an import map in development** (the `ta3do-view.html` idiom); the exe build fetches pinned, checksummed copies into a gitignored folder and rewrites the import map. Nothing vendored into git. |
-| The exe | **pywebview + PyInstaller onedir**, built with a Windows Python installed into the Wine prefix (no remote, no CI). WebView2 detected, default browser as the fallback. The heavy venv (torch, onnxruntime) stays out. First-run game-folder picker. |
+| Repo placement | `tools/tacob` (CLI: `compile`, `decompile`, `dump`, `roundtrip`, `run`, `fit-world`, `pose-check`, `open`, `gui`, `serve`, `lint`, `pack`, `weapon`), `tools/tacob-edit.html`, `tools/tacob-setup.html`, `tools/test_tacob.py` (stdlib `unittest`, hand-built fixtures, the `test_ta3do.py` idiom), shipped headers under `tools/tacob-include/`; the packaging in `tools/tacob_app.py`, `tools/tacob.spec` and `tools/tacob-build.py`. `/projects/`, `/tools/vendor/`, `/dist/` and `/build/` are gitignored so decompiled stock BOS, fetched JavaScript and build output are never tracked. |
+| JavaScript libraries | **CDN through an import map in development** (the `ta3do-view.html` idiom); the exe build fetches pinned, checksummed copies into a gitignored folder and rewrites the import map. Nothing vendored into git. **Built (landing 5)**: `tools/tacob-build.py vendor` → `tools/vendor/` (gitignored) + `tools/tacob-vendor.json` (the manifest, tracked); the *server* rewrites the map on the way out, so one page has two homes. |
+| The exe | **pywebview + PyInstaller onedir**, built with a Windows Python installed into the Wine prefix (no remote, no CI). WebView2 detected, default browser as the fallback. The heavy venv (torch, onnxruntime) stays out. First-run game-folder picker. **Built (landing 5)** — all of it, and the folder runs in a Wine prefix with no Python in it. |
 | Decompiler failure | **Refuse loudly, per script.** Scriptor emits only structured `if`/`else`/`while`, so stock COBs recover; a COB from another compiler or a `cobclone` output may not. Name the offending word address, show the script as a listing, never emit `goto` or a raw block — BOS has none and it would not recompile. |
 | Lost names | Customary parameters for known scripts (`AimPrimary(heading, pitch)`, `Killed(severity, corpsetype)`, `QueryPrimary(piecenum)`, `SetSpeed(speed)`, `RockUnit(anglex, anglez)`, the `WeaponN` family alike); otherwise `arg1`, `var1`, `static1`; signal masks numeric. |
 | Order | Five landings, each with its gate — §Landings. |
@@ -84,8 +84,13 @@ tools/tacob                      stdlib-only Python
   serve: local HTTP (stdlib) -> /state /pose /trace /events /source, and the POSTs
           /build /transport /event /world /pack /template
 tools/tacob-edit.html            CodeMirror 6 + three.js, loads the project's GLB (ta3do export)
+tools/tacob-setup.html           the first-run picker: the game folder and the unit
 tools/tacob-include/*.h          our own standard headers, values verified against the engine
-tools/test_tacob.py              unittest: hand-built COBs, round trips, VM stepping
+tools/test_tacob.py              unittest: hand-built COBs, round trips, VM stepping, the paths
+
+tools/tacob_app.py               the packaged entry point (`gui` is the default subcommand)
+tools/tacob.spec                 PyInstaller onedir; the three scripts ship as *data*
+tools/tacob-build.py             vendor · verify · wine-setup · build · check   (host side)
 ```
 
 The page never reads a COB. It gets the piece tree from the GLB (node names = 3DO piece names,
@@ -319,7 +324,7 @@ list, and everything else keeps working.
 | 2 | The `tagpu_cobtrace.on` hook | **built 2026-09-07** (§Landing 2) — the nine scenarios each produce a cobtrace log and a posedump, kept under `research/notes/evidence/cobtrace/`; reviewed as an engine change |
 | 3 | VM + director, headless `tacob run` | **built 2026-09-07** (§Landing 3) — all nine replays byte-identical to the game's own logs, all eight posedumps of the traced unit matching, the ninth thread refused |
 | 4 | The editor page, lints, slot template | **built 2026-09-07** (§Landing 4) — driven by hand end to end: ARMPW opened, `Create` edited to hide its torso, rebuilt, restarted, the change seen in the viewport, packed and installed, and the game drew the Peewee without its torso (232 pixels of its own 52×56 box) |
-| 5 | Packaging: pywebview launcher, browser fallback, game-folder picker, PyInstaller onedir | the built folder runs on a machine with no Python |
+| 5 | Packaging: pywebview launcher, browser fallback, game-folder picker, PyInstaller onedir | **built 2026-09-07** (§Landing 5) — `dist/tacob/`, 172 files and 29.7 MB, run in a Wine prefix with no `python*.exe` anywhere under `drive_c`: it decompiled ARMPW out of the game's archives, stepped the VM 30 ticks, and served the editor to headless Chrome **with the network cut off** — CodeMirror alive, the model on the canvas, the eight-record strip filled |
 | 6 | Scriptor as oracle (whenever the binary turns up) | probe corpus compiled by both, bytes identical or every difference explained here |
 
 ## Landing 1 — built 2026-09-07
@@ -487,6 +492,116 @@ bounded loops per class (shuttle, circuit, hover, run-in) scaled to the unit's o
 so the target marker stays in range. Nothing about the motion was measured against a moving
 unit, and it is not the engine's movement model.
 
+## Landing 5 — built 2026-09-07
+
+The Windows folder a modder unzips and runs. `tools/tacob_app.py` (the entry point),
+`tools/tacob.spec` (PyInstaller onedir), `tools/tacob-build.py` (`vendor` · `verify` ·
+`wine-setup` · `build` · `check`), `tools/tacob-setup.html` (the first-run picker), a `gui`
+subcommand, and the path/config layer underneath all of it. Twenty-one more offline tests, 84
+in all.
+
+**Gate**: `tools/tacob-build.py check` — the built folder run inside a Wine prefix the check
+first proves has **no `python*.exe` anywhere under `drive_c`**. Two runs there. `tacob.exe serve
+armpw --ticks 30` read the game's archives, decompiled ARMPW, compiled it back and stepped the
+VM (24 trace lines). Then `tacob.exe gui armpw --no-open`, driven by headless Chrome with
+`--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1` — every host but loopback
+unresolvable, so a CDN cannot answer for the folder — and the page came up with CodeMirror
+alive (not the textarea fallback), a `<canvas>` with the Peewee on it, the eight-record strip
+filled and `#status` reading `15 scripts, 15 pieces, 5 statics`. A `dist/tacob/` of 172 files
+and 29.7 MB.
+
+### What the packaging changed in the tool
+
+The program is the same three stdlib-only scripts; what moved is **where they look**.
+
+- **`HERE` is `sys._MEIPASS` when frozen** (`tacob._here()`). Everything the tool *ships* —
+  `tacob-include/`, `tacob-edit.html`, `tacob-setup.html`, `vendor/`, and `ta3do` and
+  `hpipack.py` themselves — hangs off it, and the spec's `.` destination is exactly that
+  directory, so the two `SourceFileLoader` calls that let the three scripts find each other keep
+  working unchanged.
+- **What the *user* writes hangs off `user_dir()`** — `%APPDATA%\tacob` on Windows,
+  `$XDG_DATA_HOME/tacob` elsewhere, `$TACOB_HOME` over both (that is what the tests set).
+  `projects_dir()` is the checkout's gitignored `/projects/` in a checkout and `user_dir() /
+  "projects"` in the bundle, because a project folder inside `Program Files` is not writable.
+- **The game folder is decided in one place** (`resolve_gamedir`, called once in `main()`): the
+  flag, then `$TA3DO_GAMEDIR` — which `ta3do` reads for itself, so the answer there is "do not
+  override it" — then the saved config. `ta3do.repo_root()` walks parents for a directory
+  holding both `tagpu/` and `pristine/`, which in a packaged folder finds nothing meaningful, so
+  `load_assets()` refuses with a sentence rather than naming that guess.
+- **`ta3do.die()` prints and raises `SystemExit`**, which `except Exception` lets straight past.
+  `load_assets()` is the one door to the asset layer now: it checks the folder holds one of
+  `totala1.hpi` / `totala2.hpi` / `rev31.gp3` first, and turns everything else into a
+  `TacobError` — which the server answers as a 400 with the sentence in it, not a 500 with a
+  type name.
+- **`run`, `fit-world` and `pose-check` are developer gates** and the folder does not ship
+  landing 2's fixtures. `fixtures_dir()` says that in one sentence instead of raising a
+  `FileNotFoundError` three frames deep.
+
+### The first run
+
+`tacob gui` with nothing configured starts the server anyway and serves **the picker** at `/`,
+on the same port the editor will use — so answering it is a reload, not a second URL. It asks
+two things (the game folder, with any folder that looks like an install offered as a button, and
+the unit), validates *before* it saves (`no scripts/armpw.cob in …` beats a session whose every
+piece silently sits at the origin), writes `config.json`, opens the project and swaps the
+session in. Until then every other route answers **503** with the same sentence. Measured in the
+packaged folder: `/setup` answered `"needed": true` with its config at
+`C:\users\…\AppData\Roaming\tacob\config.json`, and `/` served
+`<title>tacob — set up</title>`.
+
+The one thing the picker deliberately does *not* decide: **whether `pack` installs into that
+folder**. `gui` defaults it on because that is what the window is for and `serve` leaves it off,
+but either way the flag is the operator's (`--install` / `--no-install`) and the page only ever
+supplies the value — landing 4's review's rule, that a request may not name where the tool
+writes, with the Origin check still in front of it.
+
+### The window
+
+`open_window()` picks one of three and says which. **pywebview** when it can render;
+**the default browser** otherwise; nothing but a printed URL if even that fails. The test that
+decides is not "is pywebview installed" but **is WebView2 installed** — pywebview's Windows
+backend silently falls back to MSHTML, which has no ES modules, so the page's import map would
+produce a blank window and no error anywhere. `webview2_present()` reads
+`SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}\pv` under
+HKLM (both registry views) and HKCU. The exe is built **with a console** on purpose: the browser
+fallback has no window of its own to close, so the console is what stops the server, and it is
+where the URL and the lint findings appear.
+
+### The JavaScript
+
+`tools/tacob-build.py vendor` reads the page's own import map, fetches every entry, and follows
+each file's **relative** imports transitively — which is how `BufferGeometryUtils.js` came along
+(GLTFLoader imports it; nothing in the map names it). Sixteen files, 2.5 MB, mirrored under
+`tools/vendor/` at the CDN's own paths, with `tools/tacob-vendor.json` recording each URL and
+sha256. A later fetch whose bytes differ **stops the build** rather than shipping. Nothing is
+vendored into git.
+
+The rewrite is at *serve* time, not build time: `rewrite_import_map()` parses the map and swaps
+each URL for `/vendor/<same path>` **only when that file (or, for `three/addons/`, that
+directory) is actually there**, so one page works from a checkout with a network and from the
+folder without one, and a half-vendored tree still loads. Mirroring the CDN's paths is what makes
+the prefix entry work by the same rule as a file entry — and the CodeMirror files keep their
+**bare** imports, resolved by the map, because jsdelivr's `+esm` bundles inline their
+dependencies and two copies of `@codemirror/state` break CodeMirror.
+
+### What the build environment taught
+
+- **A Windows Python under Wine dies if its stdout is a plain file.** `Fatal Python error:
+  init_sys_streams: can't initialize sys standard streams / OSError: [WinError 6] Invalid
+  handle`, before it runs a line — which is what happens the moment a build is logged with `>`.
+  Every Wine call in `tacob-build.py` therefore reads through a **pipe** and re-prints, and
+  stdin is `/dev/null`. Hit twice: on `pip install`, then again on the build itself.
+- **The frozen tool must not trust the console's encoding.** With output redirected, Python
+  encodes with the machine's legacy code page and a single em dash in a message is a
+  `UnicodeEncodeError` that kills the tool while it prints its own greeting. `tacob_app.py`
+  reconfigures both streams to UTF-8 with `errors="replace"` before anything else.
+- **Only the entry script needs a rebuild.** `tacob`, `ta3do`, `hpipack.py` and both HTML pages
+  ship as *data*, so editing them is a copy into `dist/tacob/_internal/`, not a PyInstaller run.
+- Python 3.11.9 amd64 installs into a `win64` prefix from the ordinary python.org installer
+  (`/quiet InstallAllUsers=0 … TargetDir=C:\Python311`), and `pip install pyinstaller pywebview`
+  brings pythonnet 3.1.0 in with it — all three are in the bundle. What Wine cannot supply is
+  WebView2 or .NET, so **the window itself is the one path this gate does not exercise**.
+
 ## Gaps this design does not close
 
 - **Scriptor compatibility of hand-written literals** is unproven until the binary is found:
@@ -522,6 +637,16 @@ unit, and it is not the engine's movement model.
   `(tick, piece, argument)` and now also **where the piece was**, so the page draws a marker
   there; their handlers' constant tables are still unread, so the shipped `SFXTYPE_*` and
   explosion-flag values remain the community's and the editor prints the community's names.
+- **The pywebview window has never been opened.** Wine supplies neither WebView2 nor .NET, so
+  landing 5's gate exercised the *browser* fallback and the WebView2 probe's negative answer.
+  `webview`, `pythonnet` and `clr_loader` are in the bundle and `open_window()`'s three branches
+  are written, but "a window of our own on a real Windows machine" is claimed from the library's
+  contract, not measured.
+- **The packaged folder is unsigned and has no installer.** It is a folder to unzip; Windows
+  will warn about it, and nothing updates it.
+- **The picker's candidate list is a short fixed list**, not a search: the working directory,
+  the folder the tool sits in and its parent, and the usual Cavedog/Steam/GOG paths on each of
+  five drive letters. A game installed anywhere else is typed in, not offered.
 - **Landing 4 ships no `.fbi` editing.** A project carries the FBI it was opened with and packs
   it if one is present, but nothing edits it, so "add weapon 4" writes the four scripts and
   leaves `Weapon4=` to the modder. Editing FBI and weapon TDF was out of scope by decision.
