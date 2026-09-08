@@ -1070,8 +1070,24 @@ static float s_P[MAXNODEV * 3];     /* one node's model-space vertices */
    reset -- 0x45AC89 and 0x45AB6C when the body turn moved, 0x480C90 and
    0x480D22 when a COB `move`/`turn` opcode writes a piece -- and cleared
    only after the compose returns (0x45AD28 / 0x45AC0A); the rewrite is
-   entered ONLY when it is non-zero. So a piece read with the flag zero on
-   both sides of the read is a piece the engine was not rewriting.
+   entered ONLY when it is non-zero.
+
+   THIS IS A DETECTOR, NOT A LOCK, and it has a residual window: a flag is not
+   a sequence number, so a piece read with the flag zero on both sides is a
+   piece no rewrite STARTED AND FINISHED ACROSS -- not one no rewrite touched.
+   A whole dirty-to-clean cycle falling strictly between the two flag loads
+   would be missed. From the trip rate (one in ~29 000 unit-frames on an idle
+   box, at the ~30 Hz the COB writes a piece) that cycle is around a
+   microsecond, while one piece's vertex copy is tens of nanoseconds -- so the
+   miss needs the RENDER thread stalled inside those tens of nanoseconds for
+   at least the whole cycle. Most of what that would let through is benign
+   anyway: two composed poses one tick apart, mixed. The rest-pose read this
+   exists to stop needs the stall in the gap between a piece's last vertex load
+   and the flag load, with the entire remaining compose finishing in it.
+   Closing it properly needs a counter the engine does not keep (a detour on
+   all three repose sites, two of them inlined mid-function) or a content check
+   against the reconstruction on every frame rather than only on a trip --
+   research/notes/gpu-status.md 2.9, "Not closed by this".
 
    The flag is also 1 while the buffers are merely STALE (a COB write the
    next DrawUnit has not composed yet), which is most of what trips the

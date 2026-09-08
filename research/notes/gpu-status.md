@@ -845,6 +845,30 @@ reaches.
 **Cost.** Two `int` reads and a compiler barrier per piece per unit per frame on the common path;
 the reconstruction runs only on a trip. 60.0 fps before and after on the walk fixture.
 
+**A detector, not a lock — the residual window.** `Object3do+0x08` is a flag, not a sequence
+number, so "zero on both sides of the read" means *no rewrite started and finished across the
+read*, which is not the same as *no rewrite touched it*. A whole dirty-to-clean cycle falling
+strictly between the two flag loads is missed. How much smaller that is than the bug it replaces
+is the point: **before, any overlap at all between the pass's read and the rewrite produced the
+artifact** — which is exactly what the captures show happening — **and now the rewrite has to be
+strictly contained inside one piece's vertex copy.** From the trip rate (one in ~29 000
+unit-frames on an idle box, at the ~30 Hz the COB writes a piece) the dirty interval is around a
+microsecond; one piece's copy is tens of nanoseconds. So a miss needs the *render* thread stalled
+inside those tens of nanoseconds for at least the whole interval — and most of what that lets
+through is benign anyway, two composed poses one tick apart mixed together. The rest-pose read
+specifically needs the stall in the gap between a piece's last vertex load and the flag load,
+with the entire remaining compose finishing in it.
+
+Closing it outright needs one of two things, neither of them free: a **sequence counter**, which
+the engine does not keep and which we would have to synthesise with detours on all three repose
+sites (two are inlined mid-function, at `0x45ACB6` and `0x45ADA5`, so they are byte patches
+rather than prologue detours); or a **content check** — compare the copied vertices against the
+reconstruction on every frame instead of only on a trip, which has no timing hole at all but
+pays a `pose_accum` per unit per frame. A cheap middle exists and is not built: a piece whose
+posed buffer byte-equals its own rest vertices (`node+0x24`) is either mid-reset or genuinely at
+rest with the body yaw zero, and taking the reconstruction in both cases costs nothing but the
+reconstruction.
+
 **Not closed by this.** The same live read is made by `tagpu_hires_draw`'s replacement-mesh path
 through `hires_pose`, which reads the pose *fields* rather than the buffer and so cannot show the
 rest pose — but it can show a pose mixed across two ticks, which nothing here measures. And the
