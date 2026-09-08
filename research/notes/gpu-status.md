@@ -616,11 +616,22 @@ bytes is `field-notes.md` §"Our engine patches".
 | VA | What it is | Mechanism |
 |---|---|---|
 | `0x4266A7` | the `jne` that reaches TA's startup DirectX-version warning | `75` → `EB`, so the warning is always skipped |
-| `0x43E50C` | `je 0x43EB02` — the `Interface Type == 1` arm of `0x43E490`'s order-1 (contextual) case, which suppresses `cursormove`, `cursorreclamate` and the rest | `0F 84 F0 05 00 00` → `90` ×6, so the contextual cursor always takes the classic branch. **Cursor only**: `0x43E490` has exactly one caller (`CorretCursor_InGame 0x48D220`) and no address literal in the image, while left-vs-right ordering reads `main+0x37EFA` at four other sites. `tagpu_curs.off` opts out, read once at attach |
+| `0x43E50C` | `je 0x43EB02` — the `Interface Type == 1` arm of `0x43E490`'s order-1 (contextual) case, which suppresses `cursormove`, `cursorreclamate` and the rest | `0F 84 F0 05 00 00` → `90` ×6, so the contextual cursor always takes the classic branch. `0x43E490` has exactly one caller (`CorretCursor_InGame 0x48D220`) and no address literal in the image, so it governs which sprite is chosen — but the index it returns is *also* the left button's state, which is what the row below is for. `tagpu_curs.off` opts out, read once at attach |
+| `0x499041` | the left click's own dispatch inside `0x498F70`: `cmp dl,0x11 / jl` on `main+0x2CBE`, the installed cursor index, deciding "issue the order" against "deselect everything" | 27 bytes for 27, decided on `main+0x37EFA` and the order byte instead: `cmp [eax+0x37EFA],1 / jne classic / cmp cl,1 / jne classic / jmp deselect / classic: cmp dl,0x11 / jl act / jmp done`. Armed only when the `0x43E50C` patch above took, and off with the same `tagpu_curs.off` |
 
 Neither writes engine state, so neither appears in §2.5. The engine still draws the cursor
 itself — the composite only moves it (§1); what the patch changes is which sequence out of
 `cursor_ary` (`main+0x1487F + idx*4`) the engine hands to `SetUICursor 0x4AB400`.
+
+**Why the second row exists.** `0x43E50C` alone is not cursor-only, and shipped as a bug from
+G13j until 2026-09-07: `0x4992AD` stores the chosen index in `main+0x2CBE`, and `0x499027` — the
+left click's action — dispatches on that byte, treating anything below `0x11` as "an action
+cursor, issue the order". At `Interface Type 1` the engine's own arm returns only 15/17/18/19,
+so `< 0x11` never happened and the compare *was* the type-1 rule; feed it the classic 14
+`cursormove` and the left button starts issuing move orders alongside the right one. Measured
+live, commander selected on Two Continents at type 1: a left click on ground walked the unit to
+the clicked point, and the same click with `tagpu_curs.off` deselected it and moved nothing. The
+full path is `exe-reverse-engineering.md` §"The in-game mouse buttons".
 
 ---
 

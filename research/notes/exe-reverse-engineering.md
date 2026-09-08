@@ -1787,9 +1787,206 @@ seven by driving the game and reading `main+0x2CBE` back, and `cursormove` and
 - **Interface Type is not one switch with one meaning.** It gates the cursor at exactly one
   site and ordering at four others, and those are independent — which is why the game can be
   left on right-mouse orders and still show the classic cursors.
+  *[CORRECTED 2026-09-07: independent is exactly what they are NOT. The cursor site chooses the
+  index, `0x4992AD` stores it in `main+0x2CBE`, and the left click's own dispatch reads that
+  byte at `0x499027` — so changing the sprite changed the button. The section below is the
+  path this line missed, and it cost a shipped bug: from G13j until 2026-09-07 a left click at
+  Interface Type 1 issued a move order instead of deselecting.]*
 - **The contextual cursor is the only one the interface type touches.** Order bytes 2, 3, 9, 12
   … reach their cases without consulting `main+0x37EFA`, so the Move/Attack/Patrol/Reclaim/Guard
   buttons produced correct cursors at Interface Type 1 before the patch. Measured.
+
+## The in-game mouse buttons — what a click actually does — mapped by us
+
+[MEASURED 2026-09-07, this project — `objdump -d -M intel` of the pristine Steam build, plus a
+live A/B on `tacli` instance `clickfix` (Two Continents, one commander, Interface Type 1 and 0).
+Established while fixing "left click and right click both issue a move order", which turned out
+to be our own contextual-cursor patch (`field-notes.md` patch 2) reaching further than its
+licence said. Read together with the cursor chain above: this is the same handler's tail.]
+
+**`main+0x2CBE` is not a picture, it is the click's state.** That is the whole finding. The
+cursor index the chain above computes is stored at `0x4992AD` and then *dispatched on* by the
+left button, so "which sprite is shown" and "what the left button does" are one decision in
+this engine, made once per mouse move and consumed on the next press.
+
+**The dispatch.** `0x499200` — the mode-6 handler, whose head chooses the cursor — carries on
+past `0x4992CD` into the button handling, with the **message id in `[esp+0x1C]`** (`0x201`
+`WM_LBUTTONDOWN` … `0x205` `WM_RBUTTONUP`) and the region/drag flags in `main+0x2CC6`:
+
+```
+0x499348  al = main[0x2CC6]
+          if (al & 0x10) {                       ; a button is held on the minimap
+0x499352      it = main[0x37EFA]                 ; Interface Type
+              if (msg == (it ? 0x202 : 0x205))   ; ITS release: left at type 1, right at type 0
+                  { main[0x2CC6] &= ~0x10; }     ; drag over
+              else call 0x41D0F0                 ; keep dragging  [INFERRED: the view scroll]
+              done
+          }
+0x499387  if (main[0x2CDF]) { call 0x41CD50; done }         ; another mode owns the mouse
+0x49939B  if (msg == 0x204) { call 0x499100(&rec); done }   ; RBUTTONDOWN — below
+0x4993B6  if (main[0x2CC3] != 1)                            ; a command button is pressed
+              { if (msg == 0x201) call 0x498F70(&rec); done }   ; LBUTTONDOWN executes it
+0x4993D5  if (al & 0x08) {                        ; a drag-select box is open
+              if (msg != 0x202) { update the box corners; done }
+0x4993E9      main[0x2CC6] &= ~0x08
+              if (now < main[0x2CB6] + 0x19 && |dx| < 0x20 && |dy| < 0x20)
+                  call 0x498F70(&rec)             ; short and still: a CLICK, not a drag
+              else if (!0x48C390(&rec))           ; box select; nothing caught ->
+                  { 0x48BD00(); 0x491D70(1); }    ; deselect everything
+              done
+          }
+0x4994A0  if (msg != 0x201) done                  ; from here: LBUTTONDOWN, contextual order
+0x4994AC  if (al & 0x02)                          ; on the world viewport
+              { main[0x2CC6] |= 0x08;             ; open a drag-select box, remember when/where
+                main[0x2CB6] = 0x4B6340(); … ; cursor 0x13; done }
+0x499567  if (main[0x37EFA] == 1)
+              { if (al & 0x01) main[0x2CC6] |= 0x10; done }   ; minimap: start the drag
+0x4995AA  if (al & 0x01) call 0x498F70(&rec)      ; type 0, minimap: act on it
+```
+
+So **`main+0x2CC6` bit 3 (`0x08`) is "a drag-select box is open"** — set on `WM_LBUTTONDOWN`
+over the viewport at `0x4994B4`, cleared on the release at `0x4993E9` — and **bit 4 (`0x10`) is
+"a button is held on the minimap"**, set at `0x49957x` / `0x49919D` and cleared only by that
+button's own release. Both extend the bit table in the cursor section above; bit 3 agrees with
+`ui-markers.md` §4's "drag/band rect forced on".
+
+**A left click is a short, still drag.** There is no click event: the press opens a box and the
+release decides. `0x4B6340` is the clock it times that with — `GetTickCount()` (import
+`0x4FC0DC`, resolved from the import table) multiplied by `*(0x51FBD0)+0xE8` and divided by
+1000, so it counts game time, not wall time *[the multiplier's own meaning was not chased]*.
+`0x19` = 25 of those units, and 0x20 = 32 pixels on each axis.
+
+**`0x498F70` — the left click's action, and the only reader of `main+0x2CBE` that is not a
+change test.** One call site, `0x4995B3`, which every left-button path above jumps to.
+
+```
+0x498F70  cl = main[0x2CC3]                       ; the order byte
+          if (cl == 0x0E) { …build placement…; done }
+0x499027  dl = main[0x2CBE]                       ; THE INSTALLED CURSOR INDEX
+0x49902D  if (dl == 0x0F) { 0x48C7F0(&rec); done }        ; cursorselect -> select that unit
+0x499041  if (dl < 0x11) goto act                         ; an ACTION cursor -> issue the order
+0x499046  if (main[0x37EFA] == 1 && cl == 1)
+0x49905C      { 0x48BD00(); 0x491D70(1); done }           ; -> deselect everything
+          done                                            ; -> nothing at all
+0x49906D  act: 0x48CF30(&rec, cl, main+0x2CAA, 0, 0, 0)   ; issue order `cl` at the world point
+          main[0x2CC3] = 1; play 0x502714; clear 0x2CC6 bit 5
+```
+
+`cmp dl, 0x11` is the whole of the left button's interface-type behaviour, standing on the fact
+that **`0x43EB02` — the Interface Type 1 arm of the contextual case — returns 15, 17, 18 or 19
+and nothing else**. Verified by walking every branch reachable from `0x43EB02` (220 blocks) and
+collecting the returns: `0x43EB56` → 15, `0x43EB67` → 17, `0x43EB78` → 18, `0x43EC8D` → 18,
+`0x43EDA9` → 18, `0x43EE42` → 15, `0x43F09B` → 19. The action indexes (`0x43EDDF` → 6 repair,
+`0x43EF5B` → 10 revive, `0x43F06F` → 11 reclaim, and the computed 14-or-19 at `0x43F07C`) all
+belong to the classic arm and are **not reachable** from `0x43EB02`. So at type 1 the engine's
+own rule is exactly "15 selects the unit, everything else deselects", and the compare expresses
+it without a second interface-type read.
+
+**`0x499100` — the right button down.** Also one call site, `0x49939B`.
+
+```
+0x499100  if (main[0x2CC3] != 1)                  ; a command button is pressed ->
+              { main[0x2CC3] = 1; play 0x502714; done }   ; right click CANCELS it
+0x499162  if (main[0x37EFA] != 0) {               ; Interface Type 1: right orders
+0x4991D5      if (main[0x2CC6] & 0x04)            ; pointer on the viewport or the minimap
+                  0x48CF30(&rec, 1, main+0x2CAA, 0, 0, 0)   ; issue the contextual order
+              done
+          }
+0x499172  if (al & 0x02)                          ; type 0, on the world:
+              { (rec[8] & 8) ? 0x41CC60() : (0x48BD00(), 0x491D70(1)); done }  ; deselect
+0x499199  if (al & 0x01) main[0x2CC6] |= 0x10     ; type 0, on the minimap: start the drag
+```
+
+Note the asymmetry: the right button issues its order with a **hard-coded order byte 1**, the
+left button with `main+0x2CC3`. The right button therefore never executes a pressed command
+button — it cancels it — while the left button always does.
+
+**The helpers, and how each was established.**
+
+| VA | What | How |
+| --- | --- | --- |
+| `0x48CF30` | issue the order — `(rec, orderByte, &worldPoint, 0, 0, 0)`, the one call both buttons make | **16 call sites in the image**; the two on this path are `0x499087` (left) and `0x4991F5` (right). Plus live: the click that reaches it walks the unit to the point clicked. *[The count was “two call sites” until the 2026-09-07 review; two is how many are in THIS path, not in the image.]* |
+| `0x48BD00` | **deselect everything** — walks the whole unit array `main+0x14357 .. main+0x1435B` in `0x118` steps clearing bits `0xD0` of `[unit+0x110]`, whose bit 4 is "selected" | disassembly; live, the selection drops (`ARMCOM1.GUI` → `ARMMAIN2.GUI`) |
+| `0x491D70(1)` | the selection-changed UI refresh *[INFERRED]*; reads the GUI-variant word `main+0x37EBE`. Always called immediately after `0x48BD00` | call sites |
+| `0x48C7F0` | select the unit under the cursor *[INFERRED]* — reached only from the `0x0F` arm | call site + live: a left click on an own unit selects it at either interface type |
+| `0x48C390` | the drag-box selection *[INFERRED]*; returns 0 when the box caught nothing, which is what turns an empty drag into a deselect | call site |
+| `0x4B6340` | `GetTickCount() * (*(0x51FBD0)+0xE8) / 1000` — the click/drag timer | disassembly + the import table |
+
+**The behaviour table, measured live** on `clickfix` (commander selected, `one-unit` on Two
+Continents), with our contextual-cursor patch armed *and* the companion patch below:
+
+| | Interface Type 1 | Interface Type 0 |
+| --- | --- | --- |
+| left click, empty ground | deselects, no order | **issues the move order** |
+| left click, own unit | selects it | selects it |
+| left click, wreck | deselects, no reclaim | reclaims |
+| right click, empty ground | **issues the move order** | deselects |
+| right click, wreck | reclaims | deselects |
+| Move button, then left click | issues the move order | issues the move order |
+
+**Our patch — 27 bytes at `0x499041`,** armed with the cursor patch and under the same
+`tagpu_curs.off`. It decides the *contextual* left click on the interface type directly instead
+of on the cursor index that used to stand in for it, in the same 27 bytes
+(`0x499041..0x49905B`, the three destinations all pre-existing):
+
+```
+00499041  cmp dword [eax+0x37EFA], 1      ; Interface Type
+00499048  jne 0x499051                    ; type 0: classic, decide on dl
+0049904A  cmp cl, 1                       ; order byte: contextual?
+0049904D  jne 0x499051                    ; a pressed command button acts
+0049904F  jmp 0x49905C                    ; -> deselect  (the engine's own arm)
+00499051  cmp dl, 0x11                    ; the classic test, unchanged
+00499054  jl  0x49906D                    ; -> issue the order
+00499056  jmp 0x4990F6                    ; -> nothing; 0x4990F6 is `pop esi / pop
+0049905B  nop                             ;    ecx / ret 4`, this function's exit
+```
+
+`0x49905C`, `0x49906D` and `0x4990F6` are the same three destinations the stock code branches
+to; only which test picks them changes, and `0x499051` is the one new label — the stock `cmp
+dl,0x11` moved 16 bytes down. Equivalent
+to stock on a stock cursor state — at type 0 it is the original test unchanged, and at type 1
+the only indexes the engine can leave in `main+0x2CBE` are 15 (taken above it), 17, 18, 19 and
+the hourglass 20, and all of those stock deselects when the order byte is 1.
+
+**What makes that enumeration sound is not the list of stores — it is that the click always
+reads an index this same message just produced.** *[CORRECTED 2026-09-07 by review: the first
+version of this paragraph argued from a list of the direct stores to `main+0x2CBE`, which is not
+a closed set — `0x491C80` is a generic `SetCursor(idx)` with **42 call sites**, two of which
+(`0x491C95`, `0x491D4C`) store a caller-supplied index. The list also omitted `0x491CF8` and
+`0x4991B4`, and filed `0x492593` under 19 when `0x492589` loads `cl` with `0x14`.]* The real
+guarantee is structural, and it is in `0x499200`'s head: every message that can reach the click
+passes through it first, and it has exactly three exits —
+
+| head exit | what it leaves in `main+0x2CBE` | why the click is safe |
+| --- | --- | --- |
+| build placement (`0x499238`: region bit 1 and order byte `0x0E`) | untouched | `0x498F70` returns at `0x498F80` on order `0x0E`, before the read |
+| pointer on neither region (`0x49924B`) | `0x13`, stored at `0x49925D` | ≥ `0x11` |
+| otherwise (`0x499278`) | `CorretCursor_InGame`'s return, stored at `0x4992AD` | the type-1 arm returns only 15/17/18/19 |
+
+So whatever any other setter in the image left there is overwritten before the button tail runs,
+and only these three sources can be what `0x499027` reads.
+
+**Negative results worth the line.**
+
+- **`main+0x2CBE` has exactly one behavioural reader.** It has **28** `.text` references: 13
+  stores, 13 store-if-changed tests immediately in front of one (`0x491C8A`, `0x491CEC`,
+  `0x491D41`, `0x49258B`, `0x496A67`, `0x497F94`, `0x4991AC`, `0x499254`, `0x4992A2`,
+  `0x49953E`, `0x499581`, `0x49964B`, `0x4997D5`), the save at `0x443702` that `0x4437B5`
+  restores through `0x491C80`, and `0x499027` — the one place the value decides anything.
+  **Two of the 13 stores take a caller's index rather than a literal** (`0x491C95`,
+  `0x491D4C`, both inside `SetCursor 0x491C80`), so the set of *values* is not closed by this
+  census; what closes it for the click is the table above. Of the literal stores, `0x49925D`,
+  `0x499547`, `0x49958A`, `0x499654`, `0x491CF8` and `0x4991B4` write 19 and `0x492593`,
+  `0x496A6F`, `0x497F9C`, `0x4997DE` write the hourglass 20. That is why the bug had a
+  single 27-byte fix and not a rewrite.
+- **`0x498F70` and `0x499100` have one call site each** (`0x4995B3`, `0x4993AC`), both inside
+  `0x499200`. Neither address appears as a literal elsewhere. *[`0x499100`'s was written
+  `0x49939B` until the 2026-09-07 review — that is the head of the block that tests the message,
+  not the `call`.]*
+- **There is no click message.** Nothing in this path handles `WM_LBUTTONDBLCLK` either; the
+  engine's own dispatch covers `0x200..0x206` and the double-click arrives as another down.
+- **The right button cannot execute a command button, by construction** — `0x499100` returns at
+  its first test whenever `main+0x2CC3 != 1`, and its order call passes the literal 1.
 
 ## The UI surfaces and their writers — mapped by us (Phase E, G15a, 2026-09-07)
 

@@ -3715,6 +3715,147 @@ def _scn_apply_lines(res: dict, exp: dict):
     return lines
 
 
+# ------------------------------------------------------------------- order
+#
+# Giving a unit an order without touching the mouse. `tacli click --right`
+# aims a contextual click at a screen pixel and lets the engine guess the order
+# from whatever the cursor is over; this names the order and the target
+# outright, and reaches the engine's own constructor through the applier that
+# scenarios already use (ScriptAction_Type2Index -> ORDERS_NewMainOrder2Unit).
+# So it has no screen in it at all: no camera, no zoom, no selection dance, no
+# Interface Type, and a target that is off-screen or under fog is the same as
+# one in the middle of the view.
+#
+# It is NOT a validator. `ScriptAction_Type2Index` returning NULL is documented
+# (scenario-format.md) to mean "this unit cannot take that order", and the fork
+# reports it — but measured 2026-09-07 it refused nothing: capture, mobilebuild,
+# unload, blast, repair and load were all accepted on a commander with a bare
+# position, and did nothing. An order that makes no sense is issued, not caught.
+# There is no ownership check either: the applier hands the engine whatever unit
+# the caller named, which is how a scenario orders units it spawned for another
+# player.
+#
+# Clicking stays the way to test the INTERFACE — that a click selects, that the
+# cursor is right, that the panel answers. This is the way to set up a
+# situation.
+
+ORDER_TIMEOUT = 10.0
+
+
+def _order_subject(args) -> str:
+    """`sel`, or `@<index>` with the caller's claim about the slot.
+
+    The index is UnitInGameIndex, which the engine RECYCLES when a unit dies —
+    `scenario-format.md` refuses it as a public identity for exactly that
+    reason. `--expect` is what makes it safe to use here anyway: the fork checks
+    the slot still holds that unit type before it orders, on the game thread,
+    so a recycled index is an error instead of an order to a stranger. Pass the
+    `type` the roster reported next to the `engine_index` you are using.
+    """
+    if args.sel and args.unit is not None:
+        die("--sel and --unit are two different subjects; pass one")
+    if not args.sel and args.unit is None:
+        die("say who the order is for: --sel (everything selected) or "
+            "--unit <engine_index> (from `tacli roster`)")
+    if args.sel:
+        if args.expect:
+            die("--expect guards a --unit index; --sel needs no guard")
+        return "sel"
+    if args.unit < 0:
+        die(f"--unit {args.unit}: an engine index is not negative")
+    return f"@{args.unit}" + (f":{_order_type(args.expect, '--expect')}"
+                              if args.expect else "")
+
+
+def _order_cmd(raw: str) -> str:
+    cmd = raw.lower()
+    if cmd in SCN_NO_ATTACK_MOVE:
+        die(f"{raw!r}: no such order — Total Annihilation has none. Use "
+            f"`attack pos <x> <y>`: units advance on the spot and engage what "
+            f"they meet.")
+    cmd = SCN_ORDER_ALIASES.get(cmd, cmd)
+    if cmd not in SCN_ORDERS:
+        die(f"{raw!r}: no such order. TA has: " + " ".join(sorted(SCN_ORDERS)))
+    return cmd
+
+
+def _order_target(cmd: str, words, expect_target: str) -> str:
+    """`pos <x> <y>` in WORLD units, `unit <engine_index>`, or nothing."""
+    if cmd in SCN_ORDERS_ALONE:
+        if words:
+            die(f"{cmd!r} takes no target")
+        if expect_target:
+            die(f"{cmd!r} takes no target, so --expect-target guards nothing")
+        return ""
+    if not words:
+        die(f"{cmd!r} needs a target: `pos <x> <y>` (world units, not screen) "
+            f"or `unit <engine_index>`")
+    kind, rest = words[0], words[1:]
+    if kind == "pos":
+        if len(rest) != 2 or not all(_is_int(w) for w in rest):
+            die("pos wants two whole world coordinates: pos <x> <y>")
+        if expect_target:
+            die("--expect-target guards a `unit` target, not a position")
+        return f"pos {rest[0]} {rest[1]}"
+    if kind == "unit":
+        if len(rest) != 1 or not _is_int(rest[0]) or int(rest[0]) < 0:
+            die("unit wants one engine index: unit <engine_index>")
+        return f"unit @{rest[0]}" + (
+            f":{_order_type(expect_target, '--expect-target')}" if expect_target else "")
+    if kind == "feat":
+        die("a feature that this session did not create is named by where it "
+            "is: `reclaim pos <x> <y>`. TA reclaims through the map cell, so "
+            "the position reaches the same engine path.")
+    die(f"target must be `pos <x> <y>` or `unit <engine_index>`, got {kind!r}")
+
+
+def _is_int(w: str) -> bool:
+    """Exactly what the fork's `req()` accepts: optional `-`, then digits.
+
+    Python's `int()` is looser — `+5`, ` 7 `, `1_0` all parse here and are then
+    refused by the fork with a message about the wire, which reads like a bug in
+    the verb. Refuse them where the user can see why. [FROM REVIEW 2026-09-07]
+    """
+    return bool(re.fullmatch(r"-?[0-9]+", w))
+
+
+def _order_type(name: str, flag: str) -> str:
+    """A unit type for a guard, checked before it becomes a wire token.
+
+    The wire is line- and space-delimited, so an unvalidated name is the one
+    place in this verb where input reaches the fork's parser unchecked: a
+    newline in `--expect` splits the order line into two the fork parses
+    separately. TA's unit names are letters, digits and underscore.
+    [FROM REVIEW 2026-09-07]
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_]{1,31}", name):
+        die(f"{flag} {name!r}: a unit type is 1-31 characters of letters, "
+            f"digits or underscore, e.g. ARMCOM")
+    return name
+
+
+def cmd_order(args):
+    inst = Instance(args.name)
+    subject = _order_subject(args)
+    cmd = _order_cmd(args.cmd)
+    target = _order_target(cmd, args.target, args.expect_target)
+    line = f"order {subject} {cmd}" + (f" {target}" if target else "")
+    wire = ("# tagpu scenario wire v1 — written by `tacli order`.\n"
+            "v1 seed=0 clear=0 onerror=skip units=0 feats=0\n"
+            f"{line}\n"
+            "end\n")
+    res = _scn_apply(inst, wire, args.timeout)
+    orders = res.get("orders") or {}
+    issued, failed = orders.get("issued", 0), orders.get("failed", 0)
+    lines = [f"{cmd}: {issued} issued, {failed} failed"]
+    for e in res.get("errors") or []:
+        lines.append(f"error: {e}")
+    res = dict(res, wire=line)
+    out(res, args.json, human="\n".join(lines))
+    if failed or not issued:
+        sys.exit(1)
+
+
 def cmd_scenario_apply(args):
     """Apply a scenario to a game that is already running.
 
@@ -4141,6 +4282,26 @@ def build_parser():
     cl.add_argument("y", type=int)
     cl.add_argument("--right", action="store_true", help="right click (orders)")
     cl.set_defaults(func=cmd_click)
+
+    od = sub.add_parser("order", help="give units an order (no mouse, world coords)")
+    add_common(od)
+    od.add_argument("name")
+    od.add_argument("cmd", help="move attack defend|guard repair patrol reclaim "
+                               "capture load unload blast stop mobilebuild")
+    od.add_argument("target", nargs="*", metavar="TARGET",
+                    help="pos <x> <y> (world units) | unit <engine_index> | "
+                         "nothing, for stop")
+    od.add_argument("--sel", action="store_true",
+                    help="order every unit the player currently has selected")
+    od.add_argument("--unit", type=int, metavar="IDX",
+                    help="order one unit by its roster engine_index")
+    od.add_argument("--expect", metavar="TYPE",
+                    help="the unit type --unit should be, e.g. ARMCOM; the fork "
+                         "refuses the order if the index was recycled")
+    od.add_argument("--expect-target", metavar="TYPE", dest="expect_target",
+                    default="", help="the same guard for a `unit` target")
+    od.add_argument("--timeout", type=float, default=ORDER_TIMEOUT)
+    od.set_defaults(func=cmd_order)
 
     wh = sub.add_parser("wheel", help="turn the mouse wheel (the zoom control)")
     add_common(wh)

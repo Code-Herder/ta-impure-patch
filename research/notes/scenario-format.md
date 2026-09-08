@@ -182,6 +182,74 @@ TA's own order names, from the engine's button/order table [VERIFIED,
 A scenario asking for `"attack-move"` is rejected at compile time with *"no such order; TA
 has none — use attack with a coordinate"*.
 
+## Ordering units the wire did not create — `sel` and `@index`
+
+[BUILT 2026-09-07 for `tacli order`, measured live on `one-unit` / Two Continents.]
+
+An `order` line's first column was an ordinal, and an ordinal only names a unit this same
+wire file created. That is right for a scenario and useless for "order what is already in
+the game", which is what a live order verb needs. Two more subjects, both of which carry
+their own answer to the identity problem the locked decisions raise:
+
+```
+order sel        move pos 1988 1716     # every unit the WATCHED player has selected
+order @2         move pos 1988 1716     # the live unit in slot 2
+order @2:ARMCOM  move pos 1988 1716     # ...and it had better still be an ARMCOM
+order @2:ARMCOM  attack unit @251:CORCOM
+```
+
+- **`@<index>` is `UnitInGameIndex`, which is the slot in the unit array** — `unit = *(main
+  +0x14357) + idx*0x118`, the same resolution `tagpu_order.c` already uses for the tracked
+  and hovered units. `tacli roster` reports it as `engine_index`.
+- **`:<TYPE>` is the guard the recycling makes necessary.** *Identity* above refuses engine
+  indices as a public identity because the engine reuses a dead unit's slot; the guard makes
+  that a caught error rather than an order to whatever moved in. The fork compares against
+  `*(unit+0x92)`'s `UnitDefStruct` name (`+0x20`), case-insensitively, at the apply point —
+  on the game thread, so the answer cannot go stale between the check and the order.
+- **`sel` never names a slot at all.** It walks the watched player (`main+0x2A42`, **clamped to
+  the ten `Players[]` slots** — the field is a byte and nothing bounds it) unit range
+  `PlayerStruct+0x67..+0x6B` **inclusive**, stepping `0x118`, keeping units that are alive
+  (`+0x110 & 0x10000000`), not excluded (`& 0x4000`) and selected (`& 0x10`) — the same three
+  tests `CorretCursor_InGame` and our order overlay make. One `order sel` line issues to every
+  one of them, and a selection at the 512 ceiling is reported **and counted as a failure**, so a
+  truncated order cannot exit 0.
+- **Both resolvers contain their result to the unit array**, because every pointer they return is
+  handed to `ORDERS_NewMainOrder2Unit`: inside `[main+0x14357, main+0x1435B]` and on a `0x118`
+  boundary. The walk that only *reads* (`tagpu_order.c`) can be looser; this one cannot.
+  *[All three constraints — the player clamp, the containment and the excluded bit on the `@`
+  path — are FROM REVIEW 2026-09-07, as is the bound below.]*
+
+**`main+0x1435B` is INCLUSIVE, and the index bound must divide rather than multiply.** The
+engine's own sweep at `0x48BD22` reads `add eax,0x118 / cmp eax,[main+0x1435B] / jbe`, so the
+unit **at** `end` is a real unit and the array holds `(end−beg)/0x118 + 1` of them. Two
+consequences, both caught in review:
+
+- `(size_t)(idx + 1) * 0x118 > (size_t)(end − beg)` — the obvious bound — is wrong twice. It
+  **wraps** at `idx ≥ 15339168` on this 32-bit build (the product exceeds 2³²), so a large index
+  passed the test *and* `beg + idx*0x118` wrapped to a pointer below the array; and it refuses
+  the last valid slot. `(size_t)idx > (size_t)(end − beg) / 0x118` is both overflow-free and
+  correct at the end.
+- The module's own `snapshot_existing` walks `u + UNIT_STRIDE <= end`, which stops one unit
+  **short** of the array. Pre-existing and untouched by this landing; it means a
+  `clear_existing` scenario can leave the last unit alive. Not fixed here, and recorded so it is
+  not re-derived.
+- Live references are resolved at **apply** time, not validate time, so the wire's static
+  checks skip them; a live subject that does not resolve is one failed order with a reason,
+  not a rejected file.
+- **There is no `@` form for a feature target.** TA reclaims and attacks a feature through the
+  map cell — `issue_orders` passes a position and a null target pointer for `feat` already —
+  so a live feature is named by `pos <x> <y>` and reaches the identical engine path.
+
+**`ScriptAction_Type2Index` is not a validator, measured.** *The engine recipe* below records
+[CORPUS] that a `NULL` return means "this unit cannot take that order", and the applier does
+report it. It refused nothing we could construct: `capture`, `mobilebuild`, `unload`, `blast`,
+`repair` and `load` were all **accepted** on a commander with a bare position (2026-09-07) and
+did nothing observable. So `issued` counts orders handed to the engine, not orders that mean
+anything — the roster is the oracle. **There is no ownership check either**, by construction:
+`issue_orders` passes whatever unit the subject resolved to, which is what lets a scenario
+order units it spawned for another player. An order aimed at an enemy unit is accepted; whether
+its AI immediately overrides it was not measured.
+
 ## Engine switches
 
 `SoftwareDebugMode`, a `u16` at `TAdynmemStruct + 0x37F2F` [VERIFIED, `tamem.h:598`],
@@ -445,6 +513,22 @@ tools/tacli switches t1 shootall=on noshake=on   # set them live, on any instanc
 the author's handles back over the fork's ordinals before anything is printed. With
 `camera.pin` it also writes the eye-hold file, using the eye the fork actually wrote
 rather than re-deriving the projection in a second place.
+
+Built 2026-09-07 on the same pipeline, needing a running game — one order, no file:
+
+```bash
+tools/tacli order t1 --sel move pos 1988 1716
+tools/tacli order t1 --unit 2 --expect ARMCOM attack pos 3160 1200
+tools/tacli order t1 --unit 2 --expect-target CORCOM attack unit 251
+tools/tacli order t1 --unit 2 stop
+```
+
+`order` composes a two-line wire (`v1 … units=0 feats=0`, one `order` line) and sends it
+through `_scn_apply` like everything else, so it inherits the trigger, the poll, the crash
+watch and the result JSON without a second path to the engine. It is the **preferred way to
+command units** — see the `ta-drive` skill: no screen coordinates, no camera, no selection
+dance and no `Interface Type`, against a `click --right` that has all four. Clicking remains
+how the *interface* is tested.
 
 Built in phase D, and needing **nothing** — this is the one that starts from a stopped
 instance, or from no instance at all:

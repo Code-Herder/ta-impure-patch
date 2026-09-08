@@ -314,14 +314,19 @@ The exe on disk is never modified.
 |---|---|---|---|---|
 | 1 | Remove the startup **DirectX version warning** dialog | VA `0x004266A7` (file `0x25AA7`) | `75`→`EB` (`jne 0x42670A` → `jmp`, always skip the warning) | ● shipped, verified: clean main menu, no dialog |
 | 2 | **Contextual order cursors at any `Interface Type`** — restore `cursormove` over ground and `cursorreclamate` over a wreck, which the engine switches off when `Interface Type = 1` (right-mouse orders), the value `tacli` writes into every instance | VA `0x0043E50C` | `0F 84 F0 05 00 00` → `90 ×6` (drop the `je 0x43EB02` in `0x43E490`'s order-1 case) | ● shipped, verified live at Interface Type 1: ground 14 `cursormove`, wreck 11 `cursorreclamate`, own unit 15 `cursorselect`, nothing selected 19 `cursornormal`; a right-click still issues the order. Opt out with `tagpu_curs.off` |
+| 2b | **Keep patch 2 cursor-only** — the left click dispatches on the cursor index patch 2 changes, so on its own patch 2 made the LEFT button issue move orders too, at Interface Type 1, from G13j until 2026-09-07 | VA `0x00499041` (inside `0x498F70`) | 27 bytes for 27: decide the contextual left click on `main+0x37EFA` and the order byte, not on `main+0x2CBE` — `cmp [eax+0x37EFA],1 / jne classic / cmp cl,1 / jne classic / jmp deselect / classic: cmp dl,0x11 / jl act / jmp done` | ● shipped, armed with patch 2 and off with the same `tagpu_curs.off`. Verified live at both interface types: at 1 a left click deselects and the right one orders, at 0 the reverse, own-unit select and the Move button unchanged, cursors still 14/11 |
 
 | 3 | **Structure shadows are ours** — flip the `je` that sends a state-`0x20000000` unit into the blit's cached-slant-shadow branch, so under our key-filled terrain the engine no longer ALP-blends that shadow into teal | VA `0x004592C6` (path A) and `0x0045952C` (path B) of `0x459200` | `74`→`EB` on each (`je`→`jmp`, always the completed-unit branch, whose blank composite blits nothing). **Lives in `tagpu_owndraw.c`, not `tagpu_patches.c`**, and only with target `all`; installed as a pair or not at all | ● shipped (G13k), measured against the engine's shadow over engine terrain |
 
-Patch 2 is safe to make this bluntly because `0x43E490` has **exactly one caller** and its
-address appears nowhere in the image as a literal, so the branch governs which sprite is shown
-and nothing else; the four sites that decide left-vs-right ordering read `main+0x37EFA`
-separately and are untouched. Full chain, the `cursor_ary` index → GAF table and the measured
-before/after: `exe-reverse-engineering.md` §"The cursor chain — mapped by us".
+Patch 2 needs patch 2b, and the reasoning that said otherwise is worth keeping as a warning.
+`0x43E490` does have **exactly one caller** and no address literal in the image — but that only
+proves the branch governs which *index* is chosen, and the index is not a picture: `0x4992AD`
+stores it in `main+0x2CBE` and the left click's action reads that byte at `0x499027` to decide
+between issuing the order and deselecting. Enumerating the four sites that read `main+0x37EFA`
+for left-vs-right ordering and finding them untouched proved nothing, because one of them
+(`0x499046`) sits *behind* that index test. Full chain, the `cursor_ary` index → GAF table and
+the measured before/after: `exe-reverse-engineering.md` §"The cursor chain — mapped by us" and
+§"The in-game mouse buttons — what a click actually does".
 
 Patch 1 is our **first original engine modification** — proof the runtime-patch approach works end to end
 on our own binary: locate the check by its string (`0x004FD050`), find the branch, flip one byte from
