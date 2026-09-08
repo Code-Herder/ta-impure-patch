@@ -91,6 +91,7 @@ PAGES = [
     ("factory-build",             "Factories: build & carry",  "Mechanism"),
 
     ("deep-tadr",                 "TADR / tdraw.dll",          "Projects"),
+    ("tadr-merge-exploration",    "TADR merge exploration",    "Projects"),
     ("release-matrix",            "Releases & feature matrix", "Projects"),
     ("deep-patch-3902",           "Unofficial Patch 3.9.02",   "Projects"),
     ("deep-patch-loader",         "TA Patch Loader",           "Projects"),
