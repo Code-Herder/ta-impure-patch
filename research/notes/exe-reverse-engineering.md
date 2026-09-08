@@ -2338,6 +2338,115 @@ because the shell frees a popped screen's art and the heap hands the same addres
 next screen's (the 2026-09-07 review). `0x4CCF60`'s `'\n'` stop (`cmp al,0xA; je 0x4CD008` at
 `0x4CCFA0`) is honoured by the glyph observer's width since the same review.
 
+### The palette the screen is presented with, the way out of a game, and the loading screen [VERIFIED 2026-09-07, Phase E G15d]
+
+Read for [the GL UI renderer](gui-renderer.html) §12. The twin resolves its indices through a
+palette, and the question was whether `main+0x143A7` — the table every world pass reads — is the
+one the engine's own frame is displayed with. In general it is not.
+
+**`0x4BA200(PALETTEENTRY* entries, int first, int count)` — every palette the screen gets goes
+through here.** `stdcall`, `ret 0xC`, prologue `81 EC 14 08 00 00 53 55 56 57`. Under the palette
+lock (`0x52A4E8`, `[0x4fc174]`/`[0x4fc170]`, owner tag `0x4D41494E`) it copies the entries into
+**`globals+0x214 + 4·first`** (`0x4BA265..0x4BA297` — the graphics globals keep the last palette
+set), then builds a scaled copy on the stack, each byte **`min(255, byte × *(float*)(globals+0x614))`**
+(`fild`/`fmul`/`fcom 255.0`, `0x4E43A0` the CRT `ftol`, `0x4BA2C2..0x4BA35E`), and hands *that*
+on: under `[globals+0x44]` (the GDI present) as a `LOGPALETTE` (`0x300`, 256) through the imports
+`[0x4fc05c]`/`[0x4fc054]` (`CreatePalette`/`SetPaletteEntries` [INFERRED from the shape]);
+otherwise (`0x4BA450`), when `[globals+0xF0]` bit 2, **`[globals+0x94]->SetEntries(0, first,
+count, copy)`** — `call [ecx+0x18]` at `0x4BA476`, `IDirectDrawPalette`'s slot 6, which is
+cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
+
+- **`SetGamma 0x4BA590(float g)`** [CORPUS name, `tools/ta_symbols.txt`]: `globals+0x614 = g;
+  0x4BA200(globals+0x214, 0, 256)` — the last palette re-applied at the new gamma. Seventeen
+  callers. `0x4914A7` in `UIPipelinesInit 0x491200`, and `0x45BCDB` inside `0x45BCC0` (called
+  from `0x49147C`), both compute `0.5 − Gamma × (−1/24)` = **`0.5 + Gamma/24`** from
+  **`main+0x37F08`, the registry `Gamma`** (default 12 at `0x4301C0`, so a factor of 1.0);
+  `0x45BD20..0x45E3F0` are fourteen option-screen handlers that write `+0x37F08` from a slider
+  (`pos/(n−1) × range` at `0x45BD4E..0x45BD6F`) and re-apply [role INFERRED, the formula read at
+  `0x45BD86`]; **`0x4172B2` is the `+gamma N` chat command** (`Gamma 0x417290` in the NORMAL
+  cheat table): `SetGamma(N × 0.1)`, then `main+0x37F08 = N` (`0x4172C8`) — so `+gamma 15`
+  presents at 1.5 and `+gamma 10` puts 1.0 back, from any skirmish, no cheat bit needed
+  (MEASURED); `0x45FE54` sits with the mission-start flash.
+- The eleven callers of `0x4BA200`, and what they hand it: `0x497FDB` (game entry `0x497F40`:
+  `main+0x143A7, 0, 256`, before the front-end GUI stack is torn down); `0x44460B`
+  (`main+0x143A7` from `ebx`, 256, after `GUI_Pop 0x4A9660`); `0x4B58CD` (`globals+0x214, ebp,
+  256` — the globals' own copy, inside `DDrawDeviceCreateAndCaps 0x4B5510`, so a re-created
+  screen starts with the palette the old one had); `0x4BA5AC` (`SetGamma`); `0x41E000` and
+  `0x41E403` (the fade, below); `0x4ACCC4` (**one entry**: `0x4ACC70(gi, RGBQUAD* pal)`,
+  `ret 8`, builds it from three sliders' positions — `gi+0xCB6`, `+0xCBA`, `+0xCBE`, each
+  gadget's `+0x140` — into `pal[gi+0x9B2]` and sets index `gi+0x9B2`: an RGB colour editor
+  [INFERRED]; no direct call site, a callback); `0x45FBDF` (a zeroed buffer — all black — then
+  `0x4C69A0(main+0x37E1B)`, a `SurfaceFill` with `main+0xDCB[…]` and a flip: the blackout
+  `0x45FBC0`, `0x45FC33` its end); `0x428AA9`, `0x44B049`, `0x476798` (palettes loaded from
+  files).
+- **So the presented palette is `gamma(globals+0x214)`, and `main+0x143A7` is never scaled.**
+  On every normal path the two hold the same entries — `+0x143A7` is what `0x497FDB` and
+  `0x44460B` hand over — and at Gamma 12 they are byte-equal. At any other Gamma, or after
+  `+gamma`, every pass that reads `+0x143A7` (`tagpu_native.c`, and the terrain, feature, effect
+  and marker passes through it) shows the world at the wrong brightness, and so did the UI twin
+  until G15d, which resolves through cnc-ddraw's palette object (`g_ddraw.primary->palette->
+  data_rgb`, what `ddp_SetEntries` stored — the same table `tacli shot` writes into its PNG,
+  so the walk's oracle and the twin agree by construction). MEASURED, the heartbeat's `paldiff`:
+  0 entries differ in game; in the shell **one, index 9**, on every visit (its writer is not
+  traced — whichever it is, it reaches the screen through `0x4BA200` like everything else, so the
+  twin shows it right and a `+0x143A7` reader would not); `+gamma 15` in game makes every
+  non-black entry differ and the twin still matches the engine's frame ([GL UI
+  renderer](gui-renderer.html) §12 has the run).
+
+**The glamour-screen fade — `Palette` / `currentPalette` / `desiredPalette` / `FadeTable` at
+`main+0x3907F..0x3908B`** [mechanism VERIFIED; reach INFERRED]. The corpus glosses these four
+"menu fades"; the menus never fade. `0x41DA60` allocates the four 0x400-byte buffers with
+`MEM_Alloc 0x4D83B0(tag, 0x400)` — the tags are the names, `"FadeTable"` → `+0x3908B`,
+`"desiredPalette"` → `+0x39087`, `"currentPalette"` → `+0x39083`, and `"Palette"` → `+0x3907F`
+loaded from a file (`0x4290F0` at `0x41DB60`, `0x429290` at `0x41DBB2`; the neighbouring strings
+are `glamour\Arm01.PCX` and `bitmaps\glamour.PCX`, `0x502950`/`0x502964`) — and saves the gamma
+to `main+0x3906F` while setting `globals+0x614` to 1.0 (`0x41DAE3`). `0x41DFC0(from, to)`:
+`desiredPalette ← from`, `currentPalette ← to`, `0x4BA200(to, 0, 256)` — the start; its one
+caller `0x41FD55` passes `(Palette, a zeroed stack buffer)`, so the screen starts black.
+`0x41E270` is the stepper: `0x4B6340()` (the millisecond clock [INFERRED]) against
+`main+0x3905F`, then `FadeTable` indexed per byte into `currentPalette`, then
+`0x4BA200(currentPalette, 0, 256)` at `0x41E403`; one caller, `0x41FE02`. `0x41EC50..0x41ED9E`
+frees the four. All of it is one family, `0x41D8A0..0x41FEyy`, entered at `0x41FC12` behind
+`0x435100(main+0x391E9) == 1` (`0x41FB77`) — the campaign flow [INFERRED from the glamour art],
+and **nothing a skirmish does reaches it** (MEASURED: the walk's `palchg` moves only at the
+switches and at `+gamma`). Whatever runs it, the layer follows: each step is a `SetEntries`, and
+the twin's palette texture is re-uploaded from the presented table at the next present.
+
+**Leaving a game — `0x491ADC..0x491B38`** (inside the leave-game handler; the block begins with
+the width test at `0x491AA0`) [VERIFIED]. `cmp eax, 0x1E0; je 0x491B5D` (already 480 high:
+nothing to switch); **`MEM_Free 0x4D85A0(main+0x37E1B)` at `0x491AB8` — the game's OFFSCREEN goes
+straight to the heap, not through `SurfaceFree 0x4C6AC0`** (`0x49838C` does the same at the
+game's mode switch); `main+0x37E1B = 0`; `0x4C61F0(0)`; `0x4C62C0()` (restores the DirectDraw
+surfaces `globals+0x88`/`+0x8C` and re-sets their palette — slots `+0x60`, `+0x6C` — no release);
+`SetWindowPos(…, 640, 480, 4)` (`[0x4fc2f0]`); `NewTAScreen(640, 480)` at `0x491B0B`;
+`main+0x37E1B = 0x4C69F0("OFFSCREEN", main+0x37E1F, main+0x37E23)` at `0x491B28`. **The tag
+`"OFFSCREEN"` is the string at `0x5091D4`**, and the five sites that create the main offscreen
+with it are `0x490AD3`, `0x491250`, `0x491B23` (this one), `0x4980CF` (the loading-screen
+640×480, [resolution](resolution.html) §2.2) and `0x498402` (the game's mode-switch re-create) —
+the observer keys the main offscreen on that tag so a re-created one retires the last (G15d). MEASURED: the new 640×480
+lands on the base the 1024×768 had (`05190050` both, first fit), so the observer sees a
+**same-base size change** and never a free — `surf_get` now drops the ring's recorded boxes on
+such a change, where before the next publish read a 1024-wide box off a 640-wide surface and
+called it an overflow. Inside `NewTAScreen`, cnc-ddraw's `dd_SetDisplayMode` stops its render
+thread and starts a new one on a new GL context (`dd.c`); the old thread's last presents come
+hundreds of milliseconds apart while the game thread is in this path, and the shell is already
+flipping ~5 000 times a second — the stall the publisher guards against since G15d.
+
+**The loading screen.** Game entry, `0x498109..0x498156`: `0x4290F0(&path, "palettes",
+"guipal", …)`, `0x4BBE50(path)` loads the file, then **`0x4AC7D0(GUIInfo, main+0x143A7, data)`**
+(`ret 0xC`) copies its 256 entries to `GUIInfo+0xB2` (`main+0x5CB`) and rebuilds the 256-byte
+LUT at `GUIInfo+0x8B2` (**`main+0xDCB`**) by nearest RGB match of each `guipal` entry against the
+live table (`0x4AC7FF..0x4AC88F`: `|ΔR|+|ΔG|+|ΔB|`, minimum seeded at `0x98967F`) — **so
+`guipal` is the GUI's logical palette and touches the live table not at all**; `MEM_Free(data)`;
+`0x4B6340()` → `main+0x38A37`. Then, the viewport rect written (`0x4981C9..0x498237`),
+**`0x4288D0("loadgame2bg", 0, 0, 0)`** at `0x49823D` — `ret 0x10`, and not the palette init
+[resolution](resolution.html) §2.2 called it: it makes `main+0x37E1B` the back buffer
+(`0x4C69A0`), fills it, flips, and loads the PCX (`0x429290`) into a ten-deep most-recent-first
+cache of decoded backgrounds (records of 0x28 bytes from `0x5120B8`, the surface at `+0`, the
+name at `+4`; the oldest is `SurfaceFree`d and its name `MEM_Free`d at `0x428A04`). 42 callers,
+the shell's `FrontendX` background among them (`0x478F19`). How the picture then reaches the
+frame is the census's finding in [GL UI renderer](gui-renderer.html) §12.
+
 ## The unit-death path, the object destructor and the level teardown — mapped by us
 
 Mapped 2026-09-06 to close the render thread's use-after-free on a dying unit's model object

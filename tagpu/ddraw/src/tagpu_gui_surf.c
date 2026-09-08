@@ -32,6 +32,9 @@
 #include "tagpu_terr.h"
 #include "tagpu_overlay.h"
 #include "opengl_utils.h"
+#include "dd.h"                         /* g_ddraw.primary->palette: the palette the engine's frame is PRESENTED with */
+#include "IDirectDrawSurface.h"
+#include "IDirectDrawPalette.h"
 
 #define TA_MAINPP      0x00511DE8u
 #define OFF_PALETTE    0x143A7          /* 256 x {R,G,B,pad}                   */
@@ -106,6 +109,14 @@ static unsigned char s_palCopy[1024];
 static int    s_on = 0, s_strict = 0;
 static DWORD  s_lastPoll = 0;
 static unsigned s_drained = 0, s_sprites = 0, s_copies = 0, s_pixels = 0, s_seeds = 0, s_clears = 0, s_lostSprites = 0;
+static int    s_skipToReset = 0;        /* after a GL context change: the queue's ops up to the producer's next
+                                           RESET were published against twins and an atlas that died with the
+                                           context — take their arena bytes, apply nothing (see drain) */
+static unsigned s_skipped = 0;
+static unsigned s_palChanges = 0;       /* presented-palette uploads (a fade is a run of them)             */
+static int    s_palDiff = 0;            /* entries where the presented palette differs from main+0x143A7  */
+static int    s_palDiffAt = -1;         /* the first such entry                                            */
+static int    s_palSource = 0;          /* 1 = cnc-ddraw's palette object, 0 = the engine's table (no primary yet) */
 
 /* ----------------------------------------------------------------- shaders */
 /* a quad in surface pixels -> the twin's FBO (row 0 = surface row 0) */
@@ -390,9 +401,18 @@ static void drain(void)
     while (tail != head && budget-- > 0) {
         const TAGPU_PUBOP* o = &g_guiq.ops[tail & (TAGPU_GUI_QCAP - 1)];
         TWIN* t;
+        if (s_skipToReset && o->kind != PK_RESET) {
+            /* published before the producer learned the context was gone:
+               every twin and atlas entry it names is dead, and applying it
+               would only count its sprites as lost (MEASURED 2026-09-07: 705
+               per game -> shell switch). The producer's RESET follows at its
+               next publish, since glreset raised `reseed`. */
+            s_skipped++;
+            goto next;
+        }
         switch (o->kind) {
         case PK_FRAME:  s_presented = o->surf; break;
-        case PK_RESET:  twins_reset(); break;
+        case PK_RESET:  twins_reset(); s_skipToReset = 0; break;
         case PK_SEED:
             t = twin_make(o->surf, o->w, o->h);
             if (t && o->alen) twin_upload(t, 0, 0, o->w, o->h, g_guiq.arena + o->aoff);
@@ -418,8 +438,16 @@ static void drain(void)
                 /* the atlas is full, or the frame's bytes never arrived (an
                    earlier reset lost them): a fresh start — the seeds carry
                    the pixels the sprite would have drawn */
+                g_guiq.why = s_atlas.full ? TAGPU_GUI_WHY_ATLAS : TAGPU_GUI_WHY_LOST;
                 if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
                 g_guiq.reseed = 1;
+                if (s_lostSprites < 8) {
+                    char b[200];
+                    _snprintf(b, sizeof b, "gui: lost sprite #%u: frame %08X %ux%u bytes=%u atlas=%d/%d%s twins=%d flip=%u",
+                              s_lostSprites + 1, (unsigned)(size_t)o->frame, (unsigned)o->fw, (unsigned)o->fh, o->alen,
+                              s_atlas.n, s_atlas.max, s_atlas.full ? " FULL" : "", s_ntwins, o->flip);
+                    slog(b);
+                }
                 s_lostSprites++;
                 break;
             }
@@ -429,10 +457,11 @@ static void drain(void)
             TWIN* src = twin_find(o->src);
             t = twin_find(o->surf);
             if (t && src) twin_copy(t, src, o);
-            else if (t) g_guiq.reseed = 1;
+            else if (t) { g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_COPY; }
             break; }
         default: break;
         }
+    next:
         if (o->alen) g_guiq.aTail = o->aoff + o->alen;
         tail++;
         s_drained++;
@@ -442,14 +471,61 @@ static void drain(void)
 }
 
 /* ------------------------------------------------------------------ layer */
+/* THE PALETTE THE ENGINE'S FRAME IS SHOWN WITH is not main+0x143A7. Every
+   palette the engine sets goes through 0x4BA200(entries, first, count), which
+   keeps the entries in the graphics globals (+0x214) and hands DirectDraw
+   min(255, entry x gamma) with gamma = *(float*)(globals+0x614) — the Gamma
+   option (SetGamma 0x4BA590 [CORPUS], gamma = 0.5 + Gamma/24, 1.0 at the
+   default 12), applied only on the way to SetEntries, never to +0x143A7 (read
+   2026-09-07, engine map "The palette the screen is presented with"). The
+   engine's own pixels beneath the twin are drawn by cnc-ddraw through the
+   palette its SetEntries received, so that is the palette the twin resolves
+   through: the primary's palette object in this DLL. The engine's table is
+   the fallback until a primary exists, and the number of entries where the
+   two disagree is measured at every upload (`paldiff=` in the heartbeat):
+   0 at Gamma 12, and the world passes, which read +0x143A7, are wrong by
+   exactly that much at any other setting. */
 static void upload_palette(void)
 {
     const char* ta = *(const char* const*)TA_MAINPP;
-    const unsigned char* pal;
-    if (!ptr_ok(ta)) return;
-    pal = (const unsigned char*)(ta + OFF_PALETTE);
-    if (!ptr_ok(pal) || memcmp(pal, s_palCopy, 1024) == 0) return;
-    memcpy(s_palCopy, pal, 1024);
+    const unsigned char* engine = NULL;
+    unsigned char rgba[1024];
+    int i;
+    int havePresented = 0;
+    if (ptr_ok(ta) && ptr_ok(ta + OFF_PALETTE)) engine = (const unsigned char*)(ta + OFF_PALETTE);
+    /* under the fork's lock: the game thread NULLs g_ddraw.primary inside it
+       when the primary's last reference goes (IDirectDrawSurface__Release),
+       and frees the object only after leaving it — so a pointer read and
+       dereferenced inside the section is a live object or NULL, never a
+       freed one. The present itself runs outside the section. The interleave
+       reads data_rgb by member (RGBQUAD is B,G,R,reserved — reading the raw
+       bytes as R,G,B swaps red and blue, paldiff 218 not 0), so it must stay
+       inside the guard; the 2026-09-07 review's "copy the 1024 bytes out and
+       convert outside the lock" was declined because the byte copy loses the
+       member order and the saving is below the meter. */
+    EnterCriticalSection(&g_ddraw.cs);
+    if (g_ddraw.primary && g_ddraw.primary->palette) {
+        const RGBQUAD* q = g_ddraw.primary->palette->data_rgb;
+        for (i = 0; i < 256; i++) { rgba[4*i] = q[i].rgbRed; rgba[4*i+1] = q[i].rgbGreen; rgba[4*i+2] = q[i].rgbBlue; rgba[4*i+3] = 255; }
+        havePresented = 1;
+    }
+    LeaveCriticalSection(&g_ddraw.cs);
+    if (havePresented) {
+        s_palSource = 1;
+    } else if (engine) {
+        memcpy(rgba, engine, 1024);
+        s_palSource = 0;
+    } else return;
+    if (memcmp(rgba, s_palCopy, 1024) == 0) return;
+    memcpy(s_palCopy, rgba, 1024);
+    s_palChanges++;
+    s_palDiff = 0; s_palDiffAt = -1;
+    if (engine)
+        for (i = 0; i < 256; i++)
+            if (rgba[4*i] != engine[4*i] || rgba[4*i+1] != engine[4*i+1] || rgba[4*i+2] != engine[4*i+2]) {
+                if (s_palDiffAt < 0) s_palDiffAt = i;
+                s_palDiff++;
+            }
     glBindTexture(GL_TEXTURE_2D, s_palTex);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, s_palCopy);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -537,7 +613,7 @@ static void poll(void)
     if (on != s_on) {
         s_on = on;
         g_gui_draw = on;
-        if (on) g_guiq.reseed = 1;         /* the twins start from the surfaces as they are */
+        if (on) { g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_ARM; }   /* the twins start from the surfaces as they are */
         slog(on ? "gui: layer ON (twins re-seed at the next flip)" : "gui: layer OFF (the frame is the engine's)");
     }
 }
@@ -568,20 +644,24 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
-                  s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, fps);
+                  s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
+                  s_skipped, s_palChanges, s_palDiff, s_palDiffAt, s_palSource, fps);
         slog(b);
     }
 }
 
 void tagpu_gui_glreset(void)
 {
-    /* the context is gone: forget every id, start over from fresh seeds */
+    /* the context is gone: forget every id, start over from fresh seeds —
+       and take nothing from the queue until the producer's RESET arrives */
     s_ntwins = 0; s_presented = 0;
     s_gl = 0; s_sprProg = s_cpyProg = s_layProg = s_vao = s_vbo = s_palTex = 0;
     tagpu_gaf_atlas_lost(&s_atlas);
-    g_guiq.reseed = 1;
+    memset(s_palCopy, 0xFF, sizeof s_palCopy);        /* the palette texture died too: re-upload */
+    s_skipToReset = 1;
+    g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_GLCTX;
 }
 
 int tagpu_gui_drawing(void) { return s_on; }
