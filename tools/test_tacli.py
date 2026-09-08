@@ -1227,6 +1227,78 @@ class ScenarioFiles(unittest.TestCase):
                 tacli._scn_compile(path.stem)
 
 
+class OrderVerb(unittest.TestCase):
+    """The wire an `order` produces, and the refusals it makes before sending one.
+
+    The wire is the contract with the fork: a wrong subject token or a target
+    written in screen pixels would be accepted by the parser and issued against
+    the wrong thing, silently. Everything here is pure string work — no game.
+    """
+
+    def subject(self, **kw):
+        args = types.SimpleNamespace(sel=False, unit=None, expect=None)
+        args.__dict__.update(kw)
+        return tacli._order_subject(args)
+
+    def test_sel_is_its_own_subject(self):
+        self.assertEqual(self.subject(sel=True), "sel")
+
+    def test_an_index_becomes_an_at_reference(self):
+        self.assertEqual(self.subject(unit=2), "@2")
+
+    def test_the_type_guard_rides_on_the_reference(self):
+        self.assertEqual(self.subject(unit=2, expect="ARMCOM"), "@2:ARMCOM")
+
+    def test_it_refuses_two_subjects_or_none(self):
+        with refuses(self):
+            self.subject(sel=True, unit=2)
+        with refuses(self):
+            self.subject()
+
+    def test_it_refuses_a_guard_that_guards_nothing(self):
+        with refuses(self):
+            self.subject(sel=True, expect="ARMCOM")
+
+    def test_it_refuses_a_negative_index(self):
+        with refuses(self):
+            self.subject(unit=-1)
+
+    def test_order_names_and_their_aliases(self):
+        self.assertEqual(tacli._order_cmd("MOVE"), "move")
+        self.assertEqual(tacli._order_cmd("guard"), "defend")
+
+    def test_attack_move_is_named_as_the_thing_ta_lacks(self):
+        with refuses(self):
+            tacli._order_cmd("attack-move")
+        with refuses(self):
+            tacli._order_cmd("fly")
+
+    def test_targets(self):
+        self.assertEqual(tacli._order_target("move", ["pos", "10", "20"], ""),
+                         "pos 10 20")
+        self.assertEqual(tacli._order_target("attack", ["unit", "251"], ""),
+                         "unit @251")
+        self.assertEqual(tacli._order_target("attack", ["unit", "251"], "CORCOM"),
+                         "unit @251:CORCOM")
+        self.assertEqual(tacli._order_target("stop", [], ""), "")
+
+    def test_a_target_that_is_missing_malformed_or_surplus(self):
+        for cmd, words in (("move", []), ("move", ["pos", "10"]),
+                           ("move", ["pos", "x", "20"]), ("move", ["unit"]),
+                           ("move", ["unit", "-1"]), ("move", ["screen", "10", "20"]),
+                           ("stop", ["pos", "10", "20"])):
+            with self.subTest(cmd=cmd, words=words), refuses(self):
+                tacli._order_target(cmd, words, "")
+
+    def test_a_live_feature_is_refused_with_the_way_to_say_it(self):
+        with refuses(self):
+            tacli._order_target("reclaim", ["feat", "87"], "")
+
+    def test_a_guard_on_a_position_is_refused(self):
+        with refuses(self):
+            tacli._order_target("move", ["pos", "10", "20"], "ARMCOM")
+
+
 class WindowTiling(unittest.TestCase):
     """A tile must land inside the screen — GNOME never maps a window that does
     not, so the game runs invisibly and looks like it failed to start."""

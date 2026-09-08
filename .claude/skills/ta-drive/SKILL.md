@@ -119,10 +119,66 @@ tools/tacli ls                              # names, pids, windows
 tools/tacli keys t1 space                   # menu accelerators
 tools/tacli ui t1                           # what gadgets are on screen (preferred)
 tools/tacli shot t1 -o /tmp/where.png       # engine surface: see where you are
-tools/tacli click t1 320 240                # game coords; --right for orders
+tools/tacli order t1 --sel move pos 1988 1716   # orders: world coords, no mouse
+tools/tacli click t1 320 240                # game coords; the UI, not orders
 tools/tacli roster t1 --json                # units + camera eye
 tools/tacli stop t1
 ```
+
+## Ordering units: `tacli order`, not clicks
+
+**`tacli order` is the way to command units. Reach for a click only when the thing
+you are testing IS the mouse.** The verb names the order and the target outright and
+goes to the engine's own order constructor through the scenario applier
+(`ScriptAction_Type2Index` → `ORDERS_NewMainOrder2Unit`), so there is no screen in
+it anywhere:
+
+```bash
+tools/tacli order t1 --sel move pos 1988 1716          # everything selected
+tools/tacli order t1 --unit 2 --expect ARMCOM attack pos 3160 1200
+tools/tacli order t1 --unit 2 --expect-target CORCOM attack unit 251
+tools/tacli order t1 --unit 2 reclaim pos 1700 1500    # a wreck: name where it is
+tools/tacli order t1 --unit 2 stop
+```
+
+Why this and not `click --right`:
+
+- **World coordinates, not pixels.** Immune to zoom, resolution, the camera, the
+  letterbox and the addressable ring — the four things that silently move a click.
+  A target off-screen or under fog is the same as one in the middle of the view.
+- **No selection dance and no camera work.** `--unit` orders one unit wherever it is;
+  nothing has to be selected and nothing has to be on screen.
+- **The order type is yours, not a guess.** A contextual click asks the engine to
+  infer the order from whatever the cursor is over; here `attack` means attack.
+- **No `Interface Type` in the question at all** — the left/right scheme simply does
+  not enter into it.
+- **Orders: `move attack defend`(=`guard`)` repair patrol reclaim capture load unload
+  blast stop mobilebuild`.** There is no attack-move in TA; `attack pos <x> <y>` is
+  the idiom, and the CLI says so if you try.
+
+Two things it is **not**:
+
+- **Not a validator.** `ScriptAction_Type2Index` is documented to return NULL for "this
+  unit cannot take that order" and the fork reports that — but measured 2026-09-07 it
+  refused nothing: `capture`, `mobilebuild`, `unload`, `blast`, `repair` and `load` were
+  all accepted on a commander with a bare position and did nothing at all. A nonsense
+  order is issued, not caught, so `1 issued` is not evidence the unit did anything —
+  read the roster.
+- **Not ownership-checked.** The applier hands the engine whatever unit you named, which
+  is how a scenario orders units it spawned for another player. Ordering an enemy unit
+  is accepted; whether its AI immediately overrides you was not measured.
+
+**Naming the unit.** `--unit` takes the `engine_index` from `tacli roster`, which is
+`UnitInGameIndex` — and the engine **recycles** it when a unit dies, which is why
+`scenario-format.md` refuses it as a public identity. `--expect ARMCOM` is what makes it
+safe: the fork checks the slot still holds that type, on the game thread, before it
+orders, so a recycled index is an error and not an order to a stranger. **Pass `--expect`
+whenever you pass `--unit`** — the roster hands you the type in the same row.
+`--expect-target` is the same guard for a `unit` target. `--sel` sidesteps identity
+entirely by asking the engine what the player has selected right now.
+
+Failures are loud and the exit code is non-zero: `nothing alive in that slot`, `the slot
+holds a different unit than expected (the index was recycled)`, `nothing is selected`.
 
 **Drive menus by name, not by keystroke.** `tacli ui` reads the actual gadgets on
 screen (see *Driving the UI* below), so the known-good path from a fresh launch is:
@@ -183,9 +239,11 @@ game; the registry is only where TA saves the last one. So:
 
 - Clicks need `Interface Type=1` (right-mouse orders) — tacli sets it, on **every** launch
   (`apply_prefix_settings`), so there is no instance anywhere that runs TA's own default.
-  Select with `click`, order with `click --right`. Classic left-click-order resists posted
-  clicks, and at `Interface Type=0` a posted **right**-click orders nothing at all (measured
-  2026-09-03: the unit carried on to the earlier left-click target).
+  Select with `click`, and order with **`tacli order`** (above) rather than `click --right`,
+  which is scheme-bound: at `Interface Type=0` a posted **right**-click orders nothing at all,
+  because there the right button deselects and the left one orders. `click --right` still
+  works at type 1 and is the way to test *that the mouse orders*; it is not the way to give a
+  unit an order.
 - **`Interface Type=1` is not neutral — it changes what the game does.** TA switches its
   *contextual* cursor off at type 1: with a unit selected, hovering ground gives `cursornormal`
   and hovering a wreck gives `cursorgrn`, where stock TA at type 0 gives `cursormove` and
@@ -250,7 +308,9 @@ game; the registry is only where TA saves the last one. So:
 - **A right-click on water is rejected for a ground unit**, so it queues nothing and
   draws no order markers — which looks exactly like a broken marker pass. Sample the
   frame for grass before picking a waypoint (green-dominant, `g > b + 30`) rather than
-  guessing an offset from the unit.
+  guessing an offset from the unit. (`tacli order … move pos` has the same constraint for
+  a different reason: it is *issued* either way — see "not a validator" above — so check
+  the roster moved, not the `1 issued`.)
 - Game speed: `keys <name> plus` / `minus` (TA's own feature, up to +10, and negative
   below normal — invaluable for catching fast events or slowing them for capture).
 

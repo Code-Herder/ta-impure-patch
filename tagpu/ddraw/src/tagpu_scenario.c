@@ -35,6 +35,8 @@
 #define PL_METAL      0x98         /* float fCurrentMetal   (PlayerRes + 0x0C)    */
 #define PL_MAXENERGY  0xA4         /* float fMaxEnergyStorage                     */
 #define PL_MAXMETAL   0xA8         /* float fMaxMetalStorage                      */
+#define PL_FIRSTUNIT  0x67         /* UnitStruct* first/last of this player's     */
+#define PL_LASTUNIT   0x6B         /* units, INCLUSIVE, stepping UNIT_STRIDE      */
 
 #define OFF_MAPPXW    0x14223      /* int MapWidth  (world units)                 */
 #define OFF_MAPPXH    0x14227      /* int MapHeight                               */
@@ -50,6 +52,8 @@
 #define OFF_SCRTY     0x1432B      /* the eye back                                */
 #define OFF_VIEW_W    0x37E37
 #define OFF_VIEW_H    0x37E3B
+
+#define OFF_WATCHED   0x2A42       /* u8 watched player id — whose selection it is */
 
 #define OFF_BEGIN     0x14357      /* UnitStruct* BeginUnitsArray_p               */
 #define OFF_END       0x1435B      /* UnitStruct* EndOfUnitsArray_p               */
@@ -73,6 +77,7 @@
 #define U_YPOS        0x74         /* map depth, whole world units                */
 #define U_ORDERS      0x5C         /* UnitOrdersStruct* UnitOrders                */
 #define U_INGAMEIDX   0xA8         /* short UnitInGameIndex — recycled on death   */
+#define U_UDEF        0x92         /* UnitDefStruct* — a live unit's own type     */
 #define U_HEALTHPCTA  0xF6         /* char HealthPerA                             */
 #define U_HEALTHPCTB  0xF7
 #define U_OWNER       0xFF         /* unsigned char cOwnerID                      */
@@ -169,11 +174,26 @@ typedef struct {
     int   ok;
 } scn_feat;
 
+/* WHO the order is for. An ordinal names a unit this same wire file created and
+   is the only identity `scenario-format.md` calls public, because
+   UnitInGameIndex is recycled when a unit dies. The other two exist so a caller
+   can order units that were already there — `tacli order` — and both carry
+   their own guard against that recycling: SUBJ_LIVE checks the caller's claim
+   about the slot's type before it orders, and SUBJ_SEL never names a slot at
+   all, it asks the engine what the player currently has selected. */
+#define SUBJ_ORD  0                               /* an ordinal in this wire     */
+#define SUBJ_LIVE 1                               /* a live UnitInGameIndex      */
+#define SUBJ_SEL  2                               /* whatever is selected now    */
+
 typedef struct {
-    int  uord;
+    int  subj;                                    /* SUBJ_*                      */
+    int  uord;                                    /* ordinal, or engine index    */
+    char sexp[SCN_NAMELEN];                       /* "" = no type guard          */
     int  cmd;                                     /* ORDERTYPE constant          */
     int  kind;                                    /* TGT_*                       */
     int  a, b;                                    /* pos x,y  or  ordinal in a   */
+    int  tlive;                                   /* target `a` is an engine idx */
+    char texp[SCN_NAMELEN];
 } scn_order;
 
 static scn_unit  g_units[SCN_MAX_UNITS];
@@ -472,6 +492,82 @@ static void copy_name(char* dst, const char* src)
 
 /* Returns 1 when the whole file parsed and ended with `end`. A truncated file is
    visible rather than half-applied — that is what the marker is for. */
+/* `@<index>` or `@<index>:<TYPE>` — a live unit and the caller's claim about
+   what should be in that slot. Returns 0 on anything malformed; `expect` is
+   left empty when no type was named. */
+static int live_ref(const char* t, int* idx, char* expect)
+{
+    char  num[16];
+    int   i = 0;
+    const char* p;
+
+    expect[0] = 0;
+
+    if (!t || t[0] != '@')
+        return 0;
+
+    for (p = t + 1; *p && *p != ':'; p++)
+    {
+        if (*p < '0' || *p > '9' || i >= (int)sizeof num - 1)
+            return 0;
+        num[i++] = *p;
+    }
+
+    if (!i)
+        return 0;
+
+    num[i] = 0;
+
+    if (!req(num, idx))
+        return 0;
+
+    if (*p == ':')
+    {
+        if (!p[1])
+            return 0;
+        copy_name(expect, p + 1);
+    }
+
+    return 1;
+}
+
+/* The first column of an `order` line: an ordinal, `sel`, or a live reference. */
+static int order_subject(char* t, scn_order* o, int line)
+{
+    if (!t)
+    {
+        scn_err("line %d: order wants a subject (an ordinal, sel, or @index)", line);
+        return 0;
+    }
+
+    if (!strcmp(t, "sel"))
+    {
+        o->subj = SUBJ_SEL;
+        return 1;
+    }
+
+    if (t[0] == '@')
+    {
+        if (!live_ref(t, &o->uord, o->sexp))
+        {
+            scn_err("line %d: order subject `%.24s` is not @<index> or "
+                    "@<index>:<TYPE>", line, t);
+            return 0;
+        }
+        o->subj = SUBJ_LIVE;
+        return 1;
+    }
+
+    if (!req(t, &o->uord))
+    {
+        scn_err("line %d: order wants a unit ordinal", line);
+        return 0;
+    }
+
+    o->subj = SUBJ_ORD;
+    return 1;
+}
+
 static int parse_wire(char* text)
 {
     char* p = text;
@@ -727,11 +823,8 @@ static int parse_wire(char* text)
             }
             o = &g_orders[g_norders];
             memset(o, 0, sizeof *o);
-            if (!req(tok(&cur), &o->uord))
-            {
-                scn_err("line %d: order wants a unit ordinal", line);
+            if (!order_subject(tok(&cur), o, line))
                 return 0;
-            }
             cmd = tok(&cur);
             if (!cmd)
             {
@@ -766,8 +859,19 @@ static int parse_wire(char* text)
             }
             else if (!strcmp(kind, "unit") || !strcmp(kind, "feat"))
             {
+                char* t = tok(&cur);
                 o->kind = kind[0] == 'u' ? TGT_UNIT : TGT_FEAT;
-                if (!req(tok(&cur), &o->a))
+                if (o->kind == TGT_UNIT && t && t[0] == '@')
+                {
+                    if (!live_ref(t, &o->a, o->texp))
+                    {
+                        scn_err("line %d: order %d target `%.24s` is not "
+                                "@<index> or @<index>:<TYPE>", line, o->uord, t);
+                        return 0;
+                    }
+                    o->tlive = 1;
+                }
+                else if (!req(t, &o->a))
                 {
                     scn_err("line %d: order %d %s wants an ordinal", line, o->uord, kind);
                     return 0;
@@ -1062,14 +1166,18 @@ static int resolve_all(char* ta)
     {
         scn_order* o = &g_orders[i];
 
-        if (o->uord < 0 || o->uord >= g_nunits)
+        /* Only an ordinal can be checked here. A live subject names a slot in
+           the running game, so it is resolved — and its type guard tested — at
+           the apply point, on the game thread, where the answer cannot go stale
+           between the check and the order. */
+        if (o->subj == SUBJ_ORD && (o->uord < 0 || o->uord >= g_nunits))
         {
             scn_err("order %d: unit ordinal %d does not exist", i, o->uord);
             bad++;
             continue;
         }
 
-        if (o->kind == TGT_UNIT && (o->a < 0 || o->a >= g_nunits))
+        if (o->kind == TGT_UNIT && !o->tlive && (o->a < 0 || o->a >= g_nunits))
         {
             scn_err("order %d: target unit ordinal %d does not exist", i, o->a);
             bad++;
@@ -1367,25 +1475,180 @@ static void create_features(void)
 /* TADR's SendOrder recipe, minus its one dead call: ScriptAction_Index2Handler
    (0x438830) is a pure `base + *ecx * 25` address computation whose result TADR
    discards, so it is not on this path. */
+/* ---- naming a unit the wire did not create ---------------------------------
+
+   Both resolvers run at the apply point, on the game thread, so what they
+   return cannot be stale by the time the order is issued.
+
+   `live_by_index` is the engine's own index idiom: UnitInGameIndex is the slot
+   in the unit array, which is how tagpu_order.c already resolves the tracked
+   and hovered units. The index is recycled on death, and that is exactly what
+   `expect` is for — the caller says what it believes is in the slot (the type
+   name the roster reported) and a mismatch is an error instead of an order to
+   whatever moved in. */
+static char* live_by_index(char* ta, int idx, const char* expect, const char** why)
+{
+    char* beg = *(char**)(ta + OFF_BEGIN);
+    char* end = *(char**)(ta + OFF_END);
+    char* u;
+    char* def;
+
+    *why = 0;
+
+    if (!readable(beg, UNIT_STRIDE) || end <= beg)
+    {
+        *why = "the game has no unit array yet";
+        return 0;
+    }
+
+    if (idx < 0 || (size_t)(idx + 1) * UNIT_STRIDE > (size_t)(end - beg))
+    {
+        *why = "index is outside the unit array";
+        return 0;
+    }
+
+    u = beg + (size_t)idx * UNIT_STRIDE;
+
+    if (!readable(u, UNIT_STRIDE))
+    {
+        *why = "that slot is not readable";
+        return 0;
+    }
+
+    if (!(*(unsigned*)(u + U_STATE) & 0x10000000u))
+    {
+        *why = "nothing alive in that slot";
+        return 0;
+    }
+
+    if (expect && expect[0])
+    {
+        def = *(char**)(u + U_UDEF);
+
+        if (!readable(def, UD_NAME + SCN_NAMELEN))
+        {
+            *why = "that unit has no readable definition";
+            return 0;
+        }
+
+        if (lstrcmpiA(def + UD_NAME, expect) != 0)
+        {
+            *why = "the slot holds a different unit than expected "
+                   "(the index was recycled)";
+            return 0;
+        }
+    }
+
+    return u;
+}
+
+/* The watched player's current selection, the engine's own walk: the player's
+   unit range at PlayerStruct+0x67..+0x6B, inclusive, stepping the unit stride,
+   keeping the alive and unexcluded ones whose state carries the selected bit.
+   Same three tests CorretCursor_InGame and our own order overlay make. */
+static int live_selected(char* ta, char** out, int max)
+{
+    unsigned char watched = *(unsigned char*)(ta + OFF_WATCHED);
+    char* player = ta + OFF_PLAYERS + (size_t)watched * PL_STRIDE;
+    char* first;
+    char* last;
+    char* u;
+    int   n = 0;
+
+    if (!readable(player, PL_STRIDE))
+        return 0;
+
+    first = *(char**)(player + PL_FIRSTUNIT);
+    last  = *(char**)(player + PL_LASTUNIT);
+
+    if (!readable(first, UNIT_STRIDE) || last < first)
+        return 0;
+
+    if ((size_t)(last - first) > (size_t)UNIT_STRIDE * 20000)
+        return 0;
+
+    for (u = first; u <= last && n < max; u += UNIT_STRIDE)
+    {
+        unsigned st;
+
+        if (!readable(u, UNIT_STRIDE))
+            break;
+
+        st = *(unsigned*)(u + U_STATE);
+
+        if (!(st & 0x10000000u) || (st & 0x4000u))
+            continue;
+
+        if (st & 0x10u)
+            out[n++] = u;
+    }
+
+    return n;
+}
+
+/* WHERE a live unit is, in the whole world units the order path wants. */
+static void live_pos(char* u, int* x, int* alt, int* y)
+{
+    *x   = *(unsigned short*)(u + U_XPOS);
+    *alt = *(unsigned short*)(u + U_ZPOS);
+    *y   = *(unsigned short*)(u + U_YPOS);
+}
+
+#define SCN_MAX_SEL 512
+
 static void issue_orders(void)
 {
+    char* ta = *(char**)TA_MAINPP;
     int i;
 
     for (i = 0; i < g_norders; i++)
     {
-        scn_order* o = &g_orders[i];
-        scn_unit*  u = &g_units[o->uord];
-        void*      target = 0;
-        int        pos[3];
-        int        index = -1;
-        char*      resolved;
+        scn_order*  o = &g_orders[i];
+        char*       subj[SCN_MAX_SEL];
+        const char* sname = "";
+        const char* why = 0;
+        int         nsubj = 0, s;
+        void*       target = 0;
+        int         pos[3];
+        int         havepos = 0;
 
-        if (!u->unit)
+        /* WHO ------------------------------------------------------------- */
+        if (o->subj == SUBJ_ORD)
+        {
+            scn_unit* u = &g_units[o->uord];
+            sname = u->type;
+            if (u->unit)
+                subj[nsubj++] = (char*)u->unit;
+        }
+        else if (o->subj == SUBJ_LIVE)
+        {
+            char* u = live_by_index(ta, o->uord, o->sexp, &why);
+            sname = o->sexp[0] ? o->sexp : "that unit";
+            if (u)
+                subj[nsubj++] = u;
+            else
+                scn_err("order %d: unit @%d -- %s", i, o->uord, why);
+        }
+        else
+        {
+            nsubj = live_selected(ta, subj, SCN_MAX_SEL);
+            sname = "the selection";
+            if (!nsubj)
+                scn_err("order %d: nothing is selected", i);
+            else if (nsubj == SCN_MAX_SEL)
+                /* A cap that swallows the overflow quietly would report a full
+                   success while ordering part of the selection. Say it. */
+                scn_err("order %d: more than %d units are selected; only the "
+                        "first %d were ordered", i, SCN_MAX_SEL, SCN_MAX_SEL);
+        }
+
+        if (!nsubj)
         {
             g_ord_fail++;
             continue;
         }
 
+        /* WHERE / WHAT ----------------------------------------------------- */
         memset(pos, 0, sizeof pos);
 
         if (o->kind == TGT_POS)
@@ -1396,6 +1659,24 @@ static void issue_orders(void)
             pos[0] = o->a << 16;
             pos[1] = ground_at(o->a, o->b) << 16;
             pos[2] = o->b << 16;
+            havepos = 1;
+        }
+        else if (o->kind == TGT_UNIT && o->tlive)
+        {
+            int x, alt, y;
+            char* t = live_by_index(ta, o->a, o->texp, &why);
+            if (!t)
+            {
+                g_ord_fail++;
+                scn_err("order %d: target unit @%d -- %s", i, o->a, why);
+                continue;
+            }
+            target = t;
+            live_pos(t, &x, &alt, &y);
+            pos[0] = x << 16;
+            pos[1] = alt << 16;
+            pos[2] = y << 16;
+            havepos = 1;
         }
         else if (o->kind == TGT_UNIT)
         {
@@ -1409,45 +1690,56 @@ static void issue_orders(void)
             pos[0] = g_units[o->a].ax << 16;
             pos[1] = g_units[o->a].ah << 16;
             pos[2] = g_units[o->a].ay << 16;
+            havepos = 1;
         }
         else if (o->kind == TGT_FEAT)
         {
             /* A feature is not a UnitStruct: TA reclaims and attacks it through the
-               map cell, so the order carries the position and no target pointer. */
+               map cell, so the order carries the position and no target pointer.
+               A feature the wire did not create is named by its position instead —
+               `pos` reaches the same code, which is why there is no @ form here. */
             pos[0] = g_feats[o->a].ax << 16;
             pos[1] = g_feats[o->a].ah << 16;
             pos[2] = g_feats[o->a].ay << 16;
+            havepos = 1;
         }
 
-        resolved = ScriptAction_Type2Index(&index, (unsigned)o->cmd, u->unit, target, pos);
-
-        if (!resolved)
+        /* ISSUE ------------------------------------------------------------ */
+        for (s = 0; s < nsubj; s++)
         {
-            g_ord_fail++;
-            scn_err("order %d: this unit cannot take that order (%.20s, cmd %d)",
-                    i, u->type, o->cmd);
-            continue;
-        }
+            int   index = -1;
+            char* resolved = ScriptAction_Type2Index(&index, (unsigned)o->cmd,
+                                                     subj[s], target, pos);
 
-        ORDERS_NewMainOrder2Unit((int)(unsigned char)*resolved, 0, u->unit, target, pos, 0, 0);
-        g_ord_ok++;
-
-        /* Read the stored order position back once, in whole world units, so the
-           result file shows where the order actually points. It cannot prove the
-           scale (the constructor copies the dwords verbatim), but it does catch
-           the engine relocating or clamping a target. */
-        if (!g_probe_have)
-        {
-            char* ord = *(char**)((char*)u->unit + U_ORDERS);
-            g_probe_pass[0] = pos[0] >> 16;
-            g_probe_pass[1] = pos[1] >> 16;
-            g_probe_pass[2] = pos[2] >> 16;
-            if (readable(ord, UO_POS + 12))
+            if (!resolved)
             {
-                g_probe_stored[0] = *(int*)(ord + UO_POS)       >> 16;
-                g_probe_stored[1] = *(int*)(ord + UO_POS + 4)   >> 16;
-                g_probe_stored[2] = *(int*)(ord + UO_POS + 8)   >> 16;
-                g_probe_have = 1;
+                g_ord_fail++;
+                scn_err("order %d: this unit cannot take that order (%.20s, cmd %d)",
+                        i, sname, o->cmd);
+                continue;
+            }
+
+            ORDERS_NewMainOrder2Unit((int)(unsigned char)*resolved, 0, subj[s],
+                                     target, pos, 0, 0);
+            g_ord_ok++;
+
+            /* Read the stored order position back once, in whole world units, so the
+               result file shows where the order actually points. It cannot prove the
+               scale (the constructor copies the dwords verbatim), but it does catch
+               the engine relocating or clamping a target. */
+            if (!g_probe_have && havepos)
+            {
+                char* ord = *(char**)(subj[s] + U_ORDERS);
+                g_probe_pass[0] = pos[0] >> 16;
+                g_probe_pass[1] = pos[1] >> 16;
+                g_probe_pass[2] = pos[2] >> 16;
+                if (readable(ord, UO_POS + 12))
+                {
+                    g_probe_stored[0] = *(int*)(ord + UO_POS)       >> 16;
+                    g_probe_stored[1] = *(int*)(ord + UO_POS + 4)   >> 16;
+                    g_probe_stored[2] = *(int*)(ord + UO_POS + 8)   >> 16;
+                    g_probe_have = 1;
+                }
             }
         }
     }
