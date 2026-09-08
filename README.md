@@ -1,113 +1,29 @@
-# ta-impure-patch
+# Total Annihilation — Impure Patch
 
-A GPU renderer and toolchain for **Total Annihilation** (Cavedog, 1997), attached to the retail
-executable at run time. The 1997 simulation runs untouched; the drawing is ours.
+The aim of the Total Annihilation Impure patch is to fully modernize Total Annihilation from a 1997 game into a modern game engine through patching alone. It's been called impure because among other features, it adds a strategic zoom. I have many more planned features but those are the main ones being worked on right now.
 
-Two DLLs do the work. Our `ddraw.dll`, a fork of [cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw),
-gives the game DirectDraw, a window and an OpenGL present loop. The companion `tagpu.dll` hooks
-the engine at absolute addresses, reads unit state through the community's verified struct map,
-suppresses the software rasterisers inside the world viewport, and draws the scene in GL 3.3
-core. The engine's own 8-bit frame is composited over ours through a key colour, so anything it
-still draws shows through unchanged.
+## Core features
 
-## Where it stands
-
-Drawn natively today: units, wrecks, shadows, cloak and waterline; units under construction
-with their scaffold and wireframe; weapon fire, explosions and debris; smoke, fire, wakes and
-nanolathe; features (trees, rocks, splats, wreckage); terrain tiles, the fog overlay and fog of
-war as drawn; health bars, order markers, group digits, range labels, the build cursor and the
-band box. Still the engine's: the shell — menus, side panel, minimap, chat — composited through
-as before; its GL twin is in progress.
-
-Two looks, which do not blend. **Classic** reproduces the engine's 8-bit look and is measured
-against it pixel for pixel. **Classic++** restores terrain, unit textures and sprites to the true
-colour their dithering stood for — a learned restorer running as GLSL in the game's own context —
-then lights and shadows them. `tools/tascene` is the browser lab where both rules are developed
-against the same scenes before they go into the game.
-
-## What is in the repository
-
-| Path | What |
-|---|---|
-| `tagpu/ddraw/` | the cnc-ddraw fork that is our `ddraw.dll`; `src/tagpu_*.c` are the native passes, the composite, the zoom and the Classic++ restorer |
-| `tagpu/src/` | `tagpu.dll`, the companion that hooks the engine |
-| `tools/tacli` | launch and drive isolated game instances from the command line: own game-dir mirror, own Wine prefix, own window, several in parallel, JSON output for scripts |
-| `tools/tascene` | the browser render lab: compile a scenario into a scene pack and render it in WebGL under the Classic and Classic++ rules |
-| `tools/ta3do`, `tools/ta3domod` | read 3DO models and GAF textures, render standard views, export glTF; edit a 3DO and write it back |
-| `tools/hpipack.py` | read and write HAPI archives (`.hpi`, `.ufo`, `.ccx`, `.gp3`) |
-| `tools/tacob*` | tacob, a BOS/COB script editor that runs the script on the unit's own model (in progress) |
-| `tools/ghidra-scripts/`, `tools/ta_symbols.txt`, `tools/tamem_ghidra.h` | Ghidra headless scripts and the merged symbol and struct corpus for the executable |
-| `unditherer/` | the de-dither restorer: classical filters, two trained networks with their provenance, the training pipeline, the corpus credits |
-| `scenarios/` | JSON scenarios that put a running game into a known situation for measurement (`tacli scenario load`) |
-| `research/notes/` | the wiki source: the engine map, every module's design and measurements, the roadmap; `research/build_wiki.py` renders it |
-| `units/` | replacement models we built; a `hires/<name>.glb` in the game dir stands in for a 3DO and is posed by the unit's own COB script |
-| `pristine/manifest.md5` | hashes of the retail install everything is measured against; the files themselves are never in the repository |
-
-## Requirements
-
-- A retail copy of Total Annihilation in the v3.1 layout (the Steam build; `TotalA.exe` md5
-  `8e74a1dffa1f5988624c52048f5b20cd`). Nothing from the game is in this repository — see below.
-- Linux with Wine or Proton, and an X11 session for the windowed instances. This is the reference
-  setup; nothing else has been tried.
-- `i686-w64-mingw32-gcc` and `windres` for the two DLLs.
-- Python 3.12 for the tools. The wiki and the learned restorer use a virtual environment at
-  `.venv-undither/` in the checkout root (`markdown`, torch, onnxruntime); `tacli` is stdlib only.
-
-## Build and run
-
-```
-make -C tagpu/ddraw                       # ddraw.dll: the fork plus the native passes
-make -C tagpu                             # tagpu.dll: the engine hooks
-tools/tacli launch t1 --res 1024x768      # an isolated instance, created on first use
-tools/tacli scenario load t1 200v200      # menus -> a live game -> 400 units -> camera
-tools/tacli glshot t1 -o /tmp/frame.ppm   # what the GL passes drew this frame
-tools/tacli stop t1
-```
-
-Each instance lives under `tagpu/instances/` with its own game directory (a symlink mirror of
-the retail files plus private config and logs) and its own Wine prefix. Runtime features are
-switched by trigger files in that directory (`tools/tacli arm t1 owndraw.on`); the levers and
-what they do are listed on the wiki's status page.
+- **Game/UI render replacement.** Full port of the software renderer to OpenGL.
+  - Zoom in and out of the map.
+  - UI resizes proportionally to the screen resolution *(work in progress)*. A prototype is partially integrated, not a full port; some UI elements are still blitted to a texture.
+- **COB extensions**
+  - 0 to N valid weapons per unit. You could build a super unit with 40 weapons if you wanted to.
+- **Agentic tooling**
+  - **[ta-cli](docs/tacli.md)** — a CLI that drives Total Annihilation. It navigates menus, selects units, starts maps with custom testing setups, drives units, and can even run multiplayer games locally for testing. It is meant to be used with an agent skill that develops features automatically, or as the runner for the unit tests you have written and want to run again.
+  - **Scenarios** — a JSON file that describes a game scenario: the map, the sides, the units and where they stand, the camera. One command takes a fresh game from the menus into that live scenario, so a test or a measurement starts from the same state every time instead of from a sequence of clicks. The options are pretty comprehensive: wrecks, orientation of unit placement, naming specific units for tracking, etc.
+  - **Importers and exporters for every format** (3do, cob, tnt, gaf, hpi, …), for agents to drive or to build on.
+  - **COB editor** *(work in progress)*
+    - An editor supporting the new COB features.
+    - A full COB virtual machine: run the COB scripts in the editor and test them without loading TA.
+    - A viewer that shows the model running the script and its behaviours — aim, attack and so on. Supports planes, boats, etc.
+  - **Lab viewer** (`tascene`) — previews the game's rendering 1:1 in the browser and lets an agent tweak it, so you iterate on the visual look without loading Total Annihilation each time.
+- **TADR integration** — investigation stage. Working out how it can live alongside all the changes made over the years.
 
 ## The wiki
 
-`research/notes/` is the source of truth. It holds the engine map — every address the work
-touched or merely read, how each fact was established, negative results included — each
-module's design with its measurements, and the roadmap with its gates. Claims are tagged
-`[VERIFIED]`, `[MEASURED]` or `[INFERRED]`, never left implied. Render it with:
-
-```
-.venv-undither/bin/python research/build_wiki.py    # -> research/site/
-```
-
-## Nothing from the game is in here
-
-This repository ships no part of Total Annihilation; bring your own retail copy. `.gitignore`
-bans the game's file formats and its archives. A pre-commit hook refuses any file byte-identical
-to a file of the retail install, including everything inside its archives, and any binary outside
-the classes listed in `.publish-allow`; the publish scan checks every revision the same way.
-Derived work — screenshots of our renderer, figures, models we trained or built — is allowed by
-class. The rules are in `CLAUDE.md`, *Publishing*.
-
-## Lineage and credits
-
-Everything modern in TA engine modding stands on [TADR](https://github.com/tanvanman/TADR) (MIT):
-its address corpus and struct map are what `tagpu.dll` reads through. Our `ddraw.dll` is a fork of
-[cnc-ddraw](https://github.com/FunkyFr3sh/cnc-ddraw) (MIT), which carries Microsoft Detours (MIT).
-The restorer's ONNX spike used onnxruntime (MIT); its networks were trained on a CC0 texture
-corpus credited in `unditherer/`. The full lineage — Patch Loader, petool, totala-re, the mods that
-consume the patch line — is on the wiki's project-map page.
-
-## Working in this repository
-
-`CLAUDE.md` holds the conventions: commit freely on a worktree branch, land one finished unit at a
-time through the build and documentation gates, review engine changes before they land, and
-publish only through the scanned `/git_publish` flow.
+This repo also comes with a wiki that is the master reference for all the work in progress. It has accumulated a lot of TA technical knowledge from various sources, and publishes a much expanded map of the engine mappings and of how the various features work. The source is `research/notes/`.
 
 ## Licence
 
-MIT, for the code that is ours (`LICENSE`). Vendored components keep their own: cnc-ddraw and
-Detours under MIT (`tagpu/ddraw/LICENSE`, `tagpu/ddraw/src/detours/LICENSE.md`), onnxruntime under
-MIT (`tagpu/ddraw/inc/onnxruntime_LICENSE.txt`), the training corpus under CC0-1.0
-(`unditherer/LICENSES/`). Total Annihilation itself is not part of this repository and is not
-covered by any of these.
+MIT — see `LICENSE`. It covers the original work in this repository only and grants no rights over Total Annihilation, which remains the work of Cavedog Entertainment. This repository ships no part of the game.
