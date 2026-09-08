@@ -1925,10 +1925,25 @@ Continents), with our contextual-cursor patch armed *and* the companion patch be
 | Move button, then left click | issues the move order | issues the move order |
 
 **Our patch — 27 bytes at `0x499041`,** armed with the cursor patch and under the same
-`tagpu_curs.off`. It replaces `cmp dl,0x11 / jl act / cmp [main+0x37EFA],1 / jne done / cmp cl,1
-/ jne done` with `cmp [main+0x37EFA],1 / jne classic / cmp cl,1 / jne classic / jmp deselect /
-classic: cmp dl,0x11 / jl act / jmp done`, i.e. it decides the *contextual* left click on the
-interface type directly instead of on the cursor index that used to stand in for it. Equivalent
+`tagpu_curs.off`. It decides the *contextual* left click on the interface type directly instead
+of on the cursor index that used to stand in for it, in the same 27 bytes
+(`0x499041..0x49905B`, the three destinations all pre-existing):
+
+```
+00499041  cmp dword [eax+0x37EFA], 1      ; Interface Type
+00499048  jne 0x499051                    ; type 0: classic, decide on dl
+0049904A  cmp cl, 1                       ; order byte: contextual?
+0049904D  jne 0x499051                    ; a pressed command button acts
+0049904F  jmp 0x49905C                    ; -> deselect  (the engine's own arm)
+00499051  cmp dl, 0x11                    ; the classic test, unchanged
+00499054  jl  0x49906D                    ; -> issue the order
+00499056  jmp 0x4990F6                    ; -> nothing; 0x4990F6 is `pop esi / pop
+0049905B  nop                             ;    ecx / ret 4`, this function's exit
+```
+
+`0x49905C`, `0x49906D` and `0x4990F6` are the same three destinations the stock code branches
+to; only which test picks them changes, and `0x499051` is the one new label — the stock `cmp
+dl,0x11` moved 16 bytes down. Equivalent
 to stock on a stock cursor state — at type 0 it is the original test unchanged, and at type 1
 the only indexes the engine can leave in `main+0x2CBE` are 15 (taken above it), 17, 18, 19 and
 the hourglass 20 — the direct stores at `0x49925D`, `0x499547`, `0x49958A`, `0x499654`,
