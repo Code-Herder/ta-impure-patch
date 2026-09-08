@@ -1,0 +1,54 @@
+# Build ddraw.dll on every push and package it: the artifact on the run, and a
+# GitHub release when the push is a v* tag. The build is the same two commands
+# as on a desk -- make -C tagpu/ddraw, then tagpu/release/package.sh -- with the
+# Debian/Ubuntu mingw cross compiler (GCC 13, the version the fork is built with).
+name: ddraw.dll
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # git describe names the build
+
+      - name: mingw cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 make zip
+          i686-w64-mingw32-gcc --version | head -1
+
+      - name: build
+        run: make -C tagpu/ddraw -j"$(nproc)"
+
+      - name: package
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export VERSION="$GITHUB_REF_NAME"; fi
+          tagpu/release/package.sh
+          echo "zip=$(ls dist/*.zip)" >> "$GITHUB_ENV"
+          echo "name=$(basename dist/*.zip .zip)" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.name }}
+          path: dist/*/
+          if-no-files-found: error
+
+      - name: release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$zip" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "ddraw.dll built from $GITHUB_SHA. Unzip next to TotalA.exe; README.txt inside says the rest."
