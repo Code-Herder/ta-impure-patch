@@ -1,0 +1,28 @@
+# .publish-allow — the binary files this repository may carry, by class.
+#
+# The pre-commit hook refuses any staged binary (git's own text/binary
+# heuristic) whose path matches none of these globs, and the publish scan
+# checks every tracked binary the same way. Being on this list is a decision
+# that the class is OUR output, not the game's: screenshots of our renderer,
+# figures we generated, models we trained, meshes we built. Files of the
+# original game are refused by content hash regardless of this list
+# (CLAUDE.md, "Publishing").
+#
+# One glob per line, matched against the repo-relative path; `*` crosses
+# directory separators. Comments and blank lines are ignored.
+
+# Notes: screenshots of our renderer and the figures the wiki pages embed
+research/notes/assets/*
+
+# Undither tool: screenshots of the app itself
+tools/undither/screens/*.png
+
+# Learned undither restorer: models we trained on a CC0 texture corpus
+unditherer/models/*
+
+# Replacement unit models we built (posed by the unit's own COB at runtime)
+units/*.glb
+
+# cnc-ddraw upstream resources carried by the fork (MIT, github.com/FunkyFr3sh)
+tagpu/ddraw/config/cnc-ddraw.ico
+tagpu/ddraw/config/Resources/*.png

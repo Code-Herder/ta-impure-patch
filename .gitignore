@@ -80,3 +80,30 @@ __pycache__/
 # by research/build_wiki.py from unditherer/models/full.* whenever missing or stale)
 /research/notes/assets/undither/learned/
 renders/
+
+# ---------------------------------------------------------------------------
+# Publishing (CLAUDE.md "Publishing"): the private side folder, the root symlink
+# to the local half of CLAUDE.md, and the per-machine hooks. All three exist
+# only in the main checkout and never in the history.
+# ---------------------------------------------------------------------------
+/_local/
+/CLAUDE.local.md
+/.githooks/
+
+# Claude Code config: the commands and skills ARE part of this repo, but each
+# is re-included by name. Anything else that lands under .claude/ (a personal
+# command, a scratch note, the worktrees) stays out by default instead of
+# arriving with the next `git add`. Adding a skill costs one line here;
+# forgetting it means the skill is missing (which you notice), not something
+# private published (which you might not). Git cannot re-include a file whose
+# parent directory is excluded, so each level is opened by name.
+/.claude/*
+!/.claude/commands/
+/.claude/commands/*
+!/.claude/commands/git_branch_status.md
+!/.claude/commands/git_commit_merge_wt.md
+!/.claude/commands/git_publish.md
+!/.claude/skills/
+/.claude/skills/*
+!/.claude/skills/ta-capture/
+!/.claude/skills/ta-drive/
