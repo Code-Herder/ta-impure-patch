@@ -676,6 +676,16 @@ shell drawn by us at 1:1, the engine's surface the fallback; *The GL UI layer* b
 terrown.on / markown.on`, and `tagpu.log` carries one `ARMED` line per pass — read them,
 because a missing one is the whole pass silently absent.
 
+**The shipped DLL arms all of this by itself** (`tagpu_opt.c`, gpu-status §2.8: with no arm
+file the play set is on, Classic++ and the extra weapons included). An instance opts out:
+`launch` and `scenario load` write `tagpu_defaults.off` into the gamedir unless given
+`--defaults` (sticky per instance; `--no-defaults` back), so everything above still holds
+here and a bare launch is still the stock control. `--defaults` is the player's
+configuration and the one to test a release with. Under it a pass is turned off with
+`tacli arm <i> <pass>.off` — removing an `.on` that was never there changes nothing — and
+`native.off` takes `owndraw` with it, `zoom.off` takes `vpwide`. `tagpu.log`'s first `opt:`
+line says which way the instance went.
+
 **Classic++ is a separate switch; its restorer runs as GLSL in the game's own context.**
 `tacli arm <i> classicpp.on` turns on the restored true-colour terrain, features, effects and (since G14g) unit textures;
 it is *polled* twice a second, so it flips live for an A/B, and arming it mid-play restores

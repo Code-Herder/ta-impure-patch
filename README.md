@@ -20,6 +20,10 @@ The aim of the Total Annihilation Impure patch is to fully modernize Total Annih
   - **Lab viewer** (`tascene`) — previews the game's rendering 1:1 in the browser and lets an agent tweak it, so you iterate on the visual look without loading Total Annihilation each time.
 - **TADR integration** — investigation stage. Working out how it can live alongside all the changes made over the years.
 
+## Builds
+
+Every push to `main` builds `ddraw.dll` on GitHub Actions. The run's artifact is the release folder: the DLL, its `ddraw.ini`, the Classic++ restorer weights and a README. A `v*` tag publishes the same zip under Releases. Until the game has an options menu, everything is on by default; a `tagpu_<pass>.off` file next to `TotalA.exe` turns one pass off, `tagpu_defaults.off` all of them.
+
 ## The wiki
 
 This repo also comes with a wiki that is the master reference for all the work in progress. It has accumulated a lot of TA technical knowledge from various sources, and publishes a much expanded map of the engine mappings and of how the various features work. The source is `research/notes/`.

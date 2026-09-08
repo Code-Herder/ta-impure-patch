@@ -15,6 +15,8 @@ Every game tacli launches is an isolated instance. It gets its own game director
 
 The patch's `ddraw.dll` is copied into the instance at launch, so rebuilding the DLL never touches a game that is already running. Relaunch and you get the new build.
 
+The shipped DLL turns every play pass on by itself. An instance is a lab bench, so tacli writes `tagpu_defaults.off` into it and only the arm files count, which keeps a bare launch a stock control. `--defaults` on `launch` or `scenario load` gives the instance the player's configuration instead, and it sticks until `--no-defaults`.
+
 ```bash
 tools/tacli launch t1 --res 1024x768      # created on first use, a window in about 2 s
 tools/tacli ls                            # names, pids, windows

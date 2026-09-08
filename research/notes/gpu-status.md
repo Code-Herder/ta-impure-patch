@@ -34,7 +34,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + a 3-site byte patch behind `vpwide.on`, plus the `0x499221` redirect that also carries the zoom's mouse-point repair and is armed by `zoom.on` too (§2.3d) |
 | Terrain in **restored true colour** (Classic++, `tagpu_classicpp.on`) | G14a (spike, 2026-09-04); GPU G14b (2026-09-04); **GLSL G14c (2026-09-05)** | `tagpu_restoreglsl.c` runs the unditherer's full model as **fragment passes in the game's own GL context** — the shaders of `tagpu_restore_glsl.h`, the weights of `<model>.w32.bin` — sliced from `tagpu_terr.c`'s gather at 12 ms of GPU time per frame under a `GL_TIME_ELAPSED` budget, visible tiles first, painting straight into the terrain pass's RGBA atlas: Two Continents' 5062 tiles in 2.1 s at 59.7 fps, the biggest stock map's 11,561 in 4.2 s, no worker thread, no runtime, no disk. The ONNX Runtime path (`tagpu_restore.c`, G14a/b) was deleted the same day (G14d). **G14e (2026-09-05)**: the cells show as they land, centre-out (the restored atlas's alpha is the flag), and the **feature and effects atlases restore lazily** — `tagpu_gaf.c` queues every atlas miss to the same restorer, each atlas carries an RGBA8 twin the sprite shaders sample where its alpha is 1, keyed texels inpainted by a nearest-ring stand-in in the FILL pass. **G14f (2026-09-05): lit** — the terrain from the engine's height grid (`main+0x14287`, one R8 texture per map, the lab's grid normal per fragment), the units from the posed face normal carried in the vertex stream, the feature sprites from the ground's lambert at their anchor; one rule, `tagpu_glsl.h` `TAGPU_GLSL_LIGHT_FN`, level ground exactly 1.0; the knobs in `tagpu_classicpp.cfg` (`tagpu_classicpp.c`). **G14g (2026-09-05): the unit textures** — `tagpu_render3do.c`'s atlas is a `TAGPU_GAFATLAS` now, every frame in a 4-texel-padded, 4-aligned cell, its RGBA8 twin restored lazily like the sprites' (priority 3) and **mipmapped to level 2**, trilinear and 4× anisotropic, the mips regenerated after each painted batch; the unit shader samples it where its alpha says so. Classic's R8 atlas has the same cells and does not move a pixel (`tascene ab`, and the engine shot byte-identical to G14f's outside the chat). Reads only — see [Classic and Classic++ renderers](renderers.html) §4c and §5 |
-| **Chat, dialogs, side panel, minimap, top bar, the shell** | **Phase E, in progress** ([GL UI renderer](gui-renderer.html), decided 2026-09-06). **G15a done 2026-09-07**: every UI pixel-writing leaf is observed and the census explains 100 % of what changes on the presented surface across the screen inventory. **G15b done 2026-09-07**: the observed ops are replayed into GL twins of the engine's surfaces and the presented surface's twin is drawn over the world composite — the in-game panel, build pages, bars, option screens, chat and the F4 popup, and the whole shell, at 1:1 Classic; **0 differing pixels and 0 holes under `strict` on every in-game stop of the inventory at 1024×768 and at 1920×1080** (§2.3e). **G15c done 2026-09-07**: the rest of the in-game frame reached and measured — ARM and CORE, both resolutions, the HUD strings, the popups and the option screens over the world at 0.5× and 2×, the minimap under motion: 32 of 32 stops at 0/0/0 in all four runs, no DLL change. **G15d done 2026-09-07**: the shell across the 640×480 context switch, three game→shell→game cycles in one process, clean — the publisher drops batches while the render thread is dead or crawling (the switch stops it and it crawls out of a game), skips the stale queue after the new GL context, retires the main offscreen's dead entry, and resolves the twin through the palette the frame is *presented* with, not `main+0x143A7` (the engine gamma-scales the presented one) | the engine's surface is still drawn and still the fallback beneath the twin (nothing is suppressed in phase 1); the cursor stays the engine's; Classic++ art (G15e) is the next gate; the world passes reading `main+0x143A7` are wrong at Gamma ≠ 12 (a native-pass fix, not this gate's); behind one trigger, `tagpu_gui.on` |
+| **Chat, dialogs, side panel, minimap, top bar, the shell** | **Phase E, in progress** ([GL UI renderer](gui-renderer.html), decided 2026-09-06). **G15a done 2026-09-07**: every UI pixel-writing leaf is observed and the census explains 100 % of what changes on the presented surface across the screen inventory. **G15b done 2026-09-07**: the observed ops are replayed into GL twins of the engine's surfaces and the presented surface's twin is drawn over the world composite — the in-game panel, build pages, bars, option screens, chat and the F4 popup, and the whole shell, at 1:1 Classic; **0 differing pixels and 0 holes under `strict` on every in-game stop of the inventory at 1024×768 and at 1920×1080** (§2.3e). **G15c done 2026-09-07**: the rest of the in-game frame reached and measured — ARM and CORE, both resolutions, the HUD strings, the popups and the option screens over the world at 0.5× and 2×, the minimap under motion: 32 of 32 stops at 0/0/0 in all four runs, no DLL change. **G15d done 2026-09-07**: the shell across the 640×480 context switch, three game→shell→game cycles in one process, clean — the publisher drops batches while the render thread is dead or crawling (the switch stops it and it crawls out of a game), skips the stale queue after the new GL context, retires the main offscreen's dead entry, and resolves the twin through the palette the frame is *presented* with, not `main+0x143A7` (the engine gamma-scales the presented one) | the engine's surface is still drawn and still the fallback beneath the twin (nothing is suppressed in phase 1); the cursor stays the engine's; Classic++ art (G15e) is the next gate; the world passes reading `main+0x143A7` are wrong at Gamma ≠ 12 (a native-pass fix, not this gate's); on by default since 2026-09-08 (§2.8; `tagpu_gui.off` turns it off, `tagpu_gui.on` still carries the tokens) |
 
 **Phases.** Phase 0 (foothold) is complete and Phase B (blit-level GPU units) is verified
 complete. Phase D's scene takeover — G13a through G13e — has landed, which is what the table
@@ -231,8 +231,9 @@ with no further plumbing. Pointer-anchored zoom is the open follow-up and is a c
 
 ### 2.3b The addressable viewport at zoom < 1 (`tagpu_vpwide.c`, `vpwide.on`)
 
-**Opt-in and off by default.** Nothing here writes a byte unless `tagpu_vpwide.on` existed at
-DLL attach, the true rect verified, *and* a zoomed-out view is live.
+**On by default since 2026-09-08 through the play defaults (§2.8); opt-in before that.** Nothing
+here writes a byte unless the pass was on at DLL attach — `tagpu_vpwide.on`, or the default with
+the zoom on and no `tagpu_vpwide.off` — the true rect verified, *and* a zoomed-out view is live.
 
 | VA | What it is | Mechanism |
 |---|---|---|
@@ -379,7 +380,8 @@ the record must also **differ from `[obj+0x196]`**: the fallback is a `rep movsd
 six dwords, garbage included, and can never differ from them, while a real ring entry differs in
 at least its timestamp. *(Found by the landing review, not by the change.)*
 
-**Armed by `tagpu_zoom.on` as well as `tagpu_vpwide.on`, and WITHOUT EITHER THERE IS NO ZOOM.**
+**Armed by `tagpu_zoom.on` as well as `tagpu_vpwide.on` (each by file or by the play default,
+§2.8), and WITHOUT EITHER THERE IS NO ZOOM.**
 The repair is not optional once the engine is told the truth — and the zoom's own levers,
 `tagpu_zoom.txt` and the wheel, are gated by no arm file at all (`zoom.on` installs the
 minimap/`ScrollSpeed`/camera-range patches and nothing more; the lever is read by
@@ -711,6 +713,58 @@ or `… reader still in its pass after 1000 ms — N queued object(s) KEPT, the 
 way back to the racing build). Design, proof and the object catalogue:
 [Thread-safe destruction](thread-safe-destruction.html).
 
+### 2.8 The play defaults (`tagpu_opt.c`, `tagpu_defaults.off`) — since 2026-09-08
+
+Every pass is armed by a file beside `TotalA.exe`, `tagpu_<x>.on`, whose contents are its tokens;
+[renderers](renderers.html) §2.10 makes those files the store the in-game menu will drive when it
+exists. Until it does, one table stands in for the menu: **with no file at all, the play set is
+on.** `tagpu_opt.c` answers two questions for the seventeen files below — *is the pass on*
+(`tagpu_opt_on`) and *what are its tokens* (`tagpu_opt_read`) — and every reader of those files,
+at attach and on its per-frame poll, asks it instead of the file system. Nothing else changed:
+the parsers, the polls, the `*own` install-at-attach rule.
+
+| file | default tokens | only with |
+|---|---|---|
+| `tagpu_native.on` | `all wrecks` | |
+| `tagpu_owndraw.on` | `all` | `native` |
+| `tagpu_terr.on`, `tagpu_terrown.on` | | `terrown` with `terr` |
+| `tagpu_feat.on`, `tagpu_featown.on` | | `featown` with `feat` |
+| `tagpu_fx.on`, `tagpu_sfx.on`, `tagpu_fxown.on` | | `fxown` with `fx` or `sfx` |
+| `tagpu_mark.on`, `tagpu_markown.on`, `tagpu_order.on` | | `markown` with `mark` |
+| `tagpu_zoom.on`, `tagpu_vpwide.on` | | `vpwide` with `zoom` |
+| `tagpu_gui.on`, `tagpu_classicpp.on`, `tagpu_weapons.on` | | |
+
+The rules, in precedence: a `tagpu_<x>.on` that exists wins, tokens and all, as ever; a
+`tagpu_<x>.off` (and no `.on`) turns a default-on pass off; `tagpu_defaults.off` turns the table
+off — every pass opt-in again. The *only with* column is the pairing `tacli launch` makes when it
+auto-arms the `*own` half: a default `owndraw` with no native pass would skip the engine's
+rasterise and draw nothing (the "stale owndraw.on" footgun of the ta-drive skill), so `native.off`
+takes `owndraw` with it, and `zoom.off` takes `vpwide`, because the repair `vpwide` carries is what
+the zoom cannot go live without (§2.3b). Everything off the table — the instrumentation triggers,
+the knob files `tagpu_hires.on` / `tagpu_restoreglsl.on` / `tagpu_classicpp.cfg`, the `.off`
+levers of §2.7 and the render passes — reads its file exactly as before. The module is stateless
+(the readers poll on their own cadence) and reads nothing until asked; one line at attach,
+`opt: play defaults ON (no tagpu_defaults.off): native=all wrecks owndraw=all terr …`, or
+`opt: play defaults OFF (tagpu_defaults.off present)`, says which applied.
+
+**tacli opts its instances out.** An instance is a lab bench: a bare launch has to stay the stock
+control and a measurement has to arm exactly the passes it names, so `launch` and
+`scenario load` write `tagpu_defaults.off` into the gamedir unless given `--defaults` (sticky per
+instance, `--no-defaults` back). Every arm-set recipe in the skill therefore still holds; under
+`--defaults` a pass is turned off with `tacli arm <i> <pass>.off`.
+
+**Measured 2026-09-08** (Two Continents, 1024×768, `scenario load … one-unit --defaults`, no arm
+file in the gamedir): the `opt:` line listed all seventeen; `owndraw`, `fxown`, `featown`,
+`terrown`, `markown`, `gui`, `zoom`, `vpwide` and `weapons` each logged `ARMED` at attach, and
+`fx`, `sfx`, `feat`, `terr`, `mark`, `order` and `native` (`1 unit(s) … 555 verts`) in the game;
+Classic++ lit the frame with the lab's defaults and restored the 5062 tiles in 2494 ms at 58.5 fps.
+Writing `tagpu_classicpp.off` while it ran changed 424 380 of the 786 432 GL pixels within a
+second (the world back to Classic, the UI unmoved); deleting it restored them. The same instance
+relaunched with `--no-defaults` logged `opt: play defaults OFF` and armed only `curs`, `reclaim`
+and `shield`, the three that were never on the table. **Not measured**: a player's Windows, which
+is what the `_local` test VM is for; the defaults on a map change (the `*own` halves are attach
+time, the rest re-read every 30 frames, so nothing new is expected).
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
@@ -744,7 +798,8 @@ G13f that made the outer ring display-only: a click there was dropped whole rath
 on the wrong world point, and the captured marker layers clipped at the same edge. **G13f closes
 the input half** — `vpwide` (§2.3b) widens the rect the engine addresses to exactly the range the
 zoom transform produces, so a unit in the ring can be selected and ordered like any other. It is
-**opt-in**: `tacli arm <i> vpwide.on`, at launch like every other code-patching pass.
+**on by default** since 2026-09-08 (§2.8); in a tacli instance, which opts out of the defaults,
+`tacli arm <i> vpwide.on`, at launch like every other code-patching pass.
 
 **What it took, and why the shape is not obvious.** The rect's readers want four different
 things — bounds, origin, clip, and W/H — and §2.3b is that table. Two of them are traps:
