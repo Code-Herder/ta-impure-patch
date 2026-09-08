@@ -2906,7 +2906,8 @@ whole of it. It is also 1 while the buffers are merely *stale* — a COB write t
 has not composed yet — which is the common case and is perfectly consistent to read.
 
 **Stage 1, the reset.** `0x45ACC1..0x45ACF3` (and the identical `0x45ABA4..0x45ABD5` in
-`0x45AB10`) `rep movs` the node's own vertex array `node+0x24` back over the base piece's
+`0x45AB10`) `rep movs` — the instruction itself is at **`0x45ACDD`**, `0x45ABBF` in the other
+copy — the node's own vertex array `node+0x24` back over the base piece's
 `prim+0x22`, `[node+0x04] × 12` bytes, and zero `prim+0x16/+0x1A/+0x1E` (the piece origin) and
 `prim+0x26`. **`0x45B030`** then does the same for the whole tree, recursing on `prim+0x2E`
 (child) and looping on `prim+0x2A` (sibling); a piece with `prim+0x26 != 0` is skipped unless it
