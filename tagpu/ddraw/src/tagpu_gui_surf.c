@@ -497,7 +497,12 @@ static void upload_palette(void)
        when the primary's last reference goes (IDirectDrawSurface__Release),
        and frees the object only after leaving it — so a pointer read and
        dereferenced inside the section is a live object or NULL, never a
-       freed one. The present itself runs outside the section. */
+       freed one. The present itself runs outside the section. The interleave
+       reads data_rgb by member (RGBQUAD is B,G,R,reserved — reading the raw
+       bytes as R,G,B swaps red and blue, paldiff 218 not 0), so it must stay
+       inside the guard; the 2026-09-07 review's "copy the 1024 bytes out and
+       convert outside the lock" was declined because the byte copy loses the
+       member order and the saving is below the meter. */
     EnterCriticalSection(&g_ddraw.cs);
     if (g_ddraw.primary && g_ddraw.primary->palette) {
         const RGBQUAD* q = g_ddraw.primary->palette->data_rgb;
