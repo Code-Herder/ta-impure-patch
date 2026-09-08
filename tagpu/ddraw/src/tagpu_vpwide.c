@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "dd.h"
+#include "tagpu_opt.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_detour.h"
 #include "tagpu_zoom.h"
@@ -552,9 +553,8 @@ void tagpu_vpwide_init(void)
        zoom transform goes live from the lever alone, which `tagpu_zoom.on` does
        not gate. So `zoom.on` arms the repair by itself, and nothing else:
        one call-site redirect, no rect ever written. */
-    s_widenArmed = GetFileAttributesA("tagpu_vpwide.on") != INVALID_FILE_ATTRIBUTES;
-    if (!s_widenArmed &&
-        GetFileAttributesA("tagpu_zoom.on") == INVALID_FILE_ATTRIBUTES) return;
+    s_widenArmed = tagpu_opt_on("tagpu_vpwide.on");
+    if (!s_widenArmed && !tagpu_opt_on("tagpu_zoom.on")) return;
 
     if (!site_is(SITE_MOUSEWORLD, VA_MOUSEWORLD)) {
         flog("vpwide: NOT armed — 0x499221 is not a call to 0x498DA0");

@@ -81,6 +81,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "tagpu_owndraw.h"
+#include "tagpu_opt.h"
 #include "tagpu_r3dcache.h"
 
 #define RAST_OPAQUE_VA   0x00459830u
@@ -317,17 +318,13 @@ int tagpu_owndraw_structshadow_ours(void) { return g_sshadow; }
 
 static void read_target(void)
 {
-    HANDLE h;
-    DWORD  n = 0;
+    int    n;
     char   buf[64];
     int    i, j;
 
-    h = CreateFileA("tagpu_owndraw.on", GENERIC_READ,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return;
-    if (ReadFile(h, buf, (DWORD)(sizeof(buf) - 1), &n, NULL) && n > 0) {
-        buf[n] = 0;
+    n = tagpu_opt_read("tagpu_owndraw.on", buf, sizeof buf);
+    if (n < 0) return;
+    if (n > 0) {
         i = 0;
         while (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\r' || buf[i] == '\n') i++;
         j = 0;
@@ -339,7 +336,6 @@ static void read_target(void)
         }
         if (j > 0) g_target[j] = 0;
     }
-    CloseHandle(h);
     g_all = (g_target[0] == 'a' && g_target[1] == 'l' &&
              g_target[2] == 'l' && g_target[3] == 0);
 }
@@ -349,7 +345,7 @@ void tagpu_owndraw_init(void)
     char b[192];
     int a, c;
 
-    if (GetFileAttributesA("tagpu_owndraw.on") == INVALID_FILE_ATTRIBUTES) return;
+    if (!tagpu_opt_on("tagpu_owndraw.on")) return;
 
     read_target();
     a = install_one(RAST_OPAQUE_VA, RAST_OPAQUE_RES, OPQ_STOLEN);

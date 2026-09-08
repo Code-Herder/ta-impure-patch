@@ -70,6 +70,7 @@
 #include <string.h>
 #include <math.h>
 #include "opengl_utils.h"
+#include "tagpu_opt.h"
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
 #include "tagpu_order.h"
@@ -185,14 +186,14 @@ static unsigned s_armCheck = 0;
 int tagpu_mark_armed(unsigned frame_counter)
 {
     int was;
-    HANDLE h;
+    char buf[128];
+    int n;
     if (s_armed >= 0 && frame_counter - s_armCheck < 30) return s_armed > 0;
     s_armCheck = frame_counter;
     was = s_armed;
     s_armed = 0;
-    h = CreateFileA("tagpu_mark.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) {
+    n = tagpu_opt_read("tagpu_mark.on", buf, sizeof buf);
+    if (n < 0) {
         tagpu_markown_set_capture(0);
         tagpu_markown_set_bars(0);
         tagpu_markown_set_selbox(0);
@@ -206,10 +207,9 @@ int tagpu_mark_armed(unsigned frame_counter)
         return 0;
     }
     {
-        char buf[128]; DWORD n = 0;
         s_log = 0; s_passive = 0; s_bars = 1; s_capture = 1; s_selbox = 1;
         s_cursor = 1; s_digits = 1;
-        if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
+        if (n > 0) {
             char* p = buf;
             buf[n] = 0;
             while (*p) {
@@ -232,7 +232,6 @@ int tagpu_mark_armed(unsigned frame_counter)
             }
         }
     }
-    CloseHandle(h);
     s_armed = 1;
     /* Arming only ever hands markers BACK — taking them is done from the render,
        which is the only place that knows the pass is really running. This

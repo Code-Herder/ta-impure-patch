@@ -42,6 +42,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "opengl_utils.h"
+#include "tagpu_opt.h"
 #include "tagpu_terr.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
@@ -126,23 +127,22 @@ int tagpu_terr_key(void) { return s_key; }
 int tagpu_terr_armed(unsigned frame_counter)
 {
     int was;
-    HANDLE h;
+    char buf[128];
+    int n;
     if (s_armed >= 0 && frame_counter - s_armCheck < 30) return s_armed > 0;
     s_armCheck = frame_counter;
     was = s_armed;
     s_armed = 0;
-    h = CreateFileA("tagpu_terr.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) {
+    n = tagpu_opt_read("tagpu_terr.on", buf, sizeof buf);
+    if (n < 0) {
         tagpu_terrown_set_skip(0);
         if (was > 0) flog("terr: disarmed");
         return 0;
     }
     {
-        char buf[128]; DWORD n = 0;
         int wasKey = s_key;
         s_log = 0; s_passive = 0; s_over = 0; s_key = DEFAULT_KEY;
-        if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
+        if (n > 0) {
             char* p = buf;
             buf[n] = 0;
             while (*p) {
@@ -170,7 +170,6 @@ int tagpu_terr_armed(unsigned frame_counter)
            for a frame instead */
         if (s_key != wasKey) tagpu_terrown_set_skip(0);
     }
-    CloseHandle(h);
     s_armed = 1;
     if (s_passive || s_over) tagpu_terrown_set_skip(0);
     if (was != 1) {

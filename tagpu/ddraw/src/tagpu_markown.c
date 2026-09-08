@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_markown.h"
+#include "tagpu_opt.h"
 #include "tagpu_order.h"
 #include "tagpu_text.h"
 #include "tagpu_terr.h"
@@ -543,7 +544,7 @@ void tagpu_markown_init(void)
     char b[192];
     int ok;
 
-    if (GetFileAttributesA("tagpu_markown.on") == INVALID_FILE_ATTRIBUTES) return;
+    if (!tagpu_opt_on("tagpu_markown.on")) return;
 
     /* all-or-nothing: every byte is checked before any of them is written, so a
        patched or different exe arms nothing rather than half of it */

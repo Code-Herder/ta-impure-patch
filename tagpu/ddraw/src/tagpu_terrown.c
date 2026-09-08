@@ -48,6 +48,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_terrown.h"
+#include "tagpu_opt.h"
 #include "tagpu_terr.h"
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
@@ -166,7 +167,7 @@ void tagpu_terrown_init(void)
 {
     char b[192];
     int t = 0, g = 0;
-    if (GetFileAttributesA("tagpu_terrown.on") == INVALID_FILE_ATTRIBUTES) return;
+    if (!tagpu_opt_on("tagpu_terrown.on")) return;
     if (memcmp((void*)TERRAIN_VA, TERR_STOLEN, sizeof TERR_STOLEN) != 0 ||
         memcmp((void*)FOG_VA, FOG_STOLEN, sizeof FOG_STOLEN) != 0) {
         flog("terrown: NOT armed — engine bytes differ at 0x483FA0 / 0x4848E0");

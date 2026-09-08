@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_gui.h"
+#include "tagpu_opt.h"
 #include "tagpu_gui_int.h"
 #include "tagpu_gaf.h"
 #include "tagpu_vpwide.h"
@@ -597,15 +598,12 @@ static void poll(void)
 {
     DWORD t = GetTickCount();
     char buf[256];
-    DWORD n = 0;
-    HANDLE h;
+    int n;
     int on;
     if (s_lastPoll && t - s_lastPoll < POLL_MS) return;
     s_lastPoll = t;
-    h = CreateFileA("tagpu_gui.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    on = h != INVALID_HANDLE_VALUE;
-    if (on) { if (!ReadFile(h, buf, sizeof buf - 1, &n, NULL)) n = 0; CloseHandle(h); buf[n] = 0; }
-    else buf[0] = 0;
+    n = tagpu_opt_read("tagpu_gui.on", buf, sizeof buf);
+    on = n >= 0;
     /* `off` inside the file also turns the draw off, so the detours can stay
        installed (they need the file at attach) while the layer is A/B'd */
     if (on && strstr(buf, "off")) on = 0;

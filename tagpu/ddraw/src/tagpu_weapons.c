@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include "tagpu_weapons.h"
+#include "tagpu_opt.h"
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -1568,13 +1569,13 @@ static int install(void)
 void tagpu_weapons_init(void)
 {
     build_names();
-    if (GetFileAttributesA(WPN_FLAG) == INVALID_FILE_ATTRIBUTES)
+    if (!tagpu_opt_on(WPN_FLAG))
     {
         /* off: not one byte of the image is touched (assertion 1) */
         return;
     }
     g_armed = install();
-    wlog("%s (" WPN_FLAG " present): cap=%d, %u entry hooks, %u splices, %u byte patches, pool %u bytes",
+    wlog("%s (" WPN_FLAG " or the play default): cap=%d, %u entry hooks, %u splices, %u byte patches, pool %u bytes",
          g_armed ? "ARMED" : "DISARMED", WPN_CAP, (u32)N_HOOKS, (u32)N_SPLICES, (u32)N_PATCHES, g_pool_used);
 }
 

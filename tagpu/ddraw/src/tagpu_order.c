@@ -153,6 +153,7 @@
 #include <string.h>
 #include <math.h>
 #include "tagpu_order.h"
+#include "tagpu_opt.h"
 #include "tagpu_mark.h"
 #include "tagpu_text.h"
 #include "tagpu_markown.h"
@@ -285,7 +286,8 @@ int tagpu_order_on(void) { return s_armed == 1; }
 int tagpu_order_armed(unsigned frame_counter)
 {
     int was;
-    HANDLE h;
+    char buf[128];
+    int n;
     if (s_armed >= 0 && frame_counter - s_armCheck < 30) return s_armed > 0;
     s_armCheck = frame_counter;
     was = s_armed;
@@ -297,16 +299,14 @@ int tagpu_order_armed(unsigned frame_counter)
        position at any zoom but 1. (The capture window that used to be closed
        against it went with G13p; the ghost is the same either way.)
        Parse into locals and commit at the end instead. */
-    h = CreateFileA("tagpu_order.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) {
+    n = tagpu_opt_read("tagpu_order.on", buf, sizeof buf);
+    if (n < 0) {
         s_armed = 0;
         tagpu_markown_set_orders(0);
         if (was > 0) flog("order: disarmed");
         return 0;
     }
     {
-        char buf[128]; DWORD n = 0;
         /* every token into a LOCAL, committed together below — the game thread
            reads s_passive/s_trace through tagpu_order_snapshot's return value,
            and a reset-then-parse would hand it "not passive" for the length of
@@ -314,7 +314,7 @@ int tagpu_order_armed(unsigned frame_counter)
         int log_ = 0, passive_ = 0, trace_ = 0;
         int build_ = 1, dots_ = 1, circle_ = 1, sprite_ = 1, ranges_ = 1;
         int labels_ = 1;
-        if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
+        if (n > 0) {
             char* p = buf;
             buf[n] = 0;
             while (*p) {
@@ -342,7 +342,6 @@ int tagpu_order_armed(unsigned frame_counter)
         s_build = build_; s_dots = dots_; s_circle = circle_;
         s_sprite = sprite_; s_ranges = ranges_; s_labels = labels_;
     }
-    CloseHandle(h);
     s_armed = 1;
     /* Arming only ever hands the draw BACK, exactly as tagpu_mark_armed does:
        taking it is done from the render, which is the only place that knows

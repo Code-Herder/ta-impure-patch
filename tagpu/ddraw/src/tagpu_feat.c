@@ -64,6 +64,7 @@
 #include <string.h>
 #include <math.h>
 #include "opengl_utils.h"
+#include "tagpu_opt.h"
 #include "tagpu_feat.h"
 #include "tagpu_glsl.h"
 #include "tagpu_featown.h"
@@ -171,23 +172,22 @@ static unsigned s_armCheck = 0;
 int tagpu_feat_armed(unsigned frame_counter)
 {
     int was;
-    HANDLE h;
+    char buf[128];
+    int n;
     if (s_armed >= 0 && frame_counter - s_armCheck < 30) return s_armed > 0;
     s_armCheck = frame_counter;
     was = s_armed;
     s_armed = 0;
-    h = CreateFileA("tagpu_feat.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) {
+    n = tagpu_opt_read("tagpu_feat.on", buf, sizeof buf);
+    if (n < 0) {
         tagpu_featown_set_skip(0);
         if (was > 0) flog("feat: disarmed");
         return 0;
     }
     {
-        char buf[128]; DWORD n = 0;
         s_log = 0; s_passive = 0;
         s_flat = s_tall = s_shadow = s_wreck = 1;
-        if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
+        if (n > 0) {
             char* p = buf;
             buf[n] = 0;
             while (*p) {
@@ -209,7 +209,6 @@ int tagpu_feat_armed(unsigned frame_counter)
             }
         }
     }
-    CloseHandle(h);
     s_armed = 1;
     if (s_passive) tagpu_featown_set_skip(0);
     if (was != 1) {

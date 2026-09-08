@@ -40,6 +40,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "tagpu_fxown.h"
+#include "tagpu_opt.h"
 #include "tagpu_detour.h"
 
 #define SITE_PROJ_VA   0x00469B22u
@@ -114,7 +115,7 @@ static int install_site_expl(void)
 void tagpu_fxown_init(void)
 {
     char b[200];
-    if (GetFileAttributesA("tagpu_fxown.on") == INVALID_FILE_ATTRIBUTES) return;
+    if (!tagpu_opt_on("tagpu_fxown.on")) return;
     int ok = memcmp((void*)SITE_PROJ_VA, SITE_PROJ_BYTES, 5) == 0 &&
              memcmp((void*)SITE_EXPL_VA, SITE_EXPL_BYTES, 5) == 0 &&
              memcmp((void*)LEAF_MODEL_VA, MODEL_STOLEN, 5) == 0 &&

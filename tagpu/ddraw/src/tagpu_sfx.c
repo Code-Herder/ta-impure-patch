@@ -39,6 +39,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include "tagpu_sfx.h"
+#include "tagpu_opt.h"
 #include "tagpu_fxown.h"
 
 #define OFF_LAYERS    0x38D77
@@ -97,16 +98,15 @@ int tagpu_sfx_armed(unsigned frame_counter)
     s_armCheck = frame_counter;
     int was = s_armed;
     s_armed = 0;
-    HANDLE h = CreateFileA("tagpu_sfx.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) {
+    char buf[128];
+    int n = tagpu_opt_read("tagpu_sfx.on", buf, sizeof buf);
+    if (n < 0) {
         tagpu_fxown_set_skip_sfx(0);
         if (was > 0) flog("sfx: disarmed");
         return 0;
     }
-    char buf[128]; DWORD n = 0;
     s_log = 0; s_passive = 0; s_smoke = s_fire = s_wake = s_nano = 1;
-    if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
+    if (n > 0) {
         buf[n] = 0;
         char* p = buf;
         while (*p) {
@@ -125,7 +125,6 @@ int tagpu_sfx_armed(unsigned frame_counter)
             p = q + 1;
         }
     }
-    CloseHandle(h);
     s_armed = 1;
     if (s_passive) tagpu_fxown_set_skip_sfx(0);
     if (was != 1) {

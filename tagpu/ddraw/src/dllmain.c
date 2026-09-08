@@ -24,6 +24,7 @@
 #include "tagpu_weapons.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_cobtrace.h"
+#include "tagpu_opt.h"
 #include "utils.h"
 #include "versionhelpers.h"
 #include "delay_imports.h"
@@ -66,6 +67,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         /* tagpu: apply our engine byte-patches to the loaded exe before TA runs
            (e.g. skip the DirectX startup warning). Exe on disk stays pristine. */
         tagpu_apply_patches();
+
+        /* tagpu: the play defaults (tagpu_opt.h): the passes below that say
+           "no-op unless <file> exists" ask tagpu_opt now, and an absent file
+           means the table's default. One log line says which apply. */
+        tagpu_opt_init();
 
         /* tagpu: install the G5 render-suppressor. No-op unless "tagpu_suppress.on"
            exists next to the exe; byte-match guarded. Runs BEFORE the tracer so that

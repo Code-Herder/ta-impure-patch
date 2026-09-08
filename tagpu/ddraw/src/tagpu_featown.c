@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_featown.h"
+#include "tagpu_opt.h"
 #include "tagpu_detour.h"
 
 #define LEAF_FEAT_VA  0x0046A610u   /* ret 0x10 */
@@ -49,7 +50,7 @@ static void flog(const char* s)
 void tagpu_featown_init(void)
 {
     char b[160];
-    if (GetFileAttributesA("tagpu_featown.on") == INVALID_FILE_ATTRIBUTES) return;
+    if (!tagpu_opt_on("tagpu_featown.on")) return;
     if (memcmp((void*)LEAF_FEAT_VA, FEAT_STOLEN, 5) != 0) {
         flog("featown: NOT armed — engine bytes differ at 0x46A610");
         return;

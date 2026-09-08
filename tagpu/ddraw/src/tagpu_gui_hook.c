@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_gui.h"
+#include "tagpu_opt.h"
 #include "tagpu_gui_int.h"
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
@@ -920,13 +921,7 @@ static void* __cdecl after_flip(unsigned int* regs)
 static int read_tokens(void)
 {
     char buf[256];
-    DWORD n = 0;
-    HANDLE h = CreateFileA("tagpu_gui.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                           OPEN_EXISTING, 0, NULL);
-    if (h == INVALID_HANDLE_VALUE) return 0;
-    if (!ReadFile(h, buf, sizeof buf - 1, &n, NULL)) n = 0;
-    CloseHandle(h);
-    buf[n] = 0;
+    if (tagpu_opt_read("tagpu_gui.on", buf, sizeof buf) < 0) return 0;
     s_census = strstr(buf, "census") != NULL;
     s_log    = strstr(buf, "log") != NULL;
     s_pgm    = strstr(buf, "pgm") != NULL;

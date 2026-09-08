@@ -65,6 +65,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include "opengl_utils.h"
+#include "tagpu_opt.h"
 #include "tagpu_native.h"
 #include "tagpu_render3do.h"
 #include "tagpu_scaffold.h"
@@ -1538,12 +1539,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
         s_armed = 0;
-        HANDLE h = CreateFileA("tagpu_native.on", GENERIC_READ, FILE_SHARE_READ,
-                               0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-        if (h != INVALID_HANDLE_VALUE) {
-            char buf[64]; DWORD n = 0;
-            if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
-                buf[n] = 0;
+        char buf[64];
+        int n = tagpu_opt_read("tagpu_native.on", buf, sizeof buf);
+        if (n >= 0) {
+            if (n > 0) {
                 int i = 0; while (buf[i] && buf[i] > ' ') i++;
                 s_wrecks = 0;
                 if (i > 0 && i < 32) {
@@ -1562,7 +1561,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     }
                 }
             }
-            CloseHandle(h);
             s_armed = 1;
         }
         s_ss     = (GetFileAttributesA("tagpu_ss.off")     == INVALID_FILE_ATTRIBUTES);

@@ -7,6 +7,7 @@
 #include <math.h>
 #include <string.h>
 #include "dd.h"
+#include "tagpu_opt.h"
 #include "tagpu_zoom.h"
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
@@ -871,7 +872,7 @@ void tagpu_zoom_init(void)
 {
     int ok;
 
-    if (GetFileAttributesA("tagpu_zoom.on") == INVALID_FILE_ATTRIBUTES) return;
+    if (!tagpu_opt_on("tagpu_zoom.on")) return;
 
     /* Every byte is checked before any of them is written, so a patched or
        different exe arms nothing rather than half of it. */

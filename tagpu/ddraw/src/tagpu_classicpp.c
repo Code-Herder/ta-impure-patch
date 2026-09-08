@@ -14,6 +14,7 @@
 #include <string.h>
 #include <math.h>
 #include "tagpu_classicpp.h"
+#include "tagpu_opt.h"
 
 #define ON_FILE   "tagpu_classicpp.on"
 #define CFG_FILE  "tagpu_classicpp.cfg"
@@ -193,7 +194,7 @@ static void poll(void)
     int present, changed;
     if (s_last != 0 && t - s_last <= POLL_MS) return;
     s_last = t;
-    s_on = GetFileAttributesA(ON_FILE) != INVALID_FILE_ATTRIBUTES;
+    s_on = tagpu_opt_on(ON_FILE);
     present = GetFileAttributesExA(CFG_FILE, GetFileExInfoStandard, &fad) ? 1 : 0;
     changed = present != s_cfgPresent;
     if (present && !changed)
