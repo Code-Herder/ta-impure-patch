@@ -848,7 +848,7 @@ as `0.00` model units in every five-second window that contains no trip.
 frame, rebuilds the pose from the fields and reports the largest disagreement with the engine's
 buffer in model units, with the frame number and the dirty flag read on either side. A stale
 buffer reads a unit or two out; a buffer caught mid-rewrite reads the model's own size out — the
-ARMCOM stands 34 high, and the readings taken are 34.00, 38.63, 34.16, 33.03, 32.96, 32.82, 32.69,
+readings run to the model's own size — 34.00, 38.63, 34.16, 33.03, 32.96, 32.82, 32.69,
 32.00, 25.23, 23.18, 22.24. **Every one of them had the dirty flag set on both sides**, which is
 the property the guard depends on, and the guarded pass reported the same event on the ones it
 sampled. `tagpu_posefix.off` leaves the guard measuring and draws the engine's buffer anyway,
@@ -856,11 +856,11 @@ which is the baseline the fix is measured against; the guard deliberately finish
 than bailing at the torn piece, so that baseline is the emission the pass made before it existed.
 
 **Reproducing it costs scheduling pressure, not zoom.** The window is microseconds wide per unit
-and opens ~30 times a second, so on an idle 32-core machine a walk of a minute usually samples it
+and opens ~30 times a second, so on an idle machine with cores to spare a walk of a minute usually samples it
 never. Pinning the game to one core and putting spinners on that same core — its own render and
 game threads then have to timeshare, which is what a loaded machine does to a player — brings it
-to a handful of readings a minute. `_local` is not involved; one core of the box is used and
-nothing else on it is touched.
+to a handful of readings a minute. `_local` is not involved; a single core is used and nothing
+else on the machine is touched.
 
 **The regression, on the walk fixture** — Two Continents, one ARMCOM, static camera at
 `eye (1818, 850)`, zoom 2×, three south legs over 62 s, the transient detector run over the world
@@ -881,8 +881,14 @@ yaw passes the "differs from both neighbours while the neighbours agree" test, a
 frame up to ~600 px opened as ordinary animation. What goes to zero is the band only a wrong pose
 reaches.
 
-**Cost.** Two `int` reads and a compiler barrier per piece per unit per frame on the common path;
-the reconstruction runs only on a trip. 60.0 fps before and after on the walk fixture.
+**Cost.** Per piece per unit per frame on the common path: two `int` reads and a compiler barrier
+for the flag, plus — for the rest-equality test — a second stream of the piece's `nvert × 3`
+words XOR-accumulated inside the copy loop that already runs, and one `IsBadReadPtr` on the node's
+vertex array. That probe is the one avoidable part: the array is per model **type** and immutable,
+so its readability could be resolved once per type the way `pmap_for` caches the piece map, and is
+not. The reconstruction itself runs only on a trip. 60.0 fps before and after on the walk fixture,
+which is one unit — **no measurement exists at 200 units**, for this or for any of the options
+below.
 
 **A detector, not a lock — the residual window.** `Object3do+0x08` is a flag, not a sequence
 number, so "zero on both sides of the read" means *no rewrite started and finished across the
@@ -891,7 +897,7 @@ strictly between the two flag loads is missed. How much smaller that is than the
 is the point: **before, any overlap at all between the pass's read and the rewrite produced the
 artifact** — which is exactly what the captures show happening — **and now the rewrite has to be
 strictly contained inside one piece's vertex copy.** From the trip rate (one in ~29 000
-unit-frames on an idle box, at the ~30 Hz the COB writes a piece) the dirty interval is around a
+unit-frames on an idle reference setup, at the ~30 Hz the COB writes a piece) the dirty interval is around a
 microsecond; one piece's copy is tens of nanoseconds. So a miss needs the *render* thread stalled
 inside those tens of nanoseconds for at least the whole interval — and most of what that lets
 through is benign anyway, two composed poses one tick apart mixed together. The rest-pose read
@@ -915,7 +921,7 @@ whose own fields are all zero under a rotated parent is skipped and left to the 
 what the flag can miss, never the reverse, and the two run together.
 
 **Measured, and it is specific.** Under the amplifier with the fix off and the oracle armed, a
-62-second walk tripped the guard 16 times; the **one** window whose oracle reading was a
+62-second walk on the reference setup tripped the guard 16 times; the **one** window whose oracle reading was a
 mid-rewrite buffer (`err=22.23` model units, `dirty=1/1`) is the **only** window where the
 rest-equality counter moved (`rest=1`). The other fifteen trips were stale buffers — validly
 posed, one tick old, not byte-equal to rest — and it stayed at 0 on every one. In steady play it

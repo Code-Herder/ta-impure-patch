@@ -1132,10 +1132,11 @@ static float s_P[MAXNODEV * 3];     /* one node's model-space vertices */
    62-second walk (research/notes/gpu-status.md, the pose-race row).
 
    `Object3do+0x08` brackets that window exactly. It is set to 1 before the
-   reset -- 0x45AC89 and 0x45AB6C when the body turn moved, 0x480C90 and
-   0x480D22 when a COB `move`/`turn` opcode writes a piece -- and cleared
-   only after the compose returns (0x45AD28 / 0x45AC0A); the rewrite is
-   entered ONLY when it is non-zero.
+   reset -- 0x45AC89 and 0x45AB6C when the body turn moved, 0x45ADA5 for each
+   unit of the cargo chain, 0x480C90 and 0x480D22 when a COB `move`/`turn`
+   opcode writes a piece -- and cleared only after the compose returns
+   (0x45AD28, 0x45AC0A, 0x45AE47: THREE reposes, not two -- the cargo chain
+   carries a full third one); the rewrite is entered ONLY when it is non-zero.
 
    THIS IS A DETECTOR, NOT A LOCK, and it has a residual window: a flag is not
    a sequence number, so a piece read with the flag zero on both sides is a
@@ -1303,8 +1304,13 @@ static int emit_geom(const char* o3, int nv, float ax, float ay,
     nv = emit_geom_at(o3, nv0, ax, ay, wx0, wz0, encBase, owner, &torn, 0);
     if (!torn) return nv;
     s_poseGuard++;
+    /* the watch FIRST: it runs recon_begin of its own, and recon_begin clears
+       s_reconParts on entry -- so calling it between our recon_begin and the
+       emit would, on a transient failure (a dying unit's object freed under
+       us), leave every recon_prim returning NULL and the unit emitting nothing
+       at all. recon_begin is the last thing before the emit that uses it. */
+    if (s_posewatch) recon_watch(o3, "guard");
     if (recon_begin(o3)) {
-        if (s_posewatch) recon_watch(o3, "guard");
         if (s_posefix)
             return emit_geom_at(o3, nv0, ax, ay, wx0, wz0, encBase, owner, NULL, 1);
     } else if (s_posefix) {
@@ -1441,15 +1447,23 @@ static int emit_slant(const char* o3, int nv, float ax, float ay,
     int nv0 = nv, torn = 0;
     if (s_poserecon && recon_begin(o3))
         return emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, NULL, 1);
-    if (!s_posefix) return emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, NULL, 0);
+    /* s_posewatch as well as s_posefix, exactly as emit_geom does: with
+       tagpu_posefix.off the guard is supposed to keep MEASURING, and testing
+       only s_posefix here left the slant pass unguarded and uncounted, so the
+       baseline's guard=/rest= excluded structures entirely */
+    if (!s_posefix && !s_posewatch)
+        return emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, NULL, 0);
     nv = emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, &torn, 0);
     if (!torn) return nv;
     s_poseGuard++;
-    if (recon_begin(o3))
-        return emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, NULL, 1);
-    /* the body pass runs first for the same unit and logs the watch line, so
-       there is nothing to add here beyond the counter */
-    s_poseNorecon++;
+    /* no watch line here: the body pass runs first for the same unit and logs
+       it. recon_begin stays immediately before the emit that uses it. */
+    if (recon_begin(o3)) {
+        if (s_posefix)
+            return emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, NULL, 1);
+    } else if (s_posefix) {
+        s_poseNorecon++;
+    }
     return emit_slant_at(o3, nv0, ax, ay, wx0, wz0, encBase, NULL, 0);
 }
 
@@ -1871,7 +1885,8 @@ static const int* recon_prim(int p, const char* nd, int nvert)
 /* The evidence, armed by tagpu_posewatch.on: how far the engine's posed
    buffer is from the pose its own fields describe, in model units, over
    every visible piece. A buffer caught between the reset and the compose is
-   the model's own size out (tens of units -- the ARMCOM stands 38 high); a
+   the model's own size out (tens of units -- the largest reading taken on an
+   ARMCOM was 38.63); a
    merely stale one is a tick of animation out, a unit or two. That is the
    whole oracle: it says which of the two a frame saw, from inside the DLL,
    with the frame number, and it does not care whether the guard tripped --

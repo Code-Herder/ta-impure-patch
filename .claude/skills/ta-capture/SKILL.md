@@ -190,12 +190,12 @@ the delta (`~1400 px/s`, clamp 0.15–3 s) → park → re-read. Break when with
 
 6. **A race needs scheduling pressure, not a longer run.** A window that is
    microseconds wide and opens tens of times a second is essentially never
-   sampled on an idle 32-core box: a minute of walking caught it zero times
+   sampled on an idle machine: a minute of walking caught it zero times
    over four runs. `taskset -acp 0 <pid>` on the game plus two or three
    spinners pinned to the same core makes its own render and game threads
    timeshare — which is what a loaded machine does to a player — and brought
-   the same walk to five to twelve catches a minute. One core of the box, and
-   nothing else on it touched; unpin afterwards.
+   the same walk to five to twelve catches a minute. A single core is used,
+   and nothing else on the machine is touched; unpin afterwards.
 
 ## Launching (see the ta-drive skill for the full driving surface)
 

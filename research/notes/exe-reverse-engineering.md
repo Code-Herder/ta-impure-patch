@@ -2900,9 +2900,17 @@ mechanism behind the one-frame pose pop the native pass showed on a walking comm
 | `0x480C90` | a COB `move` writes a piece position (`0x480C60`, the `MOVE` setter) |
 | `0x480D22` | a COB `turn` writes a piece angle (`0x480CE0`, the `TURN` setter) |
 
-and written 0 at `0x45AD28` and `0x45AC0A` only — the last thing each repose does. The repose is
-**entered only when the flag is non-zero** (`0x45ACB1` / `0x45AB94`), so the flag is 1 for the
-whole of it. It is also 1 while the buffers are merely *stale* — a COB write the next `DrawUnit`
+and written 0 at `0x45AD28`, `0x45AC0A` and `0x45AE47` — the last thing each repose does. **There
+are THREE reposes, not two:** besides the one inlined in `DrawUnit` and the standalone
+`0x45AB10`, `DrawUnit`'s attached-unit chain carries a full third copy for each unit of the
+cargo — flag set `0x45ADA5`, entry gate `0x45ADCC`, the base piece's `rep movs` `0x45ADF3`, the
+tree reset `0x45AE1D`/`0x45AE2D` (both into `0x45B030`), the compose `0x45AE3C`, the clear
+`0x45AE47`. `[MEASURED 2026-09-08 against the pristine build]`; the set-site table above already
+listed `0x45ADA5`, and this note previously said the flag was cleared at two sites only, which
+left it with three sets and two clears. Nothing about the guard changes — the flag still brackets
+that repose exactly — but a transported unit's flag lifetime is the third site's, not the first's.
+The repose is **entered only when the flag is non-zero** (`0x45ACB1` / `0x45AB94` / `0x45ADCC`),
+so the flag is 1 for the whole of it. It is also 1 while the buffers are merely *stale* — a COB write the next `DrawUnit`
 has not composed yet — which is the common case and is perfectly consistent to read.
 
 **Stage 1, the reset.** `0x45ACC1..0x45ACF3` (and the identical `0x45ABA4..0x45ABD5` in
