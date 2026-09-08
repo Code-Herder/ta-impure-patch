@@ -164,6 +164,43 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x485070` | `GetPosHeight(POS16_16*)` (`ret 4`) | *called by us*, on the render thread — a pure read of the height grid, which is what makes a range circle follow the terrain |
 | `0x4CCF60` | the glyph blitter (**cdecl**, 9 args, base and pitch taken directly) | *called by us*, on the present thread, once per distinct string — it reads the font object and writes our atlas and touches no engine state at all (`tagpu_text.c`) |
 
+**The selection rect is drawn at 1x, after the downsample, and matches the engine's pixels.**
+Four things had to be right and none of them was ([UI markers](ui-markers.html) §1, all measured
+2026-09-08 against the engine's own rect — `mark.on=noselbox` hands it back while everything
+else stays ours, so both boxes land in one `glshot`):
+
+1. **The rotation.** The four corners take `0x4B6CC0`'s triple — `Rz(u+0x64)` on `(x,y)`,
+   `Rx(u+0x68)` on `(y,z)`, `Ry(u+0x66)` on `(x,z)` — which is what `0x467A50` does to these
+   same points. The loop used the *transposed* yaw until 2026-09-08: a rotation by −heading, so
+   a unit turning on the spot had its box turning the other way (2× the heading off — invisible
+   at every multiple of 45°, obvious between them). The tilt words are not decoration either: a
+   tank on a hillside carries up to 17° of bank and 31° of pitch.
+2. **The bounds.** `0x4CB650(model,&min,&max,**0**)` seeds min and max with the ORIGIN, skips
+   any node with fewer than three vertices, and with that last argument 0 never leaves the root
+   node — so the rect is the root piece's own vertices, not the whole tree. Ours was the whole
+   tree and stood ~11 px taller with the bottoms aligned. `aabb_walk` is unchanged (it is the
+   shadow pass's model height); the rect has its own `selbox_aabb`.
+3. **The arithmetic.** The engine truncates each term of the projection separately and halves
+   the height with `sar 1` *after* truncating it. One float expression instead is a pixel out on
+   some edges: 46 of ~110 box pixels differed until that was reproduced, 7 after.
+4. **The line.** The engine's is Bresenham (`0x4BE950`): one fully coloured pixel per major-axis
+   step. Ours was a GL line in the 2x supersampled FBO, and **the driver clamps aliased line
+   width to 1** — `glLineWidth(ss*3)` was measured to draw pixel-identically to
+   `glLineWidth(ss)` — so it was one SUPERSAMPLE wide and resolved to about half the engine's
+   colour, (66,136,56) against a flat (83,223,79). It is now drawn into the **1x FBO right after
+   the box-downsample**, with the supersampled depth blitted down (`GL_NEAREST`, the only filter
+   a depth blit takes) so it still sits under its own unit. 100 % of our box pixels are then
+   exactly the engine's colour, and its own box differs from ours on 5–18 pixels of ~110 — a
+   Bresenham step landing on the other neighbour, or a pixel where ours is correctly occluded
+   and the A/B's engine box (which composites over our whole world) is not.
+
+Two consequences worth knowing. **Supersampled — the default — the rect draws after the marker
+layer**, so where a box edge crosses a health bar our line wins where the engine's bar would (the
+bars sit inside the box on every stock unit measured); the fallback site under `tagpu_ss.off`, or
+without `glBlitFramebuffer`, still draws it first, under them, so the two sites layer differently. And the same supersampling that dimmed the rect dims **every line
+and glyph the marker layer draws** — bars, order lines, range circles, the text atlas — which is
+the same fix one layer up, and is not done.
+
 **The order block is PORTED, not captured, since G13o.** `tagpu_order.c` re-derives §3 of
 [UI markers](ui-markers.html) — the driver's three selection rules, the walker's
 capability-mask dispatch and its `pos` chaining, and all five leaf drawers — and draws them

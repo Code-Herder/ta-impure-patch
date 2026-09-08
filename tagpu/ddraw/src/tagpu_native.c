@@ -117,6 +117,7 @@
 #define U_XFIX       0x6A
 #define U_ZFIX       0x6E      /* altitude, 16.16                           */
 #define U_YFIX       0x72      /* map depth, 16.16                          */
+#define U_ROT        0x64      /* u16[3] {bank, heading, pitch}, 65536=360  */
 #define U_YAW        0x66      /* u16 body yaw, 65536 = 360 deg             */
 #define U_MODELID    0xA6      /* u16 index into MODEL_PTRS                 */
 #define OFF_MODELPTRS 0x14377  /* Model3DONode* [] (model templates)        */
@@ -306,6 +307,7 @@ typedef void (APIENTRY *PFN_LINEWIDTH)(GLfloat);
 typedef void (APIENTRY *PFN_STENCILFUNC)(GLenum,GLint,GLuint);
 typedef void (APIENTRY *PFN_STENCILOP)(GLenum,GLenum,GLenum);
 typedef void (APIENTRY *PFN_COLORMASK)(GLboolean,GLboolean,GLboolean,GLboolean);
+typedef void (APIENTRY *PFN_BLITFB)(GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLbitfield,GLenum);
 static PFN_DRAWARRAYS x_glDrawArrays;
 static PFN_DEPTHFUNC  x_glDepthFunc;
 static PFN_DISABLE    x_glDisable;
@@ -319,6 +321,7 @@ static PFN_CLEARBUFFERFV x_glClearBufferfv;
 static PFN_DEPTHMASK  x_glDepthMask;
 static PFN_SCISSOR    x_glScissor;
 static PFN_LINEWIDTH  x_glLineWidth;
+static PFN_BLITFB     x_glBlitFramebuffer;
 static PFN_STENCILFUNC x_glStencilFunc;
 static PFN_STENCILOP   x_glStencilOp;
 static PFN_COLORMASK   x_glColorMask;
@@ -638,6 +641,7 @@ static void init_gl(void)
     x_glDepthMask  = (PFN_DEPTHMASK) getgl("glDepthMask");
     x_glScissor    = (PFN_SCISSOR)   getgl("glScissor");
     x_glLineWidth  = (PFN_LINEWIDTH) getgl("glLineWidth");
+    x_glBlitFramebuffer = (PFN_BLITFB) getgl("glBlitFramebuffer");
     x_glStencilFunc = (PFN_STENCILFUNC)getgl("glStencilFunc");
     x_glStencilOp   = (PFN_STENCILOP)  getgl("glStencilOp");
     x_glColorMask   = (PFN_COLORMASK)  getgl("glColorMask");
@@ -912,6 +916,66 @@ static void aabb_walk(const char* nd, float ox, float oy, float oz,
         if (ptr_ok(ch)) aabb_walk(ch, px, py, pz, mn, mx, depth + 1);
         if (depth == 0) break;    /* root has no meaningful siblings */
     }
+}
+
+/* The select box's bounds are NOT this whole-tree walk, and the difference is
+   ~11 px on a Stumpy. `DrawUnitSelectBoxRect` asks `0x4CB650(model,&min,&max,0)`
+   and that routine:
+
+     - seeds BOTH min and max with {0,0,0} (`0x4CB65D`..`0x4CB675`), so the model
+       origin is always inside the box;
+     - accumulates only nodes with THREE OR MORE vertices (`0x4CB6D9`
+       `cmp $2,eax; jle`) — the same threshold that decides a piece is drawable;
+     - and descends into the child (`node+0x30`) and the sibling (`node+0x2C`)
+       only when its flag argument is non-zero (`0x4CB780` `test ebp,ebp; je`).
+       The select box passes **0** (`push $0` @`0x46A55A`), so the walk stops at
+       the root: the rect is the ROOT PIECE's own vertices, offset by its own
+       `+0x10/14/18`, unioned with the origin — never the turret, the barrel or
+       anything else hanging off it.
+
+   Kept apart from model_aabb() rather than folded into it: that one IS the whole
+   tree, which is what the shadow pass's model height wants (`mx[1]`, measured
+   against the lab), and the two must not drift into each other. */
+static MAABB s_sbox[256];
+static int   s_nsbox = 0;
+
+static const MAABB* selbox_aabb(const char* nd)
+{
+    int i;
+    for (i = 0; i < s_nsbox; i++)
+        if (s_sbox[i].node == nd) return &s_sbox[i];
+    if (s_nsbox >= 256 || !ptr_ok(nd) || IsBadReadPtr(nd, 0x40)) return NULL;
+    MAABB* a = &s_sbox[s_nsbox];
+    a->node = nd;
+    a->mn[0] = a->mn[1] = a->mn[2] = 0.0f;      /* the engine's {0,0,0} seed */
+    a->mx[0] = a->mx[1] = a->mx[2] = 0.0f;
+    {
+        int nvert = *(const int*)(nd + N_VCOUNT);
+        const int* vb = *(const int* const*)(nd + N_VERTS);
+        /* Fewer than three vertices is the ENGINE'S OWN answer (0x4CB6D9) and
+           caches as the bare origin seed. An unreadable vertex array is not an
+           answer at all, and caching one would be permanent: the entry is keyed
+           by the node pointer and never re-tried, so that model would carry a
+           zero-size rect for the life of the process — and worse, silently,
+           because `selDrawn` would still count it and `s_selComplete` would
+           stay 1, leaving markown suppressing the engine's box over nothing.
+           Refuse instead: the caller skips the unit, the completeness flag goes
+           false, and the whole set goes back to the engine for that frame. */
+        if (nvert > 2) {
+            const int* of = (const int*)(nd + N_OFF);
+            int k, r;
+            if (nvert > 4096 || !ptr_ok(vb) ||
+                IsBadReadPtr(vb, (SIZE_T)nvert * 12)) return NULL;
+            for (k = 0; k < nvert; k++)
+                for (r = 0; r < 3; r++) {
+                    float v = (float)(of[r] + vb[k*3+r]) / 65536.0f;
+                    if (v < a->mn[r]) a->mn[r] = v;
+                    if (v > a->mx[r]) a->mx[r] = v;
+                }
+        }
+    }
+    s_nsbox++;
+    return a;
 }
 
 static const MAABB* model_aabb(const char* root)
@@ -2615,21 +2679,74 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             unsigned mid = *(const unsigned short*)(units[i].u + U_MODELID);
             if (!ptr_ok(mptrs)) break;
             const char* root = *(const char* const*)(mptrs + (size_t)mid * 4);
-            const MAABB* a = model_aabb(root);
+            const MAABB* a = selbox_aabb(root);
             if (!a) continue;
-            float yawA = (float)*(const unsigned short*)(units[i].u + U_YAW)
-                         * 6.2831853f / 65536.0f;
-            float c = cosf(yawA), s2 = sinf(yawA);
+            /* the engine hands all THREE of the unit's angles to 0x4B6CC0
+               (bank, heading, pitch at u+0x64), so the corners take the same
+               triple an effects model does: Rz(bank) on (x,y), Rx(pitch) on
+               (y,z), Ry(heading) on (x,z) — emit_fx_model's order, rot2's
+               sense (x' = x c - z s). Yaw alone is right on the flat and
+               several pixels out on a slope, where one tank was measured at
+               17.4 deg of bank and -22.1 of pitch and the next along at -30.7
+               of pitch; the TRANSPOSED yaw,
+               which this loop used until 2026-09-08, is a rotation by
+               -heading, so the rect turned against the unit it marks. */
+            const unsigned short* rot =
+                (const unsigned short*)(units[i].u + U_ROT);
+            const float K = 6.2831853f / 65536.0f;
+            float c0 = cosf((float)rot[0] * K), s0 = sinf((float)rot[0] * K);
+            float c1 = cosf((float)rot[1] * K), s1 = sinf((float)rot[1] * K);
+            float c2 = cosf((float)rot[2] * K), s2 = sinf((float)rot[2] * K);
             float y0 = a->mn[1];
             float cx[4] = { a->mn[0], a->mx[0], a->mx[0], a->mn[0] };
             float cz[4] = { a->mn[2], a->mn[2], a->mx[2], a->mx[2] };
             float px[4], py[4];
             int k;
             for (k = 0; k < 4; k++) {
-                float rx2 = cx[k] * c + cz[k] * s2;
-                float rz2 = -cx[k] * s2 + cz[k] * c;
-                px[k] = units[i].ax + rx2;
-                py[k] = units[i].ay + (-rz2 - y0 * 0.5f);
+                float x = cx[k], y = y0, z = cz[k];
+                if (rot[0]) rot2(c0, s0, &x, &y);
+                if (rot[2]) rot2(c2, s2, &y, &z);
+                if (rot[1]) rot2(c1, s1, &x, &z);
+                /* The engine's own projection for this rect (0x467A50), term
+                   by term, because it truncates each one SEPARATELY and only
+                   then halves the height:
+
+                     sx = ((rot.x + pos.x) >> 16) + 0x80
+                     sy = ((pos.z - rot.z) >> 16)
+                        - (((rot.y + pos.y) >> 16) >> 1) + 0x20
+
+                   `>>` is arithmetic, so both are floors, and `sar 1` floors
+                   the ALREADY floored height — folding them into one float
+                   expression lands a pixel out on some edges (measured: 46 of
+                   ~110 box pixels differed from the engine's before this).
+                   `rot.y` is the corner's own y, which bank and pitch move.
+                   The anchor carries the eye and the altitude already:
+                   ax = wx - eyeX + 128, ay = wz - alt/2 - eyeY + 32. */
+                {
+                    float alt = units[i].wy;
+                    float zt  = (units[i].ay - (float)vpT + alt * 0.5f) - z;
+                    float yt  = floorf(floorf(y + alt) * 0.5f);
+                    px[k] = floorf(units[i].ax - (float)vpL + x) + (float)vpL + 0.5f;
+                    py[k] = floorf(zt) - yt + (float)vpT + 0.5f;
+                }
+                /* At 1x the truncation above has already put the corner on a
+                   device pixel, which is what keeps the line fully coloured
+                   rather than smeared across two rows — the engine's own
+                   corners are integers for the same reason. Away from 1x the
+                   shader scales about the zoom centre and lands between
+                   pixels, so snap there too: forward through the zoom, floor,
+                   and back. (Snapping a marker to the pixel grid is what the
+                   glyph atlas does, gpu-status 2.2.) */
+                if (s_zoom > 0.0f && s_zoom != 1.0f) {
+                    float zcx0 = (float)vpL + (float)vw * 0.5f;
+                    float zcy0 = (float)vpT + (float)vh * 0.5f;
+                    float sx = (px[k] - zcx0) * s_zoom + zcx0;
+                    float sy = (py[k] - zcy0) * s_zoom + zcy0;
+                    sx = floorf(sx) + 0.5f;
+                    sy = floorf(sy) + 0.5f;
+                    px[k] = (sx - zcx0) / s_zoom + zcx0;
+                    py[k] = (sy - zcy0) / s_zoom + zcy0;
+                }
             }
             float enc = encb[i] - 0.5f;
             selDrawn++;
@@ -2891,9 +3008,22 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     glEnable(GL_BLEND);
     x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);      /* premultiplied */
 
-    /* selection rects first — the engine draws them under the unit sprite */
+    /* Selection rects first — the engine draws them under the unit sprite.
+
+       ...but when this pass is SUPERSAMPLED they are not drawn here at all.
+       The engine's rect is four Bresenham lines (0x4BE950): one fully coloured
+       pixel per major-axis step. A GL line in an ss-times buffer is one
+       SUPERSAMPLE wide — the driver clamps aliased line width to 1, measured:
+       `glLineWidth(ss*3)` draws pixel-identically to `glLineWidth(ss)` — so it
+       resolves to a half-lit smear, about half the engine's colour. Drawn
+       instead into the 1x FBO right after the box-downsample, where a GL line
+       IS the engine's rule, one whole pixel per step. It still needs the
+       world's depth to sit under its own unit, so the ss depth buffer is
+       blitted down with it. `selAt1x` is 0 without the blit entry point or
+       without supersampling, and then this draws it here as before. */
+    int selAt1x = (ss > 1 && x_glBlitFramebuffer != NULL);
     glUniform1i(s_uNanoOn, 0);
-    if (lineEnd > lineStart) {
+    if (lineEnd > lineStart && !selAt1x) {
         glUniform1i(s_uFog, fogMode & 1);
         glUniform1i(s_uShadow, 0);
         x_glUniform1f(s_uAlpha, 1.0f);
@@ -3044,6 +3174,70 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         x_glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, s_colTex2);
         x_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        /* ---- the selection rects, at 1x, over the resolved frame ---- */
+        if (selAt1x && lineEnd > lineStart) {
+            /* the world's depth, downsampled by point sampling (NEAREST is the
+               only filter a depth blit may use), so the rect is still occluded
+               by its own unit and by anything nearer — the engine draws it
+               inside the row sweep, not over the frame */
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, s_fbo2);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_fbo);
+            x_glBlitFramebuffer(0, 0, gw * ss, gh * ss, 0, 0, gw, gh,
+                                GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
+            glViewport(0, 0, gw, gh);
+            glUseProgram(s_prog);
+            glBindVertexArray(s_vao);
+            glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+            /* every texture unit this program reads, put back: the feature,
+               effects and marker passes in between bind their own — the marker
+               pass alone takes 1, 2 and 3 (`tagpu_mark.c`, palette/fog/fogLut)
+               — and with the shade LUT (unit 1) and the palette (unit 2)
+               pointing at someone else's texture the rect draws BLACK
+               (measured). Unit 3 is the scaffold, which the flat path reaches
+               through TAGPU_GLSL_SCAF_TEST whenever `tagpu_scaffold.on` is
+               armed: left as the marker pass had it, that test samples the fog
+               LUT and discards rect fragments at random. */
+            x_glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, tagpu_r3d_atlas_texref());
+            x_glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, tagpu_r3d_lut_texref());
+            x_glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, s_palTex);
+            x_glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_2D, scafOn ? tagpu_scaffold_texref() : 0);
+            x_glActiveTexture(GL_TEXTURE4);
+            glBindTexture(GL_TEXTURE_2D, s_fogTex);
+            x_glActiveTexture(GL_TEXTURE5);
+            glBindTexture(GL_TEXTURE_2D, s_fogLutTex);
+            x_glActiveTexture(GL_TEXTURE8);
+            glBindTexture(GL_TEXTURE_2D, tagpu_r3d_atlas_rgbref());
+            x_glActiveTexture(GL_TEXTURE0);
+            glEnable(GL_DEPTH_TEST);
+            x_glDepthFunc(GL_LESS);
+            if (x_glDepthMask) x_glDepthMask(GL_FALSE);
+            if (x_glScissor) { glEnable(GL_SCISSOR_TEST); x_glScissor(vpL, vpT, vw, vh); }
+            glEnable(GL_BLEND);
+            x_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            glUniform1i(s_uFog, fogMode & 1);
+            glUniform1i(s_uShadow, 0);
+            glUniform1i(s_uNanoOn, 0);
+            glUniform1i(s_uWaterMode, 0);
+            x_glUniform1f(s_uAlpha, 1.0f);
+            x_glUniform2f(s_uOffset, 0.0f, 0.0f);
+            x_glUniform1f(s_uWaterT, -1e9f);
+            x_glUniform1f(s_uDigT, -1e9f);
+            /* ...and the same test scales gl_FragCoord by uSS. These
+               fragments are already 1x, so it is 1 here, not ss. The next
+               frame sets it back with the rest of the pass's uniforms. */
+            x_glUniform1f(s_uSS, 1.0f);
+            if (x_glLineWidth) x_glLineWidth(1.0f);
+            x_glDrawArrays(GL_LINES, lineStart, lineEnd - lineStart);
+            x_glDisable(GL_DEPTH_TEST);
+            if (x_glDepthMask) x_glDepthMask(GL_TRUE);
+            if (x_glScissor) x_glDisable(GL_SCISSOR_TEST);
+            x_glDisable(GL_BLEND);
+        }
     }
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
 

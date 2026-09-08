@@ -1,0 +1,26 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Selection-box orientation fixture: three still tanks at facings that are NOT multiples of 90 (45, 135, 200), so the direction the box turns is visible. The 200 is the diagnostic one — a box rotated by minus the heading lands 2x40 degrees off there, while at 45 and 135 the two are the same diamond. Select all three, then compare ours against the engine's own rect with `mark.on=noselbox`, which hands the rect back while everything else stays ours so both land in one glshot (ui-markers.md section 1).",
+  "seed": 20260908,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": { "shootall": false, "noshake": true },
+    "players": [
+      { "slot": 0, "controller": "human", "side": "arm", "color": 0 },
+      { "slot": 1, "controller": "ai", "side": "core", "color": 1 }
+    ]
+  },
+
+  "units": [
+    { "id": "t45",   "type": "ARMSTUMP", "owner": 0, "pos": [2560, 1120], "facing": 45,  "stance": "hold" },
+    { "id": "t135",  "type": "ARMSTUMP", "owner": 0, "pos": [2760, 1120], "facing": 135, "stance": "hold" },
+    { "id": "t200",  "type": "ARMSTUMP", "owner": 0, "pos": [2960, 1120], "facing": 200, "stance": "hold" },
+    { "id": "spare", "type": "CORSOLAR", "owner": 1, "pos": [4300, 1400] }
+  ],
+
+  "camera": { "center_on": "t135", "pin": true }
+}

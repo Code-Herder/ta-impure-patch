@@ -1,0 +1,26 @@
+{
+  "format": "ta-scenario/1",
+  "description": "The same fixture on a HILLSIDE: three tanks at facing 200 across the slope the tascene-air fixture puts the Thunder over, where the terrain gives them real bank and pitch in the unit's angle triple at +0x64 (measured 2026-09-08: +17.4/-22.1 degrees, 0/-30.7, 0/+1.8). This is what separates a selection box rotated by the heading alone from one that takes the whole triple the engine does.",
+  "seed": 20260908,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": { "shootall": false, "noshake": true },
+    "players": [
+      { "slot": 0, "controller": "human", "side": "arm", "color": 0 },
+      { "slot": 1, "controller": "ai", "side": "core", "color": 1 }
+    ]
+  },
+
+  "units": [
+    { "id": "s1",    "type": "ARMSTUMP", "owner": 0, "pos": [6060, 12100], "facing": 200, "stance": "hold" },
+    { "id": "s2",    "type": "ARMSTUMP", "owner": 0, "pos": [6180, 12140], "facing": 200, "stance": "hold" },
+    { "id": "s3",    "type": "ARMSTUMP", "owner": 0, "pos": [6300, 12180], "facing": 200, "stance": "hold" },
+    { "id": "spare", "type": "CORSOLAR", "owner": 1, "pos": [4300, 1400] }
+  ],
+
+  "camera": { "center_on": "s2", "pin": true }
+}

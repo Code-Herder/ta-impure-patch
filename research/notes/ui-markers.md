@@ -96,16 +96,41 @@ void DrawUnitSelectBoxRect(ctx, unit) {
 }
 ```
 
-- `0x4CB650` → `0x4CB6A0`: recursive `Model3DONode` walker (child/sibling links,
-  vertex array at node+0x24, count node+0x4, piece offsets node+0x10/14/18)
-  accumulating min/max over all vertices — **the box is the whole model's
-  bounding box, not the footprint from the unit def**. [BINARY-VERIFIED]
+- `0x4CB650` → `0x4CB6A0`: a `Model3DONode` walker (child `node+0x30` / sibling
+  `node+0x2C`, vertex array `node+0x24`, count `node+0x04`, piece offset
+  `node+0x10/14/18` accumulated into the child's) — but **not the whole model's
+  bounding box**, and not the unit def's footprint either. Three things decide
+  what actually goes in, all read off the disassembly 2026-09-08
+  [BINARY-VERIFIED]:
+    - `0x4CB650` **seeds both min and max with `{0,0,0}`** (`0x4CB65D`..`0x4CB675`),
+      so the model origin is always inside the box;
+    - the walker **skips any node with fewer than three vertices**
+      (`0x4CB6D9` `cmp $2,eax; jle`) — the same threshold that makes a piece
+      undrawable at `0x45AF1B`;
+    - and it recurses into the child and the sibling **only when its fourth
+      argument is non-zero** (`0x4CB780` `test ebp,ebp; je`). The select box
+      passes **0** (`push $0` @`0x46A55A`), so the walk never leaves the root.
+
+  So the rect is the **root piece's own vertices, offset by its own
+  `+0x10/14/18`, unioned with the origin** — a Stumpy's hull, not its barrel.
+  *[CORRECTED 2026-09-08: this said "the whole model's bounding box", and the
+  native pass believed it. Measured against the engine's own rect at 1x, the
+  whole-tree box is ~11 px taller with the bottom edges aligned.]*
 - `0x467A50` (stdcall ×4, `ret 0x10`): rotates each corner by the unit's
   rotation via `0x4B6CC0(corner, out, &unit->rot)` (scratch buffers
   `*(main+0x14383)` rotated vecs, `*(main+0x14387)` screen points), projects with
   the standard rule — `sx = (rot.x+pos.x)>>16 + 0x80`,
   `sy = (pos.z − rot.z)>>16 − ((rot.y+pos.y)>>16)/2 + 0x20` — and draws the
   4-line loop `p0→p1→p2→p3→p0` with `DrawLine 0x4BE950`. [BINARY-VERIFIED]
+  **Each term is truncated on its own, and the halving is a `sar 1` on the
+  already-truncated height** (`0x467AB5`), so `floor(a) − floor(floor(b)/2)` —
+  folding the two into one float expression is a pixel out on some edges.
+  `pos` is `{XPos(+0x6A) − eyeX<<16, YPos(+0x6E) — the altitude, ZPos(+0x72) −
+  eyeY<<16}`, and the four corners come back through the scratch buffers, which
+  is what makes them peekable: `*(main+0x14383)` holds the four rotated vectors
+  (16.16, three dwords each) and `*(main+0x14387)` the four screen points
+  (two ints each) of **the last box drawn** — the cheapest oracle there is for
+  a redraw of it.
 - **Colour:** one byte, `main+0xDD5` = GUI palette colour **index 0xA** (the
   same entry the healthy health-bar fill uses — green).
   `GetGuiPaletteColor(ta,i) = *(u8*)(ta+0xDCB+i)` per `composite-buffer.md`.
@@ -118,6 +143,63 @@ void DrawUnitSelectBoxRect(ctx, unit) {
 
 No other marker is attached to selection inside the sweeps — the "circle" of TA
 is really this rotated square.
+
+### Our redraw of it — what it took to land on the engine's pixels
+
+`tagpu_native.c` re-draws this rect (the only marker interleaved with the unit
+draws, so the engine's own is under our pixels). **[MEASURED 2026-09-08]**, all
+of it against the engine's own box: `mark.on=noselbox` hands the rect back while
+everything else stays ours, so both boxes land in the **same** `glshot` and a
+moving unit compares cleanly. Fixtures `scenarios/selbox-facings.json` (three
+tanks at facings 45, 135 and **200** — the 200 is the one that shows a wrong
+rotation *sense*, since ±45 and ±135 are the same diamond) and
+`scenarios/selbox-slope.json` (the same three at 200 across a hillside, where
+the tilt words are large). Four things had to match, and each was a real
+difference:
+
+- **The rotation sense.** The corners take `0x4B6CC0`'s triple: `(x,y)` by the
+  word at `+0x00` of the angle triple, then `(y,z)` by `+0x04`, then `(x,z)` by
+  `+0x02` (read off `0x4B6CD6`/`0x4B6CF6`/`0x4B6D1B` — the *argument* order, not
+  the `PrimitiveStruct` field order), each step `a' = a·cos − b·sin`. Passed
+  `&unit->rot`, that is `Rz(+0x64)` on `(x,y)`, `Rx(+0x68)` on `(y,z)`,
+  `Ry(+0x66)` on `(x,z)`. **The transposed form is a rotation by −heading**: the
+  rect turns *against* the unit, which is what this loop did until 2026-09-08.
+  At heading 20° (`facing 200`) our screen edges were 19.5°/111.8° where the
+  engine's were 159.2°/68.2° — an error of exactly 2×heading, invisible at any
+  multiple of 45° and unmistakable everywhere else.
+- **The tilt words are live.** `+0x64` and `+0x68` carry the terrain's bank and
+  pitch: 0 and ±1.8° on the flat, but **17.4° of bank and −22.1° of pitch** on
+  one Two Continents hillside and −30.7° of pitch on the next tank along.
+  Heading alone put 15–36 % of the engine's box pixels on ours there against
+  41–51 % for the full triple.
+- **The bounds are the ROOT PIECE plus the origin**, per the corrected §1 above,
+  not `aabb_walk`'s whole-tree box (which stays what it is — the shadow pass's
+  model height measures against the lab). With the right bounds every pixel of
+  ours came within 1.41 px of the engine's own quad, from 58–62 % within 1 px
+  and up to 12 px out before.
+- **And the line has to be a line.** The engine's is four Bresenham runs
+  (`0x4BE950`), one fully coloured pixel per major-axis step. Ours was a GL
+  hairline in a 2x supersampled buffer — **the driver clamps aliased line width
+  to 1, measured: `glLineWidth(ss*3)` draws pixel-identically to
+  `glLineWidth(ss)`** — so it resolved to a half-lit smear: our box read
+  (66,136,56) and dimmer where the engine's is a flat (83,223,79). It is now
+  drawn into the **1x FBO right after the box-downsample**, where a GL line is
+  the engine's own rule, with the supersampled depth blitted down so it still
+  sits under its own unit (`gpu-status.md` §2.2). 100 % of our box pixels are
+  then exactly (83,223,79), and the engine's own box differs from ours on 5–18
+  pixels of ~110 — every one of them either a Bresenham step landing on the
+  other neighbour, or a pixel where ours is correctly hidden behind the unit
+  and the A/B's engine box (composited over our whole world) is not.
+
+**Still ours and not the engine's:** with the pass supersampled — the default —
+the rect draws *after* the marker layer rather than before it, so where a box
+edge crosses a health bar our line wins where the engine's bar would. (The
+fallback site, taken under `tagpu_ss.off` or without `glBlitFramebuffer`, still
+draws it first, under the bars as the engine does. The two sites therefore layer
+differently, which is a second reason the supersampled one is the one to trust.) The bars sit inside the box on every stock unit
+measured, so nothing was seen crossing; the real fix is the same one the rect
+just had — the marker layer is supersampled too, and every line and glyph in it
+is softer than the engine's for exactly the same reason.
 
 ---
 
@@ -421,11 +503,21 @@ Caveats for the native pass:
    in cnc-ddraw), *everything above* is under our unit pixels and the verdicts
    flip to "must re-draw" for every row above the build cursor. The in-place
    split is what keeps this table cheap.
-2. Re-drawing the selection rect natively is ~40 lines: 4 model-space corners
-   from our own mesh AABB at min-Y, rotate by unit yaw, project with
-   `sx = wx − eyeX + 128, sy = wz − alt/2 − eyeY + 32`, 1-px lines, colour =
-   `GetGuiPaletteColor(main, 0xA)` resolved through the game palette. Honour
-   `main+0x37F2F` bit2 so `SelBoxes` still works.
+2. Re-drawing the selection rect natively is ~40 lines, and every one of the
+   four quantities in it is the engine's, not a near-enough of ours (§1 *Our
+   redraw*): the 4 corners at min-Y come from the **root piece's own vertices
+   unioned with the origin**, not our whole-tree mesh AABB; they rotate by the
+   unit's whole angle triple at `+0x64` in `0x4B6CC0`'s order (the heading alone
+   is a few pixels out on any slope, and the transposed rotation turns the box
+   the wrong way); the projection is
+   `sx = floor(wx − eyeX + rot.x) + 128`,
+   `sy = floor(wz − eyeY − rot.z) − floor(floor(rot.y + alt)/2) + 32` — **each
+   term truncated on its own, and the height halved after truncating**, which is
+   a pixel's difference from `floor(wz − alt/2 − eyeY + 32 − …)`; 1-px lines,
+   colour = `GetGuiPaletteColor(main, 0xA)` resolved through the game palette.
+   Honour `main+0x37F2F` bit2 so `SelBoxes` still works.
+   *[CORRECTED 2026-09-08: this said "our own mesh AABB" and gave the folded
+   projection; both were what the native pass did, and both were wrong.]*
 3. If we want engine-parity layering, our redrawn select box must sit **under
    its own unit's pixels** and under later-row content — i.e. give it the same
    row-sort depth key as its unit minus an epsilon, not "always on top".
