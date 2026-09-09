@@ -215,6 +215,7 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
 static void restore_enqueue(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
 {
     TAGPU_RGLSL_FRAME f;
+    if (a->restoreMinEdge > 0 && (e->w < a->restoreMinEdge || e->h < a->restoreMinEdge)) return;
     f.ax = f.dx = e->x; f.ay = f.dy = e->y;
     f.w = e->w; f.h = e->h; f.wrap = e->wrap; f.border = a->pad; f.key = e->ck;
     f.padR = cell_up(a, e->w + 2 * a->pad) - (e->w + 2 * a->pad);

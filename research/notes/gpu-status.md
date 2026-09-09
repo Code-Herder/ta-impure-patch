@@ -34,7 +34,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + a 3-site byte patch behind `vpwide.on`, plus the `0x499221` redirect that also carries the zoom's mouse-point repair and is armed by `zoom.on` too (§2.3d) |
 | Terrain in **restored true colour** (Classic++, `tagpu_classicpp.on`) | G14a (spike, 2026-09-04); GPU G14b (2026-09-04); **GLSL G14c (2026-09-05)** | `tagpu_restoreglsl.c` runs the unditherer's full model as **fragment passes in the game's own GL context** — the shaders of `tagpu_restore_glsl.h`, the weights of `<model>.w32.bin` — sliced from `tagpu_terr.c`'s gather at 12 ms of GPU time per frame under a `GL_TIME_ELAPSED` budget, visible tiles first, painting straight into the terrain pass's RGBA atlas: Two Continents' 5062 tiles in 2.1 s at 59.7 fps, the biggest stock map's 11,561 in 4.2 s, no worker thread, no runtime, no disk. The ONNX Runtime path (`tagpu_restore.c`, G14a/b) was deleted the same day (G14d). **G14e (2026-09-05)**: the cells show as they land, centre-out (the restored atlas's alpha is the flag), and the **feature and effects atlases restore lazily** — `tagpu_gaf.c` queues every atlas miss to the same restorer, each atlas carries an RGBA8 twin the sprite shaders sample where its alpha is 1, keyed texels inpainted by a nearest-ring stand-in in the FILL pass. **G14f (2026-09-05): lit** — the terrain from the engine's height grid (`main+0x14287`, one R8 texture per map, the lab's grid normal per fragment), the units from the posed face normal carried in the vertex stream, the feature sprites from the ground's lambert at their anchor; one rule, `tagpu_glsl.h` `TAGPU_GLSL_LIGHT_FN`, level ground exactly 1.0; the knobs in `tagpu_classicpp.cfg` (`tagpu_classicpp.c`). **G14g (2026-09-05): the unit textures** — `tagpu_render3do.c`'s atlas is a `TAGPU_GAFATLAS` now, every frame in a 4-texel-padded, 4-aligned cell, its RGBA8 twin restored lazily like the sprites' (priority 3) and **mipmapped to level 2**, trilinear and 4× anisotropic, the mips regenerated after each painted batch; the unit shader samples it where its alpha says so. Classic's R8 atlas has the same cells and does not move a pixel (`tascene ab`, and the engine shot byte-identical to G14f's outside the chat). Reads only — see [Classic and Classic++ renderers](renderers.html) §4c and §5 |
-| **Chat, dialogs, side panel, minimap, top bar, the shell** | **Phase E, in progress** ([GL UI renderer](gui-renderer.html), decided 2026-09-06). **G15a done 2026-09-07**: every UI pixel-writing leaf is observed and the census explains 100 % of what changes on the presented surface across the screen inventory. **G15b done 2026-09-07**: the observed ops are replayed into GL twins of the engine's surfaces and the presented surface's twin is drawn over the world composite — the in-game panel, build pages, bars, option screens, chat and the F4 popup, and the whole shell, at 1:1 Classic; **0 differing pixels and 0 holes under `strict` on every in-game stop of the inventory at 1024×768 and at 1920×1080** (§2.3e). **G15c done 2026-09-07**: the rest of the in-game frame reached and measured — ARM and CORE, both resolutions, the HUD strings, the popups and the option screens over the world at 0.5× and 2×, the minimap under motion: 32 of 32 stops at 0/0/0 in all four runs, no DLL change. **G15d done 2026-09-07**: the shell across the 640×480 context switch, three game→shell→game cycles in one process, clean — the publisher drops batches while the render thread is dead or crawling (the switch stops it and it crawls out of a game), skips the stale queue after the new GL context, retires the main offscreen's dead entry, and resolves the twin through the palette the frame is *presented* with, not `main+0x143A7` (the engine gamma-scales the presented one) | the engine's surface is still drawn and still the fallback beneath the twin (nothing is suppressed in phase 1); the cursor stays the engine's; Classic++ art (G15e) is the next gate; the world passes reading `main+0x143A7` were wrong at Gamma ≠ 12 — **fixed 2026-09-09**, §2.3f; on by default since 2026-09-08 (§2.8; `tagpu_gui.off` turns it off, `tagpu_gui.on` still carries the tokens); **phase 2 — the UI scaled — was designed 2026-09-08** ([GL UI renderer](gui-renderer.html) §13, roadmap G17a–e: the 1× mirror kept as the oracle with a device-res sharp layer beside it, a string op for text, our cursor at 1× device size, the minimap regenerated with the engine's dots) |
+| **Chat, dialogs, side panel, minimap, top bar, the shell** | **Phase E, in progress** ([GL UI renderer](gui-renderer.html), decided 2026-09-06). **G15a done 2026-09-07**: every UI pixel-writing leaf is observed and the census explains 100 % of what changes on the presented surface across the screen inventory. **G15b done 2026-09-07**: the observed ops are replayed into GL twins of the engine's surfaces and the presented surface's twin is drawn over the world composite — the in-game panel, build pages, bars, option screens, chat and the F4 popup, and the whole shell, at 1:1 Classic; **0 differing pixels and 0 holes under `strict` on every in-game stop of the inventory at 1024×768 and at 1920×1080** (§2.3e). **G15c done 2026-09-07**: the rest of the in-game frame reached and measured — ARM and CORE, both resolutions, the HUD strings, the popups and the option screens over the world at 0.5× and 2×, the minimap under motion: 32 of 32 stops at 0/0/0 in all four runs, no DLL change. **G15d done 2026-09-07**: the shell across the 640×480 context switch, three game→shell→game cycles in one process, clean — the publisher drops batches while the render thread is dead or crawling (the switch stops it and it crawls out of a game), skips the stale queue after the new GL context, retires the main offscreen's dead entry, and resolves the twin through the palette the frame is *presented* with, not `main+0x143A7` (the engine gamma-scales the presented one) | the engine's surface is still drawn and still the fallback beneath the twin (nothing is suppressed in phase 1); the cursor stays the engine's; **G15e done 2026-09-08 and its Q2 diff closed 2026-09-09** (§2.3e and [GL UI renderer](gui-renderer.html) §14: the UI restores inside the Q2 bar at both resolutions, in the shell and in game, and the exclude list does not grow); the world passes reading `main+0x143A7` were wrong at Gamma ≠ 12 — which is every instance here, the template prefix carries Gamma 15 — **fixed 2026-09-09**, §2.3f; on by default since 2026-09-08 (§2.8; `tagpu_gui.off` turns it off, `tagpu_gui.on` still carries the tokens); **phase 2 — the UI scaled — was designed 2026-09-08** ([GL UI renderer](gui-renderer.html) §13, roadmap G17a–e: the 1× mirror kept as the oracle with a device-res sharp layer beside it, a string op for text, our cursor at 1× device size, the minimap regenerated with the engine's dots) |
 
 **Phases.** Phase 0 (foothold) is complete and Phase B (blit-level GPU units) is verified
 complete. Phase D's scene takeover — G13a through G13e — has landed, which is what the table
@@ -487,7 +487,7 @@ answer `ui-markers.md` §6.1 gives for everything else outside the 1× viewport.
 over the viewport** (`ARMOPT`, `EXITMENU`) are unchanged and still take the transform as though
 they were world, which was already true before this and is not verified either way here.
 
-### 2.3e The GL UI layer — observers, publisher, twins (`tagpu_gui_hook.c`, `tagpu_gui_surf.c`, `gui.on`, Phase E G15a + G15b + G15d)
+### 2.3e The GL UI layer — observers, publisher, twins (`tagpu_gui_hook.c`, `tagpu_gui_surf.c`, `gui.on`, Phase E G15a + G15b + G15d + G15e)
 
 Nothing here changes what the engine draws. Every site is an **observer detour**
 (`tagpu_detour_observe`): the original runs unchanged, we read its arguments on the way in and,
@@ -575,6 +575,43 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   (`main+0x143A7`, re-uploaded when it moves). The cursor's rect (`*(0x51FBD0)+0x1B2/+0x1B6/
   +0x1BA`) is left to the engine's frame. `strict` paints a miss magenta instead of falling
   back, outside the viewport or on a non-key pixel inside it.
+- *Classic++ (G15e, 2026-09-08):* every surface may carry a **colour twin** — `GL_RGBA8`, the
+  same size, `COLOR_ATTACHMENT1` of the twin's own FBO — and the sprite and copy programs are
+  **MRT**, so one draw writes the index and the restored colour together. A sprite takes the UI
+  atlas's restored texel where the atlas has one (alpha 1); **a copy carries both channels**,
+  which is what makes restored art survive the `panel+0xBC` → frame blit, and a copy from a
+  source with no colour twin writes zero and so invalidates the destination there. Seeds and
+  pixel ops carry indices only and drop the colour of their box. The layer chooses **per texel**:
+  restored where alpha is 1, the live palette elsewhere. **The palette-validity rule**: the
+  restore job snapshots the palette into a texture of its own, so its colours hold only while
+  that is still the palette the frame is *presented* with — compared every frame, colour ignored
+  while they differ, and after 30 still frames the job is rebuilt against the new palette and
+  every colour twin invalidated. **The UI also steps the restorer when nothing else does**: `tagpu_rglsl_step`'s
+  only other caller is the native pass, which returns early with no unit array — in the shell and
+  with the world passes disarmed — so without this the UI atlas's queue is never drained and the
+  shell stays indexed for ever (found by the landing review; `tagpu_rglsl_calls()` compared across
+  presents means the budget is still sliced once per frame). The atlas restores at **priority 4**
+  (`MAX_JOBS` is 6 since this landing; 0–3 are terrain, features, effects, 3DO units) and skips
+  frames under **12×12**
+  (`restoreMinEdge`, G15-0's verdict). Trigger token **`norestore`** is the A/B. Heartbeat gains
+  `cpp= col=<made>/<live> colvalid= rearms= rgb=`. **Colour reaches a twin only through a sprite
+  op, so seeded art stays indexed until the engine redraws it** — entering a game, the panel is
+  seeded and indexed until a repaint. Measured: `fps=60.0`, 37 415 of 45 056 px of the menu's
+  panel rect against `norestore`, **7 963 px of the 640×480 shell frame**, and `+gamma 15` → 235
+  entries differ, one re-arm, colour valid again ([GL UI renderer](gui-renderer.html) §14).
+  **The gate closed 2026-09-09 with the Q2 diff** (`uiwalk.py --restore` fills the atlas,
+  `tascene uidiff` holds the dumped twin to the same restorer run offline on the dump's own
+  cells): shell and game, 1024×768 and 1920×1080, **far band max 1 level on 0.0007–0.0017 % of
+  bytes, 0 unmatched, alpha and the replicated border exact**, and a near band bounded *tighter*
+  than the feature twin's the owner already accepted — so the `uirestore` exclude list stays as
+  G15-0 ruled it. Two facts it forced into the record: **`e->wrap` is decided once, when a frame
+  is first atlased, and a frame first seen while the palette is uniform keeps a tileability flag
+  the settled palette would not produce** (one entry of 34 in one shell run; restored the wrong
+  way it is 10 levels off over half its texels — the fix is to recompute it on the re-arm, not
+  taken here); and **the presented palette is `min(255, (int)(entry × 1.125))` on every instance
+  here**, because the template wine prefix carries `Gamma = 15` — so `paldiff=235` is the
+  ordinary reading, not the `+gamma` one, and every pass still on `main+0x143A7` draws the world
+  ~11 % darker than the engine presents its own pixels.
 - *Fresh starts:* the trigger reappearing, a GL context change (`tagpu_gui_glreset` from the
   overlay's reset), a queue or arena overflow, a sprite whose bytes never arrived, a copy
   from a source with no twin, and the consumer coming back from a stall (below) all raise

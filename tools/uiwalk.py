@@ -23,6 +23,15 @@ string, the `+bps` lines, the hold-space unit popup — then the dialogs over th
 viewport at zoom 0.5x and 2x (opened at 1x, zoomed by the file lever, so no click is
 bent), and finally a moving commander for the minimap's dots and box.
 
+G15e, the RESTORED TWIN (`--restore`). The DLL is armed with `tagpu_gui.on=log`,
+`tagpu_classicpp.on` and `tagpu_restoredump.on`: the layer draws in Classic++ colour and
+the walk's only job is to make every screen paint, so the UI atlas fills with the art the
+inventory draws. Nothing is shot and nothing is diffed here — the strict walk is not a
+valid regression while Classic++ is on, because it compares our frame against the engine's
+INDEXED surface. At the end the dumped twin (`tagpu_restore_gui.{r8,rgba,idx}`) is copied
+into --out, where `tools/tascene uidiff` holds it to the same restorer run offline on the
+same cells (gui-renderer.md 3.11's Q2 diff).
+
 The cycles (G15d, `--cycles N`): after the in-game stops, N times game -> shell -> game
 in ONE process (no relaunch): the exit dialogs over the world, the return to MAINMENU
 through the 640x480 context switch, the whole shell inventory again, the loading
@@ -38,6 +47,7 @@ atlas counts flat across three cycles" is read straight off the report.
     ../.venv-undither/bin/python tools/uiwalk.py --inst uiw --res 1920x1080 --layer --out /tmp/layer
     ../.venv-undither/bin/python tools/uiwalk.py --inst uiwc --side core --layer --game-only --out /tmp/layer-core
     ../.venv-undither/bin/python tools/uiwalk.py --inst uiwd --layer --game-only --screens-only --cycles 3 --out /tmp/cycles
+    tools/uiwalk.py --inst uiwr --restore --out /tmp/uirestore     # then: tascene uidiff /tmp/uirestore/tagpu_restore_gui
 
 The instance is created if needed and STOPPED at the end (kept for inspection with
 --keep). Everything goes through tacli; nothing here touches X.
@@ -194,13 +204,14 @@ def instance_dir(inst):
 
 
 class Walk:
-    def __init__(self, inst, out, res, parity=False, scenario=None):
+    def __init__(self, inst, out, res, parity=False, scenario=None, restore=False):
         self.inst, self.out, self.res = inst, Path(out), res
         self.out.mkdir(parents=True, exist_ok=True)
         self.rows = []
         self.gamedir = None
         self.log_seen = 0
         self.parity = parity
+        self.restore = restore
         self.scenario = scenario
         self.W, self.H = [int(v) for v in res.lower().split("x")]
 
@@ -382,7 +393,73 @@ class Walk:
         m = re.findall(r"zoom=([0-9.]+)", out) if out.strip() else []
         return float(m[-1]) if m else None
 
+    def stop_restore(self, label, actions, in_game=False):
+        """G15e (`--restore`): drive the screen and let the UI atlas fill. No census,
+        no shots — the measurement is the twin the DLL dumps at the end, held to the
+        offline restorer by `tascene uidiff`, and the only per-stop reading is how far
+        the atlas has grown and whether colour is live (`col=`, `colvalid=`)."""
+        for act in actions:
+            self.act(label, act)
+            time.sleep(0.4)
+        time.sleep(2.0)
+        rc, uiout = tacli("ui", self.inst)
+        screen = uiout.splitlines()[0].strip() if uiout.strip() else "?"
+        hb = self.heartbeat()
+        self.rows.append({"label": label, "screen": screen, "in_game": in_game, "lines": [],
+                          **parse_census([]), "heartbeat": hb, "zoom": None})
+        print(f"  {label:14s} {screen:40s} atlas={hb.get('atlas', '-')} col={hb.get('col', '-')} "
+              f"colvalid={hb.get('colvalid', '-')} paldiff={hb.get('paldiff', '-')} "
+              f"rgb={hb.get('rgb', '-')} fps={hb.get('fps', '-')}", file=sys.stderr)
+
+    def collect_dump(self, phase, tag="gui"):
+        """The DLL rewrites tagpu_restore_<tag>.{r8,rgba,idx} every time the atlas
+        grows and its queue drains, so the copy taken at the end of a phase is that
+        phase's fullest. Nothing here waits: `dump_if_armed` only writes when the job
+        is idle, so a file that exists is a complete twin.
+
+        TAKEN ONCE PER PHASE because the atlas does not survive the shell -> game
+        context switch (`gui: atlas reset`): the shell's panels and buttons are gone
+        from it by the first in-game frame, so a single copy at the end of the walk
+        would diff the HUD and nothing else.
+
+        The .pal beside them is the walk's own addition and the diff needs it: the
+        twin was restored through the palette the frame is PRESENTED with, which is
+        the engine's table scaled by the Gamma option, and the game's own default
+        writes Gamma 15 -- a factor of 1.125, so the presented palette is NOT the
+        archives' palette.pal on any stock instance. `tacli shot` writes an 8-bit PNG
+        whose palette IS the presented one, so the shot taken here is the palette
+        record, and `colvalid=1` in the heartbeat is the proof the twin agrees with
+        it."""
+        got = []
+        for ext in ("r8", "rgba", "idx"):
+            src = self.gamedir / f"tagpu_restore_{tag}.{ext}" if self.gamedir else None
+            if src and src.exists():
+                shutil.copy2(src, self.out / f"{phase}-{src.name}")
+                got.append(f"{src.name} ({src.stat().st_size} bytes)")
+        pal = self.out / f"{phase}-tagpu_restore_{tag}.pal"
+        shot = self.out / f"{phase}-palette.png"
+        tacli("shot", self.inst, "-o", str(shot))
+        try:
+            from PIL import Image
+            im = Image.open(shot)
+            if im.mode != "P":
+                raise ValueError(f"the surface shot is {im.mode}, not an 8-bit palette PNG")
+            rgb = im.getpalette()
+            pal.write_bytes(bytes(b for i in range(256) for b in (rgb[3 * i], rgb[3 * i + 1], rgb[3 * i + 2], 255)))
+            got.append(pal.name)
+        except Exception as e:
+            print(f"  [{phase}] no presented palette: {e} — uidiff will fall back to palette.pal", file=sys.stderr)
+        idx = self.out / f"{phase}-tagpu_restore_{tag}.idx"
+        n = len([l for l in idx.read_text().splitlines() if l.strip()]) if idx.exists() else 0
+        hb = self.heartbeat()
+        print(f"dump [{phase}]: {', '.join(got) if got else 'NOTHING WRITTEN (is tagpu_restoredump.on armed?)'}"
+              f" — {n} entries, colvalid={hb.get('colvalid', '-')} paldiff={hb.get('paldiff', '-')}"
+              f"\n  tools/tascene uidiff {self.out}/{phase}-tagpu_restore_{tag}", file=sys.stderr)
+        return n
+
     def stop_at(self, label, actions, in_game=False):
+        if self.restore:
+            return self.stop_restore(label, actions, in_game)
         if not self.rows:
             self.census_lines()             # start the first window here
         for a in actions:
@@ -696,15 +773,26 @@ def main():
     ap.add_argument("--layer", action="store_true",
                     help="G15b/G15c: draw the GL UI layer (strict) instead of running the census, and diff our frame "
                          "against the engine's surface at every stop")
+    ap.add_argument("--restore", action="store_true",
+                    help="G15e: arm the layer with Classic++ and tagpu_restoredump.on, walk the inventory "
+                         "so the UI atlas fills with what every screen draws, and copy the dumped twin out "
+                         "for `tascene uidiff`. No census, no strict, no parity shots — the strict walk is "
+                         "not a valid regression while Classic++ is on (it compares against the engine's "
+                         "INDEXED surface), which is why this mode exists")
     ap.add_argument("--cycles", type=int, default=0,
                     help="G15d: after the in-game stops, this many game -> shell -> game cycles in one process "
                          "(the exit dialogs, the shell inventory again, the loading screen held, the fixture re-applied)")
     a = ap.parse_args()
     scenario = a.scenario or ("tascene-parity-core" if a.side == "core" else "tascene-parity")
-    w = Walk(a.inst, a.out, a.res, parity=a.layer, scenario=scenario)
+    if a.restore and a.layer:
+        sys.exit("uiwalk: --restore and --layer are different measurements: pick one")
+    w = Walk(a.inst, a.out, a.res, parity=a.layer, scenario=scenario, restore=a.restore)
 
     tacli("stop", a.inst)
-    tacli("arm", a.inst, "gui.on=strict log" if a.layer else "gui.on=census log pgm trace", check=True)
+    if a.restore:
+        tacli("arm", a.inst, "gui.on=log", "classicpp.on", "restoredump.on", check=True)
+    else:
+        tacli("arm", a.inst, "gui.on=strict log" if a.layer else "gui.on=census log pgm trace", check=True)
     if not a.no_passes:
         tacli("arm", a.inst, *ARM_SET, check=True)
     if not a.game_only:
@@ -716,6 +804,8 @@ def main():
         tacli("ui", a.inst, "wait", "--gui", "MAINMENU", "--timeout", "30")
         for label, actions in SHELL_WALK:
             w.stop_at(label, actions)
+        if a.restore:
+            w.collect_dump("shell")      # the atlas does not survive the switch
     if not a.shell_only:
         rc, out = tacli("scenario", "load", a.inst, scenario, "--restart", "--res", a.res, timeout=600)
         print(out.strip().splitlines()[-1] if out.strip() else "", file=sys.stderr)
@@ -739,6 +829,8 @@ def main():
             for label, actions in game_stops:
                 w.stop_at(label, actions, in_game=True)
             w.report()                          # a partial report survives a killed run
+    if a.restore and not a.shell_only:
+        w.collect_dump("game")
     w.report()
     if not a.keep:
         tacli("stop", a.inst)
