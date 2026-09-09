@@ -3175,7 +3175,7 @@ def _err_line(err):
 # engine's own. **The events are exact; the path is a sketch** and is never the
 # engine's movement model — nothing here was measured against a moving unit.
 
-MOTIONS = ("ground", "static", "circuit", "hover", "runin", "glide", "dive")
+MOTIONS = ("ground", "static", "circuit", "hover", "runin", "glide", "dive", "loop")
 
 # range and reload come from the weapon TDF; these are the fallbacks for a slot
 # whose weapon we cannot read, in world units and ticks.
@@ -3247,6 +3247,11 @@ class Director:
         self.radius = radius
         self.sfx_occupy = sfx_occupy
         self.activates = activates
+        # A VIEWING override, set by the page and never by a scenario: `ground`
+        # shuttles and stops, which is right for the trace fixtures and useless
+        # for looking at a walk cycle. Not cleared by reset(), so a restart keeps
+        # whatever the viewer chose.
+        self.path = None
         self.reset()
 
     def reset(self):
@@ -3306,9 +3311,25 @@ class Director:
         per = self.speed / float(SIM_RATE)                  # world units a tick
         x, y, z = (v / float(FIXED) for v in w.pos)
         moving = True
-        if self.motion == "static":
+        motion = self.path or self.motion
+        if motion == "static":
             moving = False
-        elif self.motion in ("ground", "glide", "dive"):
+        elif motion == "loop":
+            # A wide ground circle: never stops, never snaps a heading, stays in
+            # frame. `ground`'s shuttle does all three of those wrong for looking
+            # at a walk -- two 1 s dead stops a lap and a 180 deg flip in ONE tick,
+            # which reads as the unit walking backwards. Radius is set from speed
+            # so a lap is about 12 s at any class's pace.
+            radius = max(60.0, self.speed * 2.0)
+            a = t * self.speed / radius                     # radians travelled
+            x = radius * math.sin(a)
+            z = radius * math.cos(a)
+            y = 0.0
+            # heading is the TANGENT: position is (R sin a, R cos a), so the
+            # velocity direction is (cos a, -sin a) and TA's heading convention
+            # (0 = +z, direction = (sin h, cos h)) makes that h = a + pi/2.
+            w.body[1] = int(round((a + math.pi / 2) * 65536 / (2 * math.pi))) & 0xFFFF
+        elif motion in ("ground", "glide", "dive"):
             leg = self.radius / max(self.speed, 1.0)        # seconds to the far end
             cycle = 2 * (leg + 1.0)
             phase = t % cycle
@@ -3322,22 +3343,22 @@ class Director:
                 w.body[1] = 0x8000
             else:
                 moving = False
-            if self.motion == "glide":
+            if motion == "glide":
                 y = w.water / float(FIXED)
-            elif self.motion == "dive":
+            elif motion == "dive":
                 y = -18.0 * (0.5 - 0.5 * math.cos(t * 0.7))
-        elif self.motion == "circuit":
+        elif motion == "circuit":
             a = t * self.speed / max(self.radius, 1.0)
             x = self.radius * math.sin(a)
             z = self.radius * math.cos(a)
             y = self.alt
             w.body[1] = int(round(a * 65536 / (2 * math.pi))) & 0xFFFF
             w.body[2] = int(round(-0.35 * 65536 / (2 * math.pi))) & 0xFFFF   # the bank
-        elif self.motion == "hover":
+        elif motion == "hover":
             y = self.alt + 4.0 * math.sin(t * 1.6)
             w.body[1] = int(round(t * 0.25 * 65536 / (2 * math.pi))) & 0xFFFF
             moving = False
-        elif self.motion == "runin":
+        elif motion == "runin":
             z = -self.radius + t * self.speed
             y = self.alt if abs(z) > self.radius * 0.25 else self.alt * 0.6
             w.body[1] = 0
@@ -4128,6 +4149,8 @@ class Session:
         self.error = None
         self.diagnostics = []
         self.playing = False
+        # the viewer's motion-path override (transport `path`); None = the class's own
+        self.view_path = None
         self.speed = 1.0
         self.frames = []
         self.frames_from = 0
@@ -4235,6 +4258,7 @@ class Session:
                                      radius=radius,
                                      sfx_occupy=plan.get("sfx_occupy", False),
                                      activates=plan.get("activates", False))
+            self.director.path = self.view_path      # survives restart
             self.tick = 0
             self.director.step(0)   # Create, at the tick the page shows first
             self.record()
@@ -4664,6 +4688,11 @@ class Server:
             elif action == "restart":
                 s.playing = False
                 s.restart()
+            elif action == "path":
+                want = body.get("path") or ""
+                s.view_path = want if want in MOTIONS else None
+                if s.director is not None:
+                    s.director.path = s.view_path
             elif action == "speed":
                 s.speed = max(0.05, min(8.0, float(body.get("speed") or 1.0)))
             elif action == "class":

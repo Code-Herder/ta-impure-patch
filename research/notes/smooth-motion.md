@@ -220,6 +220,18 @@ Three things the instrument had to get right, or the comparison would not have b
   wrong way, once per stride**. `alerp` makes it the 5° step it is. Any implementation of §3.4 that
   skips this will look broken in a way that has nothing to do with the idea being tested.
 
+**The director's own path had to be fixed first, and it was not a rendering bug.** `[MEASURED
+2026-09-09]` `ground` — the motion sketch every walking class uses — is a shuttle: a leg forward,
+a **1 s dead stop**, then the return leg with the heading flipped `0 → 0x8000` **in a single
+tick**, and another 1 s stop. Its own docstring says the path "was never measured against a moving
+unit". Against a Peewee that is a ~90 wu leg (the radius is clamped to `0.5 × reach`), so the unit
+never gets going, stops twice a cycle, and reverses direction *without ever turning* — which reads
+exactly like walking backwards, because it is. None of that is the interpolation, and all of it
+drowns the thing being judged. `loop` is a new path added beside it — a wide ground circle sized
+from the class's speed (≈12 s a lap), tangent heading, never stopping — and it is what the page
+now selects by default. **`ground` is untouched**, because the nine trace fixtures replay against
+it: `tacob run --all` is 9/9 byte-identical after the change.
+
 The `body` checkbox interpolates the unit's *translation and yaw* as well. That is §8, not what the
 pose pass would ship — it defaults on so the leg difference is what you see, and turning it off
 shows the honest result of interpolating pieces alone (smooth legs on a stepping body), which is a

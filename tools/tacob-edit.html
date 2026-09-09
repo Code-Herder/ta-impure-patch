@@ -109,6 +109,10 @@
     <option value="0.25">¼×</option><option value="0.5">½×</option>
     <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
   </select>
+  <select id="path" title="the director's motion sketch. `shuttle` is the class's own — for ground units it walks a short leg, STOPS for a second and flips its heading 180 degrees in one tick, which is right for the trace fixtures and useless for judging a walk. `loop` walks a wide circle: never stops, never snaps.">
+    <option value="loop" selected>loop</option>
+    <option value="">shuttle (the fixtures' path)</option>
+  </select>
   <select id="posemode" title="smooth-motion.md gate 0 — does interpolating COB piece poses look better than the authored stepping?">
     <option value="stepped" selected>stepped</option>
     <option value="smooth">smooth</option>
@@ -644,6 +648,7 @@ $('step').onclick = () => transport('step', { n: 1 });
 $('restart').onclick = () => transport('restart');
 $('speed').onchange = () => transport('speed', { speed: +$('speed').value });
 $('posemode').onchange = layoutModels;
+$('path').onchange = () => transport('path', { path: $('path').value });
 $('cls').onchange = () => transport('class', { class: $('cls').value });
 $('scrub').oninput = async () => {
   scrubbing = true; live = false;
@@ -691,8 +696,12 @@ async function refreshState() {
   $('cls').value = state.class;
   paintDiags(state.diagnostics || []);
   drawTab();
-  if (first) say(`${state.scripts.length} scripts, ${state.pieces.length} pieces, ` +
-                 `${state.statics} statics`, 'ok');
+  if (first) {
+    say(`${state.scripts.length} scripts, ${state.pieces.length} pieces, ` +
+        `${state.statics} statics`, 'ok');
+    // the page defaults to `loop`; tell the director, which defaults to the class's own
+    transport('path', { path: $('path').value });
+  }
 }
 
 async function poll() {
