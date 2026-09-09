@@ -37,6 +37,41 @@ BOOL tagpu_mouse_nowarp(void)
    engine has always been handed the centre of its own screen, and that is kept
    exactly: a click on a letterbox bar is not a click at the nearest edge.
    Design: research/notes/gui-renderer.md 13.1. */
+/* THE TRUE DEVICE POINTER (tagpu, G17c). The engine only ever learns a point
+   in its own logical grid, so at k = 3 its cursor can only sit on multiples of
+   three device pixels; ours is drawn from the client-area point the same
+   message carried, which is where the pointer actually is. Kept here because
+   mouse_client_to_game is the one place that conversion happens, so recording
+   it there cannot drift from what the engine was told.
+
+   -1 means "no client point is known" -- the state after an injected click,
+   which sets the engine's cursor with no pointer behind it, and before the
+   first message of a session. The reader falls back to the engine's own
+   position scaled up, which is what the engine's cursor does anyway. */
+static volatile LONG s_cliX = -1, s_cliY = -1;
+
+void mouse_note_client(int cx, int cy)
+{
+    InterlockedExchange(&s_cliY, cy);
+    /* x LAST: the reader gates on x, so a torn pair can never be published */
+    InterlockedExchange(&s_cliX, cx);
+}
+
+void mouse_forget_client(void)
+{
+    InterlockedExchange(&s_cliX, -1);
+}
+
+int mouse_last_client(int* cx, int* cy)
+{
+    LONG x = InterlockedExchangeAdd(&s_cliX, 0);
+    LONG y = InterlockedExchangeAdd(&s_cliY, 0);
+    if (x < 0) return 0;
+    if (cx) *cx = (int)x;
+    if (cy) *cy = (int)y;
+    return 1;
+}
+
 int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
 {
     int x, y, inside;
@@ -50,11 +85,16 @@ int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
     {
         x = g_ddraw.width / 2;
         y = g_ddraw.height / 2;
+        /* the engine is being handed the centre of its screen, which is NOT
+           where the pointer is: drawing our cursor there would be a lie, so
+           the recorded point is dropped and the fallback takes over */
+        mouse_forget_client();
     }
     else
     {
         x = (DWORD)((cx - g_ddraw.render.viewport.x) * g_ddraw.mouse.unscale_x);
         y = (DWORD)((cy - g_ddraw.render.viewport.y) * g_ddraw.mouse.unscale_y);
+        mouse_note_client(cx, cy);
     }
 
     /* The clamp keeps the ORIGINAL unsigned comparison. `g_ddraw.width` is a

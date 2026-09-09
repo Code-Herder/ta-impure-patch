@@ -87,6 +87,7 @@
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
+#include "tagpu_gui.h"       /* tagpu_gui_cursor_own: whose cursor is on screen (G17c) */
 #include "tagpu_vpwide.h"
 #include "tagpu_shadow.h"    /* Classic++ cast shadows: the depth pass + read-back (G14i) */
 
@@ -327,6 +328,7 @@ static GLint  s_uLit, s_uSun, s_uAmb, s_uNorm;      /* Classic++ lighting */
 static GLint  s_uRestored;                          /* Classic++: the unit atlas's twin */
 static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepthScale;
 static GLint  s_uCKey = -1, s_uCSurfSz = -1, s_uCVp = -1;  /* composite: the key */
+static GLint  s_uCCurs = -1;                               /* G17c: the cursor rect */
 static float  s_zoom = 1.0f;
 static int    s_fboW = 0, s_fboH = 0, s_fboSS = 0;
 static int    s_palInit = 0;
@@ -529,6 +531,7 @@ static const char* CFS =
     "uniform ivec2 uSurfSz;\n"
     "uniform vec4 uVp;\n"          /* the rect the key fill covers, game px */
     "uniform int uKey;\n"
+    "uniform vec4 uCurs;\n"        /* G17c: the engine's cursor rect, game px */
     "void main(){\n"
     "  vec4 c = texture(uTex, uv);\n"
     "  bool empty = c.a < 0.004 && max(max(c.r, c.g), c.b) < 0.004;\n"
@@ -539,7 +542,19 @@ static const char* CFS =
     "  if (uKey >= 0 && px.x >= uVp.x && px.x < uVp.x + uVp.z &&\n"
     "                   px.y >= uVp.y && px.y < uVp.y + uVp.w) {\n"
     "    ivec2 p = clamp(ivec2(px), ivec2(0), uSurfSz - 1);\n"
-    "    if (int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5) != uKey) discard;\n"
+    /* G17c: THE CURSOR'S RECT COUNTS AS KEY. The engine blits its cursor into
+       the back buffer inside the flip, after everything we observe, so those
+       pixels are not the key and the discard above would let them through —
+       under the cursor the GL UI renderer already draws its own into the sharp
+       layer, and the screen would carry two. The rect is empty (w = h = 0)
+       unless tagpu_gui_cursor_own says ours is being drawn this frame, so this
+       is inert whenever the engine's cursor is the one on screen.
+       The cost is the engine's own in-viewport pixels inside that rect for one
+       frame — health bars, a nanoframe, chat — which its cursor had already
+       covered in the frame we are compositing. */
+    "    bool cur = px.x >= uCurs.x && px.x < uCurs.x + uCurs.z &&\n"
+    "               px.y >= uCurs.y && px.y < uCurs.y + uCurs.w;\n"
+    "    if (!cur && int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5) != uKey) discard;\n"
     /* THE KEY FILL MUST NEVER REACH THE SCREEN, NOT EVEN A FRACTION OF IT.
        This pixel of the engine's frame is the raw key — index 254, a bright
        cyan — so `c` has to land on BLACK here, the colour the engine paints
@@ -679,6 +694,7 @@ static void init_gl(void)
     s_uCKey = glGetUniformLocation(s_cprog, "uKey");
     s_uCSurfSz = glGetUniformLocation(s_cprog, "uSurfSz");
     s_uCVp = glGetUniformLocation(s_cprog, "uVp");
+    s_uCCurs = glGetUniformLocation(s_cprog, "uCurs");
     /* a GLSL uniform defaults to 0, and uKey 0 is an ACTIVE key — the whole
        frame would invert against palette index 0. Default it off explicitly. */
     if (s_uCKey >= 0) glUniform1i(s_uCKey, -1);
@@ -3401,6 +3417,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (s_uCSurfSz >= 0) glUniform2iv(s_uCSurfSz, 1, sz);
         if (s_uCVp >= 0) x_glUniform4f(s_uCVp, (float)vpL, (float)vpT,
                                        (float)vw, (float)vh);
+        /* G17c: an EMPTY rect unless the UI renderer is drawing the cursor
+           itself this frame — tagpu_gui_cursor_frame decided that before this
+           pass ran, precisely so the two erase the same rectangle. */
+        if (s_uCCurs >= 0) {
+            float cr[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+            if (!tagpu_gui_cursor_own(cr)) { cr[0] = cr[1] = cr[2] = cr[3] = 0.0f; }
+            x_glUniform4f(s_uCCurs, cr[0], cr[1], cr[2], cr[3]);
+        }
         x_glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, s_palTex);
         x_glActiveTexture(GL_TEXTURE1);

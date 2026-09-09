@@ -256,6 +256,15 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
         if (!(gx < 0 && gy < 0))
             mouse_client_to_game(gx, gy, &gx, &gy);
     }
+    else
+    {
+        /* G17c: an injected point is the engine's LOGICAL grid with no pointer
+           behind it. Dropping the recorded client point is what keeps the GL
+           UI renderer's cursor on the injected position instead of leaving it
+           at the human's real pointer, where it would disagree with every
+           gadget the engine thinks is under the mouse. */
+        mouse_forget_client();
+    }
 
     if (code == TAGPU_M_MOVEREL)
     {
