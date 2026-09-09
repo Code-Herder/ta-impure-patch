@@ -59,7 +59,10 @@
 #define VA_SETSTATUS    0x004A1080u
 #define VA_STAGEDRAW    0x004A81E0u
 #define VA_SETDIRTY     0x0049FA90u     /* gi+0xCCA = 1: repaint at the pump   */
+#define VA_DRAWLOCK     0x004C2470u     /* the counted pair GUI_Load draws under */
+#define VA_DRAWUNLOCK   0x004C2870u
 #define VA_UPDGUI       0x00491D70u
+#define VA_DRAWSCREEN   0x00468CF0u     /* the per-frame game-thread function  */
 
 #define GM_CTRLS  0x04
 #define GM_ONCMD  0x08
@@ -76,9 +79,22 @@ typedef void* (__stdcall *gui_load_fn)(void* gi, const char* name, int flags);
 typedef int   (__stdcall *set_status_fn)(void* gi, const char* name, int value);
 typedef int   (__stdcall *stage_draw_fn)(void* gi, int flags);
 typedef void  (__stdcall *set_dirty_fn)(void* gi);
+typedef int   (__stdcall *upd_gui_fn)(int);
+typedef void  (__cdecl   *lock_fn)(void);
 
-/* UpdateIngameGUI's prologue: `mov ecx,ds:0x511de8`. */
-static const unsigned char UPD_STOLEN[6] = { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 };
+/* DrawGameScreen's prologue: `sub esp,0x214`.
+
+   THE TICK IS HERE AND NOT ON UpdateIngameGUI, which is where it started.
+   UpdateIngameGUI has 21 call sites and NONE of them is the frame loop -- they
+   are transition and teardown handlers (0x460630 calls the level teardown
+   0x491B60 first) -- so an observer there is called on GUI events only, and a
+   poll hung off it never runs. Measured: with the tick there, creating the
+   trigger file did nothing at all and the module logged nothing, because
+   `before` was never entered while the game just ran. DrawGameScreen 0x468CF0
+   (tools/ta_symbols.txt, 4 call sites) is THE per-frame game-thread function,
+   and its entry is before any of the frame's drawing -- so a screen pushed
+   here is drawn by the same frame and nothing is done mid-composite. */
+static const unsigned char DRAW_STOLEN[6] = { 0x81, 0xEC, 0x14, 0x02, 0x00, 0x00 };
 
 /* ---- the geometry, from tools/guipanel.py (the source of truth) ---------- */
 #define PANEL_W   304
@@ -150,6 +166,7 @@ static int    s_stage[R_COUNT];
 static volatile LONG s_dirty;           /* a row moved: the cfg needs writing  */
 static DWORD  s_lastPoll;
 static int    s_want;
+static int    s_fresh;                  /* the next open is the PLAYER'S open  */
 
 static void mlog(const char* m)
 {
@@ -287,7 +304,14 @@ static int on_stack(char* main_p, void* gm)
     return 0;
 }
 
-static void menu_open(char* main_p)
+/* `fresh` = the player just opened the menu, so the plates take their values
+   from the levers. A re-open with fresh == 0 is a RECOVERY, and there the model
+   is ours and must survive: the engine tears the whole in-game GUI stack down
+   and rebuilds it (a new ARMMAIN2.GUI whose `under` is NULL) on a world click,
+   and our panel hangs over the world, so its own clicks do it too. Re-reading
+   the levers there put every plate back the moment it was clicked -- the cfg on
+   disk said assets=1 while the button still read Off. */
+static void menu_open(char* main_p, int fresh)
 {
     void* gi = main_p + OFF_GUIINFO;
     char* expect = main_p + OFF_EXPECT;
@@ -317,18 +341,35 @@ static void menu_open(char* main_p)
     *(void**)((char*)gm + GM_CTX)   = main_p;
     s_gm = gm;
 
-    read_state();
+    if (fresh) read_state();
     push_stages(gi);
-    ((stage_draw_fn)VA_STAGEDRAW)(gi, 0x40);
+
+    /* STAGE 1 IS WHAT BUILDS THE PANEL'S OWN SURFACE, and 0x400 suppressed it
+       along with the draw -- so this is not a repaint, it is the call GUI_Load
+       would have made, reproduced exactly: the same `flags | 1` (0x400 is
+       never passed on; 0x4AACB5 tests it and skips) under the same counted
+       lock pair. Getting this wrong is not subtle and not silent: with only a
+       0x40 repaint the panel had no surface, and the engine composited the
+       frame's own pixels at our rect -- the game drawn a second time from
+       x = 704 across. Stage 1 also reads the rect (0x4A8238: xpos -1 is the
+       centre-me sentinel), which is why the right-aligned xpos is written
+       BEFORE this and not after. */
+    ((lock_fn)VA_DRAWLOCK)();
+    ((stage_draw_fn)VA_STAGEDRAW)(gi, 0x20 | 0x1);
+    ((lock_fn)VA_DRAWUNLOCK)();
 }
 
 static void menu_close(char* main_p)
 {
     /* Restore the buffer and let UpdateIngameGUI pop us -- the mirror of the
-       engine's own idiom. Calling GUI_Pop here would fire OnCommand from
-       inside our own tick. */
+       engine's own idiom, and never GUI_Pop. It is CALLED rather than waited
+       for, because its 21 call sites are all events: left to itself the popped
+       screen would linger until the player next did something that changes the
+       GUI stack. 1 is the argument both of the engine's own visible call sites
+       pass (0x460635, 0x4929E3), and it only matters on the early-out path. */
     lstrcpynA((char*)main_p + OFF_EXPECT, s_saved, 16);
     s_gm = 0;
+    ((upd_gui_fn)VA_UPDGUI)(1);
 }
 
 /* ---- the engine calls this ----------------------------------------------- */
@@ -343,10 +384,12 @@ void __stdcall tagpu_menu_oncommand(void* gi)
 
     if (!gi || !main_p) return;
     idx = *(int*)((char*)gi + GI_UICHANGE);
-    if (idx < 0) {                          /* we were popped */
-        s_gm = 0;
-        return;
-    }
+    /* -1 IS NOT PROOF OF A POP. GUI_Pop does set gi->UIChange_f to -1 before
+       calling us (0x4A9673), but the pump also resets it (0x4AA096) and calls
+       us again on the same click -- measured, and treating that as a pop
+       destroyed the model on every click. `on_stack` in the tick is the
+       authority on whether our screen is still there. */
+    if (idx < 0) return;
 
     top   = *(char**)(main_p + OFF_TOPGUI);
     ctrls = top ? *(char**)(top + GM_CTRLS) : 0;
@@ -468,10 +511,12 @@ void tagpu_menu_present(void)
 /* ---- the per-frame tick, on the game thread ------------------------------ */
 static void menu_tick(void)
 {
+    static int s_firstTick;
     char* main_p = *(char**)TA_MAIN;
     DWORD now;
 
     if (!main_p) return;
+    if (!s_firstTick) { s_firstTick = 1; mlog("menu: first frame tick (DrawGameScreen)"); }
 
     /* Popped behind our back -- the game ended, the map changed, or something
        else took the stack down. Put the buffer back before the engine's own
@@ -483,11 +528,19 @@ static void menu_tick(void)
 
     now = GetTickCount();
     if (now - s_lastPoll >= POLL_MS) {
+        int want = exists(OPEN_FILE);
         s_lastPoll = now;
-        s_want = exists(OPEN_FILE);
+        if (want && !s_want) s_fresh = 1;          /* the rising edge is the open */
+        s_want = want;
     }
-    if (s_want && !s_gm) menu_open(main_p);
+    if (s_want && !s_gm) { menu_open(main_p, s_fresh); s_fresh = 0; }
     else if (!s_want && s_gm) menu_close(main_p);
+    else if (s_gm) {
+        /* Re-assert the name every frame. The engine rebuilds the in-game stack
+           on its own account, and the buffer is the only thing that keeps a
+           screen over the world from being popped at the next of 21 sites. */
+        lstrcpynA(main_p + OFF_EXPECT, SCREEN, 16);
+    }
 }
 
 static int __cdecl before_update(void* entry_esp)
@@ -538,14 +591,14 @@ void tagpu_menu_init(void)
     wrote = tagpu_ufo_write(UFO_FILE, f, 1);
 
     armed = wrote && !exists(OFF_FILE) &&
-            tagpu_detour_bytes_ok(VA_UPDGUI, UPD_STOLEN, sizeof UPD_STOLEN) &&
-            tagpu_detour_observe(VA_UPDGUI, UPD_STOLEN, sizeof UPD_STOLEN,
+            tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
+            tagpu_detour_observe(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN,
                                  before_update, NULL);
     s_installed = armed;
 
     _snprintf(b, sizeof b,
               "menu: %s " UFO_STAMP " ufo=%d rows=%d gui=%d bytes "
-              "(RENDER.GUI over UpdateIngameGUI 0x491D70; open with " OPEN_FILE ")",
+              "(RENDER.GUI over DrawGameScreen 0x468CF0; open with " OPEN_FILE ")",
               armed ? "ARMED" : "NOT armed", wrote, s_nrows, len);
     b[sizeof b - 1] = 0;
     mlog(b);

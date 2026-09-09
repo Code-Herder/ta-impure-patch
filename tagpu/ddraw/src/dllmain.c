@@ -170,7 +170,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            FIRST static import of TotalA.exe, so DLL_PROCESS_ATTACH runs before
            the exe's entry point and therefore before any HAPI init: the archive
            is on disk in time by the loader's rules, not by luck. The screen
-           itself is one observer on UpdateIngameGUI 0x491D70, byte-matched,
+           itself is one observer on DrawGameScreen 0x468CF0, byte-matched,
            disjoint from every detour above; `tagpu_menu.off` disables it. */
         tagpu_menu_init();
 
