@@ -1140,20 +1140,23 @@ invalidation was watched on an exit to the shell: `posebake: dropped 53 geometry
 material with them) … GL 2`. *[The 27 this first quoted was an earlier run of the same test, before
 the drop line reported the cascade separately; both are real, but only one is the shipped build.]*
 
-### 2.11 The posed program (`tagpu_posedraw.c`, OFF by default, `tagpu_posedraw.on`) — G16 step 5
+### 2.11 The posed program (`tagpu_posedraw.c`, OFF by default, `tagpu_posedraw.on`) — G16 steps 5-6
 
 The pass that finally **draws** from §2.10's buffers. A unit is one `glDrawArrays` out of its type's
 geometry and material VBOs with its whole pose in a uniform block; no vertices are built for it on
-the CPU at all. Bodies only — `emit_slant`, `emit_wire`, the selection lines and the effects models
-are still CPU-built (step 6) — and the CPU body emitter stays beside it as Gate B's oracle until the
+the CPU at all. Since step 6 that covers **all three baked ranges** — the body, the structure-shadow
+slant and the nanoframe wireframe — which is every reader of `prim+0x22` except the selection lines
+and the effects models. The CPU emitters stay beside it as Gate B's and Gate D's oracle until the
 last commit of the gate.
 
 | | |
 |---|---|
 | **the program** | a TWIN of the native one: its own vertex stage (the port of `emit_node` — piece transform, `sx = ax + x` / `sy = ay + (-z - y/2)`, the depth key, the world x/z the fog samples, the model height the waterline clips on, and the shade quantised off the baked rest normal), and the native pass's **own** fragment stage, taken through `tagpu_native_unit_fs()` rather than copied |
 | **the shadow-depth twin** | the same vertex shader with an empty fragment shader and `uDepthPass = 1`, mirroring `tagpu_shadow.c`'s `VS_U`/`FS_NONE`, so a colour-keyed texel casts on both paths |
-| **the Classic silhouette** | routed through the posed program too — it reuses the body geometry, so a posed unit would otherwise lose its shadow whenever Classic++ is off. A structure's *slant* is still CPU-built and is skipped here |
-| **the pose** | a std140 block, `vec4 uRow[3*256]` + a packed `vec4 uPieceFlag[64]` = **13 312 bytes**. `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time and the pass **refuses to arm** below that, so a driver that cannot hold the block leaves every unit to the CPU emitter rather than drawing them wrong |
+| **the Classic silhouette** | routed through the posed program too — it reuses the body geometry, so a posed unit would otherwise lose its shadow whenever Classic++ is off |
+| **the three ranges** (step 6) | `uRange` selects. **BODY** as above. **SLANT** takes `0x45A610`'s projection `(x + y/4, −z − y/4)` off the posed vertex snapped to whole units, the neutral SHD row, `waterT`/`digT` pinned at −1e9 by the pass itself (the structure branch never erases — the G14j fix), and its own per-piece rule `(P_FLAGS & 3) == 3`. **WIRE** is `GL_LINES` on the body projection, one notch nearer (+0.15), the nanoframe's animated blue from a uniform because it is per unit while the material stream is per type and owner |
+| **the 16.16 snap** (step 6) | the posed vertex is rounded onto the engine's own grid — `floor(m·65536 + 0.5)/65536` — **before anything reads it**, in every range. The engine holds each posed vertex as three 16.16 integers and every CPU emitter reads them back as `v[i]/65536.0f`, so a float compose that stops short sits up to half an LSB off a value that is exactly representable; `recon_prim` rounds the same way. This is what makes the slant portable at all (its `>>16` is a FLOOR, so half an LSB is a whole screen unit) and it took the body's residual to zero as well |
+| **the pose** | a std140 block, `vec4 uRow[3*256]` + two packed per-piece words, `uPieceFlag[64]` (shaded) and `uPieceVis[64]` (0 not drawn / 1 drawn / 3 drawn and casting) = **14 336 bytes**. `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time and the pass **refuses to arm** below that, so a driver that cannot hold the block leaves every unit to the CPU emitter rather than drawing them wrong. The wire reads the same word rather than the all-zero matrix: a zero-area triangle provably produces no fragments, a zero-length LINE is not promised away, and one bright pixel per hidden edge would land on the unit's origin |
 | **the topology** | consumed from the bake entry's `parent[]` — `pose_accum_body`'s per-unit sibling scan is gone from the posed path, which is what §2.10 cached it for |
 | **the VAO** | one per material stream, built at bake time, binding the geometry buffer (locations 0-3) and the material stream (4-6) together, so a draw is one bind |
 | **the model top** | `s_emitTop` no longer falls out of the vertices: it is each piece's baked BODY-range rest AABB through its pose matrix. An **over-estimate** (an AABB through a rotation bounds the posed points), and it covers faces the material stream collapses. Wrecks only — a unit with a record prefers `model_aabb` |
@@ -1161,13 +1164,21 @@ last commit of the gate.
 **Fields we write: none.** Every engine read is one the emitters already make; the pass adds GL
 objects and no engine state.
 
-**What it measured** (1024x768, `ss=2`, the sim paused — [GPU posing](gpu-posing.html) has the full
-table): on `pose-inventory` **27 of 28 units posed, `skip=0`**, and against the CPU emitter **2
-differing pixels of 786 432**; with `poserecon.on` on both sides, so the diff isolates the port
-alone, **1 pixel**. On `200v200` — 209 units gathered, 111 posed, 12 879 triangles — **0 differing
-pixels**, with the CPU vertex stream down from **33 279 verts to 132**. Both diffs are single-pixel
-edge flips, which is the shape [GPU posing §5](gpu-posing.html) predicts; neither is the "whole face
-one SHD row off" tell that would mean the shade quantisation is wrong.
+**What it measured**, 1024x768, `ss=2`, the sim paused, one build, twelve scenes —
+[GPU posing](gpu-posing.html) §4 step 6 has the full table. With `poserecon.on` on **both** sides,
+which is Gate B's protocol and isolates the port: **0 differing pixels of 786 432 on eleven of
+twelve scenes and 1 on the twelfth**, across four camera stops of `pose-inventory`, `200v200` at
+128 posed units and 13 219 triangles, a six-nanoframe wire sweep, and all five G14j shadow
+fixtures. Against the engine's own posed buffer the worst scene is 43 pixels (`shadow-struct`) —
+but **that column is the reconstruction, not the port**: running the CPU emitter against itself
+(`poserecon.on` vs off, the posed pass out of the picture) reproduces it row for row, and it is in
+the shipping build today because the guard falls back to the reconstruction on a torn read. Every
+differing pixel in the table is isolated; nothing is the "whole face one SHD row off" tell that
+would mean the shade quantisation is wrong. **Gate B and Gate D both PASSED.**
+
+*[The step-5 numbers this paragraph used to carry — 2 pixels and 1 pixel — were the shader not
+snapping the posed vertex onto the engine's 16.16 grid. Step 6 does, for every range, and the same
+fixtures read 0.]*
 
 **A trap this cost a crash to find.** `opengl_utils`' global `glGetIntegerv` is **NULL**:
 `wglGetProcAddress` returns NULL for GL 1.1 core entry points under wine, which is why

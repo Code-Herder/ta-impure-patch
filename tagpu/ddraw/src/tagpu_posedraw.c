@@ -251,31 +251,34 @@ static const char* VS =
     "  }\n"
     "  vec4 rp = vec4(aPos, 1.0);\n"
     "  vec3 m = vec3(dot(uRow[pb], rp), dot(uRow[pb+1], rp), dot(uRow[pb+2], rp));\n"
+    /* THE POSED VERTEX ONTO THE ENGINE'S OWN 16.16 GRID, before anything reads
+       it. This is not an optimisation of the slant's snap: it is the vertex's
+       REPRESENTATION. The engine holds every posed vertex as three 16.16
+       integers, every CPU emitter reads them back as `v[i] / 65536.0f`, and
+       `recon_prim` writes the reconstruction into the same form with the same
+       `floor(x * 65536 + 0.5)`. A float compose that stops short of it sits up
+       to half an LSB off a value that is exactly representable — see the file
+       header for why the representation is exact here — so rounding is what
+       makes the port reproduce the chain rather than approximate it. */
+    "  m = floor(m * 65536.0 + 0.5) / 65536.0;\n"
     /* the engine's projection, exactly as emit_node bakes it on the CPU — and,
-       for the slant range, 0x45A610's instead. `hy`/`hz` are the model y and z
-       the depth key, the waterline and the shadow point all read: for the
-       slant they are the value SNAPPED ONTO THE 16.16 GRID, because that is
-       what `emit_slant_at` reads back out of `v[1]`/`v[2]` after the engine (or
-       recon_prim) has rounded them. */
-    "  float px, py, hy, hz;\n"
+       for the slant range, 0x45A610's instead */
+    "  float px, py;\n"
     "  if (uRange == 1) {\n"
-    /* the posed vertex as the engine holds it: 16.16, round to nearest —
-       recon_prim's own floor(x*65536 + 0.5). Then emit_slant_at's snap:
-       `xi = v[0] >> 16`, `nzi = (-v[2]) >> 16`, `q = (v[1] >> 16) >> 2`, every
-       one of them an arithmetic FLOOR and never a truncation toward zero. */
-    "    vec3 fv = floor(m * 65536.0 + 0.5);\n"
-    "    float xi = floor(fv.x / 65536.0);\n"
-    "    float yi = floor(fv.y / 65536.0);\n"
-    "    float nzi = floor(-fv.z / 65536.0);\n"
+    /* emit_slant_at's snap: `xi = v[0] >> 16`, `nzi = (-v[2]) >> 16`,
+       `q = (v[1] >> 16) >> 2` — every one an arithmetic FLOOR and never a
+       truncation toward zero. `m` is already the 16.16 value, so `floor` of it
+       is the shift. */
+    "    float xi = floor(m.x);\n"
+    "    float yi = floor(m.y);\n"
+    "    float nzi = floor(-m.z);\n"
     "    float q = floor(yi / 4.0);\n"
     "    px = xi + q; py = nzi - q;\n"
-    "    hy = fv.y / 65536.0; hz = fv.z / 65536.0;\n"
     "  } else {\n"
     "    px = m.x; py = -m.z - m.y * 0.5;\n"
-    "    hy = m.y; hz = m.z;\n"
     "  }\n"
     "  vec2 p0 = uAnchor.xy + vec2(px, py);\n"
-    "  float md = clamp((2.0 * hy - hz) / 256.0, -1.8, 1.8);\n"
+    "  float md = clamp((2.0 * m.y - m.z) / 256.0, -1.8, 1.8);\n"
     /* the wire is emitted one notch NEARER than the surface it traces, so it
        wins against the solid part of the model: md reaches +-1.8 and the bias
        is 0.15, against the 2.0 half-gap between depth rows (emit_wire) */
@@ -313,12 +316,12 @@ static const char* VS =
     "  vUV = aUV; vFC = (uRange == 2) ? vec2(uWire, -1.0) : aFC;\n"
     "  vShade = shade;\n"
     "  vWorld = uAnchor.zw + vec2(px, py);\n"
-    "  vEnc = enc; vVY = hy; vNrm = un;\n"
+    "  vEnc = enc; vVY = m.y; vNrm = un;\n"
     /* the vertex's SHADOW-SPACE point, the expression tagpu_shadow.c's own
        depth program evaluates, so a unit's fragments look their shadow up on
        their own caster */
-    "  vShW = vec3(vWorld.x, uCast.y + uCast.z * hy,\n"
-    "              vWorld.y + (uCast.x + hy) * 0.5);\n"
+    "  vShW = vec3(vWorld.x, uCast.y + uCast.z * m.y,\n"
+    "              vWorld.y + (uCast.x + m.y) * 0.5);\n"
     "  if (uDepthPass == 1) gl_Position = uShadowMat * vec4(vShW, 1.0);\n"
     "}\n";
 
@@ -382,8 +385,9 @@ int tagpu_posedraw_ready(void)
         return 0;
     }
     /* THE BOUND IS CHECKED, NOT ASSUMED. GL 3.1 guarantees 16 KB and we need
-       13312, but a driver that reports less would silently give every unit the
-       wrong pose; refusing leaves them to the CPU emitter instead. */
+       PD_BLOCK (14336 since step 6's second per-piece word), but a driver that
+       reports less would silently give every unit the wrong pose; refusing
+       leaves them to the CPU emitter instead. */
     x_glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &maxBlock);
     if (maxBlock < PD_BLOCK) {
         _snprintf(b, sizeof b,

@@ -460,7 +460,10 @@ geometry, so a posed unit would otherwise silently lose its shadow whenever Clas
 *slant* is not posed (step 6), so a structure is still drawn from `sfirst` by the CPU loop and
 skipped by the posed one.
 
-**MEASURED 2026-09-09**, 1024x768, `ss=2`, the sim **paused** so the poses are frozen:
+**MEASURED 2026-09-09**, 1024x768, `ss=2`, the sim **paused** so the poses are frozen.
+*[SUPERSEDED by step 6, below: the pixel numbers in this table were the shader NOT snapping the
+posed vertex onto the engine's 16.16 grid, which step 6 fixed for every range. Re-measured on the
+same fixtures they are 0. The counts and the byte figures stand.]*
 
 | scene | result |
 |---|---|
@@ -482,6 +485,115 @@ above, not a frame time. Whoever takes the real number needs the cap lifted at l
 "before" half is **not perishable**, because both paths live in one build behind the lever until
 step 8.
 
+### Built 2026-09-09 — step 6, the slant and the wire, and what it measured
+
+The bake has held all three ranges since step 4 and step 5 drew one of them. Step 6 wires the
+other two — which is `emit_slant` and `emit_wire` off the CPU — as `uRange` in the posed vertex
+shader plus two draws that use it. `first[]`/`count[]` and the VAO were already there; what
+needed more than an offset is below.
+
+**THE SNAP IS THE STEP, and it turned out to be the body's too.** `emit_slant_at` floors the
+posed 16.16 value (`xi = v[0] >> 16`, `q = (v[1] >> 16) >> 2`, `nzi = (-v[2]) >> 16`), so §5's
+1–2 LSB become a whole screen unit whenever a coordinate sits within 2/65536 of an integer. The
+shader therefore rounds onto the grid before flooring — `floor(m * 65536 + 0.5) / 65536`, which
+is `recon_prim`'s own rounding.
+
+It was then obvious, and measured, that this is not a property of the slant at all: **the engine
+holds every posed vertex as three 16.16 integers and every CPU emitter reads them back as
+`v[i] / 65536.0f`**, so a float compose that stops short of the grid sits up to half an LSB from a
+value that is exactly representable. Step 5's shader stopped short, and that — not the shade
+quantisation, not the degeneracy test — is what its 1–2 stray pixels were. The snap now runs for
+**every** range, before anything reads the vertex, and on `shadow-lab` it took the port from 17
+differing pixels to **0**. *[The step-5 section above is corrected accordingly. The claim that a
+float32 shader "cannot close" §5's residual is still true of the residual against the ENGINE; it
+was never true of the residual against the RECONSTRUCTION, which is what Gate B measures.]*
+
+**What needed more than a `first`/`count`.**
+
+| | |
+|---|---|
+| the slant's per-piece rule | `(P_FLAGS & 3) == 3` — visible AND `cached`, which a COB's dont-cache clears (a CORE wind generator's mast and rotor; engine map, "Bit1 is the piece's `cached` flag"). It cannot ride the all-zero matrix body visibility uses, because such a piece still draws in the BODY range and needs its matrix there. So the block gains a **visibility word** per piece — 0 not drawn, 1 drawn, 3 drawn and casting — beside `shaded`: **14 336 bytes**, still inside GL 3.1's guaranteed 16 384, and the pass still refuses to arm below what it needs |
+| the wire's per-piece rule | `P_FLAGS & 1`, the body's own — but **not by the body's mechanism**. An all-zero matrix collapses a triangle to zero AREA, which cannot produce a fragment; it collapses a line to zero LENGTH, which the rasterisation rules do not promise away. One bright pixel per hidden edge would land exactly on the unit's origin, so the wire reads the same word rather than resting on driver behaviour |
+| the wire's colour | the nanoframe's animated blue is per UNIT while the material stream is per type and owner, so it arrives as a uniform on the flat path, key left at −1 as `emit_wire` writes it |
+| the wire's depth | `+0.15` in the shader, `emit_wire`'s own one-notch-nearer bias |
+| the waterline and digger | `_slant_set` pins both at −1e9 itself rather than taking them from the caller: the erases belong to the COMPLETED branch, never the structure branch, which is the G14j fix and a property of the range, not a choice |
+
+The emit loops skip a posed unit and the draws pick it up, with the same stencil dance, the same
+5 px offset, the same ground shift and the same line width. `nslant`/`nwire` in the `native:` line
+still count the unit whichever path drew it, and `posed=` grows ` slant=U/Ttri` and ` wire=U/Lln`
+when a scene has them.
+
+**MEASURED 2026-09-09**, 1024x768, `ss=2`, the sim **paused**, the pointer parked off the units,
+one build, twelve scenes. Each row is the lever on against the lever off; `recon` is
+`tagpu_poserecon.on` on **both** sides, which is Gate B's protocol and isolates the port, and
+`engine` is the lever off reading the engine's own posed buffer, which is what ships.
+
+| scene | posed | slant | wire | port alone (recon) | vs the engine's buffer |
+|---|---|---|---|---|---|
+| `pose-inventory` ground `1716 806` | 27 / 3936 tri | 4 / 610 tri | — | **0** | 1, 1 |
+| `pose-inventory` structures `2716 806` | 26 / 5849 | 23 / 4663 | — | **0** | 1, 1 |
+| `pose-inventory` extremes `3616 806` | 12 / 3336 | 8 / 2126 | — | **1** | 1, 1 |
+| `pose-inventory` air `2216 1606` | 17 / 2777 | 4 / 826 | — | **0** | 0, 6 |
+| `200v200` | 128 / 13 219 | — | — | **0** | 4, 0 |
+| `sfx-smoke` | 7 / 1094 | 1 / 76 | 2 / 822 ln | **0** | 8 |
+| a nanoframe sweep (3–90 %, six classes) | 9 / 1547 | 2 / 237 | 6 / 2199 ln | **0** | 0 |
+| `shadow-struct` | 5 / 709 | 4 / 500 | — | **0** | 43 |
+| `shadow-lab` | 6 / 923 | 5 / 712 | — | **0** | 1 |
+| `shadow-mix` | 4 / 531 | 1 / 76 | — | **0** | 0 |
+| `shadow-air` | 7 / 859 | 1 / 76 | — | **0** | 2 |
+| `shadow-air-fx` | 8 / 899 | 4 / 386 | — | **0** | 0 |
+
+of 786 432 pixels, and every differing pixel in the table is an isolated single pixel — no run
+longer than four, no filled region, so nothing in it is the "whole face one SHD row off" tell that
+would send decision 8 back.
+
+**The left-hand column is stable and the right-hand one is not.** The first five rows were taken
+twice, on two builds whose only difference is a C comment: the port column reproduced **exactly**
+(0, 0, 1, 0, 0) and the engine column moved (1/1/1/0/4 then 1/1/1/6/0), which is why it is quoted as
+two readings. That is not noise in the measurement — it is the thing the column measures. A scenario
+load leaves the animating pieces at whatever angle the tick reached, and the reconstruction's
+residual against the engine's buffer flips a coverage sample only where an edge happens to sit on
+one, so the count depends on the pose the shot caught. The port column does not move, because for a
+GIVEN pose the two paths now compute the same vertex.
+
+**The right-hand column is NOT the port, and it was measured rather than assumed.** Running the
+CPU emitter against itself — `poserecon.on` versus off, the posed pass out of the picture
+entirely — reproduces that column exactly, row for row: ground 1, structures 1, `200v200` 4,
+`sfx-smoke` 8, `shadow-struct` **43**, `shadow-lab` 1, `shadow-air` 2. It is the reconstruction's
+own residual against the engine's posed buffer, it is in the shipping build today (the guard falls
+back to the reconstruction on a torn read), and the posed pass adds nothing to it. That
+reproduction was taken on the **same** shots as the table row, which is why it matches to the pixel
+where a re-load does not. The one
+exception is the extremes stop, whose single pixel (delta 46, at 688,305) is present with the
+reconstruction on both sides and is therefore the port's own — one isolated coverage flip on the
+heaviest geometry in stock content.
+
+**`shadow-struct`'s 43 is the CORE wind generator, and it moves run to run.** The 43 pixels sit in
+a 16 x 19 box on `CORWIN`'s blades: thin, high-contrast, nearly edge-on quads whose silhouette runs
+close to parallel with the pixel grid, so the smallest positional difference flips a stretch of
+coverage samples at once and the delta is the blade-against-ground contrast (114) rather than the
+size of the error. The rotor is at a different angle every load, which is why the same fixture read
+17 on one pass and 43 on another. It is the sharpest thing in the fixture set for this residual and
+the reason to read the two columns separately.
+
+**Gate B: PASSED.** Its bar was "single-digit pixels, every one a single-pixel edge flip,
+characterised and written down". The port reads **0 on eleven of twelve scenes and 1 on the
+twelfth**, over four camera stops of the pose inventory, 200 units, both new ranges and all five
+G14j fixtures.
+
+**Gate D: PASSED at a stated tolerance.** On the five G14j structure-shadow fixtures the posed
+slant is **byte-identical** to the CPU slant for the same pose (0 pixels, five of five). Against
+the engine's own posed vertices the tolerance is **43 pixels of 786 432 (0.0055 %), all isolated,
+none of them the port's** — and the same 43 appear with the posed pass turned off, so the number
+bounds the reconstruction, which is what the shipping guard already falls back to. What is NOT
+claimed: byte-exactness against the engine, which §5 withdrew and which the reconstruction cannot
+deliver.
+
+**What step 6 does not close.** Gate C (the 62 s walk) is step 7 and has not run. The 200-unit
+frame time is still unmeasured and still needs the frame cap to survive the launch. The bake's
+level-generation invalidation is still owed its run. The selection lines and the effects models
+are still CPU-built, and are not part of this gate.
+
 ## 5. What cannot be byte-exact, and the gates that follow
 
 The engine's arithmetic is fixed point with rounding at every step. `0x4B7173` returns the pair
@@ -495,7 +607,11 @@ Our reconstruction composes float matrices and rounds **once**, which is where t
 model-unit residual comes from: it lands on a neighbouring 16.16 grid point, one or two LSB out.
 **A float32 vertex shader cannot close that** — reproducing `fistp`-per-level needs the products
 in double. So the roadmap's "0 differing pixels across the screen inventory" is not attainable as
-written. It bites in two very different places:
+written. *[SHARPENED 2026-09-09 by step 6: this is a statement about the residual against the
+ENGINE, and only that. The residual against the RECONSTRUCTION is closable and is closed — the
+posed vertex is rounded onto the engine's own 16.16 grid before anything reads it, which is what
+`recon_prim` does, so the two agree exactly. Measured: 0 differing pixels on eleven of twelve
+scenes. What is left in a frame is the reconstruction's residual, which the CPU path has too.]* It bites in two very different places:
 
 - **bodies** — 2 LSB is 3e-5 px; it flips a coverage sample only when an edge lands within 3e-5
   of it. Order one pixel per frame across a 1080p frame of units.
@@ -508,9 +624,9 @@ written. It bites in two very different places:
 | gate | what it compares | units | how |
 |---|---|---|---|
 | **A** | the reconstruction vs the engine's buffer | model units | `posewatch` `err=` over a screen inventory — the existing oracle, once Gate 0 has fixed it. **PASSED 2026-09-08, §0b** |
-| **B** | the CPU reconstruction vs the GPU port | pixels | a **paused** scene, `tagpu_poserecon.on` rendering the same pose through the old path; the diff isolates the port alone |
+| **B** | the CPU reconstruction vs the GPU port | pixels | a **paused** scene, `tagpu_poserecon.on` rendering the same pose through the old path; the diff isolates the port alone. **PASSED 2026-09-09**, §4 step 6: 0 differing pixels on eleven of twelve scenes and 1 on the twelfth |
 | **C** | the flicker regression | pixels | the 62 s walk protocol: frames >500 px → **0**, >1000 px → **0**, 1× as the control |
-| **D** | structure-shadow parity | pixels | the G14j fixtures, at a **stated tolerance** rather than "byte-exact" |
+| **D** | structure-shadow parity | pixels | the G14j fixtures, at a **stated tolerance** rather than "byte-exact". **PASSED 2026-09-09**, §4 step 6: byte-identical to the CPU slant for the same pose on all five, and 43 px of 786 432 against the engine's own vertices — a bound on the RECONSTRUCTION, reproduced with the posed pass off |
 
 Bar for B: single-digit pixels, every one a single-pixel edge flip, characterised and written
 down. A shade quantisation flip would show as a whole face one SHD row off, not an edge — if B
@@ -558,7 +674,10 @@ model at 3 `vec4` is 432 uniform components, and the biggest geometry bake in th
 5. **BUILT 2026-09-09** — `tagpu_posedraw.c` behind `tagpu_posedraw.on`; §4's step-5 section
    carries the numbers. The posed program and its shadow-depth twin; bodies only, behind a lever, both paths present
    — the CPU emitters live **only** as Gate B's oracle from here to step 8.
-6. Gate B on a paused scene; then slant and wire; then Gate D.
+6. **BUILT AND RUN 2026-09-09** — slant and wire through the posed program, then Gate B and
+   Gate D; §4's step-6 section carries the table. Both **PASSED**. The step that mattered was
+   snapping the posed vertex onto the engine's 16.16 grid, which is the representation every CPU
+   emitter reads back, and which step 5's shader had not done.
 7. Gate C, the walk protocol.
 8. **Last commit:** delete the CPU emitters, the pose guard, the rest-equality detector and
    `posewatch`, and the levers that only they answer to.
