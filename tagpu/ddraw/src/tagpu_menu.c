@@ -143,6 +143,34 @@ static const int SHADOW_VAL[3] = { TAGPU_SHADOWS_OFF, TAGPU_SHADOWS_HARD, TAGPU_
 /* Shadow quality -> shadowres=, whose own range is 256..4096 (tagpu_classicpp.c). */
 static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
 
+/* ---- the panel's own art -------------------------------------------------
+   The ground is a GAF the engine loads by itself -- but NOT through the id=12
+   gadget. The StageUpdateDraw dispatch (`jmp [eax*4+0x4A95F4]`, indexed by id)
+   sends only id 0 and id 11 to the branch at 0x4A84F2 that builds
+   `<prefix at gi+0xAB6 = "anims\\"><gadget name>.GAF` and loads it; id 12 goes
+   to 0x4A8ACA and looks its frame up in a bank it did not load. THE PANEL IS
+   THE LOADER: id 0's own name is the one GUI_Load stamped -- the screen name --
+   and the extension setter turns it into `anims\\<screen>.GAF`, whose frames an
+   id=12 then names.
+
+   The stock corpus says exactly this and settles it: ARMOPT.GUI's id=12 is
+   named OPTBG and anims/armopt.gaf holds one entry, OPTBG. PREFS.GUI's id=12
+   is IGOPT, which is in the SHARED commongui bank, while its own prefs.gaf
+   holds PREFSBG. VISUALRT.GUI's id=12 is VISUALSRT and there is no
+   anims/visualrt.gaf at all -- commongui again. So a screen's own GAF is
+   optional and the shared bank is the fallback, which is why the archive
+   carries anims/render.gaf (the screen is RENDER.GUI) holding one frame named
+   RENDERDD, and the .GUI's id=12 is named RENDERDD. No surgery on the bank at
+   gi+0x04 is needed, and none is done.
+
+   IT IS DRAWN, NOT SAMPLED, AND IT IS DRAWN IN PALETTE INDICES. A GAF frame is
+   8bpp, and the DLL has no palette at DLL_PROCESS_ATTACH -- so quantising an
+   RGB design at write time is not available. It does not need to be: TA's
+   palette 55..63 is a dark warm ramp and tools/guipanel.py's colours were
+   chosen against it (its GROUND_LO (46,40,29) is index 60 (47,43,27), its
+   RECESS_LO (23,20,14) is 62 (23,19,15), and so on), so the drawn panel is
+   expressible as nine indices with no colour of the game's in it. */
+#define ART_NAME   "RENDERDD"
 #define UFO_FILE   "impure-patch.ufo"
 #define SCREEN     "RENDER.GUI"
 #define ON_FILE    "tagpu_menu.on"
@@ -156,7 +184,7 @@ static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "G18-1"
+#define UFO_STAMP  "G18-3"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
@@ -177,6 +205,153 @@ static void mlog(const char* m)
 static int exists(const char* p)
 {
     return GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES;
+}
+
+/* The nine indices, and what tools/guipanel.py calls each of them. */
+#define IX_EDGE          63     /* the outer keyline, and a recess's sunken lip */
+#define IX_BEVEL_HI      55
+#define IX_BEVEL_LO      59
+#define IX_GROUND_HI     58     /* the face, lit end of the vertical ramp       */
+#define IX_GROUND_MID    59
+#define IX_GROUND_LO     60     /* ...and its shaded end                        */
+#define IX_RECESS_HI     61
+#define IX_RECESS_LO     62
+#define IX_RECESS_LIGHT  56     /* a recess's lit bottom/right lip              */
+#define IX_BOLT_HI       55
+#define IX_BOLT_LO       59
+#define IX_KEY            0     /* the frame's transparency index -- never drawn */
+
+#define DIV_TOP    30
+#define DIV_BOT   202
+#define PAD         2
+
+static void px(unsigned char* f, int x, int y, unsigned char v)
+{
+    if (x >= 0 && x < PANEL_W && y >= 0 && y < PANEL_H) f[y * PANEL_W + x] = v;
+}
+
+static void hline(unsigned char* f, int x0, int x1, int y, unsigned char v)
+{
+    for (; x0 <= x1; x0++) px(f, x0, y, v);
+}
+
+static void vline(unsigned char* f, int x, int y0, int y1, unsigned char v)
+{
+    for (; y0 <= y1; y0++) px(f, x, y0, v);
+}
+
+static void fillrect(unsigned char* f, int x, int y, int w, int h, unsigned char v)
+{
+    int i, j;
+    for (j = 0; j < h; j++) for (i = 0; i < w; i++) px(f, x + i, y + j, v);
+}
+
+/* A sunken band: dark lip above and left, lit lip below and right -- guipanel's
+   recess(), which is what every stock runtime panel paints and what makes a
+   stagebuttn plate sit IN the panel rather than on it. */
+static void recess(unsigned char* f, int x, int y, int w, int h)
+{
+    int j;
+    for (j = 1; j < h - 1; j++)
+        fillrect(f, x + 1, y + j, w - 2, 1,
+                 (unsigned char)(j * 2 < h ? IX_RECESS_HI : IX_RECESS_LO));
+    hline(f, x, x + w - 1, y, IX_EDGE);
+    vline(f, x, y, y + h - 1, IX_EDGE);
+    hline(f, x, x + w - 1, y + h - 1, IX_RECESS_LIGHT);
+    vline(f, x + w - 1, y, y + h - 1, IX_RECESS_LIGHT);
+}
+
+static void bolt(unsigned char* f, int cx, int cy)
+{
+    int i, j;
+    for (j = -3; j <= 3; j++)
+        for (i = -3; i <= 3; i++) {
+            int r2 = i * i + j * j;
+            if (r2 <= 9)  px(f, cx + i, cy + j, IX_BOLT_LO);
+            if (r2 <= 2)  px(f, cx + i, cy + j, IX_BOLT_HI);
+        }
+}
+
+static void divider(unsigned char* f, int y)
+{
+    hline(f, 10, PANEL_W - 11, y,     IX_EDGE);
+    hline(f, 10, PANEL_W - 11, y + 1, IX_BEVEL_HI);
+}
+
+/* tools/guipanel.py draw_panel(), in indices: the face's vertical ramp, the
+   black keyline and its top-left-lit bevel, four bolts, the two rules, and one
+   recess per row. */
+static void draw_panel(unsigned char* f, int rows)
+{
+    int y, i;
+
+    for (y = 0; y < PANEL_H; y++) {
+        int t = y * 3 / PANEL_H;            /* three steps is all the ramp has */
+        fillrect(f, 0, y, PANEL_W, 1,
+                 (unsigned char)(t == 0 ? IX_GROUND_HI :
+                                 t == 1 ? IX_GROUND_MID : IX_GROUND_LO));
+    }
+
+    hline(f, 0, PANEL_W - 1, 0, IX_EDGE);
+    hline(f, 0, PANEL_W - 1, PANEL_H - 1, IX_EDGE);
+    vline(f, 0, 0, PANEL_H - 1, IX_EDGE);
+    vline(f, PANEL_W - 1, 0, PANEL_H - 1, IX_EDGE);
+    hline(f, 1, PANEL_W - 2, 1, IX_EDGE);
+    hline(f, 1, PANEL_W - 2, PANEL_H - 2, IX_EDGE);
+    vline(f, 1, 1, PANEL_H - 2, IX_EDGE);
+    vline(f, PANEL_W - 2, 1, PANEL_H - 2, IX_EDGE);
+    hline(f, 2, PANEL_W - 3, 2, IX_BEVEL_HI);
+    vline(f, 2, 2, PANEL_H - 3, IX_BEVEL_HI);
+    hline(f, 3, PANEL_W - 3, PANEL_H - 3, IX_BEVEL_LO);
+    vline(f, PANEL_W - 3, 3, PANEL_H - 3, IX_BEVEL_LO);
+
+    bolt(f, 9, 9);
+    bolt(f, PANEL_W - 10, 9);
+    bolt(f, 9, PANEL_H - 10);
+    bolt(f, PANEL_W - 10, PANEL_H - 10);
+
+    divider(f, DIV_TOP);
+    divider(f, DIV_BOT);
+
+    for (i = 0; i < rows; i++) {
+        y = ROW_Y0 + ROW_PITCH * i;
+        recess(f, CTL_X - PAD, y - PAD, CTL_W + 2 * PAD, ROW_H + 2 * PAD);
+    }
+}
+
+/* One entry, one uncompressed frame (file-formats.md 3). Uncompressed is not
+   laziness: the DLL repaints this plane in place at screen-load time, and a
+   flat w*h copy is what makes that a memcpy rather than a re-encode. */
+static unsigned build_gaf(unsigned char* out, unsigned cap, int rows)
+{
+    const unsigned ENTOFF = 12 + 4;                  /* header + one offset    */
+    const unsigned TABOFF = ENTOFF + 0x28;           /* the frame table        */
+    const unsigned FRMOFF = TABOFF + 8;              /* the frame header       */
+    const unsigned PIXOFF = FRMOFF + 0x18;
+    unsigned need = PIXOFF + (unsigned)PANEL_W * PANEL_H;
+    unsigned v;
+
+    if (cap < need) return 0;
+    memset(out, 0, need);
+
+    v = 0x00010100u; memcpy(out + 0, &v, 4);         /* signature              */
+    v = 1u;          memcpy(out + 4, &v, 4);         /* one entry              */
+    v = ENTOFF;      memcpy(out + 12, &v, 4);
+
+    *(unsigned short*)(out + ENTOFF + 0) = 1;        /* one frame              */
+    v = 1u;          memcpy(out + ENTOFF + 2, &v, 4);/* entry signature        */
+    lstrcpynA((char*)out + ENTOFF + 8, ART_NAME, 32);
+    v = FRMOFF;      memcpy(out + TABOFF + 0, &v, 4);
+    v = 10u;         memcpy(out + TABOFF + 4, &v, 4);/* flag 10 = a fixed frame */
+
+    *(unsigned short*)(out + FRMOFF + 0x00) = PANEL_W;
+    *(unsigned short*)(out + FRMOFF + 0x02) = PANEL_H;
+    out[FRMOFF + 0x08] = IX_KEY;                     /* transparency index     */
+    out[FRMOFF + 0x09] = 0;                          /* raw 8bpp               */
+    v = PIXOFF;      memcpy(out + FRMOFF + 0x10, &v, 4);
+
+    draw_panel(out + PIXOFF, rows);
+    return need;
 }
 
 /* ---- generating the .GUI ------------------------------------------------- */
@@ -219,17 +394,22 @@ static int build_gui(char* b, int cap, int rows)
         "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
-        rows * 2);
+        rows * 2 + 1);
+
+    /* the ground: an id=12 whose NAME is the GAF frame, over the whole panel */
+    at = gput(b, cap, at, "[GADGET1]\r\n\t{\r\n");
+    at = common(b, cap, at, 12, ART_NAME, 0, 0, PANEL_W, PANEL_H, 0, 15);
+    at = gput(b, cap, at, "\t}\r\n");
 
     for (i = 0; i < rows; i++) {
         int y = ROW_Y0 + ROW_PITCH * i;
         /* the label, BESIDE its control -- every stock runtime screen puts it
            16 px above, which six rows have no room for (gui-gadgets.md 10.3) */
-        at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 1);
+        at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 2);
         at = common(b, cap, at, 5, "TEXT", LBL_X, y, LBL_W, ROW_H, 1, 15);
         at = gput(b, cap, at, "\ttext=%s;\r\n\t}\r\n", s_row[i].label);
 
-        at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 2);
+        at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 3);
         at = common(b, cap, at, 1, s_row[i].name, CTL_X, y, CTL_W, ROW_H, 1, 15);
         at = gput(b, cap, at,
             "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
@@ -574,9 +754,11 @@ static void read_tokens(void)
 void tagpu_menu_init(void)
 {
     static char gui[8192];
-    TAGPU_UFO_FILE f[1];
-    char b[220];
+    static unsigned char gaf[16 + 0x28 + 8 + 0x18 + PANEL_W * PANEL_H];
+    TAGPU_UFO_FILE f[2];
+    char b[240];
     int len, wrote, armed;
+    unsigned glen;
 
     read_tokens();
 
@@ -585,10 +767,15 @@ void tagpu_menu_init(void)
        genuinely confusing, and it costs a few ms. */
     len = build_gui(gui, sizeof gui, s_nrows);
     if (len < 0) { mlog("menu: NOT armed - the generated .GUI does not fit"); return; }
+    glen = build_gaf(gaf, sizeof gaf, s_nrows);
+    if (!glen) { mlog("menu: NOT armed - the panel frame does not fit"); return; }
     f[0].path = "guis/render.gui";
     f[0].data = gui;
     f[0].size = (unsigned)len;
-    wrote = tagpu_ufo_write(UFO_FILE, f, 1);
+    f[1].path = "anims/render.gaf";
+    f[1].data = gaf;
+    f[1].size = glen;
+    wrote = tagpu_ufo_write(UFO_FILE, f, 2);
 
     armed = wrote && !exists(OFF_FILE) &&
             tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
@@ -597,9 +784,9 @@ void tagpu_menu_init(void)
     s_installed = armed;
 
     _snprintf(b, sizeof b,
-              "menu: %s " UFO_STAMP " ufo=%d rows=%d gui=%d bytes "
+              "menu: %s " UFO_STAMP " ufo=%d rows=%d gui=%d gaf=%u bytes "
               "(RENDER.GUI over DrawGameScreen 0x468CF0; open with " OPEN_FILE ")",
-              armed ? "ARMED" : "NOT armed", wrote, s_nrows, len);
+              armed ? "ARMED" : "NOT armed", wrote, s_nrows, len, glen);
     b[sizeof b - 1] = 0;
     mlog(b);
 }
