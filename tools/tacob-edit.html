@@ -742,8 +742,10 @@ async function refreshState() {
   paintDiags(state.diagnostics || []);
   drawTab();
   if (first) {
+    const p = state.pace;
     say(`${state.scripts.length} scripts, ${state.pieces.length} pieces, ` +
-        `${state.statics} statics`, 'ok');
+        `${state.statics} statics` +
+        (p ? ` — ${p.wu_s} wu/s from MaxVelocity ${p.maxvelocity}` : ''), 'ok');
     // the page defaults to `loop`; tell the director, which defaults to the class's own
     transport('path', { path: $('path').value });
   }

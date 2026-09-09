@@ -3238,13 +3238,14 @@ class Director:
     this class's own idea of them."""
 
     def __init__(self, vm, world, motion="ground", slots=(), speed=60, alt=0,
-                 radius=480, sfx_occupy=False, activates=False):
+                 radius=480, sfx_occupy=False, activates=False, turn_rate=0):
         self.vm, self.world = vm, world
         self.motion = motion if motion in MOTIONS else "ground"
         self.slots = list(slots)
         self.speed = speed                       # world units a second
         self.alt = alt
         self.radius = radius
+        self.turn_rate = turn_rate               # FBI TurnRate, TAang a tick
         self.sfx_occupy = sfx_occupy
         self.activates = activates
         # A VIEWING override, set by the page and never by a scenario: `ground`
@@ -3321,6 +3322,15 @@ class Director:
             # which reads as the unit walking backwards. Radius is set from speed
             # so a lap is about 12 s at any class's pace.
             radius = max(60.0, self.speed * 2.0)
+            # and never tighter than the unit could actually turn: TurnRate is
+            # TAang a tick, so omega = rate/65536 * 2pi * SIM_RATE rad a second and
+            # the tightest circle it can hold is v/omega. For stock units this
+            # never binds (ARMCOM: 36 wu/s against 3.0 rad/s is a 12 wu circle,
+            # where the sketch asks for 72) -- it is a guard, not a change.
+            if self.turn_rate > 0:
+                omega = self.turn_rate / 65536.0 * 2 * math.pi * SIM_RATE
+                if omega > 0:
+                    radius = max(radius, self.speed / omega)
             a = t * self.speed / radius                     # radians travelled
             x = radius * math.sin(a)
             z = radius * math.cos(a)
@@ -3905,9 +3915,36 @@ def classify(fbi):
         return "sub"
     if on("floater") or on("waterline") or "SHIP" in cat:
         return "ship"
-    if "KBOT" in cat:
+    # ARMCOM reads `ARM commander LEVEL10 WEAPON NOTAIR NOTSUB CTRL_C` and CORCOM
+    # the same with CORE -- no KBOT word anywhere, so a plain KBOT test calls a
+    # walking commander a tank and drives it at a tank's pace.
+    if {"KBOT", "COMMANDER"} & cat:
         return "kbot"
     return "tank"
+
+
+def fbi_float(fbi, key, fallback):
+    """A numeric FBI field, or the fallback when it is absent or unparseable."""
+    try:
+        return float(str(fbi.get(key, "")).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
+def fbi_speed(fbi, fallback):
+    """World units a second, from the unit's own `MaxVelocity`.
+
+    The class plans below carry ONE speed per class, so every kbot moved at the
+    same pace: ARMPW is 1.8 and ARMCOM 1.2, and the commander was being walked
+    50% too fast. The ratio between units is exact -- it is the field the engine
+    itself reads. The **scale** is inferred: `MaxVelocity x SIM_RATE` puts ARMPW
+    at 54 against the 60 that was hand-chosen for kbots here, which is the only
+    correspondence we have. TA's unit for the field is not documented in these
+    notes and has not been measured against a moving unit in the game, so treat
+    the absolute pace as a good guess and the relative pace as right.
+    """
+    v = fbi_float(fbi, "maxvelocity", 0)
+    return v * SIM_RATE if v > 0 else fallback
 
 
 CLASS_PLANS = {
@@ -4253,11 +4290,12 @@ class Session:
             elif motion in ("circuit", "runin"):
                 radius = max(120.0, 0.55 * reach)
             self.director = Director(vm, world, motion=motion, slots=self.slots,
-                                     speed=plan.get("speed", 60),
+                                     speed=fbi_speed(fbi, plan.get("speed", 60)),
                                      alt=min(plan.get("alt", 0), 0.3 * reach),
                                      radius=radius,
                                      sfx_occupy=plan.get("sfx_occupy", False),
-                                     activates=plan.get("activates", False))
+                                     activates=plan.get("activates", False),
+                                     turn_rate=fbi_float(fbi, "turnrate", 0))
             self.director.path = self.view_path      # survives restart
             self.tick = 0
             self.director.step(0)   # Create, at the tick the page shows first
@@ -4344,6 +4382,13 @@ class Session:
                 "diagnostics": self.diagnostics,
                 "tick": self.tick,
                 "head": self.tick,
+                # what the director is ACTUALLY driving with, from the unit's FBI
+                "pace": ({"wu_s": round(self.director.speed, 1),
+                          "maxvelocity": fbi_float(self.project.meta.get("fbi") or {},
+                                                   "maxvelocity", 0),
+                          "turnrate": fbi_float(self.project.meta.get("fbi") or {},
+                                                "turnrate", 0)}
+                         if self.director is not None else None),
                 "first": self.frames[0]["tick"] if self.frames else 0,
                 "playing": self.playing,
                 "speed": self.speed,

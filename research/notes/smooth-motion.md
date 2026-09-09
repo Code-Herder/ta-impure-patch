@@ -259,6 +259,28 @@ running page** — the clock was twice "fixed" by reasoning (a bigger buffer, th
 and neither reasoned fix was the cause. `rAF` was steady at 16.7 ms ± 0.1 throughout; the jerk was
 always in what the clock did with it.
 
+**The director's pace came from a per-class constant, not the unit.** `[MEASURED 2026-09-09]`
+`CLASS_PLANS` carried one speed per class — 60 wu/s for every kbot — so ARMCOM walked at ARMPW's
+pace, **67% too fast**, and the walk cycle slipped against the ground accordingly. The FBI has the
+real number per unit: ARMPW `MaxVelocity` 1.8, ARMCOM 1.2, ARMSTUMP 1.7. The director now reads it
+(`fbi_speed`), and `TurnRate` bounds the loop so the circle is never tighter than the unit could
+hold — for stock units that guard never binds (ARMCOM: 36 wu/s against 3.0 rad/s is a 12 wu circle
+where the sketch asks for 72). Measured after the change: **1.199 wu/tick against the FBI's 1.2**.
+The `/state` reply and the page's status line now name the pace being used, so it is readable
+rather than something to re-derive.
+
+**The ratio between units is exact; the absolute scale is inferred.** `MaxVelocity × SIM_RATE`
+puts ARMPW at 54 wu/s against the 60 that was hand-chosen for kbots here, and that correspondence
+is the only anchor — TA's unit for the field is not documented in these notes and has not been
+measured against a moving unit in the game. Treat the relative pace as right and the absolute as a
+good guess.
+
+**And `classify` called a commander a tank.** ARMCOM's category is
+`ARM commander LEVEL10 WEAPON NOTAIR NOTSUB CTRL_C` — no `KBOT` word anywhere, so a plain `KBOT`
+test dropped both commanders to the tank plan. `{"KBOT", "COMMANDER"}` fixes it. The nine fixtures
+are unaffected by any of this: `run_class` replays from the recorded `cobtrace.log` and never
+builds a Director, which is why `tacob run --all` stays 9/9 across all three changes.
+
 The `body` checkbox interpolates the unit's *translation and yaw* as well. That is §8, not what the
 pose pass would ship — it defaults on so the leg difference is what you see, and turning it off
 shows the honest result of interpolating pieces alone (smooth legs on a stepping body), which is a
