@@ -40,4 +40,24 @@ void tagpu_reclaim_pass_end(unsigned frame_counter);
 int  tagpu_reclaim_teardown_active(void);
 
 int  tagpu_reclaim_armed(void);
+
+/* THE LEVEL GENERATION. Bumped once per level teardown, on the game thread, at
+   the top of the pre hook — before the cascade frees anything, and while the
+   render thread is already being held out of its pass.
+
+   It exists for the OTHER lifetime this module does not otherwise cover.
+   `FreeObjectState` owns the per-unit one: an `Object3do` and its posed vertex
+   buffers. But a `Model3DONode` tree — the model TEMPLATE — is shared by every
+   unit of a type, is not reached through that destructor, and its lifetime is
+   the LEVEL. Anything that caches a template pointer across frames (the whole-
+   tree AABB the shadow height reads, the select-box bounds, the glTF piece
+   map) therefore holds an address the next level's allocator may hand to a
+   different model — a wrong model drawn for the rest of the session rather
+   than a fault. Comparing this counter against the one an entry was built
+   under is what makes such a cache safe.
+
+   Read it from the render thread; it is a plain aligned 32-bit load. It starts
+   at 0, and on an exe where the teardown could not be hooked it never moves —
+   which is exactly the behaviour those caches had before it existed. */
+unsigned tagpu_reclaim_level_gen(void);
 #endif

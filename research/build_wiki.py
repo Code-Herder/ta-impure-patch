@@ -70,6 +70,7 @@ PAGES = [
     ("renderers",                  "Classic and Classic++ renderers", "Renderer"),
     ("gui-renderer",               "GL UI renderer (phase E)",    "Renderer"),
     ("thread-safe-destruction",    "Thread-safe destruction",     "Renderer"),
+    ("gpu-posing",                 "GPU posing for 3DOs (G16)",   "Renderer"),
 
     ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
     ("model-export",               "Model export (3DO → glTF)",   "Tooling"),

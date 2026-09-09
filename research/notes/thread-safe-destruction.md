@@ -147,6 +147,78 @@ leak if the render thread is stuck), flush the queue while the reader is idle, t
 free normally. The tick detour clears the flag on the next live game. While the flag is set, any
 death frees synchronously, which is safe because the reader is quiesced.
 
+### 6a. The level generation — what the deferral does NOT cover
+
+`[BUILT 2026-09-08]` `FreeObjectState` owns one lifetime: an `Object3do` and the posed vertex
+buffers hanging off it. It does not own the **model templates**, and they are not merely
+unclassified — **`0x42DB90` frees them**, called from the teardown cascade at `0x491C21`.
+`[BINARY-VERIFIED 2026-09-08]` it walks the model-pointer table `main+0x14377` bounded by
+`main+0x1438F` (`esi` runs over the unit defs at `main+0x1439B`), `MEM_Free 0x4D85A0`s each entry
+(`0x42DC01`) and nulls its slot (`0x42DC15`), then frees the table itself (`0x42DCB6`) and nulls
+`main+0x14377` (`0x42DCD8`). Those blocks go back to the same allocator whose small-block heap
+this note already documents as recycling aggressively, so a render-thread cache keyed on a
+template pointer is not protected by any of the machinery above **and** the address-reuse premise
+is not hypothetical.
+
+`tagpu_reclaim_level_gen()` is the counter that closes it: `InterlockedIncrement` in the
+**post hook**, after the cascade has freed the templates and before the reader is released.
+Unconditional — the pre hook's `busy` path keeps the queue and frees nothing of ours, but
+`0x42DB90` runs either way. A cache stamps its entries with the generation and drops them when it
+changes; the counter never moves on an exe where the teardown could not be hooked, which is the
+behaviour those caches had before it existed.
+
+**It must not be bumped in the pre hook, and this is a trap rather than a preference.** The render
+thread is not stopped by `pass_begin` — `render_ogl.c` ignores its return — it is stopped by
+`tagpu_overlay.c`'s `teardown_active()` gate at line 586, and `tagpu_native_frame` is thirteen
+lines further on, past `log_units` (file I/O) and the scaffold. A pass that cleared that gate
+before the flag was set runs on while the pre hook waits for it, so a generation bumped there is
+observed by a frame that then drops the caches **and refills them from templates the cascade has
+not freed yet** — stamping the new generation onto stale entries, which are then never dropped
+again. The first draft of this landing did exactly that; the landing review caught it.
+
+Its first client is `tagpu_native.c`'s three template caches — `s_aabb` (the whole-tree AABB the
+shadow height rule reads), `s_sbox` (the select box's bounds) and `s_pmap` (glTF piece → engine
+primitive). None of them was dropped by anything before this. Measured on a real teardown
+(surrender → main menu, Two Continents, one ARMCOM selected):
+
+```
+reclaim: level teardown (gen 0 -> 1): flushed 1 queued object(s), reader idle; the cascade frees synchronously
+native: level 0 -> 1, dropping the template caches: aabb=1 selbox=1 pmap=0
+```
+
+### 6b. **The teardown wrap freezes the game on quit-to-menu** — open, pre-existing
+
+`[MEASURED 2026-09-08]` Surrendering a skirmish (`Tab → EXIT → MAINMENU → CHOICE1`) **hangs the
+game while this module is armed.** The teardown line is written, a few more frames run, and then
+the process stops: no further log output, injected input produces none, every thread parked in a
+wait, no `ErrorLog` — the signature this project's notes give for a wild jump rather than a fault.
+
+| arm | runs | result |
+|---|---|---|
+| reclaim armed (default) | 2 — one on the DLL that adds the generation, one on the build before it | **freeze**, both |
+| `tagpu_reclaim.off` | 2 | reaches `MAINMENU.GUI`, log keeps growing, UI still readable |
+
+So it is **this module's teardown wrap**, and it is **not the level generation's doing** — it
+reproduces on the build immediately before that change. How far back it goes is **not
+established**: `roadmap.md`'s own G14h entry records "an in-process level exit … and a second
+game" working on 2026-09-06, so either that run took a different route out of the level or
+something has changed since. A clue, not a cause: the surviving runs log a **second**
+`tagpu: GL CONTEXT CHANGED` at the menu transition (an in-process map change replaces the
+context — `renderers.md`), and the frozen runs never reach it.
+
+**Why the harness never saw it:** every scripted session ends with `tacli stop`, which kills the
+process. Nothing in it had quit a level to the menu. It is on by default, so a player who
+surrenders a game hits it.
+
+**Not root-caused,** and one obvious candidate is already **disproven**: the post hook *does* run
+on both exits, so `s_teardown` and `s_defer` are restored. `[BINARY-VERIFIED 2026-09-08]` the
+tail-jump at `0x491C54` goes to `0x450DD0`, which takes no stack argument and has a single `ret`
+at `0x450E19`, so the stub's `call` returns and the post hook is reached — as
+`exe-reverse-engineering.md` §`0x491B60` already said. What is left to test: whether the pre
+hook's flush plus the `s_defer = 0` synchronous cascade can free one object twice, and what the
+render thread is doing across the context replacement the surviving runs reach and the frozen
+ones do not.
+
 ## 7. The reusable module
 
 **As built (G14h, `tagpu_reclaim.c`).** One class today — `FreeObjectState` — so the module is
@@ -316,3 +388,8 @@ the simulation.
   **Corrected a factual error:** `FreeObjectState` does not free the composite frames — `0x437C90`
   zeroes a registry entry and makes no call — so the frame at `obj+0x10` has a separate owner and
   its lifetime is now an open item, not "covered for free".
+- **2026-09-08** — `tagpu_reclaim_level_gen()` added (§6a): the model templates are a lifetime the
+  destructor detour never covered, and `tagpu_native.c`'s three pointer-keyed caches now drop on
+  it. Verified on a real teardown. In the course of that, found §6b: **the teardown wrap freezes
+  the game on quit-to-menu**, reproducible 2/2 against 2/2 clean with `tagpu_reclaim.off` — not
+  the generation's doing, but how far back it goes is unestablished; open, not root-caused.

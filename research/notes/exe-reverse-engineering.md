@@ -2563,6 +2563,27 @@ the game-state arrays (`0x491BC5`, `0x491BD9`, `0x491BED`). **The fork wraps thi
 flush the deferred queue while the registry is alive — or, if it does not leave within a second,
 keep the queue and keep deferring through the cascade) and a post hook (release it).
 
+### `0x42DB90` — the model templates are freed here, and only here
+
+`[BINARY-VERIFIED 2026-09-08]` Called once from the teardown cascade, `0x491C21`, the first call
+after `0x485980`'s unit walk. It is what makes a `Model3DONode` tree's lifetime the **level**:
+
+- it walks the model-pointer table `[main+0x14377]` — the same table the fork calls
+  `OFF_MODELPTRS` and indexes with `unit+0xA6` — bounded by the count at `main+0x1438F`, with
+  `esi` running over the unit defs at `main+0x1439B` (`0x42DB98`..`0x42DBEE`);
+- per entry: `MEM_Free 0x4D85A0` (`0x42DC01`), then the slot is nulled (`0x42DC15`,
+  `mov [eax+edi], ebx` with `ebx = 0`); two further `MEM_Free`s follow in the same body
+  (`0x42DC23`, `0x42DC52`);
+- then the table itself is freed (`0x42DCB6`) and `main+0x14377` nulled (`0x42DCD8`).
+
+**Why it matters to us.** `FreeObjectState 0x45AAA0` — the funnel `tagpu_reclaim` defers — never
+reaches these blocks: a template is not owned by any unit, it is shared by every unit of a type.
+So the deferral makes a dying unit's `Object3do` safe and does nothing for the tree, and anything
+that CACHES a template pointer across frames is holding an address that this function returns to
+`MEM_Free`, i.e. to the small-block heap documented above as recycling aggressively. That is the
+whole rationale for the fork's level generation
+([thread-safe destruction](thread-safe-destruction.html) §6a).
+
 ### Why the drain has no tick to ride — `0x4969D2`
 
 The only game-thread hook the fork owns is the scenario applier's `Game_MainLoopTick` detour at
@@ -2887,6 +2908,78 @@ without any `hide` in its script: they are one- and two-vertex marker nodes. Mea
 all eight fixtures that dumped a pose of their own unit — every `HIDDEN` piece is either such a
 node or one the unit's `Create` hides, with no exceptions and no false positives.
 
+### The repose, and the window it leaves open — `0x45AC20`, `0x45AB10`, `0x45B030`, `0x45B0A0`
+
+The posed vertex buffers (`prim+0x22`) are not built once. **They are rewritten in place, on the
+game thread, every time the pose is dirty — and the rewrite has two stages, with the buffer
+holding the model's REST vertices in between.** Read out of the binary 2026-09-08; this is the
+mechanism behind the one-frame pose pop the native pass showed on a walking commander
+(`gpu-status.md`, the pose-race row).
+
+**`Object3do+0x08` is the dirty flag, and it brackets the rewrite exactly.** Written 1 at:
+
+| site | when |
+|---|---|
+| `0x45AC89` (inside `DrawUnit 0x45AC20`) | the cached body turn `o3+0x18/+0x1A/+0x1C` differs from the live `unit+0x64/+0x66/+0x68` by ≥ 8 on any axis |
+| `0x45AB6C` (`0x45AB10`, the same test, called from the COB at `0x480EFC`) | as above |
+| `0x45ADA5` | the same test again, for each attached unit in `DrawUnit`'s cargo chain |
+| `0x480C90` | a COB `move` writes a piece position (`0x480C60`, the `MOVE` setter) |
+| `0x480D22` | a COB `turn` writes a piece angle (`0x480CE0`, the `TURN` setter) |
+
+and written 0 at `0x45AD28`, `0x45AC0A` and `0x45AE47` — the last thing each repose does. **There
+are THREE reposes, not two:** besides the one inlined in `DrawUnit` and the standalone
+`0x45AB10`, `DrawUnit`'s attached-unit chain carries a full third copy for each unit of the
+cargo — flag set `0x45ADA5`, entry gate `0x45ADCC`, the base piece's `rep movs` `0x45ADF3`, the
+tree reset `0x45AE1D`/`0x45AE2D` (both into `0x45B030`), the compose `0x45AE3C`, the clear
+`0x45AE47`. `[MEASURED 2026-09-08 against the pristine build]`; the set-site table above already
+listed `0x45ADA5`, and this note previously said the flag was cleared at two sites only, which
+left it with three sets and two clears. Nothing about the guard changes — the flag still brackets
+that repose exactly — but a transported unit's flag lifetime is the third site's, not the first's.
+The repose is **entered only when the flag is non-zero** (`0x45ACB1` / `0x45AB94` / `0x45ADCC`),
+so the flag is 1 for the whole of it. It is also 1 while the buffers are merely *stale* — a COB write the next `DrawUnit`
+has not composed yet — which is the common case and is perfectly consistent to read.
+
+**Stage 1, the reset.** `0x45ACC1..0x45ACF3` (and the identical `0x45ABA4..0x45ABD5` in
+`0x45AB10`) `rep movs` — the instruction itself is at **`0x45ACDD`**, `0x45ABBF` in the other
+copy — the node's own vertex array `node+0x24` back over the base piece's
+`prim+0x22`, `[node+0x04] × 12` bytes, and zero `prim+0x16/+0x1A/+0x1E` (the piece origin) and
+`prim+0x26`. **`0x45B030`** then does the same for the whole tree, recursing on `prim+0x2E`
+(child) and looping on `prim+0x2A` (sibling); a piece with `prim+0x26 != 0` is skipped unless it
+is the top-level call. At the end of this walk **every piece's posed buffer holds its rest
+vertices** — unrotated, unposed, no body turn.
+
+**Stage 2, the compose.** `0x45B0A0(ecx = Object3do, edx = base piece, [esp+4] = isChild)`:
+
+- on the **top-level call only** (`isChild == 0`, `0x45B0DB`) it adds the cached body turn into
+  the piece's own angle triple before using it — `o3+0x18` onto `prim+0x14` (the Z word),
+  `o3+0x1A` (the heading) onto `prim+0x12` (Y), `o3+0x1C` onto `prim+0x10` (X). **The body turn
+  is folded into the base piece's turn, not applied as an outer rotation**, which is only the
+  same thing when the base piece's own turn is zero — it is on every stock unit measured
+  (ARMCOM's base piece is `ground`, turn `(0,0,0)`).
+- it builds the origin triple as `prim+0x04/+0x08/+0x0C` (the COB `MOVE` delta) plus the node's
+  `+0x10/+0x14/+0x18` (the rest offset) — the same pair `0x43DEF0` uses — and calls
+  **`0x45B150`**, which for each piece rotates `prim+0x16` and then **every vertex of
+  `prim+0x22`, in place, one at a time, last to first** (`0x45B18C..0x45B1AA`) through
+  `0x4B6CC0`, and then adds the parent origin to the piece origin and to every vertex, again in
+  place (`0x45B1AC..0x45B204`). A piece with `prim+0x26 != 0` is left alone entirely.
+- `0x45B150` recurses on the child (`prim+0x2E`) and loops on the sibling (`prim+0x2A`), so the
+  tree is composed piece by piece.
+
+**The window.** Between the last `rep movs` of stage 1 and the moment stage 2 reaches a given
+piece, that piece's `prim+0x22` holds rest vertices; between the rotate loop and the translate
+loop it holds rotated-but-unmoved ones. Anything reading `prim+0x22` from another thread can
+see either. The whole rewrite is only microseconds for a 15-piece unit, which is why the pop is
+rare on an idle machine and clusters into bursts when the game thread is preempted inside it —
+and why `Object3do+0x08` is the only usable interlock: it is the one field that is set before
+the first write and cleared after the last.
+
+**The rebuild that leads to it is a different question.** `0x458810`'s dirty test
+(`[esp+0x10]`, built at `0x458870..0x4588F2`) is `drawCount == 0`, plus three structure /
+nanoframe / `unit+0x114` bit0 cases that all also require the composite cache `o3+0x10` to be
+null — it is **not** "the pose changed". A walking unit's composite is rebuilt because something
+else nulls `o3+0x10`, not because this test fires; the repose above runs in `DrawUnit`, before
+`0x458810` is called at all.
+
 ### `get` and `set` — the twenty value ids (tacob landing 4, 2026-09-07)
 
 `GET_UNIT_VALUE` and `GET` reach `vt+0x44` = **`0x480770`**, `SET` reaches `vt+0x40` =
@@ -3005,8 +3098,50 @@ in the unit's own frame and adds the unit's world position — `+0x6A` x, `+0x6E
   word. Because Y is the outermost factor, that is the same thing as applying the yaw last.
 - The returned z is **negated** (`neg ecx` at `0x43E00A`), which is what puts it on the world's
   map-depth axis.
+- **All three of the unit's words are live on a ground unit, not just the heading.**
+  `[MEASURED 2026-09-08]` Three ARMSTUMPs parked on Two Continents grass read `+0x64` (bank) /
+  `+0x68` (pitch) as `0x0C57`/`0xF047` = **+17.4° / −22.1°**, `0`/`0xEA2B` = **0 / −30.7°** and
+  `0`/`0x0146` = **0 / +1.8°** — the terrain's tilt, not the flat 0 a "heading" reading of
+  `+0x66` would suggest. Anything that rotates a unit-space point by the heading alone (the
+  selection rect did until 2026-09-08, `ui-markers.md` §1) is therefore right on level ground
+  and a few pixels out on a hillside. *[CORRECTED 2026-09-08: this bullet used to end "`+0x66`
+  alone stays correct for the body geometry only because the engine bakes just the yaw into
+  `vbuf` (`pose_dump`, err 0.00)". It does not. `vbuf` carries all three — the compose folds
+  the whole cached triple at `0x45B0DB` — and `pose_dump` read err 0.00 only on fixtures whose
+  bank and pitch happened to be zero. See "Checked against the engine's own vertex buffer"
+  below.]*
+- **`0x467A50(ctx, &pos, pts4, &angles)` — rotate four points, project them, draw the loop.**
+  `[BINARY-VERIFIED 2026-09-08]` `ret 0x10`; one caller, `0x46A5FB` inside
+  `DrawUnitSelectBoxRect`. Per point it calls `0x4B6CC0(pts[i], scratch, angles)` and then
+  projects with the **standard rule, one term at a time**:
+  `sx = ((rot.x + pos.x) >> 16) + 0x80` and
+  `sy = ((pos.z − rot.z) >> 16) − (((rot.y + pos.y) >> 16) >> 1) + 0x20` (`0x467A8C`..`0x467AC7`).
+  Both `>>` are arithmetic — floors — and the `sar 1` at `0x467AB5` halves the **already
+  truncated** height, so it is `floor(a) − floor(floor(b)/2)` and not `floor(a − b/2)`; the two
+  differ by a pixel on some edges. Each component is also narrowed through `movswl` before use.
+  The colour byte is read once from `main+0xDD5` and the four lines go out through
+  `DrawLine 0x4BE950` as `p0→p1→p2→p3→p0`. **Both scratch buffers are globals and therefore
+  peekable**: `*(main+0x14383)` holds the four rotated vectors (three 16.16 dwords each) and
+  `*(main+0x14387)` the four screen points (two ints each), for the **last box drawn** — which
+  is how our own redraw was held to the engine's own corner integers rather than to its pixels.
+- **`0x4CB650(model, &min, &max, flag)` is not a whole-tree AABB unless you ask for one.**
+  `[BINARY-VERIFIED 2026-09-08]` It seeds both vectors with `{0,0,0}` (`0x4CB65D`..`0x4CB675`)
+  and calls `0x4CB6A0(node, offset, min, max, flag)`, which accumulates the node's own vertices
+  (`node+0x24`, count `node+0x04`, offset `node+0x10/14/18` added and passed down to the child)
+  — but **skips a node with fewer than three vertices** (`0x4CB6D9` `cmp $2,eax; jle`, the
+  `0x45AF1B` threshold again) and **recurses into the child (`+0x30`) and the sibling (`+0x2C`)
+  only when `flag` is non-zero** (`0x4CB780` `test ebp,ebp; je`). The sibling is walked with the
+  *caller's* offset, the child with the accumulated one. `DrawUnitSelectBoxRect` passes
+  `flag = 0` (`push $0` @`0x46A55A`), so a selection box is the ROOT PIECE's vertices unioned
+  with the model origin — which is what makes it smaller than the model.
 
-**`0x4B6CC0(out, in, angles)`** rotates one vector by the three words, and **fixes the order**:
+**`0x4B6CC0(in, out, angles)`** rotates one vector by the three words, and **fixes the order**.
+*[CORRECTED 2026-09-08: the argument order is `(in, out, angles)` — `0x4B6CC4` takes arg1 as the
+source and `0x4B6D09` writes arg2 — which is what `effects.md` says.]* The rotation reads its
+angle words at `angles+0x00` for the `(x,y)` pair (`0x4B6CD6`), `angles+0x04` for `(y,z)`
+(`0x4B6CF6`) and `angles+0x02` for `(x,z)` (`0x4B6D1B`) — so for a caller passing a bare triple,
+word[0] drives the FIRST rotation and word[2] the second. Against a `PrimitiveStruct`, whose
+angle words sit at `+0x10/12/14`, that is:
 
 | Order | Pair rotated | `PrimitiveStruct` word | COB axis operand |
 |---|---|---|---|
@@ -3029,13 +3164,41 @@ off the two arrays, not off code.
 **Checked against the engine's own vertex buffer.** `tools/tacob pose-check --all` rebuilds
 each fixture's posed vertices from the rules above and diffs them against `P_VBUF`, which
 `tagpu_native.c`'s posedump prints beside the model-space vertex it came from. The residual is
-**exactly 0** on the kbot (45 points, 15 pieces, two turned), the building, the ship (40 points,
-a turned turret) and 0.002 on the submarine; the tank, fighter, gunship and bomber come out at
-4.1, 7.0, 48.4 and 77.2 world units — and `tagpu_native.c`'s own `err=` on the very same dump
-lines reads 5.45, 7.31, 48.37 and 77.19, i.e. **the vertex buffer is a frame or two behind the
-pose the dump sampled** and neither implementation can do anything about it. That also settles
-the two questions `model-import.md` left open: the composition order, and `MOVE` being a delta
-added before the rotation.
+**exactly 0 on every class** once the body turn is supplied in full. That also settles the two
+questions `model-import.md` left open: the composition order, and `MOVE` being a delta added
+before the rotation.
+
+*[CORRECTED 2026-09-08.] This paragraph used to record 4.1 / 7.0 / 48.4 / 77.2 world units on
+the tank, fighter, gunship and bomber and conclude that **the vertex buffer is a frame or two
+behind the pose the dump sampled**. That was wrong, and the way it was wrong is worth keeping:*
+
+- *`pose-check` passed `body=(0, yaw, 0)` and `tagpu_native.c`'s `pose_dump` rotated model space
+  by `unit+0x66` alone. **Both omitted the bank and the pitch**, which the compose folds at
+  `0x45B0DB` along with the heading. The two agreed to within 1.4 units on every fixture, and
+  that agreement was read as corroboration when it was a shared omission.*
+- *`[MEASURED 2026-09-08]` The missing words are recoverable from the tracked fixtures
+  themselves: each records its base piece's rest vertices (`node=`) beside the engine's posed
+  ones (`vbuf=`), and Kabsch on those pairs gives the rotation exactly. Supplying the recovered
+  triple takes **all eight classes to exactly 0** — and on five of the eight (kbot, tank,
+  building, ship, sub) the recovered heading reproduces the recorded `yaw` to within 2 units,
+  which is what says the recovery is sound rather than a fit: it never sees `yaw`. The tank is
+  the telling one — its residual was 4.11, so it is not one of the four that already read 0, yet
+  its heading comes back exact while its pitch comes back as the −12.34° that was being dropped.*
+- *`[MEASURED 2026-09-08]` Confirmed live: `pose_dump` now prints `body=` (the cached triple it
+  folds) and `live=` (`unit+0x68/+0x66/+0x64`), and a fresh capture of the tank and the bomber
+  reads **`err=0.00` on every piece**, against 5.45 and 77.19 before. The tank's recorded
+  `body=(63290,49152,0)` is exactly the triple recovered offline from its own fixture.*
+- ***The cached triple is not always the live one.*** *The tank read `body=` and `live=`
+  identical; the bomber read `body=(0,16128,3)` against `live=(0,44767,65508)` — a heading
+  28639 units (157°) apart, and it is `body=` that the drawn geometry follows. Which of the two
+  moves, and why, is **not established**. It matters because anything reconstructing a unit's
+  pose must fold `Object3do+0x18/+0x1A/+0x1C` and not `unit+0x64/+0x66/+0x68`; the fork's
+  `recon_begin` already does.*
+- *The fixtures in `research/notes/evidence/cobtrace/` were captured before `body=` existed, so
+  `pose-check` still reports the old residuals for them and labels them `legacy: yaw only`.
+  Regenerating them is `tools/cobtrace_fixtures.py`, and it also regenerates `cobtrace.log` and
+  needs `tacob fit-world` re-run for the tank's `replay.json` — a separate gate
+  (`tacob run --all`, nine byte-identical replays), not done here.*
 
 ### [REPLAY] The nine fixtures, re-run offline (tacob landing 3, 2026-09-07)
 

@@ -60,7 +60,10 @@ things remain from the original plan:
   `MOVE` delta (`PrimitiveStruct+0x04`) and the `TURN` triple (`+0x10`) accumulated down the
   tree. The `tagpu_posedump.on` probe it was written for has now been run, and it settled both
   the rotation convention and the axis the exported model has to be mirrored on — the residual
-  against the engine's own posed vertices is 2e-5 model units per piece. It also caught the
+  against the engine's own posed vertices is 2e-5 model units per piece. *[2026-09-08: that
+  probe folded the heading ALONE, which is right only where the bank and the pitch are zero —
+  the omission Gate 0 found ([GPU posing](gpu-posing.html) §0). The replacement pass still makes
+  it, so a glTF unit is posed without the terrain's tilt.]* It also caught the
   replacement pass applying the body yaw *inverted*, which had been invisible because the test
   scenario was parked at facing 90, one of the four facings where the two agree. Derivation and
   authoring guide: [model import](model-import.html); **(c)** true-colour and translucent
@@ -163,6 +166,43 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x465AC0` | `UnitInPlayerLOS(player, unit)` (`ret 8`) | *called by us*, on the game thread, to reproduce the target sprite's LOS rule and its last-seen cache write |
 | `0x485070` | `GetPosHeight(POS16_16*)` (`ret 4`) | *called by us*, on the render thread — a pure read of the height grid, which is what makes a range circle follow the terrain |
 | `0x4CCF60` | the glyph blitter (**cdecl**, 9 args, base and pitch taken directly) | *called by us*, on the present thread, once per distinct string — it reads the font object and writes our atlas and touches no engine state at all (`tagpu_text.c`) |
+
+**The selection rect is drawn at 1x, after the downsample, and matches the engine's pixels.**
+Four things had to be right and none of them was ([UI markers](ui-markers.html) §1, all measured
+2026-09-08 against the engine's own rect — `mark.on=noselbox` hands it back while everything
+else stays ours, so both boxes land in one `glshot`):
+
+1. **The rotation.** The four corners take `0x4B6CC0`'s triple — `Rz(u+0x64)` on `(x,y)`,
+   `Rx(u+0x68)` on `(y,z)`, `Ry(u+0x66)` on `(x,z)` — which is what `0x467A50` does to these
+   same points. The loop used the *transposed* yaw until 2026-09-08: a rotation by −heading, so
+   a unit turning on the spot had its box turning the other way (2× the heading off — invisible
+   at every multiple of 45°, obvious between them). The tilt words are not decoration either: a
+   tank on a hillside carries up to 17° of bank and 31° of pitch.
+2. **The bounds.** `0x4CB650(model,&min,&max,**0**)` seeds min and max with the ORIGIN, skips
+   any node with fewer than three vertices, and with that last argument 0 never leaves the root
+   node — so the rect is the root piece's own vertices, not the whole tree. Ours was the whole
+   tree and stood ~11 px taller with the bottoms aligned. `aabb_walk` is unchanged (it is the
+   shadow pass's model height); the rect has its own `selbox_aabb`.
+3. **The arithmetic.** The engine truncates each term of the projection separately and halves
+   the height with `sar 1` *after* truncating it. One float expression instead is a pixel out on
+   some edges: 46 of ~110 box pixels differed until that was reproduced, 7 after.
+4. **The line.** The engine's is Bresenham (`0x4BE950`): one fully coloured pixel per major-axis
+   step. Ours was a GL line in the 2x supersampled FBO, and **the driver clamps aliased line
+   width to 1** — `glLineWidth(ss*3)` was measured to draw pixel-identically to
+   `glLineWidth(ss)` — so it was one SUPERSAMPLE wide and resolved to about half the engine's
+   colour, (66,136,56) against a flat (83,223,79). It is now drawn into the **1x FBO right after
+   the box-downsample**, with the supersampled depth blitted down (`GL_NEAREST`, the only filter
+   a depth blit takes) so it still sits under its own unit. 100 % of our box pixels are then
+   exactly the engine's colour, and its own box differs from ours on 5–18 pixels of ~110 — a
+   Bresenham step landing on the other neighbour, or a pixel where ours is correctly occluded
+   and the A/B's engine box (which composites over our whole world) is not.
+
+Two consequences worth knowing. **Supersampled — the default — the rect draws after the marker
+layer**, so where a box edge crosses a health bar our line wins where the engine's bar would (the
+bars sit inside the box on every stock unit measured); the fallback site under `tagpu_ss.off`, or
+without `glBlitFramebuffer`, still draws it first, under them, so the two sites layer differently. And the same supersampling that dimmed the rect dims **every line
+and glyph the marker layer draws** — bars, order lines, range circles, the text atlas — which is
+the same fix one layer up, and is not done.
 
 **The order block is PORTED, not captured, since G13o.** `tagpu_order.c` re-derives §3 of
 [UI markers](ui-markers.html) — the driver's three selection rules, the walker's
@@ -600,7 +640,7 @@ objects of its own; the engine's behaviour is byte-identical with it armed, on o
 | `0x459200` | composite sprite → screen blit | `tracer` |
 | `0x469A05` / `0x469BA8` | the two `DrawUnit` return sites | `tracer` |
 | `0x4969D2` | the sim tick site (5 stolen) | `scenario` — applies a situation on the game thread |
-| `0x4B08C0` `0x4B0DA0` `0x4B19D0` `0x4B1A99` + the `E8` at `0x4B15E0` | the COB engine's thread allocator (5 stolen, wrapped: the original runs through the stolen prologue, then the start is latched), the thread runner's entry (5), the `RETURN` handler mid-function (5), the `signal` kill mid-function (6), and the `rand` handler's call into the sim RNG `0x4B6C30` (call-site redirect that calls it itself) | `cobtrace` (`tagpu_cobtrace.on`, its contents a unit-type filter) — the COB script-call oracle for tacob: S/R/X/K/D lines to `tagpu_cobtrace.log`, stamped with the sim tick `main+0x38A47`; reads only, game thread only; all five or none. `tagpu_posedump.on`'s header line now carries `tick=` and `idx=` so the two logs join — [exe-reverse-engineering](exe-reverse-engineering.html) §"The COB engine", [tacob-design](tacob-design.html) §"The trace contract" |
+| `0x4B08C0` `0x4B0DA0` `0x4B19D0` `0x4B1A99` + the `E8` at `0x4B15E0` | the COB engine's thread allocator (5 stolen, wrapped: the original runs through the stolen prologue, then the start is latched), the thread runner's entry (5), the `RETURN` handler mid-function (5), the `signal` kill mid-function (6), and the `rand` handler's call into the sim RNG `0x4B6C30` (call-site redirect that calls it itself) | `cobtrace` (`tagpu_cobtrace.on`, its contents a unit-type filter) — the COB script-call oracle for tacob: S/R/X/K/D lines to `tagpu_cobtrace.log`, stamped with the sim tick `main+0x38A47`; reads only, game thread only; all five or none. `tagpu_posedump.on`'s header line now carries `tick=` and `idx=` so the two logs join, and since 2026-09-08 `body=` (the cached triple the compose folds) and `live=` (`unit+0x68/+0x66/+0x64`) beside it, both in axis order — [exe-reverse-engineering](exe-reverse-engineering.html) §"The COB engine", [tacob-design](tacob-design.html) §"The trace contract" |
 | — | `tagpu_shadowdump.on`: the Classic++ shadow map written once as a 16-bit PGM, `tagpu_shadow.pgm` (near = small), with its matrix on the `shadow: dumped` log line — the lab's `debug=shadow` for the game; how a caster's silhouette in light space is checked instead of guessed (G14i) | `tagpu_shadow.c`, no engine address |
 | `0x485F50` `0x4864B0` `0x422DD0` `0x4224B0` `0x481550` `0x423C50` `0x43F0E0` `0x43AFC0` | `CreateUnit`, `KillUnit`, `FeatureName2ID`, `LoadFeature`, `GetGridPosPLOT`, `SpawnFeatureOnMap`, `ScriptAction_Type2Index`, `NewMainOrder2Unit` | `scenario` — *called by us*, never patched. **`NewMainOrder2Unit` takes 16.16 in `{x, altitude, depth}`**, the same convention as `CreateUnit`; we passed whole units in `{x, depth, altitude}` until 2026-09-04 and every ordered unit walked to the map origin — [exe-reverse-engineering](exe-reverse-engineering.html) §"The order module" |
 
@@ -635,6 +675,10 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x2A43` | the player id the health-bar and group-digit loop compares unit owners against (`0x46967D` → `[esp+0x70]`, read at `0x469CA6`/`0x469CC9`). Read only. **Not `main+0x2A42`**, which is what the order-marker driver `0x48CC30` uses for its player range — two bytes, two loops, one block, written independently at `0x416B25`/`0x416B38`. `tagpu_mark.c` was on `0x2A42` from G13d until G13p corrected it |
 | `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with (`tagpu_text.c`) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
+| **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
+| `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08, and what `hires_pose` still does |
+| the **level generation** (`tagpu_reclaim_level_gen()`) | not an engine field — our own counter, bumped on the game thread inside the teardown `0x491B60` and read on the render thread. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a) |
+| `node+0x24` | the model's REST vertices, `count × 12` bytes of 16.16. Read only. Shared by every unit of a type and never written after load, which is what makes the reconstruction in §2.9 safe to build from while the engine is rewriting the posed copy |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F06` bit2 / bit3 | the graphics options `Shadow` / `TShadow` (the blit tests `al,4` at `0x45928E`, [shadows & cloak](shadows-cloak.html) §2). Read only, per frame. The Classic silhouette needs both, the slant only bit2 — and **since G14i bit2 also gates the Classic++ shadow map** (with `shadows=1` in the cfg), so the player's in-game Shadows toggle keeps its meaning under the switch; bit3 is ignored there |
 | `main+0x37F2F` bit2 | `SelBoxes` |
@@ -773,6 +817,156 @@ relaunched with `--no-defaults` logged `opt: play defaults OFF` and armed only `
 and `shield`, the three that were never on the table. **Not measured**: a player's Windows, which
 is what the `_local` test VM is for; the defaults on a map change (the `*own` halves are attach
 time, the rest re-read every 30 frames, so nothing new is expected).
+
+### 2.9 The pose race, and the guard that closes it (`tagpu_native.c`, on by default, `tagpu_posefix.off`)
+
+**The bug.** A walking commander showed one-frame pops: for exactly one presented frame the unit
+was drawn in its **unrotated rest orientation** — upright, front-on, no body yaw — and then
+snapped back (~1400 changed pixels at 2× zoom, three frames of a 62-second walk). Zoom is an
+amplifier and not the cause: the event *rate* is the same at 1× and 2×, and zoom multiplies each
+event's on-screen size about fourfold in pixels.
+
+**The cause, and why nothing else can produce it.** The engine rewrites every posed vertex buffer
+`prim+0x22` **in place, on the game thread, in two stages** — first `rep movs` of the node's rest
+vertices back over it for the whole piece tree (`0x45ACC1`, `0x45B030`), then the compose that
+puts the piece turns and the body turn into them (`0x45B0A0` → `0x45B150`), one vertex at a time.
+The native unit pass gathers on the **render thread** and reads that buffer live. The only code in
+the engine that ever writes rest vertices into `prim+0x22` is that reset, so a frame that draws
+the unit at rest is a frame that read between the two stages. Full derivation and every address:
+[engine map](exe-reverse-engineering.html) "The repose, and the window it leaves open".
+
+**The interlock.** `Object3do+0x08` is set to 1 before the reset and cleared only after the
+compose returns, and the rewrite is entered only when it is non-zero — so it brackets the window
+exactly. `emit_geom` and `emit_slant` read it on either side of each piece's vertex copy (two
+`int` loads and a compiler barrier; x86 does not reorder loads with loads, so nothing stronger is
+needed). If it was set on either side the whole unit is re-emitted from the **pose fields** —
+`pose_accum`'s reconstruction, with **all three** cached body words folded into the base
+piece's turn the way `0x45B0DB` folds them (`pose_dump`'s `err=` is built from the same
+reconstruction since 2026-09-08, where it used to apply the heading alone — though not the same
+number: `recon_err` skips pieces whose visible bit is clear and compares `recon_prim`'s
+16.16-rounded output, `pose_dump` reports every piece including hidden ones, in float) — written into the same 16.16 representation the engine's buffer holds, so
+both emit paths consume it with the arithmetic they already had.
+
+The flag is *also* 1 while the buffer is merely **stale** (a COB `move`/`turn` the next `DrawUnit`
+has not composed yet), which is most of what trips the guard and would have been safe to draw.
+Nothing in the struct tells the two apart, and the reconstruction is the pose the engine is on its
+way to, so the guard does not try: it takes the fields whenever the flag says the buffer might be
+moving.
+
+**Why the fallback is not itself a change.** Forcing it for every unit on every frame
+(`tagpu_poserecon.on`, a measuring lever) renders **byte-identical** to the engine-buffer path —
+0 differing pixels of 1920×1080 on a parked commander, and the same change bbox as two
+consecutive engine-path shots on a scene with a spinning radar dish and a solar collector, i.e.
+the dish's own motion and nothing else. The oracle below reads the disagreement between the two
+as `0.00` model units in every five-second window that contains no trip.
+
+**The evidence, from inside the DLL.** `tagpu_posewatch.on` arms an oracle that, once per unit per
+frame, rebuilds the pose from the fields and reports the largest disagreement with the engine's
+buffer in model units, with the frame number and the dirty flag read on either side. A stale
+buffer reads a unit or two out; a buffer caught mid-rewrite reads the model's own size out — the
+readings run to the model's own size — 34.00, 38.63, 34.16, 33.03, 32.96, 32.82, 32.69,
+32.00, 25.23, 23.18, 22.24. **Every one of them had the dirty flag set on both sides**, which is
+the property the guard depends on, and the guarded pass reported the same event on the ones it
+sampled. `tagpu_posefix.off` leaves the guard measuring and draws the engine's buffer anyway,
+which is the baseline the fix is measured against; the guard deliberately finishes its walk rather
+than bailing at the torn piece, so that baseline is the emission the pass made before it existed.
+
+**Reproducing it costs scheduling pressure, not zoom.** The window is microseconds wide per unit
+and opens ~30 times a second, so on an idle machine with cores to spare a walk of a minute usually samples it
+never. Pinning the game to one core and putting spinners on that same core — its own render and
+game threads then have to timeshare, which is what a loaded machine does to a player — brings it
+to a handful of readings a minute. `_local` is not involved; a single core is used and nothing
+else on the machine is touched.
+
+**The regression, on the walk fixture** — Two Continents, one ARMCOM, static camera at
+`eye (1818, 850)`, zoom 2×, three south legs over 62 s, the transient detector run over the world
+band only (the frame's top carries the engine's message log, which scrolls on its own and
+produced the largest transient of one capture without a unit ever being drawn wrong):
+
+| capture | > 350 px | > 500 px | > 1000 px | worst |
+|---|---|---|---|---|
+| before the guard | 5 | **3** | **2** | 1403 px, the rest-pose draw |
+| guard on, run 1 | 7 | 0 | 0 | 475 px |
+| guard on, run 2 | 7 | 0 | 0 | 492 px |
+| guard on, run 3 | 0 | 0 | 0 | 294 px |
+| + rest-equality, run 1 | 0 | 0 | 0 | — |
+| + rest-equality, run 2 | 0 | 0 | 0 | — |
+
+The `> 350` band does not move and is not meant to: it is the walk itself — a leg swing or a fast
+yaw passes the "differs from both neighbours while the neighbours agree" test, and every ranked
+frame up to ~600 px opened as ordinary animation. What goes to zero is the band only a wrong pose
+reaches.
+
+**Cost.** Per piece per unit per frame on the common path: two `int` reads and a compiler barrier
+for the flag, plus — for the rest-equality test — a second stream of the piece's `nvert × 3`
+words XOR-accumulated inside the copy loop that already runs, and one `IsBadReadPtr` on the node's
+vertex array. That probe is the one avoidable part: the array is per model **type** and immutable,
+so its readability could be resolved once per type the way `pmap_for` caches the piece map, and is
+not. The reconstruction itself runs only on a trip. 60.0 fps before and after on the walk fixture,
+which is one unit — **no measurement exists at 200 units**, for this or for any of the options
+below.
+
+**A detector, not a lock — the residual window.** `Object3do+0x08` is a flag, not a sequence
+number, so "zero on both sides of the read" means *no rewrite started and finished across the
+read*, which is not the same as *no rewrite touched it*. A whole dirty-to-clean cycle falling
+strictly between the two flag loads is missed. How much smaller that is than the bug it replaces
+is the point: **before, any overlap at all between the pass's read and the rewrite produced the
+artifact** — which is exactly what the captures show happening — **and now the rewrite has to be
+strictly contained inside one piece's vertex copy.** From the trip rate (one in ~29 000
+unit-frames on an idle reference setup, at the ~30 Hz the COB writes a piece) the dirty interval is around a
+microsecond; one piece's copy is tens of nanoseconds. So a miss needs the *render* thread stalled
+inside those tens of nanoseconds for at least the whole interval — and most of what that lets
+through is benign anyway, two composed poses one tick apart mixed together. The rest-pose read
+specifically needs the stall in the gap between a piece's last vertex load and the flag load,
+with the entire remaining compose finishing in it.
+
+**The second detector, which has no timing hole — rest-equality.** The reset copies `node+0x24`
+over `prim+0x22` **verbatim** (`rep movs`), so mid-reset a piece *is* its node's vertex array;
+composed, it is that array through the accumulated transform. A piece that compares byte-equal is
+therefore either mid-reset or standing at an exactly identity transform — and the reconstruction
+is right for both, because at identity it reproduces the array itself. This tests the data rather
+than the clock, so no scheduling behaviour changes its answer. The compare folds into the copy
+loop the pass already runs (one more load and an OR per component, both arrays streamed once).
+
+It is applied only where equality would be a **contradiction** — the body turn, the piece's own
+`TURN` or `MOVE`, or its rest offset from its parent is non-zero, so the accumulated transform
+cannot be the identity. Without that gate a model facing exactly north whose base piece sits at
+the origin would compare equal every frame and take the reconstruction forever: correct output,
+for no reason. The gate reads local fields only, so it is conservative by construction — a piece
+whose own fields are all zero under a rotated parent is skipped and left to the flag. It catches
+what the flag can miss, never the reverse, and the two run together.
+
+**Measured, and it is specific.** Under the amplifier with the fix off and the oracle armed, a
+62-second walk on the reference setup tripped the guard 16 times; the **one** window whose oracle reading was a
+mid-rewrite buffer (`err=22.23` model units, `dirty=1/1`) is the **only** window where the
+rest-equality counter moved (`rest=1`). The other fifteen trips were stale buffers — validly
+posed, one tick old, not byte-equal to rest — and it stayed at 0 on every one. In steady play it
+does not fire at all: 19 of 20 five-second windows at `rest=0` across two shipping-configuration
+runs, at facing 90 and at facing 0, standing and walking. The twentieth is the scenario load,
+where `0x45AEC0` initialises `prim+0x22` as a copy of the node's array and it genuinely is
+unposed until the first repose — the substitution is right there too. `rest=` rides the `native:`
+line beside `guard=`, and it is the useful number of the two: it says how much of what the guard
+caught was the dangerous kind.
+
+**What is still not closed by either detector**: the "rotated but not yet translated" intermediate
+(`0x45B150` rotates every vertex of a piece before adding the parent origin to any of them) is
+neither byte-equal to rest nor flagged if both flag reads miss it — it is displaced by the parent
+origin rather than collapsed, so it is a much smaller error, but it is not detected on the data
+side. Closing everything outright still needs one of the two expensive options: a **sequence
+counter**, which the engine does not keep and which we would have to synthesise with detours on
+all three repose sites (two are inlined mid-function, at `0x45ACB6` and `0x45ADA5`, so byte
+patches rather than prologue detours); or a **full content check** — compare against the
+reconstruction on every frame instead of only on a trip, which has no timing hole anywhere but
+pays a `pose_accum` per unit per frame. The architecture that removes the question entirely is
+**G16** in the roadmap: pose 3DOs on the GPU from a static mesh, the way `tagpu_hires_draw.c`
+already poses replacement models — that path never reads `prim+0x22` and the race cannot happen
+to it.
+
+**Not closed by this.** The same live read is made by `tagpu_hires_draw`'s replacement-mesh path
+through `hires_pose`, which reads the pose *fields* rather than the buffer and so cannot show the
+rest pose — but it can show a pose mixed across two ticks, which nothing here measures. And the
+guard says nothing about the *anchor*: the unit's 16.16 position is read without any interlock,
+which is sound for a single aligned dword but has never been checked across the three of them.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

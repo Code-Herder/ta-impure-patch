@@ -4804,15 +4804,29 @@ POSE_PIECE_RE = re.compile(r"posedump: p(\d+) (\S+)( HIDDEN)? off=\(([-\d,]+)\) 
 
 
 def read_posedump_vertices(path):
-    """(yaw, [{i, name, off, move, turn, err, v: [(node, vbuf)]}]) — the dump's
-    other half. `yaw` is the unit's `+0x66` from the header line."""
-    yaw, pieces, cur = 0, [], None
+    """(body, [{i, name, off, move, turn, err, v: [(node, vbuf)]}]) — the dump's
+    other half.
+
+    `body` is the unit's body turn in AXIS order (x, y, z), ready to hand to
+    `piece_vertex`. A dump written since 2026-09-08 carries it as `body=` — the
+    CACHED triple `Object3do+0x18/+0x1A/+0x1C`, which is what the compose folds
+    into the base piece at `0x45B0DB`. An older dump carries only `yaw=`, the
+    live `unit+0x66`, and `(0, yaw, 0)` is then the best that file supports:
+    that is exactly the omission this checker used to make, so a legacy fixture
+    still reports the residual it always did and `pose_check` says which kind
+    of file it read.
+    """
+    body, legacy, pieces, cur = (0, 0, 0), True, [], None
     for line in Path(path).read_text(encoding="latin-1").splitlines():
         line = line.strip()
         if line.startswith("posedump: tick="):
-            for part in line.split():
-                if part.startswith("yaw="):
-                    yaw = int(part[4:])
+            m = re.search(r"body=\((\d+),(\d+),(\d+)\)", line)
+            if m:
+                body, legacy = tuple(int(g) for g in m.groups()), False
+            else:
+                for part in line.split():
+                    if part.startswith("yaw="):
+                        body = (0, int(part[4:]), 0)
         m = POSE_PIECE_RE.match(line)
         if m:
             cur = {"i": int(m.group(1)), "name": m.group(2),
@@ -4827,22 +4841,31 @@ def read_posedump_vertices(path):
         if m and cur is not None:
             cur["v"].append(([int(x) for x in m.group(2).split(",")],
                              [int(x) for x in m.group(3).split(",")]))
-    return yaw, pieces
+    return (body, legacy), pieces
 
 
 def pose_check(cls):
     """Rebuild the fixture's posed vertices and diff them against the engine's own.
 
-    The residual is in world units. Where the vertex buffer is fresh it is
-    **zero**; on the three fast movers it is a few units and matches
-    `tagpu_native.c`'s own `err=` on the same line, which is that pass measuring
-    the same staleness against the same buffer — the vertex buffer is a frame or
-    two behind the pose the dump sampled, and neither implementation can do
-    anything about that."""
+    The residual is in world units, and on a dump that records `body=` it is
+    **zero on every class**. It used to be 4.1 / 7.0 / 48.4 / 77.2 on the tank,
+    fighter, gunship and bomber, and that was blamed on the vertex buffer being
+    a frame or two behind the pose the dump sampled. It was not: this checker
+    passed `(0, yaw, 0)` while the engine folds all three cached body words into
+    the base piece at `0x45B0DB`, and `tagpu_native.c`'s `pose_dump` made the
+    same omission — which is why the two agreed and the agreement looked like
+    corroboration. `[MEASURED 2026-09-08]` recovering the missing pitch and roll
+    from each fixture's own base piece (Kabsch on its recorded `node=`/`vbuf=`
+    pairs) takes all eight classes to exactly 0, and independently reproduces
+    the recorded `yaw` on the five that were already 0.
+
+    A fixture written before that date carries no `body=`; it is reported as
+    `legacy` and still measured with `(0, yaw, 0)`, because that is all the file
+    can support."""
     folder = fixtures_dir() / cls
     _header, lines = read_cobtrace(folder / "cobtrace.log")
     unit = (lines[0].fields[3] if lines and lines[0].kind == "S" else cls).lower()
-    yaw, pieces = read_posedump_vertices(folder / "posedump.txt")
+    (body, legacy), pieces = read_posedump_vertices(folder / "posedump.txt")
     blob, _ = read_cob_source(unit)
     cob = read_cob(blob)
     ta3do = load_ta3do()
@@ -4861,7 +4884,8 @@ def pose_check(cls):
         if p["name"].lower() != cob.pieces[c].lower():
             # the death fixture's dump is of a different unit that happened to be
             # on screen; its pieces are not this COB's and there is nothing to diff
-            return {"class": cls, "unit": unit.upper(), "yaw": yaw, "pieces": 0,
+            return {"class": cls, "unit": unit.upper(), "body": list(body),
+                    "legacy": legacy, "pieces": 0,
                     "offsets_matched": 0, "points": 0, "worst": 0.0,
                     "engine_pass_worst": 0.0, "turned": 0, "moved": 0,
                     "note": f"the dump's p{p['i']} is {p['name']}, this COB's is "
@@ -4876,10 +4900,11 @@ def pose_check(cls):
             continue
         theirs = max(theirs, p["err"] or 0.0)
         for node, vbuf in p["v"]:
-            got = piece_vertex(frame, pos, ang, c, list(node), (0, yaw, 0))
+            got = piece_vertex(frame, pos, ang, c, list(node), body)
             worst = max(worst, max(abs(got[k] - vbuf[k]) for k in range(3)) / float(FIXED))
             points += 1
-    return {"class": cls, "unit": unit.upper(), "yaw": yaw, "pieces": addressable,
+    return {"class": cls, "unit": unit.upper(), "body": list(body), "legacy": legacy,
+            "pieces": addressable,
             "offsets_matched": offsets, "points": points,
             "worst": round(worst, 5), "engine_pass_worst": round(theirs, 2),
             "turned": sum(1 for p in pieces if any(p["turn"])),
@@ -4898,7 +4923,9 @@ def cmd_pose_check(args):
             if report.get("note"):
                 print(f"{report['class']:<9} {report['unit']:<9} {report['note']}")
             else:
-                print(f"{report['class']:<9} {report['unit']:<9} yaw={report['yaw']:<6} "
+                b = report["body"]
+                print(f"{report['class']:<9} {report['unit']:<9} "
+                      f"body={b[0]},{b[1]},{b[2]}{' (legacy: yaw only)' if report['legacy'] else ''}  "
                       f"offsets {report['offsets_matched']}/{report['pieces']}  "
                       f"points {report['points']:<3} worst {report['worst']:<9} "
                       f"(tagpu_native's own on the same dump: {report['engine_pass_worst']})")

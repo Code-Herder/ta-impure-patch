@@ -69,6 +69,9 @@ static unsigned s_head, s_tail;            /* game thread only; free-running, & 
 static volatile unsigned char s_defer;     /* the free-detour flag: 1 = enqueue, 0 = real */
 static volatile LONG s_started, s_completed;   /* reader publishes; game thread reads     */
 static volatile LONG s_teardown;           /* game thread sets; reader reads              */
+static volatile LONG s_levelGen;           /* game thread bumps, once per teardown; the
+                                              render thread keys its model-template
+                                              caches on it (see the header)             */
 static void (__stdcall *s_real_free)(void*);   /* trampoline into the real body           */
 static int   s_installed;
 static volatile DWORD s_owner_tid;         /* the game thread, when the fork has not
@@ -185,17 +188,44 @@ static void __cdecl reclaim_teardown_pre(void)
     }
     s_cTeardowns++;
     _snprintf(b, sizeof b,
-              busy ? "reclaim: level teardown: reader still in its pass after %u ms — %u queued object(s) KEPT, the cascade's frees deferred"
-                   : "reclaim: level teardown: flushed %u queued object(s), reader idle; the cascade frees synchronously",
+              busy ? "reclaim: level teardown (gen %u -> %u): reader still in its pass after %u ms — %u queued object(s) KEPT, the cascade's frees deferred"
+                   : "reclaim: level teardown (gen %u -> %u): flushed %u queued object(s), reader idle; the cascade frees synchronously",
+              (unsigned)s_levelGen, (unsigned)s_levelGen + 1u,
               busy ? RC_TEARDOWN_WAIT_MS : n, (unsigned)(s_tail - s_head));
     rlog(b);
 }
 
 /* After 0x491B60 returns (or tail-jumps to 0x450DD0, which also returns with
-   a plain ret): deferral back on, then release the reader. */
+   a plain ret): deferral back on, bump the level generation, then release the
+   reader.
+
+   THE GENERATION IS BUMPED HERE AND NOT IN THE PRE HOOK, and the difference is
+   a bug rather than a preference. The render thread is NOT stopped by
+   `pass_begin` -- `render_ogl.c` ignores its return value -- it is stopped by
+   `tagpu_overlay.c`'s `teardown_active()` gate, and a pass that got past that
+   gate before the flag was set runs on while the pre hook waits for it. That
+   pass reaches `tagpu_native_frame` (thirteen lines and two subsystems later,
+   one of them file I/O) and would there see a generation bumped in the pre
+   hook, drop the template caches, and REFILL THEM IN THE SAME FRAME from
+   templates the cascade has not freed yet -- because the game thread is still
+   blocked waiting for that very pass. The stamp would then match for the rest
+   of the process and the caches would never drop again: exactly the stale-
+   template bug the generation exists to prevent, with an extra step.
+
+   Bumped here, nothing can repopulate between the free and the bump: the
+   overlay gate refuses every frame for the whole teardown, and the release
+   below is ordered after the increment (both are interlocked, so the render
+   thread cannot observe the release without the new generation). It is still
+   unconditional -- the pre hook's `busy` path keeps the queue and frees nothing
+   of ours, but 0x42DB90 frees the templates either way.
+
+   This runs on both of 0x491B60's exits: the tail-jump at 0x491C54 goes to
+   0x450DD0, which takes no stack argument and has a single `ret` at 0x450E19,
+   so the stub's call returns and this hook is reached. */
 static void __cdecl reclaim_teardown_post(void)
 {
     s_defer = s_installed ? 1 : 0;
+    InterlockedIncrement(&s_levelGen);
     InterlockedExchange(&s_teardown, 0);
 }
 
@@ -229,6 +259,8 @@ void tagpu_reclaim_pass_end(unsigned frame_counter)
 }
 
 int tagpu_reclaim_teardown_active(void) { return s_installed && s_teardown; }
+
+unsigned tagpu_reclaim_level_gen(void) { return (unsigned)s_levelGen; }
 
 int tagpu_reclaim_armed(void) { return s_installed; }
 
