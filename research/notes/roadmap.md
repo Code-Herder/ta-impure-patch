@@ -1831,12 +1831,27 @@ the cfg and tacli can drive today, and the screen is only their first consumer.
 | G18d — the screen: `RENDER.GUI`, its gadgets, and the callback that writes the cfg and the trigger files | ○ planned | every row moves the game inside one poll; Custom appears on touching any row and clears on Renderer; `Shadow quality` greys with `grayedout` when Shadows ≠ Soft; the G15 twins mirror it at 0 diff on the `strict` walk |
 | G18e — the way in: how the screen is reached | ● **unblocked 2026-09-09** | a new `.GUI` name CAN be pushed: `GUI_Load 0x4AA8F0` builds a file path from the name, so our DLL is the call site and no stock screen is sacrificed. Push with `0x495207`'s idiom (`main+0x37EA0` + `GUI_Load`, then `+0x08`/`+0x0C`); close by restoring the buffer and letting `UpdateIngameGUI` pop. The trigger is DLL-drawn — no GUI screen owns the top bar. Exit: reached in one click from a running game, the `+clock` seconds still ticking |
 
-**What G18e is blocked on.** The screen inventory is a string table in the binary
-(gui-gadgets §6), so a *new* `.GUI` name needs a call site. And there is nowhere to hang the
-button: `ARMOPT.GUI` (Tab) is full at seven and `commongui.igopt` has exactly six recesses,
-all six used by `PREFS.GUI`. ARMOPT has a gap between `EXIT` (y=231 h=31) and `OK` (y=291) —
-**whether `OPTBG` paints a recess there is unmeasured**, and that one measurement decides
-whether G18c has to draw a second frame.
+**G18e is no longer blocked, and the entry-screen problem evaporated with it.** The screen
+inventory *is* a string table (gui-gadgets §6), but `GUI_Load 0x4AA8F0` never consults it — it
+builds `<prefix at gi+0x9B6><name>.GUI` and opens the file — so a name we invent loads if the
+file exists. And nothing has to be hung on `ARMOPT.GUI` at all (it was full at seven, with
+`commongui.igopt`'s six recesses all used by `PREFS.GUI`): **no GUI screen owns the top bar**,
+every in-game panel being `(0,128) 128×352`, so the trigger is DLL-drawn and needs no host.
+*The `OPTBG` gap measurement is therefore no longer needed for anything.*
+
+**G18 lands as a spike in three gates** [DECIDED 2026-09-09]. The three unknowns below are each
+cheap to test alone and expensive to debug together, so each gate is its own landing with its
+own oracle rather than one ~600-line drop.
+
+| gate | proves | oracle |
+|---|---|---|
+| **① it exists** | the DLL writes `impure-patch.ufo`, the engine globs it **in the same launch**, and a one-button `RENDER.GUI` pushes over a running game | the screen appears; `+clock`'s seconds keep ticking (TA's own menu stops them) |
+| **② it responds** | `OnCommand` fires with the index in `UIChange_f`; `0x4A1080` + `0x4A81E0(gi,0x40)` visibly advance a stage; **`gi+0xCCA` identified** | a plate moves on click, and the cfg on disk changes |
+| **③ it looks right** | six rows, the composed `back*` ground repainted over our drawn frame, the trigger drawn and hit-tested | the panel matches the lab; the G15 `strict` walk is 0 diff |
+
+**Gate ① is the one that can invalidate everything downstream** — if a `.ufo` written during
+`DLL_PROCESS_ATTACH` is not globbed in the same launch, the install story changes — which is
+why it is first and why it is a one-button screen rather than the real one.
 
 **Open:** which plate art a `stages=2` button gets — `stagebuttn1` (red/green) or
 `stagebuttn2` (green/green); `texturenumber` is the suspect. And where a gadget callback
