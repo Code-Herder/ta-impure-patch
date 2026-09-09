@@ -97,6 +97,8 @@
 #define MM_H           0x142ED
 #define MM_FLAGS       0x142F1
 #define MM_COMPOSITE   0x142DB          /* the fog+dots composite; non-NULL = built */
+#define MM_VIEWRECT    0x142CB          /* the view box, 4 ints, SCREEN px, edges inclusive */
+#define MM_VIEWCOL     0xDD9            /* its palette index (0x466B50 reads this byte)     */
 #define POLL_MS        500
 #define MAX_TWINS      32
 #define ATLAS_DIM      2048
@@ -211,6 +213,7 @@ static GLuint   s_mmTex;
 static unsigned s_mmGenSeen;            /* the generation s_mmTex holds; 0 = nothing        */
 static int      s_mmTW, s_mmTH;         /* its size in texels                               */
 static int      s_mmbase = 0;           /* token `mmbase`: draw it, harness only for now    */
+static int      s_mmdots = 0;           /* token `mmdots`: the dots ALONE, over the engine's */
 static unsigned s_mmDrawn = 0;
 static unsigned s_mmSprites = 0, s_mmOther = 0;   /* ops published against the minimap composite */
 /* THE ENGINE'S DOTS, ACCUMULATED FROM ITS OWN OPS (13.6). Which units appear on
@@ -1303,7 +1306,7 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     int pw = 0, ph = 0, mx, my, mw, mh;
     float kx, ky, v[24];
 
-    if (!s_mmbase || !s_cursProg || !ptr_ok(ta)) return;
+    if ((!s_mmbase && !s_mmdots) || !s_cursProg || !ptr_ok(ta)) return;
     /* NOT `+0x142F1 & 2`, which is what DrawMinimap 0x466B00 tests: that is a
        DIRTY flag and 0x466B16 CLEARS it in the same breath, so it reads 0 on
        almost every frame [MEASURED 2026-09-09 — the first build of this gated
@@ -1313,9 +1316,11 @@ static void sharp_minimap(const TAGPU_FRAME* f)
        ours has to be redrawn every frame. The honest gate is that the minimap
        surfaces exist at all, which is what being in a game with one means. */
     if (!ptr_ok(*(const void* const*)(ta + MM_COMPOSITE))) return;
-    if (!tagpu_gui_minimap_pic(&pic, &pw, &ph, &gen)) return;
-    if (pw <= 0 || ph <= 0) return;
-    if (gen != s_mmGenSeen || !s_mmTex) {
+    if (s_mmbase) {
+        if (!tagpu_gui_minimap_pic(&pic, &pw, &ph, &gen)) return;
+        if (pw <= 0 || ph <= 0) return;
+    }
+    if (s_mmbase && (gen != s_mmGenSeen || !s_mmTex)) {
         if (!s_mmTex) glGenTextures(1, &s_mmTex);
         if (!s_mmTex) return;
         glBindTexture(GL_TEXTURE_2D, s_mmTex);
@@ -1352,10 +1357,12 @@ static void sharp_minimap(const TAGPU_FRAME* f)
        surface and 0x46685F hands the picture straight to the stretch
        `0x4B95A0`, so the 252x252 square is squashed into an aspect-correct box
        (106x126 on a 336x400 map). Full 0..1 UVs reproduce exactly that. */
-    quad(v, (float)mx * kx, (float)my * ky,
-            (float)(mx + mw) * kx, (float)(my + mh) * ky, 0.0f, 0.0f, 1.0f, 1.0f);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-    x_glDrawArrays(GL_TRIANGLES, 0, 6);
+    if (s_mmbase) {
+        quad(v, (float)mx * kx, (float)my * ky,
+                (float)(mx + mw) * kx, (float)(my + mh) * ky, 0.0f, 0.0f, 1.0f, 1.0f);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
+        x_glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
     /* THE ENGINE'S DOTS, ON TOP, AT THE SAME SCALE IT DRAWS THEM. A dot's
        position is in composite pixels and the composite IS the box, so it maps
        to the screen by the box's own offset and to the device by k — the same
@@ -1388,6 +1395,53 @@ static void sharp_minimap(const TAGPU_FRAME* f)
                     e->u0, e->v0, e->u1, e->v1);
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
             x_glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+    }
+    /* THE VIEW BOX LAST, because that is where the engine puts it: DrawMinimap
+       copies the composite at 0x466B44 and only then draws the box at
+       0x466B5E. Getting that order wrong is not theoretical — with the dots
+       replayed over the engine's own frame and no box of ours, the only four
+       pixels in the whole picture that differed were the box's, overwritten by
+       a dot [MEASURED 2026-09-09]. Its rect is `main+0x142CB`, four ints in
+       SCREEN pixels with inclusive edges (it is drawn into the game offscreen,
+       not the composite), and tagpu_zoom.c already keeps it honest at zoom. */
+    if (s_mmbase) {
+        const int* vr = (const int*)(ta + MM_VIEWRECT);
+        int ci = (int)*(const unsigned char*)(ta + MM_VIEWCOL);
+        float r = s_palCopy[4 * ci] / 255.0f, g2 = s_palCopy[4 * ci + 1] / 255.0f,
+              b2 = s_palCopy[4 * ci + 2] / 255.0f;
+        int L = vr[0], T = vr[1], R = vr[2], B = vr[3];
+        if (s_mmLogged < 5) {
+            char lb[190];
+            s_mmLogged = 5;
+            /* the FIRST frame's values, which is the point — it says the rect
+               and the colour were read at all. The rect moves with the camera
+               and the first frame after a load is not where it settles, so do
+               not read a stale box out of this line. */
+            _snprintf(lb, sizeof lb, "gui: minimap view box, first frame: (%d,%d)-(%d,%d) idx=%d rgb=%.0f,%.0f,%.0f k=%.2f,%.2f",
+                      L, T, R, B, ci, r * 255.0f, g2 * 255.0f, b2 * 255.0f, kx, ky);
+            lb[sizeof lb - 1] = '\0';
+            slog(lb);
+        }
+        if (R >= L && B >= T) {
+            int e;
+            glUseProgram(s_sharpProg);
+            x_glUniform2f(s_uSharpProgSize, (float)s_sharpW, (float)s_sharpH);
+            x_glUniform4f(s_uSharpProgCol, r, g2, b2, 1.0f);
+            glBindVertexArray(s_vao);
+            glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+            /* four one-GAME-pixel edges, so the box keeps the weight the engine
+               gives it rather than thinning to a device pixel as k grows */
+            for (e = 0; e < 4; e++) {
+                float x0, y0, x1, y1;
+                if (e == 0)      { x0 = (float)L;     y0 = (float)T;     x1 = (float)(R + 1); y1 = (float)(T + 1); }
+                else if (e == 1) { x0 = (float)L;     y0 = (float)B;     x1 = (float)(R + 1); y1 = (float)(B + 1); }
+                else if (e == 2) { x0 = (float)L;     y0 = (float)T;     x1 = (float)(L + 1); y1 = (float)(B + 1); }
+                else             { x0 = (float)R;     y0 = (float)T;     x1 = (float)(R + 1); y1 = (float)(B + 1); }
+                quad(v, x0 * kx, y0 * ky, x1 * kx, y1 * ky, 0, 0, 0, 0);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
+                x_glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
         }
     }
     s_mmDrawn++;
@@ -1598,6 +1652,13 @@ static void poll(void)
        the engine's 126-px minimap. Harness only while it is the base ALONE —
        no fog, no dots, no arcs, no view box. */
     s_mmbase = on && strstr(buf, "mmbase") != NULL;
+    /* `mmdots`: the dot replay ALONE, over the engine's own minimap. It is the
+       oracle for the replay and the reason it exists — if our dots land where
+       the engine's do, in the colours the engine used, the frame does not
+       change at all, and any difference is exactly our error. The base cannot
+       be tested that way (it is a different resample by construction), so it
+       gets its own token. */
+    s_mmdots = on && strstr(buf, "mmdots") != NULL;
     /* `nocursor`: phase 1's cursor, the engine's own, kept as the A/B against
        ours — and the escape if the sprite record ever stops being a GAF frame
        header on some build. `cursorscale=N` (13.5) sizes ours in DEVICE
