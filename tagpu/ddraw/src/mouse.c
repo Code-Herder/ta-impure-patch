@@ -23,6 +23,57 @@ BOOL tagpu_mouse_nowarp(void)
     return cached != 0;
 }
 
+/* THE ONE TRANSFORM from a client-area point to the engine's logical screen
+   (tagpu, G17b). It was inline in wndproc.c's button cases and nowhere else,
+   which made the pointer path untestable: `tacli`'s injected clicks deliver
+   GAME-space coordinates straight to the engine (tagpu_shield.c
+   `deliver_mouse`), so they never traverse this arithmetic at all, and the
+   G17b gate's exit -- "clicks land on the right gadget" -- could not be
+   measured by the tooling that exists. Sharing it is what makes the harness's
+   device-space click the same code a player's click takes, rather than a copy
+   of it that can drift.
+
+   Returns 1 when the point was inside the letterboxed viewport. Outside it the
+   engine has always been handed the centre of its own screen, and that is kept
+   exactly: a click on a letterbox bar is not a click at the nearest edge.
+   Design: research/notes/gui-renderer.md 13.1. */
+int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
+{
+    int x, y, inside;
+
+    inside = !(cx > g_ddraw.render.viewport.x + g_ddraw.render.viewport.width ||
+               cx < g_ddraw.render.viewport.x ||
+               cy > g_ddraw.render.viewport.y + g_ddraw.render.viewport.height ||
+               cy < g_ddraw.render.viewport.y);
+
+    if (!inside)
+    {
+        x = g_ddraw.width / 2;
+        y = g_ddraw.height / 2;
+    }
+    else
+    {
+        x = (DWORD)((cx - g_ddraw.render.viewport.x) * g_ddraw.mouse.unscale_x);
+        y = (DWORD)((cy - g_ddraw.render.viewport.y) * g_ddraw.mouse.unscale_y);
+    }
+
+    /* The clamp keeps the ORIGINAL unsigned comparison. `g_ddraw.width` is a
+       DWORD and the inline version in wndproc promoted `x` to unsigned against
+       it, so before the first dd_SetDisplayMode (width 0) the result was 0, not
+       -1. An `(int)` cast here would hand back -1, which deliver_mouse re-reads
+       as TAGPU_M_HERE and wndproc stores as 0xFFFFFFFF (both landing reviewers
+       spotted the difference). Guarded rather than cast so the degenerate state
+       cannot produce a negative. */
+    if (g_ddraw.width  && x > (int)g_ddraw.width  - 1) x = (int)g_ddraw.width  - 1;
+    if (g_ddraw.height && y > (int)g_ddraw.height - 1) y = (int)g_ddraw.height - 1;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+
+    if (gx) *gx = x;
+    if (gy) *gy = y;
+    return inside;
+}
+
 void mouse_lock()
 {
     if (g_config.devmode || g_ddraw.bnet_active || !g_ddraw.hwnd)

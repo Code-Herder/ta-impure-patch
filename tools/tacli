@@ -385,7 +385,7 @@ class Instance:
 # --------------------------------------------------------------------------- create
 
 def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=True,
-                   verbose=False, maxfps=60):
+                   verbose=False, window=None, maxfps=60):
     """Symlink-mirror the template gamedir, with instance-private config files."""
     inst.gamedir.mkdir(parents=True, exist_ok=True)
     (inst.gamedir / "Screenshots").mkdir(exist_ok=True)
@@ -423,7 +423,7 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
     if not (exe_dst.exists() or exe_dst.is_symlink()):
         exe_dst.symlink_to(exe_src)
 
-    write_ddraw_ini(inst, tile, maxfps=maxfps)
+    write_ddraw_ini(inst, tile, window, maxfps=maxfps)
     write_totala_ini(inst, sound)
     # Never steal the human's pointer: the game snaps and fences the real cursor on
     # activation otherwise (fork honours this trigger, see mouse.c).
@@ -487,8 +487,17 @@ def write_title(inst: Instance, label: str) -> str:
     return f"{BASE_TITLE} - {label}"
 
 
-def write_ddraw_ini(inst: Instance, tile, maxfps=60):
-    """`maxfps` is the fork's frame cap. **0 is the unlimited setting**, not -1:
+def write_ddraw_ini(inst: Instance, tile, window=None, maxfps=60):
+    """The fork's own config.
+
+    `window` is the CLIENT size when it must differ from the game's resolution:
+    cnc-ddraw takes `width`/`height` as the client and letterboxes the engine's
+    screen into it (`dd.c` render.width = window_rect, then max'd with the game
+    mode), so this is the one knob that produces k != 1 without an engine patch
+    — which is what phase 2's kill rule has to be measured at (gui-renderer.md
+    13.1, 13.9).
+
+    `maxfps` is the fork's frame cap. **0 is the unlimited setting**, not -1:
     `fpsl_init` maps a NEGATIVE value onto the display refresh (60) and only 0
     falls through every branch with `tick_length` left at 0. The DLL reads it at
     attach, and this function runs on every launch path, so a hand-edit of the
@@ -497,8 +506,12 @@ def write_ddraw_ini(inst: Instance, tile, maxfps=60):
     paths that both hold 60 fps have not been compared, they have both hit the
     cap: a frame-time A/B needs `--maxfps 0` on BOTH sides."""
     x, y = tile
+    win = ""
+    if window:
+        win = f"width={int(window[0])}\nheight={int(window[1])}\n"
     (inst.gamedir / "ddraw.ini").write_text(
         "[ddraw]\n"
+        + win +
         "renderer=openglcore\n"
         "windowed=true\n"
         "fullscreen=false\n"   # true here means borderless fullscreen, not a window
@@ -767,6 +780,18 @@ def screen_size(display: "str | None" = None) -> tuple:
     return _SCREEN_SIZE[d]
 
 
+def client_box(res, window):
+    """The client cnc-ddraw will actually open, which is what has to fit on the
+    desktop. `dd.c` sets render.width/height from the ini's width/height and then
+    maxes each against the game mode, so a --window SMALLER than --res does not
+    shrink the client — it is ignored per axis. Tiling against the requested
+    window in that case put the real window off the right/bottom edge, which is
+    the silently mangled `glshot` tile_for exists to prevent (landing review)."""
+    if not window:
+        return tuple(res)
+    return (max(int(res[0]), int(window[0])), max(int(res[1]), int(window[1])))
+
+
 def tile_for(index: int, res, screen=None, origin=(0, 0)):
     """Lay instances out in a grid so parallel windows do not stack.
 
@@ -825,18 +850,21 @@ def _create(inst: Instance, args) -> dict:
     # `launch <new-name>` reaches here with res unset (its --res defaults to None so
     # that relaunching an existing instance keeps the recorded resolution).
     res = tuple(args.res or DEFAULT_RES)
+    window = tuple(args.window) if getattr(args, "window", None) else None
     display = args.display or default_display()
-    tile = tile_for(index, res, screen=screen_size(display))
+    # the CLIENT is what has to fit on the desktop, not the engine's screen
+    tile = tile_for(index, client_box(res, window), screen=screen_size(display))
     shield = args.shield is not False
     clone_prefix(inst)
     maxfps = 60 if getattr(args, "maxfps", None) is None else args.maxfps
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
-                   shield=shield, maxfps=maxfps)
+                   shield=shield, window=window, maxfps=maxfps)
     meta = {
         "name": args.name,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "res": list(res),
         "maxfps": maxfps,
+        "window": list(window) if window else None,
         "slot": index,
         "tile": list(tile),
         "sound": bool(args.sound),
@@ -1026,22 +1054,28 @@ def _launch(args) -> dict:
     # Xvfb is a different size, and measuring the wrong one puts the window
     # exactly where this is meant to stop it going.
     screen = screen_size(meta.get("display"))
+    if getattr(args, "window", None) is not None:
+        meta["window"] = list(args.window)
+    win = tuple(meta["window"]) if meta.get("window") else None
     if getattr(args, "maxfps", None) is not None and args.maxfps != meta.get("maxfps", 60):
         meta["maxfps"] = args.maxfps
         inst.save_meta(meta)
-        write_ddraw_ini(inst, tuple(meta["tile"]), maxfps=meta["maxfps"])
-    if args.res:
-        meta["res"] = list(args.res)
-        meta["tile"] = list(tile_for(meta.get("slot", 0), tuple(args.res), screen=screen))
+        write_ddraw_ini(inst, tuple(meta["tile"]), win, maxfps=meta["maxfps"])
+    if args.res or getattr(args, "window", None) is not None:
+        if args.res:
+            meta["res"] = list(args.res)
+        meta["tile"] = list(tile_for(meta.get("slot", 0),
+                                     client_box(meta["res"], win), screen=screen))
         inst.save_meta(meta)
-        write_ddraw_ini(inst, meta["tile"], maxfps=meta.get("maxfps", 60))
+        write_ddraw_ini(inst, meta["tile"], win, maxfps=meta.get("maxfps", 60))
     # Self-heal a tile recorded against a different (or wrongly assumed) desktop:
     # an off-screen window is a silently broken `glshot`, so never open one there.
     res = tuple(meta.get("res") or DEFAULT_RES)
-    if not tile_is_onscreen(tuple(meta.get("tile") or (0, 0)), res, screen=screen):
-        meta["tile"] = list(tile_for(meta.get("slot", 0), res, screen=screen))
+    box = client_box(res, win)
+    if not tile_is_onscreen(tuple(meta.get("tile") or (0, 0)), box, screen=screen):
+        meta["tile"] = list(tile_for(meta.get("slot", 0), box, screen=screen))
         inst.save_meta(meta)
-        write_ddraw_ini(inst, meta["tile"], maxfps=meta.get("maxfps", 60))
+        write_ddraw_ini(inst, meta["tile"], win, maxfps=meta.get("maxfps", 60))
     if args.sound is not None:
         meta["sound"] = args.sound
     if args.unit_limit is not None:
@@ -1260,9 +1294,36 @@ def cmd_keys(args):
 
 def cmd_click(args):
     inst = Instance(args.name)
-    token = f"{'prclick' if args.right else 'pclick'}:{args.x},{args.y}"
+    if getattr(args, "device", False):
+        verb = "drclick" if args.right else "dclick"
+    else:
+        verb = "prclick" if args.right else "pclick"
+    token = f"{verb}:{args.x},{args.y}"
     _write_tokens(inst, token)
     out({"name": args.name, "token": token}, args.json, human=f"sent: {token}")
+
+
+def device_point(snap: dict, gx: int, gy: int):
+    """Where the engine's logical pixel (gx, gy) is DRAWN, in client-area pixels.
+
+    This is deliberately the renderer's mapping — viewport offset plus the
+    logical point scaled by viewport/surface — and not the inverse of the
+    fork's pointer unscale. The whole value of a device-space click is that our
+    two halves are computed independently: we aim where the gadget visibly is,
+    the engine works back to a logical pixel by its own arithmetic, and if the
+    two disagree the click misses. Inverting the input transform here would
+    make the test agree with itself by construction.
+
+    (They do differ slightly: the renderer scales by vp/surface and the input
+    unscales by (surface-1)/(vp-1), so the two drift by up to half a device
+    pixel across the screen. Aiming at a gadget's centre leaves tens of pixels
+    of margin, which is why this is a hit test and not a pixel test.)
+    """
+    vx, vy, vw, vh = snap.get("viewport") or (0, 0, 0, 0)
+    sw, sh = snap.get("surface") or (0, 0)
+    if not (vw and vh and sw and sh):
+        return None
+    return (vx + int((gx + 0.5) * vw / sw), vy + int((gy + 0.5) * vh / sh))
 
 
 def cmd_wheel(args):
@@ -2349,9 +2410,24 @@ def _ui_label_diff(before: dict, after: dict):
     return [t for t in dict.fromkeys(labels(after)) if t not in was]
 
 
+# G17b: when set, every gadget click in this process is aimed in CLIENT-AREA
+# pixels and converted back by the engine's own pointer path, instead of being
+# handed to the engine already in its own coordinates. It is a whole-run switch
+# rather than a per-call one because a walk that mixes the two proves nothing:
+# the question is whether the pointer path is right at this k, everywhere.
+UI_CLICK_DEVICE = False
+
+
 def _ui_click_gadget(inst: Instance, g: dict, before: dict, settle: bool = True):
     x, y = g["click"]
-    _write_tokens(inst, f"pclick:{x},{y}")
+    tok = f"pclick:{x},{y}"
+    if UI_CLICK_DEVICE:
+        d = device_point(before, *g["click"])
+        if d is None:
+            die("ui click --device: the snapshot carries no viewport "
+                "(an older DLL, or no frame yet) — cannot aim a device-space click")
+        tok = f"dclick:{d[0]},{d[1]}"
+    _write_tokens(inst, tok)
     if not settle:
         return before, None
     return _ui_settle(inst, before, g)
@@ -2391,6 +2467,9 @@ def cmd_ui(args):
     verb = (args.verb or "snapshot").lower()
     rest = list(args.rest)
     tmo = args.timeout
+
+    if getattr(args, "device", False):
+        globals()["UI_CLICK_DEVICE"] = True
 
     if verb in ("snapshot", "snap"):
         if rest:
@@ -4248,6 +4327,10 @@ def build_parser():
                              "refresh, not uncapped). Sticky per instance, like "
                              "--res. Needed for any frame-time A/B: at the default "
                              "60 both sides read 60 because both hit the cap")
+        sp.add_argument("--window", type=res_type, default=None,
+                        help="window CLIENT size, when it must differ from --res: the engine keeps "
+                             "its own screen and the fork letterboxes it into this, so k = window/res "
+                             "(phase 2, G17b). Omit and the window follows the game, k = 1")
         sp.add_argument("--display", default=None, help="X display (default: autodetected live one)")
         sp.add_argument("--slot", type=int, default=None, help="tiling slot (window position)")
 
@@ -4335,6 +4418,10 @@ def build_parser():
     cl.add_argument("x", type=int)
     cl.add_argument("y", type=int)
     cl.add_argument("--right", action="store_true", help="right click (orders)")
+    cl.add_argument("--device", action="store_true",
+                    help="x,y are CLIENT-AREA pixels, not the engine's screen: the DLL converts "
+                         "them with the same transform a hardware click takes. The only click "
+                         "that exercises the pointer unscale (G17b)")
     cl.set_defaults(func=cmd_click)
 
     od = sub.add_parser("order", help="give units an order (no mouse, world coords)")
@@ -4469,6 +4556,11 @@ def build_parser():
     u.add_argument("--gui", help="wait: wait for this screen to reach the top of the stack")
     u.add_argument("--page", type=int,
                    help="click: walk a paged build menu to this page first")
+    u.add_argument("--device", action="store_true",
+                   help="click: aim in CLIENT-AREA pixels (where the gadget is DRAWN) and let "
+                        "the engine work back to a logical pixel by its own arithmetic. The only "
+                        "click that tests the pointer path, which is what phase 2's kill rule "
+                        "turns on (G17b)")
     u.add_argument("--timeout", type=float, default=UI_TIMEOUT,
                    help=f"seconds to auto-wait for a gadget, and to scroll a long list "
                         f"to an off-screen row (default {UI_TIMEOUT:g})")

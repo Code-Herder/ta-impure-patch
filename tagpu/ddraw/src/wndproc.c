@@ -896,25 +896,11 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     {
         if (!g_config.devmode && !g_mouse_locked)
         {
-            int x = GET_X_LPARAM(lParam);
-            int y = GET_Y_LPARAM(lParam);
-
-            if (x > g_ddraw.render.viewport.x + g_ddraw.render.viewport.width ||
-                x < g_ddraw.render.viewport.x ||
-                y > g_ddraw.render.viewport.y + g_ddraw.render.viewport.height ||
-                y < g_ddraw.render.viewport.y)
-            {
-                x = g_ddraw.width / 2;
-                y = g_ddraw.height / 2;
-            }
-            else
-            {
-                x = (DWORD)((x - g_ddraw.render.viewport.x) * g_ddraw.mouse.unscale_x);
-                y = (DWORD)((y - g_ddraw.render.viewport.y) * g_ddraw.mouse.unscale_y);
-            }
-
-            x = min(x, g_ddraw.width - 1);
-            y = min(y, g_ddraw.height - 1);
+            /* tagpu (G17b): this arithmetic moved to mouse_client_to_game so the
+               harness's device-space click takes the SAME path a player's does.
+               Behaviour is unchanged, the centre-on-letterbox rule included. */
+            int x, y;
+            mouse_client_to_game(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), &x, &y);
 
             InterlockedExchange((LONG*)&g_ddraw.cursor.x, x);
             InterlockedExchange((LONG*)&g_ddraw.cursor.y, y);

@@ -319,6 +319,9 @@ static int    s_spxlog = 0;            /* anchor filmstrip (tagpu_spxlog.on) */
    comes off the FIELDS. gpu-status.md §2.9 keeps the history. */
 static int    s_nano   = 1;            /* build-state look (tagpu_nano.off)  */
 static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_palTex;
+#define TAGPU_SS_MAX 4                 /* the most we will supersample by (G17b) */
+static int    s_devres = 0;            /* the world at device res — OPT IN, tagpu_devres.on */
+static int    s_devresFailed = 0;      /* the driver refused the supersampled target: stay down */
 static GLuint s_fogTex, s_fogLutTex, s_cprog, s_cvao, s_cvbo;
 static GLuint s_fbo2, s_colTex2, s_depTex2, s_dprog;
 static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
@@ -778,6 +781,19 @@ static void fbo_size(int w, int h, int ss)
     s_fboW = w; s_fboH = h; s_fboSS = ss;
     { char b[96]; _snprintf(b, sizeof b, "native: FBO %dx%d ss=%d status=%x/%x",
                             w, h, ss, st, st2); nlog(b); }
+    /* An incomplete SUPERSAMPLED target is survivable only while something
+       still resolves it: `devres` composites straight out of it, so an FBO the
+       driver refused (a 4x buffer is 4096x3072 here) would put a black world on
+       the screen for the rest of the session. The size is cached either way, so
+       this is not retried per frame; devres simply stands down and the ordinary
+       resolve path — which composites the 1x target — carries the frame.
+       (The landing review's point: nothing else notices a failed allocation.) */
+    if (ss > 1 && st2 != GL_FRAMEBUFFER_COMPLETE && !s_devresFailed) {
+        s_devresFailed = 1;            /* a LATCH: the poll below re-reads the trigger every 500 ms
+                                          and would otherwise switch it straight back on */
+        s_devres = 0;
+        nlog("native: supersampled FBO incomplete — devres off, the resolve path carries the frame");
+    }
 }
 
 static int name_ieq(const char* a, const char* b)
@@ -1788,6 +1804,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             s_armed = 1;
         }
         s_ss     = (GetFileAttributesA("tagpu_ss.off")     == INVALID_FILE_ATTRIBUTES);
+        /* THE DEVICE-RESOLUTION WORLD IS OPT-IN, and the reason is the selection
+           rects. The comment by the rect draw records the measurement: the
+           driver clamps an aliased GL line to one pixel, so a line in an
+           ss-times buffer is one SUPERSAMPLE wide and resolves to a half-lit
+           smear — which is exactly why `selAt1x` draws them into the 1x FBO
+           after the box-downsample instead. Under devres there is no such
+           downsample, so the rects would reach the screen thinner and dimmer
+           than the engine's (about 0.75 of a device pixel at k = 1.5) while
+           everything else got sharper. Two landing reviewers found this
+           independently. `tagpu_devres.on` is how it was measured; making it
+           the default waits on drawing the rects as real geometry with a
+           width, which is its own piece of work. */
+        s_devres = !s_devresFailed &&
+                   (GetFileAttributesA("tagpu_devres.on") != INVALID_FILE_ATTRIBUTES);
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
         s_nano   = (GetFileAttributesA("tagpu_nano.off")   == INVALID_FILE_ATTRIBUTES);
@@ -2283,6 +2313,40 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             }
         }
     }
+    /* THE WORLD AT THE DEVICE'S RESOLUTION (G17b, gui-renderer.md 13.1).
+       Until now the supersampled buffer was always box-resolved back down to
+       the GAME resolution and the composite then stretched that into the
+       letterboxed viewport -- so at k > 1 the extra samples were thrown away
+       and the world reached the screen at the engine's resolution, upscaled.
+       When the viewport is wider than the engine's screen, pick `ss` to reach
+       the device resolution instead and composite from the supersampled buffer
+       directly, skipping the resolve.
+
+       DECIDED HERE, ABOVE `fv`, AND NOT LOWER DOWN. Every pass that draws into
+       this frame has to agree about how many samples a game pixel is: the fx
+       and marker passes take it from `fv.ss` and the hires pass from `hv.ss`,
+       and `TAGPU_GLSL_SCAF_TEST` divides gl_FragCoord by it to find the game
+       pixel. The first cut of this raised `ss` AFTER `fv.ss` was set, so at
+       ceil(k) > 2 they disagreed and the scaffold test addressed a texel 1.5x
+       out (found by the landing review; invisible at k = 1.5, where ceil(k) is
+       2 and the two happen to match).
+
+       AT k = 1 NONE OF THIS APPLIES -- `devres` stays 0, `ss` stays 2, the
+       resolve runs and the composite reads the same texture it always did, so
+       every measurement taken at 1:1 (the parity md5 included) is untouched.
+       Past TAGPU_SS_MAX the source would fall BELOW the destination and the
+       composite would blur it, so devres is refused there rather than capped
+       into a stretch. */
+    int ss = s_ss ? 2 : 1;
+    int devres = 0;
+    if (s_ss && s_devres && f->vp_w > gw && gw > 0) {
+        int need = (f->vp_w + gw - 1) / gw;          /* ceil(vp_w / gw) = ceil(k) */
+        if (need <= TAGPU_SS_MAX) {
+            if (need > ss) ss = need;
+            devres = 1;
+        }
+    }
+
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
     int nfx = 0, nfeat = 0, nterr = 0, nmark = 0;
@@ -2290,7 +2354,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.ta = ta; fv.eyeX = eyeX; fv.eyeY = eyeY;
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.evpL = evpL; fv.evpT = evpT; fv.evw = evw; fv.evh = evh;
-        fv.gw = gw; fv.gh = gh; fv.ss = s_ss ? 2 : 1; fv.fogMode = fogMode;
+        fv.gw = gw; fv.gh = gh; fv.ss = ss; fv.fogMode = fogMode;
         fv.zoom = s_zoom;
         fv.zoomCx = (float)vpL + (float)vw * 0.5f;
         fv.zoomCy = (float)vpT + (float)vh * 0.5f;
@@ -2694,7 +2758,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             units[i].hires || pdix[i] < 0) continue;
         npdSlant++; nslant++;
     }
-    int ss = s_ss ? 2 : 1;
 
     /* the replacement pass gets the same frame it would have drawn into here:
        same FBO, same projection and depth scale, same scaffold, same fog grid,
@@ -2912,7 +2975,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        world's depth to sit under its own unit, so the ss depth buffer is
        blitted down with it. `selAt1x` is 0 without the blit entry point or
        without supersampling, and then this draws it here as before. */
-    int selAt1x = (ss > 1 && x_glBlitFramebuffer != NULL);
+    /* the 1x selection-rect path draws OVER the resolved frame, so it exists
+       only when there is one: under `devres` the rects are drawn in the main
+       pass at ss, which is what the ss == 1 path has always done */
+    int selAt1x = (!devres && ss > 1 && x_glBlitFramebuffer != NULL);
     glUniform1i(s_uNanoOn, 0);
     if (lineEnd > lineStart && !selAt1x) {
         glUniform1i(s_uFog, fogMode & 1);
@@ -3120,8 +3186,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (markOn) tagpu_mark_render(&fv, s_palTex);
     if (x_glScissor) x_glDisable(GL_SCISSOR_TEST);
 
-    /* ---- box-downsample 2x -> 1x (quad covers every pixel; no clear) ---- */
-    if (ss > 1) {
+    /* ---- box-downsample ss -> 1x (quad covers every pixel; no clear) ----
+       Skipped under `devres`: the composite reads the supersampled buffer. */
+    if (ss > 1 && !devres) {
         glBindFramebuffer(GL_FRAMEBUFFER, s_fbo);
         glViewport(0, 0, gw, gh);
         glUseProgram(s_dprog);
@@ -3235,7 +3302,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         glBindTexture(GL_TEXTURE_2D, (GLuint)f->surface_tex);
     }
     x_glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, s_colTex);
+    /* G17b: under `devres` the world was never resolved down, so the composite
+       reads the supersampled buffer (GL_LINEAR, i.e. a downsample to the
+       viewport) instead of a game-res texture stretched up to it. */
+        glBindTexture(GL_TEXTURE_2D, devres ? s_colTex2 : s_colTex);
     x_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     x_glDisable(GL_BLEND);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -3273,8 +3343,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (s_badModelId)
             _snprintf(badmodel, sizeof badmodel, " BADMODELID=%u", s_badModelId);
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s%s%s%s",
-                  nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d devres=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s%s%s%s",
+                  nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, devres, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_reread,
                   bake, posed, badmodel, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);

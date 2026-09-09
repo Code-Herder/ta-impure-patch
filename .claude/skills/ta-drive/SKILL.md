@@ -1288,8 +1288,9 @@ tools/tacli gui <i> off           # keep the detours, stop the draw — the live
 tools/tacli gui <i> strict        # the harness's mode: fallback off, a miss painted magenta (never for a player)
 tools/tacli gui <i> remove        # un-arm entirely at the next launch
 tools/tacli arm <i> gui.on=norestore   # G15e: the layer WITHOUT Classic++ art — the UI-only A/B
+tools/tacli arm <i> 'gui.on=sharptest log'   # G17a: the sharp layer filled with a known pattern
 tools/tacli gui <i>               # report
-tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= fps=
+tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= k= sharp= fps=
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --layer --out /tmp/uiwalk
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --side core --layer --game-only --out /tmp/uiwalk-core
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --layer --cycles 3 --out /tmp/uiwalk-cycles   # G15d: three game->shell->game cycles
@@ -1331,17 +1332,20 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
   is dead or crawling — G15d), `skipped=` the stale ops the render thread stepped over after a
   context change. `palchg=` counts palette uploads (a fade is a run of them; a switch costs a
   few) and `paldiff=n@i` the entries where the presented palette differs from `main+0x143A7`
-  and the first of them: **235 on a stock instance, in the shell and in game alike** (the
-  template prefix's `Gamma = 15`, below); 255 after `+gamma 15`, 0 after `+gamma 10`. In the
+  and the first of them: **whatever the live `Gamma` makes it, not a property of an instance**
+  (below) — 235 at factor 1.125 and 0 at 1.0, in the shell and in game alike; 255 after
+  `+gamma 15`, 0 after `+gamma 10`. In the
   shell exactly one entry, index 9, differs *beyond* the gamma scale.
 - **The presented palette is not `main+0x143A7`**: the engine scales every palette it sets by
   the Gamma factor on the way to DirectDraw (`SetGamma 0x4BA590`) and never scales its table.
   The scale **truncates**. **The factor has two formulas**: an option screen applies
-  `0.5 + Gamma/24`, while **`+gamma N` typed in chat sets it to `N/10` outright**
-  (`+gamma 15` → 1.5, `+gamma 10` → 1.0) with no cheat bit — the lever that makes the two
-  palettes differ in a skirmish. **The stock factor here is 1.125, not 1.0**: `wineprefix/`
-  carries `Gamma = 0x0f` and every instance hardlink-clones it (MEASURED 2026-09-09), so an
-  instance presents scaled with nothing having been typed. **Since 2026-09-09 everything we draw
+  `0.5 + Gamma/24` (1.0 at the engine's own default of 12), while **`+gamma N` typed in chat sets
+  it to `N/10` outright** (`+gamma 15` → 1.5, `+gamma 10` → 1.0) with no cheat bit — the lever
+  that makes the two palettes differ in a skirmish. **`Gamma` is one shared, mutable value, not a
+  property of the template**: `wineprefix/user.reg` and all 58 instance prefixes are the same
+  inode and wine rewrites it in place at launch, so it is whatever TA last stored — 15 (factor
+  1.125, `paldiff=235`) and 12 (factor 1.0, `paldiff=0`) have both been read on the same day
+  (MEASURED 2026-09-09). **Read it, never assume it.** **Since 2026-09-09 everything we draw
   follows the presented palette**, the world included (`tagpu_pal.c`, gpu-status §2.3f);
   `tagpu.log`'s `pal: presented palette changed (… gamma=…)` line is where to read the live
   factor, and `tacli peek <i> '*0x511DE8+0x37F08:4'` gives the *option*, which after a `+gamma`
@@ -1386,14 +1390,76 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
     `colvalid=0` for a moment, then `rearms=` +1 and `colvalid=1` again. It does **not** move
     `paldiff` off 0 — `paldiff` already reads **235** on a stock instance (next bullet).
   - **`paldiff=235` is the ORDINARY reading here, not a `+gamma` one** [MEASURED 2026-09-09].
-    Every instance hardlink-clones `wineprefix/`, and that prefix carries `Gamma = 0x0f`, so the
-    presented factor is `0.5 + 15/24 = 1.125` (truncated: the presented palette reproduces exactly
-    as `min(255, (int)(e × 1.125))`) and 235 of 256 entries differ from `main+0x143A7` in the shell
-    and in game alike. Only index 9, in the shell, differs *beyond* that scale. Two consequences:
-    **the world passes are ~11 % dark** (they read `+0x143A7`; in a Classic frame 14 896 of a
-    17 049-px viewport sample are exact `palette.pal` colours against 244 presented ones), and
-    **anything comparing a restored twin to an offline restore must use the presented palette**,
-    never the archives' `palette.pal`.
+    **`paldiff` is whatever the live `Gamma` makes it, and `Gamma` is one value shared by the
+    template prefix and all 58 instances** (the same inode — `clone_prefix` is `cp -al` — rewritten
+    in place by wine at every launch). At 15 the factor is `0.5 + 15/24 = 1.125`, truncated (the
+    presented palette reproduces exactly as `min(255, (int)(e × 1.125))`), and 235 of 256 entries
+    differ from `main+0x143A7` in the shell and in game alike; only index 9, in the shell, differs
+    *beyond* that scale. At 12 the factor is 1.0 and `paldiff` reads **0**. Both were read on
+    2026-09-09, hours apart, on the same DLLs. **So read `paldiff=` from the heartbeat before
+    trusting any measurement that depends on it** — do not assume 235, and do not "fix" the
+    registry value, which would move every measurement taken against that prefix. Two standing
+    consequences: **the world passes are dark by the factor whenever it is not 1.0** (they read
+    `+0x143A7`; at 1.125, 14 896 of a 17 049-px Classic viewport sample are exact `palette.pal`
+    colours against 244 presented ones), and **anything comparing a restored twin to an offline
+    restore must use the presented palette**, never the archives' `palette.pal`.
+
+- **The composite is three layers since G17a (2026-09-09)**, and the heartbeat says so with
+  **`k=` and `sharp=`**: `k` is device pixels per twin texel (`vp_w / twin_w`, read off the frame)
+  and `sharp=WxH` the sharp layer's size (the *viewport*, not the client). **`k` is not always
+  1**: `resizable` defaults TRUE and `maintas` fits the viewport to the client, so any window
+  dragged off the game resolution is fractional, and the second game→shell return at 1920×1080
+  gives `k=2.000 sharp=1280x960` (a 1280×984 client over the 640×480 shell). **At integer `k` the
+  ramp is exactly nearest**, so `k = 2` proves the seam holds and proves nothing about the blend
+  — that needs a fractional `k`, which is G17b's.
+  - **The mirror is unchanged and so is the `strict` walk**: the 4-tap ramp is bit-identical at
+    `k = 1` by construction, so `uiwalk.py --layer` is still the regression it was (0/0/0 at every
+    stop but `MAINMENU`'s sparkle). If it ever stops being, the ramp is what to suspect first.
+  - **`gui.on=sharptest` is the lever that proves the sharp layer exists.** It is empty until
+    G17c/G17d, so nothing else can tell a wired layer from dead code. It paints a 64×64 opaque
+    green square at the viewport's **top-left** and a **one-device-pixel** white column at device
+    x = 100, both drawn as **geometry** (the client kind G17c and G17d will be); check the
+    square's bbox is `(0,0)-(63,63)` in a `glshot`. **There is no y flip in the sharp layer** — a
+    client uses `QVS`, the twins' own vertex mapping, and one that adds a flip draws upside down.
+    Harness only, like `strict` — never hand a player an instance with it armed.
+
+### Driving and measuring at k != 1 (phase 2, G17b)
+
+```bash
+tools/tacli launch <i> --res 1280x720 --window 1920x1080   # engine 1280x720 in a 1920x1080 client => k = 1.5
+tools/tacli click <i> 1056 764 --device                    # CLIENT-AREA pixels, converted by the engine's own path
+tools/tacli ui <i> click SINGLE --device                   # aim where the gadget is DRAWN
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --window 1536x1152 --layer --device --cycles 3
+```
+
+- **`--window WxH` is the whole trick, and it needs no engine patch.** cnc-ddraw takes
+  `ddraw.ini`'s `width`/`height` as the client and maxes them against the game mode
+  (`dd.c`), so the engine keeps its own screen and the fork letterboxes it: `k = window / res`.
+  It is sticky in the instance's meta, like `--res`. The **shell is atom-locked at 640x480**, so a
+  1536x1152 window puts the shell at k = 2.4 and the game at k = 1.5 in the same run.
+- **`--device` is the only click that tests the pointer path.** Every other injected event is
+  delivered in the engine's own coordinates (`tagpu_shield.c` `deliver_mouse`), so it never
+  touches `mouse.unscale_*` and would pass at any k, right or wrong. `--device` posts
+  client-area pixels and lets `mouse_client_to_game` — the same function a hardware click takes
+  — work back to a logical pixel.
+- **`uiwalk` runs a hit check at every stop whether or not you pass `--device`** (it costs a
+  snapshot, no clicking): every gadget aimed where the renderer draws it, put through the fork's
+  own inverse, checked back inside its own rect. Read `MISS=` and `drift=` on the per-stop line
+  and the four new `report.md` columns. **Worst drift is 1 logical pixel** — the renderer scales
+  by `vp/surface` and the input unscales by `(surface-1)/(vp-1)` — so it is a hit test, not a
+  pixel test. Zero-area rects are counted as `degenerate`, not misses.
+- **Pixel parity reads `-1` at k != 1 and that is correct**: `frame_parity` refuses a stop whose
+  GL frame and surface are not 1:1. The hit columns are the measurement there.
+- **Do not walk cycles at 1280x720.** Leaving a game at that mode crashes in the level teardown —
+  at k = 1 too, so it is the mode and not the scaling ([resolution](resolution.html) §3.1d).
+  `--res 1024x768 --window 1536x1152` is k = 1.5 on a mode with clean teardowns on record.
+- **The world can be drawn at the device's resolution since G17b, and it is OPT-IN**: arm
+  `tagpu_devres.on` and `ss` follows `ceil(k)` with the box-resolve to game resolution skipped,
+  so the composite downsamples rather than nearest-stretching. The native log line carries
+  `devres=` beside `ss=`. It is not the default because a selection rect drawn in an `ss` buffer
+  is one *supersample* wide (the driver clamps aliased line width to 1), which under `devres`
+  reaches the screen thinner and dimmer than the engine's — that wants the rects drawn as real
+  geometry first.
 
 ### The Q2 diff — is the restored UI right? (G15e)
 

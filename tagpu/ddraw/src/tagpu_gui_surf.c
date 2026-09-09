@@ -45,8 +45,22 @@
    gadget on every flip; the in-game panel repaints on a mode switch or when
    something marks it dirty.
 
-   The twin is 1:1 and NEAREST; its size is the surface's × k with k = 1
-   (gui-renderer.md 6 — phase 2 raises k). */
+   THE SEAM (G17a, gui-renderer.md 13.2-13.3). The twin stays 1:1 with the
+   engine's surface — same ops, same seeds, same census, so phase 1's `strict`
+   walk goes on meaning what it meant. What changed is how it reaches the
+   screen. The composite is now three layers, top down: the SHARP LAYER (one
+   RGBA8 texture at the DEVICE resolution, drawn from live state at present
+   time — empty until the cursor and the string op fill it), then the mirror
+   scaled by a SHARP-BILINEAR ramp one device pixel wide, then the engine's own
+   frame as the fallback. k is device pixels per twin texel, read off the frame
+   rather than configured, and it is 1.0 wherever the engine's screen IS the
+   window; giving the ENGINE window / k is G17b's. It is NOT always 1 today:
+   `resizable` defaults TRUE (config.c) and `maintas` fits the viewport to the
+   window (dd.c), so a player who drags the window off the game resolution is
+   already at a fractional k and already gets this ramp. At k = 1 the ramp is
+   exactly one source texel wide, so every output pixel samples a texel centre
+   and the frame is what texelFetch gave, to within a rounding step far too
+   small to cross an 8-bit value: that identity is the gate, not a hope. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -136,6 +150,7 @@ static GLuint s_sprProg, s_cpyProg, s_layProg, s_vao, s_vbo, s_palTex;
 static GLint  s_uSprSize, s_uSprCK, s_uSprRestored;
 static GLint  s_uCpySize, s_uCpyOff, s_uCpyHasCol;
 static GLint  s_uLaySize, s_uLayStrict, s_uLayKey, s_uLayVp, s_uLayCursor, s_uLayColOn;
+static GLint  s_uLayScale, s_uLaySharpSize, s_uLaySharpOn;
 static TAGPU_GAFATLAS s_atlas;
 static TAGPU_GAFENT   s_ents[ATLAS_MAX];
 static unsigned char* s_rg;             /* interleave scratch, 2 bytes per texel */
@@ -158,6 +173,15 @@ static unsigned s_palSeen = 0;          /* tagpu_pal_changes() when the settle c
 static int    s_palSettle = 0;
 static unsigned s_rearms = 0, s_colTwins = 0;
 static unsigned s_rglslSeen = 0;        /* tagpu_rglsl_calls() at the last present */
+/* Phase 2's seam (G17a) */
+static GLuint s_sharpTex, s_sharpFbo;   /* the sharp layer: device res, RGBA8, row 0 the viewport's TOP */
+static int    s_sharpW, s_sharpH;       /* its size, = the frame's viewport in window px               */
+static int    s_sharpOn = 0;            /* it exists and may be sampled this frame                     */
+static int    s_sharptest = 0;          /* the harness lever that proves the layer is wired            */
+static int    s_sharpFailed = 0;        /* the target could not be made: stay off rather than retry     */
+static GLuint s_sharpProg;              /* QVS + SHARP_FS: a client's flat-coloured quad in the layer   */
+static GLint  s_uSharpProgSize, s_uSharpProgCol;
+static float  s_k = 1.0f;               /* device px per twin texel: 13.1's k, and the ramp's width    */
 
 /* ----------------------------------------------------------------- shaders */
 /* a quad in surface pixels -> the twin's FBO (row 0 = surface row 0) */
@@ -208,12 +232,38 @@ static const char* LAY_VS =
     "out vec2 uv;\n"
     "void main(){ uv = a.xy;\n"
     "  gl_Position = vec4(a.x*2.0-1.0, 1.0-a.y*2.0, 0.0, 1.0); }\n";
+/* A CLIENT'S FILL IN THE SHARP LAYER: a constant colour over a quad given in
+   sharp-layer pixels, y DOWN from the viewport's top row. It pairs with QVS,
+   the TWINS' vertex mapping, unchanged and deliberately: both textures are
+   read back with a texelFetch whose row 0 is the top of the thing they mirror,
+   and NDC y = -1 is attachment row 0, so `y / size * 2 - 1` is the one mapping
+   both want. There is no flip anywhere in this module, and a client that adds
+   one draws upside down (MEASURED 2026-09-09: this shader had one for exactly
+   as long as it took `sharptest` to draw a quad through it). */
+static const char* SHARP_FS =
+    "#version 330 core\n"
+    "out vec4 frag; uniform vec4 uCol;\n"
+    "void main(){ frag = uCol; }\n";
 static const char* LAY_FS =
     "#version 330 core\n"
     "in vec2 uv; out vec4 frag;\n"
     "uniform sampler2D uTwin; uniform sampler2D uPal; uniform sampler2D uSurf;\n"
-    "uniform sampler2D uTwinCol; uniform int uColOn;\n"
-    "uniform ivec2 uSize; uniform int uStrict; uniform int uKey; uniform vec4 uVp; uniform vec4 uCursor;\n"
+    "uniform sampler2D uTwinCol; uniform sampler2D uSharp;\n"
+    "uniform int uColOn; uniform int uSharpOn;\n"
+    "uniform ivec2 uSize; uniform ivec2 uSharpSize; uniform vec2 uScale;\n"
+    "uniform int uStrict; uniform int uKey; uniform vec4 uVp; uniform vec4 uCursor;\n"
+    /* ONE TAP OF THE MIRROR, premultiplied by its coverage. rgb is the
+       restored colour where this texel has one and the live palette
+       everywhere else (the per-texel rule of 3.4, unchanged); a is coverage,
+       so an uncovered texel contributes NOTHING to a blend instead of
+       dragging index 0 in from a box the key fill erased. */
+    "vec4 tap(ivec2 p){\n"
+    "  p = clamp(p, ivec2(0), uSize - 1);\n"
+    "  vec2 g = texelFetch(uTwin, p, 0).rg;\n"
+    "  if (g.g <= 0.5) return vec4(0.0);\n"
+    "  if (uColOn != 0) { vec4 c = texelFetch(uTwinCol, p, 0);\n"
+    "    if (c.a > 0.5) return vec4(c.rgb, 1.0); }\n"
+    "  return vec4(texture(uPal, vec2((g.r * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); }\n"
     "void main(){\n"
     "  ivec2 p = clamp(ivec2(uv * vec2(uSize)), ivec2(0), uSize - 1);\n"
     "  vec2 f = vec2(p);\n"
@@ -223,14 +273,33 @@ static const char* LAY_FS =
        and the same rect is exempt from `strict`. */
     "  bool cur = f.x >= uCursor.x && f.x < uCursor.x + uCursor.z && f.y >= uCursor.y && f.y < uCursor.y + uCursor.w;\n"
     "  if (cur) discard;\n"
-    "  vec2 g = texelFetch(uTwin, p, 0).rg;\n"
-    "  if (g.g > 0.5) {\n"
-    /* Classic++ per texel: the restored colour where this texel has one, the
-       live palette everywhere else -- so a surface only half restored is
-       never half WRONG, and an invalid palette (uColOn 0) is simply indexed */
-    "    if (uColOn != 0) { vec4 c = texelFetch(uTwinCol, p, 0);\n"
-    "      if (c.a > 0.5) { frag = vec4(c.rgb, 1.0); return; } }\n"
-    "    frag = vec4(texture(uPal, vec2((g.r * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); return; }\n"
+    /* THE SHARP LAYER (gui-renderer.md 13.2), top of the composite: device
+       resolution, drawn from live state at present time, row 0 the viewport's
+       TOP row. Alpha is its coverage; G17a leaves it empty, so this branch is
+       taken by nothing until the cursor (G17c) and the string op (G17d) fill
+       it, and `sharptest` is what proves it is wired at all. */
+    "  if (uSharpOn != 0) {\n"
+    "    ivec2 sp = clamp(ivec2(uv * vec2(uSharpSize)), ivec2(0), uSharpSize - 1);\n"
+    "    vec4 sh = texelFetch(uSharp, sp, 0);\n"
+    "    if (sh.a > 0.5) { frag = vec4(sh.rgb, 1.0); return; }\n"
+    "  }\n"
+    /* THE 1x MIRROR, SCALED BY THE SHARP-BILINEAR RAMP (gui-renderer.md 13.3).
+       A 4-tap whose weight ramps across ONE DEVICE PIXEL — flat inside a
+       texel, steep across its boundary — so a 1-px bevel does not stagger
+       between one and two device pixels at a fractional k the way nearest
+       does. It runs AFTER the palette lookup because interpolating indices is
+       meaningless, and coverage is thresholded at 0.5 exactly as the fog
+       grid's corner bits are.
+       AT uScale = 1 IT MUST BE THE IDENTITY, and that is the gate: tc lands on
+       an integer, so w is 0 or 1 and the blend is a single tap, resolved
+       through the palette and divided by its own coverage of 1. */
+    "  vec2 tc = uv * vec2(uSize) - 0.5;\n"
+    "  vec2 b  = floor(tc);\n"
+    "  vec2 w  = clamp((tc - b - 0.5) * uScale + 0.5, 0.0, 1.0);\n"
+    "  ivec2 ib = ivec2(b);\n"
+    "  vec4 c = mix(mix(tap(ib),                tap(ib + ivec2(1, 0)), w.x),\n"
+    "               mix(tap(ib + ivec2(0, 1)), tap(ib + ivec2(1, 1)), w.x), w.y);\n"
+    "  if (c.a > 0.5) { frag = vec4(c.rgb / c.a, 1.0); return; }\n"
     "  if (uStrict == 1) {\n"
     "    int e = int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5);\n"
     "    bool inVp = f.x >= uVp.x && f.x < uVp.x + uVp.z && f.y >= uVp.y && f.y < uVp.y + uVp.w;\n"
@@ -288,7 +357,10 @@ static int init_gl(void)
     s_sprProg = mkprog(QVS, SPR_FS);
     s_cpyProg = mkprog(QVS, CPY_FS);
     s_layProg = mkprog(LAY_VS, LAY_FS);
+    s_sharpProg = mkprog(QVS, SHARP_FS);
     if (s_gl == 2) return 0;
+    s_uSharpProgSize = glGetUniformLocation(s_sharpProg, "uSize");
+    s_uSharpProgCol  = glGetUniformLocation(s_sharpProg, "uCol");
     glUseProgram(s_sprProg);
     glUniform1i(glGetUniformLocation(s_sprProg, "uAtlas"), 0);
     glUniform1i(glGetUniformLocation(s_sprProg, "uAtlasRGB"), 1);
@@ -306,12 +378,16 @@ static int init_gl(void)
     glUniform1i(glGetUniformLocation(s_layProg, "uPal"),  1);
     glUniform1i(glGetUniformLocation(s_layProg, "uSurf"), 2);
     glUniform1i(glGetUniformLocation(s_layProg, "uTwinCol"), 3);
+    glUniform1i(glGetUniformLocation(s_layProg, "uSharp"),   4);
     s_uLaySize   = glGetUniformLocation(s_layProg, "uSize");
     s_uLayStrict = glGetUniformLocation(s_layProg, "uStrict");
     s_uLayKey    = glGetUniformLocation(s_layProg, "uKey");
     s_uLayVp     = glGetUniformLocation(s_layProg, "uVp");
     s_uLayCursor = glGetUniformLocation(s_layProg, "uCursor");
     s_uLayColOn  = glGetUniformLocation(s_layProg, "uColOn");
+    s_uLayScale     = glGetUniformLocation(s_layProg, "uScale");
+    s_uLaySharpSize = glGetUniformLocation(s_layProg, "uSharpSize");
+    s_uLaySharpOn   = glGetUniformLocation(s_layProg, "uSharpOn");
     glUseProgram(0);
     glGenVertexArrays(1, &s_vao);
     glGenBuffers(1, &s_vbo);
@@ -709,11 +785,137 @@ static void cursor_rect(float* r)
     else { r[2] = 64.0f; r[3] = 64.0f; }
 }
 
+/* ------------------------------------------------------------ sharp layer */
+/* THE SCREEN-SPACE HALF OF 13.2's SHARP LAYER. One RGBA8 texture the size of
+   the frame's viewport in WINDOW pixels — everything of ours at the device's
+   resolution (13.1) — cleared at every present and composited above the 1x
+   mirror wherever its alpha says it has coverage.
+
+   ROW 0 IS THE VIEWPORT'S TOP ROW, and it is the LAYER SHADER that makes it
+   so: it samples this texture with the same top-down `uv` it indexes the twin
+   with. Nothing about an FBO flips anything -- glScissor's y is measured from
+   the framebuffer origin here exactly as it is on the window, and that origin
+   is attachment row 0, which is also where NDC y = -1 lands. So a scissor box
+   and a client's geometry agree without help, and a client uses QVS, the very
+   mapping the twins use.
+   `sharptest` earned its lines twice over here (MEASURED 2026-09-09). Its
+   first square was scissored at `h - 64`, on the assumption that a scissor is
+   bottom-up like the window's, and came out at the foot of the screen. The
+   landing review then said the explanation was wrong in a way that would
+   mirror G17c's cursor -- correctly -- and the shader written to fix it added
+   a flip, which put the quad at the foot of the screen again. There is no
+   flip. The lever caught both.
+
+   Empty in G17a by design: its clients are the cursor (13.5, G17c) and the
+   string op (13.4, G17d). `sharptest` is what makes an empty layer testable —
+   without it the gate cannot tell a wired layer from a dead one. */
+static void sharp_drop(void)
+{
+    if (s_sharpFbo) glDeleteFramebuffers(1, &s_sharpFbo);
+    if (s_sharpTex) glDeleteTextures(1, &s_sharpTex);
+    s_sharpFbo = s_sharpTex = 0;
+    s_sharpW = s_sharpH = 0;
+    s_sharpOn = 0;
+}
+
+static void sharp_begin(const TAGPU_FRAME* f)
+{
+    int w = f->vp_w, h = f->vp_h;
+    s_sharpOn = 0;
+    /* A FAILURE LATCHES, like init_gl's s_gl = 2. sharp_drop() zeroes the ids,
+       so without this every present would re-enter the allocation below --
+       generating, sizing and deleting a vp_w x vp_h texture and appending a log
+       line 60 times a second for the rest of the session, which buries the
+       heartbeat. The layer is additive, so staying off costs sharpness only. */
+    if (s_sharpFailed) return;
+    if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return;
+    if (s_sharpTex && (s_sharpW != w || s_sharpH != h)) sharp_drop();
+    if (!s_sharpTex) {
+        GLenum st;
+        glGenTextures(1, &s_sharpTex);
+        glGenFramebuffers(1, &s_sharpFbo);
+        if (!s_sharpTex || !s_sharpFbo) {
+            slog("gui: sharp layer — no texture/framebuffer id, the mirror alone");
+            sharp_drop(); s_sharpFailed = 1; return;
+        }
+        glBindTexture(GL_TEXTURE_2D, s_sharpTex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, s_sharpFbo);
+        x_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_sharpTex, 0);
+        st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (st != GL_FRAMEBUFFER_COMPLETE) {
+            /* the mirror alone is a complete picture — the layer is additive
+               (13.2), so a target we cannot make costs sharpness, never a hole */
+            char b[140];
+            _snprintf(b, sizeof b, "gui: sharp layer %dx%d FBO incomplete (%x) — the mirror alone", w, h, (unsigned)st);
+            b[sizeof b - 1] = '\0';
+            slog(b);
+            sharp_drop();
+            s_sharpFailed = 1;
+            return;
+        }
+        s_sharpW = w; s_sharpH = h;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, s_sharpFbo);
+    glViewport(0, 0, w, h);
+    x_glDisable(GL_SCISSOR_TEST);
+    x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    x_glClear(GL_COLOR_BUFFER_BIT);
+    if (s_sharptest && s_sharpProg) {
+        /* THE HARNESS LEVER, never for a player, and the only thing in G17a
+           that puts a texel in this layer: a 64x64 opaque green square at the
+           viewport's TOP-LEFT and a one-DEVICE-pixel white column at device
+           x = 100. Between them they prove the five things the gate cannot
+           otherwise see — the layer exists at the device resolution, it
+           composites ABOVE the mirror, alpha is what gates it, row 0 is the
+           top, and SHARP_VS puts a client's GEOMETRY the right way up. It is
+           drawn as quads rather than scissored clears precisely because
+           geometry is what G17c and G17d will use, and a scissor box would
+           have proved the convention for the one client kind that never
+           needs it. */
+        float v[24];
+        x_glDisable(GL_BLEND);
+        x_glDisable(GL_DEPTH_TEST);
+        glUseProgram(s_sharpProg);
+        x_glUniform2f(s_uSharpProgSize, (float)w, (float)h);
+        glBindVertexArray(s_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+        x_glUniform4f(s_uSharpProgCol, 0.0f, 1.0f, 0.0f, 1.0f);
+        quad(v, 0.0f, 0.0f, 64.0f, 64.0f, 0, 0, 0, 0);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
+        x_glDrawArrays(GL_TRIANGLES, 0, 6);
+        x_glUniform4f(s_uSharpProgCol, 1.0f, 1.0f, 1.0f, 1.0f);
+        quad(v, 100.0f, 0.0f, 101.0f, (float)h, 0, 0, 0, 0);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
+        x_glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+    /* THE CLEAR COLOUR IS MODULE-WIDE STATE AND WE OWN IT AT (0,0,0,0).
+       render_ogl.c repaints the letterbox bars with a bare glClear on EVERY
+       frame whose viewport is offset (`if (viewport.x || viewport.y)`), and
+       tagpu_overlay_capture_begin does the same for a glshot — neither sets a
+       colour of its own, so whatever we leave here is what they paint. The
+       clear above already ends at (0,0,0,0) on the normal path; this is the
+       statement of the invariant, not a second setter.
+       `sharp_begin` also leaves the VIEWPORT at (0,0,w,h) with the scissor
+       test off and the default framebuffer bound. That is safe only because
+       tagpu_gui_present rebinds the target FBO and the frame's viewport after
+       draw_layer -- which can return early -- so a future client drawing here
+       must not assume draw_layer ran. */
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    s_sharpOn = 1;
+}
+
 static void draw_layer(const TAGPU_FRAME* f)
 {
     TWIN* t = s_presented ? twin_find(s_presented) : NULL;
-    float v[24], cur[4];
-    GLint sz[2];
+    float v[24], cur[4], ky;
+    GLint sz[2], sh[2];
     const char* ta = *(const char* const*)TA_MAINPP;
     int L = 0, T = 0, W = 0, H = 0, key;
     if (!t || t->w != f->game_width || t->h != f->game_height) return;
@@ -738,6 +940,25 @@ static void draw_layer(const TAGPU_FRAME* f)
     x_glUniform4f(s_uLayVp, (float)L, (float)T, (float)W, (float)H);
     cursor_rect(cur);
     x_glUniform4f(s_uLayCursor, cur[0], cur[1], cur[2], cur[3]);
+    /* k, and with it the ramp's width (13.3): device pixels per twin texel.
+       The twin is the engine's surface 1:1, so this is exactly 13.1's k — 1.0
+       for as long as the engine's screen IS the window. That is NOT the same
+       as "always 1 in phase 1": any window the player drags off the game
+       resolution lands here fractional, and so does the 640x480 shell left in
+       a bigger client. Below 1 the fork is scaling the engine DOWN into a
+       smaller window; the ramp is held at plain bilinear there rather than
+       widened past a texel. */
+    s_k = (t->w > 0 && f->vp_w > 0) ? (float)f->vp_w / (float)t->w : 1.0f;
+    if (s_k < 1.0f) s_k = 1.0f;
+    ky = (t->h > 0 && f->vp_h > 0) ? (float)f->vp_h / (float)t->h : 1.0f;
+    if (ky < 1.0f) ky = 1.0f;
+    x_glUniform2f(s_uLayScale, s_k, ky);
+    /* the sharp layer, above everything, at the device resolution */
+    glUniform1i(s_uLaySharpOn, s_sharpOn ? 1 : 0);
+    sh[0] = s_sharpW; sh[1] = s_sharpH;
+    x_glUniform2iv(s_uLaySharpSize, 1, sh);
+    x_glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, s_sharpOn ? s_sharpTex : s_palTex);
     /* Classic++: the presented surface's colour twin, and whether it may be
        read at all this frame (the palette-validity rule, restore_step) */
     glUniform1i(s_uLayColOn, (s_colValid && t->rgb) ? 1 : 0);
@@ -762,6 +983,7 @@ static void unbind_all(void)
 {
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, 0);
     x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, 0);
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, 0);
     x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
@@ -787,6 +1009,10 @@ static void poll(void)
     /* `norestore`: the layer without Classic++ art, so the two halves can be
        A/B'd live without turning the world's restorer off too */
     s_norestore = on && strstr(buf, "norestore") != NULL;
+    /* `sharptest`: 13.2's sharp layer filled with a known pattern. The
+       harness's mode like `strict`, never a player's — G17a's layer is empty
+       otherwise and an empty layer proves nothing. */
+    s_sharptest = on && strstr(buf, "sharptest") != NULL;
     if (on != s_on) {
         s_on = on;
         g_gui_draw = on;
@@ -823,14 +1049,19 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         s_rglslSeen = tagpu_rglsl_calls();
     }
     drain();
+    /* AFTER the drain, which binds twin FBOs and leaves one bound, and before
+       the layer that samples it: the sharp layer is cleared for this frame
+       (and, under `sharptest`, filled) while nothing of the composite has
+       been written yet. */
+    sharp_begin(f);
     draw_layer(f);
     unbind_all();
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
     if (f->frame_counter - last >= 300) {
-        /* 194 bytes of literal + 27 conversions: the worst case is ~491, and
+        /* 205 bytes of literal + 30 conversions: the worst case is ~519, and
            _snprintf does not NUL-terminate what it truncates */
-        char b[640];
+        char b[768];
         int palDiffAt, palDiff = tagpu_pal_diff(&palDiffAt);
         static LARGE_INTEGER t0, fq;
         LARGE_INTEGER t1;
@@ -840,11 +1071,12 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
-                  tagpu_classicpp_on() ? 1 : 0, s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb, fps);
+                  tagpu_classicpp_on() ? 1 : 0, s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb,
+                  s_k, s_sharpW, s_sharpH, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
     }
@@ -856,6 +1088,8 @@ void tagpu_gui_glreset(void)
        and take nothing from the queue until the producer's RESET arrives */
     s_ntwins = 0; s_presented = 0;
     s_gl = 0; s_sprProg = s_cpyProg = s_layProg = s_vao = s_vbo = s_palTex = 0;
+    s_sharpTex = s_sharpFbo = 0; s_sharpW = s_sharpH = 0; s_sharpOn = 0;   /* the sharp layer died with it */
+    s_sharpProg = 0; s_sharpFailed = 0;      /* a new context deserves a fresh try */
     tagpu_gaf_atlas_lost(&s_atlas);
     s_palUpValid = 0;                                 /* the palette texture died too: re-upload */
     s_skipToReset = 1;

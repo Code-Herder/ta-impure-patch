@@ -2408,18 +2408,24 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
   right and a `+0x143A7` reader would not); `+gamma 15` in game makes every
   non-black entry differ and the twin still matches the engine's frame ([GL UI
   renderer](gui-renderer.html) §12 has the run).
-- **The Gamma this project actually runs at is 15, not the code's default 12** [MEASURED
-  2026-09-09, [GL UI renderer](gui-renderer.html) §14]. `0x4301C0`'s default only applies when
-  the registry value is absent, and it is not: the **template wine prefix every `tacli` instance
-  hardlink-clones carries `Gamma = 0x0f`**. So the presented factor is `0.5 + 15/24 = 1.125`,
-  applied by **truncation** — the presented palette reproduces exactly as
-  `min(255, (int)(entry × 1.125))` in all 256 entries, and with rounding in only 86 — and it
-  differs from `main+0x143A7` in **235 of 256 entries in the shell and in game alike**. An
-  earlier reading of this paragraph recorded `paldiff` as 0 in game; **235 is the ordinary
-  reading**, and 0 is what a `+gamma 10` leaves behind for the rest of that process.
+- **The Gamma this project runs at is one shared, mutable registry value — read it, never assume
+  it** [MEASURED 2026-09-09, [GL UI renderer](gui-renderer.html) §15, which corrects §14].
+  `0x4301C0`'s default of 12 applies only when the registry value is absent, and it is not
+  absent. But it is also **not a property of the template prefix**: `wineprefix/user.reg` and all
+  58 `tagpu/instances/*/prefix/user.reg` are **one inode with 59 hard links** (`tacli`'s
+  `clone_prefix` is `cp -al`), and wine rewrites that file **in place at every launch**, so there
+  is a single `Gamma` for the template and every instance and it is whatever TA last stored.
+  Both values have been read hours apart on the same day, on the same DLLs:
+  **at 15** the presented factor is `0.5 + 15/24 = 1.125`, applied by **truncation** — the
+  presented palette reproduces exactly as `min(255, (int)(entry × 1.125))` in all 256 entries,
+  with rounding in only 86 — and it differs from `main+0x143A7` in **235 of 256 entries in the
+  shell and in game alike**; **at 12** the factor is 1.0 and `paldiff` reads **0**. An earlier
+  reading of this paragraph recorded `paldiff` as 0 in game and a later one called 235 "the
+  ordinary reading"; **neither is ordinary** — the heartbeat's `paldiff=` is the measurement, and
+  `+gamma N` in chat moves it for the rest of that process.
   Consequence, measured the same day: every pass that reads `+0x143A7` — terrain, features,
   effects, markers, the 3DO/unit atlas — draws the world ~11 % darker than the engine presents
-  its own pixels, on every instance here. In a Classic frame with those passes drawing, 14 896
+  its own pixels **whenever the factor is not 1.0**. In a Classic frame with those passes drawing at 1.125, 14 896
   of a 17 049-pixel viewport sample are exact `palette.pal` colours against 244 presented ones
   (the two palettes share 8 of 256). Not a bug with an obvious side: the browser lab is built on
   `palette.pal`, so a world matching it is what `tascene ab` parity measures.
@@ -2449,7 +2455,9 @@ nothing to switch); **`MEM_Free 0x4D85A0(main+0x37E1B)` at `0x491AB8` — the ga
 straight to the heap, not through `SurfaceFree 0x4C6AC0`** (`0x49838C` does the same at the
 game's mode switch); `main+0x37E1B = 0`; `0x4C61F0(0)`; `0x4C62C0()` (restores the DirectDraw
 surfaces `globals+0x88`/`+0x8C` and re-sets their palette — slots `+0x60`, `+0x6C` — no release);
-`SetWindowPos(…, 640, 480, 4)` (`[0x4fc2f0]`); `NewTAScreen(640, 480)` at `0x491B0B`;
+`SetWindowPos(…, 640, 480, 4)` (`[0x4fc2f0]`, the call at **`0x491AFB`** — **a no-op under our
+fork**, which swallows it in `fake_SetWindowPos`: [resolution](resolution.html) §3.1c);
+`NewTAScreen(640, 480)` at `0x491B0B`;
 `main+0x37E1B = 0x4C69F0("OFFSCREEN", main+0x37E1F, main+0x37E23)` at `0x491B28`. **The tag
 `"OFFSCREEN"` is the string at `0x5091D4`**, and the five sites that create the main offscreen
 with it are `0x490AD3`, `0x491250`, `0x491B23` (this one), `0x4980CF` (the loading-screen
