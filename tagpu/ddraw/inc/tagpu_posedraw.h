@@ -101,7 +101,18 @@ typedef struct {
     int   castSkip;             /* out of the depth map (nanoframe, air drop) */
 } TAGPU_PDUNIT;
 
-int  tagpu_posedraw_armed(void);      /* tagpu_posedraw.on, re-read per frame */
+/* Whether the pass can actually draw: its programs linked, its buffers exist
+   and the driver's uniform block is big enough. Published because `owndraw`
+   must not skip the engine's unit rasterise unless something will replace it —
+   gpu-posing.md §4, decision B. Safe to call from the GAME thread: the render
+   thread is the only writer and the word only ever says "live" after the pass
+   is. */
+int  tagpu_posedraw_live(void);
+/* ...and whether it has TRIED and failed, as opposed to not having run yet.
+   Only the first is a reason to say anything: `!live` is also the ordinary
+   state of the first frames. */
+int  tagpu_posedraw_refused(void);
+unsigned tagpu_posedraw_drawn(void);  /* units drawn this frame */
 void tagpu_posedraw_frame(void);      /* once per frame, before anything else */
 
 /* 0 when the pass cannot draw (no lever, no GL, a driver whose uniform block

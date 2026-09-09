@@ -62,9 +62,10 @@
    TAGPU_PBMAXPIECE (256) pieces of 3 rows plus two packed flag arrays — 14336
    bytes, inside the 16 KB GL 3.1 guarantees, with headroom rather than sitting
    exactly on the limit. The guarantee is not assumed: GL_MAX_UNIFORM_BLOCK_SIZE
-   is read at build time and the pass refuses to arm below it, so a driver that
-   cannot hold the block leaves every unit to the CPU emitter instead of
-   drawing them wrong.
+   is read at build time and the pass refuses to arm below it. Since G16 step 8
+   there is no CPU emitter to leave those units to, so the refusal is published
+   instead (`tagpu_posedraw_live`) and `owndraw` stops skipping the engine's own
+   unit rasterise — the engine draws them, rather than nothing drawing them.
 
    A HIDDEN PIECE ARRIVES AS AN ALL-ZERO MATRIX and collapses its triangles onto
    the model origin; a face the material stream has nothing for carries the skip
@@ -112,14 +113,30 @@ static void plog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-/* ---- the lever ---------------------------------------------------------- */
-/* `tagpu_posedraw.on` draws every unit whose type baked through the posed
-   program instead of the CPU emitter. It is a measurement lever, not a play
-   setting: the CPU path is Gate B's oracle and both are present until the gate
-   has run. Read on the same cadence as the pass's other levers. */
-static int s_armed;
+static int    s_state;          /* 0 untried, 1 ready, 2 refused */
 
-int tagpu_posedraw_armed(void) { return s_armed; }
+/* ---- readiness ----------------------------------------------------------
+   `tagpu_posedraw.on` WAS a measurement lever, kept while the CPU emitters
+   were Gate B's oracle. G16 step 8 deleted them, so this pass is THE unit
+   renderer and there is no lever: what is left is whether it can run at all,
+   which `tagpu_posedraw_ready()` answers once per GL context.
+
+   THAT ANSWER IS PUBLISHED, because `owndraw` needs it. Its detours skip the
+   engine's own unit rasterisers, so if this pass cannot arm and the skip
+   still happens, no units are drawn at all. `tagpu_owndraw_classify` therefore
+   asks before it skips (gpu-posing.md §4, decision B) — and reads `s_state`
+   from the GAME thread while only the render thread writes it. That is safe by
+   DIRECTION rather than by timing: `s_state` is one aligned int, set to 1 only
+   after the programs have linked and the buffers exist, and put back to 0 by
+   `tagpu_posedraw_glreset()` BEFORE a new context is used. A stale "not ready"
+   costs a double draw for a frame (the engine's 8bpp under our RGB); a stale
+   "ready" is the unsafe direction and no write order produces it. */
+int tagpu_posedraw_live(void) { return s_state == 1; }
+
+/* 1 only once the pass has TRIED and failed — a driver this build cannot run
+   on. Distinct from `!live`, which is also true for the frame or two before
+   the render thread has built anything, and which is not a problem. */
+int tagpu_posedraw_refused(void) { return s_state == 2; }
 
 /* ---- GL ---------------------------------------------------------------- */
 typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum, GLint, GLsizei);
@@ -156,7 +173,7 @@ static void* getgl(const char* n)
     return p;
 }
 
-static int    s_state;          /* 0 untried, 1 ready, 2 refused */
+
 static GLuint s_prog, s_dprog, s_ubo;
 
 /* body program */
@@ -176,6 +193,10 @@ static GLint d_anchor, d_enc, d_cast, d_shadowMat, d_depthPass, d_range;
 static GLint d_game, d_off, d_zoom, d_zoomC, d_depthScale;
 
 static unsigned s_units, s_tris, s_overPiece;
+
+/* units the pass actually drew this frame, for the caller to hold its own
+   queued count against — a queued unit that is not drawn is a missing one */
+unsigned tagpu_posedraw_drawn(void) { return s_units; }
 static unsigned s_slantU, s_slantT, s_wireU, s_wireL;
 
 /* ---- the shader --------------------------------------------------------- */
@@ -364,7 +385,6 @@ int tagpu_posedraw_ready(void)
     const char* unitFS;
     char b[256];
 
-    if (!s_armed) return 0;
     if (s_state) return s_state == 1;
     s_state = 2;                                /* refused unless we get there */
 
@@ -793,7 +813,6 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u)
 /* ---- frame, reset, stats ------------------------------------------------ */
 void tagpu_posedraw_frame(void)
 {
-    s_armed = GetFileAttributesA("tagpu_posedraw.on") != INVALID_FILE_ATTRIBUTES;
     s_units = s_tris = 0;
     s_slantU = s_slantT = s_wireU = s_wireL = 0;
 }
@@ -809,7 +828,7 @@ void tagpu_posedraw_glreset(void)
 int tagpu_posedraw_stats(char* out, int n)
 {
     int k;
-    if (!s_armed || n <= 0) { if (out && n > 0) out[0] = 0; return 0; }
+    if (s_state != 1 || n <= 0) { if (out && n > 0) out[0] = 0; return 0; }
     k = _snprintf(out, n, " posed=%u/%utri", s_units, s_tris);
     if (k < 0 || k >= n) return k;
     /* the two step-6 ranges, and only when a scene actually has them: a screen

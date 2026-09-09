@@ -1,0 +1,2608 @@
+{
+ "format": "ta-scenario/1",
+ "description": "256 units of 16 types in a block, ONE owner, no orders, nothing fighting \u2014 the large scene that stays identical between runs, so a paired A/B is valid at scale (a battle diverges and cannot be diffed). Built for G16 step 8; at 0.5x zoom it puts every unit on screen and passes the CPU emitters' 49152-vertex shared-stream budget, which is how the truncation it removes was made visible.",
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "unit_limit": 500,
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "u0",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    900
+   ],
+   "facing": 0
+  },
+  {
+   "id": "u1",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    900
+   ],
+   "facing": 23
+  },
+  {
+   "id": "u2",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    900
+   ],
+   "facing": 46
+  },
+  {
+   "id": "u3",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    900
+   ],
+   "facing": 69
+  },
+  {
+   "id": "u4",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    900
+   ],
+   "facing": 92
+  },
+  {
+   "id": "u5",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    900
+   ],
+   "facing": 115
+  },
+  {
+   "id": "u6",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    900
+   ],
+   "facing": 138
+  },
+  {
+   "id": "u7",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    900
+   ],
+   "facing": 161
+  },
+  {
+   "id": "u8",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    900
+   ],
+   "facing": 184
+  },
+  {
+   "id": "u9",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    900
+   ],
+   "facing": 207
+  },
+  {
+   "id": "u10",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    900
+   ],
+   "facing": 230
+  },
+  {
+   "id": "u11",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    900
+   ],
+   "facing": 253
+  },
+  {
+   "id": "u12",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    900
+   ],
+   "facing": 276
+  },
+  {
+   "id": "u13",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    900
+   ],
+   "facing": 299
+  },
+  {
+   "id": "u14",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    900
+   ],
+   "facing": 322
+  },
+  {
+   "id": "u15",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    900
+   ],
+   "facing": 345
+  },
+  {
+   "id": "u16",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    948
+   ],
+   "facing": 8
+  },
+  {
+   "id": "u17",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    948
+   ],
+   "facing": 31
+  },
+  {
+   "id": "u18",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    948
+   ],
+   "facing": 54
+  },
+  {
+   "id": "u19",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    948
+   ],
+   "facing": 77
+  },
+  {
+   "id": "u20",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    948
+   ],
+   "facing": 100
+  },
+  {
+   "id": "u21",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    948
+   ],
+   "facing": 123
+  },
+  {
+   "id": "u22",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    948
+   ],
+   "facing": 146
+  },
+  {
+   "id": "u23",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    948
+   ],
+   "facing": 169
+  },
+  {
+   "id": "u24",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    948
+   ],
+   "facing": 192
+  },
+  {
+   "id": "u25",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    948
+   ],
+   "facing": 215
+  },
+  {
+   "id": "u26",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    948
+   ],
+   "facing": 238
+  },
+  {
+   "id": "u27",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    948
+   ],
+   "facing": 261
+  },
+  {
+   "id": "u28",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    948
+   ],
+   "facing": 284
+  },
+  {
+   "id": "u29",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    948
+   ],
+   "facing": 307
+  },
+  {
+   "id": "u30",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    948
+   ],
+   "facing": 330
+  },
+  {
+   "id": "u31",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    948
+   ],
+   "facing": 353
+  },
+  {
+   "id": "u32",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    996
+   ],
+   "facing": 16
+  },
+  {
+   "id": "u33",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    996
+   ],
+   "facing": 39
+  },
+  {
+   "id": "u34",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    996
+   ],
+   "facing": 62
+  },
+  {
+   "id": "u35",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    996
+   ],
+   "facing": 85
+  },
+  {
+   "id": "u36",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    996
+   ],
+   "facing": 108
+  },
+  {
+   "id": "u37",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    996
+   ],
+   "facing": 131
+  },
+  {
+   "id": "u38",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    996
+   ],
+   "facing": 154
+  },
+  {
+   "id": "u39",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    996
+   ],
+   "facing": 177
+  },
+  {
+   "id": "u40",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    996
+   ],
+   "facing": 200
+  },
+  {
+   "id": "u41",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    996
+   ],
+   "facing": 223
+  },
+  {
+   "id": "u42",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    996
+   ],
+   "facing": 246
+  },
+  {
+   "id": "u43",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    996
+   ],
+   "facing": 269
+  },
+  {
+   "id": "u44",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    996
+   ],
+   "facing": 292
+  },
+  {
+   "id": "u45",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    996
+   ],
+   "facing": 315
+  },
+  {
+   "id": "u46",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    996
+   ],
+   "facing": 338
+  },
+  {
+   "id": "u47",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    996
+   ],
+   "facing": 1
+  },
+  {
+   "id": "u48",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1044
+   ],
+   "facing": 24
+  },
+  {
+   "id": "u49",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1044
+   ],
+   "facing": 47
+  },
+  {
+   "id": "u50",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1044
+   ],
+   "facing": 70
+  },
+  {
+   "id": "u51",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1044
+   ],
+   "facing": 93
+  },
+  {
+   "id": "u52",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1044
+   ],
+   "facing": 116
+  },
+  {
+   "id": "u53",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1044
+   ],
+   "facing": 139
+  },
+  {
+   "id": "u54",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1044
+   ],
+   "facing": 162
+  },
+  {
+   "id": "u55",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1044
+   ],
+   "facing": 185
+  },
+  {
+   "id": "u56",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1044
+   ],
+   "facing": 208
+  },
+  {
+   "id": "u57",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1044
+   ],
+   "facing": 231
+  },
+  {
+   "id": "u58",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1044
+   ],
+   "facing": 254
+  },
+  {
+   "id": "u59",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1044
+   ],
+   "facing": 277
+  },
+  {
+   "id": "u60",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1044
+   ],
+   "facing": 300
+  },
+  {
+   "id": "u61",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1044
+   ],
+   "facing": 323
+  },
+  {
+   "id": "u62",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1044
+   ],
+   "facing": 346
+  },
+  {
+   "id": "u63",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1044
+   ],
+   "facing": 9
+  },
+  {
+   "id": "u64",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1092
+   ],
+   "facing": 32
+  },
+  {
+   "id": "u65",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1092
+   ],
+   "facing": 55
+  },
+  {
+   "id": "u66",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1092
+   ],
+   "facing": 78
+  },
+  {
+   "id": "u67",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1092
+   ],
+   "facing": 101
+  },
+  {
+   "id": "u68",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1092
+   ],
+   "facing": 124
+  },
+  {
+   "id": "u69",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1092
+   ],
+   "facing": 147
+  },
+  {
+   "id": "u70",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1092
+   ],
+   "facing": 170
+  },
+  {
+   "id": "u71",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1092
+   ],
+   "facing": 193
+  },
+  {
+   "id": "u72",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1092
+   ],
+   "facing": 216
+  },
+  {
+   "id": "u73",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1092
+   ],
+   "facing": 239
+  },
+  {
+   "id": "u74",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1092
+   ],
+   "facing": 262
+  },
+  {
+   "id": "u75",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1092
+   ],
+   "facing": 285
+  },
+  {
+   "id": "u76",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1092
+   ],
+   "facing": 308
+  },
+  {
+   "id": "u77",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1092
+   ],
+   "facing": 331
+  },
+  {
+   "id": "u78",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1092
+   ],
+   "facing": 354
+  },
+  {
+   "id": "u79",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1092
+   ],
+   "facing": 17
+  },
+  {
+   "id": "u80",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1140
+   ],
+   "facing": 40
+  },
+  {
+   "id": "u81",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1140
+   ],
+   "facing": 63
+  },
+  {
+   "id": "u82",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1140
+   ],
+   "facing": 86
+  },
+  {
+   "id": "u83",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1140
+   ],
+   "facing": 109
+  },
+  {
+   "id": "u84",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1140
+   ],
+   "facing": 132
+  },
+  {
+   "id": "u85",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1140
+   ],
+   "facing": 155
+  },
+  {
+   "id": "u86",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1140
+   ],
+   "facing": 178
+  },
+  {
+   "id": "u87",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1140
+   ],
+   "facing": 201
+  },
+  {
+   "id": "u88",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1140
+   ],
+   "facing": 224
+  },
+  {
+   "id": "u89",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1140
+   ],
+   "facing": 247
+  },
+  {
+   "id": "u90",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1140
+   ],
+   "facing": 270
+  },
+  {
+   "id": "u91",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1140
+   ],
+   "facing": 293
+  },
+  {
+   "id": "u92",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1140
+   ],
+   "facing": 316
+  },
+  {
+   "id": "u93",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1140
+   ],
+   "facing": 339
+  },
+  {
+   "id": "u94",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1140
+   ],
+   "facing": 2
+  },
+  {
+   "id": "u95",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1140
+   ],
+   "facing": 25
+  },
+  {
+   "id": "u96",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1188
+   ],
+   "facing": 48
+  },
+  {
+   "id": "u97",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1188
+   ],
+   "facing": 71
+  },
+  {
+   "id": "u98",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1188
+   ],
+   "facing": 94
+  },
+  {
+   "id": "u99",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1188
+   ],
+   "facing": 117
+  },
+  {
+   "id": "u100",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1188
+   ],
+   "facing": 140
+  },
+  {
+   "id": "u101",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1188
+   ],
+   "facing": 163
+  },
+  {
+   "id": "u102",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1188
+   ],
+   "facing": 186
+  },
+  {
+   "id": "u103",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1188
+   ],
+   "facing": 209
+  },
+  {
+   "id": "u104",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1188
+   ],
+   "facing": 232
+  },
+  {
+   "id": "u105",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1188
+   ],
+   "facing": 255
+  },
+  {
+   "id": "u106",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1188
+   ],
+   "facing": 278
+  },
+  {
+   "id": "u107",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1188
+   ],
+   "facing": 301
+  },
+  {
+   "id": "u108",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1188
+   ],
+   "facing": 324
+  },
+  {
+   "id": "u109",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1188
+   ],
+   "facing": 347
+  },
+  {
+   "id": "u110",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1188
+   ],
+   "facing": 10
+  },
+  {
+   "id": "u111",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1188
+   ],
+   "facing": 33
+  },
+  {
+   "id": "u112",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1236
+   ],
+   "facing": 56
+  },
+  {
+   "id": "u113",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1236
+   ],
+   "facing": 79
+  },
+  {
+   "id": "u114",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1236
+   ],
+   "facing": 102
+  },
+  {
+   "id": "u115",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1236
+   ],
+   "facing": 125
+  },
+  {
+   "id": "u116",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1236
+   ],
+   "facing": 148
+  },
+  {
+   "id": "u117",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1236
+   ],
+   "facing": 171
+  },
+  {
+   "id": "u118",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1236
+   ],
+   "facing": 194
+  },
+  {
+   "id": "u119",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1236
+   ],
+   "facing": 217
+  },
+  {
+   "id": "u120",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1236
+   ],
+   "facing": 240
+  },
+  {
+   "id": "u121",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1236
+   ],
+   "facing": 263
+  },
+  {
+   "id": "u122",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1236
+   ],
+   "facing": 286
+  },
+  {
+   "id": "u123",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1236
+   ],
+   "facing": 309
+  },
+  {
+   "id": "u124",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1236
+   ],
+   "facing": 332
+  },
+  {
+   "id": "u125",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1236
+   ],
+   "facing": 355
+  },
+  {
+   "id": "u126",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1236
+   ],
+   "facing": 18
+  },
+  {
+   "id": "u127",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1236
+   ],
+   "facing": 41
+  },
+  {
+   "id": "u128",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1284
+   ],
+   "facing": 64
+  },
+  {
+   "id": "u129",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1284
+   ],
+   "facing": 87
+  },
+  {
+   "id": "u130",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1284
+   ],
+   "facing": 110
+  },
+  {
+   "id": "u131",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1284
+   ],
+   "facing": 133
+  },
+  {
+   "id": "u132",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1284
+   ],
+   "facing": 156
+  },
+  {
+   "id": "u133",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1284
+   ],
+   "facing": 179
+  },
+  {
+   "id": "u134",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1284
+   ],
+   "facing": 202
+  },
+  {
+   "id": "u135",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1284
+   ],
+   "facing": 225
+  },
+  {
+   "id": "u136",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1284
+   ],
+   "facing": 248
+  },
+  {
+   "id": "u137",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1284
+   ],
+   "facing": 271
+  },
+  {
+   "id": "u138",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1284
+   ],
+   "facing": 294
+  },
+  {
+   "id": "u139",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1284
+   ],
+   "facing": 317
+  },
+  {
+   "id": "u140",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1284
+   ],
+   "facing": 340
+  },
+  {
+   "id": "u141",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1284
+   ],
+   "facing": 3
+  },
+  {
+   "id": "u142",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1284
+   ],
+   "facing": 26
+  },
+  {
+   "id": "u143",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1284
+   ],
+   "facing": 49
+  },
+  {
+   "id": "u144",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1332
+   ],
+   "facing": 72
+  },
+  {
+   "id": "u145",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1332
+   ],
+   "facing": 95
+  },
+  {
+   "id": "u146",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1332
+   ],
+   "facing": 118
+  },
+  {
+   "id": "u147",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1332
+   ],
+   "facing": 141
+  },
+  {
+   "id": "u148",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1332
+   ],
+   "facing": 164
+  },
+  {
+   "id": "u149",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1332
+   ],
+   "facing": 187
+  },
+  {
+   "id": "u150",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1332
+   ],
+   "facing": 210
+  },
+  {
+   "id": "u151",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1332
+   ],
+   "facing": 233
+  },
+  {
+   "id": "u152",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1332
+   ],
+   "facing": 256
+  },
+  {
+   "id": "u153",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1332
+   ],
+   "facing": 279
+  },
+  {
+   "id": "u154",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1332
+   ],
+   "facing": 302
+  },
+  {
+   "id": "u155",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1332
+   ],
+   "facing": 325
+  },
+  {
+   "id": "u156",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1332
+   ],
+   "facing": 348
+  },
+  {
+   "id": "u157",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1332
+   ],
+   "facing": 11
+  },
+  {
+   "id": "u158",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1332
+   ],
+   "facing": 34
+  },
+  {
+   "id": "u159",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1332
+   ],
+   "facing": 57
+  },
+  {
+   "id": "u160",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1380
+   ],
+   "facing": 80
+  },
+  {
+   "id": "u161",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1380
+   ],
+   "facing": 103
+  },
+  {
+   "id": "u162",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1380
+   ],
+   "facing": 126
+  },
+  {
+   "id": "u163",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1380
+   ],
+   "facing": 149
+  },
+  {
+   "id": "u164",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1380
+   ],
+   "facing": 172
+  },
+  {
+   "id": "u165",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1380
+   ],
+   "facing": 195
+  },
+  {
+   "id": "u166",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1380
+   ],
+   "facing": 218
+  },
+  {
+   "id": "u167",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1380
+   ],
+   "facing": 241
+  },
+  {
+   "id": "u168",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1380
+   ],
+   "facing": 264
+  },
+  {
+   "id": "u169",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1380
+   ],
+   "facing": 287
+  },
+  {
+   "id": "u170",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1380
+   ],
+   "facing": 310
+  },
+  {
+   "id": "u171",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1380
+   ],
+   "facing": 333
+  },
+  {
+   "id": "u172",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1380
+   ],
+   "facing": 356
+  },
+  {
+   "id": "u173",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1380
+   ],
+   "facing": 19
+  },
+  {
+   "id": "u174",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1380
+   ],
+   "facing": 42
+  },
+  {
+   "id": "u175",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1380
+   ],
+   "facing": 65
+  },
+  {
+   "id": "u176",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1428
+   ],
+   "facing": 88
+  },
+  {
+   "id": "u177",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1428
+   ],
+   "facing": 111
+  },
+  {
+   "id": "u178",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1428
+   ],
+   "facing": 134
+  },
+  {
+   "id": "u179",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1428
+   ],
+   "facing": 157
+  },
+  {
+   "id": "u180",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1428
+   ],
+   "facing": 180
+  },
+  {
+   "id": "u181",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1428
+   ],
+   "facing": 203
+  },
+  {
+   "id": "u182",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1428
+   ],
+   "facing": 226
+  },
+  {
+   "id": "u183",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1428
+   ],
+   "facing": 249
+  },
+  {
+   "id": "u184",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1428
+   ],
+   "facing": 272
+  },
+  {
+   "id": "u185",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1428
+   ],
+   "facing": 295
+  },
+  {
+   "id": "u186",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1428
+   ],
+   "facing": 318
+  },
+  {
+   "id": "u187",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1428
+   ],
+   "facing": 341
+  },
+  {
+   "id": "u188",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1428
+   ],
+   "facing": 4
+  },
+  {
+   "id": "u189",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1428
+   ],
+   "facing": 27
+  },
+  {
+   "id": "u190",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1428
+   ],
+   "facing": 50
+  },
+  {
+   "id": "u191",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1428
+   ],
+   "facing": 73
+  },
+  {
+   "id": "u192",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1476
+   ],
+   "facing": 96
+  },
+  {
+   "id": "u193",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1476
+   ],
+   "facing": 119
+  },
+  {
+   "id": "u194",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1476
+   ],
+   "facing": 142
+  },
+  {
+   "id": "u195",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1476
+   ],
+   "facing": 165
+  },
+  {
+   "id": "u196",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1476
+   ],
+   "facing": 188
+  },
+  {
+   "id": "u197",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1476
+   ],
+   "facing": 211
+  },
+  {
+   "id": "u198",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1476
+   ],
+   "facing": 234
+  },
+  {
+   "id": "u199",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1476
+   ],
+   "facing": 257
+  },
+  {
+   "id": "u200",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1476
+   ],
+   "facing": 280
+  },
+  {
+   "id": "u201",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1476
+   ],
+   "facing": 303
+  },
+  {
+   "id": "u202",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1476
+   ],
+   "facing": 326
+  },
+  {
+   "id": "u203",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1476
+   ],
+   "facing": 349
+  },
+  {
+   "id": "u204",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1476
+   ],
+   "facing": 12
+  },
+  {
+   "id": "u205",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1476
+   ],
+   "facing": 35
+  },
+  {
+   "id": "u206",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1476
+   ],
+   "facing": 58
+  },
+  {
+   "id": "u207",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1476
+   ],
+   "facing": 81
+  },
+  {
+   "id": "u208",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1524
+   ],
+   "facing": 104
+  },
+  {
+   "id": "u209",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1524
+   ],
+   "facing": 127
+  },
+  {
+   "id": "u210",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1524
+   ],
+   "facing": 150
+  },
+  {
+   "id": "u211",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1524
+   ],
+   "facing": 173
+  },
+  {
+   "id": "u212",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1524
+   ],
+   "facing": 196
+  },
+  {
+   "id": "u213",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1524
+   ],
+   "facing": 219
+  },
+  {
+   "id": "u214",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1524
+   ],
+   "facing": 242
+  },
+  {
+   "id": "u215",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1524
+   ],
+   "facing": 265
+  },
+  {
+   "id": "u216",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1524
+   ],
+   "facing": 288
+  },
+  {
+   "id": "u217",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1524
+   ],
+   "facing": 311
+  },
+  {
+   "id": "u218",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1524
+   ],
+   "facing": 334
+  },
+  {
+   "id": "u219",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1524
+   ],
+   "facing": 357
+  },
+  {
+   "id": "u220",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1524
+   ],
+   "facing": 20
+  },
+  {
+   "id": "u221",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1524
+   ],
+   "facing": 43
+  },
+  {
+   "id": "u222",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1524
+   ],
+   "facing": 66
+  },
+  {
+   "id": "u223",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1524
+   ],
+   "facing": 89
+  },
+  {
+   "id": "u224",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1572
+   ],
+   "facing": 112
+  },
+  {
+   "id": "u225",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1572
+   ],
+   "facing": 135
+  },
+  {
+   "id": "u226",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1572
+   ],
+   "facing": 158
+  },
+  {
+   "id": "u227",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1572
+   ],
+   "facing": 181
+  },
+  {
+   "id": "u228",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1572
+   ],
+   "facing": 204
+  },
+  {
+   "id": "u229",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1572
+   ],
+   "facing": 227
+  },
+  {
+   "id": "u230",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1572
+   ],
+   "facing": 250
+  },
+  {
+   "id": "u231",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1572
+   ],
+   "facing": 273
+  },
+  {
+   "id": "u232",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1572
+   ],
+   "facing": 296
+  },
+  {
+   "id": "u233",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1572
+   ],
+   "facing": 319
+  },
+  {
+   "id": "u234",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1572
+   ],
+   "facing": 342
+  },
+  {
+   "id": "u235",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1572
+   ],
+   "facing": 5
+  },
+  {
+   "id": "u236",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1572
+   ],
+   "facing": 28
+  },
+  {
+   "id": "u237",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1572
+   ],
+   "facing": 51
+  },
+  {
+   "id": "u238",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1572
+   ],
+   "facing": 74
+  },
+  {
+   "id": "u239",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1572
+   ],
+   "facing": 97
+  },
+  {
+   "id": "u240",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    2200,
+    1620
+   ],
+   "facing": 120
+  },
+  {
+   "id": "u241",
+   "type": "ARMHAM",
+   "owner": 0,
+   "pos": [
+    2248,
+    1620
+   ],
+   "facing": 143
+  },
+  {
+   "id": "u242",
+   "type": "ARMSTUMP",
+   "owner": 0,
+   "pos": [
+    2296,
+    1620
+   ],
+   "facing": 166
+  },
+  {
+   "id": "u243",
+   "type": "ARMJETH",
+   "owner": 0,
+   "pos": [
+    2344,
+    1620
+   ],
+   "facing": 189
+  },
+  {
+   "id": "u244",
+   "type": "CORAK",
+   "owner": 0,
+   "pos": [
+    2392,
+    1620
+   ],
+   "facing": 212
+  },
+  {
+   "id": "u245",
+   "type": "CORTHUD",
+   "owner": 0,
+   "pos": [
+    2440,
+    1620
+   ],
+   "facing": 235
+  },
+  {
+   "id": "u246",
+   "type": "CORRAID",
+   "owner": 0,
+   "pos": [
+    2488,
+    1620
+   ],
+   "facing": 258
+  },
+  {
+   "id": "u247",
+   "type": "CORCRASH",
+   "owner": 0,
+   "pos": [
+    2536,
+    1620
+   ],
+   "facing": 281
+  },
+  {
+   "id": "u248",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    2584,
+    1620
+   ],
+   "facing": 304
+  },
+  {
+   "id": "u249",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    2632,
+    1620
+   ],
+   "facing": 327
+  },
+  {
+   "id": "u250",
+   "type": "ARMMEX",
+   "owner": 0,
+   "pos": [
+    2680,
+    1620
+   ],
+   "facing": 350
+  },
+  {
+   "id": "u251",
+   "type": "CORSOLAR",
+   "owner": 0,
+   "pos": [
+    2728,
+    1620
+   ],
+   "facing": 13
+  },
+  {
+   "id": "u252",
+   "type": "CORLLT",
+   "owner": 0,
+   "pos": [
+    2776,
+    1620
+   ],
+   "facing": 36
+  },
+  {
+   "id": "u253",
+   "type": "CORMEX",
+   "owner": 0,
+   "pos": [
+    2824,
+    1620
+   ],
+   "facing": 59
+  },
+  {
+   "id": "u254",
+   "type": "ARMROCK",
+   "owner": 0,
+   "pos": [
+    2872,
+    1620
+   ],
+   "facing": 82
+  },
+  {
+   "id": "u255",
+   "type": "CORSTORM",
+   "owner": 0,
+   "pos": [
+    2920,
+    1620
+   ],
+   "facing": 105
+  },
+  {
+   "id": "keep",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    5200,
+    3000
+   ],
+   "facing": 0
+  }
+ ],
+ "camera": {
+  "at": [
+   2560,
+   1260
+  ],
+  "pin": true
+ }
+}

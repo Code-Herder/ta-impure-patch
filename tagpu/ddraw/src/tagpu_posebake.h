@@ -31,7 +31,8 @@
 
    Nothing DRAWS from these yet — the posed program is step 5. What step 4
    delivers is the bake, the caches, their four invalidation triggers and a
-   lever that checks the bake against the emitters it is going to replace. */
+   lever. Its `check` token is gone with G16 step 8: it compared the bake
+   against the CPU emitters, and they no longer exist. `log` still works. */
 
 #include "tagpu_model3do.h"      /* TAGPU_PBMAXPIECE, and the field offsets */
 
@@ -121,16 +122,10 @@ int  tagpu_posebake_unit(const char* o3, int owner,
 /* The vertex count `emit_geom` should produce for THIS unit out of this bake:
    the body range, minus the faces whose material the engine has nothing for,
    minus the pieces this unit is not showing. The lever compares the two. */
-int  tagpu_posebake_predict_body(const TAGPU_PBGEOM* g, const TAGPU_PBMAT* m,
-                                 const char* o3);
 
 int  tagpu_posebake_armed(void);         /* tagpu_posebake.on                 */
-int  tagpu_posebake_checking(void);      /* ...with `check` in it             */
+
 void tagpu_posebake_glreset(void);       /* the GL context went              */
 /* one `bake=` field for the native: line; writes nothing when disarmed */
 int  tagpu_posebake_stats(char* out, int n);
-/* the lever's cross-check, called once per unit right after emit_geom */
-void tagpu_posebake_check(const char* o3, const TAGPU_PBGEOM* g,
-                          const TAGPU_PBMAT* m, int emitted,
-                          const float* accRest, int naccRest);
 #endif
