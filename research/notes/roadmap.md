@@ -1779,7 +1779,7 @@ Two entries in the leaf table would make it deliberate ([GL UI renderer](gui-ren
 
 ### Phase 2 — the UI scaled (designed 2026-09-08)
 
-*Gated **G17a–e**: `G16` is the 3DO GPU-posing gate on main, claimed the same day.*
+*Gated **G17a–e**: `G16` is the 3DO GPU-posing gate above, claimed the same day.*
 
 Design: [GL UI renderer](gui-renderer.html) §13, ten decisions from one interview against the
 built phase 1. **M1**: the engine runs at `window / k` and everything of ours renders at the
