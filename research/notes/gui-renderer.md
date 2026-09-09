@@ -1252,6 +1252,30 @@ layer's cursor branch simply changes from *discard* (let the engine's show throu
 *mask the fallback in that rect*. Drawing from the true device pointer also puts it ahead of the
 engine's last-drawn position, which is what G13m spent a gate achieving.
 
+> **Implementation note, established 2026-09-09 before any G17c code.** Three facts decide the
+> shape, and the last one is not what §13.5 assumes:
+>
+> 1. **The pixels are reachable with no observer change.** The cursor's blits never become ops —
+>    everything drawn while `s_inFlip` is excluded (`tagpu_gui_leaves.h`), and the cursor is drawn
+>    inside the flip with its background restored before it returns. But the sprite record at
+>    `*(globals+0x1B2)` **is a GAF frame header**: size at `+0`/`+2`, hotspot at `+4`/`+6`, the
+>    colour key at `+0x08` and **the pixel pointer at `+0x10`**. So the render thread can read the
+>    frame directly, cache it as an R8 texture keyed by the frame pointer, and draw it into the
+>    sharp layer — exactly the "no queue op is needed" §13.5 predicts.
+> 2. **The true device pointer is now available.** `mouse_client_to_game` (G17b) is the one place
+>    a client-area point is converted, so recording the client point there gives the pointer
+>    *before* quantisation to the engine's logical grid — which is what putting our cursor ahead
+>    of the engine's last-drawn position needs.
+> 3. **"Mask the fallback in that rect" is not enough, and it is not the UI layer's to do.** The
+>    engine's cursor reaches the screen through the **fork's own engine-frame draw**, beneath
+>    everything of ours. Over the panel the twin covers it once the layer stops discarding. Over
+>    the world it does not: the world composite discards wherever the engine's surface is not the
+>    terrain key, and the cursor's pixels are not the key, so they survive underneath. Removing
+>    the second cursor therefore means **exempting the cursor rect in the WORLD composite**
+>    (`tagpu_native.c`, which already carries a `uVp` rect and a key test) as well as dropping the
+>    discard in the UI layer. G17c spans both modules; a version that only draws ours would ship
+>    two cursors over the world.
+
 **Its size is 1× device pixels at every `k`** — the convention every scaled desktop UI follows,
 and it is always crisp. The accepted cost is a small pointer against a 3× UI at 4K, where TA's
 cursors carry gameplay meaning (build, reclaim, attack); a `cursorscale=` knob defaulting to 1 is
