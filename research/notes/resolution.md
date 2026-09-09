@@ -224,6 +224,101 @@ pixel sizes, not proportional and not read from UI resources** — at 1600×1200
 the view is 1472×1136. There is no other writer of these six fields in the
 binary (full-image scan of the displacements).
 
+### 3.1b Every consumer of the DESIRED pair in the game-entry path [BINARY-VERIFIED 2026-09-09, phase 2 / G17b]
+
+The full-image scan finds the displacements `+0x37F1B` (W) and `+0x37F1F` (H)
+**19 times each**. **Eight** of those are the game-entry path inside `0x497F40`,
+and they are the complete set of places the desired mode is *consumed* on the way
+to a running game — which is what phase 2 has to redirect if the engine is to run
+at `window / k` (GL UI renderer §13.1):
+
+| VA | instruction | what it does |
+|---|---|---|
+| `0x4981A7` | `mov ecx,[eax+0x37F1B]` → `mov [eax+0x37E1F],ecx` | desired W becomes the **logical** screen W |
+| `0x4981B8` | `mov edx,[eax+0x37F1F]` → `mov [eax+0x37E23],edx` | desired H becomes the **logical** screen H |
+| `0x49836D` | `cmp eax,[ecx+0x37F1B]` after `0x4B6700()` | "is the physical W already right?" — `jne 0x49838C` |
+| `0x498380` | `cmp eax,[ecx+0x37F1F]` after `0x4B6710()` | the same for H |
+| `0x4983BF` | `mov ecx,[eax+0x37F1B]` | W for **`SetWindowPos`** alone (`call [0x4fc2f0]` at `0x4983D1`) |
+| `0x4983B9` | `mov edx,[eax+0x37F1F]` | H for the same call, pushed first |
+| `0x4983E2` | `mov edx,[eax+0x37F1B]` | W for **`NewTAScreen`** (`call 0x4B5940` at `0x4983EA`) |
+| `0x4983DC` | `mov ecx,[eax+0x37F1F]` | H for the same call, pushed first |
+
+So §3.1's rect and every dimension §3.2 derives come from `0x4981A7`/`0x4981B8`
+alone; the physical switch is decided at `0x49836D`/`0x498380`, the window is
+resized from `0x4983BF`/`0x4983B9` and **the mode itself is set from the separate
+pair `0x4983E2`/`0x4983DC`**.
+
+> **Corrected 2026-09-09 by a landing reviewer, and it matters.** This table
+> first listed six sites and glossed `0x4983BF`/`0x4983B9` as "pushed for the
+> `SetWindowPos` + `NewTAScreen` pair". They are not a pair: the disassembly
+> reloads `main` at `0x4983D7` and reads both fields **again** at
+> `0x4983DC`/`0x4983E2` for `NewTAScreen`. An implementation that redirected only
+> the six would have resized the window and then handed `NewTAScreen` the
+> player's unmodified mode — the one read that actually sets the physical
+> screen. Verified against the pristine exe.
+
+**The persistence hazard, and why the desired pair must not simply be
+overwritten** [MEASURED 2026-09-09]. `REGISTRY_SaveSettings 0x430F00` writes back
+**every** option from memory, taking W/H straight from `0x37F1B/1F`
+(`0x430F27`/`0x430F43`), and §4.2 records that it is called from **~30
+option-change sites**. An in-memory override therefore reaches the player's
+registry the first time they touch *any* setting — the same class of bug as the
+`ScrollSpeed` write-back a landing review caught on G13e. Two designs avoid it:
+redirect the six reads above and never touch `0x37F1B/1F`, or wrap
+`REGISTRY_SaveSettings` so it always writes the player's own pair. **Not decided
+here**; recorded so that whichever is taken is taken deliberately.
+
+### 3.1c The leave-game `SetWindowPos` is already inert under our fork [BINARY-VERIFIED 2026-09-09]
+
+`0x491ADC..0x491B0B`, the block §2.3 describes, pushes the window resize and the
+screen re-create back to back:
+
+```
+0x491AE2  push 4          ; uFlags  = SWP_NOZORDER, and nothing else
+0x491AE4  push 0x1E0      ; cy = 480
+0x491AE9  push 0x280      ; cx = 640
+0x491AFB  call [0x4FC2F0] ; SetWindowPos
+0x491B01  push 0x1E0 / push 0x280 / call 0x4B5940   ; NewTAScreen(640, 480)
+```
+
+**That call does nothing under our fork**, and has not since the fork existed.
+`SetWindowPos` is IAT-hooked (`hook.c`), and `fake_SetWindowPos`
+(`winapi_hooks.c`) returns TRUE **without calling through** whenever the target
+is `g_ddraw.hwnd` and the flags do not carry all of
+`SWP_NOSIZE|SWP_NOMOVE|SWP_NOZORDER` (`0x7`). The engine passes `0x4`, so
+`(0x4 & 0x7) != 0x7` and the resize is swallowed.
+
+**Consequence for phase 2.** [GL UI renderer](gui-renderer.html) §13.7 proposed
+"a byte patch at `0x491AFB`" as the fix for the window shrinking when a game is
+left, and G17b's gate row names it. **No engine patch is needed**: the actor
+that actually resizes the window is `NewTAScreen(640, 480)` → the fork's own
+`dd_SetDisplayMode`, which recomputes `g_ddraw.render.width/height` from
+`g_config.window_rect` and then maxes them against the new mode (`dd.c`). The
+window policy is therefore a *fork* concern — keep a configured client size
+across a mode change — and not a patch on a call that is already a no-op.
+
+### 3.1d Leaving a game at 1280x720 crashes, and it is not phase 2's doing [MEASURED 2026-09-09]
+
+Driving `ARMOPT -> EXIT -> MAINMENU -> CHOICE1` out of a skirmish:
+
+| game mode | window | k | teardowns | result |
+|---|---|---|---|---|
+| 1024x768 | 1024x768 | 1 | 3 (the G15d cycle walk) | clean, no `ErrorLog.txt` |
+| 1280x720 | 1920x1080 | 1.5 | 1 | **Access Violation** at `0x79426297`, read of `0x06F18E29` |
+| 1280x720 | 1280x720 | **1** | 1 | **the same crash, same IP, same fault address** |
+
+**So `k` is exonerated** — the control at `k = 1` fails identically, which is why
+it was run. What the two failing rows share is the **1280x720 mode**, and the
+crash address is outside `TotalA.exe` (image `0x400000..0x520000`) in a wine
+module, with `cdaudio` / `stop` / `open` / `settimeformat` MCI strings on the
+stack. `NoDirectSound=1` and `cdmode`/`musicmode` = 0 were set on every run, so
+the sound path is nominally off and this is **not diagnosed further here**.
+
+Practical consequence, and it is the useful part: **phase 2's cycle exit must be
+walked at a mode known to survive a teardown.** `--res 1024x768 --window
+1536x1152` gives `k = 1.5` exactly on a mode with three clean teardowns on
+record, and is the configuration to use rather than 1280x720.
+
 ### 3.2 LoadMap's derivations — `0x483610` [BINARY-VERIFIED]
 
 With `ebp = main+0x141FB` (so `+0x40 = main+0x1423B` etc.), at `0x483BBF`:

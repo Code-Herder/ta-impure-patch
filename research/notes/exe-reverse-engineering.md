@@ -2663,28 +2663,45 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
 - **So the presented palette is `gamma(globals+0x214)`, and `main+0x143A7` is never scaled.**
   On every normal path the two hold the same entries — `+0x143A7` is what `0x497FDB` and
   `0x44460B` hand over — and at Gamma 12 they are byte-equal. At any other Gamma, or after
-  `+gamma`, every pass that reads `+0x143A7` (`tagpu_native.c`, and the terrain, feature, effect
-  and marker passes through it) shows the world at the wrong brightness, and so did the UI twin
-  until G15d, which resolves through cnc-ddraw's palette object (`g_ddraw.primary->palette->
-  data_rgb`, what `ddp_SetEntries` stored — the same table `tacli shot` writes into its PNG,
-  so the walk's oracle and the twin agree by construction). MEASURED, the heartbeat's `paldiff`:
-  in the shell **one, index 9**, differs *beyond the gamma scale* on every visit (its writer is
-  not traced — whichever it is, it reaches the screen through `0x4BA200` like everything else, so
-  the twin shows it right and a `+0x143A7` reader would not); `+gamma 15` in game makes every
+  `+gamma`, a pass that reads `+0x143A7` shows the world at the wrong brightness, and every one
+  of them did until G15d fixed the UI twin (which resolves through cnc-ddraw's palette object,
+  `g_ddraw.primary->palette->data_rgb`, what `ddp_SetEntries` stored — the same table
+  `tacli shot` writes into its PNG, so the walk's oracle and the twin agree by construction) and
+  **2026-09-09 fixed the world**: the resolution moved into `tagpu_pal.c`, and every pass that
+  turns an index into a colour — the world's single `uPal` texture, the three sprite atlases'
+  restores and the terrain restorer's — now takes the presented palette from there ([GPU
+  status](gpu-status.html) §2.3f). The two readers that still want `+0x143A7` want it *because*
+  it is unscaled: the restorer's tileability threshold is a raw colour distance and must classify
+  the ART, not the display, and `tagpu_order.c`'s `seq_ink` walks on the game thread. **The two
+  formulas are different and both are live**: an option screen writes `main+0x37F08` and applies
+  `0.5 + Gamma/24` (registry Gamma 15 → **1.125**, measured), while `+gamma N` applies **`N/10`**
+  outright (`+gamma 15` → **1.500**, measured 2026-09-09) and then stores N in the same field —
+  so the field alone does not tell you the factor, and `globals+0x614` is the only thing that
+  does. MEASURED, the heartbeat's `paldiff` counts raw differences, so at the stock 1.125 it
+  reads **235** in the shell and in game alike; *beyond the gamma scale* 0 entries differ in
+  game, and in the shell **one, index 9**, on every visit (its writer is not traced — whichever
+  it is, it reaches the screen through `0x4BA200` like everything else, so the twin shows it
+  right and a `+0x143A7` reader would not); `+gamma 15` in game makes every
   non-black entry differ and the twin still matches the engine's frame ([GL UI
   renderer](gui-renderer.html) §12 has the run).
-- **The Gamma this project actually runs at is 15, not the code's default 12** [MEASURED
-  2026-09-09, [GL UI renderer](gui-renderer.html) §14]. `0x4301C0`'s default only applies when
-  the registry value is absent, and it is not: the **template wine prefix every `tacli` instance
-  hardlink-clones carries `Gamma = 0x0f`**. So the presented factor is `0.5 + 15/24 = 1.125`,
-  applied by **truncation** — the presented palette reproduces exactly as
-  `min(255, (int)(entry × 1.125))` in all 256 entries, and with rounding in only 86 — and it
-  differs from `main+0x143A7` in **235 of 256 entries in the shell and in game alike**. An
-  earlier reading of this paragraph recorded `paldiff` as 0 in game; **235 is the ordinary
-  reading**, and 0 is what a `+gamma 10` leaves behind for the rest of that process.
+- **The Gamma this project runs at is one shared, mutable registry value — read it, never assume
+  it** [MEASURED 2026-09-09, [GL UI renderer](gui-renderer.html) §15, which corrects §14].
+  `0x4301C0`'s default of 12 applies only when the registry value is absent, and it is not
+  absent. But it is also **not a property of the template prefix**: `wineprefix/user.reg` and all
+  58 `tagpu/instances/*/prefix/user.reg` are **one inode with 59 hard links** (`tacli`'s
+  `clone_prefix` is `cp -al`), and wine rewrites that file **in place at every launch**, so there
+  is a single `Gamma` for the template and every instance and it is whatever TA last stored.
+  Both values have been read hours apart on the same day, on the same DLLs:
+  **at 15** the presented factor is `0.5 + 15/24 = 1.125`, applied by **truncation** — the
+  presented palette reproduces exactly as `min(255, (int)(entry × 1.125))` in all 256 entries,
+  with rounding in only 86 — and it differs from `main+0x143A7` in **235 of 256 entries in the
+  shell and in game alike**; **at 12** the factor is 1.0 and `paldiff` reads **0**. An earlier
+  reading of this paragraph recorded `paldiff` as 0 in game and a later one called 235 "the
+  ordinary reading"; **neither is ordinary** — the heartbeat's `paldiff=` is the measurement, and
+  `+gamma N` in chat moves it for the rest of that process.
   Consequence, measured the same day: every pass that reads `+0x143A7` — terrain, features,
   effects, markers, the 3DO/unit atlas — draws the world ~11 % darker than the engine presents
-  its own pixels, on every instance here. In a Classic frame with those passes drawing, 14 896
+  its own pixels **whenever the factor is not 1.0**. In a Classic frame with those passes drawing at 1.125, 14 896
   of a 17 049-pixel viewport sample are exact `palette.pal` colours against 244 presented ones
   (the two palettes share 8 of 256). Not a bug with an obvious side: the browser lab is built on
   `palette.pal`, so a world matching it is what `tascene ab` parity measures.
@@ -2714,7 +2731,9 @@ nothing to switch); **`MEM_Free 0x4D85A0(main+0x37E1B)` at `0x491AB8` — the ga
 straight to the heap, not through `SurfaceFree 0x4C6AC0`** (`0x49838C` does the same at the
 game's mode switch); `main+0x37E1B = 0`; `0x4C61F0(0)`; `0x4C62C0()` (restores the DirectDraw
 surfaces `globals+0x88`/`+0x8C` and re-sets their palette — slots `+0x60`, `+0x6C` — no release);
-`SetWindowPos(…, 640, 480, 4)` (`[0x4fc2f0]`); `NewTAScreen(640, 480)` at `0x491B0B`;
+`SetWindowPos(…, 640, 480, 4)` (`[0x4fc2f0]`, the call at **`0x491AFB`** — **a no-op under our
+fork**, which swallows it in `fake_SetWindowPos`: [resolution](resolution.html) §3.1c);
+`NewTAScreen(640, 480)` at `0x491B0B`;
 `main+0x37E1B = 0x4C69F0("OFFSCREEN", main+0x37E1F, main+0x37E23)` at `0x491B28`. **The tag
 `"OFFSCREEN"` is the string at `0x5091D4`**, and the five sites that create the main offscreen
 with it are `0x490AD3`, `0x491250`, `0x491B23` (this one), `0x4980CF` (the loading-screen
@@ -2854,6 +2873,41 @@ the game-state arrays (`0x491BC5`, `0x491BD9`, `0x491BED`). **The fork wraps thi
 flush the deferred queue while the registry is alive — or, if it does not leave within a second,
 keep the queue and keep deferring through the cascade) and a post hook (release it).
 
+### `0x42D5xx` — the model-pointer table is BUILT here, and every slot in it is written
+
+`[BINARY-VERIFIED 2026-09-09]` The other half of `0x42DB90` below, and the half a reader needs:
+it is what makes "the ModelId is in range" a safety property rather than a guess.
+
+- **The count comes first.** `main+0x1438F` (`UNITINFOCount`) is already set when the table is
+  allocated: `0x42D684` loads it, `0x42D68A` shifts it left 2, and `0x42D693` calls the named
+  allocator `0x4D83B0` for exactly `count * 4` bytes, storing the result to `main+0x14377`
+  (`0x42D6AA`). So the count is the table's **length**, not merely a related number — the same
+  value bounds the unit defs at `main+0x1439B` at stride `0x249`, which is why one count serves
+  both arrays.
+- **The allocator does not zero.** `0x4D83B0` → `0x4D83C0` is a plain malloc wrapper (a tag
+  string, `0x4E8890` or the fussy-heap path, no fill). Nothing about an untouched slot is
+  therefore safe to assume — which is why the next point is the load-bearing one.
+- **Every slot in `[1, count)` is written.** The load loop runs `esi = 1` while
+  `esi < [main+0x1438F]` (`0x42D6B6` / `0x42D6BC`) and stores the loaded model to
+  `[table + esi*4]` at `0x42D7A2` on every iteration — including the failure path, where
+  `0x4CB560` returned NULL and `0x4B6290` reported it: `edi` is stored either way.
+- **Slot 0 is never touched** by either loop — neither the fill (which starts at 1) nor the free
+  (`0x42DBCA`, same range). It is the "no model" entry, and `unit+0xA6 == 0` is how the engine
+  and the fork both spell "this unit has no model".
+
+**The invariant this gives a reader.** For `1 <= mid < [main+0x1438F]`, `[main+0x14377][mid]` is
+a slot the engine wrote at load and nulls at teardown, so it holds **NULL or a live template of
+the level that is loaded** — never the allocator's leftovers, and never off the end of the
+allocation. `unit+0xA6` itself is bounded by nothing, and the unit array it comes from is a
+Mode B object (recycled in place), so a slot that died under a render pass hands over another
+unit's ModelId or a torn one. Bounding it against this count is what keeps that inside the Mode B
+contract — one wrong frame, never a fault. `tagpu_native.c`'s `model_root` is that bound, and
+[thread-safe destruction](thread-safe-destruction.html) §2 is the contract.
+
+**What it does NOT give you** is a lifetime: the templates are still freed by `0x42DB90` at the
+level teardown, so a reader also has to be outside that window. That is the render thread's
+`teardown_active()` gate, and its one hole is the pre hook's timeout (§6b).
+
 ### `0x42DB90` — the model templates are freed here, and only here
 
 `[BINARY-VERIFIED 2026-09-08]` Called once from the teardown cascade, `0x491C21`, the first call
@@ -2865,7 +2919,18 @@ after `0x485980`'s unit walk. It is what makes a `Model3DONode` tree's lifetime 
 - per entry: `MEM_Free 0x4D85A0` (`0x42DC01`), then the slot is nulled (`0x42DC15`,
   `mov [eax+edi], ebx` with `ebx = 0`); two further `MEM_Free`s follow in the same body
   (`0x42DC23`, `0x42DC52`);
-- then the table itself is freed (`0x42DCB6`) and `main+0x14377` nulled (`0x42DCD8`).
+- then the table itself is freed (`0x42DCB6`) and `main+0x14377` nulled (`0x42DCD8`);
+- and **last, `0x42DCCB` frees `main+0x1439B` — the whole UnitDef array** (`mov edx,
+  [ecx+0x1439B]` at `0x42DCC4`), with the pointer nulled at `0x42DCE6`. **Five `MEM_Free`
+  calls in this body, not four** (verified by disassembly 2026-09-09).
+
+**Both frees are ours since 2026-09-09.** `0x42DC01` and `0x42DCB6` are redirected to
+`tagpu_reclaim`'s ring (the byte check is `E8` with a rel32 that resolves to `0x4D85A0`), so a
+template outlives any render pass still walking it; the body itself is untouched and still nulls
+every slot and the table pointer. `0x42DC23`, `0x42DC52` and `0x42DCCB` are left alone. The
+first two are unit-def fields no pass of ours reads; **`0x42DCCB` frees the UnitDef array we
+read all over** (`tagpu_order`, `tagpu_cat`, `tagpu_weapons`, `tagpu_scenario`) and is safe
+only because every one of those readers, and this cascade, is on the **game thread**. [Thread-safe destruction](thread-safe-destruction.html) §6c.
 
 **Why it matters to us.** `FreeObjectState 0x45AAA0` — the funnel `tagpu_reclaim` defers — never
 reaches these blocks: a template is not owned by any unit, it is shared by every unit of a type.

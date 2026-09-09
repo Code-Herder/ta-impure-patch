@@ -697,22 +697,87 @@ extremes) and `2216 1606` (the air lane).
 
 | file | what it does |
 |---|---|
-| `tagpu_posefix.off` | leaves the guard *measuring* but draws the engine's live posed buffer anyway — the baseline the fix is measured against, and the only way to see the artifact |
-| `tagpu_posewatch.on` | the oracle: per unit per frame, `posewatch: f=… err=… piece=…/… dirty=…/… poll|guard` — the largest disagreement in **model units** between the engine's posed buffer and the pose rebuilt from the fields, with the pose-dirty flag either side of the read. A unit or two out is a stale buffer; the model's own height out (an ARMCOM is 34) is a buffer caught mid-rewrite. Also adds a 60 Hz anchor filmstrip per owned unit — raw 16.16 position, roster shorts, the eye and the anchor we derived, which is what attributes a one-frame jump to the engine, the eye or this pass |
-| `tagpu_poserecon.on` | forces the reconstruction for **every** unit every frame. The A/B for the fallback: against the engine-buffer path it renders 0 differing pixels of 1920×1080 |
-| `tagpu_posebake.on` | G16 step 4's per-type geometry bake (gpu-status §2.10). **Draws nothing** — it bakes, caches and reports. `log` gives a line per model and per material stream; `check` holds the bake to `emit_geom`'s own vertex count and to `pose_accum_body`'s rest offsets, per unit per frame, and logs any disagreement. The `native:` line grows `bake=<types>/<streams> anom= odd= nomat= refused=` |
+| `tagpu_posebake.on` | G16 step 4's per-type geometry bake (gpu-status §2.10). **Draws nothing** — it bakes, caches and reports. `log` gives a line per model and per material stream. The `native:` line grows `bake=<types>/<streams> anom= odd= nomat= refused=`. *(Its `check` token is gone with step 8: it held the bake to `emit_geom`'s vertex count, and that emitter no longer exists.)* |
 
-**`posewatch` writes about 250 kB of `tagpu.log` per second** at 28 units on screen — it logs an
-anchor filmstrip per owned unit per frame, and `nlog` opens and closes the file per line. Two
-consequences: measure a camera stop by taking the file's **byte offsets** before and after and
-slicing it, rather than grepping the whole thing, and do not leave the lever armed for a long run.
+⚠ **`[2026-09-09]` The other three pose levers are GONE, and so is `tagpu_posedraw.on`.** G16 step 8
+deleted the CPU emitters, and with them the pose-race guard, the rest-equality detector, the
+reconstruction and `posewatch` — the only things `tagpu_posefix.off`, `tagpu_posewatch.on` and
+`tagpu_poserecon.on` ever reached. **The posed program is not a lever any more, it is the unit
+renderer**: there is nothing to A/B it against in one build, and creating those files does nothing.
+The `native:` line lost `posefix=`, `guard=`, `rest=`, `norecon=` and `errmax=` with them.
 
-The `native:` line carries `posefix=`, `guard=` (reads refused since the last line, 300 frames),
-`rest=` and `errmax=` whether or not the watch is armed. **`rest=` is the useful one**: the guard
-trips on any dirty pose, most of which are a merely stale buffer that was safe to draw, while
-`rest=` counts only the reads that caught the buffer byte-equal to the model's rest vertices —
-the state that actually draws a collapsed unit. In play it reads 0; a burst at a scenario load is
-the unit's buffer before its first repose and is expected.
+**What to read instead.** `posed=<units>/<tris>` — with ` slant=<units>/<tris>` and
+` wire=<units>/<lines>` when the scene has them — is the pass, and **`verts=` should read 0 for
+units**: anything else means something was built on the CPU, which now only the selection lines and
+the effects models do. Four more fields appear **only when they have caught something**, and in a
+healthy game none of them ever does:
+
+| field | meaning |
+|---|---|
+| `rest=` | units past the frame's pose arena, drawn **at rest** for that frame (right geometry, material, position, fog, shadow; only the animation frozen). ⚠ It looks exactly like the old pose-race artifact — that is why it is counted |
+| `unpl=` | *pieces* the pose walk could not place, left at rest inside a unit that is otherwise posed |
+| `nobake=` | units whose type would not bake, which **draw nothing** — the one honest drop. Over 256 pieces or 49152 vertices; stock's worst is 36 and 574 |
+| `q=` | units the gather queued against units the pass drew, printed only when they disagree. A queued unit the draw dropped is a unit missing from the screen |
+
+**`posed=` reading lower than the unit count is usually the HIRES pass, not a miss.** A gamedir with
+`hires/<name>.glb` in it draws those units through the replacement-mesh renderer instead, and they
+are counted in `unit(s)` but not in `posed=`. Check `ls <gamedir>/hires/` before chasing it — this
+cost a diagnosis on 2026-09-09.
+
+**If units are missing on the OLD path, that is `MAXNV`, not a bug in yours.** Before step 8 every
+unit's geometry went through one shared 49152-vertex stream, so past it units got an empty range and
+drew nothing — health bar, no model — and the line says `VERTEX-BUDGET-HIT`. `scenarios/crowd-static.json`
+(256 units, one owner, no orders, so it is the same picture between runs and can be diffed) shows it
+at 0.5x zoom. The posed path has no shared budget to exhaust.
+
+**A/B-ing any live lever: wait for a FRESH `native:` line before the second shot.** That line is
+written every 300 frames — five seconds at 60 fps — so a lever flipped and shot three seconds later
+is read against the *previous* setting's counters, and the diff comes out 0 for the wrong reason.
+Count the `native: [0-9]` lines, flip, wait until the count has moved by two, and confirm the
+numbers actually changed before believing a pixel diff (2026-09-09, a 200-unit A/B that read
+`0 differing pixels` because both shots were the same path).
+
+**A cross-BUILD A/B needs a zero noise floor first, and most fixtures do not have one.** Swapping
+`ddraw.dll` means relaunching, and a relaunch re-runs the sim: an animating piece is at a different
+angle, so `shadow-struct` diffs **9616 px** against *itself* and `shadow-lab` 10466. Establish the
+floor by running the SAME dll twice before believing any number (ta-capture rule 7). What works:
+pause at a fixed sim tick (poll `*0x511DE8+0x38A47:4`, then `keys <i> tab`), diff the world viewport
+only (the minimap and resource bar move on their own), and pick a fixture with nothing animating —
+`one-unit` and a few static structures both measure **0**. A battle cannot be paired at all: two
+loads of `200v200` diverge to different survivors.
+
+**A frame-time A/B needs `--maxfps 0`, and without it it measures nothing.** `write_ddraw_ini`
+rewrites the cap into the instance's `ddraw.ini` whenever `--maxfps`, `--res` or `--window` is given, or the tile is off-screen — **not on a bare `tacli launch <inst>`, which writes the file at all** (corrected 2026-09-09; the docstring used to claim every launch path). Pass `--maxfps` explicitly to be sure of the value. The DLL reads
+it at attach, so an edit made by hand first is overwritten — which is why the cap is a **sticky
+launch knob** (since 2026-09-09) rather than something to edit:
+
+```bash
+tools/tacli launch t1 --maxfps 0                       # 0 is UNLIMITED; sticky, like --res
+tools/tacli scenario load t1 200v200 --restart --maxfps 0
+grep maxfps <gamedir>/ddraw.ini                        # confirm it survived the launch
+```
+
+**`maxfps=0` is the unlimited setting** — `fpsl_init` maps a NEGATIVE value onto the display
+refresh (60) and only `0` falls through every branch with `tick_length` left at 0, so the value to
+make survive the launch is `0`, not `-1`. **Two paths that both hold 60 (or 58.5) fps have not been
+compared, they have both hit the cap** — that is exactly how G16's posed program read "no
+difference" until 2026-09-09, when uncapping it showed 184 fps against 313.
+
+Two things to do on top of uncapping, both learned taking that measurement:
+
+- **Pause the sim first** (`tacli keys <i> tab`, then peek the tick twice to confirm). On a
+  fighting scenario units die under the measurement, so the second half of an A/B draws a smaller
+  scene than the first. Paused, the renderer keeps working and the unit count is fixed.
+- **Read the losing path's `verts=`.** If it says `VERTEX-BUDGET-HIT` it is *truncating* geometry,
+  so the comparison flatters it — it is drawing less and still costing more.
+
+The meter needs no code: the overlay writes a `units:` line every 30 presented frames, so
+`30 × (lines gained) / (seconds elapsed)` is the frame rate.
+
+**Slice `tagpu.log` by BYTE OFFSET when a run has to be attributed to a camera stop** — take
+`stat -c %s` before and after and `tail -c +N` — rather than grepping the whole file. Any
+per-unit-per-frame logging makes it grow fast (`nlog` opens and closes the file per line), and a
+`tacli log` grep can also hand you the *previous* game's lines after a reload.
 
 **Classic++ is a separate switch; its restorer runs as GLSL in the game's own context.**
 `tacli arm <i> classicpp.on` turns on the restored true-colour terrain, features, effects and (since G14g) unit textures;
@@ -879,10 +944,20 @@ instead: `tacli arm <i> classicpp.on=off`.
   Arming everything means leaving all of them absent.
 - **`reclaim.off` disables a crash fix, not a feature** (G14h): `tagpu_reclaim` defers the
   engine's model-object frees so the render thread cannot read a freed unit or wreck — the
-  `200v200` fault at ~95 s. It is on by default with no arm file; `tacli arm <i> reclaim.off`
-  is the A/B lever back to the racing build. Read `reclaim: ARMED …` at launch and the
-  `reclaim: def=… drn=… ovf=0 …` line every 300 frames (`ovf` must stay 0); a level change logs
-  `reclaim: level teardown: flushed N …`.
+  `200v200` fault at ~95 s — and since 2026-09-09 the per-LEVEL model templates too, so a
+  level teardown cannot pull a model tree out from under a render pass. It is on by default with
+  no arm file; `tacli arm <i> reclaim.off` is the A/B lever back to the racing build. Read
+  `reclaim: ARMED …` at launch — it names `model templates@0x42DC01/0x42DCB6 -> deferred` when
+  that half armed — and the `reclaim: def=… drn=… ovf=0 … tmpl=<queued>/<freed by the
+  epoch>/<leaked> …` line every 300 frames. **`ovf` and the third `tmpl` field must stay 0**; the
+  second is normally 0 too, because the usual path releases templates at the teardown rather than
+  through the epoch. A level change logs `reclaim: level teardown: flushed N …` and then
+  `reclaim: teardown post: freed N block(s) …` (~279 on stock content, one per unit type plus the
+  table), and `native: level N -> N+1, dropping the template caches: aabb= selbox= pmap=`.
+  **Quitting a level to the shell and starting another one in the same process works** — measured
+  2026-09-09 over two cycles under the play defaults; the `tab` → `ui click EXIT` →
+  `ui click MAINMENU` → `ui click CHOICE1` route is how you do it, and it is the only way to
+  exercise the level generation at all.
 - The instrumentation triggers (`suppress.on`, `tracer.on`, `gldbg.on`, `posedump.on`,
   `cobtrace.on`, `spxlog.on`, `fpsosd.on`) — debugging, not features.
 - `hires.on` only carries the hires renderer's *tweaks* (`anchor=`, sun, ambient,
@@ -1271,8 +1346,9 @@ tools/tacli gui <i> off           # keep the detours, stop the draw — the live
 tools/tacli gui <i> strict        # the harness's mode: fallback off, a miss painted magenta (never for a player)
 tools/tacli gui <i> remove        # un-arm entirely at the next launch
 tools/tacli arm <i> gui.on=norestore   # G15e: the layer WITHOUT Classic++ art — the UI-only A/B
+tools/tacli arm <i> 'gui.on=sharptest log'   # G17a: the sharp layer filled with a known pattern
 tools/tacli gui <i>               # report
-tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= fps=
+tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= k= sharp= fps=
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --layer --out /tmp/uiwalk
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --side core --layer --game-only --out /tmp/uiwalk-core
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --layer --cycles 3 --out /tmp/uiwalk-cycles   # G15d: three game->shell->game cycles
@@ -1314,20 +1390,29 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
   is dead or crawling — G15d), `skipped=` the stale ops the render thread stepped over after a
   context change. `palchg=` counts palette uploads (a fade is a run of them; a switch costs a
   few) and `paldiff=n@i` the entries where the presented palette differs from `main+0x143A7`
-  and the first of them: **235 on a stock instance, in the shell and in game alike** (the
-  template prefix's `Gamma = 15`, below); 255 after `+gamma 15`, 0 after `+gamma 10`. In the
+  and the first of them: **whatever the live `Gamma` makes it, not a property of an instance**
+  (below) — 235 at factor 1.125 and 0 at 1.0, in the shell and in game alike; 255 after
+  `+gamma 15`, 0 after `+gamma 10`. In the
   shell exactly one entry, index 9, differs *beyond* the gamma scale.
 - **The presented palette is not `main+0x143A7`**: the engine scales every palette it sets by
-  the Gamma option on the way to DirectDraw (`SetGamma 0x4BA590`, `0.5 + Gamma/24`; 1.0 at the
-  engine's own default of 12, but **1.125 here — `wineprefix/` carries `Gamma = 0x0f` and every
-  instance hardlink-clones it**, MEASURED 2026-09-09) and never scales its table. The scale
-  **truncates**. **`+gamma N` typed in chat sets the factor to N/10 at
-  once** (`+gamma 15`, `+gamma 10` back) with no cheat bit, and is the lever that makes the two
-  differ in a skirmish; the UI layer follows the presented palette (cnc-ddraw's, also what
-  `tacli shot`'s PNG carries), the world passes read `+0x143A7` and go wrong by the factor —
-  which, since the factor here is never 1.0, means **the world is ~11 % darker than the engine
-  presents its own pixels on every instance in this project** (14 896 of a 17 049-px Classic
-  viewport sample are exact `palette.pal` colours, 244 presented ones; the two share 8 of 256).
+  the Gamma factor on the way to DirectDraw (`SetGamma 0x4BA590`) and never scales its table.
+  The scale **truncates**. **The factor has two formulas**: an option screen applies
+  `0.5 + Gamma/24` (1.0 at the engine's own default of 12), while **`+gamma N` typed in chat sets
+  it to `N/10` outright** (`+gamma 15` → 1.5, `+gamma 10` → 1.0) with no cheat bit — the lever
+  that makes the two palettes differ in a skirmish. **`Gamma` is one shared, mutable value, not a
+  property of the template**: `wineprefix/user.reg` and all 58 instance prefixes are the same
+  inode and wine rewrites it in place at launch, so it is whatever TA last stored — 15 (factor
+  1.125, `paldiff=235`) and 12 (factor 1.0, `paldiff=0`) have both been read on the same day
+  (MEASURED 2026-09-09). **Read it, never assume it.** **Since 2026-09-09 everything we draw
+  follows the presented palette**, the world included (`tagpu_pal.c`, gpu-status §2.3f);
+  `tagpu.log`'s `pal: presented palette changed (… gamma=…)` line is where to read the live
+  factor, and `tacli peek <i> '*0x511DE8+0x37F08:4'` gives the *option*, which after a `+gamma`
+  no longer implies the factor.
+- **Type a chat line slowly, and check it before you send it.** `keys return`, the `char:`
+  tokens, `keys return` back to back drops the opening `return` often enough to matter: the run
+  then types the cheat into the game as hotkeys and nothing happens, silently. A second of sleep
+  between the three, and a `glshot` of the bottom strip to read the chat field back, is the
+  difference between measuring and guessing (2026-09-09).
 - **The cycles (G15d): `--cycles N`** runs, after the in-game stops, N times game → shell → game
   in the same process: `park`, Tab, `EXIT`, `MAINMENU`, `CHOICE1` (the return: the game freed,
   640×480 restored, a new GL context), `ui wait --gui MAINMENU`, the whole shell inventory
@@ -1363,14 +1448,76 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
     `colvalid=0` for a moment, then `rearms=` +1 and `colvalid=1` again. It does **not** move
     `paldiff` off 0 — `paldiff` already reads **235** on a stock instance (next bullet).
   - **`paldiff=235` is the ORDINARY reading here, not a `+gamma` one** [MEASURED 2026-09-09].
-    Every instance hardlink-clones `wineprefix/`, and that prefix carries `Gamma = 0x0f`, so the
-    presented factor is `0.5 + 15/24 = 1.125` (truncated: the presented palette reproduces exactly
-    as `min(255, (int)(e × 1.125))`) and 235 of 256 entries differ from `main+0x143A7` in the shell
-    and in game alike. Only index 9, in the shell, differs *beyond* that scale. Two consequences:
-    **the world passes are ~11 % dark** (they read `+0x143A7`; in a Classic frame 14 896 of a
-    17 049-px viewport sample are exact `palette.pal` colours against 244 presented ones), and
-    **anything comparing a restored twin to an offline restore must use the presented palette**,
-    never the archives' `palette.pal`.
+    **`paldiff` is whatever the live `Gamma` makes it, and `Gamma` is one value shared by the
+    template prefix and all 58 instances** (the same inode — `clone_prefix` is `cp -al` — rewritten
+    in place by wine at every launch). At 15 the factor is `0.5 + 15/24 = 1.125`, truncated (the
+    presented palette reproduces exactly as `min(255, (int)(e × 1.125))`), and 235 of 256 entries
+    differ from `main+0x143A7` in the shell and in game alike; only index 9, in the shell, differs
+    *beyond* that scale. At 12 the factor is 1.0 and `paldiff` reads **0**. Both were read on
+    2026-09-09, hours apart, on the same DLLs. **So read `paldiff=` from the heartbeat before
+    trusting any measurement that depends on it** — do not assume 235, and do not "fix" the
+    registry value, which would move every measurement taken against that prefix. Two standing
+    consequences: **the world passes are dark by the factor whenever it is not 1.0** (they read
+    `+0x143A7`; at 1.125, 14 896 of a 17 049-px Classic viewport sample are exact `palette.pal`
+    colours against 244 presented ones), and **anything comparing a restored twin to an offline
+    restore must use the presented palette**, never the archives' `palette.pal`.
+
+- **The composite is three layers since G17a (2026-09-09)**, and the heartbeat says so with
+  **`k=` and `sharp=`**: `k` is device pixels per twin texel (`vp_w / twin_w`, read off the frame)
+  and `sharp=WxH` the sharp layer's size (the *viewport*, not the client). **`k` is not always
+  1**: `resizable` defaults TRUE and `maintas` fits the viewport to the client, so any window
+  dragged off the game resolution is fractional, and the second game→shell return at 1920×1080
+  gives `k=2.000 sharp=1280x960` (a 1280×984 client over the 640×480 shell). **At integer `k` the
+  ramp is exactly nearest**, so `k = 2` proves the seam holds and proves nothing about the blend
+  — that needs a fractional `k`, which is G17b's.
+  - **The mirror is unchanged and so is the `strict` walk**: the 4-tap ramp is bit-identical at
+    `k = 1` by construction, so `uiwalk.py --layer` is still the regression it was (0/0/0 at every
+    stop but `MAINMENU`'s sparkle). If it ever stops being, the ramp is what to suspect first.
+  - **`gui.on=sharptest` is the lever that proves the sharp layer exists.** It is empty until
+    G17c/G17d, so nothing else can tell a wired layer from dead code. It paints a 64×64 opaque
+    green square at the viewport's **top-left** and a **one-device-pixel** white column at device
+    x = 100, both drawn as **geometry** (the client kind G17c and G17d will be); check the
+    square's bbox is `(0,0)-(63,63)` in a `glshot`. **There is no y flip in the sharp layer** — a
+    client uses `QVS`, the twins' own vertex mapping, and one that adds a flip draws upside down.
+    Harness only, like `strict` — never hand a player an instance with it armed.
+
+### Driving and measuring at k != 1 (phase 2, G17b)
+
+```bash
+tools/tacli launch <i> --res 1280x720 --window 1920x1080   # engine 1280x720 in a 1920x1080 client => k = 1.5
+tools/tacli click <i> 1056 764 --device                    # CLIENT-AREA pixels, converted by the engine's own path
+tools/tacli ui <i> click SINGLE --device                   # aim where the gadget is DRAWN
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --window 1536x1152 --layer --device --cycles 3
+```
+
+- **`--window WxH` is the whole trick, and it needs no engine patch.** cnc-ddraw takes
+  `ddraw.ini`'s `width`/`height` as the client and maxes them against the game mode
+  (`dd.c`), so the engine keeps its own screen and the fork letterboxes it: `k = window / res`.
+  It is sticky in the instance's meta, like `--res`. The **shell is atom-locked at 640x480**, so a
+  1536x1152 window puts the shell at k = 2.4 and the game at k = 1.5 in the same run.
+- **`--device` is the only click that tests the pointer path.** Every other injected event is
+  delivered in the engine's own coordinates (`tagpu_shield.c` `deliver_mouse`), so it never
+  touches `mouse.unscale_*` and would pass at any k, right or wrong. `--device` posts
+  client-area pixels and lets `mouse_client_to_game` — the same function a hardware click takes
+  — work back to a logical pixel.
+- **`uiwalk` runs a hit check at every stop whether or not you pass `--device`** (it costs a
+  snapshot, no clicking): every gadget aimed where the renderer draws it, put through the fork's
+  own inverse, checked back inside its own rect. Read `MISS=` and `drift=` on the per-stop line
+  and the four new `report.md` columns. **Worst drift is 1 logical pixel** — the renderer scales
+  by `vp/surface` and the input unscales by `(surface-1)/(vp-1)` — so it is a hit test, not a
+  pixel test. Zero-area rects are counted as `degenerate`, not misses.
+- **Pixel parity reads `-1` at k != 1 and that is correct**: `frame_parity` refuses a stop whose
+  GL frame and surface are not 1:1. The hit columns are the measurement there.
+- **Do not walk cycles at 1280x720.** Leaving a game at that mode crashes in the level teardown —
+  at k = 1 too, so it is the mode and not the scaling ([resolution](resolution.html) §3.1d).
+  `--res 1024x768 --window 1536x1152` is k = 1.5 on a mode with clean teardowns on record.
+- **The world can be drawn at the device's resolution since G17b, and it is OPT-IN**: arm
+  `tagpu_devres.on` and `ss` follows `ceil(k)` with the box-resolve to game resolution skipped,
+  so the composite downsamples rather than nearest-stretching. The native log line carries
+  `devres=` beside `ss=`. It is not the default because a selection rect drawn in an `ss` buffer
+  is one *supersample* wide (the driver clamps aliased line width to 1), which under `devres`
+  reaches the screen thinner and dimmer than the engine's — that wants the rects drawn as real
+  geometry first.
 
 ### The Q2 diff — is the restored UI right? (G15e)
 

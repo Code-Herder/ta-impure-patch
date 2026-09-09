@@ -13,6 +13,49 @@ in progress. **Landing** — fast-forwarding local `main` — is the act with a 
 - **Nothing half-done left behind** — no debug instrumentation, no counters added to chase a bug.
 - **The documentation pass is part of the landing**, not a follow-up — see below.
 
+## Fixes must be safe by construction, never by timing
+
+**A fix that makes a fault rarer is not a fix.** Every correctness fix here — crash
+fixes above all, but any fix — must rest on an invariant that holds by design. If the
+argument for it contains "the window is small", "the other thread has almost always
+finished by then", or "we check first", it is not the fix; it is the bug with better
+odds. The failures this stack produces are silent, so a race that fires once a week
+reads as a mystery, not as the change that caused it.
+
+Concretely, the fix must be one of:
+
+- **A bound.** A value read from engine memory is DATA until it has been validated as
+  data — an index checked against the engine's own count, a length against the
+  allocation, a tag against the enum. `tagpu_native.c`'s `model_root` is the shape:
+  the unit's `ModelId` is bounded by `UNITINFOCount` (the count `0x42DB90` itself
+  loops to), so an index taken from a recycled unit slot costs one wrong frame and
+  cannot address memory the engine does not own.
+- **A lifetime.** Cooperate with the engine's own destructor so the memory cannot go
+  away while we read it — `tagpu_reclaim`'s deferred reclamation, the whole of
+  `research/notes/thread-safe-destruction.md`. Its Mode A / Mode B classification is
+  how you decide which objects need it: Mode B (fixed arrays, arenas, pools) is safe
+  to read stale **only because** every value taken out of one is then bounded.
+- **An ordering.** A handshake or a fence that makes the state a fact rather than a
+  hope, as the pass counters do.
+
+**What does not count.** `IsBadReadPtr` (and any probe of the same shape) answers a
+question about the past: the page can be unmapped between the check and the read, and
+the check itself can swallow a guard page. A range test like `ptr_ok` is a cheap
+sanity filter on a VALUE and is fine as one — it is never the safety argument. Neither
+is a timeout, a retry, a sleep, or "the render thread will have finished by then".
+
+**If there is genuinely no by-design fix available, stop and ask.** Say what the
+invariant would have to be, why it cannot be established, and what the timing-dependent
+alternative buys — then let the human decide. A timing-dependent mitigation that the
+human has approved is documented as one, in the code and in the note, with the residual
+hole named. Silently shipping one is the failure this section exists to prevent.
+
+**This is a standing debt, not just a rule for new work.** `IsBadReadPtr` is used
+widely in the older passes as though it were a guarantee. Those are not all wrong — many
+sit behind a bound already — but none of them should be cited as the reason a read is
+safe, and any of them touched by new work gets the argument above or a note saying why
+it cannot.
+
 ## Review engine changes before they land
 
 **A human declares a feature ready for review. Never launch the review off your own judgement.**

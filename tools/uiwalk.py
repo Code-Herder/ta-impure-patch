@@ -70,6 +70,10 @@ TREE = HERE.parent
 ARM_SET = ["native.on=all wrecks", "terr.on", "feat.on", "fx.on", "sfx.on", "mark.on=log", "order.on",
            "zoom.on", "vpwide.on"]          # mark.on=log: its periodic line carries the live zoom
 KEY = 254          # terrown's viewport fill index (tagpu_terr.c, `key=N` moves it)
+# G17b: aim every gadget click in CLIENT-AREA pixels and let the engine work back
+# to a logical pixel by its own arithmetic. A walk that mixes the two proves
+# nothing, so it is a whole-run switch (`--device`).
+CLICK_DEVICE = False
 
 # (label, actions) — actions are tacli argument lists run in order; a `ui click`
 # that fails is logged and the walk goes on (the screen is then whatever it is).
@@ -360,7 +364,8 @@ class Walk:
                 print(f"  [{label}] unknown verb {a}", file=sys.stderr)
             return
         if a[0] == "ui" and a[1] == "click" and len(a) > 3:
-            # alternatives: click the first gadget that exists on this screen
+            # alternatives: click the first gadget that exists on this screen.
+            # Resolved BEFORE --device is appended, or the flag reads as a name.
             rc, uiout = tacli("ui", self.inst)
             present = set()
             for line in uiout.splitlines():
@@ -372,6 +377,8 @@ class Walk:
                 print(f"  [{label}] none of {a[2:]} on screen", file=sys.stderr)
                 return
             a = ["ui", "click", pick]
+        if CLICK_DEVICE and a[0] == "ui" and a[1] == "click":
+            a = list(a) + ["--device"]
         rc, out = tacli(a[0], self.inst, *a[1:])
         if rc != 0:
             print(f"  [{label}] {' '.join(a)} -> rc={rc}: {out.strip().splitlines()[-1] if out.strip() else ''}", file=sys.stderr)
@@ -509,10 +516,24 @@ class Walk:
                             (parity["differing"] + parity.get("vpdiff", 0)):
                         p2["against"] = "after"
                         parity = {**parity, **p2}
+        # G17b's hit check goes AFTER the parity bracket, never inside or before
+        # it: it costs a snapshot round-trip, and anything between the census
+        # read and the surface/GL/surface triple moves where those land on the
+        # game's own timeline. It reads no state the shots consume.
+        hit = hit_check(self.inst)
         summary = parse_census(lines)
         hb = self.heartbeat() if self.parity else {}
         self.rows.append({"label": label, "screen": screen, "in_game": in_game, "lines": lines, **summary, **parity,
+                          "hit": hit,
                           "heartbeat": hb, "zoom": self.zoom_level() if (self.parity and in_game) else None})
+        kstr = f"{hit['k']:.4f}" if hit.get("k") else "-"
+        # the hit half prints on EVERY walk — it costs a snapshot whether or not
+        # `--layer` is on, and a census-only run that paid for it and showed
+        # nothing was what the landing review caught
+        hitstr = (f" | hit: k={kstr} gadgets={hit['n']} MISS={hit['miss']}"
+                  f"{' [' + hit['names'] + ']' if hit['miss'] else ''}"
+                  f"{' degenerate=' + str(hit['degen']) if hit['degen'] else ''}"
+                  f" drift={hit['drift']}px")
         extra = (f" | parity: differing={parity.get('differing', '-')} vpdiff={parity.get('vpdiff', '-')}"
                  f"/{parity.get('vpui', '-')} holes={parity.get('holes', '-')}"
                  f" {parity.get('bbox', '')}{parity.get('vpbbox', '')}"
@@ -521,7 +542,7 @@ class Walk:
                  f" overflows={hb.get('overflows', '-')} stalls={hb.get('stalls', '-')} lost={hb.get('lost', '-')}"
                  f" twins={hb.get('twins', '-')} atlas={hb.get('atlas', '-')} pal={hb.get('palchg', '-')}/{hb.get('paldiff', '-')}" if parity else "")
         print(f"  {label:14s} {screen:40s} flips={summary['flips']:4d} changed={summary['changed']:7d} "
-              f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{extra}", file=sys.stderr)
+              f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{hitstr}{extra}", file=sys.stderr)
 
     def stop_loading(self, label, timeout=150.0):
         """The loading screen, held under strict. It is presented exactly ONCE: the game
@@ -595,12 +616,16 @@ class Walk:
         with p.open("w") as f:
             f.write(f"# uiwalk — {self.inst} at {self.res}\n\n")
             if self.parity:
-                f.write("| stop | screen | game | zoom | differing px outside the viewport | inside it, engine non-key px: differing / total | strict holes | box | engine self-diff | fps | resets | overflows | stalls | lost | skipped | twins | atlas | palette uploads / presented-vs-engine entries |\n"
-                        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+                f.write("| stop | screen | game | zoom | k | gadgets | hit misses | drift px | differing px outside the viewport | inside it, engine non-key px: differing / total | strict holes | box | engine self-diff | fps | resets | overflows | stalls | lost | skipped | twins | atlas | palette uploads / presented-vs-engine entries |\n"
+                        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
                 for r in self.rows:
                     hb = r.get("heartbeat", {})
                     extra = f" (the one presented frame; loaded in {r.get('load_s', '?')} s, alive={r.get('alive')})" if "samples" in r else ""
+                    h = r.get("hit", {})
+                    hk = f"{h['k']:.4f}" if h.get("k") else "-"
                     f.write(f"| {r['label']} | {r['screen']}{extra} | {'y' if r['in_game'] else ''} | {r.get('zoom') or ''} | "
+                            f"{hk} | {h.get('n', '-')} | "
+                            f"{h.get('miss', '-')}{' ' + h['names'] if h.get('names') else ''} | {h.get('drift', '-')} | "
                             f"{r.get('differing', '-')} | {r.get('vpdiff', '-')} / {r.get('vpui', '-')} | "
                             f"{r.get('holes', '-')} | {r.get('bbox', '')} {r.get('vpbbox', '')} | {r.get('selfdiff', '')} | "
                             f"{hb.get('fps', '-')} | {hb.get('resets', '-')} | {hb.get('overflows', '-')} | {hb.get('stalls', '-')} | "
@@ -616,6 +641,52 @@ class Walk:
                 f.write(f"### {r['label']} — {r['screen']}\n\n```\n" + "\n".join(r["lines"][-12:]) + "\n```\n\n")
         (self.out / "report.json").write_text(json.dumps(self.rows, indent=1))
         print(f"report: {p}", file=sys.stderr)
+
+
+def hit_check(inst):
+    """Phase 2's kill rule, as arithmetic (G17b).
+
+    For every gadget on the screen: aim a device-space click where the RENDERER
+    draws it (viewport offset plus the logical point scaled by viewport/surface),
+    then apply the FORK's own inverse — `(surface-1)/(vp-1)`, `dd.c`'s
+    `mouse.unscale_*` — and check the logical point lands back inside the
+    gadget's own rect. The two halves are computed independently on purpose: if
+    we inverted the input transform instead, the test would agree with itself at
+    any k and prove nothing.
+
+    Costs one snapshot and no clicking, so it runs at every stop of every walk
+    rather than only under `--device`. Rects with zero width or height cannot
+    contain any point and are counted apart from the misses; the shell carries
+    one (`DebugString`, height 0).
+    """
+    rc, out = tacli("ui", inst, "--json", "--all")
+    try:
+        snap = json.loads(out)
+        sw, sh = snap["surface"]
+        vx, vy, vw, vh = snap["viewport"]
+    except Exception:
+        return {"k": None, "n": 0, "miss": -1, "degen": 0, "drift": -1, "names": ""}
+    if not (sw and sh and vw > 1 and vh > 1):
+        return {"k": None, "n": 0, "miss": -1, "degen": 0, "drift": -1, "names": ""}
+    ux, uy = (sw - 1) / (vw - 1), (sh - 1) / (vh - 1)
+    miss, degen, n, drift = [], 0, 0, 0
+    for g in snap.get("gadgets", []):
+        r = g.get("rect")
+        if not r:
+            continue
+        l, t, w, h = r
+        if w <= 0 or h <= 0:
+            degen += 1
+            continue
+        cx, cy = g["click"]
+        dx, dy = vx + int((cx + 0.5) * vw / sw), vy + int((cy + 0.5) * vh / sh)
+        gx, gy = min(int((dx - vx) * ux), sw - 1), min(int((dy - vy) * uy), sh - 1)
+        drift = max(drift, abs(gx - cx), abs(gy - cy))
+        n += 1
+        if not (l <= gx < l + w and t <= gy < t + h):
+            miss.append(g["name"])
+    return {"k": vw / sw, "n": n, "miss": len(miss), "degen": degen,
+            "drift": drift, "names": " ".join(miss[:6])}
 
 
 def peek_values(out):
@@ -760,6 +831,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--inst", default="uiw")
     ap.add_argument("--res", default="1024x768")
+    ap.add_argument("--window", default=None,
+                    help="window CLIENT size when it must differ from --res, e.g. 1920x1080 with "
+                         "--res 1280x720 for k = 1.5 (G17b). Sticky in the instance's meta, so it "
+                         "is passed at the launch only")
     ap.add_argument("--out", default="/tmp/uiwalk")
     ap.add_argument("--side", choices=["arm", "core"], default="arm",
                     help="the human player's side: picks the in-game screens (ARM*/COR*) and the default fixture")
@@ -779,10 +854,16 @@ def main():
                          "for `tascene uidiff`. No census, no strict, no parity shots — the strict walk is "
                          "not a valid regression while Classic++ is on (it compares against the engine's "
                          "INDEXED surface), which is why this mode exists")
+    ap.add_argument("--device", action="store_true",
+                    help="G17b: aim every gadget click in CLIENT-AREA pixels, so the walk exercises "
+                         "the pointer unscale instead of handing the engine logical coordinates. "
+                         "The hit check below runs either way")
     ap.add_argument("--cycles", type=int, default=0,
                     help="G15d: after the in-game stops, this many game -> shell -> game cycles in one process "
                          "(the exit dialogs, the shell inventory again, the loading screen held, the fixture re-applied)")
     a = ap.parse_args()
+    if a.device:
+        globals()["CLICK_DEVICE"] = True
     scenario = a.scenario or ("tascene-parity-core" if a.side == "core" else "tascene-parity")
     if a.restore and a.layer:
         sys.exit("uiwalk: --restore and --layer are different measurements: pick one")
@@ -796,7 +877,10 @@ def main():
     if not a.no_passes:
         tacli("arm", a.inst, *ARM_SET, check=True)
     if not a.game_only:
-        rc, out = tacli("launch", a.inst, "--res", a.res, timeout=300)
+        launch_args = ["launch", a.inst, "--res", a.res]
+        if a.window:
+            launch_args += ["--window", a.window]
+        rc, out = tacli(*launch_args, timeout=300)
         print(out.strip().splitlines()[-1] if out.strip() else "", file=sys.stderr)
         w.gamedir = instance_dir(a.inst) or (TREE / "tagpu" / "instances" / a.inst / "gamedir")
         rc, out = tacli("log", a.inst, "-g", "gui: ")

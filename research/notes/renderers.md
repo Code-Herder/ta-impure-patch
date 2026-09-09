@@ -319,7 +319,12 @@ does not re-scan the runtime's module tree — a precaution, not a measured faul
 Telea, radius 3 — no shader twin; the FILL pass's nearest-ring mean stands in, §4c) and alpha is restored from the
 key mask after; a frame whose opposite edges agree within 12 levels (`is_tileable`) is
 wrap-padded by the depth, every other frame is zero-padded (the convolutions' own `zeros`
-padding); output is clipped to 8 bits. The restored RGBA atlases are new objects beside
+padding); output is clipped to 8 bits. **Those 12 levels are measured in the engine's own
+palette (`main+0x143A7`), not in the one the screen is shown with**: the threshold is a raw
+colour distance, so a gamma-scaled palette stretches every distance by the same factor and moves
+tiles across it — 177 of Two Continents' 5062 wrap-padded at factor 1.5 against 400 at 1.0, when
+the test briefly read the presented palette on 2026-09-09. Tileability is a property of the ART
+([GPU status](gpu-status.html) §2.3f); the restore itself resolves through the presented one. The restored RGBA atlases are new objects beside
 Classic's indexed ones, which do not change: units 4-texel replicated pad, 4-aligned, mip
 levels 0–2.
 

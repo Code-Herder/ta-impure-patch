@@ -31,7 +31,8 @@
 
    Nothing DRAWS from these yet — the posed program is step 5. What step 4
    delivers is the bake, the caches, their four invalidation triggers and a
-   lever that checks the bake against the emitters it is going to replace. */
+   lever. Its `check` token is gone with G16 step 8: it compared the bake
+   against the CPU emitters, and they no longer exist. `log` still works. */
 
 #include "tagpu_model3do.h"      /* TAGPU_PBMAXPIECE, and the field offsets */
 
@@ -57,6 +58,19 @@ typedef struct TAGPU_PBGEOM {
     int          count[TAGPU_PB_NRANGE];
     int          nvert;
     unsigned int vbo;
+    /* the BODY range's rest AABB per piece, and whether the piece contributed
+       any body vertex at all. G16 step 5 replaces `s_emitTop` — which emit_node
+       took from the posed vertices it was writing — with a CPU walk of these 8
+       corners through the piece's pose matrix (gpu-posing.md §4, "What stops
+       being true"). Two stated deviations from what emit_node produced: an
+       AABB carried through a rotation BOUNDS the posed points rather than
+       hitting them, so the top is an over-estimate; and it covers every body
+       face, including the ones whose material the stream collapses, which
+       emit_node skipped before it ever looked at their y. It feeds the shadow
+       height of WRECKS only — a unit with a record prefers `model_aabb`. */
+    float        pmn[TAGPU_PBMAXPIECE][3];
+    float        pmx[TAGPU_PBMAXPIECE][3];
+    unsigned char pbody[TAGPU_PBMAXPIECE];   /* 0 = no body vertex baked      */
     /* THREE COUNTS, NOT ONE. gpu-posing.md §3 listed "a face with neither a
        texture nor a colour", "a node whose vertex array does not read" and "a
        piece whose parent never resolves" together as the anomaly to log once
@@ -82,6 +96,12 @@ typedef struct TAGPU_PBMAT {
     int          owner;
     unsigned     atlasGen, levelGen, glGen;
     unsigned int vbo;
+    /* the posed pass's VAO, binding this stream and its geometry together
+       (locations 0-3 from the geometry, 4-6 from here). It lives on the
+       MATERIAL entry because that is the shorter life of the two: a geometry
+       drop cascades into every stream that names it, so the VAO can never
+       outlive either buffer it points at. */
+    unsigned int vao;
     int          nvert, nskip;   /* nskip: vertices the skip flag collapses    */
     int          noMaterial;     /* faces with neither a texture nor a colour  */
     unsigned     lastFrame;
@@ -102,16 +122,10 @@ int  tagpu_posebake_unit(const char* o3, int owner,
 /* The vertex count `emit_geom` should produce for THIS unit out of this bake:
    the body range, minus the faces whose material the engine has nothing for,
    minus the pieces this unit is not showing. The lever compares the two. */
-int  tagpu_posebake_predict_body(const TAGPU_PBGEOM* g, const TAGPU_PBMAT* m,
-                                 const char* o3);
 
 int  tagpu_posebake_armed(void);         /* tagpu_posebake.on                 */
-int  tagpu_posebake_checking(void);      /* ...with `check` in it             */
+
 void tagpu_posebake_glreset(void);       /* the GL context went              */
 /* one `bake=` field for the native: line; writes nothing when disarmed */
 int  tagpu_posebake_stats(char* out, int n);
-/* the lever's cross-check, called once per unit right after emit_geom */
-void tagpu_posebake_check(const char* o3, const TAGPU_PBGEOM* g,
-                          const TAGPU_PBMAT* m, int emitted,
-                          const float* accRest, int naccRest);
 #endif
