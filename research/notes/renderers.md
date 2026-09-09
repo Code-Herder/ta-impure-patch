@@ -671,6 +671,25 @@ quietly fixed, because every one of them cost a build-and-launch cycle.
    `anims\<screen>.GAF` and not `anims\<gadget>.GAF`. Named after the gadget it was never
    opened; named after the screen it loads. See [engine map](exe-reverse-engineering.html)
    *A screen's own GAF*.
+7b. **The Renderer row applied nothing, because the menu drove only ONE of the switch's
+   two files.** `tagpu_opt.c`'s precedence is *an `.on` wins, and an `.off` only defeats a
+   pass that was on **by default***, so writing `tagpu_classicpp.off` alone fails in both
+   directions: with a hand-armed `.on` present (what `tacli arm` writes) the `.off` is inert
+   and Classic++ can never be turned off, and on any tacli instance — which carries
+   `tagpu_defaults.off`, so the table's default does not apply — deleting the `.off` is not
+   enough to turn it **on** either. The screen now owns both files, which is correct under
+   the shipped DLL, a tacli instance and a hand-armed `.on` alike. Measured: Classic++ →
+   Classic changes **1 755 893 of 2 073 600 px** outside the panel, and the round trip back
+   returns to **53 px** of the original — the cursor and a restoring tile.
+   *Supersampling deliberately keeps its single file: `tagpu_ss.off` is read directly by the
+   native pass, there is no `tagpu_ss.on` and no table entry, so inventing one would arm
+   nothing.* **The general lesson: a row that drives a `tagpu_opt` pass must write the pair,
+   because the table's default is only one of three configurations it will meet.**
+7c. **A row that cannot bite is now greyed rather than left looking live.** Four of the six
+   describe Classic++'s behaviour and are inert under Classic; leaving them reading `On`
+   there was the menu asserting something untrue. `grayedout` also makes the engine refuse
+   the click, so the two are one change.
+
 7. **A panel over the world takes its clicks through the ZOOM TRANSFORM**, and at any zoom
    ≠ 1 that bends them — so no row worked at all. Found in play within minutes, and invisible
    to every gate test, because those ran at zoom 1 with nothing else armed. `tagpu_zoom.h`

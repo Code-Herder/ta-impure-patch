@@ -1085,8 +1085,11 @@ because the panel is right-aligned and a `.GUI` written at attach cannot know th
 repainted in place with the composed ground. **Nothing sim-side, and nothing that replicates.**
 
 **Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
-key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off` and
-`tagpu_classicpp.off` created and deleted. Write access to the gamedir is not new — the DLL
+key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off`
+created and deleted; and **both** `tagpu_classicpp.on` and `.off` — the pair, because
+`tagpu_opt.c`'s precedence is an `.on` wins and an `.off` only defeats a *default*-on, so
+driving one of them applies nothing on an instance that carries `tagpu_defaults.off` or a
+hand-armed `.on` (§2.8). Write access to the gamedir is not new — the DLL
 already writes seven files from seventeen create-for-write sites.
 
 **The trigger is not a gadget and cannot be one.** No GUI screen owns the top bar (every

@@ -219,7 +219,7 @@ static const unsigned char TRIG_INK[TS_COUNT][3] = {
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "G18-6"
+#define UFO_STAMP  "G18-7"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
@@ -713,15 +713,29 @@ static void read_state(void)
 }
 
 /* ---- pushing the state at the engine ------------------------------------- */
+
+/* A row that cannot bite is greyed rather than left looking live. Four of the
+   six describe CLASSIC++'s behaviour and are inert under Classic -- leaving
+   them reading `On` there is the menu telling the player something untrue.
+   Supersampling is not one of them: `tagpu_ss.off` is read by the native pass
+   in both lanes. */
+static int row_greyed(int row)
+{
+    if (row == R_STYLE || row == R_SS) return 0;
+    if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
+    if (row == R_SHADOWQ) return s_stage[R_SHADOWS] == 2 ? 0 : 1;  /* Soft only */
+    return 0;
+}
+
 static void push_stages(void* gi)
 {
     int i;
     for (i = 0; i < s_nrows; i++)
         ((set_status_fn)VA_SETSTATUS)(gi, s_row[i].name, s_stage[i]);
-    /* Shadow quality is only live at Soft (renderers.md 2.10), and `grayedout`
-       is the engine's own way of saying so (gui-gadgets.md 7.1). There is no
-       setter for it, so it is the direct field write TA's own code does at
-       0x477416 -- and it needs the record, which SetStatus found by name. */
+    /* `grayedout` is the engine's own way of saying "this does not apply now"
+       (gui-gadgets.md 7.1), and it refuses the click as well as dimming the
+       plate. There is no setter for it, so it is the direct field write TA's
+       own code does at 0x477416, on the record SetStatus just found by name. */
     {
         char* main_p = *(char**)TA_MAIN;
         char* top = main_p ? *(char**)(main_p + OFF_TOPGUI) : 0;
@@ -729,8 +743,12 @@ static void push_stages(void* gi)
         int n = ctrls ? *(short*)(ctrls + 0xB6) : 0;
         for (i = 1; i <= n; i++) {
             char* g = ctrls + (size_t)i * STRIDE;
-            if (!memcmp(g + G_NAME, "SHADOWQ", 8))
-                *(int*)(g + G_GRAYED) = (s_stage[R_SHADOWS] == 2) ? 0 : 1;
+            int r;
+            for (r = 0; r < s_nrows; r++)
+                if (!memcmp(g + G_NAME, s_row[r].name, strlen(s_row[r].name) + 1)) {
+                    *(int*)(g + G_GRAYED) = row_greyed(r);
+                    break;
+                }
         }
     }
     ((set_dirty_fn)VA_SETDIRTY)(gi);       /* the pump repaints with 0x40 */
@@ -927,26 +945,43 @@ static void write_cfg(void)
     CloseHandle(h);
 }
 
-/* The two rows that are FILES rather than cfg keys. Creating and deleting is
-   the whole mechanism -- both are polled, so nothing else has to be told. */
-static void write_levers(void)
+static void touch(const char* path)
 {
     HANDLE h;
+    if (exists(path)) return;
+    h = CreateFileA(path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+}
+
+/* The two rows that are FILES rather than cfg keys.
+
+   THE SWITCH NEEDS BOTH OF ITS FILES WRITTEN, not just the `.off` one, because
+   `tagpu_opt.c`'s precedence is **an `.on` wins and an `.off` only defeats a
+   pass that was on BY DEFAULT**. Driving only the `.off` file fails in both
+   directions and the row silently does nothing (found in play 2026-09-09):
+
+     - with a hand-armed `tagpu_classicpp.on` present -- what `tacli arm` writes
+       -- the `.off` is inert and Classic++ can never be turned off;
+     - on any tacli instance, which carries `tagpu_defaults.off`, the table's
+       default does not apply, so deleting the `.off` is not enough to turn it
+       ON either.
+
+   Owning both is correct under all three configurations: the shipped DLL
+   (defaults on), a tacli instance (defaults off), and a hand-armed `.on`.
+
+   Supersampling is NOT the same shape and deliberately keeps one file:
+   `tagpu_ss.off` is read directly with GetFileAttributesA in tagpu_native.c
+   and tagpu_render3do.c, there is no `tagpu_ss.on` and no table entry, so
+   inventing one would arm nothing and confuse the next reader. */
+static void write_levers(void)
+{
     int ss  = s_stage[R_SS] == 1;
     int cpp = s_stage[R_STYLE] != STYLE_CLASSIC;
 
-    if (ss) DeleteFileA(SS_OFF);
-    else if (!exists(SS_OFF)) {
-        h = CreateFileA(SS_OFF, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
-    }
-    /* tagpu_classicpp.on is default-on through tagpu_opt, so the lever the menu
-       drives is the .off file, not the .on one. */
-    if (cpp) DeleteFileA(CPP_OFF);
-    else if (!exists(CPP_OFF)) {
-        h = CreateFileA(CPP_OFF, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
-    }
+    if (ss) DeleteFileA(SS_OFF); else touch(SS_OFF);
+
+    if (cpp) { DeleteFileA(CPP_OFF); touch(CPP_ON); }
+    else     { DeleteFileA(CPP_ON);  touch(CPP_OFF); }
 }
 
 void tagpu_menu_present(void)
