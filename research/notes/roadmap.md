@@ -1889,9 +1889,16 @@ failed ground composition latches instead of leaking one `frontend.gaf` per worl
   **It is the TERRAIN caster alone: `terrainshadow=0` takes the shadow term on that water to
   exactly 0.00 and leaves unit shadows untouched**, so there is a complete workaround today and
   the fix belongs to the hills draw, not the shared bias. Full diagnosis in
-  [renderers](renderers.html) §2.7b. It is NOT a regression of this landing (the landed
-  build and `bbceeb8` are byte-identical here, 0 of 270 000 px) and the fix belongs to the shadow
-  module, so it is not taken here. Until it is, `Ultra` is the wrong recommendation.
+  [renderers](renderers.html) §2.7b. It is NOT a regression of this landing (2 247 px outside the
+  new menu panel differ between the landed build and `bbceeb8`, under the 4 889-px noise floor of
+  two runs of the same build) and the fix belongs to the shadow module, so it is not taken here.
+  Until it is, `Ultra` is the wrong recommendation.
+  **The caster/receiver split is NOT the cause** — that hypothesis was built into the lab as
+  `castsplit` on 2026-09-09 and measured at 0.001 std / 780 px, which killed it and saved a
+  terrain-pass refactor. The live candidate is a blocker-search allowance that scales with the
+  TAP DISTANCE instead of with the texel (`bslack` in the lab, unmeasured in the game), and the
+  next lab work is to give `shadowFrame` the game's own light frame — `[0, Y_TOP]`, the zoomed
+  window, the octave and the map-anchored texel snap — which is the last enumerated difference.
 - **`shadowres` outside the four table values** (256, say) is snapped to the nearest row on the
   first click of any row rather than being preserved.
 - **The G15 `strict` walk still has not been run against this screen**, and **GUI scale `k ≠ 1`

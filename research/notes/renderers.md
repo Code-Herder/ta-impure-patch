@@ -464,61 +464,104 @@ surfaces**, which means the mismatch is not a constant offset but a *shape* diff
 the two reconstructions. (Note `units` is in minimum-resolvable-depth steps — here
 3577 / 2²⁴ ≈ 2.1e-4 world units — so the useful range is tens of thousands, not single digits.)
 
-**So the fix has to be structural: one surface, not two.** The receiver and the caster must be
-the same geometry, which is what the lab does and what the game stopped doing at §2.8. That is
-work in the terrain pass, not a knob, and it is not attempted here. Until it is done,
-`terrainshadow=0` is the complete and correct answer for anyone who sees this.
+**What the fix is not, continued: it is NOT the caster/receiver split.** That was this
+section's own conclusion for a day and it is wrong; the lab was changed to test it and the test
+says no. See below.
 
-**WHY THE LAB NEVER SHOWED IT: the lab has ONE terrain, the game has TWO.**
-The shading maths is not the difference — `tascene-view.html`'s shadow function is
-character-for-character what shipped: the same `(1.0 + 2.0*(1.0 - nl)) * uShScale.x /
-uShScale.y` bias, the same `24.0 / uShScale.x` blocker search, the same 16 Poisson taps, the
-same clamped `dzduv`. (Its own comment records hitting a cousin of this — *"without this the
-blocker search found the hill under every hill pixel"* — and the receiver-plane bias is what
-fixed it there.) The difference is **what geometry each one casts**:
+**So the direction the evidence actually points is the bias, and specifically its SCALE.** The
+required bias came out at ~24 world units, which is the blocker search radius itself, and the
+acne grows as the texel shrinks. The constant bias `(1 + 2(1 − nl)) × texel` is sized for a
+receiver error of one texel — the right size for a tap at one texel, and the wrong size for a
+tap 24 world units out, where the receiver-plane bias is a *first-order* extrapolation of a
+curved surface. So the candidate is an allowance that scales with the TAP DISTANCE rather than
+with the texel:
 
-- **In the lab, the caster IS the receiver.** `buildTerrainLab` fills `ltVAO` with vertices that
-  each carry the world point they depict, and `shadowPass` casts *that same array*
-  (`gl.bindVertexArray(ltVAO); gl.drawArrays(...)`). One buffer, one triangulation, one
-  rasterisation — so caster and receiver depths can only differ by the map's own texel
-  quantisation, which is precisely the quantity the texel-scaled bias is sized for. The bias is
-  correct there, and it always will be.
-- **In the game they are two different meshes.** §2.8's own premise is that the terrain gather
-  emits screen-space quads *with no height*, so the receiver's world point is reconstructed
-  analytically per fragment (`taTerrW`), while the caster is a **separate** world-space VBO
-  built from the height bytes (`build_hills`: `o[1] = hh`, `o[2] = r*16 + hh*0.5`). Same bytes,
-  two pipelines, one surface described twice.
+```
+if (d < z + dot(o, dzduv) - k * length(o)_world) { ... }      /* k world units per world unit */
+```
 
-Their disagreement is a **fixed world-space quantity**. It does not shrink with the texel, so a
-texel-scaled bias covers it at coarse resolutions and stops covering it as the map sharpens —
-which is exactly the 1/texel law measured above, and why the lattice is the caster mesh's 16-unit
-cell rather than anything of the shadow map's.
+It is scoped correctly (it only relaxes taps that are far out), it costs a unit shadow nothing
+(a unit blocker sits tens of world units above the receiver plane, far beyond any sane `k`), and
+unlike a bias floor it does not peter-pan. **Not yet measured in the game.** It is implemented in
+the lab as `bslack` so that both can be swept with the same knob. `terrainshadow=0` remains the
+complete answer for anyone who sees the artifact today.
 
-**The generalisable lesson.** The lab is a faithful oracle for the *shading*, and it is not one
-for anything that depends on caster and receiver being the same geometry. §2.8 created that
-split deliberately and for a good reason; what was not recorded is that it also invalidated the
-lab as the oracle for terrain self-shadowing. Any future pass that casts from a rebuilt copy of
-something it also shades inherits the same blind spot.
+**WHY THE LAB DID NOT SHOW IT — the first answer was wrong, and the lab is what disproved it.**
+The first answer written here was *"the lab has ONE terrain, the game has TWO"*: the game's
+terrain gather emits screen-space quads with no height, so its fragment shader rebuilds the world
+point per fragment (`taTerrW`) while the caster is a separate world-space mesh (`build_hills`),
+where the lab cast the very buffer it shaded. Plausible, and false. **The two describe the same
+surface**, and it can be shown on paper: `build_hills`'s triangle over lattice corners (c,r),
+(c+1,r), (c,r+1) interpolates to `((c+tx)·16, h, (r+ty)·16 + h/2)` with `h` the same linear blend
+of the same three bytes that `taTerrW` computes at the same parameter, and the two triangulations
+use the same diagonal, (1,0)-(0,1).
 
-**How to make the lab faithful again — mirror the split, do not remove it.** The lab is only
-misleading here because it casts `ltVAO`, the very buffer it shades. Give `shadowPass` a second
-terrain source: build a world-space heightfield mesh from the same height data the lab already
-has, on the game's 16-unit grid and with the game's per-vertex shear (`z = r*16 + h/2`,
-`build_hills`), and cast **that** instead of `ltVAO`. Put it behind a query knob
-(`castsplit=0` to get the old behaviour back for comparison) and **default it on**, so what the
-lab shows is what the game does.
+The lab was given the split anyway, so the claim could be measured instead of argued
+(`tascene-view.html`, `castsplit`, default **1**): a `build_hills`-shaped indexed caster mesh
+over the whole map, cast in place of `ltVAO`, and a receiver that runs `tagpu_terr.c`'s own
+`taTerrW` / `taTerrN` / analytic-derivative `taShadowAt` per fragment instead of interpolating a
+vertex world point. Both halves, copied from the C source. Result, same frame, `shadowres=2048`:
 
-That is worth doing for its own sake, not just to reproduce this bug: it turns a defect that
-currently takes a game build, a scenario, a camera and a shadowres sweep — minutes per
-iteration — into a browser reload, and it puts the game's actual topology under the lab's
-existing shadow oracles. The A/B is immediate too: `castsplit=1` against `castsplit=0` on the
-same frame *is* the caster/receiver mismatch, isolated, with no shadow maths in the way.
+| | shadow term (std) | worst | px differing from the other mode |
+|---|---|---|---|
+| `castsplit=0` (one buffer, cast and shaded) | **1.669** | 62.0 | — |
+| `castsplit=1` (the game's two representations) | **1.670** | 62.0 | 780 of 786 432, max 9/255 |
 
-**And the rule this suggests for the lab in general:** the lab is a faithful oracle for a pass
-only where its data flow has the same *shape* as the game's. Where the game builds a second
-representation of something — a rebuilt mesh, a reconstructed position, a cached copy — the lab
-has to build it too, or its verdict on that pass does not transfer. Worth checking the other
-passes for the same asymmetry before trusting them.
+*(`castsplit=0` is byte-identical to what the lab drew before the knob existed — verified, 0 px.)*
+**The split's entire footprint is 780 pixels and 0.001 of std.** It is not the cause of anything,
+and the structural "one surface, not two" fix it implied would have been a large terrain-pass
+refactor bought with nothing.
+
+**What the lab DOES reproduce: the defect and its law.** Pointed at open sea on Two Continents
+with no units and no features in the pack — nothing in the scene that can cast but the ground
+— the lab shows terrain self-shadowing that vanishes exactly at `terrainshadow=0` (0.000 std,
+0 px), which is the game's own signature. Most of the raw term there is *legitimate* trench
+shadow, so it has to be isolated first (see the oracle below). Isolated:
+
+| `shadowres` | lab, acne only | game, same sweep (different camera) |
+|---|---|---|
+| 512 | 0.037 | 0.03 |
+| 1024 | 0.123 | 1.03 |
+| 2048 | 0.224 | 2.50 |
+| 4096 | 0.355 | 2.50 |
+
+Same law — acne grows as the map sharpens — and at 512 the two nearly agree. What the lab does
+**not** reproduce is the magnitude at high resolution: it is roughly ten times quieter, and its
+acne sits on trench edges rather than spreading over open water in the game's blocky lattice.
+
+**The acne oracle, because the raw term will not do.** `bfloor=<w>` floors the constant bias at
+w world units. At `bfloor=24` every shadow a real caster throws survives and the ones the bias
+failed to cover are gone, so
+
+```
+acne = std(shadow term) - std(shadow term at bfloor=24)
+```
+
+On the lab's open-water frame the raw term is 1.669 and the acne is 0.224 — 87 % of what the
+naive number reports is real shadow. In the game's sample the raw term was 8.72 and `bfloor=24`
+took it to 0.00, i.e. that sample was **100 % acne and no legitimate terrain shadow at all**,
+which is the sharpest statement of the defect anywhere in this section.
+
+**What is still unexplained, stated as gaps rather than covered over.** The remaining ten-fold
+is not accounted for. Two candidates, neither tested:
+
+- **The lab's light frame is not the game's.** `shadowFrame` fits the box to the *visible*
+  height range (`[h0, h1+128]`) where `frame()` in `tagpu_shadow.c` uses a fixed `[0, Y_TOP]`
+  = `[0, 511]`; the lab's window is the **1x** viewport whatever `zoom` says, where the game
+  uses the zoomed one (`evw`/`evh`); and the lab has no octave, no `res*2 <= 4096` doubling and
+  **no map-anchored lattice snap** (`u0 = floor(u0/texel)*texel`), all three of which the game
+  has and §2.7 describes. The game's measurement was taken at **zoom 0.564**, which is exactly
+  the regime the lab cannot express. This is the next thing to mirror.
+- **The scene.** The acne is driven by the receiver's curvature across the 24-unit search, and
+  no lab eye tried so far has the game sample's seabed. Matching the camera would settle how
+  much of the gap is geometry.
+
+**The rule this still suggests for the lab.** The lab is a faithful oracle for a pass only where
+its inputs have the same shape as the game's — and the falsification above says *which* inputs
+are worth checking first. Here the two terrain representations turned out to agree exactly, so
+duplicating them bought nothing; the light frame, which nobody had compared, is where the game
+and the lab actually differ. Compare the numbers a pass is *fed* before theorising about the
+structure it is fed them through.
 
 **How to measure it, because the obvious metric lies.** The raw standard deviation of the water
 band is ~38 either way: it is dominated by the tile art, and it moved by 0.15 when the artifact
@@ -526,7 +569,10 @@ went from full to absent. The shadow term has to be isolated against an otherwis
 `shadows=0` frame first; only then does the signal appear (8.72 → 0.00).
 
 **Not a regression of the G18 landing.** The landed build and `bbceeb8` (main before it) render
-this scene **byte-identically with soft shadows on — 0 of 270 000 px differ**. The menu only
+this scene identically where it matters. *(An earlier draft of this line claimed "0 of 270 000
+px differ"; that was a hand-picked crop of deep water and is withdrawn. Full frame: 67 181 px
+differ, of which 64 934 are the menu panel the landing added; 2 247 lie outside it, below the
+4 889-px frame-to-frame noise floor of two runs of the SAME build.)* The menu only
 made the knob reachable, which is how it was found.
 
 ### 2.8 Hills cast: a static per-map heightfield mesh

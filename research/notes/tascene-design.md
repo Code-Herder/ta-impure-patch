@@ -266,6 +266,9 @@ These exist only in `lane=explore`, and they are what landing 2 added.
 | `shade=<s>` | the fraction of the *direct* light a shadow removes, default 1: full shadow is the ambient floor, `amb/level` = 0.40 at the defaults. The ambient term is never shadowed |
 | `terrainshadow=<b>` | the heightfield casts too, default 1. The art has slope shading but no cast shadows, so this adds and does not double-count the way relief did; on Two Continents' 53° sun it amounts to 786 pixels |
 | `shadowres=<n>` | depth map size, default 2048. The light-space bounds are the view plus a 192-unit margin and the height range actually in view — **0.862 world units per texel at 896×704** (measured G14i: the `u` extent, 1765 units, is the wider one and the height range does not enter it; "about 0.7" was a guess) |
+| `castsplit=<b>` | **mirror the GAME's caster/receiver split**, default **1** (added 2026-09-09). The game's terrain gather emits screen-space quads with no height in them, so its fragment shader rebuilds the world point and the normal from the height grid per fragment (`tagpu_terr.c`'s `taTerrW`/`taTerrN`, and the analytic-derivative `taShadowAt`), while the *caster* is a separate world-space mesh built from the same bytes (`build_hills`). One surface, described twice. `castsplit=1` does both here — a `build_hills`-shaped indexed mesh over the whole map, cast in place of `ltVAO`, and the game's own reconstruction in the receiver, both copied from the C source. `castsplit=0` is the older single buffer, cast and shaded, and is **byte-identical to what the lab drew before the knob** (verified, 0 px). It exists because it was the leading theory for the ground-acne defect and **the measurement killed it**: 0.001 of std and 780 of 786 432 px between the two modes ([renderers](renderers.html) §2.7b) |
+| `bfloor=<w>` | **DIAGNOSTIC — the acne oracle.** Floor the constant shadow bias at `w` world units, default 0 (off). At `bfloor=24` every shadow a real caster throws survives and every one the bias failed to cover is gone, so `acne = std(term) − std(term at bfloor=24)`. Needed because the raw shadow term on open water is dominated by *legitimate* trench shadow: 1.669 raw against 0.224 of acne on the lab's own water frame |
+| `bslack=<k>` | `k` world units of extra depth allowance per world unit of blocker-search tap offset — `d < z + dot(o, dzduv) − k·|o|`. The receiver-plane bias is a *linear* extrapolation and the search runs a fixed 24 world units; this is the candidate fix for what that leaves uncovered on a curved receiver, in the lab so the game and the lab can be swept with the same knob. 0 = off (default) |
 | `debug=shadow` | (global) show side A's depth map instead of the frame, near = bright |
 | `restore=<how>` | **CLASSIC++ only.** Where the terrain's and the features' restored colour comes from: `pack` (default — `terrain/atlas.rgba.bin` and `features/atlas.rgba.bin`, restored offline by the unditherer at build time) or **`glsl`** — the GLSL restorer (`tascene-restore.js`, the shaders extracted from `tagpu_restore_glsl.h`, the weights from `restore/<model>.w32.bin`) run in the page on the pack's own R8 atlases, which is what the game does; the feature frames go through with their colour key (the FILL pass's nearest-ring stand-in for the reference's TELEA inpaint, alpha 0 written at the key). Implies `undither=1`. With `model=full\|tiny`, `precision=fp32\|fp16`, `nk=N`; **`restorediff=1`** reads both results back and diffs them against the pack's atlases (terrain: the Q2 bar — max 1 level, < 0.01 % of interior RGB bytes, the guard ring a copy of the edge; features: Q2 on the far band, the near band reported), in the status bar and as a hidden `<pre id="restore-report">` for `tascene restore`, with the restored feature atlas as base64 in `<pre id="restore-features">` for `--save-features` |
 | `undither=<b>` | `1` = the pack's restored atlases, `0` = the palette indices. **Default: restored when the pack carries them** (`build --undither`), indexed otherwise — so the lane's defaults still reduce to parity on an indexed pack, and show the colour a restored pack was built for. `undither=1` on a pack built without `--undither` says so instead of drawing something plausible |
@@ -317,6 +320,16 @@ and differs only in the look.
 second copy.
 
 ### One rule for anyone editing the viewer
+
+**No backtick in a shader comment.** The shaders are JS template literals, so a stray `` ` ``
+inside one — a comment naming a variable the way prose does — closes the literal and the page
+dies at parse time. The symptom is the worst kind: `tascene shot` still exits 0 and still writes
+a PNG, because the shooter's error check reads the page's own error banner and the page never
+got far enough to render one. The frame is simply blank. Cost one debugging cycle on
+2026-09-09. `node --input-type=module --eval "$(the <script> block)"` catches it in a second and
+is the check to run after editing the viewer — a `ERR_MODULE_NOT_FOUND` for `tascene-restore.js`
+means the syntax is fine and nothing else ran.
+
 
 **The coordinate convention is tagpu's, deliberately.** The extracted vertex shader maps game
 `py` 0 to NDC −1, so the offscreen's row 0 is the game frame's *top* row and `gl_FragCoord.xy`
