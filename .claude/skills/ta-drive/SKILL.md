@@ -1341,6 +1341,30 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
     client uses `QVS`, the twins' own vertex mapping, and one that adds a flip draws upside down.
     Harness only, like `strict` — never hand a player an instance with it armed.
 
+### The cursor is ours (phase 2, G17c)
+
+```bash
+tools/tacli arm <i> gui.on=nocursor          # phase 1's cursor, the engine's own — the A/B
+tools/tacli arm <i> 'gui.on=cursorscale=2'   # ours, at 2 device px per art px (default 1, clamped 0.25-8)
+tools/tacli keys <i> "dmove:768,576"         # move the pointer in CLIENT pixels, no click
+tools/tacli log <i> -g 'curs='               # curs=<own>,<w>x<h>,dev=<1 if the client point>,sc=,drawn=,warm=
+```
+
+- **`dmove:` is how you place the cursor without clicking**, and it is client-area pixels. A
+  logical `pmove:` (what `ui hover` sends) works too, but it makes `dev=0`: an injected logical
+  point has no pointer behind it, so the draw falls back to the engine's own position.
+- **The measure is the cursor's device FOOTPRINT, and it needs no reference image.** Park the
+  pointer far away, `glshot`, move it to a known client point, `glshot`, and take the bounding box
+  of the pixels that changed. Ours is **10x20 at every k** (one device pixel per art pixel); the
+  engine's is that art nearest-blown-up — 15x30 at k = 1.5, 30x60 at k = 3. **The box size is also
+  how you tell one cursor from two**: if the engine's were still underneath, the changed box would
+  be the union, i.e. the bigger one.
+- **`warm=` counts frames spent atlasing a shape for the first time**, and one per new shape is
+  correct — ownership latches on the atlas so the erase never runs ahead of the draw. A `warm=`
+  that keeps climbing means the atlas is refusing the frame.
+- **The cursor rect is excluded from `uiwalk`'s diff** (padded 8 px) and exempt from `strict`
+  either way, so neither is a test of the cursor. The footprint above is.
+
 ### Driving and measuring at k != 1 (phase 2, G17b)
 
 ```bash

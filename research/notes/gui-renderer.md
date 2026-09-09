@@ -1361,7 +1361,7 @@ is itself a guess that wants a look on three monitors.
 |---|---|---|---|
 | **G17a** the seam — **done 2026-09-09, §15** | the sharp-bilinear filter, the sharp layer's texture and the composite order; `k` plumbed everywhere but forced to 1 | the parity md5 equals main's and the 120-stop `strict` walk is unchanged, with the filter in the path | the filter is not bit-identical at `k = 1` → stop; nothing downstream is safe until it is |
 | **G17b** `k ≠ 1` live | automatic `k`, the logical mode, the world pass at device resolution, the window policy | a walk at `k = 1.5` and `k = 2`: every stop renders; **clicks land on the right gadget at every stop** (a click test, not a pixel test); no resize across three entry/exit cycles; the 1× mirror still diffs exact at `k = 1` in the same run | hit-testing drifts → M1 is wrong and the phase stops, since 13.1 is what makes the rest free |
-| **G17c** the cursor | ours in the sharp layer from live state, the fallback masked in its rect, `cursorscale=` | crisp at `k = 1.5` and 3, under the true pointer; G13m's motion-frame measure re-run | — |
+| **G17c** the cursor — **done 2026-09-09, §17** | ours in the sharp layer from live state, the fallback masked in its rect **and the rect counted as key in the world composite**, `cursorscale=` | crisp at `k = 1.5` and 3, under the true pointer; G13m's motion-frame measure re-run | — |
 | **G17d** the string op | `PK_STRING`, the observer's string/font/colour capture, the atlas draw | text clean at `k ≠ 1` **and bit-identical to the engine's glyphs at `k = 1`**; arena bytes per batch down | our stamp and the engine's blit disagree → the measure loop is wrong; fix it rather than accept a near miss |
 | **G17e** the minimap | the 252-px base snapshotted at load, our fog from the corner-mask grid, the engine's dots replayed ×2, our view box | sharp at `k`; dot positions within a pixel of the engine's; **no unit visible that the engine does not show** | the fog rules disagree (13.10) → keep the engine's fog as a pixel op and ship the base alone |
 
@@ -1961,7 +1961,7 @@ against a 2.25x nearest blow-up of 640x480. 0 magenta either way.
 
 - **Which knob the player turns is still the owner's to decide.** §13.7 says the player picks the
   window and the engine is given `window / k`. Implementing that literally means redirecting the
-  six game-entry reads of the desired mode ([resolution](resolution.html) §3.1b) and never
+  eight game-entry reads of the desired mode ([resolution](resolution.html) §3.1b) and never
   writing `main+0x37F1B/1F`, because `REGISTRY_SaveSettings` writes back every option from memory
   from ~30 call sites and would persist our value into the player's registry — the `ScrollSpeed`
   write-back a review caught on G13e. The inverse — the player picks the game resolution and the
@@ -2001,3 +2001,142 @@ against a 2.25x nearest blow-up of 640x480. 0 magenta either way.
   regression is clean, and the single hole was a transient of the kind the stall-recovery window
   produces rather than anything the landing introduced. Two runs, one hole, and it is recorded
   with what it was a picture of.
+
+---
+
+## 17. G17c — the cursor  [MEASURED 2026-09-09]
+
+Phase 2's third gate, and the first real client of the sharp layer G17a built empty. The engine's
+cursor is replaced by ours, drawn at **1× device pixels at every `k`** from the true pointer, and
+the engine's own is erased from the frame it was blitted into.
+
+### What the gate turned out to need: two modules, not one
+
+§13.5 said the cursor branch "simply changes from *discard* to *mask the fallback in that rect*".
+That is the UI layer's half and it is not the whole job, which the groundwork established before
+any code was written (§13.5's implementation note, now acted on):
+
+- Over the **panel** the twin covers the engine's cursor as soon as the layer stops discarding
+  its rect, exactly as §13.5 predicted.
+- Over the **world** it does not. The engine's cursor reaches the screen through the fork's own
+  engine-frame draw, beneath everything of ours, and `tagpu_native.c`'s composite discards our
+  fragment wherever the engine's surface is not the terrain key — a cursor pixel is not the key,
+  so it survives underneath. **The cursor's rect therefore counts as key in the world composite
+  too** (`CFS`, `uCurs`). A version that only drew ours would have shipped two cursors over the
+  world, and the measurement below is what proves it does not.
+
+Because both modules erase the same rectangle, the state is read **once per frame** —
+`tagpu_gui_cursor_frame()`, called from `tagpu_overlay.c` *before* `tagpu_native_frame` — rather
+than twice. Two reads of `*(0x51FBD0)+0x1B6/+0x1BA` a pass apart would differ by any mouse move
+in between and leave a sliver of the engine's cursor standing.
+
+### How it works as built
+
+- **The pixels need no observer change, and the record is a GAF frame.** The cursor's blits never
+  become ops (everything drawn inside the flip is excluded, `tagpu_gui_leaves.h`), but the sprite
+  record at `*(0x51FBD0)+0x1B2` is a **GAF frame header** and the engine hands it straight to
+  `CopyGafToContext 0x4B7F90` — `mov eax,[ebx+0x1B2]` at `0x4C2960`, pushed at `0x4C297B` behind
+  the NULL context. So the render thread reads the frame directly, `tagpu_gaf_atlas_get` decodes
+  and uploads it into **the UI atlas we already have**, and it is restored by the same lazy job at
+  the same priority — no new pool slot, which matters with `MAX_JOBS` at 6 and priorities 0–4
+  taken.
+- **`CURS_FS` draws it into the sharp layer**, paired with `QVS` like every other client: the
+  atlas index, the colour key discarded so the layer's alpha is exactly the frame's coverage, the
+  restored twin where its alpha says it has colour, and the **presented** palette otherwise — not
+  `main+0x143A7`. The cursor sits on top of both halves of the frame and one a Gamma step darker
+  than the panel under it would show.
+- **The position is the true device pointer.** `mouse_client_to_game` (G17b) is the one place a
+  client point is converted, so it records it (`mouse_note_client`); `wndproc`'s `WM_MOUSEMOVE`
+  records the same point before `x_adjust`. The engine only ever learns a point on its own
+  logical grid, so its cursor can only sit on multiples of `k` device pixels. An **injected**
+  click has no pointer behind it, so `deliver_mouse` drops the record (`mouse_forget_client`) and
+  the draw falls back to the engine's position at the centre of its logical pixel — which is
+  where the engine draws, so the harness and the engine never disagree about the gadget.
+- **Ownership latches on the atlas.** A shape not yet uploaded is not owned: the sharp pass
+  atlases it that frame and the next frame draws it. That costs one frame of the engine's own
+  cursor per new shape and never a frame with no cursor at all — the erase is unconditional and
+  the draw is not, so getting this backwards is the one thing the gate could have shipped
+  invisibly. `warm=` in the heartbeat counts those frames (6 across a whole in-game session: the
+  contextual cursor set).
+- **`nocursor` and `cursorscale=N`** are tokens in `tagpu_gui.on`. `nocursor` is phase 1's
+  behaviour exactly — the A/B, and the escape if the record ever stops being a frame header.
+  `cursorscale=` is §13.5's knob, clamped to 0.25–8 rather than trusted.
+- **The layer's shader order changed, and that is the rest of G17c.** The sharp layer is now
+  tested **before** the cursor rect. G17a had the discard above it, which was harmless while the
+  layer was empty and fatal the moment a cursor moved in: the one place a cursor is drawn was the
+  one place the shader had already given up. The rect stays exempt from `strict` either way,
+  because either way the engine's surface holds cursor pixels the twin has never seen.
+
+### Measured
+
+Two Continents, `scenarios/tascene-parity.json`, the default arm set, Gamma 12 (`paldiff=0`).
+The measure is the cursor's **device footprint**: park the pointer far away, shoot, move it to a
+known client point, shoot, and take the bounding box of the pixels that changed. It needs no
+reference image and it answers both questions at once — how big the art is on screen, and whether
+there is one cursor or two.
+
+| | engine mode | ours | the engine's (`nocursor`) |
+|---|---|---|---|
+| `k = 1.5`, over the **world** | 1024x768 in 1536x1152 | **10x20**, 112 px | 15x30, 252 px |
+| `k = 1.5`, over the **panel** | " | **10x20**, 112 px | 15x30, 268 px |
+| `k = 3`, the shell | 640x480 in 1920x1440 | **10x20**, 112 px | 30x60, 1 707 px |
+
+The art is 10x20 (`curs=` says so). **Ours is 10x20 device pixels at every `k`** — one device
+pixel per art pixel, no filter in the path at all, which is what 13.5 means by crisp and is a
+stronger statement than any sharpness ratio. The engine's is that art nearest-blown-up by `k`:
+1.5x and 3x per axis, 2.25x and 9x the area.
+
+**And it is one cursor, not two.** If the engine's were still underneath, the changed box would be
+the union — the larger one. Over the world it is the smaller one, which is the world composite's
+`uCurs` exemption doing its job; over the panel it is the smaller one too, which is the layer's.
+
+**At `k = 1` ours is byte-identical to the engine's.** The parity fixture at 1024x768, `classicpp`
+off, six shots each way:
+
+| | frames |
+|---|---|
+| `gui.on=nocursor` | `568cc55c4301ab88f166282f969e18b9`, `608cbeaf765985b31a3f677e1551578f` |
+| `gui.on` (ours drawn, `drawn=240`) | **the same two md5s** |
+
+Those are §15's recorded values for `main`, which are §10's originally recorded parity md5 and its
+partner. So the change is inert with `nocursor` — the regression guard — and with our cursor
+actually drawn the frame is *still* byte-identical, because at `k = 1` ours is the same art
+through the same presented palette at the same position. Comparing the two builds frame by frame,
+the only difference anywhere is **one pixel at (512, 384)**, which is the fixture's own two-state
+flip §15 already recorded on `main` itself.
+
+**G13m's motion-frame measure, re-run.** G13m's artefact was the engine's sprite left behind at
+the unzoomed `u` on 10–11 % of motion frames at 0.25x. Eight `dmove` steps along a diagonal at
+zoom **0.263** and `k = 1.5`, one shot each, footprint measured against a parked reference:
+
+| stops | footprint | origin |
+|---|---|---|
+| **8 of 8** | 10x20, 112 px, every one | **exactly the commanded client point, every one** |
+
+Zero stragglers, and it cannot recur: ours is drawn on the render thread from the client point the
+message carried, not from any engine sample that a flip could get ahead of.
+
+**The `k = 1` regression** — `uiwalk.py --layer --cycles 3` at 1024x768, `classicpp` off, with the
+cursor ours: see the table in the landing's own run. The walk already excludes the cursor rect
+(padded 8 px) from its diff, so it measures the rest of the frame, which is the point.
+
+### Not closed here
+
+- **The cursor is not restored under Classic++ in practice**, only in principle: `CURS_FS` reads
+  the atlas's restored twin where its alpha says so, and cursor frames are above the 12-px restore
+  floor, so they queue like any other UI art. Nothing has measured whether the restored cursor is
+  *right*; `tascene uidiff` covers the atlas as a whole and does not single it out.
+- **`cursorscale=` is implemented and unmeasured.** It is clamped and it scales the quad; no
+  reading was taken of what a 2x or 3x cursor looks like against a 3x UI, which is the question
+  §13.5 raises and leaves to the owner.
+- **The erase is the engine's LAST-DRAWN rect**, `+0x1B6/+0x1BA`, which is stale if the engine
+  stops drawing its cursor without moving it. Phase 1's discard already trusted that rect, so this
+  is not new, but under G17c a stale rect erases a rectangle of the engine's own in-viewport
+  pixels rather than merely deferring to them.
+- **Inside the cursor's rect the world composite paints our world over whatever engine UI was
+  there** — health bars, a nanoframe, chat — for that frame. Its own cursor had already covered
+  those pixels in the frame being composited, so nothing is lost that the player could have seen,
+  but the rule is "the rect is key", not "the rect is background".
+- §16 said the desired mode has **six** game-entry read sites; [resolution](resolution.html) §3.1b
+  established there are **eight** (`0x4983BF/B9` feed `SetWindowPos` only, `0x4983E2/DC` feed
+  `NewTAScreen`). Corrected here rather than left standing.
