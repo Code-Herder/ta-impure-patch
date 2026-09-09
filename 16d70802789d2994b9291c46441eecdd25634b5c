@@ -1,0 +1,1 @@
+landing-review: model=opus effort=high reviewers=2 range=main..16d7080 findings=12 acted=11 rejected=0 recorded=1 date=2026-09-09 (fixes in dcf3e78; verified at ss=3 in 138ee2e — the case both walks missed. The one not fixed is a device-space click whose DOWN and UP could convert through different viewports if a mode switch lands between them: recorded in gui-renderer.md §16.)
