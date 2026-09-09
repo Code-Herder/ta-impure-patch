@@ -649,6 +649,17 @@ can be — tracked; the extractor writes them to a gitignored directory.
 frame.** So a new screen chooses its panel art by naming one, and reusing a stock panel
 costs nothing. [MEASURED]
 
+**But the `id=12` gadget does not LOAD anything** [VERIFIED 2026-09-09, G18 gate 3]. The
+`GUI_StageUpdateDraw` dispatch (`jmp [eax*4+0x4A95F4]`, indexed by `id`) sends only **`id 0`
+and `id 11`** to the branch that builds `anims\<gadget name>.GAF` and loads it; `id 12` looks
+its frame up in a bank it did not open. **The panel is the loader** — and its name is the one
+`GUI_Load` stamped, i.e. the screen name — so a screen's own art is `anims\<screen>.GAF` and
+an `id=12` names a frame inside it, falling back to the shared `commongui` bank. `ARMOPT.GUI`
+is the clean case: its `id=12` is `OPTBG` and `anims/armopt.gaf` holds exactly `OPTBG`.
+`PREFS.GUI`'s `IGOPT` comes from `commongui` while its own `prefs.gaf` holds `PREFSBG`, and
+`VISUALRT` has no `anims/visualrt.gaf` at all. Full reading, and the bank layout
+`0x4B8D40` walks: [engine map](exe-reverse-engineering.html) *A screen's own GAF*.
+
 The panel itself is `id=0` at `xpos=128 ypos=128`, `150×352` — over the world, hard
 against the side panel, which is the rect every in-game options screen uses.
 
@@ -667,9 +678,12 @@ A button with `stages > 0` carries **every stage label in one string**, separate
 
 `stagebuttn2/3/4` carry 2/3/4 bars. **`stagebuttn1` also carries two bars, but paints
 stage 0 RED and stage 1 green** — the on/off variant, where `stagebuttn2` is the neutral
-two-choice one. **Which of the two the engine picks for `stages=2` is [OPEN]**;
-`texturenumber` is the suspect, since VISUALRT's buttons all carry `0` while its `TEXT`
-gadget carries `2`.
+two-choice one. **ANSWERED 2026-09-09 (G18 gate 3): a `stages=2` button with
+`texturenumber=0` gets `stagebuttn1`, the red/green plate** — read straight off the
+render-options screen, whose two-stage rows show a red bar at stage 0 and a green one at
+stage 1 while its `stages=3` and `stages=4` rows are green throughout. What selects
+`stagebuttn2` instead is still unmeasured; `texturenumber` remains the suspect and the
+screen that would settle it has to carry a non-zero one.
 
 **There is no `stagebuttn5` or `6`, so no cycle button can carry more than four stages.**
 Anything longer has to page, and the build panel's own `commongui.armprev` / `armnext`
@@ -714,6 +728,17 @@ stock panel to sit on, and adding an entry point to `PREFS` has no free recess. 
 art drawn for it. `tools/guiart.py` splices a seven-recess panel out of `visualsrt`'s own
 pixels so the lab can show the layout, but that output is a derivative of the game's art
 and exists only to be looked at.
+
+**How G18 resolved it, and what shipped** [BUILT 2026-09-09]. `RENDER.GUI` carries its own
+`anims/render.gaf` in a `.ufo` the DLL writes, holding one **uncompressed** 304×212 frame
+drawn from nothing in palette indices — the ramp 55..63, which is where `tools/guipanel.py`'s
+colours already sat. At screen-load the DLL composes `frontend.gaf`'s `back*` nine-slice from
+the **player's own install** and repaints that frame's plane in place through `+0x10
+PtrFrameBits`; uncompressed is what makes the repaint one copy. So the shipped art is ours,
+the art on screen is theirs, and a missing `frontend.gaf` leaves the drawn frame standing.
+A panel with no `id=12` at all gets the engine's own composed dialog ground instead — which
+is what `MSGBOX`/`YESORNO`/`EXITMENU` are, and what the screen looked like before its `id=12`
+existed.
 
 ---
 

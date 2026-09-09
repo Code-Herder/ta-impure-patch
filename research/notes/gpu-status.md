@@ -1054,6 +1054,52 @@ invalidation was watched on an exit to the shell: `posebake: dropped 53 geometry
 material with them) … GL 2`. *[The 27 this first quoted was an earlier run of the same test, before
 the drop line reported the cascade separately; both are real, but only one is the shipped build.]*
 
+### 2.11 The render-options screen (`tagpu_menu.c`, `tagpu_ufo.c`, on by default, `tagpu_menu.off`) — Phase F G18
+
+The in-game settings screen. Design and the decisions behind it:
+[renderers](renderers.html) §2.10; the engine reading: [engine map](exe-reverse-engineering.html)
+*The screen lifecycle*, *A screen's own GAF*, *Setting a gadget's state*, *Where the engine
+looks for archives*. It is a **real TA `.GUI` screen**, so the engine does the hit-testing,
+the dispatch, the plate art, the fonts and the save-under, and the G15/G17 twins carry it for
+free; what we supply is two bytes of gadget state, one frame's pixels, one 28×28 trigger and
+one small archive.
+
+| site | what we do there | thread |
+|---|---|---|
+| `DLL_PROCESS_ATTACH` | write `impure-patch.ufo` (`guis/render.gui` + `anims/render.gaf`) unconditionally, with a version stamp. `DDRAW.dll` is TotalA.exe's first static import, so this precedes `InitTAHPIAry 0x41D4C0`'s `*.UFO` glob by the loader's rules | — |
+| `DrawGameScreen 0x468CF0` (observer) | the per-frame tick: sample the trigger file on its edges, open or close, re-assert `main+0x37EA0`, and recover if the screen was freed under us | game |
+| `0x46A308` (observer, post-GUI) | blit the sprocket into the back buffer with `CopyGafToContext 0x4B7F90(NULL, frame, x, y)` | game |
+| `GUIMEMSTRUCT+0x08` (our `OnCommand`) | advance the row, `GUIGADGET_SetStatus 0x4A1080` for every row, `grayedout` for Shadow quality, and set the repaint flag `gi+0xCCA` via `0x49FA90`. **It writes no file** | game |
+| `tagpu_shield.c`, both paths | `tagpu_menu_click()` — the sprocket's hit test, from `deliver_mouse()` (injected) and from the wndproc before the shield's gate (real) | game |
+| `render_ogl.c`'s frame | `tagpu_menu_present()` — the deferred cfg/lever write | render |
+| open | `GUI_Load 0x4AA8F0(gi, main+0x37EA0, flags)` with `0x20` + `0x400`, patch the panel rect, set `+0x08`/`+0x0C`, then `0x4C2470(); GUI_StageUpdateDraw(gi, 0x21); 0x4C2870()` — GUI_Load's own suppressed stage 1, reproduced; then repaint the ground and set `gi+0xCCA` | game |
+| close | restore `main+0x37EA0` and call `UpdateIngameGUI 0x491D70(1)`. **`GUI_Pop` is never called** | game |
+
+**Fields we write.** `main+0x37EA0`, the expected-screen name buffer — 16 bytes, saved and
+restored, and re-asserted every frame while the menu is open. Gadget `status_curnt` (`+0x137`)
+through the engine's own setter, and `grayedout` (`+0x13C`) by direct field write, which is
+what TA's own code does at `0x477416`. The panel record's `xpos`/`ypos` (`+0x13`/`+0x15`),
+because the panel is right-aligned and a `.GUI` written at attach cannot know the resolution.
+`gi+0xCCA`, the repaint flag. And the loaded GAF frame's colour plane (`+0x10 PtrFrameBits`),
+repainted in place with the composed ground. **Nothing sim-side, and nothing that replicates.**
+
+**Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
+key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off` and
+`tagpu_classicpp.off` created and deleted. Write access to the gamedir is not new — the DLL
+already writes seven files from seventeen create-for-write sites.
+
+**The trigger is not a gadget and cannot be one.** No GUI screen owns the top bar (every
+in-game panel is the side panel at `(0,128) 128×352`) and a gadget is drawn into its panel's
+own `w×h` surface at panel-relative coordinates, so a gadget at `x=1876` has nowhere to be
+drawn. It is 28×28 at `(w−16−28, 2)`, sharing `MARGIN = 16` with the panel at `(w−16−304, 32)`
+so the two right edges land on one line — measured at both 1024 (988, 704) and 1920 (1876,
+1600).
+
+**Known cost.** The engine rebuilds the whole in-game GUI stack on a world click, and the
+panel hangs over the world, so clicking a row costs one frame of the panel being re-pushed.
+The row's own state survives it (the model is ours; the levers are read only on the player's
+open), but the rebuild is visible if you look for it.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

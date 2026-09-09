@@ -410,7 +410,7 @@ lane runs at zoom 1 by construction and cannot show them (§4).
 ### 2.10 Settings: an in-game screen, drawn by the engine's own GUI  [REVISED 2026-09-09]
 
 **Decided: the render options are a real `.GUI` screen — the engine's own gadgets, its own
-GAF art, its own dispatcher — not a panel the DLL paints.** Seven stage buttons, no pages.
+GAF art, its own dispatcher — not a panel the DLL paints.** Six stage buttons, no pages.
 This supersedes the original decision below, which was for a DLL-drawn panel hanging off an
 "Options" button in the top bar.
 
@@ -421,16 +421,24 @@ game's is tracked). Interviewed with the owner 2026-09-08/09.
 
 **The two rules the owner set.**
 
+*Seven was the count before mouse-wheel zoom was cut (below); the row table and every
+geometry number here are six.*
+
 1. **The menu never offers the unmodified original engine.** No row has an "off, let the
    1997 code draw it" position — we own the draw, and the only question a row asks is which
    of *our* two renderers owns it.
-2. **Simplify.** Seven gadgets, and everything else demoted to the cfg.
+2. **Simplify.** Six gadgets, and everything else demoted to the cfg.
 
 **The screen — a drop-down, not a stock rect** [SHAPE DECIDED 2026-09-09]. `RENDER.GUI`,
-panel `id=0` at `(w−320, 32) 304×240` — right-aligned 16 px in, hanging from the top bar's
-underside, over the world. Background gadget `id=12` naming its panel frame. Seven `id=1`
-buttons at `x=166 w=120 h=20` on a **28 px** pitch, each with an `id=5` label at `x=14
-w=144` **on the same line**:
+panel `id=0` at `(w−16−304, 32) 304×212` — right-aligned by `MARGIN = 16`, hanging from the
+top bar's underside, over the world. Background gadget `id=12` naming its panel frame. Six
+`id=1` buttons at `x=166 w=120 h=20` on a **28 px** pitch, each with an `id=5` label at
+`x=14 w=144` **on the same line**:
+
+*The height is 212, not the 240 an earlier revision of this line said — `tools/guipanel.py`
+is the source of truth for the geometry (`W,H = 304,212`, `DIV_BOT = 202`, the last row
+ending at 194), the paragraph on modality below already said 212, and the built screen
+measures 212.*
 
 | y | row | stages | what drives it |
 |---|---|---|---|
@@ -604,9 +612,12 @@ is **use TA's gadget/UI mechanism as much as possible**, and every choice below 
    redraw** — so it is the direct field write plus a lookup, which is also exactly what TA's own
    code does at `0x477416`. Repaint is separate: `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)`.
    **The engine never advances a stage button itself** — nothing in `0x49F000..0x4AB000` writes
-   `+0x137` — so `OnCommand` does the advance and writes the cfg. ○ **`gi+0xCCA`**, which
-   `0x4A1110` sets and `0x4A1080` does not, is unidentified and may be why a bare `SetStatus`
-   is not enough to make a change appear [OPEN].
+   `+0x137` — so `OnCommand` does the advance and writes the cfg. ● **`gi+0xCCA` is identified**
+   (2026-09-09): the screen's **deferred-repaint flag**. About twenty state-changing calls set
+   it, there are bare accessors at `0x49FA90`/`0x49FAB0`, and its one reader in the GUI pump
+   (`0x4AA0AF`) clears it and calls `GUI_StageUpdateDraw(gi, top->flags | 0x40)`. So it is not
+   a precondition of anything; setting it is *better* than calling the draw by hand, because
+   it repaints with the screen's own flags and coalesces several changes into one repaint.
 
 5. **The trigger's hit-test must sit on BOTH input paths.** `tagpu_shield.c` handles the
    injected `WM_TAGPU_MOUSE` → `deliver_mouse()` *before* the shield check, and then, with the
@@ -631,6 +642,47 @@ is **use TA's gadget/UI mechanism as much as possible**, and every choice below 
    unconditionally because staleness after a DLL upgrade is the one failure here that would be
    genuinely confusing, and it costs a few ms at startup. *Write access to the gamedir is not a
    new requirement — the DLL already writes seven files from 17 create-for-write sites.*
+
+**WHAT WAS BUILT, and the six things the live runs corrected** [BUILT 2026-09-09, G18 gates
+1-3; `tagpu_menu.c`, `tagpu_ufo.c`]. All three gates are met on a 1024×768 skirmish. The
+design above survived contact almost intact; what did not is recorded here rather than
+quietly fixed, because every one of them cost a build-and-launch cycle.
+
+1. **`GUI_Load` stamps its name argument into `ControlsAry[0].name`** (`0x4AAC98`), which is
+   what `IsOnTop` compares — so the `.GUI`'s authored `name=` is irrelevant and the string we
+   pass is what matters. `armmain2.gui` says `name=HEADER;` on disk and reads `ARMMAIN2.GUI`
+   live for exactly this reason.
+2. **`flags & 0x400` suppresses GUI_Load's STAGE 1, not just a repaint** — and stage 1 is
+   what builds the panel's surface. Using it to patch the right-aligned `xpos` first and then
+   asking for a bare `0x40` repaint left the panel with no surface and the engine composited
+   the frame's own pixels at its rect. Reproduce the suppressed call (`flags | 1` under the
+   `0x4C2470`/`0x4C2870` pair), do not replace it.
+3. **The tick cannot hang off `UpdateIngameGUI`.** None of its 21 call sites is the frame
+   loop. `DrawGameScreen 0x468CF0` is.
+4. **A world click rebuilds the whole in-game GUI stack** — a fresh `ARMMAIN2.GUI` with a NULL
+   `per_active`, our screen freed — and a panel over the world takes its own clicks through
+   that path. The re-push is the right recovery; **re-reading the levers on it is not**, and
+   doing so put every plate back the moment it was clicked. Reading the levers is edge-
+   triggered on the player's open; a recovery re-push keeps the model.
+5. **`gi->UIChange_f == -1` is not proof of a pop** (the pump resets it and calls `OnCommand`
+   again on the same click). The `per_active` chain is the authority.
+6. **The `id=12` gadget does not load the GAF — the panel does**, so the file is
+   `anims\<screen>.GAF` and not `anims\<gadget>.GAF`. Named after the gadget it was never
+   opened; named after the screen it loads. See [engine map](exe-reverse-engineering.html)
+   *A screen's own GAF*.
+
+The oracles, for the record: the sim tick at `main+0x38A47` ran **1801 → 2057** over four
+seconds with the panel open and **2147 → 2147** with TA's own `ARMOPT` open, which is the
+non-modal claim measured rather than asserted; every row reports the engine's own `stage N →
+M` confirmation and the cfg on disk follows; `Shadow quality` greys at `Shadows ≠ Soft` and
+the engine then **refuses the click**; and the sprocket opens and closes the menu while a
+click at (500,400) does neither.
+
+**Still open after the spike.** The panel is torn down and re-pushed on every world click, so
+a click costs one frame of the panel being rebuilt — cheap, but visible if you look for it,
+and worth closing if a better re-assert exists. `stagebuttn2` (green/green) is still
+unreachable: a `stages=2` button with `texturenumber=0` gets `stagebuttn1`, the red/green
+plate, which is right for the Off/On rows and would be wrong for a neutral two-choice one.
 
 **What that buys, and when it would stop being worth it.** The engine keeps hit-testing,
 dispatch, the `stagebuttn` pressed/greyed art, `hattfont12` labels at any resolution, and the
@@ -699,7 +751,7 @@ a scrolling list — the gadget system stops paying and the superseded DLL-drawn
   the same silhouette edges. That is inside §2.12's "shadowed-pixel counts within 5 %" bar
   (−3.6 %). `shadows=0` also stops an aircraft's `airshadow=drop` silhouette, which the
   switch used to draw whatever `shadows=` said.
-- **Panel art and an entry point** — ● **answered 2026-09-09, not yet built.** Seven `h20`
+- **Panel art and an entry point** — ● **answered and BUILT 2026-09-09 (G18 gate 3).** Seven `h20`
   gadgets need seven `h20` recesses and no stock runtime panel has more than five; `PREFS`
   has six recesses and uses all six, so there is nowhere to hang a "Graphics" button either.
   Both answers are above: the ground is **composed at runtime** from `frontend.gaf`'s `back*`
