@@ -270,9 +270,9 @@ The restorer was trained on ground textures and has never seen a bevel, a button
   per class.
 - **Runtime policy**: frame headers carry no name, but `0x4B8D40`/`0x4B8DA0` look sequences up by
   name, so an observer there gives a sequence-to-name registry, and `uirestore=` in
-  `tagpu_classicpp.cfg` takes name globs; default `all` minus `cursor*` and anything under 12×12
-  (below the 25-px receptive field there is nothing to restore). G15-0's sheets set the default
-  exclude list.
+  `tagpu_classicpp.cfg` takes name globs; **the default, ruled 2026-09-08 from G15-0's sheets, is
+  `all` minus `cursor*`, `pathicon` and anything under 12×12** (below the 25-px receptive field
+  there is nothing to restore). The order buttons are in, despite their baked-in labels (§8).
 - **Kill rule**: if bevels and panel grain smear, the exclude list grows until what remains looks
   right, and a UI-aware fine-tune (synthesised bevels and renders in the corpus) is filed as a
   candidate, not started. The Classic half is unaffected.
@@ -352,7 +352,7 @@ One finished unit each; the engine's surface is the oracle throughout.
 
 | gate | builds | exit (measured) | kill / pivot |
 |---|---|---|---|
-| **G15-0** offline art spike — **run 2026-09-07, §8; verdict pending** | `tools/undither/uiart.py`, seven contact sheets, the consistency table | the owner's per-class verdict; the default `uirestore` exclude list written down | no class passes → Classic++ UI dropped from phase 1, UI-aware fine-tune filed as a candidate; the Classic half unaffected |
+| **G15-0** offline art spike — **done: run 2026-09-07, verdict 2026-09-08, §8** | `tools/undither/uiart.py`, seven contact sheets, the consistency table | **met**: every class passed, order buttons ruled in, default = `all` minus `cursor*`, `pathicon`, under 12×12 | no class passes → Classic++ UI dropped from phase 1, UI-aware fine-tune filed as a candidate; the Classic half unaffected |
 | **G15a** census — **done 2026-09-07, §9** | observer detours on every pixel-writing leaf, the flip marker, the whole-surface diff, the allocator/free pair, the walk script (`tools/uiwalk.py`); **no drawing** | writer table in [the engine map](exe-reverse-engineering.html) (leaf, convention, call sites, surfaces written); unexplained pixels under 1 % on every inventory screen or every remaining writer named; the minimap's draw path located; the two stale claims in `ui-markers.md` §4 and `frame-composition.md` §1 corrected | a core screen with a large untraceable writer → that surface is seed-only, the plan proceeds |
 | **G15b** twins, in game, Classic — **done 2026-09-07, §10** | the `tagpu_gui_*` module: registry, seed, queue, replay, the three op kinds, the index twin (the colour twin is G15e's), the composite seam, `strict`, trigger, tacli verb, the default arm set, the transient viewport clear | side panel, build pages, top and bottom bars at 1024×768: 0 differing pixels outside the cursor, 0 holes; fps fixtures within half a frame; ring peak and overflows logged; parity md5 unchanged with the trigger absent; 1080p run and recorded | replay cannot hold 60 fps at `200v200` → collapse identical per-frame ops before anything else (**it happened, for a different reason — §10**) |
 | **G15c** the rest of the frame — **done 2026-09-07, §11** | chat, the F4 and hold-SPACE box, the option screens over the viewport, the `+clock` and `+bps` strings, the minimap's picture, dots and box, the mode-switch panel painter at 1080p; the `LIGHTBAR` wipe located but not reached (§11); nothing new in the DLL — the walk gained a side switch, nineteen stops, the in-viewport measure and a bracketed shot, plus the CORE fixture | whole in-game inventory clean under `strict`, ARM and CORE, at 1024×768 and 1920×1080: 32 of 32 stops at 0/0/0 in all four runs; dialogs over the viewport exact at 0.5× and 2× | — |
@@ -502,7 +502,8 @@ it with the shipped `full` model through the unditherer CLI (`--preset learned -
 --consistency`), and lays original beside restored on one contact sheet per class, worst
 dither-consistency first. 224 frames in seven classes; the sheets are in
 `assets/shots/uiart/`, the per-frame numbers in `uiart-report.json` beside them. **The owner's
-verdict per class is pending; what follows is the run and a first reading of it.**
+verdict came 2026-09-08: every class passes, the order buttons included** (below). What
+follows is the run, the reading it produced, and the ruling.
 
 Two facts the run established before it restored anything:
 
@@ -548,11 +549,12 @@ backgrounds, a 160×120 window at 3×), [`uiart-gaf.webp`](assets/shots/uiart/ui
 [`uiart-small.webp`](assets/shots/uiart/uiart-small.webp),
 [`uiart-cursors.webp`](assets/shots/uiart/uiart-cursors.webp).
 
-**A first reading, for the owner to confirm or overrule:**
+**The reading, and the owner's ruling on it [DECIDED 2026-09-08]:**
 
 - **`unitpics` and the panels pass on sight.** The build icons are exactly what the model was
   trained on; the panels lose their grain and keep their geometry.
-- **The order buttons (`ATTACK`, `PATROL`, `REPAIR`…) are the one judgement call.** Their labels
+- **The order buttons (`ATTACK`, `PATROL`, `REPAIR`…) were the one judgement call, and they are
+  RULED IN [DECIDED 2026-09-08]** — the rounding is accepted, no name-glob exclusion. Their labels
   are baked into the GAF frame, not drawn as text, so they *are* fed to the model. On the sheet
   the metal face smooths and the letters stay legible with slightly rounded corners (mean shift
   2.5–3.7 levels, the highest in the class). Whether that softening is acceptable, or those
@@ -565,10 +567,20 @@ backgrounds, a 160×120 window at 3×), [`uiart-gaf.webp`](assets/shots/uiart/ui
   and are judged through the pieces, which look like the GAF buttons above.
 - **Text softens** (the `screens` column): confirmed, and already designed out.
 
-**Proposed default for `uirestore` pending the verdict**: `all` minus `cursor*`, `pathicon`,
-anything under 12×12, and — if the owner rules the label softening out — the order-button
-sequences of `commongui.gaf` by name. Nothing in the run argues for dropping the Classic++
-half: the kill rule of §3.9 is not triggered.
+**The default for `uirestore` [DECIDED 2026-09-08]**: `all` minus `cursor*`, `pathicon` and
+anything under 12×12. The order-button sequences are **not** excluded — the owner ruled the label
+rounding acceptable on the sheet. The two exclusions that remain are **not** aesthetic judgements
+and survive the "they all look good" verdict on purpose: below the model's 25-px receptive field
+there is nothing to restore, so the work produces approximately its input, and one cursor frame
+(`cursormove`) shifts 4.1 levels with nothing visible to show for it — a change with no benefit is
+an unforced risk, not a win. Keeping cursors indexed also keeps them byte-identical to the
+engine's, which §13.5 wants when the cursor becomes ours at a fixed 1× device size. Nothing in the
+run argues for dropping the Classic++ half: the kill rule of §3.9 is not triggered.
+
+**What the ruling does not cover.** The spike restored frames *in isolation*. The halo the game's
+GLSL path produces at a keyed edge (§4c's near band, 0.41 levels on features) has never been
+measured on UI frames, and panels and buttons are full of keyed edges. **The exclude list may
+still grow at G15e**, on that evidence rather than on the sheets'.
 
 **What the spike did not do.** It restored frames in isolation, as the game will; it did not
 measure the halo the *game* path produces at a keyed edge (§4c's near band, 0.41 levels on
