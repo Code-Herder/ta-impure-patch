@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<!-- ta-guiscreen.html — the GUI lab: a proposed .GUI screen, drawn with the
+     engine's own gadget art, over a real 1024x768 frame.
+
+     THE ART IS NOT IN THIS REPOSITORY and never can be. Extract it first:
+
+         .venv-undither/bin/python tools/guiart.py
+
+     which writes anims/commongui.gaf's gadget frames, the three .GUI files this
+     design rests on, and the spliced seven-recess panel into the gitignored
+     tmp/gafui/. This page loads them from there; without them it says so.
+
+     WHAT IT DRAWS
+     The render-options screen of renderers.md §2.10 — seven stage buttons, no
+     pages — as a real .GUI screen rather than something the DLL paints itself.
+     The record layout, the stage-button frame grammar and the panel recess
+     grids are documented in gui-gadgets.md; this page is the datapoint they
+     were read off, kept so the layout can be re-judged without re-deriving it.
+
+     Panel id=0 at (128,128) 150x352, the rect VISUALRT.GUI itself uses: over
+     the world, hard against the side panel. Background gadget id=12 names the
+     GAF frame. Seven id=1 buttons at x=13 w=120 h=20 on a 44 px pitch, each
+     with an id=5 label 16 px above.
+
+     Click a plate to advance it; RENDERER sets the whole column and Custom is
+     derived. The readouts are the .GUI this screen is and the gamedir it
+     writes. The frame is always 1:1; the box beside it magnifies at 2x/3x/4x.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>tagpu GUI lab &mdash; render options as a real .GUI screen</title>
+<style>
+:root{
+  --ground:#0d0a07;--panel:#191309;--rule:#453a2c;--rule-soft:#2b2419;
+  --cream:#efe6c0;--khaki:#c9bc86;--dim:#8e8467;--dimmer:#6b6350;
+  --led:#33e033;--led-deep:#1a8a1a;--amber:#ffd23f;
+  --mono:"IBM Plex Mono",ui-monospace,"DejaVu Sans Mono",monospace;
+  --ta:"Lucida Console","DejaVu Sans Mono",monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--cream);
+  font:14px/1.6 system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:26px 20px 70px}
+h1{font-size:25px;margin:0;font-weight:600}
+h1 em{font-style:normal;color:var(--led)}
+.hdr p{color:var(--khaki);font-size:13.5px;max-width:84ch;margin:9px 0 0}
+code{font-family:var(--mono);font-size:12.5px;color:var(--cream)}
+.hdr .rule{border-left:3px solid var(--led);padding:6px 0 6px 13px;color:var(--cream);font-size:14px}
+.hdr .rule span{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--dim);margin-top:4px}
+.shead{display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--rule);
+  padding-bottom:9px;margin:34px 0 18px}
+.shead h2{font-size:17px;margin:0;font-weight:600}
+.shead .note{font-family:var(--mono);font-size:11px;color:var(--dim);margin-left:auto}
+.zoombtn{font-family:var(--mono);font-size:11px;background:transparent;color:var(--dim);
+  border:1px solid var(--rule);padding:4px 10px;cursor:pointer}
+.zoombtn:hover{color:var(--cream);border-color:var(--khaki)}
+.zoombtn.on{background:var(--led);border-color:var(--led);color:#0a1f08}
+
+/* ------------------------------------------------------- the game frame -- */
+.views{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.console{background:#000;border:1px solid var(--rule-soft);padding:14px;overflow:auto;flex:0 0 auto}
+.console .cap{font-family:var(--mono);font-size:10px;color:var(--dimmer);margin-top:9px;
+  letter-spacing:.04em}
+.magbox{position:relative;overflow:hidden;background:#0b0906}
+.frame{position:relative;width:1024px;height:768px;user-select:none;
+  background:#000 url(../research/notes/assets/shots/feat-ownership.png) -2056px -26px no-repeat}
+/* every gadget image is 1:1 nearest-neighbour, like the engine's own blit */
+.frame img,.magbox img{image-rendering:pixelated;position:absolute;display:block}
+
+/* the screen: panel id=0 at (128,128) 150x352 -- VISUALRT.GUI's own rect */
+#screen,#screenmag{position:absolute;width:149px;height:354px;transform-origin:0 0}
+#screen{left:128px;top:128px}
+#screenmag{left:0;top:0}
+#screen .bg,#screenmag .bg{left:0;top:0}
+/* id=5 label: 16 px above its control, x=13 */
+.lab{position:absolute;left:13px;width:120px;height:14px;
+  font:9px/14px var(--ta);color:#d8cfa4;text-shadow:1px 1px 0 #000;
+  white-space:nowrap;overflow:hidden}
+.lab.dead{color:#6b6350}
+/* the stage button: the GAF plate, with text on it as the engine draws it */
+.gad{position:absolute;left:13px;width:120px;height:20px;cursor:pointer}
+.gad img{left:0;top:0}
+.gad .t{position:absolute;left:7px;top:0;width:80px;height:20px;
+  font:9px/20px var(--ta);color:#2b2a1e;text-shadow:0 1px 0 rgba(255,255,255,.45);
+  white-space:nowrap;overflow:hidden}
+.gad.dead{cursor:default}
+.gad.dead .t{color:#5c5a4e;text-shadow:none}
+.gad.top .t{font-weight:bold}
+
+/* ---------------------------------------------------------- the readouts -- */
+.readouts{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:16px;margin-top:20px}
+@media (max-width:900px){.readouts{grid-template-columns:1fr}}
+.ro{border:1px solid var(--rule-soft);background:var(--panel);padding:13px 15px;min-width:0}
+.ro h3{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--dim);font-weight:500;margin:0 0 9px}
+.ro pre{margin:0;font-family:var(--mono);font-size:11px;line-height:1.6;color:var(--led);
+  white-space:pre;overflow:auto;max-height:460px}
+.ro pre .k{color:var(--dimmer)}
+.ro pre .m{color:var(--khaki)}
+.ro pre .n{color:var(--amber)}
+.wl{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.wl li{font-size:12.5px;line-height:1.55;color:var(--khaki);padding-left:12px;
+  border-left:2px solid var(--amber)}
+.wl li.build{border-left-color:var(--led-deep)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="hdr">
+  <h1>Render options &mdash; <em>as a real <code>.GUI</code> screen</em></h1>
+  <p>Seven gadgets, no pages. Drawn with the engine's own art from
+     <code>anims/commongui.gaf</code>, at the rect <code>VISUALRT.GUI</code> itself uses:
+     panel <code>id=0</code> at <code>(128,128) 150&times;352</code>, hard against the side
+     panel and over the world. The gadget art is extracted, never tracked:
+     run <code>tools/guiart.py</code> first.</p>
+  <p class="rule">The menu never offers the unmodified engine &mdash; the only question a row
+     asks is which of <em>our</em> two renderers owns it.
+     <span>Owner's rule &middot; 2026-09-08</span></p>
+</div>
+
+<div class="shead">
+  <h2>The screen</h2>
+  <span class="note">click a plate to advance it &middot; RENDERER sets the whole column</span>
+  <button class="zoombtn" data-z="2">2&times;</button>
+  <button class="zoombtn" data-z="3">3&times;</button>
+  <button class="zoombtn" data-z="4">4&times;</button>
+</div>
+
+<div class="views">
+  <div class="console">
+    <div class="frame" id="frame"><div id="screen"></div></div>
+    <div class="cap">1:1, in situ &mdash; the rect <code>VISUALRT.GUI</code> uses</div>
+  </div>
+  <div class="console">
+    <div class="magbox"><div id="screenmag"></div></div>
+    <div class="cap">magnified, nearest-neighbour &mdash; the same state</div>
+  </div>
+</div>
+
+<div class="readouts">
+  <div class="ro">
+    <h3>The <code>.GUI</code> this screen is</h3>
+    <pre id="gui"></pre>
+  </div>
+  <div>
+    <div class="ro" style="margin-bottom:16px">
+      <h3>What it writes to gamedir</h3>
+      <pre id="files"></pre>
+    </div>
+    <div class="ro">
+      <h3>What has to be built, and what is still open</h3>
+      <ul class="wl" id="warns"></ul>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+const ART='../tmp/gafui/';
+/* ================================================== the screen's grid ====
+   tmp/gafui/renderrt-0.png, spliced from visualsrt's own recess band: seven
+   h20 recesses at a 44 px pitch. Labels 16 px above, as VISUALRT does. */
+const SLOT=[23,67,111,155,199,243,287];
+
+/* ===================================================== the option model ==
+   Row 0 is the RENDERER preset and it sets every row below it. `stages` are
+   the stage labels (the engine takes them pipe-separated in `text`), `art`
+   picks commongui.stagebuttn<art>, `lever` is what drives it. */
+const PRESET={id:'preset', g:'RENDERER', label:'Renderer', art:3,
+              stages:['Classic','Classic++','Custom'],
+              lever:'sets every row below'};
+const ROWLIST=[
+  {id:'assets',  g:'ASSETS',  label:'Undithered assets', stages:['Off','On'],   art:1,
+   lever:'tagpu_classicpp.cfg  assets=',  isnew:1},
+  {id:'light',   g:'LIGHT',   label:'Dynamic lighting',  stages:['Off','On'],   art:1,
+   lever:'tagpu_classicpp.cfg  light=',   isnew:1},
+  {id:'shadows', g:'SHADOWS', label:'Shadows',  stages:['Off','Hard','Soft'],   art:3,
+   lever:'tagpu_classicpp.cfg  shadows=', newstage:{1:1}},
+  {id:'shadowres',g:'SHADRES',label:'Shadow quality',
+   stages:['Low','Med','High','Ultra'], art:4,
+   lever:'tagpu_classicpp.cfg  shadowres=', needs:{shadows:2}},
+  {id:'ss',      g:'SUPERSMP',label:'Supersampling',     stages:['Off','2x'],   art:1,
+   lever:'tagpu_ss.off'},
+  {id:'zoom',    g:'ZOOM',    label:'Mouse-wheel zoom',  stages:['Off','On'],   art:1,
+   lever:'tagpu_zoom.on  (+ vpwide, paired in tagpu_opt.c)'},
+];
+const ROWS={}; ROWLIST.forEach(r=>{ROWS[r.id]=r;});
+
+/* Demoted to tagpu_classicpp.cfg only -- still written, still editable by hand
+   or by a tacli verb, just not a player-facing option any more. The preset
+   sets them. */
+const DEMOTED={penumbra:'0.05', shade:'1.00', airshadow:'len', terrainshadow:'1',
+               amb:'0.35', unitsun:'215.5,53.1'};
+
+const P_CLASSIC={assets:0,light:0,shadows:1,shadowres:2,ss:1,zoom:1};
+const P_CPP    ={assets:1,light:1,shadows:2,shadowres:2,ss:1,zoom:1};
+let S=Object.assign({},P_CPP);
+let presetStage=1, zoom=3;
+
+const eq=P=>Object.keys(P).every(k=>S[k]===P[k]);
+const liveRow=r=>!r.needs||Object.keys(r.needs).every(k=>S[k]===r.needs[k]);
+
+/* stagebuttnN frames: 0..N-1 the lit stage, N all dark, N+1 pressed, N+2 grey.
+   stagebuttn1 carries two bars and paints stage 0 RED, stage 1 green. */
+function plate(art,stage,dead){
+  const n = art===1 ? 2 : art;
+  return ART+'stagebuttn'+art+'-'+(dead ? n+2 : Math.min(stage,n-1))+'.png';
+}
+function el(tag,cls,css,html){
+  const e=document.createElement(tag);
+  if(cls) e.className=cls;
+  if(css) e.style.cssText=css;
+  if(html!=null) e.innerHTML=html;
+  return e;
+}
+function img(src,css,cls){
+  const i=document.createElement('img');
+  i.src=src; if(css) i.style.cssText=css; if(cls) i.className=cls;
+  return i;
+}
+
+function render(){
+  presetStage = eq(P_CLASSIC)?0 : eq(P_CPP)?1 : 2;
+  buildInto(document.getElementById('screen'), 1);
+  buildInto(document.getElementById('screenmag'), zoom);
+  const box=document.querySelector('.magbox');
+  box.style.width=(149*zoom)+'px'; box.style.height=(354*zoom)+'px';
+  readouts();
+}
+
+/* The same screen, built twice: 1:1 inside the game frame, and magnified in
+   its own box. Nothing is shared but the state. */
+function buildInto(scr, z){
+  scr.style.transform = z>1 ? 'scale('+z+')' : '';
+  scr.innerHTML='';
+  scr.appendChild(img(ART+'renderrt-0.png','left:0;top:0','bg'));
+
+  const put=(k,r,stage,dead,onclick,top)=>{
+    const y=SLOT[k];
+    scr.appendChild(el('div','lab'+(dead?' dead':''),'top:'+(y-16)+'px',r.label));
+    const g=el('div','gad'+(dead?' dead':'')+(top?' top':''),'top:'+y+'px');
+    g.appendChild(img(plate(r.art,stage,dead),'left:0;top:0'));
+    g.appendChild(el('div','t','',r.stages[stage]));
+    if(!dead && onclick) g.onclick=onclick;
+    scr.appendChild(g);
+  };
+
+  /* slot 0 -- RENDERER, at the top, setting the whole column. Custom is
+     derived: clicking never selects it, touching any row below does. */
+  put(0,PRESET,presetStage,false,()=>{
+    S=Object.assign({}, presetStage===0 ? P_CPP : P_CLASSIC);
+    render();
+  },true);
+
+  /* slots 1..6 -- the rows */
+  ROWLIST.forEach((r,k)=>{
+    const dead=!liveRow(r);
+    put(k+1,r,S[r.id],dead,()=>{ S[r.id]=(S[r.id]+1)%r.stages.length; render(); });
+  });
+}
+
+/* --------------------------------------------------------- the readouts -- */
+function guiText(){
+  const L=[]; let n=0;
+  const g=o=>{
+    L.push('[GADGET'+(n++)+']','\t{','\t[COMMON]','\t\t{');
+    ['id','assoc','name','xpos','ypos','width','height'].forEach(k=>L.push('\t\t'+k+'='+o[k]+';'));
+    L.push('\t\tactive=1;','\t\t}');
+    ['totalgadgets','text','stages','status','quickkey','grayedout']
+      .forEach(k=>{ if(o[k]!==undefined) L.push('\t'+k+'='+o[k]+';'); });
+    L.push('\t}');
+  };
+  const row=(k,r,stage,dead)=>{
+    g({id:5,assoc:0,name:'TEXT',xpos:13,ypos:SLOT[k]-16,width:114,height:14,text:r.label});
+    g({id:1,assoc:0,name:r.g,xpos:13,ypos:SLOT[k],width:120,height:20,
+       text:r.stages.join('|'),stages:r.stages.length,status:stage,
+       quickkey:r.label.toUpperCase().charCodeAt(0),grayedout:dead?1:0});
+  };
+  g({id:0,assoc:0,name:'RENDER.GUI',xpos:128,ypos:128,width:150,height:352,
+     totalgadgets:2+(ROWLIST.length+1)*2});
+  g({id:12,assoc:0,name:'RENDERRT',xpos:0,ypos:0,width:150,height:352});
+  row(0,PRESET,presetStage,false);
+  ROWLIST.forEach((r,k)=>row(k+1,r,S[r.id],!liveRow(r)));
+  return L.join('\n');
+}
+
+function computeFiles(){
+  const on=[],off=[],cfg=[],warn=[];
+  /* the Classic++ branch runs at all if any of its three halves is asked for */
+  const branch = S.assets || S.light || S.shadows===2;
+  (branch?on:off).push('tagpu_classicpp.on');
+  (S.ss?off:on).push('tagpu_ss.off');
+  on.push(S.zoom?'tagpu_zoom.on':'tagpu_zoom.off');
+  on.push(S.zoom?'tagpu_vpwide.on':'tagpu_vpwide.off');
+
+  cfg.push(['NEW','assets='+S.assets]);
+  cfg.push(['NEW','light='+S.light]);
+  cfg.push(['','shadows='+(S.shadows===2?1:S.shadows===1?2:0)+
+               (S.shadows===1?'      ; 2 = hard, NEW':'')]);
+  if(S.shadows===2)
+    cfg.push(['','shadowres='+['512','1024','2048','4096'][S.shadowres]],
+             ['','shadowsun=225,40']);
+  cfg.push(['','sun='+(S.light?'324.5,53.1':'off')]);
+  for(const k in DEMOTED) cfg.push(['dim',k+'='+DEMOTED[k]]);
+
+  warn.push(['build','<strong>Split the switch.</strong> The shaders already take '
+    +'<code>uRestored</code> and <code>uLit</code> separately — <code>tagpu_terr.c:1036</code> '
+    +'and <code>1043</code>, <code>tagpu_native.c:3053</code> and <code>3029</code>, '
+    +'<code>tagpu_feat.c:789</code>, <code>tagpu_fx.c:1013</code> — but every one of them is '
+    +'fed from the same <code>tagpu_classicpp_on()</code>. Feed each from its own cfg key and '
+    +'<em>Undithered assets</em> and <em>Dynamic lighting</em> become real rows.']);
+  warn.push(['build','<strong>Stop <code>sun=off</code> killing shadows.</strong> '
+    +'<code>apply()</code> forces <code>amb=1.0</code> when the sun is off, and '
+    +'<code>tagpu_shadow.c:359</code> refuses to run at <code>amb >= 1.0</code>. With Lighting '
+    +'its own row, turning it off would silently turn Shadows off too.']);
+  if(S.shadows===1) warn.push(['','<code>Shadows = Hard</code> has no value to write: '
+    +'§2.12 turns both Classic sub-passes off under the switch and <code>shadows=0</code> '
+    +'means <em>none</em>. The key needs a third value.']);
+  if(S.shadows!==0) warn.push(['','The engine’s own Shadows bit (<code>main+0x37F06</code> '
+    +'bit 2) still gates the whole thing — <code>tagpu_shadow.c:359</code> reads it.']);
+  warn.push(['','<strong>The panel art is spliced from the game’s own frame.</strong> Seven '
+    +'h20 recesses; the stock runtime panels give at most five. Fine in <code>tmp/</code>, '
+    +'but it has to be drawn fresh before it goes anywhere tracked.']);
+  warn.push(['','<strong>No entry point exists.</strong> <code>ARMOPT</code> (Tab) is full at '
+    +'seven buttons and <code>commongui.igopt</code> has exactly six recesses, all six used '
+    +'by <code>PREFS</code>. A “Graphics” button needs a free recess or new art.']);
+  warn.push(['','Which plate art a <code>stages=2</code> button gets is unverified — '
+    +'<code>stagebuttn1</code> (red/green) or <code>stagebuttn2</code> (green/green). '
+    +'<code>texturenumber</code> is the suspect.']);
+  return {on,off,cfg,warn};
+}
+
+function readouts(){
+  document.getElementById('gui').textContent=guiText();
+  const f=computeFiles();
+  document.getElementById('files').innerHTML=
+    f.on.map(x=>'<span class="k">create </span>'+x).join('\n')+'\n'+
+    f.off.map(x=>'<span class="k">delete '+x+'</span>').join('\n')+
+    '\n\n<span class="m">tagpu_classicpp.cfg</span>\n'+
+    f.cfg.map(([t,v])=> t==='NEW' ? '<span class="n">'+v+'      ; NEW KEY</span>'
+                      : t==='dim' ? '<span class="k">'+v+'</span>' : v).join('\n')+
+    '\n\n<span class="k">always on — nothing written (play defaults)\n'+
+    ['tagpu_terr.on','tagpu_native.on','tagpu_feat.on','tagpu_fx.on','tagpu_sfx.on',
+     'tagpu_mark.on','tagpu_order.on','tagpu_gui.on'].map(x=>'  '+x).join('\n')+'</span>';
+  document.getElementById('warns').innerHTML=
+    f.warn.map(([c,w])=>'<li'+(c?' class="'+c+'"':'')+'>'+w+'</li>').join('');
+}
+
+document.querySelectorAll('.zoombtn').forEach(b=>b.onclick=()=>{
+  zoom=+b.dataset.z;
+  document.querySelectorAll('.zoombtn').forEach(x=>x.classList.toggle('on',x===b));
+  render();
+});
+document.querySelector('.zoombtn[data-z="3"]').classList.add('on');
+render();
+
+/* The gadget art is extracted, not tracked. Say so rather than showing a
+   panel of broken images. */
+(function(){
+  const probe=new Image();
+  probe.onerror=()=>{
+    const b=document.createElement('div');
+    b.style.cssText='margin:18px 0;padding:14px 16px;border-left:3px solid var(--amber);'
+      +'background:rgba(255,210,63,.07);color:var(--cream);font-size:13.5px';
+    b.innerHTML='<strong>The gadget art is missing.</strong> It is the original game\u2019s and '
+      +'is never tracked. Extract it first:<br><code style="display:inline-block;margin-top:7px">'
+      +'.venv-undither/bin/python tools/guiart.py</code>';
+    document.querySelector('.hdr').appendChild(b);
+  };
+  probe.src=ART+'renderrt-0.png';
+})();
+</script>
+</body>
+</html>

@@ -407,38 +407,95 @@ radius follows the texel. Restored textures are mipmapped to level 2, which cove
 one vertex buffer. The softer shadows at the floor are judged in play — the lab's Classic++
 lane runs at zoom 1 by construction and cannot show them (§4).
 
-### 2.10 Settings: an in-game menu the DLL draws
-**Decided: a small "Options" button at the top right, over the engine's top bar, opening a
-DLL-drawn panel; v1 is buttons and steppers for every Classic++ knob and the renderer switch.**
-Why it fits:
+### 2.10 Settings: an in-game screen, drawn by the engine's own GUI  [REVISED 2026-09-09]
 
-- The composite draws our non-empty pixels over the engine's frame outside the viewport
-  (`if (empty) discard; frag = c;` **[SOURCE `tagpu_native.c` composite shader]**), so the
-  bar is ours to draw on.
-- The top-right is empty: on the 1024-wide engine frame the metal and energy bars end near
-  x ≈ 620 and the right ~400 px are bare panelling **[MEASURED
-  `assets/shots/feat-ownership.png`, 2026-09-04]**.
-- The DLL sees every window message before the game and already swallows the wheel
-  (`tagpu_zoom.c`), so button clicks are consumed in the wndproc and never reach the engine.
-- Our pixels cover the engine's cursor where they land, so **the menu draws its own cursor
-  while the pointer is over our UI.**
-- Text: the engine's own GUI font, whose glyph table `tagpu_ui.c` already dereferences; a
-  small embedded font is the fallback if the glyph format fights back.
-- **State: the menu is a front end, not a store.** On/off switches stay the house trigger
-  files — `gamedir/tagpu_classicpp.on` selects the renderer, polled per frame like
-  `tagpu_hires.on`, absent = Classic — and the menu creates and deletes them. Numeric knobs
-  live in `gamedir/tagpu_classicpp.cfg` as `key=value` lines re-read on mtime change, keyed
-  like the lab's URL parameters (`sun`, `unitsun`, `shadowsun`, `amb`, `penumbra`,
-  `shadowlen`, `shade`, `aniso`, `shadows`). A human editing files, a tacli verb and the menu
-  drive the same state. **The shadow keys (decided 2026-09-06, §2.12)**: `shadows`,
-  `shadowsun`, `penumbra`, `shadowlen`, `shade`, `terrainshadow`, `shadowres`, `airshadow`,
-  each with the lab's default, and the map runs only when `shadows=1` **and** the engine's own
-  Shadow option bit is set (`main+0x37F06` bit 2 — the player's in-game Shadows toggle keeps
-  its meaning under Classic++, off = no depth pass and no read-back, as it kills the
-  silhouettes today); TShadow (bit 3) is ignored, it only tells the silhouette from the slant
-  in the engine and Classic++ draws neither. The model `full.onnx` and `onnxruntime.dll` (1.22.1 x86) ship in
-  gamedir beside them.
+**Decided: the render options are a real `.GUI` screen — the engine's own gadgets, its own
+GAF art, its own dispatcher — not a panel the DLL paints.** Seven stage buttons, no pages.
+This supersedes the original decision below, which was for a DLL-drawn panel hanging off an
+"Options" button in the top bar.
 
+The record layout, the stage-button frame grammar and the panel recess grids are on
+[GUI gadgets](gui-gadgets.html) §10; the lab that draws the screen is
+`tools/ta-guiscreen.html`, and `tools/guiart.py` extracts the art it needs (nothing of the
+game's is tracked). Interviewed with the owner 2026-09-08/09.
+
+**The two rules the owner set.**
+
+1. **The menu never offers the unmodified original engine.** No row has an "off, let the
+   1997 code draw it" position — we own the draw, and the only question a row asks is which
+   of *our* two renderers owns it.
+2. **Simplify.** Seven gadgets, and everything else demoted to the cfg.
+
+**The screen.** `RENDER.GUI`, panel `id=0` at `(128,128) 150×352` — the rect `VISUALRT.GUI`
+itself uses, over the world and hard against the side panel. Background gadget `id=12`
+naming its panel frame. Seven `id=1` buttons at `x=13 w=120 h=20` on a 44 px pitch, each
+with an `id=5` label 16 px above:
+
+| y | row | stages | what drives it |
+|---|---|---|---|
+| 23 | **Renderer** | Classic \| Classic++ \| Custom | sets every row below it |
+| 67 | **Undithered assets** | Off \| On | `assets=` — **key does not exist** |
+| 111 | **Dynamic lighting** | Off \| On | `light=` — **key does not exist** |
+| 155 | **Shadows** | Off \| Hard \| Soft | `shadows=` — **needs a third value** |
+| 199 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=`, live only at Soft |
+| 243 | **Supersampling** | Off \| 2× | `tagpu_ss.off` |
+| 287 | **Mouse-wheel zoom** | Off \| On | `tagpu_zoom.on` |
+
+**Custom is derived, never chosen.** Clicking Renderer alternates Classic and Classic++;
+touching any row below makes it read Custom. **Shadows Off / Hard / Soft falls out of the
+model rather than being invented**: Classic's shadows *are* the hard ones (the 5-px
+silhouette drop and the cached slant, G13n) and Classic++'s *are* the soft ones (the
+map-anchored depth map, PCSS-lite, G14i), and a three-stage button is what the engine
+already draws for that (`stagebuttn3`).
+
+**Absorbed, not dropped:** `tagpu_vpwide.on` has no row because `tagpu_opt.c` already pairs
+it with `tagpu_zoom.on` through the `needs` column — one Zoom row arms both.
+
+**Demoted to `tagpu_classicpp.cfg`:** `penumbra`, `shade`, `airshadow`, `terrainshadow`,
+`amb`, `unitsun`, plus `tagpu_hires.on`, `tagpu_nano.off` and `tagpu_fpsosd.on`. Still
+written and still editable — a human, a tacli verb and the screen drive the same state —
+just not player-facing options.
+
+**State is still the trigger files and the cfg** (unchanged from the original decision):
+on/off is a file the screen creates and deletes, polled per frame; numbers are `key=value`
+in `gamedir/tagpu_classicpp.cfg`, re-read on mtime change, keyed like the lab's URL
+parameters. The shadow keys are §2.12's, and the depth map still runs only when
+`shadows=1` **and** the engine's own Shadow option bit is set (`main+0x37F06` bit 2;
+`tagpu_shadow.c:359` reads it) — the player's in-game Shadows toggle keeps its meaning.
+
+**What has to be built before the screen can exist** — the gates are in the roadmap:
+
+- **Split the switch.** The shaders already take `uRestored` and `uLit` as *separate*
+  uniforms — four `uRestored` (`tagpu_terr.c:1036`, `tagpu_native.c:3053`,
+  `tagpu_feat.c:789`, `tagpu_fx.c:1013`) and three `uLit` (`tagpu_terr.c:1043`,
+  `tagpu_native.c:3029`, and `tagpu_feat.c:790` through the cached `s_lit`, set at
+  `tagpu_feat.c:640`) — but every one is fed from the same `tagpu_classicpp_on()`. Feed each from its own cfg key and *Undithered assets* and
+  *Dynamic lighting* become real, independent rows. Without this they cannot be rows at
+  all, and no per-pass mix is expressible either.
+- **Stop `sun=off` clearing shadows.** `apply()` forces `amb=1.0` when the sun is off and
+  `tagpu_shadow.c:359` refuses at `amb >= 1.0`, so Lighting Off would silently take Shadows
+  with it. Note `sun=off` flattens **unit** lighting as well as terrain, which is why the
+  row is "Dynamic lighting" and not "Terrain dynamic lighting".
+- **A third value on `shadows=`.** §2.12 turns both Classic sub-passes off under the switch
+  and `shadows=0` means *none*, not *hard*, so `Shadows = Hard` has nothing to write.
+- **Panel art and an entry point.** Seven `h20` gadgets need seven `h20` recesses and no
+  stock runtime panel has more than five; `PREFS` has six recesses and uses all six, so
+  there is nowhere to hang a "Graphics" button either. Both need art drawn — see
+  [GUI gadgets](gui-gadgets.html) §10.3.
+- **Whether a new `.GUI` name can be pushed at all** [OPEN]. The screen inventory is a
+  string table in the binary (gui-gadgets §6); a new name needs a call site, so replacing a
+  screen we do not need may be cheaper than adding one.
+
+*Superseded, kept so it is not re-derived.* The original decision (2026-09-04) was a small
+"Options" button at the top right over the engine's top bar, opening a DLL-drawn panel of
+buttons and steppers for every Classic++ knob. Its reasoning still holds for a DLL-drawn
+overlay — the composite draws our non-empty pixels over the engine's frame outside the
+viewport, the top-right ~400 px of the 1024-wide frame are bare panelling, the DLL sees
+every window message before the game and already swallows the wheel, and our pixels cover
+the engine's cursor — and three shapes were prototyped against it (a drop-down, a full
+panel, an edge rail; the full panel won). The premise then moved to the engine's own UI,
+which makes all of that moot: the gadget dispatcher handles input, the GAF art handles the
+look, and the G15 twins mirror it for free.
 ### 2.11 Two small calls made by the implementer
 - **The unit vertex stream** grows from 11 to 15 floats: the map-space normal and the
   world height join `x, y, depthEnc, u, v, flat, ck, shadeRow, wx, wzp, vy`. Face normals are

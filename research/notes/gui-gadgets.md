@@ -14,6 +14,7 @@ running instance and cross-checked against a `tacli shot` on 2026-09-01.
 **[INFERRED]** = reading not yet confirmed.
 
 Companion notes: `ui-markers.md` (per-unit *world* markers — a different subsystem),
+`renderers.md` §2.10 (the render-options screen this backs),
 `resolution.md` (the 640×480 front-end lock and the in-game view rect),
 `tacli-design.md` (the CLI this serves).
 
@@ -628,6 +629,91 @@ an actionability check needs both tests. `SINGLE.GUI`'s `AnyMsn` is the `active=
   `SELECT` button. That is the difference between reading the providers and using one.
 - **`assoc` binds a scrollbar to its list.** `SELPROV`'s `DPLAY`, `SLIDER` and its two
   unnamed arrow buttons all carry `assoc 50`; `LOADGAME`'s carry `assoc 1`.
+
+---
+
+## 10. The gadget ART, and the recesses that are the layout  [MEASURED 2026-09-09]
+
+§2–§4 say where a gadget record lives and what its fields mean. This section says what
+the engine *draws* for one, because that turned out to constrain a screen's design far
+more than the record does. Everything here was read off `anims/commongui.gaf` and three
+`.GUI` files pulled out of the HPI with `ta3do.Assets()`; **`tools/guiart.py` extracts
+them all and re-derives every number below**, and `tools/ta-guiscreen.html` is the lab
+that draws a proposed screen with them. Neither the art nor the `.GUI` files are — or
+can be — tracked; the extractor writes them to a gitignored directory.
+
+### 10.1 A screen picks its background by naming a GAF frame
+
+`VISUALRT.GUI`'s gadget 1 is `id=12`, `name=VISUALSRT`, `(0,0) 150×352` — and
+`VISUALSRT` is an entry in `commongui.gaf`. **The `name` of an `id=12` gadget is the
+frame.** So a new screen chooses its panel art by naming one, and reusing a stock panel
+costs nothing. [MEASURED]
+
+The panel itself is `id=0` at `xpos=128 ypos=128`, `150×352` — over the world, hard
+against the side panel, which is the rect every in-game options screen uses.
+
+### 10.2 The stage button: `text` is pipe-separated, and the art has one frame per stage
+
+A button with `stages > 0` carries **every stage label in one string**, separated by
+`|` — `VISUALRT`'s `SHADING` is `text=Off|On; stages=2;`. The art is
+`commongui.stagebuttnN`, 120×20, and its frame list is: [MEASURED, over all four entries]
+
+| frame | what it is |
+|---|---|
+| `0 .. N−1` | stage 0..N−1, **that bar lit green**, left to right |
+| `N` | every bar dark |
+| `N+1` | pressed — body luminance 196 against 161 |
+| `N+2` | greyed out — 112, which is what `grayedout` (§7.1) renders as |
+
+`stagebuttn2/3/4` carry 2/3/4 bars. **`stagebuttn1` also carries two bars, but paints
+stage 0 RED and stage 1 green** — the on/off variant, where `stagebuttn2` is the neutral
+two-choice one. **Which of the two the engine picks for `stages=2` is [OPEN]**;
+`texturenumber` is the suspect, since VISUALRT's buttons all carry `0` while its `TEXT`
+gadget carries `2`.
+
+**There is no `stagebuttn5` or `6`, so no cycle button can carry more than four stages.**
+Anything longer has to page, and the build panel's own `commongui.armprev` / `armnext`
+(45×17, three frames: normal, pressed, greyed) are what to page with.
+
+Other shared controls in the same GAF: `checkbox` (16×16, four frames — a dark and a lit
+green lamp, twice), `sliders` (20 frames: a vertical knob 0–2, thin track pieces 3–5,
+up/down arrows 6–9, **the horizontal knob 10–12**, small boxes 13–15, left/right arrows
+16–19), `listbox` (16×16 × 9 — a nine-slice frame), `textinput` (16×32 × 3).
+
+### 10.3 Panel art: the recesses ARE the layout
+
+A runtime options panel paints dark inset bands, and **every VISUALRT gadget sits in
+one**. Measured over `x = 13..133`: [MEASURED]
+
+| frame | recesses | `h ≥ 20` | at |
+|---|---|---|---|
+| `commongui.visualsrt` | 6 | 5 | y=23 h16 · 63 · 107 · 151 · 268 · 303 |
+| `commongui.soundsrt` | 6 | 5 | y=23 · 67 h16 · 107 · 151 · 268 · 303 |
+| `commongui.musicrt` | 8 | 5 | y=23 · 67 h16 · 107 · 151 h15 · 175 h15 · 201 · 268 · 303 |
+| `commongui.speedsrt` | 8 | 4 | y=23 h16 · 62 h16 · 100 · 142 h16 · 180 h16 · 218 · 268 · 303 |
+| `commongui.igopt` | 6 | 6 (h33) | y=20 · 62 · 104 · 146 · 247 · 289 |
+
+`VISUALRT.GUI` fills `visualsrt` exactly: `GAMMA` (`id=4` slider, `(13,24) 120×16`) in the
+h16 recess, `SHADING` / `ANTI` / `BSHADOWS` (`id=1 stages=2`, `120×20`) in the next three,
+`RESTORE` / `UNDO` (`stages=0`) in the last two. All at `x=13 w=120`; each `id=5` label
+sits **16 px above** its control. So a stock runtime screen is **four option slots and two
+action slots** — the art sets that, not the record.
+
+`PREFS.GUI` is the same story one level up: `128×354` at `(0,126)`, art `IGOPT`, six
+`96×31` buttons at y=24/66/108/150/251/293 — `SOUND`, `MUSIC`, `INTERFACE` (named
+`SPEEDS`), `VISUALS`, `OK` (named `PREV`), `Cancel`. **All six recesses are used.**
+
+`ARMOPT.GUI` (the Tab menu) is `128×352` at `(0,128)`, art `OPTBG`, seven `96×31` buttons
+at y=22/64/105/147/189/231/291: `LOADGAME`, `SAVEGAME`, `PREFS` (“Options”), `MISSION`
+(“Briefing”), `HELP`, `EXIT`, `OK` (“Resume”). **There is a gap between Exit (y=231 h=31)
+and Resume (y=291); whether `OPTBG` paints a recess there is [OPEN]** — that frame is not
+in `commongui.gaf`.
+
+**The consequence for anything new:** a screen needing more than five `h20` rows has no
+stock panel to sit on, and adding an entry point to `PREFS` has no free recess. Both need
+art drawn for it. `tools/guiart.py` splices a seven-recess panel out of `visualsrt`'s own
+pixels so the lab can show the layout, but that output is a derivative of the game's art
+and exists only to be looked at.
 
 ---
 

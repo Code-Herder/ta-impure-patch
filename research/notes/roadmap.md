@@ -1810,15 +1810,48 @@ multiplayer consequence of a constant logical field of view (every player then s
 amount of world, where today a 4K player sees far more); and an SDF glyph atlas, deferred behind a
 look at the string op at `k = 1.5`.
 
+## Phase F — the render options screen (G18)  [PLANNED 2026-09-09]
+
+The player-facing half of everything Phase D and E built: a **real `.GUI` screen**, drawn by
+the engine's own gadget dispatcher with its own GAF art, not a panel the DLL paints.
+[renderers](renderers.html) §2.10 is the design and [GUI gadgets](gui-gadgets.html) §10 the
+facts it rests on; `tools/ta-guiscreen.html` is the lab that draws it and `tools/guiart.py`
+extracts the art (nothing of the game's is tracked). Seven stage buttons, no pages:
+Renderer · Undithered assets · Dynamic lighting · Shadows (off/hard/soft) · Shadow quality ·
+Supersampling · Mouse-wheel zoom, with Custom derived and everything else demoted to the cfg.
+
+**G18a and G18b are worth doing whether or not the screen is ever built** — they are levers
+the cfg and tacli can drive today, and the screen is only their first consumer.
+
+| Gate | Status | Exit |
+|---|---|---|
+| G18a — split the switch: `assets=` and `light=` in `tagpu_classicpp.cfg`, feeding `uRestored` and `uLit` separately | ○ planned | `assets=0 light=1` renders 8bpp indices with the lambert on, and `assets=1 light=0` restored colour flat, both live at a cfg rewrite; the four `uRestored` readers (`tagpu_terr.c:1036`, `tagpu_native.c:3053`, `tagpu_feat.c:789`, `tagpu_fx.c:1013`) and the three `uLit` (`tagpu_terr.c:1043`, `tagpu_native.c:3029`, and `tagpu_feat.c:790` through `s_lit`, set at `tagpu_feat.c:640`) each take their own flag, and `assets=1 light=1` is **byte-identical** to today's `tagpu_classicpp.on` |
+| G18b — the shadow keys: a third value on `shadows=` for hard, and `sun=off` stops clearing shadows | ○ planned | `shadows=2` draws the Classic silhouette and slant **under** the switch, A/B'd against `classicpp.off` at the same eye; `sun=off shadows=1` gives flat light **with** the depth map, which `apply()`'s `amb=1.0` and `tagpu_shadow.c:359`'s `amb >= 1.0` refuse today |
+| G18c — the art: a seven-recess panel frame and a free recess on the entry screen, both drawn, not spliced | ○ planned | the frame loads as an `id=12` background and every gadget lands in a recess at 1024×768 and 1080p; **no blob matches the original manifest** (`publish-check.py`), which a spliced frame would |
+| G18d — the screen: `RENDER.GUI`, its gadgets, and the callback that writes the cfg and the trigger files | ○ planned | every row moves the game inside one poll; Custom appears on touching any row and clears on Renderer; `Shadow quality` greys with `grayedout` when Shadows ≠ Soft; the G15 twins mirror it at 0 diff on the `strict` walk |
+| G18e — the way in: how the screen is reached, and whether a new `.GUI` name can be pushed at all | ○ **blocked on a finding** | reached from a running game in ≤ 2 clicks and Escape pops back; if a new name cannot be pushed, the exit is a named stock screen **replaced**, with what it cost recorded |
+
+**What G18e is blocked on.** The screen inventory is a string table in the binary
+(gui-gadgets §6), so a *new* `.GUI` name needs a call site. And there is nowhere to hang the
+button: `ARMOPT.GUI` (Tab) is full at seven and `commongui.igopt` has exactly six recesses,
+all six used by `PREFS.GUI`. ARMOPT has a gap between `EXIT` (y=231 h=31) and `OK` (y=291) —
+**whether `OPTBG` paints a recess there is unmeasured**, and that one measurement decides
+whether G18c has to draw a second frame.
+
+**Open:** which plate art a `stages=2` button gets — `stagebuttn1` (red/green) or
+`stagebuttn2` (green/green); `texturenumber` is the suspect. And where a gadget callback
+hooks: VISUALRT's own fire at `+0x144` (`GAMMA`'s is `0x45BD20`, writing `main+0x37F08`), and
+ours has to write files instead.
+
 ## Shipping — the build people can download (2026-09-08)
 
-Until the game has an options menu for the new modes ([renderers](renderers.html) §2.10 is the
-design), the shipped DLL turns the play set on by itself, and the build comes off GitHub rather
+Until the game has the render options screen (**Phase F / G18** above; [renderers](renderers.html)
+§2.10 is the design), the shipped DLL turns the play set on by itself, and the build comes off GitHub rather
 than a desk.
 
 | Gate | Status | Exit |
 |---|---|---|
-| S1 — the play defaults: every play pass on with no arm file, a `.off` file per pass, `tagpu_defaults.off` for the table, tacli's instances opted out | ● **done 2026-09-08** ([gpu-status](gpu-status.html) §2.8): `tagpu_opt.c`, seventeen readers routed through it, the `*own` halves paired with their pass; measured with no arm file (all seventeen `ARMED`, Classic++ restoring at 58.5 fps), a live `classicpp.off` (424 380 px back to Classic), and `--no-defaults` (only `curs`/`reclaim`/`shield` armed) | the menu of §2.10 retires the table |
+| S1 — the play defaults: every play pass on with no arm file, a `.off` file per pass, `tagpu_defaults.off` for the table, tacli's instances opted out | ● **done 2026-09-08** ([gpu-status](gpu-status.html) §2.8): `tagpu_opt.c`, seventeen readers routed through it, the `*own` halves paired with their pass; measured with no arm file (all seventeen `ARMED`, Classic++ restoring at 58.5 fps), a live `classicpp.off` (424 380 px back to Classic), and `--no-defaults` (only `curs`/`reclaim`/`shield` armed) | **G18d retires the table** — until then the shipped DLL turns the play set on by itself |
 | S2 — the GitHub build: `ddraw.dll` from Actions on every push to `main`, the release folder (DLL, `ddraw.ini`, the restorer weights, `README.txt`) as the run's artifact and as a release on a `v*` tag | ◐ written 2026-09-08 (`.github/workflows/build.yml`, `tagpu/release/`): the packager and the folder proven locally; **the first run on GitHub waits for the push** | a green run on `main`; a `v0.1` tag with the zip under Releases |
 | S3 — native Windows: the shipped zip on a real Windows, real driver, once per release | ○ the `_local` test VM (KVM, the Ryzen iGPU over VFIO) is being built; nothing measured yet | every pass `ARMED` and a Classic++ frame from a Windows 11 guest on the iGPU |
 
