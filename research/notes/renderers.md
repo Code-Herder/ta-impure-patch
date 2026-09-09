@@ -442,6 +442,7 @@ measures 212.*
 
 | y | row | stages | what drives it |
 |---|---|---|---|
+| 9 | *(the caption, `Render options`)* | — | an `id=5` label above the rule at y=30 |
 | 34 | **Renderer Style** | Classic \| Classic++ \| Custom | sets every row below it |
 | 62 | **Undithered assets** | Off \| On | `assets=` — done, G18a |
 | 90 | **Dynamic lighting** | Off \| On | `light=` — done, G18a |
@@ -670,6 +671,16 @@ quietly fixed, because every one of them cost a build-and-launch cycle.
    `anims\<screen>.GAF` and not `anims\<gadget>.GAF`. Named after the gadget it was never
    opened; named after the screen it loads. See [engine map](exe-reverse-engineering.html)
    *A screen's own GAF*.
+7. **A panel over the world takes its clicks through the ZOOM TRANSFORM**, and at any zoom
+   ≠ 1 that bends them — so no row worked at all. Found in play within minutes, and invisible
+   to every gate test, because those ran at zoom 1 with nothing else armed. `tagpu_zoom.h`
+   already promised dialogs arrive unmodified and noted it cannot see them; the screen now
+   answers `tagpu_menu_owns_point()` for the sprocket and its panel, and both
+   `tagpu_zoom_mouse_lparam` and `tagpu_zoom_drop_mouse` pass such a point through untouched.
+   Verified at 3.138×. *The same trap still bends `ARMOPT`, `EXITMENU` and `YESORNO`, which
+   the engine also draws over the world — this fixes only the screen that hits it on every
+   click.* **The lesson for the next screen over the world: a gate test at zoom 1 with a bare
+   arm set is not a test of the thing a player uses.**
 
 The oracles, for the record: the sim tick at `main+0x38A47` ran **1801 → 2057** over four
 seconds with the panel open and **2147 → 2147** with TA's own `ARMOPT` open, which is the
