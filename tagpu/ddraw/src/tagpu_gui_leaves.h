@@ -153,6 +153,50 @@ static int __cdecl before_text(void* e)
     return 0;
 }
 
+/* ---- 0x466780 BuildMinimapSurface: the TNT picture, while it is alive ----
+   G17e. The engine fits `main+0x1426B` into a 126-px box and throws half of
+   what it has away; the picture itself is 252x252 (or 252x256) and is a GAF
+   frame, built at 0x483900..0x483936 and freed at 0x483DF3/0x483E0B. Decoded
+   here, on the game thread, into a buffer the render thread reads — the same
+   copy-it-now discipline every other op follows, and for a stronger reason:
+   the pointer is nulled before the first frame of the map is ever presented.
+
+   Published by bumping a generation AFTER the bytes are in place, so a render
+   thread that sees the new generation sees the whole picture. One map load is
+   one write; nothing else touches the buffer. */
+static unsigned char s_mmPic[TAGPU_GAF_DECMAX * TAGPU_GAF_DECMAX];
+static volatile int      s_mmW, s_mmH;
+static volatile unsigned s_mmGen;
+static unsigned          s_mmFails;
+
+static int __cdecl before_minimap(void* e)
+{
+    const char* ta = *(const char* const*)TA_MAINPP;
+    const unsigned char* fr;
+    int w, h;
+    (void)e;
+    if (!on_game_thread()) return 0;
+    if (!ptr_ok(ta)) return 0;
+    fr = tagpu_gaf_frame_sane(*(const void* const*)(ta + 0x1426B));
+    if (!fr) { s_mmFails++; return 0; }
+    w = *(const unsigned short*)(fr + TAGPU_GF_W);
+    h = *(const unsigned short*)(fr + TAGPU_GF_H);
+    if (w <= 0 || h <= 0 || w > TAGPU_GAF_DECMAX || h > TAGPU_GAF_DECMAX) { s_mmFails++; return 0; }
+    if (!tagpu_gaf_decode(fr, w, h, s_mmPic)) { s_mmFails++; return 0; }
+    s_mmW = w; s_mmH = h;
+    MemoryBarrier();
+    s_mmGen++;
+    {
+        char b[140];
+        _snprintf(b, sizeof b, "gui: minimap picture %dx%d snapshotted (gen %u, engine box %dx%d)",
+                  w, h, s_mmGen,
+                  (int)*(const short*)(ta + 0x142EB), (int)*(const short*)(ta + 0x142ED));
+        b[sizeof b - 1] = '\0';
+        glog(b);
+    }
+    return 0;
+}
+
 /* ---- 0x4BE950 DrawLine(ctx, x0, y0, x1, y1, colour) stdcall ----------- */
 static int __cdecl before_line(void* e)
 {
@@ -387,6 +431,14 @@ static const LEAF LEAVES[] = {
     { 0x004C6AC0u, "free",  { 0x8B, 0x44, 0x24, 0x04, 0x85, 0xC0 }, 6, before_free,  NULL },
     { 0x004A81E0u, "build", { 0x8B, 0x44, 0x24, 0x04, 0x81, 0xEC, 0xC0, 0x03, 0x00, 0x00 }, 10, before_build, NULL },
     { 0x004BF4D0u, "frame", { 0x83, 0xEC, 0x40, 0x53, 0x55, 0x56, 0x57 }, 7, before_frame, NULL },
+    /* G17e: NOT a pixel-writing leaf. `BuildMinimapSurface 0x466780` is the one
+       place the TNT's own minimap picture (`main+0x1426B`, TED_GENERATED_PIC) is
+       alive and reachable: it consumes the frame at 0x46684F, its single caller
+       is 0x4669B0 and the loader frees the picture at 0x483DF3/0x483E0B in a
+       function that calls neither. An observer at its ENTRY therefore sees the
+       picture by construction, and needs to know nothing about the loader.
+       It rides the same table so it takes the same all-or-nothing byte match. */
+    { 0x00466780u, "minimap", { 0x83, 0xEC, 0x40, 0x53, 0x8B, 0x1D, 0xE8, 0x1D, 0x51, 0x00 }, 10, before_minimap, NULL },
 };
 #define LEAF_COUNT ((int)(sizeof LEAVES / sizeof LEAVES[0]))
 

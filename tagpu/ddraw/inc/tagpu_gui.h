@@ -60,4 +60,12 @@ int  tagpu_gui_drawing(void);                       /* the trigger says draw  */
    fills `r` with the engine's rect in GAME pixels (x, y, w, h). */
 void tagpu_gui_cursor_frame(void);
 int  tagpu_gui_cursor_own(float* r);
+
+/* G17e: the TNT's own minimap picture (`main+0x1426B`, TED_GENERATED_PIC),
+   decoded on the game thread inside `BuildMinimapSurface 0x466780` — the one
+   place it is alive, since the loader frees it before the map's first frame.
+   252x252 or 252x256, against the 126-px box the engine fits it into, so
+   drawing it at its native size is a free 2x with no new data path
+   (gui-renderer.md 13.6). `gen` moves once per map load. */
+int  tagpu_gui_minimap_pic(const unsigned char** pix, int* w, int* h, unsigned* gen);
 #endif
