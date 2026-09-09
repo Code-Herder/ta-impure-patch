@@ -256,6 +256,35 @@ redirect the six reads above and never touch `0x37F1B/1F`, or wrap
 `REGISTRY_SaveSettings` so it always writes the player's own pair. **Not decided
 here**; recorded so that whichever is taken is taken deliberately.
 
+### 3.1c The leave-game `SetWindowPos` is already inert under our fork [BINARY-VERIFIED 2026-09-09]
+
+`0x491ADC..0x491B0B`, the block §2.3 describes, pushes the window resize and the
+screen re-create back to back:
+
+```
+0x491AE2  push 4          ; uFlags  = SWP_NOZORDER, and nothing else
+0x491AE4  push 0x1E0      ; cy = 480
+0x491AE9  push 0x280      ; cx = 640
+0x491AFB  call [0x4FC2F0] ; SetWindowPos
+0x491B01  push 0x1E0 / push 0x280 / call 0x4B5940   ; NewTAScreen(640, 480)
+```
+
+**That call does nothing under our fork**, and has not since the fork existed.
+`SetWindowPos` is IAT-hooked (`hook.c`), and `fake_SetWindowPos`
+(`winapi_hooks.c`) returns TRUE **without calling through** whenever the target
+is `g_ddraw.hwnd` and the flags do not carry all of
+`SWP_NOSIZE|SWP_NOMOVE|SWP_NOZORDER` (`0x7`). The engine passes `0x4`, so
+`(0x4 & 0x7) != 0x7` and the resize is swallowed.
+
+**Consequence for phase 2.** [GL UI renderer](gui-renderer.html) §13.7 proposed
+"a byte patch at `0x491AFB`" as the fix for the window shrinking when a game is
+left, and G17b's gate row names it. **No engine patch is needed**: the actor
+that actually resizes the window is `NewTAScreen(640, 480)` → the fork's own
+`dd_SetDisplayMode`, which recomputes `g_ddraw.render.width/height` from
+`g_config.window_rect` and then maxes them against the new mode (`dd.c`). The
+window policy is therefore a *fork* concern — keep a configured client size
+across a mode change — and not a patch on a call that is already a no-op.
+
 ### 3.2 LoadMap's derivations — `0x483610` [BINARY-VERIFIED]
 
 With `ebp = main+0x141FB` (so `+0x40 = main+0x1423B` etc.), at `0x483BBF`:

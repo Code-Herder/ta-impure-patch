@@ -1286,7 +1286,17 @@ builds everything it would reuse.
 ### 13.7 The window never resizes, and k chooses itself
 
 **The window** [DECIDED]. The player picks a size once; entering a game and returning to the
-shell never changes it. The shell is atom-locked at 640×480 whatever we do, so it is letterboxed
+shell never changes it.
+
+> **Corrected 2026-09-09, during G17b:** the byte patch this section and §13.9 name is **not
+> needed**. The engine's `SetWindowPos(640, 480)` at `0x491AFB` passes `uFlags = SWP_NOZORDER`
+> alone, and the fork's IAT hook `fake_SetWindowPos` already returns TRUE without calling through
+> for any call on `g_ddraw.hwnd` that does not carry all of `SWP_NOSIZE|SWP_NOMOVE|SWP_NOZORDER`
+> — so it has been a no-op since the fork existed ([resolution](resolution.html) §3.1c). What
+> actually resizes the window is `NewTAScreen(640, 480)` reaching the fork's own
+> `dd_SetDisplayMode`, which recomputes the client from `g_config.window_rect` and maxes it
+> against the new mode. **The window policy is a fork change, not an engine patch**, which takes
+> the only new byte patch out of phase 2. The shell is atom-locked at 640×480 whatever we do, so it is letterboxed
 into whatever the window is at `k = min(winW/640, winH/480)`. This makes G15d's open oddity —
 "the first return gives a 640×480 window and the next two a 1912×1040 client with the shell
 scaled into it" (§12) — **the wanted behaviour, universally**: it is the *first* return that is
