@@ -19,6 +19,17 @@ What this means for the design:
    hack over a 640×480 frame. Concretely: a game-resolution RGBA+depth FBO, composited
    over the engine frame with the same letterbox transform cnc-ddraw already applies —
    one uniform scale for the whole picture.
+
+   > **Relaxed for the engine's internal grid, 2026-09-08** ([GL UI renderer](gui-renderer.html)
+   > §13.1). Phase E phase 2 runs the *engine* at `window / k` and renders everything of ours at
+   > the device resolution, which is an invented internal resolution by the letter of this rule.
+   > The rule was written when the engine's frame **was** the picture and the question was
+   > whether to draw units at a resolution the player had not asked for. It no longer describes
+   > the situation: since G13b the engine's frame inside the viewport is a key fill, and since
+   > G15b the UI is mirrored — every visible pixel is ours at the device resolution and the
+   > engine's frame is the oracle and the fallback. The spirit of the rule — one uniform scale
+   > for the whole picture, and no fidelity the player did not ask for — is what phase 2 keeps.
+
 2. **Higher fidelity = raise TA's own resolution.** cnc-ddraw (our fork) serves the mode
    list through `EnumDisplayModes` and can add custom modes — we control both sides. The
    win of the native pass at any resolution is true colour, translucency, per-fragment

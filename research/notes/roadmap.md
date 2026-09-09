@@ -1743,7 +1743,8 @@ as the residual pixels of a bracket, so no font or Bresenham is ported. An index
 through the live palette (Classic, fades correct by construction); a colour twin from the
 restored UI atlas rides beside it under Classic++. One module, `tagpu_gui_*`, one trigger,
 `tagpu_gui.on`, one seam into the composite. **Phase 1 is parity at 1:1; phase 2 (scale, the
-cursor, the shell scaled to the window) gets its own interview.**
+cursor, the shell scaled to the window) had its own interview on 2026-09-08 —
+[§13](gui-renderer.html), the G17 gates below.**
 
 | Gate | Status | Exit |
 |---|---|---|
@@ -1753,6 +1754,46 @@ cursor, the shell scaled to the window) gets its own interview.**
 | G15c — the rest of the in-game frame: chat, dialogs, the option screens over the viewport, HUD text, minimap, `LIGHTBAR`, the panel painter | ● **done 2026-09-07** ([§11](gui-renderer.html)): nothing new in the DLL — `tools/uiwalk.py` gained `--side core`, nineteen in-game stops (`+clock`, `+bps`, the hold-SPACE box, the menu / `PREFS` / F4 / chat over the world at 0.5× and 2×, a walking commander, an edge scroll), the in-viewport measure (every non-key engine pixel) and a bracketed shot, plus `scenarios/tascene-parity-core.json`; **ARM and CORE at 1024×768 and 1920×1080: 32 of 32 stops at 0 differing outside / 0 inside / 0 holes in all four runs**; the census on CORE 1 717 044 changed px, 0 unexplained. Learned: `ARMOPT` is the side panel's rect (it pauses the game, `PAUSED` over the world), the SPACE popup is F4's box held, the `LIGHTBAR` wipe is not reached by a skirmish (mission start / the multiplayer Tab menu), the clock ticks and the chat log scrolls between two shots. **Not closed**: the wipe frame by frame, the status icons and profiler bars (no play-time control found), the per-flip clear, the 1080p puff | the whole in-game inventory clean under `strict`, ARM and CORE; dialogs over the viewport verified at 0.5× and 2× |
 | G15d — the shell across the 640×480 context switch, the loading screen, the palette measured | ● **done 2026-09-07** ([§12](gui-renderer.html)): the publisher's stall guard (the render thread dies inside every `SetDisplayMode` and crawls on the way out of a game — the storm the first cycle showed was 38 overflows, 39 resets, 705 lost sprites per return), the render thread's skip-to-reset after a context change, the main offscreen's direct `MEM_Free` handled (it crashed the census, and leaked a slot, when a re-created `"OFFSCREEN"` landed elsewhere), every reset logged with a reason, and the twin resolved through the **presented** palette — the engine gamma-scales every palette on the way to DirectDraw and never scales `main+0x143A7`, so the world passes are wrong at Gamma ≠ 12 (open); no byte patch. **Not closed**: that world-pass palette bug; cnc-ddraw keeps the game-sized window from the second 1080p return (those shell stops not 1:1) | shell inventory clean under `strict` at 640×480; three entry/exit cycles with twin and atlas counts flat |
 | G15e — Classic++ UI: the UI atlas's restored twin, the palette-validity rule, `uirestore` | ○ planned | Q2 bar against G15-0's offline output; sheets judged by the owner; fps unchanged |
+
+**A trap the phase-2 interview turned up, 2026-09-08:** the radar coverage arcs `0x4C0070` and
+`DrawPoint 0x4BEE60` write the minimap composite `main+0x142DB` and are **not** observed leaves.
+They render correctly only because the base copy ahead of them reads an unseeded source and so
+publishes as a pixel op carrying the destination's final bytes. **Seeding copy sources on demand
+— the obvious cure for the shell's 300 KB background pixel ops — would make them disappear.**
+Two entries in the leaf table would make it deliberate ([GL UI renderer](gui-renderer.html) §7).
+
+### Phase 2 — the UI scaled (designed 2026-09-08)
+
+*Gated **G17a–e**: `G16` is the 3DO GPU-posing gate on main, claimed the same day.*
+
+Design: [GL UI renderer](gui-renderer.html) §13, ten decisions from one interview against the
+built phase 1. **M1**: the engine runs at `window / k` and everything of ours renders at the
+device resolution, so hit-testing, the gadget rects and the input firewall stay in one logical
+space and need no changes — the fork already unscales the pointer by `game_width /
+viewport.width`. The 1× index twin is **kept unchanged** as the oracle-diffable mirror and a
+device-res **sharp layer** is added beside it for what we can draw better at scale (restored art,
+strings, the cursor, the minimap); the mirror scales by a sharp bilinear that must be
+bit-identical at `k = 1`, which is what keeps phase 1's 120-stop walk and parity md5 working as
+phase 2's regression. Text becomes a **string op** drawing TA's own glyphs; the cursor becomes
+ours at a fixed 1× device size; the minimap is regenerated from the game's own 252-px picture
+with **the engine's dots kept**, because which units get a dot is fog/LOS sim logic. `k` is
+automatic (`clamp(winW/1280, 1, 3)`), and the window never resizes across game entry and exit.
+Nothing is ever suppressed — a pixel op reads the engine's finished surface, so the engine keeps
+drawing the whole UI forever and the fallback survives scale, soft but in place.
+
+| Gate | Status | Exit |
+|---|---|---|
+| G17a — the seam: the sharp-bilinear filter, the sharp layer's texture and composite order, `k` plumbed but forced to 1 | ○ planned | the parity md5 equals main's and the 120-stop `strict` walk is unchanged **with the filter in the path**; not bit-identical at `k = 1` stops the phase |
+| G17b — `k ≠ 1` live: automatic `k`, the logical mode, the world pass at device resolution, the window policy (a patch at `0x491AFB`) | ○ planned | a walk at `k = 1.5` and 2 — every stop renders, **clicks land on the right gadget**, no resize across three entry/exit cycles, and the 1× mirror still diffs exact at `k = 1` in the same run |
+| G17c — the cursor: ours in the sharp layer from live state, the fallback masked in its rect, `cursorscale=` | ○ planned | crisp at `k = 1.5` and 3, under the true pointer; G13m's motion-frame measure re-run |
+| G17d — the string op: `PK_STRING`, the observer's string/font/colour capture, the atlas draw | ○ planned | text clean at `k ≠ 1` **and bit-identical to the engine's glyphs at `k = 1`**; arena bytes per batch down |
+| G17e — the minimap: the 252-px base snapshotted at load, our fog from the corner-mask grid, the engine's dots replayed ×2, our view box | ○ planned | sharp at `k`; dot positions within a pixel of the engine's; **no unit visible that the engine does not show** |
+
+**Open after the interview** (§13.10): the phase-1 radar hole above; whether the engine's minimap
+fog rule matches the corner-mask grid our passes sample; the `1280` baseline in `k`'s formula; the
+multiplayer consequence of a constant logical field of view (every player then sees the same
+amount of world, where today a 4K player sees far more); and an SDF glyph atlas, deferred behind a
+look at the string op at `k = 1.5`.
 
 ## Shipping — the build people can download (2026-09-08)
 

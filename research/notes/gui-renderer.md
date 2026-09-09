@@ -26,7 +26,8 @@ Classic++ the panel art, buttons and unit pictures are restored while text stays
 glyph. The engine's 8-bit surface stops being what the player sees and becomes the *oracle* the
 gates measure against and the *fallback* that shows anything we missed.
 
-**Phase 2 — the UI scaled** [DECIDED 2026-09-06, its own interview later]. At 1080p and above the
+**Phase 2 — the UI scaled** [DECIDED 2026-09-06; **the interview ran 2026-09-08 — §13**, which
+settles the eight questions this paragraph deferred and supersedes five decisions below]. At 1080p and above the
 128-px side panel and the 32-px bars are drawn at 2× and the world viewport shrinks around them.
 The engine's layout constants are fixed pixels (`left=128`, `top=32`, `bottom=H−33`, written once
 at `0x4981C9..0x498237` — [resolution](resolution.html) §2), so this means running the engine at a
@@ -35,8 +36,9 @@ logical resolution and rendering the world at the device's. Phase 1 must not clo
 640×480 whatever the window is, so "draw the 640×480 layout into a window-sized twin with smooth
 filtering" is a late gate, not a new architecture.
 
-**Not this project**: a redesigned UI; hi-res fonts; regenerating the minimap from our terrain
-atlas (a candidate, §3.8).
+**Not this project**: a redesigned UI; hi-res fonts (§13.4 draws TA's own glyphs, it does not
+add a font); regenerating the minimap **from our terrain atlas** — still a candidate, §13.6
+regenerates it from the game's own 252-px picture instead.
 
 ---
 
@@ -123,6 +125,11 @@ engine's frame wins unless we drew a non-empty pixel, which the world passes nev
 §1. The one rule phase 1 carries for phase 2: **the UI twin's size is `surface × k`, `k = 1`
 now**, ops are recorded in logical (game) coordinates, and nothing in the module assumes
 `k == 1`.
+
+> **Superseded 2026-09-08 (§13.2).** The twin stays 1:1 and `k` applies at the *draw*, with a
+> device-res sharp layer added beside it — so phase 1's oracle diff keeps working at every `k`
+> instead of becoming undefined. The rest of the rule stands: ops are logical, nothing assumes
+> `k == 1`.
 
 ### 3.2 Mechanism: mirror the primitives into retained GL twins; seed from the surface as fallback
 Every engine surface gets a GL twin — the main offscreen, each screen's `+0xBC` surface, the
@@ -217,6 +224,11 @@ restorer never sees it. In phase 2 captured pixels scale by nearest — for 1-bi
 1997 look at 2× — and a string op that re-renders from a nicer font is the upgrade path, added
 later without touching the model.
 
+> **Superseded 2026-09-08 (§13.3, §13.4).** Nearest staggers every 1-px feature at a fractional
+> `k`, so the mirror scales by a sharp bilinear that is bit-identical at `k = 1`; and the string
+> op is taken, drawing **TA's own glyphs** from `tagpu_text.c`'s atlas rather than a nicer font,
+> which §1 excludes.
+
 **The census** is the same machinery pointed at the whole surface: at each flip, diff the surface
 against its previous copy and subtract every recorded op's box. What remains is a writer we have
 not bracketed, with its exact pixels, per screen. It is G15a's exit and every later gate's
@@ -228,11 +240,21 @@ exempts its rect (position `[obj+0x1B6/0x1BA]`, size from the sprite record at `
 it — drawing the sprite at present time from the true pointer and suppressing the four engine
 blits — is the **first gate of phase 2**, where a 1× cursor on a 2× UI forces it.
 
+> **Amended 2026-09-08 (§13.5).** Owning it needs no suppression: the layer's cursor branch
+> changes from *discard* to *mask the fallback in that rect*, and the engine's blits may keep
+> running into a frame nobody sees. The sprite record is a GAF frame header, so its size and
+> hotspot are already in hand. Its size stays **1× device pixels at every `k`**.
+
 ### 3.8 The minimap is mirrored like everything else
 A sprite op if it goes through a GAF blit, a pixel op through the gadget bracket otherwise; dots
 and view box are residual pixels. Under Classic++ the picture is restored as one frame if it
 arrives with an identity. Regenerating it from our restored terrain atlas is a candidate for
 phase 2, where a 252-px picture at 2× may not be enough.
+
+> **Decided 2026-09-08 (§13.6).** Phase 2 regenerates it — base, fog and view box ours, **the
+> engine's dots kept**, since which units get a dot is fog/LOS sim logic and re-deriving it wrong
+> is a multiplayer cheat. The base is the game's own `TED_GENERATED_PIC` at its native 252 px,
+> which the engine halves; the terrain-atlas variant stays a candidate.
 
 ### 3.9 Classic++ on UI art: judge offline first, then a name-glob policy
 The restorer was trained on ground textures and has never seen a bevel, a button or a
@@ -345,14 +367,15 @@ patch), G15-0 skips the review (tools and docs). Each landing's documentation pa
 addresses to the engine map and its rows to [GPU status](gpu-status.html) §2, and this page's
 gate table gets its status.
 
-**Unlocked, not scheduled here**: the §2.10 Options menu as a surface of ours; phase 2's cursor,
-shell scaling and in-game scaling.
+**Unlocked, not scheduled here**: the §2.10 Options menu as a surface of ours. Phase 2's cursor,
+shell scaling and in-game scaling are now designed and gated — **§13.9**.
 
 ---
 
 ## 6. What phase 2 must find intact
 
-- The twin is `surface × k` with `k` a parameter; every op is recorded in logical coordinates.
+- ~~The twin is `surface × k` with `k` a parameter~~ — **§13.2: the twin stays 1:1 and the sharp
+  layer carries `k`.** Every op is still recorded in logical coordinates, which is what mattered.
 - Sprite ops keep the frame identity, so the colour twin can be filtered when scaled; the UI
   atlas can take the unit atlas's `pad/align/mip` (4, 4, 2) without a model change.
 - Pixel ops are indices with coverage, scaled by nearest; a string op is an addition, not a
@@ -365,6 +388,21 @@ shell scaling and in-game scaling.
 
 ## 7. Open  [OPEN]
 
+- **The minimap's radar arcs are correct by accident, and one plausible change breaks them**
+  [VERIFIED 2026-09-08]. `0x4C0070` (the coverage arcs) and `DrawPoint 0x4BEE60` write the
+  composite `main+0x142DB` and are **not** in `LEAVES[]` — nothing observes them. Their pixels
+  reach the twin anyway, because the rebuild `0x466DC0` copies the base in first
+  (`0x4C6B70([0x142DB],[0x142DF],0,0)`) and that copy's source is written only by `0x466C20`'s
+  direct byte writes, so `+0x142DF` is never a destination of an observed op, so it is **never
+  seeded**, so the copy degrades to a **pixel op whose bytes are the destination's final state at
+  publish time** — arcs included (§10, "a pixel op is the final state of its box"). *The
+  precondition is that `+0x142DF` never becomes seeded.* Observe anything that writes it, or make
+  copy sources seed on demand (the obvious cure for the shell's 300 KB background pixel ops), and
+  the base copy becomes a true twin→twin `PK_COPY` — **and the arcs and points vanish from the
+  minimap**, in a build whose only change was elsewhere. Note also that the census cannot vouch
+  for them: their pixels lie inside the copy's box, so they count as explained either way. Two
+  entries in `LEAVES[]` would make the correctness deliberate; until then this is a trap, not a
+  bug.
 - ~~Whether the shell changes the palette~~ — **G15d**: it does not, and `guipal` is the GUI's
   *logical* palette (256 entries matched into `main+0xDCB`), never the live table; the corpus's
   "menu fades" are the campaign glamour screen's (`0x41DA60`, `0x41DFC0`, `0x41E270`), which no
@@ -1064,3 +1102,223 @@ clean**, loading screen exact each cycle, `+gamma 15` = 235@1 each cycle, `overf
   construction, and its code is now read (engine map).
 - The publisher's 5 ms cadence, three times the present rate in game, and the per-flip clear:
   §7.
+
+---
+
+## 13. Phase 2 — the UI scaled  [DECIDED 2026-09-08]
+
+*The second interview, held 2026-09-08 against the built phase 1. It settles the eight questions
+§1 deferred and supersedes five decisions of §3 taken when phase 2 was still a sketch. Phase 1 is
+untouched by all of it: every decision below is either additive or applies only at `k ≠ 1`.*
+
+### 13.1 Mechanism: the engine runs at a logical resolution, everything of ours at the device's
+
+**M1** [DECIDED]. The engine is given `window / k` as its screen; our world pass and our UI both
+render at the device resolution; `k` is free, not restricted to integers.
+
+The alternatives were weighed and rejected. Patching the layout constants at
+`0x4981C9..0x498237` so the engine believes the panel is `128 × k` wide leaves every gadget's hit
+rect at 1× — the engine's own UI pixels then land in the *wrong place*, not merely soft, and
+`strict` stops meaning anything. Bending the pointer per screen region instead leaves us owning
+hit-testing for a tree the engine rewrites at load time.
+
+**M1 costs nothing in input, because the fork already does it** [VERIFIED 2026-09-08, `wndproc.c`
+`912`, `dd.c:1000`]: every mouse message is already scaled by
+`mouse.unscale_x = game_width / render.viewport.width` and clipped to the letterboxed viewport.
+With the engine at 1280×720 in a 1920×1080 window the pointer is already divided by 1.5 before
+the engine sees it, so gadget rects, the minimap click rect at `main+0x142BB`, the input firewall
+and `vpwide`'s zoom bending all stay in one consistent logical space and **none of them are
+touched**. The world half is the existing 2× supersample generalised from 2 to `k` with the
+resolve-down dropped [SOURCE `tagpu_native.c:2411`, `tagpu_ss.off`].
+
+**What it relaxes.** [native-res design](native-res-design.html) §0 forbids "an invented internal
+resolution … never a mixed-resolution hack". That constraint was written at Phase D start, when
+the engine's frame *was* the picture and the question was whether to draw units at a resolution
+the player had not asked for. It no longer describes this situation: every visible pixel is ours
+at the device resolution, and the engine's frame is the oracle and the fallback, never the
+picture. The relaxation is to the engine's internal grid alone, and it is recorded there too.
+
+### 13.2 The 1× mirror stays; a device-res sharp layer is added beside it
+
+**Supersedes §3.1 and §6's "the UI twin's size is `surface × k`"** [DECIDED]. The index twin
+stays exactly what phase 1 built — 1:1 with the engine's surface, same ops, same seeds, same
+census. Beside it sits an additive **sharp layer**: one device-res RGBA texture carrying only
+what we can genuinely draw better at scale — restored art, string ops, our cursor, our minimap.
+
+Composite order, top down: **the sharp layer where it has coverage → the 1× mirror scaled by k →
+the engine's surface**.
+
+> **Amended 2026-09-08, before any code: the sharp layer is not one texture.** Restored art is
+> drawn into surfaces that have no screen position at draw time — the side panel is painted into
+> `panel+0xBC` once and *copied* to the frame when dirty, and we replay that as a twin→twin
+> `PK_COPY`. Colour that lived only in a screen-space layer would have nowhere to be written and
+> nothing to travel through. So the sharp layer is **two things**: a **colour channel on every
+> twin** (§3.4's per-surface RGBA twin, which was right about this, with copies carrying both
+> channels), and a **screen-space device-res layer** for what is drawn at present time from live
+> state — the cursor (§13.5), and string ops if they are rendered late rather than into their
+> surface's colour twin. The composite order above is unchanged, and so is every other property
+> in this section. Three properties follow, and they are the reason for the choice:
+
+- **Phase 1's verification survives as phase 2's regression.** The mirror is still bit-comparable
+  against the engine's own surface at 1:1, so the `strict` walk's 120 stops and the parity md5 go
+  on meaning what they meant, instead of being replaced by a weaker regime invented for scale.
+- **A gap in the sharp layer is soft, never a hole** — it falls through to the mirror, which is
+  exact.
+- The two hard problems decouple: getting text right no longer risks the panel's exactness.
+
+A `surface × k` twin was the alternative (sharpest, one texture, no new compositing rule) and it
+loses all three: every captured op becomes a nearest blow-up, and no diff against the engine is
+defined at `k ≠ 1`.
+
+### 13.3 The mirror scales by sharp bilinear, and must be identity at k = 1
+
+**Supersedes §3.6's "in phase 2 captured pixels scale by nearest"** [DECIDED]. Nearest at a
+fractional `k` staggers every 1-px feature — a bevel alternates one and two device pixels along
+its length, and the eye reads the pattern. The filter is therefore a 4-tap with a ramp one device
+pixel wide: flat inside a texel, steep across its boundary.
+
+It has to run **after** the palette lookup: the twin's R channel is an index and interpolating
+indices is meaningless. Coverage (G) is thresholded exactly as the fog grid's corner bits already
+are [SOURCE `tagpu_glsl.h`, "bilinear coverage over the four corner bits, thresholded at 0.5"].
+
+**The gate exit is that at `k = 1` the ramp is exactly one source texel wide, so every output
+pixel samples a texel centre and the frame is bit-identical to today's `texelFetch`** — the
+parity md5 must not move. That property is what makes 13.2's claim true rather than hoped.
+
+Second-order: because we composite all three layers ourselves at device resolution, the fork's
+own `GL_NEAREST` frame upscale [SOURCE `render_ogl.c:764`] is bypassed at `k ≠ 1`. There is only
+ever one scaler in the picture, and it is ours.
+
+### 13.4 Text becomes a string op — TA's own glyphs, drawn by us
+
+**R1** [DECIDED], the sixth op kind §3.6 anticipated. `PK_STRING` carries the string, the font
+object, the fg/bg colours and the destination instead of a box of captured bytes; the render
+thread stamps glyphs from the coverage atlas `tagpu_text.c` already builds from TA's own 1-bit
+font — the module G13p proved on the world's `ShowRanges` labels and group digits.
+
+What it requires: the observer must read the string, `GFX_FONT 0x204` and `GFX_FG 0x208` (written
+by `SetFont 0x4C1420` / `SetTextColors 0x4C13A0`) rather than only measuring; the string bytes
+must be copied into the arena **on the game thread**, for the reason sprite pixels are; and the
+engine's measure loop must be reproduced exactly, because `0x4CCF60` does no clipping at all —
+`tagpu_text.c` already replicates it character for character.
+
+What it does **not** do is make text sharper. A 1× glyph carries 1× information however it is
+drawn; the gains are that a glyph's edge no longer drags in the panel art it was blitted onto,
+that text composites correctly over restored Classic++ art, and that the arena carries ~40 bytes
+where it carried ~968. A synthesised higher-resolution glyph (an SDF fit to the same letterforms)
+would be genuinely crisper and is **not** taken here: at TA's 8–10 px cap height it rounds
+corners, and it is the only rung that invents letterform information. It waits on a look at R1 at
+`k = 1.5`, not on an argument.
+
+**The exit that keeps this honest: at `k = 1` the string op must reproduce the engine's own
+glyphs bit for bit.** If our stamp and the engine's blit disagree by a pixel, the walk says so.
+
+### 13.5 The cursor is ours, at a fixed 1× device size
+
+**Supersedes §3.7's "suppressing the four engine blits"** [DECIDED]. It is drawn in the sharp
+layer from live state on the render thread at present time — no queue op is needed, because
+everything required is already read every frame: `cursor_rect()` takes the position from the
+graphics globals and the size from the sprite record at `+0x1B2`, whose layout the engine map
+already carries from the disassembly — **size at `+0`/`+2` zero-extended, hotspot at `+4`/`+6`
+sign-extended, so a hotspot may be negative** — which is the same shape as a GAF frame header
+(`GF_W/GF_H/GF_HX/GF_HY` in `tagpu_gui_leaves.h`). `+0x1B6`/`+0x1BA` is the position it was last
+*drawn* at, i.e. already hotspot-corrected.
+
+Suppression is unnecessary: the engine's blits may keep running into a frame nobody sees, and the
+layer's cursor branch simply changes from *discard* (let the engine's show through, phase 1) to
+*mask the fallback in that rect*. Drawing from the true device pointer also puts it ahead of the
+engine's last-drawn position, which is what G13m spent a gate achieving.
+
+**Its size is 1× device pixels at every `k`** — the convention every scaled desktop UI follows,
+and it is always crisp. The accepted cost is a small pointer against a 3× UI at 4K, where TA's
+cursors carry gameplay meaning (build, reclaim, attack); a `cursorscale=` knob defaulting to 1 is
+the escape, not a change of default.
+
+### 13.6 The minimap is regenerated — rendering ours, visibility the engine's
+
+[DECIDED]. Two halves, and the split between them is the point.
+
+**Ours:** the base picture, the fog, the view box. The base comes from the TNT's own
+`TED_GENERATED_PIC`, which is **252×252 (or 252×256)** [SOURCE [file formats](file-formats.html),
+`PTRminimap`] while `BuildMinimapSurface 0x466780` fits it into a 126-px box — the engine throws
+half of what it has away, so drawing it at its native size is a free 2× with no new data path and
+no colour drift. The frame is snapshotted at map load, because the loader frees it at `0x483DF3`
+/ `0x483E0B`. Fog comes
+from the corner-mask grid we already hold as an RG8 texture for every world pass. The view box is
+already ours at zoom [SOURCE `tagpu_zoom.c:557`].
+
+**The engine's:** the dots. They are already sprite ops on `main+0x142DB` and their positions
+derive from map coordinates, so replaying them at ×2 into our 252-px target is exact and free.
+**This is a rule, not a preference: which units appear on the minimap is fog- and LOS-dependent
+sim logic.** Re-deriving it does not fail by rendering badly, it fails by showing enemy positions
+the player is not entitled to — a cheat, and in multiplayer *the* cheat. Base, fog and view box
+are presentation of data the player already has; dots are not.
+
+Rendering the base from our restored terrain atlas instead was weighed: unlimited at any `k` and
+Classic++-restored, but the TNT's picture is a *conversion* of the map rather than the terrain, so
+our minimap would no longer match the engine's colours and the oracle would be gone on exactly the
+surface where we see least (13.8). It stays what §1 and §3.8 called it — a candidate — and S1
+builds everything it would reuse.
+
+### 13.7 The window never resizes, and k chooses itself
+
+**The window** [DECIDED]. The player picks a size once; entering a game and returning to the
+shell never changes it. The shell is atom-locked at 640×480 whatever we do, so it is letterboxed
+into whatever the window is at `k = min(winW/640, winH/480)`. This makes G15d's open oddity —
+"the first return gives a 640×480 window and the next two a 1912×1040 client with the shell
+scaled into it" (§12) — **the wanted behaviour, universally**: it is the *first* return that is
+wrong, and the fix is to stop the engine's `SetWindowPos(640, 480)` at `0x491AFB` from shrinking
+a window the player chose.
+
+**k** [DECIDED]: automatic, `clamp(winW / 1280, 1, 3)`, with a cfg key for the stubborn. No
+settings surface, so nothing waits on the Options menu of [renderers](renderers.html) §2.10.
+
+**A consequence that is not cosmetic and must be checked, not assumed:** because the logical
+resolution is `window / k`, it lands near 1280×720 on every monitor, so **every player sees the
+same amount of world**. Today a 4K player sees far more map than one at 640×480. Equalising that
+is defensible and probably desirable, but it changes what a player sees in a competitive game and
+belongs under the standing multiplayer rule rather than under a rendering gate. The 1280 baseline
+is itself a guess that wants a look on three monitors.
+
+### 13.8 What phase 2 leaves alone, and why
+
+- **Nothing is ever suppressed. It cannot be**: a pixel op reads the engine's finished surface at
+  publish time [SOURCE `tagpu_gui_hook.c:318`], so the mirror is built out of the engine's own
+  pixels and the engine must keep drawing the whole UI forever. Suppression could only ever apply
+  to ops we replace by identity, and buys nothing — the engine's draw is already free at 60 fps.
+- **The fallback survives scale.** At `k ≠ 1` a miss is the engine's own pixel through the same
+  filter: soft, and exactly in place. `strict` remains the harness's mode only.
+- **The blit variants stay captured pixels by design.** The shaded and sub-frame GAF blits, the
+  descriptor blit, the textured triangles and GAF frames past `TAGPU_GAF_DECMAX` never need real
+  replay paths: the mirror carries them exactly and the sharp layer is additive. That is a
+  property of 13.2, not a debt. The only thing that would change it is Classic++ wanting their
+  art restored, which is G15e's question.
+- **Classic++ needs no new answer.** Everything in the UI is 1× information — the restorer removes
+  dithering, it does not invent resolution — so at any `k` the UI reads as one coherent surface
+  cleanly scaled rather than a mix of crisp and soft. The deliberate exception is 13.5's cursor.
+  True 2× *art* would be a super-resolution model, which is a different model.
+
+### 13.9 The gates
+
+| gate | builds | exit (measured) | kill / pivot |
+|---|---|---|---|
+| **G17a** the seam | the sharp-bilinear filter, the sharp layer's texture and the composite order; `k` plumbed everywhere but forced to 1 | the parity md5 equals main's and the 120-stop `strict` walk is unchanged, with the filter in the path | the filter is not bit-identical at `k = 1` → stop; nothing downstream is safe until it is |
+| **G17b** `k ≠ 1` live | automatic `k`, the logical mode, the world pass at device resolution, the window policy | a walk at `k = 1.5` and `k = 2`: every stop renders; **clicks land on the right gadget at every stop** (a click test, not a pixel test); no resize across three entry/exit cycles; the 1× mirror still diffs exact at `k = 1` in the same run | hit-testing drifts → M1 is wrong and the phase stops, since 13.1 is what makes the rest free |
+| **G17c** the cursor | ours in the sharp layer from live state, the fallback masked in its rect, `cursorscale=` | crisp at `k = 1.5` and 3, under the true pointer; G13m's motion-frame measure re-run | — |
+| **G17d** the string op | `PK_STRING`, the observer's string/font/colour capture, the atlas draw | text clean at `k ≠ 1` **and bit-identical to the engine's glyphs at `k = 1`**; arena bytes per batch down | our stamp and the engine's blit disagree → the measure loop is wrong; fix it rather than accept a near miss |
+| **G17e** the minimap | the 252-px base snapshotted at load, our fog from the corner-mask grid, the engine's dots replayed ×2, our view box | sharp at `k`; dot positions within a pixel of the engine's; **no unit visible that the engine does not show** | the fog rules disagree (13.10) → keep the engine's fog as a pixel op and ship the base alone |
+
+Reviews per the house rule: G17a and G17b at `high` (a new byte patch at `0x491AFB`, and the
+composite seam), G17c/d/e at `medium` unless they add a patch.
+
+### 13.10 Open after this interview
+
+- **The minimap's unobserved writers (§7).** `0x4C0070` and `0x4BEE60` are correct only because
+  the base copy ahead of them degrades to a pixel op read at publish time; seeding copy sources
+  would break them. **G17e must account for the arcs deliberately**, since a base we regenerate
+  ourselves no longer carries them for free.
+- Whether the engine's minimap fog (`0x466C20`, direct byte writes nothing observes) uses the same
+  rule as the corner-mask grid our passes sample. G17e claims parity and has not earned it yet.
+- `clamp(winW / 1280, 1, 3)`'s baseline: a guess, wanting a look on three monitors.
+- The multiplayer consequence of a constant logical field of view (13.7).
+- An SDF or supersampled glyph atlas (13.4), deferred behind a look at R1 at `k = 1.5`.
