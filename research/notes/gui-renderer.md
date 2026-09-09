@@ -1837,8 +1837,11 @@ lands rather than after it, so the numbers are here when the decision is taken.*
 - **No byte patch.** §13.7 and §13.9 both name one at `0x491AFB`. The engine's
   `SetWindowPos(640, 480)` there passes `uFlags = SWP_NOZORDER` alone, and the fork's IAT hook
   `fake_SetWindowPos` already returns TRUE without calling through for any call on
-  `g_ddraw.hwnd` missing all of `SWP_NOSIZE|SWP_NOMOVE|SWP_NOZORDER` — inert since the fork
-  existed ([resolution](resolution.html) §3.1c). **Phase 2 adds no new engine patch at all.**
+  `g_ddraw.hwnd` (with `g_ddraw.ref` set) that does **not carry all three** of
+  `SWP_NOSIZE|SWP_NOMOVE|SWP_NOZORDER`; the engine passes `SWP_NOZORDER` alone, so it is
+  swallowed — inert since the fork existed ([resolution](resolution.html) §3.1c). *(An earlier
+  draft of this line said "missing all of", which inverts the rule and predicts the opposite for
+  this very call.)* **Phase 2 adds no new engine patch at all.**
 - **No engine change to reach `k != 1`.** cnc-ddraw takes `ddraw.ini`'s `width`/`height` as the
   client and maxes them against the game mode, so `tacli --window WxH` gives `k = window / res`
   with the engine keeping its own screen. That is what every measurement below was taken on.
@@ -1871,8 +1874,12 @@ input transform would make the test agree with itself at any `k`.
 
 **No resize across the three cycles, and the walk proves it rather than asserting it**: `k` is
 `viewport / surface`, the shell's surface is 640 and the game's 1024, and every one of the 117
-stops implies a client width of **exactly 1536** — through three full game -> shell -> game
-transitions. No crash, and `hit_check` never saw a miss.
+stops implies a **viewport** exactly 1536 wide — through three full game -> shell -> game
+transitions. No crash, and `hit_check` never saw a miss. **It is the viewport, not the client**:
+`hit_check` records `k` and discards `vp_x`, so a wider client that letterboxed to the same
+viewport would read identically. That is enough for the exit — the exit is about the picture not
+jumping — but the stronger claim is not what the data supports [corrected by a landing
+reviewer].
 
 **The 1-pixel drift is structural and is why this is a hit test.** The renderer scales by
 `vp / surface` and the input unscales by `(surface - 1) / (vp - 1)`, so the two disagree by up to
@@ -1887,6 +1894,17 @@ away and the world reached the screen at the engine's resolution, upscaled. `ss`
 skipped so the composite downsamples the supersampled buffer instead of stretching a small one.
 At `k = 1` none of it applies — `devres` is 0, `ss` is 2, the resolve runs — so the 1:1
 measurements are untouched by construction. `tagpu_devres.off` is the A/B.
+
+**It is OPT-IN, and the selection rects are why.** Both landing reviewers found the same thing
+independently: this file's own measured comment records that the driver clamps an aliased GL line
+to one pixel, so a line drawn in an `ss`-times buffer is one *supersample* wide — which is
+exactly why `selAt1x` draws the rects into the 1x FBO after the box-downsample. Under `devres`
+there is no such downsample, so a selection rect would reach the screen at about 0.75 of a device
+pixel at `k = 1.5`, thinner and dimmer than the engine's, while everything around it got sharper.
+`tagpu_devres.on` is how everything below was measured; **making it the default waits on drawing
+the rects as real geometry with a width**, which is its own piece of work. A supersampled target
+the driver refuses also stands `devres` down for the session rather than putting a black world on
+the screen.
 
 **The measure is replication, not sharpness**, because `s_colTex` is `GL_NEAREST` and the old
 path therefore *nearest-upscaled* the resolved frame:
@@ -1915,6 +1933,13 @@ the naive reading says the opposite of the truth.
   field-of-view consequence.
 - **Leaving a game at 1280x720 crashes** in the level teardown, at `k = 1` as well as at 1.5, so
   it is the mode and not the scaling ([resolution](resolution.html) §3.1d). Not diagnosed.
+- **`devres` is off by default** until selection rects are drawn as geometry with a real width
+  (above). Everything measured here was taken with `tagpu_devres.on`.
+- **A device-space click converts at delivery, per message.** `inject_click_at` posts MOVE, DOWN
+  and UP separately and each is converted in `deliver_mouse`, so a mode switch landing between
+  the DOWN and the UP would unscale them through different viewports. No walk has shown it and
+  it needs a switch inside a click, but it is the kind of flake that would look like a bad gadget
+  rather than a bad frame [raised by a landing reviewer, not fixed].
 - **The `k = 1` regression on the current DLL passes, with one hole worth naming.** 117 stops,
   `k = 1.0000` throughout, **0 hit misses**, and the differing stops are the 16 `MAINMENU` visits
   at 178-190 — the sparkle, in its recorded range. **One stop of the 117 shows `strict` holes**:

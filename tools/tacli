@@ -769,6 +769,18 @@ def screen_size(display: "str | None" = None) -> tuple:
     return _SCREEN_SIZE[d]
 
 
+def client_box(res, window):
+    """The client cnc-ddraw will actually open, which is what has to fit on the
+    desktop. `dd.c` sets render.width/height from the ini's width/height and then
+    maxes each against the game mode, so a --window SMALLER than --res does not
+    shrink the client — it is ignored per axis. Tiling against the requested
+    window in that case put the real window off the right/bottom edge, which is
+    the silently mangled `glshot` tile_for exists to prevent (landing review)."""
+    if not window:
+        return tuple(res)
+    return (max(int(res[0]), int(window[0])), max(int(res[1]), int(window[1])))
+
+
 def tile_for(index: int, res, screen=None, origin=(0, 0)):
     """Lay instances out in a grid so parallel windows do not stack.
 
@@ -829,8 +841,8 @@ def _create(inst: Instance, args) -> dict:
     res = tuple(args.res or DEFAULT_RES)
     window = tuple(args.window) if getattr(args, "window", None) else None
     display = args.display or default_display()
-    # the WINDOW is what has to fit on the desktop, not the engine's screen
-    tile = tile_for(index, window or res, screen=screen_size(display))
+    # the CLIENT is what has to fit on the desktop, not the engine's screen
+    tile = tile_for(index, client_box(res, window), screen=screen_size(display))
     shield = args.shield is not False
     clone_prefix(inst)
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
@@ -1036,14 +1048,15 @@ def _launch(args) -> dict:
         if args.res:
             meta["res"] = list(args.res)
         meta["tile"] = list(tile_for(meta.get("slot", 0),
-                                     win or tuple(meta["res"]), screen=screen))
+                                     client_box(meta["res"], win), screen=screen))
         inst.save_meta(meta)
         write_ddraw_ini(inst, meta["tile"], win)
     # Self-heal a tile recorded against a different (or wrongly assumed) desktop:
     # an off-screen window is a silently broken `glshot`, so never open one there.
     res = tuple(meta.get("res") or DEFAULT_RES)
-    if not tile_is_onscreen(tuple(meta.get("tile") or (0, 0)), win or res, screen=screen):
-        meta["tile"] = list(tile_for(meta.get("slot", 0), win or res, screen=screen))
+    box = client_box(res, win)
+    if not tile_is_onscreen(tuple(meta.get("tile") or (0, 0)), box, screen=screen):
+        meta["tile"] = list(tile_for(meta.get("slot", 0), box, screen=screen))
         inst.save_meta(meta)
         write_ddraw_ini(inst, meta["tile"], win)
     if args.sound is not None:

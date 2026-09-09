@@ -315,7 +315,8 @@ static float  s_poseErrMax = 0.0f;     /* worst |engine - fields|, per log line 
 static int    s_nano   = 1;            /* build-state look (tagpu_nano.off)  */
 static GLuint s_prog, s_vao, s_vbo, s_fbo, s_colTex, s_depTex, s_palTex;
 #define TAGPU_SS_MAX 4                 /* the most we will supersample by (G17b) */
-static int    s_devres = 1;            /* the world at device res (tagpu_devres.off) */
+static int    s_devres = 0;            /* the world at device res — OPT IN, tagpu_devres.on */
+static int    s_devresFailed = 0;      /* the driver refused the supersampled target: stay down */
 static GLuint s_fogTex, s_fogLutTex, s_cprog, s_cvao, s_cvbo;
 static GLuint s_fbo2, s_colTex2, s_depTex2, s_dprog;
 static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
@@ -769,6 +770,19 @@ static void fbo_size(int w, int h, int ss)
     s_fboW = w; s_fboH = h; s_fboSS = ss;
     { char b[96]; _snprintf(b, sizeof b, "native: FBO %dx%d ss=%d status=%x/%x",
                             w, h, ss, st, st2); nlog(b); }
+    /* An incomplete SUPERSAMPLED target is survivable only while something
+       still resolves it: `devres` composites straight out of it, so an FBO the
+       driver refused (a 4x buffer is 4096x3072 here) would put a black world on
+       the screen for the rest of the session. The size is cached either way, so
+       this is not retried per frame; devres simply stands down and the ordinary
+       resolve path — which composites the 1x target — carries the frame.
+       (The landing review's point: nothing else notices a failed allocation.) */
+    if (ss > 1 && st2 != GL_FRAMEBUFFER_COMPLETE && !s_devresFailed) {
+        s_devresFailed = 1;            /* a LATCH: the poll below re-reads the trigger every 500 ms
+                                          and would otherwise switch it straight back on */
+        s_devres = 0;
+        nlog("native: supersampled FBO incomplete — devres off, the resolve path carries the frame");
+    }
 }
 
 static int name_ieq(const char* a, const char* b)
@@ -2039,10 +2053,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             s_armed = 1;
         }
         s_ss     = (GetFileAttributesA("tagpu_ss.off")     == INVALID_FILE_ATTRIBUTES);
-        /* the A/B for the device-resolution world: off = resolve to the game's
-           resolution and let the composite stretch it, which is what every
-           build before G17b did */
-        s_devres = (GetFileAttributesA("tagpu_devres.off") == INVALID_FILE_ATTRIBUTES);
+        /* THE DEVICE-RESOLUTION WORLD IS OPT-IN, and the reason is the selection
+           rects. The comment by the rect draw records the measurement: the
+           driver clamps an aliased GL line to one pixel, so a line in an
+           ss-times buffer is one SUPERSAMPLE wide and resolves to a half-lit
+           smear — which is exactly why `selAt1x` draws them into the 1x FBO
+           after the box-downsample instead. Under devres there is no such
+           downsample, so the rects would reach the screen thinner and dimmer
+           than the engine's (about 0.75 of a device pixel at k = 1.5) while
+           everything else got sharper. Two landing reviewers found this
+           independently. `tagpu_devres.on` is how it was measured; making it
+           the default waits on drawing the rects as real geometry with a
+           width, which is its own piece of work. */
+        s_devres = !s_devresFailed &&
+                   (GetFileAttributesA("tagpu_devres.on") != INVALID_FILE_ATTRIBUTES);
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
         s_posefix = (GetFileAttributesA("tagpu_posefix.off") == INVALID_FILE_ATTRIBUTES);
@@ -2552,6 +2576,40 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             }
         }
     }
+    /* THE WORLD AT THE DEVICE'S RESOLUTION (G17b, gui-renderer.md 13.1).
+       Until now the supersampled buffer was always box-resolved back down to
+       the GAME resolution and the composite then stretched that into the
+       letterboxed viewport -- so at k > 1 the extra samples were thrown away
+       and the world reached the screen at the engine's resolution, upscaled.
+       When the viewport is wider than the engine's screen, pick `ss` to reach
+       the device resolution instead and composite from the supersampled buffer
+       directly, skipping the resolve.
+
+       DECIDED HERE, ABOVE `fv`, AND NOT LOWER DOWN. Every pass that draws into
+       this frame has to agree about how many samples a game pixel is: the fx
+       and marker passes take it from `fv.ss` and the hires pass from `hv.ss`,
+       and `TAGPU_GLSL_SCAF_TEST` divides gl_FragCoord by it to find the game
+       pixel. The first cut of this raised `ss` AFTER `fv.ss` was set, so at
+       ceil(k) > 2 they disagreed and the scaffold test addressed a texel 1.5x
+       out (found by the landing review; invisible at k = 1.5, where ceil(k) is
+       2 and the two happen to match).
+
+       AT k = 1 NONE OF THIS APPLIES -- `devres` stays 0, `ss` stays 2, the
+       resolve runs and the composite reads the same texture it always did, so
+       every measurement taken at 1:1 (the parity md5 included) is untouched.
+       Past TAGPU_SS_MAX the source would fall BELOW the destination and the
+       composite would blur it, so devres is refused there rather than capped
+       into a stretch. */
+    int ss = s_ss ? 2 : 1;
+    int devres = 0;
+    if (s_ss && s_devres && f->vp_w > gw && gw > 0) {
+        int need = (f->vp_w + gw - 1) / gw;          /* ceil(vp_w / gw) = ceil(k) */
+        if (need <= TAGPU_SS_MAX) {
+            if (need > ss) ss = need;
+            devres = 1;
+        }
+    }
+
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
     int nfx = 0, nfeat = 0, nterr = 0, nmark = 0;
@@ -2559,7 +2617,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.ta = ta; fv.eyeX = eyeX; fv.eyeY = eyeY;
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.evpL = evpL; fv.evpT = evpT; fv.evw = evw; fv.evh = evh;
-        fv.gw = gw; fv.gh = gh; fv.ss = s_ss ? 2 : 1; fv.fogMode = fogMode;
+        fv.gw = gw; fv.gh = gh; fv.ss = ss; fv.fogMode = fogMode;
         fv.zoom = s_zoom;
         fv.zoomCx = (float)vpL + (float)vw * 0.5f;
         fv.zoomCy = (float)vpT + (float)vh * 0.5f;
@@ -2883,27 +2941,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         nslant++;
     }
     sfirst[nu] = nv;
-    int ss = s_ss ? 2 : 1;
-    /* THE WORLD AT THE DEVICE'S RESOLUTION (G17b, gui-renderer.md 13.1).
-       Until now the supersampled buffer was always box-resolved back down to
-       the GAME resolution and the composite then stretched that into the
-       letterboxed viewport -- so at k > 1 the extra samples were thrown away
-       and the world reached the screen at the engine's resolution, upscaled.
-       When the viewport is wider than the engine's screen, pick `ss` to reach
-       the device resolution instead and composite from the supersampled buffer
-       directly, skipping the resolve. `ceil(k)` is enough: the composite
-       samples with GL_LINEAR, so a source at or above the destination is a
-       downsample, never a stretch.
-       AT k = 1 NONE OF THIS APPLIES -- `devres` stays 0, `ss` stays 2, the
-       resolve runs and the composite reads the same texture it always did, so
-       every measurement taken at 1:1 (the parity md5 included) is untouched. */
-    int devres = 0;
-    if (s_ss && s_devres && f->vp_w > gw && gw > 0) {
-        int need = (f->vp_w + gw - 1) / gw;          /* ceil(vp_w / gw) = ceil(k) */
-        if (need > ss) ss = need;
-        if (ss > TAGPU_SS_MAX) ss = TAGPU_SS_MAX;    /* fill rate and VRAM, not correctness */
-        devres = 1;
-    }
 
     /* the replacement pass gets the same frame it would have drawn into here:
        same FBO, same projection and depth scale, same scaffold, same fog grid,

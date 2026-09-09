@@ -247,6 +247,12 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
     if (code & TAGPU_M_DEV)
     {
         code &= ~TAGPU_M_DEV;
+        /* DEV is an ABSOLUTE client point by definition, so combining it with
+           MOVEREL is meaningless — the conversion would subtract the viewport
+           origin from a delta and then add the cursor. Nothing does it today;
+           it is refused rather than left latent, because the header invites
+           the flag to be OR'd into any code (both landing reviewers). */
+        if (code == TAGPU_M_MOVEREL) return;
         if (!(gx < 0 && gy < 0))
             mouse_client_to_game(gx, gy, &gx, &gy);
     }

@@ -527,9 +527,14 @@ class Walk:
                           "hit": hit,
                           "heartbeat": hb, "zoom": self.zoom_level() if (self.parity and in_game) else None})
         kstr = f"{hit['k']:.4f}" if hit.get("k") else "-"
-        extra = (f" | hit: k={kstr} gadgets={hit['n']} MISS={hit['miss']}"
-                 f"{' [' + hit['names'] + ']' if hit['miss'] else ''} drift={hit['drift']}px"
-                 f" | parity: differing={parity.get('differing', '-')} vpdiff={parity.get('vpdiff', '-')}"
+        # the hit half prints on EVERY walk — it costs a snapshot whether or not
+        # `--layer` is on, and a census-only run that paid for it and showed
+        # nothing was what the landing review caught
+        hitstr = (f" | hit: k={kstr} gadgets={hit['n']} MISS={hit['miss']}"
+                  f"{' [' + hit['names'] + ']' if hit['miss'] else ''}"
+                  f"{' degenerate=' + str(hit['degen']) if hit['degen'] else ''}"
+                  f" drift={hit['drift']}px")
+        extra = (f" | parity: differing={parity.get('differing', '-')} vpdiff={parity.get('vpdiff', '-')}"
                  f"/{parity.get('vpui', '-')} holes={parity.get('holes', '-')}"
                  f" {parity.get('bbox', '')}{parity.get('vpbbox', '')}"
                  f"{' self=' + str(parity['selfdiff']) if 'selfdiff' in parity else ''}"
@@ -537,7 +542,7 @@ class Walk:
                  f" overflows={hb.get('overflows', '-')} stalls={hb.get('stalls', '-')} lost={hb.get('lost', '-')}"
                  f" twins={hb.get('twins', '-')} atlas={hb.get('atlas', '-')} pal={hb.get('palchg', '-')}/{hb.get('paldiff', '-')}" if parity else "")
         print(f"  {label:14s} {screen:40s} flips={summary['flips']:4d} changed={summary['changed']:7d} "
-              f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{extra}", file=sys.stderr)
+              f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{hitstr}{extra}", file=sys.stderr)
 
     def stop_loading(self, label, timeout=150.0):
         """The loading screen, held under strict. It is presented exactly ONCE: the game

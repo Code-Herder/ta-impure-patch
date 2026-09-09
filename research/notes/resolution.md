@@ -227,9 +227,9 @@ binary (full-image scan of the displacements).
 ### 3.1b Every consumer of the DESIRED pair in the game-entry path [BINARY-VERIFIED 2026-09-09, phase 2 / G17b]
 
 The full-image scan finds the displacements `+0x37F1B` (W) and `+0x37F1F` (H)
-**19 times each**. Six of those are the game-entry path inside `0x497F40`, and
-they are the complete set of places the desired mode is *consumed* on the way to
-a running game — which is what phase 2 has to redirect if the engine is to run
+**19 times each**. **Eight** of those are the game-entry path inside `0x497F40`,
+and they are the complete set of places the desired mode is *consumed* on the way
+to a running game — which is what phase 2 has to redirect if the engine is to run
 at `window / k` (GL UI renderer §13.1):
 
 | VA | instruction | what it does |
@@ -238,12 +238,24 @@ at `window / k` (GL UI renderer §13.1):
 | `0x4981B8` | `mov edx,[eax+0x37F1F]` → `mov [eax+0x37E23],edx` | desired H becomes the **logical** screen H |
 | `0x49836D` | `cmp eax,[ecx+0x37F1B]` after `0x4B6700()` | "is the physical W already right?" — `jne 0x49838C` |
 | `0x498380` | `cmp eax,[ecx+0x37F1F]` after `0x4B6710()` | the same for H |
-| `0x4983BF` | `mov ecx,[eax+0x37F1B]` | W pushed for the `SetWindowPos` + `NewTAScreen` pair |
-| `0x4983B9` | `mov edx,[eax+0x37F1F]` | H, pushed first |
+| `0x4983BF` | `mov ecx,[eax+0x37F1B]` | W for **`SetWindowPos`** alone (`call [0x4fc2f0]` at `0x4983D1`) |
+| `0x4983B9` | `mov edx,[eax+0x37F1F]` | H for the same call, pushed first |
+| `0x4983E2` | `mov edx,[eax+0x37F1B]` | W for **`NewTAScreen`** (`call 0x4B5940` at `0x4983EA`) |
+| `0x4983DC` | `mov ecx,[eax+0x37F1F]` | H for the same call, pushed first |
 
 So §3.1's rect and every dimension §3.2 derives come from `0x4981A7`/`0x4981B8`
-alone; the physical switch is decided at `0x49836D`/`0x498380` and performed with
-`0x4983BF`/`0x4983B9`.
+alone; the physical switch is decided at `0x49836D`/`0x498380`, the window is
+resized from `0x4983BF`/`0x4983B9` and **the mode itself is set from the separate
+pair `0x4983E2`/`0x4983DC`**.
+
+> **Corrected 2026-09-09 by a landing reviewer, and it matters.** This table
+> first listed six sites and glossed `0x4983BF`/`0x4983B9` as "pushed for the
+> `SetWindowPos` + `NewTAScreen` pair". They are not a pair: the disassembly
+> reloads `main` at `0x4983D7` and reads both fields **again** at
+> `0x4983DC`/`0x4983E2` for `NewTAScreen`. An implementation that redirected only
+> the six would have resized the window and then handed `NewTAScreen` the
+> player's unmodified mode — the one read that actually sets the physical
+> screen. Verified against the pristine exe.
 
 **The persistence hazard, and why the desired pair must not simply be
 overwritten** [MEASURED 2026-09-09]. `REGISTRY_SaveSettings 0x430F00` writes back

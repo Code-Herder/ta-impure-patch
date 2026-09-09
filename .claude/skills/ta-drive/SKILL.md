@@ -1371,9 +1371,13 @@ tools/tacli ui <i> click SINGLE --device                   # aim where the gadge
 - **Do not walk cycles at 1280x720.** Leaving a game at that mode crashes in the level teardown —
   at k = 1 too, so it is the mode and not the scaling ([resolution](resolution.html) §3.1d).
   `--res 1024x768 --window 1536x1152` is k = 1.5 on a mode with clean teardowns on record.
-- **The world is drawn at the device's resolution since G17b**: `ss` follows `ceil(k)` and the
-  box-resolve to game resolution is skipped, so the composite downsamples rather than stretching.
-  `tagpu_devres.off` is the A/B; the native log line carries `devres=` beside `ss=`.
+- **The world can be drawn at the device's resolution since G17b, and it is OPT-IN**: arm
+  `tagpu_devres.on` and `ss` follows `ceil(k)` with the box-resolve to game resolution skipped,
+  so the composite downsamples rather than nearest-stretching. The native log line carries
+  `devres=` beside `ss=`. It is not the default because a selection rect drawn in an `ss` buffer
+  is one *supersample* wide (the driver clamps aliased line width to 1), which under `devres`
+  reaches the screen thinner and dimmer than the engine's — that wants the rects drawn as real
+  geometry first.
 
 ### The Q2 diff — is the restored UI right? (G15e)
 

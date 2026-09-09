@@ -57,8 +57,17 @@ int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
         y = (DWORD)((cy - g_ddraw.render.viewport.y) * g_ddraw.mouse.unscale_y);
     }
 
-    x = min(x, (int)g_ddraw.width - 1);
-    y = min(y, (int)g_ddraw.height - 1);
+    /* The clamp keeps the ORIGINAL unsigned comparison. `g_ddraw.width` is a
+       DWORD and the inline version in wndproc promoted `x` to unsigned against
+       it, so before the first dd_SetDisplayMode (width 0) the result was 0, not
+       -1. An `(int)` cast here would hand back -1, which deliver_mouse re-reads
+       as TAGPU_M_HERE and wndproc stores as 0xFFFFFFFF (both landing reviewers
+       spotted the difference). Guarded rather than cast so the degenerate state
+       cannot produce a negative. */
+    if (g_ddraw.width  && x > (int)g_ddraw.width  - 1) x = (int)g_ddraw.width  - 1;
+    if (g_ddraw.height && y > (int)g_ddraw.height - 1) y = (int)g_ddraw.height - 1;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
 
     if (gx) *gx = x;
     if (gy) *gy = y;
