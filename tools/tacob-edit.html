@@ -110,16 +110,16 @@
     <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
   </select>
   <select id="view3d" title="camera. The presets are ta3do's standard views and are relative to the unit's front, so they track its heading; a drag returns to `free`.">
-    <option value="free" selected>free</option>
+    <option value="free">free</option>
     <option value="front">front</option>
-    <option value="side">side</option>
+    <option value="side" selected>side</option>
     <option value="back">back</option>
     <option value="top">top</option>
     <option value="quarter">quarter</option>
   </select>
   <select id="path" title="the director's motion sketch. `shuttle` is the class's own — for ground units it walks a short leg, STOPS for a second and flips its heading 180 degrees in one tick, which is right for the trace fixtures and useless for judging a walk. `loop` walks a wide circle: never stops, never snaps.">
-    <option value="loop" selected>loop</option>
-    <option value="forward">walk forward</option>
+    <option value="forward" selected>walk forward</option>
+    <option value="loop">loop</option>
     <option value="">shuttle (the fixtures' path)</option>
   </select>
   <select id="posemode" title="smooth-motion.md gate 0 — does interpolating COB piece poses look better than the authored stepping?">
@@ -211,7 +211,7 @@ let state = null, pieceNodes = [], head = 0, scrubbing = false, live = true;
    blend differs, which is what makes this a test of interpolation and not of
    timing. */
 const SIM_RATE = 30, PLAY_LAG = 5, RING_KEEP = 120, BACKFILL_MAX = 8;
-let ring = new Map(), ringTop = -1, playTick = -1, lastRAF = 0, rateAdj = 1;
+let ring = new Map(), ringTop = -1, playTick = -1, lastRAF = 0, rateAdj = 1, lastShown = -1;
 let pieceNodesB = [], abGap = 0;
 let traceSeen = 0, traceText = [], tab = 'state';
 
@@ -378,7 +378,8 @@ function applyWorld(frame, next, u) {
     fx.add(dot);
   }
   $('hud').textContent =
-    `tick ${frame.tick}   records ${frame.running}/8   trace ${frame.trace}\n` +
+    `tick ${frame.tick}   records ${frame.running}/8   trace ${frame.trace}   ` +
+    `path ${$('path').selectedOptions[0].textContent}\n` +
     `unit  (${(w.pos[0] / FIXED).toFixed(0)}, ${(w.pos[1] / FIXED).toFixed(0)}, ` +
     `${(w.pos[2] / FIXED).toFixed(0)})  heading ${w.body[1]}`;
   drawThreads(frame);
@@ -438,7 +439,7 @@ function stepPlayback(now) {
        the per-frame advance stays flat because rateAdj moves slowly. */
     const drift = (ringTop - PLAY_LAG) - playTick;
     if (drift > 15 || drift < -15) {
-      playTick = Math.max(lo, ringTop - PLAY_LAG);
+      playTick = Math.max(lo, lastShown, ringTop - PLAY_LAG);   // never backwards
       rateAdj = 1;
     } else {
       rateAdj += drift * 0.0008;
@@ -449,7 +450,18 @@ function stepPlayback(now) {
   }
   if (playTick < lo) playTick = lo;
   if (playTick > ringTop) playTick = ringTop;         // safety, not the normal path
-  const base = Math.floor(playTick);
+  /* Monotonic by construction: the displayed tick never decreases inside a run,
+     so no hiccup, resync or missing frame can make the unit walk backwards. If
+     the frame under playTick is missing we move FORWARD to the newest pair the
+     ring actually holds, never back. */
+  if (playTick < lastShown) playTick = lastShown;
+  let base = Math.floor(playTick);
+  if (!ring.has(base)) {
+    let snap = ring.has(ringTop - 1) ? ringTop - 1 : ringTop;
+    if (snap > base) { playTick = snap; base = snap; }
+    else return;                       // nothing newer to show; hold this frame
+  }
+  lastShown = playTick;
   const a = frameAt(base), b = frameAt(base + 1);
   if (!a) return;
   const u = b ? playTick - base : 0;
@@ -837,13 +849,18 @@ async function poll() {
         /* Backfill the ticks the 66 ms poll stepped over, so no keyframe is
            missed -- see the note on the ring above. A restart moves head
            backwards, which resets the ring rather than backfilling into it. */
-        if (ringTop >= 0 && head < ringTop) { ring.clear(); ringTop = -1; playTick = -1; }
-        if (ringTop >= 0 && head - ringTop <= BACKFILL_MAX + 1) {
+        /* Only a genuine restart (head moved BACKWARDS) resets the ring. A gap
+           does not: wiping the ring on a slow poll left playTick pointing into
+           a hole, so nothing rendered until frames refilled and playback then
+           resumed EARLIER than it froze -- a pause followed by the unit
+           teleporting backwards, once per hiccup. */
+        if (ringTop >= 0 && head < ringTop) { ring.clear(); ringTop = -1; playTick = -1; lastShown = -1; }
+        if (ringTop >= 0 && head > ringTop) {
           const want = [];
-          for (let t = ringTop + 1; t < head; t++) want.push(t);
+          for (let t = ringTop + 1; t < head && want.length < BACKFILL_MAX; t++) want.push(t);
           const got = await Promise.all(want.map((t) => api('/pose?tick=' + t)));
           for (const gap of got) if (!gap.error) ring.set(gap.tick, gap);
-        } else if (ringTop >= 0) { ring.clear(); playTick = -1; }
+        }
         ring.set(frame.tick, frame);
         ringTop = frame.tick;
         for (const t of ring.keys()) if (t < ringTop - RING_KEEP) ring.delete(t);
