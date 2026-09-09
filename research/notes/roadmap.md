@@ -80,6 +80,36 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 
 ### Awaiting review
 
+**The health bar wobbled against the unit under it.** Reported from play: *"when moving the
+commander, I can see the health bar wobble around… not sure if that's stock TA or not?"* It is
+not — stock TA cannot show it. Everything anchored to a unit in our build takes the unit pass's
+interpolated sub-pixel anchor (the body, the selection rect, the unit-anchored order markers),
+but `tagpu_mark.c`'s bar and group-digit gather read the engine's integer world shorts
+directly. That pinned the bar to the **sim** rate while the body glided at **present** rate, so
+the two slid apart by up to a whole sim step of motion, multiplied by the zoom on screen.
+Fixed 2026-09-09 by routing the gather through `tagpu_native_unit_pos()` — the body's own
+anchor, floored exactly where the engine floors its `(s16)` reads, so with no sub-pixel sample
+(unit pass disarmed, or `tagpu_subpix.off`) the arithmetic is unchanged. Bar-against-body
+separation, measured exactly with `tagpu_spxlog.on` on a walking commander at 1920x1080:
+**1.68 px peak-to-peak → 1.00 px at 1x** at TA's normal game speed, **2.95 → 1.00 at
+`gamespeed` 20**, and `zoom` times that on screen (5.77 → 2.00 at 2x). The old error was
+proportional to how far a unit moves per sim step, so it grew with unit speed and game speed;
+the new residual is the sub-pixel floor and is bounded at one unzoomed pixel. Corroborated from
+60 fps video by the same instrument in every leg — the fraction of presented frames on which
+the selection box does not move reads 51.2 % stock, 2.1 % before, 50.9 % with `subpix.off` —
+and the bar's 30 Hz alternation against the box falls to 0.616 px, at stock's own 0.658 px
+measurement floor. Details and the full table: [gpu-status](gpu-status.html) §2.2.
+
+**The reference setup was running at double game speed.** Found while measuring the above:
+`gamespeed` was **20**, not TA's normal 10. It lives in `user.reg`, which the template prefix
+and all 58 instance prefixes share as **one inode** — the same trap already documented for
+`Gamma` — so one session pressing `+` leaves every later launch of every instance at that
+speed, and a running instance writes its own copy back at exit. Set back to 10 on 2026-09-09.
+It multiplies the tick rate (`main+0x38A47`: 30/s at 10, 60/s at 20) while the picture still
+changes 30 times a second, so the in-game clock (`tick ÷ 30`) was reading **2× real time**.
+Read it before trusting any measurement that is a rate, a duration, or a distance per second:
+[exe-reverse-engineering](exe-reverse-engineering.html) §"The engine's rates".
+
 **G13q — the left mouse button stopped issuing orders.** Reported from play: *"when I have a
 unit selected, right click/left click both issue a move order. I believe that was not the
 original game behavior."* It was not: at `Interface Type = 1` — right-mouse orders, the value

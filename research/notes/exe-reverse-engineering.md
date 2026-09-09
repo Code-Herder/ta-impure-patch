@@ -235,6 +235,50 @@ cycles for water", which was never measured and is wrong; the pixel half of the 
 | Spatial index | `SortGridBucket`, stride `0x0A`, list head at +0x06; buckets ptr at `0x1429F`, cols at `0x142A3`, plus a dedicated off-map bucket at `0x142B7`. |
 | Projectiles | Count at `TAdynmemStruct+0x141F3`; **each projectile is `0x6B` (107) bytes**. |
 
+## The engine's rates — sim tick, render cadence, and what `gamespeed` multiplies
+
+[MEASURED 2026-09-09, this project — a live skirmish on Two Continents, one walking ARMCOM,
+camera pinned, 1920x1080. Every number below is a rate against the wall clock.]
+
+**At TA's normal game speed the sim runs at 30 Hz and the tick counter is the sim tick.**
+`main+0x38A47` advanced **29.81/s** while the unit's 16.16 position advanced **29.85/s** —
+1.00 ticks per position update. That is TADR's `GameTime == 6 * 30` and the `÷30` the
+`+clock` handler applies (§"the `+clock` cheat"), both confirmed.
+
+**The world only changes 30 times a second, and so does the picture.** With the present cap
+at 60 fps, **49.9 %** of consecutive presented frames (601 sampled, world viewport, stock
+renderer) are **byte-identical** to their predecessor: the engine redraws the same state.
+So the useful frame rate of the original renderer is the sim rate; presenting faster only
+duplicates. The renderer itself has no internal cap — with `maxfps 0` the same scene
+presented **915 fps**, almost all of it repeats.
+
+**The sim is paced by the wall clock, not by the frame loop.** The commander walked the same
+world units per second under a 30 fps cap and a 60 fps cap, and the tick counter held ~60/s
+at present rates from 30 to 915 fps. It is a fixed timestep that *falls behind* when the loop
+is starved: at a 15 fps cap (9.4 fps actual) the tick managed only 47/s.
+
+**`gamespeed` (registry `HKCU\…\Total Annihilation\gamespeed`, and TA's own `+`/`-` keys)
+multiplies the TICK rate, not the update rate.** Measured on the same walk:
+
+| `gamespeed` | tick rate | unit position updates | ticks per update |
+|---|---|---|---|
+| 10 (TA normal) | 29.81 /s | 29.85 /s | 1.00 |
+| 20 | 60.49 /s | 29.89 /s | 2.02 |
+
+So at 20 the picture still changes 30 times a second; each change is a bigger step, and the
+tick counter runs at double rate. **Two consequences.** The in-game clock is `tick ÷ 30`, so
+at `gamespeed` 20 **Game Time runs at exactly 2× real time** — read off the screen:
+`00:00:16` at tick 489, `00:01:17` at tick 2319, 30.6 real seconds apart. And any tool that
+treats `main+0x38A47` as seconds×30, or as a sim-step count, is only right at `gamespeed` 10.
+
+**`gamespeed` is shared machine state, exactly like `Gamma`.** It lives in `user.reg`, which
+the template prefix and every instance hold as **one inode** (`clone_prefix` is `cp -al`;
+measured 2026-09-09: 101 links). A running instance keeps its own copy and writes it back at
+exit, so a session that presses `+` leaves every later launch at that speed. It was found at
+**20** on 2026-09-09 and set back to 10; **read it before trusting any timing measurement**,
+and note that a walking-unit artifact measured at 20 is twice the size a player at normal
+speed would see.
+
 ## The camera module — mapped by us
 
 [MEASURED 2026-09-03, this project — disassembly of the pristine build plus live reads, not

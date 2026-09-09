@@ -319,6 +319,26 @@ game; the registry is only where TA saves the last one. So:
 - Game speed: `keys <name> plus` / `minus` (TA's own feature, up to +10, and negative
   below normal — invaluable for catching fast events or slowing them for capture).
 
+**The game speed is SHARED STATE, and it is not reset by a launch.** `gamespeed` lives in
+`HKCU\Software\Cavedog Entertainment\Total Annihilation`, i.e. in `user.reg` — which the
+template prefix and all 58 instance prefixes hold as **one inode** (`clone_prefix` is
+`cp -al`; 101 links, measured 2026-09-09), exactly like `Gamma`. A running instance keeps
+its own copy and writes it back at exit, so one session pressing `+` silently leaves every
+later launch of every instance at that speed. **It was found at 20 — double speed — on
+2026-09-09** and set back to 10.
+
+```bash
+WINEPREFIX=<inst>/prefix wine reg query \
+  "HKCU\Software\Cavedog Entertainment\Total Annihilation" /v gamespeed    # 0xa = TA normal
+```
+
+Read it before any measurement whose answer is a rate, a duration or a distance-per-second.
+`gamespeed` multiplies the **tick** rate (`main+0x38A47`: 30/s at 10, 60/s at 20) while the
+picture still changes 30 times a second — units simply take bigger steps — so at 20 the
+in-game clock (`tick ÷ 30`) reads **2× real time**, and any artifact whose size depends on
+how far a unit moves per sim step is twice what a player at normal speed sees. Full numbers:
+`exe-reverse-engineering.md` §"The engine's rates".
+
 ## Driving the UI (menus, options, build panel)
 
 `tacli ui` is a Playwright-style layer over TA's own gadget tree: **snapshot the screen,
@@ -527,7 +547,9 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
   claiming the crash is yours.
 - **A game whose sim tick stops while every thread sleeps, with no `ErrorLog.txt`, is not
   paused — it may be a wild jump.** `tacli peek <i> '*0x511DE8+0x38A47:4'` twice, four
-  seconds apart, is the test (the sim tick; 30 per second); `tacli shot` failing and the
+  seconds apart, is the test (the sim tick; **30 per second at `gamespeed` 10, TA's normal —
+  the counter scales with `gamespeed`, so it reads 60/s at 20**, see *The game speed is
+  shared state* below); `tacli shot` failing and the
   periodic `native:`/`reclaim:` lines stopping say the render thread went with it, and every
   `TotalA.exe` thread reading `anon_pipe_read` in `/proc/<pid>/task/*/wchan` is a wineserver
   wait, not a spin. Measured 2026-09-07: a call-site redirect whose rel32 was computed against

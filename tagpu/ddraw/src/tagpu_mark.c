@@ -27,11 +27,22 @@
    get a bar, in either version.
 
    Sub-pixel: the engine reads the ROSTER SHORTS (the high words of its 16.16
-   positions), so a bar steps once per sim tick while the native unit pass
-   interpolates its body between ticks. We keep the engine's arithmetic rather
-   than smoothing it — a bar is 35 px of flat colour over a unit that moves a
-   couple of pixels per frame, and the alternative is a second, differently
-   sourced anchor that can disagree with the body's.
+   positions), so ITS bar steps once per sim tick — and so did ours until
+   2026-09-09, while the native unit pass interpolated the body between ticks.
+   That was wrong, and visibly so: the bar and the body slid against each other
+   by up to a whole tick of motion, 2.95 px peak-to-peak at 1x on a walking
+   commander and `zoom` times that on screen (5.77 px at 2x), which is the
+   health-bar wobble. Stock TA cannot show it, because there the bar and the
+   body are the same shorts. The gather now takes `tagpu_native_unit_pos()` —
+   the body's own anchor, the same one the selection box and the unit-anchored
+   order markers already use — and floors it exactly where the engine floors
+   its s16 reads, so with no sub-pixel sample the arithmetic is unchanged.
+   [The note here used to argue the other way: "a bar is 35 px of flat colour
+   over a unit that moves a couple of pixels per frame, and the alternative is
+   a second, differently sourced anchor that can disagree with the body's."
+   The second half had it backwards — `tagpu_native_unit_pos` IS the body's
+   anchor, so it is the one source that cannot disagree — and the first half
+   was a guess that the measurement did not support.]
 
    THE BUILD CURSOR and the drag band box are re-drawn for the same reason,
    and it is the reason a captured layer can never fix them: the capture is
@@ -73,6 +84,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
+#include "tagpu_native.h"
 #include "tagpu_order.h"
 #include "tagpu_text.h"
 #include "tagpu_glsl.h"
@@ -677,22 +689,60 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         unsigned st = *(const unsigned*)(u + U_STATE);
         const char* def;
         int hp, maxhp, x, y, third, w, col;
+        int px, pd, pa;                 /* world x, map depth, altitude        */
+        float fpx, fpa, fpd;
         float wx, wz;
         if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
         if (*(const unsigned char*)(u + U_OWNER) != (unsigned)watched) continue;
 
-        x = *(const short*)(u + U_XPOS) - v->eyeX + 0x80;
-        y = *(const short*)(u + U_YPOS) - v->eyeY
-            - (*(const short*)(u + U_ZPOS) >> 1) + 0x20 + 0x0A;
+        /* THE ANCHOR IS THE BODY'S, NOT THE ENGINE'S SHORTS. `tagpu_native_unit_pos`
+           hands back the very sample the unit pass drew this unit from, so the bar
+           cannot disagree with the model it sits over. Reading the shorts here
+           instead — which is what this loop did until 2026-09-09 — pinned the bar to
+           the SIM rate while the body glided at present rate, and the two then slid
+           against each other by up to a whole tick of motion every tick: measured on
+           a walking commander at 1920x1080, 0.561 px rms and 2.95 px peak-to-peak at
+           1x, and exactly `zoom` times that on screen, because bars are emitted
+           unzoomed and the vertex shader scales them (5.77 px p2p at 2x). That is the
+           health-bar wobble; the selection box never had it, because
+           `tagpu_native.c`'s selbox has always taken this same anchor.
+
+           THE CALL IS SAFE HERE BY CONSTRUCTION, not by timing: `tagpu_mark_gather`
+           is called from inside the unit pass's own gather (`tagpu_native.c`), on the
+           same thread, in the same frame, AFTER the walk that fills the sub-pixel
+           table — and the accessor refuses any sample that does not still describe
+           this unit's current 16.16 position, so a recycled slot falls through.
+
+           WHY floorf AND NOT A ROUND. The engine reads `(s16)` of its 16.16, i.e. a
+           floor, and truncates the altitude a second time with `sar 1`; both are
+           reproduced term for term below. So with no sample — the unit pass disarmed,
+           or `tagpu_subpix.off` — every value here is bit-identical to what this loop
+           produced before, and the fix cannot move a bar that was not moving. What
+           remains is the floor itself: the body is drawn at the float, the bar and
+           the selection box at its floor, so both sit within 1 px of it and, more to
+           the point, agree with EACH OTHER exactly. */
+        if (tagpu_native_unit_pos(u, &fpx, &fpa, &fpd)) {
+            px = (int)floorf(fpx);      /* out x = world x                     */
+            pa = (int)floorf(fpa);      /* out y = ALTITUDE  (U_ZPOS)          */
+            pd = (int)floorf(fpd);      /* out z = map depth (U_YPOS)          */
+        } else {
+            px = *(const short*)(u + U_XPOS);
+            pa = *(const short*)(u + U_ZPOS);
+            pd = *(const short*)(u + U_YPOS);
+        }
+
+        x = px - v->eyeX + 0x80;
+        y = pd - v->eyeY - (pa >> 1) + 0x20 + 0x0A;
         /* cull to the ZOOM's rect, not the engine's: at zoom < 1 the frame
            shows units the engine's own HotUnits list has already dropped */
         if (x + 0x12 < v->evpL || x - 0x12 > v->evpL + v->evw ||
             y + 3 < v->evpT || y - 3 > v->evpT + v->evh) continue;
 
         /* the fog is sampled at the unit's own anchor, in the projected world
-           space the engine's screen grid is built in (tagpu_fx.h) */
-        wx = (float)*(const short*)(u + U_XPOS);
-        wz = (float)(*(const short*)(u + U_YPOS) - (*(const short*)(u + U_ZPOS) >> 1));
+           space the engine's screen grid is built in (tagpu_fx.h) — the same
+           anchor the bar is drawn at, so the two describe one point */
+        wx = (float)px;
+        wz = (float)(pd - (pa >> 1));
 
         /* THE GROUP DIGIT, `0x469CD1..0x469CF9`. Two things about it are the
            engine's and neither is obvious: the squad tag is tested as a DWORD

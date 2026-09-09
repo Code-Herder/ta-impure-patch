@@ -167,6 +167,34 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x485070` | `GetPosHeight(POS16_16*)` (`ret 4`) | *called by us*, on the render thread — a pure read of the height grid, which is what makes a range circle follow the terrain |
 | `0x4CCF60` | the glyph blitter (**cdecl**, 9 args, base and pitch taken directly) | *called by us*, on the present thread, once per distinct string — it reads the font object and writes our atlas and touches no engine state at all (`tagpu_text.c`) |
 
+**Everything anchored to a unit takes the unit pass's sub-pixel anchor — including, since
+2026-09-09, the health bar and the group digit.** `tagpu_native_unit_pos()` returns the very
+sample the body was drawn from this frame, and `tagpu_mark.c` floors it exactly where the
+engine floors its own `(s16)` reads, so with no sample (the unit pass disarmed, or
+`tagpu_subpix.off`) the arithmetic is unchanged. Until that date the bar gather read the
+engine's integer shorts directly, which pinned it to the SIM rate while the body glided at
+present rate: the two slid against each other by up to a whole sim step of motion, and
+because bars are emitted unzoomed and the vertex shader scales them, on screen that is
+`zoom` times the error. **Measured** on a walking commander, 1920x1080, camera pinned, the
+bar-against-body separation in x (`tagpu_spxlog.on`, exact, not pixels):
+
+| | 1x | 2x |
+|---|---|---|
+| before, at TA's normal game speed | 0.354 px rms, **1.68 px p2p** | 0.709 rms, **3.36 p2p** |
+| before, at `gamespeed` 20 (double) | 0.561 px rms, **2.95 px p2p** | 1.080 rms, **5.77 p2p** |
+| after (either speed) | 0.295 px rms, **1.00 px p2p** | 0.591 rms, **2.00 p2p** |
+
+The old error was **proportional to how far the unit moves per sim step**, so it grew with
+unit speed and with `gamespeed`; the new one is the sub-pixel floor and is bounded at one
+unzoomed pixel whatever the unit or the speed. The residual is not zero on purpose: the
+selection rect has always floored the same anchor (below), and a bar drawn at fractional
+coordinates would antialias its edges under `ss` and disagree with the rect. Confirmed from
+video the same way in both builds — the fraction of presented frames on which the selection
+box does not move goes 51.2 % (stock) / **2.1 % (ours, bar on the shorts)** / 50.9 %
+(`subpix.off`), while the bar's own 30 Hz alternation against it falls from 1.033 px to
+0.616 px, at or below stock's own 0.658 px measurement floor. **Stock TA cannot show this
+artifact at all**, because there the bar and the body are the same shorts.
+
 **The selection rect is drawn at 1x, after the downsample, and matches the engine's pixels.**
 Four things had to be right and none of them was ([UI markers](ui-markers.html) §1, all measured
 2026-09-08 against the engine's own rect — `mark.on=noselbox` hands it back while everything
