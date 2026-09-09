@@ -2755,7 +2755,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        building's shadow, the least visible thing to lose. */
     /* Classic++ at `shadows=1` draws neither Classic sub-pass (renderers.md
        2.12): no slant range here, and no silhouette below, except an aircraft's
-       under airshadow=drop -- the one thing that lane borrows from Classic.
+       under airshadow=drop -- the one thing that lane borrows from Classic, and
+       only in the SILHOUETTE pass: an aircraft is never a structure, and this
+       loop zeroes npdSlant whenever `cpp && !hard`, so the slant pass's own
+       copy of that test cannot fire.
        `shadows=2` (HARD, G18b) draws the pair under the switch instead, and the
        depth pass then refuses (tagpu_shadow_begin wants SHADOWS_SOFT outright);
        `shadows=0` draws neither, the aircraft included.
