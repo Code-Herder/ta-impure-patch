@@ -195,11 +195,35 @@ needs.
 
 | gate | asks | how |
 |---|---|---|
-| **0 — taste** | does smoothed TA look better than the authored stepping? | [tacob](tacob-design.md) A/B on ARMPW at 60 fps; **the owner decides, not a measurement** |
+| **0 — taste** | does smoothed TA look better than the authored stepping? | [tacob](tacob-design.md) A/B on ARMPW at 60 fps — **instrument built, §7a; the owner decides, not a measurement** |
 | **1 — coverage** | how often would B fall back? | `tools/cob_lookahead.py` — **run, §5** |
 | **2 — parity** | with the lever off, is output unchanged? | bit-identical `posed_pose` output |
 | **3 — cost** | what does it cost at scale? | `tools/gatec.sh` + `scenarios/walk-gatec.json`, the 200-unit fixture [G16](gpu-posing.md) step 7 built |
 | **4 — sim untouched** | did anything reach the simulation? | `cobtrace` + `posedump` unchanged, lever on and off |
+
+### 7a. Gate 0's instrument — built 2026-09-09
+
+`tools/tacob-edit.html` gained a `posemode` select — **stepped / smooth / A|B side by side** —
+plus a `body` checkbox. Run it with `tools/tacob serve armpw`, press play, pick `A|B`: two copies
+of the model, left stepped and right blended, **driven from one clock and one pair of frames**.
+
+Three things the instrument had to get right, or the comparison would not have been a comparison:
+
+- **The ring is dense.** The page polls every 66 ms against a 30 Hz sim, so head advances about
+  two ticks a poll and drawing head directly *skips keyframes* — which would have flattered
+  interpolation by smoothing over poses it never sampled. Gaps are backfilled and a playback clock
+  walks the ring at the sim rate.
+- **Only the blend differs.** Both models read the same clock and the same frame pair; `stepped`
+  is byte-for-byte what the page did before. The timeline is not a variable.
+- **The shortest arc is not optional.** `[MEASURED]` ARMPW's own walk crosses the TAang seam:
+  at tick 237→238 a piece goes 176.6° → −178.4°, which a naive lerp renders as a **355° spin the
+  wrong way, once per stride**. `alerp` makes it the 5° step it is. Any implementation of §3.4 that
+  skips this will look broken in a way that has nothing to do with the idea being tested.
+
+The `body` checkbox interpolates the unit's *translation and yaw* as well. That is §8, not what the
+pose pass would ship — it defaults on so the leg difference is what you see, and turning it off
+shows the honest result of interpolating pieces alone (smooth legs on a stepping body), which is a
+real risk of §2 landing by itself.
 
 **Order of work.** Gate 0 first, in tacob, before any DLL work: `tacob serve` already runs the
 verified VM and poses the real glTF with one node per piece, so an interpolation toggle in
