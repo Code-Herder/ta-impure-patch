@@ -99,6 +99,8 @@
 #define MM_COMPOSITE   0x142DB          /* the fog+dots composite; non-NULL = built */
 #define MM_VIEWRECT    0x142CB          /* the view box, 4 ints, SCREEN px, edges inclusive */
 #define MM_VIEWCOL     0xDD9            /* its palette index (0x466B50 reads this byte)     */
+#define MM_FOGBASE     0x142DF          /* the base WITH the engine's fog shading            */
+#define MM_SCALEDMAP   0x142E3          /* the same base WITHOUT it                          */
 #define POLL_MS        500
 #define MAX_TWINS      32
 #define ATLAS_DIM      2048
@@ -232,6 +234,13 @@ static int      s_mmNDots;
 static int      s_mmDotsFull;
 static unsigned s_mmDotLost;            /* a dot whose art the atlas would not hold */
 static unsigned s_mmLogged;
+static GLuint   s_mmProg, s_mmEngTex;   /* the masked draw, and the engine's two bases as RG8 */
+static GLint    s_uMmEngSize;
+static int      s_mmEngW, s_mmEngH;
+static unsigned char* s_mmRg;           /* interleave scratch                                  */
+static unsigned s_mmRgCap;
+static unsigned s_mmNoEng;              /* frames the engine's pair could not be read          */
+static unsigned s_mmFogged;             /* engine texels where fogged != unfogged, this frame  */
 
 /* The composite's PIXEL BASE, which is what an op names — `+0x142DB` is the
    OFFSCREEN and its base is field 3 (w, h, pitch, base; CTX_BASE in the hook). */
@@ -314,6 +323,45 @@ static const char* STR_FS =
     "  if (col == uTr) discard;\n"
     "  oIdx = vec4(float(col) / 255.0, 1.0, 0.0, 0.0);\n"
     "  oCol = vec4(0.0); }\n";
+/* THE MINIMAP (13.6, G17e): our 252-px base, MASKED BY THE ENGINE'S OWN FOG.
+
+   THE VISIBILITY DECISION STAYS THE ENGINE'S, which is 13.6's rule for the
+   dots applied to the fog — and it has to be, because §13.6's stated fog
+   source does not exist. The corner-mask grid the world passes hold is built
+   around the eye and covers the VIEWPORT (29x23 cells against a 336x400 map),
+   so it says nothing about the rest of the minimap; and the TNT picture is the
+   whole map with nothing hidden, so a base drawn without fog would show the
+   player terrain they have never explored.
+
+   So the shader compares the engine's two 126-px surfaces: `+0x142DF`, the
+   base with its fog shading, against `+0x142E3`, the same base without. Where
+   they AGREE the engine is showing true terrain and our sharper copy of that
+   same terrain is safe; where they differ the engine is hiding or shading
+   something and its own pixel is used verbatim.
+
+   THE TEST IS OVER A 3x3 NEIGHBOURHOOD, not one texel, and that is the whole
+   safety argument. A shaded pixel can land on the same palette index it started
+   from (the shade is a LUT into a dark-grey ramp, so a pixel already in that
+   ramp maps to itself), and a single-texel test would then let four of OUR
+   sub-texels through — sub-texels taken from the unfogged picture, which may be
+   bright. Requiring the whole neighbourhood to agree costs a one-texel band of
+   the engine's own resolution around every fog edge and cannot leak. */
+static const char* MM_FS =
+    "#version 330 core\n"
+    "in vec2 uv; out vec4 frag;\n"
+    "uniform sampler2D uPic; uniform sampler2D uEng; uniform sampler2D uPal;\n"
+    "uniform ivec2 uEngSize;\n"
+    "void main(){\n"
+    "  ivec2 p = clamp(ivec2(uv * vec2(uEngSize)), ivec2(0), uEngSize - 1);\n"
+    "  bool clean = true;\n"
+    "  for (int dy = -1; dy <= 1; ++dy)\n"
+    "    for (int dx = -1; dx <= 1; ++dx) {\n"
+    "      ivec2 q = clamp(p + ivec2(dx, dy), ivec2(0), uEngSize - 1);\n"
+    "      vec2 e = texelFetch(uEng, q, 0).rg;\n"
+    "      if (abs(e.r - e.g) > 0.5 / 255.0) clean = false;\n"
+    "    }\n"
+    "  float idx = clean ? texture(uPic, uv).r : texelFetch(uEng, p, 0).r;\n"
+    "  frag = vec4(texture(uPal, vec2((idx * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); }\n";
 /* the copy: the source twin's index at (this pixel - offset), coverage 1 */
 static const char* CPY_FS =
     "#version 330 core\n"
@@ -493,7 +541,13 @@ static int init_gl(void)
     s_sharpProg = mkprog(QVS, SHARP_FS);
     s_cursProg  = mkprog(QVS, CURS_FS);
     s_strProg   = mkprog(QVS, STR_FS);
+    s_mmProg    = mkprog(QVS, MM_FS);
     if (s_gl == 2) return 0;
+    glUseProgram(s_mmProg);
+    glUniform1i(glGetUniformLocation(s_mmProg, "uPic"), 0);
+    glUniform1i(glGetUniformLocation(s_mmProg, "uEng"), 1);
+    glUniform1i(glGetUniformLocation(s_mmProg, "uPal"), 2);
+    s_uMmEngSize = glGetUniformLocation(s_mmProg, "uEngSize");
     glUseProgram(s_strProg);
     glUniform1i(glGetUniformLocation(s_strProg, "uGlyph"), 0);
     s_uStrSize = glGetUniformLocation(s_strProg, "uSize");
@@ -1370,10 +1424,70 @@ static void sharp_minimap(const TAGPU_FRAME* f)
        `0x4B95A0`, so the 252x252 square is squashed into an aspect-correct box
        (106x126 on a 336x400 map). Full 0..1 UVs reproduce exactly that. */
     if (s_mmbase) {
+        /* THE ENGINE'S OWN PAIR, this frame: fogged base in R, unfogged in G.
+           Both are 8bpp OFFSCREENs (w, h, pitch, base as four ints), read here
+           on the render thread while the game thread may be rewriting them —
+           the same standing as the fork's own surface upload, and the worst a
+           torn read can do is put one frame's fog against another's. 13 KB. */
+        const int* fo = *(const int* const*)(ta + MM_FOGBASE);
+        const int* so = *(const int* const*)(ta + MM_SCALEDMAP);
+        const unsigned char *fb, *sb;
+        int ew, eh, fp, sp, yy, xx;
+        if (!ptr_ok(fo) || !ptr_ok(so)) { s_mmNoEng++; return; }
+        ew = fo[0]; eh = fo[1]; fp = fo[2]; sp = so[2];
+        fb = (const unsigned char*)(size_t)fo[3];
+        sb = (const unsigned char*)(size_t)so[3];
+        if (ew <= 0 || eh <= 0 || ew > 512 || eh > 512 || so[0] != ew || so[1] != eh ||
+            !ptr_ok(fb) || !ptr_ok(sb)) { s_mmNoEng++; return; }
+        if ((unsigned)(ew * eh * 2) > s_mmRgCap) {
+            free(s_mmRg); s_mmRgCap = (unsigned)(ew * eh * 2) + 4096;
+            s_mmRg = (unsigned char*)malloc(s_mmRgCap);
+            if (!s_mmRg) { s_mmRgCap = 0; s_mmNoEng++; return; }
+        }
+        for (yy = 0; yy < eh; yy++) {
+            const unsigned char* fr = fb + (size_t)yy * fp;
+            const unsigned char* sr = sb + (size_t)yy * sp;
+            unsigned char* d = s_mmRg + (size_t)yy * ew * 2;
+            for (xx = 0; xx < ew; xx++) { d[2 * xx] = fr[xx]; d[2 * xx + 1] = sr[xx]; }
+        }
+        if (!s_mmEngTex) glGenTextures(1, &s_mmEngTex);
+        if (!s_mmEngTex) { s_mmNoEng++; return; }
+        x_glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, s_mmEngTex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        if (ew != s_mmEngW || eh != s_mmEngH) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, ew, eh, 0, GL_RG, GL_UNSIGNED_BYTE, s_mmRg);
+            s_mmEngW = ew; s_mmEngH = eh;
+        } else {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ew, eh, GL_RG, GL_UNSIGNED_BYTE, s_mmRg);
+        }
+        /* how much of the map the engine is hiding right now, in its own
+           texels — the number that says whether a run had any fog to mask at
+           all. A fully-mapped skirmish reads 0 and proves nothing about the
+           mask; a fogged one is the only fixture that tests it. */
+        {
+            int d = 0;
+            for (yy = 0; yy < eh * ew; yy++) if (s_mmRg[2 * yy] != s_mmRg[2 * yy + 1]) d++;
+            s_mmFogged = (unsigned)d;
+        }
+        glUseProgram(s_mmProg);
+        x_glUniform2f(glGetUniformLocation(s_mmProg, "uSize"), (float)s_sharpW, (float)s_sharpH);
+        { GLint es[2]; es[0] = ew; es[1] = eh; x_glUniform2iv(s_uMmEngSize, 1, es); }
+        x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, s_palTex);
+        x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_mmTex);
         quad(v, (float)mx * kx, (float)my * ky,
                 (float)(mx + mw) * kx, (float)(my + mh) * ky, 0.0f, 0.0f, 1.0f, 1.0f);
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
         x_glDrawArrays(GL_TRIANGLES, 0, 6);
+        /* the dots below go back to the sprite program */
+        glUseProgram(s_cursProg);
+        x_glUniform2f(s_uCursSize, (float)s_sharpW, (float)s_sharpH);
+        glUniform1i(s_uCursRestored, 0);
     }
     /* THE ENGINE'S DOTS, ON TOP, AT THE SAME SCALE IT DRAWS THEM. A dot's
        position is in composite pixels and the composite IS the box, so it maps
@@ -1743,7 +1857,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u/%u/%u,dots=%d%s,lost=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u/%u/%u,dots=%d%s,lost=%u,fog=%u/%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, s_palChanges, s_palDiff, s_palDiffAt, s_palSource,
@@ -1756,7 +1870,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                      what `nostring` is A/B'd on (13.4: ~40 bytes where a text op
                      carried ~968) and what §7's cadence note is about */
                   g_guiq.aHead, s_mmDrawn, s_mmSprites, s_mmOther,
-                  s_mmNDots, s_mmDotsFull ? "+" : "", s_mmDotLost, fps);
+                  s_mmNDots, s_mmDotsFull ? "+" : "", s_mmDotLost,
+                  s_mmFogged, (unsigned)(s_mmEngW * s_mmEngH), fps);
         b[sizeof b - 1] = '\0';
         slog(b);
     }
@@ -1771,7 +1886,7 @@ void tagpu_gui_glreset(void)
     s_sharpTex = s_sharpFbo = 0; s_sharpW = s_sharpH = 0; s_sharpOn = 0;   /* the sharp layer died with it */
     s_sharpProg = 0; s_sharpFailed = 0;      /* a new context deserves a fresh try */
     s_cursProg = 0; s_curOwn = 0; s_curFrame = NULL;   /* and the cursor is nobody's until it is re-atlased */
-    s_strProg = 0;
+    s_strProg = 0; s_mmProg = 0; s_mmEngTex = 0; s_mmEngW = s_mmEngH = 0;
     s_mmTex = 0; s_mmGenSeen = 0;       /* the picture's texture died; the BYTES are the hook's */
     tagpu_text_glreset();               /* the glyph atlas's texture id died too; its CELLS are CPU-side */
     tagpu_gaf_atlas_lost(&s_atlas);
