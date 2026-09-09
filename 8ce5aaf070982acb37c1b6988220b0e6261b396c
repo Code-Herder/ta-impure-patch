@@ -1,0 +1,1 @@
+landing-review: model=opus effort=high reviewers=2 range=main..8ce5aaf findings=7 acted=7 rejected=0 date=2026-09-09 (fixes in ef71e9a; the layer shader and the ramp were not touched by them, and the parity identity was re-measured on the final DLL)
