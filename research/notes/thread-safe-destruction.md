@@ -147,6 +147,59 @@ leak if the render thread is stuck), flush the queue while the reader is idle, t
 free normally. The tick detour clears the flag on the next live game. While the flag is set, any
 death frees synchronously, which is safe because the reader is quiesced.
 
+### 6a. The level generation — what the deferral does NOT cover
+
+`[BUILT 2026-09-08]` `FreeObjectState` owns one lifetime: an `Object3do` and the posed vertex
+buffers hanging off it. It does not own the **model templates**. A `Model3DONode` tree is shared
+by every unit of a type, is reached through `main+0x14377` rather than through any unit, and is
+freed — if at all — by the teardown cascade, not by the destructor this module detours. So a
+render-thread cache keyed on a template pointer is *not* protected by any of the machinery above,
+and the next level's allocator may hand the same address to a different model.
+
+`tagpu_reclaim_level_gen()` is the counter that closes it: `InterlockedIncrement` at the **top of
+the pre hook**, before the cascade frees anything and while the reader is already being held out
+of its pass. Unconditional — the `busy` path, which keeps the queue and frees nothing of ours,
+does not protect templates either. A cache stamps its entries with the generation and drops them
+when it changes; the counter never moves on an exe where the teardown could not be hooked, which
+is the behaviour those caches had before it existed.
+
+Its first client is `tagpu_native.c`'s three template caches — `s_aabb` (the whole-tree AABB the
+shadow height rule reads), `s_sbox` (the select box's bounds) and `s_pmap` (glTF piece → engine
+primitive). None of them was dropped by anything before this. Measured on a real teardown
+(surrender → main menu, Two Continents, one ARMCOM selected):
+
+```
+reclaim: level teardown (gen 1): flushed 1 queued object(s), reader idle; the cascade frees synchronously
+native: level 0 -> 1, dropping the template caches: aabb=1 selbox=1 pmap=0
+```
+
+### 6b. **The teardown wrap freezes the game on quit-to-menu** — open, pre-existing
+
+`[MEASURED 2026-09-08]` Surrendering a skirmish (`Tab → EXIT → MAINMENU → CHOICE1`) **hangs the
+game while this module is armed.** The teardown line is written, a few more frames run, and then
+the process stops: no further log output, injected input produces none, every thread parked in a
+wait, no `ErrorLog` — the signature this project's notes give for a wild jump rather than a fault.
+
+| arm | runs | result |
+|---|---|---|
+| reclaim armed (default) | 2 — one on the DLL that adds the generation, one on the build before it | **freeze**, both |
+| `tagpu_reclaim.off` | 2 | reaches `MAINMENU.GUI`, log keeps growing, UI still readable |
+
+So it is **this module's teardown wrap**, and it is **pre-existing** — it reproduces on the build
+before the generation was added, and the generation is one `InterlockedIncrement` on a path that
+already ran. A clue, not a cause: the surviving runs log a **second** `tagpu: GL CONTEXT CHANGED`
+at the menu transition (an in-process map change replaces the context — `renderers.md`), and the
+frozen runs never reach it.
+
+**Why it went unnoticed for two days:** every scripted session ends with `tacli stop`, which kills
+the process. Nothing in the harness had ever quit a level to the menu. It is on by default, so a
+player who surrenders a game hits it.
+
+**Not root-caused.** The candidates worth testing first are whether the post hook runs on the
+tail-jump exit (`0x491C54 jmp 0x450DD0`, taken when `0x435100` returns 3) so `s_teardown` and
+`s_defer` are restored, and whether the pre hook's flush plus the `s_defer = 0` synchronous
+cascade can free one object twice.
+
 ## 7. The reusable module
 
 **As built (G14h, `tagpu_reclaim.c`).** One class today — `FreeObjectState` — so the module is
@@ -316,3 +369,8 @@ the simulation.
   **Corrected a factual error:** `FreeObjectState` does not free the composite frames — `0x437C90`
   zeroes a registry entry and makes no call — so the frame at `obj+0x10` has a separate owner and
   its lifetime is now an open item, not "covered for free".
+- **2026-09-08** — `tagpu_reclaim_level_gen()` added (§6a): the model templates are a lifetime the
+  destructor detour never covered, and `tagpu_native.c`'s three pointer-keyed caches now drop on
+  it. Verified on a real teardown. In the course of that, found §6b: **the teardown wrap freezes
+  the game on quit-to-menu**, pre-existing and reproducible 2/2 against 2/2 clean with
+  `tagpu_reclaim.off` — open, not root-caused.

@@ -333,8 +333,13 @@ model at 3 `vec4` is 432 uniform components, and the biggest geometry bake in th
 1. **Gate 0** — the pitch/roll measurement. Nothing else starts until it answers.
 2. The oracle fix it implies (fixtures carry all three body words; `pose_check` passes them),
    and the note corrections.
-3. `tagpu_reclaim_level_gen()`, adopted by `s_aabb`, `s_sbox`, `s_pmap`. Small, independent,
-   testable by a map change on its own.
+3. `tagpu_reclaim_level_gen()`, adopted by `s_aabb`, `s_sbox`, `s_pmap` — **built 2026-09-08.**
+   Verified on a real teardown: `reclaim: level teardown (gen 1)` followed by `native: level 0 ->
+   1, dropping the template caches: aabb=1 selbox=1 pmap=0`. **The second half could not be
+   tested**, because the game does not survive a level teardown while `tagpu_reclaim` is armed —
+   a pre-existing freeze found doing exactly this, [thread-safe destruction](thread-safe-destruction.html)
+   §6b. So "the caches repopulate correctly on the next level" is asserted from the code, not
+   measured, and it stays that way until that freeze is fixed.
 4. The per-type bake and its cache; the material stream; the bake-time anomaly log.
 5. The posed program and its shadow-depth twin; bodies only, behind a lever, both paths present
    — the CPU emitters live **only** as Gate B's oracle from here to step 8.

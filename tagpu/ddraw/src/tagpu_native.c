@@ -82,6 +82,7 @@
 #include "tagpu_markown.h"
 #include "tagpu_order.h"
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_structshadow_ours: who draws a building's shadow */
+#include "tagpu_reclaim.h"   /* tagpu_reclaim_level_gen: the model templates outlive units, not levels */
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
@@ -1747,6 +1748,45 @@ static const HPMAP* pmap_for(const void* mesh, const char* const* nd, int nparts
     return m;
 }
 
+/* ---- the three caches keyed on a MODEL TEMPLATE, and the level they belong to
+   `s_aabb` (the whole-tree AABB the shadow's height rule reads), `s_sbox` (the
+   select box's own bounds) and `s_pmap` (a replacement mesh's glTF piece ->
+   engine primitive map) are all keyed on a raw `Model3DONode*`. That tree is
+   shared by every unit of a type, so it rightly outlives any unit — but it does
+   NOT outlive the LEVEL, and it is not freed through `FreeObjectState`, so
+   `tagpu_reclaim`'s deferral does not cover it. Until this check existed
+   nothing dropped these entries at all: a second level whose allocator handed
+   the same address to a different model was served the first level's answer,
+   for the rest of the process. That is not a fault -- it is a wrong shadow
+   height, a wrong select box and a mis-bound replacement pose, silently.
+
+   The cure is the level generation `tagpu_reclaim` bumps inside the teardown
+   `0x491B60`, before the cascade frees anything. Checked once per frame rather
+   than per lookup: every one of these caches is consulted only from
+   tagpu_native_frame's own call tree, and the render thread is held out of its
+   pass for the whole teardown, so there is no partial state to catch.
+
+   They hold no GL objects, so dropping them is resetting three counts; the
+   entries rebuild on the next frame that asks. */
+static unsigned s_cacheGen;              /* the level s_aabb/s_sbox/s_pmap describe */
+static unsigned s_cacheDrops;            /* how many times they were dropped (logged) */
+
+static void cache_gen_check(void)
+{
+    unsigned g = tagpu_reclaim_level_gen();
+    if (g == s_cacheGen) return;
+    if (s_naabb || s_nsbox || s_npmap) {
+        char b[160];
+        _snprintf(b, sizeof b,
+                  "native: level %u -> %u, dropping the template caches: aabb=%d selbox=%d pmap=%d",
+                  s_cacheGen, g, s_naabb, s_nsbox, s_npmap);
+        nlog(b);
+        s_cacheDrops++;
+    }
+    s_cacheGen = g;
+    s_naabb = s_nsbox = s_npmap = 0;
+}
+
 /* Everything one unit's pose needs, accumulated down the piece tree. Shared
    with pose_dump, which checks it against the engine's own posed vertices. */
 typedef struct {
@@ -1988,6 +2028,10 @@ static int hires_pose(const char* o3, const void* mesh, float* out, int npiece)
 
 void tagpu_native_frame(const TAGPU_FRAME* f)
 {
+    /* before the early-out and before any gather: a level that ended while this
+       pass was disarmed still invalidates the template caches, and the check is
+       one aligned load when nothing has changed */
+    cache_gen_check();
     if (s_state == 2) return;
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;

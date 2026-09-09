@@ -69,6 +69,9 @@ static unsigned s_head, s_tail;            /* game thread only; free-running, & 
 static volatile unsigned char s_defer;     /* the free-detour flag: 1 = enqueue, 0 = real */
 static volatile LONG s_started, s_completed;   /* reader publishes; game thread reads     */
 static volatile LONG s_teardown;           /* game thread sets; reader reads              */
+static volatile LONG s_levelGen;           /* game thread bumps, once per teardown; the
+                                              render thread keys its model-template
+                                              caches on it (see the header)             */
 static void (__stdcall *s_real_free)(void*);   /* trampoline into the real body           */
 static int   s_installed;
 static volatile DWORD s_owner_tid;         /* the game thread, when the fork has not
@@ -170,6 +173,12 @@ static void __cdecl reclaim_teardown_pre(void)
     unsigned n = 0, busy = 0;
     char b[200];
 
+    /* First, and unconditionally. The cascade frees the model TEMPLATES whether
+       or not the reader leaves its pass in time — they do not go through
+       FreeObjectState, so the `busy` path below, which keeps the queue and frees
+       nothing of ours, does not protect them either. Anything keyed on a
+       template pointer has to be dropped on both paths. */
+    InterlockedIncrement(&s_levelGen);
     InterlockedExchange(&s_teardown, 1);       /* fence: visible before we look */
     t0 = GetTickCount();
     while (s_completed != s_started) {         /* the reader is inside a pass */
@@ -185,9 +194,10 @@ static void __cdecl reclaim_teardown_pre(void)
     }
     s_cTeardowns++;
     _snprintf(b, sizeof b,
-              busy ? "reclaim: level teardown: reader still in its pass after %u ms — %u queued object(s) KEPT, the cascade's frees deferred"
-                   : "reclaim: level teardown: flushed %u queued object(s), reader idle; the cascade frees synchronously",
-              busy ? RC_TEARDOWN_WAIT_MS : n, (unsigned)(s_tail - s_head));
+              busy ? "reclaim: level teardown (gen %u): reader still in its pass after %u ms — %u queued object(s) KEPT, the cascade's frees deferred"
+                   : "reclaim: level teardown (gen %u): flushed %u queued object(s), reader idle; the cascade frees synchronously",
+              (unsigned)s_levelGen, busy ? RC_TEARDOWN_WAIT_MS : n,
+              (unsigned)(s_tail - s_head));
     rlog(b);
 }
 
@@ -229,6 +239,8 @@ void tagpu_reclaim_pass_end(unsigned frame_counter)
 }
 
 int tagpu_reclaim_teardown_active(void) { return s_installed && s_teardown; }
+
+unsigned tagpu_reclaim_level_gen(void) { return (unsigned)s_levelGen; }
 
 int tagpu_reclaim_armed(void) { return s_installed; }
 

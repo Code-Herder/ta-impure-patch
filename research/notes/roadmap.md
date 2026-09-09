@@ -198,7 +198,16 @@ tagpu's shaders and needed an ES precision for `sampler2DShadow` and its two sha
 named to distinct units, or WebGL dropped the terrain draw (0 → 100 % of pixels differing).
 
 **G14h — thread-safe destruction: the engine's model-object frees deferred behind the render
-thread's quiescence.** Found measuring G14g, present on the G14f DLL too: `200v200` faulted about
+thread's quiescence.** ⚠ **`[2026-09-08]` Two things found since, doing the G16 lifetime work.
+(1) The deferral never covered the model TEMPLATES** — a `Model3DONode` tree is shared by every
+unit of a type and is not freed through `FreeObjectState` — so `tagpu_reclaim_level_gen()` now
+bumps inside the teardown and `tagpu_native.c`'s `s_aabb` / `s_sbox` / `s_pmap`, which nothing had
+ever dropped, key on it. **(2) The teardown wrap FREEZES THE GAME on quit-to-menu** —
+`Tab → EXIT → MAINMENU → CHOICE1` hangs with the module armed (2 runs, on the build before the
+generation as well as after) and completes cleanly with `tagpu_reclaim.off` (2 runs). Pre-existing
+since this gate landed, on by default, and it survived unnoticed because every scripted session
+ends in `tacli stop` and never quits a level. Not root-caused; open, and the first thing to fix in
+this area — [thread-safe destruction](thread-safe-destruction.html) §6a, §6b.** Found measuring G14g, present on the G14f DLL too: `200v200` faulted about
 95 s into the fight, two runs in three, at the first instruction of `emit_geom` reading a unit's
 or wreck's `Object3do` that the game thread had freed between the gather and the emit. The
 investigation (six parallel passes over the binary and the fork, 2026-09-06) settled three things
