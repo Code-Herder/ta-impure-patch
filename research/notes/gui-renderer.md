@@ -1324,7 +1324,21 @@ builds everything it would reuse.
 >    of the 126-px `+0x142DB` into the game offscreen, so a twin can only ever hold 126 px there.
 >    A 252-px base has nowhere to live except the device-res layer §13.2 already lists it in —
 >    which is G17c's plumbing, positioned at the minimap's screen rect times `k`.
-> 4. **The dots must be REPLAYED, and the arcs need two new leaves.** The unit dots are
+> 4. **§13.6's fog source does not exist** [MEASURED 2026-09-09, and it is the finding that
+>    decides the gate]. "Fog comes from the corner-mask grid we already hold as an RG8 texture for
+>    every world pass" — that grid is built around the **eye** and covers the **viewport**:
+>    `29x23` cells against a `336x400` map on Two Continents (`tagpu_native.c`'s fog block, and
+>    the `terr:` log line says both numbers). It has nothing to say about the rest of the map.
+>    The engine's own minimap fog is a different pass over different data — `0x466C20` shades
+>    `+0x142E3` into `+0x142DF` **per player**, reading the player id at `main+0x2A43`.
+>
+>    **And the consequence is not cosmetic.** The TNT picture is the whole map with nothing
+>    hidden, so a base drawn without fog shows the player terrain they have never explored. That
+>    is a cheat of exactly the class §13.6 refuses for the dots — and it means §13.10's recorded
+>    pivot, "keep the engine's fog as a pixel op and **ship the base alone**", is not available
+>    either: there is no shipping the base alone. Either the fog is solved or the minimap stays
+>    the engine's.
+> 5. **The dots must be REPLAYED, and the arcs need two new leaves.** The unit dots are
 >    `0x4B7F90` blits and already observed, so they arrive as sprite ops on `+0x142DB` and can be
 >    replayed at ×2. The coverage arcs `0x4C0070` and `DrawPoint 0x4BEE60` are **not** leaves (§7):
 >    today their pixels reach the twin only because the base copy degrades to a pixel op carrying

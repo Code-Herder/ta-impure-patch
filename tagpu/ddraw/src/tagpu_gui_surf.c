@@ -1293,11 +1293,23 @@ static void sharp_cursor(const TAGPU_FRAME* f)
    minimap reaches the frame as a copy of the 126-px composite `+0x142DB`, so a
    twin can never hold more than 126 px there.
 
-   BEHIND `mmbase`, AND THAT IS NOT A DEFAULT WAITING TO HAPPEN. On its own
-   this covers the engine's minimap with a base that has no fog, no unit dots,
-   no radar arcs and no view box — every one of which is still the engine's
-   until the rest of G17e lands. Shipping it on would hide information the
-   player is entitled to, which is worse than a soft picture. */
+   BEHIND `mmbase`, AND IT MUST STAY THERE UNTIL THE FOG IS SOLVED. The
+   picture is the TNT's own, which is the WHOLE map with nothing hidden, so a
+   base drawn without fog does not merely look wrong — it shows the player
+   terrain they have not explored. That is a cheat, and in multiplayer it is
+   the same class of cheat 13.6 refuses for the dots.
+
+   13.6 says the fog "comes from the corner-mask grid we already hold as an
+   RG8 texture for every world pass". IT CANNOT [MEASURED 2026-09-09]: that
+   grid is built around the EYE and covers the viewport — 29x23 cells against
+   a 336x400 map on Two Continents — so it has nothing to say about the rest
+   of the map. The engine's own minimap fog is a different pass over different
+   data: `0x466C20` shades `+0x142E3` into `+0x142DF` per player, reading the
+   player id at `main+0x2A43`. Re-deriving that is the thing 13.6 forbids for
+   the dots, for the same reason.
+
+   So `mmbase` also lacks the radar arcs and points (0x4C0070 and 0x4BEE60 are
+   not observed leaves, gui-renderer.md §7). Harness only. */
 static void sharp_minimap(const TAGPU_FRAME* f)
 {
     const char* ta = *(const char* const*)TA_MAINPP;
