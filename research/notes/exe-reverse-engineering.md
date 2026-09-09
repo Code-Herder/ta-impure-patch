@@ -2444,7 +2444,9 @@ nothing to switch); **`MEM_Free 0x4D85A0(main+0x37E1B)` at `0x491AB8` — the ga
 straight to the heap, not through `SurfaceFree 0x4C6AC0`** (`0x49838C` does the same at the
 game's mode switch); `main+0x37E1B = 0`; `0x4C61F0(0)`; `0x4C62C0()` (restores the DirectDraw
 surfaces `globals+0x88`/`+0x8C` and re-sets their palette — slots `+0x60`, `+0x6C` — no release);
-`SetWindowPos(…, 640, 480, 4)` (`[0x4fc2f0]`); `NewTAScreen(640, 480)` at `0x491B0B`;
+`SetWindowPos(…, 640, 480, 4)` (`[0x4fc2f0]`, the call at **`0x491AFB`** — **a no-op under our
+fork**, which swallows it in `fake_SetWindowPos`: [resolution](resolution.html) §3.1c);
+`NewTAScreen(640, 480)` at `0x491B0B`;
 `main+0x37E1B = 0x4C69F0("OFFSCREEN", main+0x37E1F, main+0x37E23)` at `0x491B28`. **The tag
 `"OFFSCREEN"` is the string at `0x5091D4`**, and the five sites that create the main offscreen
 with it are `0x490AD3`, `0x491250`, `0x491B23` (this one), `0x4980CF` (the loading-screen

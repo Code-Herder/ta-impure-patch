@@ -692,7 +692,15 @@ GL object changed for it; the census on CORE explains 1 717 044 of 1 717 044 cha
 object — and, since G15d, the fork's own palette object under the fork's lock — and writes GL
 objects of its own; the engine's behaviour is byte-identical with it armed, on or off.
 **G17a (2026-09-09) did not change that**: it added a GL texture, an FBO and shader arithmetic
-and reads no engine address the module did not already read.
+and reads no engine address the module did not already read. **Nor did G17b**, which is
+fork-side and tooling: the client-area → engine-logical pointer transform moved out of
+`wndproc`'s button cases into `mouse_client_to_game` (`mouse.c`) so the harness's device-space
+click takes the same path a player's does, the UI snapshot gained the frame's `viewport`, and the
+native pass gained `devres` — at `k > 1` `ss` follows `ceil(k)` and the box-resolve to the game's
+resolution is skipped, so the composite downsamples the supersampled buffer instead of
+nearest-stretching a game-res one (replication 42.6 % → 11.2 % of adjacent device pixels at
+`k = 1.5`, fps unchanged). `tagpu_devres.off` is the A/B and `devres=` is on the native log line;
+at `k = 1` it is inert.
 
 ### 2.4 Tooling (not part of the render path)
 
