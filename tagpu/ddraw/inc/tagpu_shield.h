@@ -22,7 +22,7 @@
    only decides whether hardware input is let through alongside them. */
 
 #define WM_TAGPU_KEY    (WM_APP + 140)   /* wParam = VK, lParam = TAGPU_KEY_UP?      */
-#define WM_TAGPU_MOUSE  (WM_APP + 141)   /* wParam = TAGPU_M_*, lParam = game x,y    */
+#define WM_TAGPU_MOUSE  (WM_APP + 141)   /* wParam = TAGPU_M_* (| TAGPU_M_DEV), lParam = x,y */
 #define WM_TAGPU_CHAR   (WM_APP + 142)   /* wParam = character                       */
 
 #define TAGPU_KEY_UP    1
@@ -38,6 +38,20 @@ enum {
 
 /* pass as the position to leave the injected cursor where it is */
 #define TAGPU_M_HERE    (-1)
+
+/* OR into the code: x,y are CLIENT-AREA (device) pixels, not the engine's
+   logical screen, and are converted by `mouse_client_to_game` -- the same
+   function a hardware click goes through (G17b).
+
+   Why it exists: every other injected event is delivered in the engine's own
+   coordinates, so none of them ever traverses the pointer unscale. That is
+   fine for driving the game and useless for TESTING the unscale, which is
+   exactly what phase 2's kill rule turns on ("clicks land on the right
+   gadget at every k"). With this, the harness clicks where a player's mouse
+   would be and the engine has to arrive at the right gadget by itself.
+   Outside the letterboxed viewport the conversion yields the centre of the
+   engine's screen, which is what a hardware click there has always done. */
+#define TAGPU_M_DEV     0x100
 
 BOOL tagpu_shield_on(void);
 

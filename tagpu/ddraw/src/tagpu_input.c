@@ -164,15 +164,22 @@ static const TAGPU_FRAME* s_frame;   /* set per call for mouse tokens */
 /* injected click: move, press, release, then park the pointer at the centre of
    the view — a click near a screen edge otherwise leaves the engine's memory
    mouse there and it EDGE-SCROLLS forever. */
-static void inject_click(HWND w, int gx, int gy, int right)
+static void inject_click_at(HWND w, int gx, int gy, int right, int dev)
 {
-    tagpu_shield_mouse(w, TAGPU_M_MOVE, gx, gy);
-    tagpu_shield_mouse(w, right ? TAGPU_M_RDOWN : TAGPU_M_LDOWN, gx, gy);
-    tagpu_shield_mouse(w, right ? TAGPU_M_RUP : TAGPU_M_LUP, gx, gy);
+    int d = dev ? TAGPU_M_DEV : 0;
+    tagpu_shield_mouse(w, TAGPU_M_MOVE | d, gx, gy);
+    tagpu_shield_mouse(w, (right ? TAGPU_M_RDOWN : TAGPU_M_LDOWN) | d, gx, gy);
+    tagpu_shield_mouse(w, (right ? TAGPU_M_RUP : TAGPU_M_LUP) | d, gx, gy);
 
+    /* park in the engine's own coordinates whichever space the click was in:
+       the parking position is about the engine's memory mouse, not the window */
     if (s_frame && s_frame->game_width > 0 && s_frame->game_height > 0)
         tagpu_shield_mouse(w, TAGPU_M_MOVE,
                            s_frame->game_width / 2, s_frame->game_height / 2);
+}
+static void inject_click(HWND w, int gx, int gy, int right)
+{
+    inject_click_at(w, gx, gy, right, 0);
 }
 
 static void do_keys(HWND hwnd)
@@ -247,6 +254,16 @@ static void do_keys(HWND hwnd)
             }
             else if (sscanf(p, "pclick:%d,%d", &gx, &gy) == 2)  inject_click(hwnd, gx, gy, 0);
             else if (sscanf(p, "prclick:%d,%d", &gx, &gy) == 2) inject_click(hwnd, gx, gy, 1);
+            /* DEVICE-SPACE click and move (G17b): x,y are client-area pixels
+               and are converted by the same `mouse_client_to_game` a hardware
+               click goes through. Every other token here speaks the engine's
+               coordinates and so proves nothing about the pointer path; these
+               two are the only ones that test it, which is what phase 2's kill
+               rule needs (gui-renderer.md 13.1, 13.9). */
+            else if (sscanf(p, "dclick:%d,%d", &gx, &gy) == 2)  inject_click_at(hwnd, gx, gy, 0, 1);
+            else if (sscanf(p, "drclick:%d,%d", &gx, &gy) == 2) inject_click_at(hwnd, gx, gy, 1, 1);
+            else if (sscanf(p, "dmove:%d,%d", &gx, &gy) == 2)
+                tagpu_shield_mouse(hwnd, TAGPU_M_MOVE | TAGPU_M_DEV, gx, gy);
             /* injected move with no click and no parking: what a hover is. The
                plain "mouse:" token falls back to SendInput when the shield is
                down, which would drag the human's real pointer. */

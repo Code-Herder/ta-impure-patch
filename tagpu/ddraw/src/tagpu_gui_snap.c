@@ -448,6 +448,15 @@ static void write_snapshot(const TAGPU_FRAME* f)
             f ? f->game_width : 0,
             f ? f->game_height : 0);
 
+    /* The letterboxed viewport in WINDOW pixels (G17b). `surface` above is the
+       engine's logical screen and every gadget rect below is in it; this is
+       where that screen is actually drawn, so the two together are what a
+       harness needs to aim a DEVICE-space click at a gadget — which is the
+       only kind of click that exercises the pointer unscale at all. */
+    fprintf(out, ",\"viewport\":[%d,%d,%d,%d]",
+            f ? f->vp_x : 0, f ? f->vp_y : 0,
+            f ? f->vp_w : 0, f ? f->vp_h : 0);
+
     fprintf(out, ",\"gui\":");
     jstr(out, ctrls + G_NAME, 16);
 

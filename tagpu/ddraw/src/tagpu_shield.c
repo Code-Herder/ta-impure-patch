@@ -14,6 +14,7 @@
 #include "dd.h"
 #include "hook.h"
 #include "tagpu_shield.h"
+#include "mouse.h"
 #include "tagpu_zoom.h"
 
 #define SHIELD_TRIGGER  "tagpu_shield.on"
@@ -238,6 +239,17 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
 {
     int cur_x = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
     int cur_y = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+
+    /* device-space injection (G17b): x,y are client-area pixels and go through
+       the SAME transform a hardware click takes, so this is a test of the
+       pointer path rather than a way around it. TAGPU_M_HERE is left alone --
+       "where it is" is already a logical position. */
+    if (code & TAGPU_M_DEV)
+    {
+        code &= ~TAGPU_M_DEV;
+        if (!(gx < 0 && gy < 0))
+            mouse_client_to_game(gx, gy, &gx, &gy);
+    }
 
     if (code == TAGPU_M_MOVEREL)
     {

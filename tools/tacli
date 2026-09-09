@@ -1246,9 +1246,36 @@ def cmd_keys(args):
 
 def cmd_click(args):
     inst = Instance(args.name)
-    token = f"{'prclick' if args.right else 'pclick'}:{args.x},{args.y}"
+    if getattr(args, "device", False):
+        verb = "drclick" if args.right else "dclick"
+    else:
+        verb = "prclick" if args.right else "pclick"
+    token = f"{verb}:{args.x},{args.y}"
     _write_tokens(inst, token)
     out({"name": args.name, "token": token}, args.json, human=f"sent: {token}")
+
+
+def device_point(snap: dict, gx: int, gy: int):
+    """Where the engine's logical pixel (gx, gy) is DRAWN, in client-area pixels.
+
+    This is deliberately the renderer's mapping — viewport offset plus the
+    logical point scaled by viewport/surface — and not the inverse of the
+    fork's pointer unscale. The whole value of a device-space click is that our
+    two halves are computed independently: we aim where the gadget visibly is,
+    the engine works back to a logical pixel by its own arithmetic, and if the
+    two disagree the click misses. Inverting the input transform here would
+    make the test agree with itself by construction.
+
+    (They do differ slightly: the renderer scales by vp/surface and the input
+    unscales by (surface-1)/(vp-1), so the two drift by up to half a device
+    pixel across the screen. Aiming at a gadget's centre leaves tens of pixels
+    of margin, which is why this is a hit test and not a pixel test.)
+    """
+    vx, vy, vw, vh = snap.get("viewport") or (0, 0, 0, 0)
+    sw, sh = snap.get("surface") or (0, 0)
+    if not (vw and vh and sw and sh):
+        return None
+    return (vx + int((gx + 0.5) * vw / sw), vy + int((gy + 0.5) * vh / sh))
 
 
 def cmd_wheel(args):
@@ -2335,9 +2362,24 @@ def _ui_label_diff(before: dict, after: dict):
     return [t for t in dict.fromkeys(labels(after)) if t not in was]
 
 
+# G17b: when set, every gadget click in this process is aimed in CLIENT-AREA
+# pixels and converted back by the engine's own pointer path, instead of being
+# handed to the engine already in its own coordinates. It is a whole-run switch
+# rather than a per-call one because a walk that mixes the two proves nothing:
+# the question is whether the pointer path is right at this k, everywhere.
+UI_CLICK_DEVICE = False
+
+
 def _ui_click_gadget(inst: Instance, g: dict, before: dict, settle: bool = True):
     x, y = g["click"]
-    _write_tokens(inst, f"pclick:{x},{y}")
+    tok = f"pclick:{x},{y}"
+    if UI_CLICK_DEVICE:
+        d = device_point(before, *g["click"])
+        if d is None:
+            die("ui click --device: the snapshot carries no viewport "
+                "(an older DLL, or no frame yet) — cannot aim a device-space click")
+        tok = f"dclick:{d[0]},{d[1]}"
+    _write_tokens(inst, tok)
     if not settle:
         return before, None
     return _ui_settle(inst, before, g)
@@ -2377,6 +2419,9 @@ def cmd_ui(args):
     verb = (args.verb or "snapshot").lower()
     rest = list(args.rest)
     tmo = args.timeout
+
+    if getattr(args, "device", False):
+        globals()["UI_CLICK_DEVICE"] = True
 
     if verb in ("snapshot", "snap"):
         if rest:
@@ -4314,6 +4359,10 @@ def build_parser():
     cl.add_argument("x", type=int)
     cl.add_argument("y", type=int)
     cl.add_argument("--right", action="store_true", help="right click (orders)")
+    cl.add_argument("--device", action="store_true",
+                    help="x,y are CLIENT-AREA pixels, not the engine's screen: the DLL converts "
+                         "them with the same transform a hardware click takes. The only click "
+                         "that exercises the pointer unscale (G17b)")
     cl.set_defaults(func=cmd_click)
 
     od = sub.add_parser("order", help="give units an order (no mouse, world coords)")
@@ -4448,6 +4497,11 @@ def build_parser():
     u.add_argument("--gui", help="wait: wait for this screen to reach the top of the stack")
     u.add_argument("--page", type=int,
                    help="click: walk a paged build menu to this page first")
+    u.add_argument("--device", action="store_true",
+                   help="click: aim in CLIENT-AREA pixels (where the gadget is DRAWN) and let "
+                        "the engine work back to a logical pixel by its own arithmetic. The only "
+                        "click that tests the pointer path, which is what phase 2's kill rule "
+                        "turns on (G17b)")
     u.add_argument("--timeout", type=float, default=UI_TIMEOUT,
                    help=f"seconds to auto-wait for a gadget, and to scroll a long list "
                         f"to an off-screen row (default {UI_TIMEOUT:g})")
