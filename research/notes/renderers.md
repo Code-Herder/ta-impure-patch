@@ -450,6 +450,25 @@ search. An earlier candidate here — capping the search at `min(24.0 / uShScale
 cut the acne 2.50 → 0.49 and touched *every* shadow including units, so it is the wrong shape
 and is not the recommendation.
 
+**What the fix is NOT — three candidates, all measured, none of them right.** Same camera,
+`shadowres=2048`, shadow term isolated against `shadows=0` (baseline **8.72 std / 71.0 worst**):
+
+| candidate | result | why it is wrong |
+|---|---|---|
+| constant bias floor of 24 world units | **0.00 / 0.0** | also erases every *unit* shadow — peter-panning, 59 970 of 163 200 px changed in the unit region |
+| blocker search capped at 8 texels (`min(24.0/uShScale.x, 8.0)`) | 0.49 / 28.7 | incomplete, and it shortens the penumbra for **every** shadow, units included |
+| `glPolygonOffset` on the hills draw alone | 6.48 @ ~1.1 wu, 5.27 @ ~4.3 wu, **3.22 @ ~12.8 wu** | scoped correctly but converges far too slowly; the magnitude that would finish the job is enough to visibly detach hill shadows |
+
+The polygon-offset result is the informative one: **a uniform depth push cannot reconcile the two
+surfaces**, which means the mismatch is not a constant offset but a *shape* difference between
+the two reconstructions. (Note `units` is in minimum-resolvable-depth steps — here
+3577 / 2²⁴ ≈ 2.1e-4 world units — so the useful range is tens of thousands, not single digits.)
+
+**So the fix has to be structural: one surface, not two.** The receiver and the caster must be
+the same geometry, which is what the lab does and what the game stopped doing at §2.8. That is
+work in the terrain pass, not a knob, and it is not attempted here. Until it is done,
+`terrainshadow=0` is the complete and correct answer for anyone who sees this.
+
 **WHY THE LAB NEVER SHOWED IT: the lab has ONE terrain, the game has TWO.**
 The shading maths is not the difference — `tascene-view.html`'s shadow function is
 character-for-character what shipped: the same `(1.0 + 2.0*(1.0 - nl)) * uShScale.x /
@@ -480,6 +499,26 @@ for anything that depends on caster and receiver being the same geometry. §2.8 
 split deliberately and for a good reason; what was not recorded is that it also invalidated the
 lab as the oracle for terrain self-shadowing. Any future pass that casts from a rebuilt copy of
 something it also shades inherits the same blind spot.
+
+**How to make the lab faithful again — mirror the split, do not remove it.** The lab is only
+misleading here because it casts `ltVAO`, the very buffer it shades. Give `shadowPass` a second
+terrain source: build a world-space heightfield mesh from the same height data the lab already
+has, on the game's 16-unit grid and with the game's per-vertex shear (`z = r*16 + h/2`,
+`build_hills`), and cast **that** instead of `ltVAO`. Put it behind a query knob
+(`castsplit=0` to get the old behaviour back for comparison) and **default it on**, so what the
+lab shows is what the game does.
+
+That is worth doing for its own sake, not just to reproduce this bug: it turns a defect that
+currently takes a game build, a scenario, a camera and a shadowres sweep — minutes per
+iteration — into a browser reload, and it puts the game's actual topology under the lab's
+existing shadow oracles. The A/B is immediate too: `castsplit=1` against `castsplit=0` on the
+same frame *is* the caster/receiver mismatch, isolated, with no shadow maths in the way.
+
+**And the rule this suggests for the lab in general:** the lab is a faithful oracle for a pass
+only where its data flow has the same *shape* as the game's. Where the game builds a second
+representation of something — a rebuilt mesh, a reconstructed position, a cached copy — the lab
+has to build it too, or its verdict on that pass does not transfer. Worth checking the other
+passes for the same asymmetry before trusting them.
 
 **How to measure it, because the obvious metric lies.** The raw standard deviation of the water
 band is ~38 either way: it is dominated by the tile art, and it moved by 0.15 when the artifact
