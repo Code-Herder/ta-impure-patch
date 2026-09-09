@@ -49,6 +49,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_ufo.h"
+#include "tagpu_gaf.h"
 #include "tagpu_menu.h"
 
 /* ---- the engine ---------------------------------------------------------- */
@@ -66,6 +67,10 @@
 #define VA_DRAWSCREEN   0x00468CF0u     /* the per-frame game-thread function  */
 #define VA_POSTGUI      0x0046A308u     /* DrawGameScreen, just past the GUI   */
 #define VA_GAFBLIT      0x004B7F90u     /* CopyGafToContext(ctx, frame, x, y)  */
+#define VA_FILEOPEN     0x004BBC40u     /* the engine's own path open          */
+#define VA_GAFLOAD      0x004B8C60u     /* -> a bank                           */
+#define VA_GAFFIND      0x004B8D40u     /* (bank, name) -> entry, or NULL      */
+#define P_GAFBANK       0xC0            /* the panel's own loaded bank         */
 
 #define GM_CTRLS  0x04
 #define GM_ONCMD  0x08
@@ -85,6 +90,9 @@ typedef void  (__stdcall *set_dirty_fn)(void* gi);
 typedef int   (__stdcall *upd_gui_fn)(int);
 typedef void  (__cdecl   *lock_fn)(void);
 typedef void  (__stdcall *gaf_blit_fn)(void* ctx, const void* frame, int x, int y);
+typedef int   (__stdcall *file_open_fn)(const char* path);
+typedef void* (__stdcall *gaf_load_fn)(const char* path);
+typedef void* (__stdcall *gaf_find_fn)(void* bank, const char* name);
 
 /* DrawGameScreen's prologue: `sub esp,0x214`.
 
@@ -209,7 +217,7 @@ static const unsigned char TRIG_INK[TS_COUNT][3] = {
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "G18-4"
+#define UFO_STAMP  "G18-5"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
@@ -382,6 +390,128 @@ static unsigned build_gaf(unsigned char* out, unsigned cap, int rows)
 
     draw_panel(out + PIXOFF, rows);
     return need;
+}
+
+/* ---- the composed ground -------------------------------------------------
+   The frame the archive carries is OURS and drawn; the ground the player sees
+   is composed at runtime from THEIR OWN install, and the composed pixels never
+   leave their machine. `frontend.gaf`'s `back*` nine-slice is the shell's
+   mottled panelling -- chosen by the owner over TA's dialog kit (`diatile` is
+   one colour, flat black, in a grey bevel) and over a hybrid of the two.
+
+   USE `backtile` FRAME 4, NOT 0: frame 0 carries a lit bottom edge that puts
+   seams through a tiled centre (tools/guipanel.py NINE).
+
+   Only the recesses are drawn over it. `text16*` is a BLUE text-field well,
+   not a neutral recess, which is why they cannot come from the kit either.
+
+   The bank lookup is the engine's own: 0x4B8D40(bank, name) walks
+   bank+0x0C as an array of entry POINTERS, bank+0x04 entries of them, and
+   compares entry+0x08 -- read for this. If anything is missing the drawn frame
+   is simply left alone, so the failure mode is a plainer panel, not no panel. */
+#define KIT_MAX 64                      /* the corner/edge frames are 64x64    */
+
+static const char* const NINE[9] = {
+    "backul", "backu",  "backur",
+    "backl",  "backtile", "backr",
+    "backll", "backbottom", "backlr",
+};
+static const int NINE_FRAME[9] = { 0, 0, 0, 0, 4, 0, 0, 0, 0 };
+
+typedef struct { unsigned char px[KIT_MAX * KIT_MAX]; int w, h, ok; } Kit;
+
+static void blit_tile(unsigned char* dst, const Kit* k, int x0, int y0, int x1, int y1)
+{
+    int x, y, i, j;
+    if (!k->ok || k->w <= 0 || k->h <= 0) return;
+    for (y = y0; y < y1; y += k->h)
+        for (x = x0; x < x1; x += k->w)
+            for (j = 0; j < k->h && y + j < y1; j++)
+                for (i = 0; i < k->w && x + i < x1; i++)
+                    px(dst, x + i, y + j, k->px[j * k->w + i]);
+}
+
+/* The composed ground, built once and kept: our screen is torn down and rebuilt
+   on every world click, and decoding nine frames each time would be waste. */
+static unsigned char s_ground[PANEL_W * PANEL_H];
+static int s_groundOk;
+
+static int compose_ground(int rows)
+{
+    char path[128];
+    Kit kit[9];
+    void* bank;
+    int i, cw, ch;
+
+    if (s_groundOk) return 1;
+
+    lstrcpynA(path, "anims\\frontend.gaf", sizeof path);
+    if (!((file_open_fn)VA_FILEOPEN)(path)) return 0;
+    bank = ((gaf_load_fn)VA_GAFLOAD)(path);
+    if (!bank) return 0;
+
+    for (i = 0; i < 9; i++) {
+        const unsigned char* fr;
+        void* ent = ((gaf_find_fn)VA_GAFFIND)(bank, NINE[i]);
+        kit[i].ok = 0;
+        if (!ent) return 0;
+        fr = tagpu_gaf_seq_frame((const char*)ent, NINE_FRAME[i]);
+        if (!fr) fr = tagpu_gaf_seq_frame((const char*)ent, 0);
+        if (!fr) return 0;
+        kit[i].w = *(const unsigned short*)(fr + TAGPU_GF_W);
+        kit[i].h = *(const unsigned short*)(fr + TAGPU_GF_H);
+        if (kit[i].w <= 0 || kit[i].h <= 0 || kit[i].w > KIT_MAX || kit[i].h > KIT_MAX)
+            return 0;
+        if (!tagpu_gaf_decode(fr, kit[i].w, kit[i].h, kit[i].px)) return 0;
+        kit[i].ok = 1;
+    }
+
+    cw = kit[0].w;
+    ch = kit[0].h;
+    if (cw >= PANEL_W || ch >= PANEL_H) return 0;
+
+    memset(s_ground, IX_GROUND_LO, sizeof s_ground);
+    blit_tile(s_ground, &kit[4], cw, ch, PANEL_W - cw, PANEL_H - ch);   /* centre */
+    blit_tile(s_ground, &kit[1], cw, 0, PANEL_W - cw, ch);              /* edges  */
+    blit_tile(s_ground, &kit[7], cw, PANEL_H - ch, PANEL_W - cw, PANEL_H);
+    blit_tile(s_ground, &kit[3], 0, ch, cw, PANEL_H - ch);
+    blit_tile(s_ground, &kit[5], PANEL_W - cw, ch, PANEL_W, PANEL_H - ch);
+    blit_tile(s_ground, &kit[0], 0, 0, cw, ch);                         /* corners */
+    blit_tile(s_ground, &kit[2], PANEL_W - cw, 0, PANEL_W, ch);
+    blit_tile(s_ground, &kit[6], 0, PANEL_H - ch, cw, PANEL_H);
+    blit_tile(s_ground, &kit[8], PANEL_W - cw, PANEL_H - ch, PANEL_W, PANEL_H);
+
+    for (i = 0; i < rows; i++) {
+        int y = ROW_Y0 + ROW_PITCH * i;
+        recess(s_ground, CTL_X - PAD, y - PAD, CTL_W + 2 * PAD, ROW_H + 2 * PAD);
+    }
+    s_groundOk = 1;
+    return 1;
+}
+
+/* Repaint the loaded frame's plane IN PLACE. The archive ships the frame
+   uncompressed for exactly this: +0x10 PtrFrameBits is a flat w*h plane, so
+   this is one copy and not a re-encode. */
+static void repaint_ground(char* ctrls)
+{
+    void* bank;
+    void* ent;
+    const unsigned char* fr;
+    unsigned char* plane;
+
+    if (!ctrls || !compose_ground(s_nrows)) return;
+    bank = *(void**)(ctrls + P_GAFBANK);
+    if (!bank) return;
+    ent = ((gaf_find_fn)VA_GAFFIND)(bank, ART_NAME);
+    if (!ent) return;
+    fr = tagpu_gaf_seq_frame((const char*)ent, 0);
+    if (!fr) return;
+    if (*(const unsigned short*)(fr + TAGPU_GF_W) != PANEL_W ||
+        *(const unsigned short*)(fr + TAGPU_GF_H) != PANEL_H ||
+        fr[TAGPU_GF_COMP]) return;                  /* only our own flat plane */
+    plane = *(unsigned char**)(fr + TAGPU_GF_PIX);
+    if (!plane) return;
+    memcpy(plane, s_ground, sizeof s_ground);
 }
 
 /* ---- the trigger --------------------------------------------------------
@@ -663,6 +793,12 @@ static void menu_open(char* main_p, int fresh)
     ((lock_fn)VA_DRAWLOCK)();
     ((stage_draw_fn)VA_STAGEDRAW)(gi, 0x20 | 0x1);
     ((lock_fn)VA_DRAWUNLOCK)();
+
+    /* Stage 1 is what loaded `anims\\RENDER.GAF` (the id 0 branch at 0x4A84F2),
+       so the plane exists only now. Repaint it from the player's own install
+       and ask for the redraw. */
+    repaint_ground(ctrls);
+    ((set_dirty_fn)VA_SETDIRTY)(gi);
 }
 
 static void menu_close(char* main_p)
