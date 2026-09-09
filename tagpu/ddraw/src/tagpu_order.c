@@ -979,6 +979,14 @@ static int seq_ink(const char* seq, int fallback)
     w = *(const unsigned short*)(g + TAGPU_GF_W);
     h = *(const unsigned short*)(g + TAGPU_GF_H);
     ck = *(const unsigned char*)(g + TAGPU_GF_CK);
+    /* THE ENGINE'S OWN TABLE, deliberately, and the one place in the world's
+       code that still reads it. Two reasons, both required: this walk runs on
+       the GAME THREAD (tagpu_order.h, "the two-thread split") and tagpu_pal.c
+       resolves on the render thread's cadence, so calling it here would race
+       the snapshot every other pass reads; and the question is a luminance
+       RANKING over one sprite's own colours, which a uniform scale of every
+       entry cannot change — the ink index this picks is a property of the art,
+       not of the display. */
     pal = (const unsigned char*)(s_v->ta + OFF_PALETTE);
     if (w > 0 && h > 0 && w <= 128 && h <= 128 &&
         tagpu_gaf_decode(g, w, h, pix)) {

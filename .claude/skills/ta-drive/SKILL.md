@@ -1267,11 +1267,20 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
   few) and `paldiff=n@i` the entries where the presented palette differs from `main+0x143A7`
   and the first of them: 0 in game, 1 (index 9) in the shell — and 255 after `+gamma 15`.
 - **The presented palette is not `main+0x143A7`**: the engine scales every palette it sets by
-  the Gamma option on the way to DirectDraw (`SetGamma 0x4BA590`, `0.5 + Gamma/24`, 1.0 at the
-  default 12) and never scales its table. **`+gamma N` typed in chat sets the factor to N/10 at
-  once** (`+gamma 15`, `+gamma 10` back) with no cheat bit, and is the lever that makes the two
-  differ in a skirmish; the UI layer follows the presented palette (cnc-ddraw's, also what
-  `tacli shot`'s PNG carries), the world passes read `+0x143A7` and go wrong by the factor.
+  the Gamma factor on the way to DirectDraw (`SetGamma 0x4BA590`) and never scales its table.
+  **The factor has two formulas**: an option screen applies `0.5 + Gamma/24` (so a registry Gamma
+  of 15 is **1.125**, and several instances on the reference setup carry exactly that), while
+  **`+gamma N` typed in chat sets it to `N/10` outright** (`+gamma 15` → 1.5, `+gamma 10` → 1.0)
+  with no cheat bit — the lever that makes the two palettes differ in a skirmish. **Since
+  2026-09-09 everything we draw follows the presented palette**, the world included
+  (`tagpu_pal.c`, gpu-status §2.3f); `tagpu.log`'s `pal: presented palette changed (… gamma=…)`
+  line is where to read the live factor, and `tacli peek <i> '*0x511DE8+0x37F08:4'` gives the
+  *option*, which after a `+gamma` no longer implies the factor.
+- **Type a chat line slowly, and check it before you send it.** `keys return`, the `char:`
+  tokens, `keys return` back to back drops the opening `return` often enough to matter: the run
+  then types the cheat into the game as hotkeys and nothing happens, silently. A second of sleep
+  between the three, and a `glshot` of the bottom strip to read the chat field back, is the
+  difference between measuring and guessing (2026-09-09).
 - **The cycles (G15d): `--cycles N`** runs, after the in-game stops, N times game → shell → game
   in the same process: `park`, Tab, `EXIT`, `MAINMENU`, `CHOICE1` (the return: the game freed,
   640×480 restored, a new GL context), `ui wait --gui MAINMENU`, the whole shell inventory

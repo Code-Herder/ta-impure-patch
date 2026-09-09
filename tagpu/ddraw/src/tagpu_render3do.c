@@ -23,6 +23,7 @@
 #include "opengl_utils.h"
 #include "tagpu_model3do.h"   /* TAGPU_PBMAXPIECE: the piece-count bound */
 #include "tagpu_render3do.h"
+#include "tagpu_pal.h"
 #include "tagpu_gaf.h"
 #include "tagpu_r3dcache.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
@@ -163,11 +164,13 @@ static void shade_upload(const unsigned char* lut)
 }
 static void shade_build_lut(void)
 {
-    const char* base = *(const char* const*)0x511DE8;
-    if (!ptr_ok(base) || IsBadReadPtr(base + 0x143A7, 256 * 4)) return;
-    const unsigned char* pal = (const unsigned char*)(base + 0x143A7);
+    /* the palette the screen is SHOWN with (tagpu_pal.h): a snapshot we own,
+       so this reads no engine memory at all -- which also retires the
+       IsBadReadPtr that used to stand in for a bound here */
+    const unsigned char* pal = tagpu_pal_live();
     static unsigned char lut[SH_ROWS * 256];
     int r, i, c;
+    if (!pal) return;
 
     /* Prefer the ENGINE's own 32x256 shade table (PALETTE.SHD, built at init,
        live at *(TAProgramStruct+0xC4) — the table its Gouraud rasteriser

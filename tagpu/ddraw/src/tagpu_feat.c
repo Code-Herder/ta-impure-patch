@@ -66,6 +66,7 @@
 #include "opengl_utils.h"
 #include "tagpu_opt.h"
 #include "tagpu_feat.h"
+#include "tagpu_pal.h"
 #include "tagpu_glsl.h"
 #include "tagpu_featown.h"
 #include "tagpu_gaf.h"
@@ -624,8 +625,9 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     if (s_state != 1) return feat_bail();
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
     /* Classic++: the lazy restore of this atlas, armed once the switch is on
-       (main+0x143A7 is the live palette, the same one the native pass uploads) */
-    tagpu_gaf_atlas_restore(&s_atlas, (const unsigned char*)(ta + 0x143A7));
+       (the palette the screen is SHOWN with, the same one the native pass
+       uploads to uPal -- tagpu_pal.h) */
+    tagpu_gaf_atlas_restore(&s_atlas, tagpu_pal_live());
 
     memset(s_nv, 0, sizeof s_nv);
     memset(&s_c, 0, sizeof s_c);

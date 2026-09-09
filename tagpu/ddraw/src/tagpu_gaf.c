@@ -17,6 +17,7 @@
 #include <string.h>
 #include "opengl_utils.h"
 #include "tagpu_gaf.h"
+#include "tagpu_pal.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
 
@@ -272,6 +273,22 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
     int i;
     a->pal = pal;
     if (a->job) {
+        /* The palette moved under the twin — the Gamma slider, or `+gamma N`
+           in chat: every texel in it was restored through the old one and is
+           now the wrong brightness beside the engine's own pixels. Re-point
+           the job and queue every entry again, WITHOUT clearing, so the atlas
+           recolours cell by cell instead of vanishing for the length of the
+           repaint. Gated on the job being idle, which bounds this to one
+           repaint of this atlas in flight however often the palette moves. */
+        if (pal && a->palSerial != tagpu_pal_serial() && tagpu_rglsl_job_idle(a->job)) {
+            char b[128];
+            a->palSerial = tagpu_pal_serial();
+            tagpu_rglsl_job_repalette(a->job, pal);
+            for (i = 0; i < a->n; i++) if (a->ents[i].ok) restore_enqueue(a, &a->ents[i]);
+            _snprintf(b, sizeof b, "%s: palette changed (serial=%u): %d entries queued for repaint",
+                      a->tag, a->palSerial, a->n);
+            glog(b);
+        }
         /* a mipped twin: its levels follow level 0 one frame behind the
            batch that painted it (the OUT draw is issued after this call,
            in tagpu_rglsl_step; the next frame's call sees the count move) */
@@ -332,6 +349,7 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
         a->restoreFailed = 1;
         return;
     }
+    a->palSerial = tagpu_pal_serial();
     /* the job cleared level 0 to alpha 0: the mip levels must say the same
        before anything samples them */
     twin_mips(a);
@@ -447,7 +465,15 @@ static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const 
     e->ck = ck;
     /* decided here, while the pixels are still at hand: the tileability the
        restorer wrap-pads by (a key on an edge says no) */
-    e->wrap = a->pal ? (char)tagpu_rglsl_tileable(pixels, w, h, a->pal, e->ck) : 0;
+    /* The tileability test asks about the ART, so it reads the engine's own
+       table and not the palette the screen is shown with: a gamma-scaled
+       palette stretches every colour distance by the same factor and moves
+       tiles across the threshold (measured 2026-09-09 on the terrain's 5062:
+       177 tiles wrap-padded at factor 1.5, 400 at 1.0). */
+    {
+        const unsigned char* art = tagpu_pal_engine();
+        e->wrap = art ? (char)tagpu_rglsl_tileable(pixels, w, h, art, e->ck) : 0;
+    }
     e->ok = 1;
     if (a->job) restore_enqueue(a, e);
     return e;

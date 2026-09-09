@@ -1098,10 +1098,14 @@ clean**, loading screen exact each cycle, `+gamma 15` = 235@1 each cycle, `overf
 
 ### Not closed here
 
-- **The world passes read `main+0x143A7`** and are wrong by the gamma factor at any Gamma but
-  12 (or after `+gamma`): the UI twin is right and the terrain, units, features and effects
-  beneath it are not. The fix is the same source, in `tagpu_native.c`'s palette upload; it is
-  not a UI change and was not made here.
+- **The world passes read `main+0x143A7` — CLOSED 2026-09-09.** The resolution moved out
+  of this module into `tagpu_pal.c` and every pass that turns an index into a colour takes the
+  presented palette from there, this layer included; the world has exactly one palette texture
+  (`tagpu_native.c`'s `s_palTex`, passed on as `uPal`), so the Classic half was that one upload.
+  Measured engine-against-ours on the terrain at `+gamma 15`: 583 010 differing pixels of the
+  viewport before, 19 419 after — and those 19 419 are the engine's own tree sprites, the same
+  set that differs at the default Gamma. [GPU status](gpu-status.html) §2.3f has the design, the
+  Classic++ repaint that keeps the baked twins honest, and the residuals.
 - **The fork keeps the game-sized window from the second return to the shell** (§7): at
   1920×1080 the first return gives a 640×480 window and the next two a 1912×1040 client with the
   shell scaled into it; those stops are reported "not 1:1" and not measured. The layer draws

@@ -2387,11 +2387,20 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
 - **So the presented palette is `gamma(globals+0x214)`, and `main+0x143A7` is never scaled.**
   On every normal path the two hold the same entries — `+0x143A7` is what `0x497FDB` and
   `0x44460B` hand over — and at Gamma 12 they are byte-equal. At any other Gamma, or after
-  `+gamma`, every pass that reads `+0x143A7` (`tagpu_native.c`, and the terrain, feature, effect
-  and marker passes through it) shows the world at the wrong brightness, and so did the UI twin
-  until G15d, which resolves through cnc-ddraw's palette object (`g_ddraw.primary->palette->
-  data_rgb`, what `ddp_SetEntries` stored — the same table `tacli shot` writes into its PNG,
-  so the walk's oracle and the twin agree by construction). MEASURED, the heartbeat's `paldiff`:
+  `+gamma`, a pass that reads `+0x143A7` shows the world at the wrong brightness, and every one
+  of them did until G15d fixed the UI twin (which resolves through cnc-ddraw's palette object,
+  `g_ddraw.primary->palette->data_rgb`, what `ddp_SetEntries` stored — the same table
+  `tacli shot` writes into its PNG, so the walk's oracle and the twin agree by construction) and
+  **2026-09-09 fixed the world**: the resolution moved into `tagpu_pal.c`, and every pass that
+  turns an index into a colour — the world's single `uPal` texture, the three sprite atlases'
+  restores and the terrain restorer's — now takes the presented palette from there ([GPU
+  status](gpu-status.html) §2.3f). The two readers that still want `+0x143A7` want it *because*
+  it is unscaled: the restorer's tileability threshold is a raw colour distance and must classify
+  the ART, not the display. **The two formulas are different and both are live**: an option
+  screen writes `main+0x37F08` and applies `0.5 + Gamma/24` (registry Gamma 15 → **1.125**,
+  measured), while `+gamma N` applies **`N/10`** outright (`+gamma 15` → **1.500**, measured
+  2026-09-09) and then stores N in the same field — so the field alone does not tell you the
+  factor, and `globals+0x614` is the only thing that does. MEASURED, the heartbeat's `paldiff`:
   0 entries differ in game; in the shell **one, index 9**, on every visit (its writer is not
   traced — whichever it is, it reaches the screen through `0x4BA200` like everything else, so the
   twin shows it right and a `+0x143A7` reader would not); `+gamma 15` in game makes every

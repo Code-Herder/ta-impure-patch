@@ -58,6 +58,17 @@ TAGPU_RGLSL_JOB* tagpu_rglsl_job_new(const char* tag, int prio, int oneshot,
                                      unsigned int atlasTex, int atlasW, int atlasH,
                                      const unsigned char* pal,
                                      unsigned int destTex, int destW, int destH);
+/* The same, for a destination that already holds a restore and is being
+   repainted in place because the palette moved under it: the frames queued
+   behind it overwrite what is there, so the world recolours cell by cell
+   instead of blanking for the length of the job. */
+TAGPU_RGLSL_JOB* tagpu_rglsl_job_repaint(const char* tag, int prio, int oneshot,
+                                         unsigned int atlasTex, int atlasW, int atlasH,
+                                         const unsigned char* pal,
+                                         unsigned int destTex, int destW, int destH);
+/* Re-point a live job at a new palette (a lazy job outlives its atlas's
+   entries, so it is re-palettable rather than replaceable). */
+void tagpu_rglsl_job_repalette(TAGPU_RGLSL_JOB* j, const unsigned char* pal);
 /* Queue `frames` (copied) behind what is already queued; they restore in this
    order. 0 if out of memory. */
 int  tagpu_rglsl_job_add(TAGPU_RGLSL_JOB* j, const TAGPU_RGLSL_FRAME* frames, int count);
@@ -93,5 +104,8 @@ void tagpu_rglsl_glreset(void);
    levels on average, over the three channels. A frame with its colour key
    `key` on an edge is never tileable (tagpu_restore_glsl.h says why);
    key = -1 for an opaque frame. */
+/* `pal` is the ART's palette -- the engine's own table (tagpu_pal_engine()),
+   never the gamma-scaled one the screen is shown with: the threshold is a raw
+   colour distance, so a scaled palette would reclassify tiles at it. */
 int  tagpu_rglsl_tileable(const unsigned char* px, int w, int h, const unsigned char* pal, int key);
 #endif

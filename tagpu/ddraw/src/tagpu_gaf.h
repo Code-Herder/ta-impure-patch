@@ -104,6 +104,7 @@ typedef struct TAGPU_GAFATLAS {
     int           restoreFailed;
     int           dumpedN;      /* entries when tagpu_restoredump.on last wrote */
     const unsigned char* pal;   /* the live palette, for the tileability test */
+    unsigned      palSerial;    /* tagpu_pal serial the TWIN was restored through */
     /* open-addressed index over `ents`, keyed on the frame header address:
        the lookup runs once per emitted sprite and the feature pass emits
        hundreds per frame against a four-figure entry count, which a linear

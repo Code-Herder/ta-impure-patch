@@ -44,6 +44,7 @@
 #include "opengl_utils.h"
 #include "tagpu_opt.h"
 #include "tagpu_terr.h"
+#include "tagpu_pal.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_glsl.h"
@@ -205,6 +206,7 @@ static int    s_maxTex;
    issued by this frame's slice is restored in this frame's terrain draw. */
 static GLuint s_rgbTex;
 static int    s_rgbState = 0;      /* 0 none, 1 restoring, 2 complete, -1 failed */
+static unsigned s_rgbPalSerial;    /* tagpu_pal serial s_rgbTex was restored through */
 static TAGPU_RGLSL_JOB* s_job;     /* the restorer's job while state is 1     */
 static GLint  s_uRestored;
 static const unsigned char* s_setPix;   /* the current set's tile pixels     */
@@ -732,9 +734,16 @@ static int* restore_order(const char* ta, int count)
     return order;
 }
 
-static int glsl_begin(const char* ta)
+/* `repaint`: the atlas is already restored and only the palette moved, so the
+   destination keeps what it holds and every tile is queued again over it —
+   the terrain recolours centre-out instead of blanking for the 2+ seconds the
+   job takes. */
+static int glsl_begin(const char* ta, int repaint)
 {
-    const unsigned char* pal = (const unsigned char*)(ta + 0x143A7);
+    const unsigned char* pal = tagpu_pal_live();
+    /* the ART's palette for the tileability test, the SCREEN's for the restore
+       itself -- tagpu_pal.h, and tagpu_gaf.c's atlas_insert has the numbers */
+    const unsigned char* art = tagpu_pal_engine();
     int rows = s_atlasH / CELL_PITCH, n = s_atlasN, i, ok;
     int* order;
     TAGPU_RGLSL_FRAME* frames;
@@ -749,7 +758,7 @@ static int glsl_begin(const char* ta)
         f->ay = f->dy = (t / ATLAS_COLS) * CELL_PITCH + CELL_BORDER;
         f->w = f->h = TILE_PX; f->border = CELL_BORDER; f->key = -1;   /* tiles are opaque */
         f->padR = f->padB = 0;                                          /* no alignment slack */
-        f->wrap = tagpu_rglsl_tileable(s_setPix + (size_t)t * TILE_BYTES, TILE_PX, TILE_PX, pal, -1);
+        f->wrap = art ? tagpu_rglsl_tileable(s_setPix + (size_t)t * TILE_BYTES, TILE_PX, TILE_PX, art, -1) : 0;
     }
     free(order);
     /* the destination, re-specified per map: the same layout as s_atlasTex */
@@ -761,11 +770,15 @@ static int glsl_begin(const char* ta)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     } else glBindTexture(GL_TEXTURE_2D, s_rgbTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, ATLAS_W, s_atlasH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    if (!repaint)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, ATLAS_W, s_atlasH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glBindTexture(GL_TEXTURE_2D, 0);
     /* a one-shot job at the head of the queue: the terrain restores before
        any GAF atlas, and its done line is the restore's measurement */
-    s_job = tagpu_rglsl_job_new("terr", 0, 1, s_atlasTex, ATLAS_W, s_atlasH, pal, s_rgbTex, ATLAS_W, s_atlasH);
+    s_job = repaint
+        ? tagpu_rglsl_job_repaint("terr", 0, 1, s_atlasTex, ATLAS_W, s_atlasH, pal, s_rgbTex, ATLAS_W, s_atlasH)
+        : tagpu_rglsl_job_new    ("terr", 0, 1, s_atlasTex, ATLAS_W, s_atlasH, pal, s_rgbTex, ATLAS_W, s_atlasH);
+    s_rgbPalSerial = tagpu_pal_serial();
     ok = s_job && tagpu_rglsl_job_add(s_job, frames, n) > 0;
     if (!ok && s_job) { tagpu_rglsl_job_free(s_job); s_job = NULL; }
     free(frames);
@@ -807,7 +820,8 @@ static void restore_step(const char* ta)
     if (!tagpu_classicpp_on() || !s_atlasTex || !s_setPix) return;
     if (s_rgbState == 0) {
         if (!s_rectValid) return;          /* the order wants a viewport: next frame */
-        if (!glsl_begin(ta)) { s_rgbState = -1; flog("terr: GLSL restore could not start; Classic++ terrain stays indexed"); return; }
+        if (!tagpu_pal_live()) return;     /* ...and a palette: next frame  */
+        if (!glsl_begin(ta, 0)) { s_rgbState = -1; flog("terr: GLSL restore could not start; Classic++ terrain stays indexed"); return; }
         s_rgbState = 1;
         return;
     }
@@ -825,6 +839,25 @@ static void restore_step(const char* ta)
             flog(b);
             dump_if_armed();
         }
+        return;
+    }
+    /* Complete, and then the palette moved under it (the Gamma option, or
+       `+gamma N`): the tiles hold the brightness the old palette gave them
+       while the engine's own pixels beside them moved. Queue them all again
+       over the texture that is there — one repaint at a time, because this
+       only runs from state 2. */
+    if (s_rgbState == 2 && s_rgbPalSerial != tagpu_pal_serial()) {
+        char b[128];
+        if (!s_rectValid) return;          /* restore_order wants a viewport: next frame */
+        if (!glsl_begin(ta, 1)) {
+            s_rgbPalSerial = tagpu_pal_serial();   /* do not retry every frame */
+            flog("terr: palette changed but the repaint could not start; the atlas keeps the old colours");
+            return;
+        }
+        s_rgbState = 1;
+        _snprintf(b, sizeof b, "terr: palette changed (serial=%u): %d tiles queued for repaint",
+                  s_rgbPalSerial, s_atlasN);
+        flog(b);
     }
 }
 

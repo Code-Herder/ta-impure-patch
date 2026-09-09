@@ -34,7 +34,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + a 3-site byte patch behind `vpwide.on`, plus the `0x499221` redirect that also carries the zoom's mouse-point repair and is armed by `zoom.on` too (§2.3d) |
 | Terrain in **restored true colour** (Classic++, `tagpu_classicpp.on`) | G14a (spike, 2026-09-04); GPU G14b (2026-09-04); **GLSL G14c (2026-09-05)** | `tagpu_restoreglsl.c` runs the unditherer's full model as **fragment passes in the game's own GL context** — the shaders of `tagpu_restore_glsl.h`, the weights of `<model>.w32.bin` — sliced from `tagpu_terr.c`'s gather at 12 ms of GPU time per frame under a `GL_TIME_ELAPSED` budget, visible tiles first, painting straight into the terrain pass's RGBA atlas: Two Continents' 5062 tiles in 2.1 s at 59.7 fps, the biggest stock map's 11,561 in 4.2 s, no worker thread, no runtime, no disk. The ONNX Runtime path (`tagpu_restore.c`, G14a/b) was deleted the same day (G14d). **G14e (2026-09-05)**: the cells show as they land, centre-out (the restored atlas's alpha is the flag), and the **feature and effects atlases restore lazily** — `tagpu_gaf.c` queues every atlas miss to the same restorer, each atlas carries an RGBA8 twin the sprite shaders sample where its alpha is 1, keyed texels inpainted by a nearest-ring stand-in in the FILL pass. **G14f (2026-09-05): lit** — the terrain from the engine's height grid (`main+0x14287`, one R8 texture per map, the lab's grid normal per fragment), the units from the posed face normal carried in the vertex stream, the feature sprites from the ground's lambert at their anchor; one rule, `tagpu_glsl.h` `TAGPU_GLSL_LIGHT_FN`, level ground exactly 1.0; the knobs in `tagpu_classicpp.cfg` (`tagpu_classicpp.c`). **G14g (2026-09-05): the unit textures** — `tagpu_render3do.c`'s atlas is a `TAGPU_GAFATLAS` now, every frame in a 4-texel-padded, 4-aligned cell, its RGBA8 twin restored lazily like the sprites' (priority 3) and **mipmapped to level 2**, trilinear and 4× anisotropic, the mips regenerated after each painted batch; the unit shader samples it where its alpha says so. Classic's R8 atlas has the same cells and does not move a pixel (`tascene ab`, and the engine shot byte-identical to G14f's outside the chat). Reads only — see [Classic and Classic++ renderers](renderers.html) §4c and §5 |
-| **Chat, dialogs, side panel, minimap, top bar, the shell** | **Phase E, in progress** ([GL UI renderer](gui-renderer.html), decided 2026-09-06). **G15a done 2026-09-07**: every UI pixel-writing leaf is observed and the census explains 100 % of what changes on the presented surface across the screen inventory. **G15b done 2026-09-07**: the observed ops are replayed into GL twins of the engine's surfaces and the presented surface's twin is drawn over the world composite — the in-game panel, build pages, bars, option screens, chat and the F4 popup, and the whole shell, at 1:1 Classic; **0 differing pixels and 0 holes under `strict` on every in-game stop of the inventory at 1024×768 and at 1920×1080** (§2.3e). **G15c done 2026-09-07**: the rest of the in-game frame reached and measured — ARM and CORE, both resolutions, the HUD strings, the popups and the option screens over the world at 0.5× and 2×, the minimap under motion: 32 of 32 stops at 0/0/0 in all four runs, no DLL change. **G15d done 2026-09-07**: the shell across the 640×480 context switch, three game→shell→game cycles in one process, clean — the publisher drops batches while the render thread is dead or crawling (the switch stops it and it crawls out of a game), skips the stale queue after the new GL context, retires the main offscreen's dead entry, and resolves the twin through the palette the frame is *presented* with, not `main+0x143A7` (the engine gamma-scales the presented one) | the engine's surface is still drawn and still the fallback beneath the twin (nothing is suppressed in phase 1); the cursor stays the engine's; Classic++ art (G15e) is the next gate; the world passes reading `main+0x143A7` are wrong at Gamma ≠ 12 (a native-pass fix, not this gate's); on by default since 2026-09-08 (§2.8; `tagpu_gui.off` turns it off, `tagpu_gui.on` still carries the tokens); **phase 2 — the UI scaled — was designed 2026-09-08** ([GL UI renderer](gui-renderer.html) §13, roadmap G17a–e: the 1× mirror kept as the oracle with a device-res sharp layer beside it, a string op for text, our cursor at 1× device size, the minimap regenerated with the engine's dots) |
+| **Chat, dialogs, side panel, minimap, top bar, the shell** | **Phase E, in progress** ([GL UI renderer](gui-renderer.html), decided 2026-09-06). **G15a done 2026-09-07**: every UI pixel-writing leaf is observed and the census explains 100 % of what changes on the presented surface across the screen inventory. **G15b done 2026-09-07**: the observed ops are replayed into GL twins of the engine's surfaces and the presented surface's twin is drawn over the world composite — the in-game panel, build pages, bars, option screens, chat and the F4 popup, and the whole shell, at 1:1 Classic; **0 differing pixels and 0 holes under `strict` on every in-game stop of the inventory at 1024×768 and at 1920×1080** (§2.3e). **G15c done 2026-09-07**: the rest of the in-game frame reached and measured — ARM and CORE, both resolutions, the HUD strings, the popups and the option screens over the world at 0.5× and 2×, the minimap under motion: 32 of 32 stops at 0/0/0 in all four runs, no DLL change. **G15d done 2026-09-07**: the shell across the 640×480 context switch, three game→shell→game cycles in one process, clean — the publisher drops batches while the render thread is dead or crawling (the switch stops it and it crawls out of a game), skips the stale queue after the new GL context, retires the main offscreen's dead entry, and resolves the twin through the palette the frame is *presented* with, not `main+0x143A7` (the engine gamma-scales the presented one) | the engine's surface is still drawn and still the fallback beneath the twin (nothing is suppressed in phase 1); the cursor stays the engine's; Classic++ art (G15e) is the next gate; the world passes reading `main+0x143A7` were wrong at Gamma ≠ 12 — **fixed 2026-09-09**, §2.3f; on by default since 2026-09-08 (§2.8; `tagpu_gui.off` turns it off, `tagpu_gui.on` still carries the tokens); **phase 2 — the UI scaled — was designed 2026-09-08** ([GL UI renderer](gui-renderer.html) §13, roadmap G17a–e: the 1× mirror kept as the oracle with a device-res sharp layer beside it, a string op for text, our cursor at 1× device size, the minimap regenerated with the engine's dots) |
 
 **Phases.** Phase 0 (foothold) is complete and Phase B (blit-level GPU units) is verified
 complete. Phase D's scene takeover — G13a through G13e — has landed, which is what the table
@@ -608,7 +608,11 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   taken under the fork's `g_ddraw.cs` (the game thread NULLs the primary inside it); the
   engine's table is the fallback until a primary exists. The heartbeat carries `palchg=` (uploads
   — a fade is a run of them) and `paldiff=n@i` (entries where the presented palette and
-  `+0x143A7` disagree, and the first): 0 in game, 1 (index 9) in the shell, 255 at `+gamma 15`.
+  `+0x143A7` disagree, and the first): 0 in game, 1 (index 9) in the shell, **235 (from index 1)**
+  at `+gamma 15` — the count `uiwalk.py` records and this page had as 255 until 2026-09-09.
+  **Since 2026-09-09 this is not the UI layer's own code**: the resolution moved into
+  `tagpu_pal.c` and serves the world's passes too (§2.3f), which is where the same-frame
+  disagreement it measured actually was.
 
 **MEASURED 2026-09-07** (`tools/uiwalk.py --layer`, `strict`, every world pass armed): **0
 differing pixels outside the viewport and 0 holes on every in-game stop** — `ARMMAIN2`,
@@ -631,6 +635,86 @@ GL object changed for it; the census on CORE explains 1 717 044 of 1 717 044 cha
 **Fields we write: none.** The module reads the engine's surfaces, the palette and the mouse
 object — and, since G15d, the fork's own palette object under the fork's lock — and writes GL
 objects of its own; the engine's behaviour is byte-identical with it armed, on or off.
+
+### 2.3f The palette the world resolves through (`tagpu_pal.c`, always on) — 2026-09-09
+
+`main+0x143A7` is the engine's own palette table and **it is not what the screen shows.** Every
+palette the engine sets goes through `0x4BA200`, which keeps the entries in the graphics globals
+and hands DirectDraw `min(255, entry × *(float*)(globals+0x614))` — the Gamma factor
+(`SetGamma 0x4BA590`; an option screen computes `0.5 + Gamma/24`, `+gamma N` in chat sets `N/10`
+outright) — and never scales `+0x143A7` ([engine map](exe-reverse-engineering.html), "The palette
+the screen is presented with"). G15d made the UI twin resolve through the presented palette and
+left the world reading the engine's table, so at any factor but 1.0 the world was the wrong
+brightness beside the engine's own pixels **in the same frame** — and the reference setup's own
+instances run at 1.125, because their registry Gamma is 15.
+
+`tagpu_pal.c` is the one resolution of that question for the whole DLL. `tagpu_overlay_draw`
+marks it stale once per present and the first reader re-resolves it — the primary's palette
+object (`g_ddraw.primary->palette->data_rgb`, what cnc-ddraw's `ddp_SetEntries` stored) read
+under the fork's `g_ddraw.cs`, the engine's table the fallback until a primary exists — into a
+1024-byte snapshot of ours. **The lifetime is the fork's lock, not a probe**: the game thread
+NULLs `g_ddraw.primary` inside that section and frees the object only after leaving it, so a
+pointer read *and dereferenced* inside it is a live object or NULL, never a freed one
+(`CLAUDE.md`, *Fixes must be safe by construction*). The snapshot being ours also means the
+atlases and restorer jobs that keep a palette pointer no longer hold one into engine memory,
+which they did before.
+
+- **The Classic half is one upload.** The world has exactly one palette texture —
+  `tagpu_native.c`'s `s_palTex`, handed on to the terrain, feature, effect, marker and
+  replacement-mesh passes as `uPal` — so the indexed path is fixed by that upload taking
+  `tagpu_pal_live()`. It is **exact**, not approximate: our Classic passes do their arithmetic in
+  index space (the SHD row, the fog LUT) and look the palette up last, exactly as the engine
+  does, so resolving through the scaled palette *is* the engine's `min(255, gamma × pal[i])`.
+- **The Classic++ twins are baked, so they go stale when the palette moves.** Each records the
+  serial it was restored through; when that moves, the atlas re-points its job's palette
+  (`tagpu_rglsl_job_repalette`) and queues every entry again **without clearing the destination**
+  (`tagpu_rglsl_job_repaint`), so the world recolours cell by cell instead of blanking for the
+  length of the job. The re-arm is gated on the job being **idle**, which bounds it to one
+  repaint of an atlas in flight however often the palette moves — a bound, not a rate limit.
+- **A replacement mesh's colour never came from a palette**, so resolving through a different one
+  cannot reach it: `tagpu_hires_draw.c` takes `tagpu_pal_gamma()` as `uGamma` and applies the
+  engine's own `min(255, c × gamma)` to its fragment instead.
+- **What still wants the engine's table wants it because it is unscaled.**
+  `tagpu_rglsl_tileable`'s threshold is a raw colour distance and a scaled palette stretches
+  every distance by the same factor, so it takes `tagpu_pal_engine()` and the classification
+  stays a property of the ART. Measured on Two Continents' 5062 terrain tiles: 177 wrap-padded at
+  factor 1.5 against 400 at 1.0 while it read the presented palette; **400 at both** after.
+- **`tagpu_order.c`'s `seq_ink` is the one reader that stays on `+0x143A7` directly**, and the
+  reason is the thread, not the colour: the order walk runs on the GAME THREAD
+  (`tagpu_order.h`, "the two-thread split") while this module resolves on the render thread's
+  cadence, so a call from there would race the snapshot every other pass reads. It costs nothing
+  to leave it — the ink it picks is the argmax of a luminance ranking over one sprite's own
+  colours, and scaling every entry by the same factor cannot move an argmax. **Everything in
+  `tagpu_pal.h` is render-thread only**, and that is the reason it is.
+
+**MEASURED 2026-09-09** — Two Continents, `scenarios/tascene-parity.json`, camera parked on open
+ground at 1024×768, Classic (`classicpp` off), the pass's own A/B: `terr.on` (ours) against
+`terr.on=passive` (the engine's own terrain, in the same frame, through the presented palette).
+The "before" column is HEAD's DLL built into a scratch tree and pinned with `--keep-dll`, so both
+columns are the same scene at the same factor:
+
+| | differing px of the 896×703 viewport |
+|---|---|
+| **before**, `+gamma 15` (factor 1.5) | **583 010 — 92.6 %**, mean RGB 0.67 / 0.73 / 0.84 of the engine's |
+| **after**, `+gamma 15` (factor 1.5) | **19 419 — 3.08 %** |
+| **after**, factor 1.125 (registry Gamma 15) | **19 419 — 3.08 %** |
+| **after**, factor 1.0 (the stock default) | **19 419 — 3.08 %** |
+
+Those 19 419 are the engine's own tree sprites, which this measurement deliberately leaves to it
+(`feat.on` unarmed, and our terrain covers what it drew): the **same** pixels differ at every
+factor and the terrain around them is byte-identical, which is the whole claim. The other
+direction says the same thing from inside: our own frame at factor 1.0 against 1.5 differs on
+99.99 % of the viewport at a mean ratio of 1.115 / 1.118 / 1.109 — **before the fix those two
+frames were the same picture.**
+
+The Classic++ repaint measured on the same map: `terr: palette changed (serial=N): 5062 tiles
+queued for repaint`, then a full second restore in 2.5 s at 57 fps, with the visible cells (which
+restore first — `restore_order` ranks from the centre of the viewport) correct within two
+seconds and **no blank frame**: a `glshot` taken 2 s into the repaint already carries the new
+brightness and zero black pixels. The heartbeat's `palchg=`, `paldiff=n@i` and `palsrc=` now come
+from this module rather than the UI layer's own copy, so the numbers `uiwalk.py` reads are
+unchanged, and `tagpu.log` gains one `pal: presented palette changed (serial= src= diff= gamma=)`
+line per change, rate-limited to one a second so a campaign fade cannot flood it.
 
 ### 2.4 Tooling (not part of the render path)
 
@@ -685,7 +769,8 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x142E7..0x142ED` | minimap rect on screen |
 | `main+0x1423B` / `+0x1423F` | view size in map cells (the minimap rect's size comes from here) |
 | `main+0x14283` / `+0x1428B` | `TILE_SET` `{count, pixels}` and the `u16` `TILE_MAP` — the terrain pass reads both per frame. The GLSL restorer reads them once more when its job starts, on the render thread: each tile's edge texels for the tileability test and the whole tile map once, to rank tiles by distance from the centre of the viewport (`tagpu_terr.c` `restore_order`, G14e: from the centre, so the reveal radiates); the pixels themselves are sampled from the R8 atlas already on the GPU |
-| `main+0x143A7` | the live palette, 256 × (R, G, B, pad) — uploaded per frame by the native passes; snapshotted once per job by the restorer into its own 256×1 texture (the terrain's, and since G14e the feature and effects atlases' — `tagpu_feat.c`/`tagpu_fx.c` hand it to `tagpu_gaf_atlas_restore` each frame, and `tagpu_gaf_atlas_get` reads it for the tileability test of every frame it uploads; since G14g the unit atlas's too — `tagpu_native.c` hands it to `tagpu_r3d_atlas_frame` once per frame before its first UV lookup) |
+| `main+0x143A7` | the engine's own palette table, 256 × (R, G, B, pad). Read only, once per present, by `tagpu_pal.c` and since 2026-09-09 by nothing else — **and it is not what the screen shows** (§2.3f). Every pass that turns an index into a colour takes `tagpu_pal_live()`: the world's single `uPal` upload, and the restorer's per-job snapshot for the terrain, the feature and effects atlases (`tagpu_gaf_atlas_restore`, per frame) and the unit atlas (`tagpu_r3d_atlas_frame`, per frame before the first UV lookup). Two readers still want the unscaled table and say why: `tagpu_rglsl_tileable`'s threshold is a raw colour distance, so it must classify the ART and not the display (`tagpu_pal_engine()`); and `tagpu_order.c`'s `seq_ink` reads `+0x143A7` **directly**, because its walk is on the GAME THREAD and must not touch a snapshot the render thread resolves — and because a luminance ranking over one sprite's colours cannot be changed by a uniform scale of all of them |
+| `*(0x51FBD0) + 0x614` | the gamma factor `0x4BA200` multiplies every palette entry by on its way to DirectDraw (`SetGamma 0x4BA590`). Read only, once per present, and only for the one thing a palette cannot reach — a replacement mesh's glTF texture, which never came from a palette at all (`tagpu_hires_draw.c`'s `uGamma`, §2.3f). **Bounded** to 0.05..8.0 against the slider's own 0.5..1.5 and the chat command's N/10; anything else, NaN included, reads as 1.0, the identity |
 | `main+0x14287` | the `FeatureStruct` grid, one 13-byte record per 16-px cell, `mapW16 × mapH16` (`main+0x14233`/`+0x14237`). Read only. `tagpu_feat.c` reads the height byte (`+0x04`) of the anchor's four corners per anchor per frame for the engine's own projection, and since G14f the four central-difference neighbours too, for the ground's lambert (Classic++ only); `tagpu_terr.c` (G14f) copies the height byte of **every** cell once per map, when it builds the atlas, into an R8 texture the terrain shader samples — keyed on the grid pointer, the dims and the tile set, re-checked every frame; the grid is `IsBadReadPtr`-checked whole before the copy (7 MB on Two Continents), and an unreadable grid leaves Classic++ terrain **unlit** (the restored colour and the grey rule stay, the lambert is skipped), logged and retried every 60 frames |
 | **`main+0x1434D`** | **`ScrollSpeed`** — sim-neutral (a local camera preference no other machine ever sees), driven at base/z, and its save path is guarded (§2.3) |
 | **`UnitOrders->Pos`, `unit+0x5C` → `+0x22`/`+0x26`/`+0x2A`** | **WRITTEN, and it is SIM state** — not by us directly but by `ORDERS_NewMainOrder2Unit 0x43AFC0`, which the scenario applier calls on the game thread from the tick site. Three 16.16 dwords, `{x, altitude, depth}`, copied verbatim by the constructor `0x43A0C0`. An order is a sim command and replicates in multiplayer, so a wrong value here is a wrong game, not a wrong picture; the applier is a fixture tool and is never armed in a played session |
@@ -1163,6 +1248,8 @@ means reimplementing selection, box-select, build placement and every cursor mod
 | A **replacement-mesh structure** casts every piece; the engine's raster takes only pieces with prim flag bit1 | `tagpu_hires_draw.c` `uSlant` | zeroing the shadow pose of the pieces whose engine prim lacks bit1 — no replacement structure exists yet to test it on |
 | A **nanoframe** casts nothing until complete; the engine drew the cached shadow of its finished pieces (teal under `terrown`) | `tagpu_native.c` (nano > 0 is not listed) | listing nanoframes shadow-only, pieces with bit1 |
 | **The structure-shadow flip is installed at attach and never undone**, like every code patch. Remove `tagpu_native.on` live under `owndraw all` and buildings lose their shadows along with their bodies (that state already draws no unit at all — *ta-drive*, "a stale owndraw.on is worse than none"); re-creating the file brings both back within 30 frames. With `writeback` armed beside `owndraw all` the engine's COMPLETED branch blits a real silhouette for a structure — teal under `terrown`, a silhouette instead of the slant without it | `tagpu_owndraw.c` | nothing for play; an A/B that needs the engine's cached shadow launches without `owndraw all` |
+| **Classic++ restored art is not exactly linear in the Gamma factor.** The restorer expands the indexed atlas through the palette the screen is shown with (§2.3f), so at a factor other than 1.0 the model sees brighter art than it was trained on. MEASURED 2026-09-09, Two Continents at factor 1.5 against `min(255, the factor-1.0 frame × 1.5)`: 88 % of the viewport differs, but by **more than 6 levels on 0.68 % of it**, max 19. The Classic (indexed) path is exact at every factor; this is the Classic++ lane only | `tagpu_pal.c`, §2.3f | restoring in the unscaled domain and applying the factor where each twin is *sampled* — five shaders in place of one palette, and it would also retire the repaint |
+| **A Gamma change mid-game costs a full Classic++ re-restore** — 2.5 s of sliced GPU work per atlas that has one, the terrain's being the large one. Bounded (one repaint in flight per atlas) and progressive (no blanking), but it is real work for a slider the player is dragging | `tagpu_gaf.c` / `tagpu_terr.c`, §2.3f | nothing planned; the same "sample-time factor" change above would remove the need entirely |
 | Extreme zoom-out clamps the terrain span to `MAXCELL` and leaves an honest black margin | `tagpu_terr_clamp_span()` | nothing — a **clamp** was chosen over a bail on purpose; a bail hands the draw back and flashes, which is the one behaviour that looks like a bug |
 
 ### 3.3 Open questions, not limits

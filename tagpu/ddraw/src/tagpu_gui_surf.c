@@ -32,10 +32,8 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_terr.h"
 #include "tagpu_overlay.h"
+#include "tagpu_pal.h"                    /* the one resolution of the presented palette */
 #include "opengl_utils.h"
-#include "dd.h"                         /* g_ddraw.primary->palette: the palette the engine's frame is PRESENTED with */
-#include "IDirectDrawSurface.h"
-#include "IDirectDrawPalette.h"
 
 #define TA_MAINPP      0x00511DE8u
 #define OFF_PALETTE    0x143A7          /* 256 x {R,G,B,pad}                   */
@@ -105,7 +103,8 @@ static TAGPU_GAFATLAS s_atlas;
 static TAGPU_GAFENT   s_ents[ATLAS_MAX];
 static unsigned char* s_rg;             /* interleave scratch, 2 bytes per texel */
 static unsigned s_rgCap = 0;
-static unsigned char s_palCopy[1024];
+static unsigned s_palUp;                /* tagpu_pal serial the palette TEXTURE holds  */
+static int    s_palUpValid;             /* ...and whether it holds one at all          */
 
 static int    s_on = 0, s_strict = 0;
 static DWORD  s_lastPoll = 0;
@@ -114,10 +113,6 @@ static int    s_skipToReset = 0;        /* after a GL context change: the queue'
                                            RESET were published against twins and an atlas that died with the
                                            context — take their arena bytes, apply nothing (see drain) */
 static unsigned s_skipped = 0;
-static unsigned s_palChanges = 0;       /* presented-palette uploads (a fade is a run of them)             */
-static int    s_palDiff = 0;            /* entries where the presented palette differs from main+0x143A7  */
-static int    s_palDiffAt = -1;         /* the first such entry                                            */
-static int    s_palSource = 0;          /* 1 = cnc-ddraw's palette object, 0 = the engine's table (no primary yet) */
 
 /* ----------------------------------------------------------------- shaders */
 /* a quad in surface pixels -> the twin's FBO (row 0 = surface row 0) */
@@ -254,7 +249,7 @@ static int init_gl(void)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glBindTexture(GL_TEXTURE_2D, 0);
-    memset(s_palCopy, 0xFF, sizeof s_palCopy);
+    s_palUpValid = 0;
     memset(&s_atlas, 0, sizeof s_atlas);
     s_atlas.ents = s_ents; s_atlas.max = ATLAS_MAX; s_atlas.dim = ATLAS_DIM; s_atlas.tag = "gui";
     s_atlas.pad = 0; s_atlas.align = 0; s_atlas.mip = 0;      /* 1:1, NEAREST, the 1-texel border */
@@ -472,63 +467,20 @@ static void drain(void)
 }
 
 /* ------------------------------------------------------------------ layer */
-/* THE PALETTE THE ENGINE'S FRAME IS SHOWN WITH is not main+0x143A7. Every
-   palette the engine sets goes through 0x4BA200(entries, first, count), which
-   keeps the entries in the graphics globals (+0x214) and hands DirectDraw
-   min(255, entry x gamma) with gamma = *(float*)(globals+0x614) — the Gamma
-   option (SetGamma 0x4BA590 [CORPUS], gamma = 0.5 + Gamma/24, 1.0 at the
-   default 12), applied only on the way to SetEntries, never to +0x143A7 (read
-   2026-09-07, engine map "The palette the screen is presented with"). The
-   engine's own pixels beneath the twin are drawn by cnc-ddraw through the
-   palette its SetEntries received, so that is the palette the twin resolves
-   through: the primary's palette object in this DLL. The engine's table is
-   the fallback until a primary exists, and the number of entries where the
-   two disagree is measured at every upload (`paldiff=` in the heartbeat):
-   0 at Gamma 12, and the world passes, which read +0x143A7, are wrong by
-   exactly that much at any other setting. */
+/* THE PALETTE THE ENGINE'S FRAME IS SHOWN WITH is not main+0x143A7 —
+   tagpu_pal.h has the engine facts and does the resolving, for the world's
+   passes and this one alike. Here it is only uploaded, and only when it has
+   actually moved: the serial says so. */
 static void upload_palette(void)
 {
-    const char* ta = *(const char* const*)TA_MAINPP;
-    const unsigned char* engine = NULL;
-    unsigned char rgba[1024];
-    int i;
-    int havePresented = 0;
-    if (ptr_ok(ta) && ptr_ok(ta + OFF_PALETTE)) engine = (const unsigned char*)(ta + OFF_PALETTE);
-    /* under the fork's lock: the game thread NULLs g_ddraw.primary inside it
-       when the primary's last reference goes (IDirectDrawSurface__Release),
-       and frees the object only after leaving it — so a pointer read and
-       dereferenced inside the section is a live object or NULL, never a
-       freed one. The present itself runs outside the section. The interleave
-       reads data_rgb by member (RGBQUAD is B,G,R,reserved — reading the raw
-       bytes as R,G,B swaps red and blue, paldiff 218 not 0), so it must stay
-       inside the guard; the 2026-09-07 review's "copy the 1024 bytes out and
-       convert outside the lock" was declined because the byte copy loses the
-       member order and the saving is below the meter. */
-    EnterCriticalSection(&g_ddraw.cs);
-    if (g_ddraw.primary && g_ddraw.primary->palette) {
-        const RGBQUAD* q = g_ddraw.primary->palette->data_rgb;
-        for (i = 0; i < 256; i++) { rgba[4*i] = q[i].rgbRed; rgba[4*i+1] = q[i].rgbGreen; rgba[4*i+2] = q[i].rgbBlue; rgba[4*i+3] = 255; }
-        havePresented = 1;
-    }
-    LeaveCriticalSection(&g_ddraw.cs);
-    if (havePresented) {
-        s_palSource = 1;
-    } else if (engine) {
-        memcpy(rgba, engine, 1024);
-        s_palSource = 0;
-    } else return;
-    if (memcmp(rgba, s_palCopy, 1024) == 0) return;
-    memcpy(s_palCopy, rgba, 1024);
-    s_palChanges++;
-    s_palDiff = 0; s_palDiffAt = -1;
-    if (engine)
-        for (i = 0; i < 256; i++)
-            if (rgba[4*i] != engine[4*i] || rgba[4*i+1] != engine[4*i+1] || rgba[4*i+2] != engine[4*i+2]) {
-                if (s_palDiffAt < 0) s_palDiffAt = i;
-                s_palDiff++;
-            }
+    const unsigned char* pal = tagpu_pal_live();
+    unsigned serial = tagpu_pal_serial();
+    if (!pal) return;
+    if (s_palUpValid && s_palUp == serial) return;
+    s_palUp = serial;
+    s_palUpValid = 1;
     glBindTexture(GL_TEXTURE_2D, s_palTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, s_palCopy);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, pal);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
@@ -634,6 +586,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
     if (f->frame_counter - last >= 300) {
         char b[260];
+        int palDiffAt, palDiff = tagpu_pal_diff(&palDiffAt);
         static LARGE_INTEGER t0, fq;
         LARGE_INTEGER t1;
         double fps = 0.0;
@@ -645,7 +598,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
-                  s_skipped, s_palChanges, s_palDiff, s_palDiffAt, s_palSource, fps);
+                  s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(), fps);
         slog(b);
     }
 }
@@ -657,7 +610,7 @@ void tagpu_gui_glreset(void)
     s_ntwins = 0; s_presented = 0;
     s_gl = 0; s_sprProg = s_cpyProg = s_layProg = s_vao = s_vbo = s_palTex = 0;
     tagpu_gaf_atlas_lost(&s_atlas);
-    memset(s_palCopy, 0xFF, sizeof s_palCopy);        /* the palette texture died too: re-upload */
+    s_palUpValid = 0;                                 /* the palette texture died too: re-upload */
     s_skipToReset = 1;
     g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_GLCTX;
 }

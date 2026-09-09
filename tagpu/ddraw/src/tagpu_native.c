@@ -87,6 +87,7 @@
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
+#include "tagpu_pal.h"       /* the palette the screen is SHOWN with, not main+0x143A7 */
 #include "tagpu_vpwide.h"
 #include "tagpu_shadow.h"    /* Classic++ cast shadows: the depth pass + read-back (G14i) */
 
@@ -2188,10 +2189,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 
     char* ta = *(char**)TA_MAINPP;
     if (!ptr_ok(ta)) return;
+    /* The palette THE SCREEN IS SHOWN WITH, not the engine's own table: the
+       engine gamma-scales every palette on the way to DirectDraw and never
+       scales main+0x143A7, so a pass reading that table draws the world at
+       the wrong brightness at any Gamma but the default (tagpu_pal.h). One
+       resolve serves the atlas restore here and uPal below. */
+    const unsigned char* pal = tagpu_pal_live();
+    /* No frame is drawn with an unspecified palette. Unreachable in practice —
+       ptr_ok(ta) above is what the engine-table fallback needs — but s_palTex
+       is only given storage by the upload below, and a shader sampling a
+       storageless texture is the all-black failure mode the fog LUT records. */
+    if (!pal) return;
     /* the unit atlas's frame: recycle if full, arm and step its Classic++
-       restore -- before any face asks it for a UV (main+0x143A7 is the live
-       palette, the one uploaded to uPal below) */
-    tagpu_r3d_atlas_frame((const unsigned char*)(ta + 0x143A7));
+       restore -- before any face asks it for a UV */
+    tagpu_r3d_atlas_frame(pal);
     char* beg = *(char**)(ta + OFF_BEGIN);
     char* end = *(char**)(ta + OFF_END);
     if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return;
@@ -2325,19 +2336,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
     }
 
-    /* ---- live palette (re-read per frame; it does NOT cycle -- terr.c) ---- */
+    /* ---- the live palette (re-read per frame; it does NOT cycle -- terr.c),
+       and this is the ONLY palette texture the world has: terrain, features,
+       effects, markers and the replacement meshes are all handed s_palTex. ---- */
     {
-        const unsigned char* pal = (const unsigned char*)(ta + 0x143A7);
-        static unsigned char rgba[256 * 4];
-        int i;
-        for (i = 0; i < 256; i++) {
-            rgba[i*4+0] = pal[i*4+0]; rgba[i*4+1] = pal[i*4+1];
-            rgba[i*4+2] = pal[i*4+2]; rgba[i*4+3] = 255;
-        }
         x_glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, s_palTex);
-        if (!s_palInit) { glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba); s_palInit = 1; }
-        else glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        if (!s_palInit) { glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pal); s_palInit = 1; }
+        else glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, pal);
         x_glActiveTexture(GL_TEXTURE0);
     }
 

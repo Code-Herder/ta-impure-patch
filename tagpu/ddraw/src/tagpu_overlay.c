@@ -33,6 +33,7 @@
 #include "tagpu_weapons.h"
 #include "tagpu_zoom.h"
 #include "tagpu_reclaim.h"
+#include "tagpu_pal.h"
 
 /* GL entry points the fork does not already expose — load once ourselves. */
 typedef void (APIENTRY *PFN_READPIXELS)(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,void*);
@@ -585,6 +586,11 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        out. Not the writeback either — its opt-in 3DO path reads them too.
        The pass bracket's end stays in the caller (render_ogl.c). */
     if (tagpu_reclaim_teardown_active()) { tagpu_zoom_frame_end(); return; }
+
+    /* the palette the screen is shown with, once for every pass that resolves
+       an 8-bit index this frame -- the world's and the UI layer's alike
+       (tagpu_pal.h). A flag, not a read: the first reader below does the work. */
+    tagpu_pal_frame();
 
     /* live-state logs tacli depends on (roster, units:, mouse:) + the 3DO probe */
     log_units(f);
