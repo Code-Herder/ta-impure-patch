@@ -941,7 +941,21 @@ and `shield`, the three that were never on the table. **Not measured**: a player
 is what the `_local` test VM is for; the defaults on a map change (the `*own` halves are attach
 time, the rest re-read every 30 frames, so nothing new is expected).
 
-### 2.9 The pose race, and the guard that closes it (`tagpu_native.c`, on by default, `tagpu_posefix.off`)
+### 2.9 The pose race, and the guard that closed it — HISTORY (removed by G16 step 8, 2026-09-09)
+
+> ⚠ **None of this is behaviour any more.** The guard, the rest-equality detector, the
+> reconstruction, `posewatch` and the levers `tagpu_posefix.off` / `tagpu_posewatch.on` /
+> `tagpu_poserecon.on` were deleted with the CPU emitters that were the only things that reached
+> them, and the `native:` line's `posefix=` / `guard=` / `rest=` / `norecon=` / `errmax=` fields
+> went with them. **Nothing reads `prim+0x22` now** — §2.11 builds the pose from the FIELDS — so
+> the race described below cannot happen rather than being detected and worked around.
+>
+> The section is kept whole because it is the evidence, not the behaviour: it is where the
+> artifact was characterised, where the engine's two-stage repose was established, and what every
+> later gate was measured against. Read it as the record of a bug that no longer has a mechanism.
+> What replaced each of its parts is [GPU posing](gpu-posing.html) §4's refusal ledger; what is
+> left of the residual is named at the end of §2.11.
+
 
 **The bug.** A walking commander showed one-frame pops: for exactly one presented frame the unit
 was drawn in its **unrotated rest orientation** — upright, front-on, no body yaw — and then
@@ -1117,13 +1131,18 @@ reconstruction on every frame instead of only on a trip, which has no timing hol
 pays a `pose_accum` per unit per frame. The architecture that removes the question entirely is
 **G16** in the roadmap: pose 3DOs on the GPU from a static mesh, the way `tagpu_hires_draw.c`
 already poses replacement models — that path never reads `prim+0x22` and the race cannot happen
-to it.
+to it. *[DONE 2026-09-09, step 8. Neither expensive option was ever built, and neither is needed:
+the question was removed rather than answered. What is left is a strictly smaller residual — a
+pose mixed across one tick — named at the end of §2.11.]*
 
 **Not closed by this.** The same live read is made by `tagpu_hires_draw`'s replacement-mesh path
 through `hires_pose`, which reads the pose *fields* rather than the buffer and so cannot show the
 rest pose — but it can show a pose mixed across two ticks, which nothing here measures. And the
 guard says nothing about the *anchor*: the unit's 16.16 position is read without any interlock,
 which is sound for a single aligned dword but has never been checked across the three of them.
+*[2026-09-09: since step 8 EVERY unit is drawn the way this paragraph describes the hires path,
+so what was a note about one pass is now the whole renderer's residual. Both halves of it are
+still open and still unmeasured, and §2.11 carries them.]*
 
 ### 2.10 The per-type geometry bake (`tagpu_posebake.c`, OFF by default, `tagpu_posebake.on`) — G16 step 4
 
@@ -1153,14 +1172,15 @@ invalidation was watched on an exit to the shell: `posebake: dropped 53 geometry
 material with them) … GL 2`. *[The 27 this first quoted was an earlier run of the same test, before
 the drop line reported the cascade separately; both are real, but only one is the shipped build.]*
 
-### 2.11 The posed program (`tagpu_posedraw.c`, OFF by default, `tagpu_posedraw.on`) — G16 steps 5-6
+### 2.11 The posed program (`tagpu_posedraw.c`) — THE unit renderer, G16 steps 5-8
 
-The pass that finally **draws** from §2.10's buffers. A unit is one `glDrawArrays` out of its type's
-geometry and material VBOs with its whole pose in a uniform block; no vertices are built for it on
-the CPU at all. Since step 6 that covers **all three baked ranges** — the body, the structure-shadow
-slant and the nanoframe wireframe — which is every reader of `prim+0x22` except the selection lines
-and the effects models. The CPU emitters stay beside it as Gate B's and Gate D's oracle until the
-last commit of the gate.
+**There is no lever and no alternative.** `tagpu_posedraw.on` was a measurement lever while the CPU
+emitters were Gate B's oracle; step 8 deleted them, so this pass draws every unit or the unit is
+not drawn. A unit is one `glDrawArrays` out of its type's geometry and material VBOs with its whole
+pose in a uniform block; no vertices are built for it on the CPU at all. That covers **all three
+baked ranges** — the body, the structure-shadow slant and the nanoframe wireframe — which was every
+reader of `prim+0x22` except the selection lines and the effects models, and those two are all that
+is left on the shared stream.
 
 | | |
 |---|---|
@@ -1169,13 +1189,70 @@ last commit of the gate.
 | **the Classic silhouette** | routed through the posed program too — it reuses the body geometry, so a posed unit would otherwise lose its shadow whenever Classic++ is off |
 | **the three ranges** (step 6) | `uRange` selects. **BODY** as above. **SLANT** takes `0x45A610`'s projection `(x + y/4, −z − y/4)` off the posed vertex snapped to whole units, the neutral SHD row, `waterT`/`digT` pinned at −1e9 by the pass itself (the structure branch never erases — the G14j fix), and its own per-piece rule `(P_FLAGS & 3) == 3`. **WIRE** is `GL_LINES` on the body projection, one notch nearer (+0.15), the nanoframe's animated blue from a uniform because it is per unit while the material stream is per type and owner |
 | **the 16.16 snap** (step 6) | the posed vertex is rounded onto the engine's own grid — `floor(m·65536 + 0.5)/65536` — **before anything reads it**, in every range. The engine holds each posed vertex as three 16.16 integers and every CPU emitter reads them back as `v[i]/65536.0f`, so a float compose that stops short sits up to half an LSB off a value that is exactly representable; `recon_prim` rounds the same way. This is what makes the slant portable at all (its `>>16` is a FLOOR, so half an LSB is a whole screen unit) and it took the body's residual to zero as well |
-| **the pose** | a std140 block, `vec4 uRow[3*256]` + two packed per-piece words, `uPieceFlag[64]` (shaded) and `uPieceVis[64]` (0 not drawn / 1 drawn / 3 drawn and casting) = **14 336 bytes**. `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time and the pass **refuses to arm** below that, so a driver that cannot hold the block leaves every unit to the CPU emitter rather than drawing them wrong. The wire reads the same word rather than the all-zero matrix: a zero-area triangle provably produces no fragments, a zero-length LINE is not promised away, and one bright pixel per hidden edge would land on the unit's origin |
+| **the pose** | a std140 block, `vec4 uRow[3*256]` + two packed per-piece words, `uPieceFlag[64]` (shaded) and `uPieceVis[64]` (0 not drawn / 1 drawn / 3 drawn and casting) = **14 336 bytes**. `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time and the pass **refuses to arm** below that. Since step 8 there is no CPU emitter to leave those units to, so the refusal is *published* and `owndraw` stops skipping the engine's own unit rasterise — see "when it cannot arm" below. The wire reads the same word rather than the all-zero matrix: a zero-area triangle provably produces no fragments, a zero-length LINE is not promised away, and one bright pixel per hidden edge would land on the unit's origin |
 | **the topology** | consumed from the bake entry's `parent[]` — `pose_accum_body`'s per-unit sibling scan is gone from the posed path, which is what §2.10 cached it for |
 | **the VAO** | one per material stream, built at bake time, binding the geometry buffer (locations 0-3) and the material stream (4-6) together, so a draw is one bind |
-| **the model top** | `s_emitTop` no longer falls out of the vertices: it is each piece's baked BODY-range rest AABB through its pose matrix. An **over-estimate** (an AABB through a rotation bounds the posed points), and it covers faces the material stream collapses. Wrecks only — a unit with a record prefers `model_aabb` |
+| **the model top** | `s_emitTop` is gone; the top no longer falls out of the vertices: it is each piece's baked BODY-range rest AABB through its pose matrix. An **over-estimate** (an AABB through a rotation bounds the posed points), and it covers faces the material stream collapses. Wrecks only — a unit with a record prefers `model_aabb` |
 
-**Fields we write: none.** Every engine read is one the emitters already make; the pass adds GL
+**Fields we write: none.** Every engine read is one the emitters used to make; the pass adds GL
 objects and no engine state.
+
+**The three degradations, and why none of them is a fallback** (step 8; the full ledger with its
+invariants is [GPU posing](gpu-posing.html) §4). There is one renderer, so every condition that
+used to fall through to `emit_geom` now degrades *inside* the unit. All three ride the `native:`
+line beside `posed=` and are printed **only when they have caught something**, because in a healthy
+game none of them ever does:
+
+| field | what happened | what the player sees |
+|---|---|---|
+| `rest=` | the frame's pose arena was full | that unit drawn **at rest** for the frame — right geometry, material, position, fog, shadow and depth, only its animation frozen. The block it takes is one shared static set of identities, so the degradation allocates nothing and cannot itself fail |
+| `unpl=` | a piece's node did not read, or its parent link never resolved | that **piece** at rest inside a unit that is otherwise posed — `hires_pose`'s answer for the same condition |
+| `nobake=` | the type would not bake: over `TAGPU_PBMAXPIECE` (256) pieces or past `PB_MAXVERT` (49152) vertices | **nothing drawn for that unit.** The one honest drop, and it is counted whether or not `posebake.on` is armed — without a count an undrawable model is a unit missing from the screen with nothing in the log. Stock's worst model is 36 pieces and 574 vertices |
+
+`q=` is the fourth and is not a degradation: it prints the units the gather **queued** against the
+units the pass **drew**, only when they disagree, because since step 8 a queued unit the draw
+dropped is a unit missing from the screen. It came out of chasing a `posed=` that read lower than
+the unit count, which turned out to be the **hires** pass taking those units — not a miss.
+
+⚠ **The arena degradation looks exactly like the artifact §2.9 exists to describe** — a unit at its
+unrotated rest orientation. That is not a coincidence and it is the reason it is counted: it is the
+same picture, but bounded, deliberate and visible in the log, rather than a race. Forced with a
+48-slot arena it reads `rest=6900` with the **same unit and triangle counts** as the healthy build:
+every unit still drawn, nothing dropped.
+
+**When it cannot arm at all** (step 8, decision B). `owndraw`'s detours skip the engine's own unit
+rasterisers and are installed at DLL attach, so with no CPU emitter left "draw nothing" would be
+the default failure — every unit in the game invisible. So `tagpu_owndraw_classify` **asks before
+it skips**: it reads a readiness word this pass publishes, and hands the draw back to the engine
+(8bpp, composited through the terrain key) when the pass is not live. That read crosses threads and
+is safe by **direction**, not by timing: the word is one aligned `int`, written only by the render
+thread, set to "live" only after the programs have linked, and cleared by `tagpu_posedraw_glreset()`
+*before* a new context is used. A stale "not ready" costs a one-frame double draw; a stale "ready"
+is the unsafe direction and no write order produces it. The log line fires only once the pass has
+**tried and failed**, not during the ordinary first frames before the render thread has built
+anything.
+
+**What `MAXNV` stopping applying to units actually looks like.** The claim used to be a design
+note; `scenarios/crowd-static.json` (256 units of 16 types, one owner, no orders — the large scene
+that stays identical between runs, so unlike a battle it can be diffed) makes it a picture. On it
+the CPU emitters log `49152 verts VERTEX-BUDGET-HIT` and **the bottom rows of the block are health
+bars with no models**: the shared stream ran out mid-gather and the units after it got empty
+ranges. The posed path draws all 256 — `posed=240/32288tri slant=96/13120tri`, plus 16 hires
+ARMPWs, and 96 slant is the 6 structure types x 16 — because per-type GL buffers have no shared
+budget to exhaust. It wanted ~136k vertices where the stream holds 49 152.
+
+**The frame time, at last** *[MEASURED 2026-09-09; it needed `tacli --maxfps 0`, since both paths
+had been reading 58.5 fps because both hit the cap]*. 200v200 at 1920x1080, sim paused, 281 units
+and 76 wrecks on screen: the CPU emitters **184.0 / 180.0 fps** against this pass's **313.0 /
+306.9** — **1.70x**, and the CPU side gets that while truncating.
+
+**The residual this pass leaves.** It reads the pose fields on the render thread with no interlock,
+so a unit can be drawn with its pieces mixed across one tick boundary — strictly smaller than what
+§2.9 describes (there, the engine's buffer lagged the fields by a whole tick for the entire unit),
+and it cannot produce the rest pose, because nothing it reads is ever `rep movs`'d from a rest
+array. Gate C looked for it over 62 s under scheduling pressure and found nothing visible
+([GPU posing](gpu-posing.html) §4 step 7). The anchor is the other half and is still unchecked: the
+unit's 16.16 position is three dwords read without an interlock.
 
 **What it measured**, 1024x768, `ss=2`, the sim paused, one build, twelve scenes —
 [GPU posing](gpu-posing.html) §4 step 6 has the full table. With `poserecon.on` on **both** sides,

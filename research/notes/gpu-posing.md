@@ -150,7 +150,7 @@ Four places read `prim+0x22`. **All of them move** (owner's call, 2026-09-08):
 | `emit_geom` → `emit_node` | unit and wreck bodies; the silhouette shadow and the Classic++ depth pass re-draw the same vertex range | GPU-posed from the type's buffer |
 | `emit_slant` | a structure's cached ground-projection shadow | GPU-posed, with the engine's integer snap in the shader |
 | `emit_wire` | the nanoframe wireframe | GPU-posed, `GL_LINES` from the same buffer |
-| `recon_err` / `pose_dump` | the oracle — not drawn | keeps reading the buffer; it is the only thing left that does |
+| `recon_err` / `pose_dump` | the oracle — not drawn | `recon_err` was deleted with the emitters in step 8; **`pose_dump` is the only thing that reads the buffer now**, and it is a one-shot debug trigger, not part of a frame |
 
 `emit_fx_model` is **not** in scope: it rotates raw model vertices for effects models and never
 touches an `Object3do`.
@@ -440,8 +440,9 @@ is the precedent for both.
   shared 49152-vertex stream, so a 200-unit frame can no longer truncate. That is a win, and it
   is a behaviour change worth stating.
 - **The pose guard, the rest-equality detector and `posewatch`** are only reachable through the
-  CPU emitters. Decision 3 removes those emitters, so they go with them — **in the last commit on
-  the branch, after Gate B has run**, because Gate B needs the CPU path as its oracle.
+  CPU emitters. Decision 3 removes those emitters, so they went with them — **in the last commit on
+  the branch, after Gate B had run**, because Gate B needed the CPU path as its oracle. *[DONE
+  2026-09-09, step 8.]*
 
 ### Built 2026-09-08 — step 4, and what it measured
 
@@ -521,7 +522,9 @@ twelve floats of the 4x3 are the matrix, and it cannot live in the per-type bake
 **Step 5 consumes the cached topology.** `posed_pose` (`tagpu_native.c`) builds the matrices off the
 bake entry's `parent[]` instead of re-walking the node tree per unit per frame — the duplication §4
 asked to have removed. Its arithmetic is deliberately still `pose_accum_body`'s, operation for
-operation, because until step 8 that duplication is what `posebake.on=check` uses as its oracle. It
+operation, because until step 8 that duplication was what `posebake.on=check` used as its oracle.
+*[Since step 8 it is not load-bearing: `check` is gone with the emitter it compared against, so the
+two could be reconciled — its own decision, with its own risk, and not step 8's.]* It
 **refuses rather than mis-placing** a unit — a piece count that is not the baked model's, a node that
 does not read, a piece whose parent link never resolved, the frame's pose arena full — the same bar
 `recon_begin` sets, and the caller then falls back to the CPU emitter. A refusal is **counted, not
@@ -745,6 +748,93 @@ scene asks for and still costing 2.3 ms a frame more. The posed line reads `vert
 posed=250/30067tri` with no `skip=` at all, so nothing fell back. That is §4's "`MAXNV` /
 `s_vtrunc` stop applying to units" turning into a measured number rather than a claim.
 
+### Built 2026-09-09 — step 8, the deletion, and what it is safe by
+
+**898 lines out, 294 in.** `emit_geom`, `emit_geom_at`, `emit_slant`, `emit_slant_at`, `emit_wire`
+and `rest_if_moved` are gone; so are the pose-race guard, the rest-equality detector, the
+reconstruction (`recon_begin` / `recon_prim` / `recon_err` / `recon_watch`, `s_recon*`), `posewatch`
+and its anchor filmstrip, the levers `tagpu_posefix.off` / `tagpu_posewatch.on` /
+`tagpu_poserecon.on` / `tagpu_posedraw.on`, and the `native:` fields `posefix=` `guard=` `rest=`
+`norecon=` `errmax=`. `tagpu_posebake`'s `check` token went with them — its two quantities were
+`emit_geom`'s vertex count and `pose_accum_body`'s rest offsets, and the emitter that produced the
+first no longer exists.
+
+**Nothing reads `prim+0x22` any more**, which is the whole point: the race is not detected and
+worked around, it has no mechanism. §3's table said the guarded surface would get *smaller*, and it
+did — the second allocation, freed one block earlier than the object, is simply not read.
+
+**What survived, and why.** `emit_node` stays (the effects models call it through `emit_fx_model`);
+`pose_accum_body` stays (`hires_pose` and `pose_dump`); the shared stream stays for the selection
+lines and the effects models. `MAXNV` / `s_vtrunc` no longer apply to units, and `s_emitTop` is gone
+outright — it was written inside `emit_node` and read only by the emitter path.
+
+**The refusal ledger, as built.** Decisions A and B above were settled first and the code follows
+them. Two of the refusals turned out not to exist: `npd >= MAXU` cannot happen (`npd <= nu <= MAXU`
+by the loop that fills it) and `nparts != g->nparts` re-read what the cache lookup had already
+matched on. The pose arena is sized from `MAXU` rather than a magic 64.
+
+**The one gap the build found in its own ledger.** The bake refusing was written up as "logged once
+per model" — but that log only exists under `tagpu_posebake.on`, so in an ordinary run an undrawable
+model was a unit missing from the screen with *nothing at all* in the log. It is now counted as
+`nobake=` unconditionally. Two more counters came out of the same reasoning: `rest=` and `unpl=` for
+the two degradations, and `q=` — units queued against units drawn — because since this commit a
+queued unit the draw dropped is a missing one.
+
+⚠ **The arena degradation looks exactly like the artifact §0 describes**: a unit at its unrotated
+rest orientation. That is not a coincidence — it is the same picture, arrived at deliberately. The
+difference that matters is that it is bounded (past an arena sized for 2048 units at 48 pieces),
+counted, and cannot cascade, where the artifact was a race. If `rest=` is ever non-zero in play, the
+arena is the thing to raise.
+
+**Two bugs the verification caught, both in code this step wrote.**
+
+- The frame bail-out tested `nv == 0 && nhi == 0 && …` and would have returned having drawn
+  **nothing** on a frame of units only. An ordinary unit contributes no vertices now, exactly as a
+  hires one already did not, so `npd` belongs in that test. The comment beside it had *already*
+  explained why `nhi` was added, which is the kind of note that pays for itself.
+- Decision B's log line announced "units are drawn by the engine" during the one-frame startup
+  transient before the pass arms — which reads as a broken driver. It now fires only once the pass
+  has **tried and failed**, which is a different state from "has not run yet".
+
+**MEASURED 2026-09-09, before against after, at the same sim tick.**
+
+| scene | result |
+|---|---|
+| `one-unit` (relaunch noise floor measured **0** first) | **0 differing px** |
+| four static structures, the slant range | **0 differing px**; `posed=4/588tri slant=4/580tri` on both |
+| `sfx-smoke`, the wire range | counters identical (`posed=7/1094tri slant=1/76tri wire=2/822ln`); pixels not comparable — the fixture's own smoke floor is 35 894 px against a 35 760 px diff |
+| `pose-inventory` ground stop, the CPU emitters against step 8 | **33 px**, every unit drawn |
+| `200v200`, 249 units | no degradations, no crash |
+| the arena degradation, forced with a 48-slot arena | `rest=6900`, the **same unit and triangle counts**, every unit drawn at rest, nothing dropped |
+
+**A cross-build A/B needs a zero noise floor, and most fixtures do not have one.** Swapping the DLL
+means relaunching, and a relaunch re-runs the sim, so an animating piece is at a different angle:
+`shadow-struct` diffs **9616 px against itself** and `shadow-lab` 10 466. What works is pausing at a
+fixed sim tick, diffing the world viewport only, and choosing a fixture with nothing animating. A
+battle cannot be paired at all — two loads of `200v200` diverge to different survivors, which is why
+`scenarios/crowd-static.json` exists.
+
+**AND THE VISIBLE WIN, which was not what this step set out to produce.** §4 has said since step 4
+that `MAXNV` / `s_vtrunc` stop applying to units and called it "a behaviour change worth stating".
+`crowd-static` states it: 256 units of 16 types, one owner, no orders. The CPU emitters log
+`49152 verts VERTEX-BUDGET-HIT` and **the bottom rows of the block are health bars with no models** —
+the shared stream ran out mid-gather and every unit after it got an empty range. The posed path
+draws all 256 (`posed=240/32288tri slant=96/13120tri`, plus 16 hires ARMPWs; 96 slant is the six
+structure types x 16), because per-type GL buffers have no shared budget to exhaust. It wanted
+~136k vertices where the stream holds 49 152.
+
+**A diagnosis this cost, worth not repeating: `posed=` reading lower than the unit count is usually
+the HIRES pass.** A gamedir with `hires/armpw.glb` in it draws every Peewee through the
+replacement-mesh renderer, which counts in `unit(s)` and not in `posed=`. Check `ls <gamedir>/hires/`
+before suspecting a miss; `q=` is the field that would actually say one had happened.
+
+**What step 8 does not close.** The residual §2 names is untouched and is now the whole renderer's:
+`posed_pose` reads the pose fields on the render thread with no interlock, so a unit can be drawn
+with its pieces mixed across one tick. Gate C looked for it and found nothing visible; it is not
+proved absent. The **anchor** is the other half and has never been checked — the unit's 16.16
+position is three dwords read without an interlock. `PB_MAXMAT`, `PB_MAXGEOM` and `MAXU` are still
+the sizes the budget table names, and `MAXU`'s exhaustion is still a silent drop.
+
 ## 5. What cannot be byte-exact, and the gates that follow
 
 The engine's arithmetic is fixed point with rounding at every step. `0x4B7173` returns the pair
@@ -824,7 +914,7 @@ model at 3 `vec4` is 432 uniform components, and the biggest geometry bake in th
 4. The per-type bake and its cache; the material stream; the bake-time anomaly log.
 5. **BUILT 2026-09-09** — `tagpu_posedraw.c` behind `tagpu_posedraw.on`; §4's step-5 section
    carries the numbers. The posed program and its shadow-depth twin; bodies only, behind a lever, both paths present
-   — the CPU emitters live **only** as Gate B's oracle from here to step 8.
+   — the CPU emitters lived **only** as Gate B's oracle from here to step 8, which deleted them.
 6. **BUILT AND RUN 2026-09-09** — slant and wire through the posed program, then Gate B and
    Gate D; §4's step-6 section carries the table. Both **PASSED**. The step that mattered was
    snapping the posed vertex onto the engine's 16.16 grid, which is the representation every CPU
@@ -835,5 +925,7 @@ model at 3 `vec4` is 432 uniform components, and the biggest geometry bake in th
    never recorded, which is why the `> 500` band could not be reproduced as calibrated. The
    **200-unit frame time** was taken in the same session, because step 8 deletes its "before"
    half — **1.70×**, and the CPU side truncating while it lost.
-8. **Last commit:** delete the CPU emitters, the pose guard, the rest-equality detector and
-   `posewatch`, and the levers that only they answer to.
+8. **BUILT 2026-09-09 — the last commit.** The CPU emitters, the guard, the rest-equality
+   detector, the reconstruction, `posewatch` and every lever that only they answered to are gone;
+   §4's step-8 section carries the ledger as built, the two bugs the verification caught and the
+   before/after table. Decisions A and B were settled in the note first, as §3 requires.

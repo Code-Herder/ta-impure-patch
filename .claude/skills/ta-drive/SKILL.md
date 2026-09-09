@@ -697,19 +697,54 @@ extremes) and `2216 1606` (the air lane).
 
 | file | what it does |
 |---|---|
-| `tagpu_posefix.off` | leaves the guard *measuring* but draws the engine's live posed buffer anyway — the baseline the fix is measured against, and the only way to see the artifact |
-| `tagpu_posewatch.on` | the oracle: per unit per frame, `posewatch: f=… err=… piece=…/… dirty=…/… poll|guard` — the largest disagreement in **model units** between the engine's posed buffer and the pose rebuilt from the fields, with the pose-dirty flag either side of the read. A unit or two out is a stale buffer; the model's own height out (an ARMCOM is 34) is a buffer caught mid-rewrite. Also adds a 60 Hz anchor filmstrip per owned unit — raw 16.16 position, roster shorts, the eye and the anchor we derived, which is what attributes a one-frame jump to the engine, the eye or this pass |
-| `tagpu_poserecon.on` | forces the reconstruction for **every** unit every frame. The A/B for the fallback: against the engine-buffer path it renders 0 differing pixels of 1920x1080 **on the walk fixture** — that number is per fixture and is NOT general. Measured 2026-09-09 over twelve scenes it runs 0 to 43 px of 786 432, worst on `shadow-struct`, whose CORE wind generator has thin, high-contrast, nearly edge-on blades; it also moves run to run, because a load leaves the animating pieces at whatever angle the tick reached. Every differing pixel is isolated. Quote the fixture with the number |
-| `tagpu_posedraw.on` | G16 steps 5-6's **posed program** (gpu-status §2.11): units are drawn from the bake's static buffers with the pose in a uniform block, and no vertices are built for them on the CPU. Since step 6 that is the **body, the structure-shadow slant and the nanoframe wireframe** — the selection lines and the effects models are what is left on the CPU — and any unit it refuses falls back to the emitter. The `native:` line grows `posed=<units>/<tris>`, then ` slant=<units>/<tris>` and ` wire=<units>/<lines>` when the scene has them, plus ` skip=<n>` if a unit fell back. **The A/B is this lever on vs off**; put `tagpu_poserecon.on` on BOTH sides to isolate the GPU port from the reconstruction, which is what Gate B asks for. **A scene with no structure casting and nothing under construction exercises neither new range** — `pose-inventory` at the structures stop (`tacli eye <i> 2716 806`) is the slant, and a `nanoframe:` entity is the wire |
-| `tagpu_posebake.on` | G16 step 4's per-type geometry bake (gpu-status §2.10). **Draws nothing** — it bakes, caches and reports. `log` gives a line per model and per material stream; `check` holds the bake to `emit_geom`'s own vertex count and to `pose_accum_body`'s rest offsets, per unit per frame, and logs any disagreement. The `native:` line grows `bake=<types>/<streams> anom= odd= nomat= refused=` |
+| `tagpu_posebake.on` | G16 step 4's per-type geometry bake (gpu-status §2.10). **Draws nothing** — it bakes, caches and reports. `log` gives a line per model and per material stream. The `native:` line grows `bake=<types>/<streams> anom= odd= nomat= refused=`. *(Its `check` token is gone with step 8: it held the bake to `emit_geom`'s vertex count, and that emitter no longer exists.)* |
 
-**A/B-ing any of these levers: wait for a FRESH `native:` line before the second shot.** That line
-is written every 300 frames — five seconds at 60 fps — so a lever flipped and shot three seconds
-later is read against the *previous* setting's counters, and the diff comes out 0 for the wrong
-reason. Count the `native: [0-9]` lines, flip, wait until the count has moved by two, and confirm
-the numbers actually changed (`verts=` collapsing to double digits is the posed path's tell) before
-believing a pixel diff (2026-09-09, a 200-unit A/B that read `0 differing pixels` because both shots
-were the same path).
+⚠ **`[2026-09-09]` The other three pose levers are GONE, and so is `tagpu_posedraw.on`.** G16 step 8
+deleted the CPU emitters, and with them the pose-race guard, the rest-equality detector, the
+reconstruction and `posewatch` — the only things `tagpu_posefix.off`, `tagpu_posewatch.on` and
+`tagpu_poserecon.on` ever reached. **The posed program is not a lever any more, it is the unit
+renderer**: there is nothing to A/B it against in one build, and creating those files does nothing.
+The `native:` line lost `posefix=`, `guard=`, `rest=`, `norecon=` and `errmax=` with them.
+
+**What to read instead.** `posed=<units>/<tris>` — with ` slant=<units>/<tris>` and
+` wire=<units>/<lines>` when the scene has them — is the pass, and **`verts=` should read 0 for
+units**: anything else means something was built on the CPU, which now only the selection lines and
+the effects models do. Four more fields appear **only when they have caught something**, and in a
+healthy game none of them ever does:
+
+| field | meaning |
+|---|---|
+| `rest=` | units past the frame's pose arena, drawn **at rest** for that frame (right geometry, material, position, fog, shadow; only the animation frozen). ⚠ It looks exactly like the old pose-race artifact — that is why it is counted |
+| `unpl=` | *pieces* the pose walk could not place, left at rest inside a unit that is otherwise posed |
+| `nobake=` | units whose type would not bake, which **draw nothing** — the one honest drop. Over 256 pieces or 49152 vertices; stock's worst is 36 and 574 |
+| `q=` | units the gather queued against units the pass drew, printed only when they disagree. A queued unit the draw dropped is a unit missing from the screen |
+
+**`posed=` reading lower than the unit count is usually the HIRES pass, not a miss.** A gamedir with
+`hires/<name>.glb` in it draws those units through the replacement-mesh renderer instead, and they
+are counted in `unit(s)` but not in `posed=`. Check `ls <gamedir>/hires/` before chasing it — this
+cost a diagnosis on 2026-09-09.
+
+**If units are missing on the OLD path, that is `MAXNV`, not a bug in yours.** Before step 8 every
+unit's geometry went through one shared 49152-vertex stream, so past it units got an empty range and
+drew nothing — health bar, no model — and the line says `VERTEX-BUDGET-HIT`. `scenarios/crowd-static.json`
+(256 units, one owner, no orders, so it is the same picture between runs and can be diffed) shows it
+at 0.5x zoom. The posed path has no shared budget to exhaust.
+
+**A/B-ing any live lever: wait for a FRESH `native:` line before the second shot.** That line is
+written every 300 frames — five seconds at 60 fps — so a lever flipped and shot three seconds later
+is read against the *previous* setting's counters, and the diff comes out 0 for the wrong reason.
+Count the `native: [0-9]` lines, flip, wait until the count has moved by two, and confirm the
+numbers actually changed before believing a pixel diff (2026-09-09, a 200-unit A/B that read
+`0 differing pixels` because both shots were the same path).
+
+**A cross-BUILD A/B needs a zero noise floor first, and most fixtures do not have one.** Swapping
+`ddraw.dll` means relaunching, and a relaunch re-runs the sim: an animating piece is at a different
+angle, so `shadow-struct` diffs **9616 px** against *itself* and `shadow-lab` 10466. Establish the
+floor by running the SAME dll twice before believing any number (ta-capture rule 7). What works:
+pause at a fixed sim tick (poll `*0x511DE8+0x38A47:4`, then `keys <i> tab`), diff the world viewport
+only (the minimap and resource bar move on their own), and pick a fixture with nothing animating —
+`one-unit` and a few static structures both measure **0**. A battle cannot be paired at all: two
+loads of `200v200` diverge to different survivors.
 
 **A frame-time A/B needs `--maxfps 0`, and without it it measures nothing.** `write_ddraw_ini`
 rewrites the cap into the instance's `ddraw.ini` at all three of its launch paths and the DLL reads
@@ -739,17 +774,10 @@ Two things to do on top of uncapping, both learned taking that measurement:
 The meter needs no code: the overlay writes a `units:` line every 30 presented frames, so
 `30 × (lines gained) / (seconds elapsed)` is the frame rate.
 
-**`posewatch` writes about 250 kB of `tagpu.log` per second** at 28 units on screen — it logs an
-anchor filmstrip per owned unit per frame, and `nlog` opens and closes the file per line. Two
-consequences: measure a camera stop by taking the file's **byte offsets** before and after and
-slicing it, rather than grepping the whole thing, and do not leave the lever armed for a long run.
-
-The `native:` line carries `posefix=`, `guard=` (reads refused since the last line, 300 frames),
-`rest=` and `errmax=` whether or not the watch is armed. **`rest=` is the useful one**: the guard
-trips on any dirty pose, most of which are a merely stale buffer that was safe to draw, while
-`rest=` counts only the reads that caught the buffer byte-equal to the model's rest vertices —
-the state that actually draws a collapsed unit. In play it reads 0; a burst at a scenario load is
-the unit's buffer before its first repose and is expected.
+**Slice `tagpu.log` by BYTE OFFSET when a run has to be attributed to a camera stop** — take
+`stat -c %s` before and after and `tail -c +N` — rather than grepping the whole file. Any
+per-unit-per-frame logging makes it grow fast (`nlog` opens and closes the file per line), and a
+`tacli log` grep can also hand you the *previous* game's lines after a reload.
 
 **Classic++ is a separate switch; its restorer runs as GLSL in the game's own context.**
 `tacli arm <i> classicpp.on` turns on the restored true-colour terrain, features, effects and (since G14g) unit textures;
