@@ -109,6 +109,14 @@
     <option value="0.25">¼×</option><option value="0.5">½×</option>
     <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
   </select>
+  <select id="view3d" title="camera. The presets are ta3do's standard views and are relative to the unit's front, so they track its heading; a drag returns to `free`.">
+    <option value="free" selected>free</option>
+    <option value="front">front</option>
+    <option value="side">side</option>
+    <option value="back">back</option>
+    <option value="top">top</option>
+    <option value="quarter">quarter</option>
+  </select>
   <select id="path" title="the director's motion sketch. `shuttle` is the class's own — for ground units it walks a short leg, STOPS for a second and flips its heading 180 degrees in one tick, which is right for the trace fixtures and useless for judging a walk. `loop` walks a wide circle: never stops, never snaps.">
     <option value="loop" selected>loop</option>
     <option value="forward">walk forward</option>
@@ -218,12 +226,31 @@ scene.background = new THREE.Color(0x0f1216);
 const camera = new THREE.PerspectiveCamera(35, 1, 0.5, 20000);
 camera.position.set(120, 90, 180);
 const controls = new OrbitControls(camera, renderer.domElement);
-let follow = true;
+let follow = true;                    // always on: the unit walks away forever
+/* tools/ta3do's VIEWS, verbatim: azimuth 0 faces the model's front, azimuth
+   rises anticlockwise seen from above, elevation is degrees above the horizon,
+   and `side` means the unit's RIGHT-hand side. Model-relative, so a preset
+   tracks the unit's heading and keeps meaning what it says. */
+const VIEWS = {
+  front:   [0, 0],
+  side:    [-90, 0],
+  back:    [180, 0],
+  top:     [0, 89.9],
+  quarter: [-45, 30],
+};
+let modelYaw = 0;                     // set each frame by applyWorld
 scene.add(new THREE.HemisphereLight(0xc4d4e8, 0x23262b, 0.7));
 const key = new THREE.DirectionalLight(0xfff4e6, 1.4); key.position.set(-90, 160, 120);
 scene.add(key);
-const GRID_SPAN = 1600, GRID_DIV = 40, GRID_CELL = GRID_SPAN / GRID_DIV;
-const grid = new THREE.GridHelper(GRID_SPAN, GRID_DIV, 0x39414d, 0x252b33);
+/* BOTH colours the same, deliberately. GridHelper's first colour is the centre
+   cross, and with the grid snapped under a walking unit that lighter cross jumps
+   back one cell every GRID_CELL of travel -- at 36 wu/s, a landmark resetting
+   every 1.1 s, which reads as shuttling between two points however far the unit
+   actually walks. A uniform grid makes the snap exactly periodic and invisible.
+   The span is large and fog eats the edge, so there is a horizon and never a
+   visible boundary. */
+const GRID_CELL = 40, GRID_SPAN = 4000, GRID_DIV = GRID_SPAN / GRID_CELL;
+const grid = new THREE.GridHelper(GRID_SPAN, GRID_DIV, 0x2b323b, 0x2b323b);
 scene.add(grid);
 const unit = new THREE.Group(); scene.add(unit);
 /* unit is the follow anchor and carries the world position; the two model roots
@@ -269,6 +296,7 @@ function loadModel(name) {
     const box = new THREE.Box3().setFromObject(gltf.scene);
     const size = box.getSize(new THREE.Vector3()).length() || 100;
     abGap = size * 0.55;
+    scene.fog = new THREE.Fog(0x0f1216, size * 2.5, size * 9);
     layoutModels();
     camera.position.set(size * 0.9, size * 0.7, size * 1.3);
     controls.target.set(0, size * 0.2, 0);
@@ -289,9 +317,8 @@ function alerp(a, b, u) {
 function layoutModels() {
   const ab = $('posemode').value === 'ab';
   rigB.visible = ab;
-  rigA.position.x = ab ? -abGap : 0;     // above the yaw: a pure scene-space gap
-  rigB.position.x = ab ? abGap : 0;
-  $('ablegend').style.display = ab ? '' : 'none';
+  if (!ab) { rigA.position.set(0, 0, 0); rigB.position.set(0, 0, 0); }
+  $('ablegend').style.display = ab ? '' : 'none';   // layoutAB places them
 }
 
 /* `next`/`u` absent (or u === 0) is the stepped path and is byte-for-byte what
@@ -339,6 +366,7 @@ function applyWorld(frame, next, u) {
               + Math.PI;                 // scene3's half turn — see the rig comment
   modelA.rotation.set(0, yaw, 0);
   modelB.rotation.set(0, yaw, 0);
+  modelYaw = yaw;                     // the presets are relative to it
   marker.visible = $('path').value !== 'forward';   // `forward` has no target
   marker.position.copy(scene3(w.target));
   fx.clear();
@@ -435,8 +463,43 @@ function stepPlayback(now) {
   $('tick').textContent = 'tick ' + a.tick;
 }
 
+/* A preset holds its angle relative to the unit's front and keeps the current
+   orbit DISTANCE, so switching view never loses your zoom. `free` leaves the
+   camera alone; a drag flips the select to `free` (below), so the dropdown can
+   never disagree with where the camera actually is. */
+function applyView() {
+  const want = VIEWS[$('view3d').value];
+  if (!want) return;
+  const [azDeg, elDeg] = want;
+  const dist = camera.position.distanceTo(controls.target) || 100;
+  const a = modelYaw + azDeg * Math.PI / 180, el = elDeg * Math.PI / 180;
+  const ce = Math.cos(el);
+  controls.target.copy(unit.position);
+  camera.position.set(unit.position.x + Math.sin(a) * ce * dist,
+                      unit.position.y + Math.sin(el) * dist,
+                      unit.position.z + Math.cos(a) * ce * dist);
+  camera.lookAt(controls.target);
+}
+
+/* The A|B gap goes along the CAMERA's right vector, not the unit's, so the two
+   copies are always separated across the screen instead of one hiding the other
+   from `side` or `front`. Taken off the camera's world matrix so it stays valid
+   looking straight down, where fwd x up is degenerate. */
+const abRight = new THREE.Vector3();
+function layoutAB() {
+  if (!rigB.visible) return;
+  camera.updateMatrixWorld();
+  abRight.setFromMatrixColumn(camera.matrixWorld, 0).setY(0);
+  if (abRight.lengthSq() < 1e-6) abRight.set(1, 0, 0);
+  abRight.normalize().multiplyScalar(abGap);
+  rigA.position.set(-abRight.x, 0, -abRight.z);
+  rigB.position.set(abRight.x, 0, abRight.z);
+}
+
 renderer.setAnimationLoop((now) => {
   stepPlayback(now);
+  applyView();
+  layoutAB();
   controls.update();
   renderer.render(scene, camera);
 });
@@ -701,7 +764,12 @@ $('step').onclick = () => transport('step', { n: 1 });
 $('restart').onclick = () => transport('restart');
 $('speed').onchange = () => transport('speed', { speed: +$('speed').value });
 $('posemode').onchange = layoutModels;
-$('path').onchange = () => transport('path', { path: $('path').value });
+$('path').onchange = () => {
+  // `side` is how a walk cycle is read; pick it when the walk-only path is chosen
+  if ($('path').value === 'forward' && $('view3d').value === 'free') $('view3d').value = 'side';
+  transport('path', { path: $('path').value });
+};
+controls.addEventListener('start', () => { $('view3d').value = 'free'; });
 $('cls').onchange = () => transport('class', { class: $('cls').value });
 $('scrub').oninput = async () => {
   scrubbing = true; live = false;
