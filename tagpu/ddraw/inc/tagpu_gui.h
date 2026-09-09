@@ -22,7 +22,10 @@
    Tokens in tagpu_gui.on: `census` (the G15a diff; costs a 1024x768 compare
    per 5 ms), `strict` (the fallback off: a UI pixel the engine drew that we
    have not is painted magenta, the cursor's rect exempt — the harness's mode),
-   `log`, `pgm`, `trace`, `key=N` (census diagnostics, tagpu_gui_hook.c).
+   `norestore` (G15e: the layer without Classic++ art — the UI-only A/B),
+   `sharptest` (G17a: 13.2's sharp layer filled with a known pattern, so an
+   empty layer is still testable — the harness's mode too), `log`, `pgm`,
+   `trace`, `key=N` (census diagnostics, tagpu_gui_hook.c).
 
    THREADS. The observers and the publisher run on the game thread inside the
    engine's own calls; the twins, the atlas and the draw run on the render
