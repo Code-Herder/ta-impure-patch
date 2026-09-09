@@ -316,6 +316,206 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
 
 void tagpu_text_dims(int* w, int* h) { *w = ATLAS_W; *h = ATLAS_H; }
 
+/* ================================================================= glyphs */
+/* THE GLYPH CACHE (G17d), and why the string atlas above cannot serve the UI.
+
+   That atlas is keyed on the whole STRING, which is right for the world's
+   markers: a range label and a group digit are a fixed set of a dozen texts
+   that never change. The engine's UI is the opposite — the metal and energy
+   readouts, the clock, unit counts and build percentages are a new string every
+   tick, so a 64-entry string cache would evict itself several times a second
+   and rasterise for ever. It also resets on any font change, and the UI switches
+   font many times a frame.
+
+   So the UI stamps GLYPHS. The engine's own blitter draws a string one glyph
+   after another, advancing x by the glyph's own width byte and nothing else
+   (`0x4C1527` and `0x4CCF60` walk the same table; there is no kerning), so a run
+   of per-glyph quads at those same offsets is not an approximation of the
+   engine's blit — it is the same arithmetic. Each font gets 95 cells, rasterised
+   once, and any string in that font is then free.
+
+   Its atlas is separate from the string one on purpose: they have different
+   lifetimes (a font change repacks the string atlas and must not throw the UI's
+   glyphs away) and different key spaces, and the marker path is a landed gate
+   that should not move to make room for this one. */
+
+#define GA_W       512
+#define GA_H       256
+#define GA_FONTS   8                       /* distinct fonts held at once      */
+/* THE ENGINE'S RANGE, NOT THE STRING ATLAS'S. `0x4CCF60` bounds a character
+   below (`sub ebx,first; jb` at 0x4CCFAA) and NOT above: it indexes the offset
+   table with whatever byte the string carries. The string atlas can afford
+   [0x20, 0x7E] because every marker string is an ASCII literal of ours; a UI
+   string is the engine's and must be reproduced, so the cache runs to 0xFF and
+   probes each table entry as it reaches it — the same unbounded index the
+   engine makes, with a fault check the engine does not. */
+#define GCH_HI     0xFF
+#define GA_NCH     (GCH_HI - CH_LO + 1)
+
+typedef struct {
+    const unsigned char* font;             /* the object, and its signature:   */
+    unsigned char sig[3];                  /* rows / yoff / first              */
+    short cell[GA_NCH][4];                 /* ax, ay, w, h; w == 0 = not cached */
+    unsigned char known[GA_NCH];           /* 1 = tried; 2 = tried and refused  */
+} GFONT;
+
+static GFONT s_gf[GA_FONTS];
+static int   s_ngf;
+static int   s_gshelfX, s_gshelfY, s_gshelfH;
+static unsigned char s_gatlas[GA_W * GA_H];
+static int   s_gdirty;
+static GLuint s_gtex;
+static unsigned s_gglyphs, s_gdrops;
+
+/* Validate an arbitrary font object — the UI's, which arrives in a published op
+   rather than from the snapshot font_ok() reads. Same probes, and it must stay
+   that way: the table is indexed to CH_HI and a short block would fault. */
+static const unsigned char* gfont_ok(const unsigned char* f)
+{
+    if (!ptr_ok(f)) return NULL;
+    if (IsBadReadPtr((void*)f, F_TAB)) return NULL;
+    if (f[F_ROWS] == 0 || f[F_ROWS] > GA_H) return NULL;
+    /* the TABLE is probed per character below, not here: its length is not
+       stated anywhere in the object, and demanding the full 0x100 - first
+       entries would reject a short font outright rather than serve the codes
+       it does have */
+    return f;
+}
+
+/* The slot for this font, matched on the POINTER AND THE SIGNATURE — an
+   allocator that hands the same address to a different font would otherwise
+   serve the old font's glyphs. A full table drops the oldest slot's cells
+   rather than refusing, because refusing would leave the UI text-less. */
+static GFONT* gfont_slot(const unsigned char* f)
+{
+    int i;
+    GFONT* g;
+    for (i = 0; i < s_ngf; i++)
+        if (s_gf[i].font == f && s_gf[i].sig[0] == f[F_ROWS] &&
+            s_gf[i].sig[1] == f[F_YOFF] && s_gf[i].sig[2] == f[F_FIRST])
+            return &s_gf[i];
+    if (s_ngf < GA_FONTS) g = &s_gf[s_ngf++];
+    else {
+        /* every slot is taken: start the whole cache over rather than evict one
+           font into a shelf another font's cells still occupy */
+        memset(s_gf, 0, sizeof s_gf);
+        memset(s_gatlas, 0, sizeof s_gatlas);
+        s_gshelfX = s_gshelfY = s_gshelfH = 0;
+        s_gdirty = 1;
+        s_ngf = 1; g = &s_gf[0];
+        flog("text: glyph atlas reset (more than 8 fonts seen)");
+    }
+    memset(g, 0, sizeof *g);
+    g->font = f;
+    g->sig[0] = f[F_ROWS]; g->sig[1] = f[F_YOFF]; g->sig[2] = f[F_FIRST];
+    return g;
+}
+
+int tagpu_text_glyph(const void* font, int ch, int* ax, int* ay, int* w, int* h, int* yoff)
+{
+    const unsigned char* f = gfont_ok((const unsigned char*)font);
+    const unsigned short* tab;
+    GFONT* g;
+    int idx, first, rows, off, gw, y;
+    char one[2];
+
+    if (!f || ch < CH_LO || ch > GCH_HI) return 0;
+    first = f[F_FIRST];
+    rows  = f[F_ROWS];
+    if (ch < first) return 0;                        /* 0x4CCFAA skips it      */
+    tab = (const unsigned short*)(f + F_TAB);
+    idx = ch - CH_LO;
+    g = gfont_slot(f);
+    if (yoff) *yoff = (int)(signed char)f[F_YOFF];
+    if (g->known[idx] == 2) return 0;
+    if (g->known[idx] == 1) {
+        *ax = g->cell[idx][0]; *ay = g->cell[idx][1];
+        *w  = g->cell[idx][2]; *h  = g->cell[idx][3];
+        return 1;
+    }
+    /* the table entry itself, probed at the index the engine would use */
+    if (IsBadReadPtr((void*)(tab + (ch - first)), 2)) { g->known[idx] = 2; return 0; }
+    off = tab[ch - first];
+    if (!off) { g->known[idx] = 2; return 0; }       /* 0x4CCFB9 skips it      */
+    if (IsBadReadPtr((void*)(f + off), 1)) { g->known[idx] = 2; return 0; }
+    gw = f[off];
+    /* A ZERO WIDTH WRITES 256 COLUMNS in the engine (the do-while at 0x4CCFCA /
+       0x4CCFE9 wraps cl to 255), so it is refused here exactly as `measure`
+       refuses it. That is a deliberate DIVERGENCE from the engine on a corrupt
+       font: the engine would smear 256 columns of ink and we draw nothing. No
+       stock font has one. */
+    if (gw <= 0) { g->known[idx] = 2; return 0; }
+    if (IsBadReadPtr((void*)(f + off + 1), (UINT_PTR)((rows * gw + 7) / 8))) {
+        g->known[idx] = 2; return 0;
+    }
+    if (gw > GA_W || rows > GA_H) { g->known[idx] = 2; s_gdrops++; return 0; }
+    if (s_gshelfX + gw > GA_W) { s_gshelfY += s_gshelfH; s_gshelfX = 0; s_gshelfH = 0; }
+    if (s_gshelfY + rows > GA_H) {
+        /* out of shelf: start over. Every cached cell goes with it, which costs
+           one re-rasterise of what is on screen and never a wrong glyph */
+        memset(s_gf, 0, sizeof s_gf);
+        memset(s_gatlas, 0, sizeof s_gatlas);
+        s_gshelfX = s_gshelfY = s_gshelfH = 0;
+        s_ngf = 0; s_gdirty = 1; s_gdrops++;
+        flog("text: glyph atlas full — reset");
+        g = gfont_slot(f);
+    }
+    /* clear first: the blitter stores nothing for a clear bit, so a dirty slot
+       would keep the previous glyph's ink */
+    for (y = 0; y < rows; y++)
+        memset(s_gatlas + (size_t)(s_gshelfY + y) * GA_W + s_gshelfX, 0, (size_t)gw);
+    one[0] = (char)ch; one[1] = 0;
+    /* fg = INK, bg = 0, transparent = 0: the store keeps only the set bits, so
+       what lands is a COVERAGE MASK and one raster serves every colour */
+    ((PFN_BLIT)BLIT_VA)(s_gatlas + (size_t)s_gshelfY * GA_W + s_gshelfX, GA_W,
+                        f, one, 0, (int)(signed char)f[F_YOFF], INK, 0, 0);
+    g->cell[idx][0] = (short)s_gshelfX; g->cell[idx][1] = (short)s_gshelfY;
+    g->cell[idx][2] = (short)gw;        g->cell[idx][3] = (short)rows;
+    g->known[idx] = 1;
+    *ax = s_gshelfX; *ay = s_gshelfY; *w = gw; *h = rows;
+    s_gshelfX += gw;
+    if (rows > s_gshelfH) s_gshelfH = rows;
+    s_gdirty = 1;
+    s_gglyphs++;
+    return 1;
+}
+
+void tagpu_text_glyph_dims(int* w, int* h) { *w = GA_W; *h = GA_H; }
+
+unsigned int tagpu_text_glyph_tex(void)
+{
+    if (!s_gglyphs) return 0;
+    if (!s_gtex) {
+        glGenTextures(1, &s_gtex);
+        if (!s_gtex) return 0;
+        glBindTexture(GL_TEXTURE_2D, s_gtex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        s_gdirty = 1;
+    } else {
+        glBindTexture(GL_TEXTURE_2D, s_gtex);
+    }
+    if (s_gdirty) {
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, GA_W, GA_H, 0,
+                     GL_RED, GL_UNSIGNED_BYTE, s_gatlas);
+        s_gdirty = 0;
+    }
+    return s_gtex;
+}
+
+int tagpu_text_glyph_stats(unsigned* glyphs, unsigned* drops, int* fonts)
+{
+    if (glyphs) *glyphs = s_gglyphs;
+    if (drops)  *drops  = s_gdrops;
+    if (fonts)  *fonts  = s_ngf;
+    return (int)s_gglyphs;
+}
+
+
 unsigned int tagpu_text_tex(void)
 {
     if (!s_nent) return 0;
@@ -349,6 +549,8 @@ void tagpu_text_glreset(void)
 {
     s_tex = 0;            /* the id died with the context */
     s_dirty = 1;
+    s_gtex = 0;           /* ...and the glyph atlas's; the CELLS survive, they are CPU-side */
+    s_gdirty = 1;
 }
 
 int tagpu_text_stats(int* strings, int* dropped)

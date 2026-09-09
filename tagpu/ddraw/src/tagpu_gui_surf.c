@@ -70,6 +70,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_gui_int.h"
 #include "tagpu_gaf.h"
+#include "tagpu_text.h"                 /* the glyph atlas the string op stamps from (13.4) */
 #include "tagpu_classicpp.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_vpwide.h"
@@ -190,6 +191,12 @@ static GLuint s_sharpProg;              /* QVS + SHARP_FS: a client's flat-colou
 static GLint  s_uSharpProgSize, s_uSharpProgCol;
 static GLuint s_cursProg;               /* QVS + CURS_FS: the cursor's frame out of the UI atlas        */
 static GLint  s_uCursSize, s_uCursCK, s_uCursRestored;
+static GLuint s_strProg;                /* QVS + STR_FS: a string op's glyphs into a twin (G17d)        */
+static GLint  s_uStrSize, s_uStrFg, s_uStrBg, s_uStrTr;
+static unsigned s_strings = 0;          /* string ops stamped                                          */
+static unsigned s_glyphs = 0;           /* glyph quads drawn                                           */
+static unsigned s_strMiss = 0;          /* glyphs the cache would not give (the engine drew them)      */
+static unsigned s_strReseed = 0;        /* strings that stamped NOTHING and asked for a fresh seed     */
 
 /* THE CURSOR (gui-renderer.md 13.5, G17c). Decided ONCE per frame, in
    tagpu_gui_cursor_frame, because the world composite reads the decision
@@ -236,6 +243,30 @@ static const char* SPR_FS =
     "  oCol = vec4(0.0);\n"
     "  if (uRestored != 0) { vec4 t = texture(uAtlasRGB, uv);\n"
     "    if (t.a > 0.5) oCol = vec4(t.rgb, 1.0); } }\n";
+/* THE STRING OP (13.4, G17d): TA's own glyphs out of the coverage atlas,
+   stamped one cell at a time in the palette indices the engine's blitter was
+   given. `0x4CCF60` picks fg where the glyph's bit is set and bg where it is
+   clear, and stores only when the chosen colour differs from `transparent` —
+   an 8-bit compare (`cmp al,ah` at 0x4CCFE2), which is why the three arrive as
+   bytes. Reproduced here exactly, so at k = 1 the stamp is the blit.
+   oCol is 0 wherever we write: text is a flat palette index and never has
+   restored colour of its own, and 0 is what tells the layer to resolve those
+   texels through the palette. Between the glyphs nothing is written at all, so
+   restored art under a transparent-background string SURVIVES — which is the
+   whole difference from publishing the box's bytes, where the whole rectangle
+   lost its colour. */
+static const char* STR_FS =
+    "#version 330 core\n"
+    "in vec2 uv;\n"
+    "layout(location=0) out vec4 oIdx;\n"
+    "layout(location=1) out vec4 oCol;\n"
+    "uniform sampler2D uGlyph;\n"
+    "uniform int uFg; uniform int uBg; uniform int uTr;\n"
+    "void main(){ float c = texture(uGlyph, uv).r;\n"
+    "  int col = (c > 0.5) ? uFg : uBg;\n"
+    "  if (col == uTr) discard;\n"
+    "  oIdx = vec4(float(col) / 255.0, 1.0, 0.0, 0.0);\n"
+    "  oCol = vec4(0.0); }\n";
 /* the copy: the source twin's index at (this pixel - offset), coverage 1 */
 static const char* CPY_FS =
     "#version 330 core\n"
@@ -414,7 +445,14 @@ static int init_gl(void)
     s_layProg = mkprog(LAY_VS, LAY_FS);
     s_sharpProg = mkprog(QVS, SHARP_FS);
     s_cursProg  = mkprog(QVS, CURS_FS);
+    s_strProg   = mkprog(QVS, STR_FS);
     if (s_gl == 2) return 0;
+    glUseProgram(s_strProg);
+    glUniform1i(glGetUniformLocation(s_strProg, "uGlyph"), 0);
+    s_uStrSize = glGetUniformLocation(s_strProg, "uSize");
+    s_uStrFg   = glGetUniformLocation(s_strProg, "uFg");
+    s_uStrBg   = glGetUniformLocation(s_strProg, "uBg");
+    s_uStrTr   = glGetUniformLocation(s_strProg, "uTr");
     s_uSharpProgSize = glGetUniformLocation(s_sharpProg, "uSize");
     s_uSharpProgCol  = glGetUniformLocation(s_sharpProg, "uCol");
     glUseProgram(s_cursProg);
@@ -632,6 +670,103 @@ static void twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
     s_sprites++;
 }
 
+/* A STRING OP INTO ITS TWIN, glyph by glyph (13.4, G17d).
+
+   NOT into the sharp layer. 13.2 leaves that open ("string ops IF they are
+   rendered late") and 13.4 closes it: a 1x glyph carries 1x information however
+   it is drawn, so a device-resolution layer would buy nothing and would cost
+   the one thing that matters — text scaling WITH the UI it belongs to. At k = 3
+   a 1x-device string beside a 3x panel is unreadable. The gains 13.4 claims are
+   all properties of stamping into the twin: the glyph's edge no longer drags in
+   the art it was blitted onto, restored colour survives between the letters,
+   and the arena carries the string instead of the rectangle.
+
+   THE ENGINE ADVANCES BY THE GLYPH'S OWN WIDTH BYTE AND NOTHING ELSE — no
+   kerning, no pair table (`0x4CCFF7`..`0x4CCFFD` adds `cl`, the width, to the
+   row-start pointer). So a run of per-glyph quads at those offsets is the same
+   arithmetic the blitter does, not an approximation of it. */
+static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
+{
+    const char* str = (const char*)(g_guiq.arena + o->aoff);
+    const unsigned char* font = (const unsigned char*)o->frame;
+    short cell[256][4];                 /* ax, ay, w, h per drawn glyph        */
+    int n = 0, i, x, top, yoff = 0, aw = 0, ah = 0, restored;
+    GLuint gtex;
+    float v[24];
+
+    if (!s_strProg || !o->alen) goto reseed;
+    /* PASS ONE: rasterise every glyph this string needs, so the atlas texture
+       is uploaded ONCE for the string rather than once per new glyph. */
+    for (i = 0; i < 256 && str[i] && str[i] != '\n'; i++) {
+        int ax, ay, gw, gh;
+        if (!tagpu_text_glyph(font, (unsigned char)str[i], &ax, &ay, &gw, &gh, &yoff)) {
+            /* the engine skips a code below `first` and a zero table entry and
+               advances for neither, so a refusal here is only a divergence when
+               the cache refused something the engine would have drawn */
+            s_strMiss++;
+            continue;
+        }
+        if (n < 256) {
+            cell[n][0] = (short)ax; cell[n][1] = (short)ay;
+            cell[n][2] = (short)gw; cell[n][3] = (short)gh; n++;
+        }
+    }
+    if (!n) goto reseed;
+    x_glActiveTexture(GL_TEXTURE0);
+    gtex = tagpu_text_glyph_tex();
+    if (!gtex) goto reseed;
+    tagpu_text_glyph_dims(&aw, &ah);
+    if (aw <= 0 || ah <= 0) goto reseed;
+
+    restored = s_colValid && s_atlas.rgb != 0;
+    if (restored) twin_colour(t);
+    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    glViewport(0, 0, t->w, t->h);
+    x_glDisable(GL_BLEND);
+    x_glDisable(GL_DEPTH_TEST);
+    x_glDisable(GL_SCISSOR_TEST);
+    glUseProgram(s_strProg);
+    x_glUniform2f(s_uStrSize, (float)t->w, (float)t->h);
+    glUniform1i(s_uStrFg, (int)o->fg);
+    glUniform1i(s_uStrBg, (int)o->bg);
+    glUniform1i(s_uStrTr, (int)o->tr);
+    glBindTexture(GL_TEXTURE_2D, gtex);
+    glBindVertexArray(s_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+    /* the blitter's destination is base + (y - (s8)font[2]) * pitch + x, so the
+       string's first pixel row is at y - yoff and NOT at the y it was given */
+    x = (int)o->sl;
+    top = (int)o->st - yoff;
+    for (i = 0; i < n; i++) {
+        int gw = cell[i][2], gh = cell[i][3];
+        quad(v, (float)x, (float)top, (float)(x + gw), (float)(top + gh),
+             (float)cell[i][0] / (float)aw,            (float)cell[i][1] / (float)ah,
+             (float)(cell[i][0] + gw) / (float)aw,     (float)(cell[i][1] + gh) / (float)ah);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
+        x_glDrawArrays(GL_TRIANGLES, 0, 6);
+        x += gw;
+        s_glyphs++;
+    }
+    s_strings++;
+    return;
+
+reseed:
+    /* WE PUBLISHED A STRING AND DREW NOTHING, so the twin is missing text the
+       engine's surface has. A box of pixels would have been drawn whatever
+       happened; a string can fail on a font we cannot read, so the fallback is
+       to re-seed the surface from the engine's own — expensive, and it should
+       never happen. Counted and logged rather than silent. */
+    if (s_strReseed < 8) {
+        char b[180];
+        _snprintf(b, sizeof b, "gui: string op stamped nothing (font %08X, %u bytes, surface %08X) — re-seeding",
+                  (unsigned)(size_t)o->frame, o->alen, o->surf);
+        b[sizeof b - 1] = '\0';
+        slog(b);
+    }
+    s_strReseed++;
+    g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_STRING;
+}
+
 static void twin_copy(TWIN* t, const TWIN* src, const TAGPU_PUBOP* o)
 {
     float v[24];
@@ -795,6 +930,10 @@ static void drain(void)
             }
             twin_sprite(t, e, o);
             break; }
+        case PK_STRING:
+            t = twin_find(o->surf);
+            if (t) twin_string(t, o);
+            break;
         case PK_COPY: {
             TWIN* src = twin_find(o->src);
             t = twin_find(o->surf);
@@ -1323,24 +1462,27 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
     if (f->frame_counter - last >= 300) {
-        /* 248 bytes of literal + 37 conversions: the worst case is ~600, and
+        /* 302 bytes of literal + 44 conversions: the worst case is ~700, and
            _snprintf does not NUL-terminate what it truncates */
         char b[768];
         static LARGE_INTEGER t0, fq;
         LARGE_INTEGER t1;
         double fps = 0.0;
+        unsigned gCached = 0, gDrops = 0; int gFonts = 0;
+        tagpu_text_glyph_stats(&gCached, &gDrops, &gFonts);
         if (!fq.QuadPart) QueryPerformanceFrequency(&fq);
         QueryPerformanceCounter(&t1);
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,glyphs=%u/%u,fonts=%d fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, s_palChanges, s_palDiff, s_palDiffAt, s_palSource,
                   tagpu_classicpp_on() ? 1 : 0, s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb,
                   s_k, s_sharpW, s_sharpH,
-                  s_curOwn, s_curW, s_curH, s_curDev, s_cursorScale, s_curDrawn, s_curWarm, fps);
+                  s_curOwn, s_curW, s_curH, s_curDev, s_cursorScale, s_curDrawn, s_curWarm,
+                  s_strings, s_glyphs, s_strMiss, s_strReseed, gCached, gDrops, gFonts, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
     }
@@ -1355,6 +1497,8 @@ void tagpu_gui_glreset(void)
     s_sharpTex = s_sharpFbo = 0; s_sharpW = s_sharpH = 0; s_sharpOn = 0;   /* the sharp layer died with it */
     s_sharpProg = 0; s_sharpFailed = 0;      /* a new context deserves a fresh try */
     s_cursProg = 0; s_curOwn = 0; s_curFrame = NULL;   /* and the cursor is nobody's until it is re-atlased */
+    s_strProg = 0;
+    tagpu_text_glreset();               /* the glyph atlas's texture id died too; its CELLS are CPU-side */
     tagpu_gaf_atlas_lost(&s_atlas);
     memset(s_palCopy, 0xFF, sizeof s_palCopy);        /* the palette texture died too: re-upload */
     s_skipToReset = 1;

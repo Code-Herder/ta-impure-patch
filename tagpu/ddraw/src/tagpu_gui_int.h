@@ -20,21 +20,32 @@ enum {
     PK_CLEAR,       /* transparent over the box (the viewport's key fill)     */
     PK_SPRITE,      /* a plain keyed GAF blit: frame identity, first sight carries its bytes */
     PK_COPY,        /* twin -> twin, the source's box at (l, t)               */
-    PK_PIXELS       /* the box's bytes follow in the arena (everything else)  */
+    PK_PIXELS,      /* the box's bytes follow in the arena (everything else)  */
+    PK_STRING       /* G17d: TA's own glyphs, stamped by us — the string        */
+                    /* follows in the arena and the font/colours ride along     */
 };
 
 typedef struct TAGPU_PUBOP {
     unsigned char  kind;
     unsigned char  ck;              /* sprite: colour key                      */
+    /* string (G17d): the three colour arguments of 0x4CCF60, as BYTES — the
+       blitter takes all three with `mov al/ah, BYTE PTR [ebp+…]` and compares
+       them 8-bit (`cmp al,ah` at 0x4CCFE2), so the low byte is the whole of
+       what it uses and storing an int here would only invite a wider compare
+       than the engine's [BINARY-VERIFIED 2026-09-09] */
+    unsigned char  fg, bg, tr;
     unsigned short fw, fh;          /* sprite: frame size                      */
     unsigned       surf;            /* destination surface (its pixel base)    */
     unsigned       src;             /* copy: source surface                    */
     short          l, t, r, b;      /* destination box, inclusive, surface px  */
-    short          sl, st;          /* copy: source top-left; sprite: dst pos   */
+    short          sl, st;          /* copy: source top-left; sprite: dst pos;
+                                       string: the x and y the blitter was GIVEN
+                                       (y before the font's own -font[2])       */
     int            w, h, pitch;     /* seed: the surface's geometry             */
-    const void*    frame;           /* sprite: the key (header, pixel ptr)      */
+    const void*    frame;           /* sprite: the key (header, pixel ptr);
+                                       string: the FONT object                  */
     const void*    pix;
-    unsigned       aoff, alen;      /* arena bytes: seed / pixels / a sprite's first sight */
+    unsigned       aoff, alen;      /* arena bytes: seed / pixels / a sprite's first sight / the string */
     unsigned       flip;            /* the flip this belongs to (diagnostics)   */
 } TAGPU_PUBOP;
 
@@ -68,6 +79,7 @@ enum {
     TAGPU_GUI_WHY_ATLAS,      /* the UI atlas was full                                                   */
     TAGPU_GUI_WHY_COPY,       /* a copy from a source with no twin                                       */
     TAGPU_GUI_WHY_STALL,      /* the consumer came back after a stall: what was dropped is re-seeded    */
+    TAGPU_GUI_WHY_STRING,     /* a string op stamped nothing (an unreadable font): the text is missing  */
     TAGPU_GUI_WHY_N
 };
 /* a consumer that has taken nothing for this long while ops were queued is not

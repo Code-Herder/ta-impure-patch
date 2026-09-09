@@ -116,7 +116,7 @@ static int __cdecl before_text(void* e)
     const unsigned char* font = (const unsigned char*)(size_t)ARG(e, 3);
     const unsigned char* str  = (const unsigned char*)(size_t)ARG(e, 4);
     int x = SARG(e, 5), y = SARG(e, 6);
-    int rows, top, w = 0, i;
+    int rows, top, w = 0, i, n;
     SURF* s = NULL;
     if (!on_game_thread()) return 0;
     if (!ptr_ok(font) || !ptr_ok(str)) { op_add(OP_TEXT, NULL, 0, 0, 0, 0); return 0; }
@@ -129,8 +129,27 @@ static int __cdecl before_text(void* e)
         off = *(const unsigned short*)(font + 4 + 2 * c);
         if (off) w += font[off];
     }
+    n = i;                                       /* the bytes the blitter reads */
     for (i = 0; i < s_nsurf; i++) if (s_surf[i].base == (unsigned)(size_t)base) { s = &s_surf[i]; break; }
     op_add(OP_TEXT, s, x, top, x + w - 1, top + rows - 1);
+    /* G17d: the STRING, not the box's bytes. Copied here, on the game thread,
+       because the argument is routinely a caller's stack temp and publish runs
+       at the flip — the same reason a sprite's pixels are copied (3.5). With no
+       room in the scratch the op stays what it was, a box of captured pixels,
+       so a full scratch costs the arena and never the picture. */
+    if (s_lastOp && n > 0 && (unsigned)n < STR_SCRATCH - s_strUsed) {
+        OP* o = s_lastOp;
+        memcpy(s_strBuf + s_strUsed, str, (size_t)n);
+        s_strBuf[s_strUsed + n] = 0;
+        o->soff = s_strUsed;
+        o->slen = (unsigned short)n;
+        o->frame = font;                         /* the font object            */
+        o->dx = (short)x; o->dy = (short)y;      /* what the blitter was GIVEN */
+        o->fg = (unsigned char)ARG(e, 7);
+        o->bg = (unsigned char)ARG(e, 8);
+        o->tr = (unsigned char)ARG(e, 9);
+        s_strUsed += (unsigned)n + 1;
+    } else if (s_lastOp && n > 0) s_strLost++;
     return 0;
 }
 

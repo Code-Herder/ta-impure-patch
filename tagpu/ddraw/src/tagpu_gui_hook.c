@@ -204,8 +204,21 @@ typedef struct OP {
     short dx, dy;                               /* sprite: unclipped top-left */
     unsigned src; short sl, st;                 /* copy: source, its top-left */
     unsigned seq;                               /* flip: terrown's fill seq   */
+    /* text (G17d): the string is copied into a game-thread scratch AT OBSERVE
+       TIME, not read again at publish. The argument routinely points at a
+       caller's stack temp, which is gone by the flip — the same reason a
+       sprite's pixels are copied rather than pointed at (gui-renderer.md 3.5).
+       `frame` carries the font object and `dx`/`dy` the x/y it was given. */
+    unsigned soff; unsigned short slen;
+    unsigned char fg, bg, tr;                   /* text: 0x4CCF60's three colours */
     unsigned char dup;                          /* an identical op follows: dropped */
 } OP;
+/* The batch's strings. Reset with s_nops, and bounded the same way: a census is
+   ~5 ms of drawing, in which the whole UI redraws a few hundred short labels. */
+#define STR_SCRATCH (64u << 10)
+static unsigned char s_strBuf[STR_SCRATCH];
+static unsigned s_strUsed;
+static unsigned s_strLost;                      /* strings the scratch could not take */
 static OP* s_lastOp = NULL;                     /* the op op_add just recorded */
 #define MAX_OPS 65536
 static OP       s_ops[MAX_OPS];
@@ -424,8 +437,19 @@ static unsigned op_hash(const OP* o)
 }
 static int op_same(const OP* a, const OP* b)
 {
-    return a->kind == b->kind && a->base == b->base && a->l == b->l && a->t == b->t && a->r == b->r && a->b == b->b &&
-           a->frame == b->frame && a->pix == b->pix && a->src == b->src && a->sl == b->sl && a->st == b->st;
+    if (!(a->kind == b->kind && a->base == b->base && a->l == b->l && a->t == b->t && a->r == b->r && a->b == b->b &&
+          a->frame == b->frame && a->pix == b->pix && a->src == b->src && a->sl == b->sl && a->st == b->st))
+        return 0;
+    /* G17d: TWO STRINGS IN ONE BOX ARE NOT THE SAME OP. Until the string op
+       existed a text draw published its box's bytes, read at publish time, so
+       collapsing two draws over the same rectangle was exactly right — the
+       later read carried both. A string op carries the string, so dropping the
+       earlier one would drop whatever ink of it the later one does not cover. */
+    if (a->kind == OP_TEXT)
+        return a->slen == b->slen && a->dx == b->dx && a->dy == b->dy &&
+               a->fg == b->fg && a->bg == b->bg && a->tr == b->tr &&
+               (a->slen == 0 || !memcmp(s_strBuf + a->soff, s_strBuf + b->soff, a->slen));
+    return 1;
 }
 static void dedup(void)
 {
@@ -456,7 +480,7 @@ static void dedup(void)
 }
 
 static const char* const WHY_NAME[TAGPU_GUI_WHY_N] =
-    { "?", "arm", "gl-context", "queue-full", "arena-full", "box-outside-surface", "lost-sprite", "atlas-full", "untwinned-copy", "stall-over" };
+    { "?", "arm", "gl-context", "queue-full", "arena-full", "box-outside-surface", "lost-sprite", "atlas-full", "untwinned-copy", "stall-over", "string-empty" };
 
 /* THE CONSUMER CAN DIE, OR CRAWL. cnc-ddraw stops its render thread inside
    every SetDisplayMode and starts a new one with a new GL context (dd.c);
@@ -597,6 +621,26 @@ static void publish(unsigned flipSurf)
                     if (!pub_surface_bytes(s, op->l, op->t, op->r, op->b, o)) return;
                 } else seen_frame(op->frame, key, 1);
             }
+            pub_commit();
+            continue;
+        }
+        /* G17d: a text draw whose string we captured is a STRING op — TA's own
+           glyphs, stamped by the render thread from the coverage atlas, instead
+           of ~968 arena bytes of a box that has already blended with whatever
+           art it was drawn onto. A text op with no string (the scratch was
+           full, or the font would not read) falls through to its box's bytes,
+           which is exactly what it was before this gate. */
+        if (op->kind == OP_TEXT && op->slen && op->frame) {
+            unsigned char* dst;
+            o = pub_op(PK_STRING, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            o->sl = op->dx; o->st = op->dy;
+            o->frame = op->frame;
+            o->fg = op->fg; o->bg = op->bg; o->tr = op->tr;
+            dst = pub_bytes(o, (unsigned)op->slen + 1u);
+            if (!dst) return;
+            memcpy(dst, s_strBuf + op->soff, (size_t)op->slen);
+            dst[op->slen] = 0;
             pub_commit();
             continue;
         }
@@ -782,14 +826,14 @@ static int __cdecl before_flip(void* entry_esp)
         s_inFlip = 1;
         hijack = 1;
     }
-    if (!s_census && !g_gui_draw) { s_nops = 0; return hijack; }
+    if (!s_census && !g_gui_draw) { s_nops = 0; s_strUsed = 0; return hijack; }
     if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
     QueryPerformanceCounter(&now);
     if (s_lastQpc.QuadPart && (now.QuadPart - s_lastQpc.QuadPart) * 1000 < (LONGLONG)CENSUS_MS * s_freq.QuadPart)
         return hijack;                              /* too soon: keep accumulating ops */
     s_lastQpc = now;
     s_censuses++;
-    if (!s_census) { publish(s ? s->base : 0); s_nops = 0; return hijack; }
+    if (!s_census) { publish(s ? s->base : 0); s_nops = 0; s_strUsed = 0; return hijack; }
     if (s) {
         int vl = 0, vt = 0, vr = -1, vb = -1, sub = 0;
         if (isGame) {
@@ -895,6 +939,7 @@ static int __cdecl before_flip(void* entry_esp)
     }
     publish(s ? s->base : 0);
     s_nops = 0;
+    s_strUsed = 0;
     memset(s_kindCount, 0, sizeof s_kindCount);
     memset(s_nullCtx, 0, sizeof s_nullCtx);
     s_builds = 0; s_buildFlags = 0;
