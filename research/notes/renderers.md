@@ -426,20 +426,85 @@ game's is tracked). Interviewed with the owner 2026-09-08/09.
    of *our* two renderers owns it.
 2. **Simplify.** Seven gadgets, and everything else demoted to the cfg.
 
-**The screen.** `RENDER.GUI`, panel `id=0` at `(128,128) 150×352` — the rect `VISUALRT.GUI`
-itself uses, over the world and hard against the side panel. Background gadget `id=12`
-naming its panel frame. Seven `id=1` buttons at `x=13 w=120 h=20` on a 44 px pitch, each
-with an `id=5` label 16 px above:
+**The screen — a drop-down, not a stock rect** [SHAPE DECIDED 2026-09-09]. `RENDER.GUI`,
+panel `id=0` at `(w−320, 32) 304×240` — right-aligned 16 px in, hanging from the top bar's
+underside, over the world. Background gadget `id=12` naming its panel frame. Seven `id=1`
+buttons at `x=166 w=120 h=20` on a **28 px** pitch, each with an `id=5` label at `x=14
+w=144` **on the same line**:
 
 | y | row | stages | what drives it |
 |---|---|---|---|
-| 23 | **Renderer** | Classic \| Classic++ \| Custom | sets every row below it |
-| 67 | **Undithered assets** | Off \| On | `assets=` — **key does not exist** |
-| 111 | **Dynamic lighting** | Off \| On | `light=` — **key does not exist** |
-| 155 | **Shadows** | Off \| Hard \| Soft | `shadows=` — **needs a third value** |
-| 199 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=`, live only at Soft |
-| 243 | **Supersampling** | Off \| 2× | `tagpu_ss.off` |
-| 287 | **Mouse-wheel zoom** | Off \| On | `tagpu_zoom.on` |
+| 34 | **Renderer Style** | Classic \| Classic++ \| Custom | sets every row below it |
+| 62 | **Undithered assets** | Off \| On | `assets=` — done, G18a |
+| 90 | **Dynamic lighting** | Off \| On | `light=` — done, G18a |
+| 118 | **Shadows** | Off \| Hard \| Soft | `shadows=` — done, G18b |
+| 146 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=`, live only at Soft |
+| 174 | **Supersampling** | Off \| 2× | `tagpu_ss.off` |
+| 202 | **Mouse-wheel zoom** | Off \| On | `tagpu_zoom.on` |
+
+*This supersedes a 150×352 panel at `(128,128)` — the rect `VISUALRT.GUI` uses — with the
+label 16 px **above** its control on a 44 px pitch. The label moved beside the control, and
+that is the whole reason the frame has to be composed rather than reused: every stock panel
+puts the label above, which seven rows have no room for.*
+
+**No Apply button** [DECIDED 2026-09-09]. A stage button **is** the setting — there is no
+edit buffer for an Apply to commit — so `OnCommand` writes the row's key on the click and
+the panel is dismissed by the trigger or by clicking away, the way a drop-down is. Not only
+a visual choice: it removes an eighth gadget from the `.GUI` and means no code ever has to
+gather seven gadgets' state at once. It also takes 40 px off the panel, which is why the
+height is 240 and not 280.
+
+**The ground is `frontend.gaf`'s own `back*` nine-slice** [DECIDED 2026-09-09] — the shell's
+mottled panelling, 64×64, composed at 304×240 by `tools/guipanel.py --nine back`. Three were
+built and looked at: `dia` (TA's dialog exactly — `diatile` is *one colour*, flat black, in a
+grey bevel), `back`, and a `hybrid` putting the back texture inside the dia frame. `back`
+was chosen. **Use `backtile` frame 4, not 0** — frame 0 carries a lit bottom edge that puts
+seams through a tiled centre. Only the seven recesses are drawn over it; `text16*` is a
+*blue* text-field well, not a neutral recess, which is why they cannot come from the kit.
+
+**What opens it: a frameless sprocket on the top bar** [DECIDED 2026-09-09]. Right-inset —
+36 px from the frame's right edge, 28×28 in the 32 px bar, so it sits over the drop-down's
+own span and the panel hangs from underneath. `tools/guipanel.py --trigger` generates it;
+nothing of the game's art is in it.
+
+- **The engine already ships the idea of a frameless icon button.** `mainmenu.gui` GADGET5
+  `Credits` — the Cavedog logo — is an ordinary `id=1` button with `text=` empty and
+  `attribs=1026`, where every other button on that screen is `attribs=2`. Its art is
+  `anims/mainmenu.gaf`, one entry, 80×40, five frames, and it has no plate, no bevel and no
+  text.
+- **The "faint tan" is a palette ramp, not a colour.** TA's palette 55..63 is a dark warm
+  ramp — `55 (95,99,71) · 56 (91,87,59) · 57 (83,67,51) · 58 (71,59,43) · 59 (59,51,35) ·
+  60 (47,43,27) · 61 (35,31,19) · 62 (23,19,15) · 63 (11,11,7)` — and the Cavedog logo is
+  drawn **entirely** inside it: its resting frame is 778 px of 62, 395 of 61, 205 of 60,
+  113 of 59 and three of 58. The outline reads as faint because it is three ramp steps above
+  its ground, not because it is desaturated.
+- **The state change is a slide along that ramp, not a second picture.** Of the five frames,
+  0/2/3 are identical, 1 drops 58 entirely and 59 falls 113 → 24 (pressed), and 4 gains
+  56/57 and more than doubles 58 (over). Nothing moves. That is how a button with no plate
+  still reads as a button, and it is what the trigger's four frames do.
+- **The logo's own scheme could NOT be copied straight onto the bar.** Measured on real
+  1920×1080 and 1024×768 skirmish frames: the top bar is exactly **32 px** (rows 0..31; row
+  32 is the world) and **its own texture is index 62** — the modal bar pixel is (23,19,15),
+  the same value that is 52 % of the logo's ink. Laid on the bar the logo's ink would be
+  invisible. So the ramp is re-hung around a lighter ground: the **body goes below** the bar
+  (63, near-black at the core) and the **outline above** it — `59` at rest, `57` over, `60`
+  pressed — which keeps the logo's three-step relationship around a different centre.
+- **The bar has room.** Quiet runs (no bright art in the 32 px band) measured at 1920:
+  x 984..1327 and 1497..1840, 343 px each, plus 1841..1920 at the corner. At 1024 the whole
+  right end from x≈940 is quiet, the only thing in it a faint vertical seam near x=984
+  peaking at 71. The corner itself was prototyped and rejected in favour of the inset, where
+  a window border cannot clip it.
+- **Rejected first: the icon on a plate.** Two rounds went to `commongui.buttons0` — frames
+  0..3 (16×16, which leaves a 10 px canvas in a 32 px bar and made every cog near-abstract)
+  and then frames 24..27, the real 96×31 in-game menu plate `ARMOPT.GUI` and `PREFS.GUI` use.
+  Six 27×27 cogs were drawn for that plate before the whole plate idea was dropped. Two
+  findings survive it: **the 96×31 plate's face is 26 px, not 31** — row 0 and rows 28..30
+  are bezel and row 27 a bright bottom chamfer — and **the ink inverts on it**, since it is
+  light brushed steel (~155 normal / 187 hover / 123 pressed) rather than the dark green of
+  the 16×16.
+- **Eight teeth, and it matters.** 8 is the only count that pixelises cleanly at this size,
+  because 45° steps put every tooth in mirror symmetry with another across an axis or a
+  diagonal; 10 and 12 gave ragged flanks and, at 12, a rough circle at 1:1.
 
 **Custom is derived, never chosen.** Clicking Renderer alternates Classic and Classic++;
 touching any row below makes it read Custom. **Shadows Off / Hard / Soft falls out of the
@@ -521,24 +586,43 @@ parameters. The shadow keys are §2.12's, and the depth map still runs only when
   the same silhouette edges. That is inside §2.12's "shadowed-pixel counts within 5 %" bar
   (−3.6 %). `shadows=0` also stops an aircraft's `airshadow=drop` silhouette, which the
   switch used to draw whatever `shadows=` said.
-- **Panel art and an entry point.** Seven `h20` gadgets need seven `h20` recesses and no
-  stock runtime panel has more than five; `PREFS` has six recesses and uses all six, so
-  there is nowhere to hang a "Graphics" button either. Both need art drawn — see
+- **Panel art and an entry point** — ● **answered 2026-09-09, not yet built.** Seven `h20`
+  gadgets need seven `h20` recesses and no stock runtime panel has more than five; `PREFS`
+  has six recesses and uses all six, so there is nowhere to hang a "Graphics" button either.
+  Both answers are above: the ground is **composed at runtime** from `frontend.gaf`'s `back*`
+  nine-slice with the recesses drawn over it, and the entry point is the **frameless sprocket
+  on the top bar**. `tools/guipanel.py` builds both the way the DLL will — see
   [GUI gadgets](gui-gadgets.html) §10.3.
+
+  **Nothing of the game's art is carried either way.** The ground is the player's own
+  install, composed in memory and appended to the gadget GAF blob at `gi+0x04`; the trigger
+  is generated geometry and nine palette indices.
 - **Whether a new `.GUI` name can be pushed at all** [OPEN]. The screen inventory is a
   string table in the binary (gui-gadgets §6); a new name needs a call site, so replacing a
   screen we do not need may be cheaper than adding one.
+- **Who hosts the trigger** [OPEN, and the sharpest one left]. **The trigger cannot be a
+  gadget of the screen it opens** — only the top GUI is interactive, so a gadget on
+  `RENDER.GUI` cannot be what makes `RENDER.GUI` appear. Every placement therefore needs
+  either a **host screen we replace** (`ARMMAIN2`/`CORMAIN2` is where TA already keeps its
+  buttons, but MAIN2 is only on top when *nothing* is selected — a builder's page covers it)
+  or a **DLL overlay that forwards the click**. Choosing the frameless icon does not settle
+  this; it is orthogonal to how the click is received.
 
-*Superseded, kept so it is not re-derived.* The original decision (2026-09-04) was a small
-"Options" button at the top right over the engine's top bar, opening a DLL-drawn panel of
-buttons and steppers for every Classic++ knob. Its reasoning still holds for a DLL-drawn
-overlay — the composite draws our non-empty pixels over the engine's frame outside the
-viewport, the top-right ~400 px of the 1024-wide frame are bare panelling, the DLL sees
-every window message before the game and already swallows the wheel, and our pixels cover
-the engine's cursor — and three shapes were prototyped against it (a drop-down, a full
-panel, an edge rail; the full panel won). The premise then moved to the engine's own UI,
-which makes all of that moot: the gadget dispatcher handles input, the GAF art handles the
-look, and the G15 twins mirror it for free.
+*Superseded in part, kept so it is not re-derived.* The original decision (2026-09-04) was a
+small "Options" button at the top right over the engine's top bar, opening a **DLL-drawn**
+panel of buttons and steppers for every Classic++ knob; three shapes were prototyped against
+it (a drop-down, a full panel, an edge rail; the full panel won).
+
+**The placement came back; only the drawing moved.** The 2026-09-09 design is again a small
+icon at the top right of the bar opening a drop-down — what changed is that the panel is the
+engine's own gadgets on its own GAF art instead of pixels the DLL paints, and that the
+drop-down beat the full panel this time round. So the old reasoning is not moot, it is the
+**fallback**, and it still holds where the overlay is concerned: the composite draws our
+non-empty pixels over the engine's frame outside the viewport, the top-right ~400 px of the
+1024-wide frame are bare panelling, the DLL sees every window message before the game and
+already swallows the wheel, and our pixels cover the engine's cursor. That last set is
+exactly what a DLL overlay forwarding the trigger click would rest on, which is why the open
+question above has two answers and not one.
 ### 2.11 Two small calls made by the implementer
 - **The unit vertex stream** grows from 11 to 15 floats: the map-space normal and the
   world height join `x, y, depthEnc, u, v, flat, ck, shadeRow, wx, wzp, vy`. Face normals are
