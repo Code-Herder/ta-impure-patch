@@ -25,6 +25,7 @@
 #include "tagpu_reclaim.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
+#include "tagpu_menu.h"
 #include "utils.h"
 #include "versionhelpers.h"
 #include "delay_imports.h"
@@ -162,6 +163,16 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            `tagpu_reclaim.off` disables. Changes only WHEN a freed block
            returns to the heap; the sim reads nothing different. */
         tagpu_reclaim_init();
+
+        /* tagpu: the render-options screen (Phase F, G18). Writes
+           impure-patch.ufo unconditionally -- the engine globs *.UFO from the
+           working directory at InitTAHPIAry 0x41D4C0, and DDRAW.dll is the
+           FIRST static import of TotalA.exe, so DLL_PROCESS_ATTACH runs before
+           the exe's entry point and therefore before any HAPI init: the archive
+           is on disk in time by the loader's rules, not by luck. The screen
+           itself is one observer on UpdateIngameGUI 0x491D70, byte-matched,
+           disjoint from every detour above; `tagpu_menu.off` disables it. */
+        tagpu_menu_init();
 
         PVOID(WINAPI * add_handler)(ULONG, PVECTORED_EXCEPTION_HANDLER) =
             (void*)real_GetProcAddress(GetModuleHandleA("Kernel32.dll"), "AddVectoredExceptionHandler");

@@ -15,6 +15,7 @@
 #include "tagpu.h"
 #include "tagpu_overlay.h"
 #include "tagpu_reclaim.h"
+#include "tagpu_menu.h"
 
 
 static HGLRC ogl_create_core_context(HDC hdc);
@@ -1589,6 +1590,13 @@ static void ogl_render()
                 tagpu_overlay_draw(&f);
                 tagpu_reclaim_pass_end(f.frame_counter);
                 gldbg("E-tagpu");
+
+                /* tagpu_menu: the render-options screen's DEFERRED WRITE. A row
+                   click sets an in-memory value on the game thread; the cfg is
+                   written here, off it, because TA is lockstep and a synchronous
+                   write inside a gadget callback is an unbounded stall
+                   (renderers.md 2.10). Nothing happens on a frame with no click. */
+                tagpu_menu_present();
 
                 if (tagpu_capturing)
                 {
