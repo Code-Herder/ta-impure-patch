@@ -224,6 +224,9 @@ static int      s_mmEngW, s_mmEngH;
 static unsigned char* s_mmRg;           /* interleave scratch                                  */
 static unsigned s_mmRgCap;
 static unsigned s_mmNoEng;              /* frames the engine's pair could not be read          */
+static unsigned char* s_mmPicRgb;       /* the picture resolved through the presented palette  */
+static unsigned s_mmPicCap;
+static unsigned s_mmPalSeen;            /* s_palChanges when it was last resolved              */
 static unsigned s_mmFogged;             /* engine texels where fogged != unfogged, this frame  */
 
 /* THE CURSOR (gui-renderer.md 13.5, G17c). Decided ONCE per frame, in
@@ -350,8 +353,15 @@ static const char* MM_FS =
     "      vec2 g = texelFetch(uEng, q, 0).rg;\n"
     "      if (abs(g.r - g.g) > 0.5 / 255.0) clean = false;\n"
     "    }\n"
-    "  float idx = clean ? texture(uPic, uv).r : e.r;\n"
-    "  frag = vec4(texture(uPal, vec2((idx * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); }\n";
+    /* OUR BASE IS SAMPLED AS COLOUR, not as an index, and it has to be. At
+       1 < k < 2 the box is SMALLER than the 252-px picture, so this is a
+       downsample, and a downsample wants a filter — but interpolating palette
+       INDICES is meaningless (13.3 says so about the mirror and it is just as
+       true here). So the picture is uploaded already resolved through the
+       presented palette and sampled RGB, with MIN linear and MAG nearest: the
+       shrink is filtered, the blow-up at k > 2 stays crisp. */
+    "  if (clean) { frag = vec4(texture(uPic, uv).rgb, 1.0); return; }\n"
+    "  frag = vec4(texture(uPal, vec2((e.r * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); }\n";
 /* the copy: the source twin's index at (this pixel - offset), coverage 1 */
 static const char* CPY_FS =
     "#version 330 core\n"
@@ -1342,19 +1352,36 @@ static void sharp_minimap(const TAGPU_FRAME* f)
         if (!tagpu_gui_minimap_pic(&pic, &pw, &ph, &gen)) return;
         if (pw <= 0 || ph <= 0) return;
     }
-    if (s_mmbase && (gen != s_mmGenSeen || !s_mmTex)) {
+    if (s_mmbase && (gen != s_mmGenSeen || s_palChanges != s_mmPalSeen || !s_mmTex)) {
         if (!s_mmTex) glGenTextures(1, &s_mmTex);
         if (!s_mmTex) return;
         glBindTexture(GL_TEXTURE_2D, s_mmTex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, pw, ph, 0, GL_RED, GL_UNSIGNED_BYTE, pic);
+        /* resolved HERE, once per map load and once per palette change, rather
+           than per fragment: the sampler has to see colour for the filter above
+           to mean anything, and a fade is a run of palette changes that costs a
+           190 KB re-upload each — against 13 356 texels of engine surface this
+           module already uploads every single frame */
+        {
+            unsigned n = (unsigned)pw * (unsigned)ph, i;
+            if (n * 3 > s_mmPicCap) {
+                free(s_mmPicRgb); s_mmPicCap = n * 3 + 4096;
+                s_mmPicRgb = (unsigned char*)malloc(s_mmPicCap);
+                if (!s_mmPicRgb) { s_mmPicCap = 0; return; }
+            }
+            for (i = 0; i < n; i++) {
+                const unsigned char* e = s_palCopy + 4 * (unsigned)pic[i];
+                s_mmPicRgb[3 * i] = e[0]; s_mmPicRgb[3 * i + 1] = e[1]; s_mmPicRgb[3 * i + 2] = e[2];
+            }
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, pw, ph, 0, GL_RGB, GL_UNSIGNED_BYTE, s_mmPicRgb);
+        }
         glBindTexture(GL_TEXTURE_2D, 0);
-        s_mmGenSeen = gen; s_mmTW = pw; s_mmTH = ph;
+        s_mmGenSeen = gen; s_mmPalSeen = s_palChanges; s_mmTW = pw; s_mmTH = ph;
     }
     /* the box the engine fitted it into, in ITS screen pixels, read live: it is
        0x0 at BuildMinimapSurface's entry, since that call is what computes it */
