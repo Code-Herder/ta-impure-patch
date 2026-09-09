@@ -83,7 +83,7 @@ code{font-family:var(--mono);font-size:12.5px;color:var(--cream)}
 /* the trigger: no plate, no bevel, no text -- the register of mainmenu.gui's
    `Credits` gadget (id=1, text= empty, attribs=1026). It is 28 px in a 32 px
    bar, so 2 px of bar shows above and below. */
-#trig{position:absolute;left:960px;top:2px;width:28px;height:28px;cursor:pointer}
+#trig{position:absolute;left:980px;top:2px;width:28px;height:28px;cursor:pointer}
 #trig img{left:0;top:0}
 #screenmag{left:0;top:0}
 #screen .bg,#screenmag .bg{left:0;top:0}
@@ -134,9 +134,11 @@ code{font-family:var(--mono);font-size:12.5px;color:var(--cream)}
 
 <div class="hdr">
   <h1>Render options &mdash; <em>the drop-down</em></h1>
-  <p><strong>Every choice settled, in one place.</strong> Click the sprocket at the
-     right of the top bar to dismiss the panel and again to bring it back &mdash; it
-     is the trigger, and it is the whole entry point.</p>
+  <p><strong>Every choice settled, in one place.</strong> The panel starts closed, the
+     way a drop-down does: click the sprocket at the right of the top bar to open it,
+     the sprocket again or anywhere else on the frame to dismiss it. Clicking a row
+     leaves it open. The magnified copy beside the frame ignores all of that, so the
+     panel stays there to be looked at.</p>
   <p>Seven gadgets, no pages, hanging off the top bar at the right: panel
      <code>id=0</code> at <code>(704,32) 304&times;240</code>. The stage buttons are the
      engine's own art from <code>anims/commongui.gaf</code> &mdash; extracted, never
@@ -224,8 +226,10 @@ const CAPTION='Rendering Options';
 /* THE TRIGGER: a frameless 28x28 icon on the 32 px top bar, right-inset.
    tools/guipanel.py generates it; renderers.md 2.10 has why it looks like
    the Cavedog logo and why its ink walks TA's palette ramp 55..63. */
-const BAR_H=32, TRIG=28, TRIG_INSET=36, FRAME_W=1024;
-const TRIG_X=FRAME_W-TRIG_INSET-TRIG, PANEL_X=FRAME_W-304-16;
+const BAR_H=32, TRIG=28, MARGIN=16, FRAME_W=1024;
+/* one margin, both rects: the icon's right edge and the panel's right edge
+   land on the same line, so the menu visibly drops from the icon. */
+const TRIG_X=FRAME_W-MARGIN-TRIG, PANEL_X=FRAME_W-MARGIN-304;
 /* label -> the PNG tools/guifont.py set it in */
 const capfile=t=>ART+'cap-'+t.toLowerCase().replace(/ /g,'-')+'.png';
 
@@ -263,7 +267,7 @@ const P_CLASSIC={assets:0,light:0,shadows:1,shadowres:2,ss:1,zoom:1};
 const P_CPP    ={assets:1,light:1,shadows:2,shadowres:2,ss:1,zoom:1};
 let S=Object.assign({},P_CPP);
 let presetStage=1, zoom=2, ground='back', face='gaf12';
-let open_=true, trigState='normal';
+let open_=false, trigState='normal';   /* a drop-down starts closed */
 
 const eq=P=>Object.keys(P).every(k=>S[k]===P[k]);
 const liveRow=r=>!r.needs||Object.keys(r.needs).every(k=>S[k]===r.needs[k]);
@@ -344,17 +348,50 @@ function buildInto(scr, z){
 function drawTrigger(){
   const t=document.getElementById('trig');
   t.style.left=TRIG_X+'px'; t.style.top='2px';
-  t.innerHTML='';
-  t.appendChild(img(ART+'trigger-'+trigState+'.png',
-                    'width:'+TRIG+'px;height:'+TRIG+'px'));
+  /* ONE <img>, built once and only ever re-`src`ed.
+     Rebuilding it per state does not work: `mousedown` would detach the node
+     the pointer went down on, and the browser then has no common ancestor to
+     fire `click` at, so the toggle never runs. That is a real bug this page
+     had -- the sprocket hovered and pressed perfectly and opened nothing. */
+  let i=t.firstElementChild;
+  if(!i){
+    i=img(ART+'trigger-normal.png','width:'+TRIG+'px;height:'+TRIG+'px');
+    t.appendChild(i);
+    t.onmouseenter=()=>{trigState='over';   paintTrigger();};
+    t.onmouseleave=()=>{trigState='normal'; paintTrigger();};
+    t.onmousedown =()=>{trigState='pressed';paintTrigger();};
+    t.onmouseup   =()=>{trigState='over';   paintTrigger();};
+    t.onclick     =()=>{open_=!open_; render();};
+  }
+  paintTrigger();
+}
+
+function paintTrigger(){
+  const t=document.getElementById('trig');
+  if(!t.firstElementChild) return;
+  t.firstElementChild.src=ART+'trigger-'+trigState+'.png';
   t.title = open_ ? 'Rendering Options — click to dismiss'
                   : 'Rendering Options';
-  t.onmouseenter=()=>{trigState='over';   drawTrigger();};
-  t.onmouseleave=()=>{trigState='normal'; drawTrigger();};
-  t.onmousedown =()=>{trigState='pressed';drawTrigger();};
-  t.onmouseup   =()=>{trigState='over';   drawTrigger();};
-  t.onclick     =()=>{open_=!open_; render();};
 }
+
+/* CLICK-AWAY, the other half of "like a real drop-down". Bound to the FRAME,
+   not the document: the frame is the game's screen, and the lab's own dock and
+   readouts around it are not part of the model.
+
+   It listens on MOUSEDOWN, not click, and that is load-bearing -- a click on a
+   row calls render(), which rebuilds the panel's children, so by the time the
+   click event bubbles its target is a DETACHED node and `screen.contains()`
+   answers false. Mousedown fires before the rebuild, while the target is still
+   in the tree. Clicks on the sprocket itself fall through to its own handler,
+   so the toggle never fires twice. */
+document.addEventListener('DOMContentLoaded',()=>{
+  document.getElementById('frame').addEventListener('mousedown',e=>{
+    if(!open_) return;
+    const scr=document.getElementById('screen'), t=document.getElementById('trig');
+    if(scr.contains(e.target)||t.contains(e.target)) return;
+    open_=false; render();
+  });
+});
 
 /* --------------------------------------------------------- the readouts -- */
 function guiText(){

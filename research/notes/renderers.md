@@ -447,6 +447,18 @@ label 16 px **above** its control on a 44 px pitch. The label moved beside the c
 that is the whole reason the frame has to be composed rather than reused: every stock panel
 puts the label above, which seven rows have no room for.*
 
+**It behaves like a real drop-down** [DECIDED 2026-09-09]. Closed at rest; the sprocket
+opens it; the sprocket **or a click anywhere outside the panel** closes it; a click on a row
+advances that row and leaves it open. All four verified in the lab.
+
+**That is not free in the engine, and it is the same open question as the trigger.** A click
+outside the panel's rect has to reach *something* that can close the screen, and the
+top-GUI-only rule means the screen cannot simply listen to the whole frame — the same
+constraint that stops the trigger being a gadget of `RENDER.GUI`. Whatever answers *who
+hosts the trigger* (below) answers this too: a replaced host screen sees the click, and a
+DLL overlay forwarding the trigger click can forward this one. **Not yet measured:** whether
+a `.GUI` screen's dispatcher reports a click that lands outside its `id=0` panel rect at all.
+
 **No Apply button** [DECIDED 2026-09-09]. A stage button **is** the setting — there is no
 edit buffer for an Apply to commit — so `OnCommand` writes the row's key on the click and
 the panel is dismissed by the trigger or by clicking away, the way a drop-down is. Not only
@@ -462,10 +474,17 @@ was chosen. **Use `backtile` frame 4, not 0** — frame 0 carries a lit bottom e
 seams through a tiled centre. Only the seven recesses are drawn over it; `text16*` is a
 *blue* text-field well, not a neutral recess, which is why they cannot come from the kit.
 
-**What opens it: a frameless sprocket on the top bar** [DECIDED 2026-09-09]. Right-inset —
-36 px from the frame's right edge, 28×28 in the 32 px bar, so it sits over the drop-down's
-own span and the panel hangs from underneath. `tools/guipanel.py --trigger` generates it;
-nothing of the game's art is in it.
+**What opens it: a frameless sprocket on the top bar** [DECIDED 2026-09-09]. 28×28 in the
+32 px bar, right-inset by **`MARGIN = 16`** — the *same* margin the panel is right-aligned
+by, so the icon's right edge and the drop-down's right edge land on one line and the menu
+visibly drops from the icon. Both are anchored to the frame's **right edge**, never to a
+fixed coordinate: `trigger_at(w) = (w − 16 − 28, 2)` and `panel_at(w) = (w − 16 − 304, 32)`,
+which is 980 and 704 at 1024, 1876 and 1600 at 1920. `tools/guipanel.py --trigger` generates
+the icon; nothing of the game's art is in it.
+
+*The inset was 36 for a day — the position picked by eye from the prototype, which was not
+derived from anything. `MARGIN` is the only non-arbitrary number available, and using it for
+both rects is what turns the placement into a rule.*
 
 - **The engine already ships the idea of a frameless icon button.** `mainmenu.gui` GADGET5
   `Credits` — the Cavedog logo — is an ordinary `id=1` button with `text=` empty and
@@ -491,9 +510,23 @@ nothing of the game's art is in it.
   pressed — which keeps the logo's three-step relationship around a different centre.
 - **The bar has room.** Quiet runs (no bright art in the 32 px band) measured at 1920:
   x 984..1327 and 1497..1840, 343 px each, plus 1841..1920 at the corner. At 1024 the whole
-  right end from x≈940 is quiet, the only thing in it a faint vertical seam near x=984
-  peaking at 71. The corner itself was prototyped and rejected in favour of the inset, where
-  a window border cannot clip it.
+  right end from x≈940 is quiet. The corner itself was prototyped and rejected in favour of
+  the inset, where a window border cannot clip it.
+- **The bar's own art is LEFT-anchored, and that is why no inset can be chosen to dodge it**
+  [MEASURED 2026-09-09]. On 1024 and 1920 frames of the same map every seam sits at the
+  **identical x** in both — 123, 132, 169, 215, 352, 397, 418, 468, 604, 641, 798, 814,
+  983… — so the bar is drawn from the left and the extra width at 1920 is simply more of it.
+  Past the resource readouts it repeats on a **513 px period**: seams at 814, 983, 1327,
+  1496, 1840, gaps of 169, 344, 169, 344. (`LIGHTBAR` frame 1 is 507×32, suggestively close;
+  the tile is *not* confirmed and the phase origin is not pinned.) A seam's distance from the
+  **right** edge therefore changes with resolution — 40 px in at 1024, 79 px at 1920 — so
+  chasing it would make the icon's position resolution-dependent, for a 4 px feature peaking
+  at 71 on a bar whose own texture already reaches 59.
+
+  **What that does cost is the bore, which is transparent** — a seam crossing it reads as a
+  defect rather than as texture. At `MARGIN = 16` the seam falls on the icon's left teeth at
+  1024 and misses the icon entirely at 1920; the bore is clean in both. An inset of 26 would
+  have put a seam straight through the bore at 1024, which is the one placement to avoid.
 - **Rejected first: the icon on a plate.** Two rounds went to `commongui.buttons0` — frames
   0..3 (16×16, which leaves a 10 px canvas in a 32 px bar and made every cog near-abstract)
   and then frames 24..27, the real 96×31 in-game menu plate `ARMOPT.GUI` and `PREFS.GUI` use.

@@ -325,24 +325,38 @@ RAMP = {55: (95, 99, 71), 56: (91, 87, 59), 57: (83, 67, 51), 58: (71, 59, 43),
         63: (11, 11, 7)}
 BAR_H = 32                       # measured: rows 0..31, row 32 is the world
 TRIG = 28                        # 2 px of bar above and below
-# RIGHT-INSET, chosen by the owner over the corner itself: two icon-widths in
-# from the right edge, so `trigger_at(frame_width)`. On the 1920 frame the
-# quiet runs measured x 984..1327, 1497..1840 (343 px each) and 1841..1920
-# (79 px, the corner) -- the inset lands inside the run that ends at 1840
-# rather than hard against the edge, where a window border can clip it.
-#
-# The panel is right-aligned 16 px in (x = w - 320, since W is 304), so the
-# trigger at w - 60 sits over the drop-down's own span and it hangs from
-# underneath -- which is the whole reason for putting it on this side.
-TRIG_INSET = 36                  # the gap the owner picked, right edge to icon
+# ONE margin, and both rects hang off it: the panel is right-aligned MARGIN in
+# and so is the trigger, which puts the icon's right edge and the drop-down's
+# right edge on the same line and makes the menu visibly drop from the icon.
+# Both are anchored to the RIGHT edge, never to a fixed coordinate -- the bar
+# spans the whole frame and the free space is at that end.
+MARGIN = 16
 
 
 def trigger_at(frame_w=1024):
-    return (frame_w - TRIG_INSET - TRIG, 2)
+    return (frame_w - MARGIN - TRIG, 2)
 
 
 def panel_at(frame_w=1024):
-    return (frame_w - W - 16, BAR_H)
+    return (frame_w - MARGIN - W, BAR_H)
+
+
+# THE BAR'S OWN ART IS LEFT-ANCHORED, which is why no inset can be chosen to
+# dodge it. Measured on 1024 and 1920 frames of the same map: every seam sits
+# at the IDENTICAL x in both (123, 132, 169, 215, 352, 397, 418, 468, 604,
+# 641, 798, 814, 983 ...), and past the resource readouts it repeats on a
+# 513 px period -- seams at 814, 983, 1327, 1496, 1840, gaps of 169, 344, 169,
+# 344. (`LIGHTBAR` frame 1 is 507x32, suggestively close, but the tile is not
+# confirmed.) So a seam's distance from the RIGHT edge changes with the
+# resolution -- 40 px in at 1024, 79 px at 1920 -- and chasing it would make
+# the position resolution-dependent for a 4 px feature peaking at 71 on a bar
+# whose texture already reaches 59.
+#
+# What it does cost is worth knowing: THE BORE IS TRANSPARENT, so a seam
+# crossing it reads as a defect rather than as texture. At MARGIN = 16 the
+# seam falls on the left teeth at 1024 and misses the icon entirely at 1920;
+# the bore is clean in both. An inset of 26 would have put it straight through
+# the bore at 1024, which is the one placement to avoid.
 # state -> (outline, inner shade, core)
 TRIG_STATES = {"normal": (59, 61, 63), "over": (57, 60, 63),
                "pressed": (60, 62, 63), "greyed": (61, 62, 62)}
