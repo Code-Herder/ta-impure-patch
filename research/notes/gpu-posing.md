@@ -544,11 +544,13 @@ model at 3 `vec4` is 432 uniform components, and the biggest geometry bake in th
    and the note corrections.
 3. `tagpu_reclaim_level_gen()`, adopted by `s_aabb`, `s_sbox`, `s_pmap` — **built 2026-09-08.**
    Verified on a real teardown: `reclaim: level teardown (gen 1)` followed by `native: level 0 ->
-   1, dropping the template caches: aabb=1 selbox=1 pmap=0`. **The second half could not be
-   tested**, because the game does not survive a level teardown while `tagpu_reclaim` is armed —
-   a pre-existing freeze found doing exactly this, [thread-safe destruction](thread-safe-destruction.html)
-   §6b. So "the caches repopulate correctly on the next level" is asserted from the code, not
-   measured, and it stays that way until that freeze is fixed.
+   1, dropping the template caches: aabb=1 selbox=1 pmap=0`. **The second half could not be tested
+   AT THE TIME**, because the game did not survive a level teardown while `tagpu_reclaim` was armed
+   — a pre-existing freeze found doing exactly this, [thread-safe destruction](thread-safe-destruction.html)
+   §6b. **That freeze is fixed since 2026-09-09** (the model-template frees are deferred too, and two
+   full game → shell → game cycles were measured working), so "the caches repopulate correctly on the
+   next level" is still asserted from the code rather than measured — but it is now **owed a run**,
+   not blocked from one.
 3b. **Gate A** — the reconstruction over a screen inventory rather than eight fixtures.
    **Run 2026-09-08 and PASSED**, §0b: `norecon` 0 across 82 types, 27142 watch lines all
    `dirty=1/1` and none `dirty=0/0`, and the 36-piece and 304-face extremes at errmax 0.00.
