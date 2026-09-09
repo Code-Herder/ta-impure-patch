@@ -1256,13 +1256,20 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
   is dead or crawling — G15d), `skipped=` the stale ops the render thread stepped over after a
   context change. `palchg=` counts palette uploads (a fade is a run of them; a switch costs a
   few) and `paldiff=n@i` the entries where the presented palette differs from `main+0x143A7`
-  and the first of them: 0 in game, 1 (index 9) in the shell — and 255 after `+gamma 15`.
+  and the first of them: **235 on a stock instance, in the shell and in game alike** (the
+  template prefix's `Gamma = 15`, below); 255 after `+gamma 15`, 0 after `+gamma 10`. In the
+  shell exactly one entry, index 9, differs *beyond* the gamma scale.
 - **The presented palette is not `main+0x143A7`**: the engine scales every palette it sets by
-  the Gamma option on the way to DirectDraw (`SetGamma 0x4BA590`, `0.5 + Gamma/24`, 1.0 at the
-  default 12) and never scales its table. **`+gamma N` typed in chat sets the factor to N/10 at
+  the Gamma option on the way to DirectDraw (`SetGamma 0x4BA590`, `0.5 + Gamma/24`; 1.0 at the
+  engine's own default of 12, but **1.125 here — `wineprefix/` carries `Gamma = 0x0f` and every
+  instance hardlink-clones it**, MEASURED 2026-09-09) and never scales its table. The scale
+  **truncates**. **`+gamma N` typed in chat sets the factor to N/10 at
   once** (`+gamma 15`, `+gamma 10` back) with no cheat bit, and is the lever that makes the two
   differ in a skirmish; the UI layer follows the presented palette (cnc-ddraw's, also what
-  `tacli shot`'s PNG carries), the world passes read `+0x143A7` and go wrong by the factor.
+  `tacli shot`'s PNG carries), the world passes read `+0x143A7` and go wrong by the factor —
+  which, since the factor here is never 1.0, means **the world is ~11 % darker than the engine
+  presents its own pixels on every instance in this project** (14 896 of a 17 049-px Classic
+  viewport sample are exact `palette.pal` colours, 244 presented ones; the two share 8 of 256).
 - **The cycles (G15d): `--cycles N`** runs, after the in-game stops, N times game → shell → game
   in the same process: `park`, Tab, `EXIT`, `MAINMENU`, `CHOICE1` (the return: the game freed,
   640×480 restored, a new GL context), `ui wait --gui MAINMENU`, the whole shell inventory
@@ -1292,9 +1299,48 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
     the panel restores. A `norestore` A/B taken before that differs by **0 px** and means nothing.
   - **`uiwalk.py --layer` is NOT a valid regression with Classic++ on.** It diffs our frame
     against the engine's **indexed** surface, so every restored pixel counts as a difference. Run
-    the walk with `classicpp` off (or `gui.on=norestore`); the restored half needs its own check.
+    the walk with `classicpp` off (or `gui.on=norestore`). **The restored half's own check is
+    `--restore`, below.**
   - The palette rule is testable with G15d's own lever: `+gamma 15` in chat → the heartbeat shows
-    `paldiff=235@1`, `colvalid=0` for a moment, then `rearms=` +1 and `colvalid=1` again.
+    `colvalid=0` for a moment, then `rearms=` +1 and `colvalid=1` again. It does **not** move
+    `paldiff` off 0 — `paldiff` already reads **235** on a stock instance (next bullet).
+  - **`paldiff=235` is the ORDINARY reading here, not a `+gamma` one** [MEASURED 2026-09-09].
+    Every instance hardlink-clones `wineprefix/`, and that prefix carries `Gamma = 0x0f`, so the
+    presented factor is `0.5 + 15/24 = 1.125` (truncated: the presented palette reproduces exactly
+    as `min(255, (int)(e × 1.125))`) and 235 of 256 entries differ from `main+0x143A7` in the shell
+    and in game alike. Only index 9, in the shell, differs *beyond* that scale. Two consequences:
+    **the world passes are ~11 % dark** (they read `+0x143A7`; in a Classic frame 14 896 of a
+    17 049-px viewport sample are exact `palette.pal` colours against 244 presented ones), and
+    **anything comparing a restored twin to an offline restore must use the presented palette**,
+    never the archives' `palette.pal`.
+
+### The Q2 diff — is the restored UI right? (G15e)
+
+```bash
+tools/uiwalk.py --inst <i> --restore --out /tmp/uirestore      # arms gui.on=log + classicpp.on + restoredump.on
+tools/tascene uidiff /tmp/uirestore/shell-tagpu_restore_gui    # the shell's art
+tools/tascene uidiff /tmp/uirestore/game-tagpu_restore_gui --sheet /tmp/near.png
+```
+
+- `--restore` is the third walk mode: no census, no `strict`, no shots. It just drives every
+  screen so the UI atlas fills, then copies the DLL's dumped twin out. **The dump is taken once
+  per phase** — the atlas does not survive the shell → game switch (`gui: atlas reset`), so a
+  single copy at the end would carry the HUD and nothing else — and each phase's **presented
+  palette** is saved beside it as `<phase>-tagpu_restore_gui.pal`, read out of a `tacli shot`'s
+  8-bit PNG. `uidiff` picks that up automatically.
+- `tascene uidiff` restores each dumped cell **offline** with the same model and holds the twin
+  to it under `featdiff`'s two-band bar. There is no UI pack and no sequence-name registry, so
+  the reference is the dump's own cells: coverage is total and `unmatched` should read 0. Entries
+  under the 12-px restore floor were never queued and are counted, not diffed (they are most of
+  them: 90 of 149 in game).
+- **It restores each cell with the tileability flag the dump carries** (`wrap` in the `.idx`) and
+  reports any whose flag the live palette would not produce. That is not pedantry: `e->wrap` is
+  decided once, when the frame is first atlased, so a frame first seen while the palette is still
+  uniform keeps a wrong flag for the session — one such entry came out 10 levels off over half its
+  texels under `--wrap auto` and byte-identical under `--wrap yes`.
+- The bar: far band **max 1 level and under 0.01 %** of bytes; the near band (within the model's
+  reach of a keyed texel) is *reported*, not barred. Measured 2026-09-09: 0.0007–0.0017 % far, and
+  a near band of mean 0.435 / max 8 — tighter than the feature twin's 0.41 / max 23.
 - The census below still works and is still the regression for "a writer we do not observe".
 
 ### The UI census (G15a)

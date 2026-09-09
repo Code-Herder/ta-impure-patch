@@ -317,9 +317,11 @@ phase 2). §4.
 - **The bar is 1024×768; 1080p runs at every gate and its findings are recorded**, and becomes
   the bar in phase 2. At 1080p the engine tiles the top-bar art, the one output of `0x467D70`
   not yet characterised.
-- **Classic++**: dump the UI atlas twin like the sprite twins and hold it against G15-0's
-  offline output for the same frames with the `featdiff` machinery; the Q2 bar unchanged (max 1
-  level, under 0.01 % of far-band bytes).
+- **Classic++**: dump the UI atlas twin like the sprite twins and hold it against the same
+  restorer run offline for the same frames with the `featdiff` machinery; the Q2 bar unchanged
+  (max 1 level, under 0.01 % of far-band bytes). **Built as `tascene uidiff` and met, §14** —
+  the reference is the dump's own cells restored offline rather than a pack, because there is no
+  UI pack and no sequence-name registry to match entries by name.
 - **Nothing moved elsewhere**: the `tascene ab` parity md5 (the world is untouched); the
   `200v200`, `fx-mix` and parity-fixture frame rates within half a frame; the ring's peak
   occupancy and overflow count logged; G13m's cursor measure re-run once after the composite
@@ -363,7 +365,7 @@ One finished unit each; the engine's surface is the oracle throughout.
 | **G15b** twins, in game, Classic — **done 2026-09-07, §10** | the `tagpu_gui_*` module: registry, seed, queue, replay, the three op kinds, the index twin (the colour twin is G15e's), the composite seam, `strict`, trigger, tacli verb, the default arm set, the transient viewport clear | side panel, build pages, top and bottom bars at 1024×768: 0 differing pixels outside the cursor, 0 holes; fps fixtures within half a frame; ring peak and overflows logged; parity md5 unchanged with the trigger absent; 1080p run and recorded | replay cannot hold 60 fps at `200v200` → collapse identical per-frame ops before anything else (**it happened, for a different reason — §10**) |
 | **G15c** the rest of the frame — **done 2026-09-07, §11** | chat, the F4 and hold-SPACE box, the option screens over the viewport, the `+clock` and `+bps` strings, the minimap's picture, dots and box, the mode-switch panel painter at 1080p; the `LIGHTBAR` wipe located but not reached (§11); nothing new in the DLL — the walk gained a side switch, nineteen stops, the in-viewport measure and a bracketed shot, plus the CORE fixture | whole in-game inventory clean under `strict`, ARM and CORE, at 1024×768 and 1920×1080: 32 of 32 stops at 0/0/0 in all four runs; dialogs over the viewport exact at 0.5× and 2× | — |
 | **G15d** the shell — **done 2026-09-07, §12** | the publisher's stall guard and the render thread's skip-to-reset across the context switch (the storm the first cycle showed: 38 overflows, 39 resets, 705 lost sprites per return), the main offscreen's direct free handled, every reset logged with its reason, the twin resolved through the **presented** palette (gamma-scaled by the engine on its way to DirectDraw, never in `main+0x143A7`), the loading screen captured at its one present, the walk's `--cycles` | shell inventory clean under `strict` at 640×480 on every visit; three entry/exit cycles with twins and atlas back to the same counts, one reset per switch, 0 overflows, 0 lost; the loading screen exact; `+gamma 15` presented right while every `+0x143A7` reader is wrong | — |
-| **G15e** Classic++ UI — **built 2026-09-08, §14; the Q2 diff still owed** | the per-surface colour twin (MRT with the index), the copy carrying both channels, the palette-validity rule with its re-arm, the atlas's restored twin at priority 4, the 12-px restore floor, `norestore` | sheets judged by the owner ✓ (2026-09-08, every class passes); fps unchanged ✓ (60.0); a fade shows indexed art, never wrong colour ✓ (`+gamma 15`: 235 entries differ, colour dropped, re-armed, valid again); **Q2 bar against G15-0's offline output: NOT RUN** | per-class exclusion per G15-0 |
+| **G15e** Classic++ UI — **done: built 2026-09-08, closed 2026-09-09, §14** | the per-surface colour twin (MRT with the index), the copy carrying both channels, the palette-validity rule with its re-arm, the atlas's restored twin at priority 4, the 12-px restore floor, `norestore`; then `uiwalk.py --restore` and `tascene uidiff` for the diff | **met**: sheets judged by the owner ✓ (2026-09-08, every class passes); fps unchanged ✓ (60.0); a fade shows indexed art, never wrong colour ✓ (`+gamma 15`: 235 entries differ, colour dropped, re-armed, valid again); **Q2 bar against the offline restore of the same cells ✓** — shell and game, 1024×768 and 1920×1080, far band max 1 level on 0.0007–0.0017 % of bytes, 0 unmatched, and the near band bounded tighter than the features' the owner already accepted (§14) | per-class exclusion per G15-0 — **not triggered**: the exclude list is unchanged |
 
 **Landings and reviews** per the house rule: G15b and G15c land separately — G15b is the
 composite seam and the module skeleton, which other worktrees will merge under, so it lands
@@ -584,13 +586,14 @@ engine's, which §13.5 wants when the cursor becomes ours at a fixed 1× device 
 run argues for dropping the Classic++ half: the kill rule of §3.9 is not triggered.
 
 **What the ruling does not cover.** The spike restored frames *in isolation*. The halo the game's
-GLSL path produces at a keyed edge (§4c's near band, 0.41 levels on features) has never been
-measured on UI frames, and panels and buttons are full of keyed edges. **The exclude list may
-still grow at G15e**, on that evidence rather than on the sheets'.
+GLSL path produces at a keyed edge (§4c's near band, 0.41 levels on features) had never been
+measured on UI frames, and panels and buttons are full of keyed edges — so this ruling was left
+open to that evidence. **Measured at G15e, 2026-09-09 (§14): it did not grow.**
 
 **What the spike did not do.** It restored frames in isolation, as the game will; it did not
 measure the halo the *game* path produces at a keyed edge (§4c's near band, 0.41 levels on
-features) on UI frames, which G15e's `featdiff`-style check will. The `oldmain.gaf` dissolve
+features) on UI frames. **G15e's `tascene uidiff` did, 2026-09-09, and the exclude list stays
+as ruled: the game's near band on UI art is bounded tighter than the features' (§14).** The `oldmain.gaf` dissolve
 frames (`intro`, `multi`, `exit`) are noise by design and score low for it; they are animation,
 not art, and the default policy treats them like any frame.
 
@@ -1029,7 +1032,8 @@ read from the code and then from the reset reasons once they were logged:
   surfaces=)`), and the heartbeat gained `stalls= skipped= palchg= paldiff=n@i palsrc=`.
 - **The palette.** Every palette the engine sets goes through `0x4BA200`, which keeps the
   entries in the graphics globals and hands DirectDraw `min(255, entry × gamma)` with the gamma
-  from the Gamma option (`SetGamma 0x4BA590`, `0.5 + Gamma/24`, 1.0 at the default 12) — and
+  from the Gamma option (`SetGamma 0x4BA590`, `0.5 + Gamma/24`; 1.0 at the code default 12, but
+  **1.125 on every instance here** — §14) — and
   never scales `main+0x143A7`. The engine's own pixels beneath the twin are shown by cnc-ddraw
   through the palette its `SetEntries` received, so that is what the twin resolves through now:
   the primary's palette object in this DLL, read under the fork's lock, the engine's table the
@@ -1440,11 +1444,107 @@ true no-op and `restore_enqueue` is the only enqueue path; the copy-from-untwinn
 invalidation works in both the C and the GLSL; and `clear_dest` really does clear the atlas twin to
 alpha 0, so a sub-12-px frame falls back to indexed rather than to garbage.
 
+### The Q2 diff  [MEASURED 2026-09-09]
+
+The gate's last exit, and the measurement G15-0 could not make: it restored UI frames *in
+isolation*, and what had never been measured on UI art is the halo the **game's** GLSL path
+leaves at a keyed edge (§4c of [renderers](renderers.html): the near band, 0.41 levels on
+features), which panels and buttons are made of.
+
+**How it is measured.** `uiwalk.py --restore` arms `gui.on=log`, `classicpp.on` and
+`restoredump.on` and walks the inventory so the UI atlas fills with what every screen draws;
+`tascene uidiff` then holds the dumped twin to the same restorer run **offline on the dump's
+own cells** and applies §4c's two-band bar. There is no UI pack to reference and no
+sequence-name registry to match entries by name (§4's `tagpu_gui_art.c` still does not exist),
+so the reference is built out of the dump itself — every entry's index plane cut from the
+`.r8` and restored through the cached wrapper `tascene build --undither` uses. Coverage is
+therefore total: **0 unmatched entries** in every run below, not "the ones some corpus happens
+to carry".
+
+Two things the walk had to learn first, both of which would have made the diff meaningless:
+
+- **The atlas does not survive the shell → game switch** (`gui: atlas reset`), so the shell's
+  panels and buttons are gone from it by the first in-game frame. The dump is taken **once per
+  phase**, and the shell and the game are two separate diffs.
+- **The presented palette is not `palette.pal`, and the dump does not carry it** — below.
+
+| run | entries | diffed | under the 12-px floor | far band (bar: max 1 level, < 0.01 % of bytes) | near band (reported) |
+|---|---|---|---|---|---|
+| shell 640×480 (walked at 1024×768) | 136 | 34 | 102 | **PASS** max 1, 7 / 404 640 bytes (0.0017 %) | max 3, mean 0.371, 671 / 1 905 (35.2 %) |
+| game 1024×768 | 149 | 59 | 90 | **PASS** max 1, 8 / 1 160 154 (0.0007 %) | max 8, mean 0.435, 8 587 / 26 787 (32.1 %) |
+| shell, from the 1920×1080 walk | 136 | 34 | 102 | **PASS** max 1, 7 / 404 640 (0.0017 %) | max 3, mean 0.371, 671 / 1 905 (35.2 %) |
+| game 1920×1080 | 127 | 58 | 69 | **PASS** max 1, 8 / 1 111 353 (0.0007 %) | max 8, mean 0.458, 7 885 / 23 715 (33.3 %) |
+
+Alpha is right on every opaque texel of all four runs (531 162 of them in the 1024×768 pair
+alone), the replicated border is an exact copy of the edge everywhere (0 of 71 168 in game, 0 of
+30 944 in the shell), and nothing is unmatched. **1080p changes nothing measurable**, which is what the atlas holding native-size GAF
+frames predicts.
+
+**The near band is no worse than the features' — the comparison that decides the policy.** The
+owner accepted the feature twin's near band by eye (§4c: 27 % of its bytes differ, mean 0.41
+levels, max 23, one outline at the silhouette). The UI's is **32.1 % of bytes, mean 0.435, max
+8** — a wider fraction of a much smaller band, a hair higher mean, and a distinctly *shorter*
+tail: 92.1 % of the in-game band within 1 level, 99.7 % within 4, nothing over 8, against the
+features' ~100 bytes over 8 and one at 23. In the shell it is tighter still (98.2 % within 1,
+nothing over 3).
+
+<figure style="margin:0"><img src="assets/shots/uiart/uidiff-nearband.png" alt="G15e Q2: the eight worst in-game frames, indexed / ours / offline / difference x8"><figcaption>The eight worst in-game frames by differing bytes, 3×: indexed, ours, the offline restore, and the difference amplified ×8. They are <code>PAUSED</code> and the order buttons — <strong>the one class §8 called a judgement call and ruled in</strong> — and ours and the reference are indistinguishable; the difference is a faint outline at the glyph edges and nothing else.</figcaption></figure>
+
+**So the `uirestore` exclude list does not grow.** §8 left that open on purpose ("the exclude
+list may still grow at G15e, on that evidence rather than on the sheets'"). The evidence is in:
+the game's path is inside the Q2 bar everywhere the model can reach, and its halo is bounded
+tighter than the one already accepted. The default stays `all` minus `cursor*`, `pathicon` and
+anything under 12×12.
+
+**The palette the twin resolves through, and the correction it forces.** `0x4BA200` hands
+DirectDraw `min(255, entry × gamma)` with `gamma = 0.5 + Gamma/24` from the registry `Gamma`,
+which the engine defaults to 12 — a factor of 1.0 — when the value is absent. **It is not
+absent here: the template wine prefix every instance hardlink-clones carries `Gamma = 0x0f`**
+(`tools/tacli` `clone_prefix`, `cp -al`; the value is in `wineprefix/user.reg` and in all six
+instances checked 2026-09-09, and `tacli` itself never writes it). So **every instance of this
+project presents at 1.125**, the scale **truncates** (all 256 entries reproduce as
+`min(255, (int)(e × 1.125))`, only 86 of them with rounding), and the presented palette differs
+from the archives' `palette.pal` in **235 of 256 entries — in the shell and in game alike**.
+
+That corrects a recorded measurement: `paldiff=235` is the *ordinary* heartbeat reading here,
+not the `+gamma 15` reading [the engine map](exe-reverse-engineering.html) and the ta-drive
+skill took it for ("0 in game, one — index 9 — in the shell"). Index 9 is still real: in the
+shell it is the one entry that differs *beyond* the gamma scale, which is what §12 traced. Where
+the template's 15 came from is not established, and changing it would move every measurement
+ever taken against that prefix, so it is recorded rather than reset.
+
+Consequently `uiwalk --restore` writes the presented palette beside each dump
+(`<phase>-tagpu_restore_gui.pal`, read out of a `tacli shot`'s 8-bit PNG, which carries what
+`ddp_SetEntries` stored) and `uidiff` picks it up. Against `palette.pal` instead, every restored
+byte reads as an error.
+
+**The one real finding: a tileability flag decided against the wrong palette.** `tagpu_gaf.c`
+sets `e->wrap = tagpu_rglsl_tileable(pixels, w, h, a->pal, e->ck)` **once**, when the frame is
+first atlased, and never revisits it. In the 1024×768 shell run one entry of 34 — the 96×20
+metal bar sitting at the atlas origin, i.e. the first frame atlased after the last reset —
+carried `wrap=1` where the settled palette gives `lr = 95.2` against a threshold of 12, i.e.
+emphatically not tileable. Restored
+`--wrap auto` it came out **10 levels off over 1 000 of its 1 920 texels**; restored `--wrap
+yes` it is **byte-identical to the twin**. The flag was decided against a palette that was still
+uniform (a fade, or the frames before the first `upload_palette`), and it does not reproduce —
+the 1920×1080 run of the same screens has none. `uidiff` therefore restores each cell with the
+flag the dump carries and *counts* the disagreements, because they are a fact about the DLL, not
+about the diff. **Not fixed here**: the fix is to recompute `wrap` when the atlas is re-armed
+against a new palette (`tagpu_gaf_atlas_restore` already re-enqueues every entry), which is a
+DLL change with its own review.
+
 ### Not closed here
 
-- **The gate's Q2 diff against G15-0's offline output is not run.** The sheets are judged
-  (2026-09-08, every class passes) and the fps and fade halves are measured; the numeric bar
-  against the offline restore of the same frames is owed.
+- **The world passes are still on `main+0x143A7`, and at the stock gamma that is 11 % dark.**
+  Terrain, features, effects and the 3DO/unit atlas all restore and draw through the engine's
+  unscaled table while the engine's own pixels reach the screen scaled by 1.125 on every
+  instance this project has ever measured (above). **Measured 2026-09-09**: in a Classic frame with the world passes drawing, 14 896 of a 17 049-pixel
+  viewport sample are exact `palette.pal` colours against 244 presented-palette ones (the two
+  palettes share only 8 of 256, so the test separates cleanly). The UI layer is the one surface
+  that follows the presented palette. Which of the two is *right* is a real question and not
+  this landing's — the browser lab is built on `palette.pal`, so the world matching it is what
+  `tascene ab` parity measures — but the seam between a world drawn one way and a UI drawn the
+  other is now named.
 - **Seeded art stays indexed** until redrawn (above). Restoring a seed directly — the surface is
   an indexed image and the restorer restores indexed images — is the obvious candidate and is
   not taken here.
@@ -1454,7 +1554,8 @@ alpha 0, so a sub-12-px frame falls back to indexed rather than to garbage.
   `pathicon` by name is unreached. `tagpu_gui_art.c` (§4) still does not exist.
 - **The phase-1 `strict` walk is not a valid regression while this is on.** It compares our frame
   against the engine's **indexed** surface, so every restored pixel reads as a difference. Run it
-  with `classicpp` off; the restored half needs a check of its own, which is the Q2 diff above.
+  with `classicpp` off; the restored half's own check is `uiwalk.py --restore` + `tascene uidiff`
+  (above), which is a different mode of the same walk for exactly that reason.
 - The heartbeat's line outgrew its 260-byte buffer when these counters were added and silently
   truncated `fps=`; it is 420 now. A counter added to that line without widening it again will
   do the same thing.

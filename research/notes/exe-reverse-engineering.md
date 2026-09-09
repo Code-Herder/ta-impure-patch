@@ -2392,11 +2392,26 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
   until G15d, which resolves through cnc-ddraw's palette object (`g_ddraw.primary->palette->
   data_rgb`, what `ddp_SetEntries` stored — the same table `tacli shot` writes into its PNG,
   so the walk's oracle and the twin agree by construction). MEASURED, the heartbeat's `paldiff`:
-  0 entries differ in game; in the shell **one, index 9**, on every visit (its writer is not
-  traced — whichever it is, it reaches the screen through `0x4BA200` like everything else, so the
-  twin shows it right and a `+0x143A7` reader would not); `+gamma 15` in game makes every
+  in the shell **one, index 9**, differs *beyond the gamma scale* on every visit (its writer is
+  not traced — whichever it is, it reaches the screen through `0x4BA200` like everything else, so
+  the twin shows it right and a `+0x143A7` reader would not); `+gamma 15` in game makes every
   non-black entry differ and the twin still matches the engine's frame ([GL UI
   renderer](gui-renderer.html) §12 has the run).
+- **The Gamma this project actually runs at is 15, not the code's default 12** [MEASURED
+  2026-09-09, [GL UI renderer](gui-renderer.html) §14]. `0x4301C0`'s default only applies when
+  the registry value is absent, and it is not: the **template wine prefix every `tacli` instance
+  hardlink-clones carries `Gamma = 0x0f`**. So the presented factor is `0.5 + 15/24 = 1.125`,
+  applied by **truncation** — the presented palette reproduces exactly as
+  `min(255, (int)(entry × 1.125))` in all 256 entries, and with rounding in only 86 — and it
+  differs from `main+0x143A7` in **235 of 256 entries in the shell and in game alike**. An
+  earlier reading of this paragraph recorded `paldiff` as 0 in game; **235 is the ordinary
+  reading**, and 0 is what a `+gamma 10` leaves behind for the rest of that process.
+  Consequence, measured the same day: every pass that reads `+0x143A7` — terrain, features,
+  effects, markers, the 3DO/unit atlas — draws the world ~11 % darker than the engine presents
+  its own pixels, on every instance here. In a Classic frame with those passes drawing, 14 896
+  of a 17 049-pixel viewport sample are exact `palette.pal` colours against 244 presented ones
+  (the two palettes share 8 of 256). Not a bug with an obvious side: the browser lab is built on
+  `palette.pal`, so a world matching it is what `tascene ab` parity measures.
 
 **The glamour-screen fade — `Palette` / `currentPalette` / `desiredPalette` / `FadeTable` at
 `main+0x3907F..0x3908B`** [mechanism VERIFIED; reach INFERRED]. The corpus glosses these four
