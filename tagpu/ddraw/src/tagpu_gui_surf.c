@@ -214,7 +214,8 @@ static unsigned s_strReseed = 0;        /* strings that stamped NOTHING and aske
 static GLuint   s_mmTex;
 static unsigned s_mmGenSeen;            /* the generation s_mmTex holds; 0 = nothing        */
 static int      s_mmTW, s_mmTH;         /* its size in texels                               */
-static int      s_mmbase = 0;           /* token `mmbase`: draw it, harness only for now    */
+static int      s_mmbase = 0;           /* the minimap is ours (see the k rule in sharp_minimap) */
+static int      s_mmforce = 0;          /* token `mmbase`: draw it at k = 1 too, for the harness */
 static unsigned s_mmDrawn = 0;
 static unsigned s_mmLogged;
 static GLuint   s_mmProg, s_mmEngTex;   /* the masked draw, and the engine's two bases as RG8 */
@@ -1302,11 +1303,14 @@ static void sharp_cursor(const TAGPU_FRAME* f)
    minimap reaches the frame as a copy of the 126-px composite `+0x142DB`, so a
    twin can never hold more than 126 px there.
 
-   BEHIND `mmbase`, AND IT MUST STAY THERE UNTIL THE FOG IS SOLVED. The
-   picture is the TNT's own, which is the WHOLE map with nothing hidden, so a
-   base drawn without fog does not merely look wrong — it shows the player
-   terrain they have not explored. That is a cheat, and in multiplayer it is
-   the same class of cheat 13.6 refuses for the dots.
+   ON AT k > 1, THE ENGINE'S AT k = 1 — the rule is stated where it is applied,
+   below. `nominimap` turns it off; `mmbase` forces it on at k = 1 too, which is
+   how the k = 1 comparison against the engine is taken at all.
+
+   THE PICTURE IS THE WHOLE MAP WITH NOTHING HIDDEN, so a base drawn without
+   fog would not merely look wrong — it would show the player terrain they have
+   never explored. That is a cheat, and in multiplayer it is the same class of
+   cheat 13.6 refuses for the dots, which is why the mask below is not optional.
 
    13.6 says the fog "comes from the corner-mask grid we already hold as an
    RG8 texture for every world pass". IT CANNOT [MEASURED 2026-09-09]: that
@@ -1315,10 +1319,7 @@ static void sharp_cursor(const TAGPU_FRAME* f)
    of the map. The engine's own minimap fog is a different pass over different
    data: `0x466C20` shades `+0x142E3` into `+0x142DF` per player, reading the
    player id at `main+0x2A43`. Re-deriving that is the thing 13.6 forbids for
-   the dots, for the same reason.
-
-   So `mmbase` also lacks the radar arcs and points (0x4C0070 and 0x4BEE60 are
-   not observed leaves, gui-renderer.md §7). Harness only. */
+   the dots, so the mask below asks the engine instead. */
 static void sharp_minimap(const TAGPU_FRAME* f)
 {
     const char* ta = *(const char* const*)TA_MAINPP;
@@ -1327,7 +1328,7 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     int pw = 0, ph = 0, mx, my, mw, mh;
     float kx, ky, v[24];
 
-    if (!s_mmbase || !s_mmProg || !ptr_ok(ta)) return;
+    if ((!s_mmbase && !s_mmforce) || !s_mmProg || !ptr_ok(ta)) return;
     /* NOT `+0x142F1 & 2`, which is what DrawMinimap 0x466B00 tests: that is a
        DIRTY flag and 0x466B16 CLEARS it in the same breath, so it reads 0 on
        almost every frame [MEASURED 2026-09-09 — the first build of this gated
@@ -1362,6 +1363,16 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     if (mw <= 0 || mh <= 0) return;
     kx = (f->game_width  > 0) ? (float)f->vp_w / (float)f->game_width  : 1.0f;
     ky = (f->game_height > 0) ? (float)f->vp_h / (float)f->game_height : 1.0f;
+    /* AT k = 1 THE ENGINE'S MINIMAP STANDS, and that is not timidity — it is
+       where the arithmetic says the win is. The box is 106x126 DEVICE pixels
+       there, so drawing it from a 252x252 source throws three quarters of the
+       picture away and lands on a nearest downsample where the engine used its
+       own stretch: no sharper, and 7232 px away from the oracle every phase-1
+       measurement is taken against. The extra resolution only starts paying at
+       k > 1, where the engine blows its 126-px picture up and we do not.
+       `mmbase` forces it on anyway, which is how the k = 1 comparison above was
+       taken at all. */
+    if (kx <= 1.001f && ky <= 1.001f && !s_mmforce) return;
     x_glDisable(GL_BLEND);
     x_glDisable(GL_DEPTH_TEST);
     glUseProgram(s_cursProg);
@@ -1701,7 +1712,8 @@ static void poll(void)
     /* `mmbase` (G17e): the TNT's 252-px picture drawn into the sharp layer over
        the engine's 126-px minimap. Harness only while it is the base ALONE —
        no fog, no dots, no arcs, no view box. */
-    s_mmbase = on && strstr(buf, "mmbase") != NULL;
+    s_mmforce = on && strstr(buf, "mmbase") != NULL;
+    s_mmbase = on && !(strstr(buf, "nominimap") != NULL);
     /* `nocursor`: phase 1's cursor, the engine's own, kept as the A/B against
        ours — and the escape if the sprite record ever stops being a GAF frame
        header on some build. `cursorscale=N` (13.5) sizes ours in DEVICE
