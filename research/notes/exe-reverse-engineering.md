@@ -2083,6 +2083,28 @@ variants, `0x20` skip the snapshot, `0x100/0x1000` recentre. Observed callers: `
 `GUI_Pop 0x4A968E`, `push 1` in `TA_DialogBox_fn 0x4ABD90` (`0x4AC01B`, `0x4AC198`),
 `esi|0x40` at `0x494210` (the in-game panel loader). 76 sites, **none in DrawGameScreen**.
 
+**The two rect sentinels, and why a hand-placed `xpos` is written BEFORE the build call**
+[VERIFIED 2026-09-09, Phase F G18, disassembly of the pristine build]. `0x4A820C` opens with
+`or eax,0xffffffff`, so `eax` is **−1** for the whole function, and `0x4A8224` sets `esi` to
+**−2**. Two flag pairs *stamp* a sentinel into the panel record before anything is drawn, and
+then the record is *read* twice:
+
+| at | condition | effect |
+|---|---|---|
+| `0x4A820F`–`0x4A821D` | `(flags & 0x100) && (flags & 0x1)` | writes −1 into `ypos` (`+0x15`) and `xpos` (`+0x13`) |
+| `0x4A8221`–`0x4A8234` | `(flags & 0x1000) && (flags & 0x1)` | writes −2 into the same two |
+| `0x4A8238` | `xpos == −1` | centre on the whole screen: `xpos = (W − w) / 2`, `ypos = (H − h) / 2` |
+| `0x4A8266` | `xpos == −2` | centre in the play area: `xpos = ((W − 128 − w) / 2) + 128` (`0x4A8275` loads `0xFFFFFF80`), `ypos` as above |
+
+`w` is `+0x17` and `h` is `+0x19`. `W` and `H` come from `0x4B6700` and `0x4B6710`, each a
+two-instruction getter returning `[[0x51FBD0]+0xD4]` and `[[0x51FBD0]+0xD8]`. The 128 is the
+in-game side panel's width, which is what makes −2 the *in-game* centring rule and −1 the
+front-end one. **Both branches write the result back into the record**, so this is not a
+read-only convenience: a screen positioned by hand must carry neither sentinel. `tagpu_menu.c`
+sets `xpos` to `W − 16 − 304` and passes `flags = 0x21`, which trips neither pair
+(`0x21 & 0x100 == 0`, `0x21 & 0x1000 == 0`) and equals neither −1 nor −2 — and it writes that
+`xpos` **before** this call, because the build consumes the rect on the way through.
+
 **The build sequence (`0x4A905E..0x4A9135`, read 2026-09-07):**
 
 ```
@@ -2123,6 +2145,14 @@ set, `0x4C14F0(ctx, s, x, y, -1)`; else per character `0x4B7F30([[0x51FBA4]+0x14
 glyph blits, and `0x4CCF60` is only reached through `DrawTextCustomFont 0x4C14F0`** (its two
 callers `0x4C16D4`, `0x4C1744`); MEASURED, in-game option screens still take that path for some
 labels (`text 1572` ops on `PREFS.GUI`).
+
+**The GUI font is registered by `0x4AEDD0(GUIInfo* gi, const char* name, int slot)`**
+[VERIFIED 2026-09-09]. An `E8` scan of `.text` finds exactly **two** call sites, both in the
+in-game GUI init and both passing `main+0x519`: `0x491564` with `"hattfont12"` (`0x509250`)
+and slot 0, `0x49157D` with `"hattfont11"` (`0x509244`) and slot 1. It copies the name into a
+256-byte field at `gi+0xAB6` through `0x4E4760`. Those two GAFs are the faces every gadget
+label and caption is drawn with — one entry, 256 frames, one per character code, the per-frame
+`ypos` hotspot being the baseline (`tools/guifont.py`).
 
 **How a screen reaches the frame: `0x4AB0B0(GUIMEMSTRUCT*, OFFSCREEN* dst, RECT* dirty)`** —
 `stdcall`, `ret 0xC`, prologue `83 EC 10 57 8B 7C 24 18` (8): recurses bottom-to-top over
@@ -2389,6 +2419,12 @@ game it reads `ARMMAIN2.GUI` or `CORMAIN2.GUI`.
 `GUI_Pop 0x4A9660`, `0x491DF2` loops. **21 call sites.** So anything pushed over the world is
 popped again unless `main+0x37EA0` names it.
 
+**Two of the 21 are the engine's own visible closes, and both pass 1**: `0x460635`, a `push 1`
+immediately after `call 0x491B60` (the level teardown), and `0x4929E3`, whose `call 0x491D70`
+is at `0x4929EB`. `tagpu_menu.c`'s close copies them — restore `main+0x37EA0`, then **call**
+`0x491D70(1)` rather than wait for one — because all 21 sites are event handlers: left to
+itself a popped screen lingers until the player next does something that changes the GUI stack.
+
 **`0x495207` is the engine's own template for pushing an in-game screen**, and it is the one
 to copy:
 
@@ -2601,6 +2637,14 @@ elsewhere on the re-push. Re-reading it put every button back the moment it was 
 on the same click. The authority on whether a screen is still there is the `per_active` chain
 from `main+0x531`.
 
+**The dispatch itself is `0x4A967C`–`0x4A9687`**, and it settles the signature: `eax =
+gi->TheActive_GUIMEM` (`+0x18`), then `eax = [eax+0x08]` (`0x4A967F`), `test eax,eax`, `je`
+past it, and only then `push esi` — the **GUIInfo** — and `call eax`. So `OnCommand` is
+NULL-guarded, takes the GUIInfo as its one `stdcall` argument, and is **never handed the
+index**. The three fields set to −1 immediately before it explain what it then reads:
+`0x4A9670`'s `or eax,0xffffffff` is stored to `+0x64`, `+0x60` and `+0x68` (`0x4A9673`,
+`0x4A9676`, `0x4A9679`), and `+0x60` is `UIChange_f` — `main+0x519 + 0x60 = main+0x579`.
+
 ### Where the engine looks for archives [VERIFIED 2026-09-09]
 
 `InitTAHPIAry 0x41D4C0` globs four patterns through `0x4BC4B0`, in this order, and every one
@@ -2618,6 +2662,16 @@ archive must land:
 before the exe's entry point and therefore before this — an archive the DLL writes at attach
 is on disk in time by the loader's rules, not by luck. Measured: written at attach, globbed
 and read in the same launch.
+
+**What actually opens one is `OpenHAPIFile 0x4BDD70`** — and the name is the engine's own, not
+ours: the allocation tag it passes is the string `"OPENHAPIFILE structure"` at `0x50A5A8`.
+`stdcall`, `ret 8`. It calls `0x4E4990(name, "rb")` (`0x505F10`) and returns 0 outright if that
+fails; otherwise it allocates a `0x118`-byte handle with `0x4D83B0(0x118, tag)`, stores the
+`FILE*` at `+0x00`, `-1` at `+0x04`, and copies the name (`0x104` bytes) into `+0x14`. The
+36-byte trailer test that decides whether the file counts as an archive at all — the last 36
+bytes must be `Copyright 1997 Cavedog Entertainment`, and anything else is skipped silently —
+is documented with the rest of the container in [file formats](file-formats.html) §5
+(measured 2026-09-02). `tagpu_ufo.c` writes that trailer for exactly this reason.
 
 ### The palette the screen is presented with, the way out of a game, and the loading screen [VERIFIED 2026-09-07, Phase E G15d]
 
