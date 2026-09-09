@@ -88,6 +88,15 @@
 #define MOUSE_POS_X    0x1B6            /* the cursor's last drawn position    */
 #define MOUSE_POS_Y    0x1BA
 #define MOUSE_SPRITE   0x1B2            /* -> record: u16 w, u16 h, s16 hotspots */
+/* the minimap's box on the engine's screen, filled by BuildMinimapSurface
+   0x466780 (engine map, "The minimap, located"); +0x142F1 bit 1 is what
+   DrawMinimap 0x466B00 itself is gated on */
+#define MM_OFFX        0x142E7
+#define MM_OFFY        0x142E9
+#define MM_W           0x142EB
+#define MM_H           0x142ED
+#define MM_FLAGS       0x142F1
+#define MM_COMPOSITE   0x142DB          /* the fog+dots composite; non-NULL = built */
 #define POLL_MS        500
 #define MAX_TWINS      32
 #define ATLAS_DIM      2048
@@ -197,6 +206,12 @@ static unsigned s_strings = 0;          /* string ops stamped                   
 static unsigned s_glyphs = 0;           /* glyph quads drawn                                           */
 static unsigned s_strMiss = 0;          /* glyphs the cache would not give (the engine drew them)      */
 static unsigned s_strReseed = 0;        /* strings that stamped NOTHING and asked for a fresh seed     */
+/* G17e: the TNT's own 252-px minimap picture, uploaded once per map load */
+static GLuint   s_mmTex;
+static unsigned s_mmGenSeen;            /* the generation s_mmTex holds; 0 = nothing        */
+static int      s_mmTW, s_mmTH;         /* its size in texels                               */
+static int      s_mmbase = 0;           /* token `mmbase`: draw it, harness only for now    */
+static unsigned s_mmDrawn = 0;
 
 /* THE CURSOR (gui-renderer.md 13.5, G17c). Decided ONCE per frame, in
    tagpu_gui_cursor_frame, because the world composite reads the decision
@@ -1203,6 +1218,84 @@ static void sharp_cursor(const TAGPU_FRAME* f)
     s_curDrawn++;
 }
 
+/* THE MINIMAP'S BASE AT ITS NATIVE SIZE (13.6, G17e).
+
+   The engine fits the TNT's `TED_GENERATED_PIC` into a 126-px box and throws
+   half of what it has away; the picture is 252x252. Drawing it at its own size
+   into the device-res layer is a free 2x with no new data path and no colour
+   drift — and the layer is the ONLY place it can live, because the engine's
+   minimap reaches the frame as a copy of the 126-px composite `+0x142DB`, so a
+   twin can never hold more than 126 px there.
+
+   BEHIND `mmbase`, AND THAT IS NOT A DEFAULT WAITING TO HAPPEN. On its own
+   this covers the engine's minimap with a base that has no fog, no unit dots,
+   no radar arcs and no view box — every one of which is still the engine's
+   until the rest of G17e lands. Shipping it on would hide information the
+   player is entitled to, which is worse than a soft picture. */
+static void sharp_minimap(const TAGPU_FRAME* f)
+{
+    const char* ta = *(const char* const*)TA_MAINPP;
+    const unsigned char* pic = NULL;
+    unsigned gen = 0;
+    int pw = 0, ph = 0, mx, my, mw, mh;
+    float kx, ky, v[24];
+
+    if (!s_mmbase || !s_cursProg || !ptr_ok(ta)) return;
+    /* NOT `+0x142F1 & 2`, which is what DrawMinimap 0x466B00 tests: that is a
+       DIRTY flag and 0x466B16 CLEARS it in the same breath, so it reads 0 on
+       almost every frame [MEASURED 2026-09-09 — the first build of this gated
+       on it and drew nothing at all, ever]. The engine can afford a dirty flag
+       because its copy lands in the game offscreen and stays there until
+       something overdraws it; the sharp layer is cleared at every present, so
+       ours has to be redrawn every frame. The honest gate is that the minimap
+       surfaces exist at all, which is what being in a game with one means. */
+    if (!ptr_ok(*(const void* const*)(ta + MM_COMPOSITE))) return;
+    if (!tagpu_gui_minimap_pic(&pic, &pw, &ph, &gen)) return;
+    if (pw <= 0 || ph <= 0) return;
+    if (gen != s_mmGenSeen || !s_mmTex) {
+        if (!s_mmTex) glGenTextures(1, &s_mmTex);
+        if (!s_mmTex) return;
+        glBindTexture(GL_TEXTURE_2D, s_mmTex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, pw, ph, 0, GL_RED, GL_UNSIGNED_BYTE, pic);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        s_mmGenSeen = gen; s_mmTW = pw; s_mmTH = ph;
+    }
+    /* the box the engine fitted it into, in ITS screen pixels, read live: it is
+       0x0 at BuildMinimapSurface's entry, since that call is what computes it */
+    mx = *(const short*)(ta + MM_OFFX); my = *(const short*)(ta + MM_OFFY);
+    mw = *(const short*)(ta + MM_W);    mh = *(const short*)(ta + MM_H);
+    if (mw <= 0 || mh <= 0) return;
+    kx = (f->game_width  > 0) ? (float)f->vp_w / (float)f->game_width  : 1.0f;
+    ky = (f->game_height > 0) ? (float)f->vp_h / (float)f->game_height : 1.0f;
+    x_glDisable(GL_BLEND);
+    x_glDisable(GL_DEPTH_TEST);
+    glUseProgram(s_cursProg);
+    x_glUniform2f(s_uCursSize, (float)s_sharpW, (float)s_sharpH);
+    glUniform1i(s_uCursCK, -1);          /* no colour key: every texel of the picture draws */
+    glUniform1i(s_uCursRestored, 0);
+    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, s_palTex);
+    x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, s_palTex);
+    x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_mmTex);
+    glBindVertexArray(s_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+    /* THE WHOLE PICTURE INTO THE WHOLE BOX, and that is the engine's own
+       mapping rather than a guess: 0x466845 builds a context for the box-sized
+       surface and 0x46685F hands the picture straight to the stretch
+       `0x4B95A0`, so the 252x252 square is squashed into an aspect-correct box
+       (106x126 on a 336x400 map). Full 0..1 UVs reproduce exactly that. */
+    quad(v, (float)mx * kx, (float)my * ky,
+            (float)(mx + mw) * kx, (float)(my + mh) * ky, 0.0f, 0.0f, 1.0f, 1.0f);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
+    x_glDrawArrays(GL_TRIANGLES, 0, 6);
+    s_mmDrawn++;
+}
+
 static void sharp_begin(const TAGPU_FRAME* f)
 {
     int w = f->vp_w, h = f->vp_h;
@@ -1281,6 +1374,7 @@ static void sharp_begin(const TAGPU_FRAME* f)
         x_glDrawArrays(GL_TRIANGLES, 0, 6);
     }
     sharp_cursor(f);                    /* 13.5's cursor: the layer's first real client */
+    sharp_minimap(f);                   /* 13.6's base, behind `mmbase` while it is alone */
     /* THE CLEAR COLOUR IS MODULE-WIDE STATE AND WE OWN IT AT (0,0,0,0).
        render_ogl.c repaints the letterbox bars with a bare glClear on EVERY
        frame whose viewport is offset (`if (viewport.x || viewport.y)`), and
@@ -1403,6 +1497,10 @@ static void poll(void)
        harness's mode like `strict`, never a player's — G17a's layer is empty
        otherwise and an empty layer proves nothing. */
     s_sharptest = on && strstr(buf, "sharptest") != NULL;
+    /* `mmbase` (G17e): the TNT's 252-px picture drawn into the sharp layer over
+       the engine's 126-px minimap. Harness only while it is the base ALONE —
+       no fog, no dots, no arcs, no view box. */
+    s_mmbase = on && strstr(buf, "mmbase") != NULL;
     /* `nocursor`: phase 1's cursor, the engine's own, kept as the A/B against
        ours — and the escape if the sprite record ever stops being a GAF frame
        header on some build. `cursorscale=N` (13.5) sizes ours in DEVICE
@@ -1503,6 +1601,7 @@ void tagpu_gui_glreset(void)
     s_sharpProg = 0; s_sharpFailed = 0;      /* a new context deserves a fresh try */
     s_cursProg = 0; s_curOwn = 0; s_curFrame = NULL;   /* and the cursor is nobody's until it is re-atlased */
     s_strProg = 0;
+    s_mmTex = 0; s_mmGenSeen = 0;       /* the picture's texture died; the BYTES are the hook's */
     tagpu_text_glreset();               /* the glyph atlas's texture id died too; its CELLS are CPU-side */
     tagpu_gaf_atlas_lost(&s_atlas);
     memset(s_palCopy, 0xFF, sizeof s_palCopy);        /* the palette texture died too: re-upload */

@@ -2274,7 +2274,30 @@ is `call 0x466780` as its first instruction, then creates `+0x142DB` (tag `0x507
 `+0x142DF` (tag `0x507508`), both `0x4C69F0(tag, [+0x142EB], [+0x142ED])`. **`0x4669B0`'s one
 caller is `0x4919C3`.** [VERIFIED 2026-09-09 by an `E8`/`E9` scan of the whole `.text` for each
 target; the loader's own free at `0x483DF3`/`0x483E0B` is in a function that calls neither, so the
-only moment the picture is reachable from a hook of ours is inside `0x466780`.] It
+only moment the picture is reachable from a hook of ours is inside `0x466780`.]
+
+**`0x466780` runs on a thread of its own, NOT the game thread** [MEASURED 2026-09-09]: an observer
+at its entry with the usual game-thread guard fired on every map load and refused, naming the
+thread. Every other site the GL UI renderer observes is called from the game loop; this one is not.
+
+**The fit, exactly** [VERIFIED 2026-09-09 by disassembly of `0x466780`..`0x466868`]: with
+`w = [main+0x1422B]` and `h = [main+0x1422F]`, the long axis gets **126** and the short one
+`short × 126 / long`, truncating, and the box is centred in a 126×126 area — `+0x142E7` is
+`(126 − w') / 2` with `+0x142E9 = 0` on a wide map (`0x4667D1`..`0x466801`) and the mirror image on
+a tall one (`0x4667A4`..`0x4667CF`). Measured on Two Continents: **106×126 at offset (10, 0)**.
+Then `0x4C69F0(0x5074F8, w', h')` creates `+0x142E3` at the box size, `0x466845` builds a context
+for it, and — **if `main+0x1426B` is non-NULL** — `0x46685F` hands the picture straight to the
+stretch `0x4B95A0` and returns. So the whole **252×252** picture is squashed into the
+aspect-correct box, and a renderer drawing it with full 0..1 UVs into that box reproduces the
+engine's mapping rather than approximating it. If the picture IS NULL, `0x46686C` takes a wholly
+different path: a `2w' × 2h'` surface (tag `0x5074E8`) built from the terrain instead.
+
+**`+0x142F1` bit 1 is a DIRTY flag, not a visibility flag.** `DrawMinimap 0x466B00` tests it at
+`0x466B11` and **clears it at `0x466B16`** in the same breath, so it reads 0 on almost every frame;
+the engine can afford that because its copy lands in the game offscreen and stays there. Anything
+drawing a minimap into a surface that is cleared per frame must redraw every frame and gate on
+something else — `+0x142DB` being non-NULL is the honest test. [MEASURED 2026-09-09: a renderer
+gated on the flag drew nothing at all, ever.] It
 fits a 126-px box (`main+0x142EB/+0x142ED` size, `+0x142E7/+0x142E9` offsets), creates
 `main+0x142E3 = 0x4C69F0(0x5074F8, w, h)` and scales the picture into it (`0x4B8AE0` + `0x4B95A0`
 [INFERRED stretch]). Three surfaces: `+0x142E3` the scaled map; `+0x142DF` the fog composite,
