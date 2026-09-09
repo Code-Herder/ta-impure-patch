@@ -450,6 +450,37 @@ search. An earlier candidate here — capping the search at `min(24.0 / uShScale
 cut the acne 2.50 → 0.49 and touched *every* shadow including units, so it is the wrong shape
 and is not the recommendation.
 
+**WHY THE LAB NEVER SHOWED IT: the lab has ONE terrain, the game has TWO.**
+The shading maths is not the difference — `tascene-view.html`'s shadow function is
+character-for-character what shipped: the same `(1.0 + 2.0*(1.0 - nl)) * uShScale.x /
+uShScale.y` bias, the same `24.0 / uShScale.x` blocker search, the same 16 Poisson taps, the
+same clamped `dzduv`. (Its own comment records hitting a cousin of this — *"without this the
+blocker search found the hill under every hill pixel"* — and the receiver-plane bias is what
+fixed it there.) The difference is **what geometry each one casts**:
+
+- **In the lab, the caster IS the receiver.** `buildTerrainLab` fills `ltVAO` with vertices that
+  each carry the world point they depict, and `shadowPass` casts *that same array*
+  (`gl.bindVertexArray(ltVAO); gl.drawArrays(...)`). One buffer, one triangulation, one
+  rasterisation — so caster and receiver depths can only differ by the map's own texel
+  quantisation, which is precisely the quantity the texel-scaled bias is sized for. The bias is
+  correct there, and it always will be.
+- **In the game they are two different meshes.** §2.8's own premise is that the terrain gather
+  emits screen-space quads *with no height*, so the receiver's world point is reconstructed
+  analytically per fragment (`taTerrW`), while the caster is a **separate** world-space VBO
+  built from the height bytes (`build_hills`: `o[1] = hh`, `o[2] = r*16 + hh*0.5`). Same bytes,
+  two pipelines, one surface described twice.
+
+Their disagreement is a **fixed world-space quantity**. It does not shrink with the texel, so a
+texel-scaled bias covers it at coarse resolutions and stops covering it as the map sharpens —
+which is exactly the 1/texel law measured above, and why the lattice is the caster mesh's 16-unit
+cell rather than anything of the shadow map's.
+
+**The generalisable lesson.** The lab is a faithful oracle for the *shading*, and it is not one
+for anything that depends on caster and receiver being the same geometry. §2.8 created that
+split deliberately and for a good reason; what was not recorded is that it also invalidated the
+lab as the oracle for terrain self-shadowing. Any future pass that casts from a rebuilt copy of
+something it also shades inherits the same blind spot.
+
 **How to measure it, because the obvious metric lies.** The raw standard deviation of the water
 band is ~38 either way: it is dominated by the tile art, and it moved by 0.15 when the artifact
 went from full to absent. The shadow term has to be isolated against an otherwise identical
