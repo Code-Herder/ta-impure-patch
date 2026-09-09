@@ -186,20 +186,22 @@ void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a)
     char b[128];
     int wasFull = a->full;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
+    a->gen++;                   /* every UV in the atlas has just moved */
     memset(a->hash, 0, sizeof a->hash);
     /* the twin's rects are about to be re-used by other frames: back to
        unpainted, and whatever was queued is dropped (it re-queues on its miss) */
     if (a->job) { tagpu_rglsl_job_clear(a->job); twin_mips(a); }
     /* the sprite atlases reset when full; the UI atlas also on a re-arm or a
        GL context change (tagpu_gui_surf.c twins_reset), which is not "full" */
-    _snprintf(b, sizeof b, "%s: atlas reset (%s) — frames re-decode on demand",
-              a->tag ? a->tag : "gaf", wasFull ? "full" : "restart");
+    _snprintf(b, sizeof b, "%s: atlas reset (%s) — frames re-decode on demand, generation %u",
+              a->tag ? a->tag : "gaf", wasFull ? "full" : "restart", a->gen);
     glog(b);
 }
 
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
 {
     a->tex = 0; a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
+    a->gen++;                   /* ...and again: the texture itself is gone */
     memset(a->hash, 0, sizeof a->hash);
     /* the twin and the job died with the context (tagpu_rglsl_glreset has
        already forgotten the job: it runs first); re-armed on the next frame */

@@ -871,6 +871,27 @@ sampled. `tagpu_posefix.off` leaves the guard measuring and draws the engine's b
 which is the baseline the fix is measured against; the guard deliberately finishes its walk rather
 than bailing at the torn piece, so that baseline is the emission the pass made before it existed.
 
+⚠ **`[2026-09-08]` Gate A ran that oracle over a 69-unit screen inventory, and two things came
+back.** ([GPU posing §0b](gpu-posing.html), the numbers in
+`research/notes/evidence/posewatch/gate-a-2026-09-08.txt`.)
+
+1. **The guard's bracket holds over everything, not just the commander.** 27142 `posewatch:` lines
+   across all eight classes and both extremes of stock geometry, and **every one of them reads
+   `dirty=1/1`** — not one large `err` with the flag clear on both sides, which is the one reading
+   that would say the bracket is not the whole window. `norecon` is 0 in every window, so no
+   model's piece tree failed to rebuild either.
+2. **A handful of STRUCTURES sit at rest permanently, and this pass has been carrying them the
+   whole time.** `rest=` — the rest-equality detector, which is supposed to read 0 in play — runs
+   at tens of piece-reads per frame on a static base, from three to six units whose posed buffer
+   is byte-equal to their own rest vertex arrays for the entire session with the pose flag set.
+   Named by peeking `Object3do+0x0C → unit+0x92`: "Gaat Gun", "Sentinel", "Solar Collector" (both
+   sides), "Vulcan", "Scorpion", "Wind Generator", and one aircraft, "Hurricane". Their `err` is
+   therefore the model's own size (39–62) for as long as they are on screen, and `posefix` draws
+   them from the reconstruction **every frame** rather than occasionally — which it does
+   correctly, which is why nothing looked wrong. **Why the engine leaves those buffers at rest is
+   not established.** It is a fact about the engine's buffer, not about our reconstruction, and
+   G16 stops reading that buffer at all.
+
 **Reproducing it costs scheduling pressure, not zoom.** The window is microseconds wide per unit
 and opens ~30 times a second, so on an idle machine with cores to spare a walk of a minute usually samples it
 never. Pinning the game to one core and putting spinners on that same core — its own render and
@@ -967,6 +988,34 @@ through `hires_pose`, which reads the pose *fields* rather than the buffer and s
 rest pose — but it can show a pose mixed across two ticks, which nothing here measures. And the
 guard says nothing about the *anchor*: the unit's 16.16 position is read without any interlock,
 which is sound for a single aligned dword but has never been checked across the three of them.
+
+### 2.10 The per-type geometry bake (`tagpu_posebake.c`, OFF by default, `tagpu_posebake.on`) — G16 step 4
+
+**It draws nothing.** This is the data half of [GPU posing](gpu-posing.html) — the step that turns
+a `Model3DONode` template into the two static vertex buffers a posed shader will draw a unit from,
+so that the emitters above stop reading `prim+0x22` and §2.9's whole apparatus can be deleted. The
+shader is step 5; until then the module bakes, caches, invalidates and **checks itself**, and with
+the trigger absent it costs one `GetFileAttributesA` every 30 frames and the `native:` line is
+byte-identical to what it was.
+
+| | |
+|---|---|
+| **the geometry buffer**, per type | rest position, the rest normal of the vertex's own triangle, the piece index and a flags word — 8 floats — with body triangles, slant triangles and wire lines laid down as three ranges of one buffer. Keyed on primitive 0's node pointer plus the level and GL generations |
+| **the material stream**, per (type, owner, atlas generation) | UV, flat colour, colour key and a **skip** flag — 5 floats. The two buffers always hold the **same** vertex count: a face the engine paints nothing for is baked and collapsed by its flag rather than dropped, which is what lets either be rebuilt without the other |
+| **the topology**, per type | the parent array and the accumulated rest offsets, so `pose_accum_body`'s per-unit sibling scan stops being a per-frame cost. Cached now, consumed in step 5 |
+| **invalidated by** | the level generation (`tagpu_reclaim_level_gen()`), the GL generation, the **atlas** generation — new, `TAGPU_GAFATLAS.gen`, bumped by every `atlas_reset` and `atlas_lost` because every UV moves — and the owner, which is in the key |
+
+**Fields we write: none.** Every engine read is the one the emitters already make.
+
+**What it measured on the pose inventory** (67 distinct types, four camera stops, `posebake.on=log
+check`): **0 check failures** on either of the two things the lever compares — the body vertex
+count `emit_geom` produced against the bake's own prediction, and the accumulated rest offsets
+against `pose_accum_body`'s per-unit walk — with `anom=0` and `refused=0`. The two ordinary
+findings (`odd=` faces outside `3 ≤ fvc ≤ 32`, `nomat=` faces with neither texture nor colour) are
+content, not faults; [GPU posing §3](gpu-posing.html) carries the correction that says so. The GL
+invalidation was watched on an exit to the shell: `posebake: dropped 53 geometry (taking 53
+material with them) … GL 2`. *[The 27 this first quoted was an earlier run of the same test, before
+the drop line reported the cascade separately; both are real, but only one is the shipped build.]*
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

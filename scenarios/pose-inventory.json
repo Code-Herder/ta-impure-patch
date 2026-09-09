@@ -1,0 +1,860 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Gate A's pose inventory: 68 units across four clusters, each cluster its own camera stop, so `tagpu_posewatch.on`'s errmax can be read per group rather than over the whole map. Cluster 1 at (2100,1200) is ground -- ARM and CORE kbots, tanks and both commanders, all on hold at facings that are not multiples of 90. Cluster 2 at (3100,1200) is structures, including the animated ones (WIN's rotor, RAD's dish). Cluster 3 at (4000,1200) is the extremes the geometry bake has to hold: ARMSCORP and CORSCORP are the 36-piece models, the most pieces in stock content, and CORGANT is the most vertices and faces (574/304). Cluster 4 at (2600,2000) is the air lane, on a tight patrol so fighters, gunships, bombers and transports stay over one stop. EVERYTHING is owned by player 0 so that nothing shoots anything and the poses are the only thing moving; player 1 holds one distant solar collector because a player with no units at all ends the game.",
+  "seed": 20260908,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "unit_limit": 200,
+    "clear_existing": true,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "g_armcom",
+      "type": "ARMCOM",
+      "owner": 0,
+      "pos": [
+        1825,
+        1035
+      ],
+      "facing": 37,
+      "stance": "hold"
+    },
+    {
+      "id": "g_armpw",
+      "type": "ARMPW",
+      "owner": 0,
+      "pos": [
+        1935,
+        1035
+      ],
+      "facing": 113,
+      "stance": "hold"
+    },
+    {
+      "id": "g_armham",
+      "type": "ARMHAM",
+      "owner": 0,
+      "pos": [
+        2045,
+        1035
+      ],
+      "facing": 206,
+      "stance": "hold"
+    },
+    {
+      "id": "g_armrock",
+      "type": "ARMROCK",
+      "owner": 0,
+      "pos": [
+        2155,
+        1035
+      ],
+      "facing": 291,
+      "stance": "hold"
+    },
+    {
+      "id": "g_armfido",
+      "type": "ARMFIDO",
+      "owner": 0,
+      "pos": [
+        2265,
+        1035
+      ],
+      "facing": 68,
+      "stance": "hold"
+    },
+    {
+      "id": "g_armzeus",
+      "type": "ARMZEUS",
+      "owner": 0,
+      "pos": [
+        2375,
+        1035
+      ],
+      "facing": 154,
+      "stance": "hold"
+    },
+    {
+      "id": "g_armstump",
+      "type": "ARMSTUMP",
+      "owner": 0,
+      "pos": [
+        1825,
+        1145
+      ],
+      "facing": 249,
+      "stance": "hold"
+    },
+    {
+      "id": "g_armflash",
+      "type": "ARMFLASH",
+      "owner": 0,
+      "pos": [
+        1935,
+        1145
+      ],
+      "facing": 331,
+      "stance": "hold"
+    },
+    {
+      "id": "g_armsam",
+      "type": "ARMSAM",
+      "owner": 0,
+      "pos": [
+        2045,
+        1145
+      ],
+      "facing": 37,
+      "stance": "hold"
+    },
+    {
+      "id": "g_armbull",
+      "type": "ARMBULL",
+      "owner": 0,
+      "pos": [
+        2155,
+        1145
+      ],
+      "facing": 113,
+      "stance": "hold"
+    },
+    {
+      "id": "g_armcv",
+      "type": "ARMCV",
+      "owner": 0,
+      "pos": [
+        2265,
+        1145
+      ],
+      "facing": 206,
+      "stance": "hold"
+    },
+    {
+      "id": "g_armfav",
+      "type": "ARMFAV",
+      "owner": 0,
+      "pos": [
+        2375,
+        1145
+      ],
+      "facing": 291,
+      "stance": "hold"
+    },
+    {
+      "id": "g_corcom",
+      "type": "CORCOM",
+      "owner": 0,
+      "pos": [
+        1825,
+        1255
+      ],
+      "facing": 68,
+      "stance": "hold"
+    },
+    {
+      "id": "g_corak",
+      "type": "CORAK",
+      "owner": 0,
+      "pos": [
+        1935,
+        1255
+      ],
+      "facing": 154,
+      "stance": "hold"
+    },
+    {
+      "id": "g_corthud",
+      "type": "CORTHUD",
+      "owner": 0,
+      "pos": [
+        2045,
+        1255
+      ],
+      "facing": 249,
+      "stance": "hold"
+    },
+    {
+      "id": "g_corstorm",
+      "type": "CORSTORM",
+      "owner": 0,
+      "pos": [
+        2155,
+        1255
+      ],
+      "facing": 331,
+      "stance": "hold"
+    },
+    {
+      "id": "g_corcan",
+      "type": "CORCAN",
+      "owner": 0,
+      "pos": [
+        2265,
+        1255
+      ],
+      "facing": 37,
+      "stance": "hold"
+    },
+    {
+      "id": "g_corpyro",
+      "type": "CORPYRO",
+      "owner": 0,
+      "pos": [
+        2375,
+        1255
+      ],
+      "facing": 113,
+      "stance": "hold"
+    },
+    {
+      "id": "g_corraid",
+      "type": "CORRAID",
+      "owner": 0,
+      "pos": [
+        1825,
+        1365
+      ],
+      "facing": 206,
+      "stance": "hold"
+    },
+    {
+      "id": "g_corlevlr",
+      "type": "CORLEVLR",
+      "owner": 0,
+      "pos": [
+        1935,
+        1365
+      ],
+      "facing": 291,
+      "stance": "hold"
+    },
+    {
+      "id": "g_corgol",
+      "type": "CORGOL",
+      "owner": 0,
+      "pos": [
+        2045,
+        1365
+      ],
+      "facing": 68,
+      "stance": "hold"
+    },
+    {
+      "id": "g_correap",
+      "type": "CORREAP",
+      "owner": 0,
+      "pos": [
+        2155,
+        1365
+      ],
+      "facing": 154,
+      "stance": "hold"
+    },
+    {
+      "id": "g_corcv",
+      "type": "CORCV",
+      "owner": 0,
+      "pos": [
+        2265,
+        1365
+      ],
+      "facing": 249,
+      "stance": "hold"
+    },
+    {
+      "id": "g_corfav",
+      "type": "CORFAV",
+      "owner": 0,
+      "pos": [
+        2375,
+        1365
+      ],
+      "facing": 331,
+      "stance": "hold"
+    },
+    {
+      "id": "s_armsolar",
+      "type": "ARMSOLAR",
+      "owner": 0,
+      "pos": [
+        2775,
+        1005
+      ],
+      "facing": 37
+    },
+    {
+      "id": "s_armwin",
+      "type": "ARMWIN",
+      "owner": 0,
+      "pos": [
+        2905,
+        1005
+      ],
+      "facing": 113
+    },
+    {
+      "id": "s_armrad",
+      "type": "ARMRAD",
+      "owner": 0,
+      "pos": [
+        3035,
+        1005
+      ],
+      "facing": 206
+    },
+    {
+      "id": "s_armlab",
+      "type": "ARMLAB",
+      "owner": 0,
+      "pos": [
+        3165,
+        1005
+      ],
+      "facing": 291
+    },
+    {
+      "id": "s_armvp",
+      "type": "ARMVP",
+      "owner": 0,
+      "pos": [
+        3295,
+        1005
+      ],
+      "facing": 68
+    },
+    {
+      "id": "s_armllt",
+      "type": "ARMLLT",
+      "owner": 0,
+      "pos": [
+        3425,
+        1005
+      ],
+      "facing": 154
+    },
+    {
+      "id": "s_armhlt",
+      "type": "ARMHLT",
+      "owner": 0,
+      "pos": [
+        2775,
+        1135
+      ],
+      "facing": 249
+    },
+    {
+      "id": "s_armmex",
+      "type": "ARMMEX",
+      "owner": 0,
+      "pos": [
+        2905,
+        1135
+      ],
+      "facing": 331
+    },
+    {
+      "id": "s_armguard",
+      "type": "ARMGUARD",
+      "owner": 0,
+      "pos": [
+        3035,
+        1135
+      ],
+      "facing": 37
+    },
+    {
+      "id": "s_armtarg",
+      "type": "ARMTARG",
+      "owner": 0,
+      "pos": [
+        3165,
+        1135
+      ],
+      "facing": 113
+    },
+    {
+      "id": "s_armaap",
+      "type": "ARMAAP",
+      "owner": 0,
+      "pos": [
+        3295,
+        1135
+      ],
+      "facing": 206
+    },
+    {
+      "id": "s_armsy",
+      "type": "ARMSY",
+      "owner": 0,
+      "pos": [
+        3425,
+        1135
+      ],
+      "facing": 291
+    },
+    {
+      "id": "s_corsolar",
+      "type": "CORSOLAR",
+      "owner": 0,
+      "pos": [
+        2775,
+        1265
+      ],
+      "facing": 68
+    },
+    {
+      "id": "s_corwin",
+      "type": "CORWIN",
+      "owner": 0,
+      "pos": [
+        2905,
+        1265
+      ],
+      "facing": 154
+    },
+    {
+      "id": "s_corrad",
+      "type": "CORRAD",
+      "owner": 0,
+      "pos": [
+        3035,
+        1265
+      ],
+      "facing": 249
+    },
+    {
+      "id": "s_corlab",
+      "type": "CORLAB",
+      "owner": 0,
+      "pos": [
+        3165,
+        1265
+      ],
+      "facing": 331
+    },
+    {
+      "id": "s_corvp",
+      "type": "CORVP",
+      "owner": 0,
+      "pos": [
+        3295,
+        1265
+      ],
+      "facing": 37
+    },
+    {
+      "id": "s_corllt",
+      "type": "CORLLT",
+      "owner": 0,
+      "pos": [
+        3425,
+        1265
+      ],
+      "facing": 113
+    },
+    {
+      "id": "s_corhlt",
+      "type": "CORHLT",
+      "owner": 0,
+      "pos": [
+        2775,
+        1395
+      ],
+      "facing": 206
+    },
+    {
+      "id": "s_cormex",
+      "type": "CORMEX",
+      "owner": 0,
+      "pos": [
+        2905,
+        1395
+      ],
+      "facing": 291
+    },
+    {
+      "id": "s_cortarg",
+      "type": "CORTARG",
+      "owner": 0,
+      "pos": [
+        3035,
+        1395
+      ],
+      "facing": 68
+    },
+    {
+      "id": "s_coraap",
+      "type": "CORAAP",
+      "owner": 0,
+      "pos": [
+        3165,
+        1395
+      ],
+      "facing": 154
+    },
+    {
+      "id": "s_corsy",
+      "type": "CORSY",
+      "owner": 0,
+      "pos": [
+        3295,
+        1395
+      ],
+      "facing": 249
+    },
+    {
+      "id": "s_corrl",
+      "type": "CORRL",
+      "owner": 0,
+      "pos": [
+        3425,
+        1395
+      ],
+      "facing": 331
+    },
+    {
+      "id": "b_armscorp",
+      "type": "ARMSCORP",
+      "owner": 0,
+      "pos": [
+        3655,
+        1085
+      ],
+      "facing": 37
+    },
+    {
+      "id": "b_corscorp",
+      "type": "CORSCORP",
+      "owner": 0,
+      "pos": [
+        3885,
+        1085
+      ],
+      "facing": 113
+    },
+    {
+      "id": "b_corgant",
+      "type": "CORGANT",
+      "owner": 0,
+      "pos": [
+        4115,
+        1085
+      ],
+      "facing": 206
+    },
+    {
+      "id": "b_corkrog",
+      "type": "CORKROG",
+      "owner": 0,
+      "pos": [
+        4345,
+        1085
+      ],
+      "facing": 291
+    },
+    {
+      "id": "b_armvulc",
+      "type": "ARMVULC",
+      "owner": 0,
+      "pos": [
+        3655,
+        1315
+      ],
+      "facing": 68
+    },
+    {
+      "id": "b_cordoom",
+      "type": "CORDOOM",
+      "owner": 0,
+      "pos": [
+        3885,
+        1315
+      ],
+      "facing": 154
+    },
+    {
+      "id": "b_armbrtha",
+      "type": "ARMBRTHA",
+      "owner": 0,
+      "pos": [
+        4115,
+        1315
+      ],
+      "facing": 249
+    },
+    {
+      "id": "b_armanni",
+      "type": "ARMANNI",
+      "owner": 0,
+      "pos": [
+        4345,
+        1315
+      ],
+      "facing": 331
+    },
+    {
+      "id": "a_armhawk",
+      "type": "ARMHAWK",
+      "owner": 0,
+      "pos": [
+        2400,
+        2000
+      ],
+      "facing": 37,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2900,
+            2000
+          ]
+        }
+      ]
+    },
+    {
+      "id": "a_armfig",
+      "type": "ARMFIG",
+      "owner": 0,
+      "pos": [
+        2480,
+        2000
+      ],
+      "facing": 113,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2780,
+            2060
+          ]
+        }
+      ]
+    },
+    {
+      "id": "a_armbrawl",
+      "type": "ARMBRAWL",
+      "owner": 0,
+      "pos": [
+        2560,
+        2000
+      ],
+      "facing": 206,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2660,
+            2120
+          ]
+        }
+      ]
+    },
+    {
+      "id": "a_armthund",
+      "type": "ARMTHUND",
+      "owner": 0,
+      "pos": [
+        2640,
+        2000
+      ],
+      "facing": 291,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2900,
+            2180
+          ]
+        }
+      ]
+    },
+    {
+      "id": "a_armpnix",
+      "type": "ARMPNIX",
+      "owner": 0,
+      "pos": [
+        2720,
+        2000
+      ],
+      "facing": 68,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2780,
+            2000
+          ]
+        }
+      ]
+    },
+    {
+      "id": "a_armpeep",
+      "type": "ARMPEEP",
+      "owner": 0,
+      "pos": [
+        2800,
+        2000
+      ],
+      "facing": 154,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2660,
+            2060
+          ]
+        }
+      ]
+    },
+    {
+      "id": "a_corvamp",
+      "type": "CORVAMP",
+      "owner": 0,
+      "pos": [
+        2400,
+        2080
+      ],
+      "facing": 249,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2900,
+            2120
+          ]
+        }
+      ]
+    },
+    {
+      "id": "a_corape",
+      "type": "CORAPE",
+      "owner": 0,
+      "pos": [
+        2480,
+        2080
+      ],
+      "facing": 331,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2780,
+            2180
+          ]
+        }
+      ]
+    },
+    {
+      "id": "a_corshad",
+      "type": "CORSHAD",
+      "owner": 0,
+      "pos": [
+        2560,
+        2080
+      ],
+      "facing": 37,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2660,
+            2000
+          ]
+        }
+      ]
+    },
+    {
+      "id": "a_corhurc",
+      "type": "CORHURC",
+      "owner": 0,
+      "pos": [
+        2640,
+        2080
+      ],
+      "facing": 113,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2900,
+            2060
+          ]
+        }
+      ]
+    },
+    {
+      "id": "a_corvalk",
+      "type": "CORVALK",
+      "owner": 0,
+      "pos": [
+        2720,
+        2080
+      ],
+      "facing": 206,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2780,
+            2120
+          ]
+        }
+      ]
+    },
+    {
+      "id": "a_corfink",
+      "type": "CORFINK",
+      "owner": 0,
+      "pos": [
+        2800,
+        2080
+      ],
+      "facing": 291,
+      "orders": [
+        {
+          "cmd": "patrol",
+          "to": [
+            2660,
+            2180
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ai_keepalive",
+      "type": "CORSOLAR",
+      "owner": 1,
+      "pos": [
+        1500,
+        2400
+      ]
+    }
+  ],
+  "camera": {
+    "at": [
+      2100,
+      1200
+    ],
+    "pin": true
+  }
+}

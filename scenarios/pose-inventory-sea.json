@@ -1,0 +1,177 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Gate A's naval half: the classes the land inventory cannot reach. Anteer Strait, the same water the cob-ship and cob-sub fixtures use (CORBATS at (3000,1950)), with surface ships, both submarines, the two patrol boats, the tidal generators -- the animated water structures -- and the mine layers, all on hold and all owned by player 0 so nothing fires. Read `tagpu_posewatch.on`'s errmax with the camera on them; a ship rides the swell, so unlike the land clusters this one is never perfectly still.",
+  "seed": 20260908,
+  "on_error": "abort",
+  "setup": {
+    "map": "Anteer Strait",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "n_corbats",
+      "type": "CORBATS",
+      "owner": 0,
+      "pos": [
+        2850,
+        1800
+      ],
+      "facing": 37,
+      "stance": "hold"
+    },
+    {
+      "id": "n_armroy",
+      "type": "ARMROY",
+      "owner": 0,
+      "pos": [
+        3000,
+        1800
+      ],
+      "facing": 113,
+      "stance": "hold"
+    },
+    {
+      "id": "n_armcrus",
+      "type": "ARMCRUS",
+      "owner": 0,
+      "pos": [
+        3150,
+        1800
+      ],
+      "facing": 206,
+      "stance": "hold"
+    },
+    {
+      "id": "n_corcrus",
+      "type": "CORCRUS",
+      "owner": 0,
+      "pos": [
+        3300,
+        1800
+      ],
+      "facing": 291,
+      "stance": "hold"
+    },
+    {
+      "id": "n_armpt",
+      "type": "ARMPT",
+      "owner": 0,
+      "pos": [
+        2850,
+        1930
+      ],
+      "facing": 68,
+      "stance": "hold"
+    },
+    {
+      "id": "n_corpt",
+      "type": "CORPT",
+      "owner": 0,
+      "pos": [
+        3000,
+        1930
+      ],
+      "facing": 154,
+      "stance": "hold"
+    },
+    {
+      "id": "n_armsub",
+      "type": "ARMSUB",
+      "owner": 0,
+      "pos": [
+        3150,
+        1930
+      ],
+      "facing": 37,
+      "stance": "hold"
+    },
+    {
+      "id": "n_corsub",
+      "type": "CORSUB",
+      "owner": 0,
+      "pos": [
+        3300,
+        1930
+      ],
+      "facing": 113,
+      "stance": "hold"
+    },
+    {
+      "id": "n_armtide",
+      "type": "ARMTIDE",
+      "owner": 0,
+      "pos": [
+        2850,
+        2060
+      ],
+      "facing": 206
+    },
+    {
+      "id": "n_cortide",
+      "type": "CORTIDE",
+      "owner": 0,
+      "pos": [
+        3000,
+        2060
+      ],
+      "facing": 291
+    },
+    {
+      "id": "n_armmship",
+      "type": "ARMMSHIP",
+      "owner": 0,
+      "pos": [
+        3150,
+        2060
+      ],
+      "facing": 68,
+      "stance": "hold"
+    },
+    {
+      "id": "n_cormship",
+      "type": "CORMSHIP",
+      "owner": 0,
+      "pos": [
+        3300,
+        2060
+      ],
+      "facing": 154,
+      "stance": "hold"
+    },
+    {
+      "id": "ai_keepalive",
+      "type": "ARMSOLAR",
+      "owner": 1,
+      "pos": [
+        3300,
+        1440
+      ]
+    }
+  ],
+  "camera": {
+    "at": [
+      3075,
+      1865
+    ],
+    "pin": true
+  }
+}

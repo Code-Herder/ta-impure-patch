@@ -15,6 +15,11 @@ unsigned int tagpu_r3d_atlas_texref(void);
    level 2 -- 0 until the switch has been seen on and the restorer's job
    made; a shader samples it only where its alpha says the texel is painted */
 unsigned int tagpu_r3d_atlas_rgbref(void);
+/* The unit atlas's generation (tagpu_gaf.h): every recycle and every context
+   loss moves every UV, so anything that BAKES a UV rather than re-reading it
+   each frame has to be keyed on this. The geometry bake's material stream is
+   (tagpu_posebake.c). */
+unsigned int tagpu_r3d_atlas_gen(void);
 /* Once per frame from the native pass, before its first tagpu_r3d_atlas_uv,
    with the live palette (main+0x143A7): recycles a full atlas (never between
    an emit and its draw) and drives the lazy restore -- arming it the first

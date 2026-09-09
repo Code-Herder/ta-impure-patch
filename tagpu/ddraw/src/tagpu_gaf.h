@@ -65,6 +65,15 @@ typedef struct TAGPU_GAFATLAS {
     TAGPU_GAFENT* ents;
     int           n, shelfX, shelfY, shelfH;
     int           full;         /* no room: reset deferred to the next frame */
+    /* THE ATLAS GENERATION. Every recycle and every context loss moves EVERY
+       entry's u0..v1: the shelf restarts at the origin and the same frame is
+       re-inserted wherever it now fits. A UV read out of this atlas is
+       therefore only valid for the generation it was read in, which does not
+       matter to a pass that re-reads them every frame -- and matters entirely
+       to one that BAKES them into a vertex buffer (gpu-posing.md 3, the
+       material stream). Bumped by atlas_reset and atlas_lost; a cache keyed
+       on it drops itself when the UVs move. Starts at 0 and only increases. */
+    unsigned      gen;
     const char*   tag;          /* log prefix, e.g. "fx" / "feat"            */
     /* The cell layout (renderers.md 2.5, the unit atlas): every frame is
        uploaded with `pad` replicated edge texels on all four sides and its

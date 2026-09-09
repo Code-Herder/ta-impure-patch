@@ -687,13 +687,25 @@ configuration and the one to test a release with. Under it a pass is turned off 
 line says which way the instance went.
 
 **The pose-race levers** (`tagpu_native.c`, gpu-status §2.9) are measuring tools, not play
-settings; all three are off unless the file is there.
+settings; all three are off unless the file is there. Their fixture is
+**`scenarios/pose-inventory.json`** — 69 units in four clusters, one camera stop each, covering
+all eight pose classes and the two extremes of stock geometry (`ARMSCORP`/`CORSCORP`, 36 pieces;
+`CORGANT`, 574 verts / 304 faces) — with **`pose-inventory-sea.json`** for the naval classes on
+Anteer Strait. Everything is owned by player 0 so nothing fires and the poses are the only thing
+moving. The stops are `tacli eye <i> 1716 806` (ground), `2716 806` (structures), `3616 806` (the
+extremes) and `2216 1606` (the air lane).
 
 | file | what it does |
 |---|---|
 | `tagpu_posefix.off` | leaves the guard *measuring* but draws the engine's live posed buffer anyway — the baseline the fix is measured against, and the only way to see the artifact |
 | `tagpu_posewatch.on` | the oracle: per unit per frame, `posewatch: f=… err=… piece=…/… dirty=…/… poll|guard` — the largest disagreement in **model units** between the engine's posed buffer and the pose rebuilt from the fields, with the pose-dirty flag either side of the read. A unit or two out is a stale buffer; the model's own height out (an ARMCOM is 34) is a buffer caught mid-rewrite. Also adds a 60 Hz anchor filmstrip per owned unit — raw 16.16 position, roster shorts, the eye and the anchor we derived, which is what attributes a one-frame jump to the engine, the eye or this pass |
 | `tagpu_poserecon.on` | forces the reconstruction for **every** unit every frame. The A/B for the fallback: against the engine-buffer path it renders 0 differing pixels of 1920×1080 |
+| `tagpu_posebake.on` | G16 step 4's per-type geometry bake (gpu-status §2.10). **Draws nothing** — it bakes, caches and reports. `log` gives a line per model and per material stream; `check` holds the bake to `emit_geom`'s own vertex count and to `pose_accum_body`'s rest offsets, per unit per frame, and logs any disagreement. The `native:` line grows `bake=<types>/<streams> anom= odd= nomat= refused=` |
+
+**`posewatch` writes about 250 kB of `tagpu.log` per second** at 28 units on screen — it logs an
+anchor filmstrip per owned unit per frame, and `nlog` opens and closes the file per line. Two
+consequences: measure a camera stop by taking the file's **byte offsets** before and after and
+slicing it, rather than grepping the whole thing, and do not leave the lever armed for a long run.
 
 The `native:` line carries `posefix=`, `guard=` (reads refused since the last line, 300 frames),
 `rest=` and `errmax=` whether or not the watch is armed. **`rest=` is the useful one**: the guard
@@ -1110,7 +1122,16 @@ storage's does not); `tacli log` returns a tail of the file, so count lines in t
   `tacli crash <name>` before theorising about loading screens — the commands do it
   for you now, but a hand-rolled poll will not.
 - `pkill -f TotalA.exe` kills your own shell (the pattern matches the wrapper).
-  Use `pkill -x` / `pgrep -x`, or just `tacli stop`.
+  Use `pkill -x` / `pgrep -x`, or just `tacli stop`. The same trap applies to `pkill -f` on **any**
+  script name you are running from — `pkill -f mysweep.sh` inside a shell whose command line
+  contains that string takes the shell with it.
+- **`pgrep -x TotalA.exe | head -1` can name a ZOMBIE.** A game that has exited stays `Z` until
+  its parent reaps it, and several runs leave several behind, so a liveness check built on the
+  first pid reports DEAD while the game is running perfectly — which reads as a crash and sends
+  you looking for one. Check `ps -o stat=` on every pid, not the first, or ask `tacli ls`.
+- **`ErrorLog.txt` is shared between instances and is not cleared at launch**, so `tacli crash`
+  can hand you a fault from hours ago. Delete it before a run you intend to attribute, and treat
+  its timestamp as part of the evidence.
 - `tagpu.log` contains binary bytes: always `grep -a` (tacli's `log`/`wait` handle it).
 - Two X windows share each instance's title (frame + client), and the user's
   browser/Discord windows match the *substring* — tacli matches exact title + pid. The

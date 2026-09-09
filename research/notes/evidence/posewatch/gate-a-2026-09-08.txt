@@ -1,0 +1,87 @@
+Gate A — the reconstruction against the engine's posed buffer, over a screen
+inventory rather than the eight cobtrace fixtures.       measured 2026-09-08
+
+WHAT WAS RUN
+  scenario   scenarios/pose-inventory.json — 69 units, four clusters, one
+             camera stop each; every unit owned by player 0 so nothing fires.
+             Covers all eight cobtrace classes plus the two extremes of stock
+             content: ARMSCORP / CORSCORP (36 pieces, the most in the game)
+             and CORGANT (574 vertices / 304 faces, the most of either).
+  arm set    native.on="all wrecks", terr.on, feat.on, posewatch.on
+             (classicpp and gui deliberately absent: this is a measurement)
+  build      the worktree's own ddraw.dll at 355e041 — byte-identical to main
+  stops      tacli eye per cluster, ~12 s each; the ground cluster is read
+             twice, once on hold and once walking under 24 `tacli order` moves
+
+  errmax / guard / rest / norecon are the `native:` line's own counters, reset
+  per line (300 frames). "flagged" counts the DISTINCT units that logged a
+  `posewatch:` line at all, i.e. err >= 4.0 model units.
+
+RESULT
+  stop             units  win   guard    rest  norec   errmax   errmin   lines  flagged  dirty
+  ground_static       28    2    4814   15084      0    61.97    61.97    5790        5  1/1
+  ground_walking      29    2    4951   15114      0    61.97    61.97    6096        6  1/1
+  structures          26    2    1850   25500      0    39.81    39.81    2980        3  1/1
+  bigmodels           12    2       0       0      0     0.00     0.00       0        0  -
+  air                 35    3    3845       0      0    35.50    24.51    3844        3  1/1
+
+  whole game   27142 posewatch lines, EVERY ONE dirty=1/1; 0 lines dirty=0/0
+               17 `native:` windows, norecon total 0, worst errmax 61.97
+
+THE NAVAL HALF, separately (scenarios/pose-inventory-sea.json, Anteer Strait:
+both submarines, four surface ships, both patrol boats, the two tidal
+generators and the mine layers, on hold and then under 12 move orders). Same
+DLL plus the atlas-generation field, which changes nothing this gate reads:
+
+  stop             units  win   guard    rest  norec   errmax   lines  flagged  dirty
+  naval_hold          13    3    1800    7200      0    50.46    1680        1  1/1
+  naval_moving        13    3    1800    7200      0    50.46    1680        1  1/1
+
+  4404 posewatch lines, every one dirty=1/1, norecon 0. One unit flagged, and
+  it is a rest-equal structure of the kind described below; no ship and neither
+  submarine was flagged at all, moving or still.
+
+WHAT IT SAYS
+  1. NO MODEL FAILED TO RECONSTRUCT. norecon = 0 in every window over 82 unit
+     types: `pose_accum_body` came back with a whole piece tree every time.
+  2. NO DISAGREEMENT WITHOUT THE ENGINE'S OWN FLAG. Not one of the 27142 lines
+     read dirty=0/0 — the signature `recon_watch` exists to catch ("a large err
+     with the flag clear both times" = the guard's bracket is not the whole
+     window). Every err over 4 model units is a buffer the engine was itself
+     saying was stale or mid-rewrite.
+  3. THE EXTREMES ARE EXACT. The bigmodels stop — ARMSCORP, CORSCORP, CORGANT,
+     CORKROG, ARMVULC, CORDOOM, ARMBRTHA, ARMANNI — read errmax 0.00 with zero
+     guard trips and zero rest-equal reads across both windows. The 36-piece
+     tree and the 304-face model reconstruct to the printed 0.00.
+  4. Walking units read 10-19; aircraft 24-35 with rest=0 (their buffers are
+     actively composed, and the guard catches the rewrite). Both are the tick
+     lag and the mid-rewrite window §2.9 already describes, not a bad rebuild.
+
+THE ONE THING THIS FOUND THAT WAS NOT THE QUESTION
+  A handful of STRUCTURES sit byte-equal to their own rest vertex arrays
+  permanently — `rest=` runs at tens of piece-reads per frame on the ground and
+  structure stops while `guard=` names only three to six units — with the pose
+  flag set on both sides of every read. Their err is therefore the model's own
+  size (39-62) for the whole session, and `posefix` draws them from the
+  reconstruction every frame rather than occasionally. Identified by peeking
+  Object3do+0x0C -> unit+0x92 -> the def's name on the run of the same fixture:
+  "Gaat Gun", "Sentinel", "Solar Collector" (both sides), "Vulcan",
+  "Scorpion", "Wind Generator", and one aircraft, "Hurricane".
+  WHY the engine leaves those buffers at rest is NOT established here. It does
+  not affect Gate A — the rest-equality detector catches every one of them and
+  the reconstruction is what gets drawn — and G16 stops reading that buffer at
+  all, so it becomes moot rather than fixed.
+
+REPRODUCING IT
+  tools/tacli arm <i> 'native.on=all wrecks' terr.on feat.on posewatch.on
+  tools/tacli scenario load <i> pose-inventory --restart --res 1024x768
+  tools/tacli eye <i> 1716 806     # ground     (cluster centre 2100,1200)
+  tools/tacli eye <i> 2716 806     # structures (3100,1200)
+  tools/tacli eye <i> 3616 806     # bigmodels  (4000,1200)
+  tools/tacli eye <i> 2216 1606    # air        (2600,2000)
+  grep -a 'native: ' <gamedir>/tagpu.log   # guard= rest= norecon= errmax=
+  grep -a 'posewatch: .* dirty=' <gamedir>/tagpu.log | grep -c 'dirty=0/0'  # must be 0
+
+  The posewatch filmstrip writes ~250 kB/s of tagpu.log at this unit count
+  (one fopen/fclose per line), so a stop is measured in a slice of the file by
+  byte offset, not by grepping the whole of it.
