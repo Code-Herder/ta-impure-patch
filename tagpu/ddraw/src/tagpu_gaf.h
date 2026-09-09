@@ -92,6 +92,11 @@ typedef struct TAGPU_GAFATLAS {
     unsigned int  rgb;
     struct TAGPU_RGLSL_JOB* job;
     int           prio;
+    /* frames whose shorter edge is under this are never queued for restore:
+       below the model's receptive field there is nothing to restore, so the
+       work returns approximately its input (G15-0's verdict, gui-renderer.md
+       3.9). 0 = no floor, which is every atlas but the UI's. */
+    int           restoreMinEdge;
     int           restoreFailed;
     int           dumpedN;      /* entries when tagpu_restoredump.on last wrote */
     const unsigned char* pal;   /* the live palette, for the tileability test */

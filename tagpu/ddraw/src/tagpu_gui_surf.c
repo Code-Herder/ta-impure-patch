@@ -18,6 +18,33 @@
    holds a UI pixel (outside the viewport, or a non-key pixel inside it) and
    the twin holds nothing, magenta; the cursor's rect is exempt.
 
+   CLASSIC++ (G15e). Beside the index twin every surface may carry a COLOUR
+   twin -- GL_RGBA8, the same size, COLOR_ATTACHMENT1 on the same FBO -- into
+   which a sprite op writes the UI atlas's RESTORED texel where the atlas has
+   one (alpha 1) and zero elsewhere. A copy carries both channels, which is
+   what makes restored art survive the panel's `panel+0xBC` -> frame blit
+   (gui-renderer.md 13.2: colour has to be per surface, because art is drawn
+   into a retained surface long before it has a screen position). A seed or a
+   pixel op invalidates the colour of its box -- those carry indices only --
+   so the layer falls back to the palette there. The layer takes colour where
+   alpha is 1 and the palette elsewhere, which is per texel, so a partly
+   restored surface is never half-wrong.
+
+   THE PALETTE-VALIDITY RULE (gui-renderer.md 3.4). The restore job SNAPSHOTS
+   the palette into a texture when it is created, so its colours are only
+   right while that palette is still the one we present with. Every frame the
+   two are compared: while they differ the colour twins are ignored and the
+   frame is indexed -- a fade shows dithered art, never wrong art -- and once
+   the palette has been still for PAL_SETTLE frames the atlas is re-armed
+   against the new one and every colour twin is invalidated so the art comes
+   back restored as it is redrawn.
+
+   What restores and what does not: colour reaches a twin only through a
+   sprite op, so anything SEEDED (a surface adopted whole from the engine's
+   bytes) stays indexed until the engine redraws it. The shell redraws every
+   gadget on every flip; the in-game panel repaints on a mode switch or when
+   something marks it dirty.
+
    The twin is 1:1 and NEAREST; its size is the surface's × k with k = 1
    (gui-renderer.md 6 — phase 2 raises k). */
 
@@ -29,6 +56,8 @@
 #include "tagpu_opt.h"
 #include "tagpu_gui_int.h"
 #include "tagpu_gaf.h"
+#include "tagpu_classicpp.h"
+#include "tagpu_restoreglsl.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_terr.h"
 #include "tagpu_overlay.h"
@@ -47,6 +76,9 @@
 #define MAX_TWINS      32
 #define ATLAS_DIM      2048
 #define ATLAS_MAX      4096
+#define UI_RESTORE_PRIO 4       /* terrain 0, features 1, effects 2, 3DO units 3 */
+#define UI_RESTORE_MIN 12       /* G15-0's verdict: nothing under 12x12 is restored */
+#define PAL_SETTLE     30       /* frames the palette must hold still before a re-arm */
 
 extern volatile int g_gui_draw;         /* tagpu_gui_hook.c: the publisher's gate */
 
@@ -61,6 +93,10 @@ typedef void (APIENTRY *PFN_BLENDFUNC)(GLenum, GLenum);
 typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
 typedef void (APIENTRY *PFN_CLEARCOLOR)(GLfloat, GLfloat, GLfloat, GLfloat);
 typedef void (APIENTRY *PFN_CLEAR)(GLbitfield);
+typedef void (APIENTRY *PFN_CLEARBUFFERFV)(GLenum, GLint, const GLfloat*);
+typedef void (APIENTRY *PFN_DRAWBUFFERS)(GLsizei, const GLenum*);
+static PFN_CLEARBUFFERFV x_glClearBufferfv;
+static PFN_DRAWBUFFERS   x_glDrawBuffers;
 static PFN_CLEARCOLOR x_glClearColor;
 static PFN_CLEAR      x_glClear;
 static PFN_DRAWARRAYS x_glDrawArrays;
@@ -91,6 +127,7 @@ typedef struct TWIN {
     unsigned surf;                      /* the engine surface's pixel base     */
     int w, h;
     GLuint tex, fbo;
+    GLuint rgb;                         /* Classic++: the colour twin, or 0    */
 } TWIN;
 static TWIN   s_twins[MAX_TWINS];
 static int    s_ntwins = 0;
@@ -98,9 +135,9 @@ static unsigned s_presented = 0;        /* the last PK_FRAME's surface         *
 
 static int    s_gl = 0;                 /* 0 none, 1 ready, 2 failed           */
 static GLuint s_sprProg, s_cpyProg, s_layProg, s_vao, s_vbo, s_palTex;
-static GLint  s_uSprSize, s_uSprCK;
-static GLint  s_uCpySize, s_uCpyOff;
-static GLint  s_uLaySize, s_uLayStrict, s_uLayKey, s_uLayVp, s_uLayCursor;
+static GLint  s_uSprSize, s_uSprCK, s_uSprRestored;
+static GLint  s_uCpySize, s_uCpyOff, s_uCpyHasCol;
+static GLint  s_uLaySize, s_uLayStrict, s_uLayKey, s_uLayVp, s_uLayCursor, s_uLayColOn;
 static TAGPU_GAFATLAS s_atlas;
 static TAGPU_GAFENT   s_ents[ATLAS_MAX];
 static unsigned char* s_rg;             /* interleave scratch, 2 bytes per texel */
@@ -118,6 +155,13 @@ static unsigned s_palChanges = 0;       /* presented-palette uploads (a fade is 
 static int    s_palDiff = 0;            /* entries where the presented palette differs from main+0x143A7  */
 static int    s_palDiffAt = -1;         /* the first such entry                                            */
 static int    s_palSource = 0;          /* 1 = cnc-ddraw's palette object, 0 = the engine's table (no primary yet) */
+/* Classic++ (G15e) */
+static int    s_norestore = 0;          /* `norestore` in the trigger: the A/B lever   */
+static int    s_colValid = 0;           /* the colour twins may be sampled this frame  */
+static unsigned char s_restorePal[1024];/* the palette the atlas's restore snapshotted */
+static unsigned s_palSeen = 0;          /* s_palChanges when the settle count last moved */
+static int    s_palSettle = 0;
+static unsigned s_rearms = 0, s_colTwins = 0;
 
 /* ----------------------------------------------------------------- shaders */
 /* a quad in surface pixels -> the twin's FBO (row 0 = surface row 0) */
@@ -131,19 +175,35 @@ static const char* QVS =
 /* the sprite: the atlas index, the colour key discarded, coverage 1 */
 static const char* SPR_FS =
     "#version 330 core\n"
-    "in vec2 uv; out vec4 frag;\n"
-    "uniform sampler2D uAtlas; uniform int uCK;\n"
+    "in vec2 uv;\n"
+    "layout(location=0) out vec4 oIdx;\n"
+    "layout(location=1) out vec4 oCol;\n"
+    "uniform sampler2D uAtlas; uniform sampler2D uAtlasRGB;\n"
+    "uniform int uCK; uniform int uRestored;\n"
     "void main(){ float i = texture(uAtlas, uv).r;\n"
     "  if (int(i * 255.0 + 0.5) == uCK) discard;\n"
-    "  frag = vec4(i, 1.0, 0.0, 0.0); }\n";
+    "  oIdx = vec4(i, 1.0, 0.0, 0.0);\n"
+    /* the restored twin is alpha 0 where the frame is keyed and where its
+       restore has not landed yet, so alpha IS 'this texel has colour'. The
+       UI atlas is pad 0 / mip 0, so alpha is 0 or 1 and t.rgb needs no
+       un-premultiply (the unit atlas's mipped twin is the one that does). */
+    "  oCol = vec4(0.0);\n"
+    "  if (uRestored != 0) { vec4 t = texture(uAtlasRGB, uv);\n"
+    "    if (t.a > 0.5) oCol = vec4(t.rgb, 1.0); } }\n";
 /* the copy: the source twin's index at (this pixel - offset), coverage 1 */
 static const char* CPY_FS =
     "#version 330 core\n"
-    "out vec4 frag;\n"
-    "uniform sampler2D uSrc; uniform ivec2 uOff;\n"
+    "layout(location=0) out vec4 oIdx;\n"
+    "layout(location=1) out vec4 oCol;\n"
+    "uniform sampler2D uSrc; uniform sampler2D uSrcCol;\n"
+    "uniform ivec2 uOff; uniform int uSrcHasCol;\n"
     "void main(){ ivec2 p = ivec2(gl_FragCoord.xy) - uOff;\n"
     "  vec2 g = texelFetch(uSrc, p, 0).rg;\n"
-    "  frag = vec4(g.r, 1.0, 0.0, 0.0); }\n";
+    "  oIdx = vec4(g.r, 1.0, 0.0, 0.0);\n"
+    /* a source with no colour twin contributes none: writing 0 INVALIDATES
+       the destination's colour there, which is what a copy from an indexed
+       surface means */
+    "  oCol = uSrcHasCol != 0 ? texelFetch(uSrcCol, p, 0) : vec4(0.0); }\n";
 /* the layer over the frame: uv.y = 0 at the top of the screen, like the
    native composite's CVS; the twin's row 0 is the surface's row 0 */
 static const char* LAY_VS =
@@ -156,6 +216,7 @@ static const char* LAY_FS =
     "#version 330 core\n"
     "in vec2 uv; out vec4 frag;\n"
     "uniform sampler2D uTwin; uniform sampler2D uPal; uniform sampler2D uSurf;\n"
+    "uniform sampler2D uTwinCol; uniform int uColOn;\n"
     "uniform ivec2 uSize; uniform int uStrict; uniform int uKey; uniform vec4 uVp; uniform vec4 uCursor;\n"
     "void main(){\n"
     "  ivec2 p = clamp(ivec2(uv * vec2(uSize)), ivec2(0), uSize - 1);\n"
@@ -167,7 +228,13 @@ static const char* LAY_FS =
     "  bool cur = f.x >= uCursor.x && f.x < uCursor.x + uCursor.z && f.y >= uCursor.y && f.y < uCursor.y + uCursor.w;\n"
     "  if (cur) discard;\n"
     "  vec2 g = texelFetch(uTwin, p, 0).rg;\n"
-    "  if (g.g > 0.5) { frag = vec4(texture(uPal, vec2((g.r * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); return; }\n"
+    "  if (g.g > 0.5) {\n"
+    /* Classic++ per texel: the restored colour where this texel has one, the
+       live palette everywhere else -- so a surface only half restored is
+       never half WRONG, and an invalid palette (uColOn 0) is simply indexed */
+    "    if (uColOn != 0) { vec4 c = texelFetch(uTwinCol, p, 0);\n"
+    "      if (c.a > 0.5) { frag = vec4(c.rgb, 1.0); return; } }\n"
+    "    frag = vec4(texture(uPal, vec2((g.r * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); return; }\n"
     "  if (uStrict == 1) {\n"
     "    int e = int(texelFetch(uSurf, p, 0).r * 255.0 + 0.5);\n"
     "    bool inVp = f.x >= uVp.x && f.x < uVp.x + uVp.z && f.y >= uVp.y && f.y < uVp.y + uVp.w;\n"
@@ -211,32 +278,44 @@ static int init_gl(void)
     x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
     x_glClearColor = (PFN_CLEARCOLOR)getgl("glClearColor");
     x_glClear      = (PFN_CLEAR)getgl("glClear");
+    x_glClearBufferfv = (PFN_CLEARBUFFERFV)getgl("glClearBufferfv");
+    x_glDrawBuffers   = (PFN_DRAWBUFFERS)getgl("glDrawBuffers");
     if (!x_glDrawArrays || !x_glFramebufferTexture2D || !x_glUniform4f || !x_glUniform2f ||
         !x_glUniform2iv || !x_glScissor || !x_glDisable || !x_glBlendFunc || !x_glActiveTexture ||
         !x_glClearColor || !x_glClear) {
         slog("gui: GL entry points missing"); s_gl = 2; return 0;
     }
+    /* the colour twins need these two; without them the module still runs,
+       indexed, exactly as it did before G15e */
+    if (!x_glClearBufferfv || !x_glDrawBuffers)
+        slog("gui: no glClearBufferfv/glDrawBuffers — Classic++ UI unavailable, the layer stays indexed");
     s_sprProg = mkprog(QVS, SPR_FS);
     s_cpyProg = mkprog(QVS, CPY_FS);
     s_layProg = mkprog(LAY_VS, LAY_FS);
     if (s_gl == 2) return 0;
     glUseProgram(s_sprProg);
     glUniform1i(glGetUniformLocation(s_sprProg, "uAtlas"), 0);
+    glUniform1i(glGetUniformLocation(s_sprProg, "uAtlasRGB"), 1);
     s_uSprSize = glGetUniformLocation(s_sprProg, "uSize");
     s_uSprCK   = glGetUniformLocation(s_sprProg, "uCK");
+    s_uSprRestored = glGetUniformLocation(s_sprProg, "uRestored");
     glUseProgram(s_cpyProg);
     glUniform1i(glGetUniformLocation(s_cpyProg, "uSrc"), 0);
+    glUniform1i(glGetUniformLocation(s_cpyProg, "uSrcCol"), 1);
     s_uCpySize = glGetUniformLocation(s_cpyProg, "uSize");
     s_uCpyOff  = glGetUniformLocation(s_cpyProg, "uOff");
+    s_uCpyHasCol = glGetUniformLocation(s_cpyProg, "uSrcHasCol");
     glUseProgram(s_layProg);
     glUniform1i(glGetUniformLocation(s_layProg, "uTwin"), 0);
     glUniform1i(glGetUniformLocation(s_layProg, "uPal"),  1);
     glUniform1i(glGetUniformLocation(s_layProg, "uSurf"), 2);
+    glUniform1i(glGetUniformLocation(s_layProg, "uTwinCol"), 3);
     s_uLaySize   = glGetUniformLocation(s_layProg, "uSize");
     s_uLayStrict = glGetUniformLocation(s_layProg, "uStrict");
     s_uLayKey    = glGetUniformLocation(s_layProg, "uKey");
     s_uLayVp     = glGetUniformLocation(s_layProg, "uVp");
     s_uLayCursor = glGetUniformLocation(s_layProg, "uCursor");
+    s_uLayColOn  = glGetUniformLocation(s_layProg, "uColOn");
     glUseProgram(0);
     glGenVertexArrays(1, &s_vao);
     glGenBuffers(1, &s_vbo);
@@ -258,6 +337,8 @@ static int init_gl(void)
     memset(&s_atlas, 0, sizeof s_atlas);
     s_atlas.ents = s_ents; s_atlas.max = ATLAS_MAX; s_atlas.dim = ATLAS_DIM; s_atlas.tag = "gui";
     s_atlas.pad = 0; s_atlas.align = 0; s_atlas.mip = 0;      /* 1:1, NEAREST, the 1-texel border */
+    s_atlas.prio = UI_RESTORE_PRIO;
+    s_atlas.restoreMinEdge = UI_RESTORE_MIN;
     if (!tagpu_gaf_atlas_create(&s_atlas)) { slog("gui: atlas FAILED"); s_gl = 2; return 0; }
     s_gl = 1;
     slog("gui: GL ready (twins RG8, atlas 2048x2048, layer over the composite)");
@@ -275,7 +356,63 @@ static void twin_drop(TWIN* t)
 {
     if (t->fbo) glDeleteFramebuffers(1, &t->fbo);
     if (t->tex) glDeleteTextures(1, &t->tex);
+    if (t->rgb) glDeleteTextures(1, &t->rgb);
     *t = s_twins[--s_ntwins];
+}
+
+/* The colour twin, made by the first op that has colour to put in it: RGBA8
+   at COLOR_ATTACHMENT1 of the same FBO, so one MRT draw writes the index and
+   the colour together and they can never disagree about what a texel holds.
+   Cleared to alpha 0 — nothing is restored until an op says so. */
+static void twin_colour(TWIN* t)
+{
+    static const GLenum two[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+    static const GLfloat zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    GLenum st;
+    if (t->rgb || !x_glDrawBuffers || !x_glClearBufferfv || !t->fbo) return;
+    glGenTextures(1, &t->rgb);
+    if (!t->rgb) return;
+    glBindTexture(GL_TEXTURE_2D, t->rgb);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, t->w, t->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    x_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, t->rgb, 0);
+    x_glDrawBuffers(2, two);
+    st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (st != GL_FRAMEBUFFER_COMPLETE) {
+        /* back to indexed rather than into an incomplete FBO, which would
+           drop the INDEX draws too and blank the surface */
+        char b[140];
+        _snprintf(b, sizeof b, "gui: colour twin %08X %dx%d FBO incomplete (%x) — indexed", t->surf, t->w, t->h, (unsigned)st);
+        slog(b);
+        x_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, 0, 0);
+        x_glDrawBuffers(1, two);
+        glDeleteTextures(1, &t->rgb);
+        t->rgb = 0;
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return;
+    }
+    x_glClearBufferfv(GL_COLOR, 1, zero);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    s_colTwins++;
+}
+
+/* Indices arrived for this box and they say nothing about colour: drop the
+   colour there so the layer falls back to the palette. */
+static void twin_col_drop(TWIN* t, int l, int tp, int w, int h)
+{
+    static const GLfloat zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    if (!t->rgb || !x_glClearBufferfv || w <= 0 || h <= 0) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    glViewport(0, 0, t->w, t->h);
+    glEnable(GL_SCISSOR_TEST);
+    x_glScissor(l, tp, w, h);
+    x_glClearBufferfv(GL_COLOR, 1, zero);
+    x_glDisable(GL_SCISSOR_TEST);
 }
 static TWIN* twin_make(unsigned surf, int w, int h)
 {
@@ -323,6 +460,7 @@ static void twin_upload(TWIN* t, int l, int tp, int w, int h, const unsigned cha
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexSubImage2D(GL_TEXTURE_2D, 0, l, tp, w, h, GL_RG, GL_UNSIGNED_BYTE, s_rg);
     glBindTexture(GL_TEXTURE_2D, 0);
+    twin_col_drop(t, l, tp, w, h);
 }
 
 static void quad(float* v, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1)
@@ -334,6 +472,8 @@ static void quad(float* v, float x0, float y0, float x1, float y1, float u0, flo
 static void twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
 {
     float v[24];
+    int restored = s_colValid && s_atlas.rgb != 0;
+    if (restored) twin_colour(t);
     glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
     glViewport(0, 0, t->w, t->h);
     glEnable(GL_SCISSOR_TEST);
@@ -341,6 +481,10 @@ static void twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
     glUseProgram(s_sprProg);
     x_glUniform2f(s_uSprSize, (float)t->w, (float)t->h);
     glUniform1i(s_uSprCK, (int)o->ck);
+    glUniform1i(s_uSprRestored, (restored && t->rgb) ? 1 : 0);
+    /* unit 1 must hold a real texture even when the branch is off */
+    x_glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, s_atlas.rgb ? s_atlas.rgb : s_palTex);
     x_glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
     quad(v, (float)o->sl, (float)o->st, (float)(o->sl + o->fw), (float)(o->st + o->fh), e->u0, e->v0, e->u1, e->v1);
@@ -356,6 +500,12 @@ static void twin_copy(TWIN* t, const TWIN* src, const TAGPU_PUBOP* o)
 {
     float v[24];
     GLint off[2];
+    /* THE COPY IS WHY COLOUR IS PER SURFACE (gui-renderer.md 13.2): the panel
+       is painted into panel+0xBC and only later blitted to the frame, so
+       restored art reaches the screen through here or not at all. A source
+       with no colour twin writes zero, which invalidates the destination's
+       colour over the box — a copy from indexed art means indexed art. */
+    if (src->rgb) twin_colour(t);
     glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
     glViewport(0, 0, t->w, t->h);
     glEnable(GL_SCISSOR_TEST);
@@ -364,6 +514,9 @@ static void twin_copy(TWIN* t, const TWIN* src, const TAGPU_PUBOP* o)
     x_glUniform2f(s_uCpySize, (float)t->w, (float)t->h);
     off[0] = o->l - o->sl; off[1] = o->t - o->st;      /* dst pixel - src pixel */
     x_glUniform2iv(s_uCpyOff, 1, off);
+    glUniform1i(s_uCpyHasCol, (src->rgb && t->rgb) ? 1 : 0);
+    x_glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, src->rgb ? src->rgb : s_palTex);
     x_glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, src->tex);
     quad(v, (float)o->l, (float)o->t, (float)(o->r + 1), (float)(o->b + 1), 0, 0, 0, 0);
@@ -392,6 +545,57 @@ static void twins_reset(void)
     while (s_ntwins) twin_drop(&s_twins[0]);
     s_presented = 0;
     tagpu_gaf_atlas_reset(&s_atlas);
+}
+
+/* ---------------------------------------------------------- Classic++ arm */
+/* Once per present, BEFORE the drain (the sprite ops it replays ask whether
+   colour is valid) and after upload_palette (this compares against it).
+
+   THE VALIDITY RULE, gui-renderer.md 3.4. tagpu_rglsl_job_new snapshots the
+   palette into a texture of its own, so the restored twin's colours are a
+   function of the palette that was live when the job was made. While that is
+   still the palette the frame is PRESENTED with, colour is used; while it is
+   not, every colour twin is ignored and the frame is indexed — dithered art
+   for the duration of a fade, never wrong art. Once the palette has held
+   still for PAL_SETTLE frames the job is rebuilt against the new one and
+   every colour twin is invalidated, so the art comes back restored as the
+   engine redraws it. */
+static void restore_step(void)
+{
+    int i;
+    if (s_norestore || !tagpu_classicpp_on() || !x_glDrawBuffers || !x_glClearBufferfv) {
+        s_colValid = 0;
+        return;
+    }
+    if (!s_atlas.rgb) {                         /* first arm, and after a context loss */
+        memcpy(s_restorePal, s_palCopy, sizeof s_restorePal);
+        tagpu_gaf_atlas_restore(&s_atlas, s_restorePal);
+        s_palSeen = s_palChanges; s_palSettle = 0;
+        s_colValid = s_atlas.rgb != 0;
+        if (s_colValid)
+            slog("gui: Classic++ UI armed — the UI atlas's restored twin at priority 4, nothing under 12x12");
+        return;
+    }
+    tagpu_gaf_atlas_restore(&s_atlas, s_restorePal);   /* the per-frame call: a no-op once armed */
+    if (memcmp(s_restorePal, s_palCopy, sizeof s_restorePal) == 0) { s_colValid = 1; s_palSettle = 0; return; }
+    s_colValid = 0;
+    if (s_palChanges != s_palSeen) { s_palSeen = s_palChanges; s_palSettle = 0; return; }
+    if (++s_palSettle < PAL_SETTLE) return;
+    {
+        char b[180];
+        if (s_atlas.job) { tagpu_rglsl_job_free(s_atlas.job); s_atlas.job = NULL; }
+        if (s_atlas.rgb) { glDeleteTextures(1, &s_atlas.rgb); s_atlas.rgb = 0; }
+        s_atlas.restoreFailed = 0;
+        memcpy(s_restorePal, s_palCopy, sizeof s_restorePal);
+        tagpu_gaf_atlas_restore(&s_atlas, s_restorePal);
+        for (i = 0; i < s_ntwins; i++)
+            if (s_twins[i].rgb) twin_col_drop(&s_twins[i], 0, 0, s_twins[i].w, s_twins[i].h);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        s_rearms++; s_palSettle = 0;
+        _snprintf(b, sizeof b, "gui: the presented palette moved — restored twin re-armed (#%u), %d colour twin(s) invalidated",
+                  s_rearms, s_ntwins);
+        slog(b);
+    }
 }
 
 /* ------------------------------------------------------------------ drain */
@@ -568,6 +772,11 @@ static void draw_layer(const TAGPU_FRAME* f)
     x_glUniform4f(s_uLayVp, (float)L, (float)T, (float)W, (float)H);
     cursor_rect(cur);
     x_glUniform4f(s_uLayCursor, cur[0], cur[1], cur[2], cur[3]);
+    /* Classic++: the presented surface's colour twin, and whether it may be
+       read at all this frame (the palette-validity rule, restore_step) */
+    glUniform1i(s_uLayColOn, (s_colValid && t->rgb) ? 1 : 0);
+    x_glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, t->rgb ? t->rgb : s_palTex);
     x_glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, (GLuint)f->surface_tex);
     x_glActiveTexture(GL_TEXTURE1);
@@ -608,6 +817,9 @@ static void poll(void)
        installed (they need the file at attach) while the layer is A/B'd */
     if (on && strstr(buf, "off")) on = 0;
     s_strict = on && strstr(buf, "strict") != NULL;
+    /* `norestore`: the layer without Classic++ art, so the two halves can be
+       A/B'd live without turning the world's restorer off too */
+    s_norestore = on && strstr(buf, "norestore") != NULL;
     if (on != s_on) {
         s_on = on;
         g_gui_draw = on;
@@ -627,13 +839,15 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         return;
     }
     if (!init_gl()) return;
+    upload_palette();       /* before restore_step, which compares against it */
+    restore_step();         /* before the drain: its sprite ops ask whether colour is valid */
     drain();
     draw_layer(f);
     unbind_all();
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
     if (f->frame_counter - last >= 300) {
-        char b[260];
+        char b[420];       /* G15e's counters pushed the line past 260 and truncated fps= */
         static LARGE_INTEGER t0, fq;
         LARGE_INTEGER t1;
         double fps = 0.0;
@@ -642,10 +856,11 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
-                  s_skipped, s_palChanges, s_palDiff, s_palDiffAt, s_palSource, fps);
+                  s_skipped, s_palChanges, s_palDiff, s_palDiffAt, s_palSource,
+                  tagpu_classicpp_on() ? 1 : 0, s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb, fps);
         slog(b);
     }
 }

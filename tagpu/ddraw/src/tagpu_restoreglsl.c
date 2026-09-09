@@ -70,7 +70,7 @@
 #define SLOT_ROWS    8
 #define BATCH        (SLOT_COLS * SLOT_ROWS)       /* frames per batch, at most  */
 #define ACT_MAX      512                           /* activation side cap, texels */
-#define MAX_JOBS     4
+#define MAX_JOBS     6      /* terrain 0, features 1, effects 2, 3DO units 3, the UI 4 (G15e) */
 #define MAX_NK       8
 #define MAX_LAYERS   32
 #define TILEABLE_THR 12.0
