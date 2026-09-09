@@ -1324,7 +1324,7 @@ is itself a guess that wants a look on three monitors.
 
 | gate | builds | exit (measured) | kill / pivot |
 |---|---|---|---|
-| **G17a** the seam | the sharp-bilinear filter, the sharp layer's texture and the composite order; `k` plumbed everywhere but forced to 1 | the parity md5 equals main's and the 120-stop `strict` walk is unchanged, with the filter in the path | the filter is not bit-identical at `k = 1` → stop; nothing downstream is safe until it is |
+| **G17a** the seam — **done 2026-09-09, §15** | the sharp-bilinear filter, the sharp layer's texture and the composite order; `k` plumbed everywhere but forced to 1 | the parity md5 equals main's and the 120-stop `strict` walk is unchanged, with the filter in the path | the filter is not bit-identical at `k = 1` → stop; nothing downstream is safe until it is |
 | **G17b** `k ≠ 1` live | automatic `k`, the logical mode, the world pass at device resolution, the window policy | a walk at `k = 1.5` and `k = 2`: every stop renders; **clicks land on the right gadget at every stop** (a click test, not a pixel test); no resize across three entry/exit cycles; the 1× mirror still diffs exact at `k = 1` in the same run | hit-testing drifts → M1 is wrong and the phase stops, since 13.1 is what makes the rest free |
 | **G17c** the cursor | ours in the sharp layer from live state, the fallback masked in its rect, `cursorscale=` | crisp at `k = 1.5` and 3, under the true pointer; G13m's motion-frame measure re-run | — |
 | **G17d** the string op | `PK_STRING`, the observer's string/font/colour capture, the atlas draw | text clean at `k ≠ 1` **and bit-identical to the engine's glyphs at `k = 1`**; arena bytes per batch down | our stamp and the engine's blit disagree → the measure loop is wrong; fix it rather than accept a near miss |
@@ -1545,6 +1545,17 @@ DLL change with its own review.
   this landing's — the browser lab is built on `palette.pal`, so the world matching it is what
   `tascene ab` parity measures — but the seam between a world drawn one way and a UI drawn the
   other is now named.
+
+  **DECIDED 2026-09-09 by the owner, put to them as the one question G17a waited on: the world
+  stays on `main+0x143A7`. The lab is the reference.** Every recorded Classic++ number and every
+  `tascene ab` parity run keeps its meaning, and the ~11 % seam between our world and the
+  engine's own UI is accepted as a known constant rather than closed. The alternative — moving
+  the world onto the presented palette so the two agree at the viewport edge — was weighed and
+  rejected *for now* on that cost: it moves every measurement ever taken and breaks `tascene ab`
+  until the browser lab is taught the same scale, which is a second landing, not a line. Nothing
+  was changed to record this, and in particular **`wineprefix/`'s `Gamma = 15` was deliberately
+  not reset**: making the symptom go away that way would silently move every measurement taken
+  against that prefix. The seam is a decision now, not an oversight.
 - **Seeded art stays indexed** until redrawn (above). Restoring a seed directly — the surface is
   an indexed image and the restorer restores indexed images — is the obvious candidate and is
   not taken here.
@@ -1557,5 +1568,135 @@ DLL change with its own review.
   with `classicpp` off; the restored half's own check is `uiwalk.py --restore` + `tascene uidiff`
   (above), which is a different mode of the same walk for exactly that reason.
 - The heartbeat's line outgrew its 260-byte buffer when these counters were added and silently
-  truncated `fps=`; it is 420 now. A counter added to that line without widening it again will
-  do the same thing.
+  truncated `fps=`; it went to 640 (**768 since G17a**, §15). A counter added to that line
+  without widening it again will do the same thing.
+
+---
+
+## 15. G17a — the seam  [MEASURED 2026-09-09]
+
+**Built.** The composite becomes the three layers §13.2 specifies, and nothing else moves. The
+whole landing is inside `tagpu_gui_surf.c` and its contract header: **no engine patch, no new
+engine address, and not one byte read from the engine that the module did not already read.**
+
+### How it works as built
+
+- **The mirror is untouched.** Same twins, same ops, same seeds, same census, same colour rule.
+  That is the point of §13.2 and it is what keeps phase 1's `strict` walk a valid regression into
+  phase 2 instead of being replaced by something weaker invented for scale.
+- **The ramp (§13.3) is a 4-tap in the layer's fragment shader**, `tap()` and two `mix`es. It runs
+  **after** the palette lookup, because interpolating indices is meaningless — each tap resolves
+  to a colour first (the restored texel where the colour twin has one, the live palette
+  otherwise: §3.4's per-texel rule, unchanged), and only then are the four blended.
+- **Each tap is premultiplied by its own coverage, and the blend is divided by the sum.** An
+  uncovered texel therefore contributes *nothing* rather than dragging index 0 in from a box the
+  viewport's key fill erased. Coverage is thresholded at 0.5 after the blend, exactly as the fog
+  grid's corner bits already are. Getting this wrong is invisible at `k = 1` and would have shown
+  up as a dark fringe along every panel edge the moment G17b raised `k`.
+- **The ramp is one device pixel wide**: `w = clamp((frac - 0.5) x k + 0.5, 0, 1)`. At `k = 1`
+  that is one *source* texel, `frac` is 0 at every fragment, `w` is 0 or 1, the blend collapses to
+  a single tap and the divide is by 1. **The identity is structural, not numerical** — it does not
+  depend on the interpolator handing back exactly `x + 0.5`, because a `frac` of `1 - e` puts
+  weight `1 - e` on the *same* texel `texelFetch` would have taken.
+- **`k` is read off the frame, not configured**: `f->vp_w / twin->w`, device pixels per twin
+  texel, which is §13.1's `k` exactly because the twin is the engine's surface 1:1. It is 1.0
+  wherever the engine's screen *is* the window — every path phase 1 has. Giving the engine
+  `window / k` is G17b's, and until it lands there is nothing here to force to 1: the frame
+  already says 1. Below 1 (the fork scaling the engine *down* into a smaller window) the ramp is
+  held at plain bilinear rather than widened past a texel.
+- **The sharp layer is one `RGBA8` texture the size of the frame's viewport in window pixels** —
+  everything of ours at the device's resolution — cleared at every present and composited above
+  the mirror wherever its alpha says it has coverage. **Row 0 is the viewport's top row**, and
+  nothing flips to make that true: the layer shader indexes it with the same top-down `uv` it
+  indexes the twin with, and a scissor box on an FBO addresses the attachment's rows directly. A
+  client draws in screen coordinates and never converts.
+- **It is empty in G17a, and that is why `sharptest` exists.** Its clients are the cursor (§13.5,
+  G17c) and the string op (§13.4, G17d); until one of them lands, an allocated-cleared-sampled
+  texture is indistinguishable from dead code by every measurement in the exit. `sharptest` — a
+  token in `tagpu_gui.on`, the harness's mode like `strict`, never a player's — fills it with a
+  64x64 opaque green square at the viewport's top-left and a **one-device-pixel** white column at
+  device *x* = 100. Between them they pin the four properties the gate cannot otherwise see: the
+  layer exists at the device resolution, it composites **above** the mirror, alpha is what gates
+  it, and which row is the top.
+- **A target that comes back incomplete costs sharpness, never a hole.** The layer is additive
+  (§13.2), so `sharp_begin` logs and falls back to the mirror alone, which is a complete picture.
+
+### Measured
+
+Two Continents, `scenarios/tascene-parity.json`, 1024x768, the default arm set, `main`'s DLL and
+this branch's launched side by side and shot alternately.
+
+**The fixture is two-state, and it is not ours.** Both DLLs produce exactly two frames and no
+others; the two differ **by one pixel, at (512, 384)** — the screen centre, i.e. the engine's own
+cursor, whose rect the layer discards to the engine's frame by design (§3.7). `main` shows the
+same two states, so a single whole-frame md5 is no longer the right shape for this fixture and
+the measurement is *the set of frames each build produces*. §10's single `568cc55c...` predates
+whatever made the centre pixel alternate; that is `main`'s to explain, not this gate's.
+
+| build | `classicpp` | frames produced over 6 shots |
+|---|---|---|
+| `main` (`3efdf25`) | off | `44a19da6614ec6f16ff81072d33a68cd`, `ce22188d43175774cc496a7505262eeb` |
+| **this branch** | off | **the same two, byte-identical files** |
+| `main` (`3efdf25`) | on | `9456cc55ed6e3039fad587d715f94b70`, `ed7aaec5b755c0c22f188a5bf8e359a8` |
+| **this branch** | on | **the same two, byte-identical files** |
+
+The Classic++ row is worth as much as the Classic one: the ramp carries the **colour twin** taps
+too, so it is the per-texel restored/palette choice of §3.4 going through the new blend, and it
+comes out byte for byte.
+
+**The 120-stop `strict` walk, with the ramp in the path** — `uiwalk.py --layer --cycles 3`,
+1024x768, `classicpp` off (§14: it is not a valid regression with Classic++ on), the whole
+inventory plus the three game -> shell -> game cycles:
+
+| | reading |
+|---|---|
+| stops | **117 parity stops + 3 loading screens = 120** |
+| differing pixels outside the viewport | **0 on 101 of 117**; the 16 that are not are the `MAINMENU` visits, **179-190**, which is G15b's own sparkle figure (183-192) |
+| inside the viewport, on the engine's non-key pixels | `vpdiff=0/N` on **all 59** in-game stops |
+| `strict` holes (magenta) | **0 on all 120**, the three loading screens included |
+| census | `unexplained=0` on all 117 |
+| queue | `overflows=0` and `lost=0` everywhere; `resets=8` and `stalls=7` over three cycles, which is 2 per launch and +1 per context switch, unmoved |
+| fps | 59.0-60.2 at every stop but four (`SELMAP` 58.4 / 57.9, `MAINMENU#2` 56.1 — the shell's own sparkle load, and the first `MAINMENU` before the meter has an interval) |
+| the engine against itself | `self=0` on 57 of 59; the two that are not are `clock-off` (40 px) and `space-popup` (846 px), both the engine animating between its own two shots |
+
+**So the walk is unchanged**, and the identity claim above is the reason: at `k = 1` the ramp
+resolves to the single tap `texelFetch` took before it.
+
+**`sharptest`, on the same fixture** [MEASURED 2026-09-09]: the green square reads
+`(0,0)-(63,63)`, 4 096 px, at the top-left; the white column is full height at *x* = 100 and
+exactly one device pixel wide (`x` = 99 and 101 are UI, not white). **It found its own bug
+first**: the square was scissored at `h - 64` on the assumption that a scissor box is bottom-up
+like the window's, and it came out at the *bottom* of the screen. On an FBO it is not — scissor
+`y` is the attachment's row. That is the entire reason a lever like this is worth its lines: at
+`k = 1` with an empty layer, nothing else in the exit would have noticed, and G17c would have
+drawn the cursor upside down.
+
+The heartbeat carries the two new fields, `k=1.000 sharp=1024x768`; its buffer went 640 to 768
+for them (205 bytes of literal, 30 conversions, ~519 worst case).
+
+### Not closed here
+
+- **`k != 1` is not exercised by anything in this landing.** The ramp is written for it and the
+  sharp layer is sized for it, but every measurement above is at `k = 1` because that is what the
+  gate is. The first frame anyone sees at a fractional `k` is G17b's.
+- **One case in phase 1 already runs at `k != 1` and is now filtered rather than nearest**: the
+  640x480 shell scaled into a window the player sized bigger (§12's "the first return gives a
+  640x480 window and the next two a 1912x1040 client"). §13.3 is what the mirror does there now.
+  It is not measurable by `uiwalk` — `frame_parity` refuses a stop that is not 1:1 — and it was
+  not judged by eye here.
+- **The fallback still `discard`s** rather than going through the same filter. §13.8 wants the
+  engine's own pixel filtered like ours at `k != 1`; today it falls through to the fork's own
+  `GL_NEAREST` upscale. Bypassing that scaler is explicitly G17b's ("there is only ever one
+  scaler in the picture, and it is ours"), and doing it here would have meant reproducing the
+  fork's frame path exactly for no gain at `k = 1`.
+- **The sharp layer costs a full-viewport clear and a texel fetch per fragment while carrying
+  nothing.** That is the price of landing the seam before its clients, and it is below the meter
+  (`fps=60.0` throughout). It stops being free work the moment G17c lands.
+- **The cursor's rect is still discarded *before* the sharp layer is consulted**, which is
+  phase 1's behaviour exactly and which **G17c has to reorder**: §13.5 turns that branch from
+  *discard* into *mask the fallback in that rect*, and a cursor drawn into the sharp layer while
+  the discard still comes first would be invisible in its own rect — a null result that looks
+  like a broken draw.
+- The seeded-art gap (§14, *Not closed here*) is untouched: G17a does not go near
+  `tagpu_gui_hook.c` or the seed path, so restoring a seed directly is still its own small
+  landing.

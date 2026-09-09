@@ -817,11 +817,14 @@ static void cursor_rect(float* r)
    resolution (13.1) — cleared at every present and composited above the 1x
    mirror wherever its alpha says it has coverage.
 
-   ROW 0 IS THE VIEWPORT'S TOP ROW, like the twins and unlike GL: the layer
-   shader indexes it with the same top-down `uv` it indexes the twin with, so
-   a client draws in screen coordinates and never converts. glScissor below is
-   the one place that flips, because scissor boxes are GL's own bottom-up
-   rectangle and this is where that ends.
+   ROW 0 IS THE VIEWPORT'S TOP ROW, and nothing flips to make that true: the
+   layer shader indexes this texture with the same top-down `uv` it indexes the
+   twin with, and a scissor box on an FBO addresses the attachment's rows
+   directly, so scissor y IS the texture row IS the distance down from the top
+   of the viewport. A client draws in screen coordinates and never converts.
+   (MEASURED 2026-09-09: this is what `sharptest` was for. Its first square was
+   scissored at `h - 64` on the assumption that a scissor is bottom-up like the
+   window's, and it came out at the bottom of the screen.)
 
    Empty in G17a by design: its clients are the cursor (13.5, G17c) and the
    string op (13.4, G17d). `sharptest` is what makes an empty layer testable —
@@ -877,13 +880,13 @@ static void sharp_begin(const TAGPU_FRAME* f)
     if (s_sharptest) {
         /* THE HARNESS LEVER, never for a player, and the only thing in G17a
            that puts a texel in this layer: a 64x64 opaque green square at the
-           viewport's TOP-LEFT (rows 0..63, hence h-64 in GL's bottom-up
-           scissor) and a one-DEVICE-pixel white column at device x = 100.
+           viewport's TOP-LEFT (rows 0..63, which is scissor y 0..63 — see
+           above) and a one-DEVICE-pixel white column at device x = 100.
            Between them they prove the four things the gate cannot otherwise
            see — the layer exists at the device resolution, it composites
            ABOVE the mirror, alpha is what gates it, and row 0 is the top. */
         glEnable(GL_SCISSOR_TEST);
-        x_glScissor(0, h - 64, 64, 64);
+        x_glScissor(0, 0, 64, 64);
         x_glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
         x_glClear(GL_COLOR_BUFFER_BIT);
         x_glScissor(100, 0, 1, h);

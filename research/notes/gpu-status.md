@@ -526,7 +526,9 @@ way, since those pixels sit inside the copy's box ([GL UI renderer](gui-renderer
 
 Tokens in `tagpu_gui.on`: `strict` (the fallback off, a miss painted magenta, the cursor rect
 exempt — the harness's mode), `off` (the detours stay installed for the next launch, nothing is
-published or drawn — the live A/B lever), `census` (the G15a diff), `log` (a census line per 50
+published or drawn — the live A/B lever), `norestore` (G15e: the layer without Classic++ art),
+`sharptest` (G17a: the sharp layer filled with a known pattern — the harness's mode too),
+`census` (the G15a diff), `log` (a census line per 50
 censuses and on any residual), `pgm` (`tagpu_gui_census.trigger` → `tagpu_gui_census.pgm`, the
 accumulated unexplained mask), `trace` (the ops intersecting a residual, the first blits after a
 build, every allocation with its tag), `probe=x,y` (with `trace`: every published op touching
@@ -571,10 +573,24 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   **The seam is one draw**: the presented surface's twin over the whole frame, into the
   overlay's target FBO with blending and depth off, `discard` where coverage is 0 — so the
   native composite's key rule beneath is unchanged and the engine's pixels remain the
-  fallback wherever a twin has nothing. The index is resolved through the live palette
-  (`main+0x143A7`, re-uploaded when it moves). The cursor's rect (`*(0x51FBD0)+0x1B2/+0x1B6/
-  +0x1BA`) is left to the engine's frame. `strict` paints a miss magenta instead of falling
-  back, outside the viewport or on a non-key pixel inside it.
+  fallback wherever a twin has nothing. The index is resolved through **the palette the frame
+  is presented with**, not `main+0x143A7` (G15d, below). The cursor's rect
+  (`*(0x51FBD0)+0x1B2/+0x1B6/+0x1BA`) is left to the engine's frame. `strict` paints a miss
+  magenta instead of falling back, outside the viewport or on a non-key pixel inside it.
+- *The seam, since G17a (2026-09-09):* that one draw now composites **three** layers, top down —
+  the **sharp layer** (one `RGBA8` texture at the *device* resolution, row 0 the viewport's top,
+  cleared every present, taken where its alpha says it has coverage), the **1× mirror scaled by a
+  sharp-bilinear ramp**, then the engine's frame. The ramp is a 4-tap run **after** the palette
+  lookup — interpolating indices is meaningless — with each tap premultiplied by its own coverage
+  so an uncovered texel contributes nothing rather than dragging index 0 in from the key fill, and
+  the coverage thresholded at 0.5 after the blend. Its width is one *device* pixel, so at `k = 1`
+  it is one source texel and the blend collapses to the single tap `texelFetch` would have taken:
+  **bit-identical by construction**, which is G17a's whole gate. `k` is `vp_w / twin_w` read off
+  the frame, 1.0 on every phase-1 path; the engine running at `window / k` is G17b's. The sharp
+  layer is **empty** until the cursor (G17c) and the string op (G17d) fill it, so the token
+  `sharptest` fills it with a known pattern — that is how an empty layer is testable at all.
+  Measured: the parity fixture's frames byte-identical to `main`'s with Classic++ off and on, the
+  120-stop `strict` walk unmoved, `fps=60.0` ([GL UI renderer](gui-renderer.html) §15).
 - *Classic++ (G15e, 2026-09-08):* every surface may carry a **colour twin** — `GL_RGBA8`, the
   same size, `COLOR_ATTACHMENT1` of the twin's own FBO — and the sprite and copy programs are
   **MRT**, so one draw writes the index and the restored colour together. A sprite takes the UI
@@ -668,6 +684,8 @@ GL object changed for it; the census on CORE explains 1 717 044 of 1 717 044 cha
 **Fields we write: none.** The module reads the engine's surfaces, the palette and the mouse
 object — and, since G15d, the fork's own palette object under the fork's lock — and writes GL
 objects of its own; the engine's behaviour is byte-identical with it armed, on or off.
+**G17a (2026-09-09) did not change that**: it added a GL texture, an FBO and shader arithmetic
+and reads no engine address the module did not already read.
 
 ### 2.4 Tooling (not part of the render path)
 

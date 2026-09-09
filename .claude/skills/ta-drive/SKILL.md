@@ -1213,8 +1213,9 @@ tools/tacli gui <i> off           # keep the detours, stop the draw — the live
 tools/tacli gui <i> strict        # the harness's mode: fallback off, a miss painted magenta (never for a player)
 tools/tacli gui <i> remove        # un-arm entirely at the next launch
 tools/tacli arm <i> gui.on=norestore   # G15e: the layer WITHOUT Classic++ art — the UI-only A/B
+tools/tacli arm <i> 'gui.on=sharptest log'   # G17a: the sharp layer filled with a known pattern
 tools/tacli gui <i>               # report
-tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= fps=
+tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= k= sharp= fps=
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --layer --out /tmp/uiwalk
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --side core --layer --game-only --out /tmp/uiwalk-core
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --layer --cycles 3 --out /tmp/uiwalk-cycles   # G15d: three game->shell->game cycles
@@ -1313,6 +1314,20 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
     17 049-px viewport sample are exact `palette.pal` colours against 244 presented ones), and
     **anything comparing a restored twin to an offline restore must use the presented palette**,
     never the archives' `palette.pal`.
+
+- **The composite is three layers since G17a (2026-09-09)**, and the heartbeat says so with
+  **`k=` and `sharp=`**: `k` is device pixels per twin texel (`vp_w / twin_w`, read off the frame)
+  and `sharp=WxH` the sharp layer's size. On every phase-1 path `k=1.000` and `sharp=` is the
+  game resolution — a `k` that is not 1.000 means the fork is scaling the engine into a window of
+  a different size, which today happens only to the 640×480 shell in a bigger window.
+  - **The mirror is unchanged and so is the `strict` walk**: the 4-tap ramp is bit-identical at
+    `k = 1` by construction, so `uiwalk.py --layer` is still the regression it was (0/0/0 at every
+    stop but `MAINMENU`'s sparkle). If it ever stops being, the ramp is what to suspect first.
+  - **`gui.on=sharptest` is the lever that proves the sharp layer exists.** It is empty until
+    G17c/G17d, so nothing else can tell a wired layer from dead code. It paints a 64×64 opaque
+    green square at the viewport's **top-left** and a **one-device-pixel** white column at device
+    x = 100; check the square's bbox is `(0,0)-(63,63)` in a `glshot`. Harness only, like
+    `strict` — never hand a player an instance with it armed.
 
 ### The Q2 diff — is the restored UI right? (G15e)
 
