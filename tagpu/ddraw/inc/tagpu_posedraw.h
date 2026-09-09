@@ -22,10 +22,25 @@
    projection, the depth key, the world x/z the fog samples, the model height
    the waterline clips on, and the shade quantised off the baked rest normal.
 
-   WHAT IS NOT PORTED YET. Bodies only. `emit_slant` and `emit_wire` are step 6
-   and still run on the CPU, as do the selection lines and the effects models.
-   The CPU body emitter stays too — it is Gate B's oracle, and it survives to
-   the last commit of the gate (§7 step 8).
+   ALL THREE RANGES SINCE STEP 6. The bake always held them; what step 6 adds
+   is the vertex shader's `uRange` and the two draws that use it — the
+   structure-shadow SLANT (its own projection, its own integer snap, its own
+   per-piece `cached` rule) and the nanoframe WIRE (GL_LINES, the body
+   projection, one notch nearer). What is still CPU-built is the selection
+   lines and the effects models. The CPU emitters stay too — they are Gate B's
+   and Gate D's oracle, and they survive to the last commit of the gate
+   (§7 step 8).
+
+   THE SLANT IS THE ONE PLACE THE PORT CANNOT BE EXACT BY CONSTRUCTION
+   (gpu-posing.md §5). Its snap is an arithmetic FLOOR of the posed 16.16
+   value, so the 1-2 LSB our once-rounded float compose sits away from the
+   engine's `fistp`-per-level chain becomes a WHOLE screen unit whenever a
+   coordinate lands within 2/65536 of an integer — a shadow edge one pixel
+   out, where the body would only flip a coverage sample. The shader therefore
+   rounds the posed value onto the 16.16 grid before flooring it, which makes
+   the port EXACT against the reconstruction (`recon_prim` rounds the same way)
+   and leaves only the reconstruction's own residual against the engine. Gate D
+   states the tolerance rather than claiming byte-exactness.
 
    THE LEVER IS `tagpu_posedraw.on`, off in play. Nothing here runs without it.
 
@@ -59,6 +74,19 @@ typedef struct {
        showing, and collapses its triangles onto the model origin. */
     const float* pose;
     const unsigned char* shaded;/* per piece: emit_geom_at's `pieceShaded`    */
+    /* per piece, the visibility WORD the slant and the wire read:
+         0  the unit is not showing this piece at all (`P_FLAGS` bit 0 clear)
+         1  showing it
+         3  showing it AND the slant raster casts from it — bit 1 as well,
+            `cached`, which a COB's dont-cache clears (a wind generator's mast
+            and rotor)
+       The slant's rule cannot be folded into the all-zero matrix the way the
+       body's visibility is, because a piece with bit 1 clear still draws in
+       the body range and needs its matrix there. The wire's is the same rule
+       as the body's but cannot use the same MECHANISM: an all-zero matrix
+       collapses a triangle to zero area, which provably produces no fragments,
+       and a line to zero length, which does not. */
+    const unsigned char* pvis;
     int   npose;
     float ax, ay;               /* frame-px anchor                            */
     float wx0, wz0;             /* world x and projected world z at the anchor*/
@@ -98,6 +126,23 @@ void tagpu_posedraw_shadow_begin(void);
 void tagpu_posedraw_shadow_set(const TAGPU_PDUNIT* u, float offX, float offY,
                                float waterT, float digT);
 void tagpu_posedraw_redraw(const TAGPU_PDUNIT* u);
+
+/* THE STRUCTURE-SHADOW SLANT (G16 step 6), the range `emit_slant` built. Same
+   stencil dance as the silhouette above and the same reason for the split: the
+   two draws must see identical geometry with nothing re-uploaded between them.
+   `_slant_set` pins the waterline and digger thresholds at -1e9 itself — the
+   erases belong to the COMPLETED branch, never the structure branch, which is
+   the G14j fix and not a per-caller choice. */
+void tagpu_posedraw_slant_begin(void);
+void tagpu_posedraw_slant_set(const TAGPU_PDUNIT* u, float offX, float offY);
+void tagpu_posedraw_slant_redraw(const TAGPU_PDUNIT* u);
+
+/* THE NANOFRAME WIREFRAME (G16 step 6), the range `emit_wire` built: GL_LINES,
+   the body projection, one notch nearer than the surface it traces, and the
+   animated blue as a per-unit uniform rather than a per-vertex colour (the
+   material stream is per type and owner; this colour is neither). */
+void tagpu_posedraw_wire_begin(void);
+void tagpu_posedraw_wire_unit(const TAGPU_PDUNIT* u, float wire);
 
 /* the shadow-depth twin: the same posed vertices through tagpu_shadow.c's
    light matrix, with no fragment work at all — the native stream's own depth

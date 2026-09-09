@@ -1,4 +1,4 @@
-/* tagpu_posedraw.c — the posed program (G16 step 5).
+/* tagpu_posedraw.c — the posed program (G16 steps 5 and 6).
 
    The pass that finally draws from step 4's bake. See tagpu_posedraw.h for the
    contract and research/notes/gpu-posing.md §4 for the design; what follows is
@@ -17,6 +17,38 @@
                        toward SH_V, dotted with SH_L and quantised onto the
                        32-row SHD ramp
 
+   THREE RANGES, ONE PROGRAM, `uRange` (G16 step 6). The bake has always laid
+   the body, the slant and the wire down in one buffer, so a range is a
+   different `first`/`count` on the same bind; what differs in the shader is
+   small and explicit:
+
+     BODY   (0)  the projection above, the depth key, the shade.
+     SLANT  (1)  0x45A610's projection `(x + y/4, -z - y/4)` off the posed
+                 vertex SNAPPED to whole units, the neutral SHD row, and its
+                 own per-piece rule — `(P_FLAGS & 3) == 3`, visible AND
+                 `cached` — which the body's all-zero matrix cannot express
+                 because such a piece still draws in the body range.
+     WIRE   (2)  the body projection, GL_LINES, one notch nearer (+0.15), and
+                 the nanoframe's animated blue from a uniform.
+
+   THE SNAP ROUNDS ONTO THE 16.16 GRID FIRST, and that is the whole reason the
+   slant can be ported at all. `xi = v[0] >> 16` is an arithmetic FLOOR of the
+   value the engine holds in 16.16; our float compose lands 1-2 LSB away from
+   that value (gpu-posing.md §5), and a floor turns 2 LSB into a WHOLE screen
+   unit — a shadow edge a pixel out — whenever a coordinate sits within
+   2/65536 of an integer. Rounding to the grid before flooring puts us on the
+   engine's own representation: it is EXACT against `recon_prim`, which rounds
+   with the same `floor(x*65536 + 0.5)`, so Gate B isolates the port with
+   nothing of §5's residual in it, and against the engine itself it leaves only
+   the reconstruction's residual rather than multiplying it by 65536. The body
+   and the wire are NOT rounded, deliberately: their projection is affine and
+   continuous in the value, so the same 2 LSB moves a vertex 3e-5 px and can
+   only flip a coverage sample.
+
+   16.16 is exactly representable in float32 while |model unit| < 128 (128 x
+   65536 = 2^23, where the float32 spacing is still 0.5 and `+ 0.5` is exact);
+   the largest stock model is an order of magnitude inside that.
+
    THE ONE KNOWN INEXACTNESS is not here but in the bake: `emit_node` takes its
    degeneracy test on the ENGINE's posed vertices, rounded into 16.16 at every
    axis and every level of the tree, while the bake takes it on the rest
@@ -27,7 +59,7 @@
 
    THE POSE LIVES IN A std140 UNIFORM BLOCK, which is what takes the piece cap
    out of the design (gpu-posing.md decision 7). The block is
-   TAGPU_PBMAXPIECE (256) pieces of 3 rows plus a packed flags array — 13312
+   TAGPU_PBMAXPIECE (256) pieces of 3 rows plus two packed flag arrays — 14336
    bytes, inside the 16 KB GL 3.1 guarantees, with headroom rather than sitting
    exactly on the limit. The guarantee is not assumed: GL_MAX_UNIFORM_BLOCK_SIZE
    is read at build time and the pass refuses to arm below it, so a driver that
@@ -57,11 +89,22 @@
 #define STR2(x) #x
 #define STR(x)  STR2(x)
 
-/* the block: 3 rows per piece, then one packed float per piece */
+/* the block: 3 rows per piece, then two packed floats per piece — `shaded`
+   for the body's SHD row and a visibility WORD (0 / 1 / 3) the slant and the
+   wire read. Two arrays rather than bits of one float because the second costs
+   1 KB (14336 against GL 3.1's guaranteed 16384) and a packed pair costs every
+   reader of it a decode; the second is a word rather than two more arrays
+   because its two values nest — a slant caster is always visible. */
 #define PD_ROWS   (TAGPU_PBMAXPIECE * 3)          /* 768 vec4 */
 #define PD_FLAGV  (TAGPU_PBMAXPIECE / 4)          /*  64 vec4 */
 #define PD_FLAGOFF (PD_ROWS * 16)                 /* bytes    */
-#define PD_BLOCK   ((PD_ROWS + PD_FLAGV) * 16)    /* 13312    */
+#define PD_VISOFF  ((PD_ROWS + PD_FLAGV) * 16)    /* bytes    */
+#define PD_BLOCK   ((PD_ROWS + PD_FLAGV * 2) * 16)  /* 14336  */
+
+/* uRange */
+#define PD_R_BODY  0
+#define PD_R_SLANT 1
+#define PD_R_WIRE  2
 
 static void plog(const char* s)
 {
@@ -126,12 +169,14 @@ static GLint u_anchor, u_enc, u_shd, u_cast, u_alpha;
 static GLint u_fog, u_fogOrg, u_fogDim, u_scafOn, u_scafP;
 static GLint u_waterT, u_waterMode, u_digT, u_nanoOn, u_nanoT, u_nanoC;
 static GLint u_lit, u_sun, u_amb, u_norm, u_shadow, u_restored, u_depthPass;
+static GLint u_range, u_wire;
 static TAGPU_SHADOWU s_shU;
 /* depth program */
-static GLint d_anchor, d_enc, d_cast, d_shadowMat, d_depthPass;
+static GLint d_anchor, d_enc, d_cast, d_shadowMat, d_depthPass, d_range;
 static GLint d_game, d_off, d_zoom, d_zoomC, d_depthScale;
 
 static unsigned s_units, s_tris, s_overPiece;
+static unsigned s_slantU, s_slantT, s_wireU, s_wireL;
 
 /* ---- the shader --------------------------------------------------------- */
 static const char* VS =
@@ -143,12 +188,14 @@ static const char* VS =
     "layout(location=4) in vec2 aUV;\n"
     "layout(location=5) in vec2 aFC;\n"      /* flat idx/255, tex ck/255      */
     "layout(location=6) in float aSkip;\n"
-    /* 3 rows of a 4x3 per piece, then one flag per piece packed 4 to a vec4:
-       1.0 = the piece is shaded (emit_geom_at's `pieceShaded`). An all-zero
-       matrix is a piece the unit is not showing. */
+    /* 3 rows of a 4x3 per piece, then two per-piece words packed 4 to a vec4:
+       uPieceFlag 1.0 = the piece is shaded (emit_geom_at's `pieceShaded`);
+       uPieceVis  0 = not drawn, 1 = drawn, 3 = drawn AND the slant casts from
+       it (`P_FLAGS` bit 0, and bit 1 as well). */
     "layout(std140) uniform Pose {\n"
     "  vec4 uRow[" STR(PD_ROWS) "];\n"
     "  vec4 uPieceFlag[" STR(PD_FLAGV) "];\n"
+    "  vec4 uPieceVis[" STR(PD_FLAGV) "];\n"
     "};\n"
     "uniform vec2 uGame;\n"
     "uniform vec2 uOffset;\n"
@@ -161,33 +208,78 @@ static const char* VS =
     "uniform vec3 uCast;\n"                  /* altitude, ground + throw, sv  */
     "uniform int uDepthPass;\n"
     "uniform mat4 uShadowMat;\n"
+    "uniform int uRange;\n"                 /* 0 body, 1 slant, 2 wire       */
+    "uniform float uWire;\n"                /* the nanoframe blue, idx/255   */
     "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
     /* tagpu_native.c's SH_V and SH_L, the engine's shading basis */
     "const vec3 SH_V = vec3(0.0, 0.8944, -0.4472);\n"
     "const vec3 SH_L = vec3(-0.35, 0.80, -0.49);\n"
     "void main(){\n"
-    /* a face the engine's rasteriser paints nothing for. It is baked so that
-       the geometry and the material buffers hold the same number of vertices
-       (gpu-posing.md §4), and collapsed here: every vertex of the face carries
-       the flag, so the whole triangle lands outside the same clip plane and
-       nothing survives. */
-    "  if (aSkip > 0.5) {\n"
+    "  int pi = int(aPiece + 0.5);\n"
+    "  int pb = pi * 3;\n"
+    /* Three ways a vertex is not drawn, and all of them collapse the same way
+       — every vertex of the primitive carries the same answer, so the whole
+       primitive lands outside the same clip plane and nothing survives.
+
+       aSkip: a face the engine's rasteriser paints nothing for. It is baked so
+       that the geometry and the material buffers hold the same number of
+       vertices (gpu-posing.md §4). Always 0 in the slant range, which flat
+       fills every face it is given.
+
+       uPieceVis >= 3, the SLANT's per-piece rule: `(P_FLAGS & 3) == 3`,
+       visible AND `cached`, which a COB's dont-cache clears (a wind
+       generator's mast). It cannot ride the all-zero matrix the way body
+       visibility does, because such a piece still draws in the BODY range and
+       needs its matrix there.
+
+       uPieceVis >= 1, the WIRE's: `P_FLAGS & 1`, the same rule the body has —
+       but the body expresses it as an all-zero matrix, which collapses a
+       triangle to zero AREA, and a triangle of zero area is guaranteed to
+       produce no fragments. A LINE of zero length is not: the rasterisation
+       rules do not promise it away, and one bright pixel per hidden edge would
+       land exactly on the unit's origin. So the wire is refused here instead
+       of relying on that. */
+    "  float pvis = uPieceVis[pi >> 2][pi & 3];\n"
+    "  if (aSkip > 0.5 ||\n"
+    "      (uRange == 1 && pvis < 2.5) ||\n"
+    "      (uRange == 2 && pvis < 0.5)) {\n"
     "    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);\n"
     "    vUV = vec2(0.0); vFC = vec2(0.0); vShade = 0.0; vWorld = vec2(0.0);\n"
     "    vEnc = 0.0; vVY = 0.0; vNrm = vec3(0.0, 1.0, 0.0); vShW = vec3(0.0);\n"
     "    return;\n"
     "  }\n"
-    "  int pi = int(aPiece + 0.5);\n"
-    "  int pb = pi * 3;\n"
     "  vec4 rp = vec4(aPos, 1.0);\n"
     "  vec3 m = vec3(dot(uRow[pb], rp), dot(uRow[pb+1], rp), dot(uRow[pb+2], rp));\n"
-    /* the engine's projection, exactly as emit_node bakes it on the CPU */
-    "  float px = m.x;\n"
-    "  float py = -m.z - m.y * 0.5;\n"
+    /* the engine's projection, exactly as emit_node bakes it on the CPU — and,
+       for the slant range, 0x45A610's instead. `hy`/`hz` are the model y and z
+       the depth key, the waterline and the shadow point all read: for the
+       slant they are the value SNAPPED ONTO THE 16.16 GRID, because that is
+       what `emit_slant_at` reads back out of `v[1]`/`v[2]` after the engine (or
+       recon_prim) has rounded them. */
+    "  float px, py, hy, hz;\n"
+    "  if (uRange == 1) {\n"
+    /* the posed vertex as the engine holds it: 16.16, round to nearest —
+       recon_prim's own floor(x*65536 + 0.5). Then emit_slant_at's snap:
+       `xi = v[0] >> 16`, `nzi = (-v[2]) >> 16`, `q = (v[1] >> 16) >> 2`, every
+       one of them an arithmetic FLOOR and never a truncation toward zero. */
+    "    vec3 fv = floor(m * 65536.0 + 0.5);\n"
+    "    float xi = floor(fv.x / 65536.0);\n"
+    "    float yi = floor(fv.y / 65536.0);\n"
+    "    float nzi = floor(-fv.z / 65536.0);\n"
+    "    float q = floor(yi / 4.0);\n"
+    "    px = xi + q; py = nzi - q;\n"
+    "    hy = fv.y / 65536.0; hz = fv.z / 65536.0;\n"
+    "  } else {\n"
+    "    px = m.x; py = -m.z - m.y * 0.5;\n"
+    "    hy = m.y; hz = m.z;\n"
+    "  }\n"
     "  vec2 p0 = uAnchor.xy + vec2(px, py);\n"
-    "  float md = clamp((2.0 * m.y - m.z) / 256.0, -1.8, 1.8);\n"
-    "  float enc = uEnc + md;\n"
+    "  float md = clamp((2.0 * hy - hz) / 256.0, -1.8, 1.8);\n"
+    /* the wire is emitted one notch NEARER than the surface it traces, so it
+       wins against the solid part of the model: md reaches +-1.8 and the bias
+       is 0.15, against the 2.0 half-gap between depth rows (emit_wire) */
+    "  float enc = uEnc + md + (uRange == 2 ? 0.15 : 0.0);\n"
     /* the shade. The rest normal is unit length and the piece transform is a
        composition of rotations, so the posed normal is unit length too — but
        normalise anyway rather than rest the quantisation on that, since a
@@ -215,14 +307,18 @@ static const char* VS =
     "  vec2 p = (p0 + uOffset - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - enc/uDepthScale, 0.0, 1.0), 1.0);\n"
-    "  vUV = aUV; vFC = aFC; vShade = shade;\n"
+    /* the wire's colour is per UNIT (the nanoframe's animated blue) and the
+       material stream is per type and owner, so it arrives as a uniform on the
+       flat path rather than baked; the key stays -1, as emit_wire writes it */
+    "  vUV = aUV; vFC = (uRange == 2) ? vec2(uWire, -1.0) : aFC;\n"
+    "  vShade = shade;\n"
     "  vWorld = uAnchor.zw + vec2(px, py);\n"
-    "  vEnc = enc; vVY = m.y; vNrm = un;\n"
+    "  vEnc = enc; vVY = hy; vNrm = un;\n"
     /* the vertex's SHADOW-SPACE point, the expression tagpu_shadow.c's own
        depth program evaluates, so a unit's fragments look their shadow up on
        their own caster */
-    "  vShW = vec3(vWorld.x, uCast.y + uCast.z * m.y,\n"
-    "              vWorld.y + (uCast.x + m.y) * 0.5);\n"
+    "  vShW = vec3(vWorld.x, uCast.y + uCast.z * hy,\n"
+    "              vWorld.y + (uCast.x + hy) * 0.5);\n"
     "  if (uDepthPass == 1) gl_Position = uShadowMat * vec4(vShW, 1.0);\n"
     "}\n";
 
@@ -347,6 +443,7 @@ int tagpu_posedraw_ready(void)
     PU(u_amb, "uAmb");          PU(u_norm, "uNorm");
     PU(u_shadow, "uShadow");    PU(u_restored, "uRestored");
     PU(u_depthPass, "uDepthPass");
+    PU(u_range, "uRange");      PU(u_wire, "uWire");
 #undef PU
     /* the samplers name the same units the native pass binds its textures on,
        so this pass never re-binds them: it draws between that pass's own binds */
@@ -360,6 +457,7 @@ int tagpu_posedraw_ready(void)
     glUniform1i(glGetUniformLocation(s_prog, "uAtlasRGB"), 8);
     tagpu_shadow_locate(s_prog, &s_shU);         /* names the map's two units */
     glUniform1i(u_depthPass, 0);
+    glUniform1i(u_range, PD_R_BODY);
     glUseProgram(0);
 
     d_game = glGetUniformLocation(s_dprog, "uGame");
@@ -372,6 +470,7 @@ int tagpu_posedraw_ready(void)
     d_cast   = glGetUniformLocation(s_dprog, "uCast");
     d_shadowMat = glGetUniformLocation(s_dprog, "uShadowMat");
     d_depthPass = glGetUniformLocation(s_dprog, "uDepthPass");
+    d_range     = glGetUniformLocation(s_dprog, "uRange");
 
     glGenBuffers(1, &s_ubo);
     glBindBuffer(GL_UNIFORM_BUFFER, s_ubo);
@@ -393,19 +492,27 @@ int tagpu_posedraw_ready(void)
    flags at their own offset. Only the bytes this model uses are written. */
 static void upload_pose(const TAGPU_PDUNIT* u)
 {
-    static float flags[PD_FLAGV * 4];
+    static float flags[PD_FLAGV * 4], vis[PD_FLAGV * 4];
     int np = u->npose, i, nf;
     if (np > TAGPU_PBMAXPIECE) np = TAGPU_PBMAXPIECE;
     if (np <= 0) return;
     nf = (np + 3) / 4;
     memset(flags, 0, (size_t)nf * 4 * sizeof(float));
-    for (i = 0; i < np; i++)
+    memset(vis,   0, (size_t)nf * 4 * sizeof(float));
+    for (i = 0; i < np; i++) {
         flags[i] = (u->shaded && u->shaded[i]) ? 1.0f : 0.0f;
+        vis[i]   = u->pvis ? (float)u->pvis[i] : 1.0f;
+    }
     glBindBuffer(GL_UNIFORM_BUFFER, s_ubo);
     glBufferSubData(GL_UNIFORM_BUFFER, 0,
                     (GLsizeiptr)np * 3 * 16, u->pose);
     glBufferSubData(GL_UNIFORM_BUFFER, PD_FLAGOFF,
                     (GLsizeiptr)nf * 16, flags);
+    /* uploaded for every range, not only the two that read it: the block is
+       one buffer and one unit's draws (body, then its silhouette, then its
+       slant) share whatever the last upload left in it */
+    glBufferSubData(GL_UNIFORM_BUFFER, PD_VISOFF,
+                    (GLsizeiptr)nf * 16, vis);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
@@ -432,6 +539,7 @@ void tagpu_posedraw_begin(const TAGPU_PDVIEW* v)
     glUniform1f(u_norm, v->norm);
     glUniform1i(u_shadow, 0);
     glUniform1i(u_depthPass, 0);
+    glUniform1i(u_range, PD_R_BODY);
     glUniform1i(u_restored,
                 (tagpu_r3d_atlas_rgbref() && tagpu_classicpp_on()) ? 1 : 0);
     x_glUniform2f(u_shd, (float)v->shNeutral, (float)v->shDir);
@@ -441,8 +549,10 @@ void tagpu_posedraw_begin(const TAGPU_PDVIEW* v)
 
 /* the geometry, the material stream and the pose all have to be present and
    agree about the piece count before anything is drawn: a mismatch would index
-   the block past the pose we uploaded */
-static const TAGPU_PBGEOM* unit_ok(const TAGPU_PDUNIT* u, const TAGPU_PBMAT** mo)
+   the block past the pose we uploaded. `range` is the one about to be drawn —
+   a model can have body triangles and no wire edges, or the reverse. */
+static const TAGPU_PBGEOM* unit_ok(const TAGPU_PDUNIT* u, const TAGPU_PBMAT** mo,
+                                   int range)
 {
     const TAGPU_PBGEOM* g = (const TAGPU_PBGEOM*)u->geom;
     const TAGPU_PBMAT*  m = (const TAGPU_PBMAT*)u->mat;
@@ -450,7 +560,7 @@ static const TAGPU_PBGEOM* unit_ok(const TAGPU_PDUNIT* u, const TAGPU_PBMAT** mo
     if (m->geom != g || !m->vao || m->nvert != g->nvert) return NULL;
     if (u->npose < g->nparts) return NULL;
     if (g->nparts > TAGPU_PBMAXPIECE) { s_overPiece++; return NULL; }
-    if (g->count[TAGPU_PB_BODY] <= 0) return NULL;
+    if (g->count[range] <= 0) return NULL;
     *mo = m;
     return g;
 }
@@ -458,7 +568,7 @@ static const TAGPU_PBGEOM* unit_ok(const TAGPU_PDUNIT* u, const TAGPU_PBMAT** mo
 void tagpu_posedraw_unit(const TAGPU_PDUNIT* u)
 {
     const TAGPU_PBMAT* m;
-    const TAGPU_PBGEOM* g = unit_ok(u, &m);
+    const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_BODY);
     if (!g) return;
     upload_pose(u);
     x_glUniform4f(u_anchor, u->ax, u->ay, u->wx0, u->wz0);
@@ -487,6 +597,7 @@ void tagpu_posedraw_shadow_begin(void)
     glUseProgram(s_prog);
     glUniform1i(u_shadow, 1);
     glUniform1i(u_depthPass, 0);
+    glUniform1i(u_range, PD_R_BODY);
     x_glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_ubo);
 }
 
@@ -494,7 +605,7 @@ void tagpu_posedraw_shadow_set(const TAGPU_PDUNIT* u, float offX, float offY,
                                float waterT, float digT)
 {
     const TAGPU_PBMAT* m;
-    if (!unit_ok(u, &m)) return;
+    if (!unit_ok(u, &m, TAGPU_PB_BODY)) return;
     upload_pose(u);
     x_glUniform4f(u_anchor, u->ax, u->ay, u->wx0, u->wz0);
     glUniform1f(u_enc, u->enc);
@@ -511,7 +622,7 @@ void tagpu_posedraw_shadow_set(const TAGPU_PDUNIT* u, float offX, float offY,
 void tagpu_posedraw_redraw(const TAGPU_PDUNIT* u)
 {
     const TAGPU_PBMAT* m;
-    const TAGPU_PBGEOM* g = unit_ok(u, &m);
+    const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_BODY);
     if (!g) return;
     x_glDrawArrays(GL_TRIANGLES, g->first[TAGPU_PB_BODY], g->count[TAGPU_PB_BODY]);
 }
@@ -522,6 +633,92 @@ void tagpu_posedraw_end(void)
     glBindVertexArray(0);
 }
 
+/* ---- the structure-shadow slant (G16 step 6) ---------------------------- */
+/* `emit_slant`'s range. The uniforms it does NOT set are as deliberate as the
+   ones it does: uAlpha and uWaterMode are never read on this path, because the
+   fragment shader's `uShadow == 1` branch returns before either. */
+void tagpu_posedraw_slant_begin(void)
+{
+    if (s_state != 1) return;
+    glUseProgram(s_prog);
+    glUniform1i(u_shadow, 1);
+    glUniform1i(u_depthPass, 0);
+    glUniform1i(u_nanoOn, 0);
+    glUniform1i(u_range, PD_R_SLANT);
+    x_glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_ubo);
+}
+
+void tagpu_posedraw_slant_set(const TAGPU_PDUNIT* u, float offX, float offY)
+{
+    const TAGPU_PBMAT* m;
+    const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_SLANT);
+    if (!g) return;
+    upload_pose(u);
+    x_glUniform4f(u_anchor, u->ax, u->ay, u->wx0, u->wz0);
+    glUniform1f(u_enc, u->enc);
+    glUniform1i(u_fog, u->fog);
+    x_glUniform2f(u_off, offX, offY);
+    /* THE STRUCTURE BRANCH BLITS ITS CACHED SPRITE AS BUILT (0x459319,
+       0x4595E9 straight after 0x45A790): the waterline erase 0x4BA1B0 belongs
+       to the COMPLETED branch and the digger's inline branch only, so a
+       building on the shore keeps the whole slant. Getting this wrong is what
+       erased the Kbot lab's shadow below the waterline until G14j, so it is
+       pinned here rather than passed in. */
+    glUniform1f(u_waterT, -1e9f);
+    glUniform1f(u_digT,   -1e9f);
+    x_glUniform3f(u_cast, u->cast[0], u->cast[1], u->cast[2]);
+    glBindVertexArray(m->vao);
+    /* counted here rather than in _slant_redraw: the stencil dance draws the
+       same geometry twice and the count is of casters, not of draws */
+    s_slantU++;
+    s_slantT += (unsigned)g->count[TAGPU_PB_SLANT] / 3;
+}
+
+void tagpu_posedraw_slant_redraw(const TAGPU_PDUNIT* u)
+{
+    const TAGPU_PBMAT* m;
+    const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_SLANT);
+    if (!g) return;
+    x_glDrawArrays(GL_TRIANGLES, g->first[TAGPU_PB_SLANT], g->count[TAGPU_PB_SLANT]);
+}
+
+/* ---- the nanoframe wireframe (G16 step 6) ------------------------------- */
+void tagpu_posedraw_wire_begin(void)
+{
+    if (s_state != 1) return;
+    glUseProgram(s_prog);
+    glUniform1i(u_shadow, 0);
+    glUniform1i(u_depthPass, 0);
+    /* the wireframe carries its own colour and must not be re-classified by
+       the build-state recolour it is drawn beside (the CPU path clears the
+       same uniform before its own line draws) */
+    glUniform1i(u_nanoOn, 0);
+    glUniform1i(u_waterMode, 0);
+    glUniform1f(u_alpha, 1.0f);
+    x_glUniform2f(u_off, 0.0f, 0.0f);
+    x_glUniform3f(u_cast, 0.0f, 0.0f, 1.0f);
+    glUniform1i(u_range, PD_R_WIRE);
+    x_glBindBufferBase(GL_UNIFORM_BUFFER, 0, s_ubo);
+}
+
+void tagpu_posedraw_wire_unit(const TAGPU_PDUNIT* u, float wire)
+{
+    const TAGPU_PBMAT* m;
+    const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_WIRE);
+    if (!g) return;
+    upload_pose(u);
+    x_glUniform4f(u_anchor, u->ax, u->ay, u->wx0, u->wz0);
+    glUniform1f(u_enc, u->enc);
+    glUniform1i(u_fog, u->fog);
+    glUniform1f(u_wire, wire);
+    glUniform1f(u_waterT, u->waterT);
+    glUniform1f(u_digT, u->digT);
+    glBindVertexArray(m->vao);
+    x_glDrawArrays(GL_LINES, g->first[TAGPU_PB_WIRE], g->count[TAGPU_PB_WIRE]);
+    s_wireU++;
+    s_wireL += (unsigned)g->count[TAGPU_PB_WIRE] / 2;
+}
+
 /* ---- the shadow-depth twin ---------------------------------------------- */
 void tagpu_posedraw_depth_begin(const float* shadowMat)
 {
@@ -529,6 +726,7 @@ void tagpu_posedraw_depth_begin(const float* shadowMat)
     glUseProgram(s_dprog);
     glUniformMatrix4fv(d_shadowMat, 1, GL_FALSE, shadowMat);
     glUniform1i(d_depthPass, 1);
+    glUniform1i(d_range, PD_R_BODY);
     /* the depth pass takes gl_Position from uShadowMat alone, but the vertex
        shader is the body's, so the projection uniforms it also evaluates must
        hold something finite — a zero uGame would make the discarded branch NaN
@@ -544,7 +742,7 @@ void tagpu_posedraw_depth_begin(const float* shadowMat)
 void tagpu_posedraw_depth_unit(const TAGPU_PDUNIT* u)
 {
     const TAGPU_PBMAT* m;
-    const TAGPU_PBGEOM* g = unit_ok(u, &m);
+    const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_BODY);
     if (!g) return;
     upload_pose(u);
     x_glUniform4f(d_anchor, u->ax, u->ay, u->wx0, u->wz0);
@@ -593,6 +791,7 @@ void tagpu_posedraw_frame(void)
 {
     s_armed = GetFileAttributesA("tagpu_posedraw.on") != INVALID_FILE_ATTRIBUTES;
     s_units = s_tris = 0;
+    s_slantU = s_slantT = s_wireU = s_wireL = 0;
 }
 
 void tagpu_posedraw_glreset(void)
@@ -605,7 +804,20 @@ void tagpu_posedraw_glreset(void)
 
 int tagpu_posedraw_stats(char* out, int n)
 {
+    int k;
     if (!s_armed || n <= 0) { if (out && n > 0) out[0] = 0; return 0; }
-    return _snprintf(out, n, " posed=%u/%utri%s", s_units, s_tris,
-                     s_overPiece ? " OVER-PIECE" : "");
+    k = _snprintf(out, n, " posed=%u/%utri", s_units, s_tris);
+    if (k < 0 || k >= n) return k;
+    /* the two step-6 ranges, and only when a scene actually has them: a screen
+       with no structure casting and nothing under construction should not carry
+       two zeroes that read as a pass that ran and found nothing */
+    if (s_slantU)
+        k += _snprintf(out + k, n - k, " slant=%u/%utri", s_slantU, s_slantT);
+    if (k < 0 || k >= n) return k;
+    if (s_wireU)
+        k += _snprintf(out + k, n - k, " wire=%u/%uln", s_wireU, s_wireL);
+    if (k < 0 || k >= n) return k;
+    if (s_overPiece)
+        k += _snprintf(out + k, n - k, " OVER-PIECE");
+    return k;
 }

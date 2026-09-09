@@ -2005,7 +2005,7 @@ static const int* recon_prim(int p, const char* nd, int nvert)
    parent link never resolved. `recon_begin` sets the same bar, and the caller
    does what it does there — leaves the unit to the CPU emitter. */
 static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
-                      float* out, unsigned char* shaded)
+                      float* out, unsigned char* shaded, unsigned char* pvis)
 {
     static float acc[TAGPU_PBMAXPIECE][12];      /* render thread only */
     static unsigned char done[TAGPU_PBMAXPIECE];
@@ -2074,6 +2074,15 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
         if (fl & 1) memcpy(out + (size_t)i * 12, acc[i], 12 * sizeof(float));
         else        memset(out + (size_t)i * 12, 0, 12 * sizeof(float));
         shaded[i] = (unsigned char)(anyShadeFlag ? ((fl & 4) != 0) : 1);
+        /* G16 step 6: the visibility word the slant and the wire ranges read.
+           The SLANT casts from a piece only when bit0 AND bit1 are set —
+           visible, and `cached`, which a COB's dont-cache clears
+           (emit_slant_at's `(pflags & 3) != 3`); a separate flag rather than a
+           zeroed matrix because such a piece still draws in the body range and
+           needs its matrix there. The WIRE wants plain visibility, bit0, which
+           is emit_wire's own test. Written as 0/1/3 rather than `fl & 3` so
+           that a piece marked cached but NOT visible reads as hidden. */
+        pvis[i] = (unsigned char)(!(fl & 1) ? 0 : ((fl & 2) ? 3 : 1));
     }
     return nparts;
 }
@@ -2850,6 +2859,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     static int pdix[MAXU];
     static float pdPose[TAGPU_PBMAXPIECE * 12 * 64];
     static unsigned char pdShaded[TAGPU_PBMAXPIECE * 64];
+    static unsigned char pdPvis[TAGPU_PBMAXPIECE * 64];
     int npd = 0, pdPoseN = 0, pdShadedN = 0;
     const int pdPoseMax = (int)(sizeof pdPose / sizeof pdPose[0]);
     const int pdShadedMax = (int)(sizeof pdShaded);
@@ -2946,12 +2956,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     bg->nparts > 0 && bg->count[TAGPU_PB_BODY] > 0 &&
                     pdPoseN + bg->nparts * 12 <= pdPoseMax &&
                     pdShadedN + bg->nparts <= pdShadedMax &&
-                    posed_pose(units[i].o3, bg, pdPose + pdPoseN, pdShaded + pdShadedN)) {
+                    posed_pose(units[i].o3, bg, pdPose + pdPoseN, pdShaded + pdShadedN,
+                               pdPvis + pdShadedN)) {
                     TAGPU_PDUNIT* q = &pdu[npd];
                     memset(q, 0, sizeof *q);
                     q->geom = bg; q->mat = bm;
                     q->pose = pdPose + pdPoseN;
                     q->shaded = pdShaded + pdShadedN;
+                    q->pvis = pdPvis + pdShadedN;       /* same stride and slot */
                     q->npose = bg->nparts;
                     q->ax = units[i].ax;   q->ay = units[i].ay;
                     q->wx0 = units[i].wx0; q->wz0 = units[i].wz0;
@@ -3137,10 +3149,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        top of a build the scaffold is erased down to this skeleton, so losing it
        loses the unit, while losing a shadow loses a shadow. */
     static int wfirst[MAXU + 1];
-    int nwire = 0;
+    int nwire = 0, npdWire = 0;
     for (i = 0; i < nu; i++) {
         wfirst[i] = nv;
         if (units[i].dead || !units[i].nanoOn) continue;
+        /* G16 step 6: a posed unit's outline comes out of its type's baked
+           WIRE range, so nothing is built for it here — its `wfirst` range
+           stays empty and the CPU line draw over it is a no-op. `nwire` still
+           counts it: the number in the `native:` line is how many units are
+           under construction, not which path drew them. */
+        if (pdix[i] >= 0) {
+            const TAGPU_PBGEOM* pg = (const TAGPU_PBGEOM*)pdu[pdix[i]].geom;
+            if (pg && pg->count[TAGPU_PB_WIRE] > 0) { npdWire++; nwire++; }
+            continue;
+        }
         nv = emit_wire(units[i].o3, nv, units[i].ax, units[i].ay,
                        units[i].wx0, units[i].wz0, encb[i], units[i].owner,
                        units[i].nanoWire);
@@ -3159,10 +3181,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int cpp = tagpu_classicpp_on();
     int airDrop = tagpu_classicpp_light()->airshadow == TAGPU_AIRSHADOW_DROP;
     static int sfirst[MAXU + 1];
-    int nslant = 0;
+    int nslant = 0, npdSlant = 0;
     for (i = 0; i < nu; i++) {
         sfirst[i] = nv;
         if (units[i].dead || cpp || !units[i].slant || !units[i].shadow || units[i].hires) continue;
+        /* G16 step 6: a posed structure casts from its type's baked SLANT
+           range, drawn with the shadows below; its `sfirst` range stays empty
+           and the CPU shadow loop over it is a no-op. */
+        if (pdix[i] >= 0) { npdSlant++; nslant++; continue; }
         nv = emit_slant(units[i].o3, nv, units[i].ax, units[i].ay,
                         units[i].wx0, units[i].wz0, encb[i]);
         nslant++;
@@ -3485,6 +3511,31 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             HIRES_RESTORE();
         }
         x_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        /* G16 step 6: a posed STRUCTURE's slant, out of the same bake's slant
+           range — the same stencil dance, the same 5 px offset and the same
+           ground shift as the loop above, which drew an empty `sfirst` range
+           for these units. The waterline and digger thresholds are the pass's
+           own (-1e9, the structure branch's rule) and are not passed in. */
+        if (npdSlant) {
+            tagpu_posedraw_slant_begin();
+            for (i = 0; i < nu; i++) {
+                if (pdix[i] < 0 || !units[i].slant) continue;
+                if (cpp && !(units[i].air && airDrop)) continue;
+                if (!units[i].shadow) continue;
+                tagpu_posedraw_slant_set(&pdu[pdix[i]], 5.0f,
+                                         (float)(units[i].gy - units[i].ay));
+                x_glStencilFunc(GL_ALWAYS, 1, 0xFF);
+                x_glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+                x_glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+                tagpu_posedraw_slant_redraw(&pdu[pdix[i]]);
+                x_glStencilFunc(GL_EQUAL, 1, 0xFF);
+                x_glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+                x_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                tagpu_posedraw_slant_redraw(&pdu[pdix[i]]);
+            }
+            HIRES_RESTORE();
+        }
+        x_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         /* the stencil stays ON for the hires shadow: a replacement mesh needs
            the same one-blend-per-pixel mask and does it per unit itself */
         if (nhi) {
@@ -3565,6 +3616,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             x_glUniform1f(s_uDigT, units[i].digT);
             x_glDrawArrays(GL_LINES, wfirst[i], wfirst[i+1] - wfirst[i]);
         }
+    }
+    /* G16 step 6: the posed outlines, out of the bake's WIRE range. Same line
+       width, same one-notch-nearer depth (the shader's own +0.15), and the
+       animated blue as a uniform rather than a per-vertex colour. */
+    if (npdWire) {
+        if (x_glLineWidth) x_glLineWidth((GLfloat)ss);
+        tagpu_posedraw_wire_begin();
+        for (i = 0; i < nu; i++) {
+            if (pdix[i] < 0 || units[i].dead || !units[i].nanoOn) continue;
+            tagpu_posedraw_wire_unit(&pdu[pdix[i]], units[i].nanoWire);
+        }
+        tagpu_posedraw_end();
+        HIRES_RESTORE();
     }
     if (nhi) {
         tagpu_hires_draw(&hv, hunits, nhi, 0, f->frame_counter);
