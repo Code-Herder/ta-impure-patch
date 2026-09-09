@@ -169,28 +169,51 @@ static volatile int      s_mmW, s_mmH;
 static volatile unsigned s_mmGen;
 static unsigned          s_mmFails;
 
+static void mm_fail(const char* why)
+{
+    char b[160];
+    if (s_mmFails++ >= 4) return;
+    _snprintf(b, sizeof b, "gui: minimap picture NOT snapshotted — %s (#%u)", why, s_mmFails);
+    b[sizeof b - 1] = '\0';
+    glog(b);
+}
+
 static int __cdecl before_minimap(void* e)
 {
     const char* ta = *(const char* const*)TA_MAINPP;
     const unsigned char* fr;
     int w, h;
     (void)e;
-    if (!on_game_thread()) return 0;
-    if (!ptr_ok(ta)) return 0;
+    /* every refusal says WHICH one, capped: a silent miss here is a minimap
+       that quietly stays the engine's, which looks like nothing at all */
+    /* THIS ONE DOES NOT RUN ON THE GAME THREAD, and that is measured, not
+       assumed [MEASURED 2026-09-09]: with the usual `on_game_thread()` guard in
+       place this observer fired and refused on every map load, naming the
+       thread. Every other site in this file is called from the game loop; the
+       minimap build is not. So the guard is deliberately absent here, which is
+       safe for exactly this handler and would not be for any other:
+       `tagpu_gaf_decode` is pure (it reads the frame and writes only the buffer
+       it is given — no statics), `s_mmPic` has one writer and one write per map
+       load, the generation is published behind a barrier, and nothing engine-
+       side is touched. It records nothing into the op ring, which is what makes
+       the SPSC contract irrelevant to it. */
+    if (!ptr_ok(ta)) { mm_fail("no TAdynmemStruct"); return 0; }
     fr = tagpu_gaf_frame_sane(*(const void* const*)(ta + 0x1426B));
-    if (!fr) { s_mmFails++; return 0; }
+    if (!fr) { mm_fail("main+0x1426B is not a readable GAF frame"); return 0; }
     w = *(const unsigned short*)(fr + TAGPU_GF_W);
     h = *(const unsigned short*)(fr + TAGPU_GF_H);
-    if (w <= 0 || h <= 0 || w > TAGPU_GAF_DECMAX || h > TAGPU_GAF_DECMAX) { s_mmFails++; return 0; }
-    if (!tagpu_gaf_decode(fr, w, h, s_mmPic)) { s_mmFails++; return 0; }
+    if (w <= 0 || h <= 0 || w > TAGPU_GAF_DECMAX || h > TAGPU_GAF_DECMAX) { mm_fail("picture size out of range"); return 0; }
+    if (!tagpu_gaf_decode(fr, w, h, s_mmPic)) { mm_fail("decode failed"); return 0; }
     s_mmW = w; s_mmH = h;
     MemoryBarrier();
     s_mmGen++;
     {
-        char b[140];
-        _snprintf(b, sizeof b, "gui: minimap picture %dx%d snapshotted (gen %u, engine box %dx%d)",
+        char b[190];
+        _snprintf(b, sizeof b, "gui: minimap picture %dx%d snapshotted (gen %u, engine box %dx%d, thread %u%s)",
                   w, h, s_mmGen,
-                  (int)*(const short*)(ta + 0x142EB), (int)*(const short*)(ta + 0x142ED));
+                  (int)*(const short*)(ta + 0x142EB), (int)*(const short*)(ta + 0x142ED),
+                  (unsigned)GetCurrentThreadId(),
+                  on_game_thread() ? "" : " — NOT the game thread");
         b[sizeof b - 1] = '\0';
         glog(b);
     }
