@@ -215,24 +215,7 @@ static GLuint   s_mmTex;
 static unsigned s_mmGenSeen;            /* the generation s_mmTex holds; 0 = nothing        */
 static int      s_mmTW, s_mmTH;         /* its size in texels                               */
 static int      s_mmbase = 0;           /* token `mmbase`: draw it, harness only for now    */
-static int      s_mmdots = 0;           /* token `mmdots`: the dots ALONE, over the engine's */
 static unsigned s_mmDrawn = 0;
-static unsigned s_mmSprites = 0, s_mmOther = 0;   /* ops published against the minimap composite */
-/* THE ENGINE'S DOTS, ACCUMULATED FROM ITS OWN OPS (13.6). Which units appear on
-   the minimap is fog- and LOS-dependent sim logic, so re-deriving it does not
-   fail by rendering badly — it fails by showing enemy positions the player is
-   not entitled to. The dots therefore stay the engine's: they are 0x4B7F90
-   blits, which are observed leaves, so they arrive as sprite ops carrying their
-   own destination, and replaying those is exact and free.
-   `0x466DC0` rebuilds the composite by copying the base in FIRST and then
-   drawing the dots, so a full-surface op against the composite is where a new
-   rebuild starts and the list resets. */
-#define MM_MAXDOTS 512
-typedef struct { const void* frame; const void* pix; unsigned short fw, fh; unsigned char ck; short sl, st; } MMDOT;
-static MMDOT    s_mmDots[MM_MAXDOTS];
-static int      s_mmNDots;
-static int      s_mmDotsFull;
-static unsigned s_mmDotLost;            /* a dot whose art the atlas would not hold */
 static unsigned s_mmLogged;
 static GLuint   s_mmProg, s_mmEngTex;   /* the masked draw, and the engine's two bases as RG8 */
 static GLint    s_uMmEngSize;
@@ -241,18 +224,6 @@ static unsigned char* s_mmRg;           /* interleave scratch                   
 static unsigned s_mmRgCap;
 static unsigned s_mmNoEng;              /* frames the engine's pair could not be read          */
 static unsigned s_mmFogged;             /* engine texels where fogged != unfogged, this frame  */
-
-/* The composite's PIXEL BASE, which is what an op names — `+0x142DB` is the
-   OFFSCREEN and its base is field 3 (w, h, pitch, base; CTX_BASE in the hook). */
-static unsigned mm_base(void)
-{
-    const char* ta = *(const char* const*)TA_MAINPP;
-    const int* off;
-    if (!ptr_ok(ta)) return 0;
-    off = *(const int* const*)(ta + MM_COMPOSITE);
-    if (!ptr_ok(off)) return 0;
-    return (unsigned)off[3];
-}
 
 /* THE CURSOR (gui-renderer.md 13.5, G17c). Decided ONCE per frame, in
    tagpu_gui_cursor_frame, because the world composite reads the decision
@@ -339,8 +310,18 @@ static const char* STR_FS =
    same terrain is safe; where they differ the engine is hiding or shading
    something and its own pixel is used verbatim.
 
-   THE TEST IS OVER A 3x3 NEIGHBOURHOOD, not one texel, and that is the whole
-   safety argument. A shaded pixel can land on the same palette index it started
+   AND EVERYTHING THE ENGINE DREW ON TOP COMES BACK THE SAME WAY. `+0x142DB`,
+   the composite, is the fog base plus the unit dots, the radar coverage arcs
+   and DrawPoint's points; it differs from `+0x142DF` exactly where one of
+   those landed, so one comparison carries all three. That is what retired the
+   dot replay this gate started with: the replay was measured pixel-exact
+   against the engine, but it could only ever carry the DOTS — the arcs
+   (0x4C0070) and the points (0x4BEE60) are not observed leaves (§7) and each
+   would have needed its own rasteriser reproduced exactly. One mechanism that
+   carries all three, from the engine's own pixels, beats two that do not.
+
+   THE FOG TEST IS OVER A 3x3 NEIGHBOURHOOD, not one texel, and that is the
+   whole safety argument. A shaded pixel can land on the same palette index it started
    from (the shade is a LUT into a dark-grey ramp, so a pixel already in that
    ramp maps to itself), and a single-texel test would then let four of OUR
    sub-texels through — sub-texels taken from the unfogged picture, which may be
@@ -353,14 +334,22 @@ static const char* MM_FS =
     "uniform ivec2 uEngSize;\n"
     "void main(){\n"
     "  ivec2 p = clamp(ivec2(uv * vec2(uEngSize)), ivec2(0), uEngSize - 1);\n"
+    "  vec3 e = texelFetch(uEng, p, 0).rgb;\n"
+    /* ANYTHING THE ENGINE DREW ON TOP OF ITS FOGGED BASE WINS, verbatim: the
+       composite differs from the fog base exactly where a unit dot, a radar
+       arc or a DrawPoint landed. That is one test for all three, and it is why
+       there is no arc replay — 0x4C0070 and 0x4BEE60 are not observed leaves
+       (§7) and would each need their own rasteriser reproduced pixel-exactly. */
+    "  if (abs(e.b - e.r) > 0.5 / 255.0) {\n"
+    "    frag = vec4(texture(uPal, vec2((e.b * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); return; }\n"
     "  bool clean = true;\n"
     "  for (int dy = -1; dy <= 1; ++dy)\n"
     "    for (int dx = -1; dx <= 1; ++dx) {\n"
     "      ivec2 q = clamp(p + ivec2(dx, dy), ivec2(0), uEngSize - 1);\n"
-    "      vec2 e = texelFetch(uEng, q, 0).rg;\n"
-    "      if (abs(e.r - e.g) > 0.5 / 255.0) clean = false;\n"
+    "      vec2 g = texelFetch(uEng, q, 0).rg;\n"
+    "      if (abs(g.r - g.g) > 0.5 / 255.0) clean = false;\n"
     "    }\n"
-    "  float idx = clean ? texture(uPic, uv).r : texelFetch(uEng, p, 0).r;\n"
+    "  float idx = clean ? texture(uPic, uv).r : e.r;\n"
     "  frag = vec4(texture(uPal, vec2((idx * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); }\n";
 /* the copy: the source twin's index at (this pixel - offset), coverage 1 */
 static const char* CPY_FS =
@@ -988,40 +977,6 @@ static void drain(void)
             s_skipped++;
             goto next;
         }
-        /* G17e: what the engine publishes against the minimap composite, which
-           is the question the dot replay turns on — the unit dots are 0x4B7F90
-           blits and therefore observed leaves, so they should arrive here as
-           sprite ops with their own positions rather than only inside the base
-           copy's bytes (gui-renderer.md §7). */
-        if (o->surf && o->surf == mm_base()) {
-            if (o->kind == PK_SPRITE) {
-                /* THE COMPOSITE HAS NO TWIN — it is never presented, so nothing
-                   ever seeds it, and drain's own PK_SPRITE case returns before
-                   it atlases anything (MEASURED 2026-09-09: `twins=2`, and the
-                   first dot replay drew nothing because every atlas_find missed).
-                   The frame has to be taken HERE, from the op's own first-sight
-                   bytes, or the dots exist as positions with no art. */
-                const TAGPU_GAFENT* e =
-                    tagpu_gaf_atlas_find(&s_atlas, o->frame, o->pix, o->fw, o->fh);
-                if (!e && o->alen)
-                    e = tagpu_gaf_atlas_put(&s_atlas, o->frame, o->pix, o->fw, o->fh,
-                                            o->ck, g_guiq.arena + o->aoff);
-                s_mmSprites++;
-                if (!e) s_mmDotLost++;
-                else if (s_mmNDots < MM_MAXDOTS) {
-                    MMDOT* d = &s_mmDots[s_mmNDots++];
-                    d->frame = o->frame; d->pix = o->pix;
-                    d->fw = o->fw; d->fh = o->fh; d->ck = o->ck;
-                    d->sl = o->sl; d->st = o->st;
-                } else s_mmDotsFull = 1;
-            } else {
-                s_mmOther++;
-                /* the rebuild's base copy: everything after it is this frame's
-                   dots. Any op that covers the whole composite serves, since
-                   nothing else redraws all of it. */
-                if (o->l <= 0 && o->t <= 0) { s_mmNDots = 0; s_mmDotsFull = 0; }
-            }
-        }
         switch (o->kind) {
         case PK_FRAME:  s_presented = o->surf; break;
         case PK_RESET:  twins_reset(); s_skipToReset = 0; break;
@@ -1372,7 +1327,7 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     int pw = 0, ph = 0, mx, my, mw, mh;
     float kx, ky, v[24];
 
-    if ((!s_mmbase && !s_mmdots) || !s_cursProg || !ptr_ok(ta)) return;
+    if (!s_mmbase || !s_mmProg || !ptr_ok(ta)) return;
     /* NOT `+0x142F1 & 2`, which is what DrawMinimap 0x466B00 tests: that is a
        DIRTY flag and 0x466B16 CLEARS it in the same breath, so it reads 0 on
        almost every frame [MEASURED 2026-09-09 — the first build of this gated
@@ -1431,24 +1386,31 @@ static void sharp_minimap(const TAGPU_FRAME* f)
            torn read can do is put one frame's fog against another's. 13 KB. */
         const int* fo = *(const int* const*)(ta + MM_FOGBASE);
         const int* so = *(const int* const*)(ta + MM_SCALEDMAP);
-        const unsigned char *fb, *sb;
-        int ew, eh, fp, sp, yy, xx;
-        if (!ptr_ok(fo) || !ptr_ok(so)) { s_mmNoEng++; return; }
-        ew = fo[0]; eh = fo[1]; fp = fo[2]; sp = so[2];
+        const int* co = *(const int* const*)(ta + MM_COMPOSITE);
+        const unsigned char *fb, *sb, *cb;
+        int ew, eh, fp, sp, cp, yy, xx;
+        if (!ptr_ok(fo) || !ptr_ok(so) || !ptr_ok(co)) { s_mmNoEng++; return; }
+        ew = fo[0]; eh = fo[1]; fp = fo[2]; sp = so[2]; cp = co[2];
         fb = (const unsigned char*)(size_t)fo[3];
         sb = (const unsigned char*)(size_t)so[3];
+        cb = (const unsigned char*)(size_t)co[3];
         if (ew <= 0 || eh <= 0 || ew > 512 || eh > 512 || so[0] != ew || so[1] != eh ||
-            !ptr_ok(fb) || !ptr_ok(sb)) { s_mmNoEng++; return; }
-        if ((unsigned)(ew * eh * 2) > s_mmRgCap) {
-            free(s_mmRg); s_mmRgCap = (unsigned)(ew * eh * 2) + 4096;
+            co[0] != ew || co[1] != eh || !ptr_ok(fb) || !ptr_ok(sb) || !ptr_ok(cb)) {
+            s_mmNoEng++; return;
+        }
+        if ((unsigned)(ew * eh * 3) > s_mmRgCap) {
+            free(s_mmRg); s_mmRgCap = (unsigned)(ew * eh * 3) + 4096;
             s_mmRg = (unsigned char*)malloc(s_mmRgCap);
             if (!s_mmRg) { s_mmRgCap = 0; s_mmNoEng++; return; }
         }
         for (yy = 0; yy < eh; yy++) {
             const unsigned char* fr = fb + (size_t)yy * fp;
             const unsigned char* sr = sb + (size_t)yy * sp;
-            unsigned char* d = s_mmRg + (size_t)yy * ew * 2;
-            for (xx = 0; xx < ew; xx++) { d[2 * xx] = fr[xx]; d[2 * xx + 1] = sr[xx]; }
+            const unsigned char* cr = cb + (size_t)yy * cp;
+            unsigned char* d = s_mmRg + (size_t)yy * ew * 3;
+            for (xx = 0; xx < ew; xx++) {
+                d[3 * xx] = fr[xx]; d[3 * xx + 1] = sr[xx]; d[3 * xx + 2] = cr[xx];
+            }
         }
         if (!s_mmEngTex) glGenTextures(1, &s_mmEngTex);
         if (!s_mmEngTex) { s_mmNoEng++; return; }
@@ -1461,10 +1423,10 @@ static void sharp_minimap(const TAGPU_FRAME* f)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, ew, eh, 0, GL_RG, GL_UNSIGNED_BYTE, s_mmRg);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, ew, eh, 0, GL_RGB, GL_UNSIGNED_BYTE, s_mmRg);
             s_mmEngW = ew; s_mmEngH = eh;
         } else {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ew, eh, GL_RG, GL_UNSIGNED_BYTE, s_mmRg);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, ew, eh, GL_RGB, GL_UNSIGNED_BYTE, s_mmRg);
         }
         /* how much of the map the engine is hiding right now, in its own
            texels — the number that says whether a run had any fog to mask at
@@ -1472,7 +1434,7 @@ static void sharp_minimap(const TAGPU_FRAME* f)
            mask; a fogged one is the only fixture that tests it. */
         {
             int d = 0;
-            for (yy = 0; yy < eh * ew; yy++) if (s_mmRg[2 * yy] != s_mmRg[2 * yy + 1]) d++;
+            for (yy = 0; yy < eh * ew; yy++) if (s_mmRg[3 * yy] != s_mmRg[3 * yy + 1]) d++;
             s_mmFogged = (unsigned)d;
         }
         glUseProgram(s_mmProg);
@@ -1484,44 +1446,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
                 (float)(mx + mw) * kx, (float)(my + mh) * ky, 0.0f, 0.0f, 1.0f, 1.0f);
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
         x_glDrawArrays(GL_TRIANGLES, 0, 6);
-        /* the dots below go back to the sprite program */
-        glUseProgram(s_cursProg);
-        x_glUniform2f(s_uCursSize, (float)s_sharpW, (float)s_sharpH);
-        glUniform1i(s_uCursRestored, 0);
-    }
-    /* THE ENGINE'S DOTS, ON TOP, AT THE SAME SCALE IT DRAWS THEM. A dot's
-       position is in composite pixels and the composite IS the box, so it maps
-       to the screen by the box's own offset and to the device by k — the same
-       transform the base just took. Scaled by k rather than kept at 1x device
-       like the cursor: a dot is 2-3 px of engine art whose SIZE carries meaning
-       against the map under it, and the engine's own is blown up by k anyway. */
-    if (s_mmNDots > 0) {
-        int i;
-        /* the first few, named: a dot list that is full of positions the box
-           does not contain is the failure this replay can have, and it is
-           invisible from a screenshot */
-        if (s_mmLogged < 4) {
-            char b[190];
-            s_mmLogged++;
-            _snprintf(b, sizeof b, "gui: minimap dots=%d box=(%d,%d) %dx%d first=(%d,%d) %ux%u ck=%u",
-                      s_mmNDots, mx, my, mw, mh, (int)s_mmDots[0].sl, (int)s_mmDots[0].st,
-                      (unsigned)s_mmDots[0].fw, (unsigned)s_mmDots[0].fh, (unsigned)s_mmDots[0].ck);
-            b[sizeof b - 1] = '\0';
-            slog(b);
-        }
-        for (i = 0; i < s_mmNDots; i++) {
-            const MMDOT* d = &s_mmDots[i];
-            const TAGPU_GAFENT* e = tagpu_gaf_atlas_find(&s_atlas, d->frame, d->pix, d->fw, d->fh);
-            if (!e) continue;             /* never atlased: the frame is the base copy's problem */
-            glUniform1i(s_uCursCK, (int)e->ck);
-            x_glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
-            quad(v, (float)(mx + d->sl) * kx, (float)(my + d->st) * ky,
-                    (float)(mx + d->sl + d->fw) * kx, (float)(my + d->st + d->fh) * ky,
-                    e->u0, e->v0, e->u1, e->v1);
-            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
-            x_glDrawArrays(GL_TRIANGLES, 0, 6);
-        }
     }
     /* THE VIEW BOX LAST, because that is where the engine puts it: DrawMinimap
        copies the composite at 0x466B44 and only then draws the box at
@@ -1778,13 +1702,6 @@ static void poll(void)
        the engine's 126-px minimap. Harness only while it is the base ALONE —
        no fog, no dots, no arcs, no view box. */
     s_mmbase = on && strstr(buf, "mmbase") != NULL;
-    /* `mmdots`: the dot replay ALONE, over the engine's own minimap. It is the
-       oracle for the replay and the reason it exists — if our dots land where
-       the engine's do, in the colours the engine used, the frame does not
-       change at all, and any difference is exactly our error. The base cannot
-       be tested that way (it is a different resample by construction), so it
-       gets its own token. */
-    s_mmdots = on && strstr(buf, "mmdots") != NULL;
     /* `nocursor`: phase 1's cursor, the engine's own, kept as the A/B against
        ours — and the escape if the sprite record ever stops being a GAF frame
        header on some build. `cursorscale=N` (13.5) sizes ours in DEVICE
@@ -1857,7 +1774,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u/%u/%u,dots=%d%s,lost=%u,fog=%u/%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, s_palChanges, s_palDiff, s_palDiffAt, s_palSource,
@@ -1869,9 +1786,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                      lines is the bytes the producer wrote in 300 frames — which is
                      what `nostring` is A/B'd on (13.4: ~40 bytes where a text op
                      carried ~968) and what §7's cadence note is about */
-                  g_guiq.aHead, s_mmDrawn, s_mmSprites, s_mmOther,
-                  s_mmNDots, s_mmDotsFull ? "+" : "", s_mmDotLost,
-                  s_mmFogged, (unsigned)(s_mmEngW * s_mmEngH), fps);
+                  g_guiq.aHead, s_mmDrawn,
+                  s_mmFogged, (unsigned)(s_mmEngW * s_mmEngH), s_mmNoEng, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
     }
