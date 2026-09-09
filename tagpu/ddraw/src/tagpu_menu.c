@@ -43,6 +43,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "dd.h"
 #include "tagpu_detour.h"
@@ -63,6 +64,8 @@
 #define VA_DRAWUNLOCK   0x004C2870u
 #define VA_UPDGUI       0x00491D70u
 #define VA_DRAWSCREEN   0x00468CF0u     /* the per-frame game-thread function  */
+#define VA_POSTGUI      0x0046A308u     /* DrawGameScreen, just past the GUI   */
+#define VA_GAFBLIT      0x004B7F90u     /* CopyGafToContext(ctx, frame, x, y)  */
 
 #define GM_CTRLS  0x04
 #define GM_ONCMD  0x08
@@ -81,6 +84,7 @@ typedef int   (__stdcall *stage_draw_fn)(void* gi, int flags);
 typedef void  (__stdcall *set_dirty_fn)(void* gi);
 typedef int   (__stdcall *upd_gui_fn)(int);
 typedef void  (__cdecl   *lock_fn)(void);
+typedef void  (__stdcall *gaf_blit_fn)(void* ctx, const void* frame, int x, int y);
 
 /* DrawGameScreen's prologue: `sub esp,0x214`.
 
@@ -95,6 +99,13 @@ typedef void  (__cdecl   *lock_fn)(void);
    and its entry is before any of the frame's drawing -- so a screen pushed
    here is drawn by the same frame and nothing is done mid-composite. */
 static const unsigned char DRAW_STOLEN[6] = { 0x81, 0xEC, 0x14, 0x02, 0x00, 0x00 };
+/* 0x46A308: `mov edx,ds:0x511de8`, immediately after DrawGameScreen's own GUI
+   draw (0x46A303 calls 0x4AB170) and before the flip. That is where the
+   trigger goes: over the finished bar, through the engine's own blitter, so
+   it lands in the back buffer every flip presents and every G15/G17 twin
+   already watches -- rather than in a GL layer the engine's surface, `tacli
+   shot` and the twins would all miss. */
+static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };
 
 /* ---- the geometry, from tools/guipanel.py (the source of truth) ---------- */
 #define PANEL_W   304
@@ -108,6 +119,7 @@ static const unsigned char DRAW_STOLEN[6] = { 0x81, 0xEC, 0x14, 0x02, 0x00, 0x00
 #define CTL_W     120
 #define LBL_X      14
 #define LBL_W     144
+#define TRIG       28                   /* 2 px of bar above and below         */
 
 /* ---- the rows ------------------------------------------------------------ */
 /* Six, and every one of them live -- mouse-wheel zoom was the seventh and was
@@ -181,10 +193,23 @@ static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
 #define CPP_ON     "tagpu_classicpp.on"
 #define CPP_OFF    "tagpu_classicpp.off"
 #define POLL_MS    250
+
+/* The trigger's ink walks the SAME ramp, re-hung around a lighter ground than
+   the Cavedog logo's because the bar's own texture is index 62 and the logo's
+   ink is 52 % that value -- laid on the bar it would be invisible. The body
+   goes below the bar (63) and the outline above it. Three states, and the
+   change is a slide along the ramp rather than a second picture, which is
+   what the logo does (renderers.md 2.10). */
+enum { TS_NORMAL, TS_OVER, TS_PRESSED, TS_COUNT };
+static const unsigned char TRIG_INK[TS_COUNT][3] = {
+    { 59, 61, 63 },                     /* outline, inner shade, core          */
+    { 57, 60, 63 },
+    { 60, 62, 63 },
+};
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "G18-3"
+#define UFO_STAMP  "G18-4"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
@@ -195,6 +220,11 @@ static volatile LONG s_dirty;           /* a row moved: the cfg needs writing  *
 static DWORD  s_lastPoll;
 static int    s_want;
 static int    s_fresh;                  /* the next open is the PLAYER'S open  */
+static int    s_fileWas;                /* the trigger file, sampled on edges  */
+static int    s_pressed;                /* the sprocket is held down           */
+static int    s_drawTrigger;            /* the post-GUI observer is installed  */
+static unsigned char s_trigPix[TS_COUNT][TRIG * TRIG];
+static unsigned char s_trigFrame[TS_COUNT][0x18];
 
 static void mlog(const char* m)
 {
@@ -352,6 +382,102 @@ static unsigned build_gaf(unsigned char* out, unsigned cap, int rows)
 
     draw_panel(out + PIXOFF, rows);
     return need;
+}
+
+/* ---- the trigger --------------------------------------------------------
+   tools/guipanel.py sprocket(), ported. Generated rather than hand-gridded
+   because the shape's whole argument is EIGHT teeth on 45 degree steps: every
+   tooth is then a mirror of another across an axis or a diagonal, so the
+   rasteriser cannot make one ragged without making its mirror ragged
+   identically. `tooth` is the angular width as a fraction of the pitch, so
+   0.5 is teeth and gaps of equal width -- square teeth, no taper, which is
+   what reads as a sprocket rather than a gear at 28 px. */
+static void sprocket(unsigned char* m)
+{
+    const double r_out = 13.4, r_root = 10.2, tooth = 0.5, bore = 4.6;
+    const int teeth = 8;
+    const double c = (TRIG - 1) / 2.0;
+    const double half = 3.14159265358979323846 / teeth;
+    int x, y;
+
+    memset(m, 0, TRIG * TRIG);
+    for (y = 0; y < TRIG; y++) {
+        for (x = 0; x < TRIG; x++) {
+            double dx = x - c, dy = y - c;
+            double r = sqrt(dx * dx + dy * dy), ang, k;
+            if (r <= bore || r > r_out) continue;   /* the bore is a hole */
+            if (r <= r_root) { m[y * TRIG + x] = 1; continue; }
+            /* phased so a tooth points straight up, which is what makes the
+               thing read as upright at 28 px */
+            ang = atan2(dy, dx) + 3.14159265358979323846 / 2 + half;
+            while (ang < 0) ang += 2 * 3.14159265358979323846;
+            while (ang >= 2 * 3.14159265358979323846) ang -= 2 * 3.14159265358979323846;
+            k = fmod(ang, 2 * half) / (2 * half);
+            if (fabs(k - 0.5) * 2 <= tooth) m[y * TRIG + x] = 1;
+        }
+    }
+}
+
+/* A mask split into its one-pixel 4-connected border and the rest. The border
+   traces the teeth AND the bore, which is what makes the hole read at 28 px. */
+static void boundary(const unsigned char* m, unsigned char* edge, unsigned char* inner)
+{
+    static const int DX[4] = { 1, -1, 0, 0 }, DY[4] = { 0, 0, 1, -1 };
+    int x, y, k;
+    for (y = 0; y < TRIG; y++) for (x = 0; x < TRIG; x++) {
+        int i = y * TRIG + x, e = 0;
+        edge[i] = inner[i] = 0;
+        if (!m[i]) continue;
+        for (k = 0; k < 4; k++) {
+            int nx = x + DX[k], ny = y + DY[k];
+            if (nx < 0 || nx >= TRIG || ny < 0 || ny >= TRIG || !m[ny * TRIG + nx]) { e = 1; break; }
+        }
+        edge[i] = (unsigned char)e;
+        inner[i] = (unsigned char)!e;
+    }
+}
+
+/* One in-memory GAF frame per state. +0x10 is a real pointer here, not a file
+   offset -- CopyGafToContext takes the loaded form (tagpu_gaf.h). */
+static void build_trigger(void)
+{
+    unsigned char m[TRIG * TRIG], edge[TRIG * TRIG], inner[TRIG * TRIG];
+    unsigned char ring[TRIG * TRIG], core[TRIG * TRIG];
+    int st, i;
+
+    sprocket(m);
+    boundary(m, edge, inner);
+    boundary(inner, ring, core);        /* one more ring a step down, so the
+                                           body is not a flat plate against the
+                                           outline -- the logo does this too */
+    for (st = 0; st < TS_COUNT; st++) {
+        unsigned char* p = s_trigPix[st];
+        unsigned char* f = s_trigFrame[st];
+        void* pix = p;
+        memset(p, IX_KEY, TRIG * TRIG);
+        for (i = 0; i < TRIG * TRIG; i++) {
+            if (edge[i])      p[i] = TRIG_INK[st][0];
+            else if (ring[i]) p[i] = TRIG_INK[st][1];
+            else if (core[i]) p[i] = TRIG_INK[st][2];
+        }
+        memset(f, 0, 0x18);
+        *(unsigned short*)(f + 0x00) = TRIG;
+        *(unsigned short*)(f + 0x02) = TRIG;
+        f[0x08] = IX_KEY;               /* transparent: the bore and the surround */
+        f[0x09] = 0;                    /* raw 8bpp                               */
+        memcpy(f + 0x10, &pix, 4);
+    }
+}
+
+/* Both rects hang off ONE margin, so the icon's right edge and the drop-down's
+   right edge land on one line and the menu visibly drops from the icon. Both
+   are anchored to the frame's RIGHT edge, never to a fixed coordinate. */
+static void trigger_rect(int* x, int* y)
+{
+    int w = (int)g_ddraw.width;
+    if (w < TRIG + MARGIN) w = TRIG + MARGIN;
+    *x = w - MARGIN - TRIG;
+    *y = 2;
 }
 
 /* ---- generating the .GUI ------------------------------------------------- */
@@ -688,6 +814,71 @@ void tagpu_menu_present(void)
     }
 }
 
+/* ---- the trigger's two jobs: it is drawn, and it is hit-tested ----------- */
+
+/* THE HIT-TEST SITS ON BOTH INPUT PATHS, and that is not tidiness. The shield
+   handles injected WM_TAGPU_MOUSE through deliver_mouse() BEFORE its own
+   armed check, and then, with the shield on, swallows every real
+   WM_LBUTTONDOWN. So a tacli instance sees only injected clicks and a player
+   sees only real ones: a hit-test hung off one path passes its own tests and
+   does not work for players, or the reverse. This is the one function, and
+   both callers hand it the same thing -- g_ddraw.cursor, which the injected
+   path has just written and which the real path's preceding WM_MOUSEMOVE
+   wrote. (The same shape as the field-notes patch-2b bug, where a cursor
+   change quietly altered what a left click did.)
+
+   The press toggles and the RELEASE is consumed too. Letting the release
+   through would leave the engine holding a button it never saw pressed --
+   the G13e review's HIGH finding, and it costs the rest of the session. */
+int tagpu_menu_click(int gx, int gy, int down)
+{
+    int x, y;
+
+    if (!s_installed || !s_drawTrigger) return 0;
+    if (!*(char**)TA_MAIN) return 0;
+
+    if (!down) {                        /* a release we own, and nothing else */
+        int was = s_pressed;
+        s_pressed = 0;
+        return was;
+    }
+
+    trigger_rect(&x, &y);
+    if (gx < x || gx >= x + TRIG || gy < y || gy >= y + TRIG) return 0;
+
+    s_pressed = 1;
+    s_want = !s_want;
+    if (s_want) s_fresh = 1;            /* the player's open reads the levers */
+    return 1;
+}
+
+/* Drawn over the finished bar, inside DrawGameScreen and before the flip, with
+   the engine's own GAF blitter -- ctx NULL is the back buffer (0x4B7FA5 ->
+   0x4C5E70). No GUI screen owns the top bar (every in-game panel is the side
+   panel at (0,128) 128x352) and a gadget is drawn into its panel's own w*h
+   surface at panel-relative coordinates, so a gadget at x=980 has nowhere to
+   be drawn. That is why this is ours and not a gadget. */
+static void draw_trigger(void)
+{
+    int x, y, st, cx, cy;
+
+    if (!s_drawTrigger) return;
+    trigger_rect(&x, &y);
+    cx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
+    cy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+    st = s_pressed ? TS_PRESSED
+       : (cx >= x && cx < x + TRIG && cy >= y && cy < y + TRIG) ? TS_OVER
+       : TS_NORMAL;
+    ((gaf_blit_fn)VA_GAFBLIT)(NULL, s_trigFrame[st], x, y);
+}
+
+static int __cdecl before_postgui(void* entry_esp)
+{
+    (void)entry_esp;
+    draw_trigger();
+    return 0;
+}
+
 /* ---- the per-frame tick, on the game thread ------------------------------ */
 static void menu_tick(void)
 {
@@ -708,10 +899,16 @@ static void menu_tick(void)
 
     now = GetTickCount();
     if (now - s_lastPoll >= POLL_MS) {
-        int want = exists(OPEN_FILE);
+        /* The file is a LEVEL sampled on its EDGES, not a level polled: the
+           sprocket owns s_want too, and a file read every 250 ms would undo
+           every click the moment it was made. */
+        int f = exists(OPEN_FILE);
         s_lastPoll = now;
-        if (want && !s_want) s_fresh = 1;          /* the rising edge is the open */
-        s_want = want;
+        if (f != s_fileWas) {
+            s_fileWas = f;
+            s_want = f;
+            if (f) s_fresh = 1;
+        }
     }
     if (s_want && !s_gm) { menu_open(main_p, s_fresh); s_fresh = 0; }
     else if (!s_want && s_gm) menu_close(main_p);
@@ -783,10 +980,18 @@ void tagpu_menu_init(void)
                                  before_update, NULL);
     s_installed = armed;
 
+    if (armed) {
+        build_trigger();
+        s_drawTrigger =
+            tagpu_detour_bytes_ok(VA_POSTGUI, POST_STOLEN, sizeof POST_STOLEN) &&
+            tagpu_detour_observe(VA_POSTGUI, POST_STOLEN, sizeof POST_STOLEN,
+                                 before_postgui, NULL);
+    }
+
     _snprintf(b, sizeof b,
-              "menu: %s " UFO_STAMP " ufo=%d rows=%d gui=%d gaf=%u bytes "
+              "menu: %s " UFO_STAMP " ufo=%d rows=%d gui=%d gaf=%u trigger=%d bytes "
               "(RENDER.GUI over DrawGameScreen 0x468CF0; open with " OPEN_FILE ")",
-              armed ? "ARMED" : "NOT armed", wrote, s_nrows, len, glen);
+              armed ? "ARMED" : "NOT armed", wrote, s_nrows, len, glen, s_drawTrigger);
     b[sizeof b - 1] = 0;
     mlog(b);
 }

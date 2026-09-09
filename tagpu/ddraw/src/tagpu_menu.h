@@ -29,6 +29,13 @@ void tagpu_menu_init(void);
 /* 1 when the observer is installed and the screen can be opened. */
 int  tagpu_menu_installed(void);
 
+/* The sprocket's hit-test, in GAME-space coordinates. Returns 1 when the
+   trigger consumed the click, in which case the caller must not pass it on.
+   Called from BOTH of the shield's input paths (tagpu_shield.c): the injected
+   one sees only injected clicks and the real one only real ones, so a
+   hit-test on either alone works for exactly half its users. */
+int  tagpu_menu_click(int gx, int gy, int down);
+
 /* The render thread's frame, from render_ogl.c. Does the DEFERRED WRITE: a row
    click sets an in-memory value on the game thread and the cfg is written
    here, off it. TA is lockstep and a synchronous write inside `OnCommand` is
