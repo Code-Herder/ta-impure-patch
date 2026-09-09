@@ -1220,6 +1220,7 @@ is left on the shared stream.
 | **the program** | a TWIN of the native one: its own vertex stage (the port of `emit_node` — piece transform, `sx = ax + x` / `sy = ay + (-z - y/2)`, the depth key, the world x/z the fog samples, the model height the waterline clips on, and the shade quantised off the baked rest normal), and the native pass's **own** fragment stage, taken through `tagpu_native_unit_fs()` rather than copied |
 | **the shadow-depth twin** | the same vertex shader with an empty fragment shader and `uDepthPass = 1`, mirroring `tagpu_shadow.c`'s `VS_U`/`FS_NONE`, so a colour-keyed texel casts on both paths |
 | **the Classic silhouette** | routed through the posed program too — it reuses the body geometry, so a posed unit would otherwise lose its shadow whenever Classic++ is off |
+| **who gates it** | `shadows=`, not the Classic++ master arm and not `assets`/`light` (G18a/G18b, merged in 2026-09-09). Both posed shadow loops in `tagpu_native.c` skip on `cpp && !hard`, so **Classic++ at `shadows=2` (HARD) draws the Classic pair through this program** and `tagpu_shadow_begin` then refuses the depth pass outright (it requires `TAGPU_SHADOWS_SOFT`, `tagpu_shadow.c:368`). At `shadows=0` nothing is drawn, an aircraft's `airshadow=drop` included. This gating was written against the CPU emitters G16 step 8 deleted and was **re-expressed**, not merged |
 | **the three ranges** (step 6) | `uRange` selects. **BODY** as above. **SLANT** takes `0x45A610`'s projection `(x + y/4, −z − y/4)` off the posed vertex snapped to whole units, the neutral SHD row, `waterT`/`digT` pinned at −1e9 by the pass itself (the structure branch never erases — the G14j fix), and its own per-piece rule `(P_FLAGS & 3) == 3`. **WIRE** is `GL_LINES` on the body projection, one notch nearer (+0.15), the nanoframe's animated blue from a uniform because it is per unit while the material stream is per type and owner |
 | **the 16.16 snap** (step 6) | the posed vertex is rounded onto the engine's own grid — `floor(m·65536 + 0.5)/65536` — **before anything reads it**, in every range. The engine holds each posed vertex as three 16.16 integers and every CPU emitter reads them back as `v[i]/65536.0f`, so a float compose that stops short sits up to half an LSB off a value that is exactly representable; `recon_prim` rounds the same way. This is what makes the slant portable at all (its `>>16` is a FLOOR, so half an LSB is a whole screen unit) and it took the body's residual to zero as well |
 | **the pose** | a std140 block, `vec4 uRow[3*256]` + two packed per-piece words, `uPieceFlag[64]` (shaded) and `uPieceVis[64]` (0 not drawn / 1 drawn / 3 drawn and casting) = **14 336 bytes**. `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time and the pass **refuses to arm** below that. Since step 8 there is no CPU emitter to leave those units to, so the refusal is *published* and `owndraw` stops skipping the engine's own unit rasterise — see "when it cannot arm" below. The wire reads the same word rather than the all-zero matrix: a zero-area triangle provably produces no fragments, a zero-length LINE is not promised away, and one bright pixel per hidden edge would land on the unit's origin |
@@ -1310,6 +1311,61 @@ fixtures read 0.]*
 Calling the global one is a jump to address 0 — `ErrorLog.txt` reads `Access Violation … at
 0023:00000000`, during map load, with nothing in `tagpu.log` because the module dies before its
 first line.
+
+### 2.12 The render-options screen (`tagpu_menu.c`, `tagpu_ufo.c`, on by default, `tagpu_menu.off`) — Phase F G18
+
+The in-game settings screen. Design and the decisions behind it:
+[renderers](renderers.html) §2.10; the engine reading: [engine map](exe-reverse-engineering.html)
+*The screen lifecycle*, *A screen's own GAF*, *Setting a gadget's state*, *Where the engine
+looks for archives*. It is a **real TA `.GUI` screen**, so the engine does the hit-testing,
+the dispatch, the plate art, the fonts and the save-under, and the G15/G17 twins carry it for
+free; what we supply is two bytes of gadget state, one frame's pixels, one 28×28 trigger and
+one small archive.
+
+| site | what we do there | thread |
+|---|---|---|
+| `DLL_PROCESS_ATTACH` | write `impure-patch.ufo` (`guis/render.gui` + `anims/render.gaf`) unconditionally, with a version stamp. `DDRAW.dll` is TotalA.exe's first static import, so this precedes `InitTAHPIAry 0x41D4C0`'s `*.UFO` glob by the loader's rules | — |
+| `DrawGameScreen 0x468CF0` (observer) | the per-frame tick: sample the trigger file on its edges, open or close, re-assert `main+0x37EA0`, and recover if the screen was freed under us | game |
+| `0x46A308` (observer, post-GUI) | blit the sprocket into the back buffer with `CopyGafToContext 0x4B7F90(NULL, frame, x, y)` | game |
+| `GUIMEMSTRUCT+0x08` (our `OnCommand`) | advance the row, `GUIGADGET_SetStatus 0x4A1080` for every row, `grayedout` for Shadow quality, and set the repaint flag `gi+0xCCA` via `0x49FA90`. **It writes no file** | game |
+| `tagpu_shield.c`, both paths | `tagpu_menu_click()` — the sprocket's hit test, from `deliver_mouse()` (injected) and from the wndproc before the shield's gate (real) | game |
+| `tagpu_zoom.c`, two entry points | `tagpu_menu_owns_point()` — the zoom transform must leave a point the menu owns alone. The panel hangs over the world and the transform's gate is geometric, so at any zoom ≠ 1 a row click was bent away and **no row worked**; `tagpu_zoom_drop_mouse` must not treat it as the display-only ring either | game |
+| `render_ogl.c`'s frame | `tagpu_menu_present()` — the deferred cfg/lever write | render |
+| open | `GUI_Load 0x4AA8F0(gi, main+0x37EA0, flags)` with `0x20` + `0x400`, patch the panel rect, set `+0x08`/`+0x0C`, then `0x4C2470(); GUI_StageUpdateDraw(gi, 0x21); 0x4C2870()` — GUI_Load's own suppressed stage 1, reproduced; then repaint the ground and set `gi+0xCCA` | game |
+| close | restore `main+0x37EA0` and call `UpdateIngameGUI 0x491D70(1)`. **`GUI_Pop` is never called** | game |
+
+**Fields we write.** `main+0x37EA0`, the expected-screen name buffer — 16 bytes, saved and
+restored, and re-asserted every frame while the menu is open. Gadget `status_curnt` (`+0x137`)
+through the engine's own setter, and `grayedout` (`+0x13C`) by direct field write, which is
+the engine's own setter `GUIGADGET_SetGrayed 0x4A1250(gi, name, grayed)` — **not** a direct
+field write. (An earlier revision stored a 32-bit 0/1 into `+0x13C` and cited `0x477416` as the
+precedent. Both were wrong: `0x477416`'s writes are `mov BYTE [esi+0x137],0/1` at `0x47743B`
+and `0x47746A` — `status_curnt`, a different field — and `+0x13C` is a **u16 whose bit 0 is the
+flag**, which the engine read-modify-writes so bits 1..15 survive.) The panel record's
+`xpos`/`ypos` (`+0x13`/`+0x15`),
+because the panel is right-aligned and a `.GUI` written at attach cannot know the resolution.
+`gi+0xCCA`, the repaint flag. And the loaded GAF frame's colour plane (`+0x10 PtrFrameBits`),
+repainted in place with the composed ground. **Nothing sim-side, and nothing that replicates.**
+
+**Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
+key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off`
+created and deleted; and **both** `tagpu_classicpp.on` and `.off` — the pair, because
+`tagpu_opt.c`'s precedence is an `.on` wins and an `.off` only defeats a *default*-on, so
+driving one of them applies nothing on an instance that carries `tagpu_defaults.off` or a
+hand-armed `.on` (§2.8). Write access to the gamedir is not new — the DLL
+already writes seven files from seventeen create-for-write sites.
+
+**The trigger is not a gadget and cannot be one.** No GUI screen owns the top bar (every
+in-game panel is the side panel at `(0,128) 128×352`) and a gadget is drawn into its panel's
+own `w×h` surface at panel-relative coordinates, so a gadget at `x=1876` has nowhere to be
+drawn. It is 28×28 at `(w−16−28, 2)`, sharing `MARGIN = 16` with the panel at `(w−16−304, 32)`
+so the two right edges land on one line — measured at both 1024 (988, 704) and 1920 (1876,
+1600).
+
+**Known cost.** The engine rebuilds the whole in-game GUI stack on a world click, and the
+panel hangs over the world, so clicking a row costs one frame of the panel being re-pushed.
+The row's own state survives it (the model is ours; the levers are read only on the player's
+open), but the rebuild is visible if you look for it.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

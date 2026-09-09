@@ -412,38 +412,433 @@ radius follows the texel. Restored textures are mipmapped to level 2, which cove
 one vertex buffer. The softer shadows at the floor are judged in play — the lab's Classic++
 lane runs at zoom 1 by construction and cannot show them (§4).
 
-### 2.10 Settings: an in-game menu the DLL draws
-**Decided: a small "Options" button at the top right, over the engine's top bar, opening a
-DLL-drawn panel; v1 is buttons and steppers for every Classic++ knob and the renderer switch.**
-Why it fits:
+### 2.10 Settings: an in-game screen, drawn by the engine's own GUI  [REVISED 2026-09-09]
 
-- The composite draws our non-empty pixels over the engine's frame outside the viewport
-  (`if (empty) discard; frag = c;` **[SOURCE `tagpu_native.c` composite shader]**), so the
-  bar is ours to draw on.
-- The top-right is empty: on the 1024-wide engine frame the metal and energy bars end near
-  x ≈ 620 and the right ~400 px are bare panelling **[MEASURED
-  `assets/shots/feat-ownership.png`, 2026-09-04]**.
-- The DLL sees every window message before the game and already swallows the wheel
-  (`tagpu_zoom.c`), so button clicks are consumed in the wndproc and never reach the engine.
-- Our pixels cover the engine's cursor where they land, so **the menu draws its own cursor
-  while the pointer is over our UI.**
-- Text: the engine's own GUI font, whose glyph table `tagpu_ui.c` already dereferences; a
-  small embedded font is the fallback if the glyph format fights back.
-- **State: the menu is a front end, not a store.** On/off switches stay the house trigger
-  files — `gamedir/tagpu_classicpp.on` selects the renderer, polled per frame like
-  `tagpu_hires.on`, absent = Classic — and the menu creates and deletes them. Numeric knobs
-  live in `gamedir/tagpu_classicpp.cfg` as `key=value` lines re-read on mtime change, keyed
-  like the lab's URL parameters (`sun`, `unitsun`, `shadowsun`, `amb`, `penumbra`,
-  `shadowlen`, `shade`, `aniso`, `shadows`). A human editing files, a tacli verb and the menu
-  drive the same state. **The shadow keys (decided 2026-09-06, §2.12)**: `shadows`,
-  `shadowsun`, `penumbra`, `shadowlen`, `shade`, `terrainshadow`, `shadowres`, `airshadow`,
-  each with the lab's default, and the map runs only when `shadows=1` **and** the engine's own
-  Shadow option bit is set (`main+0x37F06` bit 2 — the player's in-game Shadows toggle keeps
-  its meaning under Classic++, off = no depth pass and no read-back, as it kills the
-  silhouettes today); TShadow (bit 3) is ignored, it only tells the silhouette from the slant
-  in the engine and Classic++ draws neither. The model `full.onnx` and `onnxruntime.dll` (1.22.1 x86) ship in
-  gamedir beside them.
+**Decided: the render options are a real `.GUI` screen — the engine's own gadgets, its own
+GAF art, its own dispatcher — not a panel the DLL paints.** Six stage buttons, no pages.
+This supersedes the original decision below, which was for a DLL-drawn panel hanging off an
+"Options" button in the top bar.
 
+The record layout, the stage-button frame grammar and the panel recess grids are on
+[GUI gadgets](gui-gadgets.html) §10; the lab that draws the screen is
+`tools/ta-guiscreen.html`, and `tools/guiart.py` extracts the art it needs (nothing of the
+game's is tracked). Interviewed with the owner 2026-09-08/09.
+
+**The two rules the owner set.**
+
+*Seven was the count before mouse-wheel zoom was cut (below); the row table and every
+geometry number here are six.*
+
+1. **The menu never offers the unmodified original engine.** No row has an "off, let the
+   1997 code draw it" position — we own the draw, and the only question a row asks is which
+   of *our* two renderers owns it.
+2. **Simplify.** Six gadgets, and everything else demoted to the cfg.
+
+**The screen — a drop-down, not a stock rect** [SHAPE DECIDED 2026-09-09]. `RENDER.GUI`,
+panel `id=0` at `(w−16−304, 32) 304×212` — right-aligned by `MARGIN = 16`, hanging from the
+top bar's underside, over the world. Background gadget `id=12` naming its panel frame. Six
+`id=1` buttons at `x=166 w=120 h=20` on a **28 px** pitch, each with an `id=5` label at
+`x=14 w=144` **on the same line**:
+
+*The height is 212, not the 240 an earlier revision of this line said — `tools/guipanel.py`
+is the source of truth for the geometry (`W,H = 304,212`, `DIV_BOT = 202`, the last row
+ending at 194), the paragraph on modality below already said 212, and the built screen
+measures 212.*
+
+| y | row | stages | what drives it |
+|---|---|---|---|
+| 9 | *(the caption, `Render options`)* | — | an `id=5` label above the rule at y=30 |
+| 34 | **Renderer Style** | Classic \| Classic++ \| Custom | sets every row below it |
+| 62 | **Undithered assets** | Off \| On | `assets=` — done, G18a |
+| 90 | **Dynamic lighting** | Off \| On | `light=` — done, G18a |
+| 118 | **Shadows** | Off \| Hard \| Soft | `shadows=` — done, G18b |
+| 146 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=`, live only at Soft |
+| 174 | **Supersampling** | Off \| 2× | `tagpu_ss.off` |
+
+**Every row is live, and that is a rule the menu keeps** [DECIDED 2026-09-09]. Mouse-wheel zoom
+was the seventh row and was **cut**: `tagpu_zoom_init()` runs *once* from `dllmain.c:130` and
+installs byte patches, so flipping `tagpu_zoom.on` mid-game lights the plate green and changes
+no pixel until the next launch. It is also a play mode rather than a rendering option. The
+lever stays; the row goes. The other six were checked against the code and all take effect on
+the next frame — `assets`/`light` as per-frame uniforms, `shadows` as a per-frame branch,
+`shadowres` because `tagpu_shadow.c:223` reallocates the depth texture when the edge changes,
+`ss` because `tagpu_ss.off` is re-`stat`ed per unit render. So **no row ever needs an asterisk**,
+and any future row must clear the same bar or stay in the cfg.
+
+*This supersedes a 150×352 panel at `(128,128)` — the rect `VISUALRT.GUI` uses — with the
+label 16 px **above** its control on a 44 px pitch. The label moved beside the control, and
+that is the whole reason the frame has to be composed rather than reused: every stock panel
+puts the label above, which seven rows have no room for.*
+
+**It is NON-MODAL, and it does not pause** [DECIDED 2026-09-09, superseding the click-away
+behaviour prototyped the same day]. The panel opens on the sprocket and closes on the sprocket;
+clicks anywhere else go to the game untouched. Two things forced it, and both are measurements:
+**every row is live**, so a menu you must dismiss to see the effect of is the wrong shape —
+you would click, close, look, reopen; and the panel is 304×212 in a corner, covering ~8 % of a
+1024×768 frame and none of the side panel. It also removes the only place our input code would
+have had to arbitrate with the game's, and makes the earlier *"not measured: whether a `.GUI`
+dispatcher reports a click outside its `id=0` rect"* moot — nothing needs that answer now.
+
+**It must not pause the sim, in either mode** [OWNER'S CONSTRAINT 2026-09-09]. That is free:
+pausing is a separate flagged action, not a property of the push (`ARMOPT.GUI` and a build page
+share a rect and a push path, and only the first pauses), and it is **single-player only**
+anyway. The exit criterion is ready-made — the `+clock` cheat draws game time from the sim tick
+at `main+0x38A47`, and the notes record the seconds *stopping* with TA's own menu open, so
+"the clock still ticks with our panel up" is a two-screenshot test.
+
+**No Apply button** [DECIDED 2026-09-09]. A stage button **is** the setting — there is no
+edit buffer for an Apply to commit — so `OnCommand` writes the row's key on the click and
+the panel is dismissed by the trigger or by clicking away, the way a drop-down is. Not only
+a visual choice: it removes an eighth gadget from the `.GUI` and means no code ever has to
+gather seven gadgets' state at once. It also takes 40 px off the panel, which is why the
+height is 240 and not 280.
+
+**The ground is `frontend.gaf`'s own `back*` nine-slice** [DECIDED 2026-09-09] — the shell's
+mottled panelling, 64×64, composed at 304×240 by `tools/guipanel.py --nine back`. Three were
+built and looked at: `dia` (TA's dialog exactly — `diatile` is *one colour*, flat black, in a
+grey bevel), `back`, and a `hybrid` putting the back texture inside the dia frame. `back`
+was chosen. **Use `backtile` frame 4, not 0** — frame 0 carries a lit bottom edge that puts
+seams through a tiled centre. Only the seven recesses are drawn over it; `text16*` is a
+*blue* text-field well, not a neutral recess, which is why they cannot come from the kit.
+
+**What opens it: a frameless sprocket on the top bar** [DECIDED 2026-09-09]. 28×28 in the
+32 px bar, right-inset by **`MARGIN = 16`** — the *same* margin the panel is right-aligned
+by, so the icon's right edge and the drop-down's right edge land on one line and the menu
+visibly drops from the icon. Both are anchored to the frame's **right edge**, never to a
+fixed coordinate: `trigger_at(w) = (w − 16 − 28, 2)` and `panel_at(w) = (w − 16 − 304, 32)`,
+which is 980 and 704 at 1024, 1876 and 1600 at 1920. `tools/guipanel.py --trigger` generates
+the icon; nothing of the game's art is in it. **The DLL draws it and hit-tests it** — see the
+resolved *who hosts the trigger* gate below — so it never enters the `.ufo` and stays generated
+geometry plus nine palette indices.
+
+*The inset was 36 for a day — the position picked by eye from the prototype, which was not
+derived from anything. `MARGIN` is the only non-arbitrary number available, and using it for
+both rects is what turns the placement into a rule.*
+
+- **The engine already ships the idea of a frameless icon button.** `mainmenu.gui` GADGET5
+  `Credits` — the Cavedog logo — is an ordinary `id=1` button with `text=` empty and
+  `attribs=1026`, where every other button on that screen is `attribs=2`. Its art is
+  `anims/mainmenu.gaf`, one entry, 80×40, five frames, and it has no plate, no bevel and no
+  text.
+- **The "faint tan" is a palette ramp, not a colour.** TA's palette 55..63 is a dark warm
+  ramp — `55 (95,99,71) · 56 (91,87,59) · 57 (83,67,51) · 58 (71,59,43) · 59 (59,51,35) ·
+  60 (47,43,27) · 61 (35,31,19) · 62 (23,19,15) · 63 (11,11,7)` — and the Cavedog logo is
+  drawn **entirely** inside it: its resting frame is 778 px of 62, 395 of 61, 205 of 60,
+  113 of 59 and three of 58. The outline reads as faint because it is three ramp steps above
+  its ground, not because it is desaturated.
+- **The state change is a slide along that ramp, not a second picture.** Of the five frames,
+  0/2/3 are identical, 1 drops 58 entirely and 59 falls 113 → 24 (pressed), and 4 gains
+  56/57 and more than doubles 58 (over). Nothing moves. That is how a button with no plate
+  still reads as a button, and it is what the trigger's four frames do.
+- **The logo's own scheme could NOT be copied straight onto the bar.** Measured on real
+  1920×1080 and 1024×768 skirmish frames: the top bar is exactly **32 px** (rows 0..31; row
+  32 is the world) and **its own texture is index 62** — the modal bar pixel is (23,19,15),
+  the same value that is 52 % of the logo's ink. Laid on the bar the logo's ink would be
+  invisible. So the ramp is re-hung around a lighter ground: the **body goes below** the bar
+  (63, near-black at the core) and the **outline above** it — `59` at rest, `57` over, `60`
+  pressed — which keeps the logo's three-step relationship around a different centre.
+- **The bar has room.** Quiet runs (no bright art in the 32 px band) measured at 1920:
+  x 984..1327 and 1497..1840, 343 px each, plus 1841..1920 at the corner. At 1024 the whole
+  right end from x≈940 is quiet. The corner itself was prototyped and rejected in favour of
+  the inset, where a window border cannot clip it.
+- **The bar's own art is LEFT-anchored, and that is why no inset can be chosen to dodge it**
+  [MEASURED 2026-09-09]. On 1024 and 1920 frames of the same map every seam sits at the
+  **identical x** in both — 123, 132, 169, 215, 352, 397, 418, 468, 604, 641, 798, 814,
+  983… — so the bar is drawn from the left and the extra width at 1920 is simply more of it.
+  Past the resource readouts it repeats on a **513 px period**: seams at 814, 983, 1327,
+  1496, 1840, gaps of 169, 344, 169, 344. (`LIGHTBAR` frame 1 is 507×32, suggestively close;
+  the tile is *not* confirmed and the phase origin is not pinned.) A seam's distance from the
+  **right** edge therefore changes with resolution — 40 px in at 1024, 79 px at 1920 — so
+  chasing it would make the icon's position resolution-dependent, for a 4 px feature peaking
+  at 71 on a bar whose own texture already reaches 59.
+
+  **What that does cost is the bore, which is transparent** — a seam crossing it reads as a
+  defect rather than as texture. At `MARGIN = 16` the seam falls on the icon's left teeth at
+  1024 and misses the icon entirely at 1920; the bore is clean in both. An inset of 26 would
+  have put a seam straight through the bore at 1024, which is the one placement to avoid.
+- **Rejected first: the icon on a plate.** Two rounds went to `commongui.buttons0` — frames
+  0..3 (16×16, which leaves a 10 px canvas in a 32 px bar and made every cog near-abstract)
+  and then frames 24..27, the real 96×31 in-game menu plate `ARMOPT.GUI` and `PREFS.GUI` use.
+  Six 27×27 cogs were drawn for that plate before the whole plate idea was dropped. Two
+  findings survive it: **the 96×31 plate's face is 26 px, not 31** — row 0 and rows 28..30
+  are bezel and row 27 a bright bottom chamfer — and **the ink inverts on it**, since it is
+  light brushed steel (~155 normal / 187 hover / 123 pressed) rather than the dark green of
+  the 16×16.
+- **Eight teeth, and it matters.** 8 is the only count that pixelises cleanly at this size,
+  because 45° steps put every tooth in mirror symmetry with another across an axis or a
+  diagonal; 10 and 12 gave ragged flanks and, at 12, a rough circle at 1:1.
+
+**Custom is derived, never chosen.** Clicking Renderer alternates Classic and Classic++;
+touching any row below makes it read Custom. **Shadows Off / Hard / Soft falls out of the
+model rather than being invented**: Classic's shadows *are* the hard ones (the 5-px
+silhouette drop and the cached slant, G13n) and Classic++'s *are* the soft ones (the
+map-anchored depth map, PCSS-lite, G14i), and a three-stage button is what the engine
+already draws for that (`stagebuttn3`).
+
+**Absorbed, not dropped:** `tagpu_vpwide.on` has no row because `tagpu_opt.c` already pairs
+it with `tagpu_zoom.on` through the `needs` column — one Zoom row arms both.
+
+**Demoted to `tagpu_classicpp.cfg`:** `penumbra`, `shade`, `airshadow`, `terrainshadow`,
+`amb`, `unitsun`, plus `tagpu_hires.on`, `tagpu_nano.off` and `tagpu_fpsosd.on`. Still
+written and still editable — a human, a tacli verb and the screen drive the same state —
+just not player-facing options.
+
+**State is still the trigger files and the cfg** (unchanged from the original decision):
+on/off is a file the screen creates and deletes, polled per frame; numbers are `key=value`
+in `gamedir/tagpu_classicpp.cfg`, re-read on mtime change, keyed like the lab's URL
+parameters. The shadow keys are §2.12's, and the depth map still runs only when
+`shadows=1` **and** the engine's own Shadow option bit is set (`main+0x37F06` bit 2;
+`tagpu_shadow.c:359` reads it) — the player's in-game Shadows toggle keeps its meaning.
+
+**How it is assembled** [DECIDED 2026-09-09, with the owner]. The governing rule the owner set
+is **use TA's gadget/UI mechanism as much as possible**, and every choice below was taken under it.
+
+1. **`impure-patch.ufo`, written by the DLL at `DLL_PROCESS_ATTACH` if absent.** New names go in
+   a `.ufo` and overrides go loose — measured, `file-formats.md` §5 — and `RENDER.GUI` plus our
+   GAF are new names, so a `.ufo` is the engine's own answer. The DLL writes it rather than CI
+   shipping it, so distribution stays **one `ddraw.dll`** and the archive can never drift out of
+   step with the DLL that expects it. The writer is cheap because a **literal-only SQSH method-1
+   stream is a valid uncompressed encoding** (`file-formats.md` §5), so there is no compressor.
+   ○ **If the asset set ever grows much beyond these two files, revisit and let CI build it
+   instead** — the single-file property stops being worth a hand-rolled archive writer at some
+   size, and that trade should be re-taken rather than inherited.
+2. **The frame in the `.ufo` is our *drawn* panel** (`guipanel.py`'s `draw_panel()`, nothing
+   sampled), because Cavedog's pixels can never ship. At screen-load time the DLL composes the
+   chosen `back*` ground from the **player's own install** — read through the engine's loader,
+   long after HAPI is up — and repaints the frame's pixel buffer in place (`+0x10
+   PtrFrameBits`). Ship the frame **uncompressed** and that is a flat `w*h` copy. If the
+   composition ever fails the drawn frame is still there, so the failure mode is a plainer
+   panel, not no panel.
+3. **The screen is pushed with `0x495207`'s idiom**, transcribed: save `main+0x37EA0`, write
+   `"RENDER.GUI"`, `GUI_Load(gi, main+0x37EA0, flags)`, set `+0x08` to our `OnCommand` and
+   `+0x0C` to `main`. Closing restores the saved name and lets `UpdateIngameGUI` pop us — **we
+   never call `GUI_Pop`**. Without this the engine pops the screen at the next of 21 call sites.
+4. **State is set through the engine and drawn by the engine.** `0x4A1080(gi, name, value)` is
+   read and thin — name scan, `mov [rec+0x137],cl`, return 1, **no clamp, no callback, no
+   redraw** — so it is the direct field write plus a lookup, which is also exactly what TA's own
+   code does at `0x477416`. Repaint is separate: `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)`.
+   **[CORRECTED 2026-09-09 by the landing review: the engine DOES advance it.]** Three sites
+   `inc` `+0x137` — `0x4A6EC8`, `0x4A9DB6`, and `0x4AA377`, the last wrapping against the stage
+   count at `+0x136` and skipped entirely when `grayedout` bit 0 is set (`0x4AA36A`). So
+   `OnCommand` advances **its own model** and re-pushes every row, which overwrites the
+   engine's advance; it must not advance the gadget field itself, or every click would move two
+   stages. ● **`gi+0xCCA` is identified**
+   (2026-09-09): the screen's **deferred-repaint flag**. About twenty state-changing calls set
+   it, there are bare accessors at `0x49FA90`/`0x49FAB0`, and its one reader in the GUI pump
+   (`0x4AA0AF`) clears it and calls `GUI_StageUpdateDraw(gi, top->flags | 0x40)`. So it is not
+   a precondition of anything; setting it is *better* than calling the draw by hand, because
+   it repaints with the screen's own flags and coalesces several changes into one repaint.
+
+5. **The trigger's hit-test must sit on BOTH input paths.** `tagpu_shield.c` handles the
+   injected `WM_TAGPU_MOUSE` → `deliver_mouse()` *before* the shield check, and then, with the
+   shield on, swallows every real `WM_LBUTTONDOWN`. So a tacli instance sees **only injected**
+   clicks and a player sees **only real** ones. A hit-test hung off one path passes its own
+   tests and fails for players, or the reverse — it has to be one function called from both.
+   (The same shape as the `field-notes` patch-2b bug, where a cursor change quietly altered
+   what a left click did.)
+6. **`OnCommand` does not write the file.** It sets an in-memory value; the cfg is written at
+   the next present. TA is lockstep, `OnCommand` runs on the game thread, and a synchronous
+   write there is an unbounded stall — a slow disk, a scanner touching a just-written file, a
+   network drive — which can drop a player from a session whatever the content was. The
+   settings are render-only so they cannot desync *by content*; this is about the stall.
+   Deferring also coalesces four rapid clicks into one write, and the cfg poller re-reads on
+   mtime either way, so nothing downstream changes. *Note the existing knobs are written
+   synchronously — but by humans and by tacli, from outside the game thread, which is not the
+   same thing.*
+7. **If the `.ufo` is unusable: silent on screen, loud in `tagpu.log`, and rewritten every
+   launch** with a version stamp. Silent because a rendering menu failing to appear must never
+   cost someone a game; logged because that is this codebase's idiom (`terrown: ARMED`, and the
+   ta-drive skill's advice to `md5sum` the DLL when a module does not log). Rewritten
+   unconditionally because staleness after a DLL upgrade is the one failure here that would be
+   genuinely confusing, and it costs a few ms at startup. *Write access to the gamedir is not a
+   new requirement — the DLL already writes seven files from 17 create-for-write sites.*
+
+**WHAT WAS BUILT, and the six things the live runs corrected** [BUILT 2026-09-09, G18 gates
+1-3; `tagpu_menu.c`, `tagpu_ufo.c`]. All three gates are met on a 1024×768 skirmish. The
+design above survived contact almost intact; what did not is recorded here rather than
+quietly fixed, because every one of them cost a build-and-launch cycle.
+
+1. **`GUI_Load` stamps its name argument into `ControlsAry[0].name`** (`0x4AAC98`), which is
+   what `IsOnTop` compares — so the `.GUI`'s authored `name=` is irrelevant and the string we
+   pass is what matters. `armmain2.gui` says `name=HEADER;` on disk and reads `ARMMAIN2.GUI`
+   live for exactly this reason.
+2. **`flags & 0x400` suppresses GUI_Load's STAGE 1, not just a repaint** — and stage 1 is
+   what builds the panel's surface. Using it to patch the right-aligned `xpos` first and then
+   asking for a bare `0x40` repaint left the panel with no surface and the engine composited
+   the frame's own pixels at its rect. Reproduce the suppressed call (`flags | 1` under the
+   `0x4C2470`/`0x4C2870` pair), do not replace it.
+3. **The tick cannot hang off `UpdateIngameGUI`.** None of its 21 call sites is the frame
+   loop. `DrawGameScreen 0x468CF0` is.
+4. **A world click rebuilds the whole in-game GUI stack** — a fresh `ARMMAIN2.GUI` with a NULL
+   `per_active`, our screen freed — and a panel over the world takes its own clicks through
+   that path. The re-push is the right recovery; **re-reading the levers on it is not**, and
+   doing so put every plate back the moment it was clicked. Reading the levers is edge-
+   triggered on the player's open; a recovery re-push keeps the model.
+5. **`gi->UIChange_f == -1` is not proof of a pop** (the pump resets it and calls `OnCommand`
+   again on the same click). The `per_active` chain is the authority.
+6. **The `id=12` gadget does not load the GAF — the panel does**, so the file is
+   `anims\<screen>.GAF` and not `anims\<gadget>.GAF`. Named after the gadget it was never
+   opened; named after the screen it loads. See [engine map](exe-reverse-engineering.html)
+   *A screen's own GAF*.
+7b. **The Renderer row applied nothing, because the menu drove only ONE of the switch's
+   two files.** `tagpu_opt.c`'s precedence is *an `.on` wins, and an `.off` only defeats a
+   pass that was on **by default***, so writing `tagpu_classicpp.off` alone fails in both
+   directions: with a hand-armed `.on` present (what `tacli arm` writes) the `.off` is inert
+   and Classic++ can never be turned off, and on any tacli instance — which carries
+   `tagpu_defaults.off`, so the table's default does not apply — deleting the `.off` is not
+   enough to turn it **on** either. The screen now owns both files, which is correct under
+   the shipped DLL, a tacli instance and a hand-armed `.on` alike. Measured: Classic++ →
+   Classic changes **1 755 893 of 2 073 600 px** outside the panel, and the round trip back
+   returns to **53 px** of the original — the cursor and a restoring tile.
+   *Supersampling deliberately keeps its single file: `tagpu_ss.off` is read directly by the
+   native pass, there is no `tagpu_ss.on` and no table entry, so inventing one would arm
+   nothing.* **The general lesson: a row that drives a `tagpu_opt` pass must write the pair,
+   because the table's default is only one of three configurations it will meet.**
+7c. **A row that cannot bite is now greyed rather than left looking live.** Four of the six
+   describe Classic++'s behaviour and are inert under Classic; leaving them reading `On`
+   there was the menu asserting something untrue. `grayedout` also makes the engine refuse
+   the click, so the two are one change.
+
+7. **A panel over the world takes its clicks through the ZOOM TRANSFORM**, and at any zoom
+   ≠ 1 that bends them — so no row worked at all. Found in play within minutes, and invisible
+   to every gate test, because those ran at zoom 1 with nothing else armed. `tagpu_zoom.h`
+   already promised dialogs arrive unmodified and noted it cannot see them; the screen now
+   answers `tagpu_menu_owns_point()` for the sprocket and its panel, and both
+   `tagpu_zoom_mouse_lparam` and `tagpu_zoom_drop_mouse` pass such a point through untouched.
+   Verified at 3.138×. *The same trap still bends `ARMOPT`, `EXITMENU` and `YESORNO`, which
+   the engine also draws over the world — this fixes only the screen that hits it on every
+   click.* **The lesson for the next screen over the world: a gate test at zoom 1 with a bare
+   arm set is not a test of the thing a player uses.**
+
+The oracles, for the record: the sim tick at `main+0x38A47` ran **1801 → 2057** over four
+seconds with the panel open and **2147 → 2147** with TA's own `ARMOPT` open, which is the
+non-modal claim measured rather than asserted; every row reports the engine's own `stage N →
+M` confirmation and the cfg on disk follows; `Shadow quality` greys at `Shadows ≠ Soft` and
+the engine then **refuses the click**; and the sprocket opens and closes the menu while a
+click at (500,400) does neither.
+
+**Still open after the spike.** The panel is torn down and re-pushed on every world click, so
+a click costs one frame of the panel being rebuilt — cheap, but visible if you look for it,
+and worth closing if a better re-assert exists. `stagebuttn2` (green/green) is still
+unreachable: a `stages=2` button with `texturenumber=0` gets `stagebuttn1`, the red/green
+plate, which is right for the Off/On rows and would be wrong for a neutral two-choice one.
+
+**What that buys, and when it would stop being worth it.** The engine keeps hit-testing,
+dispatch, the `stagebuttn` pressed/greyed art, `hattfont12` labels at any resolution, and the
+`panel+0xB8`/`+0xBC` save-under — and, decisively, `tagpu_gui_surf.c`'s *"every engine surface
+the publisher has seeded gets a twin"* means the panel is **undithered and sharp for free**
+through G15e's colour twin and G17a's device-res layer. What we do ourselves is all *values* and
+no mechanism: two bytes and a repaint request, one frame's pixels, one 28×28 trigger, one small
+archive. **If the menu ever needs a control TA has no gadget for** — a colour picker, a preview,
+a scrolling list — the gadget system stops paying and the superseded DLL-drawn panel wins.
+
+**What has to be built before the screen can exist** — the gates are in the roadmap:
+
+- **Split the switch** — ● **done 2026-09-09 (G18a)**. `assets=0|1` and `light=0|1` in
+  `tagpu_classicpp.cfg`, read by `tagpu_classicpp_assets()` and `tagpu_classicpp_lit()`
+  (each is the master arm AND its key, so neither can be on while `tagpu_classicpp.on`
+  is absent). *Undithered assets* and *Dynamic lighting* are real, independent rows.
+
+  **`uLit` was not the lambert, and feeding it from `light=` was wrong** — the mistake is
+  recorded because this page asserted otherwise. `uLit` is the **Classic++ colour branch
+  itself** in all three shaders ("Nothing below this branch runs under Classic++, nothing
+  in it runs under Classic", `tagpu_terr.c`), and `uRestored` is read *inside* it. Feeding
+  `uLit` from `light=` therefore dropped the whole frame back to Classic and silently
+  overrode `assets=`: measured on the parity fixture, `assets=1 light=0` and
+  `assets=0 light=0` came out **byte-identical**, 0 px apart. What was actually built:
+
+  | | fed from |
+  |---|---|
+  | `uLit` — the colour branch, and with it the RGB fog rule of §2.6 | the master arm, `tagpu_classicpp_on()` |
+  | `uRestored` (`tagpu_terr.c`, `tagpu_native.c`, `tagpu_feat.c`, `tagpu_fx.c`), the terrain restore step, `tagpu_gaf.c`'s twin, the restorer's job pump, and the UI colour twin of G15e | `tagpu_classicpp_assets()` |
+  | `uLambert` — **new**, in `tagpu_glsl.h`'s `TAGPU_GLSL_LIGHT_UNIFORMS`; and the ground lambert `tagpu_feat.c` bakes into an anchor | `tagpu_classicpp_lit()` |
+
+  **`uLambert == 0` does not skip `taLambert` — it hands it the LEVEL normal**, so the
+  slope shading goes and the shadow term, which lives *inside* `taLambert`, stays. Level
+  ground is exactly 1.0 there by construction (`uNorm` is `1/level`, and `level` is that
+  same lambert of the up normal), which the measurement confirms: `light=0 shadows=0` is
+  **byte-identical to `sun=off`**, 0 px. A feature has no normal to flatten, so there
+  `light=` is applied by baking 1.0 instead.
+- **Stop `sun=off` clearing shadows** — ● **done 2026-09-09 (G18b)**. `sun=off` no longer
+  forces `amb=1.0` and no longer writes `s_light.shadows` at all: it simply **is** `light=0`,
+  the same level normal handed to `taLambert`. The picture does not move — the new
+  `sun=off shadows=0` is **0 px** from the old `sun=off` on the parity fixture — and the
+  shadow term, which lives inside the lambert and was being multiplied by `(1 - amb) = 0`,
+  survives: `sun=off shadows=1` differs from `sun=off shadows=0` by 1800 px, and is 0 px
+  from `light=0 shadows=1`. Note `sun=off` flattens **unit** lighting as well as terrain,
+  which is why the row is "Dynamic lighting" and not "Terrain dynamic lighting".
+
+  Two consequences worth having. `tagpu_shadow.c`'s `amb >= 1.0f` refusal is now reachable
+  only through an explicit `amb=1`, where it is an honest early out rather than a policy —
+  at `amb = 1` the pass would cost a depth render and change no pixel. And the **level-ground
+  rule now holds with a shadow on it**: level ground takes exactly 1.0 in both lanes whether
+  or not it is shadowed, because a level cell's own normal *is* the normal `light=0`
+  substitutes. Measured: 300 026 level-ground pixels identical between the lit and the flat
+  lane, 558 of them inside the soft shadow. The old `sun=off` could not show this — it had
+  no shadows to compare.
+- **A third value on `shadows=`** — ● **done 2026-09-09 (G18b)**. `shadows=` is now
+  `0` none, `1` **soft** (the depth map of §2.12, the default) and `2` **hard** (Classic's
+  own 5-px silhouette and cached slant, emitted under the switch). The two are never both
+  on: `tagpu_shadow_begin` runs only at `1`, and `tagpu_native.c`'s slant emission and
+  silhouette loop only at `2` — or under Classic, which the key does not govern at all.
+  An out-of-range value is reported as a bad token and the default stands.
+
+  **A/B'd against `classicpp.off` at the same eye** on `shadow-lab` (six units and
+  structures, the sim paused with Tab so the animating mex and wind blades hold still):
+  Classic's shadow mask 2144 px, ours at `shadows=2` **2067 px**, intersection 2006 —
+  **IoU 0.910**, 138 px Classic-only and 61 px ours-only, all of them one-pixel slivers on
+  the same silhouette edges. That is inside §2.12's "shadowed-pixel counts within 5 %" bar
+  (−3.6 %). `shadows=0` also stops an aircraft's `airshadow=drop` silhouette, which the
+  switch used to draw whatever `shadows=` said.
+- **Panel art and an entry point** — ● **answered and BUILT 2026-09-09 (G18 gate 3).** Seven `h20`
+  gadgets need seven `h20` recesses and no stock runtime panel has more than five; `PREFS`
+  has six recesses and uses all six, so there is nowhere to hang a "Graphics" button either.
+  Both answers are above: the ground is **composed at runtime** from `frontend.gaf`'s `back*`
+  nine-slice with the recesses drawn over it, and the entry point is the **frameless sprocket
+  on the top bar**. `tools/guipanel.py` builds both the way the DLL will — see
+  [GUI gadgets](gui-gadgets.html) §10.3.
+
+  **Nothing of the game's art is carried either way**, but the mechanism changed on
+  2026-09-09 once the loader was read. *Superseded: "composed in memory and appended to the
+  gadget GAF blob at `gi+0x04`".* `gi+0x04` really does hold **one** bank from **one** call
+  site (`0x49154E` → `0x4AEEE0` with the hardcoded `"commongui"`) — but the corollary drawn
+  from that, *"so a second file the engine finds by itself is not an option"*, **is wrong**:
+  gadgets load their own GAFs by name (115 `*_gadget.gaf` ship; `armopt.gaf`, `prefs.gaf`,
+  `mainmenu.gaf` exist plain). See [engine map](exe-reverse-engineering.html) *The GAF banks a
+  screen can reach*. So the art arrives as **a file the engine loads itself**, and no
+  in-memory bank surgery is needed at all.
+- **Whether a new `.GUI` name can be pushed at all** — ● **ANSWERED 2026-09-09: yes.**
+  `GUI_Load 0x4AA8F0(gi, name, flags)` turns the name into a **file path** (`<prefix at
+  gi+0x9B6><name>` + the extension `"GUI"` at `0x502828`, opened by `0x4BBC40`), so the exe's
+  screen-name string table is never consulted; our DLL is the call site and no stock screen is
+  sacrificed. The push itself is `0x4AAC56` and `flags & 0x200` suppresses it. Full reading,
+  including the `0x495207` template to copy: [engine map](exe-reverse-engineering.html) *The
+  screen lifecycle*.
+- **Who hosts the trigger** — ● **ANSWERED 2026-09-09: nobody can; the DLL draws and
+  hit-tests it.** Not a preference — geometry. Every in-game screen's panel is the *side*
+  panel (`armmain2`/`cormain2`/`armmain`/`armgen` are all `(0,128) 128×352`; `tabmenu` alone
+  is `(130,−33) 510×33`), **no GUI screen owns the top bar**, and a gadget is drawn into its
+  panel's own `w×h` surface at panel-relative coordinates — so a gadget at `x=960` has nowhere
+  to be drawn. The `ARMMAIN2`/`CORMAIN2` idea is dead twice over: it is also covered by a
+  builder's page (LIVE: `ARMCOM1.GUI`, `under: ARMMAIN2.GUI`), which is most of a game.
+  The 28×28 trigger is therefore ours to draw and hit-test; the menu it opens stays entirely
+  the engine's.
+
+*Superseded in part, kept so it is not re-derived.* The original decision (2026-09-04) was a
+small "Options" button at the top right over the engine's top bar, opening a **DLL-drawn**
+panel of buttons and steppers for every Classic++ knob; three shapes were prototyped against
+it (a drop-down, a full panel, an edge rail; the full panel won).
+
+**The placement came back; only the drawing moved.** The 2026-09-09 design is again a small
+icon at the top right of the bar opening a drop-down — what changed is that the panel is the
+engine's own gadgets on its own GAF art instead of pixels the DLL paints, and that the
+drop-down beat the full panel this time round. So the old reasoning is not moot, it is the
+**fallback**, and it still holds where the overlay is concerned: the composite draws our
+non-empty pixels over the engine's frame outside the viewport, the top-right ~400 px of the
+1024-wide frame are bare panelling, the DLL sees every window message before the game and
+already swallows the wheel, and our pixels cover the engine's cursor. That last set is
+exactly what a DLL overlay forwarding the trigger click would rest on, which is why the open
+question above has two answers and not one.
 ### 2.11 Two small calls made by the implementer
 - **The unit vertex stream** grows from 11 to 15 floats: the map-space normal and the
   world height join `x, y, depthEnc, u, v, flat, ck, shadeRow, wx, wzp, vy`. Face normals are
@@ -495,7 +890,10 @@ Grilled with the owner before any code, one branch at a time; the ones above (§
   indices, under 20 MB. The cell's diagonal is the one `taTerrN` interpolates across.
 - **Sub-passes off under the switch**: the per-unit stencil silhouette and the slant range are
   not emitted or drawn under Classic++ (air units under `airshadow=drop` excepted); the hires
-  silhouette likewise (§2.4).
+  silhouette likewise (§2.4). **Amended 2026-09-09 (G18b)**: that is `shadows=0|1`. At
+  `shadows=2` the switch emits and draws the pair — every unit, the replacement meshes
+  included — and the depth map refuses instead; at `shadows=0` even the `airshadow=drop`
+  aircraft loses its silhouette.
 - **Modules**: `tagpu_shadow.c/h` owns the map, the samplers, the FBO, the light-space frame
   and texel rule, the depth program for the 3DO stream, the per-frame pass and the read-back
   uniforms, and joins the GL reset; the mesh is the terrain module's; the eight keys are parsed

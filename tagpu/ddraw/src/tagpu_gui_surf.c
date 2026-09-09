@@ -637,7 +637,9 @@ static void restore_step(void)
     int i;
     const unsigned char* pal = tagpu_pal_live();   /* 256 x {R,G,B,255}, ours, render thread */
     unsigned chg = tagpu_pal_changes();
-    if (s_norestore || !tagpu_classicpp_on() || !x_glDrawBuffers || !x_glClearBufferfv) {
+    /* the ASSETS half, not the master arm (G18a): restored atlases are what
+       `assets=` owns, and `light=` must be able to run without them */
+    if (s_norestore || !tagpu_classicpp_assets() || !x_glDrawBuffers || !x_glClearBufferfv) {
         s_colValid = 0;
         return;
     }
@@ -1059,7 +1061,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
     if (f->frame_counter - last >= 300) {
-        /* 205 bytes of literal + 30 conversions: the worst case is ~519, and
+        /* 220 bytes of literal + 32 conversions: the worst case is ~579, and
            _snprintf does not NUL-terminate what it truncates */
         char b[768];
         int palDiffAt, palDiff = tagpu_pal_diff(&palDiffAt);
@@ -1071,11 +1073,13 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
-                  tagpu_classicpp_on() ? 1 : 0, s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb,
+                  tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,
+                  tagpu_classicpp_lit() ? 1 : 0,
+                  s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb,
                   s_k, s_sharpW, s_sharpH, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
