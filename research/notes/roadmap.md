@@ -1895,10 +1895,17 @@ failed ground composition latches instead of leaking one `frontend.gaf` per worl
   Until it is, `Ultra` is the wrong recommendation.
   **The caster/receiver split is NOT the cause** — that hypothesis was built into the lab as
   `castsplit` on 2026-09-09 and measured at 0.001 std / 780 px, which killed it and saved a
-  terrain-pass refactor. The live candidate is a blocker-search allowance that scales with the
-  TAP DISTANCE instead of with the texel (`bslack` in the lab, unmeasured in the game), and the
-  next lab work is to give `shadowFrame` the game's own light frame — `[0, Y_TOP]`, the zoomed
-  window, the octave and the map-anchored texel snap — which is the last enumerated difference.
+  terrain-pass refactor.
+  **The LAB REPRODUCES THIS at full strength** (same day, later): the 8.72 figure came from an
+  instance whose cfg carried `penumbra=2.5` where the shipped default is `0.05`, and the lab was
+  being run at the default. The penumbra is the amplifier — the PCSS radius is `penumbra × the
+  blocker distance`, so a sub-texel bias failure is smeared into a blob. At the game's own 2.5
+  the lab gives acne 7.66 / worst 61 of 255 and shows the blocky lattice by eye. **The severity
+  at the shipped default is 0.96 std / 58 worst and was never measured in the game — open, and
+  it decides how urgent this is.** Fix candidates rejected in the lab: `bslack` (no effect),
+  `mindist` (no effect), `pbias` (works at 4 texels but eats 12 % of the real shadow). Those
+  two null results localise it: the false blocker is on the receiver's OWN ray and far from it
+  in depth.
 - **`shadowres` outside the four table values** (256, say) is snapped to the nearest row on the
   first click of any row rather than being preserved.
 - **The G15 `strict` walk still has not been run against this screen**, and **GUI scale `k ≠ 1`

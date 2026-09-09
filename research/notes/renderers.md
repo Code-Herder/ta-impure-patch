@@ -486,6 +486,53 @@ unlike a bias floor it does not peter-pan. **Not yet measured in the game.** It 
 the lab as `bslack` so that both can be swept with the same knob. `terrainshadow=0` remains the
 complete answer for anyone who sees the artifact today.
 
+**CORRECTION [2026-09-09, later the same day]: the lab reproduces this defect at full
+strength, and the 8.72 figure above was measured on a NON-DEFAULT configuration.** Three
+things were wrong in the paragraphs that follow, and all three are measurement errors of mine
+rather than anything about the renderer:
+
+1. **`penumbra`.** The instance the in-game numbers came from (`g18acne`) carries a
+   `tagpu_classicpp.cfg` reading `sun=225,35  amb=0.35  penumbra=2.5` — the menu writes only
+   `assets/light/shadows/shadowres` and *preserves* those three, so they were put there by hand
+   during the investigation and are not what a player gets. **The shipped default is
+   `penumbra=0.05`**, and the lab was being run at it. The penumbra is the **amplifier**: the
+   PCSS kernel radius is `penumbra × the blocker distance`, so a bias failure that is a
+   fraction of a texel wide gets smeared into a soft blob tens of units across. Same lab frame,
+   same everything else: acne **0.96** at `penumbra=0.05`, **2.44** at 0.5, **7.66** at 2.5.
+2. **The oracle was computed wrongly.** `std(term) − std(term at bfloor=24)` is a difference of
+   standard deviations, not the standard deviation of the difference. The acne is the per-pixel
+   image `term(bfloor=0) − term(bfloor=24)`; take **its** std. The wrong form understated it
+   about fourfold.
+3. **The regions were not comparable.** The game figure was a hand-picked 100 %-water patch; the
+   lab figures were whole 1024×768 frames including the letterbox, which contributes no
+   variance. On one lab frame: 1.34 whole-frame, 1.50 inside the viewport, 3.85 on the worst
+   200×200, **5.92 on the worst 100×100**, 7.47 on the worst 64×64.
+
+With all three fixed, at the game's own `penumbra=2.5`: **lab acne 7.66 over the viewport,
+11.39 on the worst 100×100, worst pixel 61/255**, against the game's 8.72 on its patch — and
+the frame shows the blocky rectilinear lattice by eye, not as a statistic. **The lab is the
+oracle for this defect today.** The sections below are kept because their *structural*
+conclusions were separately tested and stand; read them with the numbers above.
+
+**What this changes about the defect's severity.** At the shipped `penumbra=0.05` the same
+frame gives 0.96 std with a worst pixel of 58/255 — real and visible, but not the dramatic
+form. Whether what was seen in play was the mild form or the severe one was **not** established:
+the play instance carried no cfg (so `penumbra=0.05`), and no severity figure was ever taken at
+the defaults in the game itself. **Open, and worth closing before choosing a fix.**
+
+**Three more fix candidates, all measured in the lab, none of them the fix** (same frame,
+`penumbra=2.5`, `shadowres=2048`, baseline acne 7.66 / real shadow 2.31):
+
+| candidate | knob | result |
+|---|---|---|
+| depth allowance per world unit of tap offset | `bslack` | **no effect at all** — 7.66 at every k up to 1.0, which is 24 world units at the outermost tap. So the false blocker is NOT being found by the ring taps |
+| receiver-plane bias on the receiver's own texel | `pbias` | 7.66 → 6.9 at 2 texels, **0.91 at 4** *(at `penumbra=0.05`: 1.50 → 0.91)*, but it takes 12 % of the real shadow with it |
+| reject blockers nearer than w world units | `mindist` | 7.66 → 7.48 at 8 units. So the false blocker is not *near* either — the map really holds a much shallower depth at the receiver's own texel |
+
+`bslack` and `mindist` between them say the false blocker sits **on the receiver's own ray and
+far from it in depth**, which is a sharper localisation of the defect than anything above and is
+where the next attempt should start.
+
 **WHY THE LAB DID NOT SHOW IT — the first answer was wrong, and the lab is what disproved it.**
 The first answer written here was *"the lab has ONE terrain, the game has TWO"*: the game's
 terrain gather emits screen-space quads with no height, so its fragment shader rebuilds the world

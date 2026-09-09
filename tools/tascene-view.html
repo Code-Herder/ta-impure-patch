@@ -302,7 +302,7 @@ const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither",
                       "filter", "aniso", "shadows", "penumbra", "shade",
                       "terrainshadow", "shadowres", "unitsun", "shadowsun",
-                      "shadowlen", "airshadow", "restore", "model", "precision", "bslack", "bfloor", "castsplit",
+                      "shadowlen", "airshadow", "restore", "model", "precision", "bslack", "bfloor", "castsplit", "pbias", "mindist",
                       "nk", "restorediff"];
 
 function sideQuery(side, presets) {
@@ -433,6 +433,8 @@ function readLook(p, label) {
     shadowres: Math.max(256, Math.min(4096, num("shadowres", 2048) | 0)),
     bslack: Math.max(0, num("bslack", 0)),
     bfloor: Math.max(0, num("bfloor", 0)),
+    pbias: Math.max(0, num("pbias", 0)),
+    mindist: Math.max(0, num("mindist", 0)),
     // castsplit: mirror the GAME's split — a separate world-space caster
     // mesh (build_hills) and a receiver that reconstructs its world point
     // per fragment, instead of casting and shading one buffer. Default ON:
@@ -565,6 +567,8 @@ uniform float uPenumbra;    // penumbra width per world unit of blocker distance
 uniform float uShade;       // fraction of the direct light a shadow removes
 uniform float uBSlack;      // depth allowance per world unit of tap offset
 uniform float uBFloor;      // DIAGNOSTIC: constant bias floor, world units
+uniform float uPBias;       // receiver-plane bias, in texels of its own gradient
+uniform float uMinDist;     // ignore blockers nearer than this, world units
 const vec2 POISSON[16] = vec2[16](
   vec2(-0.94201624,-0.39906216), vec2( 0.94558609,-0.76890725),
   vec2(-0.09418410,-0.92938870), vec2( 0.34495938, 0.29387760),
@@ -589,10 +593,13 @@ float shadowAt(vec3 W, vec3 n) {
   vec2 dzduv = abs(det) > 1e-14
     ? vec2(dpdy.y * dpdx.z - dpdx.y * dpdy.z, dpdx.x * dpdy.z - dpdy.x * dpdx.z) / det
     : vec2(0.0);
+  // the plane's own depth change across ONE texel, before the tap clamp: this
+  // is what the receiver's OWN texel needs as bias, and the nl term is not it
+  float pb = uPBias * length(dzduv) * uShScale.z;
   dzduv = clamp(dzduv, vec2(-4.0), vec2(4.0));       // a grazing receiver stays finite
   if (nl <= 0.0) return 1.0;                 // faces away from the shadow light
   if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
-  float z = p.z - max((1.0 + 2.0 * (1.0 - nl)) * uShScale.x, uBFloor) / uShScale.y;
+  float z = p.z - max(max((1.0 + 2.0 * (1.0 - nl)) * uShScale.x, uBFloor) / uShScale.y, pb);
   float search = 24.0 / uShScale.x * uShScale.z;   // 24 world units, in uv
   // The receiver-plane bias is a LINEAR extrapolation; over a search this
   // wide a curved receiver leaves it. uBSlack world units of depth per
@@ -614,6 +621,10 @@ float shadowAt(vec3 W, vec3 n) {
   }
   if (nb == 0) return 1.0;
   float dist = (z - sum / float(nb)) * uShScale.y;   // receiver - blocker, world
+  // A blocker the BIAS invented sits a fraction of a world unit above the
+  // receiver; a real caster is 10-60 units tall and its blocker is tens of
+  // units up. That distance is the discriminator, and it is already computed.
+  if (dist < uMinDist) return 1.0;
   float r = max(uPenumbra * dist, 0.5 * uShScale.x) / uShScale.x * uShScale.z;
   float lit = 0.0;
   for (int i = 0; i < 16; i++) {
@@ -639,10 +650,11 @@ float shadowAtD(vec3 W, vec3 n, vec3 dWdx, vec3 dWdy) {
   vec2 dzduv = abs(det) > 1e-14
     ? vec2(dpdy.y * dpdx.z - dpdx.y * dpdy.z, dpdx.x * dpdy.z - dpdy.x * dpdx.z) / det
     : vec2(0.0);
+  float pb = uPBias * length(dzduv) * uShScale.z;
   dzduv = clamp(dzduv, vec2(-4.0), vec2(4.0));
   if (nl <= 0.0) return 1.0;
   if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
-  float z = p.z - max((1.0 + 2.0 * (1.0 - nl)) * uShScale.x, uBFloor) / uShScale.y;
+  float z = p.z - max(max((1.0 + 2.0 * (1.0 - nl)) * uShScale.x, uBFloor) / uShScale.y, pb);
   float search = 24.0 / uShScale.x * uShScale.z;
   float slackK = uBSlack / uShScale.z / uShScale.y * uShScale.x;
   float sum = 0.0; int nb = 0;
@@ -654,6 +666,10 @@ float shadowAtD(vec3 W, vec3 n, vec3 dWdx, vec3 dWdy) {
   }
   if (nb == 0) return 1.0;
   float dist = (z - sum / float(nb)) * uShScale.y;
+  // A blocker the BIAS invented sits a fraction of a world unit above the
+  // receiver; a real caster is 10-60 units tall and its blocker is tens of
+  // units up. That distance is the discriminator, and it is already computed.
+  if (dist < uMinDist) return 1.0;
   float r = max(uPenumbra * dist, 0.5 * uShScale.x) / uShScale.x * uShScale.z;
   float lit = 0.0;
   for (int i = 0; i < 16; i++) {
@@ -669,7 +685,7 @@ float lambertD(vec3 n, vec3 W, vec3 dWdx, vec3 dWdy) {
 
 // the uniforms LAB_LIGHT's shadow term adds to every lab program
 const SHADOW_U = ["uShadowOn", "uShadowSun", "uShadowMat", "uShadowCmp",
-                  "uShadowRaw", "uShScale", "uPenumbra", "uShade", "uBSlack", "uBFloor"];
+                  "uShadowRaw", "uShScale", "uPenumbra", "uShade", "uBSlack", "uBFloor", "uPBias", "uMinDist"];
 
 // The depth pass: one attribute, the world point, at location 7 in BOTH the
 // terrain and the unit VAO, so one program renders both into the map.
@@ -1415,6 +1431,8 @@ async function main() {
     gl.uniform1f(U.uPenumbra, L.penumbra); gl.uniform1f(U.uShade, L.shade);
     gl.uniform1f(U.uBSlack, L.bslack);
     gl.uniform1f(U.uBFloor, L.bfloor);
+    gl.uniform1f(U.uPBias, L.pbias);
+    gl.uniform1f(U.uMinDist, L.mindist);
   }
 
   // ---- castsplit: the game's own caster, tagpu_terr.c build_hills ----------
@@ -1457,7 +1475,7 @@ async function main() {
   // frame uses, plus the 128 the shear can reach south
   function hillsDraw() {
     let r0 = Math.floor((E[1] - 192) / 16);
-    let r1 = Math.ceil((E[1] + W[1] / zoom + 128 + 192) / 16);
+    let r1 = Math.ceil((E[1] + W[1] + 128 + 192) / 16);   // W is ALREADY the zoomed window
     if (r0 < 0) r0 = 0;
     if (r1 > hRows - 1) r1 = hRows - 1;
     if (r1 < r0) return;
