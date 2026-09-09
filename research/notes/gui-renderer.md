@@ -1427,7 +1427,7 @@ is itself a guess that wants a look on three monitors.
 | **G17b** `k ≠ 1` live | automatic `k`, the logical mode, the world pass at device resolution, the window policy | a walk at `k = 1.5` and `k = 2`: every stop renders; **clicks land on the right gadget at every stop** (a click test, not a pixel test); no resize across three entry/exit cycles; the 1× mirror still diffs exact at `k = 1` in the same run | hit-testing drifts → M1 is wrong and the phase stops, since 13.1 is what makes the rest free |
 | **G17c** the cursor — **done 2026-09-09, §17** | ours in the sharp layer from live state, the fallback masked in its rect **and the rect counted as key in the world composite**, `cursorscale=` | crisp at `k = 1.5` and 3, under the true pointer; G13m's motion-frame measure re-run | — |
 | **G17d** the string op — **done 2026-09-09, §18** | `PK_STRING`, the observer's string/font/colour capture, **a per-font glyph cache** and the stamp into the twin | text clean at `k ≠ 1` **and bit-identical to the engine's glyphs at `k = 1`**; arena bytes per batch down | our stamp and the engine's blit disagree → the measure loop is wrong; fix it rather than accept a near miss |
-| **G17e** the minimap | the 252-px base snapshotted at load, our fog from the corner-mask grid, the engine's dots replayed ×2, our view box | sharp at `k`; dot positions within a pixel of the engine's; **no unit visible that the engine does not show** | the fog rules disagree (13.10) → keep the engine's fog as a pixel op and ship the base alone |
+| **G17e** the minimap — **done 2026-09-09, §19** | the 252-px base snapshotted at load, ~~our fog from the corner-mask grid~~ **the engine's own fog, dots, arcs and points by masking `+0x142DB`/`+0x142DF` against `+0x142E3`**, our view box | sharp at `k`; dot positions within a pixel of the engine's; **no unit visible that the engine does not show** | the fog rules disagree (13.10) → ~~ship the base alone~~ **not available: an unfogged base reveals the map (§19)** |
 
 Reviews per the house rule: G17a and G17b at `high` (a new byte patch at `0x491AFB`, and the
 composite seam), G17c/d/e at `medium` unless they add a patch.
@@ -2336,3 +2336,146 @@ path at all: `str=16/44, miss=0, reseed=0` at 1024x768 in a 1536x1152 client.
 - The glyph atlas holds 8 fonts and resets wholesale when a ninth appears. Two fonts were seen
   across a whole 120-stop walk, so the cap is not close, and the reset costs a re-rasterise rather
   than a wrong glyph.
+
+---
+
+## 19. G17e — the minimap  [MEASURED 2026-09-09]
+
+Phase 2's last gate. The base is drawn from the TNT's own 252×252 picture instead of the 126-px
+box the engine fits it into; the fog, the unit dots, the radar arcs and `DrawPoint`'s points all
+come back from the engine's own pixels; the view box is ours, drawn last.
+
+### What the gate turned out to need, and what it turned out not to
+
+**§13.6's fog source does not exist** [MEASURED, and it is the finding that shaped everything
+else]. "Fog comes from the corner-mask grid we already hold as an RG8 texture for every world
+pass" — that grid is built around the **eye** and covers the **viewport**: `29×23` cells against a
+`336×400` map on Two Continents. It has nothing to say about the rest of the minimap. The engine's
+own minimap fog is a different pass over different data (`0x466C20` shades `+0x142E3` into
+`+0x142DF` per player, reading the player id at `main+0x2A43`).
+
+And the consequence is not cosmetic. The TNT picture is the whole map with **nothing hidden**, so
+a base drawn without fog shows the player terrain they have never explored — a cheat of exactly
+the class §13.6 refuses for the dots. That also disposes of §13.10's recorded pivot, "keep the
+engine's fog as a pixel op and ship the base alone": there is no shipping the base alone.
+
+**The answer the owner chose** (2026-09-09) keeps the visibility decision entirely the engine's,
+which is §13.6's own rule for the dots applied to the fog: **mask against the engine's two bases**
+— `+0x142DF` (with its fog shading) against `+0x142E3` (without). Where they agree the engine is
+showing true terrain and our sharper copy of that terrain is safe; where they differ its own pixel
+is used verbatim.
+
+> **The test is over a 3×3 neighbourhood, and that is the safety argument rather than a nicety.**
+> The shade is a LUT into a dark-grey ramp, so a pixel already in that ramp maps to itself; a
+> single-texel test would then let four of *our* sub-texels through, taken from the unfogged
+> picture and possibly bright. Requiring the whole neighbourhood to agree costs a one-texel band
+> of the engine's own resolution around every fog edge and **cannot** leak.
+
+**And the same comparison carries the dots, the arcs and the points.** `+0x142DB`, the composite,
+is the fog base plus all three, so it differs from `+0x142DF` exactly where one of them landed —
+one test for all of them, from the engine's own pixels. **That retired the dot replay this gate
+started with.** The replay worked: measured against the engine it was four pixels out, and all
+four were the view box drawn in the wrong order. But it could only ever carry the *dots* —
+`0x4C0070` and `0x4BEE60` are not observed leaves (§7) and each would have needed its own
+rasteriser reproduced exactly. One mechanism that carries all three beats two that do not, so the
+accumulator, the op-side counters and the `mmdots` token were removed rather than left as a second
+path. **§7's trap therefore does not need fixing for this gate**: we never observe those two.
+
+### How it works as built
+
+- **The picture is snapshotted where it is alive.** `BuildMinimapSurface 0x466780` has one caller
+  (`0x4669B0`, whose own caller is `0x4919C3`), consumes `main+0x1426B` at `0x46684F`, and the
+  loader frees the picture at `0x483DF3`/`0x483E0B` in a function that calls neither — so an
+  observer at `0x466780`'s entry sees it by construction. It is a GAF frame, so the existing
+  decoder reads it. **It does not run on the game thread**, which is why the first build of the
+  observer logged nothing at all; the guard is deliberately absent for that one handler.
+- **It lives in the sharp layer**, because the engine's minimap reaches the frame as a copy of the
+  126-px composite and a twin can therefore never hold more than 126 px there.
+- **The base is sampled as COLOUR, not as an index.** At `1 < k < 2` the box is smaller than the
+  picture, so the draw is a downsample and wants a filter — and interpolating palette indices is
+  meaningless (§13.3's rule, just as true here). The picture is uploaded already resolved through
+  the presented palette, `MIN` linear and `MAG` nearest, re-resolved once per map load and once
+  per palette change.
+- **The view box is drawn last**, because that is where the engine puts it (`0x466B44` copies,
+  `0x466B5E` draws). Four one-*game*-pixel edges, so it keeps the weight the engine gives it
+  instead of thinning to a device pixel as `k` grows.
+- **Ours at `k > 1`, the engine's at `k = 1`.** Not timidity — arithmetic. See below.
+
+### Measured
+
+**The `k = 1` rule is a measurement, not a precaution.** At `k = 1` the box is 106×126 *device*
+pixels, so drawing it from a 252×252 source throws three quarters of the picture away and lands on
+a nearest downsample where the engine used its own stretch:
+
+| in the box at `k = 1` | distinct colours |
+|---|---|
+| the engine's | **36** |
+| ours (forced on with `mmbase`) | **30** |
+
+Ours is *worse* there, as well as 7 232 px away from the oracle every phase-1 measurement is taken
+against. So the minimap is ours at `k > 1` and the engine's at `k = 1` — the same shape as G17a's
+"at `k = 1` the ramp is exactly the identity".
+
+**Sharp at `k`**, distinct colours in the box:
+
+| `k` | the engine's | ours |
+|---|---|---|
+| 1.5 | 532 | **2 084** |
+| 1.875 | 2 238 | **3 208** |
+
+Ours filters a 252-px source into the box; the engine ramps a 126-px source up to it. Ours has
+strictly more source than destination, the engine's strictly less.
+
+> **A metric trap worth naming, because it inverts.** Horizontal replication at `k = 1.5` reads
+> **59.2 % for ours against 50.4 % for the engine's**, which looks like the wrong answer. It is
+> not detail: the engine's low replication is the sharp-bilinear ramp perturbing every pixel of a
+> poorer source. Replication measures flatness, and palette-exact regions *are* flat. The same
+> family of trap as the mean-gradient metric §16 records.
+
+**Nothing the engine shows is hidden, and nothing it hides is shown.** On a 99.6 % fogged map
+(`scenario load --mapping 0`; the mapped fixture reads `fog=0/13356` and tests nothing):
+
+| | reading |
+|---|---|
+| engine texels hidden | **13 301 of 13 356** |
+| our minimap vs the engine's, in the box | **2 pixels of 13 356** |
+| where those two are | inside the engine's own lit region — its 67 lit pixels span (32,7)-(68,125), the two are (64,122) and (64,123) |
+| dot and view-box colours | identical counts both ways (8 + 8 + 26 px) |
+
+The property is **bounded, not hoped**: our base can only be used where the pair agrees across
+3×3, so the pixels that can differ are at most the unfogged texels (55 here) times `k²`. Two is
+inside that bound, and `fog=` reports the bound every frame.
+
+On the fully mapped fixture, ours differs from the engine's in 7 232 px — our base is a different
+resample — with **zero** of them involving a dot or view-box pixel.
+
+**The `k = 1` regression** — `uiwalk.py --layer --cycles 3` at 1024×768, `classicpp` off, with
+G17c, G17d and G17e all in the DLL:
+
+| | reading |
+|---|---|
+| stops | **117** |
+| `strict` holes | **0 on all** |
+| hit misses | **0 on all**, `k = 1.0000` |
+| inside the viewport | `vpdiff=0` on **all 59** in-game stops |
+| differing outside the viewport | 0 but the 16 `MAINMENU` stops, **173-195** |
+
+The sparkle band has now been sampled five times across the phase — 179-190, 178-189, 177-192,
+178-193, 173-195 — and it widens with the sample count, as a stochastic animation caught between
+two shots should. It is one phenomenon and the range is quoted as measured each time rather than
+pinned to the first reading.
+
+### Not closed here
+
+- **The one-texel safety band is the engine's resolution.** Around every fog edge, a 3×3
+  disagreement forces the engine's own 126-px pixel, so the boundary between explored and
+  unexplored is drawn at the engine's resolution while the interior is ours. Correct and
+  conservative; not measured for how visible it is at `k = 3`.
+- **`k = 3` itself is unmeasured for the minimap.** 1.5 and 1.875 are; a 3072-wide client was not
+  reachable on the reference setup and `--res 640x480` does not take (§16's registry-inode note).
+- **The dots are the engine's pixels at 126 px**, not its art replayed at `k`. §13.6 imagined a
+  ×2 replay into a 252-px target; the composite mask makes that moot for correctness, and the
+  dots are 4×4 sprites whose art carries no more detail than the composite already has.
+- **`+0x142E3` and `+0x142DF` are read on the render thread while the game thread may be
+  rewriting them** — the same standing as the fork's own surface upload. The worst a torn read
+  does is put one frame's fog against another's.

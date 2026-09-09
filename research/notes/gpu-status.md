@@ -487,9 +487,14 @@ answer `ui-markers.md` §6.1 gives for everything else outside the 1× viewport.
 over the viewport** (`ARMOPT`, `EXITMENU`) are unchanged and still take the transform as though
 they were world, which was already true before this and is not verified either way here.
 
-### 2.3e The GL UI layer — observers, publisher, twins (`tagpu_gui_hook.c`, `tagpu_gui_surf.c`, `gui.on`, Phase E G15a + G15b + G15d + G15e + G17a–d)
+### 2.3e The GL UI layer — observers, publisher, twins (`tagpu_gui_hook.c`, `tagpu_gui_surf.c`, `gui.on`, Phase E G15a + G15b + G15d + G15e + G17a–e)
 
-**Phase 2 so far.** G17d (2026-09-09) made text a **string op**: `PK_STRING` carries the string,
+**Phase 2 is complete.** G17e (2026-09-09) made the **minimap** ours at `k > 1`: the base from the
+TNT's own 252-px picture instead of the 126-px box the engine fits it into, and the fog, the unit
+dots, the radar arcs and `DrawPoint`'s points all taken from the engine's own pixels by masking
+`+0x142DB` and `+0x142DF` against `+0x142E3` — so the visibility decision never leaves the engine.
+2 084 distinct colours against the engine's 532 at `k = 1.5`, and 2 differing pixels of 13 356 on
+a 99.6 % fogged map. G17d (2026-09-09) made text a **string op**: `PK_STRING` carries the string,
 the font and `0x4CCF60`'s three colour bytes, and the render thread stamps TA's own glyphs into the
 twin from a **per-font glyph cache** — the string-keyed atlas the marker path uses is wrong for a
 UI whose text is a clock and a metal readout. 44 % less arena traffic where text is redrawn, and
@@ -544,7 +549,8 @@ published or drawn — the live A/B lever), `norestore` (G15e: the layer without
 (G17c: our cursor's size in device pixels per art pixel, default 1, clamped 0.25–8),
 `nostring` (G17d: text stays a box of captured pixels — the A/B, and **read at ATTACH like
 `census`/`log`/`pgm`/`trace`, so it must be armed before the launch**; only the tokens the *surf*
-module owns follow the file live),
+module owns follow the file live), `nominimap` (G17e: the engine's minimap back) and `mmbase`
+(G17e: ours forced on at `k = 1` too, where it is otherwise off — the harness's A/B),
 `census` (the G15a diff), `log` (a census line per 50
 censuses and on any residual), `pgm` (`tagpu_gui_census.trigger` → `tagpu_gui_census.pgm`, the
 accumulated unexplained mask), `trace` (the ops intersecting a residual, the first blits after a
@@ -760,6 +766,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `0x512344` / `0x512348` | the order-descriptor array and its end: `+0xC` is the type's marker-capability mask and `+0x10` its `cursor_ary` index. Read only; the end pointer is what lets us bound an index the engine does not |
 | `unit+0xAC` | the squad tag. Read only — and read as a **DWORD** and then used as a byte, because that is what `0x469C55`/`0x469CD1` do |
 | `main+0x2A43` | the player id the health-bar and group-digit loop compares unit owners against (`0x46967D` → `[esp+0x70]`, read at `0x469CA6`/`0x469CC9`). Read only. **Not `main+0x2A42`**, which is what the order-marker driver `0x48CC30` uses for its player range — two bytes, two loops, one block, written independently at `0x416B25`/`0x416B38`. `tagpu_mark.c` was on `0x2A42` from G13d until G13p corrected it |
+| `main+0x1426B`, `+0x142CB`, `+0x142DB`, `+0x142DF`, `+0x142E3`, `+0x142E7..+0x142ED`, `+0xDD9` | the minimap: the TNT's picture, the view rect and its colour, and the three 126-px surfaces (composite, fog base, scaled base). **Read only.** The picture is decoded on the MINIMAP BUILD's own thread inside `BuildMinimapSurface 0x466780` — not the game thread, measured — and the three surfaces are read per frame on the render thread while the game thread may be rewriting them, the same standing as the fork's own surface upload (G17e, [GL UI renderer](gui-renderer.html) §19) |
 | `[0x51FBD0]+0x1B2`, `+0x1B6`, `+0x1BA` | the cursor's **GAF frame** and the position it was last drawn at. Read only, on the render thread, once per frame in `tagpu_gui_cursor_frame()` — and read ONCE because two modules act on the answer: the UI layer stops discarding that rect and the world composite counts it as the terrain key, and a second read a pass later would leave a sliver of the engine's cursor standing (G17c, [GL UI renderer](gui-renderer.html) §17). The frame's pixels go through `tagpu_gaf_decode` into the UI atlas like any other sprite |
 | `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with (`tagpu_text.c`) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |

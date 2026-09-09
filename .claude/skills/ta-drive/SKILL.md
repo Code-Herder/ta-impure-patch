@@ -1389,6 +1389,30 @@ tools/tacli log <i> -g 'arena='         # the queue's MONOTONIC arena head: the 
 - The 120-stop `strict` walk is the real oracle here — it diffs our frame against the engine's own
   surface, so a glyph off by one shows as `differing`/`vpdiff`.
 
+### The minimap is ours at k > 1 (phase 2, G17e)
+
+```bash
+tools/tacli arm <i> gui.on=nominimap    # the engine's minimap back (live, the surf module polls it)
+tools/tacli arm <i> gui.on=mmbase       # ours forced on at k = 1 too, where it is otherwise OFF
+tools/tacli log <i> -g 'mm='            # mm=<draws>,fog=<hidden>/<texels>,noeng=<frames the surfaces would not read>
+tools/tacli scenario load <i> <scn> --mapping 0    # THE fixture: an unmapped game, so there IS fog
+```
+
+- **At `k = 1` it is the engine's, deliberately** — the box is 106x126 *device* pixels there, so
+  our 252-px source is thrown away and ours counts 30 distinct colours against the engine's 36.
+  `mmbase` forces it on for the A/B; nothing else does.
+- **`fog=0/13356` means the fixture tests NOTHING.** A mapped skirmish hides nothing, so the mask
+  is inert and a clean-looking diff proves only that. `--mapping 0` gives `fog=13301/13356`.
+- **The safety property is a bound you can check**: our base is used only where the engine's
+  fogged and unfogged bases agree across 3x3, so the pixels that may differ from the engine's are
+  at most the unfogged texels times `k²`. Measured: 2 of 13 356 on a 99.6 % fogged map, both
+  inside the engine's own lit region.
+- **Measure sharpness by DISTINCT COLOURS in the box, not by replication** — replication inverts
+  here (59.2 % for ours against 50.4 % for the engine's, because the engine's ramp perturbs every
+  pixel of a poorer source while palette-exact regions are flat). Colours: 2084 vs 532 at k = 1.5.
+- The dots, arcs and points are the engine's own pixels, not a replay: `+0x142DB` differs from
+  `+0x142DF` exactly where one landed.
+
 ### Driving and measuring at k != 1 (phase 2, G17b)
 
 ```bash
