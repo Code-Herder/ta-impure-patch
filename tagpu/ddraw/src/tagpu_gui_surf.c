@@ -683,15 +683,21 @@ static void drain(void)
    keeps the entries in the graphics globals (+0x214) and hands DirectDraw
    min(255, entry x gamma) with gamma = *(float*)(globals+0x614) — the Gamma
    option (SetGamma 0x4BA590 [CORPUS], gamma = 0.5 + Gamma/24, 1.0 at the
-   default 12), applied only on the way to SetEntries, never to +0x143A7 (read
-   2026-09-07, engine map "The palette the screen is presented with"). The
+   engine's own default of 12), applied only on the way to SetEntries, never to
+   +0x143A7 (read 2026-09-07, engine map "The palette the screen is presented
+   with"). The
    engine's own pixels beneath the twin are drawn by cnc-ddraw through the
    palette its SetEntries received, so that is the palette the twin resolves
    through: the primary's palette object in this DLL. The engine's table is
    the fallback until a primary exists, and the number of entries where the
    two disagree is measured at every upload (`paldiff=` in the heartbeat):
    0 at Gamma 12, and the world passes, which read +0x143A7, are wrong by
-   exactly that much at any other setting. */
+   exactly that much at any other setting — WHICH IS EVERY SETTING WE MEASURE
+   AT. The template wine prefix carries Gamma 15, so the factor is 1.125,
+   paldiff reads 235 in the shell and in game alike, and the world is drawn
+   ~11 % darker than the engine presents its own pixels (MEASURED 2026-09-09,
+   gui-renderer.md 14). This layer is right either way; the world passes are
+   the ones still to decide. */
 static void upload_palette(void)
 {
     const char* ta = *(const char* const*)TA_MAINPP;

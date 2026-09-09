@@ -494,9 +494,13 @@ def cache_root(explicit=None) -> Path:
     return Path(base) / "tascene" / "undither"
 
 
-def _cache_key(frame, palette, preset) -> str:
+def _cache_key(frame, palette, preset, wrap="auto") -> str:
     h = hashlib.sha256()
     h.update(preset.encode())
+    if wrap != "auto":
+        # only a forced choice joins the key, so every entry cached before
+        # `uidiff` needed one is still a hit
+        h.update(f"wrap={wrap}".encode())
     h.update(struct.pack("<3i", frame.width, frame.height,
                          -1 if frame.transparent is None else frame.transparent))
     h.update(bytes(frame.pixels))
@@ -530,11 +534,11 @@ def _cache_write(path: Path, got):
         pass                            # a cache that cannot be written is not fatal
 
 
-def undither(frames, palette, preset, cdir: Path, python=None, tally=None):
+def undither(frames, palette, preset, cdir: Path, python=None, tally=None, wrap="auto"):
     """{key: GafFrame} -> {key: (w, h, RGBA bytes)}, cached on disk by content."""
     if not frames:
         return {}
-    keys = {k: _cache_key(f, palette, preset) for k, f in frames.items()}
+    keys = {k: _cache_key(f, palette, preset, wrap) for k, f in frames.items()}
     out, todo = {}, {}
     for k, digest in keys.items():
         got = _cache_read(cdir / preset / digest[:2] / f"{digest}.bin")
@@ -552,7 +556,7 @@ def undither(frames, palette, preset, cdir: Path, python=None, tally=None):
         # that survive its own sanitiser without colliding
         tags = {f"f{n:05d}": k for n, k in enumerate(batch)}
         got = ta3do.undither_frames({t: batch[k] for t, k in tags.items()},
-                                    palette, preset=preset, python=python)
+                                    palette, preset=preset, python=python, wrap=wrap)
         for tag, k in tags.items():
             out[k] = got[tag]
             _cache_write(cdir / preset / keys[k][:2] / f"{keys[k]}.bin", got[tag])
@@ -1624,55 +1628,74 @@ def _pack_atlas(args, section, what):
             (pack / sec["atlas"]["file"]).read_bytes(), (pack / sec["atlas"]["rgba"]).read_bytes())
 
 
-def _atlasdiff(args, pack, PW, PH, pr8, prgba, frames, border):
-    """Hold a DLL-dumped atlas twin (prefix.{r8,rgba,idx}) to the pack's, frame
-    by frame: `frames` maps (w, h, R8 bytes) -> (rect, name); `border` is the
-    replicated ring each dumped entry carries (1 for the sprite atlases, the
-    pack's pad for units)."""
-    prefix = Path(args.prefix).expanduser()
+def _read_dump(prefix):
+    """(prefix, entries, R8 bytes, RGBA bytes, dim) of one DLL-dumped atlas
+    twin — <prefix>.{r8,rgba,idx}, written under tagpu_restoredump.on."""
+    prefix = Path(prefix).expanduser()
     idx = [tuple(int(v) for v in line.split()) for line in (prefix.with_suffix(".idx")).read_text().split("\n") if line.strip()]
     gr8 = prefix.with_suffix(".r8").read_bytes()
     grgba = prefix.with_suffix(".rgba").read_bytes()
     dim = int(round(len(gr8) ** 0.5))
     if dim * dim != len(gr8) or len(grgba) != dim * dim * 4:
         die(f"{prefix}: .r8 is {len(gr8)} bytes and .rgba {len(grgba)}: not one square atlas and its twin")
+    return (prefix, idx, gr8, grgba, dim)
+
+
+def _cell(r8, stride, x, y, w, h):
+    """one entry's index plane out of an R8 atlas, rows packed"""
+    return b"".join(r8[(y + j) * stride + x:(y + j) * stride + x + w] for j in range(h))
+
+
+def _atlasdiff(args, source, dump, frames, border, min_edge=0, sheet=None):
+    """Hold a DLL-dumped atlas twin to a reference, frame by frame: `frames`
+    maps (w, h, R8 bytes) -> (rect, name, reference RGBA, its stride in texels);
+    `border` is the replicated ring each dumped entry carries (1 for the sprite
+    atlases, the pack's pad for units). `min_edge` is the atlas's own restore
+    floor (tagpu_gaf.h `restoreMinEdge`, 12 on the UI atlas and 0 everywhere
+    else): those entries were never queued, so they are reported, not diffed."""
+    prefix, idx, gr8, grgba, dim = dump
     depth = args.radius
-    # the reference from the pack, laid out at the dump's rects
+    # the reference, laid out at the dump's rects
     ref = bytearray(len(grgba))
-    matched, unmatched, radius = [], [], depth
+    matched, unmatched, below, radius = [], [], [], depth
     for (x, y, w, h, key, wrap) in idx:
-        px = b"".join(gr8[(y + j) * dim + x:(y + j) * dim + x + w] for j in range(h))
-        hit = frames.get((w, h, px))
+        if min_edge and (w < min_edge or h < min_edge):
+            below.append((x, y, w, h)); continue
+        hit = frames.get((w, h, _cell(gr8, dim, x, y, w, h)))
         if not hit:
             unmatched.append((x, y, w, h)); continue
-        r, name = hit
+        r, name, srgba, stride = hit
         for j in range(h):
-            so = ((r["y"] + j) * PW + r["x"]) * 4
+            so = ((r["y"] + j) * stride + r["x"]) * 4
             do = ((y + j) * dim + x) * 4
-            ref[do:do + w * 4] = prgba[so:so + w * 4]
+            ref[do:do + w * 4] = srgba[so:so + w * 4]
         matched.append((x, y, w, h, key, wrap, name))
     acc = {"far": {"bytes": 0, "differing": 0, "max": 0, "sum": 0, "hist": [0] * 256},
            "near": {"bytes": 0, "differing": 0, "max": 0, "sum": 0, "hist": [0] * 256},
            "keyed": 0, "opaque": 0, "alpha_bad": 0, "ring": 0, "ring_bytes": 0}
-    worst, worst_n = None, 0
+    worst, worst_n, per = None, 0, []
     for (x, y, w, h, key, wrap, name) in matched:
         n = _frame_bands(grgba, ref, gr8, dim, x, y, w, h, key, wrap, border, radius, acc)
+        per.append({"name": name, "x": x, "y": y, "w": w, "h": h, "key": key, "wrap": wrap, "differing": n})
         if n > worst_n:
             worst, worst_n = name, n
+    per.sort(key=lambda f: -f["differing"])
     far, near = acc["far"], acc["near"]
     pct = lambda b: 100.0 * b["differing"] / max(1, b["bytes"])
     far_pass = far["max"] <= 1 and pct(far) < 0.01
     ok = far_pass and acc["alpha_bad"] == 0 and acc["ring"] == 0 and bool(matched)
-    rep = {"pack": str(pack), "dump": str(prefix), "atlas": dim, "entries": len(idx), "matched": len(matched),
-           "unmatched": unmatched, "radius": radius,
+    rep = {"source": str(source), "dump": str(prefix), "atlas": dim, "entries": len(idx), "matched": len(matched),
+           "unmatched": unmatched, "below_floor": below, "min_edge": min_edge, "radius": radius,
            "far": {"bytes": far["bytes"], "differing": far["differing"], "pct": pct(far), "max": far["max"],
                    "hist": far["hist"][1:far["max"] + 1], "pass": far_pass},
            "near": {"bytes": near["bytes"], "differing": near["differing"], "pct": pct(near), "max": near["max"],
                     "mean": near["sum"] / max(1, near["bytes"]), "hist": near["hist"][1:near["max"] + 1]},
            "keyed_texels": acc["keyed"], "opaque_texels": acc["opaque"], "alpha_bad": acc["alpha_bad"],
-           "ring": acc["ring"], "ring_bytes": acc["ring_bytes"], "worst": worst, "worst_bytes": worst_n, "pass": ok}
-    human = (f"{'PASS' if ok else 'FAIL'}: {len(matched)} of {len(idx)} dumped entries found in the pack"
-             + (f" ({len(unmatched)} not in the pack: not diffed)" if unmatched else "") +
+           "ring": acc["ring"], "ring_bytes": acc["ring_bytes"], "worst": worst, "worst_bytes": worst_n,
+           "frames": per, "pass": ok}
+    human = (f"{'PASS' if ok else 'FAIL'}: {len(matched)} of {len(idx)} dumped entries diffed"
+             + (f" ({len(unmatched)} not in the reference: not diffed)" if unmatched else "")
+             + (f" ({len(below)} under the {min_edge}-px restore floor: never queued)" if below else "") +
              f"\n  far band (> {radius} px from any key): {'PASS' if far_pass else 'FAIL'}: max {far['max']} level(s), "
              f"{far['differing']}/{far['bytes']} bytes differ ({pct(far):.4f}%)"
              f"\n  near band: max {near['max']} level(s), mean {rep['near']['mean']:.3f}, "
@@ -1680,6 +1703,8 @@ def _atlasdiff(args, pack, PW, PH, pr8, prgba, frames, border):
              f"{acc['keyed']} keyed texels, alpha wrong on {acc['alpha_bad']}, "
              f"border {acc['ring']}/{acc['ring_bytes']} not a copy of the edge, worst frame {worst} ({worst_n} bytes)")
     ta3do.out(rep, args.json, human=human)
+    if sheet:
+        sheet(rep, ref, grgba, gr8, dim)
     if not ok:
         sys.exit(1)
 
@@ -1693,9 +1718,8 @@ def cmd_featdiff(args):
             r = d.get(slot)
             if not r:
                 continue
-            px = b"".join(pr8[(r["y"] + j) * PW + r["x"]:(r["y"] + j) * PW + r["x"] + r["w"]] for j in range(r["h"]))
-            frames[(r["w"], r["h"], px)] = (r, d["name"])
-    _atlasdiff(args, pack, PW, PH, pr8, prgba, frames, 1)
+            frames[(r["w"], r["h"], _cell(pr8, PW, r["x"], r["y"], r["w"], r["h"]))] = (r, d["name"], prgba, PW)
+    _atlasdiff(args, pack, _read_dump(args.prefix), frames, 1)
 
 
 def cmd_unitdiff(args):
@@ -1708,9 +1732,153 @@ def cmd_unitdiff(args):
         die(f"{pack}: units/atlas has no per-frame rects (rebuild with a tascene that writes them)")
     frames = {}
     for name, r in rects.items():
-        px = b"".join(pr8[(r["y"] + j) * PW + r["x"]:(r["y"] + j) * PW + r["x"] + r["w"]] for j in range(r["h"]))
-        frames[(r["w"], r["h"], px)] = (r, name)
-    _atlasdiff(args, pack, PW, PH, pr8, prgba, frames, units["atlas"].get("pad", UNIT_PAD))
+        frames[(r["w"], r["h"], _cell(pr8, PW, r["x"], r["y"], r["w"], r["h"]))] = (r, name, prgba, PW)
+    _atlasdiff(args, pack, _read_dump(args.prefix), frames, units["atlas"].get("pad", UNIT_PAD))
+
+
+# The UI atlas's twin (tagpu_gui_surf.c, G15e) against the SAME restorer run
+# offline on the same cells — gui-renderer.md §3.11's Q2 diff, the measurement
+# G15-0 could not make: it restored UI frames in isolation, and what has never
+# been measured on UI art is the halo the GAME's GLSL path leaves at a keyed
+# edge (§4c's near band, 0.41 levels on features), which panels and buttons are
+# made of.
+#
+# There is no UI pack to reference and no sequence-name registry to match
+# entries by name, so the reference is built out of the dump itself: every
+# entry's index plane is cut from the .r8 and restored by the unditherer
+# through the cached wrapper `build --undither` uses. Coverage is then total —
+# every frame the walk drew is diffed, not only the ones some corpus happens to
+# carry — and the comparison is the one the gate asks for: the game's GLSL port
+# against the Python model, on the same bytes, with the same colour key.
+# Entries under the atlas's restore floor (tagpu_gaf.h `restoreMinEdge`, 12
+# here) were never queued and are counted, not diffed.
+#
+# THE PALETTE is the one thing the DLL's dump does not carry, and assuming it
+# is wrong. The twin was restored through the palette the frame is PRESENTED
+# with (gui-renderer.md §14) — the engine's table scaled by the Gamma option,
+# `0.5 + Gamma/24` — and **the game's own default writes Gamma 15**, a factor
+# of 1.125, so on a stock instance the presented palette differs from the
+# archives' palette.pal in 235 of 256 entries and every restored byte would be
+# read as an error. So `uiwalk --restore` records it beside the dump as
+# <prefix>.pal (a `tacli shot`'s 8-bit PNG carries the presented palette), this
+# picks that up when it is there, and `--palette` names one by hand. Falling
+# back to palette.pal is right only where the presented factor is 1.0.
+
+def _tileable(px, w, h, key, palette, thr=12.0):
+    """tagpu_restoreglsl.c `tagpu_rglsl_tileable`, in Python: a key anywhere on
+    an edge says no, otherwise the mean per-channel distance between the two
+    columns and the two rows must both be under the threshold."""
+    edges = [px[j * w] for j in range(h)] + [px[j * w + w - 1] for j in range(h)] \
+        + list(px[:w]) + list(px[(h - 1) * w:(h - 1) * w + w])
+    if key in edges:
+        return False
+    lr = sum(abs(palette[px[j * w]][c] - palette[px[j * w + w - 1]][c]) for j in range(h) for c in range(3))
+    tb = sum(abs(palette[px[i]][c] - palette[px[(h - 1) * w + i]][c]) for i in range(w) for c in range(3))
+    return lr / (3.0 * h) < thr and tb / (3.0 * w) < thr
+
+
+def _palette_file(path):
+    raw = Path(path).expanduser().read_bytes()
+    if len(raw) >= 1024:
+        return [(raw[i * 4], raw[i * 4 + 1], raw[i * 4 + 2]) for i in range(256)]
+    if len(raw) >= 768:
+        return [(raw[i * 3], raw[i * 3 + 1], raw[i * 3 + 2]) for i in range(256)]
+    die(f"{path}: {len(raw)} bytes is neither a 1024-byte RGBX nor a 768-byte RGB palette")
+
+
+# The near band is reported, not barred, so it has to be judged by eye — and the
+# strip the owner judged the FEATURES' near band on (renderers.md §4c) is what
+# makes the two comparable: indexed, ours, the reference, and the difference
+# amplified, one row per frame, worst first.
+
+def _nearband_sheet(path, worst, zoom, palette, rep, ref, got, r8, dim):
+    rows = rep["frames"][:worst]
+    if not rows:
+        return
+    gap, amp, bg = 6, 8, (32, 32, 36)
+    W = max(r["w"] * 4 + 3 * gap for r in rows) * zoom
+    H = sum(r["h"] for r in rows) * zoom + gap * (len(rows) + 1)
+    out = bytearray(bytes(bg) + b"\xff") * (W * H)
+    # a keyed texel is alpha 0 in both twins: composite every column over the
+    # sheet's own ground so the four are the same picture, not three pictures
+    # and a silhouette
+    over = lambda px: tuple((px[c] * px[3] + bg[c] * (255 - px[3])) // 255 for c in range(3)) + (255,)
+    y0 = gap
+    for r in rows:
+        w, h, x, y, key = r["w"], r["h"], r["x"], r["y"], r["key"]
+        for j in range(h):
+            for i in range(w):
+                idx = r8[(y + j) * dim + x + i]
+                o = ((y + j) * dim + x + i) * 4
+                cols = [(*palette[idx], 255) if idx != key else (*bg, 255),
+                        over(got[o:o + 4]), over(ref[o:o + 4])]
+                d = max(abs(got[o + c] - ref[o + c]) for c in range(3)) if got[o + 3] else 0
+                cols.append((min(255, d * amp),) * 3 + (255,))
+                for c, col in enumerate(cols):
+                    px = (c * (w + gap) + i) * zoom
+                    for sy in range(zoom):
+                        base = ((y0 + j * zoom + sy) * W + px) * 4
+                        for sx in range(zoom):
+                            out[base + sx * 4:base + sx * 4 + 4] = bytes(col)
+        y0 += h * zoom + gap
+    Path(path).write_bytes(ta3do.write_png(W, H, bytes(out)))
+    print(f"tascene: {len(rows)} worst frames to {path} — indexed | ours | offline | difference x{amp}, {zoom}x",
+          file=sys.stderr)
+
+
+def cmd_uidiff(args):
+    dump = _read_dump(args.prefix)
+    prefix, idx, gr8, grgba, dim = dump
+    beside = prefix.with_suffix(".pal")
+    src = Path(args.palette) if args.palette else (beside if beside.exists() else None)
+    palette = _palette_file(src) if src else ta3do.load_palette(ta3do.Assets())
+    print(f"tascene: palette from {src if src else 'the archives (palette.pal)'}", file=sys.stderr)
+    # one restore per distinct cell: the same art is atlased once per frame
+    # header, and the walk revisits screens
+    cells = {}
+    for (x, y, w, h, key, wrap) in idx:
+        if w < args.min_edge or h < args.min_edge:
+            continue
+        cells.setdefault((w, h, _cell(gr8, dim, x, y, w, h)), (x, y, key, wrap))
+    if not cells:
+        die(f"{prefix}: none of its {len(idx)} entries reaches the {args.min_edge}-px restore floor")
+    # THE TILEABILITY FLAG COMES FROM THE DUMP, not from the detector. The DLL
+    # decides it once, when the frame is first atlased (tagpu_gaf.c
+    # `e->wrap = tagpu_rglsl_tileable(...)`), against whatever palette was live
+    # then, and never revisits it — so a frame first seen during a fade can
+    # carry a flag the settled palette would not have produced. Re-deriving it
+    # here would diff the heuristic instead of the restore: measured on the
+    # shell dump, one 96x20 frame flagged tileable came out 10 levels off over
+    # half its bytes under `--wrap auto` and byte-identical under `--wrap yes`.
+    # The disagreements are counted and reported, because they are a fact about
+    # the DLL rather than about this diff.
+    tags = {f"e{n:05d}": k for n, k in enumerate(sorted(cells, key=lambda k: cells[k]))}
+    tally, got, disagree = {}, {}, []
+    for flag, name in ((1, "yes"), (0, "no")):
+        batch = {t: k for t, k in tags.items() if cells[k][3] == flag}
+        if batch:
+            got.update(undither({t: ta3do.GafFrame(k[0], k[1], bytearray(k[2]), cells[k][2]) for t, k in batch.items()},
+                                palette, args.preset, cache_root(args.cache_dir), args.undither_python, tally, name))
+    origin = {"x": 0, "y": 0}
+    frames = {}
+    for t, k in tags.items():
+        w, h, _px = k
+        rw, rh, rgba = got[t]
+        x, y, key, wrap = cells[k]
+        if (rw, rh) != (w, h):
+            die(f"the restorer returned {rw}x{rh} for the {w}x{h} cell at {x},{y}")
+        if _tileable(k[2], w, h, key, palette) != bool(wrap):
+            disagree.append(f"{w}x{h}@{x},{y} wrap={wrap}")
+        frames[k] = (origin, f"{w}x{h}@{x},{y}", rgba, w)
+    print(f"tascene: {len(frames)} distinct cells of {len(idx)} entries restored offline "
+          f"({tally.get('cached', 0)} from the cache), preset {args.preset}"
+          + (f"\n  {len(disagree)} carry a tileability flag this palette would not produce "
+             f"(restored as flagged): {', '.join(disagree[:6])}" if disagree else ""), file=sys.stderr)
+    sheet = ((lambda rep, ref, got, r8, dim: _nearband_sheet(args.sheet, args.worst, args.zoom, palette,
+                                                             rep, ref, got, r8, dim))
+             if args.sheet else None)
+    _atlasdiff(args, f"the {args.preset} restorer, offline, on the dump's own cells",
+               dump, frames, args.border, args.min_edge, sheet)
 
 
 # --------------------------------------------------------------------------- ab
@@ -1957,6 +2125,30 @@ def main(argv=None):
     ud.add_argument("--radius", type=int, default=12, help="the model's depth: the far band starts past it")
     ud.add_argument("--json", action="store_true")
     ud.set_defaults(func=cmd_unitdiff)
+
+    xd = sub.add_parser("uidiff", help="hold the UI atlas's restored twin dumped by the DLL "
+                                       "(tagpu_restoredump.on) to the same restorer run offline "
+                                       "on the same cells — G15e's Q2 diff")
+    xd.add_argument("prefix", help="the dump's path without its extension, e.g. <gamedir>/tagpu_restore_gui")
+    xd.add_argument("--radius", type=int, default=12, help="the model's depth: the far band starts past it")
+    xd.add_argument("--min-edge", dest="min_edge", type=int, default=12,
+                    help="the atlas's restore floor (tagpu_gui_surf.c UI_RESTORE_MIN): "
+                         "entries with an edge under this were never queued (default 12)")
+    xd.add_argument("--border", type=int, default=1,
+                    help="the replicated ring each entry carries (the UI atlas is pad 1)")
+    xd.add_argument("--preset", default="learned", help="unditherer preset (default learned)")
+    xd.add_argument("--palette", help="raw palette the twin was restored through (1024-byte RGBX or "
+                                      "768-byte RGB); default: the archives' palette.pal, which is what "
+                                      "the engine presents at the default Gamma 12")
+    xd.add_argument("--cache-dir", dest="cache_dir", help=f"undither cache (default ${CACHE_ENV} or ~/.cache/tascene)")
+    xd.add_argument("--undither-python", dest="undither_python",
+                    help="interpreter that can import unditherer (default: the checkout's .venv-undither)")
+    xd.add_argument("--sheet", help="write the worst frames as indexed | ours | offline | difference x8, "
+                                    "the strip renderers.md 4c judged the features' near band on")
+    xd.add_argument("--worst", type=int, default=6, help="rows on the sheet (default 6)")
+    xd.add_argument("--zoom", type=int, default=3, help="sheet magnification (default 3)")
+    xd.add_argument("--json", action="store_true")
+    xd.set_defaults(func=cmd_uidiff)
 
     al = sub.add_parser("artlight",
                         help="is the map art already painted lit? sweep the sun "

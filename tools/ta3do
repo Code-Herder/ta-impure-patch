@@ -577,11 +577,16 @@ def undither_python() -> str:
 
 
 def undither_frames(frames: dict, palette, preset: str = "learned",
-                    python: str = None, timeout: float = 600.0):
+                    python: str = None, timeout: float = 600.0, wrap: str = "auto"):
     """{NAME: GafFrame} -> {NAME: (width, height, RGBA bytes)}, restored.
 
     Frames go in one at a time as files but through a single process, because
     loading the CNN costs far more than running it on a 32x32 texture.
+
+    `wrap` is the CLI's tileable-border choice ("auto", "yes", "no"), and a
+    whole batch shares it: the caller that knows the answer -- a twin dumped
+    with the flag the DLL decided -- passes it rather than letting the detector
+    re-derive one that may differ.
     """
     import tempfile
     if not frames:
@@ -602,7 +607,7 @@ def undither_frames(frames: dict, palette, preset: str = "learned",
                                   transparent=frame.transparent))
         cmd = [python or undither_python(), "-m", "unditherer", "restore",
                *[str(p) for p in sorted(source.glob("*.png"))],
-               "-o", str(target), "--preset", preset, "--quiet"]
+               "-o", str(target), "--preset", preset, "--wrap", wrap, "--quiet"]
         try:
             proc = subprocess.run(cmd, cwd=str(checkout), timeout=timeout,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
