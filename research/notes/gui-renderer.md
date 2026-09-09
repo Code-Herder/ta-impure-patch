@@ -1376,6 +1376,14 @@ G15b already built.
   model's receptive field — G15-0's verdict, "nothing under 12×12". `norestore` in
   `tagpu_gui.on` is the A/B: the layer without Classic++ art, so the UI half can be toggled live
   without touching the world's restorer.
+- **The UI steps the restorer when nothing else does** [the landing review found this]. The only
+  other caller of `tagpu_rglsl_step` is the native pass, and it returns early when there is no
+  unit array — **in the shell, and in game with the world passes disarmed**. The UI atlas is the
+  one atlas that exists there, so without this its queue is never drained: every sprite would
+  read alpha 0 from an unpainted twin and the UI would stay indexed for ever, silently and with
+  nothing in the log to say why. `tagpu_rglsl_calls()` (a call count, new) compared across
+  presents says whether the native pass stepped this frame; when it did, the UI does nothing, so
+  the 12 ms budget is sliced once either way.
 
 ### Measured
 
@@ -1390,7 +1398,9 @@ a lone instance:
 | queue health | `overflows=0 lost=0 resets=2 stalls=1` — G15b/G15d's norms, unmoved |
 | **frame rate with it on** | **`fps=60.0`** |
 | **restored vs `norestore`, same DLL, same frame** | **37 435 of the 45 056 px of the in-game menu's panel rect differ; 40 079 whole frame** |
-| the palette rule, via `+gamma 15` | `paldiff=235@1` — G15d's own figure — colour dropped, **`rearms=1`**, 3 colour twins invalidated, `colvalid=1` again against the new palette |
+| the palette rule, via `+gamma 15` | `paldiff=235@1` — G15d's own figure — colour dropped, **`rearms=1`**, the colour twins invalidated, `colvalid=1` again against the new palette |
+| **the shell** (640×480 `MAINMENU`, after the review's step fix) | **7 963 px differ** against `norestore` — before the fix the shell could not restore at all, structurally |
+| in game, re-measured after the five fixes | 40 063 px / 37 415 in the panel rect, `fps=60.0` — unmoved |
 
 **The first A/B differed by 0 pixels, and that is the finding.** In a running game the panel is
 *seeded* at the mode switch, and colour reaches a twin only through a sprite op — so the atlas
@@ -1398,6 +1408,37 @@ then holds nothing but the small HUD icons: **25 entries, none larger than 10×1
 them under the floor by design (`tagpu_restore_gui.idx`). Opening `ARMOPT` draws real UI art as
 sprite ops, the atlas goes to 44 entries, and the panel restores. So **on entering a game the
 panel is indexed until something repaints it** — a mode switch, a build page, the menu.
+
+### After the review
+
+One Opus reviewer at `medium` on the landing diff, five findings, **all five verified against the
+code and all five acted on**:
+
+- **The restorer never stepped where the native pass returns early** — the shell, and in game with
+  the world passes off. This was the real one: the shell's UI could not restore at all, and the
+  module's own comment offered the shell as the *good* case. Fixed above; the shell measurement in
+  the table is the proof, and it is a number that did not exist before the fix.
+- **`upload_palette()` ran twice per frame** — once in `tagpu_gui_present` before `restore_step`
+  decided `s_colValid`, and again inside `draw_layer` after a drain thousands of ops long. If the
+  game thread set a new palette in between, the frame drew restored texels resolved through the
+  palette their restore snapshotted beside indexed texels resolved through a newer one — exactly
+  the "wrong art" §3.4 exists to prevent. The second call is gone; one upload per frame, and it is
+  the one `s_colValid` was decided against.
+- **The re-arm line printed `s_ntwins`**, the total twin count, where it claimed to report the
+  colour twins invalidated — and this page quoted that number as a measurement. It counts them now,
+  and says "N of M twins had colour".
+- **`unbind_all` left texture unit 3 bound**, against its own stated invariant, once the layer
+  started binding the colour twin there. No consumer reads unit 3 unbound today; fixed as hygiene.
+- **The heartbeat buffer was still too small**: 194 bytes of literal plus 27 conversions is ~491
+  worst case against 420, and `_snprintf` does not terminate what it truncates. 640, and
+  terminated explicitly.
+
+The reviewer separately verified clean, and these are worth recording because they are the
+properties the landing rests on: the indexed path is untouched with `classicpp` off or `norestore`
+set; `MAX_JOBS` 4 → 6 has no bitmask or baked bound behind it; `restoreMinEdge`'s 0 default is a
+true no-op and `restore_enqueue` is the only enqueue path; the copy-from-untwinned-source
+invalidation works in both the C and the GLSL; and `clear_dest` really does clear the atlas twin to
+alpha 0, so a sub-12-px frame falls back to indexed rather than to garbage.
 
 ### Not closed here
 

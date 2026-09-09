@@ -586,14 +586,19 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   restore job snapshots the palette into a texture of its own, so its colours hold only while
   that is still the palette the frame is *presented* with — compared every frame, colour ignored
   while they differ, and after 30 still frames the job is rebuilt against the new palette and
-  every colour twin invalidated. The atlas restores at **priority 4** (`MAX_JOBS` is 6 since this
-  landing; 0–3 are terrain, features, effects, 3DO units) and skips frames under **12×12**
+  every colour twin invalidated. **The UI also steps the restorer when nothing else does**: `tagpu_rglsl_step`'s
+  only other caller is the native pass, which returns early with no unit array — in the shell and
+  with the world passes disarmed — so without this the UI atlas's queue is never drained and the
+  shell stays indexed for ever (found by the landing review; `tagpu_rglsl_calls()` compared across
+  presents means the budget is still sliced once per frame). The atlas restores at **priority 4**
+  (`MAX_JOBS` is 6 since this landing; 0–3 are terrain, features, effects, 3DO units) and skips
+  frames under **12×12**
   (`restoreMinEdge`, G15-0's verdict). Trigger token **`norestore`** is the A/B. Heartbeat gains
   `cpp= col=<made>/<live> colvalid= rearms= rgb=`. **Colour reaches a twin only through a sprite
   op, so seeded art stays indexed until the engine redraws it** — entering a game, the panel is
-  seeded and indexed until a repaint. Measured: `fps=60.0`, 37 435 of 45 056 px of the menu's
-  panel rect against `norestore`, `+gamma 15` → 235 entries differ, one re-arm, colour valid
-  again ([GL UI renderer](gui-renderer.html) §14).
+  seeded and indexed until a repaint. Measured: `fps=60.0`, 37 415 of 45 056 px of the menu's
+  panel rect against `norestore`, **7 963 px of the 640×480 shell frame**, and `+gamma 15` → 235
+  entries differ, one re-arm, colour valid again ([GL UI renderer](gui-renderer.html) §14).
 - *Fresh starts:* the trigger reappearing, a GL context change (`tagpu_gui_glreset` from the
   overlay's reset), a queue or arena overflow, a sprite whose bytes never arrived, a copy
   from a source with no twin, and the consumer coming back from a stall (below) all raise

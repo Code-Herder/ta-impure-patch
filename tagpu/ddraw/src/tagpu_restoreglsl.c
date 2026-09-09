@@ -933,6 +933,8 @@ static void job_drained(struct TAGPU_RGLSL_JOB* j)
     }
 }
 
+unsigned tagpu_rglsl_calls(void) { return s_calls; }
+
 void tagpu_rglsl_step(void)
 {
     GLint fbo = 0, vp[4] = { 0, 0, 0, 0 };

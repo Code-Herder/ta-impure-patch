@@ -86,6 +86,13 @@ void tagpu_rglsl_job_free(TAGPU_RGLSL_JOB* j);
    binding, uniform binding point 0, GL_UNPACK_ALIGNMENT = 1. Does nothing
    while the switch is off. */
 void tagpu_rglsl_step(void);
+/* How many times tagpu_rglsl_step has been CALLED (not how much it painted).
+   Its only caller is the native pass, which returns early when there is no
+   unit array -- in the shell, and in game with the world passes disarmed. A
+   pass whose atlas exists there (the UI's does) compares this across presents
+   to find out whether anything stepped the restorer, and steps it itself when
+   nothing did; otherwise its queue is never drained. */
+unsigned tagpu_rglsl_calls(void);
 /* The GL context died with everything in it: forget the ids, no deletes, and
    every job with them -- call it BEFORE the jobs' owners forget theirs. */
 void tagpu_rglsl_glreset(void);

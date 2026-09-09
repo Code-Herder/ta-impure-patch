@@ -162,6 +162,7 @@ static unsigned char s_restorePal[1024];/* the palette the atlas's restore snaps
 static unsigned s_palSeen = 0;          /* s_palChanges when the settle count last moved */
 static int    s_palSettle = 0;
 static unsigned s_rearms = 0, s_colTwins = 0;
+static unsigned s_rglslSeen = 0;        /* tagpu_rglsl_calls() at the last present */
 
 /* ----------------------------------------------------------------- shaders */
 /* a quad in surface pixels -> the twin's FBO (row 0 = surface row 0) */
@@ -582,18 +583,19 @@ static void restore_step(void)
     if (s_palChanges != s_palSeen) { s_palSeen = s_palChanges; s_palSettle = 0; return; }
     if (++s_palSettle < PAL_SETTLE) return;
     {
-        char b[180];
+        char b[220];
+        int ncol = 0;
         if (s_atlas.job) { tagpu_rglsl_job_free(s_atlas.job); s_atlas.job = NULL; }
         if (s_atlas.rgb) { glDeleteTextures(1, &s_atlas.rgb); s_atlas.rgb = 0; }
         s_atlas.restoreFailed = 0;
         memcpy(s_restorePal, s_palCopy, sizeof s_restorePal);
         tagpu_gaf_atlas_restore(&s_atlas, s_restorePal);
         for (i = 0; i < s_ntwins; i++)
-            if (s_twins[i].rgb) twin_col_drop(&s_twins[i], 0, 0, s_twins[i].w, s_twins[i].h);
+            if (s_twins[i].rgb) { twin_col_drop(&s_twins[i], 0, 0, s_twins[i].w, s_twins[i].h); ncol++; }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         s_rearms++; s_palSettle = 0;
-        _snprintf(b, sizeof b, "gui: the presented palette moved — restored twin re-armed (#%u), %d colour twin(s) invalidated",
-                  s_rearms, s_ntwins);
+        _snprintf(b, sizeof b, "gui: the presented palette moved — restored twin re-armed (#%u), %d of %d twin(s) had colour and were invalidated",
+                  s_rearms, ncol, s_ntwins);
         slog(b);
     }
 }
@@ -757,7 +759,13 @@ static void draw_layer(const TAGPU_FRAME* f)
     const char* ta = *(const char* const*)TA_MAINPP;
     int L = 0, T = 0, W = 0, H = 0, key;
     if (!t || t->w != f->game_width || t->h != f->game_height) return;
-    upload_palette();
+    /* the palette was uploaded in tagpu_gui_present, BEFORE restore_step
+       decided s_colValid. Uploading it again here -- after a drain that can be
+       thousands of ops long, during which the game thread may have set a new
+       one -- would show restored texels resolved through the palette their
+       restore snapshotted beside indexed texels resolved through a NEWER one,
+       which is the "wrong art" 3.4 exists to prevent. One upload per frame,
+       and it is the one s_colValid was decided against. */
     tagpu_vpwide_true_rect(ta, &L, &T, &W, &H);
     key = tagpu_terr_key();
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
@@ -796,6 +804,7 @@ static void unbind_all(void)
 {
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, 0);
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, 0);
     x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
     x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, 0);
@@ -841,13 +850,29 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     if (!init_gl()) return;
     upload_palette();       /* before restore_step, which compares against it */
     restore_step();         /* before the drain: its sprite ops ask whether colour is valid */
+    /* STEP THE RESTORER WHEN NOTHING ELSE DID. tagpu_rglsl_step's only other
+       caller is the native pass, which returns early with no unit array — so
+       in the shell, and in game with the world passes disarmed, it never runs
+       and the UI atlas's queue is never drained: every sprite would then read
+       alpha 0 from an unpainted twin and the UI would stay indexed for ever,
+       silently. Comparing the restorer's call count across presents says
+       whether the native pass stepped it this frame; when it did, we do
+       nothing, so the budget is sliced once either way. Before the drain, so
+       what it paints this frame is what the drain's sprites sample. */
+    if (s_atlas.job) {
+        unsigned n = tagpu_rglsl_calls();
+        if (n == s_rglslSeen) tagpu_rglsl_step();
+        s_rglslSeen = tagpu_rglsl_calls();
+    }
     drain();
     draw_layer(f);
     unbind_all();
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
     if (f->frame_counter - last >= 300) {
-        char b[420];       /* G15e's counters pushed the line past 260 and truncated fps= */
+        /* 194 bytes of literal + 27 conversions: the worst case is ~491, and
+           _snprintf does not NUL-terminate what it truncates */
+        char b[640];
         static LARGE_INTEGER t0, fq;
         LARGE_INTEGER t1;
         double fps = 0.0;
@@ -861,6 +886,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, s_palChanges, s_palDiff, s_palDiffAt, s_palSource,
                   tagpu_classicpp_on() ? 1 : 0, s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb, fps);
+        b[sizeof b - 1] = '\0';
         slog(b);
     }
 }
