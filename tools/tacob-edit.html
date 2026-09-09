@@ -418,7 +418,10 @@ function stepPlayback(now) {
   if (!a) return;
   const u = b ? playTick - base : 0;
   const mode = $('posemode').value;
-  applyPieces(pieceNodes, a, mode === 'stepped' ? null : b, u);
+  /* A is the LEFT copy and is the stepped one in A|B -- it takes the blend only
+     when the whole view is set to `smooth`. Testing `mode !== 'stepped'` here
+     smoothed BOTH copies in A|B, which made the comparison show nothing. */
+  applyPieces(pieceNodes, a, mode === 'smooth' ? b : null, u);
   if (mode === 'ab') applyPieces(pieceNodesB, a, b, u);
   applyWorld(a, b, u);
   $('tick').textContent = 'tick ' + a.tick;
