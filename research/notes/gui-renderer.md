@@ -1824,3 +1824,96 @@ row, gpu-status, the engine map's palette section and the `ta-drive` skill.
   contract says `R8` costs nothing. What is *not* resolved is that `tagpu_rglsl_job_new` clears
   its destination when the job is made, and that priorities 0-4 are taken with `MAX_JOBS` at 6 —
   a job per seeded surface does not fit as the pool stands.
+
+---
+
+## 16. G17b — `k != 1` live  [MEASURED 2026-09-09, IN PROGRESS]
+
+*The gate's exits are met and one decision is still open; this section is written as the work
+lands rather than after it, so the numbers are here when the decision is taken.*
+
+### What the gate turned out not to need
+
+- **No byte patch.** §13.7 and §13.9 both name one at `0x491AFB`. The engine's
+  `SetWindowPos(640, 480)` there passes `uFlags = SWP_NOZORDER` alone, and the fork's IAT hook
+  `fake_SetWindowPos` already returns TRUE without calling through for any call on
+  `g_ddraw.hwnd` missing all of `SWP_NOSIZE|SWP_NOMOVE|SWP_NOZORDER` — inert since the fork
+  existed ([resolution](resolution.html) §3.1c). **Phase 2 adds no new engine patch at all.**
+- **No engine change to reach `k != 1`.** cnc-ddraw takes `ddraw.ini`'s `width`/`height` as the
+  client and maxes them against the game mode, so `tacli --window WxH` gives `k = window / res`
+  with the engine keeping its own screen. That is what every measurement below was taken on.
+
+### What it did need: a click that tests the pointer path
+
+**The kill rule was not measurable when the gate was written.** Every injected event reaches
+`tagpu_shield.c`'s `deliver_mouse` in the engine's *own* coordinates and is clamped to
+`g_ddraw.width/height`, so `tacli ui click` never touched `mouse.unscale_*` — the one piece of
+arithmetic M1 rests on. A walk of those clicks would have passed at any `k`, right or wrong.
+
+The transform a hardware click takes was inline in `wndproc`'s button cases and nowhere else. It
+is now `mouse_client_to_game` (`mouse.c`), unchanged including the centre-on-letterbox rule, and
+**the harness calls the same function rather than a copy** — a copy could drift from the path a
+player's click takes and the test would still pass. `TAGPU_M_DEV`, the tokens `dclick`/`drclick`/
+`dmove`, `tacli click --device`, `tacli ui click --device` and `viewport` in the UI snapshot are
+the rest of it.
+
+`uiwalk`'s `hit_check` then runs at **every stop of every walk** (one snapshot, no clicking):
+each gadget aimed where the *renderer* draws it, put through the *fork's* own inverse, checked
+back inside its own rect. The two halves stay independently computed on purpose — inverting the
+input transform would make the test agree with itself at any `k`.
+
+### Measured
+
+| run | `k` | stops | gadgets | **misses** | drift | fps |
+|---|---|---|---|---|---|---|
+| shell + game, `--res 1280x720 --window 1920x1080` | 2.2500 / 1.5000 | 45 | 595 | **0** | 1 px | 58.3-60.0 |
+| **+ three entry/exit cycles**, `--res 1024x768 --window 1536x1152` | 2.4000 / 1.5000 | **117** | **1492** | **0** | 1 px | — |
+
+**No resize across the three cycles, and the walk proves it rather than asserting it**: `k` is
+`viewport / surface`, the shell's surface is 640 and the game's 1024, and every one of the 117
+stops implies a client width of **exactly 1536** — through three full game -> shell -> game
+transitions. No crash, and `hit_check` never saw a miss.
+
+**The 1-pixel drift is structural and is why this is a hit test.** The renderer scales by
+`vp / surface` and the input unscales by `(surface - 1) / (vp - 1)`, so the two disagree by up to
+half a device pixel across the screen; a gadget is tens of pixels wide, so it never leaves a rect.
+
+### The world at the device's resolution
+
+The supersampled buffer was **always** box-resolved back down to the *game* resolution, and the
+composite then stretched that into the viewport — so at `k > 1` every extra sample was thrown
+away and the world reached the screen at the engine's resolution, upscaled. `ss` now follows
+`ceil(k)` (capped at 4) when the viewport is wider than the engine's screen, and the resolve is
+skipped so the composite downsamples the supersampled buffer instead of stretching a small one.
+At `k = 1` none of it applies — `devres` is 0, `ss` is 2, the resolve runs — so the 1:1
+measurements are untouched by construction. `tagpu_devres.off` is the A/B.
+
+**The measure is replication, not sharpness**, because `s_colTex` is `GL_NEAREST` and the old
+path therefore *nearest-upscaled* the resolved frame:
+
+| | adjacent device pixels exactly equal | mid-row run lengths | fps |
+|---|---|---|---|
+| `devres` off (the old path) | **42.6 %** | 367 of run 1, **353 of run 2** | 60.0 |
+| `devres` on | **11.2 %** | 1113 of run 1, 31 of run 3 | 60.0 |
+
+Runs of 1 and 2 in almost equal number are the signature of a 1.5x nearest blow-up. **Mean
+|gradient| reads 7.3 % *lower* with `devres` on**, and that is the metric being wrong rather than
+the change — a nearest upscale has hard edges, so blockiness scores as detail. Recorded because
+the naive reading says the opposite of the truth.
+
+### Not closed here
+
+- **Which knob the player turns is still the owner's to decide.** §13.7 says the player picks the
+  window and the engine is given `window / k`. Implementing that literally means redirecting the
+  six game-entry reads of the desired mode ([resolution](resolution.html) §3.1b) and never
+  writing `main+0x37F1B/1F`, because `REGISTRY_SaveSettings` writes back every option from memory
+  from ~30 call sites and would persist our value into the player's registry — the `ScrollSpeed`
+  write-back a review caught on G13e. The inverse — the player picks the game resolution and the
+  window is `k` times it — is what every measurement above already runs on, needs no engine
+  change and leaves the stored mode truthful and network-correct. **The automatic
+  `clamp(winW/1280, 1, 3)` policy waits on that answer**, and so does §13.10's multiplayer
+  field-of-view consequence.
+- **Leaving a game at 1280x720 crashes** in the level teardown, at `k = 1` as well as at 1.5, so
+  it is the mode and not the scaling ([resolution](resolution.html) §3.1d). Not diagnosed.
+- **The `k = 1` regression on the current DLL** — the mouse refactor touches every input path —
+  was still running when this was written.
