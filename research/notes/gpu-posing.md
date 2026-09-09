@@ -267,6 +267,87 @@ The instrument to measure how often
 any of it happens **before** the landing already exists: `tagpu_poserecon.on` forces the
 reconstruction for every unit on every frame, and `s_poseNorecon` counts the walks that failed.
 
+### Step 8's two decisions — SETTLED 2026-09-09, before the code
+
+Step 8 deletes the CPU emitters, so every condition that today *falls back* to one has to become
+something else. These are the two questions the deletion could not be written without.
+
+#### A. The refusal ledger
+
+The rule is §3's: **degrade inside the unit, never drop it.** Applied to every place the gather or
+`posed_pose` can refuse today, with the invariant that makes each answer safe by construction
+rather than by luck:
+
+| refusal today | what it actually is | after step 8 | the invariant |
+|---|---|---|---|
+| `npd >= MAXU` | our per-frame array | **cannot happen.** The gather already stops at `nu < MAXU` and every non-hires unit takes exactly one `pdu` slot, so `npd <= nu <= MAXU` | a counting bound, established at the loop that fills it |
+| the pose arena is full | our arena | **degrade: that unit draws AT REST for that frame** — right geometry, right material, right position, fog, shadow and depth; only its animation is frozen | the rest block is **one shared static identity block**, so the degradation consumes no arena and cannot itself fail |
+| a piece's parent link never resolves (`!done[i]`) | the piece tree, not the renderer | **degrade: THAT PIECE at rest**, the rest of the unit posed. `hires_pose` has always done exactly this | identity is a valid matrix for any piece; the unit's other pieces are unaffected |
+| `nparts != g->nparts` | a cache-identity re-read | **redundant.** `tagpu_posebake_unit` already matches the cache entry on `nparts`, so equality holds at every call site. It becomes the loop bound it always was | established by the lookup, one call earlier |
+| `o3` / a node pointer does not read | a **lifetime** question | the lifetime is the argument, and it already exists: the gather re-reads `o3` against `unit+0x9E`, and `tagpu_reclaim` defers `FreeObjectState 0x45AAA0` and the model-template frees until the render thread has completed the pass. `ptr_ok` stays as a cheap filter on a VALUE; **the `IsBadReadPtr` is not the safety argument and is not written as though it were** | [thread-safe destruction](thread-safe-destruction.html); CLAUDE.md's standing debt |
+| the type will not bake — over `TAGPU_PBMAXPIECE` (256) pieces, or past `PB_MAXVERT` (49152) vertices | **content past a bound**, not a renderer failure | **the unit draws nothing, and it is logged once per model.** This is the one honest drop, and it is named as one rather than dressed up | the bounds are 7× and 85× the largest thing stock content asks for (36 pieces, 574 vertices), and a bake that refuses is *remembered*, so the log is one line per model and not one per frame |
+| the material walk disagrees with the geometry walk | an internal invariant violation | unchanged — refuse and log. If it ever fires, the split is broken and a buffer that lies is worse than a missing unit | `mat_bake`'s own `c.nv != g->nvert` |
+
+**The one thing that is genuinely lost** is the ability to draw a >256-piece or >49152-vertex model
+at all. No stock model is within an order of magnitude of either, and the alternative — keeping a
+whole second renderer against content that does not exist — is what decision 3 exists to refuse.
+
+#### B. When the pass cannot arm at all
+
+`tagpu_posedraw_ready()` returns 0 on a missing GL entry point, a shader that will not compile or
+link, or `GL_MAX_UNIFORM_BLOCK_SIZE` under `PD_BLOCK` (14 336). Today those units go to the CPU
+emitter. After the deletion there is nothing to go to — and handing them back to the engine is not
+free either, because `owndraw`'s detours are installed at DLL attach and already skip the engine's
+unit rasterisers, so **"draw nothing" is the default failure**: every unit in the game invisible.
+
+**The decision: `owndraw` does not skip a unit's rasterise until the pass that replaces it has
+published that it works.** Not a retained CPU path — the engine's own rasteriser is the fallback,
+which is what §3's table already says for a pass-level condition, and what `tagpu_r3d_ready()`
+already gates.
+
+This is available because **`tagpu_owndraw_classify` is a per-call runtime decision, not a static
+patch.** The detour is installed once at attach, but whether it returns 1 is decided per unit per
+call — that is the same mechanism `fx.on=passive` uses to hand the draw back live. So the
+classifier gains one gate: it reads a readiness word the posed pass publishes.
+
+**Why it is safe by construction, and not by timing.** `s_state` is a single aligned `int`, written
+only on the render thread, and it moves `0 → 1` (ready) or `0 → 2` (refused) after the programs
+have compiled and the buffers exist; `tagpu_posedraw_glreset()` puts it back to `0` **before** the
+new context is used. The classifier, on the game thread, only ever reads it. A single aligned word
+written once and read elsewhere yields the old value or the new one, never a torn one — so the
+question is only which direction a stale read fails in:
+
+- reading **stale "not ready"** when the pass has just become ready → the engine draws a unit we
+  also draw. That is a **double draw** for at most the frames between the pass arming and the
+  classifier's next call, and it is the near-invisible one the notes already describe (the engine's
+  8bpp under our RGB). Harmless.
+- reading **stale "ready"** when the pass cannot draw → the unsafe outcome, and it **cannot
+  happen**: the word is only ever set to 1 *after* readiness has been established, and is cleared
+  to 0 before a context change invalidates it. There is no ordering in which it says 1 first.
+
+So the failure is safe by *direction*, which is a property of the write order and not of how fast
+either thread runs. This is strictly better than today as well: today a `s_state == 1` that a
+context loss has invalidated draws nothing for those frames, because the gather has already taken
+the posed branch.
+
+#### The budget — 10 players × 1000 units
+
+`[OWNER, 2026-09-09]` a patch raising the unit limit to **1000 per player across 10 players** is
+coming, so step 8's degradations are designed against 10 000 units rather than against 200. What
+each bound does when it is reached, at that scale:
+
+| bound | today | what it limits | at 10 000 units |
+|---|---|---|---|
+| `MAXNV` / `s_vtrunc` | 49152 verts | the shared CPU vertex stream | **gone for units** — and it was already truncating at 281 units on screen (§4 step 7), which is the whole reason the CPU path is both slower and drawing less |
+| the pose arena | 16 384 piece-slots (`TAGPU_PBMAXPIECE * 64`) | poses buffered per frame | **the first thing to fill**: 2048 on-screen units at stock's worst 36 pieces is 73 728. Step 8 sizes it from `MAXU` rather than a magic 64, and its exhaustion is the rest-pose degradation above rather than a fallback |
+| `MAXU` | 2048 | units gathered per frame — **on screen only**, not alive | reachable zoomed out. Exhaustion today is a silent **drop** (the gather loop just stops), which is the one place §3's rule is still violated; raising it multiplies a dozen per-unit arrays, and `tagpu_native.o` already carries 5.1 MB of BSS. **Named here, not fixed by step 8** |
+| `PB_MAXMAT` | 256 | `(type, owner, atlas gen)` material streams | **the binding cache**: a stream is per OWNER, so ten players fielding thirty types each want ~300. Over the limit `mat_slot()` evicts and rebakes — a performance cliff, not a correctness bug, but it belongs in the same patch as the unit limit |
+| `PB_MAXGEOM` | 128 | model types baked at once | 279 unit types exist; a varied ten-player game can pass it, with the same eviction behaviour |
+
+**Only the first two are step 8's.** The other three are named with their failure mode so the
+unit-limit patch has a list rather than a surprise; `MAXU`'s silent drop is the one that is a
+correctness bug today and should not wait for the rest.
+
 ## 4. The architecture
 
 ### Per type, built once (the geometry buffer)
