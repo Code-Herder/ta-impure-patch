@@ -320,7 +320,7 @@ static GLint  s_uGame, s_uShadow, s_uAlpha, s_uFog, s_uFogOrg, s_uFogDim,
               s_uScafOn, s_uScafP;
 static GLint  s_uWaterT, s_uWaterMode, s_uDigT;
 static GLint  s_uNanoOn, s_uNanoT, s_uNanoC;
-static GLint  s_uLit, s_uSun, s_uAmb, s_uNorm;      /* Classic++ lighting */
+static GLint  s_uLit, s_uLambert, s_uSun, s_uAmb, s_uNorm;  /* Classic++ lighting */
 static GLint  s_uRestored;                          /* Classic++: the unit atlas's twin */
 static GLint  s_uOffset, s_uSS, s_uZoom, s_uZoomC, s_uZoomF, s_uZoomCF, s_uDepthScale;
 static GLint  s_uCKey = -1, s_uCSurfSz = -1, s_uCVp = -1;  /* composite: the key */
@@ -482,7 +482,7 @@ static const char* FS =
     "  if (uLit == 1) {\n"
     "    rgb = (t.a > 0.5 && !band) ? t.rgb / t.a\n"
     "        : texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
-    "    rgb *= taLambert(vNrm, vShW, taSx, taSy);\n"
+    "    rgb *= taLambert(uLambert == 1 ? vNrm : vec3(0.0, 1.0, 0.0), vShW, taSx, taSy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
     "  } else {\n"
     TAGPU_GLSL_FOG_SHADE("pi")
@@ -630,6 +630,7 @@ static void init_gl(void)
     s_uDigT      = glGetUniformLocation(s_prog, "uDigT");
     s_uNanoOn    = glGetUniformLocation(s_prog, "uNanoOn");
     s_uLit       = glGetUniformLocation(s_prog, "uLit");
+    s_uLambert   = glGetUniformLocation(s_prog, "uLambert");
     s_uSun       = glGetUniformLocation(s_prog, "uSun");
     s_uAmb       = glGetUniformLocation(s_prog, "uAmb");
     s_uNorm      = glGetUniformLocation(s_prog, "uNorm");
@@ -2864,7 +2865,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        building's shadow, the least visible thing to lose. */
     /* Classic++ draws neither Classic sub-pass (renderers.md 2.12): no slant
        range here, and no silhouette below, except an aircraft's under
-       airshadow=drop -- the one thing that lane borrows from Classic */
+       airshadow=drop -- the one thing that lane borrows from Classic.
+       The MASTER ARM, not assets/light (G18a): which half of Classic++ is on
+       says nothing about who owns the shadows. That dimension has its own key
+       already (`shadows=`), and G18b's third value is what will draw this pair
+       back under the switch. */
     int cpp = tagpu_classicpp_on();
     int airDrop = tagpu_classicpp_light()->airshadow == TAGPU_AIRSHADOW_DROP;
     static int sfirst[MAXU + 1];
@@ -3027,6 +3032,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     {
         const TAGPU_LIGHT* L = tagpu_classicpp_light();
         glUniform1i(s_uLit, tagpu_classicpp_on() ? 1 : 0);
+        glUniform1i(s_uLambert, tagpu_classicpp_lit() ? 1 : 0);
         x_glUniform3f(s_uSun, L->unitSun[0], L->unitSun[1], L->unitSun[2]);
         x_glUniform1f(s_uAmb, L->amb);
         x_glUniform1f(s_uNorm, 1.0f / L->unitLevel);
@@ -3050,7 +3056,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     x_glActiveTexture(GL_TEXTURE0);
     /* Classic++: the twin exists and the switch is on; a job may still be
        running, and the shader's alpha test is what says a texel is ready */
-    glUniform1i(s_uRestored, (tagpu_r3d_atlas_rgbref() && tagpu_classicpp_on()) ? 1 : 0);
+    glUniform1i(s_uRestored, (tagpu_r3d_atlas_rgbref() && tagpu_classicpp_assets()) ? 1 : 0);
     /* the stream was uploaded before the depth pass; the terrain and feature
        renders bound their own VAOs, so ours is put back */
     glBindVertexArray(s_vao);

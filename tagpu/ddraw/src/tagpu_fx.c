@@ -1010,7 +1010,7 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
     x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, scafTex);
     x_glActiveTexture(GL_TEXTURE6); glBindTexture(GL_TEXTURE_2D, s_atlas.rgb);
     x_glActiveTexture(GL_TEXTURE0);
-    glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_on()) ? 1 : 0);
+    glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_assets()) ? 1 : 0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);

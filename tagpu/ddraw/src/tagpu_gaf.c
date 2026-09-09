@@ -281,7 +281,7 @@ void tagpu_gaf_atlas_restore(TAGPU_GAFATLAS* a, const unsigned char* pal)
         return;
     }
     if (a->restoreFailed || !a->tex || !pal) return;
-    if (!tagpu_classicpp_on()) return;
+    if (!tagpu_classicpp_assets()) return;
     fetch_gl();
     if (a->mip && (!x_glGenerateMipmap || !x_glTexParameterf)) {
         char b[128];

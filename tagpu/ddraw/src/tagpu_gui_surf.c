@@ -564,7 +564,7 @@ static void twins_reset(void)
 static void restore_step(void)
 {
     int i;
-    if (s_norestore || !tagpu_classicpp_on() || !x_glDrawBuffers || !x_glClearBufferfv) {
+    if (s_norestore || !tagpu_classicpp_assets() || !x_glDrawBuffers || !x_glClearBufferfv) {
         s_colValid = 0;
         return;
     }
@@ -875,7 +875,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
     if (f->frame_counter - last >= 300) {
-        /* 194 bytes of literal + 27 conversions: the worst case is ~491, and
+        /* 209 bytes of literal + 29 conversions: the worst case is ~528, and
            _snprintf does not NUL-terminate what it truncates */
         char b[640];
         static LARGE_INTEGER t0, fq;
@@ -886,11 +886,13 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, s_palChanges, s_palDiff, s_palDiffAt, s_palSource,
-                  tagpu_classicpp_on() ? 1 : 0, s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb, fps);
+                  tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,
+                  tagpu_classicpp_lit() ? 1 : 0,
+                  s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
     }

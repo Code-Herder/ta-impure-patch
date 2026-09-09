@@ -759,7 +759,30 @@ value), `tacli arm <i> classicpp.cfg=off` removes it (= the lab's defaults `324.
 `215.5,53.1` / `0.35`). The DLL answers every read with one line, `classicpp: light sun=…
 unitsun=… amb=… level=…/… (tagpu_classicpp.cfg)` — or `(no cfg: defaults)` — so
 `tacli log <i> -g 'classicpp: light' | tail -1` says what the frame is lit by; allow ~1.5 s
-after arming before a shot. **The shadow keys** (G14i) ride the same file — `shadows=0|1`,
+after arming before a shot.
+
+**The switch has two halves (G18a): `assets=0|1` and `light=0|1`**, both default 1, both in
+the same cfg and live on the same poll, and they answer on their own line ahead of the light
+one — `classicpp: assets=1 light=1 (tagpu_classicpp.cfg)`. `assets=` is the restored
+atlases (`uRestored`, the terrain restore step, every lazy GAF twin, and the G15e UI twin);
+`light=` is the lambert (`uLambert`, and the ground lambert baked into a feature anchor).
+`tagpu_classicpp.on` stays the master arm — absent, both are off whatever the cfg says — and
+the **shadow** dimension is still on that master arm and its own `shadows=` key, not on these.
+
+- `assets=1 light=1` is the switch as it always was, to the pixel.
+- **`light=0` is not `sun=off`.** Both give a flat frame, but `sun=off` sets `amb=1.0`, which
+  puts the depth-map shadows out (`tagpu_shadow.c:359` refuses at `amb >= 1.0`); `light=0`
+  leaves them. Measured on `tascene-parity`: `light=0 shadows=0` is byte-identical to
+  `sun=off`, and `light=0` alone differs from it by exactly the 1800 shadow pixels.
+- **`light=0` leaves a unit UNSHADED, not Classic-shaded.** The engine's per-face
+  `PALETTE.SHD` shade row is the *Classic* branch's (`uLit == 0`), which the master arm
+  selects, so under Classic++ the choice is the lambert or nothing.
+- **To see `assets=` on the UI you must first make the UI draw real art.** Entering a game
+  seeds the panel with HUD icons only, all under the 12-px restore floor, so flipping
+  `assets` changes 0 px there. Press Tab for `ARMOPT` (or select a builder) first: then the
+  flip moves 37 415 of that rect's 45 056 px.
+- The `gui: twins=` heartbeat carries `cpp=<master> assets=<n> light=<n>`, and `colvalid`
+  drops to 0 while `assets=0`. **The shadow keys** (G14i) ride the same file — `shadows=0|1`,
 `shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B|off`, `shade=S`, `terrainshadow=0|1`,
 `shadowres=N`, `airshadow=len|physical|drop`, the lab's defaults — and answer on a second
 line, `classicpp: shadows=1 shadowsun=225.0,40.0 …`; the map also needs the engine's own
@@ -785,7 +808,9 @@ engine draws the sprites, identical in both): every pixel whose 16-px cell has z
 at all four corners must be byte-identical — 0 of 162,828 on the parity fixture — while the
 sloped ones move. `sun=off` also draws the units without their LUT row (the lab's meaning of
 "no sun"), so it is not a Classic frame: compare it to a Classic++ shot of the previous DLL,
-not to Classic.
+not to Classic. **`assets=0 light=0` is the one Classic++ state that IS a Classic frame** —
+with `shadows=0` too it lands within 594 px of a `classicpp.on`-removed shot on
+`tascene-parity`, all of them on one unit (the LUT row above).
 `tools/tascene restorediff <pack> <the .rgba>` holds the terrain to a pack built with `--undither`
 of the same map (max 1 level on < 0.01 % of bytes is the bar; Two Continents measures 0.0012 %),
 and `tools/tascene featdiff <pack> <gamedir>/tagpu_restore_feat` the feature twin (the far band
@@ -807,6 +832,12 @@ WINEPREFIX=<inst>/prefix wine reg add \
   "HKCU\Software\Cavedog Entertainment\Total Annihilation" \
   /v damagebars /t REG_DWORD /d 1 /f
 ```
+
+**`<pass>.off` does nothing while `<pass>.on` exists.** The precedence is the one
+`tagpu_opt.c` documents — an `.on` wins, tokens and all; an `.off` only turns off a pass that
+was on *by default*. So on an instance where you armed `classicpp.on` by hand, `arm <i>
+classicpp.off` is inert and the shot you take after it is still Classic++. Remove the arm
+instead: `tacli arm <i> classicpp.on=off`.
 
 **Deliberately NOT in the set**, so that "everything" stays a decision and not a sweep:
 

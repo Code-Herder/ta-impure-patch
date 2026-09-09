@@ -223,7 +223,7 @@ static int    s_hW, s_hH;              /* 0 while there is no usable grid    */
 static const void* s_hGrid;            /* the inputs the texture was built  */
 static const void* s_hSet;             /* from, or last attempted from      */
 static unsigned s_hFrame;              /* the frame of that attempt          */
-static GLint  s_uHDim, s_uLit, s_uSun, s_uAmb, s_uNorm;
+static GLint  s_uHDim, s_uLit, s_uLambert, s_uSun, s_uAmb, s_uNorm;
 static GLuint s_hVao, s_hVbo, s_hIbo;  /* the heightfield caster mesh (G14i)  */
 static int    s_hMeshW, s_hMeshH;      /* the grid it was built from: a failed
                                           rebuild leaves the old mesh, and this
@@ -341,7 +341,8 @@ static const char* FS =
     "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
     "    vec3 c = t.a > 0.5 ? t.rgb\n"
     "           : texelFetch(uPal, ivec2(int(texture(uAtlas, vUV).r * 255.0 + 0.5), 0), 0).rgb;\n"
-    "    if (uHDim.x > 0.5) c *= taLambert(taTerrN(vWorld), taW, taWx, taWy);\n"
+    "    if (uHDim.x > 0.5) c *= taLambert(uLambert == 1 ? taTerrN(vWorld) : vec3(0.0, 1.0, 0.0),\n"
+    "                                     taW, taWx, taWy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
     "    frag = vec4(c, 1.0); return;\n"
     "  }\n"
@@ -404,6 +405,7 @@ static void init_gl(void)
     glUniform1i(glGetUniformLocation(s_prog, "uHeight"),  5);
     s_uHDim = glGetUniformLocation(s_prog, "uHDim");
     s_uLit  = glGetUniformLocation(s_prog, "uLit");
+    s_uLambert = glGetUniformLocation(s_prog, "uLambert");
     s_uSun  = glGetUniformLocation(s_prog, "uSun");
     s_uAmb  = glGetUniformLocation(s_prog, "uAmb");
     s_uNorm = glGetUniformLocation(s_prog, "uNorm");
@@ -804,7 +806,7 @@ static void dump_if_armed(void)
    and leaves the texture in place, unsampled, restored as far as it got. */
 static void restore_step(const char* ta)
 {
-    if (!tagpu_classicpp_on() || !s_atlasTex || !s_setPix) return;
+    if (!tagpu_classicpp_assets() || !s_atlasTex || !s_setPix) return;
     if (s_rgbState == 0) {
         if (!s_rectValid) return;          /* the order wants a viewport: next frame */
         if (!glsl_begin(ta)) { s_rgbState = -1; flog("terr: GLSL restore could not start; Classic++ terrain stays indexed"); return; }
@@ -1033,14 +1035,16 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     /* running OR complete: while the job runs the alpha test in the shader
        reveals each cell as its out pass lands (and stays indexed elsewhere);
        a failed or absent job never samples the texture */
-    glUniform1i(s_uRestored, ((s_rgbState == 1 || s_rgbState == 2) && tagpu_classicpp_on()) ? 1 : 0);
+    glUniform1i(s_uRestored, ((s_rgbState == 1 || s_rgbState == 2) && tagpu_classicpp_assets()) ? 1 : 0);
     tagpu_shadow_apply(&s_shU);            /* this frame's map, or uShadowOn 0 */
-    /* the lighting: the terrain's sun. uLit is the switch alone (the Classic++
-       colour path); uHDim is 0 while there is no usable grid, and the shader
+    /* the lighting: the terrain's sun. uLit is the MASTER ARM (the Classic++
+       colour path, which `assets=`/`light=` only subdivide) and uLambert the
+       `light=` half; uHDim is 0 while there is no usable grid, and the shader
        then skips the lambert rather than sample a dead or stale texture */
     {
         const TAGPU_LIGHT* L = tagpu_classicpp_light();
         glUniform1i(s_uLit, tagpu_classicpp_on() ? 1 : 0);
+        glUniform1i(s_uLambert, tagpu_classicpp_lit() ? 1 : 0);
         x_glUniform3f(s_uSun, L->sun[0], L->sun[1], L->sun[2]);
         x_glUniform1f(s_uAmb, L->amb);
         x_glUniform1f(s_uNorm, 1.0f / L->level);

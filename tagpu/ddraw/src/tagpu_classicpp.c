@@ -32,6 +32,8 @@ static void cplog(const char* s)
 }
 
 static int          s_on = 0;
+static int          s_assets = 1;         /* assets=: the restored atlases  */
+static int          s_lit = 1;            /* light=:  the lambert           */
 static DWORD        s_last = 0;
 static TAGPU_LIGHT  s_light;
 static int          s_cfgSeen = 0;        /* a cfg was read (or its absence logged) */
@@ -95,6 +97,9 @@ static void apply(float sunAz, float sunEl, float usunAz, float usunEl, float am
     s_light.level = level_of(s_light.sun, amb);
     s_light.unitLevel = level_of(s_light.unitSun, amb);
     if (off) s_light.shadows = 0;         /* the lab: no sun, no shadows */
+    /* its own line: `classicpp: light ` is a prefix the ta-drive skill greps */
+    _snprintf(b, sizeof b, "classicpp: assets=%d light=%d (%s)", s_assets, s_lit, how);
+    cplog(b);
     _snprintf(b, sizeof b, "classicpp: light sun=%s%.1f,%.1f unitsun=%.1f,%.1f amb=%.2f level=%.4f/%.4f (%s)",
               off ? "off " : "", sunAz, sunEl, usunAz, usunEl, amb,
               s_light.level, s_light.unitLevel, how);
@@ -121,6 +126,7 @@ static void read_cfg(void)
     float amb = DEF_AMB;
     float ssunAz = DEF_SSUN_AZ, ssunEl = DEF_SSUN_EL;
     int off = 0;
+    s_assets = 1; s_lit = 1;              /* the switch undivided: G18a's defaults */
     shadow_defaults(&s_light);
     h = CreateFileA(CFG_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
@@ -138,7 +144,11 @@ static void read_cfg(void)
             while (*q && (unsigned char)*q > ' ') q++;
             last = (*q == 0);
             *q = 0;
-            if (!_strnicmp(p, "sun=", 4)) {
+            if (!_strnicmp(p, "assets=", 7)) {
+                s_assets = atoi(p + 7) != 0;
+            } else if (!_strnicmp(p, "light=", 6)) {
+                s_lit = atoi(p + 6) != 0;
+            } else if (!_strnicmp(p, "sun=", 4)) {
                 if (!lstrcmpiA(p + 4, "off")) off = 1;
                 else if (sscanf(p + 4, "%f,%f", &a, &e) == 2) { sunAz = a; sunEl = e; }
                 else { char b[160]; _snprintf(b, sizeof b, "classicpp: cfg: bad token \"%s\" ignored", p); cplog(b); }
@@ -212,6 +222,18 @@ int tagpu_classicpp_on(void)
 {
     poll();
     return s_on;
+}
+
+int tagpu_classicpp_assets(void)
+{
+    poll();
+    return s_on && s_assets;
+}
+
+int tagpu_classicpp_lit(void)
+{
+    poll();
+    return s_on && s_lit;
 }
 
 const TAGPU_LIGHT* tagpu_classicpp_light(void)

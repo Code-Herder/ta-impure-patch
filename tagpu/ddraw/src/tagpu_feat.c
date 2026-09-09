@@ -465,7 +465,8 @@ typedef struct {
 } FEATC;
 static FEATC s_c;
 static int s_logged;
-static int s_lit;                       /* Classic++ this frame: anchors take the ground's light */
+static int s_cpp;                       /* Classic++ this frame: the colour branch (uLit)        */
+static int s_lit;                       /* light= this frame: anchors take the ground's light    */
 
 /* Classic++: the ground's lambert at an anchor -- the lab's lambertAt(col,
    row): central differences of the height over 32 world units at the anchor
@@ -528,6 +529,9 @@ static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile
     waz = row * 16 + (fz * 16) / 2 - ((h00 + h01 + h10 + h11) >> 3);
     sx = wax + 128 - v->eyeX;
     sy = waz + 32 - v->eyeY;
+    /* `light=` is applied HERE, by baking 1.0 -- a billboard has no normal, so
+       there is no level normal to hand the rule the way the terrain and unit
+       shaders do, and no shadow term in it to preserve either */
     lam = s_lit ? ground_lambert(*(const char* const*)(ta + OFF_FEATMAP), col, row, mapW, mapH)
                 : 1.0f;
 
@@ -637,7 +641,8 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
        double draw, with the occlusion this pass exists for silently inert. */
     s_ownable = tagpu_native_wrecks_armed();
     s_mute = s_passive || !s_ownable;
-    s_lit = tagpu_classicpp_on();
+    s_cpp = tagpu_classicpp_on();
+    s_lit = tagpu_classicpp_lit();
 
     fmap  = *(const char* const*)(ta + OFF_FEATMAP);
     fdefs = *(const char* const*)(ta + OFF_FEATDEF);
@@ -786,8 +791,8 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     x_glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, v->fogLut);
     x_glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, s_atlas.rgb);
     x_glActiveTexture(GL_TEXTURE0);
-    glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_on()) ? 1 : 0);
-    glUniform1i(s_uLit, s_lit ? 1 : 0);    /* the lambert the gather baked in */
+    glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_assets()) ? 1 : 0);
+    glUniform1i(s_uLit, s_cpp ? 1 : 0);    /* the Classic++ colour branch     */
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     /* orphan and size to what this frame USES (shadow then body, contiguous),

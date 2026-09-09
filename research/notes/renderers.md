@@ -465,17 +465,38 @@ parameters. The shadow keys are §2.12's, and the depth map still runs only when
 
 **What has to be built before the screen can exist** — the gates are in the roadmap:
 
-- **Split the switch.** The shaders already take `uRestored` and `uLit` as *separate*
-  uniforms — four `uRestored` (`tagpu_terr.c:1036`, `tagpu_native.c:3053`,
-  `tagpu_feat.c:789`, `tagpu_fx.c:1013`) and three `uLit` (`tagpu_terr.c:1043`,
-  `tagpu_native.c:3029`, and `tagpu_feat.c:790` through the cached `s_lit`, set at
-  `tagpu_feat.c:640`) — but every one is fed from the same `tagpu_classicpp_on()`. Feed each from its own cfg key and *Undithered assets* and
-  *Dynamic lighting* become real, independent rows. Without this they cannot be rows at
-  all, and no per-pass mix is expressible either.
+- **Split the switch** — ● **done 2026-09-09 (G18a)**. `assets=0|1` and `light=0|1` in
+  `tagpu_classicpp.cfg`, read by `tagpu_classicpp_assets()` and `tagpu_classicpp_lit()`
+  (each is the master arm AND its key, so neither can be on while `tagpu_classicpp.on`
+  is absent). *Undithered assets* and *Dynamic lighting* are real, independent rows.
+
+  **`uLit` was not the lambert, and feeding it from `light=` was wrong** — the mistake is
+  recorded because this page asserted otherwise. `uLit` is the **Classic++ colour branch
+  itself** in all three shaders ("Nothing below this branch runs under Classic++, nothing
+  in it runs under Classic", `tagpu_terr.c`), and `uRestored` is read *inside* it. Feeding
+  `uLit` from `light=` therefore dropped the whole frame back to Classic and silently
+  overrode `assets=`: measured on the parity fixture, `assets=1 light=0` and
+  `assets=0 light=0` came out **byte-identical**, 0 px apart. What was actually built:
+
+  | | fed from |
+  |---|---|
+  | `uLit` — the colour branch, and with it the RGB fog rule of §2.6 | the master arm, `tagpu_classicpp_on()` |
+  | `uRestored` (`tagpu_terr.c`, `tagpu_native.c`, `tagpu_feat.c`, `tagpu_fx.c`), the terrain restore step, `tagpu_gaf.c`'s twin, the restorer's job pump, and the UI colour twin of G15e | `tagpu_classicpp_assets()` |
+  | `uLambert` — **new**, in `tagpu_glsl.h`'s `TAGPU_GLSL_LIGHT_UNIFORMS`; and the ground lambert `tagpu_feat.c` bakes into an anchor | `tagpu_classicpp_lit()` |
+
+  **`uLambert == 0` does not skip `taLambert` — it hands it the LEVEL normal**, so the
+  slope shading goes and the shadow term, which lives *inside* `taLambert`, stays. Level
+  ground is exactly 1.0 there by construction (`uNorm` is `1/level`, and `level` is that
+  same lambert of the up normal), which the measurement confirms: `light=0 shadows=0` is
+  **byte-identical to `sun=off`**, 0 px. A feature has no normal to flatten, so there
+  `light=` is applied by baking 1.0 instead.
 - **Stop `sun=off` clearing shadows.** `apply()` forces `amb=1.0` when the sun is off and
   `tagpu_shadow.c:359` refuses at `amb >= 1.0`, so Lighting Off would silently take Shadows
   with it. Note `sun=off` flattens **unit** lighting as well as terrain, which is why the
-  row is "Dynamic lighting" and not "Terrain dynamic lighting".
+  row is "Dynamic lighting" and not "Terrain dynamic lighting". **G18a already keeps the
+  Lighting row clear of this**: `light=0` is a flag on `uLambert`, not a move of `amb`, so
+  the depth map survives it (1800 px of shadow on the parity fixture, the exact pixels by
+  which `light=0` and `sun=off` differ). What is left for G18b is the `sun=off` path itself.
 - **A third value on `shadows=`.** §2.12 turns both Classic sub-passes off under the switch
   and `shadows=0` means *none*, not *hard*, so `Shadows = Hard` has nothing to write.
 - **Panel art and an entry point.** Seven `h20` gadgets need seven `h20` recesses and no

@@ -352,6 +352,10 @@ static void frame(const TAGPU_FXVIEW* v, const TAGPU_LIGHT* L)
 }
 
 /* ---- the frame protocol ------------------------------------------------ */
+/* The gate reads the MASTER ARM, not assets/light (G18a): the depth map is the
+   shadow dimension's, and `shadows=` is that dimension's own key. `amb >= 1.0f`
+   is `sun=off`, which is the lighting rule evaluated flat rather than the
+   `light=0` flag -- G18b is where the two stop being the same refusal. */
 int tagpu_shadow_begin(const TAGPU_FXVIEW* v, int engineShadowBit)
 {
     const TAGPU_LIGHT* L = tagpu_classicpp_light();
