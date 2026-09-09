@@ -2558,6 +2558,27 @@ the game-state arrays (`0x491BC5`, `0x491BD9`, `0x491BED`). **The fork wraps thi
 flush the deferred queue while the registry is alive — or, if it does not leave within a second,
 keep the queue and keep deferring through the cascade) and a post hook (release it).
 
+### `0x42DB90` — the model templates are freed here, and only here
+
+`[BINARY-VERIFIED 2026-09-08]` Called once from the teardown cascade, `0x491C21`, the first call
+after `0x485980`'s unit walk. It is what makes a `Model3DONode` tree's lifetime the **level**:
+
+- it walks the model-pointer table `[main+0x14377]` — the same table the fork calls
+  `OFF_MODELPTRS` and indexes with `unit+0xA6` — bounded by the count at `main+0x1438F`, with
+  `esi` running over the unit defs at `main+0x1439B` (`0x42DB98`..`0x42DBEE`);
+- per entry: `MEM_Free 0x4D85A0` (`0x42DC01`), then the slot is nulled (`0x42DC15`,
+  `mov [eax+edi], ebx` with `ebx = 0`); two further `MEM_Free`s follow in the same body
+  (`0x42DC23`, `0x42DC52`);
+- then the table itself is freed (`0x42DCB6`) and `main+0x14377` nulled (`0x42DCD8`).
+
+**Why it matters to us.** `FreeObjectState 0x45AAA0` — the funnel `tagpu_reclaim` defers — never
+reaches these blocks: a template is not owned by any unit, it is shared by every unit of a type.
+So the deferral makes a dying unit's `Object3do` safe and does nothing for the tree, and anything
+that CACHES a template pointer across frames is holding an address that this function returns to
+`MEM_Free`, i.e. to the small-block heap documented above as recycling aggressively. That is the
+whole rationale for the fork's level generation
+([thread-safe destruction](thread-safe-destruction.html) §6a).
+
 ### Why the drain has no tick to ride — `0x4969D2`
 
 The only game-thread hook the fork owns is the scenario applier's `Game_MainLoopTick` detour at
