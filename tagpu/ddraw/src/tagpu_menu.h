@@ -29,6 +29,14 @@ void tagpu_menu_init(void);
 /* 1 when the observer is installed and the screen can be opened. */
 int  tagpu_menu_installed(void);
 
+/* Is this GAME-space point one the render-options UI owns -- the sprocket, or
+   the panel while it is open? The zoom asks, because a click inside the world
+   viewport is UNZOOMED on its way to the engine (tagpu_zoom.h) and our panel
+   hangs over the world: at any zoom != 1 every row click would be bent to a
+   different point before the engine hit-tested it, and no row would work.
+   The zoom cannot see GUI screens, so the screen has to say. */
+int  tagpu_menu_owns_point(int gx, int gy);
+
 /* The sprocket's hit-test, in GAME-space coordinates. Returns 1 when the
    trigger consumed the click, in which case the caller must not pass it on.
    Called from BOTH of the shield's input paths (tagpu_shield.c): the injected

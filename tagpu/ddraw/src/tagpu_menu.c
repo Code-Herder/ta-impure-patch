@@ -127,6 +127,8 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 #define CTL_W     120
 #define LBL_X      14
 #define LBL_W     144
+#define TITLE_Y     9                   /* the caption, above the rule at 30   */
+#define TITLE_W   276
 #define TRIG       28                   /* 2 px of bar above and below         */
 
 /* ---- the rows ------------------------------------------------------------ */
@@ -217,7 +219,7 @@ static const unsigned char TRIG_INK[TS_COUNT][3] = {
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "G18-5"
+#define UFO_STAMP  "G18-6"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
@@ -650,22 +652,28 @@ static int build_gui(char* b, int cap, int rows)
         "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
         "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
-        rows * 2 + 1);
+        rows * 2 + 2);
 
     /* the ground: an id=12 whose NAME is the GAF frame, over the whole panel */
     at = gput(b, cap, at, "[GADGET1]\r\n\t{\r\n");
     at = common(b, cap, at, 12, ART_NAME, 0, 0, PANEL_W, PANEL_H, 0, 15);
     at = gput(b, cap, at, "\t}\r\n");
 
+    /* the caption. tools/guipanel.py rules the panel at DIV_TOP = 30 and the
+       band above it is the title's -- an empty one is just a bare rule. */
+    at = gput(b, cap, at, "[GADGET2]\r\n\t{\r\n");
+    at = common(b, cap, at, 5, "TITLE", LBL_X, TITLE_Y, TITLE_W, 18, 1, 15);
+    at = gput(b, cap, at, "\ttext=%s;\r\n\t}\r\n", "Render options");
+
     for (i = 0; i < rows; i++) {
         int y = ROW_Y0 + ROW_PITCH * i;
         /* the label, BESIDE its control -- every stock runtime screen puts it
            16 px above, which six rows have no room for (gui-gadgets.md 10.3) */
-        at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 2);
+        at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 3);
         at = common(b, cap, at, 5, "TEXT", LBL_X, y, LBL_W, ROW_H, 1, 15);
         at = gput(b, cap, at, "\ttext=%s;\r\n\t}\r\n", s_row[i].label);
 
-        at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 3);
+        at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 4);
         at = common(b, cap, at, 1, s_row[i].name, CTL_X, y, CTL_W, ROW_H, 1, 15);
         at = gput(b, cap, at,
             "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
@@ -966,6 +974,24 @@ void tagpu_menu_present(void)
    The press toggles and the RELEASE is consumed too. Letting the release
    through would leave the engine holding a button it never saw pressed --
    the G13e review's HIGH finding, and it costs the rest of the session. */
+/* The sprocket always, and the panel while it is open. Both rects are computed
+   the same way the drawing and the push do, so there is one source of truth. */
+int tagpu_menu_owns_point(int gx, int gy)
+{
+    int x, y, w;
+
+    if (!s_installed) return 0;
+
+    trigger_rect(&x, &y);
+    if (gx >= x && gx < x + TRIG && gy >= y && gy < y + TRIG) return 1;
+
+    if (!s_gm) return 0;
+    w = (int)g_ddraw.width;
+    if (w < PANEL_W + MARGIN) w = PANEL_W + MARGIN;
+    x = w - MARGIN - PANEL_W;
+    return gx >= x && gx < x + PANEL_W && gy >= BAR_H && gy < BAR_H + PANEL_H;
+}
+
 int tagpu_menu_click(int gx, int gy, int down)
 {
     int x, y;

@@ -9,6 +9,7 @@
 #include "dd.h"
 #include "tagpu_opt.h"
 #include "tagpu_zoom.h"
+#include "tagpu_menu.h"
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
 
@@ -505,6 +506,9 @@ int tagpu_zoom_drop_mouse(UINT msg, LPARAM lparam)
 
     x = (int)(short)LOWORD(lparam);
     y = (int)(short)HIWORD(lparam);
+    /* a point the render-options UI owns is never in the ring: it is screen
+       furniture, not world, and dropping its press would swallow the click */
+    if (tagpu_menu_owns_point(x, y)) { s_dropped[slot] = 0; return 0; }
     /* the return value is "was it transformed", which is 0 in the ring — `ring`
        is the flag to read, and it is the only one that matters here */
     to_engine(&x, &y, &ring);
@@ -517,6 +521,13 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
     if (!carries_point(msg)) return lparam;
     int x = (int)(short)LOWORD(lparam);
     int y = (int)(short)HIWORD(lparam);
+    /* THE RENDER-OPTIONS PANEL IS OVER THE WORLD, so the geometric gate below
+       would treat every click on it as a world click and unzoom it -- at 3.1x
+       a row click landed hundreds of pixels away and no row worked at all
+       (found in play 2026-09-09). The engine hit-tests a GUI screen in screen
+       space, so a point the screen owns must reach it untouched. This module
+       cannot see GUI screens; tagpu_menu answers for its own. */
+    if (tagpu_menu_owns_point(x, y)) return lparam;
     if (!tagpu_zoom_to_engine(&x, &y)) return lparam;
     return MAKELPARAM((short)x, (short)y);
 }
