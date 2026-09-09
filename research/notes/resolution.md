@@ -285,6 +285,28 @@ that actually resizes the window is `NewTAScreen(640, 480)` → the fork's own
 window policy is therefore a *fork* concern — keep a configured client size
 across a mode change — and not a patch on a call that is already a no-op.
 
+### 3.1d Leaving a game at 1280x720 crashes, and it is not phase 2's doing [MEASURED 2026-09-09]
+
+Driving `ARMOPT -> EXIT -> MAINMENU -> CHOICE1` out of a skirmish:
+
+| game mode | window | k | teardowns | result |
+|---|---|---|---|---|
+| 1024x768 | 1024x768 | 1 | 3 (the G15d cycle walk) | clean, no `ErrorLog.txt` |
+| 1280x720 | 1920x1080 | 1.5 | 1 | **Access Violation** at `0x79426297`, read of `0x06F18E29` |
+| 1280x720 | 1280x720 | **1** | 1 | **the same crash, same IP, same fault address** |
+
+**So `k` is exonerated** — the control at `k = 1` fails identically, which is why
+it was run. What the two failing rows share is the **1280x720 mode**, and the
+crash address is outside `TotalA.exe` (image `0x400000..0x520000`) in a wine
+module, with `cdaudio` / `stop` / `open` / `settimeformat` MCI strings on the
+stack. `NoDirectSound=1` and `cdmode`/`musicmode` = 0 were set on every run, so
+the sound path is nominally off and this is **not diagnosed further here**.
+
+Practical consequence, and it is the useful part: **phase 2's cycle exit must be
+walked at a mode known to survive a teardown.** `--res 1024x768 --window
+1536x1152` gives `k = 1.5` exactly on a mode with three clean teardowns on
+record, and is the configuration to use rather than 1280x720.
+
 ### 3.2 LoadMap's derivations — `0x483610` [BINARY-VERIFIED]
 
 With `ebp = main+0x141FB` (so `+0x40 = main+0x1423B` etc.), at `0x483BBF`:
