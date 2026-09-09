@@ -232,6 +232,33 @@ from the class's speed (≈12 s a lap), tangent heading, never stopping — and 
 now selects by default. **`ground` is untouched**, because the nine trace fixtures replay against
 it: `tacob run --all` is 9/9 byte-identical after the change.
 
+**Three viewer bugs the first A/B session found, none of them the interpolation.** `[MEASURED
+2026-09-09]`
+
+1. **The model faced 180° away from its direction of travel — always.** `scene3` maps world to
+   scene as `(-x, y, -z)`, a half turn about Y, and the page applied `body[1]` to the model's yaw
+   *without* that half turn. Measured against the loop path: a constant **174.3° error with 0.0°
+   spread** (the residual is the half-interval of the sampling). `+ π` on the yaw takes it to
+   1.9°. This predates the A/B work and is why the walk read as backwards; on the old shuttle path
+   it cancelled on the return leg, which is exactly the "only part of the animation" symptom.
+2. **The A|B separation was applied inside the yaw rotation.** With both copies parented under the
+   rotating anchor, every heading change swept them through an arc of radius `abGap` — so the
+   outer copy jumped laterally by far more than the inner one, and on the old shuttle's one-tick
+   180° flip it crossed a half circle in a single frame. The rigs now carry the gap **above** the
+   yaw, so it is a pure scene-space offset.
+3. **The playback clock modulated playback speed by ±20%.** Correcting `playTick` toward the
+   ring's head every frame cannot settle, because the server's real tick rate is not `SIM_RATE` —
+   it is a Python sleep plus the VM's step cost. The correction saturated every frame and surged
+   at the poll frequency, which reads as jerk against the grid. Trimming a **rate multiplier**
+   instead lets the clock lock to the server's actual rate. Measured on the page: per-frame
+   advance `0.495 ± 0.040` → `0.516 ± 0.009`, camera jitter 8% → **2%**, and the advance settling
+   above 0.5 is the rate mismatch made visible.
+
+Worth stating because it cost a session: **two of the three were only found by instrumenting the
+running page** — the clock was twice "fixed" by reasoning (a bigger buffer, then gentler easing)
+and neither reasoned fix was the cause. `rAF` was steady at 16.7 ms ± 0.1 throughout; the jerk was
+always in what the clock did with it.
+
 The `body` checkbox interpolates the unit's *translation and yaw* as well. That is §8, not what the
 pose pass would ship — it defaults on so the leg difference is what you see, and turning it off
 shows the honest result of interpolating pieces alone (smooth legs on a stepping body), which is a

@@ -201,8 +201,8 @@ let state = null, pieceNodes = [], head = 0, scrubbing = false, live = true;
    sim rate. Both models read the same clock and the same two frames -- only the
    blend differs, which is what makes this a test of interpolation and not of
    timing. */
-const SIM_RATE = 30, PLAY_LAG = 2, RING_KEEP = 120, BACKFILL_MAX = 8;
-let ring = new Map(), ringTop = -1, playTick = -1, lastRAF = 0;
+const SIM_RATE = 30, PLAY_LAG = 5, RING_KEEP = 120, BACKFILL_MAX = 8;
+let ring = new Map(), ringTop = -1, playTick = -1, lastRAF = 0, rateAdj = 1;
 let pieceNodesB = [], abGap = 0;
 let traceSeen = 0, traceText = [], tab = 'state';
 
@@ -226,8 +226,18 @@ scene.add(grid);
 const unit = new THREE.Group(); scene.add(unit);
 /* unit is the follow anchor and carries the world position; the two model roots
    hang off it so A|B offsets are local and `follow` keeps working unchanged. */
+/* Three levels, and the order matters. `unit` carries the world position only.
+   The rigs carry the A|B separation, ABOVE the yaw -- putting the offset inside
+   the rotation swings the outer copy through an arc, so every yaw step became a
+   large lateral jump on that side and a small one on the other. The models carry
+   the yaw, which is `body[1] + PI`: scene3 maps world to scene as (-x, y, -z),
+   a half turn about Y, and the heading has to take the same half turn or the
+   unit faces exactly backwards. It always did -- measured 2026-09-09 at a
+   constant 180 deg between travel and facing. */
+const rigA = new THREE.Group(), rigB = new THREE.Group();
 const modelA = new THREE.Group(), modelB = new THREE.Group();
-unit.add(modelA); unit.add(modelB); modelB.visible = false;
+rigA.add(modelA); rigB.add(modelB);
+unit.add(rigA); unit.add(rigB); rigB.visible = false;
 const marker = new THREE.Mesh(new THREE.SphereGeometry(6, 16, 12),
                               new THREE.MeshBasicMaterial({ color: 0xd8a657, wireframe: true }));
 scene.add(marker);
@@ -276,9 +286,9 @@ function alerp(a, b, u) {
 
 function layoutModels() {
   const ab = $('posemode').value === 'ab';
-  modelB.visible = ab;
-  modelA.position.x = ab ? -abGap : 0;
-  modelB.position.x = ab ? abGap : 0;
+  rigB.visible = ab;
+  rigA.position.x = ab ? -abGap : 0;     // above the yaw: a pure scene-space gap
+  rigB.position.x = ab ? abGap : 0;
   $('ablegend').style.display = ab ? '' : 'none';
 }
 
@@ -318,8 +328,10 @@ function applyWorld(frame, next, u) {
     camera.position.add(move);
   }
   const K = Math.PI * 2 / 65536;
-  unit.rotation.set(0, smooth ? alerp(w.body[1] * K, w2.body[1] * K, u)
-                              : w.body[1] * K, 0);
+  const yaw = (smooth ? alerp(w.body[1] * K, w2.body[1] * K, u) : w.body[1] * K)
+              + Math.PI;                 // scene3's half turn — see the rig comment
+  modelA.rotation.set(0, yaw, 0);
+  modelB.rotation.set(0, yaw, 0);
   marker.position.copy(scene3(w.target));
   fx.clear();
   for (const e of frame.effects || []) {
@@ -364,13 +376,43 @@ function stepPlayback(now) {
   const dt = lastRAF ? Math.min(0.1, (now - lastRAF) / 1000) : 0;
   lastRAF = now;
   if (scrubbing || ringTop < 0) return;
+  /* Run our own clock at the sim rate and EASE toward a fixed lag behind the
+     ring, instead of hard-clamping to its head. The old clamp sat one tick off
+     the newest frame, so every poll (66 ms, ~2 ticks at a time) the clock ran
+     into it and stalled: a visible ~15 Hz stutter in everything, the ground grid
+     included, because the camera follows the unit. PLAY_LAG ticks of buffer is
+     what stops that; the hard resync is only for a restart or a long stall. */
   const lo = Math.max(0, ringTop - RING_KEEP + 2);
-  /* hold one tick behind the ring's head so the segment's far end exists; with a
-     single frame (tick 0, paused) there is no segment and it draws stepped. */
-  const hi = ringTop >= 1 ? ringTop - 1 : ringTop;
-  if (playTick < lo || playTick > ringTop) playTick = Math.max(lo, ringTop - PLAY_LAG);
-  else playTick = Math.min(hi, playTick + dt * SIM_RATE * (+$('speed').value || 1));
+  const rate = SIM_RATE * (+$('speed').value || 1);
+  if (playTick < 0) playTick = Math.max(lo, ringTop - PLAY_LAG);
+  else {
+    /* Advance at the sim rate and correct toward the target lag only WEAKLY.
+       `ringTop` arrives in steps (one poll, one or two ticks), so any correction
+       proportional to the instantaneous drift modulates playback speed at the
+       poll frequency -- measured at +-20% per frame, which surges visibly
+       against the grid. The correction is capped at 5% of a frame's advance, so
+       the clock converges over a second or two and the rendered speed stays
+       flat. */
+    /* Correct the RATE, not the position. The server's real tick rate is not
+       exactly SIM_RATE -- it is a Python sleep plus the VM's own step cost -- so
+       a position correction never settles: it saturates every frame and
+       modulates playback speed at the poll frequency (measured at +-20% before
+       this, which surges visibly against the grid). Trimming a rate multiplier
+       instead lets the clock LOCK to whatever the server is really doing, and
+       the per-frame advance stays flat because rateAdj moves slowly. */
+    const drift = (ringTop - PLAY_LAG) - playTick;
+    if (drift > 15 || drift < -15) {
+      playTick = Math.max(lo, ringTop - PLAY_LAG);
+      rateAdj = 1;
+    } else {
+      rateAdj += drift * 0.0008;
+      if (rateAdj < 0.85) rateAdj = 0.85;
+      if (rateAdj > 1.15) rateAdj = 1.15;
+      playTick += dt * rate * rateAdj;
+    }
+  }
   if (playTick < lo) playTick = lo;
+  if (playTick > ringTop) playTick = ringTop;         // safety, not the normal path
   const base = Math.floor(playTick);
   const a = frameAt(base), b = frameAt(base + 1);
   if (!a) return;
@@ -716,10 +758,10 @@ async function poll() {
            backwards, which resets the ring rather than backfilling into it. */
         if (ringTop >= 0 && head < ringTop) { ring.clear(); ringTop = -1; playTick = -1; }
         if (ringTop >= 0 && head - ringTop <= BACKFILL_MAX + 1) {
-          for (let t = ringTop + 1; t < head; t++) {
-            const gap = await api('/pose?tick=' + t);
-            if (!gap.error) ring.set(gap.tick, gap);
-          }
+          const want = [];
+          for (let t = ringTop + 1; t < head; t++) want.push(t);
+          const got = await Promise.all(want.map((t) => api('/pose?tick=' + t)));
+          for (const gap of got) if (!gap.error) ring.set(gap.tick, gap);
         } else if (ringTop >= 0) { ring.clear(); playTick = -1; }
         ring.set(frame.tick, frame);
         ringTop = frame.tick;
@@ -737,7 +779,7 @@ async function poll() {
       }
     }
   } catch (err) { /* the server is restarting a build; the next tick will do */ }
-  setTimeout(poll, 66);
+  setTimeout(poll, 33);        // the sim is 30 Hz; 66 ms arrived in lumps of two
 }
 
 refreshState().then(poll);
