@@ -1,10 +1,12 @@
 # Smooth unit movement and animation
 
-*A design, not a landing. **Nothing on this page is built and none of it is scheduled** — it is
-future work, written down while the measurements behind it were fresh (2026-09-09). The concrete
-piece is interpolating COB-driven piece poses toward the next keyframe so models animate at render
-rate instead of at the 30 Hz sim tick; the wider topic — unit turn rate, body rotation, position
-between ticks — is §8. Companion pages: [file formats](file-formats.md) §2 (the COB format and the
+*A design, mostly unbuilt. **Gate 0 has passed** — the owner watched stepped against smoothed
+side by side on 2026-09-09 and the verdict was that the smoothed walk looks good, which is what
+the rest of the plan was waiting on. What exists is the *instrument* (§7a) and the coverage
+measurement (§5); **no renderer change is built and none is scheduled** — §7's order of work now
+points at option A behind a lever. The concrete piece is interpolating COB-driven piece poses
+toward the next keyframe so models animate at render rate instead of at the 30 Hz sim tick; the
+wider topic — unit turn rate, body rotation, position between ticks — is §8. Companion pages: [file formats](file-formats.md) §2 (the COB format and the
 animation stepper), [GPU posing](gpu-posing.md) (the pass this plugs into), [exe reverse
 engineering](exe-reverse-engineering.md) §"The COB engine" (the thread records), [tacob](tacob-design.md)
 (the VM and editor the prototype lives in).*
@@ -29,6 +31,14 @@ only.
 `MOVE`/`TURN`/`SPIN` by `dt × (speed / 30)` per tick, and aiming and settling scripts use it
 throughout. Those pieces are already smooth at the sim rate and need nothing from this page. What
 is stepped is exactly what the animators chose to author as keyframes.
+
+**One part of locomotion is already interpolated: the stop.** `StopMoving` only clears a static;
+`MotionControl`'s idle branch then eases the legs to rest with `speed`, one-shot, and the stride
+in flight finishes first because `call-script` blocks. Measured on ARMCOM: **10 ticks, 0.33 s**,
+at the 6.67°/tick its `speed <200>` implies — [file formats](file-formats.md) §2.6 carries the tick
+table. **There is no start transition**; `walk` opens with `TURN_NOW` and snaps in. So the blend
+this page proposes must leave the stop alone and hold the whole burden of the start, which is the
+asymmetry to look for when judging whether it is worth shipping.
 
 ## 2. Where it goes
 
@@ -195,7 +205,7 @@ needs.
 
 | gate | asks | how |
 |---|---|---|
-| **0 — taste** | does smoothed TA look better than the authored stepping? | [tacob](tacob-design.md) A/B on ARMPW at 60 fps — **instrument built, §7a; the owner decides, not a measurement** |
+| **0 — taste** | does smoothed TA look better than the authored stepping? | **PASSED 2026-09-09** — the owner's verdict on the A\|B viewer (§7a), which is the only thing that could decide it |
 | **1 — coverage** | how often would B fall back? | `tools/cob_lookahead.py` — **run, §5** |
 | **2 — parity** | with the lever off, is output unchanged? | bit-identical `posed_pose` output |
 | **3 — cost** | what does it cost at scale? | `tools/gatec.sh` + `scenarios/walk-gatec.json`, the 200-unit fixture [G16](gpu-posing.md) step 7 built |
@@ -342,11 +352,43 @@ pose pass would ship — it defaults on so the leg difference is what you see, a
 shows the honest result of interpolating pieces alone (smooth legs on a stepping body), which is a
 real risk of §2 landing by itself.
 
-**Order of work.** Gate 0 first, in tacob, before any DLL work: `tacob serve` already runs the
-verified VM and poses the real glTF with one node per piece, so an interpolation toggle in
-`tacob-edit.html` costs a page change and answers the only question that decides the rest. Then A
-behind the lever with gates 2–4. Then B, only if gate 0 likes the look *and* the 66 ms actually
-shows on screen.
+**Order of work.** ~~Gate 0 first, in tacob~~ — **done, and it passed**; §7a is what was built to
+answer it and §7c is what it cost. Next is **option A behind the lever**, with gates 2–4. Then B,
+only if the 66 ms actually shows on screen — gate 1 says the coverage is there for it (§5), so the
+decision is about latency, not feasibility.
+
+### 7c. What answering gate 0 actually cost — nine bugs, none of them the interpolation
+
+Every one was found by measuring the running thing, and all nine were in the *instrument*, not in
+the idea being tested. Kept because the pattern is the lesson: **an instrument that has never been
+looked at closely is not evidence, and most of these produced a picture that flatly contradicted a
+correct measurement.** `[MEASURED 2026-09-09]`
+
+| # | what was wrong | how it showed up |
+|---|---|---|
+| 1 | The viewer set the model's yaw from `body[1]` raw, but `scene3` maps world to scene as `(-x, y, -z)` — a half turn about Y | Units faced **180° away from travel, always**: a constant 174.3° error with 0.0° spread. On the old shuttle it cancelled on the return leg, so it read as "backwards only part of the time" |
+| 2 | The A\|B gap sat *inside* the yaw rotation | Every heading change swept both copies through an arc of radius `abGap`, so the outer one jumped much further per step |
+| 3 | `ground`, the motion sketch every walking class used, is a shuttle with two 1 s dead stops and a **one-tick 180° heading flip** | "It pauses and walks backwards" — it did, because reversing without turning *is* walking backwards. Its own docstring admitted the path "was never measured against a moving unit" |
+| 4 | `CLASS_PLANS` carried one speed per class | ARMCOM walked at ARMPW's pace, **67% too fast**, and the stride slipped against the ground to match. The FBI has the number per unit: 1.2 against 1.8 |
+| 5 | `classify` tested for `KBOT` in the category word list | ARMCOM reads `ARM commander LEVEL10 …` with no `KBOT`, so both commanders were driven as tanks |
+| 6 | The director drove every weapon slot the FBI listed | ARMCOM's `Weapon3` is `ARM_DISINTEGRATOR`, so the commander **D-gunned on a loop forever**. `commandfire=1` is TA's manual-fire tag and the engine's own `AutoAim` never calls those scripts |
+| 7 | `applyPieces` was dispatched on `mode === 'stepped' ? null : b` | In `ab` that is false, so **both** copies were smoothed and the side-by-side compared nothing. After: they differ by up to 35.14° on 70% of frames — the other 30% are pose *holds*, where correctly nothing blends |
+| 8 | `GridHelper`'s first colour is the **centre cross**, and it is the lighter one | Snapping the grid under a walking unit moved a distinct landmark back one cell every 40 units — a reset every **1.1 s**, forever, which read as shuttling however far the unit really walked |
+| 9 | The page pushed its own `path` select to the server on every load, defaulting to `loop` | Every reload silently replaced the chosen path with a 72 wu circle. Measured on the rendered position: `loop` reverses the drawn world z **1009 times in 2160 frames**; `forward` reverses it **0 times in 1200** |
+
+**Two of my own diagnoses were wrong and are recorded as such**, because the way they were wrong
+is the transferable part:
+
+- The playback clock was "fixed" twice by reasoning — a bigger buffer, then gentler easing — before
+  anything was measured, and then measured under **headless Chrome with `--virtual-time-budget`**,
+  where rAF runs on virtual time and the server on the wall clock, so their rates are unrelated by
+  construction. The ±20% surge that justified the rate-locked clock was an artifact of that
+  harness. The real server runs **29.83 ticks/s at 1×, 99.4% of nominal**. The rate-locked clock is
+  kept because it is the right control law, not because that surge was ever demonstrated.
+- The pause-and-teleport was attributed to a ring wipe on slow polls. A 40-seed simulation of the
+  clock under adversarial stalls produced **no backward jumps before or after** the change, and a
+  wipe gives pause-then-jump-*forward* anyway. It was item 9. The hardening (monotonic playback,
+  no wipe except on a real restart) is insurance, and the note says so rather than claiming a fix.
 
 ## 8. Future work — the rest of "smooth"
 
