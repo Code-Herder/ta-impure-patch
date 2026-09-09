@@ -272,11 +272,23 @@ hold; item 3's was taken against virtual time and does not.
 ### 7b. Walk-forward — the walk cycle and nothing else
 
 `forward` `[MEASURED 2026-09-09]`: straight ahead at a fixed heading, never stopping, never
-turning, and `Director.step` runs **no weapon events** for it — the scripts started over a run are
-`Create, MotionControl, StartMoving, walk` and nothing else, so there is no aim to confound the
-cycle. Verified at a constant **1.200 wu/tick** on ARMCOM with a single heading and zero stops. The
-viewer snaps the ground grid to its own cell under the unit, so walking away from the origin
-indefinitely still reads as ground going past instead of running off a 1600-unit grid.
+turning, no weapon events and no slots — the scripts started over a whole run are
+`Create, MotionControl, StartMoving, walk` and nothing else.
+
+**Gating the weapon events was not enough, and the reason is worth keeping.** Switching path
+mid-run left the unit's *script* in whatever state it had reached: once anything has aimed,
+ARMPW-shape `MotionControl` keeps calling **`walklegs`** — the aim-while-moving cycle, torso locked
+for the gun — because the `aiming` static is still 1, and nothing the director stops will clear a
+static the script only clears on its own events. So a path change now **restarts the run** rather
+than retargeting it, and `forward` additionally empties the director's slots. Measured after: a
+mid-run switch produces `Create, MotionControl, StartMoving, walk` and no `walklegs`.
+
+**It is genuinely unbounded.** 63 s of continuous walking took ARMCOM from 1100 to 3035 world
+units at a steady **35.9 wu/s** with no wrap, clamp or stop; position is a Python int in 16.16, so
+nothing overflows. The viewer snaps the ground grid to its own cell under the unit (measured max
+offset 22.7 of a 40-unit cell), so the unit never runs off the 1600-unit grid and the lines stay
+world-aligned as motion cues. The one real limit is float32 in the scene graph, which is ~0.008 wu
+of precision after an hour of walking and only matters after many hours.
 
 **The director's pace came from a per-class constant, not the unit.** `[MEASURED 2026-09-09]`
 `CLASS_PLANS` carried one speed per class — 60 wu/s for every kbot — so ARMCOM walked at ARMPW's

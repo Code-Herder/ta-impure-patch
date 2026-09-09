@@ -3516,6 +3516,8 @@ class Director:
             self.flush("pre")
             self.flush("post")
             return
+        if self.running_motion == "forward" and self.slots:
+            self.slots = []               # the walk cycle alone: no aim, no reload
         moving = self.step_motion(tick)
         self.motion_events(moving)
         if self.activates:
@@ -4749,8 +4751,22 @@ class Server:
                 s.restart()
             elif action == "path":
                 want = body.get("path") or ""
-                s.view_path = want if want in MOTIONS else None
-                if s.director is not None:
+                new_path = want if want in MOTIONS else None
+                if new_path != s.view_path:
+                    s.view_path = new_path
+                    # RESTART, do not just retarget. Switching mid-run leaves the
+                    # unit's own script in whatever state it had reached: after any
+                    # aiming, ARMPW's `aiming` static stays 1 and MotionControl keeps
+                    # calling `walklegs` (torso locked for the gun) instead of `walk`
+                    # for the rest of the session, so `forward` showed the aim-while-
+                    # moving cycle and looked like it was still fighting. Nothing
+                    # short of re-running from Create clears a static the script only
+                    # clears on its own events.
+                    was_playing = s.playing
+                    s.playing = False
+                    s.restart()
+                    s.playing = was_playing
+                elif s.director is not None:
                     s.director.path = s.view_path
             elif action == "speed":
                 s.speed = max(0.05, min(8.0, float(body.get("speed") or 1.0)))
