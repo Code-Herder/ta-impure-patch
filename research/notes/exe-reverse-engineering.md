@@ -2252,7 +2252,13 @@ skill says.
 ### The minimap, located [VERIFIED]
 
 `main+0x1426B` (`TED_GENERATED_PIC`) is consumed once, at `0x46684F` in
-**`BuildMinimapSurface 0x466780`** (no args, prologue `83 EC 40 53 8B 1D E8 1D 51 00`): it
+**`BuildMinimapSurface 0x466780`** (no args, prologue `83 EC 40 53 8B 1D E8 1D 51 00`, `ret` at
+`0x4669A3`). **Its one caller is `0x4669B0`, the minimap set-up** *[INFERRED name]*: that function
+is `call 0x466780` as its first instruction, then creates `+0x142DB` (tag `0x507518`) and
+`+0x142DF` (tag `0x507508`), both `0x4C69F0(tag, [+0x142EB], [+0x142ED])`. **`0x4669B0`'s one
+caller is `0x4919C3`.** [VERIFIED 2026-09-09 by an `E8`/`E9` scan of the whole `.text` for each
+target; the loader's own free at `0x483DF3`/`0x483E0B` is in a function that calls neither, so the
+only moment the picture is reachable from a hook of ours is inside `0x466780`.] It
 fits a 126-px box (`main+0x142EB/+0x142ED` size, `+0x142E7/+0x142E9` offsets), creates
 `main+0x142E3 = 0x4C69F0(0x5074F8, w, h)` and scales the picture into it (`0x4B8AE0` + `0x4B95A0`
 [INFERRED stretch]). Three surfaces: `+0x142E3` the scaled map; `+0x142DF` the fog composite,

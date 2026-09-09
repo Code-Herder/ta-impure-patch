@@ -1307,6 +1307,31 @@ our minimap would no longer match the engine's colours and the oracle would be g
 surface where we see least (13.8). It stays what §1 and §3.8 called it — a candidate — and S1
 builds everything it would reuse.
 
+> **Implementation note, established 2026-09-09 before any G17e code**, the way §13.5's was.
+> Four facts, and the last two change the gate's shape:
+>
+> 1. **There is exactly one place to snapshot the picture, and it is not the loader.**
+>    `BuildMinimapSurface 0x466780` has **one caller, `0x4669B0`** — the minimap set-up, which
+>    calls it and then creates `+0x142DB` (tag `0x507518`) and `+0x142DF` (tag `0x507508`) at
+>    `+0x142EB × +0x142ED` — and **`0x4669B0` has one caller, `0x4919C3`** [VERIFIED 2026-09-09 by
+>    an `E8`/`E9` scan of `.text`]. `0x466780` consumes `main+0x1426B` at `0x46684F`, so at its
+>    ENTRY the picture is alive by construction. An observer detour there needs to know nothing
+>    about the loader's structure, and the loader's own free at `0x483DF3`/`0x483E0B` sits in a
+>    function that never calls `0x466780` at all.
+> 2. **The picture is a GAF frame**, built at `0x483900..0x483936` — so `tagpu_gaf_frame_sane` and
+>    `tagpu_gaf_decode` read it, exactly as G17c reads the cursor's record. No new decoder.
+> 3. **It goes in the SHARP LAYER, not a twin.** The engine's minimap reaches the frame as a copy
+>    of the 126-px `+0x142DB` into the game offscreen, so a twin can only ever hold 126 px there.
+>    A 252-px base has nowhere to live except the device-res layer §13.2 already lists it in —
+>    which is G17c's plumbing, positioned at the minimap's screen rect times `k`.
+> 4. **The dots must be REPLAYED, and the arcs need two new leaves.** The unit dots are
+>    `0x4B7F90` blits and already observed, so they arrive as sprite ops on `+0x142DB` and can be
+>    replayed at ×2. The coverage arcs `0x4C0070` and `DrawPoint 0x4BEE60` are **not** leaves (§7):
+>    today their pixels reach the twin only because the base copy degrades to a pixel op carrying
+>    the destination's final bytes. A regenerated base does not carry them at all, so G17e must
+>    observe those two — which is also the fix §7 asks for, and is safe because neither writes
+>    `+0x142DF`, the surface whose staying-unseeded the trap depends on.
+
 ### 13.7 The window never resizes, and k chooses itself
 
 **The window** [DECIDED]. The player picks a size once; entering a game and returning to the
