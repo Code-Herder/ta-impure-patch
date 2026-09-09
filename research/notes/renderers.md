@@ -396,6 +396,53 @@ shadow crop re-registered by the known scroll, differ by **0.00 levels on every 
 pair** (the frames differ on 630,626 px before re-registration) — the shadow moves rigidly
 with the ground under it.
 
+### 2.7b Soft shadows self-shadow the ground, and MORE as the map sharpens [MEASURED 2026-09-09]
+
+**The defect, stated plainly: turning `Shadow quality` UP makes the picture worse.** On open
+sea with no land anywhere in the sample — nothing that can cast — the water darkens by up to
+50/255 in a blocky lattice. Measured at zoom 0.564 on `shadow-mix`, against the same frame with
+`shadows=0`, over a patch that is 100 % water:
+
+| `shadowres` | texel (world units) | acne (std) | worst darkening |
+|---|---|---|---|
+| 512 | 5.115 | **0.03** | 3.3 |
+| 1024 | 2.558 | 1.03 | 33.3 |
+| 2048 | 1.279 | 2.50 | 50.0 |
+| 4096 | 0.639 | 2.50 | 50.0 |
+
+At `Low` it is **effectively absent**. 2048 and 4096 tie because the zoom-out doubling (§2.7)
+caps both at `res=4096, texel=1.279`, which the `shadow: frame` log line confirms.
+
+**The lattice is the caster's, not the map's.** Autocorrelation of the shadow term on open water
+peaks at 9, 18, 27, 36, 45 screen px — a fundamental of 9 px, and at 1.81 world units per pixel
+that is **16.3 world units**: exactly the grid `build_hills` lays down (`o[0] = c*16`,
+`o[2] = r*16 + hh*0.5`, `tagpu_terr.c`). The dumped depth map itself is clean — a smooth
+gradient, 45 029 distinct depths, no blockiness — so the map is right and the **sampling** is
+wrong.
+
+**It is bias, not occlusion, and that was proved rather than argued.** Forcing the constant bias
+to a floor of 24 world units takes the acne to **exactly 0.00 std / 0.0 darkening**. But that is
+a diagnostic, not a fix: at that bias every unit shadow disappears (peter-panning, measured —
+59 970 of 163 200 px changed in the unit region).
+
+**Why it scales with the texel.** The blocker search is a **fixed 24 world units**
+(`search = 24.0 / uShScale.x * uShScale.z`), and the receiver-plane bias `dot(o, dzduv)` is a
+*linear* extrapolation across that distance. On curved seabed the extrapolation error is fixed
+in world units, while the constant bias `(1 + 2(1 − nl)) × texel` shrinks as the map sharpens —
+so past some resolution the bias no longer covers the error and false blockers appear. That the
+required bias turned out to be ~24 world units, the search radius itself, is the confirmation.
+
+**A candidate fix, measured but NOT landed.** Capping the search in texels rather than world
+units — `min(24.0 / uShScale.x, 8.0)` — cuts the acne **2.50 → 0.49 std** with the bias
+untouched, keeps the unit shadows, and leaves `512`/`1024` byte-identical. It is not landed
+because it shortens the maximum penumbra, which is the tuned look of G14i, and it belongs to
+the shadow module rather than the menu: it needs the shadow-lab and parity oracles, not one
+scenario.
+
+**Not a regression of the G18 landing.** The landed build and `bbceeb8` (main before it) render
+this scene **byte-identically with soft shadows on — 0 of 270 000 px differ**. The menu only
+made the knob reachable, which is how it was found.
+
 ### 2.8 Hills cast: a static per-map heightfield mesh
 The terrain gather emits screen-space quads with no height **[SOURCE `tagpu_terr.c`]**, so
 the depth pass has nothing of the ground to draw. **Decided: one world-space VBO of the whole

@@ -1881,6 +1881,15 @@ failed ground composition latches instead of leaking one `frontend.gaf` per worl
   the pass **on**, and with both present the `.on` wins — so both orderings have a transient
   wrong read. It is sub-frame and the next 250 ms poll corrects it; closing it properly needs a
   single atomic indicator rather than a pair.
+- **The `Shadow quality` row makes the picture WORSE as it goes up** — the one defect a player
+  actually meets, found by playing zoomed out and diagnosed 2026-09-09. Soft shadows self-shadow
+  flat ground: on open sea with nothing casting, the water darkens up to 50/255 in a 16-world-unit
+  lattice (the `build_hills` caster grid), and the acne grows as the map sharpens because the
+  bias is scaled to the texel while the error is not — 0.03 std at `Low`, 2.50 at `High`/`Ultra`.
+  **The full diagnosis, the proof that it is bias and not occlusion, and a measured candidate fix
+  are in [renderers](renderers.html) §2.7b.** It is NOT a regression of this landing (the landed
+  build and `bbceeb8` are byte-identical here, 0 of 270 000 px) and the fix belongs to the shadow
+  module, so it is not taken here. Until it is, `Ultra` is the wrong recommendation.
 - **`shadowres` outside the four table values** (256, say) is snapped to the nearest row on the
   first click of any row rather than being preserved.
 - **The G15 `strict` walk still has not been run against this screen**, and **GUI scale `k ≠ 1`
