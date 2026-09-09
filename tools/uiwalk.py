@@ -479,7 +479,6 @@ class Walk:
         lines = self.census_lines()
         rc, uiout = tacli("ui", self.inst)
         screen = uiout.splitlines()[0].strip() if uiout.strip() else "?"
-        hit = hit_check(self.inst)      # G17b: costs a snapshot, no clicking
         # the PGM of the last flip, and the engine's surface
         tacli("arm", self.inst, "gui_census.trigger")
         time.sleep(0.6)
@@ -517,6 +516,11 @@ class Walk:
                             (parity["differing"] + parity.get("vpdiff", 0)):
                         p2["against"] = "after"
                         parity = {**parity, **p2}
+        # G17b's hit check goes AFTER the parity bracket, never inside or before
+        # it: it costs a snapshot round-trip, and anything between the census
+        # read and the surface/GL/surface triple moves where those land on the
+        # game's own timeline. It reads no state the shots consume.
+        hit = hit_check(self.inst)
         summary = parse_census(lines)
         hb = self.heartbeat() if self.parity else {}
         self.rows.append({"label": label, "screen": screen, "in_game": in_game, "lines": lines, **summary, **parity,

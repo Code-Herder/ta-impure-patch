@@ -1915,5 +1915,19 @@ the naive reading says the opposite of the truth.
   field-of-view consequence.
 - **Leaving a game at 1280x720 crashes** in the level teardown, at `k = 1` as well as at 1.5, so
   it is the mode and not the scaling ([resolution](resolution.html) §3.1d). Not diagnosed.
-- **The `k = 1` regression on the current DLL** — the mouse refactor touches every input path —
-  was still running when this was written.
+- **The `k = 1` regression on the current DLL passes, with one hole worth naming.** 117 stops,
+  `k = 1.0000` throughout, **0 hit misses**, and the differing stops are the 16 `MAINMENU` visits
+  at 178-190 — the sparkle, in its recorded range. **One stop of the 117 shows `strict` holes**:
+  `ARMOPT#2`, 4 619 px in `(169,95)-(636,400)`, where the previous 120-stop walk had none.
+  The holes are **text over the world** and the picture says so outright — the flashing `PAUSED`
+  and a transient event message ("…re vermin have been exterminated"), rendered as glyphs in the
+  magenta mask and nothing else. `differing=0` outside the viewport and `self=0` between the two
+  bracketing surface shots, so the engine's frame was stable and ours was a publish behind.
+  That stop reads `stalls=5` and sits immediately after a cycle's context switch, which is the
+  documented stall-recovery window (`TAGPU_GUI_WHY_STALL`: the producer drops batches while the
+  consumer is dead or crawling and re-seeds when it returns) — a shot taken inside that window
+  sees exactly this, and it self-corrects. **It is one sample and it is not proven to be that**;
+  it is recorded with its evidence rather than explained away, and the re-run is the next thing.
+  `hit_check` has been moved to *after* the parity bracket in the same pass, because a snapshot
+  round-trip between the census read and the shots moves where they land on the game's timeline
+  and the measurement should not carry that.
