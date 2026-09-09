@@ -432,12 +432,28 @@ in world units, while the constant bias `(1 + 2(1 − nl)) × texel` shrinks as 
 so past some resolution the bias no longer covers the error and false blockers appear. That the
 required bias turned out to be ~24 world units, the search radius itself, is the confirmation.
 
-**A candidate fix, measured but NOT landed.** Capping the search in texels rather than world
-units — `min(24.0 / uShScale.x, 8.0)` — cuts the acne **2.50 → 0.49 std** with the bias
-untouched, keeps the unit shadows, and leaves `512`/`1024` byte-identical. It is not landed
-because it shortens the maximum penumbra, which is the tuned look of G14i, and it belongs to
-the shadow module rather than the menu: it needs the shadow-lab and parity oracles, not one
-scenario.
+**IT IS THE TERRAIN CASTER ALONE, and `terrainshadow=0` removes it completely**
+[MEASURED 2026-09-09, and this supersedes the "candidate fix" this section first proposed].
+The ground shadowing itself is the *hills* mesh (§2.8) casting onto the ground it was built
+from. Same camera, same `shadowres=2048`, shadow term isolated against `shadows=0`:
+
+| | shadow term (std) | worst darkening | 16-unit lattice (autocorr @ 9 px) |
+|---|---|---|---|
+| `terrainshadow=1` | 8.72 | 71.0 | 0.71 |
+| `terrainshadow=0` | **0.00** | **0.0** | **0.00** |
+
+**Exactly zero, not merely reduced** — and unit shadows are untouched by the switch, so
+`terrainshadow=0` is a complete workaround today for anyone who sees it. That also relocates
+the fix: it belongs to the **hills draw alone** (a depth offset on that one `glDrawElements` in
+`tagpu_shadow_hills`, which casters conventionally get), not to the shared bias or the blocker
+search. An earlier candidate here — capping the search at `min(24.0 / uShScale.x, 8.0)` — only
+cut the acne 2.50 → 0.49 and touched *every* shadow including units, so it is the wrong shape
+and is not the recommendation.
+
+**How to measure it, because the obvious metric lies.** The raw standard deviation of the water
+band is ~38 either way: it is dominated by the tile art, and it moved by 0.15 when the artifact
+went from full to absent. The shadow term has to be isolated against an otherwise identical
+`shadows=0` frame first; only then does the signal appear (8.72 → 0.00).
 
 **Not a regression of the G18 landing.** The landed build and `bbceeb8` (main before it) render
 this scene **byte-identically with soft shadows on — 0 of 270 000 px differ**. The menu only

@@ -1886,8 +1886,10 @@ failed ground composition latches instead of leaking one `frontend.gaf` per worl
   flat ground: on open sea with nothing casting, the water darkens up to 50/255 in a 16-world-unit
   lattice (the `build_hills` caster grid), and the acne grows as the map sharpens because the
   bias is scaled to the texel while the error is not — 0.03 std at `Low`, 2.50 at `High`/`Ultra`.
-  **The full diagnosis, the proof that it is bias and not occlusion, and a measured candidate fix
-  are in [renderers](renderers.html) §2.7b.** It is NOT a regression of this landing (the landed
+  **It is the TERRAIN caster alone: `terrainshadow=0` takes the shadow term on that water to
+  exactly 0.00 and leaves unit shadows untouched**, so there is a complete workaround today and
+  the fix belongs to the hills draw, not the shared bias. Full diagnosis in
+  [renderers](renderers.html) §2.7b. It is NOT a regression of this landing (the landed
   build and `bbceeb8` are byte-identical here, 0 of 270 000 px) and the fix belongs to the shadow
   module, so it is not taken here. Until it is, `Ultra` is the wrong recommendation.
 - **`shadowres` outside the four table values** (256, say) is snapped to the nearest row on the
