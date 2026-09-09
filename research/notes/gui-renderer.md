@@ -2116,9 +2116,24 @@ zoom **0.263** and `k = 1.5`, one shot each, footprint measured against a parked
 Zero stragglers, and it cannot recur: ours is drawn on the render thread from the client point the
 message carried, not from any engine sample that a flip could get ahead of.
 
-**The `k = 1` regression** — `uiwalk.py --layer --cycles 3` at 1024x768, `classicpp` off, with the
-cursor ours: see the table in the landing's own run. The walk already excludes the cursor rect
-(padded 8 px) from its diff, so it measures the rest of the frame, which is the point.
+**The `k = 1` regression** — `uiwalk.py --layer --cycles 3` at 1024x768, `classicpp` off, with
+the cursor ours. The walk already excludes the cursor rect (padded 8 px) from its diff, so what
+it measures is the rest of the frame, which is the point: the cursor became ours and nothing else
+moved.
+
+| | reading |
+|---|---|
+| stops | **117 parity stops + 3 loading screens = 120** |
+| `strict` holes | **0 on all 120** |
+| hit misses | **0 on all 117**, `k = 1.0000`, drift 0 px |
+| differing pixels outside the viewport | **0 on 101 of 117**; the 16 that are not are the `MAINMENU` visits, **178-189** |
+| inside the viewport, on the engine's non-key pixels | `vpdiff=0/N` on **all 59** in-game stops |
+| `overflows` / `lost` | **0 / 0** on all 120 |
+
+The same shape as G17a's run, stop for stop. The one difference worth naming is that the sparkle
+band reads **178-189** here against the **179-190** §15 recorded — one pixel lower at the bottom
+and one lower at the top, on an animation that is sampled between two shots. It is the same
+phenomenon and it is quoted as measured rather than rounded into the earlier band.
 
 ### Not closed here
 
