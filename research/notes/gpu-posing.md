@@ -592,7 +592,77 @@ deliver.
 **What step 6 does not close.** Gate C (the 62 s walk) is step 7 and has not run. The 200-unit
 frame time is still unmeasured and still needs the frame cap to survive the launch. The bake's
 level-generation invalidation is still owed its run. The selection lines and the effects models
-are still CPU-built, and are not part of this gate.
+are still CPU-built, and are not part of this gate. *[Step 7 closed the first two — below.]*
+
+### Run 2026-09-09 — step 7, Gate C, and the 200-unit frame time
+
+**Gate C asks something different on this branch, and the result has to say so.** The pose race is
+the render thread reading `prim+0x22` while the game thread rewrites it. The posed path **never
+reads `prim+0x22` at all** — `posed_pose` builds its matrices from the pose FIELDS — so the
+original window is gone by construction and the interesting reading is `guard=`, which is **0 for
+every frame of both gate runs** where the CPU control refused 22 reads over the same 62 s. What
+the pixels are testing is the residual §4 names: `posed_pose` reads those fields on the render
+thread with no interlock, so a torn *field* read is the failure mode still available. It produced
+nothing visible.
+
+**The protocol as run.** Two Continents, one ARMCOM, static camera at `tacli eye <i> 1818 850`,
+zoom 2×, **1920×1080**, 62 s, the transient detector ("differs from both neighbours while the
+neighbours agree") over the **world band only** — the viewport less its top 120 px, because the
+frame's top carries the engine's message log. Scheduling pressure throughout: the game
+`taskset -acp 0` plus three spinners pinned to the same core, released afterwards. The fixture is
+`scenarios/walk-gatec.json` and the driver is `tools/gatec.sh`; before this run there was no walk
+fixture at all and the G13 legs were driven by hand, which is why their geometry could not be
+reproduced (see the caveat below).
+
+| run | path | > 350 | > 500 | > 1000 | worst | `guard=` |
+|---|---|---|---|---|---|---|
+| control | the CPU emitters and the guard — what ships today | 15 | 1 | **0** | 520 px | **22** |
+| gate 1 | the posed program | 14 | 1 | **0** | 558 px | **0** |
+| gate 2 | the posed program | 17 | **0** | **0** | 466 px | **0** |
+| racing | `tagpu_posefix.off` — the guard measuring nothing, engine buffer drawn | 16 | 0 | **0** | 484 px | — |
+
+of 3720 frames each, over a 1792×896 band.
+
+**The rig bit, and that was measured rather than assumed.** A 0/0 on every row would otherwise be
+consistent with the pressure never applying any. Two independent readings say it did: the control
+run's guard refused **22** reads in 62 s, and a fifth run of the same fixture under the same
+pressure with `tagpu_posewatch.on` armed caught the rewrite window **four times** — `err` 25.60,
+33.42, 34.16 and 38.63 model units, which is the ARMCOM's own size (34) and §2.9's signature for a
+buffer caught between the reset and the compose — plus **one rest-equality catch**, the state that
+actually draws a collapsed unit. So the window the guard exists for was open four times a minute
+during these runs, and the posed path drew through all of it without reading it.
+
+⚠ **The `> 500 → 0` half of the bar is NOT discriminating on this fixture, and saying otherwise
+would be dishonest.** The walk's own ceiling here is 520 px (CPU) and 558 px (posed) — above the
+bar on the path that ships. That is the fixture, not a regression: §2.9's own note is that the low
+band "is the walk itself", and the G13 fixture's leg geometry was never written down, so this
+reconstruction of it is more energetic than the original (whose walk topped at 475–492). **Every
+ranked frame was opened**, as the protocol requires: each one's transient sits in a single dense
+cluster on the commander's own screen column (x ≈ 876–978 against a model centred at 996), and
+each is a leg swing or a yaw at the 30 Hz sim rate presented at 60 Hz — the body orientation is
+intact in the odd frame out, which the rest-pose draw's signature is not. **The band only a wrong
+pose reaches — `> 1000`, the original artifact measured 1403 px — is 0 on all four runs.**
+
+**Gate C: PASSED**, on the `> 1000` bar and on `guard=`, with the `> 500` bar recorded as
+non-discriminating on this fixture and every ranked frame opened.
+
+**The 200-unit frame time, at last.** The obstacle was never the DLL: `tools/tacli` rewrote
+`maxfps=60` into the instance's `ddraw.ini` at all three launch paths and the DLL read it at
+attach, so both paths reported 58.5 fps because both had hit the cap. `--maxfps` is now a sticky
+launch knob (`0` is the unlimited setting — a *negative* value means the display refresh). 200v200
+on Two Continents, 1920×1080, the sim **paused** with `tab` so units stop dying under the
+measurement, 281 units and 76 wrecks on screen, fps read off the overlay's `units:` line arrivals:
+
+| path | fps, two runs | frame time |
+|---|---|---|
+| the CPU emitters | 184.0 / 180.0 | 5.43 / 5.56 ms |
+| the posed program | 313.0 / 306.9 | 3.19 / 3.26 ms |
+
+**1.70×**, and the comparison flatters the CPU path: its line reads `49152 verts
+VERTEX-BUDGET-HIT`, so at this unit count it is **truncating geometry** — drawing less than the
+scene asks for and still costing 2.3 ms a frame more. The posed line reads `verts=0
+posed=250/30067tri` with no `skip=` at all, so nothing fell back. That is §4's "`MAXNV` /
+`s_vtrunc` stop applying to units" turning into a measured number rather than a claim.
 
 ## 5. What cannot be byte-exact, and the gates that follow
 
@@ -625,7 +695,7 @@ scenes. What is left in a frame is the reconstruction's residual, which the CPU 
 |---|---|---|---|
 | **A** | the reconstruction vs the engine's buffer | model units | `posewatch` `err=` over a screen inventory — the existing oracle, once Gate 0 has fixed it. **PASSED 2026-09-08, §0b** |
 | **B** | the CPU reconstruction vs the GPU port | pixels | a **paused** scene, `tagpu_poserecon.on` rendering the same pose through the old path; the diff isolates the port alone. **PASSED 2026-09-09**, §4 step 6: 0 differing pixels on eleven of twelve scenes and 1 on the twelfth |
-| **C** | the flicker regression | pixels | the 62 s walk protocol: frames >500 px → **0**, >1000 px → **0**, 1× as the control |
+| **C** | the flicker regression | pixels | the 62 s walk protocol. **PASSED 2026-09-09**, §4 step 7: `> 1000` **0** on all four runs and `guard=` **0** for both gate runs, against a control that refused 22 reads and an oracle that caught the window 4 times in the same 62 s. The `> 500` half of the bar reads 1/0 and is recorded as non-discriminating — this fixture's own walk reaches 520 px on the path that ships |
 | **D** | structure-shadow parity | pixels | the G14j fixtures, at a **stated tolerance** rather than "byte-exact". **PASSED 2026-09-09**, §4 step 6: byte-identical to the CPU slant for the same pose on all five, and 43 px of 786 432 against the engine's own vertices — a bound on the RECONSTRUCTION, reproduced with the posed pass off |
 
 Bar for B: single-digit pixels, every one a single-pixel edge flip, characterised and written
@@ -678,6 +748,11 @@ model at 3 `vec4` is 432 uniform components, and the biggest geometry bake in th
    Gate D; §4's step-6 section carries the table. Both **PASSED**. The step that mattered was
    snapping the posed vertex onto the engine's 16.16 grid, which is the representation every CPU
    emitter reads back, and which step 5's shader had not done.
-7. Gate C, the walk protocol.
+7. **RUN 2026-09-09 — PASSED**; §4's step-7 section carries the protocol, the four-run table and
+   the two caveats. `scenarios/walk-gatec.json` and `tools/gatec.sh` are the fixture and the
+   driver, which did not exist before: the G13 legs were driven by hand and their geometry was
+   never recorded, which is why the `> 500` band could not be reproduced as calibrated. The
+   **200-unit frame time** was taken in the same session, because step 8 deletes its "before"
+   half — **1.70×**, and the CPU side truncating while it lost.
 8. **Last commit:** delete the CPU emitters, the pose guard, the rest-equality detector and
    `posewatch`, and the levers that only they answer to.

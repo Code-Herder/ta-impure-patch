@@ -385,7 +385,7 @@ class Instance:
 # --------------------------------------------------------------------------- create
 
 def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=True,
-                   verbose=False):
+                   verbose=False, maxfps=60):
     """Symlink-mirror the template gamedir, with instance-private config files."""
     inst.gamedir.mkdir(parents=True, exist_ok=True)
     (inst.gamedir / "Screenshots").mkdir(exist_ok=True)
@@ -423,7 +423,7 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
     if not (exe_dst.exists() or exe_dst.is_symlink()):
         exe_dst.symlink_to(exe_src)
 
-    write_ddraw_ini(inst, tile)
+    write_ddraw_ini(inst, tile, maxfps=maxfps)
     write_totala_ini(inst, sound)
     # Never steal the human's pointer: the game snaps and fences the real cursor on
     # activation otherwise (fork honours this trigger, see mouse.c).
@@ -487,7 +487,15 @@ def write_title(inst: Instance, label: str) -> str:
     return f"{BASE_TITLE} - {label}"
 
 
-def write_ddraw_ini(inst: Instance, tile):
+def write_ddraw_ini(inst: Instance, tile, maxfps=60):
+    """`maxfps` is the fork's frame cap. **0 is the unlimited setting**, not -1:
+    `fpsl_init` maps a NEGATIVE value onto the display refresh (60) and only 0
+    falls through every branch with `tick_length` left at 0. The DLL reads it at
+    attach, and this function runs on every launch path, so a hand-edit of the
+    instance's ddraw.ini is overwritten — which is why the cap is a launch knob
+    (sticky in the instance meta) rather than something to edit by hand. Two
+    paths that both hold 60 fps have not been compared, they have both hit the
+    cap: a frame-time A/B needs `--maxfps 0` on BOTH sides."""
     x, y = tile
     (inst.gamedir / "ddraw.ini").write_text(
         "[ddraw]\n"
@@ -496,7 +504,7 @@ def write_ddraw_ini(inst: Instance, tile):
         "fullscreen=false\n"   # true here means borderless fullscreen, not a window
         "maintas=true\n"
         "vsync=false\n"
-        "maxfps=60\n"
+        f"maxfps={int(maxfps)}\n"
         "adjmouse=true\n"
         "border=true\n"
         "savesettings=0\n"
@@ -821,12 +829,14 @@ def _create(inst: Instance, args) -> dict:
     tile = tile_for(index, res, screen=screen_size(display))
     shield = args.shield is not False
     clone_prefix(inst)
+    maxfps = 60 if getattr(args, "maxfps", None) is None else args.maxfps
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
-                   shield=shield)
+                   shield=shield, maxfps=maxfps)
     meta = {
         "name": args.name,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "res": list(res),
+        "maxfps": maxfps,
         "slot": index,
         "tile": list(tile),
         "sound": bool(args.sound),
@@ -1016,18 +1026,22 @@ def _launch(args) -> dict:
     # Xvfb is a different size, and measuring the wrong one puts the window
     # exactly where this is meant to stop it going.
     screen = screen_size(meta.get("display"))
+    if getattr(args, "maxfps", None) is not None and args.maxfps != meta.get("maxfps", 60):
+        meta["maxfps"] = args.maxfps
+        inst.save_meta(meta)
+        write_ddraw_ini(inst, tuple(meta["tile"]), maxfps=meta["maxfps"])
     if args.res:
         meta["res"] = list(args.res)
         meta["tile"] = list(tile_for(meta.get("slot", 0), tuple(args.res), screen=screen))
         inst.save_meta(meta)
-        write_ddraw_ini(inst, meta["tile"])
+        write_ddraw_ini(inst, meta["tile"], maxfps=meta.get("maxfps", 60))
     # Self-heal a tile recorded against a different (or wrongly assumed) desktop:
     # an off-screen window is a silently broken `glshot`, so never open one there.
     res = tuple(meta.get("res") or DEFAULT_RES)
     if not tile_is_onscreen(tuple(meta.get("tile") or (0, 0)), res, screen=screen):
         meta["tile"] = list(tile_for(meta.get("slot", 0), res, screen=screen))
         inst.save_meta(meta)
-        write_ddraw_ini(inst, meta["tile"])
+        write_ddraw_ini(inst, meta["tile"], maxfps=meta.get("maxfps", 60))
     if args.sound is not None:
         meta["sound"] = args.sound
     if args.unit_limit is not None:
@@ -4069,6 +4083,7 @@ def cmd_scenario_load(args):
     los = args.los
     launched = _launch(argparse.Namespace(
         name=args.name, json=True, force=False, res=res, map=wanted_map,
+        maxfps=args.maxfps,
         unit_limit=limit, player=_scn_player_flags(setup) or None,
         display=args.display, slot=None, sound=None, intro=False, shield=None,
         dplay=None, free_dplay_port=False, title=None,
@@ -4227,6 +4242,12 @@ def build_parser():
         add_common(sp)
         sp.add_argument("--res", type=res_type, default=default_res,
                         help="game resolution, e.g. 1024x768")
+        sp.add_argument("--maxfps", type=int, default=None,
+                        help="frame cap written into the instance's ddraw.ini; "
+                             "0 is UNLIMITED (a negative value means the display "
+                             "refresh, not uncapped). Sticky per instance, like "
+                             "--res. Needed for any frame-time A/B: at the default "
+                             "60 both sides read 60 because both hit the cap")
         sp.add_argument("--display", default=None, help="X display (default: autodetected live one)")
         sp.add_argument("--slot", type=int, default=None, help="tiling slot (window position)")
 
@@ -4534,6 +4555,9 @@ def build_parser():
     # Launch options the file may also carry. Explicit flags win, so a scenario
     # re-runs at another resolution, or on another map, without being edited.
     scd.add_argument("--res", type=res_type, help="override setup.res")
+    scd.add_argument("--maxfps", type=int, default=None,
+                     help="frame cap for the launch; 0 is UNLIMITED. Sticky per "
+                          "instance — omit it to keep what the instance has")
     scd.add_argument("--map", help="override setup.map")
     scd.add_argument("--unit-limit", dest="unit_limit", type=int,
                      help="override setup.unit_limit")

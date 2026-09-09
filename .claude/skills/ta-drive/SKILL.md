@@ -711,12 +711,33 @@ the numbers actually changed (`verts=` collapsing to double digits is the posed 
 believing a pixel diff (2026-09-09, a 200-unit A/B that read `0 differing pixels` because both shots
 were the same path).
 
-**A frame-time A/B is not available through `tacli` as it stands.** `write_ddraw_ini` rewrites `maxfps=60` into the instance's
-`ddraw.ini` at all three of its launch paths and the DLL reads it at attach, so an edit made first is
-overwritten. **`maxfps=0` is the unlimited setting** — `fpsl_init` maps a NEGATIVE value onto the
-display refresh (60) and only `0` falls through every branch with `tick_length` left at 0, so the
-value to make survive the launch is `0`, not `-1`. Two paths that
-both hold 60 (or 58.5) fps have not been compared, they have both hit the cap.
+**A frame-time A/B needs `--maxfps 0`, and without it it measures nothing.** `write_ddraw_ini`
+rewrites the cap into the instance's `ddraw.ini` at all three of its launch paths and the DLL reads
+it at attach, so an edit made by hand first is overwritten — which is why the cap is a **sticky
+launch knob** (since 2026-09-09) rather than something to edit:
+
+```bash
+tools/tacli launch t1 --maxfps 0                       # 0 is UNLIMITED; sticky, like --res
+tools/tacli scenario load t1 200v200 --restart --maxfps 0
+grep maxfps <gamedir>/ddraw.ini                        # confirm it survived the launch
+```
+
+**`maxfps=0` is the unlimited setting** — `fpsl_init` maps a NEGATIVE value onto the display
+refresh (60) and only `0` falls through every branch with `tick_length` left at 0, so the value to
+make survive the launch is `0`, not `-1`. **Two paths that both hold 60 (or 58.5) fps have not been
+compared, they have both hit the cap** — that is exactly how G16's posed program read "no
+difference" until 2026-09-09, when uncapping it showed 184 fps against 313.
+
+Two things to do on top of uncapping, both learned taking that measurement:
+
+- **Pause the sim first** (`tacli keys <i> tab`, then peek the tick twice to confirm). On a
+  fighting scenario units die under the measurement, so the second half of an A/B draws a smaller
+  scene than the first. Paused, the renderer keeps working and the unit count is fixed.
+- **Read the losing path's `verts=`.** If it says `VERTEX-BUDGET-HIT` it is *truncating* geometry,
+  so the comparison flatters it — it is drawing less and still costing more.
+
+The meter needs no code: the overlay writes a `units:` line every 30 presented frames, so
+`30 × (lines gained) / (seconds elapsed)` is the frame rate.
 
 **`posewatch` writes about 250 kB of `tagpu.log` per second** at 28 units on screen — it logs an
 anchor filmstrip per owned unit per frame, and `nlog` opens and closes the file per line. Two

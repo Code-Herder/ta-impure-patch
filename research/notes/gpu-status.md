@@ -1036,6 +1036,15 @@ produced the largest transient of one capture without a unit ever being drawn wr
 | + rest-equality, run 1 | 0 | 0 | 0 | — |
 | + rest-equality, run 2 | 0 | 0 | 0 | — |
 
+⚠ **`[2026-09-09]` Those rows were driven by hand and their leg geometry was never written
+down**, which is why re-running the protocol for G16's Gate C could not reproduce the `> 500`
+column: the fixture built to replace them (`scenarios/walk-gatec.json` + `tools/gatec.sh`, at
+1920×1080) walks a more energetic leg and reaches 520 px **on this same guarded path**. Treat the
+`> 500` numbers above as a property of the original fixture, not as a threshold that transfers.
+The `> 1000` band — the only one the rest-pose draw reaches — is the part that does transfer, and
+it is 0 on every run of both fixtures. [GPU posing](gpu-posing.html) §4 step 7 carries the G16
+table and the two caveats.
+
 The `> 350` band does not move and is not meant to: it is the walk itself — a leg swing or a fast
 yaw passes the "differs from both neighbours while the neighbours agree" test, and every ranked
 frame up to ~600 px opened as ordinary animation. What goes to zero is the band only a wrong pose
@@ -1048,7 +1057,11 @@ vertex array. That probe is the one avoidable part: the array is per model **typ
 so its readability could be resolved once per type the way `pmap_for` caches the piece map, and is
 not. The reconstruction itself runs only on a trip. 60.0 fps before and after on the walk fixture,
 which is one unit — **no measurement exists at 200 units**, for this or for any of the options
-below.
+below. *[MEASURED 2026-09-09, once `tacli` stopped forcing the frame cap: on 200v200 at 1920×1080
+with the sim paused, 281 units and 76 wrecks on screen, this path runs at **184.0 / 180.0 fps**
+against the posed program's **313.0 / 306.9** — 1.70×. And it gets that while **truncating**:
+`49152 verts VERTEX-BUDGET-HIT`, so it is drawing less than the scene asks for. §2.11 and
+[GPU posing](gpu-posing.html) §4 step 7.]*
 
 **A detector, not a lock — the residual window.** `Object3do+0x08` is a flag, not a sequence
 number, so "zero on both sides of the read" means *no rewrite started and finished across the
