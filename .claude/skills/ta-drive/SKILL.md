@@ -782,18 +782,42 @@ the **shadow** dimension is still on that master arm and its own `shadows=` key,
   `assets` changes 0 px there. Press Tab for `ARMOPT` (or select a builder) first: then the
   flip moves 37 415 of that rect's 45 056 px.
 - The `gui: twins=` heartbeat carries `cpp=<master> assets=<n> light=<n>`, and `colvalid`
-  drops to 0 while `assets=0`. **The shadow keys** (G14i) ride the same file — `shadows=0|1`,
+  drops to 0 while `assets=0`. **The shadow keys** (G14i) ride the same file — `shadows=0|1|2`,
 `shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B|off`, `shade=S`, `terrainshadow=0|1`,
 `shadowres=N`, `airshadow=len|physical|drop`, the lab's defaults — and answer on a second
-line, `classicpp: shadows=1 shadowsun=225.0,40.0 …`; the map also needs the engine's own
-Shadows option on. `tagpu.log` says `shadow: GL ready (GL_VERSION 3.3.0 …)` once per context,
+line, `classicpp: shadows=1(soft) shadowsun=225.0,40.0 …`; the map also needs the engine's own
+Shadows option on.
+
+**`shadows=` is three-way since G18b: `0` none, `1` SOFT (the map-anchored depth map, the
+default), `2` HARD (Classic's own 5-px silhouette and cached slant, drawn under the
+switch).** The two are never both on, so `shadows=2` is how you get Classic's shadow look
+with Classic++ art. An out-of-range value logs `bad token` and leaves the default standing.
+Only the soft map reads the other seven keys. `shadows=0` also drops the silhouette an
+aircraft keeps under `airshadow=drop`.
+
+**`sun=off` is now exactly `light=0`** (G18b) and no longer touches `amb` or `shadows=`. It
+used to force `amb=1.0` and silently clear the shadow key — so the log answered `shadows=0`
+while the cfg said 1, and it did not put it back. The picture is unchanged (`sun=off
+shadows=0` is 0 px from the old `sun=off`); what is new is that **`sun=off shadows=1` keeps
+the depth map**. `tagpu_shadow.c`'s `amb >= 1.0f` refusal now only fires on an explicit
+`amb=1`, where the shadow term would be multiplied by `(1 - amb) = 0` anyway. `tagpu.log` says `shadow: GL ready (GL_VERSION 3.3.0 …)` once per context,
 `shadow: frame zoom=… res=… k=… texel=…` whenever the lattice changes (zoom), and one
 `shadow: caster model=… top=… gnd=… sv=…` line per caster position seen (16 at most) — the
 numbers the length rule used. **`tacli arm <i> shadowdump.on`** writes the map once as
 `tagpu_shadow.pgm` and removes itself (`shadow: dumped …` carries the matrix). **A shadow A/B
 against the lab needs the pointer parked off the units**: `scenario load`'s `center_on` leaves
 it ON the anchor, the engine draws its crosshair there, and those pixels are identical in an
-on/off pair, so `tacli keys <i> mouse:200,700` first. **The engine's own Shadows toggle is the
+on/off pair, so `tacli keys <i> mouse:200,700` first. **The parked cursor is still an
+animating sprite**, so it differs between two *launches* even when nothing else does —
+exclude its rect (~26×36 around where you parked it) from any cross-build diff, or you will
+chase a constant ~110 px that is not yours.
+
+**On any fixture with an animating unit, pause the sim before shooting.** `shadow-lab`'s mex
+spinners, the wind generator's blades and a commander's idle put 3000–4000 px of noise
+between two shots one second apart, and the phase differs per launch, so cross-launch
+diffing is meaningless there. `tacli keys <i> tab` opens `ARMOPT`, which pauses the sim and
+sits in the side-panel rect, leaving the world viewport untouched — the noise floor goes to
+**0 px**. Take every state of the A/B inside that one paused run. **The engine's own Shadows toggle is the
 parity oracle for a Classic shadow**: `tacli keys <i> tab`, `ui <i> click PREFS`, `ui <i> click
 VISUALS`, `ui <i> set BSHADOWS 0` (or `1`), `ui <i> click PREV`, `ui <i> click OK`. It clears and
 sets BOTH option bits (`main+0x37F06` reads `0x3F` on, `0x23` off) — **read the word back with
@@ -808,7 +832,10 @@ engine draws the sprites, identical in both): every pixel whose 16-px cell has z
 at all four corners must be byte-identical — 0 of 162,828 on the parity fixture — while the
 sloped ones move. `sun=off` also draws the units without their LUT row (the lab's meaning of
 "no sun"), so it is not a Classic frame: compare it to a Classic++ shot of the previous DLL,
-not to Classic. **`assets=0 light=0` is the one Classic++ state that IS a Classic frame** —
+not to Classic. **Since G18b the level-ground rule holds under a shadow too** — a level
+cell's own normal is the one `light=0`/`sun=off` substitutes, so a shadowed level cell is
+identical in the lit and the flat lane (300 026 level pixels, 558 of them shadowed, on the
+parity fixture). The old `sun=off` put the shadows out, so the pair could not show it. **`assets=0 light=0` is the one Classic++ state that IS a Classic frame** —
 with `shadows=0` too it lands within 594 px of a `classicpp.on`-removed shot on
 `tascene-parity`, all of them on one unit (the LUT row above).
 `tools/tascene restorediff <pack> <the .rgba>` holds the terrain to a pack built with `--undither`

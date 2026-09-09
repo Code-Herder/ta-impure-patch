@@ -2863,20 +2863,26 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        else, so the shadow pass below indexes it uniformly. Emitted LAST so
        that under the vertex budget effects and selection rects win over a
        building's shadow, the least visible thing to lose. */
-    /* Classic++ draws neither Classic sub-pass (renderers.md 2.12): no slant
-       range here, and no silhouette below, except an aircraft's under
-       airshadow=drop -- the one thing that lane borrows from Classic.
+    /* Classic++ at `shadows=1` draws neither Classic sub-pass (renderers.md
+       2.12): no slant range here, and no silhouette below, except an aircraft's
+       under airshadow=drop -- the one thing that lane borrows from Classic.
+       `shadows=2` (HARD, G18b) draws the pair under the switch instead, and the
+       depth pass then refuses; `shadows=0` draws neither, the aircraft included.
+
        The MASTER ARM, not assets/light (G18a): which half of Classic++ is on
-       says nothing about who owns the shadows. That dimension has its own key
-       already (`shadows=`), and G18b's third value is what will draw this pair
-       back under the switch. */
-    int cpp = tagpu_classicpp_on();
-    int airDrop = tagpu_classicpp_light()->airshadow == TAGPU_AIRSHADOW_DROP;
+       says nothing about who owns the shadows -- that dimension has `shadows=`.
+       Classic itself is untouched by the key: with the switch off the engine's
+       own option bits rule, exactly as before. */
+    const TAGPU_LIGHT* cppL = tagpu_classicpp_light();
+    int cpp  = tagpu_classicpp_on();
+    int hard = cpp && cppL->shadows == TAGPU_SHADOWS_HARD;
+    int airDrop = cppL->airshadow == TAGPU_AIRSHADOW_DROP &&
+                  cppL->shadows != TAGPU_SHADOWS_OFF;
     static int sfirst[MAXU + 1];
     int nslant = 0;
     for (i = 0; i < nu; i++) {
         sfirst[i] = nv;
-        if (units[i].dead || cpp || !units[i].slant || !units[i].shadow || units[i].hires) continue;
+        if (units[i].dead || (cpp && !hard) || !units[i].slant || !units[i].shadow || units[i].hires) continue;
         nv = emit_slant(units[i].o3, nv, units[i].ax, units[i].ay,
                         units[i].wx0, units[i].wz0, encb[i]);
         nslant++;
@@ -3133,7 +3139,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         for (i = 0; i < nu; i++) {
             GLint  first;
             GLsizei count;
-            if (cpp && !(units[i].air && airDrop)) continue;
+            if (cpp && !hard && !(units[i].air && airDrop)) continue;
             if (!units[i].shadow) continue;
             if (!units[i].slant && !(gfx & 8)) continue;
             glUniform1i(s_uFog, FOGW(i));
@@ -3160,11 +3166,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         /* the stencil stays ON for the hires shadow: a replacement mesh needs
            the same one-blend-per-pixel mask and does it per unit itself */
         if (nhi) {
-            /* under Classic++ only an aircraft under `drop` keeps its silhouette */
+            /* under Classic++ at `shadows=1` only an aircraft under `drop` keeps
+               its silhouette; at `shadows=2` every replacement mesh does */
             static TAGPU_HUNIT hsil[MAXU];
             int ns = 0, k;
             for (k = 0; k < nhi; k++)
-                if (!cpp || (hunits[k].air && airDrop)) hsil[ns++] = hunits[k];
+                if (!cpp || hard || (hunits[k].air && airDrop)) hsil[ns++] = hunits[k];
             if (ns) tagpu_hires_draw(&hv, hsil, ns, 1, f->frame_counter);
             HIRES_RESTORE();
         }

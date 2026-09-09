@@ -19,19 +19,25 @@
                                             indices, and pauses the restore
                                             jobs where they stand
                              light=0|1      the lambert below, default 1;
-                                            0 draws Classic++ flat. This is
-                                            NOT `sun=off`, which is the rule
-                                            evaluated with amb = 1 and takes
-                                            the shadows with it
+                                            0 draws Classic++ flat, and keeps
+                                            the shadows (G18b)
                              sun=AZ,EL      the terrain's sun, degrees
                                             (azimuth, elevation); `sun=off`
-                                            turns every sun off
+                                            is the older spelling of `light=0`
+                                            and does exactly that (G18b: it
+                                            used to force amb = 1 and clear
+                                            `shadows=` with it)
                              unitsun=AZ,EL  the units' sun
                              amb=A          the ambient floor, 0..1
                            and the shadows' (renderers.md 2.12; tagpu_shadow.c):
-                             shadows=0|1        cast shadows, default 1; the map
-                                                also needs the engine's own
-                                                Shadow option bit (+0x37F06 bit2)
+                             shadows=0|1|2      0 none, 1 SOFT (the map-anchored
+                                                depth map of 2.12, the default),
+                                                2 HARD (Classic's own silhouette
+                                                and slant, drawn under the
+                                                switch). Any of them also needs
+                                                the engine's own Shadow option
+                                                bit (+0x37F06 bit2); the keys
+                                                below describe the soft map only
                              shadowsun=AZ,EL    the shadows' light, 225,40
                              penumbra=K         kernel radius per world unit of
                                                 blocker distance, 0.05; 0 = hard
@@ -78,7 +84,16 @@ int tagpu_classicpp_lit(void);      /* the lambert: uLambert, and the baked one 
    every lambert is divided by so that level is exactly 1.0 (the art is
    already lit; the sun may only modulate by the tilt from level). The
    shaders take 1/level as uNorm (tagpu_glsl.h TAGPU_GLSL_LIGHT_FN).
-   `sun=off` is amb = 1: the rule is then exactly 1.0 with no branch. */
+   `sun=off` is `light=0` (G18b): the level normal, so the rule is exactly 1.0
+   and the shadow term inside it survives. It no longer moves `amb`. */
+/* shadows=: which shadow the Classic++ frame draws (renderers.md 2.10's
+   Off | Hard | Soft row, G18b). HARD is Classic's pair -- the 5-px silhouette
+   and the cached slant -- emitted under the switch instead of the depth map;
+   the two are never both on. Classic itself is not governed by this key: the
+   engine's option bits rule there, and this file is the Classic++ knob. */
+#define TAGPU_SHADOWS_OFF   0
+#define TAGPU_SHADOWS_SOFT  1
+#define TAGPU_SHADOWS_HARD  2
 #define TAGPU_AIRSHADOW_LEN      0
 #define TAGPU_AIRSHADOW_PHYSICAL 1
 #define TAGPU_AIRSHADOW_DROP     2
@@ -88,7 +103,7 @@ typedef struct {
     float amb;
     float level, unitLevel;
     /* the shadows (renderers.md 2.12): the lab's knobs at the lab's defaults */
-    int   shadows;          /* shadows=; sun=off puts them out as well    */
+    int   shadows;          /* shadows=: TAGPU_SHADOWS_*                  */
     float shadowSun[3];     /* toward the light the shadows fall from     */
     float penumbra;
     int   shadowlenOn;      /* 0 = shadowlen=off, the physical length     */

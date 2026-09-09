@@ -353,14 +353,20 @@ static void frame(const TAGPU_FXVIEW* v, const TAGPU_LIGHT* L)
 
 /* ---- the frame protocol ------------------------------------------------ */
 /* The gate reads the MASTER ARM, not assets/light (G18a): the depth map is the
-   shadow dimension's, and `shadows=` is that dimension's own key. `amb >= 1.0f`
-   is `sun=off`, which is the lighting rule evaluated flat rather than the
-   `light=0` flag -- G18b is where the two stop being the same refusal. */
+   shadow dimension's, and `shadows=` is that dimension's own key. This map is
+   the SOFT value alone (G18b) -- at `shadows=2` the frame draws Classic's own
+   silhouette and slant instead (tagpu_native.c), and the two are never both on.
+
+   `amb >= 1.0f` is no longer `sun=off` (G18b routed that through `light=`); it
+   is now only an explicit `amb=1`, and there it is an honest early out rather
+   than a policy: taLambert multiplies the shadow term by (1 - amb), so at amb 1
+   the pass would cost a depth render and change no pixel. */
 int tagpu_shadow_begin(const TAGPU_FXVIEW* v, int engineShadowBit)
 {
     const TAGPU_LIGHT* L = tagpu_classicpp_light();
     s_live = 0;
-    if (!tagpu_classicpp_on() || !L->shadows || !engineShadowBit || L->amb >= 1.0f) return 0;
+    if (!tagpu_classicpp_on() || L->shadows != TAGPU_SHADOWS_SOFT ||
+        !engineShadowBit || L->amb >= 1.0f) return 0;
     if (s_state == 0) init_gl();
     if (s_state != 1) return 0;
     frame(v, L);

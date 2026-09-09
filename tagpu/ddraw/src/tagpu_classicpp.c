@@ -73,7 +73,7 @@ static float level_of(const float sun[3], float amb)
 #define DEF_SSUN_EL 40.0f
 static void shadow_defaults(TAGPU_LIGHT* L)
 {
-    L->shadows = 1;
+    L->shadows = TAGPU_SHADOWS_SOFT;
     L->penumbra = 0.05f;
     L->shadowlenOn = 1; L->shadowlen[0] = 14.0f; L->shadowlen[1] = 0.25f;
     L->shade = 1.0f;
@@ -87,16 +87,23 @@ static void apply(float sunAz, float sunEl, float usunAz, float usunEl, float am
 {
     char b[240];
     static const char* const air[3] = { "len", "physical", "drop" };
+    static const char* const shad[3] = { "off", "soft", "hard" };
     if (amb < 0.0f) amb = 0.0f;
     if (amb > 1.0f) amb = 1.0f;
-    if (off) amb = 1.0f;                  /* every sun off: the rule is exactly 1.0 */
+    /* G18b: `sun=off` IS `light=0` -- the level normal handed to taLambert, not
+       amb forced to 1. The picture is the same to the pixel (measured in G18a:
+       `light=0 shadows=0` and the old `sun=off` are byte-identical) and the
+       shadow term, which lives inside the lambert and was multiplied by
+       (1 - amb) = 0, survives. Nothing here touches `shadows=` any more: it is
+       the player's key, and a lever that silently rewrote it made the log lie
+       and did not put it back when the sun came on again. */
+    if (off) s_lit = 0;
     sun_vector(sunAz, sunEl, s_light.sun);
     sun_vector(usunAz, usunEl, s_light.unitSun);
     sun_vector(ssunAz, ssunEl, s_light.shadowSun);
     s_light.amb = amb;
     s_light.level = level_of(s_light.sun, amb);
     s_light.unitLevel = level_of(s_light.unitSun, amb);
-    if (off) s_light.shadows = 0;         /* the lab: no sun, no shadows */
     /* its own line: `classicpp: light ` is a prefix the ta-drive skill greps */
     _snprintf(b, sizeof b, "classicpp: assets=%d light=%d (%s)", s_assets, s_lit, how);
     cplog(b);
@@ -104,9 +111,9 @@ static void apply(float sunAz, float sunEl, float usunAz, float usunEl, float am
               off ? "off " : "", sunAz, sunEl, usunAz, usunEl, amb,
               s_light.level, s_light.unitLevel, how);
     cplog(b);
-    _snprintf(b, sizeof b, "classicpp: shadows=%d shadowsun=%.1f,%.1f penumbra=%.3f shadowlen=%s%.1f,%.2f"
+    _snprintf(b, sizeof b, "classicpp: shadows=%d(%s) shadowsun=%.1f,%.1f penumbra=%.3f shadowlen=%s%.1f,%.2f"
               " shade=%.2f terrainshadow=%d shadowres=%d airshadow=%s",
-              s_light.shadows, ssunAz, ssunEl, s_light.penumbra,
+              s_light.shadows, shad[s_light.shadows], ssunAz, ssunEl, s_light.penumbra,
               s_light.shadowlenOn ? "" : "off:", s_light.shadowlen[0], s_light.shadowlen[1],
               s_light.shade, s_light.terrainshadow, s_light.shadowres, air[s_light.airshadow]);
     cplog(b);
@@ -158,7 +165,9 @@ static void read_cfg(void)
             } else if (!_strnicmp(p, "amb=", 4)) {
                 amb = (float)atof(p + 4);
             } else if (!_strnicmp(p, "shadows=", 8)) {
-                s_light.shadows = atoi(p + 8) != 0;
+                int m = atoi(p + 8);          /* 0 none, 1 soft, 2 hard (G18b) */
+                if (m >= TAGPU_SHADOWS_OFF && m <= TAGPU_SHADOWS_HARD) s_light.shadows = m;
+                else bad(p);                  /* out of range: the default stands */
             } else if (!_strnicmp(p, "shadowsun=", 10)) {
                 if (sscanf(p + 10, "%f,%f", &a, &e) == 2) { ssunAz = a; ssunEl = e; }
                 else bad(p);

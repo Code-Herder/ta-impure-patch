@@ -490,15 +490,37 @@ parameters. The shadow keys are §2.12's, and the depth map still runs only when
   same lambert of the up normal), which the measurement confirms: `light=0 shadows=0` is
   **byte-identical to `sun=off`**, 0 px. A feature has no normal to flatten, so there
   `light=` is applied by baking 1.0 instead.
-- **Stop `sun=off` clearing shadows.** `apply()` forces `amb=1.0` when the sun is off and
-  `tagpu_shadow.c:359` refuses at `amb >= 1.0`, so Lighting Off would silently take Shadows
-  with it. Note `sun=off` flattens **unit** lighting as well as terrain, which is why the
-  row is "Dynamic lighting" and not "Terrain dynamic lighting". **G18a already keeps the
-  Lighting row clear of this**: `light=0` is a flag on `uLambert`, not a move of `amb`, so
-  the depth map survives it (1800 px of shadow on the parity fixture, the exact pixels by
-  which `light=0` and `sun=off` differ). What is left for G18b is the `sun=off` path itself.
-- **A third value on `shadows=`.** §2.12 turns both Classic sub-passes off under the switch
-  and `shadows=0` means *none*, not *hard*, so `Shadows = Hard` has nothing to write.
+- **Stop `sun=off` clearing shadows** — ● **done 2026-09-09 (G18b)**. `sun=off` no longer
+  forces `amb=1.0` and no longer writes `s_light.shadows` at all: it simply **is** `light=0`,
+  the same level normal handed to `taLambert`. The picture does not move — the new
+  `sun=off shadows=0` is **0 px** from the old `sun=off` on the parity fixture — and the
+  shadow term, which lives inside the lambert and was being multiplied by `(1 - amb) = 0`,
+  survives: `sun=off shadows=1` differs from `sun=off shadows=0` by 1800 px, and is 0 px
+  from `light=0 shadows=1`. Note `sun=off` flattens **unit** lighting as well as terrain,
+  which is why the row is "Dynamic lighting" and not "Terrain dynamic lighting".
+
+  Two consequences worth having. `tagpu_shadow.c`'s `amb >= 1.0f` refusal is now reachable
+  only through an explicit `amb=1`, where it is an honest early out rather than a policy —
+  at `amb = 1` the pass would cost a depth render and change no pixel. And the **level-ground
+  rule now holds with a shadow on it**: level ground takes exactly 1.0 in both lanes whether
+  or not it is shadowed, because a level cell's own normal *is* the normal `light=0`
+  substitutes. Measured: 300 026 level-ground pixels identical between the lit and the flat
+  lane, 558 of them inside the soft shadow. The old `sun=off` could not show this — it had
+  no shadows to compare.
+- **A third value on `shadows=`** — ● **done 2026-09-09 (G18b)**. `shadows=` is now
+  `0` none, `1` **soft** (the depth map of §2.12, the default) and `2` **hard** (Classic's
+  own 5-px silhouette and cached slant, emitted under the switch). The two are never both
+  on: `tagpu_shadow_begin` runs only at `1`, and `tagpu_native.c`'s slant emission and
+  silhouette loop only at `2` — or under Classic, which the key does not govern at all.
+  An out-of-range value is reported as a bad token and the default stands.
+
+  **A/B'd against `classicpp.off` at the same eye** on `shadow-lab` (six units and
+  structures, the sim paused with Tab so the animating mex and wind blades hold still):
+  Classic's shadow mask 2144 px, ours at `shadows=2` **2067 px**, intersection 2006 —
+  **IoU 0.910**, 138 px Classic-only and 61 px ours-only, all of them one-pixel slivers on
+  the same silhouette edges. That is inside §2.12's "shadowed-pixel counts within 5 %" bar
+  (−3.6 %). `shadows=0` also stops an aircraft's `airshadow=drop` silhouette, which the
+  switch used to draw whatever `shadows=` said.
 - **Panel art and an entry point.** Seven `h20` gadgets need seven `h20` recesses and no
   stock runtime panel has more than five; `PREFS` has six recesses and uses all six, so
   there is nowhere to hang a "Graphics" button either. Both need art drawn — see
@@ -568,7 +590,10 @@ Grilled with the owner before any code, one branch at a time; the ones above (§
   indices, under 20 MB. The cell's diagonal is the one `taTerrN` interpolates across.
 - **Sub-passes off under the switch**: the per-unit stencil silhouette and the slant range are
   not emitted or drawn under Classic++ (air units under `airshadow=drop` excepted); the hires
-  silhouette likewise (§2.4).
+  silhouette likewise (§2.4). **Amended 2026-09-09 (G18b)**: that is `shadows=0|1`. At
+  `shadows=2` the switch emits and draws the pair — every unit, the replacement meshes
+  included — and the depth map refuses instead; at `shadows=0` even the `airshadow=drop`
+  aircraft loses its silhouette.
 - **Modules**: `tagpu_shadow.c/h` owns the map, the samplers, the FBO, the light-space frame
   and texel rule, the depth program for the 3DO stream, the per-frame pass and the read-back
   uniforms, and joins the GL reset; the mesh is the terrain module's; the eight keys are parsed
