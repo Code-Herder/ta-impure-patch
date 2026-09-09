@@ -533,6 +533,48 @@ the defaults in the game itself. **Open, and worth closing before choosing a fix
 far from it in depth**, which is a sharper localisation of the defect than anything above and is
 where the next attempt should start.
 
+**The mechanism, as far as it has been measured.** The height byte is one sample per 16 world
+units, and neighbouring bytes differ by up to 70 — a **77° cliff** to anything that treats the
+grid as geometry, where the art it labels is a flat painted tile. A shadow-map texel here is
+1.28 world units, so **across ONE texel the surface's depth changes by tens of world units**
+wherever the grid is steep. The receiver compares against the depth stored for its own texel,
+which is the surface at the texel *centre* — that much shallower. The shipped bias is
+`(1 + 2(1 − nl)) × texel`: one to three texels, sized as though the depth gradient were about 1,
+where `dzduv` runs to the ±4 clamp and beyond. That is why the acne scales as 1/texel, why the
+lattice is the caster's 16-unit cell, and why the bias that finally covers it (~24 units) is the
+*relief* scale rather than anything of the shadow map's.
+
+**A fourth null result, and it is the informative one: SMOOTHING THE CASTER MAKES IT WORSE.**
+`castsmooth=<n>` low-passes the caster's heights over a (2n+1)-cell box — the obvious "make the
+caster depict what the art depicts" move. Same frame, `penumbra=2.5`:
+
+| `castsmooth` | acne | real shadow |
+|---|---|---|
+| 0 | 7.66 | 2.34 |
+| 1 | **12.11** | 1.58 |
+| 2 | **17.53** | 1.03 |
+| 3 | **20.26** | 0.89 |
+
+So the caster and the receiver **must** stay the same surface to the world unit — which is the
+same lesson `castsplit` gave from the other side, and it rules out every fix that reshapes the
+caster (smoothing, a lowered proxy, a coarser mesh). What is left has to change the **bias**, or
+separate terrain from objects so the two can be biased differently.
+
+**And the one candidate that reduces it without wrecking anything:** `pbias`, the receiver-plane
+bias applied to the receiver's own texel — `k · length(dzduv) · uShScale.z`, taken before the
+tap clamp, as a floor under the `nl` term. Same frame, `penumbra=2.5`:
+
+| `pbias` | acne | real shadow |
+|---|---|---|
+| 0 | 7.66 | 2.34 |
+| 4 | 6.73 | 2.28 |
+| 8 | 5.30 | 2.23 |
+| 16 | **3.20** | **2.19** |
+
+7.66 → 3.20 for 6 % of the real shadow, where the constant bias floor that zeroed the acne cost
+37 % of the unit-shadow pixels. Still converging slowly, and **not verified against unit contact
+shadows** — that needs a scene with units and has not been run.
+
 **WHY THE LAB DID NOT SHOW IT — the first answer was wrong, and the lab is what disproved it.**
 The first answer written here was *"the lab has ONE terrain, the game has TWO"*: the game's
 terrain gather emits screen-space quads with no height, so its fragment shader rebuilds the world

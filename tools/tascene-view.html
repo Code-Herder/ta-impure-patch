@@ -302,7 +302,7 @@ const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither",
                       "filter", "aniso", "shadows", "penumbra", "shade",
                       "terrainshadow", "shadowres", "unitsun", "shadowsun",
-                      "shadowlen", "airshadow", "restore", "model", "precision", "bslack", "bfloor", "castsplit", "pbias", "mindist",
+                      "shadowlen", "airshadow", "restore", "model", "precision", "bslack", "bfloor", "castsplit", "pbias", "mindist", "castsmooth",
                       "nk", "restorediff"];
 
 function sideQuery(side, presets) {
@@ -435,6 +435,7 @@ function readLook(p, label) {
     bfloor: Math.max(0, num("bfloor", 0)),
     pbias: Math.max(0, num("pbias", 0)),
     mindist: Math.max(0, num("mindist", 0)),
+    castsmooth: Math.max(0, Math.min(8, num("castsmooth", 0) | 0)),
     // castsplit: mirror the GAME's split — a separate world-space caster
     // mesh (build_hills) and a receiver that reconstructs its world point
     // per fragment, instead of casting and shading one buffer. Default ON:
@@ -1442,14 +1443,40 @@ async function main() {
   // contiguous range. Static: the map's heights never change. This is a
   // SECOND representation of the surface the terrain pass already shades —
   // that duplication is the thing being reproduced, not an accident.
-  let hVAO = null, hVBO = null, hIBO = null, hCells = 0, hRows = 0;
-  function buildHills() {
-    if (hVAO) return;
+  let hVAO = null, hVBO = null, hIBO = null, hCells = 0, hRows = 0, hSmooth = -1;
+  // castsmooth: low-pass the CASTER's heights over a (2n+1) box, in cells. The
+  // height byte is one sample per 16 world units and the art it labels is a
+  // flat painted tile, so a cell whose byte jumps 70 is a 77-degree cliff to a
+  // shadow caster and level ground to the eye. At a 40-degree light anything
+  // past 50 degrees occludes itself, which is the acne. Smoothing the caster
+  // makes it depict what the art depicts; a hill spans many cells and survives.
+  function smoothHeights(w, h, n) {
+    if (n <= 0) return heightBuf;
+    const src = new Float32Array(w * h), tmp = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) src[i] = heightBuf[i];
+    const cl = (v, hi) => (v < 0 ? 0 : v > hi ? hi : v);
+    for (let r = 0; r < h; r++)                       // horizontal
+      for (let c = 0; c < w; c++) {
+        let a = 0;
+        for (let k = -n; k <= n; k++) a += src[r * w + cl(c + k, w - 1)];
+        tmp[r * w + c] = a / (2 * n + 1);
+      }
+    for (let c = 0; c < w; c++)                       // vertical
+      for (let r = 0; r < h; r++) {
+        let a = 0;
+        for (let k = -n; k <= n; k++) a += tmp[cl(r + k, h - 1) * w + c];
+        src[r * w + c] = a / (2 * n + 1);
+      }
+    return src;
+  }
+  function buildHills(smooth) {
+    if (hVAO && hSmooth === smooth) return;
     const w = w16, h = h16;
+    const HB = smoothHeights(w, h, smooth);
     const vb = new Float32Array(w * h * 3);
     for (let r = 0; r < h; r++)
       for (let c = 0; c < w; c++) {
-        const hh = heightBuf[r * w + c], o = (r * w + c) * 3;
+        const hh = HB[r * w + c], o = (r * w + c) * 3;
         vb[o] = c * 16; vb[o + 1] = hh; vb[o + 2] = r * 16 + hh * 0.5;
       }
     const ib = new Uint32Array((w - 1) * (h - 1) * 6);
@@ -1469,7 +1496,7 @@ async function main() {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, hIBO);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, ib, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
-    hCells = w - 1; hRows = h - 1;
+    hCells = w - 1; hRows = h - 1; hSmooth = smooth;
   }
   // tagpu_terr_hills_draw's row window: the same 192-unit margin the light
   // frame uses, plus the 128 the shear can reach south
@@ -1497,7 +1524,7 @@ async function main() {
     gl.uniformMatrix4fv(SHU.uShadowMat, false, frame.m);
     if (L.terrainshadow) {
       if (L.castsplit) {
-        buildHills(); hillsDraw();          // the game's separate caster mesh
+        buildHills(L.castsmooth); hillsDraw();   // the game's separate caster mesh
       } else if (nterr) {
         gl.bindVertexArray(ltVAO); gl.drawArrays(gl.TRIANGLES, 0, nterr);
       }
