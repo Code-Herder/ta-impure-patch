@@ -477,10 +477,7 @@ would send decision 8 back for rework. That is Gate B's bar met on two scenes. W
 which are step 6.
 
 **The frame-time criterion is NOT met, and is not measurable in this setup.** At 209 units both paths
-hold **58.5 fps** and are indistinguishable. `tools/tacli` writes `maxfps=60` into `ddraw.ini` on
-*every* launch (`write_ddraw_ini`) and the DLL reads it at attach, so editing the file beforehand is
-overwritten; and `fps_limiter.c` disables the limiter only on a **negative** `maxfps`, so `0` is not
-"unlimited" and still goes through it. The honest statement of what was measured is the byte count
+hold **58.5 fps** and are indistinguishable. `tools/tacli` rewrites `maxfps=60` into the instance's `ddraw.ini` at all three of its launch paths and the DLL reads it at attach, so an edit made beforehand is overwritten — which is what actually happened here, including on the two runs labelled "uncapped" at the time. **`maxfps=0` IS the unlimited setting**: `fpsl_init` maps a NEGATIVE value onto the display refresh (60 here) and only `0` falls through every branch leaving `tick_length` at 0. So the number is obtainable — it needs the value to survive the launch, not a different value. The honest statement of what was measured is the byte count
 above, not a frame time. Whoever takes the real number needs the cap lifted at launch — and the
 "before" half is **not perishable**, because both paths live in one build behind the lever until
 step 8.

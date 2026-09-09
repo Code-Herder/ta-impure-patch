@@ -711,10 +711,11 @@ the numbers actually changed (`verts=` collapsing to double digits is the posed 
 believing a pixel diff (2026-09-09, a 200-unit A/B that read `0 differing pixels` because both shots
 were the same path).
 
-**A frame-time A/B is not available through `tacli` as it stands.** `write_ddraw_ini` rewrites
-`maxfps=60` into the instance's `ddraw.ini` on *every* launch and the DLL reads it at attach, so
-editing the file first is overwritten; and `fps_limiter.c` disables the limiter only on a
-**negative** `maxfps` — `0` means "not unlimited", it still goes through the limiter. Two paths that
+**A frame-time A/B is not available through `tacli` as it stands.** `write_ddraw_ini` rewrites `maxfps=60` into the instance's
+`ddraw.ini` at all three of its launch paths and the DLL reads it at attach, so an edit made first is
+overwritten. **`maxfps=0` is the unlimited setting** — `fpsl_init` maps a NEGATIVE value onto the
+display refresh (60) and only `0` falls through every branch with `tick_length` left at 0, so the
+value to make survive the launch is `0`, not `-1`. Two paths that
 both hold 60 (or 58.5) fps have not been compared, they have both hit the cap.
 
 **`posewatch` writes about 250 kB of `tagpu.log` per second** at 28 units on screen — it logs an
