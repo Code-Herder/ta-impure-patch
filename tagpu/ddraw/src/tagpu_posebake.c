@@ -243,12 +243,20 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
        `s_emitTop` emit_node kept while it wrote the posed vertices */
     if (range == TAGPU_PB_BODY && c->g && p >= 0 && p < TAGPU_PBMAXPIECE) {
         TAGPU_PBGEOM* g = c->g;
-        for (t = 0; t < n; t++)
+        for (t = 0; t < n; t++) {
+            /* `pbody` is the SEEDED flag and must not be set until all three
+               axes have been seeded from this first vertex. Setting it inside
+               the r loop seeded x only: y and z then compared against the
+               zeroed struct, so every piece's box was unioned with the origin
+               plane and `tagpu_posedraw_top` could only read too tall — a
+               wreck's shadow thrown too far, worst where the pose has
+               M[5] < 0. */
             for (r = 0; r < 3; r++) {
                 if (!g->pbody[p] || V[t][r] < g->pmn[p][r]) g->pmn[p][r] = V[t][r];
                 if (!g->pbody[p] || V[t][r] > g->pmx[p][r]) g->pmx[p][r] = V[t][r];
-                g->pbody[p] = 1;
             }
+            g->pbody[p] = 1;
+        }
     }
     c->nv += n;
 }

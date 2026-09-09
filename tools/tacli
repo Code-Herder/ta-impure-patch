@@ -500,9 +500,10 @@ def write_ddraw_ini(inst: Instance, tile, window=None, maxfps=60):
     `maxfps` is the fork's frame cap. **0 is the unlimited setting**, not -1:
     `fpsl_init` maps a NEGATIVE value onto the display refresh (60) and only 0
     falls through every branch with `tick_length` left at 0. The DLL reads it at
-    attach, and this function runs on every launch path, so a hand-edit of the
-    instance's ddraw.ini is overwritten — which is why the cap is a launch knob
-    (sticky in the instance meta) rather than something to edit by hand. Two
+    attach. This function does NOT run on every launch: `tacli launch <inst>`
+    with no --maxfps/--res/--window and an on-screen tile writes nothing, so a
+    hand-edited ddraw.ini survives such a launch. Passing --maxfps explicitly
+    always rewrites it, which is the way to be sure of the value. Two
     paths that both hold 60 fps have not been compared, they have both hit the
     cap: a frame-time A/B needs `--maxfps 0` on BOTH sides."""
     x, y = tile
@@ -1057,9 +1058,15 @@ def _launch(args) -> dict:
     if getattr(args, "window", None) is not None:
         meta["window"] = list(args.window)
     win = tuple(meta["window"]) if meta.get("window") else None
-    if getattr(args, "maxfps", None) is not None and args.maxfps != meta.get("maxfps", 60):
-        meta["maxfps"] = args.maxfps
-        inst.save_meta(meta)
+    # An EXPLICIT --maxfps always rewrites the file, even when the meta already
+    # agrees: the ini is what the DLL reads, it can drift from the meta (a hand
+    # edit, a copied gamedir), and this knob exists for frame-time A/Bs where a
+    # silent fall back to the 60 cap is exactly the measurement error it was
+    # added to remove. Only a CHANGE is worth persisting to the meta.
+    if getattr(args, "maxfps", None) is not None:
+        if args.maxfps != meta.get("maxfps", 60):
+            meta["maxfps"] = args.maxfps
+            inst.save_meta(meta)
         write_ddraw_ini(inst, tuple(meta["tile"]), win, maxfps=meta["maxfps"])
     if args.res or getattr(args, "window", None) is not None:
         if args.res:

@@ -747,7 +747,7 @@ only (the minimap and resource bar move on their own), and pick a fixture with n
 loads of `200v200` diverge to different survivors.
 
 **A frame-time A/B needs `--maxfps 0`, and without it it measures nothing.** `write_ddraw_ini`
-rewrites the cap into the instance's `ddraw.ini` at all three of its launch paths and the DLL reads
+rewrites the cap into the instance's `ddraw.ini` whenever `--maxfps`, `--res` or `--window` is given, or the tile is off-screen — **not on a bare `tacli launch <inst>`, which writes the file at all** (corrected 2026-09-09; the docstring used to claim every launch path). Pass `--maxfps` explicitly to be sure of the value. The DLL reads
 it at attach, so an edit made by hand first is overwritten — which is why the cap is a **sticky
 launch knob** (since 2026-09-09) rather than something to edit:
 

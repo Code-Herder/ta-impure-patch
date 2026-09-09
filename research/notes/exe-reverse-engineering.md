@@ -2643,13 +2643,18 @@ after `0x485980`'s unit walk. It is what makes a `Model3DONode` tree's lifetime 
 - per entry: `MEM_Free 0x4D85A0` (`0x42DC01`), then the slot is nulled (`0x42DC15`,
   `mov [eax+edi], ebx` with `ebx = 0`); two further `MEM_Free`s follow in the same body
   (`0x42DC23`, `0x42DC52`);
-- then the table itself is freed (`0x42DCB6`) and `main+0x14377` nulled (`0x42DCD8`).
+- then the table itself is freed (`0x42DCB6`) and `main+0x14377` nulled (`0x42DCD8`);
+- and **last, `0x42DCCB` frees `main+0x1439B` — the whole UnitDef array** (`mov edx,
+  [ecx+0x1439B]` at `0x42DCC4`), with the pointer nulled at `0x42DCE6`. **Five `MEM_Free`
+  calls in this body, not four** (verified by disassembly 2026-09-09).
 
 **Both frees are ours since 2026-09-09.** `0x42DC01` and `0x42DCB6` are redirected to
 `tagpu_reclaim`'s ring (the byte check is `E8` with a rel32 that resolves to `0x4D85A0`), so a
 template outlives any render pass still walking it; the body itself is untouched and still nulls
-every slot and the table pointer. `0x42DC23` and `0x42DC52` are left alone — unit-def fields no
-pass of ours reads. [Thread-safe destruction](thread-safe-destruction.html) §6c.
+every slot and the table pointer. `0x42DC23`, `0x42DC52` and `0x42DCCB` are left alone. The
+first two are unit-def fields no pass of ours reads; **`0x42DCCB` frees the UnitDef array we
+read all over** (`tagpu_order`, `tagpu_cat`, `tagpu_weapons`, `tagpu_scenario`) and is safe
+only because every one of those readers, and this cascade, is on the **game thread**. [Thread-safe destruction](thread-safe-destruction.html) §6c.
 
 **Why it matters to us.** `FreeObjectState 0x45AAA0` — the funnel `tagpu_reclaim` defers — never
 reaches these blocks: a template is not owned by any unit, it is shared by every unit of a type.

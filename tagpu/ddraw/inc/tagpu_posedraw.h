@@ -27,8 +27,9 @@
    structure-shadow SLANT (its own projection, its own integer snap, its own
    per-piece `cached` rule) and the nanoframe WIRE (GL_LINES, the body
    projection, one notch nearer). What is still CPU-built is the selection
-   lines and the effects models. The CPU emitters stay too — they are Gate B's
-   and Gate D's oracle, and they survive to the last commit of the gate
+   lines and the effects models. The CPU emitters were Gate B's and Gate D's
+   oracle and survived to the last commit of the gate; **step 8 DELETED them**,
+   so this is now the only unit renderer and there is nothing to fall back to
    (§7 step 8).
 
    THE SLANT IS THE ONE PLACE THE PORT CANNOT BE EXACT BY CONSTRUCTION
@@ -42,7 +43,9 @@
    and leaves only the reconstruction's own residual against the engine. Gate D
    states the tolerance rather than claiming byte-exactness.
 
-   THE LEVER IS `tagpu_posedraw.on`, off in play. Nothing here runs without it.
+   THE LEVER IS GONE. `tagpu_posedraw.on` was the step-5 to step-7 gate and
+   step 8 removed it with the emitters: this pass runs in play, unconditionally,
+   because it is the only thing that draws a unit.
 
    RENDER THREAD ONLY: it owns GL objects and is called from
    `tagpu_native_frame`. */
@@ -115,10 +118,11 @@ int  tagpu_posedraw_refused(void);
 unsigned tagpu_posedraw_drawn(void);  /* units drawn this frame */
 void tagpu_posedraw_frame(void);      /* once per frame, before anything else */
 
-/* 0 when the pass cannot draw (no lever, no GL, a driver whose uniform block
-   is too small), so the caller leaves those units to the CPU emitter rather
-   than to nobody. Builds the program on the first call — CALL ONLY WITH A
-   CURRENT GL CONTEXT. */
+/* 0 when the pass cannot draw (no GL, a driver whose uniform block is too
+   small). Since step 8 there is no CPU emitter to leave those units to: the
+   caller instead stops skipping the engine's own unit rasterise, so they are
+   drawn by the engine at 8bpp. Builds the program on the first call — CALL
+   ONLY WITH A CURRENT GL CONTEXT. */
 int  tagpu_posedraw_ready(void);
 
 /* bodies: begin, then one call per unit, then end. Leaves the program and the

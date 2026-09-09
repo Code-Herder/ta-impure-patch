@@ -71,8 +71,13 @@
    0x42DC01 frees one model's block -- the whole tree, its rest vertices and its
    faces are one allocation -- and 0x42DCB6 frees the pointer table itself.
    Both are `push eax; call MEM_Free; add esp,4`, so the 5-byte call is a clean
-   redirect to a cdecl function of ours. The two OTHER MEM_Frees in that body
-   (0x42DC23, 0x42DC52) are unit-def fields no pass of ours reads: left alone. */
+   redirect to a cdecl function of ours. There are FIVE calls to MEM_Free in that
+   body, not four; the three we leave alone are 0x42DC23 and 0x42DC52 (unit-def
+   fields no pass of ours reads) and 0x42DCCB, which frees the whole UnitDef
+   array at main+0x1439B and nulls it at 0x42DCE6. That array IS read by us --
+   tagpu_order, tagpu_cat, tagpu_weapons, tagpu_scenario -- but every one of
+   those readers is on the GAME thread, as is this cascade, so it needs no ring.
+   Stated because the list is what the next pass to want the defs will trust. */
 #define TMPLFREE_VA   0x0042DC01u          /* MEM_Free(one Model3DONode block)            */
 #define TMPLTAB_VA    0x0042DCB6u          /* MEM_Free(the model-pointer table)           */
 #define MEMFREE_VA    0x004D85A0u          /* MEM_Free: cdecl, 1 arg, caller cleans       */

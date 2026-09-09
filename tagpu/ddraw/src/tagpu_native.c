@@ -883,7 +883,12 @@ int tagpu_native_owns_obj(unsigned int obj3do)
    not merely a related number. [BINARY-VERIFIED 2026-09-09]: the count is set
    first and the table allocated as `count * 4` bytes at 0x42D68A/0x42D693; the
    load loop then runs `i = 1 .. count-1` and writes EVERY slot (0x42D7A2), so
-   no slot in range is left holding the allocator's garbage; and the teardown
+   no slot in range is left holding the allocator's garbage ONCE THE LOAD HAS
+   FINISHED -- 0x4D83B0 does not zero, and the count at main+0x1438F and the
+   table pointer at 0x42D6AA are both live before that loop runs, so a pass
+   reading during the load itself can see an uninitialised slot. That window is
+   not closed by this bound; it is empty for a different reason, which is that
+   no unit record exists to name a ModelId until the load is over; and the
    loop 0x42DBCA runs the same range, freeing each slot and nulling it
    (0x42DC15) before freeing the table and nulling the pointer (0x42DCB6 /
    0x42DCD8). The unit defs at `main+0x1439B` run alongside at stride 0x249,
@@ -3315,25 +3320,37 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     static unsigned last = 0;
     if (f->frame_counter - last >= 300) {
         last = f->frame_counter;
-        char b[352], bake[64];
+        char b[768], bake[64];
         /* writes nothing at all unless tagpu_posebake.on is there */
         tagpu_posebake_stats(bake, sizeof bake);
-        char posed[96];
+        /* EVERY APPEND HERE IS BOUNDED, AND EVERY BUFFER IS TERMINATED BY HAND.
+           This was `posed[96]` extended by two `lstrcatA`s with no
+           remaining-space check. `tagpu_posedraw_stats` alone reaches 56 chars
+           with all three ranges live, the degradation field adds up to 49 and
+           `q=` 11 — and at the 10k-unit budget step 8 sizes for (§4's table)
+           the counters are accumulated over the whole 300-frame window, so
+           seven digits are reachable and the write runs off this frame.
+           `_snprintf` also does NOT NUL-terminate what it truncates, so a
+           truncated `posed` would have sent `lstrcatA` scanning past the end;
+           the terminator is forced after every call rather than assumed. */
+        char posed[192];
+        int pn;
         tagpu_posedraw_stats(posed, sizeof posed);
+        posed[sizeof posed - 1] = '\0';
+        pn = lstrlenA(posed);
         /* G16 step 8's two DEGRADATIONS, printed only when they have caught
            something — in a healthy game neither ever does, and a field that
            reads 0 forever trains the eye to skip it. Both mean the unit still
            drew; see gpu-posing.md §4's refusal ledger. */
         if (posed[0] && (s_poseAtRest || s_poseUnplaced || s_poseNoBake)) {
-            char t[64];
-            _snprintf(t, sizeof t, " rest=%u unpl=%u nobake=%u",
+            _snprintf(posed + pn, sizeof posed - pn, " rest=%u unpl=%u nobake=%u",
                       s_poseAtRest, s_poseUnplaced, s_poseNoBake);
-            lstrcatA(posed, t);
+            posed[sizeof posed - 1] = '\0';
+            pn = lstrlenA(posed);
         }
         if (posed[0] && s_poseQueued != tagpu_posedraw_drawn()) {
-            char t[40];
-            _snprintf(t, sizeof t, " q=%u", s_poseQueued);
-            lstrcatA(posed, t);
+            _snprintf(posed + pn, sizeof posed - pn, " q=%u", s_poseQueued);
+            posed[sizeof posed - 1] = '\0';
         }
         /* ModelIds refused by model_root's bound — a unit slot recycled under
            the frame, or a torn read of one. Reported only when it has caught
@@ -3347,6 +3364,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, devres, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_reread,
                   bake, posed, badmodel, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
+        b[sizeof b - 1] = '\0';        /* _snprintf does not terminate a truncation */
         nlog(b);
         s_reread = 0;
         s_poseAtRest = 0; s_poseUnplaced = 0; s_poseNoBake = 0;

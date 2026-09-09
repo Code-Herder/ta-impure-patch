@@ -53,8 +53,19 @@ sleep 9
 
 OFF=$(stat -c %s "$GD/tagpu.log")                     # slice this run's own log out by offset
 
+# The spinners are BUSY LOOPS and the game is pinned to one core: if this
+# script dies between here and the cleanup below (Ctrl-C, an ffmpeg failure),
+# both outlive it and the desktop is the human's. Release them from a trap
+# rather than only on the happy path.
 taskset -acp 0 "$PID" >/dev/null 2>&1
 SPIN=()
+gatec_release() {
+    for p in "${SPIN[@]}"; do kill "$p" 2>/dev/null; done
+    SPIN=()
+    taskset -acp 0-$((NCPU-1)) "$PID" >/dev/null 2>&1
+}
+trap 'gatec_release; exit 130' INT TERM
+trap 'gatec_release' EXIT
 for _ in 1 2 3; do taskset -c 0 bash -c 'while :; do :; done' & SPIN+=($!); done
 
 # -window_id reads the window's own redirected pixmap, so the capture is the game's frame
@@ -73,8 +84,7 @@ for leg in $(seq 1 $LEGS); do
 done
 wait $FF
 
-for p in "${SPIN[@]}"; do kill "$p" 2>/dev/null; done
-taskset -acp 0-$((NCPU-1)) "$PID" >/dev/null 2>&1
+gatec_release
 
 tail -c +$((OFF + 1)) "$GD/tagpu.log" | tr -d '\000' > "$OUT/log-$TAG.txt"
 echo "== gate C, $TAG =="

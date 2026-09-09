@@ -386,7 +386,13 @@ int tagpu_posedraw_ready(void)
     char b[256];
 
     if (s_state) return s_state == 1;
-    s_state = 2;                                /* refused unless we get there */
+    /* 3 = BUILDING, not 2 = refused. This blocks re-entry exactly as 2 did,
+       but `tagpu_posedraw_refused()` stays false while we load entry points
+       and query the block size — a window the GAME thread's owndraw classify
+       runs through many times a frame, and in which a 2 here latched its
+       one-shot "the posed unit program REFUSED to arm" on a perfectly healthy
+       run. Every real refusal below sets 2 before returning. */
+    s_state = 3;
 
     x_glDrawArrays = (PFN_DRAWARRAYS)getgl("glDrawArrays");
     x_glUniform2f  = (PFN_UNIFORM2F) getgl("glUniform2f");
@@ -402,22 +408,25 @@ int tagpu_posedraw_ready(void)
         !x_glUniformBlockBinding || !x_glGetIntegerv ||
         !glCreateShader || !glGenBuffers) {
         plog("posedraw: refused — the GL entry points this pass needs are missing");
-        return 0;
+        s_state = 2; return 0;
     }
     /* THE BOUND IS CHECKED, NOT ASSUMED. GL 3.1 guarantees 16 KB and we need
        PD_BLOCK (14336 since step 6's second per-piece word), but a driver that
-       reports less would silently give every unit the wrong pose; refusing
-       leaves them to the CPU emitter instead. */
+       reports less would silently give every unit the wrong pose. Since step 8
+       deleted the CPU emitters there is nothing to fall back TO: refusing here
+       means owndraw stops skipping the engine's own unit rasterise, so the
+       units are drawn by the engine at 8bpp rather than by us. */
     x_glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &maxBlock);
     if (maxBlock < PD_BLOCK) {
         _snprintf(b, sizeof b,
                   "posedraw: refused — GL_MAX_UNIFORM_BLOCK_SIZE is %d, the pose block needs %d",
                   (int)maxBlock, PD_BLOCK);
         plog(b);
-        return 0;
+        s_state = 2; return 0;
     }
     unitFS = tagpu_native_unit_fs();
-    if (!unitFS) { plog("posedraw: refused — the native pass has no fragment shader to share"); return 0; }
+    if (!unitFS) { plog("posedraw: refused — the native pass has no fragment shader to share");
+                   s_state = 2; return 0; }
 
     s_state = 0;
     vs  = mksh(GL_VERTEX_SHADER, VS);

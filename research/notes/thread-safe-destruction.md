@@ -285,8 +285,12 @@ So the frees are deferred, with the pattern this page is about, applied to its s
   are one allocation) and at `0x42DCB6` (the pointer table) are rewritten to call
   `reclaim_template_free`, which pushes the pointer onto the same ring. Each site is byte-checked
   first — `E8` with a rel32 that really resolves to `0x4D85A0` — and both are landed or neither.
-  The other two `MEM_Free`s in that body (`0x42DC23`, `0x42DC52`) are unit-def fields no pass of
-  ours reads, and are left alone.
+  **There are five `MEM_Free` calls in that body, not four.** The three left alone are
+  `0x42DC23` and `0x42DC52` — unit-def fields no pass of ours reads — and **`0x42DCCB`, which
+  frees the whole UnitDef array at `main+0x1439B`** (nulled at `0x42DCE6`). That array *is* read
+  by us (`tagpu_order`, `tagpu_cat`, `tagpu_weapons`, `tagpu_scenario`), but every reader is on
+  the **game thread**, as is this cascade, so it needs no ring — a lifetime argument, not an
+  absence of readers.
 - **The rel32 is computed against the call site, never against the buffer it is built in.** That
   is the wild-call footgun this project has already paid for once.
 - **The normal release is not the epoch at all.** When the pre hook returned with the reader idle

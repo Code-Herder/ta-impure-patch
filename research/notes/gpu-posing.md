@@ -281,7 +281,7 @@ rather than by luck:
 | refusal today | what it actually is | after step 8 | the invariant |
 |---|---|---|---|
 | `npd >= MAXU` | our per-frame array | **cannot happen.** The gather already stops at `nu < MAXU` and every non-hires unit takes exactly one `pdu` slot, so `npd <= nu <= MAXU` | a counting bound, established at the loop that fills it |
-| the pose arena is full | our arena | **degrade: that unit draws AT REST for that frame** — right geometry, right material, right position, fog, shadow and depth; only its animation is frozen | the rest block is **one shared static identity block**, so the degradation consumes no arena and cannot itself fail |
+| the pose arena is full | our arena | **degrade: that unit draws AT REST for that frame** — right geometry, right material, right position, fog, shadow and depth. **Not only "animation frozen"**: the shared block gives every one of the 256 piece slots an identity matrix and `pvis = 3`, and body visibility is normally carried by an ALL-ZERO matrix, so under the degradation the pieces the unit is *not* showing (flares, muzzle pieces, anything HIDden) are drawn too, and non-`cached` pieces cast a slant shadow. Right unit, wrong pose — visibly, not just statically | the rest block is **one shared static identity block**, so the degradation consumes no arena and cannot itself fail |
 | a piece's parent link never resolves (`!done[i]`) | the piece tree, not the renderer | **degrade: THAT PIECE at rest**, the rest of the unit posed. `hires_pose` has always done exactly this | identity is a valid matrix for any piece; the unit's other pieces are unaffected |
 | `nparts != g->nparts` | a cache-identity re-read | **redundant.** `tagpu_posebake_unit` already matches the cache entry on `nparts`, so equality holds at every call site. It becomes the loop bound it always was | established by the lookup, one call earlier |
 | `o3` / a node pointer does not read | a **lifetime** question | the lifetime is the argument, and it already exists: the gather re-reads `o3` against `unit+0x9E`, and `tagpu_reclaim` defers `FreeObjectState 0x45AAA0` and the model-template frees until the render thread has completed the pass. `ptr_ok` stays as a cheap filter on a VALUE; **the `IsBadReadPtr` is not the safety argument and is not written as though it were** | [thread-safe destruction](thread-safe-destruction.html); CLAUDE.md's standing debt |
@@ -339,7 +339,7 @@ each bound does when it is reached, at that scale:
 | bound | today | what it limits | at 10 000 units |
 |---|---|---|---|
 | `MAXNV` / `s_vtrunc` | 49152 verts | the shared CPU vertex stream | **gone for units** — and it was already truncating at 281 units on screen (§4 step 7), which is the whole reason the CPU path is both slower and drawing less |
-| the pose arena | 16 384 piece-slots (`TAGPU_PBMAXPIECE * 64`) | poses buffered per frame | **the first thing to fill**: 2048 on-screen units at stock's worst 36 pieces is 73 728. Step 8 sizes it from `MAXU` rather than a magic 64, and its exhaustion is the rest-pose degradation above rather than a fallback |
+| the pose arena | **98 304 piece-slots** (`PD_ARENA = MAXU * 48`, `tagpu_native.c`) | poses buffered per frame | **not** the first thing to fill, and the earlier claim that it was is withdrawn: 2048 on-screen units at stock's worst 36 pieces is 73 728, which is *below* 98 304, so with stock content `MAXU` binds first and the arena cannot exhaust. Step 8 sizes it from `MAXU` rather than a magic 64; its exhaustion is the rest-pose degradation above rather than a fallback, and it becomes reachable only for content averaging over 48 pieces a unit |
 | `MAXU` | 2048 | units gathered per frame — **on screen only**, not alive | reachable zoomed out. Exhaustion today is a silent **drop** (the gather loop just stops), which is the one place §3's rule is still violated; raising it multiplies a dozen per-unit arrays, and `tagpu_native.o` already carries 5.1 MB of BSS. **Named here, not fixed by step 8** |
 | `PB_MAXMAT` | 256 | `(type, owner, atlas gen)` material streams | **the binding cache**: a stream is per OWNER, so ten players fielding thirty types each want ~300. Over the limit `mat_slot()` evicts and rebakes — a performance cliff, not a correctness bug, but it belongs in the same patch as the unit limit |
 | `PB_MAXGEOM` | 128 | model types baked at once | 279 unit types exist; a varied ten-player game can pass it, with the same eviction behaviour |
@@ -564,7 +564,7 @@ would send decision 8 back for rework. That is Gate B's bar met on two scenes. W
 which are step 6.
 
 **The frame-time criterion is NOT met, and is not measurable in this setup.** At 209 units both paths
-hold **58.5 fps** and are indistinguishable. `tools/tacli` rewrites `maxfps=60` into the instance's `ddraw.ini` at all three of its launch paths and the DLL reads it at attach, so an edit made beforehand is overwritten — which is what actually happened here, including on the two runs labelled "uncapped" at the time. **`maxfps=0` IS the unlimited setting**: `fpsl_init` maps a NEGATIVE value onto the display refresh (60 here) and only `0` falls through every branch leaving `tick_length` at 0. So the number is obtainable — it needs the value to survive the launch, not a different value. The honest statement of what was measured is the byte count
+hold **58.5 fps** and are indistinguishable. `tools/tacli` rewrites `maxfps=60` into the instance's `ddraw.ini` on any launch that passes `--res` — as every one of these did — and the DLL reads it at attach, so an edit made beforehand is overwritten, which is what actually happened here. including on the two runs labelled "uncapped" at the time. **`maxfps=0` IS the unlimited setting**: `fpsl_init` maps a NEGATIVE value onto the display refresh (60 here) and only `0` falls through every branch leaving `tick_length` at 0. So the number is obtainable — it needs the value to survive the launch, not a different value. The honest statement of what was measured is the byte count
 above, not a frame time. Whoever takes the real number needs the cap lifted at launch — and the
 "before" half is **not perishable**, because both paths live in one build behind the lever until
 step 8.
@@ -731,7 +731,7 @@ pose reaches — `> 1000`, the original artifact measured 1403 px — is 0 on al
 non-discriminating on this fixture and every ranked frame opened.
 
 **The 200-unit frame time, at last.** The obstacle was never the DLL: `tools/tacli` rewrote
-`maxfps=60` into the instance's `ddraw.ini` at all three launch paths and the DLL read it at
+`maxfps=60` into the instance's `ddraw.ini` on any launch passing `--res` (all of these) and the DLL read it at
 attach, so both paths reported 58.5 fps because both had hit the cap. `--maxfps` is now a sticky
 launch knob (`0` is the unlimited setting — a *negative* value means the display refresh). 200v200
 on Two Continents, 1920×1080, the sim **paused** with `tab` so units stop dying under the
