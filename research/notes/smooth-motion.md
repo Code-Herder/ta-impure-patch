@@ -246,18 +246,37 @@ it: `tacob run --all` is 9/9 byte-identical after the change.
    outer copy jumped laterally by far more than the inner one, and on the old shuttle's one-tick
    180° flip it crossed a half circle in a single frame. The rigs now carry the gap **above** the
    yaw, so it is a pure scene-space offset.
-3. **The playback clock modulated playback speed by ±20%.** Correcting `playTick` toward the
-   ring's head every frame cannot settle, because the server's real tick rate is not `SIM_RATE` —
-   it is a Python sleep plus the VM's step cost. The correction saturated every frame and surged
-   at the poll frequency, which reads as jerk against the grid. Trimming a **rate multiplier**
-   instead lets the clock lock to the server's actual rate. Measured on the page: per-frame
-   advance `0.495 ± 0.040` → `0.516 ± 0.009`, camera jitter 8% → **2%**, and the advance settling
-   above 0.5 is the rate mismatch made visible.
+3. **The playback clock modulated playback speed.** Correcting `playTick` toward the ring's head
+   every frame saturates whenever the page's assumed tick rate and the server's differ at all, and
+   the correction then surges at the poll frequency. Trimming a **rate multiplier** instead lets
+   the clock lock to whatever the server is really doing, at any speed setting and on a loaded
+   machine. Measured under the headless harness: camera jitter 8% → **2%**.
 
-Worth stating because it cost a session: **two of the three were only found by instrumenting the
-running page** — the clock was twice "fixed" by reasoning (a bigger buffer, then gentler easing)
-and neither reasoned fix was the cause. `rAF` was steady at 16.7 ms ± 0.1 throughout; the jerk was
-always in what the clock did with it.
+   ⚠ **The magnitude of that one is not trustworthy, and the cause I first wrote for it was
+   wrong.** The numbers came from headless Chrome under `--virtual-time-budget`, where rAF runs on
+   *virtual* time while the server runs on the wall clock, so the two rates are unrelated by
+   construction — which is what saturated the old correction there and inflated the jitter. The
+   real server is **29.83 ticks/s at 1×, 99.4% of 30 Hz** `[MEASURED 2026-09-09, 179 ticks over
+   6.00 s]`, so in a real browser the old control law would have had to trim 0.6%, well inside its
+   own cap, and would not have saturated. The rate-locked clock is kept because it is the correct
+   control law and costs nothing — **not** because a ±20% surge was ever demonstrated in a real
+   browser. The jerk the owner reported is attributed to items 1 and 2, which were measured
+   against the server's own data and do not depend on the harness.
+
+Worth stating because it cost a session: the clock was twice "fixed" by reasoning (a bigger
+buffer, then gentler easing) before anything was measured, and then measured under a harness whose
+clock is not the product's — so the third "fix" was aimed at an artifact. **A measurement is only
+as good as the thing it was taken on**: items 1 and 2 were taken against the server's own data and
+hold; item 3's was taken against virtual time and does not.
+
+### 7b. Walk-forward — the walk cycle and nothing else
+
+`forward` `[MEASURED 2026-09-09]`: straight ahead at a fixed heading, never stopping, never
+turning, and `Director.step` runs **no weapon events** for it — the scripts started over a run are
+`Create, MotionControl, StartMoving, walk` and nothing else, so there is no aim to confound the
+cycle. Verified at a constant **1.200 wu/tick** on ARMCOM with a single heading and zero stops. The
+viewer snaps the ground grid to its own cell under the unit, so walking away from the origin
+indefinitely still reads as ground going past instead of running off a 1600-unit grid.
 
 **The director's pace came from a per-class constant, not the unit.** `[MEASURED 2026-09-09]`
 `CLASS_PLANS` carried one speed per class — 60 wu/s for every kbot — so ARMCOM walked at ARMPW's

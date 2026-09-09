@@ -111,6 +111,7 @@
   </select>
   <select id="path" title="the director's motion sketch. `shuttle` is the class's own — for ground units it walks a short leg, STOPS for a second and flips its heading 180 degrees in one tick, which is right for the trace fixtures and useless for judging a walk. `loop` walks a wide circle: never stops, never snaps.">
     <option value="loop" selected>loop</option>
+    <option value="forward">walk forward</option>
     <option value="">shuttle (the fixtures' path)</option>
   </select>
   <select id="posemode" title="smooth-motion.md gate 0 — does interpolating COB piece poses look better than the authored stepping?">
@@ -221,7 +222,8 @@ let follow = true;
 scene.add(new THREE.HemisphereLight(0xc4d4e8, 0x23262b, 0.7));
 const key = new THREE.DirectionalLight(0xfff4e6, 1.4); key.position.set(-90, 160, 120);
 scene.add(key);
-const grid = new THREE.GridHelper(1600, 40, 0x39414d, 0x252b33);
+const GRID_SPAN = 1600, GRID_DIV = 40, GRID_CELL = GRID_SPAN / GRID_DIV;
+const grid = new THREE.GridHelper(GRID_SPAN, GRID_DIV, 0x39414d, 0x252b33);
 scene.add(grid);
 const unit = new THREE.Group(); scene.add(unit);
 /* unit is the follow anchor and carries the world position; the two model roots
@@ -327,11 +329,17 @@ function applyWorld(frame, next, u) {
     controls.target.add(move);
     camera.position.add(move);
   }
+  /* Snap the grid to its own cell under the unit: `forward` walks away from the
+     origin indefinitely and would otherwise run off a 1600-unit grid, and the
+     snap keeps the lines world-aligned so they still read as ground going past. */
+  grid.position.x = Math.round(unit.position.x / GRID_CELL) * GRID_CELL;
+  grid.position.z = Math.round(unit.position.z / GRID_CELL) * GRID_CELL;
   const K = Math.PI * 2 / 65536;
   const yaw = (smooth ? alerp(w.body[1] * K, w2.body[1] * K, u) : w.body[1] * K)
               + Math.PI;                 // scene3's half turn — see the rig comment
   modelA.rotation.set(0, yaw, 0);
   modelB.rotation.set(0, yaw, 0);
+  marker.visible = $('path').value !== 'forward';   // `forward` has no target
   marker.position.copy(scene3(w.target));
   fx.clear();
   for (const e of frame.effects || []) {

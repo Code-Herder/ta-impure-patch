@@ -3175,7 +3175,8 @@ def _err_line(err):
 # engine's own. **The events are exact; the path is a sketch** and is never the
 # engine's movement model — nothing here was measured against a moving unit.
 
-MOTIONS = ("ground", "static", "circuit", "hover", "runin", "glide", "dive", "loop")
+MOTIONS = ("ground", "static", "circuit", "hover", "runin", "glide", "dive", "loop",
+           "forward")
 
 # range and reload come from the weapon TDF; these are the fallbacks for a slot
 # whose weapon we cannot read, in world units and ticks.
@@ -3255,6 +3256,11 @@ class Director:
         self.path = None
         self.reset()
 
+    @property
+    def running_motion(self):
+        """The viewer's override if it set one, else the class's own."""
+        return self.path or self.motion
+
     def reset(self):
         self.started = False
         self.moving = False
@@ -3312,9 +3318,16 @@ class Director:
         per = self.speed / float(SIM_RATE)                  # world units a tick
         x, y, z = (v / float(FIXED) for v in w.pos)
         moving = True
-        motion = self.path or self.motion
+        motion = self.running_motion
         if motion == "static":
             moving = False
+        elif motion == "forward":
+            # The walk cycle and nothing else: straight ahead at a fixed heading,
+            # never stopping, never turning, and `step` runs no weapon events for
+            # it so there is nothing to aim at. It walks away from the origin for
+            # as long as it is left running; the viewer keeps the grid under it.
+            z += per
+            w.body[1] = 0
         elif motion == "loop":
             # A wide ground circle: never stops, never snaps a heading, stays in
             # frame. `ground`'s shuttle does all three of those wrong for looking
@@ -3513,7 +3526,8 @@ class Director:
                 self.active = want
                 w.bits["activation"] = want
                 self.issue("Activate" if want else "Deactivate")
-        self.weapon_events(tick)
+        if self.running_motion != "forward":
+            self.weapon_events(tick)      # `forward` is the walk cycle alone
         self.flush("pre")
         vm.do_scripts_now(1)
         self.flush("post")
