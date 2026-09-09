@@ -74,6 +74,17 @@ static const unsigned char FLIP_STOLEN[6] = { 0x81, 0xEC, 0xF4, 0x00, 0x00, 0x00
 
 static int      s_installed = 0;
 static int      s_census = 0, s_log = 0, s_pgm = 0, s_trace = 0;
+/* `nostring` (G17d): text stays a box of captured pixels, as it was through
+   the whole of phase 1. The A/B for the arena saving, and the escape if the
+   stamp ever disagrees with the engine's blit on some font.
+   READ AT ATTACH, LIKE EVERY OTHER TOKEN THIS FILE OWNS — `read_tokens` runs
+   once, from `tagpu_gui_init`, so `census`, `log`, `pgm`, `trace` and this one
+   must be armed BEFORE the launch. Only the surf module's tokens (`strict`,
+   `norestore`, `sharptest`, `nocursor`, `cursorscale=`) follow the file live,
+   because only the DRAW can change mid-session; the publisher's shape cannot
+   without leaving the twins holding ops of the other kind. Arming it on a
+   running instance silently does nothing, which cost one A/B to notice. */
+static int      s_nostring = 0;
 static int      s_key = KEY_DEFAULT;
 static int      s_probeX = -1, s_probeY = -1;   /* trace: ops touching this pixel */
 static DWORD    s_gameTid = 0;        /* the thread the flip runs on          */
@@ -630,7 +641,7 @@ static void publish(unsigned flipSurf)
            art it was drawn onto. A text op with no string (the scratch was
            full, or the font would not read) falls through to its box's bytes,
            which is exactly what it was before this gate. */
-        if (op->kind == OP_TEXT && op->slen && op->frame) {
+        if (op->kind == OP_TEXT && op->slen && op->frame && !s_nostring) {
             unsigned char* dst;
             o = pub_op(PK_STRING, s->base); if (!o) return;
             o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
@@ -971,6 +982,7 @@ static int read_tokens(void)
     s_log    = strstr(buf, "log") != NULL;
     s_pgm    = strstr(buf, "pgm") != NULL;
     s_trace  = strstr(buf, "trace") != NULL;
+    s_nostring = strstr(buf, "nostring") != NULL;
     { const char* k = strstr(buf, "key="); if (k) s_key = atoi(k + 4) & 255; }
     { const char* k = strstr(buf, "probe="); if (k) sscanf(k + 6, "%d,%d", &s_probeX, &s_probeY); }
     return 1;
@@ -1024,4 +1036,22 @@ void tagpu_gui_flush(unsigned int frame_counter)
             glog(b);
         }
     }
+}
+
+/* ---- G17e: the TNT's minimap picture, for the render thread --------------
+   Returns 1 and fills the outputs when a picture has been snapshotted since
+   the last map load. `gen` changes exactly once per load, so a consumer that
+   caches anything derived from these bytes drops it when the generation moves.
+   The bytes are stable for the life of that generation: one writer, one write,
+   and it happens inside the map loader before any frame of that map presents. */
+int tagpu_gui_minimap_pic(const unsigned char** pix, int* w, int* h, unsigned* gen)
+{
+    unsigned g = s_mmGen;
+    if (!g) return 0;
+    MemoryBarrier();
+    if (pix) *pix = s_mmPic;
+    if (w) *w = s_mmW;
+    if (h) *h = s_mmH;
+    if (gen) *gen = g;
+    return 1;
 }

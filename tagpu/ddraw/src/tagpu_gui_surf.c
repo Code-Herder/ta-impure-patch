@@ -1475,14 +1475,19 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,glyphs=%u/%u,fonts=%d fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,glyphs=%u/%u,fonts=%d arena=%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, s_palChanges, s_palDiff, s_palDiffAt, s_palSource,
                   tagpu_classicpp_on() ? 1 : 0, s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb,
                   s_k, s_sharpW, s_sharpH,
                   s_curOwn, s_curW, s_curH, s_curDev, s_cursorScale, s_curDrawn, s_curWarm,
-                  s_strings, s_glyphs, s_strMiss, s_strReseed, gCached, gDrops, gFonts, fps);
+                  s_strings, s_glyphs, s_strMiss, s_strReseed, gCached, gDrops, gFonts,
+                  /* the arena head is MONOTONIC, so the delta between two of these
+                     lines is the bytes the producer wrote in 300 frames — which is
+                     what `nostring` is A/B'd on (13.4: ~40 bytes where a text op
+                     carried ~968) and what §7's cadence note is about */
+                  g_guiq.aHead, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
     }
