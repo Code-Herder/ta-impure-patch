@@ -29,7 +29,7 @@ Without `--nine` it draws the frame from nothing, which needs no install and
 is the fallback if composing turns out to be unavailable at the moment the
 screen is built.
 
-Either way it writes the drop-down frame of renderers.md §2.10 at 304x240 --
+Either way it writes the drop-down frame of renderers.md §2.10 at 304x212 --
 `renderdd-nine-0.png` composed, `renderdd-0.png` drawn -- and prints the recess
 table the lab and the `.GUI` both lay out to.
 
@@ -61,18 +61,26 @@ TOOLS = Path(__file__).resolve().parent
 # Panel id=0 at (704, 32), right-aligned 16 px in, hanging from the top bar's
 # underside. Panel-local coordinates throughout.
 #
+# SIX ROWS, AND EVERY ONE OF THEM IS LIVE. Mouse-wheel zoom was the seventh
+# and was cut 2026-09-09: `tagpu_zoom_init()` runs ONCE from dllmain.c:130 and
+# installs byte patches, so flipping `tagpu_zoom.on` mid-game does nothing at
+# all -- the row would have lit green and changed no pixel until the next
+# launch. It is also not a rendering option; it is a play mode. The lever
+# stays, the row goes, and the menu keeps an invariant worth having: NOTHING
+# IN IT NEEDS A RESTART, so no row ever has to carry an asterisk.
+#
 # NO APPLY BUTTON -- decided with the owner 2026-09-09. A stage button IS the
 # setting; there is no edit buffer for an Apply to commit, so a row writes its
 # key the moment it is clicked and the panel is dismissed by the trigger or by
 # clicking away, the way a drop-down is. That is not only a visual choice: it
 # means `OnCommand` writes the cfg per row and there is no eighth gadget to
 # gather state from. The panel loses the 40 px the action row occupied.
-W, H = 304, 240
-ROWS = 7
+W, H = 304, 212
+ROWS = 6
 ROW_Y0, ROW_PITCH, ROW_H = 34, 28, 20
 CTL_X, CTL_W = 166, 120          # stagebuttnN's own frame size -- fixed
 PAD = 2                          # the reveal of recess around a plate
-DIV_TOP, DIV_BOT = 30, 230       # the caption rule, and the panel's own floor
+DIV_TOP, DIV_BOT = 30, 202       # the caption rule, and the panel's own floor
 
 # ----------------------------------------------------------------- palette --
 # Ours. An olive-tinted gunmetal: warm enough to sit under the cream lettering,

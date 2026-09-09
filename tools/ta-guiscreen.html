@@ -78,7 +78,7 @@ code{font-family:var(--mono);font-size:12.5px;color:var(--cream)}
 .frame img,.magbox img{image-rendering:pixelated;position:absolute;display:block}
 
 /* the screen: panel id=0 at (704,32) 304x240 -- the drop-down's own rect */
-#screen,#screenmag{position:absolute;width:304px;height:240px;transform-origin:0 0}
+#screen,#screenmag{position:absolute;width:304px;height:212px;transform-origin:0 0}
 #screen{left:704px;top:32px}
 /* the trigger: no plate, no bevel, no text -- the register of mainmenu.gui's
    `Credits` gadget (id=1, text= empty, attribs=1026). It is 28 px in a 32 px
@@ -139,12 +139,12 @@ code{font-family:var(--mono);font-size:12.5px;color:var(--cream)}
      the sprocket again or anywhere else on the frame to dismiss it. Clicking a row
      leaves it open. The magnified copy beside the frame ignores all of that, so the
      panel stays there to be looked at.</p>
-  <p>Seven gadgets, no pages, hanging off the top bar at the right: panel
-     <code>id=0</code> at <code>(704,32) 304&times;240</code>. The stage buttons are the
+  <p>Six gadgets, no pages, hanging off the top bar at the right: panel
+     <code>id=0</code> at <code>(704,32) 304&times;212</code>. The stage buttons are the
      engine's own art from <code>anims/commongui.gaf</code> &mdash; extracted, never
      tracked, run <code>tools/guiart.py</code> first. The ground is
      <code>frontend.gaf</code>'s own <code>back*</code> nine-slice, the shell's mottled
-     panelling, composed at 304&times;240 by <code>tools/guipanel.py</code>; only the
+     panelling, composed at 304&times;212 by <code>tools/guipanel.py</code>; only the
      seven recesses are drawn over it, because no stock frame has seven
      <code>h20</code> wells and none puts a label beside its control instead of
      above it.</p>
@@ -216,7 +216,7 @@ const ART='../tmp/gafui/';
    tmp/gafui/renderdd-0.png, DRAWN by tools/guipanel.py: eight h20 recesses at
    x=164 w=124 on a 28 px pitch -- seven rows and the action. Labels sit at
    x=14 w=144 on the same line, which is what the extra width buys. */
-const SLOT=[34,62,90,118,146,174,202];
+const SLOT=[34,62,90,118,146,174];
 /* NO ACTION ROW. A stage button IS the setting -- there is no edit buffer for
    an Apply to commit -- so a row writes its key on the click and the panel is
    dismissed by the trigger or by clicking away, the way a drop-down is.
@@ -252,8 +252,6 @@ const ROWLIST=[
    lever:'tagpu_classicpp.cfg  shadowres=', needs:{shadows:2}},
   {id:'ss',      g:'SUPERSMP',label:'Supersampling',     stages:['Off','2x'],   art:1,
    lever:'tagpu_ss.off'},
-  {id:'zoom',    g:'ZOOM',    label:'Mouse-wheel zoom',  stages:['Off','On'],   art:1,
-   lever:'tagpu_zoom.on  (+ vpwide, paired in tagpu_opt.c)'},
 ];
 const ROWS={}; ROWLIST.forEach(r=>{ROWS[r.id]=r;});
 
@@ -263,8 +261,8 @@ const ROWS={}; ROWLIST.forEach(r=>{ROWS[r.id]=r;});
 const DEMOTED={penumbra:'0.05', shade:'1.00', airshadow:'len', terrainshadow:'1',
                amb:'0.35', unitsun:'215.5,53.1'};
 
-const P_CLASSIC={assets:0,light:0,shadows:1,shadowres:2,ss:1,zoom:1};
-const P_CPP    ={assets:1,light:1,shadows:2,shadowres:2,ss:1,zoom:1};
+const P_CLASSIC={assets:0,light:0,shadows:1,shadowres:2,ss:1};
+const P_CPP    ={assets:1,light:1,shadows:2,shadowres:2,ss:1};
 let S=Object.assign({},P_CPP);
 let presetStage=1, zoom=2, ground='back', face='gaf12';
 let open_=false, trigState='normal';   /* a drop-down starts closed */
@@ -300,7 +298,7 @@ function render(){
   buildInto(scr, 1);
   buildInto(document.getElementById('screenmag'), zoom);
   const box=document.querySelector('.magbox');
-  box.style.width=(304*zoom)+'px'; box.style.height=(240*zoom)+'px';
+  box.style.width=(304*zoom)+'px'; box.style.height=(212*zoom)+'px';
   readouts();
 }
 
@@ -410,9 +408,9 @@ function guiText(){
        text:r.stages.join('|'),stages:r.stages.length,status:stage,
        quickkey:r.label.toUpperCase().charCodeAt(0),grayedout:dead?1:0});
   };
-  g({id:0,assoc:0,name:'RENDER.GUI',xpos:PANEL_X,ypos:BAR_H,width:304,height:240,
+  g({id:0,assoc:0,name:'RENDER.GUI',xpos:PANEL_X,ypos:BAR_H,width:304,height:212,
      totalgadgets:3+(ROWLIST.length+1)*2});
-  g({id:12,assoc:0,name:'RENDERDD',xpos:0,ypos:0,width:304,height:240});
+  g({id:12,assoc:0,name:'RENDERDD',xpos:0,ypos:0,width:304,height:212});
   g({id:5,assoc:0,name:'CAPTION',xpos:14,ypos:6,width:224,height:20,text:CAPTION});
   row(0,PRESET,presetStage,false);
   ROWLIST.forEach((r,k)=>row(k+1,r,S[r.id],!liveRow(r)));
@@ -457,14 +455,18 @@ function computeFiles(){
     +'itself is not an option.']);
   if(S.shadows!==0) warn.push(['','The engine\u2019s own Shadows bit '
     +'(<code>main+0x37F06</code> bit 2) still gates both lanes.']);
-  warn.push(['','<strong>How it opens is undecided.</strong> The trigger cannot be a gadget '
-    +'of the screen it opens \u2014 only the top GUI is interactive. Either a DLL hotkey, or '
-    +'a gadget on <code>ARMMAIN2</code>/<code>CORMAIN2</code> (two files, one per side), '
-    +'which a selected builder\u2019s build page then covers.']);
-  warn.push(['','<strong>A new <code>.GUI</code> name can be pushed after all.</strong> '
-    +'<code>GUI_Load(main+0x519, name, flags)</code> at <code>0x4AA8F0</code> takes the name '
-    +'as a pointer and the caller sets <code>OnCommand</code> at <code>+0x08</code>. Our DLL '
-    +'is the call site; no stock screen is sacrificed.']);
+  warn.push(['done','<strong>The trigger is DLL-drawn, and that is geometry, not taste.</strong> '
+    +'Every in-game screen\u2019s panel is the side panel \u2014 <code>(0,128) 128\u00d7352</code> '
+    +'\u2014 so no GUI screen owns the top bar, and a gadget is drawn into its panel\u2019s own '
+    +'surface at panel-relative coordinates. <code>ARMMAIN2</code> is dead twice over: a '
+    +'builder\u2019s page covers it (measured: <code>ARMCOM1.GUI</code>, '
+    +'<code>under: ARMMAIN2.GUI</code>).']);
+  warn.push(['done','<strong>A new <code>.GUI</code> name can be pushed \u2014 now read, not '
+    +'asserted.</strong> <code>0x4AA8F0(gi, name, flags)</code> is <code>__stdcall ret 0xC</code> '
+    +'and turns the name into a FILE PATH (prefix at <code>gi+0x9B6</code>, extension '
+    +'<code>"GUI"</code> at <code>0x502828</code>, opened by <code>0x4BBC40</code>), so the '
+    +'exe\u2019s screen-name table is never consulted. The push is at <code>0x4AAC56</code>; '
+    +'<code>flags &amp; 0x200</code> suppresses it. Copy <code>0x495207</code>.']);
   warn.push(['','Which plate art a <code>stages=2</code> button gets is unverified \u2014 '
     +'<code>stagebuttn1</code> (red/green) or <code>stagebuttn2</code> (green/green). '
     +'<code>texturenumber</code> is the suspect.']);

@@ -2188,7 +2188,7 @@ call order, with each gate (`ebx` is the function's `drawUnits` argument):
 | `0x469FCB` `DrawChatText 0x464060` | `ebx` | the chat lines |
 | `0x469FD5..0x46A102` | `[main+0x3923B] & 2` and `ebx` | the debug line: `"FRATE: %d"`, `"%.1f"`, `"MODE %s INFO %s"` with `NORMAL`/`DEBUG` and `[Release]` (`0x507828..0x50781C`, `0x5077FC`, `0x50780C..0x507814`, `0x502558/0x50255C`) at x `0x83`, `0xBC`, `0x1EE`, plus a fourth string from `0x415FA0` under `[main+0x2A44] & 1`. **Negative result**: bit 1 of `main+0x3923B` is flipped only at `0x49631B`, behind `main+0x37F2F` bit 1 (`0x4962F8..0x496303`), the engine's debug mode (set at `0x417009`, `0x430E68`); it is cleared at game entry (`0x49128E`) and no cheat in the NORMAL table sets it — not reachable in play, not exercised |
 | `0x46A107..0x46A1CB` | `[main+0x38A51] & 1` → the GAF `main+0x1481B` frame 0 at (`[esp+0xAC]`, `[esp+0xB0]`); else, unless the local player's `[player+0x9B] & 0x40`, `main+0x3923B` bit 5 → `main+0x14813`, bit 6 → `main+0x14817` | status icons [INFERRED: pause/speed indicators]; not exercised |
-| **`0x46A1D0..0x46A2A3`** | **`main+0x37F2F` bit 6 — the `+clock` cheat** (handler `0x417300`: the bit flipped, then `0x430F00`) | the sim tick `main+0x38A47` split into h:m:s (÷108 000, ÷1 800, ÷30 — 30 ticks a second), `"%s : %02d:%02d:%02d"` (`0x507794`) with `"Game Time"` (`0x504910`, through `0x4C5740` [INFERRED: the string table]); `DrawTextCustomFont 0x4C14F0` at x `0x82`, y `[gfx+0xD8]` (`0x4B6710` [INFERRED: the primary's height]) `− 0x22 −` the font height (`0x4C1450`): the viewport's bottom-left, just above the bottom bar. **The seconds tick between two shots** — the walk measures it with the in-game menu open, which pauses the sim and the clock with it |
+| **`0x46A1D0..0x46A2A3`** | **`main+0x37F2F` bit 6 — the `+clock` cheat** (handler `0x417300`: the bit flipped, then `0x430F00`) | the sim tick `main+0x38A47` split into h:m:s (÷108 000, ÷1 800, ÷30 — 30 ticks a second), `"%s : %02d:%02d:%02d"` (`0x507794`) with `"Game Time"` (`0x504910`, through `0x4C5740` [INFERRED: the string table]); `DrawTextCustomFont 0x4C14F0` at x `0x82`, y `[gfx+0xD8]` (`0x4B6710` [INFERRED: the primary's height]) `− 0x22 −` the font height (`0x4C1450`): the viewport's bottom-left, just above the bottom bar. **The seconds tick between two shots** — the walk measures it with the in-game menu open, which pauses the sim and the clock with it **in single player** (the pause is a separate flagged action, not a property of the push -- see *The screen lifecycle* below; a network game cannot be paused unilaterally) |
 | `0x46A2A8` | `[main+0x38A51] & 2` | the GAF `main+0x148CF` frame 0 at (`screenW − 0x10`, `screenH − 0x50`); not exercised |
 | `0x46A2E7`, `0x46A303` | — | clip reset `0x4C69C0`, then the retained GUI blit `0x4AB170` |
 | `0x46A308..0x46A3B8` | `[main+0x38DD5]` and `ebx` | the nine profiler bars `0x46B900` |
@@ -2229,7 +2229,7 @@ box=(0,4)-(639,479) ops_on_it=0` — the item already open above; and a 128×352
 
 **`ARMOPT.GUI` is not over the viewport.** Its `[COMMON]` record is `xpos=0 ypos=128 width=128
 height=352` — the side panel's own rect; the in-game menu *replaces* the build panel. Opening it
-pauses the game and draws `PAUSED` in the middle of the world (the 2 621–2 938 non-key viewport
+pauses the game **in single player** and draws `PAUSED` -- the GAF entry `igpaused`, not text -- in the middle of the world (the 2 621–2 938 non-key viewport
 pixels the walk counts on that stop). The screens that do lie over the world are `PREFS.GUI` and
 `VISUALRT.GUI` (~55 000 px each at 1024×768), the F4 / SPACE box (~21 000), the chat (~800), the
 clock and the `+bps` lines.
@@ -2342,6 +2342,137 @@ rows for an RLE frame — go into the sprite's identity beside the header and pl
 because the shell frees a popped screen's art and the heap hands the same addresses to the
 next screen's (the 2026-09-07 review). `0x4CCF60`'s `'\n'` stop (`cmp al,0xA; je 0x4CD008` at
 `0x4CCFA0`) is honoured by the glyph observer's width since the same review.
+
+### The screen lifecycle: loading, pushing, keeping on top [VERIFIED 2026-09-09, Phase F G18]
+
+*Read with `i686-w64-mingw32-objdump -d -M intel` on `pristine/TotalA.exe.pristine`. This
+section exists because [renderers](renderers.html) §2.10 needed to know whether a **new**
+`.GUI` name can be pushed at all. It can.*
+
+**`GUI_Load 0x4AA8F0(GUIInfo* gi, const char* name, int flags)` — `__stdcall`, `ret 0xC`,
+returns the new `GUIMEMSTRUCT*` in `eax`.** Arguments proven from the frame: after
+`sub esp,0x21c` and four pushes, `[esp+0x230]`, `[esp+0x234]` and `[esp+0x238]` are args 1-3;
+arg 1 is dereferenced at `+0x18` (`TheActive_GUIMEM`) at `0x4AA917`, and arg 2 is `strlen`ed
+(`repnz scas`, `0x4AA9B4`) and concatenated.
+
+- **The name becomes a FILE PATH, so the exe's screen-name string table is never consulted.**
+  `0x4AA99A` copies a 0x100-byte prefix from **`gi+0x9B6`**; the name is appended; `0x4AA9FB`
+  pushes **`0x502828` = `"GUI"`** into the extension-setter `0x4BAFF0`; `0x4AAA10` calls
+  `0x4BBC40` to open it. Setting the extension is idempotent, which is why the engine's own
+  callers pass a name that already ends `.GUI`. **A name we invent is loaded if the file
+  exists** — our DLL is the call site, and no stock screen has to be sacrificed. *This closes
+  the question both this page's §6 and roadmap G18e recorded as open.*
+- **`flags` bit `0x800`** — before anything else, read the current top screen's panel rect
+  (`+0x13/+0x15/+0x17/+0x19`) and call `0x4BF4D0(panel+0xBC, rect, -0x18)`; then set the top
+  screen's `+0x14` to 1. A save/dirty step, `0x4AA912..0x4AA97C`.
+- **`flags` bit `0x200` suppresses the push** (`0x4AAA26`, `0x4AAC46`).
+- **THE PUSH, `0x4AAC56`** — the writer of `per_active` that was previously unmapped:
+  ```asm
+  4aac43:  mov [edi+0x04],ebp        ; new->ControlsAry = the gadget array
+  4aac4b:  mov [edi+0x1c],0          ; and +0x24, +0x3b cleared
+  4aac54:  jne 0x4aac5e              ; skip the push if flags & 0x200
+  4aac56:  mov edx,[esi+0x18]        ; edx = gi->TheActive_GUIMEM   (the old top)
+  4aac59:  mov [edi],edx             ; new->per_active = old top    (the LIFO link)
+  4aac5b:  mov [esi+0x18],edi        ; gi->TheActive_GUIMEM = new   (the push)
+  ```
+
+**`main+0x37EA0` is the name of the screen the engine KEEPS on top in game**, and it is a
+plain string buffer. `0x497BA4` fills it: `sprintf(main+0x37EA0, "%sMAIN2.GUI", side)`, the
+side being the 562-byte record at `main+0x37F5B` indexed by the player's side byte — so in a
+game it reads `ARMMAIN2.GUI` or `CORMAIN2.GUI`.
+
+**`GUICONTROL_IsOnTop 0x4AB060(gi, name)` is strict — it does NOT walk the stack.** It reads
+`gi->TheActive_GUIMEM` (`+0x18`), then `->ControlsAry` (`+0x04`), adds 2 for the panel's
+`name`, and `strncmp`s 16 bytes through `0x4FAB50`. Only the **topmost** screen can match.
+
+**`UpdateIngameGUI 0x491D70` pops until that is true** — `0x491DCA` tests, `0x491DD3` calls
+`GUI_Pop 0x4A9660`, `0x491DF2` loops. **21 call sites.** So anything pushed over the world is
+popped again unless `main+0x37EA0` names it.
+
+**`0x495207` is the engine's own template for pushing an in-game screen**, and it is the one
+to copy:
+
+```asm
+495207:  lea ecx,[eax+0x37ea0]           ; the expected-screen buffer...
+49520d:  add eax,0x519                   ; gi
+495212:  push ecx                        ; ...passed AS the name
+495213:  push eax
+495214:  call 0x4aa8f0                   ; -> eax = the new GUIMEMSTRUCT
+495219:  mov [eax+0x8],0x494890          ; new->OnCommand   (the caller sets it)
+495226:  mov [eax+0xc],edx               ; new->+0x0C = main   (its context)
+```
+
+i.e. **write the buffer, load that same string, then set `+0x08` and `+0x0C`.** Closing is the
+mirror: restore the buffer and let `UpdateIngameGUI` pop, without calling `GUI_Pop` at all.
+
+**Pausing is NOT a property of the push** [CORRECTS this page's two unqualified claims that
+the in-game menu pauses]. `ARMOPT.GUI` is `xpos=0 ypos=128 width=128 height=352` — the same
+side-panel rect as a build page, pushed the same way — yet the build page leaves the sim
+running (LIVE 2026-09-09: selecting a commander gives `ARMCOM1.GUI`, `under: ARMMAIN2.GUI`,
+with the game running). The pause is a separate action on a flag; the `PAUSED` indicator is
+not text but the GAF entry **`igpaused`** (`0x5035BC`), looked up once at `0x429B66` through
+`0x4B8D40` into `main+0x1481B` beside two siblings at `main+0x14813`/`+0x14817`, and drawn on
+`[main+0x38A51] & 1`. **The pause is single-player only** — a network game cannot be paused
+unilaterally — so the earlier statements need that qualifier.
+
+### The GAF banks a screen can reach [VERIFIED 2026-09-09]
+
+Three different name→bank paths, and only the first is the single common one:
+
+| site | builds | bank stored at |
+|---|---|---|
+| **`0x4AEEE0(gi, name)`** | `<prefix at gi+0xAB6><name>` + ext `"GAF"` (`0x502E38`), opened `0x4BBC40`, loaded `0x4B8C60` | **`gi+0x04`** — `mov [ebx+0x4],eax` at `0x4AEF66` |
+| `0x4A8444`, gated on `test [gadget+0xB4],0x1` | `<prefix><gadget name>` + `"_gadget"` (`0x509970`) + `.GAF` | the **gadget**, `mov [ebp+ebx+0x2b],eax` at `0x4A84C7` |
+| `0x4A8565`, inside the per-`id` dispatch (`jmp [eax*4+0x4A95F4]`, `0x4A84EB`) | `<prefix><name>.GAF` | per gadget |
+
+- **`gi+0x04` holds ONE bank and has exactly ONE call site**: `0x49154E` passes the hardcoded
+  `0x50925C = "commongui"`. This upgrades the [CORPUS] `commongui_GAF` field name to verified.
+  **`0x4AEEE0` leaves the old bank in place if the file is absent** (`je 0x4AEF69` skips the
+  store).
+- **But a screen's gadgets DO load their own GAFs by name**, which is the corollary
+  [renderers](renderers.html) §2.10 previously got wrong. 115 `anims/*_gadget.gaf` ship (all
+  unit build pages) and `armopt.gaf`, `prefs.gaf`, `mainmenu.gaf` exist plain. So **new art
+  reaches the engine as a file it loads itself**, not by surgery on the bank at `gi+0x04`.
+
+### Setting a gadget's state: the engine writes the field [VERIFIED 2026-09-09]
+
+**No instruction anywhere in `0x49F000..0x4AB000` writes a gadget's `status_curnt` (`+0x137`).**
+Every writer is app code (`0x47743B`, `0x47746A`, `0x47843D`, `0x478469`, `0x478497`,
+`0x47A4F3`, …), so **the engine never advances a stage button — the screen's own handler does.**
+
+TA's own idiom, at `0x477416`: push a gadget **name**, resolve the record through `0x49FF10`
+(a find-by-name taking `ControlsAry`, sibling of `GUI_FindGadgetByName 0x49FE60`), then
+`mov BYTE PTR [esi+0x137],0` — a **direct field write**.
+
+The setters exist and are thin:
+
+- **`0x4A1080(gi, name, value)`** — the [CORPUS] `GUIGADGET_SetStatus`, now read. Scans
+  `ControlsAry+0x15D` in `0x15B` strides comparing 16 bytes (`0x4E4B50`), then
+  `mov BYTE PTR [ebx+eax*2+0x137],cl` and returns 1. **No clamp, no callback, and no redraw** —
+  it is the direct write plus a name lookup, nothing more.
+- **`0x4A1110(gi, name, value)`** — same scan, but writes the **word** at `+0x138`
+  (`status_init`) and then `mov [gi+0xCCA],1`. **`gi+0xCCA` is a flag `0x4A1080` does not
+  touch** and is not yet identified [OPEN]; it is the reason a bare `SetStatus` may not be
+  enough to make a change appear.
+
+Redrawing is separate either way: `GUI_StageUpdateDraw 0x4A81E0(gi, flags)` with `0x40`.
+
+### Which screen is on top in game, and what owns the top bar [LIVE 2026-09-09]
+
+Measured with `tools/tacli ui` on a 1024×768 skirmish:
+
+```
+nothing selected    gui ARMMAIN2.GUI   under: -
+commander selected  gui ARMCOM1.GUI    under: ARMMAIN2.GUI
+```
+
+**A builder's page covers MAIN2**, which is most of a game. And every in-game screen's panel
+is the *side* panel — `armmain2`, `cormain2`, `armmain`, `armgen` are all `(0,128) 128×352`;
+`tabmenu` alone is `(130,−33) 510×33`. **No GUI screen owns the top bar** (`y 0..31`, full
+width): the engine draws the resource bar itself. Since a gadget's coordinates are
+panel-relative and it is drawn into the panel's own `w×h` surface (`panel+0xBC`), **a gadget
+on the top bar is impossible** — which is why the render-options trigger is drawn and
+hit-tested by the DLL and is not a gadget.
 
 ### The palette the screen is presented with, the way out of a game, and the loading screen [VERIFIED 2026-09-07, Phase E G15d]
 

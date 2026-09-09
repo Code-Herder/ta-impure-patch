@@ -440,24 +440,37 @@ w=144` **on the same line**:
 | 118 | **Shadows** | Off \| Hard \| Soft | `shadows=` — done, G18b |
 | 146 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=`, live only at Soft |
 | 174 | **Supersampling** | Off \| 2× | `tagpu_ss.off` |
-| 202 | **Mouse-wheel zoom** | Off \| On | `tagpu_zoom.on` |
+
+**Every row is live, and that is a rule the menu keeps** [DECIDED 2026-09-09]. Mouse-wheel zoom
+was the seventh row and was **cut**: `tagpu_zoom_init()` runs *once* from `dllmain.c:130` and
+installs byte patches, so flipping `tagpu_zoom.on` mid-game lights the plate green and changes
+no pixel until the next launch. It is also a play mode rather than a rendering option. The
+lever stays; the row goes. The other six were checked against the code and all take effect on
+the next frame — `assets`/`light` as per-frame uniforms, `shadows` as a per-frame branch,
+`shadowres` because `tagpu_shadow.c:223` reallocates the depth texture when the edge changes,
+`ss` because `tagpu_ss.off` is re-`stat`ed per unit render. So **no row ever needs an asterisk**,
+and any future row must clear the same bar or stay in the cfg.
 
 *This supersedes a 150×352 panel at `(128,128)` — the rect `VISUALRT.GUI` uses — with the
 label 16 px **above** its control on a 44 px pitch. The label moved beside the control, and
 that is the whole reason the frame has to be composed rather than reused: every stock panel
 puts the label above, which seven rows have no room for.*
 
-**It behaves like a real drop-down** [DECIDED 2026-09-09]. Closed at rest; the sprocket
-opens it; the sprocket **or a click anywhere outside the panel** closes it; a click on a row
-advances that row and leaves it open. All four verified in the lab.
+**It is NON-MODAL, and it does not pause** [DECIDED 2026-09-09, superseding the click-away
+behaviour prototyped the same day]. The panel opens on the sprocket and closes on the sprocket;
+clicks anywhere else go to the game untouched. Two things forced it, and both are measurements:
+**every row is live**, so a menu you must dismiss to see the effect of is the wrong shape —
+you would click, close, look, reopen; and the panel is 304×212 in a corner, covering ~8 % of a
+1024×768 frame and none of the side panel. It also removes the only place our input code would
+have had to arbitrate with the game's, and makes the earlier *"not measured: whether a `.GUI`
+dispatcher reports a click outside its `id=0` rect"* moot — nothing needs that answer now.
 
-**That is not free in the engine, and it is the same open question as the trigger.** A click
-outside the panel's rect has to reach *something* that can close the screen, and the
-top-GUI-only rule means the screen cannot simply listen to the whole frame — the same
-constraint that stops the trigger being a gadget of `RENDER.GUI`. Whatever answers *who
-hosts the trigger* (below) answers this too: a replaced host screen sees the click, and a
-DLL overlay forwarding the trigger click can forward this one. **Not yet measured:** whether
-a `.GUI` screen's dispatcher reports a click that lands outside its `id=0` panel rect at all.
+**It must not pause the sim, in either mode** [OWNER'S CONSTRAINT 2026-09-09]. That is free:
+pausing is a separate flagged action, not a property of the push (`ARMOPT.GUI` and a build page
+share a rect and a push path, and only the first pauses), and it is **single-player only**
+anyway. The exit criterion is ready-made — the `+clock` cheat draws game time from the sim tick
+at `main+0x38A47`, and the notes record the seconds *stopping* with TA's own menu open, so
+"the clock still ticks with our panel up" is a two-screenshot test.
 
 **No Apply button** [DECIDED 2026-09-09]. A stage button **is** the setting — there is no
 edit buffer for an Apply to commit — so `OnCommand` writes the row's key on the click and
@@ -480,7 +493,9 @@ by, so the icon's right edge and the drop-down's right edge land on one line and
 visibly drops from the icon. Both are anchored to the frame's **right edge**, never to a
 fixed coordinate: `trigger_at(w) = (w − 16 − 28, 2)` and `panel_at(w) = (w − 16 − 304, 32)`,
 which is 980 and 704 at 1024, 1876 and 1600 at 1920. `tools/guipanel.py --trigger` generates
-the icon; nothing of the game's art is in it.
+the icon; nothing of the game's art is in it. **The DLL draws it and hit-tests it** — see the
+resolved *who hosts the trigger* gate below — so it never enters the `.ufo` and stays generated
+geometry plus nine palette indices.
 
 *The inset was 36 for a day — the position picked by eye from the prototype, which was not
 derived from anything. `MARGIN` is the only non-arbitrary number available, and using it for
@@ -561,6 +576,47 @@ parameters. The shadow keys are §2.12's, and the depth map still runs only when
 `shadows=1` **and** the engine's own Shadow option bit is set (`main+0x37F06` bit 2;
 `tagpu_shadow.c:359` reads it) — the player's in-game Shadows toggle keeps its meaning.
 
+**How it is assembled** [DECIDED 2026-09-09, with the owner]. The governing rule the owner set
+is **use TA's gadget/UI mechanism as much as possible**, and every choice below was taken under it.
+
+1. **`impure-patch.ufo`, written by the DLL at `DLL_PROCESS_ATTACH` if absent.** New names go in
+   a `.ufo` and overrides go loose — measured, `file-formats.md` §5 — and `RENDER.GUI` plus our
+   GAF are new names, so a `.ufo` is the engine's own answer. The DLL writes it rather than CI
+   shipping it, so distribution stays **one `ddraw.dll`** and the archive can never drift out of
+   step with the DLL that expects it. The writer is cheap because a **literal-only SQSH method-1
+   stream is a valid uncompressed encoding** (`file-formats.md` §5), so there is no compressor.
+   ○ **If the asset set ever grows much beyond these two files, revisit and let CI build it
+   instead** — the single-file property stops being worth a hand-rolled archive writer at some
+   size, and that trade should be re-taken rather than inherited.
+2. **The frame in the `.ufo` is our *drawn* panel** (`guipanel.py`'s `draw_panel()`, nothing
+   sampled), because Cavedog's pixels can never ship. At screen-load time the DLL composes the
+   chosen `back*` ground from the **player's own install** — read through the engine's loader,
+   long after HAPI is up — and repaints the frame's pixel buffer in place (`+0x10
+   PtrFrameBits`). Ship the frame **uncompressed** and that is a flat `w*h` copy. If the
+   composition ever fails the drawn frame is still there, so the failure mode is a plainer
+   panel, not no panel.
+3. **The screen is pushed with `0x495207`'s idiom**, transcribed: save `main+0x37EA0`, write
+   `"RENDER.GUI"`, `GUI_Load(gi, main+0x37EA0, flags)`, set `+0x08` to our `OnCommand` and
+   `+0x0C` to `main`. Closing restores the saved name and lets `UpdateIngameGUI` pop us — **we
+   never call `GUI_Pop`**. Without this the engine pops the screen at the next of 21 call sites.
+4. **State is set through the engine and drawn by the engine.** `0x4A1080(gi, name, value)` is
+   read and thin — name scan, `mov [rec+0x137],cl`, return 1, **no clamp, no callback, no
+   redraw** — so it is the direct field write plus a lookup, which is also exactly what TA's own
+   code does at `0x477416`. Repaint is separate: `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)`.
+   **The engine never advances a stage button itself** — nothing in `0x49F000..0x4AB000` writes
+   `+0x137` — so `OnCommand` does the advance and writes the cfg. ○ **`gi+0xCCA`**, which
+   `0x4A1110` sets and `0x4A1080` does not, is unidentified and may be why a bare `SetStatus`
+   is not enough to make a change appear [OPEN].
+
+**What that buys, and when it would stop being worth it.** The engine keeps hit-testing,
+dispatch, the `stagebuttn` pressed/greyed art, `hattfont12` labels at any resolution, and the
+`panel+0xB8`/`+0xBC` save-under — and, decisively, `tagpu_gui_surf.c`'s *"every engine surface
+the publisher has seeded gets a twin"* means the panel is **undithered and sharp for free**
+through G15e's colour twin and G17a's device-res layer. What we do ourselves is all *values* and
+no mechanism: two bytes and a repaint request, one frame's pixels, one 28×28 trigger, one small
+archive. **If the menu ever needs a control TA has no gadget for** — a colour picker, a preview,
+a scrolling list — the gadget system stops paying and the superseded DLL-drawn panel wins.
+
 **What has to be built before the screen can exist** — the gates are in the roadmap:
 
 - **Split the switch** — ● **done 2026-09-09 (G18a)**. `assets=0|1` and `light=0|1` in
@@ -627,19 +683,31 @@ parameters. The shadow keys are §2.12's, and the depth map still runs only when
   on the top bar**. `tools/guipanel.py` builds both the way the DLL will — see
   [GUI gadgets](gui-gadgets.html) §10.3.
 
-  **Nothing of the game's art is carried either way.** The ground is the player's own
-  install, composed in memory and appended to the gadget GAF blob at `gi+0x04`; the trigger
-  is generated geometry and nine palette indices.
-- **Whether a new `.GUI` name can be pushed at all** [OPEN]. The screen inventory is a
-  string table in the binary (gui-gadgets §6); a new name needs a call site, so replacing a
-  screen we do not need may be cheaper than adding one.
-- **Who hosts the trigger** [OPEN, and the sharpest one left]. **The trigger cannot be a
-  gadget of the screen it opens** — only the top GUI is interactive, so a gadget on
-  `RENDER.GUI` cannot be what makes `RENDER.GUI` appear. Every placement therefore needs
-  either a **host screen we replace** (`ARMMAIN2`/`CORMAIN2` is where TA already keeps its
-  buttons, but MAIN2 is only on top when *nothing* is selected — a builder's page covers it)
-  or a **DLL overlay that forwards the click**. Choosing the frameless icon does not settle
-  this; it is orthogonal to how the click is received.
+  **Nothing of the game's art is carried either way**, but the mechanism changed on
+  2026-09-09 once the loader was read. *Superseded: "composed in memory and appended to the
+  gadget GAF blob at `gi+0x04`".* `gi+0x04` really does hold **one** bank from **one** call
+  site (`0x49154E` → `0x4AEEE0` with the hardcoded `"commongui"`) — but the corollary drawn
+  from that, *"so a second file the engine finds by itself is not an option"*, **is wrong**:
+  gadgets load their own GAFs by name (115 `*_gadget.gaf` ship; `armopt.gaf`, `prefs.gaf`,
+  `mainmenu.gaf` exist plain). See [engine map](exe-reverse-engineering.html) *The GAF banks a
+  screen can reach*. So the art arrives as **a file the engine loads itself**, and no
+  in-memory bank surgery is needed at all.
+- **Whether a new `.GUI` name can be pushed at all** — ● **ANSWERED 2026-09-09: yes.**
+  `GUI_Load 0x4AA8F0(gi, name, flags)` turns the name into a **file path** (`<prefix at
+  gi+0x9B6><name>` + the extension `"GUI"` at `0x502828`, opened by `0x4BBC40`), so the exe's
+  screen-name string table is never consulted; our DLL is the call site and no stock screen is
+  sacrificed. The push itself is `0x4AAC56` and `flags & 0x200` suppresses it. Full reading,
+  including the `0x495207` template to copy: [engine map](exe-reverse-engineering.html) *The
+  screen lifecycle*.
+- **Who hosts the trigger** — ● **ANSWERED 2026-09-09: nobody can; the DLL draws and
+  hit-tests it.** Not a preference — geometry. Every in-game screen's panel is the *side*
+  panel (`armmain2`/`cormain2`/`armmain`/`armgen` are all `(0,128) 128×352`; `tabmenu` alone
+  is `(130,−33) 510×33`), **no GUI screen owns the top bar**, and a gadget is drawn into its
+  panel's own `w×h` surface at panel-relative coordinates — so a gadget at `x=960` has nowhere
+  to be drawn. The `ARMMAIN2`/`CORMAIN2` idea is dead twice over: it is also covered by a
+  builder's page (LIVE: `ARMCOM1.GUI`, `under: ARMMAIN2.GUI`), which is most of a game.
+  The 28×28 trigger is therefore ours to draw and hit-test; the menu it opens stays entirely
+  the engine's.
 
 *Superseded in part, kept so it is not re-derived.* The original decision (2026-09-04) was a
 small "Options" button at the top right over the engine's top bar, opening a **DLL-drawn**
