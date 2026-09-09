@@ -325,7 +325,13 @@ The shade is the interesting one. Every face of a 3DO belongs to **one** piece, 
 transforms rigidly with that piece's matrix — bake the rest normal, transform it as
 `tagpu_hires_draw` already transforms `aNrm`, then do the flip toward `SH_V`, the normalise, the
 dot with `SH_L` and the quantise `clamp(shNeutral + shDir·floor(I·12 + 0.5), 0, 31)` in the
-shader. The Classic++ outward normal comes off the same vector. **[mine]** — the alternative is a
+shader. **One thing that is NOT exact, found by the step-4 review:** `emit_node` takes its
+degeneracy test `nl > 1e-6` on the **engine's** posed vertices, which the compose has rounded into
+16.16 at every axis and every level of the tree, while the bake takes it on the rest vertices. A
+face of any real area gives the same answer; a near-degenerate one can land on the other side and
+take the neutral row where the CPU path takes a shaded one, or the reverse. That is a whole face
+one SHD row off — which §5 already names as Gate B's tell for decision 8, so Gate B should now be
+read as testing this specifically rather than only the quantisation. The Classic++ outward normal comes off the same vector. **[mine]** — the alternative is a
 per-face CPU shade uploaded per unit per frame, which keeps a streaming buffer the design is
 trying to lose.
 
@@ -376,8 +382,10 @@ emitter that just ran on the same unit in the same frame, on two independent qua
   which `pose_accum_body` rebuilds per unit per frame — equality to within 1/65536.
 
 Over the whole pose inventory, four camera stops: **0 mismatches on either**, `anom=0`,
-`refused=0`, 67 of 67 types baked. The largest bake is **6090 vertices** (`CORGANT`: 1218 body +
-1212 slant + 1616 wire … per range as the walk lays them down).
+`refused=0`, 67 of 67 types baked. The largest bake is **6090 vertices** — `33 piece(s) -> 6090
+vert (body 1830, slant 1824, wire 2436)`. *[CORRECTED by the landing review: this first quoted the
+6090 total against a different model's breakdown (1218/1212/1616, which sums to 4046) and named it
+`CORGANT`, which the log does not say — the bake lines carry a root pointer, not a type name.]*
 
 **What it deviates from §3–§4, and why.**
 

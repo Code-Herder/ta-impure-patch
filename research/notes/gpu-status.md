@@ -1013,7 +1013,9 @@ count `emit_geom` produced against the bake's own prediction, and the accumulate
 against `pose_accum_body`'s per-unit walk — with `anom=0` and `refused=0`. The two ordinary
 findings (`odd=` faces outside `3 ≤ fvc ≤ 32`, `nomat=` faces with neither texture nor colour) are
 content, not faults; [GPU posing §3](gpu-posing.html) carries the correction that says so. The GL
-invalidation was watched on an exit to the shell: `posebake: dropped 27 geometry … GL 2`.
+invalidation was watched on an exit to the shell: `posebake: dropped 53 geometry (taking 53
+material with them) … GL 2`. *[The 27 this first quoted was an earlier run of the same test, before
+the drop line reported the cascade separately; both are real, but only one is the shipped build.]*
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

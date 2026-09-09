@@ -1753,16 +1753,13 @@ static void cache_gen_check(void)
 
 /* Everything one unit's pose needs, accumulated down the piece tree. Shared
    with pose_dump, which checks it against the engine's own posed vertices. */
-/* THE PIECE COUNT IS NOT CAPPED AT 64 ANY MORE (gpu-posing.md decision 7).
-   Nothing in the engine bounds a model's piece count; 64 was this file's array
-   size and 48 was the replacement-mesh program's uniform array. Measured over
-   all 608 stock `objects3d/*.3do`, the largest model has 36 pieces, so
-   TAGPU_PBMAXPIECE (256) puts the bound an order of magnitude above anything
-   stock content asks for and above any plausible mod — which is the point of
-   the decision: it stops being a number the design has to reason about.
-   These are held STATIC rather than on the stack: at 256 pieces one HPOSE is
-   ~17 kB, and pose_dump and hires_pose both used to take one as a local. Both
-   are render-thread only, as s_recon already was. */
+/* THE PIECE COUNT IS NOT CAPPED AT 64 ANY MORE (gpu-posing.md decision 7):
+   64 was this array's size and nothing in the engine bounds a model's pieces.
+   TAGPU_PBMAXPIECE and why it is 256 are in tagpu_model3do.h.
+   The consequence HERE is that one HPOSE is ~17 kB, so the three of them are
+   held STATIC rather than on the stack — pose_dump and hires_pose both used to
+   take one as a local. All three are render-thread only, as s_recon already
+   was: pose_dump and hires_pose are reached only from tagpu_native_frame. */
 typedef struct {
     const char* nd[TAGPU_PBMAXPIECE];
     const char* pr[TAGPU_PBMAXPIECE];

@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "opengl_utils.h"   /* the fork's extern GL function pointers   */
+#include "tagpu_model3do.h"   /* TAGPU_PBMAXPIECE: the piece-count bound */
 #include "tagpu_overlay.h"
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
@@ -247,7 +248,7 @@ static void probe_unit_model(void)
         if (*(char**)(o3 + O3_THISUNIT) != u) { olog("probe: ThisUnit mismatch!"); return; }
 
         int nparts = *(unsigned short*)(o3 + O3_NUMPARTS);
-        if (nparts <= 0 || nparts > 64) { olog("probe: bad NumParts"); return; }
+        if (nparts <= 0 || nparts > TAGPU_PBMAXPIECE) { olog("probe: bad NumParts"); return; }
 
         {
         char b[256]; int i;

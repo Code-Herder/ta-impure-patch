@@ -33,13 +33,7 @@
    delivers is the bake, the caches, their four invalidation triggers and a
    lever that checks the bake against the emitters it is going to replace. */
 
-/* The piece bound the bake and the pose share. `TAGPU_HMAXPIECE` (48) is the
-   replacement-mesh program's UNIFORM ARRAY size and stays where it is; this one
-   is a plain array bound with no GL cost, so it is set an order of magnitude
-   above the largest stock model (36 pieces, `armscorp`, measured over all 608
-   models of the stock objects3d tree) rather than at a number the design has to
-   reason about. */
-#define TAGPU_PBMAXPIECE 256
+#include "tagpu_model3do.h"      /* TAGPU_PBMAXPIECE, and the field offsets */
 
 #define TAGPU_PB_GEOMST  8      /* floats per geometry vertex */
 #define TAGPU_PB_MATST   5      /* floats per material vertex */
@@ -72,6 +66,7 @@ typedef struct TAGPU_PBGEOM {
        count, while nothing in stock content produced an unreadable node or an
        orphan piece. So the ordinary two are statistics and only the last two
        are anomalies; reporting them as one number cried wolf 1486 times. */
+    int          refused;      /* over the vertex bound: remembered, not re-walked */
     int          badNode;      /* a piece whose node or vertex array does not read */
     int          orphan;       /* a piece whose parent link never resolved        */
     int          oddFace;      /* a face the emitters skip: fvc outside [3,32],

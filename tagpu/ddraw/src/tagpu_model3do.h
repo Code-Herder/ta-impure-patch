@@ -18,6 +18,18 @@
    them. Derivation and call sites: research/notes/exe-reverse-engineering.md,
    "The repose" and "The 3DO model tree". */
 
+/* The piece-count bound every reader of an Object3do uses. Nothing in the
+   engine bounds a model's piece count; 64 was an array size in tagpu_native.c
+   and 48 is the replacement-mesh program's GLSL uniform array (TAGPU_HMAXPIECE,
+   a different constraint, deliberately left alone). Measured over all 608 models
+   of the stock objects3d tree the largest has 36 pieces, so this sits an order
+   of magnitude above anything stock content asks for and above any plausible
+   mod — which is the point: it stops being a number the design has to reason
+   about (gpu-posing.md decision 7). The `PB` is historical: it arrived with the
+   pose bake, and it lives here because the bound is a fact about a model, not
+   about that module. */
+#define TAGPU_PBMAXPIECE 256
+
 #define O3_NUMPARTS  0x00
 #define O3_POSEDIRTY 0x08      /* i32: the posed vertex buffers are stale or */
                                /* being rewritten. Set before the rewrite    */

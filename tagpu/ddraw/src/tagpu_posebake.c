@@ -92,6 +92,15 @@ static unsigned char* s_matSkip[PB_MAXMAT];   /* per vertex, for the predictor *
 static int          s_nmat;
 static unsigned     s_glGen;                  /* bumped by tagpu_posebake_glreset */
 static unsigned     s_frame;
+/* THE FRAME'S generations, latched by tagpu_posebake_frame and used by every
+   lookup in it. Re-reading them per unit was a real hazard: the teardown pre
+   hook gives up after a timeout and lets the cascade free the templates while a
+   render pass is still running, so the generation can move MID-FRAME — and a
+   lookup that saw the new one would re-bake from templates 0x42DB90 has just
+   freed and stamp the new generation on the result, which is the stale-template
+   bug the generation exists to prevent. cache_gen_check latches once per frame
+   for exactly this reason; this now matches it. */
+static unsigned     s_lvlGen, s_atlasGen;
 static int          s_anomTotal, s_oddTotal, s_collapsed, s_refused, s_baked, s_matBaked;
 
 /* the bake's scratch: one model at a time, render thread only */
@@ -193,6 +202,13 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
        gives the same answer here, and the shader has only to transform, flip
        toward SH_V and normalise. The flip is NOT baked: it depends on the posed
        direction, which is what the piece matrix decides. */
+    /* THE ONE PLACE THIS IS NOT EXACT. `emit_node` computes its `nl` from the
+       ENGINE's posed vertices, which the compose has rounded into 16.16 at every
+       axis and every level of the tree (`fistp`, 0x4B7173); the bake computes it
+       from the rest vertices. For a face of any real area the two agree, but a
+       NEAR-DEGENERATE one can land on the other side of `nl > 1e-6` there and
+       take the neutral row where we take a shaded one, or the reverse. That is a
+       whole face one SHD row off, which is what Gate B is told to look for. */
     if (range == TAGPU_PB_BODY) {
         float e1x = V[1][0]-V[0][0], e1y = V[1][1]-V[0][1], e1z = V[1][2]-V[0][2];
         float e2x = V[2][0]-V[0][0], e2y = V[2][1]-V[0][1], e2z = V[2][2]-V[0][2];
@@ -316,8 +332,16 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl)
                   "posebake: REFUSED root=%p — %d pieces bake past the %d-vertex bound",
                   (const void*)nd[0], nparts, PB_MAXVERT);
         blog(b);
+        /* KEEP THE ENTRY, marked. Dropping it left `root == NULL`, which the
+           lookup never matches — so the next frame missed, took a fresh slot
+           and walked the whole model again, once per frame for the life of the
+           level, inflating `refused=` with it. Remembering the refusal costs
+           one flag and makes the count mean "models refused", not "frames".
+           The entry is dropped by the ordinary generation checks like any
+           other, so a level or context change re-tries. */
+        g->refused = 1;
+        g->nvert = 0;
         s_refused++;
-        geom_drop(g);          /* leaves the slot zeroed; root == NULL never matches */
         return NULL;
     }
     g->nvert = c.nv;
@@ -476,6 +500,7 @@ void tagpu_posebake_frame(unsigned frame_counter)
     int i, dg = 0, dm = 0;
     s_dropCascade = 0;
     s_frame = frame_counter;
+    s_lvlGen = lvl; s_atlasGen = agen;
     /* the same 30-frame cadence tagpu_native.on is read on: this is a file
        probe, and one per frame is a syscall nobody asked for */
     if ((frame_counter % 30) == 0 || !s_polled) { lever_read(); s_polled = 1; }
@@ -518,7 +543,7 @@ int tagpu_posebake_unit(const char* o3, int owner,
 {
     const char* nd[TAGPU_PBMAXPIECE];
     int nparts, i;
-    unsigned lvl = tagpu_reclaim_level_gen(), agen = tagpu_r3d_atlas_gen();
+    unsigned lvl = s_lvlGen, agen = s_atlasGen;   /* the frame's, not a fresh read */
     TAGPU_PBGEOM* g = NULL;
     TAGPU_PBMAT* m = NULL;
 
@@ -541,6 +566,7 @@ int tagpu_posebake_unit(const char* o3, int owner,
     for (i = 0; i < s_ngeom; i++)
         if (s_geom[i].root == nd[0] && s_geom[i].levelGen == lvl &&
             s_geom[i].glGen == s_glGen && s_geom[i].nparts == nparts) { g = &s_geom[i]; break; }
+    if (g && g->refused) { g->lastFrame = s_frame; return 0; }
     if (!g) {
         if (!tagpu_r3d_ready()) return 0;
         g = geom_bake(nd, nparts, lvl);
@@ -572,12 +598,24 @@ static void pred_emit(void* vctx, int range, int p, const char* nd,
                       const unsigned short* vi, const int* slot, int n)
 {
     PBPREDCTX* c = (PBPREDCTX*)vctx;
-    (void)nd; (void)rv; (void)nvert; (void)fa; (void)fvc; (void)vi; (void)slot;
+    (void)rv; (void)fa; (void)fvc; (void)vi; (void)slot;
     if (range == TAGPU_PB_BODY) {
         const char* pr = c->o3 + O3_PRIM0 + p * PRIM_STRIDE;
         unsigned char fl = *(const unsigned char*)(pr + P_FLAGS);
-        if ((fl & 1) && (!c->skip || !c->skip[c->nv])) c->count += n;
+        /* `emit_geom_at` skips a piece whose POSED buffer does not read, and
+           the bake only ever validates the REST array — so a piece with a good
+           template and a bad `prim+0x22` is baked but not emitted, and without
+           this the check would report the emitter's skip as a bake mismatch.
+           Per triangle rather than per piece because the walk is shaped that
+           way; this whole path only runs under the `check` token. */
+        int live = (fl & 1) != 0;
+        if (live) {
+            const int* vb = *(const int* const*)(pr + P_VBUF);
+            if (!ptr_ok(vb) || IsBadReadPtr(vb, (SIZE_T)nvert * 12)) live = 0;
+        }
+        if (live && (!c->skip || !c->skip[c->nv])) c->count += n;
     }
+    (void)nd;
     c->nv += n;
 }
 

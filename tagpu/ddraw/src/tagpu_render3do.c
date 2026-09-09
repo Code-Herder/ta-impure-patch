@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "opengl_utils.h"
+#include "tagpu_model3do.h"   /* TAGPU_PBMAXPIECE: the piece-count bound */
 #include "tagpu_render3do.h"
 #include "tagpu_gaf.h"
 #include "tagpu_r3dcache.h"
@@ -669,7 +670,7 @@ int tagpu_render3do(const TAGPU_FRAME* f, const char* unit, const char* obj3do,
     if (!ptr_ok(col)) return 0;
 
     int nparts = *(unsigned short*)(obj3do + O3_NUMPARTS);
-    if (nparts <= 0 || nparts > 64) return 0;
+    if (nparts <= 0 || nparts > TAGPU_PBMAXPIECE) return 0;
     int owner = ptr_ok(unit) ? *(const unsigned char*)(unit + 0xFF) : 0;
     /* 2x supersampled edges: render at 2x, majority-downsample (palette-safe).
        Falls back to 1x when the doubled sprite would not fit the FBO. */
