@@ -29,10 +29,17 @@
      SCREEN'S flags rather than a bare 0x40. We set it and let the pump draw.
    - `GUIGADGET_SetStatus 0x4A1080(gi, name, value)` -- __stdcall, ret 0xC --
      is a name scan plus `mov [rec+0x137],cl`, no clamp, no callback, no
-     redraw. The engine NEVER advances a stage button itself (nothing in
-     0x49F000..0x4AB000 writes +0x137), so OnCommand does the advance.
+     redraw.
+     THE ENGINE DOES ADVANCE THE CLICKED ROW ITSELF -- 0x4A6EC8, 0x4A9DB6 and
+     0x4AA377 all `inc` +0x137, the last wrapping against the count at +0x136
+     and skipped when `grayedout` bit 0 is set (0x4AA36A). So OnCommand
+     advances OUR MODEL and push_stages re-writes EVERY row, which overwrites
+     what the engine did. Do not also advance the gadget field, and do not drop
+     the re-push: either way every click would move two stages.
 
-   WHERE THE WORK RUNS. `before_update()` is an observer on UpdateIngameGUI, so
+   WHERE THE WORK RUNS. `before_update()` is an observer on DrawGameScreen
+   0x468CF0 -- UpdateIngameGUI 0x491D70 was tried first and starved, because all
+   21 of its call sites are transition handlers rather than the frame loop. So
    it is on the game thread and runs immediately before the engine reconsiders
    the GUI stack -- the one moment at which pushing a screen cannot race the
    pop loop. `OnCommand` is the engine calling us, also on the game thread, and
@@ -59,6 +66,7 @@
 #define OFF_EXPECT        0x37EA0u      /* the screen the engine keeps on top  */
 #define VA_GUI_LOAD     0x004AA8F0u
 #define VA_SETSTATUS    0x004A1080u
+#define VA_SETGRAYED    0x004A1250u     /* (gi, name, grayed): see push_stages */
 #define VA_STAGEDRAW    0x004A81E0u
 #define VA_SETDIRTY     0x0049FA90u     /* gi+0xCCA = 1: repaint at the pump   */
 #define VA_DRAWLOCK     0x004C2470u     /* the counted pair GUI_Load draws under */
@@ -85,6 +93,7 @@
 
 typedef void* (__stdcall *gui_load_fn)(void* gi, const char* name, int flags);
 typedef int   (__stdcall *set_status_fn)(void* gi, const char* name, int value);
+typedef int   (__stdcall *set_grayed_fn)(void* gi, const char* name, int grayed);
 typedef int   (__stdcall *stage_draw_fn)(void* gi, int flags);
 typedef void  (__stdcall *set_dirty_fn)(void* gi);
 typedef int   (__stdcall *upd_gui_fn)(int);
@@ -199,6 +208,7 @@ static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
 #define OFF_FILE   "tagpu_menu.off"
 #define OPEN_FILE  "tagpu_menu.open"    /* the spike's stand-in for the trigger */
 #define CFG_FILE   "tagpu_classicpp.cfg"
+#define CFG_TMP    "tagpu_classicpp.cfg.tmp"
 #define SS_OFF     "tagpu_ss.off"
 #define CPP_ON     "tagpu_classicpp.on"
 #define CPP_OFF    "tagpu_classicpp.off"
@@ -438,7 +448,7 @@ static void blit_tile(unsigned char* dst, const Kit* k, int x0, int y0, int x1, 
 static unsigned char s_ground[PANEL_W * PANEL_H];
 static int s_groundOk;
 
-static int compose_ground(int rows)
+static int compose_ground_once(int rows)
 {
     char path[128];
     Kit kit[9];
@@ -494,6 +504,28 @@ static int compose_ground(int rows)
 /* Repaint the loaded frame's plane IN PLACE. The archive ships the frame
    uncompressed for exactly this: +0x10 PtrFrameBits is a flat w*h plane, so
    this is one copy and not a re-encode. */
+/* A failure LATCHES. The bank 0x4B8C60 hands back is a FRESH buffer every call
+   -- it is 0x4BBE50's read, pointer-fixed in place, with no cache -- and none
+   of the failure paths above can give it back. The engine rebuilds the in-game
+   GUI stack on every world click, which re-pushes this screen, so without the
+   latch a persistent failure would leak one frontend.gaf per click. The
+   documented failure mode is a plainer panel, not no panel, so latching costs
+   the composed ground and nothing else. */
+static int s_groundFailed;
+
+static int compose_ground(int rows)
+{
+    int ok;
+    if (s_groundOk) return 1;
+    if (s_groundFailed) return 0;
+    ok = compose_ground_once(rows);
+    if (!ok) {
+        s_groundFailed = 1;
+        mlog("menu: the frontend.gaf ground did not compose - the drawn panel stands");
+    }
+    return ok;
+}
+
 static void repaint_ground(char* ctrls)
 {
     void* bank;
@@ -734,23 +766,19 @@ static void push_stages(void* gi)
         ((set_status_fn)VA_SETSTATUS)(gi, s_row[i].name, s_stage[i]);
     /* `grayedout` is the engine's own way of saying "this does not apply now"
        (gui-gadgets.md 7.1), and it refuses the click as well as dimming the
-       plate. There is no setter for it, so it is the direct field write TA's
-       own code does at 0x477416, on the record SetStatus just found by name. */
-    {
-        char* main_p = *(char**)TA_MAIN;
-        char* top = main_p ? *(char**)(main_p + OFF_TOPGUI) : 0;
-        char* ctrls = top ? *(char**)(top + GM_CTRLS) : 0;
-        int n = ctrls ? *(short*)(ctrls + 0xB6) : 0;
-        for (i = 1; i <= n; i++) {
-            char* g = ctrls + (size_t)i * STRIDE;
-            int r;
-            for (r = 0; r < s_nrows; r++)
-                if (!memcmp(g + G_NAME, s_row[r].name, strlen(s_row[r].name) + 1)) {
-                    *(int*)(g + G_GRAYED) = row_greyed(r);
-                    break;
-                }
-        }
-    }
+       plate: 0x4AA36A tests bit 0 and skips the stage advance outright.
+
+       THROUGH THE ENGINE'S SETTER, and it has to be. `+0x13C` is a **u16 whose
+       bit 0 is the flag**, and both of the engine's own writers -- the .GUI
+       parser (0x4ADD3E) and this setter (0x4A12D0) -- read the word, replace
+       bit 0 and store a WORD, deliberately preserving bits 1..15. An earlier
+       revision here stored a 32-bit 0/1 into the field directly, which cleared
+       those bits and the two bytes at +0x13E/+0x13F as well.
+       GUIGADGET_SetGrayed 0x4A1250 is the exact parallel of SetStatus above:
+       the same by-name scan of ControlsAry (stride 0x15B, name at +0x15D),
+       stdcall, ret 0xC. */
+    for (i = 0; i < s_nrows; i++)
+        ((set_grayed_fn)VA_SETGRAYED)(gi, s_row[i].name, row_greyed(i));
     ((set_dirty_fn)VA_SETDIRTY)(gi);       /* the pump repaints with 0x40 */
 }
 
@@ -876,8 +904,11 @@ void __stdcall tagpu_menu_oncommand(void* gi)
            a destination -- from Custom the click goes to Classic++ */
         s_stage[R_STYLE] = (s_stage[R_STYLE] == STYLE_PP) ? STYLE_CLASSIC : STYLE_PP;
         if (s_stage[R_STYLE] == STYLE_PP) {
+            /* NOT R_SS: supersampling is orthogonal to the lane -- row_greyed
+               deliberately exempts it from the switch's dependants -- so the
+               preset must not silently undo a player who turned it off. */
             s_stage[R_ASSETS] = 1; s_stage[R_LIGHT] = 1;
-            s_stage[R_SHADOWS] = 2; s_stage[R_SHADOWQ] = 2; s_stage[R_SS] = 1;
+            s_stage[R_SHADOWS] = 2; s_stage[R_SHADOWQ] = 2;
         }
     } else {
         s_stage[row] = (s_stage[row] + 1) % s_row[row].stages;
@@ -896,10 +927,17 @@ void __stdcall tagpu_menu_oncommand(void* gi)
    every token that is not one of ours is copied through in the order it was
    read, and ours are appended. The reader's grammar is whitespace-separated
    `key=value`, so newline-separated output reads back identically. */
+/* `sun=off` is the LEGACY spelling of `light=0`, and it BEATS us: tagpu_classicpp.c
+   sets its `off` flag at :159 and then forces `s_lit = 0` at :100 AFTER the token
+   loop, so a preserved `sun=off` makes the Dynamic lighting row read "On" and
+   change nothing -- the same silent no-op this landing fixed for the lever files.
+   So the menu owns that one token and drops it, expressing it through `light=`.
+   `sun=<az>,<el>` is the sun DIRECTION, is the player's, and must survive. */
 static int ours(const char* tok)
 {
     return !_strnicmp(tok, "assets=", 7) || !_strnicmp(tok, "light=", 6) ||
-           !_strnicmp(tok, "shadows=", 8) || !_strnicmp(tok, "shadowres=", 10);
+           !_strnicmp(tok, "shadows=", 8) || !_strnicmp(tok, "shadowres=", 10) ||
+           !lstrcmpiA(tok, "sun=off");
 }
 
 static void write_cfg(void)
@@ -916,6 +954,16 @@ static void write_cfg(void)
         if (!ReadFile(h, in, sizeof in - 1, &n, 0)) n = 0;
         CloseHandle(h);
         in[n] = 0;
+        /* A cfg that FILLED the buffer may have had more after it, and this
+           function exists to preserve what it does not own. Rewriting from a
+           truncated read would silently drop the tail -- the exact opposite --
+           so refuse instead. The rows still apply; only persistence is lost,
+           and the log says so. */
+        if (n >= sizeof in - 1) {
+            mlog("menu: " CFG_FILE " is larger than the rewrite buffer - NOT rewritten "
+                 "(the rows still apply this session)");
+            return;
+        }
     }
 
     {
@@ -938,11 +986,28 @@ static void write_cfg(void)
               SHADOW_VAL[s_stage[R_SHADOWS]], SHADOWQ_VAL[s_stage[R_SHADOWQ]]);
     if (at < 0) { mlog("menu: cfg too large to rewrite - not written"); return; }
 
-    h = CreateFileA(CFG_FILE, GENERIC_WRITE, FILE_SHARE_READ, 0,
+    /* Write a temporary and RENAME it over the target. CREATE_ALWAYS truncates
+       first, so writing in place means that between the truncate and the write
+       the player's file is empty -- and everything this function copies through
+       (sun, amb, penumbra, shadowlen) is gone if we are killed there, or if the
+       write is short. MoveFileEx with MOVEFILE_REPLACE_EXISTING is atomic, so
+       a reader sees either the old file or the new one and never a stub. The
+       write is checked, and a failed one takes the temporary with it rather
+       than leaving litter beside the cfg. */
+    h = CreateFileA(CFG_TMP, GENERIC_WRITE, FILE_SHARE_READ, 0,
                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) { mlog("menu: cannot write " CFG_FILE); return; }
-    WriteFile(h, out, (DWORD)at, &wrote, 0);
+    if (h == INVALID_HANDLE_VALUE) { mlog("menu: cannot write " CFG_TMP); return; }
+    if (!WriteFile(h, out, (DWORD)at, &wrote, 0) || wrote != (DWORD)at) {
+        CloseHandle(h);
+        DeleteFileA(CFG_TMP);
+        mlog("menu: short write to " CFG_TMP " - " CFG_FILE " left as it was");
+        return;
+    }
     CloseHandle(h);
+    if (!MoveFileExA(CFG_TMP, CFG_FILE, MOVEFILE_REPLACE_EXISTING)) {
+        DeleteFileA(CFG_TMP);
+        mlog("menu: cannot replace " CFG_FILE " - left as it was");
+    }
 }
 
 static void touch(const char* path)
@@ -1017,8 +1082,14 @@ int tagpu_menu_owns_point(int gx, int gy)
 
     if (!s_installed) return 0;
 
-    trigger_rect(&x, &y);
-    if (gx >= x && gx < x + TRIG && gy >= y && gy < y + TRIG) return 1;
+    /* s_drawTrigger, to match tagpu_menu_click's own guard: if the post-GUI
+       observer did not install there is no sprocket, and claiming its rect
+       would leave a 28x28 patch that the zoom transform skips and the click
+       path refuses -- an invisible dead zone. */
+    if (s_drawTrigger) {
+        trigger_rect(&x, &y);
+        if (gx >= x && gx < x + TRIG && gy >= y && gy < y + TRIG) return 1;
+    }
 
     if (!s_gm) return 0;
     w = (int)g_ddraw.width;
@@ -1041,7 +1112,18 @@ int tagpu_menu_click(int gx, int gy, int down)
     }
 
     trigger_rect(&x, &y);
-    if (gx < x || gx >= x + TRIG || gy < y || gy >= y + TRIG) return 0;
+    if (gx < x || gx >= x + TRIG || gy < y || gy >= y + TRIG) {
+        /* A press we do NOT own ends any press we do. Without this, a press on
+           the sprocket whose release never arrives -- dragged off the window
+           (the trigger sits 16 px from the right edge), or alt-tabbed away --
+           leaves s_pressed set, and then the next unrelated button-UP is
+           swallowed by the branch above and never reaches the engine, which
+           goes on holding the button for the rest of the session. That is the
+           G13e failure this guard exists to prevent, and the release path
+           alone did not prevent it. */
+        s_pressed = 0;
+        return 0;
+    }
 
     s_pressed = 1;
     s_want = !s_want;

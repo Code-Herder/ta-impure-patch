@@ -617,8 +617,12 @@ is **use TA's gadget/UI mechanism as much as possible**, and every choice below 
    read and thin — name scan, `mov [rec+0x137],cl`, return 1, **no clamp, no callback, no
    redraw** — so it is the direct field write plus a lookup, which is also exactly what TA's own
    code does at `0x477416`. Repaint is separate: `GUI_StageUpdateDraw 0x4A81E0(gi, 0x40)`.
-   **The engine never advances a stage button itself** — nothing in `0x49F000..0x4AB000` writes
-   `+0x137` — so `OnCommand` does the advance and writes the cfg. ● **`gi+0xCCA` is identified**
+   **[CORRECTED 2026-09-09 by the landing review: the engine DOES advance it.]** Three sites
+   `inc` `+0x137` — `0x4A6EC8`, `0x4A9DB6`, and `0x4AA377`, the last wrapping against the stage
+   count at `+0x136` and skipped entirely when `grayedout` bit 0 is set (`0x4AA36A`). So
+   `OnCommand` advances **its own model** and re-pushes every row, which overwrites the
+   engine's advance; it must not advance the gadget field itself, or every click would move two
+   stages. ● **`gi+0xCCA` is identified**
    (2026-09-09): the screen's **deferred-repaint flag**. About twenty state-changing calls set
    it, there are bare accessors at `0x49FA90`/`0x49FAB0`, and its one reader in the GUI pump
    (`0x4AA0AF`) clears it and calls `GUI_StageUpdateDraw(gi, top->flags | 0x40)`. So it is not

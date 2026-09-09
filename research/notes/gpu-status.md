@@ -1337,7 +1337,12 @@ one small archive.
 **Fields we write.** `main+0x37EA0`, the expected-screen name buffer — 16 bytes, saved and
 restored, and re-asserted every frame while the menu is open. Gadget `status_curnt` (`+0x137`)
 through the engine's own setter, and `grayedout` (`+0x13C`) by direct field write, which is
-what TA's own code does at `0x477416`. The panel record's `xpos`/`ypos` (`+0x13`/`+0x15`),
+the engine's own setter `GUIGADGET_SetGrayed 0x4A1250(gi, name, grayed)` — **not** a direct
+field write. (An earlier revision stored a 32-bit 0/1 into `+0x13C` and cited `0x477416` as the
+precedent. Both were wrong: `0x477416`'s writes are `mov BYTE [esi+0x137],0/1` at `0x47743B`
+and `0x47746A` — `status_curnt`, a different field — and `+0x13C` is a **u16 whose bit 0 is the
+flag**, which the engine read-modify-writes so bits 1..15 survive.) The panel record's
+`xpos`/`ypos` (`+0x13`/`+0x15`),
 because the panel is right-aligned and a `.GUI` written at attach cannot know the resolution.
 `gi+0xCCA`, the repaint flag. And the loaded GAF frame's colour plane (`+0x10 PtrFrameBits`),
 repainted in place with the composed ground. **Nothing sim-side, and nothing that replicates.**

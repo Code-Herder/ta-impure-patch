@@ -1849,6 +1849,44 @@ own oracle rather than one ~600-line drop.
 | **② it responds** | `OnCommand` fires with the index in `UIChange_f`; `0x4A1080` + a repaint visibly advance a stage; **`gi+0xCCA` identified** | a plate moves on click, and the cfg on disk changes | ● **done 2026-09-09** — every click reports the engine's own `stage N → M`; the cfg gains `assets=/light=/shadows=/shadowres=` and the renderer and supersampling rows create and delete their lever files; Custom is derived; `Shadow quality` greys at `Shadows ≠ Soft` and the engine then **refuses the click**. `gi+0xCCA` is the **deferred-repaint flag** — twenty-odd setters, accessors at `0x49FA90`/`0x49FAB0`, one reader at `0x4AA0AF` that clears it and calls `GUI_StageUpdateDraw` with the screen's own flags plus `0x40` |
 | **③ it looks right** | six rows, the composed `back*` ground repainted over our drawn frame, the trigger drawn and hit-tested | the panel matches the lab | ● **done 2026-09-09** — six rows on the shell's `back*` nine-slice composed at runtime from the player's install and repainted into `+0x10 PtrFrameBits`; the 28×28 sprocket at `(w−16−28, 2)` opens and closes the menu while a click at (500,400) does neither. **The G15 `strict` walk has not been run against it** — the walk's screen inventory does not know this screen |
 
+**What the landing review changed, and what it left open** (2026-09-09, two Opus reviewers at
+`high`, on the post-merge diff). Acted on: `grayedout` now goes through the engine's own
+`GUIGADGET_SetGrayed 0x4A1250` instead of a 32-bit field write that cleared bits 1..15 of a u16
+and the two bytes after it; the legacy `sun=off` is dropped from the cfg the menu rewrites,
+because it forced `light=0` *after* the token loop and made the Dynamic lighting row a silent
+no-op; the cfg is written to a temporary and `MoveFileEx`'d over the target, with the write
+checked, so a kill or a short write can no longer leave the player's `sun`/`amb`/`penumbra`
+gone; a cfg too large for the rewrite buffer is now refused rather than silently truncated; a
+press we do not own clears `s_pressed`, so a sprocket press whose release goes elsewhere can no
+longer make the *next* unrelated release get swallowed (the G13e failure); the Classic++ preset
+no longer forces Supersampling on; `tagpu_menu_owns_point` honours `s_drawTrigger`; and a
+failed ground composition latches instead of leaking one `frontend.gaf` per world click.
+
+**Still open, and deliberately not closed here:**
+
+- **The expect-buffer clash.** While the menu is open the tick stamps `RENDER.GUI` into
+  `main+0x37EA0` every frame, and `s_saved` is captured once at open. If the engine pushes a
+  screen of its own through the same slot (the `0x495207` idiom) it would be popped at the next
+  of `UpdateIngameGUI`'s 21 sites, and close would restore a stale name. **This was NOT
+  reproduced**: no engine screen turned out to be reachable in-game on the test instance —
+  `ESC` opens nothing and `ARMMAIN2.GUI` carries only labels — and the control confirmed that,
+  so the probe never tested the path rather than clearing it. A guard was written and then
+  *not* landed, because it could not be run. Reproducing it needs a scenario or build in which
+  an in-game engine screen can actually be opened.
+- **`s_gm` is a raw pointer compared across level teardowns.** A level change with the menu open
+  leaves it dangling; if the new level's allocator returns the same address, `on_stack()` would
+  agree forever. Same class as the above and untested for the same reason.
+- **The `.on`/`.off` pair has an unavoidable window.** Turning Classic++ *off* means deleting
+  one file and creating another; with neither present the shipped DLL's default table reports
+  the pass **on**, and with both present the `.on` wins — so both orderings have a transient
+  wrong read. It is sub-frame and the next 250 ms poll corrects it; closing it properly needs a
+  single atomic indicator rather than a pair.
+- **`shadowres` outside the four table values** (256, say) is snapped to the nearest row on the
+  first click of any row rather than being preserved.
+- **The G15 `strict` walk still has not been run against this screen**, and **GUI scale `k ≠ 1`
+  is still unexercised** — tacli runs the window 1:1 with the engine surface, and
+  `tagpu_devres.on` stayed `devres=0` with supersampling off.
+
 **Gate ① is the one that can invalidate everything downstream** — if a `.ufo` written during
 `DLL_PROCESS_ATTACH` is not globbed in the same launch, the install story changes — which is
 why it is first and why it is a one-button screen rather than the real one.

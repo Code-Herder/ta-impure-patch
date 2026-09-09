@@ -153,7 +153,7 @@ exactly this against a 16-byte string. [BINARY-VERIFIED]
 | `+0x137` | `status_curnt` — current stage | [LIVE] |
 | `+0x138` | `status_init` (`i16`) | [BINARY-VERIFIED] `0x4A6A95` |
 | `+0x13A` | `quickkey` — **`u8`**, the ASCII accelerator (`'S'` for SINGLE, `'E'` for EXIT, matching the underlined letter on screen). The corpus calls it an `i16`; the high byte is a separate field. | [LIVE] |
-| `+0x13C` | `grayedout` (`i32`) | [CORPUS] |
+| `+0x13C` | `grayedout` — **`u16`, and only bit 0 is the flag**. The corpus calls it an `i32`; it is not. Both engine writers do a read-modify-write that preserves bits 1..15 — the `.GUI` parser at `0x4ADD3E` and `GUIGADGET_SetGrayed 0x4A1250` at `0x4A12D0`, each `xor/and 1/xor` then **`mov WORD`**. A 32-bit store clears those bits and `+0x13E`/`+0x13F` with them. | [BINARY-VERIFIED] `0x4ADD3E`, `0x4A12D0` |
 
 ### 2.4 Listbox — `id 2`
 
@@ -550,7 +550,7 @@ tooltip to show. Whether TA's tooltip renderer is the consumer of `+0x33` is [IN
 
 ## 7.1 `grayedout` is used, and is not the same as `active`
 
-`grayedout (i32 @ +0x13C)` on a button is set by 58 gadgets across 24 stock `.GUI` files
+`grayedout (u16 @ +0x13C, bit 0 — see §2.3)` on a button is set by 58 gadgets across 24 stock `.GUI` files
 — every one of them a **builder's** build page (`ARMLAB1`, `ARMVP1`, `ARMSY1`,
 `ARMSILO1`, `ARMAMD1`, their CORE twins…), plus `LOUNGE2`. [CORPUS] The commander's own
 pages (`ARMCOM1/2`) declare none, which is why the first live pass — which only ever

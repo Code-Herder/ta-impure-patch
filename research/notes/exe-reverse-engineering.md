@@ -2150,8 +2150,11 @@ labels (`text 1572` ops on `PREFS.GUI`).
 [VERIFIED 2026-09-09]. An `E8` scan of `.text` finds exactly **two** call sites, both in the
 in-game GUI init and both passing `main+0x519`: `0x491564` with `"hattfont12"` (`0x509250`)
 and slot 0, `0x49157D` with `"hattfont11"` (`0x509244`) and slot 1. It copies the name into a
-256-byte field at `gi+0xAB6` through `0x4E4760`. Those two GAFs are the faces every gadget
-label and caption is drawn with — one entry, 256 frames, one per character code, the per-frame
+256-byte **prefix** it READS from `gi+0xAB6` through `0x4E4760` (the name is composed, not
+stored there), loads the result with the GAF loader `0x4B8C60` after `0x4BBC40` opens it, and
+stores the resulting bank at **`gi + 0x08 + slot*4`** (`0x4AEE5F`: `mov [ebp+ecx*4+0x8],eax`) —
+which is why `slot` is the third argument. Glyphs then come out of it through `GetGlyph
+0x4B7F30`. Those two GAFs are the faces every gadget label and caption is drawn with — one entry, 256 frames, one per character code, the per-frame
 `ypos` hotspot being the baseline (`tools/guifont.py`).
 
 **How a screen reaches the frame: `0x4AB0B0(GUIMEMSTRUCT*, OFFSCREEN* dst, RECT* dirty)`** —
@@ -2415,7 +2418,7 @@ game it reads `ARMMAIN2.GUI` or `CORMAIN2.GUI`.
 `gi->TheActive_GUIMEM` (`+0x18`), then `->ControlsAry` (`+0x04`), adds 2 for the panel's
 `name`, and `strncmp`s 16 bytes through `0x4FAB50`. Only the **topmost** screen can match.
 
-**`UpdateIngameGUI 0x491D70` pops until that is true** — `0x491DCA` tests, `0x491DD3` calls
+**`UpdateIngameGUI 0x491D70` pops until that is true** — `0x491DCA` tests, `0x491DE0` calls
 `GUI_Pop 0x4A9660`, `0x491DF2` loops. **21 call sites.** So anything pushed over the world is
 popped again unless `main+0x37EA0` names it.
 
@@ -2506,9 +2509,27 @@ Three different name→bank paths, and only the first is the single common one:
 
 ### Setting a gadget's state: the engine writes the field [VERIFIED 2026-09-09]
 
-**No instruction anywhere in `0x49F000..0x4AB000` writes a gadget's `status_curnt` (`+0x137`).**
-Every writer is app code (`0x47743B`, `0x47746A`, `0x47843D`, `0x478469`, `0x478497`,
-`0x47A4F3`, …), so **the engine never advances a stage button — the screen's own handler does.**
+**[CORRECTED 2026-09-09, by the G18 landing review — the earlier claim here was wrong.]** This
+section used to say "no instruction anywhere in `0x49F000..0x4AB000` writes a gadget's
+`status_curnt` (`+0x137`), so the engine never advances a stage button". **It does.** Three
+sites in the GUI code advance it, each an `inc` of `+0x137`:
+
+| at | shape |
+|---|---|
+| `0x4A6EC8` | `mov dl,[ebp+0x137]; inc dl; mov [ebp+0x137],dl`, guarded by `[ebp+0x136] != 0` (the stage count) |
+| `0x4A9DB6` | the same on `ebx` |
+| `0x4AA377` | `dl = [ecx+0x137]; bl = [ecx+0x136]; inc dl; cmp dl,bl; mov [ecx+0x137],dl; jb keep; else store 0` — **inc AND WRAP** against the stage count, then `call 0x4A5F40` to redraw |
+
+The third is the dispatcher's own path and carries the guard that matters:
+**`0x4AA36A` — `test BYTE PTR [ecx+0x13c],0x1`, `jne` past the whole block.** That is why a
+greyed row refuses the click: the engine skips its own advance.
+
+App code writes the field too (`0x47743B`, `0x47746A`, `0x47843D`, `0x478469`, `0x478497`,
+`0x47A4F3`, …), so both do. **What this means for a screen of our own:** the engine advances
+the clicked row *before* `OnCommand` sees it, so a handler that also advances would
+double-advance. `tagpu_menu.c` is correct only because it keeps its own model and re-pushes
+**every** row through `SetStatus` afterwards, which overwrites whatever the engine did — a
+property worth knowing before anyone removes that re-push.
 
 TA's own idiom, at `0x477416`: push a gadget **name**, resolve the record through `0x49FF10`
 (a find-by-name taking `ControlsAry`, sibling of `GUI_FindGadgetByName 0x49FE60`), then
@@ -2666,8 +2687,10 @@ and read in the same launch.
 **What actually opens one is `OpenHAPIFile 0x4BDD70`** — and the name is the engine's own, not
 ours: the allocation tag it passes is the string `"OPENHAPIFILE structure"` at `0x50A5A8`.
 `stdcall`, `ret 8`. It calls `0x4E4990(name, "rb")` (`0x505F10`) and returns 0 outright if that
-fails; otherwise it allocates a `0x118`-byte handle with `0x4D83B0(0x118, tag)`, stores the
-`FILE*` at `+0x00`, `-1` at `+0x04`, and copies the name (`0x104` bytes) into `+0x14`. The
+fails; otherwise it allocates a `0x118`-byte handle with `0x4D83B0(tag, 0x118)` — the tag is the
+FIRST argument — stores the `FILE*` at `+0x00` and `-1` at `+0x04`, and fills `+0x14` with
+`GetFullPathNameA(name, 0x104, handle+0x14, …)`, i.e. the **resolved absolute path**, not a
+copy of the name it was given. The
 36-byte trailer test that decides whether the file counts as an archive at all — the last 36
 bytes must be `Copyright 1997 Cavedog Entertainment`, and anything else is skipped silently —
 is documented with the rest of the container in [file formats](file-formats.html) §5
