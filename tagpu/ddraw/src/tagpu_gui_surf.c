@@ -893,6 +893,10 @@ static void sharp_begin(const TAGPU_FRAME* f)
         x_glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
         x_glClear(GL_COLOR_BUFFER_BIT);
         x_glDisable(GL_SCISSOR_TEST);
+        /* the clear colour is global state and tagpu_overlay_capture_begin
+           clears the frame's target without setting one of its own — leaving
+           white here would tint every letterbox bar under the lever */
+        x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     s_sharpOn = 1;
