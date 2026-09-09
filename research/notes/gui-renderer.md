@@ -1387,7 +1387,7 @@ is itself a guess that wants a look on three monitors.
 | **G17a** the seam — **done 2026-09-09, §15** | the sharp-bilinear filter, the sharp layer's texture and the composite order; `k` plumbed everywhere but forced to 1 | the parity md5 equals main's and the 120-stop `strict` walk is unchanged, with the filter in the path | the filter is not bit-identical at `k = 1` → stop; nothing downstream is safe until it is |
 | **G17b** `k ≠ 1` live | automatic `k`, the logical mode, the world pass at device resolution, the window policy | a walk at `k = 1.5` and `k = 2`: every stop renders; **clicks land on the right gadget at every stop** (a click test, not a pixel test); no resize across three entry/exit cycles; the 1× mirror still diffs exact at `k = 1` in the same run | hit-testing drifts → M1 is wrong and the phase stops, since 13.1 is what makes the rest free |
 | **G17c** the cursor — **done 2026-09-09, §17** | ours in the sharp layer from live state, the fallback masked in its rect **and the rect counted as key in the world composite**, `cursorscale=` | crisp at `k = 1.5` and 3, under the true pointer; G13m's motion-frame measure re-run | — |
-| **G17d** the string op | `PK_STRING`, the observer's string/font/colour capture, the atlas draw | text clean at `k ≠ 1` **and bit-identical to the engine's glyphs at `k = 1`**; arena bytes per batch down | our stamp and the engine's blit disagree → the measure loop is wrong; fix it rather than accept a near miss |
+| **G17d** the string op — **done 2026-09-09, §18** | `PK_STRING`, the observer's string/font/colour capture, **a per-font glyph cache** and the stamp into the twin | text clean at `k ≠ 1` **and bit-identical to the engine's glyphs at `k = 1`**; arena bytes per batch down | our stamp and the engine's blit disagree → the measure loop is wrong; fix it rather than accept a near miss |
 | **G17e** the minimap | the 252-px base snapshotted at load, our fog from the corner-mask grid, the engine's dots replayed ×2, our view box | sharp at `k`; dot positions within a pixel of the engine's; **no unit visible that the engine does not show** | the fog rules disagree (13.10) → keep the engine's fog as a pixel op and ship the base alone |
 
 Reviews per the house rule: G17a and G17b at `high` (a new byte patch at `0x491AFB`, and the
@@ -2180,3 +2180,120 @@ phenomenon and it is quoted as measured rather than rounded into the earlier ban
 - §16 said the desired mode has **six** game-entry read sites; [resolution](resolution.html) §3.1b
   established there are **eight** (`0x4983BF/B9` feed `SetWindowPos` only, `0x4983E2/DC` feed
   `NewTAScreen`). Corrected here rather than left standing.
+
+---
+
+## 18. G17d — the string op  [MEASURED 2026-09-09]
+
+§3.6's sixth op kind, finally built. `PK_STRING` carries the string, the font object and
+`0x4CCF60`'s three colour bytes; the render thread stamps TA's own glyphs into the twin instead of
+publishing the box's captured pixels.
+
+### What the gate needed that §13.4 does not say
+
+**The UI's text is not the marker path's text, and that decides the whole shape.**
+`tagpu_text.c`'s atlas is keyed on the whole **string**, which is exactly right for the world's
+markers — a dozen range labels and a group digit, a fixed set that never changes. The engine's UI
+is the opposite: the metal and energy readouts, the clock, unit counts and build percentages are a
+new string every tick, against `MAXSTR 64`. That cache would evict itself several times a second
+and rasterise for ever, and it repacks on any font change while the UI switches font many times a
+frame.
+
+So G17d adds a **per-font glyph cache** beside it, and that is exact rather than approximate:
+`0x4CCF60` advances x by the glyph's own width byte and nothing else — `0x4CCFF7`..`0x4CCFFD` adds
+`cl`, the width, to the row-start pointer — so there is no kerning and no pair table, and a run of
+per-glyph quads at those offsets **is the arithmetic the blitter does**. Its atlas is separate from
+the string one (different lifetimes, different key space, and the marker path is a landed gate that
+should not move to make room), and it runs to **0xFF, not 0x7E**: the blitter bounds a character
+below (`sub ebx,first; jb` at `0x4CCFAA`) and not above, so a UI string must be reproduced over the
+engine's whole range. Each table entry is probed at the index the engine would use rather than the
+font's table length being demanded up front, since that length is stated nowhere in the object.
+
+**The three colour arguments are BYTES** [BINARY-VERIFIED 2026-09-09]: `0x4CCFD5`/`0x4CCFD8` take
+fg and transparent with `mov al/ah, BYTE PTR`, `0x4CCFDF` takes bg the same way, and `0x4CCFE2` is
+`cmp al,ah` — an 8-bit compare. So the op carries them as bytes, and a wider compare than the
+engine's is not available to get wrong.
+
+### Into the twin, not the sharp layer
+
+§13.2 leaves this open — "string ops **if** they are rendered late rather than into their surface's
+colour twin" — and §13.4 closes it: *a 1× glyph carries 1× information however it is drawn.* A
+device-resolution layer buys nothing in sharpness and costs the one thing that matters, because
+text drawn at 1× device size beside a 3× panel is unreadable. The gains §13.4 claims are all
+properties of stamping into the twin, and all three are real:
+
+- a glyph's edge no longer drags in the art it was blitted onto;
+- **restored Classic++ colour survives between the letters** — the stamp writes `oCol = 0` only
+  where it writes ink, where publishing the box's bytes invalidated the colour of the whole
+  rectangle;
+- the arena carries the string.
+
+### Measured
+
+**The 120-stop `strict` walk is the exit**, because it diffs our frame against the engine's own
+surface pixel by pixel: a glyph off by one shows. `uiwalk.py --layer --cycles 3`, 1024x768,
+`classicpp` off, twice.
+
+| | run 1 | run 2 |
+|---|---|---|
+| stops | 117 + 3 loading | 117 + 3 loading |
+| `strict` holes | 0 on 119, **7 079 on `game-back#3`** | **0 on all 120** |
+| hit misses | 0 on all 117 | 0 on all 117 |
+| `vpdiff` in game | 0 on 57, **35 on `space-popup`** | **0 on all 59** |
+| differing outside the viewport | 0 but the 14 `MAINMENU` stops, 177-192 | 0 but the 16, 178-193 |
+| string ops / glyph quads | 20 279 / 146 778 | 20 194 / 148 109 |
+| `miss` / `reseed` / atlas resets | **0 / 0 / 0** | **0 / 0 / 0** |
+
+Across both runs the stamp never refused a glyph and never failed to draw a string.
+
+**The two anomalies of run 1, and why neither is the string op.**
+
+- **`space-popup`, `vpdiff=35`.** Reproduced and looked at: the box holds a two-digit counter
+  reading **"41", then "40"** — both clean, well-formed glyphs. Our own consecutive GL frames
+  differ by 35-42 px in that box, so the residual is exactly one tick of the counter, and
+  `vpdiff=35 ≤ self=38`. It also disposes of the one hypothesis worth having: if a
+  transparent-background stamp failed to erase the previous digit, the "0" would carry the "1"'s
+  stem inside it. It does not. Run 2 reads 0 at the same stop.
+- **`game-back#3`, `holes=7079`, `self=0`.** The stall-recovery window after a cycle's context
+  switch — the same class §16 recorded once at `ARMOPT#2` and the same resolution: the clean run
+  reached that stop having completed one **more** reset (9 against 8). Run 2 reads
+  `vpdiff=0 holes=0` at all three `game-back` stops.
+
+**The arena, A/B'd on a fixture where text is actually redrawn** (`+clock` on, so the clock line
+re-publishes every tick), 300-frame windows, median of 7:
+
+| | arena bytes per 300 frames | string ops per window |
+|---|---|---|
+| the string op | **2 035 029** | 999 |
+| `nostring` | **3 606 998** | 0 |
+
+**44 % less traffic, ~1 573 bytes saved per text op.** §13.4 estimated ~40 bytes against ~968; the
+direction is right and the magnitude larger, because the clock line's box is bigger than the
+estimate assumed.
+
+> **A trap this measurement cost one round to find, now written into the code.** `read_tokens()`
+> runs **once, from `tagpu_gui_init` at DllMain**, so every token the *hook* owns — `census`,
+> `log`, `pgm`, `trace` and `nostring` — must be armed BEFORE the launch. Only the surf module's
+> tokens (`strict`, `norestore`, `sharptest`, `nocursor`, `cursorscale=`) follow the file live,
+> because only the DRAW can change mid-session: the publisher's shape cannot, or the twins would
+> be left holding ops of the other kind. The first A/B armed `nostring` on a running instance,
+> which silently did nothing, and duly reported the same run twice.
+
+**At `k = 1.5`** the stamp is unchanged and unaffected — it is twin-side, so `k` is not in its
+path at all: `str=16/44, miss=0, reseed=0` at 1024x768 in a 1536x1152 client.
+
+### Not closed here
+
+- **A static in-game frame publishes its text once.** `str=` froze at 22 ops on the parity fixture
+  until the clock was turned on, because the panel's labels are drawn once and then deduped. The
+  arena saving above is per redraw and is therefore a shell and HUD figure, not a steady-state
+  in-game one.
+- **`0x4CCF60` does no clipping and our stamp does.** A string running off the surface writes into
+  the next row in the engine and is clipped by the FBO for us. Phase 1's captured box already
+  differed there, so this is not new, and no walk has produced one.
+- **A zero-width glyph is refused rather than reproduced.** The engine's per-row counter is a
+  do-while, so `cl == 0` wraps to 255 and smears 256 columns; the cache declines instead. That is
+  a deliberate divergence on a corrupt font, and no stock font has one.
+- The glyph atlas holds 8 fonts and resets wholesale when a ninth appears. Two fonts were seen
+  across a whole 120-stop walk, so the cap is not close, and the reset costs a re-rasterise rather
+  than a wrong glyph.

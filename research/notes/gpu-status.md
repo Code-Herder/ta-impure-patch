@@ -487,9 +487,13 @@ answer `ui-markers.md` §6.1 gives for everything else outside the 1× viewport.
 over the viewport** (`ARMOPT`, `EXITMENU`) are unchanged and still take the transform as though
 they were world, which was already true before this and is not verified either way here.
 
-### 2.3e The GL UI layer — observers, publisher, twins (`tagpu_gui_hook.c`, `tagpu_gui_surf.c`, `gui.on`, Phase E G15a + G15b + G15d + G15e + G17a–c)
+### 2.3e The GL UI layer — observers, publisher, twins (`tagpu_gui_hook.c`, `tagpu_gui_surf.c`, `gui.on`, Phase E G15a + G15b + G15d + G15e + G17a–d)
 
-**Phase 2 so far.** G17a (2026-09-09) added the seam: a 4-tap sharp-bilinear ramp on the 1x mirror
+**Phase 2 so far.** G17d (2026-09-09) made text a **string op**: `PK_STRING` carries the string,
+the font and `0x4CCF60`'s three colour bytes, and the render thread stamps TA's own glyphs into the
+twin from a **per-font glyph cache** — the string-keyed atlas the marker path uses is wrong for a
+UI whose text is a clock and a metal readout. 44 % less arena traffic where text is redrawn, and
+two 120-stop walks with `miss=0`. G17a (2026-09-09) added the seam: a 4-tap sharp-bilinear ramp on the 1x mirror
 run after the palette lookup, a device-resolution RGBA8 **sharp layer** above it, and `k` read off
 the frame. G17b (2026-09-09) made `k != 1` live and added device-space click injection. **G17c
 (2026-09-09) put the cursor in the sharp layer** — ours at 1x device pixels at every `k`, from the
@@ -538,6 +542,9 @@ published or drawn — the live A/B lever), `norestore` (G15e: the layer without
 `sharptest` (G17a: the sharp layer filled with a known pattern — the harness's mode too),
 `nocursor` (G17c: phase 1's cursor, the engine's own — the A/B against ours), `cursorscale=N`
 (G17c: our cursor's size in device pixels per art pixel, default 1, clamped 0.25–8),
+`nostring` (G17d: text stays a box of captured pixels — the A/B, and **read at ATTACH like
+`census`/`log`/`pgm`/`trace`, so it must be armed before the launch**; only the tokens the *surf*
+module owns follow the file live),
 `census` (the G15a diff), `log` (a census line per 50
 censuses and on any residual), `pgm` (`tagpu_gui_census.trigger` → `tagpu_gui_census.pgm`, the
 accumulated unexplained mask), `trace` (the ops intersecting a residual, the first blits after a

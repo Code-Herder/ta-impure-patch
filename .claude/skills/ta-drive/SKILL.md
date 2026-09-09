@@ -1365,6 +1365,30 @@ tools/tacli log <i> -g 'curs='               # curs=<own>,<w>x<h>,dev=<1 if the 
 - **The cursor rect is excluded from `uiwalk`'s diff** (padded 8 px) and exempt from `strict`
   either way, so neither is a test of the cursor. The footprint above is.
 
+### Text is a string op (phase 2, G17d)
+
+```bash
+tools/tacli arm <i> gui.on=nostring     # BEFORE the launch: text stays a box of captured pixels
+tools/tacli log <i> -g 'str='           # str=<ops>/<glyph quads>,miss=,reseed=,glyphs=<cached>/<drops>,fonts=
+tools/tacli log <i> -g 'arena='         # the queue's MONOTONIC arena head: the delta over 300 frames
+```
+
+- **`nostring`, and every other token the HOOK owns (`census`, `log`, `pgm`, `trace`), is read at
+  ATTACH.** `read_tokens()` runs once, from `tagpu_gui_init`. Arming any of them on a running
+  instance silently does nothing — only the surf module's tokens (`strict`, `norestore`,
+  `sharptest`, `nocursor`, `cursorscale=`) follow the file live. One A/B was lost to this.
+- **`miss=` and `reseed=` must stay 0.** `miss` counts glyphs the cache refused that the engine
+  would have drawn; `reseed` counts strings that stamped nothing and asked for a fresh seed. Two
+  full 120-stop walks produced 0 of each over ~20 000 string ops.
+- **A static in-game frame publishes its text ONCE** — `str=` freezes at ~22 ops on the parity
+  fixture, because the panel's labels are drawn once and then deduped. To measure anything about
+  text, turn the clock on (`+clock` in chat) or open a screen: then it is ~1 000 ops per 300
+  frames.
+- **The arena A/B needs a redrawing fixture and two launches**: 3 606 998 bytes per 300 frames
+  with text as pixel ops against 2 035 029 with the string op.
+- The 120-stop `strict` walk is the real oracle here — it diffs our frame against the engine's own
+  surface, so a glyph off by one shows as `differing`/`vpdiff`.
+
 ### Driving and measuring at k != 1 (phase 2, G17b)
 
 ```bash

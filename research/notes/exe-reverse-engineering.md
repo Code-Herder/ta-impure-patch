@@ -937,6 +937,22 @@ transparent equal to `bg` makes the background bits no-ops, so `(255, 0, 0)` tur
 into a **1-bit coverage mask** rather than a coloured sprite. The bit counter (`dl`) is reset
 per GLYPH at `0x4CCFC8` and not per row, so only each glyph starts on a byte boundary.
 
+**All three colours are used as BYTES, and the test is an 8-bit compare** [VERIFIED 2026-09-09,
+G17d]: `0x4CCFD5` `mov al,BYTE PTR [ebp+0x20]` (fg), `0x4CCFD8` `mov ah,BYTE PTR [ebp+0x28]`
+(transparent), `0x4CCFDF` `mov al,BYTE PTR [ebp+0x24]` (bg, on the clear bit), then `0x4CCFE2`
+`cmp al,ah`. The arguments are `int`s and their high three bytes are never read, so anything
+mirroring this call stores and compares the low byte and nothing wider.
+
+**The cursor advances by the glyph's own width byte and NOTHING ELSE** [VERIFIED 2026-09-09,
+G17d]: at the end of a glyph `0x4CCFF7` reloads the row start from `[ebp-0xc]` and `0x4CCFFA`/
+`0x4CCFFD` add `cl` — the width read at `0x4CCFBF` — to it. There is no kerning and no pair
+table, which is what makes a **per-glyph** replay of a string exact rather than approximate: the
+GL UI renderer's string op stamps one quad per glyph at exactly these offsets ([GUI
+renderer](gui-renderer.html) §18). The character filter is `sub ebx,first; jb` at `0x4CCFAA`
+(below `first` is skipped **and does not advance**) and `or ebx,ebx; je` at `0x4CCFB9` (a zero
+table entry, likewise) — bounded below and **not above**, so the table is indexed with whatever
+byte the string carries.
+
 #### The text globals, and who sets them
 
 | VA | What |
