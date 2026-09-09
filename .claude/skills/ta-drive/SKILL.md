@@ -1341,6 +1341,40 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
     client uses `QVS`, the twins' own vertex mapping, and one that adds a flip draws upside down.
     Harness only, like `strict` — never hand a player an instance with it armed.
 
+### Driving and measuring at k != 1 (phase 2, G17b)
+
+```bash
+tools/tacli launch <i> --res 1280x720 --window 1920x1080   # engine 1280x720 in a 1920x1080 client => k = 1.5
+tools/tacli click <i> 1056 764 --device                    # CLIENT-AREA pixels, converted by the engine's own path
+tools/tacli ui <i> click SINGLE --device                   # aim where the gadget is DRAWN
+../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --window 1536x1152 --layer --device --cycles 3
+```
+
+- **`--window WxH` is the whole trick, and it needs no engine patch.** cnc-ddraw takes
+  `ddraw.ini`'s `width`/`height` as the client and maxes them against the game mode
+  (`dd.c`), so the engine keeps its own screen and the fork letterboxes it: `k = window / res`.
+  It is sticky in the instance's meta, like `--res`. The **shell is atom-locked at 640x480**, so a
+  1536x1152 window puts the shell at k = 2.4 and the game at k = 1.5 in the same run.
+- **`--device` is the only click that tests the pointer path.** Every other injected event is
+  delivered in the engine's own coordinates (`tagpu_shield.c` `deliver_mouse`), so it never
+  touches `mouse.unscale_*` and would pass at any k, right or wrong. `--device` posts
+  client-area pixels and lets `mouse_client_to_game` — the same function a hardware click takes
+  — work back to a logical pixel.
+- **`uiwalk` runs a hit check at every stop whether or not you pass `--device`** (it costs a
+  snapshot, no clicking): every gadget aimed where the renderer draws it, put through the fork's
+  own inverse, checked back inside its own rect. Read `MISS=` and `drift=` on the per-stop line
+  and the four new `report.md` columns. **Worst drift is 1 logical pixel** — the renderer scales
+  by `vp/surface` and the input unscales by `(surface-1)/(vp-1)` — so it is a hit test, not a
+  pixel test. Zero-area rects are counted as `degenerate`, not misses.
+- **Pixel parity reads `-1` at k != 1 and that is correct**: `frame_parity` refuses a stop whose
+  GL frame and surface are not 1:1. The hit columns are the measurement there.
+- **Do not walk cycles at 1280x720.** Leaving a game at that mode crashes in the level teardown —
+  at k = 1 too, so it is the mode and not the scaling ([resolution](resolution.html) §3.1d).
+  `--res 1024x768 --window 1536x1152` is k = 1.5 on a mode with clean teardowns on record.
+- **The world is drawn at the device's resolution since G17b**: `ss` follows `ceil(k)` and the
+  box-resolve to game resolution is skipped, so the composite downsamples rather than stretching.
+  `tagpu_devres.off` is the A/B; the native log line carries `devres=` beside `ss=`.
+
 ### The Q2 diff — is the restored UI right? (G15e)
 
 ```bash
