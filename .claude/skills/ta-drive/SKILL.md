@@ -821,10 +821,20 @@ WINEPREFIX=<inst>/prefix wine reg add \
   Arming everything means leaving all of them absent.
 - **`reclaim.off` disables a crash fix, not a feature** (G14h): `tagpu_reclaim` defers the
   engine's model-object frees so the render thread cannot read a freed unit or wreck — the
-  `200v200` fault at ~95 s. It is on by default with no arm file; `tacli arm <i> reclaim.off`
-  is the A/B lever back to the racing build. Read `reclaim: ARMED …` at launch and the
-  `reclaim: def=… drn=… ovf=0 …` line every 300 frames (`ovf` must stay 0); a level change logs
-  `reclaim: level teardown: flushed N …`.
+  `200v200` fault at ~95 s — and since 2026-09-09 the per-LEVEL model templates too, so a
+  level teardown cannot pull a model tree out from under a render pass. It is on by default with
+  no arm file; `tacli arm <i> reclaim.off` is the A/B lever back to the racing build. Read
+  `reclaim: ARMED …` at launch — it names `model templates@0x42DC01/0x42DCB6 -> deferred` when
+  that half armed — and the `reclaim: def=… drn=… ovf=0 … tmpl=<queued>/<freed by the
+  epoch>/<leaked> …` line every 300 frames. **`ovf` and the third `tmpl` field must stay 0**; the
+  second is normally 0 too, because the usual path releases templates at the teardown rather than
+  through the epoch. A level change logs `reclaim: level teardown: flushed N …` and then
+  `reclaim: teardown post: freed N block(s) …` (~279 on stock content, one per unit type plus the
+  table), and `native: level N -> N+1, dropping the template caches: aabb= selbox= pmap=`.
+  **Quitting a level to the shell and starting another one in the same process works** — measured
+  2026-09-09 over two cycles under the play defaults; the `tab` → `ui click EXIT` →
+  `ui click MAINMENU` → `ui click CHOICE1` route is how you do it, and it is the only way to
+  exercise the level generation at all.
 - The instrumentation triggers (`suppress.on`, `tracer.on`, `gldbg.on`, `posedump.on`,
   `cobtrace.on`, `spxlog.on`, `fpsosd.on`) — debugging, not features.
 - `hires.on` only carries the hires renderer's *tweaks* (`anchor=`, sun, ambient,

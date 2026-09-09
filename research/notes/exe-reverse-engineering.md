@@ -2611,6 +2611,12 @@ after `0x485980`'s unit walk. It is what makes a `Model3DONode` tree's lifetime 
   (`0x42DC23`, `0x42DC52`);
 - then the table itself is freed (`0x42DCB6`) and `main+0x14377` nulled (`0x42DCD8`).
 
+**Both frees are ours since 2026-09-09.** `0x42DC01` and `0x42DCB6` are redirected to
+`tagpu_reclaim`'s ring (the byte check is `E8` with a rel32 that resolves to `0x4D85A0`), so a
+template outlives any render pass still walking it; the body itself is untouched and still nulls
+every slot and the table pointer. `0x42DC23` and `0x42DC52` are left alone — unit-def fields no
+pass of ours reads. [Thread-safe destruction](thread-safe-destruction.html) §6c.
+
 **Why it matters to us.** `FreeObjectState 0x45AAA0` — the funnel `tagpu_reclaim` defers — never
 reaches these blocks: a template is not owned by any unit, it is shared by every unit of a type.
 So the deferral makes a dying unit's `Object3do` safe and does nothing for the tree, and anything

@@ -1,13 +1,15 @@
-/* tagpu_reclaim.c — deferred reclamation of the engine's Object3do.
+/* tagpu_reclaim.c — deferred reclamation of the engine memory the render
+   thread reads: the per-unit Object3do, and the per-LEVEL model templates.
    Design and proof: research/notes/thread-safe-destruction.md. See the header
    for the one-paragraph version.
 
    THREADS. Two, and only these two touch the shared state:
      producer/owner = the engine's game thread: every FreeObjectState call
                       (unit death 0x486D9E, wreck destroy 0x42474F, the bulk
-                      loop 0x4221C4) and the level teardown 0x491B60. It owns
-                      the ring outright — enqueue AND drain run here, so the
-                      ring itself is single-threaded.
+                      loop 0x4221C4), the model-template frees inside 0x42DB90
+                      (0x42DC01, 0x42DCB6) and the level teardown 0x491B60. It
+                      owns the ring outright — enqueue AND drain run here, so
+                      the ring itself is single-threaded.
      reader         = the fork's GL render thread: publishes s_started before
                       the overlay driver and s_completed after it returns
                       (render_ogl.c brackets tagpu_overlay_draw), and skips the
@@ -36,6 +38,17 @@
    to leave) — the Dekker pair that makes "the reader is not inside a pass"
    a fact and not a hope.
 
+   TWO CLASSES, ONE RING. RC_OBJ3DO entries go back through the real
+   FreeObjectState; RC_BLOCK entries — a model template's single block, and the
+   pointer table itself — through the engine's raw MEM_Free. They share the
+   ring, the epoch and the overflow policy because they share the hazard: the
+   render thread walks both, and 0x42DB90 returns the templates to the same
+   small-block heap. What differs is when they are normally released. An
+   Object3do waits for the epoch, because units die while the reader runs. A
+   template does not need to: the teardown wrap has already made the reader
+   quiescent before the cascade, so the post hook frees the whole queue on that
+   guarantee, and the epoch is only the fallback for the timed-out path.
+
    LIVENESS. The drain runs only from FreeObjectState itself (the engine's
    tick detour at 0x4969D2 exists only while a scenario is being applied, so it
    cannot host one), so the most recent death's object is held until the next
@@ -54,6 +67,15 @@
 #define FREEOBJ_RESUME (FREEOBJ_VA + 5u)
 #define TEARDOWN_VA   0x00491B60u          /* level teardown: no stack args               */
 #define TEARDOWN_RESUME (TEARDOWN_VA + 5u)
+/* The model templates' two frees, both inside 0x42DB90 (one caller, 0x491C21).
+   0x42DC01 frees one model's block -- the whole tree, its rest vertices and its
+   faces are one allocation -- and 0x42DCB6 frees the pointer table itself.
+   Both are `push eax; call MEM_Free; add esp,4`, so the 5-byte call is a clean
+   redirect to a cdecl function of ours. The two OTHER MEM_Frees in that body
+   (0x42DC23, 0x42DC52) are unit-def fields no pass of ours reads: left alone. */
+#define TMPLFREE_VA   0x0042DC01u          /* MEM_Free(one Model3DONode block)            */
+#define TMPLTAB_VA    0x0042DCB6u          /* MEM_Free(the model-pointer table)           */
+#define MEMFREE_VA    0x004D85A0u          /* MEM_Free: cdecl, 1 arg, caller cleans       */
 static const unsigned char FREEOBJ_STOLEN[5]  = { 0x53, 0x8B, 0x5C, 0x24, 0x08 }; /* push ebx; mov ebx,[esp+8] */
 static const unsigned char TEARDOWN_STOLEN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }; /* mov eax,[0x511DE8]        */
 
@@ -62,7 +84,9 @@ static const unsigned char TEARDOWN_STOLEN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }
 #define RC_RING_MASK (RC_RING_SIZE - 1u)
 #define RC_TEARDOWN_WAIT_MS 1000u
 
-typedef struct { void* obj; LONG stamp; int stamped; } RC_ENTRY;
+#define RC_OBJ3DO 0                        /* free via the real FreeObjectState  */
+#define RC_BLOCK  1                        /* free via the engine's raw MEM_Free  */
+typedef struct { void* obj; LONG stamp; int stamped; int kind; } RC_ENTRY;
 
 static RC_ENTRY s_ring[RC_RING_SIZE];      /* game thread only                            */
 static unsigned s_head, s_tail;            /* game thread only; free-running, & MASK      */
@@ -73,19 +97,45 @@ static volatile LONG s_levelGen;           /* game thread bumps, once per teardo
                                               render thread keys its model-template
                                               caches on it (see the header)             */
 static void (__stdcall *s_real_free)(void*);   /* trampoline into the real body           */
+static void (__cdecl   *s_mem_free)(void*) = (void (__cdecl*)(void*))MEMFREE_VA;
 static int   s_installed;
+static int   s_tmplArmed;                  /* the two template redirects are in       */
+static int   s_quiesced;                   /* this teardown's pre hook proved the
+                                              reader idle, so the post hook may free  */
 static volatile DWORD s_owner_tid;         /* the game thread, when the fork has not
                                               recorded it yet: the first caller           */
 static int   s_foreign_logged;
 
 /* counters: written on the game thread, read racily by the render thread's log */
 static volatile unsigned s_cDeferred, s_cDrained, s_cOverflow, s_cForeign,
-                         s_cFlushed, s_cHeld, s_cHigh, s_cTeardowns;
+                         s_cFlushed, s_cHeld, s_cHigh, s_cTeardowns,
+                         s_cTmpl, s_cTmplFreed, s_cTmplLeaked;
 
 static void rlog(const char* s)
 {
     FILE* f = fopen("tagpu.log", "a");
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
+}
+
+/* Every entry is freed through here, so the two classes can share one ring,
+   one epoch and one overflow policy. */
+static void entry_free(RC_ENTRY* e)
+{
+    if (e->kind == RC_BLOCK) s_mem_free(e->obj);
+    else                     s_real_free(e->obj);
+}
+
+/* Push one pointer, or LEAK it if the ring is full: never free under doubt (a
+   reader may hold it) and never spin (the reader may be gone). 1 = queued. */
+static int ring_push(void* p, int kind)
+{
+    RC_ENTRY* e;
+    if (s_tail - s_head >= RC_RING_SIZE) { s_cOverflow++; return 0; }
+    e = &s_ring[s_tail & RC_RING_MASK];
+    e->obj = p; e->stamp = 0; e->stamped = 0; e->kind = kind;
+    s_tail++;
+    if (s_tail - s_head > s_cHigh) s_cHigh = s_tail - s_head;
+    return 1;
 }
 
 /* ---------------------------------------------------------- game thread ---- */
@@ -137,22 +187,46 @@ static void __cdecl reclaim_enqueue(void* obj)
     while (s_head != s_tail) {
         RC_ENTRY* e = &s_ring[s_head & RC_RING_MASK];
         if (!e->stamped || (LONG)(s_completed - e->stamp) < 0) break;
-        s_real_free(e->obj);
-        s_cDrained++;
+        entry_free(e);
+        if (e->kind == RC_BLOCK) s_cTmplFreed++; else s_cDrained++;
         s_head++;
     }
 
     /* 2. queue this one. Its null happens the instant we return; it is
           stamped by the next call. Full ring = leak this object: never free
           it (a reader may hold it) and never spin (the reader may be gone). */
-    if (s_tail - s_head >= RC_RING_SIZE) { s_cOverflow++; return; }
-    {
-        RC_ENTRY* e = &s_ring[s_tail & RC_RING_MASK];
-        e->obj = obj; e->stamp = 0; e->stamped = 0;
-        s_tail++;
-        s_cDeferred++;
-        if (s_tail - s_head > s_cHigh) s_cHigh = s_tail - s_head;
+    if (ring_push(obj, RC_OBJ3DO)) s_cDeferred++;
+}
+
+/* THE MODEL TEMPLATES, from inside the teardown cascade (game thread).
+   0x42DB90's two MEM_Free call sites are redirected here, so a template block
+   is queued instead of returned to the heap and the render thread cannot be
+   walking memory the allocator has taken back. It is the same epoch the
+   Object3do class uses, and for the same reason -- but the release is normally
+   NOT the epoch at all: the post hook frees the whole queue outright whenever
+   the pre hook proved the reader idle, because the reader has then been refused
+   every pass since, which is a fact rather than a race. Only the timed-out
+   (`busy`) path falls back to the stamp, and it can only be later.
+
+   NOT stamped here, deliberately: the engine nulls the slot at 0x42DC15 the
+   instruction AFTER this returns (and the table pointer at 0x42DCD8), so a pass
+   could still reach the block through main+0x14377 until then. The ring's rule
+   -- stamp at the NEXT drain, never at the push -- is exactly the rule that
+   makes that safe, which is why this class reuses it rather than inventing one.
+
+   No drain from here: the cascade is mid-flight, and calling FreeObjectState
+   re-entrantly from inside 0x42DB90 would be a behaviour the engine never has. */
+static void __cdecl reclaim_template_free(void* p)
+{
+    if (!p) return;
+    if (GetCurrentThreadId() != (g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id
+                                                       : s_owner_tid)) {
+        s_cForeign++;                      /* never seen: 0x42DB90 is game-thread only */
+        s_mem_free(p);
+        return;
     }
+    s_cTmpl++;
+    if (!ring_push(p, RC_BLOCK)) s_cTmplLeaked++;   /* full ring: leak, never free */
 }
 
 /* Level teardown, on entry to 0x491B60 (game thread). Hold the reader off and
@@ -179,8 +253,9 @@ static void __cdecl reclaim_teardown_pre(void)
         if (GetTickCount() - t0 > RC_TEARDOWN_WAIT_MS) { busy = 1; break; }
         Sleep(0);
     }
+    s_quiesced = !busy;
     if (!busy) {
-        while (s_head != s_tail) { s_real_free(s_ring[s_head & RC_RING_MASK].obj); s_head++; n++; }
+        while (s_head != s_tail) { entry_free(&s_ring[s_head & RC_RING_MASK]); s_head++; n++; }
         s_cFlushed += n;
         s_defer = 0;                           /* the cascade frees synchronously */
     } else {
@@ -224,6 +299,42 @@ static void __cdecl reclaim_teardown_pre(void)
    so the stub's call returns and this hook is reached. */
 static void __cdecl reclaim_teardown_post(void)
 {
+    /* THE TEMPLATES THE CASCADE JUST QUEUED GO BACK HERE, and the argument is a
+       fact rather than a window. When the pre hook returned with the reader
+       idle it had already published s_teardown, so every pass_begin since has
+       quiesced at once and tagpu_overlay_draw has returned before its first
+       engine read: no pass in this interval can be holding a template pointer,
+       and none could have started holding one. So the queue is freed outright,
+       the heap gets the level's models back before the next one loads, and
+       nothing depends on how long anything took.
+
+       When the pre hook timed out instead (`busy`), the reader may genuinely
+       still be inside a pass that is reading templates -- that is what the
+       timeout means -- so nothing is freed here. Those blocks stay on the ring
+       and leave it through the ordinary epoch drain, stamped at the next
+       FreeObjectState and freed once the reader has completed a pass past the
+       stamp. Later, never sooner; and if the reader never runs again they are
+       leaked, which is the module's standing answer to doubt.
+
+       This runs BEFORE the generation bump only for tidiness -- the reader is
+       refused passes either way until the flag clears below. */
+    if (s_quiesced) {
+        unsigned n = 0;
+        while (s_head != s_tail) { entry_free(&s_ring[s_head & RC_RING_MASK]); s_head++; n++; }
+        s_cFlushed += n;
+        if (n) {
+            char b[140];
+            _snprintf(b, sizeof b,
+                      "reclaim: teardown post: freed %u block(s) the cascade queued "
+                      "(%u model template(s) this session), reader quiesced throughout",
+                      n, s_cTmpl);
+            rlog(b);
+        }
+    } else if (s_tmplArmed) {
+        rlog("reclaim: teardown post: reader was still in its pass — the cascade's "
+             "template blocks are KEPT and leave by the epoch, not here");
+    }
+    s_quiesced = 0;
     s_defer = s_installed ? 1 : 0;
     InterlockedIncrement(&s_levelGen);
     InterlockedExchange(&s_teardown, 0);
@@ -251,9 +362,10 @@ void tagpu_reclaim_pass_end(unsigned frame_counter)
         char b[200];
         last = frame_counter;
         _snprintf(b, sizeof b,
-                  "reclaim: def=%u drn=%u queued=%u hw=%u ovf=%u foreign=%u flushed=%u held=%u teardowns=%u pass=%ld",
+                  "reclaim: def=%u drn=%u queued=%u hw=%u ovf=%u foreign=%u flushed=%u held=%u teardowns=%u tmpl=%u/%u/%u pass=%ld",
                   s_cDeferred, s_cDrained, (unsigned)(s_tail - s_head), s_cHigh, s_cOverflow,
-                  s_cForeign, s_cFlushed, s_cHeld, s_cTeardowns, (long)s_completed);
+                  s_cForeign, s_cFlushed, s_cHeld, s_cTeardowns,
+                  s_cTmpl, s_cTmplFreed, s_cTmplLeaked, (long)s_completed);
         rlog(b);
     }
 }
@@ -265,6 +377,25 @@ unsigned tagpu_reclaim_level_gen(void) { return (unsigned)s_levelGen; }
 int tagpu_reclaim_armed(void) { return s_installed; }
 
 /* --------------------------------------------------------------- install ---- */
+
+/* Redirect one `call MEM_Free` to `fn`. The rel32 is computed against the
+   CALL SITE, not against the buffer it is built in -- a rel32 encoded against
+   a stack address is a wild call, and this project has already paid for that
+   once (field notes: tagpu_detour_rel takes the address it will live at).
+   Refuses unless the site really is `E8 <rel to 0x4D85A0>`, so a different exe
+   arms nothing. */
+static int redirect_memfree(unsigned int va, void (__cdecl *fn)(void*))
+{
+    unsigned char b[5];
+    int rel;
+    if (*(const unsigned char*)(size_t)va != 0xE8) return 0;
+    memcpy(&rel, (const void*)(size_t)(va + 1), 4);
+    if ((unsigned)(va + 5 + rel) != MEMFREE_VA) return 0;
+    b[0] = 0xE8;
+    rel = (int)((unsigned)(size_t)fn - (va + 5));
+    memcpy(b + 1, &rel, 4);
+    return tagpu_detour_write(va, b, 5);
+}
 
 /* The free detour. Same shape as tagpu_detour_leaf_call (flag-gated: call our
    function with arg1 and `ret 4` while set, else the stolen prologue and a
@@ -351,6 +482,22 @@ void tagpu_reclaim_init(void)
     if (!tagpu_detour_land(FREEOBJ_VA, sf, 5))  { rlog("reclaim: NOT armed — could not write 0x45AAA0 (teardown wrap is in, inert)"); return; }
     s_installed = 1;
     s_defer = 1;
-    rlog("reclaim: ARMED FreeObjectState@0x45AAA0 -> deferred (quiescence, game-thread drain), "
-         "teardown@0x491B60 -> hold reader + flush; ring=4096");
+    /* Last, and independently: the module is worth having without it, so a
+       refusal here is logged rather than fatal. Both sites or neither. */
+    if (redirect_memfree(TMPLFREE_VA, &reclaim_template_free)) {
+        if (redirect_memfree(TMPLTAB_VA, &reclaim_template_free)) {
+            s_tmplArmed = 1;
+        } else {
+            unsigned char b[5];                /* put the first one back */
+            int rel = (int)(MEMFREE_VA - (TMPLFREE_VA + 5));
+            b[0] = 0xE8; memcpy(b + 1, &rel, 4);
+            tagpu_detour_write(TMPLFREE_VA, b, 5);
+        }
+    }
+    rlog(s_tmplArmed
+         ? "reclaim: ARMED FreeObjectState@0x45AAA0 -> deferred (quiescence, game-thread drain), "
+           "teardown@0x491B60 -> hold reader + flush, model templates@0x42DC01/0x42DCB6 -> deferred; ring=4096"
+         : "reclaim: ARMED FreeObjectState@0x45AAA0 -> deferred (quiescence, game-thread drain), "
+           "teardown@0x491B60 -> hold reader + flush; model-template frees NOT deferred "
+           "(0x42DC01/0x42DCB6 are not calls to MEM_Free on this exe); ring=4096");
 }

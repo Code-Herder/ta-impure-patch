@@ -18,6 +18,7 @@ thread reads).*
 | **Problem** | <span class="pill pill-ok">CONFIRMED</span> cross-thread use-after-free, `200v200` ~95 s in, ~2 of 3 runs |
 | **Pattern** | **built** 2026-09-06 as `tagpu/ddraw/src/tagpu_reclaim.c` (G14h), on by default, `tagpu_reclaim.off` disables — see **GPU status, hooks & limits** §2.7 for the landed shape and the log lines |
 | **First client** | the model object `Object3do` (units + wrecks + features), via `FreeObjectState 0x45AAA0` — landed |
+| **Second client** | the **model templates** and their pointer table, via the two `MEM_Free` call sites inside `0x42DB90` — landed 2026-09-09, §6c |
 | **Next clients** | the two particle heap surfaces (sub-vector, layer array); the fog grid separately |
 
 ## 1. The answer in one paragraph
@@ -72,6 +73,7 @@ That single rule tells you, per object type, whether it needs the pattern.
 | **Model object (`Object3do`) — units + wrecks + features** | A | `FreeObjectState 0x45AAA0` (callers `0x486D9E` unit, `0x42474F` wreck, `0x4221C4` bulk) | the confirmed crash — fix first |
 | Its posed vertex buffers | A | freed *inside* `FreeObjectState` (per-prim loop at `0x45AAB2`) | covered for free by deferring `FreeObjectState` |
 | Its composite frame (`obj+0x10`, read at `tagpu_native.c:1786`) | **unclassified** | **not** freed by `FreeObjectState` — `0x437C90` only zeroes a registry entry and makes no call; the frame's owner is the composite draw context at `*(TA+0x1437B)` <span class="pill pill-warn">INFERRED</span> | separate lifetime — classify Mode A/B before landing (§10) |
+| **Model templates (`Model3DONode`) and their pointer table** — per TYPE, one block each | A | `0x42DB90` in the teardown cascade: `MEM_Free 0x4D85A0` per model (`0x42DC01`) and once for the table (`0x42DCB6`) | **landed 2026-09-09** — both call sites redirected, §6c |
 | **Particle sub-vector** (smoke/fire/nano per-object point list) | A | each particle destructor `MEM_Free`s `obj+0x10` (nano `0x471560`, fire `0x4716A0`, smoke2 `0x474D10`, smoke1 `0x475110`, flare `0x471430`, wake `0x4717E0`) | latent UAF — same mechanism, fold in next |
 | **Particle layer pointer-array** (during growth) | A | `std::vector` grow `0x4732E0` frees the old array | latent UAF, only while a layer grows |
 | **Screen fog grid** | A | reallocated mid-frame; the indexed read has no `IsBadReadPtr` | second, independent hazard — wants a per-frame snapshot, not this detour |
@@ -179,7 +181,9 @@ this note already documents as recycling aggressively, so a render-thread cache 
 template pointer is not protected by any of the machinery above **and** the address-reuse premise
 is not hypothetical.
 
-`tagpu_reclaim_level_gen()` is the counter that closes it: `InterlockedIncrement` in the
+`tagpu_reclaim_level_gen()` is the counter that closes the CACHE half of it (the block half is
+§6c, which defers those frees so a walk in flight cannot be reading freed memory in the first
+place): `InterlockedIncrement` in the
 **post hook**, after the cascade has freed the templates and before the reader is released.
 Unconditional — the pre hook's `busy` path keeps the queue and frees nothing of ours, but
 `0x42DB90` runs either way. A cache stamps its entries with the generation and drops them when it
@@ -265,11 +269,65 @@ hook's flush plus the `s_defer = 0` synchronous cascade can free one object twic
 render thread is doing across the context replacement the surviving runs reach and the frozen
 ones do not.
 
+### 6c. The template frees are deferred too — the timeout stops being load-bearing
+
+`[BUILT 2026-09-09]` §6a left one thing to timing: the pre hook waits up to a second for the
+reader, and **on the timeout it lets the cascade run anyway**, so `0x42DB90` could return the
+templates to the heap with a render pass still walking them. The level generation does not help
+there — it invalidates a *cache* after the fact; it does not keep the memory alive while a walk
+is in flight. Nothing downstream could close it either: a reader cannot make a pointer valid by
+checking it, and `tagpu_native.c`'s bounded `model_root` guarantees the *slot*, not the block.
+
+So the frees are deferred, with the pattern this page is about, applied to its second client:
+
+- **The two call sites are redirected, not the function.** `0x42DB90` is left to run: its
+  `call MEM_Free` at `0x42DC01` (one model's block — the tree, the rest vertices and the faces
+  are one allocation) and at `0x42DCB6` (the pointer table) are rewritten to call
+  `reclaim_template_free`, which pushes the pointer onto the same ring. Each site is byte-checked
+  first — `E8` with a rel32 that really resolves to `0x4D85A0` — and both are landed or neither.
+  The other two `MEM_Free`s in that body (`0x42DC23`, `0x42DC52`) are unit-def fields no pass of
+  ours reads, and are left alone.
+- **The rel32 is computed against the call site, never against the buffer it is built in.** That
+  is the wild-call footgun this project has already paid for once.
+- **The normal release is not the epoch at all.** When the pre hook returned with the reader idle
+  it had already published `s_teardown`, so every `pass_begin` since has quiesced immediately and
+  `tagpu_overlay_draw` has returned before its first engine read. No pass in that interval can be
+  holding a template, and none can start holding one. The post hook therefore frees the whole
+  queue outright, on that guarantee rather than on any elapsed time, and the heap has the level's
+  models back before the next one loads.
+- **The timed-out path falls back to the stamp.** If the reader was still in its pass, nothing is
+  freed at the post hook; those blocks stay on the ring and leave through the ordinary epoch
+  drain at the next level's first death — later, never sooner, and leaked outright if the reader
+  never runs again. The one-second wait is now a *scheduling* choice: it decides when the memory
+  comes back, not whether the read was safe.
+- **The generation is still needed and is not made redundant.** It answers a different question:
+  the blocks really are freed at the post hook, so the next level's allocator may hand the same
+  address to a different model, and a cache keyed on a template pointer must still drop. Deferral
+  keeps the walk safe; the generation keeps the cache honest.
+
+`[MEASURED 2026-09-09]` two full level cycles in one process, `200v200` under the play defaults:
+
+```
+reclaim: level teardown (gen 0 -> 1): flushed 1 queued object(s), reader idle; the cascade frees synchronously
+reclaim: teardown post: freed 279 block(s) the cascade queued (279 model template(s) this session), reader quiesced throughout
+native: level 0 -> 1, dropping the template caches: aabb=4 selbox=0 pmap=1
+```
+
+then the same again for `gen 1 -> 2` (558 cumulative), with the second level's shadow AABBs
+rebuilt in between. The periodic line grows `tmpl=<queued>/<freed by the epoch>/<leaked>`, which
+read `279/0/0` and `558/0/0`: every teardown took the quiesced path, so nothing needed the
+fallback and nothing was lost. `ovf=0`, ring high-water 279 against 4096.
+
 ## 7. The reusable module
 
-**As built (G14h, `tagpu_reclaim.c`).** One class today — `FreeObjectState` — so the module is
-deliberately smaller than the sketch below: the drain runs on the game thread **inside the
-destructor detour itself** (every call first stamps and frees what became safe, then queues its
+**As built (G14h, `tagpu_reclaim.c`; the templates added 2026-09-09, §6c).** Two classes now, one
+ring: `RC_OBJ3DO` entries go back through the real `FreeObjectState`, `RC_BLOCK` entries — a model
+template's single block and the pointer table — through the engine's raw `MEM_Free`, and
+`entry_free()` is the one place that knows which. They share the ring, the epoch, the high-water
+mark and the overflow-means-leak policy because they share the hazard; what differs is when they
+are normally released (an `Object3do` waits for the epoch because units die while the reader runs;
+a template does not need to, because the teardown wrap has already made the reader quiescent).
+The drain runs on the game thread **inside the destructor detour itself** (every call first stamps and frees what became safe, then queues its
 own object), which needs no tick hook — the engine's tick detour at `0x4969D2` is installed only
 while a scenario is being applied, so it could not host the drain. The reader's bracket is one
 unconditional `pass_begin` / `pass_end` pair around `tagpu_overlay_draw` in `render_ogl.c`, which
@@ -279,12 +337,15 @@ engine-reading half, so input injection and the GL-context detection keep runnin
 let the cascade free synchronously — or, if the reader is still busy, free **nothing**: keep the queue
 and keep deferring through the cascade; post: release). It is on by default, `tagpu_reclaim.off`
 disables, and it logs `reclaim: def=… drn=… queued=… hw=… ovf=… foreign=… flushed=… held=…
-teardowns=… pass=…` every 300 frames (ring 4096). The composite frames are **not** freed by
+teardowns=… tmpl=<queued>/<freed by the epoch>/<leaked> pass=…` every 300 frames (ring 4096), plus
+one `reclaim: teardown post: freed N block(s) …` line per teardown. The composite frames are **not** freed by
 the destructor (`0x437C90` only unregisters a slot — see §3), so they are not covered and not
 needed for the crash.
 
-The generalisation, when a second client arrives — register a destructor by address, one ring
-tagged by class, a shared bracket:
+The second client did not need the generalisation below: its frees are two `call MEM_Free` sites
+rather than a destructor with a prologue, so they are redirected in place and the "class" is one
+field on the ring entry. The sketch stands for a client that really is a destructor — register it
+by address, one ring tagged by class, a shared bracket:
 
 ```c
 int  tagpu_reclaim_arm(const char* on_file, unsigned dtor_va,
@@ -407,6 +468,14 @@ renders the correct final frame rather than garbage, needs no hot-path lock, and
 the simulation.
 
 ## Changelog
+
+- **2026-09-09** — **second client landed: the model templates** (§6c). `0x42DB90`'s two
+  `MEM_Free` call sites are redirected onto the same ring, so the templates outlive any render
+  pass that is walking them and the pre hook's one-second timeout stops being a safety argument —
+  it now only decides *when* the memory comes back. Measured over two level cycles: 279 blocks a
+  teardown, `tmpl=279/0/0` then `558/0/0`, `ovf=0`, nothing lost. §6b gains the freeze's
+  non-reproduction table (seven teardowns, three arm sets, all clean), and §2 gains what a Mode B
+  read owes — the bound that an unbounded `ModelId` was missing when it crashed the shadow pass.
 
 - **2026-09-06** — first draft. Design synthesised from six investigations; not yet landed. Crash
   root cause is recorded in **GPU status, hooks & limits** §3.2.
