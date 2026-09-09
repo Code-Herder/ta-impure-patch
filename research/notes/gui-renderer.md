@@ -1931,3 +1931,10 @@ the naive reading says the opposite of the truth.
   `hit_check` has been moved to *after* the parity bracket in the same pass, because a snapshot
   round-trip between the census read and the shots moves where they land on the game's timeline
   and the measurement should not carry that.
+
+  **The re-run settles it: the hole did not recur.** A second `--layer --cycles 3` at 1024x768 on
+  the same DLL is **117 stops + 3 loading screens, 0 hit misses, 0 `strict` holes anywhere** —
+  `ARMOPT#2` included — and exactly the 16 `MAINMENU` sparkle stops differing. So the `k = 1`
+  regression is clean, and the single hole was a transient of the kind the stall-recovery window
+  produces rather than anything the landing introduced. Two runs, one hole, and it is recorded
+  with what it was a picture of.
