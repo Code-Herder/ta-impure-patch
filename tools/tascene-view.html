@@ -624,7 +624,7 @@ float shadowAt(vec3 W, vec3 n) {
   // A blocker the BIAS invented sits a fraction of a world unit above the
   // receiver; a real caster is 10-60 units tall and its blocker is tens of
   // units up. That distance is the discriminator, and it is already computed.
-  if (dist < uMinDist) return 1.0;
+  if (uMinDist > 0.0 && dist < uMinDist) return 1.0;   // dist can be NEGATIVE
   float r = max(uPenumbra * dist, 0.5 * uShScale.x) / uShScale.x * uShScale.z;
   float lit = 0.0;
   for (int i = 0; i < 16; i++) {
@@ -669,7 +669,7 @@ float shadowAtD(vec3 W, vec3 n, vec3 dWdx, vec3 dWdy) {
   // A blocker the BIAS invented sits a fraction of a world unit above the
   // receiver; a real caster is 10-60 units tall and its blocker is tens of
   // units up. That distance is the discriminator, and it is already computed.
-  if (dist < uMinDist) return 1.0;
+  if (uMinDist > 0.0 && dist < uMinDist) return 1.0;   // dist can be NEGATIVE
   float r = max(uPenumbra * dist, 0.5 * uShScale.x) / uShScale.x * uShScale.z;
   float lit = 0.0;
   for (int i = 0; i < 16; i++) {
