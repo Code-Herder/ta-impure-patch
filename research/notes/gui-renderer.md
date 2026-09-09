@@ -1032,8 +1032,9 @@ read from the code and then from the reset reasons once they were logged:
   surfaces=)`), and the heartbeat gained `stalls= skipped= palchg= paldiff=n@i palsrc=`.
 - **The palette.** Every palette the engine sets goes through `0x4BA200`, which keeps the
   entries in the graphics globals and hands DirectDraw `min(255, entry × gamma)` with the gamma
-  from the Gamma option (`SetGamma 0x4BA590`, `0.5 + Gamma/24`; 1.0 at the code default 12, but
-  **1.125 on every instance here** — §14) — and
+  from the Gamma option (`SetGamma 0x4BA590`, `0.5 + Gamma/24`; 1.0 at the code default 12, and
+  whatever the one shared registry `Gamma` currently says — 1.125 and 1.0 have both been read;
+  §15) — and
   never scales `main+0x143A7`. The engine's own pixels beneath the twin are shown by cnc-ddraw
   through the palette its `SetEntries` received, so that is what the twin resolves through now:
   the primary's palette object in this DLL, read under the fork's lock, the engine's table the
@@ -1510,8 +1511,10 @@ That corrects a recorded measurement: `paldiff=235` is the *ordinary* heartbeat 
 not the `+gamma 15` reading [the engine map](exe-reverse-engineering.html) and the ta-drive
 skill took it for ("0 in game, one — index 9 — in the shell"). Index 9 is still real: in the
 shell it is the one entry that differs *beyond* the gamma scale, which is what §12 traced. Where
-the template's 15 came from is not established, and changing it would move every measurement
-ever taken against that prefix, so it is recorded rather than reset.
+the 15 came from is not established, and changing it would move every measurement
+ever taken against that prefix, so it is recorded rather than reset. **§15 corrects the
+"template" half of this**: there is one `Gamma`, shared by the template and every instance
+through a single inode, wine rewrites it at launch, and it now reads 12.
 
 Consequently `uiwalk --restore` writes the presented palette beside each dump
 (`<phase>-tagpu_restore_gui.pal`, read out of a `tacli shot`'s 8-bit PNG, which carries what
@@ -1548,14 +1551,18 @@ DLL change with its own review.
 
   **DECIDED 2026-09-09 by the owner, put to them as the one question G17a waited on: the world
   stays on `main+0x143A7`. The lab is the reference.** Every recorded Classic++ number and every
-  `tascene ab` parity run keeps its meaning, and the ~11 % seam between our world and the
-  engine's own UI is accepted as a known constant rather than closed. The alternative — moving
-  the world onto the presented palette so the two agree at the viewport edge — was weighed and
-  rejected *for now* on that cost: it moves every measurement ever taken and breaks `tascene ab`
-  until the browser lab is taught the same scale, which is a second landing, not a line. Nothing
-  was changed to record this, and in particular **`wineprefix/`'s `Gamma = 15` was deliberately
-  not reset**: making the symptom go away that way would silently move every measurement taken
-  against that prefix. The seam is a decision now, not an oversight.
+  `tascene ab` parity run keeps its meaning, and the seam between our world and the engine's own
+  UI is accepted rather than closed. The alternative — moving the world onto the presented
+  palette so the two agree at the viewport edge — was weighed and rejected *for now* on that
+  cost: it moves every measurement ever taken and breaks `tascene ab` until the browser lab is
+  taught the same scale, which is a second landing, not a line.
+  **The question was put on a premise that turned out to be false, and the answer survives it.**
+  It was framed as a *constant* ~11 % seam, "on every instance this project has ever measured".
+  §15 has the measurement: there is one shared `Gamma` for the template and all 58 instances, it
+  now reads 12, and an instance launched under it presents `paldiff=0` — no seam at all. What the
+  decision really settles is the *policy*, which does not depend on the value: the world draws
+  through the engine's unscaled table because that is what the lab and every recorded number are
+  built on, and the seam is whatever the live `Gamma` makes it, from nothing to 11 %.
 - **Seeded art stays indexed** until redrawn (above). Restoring a seed directly — the surface is
   an indexed image and the restorer restores indexed images — is the obvious candidate and is
   not taken here.
@@ -1594,16 +1601,30 @@ engine address, and not one byte read from the engine that the module did not al
   grid's corner bits already are. Getting this wrong is invisible at `k = 1` and would have shown
   up as a dark fringe along every panel edge the moment G17b raised `k`.
 - **The ramp is one device pixel wide**: `w = clamp((frac - 0.5) x k + 0.5, 0, 1)`. At `k = 1`
-  that is one *source* texel, `frac` is 0 at every fragment, `w` is 0 or 1, the blend collapses to
-  a single tap and the divide is by 1. **The identity is structural, not numerical** — it does not
-  depend on the interpolator handing back exactly `x + 0.5`, because a `frac` of `1 - e` puts
-  weight `1 - e` on the *same* texel `texelFetch` would have taken.
+  that is one *source* texel, so every fragment lands on a texel centre, `w` is 0 or 1, the blend
+  collapses to a single tap and the divide is by 1.
+  **It is a numerical argument, not a structural one, and the landing review was right to say
+  so.** An earlier draft of this page claimed the identity "does not depend on the interpolator
+  handing back exactly `x + 0.5`". It does depend on it, mildly: a `frac` of `1 - e` puts weight
+  `e` on the *neighbouring* texel, so the output is `C(i) + e·(C(i-1) - C(i))` and equals
+  `texelFetch` only after the 8-bit quantisation. The margin is what makes it safe — fp32
+  interpolation over a span of at most 1 024 keeps `e` below ~1e-4, i.e. under 0.03 of an 8-bit
+  step — and the measurement below is the proof, not the algebra. **A later gate that raises the
+  twin's size by orders of magnitude must re-take the parity reading rather than cite this line.**
+  **At *integer* `k` the weights are exactly 0 or 1** and the ramp is precisely nearest; that is
+  measured below, and it means `k = 2` is *not* a test of the blend.
 - **`k` is read off the frame, not configured**: `f->vp_w / twin->w`, device pixels per twin
-  texel, which is §13.1's `k` exactly because the twin is the engine's surface 1:1. It is 1.0
-  wherever the engine's screen *is* the window — every path phase 1 has. Giving the engine
-  `window / k` is G17b's, and until it lands there is nothing here to force to 1: the frame
-  already says 1. Below 1 (the fork scaling the engine *down* into a smaller window) the ramp is
-  held at plain bilinear rather than widened past a texel.
+  texel, which is §13.1's `k` exactly because the twin is the engine's surface 1:1. Giving the
+  *engine* `window / k` is G17b's, and until that lands there is nothing here to force to 1 —
+  the frame says what it says. Below 1 (the fork scaling the engine *down*) the ramp is held at
+  plain bilinear rather than widened past a texel.
+  **`k` is NOT 1 on every phase-1 path, and an earlier draft of this page, the roadmap and
+  gpu-status all said it was** [the landing review, CONFIRMED 2026-09-09]. `resizable` defaults
+  TRUE (`config.c`, and the shipped `tagpu/release/ddraw.ini` does not turn it off) and
+  `maintas` fits the viewport to the client (`dd.c`), so **any window a player drags off the game
+  resolution is already at a fractional `k` and already gets this ramp**. Only zooming forces
+  `resizable` off (`dd.c:780`). So the ramp is in the field from this landing, not dormant until
+  G17b — which is why the `k = 2` reading below was taken rather than deferred.
 - **The sharp layer is one `RGBA8` texture the size of the frame's viewport in window pixels** —
   everything of ours at the device's resolution — cleared at every present and composited above
   the mirror wherever its alpha says it has coverage. **Row 0 is the viewport's top row**, and
@@ -1627,22 +1648,32 @@ Two Continents, `scenarios/tascene-parity.json`, 1024x768, the default arm set, 
 this branch's launched side by side and shot alternately.
 
 **The fixture is two-state, and it is not ours.** Both DLLs produce exactly two frames and no
-others; the two differ **by one pixel, at (512, 384)** — the screen centre, i.e. the engine's own
-cursor, whose rect the layer discards to the engine's frame by design (§3.7). `main` shows the
-same two states, so a single whole-frame md5 is no longer the right shape for this fixture and
-the measurement is *the set of frames each build produces*. §10's single `568cc55c...` predates
-whatever made the centre pixel alternate; that is `main`'s to explain, not this gate's.
+others; the two differ **by one pixel, at (512, 384)** (measured on the Gamma-15 pair, where it
+flips between `(12,12,0)` and `(255,255,255)`). `main` shows the same two states, so a single
+whole-frame md5 is no longer the right shape for this fixture and the measurement is *the set of
+frames each build produces* — one of which, at Gamma 12, is §10's own recorded value.
 
-| build | `classicpp` | frames produced over 6 shots |
-|---|---|---|
-| `main` (`3efdf25`) | off | `44a19da6614ec6f16ff81072d33a68cd`, `ce22188d43175774cc496a7505262eeb` |
-| **this branch** | off | **the same two, byte-identical files** |
-| `main` (`3efdf25`) | on | `9456cc55ed6e3039fad587d715f94b70`, `ed7aaec5b755c0c22f188a5bf8e359a8` |
-| **this branch** | on | **the same two, byte-identical files** |
+| Gamma | `classicpp` | `main` (`3efdf25`) | this branch |
+|---|---|---|---|
+| 15 | off | `44a19da6…`, `ce22188d…` | **the same two, byte-identical files** |
+| 15 | on | `9456cc55…`, `ed7aaec5…` | **the same two** |
+| 12 | off | `568cc55c…`, `608cbeaf…` | **the same two** |
+| 12 | on | `582c94a4…`, `62bcb9c7…` | **the same two** |
 
-The Classic++ row is worth as much as the Classic one: the ramp carries the **colour twin** taps
-too, so it is the per-texel restored/palette choice of §3.4 going through the new blend, and it
-comes out byte for byte.
+Twice over, then: the identity holds on both sides of the palette change the section below
+documents, and `568cc55c4301ab88f166282f969e18b9` at Gamma 12 is **§10's originally recorded
+parity md5, reproduced exactly** — which is the strongest form the reading can take, since that
+value was measured on `main` at `2b83b12` two days before any of this existed.
+
+The Classic++ rows are worth as much as the Classic ones: the ramp carries the **colour twin**
+taps too, so it is the per-texel restored/palette choice of §3.4 going through the new blend, and
+it comes out byte for byte.
+
+**A trap that cost a round here: shoot the parity fixture only after it has settled.** A pair
+taken minutes after `scenario load` had `main` and this branch differing by 8 720 pixels in a
+293x57 block at (138, 52) — the world flat blue on one side and terrain on the other. It is the
+frame, not the build: the same two instances, left alone and re-shot, agree byte for byte. Take
+the reading twice before believing a difference in the viewport.
 
 **The 120-stop `strict` walk, with the ramp in the path** — `uiwalk.py --layer --cycles 3`,
 1024x768, `classicpp` off (§14: it is not a valid regression with Classic++ on), the whole
@@ -1662,32 +1693,102 @@ inventory plus the three game -> shell -> game cycles:
 **So the walk is unchanged**, and the identity claim above is the reason: at `k = 1` the ramp
 resolves to the single tap `texelFetch` took before it.
 
-**`sharptest`, on the same fixture** [MEASURED 2026-09-09]: the green square reads
-`(0,0)-(63,63)`, 4 096 px, at the top-left; the white column is full height at *x* = 100 and
-exactly one device pixel wide (`x` = 99 and 101 are UI, not white). **It found its own bug
-first**: the square was scissored at `h - 64` on the assumption that a scissor box is bottom-up
-like the window's, and it came out at the *bottom* of the screen. On an FBO it is not — scissor
-`y` is the attachment's row. That is the entire reason a lever like this is worth its lines: at
-`k = 1` with an empty layer, nothing else in the exit would have noticed, and G17c would have
-drawn the cursor upside down.
+**`sharptest`, and the two bugs it caught** [MEASURED 2026-09-09]. Final reading, 1920x1080: the
+green quad is `(0,0)-(63,63)`, 4 096 px, at the viewport's top-left, and the white column is full
+height at device *x* = 100 and **exactly one device pixel wide**. It is drawn as *geometry*, not
+as a scissored clear, precisely because geometry is what G17c and G17d will use.
 
-The heartbeat carries the two new fields, `k=1.000 sharp=1024x768`; its buffer went 640 to 768
-for them (205 bytes of literal, 30 conversions, ~519 worst case).
+Both bugs were in the same place, and neither was reachable by any other measurement in the exit:
+
+1. The first square was scissored at `h - 64`, on the assumption that a scissor box is bottom-up
+   like the window's. It came out at the foot of the screen.
+2. The landing review then pointed out that the *explanation* written for that fix — "a scissor
+   box on an FBO addresses the attachment's rows, unlike the window" — was wrong, and predicted
+   the real consequence: a client drawing **geometry** would be mirrored. It was right. The
+   vertex shader written to fix it added a flip, and `sharptest`'s quad went to the foot of the
+   screen again.
+
+**There is no flip anywhere.** Attachment row 0 is where NDC `y = -1` lands *and* where scissor
+`y = 0` is, and the layer shader samples row 0 as the viewport's top row — so a scissor box and a
+client's quad agree without help, and a client uses **`QVS`, the twins' own vertex mapping**,
+unchanged. That is the rule G17c needs, and it is now proved by the thing that will use it rather
+than by the one client kind that never would.
+
+**`k = 2`, and what it does and does not show** [MEASURED 2026-09-09]. Reachable without touching
+the code: at 1920x1080 the second game -> shell return leaves a **1280x984 client over the
+640x480 shell**, and `maintas` letterboxes a **1280x960** viewport into it — the heartbeat reads
+`k=2.000 sharp=1280x960`, so `k` and the sharp layer's size both follow the frame correctly.
+
+| what | reading |
+|---|---|
+| the frame | renders; 0 magenta (`strict` off, as it must be); the 11-px letterbox bars pure black |
+| **every 2x2 device block uniform?** | **307 000 of 307 200 — yes, except 200** |
+| where the 200 are | a single 10x20 box at source `(320, 240)` |
+| what is at `(320, 240)` | `tacli peek *0x51FBD0+0x1B6/+0x1BA` = **(320, 240)**: the cursor's last-drawn position, and 10x20 is its sprite's size |
+
+So **at integer `k` the ramp is exactly nearest** — the weights fall on 0 and 1 — and every texel
+*we* draw is a clean 2x2 block. The only 200 that are not are the ones the layer `discard`s to
+the engine's frame in the cursor's rect, which the fork upscales with its own filter on a grid
+that is not ours. That is §13.8's fallback, measured: **`k = 2` is a test that the seam holds
+together at `k != 1`, and it is NOT a test of the blend.** The blend needs a fractional `k`,
+which is G17b's exit and is why §13.9 asks for 1.5 as well as 2.
+
+**The alternating pixel is not explained, and this page does not claim it.** (512, 384) is the
+exact centre of a 1024x768 frame and therefore the origin of the cursor rect the layer discards
+to the engine's own frame, so *what* is drawn there is the engine's business — but why one pixel
+of it alternates while its neighbours do not was not established. It is on `main`'s DLL and this
+branch's alike, in Classic and in Classic++, and it is why §10's single md5 no longer describes
+this fixture on its own.
+
+The heartbeat carries the two new fields, `k=` and `sharp=`; its buffer went 640 to 768 for them
+(205 bytes of literal, 30 conversions, ~519 worst case).
+
+### The Gamma story is wrong, and this is the correction  [MEASURED 2026-09-09]
+
+The landing review checked the sentence this landing's own §14 bullet leaned on, and it does not
+hold. G15e recorded, and §14, the roadmap, gpu-status, the engine map and the `ta-drive` skill all
+repeated, that "the template wine prefix every instance hardlink-clones carries `Gamma = 0x0f`",
+so "every instance of this project presents at 1.125" and "the world is ~11 % darker than the
+engine presents its own pixels on every instance this project has ever measured".
+
+**What is actually there:**
+
+| what | reading |
+|---|---|
+| `wineprefix/user.reg` and all 58 `tagpu/instances/*/prefix/user.reg` | **one inode, 59 hard links** (`tacli`'s `clone_prefix` is `cp -al`) |
+| its `Gamma` | **`dword:0000000c` = 12**, i.e. `0.5 + 12/24 = 1.0` — not 15 |
+| who writes it | **wine, in place, at launch**: its mtime moved to 07:29:36 when an instance started at 07:28:48 |
+| instances launched earlier that day | `paldiff=235@1` (g17a, g17m, g17w) |
+| **instances launched after** | **`paldiff=0@-1`** — on this branch's DLL *and* on `main`'s |
+
+So the **mechanism** is right and unchanged — the engine scales every palette it sets by
+`0.5 + Gamma/24` on the way to DirectDraw and never scales `main+0x143A7`, and `paldiff` measures
+exactly that. What is wrong is treating the *value* as a property of the setup. There is **one**
+`Gamma`, shared by the template and every instance through the same inode, and it is whatever TA
+last stored. It was 15; it is 12; the world seam that follows from it is 11 % at the one and
+**zero at the other**.
+
+**Where 12 came from is not established.** `uiwalk`'s cycle ends with `+gamma 10` — factor 1.0,
+i.e. `Gamma = 12` — three times per run, and TA persists its preferences, which is the obvious
+suspect. It is *not* proved here, and it is not worth proving by writing to that file: the honest
+consequence is that **`Gamma` must be read, not assumed, at the top of any measurement that
+depends on it**, and `paldiff=` in the heartbeat already reports it for free.
+
+Every page that carried the old claim is corrected in this landing: §14 twice, the roadmap's G15e
+row, gpu-status, the engine map's palette section and the `ta-drive` skill.
 
 ### Not closed here
 
-- **`k != 1` is not exercised by anything in this landing.** The ramp is written for it and the
-  sharp layer is sized for it, but every measurement above is at `k = 1` because that is what the
-  gate is. The first frame anyone sees at a fractional `k` is G17b's.
-- **One case in phase 1 already runs at `k != 1` and is now filtered rather than nearest**: the
-  640x480 shell scaled into a window the player sized bigger (§12's "the first return gives a
-  640x480 window and the next two a 1912x1040 client"). §13.3 is what the mirror does there now.
-  It is not measurable by `uiwalk` — `frame_parity` refuses a stop that is not 1:1 — and it was
-  not judged by eye here.
-- **The fallback still `discard`s** rather than going through the same filter. §13.8 wants the
-  engine's own pixel filtered like ours at `k != 1`; today it falls through to the fork's own
-  `GL_NEAREST` upscale. Bypassing that scaler is explicitly G17b's ("there is only ever one
-  scaler in the picture, and it is ours"), and doing it here would have meant reproducing the
+- **A FRACTIONAL `k` is still unexercised.** `k = 2` was reached and is clean, but the ramp is
+  exactly nearest there, so nothing above tests the blend. Players reach fractional `k` today by
+  resizing the window (above), so this is exposure that exists now and not only after G17b — the
+  first *measurement* of it is G17b's `k = 1.5` walk. `uiwalk` cannot take it as it stands:
+  `frame_parity` refuses a stop that is not 1:1.
+- **The fallback still `discard`s to the fork's own scaler**, and the `k = 2` reading shows
+  exactly what that costs: the 200 device pixels that are not a clean 2x2 block are the cursor's
+  rect, upscaled by the fork on a grid that is not ours. §13.8 wants the engine's pixel through
+  *our* filter at `k != 1`; bypassing the fork's scaler is explicitly G17b's ("there is only ever
+  one scaler in the picture, and it is ours"), and doing it here would have meant reproducing the
   fork's frame path exactly for no gain at `k = 1`.
 - **The sharp layer costs a full-viewport clear and a texel fetch per fragment while carrying
   nothing.** That is the price of landing the seam before its clients, and it is below the meter
@@ -1697,6 +1798,19 @@ for them (205 bytes of literal, 30 conversions, ~519 worst case).
   *discard* into *mask the fallback in that rect*, and a cursor drawn into the sharp layer while
   the discard still comes first would be invisible in its own rect — a null result that looks
   like a broken draw.
+- **1920x1080 on the reference setup is currently sick, and it is not this landing** [MEASURED
+  2026-09-09]. The parity fixture at 1920x1080 runs at **27 fps** with the publisher stalling
+  about sixteen times per 100 000 drained ops (`resets=113 stalls=112` at `drained=908 511`).
+  `main`'s own DLL on the same fixture, same window, minutes apart: **`resets=114 stalls=113
+  fps=27.0` at `drained=920 159`** — the same pathology to within a count. So it is pre-existing
+  and environmental, and it contradicts §10's recorded 1080p figures (59.99-60.01 fps, three
+  builds). The desktop is now 3840x2160 and the client the WM gives a "1920x1080" launch is not
+  1920x1080; that is the obvious suspect and it is **not investigated here**. Nothing at
+  1024x768 shows it: the 120-stop walk held 59-60 fps with `resets=8 stalls=7`.
 - The seeded-art gap (§14, *Not closed here*) is untouched: G17a does not go near
   `tagpu_gui_hook.c` or the seed path, so restoring a seed directly is still its own small
-  landing.
+  landing. **Its stated unknown is resolved**: the restorer reads only `.r` from its source
+  atlas (`tagpu_restore_glsl.h`, `idxAt` and the OUT pass), so a twin being `RG8` where the job's
+  contract says `R8` costs nothing. What is *not* resolved is that `tagpu_rglsl_job_new` clears
+  its destination when the job is made, and that priorities 0-4 are taken with `MAX_JOBS` at 6 —
+  a job per seeded surface does not fit as the pool stands.

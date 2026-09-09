@@ -53,11 +53,14 @@
    time — empty until the cursor and the string op fill it), then the mirror
    scaled by a SHARP-BILINEAR ramp one device pixel wide, then the engine's own
    frame as the fallback. k is device pixels per twin texel, read off the frame
-   rather than configured, and it is 1.0 wherever the engine's screen is the
-   window — which is every path phase 1 has; giving the engine window / k is
-   G17b's. At k = 1 the ramp is exactly one source texel wide, so every output
-   pixel samples a texel centre and the frame is what texelFetch gave: that
-   identity is the gate, not a hope. */
+   rather than configured, and it is 1.0 wherever the engine's screen IS the
+   window; giving the ENGINE window / k is G17b's. It is NOT always 1 today:
+   `resizable` defaults TRUE (config.c) and `maintas` fits the viewport to the
+   window (dd.c), so a player who drags the window off the game resolution is
+   already at a fractional k and already gets this ramp. At k = 1 the ramp is
+   exactly one source texel wide, so every output pixel samples a texel centre
+   and the frame is what texelFetch gave, to within a rounding step far too
+   small to cross an 8-bit value: that identity is the gate, not a hope. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -180,6 +183,9 @@ static GLuint s_sharpTex, s_sharpFbo;   /* the sharp layer: device res, RGBA8, r
 static int    s_sharpW, s_sharpH;       /* its size, = the frame's viewport in window px               */
 static int    s_sharpOn = 0;            /* it exists and may be sampled this frame                     */
 static int    s_sharptest = 0;          /* the harness lever that proves the layer is wired            */
+static int    s_sharpFailed = 0;        /* the target could not be made: stay off rather than retry     */
+static GLuint s_sharpProg;              /* QVS + SHARP_FS: a client's flat-coloured quad in the layer   */
+static GLint  s_uSharpProgSize, s_uSharpProgCol;
 static float  s_k = 1.0f;               /* device px per twin texel: 13.1's k, and the ramp's width    */
 
 /* ----------------------------------------------------------------- shaders */
@@ -231,6 +237,18 @@ static const char* LAY_VS =
     "out vec2 uv;\n"
     "void main(){ uv = a.xy;\n"
     "  gl_Position = vec4(a.x*2.0-1.0, 1.0-a.y*2.0, 0.0, 1.0); }\n";
+/* A CLIENT'S FILL IN THE SHARP LAYER: a constant colour over a quad given in
+   sharp-layer pixels, y DOWN from the viewport's top row. It pairs with QVS,
+   the TWINS' vertex mapping, unchanged and deliberately: both textures are
+   read back with a texelFetch whose row 0 is the top of the thing they mirror,
+   and NDC y = -1 is attachment row 0, so `y / size * 2 - 1` is the one mapping
+   both want. There is no flip anywhere in this module, and a client that adds
+   one draws upside down (MEASURED 2026-09-09: this shader had one for exactly
+   as long as it took `sharptest` to draw a quad through it). */
+static const char* SHARP_FS =
+    "#version 330 core\n"
+    "out vec4 frag; uniform vec4 uCol;\n"
+    "void main(){ frag = uCol; }\n";
 static const char* LAY_FS =
     "#version 330 core\n"
     "in vec2 uv; out vec4 frag;\n"
@@ -344,7 +362,10 @@ static int init_gl(void)
     s_sprProg = mkprog(QVS, SPR_FS);
     s_cpyProg = mkprog(QVS, CPY_FS);
     s_layProg = mkprog(LAY_VS, LAY_FS);
+    s_sharpProg = mkprog(QVS, SHARP_FS);
     if (s_gl == 2) return 0;
+    s_uSharpProgSize = glGetUniformLocation(s_sharpProg, "uSize");
+    s_uSharpProgCol  = glGetUniformLocation(s_sharpProg, "uCol");
     glUseProgram(s_sprProg);
     glUniform1i(glGetUniformLocation(s_sprProg, "uAtlas"), 0);
     glUniform1i(glGetUniformLocation(s_sprProg, "uAtlasRGB"), 1);
@@ -746,12 +767,17 @@ static void drain(void)
    the fallback until a primary exists, and the number of entries where the
    two disagree is measured at every upload (`paldiff=` in the heartbeat):
    0 at Gamma 12, and the world passes, which read +0x143A7, are wrong by
-   exactly that much at any other setting — WHICH IS EVERY SETTING WE MEASURE
-   AT. The template wine prefix carries Gamma 15, so the factor is 1.125,
-   paldiff reads 235 in the shell and in game alike, and the world is drawn
-   ~11 % darker than the engine presents its own pixels (MEASURED 2026-09-09,
-   gui-renderer.md 14). This layer is right either way; the world passes are
-   the ones still to decide. */
+   exactly that much at any other setting.
+   WHICH SETTING WE ARE AT IS NOT A PROPERTY OF THE TEMPLATE PREFIX, and the
+   G15e note that said it was is withdrawn (MEASURED 2026-09-09, gui-renderer.md
+   15): `wineprefix/user.reg` and all 58 instance prefixes are ONE inode — the
+   clone is `cp -al` — and wine rewrites it in place at every launch, so there
+   is a single Gamma shared by every instance and by the template, and it is
+   whatever TA last stored. It read 15 (factor 1.125, `paldiff=235`) for the
+   instances launched earlier that day and 12 (factor 1.0, `paldiff=0`) for the
+   ones launched after, on this DLL and on main's alike. This layer is right at
+   either value; the world passes are wrong by the factor whenever it is not
+   12, and how it comes to be one or the other is open. */
 static void upload_palette(void)
 {
     const char* ta = *(const char* const*)TA_MAINPP;
@@ -817,14 +843,20 @@ static void cursor_rect(float* r)
    resolution (13.1) — cleared at every present and composited above the 1x
    mirror wherever its alpha says it has coverage.
 
-   ROW 0 IS THE VIEWPORT'S TOP ROW, and nothing flips to make that true: the
-   layer shader indexes this texture with the same top-down `uv` it indexes the
-   twin with, and a scissor box on an FBO addresses the attachment's rows
-   directly, so scissor y IS the texture row IS the distance down from the top
-   of the viewport. A client draws in screen coordinates and never converts.
-   (MEASURED 2026-09-09: this is what `sharptest` was for. Its first square was
-   scissored at `h - 64` on the assumption that a scissor is bottom-up like the
-   window's, and it came out at the bottom of the screen.)
+   ROW 0 IS THE VIEWPORT'S TOP ROW, and it is the LAYER SHADER that makes it
+   so: it samples this texture with the same top-down `uv` it indexes the twin
+   with. Nothing about an FBO flips anything -- glScissor's y is measured from
+   the framebuffer origin here exactly as it is on the window, and that origin
+   is attachment row 0, which is also where NDC y = -1 lands. So a scissor box
+   and a client's geometry agree without help, and a client uses QVS, the very
+   mapping the twins use.
+   `sharptest` earned its lines twice over here (MEASURED 2026-09-09). Its
+   first square was scissored at `h - 64`, on the assumption that a scissor is
+   bottom-up like the window's, and came out at the foot of the screen. The
+   landing review then said the explanation was wrong in a way that would
+   mirror G17c's cursor -- correctly -- and the shader written to fix it added
+   a flip, which put the quad at the foot of the screen again. There is no
+   flip. The lever caught both.
 
    Empty in G17a by design: its clients are the cursor (13.5, G17c) and the
    string op (13.4, G17d). `sharptest` is what makes an empty layer testable —
@@ -842,13 +874,22 @@ static void sharp_begin(const TAGPU_FRAME* f)
 {
     int w = f->vp_w, h = f->vp_h;
     s_sharpOn = 0;
+    /* A FAILURE LATCHES, like init_gl's s_gl = 2. sharp_drop() zeroes the ids,
+       so without this every present would re-enter the allocation below --
+       generating, sizing and deleting a vp_w x vp_h texture and appending a log
+       line 60 times a second for the rest of the session, which buries the
+       heartbeat. The layer is additive, so staying off costs sharpness only. */
+    if (s_sharpFailed) return;
     if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return;
     if (s_sharpTex && (s_sharpW != w || s_sharpH != h)) sharp_drop();
     if (!s_sharpTex) {
         GLenum st;
         glGenTextures(1, &s_sharpTex);
         glGenFramebuffers(1, &s_sharpFbo);
-        if (!s_sharpTex || !s_sharpFbo) { sharp_drop(); return; }
+        if (!s_sharpTex || !s_sharpFbo) {
+            slog("gui: sharp layer — no texture/framebuffer id, the mirror alone");
+            sharp_drop(); s_sharpFailed = 1; return;
+        }
         glBindTexture(GL_TEXTURE_2D, s_sharpTex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -868,6 +909,7 @@ static void sharp_begin(const TAGPU_FRAME* f)
             b[sizeof b - 1] = '\0';
             slog(b);
             sharp_drop();
+            s_sharpFailed = 1;
             return;
         }
         s_sharpW = w; s_sharpH = h;
@@ -877,27 +919,46 @@ static void sharp_begin(const TAGPU_FRAME* f)
     x_glDisable(GL_SCISSOR_TEST);
     x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     x_glClear(GL_COLOR_BUFFER_BIT);
-    if (s_sharptest) {
+    if (s_sharptest && s_sharpProg) {
         /* THE HARNESS LEVER, never for a player, and the only thing in G17a
            that puts a texel in this layer: a 64x64 opaque green square at the
-           viewport's TOP-LEFT (rows 0..63, which is scissor y 0..63 — see
-           above) and a one-DEVICE-pixel white column at device x = 100.
-           Between them they prove the four things the gate cannot otherwise
-           see — the layer exists at the device resolution, it composites
-           ABOVE the mirror, alpha is what gates it, and row 0 is the top. */
-        glEnable(GL_SCISSOR_TEST);
-        x_glScissor(0, 0, 64, 64);
-        x_glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
-        x_glClear(GL_COLOR_BUFFER_BIT);
-        x_glScissor(100, 0, 1, h);
-        x_glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-        x_glClear(GL_COLOR_BUFFER_BIT);
-        x_glDisable(GL_SCISSOR_TEST);
-        /* the clear colour is global state and tagpu_overlay_capture_begin
-           clears the frame's target without setting one of its own — leaving
-           white here would tint every letterbox bar under the lever */
-        x_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+           viewport's TOP-LEFT and a one-DEVICE-pixel white column at device
+           x = 100. Between them they prove the five things the gate cannot
+           otherwise see — the layer exists at the device resolution, it
+           composites ABOVE the mirror, alpha is what gates it, row 0 is the
+           top, and SHARP_VS puts a client's GEOMETRY the right way up. It is
+           drawn as quads rather than scissored clears precisely because
+           geometry is what G17c and G17d will use, and a scissor box would
+           have proved the convention for the one client kind that never
+           needs it. */
+        float v[24];
+        x_glDisable(GL_BLEND);
+        x_glDisable(GL_DEPTH_TEST);
+        glUseProgram(s_sharpProg);
+        x_glUniform2f(s_uSharpProgSize, (float)w, (float)h);
+        glBindVertexArray(s_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+        x_glUniform4f(s_uSharpProgCol, 0.0f, 1.0f, 0.0f, 1.0f);
+        quad(v, 0.0f, 0.0f, 64.0f, 64.0f, 0, 0, 0, 0);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
+        x_glDrawArrays(GL_TRIANGLES, 0, 6);
+        x_glUniform4f(s_uSharpProgCol, 1.0f, 1.0f, 1.0f, 1.0f);
+        quad(v, 100.0f, 0.0f, 101.0f, (float)h, 0, 0, 0, 0);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
+        x_glDrawArrays(GL_TRIANGLES, 0, 6);
     }
+    /* THE CLEAR COLOUR IS MODULE-WIDE STATE AND WE OWN IT AT (0,0,0,0).
+       render_ogl.c repaints the letterbox bars with a bare glClear on EVERY
+       frame whose viewport is offset (`if (viewport.x || viewport.y)`), and
+       tagpu_overlay_capture_begin does the same for a glshot — neither sets a
+       colour of its own, so whatever we leave here is what they paint. The
+       clear above already ends at (0,0,0,0) on the normal path; this is the
+       statement of the invariant, not a second setter.
+       `sharp_begin` also leaves the VIEWPORT at (0,0,w,h) with the scissor
+       test off and the default framebuffer bound. That is safe only because
+       tagpu_gui_present rebinds the target FBO and the frame's viewport after
+       draw_layer -- which can return early -- so a future client drawing here
+       must not assume draw_layer ran. */
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     s_sharpOn = 1;
 }
@@ -932,11 +993,13 @@ static void draw_layer(const TAGPU_FRAME* f)
     cursor_rect(cur);
     x_glUniform4f(s_uLayCursor, cur[0], cur[1], cur[2], cur[3]);
     /* k, and with it the ramp's width (13.3): device pixels per twin texel.
-       The twin is the engine's surface 1:1, so this is exactly 13.1's k —
-       1.0 for as long as the engine's screen IS the window, which is every
-       path in phase 1 and the whole of G17a. Below 1 the fork is scaling the
-       engine DOWN into a smaller window; the ramp is held at plain bilinear
-       there rather than widened past a texel. */
+       The twin is the engine's surface 1:1, so this is exactly 13.1's k — 1.0
+       for as long as the engine's screen IS the window. That is NOT the same
+       as "always 1 in phase 1": any window the player drags off the game
+       resolution lands here fractional, and so does the 640x480 shell left in
+       a bigger client. Below 1 the fork is scaling the engine DOWN into a
+       smaller window; the ramp is held at plain bilinear there rather than
+       widened past a texel. */
     s_k = (t->w > 0 && f->vp_w > 0) ? (float)f->vp_w / (float)t->w : 1.0f;
     if (s_k < 1.0f) s_k = 1.0f;
     ky = (t->h > 0 && f->vp_h > 0) ? (float)f->vp_h / (float)t->h : 1.0f;
@@ -1077,6 +1140,7 @@ void tagpu_gui_glreset(void)
     s_ntwins = 0; s_presented = 0;
     s_gl = 0; s_sprProg = s_cpyProg = s_layProg = s_vao = s_vbo = s_palTex = 0;
     s_sharpTex = s_sharpFbo = 0; s_sharpW = s_sharpH = 0; s_sharpOn = 0;   /* the sharp layer died with it */
+    s_sharpProg = 0; s_sharpFailed = 0;      /* a new context deserves a fresh try */
     tagpu_gaf_atlas_lost(&s_atlas);
     memset(s_palCopy, 0xFF, sizeof s_palCopy);        /* the palette texture died too: re-upload */
     s_skipToReset = 1;
