@@ -1338,6 +1338,31 @@ builds everything it would reuse.
 >    pivot, "keep the engine's fog as a pixel op and **ship the base alone**", is not available
 >    either: there is no shipping the base alone. Either the fog is solved or the minimap stays
 >    the engine's.
+> 4b. **How the fog is done instead** [DECIDED by the owner 2026-09-09, MEASURED the same day].
+>    Not by re-deriving visibility — that is what §13.6 forbids for the dots — but by **masking
+>    against the engine's own two bases**: `+0x142DF` (the base *with* its fog shading) against
+>    `+0x142E3` (the same base without). Where they agree the engine is showing true terrain and
+>    our sharper copy of that terrain is safe; where they differ its own pixel is used verbatim.
+>    The visibility decision therefore stays entirely the engine's.
+>
+>    **The test is over a 3×3 neighbourhood, and that is the safety argument, not a nicety.** The
+>    shade is a LUT into a dark-grey ramp, so a pixel already in that ramp maps to itself; a
+>    single-texel test would then let four of *our* sub-texels through, taken from the unfogged
+>    picture and possibly bright. Requiring the whole neighbourhood to agree costs a one-texel band
+>    of the engine's own resolution around every fog edge and **cannot** leak.
+>
+>    **Measured on a 99.6 % fogged map** (`scenario load --mapping 0`; the mapped fixture reads
+>    `fog=0/13356` and tests nothing):
+>
+>    | | reading |
+>    |---|---|
+>    | engine texels hidden | **13 301 of 13 356** |
+>    | our minimap vs the engine's, in the box | **2 pixels of 13 356** |
+>    | where those two are | inside the engine's own lit region — its 67 lit pixels span (32,7)-(68,125), the two are (64,122) and (64,123) |
+>
+>    The property is **bounded, not hoped**: our base can only be used where the pair agrees across
+>    3×3, so the pixels that can differ are at most the unfogged texels (55 here) times `k²`. Two
+>    is inside that bound, and `fog=` reports the bound every frame.
 > 5. **The dots must be REPLAYED, and the arcs need two new leaves.** The unit dots are
 >    `0x4B7F90` blits and already observed, so they arrive as sprite ops on `+0x142DB` and can be
 >    replayed at ×2. The coverage arcs `0x4C0070` and `DrawPoint 0x4BEE60` are **not** leaves (§7):
