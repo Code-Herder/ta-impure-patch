@@ -608,6 +608,30 @@ is **use TA's gadget/UI mechanism as much as possible**, and every choice below 
    `0x4A1110` sets and `0x4A1080` does not, is unidentified and may be why a bare `SetStatus`
    is not enough to make a change appear [OPEN].
 
+5. **The trigger's hit-test must sit on BOTH input paths.** `tagpu_shield.c` handles the
+   injected `WM_TAGPU_MOUSE` → `deliver_mouse()` *before* the shield check, and then, with the
+   shield on, swallows every real `WM_LBUTTONDOWN`. So a tacli instance sees **only injected**
+   clicks and a player sees **only real** ones. A hit-test hung off one path passes its own
+   tests and fails for players, or the reverse — it has to be one function called from both.
+   (The same shape as the `field-notes` patch-2b bug, where a cursor change quietly altered
+   what a left click did.)
+6. **`OnCommand` does not write the file.** It sets an in-memory value; the cfg is written at
+   the next present. TA is lockstep, `OnCommand` runs on the game thread, and a synchronous
+   write there is an unbounded stall — a slow disk, a scanner touching a just-written file, a
+   network drive — which can drop a player from a session whatever the content was. The
+   settings are render-only so they cannot desync *by content*; this is about the stall.
+   Deferring also coalesces four rapid clicks into one write, and the cfg poller re-reads on
+   mtime either way, so nothing downstream changes. *Note the existing knobs are written
+   synchronously — but by humans and by tacli, from outside the game thread, which is not the
+   same thing.*
+7. **If the `.ufo` is unusable: silent on screen, loud in `tagpu.log`, and rewritten every
+   launch** with a version stamp. Silent because a rendering menu failing to appear must never
+   cost someone a game; logged because that is this codebase's idiom (`terrown: ARMED`, and the
+   ta-drive skill's advice to `md5sum` the DLL when a module does not log). Rewritten
+   unconditionally because staleness after a DLL upgrade is the one failure here that would be
+   genuinely confusing, and it costs a few ms at startup. *Write access to the gamedir is not a
+   new requirement — the DLL already writes seven files from 17 create-for-write sites.*
+
 **What that buys, and when it would stop being worth it.** The engine keeps hit-testing,
 dispatch, the `stagebuttn` pressed/greyed art, `hattfont12` labels at any resolution, and the
 `panel+0xB8`/`+0xBC` save-under — and, decisively, `tagpu_gui_surf.c`'s *"every engine surface
