@@ -3348,8 +3348,11 @@ static void pose_dump(const char* u, const char* o3)
        what was left; that omission, not any staleness in the vertex buffer, is
        the whole of the residual the eight fixtures recorded -- recovered from
        the fixtures' own base pieces 2026-09-08, every class to exactly 0.
-       `bt` is therefore built exactly as recon_begin builds it, and `err=` is
-       now the same quantity recon_err reports. */
+       `bt` is therefore built exactly as recon_begin builds it. `err=` is now
+       built from the SAME RECONSTRUCTION recon_err uses -- not the same
+       number: recon_err skips a piece whose visible bit is clear and compares
+       recon_prim's 16.16-ROUNDED output, while this reports every piece,
+       ` HIDDEN` ones included, differenced in float. */
     const unsigned short* bturn = (const unsigned short*)(o3 + O3_BTURN);
     unsigned short bt[3];
     int nparts;

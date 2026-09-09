@@ -164,7 +164,10 @@ Measured against `pr + 0x22`:
   node's `+0x10/+0x14/+0x18` and only then walks up the chain, which is what this pass's `d`
   already does. The live check is `tools/tacob pose-check --all`, which rebuilds the eight
   cobtrace fixtures' posed vertices from those rules and diffs them against `P_VBUF`: **exactly
-  0 on every class**, once the body turn is supplied in full. *[CORRECTED 2026-09-08: this used
+  0 on every class**, once the body turn is supplied in full. **The tracked fixtures predate the
+  dump's `body=` field**, so the command as run today reports their old residuals against a
+  `legacy: yaw only` tag; the 0 is measured by recovering the body triple from each fixture's own
+  base piece (`exe-reverse-engineering.md`) and, live, by a fresh capture. *[CORRECTED 2026-09-08: this used
   to read "on the four fast movers a residual that equals this pass's own `err=` on the same
   dump line (the vertex buffer being a frame behind the pose the dump sampled)". The residual
   was not staleness — the checker and `pose_dump` both applied the heading alone while the

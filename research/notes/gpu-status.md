@@ -831,8 +831,10 @@ exactly. `emit_geom` and `emit_slant` read it on either side of each piece's ver
 `int` loads and a compiler barrier; x86 does not reorder loads with loads, so nothing stronger is
 needed). If it was set on either side the whole unit is re-emitted from the **pose fields** —
 `pose_accum`'s reconstruction, with **all three** cached body words folded into the base
-piece's turn the way `0x45B0DB` folds them (`pose_dump`'s `err=` reports the same quantity since
-2026-09-08; it used to apply the heading alone) — written into the same 16.16 representation the engine's buffer holds, so
+piece's turn the way `0x45B0DB` folds them (`pose_dump`'s `err=` is built from the same
+reconstruction since 2026-09-08, where it used to apply the heading alone — though not the same
+number: `recon_err` skips pieces whose visible bit is clear and compares `recon_prim`'s
+16.16-rounded output, `pose_dump` reports every piece including hidden ones, in float) — written into the same 16.16 representation the engine's buffer holds, so
 both emit paths consume it with the arithmetic they already had.
 
 The flag is *also* 1 while the buffer is merely **stale** (a COB `move`/`turn` the next `DrawUnit`

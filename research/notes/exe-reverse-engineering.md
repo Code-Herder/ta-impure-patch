@@ -3153,9 +3153,11 @@ behind the pose the dump sampled**. That was wrong, and the way it was wrong is 
 - *`[MEASURED 2026-09-08]` The missing words are recoverable from the tracked fixtures
   themselves: each records its base piece's rest vertices (`node=`) beside the engine's posed
   ones (`vbuf=`), and Kabsch on those pairs gives the rotation exactly. Supplying the recovered
-  triple takes **all eight classes to exactly 0** — and on the five that already read 0 the
-  recovered heading reproduces the recorded `yaw` to within 2 units, which is what says the
-  recovery is sound rather than a fit.*
+  triple takes **all eight classes to exactly 0** — and on five of the eight (kbot, tank,
+  building, ship, sub) the recovered heading reproduces the recorded `yaw` to within 2 units,
+  which is what says the recovery is sound rather than a fit: it never sees `yaw`. The tank is
+  the telling one — its residual was 4.11, so it is not one of the four that already read 0, yet
+  its heading comes back exact while its pitch comes back as the −12.34° that was being dropped.*
 - *`[MEASURED 2026-09-08]` Confirmed live: `pose_dump` now prints `body=` (the cached triple it
   folds) and `live=` (`unit+0x68/+0x66/+0x64`), and a fresh capture of the tank and the bomber
   reads **`err=0.00` on every piece**, against 5.45 and 77.19 before. The tank's recorded

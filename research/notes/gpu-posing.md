@@ -44,9 +44,12 @@ ZXY extraction gives the triple. Supplying it takes **all eight classes to exact
 | ship | CORBATS | 0.000 | **0.000** | +0.00° / −90.00° / +0.00° |
 | sub | CORSUB | 0.002 | **0.000** | +0.00° / −84.38° / +0.00° |
 
-The recovery validates itself: on the five classes that already read 0, the heading it recovers
-reproduces the fixture's recorded `yaw` to within 2 units. It is not a fit to noise — a fit
-would not agree with a number it never saw.
+The recovery validates itself: on **five of the eight** — kbot, tank, building, ship and sub —
+the heading it recovers reproduces the fixture's recorded `yaw` to within 2 units, and the
+recovery never sees `yaw`. The tank is the one that makes the point: its residual was 4.110, so
+it is not one of the four that already read 0, and its heading still comes back exactly right
+while its *pitch* comes back as the −12.34° the old checker was throwing away. A fit to noise
+would not agree with a number it was never shown.
 
 *Live, with the fixed instrument.* `pose_dump` now folds the cached triple and prints it. A
 fresh capture of the tank and the bomber reads **`err=0.00` on every piece**, against 5.45 and
