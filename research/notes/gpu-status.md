@@ -676,7 +676,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with (`tagpu_text.c`) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
-| `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08, and what `hires_pose` still does |
+| `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
 | the **level generation** (`tagpu_reclaim_level_gen()`) | not an engine field — our own counter, bumped on the game thread inside the teardown `0x491B60` and read on the render thread. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a) |
 | `node+0x24` | the model's REST vertices, `count × 12` bytes of 16.16. Read only. Shared by every unit of a type and never written after load, which is what makes the reconstruction in §2.9 safe to build from while the engine is rewriting the posed copy |
 | `main+0x37F06` bit0 | `damagebars` registry option |
@@ -1097,6 +1097,25 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 ### 3.2 Smaller, known, and cheap to close
 
+- **A crash in the Classic++ shadow pass, fixed 2026-09-09 — and the fix is a BOUND, not a
+  probe.** `[MEASURED 2026-09-08]` a 400-unit game under the play defaults faulted at
+  `fild [ebx+0x10]` inside `tagpu_native.c`'s `aabb_walk`, `EBX = 0x3D1E4B1E`, seven levels into
+  the recursion, ~46 s in — `C0000005`, no warning, and identified only by matching the
+  `ErrorLog`'s bytes at EIP against our own DLL (the report names `TotalA.exe` whatever module
+  faulted; the IP was our relocated base plus `0x48462`). The caster loop took the unit record's
+  `ModelId` (`unit+0xA6`) straight into the model-template table with no bound at all, so a unit
+  slot recycled between the frame's gather and the shadow loop addressed memory past the end of
+  that table and the pointer read from there was walked as if it were a model. Now it goes
+  through `model_root`, which holds the index to `1 <= mid < UNITINFOCount` — the exact range the
+  engine's own load and free loops use, so an in-range slot holds NULL or a live template by
+  construction ([engine map](exe-reverse-engineering.html) §`0x42D5xx`). The walk itself gained
+  **no** per-node `IsBadReadPtr`: a readability probe is a fact about the past and would have
+  made the fault rarer rather than impossible (`CLAUDE.md`, *Fixes must be safe by construction*;
+  [thread-safe destruction](thread-safe-destruction.html) §2 on what a Mode B read owes). The
+  selection-rect loop read the same table the same way and now shares the bound. Re-measured: the
+  case that crashed ran 7.5 minutes of `200v200` plus a quit to the shell and a second level, no
+  fault, `BADMODELID=0` — the counter the `native:` line grows only when the bound catches
+  something, which so far it never has.
 - **The Kbot lab's Classic slant shadow — found mostly missing on 2026-09-06, closed 2026-09-07
   (G14j).** Not the piece flags: the slant was drawn through the silhouette's waterline erase,
   and the fixture's lab on the shore (altitude 63, sea level 75, a path-B composite) lost every

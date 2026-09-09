@@ -123,6 +123,10 @@
 #define U_YAW        0x66      /* u16 body yaw, 65536 = 360 deg             */
 #define U_MODELID    0xA6      /* u16 index into MODEL_PTRS                 */
 #define OFF_MODELPTRS 0x14377  /* Model3DONode* [] (model templates)        */
+#define OFF_UDEFCOUNT 0x1438F  /* u32 UNITINFOCount: the LENGTH of that     */
+                               /* table as well as of the unit-def array —  */
+                               /* 0x42DBCA loops i = 1 .. count-1 over      */
+                               /* exactly these two (stride 4 and 0x249)    */
 #define OFF_UIGATES  0x37F2F   /* bit2 = SelBoxes toggle (default on)       */
 #define OFF_GUICOL   0x0DCB    /* GUI colour byte array: GetGuiPaletteColor  */
                                /* (composite-buffer.md) = *(u8*)(ta+0xDCB+i)*/
@@ -848,10 +852,91 @@ int tagpu_native_owns_obj(unsigned int obj3do)
 /* ---- whole-3DO-tree model-space AABB (engine FUN_004CB650 equivalent) ----
    walked over the raw Model3DONode template (verts 16.16, child offsets
    accumulate); cached per root node. Feeds the native selection rect. */
+/* THE UNIT'S MODEL TEMPLATE, BOUNDS-CHECKED — and the bound is the whole
+   safety argument, deliberately, because a readability PROBE would not be one.
+
+   `main+0x14377` is the array of Model3DONode* the engine indexes with the
+   unit record's ModelId, and `UNITINFOCount` at `main+0x1438F` is its LENGTH,
+   not merely a related number. [BINARY-VERIFIED 2026-09-09]: the count is set
+   first and the table allocated as `count * 4` bytes at 0x42D68A/0x42D693; the
+   load loop then runs `i = 1 .. count-1` and writes EVERY slot (0x42D7A2), so
+   no slot in range is left holding the allocator's garbage; and the teardown
+   loop 0x42DBCA runs the same range, freeing each slot and nulling it
+   (0x42DC15) before freeing the table and nulling the pointer (0x42DCB6 /
+   0x42DCD8). The unit defs at `main+0x1439B` run alongside at stride 0x249,
+   which is why one count serves both. Slot 0 is the "no model" entry the
+   engine neither fills nor frees, and this file's dead-unit test already reads
+   ModelId == 0 that way.
+
+   So `1 <= mid < count` is not a heuristic: it is the exact set of slots the
+   engine writes, and every one of them holds NULL or a template of the level
+   that is loaded.
+
+   NOTHING BOUNDS THE u16 IN THE UNIT RECORD, and it is read from a Mode B
+   object (thread-safe-destruction.md §2): the unit array is a fixed array the
+   engine recycles in place and never returns to the heap, so a slot that died
+   between this frame's gather and this read is mapped but holds another unit's
+   values — or, mid-rewrite, a torn one. That contract says a stale read is at
+   worst a wrong frame, and it holds only if every value taken from such an
+   object is validated AS DATA before it is used. This one was not: an
+   unbounded index into a bounded table addresses arbitrary memory, and the
+   pointer read from there passes a range test about as often as not, so the
+   caller then walks bytes that are not a model at all. That is the read behind
+   the 2026-09-08 access violation in aabb_walk.
+
+   Bounded, the worst case is back inside the Mode B contract by construction
+   rather than by luck: a stale index costs one frame of another type's AABB
+   and can never fault. A live template has an internally consistent tree,
+   which is why aabb_walk below needs no per-node probing — see the note there.
+
+   THE ONE THING THIS RESTS ON that it does not itself establish: the templates
+   must still be alive while we read them. They are freed by 0x42DB90 in the
+   level-teardown cascade, and the render thread is held out of that window by
+   tagpu_reclaim's teardown wrap — whose wait has a 1 s timeout, after which
+   the cascade proceeds with a render pass still running. That hole is
+   pre-existing, is recorded in thread-safe-destruction.md §6a as an open item,
+   and is the reason this function is not the last word on the subject. */
+static unsigned s_badModelId;          /* refused here, reported with the frame */
+
+static const char* model_root(const char* ta, const char* u)
+{
+    unsigned mid, n;
+    const char* mptrs;
+    if (!ptr_ok(ta) || !ptr_ok(u)) return NULL;
+    mid = *(const unsigned short*)(u + U_MODELID);
+    n   = *(const unsigned*)(ta + OFF_UDEFCOUNT);
+    if (mid == 0 || n == 0 || n > 0x10000u || mid >= n) {
+        if (mid) s_badModelId++;       /* 0 is "no model", not a refusal */
+        return NULL;
+    }
+    mptrs = *(const char* const*)(ta + OFF_MODELPTRS);
+    if (!ptr_ok(mptrs)) return NULL;
+    return *(const char* const*)(mptrs + (size_t)mid * 4);   /* in bounds */
+}
+
 typedef struct { const char* node; float mn[3], mx[3]; } MAABB;
 static MAABB s_aabb[256];              /* every caster asks, once per model (G14i) */
 static int   s_naabb = 0;
 
+/* NO PER-NODE READABILITY PROBE HERE, ON PURPOSE. An IsBadReadPtr before each
+   dereference would be a check whose answer can go stale between the check and
+   the read — it would make a fault rarer without making it impossible, which
+   is the shape of fix this project does not take (CLAUDE.md, "Fixes must be
+   safe by construction"). The walk is safe because of what it is handed: a
+   root that came through model_root, so it is a slot of the engine's own model
+   table, and the tree hanging off a live template is internally consistent —
+   the engine's own equivalent walk (0x4CB650) probes nothing either.
+
+   The two loop bounds below are data bounds, not memory probes: they stop a
+   malformed model from running away, and they hold whatever the file contains.
+
+   The lifetime the argument rests on is the LEVEL: 0x42DB90 frees every
+   template in the teardown cascade, and the render thread is held out of that
+   window by tagpu_reclaim's teardown wrap (thread-safe-destruction.md §6a).
+   That hold has one timing-dependent hole left — the pre hook's 1 s timeout,
+   after which the cascade frees the templates with a render pass still
+   running. It is pre-existing and is recorded there as an open item; it is not
+   something this walk can close on its own. */
 static void aabb_walk(const char* nd, float ox, float oy, float oz,
                       float* mn, float* mx, int depth)
 {
@@ -1144,7 +1229,7 @@ static float s_P[MAXNODEV * 3];     /* one node's model-space vertices */
    next DrawUnit has not composed yet), which is most of what trips the
    guard and would be perfectly safe to draw. We do not try to tell the two
    apart -- nothing in the struct does -- and instead emit the unit from the
-   pose FIELDS: `pose_accum`'s reconstruction, the one `pose_dump`'s `err=`
+   pose FIELDS: `pose_accum_body`'s reconstruction, the one `pose_dump`'s `err=`
    and `tools/tacob pose-check --all` check the engine's own buffer against
    (residual 2e-5 model units). That is the pose the engine is on its way
    to, it is built from fields no one is rewriting behind us, and it lands
@@ -1838,11 +1923,6 @@ static int pose_accum_body(const char* o3, HPOSE* h, const unsigned short* bt)
     return nparts;
 }
 
-static int pose_accum(const char* o3, HPOSE* h)
-{
-    return pose_accum_body(o3, h, NULL);
-}
-
 /* ---- the reconstruction emit_geom/emit_slant fall back to ---------------
    One Object3do's whole pose, rebuilt from the fields and written out in the
    SAME 16.16 representation P_VBUF holds, so the two emit paths consume it
@@ -1958,11 +2038,45 @@ static void recon_watch(const char* o3, const char* why)
 }
 
 /* Fill out[npiece*12] for `mesh` from the unit's Object3do. 0 = leave it all
-   at rest (the caller then uploads the identity). */
+   at rest (the caller then uploads the identity).
+
+   THE BODY TURN IS FOLDED IN HERE, ALL THREE WORDS, from the Object3do's
+   CACHED copy — and both halves of that sentence were wrong until 2026-09-09.
+   This pass used to pose in model space and let the shader rotate the result
+   by the heading alone (`uYawEnc`), which is not what the engine does twice
+   over:
+
+     - the engine folds the whole triple at Object3do+0x18/+0x1A/+0x1C into the
+       BASE piece's own turn (0x45B0DB) before composing, so bank and pitch are
+       part of the pose and not an outer rotation. Applying the heading alone
+       draws a replacement mesh upright on ground that tilts every other unit —
+       right on the flat, wrong on every slope, and a Stumpy on the fixture
+       hillside reads 17.4 deg of bank and -22.1 of pitch;
+     - and the words to fold are the CACHED ones, not the live unit+0x64. On a
+       ground unit the two agree; on a bomber they were measured 157 degrees of
+       heading apart (cached (0,16128,3) against live (0,44767,65508)), and the
+       geometry the engine draws follows the cached copy.
+
+   This is the same additive fold recon_begin uses, and that path is measured
+   at exactly 0 residual against the engine's own P_VBUF on all eight COB
+   classes (`tools/tacob pose-check --all`) — so the fold is the engine's
+   arithmetic, and the outer rotation it replaces was the approximation.
+   The caller sends 0 for the shader's yaw whenever this returns 1: the pose
+   already carries the rotation, and turning it again would double it.
+   model-import.md, "The body turn is all three words". */
 static int hires_pose(const char* o3, const void* mesh, float* out, int npiece)
 {
     static HPOSE h;                        /* 17 kB at TAGPU_PBMAXPIECE: not a local */
-    int g, nparts = pose_accum(o3, &h);
+    unsigned short bt[3];
+    int g, nparts;
+    if (!ptr_ok(o3) || IsBadReadPtr(o3, O3_PRIM0)) return 0;
+    {
+        const unsigned short* bturn = (const unsigned short*)(o3 + O3_BTURN);
+        bt[0] = bturn[2];                  /* +0x1C = unit+0x68, about X */
+        bt[1] = bturn[1];                  /* +0x1A = unit+0x66, about Y */
+        bt[2] = bturn[0];                  /* +0x18 = unit+0x64, about Z */
+    }
+    nparts = pose_accum_body(o3, &h, bt);
     if (!nparts) return 0;
     {
         const HPMAP* pm = pmap_for(mesh, h.nd, nparts);
@@ -2670,7 +2784,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             h->wx0 = units[i].wx0; h->wz0 = units[i].wz0;
             h->enc = encBase;
             h->shadowDy = (float)(units[i].gy - units[i].ay);
-            h->yaw = units[i].yaw;
+            /* the pose carries the body turn now (hires_pose), so the
+               shader must not turn it again; only the rest-pose fallback,
+               which has no pose to carry anything, still needs an outer
+               rotation — and it takes the heading from the CACHED triple the
+               drawn geometry follows, not the live unit word */
+            h->yaw = h->pose ? 0
+                   : (unsigned short)*(const unsigned short*)(units[i].o3 + O3_BTURN + 2);
             h->alpha = units[i].cloaked ? 0.5f : 1.0f;
             h->fog = FOGW(i);
             h->waterT = units[i].waterT;
@@ -2733,13 +2853,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        GUI colour 0xA, drawn as GL_LINES at just-under-the-unit depth ---- */
     int lineStart = nv, selDrawn = 0;
     if (nsel) {
-        const char* mptrs = *(const char* const*)(ta + OFF_MODELPTRS);
         for (i = 0; i < nu && nv + 8 <= MAXNV; i++) {
             if (units[i].dead || !units[i].sel || !units[i].u) continue;
-            unsigned mid = *(const unsigned short*)(units[i].u + U_MODELID);
-            if (!ptr_ok(mptrs)) break;
-            const char* root = *(const char* const*)(mptrs + (size_t)mid * 4);
-            const MAABB* a = selbox_aabb(root);
+            const char* root = model_root(ta, units[i].u);
+            const MAABB* a = root ? selbox_aabb(root) : NULL;
             if (!a) continue;
             /* the engine hands all THREE of the unit's angles to 0x4B6CC0
                (bank, heading, pitch at u+0x64), so the corners take the same
@@ -2921,7 +3038,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)nv * NVST * 4, s_verts);
     for (i = 0; i < nu; i++) { castv[i][0] = 0.0f; castv[i][1] = 0.0f; castv[i][2] = 1.0f; }
     if (cpp && tagpu_shadow_begin(&fv, (gfx & 4) != 0)) {
-        const char* mptrs = *(const char* const*)(ta + OFF_MODELPTRS);
         for (i = 0; i < nu; i++) {
             float agl, throw_, sv, top = 0.0f, amn = 0.0f;
             int skip;
@@ -2933,10 +3049,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                AABB for a unit (constant per type, so an animating piece does
                not make its shadow breathe); a wreck has no unit record and
                takes its posed top, which never moves */
-            if (units[i].u && ptr_ok(mptrs)) {
-                unsigned mid = *(const unsigned short*)(units[i].u + U_MODELID);
-                const char* root = *(const char* const*)(mptrs + (size_t)mid * 4);
-                if (ptr_ok(root)) {
+            if (units[i].u) {
+                const char* root = model_root(ta, units[i].u);
+                if (root) {
                     const MAABB* a = model_aabb(root);
                     if (a) { top = a->mx[1]; amn = a->mn[1]; }
                 }
@@ -3359,11 +3474,18 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         /* writes nothing at all unless tagpu_posebake.on is there, so the line
            a player's log carries is byte-identical to the one before G16 */
         tagpu_posebake_stats(bake, sizeof bake);
+        /* ModelIds refused by model_root's bound — a unit slot recycled under
+           the frame, or a torn read of one. Reported only when it has caught
+           something, because in a healthy game it never does. */
+        char badmodel[48];
+        badmodel[0] = 0;
+        if (s_badModelId)
+            _snprintf(badmodel, sizeof badmodel, " BADMODELID=%u", s_badModelId);
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u posefix=%d guard=%u rest=%u norecon=%u errmax=%s%s%s",
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u posefix=%d guard=%u rest=%u norecon=%u errmax=%s%s%s%s",
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_reread, s_posefix, s_poseGuard, s_poseRest, s_poseNorecon,
-                  emax, bake, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
+                  emax, bake, badmodel, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
         s_reread = 0;
         s_poseGuard = 0; s_poseRest = 0; s_poseNorecon = 0; s_poseErrMax = 0.0f;
@@ -3375,7 +3497,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
    numeric dump of the engine's per-piece pose for the first owned unit — its
    rest offset, MOVE delta and TURN triple, its raw node verts against the
    engine's own posed vbuf, and `err=`, the largest disagreement in model units
-   between those posed verts and what pose_accum() reconstructs from the
+   between those posed verts and what pose_accum_body() reconstructs from the
    fields. That last number is the whole point: it is how the transform
    convention was solved in the first place (research/notes/model-import.md),
    and it is how a unit whose script does something no sample covered — a piece
@@ -3435,7 +3557,7 @@ static void pose_dump(const char* u, const char* o3)
               (unsigned)*(const unsigned short*)(u + U_YAW),
               (unsigned)*(const unsigned short*)(u + 0x64));
     nlog(b);
-    if (!nparts) { nlog("posedump: pose_accum refused this unit"); return; }
+    if (!nparts) { nlog("posedump: pose_accum_body refused this unit"); return; }
     int p;
     for (p = 0; p < nparts && p < 32; p++) {
         const char* pr = h.pr[p];

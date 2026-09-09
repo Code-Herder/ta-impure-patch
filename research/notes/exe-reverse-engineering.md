@@ -2563,6 +2563,41 @@ the game-state arrays (`0x491BC5`, `0x491BD9`, `0x491BED`). **The fork wraps thi
 flush the deferred queue while the registry is alive — or, if it does not leave within a second,
 keep the queue and keep deferring through the cascade) and a post hook (release it).
 
+### `0x42D5xx` — the model-pointer table is BUILT here, and every slot in it is written
+
+`[BINARY-VERIFIED 2026-09-09]` The other half of `0x42DB90` below, and the half a reader needs:
+it is what makes "the ModelId is in range" a safety property rather than a guess.
+
+- **The count comes first.** `main+0x1438F` (`UNITINFOCount`) is already set when the table is
+  allocated: `0x42D684` loads it, `0x42D68A` shifts it left 2, and `0x42D693` calls the named
+  allocator `0x4D83B0` for exactly `count * 4` bytes, storing the result to `main+0x14377`
+  (`0x42D6AA`). So the count is the table's **length**, not merely a related number — the same
+  value bounds the unit defs at `main+0x1439B` at stride `0x249`, which is why one count serves
+  both arrays.
+- **The allocator does not zero.** `0x4D83B0` → `0x4D83C0` is a plain malloc wrapper (a tag
+  string, `0x4E8890` or the fussy-heap path, no fill). Nothing about an untouched slot is
+  therefore safe to assume — which is why the next point is the load-bearing one.
+- **Every slot in `[1, count)` is written.** The load loop runs `esi = 1` while
+  `esi < [main+0x1438F]` (`0x42D6B6` / `0x42D6BC`) and stores the loaded model to
+  `[table + esi*4]` at `0x42D7A2` on every iteration — including the failure path, where
+  `0x4CB560` returned NULL and `0x4B6290` reported it: `edi` is stored either way.
+- **Slot 0 is never touched** by either loop — neither the fill (which starts at 1) nor the free
+  (`0x42DBCA`, same range). It is the "no model" entry, and `unit+0xA6 == 0` is how the engine
+  and the fork both spell "this unit has no model".
+
+**The invariant this gives a reader.** For `1 <= mid < [main+0x1438F]`, `[main+0x14377][mid]` is
+a slot the engine wrote at load and nulls at teardown, so it holds **NULL or a live template of
+the level that is loaded** — never the allocator's leftovers, and never off the end of the
+allocation. `unit+0xA6` itself is bounded by nothing, and the unit array it comes from is a
+Mode B object (recycled in place), so a slot that died under a render pass hands over another
+unit's ModelId or a torn one. Bounding it against this count is what keeps that inside the Mode B
+contract — one wrong frame, never a fault. `tagpu_native.c`'s `model_root` is that bound, and
+[thread-safe destruction](thread-safe-destruction.html) §2 is the contract.
+
+**What it does NOT give you** is a lifetime: the templates are still freed by `0x42DB90` at the
+level teardown, so a reader also has to be outside that window. That is the render thread's
+`teardown_active()` gate, and its one hole is the pre hook's timeout (§6b).
+
 ### `0x42DB90` — the model templates are freed here, and only here
 
 `[BINARY-VERIFIED 2026-09-08]` Called once from the teardown cascade, `0x491C21`, the first call

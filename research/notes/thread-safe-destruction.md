@@ -41,8 +41,27 @@ falls into one of two classes, and each gets one treatment:
   an unmapped page and fault. These need the deferred-reclamation pattern.
 - **Mode B — ACCEPT.** The object lives in a fixed array, an arena, or a pool never returned to the
   OS during a match; a dead slot is recycled in place. A stale read is a wrong-but-mapped value —
-  at worst a one-frame cosmetic glitch, never a crash. These need nothing beyond the field
-  validation the fork already does (`ptr_ok` range test plus `IsBadReadPtr`).
+  at worst a one-frame cosmetic glitch, never a crash.
+
+  **That promise is conditional, and the condition is the part that gets forgotten:** every value
+  taken out of a Mode B object is arbitrary, so it is DATA until it has been bounded as data. An
+  index must be checked against the array's own count, a length against its allocation, a tag
+  against its enum — and only then may it be used. `[MEASURED 2026-09-08]` the counter-example is
+  what an unbounded one costs: `tagpu_native.c`'s Classic++ shadow pass took the unit record's
+  `ModelId` (`unit+0xA6`, a Mode B read) straight into the model-template table with no bound at
+  all, so a slot recycled between the frame's gather and the shadow loop addressed memory past the
+  end of that table, and the pointer read from there walked as if it were a model — an access
+  violation in `aabb_walk` at `fild [ebx+0x10]`, `EBX = 0x3D1E4B1E`, seven levels into the
+  recursion, in a 400-unit game. Bounded (`1 <= mid < UNITINFOCount`, the range the engine's own
+  loops use — [exe reverse engineering](exe-reverse-engineering.html) §`0x42D5xx`), the same stale
+  read costs one frame of the wrong model's AABB, which is exactly what Mode B promises.
+
+  **A range test is not that bound, and neither is a readability probe.** `ptr_ok` filters a
+  pointer VALUE and is worth keeping as a cheap sanity net; it admits a 2 GB window, so it is
+  never the argument. `IsBadReadPtr` answers a question about the past — the page can go away
+  between the check and the read — so it makes a fault rarer without making it impossible. The
+  fork uses it widely in the older passes; none of those uses is a safety argument, and new work
+  does not add more (`CLAUDE.md`, *Fixes must be safe by construction*).
 
 That single rule tells you, per object type, whether it needs the pattern.
 
@@ -209,6 +228,33 @@ context — `renderers.md`), and the frozen runs never reach it.
 **Why the harness never saw it:** every scripted session ends with `tacli stop`, which kills the
 process. Nothing in it had quit a level to the menu. It is on by default, so a player who
 surrenders a game hits it.
+
+`[2026-09-09] IT DID NOT REPRODUCE.` Seven teardowns on the branch tip (`0d876b9` plus the
+`model_root` fix), every one clean — the cascade returned, the post hook ran, the second
+`GL CONTEXT CHANGED` was logged and the shell came back:
+
+| run | arm set | at the teardown | result |
+|---|---|---|---|
+| 1 | native/terr/feat/gui, `one-unit` | queue empty (`flushed 0`) | `MAINMENU.GUI`, clean |
+| 2 | same, `cob-tank` (4 commanders cleared) | **`flushed 1`, reader idle** — §6b's own line | clean |
+| 3 | + `posebake.on=log check`, `pose-inventory` (69 units) | `flushed 1`, reader idle | clean, `native: level 0 -> 1 … aabb=0 selbox=0 pmap=1` |
+| 4 | same, second level in the same process | `flushed 0` | clean |
+| 5 | same, `200v200` quit mid-battle (400 units) | `flushed 2` | clean |
+| 6 | **play defaults** (`--defaults`: classicpp, shadows, gui, weapons), `200v200` at 7.5 min | `flushed 1` | clean, `aabb=4 selbox=0 pmap=1` |
+| 7 | play defaults, second level in the same process | `flushed 0` | clean, caches **repopulated** |
+
+So the reproduction above is not a recipe that works today, and the freeze is **not** simply "the
+teardown wrap is armed": every one of those runs had it armed and on by default. What is not
+established is why — whether the two frozen runs needed a condition none of these seven had, or
+whether something between them and the branch tip changed it. Instrumented breadcrumbs either
+side of the cascade (pre enter / pre leave / post enter / post leave) were in the DLL for runs
+1-5 and every one of the four lines appeared in order.
+
+**The consequence for the work that was blocked on it: it is no longer blocked.** Runs 3, 4, 6
+and 7 are the level-generation invalidation observed end to end — the three `tagpu_native.c`
+caches dropped at the teardown and refilled from the next level's templates, which §6a and the
+G16 step 3/4 landings could only assert from the code. Run 7's `shadow: caster model=34 top=40.0
+(aabb y -1.5..40.0)` is a second level's AABB, rebuilt after the drop.
 
 **Not root-caused,** and one obvious candidate is already **disproven**: the post hook *does* run
 on both exits, so `s_teardown` and `s_defer` are restored. `[BINARY-VERIFIED 2026-09-08]` the

@@ -66,10 +66,14 @@ recovered offline from its own fixture — the game reproducing a number solved 
    Which of the two moves, and why, is **not established**; the new `live=` field is what will
    say on the next capture. G16 is on the right side of it either way: `recon_begin` folds
    `Object3do+0x18/+0x1A/+0x1C`, which is what the compose folds.
-2. **`hires_pose` has the bug the oracle had.** The replacement-mesh pass poses in model space
-   and applies the heading alone as an outer rotation (`uYawEnc`), so a glTF unit is drawn
-   without the terrain's tilt — right on level ground, wrong on a hillside, and wrong by 157°
-   of heading on the bomber above. Recorded in `model-import.md`; not fixed here.
+2. **`hires_pose` had the bug the oracle had — FIXED 2026-09-09.** The replacement-mesh pass
+   posed in model space and applied the heading alone as an outer rotation (`uYawEnc`), so a
+   glTF unit was drawn without the terrain's tilt — right on level ground, wrong on a hillside,
+   and wrong by 157° of heading on the bomber above. It now folds the whole cached triple
+   through `pose_accum_body` like `recon_begin`, and the caller sends 0 for the shader's yaw
+   whenever a pose was produced so the rotation is applied once. Measured against the same unit
+   drawn natively on the `selbox-slope` hillside; the flat-ground and Kbot frames are
+   byte-identical to the old build. `model-import.md`, "The body turn is all three words".
 
 **What changed in the tree.** `pose_dump` folds all three cached words (so its `err=` is now the
 same quantity `recon_err` reports) and prints `body=` and `live=`; `tacob`'s parser and
