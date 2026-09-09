@@ -1919,6 +1919,20 @@ Runs of 1 and 2 in almost equal number are the signature of a 1.5x nearest blow-
 the change — a nearest upscale has hard edges, so blockiness scores as detail. Recorded because
 the naive reading says the opposite of the truth.
 
+**`ss = 3` measured, because that is the case the review found broken.** The `fv.ss` defect only
+bit at `ceil(k) > 2`, and neither walk went there — in-game `k` was 1.5 and the 2.25/2.4 figures
+are the shell, which runs no world pass. Engine 640x480 in a 1920x1080 client gives a 1440x1080
+viewport, `k = 2.25`, `ss = 3`, and both targets come back
+`GL_FRAMEBUFFER_COMPLETE` at 1920x1440:
+
+| at `k = 2.25` | adjacent device pixels exactly equal | distinct colours in the sample | fps |
+|---|---|---|---|
+| `devres` off | 59.9 % | **761** | 60.0 |
+| `devres` on | 29.1 % | **5 504** | 60.0 |
+
+Seven times the distinct colours, which is what rendering 1920x1440 and downsampling should give
+against a 2.25x nearest blow-up of 640x480. 0 magenta either way.
+
 ### Not closed here
 
 - **Which knob the player turns is still the owner's to decide.** §13.7 says the player picks the
