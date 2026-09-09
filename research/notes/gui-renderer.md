@@ -173,6 +173,12 @@ re-restored. A fade shows dithered art for its duration, never wrong colours.
 Coverage lives in the second channel rather than in a reserved index: "index 254 is unused" was
 measured inside the viewport, not on GAF art.
 
+> **Built, G15e (§14).** As built the colour twin is `COLOR_ATTACHMENT1` of the *same* FBO, so
+> one MRT draw writes the index and the colour together; and the "restore snapshotted" palette
+> is a real snapshot — `tagpu_rglsl_job_new` copies it into a texture of its own — so the
+> validity test is a `memcmp` against the palette the frame is **presented** with, per G15d. The
+> re-restore half is built too: 30 still frames and the job is rebuilt against the new palette.
+
 ### 3.5 Record on the game thread, replay all at present, seed instead of reconstruct
 - **Record.** Each observer appends `(surface, op, args, engine-frame seq)` to a ring. A
   prologue detour on `FlipOffscreenToPrimary 0x4C63A0` appends a **frame marker**, the engine's
@@ -357,7 +363,7 @@ One finished unit each; the engine's surface is the oracle throughout.
 | **G15b** twins, in game, Classic — **done 2026-09-07, §10** | the `tagpu_gui_*` module: registry, seed, queue, replay, the three op kinds, the index twin (the colour twin is G15e's), the composite seam, `strict`, trigger, tacli verb, the default arm set, the transient viewport clear | side panel, build pages, top and bottom bars at 1024×768: 0 differing pixels outside the cursor, 0 holes; fps fixtures within half a frame; ring peak and overflows logged; parity md5 unchanged with the trigger absent; 1080p run and recorded | replay cannot hold 60 fps at `200v200` → collapse identical per-frame ops before anything else (**it happened, for a different reason — §10**) |
 | **G15c** the rest of the frame — **done 2026-09-07, §11** | chat, the F4 and hold-SPACE box, the option screens over the viewport, the `+clock` and `+bps` strings, the minimap's picture, dots and box, the mode-switch panel painter at 1080p; the `LIGHTBAR` wipe located but not reached (§11); nothing new in the DLL — the walk gained a side switch, nineteen stops, the in-viewport measure and a bracketed shot, plus the CORE fixture | whole in-game inventory clean under `strict`, ARM and CORE, at 1024×768 and 1920×1080: 32 of 32 stops at 0/0/0 in all four runs; dialogs over the viewport exact at 0.5× and 2× | — |
 | **G15d** the shell — **done 2026-09-07, §12** | the publisher's stall guard and the render thread's skip-to-reset across the context switch (the storm the first cycle showed: 38 overflows, 39 resets, 705 lost sprites per return), the main offscreen's direct free handled, every reset logged with its reason, the twin resolved through the **presented** palette (gamma-scaled by the engine on its way to DirectDraw, never in `main+0x143A7`), the loading screen captured at its one present, the walk's `--cycles` | shell inventory clean under `strict` at 640×480 on every visit; three entry/exit cycles with twins and atlas back to the same counts, one reset per switch, 0 overflows, 0 lost; the loading screen exact; `+gamma 15` presented right while every `+0x143A7` reader is wrong | — |
-| **G15e** Classic++ UI | the UI atlas's restored twin (job priority 4, lazy on first draw), the palette-validity rule, the `uirestore` policy, the twin dump and diff | Q2 bar against G15-0's offline output on every frame the walk draws; sheets judged by the owner; fps unchanged; a fade shows indexed art, never wrong colour | per-class exclusion per G15-0 |
+| **G15e** Classic++ UI — **built 2026-09-08, §14; the Q2 diff still owed** | the per-surface colour twin (MRT with the index), the copy carrying both channels, the palette-validity rule with its re-arm, the atlas's restored twin at priority 4, the 12-px restore floor, `norestore` | sheets judged by the owner ✓ (2026-09-08, every class passes); fps unchanged ✓ (60.0); a fade shows indexed art, never wrong colour ✓ (`+gamma 15`: 235 entries differ, colour dropped, re-armed, valid again); **Q2 bar against G15-0's offline output: NOT RUN** | per-class exclusion per G15-0 |
 
 **Landings and reviews** per the house rule: G15b and G15c land separately — G15b is the
 composite seam and the module skeleton, which other worktrees will merge under, so it lands
@@ -1334,3 +1340,80 @@ composite seam), G17c/d/e at `medium` unless they add a patch.
 - `clamp(winW / 1280, 1, 3)`'s baseline: a guess, wanting a look on three monitors.
 - The multiplayer consequence of a constant logical field of view (13.7).
 - An SDF or supersampled glyph atlas (13.4), deferred behind a look at R1 at `k = 1.5`.
+
+---
+
+## 14. G15e — Classic++ UI: colour per surface  [MEASURED 2026-09-08]
+
+**Built.** `tagpu_gui_surf.c` gains a colour twin per surface and the palette rule; the two
+shared pieces are `MAX_JOBS` 4 → 6 in `tagpu_restoreglsl.c` (priorities 0–3 are terrain,
+features, effects and 3DO units, so the UI's 4 had no slot) and `restoreMinEdge` on
+`TAGPU_GAFATLAS`, honoured in `restore_enqueue`, which every other atlas leaves at 0. No engine
+patch, and **no new engine address** — the whole landing is GL-side over machinery G14e and
+G15b already built.
+
+### How it works as built
+
+- **Colour is per surface, `COLOR_ATTACHMENT1` of the twin's own FBO.** The sprite and copy
+  programs became MRT: one draw writes `oIdx` (index, coverage) and `oCol` (restored colour,
+  alpha 1 where there is one) together, so the two can never disagree about a texel. The colour
+  texture is made lazily by the first op that has colour to put in it, and an FBO that comes back
+  incomplete is torn back down to one attachment rather than left to swallow the index draws too.
+- **§13.2's amendment is why, and the build confirms it.** A copy carries both channels, because
+  the panel is painted into `panel+0xBC` once and blitted to the frame later — restored art
+  reaches the screen through `PK_COPY` or not at all. A copy from a source with *no* colour twin
+  writes zero, which invalidates the destination over the box: a copy from indexed art means
+  indexed art. Seeds and pixel ops carry indices only and drop the colour of their box.
+- **The layer chooses per texel** — restored where alpha is 1, the live palette everywhere else —
+  so a surface only half restored is never half *wrong*.
+- **The palette-validity rule (§3.4), in full.** `tagpu_rglsl_job_new` snapshots the palette into
+  a texture of its own, so restored colour is a function of the palette that was live when the
+  job was made. Every frame that is `memcmp`'d against the palette the frame is **presented**
+  with (G15d's, not `main+0x143A7`). While they differ the colour twins are ignored; once the
+  palette has held still for 30 frames the job is freed and rebuilt against the new one and every
+  colour twin is invalidated, so the art returns restored as the engine redraws it.
+- **The floor and the lever.** `restoreMinEdge = 12` keeps the restore queue off frames below the
+  model's receptive field — G15-0's verdict, "nothing under 12×12". `norestore` in
+  `tagpu_gui.on` is the A/B: the layer without Classic++ art, so the UI half can be toggled live
+  without touching the world's restorer.
+
+### Measured
+
+Two Continents, `scenarios/tascene-parity.json`, 1024×768, every pass armed plus `classicpp.on`,
+a lone instance:
+
+| what | reading |
+|---|---|
+| the job exists (the pool raise) | `restoreglsl: gui: lazy restore armed (2048x2048 twin …)` |
+| the arm | `gui: Classic++ UI armed — … priority 4, nothing under 12x12` |
+| heartbeat | `cpp=1 col=13/3 colvalid=1 rgb=40` |
+| queue health | `overflows=0 lost=0 resets=2 stalls=1` — G15b/G15d's norms, unmoved |
+| **frame rate with it on** | **`fps=60.0`** |
+| **restored vs `norestore`, same DLL, same frame** | **37 435 of the 45 056 px of the in-game menu's panel rect differ; 40 079 whole frame** |
+| the palette rule, via `+gamma 15` | `paldiff=235@1` — G15d's own figure — colour dropped, **`rearms=1`**, 3 colour twins invalidated, `colvalid=1` again against the new palette |
+
+**The first A/B differed by 0 pixels, and that is the finding.** In a running game the panel is
+*seeded* at the mode switch, and colour reaches a twin only through a sprite op — so the atlas
+then holds nothing but the small HUD icons: **25 entries, none larger than 10×12**, every one of
+them under the floor by design (`tagpu_restore_gui.idx`). Opening `ARMOPT` draws real UI art as
+sprite ops, the atlas goes to 44 entries, and the panel restores. So **on entering a game the
+panel is indexed until something repaints it** — a mode switch, a build page, the menu.
+
+### Not closed here
+
+- **The gate's Q2 diff against G15-0's offline output is not run.** The sheets are judged
+  (2026-09-08, every class passes) and the fps and fade halves are measured; the numeric bar
+  against the offline restore of the same frames is owed.
+- **Seeded art stays indexed** until redrawn (above). Restoring a seed directly — the surface is
+  an indexed image and the restorer restores indexed images — is the obvious candidate and is
+  not taken here.
+- **The `uirestore` name globs and the sequence-name registry are not built.** Cursors are
+  excluded *structurally* — the cursor's blits are excluded at the source, so its frames never
+  enter the UI atlas at all — and the 12-px floor covers the rest of the ruled default; only
+  `pathicon` by name is unreached. `tagpu_gui_art.c` (§4) still does not exist.
+- **The phase-1 `strict` walk is not a valid regression while this is on.** It compares our frame
+  against the engine's **indexed** surface, so every restored pixel reads as a difference. Run it
+  with `classicpp` off; the restored half needs a check of its own, which is the Q2 diff above.
+- The heartbeat's line outgrew its 260-byte buffer when these counters were added and silently
+  truncated `fps=`; it is 420 now. A counter added to that line without widening it again will
+  do the same thing.

@@ -1212,6 +1212,7 @@ tools/tacli gui <i> on            # arm BEFORE launch (the detours install at DL
 tools/tacli gui <i> off           # keep the detours, stop the draw — the live A/B, 500 ms poll
 tools/tacli gui <i> strict        # the harness's mode: fallback off, a miss painted magenta (never for a player)
 tools/tacli gui <i> remove        # un-arm entirely at the next launch
+tools/tacli arm <i> gui.on=norestore   # G15e: the layer WITHOUT Classic++ art — the UI-only A/B
 tools/tacli gui <i>               # report
 tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds= sprites= pixels= atlas= resets= overflows= fps=
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --layer --out /tmp/uiwalk
@@ -1278,6 +1279,22 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
   line every 30 presented frames, so timing their arrival in `tagpu.log` from outside is an
   fps meter that needs no code — `30 × intervals / elapsed` (the G15b measurement used exactly
   that against main's DLL).
+- **Classic++ UI (G15e, 2026-09-08).** With `classicpp.on` the UI art is restored too: every
+  surface carries a colour twin beside its index twin and the layer picks per texel. Read
+  `gui: Classic++ UI armed …` and the heartbeat's `cpp=1 col=<made>/<live> colvalid=1 rgb=<tex>`;
+  `restoreglsl: gui: lazy restore armed` says the job was created. **`gui.on=norestore` is the
+  A/B** — the same DLL, the layer up, Classic++ art off — which is how the 37 435-of-45 056-px
+  panel-rect difference was measured. Two things will waste your time otherwise:
+  - **On entering a game the panel is INDEXED, and that is expected.** Colour reaches a twin only
+    through a sprite op, and the panel is *seeded* at the mode switch, so the atlas holds only
+    the small HUD icons (25 entries, none over 10×12, all under the 12-px restore floor). Open
+    `ARMOPT` with Tab, or select a builder, and real UI art is drawn — the atlas goes to 44 and
+    the panel restores. A `norestore` A/B taken before that differs by **0 px** and means nothing.
+  - **`uiwalk.py --layer` is NOT a valid regression with Classic++ on.** It diffs our frame
+    against the engine's **indexed** surface, so every restored pixel counts as a difference. Run
+    the walk with `classicpp` off (or `gui.on=norestore`); the restored half needs its own check.
+  - The palette rule is testable with G15d's own lever: `+gamma 15` in chat → the heartbeat shows
+    `paldiff=235@1`, `colvalid=0` for a moment, then `rearms=` +1 and `colvalid=1` again.
 - The census below still works and is still the regression for "a writer we do not observe".
 
 ### The UI census (G15a)

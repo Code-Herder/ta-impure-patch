@@ -575,6 +575,25 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   (`main+0x143A7`, re-uploaded when it moves). The cursor's rect (`*(0x51FBD0)+0x1B2/+0x1B6/
   +0x1BA`) is left to the engine's frame. `strict` paints a miss magenta instead of falling
   back, outside the viewport or on a non-key pixel inside it.
+- *Classic++ (G15e, 2026-09-08):* every surface may carry a **colour twin** — `GL_RGBA8`, the
+  same size, `COLOR_ATTACHMENT1` of the twin's own FBO — and the sprite and copy programs are
+  **MRT**, so one draw writes the index and the restored colour together. A sprite takes the UI
+  atlas's restored texel where the atlas has one (alpha 1); **a copy carries both channels**,
+  which is what makes restored art survive the `panel+0xBC` → frame blit, and a copy from a
+  source with no colour twin writes zero and so invalidates the destination there. Seeds and
+  pixel ops carry indices only and drop the colour of their box. The layer chooses **per texel**:
+  restored where alpha is 1, the live palette elsewhere. **The palette-validity rule**: the
+  restore job snapshots the palette into a texture of its own, so its colours hold only while
+  that is still the palette the frame is *presented* with — compared every frame, colour ignored
+  while they differ, and after 30 still frames the job is rebuilt against the new palette and
+  every colour twin invalidated. The atlas restores at **priority 4** (`MAX_JOBS` is 6 since this
+  landing; 0–3 are terrain, features, effects, 3DO units) and skips frames under **12×12**
+  (`restoreMinEdge`, G15-0's verdict). Trigger token **`norestore`** is the A/B. Heartbeat gains
+  `cpp= col=<made>/<live> colvalid= rearms= rgb=`. **Colour reaches a twin only through a sprite
+  op, so seeded art stays indexed until the engine redraws it** — entering a game, the panel is
+  seeded and indexed until a repaint. Measured: `fps=60.0`, 37 435 of 45 056 px of the menu's
+  panel rect against `norestore`, `+gamma 15` → 235 entries differ, one re-arm, colour valid
+  again ([GL UI renderer](gui-renderer.html) §14).
 - *Fresh starts:* the trigger reappearing, a GL context change (`tagpu_gui_glreset` from the
   overlay's reset), a queue or arena overflow, a sprite whose bytes never arrived, a copy
   from a source with no twin, and the consumer coming back from a stall (below) all raise
