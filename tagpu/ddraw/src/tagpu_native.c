@@ -3338,24 +3338,53 @@ static void pose_dump(const char* u, const char* o3)
     if (GetFileAttributesA("tagpu_posedump.on") == INVALID_FILE_ATTRIBUTES) return;
     DeleteFileA("tagpu_posedump.on");
     HPOSE h;
-    int nparts = pose_accum(o3, &h);
-    char b[256];
+    /* THE BODY TURN IS ALL THREE WORDS, AND IT IS THE CACHED COPY. The compose
+       folds `o3+0x18/+0x1A/+0x1C` into the base piece's own turn at 0x45B0DB
+       -- +0x18 onto the Z word, +0x1A (the heading) onto Y, +0x1C onto X -- so
+       a reconstruction that applies the heading alone is short a bank and a
+       pitch, and on ordinary ground the terrain's tilt puts tens of degrees
+       there (three parked ARMSTUMPs read -22.1, -30.7 and +1.8 degrees of
+       +0x68). This dump used to rotate model space by `unit+0x66` and report
+       what was left; that omission, not any staleness in the vertex buffer, is
+       the whole of the residual the eight fixtures recorded -- recovered from
+       the fixtures' own base pieces 2026-09-08, every class to exactly 0.
+       `bt` is therefore built exactly as recon_begin builds it, and `err=` is
+       now the same quantity recon_err reports. */
+    const unsigned short* bturn = (const unsigned short*)(o3 + O3_BTURN);
+    unsigned short bt[3];
+    int nparts;
+    char b[288];
+    bt[0] = bturn[2];                       /* +0x1C = unit+0x68, about X */
+    bt[1] = bturn[1];                       /* +0x1A = unit+0x66, about Y */
+    bt[2] = bturn[0];                       /* +0x18 = unit+0x64, about Z */
+    nparts = pose_accum_body(o3, &h, bt);
     /* tick and in-game index first, so the line joins tagpu_cobtrace.log's
        (tick, unit) columns; the tick is read here on the render thread, so
        it names the sim tick this pass sampled, which may be the one before
        the pose's last update or the one after */
-    _snprintf(b, sizeof b, "posedump: tick=%d idx=%d unit=%p o3=%p nparts=%d yaw=%u",
+    /* `body` and `live` are printed in AXIS order (x, y, z) -- the order a
+       piece's own turn triple is indexed in, so `tacob pose-check` passes
+       `body` through unchanged. `body` is the cached copy the compose actually
+       folds; `live` is the unit's own `+0x68/+0x66/+0x64` beside it, because
+       the two are NOT the same on an aircraft: the fixtures' recovered heading
+       matched `yaw` to within 2 units on the kbot, tank, building, ship and
+       sub and was 1.4, 91.1 and 148.0 degrees away from it on the fighter,
+       gunship and bomber. Which of the two diverges, and why, is not
+       established -- this line is what will say. `yaw=` is kept, and is the
+       live heading, so a fixture written before this change still parses. */
+    _snprintf(b, sizeof b,
+              "posedump: tick=%d idx=%d unit=%p o3=%p nparts=%d yaw=%u "
+              "body=(%u,%u,%u) live=(%u,%u,%u)",
               *(const int*)(*(const char* const*)TA_MAINPP + 0x38A47),
               (int)*(const short*)(u + 0xA8), u, o3,
               (int)*(const unsigned short*)(o3 + O3_NUMPARTS),
-              (unsigned)*(const unsigned short*)(u + U_YAW));
+              (unsigned)*(const unsigned short*)(u + U_YAW),
+              (unsigned)bt[0], (unsigned)bt[1], (unsigned)bt[2],
+              (unsigned)*(const unsigned short*)(u + 0x68),
+              (unsigned)*(const unsigned short*)(u + U_YAW),
+              (unsigned)*(const unsigned short*)(u + 0x64));
     nlog(b);
     if (!nparts) { nlog("posedump: pose_accum refused this unit"); return; }
-    /* the engine bakes the BODY YAW into vbuf; pose_accum stops at model
-       space, which is where the replacement pass takes over from it */
-    const float K = 6.2831853f / 65536.0f;
-    unsigned yaw = *(const unsigned short*)(u + U_YAW);
-    float yc = cosf((float)yaw * K), ys = sinf((float)yaw * K);
     int p;
     for (p = 0; p < nparts && p < 32; p++) {
         const char* pr = h.pr[p];
@@ -3379,7 +3408,6 @@ static void pose_dump(const char* u, const char* o3)
                     const float* m = h.acc[p] + r * 4;
                     g[r] = m[0]*v[0] + m[1]*v[1] + m[2]*v[2] + m[3];
                 }
-                rot2(yc, ys, &g[0], &g[2]);
                 for (r = 0; r < 3; r++) {
                     float d = g[r] - (float)vb[k*3+r] / 65536.0f;
                     if (d < 0.0f) d = -d;

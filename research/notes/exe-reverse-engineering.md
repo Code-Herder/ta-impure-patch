@@ -3078,8 +3078,12 @@ in the unit's own frame and adds the unit's world position — `+0x6A` x, `+0x6E
   `0`/`0x0146` = **0 / +1.8°** — the terrain's tilt, not the flat 0 a "heading" reading of
   `+0x66` would suggest. Anything that rotates a unit-space point by the heading alone (the
   selection rect did until 2026-09-08, `ui-markers.md` §1) is therefore right on level ground
-  and a few pixels out on a hillside. `+0x66` alone stays correct for the *body* geometry only
-  because the engine bakes just the yaw into `vbuf` (`pose_dump`, err 0.00).
+  and a few pixels out on a hillside. *[CORRECTED 2026-09-08: this bullet used to end "`+0x66`
+  alone stays correct for the body geometry only because the engine bakes just the yaw into
+  `vbuf` (`pose_dump`, err 0.00)". It does not. `vbuf` carries all three — the compose folds
+  the whole cached triple at `0x45B0DB` — and `pose_dump` read err 0.00 only on fixtures whose
+  bank and pitch happened to be zero. See "Checked against the engine's own vertex buffer"
+  below.]*
 - **`0x467A50(ctx, &pos, pts4, &angles)` — rotate four points, project them, draw the loop.**
   `[BINARY-VERIFIED 2026-09-08]` `ret 0x10`; one caller, `0x46A5FB` inside
   `DrawUnitSelectBoxRect`. Per point it calls `0x4B6CC0(pts[i], scratch, angles)` and then
@@ -3134,13 +3138,39 @@ off the two arrays, not off code.
 **Checked against the engine's own vertex buffer.** `tools/tacob pose-check --all` rebuilds
 each fixture's posed vertices from the rules above and diffs them against `P_VBUF`, which
 `tagpu_native.c`'s posedump prints beside the model-space vertex it came from. The residual is
-**exactly 0** on the kbot (45 points, 15 pieces, two turned), the building, the ship (40 points,
-a turned turret) and 0.002 on the submarine; the tank, fighter, gunship and bomber come out at
-4.1, 7.0, 48.4 and 77.2 world units — and `tagpu_native.c`'s own `err=` on the very same dump
-lines reads 5.45, 7.31, 48.37 and 77.19, i.e. **the vertex buffer is a frame or two behind the
-pose the dump sampled** and neither implementation can do anything about it. That also settles
-the two questions `model-import.md` left open: the composition order, and `MOVE` being a delta
-added before the rotation.
+**exactly 0 on every class** once the body turn is supplied in full. That also settles the two
+questions `model-import.md` left open: the composition order, and `MOVE` being a delta added
+before the rotation.
+
+*[CORRECTED 2026-09-08.] This paragraph used to record 4.1 / 7.0 / 48.4 / 77.2 world units on
+the tank, fighter, gunship and bomber and conclude that **the vertex buffer is a frame or two
+behind the pose the dump sampled**. That was wrong, and the way it was wrong is worth keeping:*
+
+- *`pose-check` passed `body=(0, yaw, 0)` and `tagpu_native.c`'s `pose_dump` rotated model space
+  by `unit+0x66` alone. **Both omitted the bank and the pitch**, which the compose folds at
+  `0x45B0DB` along with the heading. The two agreed to within 1.4 units on every fixture, and
+  that agreement was read as corroboration when it was a shared omission.*
+- *`[MEASURED 2026-09-08]` The missing words are recoverable from the tracked fixtures
+  themselves: each records its base piece's rest vertices (`node=`) beside the engine's posed
+  ones (`vbuf=`), and Kabsch on those pairs gives the rotation exactly. Supplying the recovered
+  triple takes **all eight classes to exactly 0** — and on the five that already read 0 the
+  recovered heading reproduces the recorded `yaw` to within 2 units, which is what says the
+  recovery is sound rather than a fit.*
+- *`[MEASURED 2026-09-08]` Confirmed live: `pose_dump` now prints `body=` (the cached triple it
+  folds) and `live=` (`unit+0x68/+0x66/+0x64`), and a fresh capture of the tank and the bomber
+  reads **`err=0.00` on every piece**, against 5.45 and 77.19 before. The tank's recorded
+  `body=(63290,49152,0)` is exactly the triple recovered offline from its own fixture.*
+- ***The cached triple is not always the live one.*** *The tank read `body=` and `live=`
+  identical; the bomber read `body=(0,16128,3)` against `live=(0,44767,65508)` — a heading
+  28639 units (157°) apart, and it is `body=` that the drawn geometry follows. Which of the two
+  moves, and why, is **not established**. It matters because anything reconstructing a unit's
+  pose must fold `Object3do+0x18/+0x1A/+0x1C` and not `unit+0x64/+0x66/+0x68`; the fork's
+  `recon_begin` already does.*
+- *The fixtures in `research/notes/evidence/cobtrace/` were captured before `body=` existed, so
+  `pose-check` still reports the old residuals for them and labels them `legacy: yaw only`.
+  Regenerating them is `tools/cobtrace_fixtures.py`, and it also regenerates `cobtrace.log` and
+  needs `tacob fit-world` re-run for the tank's `replay.json` — a separate gate
+  (`tacob run --all`, nine byte-identical replays), not done here.*
 
 ### [REPLAY] The nine fixtures, re-run offline (tacob landing 3, 2026-09-07)
 

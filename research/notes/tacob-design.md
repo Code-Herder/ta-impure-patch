@@ -458,9 +458,12 @@ dictionary:
   order (`Ry · Rx · Rz`), settles that the COB's axis operands are plain X, Y, Z, and shows
   `MOVE` to be a delta added before the rotation. Both of those were open questions in
   `model-import.md`; the disassembly closes them and `tools/tacob pose-check --all` checks the
-  result against the engine's own posed vertex buffer — **exactly 0** on the kbot, the
-  building and the ship, and on the four fast movers the same residual `tagpu_native.c`'s own
-  `err=` reports on the same dump line.
+  result against the engine's own posed vertex buffer — **exactly 0 on every class**, once the
+  body turn is supplied in full. *[CORRECTED 2026-09-08: the fast movers' residual was not the
+  buffer lagging. `pose-check` passed `body=(0, yaw, 0)` while the engine folds all three
+  cached body words, and it matched `tagpu_native.c`'s `err=` because that made the same
+  omission. The dump now records `body=`; a fixture written before it is reported `legacy: yaw
+  only` and still measured the old way, which is all such a file supports.]*
 - **The 3DO loader negates X and Z.** Every offset and vertex the engine holds is `(−x, y, −z)`
   of the file's. Until that was measured the composed pose was mirrored, and `PIECE_XZ` with
   it.

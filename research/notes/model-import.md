@@ -163,10 +163,24 @@ Measured against `pr + 0x22`:
   also read rather than inferred. `0x43DF2A..0x43DF55` adds `prim+0x04/+0x08/+0x0C` to the
   node's `+0x10/+0x14/+0x18` and only then walks up the chain, which is what this pass's `d`
   already does. The live check is `tools/tacob pose-check --all`, which rebuilds the eight
-  cobtrace fixtures' posed vertices from those rules and diffs them against `P_VBUF`: exactly
-  0 on the kbot, the building and the ship, and on the four fast movers a residual that equals
-  this pass's own `err=` on the same dump line (the vertex buffer being a frame behind the
-  pose the dump sampled).
+  cobtrace fixtures' posed vertices from those rules and diffs them against `P_VBUF`: **exactly
+  0 on every class**, once the body turn is supplied in full. *[CORRECTED 2026-09-08: this used
+  to read "on the four fast movers a residual that equals this pass's own `err=` on the same
+  dump line (the vertex buffer being a frame behind the pose the dump sampled)". The residual
+  was not staleness — the checker and `pose_dump` both applied the heading alone while the
+  engine folds all three body words, and they agreed because they shared the omission.
+  `exe-reverse-engineering.md` §"Checked against the engine's own vertex buffer" has the
+  measurements.]*
+
+**The body turn is all three words, and it is the CACHED copy.** A reconstruction must fold
+`Object3do+0x18/+0x1A/+0x1C` — `+0x18` onto the Z word, `+0x1A` (the heading) onto Y, `+0x1C`
+onto X — and **not** `unit+0x64/+0x66/+0x68`. `[MEASURED 2026-09-08]` on a ground unit the two
+agree (a tank read both as `(63290, 49152, 0)`, i.e. −12.3° of terrain pitch); on a bomber they
+did not — cached `(0, 16128, 3)` against live `(0, 44767, 65508)`, 157° of heading apart — and
+the drawn geometry follows the cached one. **This applies to `hires_pose` too, and it does not
+do it**: the replacement-mesh pass poses in model space and applies the heading alone as an
+outer rotation (`uYawEnc`), so a glTF unit is drawn without the terrain's tilt — right on level
+ground, wrong on a hillside. Not yet fixed; recorded here because it is the same fact.
 
 ### Hidden pieces
 

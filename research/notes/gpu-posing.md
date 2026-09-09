@@ -15,58 +15,64 @@ written.
 
 ---
 
-## 0. Gate 0 — the oracle omits pitch and roll. Settle this first.
+## 0. Gate 0 — SETTLED 2026-09-08. The oracle omitted pitch and roll.
 
-**The claim to test:** the residual `tacob pose-check --all` reports on fast movers is not the
-vertex buffer lagging the fields. It is the checker applying **yaw only** while the engine folds
-**all three** body words.
+**The answer: the residual was the omission, not the buffer. There is no lag component at all,
+and G16 is unblocked.**
 
-The evidence, all read off the tree rather than remembered:
+The question was whether the residual `tacob pose-check --all` reported on fast movers —
+**4.1 / 7.0 / 48.4 / 77.2** world units on the tank, fighter, gunship and bomber against 0 on
+the kbot, building and ship — was the vertex buffer lagging the fields (the standing
+attribution) or the checker applying **yaw only** while the engine folds **all three** body
+words at `0x45B0DB`.
 
-- The compose folds the whole cached triple into the base piece's own turn at **`0x45B0DB`** —
-  `o3+0x18` onto `prim+0x14` (Z), `o3+0x1A` onto `+0x12` (Y), `o3+0x1C` onto `+0x10` (X). Read
-  out of the binary 2026-09-08 and written up in the engine map.
-- `tools/tacob`'s `pose_check` calls `piece_vertex(frame, pos, ang, c, node, (0, yaw, 0))` —
-  **pitch and roll passed as literal zeros**, because the `posedump.txt` fixture only carries
-  `yaw` (from `U_YAW`).
-- `tagpu_native.c`'s `pose_dump` does the same thing: `pose_accum` stops at model space and the
-  comparison then applies `rot2(yc, ys, …)` from `U_YAW` alone.
-- `[MEASURED 2026-09-08]` three ARMSTUMPs parked on Two Continents grass read `unit+0x64` /
-  `+0x68` as **+17.4° / −22.1°**, **0 / −30.7°** and **0 / +1.8°** — the terrain's tilt. Body
-  pitch and roll are live on ordinary ground units, not just aircraft.
+**Measured twice, offline and live.**
 
-The reported residuals fit the omission exactly: **0** on the kbot, the building and the ship
-(flat ground, flat water — nothing to omit) and **4.1 / 7.0 / 48.4 / 77.2** world units on the
-tank, fighter, gunship and bomber. The standing attribution — "the vertex buffer is a frame or
-two behind" — rests on `pose_check` and `pose_dump` agreeing with each other, and **they agree
-because they share the omission.** A bomber 77 units out *in model space* from one tick of lag
-would need something like 90° of rotation per tick across a ~50-unit half-span.
+*Offline, from evidence already in the tree.* Each tracked fixture records its base piece's rest
+vertices (`node=`) beside the engine's posed ones (`vbuf=`), and the base piece composes as
+`posed = R(turn + body)·v + (off + move)` — so Kabsch on those pairs recovers `R` exactly and a
+ZXY extraction gives the triple. Supplying it takes **all eight classes to exactly 0.000**:
 
-`recon_begin` already folds all three (`bt[0] = o3+0x1C` → X, `bt[1] = +0x1A` → Y,
-`bt[2] = +0x18` → Z), so the *renderer* is probably right and the *oracle* is wrong. But the
-oracle is what G16's parity gate is measured against, and G16 renders **every** unit from the
-reconstruction, so a reconstruction that is wrong for fast movers stops being a rare-frame
-fallback and becomes what the screen shows.
+| class | unit | yaw only | with the recovered body | recovered body (pitch / heading / roll) |
+|---|---|---|---|---|
+| kbot | ARMPW | 0.000 | **0.000** | +0.00° / −82.86° / +0.00° |
+| tank | ARMSTUMP | 4.110 | **0.000** | −12.34° / −90.00° / +0.00° |
+| building | ARMWIN | 0.000 | **0.000** | +0.00° / −180.00° / +0.00° |
+| fighter | ARMHAWK | 7.023 | **0.000** | +0.00° / +94.78° / −23.96° |
+| gunship | ARMBRAWL | 48.373 | **0.000** | +0.00° / −19.85° / −50.38° |
+| bomber | ARMTHUND | 77.188 | **0.000** | +0.00° / +88.59° / +0.02° |
+| ship | CORBATS | 0.000 | **0.000** | +0.00° / −90.00° / +0.00° |
+| sub | CORSUB | 0.002 | **0.000** | +0.00° / −84.38° / +0.00° |
 
-**The measurement.** Arm `tagpu_posewatch.on` with a tilted ground unit and a banking aircraft on
-screen and compare, on the same frame:
+The recovery validates itself: on the five classes that already read 0, the heading it recovers
+reproduces the fixture's recorded `yaw` to within 2 units. It is not a fit to noise — a fit
+would not agree with a number it never saw.
 
-| source | folds | expected if the omission explains it | expected if the buffer really lags |
-|---|---|---|---|
-| `recon_err` (posewatch `err=`) | all three | collapses to the flat-ground residual (~0) | stays at 4–77 |
-| `pose_dump` `err=` | yaw only | stays at 4–77 | stays at 4–77 |
+*Live, with the fixed instrument.* `pose_dump` now folds the cached triple and prints it. A
+fresh capture of the tank and the bomber reads **`err=0.00` on every piece**, against 5.45 and
+77.19 before, and the tank's recorded `body=(63290, 49152, 0)` is **exactly** the triple
+recovered offline from its own fixture — the game reproducing a number solved for out of a file.
 
-- **Collapses** → the oracle is wrong. Fix it (record all three body words in `posedump.txt`;
-  pass them through `pose_check`), correct this page, `model-import.md` and the roadmap, and G16
-  proceeds on a reconstruction with a residual that means something.
-- **Does not collapse** → the reconstruction is wrong for fast movers and **G16 is blocked**
-  until that is understood. This is the outcome worth paying a measurement to find early.
+**Two things came out of it that were not the question.**
 
-**A consequence either way.** `tagpu_hires_draw.c` applies **yaw only**, as an outer rotation
-(`uYawEnc`), on top of a `pose_accum` that folds nothing. If the engine folds all three, every
-replacement mesh is drawn without the terrain's tilt — right on level ground and wrong on a
-hillside. Not G16's to fix, but it is the same fact, and it should be recorded when Gate 0
-answers.
+1. ***The cached triple is not always the live one.*** The tank read `body=` and `live=`
+   identical. The bomber read cached `(0, 16128, 3)` against live `(0, 44767, 65508)` — a
+   heading **28639 units (157°)** apart — and the drawn geometry follows the **cached** one.
+   Which of the two moves, and why, is **not established**; the new `live=` field is what will
+   say on the next capture. G16 is on the right side of it either way: `recon_begin` folds
+   `Object3do+0x18/+0x1A/+0x1C`, which is what the compose folds.
+2. **`hires_pose` has the bug the oracle had.** The replacement-mesh pass poses in model space
+   and applies the heading alone as an outer rotation (`uYawEnc`), so a glTF unit is drawn
+   without the terrain's tilt — right on level ground, wrong on a hillside, and wrong by 157°
+   of heading on the bomber above. Recorded in `model-import.md`; not fixed here.
+
+**What changed in the tree.** `pose_dump` folds all three cached words (so its `err=` is now the
+same quantity `recon_err` reports) and prints `body=` and `live=`; `tacob`'s parser and
+`pose_check` take `body=` when the fixture has it. **The tracked fixtures predate `body=`**, so
+`pose-check` still reports their old residuals and labels them `legacy: yaw only`. Regenerating
+them is `tools/cobtrace_fixtures.py`, which also regenerates `cobtrace.log` and needs
+`tacob fit-world` re-run for the tank's `replay.json` — a separate gate (`tacob run --all`,
+nine byte-identical replays), deliberately not done here.
 
 ---
 
