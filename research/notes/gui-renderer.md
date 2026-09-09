@@ -1552,31 +1552,44 @@ DLL change with its own review.
 
 ### Not closed here
 
-- **The world passes are still on `main+0x143A7`, and at the stock gamma that is 11 % dark.**
-  Terrain, features, effects and the 3DO/unit atlas all restore and draw through the engine's
-  unscaled table while the engine's own pixels reach the screen scaled by 1.125 on every
-  instance this project has ever measured (above). **Measured 2026-09-09**: in a Classic frame with the world passes drawing, 14 896 of a 17 049-pixel
+- **The world passes were on `main+0x143A7`, and at a gamma of 1.125 that is 11 % dark.**
+  Terrain, features, effects and the 3DO/unit atlas all restored and drew through the engine's
+  unscaled table while the engine's own pixels reached the screen scaled (above). **Measured
+  2026-09-09**: in a Classic frame with the world passes drawing, 14 896 of a 17 049-pixel
   viewport sample are exact `palette.pal` colours against 244 presented-palette ones (the two
-  palettes share only 8 of 256, so the test separates cleanly). The UI layer is the one surface
-  that follows the presented palette. Which of the two is *right* is a real question and not
-  this landing's — the browser lab is built on `palette.pal`, so the world matching it is what
-  `tascene ab` parity measures — but the seam between a world drawn one way and a UI drawn the
-  other is now named.
+  palettes share only 8 of 256, so the test separates cleanly). The UI layer was the one surface
+  that followed the presented palette, and the seam between a world drawn one way and a UI drawn
+  the other is what this named. **CLOSED — see the decision below: the world moved onto the
+  presented palette in G16 (`tagpu_pal.c`, gpu-status §2.3f).**
 
   **DECIDED 2026-09-09 by the owner, put to them as the one question G17a waited on: the world
-  stays on `main+0x143A7`. The lab is the reference.** Every recorded Classic++ number and every
-  `tascene ab` parity run keeps its meaning, and the seam between our world and the engine's own
-  UI is accepted rather than closed. The alternative — moving the world onto the presented
-  palette so the two agree at the viewport edge — was weighed and rejected *for now* on that
-  cost: it moves every measurement ever taken and breaks `tascene ab` until the browser lab is
-  taught the same scale, which is a second landing, not a line.
-  **The question was put on a premise that turned out to be false, and the answer survives it.**
-  It was framed as a *constant* ~11 % seam, "on every instance this project has ever measured".
-  §15 has the measurement: there is one shared `Gamma` for the template and all 58 instances, it
-  now reads 12, and an instance launched under it presents `paldiff=0` — no seam at all. What the
-  decision really settles is the *policy*, which does not depend on the value: the world draws
-  through the engine's unscaled table because that is what the lab and every recorded number are
-  built on, and the seam is whatever the live `Gamma` makes it, from nothing to 11 %.
+  stays on `main+0x143A7`. The lab is the reference.** The alternative — moving the world onto
+  the presented palette so the two agree at the viewport edge — was weighed and rejected *for
+  now* on its cost: it moves every measurement ever taken and breaks `tascene ab` until the
+  browser lab is taught the same scale, which is a second landing, not a line.
+
+  **SUPERSEDED 2026-09-09 by the owner, on the G16 landing. The world resolves through the
+  presented palette** (`tagpu_pal.c`, gpu-status §2.3f). Two things the original question did not
+  have in front of it:
+
+  * **It was put on a premise that turned out to be false.** It was framed as a *constant* ~11 %
+    seam, "on every instance this project has ever measured". §15 above has the measurement:
+    there is one shared, mutable `Gamma` for the template and all 58 instances, it now reads 12,
+    and an instance launched under it presents `paldiff=0` — no seam at all.
+  * **So the cost it was rejected on is currently zero.** At `Gamma` 12 the factor is exactly
+    1.0 and `min(255, entry × 1.0)` is the engine's own table: the two palettes are bit-identical,
+    `paldiff=0` on this branch's DLL and on `main`'s alike. No recorded Classic++ number moves and
+    `tascene ab` is unaffected *at that value* — while at any other value the change removes a
+    real seam rather than creating one.
+
+  **What the reversal costs, stated rather than hidden:** the lab is still built on
+  `palette.pal`, so at any `Gamma` but 12 the world no longer matches what `tascene ab` parity
+  measures, and teaching the browser lab the same scale remains the second landing it always was.
+  The policy is now "the world draws what the player is shown"; `paldiff=` in the heartbeat is
+  how far that is from the lab's reference on any given run, and it must be read rather than
+  assumed. `tagpu_order.c`'s `seq_ink` and the tileability threshold deliberately stay on the
+  engine's unscaled table — the first because its walk is on the game thread, the second because
+  tileability is a property of the ART (`tagpu_pal_engine()`).
 - **Seeded art stays indexed** until redrawn (above). Restoring a seed directly — the surface is
   an indexed image and the restorer restores indexed images — is the obvious candidate and is
   not taken here.
