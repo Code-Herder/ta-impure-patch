@@ -212,6 +212,35 @@ static unsigned s_mmGenSeen;            /* the generation s_mmTex holds; 0 = not
 static int      s_mmTW, s_mmTH;         /* its size in texels                               */
 static int      s_mmbase = 0;           /* token `mmbase`: draw it, harness only for now    */
 static unsigned s_mmDrawn = 0;
+static unsigned s_mmSprites = 0, s_mmOther = 0;   /* ops published against the minimap composite */
+/* THE ENGINE'S DOTS, ACCUMULATED FROM ITS OWN OPS (13.6). Which units appear on
+   the minimap is fog- and LOS-dependent sim logic, so re-deriving it does not
+   fail by rendering badly — it fails by showing enemy positions the player is
+   not entitled to. The dots therefore stay the engine's: they are 0x4B7F90
+   blits, which are observed leaves, so they arrive as sprite ops carrying their
+   own destination, and replaying those is exact and free.
+   `0x466DC0` rebuilds the composite by copying the base in FIRST and then
+   drawing the dots, so a full-surface op against the composite is where a new
+   rebuild starts and the list resets. */
+#define MM_MAXDOTS 512
+typedef struct { const void* frame; const void* pix; unsigned short fw, fh; unsigned char ck; short sl, st; } MMDOT;
+static MMDOT    s_mmDots[MM_MAXDOTS];
+static int      s_mmNDots;
+static int      s_mmDotsFull;
+static unsigned s_mmDotLost;            /* a dot whose art the atlas would not hold */
+static unsigned s_mmLogged;
+
+/* The composite's PIXEL BASE, which is what an op names — `+0x142DB` is the
+   OFFSCREEN and its base is field 3 (w, h, pitch, base; CTX_BASE in the hook). */
+static unsigned mm_base(void)
+{
+    const char* ta = *(const char* const*)TA_MAINPP;
+    const int* off;
+    if (!ptr_ok(ta)) return 0;
+    off = *(const int* const*)(ta + MM_COMPOSITE);
+    if (!ptr_ok(off)) return 0;
+    return (unsigned)off[3];
+}
 
 /* THE CURSOR (gui-renderer.md 13.5, G17c). Decided ONCE per frame, in
    tagpu_gui_cursor_frame, because the world composite reads the decision
@@ -902,6 +931,40 @@ static void drain(void)
             s_skipped++;
             goto next;
         }
+        /* G17e: what the engine publishes against the minimap composite, which
+           is the question the dot replay turns on — the unit dots are 0x4B7F90
+           blits and therefore observed leaves, so they should arrive here as
+           sprite ops with their own positions rather than only inside the base
+           copy's bytes (gui-renderer.md §7). */
+        if (o->surf && o->surf == mm_base()) {
+            if (o->kind == PK_SPRITE) {
+                /* THE COMPOSITE HAS NO TWIN — it is never presented, so nothing
+                   ever seeds it, and drain's own PK_SPRITE case returns before
+                   it atlases anything (MEASURED 2026-09-09: `twins=2`, and the
+                   first dot replay drew nothing because every atlas_find missed).
+                   The frame has to be taken HERE, from the op's own first-sight
+                   bytes, or the dots exist as positions with no art. */
+                const TAGPU_GAFENT* e =
+                    tagpu_gaf_atlas_find(&s_atlas, o->frame, o->pix, o->fw, o->fh);
+                if (!e && o->alen)
+                    e = tagpu_gaf_atlas_put(&s_atlas, o->frame, o->pix, o->fw, o->fh,
+                                            o->ck, g_guiq.arena + o->aoff);
+                s_mmSprites++;
+                if (!e) s_mmDotLost++;
+                else if (s_mmNDots < MM_MAXDOTS) {
+                    MMDOT* d = &s_mmDots[s_mmNDots++];
+                    d->frame = o->frame; d->pix = o->pix;
+                    d->fw = o->fw; d->fh = o->fh; d->ck = o->ck;
+                    d->sl = o->sl; d->st = o->st;
+                } else s_mmDotsFull = 1;
+            } else {
+                s_mmOther++;
+                /* the rebuild's base copy: everything after it is this frame's
+                   dots. Any op that covers the whole composite serves, since
+                   nothing else redraws all of it. */
+                if (o->l <= 0 && o->t <= 0) { s_mmNDots = 0; s_mmDotsFull = 0; }
+            }
+        }
         switch (o->kind) {
         case PK_FRAME:  s_presented = o->surf; break;
         case PK_RESET:  twins_reset(); s_skipToReset = 0; break;
@@ -1293,6 +1356,40 @@ static void sharp_minimap(const TAGPU_FRAME* f)
             (float)(mx + mw) * kx, (float)(my + mh) * ky, 0.0f, 0.0f, 1.0f, 1.0f);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
     x_glDrawArrays(GL_TRIANGLES, 0, 6);
+    /* THE ENGINE'S DOTS, ON TOP, AT THE SAME SCALE IT DRAWS THEM. A dot's
+       position is in composite pixels and the composite IS the box, so it maps
+       to the screen by the box's own offset and to the device by k — the same
+       transform the base just took. Scaled by k rather than kept at 1x device
+       like the cursor: a dot is 2-3 px of engine art whose SIZE carries meaning
+       against the map under it, and the engine's own is blown up by k anyway. */
+    if (s_mmNDots > 0) {
+        int i;
+        /* the first few, named: a dot list that is full of positions the box
+           does not contain is the failure this replay can have, and it is
+           invisible from a screenshot */
+        if (s_mmLogged < 4) {
+            char b[190];
+            s_mmLogged++;
+            _snprintf(b, sizeof b, "gui: minimap dots=%d box=(%d,%d) %dx%d first=(%d,%d) %ux%u ck=%u",
+                      s_mmNDots, mx, my, mw, mh, (int)s_mmDots[0].sl, (int)s_mmDots[0].st,
+                      (unsigned)s_mmDots[0].fw, (unsigned)s_mmDots[0].fh, (unsigned)s_mmDots[0].ck);
+            b[sizeof b - 1] = '\0';
+            slog(b);
+        }
+        for (i = 0; i < s_mmNDots; i++) {
+            const MMDOT* d = &s_mmDots[i];
+            const TAGPU_GAFENT* e = tagpu_gaf_atlas_find(&s_atlas, d->frame, d->pix, d->fw, d->fh);
+            if (!e) continue;             /* never atlased: the frame is the base copy's problem */
+            glUniform1i(s_uCursCK, (int)e->ck);
+            x_glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, s_atlas.tex);
+            quad(v, (float)(mx + d->sl) * kx, (float)(my + d->st) * ky,
+                    (float)(mx + d->sl + d->fw) * kx, (float)(my + d->st + d->fh) * ky,
+                    e->u0, e->v0, e->u1, e->v1);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof v, v);
+            x_glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+    }
     s_mmDrawn++;
 }
 
@@ -1573,7 +1670,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,glyphs=%u/%u,fonts=%d arena=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u/%u/%u,dots=%d%s,lost=%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, s_palChanges, s_palDiff, s_palDiffAt, s_palSource,
@@ -1585,7 +1682,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                      lines is the bytes the producer wrote in 300 frames — which is
                      what `nostring` is A/B'd on (13.4: ~40 bytes where a text op
                      carried ~968) and what §7's cadence note is about */
-                  g_guiq.aHead, fps);
+                  g_guiq.aHead, s_mmDrawn, s_mmSprites, s_mmOther,
+                  s_mmNDots, s_mmDotsFull ? "+" : "", s_mmDotLost, fps);
         b[sizeof b - 1] = '\0';
         slog(b);
     }
