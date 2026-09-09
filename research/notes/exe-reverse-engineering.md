@@ -2259,7 +2259,12 @@ fits a 126-px box (`main+0x142EB/+0x142ED` size, `+0x142E7/+0x142E9` offsets), c
 rebuilt by `0x466C20` with **direct byte writes** (callers `0x465572`, `0x48191A`); `+0x142DB`
 the composite plus radar dots, rebuilt by `0x466DC0` (`0x4C6B70([0x142DB],[0x142DF],0,0)` then
 unit dots through `0x4B7F90` of `main+0x147DF/+0x147E3`, `0x4C0070` arcs, `0x4BEE60 DrawPoint`;
-callers `0x465072`, `0x48191F`). **Per frame, `DrawMinimap 0x466B00(ctx)`** (`stdcall`, `ret 4`,
+callers `0x465072`, `0x48191F`). **Of those three writers only `0x4B7F90` is an observed leaf**
+[VERIFIED 2026-09-08]: `0x4C0070` and `0x4BEE60` are absent from the twin layer's table. What
+they draw still reaches the twin, but only because the base copy at the head of `0x466DC0` reads
+`+0x142DF`, which no observed leaf writes and which is therefore never seeded — so that copy
+publishes as a pixel op carrying `+0x142DB`'s final bytes, arcs and points included. The
+correctness depends on `+0x142DF` staying unseeded ([GL UI renderer](gui-renderer.html) §7). **Per frame, `DrawMinimap 0x466B00(ctx)`** (`stdcall`, `ret 4`,
 prologue `8B 0D E8 1D 51 00`, gated on `main+0x142F1 & 2`) does
 `0x4C6B70(ctx, [main+0x142DB], main+0x142E7, main+0x142E9)` at `0x466B44` and the view box
 `0x4BF8C0(ctx, main+0x142CB, main+0xDD9)` at `0x466B5E`; **one caller, `0x46961F` in
