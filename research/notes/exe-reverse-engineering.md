@@ -2934,6 +2934,24 @@ The repose is **entered only when the flag is non-zero** (`0x45ACB1` / `0x45AB94
 so the flag is 1 for the whole of it. It is also 1 while the buffers are merely *stale* — a COB write the next `DrawUnit`
 has not composed yet — which is the common case and is perfectly consistent to read.
 
+⚠ **A NEGATIVE RESULT WORTH THE SPACE `[MEASURED 2026-09-08]`: some units are never composed at
+all, and their posed buffers therefore hold rest vertices for the whole session.** Over a 69-unit
+screen inventory with the native pass armed, three to six units per frame read **byte-equal to
+their own `node+0x24` arrays** for as long as they were on screen, with `Object3do+0x08` set on
+both sides of every read — measured by `tagpu_native.c`'s rest-equality detector, whose whole job
+is to catch exactly that, and which is supposed to read 0 in play. They are almost all
+**structures** — identified through `Object3do+0x0C → unit+0x92 →` the def's name as "Gaat Gun",
+"Sentinel", "Solar Collector" (both sides), "Vulcan", "Scorpion" and "Wind Generator", plus one
+aircraft, "Hurricane". So `prim+0x22` is **not** reliably "the pose one tick behind": for these it
+is the rest pose indefinitely, and anything reading it draws them unrotated unless it reconstructs
+from the fields.
+
+**Which of the three repose call sites is not reaching them is NOT established.** The candidates
+are that the composite is cached and its builder therefore never re-runs, or that an idle COB
+script keeps setting the flag without anything clearing it; neither was tested. What is measured
+is the state of the buffer and of the flag, not the reason.
+[GPU posing §0b](gpu-posing.html) has the run.
+
 **Stage 1, the reset.** `0x45ACC1..0x45ACF3` (and the identical `0x45ABA4..0x45ABD5` in
 `0x45AB10`) `rep movs` — the instruction itself is at **`0x45ACDD`**, `0x45ABBF` in the other
 copy — the node's own vertex array `node+0x24` back over the base piece's

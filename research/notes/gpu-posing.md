@@ -1,8 +1,10 @@
 # GPU posing for 3DO units — the G16 plan
 
-**Status: planned, not built.** Nothing in this page is implemented. It records the design that
-was grilled out on 2026-09-08, the measurements taken while planning, and — first — the one
-question that has to be answered before a line of it is written.
+**Status: in build.** Gate 0 (§0) and Gate A (§0b) are measured and passed, the level generation
+(step 3) landed on 2026-09-08, and the per-type bake (step 4) is being built; the shader, the
+gates that follow it and the deletion of the CPU emitters are not. §7 is the running score. The
+rest of the page records the design grilled out on 2026-09-08 and the measurements taken while
+planning.
 
 The pass this replaces is `tagpu_native.c`'s unit emitter. Today it reads the engine's **posed
 vertex buffer** `prim+0x22` and rebuilds a 14-float stream vertex per triangle corner, per unit,
@@ -79,6 +81,62 @@ nine byte-identical replays), deliberately not done here.
 
 ---
 
+## 0b. Gate A — PASSED 2026-09-08. Nothing reconstructs wrong, and the extremes are exact.
+
+Gate 0 fixed the oracle on eight one-unit fixtures. **Gate A is the same oracle over a screen
+inventory**: 69 units, both sides, all eight classes plus the two extremes of stock content —
+`ARMSCORP` / `CORSCORP` (36 pieces, the most in the game) and `CORGANT` (574 vertices, 304 faces,
+the most of either). It is the last thing before the GPU path is built on the reconstruction,
+and it needed **no new code**: `recon_err` has always folded all three body words, so the whole
+gate is `tagpu_posewatch.on`, a camera stop per cluster, and the `native:` line's own counters.
+
+The fixture is `scenarios/pose-inventory.json`; the arm set, the four stops and the full numbers
+are in `research/notes/evidence/posewatch/gate-a-2026-09-08.txt`.
+
+| stop | units | guard | rest | norecon | errmax | units flagged (err ≥ 4) |
+|---|---|---|---|---|---|---|
+| ground, on hold | 28 | 4814 | 15084 | **0** | 61.97 | 5 |
+| ground, walking | 29 | 4951 | 15114 | **0** | 61.97 | 6 |
+| structures | 26 | 1850 | 25500 | **0** | 39.81 | 3 |
+| **the extremes** | 12 | **0** | **0** | **0** | **0.00** | **0** |
+| air | 35 | 3845 | 0 | **0** | 35.50 | 3 |
+
+The naval classes are a second load on Anteer Strait (`scenarios/pose-inventory-sea.json`): both
+submarines, four surface ships, the patrol boats and the tidal generators, on hold and then under
+move orders — 4404 lines, all `dirty=1/1`, `norecon` 0, and **no ship and neither submarine
+flagged at all**, moving or still.
+
+**Three things it establishes.**
+
+1. **No model failed to reconstruct.** `norecon` is 0 in every window across 82 unit types:
+   `pose_accum_body` returned a whole piece tree every time. That is the number §3 says to take
+   before the landing, and it is zero.
+2. **No disagreement without the engine's own flag.** All **27142** `posewatch:` lines of the run
+   read `dirty=1/1`; **not one read `dirty=0/0`**. That is precisely the signature `recon_watch`
+   was written to catch — "a large err with the flag clear both times" would mean the guard's
+   bracket is not the whole window — and it is absent. Every err over 4 model units is a buffer
+   the engine was itself declaring stale or mid-rewrite.
+3. **The extremes are exact.** The 36-piece trees and the 304-face model read **errmax 0.00**
+   with zero guard trips and zero rest-equal reads. Piece count and face count are not where
+   this breaks.
+
+The residuals that *are* there are the two §2.9 already names: a walking unit reads 10–19 (a tick
+of animation), an aircraft 24–35 with `rest=0` — its buffer is being actively composed and the
+guard catches the rewrite.
+
+**What it found that was not the question.** A handful of **structures** read byte-equal to their
+own rest vertex arrays *permanently* — `rest=` runs at tens of piece-reads per frame while
+`guard=` names only three to six units — with the pose flag set on both sides of every read. So
+their err is the model's own size for the whole session and `posefix` draws them from the
+reconstruction every frame rather than occasionally. Identified by peeking
+`Object3do+0x0C → unit+0x92 →` the def's name: "Gaat Gun", "Sentinel", "Solar Collector" (both
+sides), "Vulcan", "Scorpion", "Wind Generator", and one aircraft, "Hurricane". **Why the engine
+leaves those buffers at rest is not established.** It does not touch Gate A — the rest-equality
+detector catches every one and the reconstruction is what gets drawn — and G16 stops reading that
+buffer at all, so it becomes moot rather than fixed.
+
+---
+
 ## 1. What moves, and what it is replaced by
 
 Four places read `prim+0x22`. **All of them move** (owner's call, 2026-09-08):
@@ -145,10 +203,13 @@ and `s_pmap` (keyed by mesh + node pointer).
 
 **The fix, for all of them:** a level generation.
 
-- `tagpu_reclaim` already owns the level teardown `0x491B60` and already wraps it with a pre-hook
-  that runs on the game thread **before** the cascade frees anything, holding the render thread
-  off for the duration. It bumps an interlocked counter there and exposes
-  `tagpu_reclaim_level_gen()`.
+- `tagpu_reclaim` already owns the level teardown `0x491B60` and wraps it on both sides: a pre-hook
+  that runs on the game thread **before** the cascade frees anything, holding the render thread off
+  for the duration, and a post-hook after it returns. It bumps an interlocked counter in the
+  **post** hook and exposes `tagpu_reclaim_level_gen()`. *(This page said "pre-hook" while the
+  plan was being written; the landing review caught that a bump there is re-read by a pass already
+  past the overlay's teardown gate, which would refill the caches from templates about to be
+  freed — [thread-safe destruction](thread-safe-destruction.html) §6a carries the reasoning.)*
 - Every cache entry is stamped with the generation it was built under. The render thread drops
   and `glDelete`s mismatched entries — **GL deletion never happens on the game thread**.
 - The bake itself runs inside the overlay-driver pass, which `teardown_active()` already gates,
@@ -178,9 +239,27 @@ with a local answer or a *pass-level* condition that already has one:
 | GL objects cannot be made, no atlas | the **pass** cannot run at all | existing behaviour: the pass is not armed and hands the draw back to the engine, exactly as `tagpu_r3d_ready()` already gates it |
 
 What is left to log is not a refusal but an **anomaly**: once per model, at bake time, when the
-tree walk finds something that should not exist — a piece whose parent never resolves, a face
-with neither a texture nor a colour, a node whose vertex array does not read. One line per model,
-not per unit per frame, plus a counter in the `native:` line. The instrument to measure how often
+tree walk finds something that should not exist. One line per model, not per unit per frame, plus
+a counter in the `native:` line.
+
+⚠ **`[CORRECTED 2026-09-08, by building it]` This paragraph used to name three things as the
+anomaly — "a piece whose parent never resolves, a face with neither a texture nor a colour, a node
+whose vertex array does not read". Measured over the 67 distinct models of the pose inventory,
+they are not one kind of thing:**
+
+| what the walk finds | over 67 stock models | so it is |
+|---|---|---|
+| a face with **neither a texture nor a colour** | **every model has some** — 238 faces, 3402 of 124814 baked vertices (2.7 %) | ordinary content. The engine's own rasteriser skips them too, and the slant raster *fills* them (the footprint quad). A **count**, `nomat=` |
+| a face outside the emitters' `3 ≤ fvc ≤ 32` | 30 faces, in 14 of the 67 | ordinary content. A count, `odd=` |
+| a piece whose **node or vertex array does not read** | **0** | an anomaly, `anom=` |
+| a piece whose **parent link never resolves** | **0** | an anomaly, `anom=` |
+
+Reporting the four as one number logged 1486 anomalies on a scene that has none. The first two
+are statistics and are logged only under the lever's `log` token; the last two get a line whether
+or not logging was asked for, because nothing in stock content produces either. That the parent
+walk never fails is the same fact Gate A read from the other end: `norecon` was 0 there too.
+
+The instrument to measure how often
 any of it happens **before** the landing already exists: `tagpu_poserecon.on` forces the
 reconstruction for every unit on every frame, and `s_poseNorecon` counts the walks that failed.
 
@@ -273,6 +352,55 @@ is the precedent for both.
   CPU emitters. Decision 3 removes those emitters, so they go with them — **in the last commit on
   the branch, after Gate B has run**, because Gate B needs the CPU path as its oracle.
 
+### Built 2026-09-08 — step 4, and what it measured
+
+`tagpu_posebake.c` / `.h`, driven from `tagpu_native_frame` beside the `emit_geom` it will
+replace, behind **`tagpu_posebake.on`** (tokens `log`, `check`). **Nothing draws from these
+buffers yet** — the posed program is step 5 — so the lever is off in play and the `native:` line
+is byte-identical to main's without it.
+
+**One walk, not three.** `emit_node`, `emit_slant_at` and `emit_wire` each walk the same tree with
+slightly different rules, so the bake has a single `pb_walk` that both bakes and the predictor
+drive, parameterised by range. A rule that lives in one place cannot drift between the geometry
+buffer and the material stream — which is exactly what the "same vertex count" invariant needs.
+`mat_bake` refuses and logs if the two walks ever disagree, rather than uploading a stream that
+lies about which vertex it belongs to.
+
+**The invariant is checked, not asserted.** With `check` in the lever the bake is held to the
+emitter that just ran on the same unit in the same frame, on two independent quantities:
+
+- the **body vertex count** `emit_geom` produced, against `tagpu_posebake_predict_body` — the
+  bake's body range minus this unit's invisible pieces and minus the faces the material stream
+  collapsed;
+- the **accumulated rest offsets** the bake walked off the template, against `s_recon.rest[]`,
+  which `pose_accum_body` rebuilds per unit per frame — equality to within 1/65536.
+
+Over the whole pose inventory, four camera stops: **0 mismatches on either**, `anom=0`,
+`refused=0`, 67 of 67 types baked. The largest bake is **6090 vertices** (`CORGANT`: 1218 body +
+1212 slant + 1616 wire … per range as the walk lays them down).
+
+**What it deviates from §3–§4, and why.**
+
+| | |
+|---|---|
+| the anomaly counter is **four** counters | see the correction in §3: three of the four things §3 called anomalies are ordinary content |
+| the cache is **128 types / 256 material streams** | 64 was reached and started evicting on a 69-unit screen. At ~2000 vertices per model that is ~8 MB + ~10 MB of static VBO, against the **2.75 MB re-uploaded every frame** today |
+| `TAGPU_HMAXPIECE` (48) is **left alone**; the new bound is `TAGPU_PBMAXPIECE` (256) | decision 7 is about *our* array sizes. 48 is the replacement-mesh program's **uniform array** size, and raising that one to 256 would be 768 `vec4` of non-block uniforms — a different constraint, and not this step's. `HPOSE`, `pose_accum_body`'s parent array and the emitters' `nparts` guards all move to 256, and the three `HPOSE`s become statics rather than 17 kB stack locals |
+| the topology is **cached but not yet consumed** | §4 requires the parent walk to stop running per unit per frame; the entry now holds `parent[]` and `restOff[]`, and the caller that uses them instead of `pose_accum_body`'s own walk is step 5. Until then the `check` token uses the duplication as an oracle |
+
+**Three of the four invalidations are exercised; one is not.** The **atlas generation** and the
+**owner** are in the key, so ordinary play exercises them — a wrong one simply misses. The **GL
+generation** was watched on an exit to the shell, which re-creates the context: `posebake: dropped
+53 geometry (taking 53 material with them) and 0 material in its own right — level 0, GL 2, atlas
+4`. (That line reports the cascade separately because a material stream is only meaningful against
+the geometry it was walked beside, so dropping a geometry entry takes its streams with it; without
+the split the line read "0 material" on a reset that had just dropped every stream there was.) The
+**level generation** is not measured: the game does not survive a level teardown with `tagpu_reclaim`
+armed (§6b of [thread-safe destruction](thread-safe-destruction.html)), and with `reclaim.off` the
+generation never moves at all because the hook that bumps it is not installed. So "the caches drop
+and repopulate on the next level" rests on step 3's own verification of the identical mechanism in
+`cache_gen_check`, not on a run of this one.
+
 ## 5. What cannot be byte-exact, and the gates that follow
 
 The engine's arithmetic is fixed point with rounding at every step. `0x4B7173` returns the pair
@@ -298,7 +426,7 @@ written. It bites in two very different places:
 
 | gate | what it compares | units | how |
 |---|---|---|---|
-| **A** | the reconstruction vs the engine's buffer | model units | `posewatch` `err=` over a screen inventory — the existing oracle, once Gate 0 has fixed it |
+| **A** | the reconstruction vs the engine's buffer | model units | `posewatch` `err=` over a screen inventory — the existing oracle, once Gate 0 has fixed it. **PASSED 2026-09-08, §0b** |
 | **B** | the CPU reconstruction vs the GPU port | pixels | a **paused** scene, `tagpu_poserecon.on` rendering the same pose through the old path; the diff isolates the port alone |
 | **C** | the flicker regression | pixels | the 62 s walk protocol: frames >500 px → **0**, >1000 px → **0**, 1× as the control |
 | **D** | structure-shadow parity | pixels | the G14j fixtures, at a **stated tolerance** rather than "byte-exact" |
@@ -340,6 +468,9 @@ model at 3 `vec4` is 432 uniform components, and the biggest geometry bake in th
    a pre-existing freeze found doing exactly this, [thread-safe destruction](thread-safe-destruction.html)
    §6b. So "the caches repopulate correctly on the next level" is asserted from the code, not
    measured, and it stays that way until that freeze is fixed.
+3b. **Gate A** — the reconstruction over a screen inventory rather than eight fixtures.
+   **Run 2026-09-08 and PASSED**, §0b: `norecon` 0 across 82 types, 27142 watch lines all
+   `dirty=1/1` and none `dirty=0/0`, and the 36-piece and 304-face extremes at errmax 0.00.
 4. The per-type bake and its cache; the material stream; the bake-time anomaly log.
 5. The posed program and its shadow-depth twin; bodies only, behind a lever, both paths present
    — the CPU emitters live **only** as Gate B's oracle from here to step 8.

@@ -83,6 +83,7 @@
 #include "tagpu_order.h"
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_structshadow_ours: who draws a building's shadow */
 #include "tagpu_reclaim.h"   /* tagpu_reclaim_level_gen: the model templates outlive units, not levels */
+#include "tagpu_posebake.h"  /* G16 step 4: the per-type geometry bake and its caches */
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
@@ -165,45 +166,7 @@
 #define WR_XPOS      0x08      /* i32 16.16 world x   (>>16 = world units)   */
 #define WR_ZPOS      0x0C      /* i32 16.16 altitude  (>>16 = world units)   */
 #define WR_YPOS      0x10      /* i32 16.16 world z   (>>16 = map depth)     */
-#define O3_NUMPARTS  0x00
-#define O3_POSEDIRTY 0x08      /* i32: the posed vertex buffers are stale or */
-                               /* being rewritten. Set before the rewrite    */
-                               /* (0x45AC89 / 0x45AB6C, and by the COB piece */
-                               /* MOVE/TURN setters 0x480C90 / 0x480D22),    */
-                               /* cleared only after the compose returns     */
-                               /* (0x45AD28 / 0x45AC0A) -- and the rewrite is */
-                               /* ENTERED only when it is non-zero, so zero   */
-                               /* on both sides of a read means the engine    */
-                               /* was not touching the buffer                */
-#define O3_THISUNIT  0x0C
-#define O3_BTURN     0x18      /* u16[3] the body turn the compose folds into */
-                               /* the BASE piece's own turn (0x45B0DB): +0x18 */
-                               /* <- unit+0x64 (about Z), +0x1A <- unit+0x66  */
-                               /* (the yaw, about Y), +0x1C <- unit+0x68      */
-                               /* (about X). The cached copy, up to 8 behind  */
-                               /* the live unit -- and it is what was baked   */
-#define O3_BASEPRIM  0x1E      /* PrimitiveStruct* the reset walk and the     */
-                               /* compose both start from                     */
-#define O3_PRIM0     0x22
-#define PRIM_STRIDE  0x36
-#define P_NODE       0x00
-#define P_POS        0x04      /* i32[3] 16.16 COB MOVE delta               */
-#define P_TURN       0x10      /* u16[3] COB TURN, 65536 = 360 degrees      */
-#define P_VBUF       0x22
-#define P_FLAGS      0x28
-#define N_VCOUNT     0x04
-#define N_FCOUNT     0x08
-#define N_SELPRIM    0x0C      /* selection primitive index, -1 = none      */
-#define N_OFF        0x10      /* i32[3] 16.16 rest offset from the parent  */
-#define N_NAME       0x1C      /* char* piece name                          */
-#define N_VERTS      0x24      /* raw model-space verts i32[3] 16.16        */
-#define N_FACES      0x28
-#define N_SIB        0x2C
-#define N_CHILD      0x30
-#define FACE_STRIDE  0x20
-#define F_COLORTAB   0x00
-#define F_VCOUNT     0x04
-#define F_INDICES    0x0C
+#include "tagpu_model3do.h"   /* O3_*, PRIM_*, P_*, N_*, F_*: the engine's model structures */
 
 #define MAXNV  49152           /* vertices across all native units per frame */
 /* Units (and wrecks) gathered per frame. This is NOT a soft limit: a unit past
@@ -1231,7 +1194,7 @@ static int emit_geom_at(const char* o3, int nv, float ax, float ay,
 {
     s_emitTop = -1e9f;
     int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
-    if (nparts <= 0 || nparts > 64) return nv;
+    if (nparts <= 0 || nparts > TAGPU_PBMAXPIECE) return nv;
 
     int anyShadeFlag = 0, p;
     const unsigned short* bt = (const unsigned short*)(o3 + O3_BTURN);
@@ -1354,7 +1317,7 @@ static int emit_slant_at(const char* o3, int nv, float ax, float ay,
                          int* torn, int recon)
 {
     int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
-    if (nparts <= 0 || nparts > 64) return nv;
+    if (nparts <= 0 || nparts > TAGPU_PBMAXPIECE) return nv;
     float shade = (float)tagpu_r3d_shade_neutral() / 31.0f;
     const unsigned short* bt = (const unsigned short*)(o3 + O3_BTURN);
     int btNZ = (bt[0] | bt[1] | bt[2]) != 0;
@@ -1489,7 +1452,7 @@ static int emit_wire(const char* o3, int nv, float ax, float ay,
                      float wx0, float wz0, float encBase, int owner, float wire)
 {
     int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
-    if (nparts <= 0 || nparts > 64) return nv;
+    if (nparts <= 0 || nparts > TAGPU_PBMAXPIECE) return nv;
     int shNeutral = tagpu_r3d_shade_neutral();
     int p;
     for (p = 0; p < nparts; p++) {
@@ -1790,12 +1753,22 @@ static void cache_gen_check(void)
 
 /* Everything one unit's pose needs, accumulated down the piece tree. Shared
    with pose_dump, which checks it against the engine's own posed vertices. */
+/* THE PIECE COUNT IS NOT CAPPED AT 64 ANY MORE (gpu-posing.md decision 7).
+   Nothing in the engine bounds a model's piece count; 64 was this file's array
+   size and 48 was the replacement-mesh program's uniform array. Measured over
+   all 608 stock `objects3d/*.3do`, the largest model has 36 pieces, so
+   TAGPU_PBMAXPIECE (256) puts the bound an order of magnitude above anything
+   stock content asks for and above any plausible mod — which is the point of
+   the decision: it stops being a number the design has to reason about.
+   These are held STATIC rather than on the stack: at 256 pieces one HPOSE is
+   ~17 kB, and pose_dump and hires_pose both used to take one as a local. Both
+   are render-thread only, as s_recon already was. */
 typedef struct {
-    const char* nd[64];
-    const char* pr[64];
-    float acc[64][12];          /* rest vertex of that piece -> model space  */
-    float rest[64][3];          /* accumulated rest offset                   */
-    unsigned char done[64];     /* 0 = tree link broken, piece left at rest  */
+    const char* nd[TAGPU_PBMAXPIECE];
+    const char* pr[TAGPU_PBMAXPIECE];
+    float acc[TAGPU_PBMAXPIECE][12];   /* rest vertex of that piece -> model space */
+    float rest[TAGPU_PBMAXPIECE][3];   /* accumulated rest offset                  */
+    unsigned char done[TAGPU_PBMAXPIECE]; /* 0 = tree link broken, piece at rest    */
 } HPOSE;
 
 /* `bt` non-NULL folds the body turn into the BASE piece's own turn, exactly
@@ -1804,13 +1777,13 @@ typedef struct {
    hires_pose and pose_dump want model space and pass NULL. */
 static int pose_accum_body(const char* o3, HPOSE* h, const unsigned short* bt)
 {
-    short parent[64];
+    static short parent[TAGPU_PBMAXPIECE];   /* render thread only, as HPOSE is */
     const char* basePrim = bt ? *(const char* const*)(o3 + O3_BASEPRIM) : NULL;
     int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
     const char** nd = h->nd;
     const char** pr = h->pr;
     int i, g, left, pass;
-    if (nparts <= 0 || nparts > 64) return 0;
+    if (nparts <= 0 || nparts > TAGPU_PBMAXPIECE) return 0;
     for (i = 0; i < nparts; i++) {
         pr[i] = o3 + O3_PRIM0 + i * PRIM_STRIDE;
         nd[i] = *(const char* const*)(pr[i] + P_NODE);
@@ -1991,7 +1964,7 @@ static void recon_watch(const char* o3, const char* why)
    at rest (the caller then uploads the identity). */
 static int hires_pose(const char* o3, const void* mesh, float* out, int npiece)
 {
-    HPOSE h;
+    static HPOSE h;                        /* 17 kB at TAGPU_PBMAXPIECE: not a local */
     int g, nparts = pose_accum(o3, &h);
     if (!nparts) return 0;
     {
@@ -2033,6 +2006,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        pass was disarmed still invalidates the template caches, and the check is
        one aligned load when nothing has changed */
     cache_gen_check();
+    /* the geometry bake's caches take the same three generations one frame
+       later than they are bumped, for the same reason and on the same thread —
+       and it holds GL objects, so its drop has to be here, on the render
+       thread, and not wherever the generation moved */
+    tagpu_posebake_frame(f->frame_counter);
     if (s_state == 2) return;
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
@@ -2708,9 +2686,34 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             h->air = units[i].air;
             h->cast[0] = h->cast[1] = 0.0f; h->cast[2] = 1.0f; h->castSkip = 1;
         } else {
+            int nv0 = nv;
             nv = emit_geom(units[i].o3, nv, units[i].ax, units[i].ay,
                            units[i].wx0, units[i].wz0, encBase, units[i].owner);
             hidx[i] = -1; topv[i] = s_emitTop > 0.0f ? s_emitTop : 0.0f;
+            /* G16 step 4: bake this type's static geometry and its material
+               stream. NOTHING DRAWS FROM THEM YET — the posed program is step 5
+               — so this is behind its own lever and its only output today is
+               the check below, which holds the bake to the emitter that just
+               ran on the same unit in the same frame. */
+            if (tagpu_posebake_armed()) {
+                const TAGPU_PBGEOM* bg; const TAGPU_PBMAT* bm;
+                if (tagpu_posebake_unit(units[i].o3, units[i].owner, &bg, &bm) &&
+                    tagpu_posebake_checking() && !s_vtrunc) {
+                    /* !s_vtrunc: once the shared stream has truncated, what
+                       emit_geom produced is a prefix of what it wanted, and the
+                       check would report the budget rather than the bake */
+                    /* recon_begin fills s_recon.rest[] with the very offsets the
+                       bake accumulated off the template; it is safe HERE because
+                       the emit that depends on s_recon has already returned */
+                    const float* rest = NULL;
+                    int nrest = 0;
+                    if (recon_begin(units[i].o3)) {
+                        rest = &s_recon.rest[0][0];
+                        nrest = s_reconParts;
+                    }
+                    tagpu_posebake_check(units[i].o3, bg, bm, nv - nv0, rest, nrest);
+                }
+            }
         }
     }
     firstv[nu] = nv;
@@ -3350,17 +3353,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     static unsigned last = 0;
     if (f->frame_counter - last >= 300) {
         last = f->frame_counter;
-        char b[288], emax[16];
+        char b[352], emax[16], bake[64];
         /* the worst |engine - fields| of the window, and "off" rather than
            0.00 when nothing measured it — a number nobody took reads as a
            measurement that came out clean */
         if (s_posewatch) _snprintf(emax, sizeof emax, "%.2f", s_poseErrMax);
         else             lstrcpynA(emax, "off", sizeof emax);
+        /* writes nothing at all unless tagpu_posebake.on is there, so the line
+           a player's log carries is byte-identical to the one before G16 */
+        tagpu_posebake_stats(bake, sizeof bake);
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u posefix=%d guard=%u rest=%u norecon=%u errmax=%s%s",
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u posefix=%d guard=%u rest=%u norecon=%u errmax=%s%s%s",
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_reread, s_posefix, s_poseGuard, s_poseRest, s_poseNorecon,
-                  emax, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
+                  emax, bake, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
         s_reread = 0;
         s_poseGuard = 0; s_poseRest = 0; s_poseNorecon = 0; s_poseErrMax = 0.0f;
@@ -3382,7 +3388,7 @@ static void pose_dump(const char* u, const char* o3)
 {
     if (GetFileAttributesA("tagpu_posedump.on") == INVALID_FILE_ATTRIBUTES) return;
     DeleteFileA("tagpu_posedump.on");
-    HPOSE h;
+    static HPOSE h;                        /* see HPOSE: not a 17 kB local */
     /* THE BODY TURN IS ALL THREE WORDS, AND IT IS THE CACHED COPY. The compose
        folds `o3+0x18/+0x1A/+0x1C` into the base piece's own turn at 0x45B0DB
        -- +0x18 onto the Z word, +0x1A (the heading) onto Y, +0x1C onto X -- so
@@ -3499,6 +3505,7 @@ void tagpu_native_glreset(void)
     s_castLogged = 0;
     tagpu_mark_glreset();
     tagpu_hires_draw_glreset();
+    tagpu_posebake_glreset();
 }
 
 int tagpu_native_wrecks_armed(void)

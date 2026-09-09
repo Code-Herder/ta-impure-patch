@@ -41,9 +41,16 @@ int  tagpu_reclaim_teardown_active(void);
 
 int  tagpu_reclaim_armed(void);
 
-/* THE LEVEL GENERATION. Bumped once per level teardown, on the game thread, at
-   the top of the pre hook — before the cascade frees anything, and while the
-   render thread is already being held out of its pass.
+/* THE LEVEL GENERATION. Bumped once per level teardown, on the game thread, in
+   the POST hook — after the cascade has freed the templates, and before the
+   render thread is released.
+
+   NOT the pre hook, and the difference is a bug rather than a preference: the
+   render thread is stopped by tagpu_overlay.c's teardown_active() gate, not by
+   pass_begin, so a pass that got past that gate before the flag was set runs on
+   while the pre hook waits for it — and would there see a generation bumped in
+   the pre hook, drop its template caches and refill them from templates the
+   cascade has not freed yet. reclaim_teardown_post carries the full reasoning.
 
    It exists for the OTHER lifetime this module does not otherwise cover.
    `FreeObjectState` owns the per-unit one: an `Object3do` and its posed vertex

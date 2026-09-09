@@ -1011,6 +1011,7 @@ int tagpu_render3do(const TAGPU_FRAME* f, const char* unit, const char* obj3do,
    shade LUT and calibration so both paths draw identical materials ---- */
 GLuint tagpu_r3d_atlas_texref(void) { return s_atlas.tex; }
 GLuint tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
+unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
 void tagpu_r3d_atlas_frame(const unsigned char* pal)
 {
     if (s_state != 1) return;
