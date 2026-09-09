@@ -685,8 +685,7 @@ static void drain(void)
    option (SetGamma 0x4BA590 [CORPUS], gamma = 0.5 + Gamma/24, 1.0 at the
    engine's own default of 12), applied only on the way to SetEntries, never to
    +0x143A7 (read 2026-09-07, engine map "The palette the screen is presented
-   with"). The
-   engine's own pixels beneath the twin are drawn by cnc-ddraw through the
+   with"). The engine's own pixels beneath the twin are drawn by cnc-ddraw through the
    palette its SetEntries received, so that is the palette the twin resolves
    through: the primary's palette object in this DLL. The engine's table is
    the fallback until a primary exists, and the number of entries where the
