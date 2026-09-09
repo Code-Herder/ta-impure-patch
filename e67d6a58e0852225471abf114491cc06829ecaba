@@ -1,0 +1,8 @@
+landing-review: model=opus effort=high range=main..e67d6a5 agents=2 findings=11 acted=10 rejected=0 recorded=1 date=2026-09-09
+Two general-purpose Opus agents at high, read-only, on main...HEAD (G16 steps 3-8 + the G17a/G17b merge).
+Both independently returned the posed[96] unbounded lstrcatA as their top finding (stack smash at
+step 8's own stated 10k-unit budget). Reviewer B additionally found tagpu_posebake.c seeding each
+piece's rest AABB wrong in y and z (pbody set inside the axis loop). Acted on in bbceeb8; the one
+finding recorded rather than fixed is model_root's level-LOAD window, which is empty for a reason
+the comment now states instead of implying. Both merge-recomposed _snprintf format strings were
+checked conversion-by-argument by both reviewers and are correct.
