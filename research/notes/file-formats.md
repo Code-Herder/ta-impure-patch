@@ -546,10 +546,11 @@ The cycle is driven by a script thread, not by the engine. `Create` starts `Moti
 `evidence/cobtrace/kbot/cobtrace.log`: **a stride is atomic** — `StopMoving` at tick 311 does not
 interrupt the `walk` that started at 305 and still returns at 324, and the loop only then eases
 the legs back to rest with `speed` turns — and **the cycle length is the sum of its sleeps**,
-which for ARMPW measures a steady 19 ticks against 740 ms (22.2 ticks) nominal. Flooring each
-sleep to whole ticks gives 18, so one tick of call/return bookkeeping would account for the rest,
-but **`SLEEP`'s quantisation rule has not been read from the binary** and that arithmetic is only
-a fit. Note also that nothing in the engine stops two threads writing the same piece: `walklegs`
+which for ARMPW measures a steady 19 ticks against 740 ms (22.2 ticks) nominal. `SLEEP` converts
+its millisecond operand to ticks as **`floor(ms × 30 / 1000)`** — read from the binary and
+modelled in `tools/tacob`'s VM — which turns those twelve sleeps into 18; the extra tick is in the
+runner's own wake accounting, which the VM also models: `tacob run kbot` replays this fixture
+**byte-identically, cadence included**, so nothing here is a fit. Note also that nothing in the engine stops two threads writing the same piece: `walklegs`
 leaves the torso alone and `AimPrimary` blocks on a static flag that `MotionControl` raises only
 once it has switched to `walklegs` — cooperative piece ownership arranged entirely in script.
 [MEASURED — the trace 2026-09-07, the script structure and the arithmetic 2026-09-09.]
