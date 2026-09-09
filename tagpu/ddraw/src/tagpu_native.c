@@ -83,7 +83,8 @@
 #include "tagpu_order.h"
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_structshadow_ours: who draws a building's shadow */
 #include "tagpu_reclaim.h"   /* tagpu_reclaim_level_gen: the model templates outlive units, not levels */
-#include "tagpu_posebake.h"  /* G16 step 4: the per-type geometry bake and its caches */
+#include "tagpu_posebake.h"
+#include "tagpu_posedraw.h"  /* G16 step 4: the per-type geometry bake and its caches */
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
@@ -502,6 +503,12 @@ static const char* FS =
        ride the same composite as (rgb, alpha 0) */
     "  frag = vec4(rgb * uAlpha, uAlpha);\n"
     "}\n";
+
+/* G16 step 5: the posed program is a TWIN of this one — its own vertex stage,
+   this exact fragment stage. Handing over the source rather than letting
+   tagpu_posedraw.c carry a copy is what keeps the two from drifting in the half
+   of the pipeline step 5 does not replace. */
+const char* tagpu_native_unit_fs(void) { return FS; }
 
 /* composite: the game-res FBO over the frame, NEAREST (game-res look kept) */
 static const char* CVS =
@@ -1057,6 +1064,12 @@ static const MAABB* model_aabb(const char* root)
    quadOnly: textured faces need exactly 4 verts (GAF_DrawTransformed is a
    quad rasteriser — the generic 3DO draw 0x46BAE0 skips the rest). */
 static int s_vtrunc = 0;            /* vertex budget hit this frame (logged) */
+/* G16 step 5: units the posed pass was armed for, had a bake for, and still
+   could not draw — a pose that would not reconstruct, or the frame's pose
+   arena full. They fall back to the CPU emitter and are correct either way,
+   but a SILENT fallback would hide the one thing this gate has to measure, so
+   the count rides the native: line beside `posed=`. */
+static unsigned s_posedSkip = 0;
 static float s_emitTop = -1e9f;     /* the highest posed model y emit_geom saw
                                        (a wreck's model height, tagpu_shadow.c) */
 static int   s_castLogged = 0;      /* the first casters' numbers, once per session */
@@ -1974,6 +1987,97 @@ static const int* recon_prim(int p, const char* nd, int nvert)
     return s_reconV;
 }
 
+/* ---- G16 step 5: one unit's pose, off the type's CACHED topology --------
+   `pose_accum_body` rebuilds the parent links by scanning the node list for
+   every sibling of every node. That is fine on today's rare trip frames and
+   not fine at 200 units a frame, so gpu-posing.md §4 requires the walk to be
+   cached per type — step 4 put `parent[]` and `restOff[]` in the bake entry,
+   and this is the caller that finally consumes them instead of walking again.
+
+   THE ARITHMETIC IS pose_accum_body's, DELIBERATELY UNCHANGED: same order of
+   operations, same `piece_local`, same body-turn fold into the base piece at
+   0x45B0DB's place. Only the parent array's SOURCE moves. That matters because
+   until step 8 the duplication is the oracle `tagpu_posebake.on=check` compares
+   against — the two must still agree exactly.
+
+   Refuses (returns 0) rather than posing a unit it cannot place: a piece count
+   that is not the baked model's, a node that does not read, or a piece whose
+   parent link never resolved. `recon_begin` sets the same bar, and the caller
+   does what it does there — leaves the unit to the CPU emitter. */
+static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
+                      float* out, unsigned char* shaded)
+{
+    static float acc[TAGPU_PBMAXPIECE][12];      /* render thread only */
+    static unsigned char done[TAGPU_PBMAXPIECE];
+    static const char* pr[TAGPU_PBMAXPIECE];
+    static const char* nd[TAGPU_PBMAXPIECE];
+    const unsigned short* bturn;
+    unsigned short bt[3];
+    const char* basePrim;
+    int nparts, i, pass, left, anyShadeFlag = 0;
+
+    if (!ptr_ok(o3) || IsBadReadPtr(o3, O3_PRIM0)) return 0;
+    nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
+    /* the topology describes THIS piece list or it describes nothing: a
+       different count in the same cache slot is a different model */
+    if (nparts <= 0 || nparts > TAGPU_PBMAXPIECE || nparts != g->nparts) return 0;
+    bturn = (const unsigned short*)(o3 + O3_BTURN);
+    bt[0] = bturn[2];                       /* +0x1C = unit+0x68, about X */
+    bt[1] = bturn[1];                       /* +0x1A = unit+0x66, about Y */
+    bt[2] = bturn[0];                       /* +0x18 = unit+0x64, about Z */
+    basePrim = *(const char* const*)(o3 + O3_BASEPRIM);
+    for (i = 0; i < nparts; i++) {
+        unsigned char fl;
+        pr[i] = o3 + O3_PRIM0 + i * PRIM_STRIDE;
+        nd[i] = *(const char* const*)(pr[i] + P_NODE);
+        if (!ptr_ok(nd[i]) || IsBadReadPtr(nd[i], N_CHILD + 4)) return 0;
+        done[i] = 0;
+        fl = *(const unsigned char*)(pr[i] + P_FLAGS);
+        if ((fl & 1) && (fl & 4)) anyShadeFlag = 1;
+    }
+    /* parents before children, exactly as pose_accum_body orders them; the
+       links themselves come off the bake */
+    left = nparts;
+    for (pass = 0; pass < nparts && left > 0; pass++) {
+        for (i = 0; i < nparts; i++) {
+            short par = g->parent[i];
+            const int* off;
+            const int* mv;
+            const unsigned short* tn;
+            unsigned short bturn2[3];
+            float d[3], loc[12];
+            int k;
+            if (done[i] || (par >= 0 && !done[par])) continue;
+            off = (const int*)(nd[i] + N_OFF);
+            mv  = (const int*)(pr[i] + P_POS);
+            tn  = (const unsigned short*)(pr[i] + P_TURN);
+            for (k = 0; k < 3; k++)
+                d[k] = (float)off[k] / 65536.0f + (float)mv[k] / 65536.0f;
+            if (basePrim && pr[i] == basePrim) {
+                for (k = 0; k < 3; k++)
+                    bturn2[k] = (unsigned short)(tn[k] + bt[k]);
+                tn = bturn2;
+            }
+            piece_local(tn, d, loc);
+            if (par < 0) memcpy(acc[i], loc, sizeof loc);
+            else         m43_mul(acc[par], loc, acc[i]);
+            done[i] = 1;
+            left--;
+        }
+    }
+    for (i = 0; i < nparts; i++) if (!done[i]) return 0;
+    /* out: the piece's matrix, or all zeros for a piece this unit is not
+       showing — which collapses its triangles onto the model origin, the same
+       vertices `emit_geom_at`'s `if (!(pflags & 1)) continue` never emitted */
+    for (i = 0; i < nparts; i++) {
+        unsigned char fl = *(const unsigned char*)(pr[i] + P_FLAGS);
+        if (fl & 1) memcpy(out + (size_t)i * 12, acc[i], 12 * sizeof(float));
+        else        memset(out + (size_t)i * 12, 0, 12 * sizeof(float));
+        shaded[i] = (unsigned char)(anyShadeFlag ? ((fl & 4) != 0) : 1);
+    }
+    return nparts;
+}
+
 /* The evidence, armed by tagpu_posewatch.on: how far the engine's posed
    buffer is from the pose its own fields describe, in model units, over
    every visible piece. A buffer caught between the reset and the compose is
@@ -2123,6 +2227,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        and it holds GL objects, so its drop has to be here, on the render
        thread, and not wherever the generation moved */
     tagpu_posebake_frame(f->frame_counter);
+    tagpu_posedraw_frame();      /* the lever, and this frame's counters */
     if (s_state == 2) return;
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
@@ -2737,9 +2842,26 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int i;
     static TAGPU_HUNIT hunits[MAXU];
     int nhi = 0;
+    /* G16 step 5: the units the POSED program drew, and their poses. `pdix[i]`
+       is the unit's entry or -1; a posed unit contributes no vertices to the
+       shared stream, so its firstv range is empty and every CPU draw over it
+       is a no-op — the same way a replacement mesh's is. */
+    static TAGPU_PDUNIT pdu[MAXU];
+    static int pdix[MAXU];
+    static float pdPose[TAGPU_PBMAXPIECE * 12 * 64];
+    static unsigned char pdShaded[TAGPU_PBMAXPIECE * 64];
+    int npd = 0, pdPoseN = 0, pdShadedN = 0;
+    const int pdPoseMax = (int)(sizeof pdPose / sizeof pdPose[0]);
+    const int pdShadedMax = (int)(sizeof pdShaded);
+    int pdReady = tagpu_posedraw_armed() && tagpu_posedraw_ready();
     s_hposeN = 0;
     for (i = 0; i < nu; i++) {
         firstv[i] = nv;
+        /* BEFORE any of the skips below, not in the branch that fills it: the
+           array is static, so a unit that takes an early `continue` — dead, or
+           a replacement mesh — would otherwise be read against another unit's
+           index from an earlier frame. */
+        pdix[i] = -1;
         /* The object pointer was captured at gather time. If the engine has
            since nulled or replaced it (unit death, wreck destroyed), the old
            object is on tagpu_reclaim's queue and still readable — but drawing
@@ -2810,6 +2932,52 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             h->cast[0] = h->cast[1] = 0.0f; h->cast[2] = 1.0f; h->castSkip = 1;
         } else {
             int nv0 = nv;
+            int posed = 0;
+            /* G16 step 5: the posed program draws this unit out of its type's
+               baked buffers, so no vertices are built for it here at all. It
+               FALLS BACK to the emitter on every refusal — a type that will
+               not bake, a pose that will not reconstruct, a piece list past
+               the uniform block, the arena full — because the CPU path is
+               still present and is Gate B's oracle (gpu-posing.md §7 step 8).
+               Off in play: `tagpu_posedraw.on` is a measurement lever. */
+            if (pdReady && npd < MAXU) {
+                const TAGPU_PBGEOM* bg; const TAGPU_PBMAT* bm;
+                if (tagpu_posebake_unit(units[i].o3, units[i].owner, &bg, &bm) &&
+                    bg->nparts > 0 && bg->count[TAGPU_PB_BODY] > 0 &&
+                    pdPoseN + bg->nparts * 12 <= pdPoseMax &&
+                    pdShadedN + bg->nparts <= pdShadedMax &&
+                    posed_pose(units[i].o3, bg, pdPose + pdPoseN, pdShaded + pdShadedN)) {
+                    TAGPU_PDUNIT* q = &pdu[npd];
+                    memset(q, 0, sizeof *q);
+                    q->geom = bg; q->mat = bm;
+                    q->pose = pdPose + pdPoseN;
+                    q->shaded = pdShaded + pdShadedN;
+                    q->npose = bg->nparts;
+                    q->ax = units[i].ax;   q->ay = units[i].ay;
+                    q->wx0 = units[i].wx0; q->wz0 = units[i].wz0;
+                    q->enc = encBase;
+                    q->alpha = units[i].cloaked ? 0.5f : 1.0f;
+                    q->fog = FOGW(i);
+                    q->waterT = units[i].waterT;
+                    q->digT = units[i].digT;
+                    q->waterMode = units[i].waterMode;
+                    q->nanoOn = units[i].nanoOn;
+                    q->nanoT = units[i].nanoT;
+                    q->nanoC[0] = units[i].nanoC[0];
+                    q->nanoC[1] = units[i].nanoC[1];
+                    q->nanoC[2] = units[i].nanoC[2];
+                    q->cast[0] = 0.0f; q->cast[1] = 0.0f; q->cast[2] = 1.0f;
+                    pdPoseN += bg->nparts * 12;
+                    pdShadedN += bg->nparts;
+                    pdix[i] = npd++;
+                    hidx[i] = -1;
+                    /* the model top no longer falls out of the vertices */
+                    topv[i] = tagpu_posedraw_top(q);
+                    posed = 1;
+                }
+                if (!posed) s_posedSkip++;
+            }
+            if (posed) continue;
             nv = emit_geom(units[i].o3, nv, units[i].ax, units[i].ay,
                            units[i].wx0, units[i].wz0, encBase, units[i].owner);
             hidx[i] = -1; topv[i] = s_emitTop > 0.0f ? s_emitTop : 0.0f;
@@ -3082,6 +3250,16 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 s_castLogged++;
             }
             skip = units[i].nanoOn || (units[i].air && airDrop);
+            /* a posed unit casts from the posed program's depth twin, after
+               this loop — the caster numbers are recorded here because this is
+               where they are computed */
+            if (pdix[i] >= 0) {
+                pdu[pdix[i]].cast[0] = castv[i][0];
+                pdu[pdix[i]].cast[1] = castv[i][1];
+                pdu[pdix[i]].cast[2] = castv[i][2];
+                pdu[pdix[i]].castSkip = skip;
+                continue;
+            }
             if (units[i].hires) {
                 if (hidx[i] >= 0) {
                     TAGPU_HUNIT* h = &hunits[hidx[i]];
@@ -3093,6 +3271,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             if (skip || firstv[i + 1] == firstv[i]) continue;
             tagpu_shadow_unit(castv[i][0], castv[i][1], castv[i][2]);
             x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i + 1] - firstv[i]);
+        }
+        if (npd) {
+            int k;
+            tagpu_posedraw_depth_begin(tagpu_shadow_mat());
+            for (k = 0; k < npd; k++)
+                if (!pdu[k].castSkip) tagpu_posedraw_depth_unit(&pdu[k]);
         }
         if (nhi) tagpu_hires_depth(&hv, hunits, nhi, tagpu_shadow_mat());
         tagpu_shadow_hills();
@@ -3272,6 +3456,35 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             x_glDrawArrays(GL_TRIANGLES, first, count);
         }
         x_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        /* G16 step 5: a posed unit's body vertices are not in the shared
+           stream, so its silhouette is drawn here instead — the same stencil
+           dance, the same offset and clip thresholds, through the posed
+           program. Its SLANT is not posed (step 6), so a structure has already
+           been drawn from `sfirst` by the loop above and is skipped here.
+           Without this a posed unit simply lost its shadow whenever Classic++
+           was off. */
+        if (npd) {
+            tagpu_posedraw_shadow_begin();
+            for (i = 0; i < nu; i++) {
+                if (pdix[i] < 0 || units[i].slant) continue;
+                if (cpp && !(units[i].air && airDrop)) continue;
+                if (!units[i].shadow) continue;
+                if (!(gfx & 8)) continue;
+                tagpu_posedraw_shadow_set(&pdu[pdix[i]], 5.0f,
+                                          (float)(units[i].gy - units[i].ay),
+                                          units[i].waterT, units[i].digT);
+                x_glStencilFunc(GL_ALWAYS, 1, 0xFF);
+                x_glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+                x_glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+                tagpu_posedraw_redraw(&pdu[pdix[i]]);
+                x_glStencilFunc(GL_EQUAL, 1, 0xFF);
+                x_glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+                x_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                tagpu_posedraw_redraw(&pdu[pdix[i]]);
+            }
+            HIRES_RESTORE();
+        }
+        x_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         /* the stencil stays ON for the hires shadow: a replacement mesh needs
            the same one-blend-per-pixel mask and does it per unit itself */
         if (nhi) {
@@ -3304,6 +3517,40 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                                     units[i].nanoC[2]);
         }
         x_glDrawArrays(GL_TRIANGLES, firstv[i], firstv[i+1] - firstv[i]);
+    }
+    /* G16 step 5: the posed bodies. They are drawn as a block after the CPU
+       ones rather than interleaved by index — with the lever on essentially
+       every unit takes this path, so there is nothing to interleave with, and
+       the depth keys sort the two against each other anyway. What the order
+       does reach is the blend of a CLOAKED unit (alpha 0.5) against another
+       unit at the same key, which is why this is a measurement lever and not
+       a play setting until Gate B has run. */
+    if (npd) {
+        TAGPU_PDVIEW pv;
+        const TAGPU_LIGHT* L = tagpu_classicpp_light();
+        int k;
+        memset(&pv, 0, sizeof pv);
+        pv.game[0] = (float)gw; pv.game[1] = (float)gh;
+        pv.zoom = s_zoom;
+        pv.zoomC[0] = (float)vpL + (float)vw * 0.5f;
+        pv.zoomC[1] = (float)vpT + (float)vh * 0.5f;
+        pv.depthScale = depthScale;
+        pv.ss = (float)ss;
+        pv.scafOn = scafOn ? 1 : 0;
+        pv.scafP[0] = (float)vpL; pv.scafP[1] = (float)vpT;
+        pv.scafP[2] = (float)vw;  pv.scafP[3] = (float)vh;
+        pv.fogOrg[0] = (float)s_fogOrgX; pv.fogOrg[1] = (float)s_fogOrgY;
+        pv.fogDim[0] = (float)s_fogCols; pv.fogDim[1] = (float)s_fogRows;
+        pv.lit = tagpu_classicpp_on() ? 1 : 0;
+        pv.sun[0] = L->unitSun[0]; pv.sun[1] = L->unitSun[1]; pv.sun[2] = L->unitSun[2];
+        pv.amb = L->amb;
+        pv.norm = 1.0f / L->unitLevel;
+        pv.shNeutral = tagpu_r3d_shade_neutral();
+        pv.shDir = tagpu_r3d_shade_dir();
+        tagpu_posedraw_begin(&pv);
+        for (k = 0; k < npd; k++) tagpu_posedraw_unit(&pdu[k]);
+        tagpu_posedraw_end();
+        HIRES_RESTORE();
     }
     glUniform1i(s_uNanoOn, 0);      /* the wireframe carries its own colour */
     x_glUniform3f(s_uCast, 0.0f, 0.0f, 1.0f);
@@ -3480,6 +3727,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         /* writes nothing at all unless tagpu_posebake.on is there, so the line
            a player's log carries is byte-identical to the one before G16 */
         tagpu_posebake_stats(bake, sizeof bake);
+        /* likewise: nothing at all unless tagpu_posedraw.on is there */
+        char posed[64];
+        tagpu_posedraw_stats(posed, sizeof posed);
+        if (posed[0] && s_posedSkip) {
+            char t[32];
+            _snprintf(t, sizeof t, " skip=%u", s_posedSkip);
+            lstrcatA(posed, t);
+        }
         /* ModelIds refused by model_root's bound — a unit slot recycled under
            the frame, or a torn read of one. Reported only when it has caught
            something, because in a healthy game it never does. */
@@ -3488,13 +3743,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (s_badModelId)
             _snprintf(badmodel, sizeof badmodel, " BADMODELID=%u", s_badModelId);
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u posefix=%d guard=%u rest=%u norecon=%u errmax=%s%s%s%s",
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u posefix=%d guard=%u rest=%u norecon=%u errmax=%s%s%s%s%s",
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_reread, s_posefix, s_poseGuard, s_poseRest, s_poseNorecon,
-                  emax, bake, badmodel, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
+                  emax, bake, posed, badmodel, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         nlog(b);
         s_reread = 0;
         s_poseGuard = 0; s_poseRest = 0; s_poseNorecon = 0; s_poseErrMax = 0.0f;
+        s_posedSkip = 0;
     }
     s_vtrunc = 0;
 }
@@ -3631,6 +3887,7 @@ void tagpu_native_glreset(void)
     tagpu_mark_glreset();
     tagpu_hires_draw_glreset();
     tagpu_posebake_glreset();
+    tagpu_posedraw_glreset();
 }
 
 int tagpu_native_wrecks_armed(void)

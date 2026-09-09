@@ -5,6 +5,11 @@
    armcom). Owned units leave the composite path: writeback must skip+wipe
    them, the owndraw stub wipes instead of restoring. */
 void tagpu_native_frame(const TAGPU_FRAME* f);
+/* THE UNIT FRAGMENT SHADER, so the posed program (G16 step 5,
+   tagpu_posedraw.c) is a twin of this pass rather than a copy of it: the
+   vertex stage is what step 5 replaces, and sharing the fragment stage is what
+   stops the two drifting in the half it does not touch. */
+const char* tagpu_native_unit_fs(void);
 int  tagpu_native_owns_unit(const char* unit);
 int  tagpu_native_owns_obj(unsigned int obj3do);
 int  tagpu_native_wrecks_armed(void);

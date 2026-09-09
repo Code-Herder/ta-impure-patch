@@ -407,11 +407,83 @@ generation** was watched on an exit to the shell, which re-creates the context: 
 4`. (That line reports the cascade separately because a material stream is only meaningful against
 the geometry it was walked beside, so dropping a geometry entry takes its streams with it; without
 the split the line read "0 material" on a reset that had just dropped every stream there was.) The
-**level generation** is not measured: the game does not survive a level teardown with `tagpu_reclaim`
-armed (§6b of [thread-safe destruction](thread-safe-destruction.html)), and with `reclaim.off` the
-generation never moves at all because the hook that bumps it is not installed. So "the caches drop
-and repopulate on the next level" rests on step 3's own verification of the identical mechanism in
-`cache_gen_check`, not on a run of this one.
+**level generation** was not measured *at the time*: the game did not survive a level teardown with
+`tagpu_reclaim` armed (§6b of [thread-safe destruction](thread-safe-destruction.html)), and with
+`reclaim.off` the generation never moves at all because the hook that bumps it is not installed.
+**That blocker is gone since 2026-09-09** — deferring the model-template frees makes a teardown
+survivable, and two full game → shell → game cycles were measured working (the route is the
+`ta-drive` skill's `reclaim.off` bullet). So this check is **runnable now and simply has not been
+run**: it no longer *rests* on step 3's verification of the identical mechanism in `cache_gen_check`,
+it is owed a run of its own.
+
+### Built 2026-09-09 — step 5, the posed program, and what it measured
+
+`tagpu_posedraw.c` / `.h` behind **`tagpu_posedraw.on`**, off in play. This is the pass that finally
+draws from step 4's buffers: a unit is one `glDrawArrays` out of its type's geometry and material
+VBOs with its whole pose in a uniform block, and **no vertices are built for it on the CPU at all**.
+
+**A twin, not a mode switch**, as §4 requires. Its VERTEX stage is the port of `emit_node`; its
+FRAGMENT stage is the native pass's own, handed over by `tagpu_native_unit_fs()` rather than copied,
+so the two programs cannot drift in the half step 5 does not touch. The shadow-depth twin is that
+same vertex shader with an empty fragment shader and `uDepthPass = 1` — which is what
+`tagpu_shadow.c`'s own `VS_U`/`FS_NONE` pair does for the CPU stream, so a colour-keyed texel casts
+a shadow on both paths rather than one of them discarding it.
+
+**The pose is a std140 block: `vec4 uRow[3*256]` plus a packed `vec4 uPieceFlag[64]` — 13 312
+bytes**, inside the 16 KB GL 3.1 guarantees with headroom rather than sitting exactly on it. The
+guarantee is checked, not assumed: `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time (**65 536** on
+the reference setup) and the pass refuses to arm below 13 312, leaving every unit to the CPU emitter
+instead of drawing them all wrong. The per-piece `shaded` bit needs that second array because all
+twelve floats of the 4x3 are the matrix, and it cannot live in the per-type bake: it is
+`emit_geom_at`'s `pieceShaded`, which is per UNIT (a COB can clear the flag).
+
+**Step 5 consumes the cached topology.** `posed_pose` (`tagpu_native.c`) builds the matrices off the
+bake entry's `parent[]` instead of re-walking the node tree per unit per frame — the duplication §4
+asked to have removed. Its arithmetic is deliberately still `pose_accum_body`'s, operation for
+operation, because until step 8 that duplication is what `posebake.on=check` uses as its oracle. It
+**refuses rather than mis-placing** a unit — a piece count that is not the baked model's, a node that
+does not read, a piece whose parent link never resolved, the frame's pose arena full — the same bar
+`recon_begin` sets, and the caller then falls back to the CPU emitter. A refusal is **counted, not
+silent**: the `native:` line carries `posed=<units>/<tris>` and grows ` skip=<n>` when any unit fell
+back.
+
+**`s_emitTop` changed source**, as §4 said it must. Each piece's BODY-range rest AABB is baked
+(`pmn`/`pmx`/`pbody` on the geometry entry) and the model top is those 8 corners through the piece's
+pose matrix. Two deviations, stated rather than hidden: an AABB carried through a rotation *bounds*
+the posed points rather than hitting them, so the top is an **over-estimate**; and it covers every
+body face, including the ones whose material the stream collapses, which `emit_node` skipped before
+it ever looked at their y. It feeds the shadow height of **wrecks** only — a unit with a record
+prefers `model_aabb`.
+
+**The Classic silhouette shadow is routed through the posed program too.** It reuses the body
+geometry, so a posed unit would otherwise silently lose its shadow whenever Classic++ is off. Its
+*slant* is not posed (step 6), so a structure is still drawn from `sfirst` by the CPU loop and
+skipped by the posed one.
+
+**MEASURED 2026-09-09**, 1024x768, `ss=2`, the sim **paused** so the poses are frozen:
+
+| scene | result |
+|---|---|
+| `pose-inventory`, ground stop, 28 units | **27 posed**, `skip=0`. The 28th is skipped before the branch on **both** paths — the diffs below are what prove the two draw the same set |
+| the same, posed program vs CPU emitter | **2 differing pixels of 786 432**, max channel delta 7 — two isolated single pixels, on different rows |
+| the same, **`poserecon.on` on both sides** — Gate B's protocol, the same pose through both paths so the diff isolates the port | **1 differing pixel of 786 432**, max channel delta 7 |
+| `200v200`, 209 units gathered, **111 posed / 12 879 triangles**, `poserecon` both sides | **0 differing pixels of 786 432** |
+| the CPU vertex stream on that scene | **33 279 verts -> 132** (the remainder is slant, wire and effects — none of them ported yet) |
+
+So the port is a **single-pixel edge flip on one fixture and byte-identical on the other**: the shape
+§5 predicts from the 2e-5 model-unit residual, and **not** the "whole face one SHD row off" tell that
+would send decision 8 back for rework. That is Gate B's bar met on two scenes. What makes it a
+*preliminary* reading rather than the gate itself is that neither scene exercises slant or wire,
+which are step 6.
+
+**The frame-time criterion is NOT met, and is not measurable in this setup.** At 209 units both paths
+hold **58.5 fps** and are indistinguishable. `tools/tacli` writes `maxfps=60` into `ddraw.ini` on
+*every* launch (`write_ddraw_ini`) and the DLL reads it at attach, so editing the file beforehand is
+overwritten; and `fps_limiter.c` disables the limiter only on a **negative** `maxfps`, so `0` is not
+"unlimited" and still goes through it. The honest statement of what was measured is the byte count
+above, not a frame time. Whoever takes the real number needs the cap lifted at launch — and the
+"before" half is **not perishable**, because both paths live in one build behind the lever until
+step 8.
 
 ## 5. What cannot be byte-exact, and the gates that follow
 
@@ -484,7 +556,8 @@ model at 3 `vec4` is 432 uniform components, and the biggest geometry bake in th
    **Run 2026-09-08 and PASSED**, §0b: `norecon` 0 across 82 types, 27142 watch lines all
    `dirty=1/1` and none `dirty=0/0`, and the 36-piece and 304-face extremes at errmax 0.00.
 4. The per-type bake and its cache; the material stream; the bake-time anomaly log.
-5. The posed program and its shadow-depth twin; bodies only, behind a lever, both paths present
+5. **BUILT 2026-09-09** — `tagpu_posedraw.c` behind `tagpu_posedraw.on`; §4's step-5 section
+   carries the numbers. The posed program and its shadow-depth twin; bodies only, behind a lever, both paths present
    — the CPU emitters live **only** as Gate B's oracle from here to step 8.
 6. Gate B on a paused scene; then slant and wire; then Gate D.
 7. Gate C, the walk protocol.

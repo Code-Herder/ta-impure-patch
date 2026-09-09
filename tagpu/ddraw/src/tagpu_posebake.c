@@ -179,7 +179,7 @@ static int pb_walk(const char* const* nd, int nparts, int range,
 }
 
 /* ---- the geometry bake -------------------------------------------------- */
-typedef struct { int nv; int over; } PBGEOMCTX;
+typedef struct { int nv; int over; TAGPU_PBGEOM* g; } PBGEOMCTX;
 
 static void geom_emit(void* vctx, int range, int p, const char* nd,
                       const int* rv, int nvert, const char* fa, int fvc,
@@ -226,6 +226,17 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
         o[6] = (float)p;
         o[7] = shaded ? (float)TAGPU_PBF_SHADED : 0.0f;
     }
+    /* the body range's rest AABB per piece — step 5's replacement for the
+       `s_emitTop` emit_node kept while it wrote the posed vertices */
+    if (range == TAGPU_PB_BODY && c->g && p >= 0 && p < TAGPU_PBMAXPIECE) {
+        TAGPU_PBGEOM* g = c->g;
+        for (t = 0; t < n; t++)
+            for (r = 0; r < 3; r++) {
+                if (!g->pbody[p] || V[t][r] < g->pmn[p][r]) g->pmn[p][r] = V[t][r];
+                if (!g->pbody[p] || V[t][r] > g->pmx[p][r]) g->pmx[p][r] = V[t][r];
+                g->pbody[p] = 1;
+            }
+    }
     c->nv += n;
 }
 
@@ -267,6 +278,7 @@ static void bake_topology(TAGPU_PBGEOM* g, const char* const* nd, int nparts)
 
 static void mat_drop(int i)
 {
+    if (s_mat[i].vao) glDeleteVertexArrays(1, &s_mat[i].vao);
     if (s_mat[i].vbo) glDeleteBuffers(1, &s_mat[i].vbo);
     if (s_matSkip[i]) { free(s_matSkip[i]); s_matSkip[i] = NULL; }
     memset(&s_mat[i], 0, sizeof s_mat[i]);
@@ -320,6 +332,7 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl)
     g = &s_geom[slot];
     memset(g, 0, sizeof *g);
     g->root = nd[0]; g->levelGen = lvl; g->glGen = s_glGen; g->nparts = nparts;
+    c.g = g;                    /* the per-piece rest AABB accumulates here */
     for (r = 0; r < TAGPU_PB_NRANGE; r++) {
         g->first[r] = c.nv;
         pb_walk(nd, nparts, r, geom_emit, &c, r == 0 ? &st : NULL);
@@ -469,6 +482,31 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
                  (GLsizeiptr)c.nv * TAGPU_PB_MATST * sizeof(float),
                  s_scratchM, GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    /* THE POSED PASS'S VAO (G16 step 5). The two buffers are bound together
+       once, here, rather than re-pointed per unit per frame: a draw is then
+       one bind and one glDrawArrays. Locations 0-3 come off the geometry (the
+       type's), 4-6 off this stream — the same split the two buffers have, so
+       either can be re-baked without touching the other's pointers. */
+    glGenVertexArrays(1, &m->vao);
+    glBindVertexArray(m->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g->vbo);
+    glEnableVertexAttribArray(0);   /* rest position                        */
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)0);
+    glEnableVertexAttribArray(1);   /* rest normal of the vertex's face     */
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)12);
+    glEnableVertexAttribArray(2);   /* piece index                          */
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)24);
+    glEnableVertexAttribArray(3);   /* TAGPU_PBF_* flags                    */
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)28);
+    glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
+    glEnableVertexAttribArray(4);   /* uv                                   */
+    glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)0);
+    glEnableVertexAttribArray(5);   /* flat colour, colour key              */
+    glVertexAttribPointer(5, 2, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)8);
+    glEnableVertexAttribArray(6);   /* skip                                 */
+    glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)16);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
     s_matSkip[slot] = (unsigned char*)malloc((size_t)c.nv ? (size_t)c.nv : 1);
     if (s_matSkip[slot]) memcpy(s_matSkip[slot], s_scratchSkip, (size_t)c.nv);
     s_matBaked++;
@@ -533,7 +571,7 @@ void tagpu_posebake_glreset(void)
        check drops the entries. */
     int i;
     for (i = 0; i < s_ngeom; i++) s_geom[i].vbo = 0;
-    for (i = 0; i < s_nmat; i++)  s_mat[i].vbo = 0;
+    for (i = 0; i < s_nmat; i++)  { s_mat[i].vbo = 0; s_mat[i].vao = 0; }
     s_glGen++;
 }
 

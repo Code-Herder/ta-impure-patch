@@ -700,7 +700,22 @@ extremes) and `2216 1606` (the air lane).
 | `tagpu_posefix.off` | leaves the guard *measuring* but draws the engine's live posed buffer anyway — the baseline the fix is measured against, and the only way to see the artifact |
 | `tagpu_posewatch.on` | the oracle: per unit per frame, `posewatch: f=… err=… piece=…/… dirty=…/… poll|guard` — the largest disagreement in **model units** between the engine's posed buffer and the pose rebuilt from the fields, with the pose-dirty flag either side of the read. A unit or two out is a stale buffer; the model's own height out (an ARMCOM is 34) is a buffer caught mid-rewrite. Also adds a 60 Hz anchor filmstrip per owned unit — raw 16.16 position, roster shorts, the eye and the anchor we derived, which is what attributes a one-frame jump to the engine, the eye or this pass |
 | `tagpu_poserecon.on` | forces the reconstruction for **every** unit every frame. The A/B for the fallback: against the engine-buffer path it renders 0 differing pixels of 1920×1080 |
+| `tagpu_posedraw.on` | G16 step 5's **posed program** (gpu-status §2.11): units are drawn from the bake's static buffers with the pose in a uniform block, and no vertices are built for them on the CPU. Bodies only — slant, wire, selection lines and effects stay CPU-built — and any unit it refuses falls back to the emitter. The `native:` line grows `posed=<units>/<tris>`, plus ` skip=<n>` if a unit fell back. **The A/B is this lever on vs off**; put `tagpu_poserecon.on` on BOTH sides to isolate the GPU port from the reconstruction, which is what Gate B asks for |
 | `tagpu_posebake.on` | G16 step 4's per-type geometry bake (gpu-status §2.10). **Draws nothing** — it bakes, caches and reports. `log` gives a line per model and per material stream; `check` holds the bake to `emit_geom`'s own vertex count and to `pose_accum_body`'s rest offsets, per unit per frame, and logs any disagreement. The `native:` line grows `bake=<types>/<streams> anom= odd= nomat= refused=` |
+
+**A/B-ing any of these levers: wait for a FRESH `native:` line before the second shot.** That line
+is written every 300 frames — five seconds at 60 fps — so a lever flipped and shot three seconds
+later is read against the *previous* setting's counters, and the diff comes out 0 for the wrong
+reason. Count the `native: [0-9]` lines, flip, wait until the count has moved by two, and confirm
+the numbers actually changed (`verts=` collapsing to double digits is the posed path's tell) before
+believing a pixel diff (2026-09-09, a 200-unit A/B that read `0 differing pixels` because both shots
+were the same path).
+
+**A frame-time A/B is not available through `tacli` as it stands.** `write_ddraw_ini` rewrites
+`maxfps=60` into the instance's `ddraw.ini` on *every* launch and the DLL reads it at attach, so
+editing the file first is overwritten; and `fps_limiter.c` disables the limiter only on a
+**negative** `maxfps` — `0` means "not unlimited", it still goes through the limiter. Two paths that
+both hold 60 (or 58.5) fps have not been compared, they have both hit the cap.
 
 **`posewatch` writes about 250 kB of `tagpu.log` per second** at 28 units on screen — it logs an
 anchor filmstrip per owned unit per frame, and `nlog` opens and closes the file per line. Two

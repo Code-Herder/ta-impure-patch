@@ -1140,6 +1140,43 @@ invalidation was watched on an exit to the shell: `posebake: dropped 53 geometry
 material with them) … GL 2`. *[The 27 this first quoted was an earlier run of the same test, before
 the drop line reported the cascade separately; both are real, but only one is the shipped build.]*
 
+### 2.11 The posed program (`tagpu_posedraw.c`, OFF by default, `tagpu_posedraw.on`) — G16 step 5
+
+The pass that finally **draws** from §2.10's buffers. A unit is one `glDrawArrays` out of its type's
+geometry and material VBOs with its whole pose in a uniform block; no vertices are built for it on
+the CPU at all. Bodies only — `emit_slant`, `emit_wire`, the selection lines and the effects models
+are still CPU-built (step 6) — and the CPU body emitter stays beside it as Gate B's oracle until the
+last commit of the gate.
+
+| | |
+|---|---|
+| **the program** | a TWIN of the native one: its own vertex stage (the port of `emit_node` — piece transform, `sx = ax + x` / `sy = ay + (-z - y/2)`, the depth key, the world x/z the fog samples, the model height the waterline clips on, and the shade quantised off the baked rest normal), and the native pass's **own** fragment stage, taken through `tagpu_native_unit_fs()` rather than copied |
+| **the shadow-depth twin** | the same vertex shader with an empty fragment shader and `uDepthPass = 1`, mirroring `tagpu_shadow.c`'s `VS_U`/`FS_NONE`, so a colour-keyed texel casts on both paths |
+| **the Classic silhouette** | routed through the posed program too — it reuses the body geometry, so a posed unit would otherwise lose its shadow whenever Classic++ is off. A structure's *slant* is still CPU-built and is skipped here |
+| **the pose** | a std140 block, `vec4 uRow[3*256]` + a packed `vec4 uPieceFlag[64]` = **13 312 bytes**. `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time and the pass **refuses to arm** below that, so a driver that cannot hold the block leaves every unit to the CPU emitter rather than drawing them wrong |
+| **the topology** | consumed from the bake entry's `parent[]` — `pose_accum_body`'s per-unit sibling scan is gone from the posed path, which is what §2.10 cached it for |
+| **the VAO** | one per material stream, built at bake time, binding the geometry buffer (locations 0-3) and the material stream (4-6) together, so a draw is one bind |
+| **the model top** | `s_emitTop` no longer falls out of the vertices: it is each piece's baked BODY-range rest AABB through its pose matrix. An **over-estimate** (an AABB through a rotation bounds the posed points), and it covers faces the material stream collapses. Wrecks only — a unit with a record prefers `model_aabb` |
+
+**Fields we write: none.** Every engine read is one the emitters already make; the pass adds GL
+objects and no engine state.
+
+**What it measured** (1024x768, `ss=2`, the sim paused — [GPU posing](gpu-posing.html) has the full
+table): on `pose-inventory` **27 of 28 units posed, `skip=0`**, and against the CPU emitter **2
+differing pixels of 786 432**; with `poserecon.on` on both sides, so the diff isolates the port
+alone, **1 pixel**. On `200v200` — 209 units gathered, 111 posed, 12 879 triangles — **0 differing
+pixels**, with the CPU vertex stream down from **33 279 verts to 132**. Both diffs are single-pixel
+edge flips, which is the shape [GPU posing §5](gpu-posing.html) predicts; neither is the "whole face
+one SHD row off" tell that would mean the shade quantisation is wrong.
+
+**A trap this cost a crash to find.** `opengl_utils`' global `glGetIntegerv` is **NULL**:
+`wglGetProcAddress` returns NULL for GL 1.1 core entry points under wine, which is why
+`opengl_utils` guards its own use of it and why `tagpu_terr.c`, `tagpu_shadow.c` and
+`tagpu_restoreglsl.c` each load their own through a `getgl()` that falls back to `opengl32.dll`.
+Calling the global one is a jump to address 0 — `ErrorLog.txt` reads `Access Violation … at
+0023:00000000`, during map load, with nothing in `tagpu.log` because the module dies before its
+first line.
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out
