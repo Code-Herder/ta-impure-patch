@@ -283,6 +283,31 @@ static the script only clears on its own events. So a path change now **restarts
 than retargeting it, and `forward` additionally empties the director's slots. Measured after: a
 mid-run switch produces `Create, MotionControl, StartMoving, walk` and no `walklegs`.
 
+**The ground was the treadmill, not the walk.** `[MEASURED 2026-09-09]` `GridHelper`'s first
+colour is the **centre cross**, and it is the lighter of the two — so snapping the grid under a
+walking unit moved a distinctly-coloured landmark back one cell every 40 units, a reset every
+**1.1 s** at 36 wu/s, forever. "It never stops" and "it shuttles between two points" were both
+true at once: the first of the simulation, the second of the picture. Both colours are now equal,
+which makes the snap exactly periodic and invisible, and the span is 4000 with fog eating the edge
+— that fade is the horizon.
+
+**Camera presets reuse `tools/ta3do`'s `VIEWS` verbatim** — `front`, `side` (the unit's right),
+`back`, `top`, `quarter`, plus `free` — rather than inventing a second convention for the same
+idea. That table defines its angles relative to the model's front, so a preset **tracks the unit's
+heading** and keeps meaning what it says on a turning path. Switching keeps the current orbit
+distance so it never costs a zoom, and a drag returns the select to `free` so the dropdown cannot
+disagree with the camera. Verified numerically: at `front` the camera sits **0.0°** off the model's
+forward. The A|B gap moves to the **camera's right vector** (off the camera's world matrix, so it
+survives looking straight down) — otherwise `side` or `front` would put one copy exactly behind the
+other; `abRight · model-forward` measures **0.00**, exactly across the walk, and A still lands
+screen-left.
+
+**`commandfire=1` weapons are not driven at all.** ARMCOM's `Weapon3` is `ARM_DISINTEGRATOR` — the
+D-Gun — and the director aimed and fired every slot the FBI listed, so the commander D-gunned on a
+loop forever, which no unit does in a game: `commandfire` is TA's manual-fire tag and the engine's
+own `AutoAim` never calls those scripts. `slots_from_fbi` now skips them. Measured on the shuttle
+path afterwards: `AimPrimary`/`FirePrimary` only, no `*Tertiary` at all.
+
 **It is genuinely unbounded.** 63 s of continuous walking took ARMCOM from 1100 to 3035 world
 units at a steady **35.9 wu/s** with no wrap, clamp or stop; position is a Python int in 16.16, so
 nothing overflows. The viewer snaps the ground grid to its own cell under the unit (measured max

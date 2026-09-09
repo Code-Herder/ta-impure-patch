@@ -4017,6 +4017,13 @@ def slots_from_fbi(fbi, weapons):
         if not name:
             continue
         spec = weapons.get(name.lower(), {})
+        # `commandfire=1` is TA's manual-fire tag -- the D-Gun and its kin. The
+        # engine's AutoAim never calls their Aim/Fire scripts; only an explicit
+        # player order does. ARMCOM's Weapon3 is ARM_DISINTEGRATOR, so a director
+        # that drives every slot it finds had the commander D-gunning on a loop
+        # forever, which no unit does in a game.
+        if str(spec.get("commandfire", "0")).strip() not in ("0", ""):
+            continue
         try:
             rng = int(float(spec.get("range", DEFAULT_RANGE)))
         except ValueError:
