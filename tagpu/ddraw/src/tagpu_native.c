@@ -1899,7 +1899,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int vpL, vpT, vw, vh;
     tagpu_vpwide_true_rect(ta, &vpL, &vpT, &vw, &vh);
     int eyeX = *(int*)(ta + OFF_EYEX), eyeY = *(int*)(ta + OFF_EYEY);
-    if (vw < 64 || vh < 64 || vw > 4096 || vh > 4096) return;
+    /* A SANITY BOUND ON ENGINE DATA, NOT A SUPPORTED-RESOLUTION LIMIT. The
+       viewport is read out of engine memory and everything below sizes itself
+       from it, so a garbage pair must not be believed — but nothing here
+       assumes a number: the FBO is the game's own size, the gather rect is the
+       viewport over the zoom, and the terrain staging is reserved from the
+       viewport. 16384 is the largest 2D texture common hardware will hold,
+       which is the real ceiling on the FBO the frame is drawn into; it used to
+       read 4096, and a 5K or 8K desktop was refused the whole native pass. */
+    if (vw < 64 || vh < 64 || vw > 16384 || vh > 16384) return;
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
 
@@ -1908,22 +1916,38 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        viewport, so zooming out reaches further into the map instead of leaving
        the frame edge bare. At z >= 1 it IS the engine's viewport, bit for bit. */
     int evpL = vpL, evpT = vpT, evw = vw, evh = vh;
+    int maxeff_w = (int)((float)vw / TAGPU_ZOOM_MIN) + 64;
+    int maxeff_h = (int)((float)vh / TAGPU_ZOOM_MIN) + 64;
     if (s_zoom > 0.05f && s_zoom < 1.0f) {
         evw = (int)((float)vw / s_zoom) + 64;      /* +64: partial cells at the edge */
         evh = (int)((float)vh / s_zoom) + 64;
-        if (evw > 8192) evw = 8192;
-        if (evh > 8192) evh = 8192;
-        /* and never ask the terrain pass for more cells than it can draw: it
-           would bail, and a bail hands the whole draw back for a frame */
-        tagpu_terr_clamp_span(&evw, &evh);
-        /* the effective rect is only ever WIDER than the engine's — a clamp that
-           took it below the viewport would cull content that is plainly on
-           screen. Unreachable at any real resolution, stated so it stays true. */
-        if (evw < vw) evw = vw;
-        if (evh < vh) evh = vh;
-        evpL = vpL + (vw - evw) / 2;
-        evpT = vpT + (vh - evh) / 2;
+        /* THE BOUND IS THE ZOOM FLOOR, AND IT HAS THE SCREEN IN IT. The lever
+           clamps to TAGPU_ZOOM_MIN, so this is the same expression at its
+           extreme and it can never shorten a view the player can actually
+           reach — it is here so that a zoom that somehow slipped below the
+           floor cannot ask for an unbounded rect, which is a property of the
+           value and not of the resolution. The fixed 8192 it replaced was
+           already below what a 3840x2160 viewport asks for at 0.25x (14912),
+           so the rect lost a third of its width here before the cell budget
+           cut it again. */
+        if (evw > maxeff_w) evw = maxeff_w;
+        if (evh > maxeff_h) evh = maxeff_h;
     }
+    /* Reserve the terrain staging for THIS VIEWPORT at the zoom floor and trim
+       the rect to what could be reserved. Unconditional, at every zoom: the
+       reservation is what the gather draws out of, so a 1x frame needs it made
+       too, and making it from the viewport rather than from this frame's rect
+       is what keeps a zoom-out from allocating mid-gesture. It trims nothing
+       on any screen whose viewport was believed — see tagpu_terr.h. */
+    tagpu_terr_clamp_span(vw, vh, &evw, &evh);
+    /* the effective rect is only ever WIDER than the engine's — a trim that
+       took it below the viewport would cull content that is plainly on screen.
+       Then centre it: at z >= 1 the deltas are zero and this is the engine's
+       own viewport, bit for bit. */
+    if (evw < vw) evw = vw;
+    if (evh < vh) evh = vh;
+    evpL = vpL + (vw - evw) / 2;
+    evpT = vpT + (vh - evh) / 2;
 
     int scafR0 = 0, scafRows = 0;
     int scafOn = tagpu_scaffold_frameinfo(f->frame_counter, &scafR0, &scafRows);
@@ -1955,8 +1979,32 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (ptr_ok(fg) && !IsBadReadPtr(fg, 16)) {
             const unsigned short* buf = (const unsigned short*)(size_t)fg[0];
             int cols = fg[1], rows = fg[2], cells = fg[3];
-            if (ptr_ok(buf) && cols > 0 && rows > 0 && cols <= 256 && rows <= 256 &&
-                cells == cols * rows && !IsBadReadPtr(buf, (SIZE_T)cells * 2)) {
+            /* 1024 is a sanity bound on a count read from engine memory, not a
+               screen limit. The engine builds this grid at one cell per 32 px
+               of ITS viewport plus two: MEASURED 2026-09-09, 118 x 68 for the
+               3712 x 2096 viewport of a 3840x2160 screen and 78 x 45 for the
+               2432 x 1376 of a 2560x1440 one. The bound read 256, which an
+               8192-px-wide viewport passes and a wider one does not — and a
+               rejected grid is a frame with NO FOG AT ALL (fogMode is set
+               inside this test).
+
+               `cells` IS NOT REQUIRED TO EQUAL cols*rows, and requiring it cost
+               the fog its whole rule at some resolutions. MEASURED the same
+               day: the 3840x2160 grid reports cells = 8024 = 118 x 68 exactly,
+               and the 2560x1440 one reports 3512 against 78 x 45 = 3510 — two
+               more than the grid it describes — so the equality rejected the
+               grid and `native:` logged `fog=0` on a screen where the engine
+               was fogging normally. What the read actually needs is that the
+               allocation COVER the cells we read, which is what is asked here
+               now: `cells` at least cols*rows, and the readability probe over
+               the cols*rows we sample rather than over the engine's count.
+               That is strictly tighter than the old probe, which measured a
+               region we did not read. Where the extra two come from was not
+               traced — the descriptor is allocated somewhere we have not read,
+               and 0x483F1C only frees it. */
+            if (ptr_ok(buf) && cols > 0 && rows > 0 && cols <= 1024 && rows <= 1024 &&
+                cells >= cols * rows &&
+                !IsBadReadPtr(buf, (SIZE_T)cols * rows * 2)) {
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
                 x_glActiveTexture(GL_TEXTURE4);
                 glBindTexture(GL_TEXTURE_2D, s_fogTex);

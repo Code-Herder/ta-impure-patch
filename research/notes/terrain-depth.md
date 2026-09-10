@@ -563,7 +563,16 @@ full-viewport layer inverts it.**
 
 Armed by `tagpu_terr.on` (tokens `log`, `passive`, `over`, `key=N`). It rides the
 native pass's frame like the feature pass, walks the same grid §2 walks, and emits
-one quad per visible cell. Three things fall out of §2 exactly as predicted:
+one quad per visible cell. **The quad is an INSTANCE since 2026-09-09**: one static
+six-corner buffer, and per cell four shorts — its column and row in the gather's
+grid, its tile's column and row in the atlas — that the vertex shader turns back
+into the position, UV and world coordinate the per-vertex stream used to carry.
+Every term is an integer far below 2²⁴, so the floats are the same floats, bit for
+bit (verified: 0 differing pixels at 1× against the pre-change build). The reason
+is size: at 144 bytes a cell a 3840×2160 view at the 0.25× zoom floor needs 17.9 MB
+of staging and as much uploaded every frame; at 8 bytes it needs 972 KB, which is
+what let the fixed 32768-cell budget become a reservation made from the live
+viewport (`tagpu_terr_clamp_span`). Three things fall out of §2 exactly as predicted:
 
 - **Terrain is the frame's far plane**, so it draws at depth key `0.10` — under the
   flat-feature band (`0.40`) and under particle layers 0..2 (`0.30`), i.e. under

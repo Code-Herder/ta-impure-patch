@@ -23,8 +23,10 @@ static int            g_mmInstalled;   /* tagpu_zoom_init() patched the engine  
 
 /* The range BOTH levers share. The transform is fine outside it; these are the
    levels the rest of the stack has been checked at. */
-#define ZOOM_MIN  0.25f
-#define ZOOM_MAX  8.0f
+/* the range itself is published in tagpu_zoom.h — the passes that size a
+   gather from it need the same two numbers */
+#define ZOOM_MIN  TAGPU_ZOOM_MIN
+#define ZOOM_MAX  TAGPU_ZOOM_MAX
 
 static void zlog(const char* m);
 static int  in_viewport(int x, int y, int L, int T, int W, int H);

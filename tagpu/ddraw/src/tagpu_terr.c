@@ -51,6 +51,7 @@
 #include "tagpu_terrown.h"
 #include "tagpu_native.h"
 #include "tagpu_shadow.h"
+#include "tagpu_zoom.h"
 
 /* ---- engine layout (terrain-depth.md 1, byte-confirmed) ---- */
 #define OFF_TILEMAP  0x1428B   /* u16 per 32-px cell, stride mapW16/2         */
@@ -78,14 +79,20 @@
 #define CELL_PITCH   (TILE_PX + 2 * CELL_BORDER) /* 34                         */
 #define ATLAS_W      (ATLAS_COLS * CELL_PITCH)   /* 2176                       */
 #define MAX_TILES    65536                      /* the index is a u16          */
-#define MAXCELL      32768                      /* visible cells per frame: the
-                                                  zoomed-out rect at the 0.25x
-                                                  floor is ~12.9k on a 1024x768
-                                                  view and ~33.5k at 1920x1080,
-                                                  so this covers the first and
-                                                  tagpu_terr_clamp_span() trims
-                                                  the second                     */
-#define TVST         6                          /* x,y, u,v, wx,wz             */
+#define ICOMP        4                          /* col,row, atlas col,row      */
+/* THE STAGING CEILING IS MEMORY, NOT A RESOLUTION. What one frame may need is
+   reserved from the live viewport at the zoom floor (tagpu_terr_clamp_span),
+   so it tracks the screen. MEASURED, from the `terr: staging` line: 1024x768
+   reserves 10672 cells (83 KB), 2560x1440 54208 (423 KB), 3840x2160 124488
+   (972 KB), 5120x2880 223568 (1746 KB); 7680x4320 works out at 507592
+   (3966 KB). This is only the point past which a viewport is NOT BELIEVED —
+   `vw`/`vh` are read out of engine memory, and a garbage pair must not be
+   allowed to ask for an arbitrary allocation. 24 MB is a viewport of about
+   14000 x 14000, which is past any screen and well short of a wild value.
+   A cell costs FOUR SHORTS (s_inst); as six vertices of six floats, the same
+   ceiling would be 432 MB. */
+#define INST_MAX_BYTES  (24u * 1024u * 1024u)
+#define INST_MAX_CELLS  ((int)(INST_MAX_BYTES / (ICOMP * sizeof(short))))
 #define TERR_ENC     0.10f                      /* under every other band      */
 #define DEFAULT_KEY  254                        /* see tagpu_terrown.c         */
 
@@ -97,13 +104,15 @@ static void flog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum,GLint,GLsizei);
+typedef void (APIENTRY *PFN_DRAWARRAYSINST)(GLenum,GLint,GLsizei,GLsizei);
+typedef void (APIENTRY *PFN_ATTRIBDIVISOR)(GLuint,GLuint);
 typedef void (APIENTRY *PFN_UNIFORM1F)(GLint,GLfloat);
 typedef void (APIENTRY *PFN_UNIFORM2F)(GLint,GLfloat,GLfloat);
 typedef void (APIENTRY *PFN_UNIFORM3F)(GLint,GLfloat,GLfloat,GLfloat);
 typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
 typedef void (APIENTRY *PFN_GETINTEGERV)(GLenum,GLint*);
-static PFN_DRAWARRAYS x_glDrawArrays;
+static PFN_DRAWARRAYSINST x_glDrawArraysInstanced;
+static PFN_ATTRIBDIVISOR  x_glVertexAttribDivisor;
 static PFN_UNIFORM1F  x_glUniform1f;
 static PFN_UNIFORM2F  x_glUniform2f;
 static PFN_UNIFORM3F  x_glUniform3f;
@@ -186,9 +195,9 @@ int tagpu_terr_on(void) { return s_armed > 0; }
 
 /* ---- GL ---- */
 static int    s_state = 0;             /* 0 unloaded, 1 ready, 2 failed       */
-static GLuint s_prog, s_vao, s_vbo, s_atlasTex;
+static GLuint s_prog, s_vao, s_vbo, s_qvbo, s_atlasTex;
 static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC,
-              s_uDepthScale, s_uEnc;
+              s_uDepthScale, s_uEnc, s_uOrigin, s_uTile0, s_uTexel;
 static int    s_atlasH, s_atlasN;      /* atlas rows*CELL_PITCH, tiles held   */
 static const void* s_setPtr;           /* the TILE_SET we built from          */
 static int    s_setCount;
@@ -232,21 +241,63 @@ static int    s_hMeshW, s_hMeshH;      /* the grid it was built from: a failed
                                           is what keeps it undrawn (review) */
 static TAGPU_SHADOWU s_shU;            /* the shadow read-back uniforms      */
 
-static float s_verts[MAXCELL * 6 * TVST];
-static int   s_nv;
+/* THIS FRAME'S CELLS, one record each: the cell's column and row in the
+   gather's own grid, then its tile's column and row in the atlas. Everything
+   the six vertices used to carry is rebuilt from these four shorts by the
+   vertex shader below, which is why a whole 4K view fits in a megabyte.
+   GROWN FROM THE VIEWPORT (terr_reserve, through tagpu_terr_clamp_span) and
+   never shrunk: a resolution change reserves once and every frame after it
+   costs nothing. */
+static short* s_inst;
+static int    s_instCells;             /* what s_inst can hold                */
+static int    s_ncell;                 /* what this frame put in it           */
+/* what the shader needs to rebuild them: the screen point grid cell (0,0)'s
+   top-left corner sits on, and the atlas's texel size. The map cell it is,
+   the other half of the rebuild, is s_rectTx0/s_rectTy0. */
+static float s_origX, s_origY, s_iw, s_ih;
+/* The shader spells CELL_PITCH, CELL_BORDER and TILE_PX as literals — GLSL
+   cannot see a C macro — so a change to any of the three must not silently
+   leave the UVs a texel out. This is that change refusing to compile. */
+typedef char terr_atlas_consts_unchanged[
+    (CELL_PITCH == 34 && CELL_BORDER == 1 && TILE_PX == 32) ? 1 : -1];
 
+/* ONE QUAD PER VISIBLE CELL, AND THE CELL IS AN INSTANCE. `aCorner` is the
+   unit quad's six corners in the engine's own vertex order — one static buffer
+   uploaded at init and never touched again — and `aCell` is this frame's four
+   shorts for the cell, per instance.
+
+   The three values the per-vertex stream used to carry are rebuilt here, and
+   rebuilt EXACTLY: every term is an integer far below 2^24 — a grid column is
+   at most 2052 (the 16384-px viewport tagpu_native.c will believe, at the
+   0.25x zoom floor, over 32), a map cell at most 2047 (`mapW16 <= 4096`, and
+   the tile map's stride is half that), an atlas column 63 and an atlas row
+   1023 — so each product and sum is exact in float and aPos, aUV and aWorld
+   are bit for bit the floats the CPU used to write. Those same bounds are
+   what puts every field of aCell inside a signed short. The atlas texel size arrives as the same
+   `uTexel` float the CPU used to multiply by, so the UVs are the same product
+   of the same two operands. What changes is only the cost — four shorts a
+   cell against six vertices of six floats — and that is what lets one frame's
+   budget cover a 3840x2160 view at the zoom floor. */
 static const char* VS =
     "#version 330 core\n"
-    "layout(location=0) in vec2 aPos;\n"
-    "layout(location=1) in vec2 aUV;\n"
-    "layout(location=2) in vec2 aWorld;\n"
+    "layout(location=0) in vec2 aCorner;\n"   /* per vertex: 0/1 x 0/1        */
+    "layout(location=1) in vec4 aCell;\n"     /* per instance: col,row,cx,cy  */
     "uniform vec2 uGame;\n"
     "uniform float uZoom;\n"
     "uniform vec2 uZoomC;\n"
     "uniform float uDepthScale;\n"
     "uniform float uEnc;\n"
+    "uniform vec2 uOrigin;\n"   /* screen px of grid cell (0,0)'s corner      */
+    "uniform vec2 uTile0;\n"    /* the map cell grid cell (0,0) IS            */
+    "uniform vec2 uTexel;\n"    /* 1/ATLAS_W, 1/atlas height                  */
     "out vec2 vUV; out vec2 vWorld;\n"
     "void main(){\n"
+    /* CELL_PITCH 34, CELL_BORDER 1, TILE_PX 32 — held to those values by
+       terr_atlas_consts_unchanged in tagpu_terr.c */
+    "  vec2 g = aCell.xy + aCorner;\n"
+    "  vec2 aPos = uOrigin + g * 32.0;\n"
+    "  vec2 aWorld = (uTile0 + g) * 32.0;\n"
+    "  vec2 aUV = (aCell.zw * 34.0 + 1.0 + aCorner * 32.0) * uTexel;\n"
     "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC - vec2(" TAGPU_EDGE_NUDGE ");\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - uEnc/uDepthScale, 0.0, 1.0), 1.0);\n"
@@ -372,14 +423,19 @@ static void init_gl(void)
 {
     GLuint vs, fs;
     GLint ok = 0;
-    x_glDrawArrays = (PFN_DRAWARRAYS)getgl("glDrawArrays");
+    /* Instanced drawing is GL 3.1 and the divisor GL 3.3, both core in any
+       context that can compile the `#version 330 core` shaders below — so a
+       device missing them cannot run this pass at all, and the same refusal
+       the missing-proc test already applies is the right answer. */
+    x_glDrawArraysInstanced = (PFN_DRAWARRAYSINST)getgl("glDrawArraysInstanced");
+    x_glVertexAttribDivisor = (PFN_ATTRIBDIVISOR)getgl("glVertexAttribDivisor");
     x_glUniform1f  = (PFN_UNIFORM1F) getgl("glUniform1f");
     x_glUniform2f  = (PFN_UNIFORM2F) getgl("glUniform2f");
     x_glUniform3f  = (PFN_UNIFORM3F) getgl("glUniform3f");
     x_glActiveTexture = (PFN_ACTIVETEX)getgl("glActiveTexture");
     x_glGetIntegerv = (PFN_GETINTEGERV)getgl("glGetIntegerv");
-    if (!x_glDrawArrays || !x_glUniform1f || !x_glUniform2f || !x_glUniform3f ||
-        !x_glActiveTexture) {
+    if (!x_glUniform1f || !x_glUniform2f || !x_glUniform3f ||
+        !x_glActiveTexture || !x_glDrawArraysInstanced || !x_glVertexAttribDivisor) {
         flog("terr: missing GL proc"); s_state = 2; return;
     }
     vs = mksh(GL_VERTEX_SHADER, VS); fs = mksh(GL_FRAGMENT_SHADER, FS);
@@ -397,6 +453,9 @@ static void init_gl(void)
     s_uZoomC = glGetUniformLocation(s_prog, "uZoomC");
     s_uDepthScale = glGetUniformLocation(s_prog, "uDepthScale");
     s_uEnc = glGetUniformLocation(s_prog, "uEnc");
+    s_uOrigin = glGetUniformLocation(s_prog, "uOrigin");
+    s_uTile0 = glGetUniformLocation(s_prog, "uTile0");
+    s_uTexel = glGetUniformLocation(s_prog, "uTexel");
     glUseProgram(s_prog);
     glUniform1i(glGetUniformLocation(s_prog, "uAtlas"), 0);
     glUniform1i(glGetUniformLocation(s_prog, "uPal"),   1);
@@ -415,14 +474,26 @@ static void init_gl(void)
     glUseProgram(0);
 
     glGenVertexArrays(1, &s_vao); glBindVertexArray(s_vao);
+    /* the unit quad, in the engine's own vertex order: two triangles whose
+       shared edge runs (1,0)-(0,1), exactly the six corners the per-vertex
+       gather used to write out per cell */
+    {
+        static const GLfloat corners[12] = { 0,0, 1,0, 0,1, 1,0, 1,1, 0,1 };
+        glGenBuffers(1, &s_qvbo); glBindBuffer(GL_ARRAY_BUFFER, s_qvbo);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof corners, corners,
+                     GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, (void*)0);
+    }
     glGenBuffers(1, &s_vbo); glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof s_verts, NULL, GL_STREAM_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, TVST * 4, (void*)0);
+    /* no storage yet: the per-frame upload in tagpu_terr_render re-specifies it
+       at this frame's size, and the attribute below only records the binding */
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, TVST * 4, (void*)8);
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, TVST * 4, (void*)16);
+    /* GL_SHORT, UNNORMALISED: every field is a small integer, so the fixed
+       conversion to float is exact and the shader gets the same numbers the
+       gather wrote. Normalising here would divide them all by 32767. */
+    glVertexAttribPointer(1, 4, GL_SHORT, GL_FALSE, ICOMP * 2, (void*)0);
+    x_glVertexAttribDivisor(1, 1);
     glBindVertexArray(0);
 
     s_maxTex = 0;
@@ -886,30 +957,76 @@ static void restore_step(const char* ta)
     }
 }
 
-/* The one budget every pass has to agree on.
+/* The cells a rect of `w` x `h` game px can cost the gather. The +2 is the
+   gather's own worst case: ceil32 of the size plus a fractional eye offset
+   costs one extra column and one extra row. */
+static int span_cells(int w, int h)
+{
+    long cols = (long)w / 32 + 2, rows = (long)h / 32 + 2;
+    long n = cols * rows;                    /* < 2^31 for any believed w,h */
+    return n > 0 ? (int)n : 0;
+}
 
-   `tagpu_terr_gather` bails when the rect it is asked for needs more cells than
-   MAXCELL, and a bail HANDS THE DRAW BACK — one frame of the engine's own
-   terrain under an inverted composite, which reads as a flash. Bailing is the
-   one behaviour that looks like a bug, so the zoom's rect is trimmed to what the
-   budget can actually draw BEFORE any pass sizes itself from it
-   (tagpu_native.c), trading a black margin at extreme zoom-out — honest, and
-   only past the resolutions MAXCELL was sized for — for a rect terrain, units,
-   wrecks and features all agree on.
+/* Grow the staging to hold `cells`, never shrink. Render thread, and in
+   practice once per resolution: the reservation is made for the widest rect
+   the VIEWPORT can produce, not for this frame's rect, so zooming never
+   allocates. A refusal — the memory guard, or a failed realloc — leaves the
+   old buffer intact and is not an error here: the caller trims the rect to
+   what is held, which costs a black margin and not a dropped frame. */
+static void terr_reserve(int cells)
+{
+    short* p;
+    size_t bytes;
+    if (cells <= s_instCells) return;
+    if (cells > INST_MAX_CELLS) cells = INST_MAX_CELLS;
+    if (cells <= s_instCells) return;
+    bytes = (size_t)cells * ICOMP * sizeof(short);
+    p = (short*)realloc(s_inst, bytes);
+    if (!p) {
+        char b[128];
+        _snprintf(b, sizeof b, "terr: could not reserve %d cells (%u KB) —"
+                               " the view is trimmed to the %d held",
+                  cells, (unsigned)(bytes / 1024), s_instCells);
+        flog(b);
+        return;
+    }
+    {
+        char b[128];
+        _snprintf(b, sizeof b, "terr: staging %d -> %d cells (%u KB)",
+                  s_instCells, cells, (unsigned)(bytes / 1024));
+        flog(b);
+    }
+    s_inst = p; s_instCells = cells;
+}
+
+/* The one budget every pass has to agree on — see tagpu_terr.h for the
+   contract. `tagpu_terr_gather` bails when the rect it is asked for needs more
+   cells than the staging holds, and a bail HANDS THE DRAW BACK: one frame of
+   the engine's own terrain under an inverted composite, which reads as a
+   flash. Bailing is the one behaviour that looks like a bug, so the rect is
+   trimmed to what can actually be drawn BEFORE any pass sizes itself from it
+   (tagpu_native.c), leaving terrain, units, wrecks and features one rect.
+
+   The reservation is made from the VIEWPORT at the zoom floor, so on any
+   screen whose viewport is believed the trim below finds nothing to do and no
+   view is ever drawn short. It runs anyway, because the reservation can be
+   refused and the gather's bail must never be what a player sees.
 
    Shrink is proportional and iterated rather than solved: the rect keeps its
    aspect, so the margin is even on all four sides, and no square root is needed
    for a loop that converges in three passes at any sane viewport. */
-void tagpu_terr_clamp_span(int* w, int* h)
+void tagpu_terr_clamp_span(int vw, int vh, int* w, int* h)
 {
     int guard = 64;
     if (*w < 32) *w = 32;
     if (*h < 32) *h = 32;
+    /* the widest rect this viewport can ever ask for: itself at the zoom floor.
+       vw/vh are the true 1x viewport, already range-checked by the caller. */
+    if (vw > 0 && vh > 0)
+        terr_reserve(span_cells((int)((float)vw / TAGPU_ZOOM_MIN) + 64,
+                                (int)((float)vh / TAGPU_ZOOM_MIN) + 64));
     while (guard-- > 0) {
-        /* the +2 is the gather's own worst case: a fractional eye offset costs
-           one extra column and one extra row (ceil32 of size + frac) */
-        long cols = (long)*w / 32 + 2, rows = (long)*h / 32 + 2;
-        if (cols * rows <= MAXCELL) return;
+        if (span_cells(*w, *h) <= s_instCells) return;
         *w -= *w / 32 + 1;
         *h -= *h / 32 + 1;
     }
@@ -920,11 +1037,13 @@ void tagpu_terr_clamp_span(int* w, int* h)
 static int div32_trunc(int v) { return (v + (v < 0 ? 31 : 0)) >> 5; }
 static int ceil32(int v)      { int q = div32_trunc(v); return (v - q * 32) ? q + 1 : q; }
 
-static void put_vert(float x, float y, float u, float vv, float wx, float wz)
+/* one visible cell: where it is in this frame's grid, and where its tile is in
+   the atlas. The shader turns the pair into the six vertices. */
+static void put_cell(int col, int row, int cx, int cy)
 {
-    float* o = s_verts + (size_t)s_nv * TVST;
-    o[0] = x; o[1] = y; o[2] = u; o[3] = vv; o[4] = wx; o[5] = wz;
-    s_nv++;
+    short* o = s_inst + (size_t)s_ncell * ICOMP;
+    o[0] = (short)col; o[1] = (short)row; o[2] = (short)cx; o[3] = (short)cy;
+    s_ncell++;
 }
 
 /* Every exit that draws nothing must hand the draw back: the skip byte is
@@ -953,7 +1072,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     ensure_height(ta, v->frame_counter);
     restore_step(ta);
 
-    s_nv = 0;
+    s_ncell = 0;
     /* Read BEFORE touching the skip: it says whether the engine frame we are
        about to composite over is the key fill rather than a terrain blit. */
     wasFilled = tagpu_terrown_filled();
@@ -989,40 +1108,35 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     cols = ceil32(evw + fx);
     rows = ceil32(evh + fy);
     if (cols <= 0 || rows <= 0) return terr_bail();
-    if ((long)cols * rows > MAXCELL) return terr_bail();
+    /* the staging holds what tagpu_terr_clamp_span reserved for this viewport,
+       and it trimmed the rect to fit — so this is the guard, not the policy */
+    if (!s_inst || (long)cols * rows > s_instCells) return terr_bail();
     s_rectTx0 = tx0; s_rectTy0 = ty0; s_rectCols = cols; s_rectRows = rows; s_rectValid = 1;
 
     iw = 1.0f / (float)ATLAS_W;
     ih = 1.0f / (float)s_atlasH;
+    /* what the vertex shader rebuilds the quads from: the screen point grid
+       cell (0,0) starts at, and the atlas texel size. `vpL - fx` is the same
+       integer `vpL + c * 32 - fx` was built on, so the positions are the same
+       floats. The map cell is s_rectTx0/s_rectTy0, set just above. */
+    s_origX = (float)(vpL - fx); s_origY = (float)(vpT - fy);
+    s_iw = iw; s_ih = ih;
     for (r = 0; r < rows && emit; r++) {
         int my = ty0 + r;
         if (my < 0 || my >= mrows) { skipped += cols; continue; }
         for (c = 0; c < cols; c++) {
             int mx = tx0 + c;
-            int idx, cx, cy;
-            float x0, y0, wx0, wz0, u0, v0, u1, v1;
+            int idx;
             if (mx < 0 || mx >= stride) { skipped++; continue; }
             idx = tmap[(size_t)my * stride + mx];
             if (idx >= s_atlasN) { junk++; continue; }
-            cx = idx % ATLAS_COLS; cy = idx / ATLAS_COLS;
-            /* the quad still spans exactly TILE_PX texels; u1 lands ON the
-               guard column, which is a copy of the last real one */
-            u0 = (float)(cx * CELL_PITCH + CELL_BORDER) * iw;
-            u1 = (float)(cx * CELL_PITCH + CELL_BORDER + TILE_PX) * iw;
-            v0 = (float)(cy * CELL_PITCH + CELL_BORDER) * ih;
-            v1 = (float)(cy * CELL_PITCH + CELL_BORDER + TILE_PX) * ih;
-            x0 = (float)(vpL + c * 32 - fx);
-            y0 = (float)(vpT + r * 32 - fy);
-            /* screen and world differ by a pure translation here, so a cell's
-               world rect is exactly (mx*32, my*32)..+32 — which is the space
-               the engine's fog grid is built in */
-            wx0 = (float)(mx * 32); wz0 = (float)(my * 32);
-            put_vert(x0,      y0,      u0, v0, wx0,       wz0);
-            put_vert(x0 + 32, y0,      u1, v0, wx0 + 32,  wz0);
-            put_vert(x0,      y0 + 32, u0, v1, wx0,       wz0 + 32);
-            put_vert(x0 + 32, y0,      u1, v0, wx0 + 32,  wz0);
-            put_vert(x0 + 32, y0 + 32, u1, v1, wx0 + 32,  wz0 + 32);
-            put_vert(x0,      y0 + 32, u0, v1, wx0,       wz0 + 32);
+            /* the quad still spans exactly TILE_PX texels, and its far edge
+               lands ON the guard column, which is a copy of the last real one.
+               Screen and world differ by a pure translation here, so the cell's
+               world rect is exactly (mx*32, my*32)..+32 — the space the
+               engine's fog grid is built in — and the shader reaches it as
+               uTile0 + (col,row), which is (tx0+c, ty0+r) = (mx, my). */
+            put_cell(c, r, idx % ATLAS_COLS, idx / ATLAS_COLS);
         }
     }
 
@@ -1030,7 +1144,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
        back here clears `filled`, so the composite stops inverting on the SAME
        frame the quads above were emitted for — which is why the hand-back never
        shows a frame of bare key fill. */
-    tagpu_terrown_set_skip(own && s_nv > 0);
+    tagpu_terrown_set_skip(own && s_ncell > 0);
     tagpu_terrown_beat(v->frame_counter);
 
     {
@@ -1041,7 +1155,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
             _snprintf(b, sizeof b,
                 "terr: grid=%dx%d tile0=(%d,%d) frac=(%d,%d) map=%dx%d cells=%d"
                 " zoomvp=%dx%d off-map=%d junk=%d atlas=%dx%d/%d%s%s",
-                cols, rows, tx0, ty0, fx, fy, stride, mrows, s_nv / 6, evw, evh,
+                cols, rows, tx0, ty0, fx, fy, stride, mrows, s_ncell, evw, evh,
                 skipped, junk, ATLAS_W, s_atlasH, s_setCount,
                 s_over ? " (over: engine still drawing)"
                        : (s_passive ? " (passive: engine still drawing)" : ""),
@@ -1051,7 +1165,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
             flog(b);
         }
     }
-    if (s_log && s_nv) {
+    if (s_log && s_ncell) {
         static unsigned lastl = 0;
         if (v->frame_counter - lastl >= 120) {
             char b[200];
@@ -1066,12 +1180,12 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
             flog(b);
         }
     }
-    return s_nv;
+    return s_ncell;
 }
 
 void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
 {
-    if (s_state != 1 || s_nv == 0) return;
+    if (s_state != 1 || s_ncell == 0) return;
     glUseProgram(s_prog);
     x_glUniform2f(s_uGame, (float)v->gw, (float)v->gh);
     glUniform1i(s_uFog, v->fogMode & 1);   /* terrain darkens in grey, never hides */
@@ -1081,6 +1195,10 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     x_glUniform2f(s_uZoomC, v->zoomCx, v->zoomCy);
     x_glUniform1f(s_uDepthScale, v->depthScale > 1.0f ? v->depthScale : 512.0f);
     x_glUniform1f(s_uEnc, TERR_ENC);
+    /* the three the vertex shader rebuilds each cell's quad from */
+    x_glUniform2f(s_uOrigin, s_origX, s_origY);
+    x_glUniform2f(s_uTile0, (float)s_rectTx0, (float)s_rectTy0);
+    x_glUniform2f(s_uTexel, s_iw, s_ih);
     x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_atlasTex);
     x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, palTex);
     x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->fogTex);
@@ -1108,12 +1226,14 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
     }
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
-    /* orphan and upload in one call, sized to what this frame USES. The staging
-       array is now big enough for a fully zoomed-out rect, and re-specifying all
-       of it every frame would churn megabytes of driver memory to draw the ~2.5k
-       cells a 1x view needs. */
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)s_nv * TVST * 4, s_verts, GL_STREAM_DRAW);
+    /* orphan and upload in one call, sized to what this frame USES. Even the
+       whole array is only 2 MB now, but a 1x view needs ~2.5k cells of it and
+       re-specifying the rest every frame would churn driver memory for nothing.
+       (GL_ARRAY_BUFFER's binding is not VAO state, so binding it to re-specify
+       the storage leaves the attribute's own buffer binding alone.) */
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)s_ncell * ICOMP * 2, s_inst,
+                 GL_STREAM_DRAW);
     /* opaque, and the far plane of the frame: depth writes ON, no blending
        needed (the FBO is premultiplied and terrain's alpha is 1 everywhere) */
-    x_glDrawArrays(GL_TRIANGLES, 0, s_nv);
+    x_glDrawArraysInstanced(GL_TRIANGLES, 0, 6, s_ncell);
 }

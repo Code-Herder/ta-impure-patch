@@ -20,7 +20,8 @@
 
 int  tagpu_terr_armed(unsigned frame_counter);   /* re-reads tagpu_terr.on (30f) */
 int  tagpu_terr_on(void);
-/* build this frame's quads; returns the vertex count (0 = nothing to draw) */
+/* build this frame's quads; returns the CELL count (0 = nothing to draw) —
+   one instanced quad each, see the vertex shader in tagpu_terr.c */
 int  tagpu_terr_gather(const TAGPU_FXVIEW* v);
 /* draw into the currently bound FBO (depth test on, depth writes on). Own
    program/VAO; leaves program, VAO and texture bindings dirty. */
@@ -34,11 +35,32 @@ void tagpu_terr_glreset(void);
    Returns 1 if anything was drawn. */
 int  tagpu_terr_hills_draw(int r0, int r1);
 
-/* Trim a would-be gather rect (in game px) to what this pass can actually draw
-   in one frame. The zoomed-out viewport is the only thing that ever exceeds the
-   budget, and a gather that bails hands the draw back for a frame — so the rect
-   is trimmed once, up front, and every pass sizes itself from the same one. */
-void tagpu_terr_clamp_span(int* w, int* h);
+/* RESERVE FOR THIS VIEWPORT, then trim a would-be gather rect (game px) to
+   what this pass can actually draw in one frame. Called once a frame by
+   tagpu_native.c before any pass sizes itself, so every pass gathers over one
+   rect they all agree on.
+
+   THE BUDGET IS THE SCREEN, not a constant. `vw`/`vh` are the true 1x world
+   viewport, and the widest rect any zoom can ask for is that viewport at
+   TAGPU_ZOOM_MIN — so the staging is reserved for exactly that and grows when
+   the player changes resolution. Nothing here names a resolution, and no
+   screen is a special case: MEASURED, 1024x768 reserves 83 KB, 2560x1440
+   423 KB, 3840x2160 972 KB and 5120x2880 1746 KB, and each draws its whole
+   view at the zoom floor.
+
+   The trim is what is left of the old fixed budget, and it now fires only if
+   the reservation could not be met — an allocation that failed, or a viewport
+   so large the module's own memory guard refuses it. It cannot be skipped: a
+   gather that exceeds the staging BAILS, which hands the draw back for a frame
+   and flashes, and a flash is the one failure that reads as a bug. A black
+   margin is the honest degradation.
+
+   What this replaced was a fixed 32768 cells sized for 1024x768 and 1920x1080.
+   An ordinary 3840x2160 desktop exceeded it at any zoom below about 0.5x, and
+   the rect was then cut to roughly a third of the width the view showed —
+   terrain, units, features and markers all stopping at a black margin that a
+   player reads as the map failing to draw at the edges. */
+void tagpu_terr_clamp_span(int vw, int vh, int* w, int* h);
 
 /* the palette index tagpu_terrown.c fills the viewport with in place of the
    engine's terrain blit; the composite treats every OTHER index in the engine's

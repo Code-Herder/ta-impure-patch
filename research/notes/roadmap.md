@@ -80,6 +80,78 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 
 ### Awaiting review
 
+**The zoom-out budget is the screen — part of the map stopped drawing at 4K.** Reported from
+play: *"I see an issue in the map Town & Country when in 4k fullscreen, if you zoom out, part
+of the map don't draw on the edges."* It is ours, and it is the `MAXCELL` clamp two paragraphs
+of this file called an honest trade. Two fixed pixel counts stood between the view and the
+world, and a 3840×2160 viewport (3712×2096) walks past both:
+
+- `tagpu_native.c` capped the effective rect at **8192 px** per axis. At the 0.25× floor that
+  viewport asks for **14912**, so the rect lost 45 % of its width before anything else looked
+  at it.
+- `tagpu_terr.c`'s staging held **32768 cells**, sized for 1024×768 and 1920×1080.
+  `tagpu_terr_clamp_span()` then shrank the rect again, proportionally, to fit.
+
+MEASURED on Town & Country at 3840×2160, zoom 0.25: the pass drew a **5591 × 5591** world rect
+where the view showed **14912 × 8448** — 37 % of the width and 66 % of the height, the rest an
+even black margin on all four sides. The trim starts biting at about **0.5×** on that screen,
+which is ordinary zoom-out and not the "extreme" the old note assumed. At 1920×1080 the floor
+asks for 29868 cells against the 32768, which is why it had never been seen.
+
+**Neither number is a number any more.** The rect is bounded by `vw / TAGPU_ZOOM_MIN + 64` —
+this frame's own viewport at the zoom floor, which is the widest rect any zoom can ask for by
+construction — and the terrain staging is *reserved* from that same expression, once, when the
+viewport changes. `tagpu_terr_clamp_span()` survives as the guard on the gather's bail (a bail
+hands the draw back and flashes, which is the one failure that reads as a bug) and now fires
+only if the reservation is refused. `tagpu_native.c`'s viewport sanity bound went 4096 → 16384
+and the engine fog grid's 256 → 1024, both of which were screen limits wearing a validation's
+clothes: at **5120×2880 the old build refused the native pass outright**.
+
+**Affording it cost a data structure, not a compromise.** A cell was six vertices of six floats
+— 144 bytes — so a 4K zoom-out would have needed 17.9 MB of staging and as much uploaded every
+frame. The quad is now **instanced**: one static six-corner buffer, and per cell four shorts
+(its column and row in the gather's grid, its tile's column and row in the atlas) that the
+vertex shader turns back into the same positions, UVs and world coordinates. Every term is an
+integer far below 2²⁴, so the floats are bit-identical to the ones the CPU used to write —
+**0 differing pixels at 1×**, old build against new, on a deliberately static frame (two
+consecutive captures of the same build also differ by 0, so the oracle is real). At zoom < 1
+the two builds differ by 288/4155/2382 px at 0.5/0.35/0.25× — and the **same build across a
+restart** differs by 114/4118/2393, so that is the stack's own run-to-run variance (the feature
+atlas fills in view order), not the change. The reservation is the screen and nothing else:
+**83 KB at 1024×768, 423 KB at 2560×1440, 972 KB at 3840×2160, 1746 KB at 5120×2880**, each
+read off the `terr: staging` line, against a 4.50 MiB fixed array that could not have covered
+4K at all.
+
+**Measured after, in the same place:** 3840×2160 draws `zoomvp=14912x8448` at 0.25× (was
+5591×5591), `10669x6052` at 0.35×, `7488x4256` at 0.5×, and `3712x2096` at 1× unchanged.
+5120×2880 at 0.25× draws `zoomvp=20032x11328` and emits **72900 cells — every cell of the map
+at once**. Before/after captures at 2560×1440 are the picture: `zoomvp` 6768×4598 with a black
+frame around the map, against 9792×5568 filling the viewport edge to edge.
+
+**A second resolution-dependent failure fell out of checking the first, and it is fixed too.**
+The engine's fog grid arrives as a descriptor at `main+0x1421F` — `{buf, cols, rows, cells}` —
+and `tagpu_native.c` would only believe it when `cells == cols * rows`. MEASURED with `tacli
+peek`: at 3840×2160 the grid is **118 × 68** and `cells` is **8024**, exactly the product; at
+2560×1440 it is **78 × 45** and `cells` is **3512** against a product of **3510**. `fogMode` is
+assigned inside that test, so the mismatch does not degrade the fog — it deletes it. A/B on one
+instance, same map, same settings, `--los 2 --mapping 0`: the shipped build logs `native: fog=0
+… foglut=0` at 2560×1440 and the fixed one `fog=1 … foglut=1`. **At that resolution our
+renderer was painting no fog of war at all.** The test now asks what the read actually needs —
+that the allocation cover the `cols × rows` we sample — and probes those cells rather than the
+engine's count, which is *tighter* than the probe it replaced (that one measured a region we
+never read). Where the extra two cells come from is not traced: `0x4843C0` fills the grid and
+`0x483F1C` frees the descriptor; the allocation site was not read.
+
+**What this did not close.** The engine's own **fog grid is one cell per 32 px of the 1×
+viewport plus two, whatever the zoom** — measured above — and `taFog()` clamps outside it, so on
+a genuinely fogged map at 0.25× the ring beyond that grid samples the grid's edge cells and the
+grid itself covers a sixteenth of the world on screen. Unrelated to this fix, present at every
+resolution, and not yet looked at in a fogged game. The feature pass's `MAXBV_BODY` (5461
+quads) and the unit pass's `MAXU`/`MAXNV` are unchanged and are now the first budgets a very
+wide view will meet. And the **frame cost of a full 4K zoom-out was not measured on real
+hardware**: the reference setup's GL is only reachable through the live desktop, and the
+verification above ran on a virtual display under llvmpipe, where a frame rate means nothing.
+
 **The health bar wobbled against the unit under it.** Reported from play: *"when moving the
 commander, I can see the health bar wobble around… not sure if that's stock TA or not?"* It is
 not — stock TA cannot show it. Everything anchored to a unit in our build takes the unit pass's
@@ -1336,11 +1408,20 @@ with every marker still over its unit.
 **And the zoom gathers are finished.** `tagpu_feat.c` was the last pass still sizing itself
 from the engine's viewport; it now uses the effective rect like the others, and the terrain
 budget went from a **bail** (which hands the draw back and flashes — the one behaviour that
-looks like a bug) to a **clamp**: `tagpu_terr_clamp_span()` trims the rect to what `MAXCELL`
-can draw before any pass reads it, so every gather agrees on one centred rect and extreme
-zoom-out degrades to an honest black margin instead of a flash. Measured black fraction
-inside the viewport: **0.0019 at 1×, 0.0003 at 0.5×, 0.0002 at 0.35×** — the zoom-out
-margin the G13b probe filmed is gone.
+looks like a bug) to a **clamp**: `tagpu_terr_clamp_span()` trims the rect to what the
+terrain pass can draw before any pass reads it, so every gather agrees on one centred rect
+and a budget that cannot be met degrades to an honest black margin instead of a flash.
+Measured black fraction inside the viewport: **0.0019 at 1×, 0.0003 at 0.5×, 0.0002 at
+0.35×** — the zoom-out margin the G13b probe filmed is gone.
+
+**[CORRECTED 2026-09-09] The budget those numbers were measured against was a fixed 32768
+cells, and it was a resolution in disguise.** Those fractions were measured at 1024×768,
+where the trim never fires. It fires on any 4K desktop below about 0.5× — the black margin
+stops being "extreme zoom-out" and becomes the ordinary zoom-out a player uses — and the
+`8192`-px cap on the effective rect in `tagpu_native.c` cut the width before the cell budget
+saw it at all. Both are gone: the budget is now reserved from the LIVE VIEWPORT at the zoom
+floor and the trim fires only when that reservation cannot be met. See "The zoom-out budget
+is the screen" below.
 
 **Gaps, both deliberate.** The *captured* layers are clipped to the 1× viewport (the
 engine's drawers clip to the OFFSCREEN rect), so at zoom < 1 order markers and group digits

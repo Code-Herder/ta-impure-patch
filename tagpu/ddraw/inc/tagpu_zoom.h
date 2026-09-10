@@ -2,6 +2,16 @@
 #define TAGPU_ZOOM_H
 #include <windows.h>
 
+/* THE RANGE THE LEVER CLAMPS TO, public because it is half of every "how much
+   world can be on screen at once" question. The rect each pass gathers over is
+   the viewport divided by the zoom, so the widest rect that can EVER be asked
+   for is this viewport at TAGPU_ZOOM_MIN — an expression with the live screen
+   in it and no resolution constant anywhere. tagpu_native.c bounds the rect
+   with it and tagpu_terr.c sizes its staging for it, so both track whatever
+   screen the player is on instead of a number someone picked. */
+#define TAGPU_ZOOM_MIN  0.25f
+#define TAGPU_ZOOM_MAX  8.0f
+
 /* tagpu_zoom — the view transform, and the ONE place that owns it.
 
    The native pass scales the world about the view centre; the engine's own
