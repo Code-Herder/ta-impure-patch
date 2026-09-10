@@ -1397,6 +1397,10 @@ than snapping at the tick. It is only this small because G16 turned the pose bac
   take — is untouched, so replacement meshes still step and the sim oracle still reports the
   engine's own fields. The unit's world position and `O3_BTURN` are out of scope, which means the
   pose runs a sample behind a position that is not delayed.
+- **Cost, measured**: `+0.560 ms a frame at 240 posed units` — 2.33 µs a unit, 3.4 % of a 60 fps
+  budget, on the paired `crowd-static` fixture ([smooth motion](smooth-motion.html) §7f). The
+  position blend goes through a `double` per component so no endpoint pair can overflow the
+  subtraction; a float or 16.16 path would remove most of that and is deliberately not taken yet.
 - `lerp=<blended>/<snapped> p=<ms> u=<weight>` rides the `native:` line, and **nothing at all** is
   printed when the lever is off.
 

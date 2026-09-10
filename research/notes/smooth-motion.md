@@ -1,11 +1,15 @@
 # Smooth unit movement and animation
 
-*A design, mostly unbuilt. **Gate 0 has passed** — the owner watched stepped against smoothed
-side by side on 2026-09-09 and the verdict was that the smoothed walk looks good, which is what
-the rest of the plan was waiting on. What exists is the *instrument* (§7a) and the coverage
-measurement (§5); **no renderer change is built and none is scheduled** — §7's order of work now
-points at option A behind a lever. The concrete piece is interpolating COB-driven piece poses
-toward the next keyframe so models animate at render rate instead of at the 30 Hz sim tick; the
+***Option A is built and all five gates are answered** (2026-09-09), and it is **not shipped**:
+`tagpu_lerp.c` behind `tagpu_lerp.on`, off by default and absent from `tagpu_opt.c`'s
+play-default table, so only that file arms it. Gate 0 passed on the tacob viewer (§7a) — the
+owner watched stepped against smoothed side by side and the smoothed walk looks good — but that
+was a **model** of the change; **nobody has looked at option A itself in the game**, and that
+taste question is the one thing still open. Gate 2 parity and gate 4 sim-untouched both PASS
+(§7e, §7g), gate 3 puts the cost at **0.56 ms a frame for 240 posed units** (§7f), and §7h shows
+the blend is measurably live. The concrete piece is interpolating COB-driven piece poses toward
+the next keyframe so models animate at render rate instead of at the sim tick — which is **60 a
+second in a skirmish, not 30**, one of the three things this build got wrong first (§7d). The
 wider topic — unit turn rate, body rotation, position between ticks — is §8. Companion pages: [file formats](file-formats.md) §2 (the COB format and the
 animation stepper), [GPU posing](gpu-posing.md) (the pass this plugs into), [exe reverse
 engineering](exe-reverse-engineering.md) §"The COB engine" (the thread records), [tacob](tacob-design.md)
@@ -208,7 +212,7 @@ needs.
 | **0 — taste** | does smoothed TA look better than the authored stepping? | **PASSED 2026-09-09** — the owner's verdict on the A\|B viewer (§7a), which is the only thing that could decide it |
 | **1 — coverage** | how often would B fall back? | `tools/cob_lookahead.py` — **run, §5** |
 | **2 — parity** | with the lever off, is output unchanged? | **PASSED 2026-09-09** — `tagpu_posecrc.on`, §7e |
-| **3 — cost** | what does it cost at scale? | `scenarios/200v200.json` free-running, §7f |
+| **3 — cost** | what does it cost at scale? | **MEASURED 2026-09-09 — 0.56 ms/frame at 240 posed units**, §7f |
 | **4 — sim untouched** | did anything reach the simulation? | **PASSED 2026-09-09** — `cobtrace` on `scenarios/walk-lerp.json`, §7g |
 
 ### 7a. Gate 0's instrument — built 2026-09-09
@@ -509,6 +513,46 @@ one engine state at up to ten different poses. `lerp=300/0 p=16.6ms u=0.84` on t
 says the same thing from the other side: **every** one of the window's 300 draws blended and none
 snapped — which is also how the `u >= 0` fix above shows up, since before it every sampling frame
 refused.
+
+### 7f. Gate 3 — cost, measured `[MEASURED 2026-09-09]`
+
+This gate has no pass mark to hit; it produces a number, and the number is the owner's to weigh.
+
+**The first attempt was not a measurement and is recorded as such.** `scenarios/200v200.json` is a
+battle: it kills units as it runs, so the two sides were taken at different points in the fight —
+202 posed units against 136 — and the 325-vs-565 fps that came out of it says nothing at all about
+the change. `scenarios/crowd-static.json` exists precisely because a battle cannot be paired: 256
+units, one owner, no orders, nothing fighting, identical between runs.
+
+Free-running (`tacli create --maxfps 0`, or both sides read the cap and the answer is 60 either
+way), 1024×768 `ss=2`, the oracles disarmed, a 60 s window starting a fixed 20 s after the
+scenario applies. **All four runs drew the same scene — `posed=240/32288tri` on every one of
+them**, which is what makes the pair valid.
+
+| pass | lever off | lever on |
+|---|---|---|
+| 1 | 294.98 fps | 254.99 fps (`lerp=71040/960`, `p=16.8ms`) |
+| 2 | 299.98 fps | 254.99 fps (`lerp=68640/3360`, `p=16.0ms`) |
+| **mean** | **297.5** | **255.0** |
+
+| | |
+|---|---|
+| **cost** | **+0.560 ms per frame** at 240 posed units |
+| per unit | **2.33 µs** (a stock model is ~36 pieces, so ~65 ns a piece) |
+| as a share of a **60 fps** budget | **3.4 %** |
+| as a share of *this* frame rate | 14.3 % — the less useful framing: at 297 fps the whole frame is only 3.4 ms |
+| granularity | one `native:` line per 300 frames over 60 s, i.e. **±5 fps**; the 40–45 fps gap is well outside it |
+
+**Read it in milliseconds, not in percent.** Fourteen percent sounds alarming and is an artifact of
+measuring where the frame is already 3.4 ms long; what a player at 60 fps would give up is a third
+of a millisecond per hundred units. For scale, [G16](gpu-posing.md) step 7 bought **2.3 ms a frame**
+by deleting the CPU emitters, so this spends about a quarter of that win back.
+
+**The obvious optimisation is not taken and is not needed for the gate**: the position blend goes
+through a `double` per component (`(double)d * u`) so that no pair of endpoints can overflow the
+subtraction. A `float` path with the wide subtraction kept, or a 16.16 fixed-point multiply, would
+remove most of it. Left alone deliberately — this is the first cut, and a correctness-first blend
+that costs 2.33 µs is the right thing to measure before tuning it.
 
 ### 7g. Gate 4 — sim untouched, PASSED `[MEASURED 2026-09-09]`
 
