@@ -366,6 +366,10 @@ static unsigned char s_gatlas[GA_W * GA_H];
 static int   s_gdirty;
 static GLuint s_gtex;
 static unsigned s_gglyphs, s_gdrops;
+/* Bumped whenever the shelves restart, i.e. whenever every cell handed out so
+   far stops being valid. A caller that gathers a run of cells before it draws
+   them has to check this across the gather. */
+static unsigned s_ggen;
 
 /* Validate an arbitrary font object — the UI's, which arrives in a published op
    rather than from the snapshot font_ok() reads. Same probes, and it must stay
@@ -457,6 +461,11 @@ int tagpu_text_glyph(const void* font, int ch, int* ax, int* ay, int* w, int* h,
         memset(s_gatlas, 0, sizeof s_gatlas);
         s_gshelfX = s_gshelfY = s_gshelfH = 0;
         s_ngf = 0; s_gdirty = 1; s_gdrops++;
+        /* EVERY CELL HANDED OUT BEFORE THIS POINT NOW NAMES CLEARED TEXELS, and
+           a caller gathering a whole string is holding a fistful of them. This
+           is how it finds out -- the same rule as the `s_frameFont` latch
+           above, one level down. */
+        s_ggen++;
         flog("text: glyph atlas full — reset");
         g = gfont_slot(f);
     }
@@ -481,6 +490,7 @@ int tagpu_text_glyph(const void* font, int ch, int* ax, int* ay, int* w, int* h,
 }
 
 void tagpu_text_glyph_dims(int* w, int* h) { *w = GA_W; *h = GA_H; }
+unsigned tagpu_text_glyph_gen(void) { return s_ggen; }
 
 unsigned int tagpu_text_glyph_tex(void)
 {

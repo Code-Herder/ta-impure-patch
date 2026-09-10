@@ -100,6 +100,12 @@ int  tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff
    snapshot. */
 int  tagpu_text_glyph(const void* font, int ch, int* ax, int* ay, int* w, int* h, int* yoff);
 void tagpu_text_glyph_dims(int* w, int* h);
+/* Bumped whenever the glyph atlas repacks, which invalidates every cell handed
+   out before it. A caller that gathers a run of cells and draws them afterwards
+   must read this before the gather and again after it, and discard the run if
+   it moved -- the cells would otherwise name texels that have just been
+   cleared and re-used. */
+unsigned tagpu_text_glyph_gen(void);
 unsigned int tagpu_text_glyph_tex(void);
 int  tagpu_text_glyph_stats(unsigned* glyphs, unsigned* drops, int* fonts);
 

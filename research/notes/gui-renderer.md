@@ -1353,7 +1353,9 @@ builds everything it would reuse.
 >    shade is a LUT into a dark-grey ramp, so a pixel already in that ramp maps to itself; a
 >    single-texel test would then let four of *our* sub-texels through, taken from the unfogged
 >    picture and possibly bright. Requiring the whole neighbourhood to agree costs a one-texel band
->    of the engine's own resolution around every fog edge and **cannot** leak.
+>    of the engine's own resolution around every fog edge. (This decision record said "**cannot**
+>    leak"; §19 corrects that to what the argument actually buys — no unit, arc or point can leak,
+>    and terrain is measured rather than proven.)
 >
 >    **Measured on a 99.6 % fogged map** (`scenario load --mapping 0`; the mapped fixture reads
 >    `fog=0/13356` and tests nothing):
@@ -2218,6 +2220,14 @@ phenomenon and it is quoted as measured rather than rounded into the earlier ban
 
 ### Not closed here
 
+- **The cursor's erase and its draw are latched on different conditions.**
+  `tagpu_gui_cursor_frame` owns the cursor on the atlas alone, while the world composite's
+  cursor exemption sits inside `uKey >= 0` (`tagpu_native.c`: the terrain is ours and the fill
+  has not stalled). Where our own FBO is *empty* and `uKey < 0` the engine's frame shows through
+  with its cursor while the sharp layer still draws ours — two cursors over the world. Not
+  reachable in the shipped path (the terrain is ours whenever the world composite runs, and over
+  the panel the layer's twin covers the engine's cursor either way), and not observed; the fix
+  is a decision about which module owns the question, so it is recorded rather than guessed at.
 - **The cursor is not restored under Classic++ in practice**, only in principle: `CURS_FS` reads
   the atlas's restored twin where its alpha says so, and cursor frames are above the 12-px restore
   floor, so they queue like any other UI art. Nothing has measured whether the restored cursor is
@@ -2338,6 +2348,18 @@ estimate assumed.
 **At `k = 1.5`** the stamp is unchanged and unaffected — it is twin-side, so `k` is not in its
 path at all: `str=16/44, miss=0, reseed=0` at 1024x768 in a 1536x1152 client.
 
+**THE GLYPH ATLAS CAN REPACK IN THE MIDDLE OF A STRING** [landing review, 2026-09-09 — found
+before it shipped, not observed in a run]. `twin_string` gathers every glyph's atlas cell in a
+first pass and draws them in a second, and `tagpu_text_glyph` restarts the shelves — clearing
+every cell — when one runs the atlas out. A glyph that overflows part-way through therefore
+invalidates the cells already gathered for the *same* string: its leading characters would sample
+0, which is invisible where `bg == tr` and a solid box where it is not, self-healing the next
+frame. This is the same hazard the `s_frameFont` latch prevents one level up (a font change
+mid-gather), and it is closed the same way: `tagpu_text_glyph_gen()` is read before the gather and
+again after it, the gather is retried once if it moved (the atlas is empty at that point, and one
+string's distinct glyphs fit), and a second move falls through to the box's own bytes.
+`repack=` in the heartbeat counts the retries and should read 0.
+
 ### Not closed here
 
 - **A static in-game frame publishes its text once.** `str=` froze at 22 ops on the parity fixture
@@ -2386,7 +2408,15 @@ is used verbatim.
 > The shade is a LUT into a dark-grey ramp, so a pixel already in that ramp maps to itself; a
 > single-texel test would then let four of *our* sub-texels through, taken from the unfogged
 > picture and possibly bright. Requiring the whole neighbourhood to agree costs a one-texel band
-> of the engine's own resolution around every fog edge and **cannot** leak.
+> of the engine's own resolution around every fog edge.
+>
+> **The bound it buys is not "cannot leak"** [landing review, 2026-09-09]. The test is at the
+> engine's 126-px resolution and our base is the 252-px picture, so a texel whose whole 3×3
+> neighbourhood is fog-invariant can still contain a sub-texel the engine's nearest downsample
+> never picked. What it bounds is terrain detail only — never a unit, an arc or a point, all of
+> which come from the composite verbatim — and the measured figure is 2 differing pixels of
+> 13 356 on a 99.6 % fogged map, both inside the engine's own lit region. Say "has not leaked in
+> the measured fixture, and cannot leak a unit", not "cannot leak".
 
 **And the same comparison carries the dots, the arcs and the points.** `+0x142DB`, the composite,
 is the fog base plus all three, so it differs from `+0x142DF` exactly where one of them landed —
@@ -2489,12 +2519,26 @@ The sparkle band has now been sampled five times across the phase — 179-190, 1
 two shots should. It is one phenomenon and the range is quoted as measured each time rather than
 pinned to the first reading.
 
+**The engine's pair is validated on every field the walk uses** [landing review, 2026-09-09].
+`+0x142DF`, `+0x142E3` and `+0x142DB` are 8bpp offscreens read as four ints — `w, h, pitch,
+base` — on the render thread while the game thread may be rewriting them. Dimensions were
+cross-checked between the three and bounded to 512, and the bases probed; the three **pitches**
+were not, and the walk is `base + yy * pitch` for `yy` up to 511, so a wild or negative pitch out
+of a half-freed surface would read past the surface every frame. They are now bounded the same
+way (a row cannot be shorter than the surface is wide, and these are at most 512 px), and a
+refusal counts in `noeng=`.
+
 ### Not closed here
 
 - **The one-texel safety band is the engine's resolution.** Around every fog edge, a 3×3
   disagreement forces the engine's own 126-px pixel, so the boundary between explored and
   unexplored is drawn at the engine's resolution while the interior is ours. Correct and
   conservative; not measured for how visible it is at `k = 3`.
+- **The mask is not PROVEN leak-free for terrain**, only measured. The 3×3 test is at 126 px and
+  the base it admits is 252 px, so a fog-invariant neighbourhood can still carry a sub-texel the
+  engine never sampled. Units, arcs and points cannot leak — they come from the composite
+  verbatim — and the fixture reads 2 of 13 356. A proof would need the test at the base's own
+  resolution, which the engine's pair does not have.
 - **`k = 3` itself is unmeasured for the minimap.** 1.5 and 1.875 are; a 3072-wide client was not
   reachable on the reference setup and `--res 640x480` does not take (§16's registry-inode note).
 - **The dots are the engine's pixels at 126 px**, not its art replayed at `k`. §13.6 imagined a

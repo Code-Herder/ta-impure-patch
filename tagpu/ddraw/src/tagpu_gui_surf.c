@@ -206,6 +206,7 @@ static unsigned s_strings = 0;          /* string ops stamped                   
 static unsigned s_glyphs = 0;           /* glyph quads drawn                                           */
 static unsigned s_strMiss = 0;          /* glyphs the cache would not give (the engine drew them)      */
 static unsigned s_strReseed = 0;        /* strings that stamped NOTHING and asked for a fresh seed     */
+static unsigned s_strRepack = 0;        /* gathers restarted because the glyph atlas repacked under them */
 /* G17e: the TNT's own 252-px minimap picture, uploaded once per map load */
 static GLuint   s_mmTex;
 static unsigned s_mmGenSeen;            /* the generation s_mmTex holds; 0 = nothing        */
@@ -326,7 +327,15 @@ static const char* STR_FS =
    ramp maps to itself), and a single-texel test would then let four of OUR
    sub-texels through — sub-texels taken from the unfogged picture, which may be
    bright. Requiring the whole neighbourhood to agree costs a one-texel band of
-   the engine's own resolution around every fog edge and cannot leak. */
+   the engine's own resolution around every fog edge.
+
+   WHAT THAT BUYS, EXACTLY [landing review, 2026-09-09]: no unit, arc or point
+   can leak -- those come from the composite verbatim -- and terrain is bounded
+   but not proven, because the test is at the engine's 126 px while the base it
+   admits is the 252-px picture, so a fog-invariant neighbourhood can still
+   carry a sub-texel the engine's own downsample never picked. Measured: 2
+   differing pixels of 13 356 on a 99.6 % fogged map, both inside the engine's
+   lit region. */
 static const char* MM_FS =
     "#version 330 core\n"
     "in vec2 uv; out vec4 frag;\n"
@@ -788,26 +797,47 @@ static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
     const unsigned char* font = (const unsigned char*)o->frame;
     short cell[256][4];                 /* ax, ay, w, h per drawn glyph        */
     int n = 0, i, x, top, yoff = 0, aw = 0, ah = 0, restored;
+    int attempt, miss = 0;
+    unsigned gen0;
     GLuint gtex;
     float v[24];
 
     if (!s_strProg || !o->alen) goto reseed;
     /* PASS ONE: rasterise every glyph this string needs, so the atlas texture
-       is uploaded ONCE for the string rather than once per new glyph. */
-    for (i = 0; i < 256 && str[i] && str[i] != '\n'; i++) {
-        int ax, ay, gw, gh;
-        if (!tagpu_text_glyph(font, (unsigned char)str[i], &ax, &ay, &gw, &gh, &yoff)) {
-            /* the engine skips a code below `first` and a zero table entry and
-               advances for neither, so a refusal here is only a divergence when
-               the cache refused something the engine would have drawn */
-            s_strMiss++;
-            continue;
+       is uploaded ONCE for the string rather than once per new glyph.
+
+       AND THE ATLAS CAN REPACK UNDER US WHILE WE DO IT [landing review,
+       2026-09-09]: a glyph that runs the shelves out clears every cell and
+       starts over, so the ax/ay already in `cell` would name texels that were
+       just wiped and re-used, and the string's leading characters would sample
+       0 -- invisible where `bg == tr`, solid boxes where it is not. The
+       generation says whether that happened. One retry is enough by
+       construction, the atlas being empty at that point and one string's
+       distinct glyphs fitting in it; a second move means something is wrong
+       with the font, and the box's own bytes are the honest fallback. */
+    for (attempt = 0; attempt < 2; attempt++) {
+        gen0 = tagpu_text_glyph_gen();
+        n = 0; miss = 0;
+        for (i = 0; i < 256 && str[i] && str[i] != '\n'; i++) {
+            int ax, ay, gw, gh;
+            if (!tagpu_text_glyph(font, (unsigned char)str[i], &ax, &ay, &gw, &gh, &yoff)) {
+                /* the engine skips a code below `first` and a zero table entry
+                   and advances for neither, so a refusal here is only a
+                   divergence when the cache refused something the engine would
+                   have drawn */
+                miss++;
+                continue;
+            }
+            if (n < 256) {
+                cell[n][0] = (short)ax; cell[n][1] = (short)ay;
+                cell[n][2] = (short)gw; cell[n][3] = (short)gh; n++;
+            }
         }
-        if (n < 256) {
-            cell[n][0] = (short)ax; cell[n][1] = (short)ay;
-            cell[n][2] = (short)gw; cell[n][3] = (short)gh; n++;
-        }
+        if (tagpu_text_glyph_gen() == gen0) break;
+        s_strRepack++;
     }
+    if (tagpu_text_glyph_gen() != gen0) goto reseed;
+    s_strMiss += (unsigned)miss;
     if (!n) goto reseed;
     x_glActiveTexture(GL_TEXTURE0);
     gtex = tagpu_text_glyph_tex();
@@ -1359,13 +1389,9 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     if (kx <= 1.001f && ky <= 1.001f && !s_mmforce) return;
     x_glDisable(GL_BLEND);
     x_glDisable(GL_DEPTH_TEST);
-    glUseProgram(s_cursProg);
-    x_glUniform2f(s_uCursSize, (float)s_sharpW, (float)s_sharpH);
-    glUniform1i(s_uCursCK, -1);          /* no colour key: every texel of the picture draws */
-    glUniform1i(s_uCursRestored, 0);
-    x_glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, s_palTex);
-    x_glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, s_palTex);
-    x_glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, s_mmTex);
+    /* the program, its uniforms and every texture unit are set by whichever
+       block below actually draws -- `s_mmProg` for the picture, `s_sharpProg`
+       for the box. Only the array bindings are shared. */
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     /* THE WHOLE PICTURE INTO THE WHOLE BOX, and that is the engine's own
@@ -1385,12 +1411,22 @@ static void sharp_minimap(const TAGPU_FRAME* f)
         const unsigned char *fb, *sb, *cb;
         int ew, eh, fp, sp, cp, yy, xx;
         if (!ptr_ok(fo) || !ptr_ok(so) || !ptr_ok(co)) { s_mmNoEng++; return; }
-        ew = fo[0]; eh = fo[1]; fp = fo[2]; sp = so[2]; cp = co[2];
+        ew = fo[0]; eh = fo[1];
         fb = (const unsigned char*)(size_t)fo[3];
         sb = (const unsigned char*)(size_t)so[3];
         cb = (const unsigned char*)(size_t)co[3];
+        /* THE PITCHES ARE VALIDATED LIKE THE DIMENSIONS [landing review,
+           2026-09-09]. `ptr_ok` covers the three bases and the four dimension
+           fields are cross-checked, but the walk below is `base + yy * pitch`
+           for yy up to 511: a wild or negative pitch out of a half-freed
+           surface reads 512 x pitch bytes of engine memory on the render
+           thread, every frame, and the read is the one thing here that cannot
+           be undone. A row cannot be shorter than the surface is wide, and
+           these are 8bpp offscreens of at most 512 px. */
+        fp = fo[2]; sp = so[2]; cp = co[2];
         if (ew <= 0 || eh <= 0 || ew > 512 || eh > 512 || so[0] != ew || so[1] != eh ||
-            co[0] != ew || co[1] != eh || !ptr_ok(fb) || !ptr_ok(sb) || !ptr_ok(cb)) {
+            co[0] != ew || co[1] != eh || !ptr_ok(fb) || !ptr_ok(sb) || !ptr_ok(cb) ||
+            fp < ew || sp < ew || cp < ew || fp > 4096 || sp > 4096 || cp > 4096) {
             s_mmNoEng++; return;
         }
         if ((unsigned)(ew * eh * 3) > s_mmRgCap) {
@@ -1492,7 +1528,10 @@ static void sharp_minimap(const TAGPU_FRAME* f)
             }
         }
     }
-    s_mmDrawn++;
+    /* only when something was actually drawn: with `mmbase` set and
+       `nominimap` also set, both blocks above are skipped and the heartbeat
+       would otherwise report a minimap this module never put on screen. */
+    if (s_mmbase) s_mmDrawn++;
 }
 
 static void sharp_begin(const TAGPU_FRAME* f)
@@ -1760,7 +1799,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     glBindFramebuffer(GL_FRAMEBUFFER, tagpu_overlay_target_fbo());
     glViewport(f->vp_x, f->vp_y, f->vp_w, f->vp_h);
     if (f->frame_counter - last >= 300) {
-        /* 310 bytes of literal + 51 conversions: the worst case is ~880, so the
+        /* 318 bytes of literal + 52 conversions: the worst case is ~900, so the
            buffer grew with the merge (the cursor, string and minimap counters
            joined `assets=`/`light=`), and _snprintf does not NUL-terminate what
            it truncates */
@@ -1776,7 +1815,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
@@ -1785,7 +1824,7 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                   s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb,
                   s_k, s_sharpW, s_sharpH,
                   s_curOwn, s_curW, s_curH, s_curDev, s_cursorScale, s_curDrawn, s_curWarm,
-                  s_strings, s_glyphs, s_strMiss, s_strReseed, gCached, gDrops, gFonts,
+                  s_strings, s_glyphs, s_strMiss, s_strReseed, s_strRepack, gCached, gDrops, gFonts,
                   /* the arena head is MONOTONIC, so the delta between two of these
                      lines is the bytes the producer wrote in 300 frames — which is
                      what `nostring` is A/B'd on (13.4: ~40 bytes where a text op

@@ -57,7 +57,17 @@ int  tagpu_gui_drawing(void);                       /* the trigger says draw  */
    tagpu_native.c asks tagpu_gui_cursor_own for the rect and treats it as key.
    A version that only drew ours would ship two cursors over the world.
    tagpu_gui_cursor_own returns 1 when ours is being drawn this frame and
-   fills `r` with the engine's rect in GAME pixels (x, y, w, h). */
+   fills `r` with the engine's rect in GAME pixels (x, y, w, h).
+
+   THE TWO HALVES SHARE THE RECT, NOT THE DECISION [landing review,
+   2026-09-09]. Ownership here is latched on the atlas alone; the composite
+   applies the exemption only inside `uKey >= 0`, i.e. when the terrain is ours
+   and the fill has not stalled. Where our own FBO is empty and the key is off,
+   the engine's frame shows through with its cursor while the layer still draws
+   ours. Not reachable in the shipped path — the terrain is ours whenever the
+   composite runs, and over the panel the twin covers the engine's cursor
+   either way — and recorded in gui-renderer.md 17 "Not closed here" rather
+   than closed by guessing which module should own the question. */
 void tagpu_gui_cursor_frame(void);
 int  tagpu_gui_cursor_own(float* r);
 
