@@ -427,6 +427,31 @@ an eye-induced artifact at all, so the excursions are the ease changing how much
 screen, and anchoring adds nothing above that floor. The criterion was checked live before
 being trusted: 196 210 green-dominant px at the units against **0** in the fogged corner.
 
+**What the landing review found, and what it settled** (two Opus reviewers, `high`,
+2026-09-10). Three real defects, all fixed on the branch: the eye was stepped *before*
+`zoom_eye_range()` was consulted, so a frame with no sane engine state left it unclamped **and**
+skipped the invalidation; `anchor_step()` used the widened camera range without the
+`g_eyeInstalled` guard the public accessor applies, so `vpwide.on` + `terrown.on` without
+`zoom.on` — a reachable arm set, since `tagpu_opt.c`'s `needs` steers a default and not a
+requirement — could push the eye past a range nothing would walk it home from; and
+`tagpu_zoom_fog_pending()` could latch, because `tagpu_terr.c` drops the skip later in the same
+frame than `read_lever()` runs, leaving a bump nobody would ever ack. It now asks
+`tagpu_terrown_owns_fog()` first: no consumer, no request.
+
+Two claims the review disproved, corrected above and in
+[exe reverse engineering](exe-reverse-engineering.html): the lowest level a single ease step can
+cross 1.0 from is **0.5 exactly**, not 0.489, and the engine grid's slack collapses to the bare
+32 px at 1×, not to zero. `tagpu_fogwide.c`'s coverage derivation was true but its proof was
+not — it holds only under the one-ease-step bound, which the comment now states.
+
+**And one it raised that measurement refutes.** We do not set the minimap's dirty bit, and at
+`k = 1` the sharp minimap layer returns early (`tagpu_gui_surf.c:1451`), so the engine draws the
+view box gated on that bit — the box should lag. It does not: measured 2026-09-10 across an
+anchored gesture, **51 px of the 106×126 minimap change**, bounding box screen x 26..42 y 7..16,
+exactly the union of the old box (26,7,42,16) and the new one (32,11,42,16) — erased at the old
+position, drawn at the new. Something else sets the bit during a gesture; which path, we did not
+establish, so this is a measured behaviour and not an explained one.
+
 **Named gaps.** The eye is an integer in world px, so the anchor can sit up to `z/2` screen px
 from the pointer while a gesture is in flight — 0.5 px at 1×, 4 px at 8×; holding it exactly
 would need an off-centre scale centre, which vpwide's addressable rect, fogwide's window and
@@ -434,6 +459,16 @@ the ring test all assume away. The three sites that clamp the scroll target inli
 `[0, map − W]` — `0x41C4C0`, `0x41C7F7` and the per-frame camera FOLLOW `0x41CAF7` — do not go
 through our clamp, so on those paths a target we stepped can be recomputed without the delta
 and the stepper eases the eye back; the camera owns itself while it is following something.
+`eye[0] += nx` is a read-modify-write on an unaligned field (`main+0x1431F` is an odd offset)
+racing the game thread's own stepper, and the landing accepts it: every value that escapes goes
+through `clamp_pair()` so nothing can address memory the engine does not own, but a lost update
+**discards** a camera move rather than delaying it — a minimap click landing inside the window is
+simply gone — and this change raises the write rate from "only when a clamp fires" to every frame
+of every gesture. A camera hold that is *moving* (a scripted pan through `tagpu_eye.txt`) now
+bumps the fog sequence every frame, so such a pan draws on the wide grid throughout even at 1×;
+the replication oracle reads `differ=0`, so the picture is the same, but the fog texture is
+re-uploaded on each switch. And `s_eyeHold` is polled every 15 frames, so the hold gate is up to
+a quarter-second late in both directions.
 
 ### 2.3b The addressable viewport at zoom < 1 (`tagpu_vpwide.c`, `vpwide.on`)
 

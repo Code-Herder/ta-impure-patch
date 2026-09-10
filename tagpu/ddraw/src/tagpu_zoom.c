@@ -966,7 +966,16 @@ static volatile LONG s_eyeSeq, s_eyeAck;
 
 int tagpu_zoom_fog_pending(void)
 {
-    return s_eyeSeq != s_eyeAck;
+    /* NO CONSUMER, NO REQUEST. Only terr_fogtick answers this, and only while
+       terrown is skipping — so a bump left outstanding when the fog draw goes
+       back to the engine would never be acked, and this would read 1 for the
+       rest of the session: the wide grid put in front of a 1x picture that is
+       already right, which is the one thing this must never do. tagpu_terr.c
+       drops the skip LATER in the same frame than read_lever() runs, so that
+       ordering is reachable in one wheel gesture. Asking the same question
+       anchoring itself is gated on keeps the two from coming apart.
+       [landing review, 2026-09-10] */
+    return tagpu_terrown_owns_fog() && s_eyeSeq != s_eyeAck;
 }
 
 LONG tagpu_zoom_fog_seq(void)
@@ -1069,13 +1078,29 @@ static void anchor_step(float zNow, int fromWheel)
         int* scr = (int*)(ta + OFF_SCRTX);
         int  moved;
 
+        /* THE RANGE FIRST, AND NOTHING IS WRITTEN WITHOUT ONE. Fetching it
+           after the += left a window where a frame with no sane engine state —
+           a map size or a true viewport reading <= 0 during a level change,
+           with s_live still set — returned having stepped the eye and skipped
+           BOTH the clamp and the invalidation below: an unclamped camera and a
+           fog grid still built for where it used to be, which is the exact
+           failure the terrown gate exists to prevent. [landing review, 2026-09-10]
+
+           And the same guarded level `tagpu_zoom_eye_range()` uses, not a bare
+           `eye_level()`. Without `zoom.on` the clamp at 0x41C3C0 is the
+           engine's own, `apply_eye_range()` returns before it can walk an eye
+           home, and `tagpu_zoomedge.off` is never even polled — so the widened
+           range must not be handed out here either. `tagpu_vpwide.on` +
+           `tagpu_terrown.on` without `tagpu_zoom.on` is a reachable arm set:
+           tagpu_opt.c's `needs` steers a DEFAULT, not a requirement. */
+        if (!zoom_eye_range(ta, g_eyeInstalled ? eye_level() : 1.0f,
+                            &loX, &hiX, &loY, &hiY)) return;
         eye[0] += nx; eye[1] += ny;
         /* the target moves with the eye, always: the two disagreeing is what
            the per-frame stepper reads as "a camera move is in flight", and it
            would drag the eye back and rebuild the fog grid every frame for as
            long as the disagreement lasted (G13g) */
         scr[0] += nx; scr[1] += ny;
-        if (!zoom_eye_range(ta, eye_level(), &loX, &hiX, &loY, &hiY)) return;
         moved  = clamp_pair(eye, eye + 1, loX, hiX, loY, hiY);
         moved |= clamp_pair(scr, scr + 1, loX, hiX, loY, hiY);
         /* refused at a map edge: drop what could not be taken rather than

@@ -2213,11 +2213,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     /* ...OR while the eye has been stepped and the game
                        thread has not rebuilt for it yet. Cursor anchoring moves
                        the camera on every frame of a gesture, and the engine's
-                       grid has only its two spare columns of slack: the frame
-                       that eases up THROUGH 1.0 can start as low as z = 0.489
-                       (one ease step of 0.25 in log space toward the 8x
-                       ceiling), which puts the view it must span up to ~1000 px
-                       at 1920 off the grid the eye had when it was built. The
+                       grid has only its two spare columns of slack. The frame
+                       that eases up THROUGH 1.0 starts at z = 0.5 EXACTLY at
+                       the lowest: one ease step of 0.25 in log space is
+                       z1 = z0^0.75 * ztgt^0.25, which reaches 1.0 at
+                       z0 = 8^(-1/3) = 0.5. There the eye steps by up to vw/2 in
+                       that single frame — 896 px at the 1792-px viewport of a
+                       1920x1080 screen — against the 32 px those two columns
+                       are worth, leaving an 864 px band uncovered. The
                        wide grid spans it with room over — measured against the
                        same inequality, sizing at the zoom FLOOR covers any
                        anchored step at any level with the margin untouched. */

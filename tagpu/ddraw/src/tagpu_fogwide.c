@@ -373,9 +373,16 @@ static int floor_div32(int v) { return v >= 0 ? v / 32 : -(((-v) + 31) / 32); }
    with `|D| <= (vw/2)|1/z0 - 1/z1|`, the anchor being inside the viewport.
    Zooming IN that reduces to `(vw/2)(1/z0 - 1/zmin) <= 0` — an anchored
    zoom-in's view is a SUBSET of the view before it, so there is nothing new to
-   cover. Zooming out, the left side maximises at exactly 0 over the whole
-   0.25..8 range, touched only in the limit `z0 -> zmin` where there is no
-   further out to go. So the margin is slack for this, not budget. */
+   cover. Zooming out it is `(vw/2)(2/z1 - 1/z0 - 1/zmin)`, and **the bound
+   holds only because `z1` is ONE EASE STEP from `z0`**, not any level in the
+   range: `z1 = z0^(1-WHEEL_EASE) * ztgt^WHEEL_EASE` with `ztgt >= zmin`. Under
+   that constraint the expression maximises at exactly 0, touched only in the
+   limit `z0 -> zmin` where there is no further out to go. Free of it the sup is
+   3.875 (z0 = 8 against z1 = 0.25, i.e. the whole range crossed in one frame),
+   which is ~3470 px and would need a margin thirteen times this one — so if the
+   ease is ever replaced by something that can jump, this derivation goes with
+   it. [the constraint was missing when this was first written; landing review,
+   2026-09-10] So the margin is slack for this, not budget. */
 static int fogw_window(char* ta, int* col0, int* row0, int* cols, int* rows)
 {
     int vpL, vpT, vw, vh, eyeX, eyeY, evw, evh, x0, y0, x1, y1;
