@@ -331,6 +331,39 @@ Centre-anchored: no eye motion at all, so `vpwide`, the minimap rect and `Scroll
 with no further plumbing. Pointer-anchored zoom is the open follow-up and is a camera move —
 `tagpu_input.c`'s eye hold, not a transient bias (§3.1).
 
+### 2.3a-bis The arm state is published in one store, never transiently zero  [2026-09-10]
+
+The arm block inside **`tagpu_native_frame()`** (there is no `tagpu_native_armed()`; the other
+passes have one, this one does not) re-reads its lever every 30 frames. It used to do that by setting
+`s_armed = 0`, performing a **file read**, and setting it back — and `tagpu_native_owns_unit()`
+opens `if (s_armed != 1) return 0;` and is called **from the game thread** by `tagpu_markown.c`'s
+`mark_selbox`. So twice a second, for the length of that read, every selected unit read as "not
+ours" and the engine drew its own selection rects into the key-filled viewport, where the GUI
+mirror published the boxes and painted them cyan over the world (`gui-renderer.md` §20).
+
+It is now computed into locals and published in **one store**, and `s_armed` is **`volatile`**
+(as `s_selComplete` already was) so that store cannot be hoisted above the state it publishes.
+That closes the periodic window — the one the shipped configuration hits twice a second.
+
+**Residual, stated rather than papered over:** `s_type` is written only when it has actually
+changed, and the pass is disarmed across that write, which **narrows** a window rather than
+removing one — nothing waits for the game thread to observe the disarm. It is reachable only
+while a human is editing the arm file. Closing it properly wants the type published by index into
+a double buffer, which is its own piece of work.
+
+**And one predicate carries the whole ownership decision [2026-09-10].**
+`tagpu_native_owns_unit` now also refuses a unit whose **ModelId will not resolve**, because that
+decision has four consumers that must agree: the gather skips what it refuses, `tagpu_overlay.c`
+leaves the engine's composite unwiped, `tagpu_mark.c` leaves the bar on the engine's anchor, and
+`tagpu_markown.c` leaves the engine's own selection rect alone. Wrong in one direction a unit is
+drawn twice; wrong in the other it is invisible, or keeps its sprite and silently loses its
+selection box for ever — which is what a landing review caught here, against a claim that a unit
+with no model was "owed nothing" (`ui-markers.md` §1 carries the correction and the disassembly).
+
+**The general rule this is an instance of:** anything the game thread reads to decide whether we
+own a draw must never have a "not yet" state that the render thread publishes on its way to an
+answer. A poll that tears is a poll that hands the engine back the frame.
+
 ### 2.3b The addressable viewport at zoom < 1 (`tagpu_vpwide.c`, `vpwide.on`)
 
 **On by default since 2026-09-08 through the play defaults (§2.8); opt-in before that.** Nothing
@@ -339,9 +372,46 @@ the zoom on and no `tagpu_vpwide.off` — the true rect verified, *and* a zoomed
 
 | VA | What it is | Mechanism |
 |---|---|---|
-| `0x468D85` / `0x46964F` / `0x469F95` | `call 0x4C6B10` — the three sites in `DrawGameScreen` that copy the viewport rect into the offscreen surface's clip rect (`+0x1C..+0x28`) | call-site redirect; **clamped to the surface**, because `0x4C6B10` is a bare four-dword store with no clamping and a wide rect would license an engine drawer to write outside its allocation |
+| `0x468D85` / `0x46964F` / `0x469F95` | `call 0x4C6B10` — the three sites in `DrawGameScreen` that copy the viewport rect into the offscreen surface's clip rect (`+0x1C..+0x28`) | call-site redirect; **clamped to the surface AND to the TRUE viewport rect** (2026-09-09, below), because `0x4C6B10` is a bare four-dword store with no clamping: the surface clamp keeps a wide rect from licensing a write outside the allocation, the viewport clamp keeps one from licensing a write outside the rect our key fill erases |
 | `0x499221` | `call 0x498DA0` — the mouse → world / map cell / hovered feature conversion, and the ONE reader that uses L and T as the screen→world **origin** (`world = eye + clamp(pos, L, R) − L`) | call-site redirect; redone with the TRUE origin and the WIDE clamp, a straight pass-through whenever the rect is not ours |
 | `0x4B5E5F` / `0x4B5EC0` / `0x4B5F0C` | the three arms of TA's own window procedure's `0x200..0x206` jump table, each unpacking the mouse `lParam` with `AND 0xffff` + `SHR 0x10` | **byte patch** → `MOVSX ECX,CX` + `SAR EAX,0x10`. `LOWORD`/`HIWORD` is zero-extending, so a client x of −20 arrived as 65516 and the event was lost; this is Microsoft's own `GET_X_LPARAM`, and for any position a real mouse can report it is bit-for-bit identical |
+
+**The clip guard needs BOTH bounds, and the second one is the picture's [MEASURED 2026-09-09].**
+Clamping the widened rect to the surface allocation is a memory-safety bound and nothing more: it
+still leaves the side panel and the top and bottom strips inside the clip, and **nothing ever
+repaints those**. Our key fill covers the true viewport only — that is why every pass takes its
+rect from `tagpu_vpwide_true_rect()` and not from the field — and the engine repaints the panel
+only on damage it knows about, which a stray world draw is not. So one frame in which an engine
+drawer runs with the wide rect leaves marks outside the viewport **for the rest of the session**,
+and they accumulate.
+
+That is not hypothetical: it is the bug a 500 v 500 fight with the whole army selected produces at
+zoom < 1 (`scenarios/500v500.json`, the fixture written for it). The drawer that reaches them is
+the engine's own selection rect `0x46A530`, which `markown` hands the WHOLE set back to whenever
+the native pass came up one box short (`ui-markers.md` §1) — and `0x467A50` projects each one at
+the **unzoomed** position, which at 0.42× is up to 1.4 screens from where the unit is drawn. Two
+independent runs of the fixture: **5768 stray green pixels on the panel before, 31 after** (the 31
+is the minimap's own view rect), with five hand-back frames in the "after" run and the engine
+surface under the buttons reading 100 % palette index 0.
+
+**The clamp is NOT gated on the surface probe [2026-09-10].** It only ever narrows, so it needs
+to know nothing about the allocation — and riding it on `IsBadReadPtr` succeeding would make the
+bound conditional on a probe, which is precisely what CLAUDE.md refuses as a safety argument. A
+landing review caught it there: one call with an unreadable `self` would have re-licensed the
+permanent side-panel marks. The allocation clamp above it still rides the probe, because that one
+genuinely needs the surface's width and height.
+
+**Two residuals, named:** `mark.on=nocursor`'s capture window (window B) takes
+`tagpu_vpwide_addressable()` and then intersects with the ctx clip, so the narrower clip costs
+that **debug lever** the ring markers it exists to show — the shipped configuration never opens
+it (G13p). And `0x46A530` indexes `MODEL_PTRS[ModelId]` with no zero test while slot 0 is never
+written by the load loop, so an engine box drawn for a ModelId-0 unit bounds itself on
+uninitialised memory. That is stock TA's own behaviour, not something this stack introduced, and
+restoring it is the correct half of the `owns_unit` fix — but it is worth knowing it is there.
+
+Clamping to the true rect is exactly the bound **stock** TA sets at these three sites — unwidened,
+the rect they are handed IS the true one — so it can never clip anything the engine would otherwise
+have drawn on screen, and at zoom ≥ 1 or with the widening disarmed it is the identity.
 
 The rect it writes is `main+0x37E27..0x37E33` (L, T, R, B) only — **never W/H at `+0x37E37`/`+0x37E3B`**,
 because the eye clamp `0x41C3C0` derives `maxEye = map − W` from them and a negative `maxEye`

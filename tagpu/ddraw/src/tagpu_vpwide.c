@@ -125,7 +125,12 @@ static int clampi(int v, int lo, int hi)
 
 static int  s_installed;        /* the mouse->world redirect went in         */
 static int  s_widenArmed;       /* ...and tagpu_vpwide.on, so the rect widens */
-static int  s_verified;         /* the rect matched what 0x497F40 builds     */
+static volatile int s_verified; /* the rect matched what 0x497F40 builds     */
+/* volatile for the same reason s_wide below is: since the clip guard began
+   calling tagpu_vpwide_true_rect(), this flag is read on the GAME thread
+   three times per DrawGameScreen, and a stale 0 there makes true_rect_of
+   fall back to the FIELD -- which is the widened rect -- turning the
+   viewport clamp into the identity and re-opening the side panel. */
 static int  s_saidUnverified;   /* the diagnostic is one-shot                */
 static int  s_saidRepair;       /* the W/H repair diagnostic is one-shot     */
 /* VOLATILE, and not merely because two threads read it: the ordering the
@@ -163,6 +168,49 @@ static void __thiscall vpw_setclip(void* self, int l, int t, int r, int b)
             if (t < 0) t = 0;
             if (r > w - 1) r = w - 1;
             if (b > h - 1) b = h - 1;
+        }
+    }
+    /* ...and never past the TRUE VIEWPORT, which is a different bound and the
+       one that matters for the picture. The allocation clamp above keeps the
+       write inside the surface; it still leaves the whole side panel and the
+       top and bottom strips fair game, and NOTHING EVER REPAINTS THEM — our
+       key fill covers the true viewport only (that is why it takes its rect
+       from tagpu_vpwide_true_rect and not from the field), and the engine
+       redraws the panel on damage it knows about, which a stray world draw is
+       not. So one frame in which an engine drawer runs with the wide rect
+       leaves marks outside the viewport for the rest of the session: measured
+       2026-09-09 as the stuck selection boxes a 500 v 500 fight with the whole
+       army selected paints over the panel at zoom < 1, permanent and
+       accumulating (the engine's selection rect is the drawer that reaches
+       them: markown hands the whole set back for a frame whenever the native
+       pass came up one box short, and the engine projects each one at the
+       UNZOOMED position, which at 0.42x is up to 1.4 screens away from where
+       the unit is drawn).
+
+       Clamping to the true rect is exactly the bound stock TA sets here —
+       DrawGameScreen feeds these three sites the viewport rect, and unwidened
+       that rect IS the true one — so it can never clip anything the engine
+       would otherwise have drawn on screen. At zoom >= 1 and with the widening
+       disarmed it is the identity. */
+    {
+        const char* ta = *(const char* const*)TA_MAINPP;
+        int tL, tT, tW, tH;
+        tagpu_vpwide_true_rect(ta, &tL, &tT, &tW, &tH);
+        /* NOT GATED ON THE SURFACE PROBE ABOVE, and that is the point. This
+           clamp only ever NARROWS, so it needs to know nothing about the
+           allocation; riding it on `IsBadReadPtr` succeeding would make the
+           bound conditional on a probe, which CLAUDE.md rules out as a safety
+           argument — and a single call with an unreadable `self` would then
+           re-license the permanent side-panel marks this exists to stop.
+           A landing review caught exactly that [2026-09-10]. */
+        if (tW > 0 && tH > 0) {
+            int cl = l < tL ? tL : l, ct = t < tT ? tT : t;
+            int cr = r > tL + tW - 1 ? tL + tW - 1 : r;
+            int cb = b > tT + tH - 1 ? tT + tH - 1 : b;
+            /* a rect that does not meet the viewport at all is not one of
+               these sites' — leave it alone rather than handing the engine an
+               inverted rect */
+            if (cl <= cr && ct <= cb) { l = cl; t = ct; r = cr; b = cb; }
         }
     }
     ((PFN_SETCLIP)VA_SETCLIP)(self, l, t, r, b);

@@ -478,6 +478,7 @@ id.
 
 ```bash
 tools/tacli scenario load     t1 200v200        # launch → menus → live → spawned → camera
+tools/tacli scenario load     t1 500v500        # the big fight: 1000 units, 1920x1080 (UI-damage fixture)
 tools/tacli scenario list                       # what is in scenarios/
 tools/tacli scenario validate 200v200 --instance t1   # schema + this game's catalogue
 tools/tacli scenario expand   200v200 --wire    # the flat list, and the file the fork reads
@@ -740,6 +741,7 @@ healthy game none of them ever does:
 | `unpl=` | *pieces* the pose walk could not place, left at rest inside a unit that is otherwise posed |
 | `nobake=` | units whose type would not bake, which **draw nothing** — the one honest drop. Over 256 pieces or 49152 vertices; stock's worst is 36 and 574 |
 | `q=` | units the gather queued against units the pass drew, printed only when they disagree. A queued unit the draw dropped is a unit missing from the screen |
+| `SELHANDBACK=<n> last=<drawn>/<owed>` | frames the pass came up short on selection rects and `markown` handed the **whole set** back to the engine, which then draws every box at the **unzoomed** projection. Harmless at 1×, a one-frame scatter at any other zoom, and it must not climb steadily: 0 over a four-minute `500v500` run with ~470 units selected at 0.42× [MEASURED 2026-09-09] |
 
 **`posed=` reading lower than the unit count is usually the HIRES pass, not a miss.** A gamedir with
 `hires/<name>.glb` in it draws those units through the replacement-mesh renderer instead, and they
@@ -1241,7 +1243,10 @@ Three things to know when driving zoomed:
   zoom-out reveals beyond it has no address: a click there is **dropped** (the selection is
   left alone rather than being moved to whatever sat at the 1× position). At 0.5× the
   addressable region is then the central half of the frame in each axis. Zoom ≥ 1 has no
-  such limit either way.
+  such limit either way. **A band-box drag is a click and goes the same way**: with
+  `vpwide.off` armed, a drag across the whole viewport at 0.42× selected **0** units where
+  the same drag with vpwide selects ~470 [MEASURED 2026-09-09] — so an A/B that turns
+  vpwide off has to make its selection at 1× first, or it is comparing against an empty one.
 - **In-game dialogs drawn inside the viewport take bent clicks at any zoom ≠ 1.** The
   transform's gate is geometric — inside the world viewport rect or not — so `ARMOPT`,
   `EXITMENU` and `YESORNO`, which the engine draws over the middle of the world, are
@@ -1294,6 +1299,27 @@ storage's does not); `tacli log` returns a tail of the file, so count lines in t
 
 ## Things that will bite you
 
+- **`ErrorLog.txt` is rotated to `.prev` at every launch since 2026-09-10**, so a report in it
+  belongs to the current run. Before that it was appended to forever and `tacli crash` reported
+  the FIRST (oldest) entry with no timestamp — a 20-minute-old fault read as five consecutive
+  fresh crashes on 2026-09-09. It is also per-instance by construction now (TA writes it beside
+  the exe, and `mirror_gamedir` no longer symlinks it through from the template; instances built
+  on or before 2026-09-03 carry a dangling symlink that the launch rotation unlinks). **It lives
+  in the MAIN CHECKOUT** at `tagpu/instances/<inst>/gamedir/`, never under a worktree — a relative
+  path from a worktree deletes nothing, silently.
+- **`mark.on=noselbox` is the forcing lever for anything the engine draws inside the viewport.**
+  It sets `g_selbox = 0`, so `markown` never suppresses the engine's selection rects and the
+  engine draws every one of them, every frame, at the **unzoomed** position. That turns a
+  fraction-of-a-percent artifact into a deterministic one — it is how the cyan-square bug
+  (`gui-renderer.md` §20) went from 15 hits in 3600 frames to 12 of 12. Confirm it took with
+  `tacli log <i> -g 'markown: engine selection'` → `restored`; the `mark: ARMED (… selbox=…)`
+  line is written only when the arm state changes and is stale otherwise. **Remove it afterwards**
+  — a player seeing hundreds of green boxes scattered over the map is this lever, not a bug.
+- **A 1-frame artifact is not findable with `glshot`** (~1 sample/s against 60 fps). Record the
+  window losslessly instead and scan every frame:
+  `ffmpeg -f x11grab -window_id <id> -framerate 60 -c:v libx264rgb -qp 0 out.mkv`. Use
+  `-window_id`, not `:0+x,y` — a screen-region grab captures whatever is on top, which on a shared
+  desktop is usually a browser.
 - **A launch or wait that "timed out" has usually crashed instead.** Check
   `tacli crash <name>` before theorising about loading screens — the commands do it
   for you now, but a hand-rolled poll will not.

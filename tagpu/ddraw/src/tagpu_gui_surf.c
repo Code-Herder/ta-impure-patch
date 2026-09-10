@@ -75,6 +75,7 @@
 #include "tagpu_restoreglsl.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_terr.h"
+#include "tagpu_terrown.h"           /* is the world viewport carrying our key fill right now? */
 #include "tagpu_overlay.h"
 #include "tagpu_pal.h"                    /* the one resolution of the presented palette */
 #include "opengl_utils.h"
@@ -166,6 +167,7 @@ static GLuint s_sprProg, s_cpyProg, s_layProg, s_vao, s_vbo, s_palTex;
 static GLint  s_uSprSize, s_uSprCK, s_uSprRestored;
 static GLint  s_uCpySize, s_uCpyOff, s_uCpyHasCol;
 static GLint  s_uLaySize, s_uLayStrict, s_uLayKey, s_uLayVp, s_uLayCursor, s_uLayColOn;
+static GLint  s_uLayVpKey = -1;         /* the key to REFUSE inside the viewport, or -1 */
 static GLint  s_uLayCursOurs;
 static GLint  s_uLayScale, s_uLaySharpSize, s_uLaySharpOn;
 static TAGPU_GAFATLAS s_atlas;
@@ -430,6 +432,7 @@ static const char* LAY_FS =
     "uniform int uColOn; uniform int uSharpOn;\n"
     "uniform ivec2 uSize; uniform ivec2 uSharpSize; uniform vec2 uScale;\n"
     "uniform int uStrict; uniform int uKey; uniform vec4 uVp; uniform vec4 uCursor;\n"
+    "uniform int uVpKey;\n"
     "uniform int uCursOurs;\n"
     /* ONE TAP OF THE MIRROR, premultiplied by its coverage. rgb is the
        restored colour where this texel has one and the live palette
@@ -440,6 +443,28 @@ static const char* LAY_FS =
     "  p = clamp(p, ivec2(0), uSize - 1);\n"
     "  vec2 g = texelFetch(uTwin, p, 0).rg;\n"
     "  if (g.g <= 0.5) return vec4(0.0);\n"
+    /* THE KEY IS NOT UI, AND INSIDE THE VIEWPORT IT IS ALL WE EVER MIRROR.
+       The publisher hands us a box's bytes verbatim (pub_surface_bytes) and
+       twin_upload stamps coverage 255 on every one of them, key included -- so
+       any engine drawer still running inside the world viewport publishes a
+       rectangle of tagpu_terrown's fill, and without this rule the layer
+       resolves index 254 through the palette and paints BRIGHT CYAN, opaque,
+       over the world composite. [MEASURED 2026-09-09: the engine's selection
+       rect is drawn as four DrawLine 0x4BE950 calls, each recorded as its own
+       axis-aligned BOUNDING BOX, so one rotated rect published four boxes whose
+       union is a ~44 px cyan square with a hole -- 15 frames in 3600 of
+       ordinary play, and 12 of 12 with the engine's rects forced on.]
+       The composite makes the same judgement one layer down (tagpu_native.c
+       CFS, "THE KEY FILL MUST NEVER REACH THE SCREEN"); this is that rule for
+       the layer above it. Coverage 0 is exactly the right answer: it is what
+       "no UI here" already means to every reader of the twin, so the ramp
+       blends it as absence rather than dragging cyan into its neighbours.
+       uVpKey is -1 whenever the viewport is NOT ours (tagpu_terrown_filled),
+       so with the terrain pass off -- where the engine's own art fills the
+       viewport and 254 would be a real colour -- the rule is inert. */
+    "  if (uVpKey >= 0 && int(g.r * 255.0 + 0.5) == uVpKey &&\n"
+    "      float(p.x) >= uVp.x && float(p.x) < uVp.x + uVp.z &&\n"
+    "      float(p.y) >= uVp.y && float(p.y) < uVp.y + uVp.w) return vec4(0.0);\n"
     "  if (uColOn != 0) { vec4 c = texelFetch(uTwinCol, p, 0);\n"
     "    if (c.a > 0.5) return vec4(c.rgb, 1.0); }\n"
     "  return vec4(texture(uPal, vec2((g.r * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); }\n"
@@ -590,6 +615,7 @@ static int init_gl(void)
     s_uLayStrict = glGetUniformLocation(s_layProg, "uStrict");
     s_uLayKey    = glGetUniformLocation(s_layProg, "uKey");
     s_uLayVp     = glGetUniformLocation(s_layProg, "uVp");
+    s_uLayVpKey  = glGetUniformLocation(s_layProg, "uVpKey");
     s_uLayCursor = glGetUniformLocation(s_layProg, "uCursor");
     s_uLayColOn  = glGetUniformLocation(s_layProg, "uColOn");
     s_uLayScale     = glGetUniformLocation(s_layProg, "uScale");
@@ -1655,6 +1681,8 @@ static void draw_layer(const TAGPU_FRAME* f)
     x_glUniform2iv(s_uLaySize, 1, sz);
     glUniform1i(s_uLayStrict, s_strict && f->surface_tex ? 1 : 0);
     glUniform1i(s_uLayKey, key);
+    /* only while the viewport really is our key fill -- see tap() */
+    glUniform1i(s_uLayVpKey, tagpu_terrown_filled() ? key : -1);
     x_glUniform4f(s_uLayVp, (float)L, (float)T, (float)W, (float)H);
     /* THE RECT tagpu_gui_cursor_frame READ, not a second read of the globals:
        the world composite was given that one before the native pass ran, and

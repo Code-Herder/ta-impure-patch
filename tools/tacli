@@ -395,7 +395,14 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
         low = name.lower()
         if name in PRIVATE_FILES or low.startswith("tagpu") or low.startswith("cnc-ddraw-"):
             continue
-        if name in ("Screenshots", "_triggers_off") or low.endswith(".log"):
+        # ErrorLog.txt is TA's crash report. It matches no other rule here — not
+        # private, not tagpu*, and .txt rather than .log — so it used to be
+        # symlinked through whenever the template happened to carry one, which
+        # is how 17 instances built on or before 2026-09-03 came to share a
+        # single file. TA writes it next to the EXE, and the exe is symlinked
+        # into each gamedir, so leaving it out of the mirror is all it takes to
+        # make it per-instance by construction.
+        if name in ("Screenshots", "_triggers_off", "ErrorLog.txt") or low.endswith(".log"):
             continue
         if name == "music" and not sound:
             continue   # Steam MP3 soundtrack: audiere cannot play what is absent
@@ -1120,9 +1127,21 @@ def _launch(args) -> dict:
     if args.mapping is not None:
         reg_add(inst, GAME_REG, "SkirmishMapping", "REG_DWORD", str(args.mapping))
 
-    for stale in ("tagpu.log", "tagpu_gl.ppm"):
+    # ErrorLog.txt rides with these, and it matters more than it looks: TA opens
+    # it OPEN_ALWAYS and APPENDS, and crash_report() takes the FIRST match in the
+    # file, so without this a report from an earlier run — or from another
+    # instance sharing the file — is what `tacli crash` prints, with no timestamp
+    # to give it away. Measured 2026-09-09: a 20-minute-old fault was read as five
+    # consecutive fresh crashes, and cob1's file holds 17 reports whose fields
+    # `tacli crash` stitches into one line from four different faults.
+    for stale in ("tagpu.log", "tagpu_gl.ppm", "ErrorLog.txt"):
         p = inst.gamedir / stale
-        if p.exists():
+        # a legacy instance carries this as a symlink into the TEMPLATE gamedir;
+        # unlink rather than rotate, or the next fault re-creates the shared
+        # target through the dangling link and re-shares it across all of them
+        if p.is_symlink():
+            p.unlink()
+        elif p.exists():
             p.rename(inst.gamedir / f"{stale}.prev")
     # A trigger the previous run never consumed fires the moment this one reaches
     # a game — measured 2026-09-01, when a leftover scenario spawned itself into a
@@ -1581,8 +1600,21 @@ def crash_mtime(inst: "Instance") -> float:
 
 def crash_report(inst: "Instance", since: float):
     """A one-line summary of a crash newer than `since` belonging to THIS
-    instance, or None. The file can be shared between instances (the gamedir
-    symlinks it), so the exe path inside it is what attributes the crash."""
+    instance, or None. The exe path inside the report is what attributes it.
+
+    The file is PER-INSTANCE: TA writes it beside the exe, and the exe is
+    symlinked into each gamedir. (Instances built on or before 2026-09-03 carry
+    a dangling symlink to a shared target, from when mirror_gamedir copied it
+    through; _launch's rotation unlinks that.) Corrected 2026-09-10 -- this
+    said the file "can be shared between instances", which is true only of
+    those legacy instances.
+
+    TWO THINGS THIS DOES NOT DO, and both have misled a session: it parses no
+    TIMESTAMP -- freshness is the caller's `since` against the file's mtime,
+    and nothing in the returned string says how old the report is -- and TA
+    APPENDS, so `re.search` below returns the FIRST report in the file. Since
+    _launch rotates the file to .prev, that is normally this run's only report;
+    a run that faults twice still reports the first."""
     path = inst.gamedir / "ErrorLog.txt"
     try:
         if path.stat().st_mtime <= since:
