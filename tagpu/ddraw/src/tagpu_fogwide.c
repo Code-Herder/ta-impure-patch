@@ -109,6 +109,12 @@ static volatile LONG    s_tick;
 static volatile LONG    s_off;                            /* tagpu_fogwide.off */
 #define FOGW_STALE_MS   500
 
+/* Frames the RENDER thread asked for a wide grid and was refused. The consumer
+   asks only while it is drawing a zoomed-OUT frame, so every refusal is a frame
+   drawn over a grid that does not span it — the outer ring falling back to the
+   engine's own. It must read 0; the heartbeat prints and clears it. */
+static volatile LONG    s_bare;
+
 /* render thread only */
 static int              s_holdValid, s_holdCols, s_holdRows, s_holdOrgX, s_holdOrgY;
 static unsigned         s_holdData;
@@ -495,10 +501,31 @@ void tagpu_fogwide_tick(char* ta, int rebuilt)
        `s_tick` has already advanced by the time any of them is reached, so the
        render thread's liveness rule cannot catch a producer that is still
        ticking but has stopped building — it would go on painting a grid
-       anchored at an eye that has moved on. Nothing to do while the view is
-       1:1 either: the engine's own grid spans it, and leaving it in place keeps
-       the fog at 1x bit for bit what it has always been. */
-    if (s_off || tagpu_zoom_level() >= 1.0f ||
+       anchored at an eye that has moved on.
+
+       THE LIVE ZOOM LEVEL IS NOT ONE OF THEM, and that is the G13s fix. This
+       used to read `|| tagpu_zoom_level() >= 1.0f`, on the reasoning that a 1:1
+       view is spanned by the engine's own grid and nothing needs building. It
+       is spanned — but the level that gate reads is published by the RENDER
+       thread, and the render thread is the one that decides, mid-frame, to draw
+       the first zoomed-out frame of a gesture. On that frame it asked for a
+       wide grid the game thread had had no tick to build, fell back to the
+       engine's, and the ring beyond the 1x viewport came out with NO FOG at all
+       — a full-brightness flash of terrain lasting exactly one frame, at the
+       start of every zoom-out. (Measured 2026-09-10 at the bottom-left corner
+       of Town & Country, unmapped: one bare frame and one rebuild per gesture,
+       `bare=1 rebuilds=1/300`.) A producer that cannot see the future must not
+       be gated on it: build every tick, and let the CONSUMER decide per frame
+       which grid the frame it is drawing needs.
+
+       WHAT THAT COSTS AT 1X, measured rather than feared (1920x1080, Town &
+       Country, edge-scrolling at TA's default ScrollSpeed of 32 world px a
+       scroll tick): the eye covered 2790 px in 3.20 s and the module rebuilt
+       90 times — one per 32-px cell crossing, ~28 a second, at 150-220 us each.
+       That is 4-6 ms of game-thread time per second of SCROLLING and exactly
+       nothing while the camera is still, because the window sits on the grid
+       lattice and only moves when the eye crosses a cell. */
+    if (s_off ||
         !fogw_source(ta, &s) ||
         !fogw_window(ta, &col0, &row0, &cols, &rows) ||
         !fogw_alloc()) {
@@ -558,16 +585,30 @@ void tagpu_fogwide_tick(char* ta, int rebuilt)
 }
 
 /* One line per 300 ticks while a wide grid is live, called at the top of the
-   tick so a run that stops rebuilding still reports. `rebuilds` is out of the
-   ticks in the block — it reads 300/300 while the camera is moving, because
-   every scroll invalidates the engine's grid and ours with it. */
+   tick so a run that stops rebuilding still reports.
+
+   `rebuilds` is out of the ticks in the block, and A TICK IS NOT A FRAME: this
+   runs from the engine's fog-overlay call site inside DrawGameScreen, which the
+   game loop turns over as fast as the scene allows while the presenter caps the
+   flip. Measured 2026-09-10 at 1920x1080, `--maxfps 60`, both presenting 58-60
+   fps: **330 ticks a second** on `crowd-static` (256 units, Two Continents) and
+   **3200-4900** on a sparse Town & Country skirmish. So a block of 300 ticks is
+   anything from a tenth of a second to a second, and a scrolling camera reads
+   2-4 rebuilds in it — not the 300/300 this comment used to claim, which
+   assumed a tick was a frame. Read `rebuilds` as a ratio, never as a rate.
+
+   `bare` is the render thread's, and it is the one to read after a zoom-out:
+   any non-zero value is a frame drawn zoomed over the engine's 1x grid. */
 static void fogw_heartbeat(int cols, int rows)
 {
-    char b[160];
+    char b[192];
+    LONG bare;
     if (++s_hbTicks < 300) return;
-    sprintf(b, "fogwide: %dx%d cells=%d rebuilds=%u/%u build=%.0f/%.0f us (mean/max)",
+    bare = InterlockedExchange(&s_bare, 0);
+    sprintf(b, "fogwide: %dx%d cells=%d rebuilds=%u/%u build=%.0f/%.0f us "
+               "(mean/max) bare=%ld",
             cols, rows, cols * rows, s_hbBuilds, s_hbTicks,
-            s_hbBuilds ? s_hbUs / s_hbBuilds : 0.0, s_hbUsMax);
+            s_hbBuilds ? s_hbUs / s_hbBuilds : 0.0, s_hbUsMax, (long)bare);
     flog(b);
     s_hbTicks = s_hbBuilds = 0; s_hbUs = s_hbUsMax = 0.0;
 }
@@ -602,7 +643,7 @@ int tagpu_fogwide_get(const unsigned short** buf,
     LONG tick;
     DWORD now;
 
-    if (s_off || !s_csInit) return 0;
+    if (s_off || !s_csInit) { InterlockedIncrement(&s_bare); return 0; }
 
     /* Liveness: the game thread bumps s_tick every tick whether or not it
        rebuilds, so a tick that stops advancing means it is no longer running —
@@ -617,7 +658,9 @@ int tagpu_fogwide_get(const unsigned short** buf,
     tick = s_tick;
     now = GetTickCount();
     if (tick != s_seenTick) { s_seenTick = tick; s_seenMs = now; }
-    else if (now - s_seenMs > FOGW_STALE_MS) { s_holdValid = 0; return 0; }
+    else if (now - s_seenMs > FOGW_STALE_MS) {
+        s_holdValid = 0; InterlockedIncrement(&s_bare); return 0;
+    }
 
     EnterCriticalSection(&s_cs);
     if (!s_pubValid) {
@@ -635,7 +678,7 @@ int tagpu_fogwide_get(const unsigned short** buf,
     }
     LeaveCriticalSection(&s_cs);
 
-    if (!s_holdValid || !s_hold) return 0;
+    if (!s_holdValid || !s_hold) { InterlockedIncrement(&s_bare); return 0; }
     *buf = s_hold; *cols = s_holdCols; *rows = s_holdRows;
     *orgX = s_holdOrgX; *orgY = s_holdOrgY;
     return 1;

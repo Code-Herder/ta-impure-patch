@@ -2197,7 +2197,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    neither can the state the wide one is built from. */
                 {
                     const unsigned short* wb; int wc, wr, wox, woy;
-                    if (tagpu_fogwide_get(&wb, &wc, &wr, &wox, &woy)) {
+                    /* Asked for ONLY while this frame is drawn zoomed out. The
+                       engine's grid spans the 1x viewport with a cell or more to
+                       spare on every side (the origin is the eye rounded to a
+                       half cell and the count is viewW/32 + 2, so the last
+                       column starts at least one pixel past the viewport's right
+                       edge — same for the last row), so at zoom >= 1 it covers
+                       the frame by construction and taking the wide grid there
+                       would only put a second lattice in front of a picture that
+                       is right. Below 1 it cannot, and the wide one must be
+                       used: the producer builds it every tick, so the frame that
+                       first eases past 1.0 already has one. */
+                    if (tagpu_zoom_level() < 1.0f &&
+                        tagpu_fogwide_get(&wb, &wc, &wr, &wox, &woy)) {
                         buf = wb; cols = wc; rows = wr; orgX = wox; orgY = woy;
                     }
                 }

@@ -45,7 +45,27 @@
 
    uFog bit0 = fog on, bit1 = this draw HIDES in grey rather than darkening:
    the engine never draws units or effects outside LOS, while terrain,
-   features and wreckage stay visible and are merely shade-remapped. */
+   features and wreckage stay visible and are merely shade-remapped.
+
+   THE CLAMP STOPS ONE CELL SHORT OF THE GRID, and that is a bound, not a
+   margin. A builder fills entry gx from map cells col0+gx and col0+gx+1, so
+   the LAST column of any grid — the engine's and ours alike — never has its
+   RIGHT corners written, and the last row never has its bottom ones (it is
+   why fogw_window asks for two spare columns and the engine's own border
+   completion works on cols-2). Clamping to `uFogDim - 0.001` put every sample
+   past the grid at f.x = 1 in that column, i.e. on the corners nobody wrote:
+   coverage 0, which reads as NO FOG. That is the worst way to fail — a
+   zoomed-out frame the grid does not span came out with the outer ring in
+   full daylight rather than merely smeared. `uFogDim - 1.0` lands such a
+   sample at f = 0 in the last entry instead, on the corners the builder did
+   write, so the region past the grid REPLICATES its edge — the same thing
+   fogw_edge_fill does off the map, and what the engine's own single off-map
+   row already amounts to. It cannot change a picture whose fragments are all
+   inside the grid: the engine's grid is the eye rounded to a half cell plus
+   viewW/32 + 2 columns, so its last column starts at least one pixel past the
+   viewport's right edge at every eye (16 - eye%32 px of slack when the eye
+   sits in the first half of its cell, 48 - eye%32 when it does not), and the
+   wide grid keeps the view a whole margin inside. */
 #define TAGPU_GLSL_FOG_UNIFORMS \
     "uniform sampler2D uFogGrid;\n"   /* RG8 corner masks, r = b0, g = b1  */ \
     "uniform sampler2D uFogLUT;\n"    /* 256x1 palette remap for the grey  */ \
@@ -59,7 +79,8 @@
     "  return mix(mix(tl, tr, f.x), mix(bl, br, f.x), f.y);\n" \
     "}\n" \
     "vec2 taFog(vec2 w){\n" \
-    "  vec2 g = clamp((w - uFogOrg) * (1.0/32.0), vec2(0.0), uFogDim - 0.001);\n" \
+    "  vec2 g = clamp((w - uFogOrg) * (1.0/32.0), vec2(0.0),\n" \
+    "                 max(uFogDim - 1.0, vec2(0.0)));\n" \
     "  vec2 c = floor(g);\n" \
     "  vec2 e = texelFetch(uFogGrid, ivec2(c), 0).rg * 255.0 + 0.5;\n" \
     "  return vec2(taFogCov(int(e.x) & 15, g - c), taFogCov(int(e.y) & 15, g - c));\n" \
