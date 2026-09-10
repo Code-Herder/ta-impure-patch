@@ -80,6 +80,59 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 
 ### Awaiting review
 
+**The health bar wobbled against the unit under it.** Reported from play: *"when moving the
+commander, I can see the health bar wobble around… not sure if that's stock TA or not?"* It is
+not — stock TA cannot show it. Everything anchored to a unit in our build takes the unit pass's
+interpolated sub-pixel anchor (the body, the selection rect, the unit-anchored order markers),
+but `tagpu_mark.c`'s bar and group-digit gather read the engine's integer world shorts
+directly. That pinned the bar to the **sim** rate while the body glided at **present** rate, so
+the two slid apart by up to a whole sim step of motion, multiplied by the zoom on screen.
+Fixed 2026-09-09 by routing the gather through `tagpu_native_unit_pos()` — the body's own
+anchor — for units the unit pass owns, and keeping the engine's own integer arithmetic for the
+ones it does not, so the bar always sits on whoever drew the body. (That second branch was
+added by the landing review: the accessor never reports "no sample", it returns the raw
+fraction, so the integer path had been unreachable and every engine-drawn unit carried a bar up
+to a pixel off its body.) Bar-against-body separation, exact via `tagpu_spxlog.on` on a walking
+commander at 1920x1080: **1.68 px peak-to-peak → 1.00 px at 1x** at TA's normal speed, **2.95 → 1.00** at
+`gamespeed` 20, and `zoom` times that on screen. The old error was proportional to how far a
+unit moves per sim step, so it grew with unit speed and game speed.
+
+**Then the fix itself left a second, larger artifact at high zoom — the same day, from the
+same file.** Reported from play again: *"the health bar goes up by a few pixel and down by a
+few pixel when walking diagonally… extremely visible at max zoom in."* The first fix took the
+body's anchor and **floored** it, on the argument that the selection rect floors the same
+anchor and the two should agree. They did agree — with each other, in the frame's PRE-zoom
+units, which is the wrong grid: the vertex shader scales this pass by `zoom`, so one unit of
+quantisation there is **`zoom` displayed pixels**. At 1x it is at the measurement floor and
+every 1x oracle passed it clean; at 4x the bar stood still and then teleported 4 px, and at
+`ZOOM_MAX` 8. The selection rect never showed it because it does not floor in those units at
+all — `tagpu_native.c` snaps its corners *forward through the zoom*, floors there and comes
+back, and the glyph atlas has done the same since G15. `tagpu_mark.c` now shares that rule as
+`snap_device()`, so the bar, the group digit and the text all step **1/ss of a displayed pixel
+at every zoom**, a bound that does not grow with the zoom. Measured at 4x, bar-vs-body in
+displayed px: shorts **6.56 p2p** → floored **4.00** (exactly `zoom`) → snapped **0.49**.
+
+**The instrument missed it, and that is the lesson.** The 1x legs passed, and at 4x the shipped
+criterion — the bar's alternation against the selection box — moved only 2.79 → 2.27, because
+the box is a rotated outline whose own centroid breathes ~11 px at that zoom. The statistic that
+catches it is **the bar against itself**: a unit walks at constant speed, so a tracking bar has
+a second difference near zero and a bar quantised on a grid of `q` px stands still and then
+teleports `q`. Before: still on **60.9 %** of frames, every step exactly 0 / 4.00 / 8.00 px and
+nothing between, |2nd diff| p99 **4.00 px**. After: still on 2.3 %, a continuous 1.1–3.2 px
+spread, p99 **1.00 px**. Both are now in `tools/barwobble_detect.py`, with
+`scenarios/bar-wobble-4x.json` as a tracked fixture — a defect worth `zoom` pixels needs a leg
+at a zoom. Details and the full table: [gpu-status](gpu-status.html) §2.2.
+
+**The reference setup was running at double game speed.** Found while measuring the above:
+`gamespeed` was **20**, not TA's normal 10. It lives in `user.reg`, which the template prefix
+and all 58 instance prefixes share as **one inode** — the same trap already documented for
+`Gamma` — so one session pressing `+` leaves every later launch of every instance at that
+speed, and a running instance writes its own copy back at exit. Set back to 10 on 2026-09-09.
+It multiplies the tick rate (`main+0x38A47`: 30/s at 10, 60/s at 20) while the picture still
+changes 30 times a second, so the in-game clock (`tick ÷ 30`) was reading **2× real time**.
+Read it before trusting any measurement that is a rate, a duration, or a distance per second:
+[exe-reverse-engineering](exe-reverse-engineering.html) §"The engine's rates".
+
 **G13q — the left mouse button stopped issuing orders.** Reported from play: *"when I have a
 unit selected, right click/left click both issue a move order. I believe that was not the
 original game behavior."* It was not: at `Interface Type = 1` — right-mouse orders, the value

@@ -1,0 +1,57 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Health-bar wobble regression: one SELECTED ARMCOM walking a ~920 wu straight diagonal under a pinned camera, on open ground. The oracle is the health bar (which floors the unit pass's sub-pixel anchor) against the selection box (which floors the same anchor from tagpu_native.c) -- both drawn on top of everything, so no tree can occlude either, and they must move on the SAME frames. shootall off and a far CORE keepalive so nothing fights; noshake on so the camera contributes nothing. Drive it with tools/barwobble.sh.",
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1920x1080",
+    "clear_existing": true,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "walker",
+      "type": "ARMCOM",
+      "owner": 0,
+      "pos": [
+        1958,
+        1296
+      ],
+      "facing": 45
+    },
+    {
+      "id": "keepalive",
+      "type": "CORCOM",
+      "owner": 1,
+      "pos": [
+        4600,
+        2600
+      ],
+      "facing": 0
+    }
+  ],
+  "camera": {
+    "at": [
+      1818,
+      850
+    ],
+    "pin": true
+  }
+}
