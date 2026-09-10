@@ -48,8 +48,16 @@ typedef struct TAGPU_GAFENT {
     unsigned short x, y;        /* its first texel in the atlas (inside the border) */
     float          u0, v0, u1, v1;
     unsigned char  ck;
-    char           ok;
+    char           ok;          /* painted: its texels are in the atlas      */
     char           wrap;        /* tagpu_rglsl_tileable said so at upload    */
+    /* RESERVED BY A REPACK: the rect above is assigned but nothing has been
+       uploaded to it yet, because a repack moves every entry and we do not
+       keep the decoded pixels (only the frame's address and its size). The
+       next atlas_get/atlas_put for this frame paints it in place instead of
+       allocating a new cell. `ok` is 0 for exactly as long as that is true,
+       so tagpu_gaf_atlas_find keeps refusing it -- there is nothing there to
+       sample yet. Cleared when the paint lands. */
+    char           resv;
 } TAGPU_GAFENT;
 
 struct TAGPU_RGLSL_JOB;
@@ -75,6 +83,32 @@ typedef struct TAGPU_GAFATLAS {
        on it drops itself when the UVs move. Starts at 0 and only increases. */
     unsigned      gen;
     const char*   tag;          /* log prefix, e.g. "fx" / "feat"            */
+    /* THE REPACK (features.md 5, "the atlas is half empty"). Set by an atlas
+       whose contents are worth keeping -- one whose frames stay useful for
+       as long as the atlas lives, which is the feature atlas: it fills once
+       per map and every frame in it is a feature that is still on the map.
+       With it, filling up re-lays what is already here TALLEST CELL FIRST
+       instead of dropping it, and each entry re-uploads on its next get.
+       Insertion order is what wastes the page -- a 320-tall tree opens a
+       shelf that a row of 12-tall rocks then sits in -- so sorting is worth
+       more than any cleverer packer: measured on Town & Country's 229
+       feature frames, arrival order places 197 and spans 86% of a 2048
+       square, tallest-first places all 229 and spans 58%. A skyline packer
+       gets that to 53% and is four times the code, which buys nothing while
+       the page is not the binding constraint.
+       Leave it 0 for an atlas that churns -- the effects atlas frees and
+       re-allocates sequences, so pinning its entries would pin dead ones. */
+    int           repack;
+    int           repackN;      /* entries the last repack placed            */
+    /* THE WALL. Latched when a repack cannot do better than the last one:
+       either the tallest-first layout itself did not hold every entry, or
+       the atlas filled again at the same entry count. Past it a repack is
+       futile by construction (same entries, same sort, same layout), so the
+       atlas HOLDS what it has rather than dropping it for a rebuild that
+       would place fewer -- and the log says a second page is the only thing
+       left that adds room. See tagpu_gaf.c atlas_repack for what that costs. */
+    int           repackWall;
+    unsigned      repacks;      /* how many have run, for the pass's log line */
     /* The cell layout (renderers.md 2.5, the unit atlas): every frame is
        uploaded with `pad` replicated edge texels on all four sides and its
        cell -- frame plus border -- is allocated at a multiple of `align`
@@ -142,7 +176,11 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_put(TAGPU_GAFATLAS* a, const void* frame, co
                                         int w, int h, unsigned char ck, const unsigned char* pixels);
 const TAGPU_GAFENT* tagpu_gaf_atlas_find(const TAGPU_GAFATLAS* a, const void* frame, const void* pix,
                                          int w, int h);
-void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a);      /* recycle when full     */
+/* Recycle a full atlas. With `repack` set this RE-LAYS the entries it holds
+   tallest-first and keeps them (reserved, re-uploading on demand); without
+   it -- and always for a restart that is not "full", such as the UI atlas's
+   re-arm -- it drops them and they re-decode in arrival order as before. */
+void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a);
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a);       /* GL context replaced   */
 /* create the GL texture now rather than on the first frame that atlases a
    sprite — a pass whose shader samples the atlas must never bind texture 0 */

@@ -414,6 +414,15 @@ static void init_gl(void)
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "feat";
     s_atlas.prio = 1;                        /* restored after the terrain, before effects */
+    /* Every frame in here is a feature standing on the map, so nothing in it
+       ever stops being wanted: when it fills, re-lay it tallest-first and
+       keep it rather than drop it (tagpu_gaf.h `repack`). Before this the
+       atlas hit `full` at 48% occupancy and was rebuilt from nothing on the
+       next frame -- and on the frame after that, for as long as the view
+       stayed wide enough to want more frames than arrival order could pack:
+       37,140 rebuilds in one 4K session, each of them re-decoding ~200 GAF
+       frames and clearing the Classic++ restore queue before it could land. */
+    s_atlas.repack = 1;
     tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
     s_state = 1;
     flog("feat: GL ready");
@@ -811,6 +820,10 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
             sappend(b, sizeof b, &p, " defs=%d", nDefs);
             sappend(b, sizeof b, &p, " anim=%d los-skip=%d junk=%d -> body=%d shadow=%d atlas=%d",
                     s_c.animated, s_c.losSkip, s_c.junk, s_cBody, s_cShadow, s_atlas.n);
+            /* repacks should settle at a small number and stop; `wall` means
+               the map wants more than one 2048 page holds (tagpu_gaf.h) */
+            sappend(b, sizeof b, &p, " repack=%u%s", s_atlas.repacks,
+                    s_atlas.repackWall ? " WALL" : "");
             if (s_cOverflow || s_cAtlasFail)
                 sappend(b, sizeof b, &p, " DROPPED(full=%d atlas-fail=%d)",
                         s_cOverflow, s_cAtlasFail);

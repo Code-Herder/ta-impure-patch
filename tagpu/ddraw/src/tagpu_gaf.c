@@ -91,6 +91,25 @@ static void twin_mips(TAGPU_GAFATLAS* a)
     a->mippedN = tagpu_rglsl_job_painted(a->job);
 }
 
+/* ORDER IS THE WHOLE FIX. A shelf packer wastes the difference between the
+   cell that opened a shelf and every shorter cell that then sat on it, and
+   the feature atlas is fed in map order -- a 320-tall tree, then a row of
+   12-tall rocks under it. Fed tallest-first the same 229 frames span 58% of
+   a 2048 square instead of 86%, which is the difference between fitting and
+   latching `full`. This is a COUNTING SORT over the cell height: the bins
+   below cover every height atlas_get and atlas_put admit (h <= DECMAX, plus
+   two borders of at most PADMAX, rounded up to at most PADMAX of alignment),
+   and s_ordNext threads the entries sharing a bin. No comparator, no qsort
+   context, no allocation -- a repack runs on the render thread inside a
+   frame. Render thread only, one atlas at a time: only tagpu_gaf_atlas_reset
+   reaches it, and it never re-enters. */
+#define ORD_MAX   4096          /* >= every atlas's `max` (feat and gui: 4096) */
+#define ORD_HBINS (TAGPU_GAF_DECMAX + 4 * TAGPU_GAF_PADMAX + 1)
+static int s_ordNext[ORD_MAX];
+static int s_ordHead[ORD_HBINS];
+
+static int atlas_repack(TAGPU_GAFATLAS* a);
+
 const unsigned char* tagpu_gaf_frame_sane(const void* g0)
 {
     const unsigned char* g = (const unsigned char*)g0;
@@ -186,6 +205,15 @@ void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a)
 {
     char b[128];
     int wasFull = a->full;
+    /* PART 2: re-lay what is here instead of throwing it away. Only for an
+       atlas that asked (`repack`), only when it actually filled -- a restart
+       that is not "full" is the UI atlas re-arming or a context change, and
+       both want the entries gone -- and only while a re-lay can still gain
+       something. atlas_repack owns the log line and leaves the atlas usable. */
+    if (wasFull && a->repack) {
+        if (a->repackWall) return;      /* held: nothing a rebuild can improve */
+        if (atlas_repack(a)) return;
+    }
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     a->gen++;                   /* every UV in the atlas has just moved */
     memset(a->hash, 0, sizeof a->hash);
@@ -207,6 +235,9 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     /* the twin and the job died with the context (tagpu_rglsl_glreset has
        already forgotten the job: it runs first); re-armed on the next frame */
     a->rgb = 0; a->job = NULL; a->restoreFailed = 0; a->mippedN = 0;
+    /* the entries went with the texture, so the wall the last fill hit says
+       nothing about the next one */
+    a->repackN = 0; a->repackWall = 0;
 }
 
 /* one frame onto the restore queue: the R8 atlas is the source, the twin the
@@ -393,76 +424,185 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
     return 1;
 }
 
-/* the insertion shared by atlas_get (which decodes into s_dec first) and
-   atlas_put (which is handed the bytes): `pixels` holds w*h indices */
-static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const void* pix,
-                                        int w, int h, unsigned char ck, const unsigned char* pixels)
+/* THE REPACK. Re-lay every entry the atlas holds, tallest cell first, and
+   leave each one RESERVED: the rect is assigned, nothing is uploaded, and
+   the next atlas_get for that frame paints it in place (atlas_insert's probe
+   below). We cannot move the texels ourselves -- an entry records the
+   frame's address and its size, never the decoded bytes, and GL 3.3 core has
+   no glCopyImageSubData to shuffle them with -- so the pixels come back the
+   way they arrived the first time, by RLE decode on demand. That is the same
+   work one of today's recycles does, done ONCE when the page fills instead
+   of once per frame for as long as it stays full.
+
+   It reads `w` and `h` out of an entry and nothing else: both were bounded to
+   1..TAGPU_GAF_DECMAX by atlas_get/atlas_put before the entry existed, so the
+   geometry below cannot address outside the atlas whatever the entry's `frame`
+   pointer has since become. No pointer stored in an entry is dereferenced
+   here. (A frame freed by the engine and re-allocated at the same address
+   with the same `pix` and the same size would draw its old art -- that is the
+   pre-existing hazard the (frame, pix, w, h) key already carries, and this
+   widens the window it lives in: the feature atlas is meant to last as long
+   as the map, but nothing tells it when the map changes. features.md 5.)
+
+   Returns 1 when the atlas was re-laid (the caller must not go on to drop
+   it), 0 when it was left exactly as it was found. */
+static int atlas_repack(TAGPU_GAFATLAS* a)
 {
-    int x, y, slot, i;
-    TAGPU_GAFENT* e;
-    for (slot = (int)gaf_hash(g); a->hash[slot]; slot = (slot + 1) & (TAGPU_GAF_HASH - 1)) {
-        TAGPU_GAFENT* c = &a->ents[a->hash[slot] - 1];
-        if (c->frame == g && c->pix == pix && c->w == w && c->h == h)
-            return c->ok ? c : NULL;
+    const int p = a->pad;
+    const int before = a->n;
+    char b[192];
+    int i, hb, x = 0, y = 0, sh = 0, kept = 0, w;
+
+    if (before <= 0 || before > ORD_MAX || !a->tex || !a->ents) return 0;
+
+    for (i = 0; i < ORD_HBINS; i++) s_ordHead[i] = -1;
+    for (i = 0; i < before; i++) {
+        const int ch = cell_up(a, (int)a->ents[i].h + 2 * p);
+        if (ch < 1 || ch >= ORD_HBINS) return 0;   /* h was bounded; belt and braces */
+        s_ordNext[i] = s_ordHead[ch];
+        s_ordHead[ch] = i;
     }
-    /* every frame carries its OWN border of `pad` texels, so the shelf
-       advances by the whole cell (w+2p / h+2p, rounded up to the alignment)
-       rather than sharing one gutter between two neighbours */
-    {
-        const int p = a->pad, cw = cell_up(a, w + 2 * p), ch = cell_up(a, h + 2 * p);
-        if (a->full || ch > a->dim) return NULL;
-        if (a->n >= a->max) { a->full = 1; return NULL; }
-        if (a->shelfX + cw > a->dim) { a->shelfY += a->shelfH; a->shelfX = 0; a->shelfH = 0; }
-        if (a->shelfY + ch > a->dim) { a->full = 1; return NULL; }
-        e = &a->ents[a->n];
-        e->frame = g; e->pix = pix;
-        e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0;
-        a->hash[slot] = ++a->n;
-        x = a->shelfX + p; y = a->shelfY + p;          /* inside the border */
-        a->shelfX += cw;
-        if (ch > a->shelfH) a->shelfH = ch;
-        glBindTexture(GL_TEXTURE_2D, a->tex);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        /* Re-emit the frame with its outermost row and column repeated all
-           round, `pad` deep. The border is what any sampler that reaches past
-           the frame must land on: under GL_NEAREST that is the fragment whose
-           centre falls exactly on the quad's far edge (its u interpolates to
-           exactly u1, and floor(u1*dim) is one texel past the frame) — left
-           unwritten that texel is whatever glTexImage2D(NULL) leaves, i.e.
-           index 0, a real palette entry (black) rather than the frame's colour
-           key, which is the black hairline down the right of every tree at
-           zoom 0.25. Under a filtered sampler it is every edge fragment, which
-           is why the border is on all four sides and not just the two the
-           shelf packer used to leave spare; under a mipmapped one it is the
-           whole 4-texel ring (tagpu_gaf.h `pad`). The cell's slack past the
-           border, where the alignment rounds up (0..align-1 texels on the
-           right and bottom), is filled with the same edge: at level 2 the
-           far-edge sample of a frame whose width is 3 mod 4 takes a quarter
-           of its weight from the level-2 texel that covers the slack, so
-           unwritten slack would darken that column by a sixteenth. The whole
-           cell is uploaded, and restore_enqueue has the OUT pass paint the
-           twin's slack the same way. */
-        {
-            const int pw = cw, pr = cw - p - w, pb = ch - p - h;   /* right/bottom: p + slack */
-            int k;
-            for (i = 0; i < h; i++) {
-                unsigned char* row = s_pad + (size_t)(i + p) * pw + p;
-                memcpy(row, pixels + (size_t)i * w, (size_t)w);
-                for (k = 1; k <= p; k++) row[-k] = row[0];
-                for (k = 0; k < pr; k++) row[w + k] = row[w - 1];
-            }
-            for (k = 1; k <= p; k++)
-                memcpy(s_pad + (size_t)(p - k) * pw, s_pad + (size_t)p * pw, (size_t)pw);
-            for (k = 0; k < pb; k++)
-                memcpy(s_pad + (size_t)(p + h + k) * pw, s_pad + (size_t)(p + h - 1) * pw, (size_t)pw);
-            glTexSubImage2D(GL_TEXTURE_2D, 0, x - p, y - p, cw, ch,
-                            GL_RED, GL_UNSIGNED_BYTE, s_pad);
+
+    /* Pass 1 -- the shelf geometry of atlas_insert, fed tallest bin first.
+       Because the tallest cell on a shelf is always the one that opened it,
+       `sh` is set once per shelf and never grown under a later cell, which is
+       exactly the waste arrival order pays. The new rect goes straight into
+       the entry: its old one stops meaning anything either way. */
+    for (hb = ORD_HBINS - 1; hb >= 1; hb--) {
+        for (i = s_ordHead[hb]; i >= 0; i = s_ordNext[i]) {
+            TAGPU_GAFENT* e = &a->ents[i];
+            const int cw = cell_up(a, (int)e->w + 2 * p);
+            e->resv = 0;
+            if (cw > a->dim || hb > a->dim) continue;
+            if (x + cw > a->dim) { y += sh; x = 0; sh = 0; }
+            if (y + hb > a->dim) continue;      /* shorter bins may still fit */
+            e->x = (unsigned short)(x + p);
+            e->y = (unsigned short)(y + p);
+            e->resv = 1;
+            x += cw;
+            if (hb > sh) sh = hb;
+            kept++;
         }
-        glBindTexture(GL_TEXTURE_2D, 0);
     }
+
+    /* An empty atlas that is also `full` could never take another frame, and
+       the tallest-first layout has to be at least as good as the arrival
+       order that got these entries in, so this cannot happen -- but the
+       state it would leave is unrecoverable, so hand the caller back to the
+       plain recycle rather than commit it. The rects written above belong to
+       entries the recycle is about to make unreachable. */
+    if (kept <= 0) return 0;
+
+    /* Pass 2 -- compact the survivors down so `ents` stays dense (`n` is
+       where atlas_insert puts the next one) and rebuild the hash over their
+       new indices. `w <= i` throughout, so the copy never runs ahead of the
+       read. */
+    memset(a->hash, 0, sizeof a->hash);
+    for (i = 0, w = 0; i < before; i++) {
+        TAGPU_GAFENT* src = &a->ents[i];
+        TAGPU_GAFENT* dst;
+        int slot;
+        if (!src->resv) continue;
+        dst = &a->ents[w];
+        if (dst != src) *dst = *src;
+        dst->u0 = (float)dst->x / (float)a->dim;
+        dst->v0 = (float)dst->y / (float)a->dim;
+        dst->u1 = (float)(dst->x + dst->w) / (float)a->dim;
+        dst->v1 = (float)(dst->y + dst->h) / (float)a->dim;
+        dst->ok = 0;                    /* reserved until its next get paints it */
+        for (slot = (int)gaf_hash(dst->frame); a->hash[slot];
+             slot = (slot + 1) & (TAGPU_GAF_HASH - 1)) { }
+        a->hash[slot] = ++w;
+    }
+    a->n = w;
+    a->shelfX = x; a->shelfY = y; a->shelfH = sh;
+    a->full = 0;
+    a->gen++;                           /* every UV in the atlas has just moved */
+    a->repacks++;
+    /* the twin's rects moved with them: back to unpainted (job_clear clears
+       level 0), and whatever was queued is dropped -- it re-queues as each
+       reserved entry is painted. Unlike the recycle this happens once, which
+       is what lets the twin converge at all while zoomed out. */
+    if (a->job) { tagpu_rglsl_job_clear(a->job); twin_mips(a); }
+
+    /* PART 3, the branch that says a second page is the only thing left. A
+       repack is futile by construction once it cannot beat the last one:
+       same entries, same sort, same layout. Hold what we have rather than
+       drop it for a rebuild that would place fewer. */
+    if (kept < before || kept <= a->repackN) {
+        a->repackWall = 1;
+        a->full = 1;
+        _snprintf(b, sizeof b,
+                  "%s: atlas repack wall — %d of %d frames fit one %d square tallest-first"
+                  " (%d%% spanned); holding this layout, only a second page adds room",
+                  a->tag ? a->tag : "gaf", kept, before, a->dim,
+                  a->dim ? (y + sh) * 100 / a->dim : 0);
+    } else {
+        _snprintf(b, sizeof b,
+                  "%s: atlas repacked — %d frames re-laid tallest-first, %d%% of the %d square,"
+                  " generation %u (repack %u)",
+                  a->tag ? a->tag : "gaf", kept, a->dim ? (y + sh) * 100 / a->dim : 0,
+                  a->dim, a->gen, a->repacks);
+    }
+    a->repackN = kept;
+    glog(b);
+    return 1;
+}
+
+/* Upload one entry's texels into the rect it has already been assigned, and
+   finish it: the replicated border, the UVs, the tileability verdict and the
+   restore queue. Shared by a first insertion and by the paint of an entry a
+   repack reserved -- which is why it takes the rect from the entry rather
+   than from the shelf cursor. */
+static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
+                        const unsigned char* pixels)
+{
+    const int p = a->pad, w = e->w, h = e->h;
+    const int cw = cell_up(a, w + 2 * p), ch = cell_up(a, h + 2 * p);
+    const int x = e->x, y = e->y;
+    int i;
+
+    glBindTexture(GL_TEXTURE_2D, a->tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    /* Re-emit the frame with its outermost row and column repeated all
+       round, `pad` deep. The border is what any sampler that reaches past
+       the frame must land on: under GL_NEAREST that is the fragment whose
+       centre falls exactly on the quad's far edge (its u interpolates to
+       exactly u1, and floor(u1*dim) is one texel past the frame) — left
+       unwritten that texel is whatever glTexImage2D(NULL) leaves, i.e.
+       index 0, a real palette entry (black) rather than the frame's colour
+       key, which is the black hairline down the right of every tree at
+       zoom 0.25. Under a filtered sampler it is every edge fragment, which
+       is why the border is on all four sides and not just the two the
+       shelf packer used to leave spare; under a mipmapped one it is the
+       whole 4-texel ring (tagpu_gaf.h `pad`). The cell's slack past the
+       border, where the alignment rounds up (0..align-1 texels on the
+       right and bottom), is filled with the same edge: at level 2 the
+       far-edge sample of a frame whose width is 3 mod 4 takes a quarter
+       of its weight from the level-2 texel that covers the slack, so
+       unwritten slack would darken that column by a sixteenth. The whole
+       cell is uploaded, and restore_enqueue has the OUT pass paint the
+       twin's slack the same way. */
+    {
+        const int pw = cw, pr = cw - p - w, pb = ch - p - h;   /* right/bottom: p + slack */
+        int k;
+        for (i = 0; i < h; i++) {
+            unsigned char* row = s_pad + (size_t)(i + p) * pw + p;
+            memcpy(row, pixels + (size_t)i * w, (size_t)w);
+            for (k = 1; k <= p; k++) row[-k] = row[0];
+            for (k = 0; k < pr; k++) row[w + k] = row[w - 1];
+        }
+        for (k = 1; k <= p; k++)
+            memcpy(s_pad + (size_t)(p - k) * pw, s_pad + (size_t)p * pw, (size_t)pw);
+        for (k = 0; k < pb; k++)
+            memcpy(s_pad + (size_t)(p + h + k) * pw, s_pad + (size_t)(p + h - 1) * pw, (size_t)pw);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, x - p, y - p, cw, ch,
+                        GL_RED, GL_UNSIGNED_BYTE, s_pad);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+
     e->u0 = (float)x / (float)a->dim;         e->v0 = (float)y / (float)a->dim;
     e->u1 = (float)(x + w) / (float)a->dim;   e->v1 = (float)(y + h) / (float)a->dim;
-    e->x = (unsigned short)x; e->y = (unsigned short)y;
     e->ck = ck;
     /* decided here, while the pixels are still at hand: the tileability the
        restorer wrap-pads by (a key on an edge says no) */
@@ -475,8 +615,46 @@ static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const 
         const unsigned char* art = tagpu_pal_engine();
         e->wrap = art ? (char)tagpu_rglsl_tileable(pixels, w, h, art, e->ck) : 0;
     }
-    e->ok = 1;
+    e->ok = 1; e->resv = 0;
     if (a->job) restore_enqueue(a, e);
+}
+
+/* the insertion shared by atlas_get (which decodes into s_dec first) and
+   atlas_put (which is handed the bytes): `pixels` holds w*h indices */
+static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const void* pix,
+                                        int w, int h, unsigned char ck, const unsigned char* pixels)
+{
+    int slot;
+    TAGPU_GAFENT* e;
+    for (slot = (int)gaf_hash(g); a->hash[slot]; slot = (slot + 1) & (TAGPU_GAF_HASH - 1)) {
+        TAGPU_GAFENT* c = &a->ents[a->hash[slot] - 1];
+        if (c->frame == g && c->pix == pix && c->w == w && c->h == h) {
+            if (c->ok) return c;
+            /* a repack reserved this rect and the caller is holding exactly
+               the pixels it wants: paint it where it already sits */
+            if (c->resv) { atlas_paint(a, c, ck, pixels); return c; }
+            return NULL;
+        }
+    }
+    /* every frame carries its OWN border of `pad` texels, so the shelf
+       advances by the whole cell (w+2p / h+2p, rounded up to the alignment)
+       rather than sharing one gutter between two neighbours */
+    {
+        const int p = a->pad, cw = cell_up(a, w + 2 * p), ch = cell_up(a, h + 2 * p);
+        if (a->full || ch > a->dim) return NULL;
+        if (a->n >= a->max) { a->full = 1; return NULL; }
+        if (a->shelfX + cw > a->dim) { a->shelfY += a->shelfH; a->shelfX = 0; a->shelfH = 0; }
+        if (a->shelfY + ch > a->dim) { a->full = 1; return NULL; }
+        e = &a->ents[a->n];
+        e->frame = g; e->pix = pix;
+        e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0; e->resv = 0;
+        e->x = (unsigned short)(a->shelfX + p);       /* inside the border */
+        e->y = (unsigned short)(a->shelfY + p);
+        a->hash[slot] = ++a->n;
+        a->shelfX += cw;
+        if (ch > a->shelfH) a->shelfH = ch;
+    }
+    atlas_paint(a, e, ck, pixels);
     return e;
 }
 

@@ -1650,6 +1650,29 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 ### 3.2 Smaller, known, and cheap to close
 
+- **The feature atlas filled at 48 % occupancy and then rebuilt itself every frame — closed
+  2026-09-10 by sorting, not by growing.** `[MEASURED 2026-09-10]` at 3840×2160 / 0.25× on Town
+  & Country the pass reported `atlas=204 DROPPED(atlas-fail=455)`, a different 3.7 % of the
+  feature quads missing each frame, and the atlas latched `full` at **48 %** of its 2048 square.
+  The shelf packer is fed in map order, so a 320-tall tree opened a shelf that a row of 12-tall
+  rocks then sat in: 197 of the map's 229 feature frames placed, 86 % of the page consumed, 52 %
+  of that air. `tagpu_feat_gather` then reset the atlas whole on the next frame, restoring the
+  same order into the same geometry — **37,140 resets in one 4K session**, each re-decoding ~200
+  frames from RLE, re-uploading them to build a byte-identical layout, and clearing the
+  Classic++ restore queue (`tagpu_rglsl_job_clear`, which clears the twin), so the feature twin
+  could never converge while zoomed out. `tagpu_gaf.c`'s `atlas_repack` now re-lays the entries
+  **tallest cell first** — the reset was always the one moment the packer had perfect
+  information, and `atlas_reset` never cleared `ents` — and *reserves* the rects rather than
+  filling them, because we keep no decoded pixels and GL 3.3 core has no `glCopyImageSubData`;
+  each frame re-decodes into its new rect on its next `atlas_get`. Re-measured on the same
+  scenario, resolution and zoom: **`atlas=234`, no `DROPPED` line at all, 0 resets, 1 repack**
+  (`205 frames re-laid tallest-first, 50% of the 2048 square, generation 4`), every other field
+  on the pass's line unchanged. Confirmed visually at 4K on the reference setup's real GL.
+  `repackWall` latches when a repack cannot beat its predecessor and the atlas then *holds* its
+  layout, naming a second page as the only thing left that adds room — nothing has reached it
+  (42 % of the page is still untouched after the repack, and of the four atlases only this one
+  has ever filled). See [features](features.html) §5 for the branch, the multipage cost, and
+  the residual it leaves.
 - **A crash in the Classic++ shadow pass, fixed 2026-09-09 — and the fix is a BOUND, not a
   probe.** `[MEASURED 2026-09-08]` a 400-unit game under the play defaults faulted at
   `fild [ebx+0x10]` inside `tagpu_native.c`'s `aabb_walk`, `EBX = 0x3D1E4B1E`, seven levels into

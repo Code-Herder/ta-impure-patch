@@ -155,12 +155,52 @@ resolution that reported it. The merge reconciles them (gate 16384, no span clam
 once — fogwide publishes a pointer into `s_pub` to the render thread, so a buffer grown under a
 zoom change would be a use-after-free.
 
+**The GAF sprite atlas was the next thing a full-map view outgrew — and the packer, not the
+page, was the problem.** At 3840×2160 / 0.25× on Town & Country the feature atlas reported
+`atlas-fail=455`, a different 3.7 % of the feature quads missing each frame. It looked like a
+capacity question. It was not: the map's 123 feature types resolve to **229 GAF frames** whose
+cells total **48 % of one 2048 square**. The shelf packer placed only 197 of them, because it
+is fed in map order and a 320-tall tree opens a shelf that a row of 12-tall rocks then sits in
+— 86 % of the page consumed, 52 % of that air. Then the atlas latched `full` and
+`tagpu_feat_gather` reset it whole on the next frame, which restored the *same* order into the
+*same* geometry and filled again immediately: **37,140 resets in one 4K session** (generation
+37,143 over ~48,600 frames), each re-decoding ~200 frames from RLE, re-uploading them to
+produce a byte-identical layout, and clearing the Classic++ restore queue — so the feature
+twin could never converge while zoomed out.
+
+Closed 2026-09-10 by **repacking instead of resetting**. A reset is the one moment the packer
+has perfect information: it has just observed the exact working set, and `atlas_reset` never
+cleared `ents`. `tagpu_gaf.c`'s `atlas_repack` re-lays the surviving entries **tallest cell
+first** (a counting sort over the cell height — no comparator, no allocation, it runs inside a
+frame) and *reserves* the rects rather than filling them: we keep no decoded pixels and GL 3.3
+core has no `glCopyImageSubData`, so each frame re-decodes into its new rect on its next
+`atlas_get`. That is the work one old reset did, done once. MEASURED on the same scenario,
+resolution and zoom, only the DLL differing: `atlas=204 DROPPED(atlas-fail=455)` → **`atlas=234`
+with no DROPPED line at all**, `feat: atlas reset` **37,140 → 0**, and exactly **one** repack for
+the session (`205 frames re-laid tallest-first, 50% of the 2048 square, generation 4`). Every
+other field on the pass's line — anchors, flat/tall, body, shadow — is unchanged, so the gather
+is identical and only the atlas's behaviour moved. Sorting is worth more than a cleverer packer
+here: a skyline bottom-left packer gets the span to 53 % against tallest-first's 58 %, four
+times the code for room the page does not need.
+
+**What a second page would cost, and why there isn't one.** `repackWall` latches when a repack
+cannot beat its predecessor, and past it the atlas *holds* its layout instead of dropping it —
+the log then names a second page as the only thing left that adds room. Nothing has reached it:
+of the four 2048-square atlases only the feature one has ever filled (`fx` 168 entries and no
+resets, `unit` none, `gui` two re-arms), its high-water mark is 231 entries against a 4096-entry
+`max`, and after the repack **42 % of the page is untouched**. A map would need roughly four
+times Town & Country's feature variety to be tight. That is worth knowing because multipage is
+not a local change: a sprite's UV is `(u, v)` into one bound texture, so it means either
+`sampler2DArray` plus a layer index in every consumer's vertex format (`tagpu_feat.c`'s two
+buckets, `tagpu_fx.c`, and `tagpu_posebake.c`, which *bakes* UVs into a stream keyed on
+`atlasGen`) with `glTexStorage3D` fixing the layer count at creation, or a draw per page with
+the page as a third sort key — and each page carries its own Classic++ twin, 4.2 MB of `GL_R8`
+plus 16.8 MB of RGBA8 and a second restorer job in the same queue. [Features](features.html) §5
+carries the branch and the residual it leaves (a recycled frame address with an identical pixel
+pointer and size can draw old art; the per-frame reset used to scrub that by accident).
+
 **What this did not close.** Past about **7680×4320** the wide fog window clamps again, centred,
-and the outer ring returns to the border-cell smear. And the **GAF sprite atlas** is the next
-thing a full-map view outgrows: a fixed 2048 square that resets whole when it fills, which at
-3840×2160 / 0.25× on Town & Country reports `atlas-fail=455` — 3.7 % of the feature quads, a
-different 3.7 % each frame. That is a capacity and eviction question rather than another fixed
-budget, and nothing here addresses it. The feature pass's `MAXBV_BODY` (5461
+and the outer ring returns to the border-cell smear. The feature pass's `MAXBV_BODY` (5461
 quads) and the unit pass's `MAXU`/`MAXNV` are unchanged and are now the first budgets a very
 wide view will meet. And the **frame cost of a full 4K zoom-out was not measured on real
 hardware**: the reference setup's GL is only reachable through the live desktop, and the
