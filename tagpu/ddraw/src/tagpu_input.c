@@ -339,6 +339,11 @@ static void do_keys(HWND hwnd)
     ilog(lg);
 }
 
+/* eye hold: polled every 15 frames with the other tokens (a GetFileAttributes
+   probe first, because the absent case is the common one and an open-fail per
+   frame is not free) */
+static int s_eyeHold = 0;
+
 static void do_eye(void)
 {
     char buf[64]; DWORD n = 0;
@@ -385,18 +390,41 @@ static void do_eye(void)
     }
     if (x < loX) x = loX; else if (x > hiX) x = hiX;
     if (y < loY) y = loY; else if (y > hiY) y = hiY;
-    *(volatile int*)(ta + OFF_EYEX) = x;
-    *(volatile int*)(ta + OFF_EYEY) = y;
-    *(volatile int*)(ta + OFF_SCRTX) = x;
-    *(volatile int*)(ta + OFF_SCRTY) = y;
+    /* ONLY WHEN IT ACTUALLY MOVES, and that guard is what makes the
+       invalidation below affordable. A hold normally asserts the eye the
+       camera already has — `pin` reports the eye precisely so it can — so this
+       is a no-op on almost every frame, and running the fog rebuild on every
+       frame of every held-camera capture would be a real cost on exactly the
+       path the fixtures use. */
+    {
+        volatile int* eye = (volatile int*)(ta + OFF_EYEX);
+        volatile int* scr = (volatile int*)(ta + OFF_SCRTX);
+        int moved = (eye[0] != x || eye[1] != y);
+
+        if (!moved && scr[0] == x && scr[1] == y) return;
+        eye[0] = x; eye[1] = y;
+        scr[0] = x; scr[1] = y;
+        /* A DIRECT EYE WRITER OWES THE ENGINE THE SAME TWO THINGS ITS OWN
+           WRITERS DO (exe-reverse-engineering.md: eleven sites, each one
+           immediately before its 0x41C3C0 call): the minimap's view box
+           recomputed, and a fog grid that spans where the camera now is. The
+           screen fog grid is view-anchored and rebuilt lazily, so a hold that
+           MOVED the camera and said nothing would leave the fog built for
+           where it used to be until the engine next moved the camera itself. */
+        if (moved) tagpu_zoom_eye_moved();
+    }
 }
+
+/* 1 while tagpu_eye.txt is holding the camera. tagpu_zoom asks before stepping
+   the eye for the cursor anchor: a hold means the camera does not move, and
+   two writers asserting different positions on alternate frames is a judder
+   plus the "eye: WAR" line above. Reads the flag this module already polls
+   every 15 frames, so it costs no extra file system call. */
+int tagpu_input_eye_held(void) { return s_eyeHold; }
 
 void tagpu_input_frame(const TAGPU_FRAME* f)
 {
     static unsigned last = 0;
-    /* eye hold: every frame (cheap open-fail when absent is the common path
-       is wrong way round — probe with GetFileAttributes first) */
-    static int eyeHold = 0;
 
     /* every frame: held modifiers must be released on time, not on the next
        15-frame token poll */
@@ -406,7 +434,7 @@ void tagpu_input_frame(const TAGPU_FRAME* f)
         last = f->frame_counter;
         s_frame = f;
         if (f->hwnd) do_keys((HWND)f->hwnd);
-        eyeHold = (GetFileAttributesA("tagpu_eye.txt") != INVALID_FILE_ATTRIBUTES);
+        s_eyeHold = (GetFileAttributesA("tagpu_eye.txt") != INVALID_FILE_ATTRIBUTES);
     }
-    if (eyeHold) do_eye();
+    if (s_eyeHold) do_eye();
 }

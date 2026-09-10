@@ -53,6 +53,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_fogwide.h"
+#include "tagpu_zoom.h"
 
 #define TERRAIN_VA   0x00483FA0u   /* stdcall(ctx), ret 4  */
 #define FOG_VA       0x004848E0u   /* stdcall(ctx), ret 4  */
@@ -158,16 +159,30 @@ static void __cdecl terr_fogtick(void* ctxv)
     char* ta = *(char**)TA_MAINPP;
     unsigned short* los;
     int rebuilt = 0;
+    LONG want;
     (void)ctxv;
     if (!ptr_ok(ta)) return;
     los = (unsigned short*)(ta + OFF_LOSTYPE);
-    if (!(*(unsigned char*)los & 8)) {
+    /* OUR OWN REQUEST, OR-ed into the engine's lazy test rather than written
+       into it. The screen fog grid is view-anchored, so an eye that moved must
+       rebuild it — and every engine path that moves the eye says so by clearing
+       LosType bit 3. tagpu_zoom moves the eye too (cursor anchoring, the camera
+       range, the hold) and CANNOT clear that bit safely: `0x484904` below is an
+       unlocked read-modify-write on the same word, so a clear from the render
+       thread can simply be lost, and a lost one is a silently stale fog.
+       Asking here instead costs nothing and cannot be lost — this is the only
+       code that decides, and it is on the thread that owns the word.
+       Sampled BEFORE the rebuild and acked after, so a step that lands during
+       one is answered by the next tick rather than swallowed. */
+    want = tagpu_zoom_fog_seq();
+    if (!(*(unsigned char*)los & 8) || tagpu_zoom_fog_pending()) {
         ((void (*)(void))(size_t)FOGGRID_BUILD_VA)();
         /* re-read: the builder reallocates nothing, but the engine reloads the
            TAdynmem pointer here and so do we */
         ta = *(char**)TA_MAINPP;
         if (!ptr_ok(ta)) return;
         *(unsigned short*)(ta + OFF_LOSTYPE) |= 8;
+        tagpu_zoom_fog_ack(want);
         rebuilt = 1;
     }
     tagpu_fogwide_tick(ta, rebuilt);
@@ -217,6 +232,11 @@ void tagpu_terrown_beat(unsigned int frame_counter) { g_beat = frame_counter; }
 int tagpu_terrown_installed(void) { return g_installed; }
 
 int tagpu_terrown_filled(void) { return g_terrown_skip && g_filled; }
+
+/* The fog overlay is ours exactly while the skip is set: that is the flag the
+   leaf_call detour on 0x4848E0 tests, so terr_fogtick above runs on precisely
+   these ticks and on no others. */
+int tagpu_terrown_owns_fog(void) { return g_terrown_skip != 0; }
 
 unsigned tagpu_terrown_fill_seq(void) { return g_fillSeq; }
 

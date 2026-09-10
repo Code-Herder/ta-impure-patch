@@ -364,6 +364,77 @@ with no model was "owed nothing" (`ui-markers.md` §1 carries the correction and
 own a draw must never have a "not yet" state that the render thread publishes on its way to an
 answer. A poll that tears is a poll that hands the engine back the frame.
 
+### 2.3e Zoom to the cursor (`tagpu_zoom.c`, no arm file)
+
+The wheel holds the world point under the **pointer** still, instead of the one at the centre
+of the screen. No engine patch and no lever: the transform is a similarity about the viewport
+centre and nothing in it is free, so the one variable that can hold a point is the engine's
+eye. With `W(s) = eye + vw/2 + (s − c)/z`, holding `W(a)` across a change in `z` is
+
+    d = (a − c) · (1/z_prev − 1/z_now)
+
+added to the eye, where `a` is the point the notch was aimed at. Applied on the render thread
+inside `tagpu_zoom_read_lever()`, which is the call the pass makes before it reads the eye, so
+the zoom and the eye it is drawn with change together.
+
+**Fields we write:** `main+0x1431F`/`+0x14323` (the eye) and `main+0x14327`/`+0x1432B` (its
+scroll target) — always together, because the two disagreeing is what the per-frame stepper
+reads as a camera move in flight and would rebuild the fog grid every frame for as long as it
+lasted (G13g) — and `main+0x142CB`, the minimap's view box, recomputed through the engine's own
+`0x466B70` because `0x41C3C0` is the only place it is otherwise filled. **No engine flag bit is
+written at all**, and both omissions are deliberate: see the two new rows in
+[exe reverse engineering](exe-reverse-engineering.html) on `main+0x14281` bit 3 and
+`main+0x142F1` bit 1.
+
+**Three properties the tests lean on.** The delta is exactly 0 with the pointer at the viewport
+centre, so that case is the previous behaviour bit for bit — which is the A/B control, and why
+this needs no lever. The steps **telescope**, so total displacement is
+`(a − c)(1/z_start − 1/z_end)` whatever the frame timing, giving an exact oracle on the eye.
+And in-then-out with a still pointer returns the eye exactly.
+
+**Four gates, each a positive condition.** The wheel only — `tagpu_zoom.txt` keeps the
+centre-anchored behaviour, so every zoom fixture stays reproducible. `tagpu_eye.txt` wins, and
+says so once a second. A zoomed world must be on screen. And `tagpu_terrown` must own the fog
+draw, which is the safety argument rather than tidiness: only there is the grid's rebuild
+decision ours to make on the game thread.
+
+**MEASURED 2026-09-10**, 1920×1080, `crowd-static` on Two Continents, viewport `128,32
+1792×1016` so `c = (1024,540)`:
+
+| case | anchor | notches | predicted Δeye | measured |
+|---|---|---|---|---|
+| control | (1024,540) | +6 | (0, 0) | **(0, 0)** |
+| upper-left | (400,300) | +6 | (−272, −105) | **(−272, −105)** |
+| lower-right | (1700,900) | +6 | (294, 157) | **(294, 157)** |
+| zoom out | (400,300) | −6 | (481, 185) | **(481, 185)** |
+| at the map corner, eye already (0,0) | (140,44) | +8 | (−472, −265) | **(−472, −265)** — the eye going negative, i.e. §2.3c's widened range composing with the anchor |
+
+Exact on every axis. In-then-out returned `(1728,702) → (1456,597) → (1728,702)`. At a map
+edge the range refuses what it must and the residual is dropped rather than banked: parked at
+`(0,0)`, six notches out anchored at the bottom-right held eye **and** target at `(0,0)` for
+four seconds with no churn.
+
+**The functional oracle is the engine's own hover state**, `main+0x2CBA` (the unit under the
+pointer). Pointer parked on an ARMPW drawn at `(664,186)`, +6 notches: **still unit 17 under
+the cursor** anchored, and unit **68** under it centre-anchored. That is the feature, read out
+of the engine rather than off a screenshot.
+
+**Fog:** `bare=0` on every `fogwide` heartbeat of the run and the replication oracle
+`differ=0` (1972 of 1972 cells). A frame-by-frame scan of a lossless 60 fps capture at the
+units, on G13s's green-dominance criterion, put the worst single-frame excursion of the
+anchored run at **33 396 px against the eye-fixed control's 45 431** — the control cannot have
+an eye-induced artifact at all, so the excursions are the ease changing how much world is on
+screen, and anchoring adds nothing above that floor. The criterion was checked live before
+being trusted: 196 210 green-dominant px at the units against **0** in the fogged corner.
+
+**Named gaps.** The eye is an integer in world px, so the anchor can sit up to `z/2` screen px
+from the pointer while a gesture is in flight — 0.5 px at 1×, 4 px at 8×; holding it exactly
+would need an off-centre scale centre, which vpwide's addressable rect, fogwide's window and
+the ring test all assume away. The three sites that clamp the scroll target inline against
+`[0, map − W]` — `0x41C4C0`, `0x41C7F7` and the per-frame camera FOLLOW `0x41CAF7` — do not go
+through our clamp, so on those paths a target we stepped can be recomputed without the delta
+and the stepper eases the eye back; the camera owns itself while it is following something.
+
 ### 2.3b The addressable viewport at zoom < 1 (`tagpu_vpwide.c`, `vpwide.on`)
 
 **On by default since 2026-09-08 through the play defaults (§2.8); opt-in before that.** Nothing

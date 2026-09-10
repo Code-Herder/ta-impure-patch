@@ -361,7 +361,21 @@ static int floor_div32(int v) { return v >= 0 ? v / 32 : -(((-v) + 31) / 32); }
    ease — and one ease step of a wheel flick is far more than the engine grid's
    own two cells of slack. Sizing for the whole range means no step of any lever
    can outrun the grid, at the cost of a window that is 16x the 1x viewport's
-   area while any zoom-out is live. */
+   area while any zoom-out is live.
+
+   AND IT COVERS A STEPPED EYE FOR FREE, which is what cursor anchoring needs
+   and why FOGW_MARGIN did not have to grow for it. The window is centred on
+   `eye + vw/2` with half-width `evw/2 + MARGIN`, so a step `D` to level `z1`
+   is spanned when
+
+       (vw/2)[ |1/z0 - 1/z1| + 1/z1 - 1/zmin ]  <=  MARGIN
+
+   with `|D| <= (vw/2)|1/z0 - 1/z1|`, the anchor being inside the viewport.
+   Zooming IN that reduces to `(vw/2)(1/z0 - 1/zmin) <= 0` — an anchored
+   zoom-in's view is a SUBSET of the view before it, so there is nothing new to
+   cover. Zooming out, the left side maximises at exactly 0 over the whole
+   0.25..8 range, touched only in the limit `z0 -> zmin` where there is no
+   further out to go. So the margin is slack for this, not budget. */
 static int fogw_window(char* ta, int* col0, int* row0, int* cols, int* rows)
 {
     int vpL, vpT, vw, vh, eyeX, eyeY, evw, evh, x0, y0, x1, y1;

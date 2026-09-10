@@ -12,6 +12,8 @@
 #include "tagpu_menu.h"
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
+#include "tagpu_terrown.h"
+#include "tagpu_input.h"
 
 /* Published view. Volatile because two threads touch it; each is one aligned
    32-bit slot, which x86 loads and stores atomically. */
@@ -31,6 +33,7 @@ static int            g_mmInstalled;   /* tagpu_zoom_init() patched the engine  
 static void zlog(const char* m);
 static int  in_viewport(int x, int y, int L, int T, int W, int H);
 static void apply_eye_range(void);
+static void anchor_step(float zNow, int fromWheel);
 
 /* ---- the wheel -------------------------------------------------------------
 
@@ -62,6 +65,15 @@ static void apply_eye_range(void);
 #endif
 
 static volatile LONG s_wheelAccum;              /* raw delta, message thread */
+/* WHERE THE NOTCH WAS AIMED, packed x,y as two shorts in ONE aligned 32-bit
+   slot so the point cannot tear against itself — the pair is what the step
+   below is about, and half of one frame's pointer with half of another's would
+   be a point the player never aimed at. Message thread writes, render thread
+   reads. The notches and the point are two publishes, so they CAN tear against
+   each other; the bound is one frame of pointer travel times one notch of
+   1/z, which is sub-pixel, and a lock on the input path buys nothing for it. */
+static volatile LONG s_anchor;
+static volatile LONG s_anchorSet;
 static float         s_wheelTgt = 1.0f;         /* render thread only        */
 static float         s_wheelCur = 1.0f;         /* render thread only        */
 static LONG          s_wheelPend;               /* notches not yet logged    */
@@ -172,6 +184,7 @@ float tagpu_zoom_read_lever(void)
         s_wheelTgt = s_wheelCur = 1.0f;
         s_wheelPend = 0;
         s_zoom = 1.0f;
+        anchor_step(1.0f, 0);
         return 1.0f;
     }
 
@@ -184,7 +197,8 @@ float tagpu_zoom_read_lever(void)
     HANDLE zh = CreateFileA("tagpu_zoom.txt", GENERIC_READ,
                             FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (zh == INVALID_HANDLE_VALUE) {
+    int    fromWheel = (zh == INVALID_HANDLE_VALUE);
+    if (fromWheel) {
         s_zoom = wheel_level();
     } else {
         char zb[32]; DWORD zn = 0;
@@ -200,6 +214,12 @@ float tagpu_zoom_read_lever(void)
            therefore the one the wheel must inherit when the file goes away. */
         wheel_pin(s_zoom);
     }
+    /* The eye step that holds the point under the cursor, applied HERE: this
+       is the call the pass makes at the top of its frame, before it reads the
+       eye (tagpu_native.c), so the zoom and the eye it is drawn with change
+       together. Only the wheel anchors — the file lever has no gesture behind
+       it and every zoom fixture drives it. */
+    anchor_step(s_zoom, fromWheel);
     return s_zoom;
 }
 
@@ -248,6 +268,16 @@ int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
 
     delta = (int)(short)HIWORD(wparam);
     if (!delta) return 0;
+    /* AIM FIRST, THEN THE NOTCH. The point is published before the delta so a
+       render thread that sees the notches has, by then, a point at least as
+       new as they are — the tear can only be a point NEWER than its notches,
+       which is the harmless direction (it anchors where the pointer is now).
+       The gate above has already proved this point is inside the true
+       viewport, which is what makes it a legal anchor. */
+    InterlockedExchange(&s_anchor,
+                        (LONG)(((unsigned)(unsigned short)y << 16) |
+                               (unsigned)(unsigned short)x));
+    InterlockedExchange(&s_anchorSet, 1);
     InterlockedExchangeAdd(&s_wheelAccum, (LONG)delta);
     return 1;
 }
@@ -818,13 +848,241 @@ static void apply_eye_range(void)
                         loX, hiX, loY, hiY);
     moved |= clamp_pair((int*)(ta + OFF_SCRTX), (int*)(ta + OFF_SCRTY),
                         loX, hiX, loY, hiY);
-    /* Recomputed here because `0x41C3C0` is the only place the engine ever
-       fills this rect, so a corrected eye would otherwise leave the minimap's
-       box where it was until the next camera move. It is a write to
-       `main+0x142CB` from the RENDER thread — the same one-frame-tear standing
-       as the published view this module already accepts, and it happens only on
-       the frames the correction fires. */
-    if (moved) zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
+    /* The minimap's box is recomputed here because `0x41C3C0` is the only place
+       the engine ever fills it, so a corrected eye would otherwise leave the
+       box where it was until the next camera move — and the fog grid is asked
+       for with it, because this correction MOVES THE CAMERA and the screen fog
+       grid is view-anchored (see the handshake above). Both are writes from the
+       RENDER thread on the frames the correction fires, which is a zoom-out at
+       a map edge and nothing else. */
+    if (moved) tagpu_zoom_eye_moved();
+}
+
+/* ---- zoom to the cursor ----------------------------------------------------
+
+   The wheel holds the world point under the POINTER still, instead of the one
+   at the centre of the screen. The transform cannot do it: it is a similarity
+   about the viewport centre and nothing in it is free. What is free is the
+   engine's eye, because the world on screen is
+
+       W(s) = eye + vw/2 + (s - c) / z
+
+   so holding W(s) fixed across a change in z is one subtraction:
+
+       d = (a - c) * (1/z_prev - 1/z_now)          a = where the notch was aimed
+
+   applied to the eye. THE DELTA IS EXACT, not an approximation of one: it is
+   the difference of two exact solutions, so the constants (the anchored world
+   point, vw/2) cancel and never appear.
+
+   WHY A DELTA AND NOT A SOLVED POSITION. The absolute form — keep the anchored
+   world point W* and set the eye from it every frame — is algebraically the
+   same thing, but it ASSERTS the eye on every frame of the ease and so
+   overwrites any other camera source for as long as a gesture lasts. The delta
+   composes with them instead: an edge scroll, an arrow key or a camera move
+   already in flight is preserved, because we add to whatever the eye is rather
+   than declaring what it should be. And when z is not moving the delta is
+   exactly zero, so at steady state — which is almost every frame — this
+   function writes NOTHING and there is no interference to reason about.
+
+   THREE PROPERTIES FALL OUT OF THE DELTA FORM, and the tests lean on all three.
+   With the pointer at the viewport centre `a - c` is zero, so the eye never
+   moves and the behaviour is what it was before this existed, bit for bit —
+   that is the A/B control, and it is why this needs no lever. The steps
+   TELESCOPE, so the total displacement over a gesture is
+   `(a - c)(1/z_start - 1/z_end)` however many frames the ease took and whatever
+   the frame timing was — an exact oracle on `main+0x1431F` with `tacli peek`.
+   And in-then-out with a still pointer returns the eye exactly where it was.
+
+   THE ROUNDING RESIDUAL IS CARRIED; A REFUSED DELTA IS NOT. The eye is an
+   integer in world px, so `d` is split into an integer part and a remainder
+   that is kept for the next frame — that is what makes the telescoping exact
+   rather than drifting a pixel per frame. But a delta the camera RANGE refused
+   at a map edge is thrown away, and the residual with it: banking it would
+   grow without bound (a hard zoom-in at a corner banks hundreds of world px)
+   and then spend itself as a sideways lurch on the first notch of the way out.
+   The two leftovers are different things and only one of them is a debt.
+
+   WHAT IT COSTS AT THE EDGE OF THE MAP: the point cannot be held, because the
+   eye cannot go where holding it would need. The anchor drifts toward the
+   centre, which is what every map application does, and there is no fix that
+   is not "refuse to zoom".
+
+   ANCHORING IS OFF UNLESS WE OWN THE FOG, and that gate is the whole safety
+   argument rather than a tidiness rule — see fog_pending() below.
+
+   THE RESIDUAL, STATED: the eye is an integer in world px, so at zoom z one
+   unit of it is z screen px, and the anchor can sit up to z/2 px from the
+   pointer while a gesture is in flight — 0.5 px at 1x, 4 px at 8x. Holding it
+   exactly would mean giving the transform an off-centre scale centre, which
+   every rect derived from the viewport (vpwide's addressable rect, fogwide's
+   window, the ring test) currently assumes away.
+
+   AND WHAT IS NOT COVERED. The three sites that compute the scroll target and
+   clamp it INLINE against `[0, map - W]` — `0x41C4C0`, `0x41C7F7` and the
+   per-frame camera FOLLOW `0x41CAF7` — do not go through our clamp, so on
+   those paths a target we stepped can be recomputed without our delta and the
+   stepper eases the eye back. Nothing fights and nothing churns; the camera
+   simply owns itself while it is following something, which is what following
+   means. */
+
+/* The level the eye was last stepped at, and the sub-world-pixel carry. Render
+   thread only: the same thread that owns the level itself. */
+static float s_zStep = 1.0f;
+static float s_residX, s_residY;
+
+/* THE FOG HANDSHAKE, and the reason anchoring is gated on terrown at all.
+
+   The screen fog grid is view-anchored and rebuilt LAZILY: `0x4848F2` tests bit
+   3 of `main+0x14281` and only rebuilds when it is clear. So an eye that moves
+   without that bit being cleared leaves the fog built for where the camera used
+   to be. Every engine path that moves the eye clears it — and we cannot, not
+   safely: the engine's own `or word [eax+0x14281], bx` at `0x484904` is an
+   UNLOCKED read-modify-write, so no atomic on our side can stop it clobbering
+   ours. A lost clear is a silently stale fog until the next camera move, which
+   is exactly the kind of "usually fine" this project does not ship.
+
+   So we never touch that word. While `tagpu_terrown` is skipping, the engine's
+   fog draw is OURS — terr_fogtick replicates the lazy rebuild — and we simply
+   OR our own request into its condition. Two monotonic counters, one writer
+   each, make it a handshake and not a hope:
+
+     s_eyeSeq   bumped by the render thread every time it moves the eye
+     s_eyeAck   set by the GAME thread to the seq it has just rebuilt for
+
+   While they disagree the grid on hand does not span where the camera now is,
+   so the frame takes the WIDE grid (tagpu_native.c) — which is built every tick
+   from the live eye since G13s and carries FOGW_MARGIN around it. The ack is
+   sampled BEFORE the rebuild and stored after, so a bump that lands during one
+   is not swallowed. A game thread that stops ticking leaves them disagreeing
+   for ever, which keeps the wide grid — the fail-safe direction.
+
+   And with terrown NOT skipping there is no consumer, so we do not bump at all:
+   an ack that never advances would put the wide grid in front of a 1x picture
+   that is already right, and 1x is the thing the whole stack is measured
+   against. That is the same condition anchoring itself is gated on, so the two
+   cannot come apart. */
+static volatile LONG s_eyeSeq, s_eyeAck;
+
+int tagpu_zoom_fog_pending(void)
+{
+    return s_eyeSeq != s_eyeAck;
+}
+
+LONG tagpu_zoom_fog_seq(void)
+{
+    return s_eyeSeq;
+}
+
+void tagpu_zoom_fog_ack(LONG seq)
+{
+    s_eyeAck = seq;
+}
+
+/* An eye writer moved the camera. Recompute the minimap's view box — `0x41C3C0`
+   is the only place the engine ever fills it, so a camera we moved ourselves
+   would otherwise leave the box where it was until the next engine camera move
+   — and ask the game thread for a fog grid that spans the new view.
+
+   THE MINIMAP'S DIRTY BIT `main+0x142F1` IS DELIBERATELY NOT SET. It is the
+   same unlocked-RMW problem as the fog bit and a far worse one in practice:
+   `DrawMinimap 0x466B00` clears it at `0x466B16` in the same breath, so it
+   reads 0 on almost every frame [MEASURED 2026-09-09, tagpu_gui_surf.c] and our
+   read-modify-write would be racing a writer that is always writing. What reads
+   the box is the sharp minimap layer, every frame, off the rect recomputed
+   here. */
+void tagpu_zoom_eye_moved(void)
+{
+    char* ta = *(char**)TA_MAINPP;
+
+    if (!ta_ok(ta)) return;
+    zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
+    if (tagpu_terrown_owns_fog()) InterlockedIncrement(&s_eyeSeq);
+}
+
+/* 1 while the eye may be stepped: our passes own the frame (so the fog
+   handshake has a consumer), a zoomed world is actually on screen, and nothing
+   else is driving the camera. Throttled log lines, because a control that
+   silently does nothing is the one failure this module's other gripes exist to
+   prevent. */
+static int anchor_allowed(void)
+{
+    static DWORD tick;                       /* render thread only */
+    const char* why = 0;
+
+    if (!s_live)                     return 0;   /* menus: nothing to say */
+    if (tagpu_input_eye_held())      why = "zoom: cursor anchor off - tagpu_eye.txt holds the camera";
+    else if (!tagpu_terrown_owns_fog())
+        why = "zoom: cursor anchor off - the engine owns the fog draw, so a moved eye could not be answered for";
+    if (!why) return 1;
+    {
+        DWORD now = GetTickCount();
+        if (now - tick > 1000) { tick = now; zlog(why); }
+    }
+    return 0;
+}
+
+/* Render thread, once a frame, from read_lever() and BEFORE the pass reads the
+   eye. `fromWheel` is false while the file lever is in force: it changes z with
+   no gesture behind it and every zoom fixture drives it, so it must not move
+   the camera. */
+static void anchor_step(float zNow, int fromWheel)
+{
+    char* ta = 0;
+    LONG  a;
+    float ax, ay, cx, cy, k;
+    int   nx, ny, loX, hiX, loY, hiY;
+
+    /* Whatever happens below, the level the NEXT step measures from is this
+       one. A frame that declined to move the eye must not leave its change
+       banked for a later frame to apply in one jump. */
+    if (zNow == s_zStep) return;                 /* the common case: no gesture */
+    {
+        float zWas = s_zStep;
+        s_zStep = zNow;
+
+        if (!fromWheel || !s_anchorSet || !anchor_allowed() ||
+            zWas <= 0.05f || zNow <= 0.05f) { s_residX = s_residY = 0.0f; return; }
+        if ((int)s_vw <= 0 || (int)s_vh <= 0) { s_residX = s_residY = 0.0f; return; }
+
+        ta = *(char**)TA_MAINPP;
+        if (!ta_ok(ta)) { s_residX = s_residY = 0.0f; return; }
+
+        a  = s_anchor;
+        ax = (float)(int)(short)(a & 0xFFFF);
+        ay = (float)(int)(short)((a >> 16) & 0xFFFF);
+        cx = (float)(int)s_vpL + (float)(int)s_vw * 0.5f;
+        cy = (float)(int)s_vpT + (float)(int)s_vh * 0.5f;
+
+        k  = 1.0f / zWas - 1.0f / zNow;
+        s_residX += (ax - cx) * k;
+        s_residY += (ay - cy) * k;
+    }
+    nx = iround(s_residX);
+    ny = iround(s_residY);
+    if (!nx && !ny) return;                      /* sub-pixel: carried, not lost */
+    s_residX -= (float)nx;
+    s_residY -= (float)ny;
+
+    {
+        int* eye = (int*)(ta + OFF_EYEX);
+        int* scr = (int*)(ta + OFF_SCRTX);
+        int  moved;
+
+        eye[0] += nx; eye[1] += ny;
+        /* the target moves with the eye, always: the two disagreeing is what
+           the per-frame stepper reads as "a camera move is in flight", and it
+           would drag the eye back and rebuild the fog grid every frame for as
+           long as the disagreement lasted (G13g) */
+        scr[0] += nx; scr[1] += ny;
+        if (!zoom_eye_range(ta, eye_level(), &loX, &hiX, &loY, &hiY)) return;
+        moved  = clamp_pair(eye, eye + 1, loX, hiX, loY, hiY);
+        moved |= clamp_pair(scr, scr + 1, loX, hiX, loY, hiY);
+        /* refused at a map edge: drop what could not be taken rather than
+           banking it against the way back out */
+        if (moved) s_residX = s_residY = 0.0f;
+    }
+    tagpu_zoom_eye_moved();
 }
 
 int tagpu_zoom_eye_range(int* loX, int* hiX, int* loY, int* hiY)

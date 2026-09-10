@@ -2210,7 +2210,18 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                        is right. Below 1 it cannot, and the wide one must be
                        used: the producer builds it every tick, so the frame that
                        first eases past 1.0 already has one. */
-                    if (tagpu_zoom_level() < 1.0f &&
+                    /* ...OR while the eye has been stepped and the game
+                       thread has not rebuilt for it yet. Cursor anchoring moves
+                       the camera on every frame of a gesture, and the engine's
+                       grid has only its two spare columns of slack: the frame
+                       that eases up THROUGH 1.0 can start as low as z = 0.489
+                       (one ease step of 0.25 in log space toward the 8x
+                       ceiling), which puts the view it must span up to ~1000 px
+                       at 1920 off the grid the eye had when it was built. The
+                       wide grid spans it with room over — measured against the
+                       same inequality, sizing at the zoom FLOOR covers any
+                       anchored step at any level with the margin untouched. */
+                    if ((tagpu_zoom_level() < 1.0f || tagpu_zoom_fog_pending()) &&
                         tagpu_fogwide_get(&wb, &wc, &wr, &wox, &woy)) {
                         buf = wb; cols = wc; rows = wr; orgX = wox; orgY = woy;
                     }

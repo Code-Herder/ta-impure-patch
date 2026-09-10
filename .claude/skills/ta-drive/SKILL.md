@@ -1170,7 +1170,24 @@ every scenario and every `tacli` recipe still drives zoom exactly as before.
 
 **The mouse wheel** is what the player uses, and what the level falls back to whenever the
 file is *absent*: one notch is ×1.1 geometric, clamped to the same 0.25–8.0, eased over
-about six frames. It is live **only while our zoomed world is actually on screen and the
+about six frames.
+
+**The wheel ZOOMS TO THE CURSOR since G13t (2026-09-10), so it MOVES THE CAMERA.** The world
+point under the pointer is held still, which means `tacli wheel --at X Y` is no longer a
+camera-neutral operation: the eye steps by `(a − c)(1/z0 − 1/z1)`, where `c` is the viewport
+centre. Three consequences for driving:
+
+- **Re-read the eye after any wheel**, and do not assume a recipe's camera survived one.
+- **`--at` the viewport centre is the old behaviour exactly** — the delta is 0 there, so that
+  is the control for any A/B, and it needs no flag (there isn't one).
+- **`tagpu_zoom.txt` still does NOT move the camera.** Only the wheel anchors, so every
+  scripted zoom and every fixture is unchanged.
+
+Anchoring is off — and says so once a second in the log — while `tagpu_eye.txt` holds the
+camera (`zoom: cursor anchor off - tagpu_eye.txt holds the camera`), and while `terrown` is
+not skipping, because the fog grid is view-anchored and only then is its rebuild ours to ask
+for. **`scenario load` pins the camera**, so `tacli eye <i> --release` first or the wheel will
+zoom to the centre and the log will tell you why. It is live **only while our zoomed world is actually on screen and the
 pointer is over the world viewport** — the menus, the side panel and the minimap keep their
 wheel, and the log says which gate refused (`zoom: wheel ignored — no zoomed world on
 screen` / `— pointer is off the world viewport`). Every accepted turn logs

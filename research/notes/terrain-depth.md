@@ -1099,6 +1099,20 @@ session** — the three `FOGW_MAXDIM` buffers are allocated on the first in-game
 the first zoom-out, and nothing frees them before the process exits. The alternative on the table
 was a frame drawn without a grid, which is what the report was about.
 
+**And since 2026-09-10 a SECOND thing can ask for that rebuild.** `terr_fogtick`'s condition is
+`!(LosType & 8) || tagpu_zoom_fog_pending()`: the engine's own lazy test, OR-ed with a request
+from `tagpu_zoom` saying it has stepped the eye for a cursor-anchored zoom. It is a request and
+not a write, and that is the whole point — `0x484904` sets the bit with an **unlocked**
+`or word`, so a clear issued from the render thread can be swallowed and a swallowed clear is a
+silently stale, view-anchored fog grid. Asking here costs nothing and cannot be lost: this is
+the only code that decides, and it is already on the thread that owns the word. The handshake
+is two monotonic counters with one writer each — the render thread bumps a sequence when it
+moves the eye, this function samples it BEFORE the rebuild and stores it after, so a step that
+lands mid-rebuild is answered by the next tick rather than swallowed. While the two disagree
+the frame takes the wide grid, so a game thread that stops ticking fails safe. **Cursor
+anchoring is gated on `g_terrown_skip`** for exactly this reason: with the engine owning its
+own fog draw there is no one to ask, so the eye is not stepped at all.
+
 **The CPU twin was NOT brought along.** `tagpu_fog_at` (`tagpu_fx.c`) still bounds on
 `gx >= cols`, so the band `[cols−1, cols)` interpolates the same unwritten corners the shader now
 avoids. It is unreachable through the wide grid — that band is ≥ 320 px outside the view
