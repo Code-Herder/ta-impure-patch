@@ -941,6 +941,13 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             lParam = MAKELPARAM(pt.x, pt.y);
         }
 
+        /* tagpu (G17c): the CLIENT point, before x_adjust and before any
+           unscale — the pointer at the device's resolution, which is what the
+           GL UI renderer draws its own cursor from (gui-renderer.md 13.5).
+           Recorded unclamped: the reader clamps to the viewport, matching the
+           edge clamp the two lines below apply to the engine's own copy. */
+        mouse_note_client(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+
         int x = max(GET_X_LPARAM(lParam) - g_ddraw.mouse.x_adjust, 0);
         int y = max(GET_Y_LPARAM(lParam) - g_ddraw.mouse.y_adjust, 0);
 

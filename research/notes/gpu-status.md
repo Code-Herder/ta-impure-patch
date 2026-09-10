@@ -30,7 +30,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Terrain tiles + the fog overlay | G13b | `terrown`: two detours; the terrain skip path key-fills the viewport |
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
 | Health bars, order markers, group digits, ShowRanges labels, build cursor, band box, selection rect | G13d, cursor G13n, order block G13o, text G13p | `markown`: 14 call-site redirects + 1 detour, and **nothing world-anchored is captured any more**. Health bars, the selection rect, the build cursor and drag band box are re-drawn from engine state; **G13o ported the order-marker block** (`tagpu_order.c`) as a game-thread snapshot of the order lists at `0x469BFC`; **G13p ported the text** (`tagpu_text.c`) — the group digit at `0x469CF9` and the `ShowRanges` labels — by calling TA's own glyph blitter `0x4CCF60` with a buffer of ours. Window A is retired and the identity blend LUT with it; the post-fog capture survives only for `mark.on=nocursor` (§2.2) |
-| Mouse cursor position, clicks, minimap view rect, scroll rate | G13e, cured G13m | `tagpu_zoom.c`; the cursor is the engine's own again — the composite no longer touches it (§2.3d) |
+| Mouse cursor position, clicks, minimap view rect, scroll rate | G13e, cured G13m, **cursor ours again G17c** | `tagpu_zoom.c`; G13m made the engine's own cursor correct by telling it the truth about the pointer, and the zoom composite stopped touching it (§2.3d). **Since G17c the cursor is DRAWN BY US** — 1× device pixels at every `k`, from the client point the message carried, into the GL UI renderer's sharp layer — and the engine's is erased from the frame by two cooperating exemptions, the UI layer's rect discard and the world composite's `uCurs` ([GL UI renderer](gui-renderer.html) §17). §2.3d's rule is unchanged and still what keeps the two in the same place |
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + a 3-site byte patch behind `vpwide.on`, plus the `0x499221` redirect that also carries the zoom's mouse-point repair and is armed by `zoom.on` too (§2.3d) |
 | Terrain in **restored true colour** (Classic++, `tagpu_classicpp.on`) | G14a (spike, 2026-09-04); GPU G14b (2026-09-04); **GLSL G14c (2026-09-05)** | `tagpu_restoreglsl.c` runs the unditherer's full model as **fragment passes in the game's own GL context** — the shaders of `tagpu_restore_glsl.h`, the weights of `<model>.w32.bin` — sliced from `tagpu_terr.c`'s gather at 12 ms of GPU time per frame under a `GL_TIME_ELAPSED` budget, visible tiles first, painting straight into the terrain pass's RGBA atlas: Two Continents' 5062 tiles in 2.1 s at 59.7 fps, the biggest stock map's 11,561 in 4.2 s, no worker thread, no runtime, no disk. The ONNX Runtime path (`tagpu_restore.c`, G14a/b) was deleted the same day (G14d). **G14e (2026-09-05)**: the cells show as they land, centre-out (the restored atlas's alpha is the flag), and the **feature and effects atlases restore lazily** — `tagpu_gaf.c` queues every atlas miss to the same restorer, each atlas carries an RGBA8 twin the sprite shaders sample where its alpha is 1, keyed texels inpainted by a nearest-ring stand-in in the FILL pass. **G14f (2026-09-05): lit** — the terrain from the engine's height grid (`main+0x14287`, one R8 texture per map, the lab's grid normal per fragment), the units from the posed face normal carried in the vertex stream, the feature sprites from the ground's lambert at their anchor; one rule, `tagpu_glsl.h` `TAGPU_GLSL_LIGHT_FN`, level ground exactly 1.0; the knobs in `tagpu_classicpp.cfg` (`tagpu_classicpp.c`). **G14g (2026-09-05): the unit textures** — `tagpu_render3do.c`'s atlas is a `TAGPU_GAFATLAS` now, every frame in a 4-texel-padded, 4-aligned cell, its RGBA8 twin restored lazily like the sprites' (priority 3) and **mipmapped to level 2**, trilinear and 4× anisotropic, the mips regenerated after each painted batch; the unit shader samples it where its alpha says so. Classic's R8 atlas has the same cells and does not move a pixel (`tascene ab`, and the engine shot byte-identical to G14f's outside the chat). Reads only — see [Classic and Classic++ renderers](renderers.html) §4c and §5 |
@@ -549,7 +549,24 @@ answer `ui-markers.md` §6.1 gives for everything else outside the 1× viewport.
 over the viewport** (`ARMOPT`, `EXITMENU`) are unchanged and still take the transform as though
 they were world, which was already true before this and is not verified either way here.
 
-### 2.3e The GL UI layer — observers, publisher, twins (`tagpu_gui_hook.c`, `tagpu_gui_surf.c`, `gui.on`, Phase E G15a + G15b + G15d + G15e)
+### 2.3e The GL UI layer — observers, publisher, twins (`tagpu_gui_hook.c`, `tagpu_gui_surf.c`, `gui.on`, Phase E G15a + G15b + G15d + G15e + G17a–e)
+
+**Phase 2 is complete.** G17e (2026-09-09) made the **minimap** ours at `k > 1`: the base from the
+TNT's own 252-px picture instead of the 126-px box the engine fits it into, and the fog, the unit
+dots, the radar arcs and `DrawPoint`'s points all taken from the engine's own pixels by masking
+`+0x142DB` and `+0x142DF` against `+0x142E3` — so the visibility decision never leaves the engine.
+2 084 distinct colours against the engine's 532 at `k = 1.5`, and 2 differing pixels of 13 356 on
+a 99.6 % fogged map. G17d (2026-09-09) made text a **string op**: `PK_STRING` carries the string,
+the font and `0x4CCF60`'s three colour bytes, and the render thread stamps TA's own glyphs into the
+twin from a **per-font glyph cache** — the string-keyed atlas the marker path uses is wrong for a
+UI whose text is a clock and a metal readout. 44 % less arena traffic where text is redrawn, and
+two 120-stop walks with `miss=0`. G17a (2026-09-09) added the seam: a 4-tap sharp-bilinear ramp on the 1x mirror
+run after the palette lookup, a device-resolution RGBA8 **sharp layer** above it, and `k` read off
+the frame. G17b (2026-09-09) made `k != 1` live and added device-space click injection. **G17c
+(2026-09-09) put the cursor in the sharp layer** — ours at 1x device pixels at every `k`, from the
+client point rather than the engine's logical grid, with the engine's own erased by the UI layer
+and the world composite together ([GL UI renderer](gui-renderer.html) §15–§17). Still no engine
+patch in phase 2 and no new engine-state write.
 
 Nothing here changes what the engine draws. Every site is an **observer detour**
 (`tagpu_detour_observe`): the original runs unchanged, we read its arguments on the way in and,
@@ -590,6 +607,12 @@ Tokens in `tagpu_gui.on`: `strict` (the fallback off, a miss painted magenta, th
 exempt — the harness's mode), `off` (the detours stay installed for the next launch, nothing is
 published or drawn — the live A/B lever), `norestore` (G15e: the layer without Classic++ art),
 `sharptest` (G17a: the sharp layer filled with a known pattern — the harness's mode too),
+`nocursor` (G17c: phase 1's cursor, the engine's own — the A/B against ours), `cursorscale=N`
+(G17c: our cursor's size in device pixels per art pixel, default 1, clamped 0.25–8),
+`nostring` (G17d: text stays a box of captured pixels — the A/B, and **read at ATTACH like
+`census`/`log`/`pgm`/`trace`, so it must be armed before the launch**; only the tokens the *surf*
+module owns follow the file live), `nominimap` (G17e: the engine's minimap back) and `mmbase`
+(G17e: ours forced on at `k = 1` too, where it is otherwise off — the harness's A/B),
 `census` (the G15a diff), `log` (a census line per 50
 censuses and on any residual), `pgm` (`tagpu_gui_census.trigger` → `tagpu_gui_census.pgm`, the
 accumulated unexplained mask), `trace` (the ops intersecting a residual, the first blits after a
@@ -889,6 +912,8 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `0x512344` / `0x512348` | the order-descriptor array and its end: `+0xC` is the type's marker-capability mask and `+0x10` its `cursor_ary` index. Read only; the end pointer is what lets us bound an index the engine does not |
 | `unit+0xAC` | the squad tag. Read only — and read as a **DWORD** and then used as a byte, because that is what `0x469C55`/`0x469CD1` do |
 | `main+0x2A43` | the player id the health-bar and group-digit loop compares unit owners against (`0x46967D` → `[esp+0x70]`, read at `0x469CA6`/`0x469CC9`). Read only. **Not `main+0x2A42`**, which is what the order-marker driver `0x48CC30` uses for its player range — two bytes, two loops, one block, written independently at `0x416B25`/`0x416B38`. `tagpu_mark.c` was on `0x2A42` from G13d until G13p corrected it |
+| `main+0x1426B`, `+0x142CB`, `+0x142DB`, `+0x142DF`, `+0x142E3`, `+0x142E7..+0x142ED`, `+0xDD9` | the minimap: the TNT's picture, the view rect and its colour, and the three 126-px surfaces (composite, fog base, scaled base). **Read only.** The picture is decoded on the MINIMAP BUILD's own thread inside `BuildMinimapSurface 0x466780` — not the game thread, measured — and the three surfaces are read per frame on the render thread while the game thread may be rewriting them, the same standing as the fork's own surface upload (G17e, [GL UI renderer](gui-renderer.html) §19) |
+| `[0x51FBD0]+0x1B2`, `+0x1B6`, `+0x1BA` | the cursor's **GAF frame** and the position it was last drawn at. Read only, on the render thread, once per frame in `tagpu_gui_cursor_frame()` — and read ONCE because two modules act on the answer: the UI layer stops discarding that rect and the world composite counts it as the terrain key, and a second read a pass later would leave a sliver of the engine's cursor standing (G17c, [GL UI renderer](gui-renderer.html) §17). The frame's pixels go through `tagpu_gaf_decode` into the UI atlas like any other sprite |
 | `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with (`tagpu_text.c`) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |

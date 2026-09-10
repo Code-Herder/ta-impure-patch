@@ -1256,6 +1256,30 @@ layer's cursor branch simply changes from *discard* (let the engine's show throu
 *mask the fallback in that rect*. Drawing from the true device pointer also puts it ahead of the
 engine's last-drawn position, which is what G13m spent a gate achieving.
 
+> **Implementation note, established 2026-09-09 before any G17c code.** Three facts decide the
+> shape, and the last one is not what §13.5 assumes:
+>
+> 1. **The pixels are reachable with no observer change.** The cursor's blits never become ops —
+>    everything drawn while `s_inFlip` is excluded (`tagpu_gui_leaves.h`), and the cursor is drawn
+>    inside the flip with its background restored before it returns. But the sprite record at
+>    `*(globals+0x1B2)` **is a GAF frame header**: size at `+0`/`+2`, hotspot at `+4`/`+6`, the
+>    colour key at `+0x08` and **the pixel pointer at `+0x10`**. So the render thread can read the
+>    frame directly, cache it as an R8 texture keyed by the frame pointer, and draw it into the
+>    sharp layer — exactly the "no queue op is needed" §13.5 predicts.
+> 2. **The true device pointer is now available.** `mouse_client_to_game` (G17b) is the one place
+>    a client-area point is converted, so recording the client point there gives the pointer
+>    *before* quantisation to the engine's logical grid — which is what putting our cursor ahead
+>    of the engine's last-drawn position needs.
+> 3. **"Mask the fallback in that rect" is not enough, and it is not the UI layer's to do.** The
+>    engine's cursor reaches the screen through the **fork's own engine-frame draw**, beneath
+>    everything of ours. Over the panel the twin covers it once the layer stops discarding. Over
+>    the world it does not: the world composite discards wherever the engine's surface is not the
+>    terrain key, and the cursor's pixels are not the key, so they survive underneath. Removing
+>    the second cursor therefore means **exempting the cursor rect in the WORLD composite**
+>    (`tagpu_native.c`, which already carries a `uVp` rect and a key test) as well as dropping the
+>    discard in the UI layer. G17c spans both modules; a version that only draws ours would ship
+>    two cursors over the world.
+
 **Its size is 1× device pixels at every `k`** — the convention every scaled desktop UI follows,
 and it is always crisp. The accepted cost is a small pointer against a 3× UI at 4K, where TA's
 cursors carry gameplay meaning (build, reclaim, attack); a `cursorscale=` knob defaulting to 1 is
@@ -1286,6 +1310,72 @@ Classic++-restored, but the TNT's picture is a *conversion* of the map rather th
 our minimap would no longer match the engine's colours and the oracle would be gone on exactly the
 surface where we see least (13.8). It stays what §1 and §3.8 called it — a candidate — and S1
 builds everything it would reuse.
+
+> **Implementation note, established 2026-09-09 before any G17e code**, the way §13.5's was.
+> Four facts, and the last two change the gate's shape:
+>
+> 1. **There is exactly one place to snapshot the picture, and it is not the loader.**
+>    `BuildMinimapSurface 0x466780` has **one caller, `0x4669B0`** — the minimap set-up, which
+>    calls it and then creates `+0x142DB` (tag `0x507518`) and `+0x142DF` (tag `0x507508`) at
+>    `+0x142EB × +0x142ED` — and **`0x4669B0` has one caller, `0x4919C3`** [VERIFIED 2026-09-09 by
+>    an `E8`/`E9` scan of `.text`]. `0x466780` consumes `main+0x1426B` at `0x46684F`, so at its
+>    ENTRY the picture is alive by construction. An observer detour there needs to know nothing
+>    about the loader's structure, and the loader's own free at `0x483DF3`/`0x483E0B` sits in a
+>    function that never calls `0x466780` at all.
+> 2. **The picture is a GAF frame**, built at `0x483900..0x483936` — so `tagpu_gaf_frame_sane` and
+>    `tagpu_gaf_decode` read it, exactly as G17c reads the cursor's record. No new decoder.
+> 3. **It goes in the SHARP LAYER, not a twin.** The engine's minimap reaches the frame as a copy
+>    of the 126-px `+0x142DB` into the game offscreen, so a twin can only ever hold 126 px there.
+>    A 252-px base has nowhere to live except the device-res layer §13.2 already lists it in —
+>    which is G17c's plumbing, positioned at the minimap's screen rect times `k`.
+> 4. **§13.6's fog source does not exist** [MEASURED 2026-09-09, and it is the finding that
+>    decides the gate]. "Fog comes from the corner-mask grid we already hold as an RG8 texture for
+>    every world pass" — that grid is built around the **eye** and covers the **viewport**:
+>    `29x23` cells against a `336x400` map on Two Continents (`tagpu_native.c`'s fog block, and
+>    the `terr:` log line says both numbers). It has nothing to say about the rest of the map.
+>    The engine's own minimap fog is a different pass over different data — `0x466C20` shades
+>    `+0x142E3` into `+0x142DF` **per player**, reading the player id at `main+0x2A43`.
+>
+>    **And the consequence is not cosmetic.** The TNT picture is the whole map with nothing
+>    hidden, so a base drawn without fog shows the player terrain they have never explored. That
+>    is a cheat of exactly the class §13.6 refuses for the dots — and it means §13.10's recorded
+>    pivot, "keep the engine's fog as a pixel op and **ship the base alone**", is not available
+>    either: there is no shipping the base alone. Either the fog is solved or the minimap stays
+>    the engine's.
+> 4b. **How the fog is done instead** [DECIDED by the owner 2026-09-09, MEASURED the same day].
+>    Not by re-deriving visibility — that is what §13.6 forbids for the dots — but by **masking
+>    against the engine's own two bases**: `+0x142DF` (the base *with* its fog shading) against
+>    `+0x142E3` (the same base without). Where they agree the engine is showing true terrain and
+>    our sharper copy of that terrain is safe; where they differ its own pixel is used verbatim.
+>    The visibility decision therefore stays entirely the engine's.
+>
+>    **The test is over a 3×3 neighbourhood, and that is the safety argument, not a nicety.** The
+>    shade is a LUT into a dark-grey ramp, so a pixel already in that ramp maps to itself; a
+>    single-texel test would then let four of *our* sub-texels through, taken from the unfogged
+>    picture and possibly bright. Requiring the whole neighbourhood to agree costs a one-texel band
+>    of the engine's own resolution around every fog edge. (This decision record said "**cannot**
+>    leak"; §19 corrects that to what the argument actually buys — no unit, arc or point can leak,
+>    and terrain is measured rather than proven.)
+>
+>    **Measured on a 99.6 % fogged map** (`scenario load --mapping 0`; the mapped fixture reads
+>    `fog=0/13356` and tests nothing):
+>
+>    | | reading |
+>    |---|---|
+>    | engine texels hidden | **13 301 of 13 356** |
+>    | our minimap vs the engine's, in the box | **2 pixels of 13 356** |
+>    | where those two are | inside the engine's own lit region — its 67 lit pixels span (32,7)-(68,125), the two are (64,122) and (64,123) |
+>
+>    The property is **bounded, not hoped**: our base can only be used where the pair agrees across
+>    3×3, so the pixels that can differ are at most the unfogged texels (55 here) times `k²`. Two
+>    is inside that bound, and `fog=` reports the bound every frame.
+> 5. **The dots must be REPLAYED, and the arcs need two new leaves.** The unit dots are
+>    `0x4B7F90` blits and already observed, so they arrive as sprite ops on `+0x142DB` and can be
+>    replayed at ×2. The coverage arcs `0x4C0070` and `DrawPoint 0x4BEE60` are **not** leaves (§7):
+>    today their pixels reach the twin only because the base copy degrades to a pixel op carrying
+>    the destination's final bytes. A regenerated base does not carry them at all, so G17e must
+>    observe those two — which is also the fix §7 asks for, and is safe because neither writes
+>    `+0x142DF`, the surface whose staying-unseeded the trap depends on.
 
 ### 13.7 The window never resizes, and k chooses itself
 
@@ -1341,9 +1431,9 @@ is itself a guess that wants a look on three monitors.
 |---|---|---|---|
 | **G17a** the seam — **done 2026-09-09, §15** | the sharp-bilinear filter, the sharp layer's texture and the composite order; `k` plumbed everywhere but forced to 1 | the parity md5 equals main's and the 120-stop `strict` walk is unchanged, with the filter in the path | the filter is not bit-identical at `k = 1` → stop; nothing downstream is safe until it is |
 | **G17b** `k ≠ 1` live | automatic `k`, the logical mode, the world pass at device resolution, the window policy | a walk at `k = 1.5` and `k = 2`: every stop renders; **clicks land on the right gadget at every stop** (a click test, not a pixel test); no resize across three entry/exit cycles; the 1× mirror still diffs exact at `k = 1` in the same run | hit-testing drifts → M1 is wrong and the phase stops, since 13.1 is what makes the rest free |
-| **G17c** the cursor | ours in the sharp layer from live state, the fallback masked in its rect, `cursorscale=` | crisp at `k = 1.5` and 3, under the true pointer; G13m's motion-frame measure re-run | — |
-| **G17d** the string op | `PK_STRING`, the observer's string/font/colour capture, the atlas draw | text clean at `k ≠ 1` **and bit-identical to the engine's glyphs at `k = 1`**; arena bytes per batch down | our stamp and the engine's blit disagree → the measure loop is wrong; fix it rather than accept a near miss |
-| **G17e** the minimap | the 252-px base snapshotted at load, our fog from the corner-mask grid, the engine's dots replayed ×2, our view box | sharp at `k`; dot positions within a pixel of the engine's; **no unit visible that the engine does not show** | the fog rules disagree (13.10) → keep the engine's fog as a pixel op and ship the base alone |
+| **G17c** the cursor — **done 2026-09-09, §17** | ours in the sharp layer from live state, the fallback masked in its rect **and the rect counted as key in the world composite**, `cursorscale=` | crisp at `k = 1.5` and 3, under the true pointer; G13m's motion-frame measure re-run | — |
+| **G17d** the string op — **done 2026-09-09, §18** | `PK_STRING`, the observer's string/font/colour capture, **a per-font glyph cache** and the stamp into the twin | text clean at `k ≠ 1` **and bit-identical to the engine's glyphs at `k = 1`**; arena bytes per batch down | our stamp and the engine's blit disagree → the measure loop is wrong; fix it rather than accept a near miss |
+| **G17e** the minimap — **done 2026-09-09, §19** | the 252-px base snapshotted at load, ~~our fog from the corner-mask grid~~ **the engine's own fog, dots, arcs and points by masking `+0x142DB`/`+0x142DF` against `+0x142E3`**, our view box | sharp at `k`; dot positions within a pixel of the engine's; **no unit visible that the engine does not show** | the fog rules disagree (13.10) → ~~ship the base alone~~ **not available: an unfogged base reveals the map (§19)** |
 
 Reviews per the house rule: G17a and G17b at `high` (a new byte patch at `0x491AFB`, and the
 composite seam), G17c/d/e at `medium` unless they add a patch.
@@ -1954,7 +2044,7 @@ against a 2.25x nearest blow-up of 640x480. 0 magenta either way.
 
 - **Which knob the player turns is still the owner's to decide.** §13.7 says the player picks the
   window and the engine is given `window / k`. Implementing that literally means redirecting the
-  six game-entry reads of the desired mode ([resolution](resolution.html) §3.1b) and never
+  eight game-entry reads of the desired mode ([resolution](resolution.html) §3.1b) and never
   writing `main+0x37F1B/1F`, because `REGISTRY_SaveSettings` writes back every option from memory
   from ~30 call sites and would persist our value into the player's registry — the `ScrollSpeed`
   write-back a review caught on G13e. The inverse — the player picks the game resolution and the
@@ -1994,3 +2084,466 @@ against a 2.25x nearest blow-up of 640x480. 0 magenta either way.
   regression is clean, and the single hole was a transient of the kind the stall-recovery window
   produces rather than anything the landing introduced. Two runs, one hole, and it is recorded
   with what it was a picture of.
+
+---
+
+## 17. G17c — the cursor  [MEASURED 2026-09-09]
+
+Phase 2's third gate, and the first real client of the sharp layer G17a built empty. The engine's
+cursor is replaced by ours, drawn at **1× device pixels at every `k`** from the true pointer, and
+the engine's own is erased from the frame it was blitted into.
+
+### What the gate turned out to need: two modules, not one
+
+§13.5 said the cursor branch "simply changes from *discard* to *mask the fallback in that rect*".
+That is the UI layer's half and it is not the whole job, which the groundwork established before
+any code was written (§13.5's implementation note, now acted on):
+
+- Over the **panel** the twin covers the engine's cursor as soon as the layer stops discarding
+  its rect, exactly as §13.5 predicted.
+- Over the **world** it does not. The engine's cursor reaches the screen through the fork's own
+  engine-frame draw, beneath everything of ours, and `tagpu_native.c`'s composite discards our
+  fragment wherever the engine's surface is not the terrain key — a cursor pixel is not the key,
+  so it survives underneath. **The cursor's rect therefore counts as key in the world composite
+  too** (`CFS`, `uCurs`). A version that only drew ours would have shipped two cursors over the
+  world, and the measurement below is what proves it does not.
+
+Because both modules erase the same rectangle, the state is read **once per frame** —
+`tagpu_gui_cursor_frame()`, called from `tagpu_overlay.c` *before* `tagpu_native_frame` — rather
+than twice. Two reads of `*(0x51FBD0)+0x1B6/+0x1BA` a pass apart would differ by any mouse move
+in between and leave a sliver of the engine's cursor standing.
+
+### How it works as built
+
+- **The pixels need no observer change, and the record is a GAF frame.** The cursor's blits never
+  become ops (everything drawn inside the flip is excluded, `tagpu_gui_leaves.h`), but the sprite
+  record at `*(0x51FBD0)+0x1B2` is a **GAF frame header** and the engine hands it straight to
+  `CopyGafToContext 0x4B7F90` — `mov eax,[ebx+0x1B2]` at `0x4C2960`, pushed at `0x4C297B` behind
+  the NULL context. So the render thread reads the frame directly, `tagpu_gaf_atlas_get` decodes
+  and uploads it into **the UI atlas we already have**, and it is restored by the same lazy job at
+  the same priority — no new pool slot, which matters with `MAX_JOBS` at 6 and priorities 0–4
+  taken.
+- **`CURS_FS` draws it into the sharp layer**, paired with `QVS` like every other client: the
+  atlas index, the colour key discarded so the layer's alpha is exactly the frame's coverage, the
+  restored twin where its alpha says it has colour, and the **presented** palette otherwise — not
+  `main+0x143A7`. The cursor sits on top of both halves of the frame and one a Gamma step darker
+  than the panel under it would show.
+- **The position is the true device pointer.** `mouse_client_to_game` (G17b) is the one place a
+  client point is converted, so it records it (`mouse_note_client`); `wndproc`'s `WM_MOUSEMOVE`
+  records the same point before `x_adjust`. The engine only ever learns a point on its own
+  logical grid, so its cursor can only sit on multiples of `k` device pixels. An **injected**
+  click has no pointer behind it, so `deliver_mouse` drops the record (`mouse_forget_client`) and
+  the draw falls back to the engine's position at the centre of its logical pixel — which is
+  where the engine draws, so the harness and the engine never disagree about the gadget.
+- **Ownership latches on the atlas.** A shape not yet uploaded is not owned: the sharp pass
+  atlases it that frame and the next frame draws it. That costs one frame of the engine's own
+  cursor per new shape and never a frame with no cursor at all — the erase is unconditional and
+  the draw is not, so getting this backwards is the one thing the gate could have shipped
+  invisibly. `warm=` in the heartbeat counts those frames (6 across a whole in-game session: the
+  contextual cursor set).
+- **`nocursor` and `cursorscale=N`** are tokens in `tagpu_gui.on`. `nocursor` is phase 1's
+  behaviour exactly — the A/B, and the escape if the record ever stops being a frame header.
+  `cursorscale=` is §13.5's knob, clamped to 0.25–8 rather than trusted.
+- **The layer's shader order changed, and that is the rest of G17c.** The sharp layer is now
+  tested **before** the cursor rect. G17a had the discard above it, which was harmless while the
+  layer was empty and fatal the moment a cursor moved in: the one place a cursor is drawn was the
+  one place the shader had already given up. The rect stays exempt from `strict` either way,
+  because either way the engine's surface holds cursor pixels the twin has never seen.
+
+### Measured
+
+Two Continents, `scenarios/tascene-parity.json`, the default arm set, Gamma 12 (`paldiff=0`).
+The measure is the cursor's **device footprint**: park the pointer far away, shoot, move it to a
+known client point, shoot, and take the bounding box of the pixels that changed. It needs no
+reference image and it answers both questions at once — how big the art is on screen, and whether
+there is one cursor or two.
+
+| | engine mode | ours | the engine's (`nocursor`) |
+|---|---|---|---|
+| `k = 1.5`, over the **world** | 1024x768 in 1536x1152 | **10x20**, 112 px | 15x30, 252 px |
+| `k = 1.5`, over the **panel** | " | **10x20**, 112 px | 15x30, 268 px |
+| `k = 3`, the shell | 640x480 in 1920x1440 | **10x20**, 112 px | 30x60, 1 707 px |
+
+The art is 10x20 (`curs=` says so). **Ours is 10x20 device pixels at every `k`** — one device
+pixel per art pixel, no filter in the path at all, which is what 13.5 means by crisp and is a
+stronger statement than any sharpness ratio. The engine's is that art nearest-blown-up by `k`:
+1.5x and 3x per axis, 2.25x and 9x the area.
+
+**And it is one cursor, not two.** If the engine's were still underneath, the changed box would be
+the union — the larger one. Over the world it is the smaller one, which is the world composite's
+`uCurs` exemption doing its job; over the panel it is the smaller one too, which is the layer's.
+
+**At `k = 1` ours is byte-identical to the engine's.** The parity fixture at 1024x768, `classicpp`
+off, six shots each way:
+
+| | frames |
+|---|---|
+| `gui.on=nocursor` | `568cc55c4301ab88f166282f969e18b9`, `608cbeaf765985b31a3f677e1551578f` |
+| `gui.on` (ours drawn, `drawn=240`) | **the same two md5s** |
+
+Those are §15's recorded values for `main`, which are §10's originally recorded parity md5 and its
+partner. So the change is inert with `nocursor` — the regression guard — and with our cursor
+actually drawn the frame is *still* byte-identical, because at `k = 1` ours is the same art
+through the same presented palette at the same position. Comparing the two builds frame by frame,
+the only difference anywhere is **one pixel at (512, 384)**, which is the fixture's own two-state
+flip §15 already recorded on `main` itself.
+
+**G13m's motion-frame measure, re-run.** G13m's artefact was the engine's sprite left behind at
+the unzoomed `u` on 10–11 % of motion frames at 0.25x. Eight `dmove` steps along a diagonal at
+zoom **0.263** and `k = 1.5`, one shot each, footprint measured against a parked reference:
+
+| stops | footprint | origin |
+|---|---|---|
+| **8 of 8** | 10x20, 112 px, every one | **exactly the commanded client point, every one** |
+
+Zero stragglers, and it cannot recur: ours is drawn on the render thread from the client point the
+message carried, not from any engine sample that a flip could get ahead of.
+
+**The `k = 1` regression** — `uiwalk.py --layer --cycles 3` at 1024x768, `classicpp` off, with
+the cursor ours. The walk already excludes the cursor rect (padded 8 px) from its diff, so what
+it measures is the rest of the frame, which is the point: the cursor became ours and nothing else
+moved.
+
+| | reading |
+|---|---|
+| stops | **117 parity stops + 3 loading screens = 120** |
+| `strict` holes | **0 on all 120** |
+| hit misses | **0 on all 117**, `k = 1.0000`, drift 0 px |
+| differing pixels outside the viewport | **0 on 101 of 117**; the 16 that are not are the `MAINMENU` visits, **178-189** |
+| inside the viewport, on the engine's non-key pixels | `vpdiff=0/N` on **all 59** in-game stops |
+| `overflows` / `lost` | **0 / 0** on all 120 |
+
+The same shape as G17a's run, stop for stop. The one difference worth naming is that the sparkle
+band reads **178-189** here against the **179-190** §15 recorded — one pixel lower at the bottom
+and one lower at the top, on an animation that is sampled between two shots. It is the same
+phenomenon and it is quoted as measured rather than rounded into the earlier band.
+
+### Not closed here
+
+- **The cursor's erase and its draw are latched on different conditions.**
+  `tagpu_gui_cursor_frame` owns the cursor on the atlas alone, while the world composite's
+  cursor exemption sits inside `uKey >= 0` (`tagpu_native.c`: the terrain is ours and the fill
+  has not stalled). Where our own FBO is *empty* and `uKey < 0` the engine's frame shows through
+  with its cursor while the sharp layer still draws ours — two cursors over the world. Not
+  reachable in the shipped path (the terrain is ours whenever the world composite runs, and over
+  the panel the layer's twin covers the engine's cursor either way), and not observed; the fix
+  is a decision about which module owns the question, so it is recorded rather than guessed at.
+- **The cursor is not restored under Classic++ in practice**, only in principle: `CURS_FS` reads
+  the atlas's restored twin where its alpha says so, and cursor frames are above the 12-px restore
+  floor, so they queue like any other UI art. Nothing has measured whether the restored cursor is
+  *right*; `tascene uidiff` covers the atlas as a whole and does not single it out.
+- **`cursorscale=` is implemented and unmeasured.** It is clamped and it scales the quad; no
+  reading was taken of what a 2x or 3x cursor looks like against a 3x UI, which is the question
+  §13.5 raises and leaves to the owner.
+- **The erase is the engine's LAST-DRAWN rect**, `+0x1B6/+0x1BA`, which is stale if the engine
+  stops drawing its cursor without moving it. Phase 1's discard already trusted that rect, so this
+  is not new, but under G17c a stale rect erases a rectangle of the engine's own in-viewport
+  pixels rather than merely deferring to them.
+- **Inside the cursor's rect the world composite paints our world over whatever engine UI was
+  there** — health bars, a nanoframe, chat — for that frame. Its own cursor had already covered
+  those pixels in the frame being composited, so nothing is lost that the player could have seen,
+  but the rule is "the rect is key", not "the rect is background".
+- §16 said the desired mode has **six** game-entry read sites; [resolution](resolution.html) §3.1b
+  established there are **eight** (`0x4983BF/B9` feed `SetWindowPos` only, `0x4983E2/DC` feed
+  `NewTAScreen`). Corrected here rather than left standing.
+
+---
+
+## 18. G17d — the string op  [MEASURED 2026-09-09]
+
+§3.6's sixth op kind, finally built. `PK_STRING` carries the string, the font object and
+`0x4CCF60`'s three colour bytes; the render thread stamps TA's own glyphs into the twin instead of
+publishing the box's captured pixels.
+
+### What the gate needed that §13.4 does not say
+
+**The UI's text is not the marker path's text, and that decides the whole shape.**
+`tagpu_text.c`'s atlas is keyed on the whole **string**, which is exactly right for the world's
+markers — a dozen range labels and a group digit, a fixed set that never changes. The engine's UI
+is the opposite: the metal and energy readouts, the clock, unit counts and build percentages are a
+new string every tick, against `MAXSTR 64`. That cache would evict itself several times a second
+and rasterise for ever, and it repacks on any font change while the UI switches font many times a
+frame.
+
+So G17d adds a **per-font glyph cache** beside it, and that is exact rather than approximate:
+`0x4CCF60` advances x by the glyph's own width byte and nothing else — `0x4CCFF7`..`0x4CCFFD` adds
+`cl`, the width, to the row-start pointer — so there is no kerning and no pair table, and a run of
+per-glyph quads at those offsets **is the arithmetic the blitter does**. Its atlas is separate from
+the string one (different lifetimes, different key space, and the marker path is a landed gate that
+should not move to make room), and it runs to **0xFF, not 0x7E**: the blitter bounds a character
+below (`sub ebx,first; jb` at `0x4CCFAA`) and not above, so a UI string must be reproduced over the
+engine's whole range. Each table entry is probed at the index the engine would use rather than the
+font's table length being demanded up front, since that length is stated nowhere in the object.
+
+**The three colour arguments are BYTES** [BINARY-VERIFIED 2026-09-09]: `0x4CCFD5`/`0x4CCFD8` take
+fg and transparent with `mov al/ah, BYTE PTR`, `0x4CCFDF` takes bg the same way, and `0x4CCFE2` is
+`cmp al,ah` — an 8-bit compare. So the op carries them as bytes, and a wider compare than the
+engine's is not available to get wrong.
+
+### Into the twin, not the sharp layer
+
+§13.2 leaves this open — "string ops **if** they are rendered late rather than into their surface's
+colour twin" — and §13.4 closes it: *a 1× glyph carries 1× information however it is drawn.* A
+device-resolution layer buys nothing in sharpness and costs the one thing that matters, because
+text drawn at 1× device size beside a 3× panel is unreadable. The gains §13.4 claims are all
+properties of stamping into the twin, and all three are real:
+
+- a glyph's edge no longer drags in the art it was blitted onto;
+- **restored Classic++ colour survives between the letters** — the stamp writes `oCol = 0` only
+  where it writes ink, where publishing the box's bytes invalidated the colour of the whole
+  rectangle;
+- the arena carries the string.
+
+### Measured
+
+**The 120-stop `strict` walk is the exit**, because it diffs our frame against the engine's own
+surface pixel by pixel: a glyph off by one shows. `uiwalk.py --layer --cycles 3`, 1024x768,
+`classicpp` off, twice.
+
+| | run 1 | run 2 |
+|---|---|---|
+| stops | 117 + 3 loading | 117 + 3 loading |
+| `strict` holes | 0 on 119, **7 079 on `game-back#3`** | **0 on all 120** |
+| hit misses | 0 on all 117 | 0 on all 117 |
+| `vpdiff` in game | 0 on 57, **35 on `space-popup`** | **0 on all 59** |
+| differing outside the viewport | 0 but the 14 `MAINMENU` stops, 177-192 | 0 but the 16, 178-193 |
+| string ops / glyph quads | 20 279 / 146 778 | 20 194 / 148 109 |
+| `miss` / `reseed` / atlas resets | **0 / 0 / 0** | **0 / 0 / 0** |
+
+Across both runs the stamp never refused a glyph and never failed to draw a string.
+
+**The two anomalies of run 1, and why neither is the string op.**
+
+- **`space-popup`, `vpdiff=35`.** Reproduced and looked at: the box holds a two-digit counter
+  reading **"41", then "40"** — both clean, well-formed glyphs. Our own consecutive GL frames
+  differ by 35-42 px in that box, so the residual is exactly one tick of the counter, and
+  `vpdiff=35 ≤ self=38`. It also disposes of the one hypothesis worth having: if a
+  transparent-background stamp failed to erase the previous digit, the "0" would carry the "1"'s
+  stem inside it. It does not. Run 2 reads 0 at the same stop.
+- **`game-back#3`, `holes=7079`, `self=0`.** The stall-recovery window after a cycle's context
+  switch — the same class §16 recorded once at `ARMOPT#2` and the same resolution: the clean run
+  reached that stop having completed one **more** reset (9 against 8). Run 2 reads
+  `vpdiff=0 holes=0` at all three `game-back` stops.
+
+**The arena, A/B'd on a fixture where text is actually redrawn** (`+clock` on, so the clock line
+re-publishes every tick), 300-frame windows, median of 7:
+
+| | arena bytes per 300 frames | string ops per window |
+|---|---|---|
+| the string op | **2 035 029** | 999 |
+| `nostring` | **3 606 998** | 0 |
+
+**44 % less traffic, ~1 573 bytes saved per text op.** §13.4 estimated ~40 bytes against ~968; the
+direction is right and the magnitude larger, because the clock line's box is bigger than the
+estimate assumed.
+
+> **A trap this measurement cost one round to find, now written into the code.** `read_tokens()`
+> runs **once, from `tagpu_gui_init` at DllMain**, so every token the *hook* owns — `census`,
+> `log`, `pgm`, `trace` and `nostring` — must be armed BEFORE the launch. Only the surf module's
+> tokens (`strict`, `norestore`, `sharptest`, `nocursor`, `cursorscale=`) follow the file live,
+> because only the DRAW can change mid-session: the publisher's shape cannot, or the twins would
+> be left holding ops of the other kind. The first A/B armed `nostring` on a running instance,
+> which silently did nothing, and duly reported the same run twice.
+
+**At `k = 1.5`** the stamp is unchanged and unaffected — it is twin-side, so `k` is not in its
+path at all: `str=16/44, miss=0, reseed=0` at 1024x768 in a 1536x1152 client.
+
+**THE GLYPH ATLAS CAN REPACK IN THE MIDDLE OF A STRING** [landing review, 2026-09-09 — found
+before it shipped, not observed in a run]. `twin_string` gathers every glyph's atlas cell in a
+first pass and draws them in a second, and `tagpu_text_glyph` restarts the shelves — clearing
+every cell — when one runs the atlas out. A glyph that overflows part-way through therefore
+invalidates the cells already gathered for the *same* string: its leading characters would sample
+0, which is invisible where `bg == tr` and a solid box where it is not, self-healing the next
+frame. This is the same hazard the `s_frameFont` latch prevents one level up (a font change
+mid-gather), and it is closed the same way: `tagpu_text_glyph_gen()` is read before the gather and
+again after it, the gather is retried once if it moved (the atlas is empty at that point, and one
+string's distinct glyphs fit), and a second move falls through to the box's own bytes.
+`repack=` in the heartbeat counts the retries and should read 0.
+
+### Not closed here
+
+- **A static in-game frame publishes its text once.** `str=` froze at 22 ops on the parity fixture
+  until the clock was turned on, because the panel's labels are drawn once and then deduped. The
+  arena saving above is per redraw and is therefore a shell and HUD figure, not a steady-state
+  in-game one.
+- **`0x4CCF60` does no clipping and our stamp does.** A string running off the surface writes into
+  the next row in the engine and is clipped by the FBO for us. Phase 1's captured box already
+  differed there, so this is not new, and no walk has produced one.
+- **A zero-width glyph is refused rather than reproduced.** The engine's per-row counter is a
+  do-while, so `cl == 0` wraps to 255 and smears 256 columns; the cache declines instead. That is
+  a deliberate divergence on a corrupt font, and no stock font has one.
+- The glyph atlas holds 8 fonts and resets wholesale when a ninth appears. Two fonts were seen
+  across a whole 120-stop walk, so the cap is not close, and the reset costs a re-rasterise rather
+  than a wrong glyph.
+
+---
+
+## 19. G17e — the minimap  [MEASURED 2026-09-09]
+
+Phase 2's last gate. The base is drawn from the TNT's own 252×252 picture instead of the 126-px
+box the engine fits it into; the fog, the unit dots, the radar arcs and `DrawPoint`'s points all
+come back from the engine's own pixels; the view box is ours, drawn last.
+
+### What the gate turned out to need, and what it turned out not to
+
+**§13.6's fog source does not exist** [MEASURED, and it is the finding that shaped everything
+else]. "Fog comes from the corner-mask grid we already hold as an RG8 texture for every world
+pass" — that grid is built around the **eye** and covers the **viewport**: `29×23` cells against a
+`336×400` map on Two Continents. It has nothing to say about the rest of the minimap. The engine's
+own minimap fog is a different pass over different data (`0x466C20` shades `+0x142E3` into
+`+0x142DF` per player, reading the player id at `main+0x2A43`).
+
+And the consequence is not cosmetic. The TNT picture is the whole map with **nothing hidden**, so
+a base drawn without fog shows the player terrain they have never explored — a cheat of exactly
+the class §13.6 refuses for the dots. That also disposes of §13.10's recorded pivot, "keep the
+engine's fog as a pixel op and ship the base alone": there is no shipping the base alone.
+
+**The answer the owner chose** (2026-09-09) keeps the visibility decision entirely the engine's,
+which is §13.6's own rule for the dots applied to the fog: **mask against the engine's two bases**
+— `+0x142DF` (with its fog shading) against `+0x142E3` (without). Where they agree the engine is
+showing true terrain and our sharper copy of that terrain is safe; where they differ its own pixel
+is used verbatim.
+
+> **The test is over a 3×3 neighbourhood, and that is the safety argument rather than a nicety.**
+> The shade is a LUT into a dark-grey ramp, so a pixel already in that ramp maps to itself; a
+> single-texel test would then let four of *our* sub-texels through, taken from the unfogged
+> picture and possibly bright. Requiring the whole neighbourhood to agree costs a one-texel band
+> of the engine's own resolution around every fog edge.
+>
+> **The bound it buys is not "cannot leak"** [landing review, 2026-09-09]. The test is at the
+> engine's 126-px resolution and our base is the 252-px picture, so a texel whose whole 3×3
+> neighbourhood is fog-invariant can still contain a sub-texel the engine's nearest downsample
+> never picked. What it bounds is terrain detail only — never a unit, an arc or a point, all of
+> which come from the composite verbatim — and the measured figure is 2 differing pixels of
+> 13 356 on a 99.6 % fogged map, both inside the engine's own lit region. Say "has not leaked in
+> the measured fixture, and cannot leak a unit", not "cannot leak".
+
+**And the same comparison carries the dots, the arcs and the points.** `+0x142DB`, the composite,
+is the fog base plus all three, so it differs from `+0x142DF` exactly where one of them landed —
+one test for all of them, from the engine's own pixels. **That retired the dot replay this gate
+started with.** The replay worked: measured against the engine it was four pixels out, and all
+four were the view box drawn in the wrong order. But it could only ever carry the *dots* —
+`0x4C0070` and `0x4BEE60` are not observed leaves (§7) and each would have needed its own
+rasteriser reproduced exactly. One mechanism that carries all three beats two that do not, so the
+accumulator, the op-side counters and the `mmdots` token were removed rather than left as a second
+path. **§7's trap therefore does not need fixing for this gate**: we never observe those two.
+
+### How it works as built
+
+- **The picture is snapshotted where it is alive.** `BuildMinimapSurface 0x466780` has one caller
+  (`0x4669B0`, whose own caller is `0x4919C3`), consumes `main+0x1426B` at `0x46684F`, and the
+  loader frees the picture at `0x483DF3`/`0x483E0B` in a function that calls neither — so an
+  observer at `0x466780`'s entry sees it by construction. It is a GAF frame, so the existing
+  decoder reads it. **It does not run on the game thread**, which is why the first build of the
+  observer logged nothing at all; the guard is deliberately absent for that one handler.
+- **It lives in the sharp layer**, because the engine's minimap reaches the frame as a copy of the
+  126-px composite and a twin can therefore never hold more than 126 px there.
+- **The base is sampled as COLOUR, not as an index.** At `1 < k < 2` the box is smaller than the
+  picture, so the draw is a downsample and wants a filter — and interpolating palette indices is
+  meaningless (§13.3's rule, just as true here). The picture is uploaded already resolved through
+  the presented palette, `MIN` linear and `MAG` nearest, re-resolved once per map load and once
+  per palette change. The resolution is `tagpu_pal.h`'s, shared with every world pass — its
+  `tagpu_pal_serial()` is the bake's invalidation key, because that serial is bumped on exactly
+  the 1024-byte change this cache has to notice. Before any palette is resolvable
+  (`tagpu_pal_live()` is `NULL`) the bake retries the next frame rather than drawing.
+- **The view box is drawn last**, because that is where the engine puts it (`0x466B44` copies,
+  `0x466B5E` draws). Four one-*game*-pixel edges, so it keeps the weight the engine gives it
+  instead of thinning to a device pixel as `k` grows. **Its colour is a palette index, not an
+  RGB** — the byte at `main+0xDD9`, zero-extended into the `DrawTranspRectangle` call at
+  `0x466B50` [VERIFIED 2026-09-09, engine map] — so it resolves through the same presented
+  palette as the base, and with no palette resolvable the box is skipped rather than drawn in a
+  wrong colour.
+- **Ours at `k > 1`, the engine's at `k = 1`.** Not timidity — arithmetic. See below.
+
+### Measured
+
+**The `k = 1` rule is a measurement, not a precaution.** At `k = 1` the box is 106×126 *device*
+pixels, so drawing it from a 252×252 source throws three quarters of the picture away and lands on
+a nearest downsample where the engine used its own stretch:
+
+| in the box at `k = 1` | distinct colours |
+|---|---|
+| the engine's | **36** |
+| ours (forced on with `mmbase`) | **30** |
+
+Ours is *worse* there, as well as 7 232 px away from the oracle every phase-1 measurement is taken
+against. So the minimap is ours at `k > 1` and the engine's at `k = 1` — the same shape as G17a's
+"at `k = 1` the ramp is exactly the identity".
+
+**Sharp at `k`**, distinct colours in the box:
+
+| `k` | the engine's | ours |
+|---|---|---|
+| 1.5 | 532 | **2 084** |
+| 1.875 | 2 238 | **3 208** |
+
+Ours filters a 252-px source into the box; the engine ramps a 126-px source up to it. Ours has
+strictly more source than destination, the engine's strictly less.
+
+> **A metric trap worth naming, because it inverts.** Horizontal replication at `k = 1.5` reads
+> **59.2 % for ours against 50.4 % for the engine's**, which looks like the wrong answer. It is
+> not detail: the engine's low replication is the sharp-bilinear ramp perturbing every pixel of a
+> poorer source. Replication measures flatness, and palette-exact regions *are* flat. The same
+> family of trap as the mean-gradient metric §16 records.
+
+**Nothing the engine shows is hidden, and nothing it hides is shown.** On a 99.6 % fogged map
+(`scenario load --mapping 0`; the mapped fixture reads `fog=0/13356` and tests nothing):
+
+| | reading |
+|---|---|
+| engine texels hidden | **13 301 of 13 356** |
+| our minimap vs the engine's, in the box | **2 pixels of 13 356** |
+| where those two are | inside the engine's own lit region — its 67 lit pixels span (32,7)-(68,125), the two are (64,122) and (64,123) |
+| dot and view-box colours | identical counts both ways (8 + 8 + 26 px) |
+
+The property is **bounded, not hoped**: our base can only be used where the pair agrees across
+3×3, so the pixels that can differ are at most the unfogged texels (55 here) times `k²`. Two is
+inside that bound, and `fog=` reports the bound every frame.
+
+On the fully mapped fixture, ours differs from the engine's in 7 232 px — our base is a different
+resample — with **zero** of them involving a dot or view-box pixel.
+
+**The `k = 1` regression** — `uiwalk.py --layer --cycles 3` at 1024×768, `classicpp` off, with
+G17c, G17d and G17e all in the DLL:
+
+| | reading |
+|---|---|
+| stops | **117** |
+| `strict` holes | **0 on all** |
+| hit misses | **0 on all**, `k = 1.0000` |
+| inside the viewport | `vpdiff=0` on **all 59** in-game stops |
+| differing outside the viewport | 0 but the 16 `MAINMENU` stops, **173-195** |
+
+The sparkle band has now been sampled five times across the phase — 179-190, 178-189, 177-192,
+178-193, 173-195 — and it widens with the sample count, as a stochastic animation caught between
+two shots should. It is one phenomenon and the range is quoted as measured each time rather than
+pinned to the first reading.
+
+**The engine's pair is validated on every field the walk uses** [landing review, 2026-09-09].
+`+0x142DF`, `+0x142E3` and `+0x142DB` are 8bpp offscreens read as four ints — `w, h, pitch,
+base` — on the render thread while the game thread may be rewriting them. Dimensions were
+cross-checked between the three and bounded to 512, and the bases probed; the three **pitches**
+were not, and the walk is `base + yy * pitch` for `yy` up to 511, so a wild or negative pitch out
+of a half-freed surface would read past the surface every frame. They are now bounded the same
+way (a row cannot be shorter than the surface is wide, and these are at most 512 px), and a
+refusal counts in `noeng=`.
+
+### Not closed here
+
+- **The one-texel safety band is the engine's resolution.** Around every fog edge, a 3×3
+  disagreement forces the engine's own 126-px pixel, so the boundary between explored and
+  unexplored is drawn at the engine's resolution while the interior is ours. Correct and
+  conservative; not measured for how visible it is at `k = 3`.
+- **The mask is not PROVEN leak-free for terrain**, only measured. The 3×3 test is at 126 px and
+  the base it admits is 252 px, so a fog-invariant neighbourhood can still carry a sub-texel the
+  engine never sampled. Units, arcs and points cannot leak — they come from the composite
+  verbatim — and the fixture reads 2 of 13 356. A proof would need the test at the base's own
+  resolution, which the engine's pair does not have.
+- **`k = 3` itself is unmeasured for the minimap.** 1.5 and 1.875 are; a 3072-wide client was not
+  reachable on the reference setup and `--res 640x480` does not take (§16's registry-inode note).
+- **The dots are the engine's pixels at 126 px**, not its art replayed at `k`. §13.6 imagined a
+  ×2 replay into a 252-px target; the composite mask makes that moot for correctness, and the
+  dots are 4×4 sprites whose art carries no more detail than the composite already has.
+- **`+0x142E3` and `+0x142DF` are read on the render thread while the game thread may be
+  rewriting them** — the same standing as the fork's own surface upload. The worst a torn read
+  does is put one frame's fog against another's.

@@ -602,6 +602,12 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_scaffold_frame(f);
     oerr("scaffold");
 
+    /* G17c: the cursor's ONE decision for this frame, before the world pass
+       reads it (tagpu_gui.h). Both the composite below and the UI layer after
+       it erase the engine's cursor from the same rect, and they can only agree
+       if the globals are read once. */
+    tagpu_gui_cursor_frame();
+
     /* G12b: native unit pass (tagpu_native.on) — needs this frame's scaffold */
     tagpu_native_frame(f);
     oerr("native");

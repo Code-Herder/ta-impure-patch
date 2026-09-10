@@ -1064,6 +1064,33 @@ transparent equal to `bg` makes the background bits no-ops, so `(255, 0, 0)` tur
 into a **1-bit coverage mask** rather than a coloured sprite. The bit counter (`dl`) is reset
 per GLYPH at `0x4CCFC8` and not per row, so only each glyph starts on a byte boundary.
 
+**All three colours are used as BYTES, and the test is an 8-bit compare** [VERIFIED 2026-09-09,
+G17d]: `0x4CCFD5` `mov al,BYTE PTR [ebp+0x20]` (fg), `0x4CCFD8` `mov ah,BYTE PTR [ebp+0x28]`
+(transparent), `0x4CCFDF` `mov al,BYTE PTR [ebp+0x24]` (bg, on the clear bit), then `0x4CCFE2`
+`cmp al,ah`. The arguments are `int`s and their high three bytes are never read, so anything
+mirroring this call stores and compares the low byte and nothing wider.
+
+**The cursor advances by the glyph's own width byte and NOTHING ELSE** [VERIFIED 2026-09-09,
+G17d]: at the end of a glyph `0x4CCFF7` reloads the row start from `[ebp-0xc]` and `0x4CCFFA`/
+`0x4CCFFD` add `cl` — the width read at `0x4CCFBF` — to it. There is no kerning and no pair
+table, which is what makes a **per-glyph** replay of a string exact rather than approximate: the
+GL UI renderer's string op stamps one quad per glyph at exactly these offsets ([GUI
+renderer](gui-renderer.html) §18). The character filter is `sub ebx,first; jb` at `0x4CCFAA`
+(below `first` is skipped **and does not advance**) and `or ebx,ebx; je` at `0x4CCFB9` (a zero
+table entry, likewise) — bounded below and **not above**, so the table is indexed with whatever
+byte the string carries.
+
+**The per-row column counter is a do-while, so a ZERO width byte writes 256 columns per row**
+[VERIFIED 2026-09-09, G17d/G17e]: the width is read into `cl` at `0x4CCFBF`, copied to `ch` at
+**`0x4CCFCA`**, and the column loop decrements it at the BOTTOM — `dec ch` at **`0x4CCFE9`**
+with `je 0x4CCFEF` at `0x4CCFEB` and `jmp 0x4CCFCC` at `0x4CCFED`. `ch = 0` therefore wraps to
+255 on the first decrement and runs 256 times. It is per row, not per glyph: the row tail
+`0x4CD006` jumps back to `0x4CCFCA` and reloads `ch` from `cl` for every one of `font[0]` rows,
+so a corrupt width byte of 0 smears `256 × rows` pixels past everything the caller measured.
+**No stock font has one** — the guard matters only for a font a mod ships. `tagpu_text.c`
+refuses `gw <= 0` in both `measure` and the per-glyph probe, which is a deliberate divergence:
+the engine would smear, we draw nothing.
+
 #### The text globals, and who sets them
 
 | VA | What |
@@ -1572,7 +1599,7 @@ their head; `0x4C24B0`, `0x4C25E0`, `0x4C67C0` and `0x4C6B10` do **not** — the
 | `+0x192` | ring **tail** (read index), advanced at `0x4C2DB5` | disassembly |
 | `+0x196` | the **current mouse record**, 6 dwords, laid out exactly like a ring entry. Written whole by `0x4C2360`, and x/y alone by each of the three drawing polls | disassembly + live |
 | `+0x1AE` | cursor hide/nesting counter — `0x4C2870` decrements it and returns early while it is still > 0 | disassembly |
-| `+0x1B2` | the current cursor sprite record: size at `+0`/`+2`, read **zero**-extended (`xor edx,edx; mov dx,…`), hotspot at `+4`/`+6`, read **sign**-extended (`movsx`) — so a hotspot may be negative and a size may not | disassembly |
+| `+0x1B2` | the current cursor sprite record: size at `+0`/`+2`, read **zero**-extended (`xor edx,edx; mov dx,…`), hotspot at `+4`/`+6`, read **sign**-extended (`movsx`) — so a hotspot may be negative and a size may not. **It is a GAF frame header, whole**, not a cursor-shaped struct that happens to start like one: `0x4C2960` loads `[obj+0x1B2]` and `0x4C297B` pushes it straight to `CopyGafToContext 0x4B7F90` behind the NULL context, so the colour key at `+0x08` and the pixel plane at `+0x10` are the ones every other GAF frame in this engine carries ([effects](effects.html) `CopyGafToContext`). That is what lets a renderer draw the cursor with no observer on the blit at all — it reads the frame instead. **[VERIFIED 2026-09-09** by disassembly `0x4C28A5`–`0x4C2989`, and by measurement: decoding it through `tagpu_gaf_decode` and drawing it at `k = 1` reproduces the engine's own frame byte for byte ([GUI renderer](gui-renderer.html) §17), which a wrong key or pixel offset could not.**]** | disassembly + live |
 | `+0x1B6` / `+0x1BA` | the position the sprite was last DRAWN at, i.e. position − hotspot | disassembly |
 | `+0x1BE` / `+0x1C2` / `+0x1C6` | saved-background rect pointers *[INFERRED]*. **Not one per draw path**: `0x4C2870`, `0x4C24B0` and `0x4C67C0` all use `+0x1BE`, `0x4C25E0` uses `+0x1C2`, and no reader of `+0x1C6` was found in this pass | disassembly |
 | `+0x1CE` | a mode word, and **not a simple disable**: `0x4C67C0` returns early when it is **zero**, `0x4C2870` returns early when it is exactly **1**. The two draw paths below are selected by it *[INFERRED]* | disassembly |
@@ -2412,7 +2439,36 @@ skill says.
 ### The minimap, located [VERIFIED]
 
 `main+0x1426B` (`TED_GENERATED_PIC`) is consumed once, at `0x46684F` in
-**`BuildMinimapSurface 0x466780`** (no args, prologue `83 EC 40 53 8B 1D E8 1D 51 00`): it
+**`BuildMinimapSurface 0x466780`** (no args, prologue `83 EC 40 53 8B 1D E8 1D 51 00`, `ret` at
+`0x4669A3`). **Its one caller is `0x4669B0`, the minimap set-up** *[INFERRED name]*: that function
+is `call 0x466780` as its first instruction, then creates `+0x142DB` (tag `0x507518`) and
+`+0x142DF` (tag `0x507508`), both `0x4C69F0(tag, [+0x142EB], [+0x142ED])`. **`0x4669B0`'s one
+caller is `0x4919C3`.** [VERIFIED 2026-09-09 by an `E8`/`E9` scan of the whole `.text` for each
+target; the loader's own free at `0x483DF3`/`0x483E0B` is in a function that calls neither, so the
+only moment the picture is reachable from a hook of ours is inside `0x466780`.]
+
+**`0x466780` runs on a thread of its own, NOT the game thread** [MEASURED 2026-09-09]: an observer
+at its entry with the usual game-thread guard fired on every map load and refused, naming the
+thread. Every other site the GL UI renderer observes is called from the game loop; this one is not.
+
+**The fit, exactly** [VERIFIED 2026-09-09 by disassembly of `0x466780`..`0x466868`]: with
+`w = [main+0x1422B]` and `h = [main+0x1422F]`, the long axis gets **126** and the short one
+`short × 126 / long`, truncating, and the box is centred in a 126×126 area — `+0x142E7` is
+`(126 − w') / 2` with `+0x142E9 = 0` on a wide map (`0x4667D1`..`0x466801`) and the mirror image on
+a tall one (`0x4667A4`..`0x4667CF`). Measured on Two Continents: **106×126 at offset (10, 0)**.
+Then `0x4C69F0(0x5074F8, w', h')` creates `+0x142E3` at the box size, `0x466845` builds a context
+for it, and — **if `main+0x1426B` is non-NULL** — `0x46685F` hands the picture straight to the
+stretch `0x4B95A0` and returns. So the whole **252×252** picture is squashed into the
+aspect-correct box, and a renderer drawing it with full 0..1 UVs into that box reproduces the
+engine's mapping rather than approximating it. If the picture IS NULL, `0x46686C` takes a wholly
+different path: a `2w' × 2h'` surface (tag `0x5074E8`) built from the terrain instead.
+
+**`+0x142F1` bit 1 is a DIRTY flag, not a visibility flag.** `DrawMinimap 0x466B00` tests it at
+`0x466B11` and **clears it at `0x466B16`** in the same breath, so it reads 0 on almost every frame;
+the engine can afford that because its copy lands in the game offscreen and stays there. Anything
+drawing a minimap into a surface that is cleared per frame must redraw every frame and gate on
+something else — `+0x142DB` being non-NULL is the honest test. [MEASURED 2026-09-09: a renderer
+gated on the flag drew nothing at all, ever.] It
 fits a 126-px box (`main+0x142EB/+0x142ED` size, `+0x142E7/+0x142E9` offsets), creates
 `main+0x142E3 = 0x4C69F0(0x5074F8, w, h)` and scales the picture into it (`0x4B8AE0` + `0x4B95A0`
 [INFERRED stretch]). Three surfaces: `+0x142E3` the scaled map; `+0x142DF` the fog composite,
@@ -2427,7 +2483,13 @@ publishes as a pixel op carrying `+0x142DB`'s final bytes, arcs and points inclu
 correctness depends on `+0x142DF` staying unseeded ([GL UI renderer](gui-renderer.html) §7). **Per frame, `DrawMinimap 0x466B00(ctx)`** (`stdcall`, `ret 4`,
 prologue `8B 0D E8 1D 51 00`, gated on `main+0x142F1 & 2`) does
 `0x4C6B70(ctx, [main+0x142DB], main+0x142E7, main+0x142E9)` at `0x466B44` and the view box
-`0x4BF8C0(ctx, main+0x142CB, main+0xDD9)` at `0x466B5E`; **one caller, `0x46961F` in
+`0x4BF8C0(ctx, main+0x142CB, colour)` at `0x466B5E`; **that colour is the BYTE at `main+0xDD9`,
+zero-extended, not the address** [VERIFIED 2026-09-09, G17e — an earlier revision of this line
+read as though the pointer were passed]: `xor ecx,ecx` at `0x466B4E`, `mov cl,BYTE PTR
+[eax+0xdd9]` at **`0x466B50`**, `push ecx` at `0x466B5B`. So the box's colour is a single palette
+index held at `main+0xDD9` — the same byte §"The order-marker chain" records as the range
+labels' colour (gui `0xE`) — and anything replaying the box has to resolve that index through
+the palette the screen is shown with rather than assume a fixed colour; **one caller, `0x46961F` in
 DrawGameScreen, with the game offscreen's context.** The minimap never goes through the GUI
 surfaces. The map loader builds `main+0x1426B` at `0x483900..0x483936` as a GAF frame
 (`0x4B8DA0(0x508B6C, w, h)`, filled via `0x4B8A80` + `0x4B7F90`) and frees it at

@@ -1522,6 +1522,78 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
     client uses `QVS`, the twins' own vertex mapping, and one that adds a flip draws upside down.
     Harness only, like `strict` — never hand a player an instance with it armed.
 
+### The cursor is ours (phase 2, G17c)
+
+```bash
+tools/tacli arm <i> gui.on=nocursor          # phase 1's cursor, the engine's own — the A/B
+tools/tacli arm <i> 'gui.on=cursorscale=2'   # ours, at 2 device px per art px (default 1, clamped 0.25-8)
+tools/tacli keys <i> "dmove:768,576"         # move the pointer in CLIENT pixels, no click
+tools/tacli log <i> -g 'curs='               # curs=<own>,<w>x<h>,dev=<1 if the client point>,sc=,drawn=,warm=
+```
+
+- **`dmove:` is how you place the cursor without clicking**, and it is client-area pixels. A
+  logical `pmove:` (what `ui hover` sends) works too, but it makes `dev=0`: an injected logical
+  point has no pointer behind it, so the draw falls back to the engine's own position.
+- **The measure is the cursor's device FOOTPRINT, and it needs no reference image.** Park the
+  pointer far away, `glshot`, move it to a known client point, `glshot`, and take the bounding box
+  of the pixels that changed. Ours is **10x20 at every k** (one device pixel per art pixel); the
+  engine's is that art nearest-blown-up — 15x30 at k = 1.5, 30x60 at k = 3. **The box size is also
+  how you tell one cursor from two**: if the engine's were still underneath, the changed box would
+  be the union, i.e. the bigger one.
+- **`warm=` counts frames spent atlasing a shape for the first time**, and one per new shape is
+  correct — ownership latches on the atlas so the erase never runs ahead of the draw. A `warm=`
+  that keeps climbing means the atlas is refusing the frame.
+- **The cursor rect is excluded from `uiwalk`'s diff** (padded 8 px) and exempt from `strict`
+  either way, so neither is a test of the cursor. The footprint above is.
+
+### Text is a string op (phase 2, G17d)
+
+```bash
+tools/tacli arm <i> gui.on=nostring     # BEFORE the launch: text stays a box of captured pixels
+tools/tacli log <i> -g 'str='           # str=<ops>/<glyph quads>,miss=,reseed=,glyphs=<cached>/<drops>,fonts=
+tools/tacli log <i> -g 'arena='         # the queue's MONOTONIC arena head: the delta over 300 frames
+```
+
+- **`nostring`, and every other token the HOOK owns (`census`, `log`, `pgm`, `trace`), is read at
+  ATTACH.** `read_tokens()` runs once, from `tagpu_gui_init`. Arming any of them on a running
+  instance silently does nothing — only the surf module's tokens (`strict`, `norestore`,
+  `sharptest`, `nocursor`, `cursorscale=`) follow the file live. One A/B was lost to this.
+- **`miss=` and `reseed=` must stay 0.** `miss` counts glyphs the cache refused that the engine
+  would have drawn; `reseed` counts strings that stamped nothing and asked for a fresh seed. Two
+  full 120-stop walks produced 0 of each over ~20 000 string ops.
+- **A static in-game frame publishes its text ONCE** — `str=` freezes at ~22 ops on the parity
+  fixture, because the panel's labels are drawn once and then deduped. To measure anything about
+  text, turn the clock on (`+clock` in chat) or open a screen: then it is ~1 000 ops per 300
+  frames.
+- **The arena A/B needs a redrawing fixture and two launches**: 3 606 998 bytes per 300 frames
+  with text as pixel ops against 2 035 029 with the string op.
+- The 120-stop `strict` walk is the real oracle here — it diffs our frame against the engine's own
+  surface, so a glyph off by one shows as `differing`/`vpdiff`.
+
+### The minimap is ours at k > 1 (phase 2, G17e)
+
+```bash
+tools/tacli arm <i> gui.on=nominimap    # the engine's minimap back (live, the surf module polls it)
+tools/tacli arm <i> gui.on=mmbase       # ours forced on at k = 1 too, where it is otherwise OFF
+tools/tacli log <i> -g 'mm='            # mm=<draws>,fog=<hidden>/<texels>,noeng=<frames the surfaces would not read>
+tools/tacli scenario load <i> <scn> --mapping 0    # THE fixture: an unmapped game, so there IS fog
+```
+
+- **At `k = 1` it is the engine's, deliberately** — the box is 106x126 *device* pixels there, so
+  our 252-px source is thrown away and ours counts 30 distinct colours against the engine's 36.
+  `mmbase` forces it on for the A/B; nothing else does.
+- **`fog=0/13356` means the fixture tests NOTHING.** A mapped skirmish hides nothing, so the mask
+  is inert and a clean-looking diff proves only that. `--mapping 0` gives `fog=13301/13356`.
+- **The safety property is a bound you can check**: our base is used only where the engine's
+  fogged and unfogged bases agree across 3x3, so the pixels that may differ from the engine's are
+  at most the unfogged texels times `k²`. Measured: 2 of 13 356 on a 99.6 % fogged map, both
+  inside the engine's own lit region.
+- **Measure sharpness by DISTINCT COLOURS in the box, not by replication** — replication inverts
+  here (59.2 % for ours against 50.4 % for the engine's, because the engine's ramp perturbs every
+  pixel of a poorer source while palette-exact regions are flat). Colours: 2084 vs 532 at k = 1.5.
+- The dots, arcs and points are the engine's own pixels, not a replay: `+0x142DB` differs from
+  `+0x142DF` exactly where one landed.
+
 ### Driving and measuring at k != 1 (phase 2, G17b)
 
 ```bash
