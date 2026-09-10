@@ -343,6 +343,11 @@ float tagpu_zoom_level(void)
     return s_live ? s_zoom : 1.0f;
 }
 
+float tagpu_zoom_min(void)
+{
+    return ZOOM_MIN;
+}
+
 /* Snapshot the published view. Returns 0 when there is nothing to do —
    the caller then leaves the point alone. */
 static int view(float* z, float* cx, float* cy, int* L, int* T, int* W, int* H)

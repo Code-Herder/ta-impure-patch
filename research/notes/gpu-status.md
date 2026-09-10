@@ -134,7 +134,7 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x46A610` | feature draw leaf (`ret 0x10`) | `featown` (`featown.on`) | prologue detour, 5 stolen |
 | `0x483FA0` | terrain tile blit (`ret 4`) | `terrown` (`terrown.on`) | `leaf_call` — the skip path key-fills the viewport |
 | `0x4848E0` | fog overlay (`ret 4`) | `terrown` | `leaf_call` — the skip path replicates only the lazy grid rebuild |
-| `0x4843C0` | screen fog-grid rebuild | `terrown` | *called by us*, not patched |
+| `0x4843C0` | screen fog-grid rebuild | `terrown` | *called by us*, not patched — and **replicated in C** by `tagpu_fogwide.c`, which builds the same masks over a window the whole zoom range fits in (terrain-depth §8) |
 
 > **`0x4B7F90` is not an effects function** — it is the engine's generic GAF-frame blit, and the
 > mouse cursor goes through it too (`0x4C2870` → `0x4C297E`). It is detoured on **`g_fxown_in`**,
@@ -920,6 +920,7 @@ line per change, rate-limited to one a second so a campaign fade cannot flood it
 | `0x469A05` / `0x469BA8` | the two `DrawUnit` return sites | `tracer` |
 | `0x4969D2` | the sim tick site (5 stolen) | `scenario` — applies a situation on the game thread |
 | `0x4B08C0` `0x4B0DA0` `0x4B19D0` `0x4B1A99` + the `E8` at `0x4B15E0` | the COB engine's thread allocator (5 stolen, wrapped: the original runs through the stolen prologue, then the start is latched), the thread runner's entry (5), the `RETURN` handler mid-function (5), the `signal` kill mid-function (6), and the `rand` handler's call into the sim RNG `0x4B6C30` (call-site redirect that calls it itself) | `cobtrace` (`tagpu_cobtrace.on`, its contents a unit-type filter) — the COB script-call oracle for tacob: S/R/X/K/D lines to `tagpu_cobtrace.log`, stamped with the sim tick `main+0x38A47`; reads only, game thread only; all five or none. `tagpu_posedump.on`'s header line now carries `tick=` and `idx=` so the two logs join, and since 2026-09-08 `body=` (the cached triple the compose folds) and `live=` (`unit+0x68/+0x66/+0x64`) beside it, both in axis order — [exe-reverse-engineering](exe-reverse-engineering.html) §"The COB engine", [tacob-design](tacob-design.html) §"The trace contract" |
+| — | `tagpu_posecrc.on`: one line per unit per SIM TICK carrying `in=` a CRC32 of every byte `posed_pose` reads and `out=` a CRC32 of every byte it writes, plus `raced=`. **The only oracle that watches the matrices the unit pass hands the GPU** — `posedump` dumps the *engine's* fields and `tacob pose-check` diffs tacob's reconstruction of them. It is joined on the INPUT, never on the tick, so two runs need no tick-for-tick determinism: `posed_pose` is a pure function of its input, so a shared `in` must carry the same `out`. The input is hashed on **both sides** of the pose loop and the sample is dropped and counted when the game thread moved a field under it (§2.9's residual, measured at 0–0.33%) — [smooth motion](smooth-motion.html) §7e | `tagpu_native.c`, no engine address |
 | — | `tagpu_shadowdump.on`: the Classic++ shadow map written once as a 16-bit PGM, `tagpu_shadow.pgm` (near = small), with its matrix on the `shadow: dumped` log line — the lab's `debug=shadow` for the game; how a caster's silhouette in light space is checked instead of guessed (G14i) | `tagpu_shadow.c`, no engine address |
 | `0x485F50` `0x4864B0` `0x422DD0` `0x4224B0` `0x481550` `0x423C50` `0x43F0E0` `0x43AFC0` | `CreateUnit`, `KillUnit`, `FeatureName2ID`, `LoadFeature`, `GetGridPosPLOT`, `SpawnFeatureOnMap`, `ScriptAction_Type2Index`, `NewMainOrder2Unit` | `scenario` — *called by us*, never patched. **`NewMainOrder2Unit` takes 16.16 in `{x, altitude, depth}`**, the same convention as `CreateUnit`; we passed whole units in `{x, depth, altitude}` until 2026-09-04 and every ordered unit walked to the map origin — [exe-reverse-engineering](exe-reverse-engineering.html) §"The order module" |
 
@@ -959,7 +960,10 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
 | the **level generation** (`tagpu_reclaim_level_gen()`) | not an engine field — our own counter, bumped on the game thread inside the teardown `0x491B60` and read on the render thread. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a) |
+| the **pose history** (`tagpu_lerp.c`, `tagpu_lerp.on`) | not an engine field — our own arena, 3.4 MB of `P_POS`/`P_TURN` snapshots keyed by `(Object3do, nparts, level generation)`. **It READS `pr+P_POS` and `pr+P_TURN` and writes NOTHING back**, which is the whole safety argument: the sim reads those fields (`get PIECE_XZ`, and `QueryPrimary`/`AimFromPrimary` hand the engine weapon muzzle origins out of them) and TA has no runtime desync detection, so a framerate-dependent per-machine blend written there would diverge two machines silently. Verified by running it: the walker's COB trace is byte-identical with the lever on and off ([smooth motion](smooth-motion.html) §7g) |
 | `node+0x24` | the model's REST vertices, `count × 12` bytes of 16.16. Read only. Shared by every unit of a type and never written after load, which is what makes the reconstruction in §2.9 safe to build from while the engine is rewriting the posed copy |
+| `main+0x1421F` | the screen fog grid `{u16* buf; cols; rows; cells}`. Read only, per frame on the render thread. **`cells` is the ALLOCATION**, `(cols*rows + 7) & ~7` — asserting `cells == cols*rows` accepted 1024×768 and refused 1920×1080, where the refusal cleared `fogMode` and there was no fog at all until 2026-09-09 ([terrain & depth](terrain-depth.html) §5.2) |
+| `main+0x2A43`, `main+0x1B63 + id*0x14B + 0x7C`, `main+0x14273`, `main+0x14233`/`+0x14237` | the LOCAL player id, that player's LOS counter block `{u8* buf; w; h}`, the MAPPED bitmap (u16 per tile, one bit per player, row stride `PLOT_C` **bytes**) and the PLOT dimensions. Read only, **on the GAME THREAD** from `tagpu_fogwide.c` at the fog overlay's own call site — which is the lifetime argument for reading them at all: the engine's builder reads the same two allocations there. Every index is bounded by the dimensions read alongside them |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F06` bit2 / bit3 | the graphics options `Shadow` / `TShadow` (the blit tests `al,4` at `0x45928E`, [shadows & cloak](shadows-cloak.html) §2). Read only, per frame. The Classic silhouette needs both, the slant only bit2 — and **since G14i bit2 also gates the Classic++ shadow map** (with `shadows=1` in the cfg), so the player's in-game Shadows toggle keeps its meaning under the switch; bit3 is ignored there |
 | `main+0x37F2F` bit2 | `SelBoxes` |
@@ -1475,9 +1479,29 @@ because the panel is right-aligned and a `.GUI` written at attach cannot know th
 `gi+0xCCA`, the repaint flag. And the loaded GAF frame's colour plane (`+0x10 PtrFrameBits`),
 repainted in place with the composed ground. **Nothing sim-side, and nothing that replicates.**
 
+**Seven rows since 2026-09-09**, the seventh being the FPS readout (§2.14). Two things about it
+are unlike the other six, and `read_state()` and the click handler have to agree on both or the
+row would read one way and behave the other:
+
+- **It never makes Renderer read `Custom`.** Every other row below Renderer changes what the game
+  *looks like*, and `Custom` is the honest answer for those; this one draws a diagnostic over the
+  finished frame and changes no pixel the game rendered. So the click handler skips the
+  `STYLE_CUSTOM` assignment for it and `read_state`'s `custom` test leaves it out.
+- **It is never greyed.** Like supersampling, it is orthogonal to the Classic/Classic++ lane, so it
+  is not one of the switch's dependants — grey it with the lane and a player on Classic could not
+  turn it on.
+
+`PANEL_H` went 212 → 240 for the seventh row: `ROW_Y0 34 + ROW_PITCH 28 × 6 = 202` and `ROW_H` is
+20, so the last row ends at 222 and 240 leaves the 18 px the six-row panel left below 194. One
+define carries it — the GAF frame header, the ground, the ramp, the border and the corner bolts
+are all sized from it — and the panel is **composed at runtime** from the player's install rather
+than shipped, so no art is regenerated. `tools/guipanel.py` still says 304×212: it is the lab's
+copy of this layout, not its source.
+
 **Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
 key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off`
-created and deleted; and **both** `tagpu_classicpp.on` and `.off` — the pair, because
+created and deleted; `tagpu_fps.on` created and deleted (§2.14); and **both**
+`tagpu_classicpp.on` and `.off` — the pair, because
 `tagpu_opt.c`'s precedence is an `.on` wins and an `.off` only defeats a *default*-on, so
 driving one of them applies nothing on an instance that carries `tagpu_defaults.off` or a
 hand-armed `.on` (§2.8). Write access to the gamedir is not new — the DLL
@@ -1494,6 +1518,97 @@ so the two right edges land on one line — measured at both 1024 (988, 704) and
 panel hangs over the world, so clicking a row costs one frame of the panel being re-pushed.
 The row's own state survives it (the model is ours; the levers are read only on the player's
 open), but the rebuild is visible if you look for it.
+
+### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
+
+The design, the invariants and the gate results are [smooth motion](smooth-motion.html); this is
+the hook-map entry. **No engine address, no patch, no engine write.**
+
+`posed_pose` composes each piece's 4×3 from exactly `pr+P_POS` (i32[3] 16.16) and `pr+P_TURN`
+(u16[3] TAang). With the lever armed, those two reads are served from a blend of the unit's last
+two **sim-tick** snapshots instead of the live fields, so the model animates at render rate rather
+than snapping at the tick. It is only this small because G16 turned the pose back into per-piece
+*fields*; before it, the pose arrived already baked into vertices.
+
+- **Read-only.** The history arena is ours (§2.5). Nothing is written back to `PrimitiveStruct` —
+  the sim reads those fields and TA has no runtime desync detection, so a per-machine
+  framerate-dependent blend written there would diverge two peers silently.
+- **The degradation is a refusal, not a weight.** No history, a stale pair, a model over 48 pieces,
+  a full table, or a weight that has reached 1.0 — every one returns 0 and the caller reads the
+  live fields with its own untouched code. Not "blend at weight 1.0": `a + (b - a) * 1.0f` is not
+  `b` in floating point, and the parity claim would have been false.
+- **The tick period is measured, not assumed.** `main+0x38A47` advances `3 × GameSpeed` a second
+  and a skirmish starts at `GameSpeed` **20**, i.e. 60 ticks a second — [engine
+  map](exe-reverse-engineering.html) §"The simulation clock". The module learns the period from the
+  observed interval divided by the tick gap, so it is right at any speed and follows a live change
+  (`p=33.2ms` at GameSpeed 10 against a predicted 33.3). **On pause it degrades by the same
+  refusal**: no new tick arrives, the weight passes 1.0, and every unit draws from the live fields.
+- **Not smoothed, deliberately**: `pose_accum_body` — the path `hires_pose` and `tagpu_posedump.on`
+  take — is untouched, so replacement meshes still step and the sim oracle still reports the
+  engine's own fields. The unit's world position and `O3_BTURN` are out of scope, which means the
+  pose runs a sample behind a position that is not delayed.
+- **Cost**: the first cut's `double` blend measured `+0.560 ms a frame at 240 posed units` — 2.33 µs
+  a unit, 3.4 % of a 60 fps budget, on the paired `crowd-static` fixture
+  ([smooth motion](smooth-motion.html) §7f). **The shipped blend is 16.16 fixed point and that
+  number no longer describes it**: the loop now carries no x87 at all, where the float form carried
+  13 instructions including 4 `fldcw` (§7i, established from the compiler). Its frame cost is
+  **not re-measured** — an interleaved live A/B put every off/on pair below 0.560 ms but spread
+  0.068–0.461 ms under load from three other instances, which is not a number. §7i says how to
+  close it.
+- **The bound on the weight is clamped, not argued.** `w16` is forced into `[0, 65535]` because the
+  turn multiply has only 32767 of headroom (`t` reaches +32768; `32768 × 65535` is 2 147 450 880
+  against `INT_MAX` 2 147 483 647). The `[0,1)` refusal above already implies it today; the clamp is
+  what keeps a later change to that refusal from becoming silent signed overflow.
+- **Known residual, open**: the `(o3, nparts, gen)` key does not separate two units of the **same
+  type** landing on the same reused `Object3do`, so a freshly built unit drawn within `LERP_MAXGAP`
+  of a dead one's last sample can blend one frame from the dead unit's stance. Cosmetic and bounded
+  — every index stays inside the same 48-piece block — but not closed; closing it wants a stable
+  per-unit identity (`unit+0xA8`) rather than the allocation address. Found by the landing review.
+- `lerp=<blended>/<snapped> p=<ms> u=<weight>` rides the `native:` line, and **nothing at all** is
+  printed when the lever is off.
+
+### 2.14 The frame-rate readout (`tagpu_fps.c`, OFF by default, `tagpu_fps.on`) — 2026-09-09
+
+A row on the render-options screen (Off|On) and the module that draws it. **No engine address, no
+patch, no engine read at all** — it counts our own presents and draws over the finished frame.
+
+| site | what we do there | thread |
+|---|---|---|
+| `tagpu_overlay_draw`, after `tagpu_gui_present` | `tagpu_fps_present()` — the readout, drawn **above** the UI layer so the side panel and dialogs cannot hide it | render |
+| `tagpu_overlay_draw`, the context-change branch | `tagpu_fps_glreset()` alongside the other modules' | render |
+| `tagpu_menu.c` `write_levers()` | create or delete `tagpu_fps.on` — the deferred write, off the game thread, exactly as `tagpu_ss.off` is written | render |
+
+**Files.** `tagpu_fps.on`, positive sense (present = on), polled every 30 frames on the render
+thread. The row and the file are one setting, so either can drive it.
+
+**Why not the one that already exists.** cnc-ddraw's own `dbg_draw_frame_info_start` sits behind
+`tagpu_fpsosd.on`, but it is compiled only under `_DEBUG` and GDI-draws into the engine's 8bpp
+surface, where it beats against the engine's redraw of that area and flickers — its own comment
+says so. A `_DEBUG` build would also move the very numbers a frame-rate readout exists to report.
+
+**The atlas is a cache, and that decides the design.** `tagpu_text_place` keys on the WHOLE STRING
+and packs it onto a shelf that is never freed until the font changes, in a **fixed** 512×256 atlas
+(`tagpu_text.c`). A readout that placed `"FPS 101"`, then `"FPS 102"`, would burn one permanent
+entry per distinct number, exhaust the table within seconds and then start dropping — and it shares
+that atlas with `tagpu_mark`'s group digits and the `ShowRanges` labels, so it would starve those
+too. This places **eleven fixed strings** — `"FPS"` and `"0"`..`"9"` — and emits one quad per
+character. Eleven entries, once, for the life of the font.
+
+**Screen space, not world space.** The marker pass's text is world-anchored: its quads carry
+`(wx, wz)` for the fog lookup and take the zoom transform, so a readout drawn through it would
+fade into fog and scale with the camera. This has its own two-triangle program in game-frame
+pixels and nothing else.
+
+**Threads.** Render thread only. It reads the font the game thread published (`tagpu_text_snapshot`
+at hook 8) through `tagpu_text_frame`'s per-frame latch, exactly as the marker gather does.
+
+**Verified in the game 2026-09-09** on `crowd-static` at 1024×768: `fps: armed …` in the log and
+the readout drawn and legible. *Two things to know before reading a capture of it.* It is drawn at
+`(6, 6)` in game-frame pixels, which in a normal layout is **over the minimap** — deliberate for a
+diagnostic that is off by default, but it means a `glshot` of that corner shows the minimap's own
+grey/yellow view rectangle behind the digits, which reads convincingly as a corrupted glyph until
+you take the pair with the readout off. And the glyph advance is `w + 1`, so it renders as
+`FPS175` with no gap after the label.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

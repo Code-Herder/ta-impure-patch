@@ -1,0 +1,202 @@
+{
+ "format": "ta-scenario/1",
+ "description": "2500 kbots in a four-way melee, every one ordered onto the same point: the largest fight this repo has a fixture for, built to measure what sub-tick pose interpolation costs at scale. KBOTS on purpose -- their walk is authored as keyframes, so they are the only class the blend changes. THE PLAYER COUNT IS FOUR AND THAT IS THE ENGINE'S CHOICE, not a preference: ten were asked for and ten are written to the registry (Player0..9 Controller/Side/Colour, verified in user.reg), but TA seats FOUR and leaves slots 4-9 with My_PlayerType=0 (empty) and PlayerActive=0, so the applier refuses their units with 'player slot N is not in this game'. Ruled out as the cause, each measured: the registry write; the OTA's `numplayers` list; the start-position count; and the schema (Town & Country's Schema 0 has ten StartPos and still seated four). Also engine-forced: slot 0 must be HUMAN, or the skirmish never starts -- an all-AI table sits behind a MSGBOX, 'There must be at least one player and one computer opponent', and the load simply times out.",
+ "seed": 20260909,
+ "on_error": "skip",
+ "setup": {
+  "map": "Town & Country",
+  "unit_limit": 1500,
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2
+   },
+   {
+    "slot": 3,
+    "controller": "ai",
+    "side": "core",
+    "color": 3
+   }
+  ]
+ },
+ "groups": [
+  {
+   "id": "wave0",
+   "owner": 0,
+   "at": [
+    5520,
+    4320
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 25,
+    "spacing": 40,
+    "jitter": 8
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 300
+    },
+    {
+     "type": "ARMHAM",
+     "count": 200
+    },
+    {
+     "type": "ARMROCK",
+     "count": 125
+    }
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wave1",
+   "owner": 1,
+   "at": [
+    4320,
+    5520
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 25,
+    "spacing": 40,
+    "jitter": 8
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 300
+    },
+    {
+     "type": "CORTHUD",
+     "count": 200
+    },
+    {
+     "type": "CORSTORM",
+     "count": 125
+    }
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wave2",
+   "owner": 2,
+   "at": [
+    3120,
+    4320
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 25,
+    "spacing": 40,
+    "jitter": 8
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 300
+    },
+    {
+     "type": "ARMHAM",
+     "count": 200
+    },
+    {
+     "type": "ARMROCK",
+     "count": 125
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "wave3",
+   "owner": 3,
+   "at": [
+    4320,
+    3120
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 25,
+    "spacing": 40,
+    "jitter": 8
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 300
+    },
+    {
+     "type": "CORTHUD",
+     "count": 200
+    },
+    {
+     "type": "CORSTORM",
+     "count": 125
+    }
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   4320,
+   4320
+  ],
+  "pin": true
+ }
+}

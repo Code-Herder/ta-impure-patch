@@ -563,7 +563,7 @@ would send decision 8 back for rework. That is Gate B's bar met on two scenes. W
 *preliminary* reading rather than the gate itself is that neither scene exercises slant or wire,
 which are step 6.
 
-**The frame-time criterion is NOT met, and is not measurable in this setup.** At 209 units both paths
+**The frame-time criterion is NOT met, and is not measurable from these runs.** At 209 units both paths
 hold **58.5 fps** and are indistinguishable. `tools/tacli` rewrites `maxfps=60` into the instance's `ddraw.ini` on any launch that passes `--res` — as every one of these did — and the DLL reads it at attach, so an edit made beforehand is overwritten, which is what actually happened here. including on the two runs labelled "uncapped" at the time. **`maxfps=0` IS the unlimited setting**: `fpsl_init` maps a NEGATIVE value onto the display refresh (60 here) and only `0` falls through every branch leaving `tick_length` at 0. So the number is obtainable — it needs the value to survive the launch, not a different value. The honest statement of what was measured is the byte count
 above, not a frame time. Whoever takes the real number needs the cap lifted at launch — and the
 "before" half is **not perishable**, because both paths live in one build behind the lever until

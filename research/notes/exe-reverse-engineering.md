@@ -353,6 +353,89 @@ the eye, and they do not agree:
   negative eye would read before the array. Moot in practice — `terrown` skips the whole
   function — but it is the reason to keep the eye's excursion a property of *our* passes.
 
+## The screen fog grid — where it is allocated, and every cell the builder reads — mapped by us
+
+[MEASURED 2026-09-09, this project — `objdump -d -M intel` of the pristine Steam build over
+`0x483BB8..0x483CA6` and `0x4843C0..0x4848D6`, plus a live oracle: `tagpu_fogwide.c` replicates
+the builder in C and, under `tagpu_fogwide_check.on`, rebuilds over the engine's own window and
+compares. **0 differing bytes of 720 (30×24, 1024×768) and of 1972 (58×34, 1920×1080)**, 357 and
+1555 non-zero cells respectively. The overlay that consumes the grid is `terrain-depth.md` §5.1;
+what is new here is its **allocation** and the **cell-by-cell reads** of `0x4843C0`.]
+
+### The allocation, at map load — `0x483BB8..0x483CA6`
+
+The struct behind `*(main+0x1421F)` is built **once per map**, inside `LoadMap 0x483610`, from the
+engine's viewport size — and nothing resizes it afterwards:
+
+```
+483bbf  esi = [main+0x37E37]          ; viewW      (1792 at 1920x1080)
+483bc5  ebx = [main+0x37E3B]          ; viewH      (1016)
+483c03  call 0x4B4F10 (16)            ; the {u16* buf; int cols; int rows; int cells} struct
+483c28  [main+0x1421F] = it
+        cols = viewW/32 + (viewW % 32 ? 3 : 2)      ; 483c1e..483c79
+        rows = viewH/32 + (viewH % 32 ? 3 : 2)
+483c84  cells = (cols*rows + 7) & ~7                ; ROUNDED UP TO A MULTIPLE OF 8
+483c96  buf   = malloc(cells * 2)
+```
+
+Three consequences, all of which have bitten:
+
+- **`cells` is the allocation, not `cols*rows`.** A reader that asserts `cells == cols*rows`
+  accepts 1024×768 (30×24 = 720, already a multiple of 8) and **refuses 1920×1080** (58×34 = 1972
+  against an allocated 1976). `tagpu_native.c` asserted exactly that until 2026-09-09, and the
+  refusal is not a degraded fog — it clears `fogMode`, so at 1080p there was **no fog at all**: no
+  black over unexplored ground, no grey band, the whole map drawn lit at every zoom.
+- **The grid spans the 1x viewport and about two cells more**, for ever. It cannot be made to
+  cover a zoomed-out view by asking it to: the size is a map-load decision.
+- **The origin is not stored** — the builder recomputes it from the eye every time (below), so
+  the grid cannot be re-anchored either without lying to the builder about `main+0x1431F`.
+
+### The builder `0x4843C0` — void, no args, `ret` @ `0x4848D6`
+
+Clears `cells*2` bytes, then walks the map cells `[col0, col0+cols) × [row0, row0+rows)`:
+
+| Where | What it reads |
+| --- | --- |
+| `0x4843CD` | `main+0x2A43` — the **LOCAL** player id (not `+0x2A42`, the watched one). `mask = 1 << id` |
+| `0x4843F0` | `ebp = main + 0x1B63 + id*0x14B + 0x7C` — that player's LOS block: `{u8* counters; i32 w; i32 h}` at `+0`/`+4`/`+8` |
+| `0x48442D..0x484485` | `col0 = eyeX/32 − (eyeX % 32 < 16)`, `row0` the same from `eyeY`. Equivalently **origin = `32·col0 + 16`** |
+| `0x4844B9`/`0x4844C7` | `cx`/`cy` bounded against the LOS block's own `w`/`h`, **unsigned**, so a negative index is skipped |
+| `0x4844D7` | `los[cy*w + cx]` — one byte, an overlap **counter**; 0 means out of LOS |
+| `0x4844E7` | `LosType & 2` — the grey mask is written only in true-LOS mode |
+| `0x4845A9` | `idx = (main[0x14233] * cy) / 2 + cx` into `*(main+0x14273)`, **u16** per tile, one **bit per player**. The row stride is `PLOT_C` *bytes*, i.e. the map is `PLOT_C/2` tiles wide; the allocation is `PLOT_C*PLOT_R/2` bytes (`0x483CF6`), so the last index used is exactly its last entry |
+
+A cell that is dark ORs **a different corner bit into each of the four grid entries around it** —
+entry `(cx−col0, cy−row0)` gets bit 1, `(cx−col0−1, cy−row0)` bit 2, `(…, cy−row0−1)` bits 4 and
+8 — into byte `+1` for the out-of-LOS mask (`0x4844FF..0x4845A2`) and byte `+0` for the
+unexplored one (`0x4845CC..0x484678`). The two blocks fall through, so a cell that is both sets
+both. **The last column and the last row of any window are therefore short their right/bottom
+corners**, because the cell that would supply them is outside the loop.
+
+### The four border completions — `0x4846A1..0x4848CD`, and the index that is only right by luck
+
+Off the map there is no cell to darken a corner, so each edge copies the corner bits it does have
+outward: top `4→1, 8→2` (`0x4846AE`), bottom `1→4, 2→8` (`0x484731`), left `8→4, 2→1`
+(`0x4847CA`), right `4→8, 1→2` (`0x48485A`); each pair is gated on `LosType & 2` for the grey
+byte and unconditional for the black one, and **the four run in that order**, reading bits an
+earlier one may have set.
+
+The engine writes them into grid **row 0**, **row `rows−2`**, **column 0** and **column
+`cols−2`**. Those are not the general answer — they are the straddling entries only because the
+engine's own grid never reaches more than one cell past the map (the eye clamp holds `row0` at 0
+or −1). The entry that straddles an edge is the one whose corners are on the map on one side and
+off it on the other:
+
+| edge | gate | straddling entry | the engine's literal |
+|---|---|---|---|
+| top | `row0 < 0` | `gy = −row0 − 1` | `0` |
+| bottom | `row0 + rows > PLOT_R/2` | `gy = PLOT_R/2 − 1 − row0` | `rows − 2` |
+| left | `col0 < 0` | `gx = −col0 − 1` | `0` |
+| right | `col0 + cols > PLOT_C/2` | `gx = PLOT_C/2 − 1 − col0` | `cols − 2` |
+
+The two columns agree whenever the window overshoots by exactly one cell, which is the only case
+the engine can produce. A window that reaches further — ours does — must use the derived index,
+or the completion lands rows out in open water and the shoreline entry keeps a half-set mask.
+
 ## The blend LUT and the marker composites — mapped by us
 
 [MEASURED 2026-09-03, this project — disassembly of the pristine Steam build plus live reads.
@@ -3164,6 +3247,56 @@ wholly free pages (`0x4F24A9`), and `0x4F2410` releases a region whose `0x400` p
 (88 bytes) live. Unit objects (736–898 bytes) are wine-heap blocks, whose pages go only when
 wine 9.0's `heap_free_block` decommits a subheap's free tail past its `0x10000` hysteresis or
 releases a subheap that has emptied.
+
+## The simulation clock — `main+0x38A3B..0x38A52` — mapped by us (2026-09-09)
+
+*Layout `[VERIFIED]` against the vendored TADR corpus (`tools/tamem_ghidra.h`, which carries these
+offsets in its comments); the rates below are **ours**, measured live with `tacli peek` against the
+wall clock on `scenarios/walk-lerp.json`.*
+
+| VA | type | what |
+|---|---|---|
+| `main+0x38A3B` | u32 | `DeltaTime` — **sim ticks to execute this engine frame, 0..5**, computed by `ApplyDeltaTime` and consumed by `InGameAsynchronousThread`. This is why the tick can advance by more than one between two render frames |
+| `main+0x38A3F` | u32 | `scrollLen_buf` — raw elapsed, current − previous `GameRunSec()` |
+| `main+0x38A43` | u32 | the fractional-tick accumulator (used as a float) |
+| `main+0x38A47` | i32 | **`GameTime`** — the sim tick. `tagpu_cobtrace` and `tagpu_posedump` both stamp it, which is how their logs join |
+| `main+0x38A4B` | i16 | the speed **CEILING** — the corpus calls it `GameSpeed`, and it is what `minus`/`plus` set, but it is *not* what scales time into ticks. `0x49546A` only lets the throttle raise the live value back **while `0x38A4D < 0x38A4B`** (`cmp cx,[eax+0x38a4b]; jae skip`) |
+| `main+0x38A4D` | i16 | the **LIVE effective speed** — the corpus calls it `GameSpeed_Init` and the name is misleading. `0x495260` loads `WORD [main+0x38A4D]`, `fild`s it and multiplies by the double `0.1` at `0x4FDA28`, and *that* product scales elapsed time into ticks. **This is the field to read.** `[VERIFIED 2026-09-09 by disassembly]` |
+| `main+0x38A4F` | i16 | the **lag counter** the throttle runs on: `inc` at `0x49540A`, `dec` at `0x495448`. At **+10** (`0x495415`) it is zeroed and the live speed `0x38A4D` is **decremented**, floored at 1 (`cmp ax,1; jbe`); at **−100** (`0xff9c`, `0x495454`) it is zeroed and the live speed is **incremented**, capped at the ceiling above `[VERIFIED 2026-09-09 by disassembly]` |
+| `main+0x38A51` | u8 | `IsGamePaused` (bit 0 is also read as `[main+0x38A51] & 1` by the HUD's pause icon) |
+
+### The tick rate is `3 × GameSpeed` a second, and a skirmish does not start at 30 `[MEASURED 2026-09-09]`
+
+| GameSpeed | GameTime per wall-clock second | ratio |
+|---|---|---|
+| **20** — what `tacli scenario load` lands on | 59.88 | 2.994 |
+| 15 | 44.78 | 2.985 |
+| 10 | ≈ 30 | 3 |
+
+`minus` / `plus` step `GameSpeed` by one per press. So the tick period is
+`1000 / (3 × GameSpeed)` ms — **16.7 ms on a default skirmish, not 33.3.**
+
+**This corrects a reading of the `+clock` cheat.** Its arithmetic (`÷108 000, ÷1 800, ÷30`, in the
+HUD-extras table above) is right, but "30 ticks a second" is the **GameSpeed-10** rate, not a
+property of the engine: at the speed a skirmish actually starts at, that clock runs at double wall
+time. Anything converting sim ticks to wall-clock time must read the **live** speed at
+`main+0x38A4D` — **not** `main+0x38A4B`, which the corpus labels `GameSpeed` but which is only the
+ceiling — or measure the interval; a hard-coded 33.3 ms is wrong by 2× out of the box. **The two
+fields agree until the machine falls behind**, which is exactly the case where the difference
+matters: the throttle drops `0x38A4D` and leaves `0x38A4B` where the player set it, so code that
+reads the ceiling then believes a rate the sim is no longer running at. *(Corrected 2026-09-09 by
+the landing review, which disassembled `0x495260` and the throttle at `0x495415`–`0x49547B`; the
+table above previously carried the corpus's names with no note that they do not describe which
+field drives the rate.)* **Measuring the interval, as `tagpu_lerp.c` does, sidesteps the whole
+question and is the reason that module is right at any speed and through a throttle event. `tagpu_lerp.c` measures it, and its
+learned period read `p=33.2ms` against a predicted 33.3 at GameSpeed 10 (0.3%) and tracked a live
+speed change down from 20.
+
+**The COB `sleep` conversion does NOT scale with GameSpeed.** The divisor is the COB object's
+`+4`, i.e. `0x4B6330() = [[0x51FBD0]+0xE8]`, and that reads **30** with `GameSpeed` at 20
+`[MEASURED]` — so `sleep 100` is always 3 COB ticks and a raised game speed simply plays every
+animation at `GameSpeed/10 ×` real time. That settles the `[INFERRED from that use]` on `cob+4` in
+the next section: it is 30, and it is a constant rather than the live tick rate.
 
 ## The COB engine — mapped by us (tacob landing 2, 2026-09-07)
 
