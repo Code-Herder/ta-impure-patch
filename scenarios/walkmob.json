@@ -1,0 +1,187 @@
+{
+ "format": "ta-scenario/1",
+ "description": "2000 kbots walking a short patrol for ever in four boxes 1800 wu apart -- far enough that kbot weapons (230-500 wu) never reach, so nothing dies and the scene does not decay. THE FIXTURE A PAIRED FRAME-COST A/B IS VALID ON, at a scale the melee (ball10) only demonstrates. NO ARMPW, and that is the point: `hires/armpw.glb` is installed, and a unit with a replacement mesh is drawn by tagpu_hires_draw.c through pose_accum_body -- NOT posed_pose -- so it is neither smoothed nor measured. A 700-ARMPW version of this fixture read `posed=0 lerp=0/0`: it measured nothing at all, silently. FOUR owners because TA clamps to 500 units per player whatever UnitLimit says (1500 was written to totala.ini and 877 creates were still refused).",
+ "seed": 20260909,
+ "on_error": "skip",
+ "setup": {
+  "map": "Town & Country",
+  "res": "1024x768",
+  "unit_limit": 1500,
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2
+   },
+   {
+    "slot": 3,
+    "controller": "ai",
+    "side": "core",
+    "color": 3
+   }
+  ]
+ },
+ "groups": [
+  {
+   "id": "box0",
+   "owner": 0,
+   "at": [
+    3420,
+    3220
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 25,
+    "spacing": 44,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "ARMHAM",
+     "count": 300
+    },
+    {
+     "type": "ARMROCK",
+     "count": 200
+    }
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3420,
+      3620
+     ]
+    }
+   ]
+  },
+  {
+   "id": "box1",
+   "owner": 1,
+   "at": [
+    5220,
+    3220
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 25,
+    "spacing": 44,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 300
+    },
+    {
+     "type": "CORTHUD",
+     "count": 200
+    }
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      5220,
+      3620
+     ]
+    }
+   ]
+  },
+  {
+   "id": "box2",
+   "owner": 2,
+   "at": [
+    3420,
+    5020
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 25,
+    "spacing": 44,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "ARMHAM",
+     "count": 200
+    },
+    {
+     "type": "ARMROCK",
+     "count": 300
+    }
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      3420,
+      5420
+     ]
+    }
+   ]
+  },
+  {
+   "id": "box3",
+   "owner": 3,
+   "at": [
+    5220,
+    5020
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 25,
+    "spacing": 44,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "CORTHUD",
+     "count": 300
+    },
+    {
+     "type": "CORSTORM",
+     "count": 200
+    }
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      5220,
+      5420
+     ]
+    }
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   4320,
+   4320
+  ],
+  "pin": true
+ }
+}

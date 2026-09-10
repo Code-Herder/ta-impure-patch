@@ -86,6 +86,8 @@
 #include "tagpu_reclaim.h"   /* tagpu_reclaim_level_gen: the model templates outlive units, not levels */
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"  /* G16 step 4: the per-type geometry bake and its caches */
+#include "tagpu_lerp.h"      /* smooth-motion.md option A: the pose between two sim ticks */
+#include "crc32.h"          /* the tagpu_posecrc.on gate oracle */
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
 #include "tagpu_overlay.h"   /* tagpu_overlay_target_fbo: the frame's default draw target */
@@ -1610,6 +1612,56 @@ static int pose_accum_body(const char* o3, HPOSE* h, const unsigned short* bt)
    The piece count is NOT re-checked against the bake's: `tagpu_posebake_unit`
    matched the cache entry on `nparts` one call earlier, so equality holds at
    every call site, and `g->nparts` is used as the loop bound it always was. */
+/* GATE ORACLE -- tagpu_posecrc.on, and the only thing that watches the
+   matrices this pass hands the GPU. `tagpu_posedump.on` dumps the ENGINE's
+   fields and `tools/tacob pose-check` diffs tacob's own reconstruction of
+   them; neither ever looked at posed_pose's output.
+
+   IT IS CONTENT-ADDRESSED, NOT TICK-ADDRESSED, AND THAT IS THE WHOLE POINT.
+   Joining two runs on the sim tick would need the two to be tick-for-tick
+   deterministic, which they are not: the walk fixture's move order is issued
+   over the wire and lands on whatever tick it lands on, so run B's unit is
+   several ticks out of phase with run A's and every CRC differs for a reason
+   that has nothing to do with the code. Joining on the INPUT needs no
+   determinism at all -- `in` is a CRC of every byte posed_pose reads, `out` a
+   CRC of every byte it writes, and posed_pose is a pure function of the
+   former. So for every `in` that appears in both logs the `out` must match,
+   whatever tick each run saw it on, and a log that disagrees with ITSELF on
+   one `in` says the function is not pure.
+
+   smooth-motion.md gate 2 is exactly that join, with tagpu_lerp.on absent on
+   both sides. Off by default; the two extra passes cost nothing when it is. */
+static int s_poseCrcOn = 0;                 /* polled on the 30-frame cadence */
+static unsigned long s_poseCrcIn = 0, s_poseCrcOut = 0;
+static unsigned s_poseCrcRaced = 0;         /* samples the sim moved under */
+
+/* Every byte posed_pose reads, in the order it reads them: the body turn, and
+   per piece the rest offset, the two COB triples, the flag byte, the parent
+   link, and whether the node resolved and whether it is the base piece.
+   Deliberately the LIVE fields and not the blended ones -- `in` has to name
+   the ENGINE state, so a lever-on run and a lever-off run that saw the same
+   simulation join on the same key. */
+static unsigned long pose_crc_in(const char* basePrim, const TAGPU_PBGEOM* g,
+                                 const char* const* pr, const char* const* nd,
+                                 const unsigned short* bt, int nparts)
+{
+    unsigned long c = Crc32_ComputeBuf(0, bt, 3 * sizeof *bt);
+    int i;
+    for (i = 0; i < nparts; i++) {
+        unsigned char fl = *(const unsigned char*)(pr[i] + P_FLAGS);
+        short par = g->parent[i];
+        unsigned char link = (unsigned char)((nd[i] ? 1 : 0) |
+                                             (basePrim && pr[i] == basePrim ? 2 : 0));
+        if (nd[i]) c = Crc32_ComputeBuf(c, nd[i] + N_OFF, 12);
+        c = Crc32_ComputeBuf(c, pr[i] + P_POS, 12);
+        c = Crc32_ComputeBuf(c, pr[i] + P_TURN, 6);
+        c = Crc32_ComputeBuf(c, &fl, 1);
+        c = Crc32_ComputeBuf(c, &par, sizeof par);
+        c = Crc32_ComputeBuf(c, &link, 1);
+    }
+    return c;
+}
+
 static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
                       float* out, unsigned char* shaded, unsigned char* pvis)
 {
@@ -1621,6 +1673,12 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
     unsigned short bt[3];
     const char* basePrim;
     int nparts, i, pass, left, anyShadeFlag = 0;
+    /* smooth-motion.md option A: NULL unless tagpu_lerp.on is armed AND this
+       unit has two adjacent sim ticks of history. NULL is the blend weight of
+       1.0 that invariant 2 requires the degradation to be, and it is spelled
+       as the caller reading the live fields exactly as it always has. */
+    const int* lpos = NULL;
+    const unsigned short* lturn = NULL;
 
     if (!ptr_ok(o3)) return 0;
     /* the bake's count, not a fresh read of the unit's: tagpu_posebake_unit
@@ -1647,6 +1705,11 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
         fl = *(const unsigned char*)(pr[i] + P_FLAGS);
         if ((fl & 1) && (fl & 4)) anyShadeFlag = 1;
     }
+    /* After pr[] is built and before anything is composed: one call per unit
+       per frame, which is also where the tick's snapshot is taken. It reads
+       P_POS/P_TURN and writes nothing back -- invariant 1. */
+    if (!tagpu_lerp_unit(o3, nparts, pr, &lpos, &lturn)) { lpos = NULL; lturn = NULL; }
+    if (s_poseCrcOn) s_poseCrcIn = pose_crc_in(basePrim, g, pr, nd, bt, nparts);
     /* parents before children, exactly as pose_accum_body orders them; the
        links themselves come off the bake */
     left = nparts;
@@ -1663,6 +1726,11 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
             off = (const int*)(nd[i] + N_OFF);
             mv  = (const int*)(pr[i] + P_POS);
             tn  = (const unsigned short*)(pr[i] + P_TURN);
+            /* THE WHOLE OF OPTION A IS THESE TWO LINES. Everything below --
+               the rest offset, the body-turn fold, piece_local, the parent
+               multiply -- is the arithmetic it always was, on a blended pair
+               of triples instead of the live ones. */
+            if (lpos) { mv = lpos + i * 3; tn = lturn + i * 3; }
             for (k = 0; k < 3; k++)
                 d[k] = (float)off[k] / 65536.0f + (float)mv[k] / 65536.0f;
             if (basePrim && pr[i] == basePrim) {
@@ -1707,6 +1775,26 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
            is emit_wire's own test. Written as 0/1/3 rather than `fl & 3` so
            that a piece marked cached but NOT visible reads as hidden. */
         pvis[i] = (unsigned char)(!(fl & 1) ? 0 : ((fl & 2) ? 3 : 1));
+    }
+    if (s_poseCrcOn) {
+        /* every byte it wrote */
+        unsigned long c = Crc32_ComputeBuf(0, out, (size_t)nparts * 12 * sizeof *out);
+        c = Crc32_ComputeBuf(c, shaded, (size_t)nparts);
+        c = Crc32_ComputeBuf(c, pvis, (size_t)nparts);
+        s_poseCrcOut = c;
+        /* AND THE INPUT AGAIN. The COB scripts run on the GAME thread while
+           this one poses, so the fields can move between the hash above and
+           the loop that read them -- gpu-posing.md section 2's residual, one
+           tick of one piece, accepted there by design. It is real and it is
+           rare (measured at 1 sample in 1498 on the walk fixture), but it
+           makes `in` a lie for that one sample and the join then reports a
+           mismatch that is nothing to do with the code under test. Hashing the
+           input on BOTH sides of the loop turns that from a false positive
+           into a MEASUREMENT: the sample is dropped and counted instead. */
+        if (pose_crc_in(basePrim, g, pr, nd, bt, nparts) != s_poseCrcIn) {
+            s_poseCrcRaced++;
+            s_poseCrcIn = 0;                /* 0 = "do not join on this one" */
+        }
     }
     return nparts;
 }
@@ -1798,6 +1886,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     tagpu_posebake_frame(f->frame_counter);
     pose_rest_block_init();      /* the degradation's block, once per session */
     tagpu_posedraw_frame();      /* this frame's counters */
+    /* smooth-motion.md option A. BEFORE the gather, because posed_pose
+       samples through it: it latches this frame's sim tick and the phase
+       inside that tick, and ages the history table. Off by default and a
+       no-op past its own early-out when tagpu_lerp.on is absent. */
+    tagpu_lerp_frame(f->frame_counter);
+    if ((f->frame_counter % 30) == 0)
+        s_poseCrcOn = GetFileAttributesA("tagpu_posecrc.on") != INVALID_FILE_ATTRIBUTES;
     if (s_state == 2) return;
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
@@ -2492,6 +2587,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     const int pdPoseMax = (int)(sizeof pdPose / sizeof pdPose[0]);
     const int pdShadedMax = (int)(sizeof pdShaded);
     int pdReady = tagpu_posedraw_ready();
+    /* tagpu_posecrc.on: one line per unit per SIM TICK. Per FRAME would be two
+       identical lines per tick at 60 fps and sixteen on a fast machine, which
+       buries the transitions the join is looking for. */
+    static unsigned crcTick = 0xFFFFFFFFu;
+    unsigned crcNow = 0;
+    int crcLog = 0;
+    if (s_poseCrcOn) {
+        const char* cta = *(const char* const*)TA_MAINPP;
+        if (ptr_ok(cta)) {
+            crcNow = (unsigned)*(const int*)(cta + 0x38A47);
+            if (crcNow != crcTick) { crcTick = crcNow; crcLog = 1; }
+        }
+    }
     s_hposeN = 0;
     for (i = 0; i < nu; i++) {
         firstv[i] = nv;
@@ -2623,6 +2731,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     q->pvis   = pdPvis + pdShadedN;     /* same stride and slot */
                     pdPoseN += np * 12;
                     pdShadedN += np;
+                    if (crcLog && s_poseCrcIn) {
+                        char cb[128];
+                        _snprintf(cb, sizeof cb,
+                                  "posecrc: tick=%u o3=%p np=%d in=%08lx out=%08lx raced=%u",
+                                  crcNow, (const void*)units[i].o3, np,
+                                  s_poseCrcIn, s_poseCrcOut, s_poseCrcRaced);
+                        cb[sizeof cb - 1] = '\0';
+                        nlog(cb);
+                    }
                 } else {
                     q->pose   = s_poseRestPose;
                     q->shaded = s_poseRestShaded;
@@ -3433,11 +3550,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         badmodel[0] = 0;
         if (s_badModelId)
             _snprintf(badmodel, sizeof badmodel, " BADMODELID=%u", s_badModelId);
+        /* smooth-motion.md option A, its own buffer rather than an append to
+           `posed` -- that one is already sized to the byte for the three
+           counters it carries. Writes "" whenever the lever is off, so the
+           line is unchanged in a default game. */
+        char lerp[64];
+        tagpu_lerp_stats(lerp, sizeof lerp);
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d devres=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s%s%s%s",
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d devres=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s%s%s%s%s",
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, devres, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_reread,
-                  bake, posed, badmodel, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
+                  bake, posed, lerp, badmodel, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         b[sizeof b - 1] = '\0';        /* _snprintf does not terminate a truncation */
         nlog(b);
         s_reread = 0;

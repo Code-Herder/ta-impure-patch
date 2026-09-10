@@ -534,7 +534,35 @@ give 119–155 instant writes and 8–16 sleeps each, and zero interpolated turn
 (ARMPW's `walklegs`, the aim-while-moving variant, is the same shape at 73 writes and 12 sleeps).
 The stepper serves the *other* idiom in the same files: ARMPW's `AimPrimary` and
 `RestoreAfterDelay` are `speed` + `wait-for-turn` throughout, and `MotionControl`'s stop branch
-issues `speed` turns without waiting on them; none of the three contains an instant write. So the
+issues `speed` turns without waiting on them; none of the three contains an instant write.
+
+**The one part of locomotion the stepper does own is the stop.** `StopMoving` only clears a
+static; the transition lives in `MotionControl`'s idle branch, and it was measured end to end on
+ARMCOM `[MEASURED 2026-09-09, `tacob serve` on the shuttle path]`:
+
+| tick | what | `rthigh` / `rleg` / `lthigh` / `lleg`, degrees |
+|---|---|---|
+| 84 | `StopMoving` fires | −34.5 / 40.4 / 9.5 / 43.9 |
+| 86 | **still walking** — a later `walk` keyframe lands | 14.4 / 40.4 / −43.9 / 25.7 |
+| 90 | settling, interpolated | 0.0 / 20.4 / −24.0 / 5.7 |
+| 94 | at rest — **10 ticks, 0.33 s** | 0 / 0 / 0 / 0 |
+
+Four properties, all visible in that table or the script beside it:
+
+- **A stop is never mid-stride.** `MotionControl` reaches `walk` through `call-script`, which
+  *blocks*, so the flag cannot be noticed until the stride returns — ticks 86–87 are keyframes
+  landing *after* `StopMoving`.
+- **The settle is `speed`, not `now`**, and the rate confirms the stepper's arithmetic exactly:
+  `rleg` covers 40.4° → 0.5° in six ticks = **6.67°/tick**, and the script's `speed <200>` is
+  200°/s ÷ 30.
+- **It is one-shot**, gated by a `justmoved` local that every moving iteration sets and the settle
+  clears — otherwise it would re-issue every `sleep 100` for as long as the unit stood still.
+- **The torso is conditional on `aiming`**: stop while aimed and the legs come to rest with the
+  gun still pointing.
+
+**There is no start transition.** `StartMoving` sets the flag, the next `MotionControl` iteration
+calls `walk`, and `walk` opens with `TURN_NOW` — it snaps into keyframe 1 from wherever the legs
+were. Starting is abrupt by design; only stopping eases. So the
 two animation styles are cleanly split — **keyframes for locomotion, interpolated
 turns for aiming and settling** — and a renderer that smoothed poses between sim ticks would be
 inventing leg motion the animator declined to ask for, while merely reproducing what the turrets
