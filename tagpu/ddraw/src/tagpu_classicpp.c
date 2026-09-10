@@ -145,7 +145,15 @@ static void bad(const char* p)
 static void read_cfg(void)
 {
     HANDLE h;
-    char buf[1024]; DWORD n = 0;
+    /* 2048 to match tagpu_menu.c's write_cfg `in[2048]`, and it must: that
+       function copies through every token it does not own and appends its own
+       four (assets/light/shadows/shadowres) LAST, so a reader with a smaller
+       window loses the menu's own settings first. At 1024 a cfg between 1 KB
+       and 2 KB -- a few research knobs plus comments -- read back without the
+       player's rows, which applied for the session and then vanished on the
+       next poll, silently. write_cfg refuses to rewrite at all past its own
+       buffer, so matching it is the whole fix. */
+    char buf[2048]; DWORD n = 0;
     float sunAz = DEF_SUN_AZ, sunEl = DEF_SUN_EL, usunAz = DEF_USUN_AZ, usunEl = DEF_USUN_EL;
     float amb = DEF_AMB;
     float ssunAz = DEF_SSUN_AZ, ssunEl = DEF_SSUN_EL;
@@ -158,6 +166,10 @@ static void read_cfg(void)
     if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
         char* p = buf;
         buf[n] = 0;
+        /* and never truncate in silence: past this the tail is unread, which
+           is how a setting appears not to stick */
+        if (n >= sizeof buf - 1)
+            cplog("classicpp: cfg is larger than the read buffer - the tail was IGNORED");
         while (*p) {
             char* q;
             int last;

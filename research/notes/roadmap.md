@@ -1903,7 +1903,7 @@ failed ground composition latches instead of leaking one `frontend.gaf` per worl
   the lab gives acne 7.66 / worst 61 of 255 and shows the blocky lattice by eye. **The severity
   at the shipped default is 0.96 std / 58 worst and was never measured in the game — open, and
   it decides how urgent this is.** **NO BIAS CAN FIX THIS, and that is now measured rather than suspected.** Seven candidates
-  swept to convergence and costed (`bslack`, `mindist`, `castsmooth`, `castsplit`, `pbias`,
+  swept to convergence and costed (`bslack`, `mindist`, `castsmooth`, `pbias`,
   `noff`, `pofac`, plus the constant floor): every one removes the artifact and the terrain-shadow
   feature together at about one for one, and the shared ones spend unit shadows too — `pbias=32`
   takes 90 % of the acne and 91 % of the unit shadows with it. The reason is that a cell's own
