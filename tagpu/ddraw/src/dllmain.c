@@ -17,6 +17,7 @@
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
 #include "tagpu_terrown.h"
+#include "tagpu_fogwide.h"
 #include "tagpu_gui.h"
 #include "tagpu_markown.h"
 #include "tagpu_zoom.h"
@@ -108,6 +109,13 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            viewport with the composite's key and replicates the fog grid's
            lazy rebuild. */
         tagpu_terrown_init();
+
+        /* fogwide: the fog grid over the ZOOMED-OUT view (tagpu_fogwide.h).
+           No engine patch of its own — it rides terrown's fog-overlay call
+           site — but its critical section is created here, before either the
+           game thread or the render thread can reach it. Inert unless a
+           zoomed-out view is live; `tagpu_fogwide.off` turns it off. */
+        tagpu_fogwide_init();
 
         /* tagpu: own the engine's world-space UI markers (G13d) — health bars
            re-drawn natively, order markers / group digits / build cursor

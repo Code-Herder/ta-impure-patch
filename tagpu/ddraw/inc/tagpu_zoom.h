@@ -142,6 +142,14 @@ void  tagpu_zoom_frame_end(void);
 /* The level in force (1.0 until the first publish — menus are never zoomed). */
 float tagpu_zoom_level(void);
 
+/* The widest view the levers can produce: the LOWEST level either of them will
+   settle at, which is the same clamp tagpu_zoom_read_lever() applies to both.
+   Anything that has to size a buffer for "however far out this view can go"
+   asks here rather than pinning the number itself — tagpu_fogwide.c does,
+   because the level it can read is always one frame old and an ease step is
+   wider than the slack it would otherwise have. */
+float tagpu_zoom_min(void);
+
 /* The camera range in force: the engine's own eye bounds, widened to the range
    the zoom actually shows (see the camera-range block in tagpu_zoom.c), or the
    engine's own verbatim whenever that patch is not the one clamping. Returns 0

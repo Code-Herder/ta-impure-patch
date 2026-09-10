@@ -53,7 +53,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
 | Smoke, fire, wakes, nanolathe | ● native (G12f) | one detour on the layer walker `0x471F90` | A/B `sfx-strait`, engine surface empty of particles |
 | Features (trees, rocks, splats, wreckage) | ● native (G13a) | `featown`: one detour on the leaf `0x46A610` | occlusion parity vs the engine's own draw, engine surface empty of features, `feat-forest` |
-| Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02) | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid | done — [Features](features.html) §9 |
+| Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02), **and it now spans the zoomed-out view (G13r, 2026-09-09)** | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid — which spans the 1× viewport only, so at zoom < 1 `tagpu_fogwide.c` replicates `0x4843C0` over a window sized for the whole zoom range and hands that to the passes instead | G13c: [Features](features.html) §9. G13r: the replication **byte-identical to the engine's builder** over the engine's own window (0 differing of 720 cells at 1024×768 and of 1972 at 1920×1080), **0 differing pixels** on/off at zoom 1, and an enemy building that was drawn in full colour through the smear now hidden — [terrain & depth](terrain-depth.html) §8 |
 | Terrain tiles | ● native (G13b) | `terrown`: one detour on `0x483FA0`, whose skip path key-fills the viewport | 0-px parity vs the engine's own blit, engine surface 99.9 % key, in-process map change |
 | Fog overlay | ● native (G13b) | `terrown` detours `0x4848E0` too, replicating only its lazy grid rebuild | 99.06–99.39 % lit-vs-grey agreement with the engine's own overlay |
 | **Selection rect**, health bars, order markers, group digits, ShowRanges labels, build cursor, band box | ● native and **nothing captured** (G13d, corrected G13h, cursor re-drawn G13n, order block ported G13o, **text ported G13p**, **rect at the engine's pixels 2026-09-08**) | `markown`: 14 call-site redirects + one detour on `0x46A430`. Health bars, the build cursor and the drag band box are re-drawn from engine state; the order-marker block is a game-thread snapshot drawn as geometry (`tagpu_order.c`); the group digit and the `ShowRanges` labels are TA's own glyphs rasterised into an atlas of ours through `0x4CCF60` (`tagpu_text.c`). Window A and the identity blend LUT are gone | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x); the build cursor **0-px against the captured path** at 1× and 2.144×, and present in the ring at 0.467× where the capture drew nothing; the order block's node-list diff against the engine clean over **16 650 records / 1 665 blocks**, and at 0.25× four build sites queued in the ring draw where the engine draws none. G13p: the group digit **PIXEL-IDENTICAL to the engine's at 1×** (0 differing pixels, 19 bright each way) and drawn out in the ring at 0.25× where the engine draws nothing at all; the eight `ShowRanges` labels on the engine's own pixels ("weapon1 range" 209 bright against 205). **2026-09-08, the selection rect**: it had been turning the WRONG WAY (the transposed yaw = a rotation by −heading, 2× the heading out — invisible at multiples of 45°), built from the whole model tree where `0x4CB650(…,0)` gives the root piece unioned with the origin, projected with one float expression where the engine truncates each term and halves the height after truncating it, and drawn as a GL line in the 2× supersampled FBO where **the driver clamps aliased line width to 1**, so half a device pixel and about half the engine's colour. All four fixed: 100 % of our box pixels are now exactly the engine's `(83,223,79)` and its own rect differs from ours on **7 px of ~110** on open ground (5–18 on a hillside — a Bresenham step on the other neighbour, or a pixel where ours is correctly hidden behind its unit and the A/B's engine rect is not). `scenarios/selbox-facings.json` / `selbox-slope.json`; checked at 0.5× and 2×, with `ss.off`, and on a unit turning under a move order |
@@ -242,6 +242,55 @@ named by their call sites only. Nothing here changes `tacli`'s `Interface Type =
 scripted recipe in the repo still orders with `click --right`. Full path:
 [exe-reverse-engineering](exe-reverse-engineering.html) §"The in-game mouse buttons — what a
 click actually does".
+
+**G13r — the fog of war stopped at the edge of the 1x viewport, and at 1920x1080 it never drew
+at all.** Reported from play: *"when the fog of war (los = true) is on the gray LOS fog does not
+work correctly when zooming out. It doesn't cover the whole screen."* Two separate defects, both
+on the surface G13c built, and both settled 2026-09-09.
+
+**The reported one.** Every native pass samples the engine's own screen fog grid, and that grid
+is sized at MAP LOAD from the viewport (`0x483BB8`: `cols = viewW/32 + 2 or 3`) and re-anchored
+at the eye by the builder itself. It therefore spans the 1x viewport and about two cells more,
+for ever. At zoom < 1 the passes draw a rect `vw/z` across; everything past the grid falls off
+the lattice, `taFog`'s `clamp` returns the border cell, and the ring outside is painted with a
+**smear of the last row and column** — the grey bands the report describes, and, on an unmapped
+map, undiscovered ground drawn in full colour. **It leaks information, it is not cosmetic:** the
+same sample gates units and effects on the CPU, so an enemy CORE Solar Collector on ground with
+no LOS drew in full colour at 0.35x on `feat-forest`, and is hidden with the fix.
+
+Neither half of the engine's grid can be moved — the size is a map-load allocation and the origin
+is recomputed inside `0x4843C0` from `main+0x1431F`, which the render thread reads for the whole
+world's position, so lying to the builder about it is a race with the camera. **`tagpu_fogwide.c`
+replicates the builder instead**, over a window sized for `tagpu_zoom_min()` (the widest view the
+levers reach — not the level in force, which the game thread can only see one frame late), on the
+**game thread** from `terr_fogtick`, where the LOS and MAPPED allocations are the engine's own to
+read. Three buffers swapped under a critical section carry it to the render thread, so neither
+side can be writing the one the other is reading. **The replication is byte-identical to the
+engine's**: under `tagpu_fogwide_check.on` it rebuilds over the engine's *own* window and
+compares — **0 differing of 720 cells (30x24 at 1024x768, 357 non-zero) and of 1972 (58x34 at
+1920x1080, 1555 non-zero)**. Inert at zoom >= 1 (**0 differing pixels** on/off at 1x at both
+resolutions, sim paused), 86-98 us per rebuild for a 36,260-cell window with one game on the box
+(109-246 us with six running -- it scales with contention, so the load belongs with the number)
+and only on ticks where the engine's grid was invalidated or the window moved,
+`tagpu_fogwide.off` to turn it off live.
+
+**The one found on the way.** `tagpu_native.c` validated the engine's grid struct with
+`cells == cols * rows`. `cells` is the **allocation**, which the builder rounds up to a multiple
+of 8 (`0x483C84`), so the test passes at 1024x768 (30x24 = 720) and **fails at 1920x1080** (58x34
+= 1972 against an allocated 1976) — and failing there sets `fogMode` 0, which is not a degraded
+fog but **no fog whatever**: no black over unexplored ground, no grey band, the whole map drawn
+lit at every zoom. Anyone playing at 1080p had never seen fog of war. Now `cells ==
+((cols*rows + 7) & ~7)`, the engine's own arithmetic.
+
+Two departures from `0x4843C0` are deliberate, and both are needed only because our window is
+larger than any the engine can build: the border completions use the **derived** straddling entry
+rather than the engine's literal row 0 / `rows-2` (identical in every window the engine can
+produce, which is why the oracle still reads 0), and `fogw_edge_fill` replicates the edge entry
+outward over entries that lie wholly off the map — without it a tree on the high north shore,
+whose *projected* position lands past the shoreline while its anchor is on the map, drew in full
+colour above a fogged map. Full read of the builder, its allocation and the completion indices:
+[exe-reverse-engineering](exe-reverse-engineering.html) §"The screen fog grid";
+[terrain & depth](terrain-depth.html) §8.
 
 **G14j — the Classic structure shadow at parity, in the game and in the lab.** Found on
 2026-09-06 while answering whether the engine draws the Kbot lab a shadow at all (G14i's "did
@@ -1880,6 +1929,39 @@ coexistence with the TADR chain for a distributable build. *"GUI/minimap still s
 was the design until 2026-09-06; Phase E below and [GL UI renderer](gui-renderer.html) take
 the UI too.*
 
+## Smooth unit movement and animation — option A (2026-09-09)
+
+Design, invariants, gates and everything measured: [smooth motion](smooth-motion.html). It rides on
+G16 — `posed_pose` reads the pose as per-piece *fields*, so interpolating it is a blend of two
+integer triples rather than a lerp of geometry.
+
+| Gate | Status | Result |
+|---|---|---|
+| 0 — taste | ● **passed 2026-09-09** | The owner watched stepped against smoothed side by side in the tacob viewer and the smoothed walk looks good. Answering it cost **nine bugs, every one in the instrument** (smooth-motion §7c). **This was a model of the change, not the change**: nobody has yet looked at option A in the game. |
+| 1 — coverage (option B) | ● measured | `tools/cob_lookahead.py` over all 278 stock COBs: **74.5 %** of walk resume points resolve offline, **63.5 %** corpus-wide. Every residual blocker on a walk script is an unknown static or local, both of which the game can read, so the runtime rate should be near zero — an inference, not a measurement |
+| 2 — parity, lever off | ● **passed 2026-09-09** | New oracle `tagpu_posecrc.on` — `in=` a CRC32 of every byte `posed_pose` reads, `out=` a CRC32 of every byte it writes, **joined on the input** so no tick-for-tick determinism is needed. This tree against **HEAD plus the oracle and nothing else**, lever absent on both: 1513/1511 samples, **385 inputs seen by both runs, 0 producing a different output**, 0 impure within a run. The first attempt FAILED on one sample in 1498 — not an impurity but G16 §2's game-thread race, which the oracle now measures instead of tripping over (`raced=` 0–0.33 %) |
+| 3 — cost | ● **measured 2026-09-09** | `scenarios/crowd-static.json` free-running (`--maxfps 0`), paired because a battle diverges and cannot be — all four runs drew `posed=240/32288tri`. **297.5 fps off against 255.0 on = +0.560 ms a frame at 240 posed units**, 2.33 µs a unit, **3.4 % of a 60 fps budget** (14.3 % of *this* frame rate, which is the wrong framing at 3.4 ms a frame). For scale, G16 step 7 bought 2.3 ms by deleting the CPU emitters, so this spends a quarter of that back. **The first attempt was not a measurement**: the two 200v200 samples were taken at different points in the fight, 202 posed units against 136, and 325 vs 565 fps says nothing. ⚠ **That number is the first cut's `double` blend.** The shipped blend is 16.16 fixed point (smooth-motion §7i) and its frame cost is **not re-measured** — the loop's x87 traffic goes from 13 instructions including 4 `fldcw` to zero, established from the compiler, and every off/on pair of an interleaved live A/B came in under 0.560 ms, but they spread 0.068–0.461 ms under load from three other instances, which is not a number |
+| 4 — sim untouched | ● **passed 2026-09-09** | `tagpu_cobtrace.on` is the simulation's own fingerprint — every thread start, return, kill and `rand` draw. On the new `scenarios/walk-lerp.json` the walker's trace is **byte-identical with the lever on and off**, and identical to the pre-change build's. Determinism was established first, not assumed: two runs of one build gave **1084 events byte-identical once the tick column is dropped**, a constant +2 offset apart |
+
+**Three engine facts came out of it.** (1) **The sim tick is `3 × GameSpeed` a second and a
+skirmish starts at GameSpeed 20 — 60 ticks a second, not 30**; the "30 a second" the `+clock`
+cheat implies is the GameSpeed-10 rate ([engine map](exe-reverse-engineering.html) §"The simulation
+clock"). (2) The COB `sleep` divisor is a constant 30 (`[[0x51FBD0]+0xE8]`) and does **not** follow
+GameSpeed, so a raised speed simply plays every animation faster. (3)
+`ORDERS_NewMainOrder2Unit 0x43AFC0` **replaces** the main order rather than queueing it and drops
+one within ±16 wu of the standing one, so a scenario's list of move legs collapses to its last —
+which is why the new fixture patrols.
+
+**Not shipped, and the taste question is open**: the lever is off by default and absent from
+`tagpu_opt.c`'s play-default table, so only the file arms it.
+
+**The blend became fixed point afterwards** (smooth-motion §7i). Not a micro-optimisation and not
+about the multiply: this target has no SSE, so every `(int)` of a float costs an x87 control-word
+save and restore, and the first cut's two conversions per iteration put **four `fldcw`** — each a
+pipeline serialisation — around ten cycles of arithmetic. The weight is now one 16.16 integer
+computed once per unit, clamped into `[0, 65535]` rather than argued safe, because the turn
+multiply has only 32767 of headroom.
+
 ## Phase E — the UI, ours (planned 2026-09-06)
 
 Design: [GL UI renderer](gui-renderer.html) — decided in one interview on 2026-09-06; the spike,
@@ -1964,6 +2046,7 @@ the cfg and tacli can drive today, and the screen is only their first consumer.
 | G18c — the art: a six-recess panel frame and an entry point, both drawn, not spliced | ● **done 2026-09-09** (gate ③): `anims/render.gaf` in the DLL-written `.ufo`, one uncompressed 304×212 frame drawn in palette indices 55..63, repainted at load from `frontend.gaf`'s `back*`; the entry point is the DLL-drawn sprocket. `publish-check.py` has nothing to refuse — the archive is a runtime artifact and `*.ufo` is gitignored | **exit met**: the frame loads as an `id=12` background and every gadget lands in a recess at 1024×768 and 1080p; **no blob matches the original manifest** (`publish-check.py`), which a spliced frame would |
 | G18d — the screen: `RENDER.GUI`, its gadgets, and the callback that writes the cfg and the trigger files | ● **done 2026-09-09** (gates ① and ②) | **exit met**: every row moves the game inside one poll; Custom appears on touching any row and clears on Renderer; `Shadow quality` greys with `grayedout` when Shadows ≠ Soft; the G15 twins mirror it at 0 diff on the `strict` walk |
 | G18e — the way in: how the screen is reached | ● **unblocked 2026-09-09** | a new `.GUI` name CAN be pushed: `GUI_Load 0x4AA8F0` builds a file path from the name, so our DLL is the call site and no stock screen is sacrificed. Push with `0x495207`'s idiom (`main+0x37EA0` + `GUI_Load`, then `+0x08`/`+0x0C`); close by restoring the buffer and letting `UpdateIngameGUI` pop. The trigger is DLL-drawn — no GUI screen owns the top bar. Exit: reached in one click from a running game, the `+clock` seconds still ticking |
+| G18f — the FPS readout as a seventh row | ● **done 2026-09-09** ([GPU status](gpu-status.html) §2.14, [renderers](renderers.html) §2.10) | `tagpu_fps.c` draws its own two-triangle pass in game-frame pixels **above** the UI layer, from the eleven fixed atlas strings `"FPS"` and `"0"`..`"9"` — the string atlas keys on the whole string and never frees, so a per-number string would exhaust it in seconds and starve `tagpu_mark`'s digits with it. Not cnc-ddraw's own OSD: that is `_DEBUG`-only, GDI-draws into the 8bpp surface and flickers, and a debug build would move the numbers it exists to report. **First row that is not a rendering option**, so it never sets Renderer to Custom and is never greyed by the Classic lane; it still clears the no-restart rule (render-thread poll, GL objects on first use). `PANEL_H` 212 → 240. Verified in the game on `crowd-static` |
 
 **G18e is no longer blocked, and the entry-screen problem evaporated with it.** The screen
 inventory *is* a string table (gui-gadgets §6), but `GUI_Load 0x4AA8F0` never consults it — it

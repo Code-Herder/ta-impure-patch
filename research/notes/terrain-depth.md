@@ -399,6 +399,17 @@ per-fragment source-map sampling is ~16 px out of register (§6 item 4).
 the frame at 25 s apart with the camera parked; the ~17 invalidation sites mean
 it rebuilds whenever anything moves. Reading it every frame is correct.
 
+**Its size is a MAP-LOAD decision, and `cells` is the allocation** [BINARY-VERIFIED
+2026-09-09, `0x483BB8..0x483CA6` inside `LoadMap`]. `cols = viewW/32 + (viewW % 32 ? 3 : 2)`,
+`rows` likewise from `viewH`, then `cells = (cols*rows + 7) & ~7` and `buf = malloc(cells*2)`.
+Two things follow. First, **a reader must not assert `cells == cols*rows`** — it holds at
+1024×768 (30×24 = 720) and fails at 1920×1080 (58×34 = 1972 against 1976), and in our stack that
+refusal cleared `fogMode` and turned the whole fog rule off at 1080p until 2026-09-09 (§8).
+Second, the grid spans the **1× viewport** and about two cells more, permanently — it cannot be
+made to cover a zoomed-out view, which is why `tagpu_fogwide.c` builds its own. Full read of the
+builder's every load, and of the four border completions, is in
+[engine map](exe-reverse-engineering.html) §"The screen fog grid".
+
 **A caution about the source maps.** With the grid and MAPPED read *in the same
 frame*, at the same cells, using the stride this section documents, they
 disagree: on Two Continents MAPPED reported explored for cols 80..98 of row 20
@@ -965,6 +976,57 @@ One known deviation from suppressing `0x4848E0`: the engine used to shade-remap 
 were ever drawn on out-of-LOS ground, which the engine does not do.
 
 ---
+
+## 8. Fog at zoom — the grid the engine cannot give us [LIVE-VERIFIED 2026-09-09]
+
+The four native passes sample the engine's grid, and §5.2 says why that grid can only ever span
+the 1× viewport: its dimensions are fixed at map load and its origin is recomputed from the eye
+inside the builder. At zoom < 1 the passes draw a world rect `vw/z` across, so everything outside
+the grid falls off the lattice, `taFog`'s `clamp` reads the border cell, and the outer ring gets a
+**smear of the last row and column** — horizontal and vertical grey bands with lit, un-fogged
+ground between them, and, in the black band's case, unexplored map drawn in full colour.
+
+**It is not cosmetic.** The CPU-side gates take the same sample: `tagpu_native.c`'s anchor test and
+`tagpu_fx_tile_visible` both call `tagpu_fog_at`, so a smear that reads "no fog" draws enemy units
+and buildings the player has never seen. Measured on `feat-forest` at 0.35× — an enemy CORE Solar
+Collector on ground with no LOS, drawn in full colour on the frame's right edge, gone with the fix.
+
+**`tagpu_fogwide.c` builds its own grid** over a window sized for `tagpu_zoom_min()` — the widest
+view the levers can reach, not the level in force, because the level the game thread can read is a
+frame old and one ease step of a wheel flick is wider than the slack. It replicates `0x4843C0`
+exactly (engine map §"The screen fog grid"), on the **game thread**, from `terr_fogtick` — the fog
+overlay's own call site, where the LOS and MAPPED allocations are the engine's own to read — and
+hands the result to the render thread by swapping one of three buffers under a critical section,
+so the two never touch the same one. The render thread uses it in place of the engine's grid,
+same lattice and same bytes, and falls back to the engine's whenever the game thread is not
+building (zoom ≥ 1, the off lever, terrain ownership disarmed, the menus).
+
+**The oracle is exact**: with `tagpu_fogwide_check.on` the module rebuilds over the *engine's* own
+window each 120th tick and compares byte for byte — **0 differing of 720 cells (30×24, 1024×768,
+357 non-zero) and of 1972 (58×34, 1920×1080, 1555 non-zero)**.
+
+Two departures from the engine, both deliberate and both documented in the source:
+
+1. **The border completions use the derived straddling index**, not the engine's literal
+   `0`/`rows−2`/`0`/`cols−2` (engine map, the table). They coincide in every window the engine can
+   produce, which is why the oracle still reads 0; they do not in a window that reaches many cells
+   past the map.
+2. **`fogw_edge_fill` replicates the edge entry outward** over the entries that lie wholly off the
+   map. The engine never meets that case — its grid stops one cell past — but ours can carry forty
+   all-zero rows over open water, and an all-zero entry means "no fog": a sprite whose *projected*
+   position (`y − alt/2`) lands past the shoreline while its anchor is on the map drew in full
+   colour above a fogged map. It is applied after `fogw_build` and is not part of what the oracle
+   compares.
+
+**Cost**, from the module's own heartbeat (`fogwide:` per 300 ticks): a 245×148 window — 36,260
+cells, 1920×1080 at 0.25× — rebuilds in **86–98 µs** on the game thread with one game on the
+box, and **109–246 µs with six of them running**, so it is a cost that scales with contention
+rather than a fixed figure; quote the load with the number. It is paid only on ticks where the
+engine's grid was invalidated or the window moved. Inert at zoom ≥ 1: **0 differing pixels**
+on/off at 1× at both 1024×768 and 1920×1080, sim paused.
+
+`tagpu_fogwide.off` in the gamedir disables it live (polled twice a second on the render thread);
+`tagpu_fogwide_check.on` arms the oracle.
 
 ## Appendix — address & offset tables
 
