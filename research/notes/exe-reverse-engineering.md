@@ -3049,6 +3049,48 @@ wholly free pages (`0x4F24A9`), and `0x4F2410` releases a region whose `0x400` p
 wine 9.0's `heap_free_block` decommits a subheap's free tail past its `0x10000` hysteresis or
 releases a subheap that has emptied.
 
+## The simulation clock — `main+0x38A3B..0x38A52` — mapped by us (2026-09-09)
+
+*Layout `[VERIFIED]` against the vendored TADR corpus (`tools/tamem_ghidra.h`, which carries these
+offsets in its comments); the rates below are **ours**, measured live with `tacli peek` against the
+wall clock on `scenarios/walk-lerp.json`.*
+
+| VA | type | what |
+|---|---|---|
+| `main+0x38A3B` | u32 | `DeltaTime` — **sim ticks to execute this engine frame, 0..5**, computed by `ApplyDeltaTime` and consumed by `InGameAsynchronousThread`. This is why the tick can advance by more than one between two render frames |
+| `main+0x38A3F` | u32 | `scrollLen_buf` — raw elapsed, current − previous `GameRunSec()` |
+| `main+0x38A43` | u32 | the fractional-tick accumulator (used as a float) |
+| `main+0x38A47` | i32 | **`GameTime`** — the sim tick. `tagpu_cobtrace` and `tagpu_posedump` both stamp it, which is how their logs join |
+| `main+0x38A4B` | i16 | **`GameSpeed`** |
+| `main+0x38A4D` | i16 | `GameSpeed_Init` |
+| `main+0x38A4F` | i16 | — |
+| `main+0x38A51` | u8 | `IsGamePaused` (bit 0 is also read as `[main+0x38A51] & 1` by the HUD's pause icon) |
+
+### The tick rate is `3 × GameSpeed` a second, and a skirmish does not start at 30 `[MEASURED 2026-09-09]`
+
+| GameSpeed | GameTime per wall-clock second | ratio |
+|---|---|---|
+| **20** — what `tacli scenario load` lands on | 59.88 | 2.994 |
+| 15 | 44.78 | 2.985 |
+| 10 | ≈ 30 | 3 |
+
+`minus` / `plus` step `GameSpeed` by one per press. So the tick period is
+`1000 / (3 × GameSpeed)` ms — **16.7 ms on a default skirmish, not 33.3.**
+
+**This corrects a reading of the `+clock` cheat.** Its arithmetic (`÷108 000, ÷1 800, ÷30`, in the
+HUD-extras table above) is right, but "30 ticks a second" is the **GameSpeed-10** rate, not a
+property of the engine: at the speed a skirmish actually starts at, that clock runs at double wall
+time. Anything converting sim ticks to wall-clock time must read `GameSpeed` or measure the
+interval; a hard-coded 33.3 ms is wrong by 2× out of the box. `tagpu_lerp.c` measures it, and its
+learned period read `p=33.2ms` against a predicted 33.3 at GameSpeed 10 (0.3%) and tracked a live
+speed change down from 20.
+
+**The COB `sleep` conversion does NOT scale with GameSpeed.** The divisor is the COB object's
+`+4`, i.e. `0x4B6330() = [[0x51FBD0]+0xE8]`, and that reads **30** with `GameSpeed` at 20
+`[MEASURED]` — so `sleep 100` is always 3 COB ticks and a raised game speed simply plays every
+animation at `GameSpeed/10 ×` real time. That settles the `[INFERRED from that use]` on `cob+4` in
+the next section: it is 30, and it is a constant rather than the live tick rate.
+
 ## The COB engine — mapped by us (tacob landing 2, 2026-09-07)
 
 *Everything here is from `i686-w64-mingw32-objdump -d -M intel` of `pristine/TotalA.exe.pristine`

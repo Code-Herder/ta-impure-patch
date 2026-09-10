@@ -795,6 +795,7 @@ line per change, rate-limited to one a second so a campaign fade cannot flood it
 | `0x469A05` / `0x469BA8` | the two `DrawUnit` return sites | `tracer` |
 | `0x4969D2` | the sim tick site (5 stolen) | `scenario` — applies a situation on the game thread |
 | `0x4B08C0` `0x4B0DA0` `0x4B19D0` `0x4B1A99` + the `E8` at `0x4B15E0` | the COB engine's thread allocator (5 stolen, wrapped: the original runs through the stolen prologue, then the start is latched), the thread runner's entry (5), the `RETURN` handler mid-function (5), the `signal` kill mid-function (6), and the `rand` handler's call into the sim RNG `0x4B6C30` (call-site redirect that calls it itself) | `cobtrace` (`tagpu_cobtrace.on`, its contents a unit-type filter) — the COB script-call oracle for tacob: S/R/X/K/D lines to `tagpu_cobtrace.log`, stamped with the sim tick `main+0x38A47`; reads only, game thread only; all five or none. `tagpu_posedump.on`'s header line now carries `tick=` and `idx=` so the two logs join, and since 2026-09-08 `body=` (the cached triple the compose folds) and `live=` (`unit+0x68/+0x66/+0x64`) beside it, both in axis order — [exe-reverse-engineering](exe-reverse-engineering.html) §"The COB engine", [tacob-design](tacob-design.html) §"The trace contract" |
+| — | `tagpu_posecrc.on`: one line per unit per SIM TICK carrying `in=` a CRC32 of every byte `posed_pose` reads and `out=` a CRC32 of every byte it writes, plus `raced=`. **The only oracle that watches the matrices the unit pass hands the GPU** — `posedump` dumps the *engine's* fields and `tacob pose-check` diffs tacob's reconstruction of them. It is joined on the INPUT, never on the tick, so two runs need no tick-for-tick determinism: `posed_pose` is a pure function of its input, so a shared `in` must carry the same `out`. The input is hashed on **both sides** of the pose loop and the sample is dropped and counted when the game thread moved a field under it (§2.9's residual, measured at 0–0.33%) — [smooth motion](smooth-motion.html) §7e | `tagpu_native.c`, no engine address |
 | — | `tagpu_shadowdump.on`: the Classic++ shadow map written once as a 16-bit PGM, `tagpu_shadow.pgm` (near = small), with its matrix on the `shadow: dumped` log line — the lab's `debug=shadow` for the game; how a caster's silhouette in light space is checked instead of guessed (G14i) | `tagpu_shadow.c`, no engine address |
 | `0x485F50` `0x4864B0` `0x422DD0` `0x4224B0` `0x481550` `0x423C50` `0x43F0E0` `0x43AFC0` | `CreateUnit`, `KillUnit`, `FeatureName2ID`, `LoadFeature`, `GetGridPosPLOT`, `SpawnFeatureOnMap`, `ScriptAction_Type2Index`, `NewMainOrder2Unit` | `scenario` — *called by us*, never patched. **`NewMainOrder2Unit` takes 16.16 in `{x, altitude, depth}`**, the same convention as `CreateUnit`; we passed whole units in `{x, depth, altitude}` until 2026-09-04 and every ordered unit walked to the map origin — [exe-reverse-engineering](exe-reverse-engineering.html) §"The order module" |
 
@@ -832,6 +833,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
 | the **level generation** (`tagpu_reclaim_level_gen()`) | not an engine field — our own counter, bumped on the game thread inside the teardown `0x491B60` and read on the render thread. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a) |
+| the **pose history** (`tagpu_lerp.c`, `tagpu_lerp.on`) | not an engine field — our own arena, 3.4 MB of `P_POS`/`P_TURN` snapshots keyed by `(Object3do, nparts, level generation)`. **It READS `pr+P_POS` and `pr+P_TURN` and writes NOTHING back**, which is the whole safety argument: the sim reads those fields (`get PIECE_XZ`, and `QueryPrimary`/`AimFromPrimary` hand the engine weapon muzzle origins out of them) and TA has no runtime desync detection, so a framerate-dependent per-machine blend written there would diverge two machines silently. Verified by running it: the walker's COB trace is byte-identical with the lever on and off ([smooth motion](smooth-motion.html) §7g) |
 | `node+0x24` | the model's REST vertices, `count × 12` bytes of 16.16. Read only. Shared by every unit of a type and never written after load, which is what makes the reconstruction in §2.9 safe to build from while the engine is rewriting the posed copy |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F06` bit2 / bit3 | the graphics options `Shadow` / `TShadow` (the blit tests `al,4` at `0x45928E`, [shadows & cloak](shadows-cloak.html) §2). Read only, per frame. The Classic silhouette needs both, the slant only bit2 — and **since G14i bit2 also gates the Classic++ shadow map** (with `shadows=1` in the cfg), so the player's in-game Shadows toggle keeps its meaning under the switch; bit3 is ignored there |
@@ -1366,6 +1368,37 @@ so the two right edges land on one line — measured at both 1024 (988, 704) and
 panel hangs over the world, so clicking a row costs one frame of the panel being re-pushed.
 The row's own state survives it (the model is ours; the levers are read only on the player's
 open), but the rebuild is visible if you look for it.
+
+### 2.13 Sub-tick pose interpolation (`tagpu_lerp.c`, OFF by default, `tagpu_lerp.on`) — 2026-09-09
+
+The design, the invariants and the gate results are [smooth motion](smooth-motion.html); this is
+the hook-map entry. **No engine address, no patch, no engine write.**
+
+`posed_pose` composes each piece's 4×3 from exactly `pr+P_POS` (i32[3] 16.16) and `pr+P_TURN`
+(u16[3] TAang). With the lever armed, those two reads are served from a blend of the unit's last
+two **sim-tick** snapshots instead of the live fields, so the model animates at render rate rather
+than snapping at the tick. It is only this small because G16 turned the pose back into per-piece
+*fields*; before it, the pose arrived already baked into vertices.
+
+- **Read-only.** The history arena is ours (§2.5). Nothing is written back to `PrimitiveStruct` —
+  the sim reads those fields and TA has no runtime desync detection, so a per-machine
+  framerate-dependent blend written there would diverge two peers silently.
+- **The degradation is a refusal, not a weight.** No history, a stale pair, a model over 48 pieces,
+  a full table, or a weight that has reached 1.0 — every one returns 0 and the caller reads the
+  live fields with its own untouched code. Not "blend at weight 1.0": `a + (b - a) * 1.0f` is not
+  `b` in floating point, and the parity claim would have been false.
+- **The tick period is measured, not assumed.** `main+0x38A47` advances `3 × GameSpeed` a second
+  and a skirmish starts at `GameSpeed` **20**, i.e. 60 ticks a second — [engine
+  map](exe-reverse-engineering.html) §"The simulation clock". The module learns the period from the
+  observed interval divided by the tick gap, so it is right at any speed and follows a live change
+  (`p=33.2ms` at GameSpeed 10 against a predicted 33.3). **On pause it degrades by the same
+  refusal**: no new tick arrives, the weight passes 1.0, and every unit draws from the live fields.
+- **Not smoothed, deliberately**: `pose_accum_body` — the path `hires_pose` and `tagpu_posedump.on`
+  take — is untouched, so replacement meshes still step and the sim oracle still reports the
+  engine's own fields. The unit's world position and `O3_BTURN` are out of scope, which means the
+  pose runs a sample behind a position that is not delayed.
+- `lerp=<blended>/<snapped> p=<ms> u=<weight>` rides the `native:` line, and **nothing at all** is
+  printed when the lever is off.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

@@ -1746,6 +1746,32 @@ coexistence with the TADR chain for a distributable build. *"GUI/minimap still s
 was the design until 2026-09-06; Phase E below and [GL UI renderer](gui-renderer.html) take
 the UI too.*
 
+## Smooth unit movement and animation — option A (2026-09-09)
+
+Design, invariants, gates and everything measured: [smooth motion](smooth-motion.html). It rides on
+G16 — `posed_pose` reads the pose as per-piece *fields*, so interpolating it is a blend of two
+integer triples rather than a lerp of geometry.
+
+| Gate | Status | Result |
+|---|---|---|
+| 0 — taste | ● **passed 2026-09-09** | The owner watched stepped against smoothed side by side in the tacob viewer and the smoothed walk looks good. Answering it cost **nine bugs, every one in the instrument** (smooth-motion §7c). **This was a model of the change, not the change**: nobody has yet looked at option A in the game. |
+| 1 — coverage (option B) | ● measured | `tools/cob_lookahead.py` over all 278 stock COBs: **74.5 %** of walk resume points resolve offline, **63.5 %** corpus-wide. Every residual blocker on a walk script is an unknown static or local, both of which the game can read, so the runtime rate should be near zero — an inference, not a measurement |
+| 2 — parity, lever off | ● **passed 2026-09-09** | New oracle `tagpu_posecrc.on` — `in=` a CRC32 of every byte `posed_pose` reads, `out=` a CRC32 of every byte it writes, **joined on the input** so no tick-for-tick determinism is needed. This tree against **HEAD plus the oracle and nothing else**, lever absent on both: 1513/1511 samples, **385 inputs seen by both runs, 0 producing a different output**, 0 impure within a run. The first attempt FAILED on one sample in 1498 — not an impurity but G16 §2's game-thread race, which the oracle now measures instead of tripping over (`raced=` 0–0.33 %) |
+| 3 — cost | ◐ see smooth-motion §7f | `scenarios/crowd-static.json` free-running (`--maxfps 0`), paired because a battle diverges and cannot be. **The first attempt was not a measurement**: the two 200v200 samples were taken at different points in the fight, 202 posed units against 136, and 325 vs 565 fps says nothing |
+| 4 — sim untouched | ● **passed 2026-09-09** | `tagpu_cobtrace.on` is the simulation's own fingerprint — every thread start, return, kill and `rand` draw. On the new `scenarios/walk-lerp.json` the walker's trace is **byte-identical with the lever on and off**, and identical to the pre-change build's. Determinism was established first, not assumed: two runs of one build gave **1084 events byte-identical once the tick column is dropped**, a constant +2 offset apart |
+
+**Three engine facts came out of it.** (1) **The sim tick is `3 × GameSpeed` a second and a
+skirmish starts at GameSpeed 20 — 60 ticks a second, not 30**; the "30 a second" the `+clock`
+cheat implies is the GameSpeed-10 rate ([engine map](exe-reverse-engineering.html) §"The simulation
+clock"). (2) The COB `sleep` divisor is a constant 30 (`[[0x51FBD0]+0xE8]`) and does **not** follow
+GameSpeed, so a raised speed simply plays every animation faster. (3)
+`ORDERS_NewMainOrder2Unit 0x43AFC0` **replaces** the main order rather than queueing it and drops
+one within ±16 wu of the standing one, so a scenario's list of move legs collapses to its last —
+which is why the new fixture patrols.
+
+**Not shipped, and the taste question is open**: the lever is off by default and absent from
+`tagpu_opt.c`'s play-default table, so only the file arms it.
+
 ## Phase E — the UI, ours (planned 2026-09-06)
 
 Design: [GL UI renderer](gui-renderer.html) — decided in one interview on 2026-09-06; the spike,

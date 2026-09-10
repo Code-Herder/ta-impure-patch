@@ -207,9 +207,9 @@ needs.
 |---|---|---|
 | **0 — taste** | does smoothed TA look better than the authored stepping? | **PASSED 2026-09-09** — the owner's verdict on the A\|B viewer (§7a), which is the only thing that could decide it |
 | **1 — coverage** | how often would B fall back? | `tools/cob_lookahead.py` — **run, §5** |
-| **2 — parity** | with the lever off, is output unchanged? | bit-identical `posed_pose` output |
-| **3 — cost** | what does it cost at scale? | `tools/gatec.sh` + `scenarios/walk-gatec.json`, the 200-unit fixture [G16](gpu-posing.md) step 7 built |
-| **4 — sim untouched** | did anything reach the simulation? | `cobtrace` + `posedump` unchanged, lever on and off |
+| **2 — parity** | with the lever off, is output unchanged? | **PASSED 2026-09-09** — `tagpu_posecrc.on`, §7e |
+| **3 — cost** | what does it cost at scale? | `scenarios/200v200.json` free-running, §7f |
+| **4 — sim untouched** | did anything reach the simulation? | **PASSED 2026-09-09** — `cobtrace` on `scenarios/walk-lerp.json`, §7g |
 
 ### 7a. Gate 0's instrument — built 2026-09-09
 
@@ -353,9 +353,11 @@ shows the honest result of interpolating pieces alone (smooth legs on a stepping
 real risk of §2 landing by itself.
 
 **Order of work.** ~~Gate 0 first, in tacob~~ — **done, and it passed**; §7a is what was built to
-answer it and §7c is what it cost. Next is **option A behind the lever**, with gates 2–4. Then B,
-only if the 66 ms actually shows on screen — gate 1 says the coverage is there for it (§5), so the
-decision is about latency, not feasibility.
+answer it and §7c is what it cost. ~~Next is option A behind the lever, with gates 2–4~~ — **built
+2026-09-09**, §7d, and gates 2–4 are answered in §7e–§7g. Then B, only if the latency actually
+shows on screen — gate 1 says the coverage is there for it (§5), so the decision is about latency,
+not feasibility. **Nobody has yet looked at option A in the game**; gate 0 was passed on the tacob
+viewer's model of it, and the taste question for the real renderer is open.
 
 ### 7c. What answering gate 0 actually cost — nine bugs, none of them the interpolation
 
@@ -389,6 +391,162 @@ is the transferable part:
   clock under adversarial stalls produced **no backward jumps before or after** the change, and a
   wipe gives pause-then-jump-*forward* anyway. It was item 9. The hardening (monotonic playback,
   no wipe except on a real restart) is insurance, and the note says so rather than claiming a fix.
+
+### 7d. Option A, built — `tagpu_lerp.c` (2026-09-09)
+
+`[VERIFIED — the code is in the tree]` The lever is **`tagpu_lerp.on`**, a file beside the exe,
+**off by default and absent from `tagpu_opt.c`'s play-default table**, so only that file arms it;
+there is no default that could turn it on for a player who did not ask.
+
+The insertion in `posed_pose` is what §2 said it would be — the two field reads, and one line:
+
+```c
+mv  = (const int*)(pr[i] + P_POS);
+tn  = (const unsigned short*)(pr[i] + P_TURN);
+if (lpos) { mv = lpos + i * 3; tn = lturn + i * 3; }
+```
+
+`lpos` is non-NULL only when the lever is armed *and* that unit has two usable samples, so with the
+lever off the function reads the live fields with the code it always had. Everything else lives in
+`tagpu_lerp.c`:
+
+| | |
+|---|---|
+| key | `(Object3do, nparts, level generation)` — a pointer alone would let a new unit inherit a dead one's poses, because slots and allocations are both recycled |
+| table | 4096 records, open-addressed on the pointer, probe 8, swept 256/frame and dropped after 180 frames unseen |
+| arena | fixed blocks of **48 pieces** × 2048 blocks × 2 banks = **3.4 MB**, less than the 4.7 MB pose arena beside it. 48 is above every stock model (36, ARMSCORP/CORSCORP) and below `TAGPU_PBMAXPIECE` 256, so a bigger model gets no history and draws stepped, counted as `big=` |
+| banks | a new sample is written into the bank the record is *not* pointing at and the index flips — the "shift" costs nothing |
+| line | `lerp=<blended>/<snapped> p=<ms> u=<weight>` on `native:`, and **nothing at all** when the lever is off |
+
+**The degradation is a `return 0`, never a blend at weight 1.0** — and that distinction is not
+pedantry. `a + (b - a) * 1.0f` is *not* `b` in floating point, so "blend with weight 1" would have
+been off by an ulp on every piece of every unit and invariant 2's parity claim would have been
+false before it was ever tested. Refusing hands the caller back its own untouched read.
+
+**Three things the design had wrong.** The first two were found by the instrument and both are about the clock; the third by re-reading the code, which is worth saying because §7c's lesson is not *only* "measure":
+
+1. **The sim tick is not 30 Hz.** `main+0x38A47` advanced **60 a second** on the gate fixture, not
+   the 30 the engine's own `+clock` arithmetic implies: a skirmish starts at `GameSpeed`
+   (`main+0x38A4B`) **20**, and the tick rate follows it. A hard-coded 33.3 ms would have run every
+   blend at half speed and left the legs a whole stride behind the unit. The period is **measured**
+   — the learned value reads `p=16.7ms` — which closes §9 question 1's first half. See
+   [exe reverse engineering](exe-reverse-engineering.md) §"The simulation clock".
+2. **The pair to interpolate is not "last tick and this tick".** A render slower than the sim sees
+   several ticks arrive at once, and a unit that was off screen has not been sampled for many more
+   — so the window to spread a sample pair over is however many ticks apart *that unit's* last two
+   samples were, not one. The first cut tested `tick == prev + 1` and would have blended nothing at
+   all on this fixture, where the render is at half the sim rate. The gap is per record, capped at
+   8 ticks, and the period is learned from the observed interval **divided by the gap**.
+3. **`u > 0` where it had to be `u >= 0`**, and it is a visible stutter rather than a nicety. On the
+   frame a sample lands `s_now` *is* the record's stamp, so `u` is exactly 0 and the honest answer
+   is "show PREV". Refusing there instead falls through to the live fields, which are **CUR** — so
+   the unit would have jumped forward one tick and been pulled back on the very next frame, once
+   per tick, forever. It was written as a NaN guard; `>= 0` rejects NaN just as well, and `u == 0`
+   blends exactly (`ap[i] + (int)(d * 0.0f)` is `ap[i]`), so there was nothing to guard against.
+   **Found by reading the function back, not by looking at it**, and every gate below was re-run on
+   the corrected binary rather than on the one that had already produced numbers.
+
+**What is deliberately NOT smoothed.** `pose_accum_body` — the path `hires_pose` and
+`tagpu_posedump.on` take — is untouched, so replacement meshes still step and the sim oracle still
+reports the engine's own fields. The unit's world position and `O3_BTURN` are §8. That asymmetry
+has a visible consequence this page has to own: **the pose is one sample behind a position that is
+not delayed**, so the feet slide against the ground by speed × the delay — for ARMCOM at 1.2 wu per
+tick, under 2 wu. Stock strides were never distance-synced to ground speed either (§9 question 4),
+so this adds to a slip that is already there rather than creating one; whether it reads worse is a
+taste question and **nobody has looked at option A in the game yet**.
+
+### 7e. Gate 2 — parity, PASSED `[MEASURED 2026-09-09]`
+
+The oracle is new and general: **`tagpu_posecrc.on`** logs, once per unit per sim tick,
+`in=` a CRC32 of every byte `posed_pose` reads and `out=` a CRC32 of every byte it writes.
+`tagpu_posedump.on` dumps the *engine's* fields and `tools/tacob pose-check` diffs tacob's own
+reconstruction of them; **nothing had ever watched the matrices this pass hands the GPU.**
+
+It is joined on the **input, not the tick**, and that is the whole point. Two runs are not
+tick-for-tick comparable — the gate-C fixture's move order goes over the wire and lands where it
+lands — but `posed_pose` is a pure function of its input, so every `in` that appears in both runs
+must carry the same `out`, whatever tick each run saw it on.
+
+Two builds, the lever absent on both: the tree as it stands, against **HEAD plus the oracle and
+nothing else** (built in the scratchpad, diffed to confirm the only change was the oracle).
+
+| | |
+|---|---|
+| samples | 1502 / 1495 over a six-leg walk |
+| distinct inputs | 476 / 477 |
+| **joined on inputs seen by both** | **361** (75.8% of the smaller side) |
+| **inputs producing a different output** | **0** |
+| inputs producing more than one output *within* a run | 0 |
+
+**The first attempt failed, and the failure was worth more than the pass.** One input in 1498 had
+two outputs *inside a single run* — at tick 3595, the only odd tick in a stream of even ones. That
+is not an impurity: the COB scripts run on the **game** thread while this one poses, so the fields
+moved between the input hash and the loop that read them. It is [G16](gpu-posing.md) §2's accepted
+residual, one tick of one piece, and it had never been given a number. The oracle now hashes the
+input on **both sides** of the pose loop and drops the sample when they disagree, which turns a
+false positive into a measurement: `raced=` 0 to 5 per ~1500 samples, **0 to 0.33%**, present in
+the control build too and not attributable to this change.
+
+### 7h. Is the blend actually doing anything? `[MEASURED 2026-09-09]`
+
+The gates all ask whether the change *breaks* something. This asks whether it *works*, and it
+falls out of the same `tagpu_posecrc.on` log for free.
+
+`in` hashes the live engine fields; `out` hashes what `posed_pose` wrote. With the lever **off**
+the output is a function of the input alone, so an input the log saw twice must carry one output.
+With it **on** the output also depends on the sub-tick weight, so a repeated input must carry
+*several* — one per weight the render sampled it at.
+
+| | lever OFF | lever ON |
+|---|---|---|
+| samples / distinct inputs | 1676 / 624 | 1683 / 670 |
+| inputs seen more than once | 144 | 162 |
+| **of those, carrying more than one output** | **0 (0.0%)** | **104 (64.2%)** |
+| most outputs for one engine state | 1 | **10** |
+
+So the lever-off pass is exactly the pure function it has always been, and the lever-on pass draws
+one engine state at up to ten different poses. `lerp=300/0 p=16.6ms u=0.84` on the `native:` line
+says the same thing from the other side: **every** one of the window's 300 draws blended and none
+snapped — which is also how the `u >= 0` fix above shows up, since before it every sampling frame
+refused.
+
+### 7g. Gate 4 — sim untouched, PASSED `[MEASURED 2026-09-09]`
+
+`scenarios/walk-lerp.json` is new and exists because the gate-C fixture cannot answer this:
+its orders come from the shell, so two runs are several ticks out of phase and every trace differs
+for reasons that have nothing to do with the code. The new fixture carries its order, and it has to
+be a **patrol** — `ORDERS_NewMainOrder2Unit 0x43AFC0` *replaces* the main order rather than
+queueing it, and drops one whose target is within ±16 wu of the standing one (the tolerance test at
+`0x43B006`), so a list of six move legs collapses to its last, which is the start point, and the
+unit never takes a step. That was measured the slow way: six orders "issued, 0 failed" and a
+commander that stood still for 55 seconds.
+
+**The sim is deterministic, and that was established before it was relied on**: two runs of the
+same build and the same lever produced **1084 COB events, byte-identical once the tick column is
+dropped** — same order, same arguments, same `rand` draws — with a constant +2 tick offset from
+when the scenario applied. `tagpu_cobtrace.on` records every thread start, return, kill and RNG
+draw on the game thread, so it is the simulation's own fingerprint.
+
+The result, lever ON against lever OFF on the same build, filtered to the walker: the lever-OFF
+run's **273-event trace occurs VERBATIM inside** the lever-ON run's 675 (a longer capture — the
+same patrol, more cycles of it). Same events, same order, same arguments, same `rand` draws.
+
+- The **AI is the one source of noise** and it is not ours: the CORE keepalive is AI-controlled and
+  in one run it decided to walk and to build a CORFMKR, which is why the comparison filters to the
+  scripted unit. Worth fixing in the fixture (a structure keepalive has nothing to decide); it does
+  not affect the result.
+
+**A harness trap worth writing down, because it cost half an hour.** After a dozen rapid
+`scenario load --restart` cycles the instance's **wineserver wedges**: every subsequent launch dies
+with `exited during launch before showing a window (no ErrorLog.txt)`, the DLL is fine, and nothing
+in the log says why. Killing the wineserver **for that prefix alone** (match `WINEPREFIX` in
+`/proc/<pid>/environ`, never `pkill wineserver` — other instances and the human's own session are
+on this machine) clears it and the next launch is normal. It looks exactly like a DLL that will not
+load, which is the wrong thing to go and debug.
+
+The structural half of the gate is stronger than the measurement anyway: the module writes to its
+own statics and to nothing else, and the invariant-1 read-only rule is checkable by inspection —
+there is no write to `PrimitiveStruct` anywhere in the diff.
 
 ## 8. Future work — the rest of "smooth"
 
