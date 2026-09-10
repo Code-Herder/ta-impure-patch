@@ -149,6 +149,30 @@
                      no cast shadows, so this adds and does not double-count
        shadowres=<n> EXPLORE: depth map size, default 2048 (about half a
                      world unit per texel over the view plus its margin)
+       castsplit=<b> EXPLORE: mirror the GAME's caster/receiver split, default
+                     1. The game's terrain gather emits screen-space quads with
+                     no height in them, so its fragment shader rebuilds the
+                     world point and the normal from the height grid per
+                     fragment (tagpu_terr.c taTerrW/taTerrN), while the CASTER
+                     is a separate world-space mesh built from the same bytes
+                     (build_hills). One surface described twice. castsplit=1
+                     does both here; castsplit=0 is the lab's older single
+                     buffer, cast and shaded, and is byte-identical to what the
+                     lab drew before the knob existed. MEASURED 2026-09-09: the
+                     two differ by 0.001 std of the shadow term, which is what
+                     falsified the split as the cause of the ground acne
+                     (renderers.md 2.7b)
+       bfloor=<w>    EXPLORE, DIAGNOSTIC: floor the constant shadow bias at w
+                     world units, default 0 (off). This is the ACNE ORACLE: the
+                     shadow term at bfloor=24 keeps every shadow a real caster
+                     throws and loses the ones the bias failed to cover, so
+                     acne = std(term) - std(term at bfloor=24). Needed because
+                     the raw term is dominated by legitimate terrain shadow
+       bslack=<k>    EXPLORE: k world units of extra depth allowance per world
+                     unit of blocker-search tap offset. The receiver-plane bias
+                     is a LINEAR extrapolation and the search runs a fixed 24
+                     world units; this is the candidate fix for what that
+                     leaves uncovered on a curved receiver. 0 = off (default)
        undither=<b>  EXPLORE: 1 = the pack's restored true-colour atlases,
                      0 = the palette indices. DEFAULT: restored when the pack
                      carries them (`tascene build --undither`), indexed
@@ -278,7 +302,7 @@ const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither",
                       "filter", "aniso", "shadows", "penumbra", "shade",
                       "terrainshadow", "shadowres", "unitsun", "shadowsun",
-                      "shadowlen", "airshadow", "restore", "model", "precision",
+                      "shadowlen", "airshadow", "restore", "model", "precision", "bslack", "bfloor", "castsplit", "pbias", "mindist", "castsmooth", "noff", "pofac", "pounits",
                       "nk", "restorediff"];
 
 function sideQuery(side, presets) {
@@ -407,6 +431,18 @@ function readLook(p, label) {
     shade: Math.min(1, Math.max(0, num("shade", 1))),
     terrainshadow: p.get("terrainshadow") !== "0",
     shadowres: Math.max(256, Math.min(4096, num("shadowres", 2048) | 0)),
+    bslack: Math.max(0, num("bslack", 0)),
+    bfloor: Math.max(0, num("bfloor", 0)),
+    pbias: Math.max(0, num("pbias", 0)),
+    mindist: Math.max(0, num("mindist", 0)),
+    castsmooth: Math.max(0, Math.min(8, num("castsmooth", 0) | 0)),
+    noff: Math.max(0, num("noff", 0)),
+    pofac: num("pofac", 0), pounits: num("pounits", 0),
+    // castsplit: mirror the GAME's split — a separate world-space caster
+    // mesh (build_hills) and a receiver that reconstructs its world point
+    // per fragment, instead of casting and shading one buffer. Default ON:
+    // what the lab shows should be what the game does (renderers.md 2.7b).
+    castsplit: p.get("castsplit") !== "0",
     airshadow: (() => {
       const v = p.get("airshadow") || "len";
       if (!["drop", "len", "physical"].includes(v))
@@ -532,6 +568,11 @@ uniform highp sampler2D uShadowRaw;        // the same map, raw depths
 uniform vec3 uShScale;      // world per texel, world per depth unit, 1/res
 uniform float uPenumbra;    // penumbra width per world unit of blocker distance
 uniform float uShade;       // fraction of the direct light a shadow removes
+uniform float uBSlack;      // depth allowance per world unit of tap offset
+uniform float uBFloor;      // DIAGNOSTIC: constant bias floor, world units
+uniform float uPBias;       // receiver-plane bias, in texels of its own gradient
+uniform float uMinDist;     // ignore blockers nearer than this, world units
+uniform float uNOff;        // slope-scaled normal offset, texels per tan(theta)
 const vec2 POISSON[16] = vec2[16](
   vec2(-0.94201624,-0.39906216), vec2( 0.94558609,-0.76890725),
   vec2(-0.09418410,-0.92938870), vec2( 0.34495938, 0.29387760),
@@ -545,7 +586,13 @@ float shadowAt(vec3 W, vec3 n) {
   if (uShadowOn == 0) return 1.0;
   // 1.5 texels of normal offset, then a slope-scaled bias in depth units
   float nl = dot(n, uShadowSun);
-  vec3 p = (uShadowMat * vec4(W + n * uShScale.x * 1.5, 1.0)).xyz * 0.5 + 0.5;
+  // Normal-offset bias, the standard first answer: move the SAMPLE along the
+  // surface normal so it lands on a texel whose stored depth is right, rather
+  // than pushing depth (which peter-pans). The shipped 1.5 texels is flat; the
+  // usual form scales with the slope relative to the light, tan(acos(N.L)).
+  float nlc = clamp(nl, 0.05, 1.0);
+  float noTex = 1.5 + uNOff * sqrt(1.0 - nlc * nlc) / nlc;
+  vec3 p = (uShadowMat * vec4(W + n * uShScale.x * noTex, 1.0)).xyz * 0.5 + 0.5;
   // Receiver-plane depth bias: the receiver's own depth gradient across the
   // map, from the screen-space derivatives (taken before any early return,
   // where the flow is still uniform). Every tap compares against the plane's
@@ -556,11 +603,18 @@ float shadowAt(vec3 W, vec3 n) {
   vec2 dzduv = abs(det) > 1e-14
     ? vec2(dpdy.y * dpdx.z - dpdx.y * dpdy.z, dpdx.x * dpdy.z - dpdy.x * dpdx.z) / det
     : vec2(0.0);
+  // the plane's own depth change across ONE texel, before the tap clamp: this
+  // is what the receiver's OWN texel needs as bias, and the nl term is not it
+  float pb = uPBias * length(dzduv) * uShScale.z;
   dzduv = clamp(dzduv, vec2(-4.0), vec2(4.0));       // a grazing receiver stays finite
   if (nl <= 0.0) return 1.0;                 // faces away from the shadow light
   if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
-  float z = p.z - (1.0 + 2.0 * (1.0 - nl)) * uShScale.x / uShScale.y;
+  float z = p.z - max(max((1.0 + 2.0 * (1.0 - nl)) * uShScale.x, uBFloor) / uShScale.y, pb);
   float search = 24.0 / uShScale.x * uShScale.z;   // 24 world units, in uv
+  // The receiver-plane bias is a LINEAR extrapolation; over a search this
+  // wide a curved receiver leaves it. uBSlack world units of depth per
+  // world unit of tap offset is the allowance for that curvature.
+  float slackK = uBSlack / uShScale.z / uShScale.y * uShScale.x;
   float sum = 0.0; int nb = 0;
   // The receiver's OWN texel first (G14i, 2026-09-06). The eight ring taps
   // all sit 12-28 texels out, so a caster the size of a kbot's head -- 30
@@ -573,26 +627,81 @@ float shadowAt(vec3 W, vec3 n) {
   for (int i = 0; i < 16; i++) {                   // all 16 (G14i): 8 left the
     vec2 o = POISSON[i] * search;                  // estimate to lattice luck
     float d = texture(uShadowRaw, p.xy + o).r;
-    if (d < z + dot(o, dzduv)) { sum += d; nb++; }
+    if (d < z + dot(o, dzduv) - slackK * length(o)) { sum += d; nb++; }
   }
   if (nb == 0) return 1.0;
   float dist = (z - sum / float(nb)) * uShScale.y;   // receiver - blocker, world
+  // A blocker the BIAS invented sits a fraction of a world unit above the
+  // receiver; a real caster is 10-60 units tall and its blocker is tens of
+  // units up. That distance is the discriminator, and it is already computed.
+  if (uMinDist > 0.0 && dist < uMinDist) return 1.0;   // dist can be NEGATIVE
   float r = max(uPenumbra * dist, 0.5 * uShScale.x) / uShScale.x * uShScale.z;
   float lit = 0.0;
   for (int i = 0; i < 16; i++) {
     vec2 o = POISSON[i] * r;
-    lit += texture(uShadowCmp, vec3(p.xy + o, z + dot(o, dzduv)));
+    lit += texture(uShadowCmp, vec3(p.xy + o, z + dot(o, dzduv) - slackK * length(o)));
   }
   return 1.0 - uShade * (1.0 - lit / 16.0);
 }
 float lambert(vec3 n, vec3 W) {
   n = normalize(n);
   return (uAmb + (1.0 - uAmb) * max(dot(n, uSun), 0.0) * shadowAt(W, n)) * uNorm;
+}
+// castsplit: the game's taShadowAt, which is handed ANALYTIC world derivatives
+// rather than taking dFdx of an interpolated world point. Identical body to
+// shadowAt above from dzduv on; only where dpdx/dpdy come from differs, and
+// that is the whole point of the knob (renderers.md 2.7b).
+float shadowAtD(vec3 W, vec3 n, vec3 dWdx, vec3 dWdy) {
+  if (uShadowOn == 0) return 1.0;
+  float nl = dot(n, uShadowSun);
+  // Normal-offset bias, the standard first answer: move the SAMPLE along the
+  // surface normal so it lands on a texel whose stored depth is right, rather
+  // than pushing depth (which peter-pans). The shipped 1.5 texels is flat; the
+  // usual form scales with the slope relative to the light, tan(acos(N.L)).
+  float nlc = clamp(nl, 0.05, 1.0);
+  float noTex = 1.5 + uNOff * sqrt(1.0 - nlc * nlc) / nlc;
+  vec3 p = (uShadowMat * vec4(W + n * uShScale.x * noTex, 1.0)).xyz * 0.5 + 0.5;
+  vec3 dpdx = mat3(uShadowMat) * dWdx * 0.5, dpdy = mat3(uShadowMat) * dWdy * 0.5;
+  float det = dpdx.x * dpdy.y - dpdx.y * dpdy.x;
+  vec2 dzduv = abs(det) > 1e-14
+    ? vec2(dpdy.y * dpdx.z - dpdx.y * dpdy.z, dpdx.x * dpdy.z - dpdy.x * dpdx.z) / det
+    : vec2(0.0);
+  float pb = uPBias * length(dzduv) * uShScale.z;
+  dzduv = clamp(dzduv, vec2(-4.0), vec2(4.0));
+  if (nl <= 0.0) return 1.0;
+  if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
+  float z = p.z - max(max((1.0 + 2.0 * (1.0 - nl)) * uShScale.x, uBFloor) / uShScale.y, pb);
+  float search = 24.0 / uShScale.x * uShScale.z;
+  float slackK = uBSlack / uShScale.z / uShScale.y * uShScale.x;
+  float sum = 0.0; int nb = 0;
+  { float d = texture(uShadowRaw, p.xy).r; if (d < z) { sum += d; nb++; } }
+  for (int i = 0; i < 16; i++) {
+    vec2 o = POISSON[i] * search;
+    float d = texture(uShadowRaw, p.xy + o).r;
+    if (d < z + dot(o, dzduv) - slackK * length(o)) { sum += d; nb++; }
+  }
+  if (nb == 0) return 1.0;
+  float dist = (z - sum / float(nb)) * uShScale.y;
+  // A blocker the BIAS invented sits a fraction of a world unit above the
+  // receiver; a real caster is 10-60 units tall and its blocker is tens of
+  // units up. That distance is the discriminator, and it is already computed.
+  if (uMinDist > 0.0 && dist < uMinDist) return 1.0;   // dist can be NEGATIVE
+  float r = max(uPenumbra * dist, 0.5 * uShScale.x) / uShScale.x * uShScale.z;
+  float lit = 0.0;
+  for (int i = 0; i < 16; i++) {
+    vec2 o = POISSON[i] * r;
+    lit += texture(uShadowCmp, vec3(p.xy + o, z + dot(o, dzduv) - slackK * length(o)));
+  }
+  return 1.0 - uShade * (1.0 - lit / 16.0);
+}
+float lambertD(vec3 n, vec3 W, vec3 dWdx, vec3 dWdy) {
+  n = normalize(n);
+  return (uAmb + (1.0 - uAmb) * max(dot(n, uSun), 0.0) * shadowAtD(W, n, dWdx, dWdy)) * uNorm;
 }`;
 
 // the uniforms LAB_LIGHT's shadow term adds to every lab program
 const SHADOW_U = ["uShadowOn", "uShadowSun", "uShadowMat", "uShadowCmp",
-                  "uShadowRaw", "uShScale", "uPenumbra", "uShade"];
+                  "uShadowRaw", "uShScale", "uPenumbra", "uShade", "uBSlack", "uBFloor", "uPBias", "uMinDist", "uNOff"];
 
 // The depth pass: one attribute, the world point, at location 7 in BOTH the
 // terrain and the unit VAO, so one program renders both into the map.
@@ -613,7 +722,55 @@ uniform sampler2D uAtlas;   // R8 palette indices
 uniform sampler2D uRGB;     // restored true colour, same layout
 uniform sampler2D uPal;
 uniform int uUndither;
+uniform sampler2D uHeight;  // castsplit: R8 height per 16-px cell, the game's
+uniform vec2 uHDim;         // its size in cells
+uniform int uCastSplit;     // 1 = reconstruct the receiver, do not interpolate it
 ${LAB_LIGHT}
+// ---- castsplit: tagpu_terr.c's OWN reconstruction, copied verbatim ----------
+// The game's terrain gather emits screen-space quads with no height in them, so
+// its fragment shader rebuilds the world point and the normal from the height
+// grid per fragment, while the CASTER is a separate world-space mesh
+// (build_hills). Same bytes, two pipelines. Under castsplit the lab does the
+// same, so the shadow it reads back is the shadow the game reads back.
+float taH(ivec2 p){
+  p = clamp(p, ivec2(0), ivec2(uHDim) - 1);
+  return texelFetch(uHeight, p, 0).r * 255.0;
+}
+vec3 taGridN(ivec2 p){
+  float dx = (taH(p + ivec2(1, 0)) - taH(p - ivec2(1, 0))) * (1.0/32.0);
+  float dz = (taH(p + ivec2(0, 1)) - taH(p - ivec2(0, 1))) * (1.0/32.0);
+  return normalize(vec3(-dx, 1.0, -dz));
+}
+vec3 taTerrN(vec2 w){
+  vec2 g = w * (1.0/16.0);
+  vec2 f = floor(g), t = g - f;
+  ivec2 c = ivec2(f);
+  vec3 n00 = taGridN(c), n10 = taGridN(c + ivec2(1, 0));
+  vec3 n01 = taGridN(c + ivec2(0, 1)), n11 = taGridN(c + ivec2(1, 1));
+  return t.x + t.y <= 1.0
+    ? n00 + t.x * (n10 - n00) + t.y * (n01 - n00)
+    : n11 + (1.0 - t.x) * (n01 - n11) + (1.0 - t.y) * (n10 - n11);
+}
+vec3 taTerrW(vec2 w, out vec3 dWdx, out vec3 dWdy){
+  vec2 g = w * (1.0/16.0);
+  vec2 f = floor(g), t = g - f;
+  ivec2 c = ivec2(f);
+  float h00 = taH(c), h10 = taH(c + ivec2(1, 0));
+  float h01 = taH(c + ivec2(0, 1)), h11 = taH(c + ivec2(1, 1));
+  float h, gx, gz;
+  if (t.x + t.y <= 1.0) {
+    h = h00 + t.x * (h10 - h00) + t.y * (h01 - h00);
+    gx = (h10 - h00) * (1.0/16.0); gz = (h01 - h00) * (1.0/16.0);
+  } else {
+    h = h11 + (1.0 - t.x) * (h01 - h11) + (1.0 - t.y) * (h10 - h11);
+    gx = (h11 - h01) * (1.0/16.0); gz = (h11 - h10) * (1.0/16.0);
+  }
+  vec2 sx = dFdx(w), sy = dFdy(w);
+  float hx = gx * sx.x + gz * sx.y, hy = gx * sy.x + gz * sy.y;
+  dWdx = vec3(sx.x, hx, sx.y + 0.5 * hx);
+  dWdy = vec3(sy.x, hy, sy.y + 0.5 * hy);
+  return vec3(w.x, h, w.y + 0.5 * h);
+}
 void main(){
   vec3 rgb;
   if (uUndither == 1) rgb = texture(uRGB, vUV).rgb;
@@ -621,7 +778,20 @@ void main(){
     int pi = int(texture(uAtlas, vUV).r * 255.0 + 0.5);
     rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;
   }
-  frag = vec4(rgb * lambert(vNrm, vWorld), 1.0);
+  float lam;
+  if (uCastSplit == 1) {
+    // the vertex carries the point it DEPICTS, (x, h, z + h/2); the game's
+    // vWorld is the flat grid point under it, which is that with the shear
+    // taken back out. Both interpolate linearly across the quad, so this is
+    // the same varying the game's terrain shader receives.
+    vec2 w = vec2(vWorld.x, vWorld.z - 0.5 * vWorld.y);
+    vec3 dWdx, dWdy;
+    vec3 W = taTerrW(w, dWdx, dWdy);
+    lam = lambertD(taTerrN(w), W, dWdx, dWdy);
+  } else {
+    lam = lambert(vNrm, vWorld);
+  }
+  frag = vec4(rgb * lam, 1.0);
 }`;
 
 // Features are billboards, so there is no normal to light them by; they take
@@ -1040,7 +1210,11 @@ async function main() {
     gl.bindVertexArray(null);
     LTU = uniforms(gl, ltProg, ["uGame", "uDepthScale", "uAtlas", "uRGB", "uPal",
                                 "uUndither", "uSun", "uAmb", "uNorm", "uZoom", "uZoomC",
-                                ...SHADOW_U]);
+                                "uHeight", "uHDim", "uCastSplit", ...SHADOW_U]);
+    // the height grid the game's fragment shader reads (tagpu_terr.c
+    // build_height): R8, one byte per 16-px cell, NEAREST, clamped
+    tex2D(gl, 14, gl.R8, map.w16, map.h16, gl.RED, gl.UNSIGNED_BYTE, heightBuf);
+    gl.activeTexture(gl.TEXTURE0);        // tex2D leaves its own unit selected
   }
 
   // ---- feature (sprite) pass — tagpu_feat.c's shaders and vertex format, plus
@@ -1271,6 +1445,86 @@ async function main() {
     gl.uniform3f(U.uShadowSun, L.shadowSun[0], L.shadowSun[1], L.shadowSun[2]);
     gl.uniform3f(U.uShScale, frame.texel, frame.depth, 1 / SH_RES);
     gl.uniform1f(U.uPenumbra, L.penumbra); gl.uniform1f(U.uShade, L.shade);
+    gl.uniform1f(U.uBSlack, L.bslack);
+    gl.uniform1f(U.uBFloor, L.bfloor);
+    gl.uniform1f(U.uPBias, L.pbias);
+    gl.uniform1f(U.uMinDist, L.mindist);
+    gl.uniform1f(U.uNOff, L.noff);
+  }
+
+  // ---- castsplit: the game's own caster, tagpu_terr.c build_hills ----------
+  // One vertex per grid point at the world point the terrain art depicts,
+  // (c*16, h, r*16 + h/2), two triangles per cell on the diagonal (1,0)-(0,1),
+  // indices ordered by cell row so the rows under the light window are one
+  // contiguous range. Static: the map's heights never change. This is a
+  // SECOND representation of the surface the terrain pass already shades —
+  // that duplication is the thing being reproduced, not an accident.
+  let hVAO = null, hVBO = null, hIBO = null, hCells = 0, hRows = 0, hSmooth = -1;
+  // castsmooth: low-pass the CASTER's heights over a (2n+1) box, in cells. The
+  // height byte is one sample per 16 world units and the art it labels is a
+  // flat painted tile, so a cell whose byte jumps 70 is a 77-degree cliff to a
+  // shadow caster and level ground to the eye. At a 40-degree light anything
+  // past 50 degrees occludes itself, which is the acne. Smoothing the caster
+  // makes it depict what the art depicts; a hill spans many cells and survives.
+  function smoothHeights(w, h, n) {
+    if (n <= 0) return heightBuf;
+    const src = new Float32Array(w * h), tmp = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) src[i] = heightBuf[i];
+    const cl = (v, hi) => (v < 0 ? 0 : v > hi ? hi : v);
+    for (let r = 0; r < h; r++)                       // horizontal
+      for (let c = 0; c < w; c++) {
+        let a = 0;
+        for (let k = -n; k <= n; k++) a += src[r * w + cl(c + k, w - 1)];
+        tmp[r * w + c] = a / (2 * n + 1);
+      }
+    for (let c = 0; c < w; c++)                       // vertical
+      for (let r = 0; r < h; r++) {
+        let a = 0;
+        for (let k = -n; k <= n; k++) a += tmp[cl(r + k, h - 1) * w + c];
+        src[r * w + c] = a / (2 * n + 1);
+      }
+    return src;
+  }
+  function buildHills(smooth) {
+    if (hVAO && hSmooth === smooth) return;
+    const w = w16, h = h16;
+    const HB = smoothHeights(w, h, smooth);
+    const vb = new Float32Array(w * h * 3);
+    for (let r = 0; r < h; r++)
+      for (let c = 0; c < w; c++) {
+        const hh = HB[r * w + c], o = (r * w + c) * 3;
+        vb[o] = c * 16; vb[o + 1] = hh; vb[o + 2] = r * 16 + hh * 0.5;
+      }
+    const ib = new Uint32Array((w - 1) * (h - 1) * 6);
+    let k = 0;
+    for (let r = 0; r < h - 1; r++)
+      for (let c = 0; c < w - 1; c++) {
+        const i00 = r * w + c, i10 = i00 + 1, i01 = i00 + w, i11 = i01 + 1;
+        ib[k++] = i00; ib[k++] = i10; ib[k++] = i01;
+        ib[k++] = i11; ib[k++] = i01; ib[k++] = i10;
+      }
+    hVAO = gl.createVertexArray(); hVBO = gl.createBuffer(); hIBO = gl.createBuffer();
+    gl.bindVertexArray(hVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, hVBO);
+    gl.bufferData(gl.ARRAY_BUFFER, vb, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(7);
+    gl.vertexAttribPointer(7, 3, gl.FLOAT, false, 12, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, hIBO);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, ib, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    hCells = w - 1; hRows = h - 1; hSmooth = smooth;
+  }
+  // tagpu_terr_hills_draw's row window: the same 192-unit margin the light
+  // frame uses, plus the 128 the shear can reach south
+  function hillsDraw() {
+    let r0 = Math.floor((E[1] - 192) / 16);
+    let r1 = Math.ceil((E[1] + W[1] + 128 + 192) / 16);   // W is ALREADY the zoomed window
+    if (r0 < 0) r0 = 0;
+    if (r1 > hRows - 1) r1 = hRows - 1;
+    if (r1 < r0) return;
+    gl.bindVertexArray(hVAO);
+    gl.drawElements(gl.TRIANGLES, (r1 - r0 + 1) * hCells * 6, gl.UNSIGNED_INT,
+                    r0 * hCells * 6 * 4);
   }
 
   // The depth pass: everything with geometry, along the sun, into the map
@@ -1284,8 +1538,20 @@ async function main() {
     gl.clearDepth(1.0); gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.useProgram(shProg);
     gl.uniformMatrix4fv(SHU.uShadowMat, false, frame.m);
-    if (L.terrainshadow && nterr) {
-      gl.bindVertexArray(ltVAO); gl.drawArrays(gl.TRIANGLES, 0, nterr);
+    if (L.terrainshadow) {
+      if (L.castsplit) {
+        buildHills(L.castsmooth);
+        // slope-scaled polygon offset on the CASTER alone: `factor` multiplies
+        // the polygon's own depth slope, which is the half a constant push cannot do
+        if (L.pofac !== 0 || L.pounits !== 0) {
+          gl.enable(gl.POLYGON_OFFSET_FILL);
+          gl.polygonOffset(L.pofac, L.pounits);
+        }
+        hillsDraw();
+        gl.disable(gl.POLYGON_OFFSET_FILL);
+      } else if (nterr) {
+        gl.bindVertexArray(ltVAO); gl.drawArrays(gl.TRIANGLES, 0, nterr);
+      }
     }
     if (nu) {
       gl.bindVertexArray(uVAO);
@@ -1937,6 +2203,9 @@ async function main() {
         gl.uniform1f(LTU.uAmb, L.amb);
         gl.uniform1f(LTU.uNorm, L.norm);
         gl.uniform1f(LTU.uZoom, zoom); gl.uniform2f(LTU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
+        gl.uniform1i(LTU.uHeight, 14);
+        gl.uniform2f(LTU.uHDim, map.w16, map.h16);
+        gl.uniform1i(LTU.uCastSplit, L.castsplit ? 1 : 0);
         setShadowUniforms(LTU, L, L.shadowFrame);
         gl.bindVertexArray(ltVAO);
       } else {

@@ -74,6 +74,17 @@ static const unsigned char FLIP_STOLEN[6] = { 0x81, 0xEC, 0xF4, 0x00, 0x00, 0x00
 
 static int      s_installed = 0;
 static int      s_census = 0, s_log = 0, s_pgm = 0, s_trace = 0;
+/* `nostring` (G17d): text stays a box of captured pixels, as it was through
+   the whole of phase 1. The A/B for the arena saving, and the escape if the
+   stamp ever disagrees with the engine's blit on some font.
+   READ AT ATTACH, LIKE EVERY OTHER TOKEN THIS FILE OWNS — `read_tokens` runs
+   once, from `tagpu_gui_init`, so `census`, `log`, `pgm`, `trace` and this one
+   must be armed BEFORE the launch. Only the surf module's tokens (`strict`,
+   `norestore`, `sharptest`, `nocursor`, `cursorscale=`) follow the file live,
+   because only the DRAW can change mid-session; the publisher's shape cannot
+   without leaving the twins holding ops of the other kind. Arming it on a
+   running instance silently does nothing, which cost one A/B to notice. */
+static int      s_nostring = 0;
 static int      s_key = KEY_DEFAULT;
 static int      s_probeX = -1, s_probeY = -1;   /* trace: ops touching this pixel */
 static DWORD    s_gameTid = 0;        /* the thread the flip runs on          */
@@ -204,8 +215,21 @@ typedef struct OP {
     short dx, dy;                               /* sprite: unclipped top-left */
     unsigned src; short sl, st;                 /* copy: source, its top-left */
     unsigned seq;                               /* flip: terrown's fill seq   */
+    /* text (G17d): the string is copied into a game-thread scratch AT OBSERVE
+       TIME, not read again at publish. The argument routinely points at a
+       caller's stack temp, which is gone by the flip — the same reason a
+       sprite's pixels are copied rather than pointed at (gui-renderer.md 3.5).
+       `frame` carries the font object and `dx`/`dy` the x/y it was given. */
+    unsigned soff; unsigned short slen;
+    unsigned char fg, bg, tr;                   /* text: 0x4CCF60's three colours */
     unsigned char dup;                          /* an identical op follows: dropped */
 } OP;
+/* The batch's strings. Reset with s_nops, and bounded the same way: a census is
+   ~5 ms of drawing, in which the whole UI redraws a few hundred short labels. */
+#define STR_SCRATCH (64u << 10)
+static unsigned char s_strBuf[STR_SCRATCH];
+static unsigned s_strUsed;
+static unsigned s_strLost;                      /* strings the scratch could not take */
 static OP* s_lastOp = NULL;                     /* the op op_add just recorded */
 #define MAX_OPS 65536
 static OP       s_ops[MAX_OPS];
@@ -424,8 +448,19 @@ static unsigned op_hash(const OP* o)
 }
 static int op_same(const OP* a, const OP* b)
 {
-    return a->kind == b->kind && a->base == b->base && a->l == b->l && a->t == b->t && a->r == b->r && a->b == b->b &&
-           a->frame == b->frame && a->pix == b->pix && a->src == b->src && a->sl == b->sl && a->st == b->st;
+    if (!(a->kind == b->kind && a->base == b->base && a->l == b->l && a->t == b->t && a->r == b->r && a->b == b->b &&
+          a->frame == b->frame && a->pix == b->pix && a->src == b->src && a->sl == b->sl && a->st == b->st))
+        return 0;
+    /* G17d: TWO STRINGS IN ONE BOX ARE NOT THE SAME OP. Until the string op
+       existed a text draw published its box's bytes, read at publish time, so
+       collapsing two draws over the same rectangle was exactly right — the
+       later read carried both. A string op carries the string, so dropping the
+       earlier one would drop whatever ink of it the later one does not cover. */
+    if (a->kind == OP_TEXT)
+        return a->slen == b->slen && a->dx == b->dx && a->dy == b->dy &&
+               a->fg == b->fg && a->bg == b->bg && a->tr == b->tr &&
+               (a->slen == 0 || !memcmp(s_strBuf + a->soff, s_strBuf + b->soff, a->slen));
+    return 1;
 }
 static void dedup(void)
 {
@@ -456,7 +491,7 @@ static void dedup(void)
 }
 
 static const char* const WHY_NAME[TAGPU_GUI_WHY_N] =
-    { "?", "arm", "gl-context", "queue-full", "arena-full", "box-outside-surface", "lost-sprite", "atlas-full", "untwinned-copy", "stall-over" };
+    { "?", "arm", "gl-context", "queue-full", "arena-full", "box-outside-surface", "lost-sprite", "atlas-full", "untwinned-copy", "stall-over", "string-empty" };
 
 /* THE CONSUMER CAN DIE, OR CRAWL. cnc-ddraw stops its render thread inside
    every SetDisplayMode and starts a new one with a new GL context (dd.c);
@@ -597,6 +632,26 @@ static void publish(unsigned flipSurf)
                     if (!pub_surface_bytes(s, op->l, op->t, op->r, op->b, o)) return;
                 } else seen_frame(op->frame, key, 1);
             }
+            pub_commit();
+            continue;
+        }
+        /* G17d: a text draw whose string we captured is a STRING op — TA's own
+           glyphs, stamped by the render thread from the coverage atlas, instead
+           of ~968 arena bytes of a box that has already blended with whatever
+           art it was drawn onto. A text op with no string (the scratch was
+           full, or the font would not read) falls through to its box's bytes,
+           which is exactly what it was before this gate. */
+        if (op->kind == OP_TEXT && op->slen && op->frame && !s_nostring) {
+            unsigned char* dst;
+            o = pub_op(PK_STRING, s->base); if (!o) return;
+            o->l = op->l; o->t = op->t; o->r = op->r; o->b = op->b;
+            o->sl = op->dx; o->st = op->dy;
+            o->frame = op->frame;
+            o->fg = op->fg; o->bg = op->bg; o->tr = op->tr;
+            dst = pub_bytes(o, (unsigned)op->slen + 1u);
+            if (!dst) return;
+            memcpy(dst, s_strBuf + op->soff, (size_t)op->slen);
+            dst[op->slen] = 0;
             pub_commit();
             continue;
         }
@@ -782,14 +837,14 @@ static int __cdecl before_flip(void* entry_esp)
         s_inFlip = 1;
         hijack = 1;
     }
-    if (!s_census && !g_gui_draw) { s_nops = 0; return hijack; }
+    if (!s_census && !g_gui_draw) { s_nops = 0; s_strUsed = 0; return hijack; }
     if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
     QueryPerformanceCounter(&now);
     if (s_lastQpc.QuadPart && (now.QuadPart - s_lastQpc.QuadPart) * 1000 < (LONGLONG)CENSUS_MS * s_freq.QuadPart)
         return hijack;                              /* too soon: keep accumulating ops */
     s_lastQpc = now;
     s_censuses++;
-    if (!s_census) { publish(s ? s->base : 0); s_nops = 0; return hijack; }
+    if (!s_census) { publish(s ? s->base : 0); s_nops = 0; s_strUsed = 0; return hijack; }
     if (s) {
         int vl = 0, vt = 0, vr = -1, vb = -1, sub = 0;
         if (isGame) {
@@ -895,6 +950,7 @@ static int __cdecl before_flip(void* entry_esp)
     }
     publish(s ? s->base : 0);
     s_nops = 0;
+    s_strUsed = 0;
     memset(s_kindCount, 0, sizeof s_kindCount);
     memset(s_nullCtx, 0, sizeof s_nullCtx);
     s_builds = 0; s_buildFlags = 0;
@@ -926,6 +982,7 @@ static int read_tokens(void)
     s_log    = strstr(buf, "log") != NULL;
     s_pgm    = strstr(buf, "pgm") != NULL;
     s_trace  = strstr(buf, "trace") != NULL;
+    s_nostring = strstr(buf, "nostring") != NULL;
     { const char* k = strstr(buf, "key="); if (k) s_key = atoi(k + 4) & 255; }
     { const char* k = strstr(buf, "probe="); if (k) sscanf(k + 6, "%d,%d", &s_probeX, &s_probeY); }
     return 1;
@@ -979,4 +1036,22 @@ void tagpu_gui_flush(unsigned int frame_counter)
             glog(b);
         }
     }
+}
+
+/* ---- G17e: the TNT's minimap picture, for the render thread --------------
+   Returns 1 and fills the outputs when a picture has been snapshotted since
+   the last map load. `gen` changes exactly once per load, so a consumer that
+   caches anything derived from these bytes drops it when the generation moves.
+   The bytes are stable for the life of that generation: one writer, one write,
+   and it happens inside the map loader before any frame of that map presents. */
+int tagpu_gui_minimap_pic(const unsigned char** pix, int* w, int* h, unsigned* gen)
+{
+    unsigned g = s_mmGen;
+    if (!g) return 0;
+    MemoryBarrier();
+    if (pix) *pix = s_mmPic;
+    if (w) *w = s_mmW;
+    if (h) *h = s_mmH;
+    if (gen) *gen = g;
+    return 1;
 }

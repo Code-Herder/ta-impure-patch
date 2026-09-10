@@ -319,6 +319,26 @@ game; the registry is only where TA saves the last one. So:
 - Game speed: `keys <name> plus` / `minus` (TA's own feature, up to +10, and negative
   below normal — invaluable for catching fast events or slowing them for capture).
 
+**The game speed is SHARED STATE, and it is not reset by a launch.** `gamespeed` lives in
+`HKCU\Software\Cavedog Entertainment\Total Annihilation`, i.e. in `user.reg` — which the
+template prefix and all 58 instance prefixes hold as **one inode** (`clone_prefix` is
+`cp -al`; 101 links, measured 2026-09-09), exactly like `Gamma`. A running instance keeps
+its own copy and writes it back at exit, so one session pressing `+` silently leaves every
+later launch of every instance at that speed. **It was found at 20 — double speed — on
+2026-09-09** and set back to 10.
+
+```bash
+WINEPREFIX=<inst>/prefix wine reg query \
+  "HKCU\Software\Cavedog Entertainment\Total Annihilation" /v gamespeed    # 0xa = TA normal
+```
+
+Read it before any measurement whose answer is a rate, a duration or a distance-per-second.
+`gamespeed` multiplies the **tick** rate (`main+0x38A47`: 30/s at 10, 60/s at 20) while the
+picture still changes 30 times a second — units simply take bigger steps — so at 20 the
+in-game clock (`tick ÷ 30`) reads **2× real time**, and any artifact whose size depends on
+how far a unit moves per sim step is twice what a player at normal speed sees. Full numbers:
+`exe-reverse-engineering.md` §"The engine's rates".
+
 ## Driving the UI (menus, options, build panel)
 
 `tacli ui` is a Playwright-style layer over TA's own gadget tree: **snapshot the screen,
@@ -527,7 +547,9 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
   claiming the crash is yours.
 - **A game whose sim tick stops while every thread sleeps, with no `ErrorLog.txt`, is not
   paused — it may be a wild jump.** `tacli peek <i> '*0x511DE8+0x38A47:4'` twice, four
-  seconds apart, is the test (the sim tick; 30 per second); `tacli shot` failing and the
+  seconds apart, is the test (the sim tick; **30 per second at `gamespeed` 10, TA's normal —
+  the counter scales with `gamespeed`, so it reads 60/s at 20**, see *The game speed is
+  shared state* below); `tacli shot` failing and the
   periodic `native:`/`reclaim:` lines stopping say the render thread went with it, and every
   `TotalA.exe` thread reading `anon_pipe_read` in `/proc/<pid>/task/*/wchan` is a wineserver
   wait, not a spin. Measured 2026-09-07: a call-site redirect whose rel32 was computed against
@@ -848,7 +870,9 @@ the **shadow** dimension is still on that master arm and its own `shadows=` key,
   flip moves 37 415 of that rect's 45 056 px.
 - The `gui: twins=` heartbeat carries `cpp=<master> assets=<n> light=<n>`, and `colvalid`
   drops to 0 while `assets=0`. **The shadow keys** (G14i) ride the same file — `shadows=0|1|2`,
-`shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B|off`, `shade=S`, `terrainshadow=0|1`,
+`shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B|off`, `shade=S`, `terrainshadow=0|1`
+(**default 0** since 2026-09-09 — the ground self-shadows, renderers.md 2.7b; set it to 1 only
+to study that),
 `shadowres=N`, `airshadow=len|physical|drop`, the lab's defaults — and answer on a second
 line, `classicpp: shadows=1(soft) shadowsun=225.0,40.0 …`; the map also needs the engine's own
 Shadows option on.
@@ -1155,9 +1179,15 @@ Armed, the range widens by exactly that, so `eyeX` goes **negative** at the left
 `zoomedge.off=off` removes the file again.
 
 **To measure a camera bound, jump with the minimap and peek the eye.** Arrow keys do not scroll
-(TA's scroll hotkeys are its own ids `0xF4`/`0xF5`/`0xF6`/`0xF7`, not VK arrows), but a *held*
-left button on the minimap does jump the camera, and lands exactly on `world − (W/2, H/2)`
-before the clamp:
+**under `tacli keys`** — TA's scroll hotkeys are its own ids `0xF4`/`0xF5`/`0xF6`/`0xF7` and our
+injection posts VK arrows, which those ids are not. *[CORRECTED 2026-09-09. This said "arrow keys
+do not scroll" flat, and it was read back to the owner as a statement about the GAME: they were
+sitting at a handed-over instance whose arrows would not pan, and this line agreed with them that
+that was normal. It is not — on a real keyboard the arrows scroll TA perfectly well, and the
+actual cause was that the window they were typing into belonged to another session's instance
+entirely. A measurement made under injection is a fact about the injection until it has been
+checked with the shield off.]* A *held* left button on the minimap does jump the camera, and
+lands exactly on `world − (W/2, H/2)` before the clamp:
 
 ```bash
 tools/tacli keys edge1 mouse:10,0 down:lbutton   # top-left of the minimap click rect
@@ -1480,6 +1510,78 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
     square's bbox is `(0,0)-(63,63)` in a `glshot`. **There is no y flip in the sharp layer** — a
     client uses `QVS`, the twins' own vertex mapping, and one that adds a flip draws upside down.
     Harness only, like `strict` — never hand a player an instance with it armed.
+
+### The cursor is ours (phase 2, G17c)
+
+```bash
+tools/tacli arm <i> gui.on=nocursor          # phase 1's cursor, the engine's own — the A/B
+tools/tacli arm <i> 'gui.on=cursorscale=2'   # ours, at 2 device px per art px (default 1, clamped 0.25-8)
+tools/tacli keys <i> "dmove:768,576"         # move the pointer in CLIENT pixels, no click
+tools/tacli log <i> -g 'curs='               # curs=<own>,<w>x<h>,dev=<1 if the client point>,sc=,drawn=,warm=
+```
+
+- **`dmove:` is how you place the cursor without clicking**, and it is client-area pixels. A
+  logical `pmove:` (what `ui hover` sends) works too, but it makes `dev=0`: an injected logical
+  point has no pointer behind it, so the draw falls back to the engine's own position.
+- **The measure is the cursor's device FOOTPRINT, and it needs no reference image.** Park the
+  pointer far away, `glshot`, move it to a known client point, `glshot`, and take the bounding box
+  of the pixels that changed. Ours is **10x20 at every k** (one device pixel per art pixel); the
+  engine's is that art nearest-blown-up — 15x30 at k = 1.5, 30x60 at k = 3. **The box size is also
+  how you tell one cursor from two**: if the engine's were still underneath, the changed box would
+  be the union, i.e. the bigger one.
+- **`warm=` counts frames spent atlasing a shape for the first time**, and one per new shape is
+  correct — ownership latches on the atlas so the erase never runs ahead of the draw. A `warm=`
+  that keeps climbing means the atlas is refusing the frame.
+- **The cursor rect is excluded from `uiwalk`'s diff** (padded 8 px) and exempt from `strict`
+  either way, so neither is a test of the cursor. The footprint above is.
+
+### Text is a string op (phase 2, G17d)
+
+```bash
+tools/tacli arm <i> gui.on=nostring     # BEFORE the launch: text stays a box of captured pixels
+tools/tacli log <i> -g 'str='           # str=<ops>/<glyph quads>,miss=,reseed=,glyphs=<cached>/<drops>,fonts=
+tools/tacli log <i> -g 'arena='         # the queue's MONOTONIC arena head: the delta over 300 frames
+```
+
+- **`nostring`, and every other token the HOOK owns (`census`, `log`, `pgm`, `trace`), is read at
+  ATTACH.** `read_tokens()` runs once, from `tagpu_gui_init`. Arming any of them on a running
+  instance silently does nothing — only the surf module's tokens (`strict`, `norestore`,
+  `sharptest`, `nocursor`, `cursorscale=`) follow the file live. One A/B was lost to this.
+- **`miss=` and `reseed=` must stay 0.** `miss` counts glyphs the cache refused that the engine
+  would have drawn; `reseed` counts strings that stamped nothing and asked for a fresh seed. Two
+  full 120-stop walks produced 0 of each over ~20 000 string ops.
+- **A static in-game frame publishes its text ONCE** — `str=` freezes at ~22 ops on the parity
+  fixture, because the panel's labels are drawn once and then deduped. To measure anything about
+  text, turn the clock on (`+clock` in chat) or open a screen: then it is ~1 000 ops per 300
+  frames.
+- **The arena A/B needs a redrawing fixture and two launches**: 3 606 998 bytes per 300 frames
+  with text as pixel ops against 2 035 029 with the string op.
+- The 120-stop `strict` walk is the real oracle here — it diffs our frame against the engine's own
+  surface, so a glyph off by one shows as `differing`/`vpdiff`.
+
+### The minimap is ours at k > 1 (phase 2, G17e)
+
+```bash
+tools/tacli arm <i> gui.on=nominimap    # the engine's minimap back (live, the surf module polls it)
+tools/tacli arm <i> gui.on=mmbase       # ours forced on at k = 1 too, where it is otherwise OFF
+tools/tacli log <i> -g 'mm='            # mm=<draws>,fog=<hidden>/<texels>,noeng=<frames the surfaces would not read>
+tools/tacli scenario load <i> <scn> --mapping 0    # THE fixture: an unmapped game, so there IS fog
+```
+
+- **At `k = 1` it is the engine's, deliberately** — the box is 106x126 *device* pixels there, so
+  our 252-px source is thrown away and ours counts 30 distinct colours against the engine's 36.
+  `mmbase` forces it on for the A/B; nothing else does.
+- **`fog=0/13356` means the fixture tests NOTHING.** A mapped skirmish hides nothing, so the mask
+  is inert and a clean-looking diff proves only that. `--mapping 0` gives `fog=13301/13356`.
+- **The safety property is a bound you can check**: our base is used only where the engine's
+  fogged and unfogged bases agree across 3x3, so the pixels that may differ from the engine's are
+  at most the unfogged texels times `k²`. Measured: 2 of 13 356 on a 99.6 % fogged map, both
+  inside the engine's own lit region.
+- **Measure sharpness by DISTINCT COLOURS in the box, not by replication** — replication inverts
+  here (59.2 % for ours against 50.4 % for the engine's, because the engine's ramp perturbs every
+  pixel of a poorer source while palette-exact regions are flat). Colours: 2084 vs 532 at k = 1.5.
+- The dots, arcs and points are the engine's own pixels, not a replay: `+0x142DB` differs from
+  `+0x142DF` exactly where one landed.
 
 ### Driving and measuring at k != 1 (phase 2, G17b)
 

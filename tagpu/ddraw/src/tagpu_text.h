@@ -86,6 +86,29 @@ int  tagpu_text_colour(void);
    string does not fit, or the atlas is full. */
 int  tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff);
 
+/* ---- the GLYPH cache (G17d), present thread ---- */
+/* Find or rasterise ONE character of `font` in the glyph atlas. The engine's
+   own blitter advances x by the glyph's width byte and nothing else, so a run
+   of these at those offsets reproduces its string blit exactly rather than
+   approximating it — which is what the GL UI renderer's `PK_STRING` needs and
+   what tagpu_text_place cannot give it: the UI's text is metal readouts and a
+   clock, a new STRING every tick, against a 64-entry string cache.
+   Its atlas is separate from the string one: different lifetimes (a font change
+   repacks that one) and different keys. 0 when the font will not read, the code
+   is outside [0x20, 0x7E], the font's table skips it, or the atlas is full.
+   `font` is validated here — it arrives from a published op, not from the
+   snapshot. */
+int  tagpu_text_glyph(const void* font, int ch, int* ax, int* ay, int* w, int* h, int* yoff);
+void tagpu_text_glyph_dims(int* w, int* h);
+/* Bumped whenever the glyph atlas repacks, which invalidates every cell handed
+   out before it. A caller that gathers a run of cells and draws them afterwards
+   must read this before the gather and again after it, and discard the run if
+   it moved -- the cells would otherwise name texels that have just been
+   cleared and re-used. */
+unsigned tagpu_text_glyph_gen(void);
+unsigned int tagpu_text_glyph_tex(void);
+int  tagpu_text_glyph_stats(unsigned* glyphs, unsigned* drops, int* fonts);
+
 /* ---- GL (present thread, context current) ---- */
 /* The atlas texture, uploading it first if a raster has landed since the last
    call. 0 when there is nothing to draw. */

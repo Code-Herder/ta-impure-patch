@@ -27,11 +27,38 @@
    get a bar, in either version.
 
    Sub-pixel: the engine reads the ROSTER SHORTS (the high words of its 16.16
-   positions), so a bar steps once per sim tick while the native unit pass
-   interpolates its body between ticks. We keep the engine's arithmetic rather
-   than smoothing it — a bar is 35 px of flat colour over a unit that moves a
-   couple of pixels per frame, and the alternative is a second, differently
-   sourced anchor that can disagree with the body's.
+   positions), so ITS bar steps once per sim tick — and so did ours until
+   2026-09-09, while the native unit pass interpolated the body between ticks.
+   That was wrong, and visibly so: the bar and the body slid against each other
+   by up to a whole tick of motion — 1.68 px peak-to-peak at 1x on a walking
+   commander at TA's NORMAL game speed, 2.95 px at `gamespeed` 20, and `zoom`
+   times either on screen — which is the health-bar wobble. (Both figures were
+   measured; the note here quoted only the 2.95 until the landing review, which
+   is the double-speed one this very session found the reference setup running
+   at, so it overstated the defect by 1.75x.) Stock TA cannot show it, because there the bar and the
+   body are the same shorts. The gather now takes `tagpu_native_unit_pos()` —
+   the body's own anchor, the same one the selection box and the unit-anchored
+   order markers already use.
+
+   THE FIX HAD TO BE MADE TWICE, and the second half is the interesting one.
+   The first pass took that anchor and FLOORED it, on the argument that the
+   selection box floors the same anchor and the two should agree. They did
+   agree — with each other, in the frame's PRE-zoom units, which is the wrong
+   grid. The vertex shader scales this pass by `zoom` about the zoom centre, so
+   a one-unit quantisation here is `zoom * ss` DEVICE pixels on screen, and the
+   bar went on stepping 2-4 px diagonally at max zoom-in while the body glided
+   underneath it. (The selection box never showed it because it does not
+   actually floor in these units: `tagpu_native.c` snaps its corners forward
+   through the zoom, floors THERE, and comes back — a device-pixel step.) The
+   anchor now keeps its fraction to the last moment and `snap_device` puts it on
+   the device grid, so the step is one device pixel at every zoom, and the two
+   markers still agree because they are now quantised on the same grid.
+   [This note used to argue for the shorts outright: "a bar is 35 px of flat
+   colour over a unit that moves a couple of pixels per frame, and the
+   alternative is a second, differently sourced anchor that can disagree with
+   the body's." The second half had it backwards — `tagpu_native_unit_pos` IS
+   the body's anchor — and the first half was a guess the measurement did not
+   support.]
 
    THE BUILD CURSOR and the drag band box are re-drawn for the same reason,
    and it is the reason a captured layer can never fix them: the capture is
@@ -73,6 +100,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
+#include "tagpu_native.h"
 #include "tagpu_order.h"
 #include "tagpu_text.h"
 #include "tagpu_glsl.h"
@@ -463,6 +491,32 @@ int tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
     return 1;
 }
 
+/* SNAP A POINT ONTO THE DEVICE PIXEL GRID, THROUGH THE ZOOM — and do it by
+   pre-image rather than by rounding the vertex.
+
+   The vertex shader applies `(p - zoomC) * zoom + zoomC` and then a viewport
+   `ss` device pixels to the game-frame unit, so the snap is: take the post-zoom
+   position, round it onto the 1/ss grid, and hand back the point that
+   transforms to it. Snapping the point we hand the shader instead — which is
+   what the health bars did until 2026-09-09 — quantises the marker in the
+   frame's PRE-zoom units, so its step on screen is `zoom * ss` device pixels
+   rather than one, and a marker anchored to a smoothly moving body then jerks
+   against it by that much every time the anchor crosses a boundary. That is a
+   whole 4 px at 4x with the body gliding underneath it.
+
+   `tagpu_native.c`'s selection rect does the same thing for the same reason
+   (its corners, "forward through the zoom, floor, and back"); this is the
+   marker pass's copy of that rule. */
+static void snap_device(float* x, float* y)
+{
+    double gx = ((double)*x - s_zcx) * s_zoom + s_zcx;
+    double gy = ((double)*y - s_zcy) * s_zoom + s_zcy;
+    gx = floor(gx * s_ss + 0.5) / s_ss;
+    gy = floor(gy * s_ss + 0.5) / s_ss;
+    *x = (float)((gx - s_zcx) / s_zoom + s_zcx);
+    *y = (float)((gy - s_zcy) / s_zoom + s_zcy);
+}
+
 /* One string, in the palette index the caller names, anchored at the (x, y) the
    engine would have passed `DrawTextCustomFont`.
 
@@ -496,20 +550,11 @@ int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
        engine's own label at 1x, ss=2: 66 pure-white pixels in "build distance"
        against its 183, at the same position and size.)
 
-       The vertex shader will apply `(p - zoomC) * zoom + zoomC` and then a
-       viewport `ss` device pixels to the game-frame unit, so the snap is: take
-       the post-zoom position, round it onto the 1/ss grid, and hand back the
-       point that transforms to it. The quad's SIZE needs no such care — the
-       text is constant screen size, so it is `w` game-frame units after the
-       zoom whatever the zoom is, and `w * ss` device pixels is an integer. */
-    {
-        double gx = ((double)x  - s_zcx) * s_zoom + s_zcx;
-        double gy = ((double)y0 - s_zcy) * s_zoom + s_zcy;
-        gx = floor(gx * s_ss + 0.5) / s_ss;
-        gy = floor(gy * s_ss + 0.5) / s_ss;
-        x  = (float)((gx - s_zcx) / s_zoom + s_zcx);
-        y0 = (float)((gy - s_zcy) / s_zoom + s_zcy);
-    }
+       `snap_device` is that snap (it is shared with the health bars). The
+       quad's SIZE needs no such care — the text is constant screen size, so it
+       is `w` game-frame units after the zoom whatever the zoom is, and
+       `w * ss` device pixels is an integer. */
+    snap_device(&x, &y0);
     x1 = x + (float)((double)w * s_px);
     y1 = y0 + (float)((double)h * s_px);
     c  = (float)colidx / 255.0f;
@@ -524,11 +569,17 @@ int tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
     return 1;
 }
 
-/* one DrawBar rect, edges INCLUSIVE — so the quad's far edge is +1 */
-static void put_bar(int* nv, int l, int t, int r, int b, int colidx,
-                    float wx, float wz)
+/* one DrawBar rect, edges INCLUSIVE — so the quad's far edge is +1.
+
+   The float form is for the rects anchored to a UNIT, whose anchor is snapped
+   onto the device grid by `snap_device` and is therefore not an integer in
+   game-frame units at any zoom but 1x. `put_bar` keeps the integer signature
+   for the rects that are the engine's own — the build-cursor footprint and the
+   drag band — whose positions come from engine integers and stay bit-exact. */
+static void put_barf(int* nv, float l, float t, float r, float b, int colidx,
+                     float wx, float wz)
 {
-    float x0 = (float)l, y0 = (float)t, x1 = (float)(r + 1), y1 = (float)(b + 1);
+    float x0 = l, y0 = t, x1 = r + 1.0f, y1 = b + 1.0f;
     float c = (float)colidx / 255.0f;
     int i = *nv;
     put_vert(i + 0, x0, y0, -1.0f, -1.0f, wx, wz, c);
@@ -538,6 +589,12 @@ static void put_bar(int* nv, int l, int t, int r, int b, int colidx,
     put_vert(i + 4, x1, y1, -1.0f, -1.0f, wx, wz, c);
     put_vert(i + 5, x0, y1, -1.0f, -1.0f, wx, wz, c);
     *nv = i + QUADV;
+}
+
+static void put_bar(int* nv, int l, int t, int r, int b, int colidx,
+                    float wx, float wz)
+{
+    put_barf(nv, (float)l, (float)t, (float)r, (float)b, colidx, wx, wz);
 }
 
 /* one DrawTranspRectangle: the four 1-px edges of the rect in one flat colour,
@@ -676,23 +733,89 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     for (u = beg + UNIT_STRIDE; u < end && s_cBar < MAXBAR; u += UNIT_STRIDE) {
         unsigned st = *(const unsigned*)(u + U_STATE);
         const char* def;
-        int hp, maxhp, x, y, third, w, col;
+        int hp, maxhp, third, w, col;
+        float x, y;                     /* the anchor, in game-frame units     */
+        float fpx, fpa, fpd;            /* world x, ALTITUDE, map depth        */
         float wx, wz;
         if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
         if (*(const unsigned char*)(u + U_OWNER) != (unsigned)watched) continue;
 
-        x = *(const short*)(u + U_XPOS) - v->eyeX + 0x80;
-        y = *(const short*)(u + U_YPOS) - v->eyeY
-            - (*(const short*)(u + U_ZPOS) >> 1) + 0x20 + 0x0A;
+        /* THE BAR SITS ON WHOEVER DREW THE BODY. That is the invariant, and it needs
+           two branches because two different things draw units.
+
+           OURS. `tagpu_native_owns_unit` is the very predicate the unit pass gathers
+           on (`tagpu_native.c`, "units are gathered only by the unit pass"), so when
+           it holds the body was placed from `tagpu_native_unit_pos` — the
+           interpolated sub-pixel sample when there is one, that unit's own raw
+           fractional 16.16 when there is not (`tagpu_subpix.off`, or a slot the walk
+           skipped). Either way the bar takes the same number as the model under it.
+
+           THE ENGINE'S. When it does not hold, the unit pass skipped this unit and
+           the ENGINE drew the body, from `(s16)` reads of the same 16.16 — a floor.
+           The bar has to floor with it, or it sits up to a whole game pixel off a
+           body we did not place. `markown` has suppressed the engine's own bars
+           globally by then, so this is not a rare path: a unit the type filter
+           rejects, or a nanoframe while the build-effect detour is absent, still
+           needs a bar from us.
+
+           [Until the landing review both branches went through the accessor. It
+           returns 1 whenever its POINTER checks pass and hands back the raw fraction
+           when the table holds no sample — it never reports "no sample" — so the
+           integer branch below was unreachable and every engine-drawn unit got a bar
+           up to a pixel off its body. The comment here asserted the opposite, that
+           the sampleless path was byte-for-byte what it had always been.]
+
+           BOTH CALLS ARE SAFE HERE BY CONSTRUCTION, not by timing. `u` is the
+           engine's own array walk — bounded by its `beg`/`end` and stride-aligned by
+           the loop — which is the same bound under which `tagpu_native.c:2037` calls
+           `tagpu_native_owns_unit` on these very pointers every frame, so the
+           `IsBadReadPtr` inside its nanoframe branch is not what makes this read
+           safe and is not being relied on as such. And `tagpu_mark_gather` is called
+           from inside the unit pass's own gather (`tagpu_native.c:2398`), on the same
+           thread, in the same frame, AFTER the walk that fills the sub-pixel table —
+           so the ownership answer here is the one the unit pass just acted on, and
+           the accessor refuses any sample that does not still describe this unit's
+           current 16.16 position, so a recycled slot falls through to its own
+           fraction.
+
+           AND THE ANCHOR KEEPS ITS FRACTION TO THE LAST MOMENT. Flooring it — which
+           is what this loop did between the first fix and the second, both on
+           2026-09-09 — quantises the bar in the frame's PRE-zoom units, so the bar
+           steps `zoom` game pixels at a time while the body glides continuously
+           underneath it: 4 px at 4x, 8 px at ZOOM_MAX, which is the diagonal twitch
+           the owner reported at max zoom-in. `snap_device` puts the anchor on the
+           DEVICE grid instead, the same rule the selection rect and the glyph atlas
+           already follow, so the step is 1/ss of a displayed pixel at every zoom.
+           It runs on BOTH branches: on the engine's integers it is the identity at
+           1x, so engine parity there is exact, and away from 1x it only makes an
+           already sim-rate anchor land crisply. */
+        if (tagpu_native_owns_unit(u) &&
+            tagpu_native_unit_pos(u, &fpx, &fpa, &fpd)) {
+            x  = fpx - (float)v->eyeX + 128.0f;
+            y  = fpd - (float)v->eyeY - fpa * 0.5f + 32.0f + 10.0f;
+            wx = fpx;
+            wz = fpd - fpa * 0.5f;
+        } else {
+            int px = *(const short*)(u + U_XPOS);   /* world x            */
+            int pa = *(const short*)(u + U_ZPOS);   /* altitude  (U_ZPOS) */
+            int pd = *(const short*)(u + U_YPOS);   /* map depth (U_YPOS) */
+            x  = (float)(px - v->eyeX + 0x80);
+            y  = (float)(pd - v->eyeY - (pa >> 1) + 0x20 + 0x0A);
+            wx = (float)px;
+            wz = (float)(pd - (pa >> 1));
+        }
         /* cull to the ZOOM's rect, not the engine's: at zoom < 1 the frame
            shows units the engine's own HotUnits list has already dropped */
         if (x + 0x12 < v->evpL || x - 0x12 > v->evpL + v->evw ||
             y + 3 < v->evpT || y - 3 > v->evpT + v->evh) continue;
 
-        /* the fog is sampled at the unit's own anchor, in the projected world
-           space the engine's screen grid is built in (tagpu_fx.h) */
-        wx = (float)*(const short*)(u + U_XPOS);
-        wz = (float)(*(const short*)(u + U_YPOS) - (*(const short*)(u + U_ZPOS) >> 1));
+        /* one snap for the bar and the group digit both, so the two cannot part
+           company. (The digit's own snap inside `tagpu_mark_emit_text` is over the
+           glyph's baseline, four rows below this, and is idempotent on a point
+           already on the grid.) The fog is sampled at the UNSNAPPED anchor, in the
+           projected world space the engine's screen grid is built in (tagpu_fx.h) —
+           it is a world lookup, and the snap is a screen-space concern. */
+        snap_device(&x, &y);
 
         /* THE GROUP DIGIT, `0x469CD1..0x469CF9`. Two things about it are the
            engine's and neither is obvious: the squad tag is tested as a DWORD
@@ -708,7 +831,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
                 int tc = tagpu_text_colour();
                 d[0] = (char)('0' + (unsigned char)squad);
                 d[1] = 0;
-                if (!tagpu_mark_emit_text((float)x, (float)(y + 4), d,
+                if (!tagpu_mark_emit_text(x, y + 4.0f, d,
                                           (tc >= 0 && tc < 256) ? tc : gui[GUI_WHITE],
                                           wx, wz))
                     s_xover++;
@@ -725,7 +848,8 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         s_cBar++;
         if (s_passive) continue;      /* the A/B lever: count, let the engine draw */
 
-        put_bar(&nv, x - 0x11, y - 2, x + 0x11, y + 2, gui[GUI_BLACK], wx, wz);
+        put_barf(&nv, x - 17.0f, y - 2.0f, x + 17.0f, y + 2.0f, gui[GUI_BLACK],
+                 wx, wz);
         /* (Health << 5) / maxHP as an UNSIGNED divide, and the thirds through
            the same maxHP/3 the engine's reciprocal multiply produces */
         w = (int)(((unsigned)(hp << 5)) / (unsigned)maxhp);
@@ -733,7 +857,8 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         col = hp > 2 * third ? gui[GUI_GREEN]
             : hp > third     ? gui[GUI_YELLOW]
             :                  gui[GUI_RED];
-        put_bar(&nv, x - 0x10, y - 1, x - 0x10 + w, y + 1, col, wx, wz);
+        put_barf(&nv, x - 16.0f, y - 1.0f, x - 16.0f + (float)w, y + 1.0f, col,
+                 wx, wz);
     }
     s_nbar = nv - BARBASE;
     return s_cBar;
