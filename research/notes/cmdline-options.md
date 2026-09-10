@@ -21,7 +21,10 @@ PCGamingWiki), not yet runtime-confirmed on our stack. **[INFERRED]** = my readi
   feature, absent from this binary).
 - **Windowed**: TA's own `-d` switch exists but likely bypasses/perturbs the ddraw
   path our whole stack lives in — use cnc-ddraw `windowed=true fullscreen=false`
-  instead and treat `-d` as off-limits until tested.
+  instead and treat `-d` as off-limits until tested. **Since 2026-09-10 the DLL
+  owns that pair** (and `toggle_borderless`, `max_resolutions`,
+  `inject_resolution`) so a player gets borderless fullscreen with no ini at all;
+  a key they write still wins — `tagpu_cfg.c`, [GPU status](gpu-status.html) §2.8b.
 - **Game rules**: **nothing on the command line sets them.** `-b` is broken in the
   stock binary and its words are empty anyway (see "The `-b` dead end"); the rule
   path that does exist is `online.dll`, and it is network-only. Skirmish rules stay

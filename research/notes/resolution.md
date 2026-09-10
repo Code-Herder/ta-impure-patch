@@ -507,6 +507,43 @@ Refresh-rate variants are harmless only if they don't multiply entries past the
 cap (flags=0 normally suppresses them; entries differing only in refresh would
 otherwise appear as duplicate rows — the matcher compares w/h only).
 
+### 6.5 What our fork actually serves — and why the cap was never the cap [MEASURED 2026-09-10]
+
+`EnumDisplayModes` (`tagpu/ddraw/src/dd.c`) has **two** branches and only one of
+them runs for TA:
+
+- **The OS walk** — `real_EnumDisplaySettingsA` in order, emitting only modes
+  whose `dmDisplayFrequency`, `dmBitsPerPel`, `dmDisplayFlags` **and**
+  `dmDisplayFixedOutput` all equal the values computed in a first pass. Runs when
+  `g_ddraw.bpp && resolutions == RESLIST_NORMAL`, which is TA (8bpp, the default).
+- **A hardcoded table** (`dd.c:122`) topping out at 2048×1536 / 2560×1600 /
+  2560×1440, plus `{max_w, max_h}` from `ENUM_REGISTRY_SETTINGS`. Runs only when
+  `!bpp`, `RESLIST_FULL` or `windowed_hack` — **not** for us.
+
+Both are then truncated at `max_resolutions` entries (`dd.c:269`), and every
+entry except the injected one must pass a `ChangeDisplaySettings(CDS_TEST)`.
+
+**The measured list on the reference setup** (3840×2160 desktop, wine 9.0), read
+by walking `VIDSLDR` on `VISUALS.GUI` and reading the `VIDVAL` label at each stop:
+
+| | modes offered |
+|---|---|
+| no injection | 800×600, 1024×768, 1280×1024, 1600×1200, 1920×1080, 2048×1152, 2048×1280 — **7** |
+| injecting the desktop mode | the same 7 **plus 3840×2160** — 8 |
+
+So the "the picker stops around 2K" complaint was **not** `max_resolutions`:
+only seven modes survive the four-way match filter here, far under any cap, and
+raising 32 → 90 alone changes nothing. What puts the native mode in the list is
+`inject_resolution`, because it is the one entry exempt from the `CDS_TEST`.
+
+**The injection is ours-additive, upstream's was a replacement.** `dd.c`
+overwrote the first mode that passed the filter, and since the walk is ascending
+that is the *smallest* — measured here, injecting 3840×2160 cost **800×600**,
+which under our stack is the most useful entry of the whole list (the smallest
+engine surface gives the largest UI scale `k`). The fix steps the enumeration
+index back one so the same mode is re-enumerated with the injection guard
+already set, and both are emitted; the list goes 7 → 8 with nothing lost.
+
 ---
 
 ## 7. Risks & watch-list for a non-640×480 mode
@@ -514,7 +551,10 @@ otherwise appear as duplicate rows — the matcher compares w/h only).
 1. **Mode-list buffer overflow** [BINARY-VERIFIED]: "DISPLAY MODES" is a fixed
    `0x4B0`-byte MEM alloc = 100 entries; callback `0x4B5330` appends unchecked.
    \>100 8-bpp modes from our ddraw ⇒ heap corruption in the options screen.
-   Cap the served list.
+   **Closed since 2026-09-10**: `tagpu_cfg.c` owns `max_resolutions` (90) and
+   **clamps any value, the player's included, to 100** — the fork's own default
+   for that key is `0`, i.e. *no cap*, so an ini without it was the hazard rather
+   than the protection ([GPU status](gpu-status.html) §2.8b).
 2. **Registry values are unclamped** [BINARY-VERIFIED]: whatever we write to
    `DisplaymodeWidth/Height` is what `SetDisplayMode` gets (mod the §6 UI
    filter, which only gates the *picker*). Setting the registry directly is a

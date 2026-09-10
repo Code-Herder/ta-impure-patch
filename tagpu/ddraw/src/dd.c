@@ -17,6 +17,7 @@
 #include "blt.h"
 #include "versionhelpers.h"
 #include "tagpu_title.h"
+#include "tagpu_cfg.h"
 
 
 CNCDDRAW g_ddraw;
@@ -113,6 +114,14 @@ HRESULT dd_EnumDisplayModes(
     {
         while (--max_w % 8);
     }
+
+    /* tagpu: put the monitor's own mode in the list without the player editing
+       an ini. It goes through `inject_resolution` because that entry is the one
+       exempt from the CDS_TEST filter below, and it is set HERE rather than at
+       DLL attach because this is where the desktop mode is already known --
+       cfg_load runs under the loader lock and must not touch the display.
+       Does nothing if the player wrote the key (tagpu_cfg.c). */
+    tagpu_cfg_inject_native(max_w, max_h);
 
     char* ires = &g_config.inject_resolution[0];
 
@@ -239,6 +248,21 @@ HRESULT dd_EnumDisplayModes(
                     m.dmPelsWidth = custom_width;
                     m.dmPelsHeight = custom_height;
                     custom_res_injected = TRUE;
+
+                    /* tagpu: the injected mode is an EXTRA entry, not a
+                       replacement. Upstream overwrote the first mode that
+                       passed the filter above, and since the walk is ascending
+                       that is the SMALLEST one -- measured 2026-09-10 on a 4K
+                       desktop, injecting 3840x2160 cost 800x600, which under
+                       our stack is the most useful mode of the list (the
+                       smallest engine surface is the largest UI scale k).
+                       Stepping the index back here re-enumerates this same mode
+                       on the next iteration, with the guard above now set, so
+                       it is emitted too. `i` is unsigned and this is an
+                       injection at index 0 away from wrapping: that is fine and
+                       deliberate, because the `i++` at the end of the body
+                       wraps it straight back. */
+                    i--;
                 }
 
                 TRACE(

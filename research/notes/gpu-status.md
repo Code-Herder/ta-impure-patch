@@ -1061,6 +1061,54 @@ and `shield`, the three that were never on the table. **Not measured**: a player
 is what the `_local` test VM is for; the defaults on a map change (the `*own` halves are attach
 time, the rest re-read every 30 frames, so nothing new is expected).
 
+### 2.8b The fork defaults (`tagpu_cfg.c`) — since 2026-09-10
+
+`tagpu_opt.c` arms our passes with no file; this is its sibling for **cnc-ddraw's own settings**,
+so that a player never edits `ddraw.ini` to get a working game. It runs at the END of `cfg_load()`,
+immediately before `ini_free()` — the parsed ini is still in memory there, which is what lets it
+ask whether the player wrote a key, through the same section rule `cfg_get_string` uses (the game
+section, then `ddraw`).
+
+| key | ours | why |
+|---|---|---|
+| `windowed` + `fullscreen` | both true | borderless fullscreen (`dd.c` sizes the render target from the desktop mode); **one decision, not two** |
+| `toggle_borderless` | true | alt+enter switches borderless ↔ window instead of taking `util_toggle_fullscreen`'s exclusive branch, which is a real `ChangeDisplaySettings` |
+| `max_resolutions` | 90 | the mode list TA is fed; **and bounded at 100 whatever the ini says** |
+| `inject_resolution` | the desktop mode | the one list entry exempt from the `CDS_TEST` filter, so the monitor's own mode is *guaranteed* into the picker ([resolution](resolution.html) §6.5) |
+
+**A key the player wrote wins**, and that includes the one `cfg_save()` writes back after they
+press alt+enter — so their own choice sticks across launches. One line at attach says which way it
+went: `cfg: tagpu defaults: max_resolutions 0 -> 90, toggle_borderless 0 -> 1, windowed 0 -> 1,
+fullscreen 0 -> 1 (the ini wins; the player set nothing)`.
+
+Four things about it are load-bearing and were each found by measuring rather than by reading:
+
+- **`windowed` and `fullscreen` are atomic.** `cfg_load` defaults `windowed` to FALSE, so owning
+  `fullscreen` alone would give a player with no ini fullscreen-*without*-windowed — the exclusive
+  modeset the `toggle_borderless` row exists to prevent. If the player wrote **either**, we own
+  **neither**. Verified: an ini with only `windowed=false` logs `the player set windowed,
+  fullscreen` and applies neither.
+- **The bound is not a default.** `max_resolutions=0` means *no cap*, and TA's "DISPLAY MODES"
+  allocation is 100 entries whose writer does not bounds-check ([resolution](resolution.html)
+  §6.1/§6.3). The clamp therefore applies to the player's own value too, and says so:
+  `cfg: max_resolutions 250 -> 100 (TA's mode buffer is 100 entries and its callback 0x4B5330
+  does not bounds-check)`.
+- **We had to stop shipping these keys, in two places.** `cfg_create_ini()` writes a full ini for a
+  player who has none, and its **generic `[ddraw]` block** set all four — so every key read as
+  "the player's" and *nothing applied*. That is exactly what the first end-to-end run showed
+  (`the player set max_resolutions, toggle_borderless, windowed, fullscreen`, all four skipped).
+  They are commented out there and gone from `[TotalA]` and from `tagpu/release/ddraw.ini`. **If
+  one comes back, this module silently stops working and nothing warns you.**
+- **No display API at `DLL_PROCESS_ATTACH`.** `cfg_load` runs under the loader lock, so
+  `inject_resolution` is filled lazily inside `EnumDisplayModes`, where the desktop mode has
+  already been read for `max_w`/`max_h`.
+
+**tacli is unaffected and deliberately so:** `write_ddraw_ini` writes all four explicitly, so an
+instance is always explicit and every measurement is unchanged — which also means **an instance
+does not exercise the player path**. To test that path, put `tagpu/release/ddraw.ini` in the
+gamedir (or delete it entirely and let the DLL create one) and launch bare, with no `--res`,
+`--window` or `--maxfps`, which are the only knobs that rewrite the file.
+
 ### 2.9 The pose race, and the guard that closed it — HISTORY (removed by G16 step 8, 2026-09-09)
 
 > ⚠ **None of this is behaviour any more.** The guard, the rest-equality detector, the
