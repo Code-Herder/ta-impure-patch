@@ -1600,8 +1600,21 @@ def crash_mtime(inst: "Instance") -> float:
 
 def crash_report(inst: "Instance", since: float):
     """A one-line summary of a crash newer than `since` belonging to THIS
-    instance, or None. The file can be shared between instances (the gamedir
-    symlinks it), so the exe path inside it is what attributes the crash."""
+    instance, or None. The exe path inside the report is what attributes it.
+
+    The file is PER-INSTANCE: TA writes it beside the exe, and the exe is
+    symlinked into each gamedir. (Instances built on or before 2026-09-03 carry
+    a dangling symlink to a shared target, from when mirror_gamedir copied it
+    through; _launch's rotation unlinks that.) Corrected 2026-09-10 -- this
+    said the file "can be shared between instances", which is true only of
+    those legacy instances.
+
+    TWO THINGS THIS DOES NOT DO, and both have misled a session: it parses no
+    TIMESTAMP -- freshness is the caller's `since` against the file's mtime,
+    and nothing in the returned string says how old the report is -- and TA
+    APPENDS, so `re.search` below returns the FIRST report in the file. Since
+    _launch rotates the file to .prev, that is normally this run's only report;
+    a run that faults twice still reports the first."""
     path = inst.gamedir / "ErrorLog.txt"
     try:
         if path.stat().st_mtime <= since:

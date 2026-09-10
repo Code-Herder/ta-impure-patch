@@ -2593,7 +2593,8 @@ runs under `census`. The layer that actually paints had it nowhere.
 
 ### The trigger was a race, not the vertex budget
 
-`tagpu_native_armed()` re-read its lever every 30 frames by setting `s_armed = 0`, doing a **file
+The arm block inside `tagpu_native_frame()` re-read its lever every 30 frames by setting
+`s_armed = 0`, doing a **file
 read**, and setting it back. `tagpu_native_owns_unit()` opens `if (s_armed != 1) return 0;` and is
 called **from the game thread** by `tagpu_markown.c`'s `mark_selbox`. So twice a second, for the
 length of a file read, every selected unit read as "not ours", markown stopped suppressing, and

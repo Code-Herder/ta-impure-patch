@@ -125,7 +125,12 @@ static int clampi(int v, int lo, int hi)
 
 static int  s_installed;        /* the mouse->world redirect went in         */
 static int  s_widenArmed;       /* ...and tagpu_vpwide.on, so the rect widens */
-static int  s_verified;         /* the rect matched what 0x497F40 builds     */
+static volatile int s_verified; /* the rect matched what 0x497F40 builds     */
+/* volatile for the same reason s_wide below is: since the clip guard began
+   calling tagpu_vpwide_true_rect(), this flag is read on the GAME thread
+   three times per DrawGameScreen, and a stale 0 there makes true_rect_of
+   fall back to the FIELD -- which is the widened rect -- turning the
+   viewport clamp into the identity and re-opening the side panel. */
 static int  s_saidUnverified;   /* the diagnostic is one-shot                */
 static int  s_saidRepair;       /* the W/H repair diagnostic is one-shot     */
 /* VOLATILE, and not merely because two threads read it: the ordering the
@@ -156,11 +161,9 @@ static volatile LONG s_pubL, s_pubT, s_pubW, s_pubH, s_pubLive;
 static void __thiscall vpw_setclip(void* self, int l, int t, int r, int b)
 {
     const int* s = (const int*)self;
-    int sw = 0, sh = 0;
     if (ptr_ok(s) && !IsBadReadPtr(s, 8)) {
         int w = s[0], h = s[1];             /* SurfaceCreateNamed: +0 w, +4 h */
         if (w > 0 && h > 0 && w <= 16384 && h <= 16384) {
-            sw = w; sh = h;
             if (l < 0) l = 0;
             if (t < 0) t = 0;
             if (r > w - 1) r = w - 1;
@@ -193,13 +196,20 @@ static void __thiscall vpw_setclip(void* self, int l, int t, int r, int b)
         const char* ta = *(const char* const*)TA_MAINPP;
         int tL, tT, tW, tH;
         tagpu_vpwide_true_rect(ta, &tL, &tT, &tW, &tH);
-        if (tW > 0 && tH > 0 && sw >= tL + tW && sh >= tT + tH) {
+        /* NOT GATED ON THE SURFACE PROBE ABOVE, and that is the point. This
+           clamp only ever NARROWS, so it needs to know nothing about the
+           allocation; riding it on `IsBadReadPtr` succeeding would make the
+           bound conditional on a probe, which CLAUDE.md rules out as a safety
+           argument — and a single call with an unreadable `self` would then
+           re-license the permanent side-panel marks this exists to stop.
+           A landing review caught exactly that [2026-09-10]. */
+        if (tW > 0 && tH > 0) {
             int cl = l < tL ? tL : l, ct = t < tT ? tT : t;
             int cr = r > tL + tW - 1 ? tL + tW - 1 : r;
             int cb = b > tT + tH - 1 ? tT + tH - 1 : b;
             /* a rect that does not meet the viewport at all is not one of
-               these sites' — leave it as the allocation clamp left it rather
-               than handing the engine an inverted rect */
+               these sites' — leave it alone rather than handing the engine an
+               inverted rect */
             if (cl <= cr && ct <= cb) { l = cl; t = ct; r = cr; b = cb; }
         }
     }

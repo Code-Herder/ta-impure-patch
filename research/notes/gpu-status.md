@@ -333,7 +333,8 @@ with no further plumbing. Pointer-anchored zoom is the open follow-up and is a c
 
 ### 2.3a-bis The arm state is published in one store, never transiently zero  [2026-09-10]
 
-`tagpu_native_armed()` re-reads its lever every 30 frames. It used to do that by setting
+The arm block inside **`tagpu_native_frame()`** (there is no `tagpu_native_armed()`; the other
+passes have one, this one does not) re-reads its lever every 30 frames. It used to do that by setting
 `s_armed = 0`, performing a **file read**, and setting it back — and `tagpu_native_owns_unit()`
 opens `if (s_armed != 1) return 0;` and is called **from the game thread** by `tagpu_markown.c`'s
 `mark_selbox`. So twice a second, for the length of that read, every selected unit read as "not
@@ -392,6 +393,21 @@ the **unzoomed** position, which at 0.42× is up to 1.4 screens from where the u
 independent runs of the fixture: **5768 stray green pixels on the panel before, 31 after** (the 31
 is the minimap's own view rect), with five hand-back frames in the "after" run and the engine
 surface under the buttons reading 100 % palette index 0.
+
+**The clamp is NOT gated on the surface probe [2026-09-10].** It only ever narrows, so it needs
+to know nothing about the allocation — and riding it on `IsBadReadPtr` succeeding would make the
+bound conditional on a probe, which is precisely what CLAUDE.md refuses as a safety argument. A
+landing review caught it there: one call with an unreadable `self` would have re-licensed the
+permanent side-panel marks. The allocation clamp above it still rides the probe, because that one
+genuinely needs the surface's width and height.
+
+**Two residuals, named:** `mark.on=nocursor`'s capture window (window B) takes
+`tagpu_vpwide_addressable()` and then intersects with the ctx clip, so the narrower clip costs
+that **debug lever** the ring markers it exists to show — the shipped configuration never opens
+it (G13p). And `0x46A530` indexes `MODEL_PTRS[ModelId]` with no zero test while slot 0 is never
+written by the load loop, so an engine box drawn for a ModelId-0 unit bounds itself on
+uninitialised memory. That is stock TA's own behaviour, not something this stack introduced, and
+restoring it is the correct half of the `owns_unit` fix — but it is worth knowing it is there.
 
 Clamping to the true rect is exactly the bound **stock** TA sets at these three sites — unwidened,
 the rect they are handed IS the true one — so it can never clip anything the engine would otherwise
