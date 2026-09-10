@@ -169,6 +169,14 @@ cost time; each is a landmine for the next GL-hook we add.
   re-sets the viewport at the top of the next frame. The overlay just cleans up after itself
   (`glUseProgram(0)`, `glBindVertexArray(0)`, `glDisable(GL_BLEND)`). Trying to save state with
   `glGetIntegerv` was itself the crash (previous point).
+- **`renderer=openglcore` on a real Windows ICD fell all the way back to GDI until 2026-09-10.**
+  `wglGetProcAddress` returns NULL for the OpenGL 1.1 entry points on Windows, and
+  `glGetIntegerv` was the one 1.1 function `opengl_utils.c` fetched through it rather than from
+  the module — the resulting illegal `glGetString(GL_EXTENSIONS)` in a core profile left
+  `GL_INVALID_ENUM` pending, which `render_ogl.c` folds into `got_error`, which turns
+  `use_opengl` off. **Wine hides it**: its `wglGetProcAddress` does return the 1.1 entry points,
+  so every instance `tacli` launches took the healthy path and the bug was invisible here for
+  the whole life of the project. [gui-renderer](gui-renderer.html) §21.
 - **`renderer=openglcore` gives a guaranteed core context** — 3.2 until G14i, **3.3 since**
   (`render_ogl.c`; verified 2026-09-06: `tagpu.log` `shadow: GL ready (GL_VERSION 3.3.0 NVIDIA
   595.84 …)`, wine 9 on the 4070; the Classic++ shadow map's sampler objects need it). Use it

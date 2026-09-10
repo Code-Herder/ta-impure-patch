@@ -1720,6 +1720,17 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 ### 3.2 Smaller, known, and cheap to close
 
+- **Nothing in this repository has ever been measured on a Windows GL driver, and the first run
+  on one found two bugs — 2026-09-10.** `renderer=openglcore` fell back to GDI on a real ICD
+  because `glGetIntegerv` was fetched through `wglGetProcAddress`, which returns NULL for the
+  OpenGL 1.1 entry points on Windows but not under Wine; and the GL UI layer painted its stale
+  twin over the entire intro movie, because the Smacker writes the primary surface directly and
+  the publisher never sees it. Both are fixed ([GL UI renderer](gui-renderer.html) §21) — the
+  point that survives is the **gap in the harness**: `tacli` runs every instance in a wine
+  prefix and skips the intro movies, so neither code path had an oracle at all. The Windows VM
+  kit (`_local/vm/`) exists for exactly this and is still waiting on an ISO; until it runs, any
+  claim about Windows behaviour in these notes is untested.
+
 - **The feature atlas filled at 48 % occupancy and then rebuilt itself every frame — closed
   2026-09-10 by sorting, not by growing.** `[MEASURED 2026-09-10]` at 3840×2160 / 0.25× on Town
   & Country the pass reported `atlas=204 DROPPED(atlas-fail=455)`, a different 3.7 % of the

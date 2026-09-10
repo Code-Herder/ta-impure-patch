@@ -2645,3 +2645,102 @@ engine drawing throughout, so "no cyan" is not "nothing was drawn".
   too.
 - Whether any effect or unit GAF art contains index 254 was never measured; only tile art and the
   panel/minimap/chat/build art were.
+
+---
+
+## 21. Windows: the GDI fallback, and the stale mirror over the intro  [MEASURED 2026-09-10]
+
+Both of these were found on the **first run of a shipped build on a real Windows driver**
+(AMD Radeon R9 290X, driver `26.20.12028.2`, Windows 10 19045) and neither can reproduce in
+this project's own harness. `tacli` runs every instance in a wine prefix, and it skips the
+intro movies. That is the finding under the findings: **`renderer=openglcore` had never been
+exercised on a Windows ICD, and the shell's first eighteen seconds had never been looked at
+at all.**
+
+### 21.1 `openglcore` fell all the way back to GDI, and blamed the driver
+
+The game rendered in software and printed `-WARNING- Using slow software rendering, please
+update your graphics card driver (3.3.13559)` across the frame. The version in that string is
+read **inside** the core context, which is the proof that the context was created and the
+driver was not at fault.
+
+`wglGetProcAddress` returns NULL for the OpenGL 1.1 entry points on Windows; only
+extension-level functions come back from it. `opengl_utils.c` already knows this —
+`glGetError`, `glGetString`, `glTexImage2D`, `glEnable` are all 1.1 and all fetched with
+`real_GetProcAddress(g_oglu_hmodule, …)`. **`glGetIntegerv` was the one 1.1 entry point still
+going through `xwglGetProcAddress`**, so on Windows it alone resolved to NULL. Then:
+
+| step | where |
+|---|---|
+| `oglu_ext_exists()` gates its `glGetStringi` path on `glGetIntegerv && glGetStringi` — NULL skips it | `opengl_utils.c` |
+| it falls through to `glGetString(GL_EXTENSIONS)`, not a legal enum in a core profile | same |
+| the driver raises `GL_INVALID_ENUM` and leaves it **pending** | the ICD |
+| `got_error` folds any pending error, at three sites | `render_ogl.c:120/135/138` |
+| `use_opengl = (main_program \|\| bpp==16 \|\| bpp==32) && !got_error` → FALSE | `render_ogl.c:140` |
+| `ogl_render_main` hands the game to `gdi_render_main`, `show_driver_warning` set | `render_ogl.c` |
+
+Fixed by fetching it from the module when `wglGetProcAddress` declines it, and by swallowing
+any error still pending after the `GL_EXTENSIONS` fallback so it cannot reach `got_error` by
+another route. **The fallback is deliberate rather than an unconditional module fetch:** under
+Wine `wglGetProcAddress` does return the 1.1 entry points, so the new branch never fires there
+and the platform every measurement in this repo was taken on keeps byte-identical behaviour.
+
+### 21.2 The layer painted a stale mirror over the intro movie
+
+With GL restored, the whole startup sequence was black until the main menu — 0.2 mean
+luminance, flat, for eighteen seconds.
+
+`draw_layer` does not draw *over* the frame; it **replaces** it with a full-screen quad
+composed from the twin of the presented surface (§3.4). The twin is fed by the publisher,
+which observes the engine's drawing routines. **The intro Smacker writes the primary surface
+directly**, so no op ever reaches that queue: the twin keeps the bytes its seed left there —
+black, at coverage 255 — and the layer faithfully paints that stale black over a movie
+playing underneath.
+
+The bisect is worth keeping because it names the diagnosis rather than the symptom:
+
+| configuration | result |
+|---|---|
+| original DLL (GDI) | draws, mean 188 |
+| OpenGL, all passes on | **black**, mean 0.2 |
+| `tagpu_defaults.off` | draws, mean 189 |
+| `native.off` / `terr.off` / `classicpp.off` | still black |
+| `tagpu_gui.off` | **draws** |
+| `strict` | still black, **not magenta** |
+
+`strict` staying black rather than turning magenta is the whole answer: magenta is the
+*uncovered* case, so the twin is **covered**, and what covers it is stale rather than absent.
+
+The layer already had this rule for exactly one case — the cursor rect is left to the engine's
+frame because the cursor is blitted onto the primary after everything we observe (§17), so it
+exists only there. The movie is the same situation without a known rect, so the test became
+general instead of positional: **where the engine has painted by a path we never saw, its
+frame is the truth.**
+
+The test is **narrow on purpose**. It fires only where the mirror holds index 0 — the seed
+value, *nothing was ever published for this texel* — and the engine has something. A wider
+test (any index mismatch) also unblanks the movie and was tried first, but the twin's index
+and its restored colour are separate channels, so it discarded restored texels whose index
+legitimately differs and dropped that art back to the engine's dithered original, **visibly
+de-restoring the ORDERS/BUILD tab row**. The guard is gated on `f->surface_tex`: with no engine
+surface to compare against there is nothing to be right about, and the layer behaves as before.
+
+### 21.3 What was measured, and on which platform
+
+| | where | result |
+|---|---|---|
+| intro luminance, first frames | Windows | **187.3 / 200.0 / 190.1 / 128.0**, against GDI's 187.8/196.6/183.6/130.3 and an all-passes-off GL reference's 187.7/198.9/189.1/128.3. Before: 0.2 flat |
+| skirmish, matched interaction history | Windows | UI panel **0.00 %**, whole frame **0.00 %** against an unguarded build |
+| static scenario against shipped v0.2 | here, Wine + llvmpipe | side panel, top bar, world, bottom strip, whole frame all **0.00 %** |
+
+**A methodology note worth keeping.** The UI panel legitimately changes ~6 % within one
+session as the tab art is republished and undithered, so two captures must share an
+interaction history or the diff is meaningless — comparing a short session against a longer one
+produced a convincing but entirely false 1.46 % "regression" on the first attempt.
+
+### 21.4 Not covered
+
+A long match with heavy combat; resolutions other than the 1024×768 the Windows skirmish
+defaulted to. The intro movie renders washed-out with heavy scanlines, but it does so
+identically under plain GDI and with all passes off, so that is pre-existing and unrelated.
+
