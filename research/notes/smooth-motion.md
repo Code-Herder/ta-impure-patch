@@ -584,8 +584,8 @@ same patrol, more cycles of it). Same events, same order, same arguments, same `
 `scenario load --restart` cycles the instance's **wineserver wedges**: every subsequent launch dies
 with `exited during launch before showing a window (no ErrorLog.txt)`, the DLL is fine, and nothing
 in the log says why. Killing the wineserver **for that prefix alone** (match `WINEPREFIX` in
-`/proc/<pid>/environ`, never `pkill wineserver` — other instances and the human's own session are
-on this machine) clears it and the next launch is normal. It looks exactly like a DLL that will not
+`/proc/<pid>/environ`, never `pkill wineserver` — that would take every other instance and the
+human's own session with it) clears it and the next launch is normal. It looks exactly like a DLL that will not
 load, which is the wrong thing to go and debug.
 
 The structural half of the gate is stronger than the measurement anyway: the module writes to its
