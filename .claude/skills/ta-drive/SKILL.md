@@ -1066,14 +1066,19 @@ Three things about this one are unlike the other passes:
   oracle, which logs `fogwide check: … compared=N of cells=M differ=N` every 120th tick and
   **must read `differ=0`**. `compared` is `cols*rows` and `cells` the engine's ALLOCATION, which
   it rounds up to a multiple of 8 — comparing the tail reads entries nothing built.
-  Its heartbeat is `fogwide: <cols>x<rows> cells=… rebuilds=n/300 build=…/… us bare=N`.
-  **`bare=` must read 0** (G13s): it counts render frames that drew zoomed and were refused a wide
-  grid, i.e. frames painted over the engine's 1× grid, and it read 1 per gesture before the fix.
+  Its heartbeat is `fogwide: <cols>x<rows> cells=… rebuilds=N in 5.0s = R/s ticks=… build=…/… us
+  (mean/max) bare=N`, **one line per five seconds of wall time** (G13s; it used to be per 300
+  ticks, which was incomparable between runs because a tick is a `DrawGameScreen` call and the game
+  loop turns that over 330–4900 times a second depending on the scene while the presenter holds 60).
+  **`bare=` must read 0**: it counts render frames that drew zoomed and were refused a wide grid,
+  i.e. frames painted over the engine's 1× grid, and it read 1 per gesture before the fix. It does
+  **not** count `tagpu_fogwide.off`, so the lever does not make the heartbeat cry wolf.
   **The module builds at every zoom since G13s** — the grid has to exist before the frame that
   eases past 1.0, so the tick no longer waits for the level — while the *picture* at zoom ≥ 1 is
-  still the engine's grid, bit for bit, because the consumer is what gates on the level now.
-  `rebuilds=n/300` is a **ratio, not a rate**: a tick is a `DrawGameScreen` call and the game loop
-  turns that over 330–4900 times a second depending on the scene, while the presenter holds 60.
+  still the engine's grid, bit for bit, because the consumer is what gates on the level now. That
+  costs **~30 rebuilds a second whenever anything is moving** (the rate is the sim tick's, not the
+  camera's: every LOS stamp clears the engine's is-current bit) at ~145 µs, i.e. ~4.4 ms of
+  game-thread time a second, plus 6 MB of heap in every session.
 - **A one-frame fog artifact is not findable with `glshot`.** Record the window losslessly
   (`ffmpeg -f x11grab -window_id <id> -framerate 60 -c:v libx264rgb -qp 0`) and scan every frame;
   the criterion that separates a fog failure from the grey band is **green dominance**

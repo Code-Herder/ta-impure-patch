@@ -2190,11 +2190,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    outer ring. tagpu_fogwide builds the same masks over a window
                    the whole zoom range fits in; when it has one, it replaces the
                    engine's grid outright — same lattice, same bytes, more of
-                   them. At zoom >= 1, and whenever the game thread is not
-                   building (terrain ownership disarmed, the menus), it declines
-                   and the engine's own grid is used exactly as before. The
-                   engine's grid stays the GATE either way: if it cannot be read,
-                   neither can the state the wide one is built from. */
+                   them. Whenever the game thread is not building (terrain
+                   ownership disarmed, the menus, the off lever) it declines and
+                   the engine's own grid is used exactly as before — and so it is
+                   at zoom >= 1, which since G13s is decided HERE rather than by
+                   the producer (below). The engine's grid stays the GATE either
+                   way: if it cannot be read, neither can the state the wide one
+                   is built from. */
                 {
                     const unsigned short* wb; int wc, wr, wox, woy;
                     /* Asked for ONLY while this frame is drawn zoomed out. The

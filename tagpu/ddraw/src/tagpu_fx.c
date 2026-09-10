@@ -633,7 +633,19 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows,
        reports no fog and leaves the caller's own viewport cull to decide —
        clamping to the border cell instead would cull anything whose anchor
        sits past the edge over dark ground, popping sprites in as you scroll.
-       The shaders clamp, which is exact: an on-screen fragment is in range. */
+
+       THE SHADERS NO LONGER CLAMP THE SAME WAY, and this comment used to say
+       theirs "is exact". Since G13s taFog clamps to `uFogDim - 1.0`, one whole
+       cell short, because the last column of any grid never has its right
+       corners written and interpolating toward them reads as NO FOG. The band
+       `gx in [cols-1, cols)` here has that same hazard and is left alone
+       deliberately: with the WIDE grid it is at least 320 px outside the view
+       (FOGW_MARGIN plus the window's two spare columns) against a gather that
+       reaches 256, so nothing can be sampled there; with the ENGINE's grid at
+       zoom >= 1 an anchor 1..32 px past the viewport edge does land in it, and
+       both answers available there — the interpolation's and the off-grid
+       `return 0` a tighter bound would give — are the same "no fog", so
+       tightening it would change nothing but the argument. */
     if (gx < 0.0f || gy < 0.0f ||
         gx >= (float)cols || gy >= (float)rows) return 0;
     int cx = (int)gx, cy = (int)gy;

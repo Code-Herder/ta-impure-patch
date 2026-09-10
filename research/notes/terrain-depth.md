@@ -1026,14 +1026,20 @@ box, **109–246 µs with six of them running** and 150–220 µs with two or th
 that scales with contention rather than a fixed figure; quote the load with the number. It is
 paid only on ticks where the engine's grid was invalidated or the window moved.
 
-**`rebuilds=n/300` is a RATIO, not a rate.** A tick here is a `DrawGameScreen` call, and the game
-loop turns that over 330 times a second on `crowd-static` and 3200–4900 on a sparse skirmish while
-both present 58–60 fps (engine map, §"The engine's rates") — so 300 ticks is anywhere from a
-tenth of a second to a second. To get a rate, count the window's own travel: edge-scrolling at
-TA's default `ScrollSpeed` of 32 world px a scroll tick, the eye covered 2790 px in 3.20 s and the
-module rebuilt **90 times** — one per 32-px cell crossing, ~28 a second [MEASURED 2026-09-10].
-*(An earlier note here said the heartbeat "reads 300/300 while the camera is moving". It does not,
-and never did: that assumed a tick was a frame.)*
+**The heartbeat is emitted per five seconds of WALL TIME and carries the rate** (G13s). It used to
+be one line per 300 ticks — but a tick here is a `DrawGameScreen` call, and the game loop turns
+that over 330 times a second on `crowd-static` and 3200–4900 on a sparse skirmish while both
+present 58–60 fps (engine map, §"The engine's rates"), so a block of 300 was anywhere from a tenth
+of a second to a second and `rebuilds=n/300` was a ratio that read like a rate. *(An earlier note
+here said it "reads 300/300 while the camera is moving". It does not, and never did.)*
+
+**And the rebuild rate is the SIM TICK rate, not the camera's.** `changed` is
+`rebuilt || the window moved || …`, and `rebuilt` is the engine's is-current bit, which §5.2
+records as cleared by every LOS stamp touching the local player's maps as well as by every scroll
+— "the grid rebuilds nearly every frame something moves". MEASURED 2026-09-10 at 1920×1080 on
+`200v200`, 400 units fighting, **camera still, zoom 1.0: 760 rebuilds in 25.0 s = 30.4/s** at
+145 µs mean, so **~4.4 ms of game-thread time per second**, doubling at `gamespeed` 20. It is
+bounded by the tick rate rather than by the unit count, and since G13s it is paid at every zoom.
 
 `tagpu_fogwide.off` in the gamedir disables it live — polled on the **game** thread, at the top of
 the tick, because the producer is the one that must obey it (polling it in the consumer left the
@@ -1059,7 +1065,8 @@ Two faults, and only both together made it visible.
    A producer that cannot see the future must not be gated on it: it now builds **every tick**,
    and the consumer picks per frame off the level it is actually drawing with. The instrument is
    the heartbeat's new **`bare=`** counter — render-thread frames that asked and were refused, so
-   frames drawn zoomed over the engine's 1× grid: `bare=1 rebuilds=1/300` per gesture before, **0
+   frames drawn zoomed over the engine's 1× grid: `bare=1 rebuilds=1/300` per gesture before (the
+   old per-300-tick line), **0
    throughout** after. It must read 0.
 2. **The fallback failed OPEN.** The last column of any grid never has its right corners written
    (engine map, §"The builder `0x4843C0`"), so `taFog`'s clamp to `uFogDim − 0.001` landed every
@@ -1085,6 +1092,20 @@ animation phase; that fixture is static in position, not in pose, so it cannot b
 tightly than its own floor. *(A first attempt at this measured nothing at all: `scenario load`
 writes `tagpu_defaults.off`, so the instance had every pass opt-in and none armed and both builds
 were drawing the stock engine's picture. Read the `opt:` line before believing a parity number.)*
+
+**What it costs, stated plainly**, because the landing bought the fix with it: ~4.4 ms of
+game-thread time a second whenever anything is moving (above), and **6 MB of heap in every
+session** — the three `FOGW_MAXDIM` buffers are allocated on the first in-game tick now, not on
+the first zoom-out, and nothing frees them before the process exits. The alternative on the table
+was a frame drawn without a grid, which is what the report was about.
+
+**The CPU twin was NOT brought along.** `tagpu_fog_at` (`tagpu_fx.c`) still bounds on
+`gx >= cols`, so the band `[cols−1, cols)` interpolates the same unwritten corners the shader now
+avoids. It is unreachable through the wide grid — that band is ≥ 320 px outside the view
+(`FOGW_MARGIN` plus the window's two spare columns) against a gather that reaches 256 — and
+through the engine's grid at zoom ≥ 1 it is reachable for an anchor 1–32 px past the viewport
+edge, where both available answers are the same "no fog" and tightening the bound would change
+only the argument. Recorded rather than changed.
 
 ## Appendix — address & offset tables
 

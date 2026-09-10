@@ -380,20 +380,31 @@ built **every tick** and the consumer picks per frame off the level it is actual
 last complete entry exactly as `fogw_edge_fill` already does off the map. The new **`bare=`**
 counter on the fogwide heartbeat is the instrument and must read 0 — it counts render frames that
 asked for a wide grid and were refused, i.e. zoomed frames drawn over the engine's 1x grid:
-`bare=1 rebuilds=1/300` per gesture before, **0 throughout** after. **After: 0 failure frames of
+`bare=1 rebuilds=1/300` per gesture before (the old per-300-tick line), **0 throughout** after. **After: 0 failure frames of
 1800 unmapped (max 32 green px) and 0 of 1561 mapped (max 0)**, with the replication oracle still
 `differ=0` over 1972 of 1972 cells.
 
 **Parity and cost.** On `crowd-static`, every pass armed, at zoom 1.0 / 0.5 / 0.25, the **outer
 64-px ring of the world viewport — the only region the clamp can reach — differs by 0 pixels** in
 every pair, cross-build and same-build alike; the interior differs by as much within one build as
-across the two (that fixture is static in position, not in pose). Building at 1x as well costs one
-rebuild per 32 px of camera travel — 90 rebuilds in 3.20 s of edge-scrolling, ~28 a second at
-150-220 us, so **4-6 ms of game-thread time per second of scrolling and nothing while the camera
-is still**. Two things the landing corrected on the way: `rebuilds=n/300` is a **ratio**, not a
-rate (a tick is a `DrawGameScreen` call, and the game loop turns that over 330 times a second on
-`crowd-static` and 3200-4900 on a sparse skirmish while both present 58-60 fps), and the off lever
-is polled on the **game** thread, not the render thread as the note said.
+across the two (that fixture is static in position, not in pose).
+
+**What building at every zoom costs, measured after the landing review pushed back on a first,
+too-flattering figure.** The rebuild is triggered by the engine's is-current bit, which every LOS
+stamp clears as well as every scroll — so the rate is the SIM TICK rate whenever *anything* moves,
+not the camera's. On `200v200`, 400 units fighting, **camera still, zoom 1.0: 760 rebuilds in
+25.0 s = 30.4/s** at 145 us, i.e. **~4.4 ms of game-thread time per second**, doubling at
+`gamespeed` 20 — plus **6 MB of heap in every session**, since the buffers are now allocated on the
+first in-game tick rather than the first zoom-out. Bounded by the tick rate, not by the unit
+count, and the price of the grid being ready before the frame that needs it.
+
+Three things the landing corrected on the way: the heartbeat is emitted per five seconds of **wall
+time** and carries the rate (per 300 *ticks* was both incomparable between runs — a tick is a
+`DrawGameScreen` call, 330/s on `crowd-static` and 3200-4900 on a sparse skirmish while both
+present 58-60 fps — and, once the producer stopped bailing at zoom >= 1, 11-16 log writes a second
+on the game thread); the off lever is polled on the **game** thread, not the render thread as the
+note said; and `bare=` does not count the two deliberate refusals (`tagpu_fogwide.off` and an
+uninitialised module), which nothing would ever clear.
 [terrain & depth](terrain-depth.html) §8a; [engine map](exe-reverse-engineering.html) §"The screen
 fog grid" and §"The engine's rates".
 

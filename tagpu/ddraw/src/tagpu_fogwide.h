@@ -60,16 +60,31 @@ void tagpu_fogwide_init(void);
 /* Game thread, from the fog-overlay call site, once per engine frame. `ta` is
    the TAdynmem base; `rebuilt` is 1 when the engine's own grid was rebuilt on
    this tick (its is-current flag had been cleared), which is also our cue that
-   the LOS state moved under us. Cheap when nothing changed: it rebuilds only
-   when `rebuilt` is set or the window itself moved. */
+   the LOS state moved under us. It rebuilds only when `rebuilt` is set or the
+   window itself moved — but `rebuilt` is cleared by every LOS stamp as well as
+   every scroll, so in a live game that is the SIM TICK rate whenever anything
+   is moving, ~30/s at gamespeed 10 (see the tick's own comment for the number).
+
+   AT EVERY ZOOM, since G13s. It does not ask what the level is: the level is
+   the render thread's to publish, and that thread is the one that decides,
+   mid-frame, to draw the first zoomed-out frame of a gesture — so a producer
+   gated on it is a producer that is always one tick late exactly when it
+   matters. Which grid a FRAME uses is the consumer's decision, below. */
 void tagpu_fogwide_tick(char* ta, int rebuilt);
 
 /* Render thread, once per frame, before the fog texture upload. Hands back the
    grid to sample — the buffer stays valid until the next call on this thread —
-   or 0 when there is none to use: the module is off, no zoomed-out view is
-   live, nothing has been published, or the game thread has stopped ticking
-   (terrain ownership disarmed, the menus). The caller then uses the engine's own
-   grid exactly as before. */
+   or 0 when there is none to use: the module is off (`tagpu_fogwide.off`), it
+   never initialised, nothing has been published, or the game thread has stopped
+   ticking (terrain ownership disarmed, the menus). The caller then uses the
+   engine's own grid exactly as before.
+
+   THE ZOOM IS NOT ONE OF THOSE REASONS and this must not be asked at zoom >= 1:
+   the engine's own grid spans a 1:1 frame with at least a pixel to spare on
+   every side, so the caller gates on the level it is actually drawing with and
+   only asks below 1. Every refusal it does get is counted (`bare=` on the
+   module's heartbeat) and must read 0 — the two deliberate refusals above are
+   not counted. */
 int tagpu_fogwide_get(const unsigned short** buf,
                       int* cols, int* rows, int* orgX, int* orgY);
 

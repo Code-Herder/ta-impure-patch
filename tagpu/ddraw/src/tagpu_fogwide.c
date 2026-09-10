@@ -39,7 +39,10 @@
    7680x4320** — every one of them past 320, which would have clamped the wide
    grid back to a 10240-px-wide core and left the rest of a 4K zoom-out smeared
    from the border cell again. 1024 covers all three and costs 2 MB a buffer,
-   6 MB for the three, allocated only for a session that actually zooms out.
+   **6 MB for the three, in every session** — since G13s the producer builds at
+   every zoom (see tagpu_fogwide_tick), so this is allocated on the first
+   in-game tick whether or not the player ever zooms out, and nothing frees it
+   before the process exits.
 
    THE RESIDUAL, stated so it stays true: past about 7680x4320 the window is
    clamped again. The clamp takes its trim off both ends (fogw_window below),
@@ -110,9 +113,16 @@ static volatile LONG    s_off;                            /* tagpu_fogwide.off *
 #define FOGW_STALE_MS   500
 
 /* Frames the RENDER thread asked for a wide grid and was refused. The consumer
-   asks only while it is drawing a zoomed-OUT frame, so every refusal is a frame
-   drawn over a grid that does not span it — the outer ring falling back to the
-   engine's own. It must read 0; the heartbeat prints and clears it. */
+   asks only while it is drawing a zoomed-OUT frame, so every refusal counted
+   here is a frame drawn over a grid that does not span it — the outer ring
+   falling back to the engine's own. It must read 0; the heartbeat prints and
+   clears it.
+
+   THE TWO DELIBERATE REFUSALS ARE NOT COUNTED. `tagpu_fogwide.off` and a module
+   that never initialised both make the producer return before the heartbeat, so
+   nothing would ever clear what they added: the count would grow for as long as
+   the lever was armed and then print, once, as a large number against a comment
+   that says it must read 0. A lever doing what it was asked is not a defect. */
 static volatile LONG    s_bare;
 
 /* render thread only */
@@ -122,9 +132,11 @@ static LONG             s_seenTick;
 static DWORD            s_seenMs;
 
 /* game thread only: the heartbeat, so the cost of a rebuild is a number and not
-   an estimate. One line per 300 ticks, the cadence every other pass logs at. */
+   an estimate. Emitted on WALL TIME — see fogw_heartbeat for why not on ticks. */
 static unsigned         s_hbTicks, s_hbBuilds;
 static double           s_hbUs, s_hbUsMax;
+static DWORD            s_hbMs;
+#define FOGW_HB_MS      5000
 
 /* game thread only: the window last built, and the source it was built from */
 static int              s_lastCols, s_lastRows, s_lastCol0, s_lastRow0;
@@ -514,17 +526,24 @@ void tagpu_fogwide_tick(char* ta, int rebuilt)
        — a full-brightness flash of terrain lasting exactly one frame, at the
        start of every zoom-out. (Measured 2026-09-10 at the bottom-left corner
        of Town & Country, unmapped: one bare frame and one rebuild per gesture,
-       `bare=1 rebuilds=1/300`.) A producer that cannot see the future must not
+       `bare=1 rebuilds=1/300`, on the per-300-tick line this build no longer
+       emits.) A producer that cannot see the future must not
        be gated on it: build every tick, and let the CONSUMER decide per frame
        which grid the frame it is drawing needs.
 
-       WHAT THAT COSTS AT 1X, measured rather than feared (1920x1080, Town &
-       Country, edge-scrolling at TA's default ScrollSpeed of 32 world px a
-       scroll tick): the eye covered 2790 px in 3.20 s and the module rebuilt
-       90 times — one per 32-px cell crossing, ~28 a second, at 150-220 us each.
-       That is 4-6 ms of game-thread time per second of SCROLLING and exactly
-       nothing while the camera is still, because the window sits on the grid
-       lattice and only moves when the eye crosses a cell. */
+       WHAT THAT COSTS, and it is NOT only while the camera moves. `changed`
+       below is `rebuilt || the window moved || …`, and `rebuilt` is the engine's
+       own is-current bit, which every LOS stamp that touches the local player's
+       maps clears (`0x481911`, `0x481D2D`, `0x481D73`, `0x482293` —
+       terrain-depth.md §5.2). So the rate is the SIM TICK rate whenever
+       anything at all is moving, units included: MEASURED 2026-09-10 at
+       1920x1080 on `200v200`, 400 units fighting, camera still, zoom 1.0 —
+       **760 rebuilds in 25.0 s = 30.4/s** (gamespeed 10's 30 Hz tick) at 145 us
+       mean, so **~4.4 ms of game-thread time per second**, doubling at
+       gamespeed 20. It is bounded by the tick rate rather than by the unit
+       count, and it is paid by every session, including one that never zooms
+       out — that is the price of the grid being ready before the frame that
+       needs it, and the alternative was a frame drawn without one. */
     if (s_off ||
         !fogw_source(ta, &s) ||
         !fogw_window(ta, &col0, &row0, &cols, &rows) ||
@@ -584,32 +603,44 @@ void tagpu_fogwide_tick(char* ta, int rebuilt)
     s_lastMask = (int)s.mask; s_lastTrue = s.trueLos;
 }
 
-/* One line per 300 ticks while a wide grid is live, called at the top of the
-   tick so a run that stops rebuilding still reports.
+/* One line per FOGW_HB_MS of WALL TIME while a grid is live, called at the top
+   of the tick so a run that stops rebuilding still reports.
 
-   `rebuilds` is out of the ticks in the block, and A TICK IS NOT A FRAME: this
-   runs from the engine's fog-overlay call site inside DrawGameScreen, which the
-   game loop turns over as fast as the scene allows while the presenter caps the
-   flip. Measured 2026-09-10 at 1920x1080, `--maxfps 60`, both presenting 58-60
-   fps: **330 ticks a second** on `crowd-static` (256 units, Two Continents) and
-   **3200-4900** on a sparse Town & Country skirmish. So a block of 300 ticks is
-   anything from a tenth of a second to a second, and a scrolling camera reads
-   2-4 rebuilds in it — not the 300/300 this comment used to claim, which
-   assumed a tick was a frame. Read `rebuilds` as a ratio, never as a rate.
+   ON WALL TIME, NOT ON A TICK COUNT, and that is a G13s correction. A tick here
+   is a `DrawGameScreen` call, not a presented frame, and the game loop turns
+   that over as fast as the scene allows while the presenter caps only the flip:
+   MEASURED 2026-09-10 at 1920x1080, `--maxfps 60`, both instances presenting
+   58-60 fps, **330 ticks a second** on `crowd-static` (256 units, Two
+   Continents) and **3200-4900** on a sparse Town & Country skirmish. Two things
+   followed from counting ticks. A block of 300 was anywhere from a tenth of a
+   second to a second, so the old `rebuilds=n/300` was a RATIO that read like a
+   rate and no two runs could be compared. And once the producer stopped bailing
+   out at zoom >= 1, the same cadence meant 11-16 fopen/fprintf/fclose a second
+   on the game thread in a session that never zooms out. Five seconds of wall
+   time is one line per five seconds whatever the scene is doing, and the line
+   carries the rate rather than leaving it to be reconstructed.
 
    `bare` is the render thread's, and it is the one to read after a zoom-out:
    any non-zero value is a frame drawn zoomed over the engine's 1x grid. */
 static void fogw_heartbeat(int cols, int rows)
 {
-    char b[192];
+    char b[224];
     LONG bare;
-    if (++s_hbTicks < 300) return;
+    DWORD now = GetTickCount();
+    double secs;
+
+    s_hbTicks++;
+    if (!s_hbMs) { s_hbMs = now; return; }     /* the first tick opens the window */
+    if (now - s_hbMs < FOGW_HB_MS) return;
+    secs = (double)(now - s_hbMs) / 1000.0;
     bare = InterlockedExchange(&s_bare, 0);
-    sprintf(b, "fogwide: %dx%d cells=%d rebuilds=%u/%u build=%.0f/%.0f us "
-               "(mean/max) bare=%ld",
-            cols, rows, cols * rows, s_hbBuilds, s_hbTicks,
+    sprintf(b, "fogwide: %dx%d cells=%d rebuilds=%u in %.1fs = %.1f/s ticks=%u "
+               "build=%.0f/%.0f us (mean/max) bare=%ld",
+            cols, rows, cols * rows, s_hbBuilds, secs,
+            secs > 0.0 ? (double)s_hbBuilds / secs : 0.0, s_hbTicks,
             s_hbBuilds ? s_hbUs / s_hbBuilds : 0.0, s_hbUsMax, (long)bare);
     flog(b);
+    s_hbMs = now;
     s_hbTicks = s_hbBuilds = 0; s_hbUs = s_hbUsMax = 0.0;
 }
 
@@ -643,7 +674,7 @@ int tagpu_fogwide_get(const unsigned short** buf,
     LONG tick;
     DWORD now;
 
-    if (s_off || !s_csInit) { InterlockedIncrement(&s_bare); return 0; }
+    if (s_off || !s_csInit) return 0;        /* asked for; not counted, above */
 
     /* Liveness: the game thread bumps s_tick every tick whether or not it
        rebuilds, so a tick that stops advancing means it is no longer running —
