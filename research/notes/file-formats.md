@@ -525,6 +525,36 @@ arrival and zeroes the speed — which is what `wait-for-move`/`wait-for-turn` t
 resumes the tick *after* its axis arrives. `TURN` always takes the short way round. Full rules:
 `exe-reverse-engineering.md` §"The piece animation array".
 
+**Stock locomotion does not use the stepper — walk cycles are keyframe tables.** The `walk` body
+of every kbot decompiled so far is a straight-line list of `MOVE_NOW`/`TURN_NOW` writes grouped
+into pose blocks separated by `SLEEP`, with no `speed` operand and no
+`wait-for-turn`/`wait-for-move` in it at all: the thread snaps the whole skeleton to a pose,
+sleeps, snaps to the next. Eight units measured — ARMPW, ARMCOM, CORCOM, ARMROCK, CORAK, ARMFIDO, CORCAN, ARMHAM —
+give 119–155 instant writes and 8–16 sleeps each, and zero interpolated turns in every one
+(ARMPW's `walklegs`, the aim-while-moving variant, is the same shape at 73 writes and 12 sleeps).
+The stepper serves the *other* idiom in the same files: ARMPW's `AimPrimary` and
+`RestoreAfterDelay` are `speed` + `wait-for-turn` throughout, and `MotionControl`'s stop branch
+issues `speed` turns without waiting on them; none of the three contains an instant write. So the
+two animation styles are cleanly split — **keyframes for locomotion, interpolated
+turns for aiming and settling** — and a renderer that smoothed poses between sim ticks would be
+inventing leg motion the animator declined to ask for, while merely reproducing what the turrets
+already do. [MEASURED 2026-09-09 — `tools/tacob decompile`, opcode counts per script body.]
+
+The cycle is driven by a script thread, not by the engine. `Create` starts `MotionControl`, whose
+`while(1)` loop calls `walk` while a static flag is set; the engine's whole part is calling
+`StartMoving`/`StopMoving` to set that flag. Two consequences, both visible in
+`evidence/cobtrace/kbot/cobtrace.log`: **a stride is atomic** — `StopMoving` at tick 311 does not
+interrupt the `walk` that started at 305 and still returns at 324, and the loop only then eases
+the legs back to rest with `speed` turns — and **the cycle length is the sum of its sleeps**,
+which for ARMPW measures a steady 19 ticks against 740 ms (22.2 ticks) nominal. `SLEEP` converts
+its millisecond operand to ticks as **`floor(ms × 30 / 1000)`** — read from the binary and
+modelled in `tools/tacob`'s VM — which turns those twelve sleeps into 18; the extra tick is in the
+runner's own wake accounting, which the VM also models: `tacob run kbot` replays this fixture
+**byte-identically, cadence included**, so nothing here is a fit. Note also that nothing in the engine stops two threads writing the same piece: `walklegs`
+leaves the torso alone and `AimPrimary` blocks on a static flag that `MotionControl` raises only
+once it has switched to `walklegs` — cooperative piece ownership arranged entirely in script.
+[MEASURED — the trace 2026-09-07, the script structure and the arithmetic 2026-09-09.]
+
 **Renderer recipe:** for each piece build a local matrix
 `L = T(offset + pos) · R`, where **`R = Ry · Rx · Rz`** — the engine's own composer
 `0x4B6CC0` rotates the `(x,y)` pair by the `+0x14` word first, then `(y,z)` by `+0x10`, then

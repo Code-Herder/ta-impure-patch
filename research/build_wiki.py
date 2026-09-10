@@ -71,6 +71,7 @@ PAGES = [
     ("gui-renderer",               "GL UI renderer (phase E)",    "Renderer"),
     ("thread-safe-destruction",    "Thread-safe destruction",     "Renderer"),
     ("gpu-posing",                 "GPU posing for 3DOs (G16)",   "Renderer"),
+    ("smooth-motion",              "Smooth unit movement & animation", "Renderer"),
 
     ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
     ("model-export",               "Model export (3DO → glTF)",   "Tooling"),

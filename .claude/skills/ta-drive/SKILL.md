@@ -697,22 +697,87 @@ extremes) and `2216 1606` (the air lane).
 
 | file | what it does |
 |---|---|
-| `tagpu_posefix.off` | leaves the guard *measuring* but draws the engine's live posed buffer anyway — the baseline the fix is measured against, and the only way to see the artifact |
-| `tagpu_posewatch.on` | the oracle: per unit per frame, `posewatch: f=… err=… piece=…/… dirty=…/… poll|guard` — the largest disagreement in **model units** between the engine's posed buffer and the pose rebuilt from the fields, with the pose-dirty flag either side of the read. A unit or two out is a stale buffer; the model's own height out (an ARMCOM is 34) is a buffer caught mid-rewrite. Also adds a 60 Hz anchor filmstrip per owned unit — raw 16.16 position, roster shorts, the eye and the anchor we derived, which is what attributes a one-frame jump to the engine, the eye or this pass |
-| `tagpu_poserecon.on` | forces the reconstruction for **every** unit every frame. The A/B for the fallback: against the engine-buffer path it renders 0 differing pixels of 1920×1080 |
-| `tagpu_posebake.on` | G16 step 4's per-type geometry bake (gpu-status §2.10). **Draws nothing** — it bakes, caches and reports. `log` gives a line per model and per material stream; `check` holds the bake to `emit_geom`'s own vertex count and to `pose_accum_body`'s rest offsets, per unit per frame, and logs any disagreement. The `native:` line grows `bake=<types>/<streams> anom= odd= nomat= refused=` |
+| `tagpu_posebake.on` | G16 step 4's per-type geometry bake (gpu-status §2.10). **Draws nothing** — it bakes, caches and reports. `log` gives a line per model and per material stream. The `native:` line grows `bake=<types>/<streams> anom= odd= nomat= refused=`. *(Its `check` token is gone with step 8: it held the bake to `emit_geom`'s vertex count, and that emitter no longer exists.)* |
 
-**`posewatch` writes about 250 kB of `tagpu.log` per second** at 28 units on screen — it logs an
-anchor filmstrip per owned unit per frame, and `nlog` opens and closes the file per line. Two
-consequences: measure a camera stop by taking the file's **byte offsets** before and after and
-slicing it, rather than grepping the whole thing, and do not leave the lever armed for a long run.
+⚠ **`[2026-09-09]` The other three pose levers are GONE, and so is `tagpu_posedraw.on`.** G16 step 8
+deleted the CPU emitters, and with them the pose-race guard, the rest-equality detector, the
+reconstruction and `posewatch` — the only things `tagpu_posefix.off`, `tagpu_posewatch.on` and
+`tagpu_poserecon.on` ever reached. **The posed program is not a lever any more, it is the unit
+renderer**: there is nothing to A/B it against in one build, and creating those files does nothing.
+The `native:` line lost `posefix=`, `guard=`, `rest=`, `norecon=` and `errmax=` with them.
 
-The `native:` line carries `posefix=`, `guard=` (reads refused since the last line, 300 frames),
-`rest=` and `errmax=` whether or not the watch is armed. **`rest=` is the useful one**: the guard
-trips on any dirty pose, most of which are a merely stale buffer that was safe to draw, while
-`rest=` counts only the reads that caught the buffer byte-equal to the model's rest vertices —
-the state that actually draws a collapsed unit. In play it reads 0; a burst at a scenario load is
-the unit's buffer before its first repose and is expected.
+**What to read instead.** `posed=<units>/<tris>` — with ` slant=<units>/<tris>` and
+` wire=<units>/<lines>` when the scene has them — is the pass, and **`verts=` should read 0 for
+units**: anything else means something was built on the CPU, which now only the selection lines and
+the effects models do. Four more fields appear **only when they have caught something**, and in a
+healthy game none of them ever does:
+
+| field | meaning |
+|---|---|
+| `rest=` | units past the frame's pose arena, drawn **at rest** for that frame (right geometry, material, position, fog, shadow; only the animation frozen). ⚠ It looks exactly like the old pose-race artifact — that is why it is counted |
+| `unpl=` | *pieces* the pose walk could not place, left at rest inside a unit that is otherwise posed |
+| `nobake=` | units whose type would not bake, which **draw nothing** — the one honest drop. Over 256 pieces or 49152 vertices; stock's worst is 36 and 574 |
+| `q=` | units the gather queued against units the pass drew, printed only when they disagree. A queued unit the draw dropped is a unit missing from the screen |
+
+**`posed=` reading lower than the unit count is usually the HIRES pass, not a miss.** A gamedir with
+`hires/<name>.glb` in it draws those units through the replacement-mesh renderer instead, and they
+are counted in `unit(s)` but not in `posed=`. Check `ls <gamedir>/hires/` before chasing it — this
+cost a diagnosis on 2026-09-09.
+
+**If units are missing on the OLD path, that is `MAXNV`, not a bug in yours.** Before step 8 every
+unit's geometry went through one shared 49152-vertex stream, so past it units got an empty range and
+drew nothing — health bar, no model — and the line says `VERTEX-BUDGET-HIT`. `scenarios/crowd-static.json`
+(256 units, one owner, no orders, so it is the same picture between runs and can be diffed) shows it
+at 0.5x zoom. The posed path has no shared budget to exhaust.
+
+**A/B-ing any live lever: wait for a FRESH `native:` line before the second shot.** That line is
+written every 300 frames — five seconds at 60 fps — so a lever flipped and shot three seconds later
+is read against the *previous* setting's counters, and the diff comes out 0 for the wrong reason.
+Count the `native: [0-9]` lines, flip, wait until the count has moved by two, and confirm the
+numbers actually changed before believing a pixel diff (2026-09-09, a 200-unit A/B that read
+`0 differing pixels` because both shots were the same path).
+
+**A cross-BUILD A/B needs a zero noise floor first, and most fixtures do not have one.** Swapping
+`ddraw.dll` means relaunching, and a relaunch re-runs the sim: an animating piece is at a different
+angle, so `shadow-struct` diffs **9616 px** against *itself* and `shadow-lab` 10466. Establish the
+floor by running the SAME dll twice before believing any number (ta-capture rule 7). What works:
+pause at a fixed sim tick (poll `*0x511DE8+0x38A47:4`, then `keys <i> tab`), diff the world viewport
+only (the minimap and resource bar move on their own), and pick a fixture with nothing animating —
+`one-unit` and a few static structures both measure **0**. A battle cannot be paired at all: two
+loads of `200v200` diverge to different survivors.
+
+**A frame-time A/B needs `--maxfps 0`, and without it it measures nothing.** `write_ddraw_ini`
+rewrites the cap into the instance's `ddraw.ini` whenever `--maxfps`, `--res` or `--window` is given, or the tile is off-screen — **not on a bare `tacli launch <inst>`, which writes the file at all** (corrected 2026-09-09; the docstring used to claim every launch path). Pass `--maxfps` explicitly to be sure of the value. The DLL reads
+it at attach, so an edit made by hand first is overwritten — which is why the cap is a **sticky
+launch knob** (since 2026-09-09) rather than something to edit:
+
+```bash
+tools/tacli launch t1 --maxfps 0                       # 0 is UNLIMITED; sticky, like --res
+tools/tacli scenario load t1 200v200 --restart --maxfps 0
+grep maxfps <gamedir>/ddraw.ini                        # confirm it survived the launch
+```
+
+**`maxfps=0` is the unlimited setting** — `fpsl_init` maps a NEGATIVE value onto the display
+refresh (60) and only `0` falls through every branch with `tick_length` left at 0, so the value to
+make survive the launch is `0`, not `-1`. **Two paths that both hold 60 (or 58.5) fps have not been
+compared, they have both hit the cap** — that is exactly how G16's posed program read "no
+difference" until 2026-09-09, when uncapping it showed 184 fps against 313.
+
+Two things to do on top of uncapping, both learned taking that measurement:
+
+- **Pause the sim first** (`tacli keys <i> tab`, then peek the tick twice to confirm). On a
+  fighting scenario units die under the measurement, so the second half of an A/B draws a smaller
+  scene than the first. Paused, the renderer keeps working and the unit count is fixed.
+- **Read the losing path's `verts=`.** If it says `VERTEX-BUDGET-HIT` it is *truncating* geometry,
+  so the comparison flatters it — it is drawing less and still costing more.
+
+The meter needs no code: the overlay writes a `units:` line every 30 presented frames, so
+`30 × (lines gained) / (seconds elapsed)` is the frame rate.
+
+**Slice `tagpu.log` by BYTE OFFSET when a run has to be attributed to a camera stop** — take
+`stat -c %s` before and after and `tail -c +N` — rather than grepping the whole file. Any
+per-unit-per-frame logging makes it grow fast (`nlog` opens and closes the file per line), and a
+`tacli log` grep can also hand you the *previous* game's lines after a reload.
 
 **Classic++ is a separate switch; its restorer runs as GLSL in the game's own context.**
 `tacli arm <i> classicpp.on` turns on the restored true-colour terrain, features, effects and (since G14g) unit textures;
@@ -759,18 +824,65 @@ value), `tacli arm <i> classicpp.cfg=off` removes it (= the lab's defaults `324.
 `215.5,53.1` / `0.35`). The DLL answers every read with one line, `classicpp: light sun=…
 unitsun=… amb=… level=…/… (tagpu_classicpp.cfg)` — or `(no cfg: defaults)` — so
 `tacli log <i> -g 'classicpp: light' | tail -1` says what the frame is lit by; allow ~1.5 s
-after arming before a shot. **The shadow keys** (G14i) ride the same file — `shadows=0|1`,
+after arming before a shot.
+
+**The switch has two halves (G18a): `assets=0|1` and `light=0|1`**, both default 1, both in
+the same cfg and live on the same poll, and they answer on their own line ahead of the light
+one — `classicpp: assets=1 light=1 (tagpu_classicpp.cfg)`. `assets=` is the restored
+atlases (`uRestored`, the terrain restore step, every lazy GAF twin, and the G15e UI twin);
+`light=` is the lambert (`uLambert`, and the ground lambert baked into a feature anchor).
+`tagpu_classicpp.on` stays the master arm — absent, both are off whatever the cfg says — and
+the **shadow** dimension is still on that master arm and its own `shadows=` key, not on these.
+
+- `assets=1 light=1` is the switch as it always was, to the pixel.
+- **`light=0` is not `sun=off`.** Both give a flat frame, but `sun=off` sets `amb=1.0`, which
+  puts the depth-map shadows out (`tagpu_shadow.c:359` refuses at `amb >= 1.0`); `light=0`
+  leaves them. Measured on `tascene-parity`: `light=0 shadows=0` is byte-identical to
+  `sun=off`, and `light=0` alone differs from it by exactly the 1800 shadow pixels.
+- **`light=0` leaves a unit UNSHADED, not Classic-shaded.** The engine's per-face
+  `PALETTE.SHD` shade row is the *Classic* branch's (`uLit == 0`), which the master arm
+  selects, so under Classic++ the choice is the lambert or nothing.
+- **To see `assets=` on the UI you must first make the UI draw real art.** Entering a game
+  seeds the panel with HUD icons only, all under the 12-px restore floor, so flipping
+  `assets` changes 0 px there. Press Tab for `ARMOPT` (or select a builder) first: then the
+  flip moves 37 415 of that rect's 45 056 px.
+- The `gui: twins=` heartbeat carries `cpp=<master> assets=<n> light=<n>`, and `colvalid`
+  drops to 0 while `assets=0`. **The shadow keys** (G14i) ride the same file — `shadows=0|1|2`,
 `shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B|off`, `shade=S`, `terrainshadow=0|1`,
 `shadowres=N`, `airshadow=len|physical|drop`, the lab's defaults — and answer on a second
-line, `classicpp: shadows=1 shadowsun=225.0,40.0 …`; the map also needs the engine's own
-Shadows option on. `tagpu.log` says `shadow: GL ready (GL_VERSION 3.3.0 …)` once per context,
+line, `classicpp: shadows=1(soft) shadowsun=225.0,40.0 …`; the map also needs the engine's own
+Shadows option on.
+
+**`shadows=` is three-way since G18b: `0` none, `1` SOFT (the map-anchored depth map, the
+default), `2` HARD (Classic's own 5-px silhouette and cached slant, drawn under the
+switch).** The two are never both on, so `shadows=2` is how you get Classic's shadow look
+with Classic++ art. An out-of-range value logs `bad token` and leaves the default standing.
+Only the soft map reads the other seven keys. `shadows=0` also drops the silhouette an
+aircraft keeps under `airshadow=drop`.
+
+**`sun=off` is now exactly `light=0`** (G18b) and no longer touches `amb` or `shadows=`. It
+used to force `amb=1.0` and silently clear the shadow key — so the log answered `shadows=0`
+while the cfg said 1, and it did not put it back. The picture is unchanged (`sun=off
+shadows=0` is 0 px from the old `sun=off`); what is new is that **`sun=off shadows=1` keeps
+the depth map**. `tagpu_shadow.c`'s `amb >= 1.0f` refusal now only fires on an explicit
+`amb=1`, where the shadow term would be multiplied by `(1 - amb) = 0` anyway. `tagpu.log` says `shadow: GL ready (GL_VERSION 3.3.0 …)` once per context,
 `shadow: frame zoom=… res=… k=… texel=…` whenever the lattice changes (zoom), and one
 `shadow: caster model=… top=… gnd=… sv=…` line per caster position seen (16 at most) — the
 numbers the length rule used. **`tacli arm <i> shadowdump.on`** writes the map once as
 `tagpu_shadow.pgm` and removes itself (`shadow: dumped …` carries the matrix). **A shadow A/B
 against the lab needs the pointer parked off the units**: `scenario load`'s `center_on` leaves
 it ON the anchor, the engine draws its crosshair there, and those pixels are identical in an
-on/off pair, so `tacli keys <i> mouse:200,700` first. **The engine's own Shadows toggle is the
+on/off pair, so `tacli keys <i> mouse:200,700` first. **The parked cursor is still an
+animating sprite**, so it differs between two *launches* even when nothing else does —
+exclude its rect (~26×36 around where you parked it) from any cross-build diff, or you will
+chase a constant ~110 px that is not yours.
+
+**On any fixture with an animating unit, pause the sim before shooting.** `shadow-lab`'s mex
+spinners, the wind generator's blades and a commander's idle put 3000–4000 px of noise
+between two shots one second apart, and the phase differs per launch, so cross-launch
+diffing is meaningless there. `tacli keys <i> tab` opens `ARMOPT`, which pauses the sim and
+sits in the side-panel rect, leaving the world viewport untouched — the noise floor goes to
+**0 px**. Take every state of the A/B inside that one paused run. **The engine's own Shadows toggle is the
 parity oracle for a Classic shadow**: `tacli keys <i> tab`, `ui <i> click PREFS`, `ui <i> click
 VISUALS`, `ui <i> set BSHADOWS 0` (or `1`), `ui <i> click PREV`, `ui <i> click OK`. It clears and
 sets BOTH option bits (`main+0x37F06` reads `0x3F` on, `0x23` off) — **read the word back with
@@ -785,7 +897,12 @@ engine draws the sprites, identical in both): every pixel whose 16-px cell has z
 at all four corners must be byte-identical — 0 of 162,828 on the parity fixture — while the
 sloped ones move. `sun=off` also draws the units without their LUT row (the lab's meaning of
 "no sun"), so it is not a Classic frame: compare it to a Classic++ shot of the previous DLL,
-not to Classic.
+not to Classic. **Since G18b the level-ground rule holds under a shadow too** — a level
+cell's own normal is the one `light=0`/`sun=off` substitutes, so a shadowed level cell is
+identical in the lit and the flat lane (300 026 level pixels, 558 of them shadowed, on the
+parity fixture). The old `sun=off` put the shadows out, so the pair could not show it. **`assets=0 light=0` is the one Classic++ state that IS a Classic frame** —
+with `shadows=0` too it lands within 594 px of a `classicpp.on`-removed shot on
+`tascene-parity`, all of them on one unit (the LUT row above).
 `tools/tascene restorediff <pack> <the .rgba>` holds the terrain to a pack built with `--undither`
 of the same map (max 1 level on < 0.01 % of bytes is the bar; Two Continents measures 0.0012 %),
 and `tools/tascene featdiff <pack> <gamedir>/tagpu_restore_feat` the feature twin (the far band
@@ -808,6 +925,12 @@ WINEPREFIX=<inst>/prefix wine reg add \
   /v damagebars /t REG_DWORD /d 1 /f
 ```
 
+**`<pass>.off` does nothing while `<pass>.on` exists.** The precedence is the one
+`tagpu_opt.c` documents — an `.on` wins, tokens and all; an `.off` only turns off a pass that
+was on *by default*. So on an instance where you armed `classicpp.on` by hand, `arm <i>
+classicpp.off` is inert and the shot you take after it is still Classic++. Remove the arm
+instead: `tacli arm <i> classicpp.on=off`.
+
 **Deliberately NOT in the set**, so that "everything" stays a decision and not a sweep:
 
 - `scaffold.on` — superseded by `feat.on` (features write real depth now) and its debug
@@ -821,10 +944,20 @@ WINEPREFIX=<inst>/prefix wine reg add \
   Arming everything means leaving all of them absent.
 - **`reclaim.off` disables a crash fix, not a feature** (G14h): `tagpu_reclaim` defers the
   engine's model-object frees so the render thread cannot read a freed unit or wreck — the
-  `200v200` fault at ~95 s. It is on by default with no arm file; `tacli arm <i> reclaim.off`
-  is the A/B lever back to the racing build. Read `reclaim: ARMED …` at launch and the
-  `reclaim: def=… drn=… ovf=0 …` line every 300 frames (`ovf` must stay 0); a level change logs
-  `reclaim: level teardown: flushed N …`.
+  `200v200` fault at ~95 s — and since 2026-09-09 the per-LEVEL model templates too, so a
+  level teardown cannot pull a model tree out from under a render pass. It is on by default with
+  no arm file; `tacli arm <i> reclaim.off` is the A/B lever back to the racing build. Read
+  `reclaim: ARMED …` at launch — it names `model templates@0x42DC01/0x42DCB6 -> deferred` when
+  that half armed — and the `reclaim: def=… drn=… ovf=0 … tmpl=<queued>/<freed by the
+  epoch>/<leaked> …` line every 300 frames. **`ovf` and the third `tmpl` field must stay 0**; the
+  second is normally 0 too, because the usual path releases templates at the teardown rather than
+  through the epoch. A level change logs `reclaim: level teardown: flushed N …` and then
+  `reclaim: teardown post: freed N block(s) …` (~279 on stock content, one per unit type plus the
+  table), and `native: level N -> N+1, dropping the template caches: aabb= selbox= pmap=`.
+  **Quitting a level to the shell and starting another one in the same process works** — measured
+  2026-09-09 over two cycles under the play defaults; the `tab` → `ui click EXIT` →
+  `ui click MAINMENU` → `ui click CHOICE1` route is how you do it, and it is the only way to
+  exercise the level generation at all.
 - The instrumentation triggers (`suppress.on`, `tracer.on`, `gldbg.on`, `posedump.on`,
   `cobtrace.on`, `spxlog.on`, `fpsosd.on`) — debugging, not features.
 - `hires.on` only carries the hires renderer's *tweaks* (`anchor=`, sun, ambient,
@@ -1257,22 +1390,29 @@ tools/tacli log <i> -g 'gui: twins='   # heartbeat per 300 frames: twins= seeds=
   is dead or crawling — G15d), `skipped=` the stale ops the render thread stepped over after a
   context change. `palchg=` counts palette uploads (a fade is a run of them; a switch costs a
   few) and `paldiff=n@i` the entries where the presented palette differs from `main+0x143A7`
-  and the first of them: **235 on a stock instance, in the shell and in game alike** (the
-  live `Gamma`, below); 255 after `+gamma 15`, 0 after `+gamma 10`. In the
+  and the first of them: **whatever the live `Gamma` makes it, not a property of an instance**
+  (below) — 235 at factor 1.125 and 0 at 1.0, in the shell and in game alike; 255 after
+  `+gamma 15`, 0 after `+gamma 10`. In the
   shell exactly one entry, index 9, differs *beyond* the gamma scale.
 - **The presented palette is not `main+0x143A7`**: the engine scales every palette it sets by
-  the Gamma option on the way to DirectDraw (`SetGamma 0x4BA590`, `0.5 + Gamma/24`; 1.0 at the
-  engine's own default of 12. **`Gamma` is one shared, mutable value, not a property of the
-  template**: `wineprefix/user.reg` and all 58 instance prefixes are the same inode and wine
-  rewrites it at launch, so it is whatever TA last stored — 15 (factor 1.125, `paldiff=235`) and
-  12 (factor 1.0, `paldiff=0`) have both been read on the same day. MEASURED 2026-09-09) and never scales its table. The scale
-  **truncates**. **`+gamma N` typed in chat sets the factor to N/10 at
-  once** (`+gamma 15`, `+gamma 10` back) with no cheat bit, and is the lever that makes the two
-  differ in a skirmish; the UI layer follows the presented palette (cnc-ddraw's, also what
-  `tacli shot`'s PNG carries), the world passes read `+0x143A7` and go wrong by the factor —
-  which, since the factor here is never 1.0, means **the world is ~11 % darker than the engine
-  presents its own pixels on every instance in this project** (14 896 of a 17 049-px Classic
-  viewport sample are exact `palette.pal` colours, 244 presented ones; the two share 8 of 256).
+  the Gamma factor on the way to DirectDraw (`SetGamma 0x4BA590`) and never scales its table.
+  The scale **truncates**. **The factor has two formulas**: an option screen applies
+  `0.5 + Gamma/24` (1.0 at the engine's own default of 12), while **`+gamma N` typed in chat sets
+  it to `N/10` outright** (`+gamma 15` → 1.5, `+gamma 10` → 1.0) with no cheat bit — the lever
+  that makes the two palettes differ in a skirmish. **`Gamma` is one shared, mutable value, not a
+  property of the template**: `wineprefix/user.reg` and all 58 instance prefixes are the same
+  inode and wine rewrites it in place at launch, so it is whatever TA last stored — 15 (factor
+  1.125, `paldiff=235`) and 12 (factor 1.0, `paldiff=0`) have both been read on the same day
+  (MEASURED 2026-09-09). **Read it, never assume it.** **Since 2026-09-09 everything we draw
+  follows the presented palette**, the world included (`tagpu_pal.c`, gpu-status §2.3f);
+  `tagpu.log`'s `pal: presented palette changed (… gamma=…)` line is where to read the live
+  factor, and `tacli peek <i> '*0x511DE8+0x37F08:4'` gives the *option*, which after a `+gamma`
+  no longer implies the factor.
+- **Type a chat line slowly, and check it before you send it.** `keys return`, the `char:`
+  tokens, `keys return` back to back drops the opening `return` often enough to matter: the run
+  then types the cheat into the game as hotkeys and nothing happens, silently. A second of sleep
+  between the three, and a `glshot` of the bottom strip to read the chat field back, is the
+  difference between measuring and guessing (2026-09-09).
 - **The cycles (G15d): `--cycles N`** runs, after the in-game stops, N times game → shell → game
   in the same process: `park`, Tab, `EXIT`, `MAINMENU`, `CHOICE1` (the return: the game freed,
   640×480 restored, a new GL context), `ui wait --gui MAINMENU`, the whole shell inventory

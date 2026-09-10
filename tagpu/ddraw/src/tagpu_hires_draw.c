@@ -59,6 +59,7 @@
 #include <math.h>
 #include "opengl_utils.h"
 #include "tagpu_hires.h"
+#include "tagpu_pal.h"
 #include "tagpu_hires_draw.h"
 #include "tagpu_glsl.h"
 
@@ -160,6 +161,7 @@ static const char* FS =
     "uniform int uDepthPass;\n"               /* 1: depth only, after the cutout */
     "uniform int uShadow;\n"
     "uniform float uAlpha;\n"
+    "uniform float uGamma;\n"                 /* the engine's palette scale   */
     "uniform float uWaterT;\n"
     "uniform int uWaterMode;\n"
     "uniform float uDigT;\n"
@@ -249,7 +251,12 @@ static const char* FS =
     "    if (uWaterMode == 1) discard;\n"
     "    rgb = rgb * 0.5 + vec3(0.0, 0.0, 50.0/255.0);\n"
     "  }\n"
-    "  frag = vec4(clamp(rgb, 0.0, 1.0) * uAlpha, uAlpha);\n"
+    /* A replacement mesh is the one thing on screen whose colour never came
+       from a palette, so resolving through the presented one cannot reach it:
+       apply the engine's own scale here instead, the same min(255, c*gamma)
+       0x4BA200 applies to every palette entry (tagpu_pal.h). 1.0 at the
+       default Gamma, where this is the identity. */
+    "  frag = vec4(clamp(rgb * uGamma, 0.0, 1.0) * uAlpha, uAlpha);\n"
     "}\n";
 
 typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum, GLint, GLsizei);
@@ -268,7 +275,7 @@ static GLuint s_prog;
 static GLint  u_game, u_offset, u_zoom, u_zoomC, u_depthScale, u_anchor, u_yawEnc;
 static GLint  u_piece;
 static GLint  u_hasNrm, u_base, u_mr, u_cutoff, u_shadow, u_alpha, u_slant;
-static GLint  u_waterT, u_waterMode, u_digT, u_light, u_view, u_sunAmb;
+static GLint  u_waterT, u_waterMode, u_digT, u_light, u_view, u_sunAmb, u_gamma;
 static GLint  u_anchorMix, u_shade, u_fog, u_fogOrg, u_fogDim;
 static GLint  u_scafOn, u_scafP, u_ss, u_zoomF, u_zoomCF;
 static GLint  u_depthPass, u_shadowMat, u_cast;    /* the depth pass (G14i) */
@@ -351,6 +358,7 @@ static void ensure(void)
     u_digT = U("uDigT");        u_light = U("uLight");
     u_view = U("uView");        u_sunAmb = U("uSunAmb");
     u_anchorMix = U("uAnchorMix");  u_shade = U("uShade");
+    u_gamma = U("uGamma");
     u_fog = U("uFog");          u_fogOrg = U("uFogOrg");
     u_fogDim = U("uFogDim");    u_scafOn = U("uScafOn");
     u_scafP = U("uScafP");      u_ss = U("uSS");
@@ -463,6 +471,7 @@ void tagpu_hires_draw(const TAGPU_HVIEW* v, const TAGPU_HUNIT* u, int n,
     glUniform3fv(u_light, 1, SH_L);
     glUniform3fv(u_view, 1, SH_V);
     glUniform1i(u_shadow, shadowPass ? 1 : 0);
+    glUniform1f(u_gamma, tagpu_pal_gamma());
     {
         float sa[2]; sa[0] = s_sun; sa[1] = s_amb;
         glUniform2fv(u_sunAmb, 1, sa);

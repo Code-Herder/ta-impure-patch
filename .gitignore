@@ -25,6 +25,9 @@
 /dist/
 /build/
 
+# throwaway prototypes and scratch work -- never published
+/tmp/
+
 # Build artifacts
 *.o
 *.obj

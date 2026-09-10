@@ -385,7 +385,7 @@ class Instance:
 # --------------------------------------------------------------------------- create
 
 def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=True,
-                   verbose=False, window=None):
+                   verbose=False, window=None, maxfps=60):
     """Symlink-mirror the template gamedir, with instance-private config files."""
     inst.gamedir.mkdir(parents=True, exist_ok=True)
     (inst.gamedir / "Screenshots").mkdir(exist_ok=True)
@@ -423,7 +423,7 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
     if not (exe_dst.exists() or exe_dst.is_symlink()):
         exe_dst.symlink_to(exe_src)
 
-    write_ddraw_ini(inst, tile, window)
+    write_ddraw_ini(inst, tile, window, maxfps=maxfps)
     write_totala_ini(inst, sound)
     # Never steal the human's pointer: the game snaps and fences the real cursor on
     # activation otherwise (fork honours this trigger, see mouse.c).
@@ -487,13 +487,25 @@ def write_title(inst: Instance, label: str) -> str:
     return f"{BASE_TITLE} - {label}"
 
 
-def write_ddraw_ini(inst: Instance, tile, window=None):
-    """The fork's own config. `window` is the CLIENT size when it must differ from
-    the game's resolution: cnc-ddraw takes `width`/`height` as the client and
-    letterboxes the engine's screen into it (`dd.c` render.width = window_rect,
-    then max'd with the game mode), so this is the one knob that produces
-    k != 1 without an engine patch — which is what phase 2's kill rule has to
-    be measured at (gui-renderer.md 13.1, 13.9)."""
+def write_ddraw_ini(inst: Instance, tile, window=None, maxfps=60):
+    """The fork's own config.
+
+    `window` is the CLIENT size when it must differ from the game's resolution:
+    cnc-ddraw takes `width`/`height` as the client and letterboxes the engine's
+    screen into it (`dd.c` render.width = window_rect, then max'd with the game
+    mode), so this is the one knob that produces k != 1 without an engine patch
+    — which is what phase 2's kill rule has to be measured at (gui-renderer.md
+    13.1, 13.9).
+
+    `maxfps` is the fork's frame cap. **0 is the unlimited setting**, not -1:
+    `fpsl_init` maps a NEGATIVE value onto the display refresh (60) and only 0
+    falls through every branch with `tick_length` left at 0. The DLL reads it at
+    attach. This function does NOT run on every launch: `tacli launch <inst>`
+    with no --maxfps/--res/--window and an on-screen tile writes nothing, so a
+    hand-edited ddraw.ini survives such a launch. Passing --maxfps explicitly
+    always rewrites it, which is the way to be sure of the value. Two
+    paths that both hold 60 fps have not been compared, they have both hit the
+    cap: a frame-time A/B needs `--maxfps 0` on BOTH sides."""
     x, y = tile
     win = ""
     if window:
@@ -506,7 +518,7 @@ def write_ddraw_ini(inst: Instance, tile, window=None):
         "fullscreen=false\n"   # true here means borderless fullscreen, not a window
         "maintas=true\n"
         "vsync=false\n"
-        "maxfps=60\n"
+        f"maxfps={int(maxfps)}\n"
         "adjmouse=true\n"
         "border=true\n"
         "savesettings=0\n"
@@ -845,12 +857,14 @@ def _create(inst: Instance, args) -> dict:
     tile = tile_for(index, client_box(res, window), screen=screen_size(display))
     shield = args.shield is not False
     clone_prefix(inst)
+    maxfps = 60 if getattr(args, "maxfps", None) is None else args.maxfps
     mirror_gamedir(inst, intro=args.intro, sound=args.sound, res=res, tile=tile,
-                   shield=shield, window=window)
+                   shield=shield, window=window, maxfps=maxfps)
     meta = {
         "name": args.name,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "res": list(res),
+        "maxfps": maxfps,
         "window": list(window) if window else None,
         "slot": index,
         "tile": list(tile),
@@ -1044,13 +1058,23 @@ def _launch(args) -> dict:
     if getattr(args, "window", None) is not None:
         meta["window"] = list(args.window)
     win = tuple(meta["window"]) if meta.get("window") else None
+    # An EXPLICIT --maxfps always rewrites the file, even when the meta already
+    # agrees: the ini is what the DLL reads, it can drift from the meta (a hand
+    # edit, a copied gamedir), and this knob exists for frame-time A/Bs where a
+    # silent fall back to the 60 cap is exactly the measurement error it was
+    # added to remove. Only a CHANGE is worth persisting to the meta.
+    if getattr(args, "maxfps", None) is not None:
+        if args.maxfps != meta.get("maxfps", 60):
+            meta["maxfps"] = args.maxfps
+            inst.save_meta(meta)
+        write_ddraw_ini(inst, tuple(meta["tile"]), win, maxfps=meta["maxfps"])
     if args.res or getattr(args, "window", None) is not None:
         if args.res:
             meta["res"] = list(args.res)
         meta["tile"] = list(tile_for(meta.get("slot", 0),
                                      client_box(meta["res"], win), screen=screen))
         inst.save_meta(meta)
-        write_ddraw_ini(inst, meta["tile"], win)
+        write_ddraw_ini(inst, meta["tile"], win, maxfps=meta.get("maxfps", 60))
     # Self-heal a tile recorded against a different (or wrongly assumed) desktop:
     # an off-screen window is a silently broken `glshot`, so never open one there.
     res = tuple(meta.get("res") or DEFAULT_RES)
@@ -1058,7 +1082,7 @@ def _launch(args) -> dict:
     if not tile_is_onscreen(tuple(meta.get("tile") or (0, 0)), box, screen=screen):
         meta["tile"] = list(tile_for(meta.get("slot", 0), box, screen=screen))
         inst.save_meta(meta)
-        write_ddraw_ini(inst, meta["tile"], win)
+        write_ddraw_ini(inst, meta["tile"], win, maxfps=meta.get("maxfps", 60))
     if args.sound is not None:
         meta["sound"] = args.sound
     if args.unit_limit is not None:
@@ -4145,6 +4169,7 @@ def cmd_scenario_load(args):
     los = args.los
     launched = _launch(argparse.Namespace(
         name=args.name, json=True, force=False, res=res, map=wanted_map,
+        maxfps=args.maxfps,
         unit_limit=limit, player=_scn_player_flags(setup) or None,
         display=args.display, slot=None, sound=None, intro=False, shield=None,
         dplay=None, free_dplay_port=False, title=None,
@@ -4303,6 +4328,12 @@ def build_parser():
         add_common(sp)
         sp.add_argument("--res", type=res_type, default=default_res,
                         help="game resolution, e.g. 1024x768")
+        sp.add_argument("--maxfps", type=int, default=None,
+                        help="frame cap written into the instance's ddraw.ini; "
+                             "0 is UNLIMITED (a negative value means the display "
+                             "refresh, not uncapped). Sticky per instance, like "
+                             "--res. Needed for any frame-time A/B: at the default "
+                             "60 both sides read 60 because both hit the cap")
         sp.add_argument("--window", type=res_type, default=None,
                         help="window CLIENT size, when it must differ from --res: the engine keeps "
                              "its own screen and the fork letterboxes it into this, so k = window/res "
@@ -4623,6 +4654,9 @@ def build_parser():
     # Launch options the file may also carry. Explicit flags win, so a scenario
     # re-runs at another resolution, or on another map, without being edited.
     scd.add_argument("--res", type=res_type, help="override setup.res")
+    scd.add_argument("--maxfps", type=int, default=None,
+                     help="frame cap for the launch; 0 is UNLIMITED. Sticky per "
+                          "instance — omit it to keep what the instance has")
     scd.add_argument("--map", help="override setup.map")
     scd.add_argument("--unit-limit", dest="unit_limit", type=int,
                      help="override setup.unit_limit")

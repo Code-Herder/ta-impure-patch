@@ -1,0 +1,24 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Gate C (keepalive: a slot owning nothing is a defeat, so CORE keeps one unit far outside the camera band; shootall is off so it never fights): one ARMCOM walking north/south under a static camera at 2x, the pose race's flicker regression (gpu-posing.md §4 step 7)",
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1920x1080",
+    "clear_existing": true,
+    "switches": {"shootall": false, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "units": [
+    { "id": "walker", "type": "ARMCOM", "owner": 0, "pos": [2700, 1200], "facing": 180 },
+
+    { "id": "keepalive", "type": "CORCOM", "owner": 1, "pos": [4200, 2200], "facing": 0 }
+  ],
+
+  "camera": { "at": [1818, 850], "pin": true }
+}

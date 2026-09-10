@@ -2099,6 +2099,28 @@ variants, `0x20` skip the snapshot, `0x100/0x1000` recentre. Observed callers: `
 `GUI_Pop 0x4A968E`, `push 1` in `TA_DialogBox_fn 0x4ABD90` (`0x4AC01B`, `0x4AC198`),
 `esi|0x40` at `0x494210` (the in-game panel loader). 76 sites, **none in DrawGameScreen**.
 
+**The two rect sentinels, and why a hand-placed `xpos` is written BEFORE the build call**
+[VERIFIED 2026-09-09, Phase F G18, disassembly of the pristine build]. `0x4A820C` opens with
+`or eax,0xffffffff`, so `eax` is **−1** for the whole function, and `0x4A8224` sets `esi` to
+**−2**. Two flag pairs *stamp* a sentinel into the panel record before anything is drawn, and
+then the record is *read* twice:
+
+| at | condition | effect |
+|---|---|---|
+| `0x4A820F`–`0x4A821D` | `(flags & 0x100) && (flags & 0x1)` | writes −1 into `ypos` (`+0x15`) and `xpos` (`+0x13`) |
+| `0x4A8221`–`0x4A8234` | `(flags & 0x1000) && (flags & 0x1)` | writes −2 into the same two |
+| `0x4A8238` | `xpos == −1` | centre on the whole screen: `xpos = (W − w) / 2`, `ypos = (H − h) / 2` |
+| `0x4A8266` | `xpos == −2` | centre in the play area: `xpos = ((W − 128 − w) / 2) + 128` (`0x4A8275` loads `0xFFFFFF80`), `ypos` as above |
+
+`w` is `+0x17` and `h` is `+0x19`. `W` and `H` come from `0x4B6700` and `0x4B6710`, each a
+two-instruction getter returning `[[0x51FBD0]+0xD4]` and `[[0x51FBD0]+0xD8]`. The 128 is the
+in-game side panel's width, which is what makes −2 the *in-game* centring rule and −1 the
+front-end one. **Both branches write the result back into the record**, so this is not a
+read-only convenience: a screen positioned by hand must carry neither sentinel. `tagpu_menu.c`
+sets `xpos` to `W − 16 − 304` and passes `flags = 0x21`, which trips neither pair
+(`0x21 & 0x100 == 0`, `0x21 & 0x1000 == 0`) and equals neither −1 nor −2 — and it writes that
+`xpos` **before** this call, because the build consumes the rect on the way through.
+
 **The build sequence (`0x4A905E..0x4A9135`, read 2026-09-07):**
 
 ```
@@ -2139,6 +2161,17 @@ set, `0x4C14F0(ctx, s, x, y, -1)`; else per character `0x4B7F30([[0x51FBA4]+0x14
 glyph blits, and `0x4CCF60` is only reached through `DrawTextCustomFont 0x4C14F0`** (its two
 callers `0x4C16D4`, `0x4C1744`); MEASURED, in-game option screens still take that path for some
 labels (`text 1572` ops on `PREFS.GUI`).
+
+**The GUI font is registered by `0x4AEDD0(GUIInfo* gi, const char* name, int slot)`**
+[VERIFIED 2026-09-09]. An `E8` scan of `.text` finds exactly **two** call sites, both in the
+in-game GUI init and both passing `main+0x519`: `0x491564` with `"hattfont12"` (`0x509250`)
+and slot 0, `0x49157D` with `"hattfont11"` (`0x509244`) and slot 1. It copies the name into a
+256-byte **prefix** it READS from `gi+0xAB6` through `0x4E4760` (the name is composed, not
+stored there), loads the result with the GAF loader `0x4B8C60` after `0x4BBC40` opens it, and
+stores the resulting bank at **`gi + 0x08 + slot*4`** (`0x4AEE5F`: `mov [ebp+ecx*4+0x8],eax`) —
+which is why `slot` is the third argument. Glyphs then come out of it through `GetGlyph
+0x4B7F30`. Those two GAFs are the faces every gadget label and caption is drawn with — one entry, 256 frames, one per character code, the per-frame
+`ypos` hotspot being the baseline (`tools/guifont.py`).
 
 **How a screen reaches the frame: `0x4AB0B0(GUIMEMSTRUCT*, OFFSCREEN* dst, RECT* dirty)`** —
 `stdcall`, `ret 0xC`, prologue `83 EC 10 57 8B 7C 24 18` (8): recurses bottom-to-top over
@@ -2204,7 +2237,7 @@ call order, with each gate (`ebx` is the function's `drawUnits` argument):
 | `0x469FCB` `DrawChatText 0x464060` | `ebx` | the chat lines |
 | `0x469FD5..0x46A102` | `[main+0x3923B] & 2` and `ebx` | the debug line: `"FRATE: %d"`, `"%.1f"`, `"MODE %s INFO %s"` with `NORMAL`/`DEBUG` and `[Release]` (`0x507828..0x50781C`, `0x5077FC`, `0x50780C..0x507814`, `0x502558/0x50255C`) at x `0x83`, `0xBC`, `0x1EE`, plus a fourth string from `0x415FA0` under `[main+0x2A44] & 1`. **Negative result**: bit 1 of `main+0x3923B` is flipped only at `0x49631B`, behind `main+0x37F2F` bit 1 (`0x4962F8..0x496303`), the engine's debug mode (set at `0x417009`, `0x430E68`); it is cleared at game entry (`0x49128E`) and no cheat in the NORMAL table sets it — not reachable in play, not exercised |
 | `0x46A107..0x46A1CB` | `[main+0x38A51] & 1` → the GAF `main+0x1481B` frame 0 at (`[esp+0xAC]`, `[esp+0xB0]`); else, unless the local player's `[player+0x9B] & 0x40`, `main+0x3923B` bit 5 → `main+0x14813`, bit 6 → `main+0x14817` | status icons [INFERRED: pause/speed indicators]; not exercised |
-| **`0x46A1D0..0x46A2A3`** | **`main+0x37F2F` bit 6 — the `+clock` cheat** (handler `0x417300`: the bit flipped, then `0x430F00`) | the sim tick `main+0x38A47` split into h:m:s (÷108 000, ÷1 800, ÷30 — 30 ticks a second), `"%s : %02d:%02d:%02d"` (`0x507794`) with `"Game Time"` (`0x504910`, through `0x4C5740` [INFERRED: the string table]); `DrawTextCustomFont 0x4C14F0` at x `0x82`, y `[gfx+0xD8]` (`0x4B6710` [INFERRED: the primary's height]) `− 0x22 −` the font height (`0x4C1450`): the viewport's bottom-left, just above the bottom bar. **The seconds tick between two shots** — the walk measures it with the in-game menu open, which pauses the sim and the clock with it |
+| **`0x46A1D0..0x46A2A3`** | **`main+0x37F2F` bit 6 — the `+clock` cheat** (handler `0x417300`: the bit flipped, then `0x430F00`) | the sim tick `main+0x38A47` split into h:m:s (÷108 000, ÷1 800, ÷30 — 30 ticks a second), `"%s : %02d:%02d:%02d"` (`0x507794`) with `"Game Time"` (`0x504910`, through `0x4C5740` [INFERRED: the string table]); `DrawTextCustomFont 0x4C14F0` at x `0x82`, y `[gfx+0xD8]` (`0x4B6710` [INFERRED: the primary's height]) `− 0x22 −` the font height (`0x4C1450`): the viewport's bottom-left, just above the bottom bar. **The seconds tick between two shots** — the walk measures it with the in-game menu open, which pauses the sim and the clock with it **in single player** (the pause is a separate flagged action, not a property of the push -- see *The screen lifecycle* below; a network game cannot be paused unilaterally) |
 | `0x46A2A8` | `[main+0x38A51] & 2` | the GAF `main+0x148CF` frame 0 at (`screenW − 0x10`, `screenH − 0x50`); not exercised |
 | `0x46A2E7`, `0x46A303` | — | clip reset `0x4C69C0`, then the retained GUI blit `0x4AB170` |
 | `0x46A308..0x46A3B8` | `[main+0x38DD5]` and `ebx` | the nine profiler bars `0x46B900` |
@@ -2245,7 +2278,7 @@ box=(0,4)-(639,479) ops_on_it=0` — the item already open above; and a 128×352
 
 **`ARMOPT.GUI` is not over the viewport.** Its `[COMMON]` record is `xpos=0 ypos=128 width=128
 height=352` — the side panel's own rect; the in-game menu *replaces* the build panel. Opening it
-pauses the game and draws `PAUSED` in the middle of the world (the 2 621–2 938 non-key viewport
+pauses the game **in single player** and draws `PAUSED` -- the GAF entry `igpaused`, not text -- in the middle of the world (the 2 621–2 938 non-key viewport
 pixels the walk counts on that stop). The screens that do lie over the world are `PREFS.GUI` and
 `VISUALRT.GUI` (~55 000 px each at 1024×768), the F4 / SPACE box (~21 000), the chat (~800), the
 clock and the `+bps` lines.
@@ -2388,6 +2421,326 @@ because the shell frees a popped screen's art and the heap hands the same addres
 next screen's (the 2026-09-07 review). `0x4CCF60`'s `'\n'` stop (`cmp al,0xA; je 0x4CD008` at
 `0x4CCFA0`) is honoured by the glyph observer's width since the same review.
 
+### The screen lifecycle: loading, pushing, keeping on top [VERIFIED 2026-09-09, Phase F G18]
+
+*Read with `i686-w64-mingw32-objdump -d -M intel` on `pristine/TotalA.exe.pristine`. This
+section exists because [renderers](renderers.html) §2.10 needed to know whether a **new**
+`.GUI` name can be pushed at all. It can.*
+
+**`GUI_Load 0x4AA8F0(GUIInfo* gi, const char* name, int flags)` — `__stdcall`, `ret 0xC`,
+returns the new `GUIMEMSTRUCT*` in `eax`.** Arguments proven from the frame: after
+`sub esp,0x21c` and four pushes, `[esp+0x230]`, `[esp+0x234]` and `[esp+0x238]` are args 1-3;
+arg 1 is dereferenced at `+0x18` (`TheActive_GUIMEM`) at `0x4AA917`, and arg 2 is `strlen`ed
+(`repnz scas`, `0x4AA9B4`) and concatenated.
+
+- **The name becomes a FILE PATH, so the exe's screen-name string table is never consulted.**
+  `0x4AA99A` copies a 0x100-byte prefix from **`gi+0x9B6`**; the name is appended; `0x4AA9FB`
+  pushes **`0x502828` = `"GUI"`** into the extension-setter `0x4BAFF0`; `0x4AAA10` calls
+  `0x4BBC40` to open it. Setting the extension is idempotent, which is why the engine's own
+  callers pass a name that already ends `.GUI`. **A name we invent is loaded if the file
+  exists** — our DLL is the call site, and no stock screen has to be sacrificed. *This closes
+  the question both this page's §6 and roadmap G18e recorded as open.*
+- **`flags` bit `0x800`** — before anything else, read the current top screen's panel rect
+  (`+0x13/+0x15/+0x17/+0x19`) and call `0x4BF4D0(panel+0xBC, rect, -0x18)`; then set the top
+  screen's `+0x14` to 1. A save/dirty step, `0x4AA912..0x4AA97C`.
+- **`flags` bit `0x200` suppresses the push** (`0x4AAA26`, `0x4AAC46`).
+- **THE PUSH, `0x4AAC56`** — the writer of `per_active` that was previously unmapped:
+  ```asm
+  4aac43:  mov [edi+0x04],ebp        ; new->ControlsAry = the gadget array
+  4aac4b:  mov [edi+0x1c],0          ; and +0x24, +0x3b cleared
+  4aac54:  jne 0x4aac5e              ; skip the push if flags & 0x200
+  4aac56:  mov edx,[esi+0x18]        ; edx = gi->TheActive_GUIMEM   (the old top)
+  4aac59:  mov [edi],edx             ; new->per_active = old top    (the LIFO link)
+  4aac5b:  mov [esi+0x18],edi        ; gi->TheActive_GUIMEM = new   (the push)
+  ```
+
+**`main+0x37EA0` is the name of the screen the engine KEEPS on top in game**, and it is a
+plain string buffer. `0x497BA4` fills it: `sprintf(main+0x37EA0, "%sMAIN2.GUI", side)`, the
+side being the 562-byte record at `main+0x37F5B` indexed by the player's side byte — so in a
+game it reads `ARMMAIN2.GUI` or `CORMAIN2.GUI`.
+
+**`GUICONTROL_IsOnTop 0x4AB060(gi, name)` is strict — it does NOT walk the stack.** It reads
+`gi->TheActive_GUIMEM` (`+0x18`), then `->ControlsAry` (`+0x04`), adds 2 for the panel's
+`name`, and `strncmp`s 16 bytes through `0x4FAB50`. Only the **topmost** screen can match.
+
+**`UpdateIngameGUI 0x491D70` pops until that is true** — `0x491DCA` tests, `0x491DE0` calls
+`GUI_Pop 0x4A9660`, `0x491DF2` loops. **21 call sites.** So anything pushed over the world is
+popped again unless `main+0x37EA0` names it.
+
+**Two of the 21 are the engine's own visible closes, and both pass 1**: `0x460635`, a `push 1`
+immediately after `call 0x491B60` (the level teardown), and `0x4929E3`, whose `call 0x491D70`
+is at `0x4929EB`. `tagpu_menu.c`'s close copies them — restore `main+0x37EA0`, then **call**
+`0x491D70(1)` rather than wait for one — because all 21 sites are event handlers: left to
+itself a popped screen lingers until the player next does something that changes the GUI stack.
+
+**`0x495207` is the engine's own template for pushing an in-game screen**, and it is the one
+to copy:
+
+```asm
+495207:  lea ecx,[eax+0x37ea0]           ; the expected-screen buffer...
+49520d:  add eax,0x519                   ; gi
+495212:  push ecx                        ; ...passed AS the name
+495213:  push eax
+495214:  call 0x4aa8f0                   ; -> eax = the new GUIMEMSTRUCT
+495219:  mov [eax+0x8],0x494890          ; new->OnCommand   (the caller sets it)
+495226:  mov [eax+0xc],edx               ; new->+0x0C = main   (its context)
+```
+
+i.e. **write the buffer, load that same string, then set `+0x08` and `+0x0C`.** Closing is the
+mirror: restore the buffer and let `UpdateIngameGUI` pop, without calling `GUI_Pop` at all.
+The flags there are **`0x20`**.
+
+**`GUI_Load` STAMPS the name into `ControlsAry[0].name`** [VERIFIED 2026-09-09, G18 gate 1]:
+`0x4AAC98` is `strncpy(ctrls + 2, name, 16)` through `0x4E4760`, on the copy of the *name
+argument* taken at `0x4AA9E2`. That is the field `GUICONTROL_IsOnTop` compares, so **the
+`name=` authored in a `.GUI` file is irrelevant** — which is why `armmain2.gui` says
+`name=HEADER;` on disk and `tacli ui` reads `ARMMAIN2.GUI` live, and why a screen we invent
+only has to be loaded with the same string we leave in `main+0x37EA0`. (`PREFS.GUI`,
+`ARMOPT.GUI` and `MAINMENU.GUI` author their own file name and so agree by accident;
+`ARMMAIN2`, `CORMAIN2`, `ARMCOM1` and `VISUALRT` all say `HEADER`.)
+
+**`flags & 0x400` suppresses GUI_Load's own STAGE 1, not merely a repaint** [MEASURED
+2026-09-09]. `0x4AACB5` tests `bh,0x4` and skips `0x4AACBA..0x4AACCD`, which is
+`0x4C2470(); GUI_StageUpdateDraw(gi, flags | 1); 0x4C2870()` — a counted lock pair around a
+**stage 1** draw, and stage 1 is what builds the panel's own surface. Suppressing it to patch
+a panel's rect first and then asking for a bare `0x40` repaint leaves the panel with **no
+surface**, and the engine composites the frame's own pixels at its rect — the game drawn a
+second time from the panel's x across. The fix is to reproduce the call, not replace it.
+Stage 1 also *reads* the rect: `0x4A820F` and `0x4A8221` show `xpos == -1` and `-2` are
+**centre-me sentinels**, written when `flags & 0x100` / `0x1000` accompany stage 1, so a rect
+we want honoured must be written before stage 1 and not after.
+
+**The path prefixes are runtime state, and there is no such literal in the exe.**
+`0x49FBA0(gi, dir)` sets `gi+0x9B6` and `0x49FBF0(gi, dir)` sets `gi+0xAB6`, each
+`strncpy(dst, dir, 0x100)` then `strcat(dst, "\\")` (`0x503374`). `UIPipelinesInit` calls them
+once at `0x4914CE` and `0x4914E5` with `0x502820 = "guis"` and `0x502E30 = "anims"`, so the
+two prefixes are `guis\` and `anims\`. [VERIFIED 2026-09-09]
+
+**`UpdateIngameGUI` is NOT called per frame** [MEASURED 2026-09-09]. All 21 call sites are
+transition and teardown handlers — `0x460630` calls the level teardown `0x491B60` first, and
+the `0x499xxx` cluster is the in-game command path — so an observer installed there is entered
+on GUI *events* only. A poll hung off it never runs while the game merely runs.
+**`DrawGameScreen 0x468CF0`** (`tools/ta_symbols.txt`; 4 call sites, all in `0x495C76..0x4969CD`)
+is the per-frame game-thread function, and its entry is before any of the frame's drawing.
+
+**Pausing is NOT a property of the push** [CORRECTS this page's two unqualified claims that
+the in-game menu pauses]. `ARMOPT.GUI` is `xpos=0 ypos=128 width=128 height=352` — the same
+side-panel rect as a build page, pushed the same way — yet the build page leaves the sim
+running (LIVE 2026-09-09: selecting a commander gives `ARMCOM1.GUI`, `under: ARMMAIN2.GUI`,
+with the game running). The pause is a separate action on a flag; the `PAUSED` indicator is
+not text but the GAF entry **`igpaused`** (`0x5035BC`), looked up once at `0x429B66` through
+`0x4B8D40` into `main+0x1481B` beside two siblings at `main+0x14813`/`+0x14817`, and drawn on
+`[main+0x38A51] & 1`. **The pause is single-player only** — a network game cannot be paused
+unilaterally — so the earlier statements need that qualifier.
+
+### The GAF banks a screen can reach [VERIFIED 2026-09-09]
+
+Three different name→bank paths, and only the first is the single common one:
+
+| site | builds | bank stored at |
+|---|---|---|
+| **`0x4AEEE0(gi, name)`** | `<prefix at gi+0xAB6><name>` + ext `"GAF"` (`0x502E38`), opened `0x4BBC40`, loaded `0x4B8C60` | **`gi+0x04`** — `mov [ebx+0x4],eax` at `0x4AEF66` |
+| `0x4A8444`, gated on `test [gadget+0xB4],0x1` | `<prefix><gadget name>` + `"_gadget"` (`0x509970`) + `.GAF` | the **gadget**, `mov [ebp+ebx+0x2b],eax` at `0x4A84C7` |
+| `0x4A8565`, inside the per-`id` dispatch (`jmp [eax*4+0x4A95F4]`, `0x4A84EB`) | `<prefix><name>.GAF` | per gadget |
+
+- **`gi+0x04` holds ONE bank and has exactly ONE call site**: `0x49154E` passes the hardcoded
+  `0x50925C = "commongui"`. This upgrades the [CORPUS] `commongui_GAF` field name to verified.
+  **`0x4AEEE0` leaves the old bank in place if the file is absent** (`je 0x4AEF69` skips the
+  store).
+- **But a screen's gadgets DO load their own GAFs by name**, which is the corollary
+  [renderers](renderers.html) §2.10 previously got wrong. 115 `anims/*_gadget.gaf` ship (all
+  unit build pages) and `armopt.gaf`, `prefs.gaf`, `mainmenu.gaf` exist plain. So **new art
+  reaches the engine as a file it loads itself**, not by surgery on the bank at `gi+0x04`.
+
+### Setting a gadget's state: the engine writes the field [VERIFIED 2026-09-09]
+
+**[CORRECTED 2026-09-09, by the G18 landing review — the earlier claim here was wrong.]** This
+section used to say "no instruction anywhere in `0x49F000..0x4AB000` writes a gadget's
+`status_curnt` (`+0x137`), so the engine never advances a stage button". **It does.** Three
+sites in the GUI code advance it, each an `inc` of `+0x137`:
+
+| at | shape |
+|---|---|
+| `0x4A6EC8` | `mov dl,[ebp+0x137]; inc dl; mov [ebp+0x137],dl`, guarded by `[ebp+0x136] != 0` (the stage count) |
+| `0x4A9DB6` | the same on `ebx` |
+| `0x4AA377` | `dl = [ecx+0x137]; bl = [ecx+0x136]; inc dl; cmp dl,bl; mov [ecx+0x137],dl; jb keep; else store 0` — **inc AND WRAP** against the stage count, then `call 0x4A5F40` to redraw |
+
+The third is the dispatcher's own path and carries the guard that matters:
+**`0x4AA36A` — `test BYTE PTR [ecx+0x13c],0x1`, `jne` past the whole block.** That is why a
+greyed row refuses the click: the engine skips its own advance.
+
+App code writes the field too (`0x47743B`, `0x47746A`, `0x47843D`, `0x478469`, `0x478497`,
+`0x47A4F3`, …), so both do. **What this means for a screen of our own:** the engine advances
+the clicked row *before* `OnCommand` sees it, so a handler that also advances would
+double-advance. `tagpu_menu.c` is correct only because it keeps its own model and re-pushes
+**every** row through `SetStatus` afterwards, which overwrites whatever the engine did — a
+property worth knowing before anyone removes that re-push.
+
+TA's own idiom, at `0x477416`: push a gadget **name**, resolve the record through `0x49FF10`
+(a find-by-name taking `ControlsAry`, sibling of `GUI_FindGadgetByName 0x49FE60`), then
+`mov BYTE PTR [esi+0x137],0` — a **direct field write**.
+
+The setters exist and are thin:
+
+- **`0x4A1080(gi, name, value)`** — the [CORPUS] `GUIGADGET_SetStatus`, now read. Scans
+  `ControlsAry+0x15D` in `0x15B` strides comparing 16 bytes (`0x4E4B50`), then
+  `mov BYTE PTR [ebx+eax*2+0x137],cl` and returns 1. **No clamp, no callback, and no redraw** —
+  it is the direct write plus a name lookup, nothing more.
+- **`0x4A1110(gi, name, value)`** — same scan, but writes the **word** at `+0x138`
+  (`status_init`), sets `gi+0xCCA` and, for a non-zero value, calls `0x4A0340(gi, idx)` —
+  the **radio-group reset**, which walks every other `id 1` gadget sharing the gadget's
+  `assoc` and clears its `status_init`, redrawing each through `GUI_ButtonDraw 0x4A5F40`.
+
+**`gi+0xCCA` is the screen's DEFERRED-REPAINT flag** [VERIFIED 2026-09-09, G18 gate 2 —
+this closes the `[OPEN]` this section and roadmap G18 carried]. About twenty state-changing
+GUI calls set it and there are bare accessors — `0x49FA90(gi)` sets it, `0x49FAB0(gi)` clears
+it, both `ret 4`. There is exactly **one reader**, `0x4AA0AF` inside the GUI pump:
+
+```asm
+4aa0af:  cmp DWORD PTR [ebp+0xcca],1
+4aa0b6:  jne 0x4aa0d2
+4aa0bb:  mov DWORD PTR [ebp+0xcca],0
+4aa0c5:  mov edx,[ecx+0x10]          ; the top screen's own flags
+4aa0c8:  or  edx,0x40
+4aa0cd:  call 0x4a81e0               ; GUI_StageUpdateDraw(gi, flags | 0x40)
+```
+
+So it is **not a precondition of anything**: it is the engine's own way of asking for the
+repaint, and it repaints with the *screen's* flags rather than a bare `0x40`. Setting it and
+letting the pump draw is therefore strictly better than calling `GUI_StageUpdateDraw` by
+hand, and it coalesces several changes into one repaint. A bare `SetStatus` needs only this.
+
+Redrawing is separate either way: `GUI_StageUpdateDraw 0x4A81E0(gi, flags)` with `0x40`.
+
+### Which screen is on top in game, and what owns the top bar [LIVE 2026-09-09]
+
+Measured with `tools/tacli ui` on a 1024×768 skirmish:
+
+```
+nothing selected    gui ARMMAIN2.GUI   under: -
+commander selected  gui ARMCOM1.GUI    under: ARMMAIN2.GUI
+```
+
+**A builder's page covers MAIN2**, which is most of a game. And every in-game screen's panel
+is the *side* panel — `armmain2`, `cormain2`, `armmain`, `armgen` are all `(0,128) 128×352`;
+`tabmenu` alone is `(130,−33) 510×33`. **No GUI screen owns the top bar** (`y 0..31`, full
+width): the engine draws the resource bar itself. Since a gadget's coordinates are
+panel-relative and it is drawn into the panel's own `w×h` surface (`panel+0xBC`), **a gadget
+on the top bar is impossible** — which is why the render-options trigger is drawn and
+hit-tested by the DLL and is not a gadget.
+
+### A screen's own GAF: the PANEL is the loader [VERIFIED 2026-09-09, Phase F G18]
+
+*Read because [renderers](renderers.html) §2.10 needed new panel art to reach the engine as a
+file it loads itself. It does — but not through the `id=12` gadget that names the frame.*
+
+`GUI_StageUpdateDraw`'s per-gadget dispatch is `cmp eax,0xD; ja …; jmp [eax*4+0x4A95F4]` at
+`0x4A84E2`, indexed by **`id` directly** (unlike the *draw* dispatcher at `0x4A962C`, which is
+indexed by `id-1`). The table:
+
+| `id` | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| → | **`4A84F2`** | `4A8B4B` | `4A8A16` | `4A899F` | `4A8663` | `4A900C` | `4A9045` | `4A8EF3` | `4A8FA0` | `4A9045` | `4A9045` | **`4A84F2`** | `4A8ACA` | `4A8FEA` |
+
+**Only `id 0` (the panel) and `id 11` (picture) reach `0x4A84F2`**, the branch that builds
+`<prefix at gi+0xAB6><gadget name>` + `"GAF"` (`0x502E38`), opens it with `0x4BBC40` and loads
+it with `0x4B8C60` into the **gadget's own `+0xC0`** — and only when `+0xC0` is still NULL.
+`id 12` goes to `0x4A8ACA` and looks its frame up in a bank it did not load.
+
+**So the panel is the loader, and its name is the one `GUI_Load` stamped** — the screen name —
+which the extension setter turns into `anims\<screen>.GAF`. An `id=12` gadget then names a
+frame in that bank, falling back to the shared `commongui` bank at `gi+0x04`.
+
+The stock corpus says exactly this, and it is what makes the rule safe to build on:
+
+| screen | its `id=12` | `anims/<screen>.gaf` holds | so the frame comes from |
+|---|---|---|---|
+| `ARMOPT.GUI` | `OPTBG` | `OPTBG` | its own file |
+| `PREFS.GUI` | `IGOPT` | `PREFSBG` | `commongui` (`IGOPT` is not in prefs.gaf) |
+| `VISUALRT.GUI` | `VISUALSRT` | *the file does not exist* | `commongui` |
+| `MAINMENU.GUI` | *none* | `Credits` | the frameless logo button |
+
+A screen's own GAF is therefore **optional**, and this also explains `armopt.gaf`,
+`prefs.gaf` and `mainmenu.gaf` existing plain beside the 115 `*_gadget.gaf`.
+
+**Live consequence, measured:** an archive carrying `anims/renderdd.gaf` for a screen called
+`RENDER.GUI` was never opened and the panel kept the engine's dialog composite; the same
+bytes at `anims/render.gaf` load.
+
+**`0x4B8D40(bank, name)` is the by-name entry lookup**, and it gives the bank's layout:
+
+```asm
+4b8d4e:  lea esi,[ebx+0xc]          ; bank+0x0C = GAFENTRY*[] , stride 4
+4b8d51:  cmp WORD PTR [ebx+0x4],di  ; bank+0x04 = i16 entry count
+4b8d5b:  mov eax,[esi]              ; the entry pointer...
+4b8d5e:  add eax,0x8                ; ...+0x08 is its name  (tagpu_gaf.h TAGPU_SQ_NAME)
+4b8d62:  call 0x4f8a70              ; string compare, 0 on match
+```
+
+`stdcall`, `ret 8`, returns the entry or NULL. `0x429B66` uses it for `igpaused`.
+
+**`CopyGafToContext 0x4B7F90(ctx, frame, x, y)` takes `ctx = NULL` as the back buffer**
+(`0x4B7FA5` → `0x4C5E70`), so a frame built in memory can be blitted into the buffer every
+flip presents without knowing the surface layout at all. `0x46A308` — inside `DrawGameScreen`
+immediately after its own GUI draw at `0x46A303` and before the flip — is where the G18
+trigger uses it.
+
+### A world click REBUILDS the in-game GUI stack [MEASURED 2026-09-09, Phase F G18]
+
+With a screen of ours pushed over the world and `main+0x37EA0` naming it, a single left click
+left the top `GUIMEMSTRUCT` a **freshly allocated `ARMMAIN2.GUI` whose `per_active` is NULL**:
+our screen and the `ARMMAIN2` beneath it were both freed and the in-game screen was loaded
+again from scratch. The expected-screen buffer still read `RENDER.GUI` throughout, so this is
+not `UpdateIngameGUI` popping — it is the engine rebuilding the stack on its own account
+(the selection path; a panel over the world takes its own clicks through it too).
+
+**Consequences for anything living over the world:** the screen must be re-pushed rather than
+assumed to persist, and whatever state it shows must be *the pusher's*, not re-read from
+elsewhere on the re-push. Re-reading it put every button back the moment it was clicked.
+
+**And `gi->UIChange_f == -1` is not proof of a pop.** `GUI_Pop` does set it before calling
+`OnCommand` (`0x4A9673`), but the pump resets it too (`0x4AA096`) and calls `OnCommand` again
+on the same click. The authority on whether a screen is still there is the `per_active` chain
+from `main+0x531`.
+
+**The dispatch itself is `0x4A967C`–`0x4A9687`**, and it settles the signature: `eax =
+gi->TheActive_GUIMEM` (`+0x18`), then `eax = [eax+0x08]` (`0x4A967F`), `test eax,eax`, `je`
+past it, and only then `push esi` — the **GUIInfo** — and `call eax`. So `OnCommand` is
+NULL-guarded, takes the GUIInfo as its one `stdcall` argument, and is **never handed the
+index**. The three fields set to −1 immediately before it explain what it then reads:
+`0x4A9670`'s `or eax,0xffffffff` is stored to `+0x64`, `+0x60` and `+0x68` (`0x4A9673`,
+`0x4A9676`, `0x4A9679`), and `+0x60` is `UIChange_f` — `main+0x519 + 0x60 = main+0x579`.
+
+### Where the engine looks for archives [VERIFIED 2026-09-09]
+
+`InitTAHPIAry 0x41D4C0` globs four patterns through `0x4BC4B0`, in this order, and every one
+of them is a **bare relative pattern** — so the process's working directory is where an
+archive must land:
+
+| order | pattern | at |
+|---|---|---|
+| 1 | `rev31.GP3` (`"rev%s.GP3"` `0x5028CC` + `"31"` `0x5028D8`) | `0x41D4E0` |
+| 2 | `*.CCX` (`0x5028C4`) | `0x41D537` |
+| 3 | `*.UFO` (`0x5028BC`) | `0x41D571` |
+| 4 | `*.HPI` (`0x5028B4`) | `0x41D5AB` |
+
+`DDRAW.dll` is the **first static import** of `TotalA.exe`, so `DLL_PROCESS_ATTACH` runs
+before the exe's entry point and therefore before this — an archive the DLL writes at attach
+is on disk in time by the loader's rules, not by luck. Measured: written at attach, globbed
+and read in the same launch.
+
+**What actually opens one is `OpenHAPIFile 0x4BDD70`** — and the name is the engine's own, not
+ours: the allocation tag it passes is the string `"OPENHAPIFILE structure"` at `0x50A5A8`.
+`stdcall`, `ret 8`. It calls `0x4E4990(name, "rb")` (`0x505F10`) and returns 0 outright if that
+fails; otherwise it allocates a `0x118`-byte handle with `0x4D83B0(tag, 0x118)` — the tag is the
+FIRST argument — stores the `FILE*` at `+0x00` and `-1` at `+0x04`, and fills `+0x14` with
+`GetFullPathNameA(name, 0x104, handle+0x14, …)`, i.e. the **resolved absolute path**, not a
+copy of the name it was given. The
+36-byte trailer test that decides whether the file counts as an archive at all — the last 36
+bytes must be `Copyright 1997 Cavedog Entertainment`, and anything else is skipped silently —
+is documented with the rest of the container in [file formats](file-formats.html) §5
+(measured 2026-09-02). `tagpu_ufo.c` writes that trailer for exactly this reason.
+
 ### The palette the screen is presented with, the way out of a game, and the loading screen [VERIFIED 2026-09-07, Phase E G15d]
 
 Read for [the GL UI renderer](gui-renderer.html) §12. The twin resolves its indices through a
@@ -2432,14 +2785,25 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
 - **So the presented palette is `gamma(globals+0x214)`, and `main+0x143A7` is never scaled.**
   On every normal path the two hold the same entries — `+0x143A7` is what `0x497FDB` and
   `0x44460B` hand over — and at Gamma 12 they are byte-equal. At any other Gamma, or after
-  `+gamma`, every pass that reads `+0x143A7` (`tagpu_native.c`, and the terrain, feature, effect
-  and marker passes through it) shows the world at the wrong brightness, and so did the UI twin
-  until G15d, which resolves through cnc-ddraw's palette object (`g_ddraw.primary->palette->
-  data_rgb`, what `ddp_SetEntries` stored — the same table `tacli shot` writes into its PNG,
-  so the walk's oracle and the twin agree by construction). MEASURED, the heartbeat's `paldiff`:
-  in the shell **one, index 9**, differs *beyond the gamma scale* on every visit (its writer is
-  not traced — whichever it is, it reaches the screen through `0x4BA200` like everything else, so
-  the twin shows it right and a `+0x143A7` reader would not); `+gamma 15` in game makes every
+  `+gamma`, a pass that reads `+0x143A7` shows the world at the wrong brightness, and every one
+  of them did until G15d fixed the UI twin (which resolves through cnc-ddraw's palette object,
+  `g_ddraw.primary->palette->data_rgb`, what `ddp_SetEntries` stored — the same table
+  `tacli shot` writes into its PNG, so the walk's oracle and the twin agree by construction) and
+  **2026-09-09 fixed the world**: the resolution moved into `tagpu_pal.c`, and every pass that
+  turns an index into a colour — the world's single `uPal` texture, the three sprite atlases'
+  restores and the terrain restorer's — now takes the presented palette from there ([GPU
+  status](gpu-status.html) §2.3f). The two readers that still want `+0x143A7` want it *because*
+  it is unscaled: the restorer's tileability threshold is a raw colour distance and must classify
+  the ART, not the display, and `tagpu_order.c`'s `seq_ink` walks on the game thread. **The two
+  formulas are different and both are live**: an option screen writes `main+0x37F08` and applies
+  `0.5 + Gamma/24` (registry Gamma 15 → **1.125**, measured), while `+gamma N` applies **`N/10`**
+  outright (`+gamma 15` → **1.500**, measured 2026-09-09) and then stores N in the same field —
+  so the field alone does not tell you the factor, and `globals+0x614` is the only thing that
+  does. MEASURED, the heartbeat's `paldiff` counts raw differences, so at the stock 1.125 it
+  reads **235** in the shell and in game alike; *beyond the gamma scale* 0 entries differ in
+  game, and in the shell **one, index 9**, on every visit (its writer is not traced — whichever
+  it is, it reaches the screen through `0x4BA200` like everything else, so the twin shows it
+  right and a `+0x143A7` reader would not); `+gamma 15` in game makes every
   non-black entry differ and the twin still matches the engine's frame ([GL UI
   renderer](gui-renderer.html) §12 has the run).
 - **The Gamma this project runs at is one shared, mutable registry value — read it, never assume
@@ -2631,6 +2995,41 @@ the game-state arrays (`0x491BC5`, `0x491BD9`, `0x491BED`). **The fork wraps thi
 flush the deferred queue while the registry is alive — or, if it does not leave within a second,
 keep the queue and keep deferring through the cascade) and a post hook (release it).
 
+### `0x42D5xx` — the model-pointer table is BUILT here, and every slot in it is written
+
+`[BINARY-VERIFIED 2026-09-09]` The other half of `0x42DB90` below, and the half a reader needs:
+it is what makes "the ModelId is in range" a safety property rather than a guess.
+
+- **The count comes first.** `main+0x1438F` (`UNITINFOCount`) is already set when the table is
+  allocated: `0x42D684` loads it, `0x42D68A` shifts it left 2, and `0x42D693` calls the named
+  allocator `0x4D83B0` for exactly `count * 4` bytes, storing the result to `main+0x14377`
+  (`0x42D6AA`). So the count is the table's **length**, not merely a related number — the same
+  value bounds the unit defs at `main+0x1439B` at stride `0x249`, which is why one count serves
+  both arrays.
+- **The allocator does not zero.** `0x4D83B0` → `0x4D83C0` is a plain malloc wrapper (a tag
+  string, `0x4E8890` or the fussy-heap path, no fill). Nothing about an untouched slot is
+  therefore safe to assume — which is why the next point is the load-bearing one.
+- **Every slot in `[1, count)` is written.** The load loop runs `esi = 1` while
+  `esi < [main+0x1438F]` (`0x42D6B6` / `0x42D6BC`) and stores the loaded model to
+  `[table + esi*4]` at `0x42D7A2` on every iteration — including the failure path, where
+  `0x4CB560` returned NULL and `0x4B6290` reported it: `edi` is stored either way.
+- **Slot 0 is never touched** by either loop — neither the fill (which starts at 1) nor the free
+  (`0x42DBCA`, same range). It is the "no model" entry, and `unit+0xA6 == 0` is how the engine
+  and the fork both spell "this unit has no model".
+
+**The invariant this gives a reader.** For `1 <= mid < [main+0x1438F]`, `[main+0x14377][mid]` is
+a slot the engine wrote at load and nulls at teardown, so it holds **NULL or a live template of
+the level that is loaded** — never the allocator's leftovers, and never off the end of the
+allocation. `unit+0xA6` itself is bounded by nothing, and the unit array it comes from is a
+Mode B object (recycled in place), so a slot that died under a render pass hands over another
+unit's ModelId or a torn one. Bounding it against this count is what keeps that inside the Mode B
+contract — one wrong frame, never a fault. `tagpu_native.c`'s `model_root` is that bound, and
+[thread-safe destruction](thread-safe-destruction.html) §2 is the contract.
+
+**What it does NOT give you** is a lifetime: the templates are still freed by `0x42DB90` at the
+level teardown, so a reader also has to be outside that window. That is the render thread's
+`teardown_active()` gate, and its one hole is the pre hook's timeout (§6b).
+
 ### `0x42DB90` — the model templates are freed here, and only here
 
 `[BINARY-VERIFIED 2026-09-08]` Called once from the teardown cascade, `0x491C21`, the first call
@@ -2642,7 +3041,18 @@ after `0x485980`'s unit walk. It is what makes a `Model3DONode` tree's lifetime 
 - per entry: `MEM_Free 0x4D85A0` (`0x42DC01`), then the slot is nulled (`0x42DC15`,
   `mov [eax+edi], ebx` with `ebx = 0`); two further `MEM_Free`s follow in the same body
   (`0x42DC23`, `0x42DC52`);
-- then the table itself is freed (`0x42DCB6`) and `main+0x14377` nulled (`0x42DCD8`).
+- then the table itself is freed (`0x42DCB6`) and `main+0x14377` nulled (`0x42DCD8`);
+- and **last, `0x42DCCB` frees `main+0x1439B` — the whole UnitDef array** (`mov edx,
+  [ecx+0x1439B]` at `0x42DCC4`), with the pointer nulled at `0x42DCE6`. **Five `MEM_Free`
+  calls in this body, not four** (verified by disassembly 2026-09-09).
+
+**Both frees are ours since 2026-09-09.** `0x42DC01` and `0x42DCB6` are redirected to
+`tagpu_reclaim`'s ring (the byte check is `E8` with a rel32 that resolves to `0x4D85A0`), so a
+template outlives any render pass still walking it; the body itself is untouched and still nulls
+every slot and the table pointer. `0x42DC23`, `0x42DC52` and `0x42DCCB` are left alone. The
+first two are unit-def fields no pass of ours reads; **`0x42DCCB` frees the UnitDef array we
+read all over** (`tagpu_order`, `tagpu_cat`, `tagpu_weapons`, `tagpu_scenario`) and is safe
+only because every one of those readers, and this cascade, is on the **game thread**. [Thread-safe destruction](thread-safe-destruction.html) §6c.
 
 **Why it matters to us.** `FreeObjectState 0x45AAA0` — the funnel `tagpu_reclaim` defers — never
 reaches these blocks: a template is not owned by any unit, it is shared by every unit of a type.

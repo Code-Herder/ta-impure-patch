@@ -51,6 +51,7 @@
 #include "opengl_utils.h"
 #include "tagpu_opt.h"
 #include "tagpu_fx.h"
+#include "tagpu_pal.h"
 #include "tagpu_fxown.h"
 #include "tagpu_sfx.h"
 #include "tagpu_glsl.h"
@@ -909,9 +910,9 @@ static void gather_fx(const TAGPU_FXVIEW* v)
     if (flashOn && (!s_lhtInit || v->frame_counter - s_lhtStamp >= 300)) {
         const char* prog = *(const char* const*)TAPROG_PP;
         const unsigned char* lht = prog_ok(prog) ? *(const unsigned char* const*)(prog + PROG_LHT) : NULL;
-        const unsigned char* pal = (const unsigned char*)(ta + 0x143A7);
+        const unsigned char* pal = tagpu_pal_live();
         static unsigned char rgb[32 * 3];
-        if (ptr_ok(lht) && !IsBadReadPtr(lht, 0x2000)) {
+        if (pal && ptr_ok(lht) && !IsBadReadPtr(lht, 0x2000)) {
             int L;
             for (L = 0; L < 32; L++) {
                 long sr = 0, sg = 0, sb = 0; int d;
@@ -960,8 +961,9 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         return 0;
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
-    /* Classic++: the lazy restore of this atlas (main+0x143A7: the live palette) */
-    tagpu_gaf_atlas_restore(&s_atlas, (const unsigned char*)(v->ta + 0x143A7));
+    /* Classic++: the lazy restore of this atlas (the palette the screen is
+       SHOWN with -- tagpu_pal.h) */
+    tagpu_gaf_atlas_restore(&s_atlas, tagpu_pal_live());
     memset(s_nv, 0, sizeof s_nv); s_nm = 0;
     s_cLines = s_cSprites = s_cFlash = s_cAtlasFail = s_cOverflow = s_cQuads = 0;
     memset(&s_c, 0, sizeof s_c);
@@ -1010,7 +1012,7 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v, unsigned int palTex,
     x_glActiveTexture(GL_TEXTURE5); glBindTexture(GL_TEXTURE_2D, scafTex);
     x_glActiveTexture(GL_TEXTURE6); glBindTexture(GL_TEXTURE_2D, s_atlas.rgb);
     x_glActiveTexture(GL_TEXTURE0);
-    glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_on()) ? 1 : 0);
+    glUniform1i(s_uRestored, (s_atlas.rgb && tagpu_classicpp_assets()) ? 1 : 0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof s_verts, NULL, GL_STREAM_DRAW);

@@ -180,10 +180,26 @@ Measured against `pr + 0x22`:
 onto X — and **not** `unit+0x64/+0x66/+0x68`. `[MEASURED 2026-09-08]` on a ground unit the two
 agree (a tank read both as `(63290, 49152, 0)`, i.e. −12.3° of terrain pitch); on a bomber they
 did not — cached `(0, 16128, 3)` against live `(0, 44767, 65508)`, 157° of heading apart — and
-the drawn geometry follows the cached one. **This applies to `hires_pose` too, and it does not
-do it**: the replacement-mesh pass poses in model space and applies the heading alone as an
-outer rotation (`uYawEnc`), so a glTF unit is drawn without the terrain's tilt — right on level
-ground, wrong on a hillside. Not yet fixed; recorded here because it is the same fact.
+the drawn geometry follows the cached one. **`hires_pose` does it too, as of 2026-09-09.** It used to pose in model space and let the
+shader apply the heading alone as an outer rotation (`uYawEnc`), so a glTF unit was drawn without
+the terrain's tilt — right on level ground, wrong on every hillside — and it took the heading from
+the LIVE `unit+0x66` rather than the cached word, the half that is 157° out on a bomber. It now
+folds the whole cached triple through `pose_accum_body`, exactly as `recon_begin` does, and the
+caller sends 0 for the shader's yaw whenever a pose was produced, so the rotation is applied once.
+The rest-pose fallback (a mesh whose pose could not be built) still needs an outer rotation and
+still takes only the heading — from the cached word now.
+
+`[MEASURED 2026-09-09]` The fixture is **`scenarios/hires-vehicle-slope.json`**: two Stumpys at
+facing 200 on the `selbox-slope.json` hillside (17.4° of bank, −22.1° of pitch) with two
+engine-rendered Raiders beside them as the oracle. It needs a mesh the repo does not ship —
+`tools/ta3do export armstump`, dropped in as `<gamedir>/hires/armstump.glb` — because the export
+is derived from the retail model:
+
+| fixture | `body=` (posedump) | before → after |
+|---|---|---|
+| ARMSTUMP, the `selbox-slope` hillside, facing 200 | bank and pitch both live | **the fix**: square before, leaning after — and the lean puts its hull and barrel at the same angle as **the same unit drawn natively** from the same 3DO (the `.glb` is an export of it, so the two poses are directly comparable). The engine-rendered Raiders beside them are byte-identical in both frames, which is what says only the replacement pass moved |
+| ARMSTUMP at `[2600,1200]`, a gentler slope | `(63290, 3640, 0)` = **−12.4° of bank**, and `live=` identical | 912 pixels move, all of them inside the two meshes. Worth recording that this was picked as "flat ground" and is not: no spot sampled on Two Continents had a zero bank word |
+| **ARMPW — a Kbot — on the hillside above** | `(0, 40960, 0)`: heading only, `live=` identical | **byte-identical, the whole 1024×768 frame.** This is the identity case measured rather than argued: where the triple carries no bank or pitch the fold reduces to exactly the outer rotation it replaced, over 15 pieces on real sloping ground. It is also why the first attempt at this test measured nothing — TA keeps a Kbot upright, so a Kbot fixture cannot see the bug at all, and it takes a tracked or wheeled unit to show it |
 
 ### Hidden pieces
 

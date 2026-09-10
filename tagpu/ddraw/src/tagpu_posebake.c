@@ -59,14 +59,14 @@ static void blog(const char* s)
    in the `native:` line. `check` adds the cross-check against the emitters
    (below), which costs a second walk per unit per frame and is a measurement,
    not a play setting. Re-read on the same cadence as the pass's other levers. */
-static int s_armed, s_check, s_log, s_polled;
+static int s_armed, s_log, s_polled;
 
 static void lever_read(void)
 {
     char v[64];
     DWORD n;
     HANDLE h;
-    s_armed = s_check = s_log = 0;
+    s_armed = s_log = 0;
     if (GetFileAttributesA("tagpu_posebake.on") == INVALID_FILE_ATTRIBUTES) return;
     s_armed = 1;
     h = CreateFileA("tagpu_posebake.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -75,14 +75,27 @@ static void lever_read(void)
     n = 0;
     if (ReadFile(h, v, sizeof v - 1, &n, NULL)) {
         v[n] = 0;
-        if (strstr(v, "check")) s_check = 1;
         if (strstr(v, "log"))   s_log = 1;
     }
     CloseHandle(h);
 }
 
 int tagpu_posebake_armed(void)    { return s_armed; }
-int tagpu_posebake_checking(void) { return s_armed && s_check; }
+
+/* THE `check` TOKEN IS GONE, with G16 step 8. Its two quantities were
+   `emit_geom`'s body vertex count and `pose_accum_body`'s accumulated rest
+   offsets, checked against the bake for the same unit on the same frame. The
+   emitter that produced the first no longer exists, and the second was only
+   reachable from the same call site, so what is left would be an oracle
+   comparing the bake against nothing. Gates B and D (gpu-posing.md §4 step 6)
+   are the record that the bake and the emitter agreed while both existed —
+   0 differing pixels on eleven of twelve scenes.
+
+   A CONSEQUENCE WORTH NAMING: `posed_pose` deliberately duplicates
+   `pose_accum_body`'s arithmetic, and that duplication was load-bearing only
+   because `check` compared the two. It is not any more, so the two can be
+   reconciled — but that is its own decision with its own risk, not a free
+   tidy, and it is not step 8's. */
 
 /* ---- the caches --------------------------------------------------------- */
 static TAGPU_PBGEOM s_geom[PB_MAXGEOM];
@@ -179,7 +192,7 @@ static int pb_walk(const char* const* nd, int nparts, int range,
 }
 
 /* ---- the geometry bake -------------------------------------------------- */
-typedef struct { int nv; int over; } PBGEOMCTX;
+typedef struct { int nv; int over; TAGPU_PBGEOM* g; } PBGEOMCTX;
 
 static void geom_emit(void* vctx, int range, int p, const char* nd,
                       const int* rv, int nvert, const char* fa, int fvc,
@@ -226,6 +239,25 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
         o[6] = (float)p;
         o[7] = shaded ? (float)TAGPU_PBF_SHADED : 0.0f;
     }
+    /* the body range's rest AABB per piece — step 5's replacement for the
+       `s_emitTop` emit_node kept while it wrote the posed vertices */
+    if (range == TAGPU_PB_BODY && c->g && p >= 0 && p < TAGPU_PBMAXPIECE) {
+        TAGPU_PBGEOM* g = c->g;
+        for (t = 0; t < n; t++) {
+            /* `pbody` is the SEEDED flag and must not be set until all three
+               axes have been seeded from this first vertex. Setting it inside
+               the r loop seeded x only: y and z then compared against the
+               zeroed struct, so every piece's box was unioned with the origin
+               plane and `tagpu_posedraw_top` could only read too tall — a
+               wreck's shadow thrown too far, worst where the pose has
+               M[5] < 0. */
+            for (r = 0; r < 3; r++) {
+                if (!g->pbody[p] || V[t][r] < g->pmn[p][r]) g->pmn[p][r] = V[t][r];
+                if (!g->pbody[p] || V[t][r] > g->pmx[p][r]) g->pmx[p][r] = V[t][r];
+            }
+            g->pbody[p] = 1;
+        }
+    }
     c->nv += n;
 }
 
@@ -267,6 +299,7 @@ static void bake_topology(TAGPU_PBGEOM* g, const char* const* nd, int nparts)
 
 static void mat_drop(int i)
 {
+    if (s_mat[i].vao) glDeleteVertexArrays(1, &s_mat[i].vao);
     if (s_mat[i].vbo) glDeleteBuffers(1, &s_mat[i].vbo);
     if (s_matSkip[i]) { free(s_matSkip[i]); s_matSkip[i] = NULL; }
     memset(&s_mat[i], 0, sizeof s_mat[i]);
@@ -320,6 +353,7 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl)
     g = &s_geom[slot];
     memset(g, 0, sizeof *g);
     g->root = nd[0]; g->levelGen = lvl; g->glGen = s_glGen; g->nparts = nparts;
+    c.g = g;                    /* the per-piece rest AABB accumulates here */
     for (r = 0; r < TAGPU_PB_NRANGE; r++) {
         g->first[r] = c.nv;
         pb_walk(nd, nparts, r, geom_emit, &c, r == 0 ? &st : NULL);
@@ -469,6 +503,31 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
                  (GLsizeiptr)c.nv * TAGPU_PB_MATST * sizeof(float),
                  s_scratchM, GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    /* THE POSED PASS'S VAO (G16 step 5). The two buffers are bound together
+       once, here, rather than re-pointed per unit per frame: a draw is then
+       one bind and one glDrawArrays. Locations 0-3 come off the geometry (the
+       type's), 4-6 off this stream — the same split the two buffers have, so
+       either can be re-baked without touching the other's pointers. */
+    glGenVertexArrays(1, &m->vao);
+    glBindVertexArray(m->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g->vbo);
+    glEnableVertexAttribArray(0);   /* rest position                        */
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)0);
+    glEnableVertexAttribArray(1);   /* rest normal of the vertex's face     */
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)12);
+    glEnableVertexAttribArray(2);   /* piece index                          */
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)24);
+    glEnableVertexAttribArray(3);   /* TAGPU_PBF_* flags                    */
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_GEOMST * 4, (void*)28);
+    glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
+    glEnableVertexAttribArray(4);   /* uv                                   */
+    glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)0);
+    glEnableVertexAttribArray(5);   /* flat colour, colour key              */
+    glVertexAttribPointer(5, 2, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)8);
+    glEnableVertexAttribArray(6);   /* skip                                 */
+    glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, TAGPU_PB_MATST * 4, (void*)16);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
     s_matSkip[slot] = (unsigned char*)malloc((size_t)c.nv ? (size_t)c.nv : 1);
     if (s_matSkip[slot]) memcpy(s_matSkip[slot], s_scratchSkip, (size_t)c.nv);
     s_matBaked++;
@@ -533,7 +592,7 @@ void tagpu_posebake_glreset(void)
        check drops the entries. */
     int i;
     for (i = 0; i < s_ngeom; i++) s_geom[i].vbo = 0;
-    for (i = 0; i < s_nmat; i++)  s_mat[i].vbo = 0;
+    for (i = 0; i < s_nmat; i++)  { s_mat[i].vbo = 0; s_mat[i].vao = 0; }
     s_glGen++;
 }
 
@@ -585,107 +644,6 @@ int tagpu_posebake_unit(const char* o3, int owner,
     if (geomOut) *geomOut = g;
     if (matOut)  *matOut  = m;
     return 1;
-}
-
-/* ---- the predictor, and the lever's cross-check -------------------------- */
-typedef struct {
-    const TAGPU_PBGEOM* g; const unsigned char* skip;
-    const char* o3; int nv; int count;
-} PBPREDCTX;
-
-static void pred_emit(void* vctx, int range, int p, const char* nd,
-                      const int* rv, int nvert, const char* fa, int fvc,
-                      const unsigned short* vi, const int* slot, int n)
-{
-    PBPREDCTX* c = (PBPREDCTX*)vctx;
-    (void)rv; (void)fa; (void)fvc; (void)vi; (void)slot;
-    if (range == TAGPU_PB_BODY) {
-        const char* pr = c->o3 + O3_PRIM0 + p * PRIM_STRIDE;
-        unsigned char fl = *(const unsigned char*)(pr + P_FLAGS);
-        /* `emit_geom_at` skips a piece whose POSED buffer does not read, and
-           the bake only ever validates the REST array — so a piece with a good
-           template and a bad `prim+0x22` is baked but not emitted, and without
-           this the check would report the emitter's skip as a bake mismatch.
-           Per triangle rather than per piece because the walk is shaped that
-           way; this whole path only runs under the `check` token. */
-        int live = (fl & 1) != 0;
-        if (live) {
-            const int* vb = *(const int* const*)(pr + P_VBUF);
-            if (!ptr_ok(vb) || IsBadReadPtr(vb, (SIZE_T)nvert * 12)) live = 0;
-        }
-        if (live && (!c->skip || !c->skip[c->nv])) c->count += n;
-    }
-    (void)nd;
-    c->nv += n;
-}
-
-int tagpu_posebake_predict_body(const TAGPU_PBGEOM* g, const TAGPU_PBMAT* m,
-                                const char* o3)
-{
-    const char* nd[TAGPU_PBMAXPIECE];
-    PBPREDCTX c;
-    int i, r, slot = -1;
-    if (!g || !m || !ptr_ok(o3)) return -1;
-    for (i = 0; i < g->nparts; i++) {
-        const char* pr = o3 + O3_PRIM0 + i * PRIM_STRIDE;
-        nd[i] = *(const char* const*)(pr + P_NODE);
-        if (!ptr_ok(nd[i])) return -1;
-    }
-    for (i = 0; i < s_nmat; i++) if (&s_mat[i] == m) { slot = i; break; }
-    c.g = g; c.skip = slot >= 0 ? s_matSkip[slot] : NULL;
-    c.o3 = o3; c.nv = 0; c.count = 0;
-    /* the ranges are walked in order so `c.nv` indexes the material stream the
-       same way the bake filled it */
-    for (r = 0; r < TAGPU_PB_NRANGE; r++)
-        pb_walk(nd, g->nparts, r, pred_emit, &c, NULL);
-    return c.count;
-}
-
-/* The check the lever exists for. Two things the bake claims, against the two
-   things the CPU path independently computes for the same unit on the same
-   frame: the number of body vertices `emit_geom` produced, and the accumulated
-   rest offsets `pose_accum_body` walked. Both are exact equalities — a bake
-   that disagrees with the emitter it is replacing is the whole failure mode
-   step 4 can have before there is a picture to look at. */
-void tagpu_posebake_check(const char* o3, const TAGPU_PBGEOM* g,
-                          const TAGPU_PBMAT* m, int emitted,
-                          const float* accRest, int naccRest)
-{
-    static int reported;
-    int want, i, k, bad = 0;
-    char b[224];
-    if (!s_armed || !s_check || !g || !m) return;
-    want = tagpu_posebake_predict_body(g, m, o3);
-    if (want >= 0 && want != emitted && reported < 24) {
-        reported++;
-        _snprintf(b, sizeof b,
-                  "posebake CHECK: root=%p owner=%d body vertices: bake predicts %d, "
-                  "emit_geom produced %d",
-                  (const void*)g->root, m->owner, want, emitted);
-        blog(b);
-        bad = 1;
-    }
-    if (accRest && naccRest > 0 && naccRest <= g->nparts) {
-        for (i = 0; i < naccRest && !bad; i++)
-            for (k = 0; k < 3; k++) {
-                float d = accRest[i * 3 + k] - g->restOff[i][k];
-                if (d < 0.0f) d = -d;
-                if (d > 1.0f / 65536.0f) {
-                    if (reported < 24) {
-                        reported++;
-                        _snprintf(b, sizeof b,
-                                  "posebake CHECK: root=%p piece %d rest offset %.6f baked "
-                                  "against %.6f walked per unit",
-                                  (const void*)g->root, i,
-                                  g->restOff[i][k], accRest[i * 3 + k]);
-                        blog(b);
-                    }
-                    bad = 1;
-                    break;
-                }
-            }
-    }
-    if (bad) s_anomTotal++;
 }
 
 int tagpu_posebake_stats(char* out, int n)

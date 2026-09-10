@@ -1,0 +1,88 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Two replacement-mesh Stumpys and two engine-rendered Raiders on the selbox-slope hillside at facing 200 \u2014 the regression fixture for the body-turn fold in hires_pose (model-import.md). VEHICLES on purpose: TA keeps a Kbot upright, so a Kbot's body triple is heading-only and a Kbot fixture cannot see this bug at all. The Raiders are the oracle \u2014 the engine tilts them with the terrain, so a replacement mesh posed with the heading alone stands square while they lean. Needs hires/armstump.glb, which is 'tools/ta3do export armstump' (not shipped: it is derived from the retail model). Facing 200 rather than a multiple of 90 so a yaw convention that is a reflection or an inverse cannot render correctly by accident.",
+  "seed": 1,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "s1",
+      "type": "ARMSTUMP",
+      "owner": 0,
+      "pos": [
+        6060,
+        12100
+      ],
+      "facing": 200,
+      "stance": "hold"
+    },
+    {
+      "id": "s2",
+      "type": "ARMSTUMP",
+      "owner": 0,
+      "pos": [
+        6180,
+        12140
+      ],
+      "facing": 200,
+      "stance": "hold"
+    },
+    {
+      "id": "r1",
+      "type": "CORRAID",
+      "owner": 0,
+      "pos": [
+        6300,
+        12180
+      ],
+      "facing": 200,
+      "stance": "hold"
+    },
+    {
+      "id": "r2",
+      "type": "CORRAID",
+      "owner": 0,
+      "pos": [
+        5940,
+        12060
+      ],
+      "facing": 200,
+      "stance": "hold"
+    },
+    {
+      "id": "spare",
+      "type": "CORSOLAR",
+      "owner": 1,
+      "pos": [
+        4300,
+        1400
+      ]
+    }
+  ],
+  "camera": {
+    "center_on": "s2",
+    "pin": true
+  }
+}

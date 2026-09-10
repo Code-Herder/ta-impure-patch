@@ -14,6 +14,7 @@ running instance and cross-checked against a `tacli shot` on 2026-09-01.
 **[INFERRED]** = reading not yet confirmed.
 
 Companion notes: `ui-markers.md` (per-unit *world* markers — a different subsystem),
+`renderers.md` §2.10 (the render-options screen this backs),
 `resolution.md` (the 640×480 front-end lock and the in-game view rect),
 `tacli-design.md` (the CLI this serves).
 
@@ -152,7 +153,7 @@ exactly this against a 16-byte string. [BINARY-VERIFIED]
 | `+0x137` | `status_curnt` — current stage | [LIVE] |
 | `+0x138` | `status_init` (`i16`) | [BINARY-VERIFIED] `0x4A6A95` |
 | `+0x13A` | `quickkey` — **`u8`**, the ASCII accelerator (`'S'` for SINGLE, `'E'` for EXIT, matching the underlined letter on screen). The corpus calls it an `i16`; the high byte is a separate field. | [LIVE] |
-| `+0x13C` | `grayedout` (`i32`) | [CORPUS] |
+| `+0x13C` | `grayedout` — **`u16`, and only bit 0 is the flag**. The corpus calls it an `i32`; it is not. Both engine writers do a read-modify-write that preserves bits 1..15 — the `.GUI` parser at `0x4ADD3E` and `GUIGADGET_SetGrayed 0x4A1250` at `0x4A12D0`, each `xor/and 1/xor` then **`mov WORD`**. A 32-bit store clears those bits and `+0x13E`/`+0x13F` with them. | [BINARY-VERIFIED] `0x4ADD3E`, `0x4A12D0` |
 
 ### 2.4 Listbox — `id 2`
 
@@ -549,7 +550,7 @@ tooltip to show. Whether TA's tooltip renderer is the consumer of `+0x33` is [IN
 
 ## 7.1 `grayedout` is used, and is not the same as `active`
 
-`grayedout (i32 @ +0x13C)` on a button is set by 58 gadgets across 24 stock `.GUI` files
+`grayedout (u16 @ +0x13C, bit 0 — see §2.3)` on a button is set by 58 gadgets across 24 stock `.GUI` files
 — every one of them a **builder's** build page (`ARMLAB1`, `ARMVP1`, `ARMSY1`,
 `ARMSILO1`, `ARMAMD1`, their CORE twins…), plus `LOUNGE2`. [CORPUS] The commander's own
 pages (`ARMCOM1/2`) declare none, which is why the first live pass — which only ever
@@ -628,6 +629,116 @@ an actionability check needs both tests. `SINGLE.GUI`'s `AnyMsn` is the `active=
   `SELECT` button. That is the difference between reading the providers and using one.
 - **`assoc` binds a scrollbar to its list.** `SELPROV`'s `DPLAY`, `SLIDER` and its two
   unnamed arrow buttons all carry `assoc 50`; `LOADGAME`'s carry `assoc 1`.
+
+---
+
+## 10. The gadget ART, and the recesses that are the layout  [MEASURED 2026-09-09]
+
+§2–§4 say where a gadget record lives and what its fields mean. This section says what
+the engine *draws* for one, because that turned out to constrain a screen's design far
+more than the record does. Everything here was read off `anims/commongui.gaf` and three
+`.GUI` files pulled out of the HPI with `ta3do.Assets()`; **`tools/guiart.py` extracts
+them all and re-derives every number below**, and `tools/ta-guiscreen.html` is the lab
+that draws a proposed screen with them. Neither the art nor the `.GUI` files are — or
+can be — tracked; the extractor writes them to a gitignored directory.
+
+### 10.1 A screen picks its background by naming a GAF frame
+
+`VISUALRT.GUI`'s gadget 1 is `id=12`, `name=VISUALSRT`, `(0,0) 150×352` — and
+`VISUALSRT` is an entry in `commongui.gaf`. **The `name` of an `id=12` gadget is the
+frame.** So a new screen chooses its panel art by naming one, and reusing a stock panel
+costs nothing. [MEASURED]
+
+**But the `id=12` gadget does not LOAD anything** [VERIFIED 2026-09-09, G18 gate 3]. The
+`GUI_StageUpdateDraw` dispatch (`jmp [eax*4+0x4A95F4]`, indexed by `id`) sends only **`id 0`
+and `id 11`** to the branch that builds `anims\<gadget name>.GAF` and loads it; `id 12` looks
+its frame up in a bank it did not open. **The panel is the loader** — and its name is the one
+`GUI_Load` stamped, i.e. the screen name — so a screen's own art is `anims\<screen>.GAF` and
+an `id=12` names a frame inside it, falling back to the shared `commongui` bank. `ARMOPT.GUI`
+is the clean case: its `id=12` is `OPTBG` and `anims/armopt.gaf` holds exactly `OPTBG`.
+`PREFS.GUI`'s `IGOPT` comes from `commongui` while its own `prefs.gaf` holds `PREFSBG`, and
+`VISUALRT` has no `anims/visualrt.gaf` at all. Full reading, and the bank layout
+`0x4B8D40` walks: [engine map](exe-reverse-engineering.html) *A screen's own GAF*.
+
+The panel itself is `id=0` at `xpos=128 ypos=128`, `150×352` — over the world, hard
+against the side panel, which is the rect every in-game options screen uses.
+
+### 10.2 The stage button: `text` is pipe-separated, and the art has one frame per stage
+
+A button with `stages > 0` carries **every stage label in one string**, separated by
+`|` — `VISUALRT`'s `SHADING` is `text=Off|On; stages=2;`. The art is
+`commongui.stagebuttnN`, 120×20, and its frame list is: [MEASURED, over all four entries]
+
+| frame | what it is |
+|---|---|
+| `0 .. N−1` | stage 0..N−1, **that bar lit green**, left to right |
+| `N` | every bar dark |
+| `N+1` | pressed — body luminance 196 against 161 |
+| `N+2` | greyed out — 112, which is what `grayedout` (§7.1) renders as |
+
+`stagebuttn2/3/4` carry 2/3/4 bars. **`stagebuttn1` also carries two bars, but paints
+stage 0 RED and stage 1 green** — the on/off variant, where `stagebuttn2` is the neutral
+two-choice one. **ANSWERED 2026-09-09 (G18 gate 3): a `stages=2` button with
+`texturenumber=0` gets `stagebuttn1`, the red/green plate** — read straight off the
+render-options screen, whose two-stage rows show a red bar at stage 0 and a green one at
+stage 1 while its `stages=3` and `stages=4` rows are green throughout. What selects
+`stagebuttn2` instead is still unmeasured; `texturenumber` remains the suspect and the
+screen that would settle it has to carry a non-zero one.
+
+**There is no `stagebuttn5` or `6`, so no cycle button can carry more than four stages.**
+Anything longer has to page, and the build panel's own `commongui.armprev` / `armnext`
+(45×17, three frames: normal, pressed, greyed) are what to page with.
+
+Other shared controls in the same GAF: `checkbox` (16×16, four frames — a dark and a lit
+green lamp, twice), `sliders` (20 frames: a vertical knob 0–2, thin track pieces 3–5,
+up/down arrows 6–9, **the horizontal knob 10–12**, small boxes 13–15, left/right arrows
+16–19), `listbox` (16×16 × 9 — a nine-slice frame), `textinput` (16×32 × 3).
+
+### 10.3 Panel art: the recesses ARE the layout
+
+A runtime options panel paints dark inset bands, and **every VISUALRT gadget sits in
+one**. Measured over `x = 13..133`: [MEASURED]
+
+| frame | recesses | `h ≥ 20` | at |
+|---|---|---|---|
+| `commongui.visualsrt` | 6 | 5 | y=23 h16 · 63 · 107 · 151 · 268 · 303 |
+| `commongui.soundsrt` | 6 | 5 | y=23 · 67 h16 · 107 · 151 · 268 · 303 |
+| `commongui.musicrt` | 8 | 5 | y=23 · 67 h16 · 107 · 151 h15 · 175 h15 · 201 · 268 · 303 |
+| `commongui.speedsrt` | 8 | 4 | y=23 h16 · 62 h16 · 100 · 142 h16 · 180 h16 · 218 · 268 · 303 |
+| `commongui.igopt` | 6 | 6 (h33) | y=20 · 62 · 104 · 146 · 247 · 289 |
+
+`VISUALRT.GUI` fills `visualsrt` exactly: `GAMMA` (`id=4` slider, `(13,24) 120×16`) in the
+h16 recess, `SHADING` / `ANTI` / `BSHADOWS` (`id=1 stages=2`, `120×20`) in the next three,
+`RESTORE` / `UNDO` (`stages=0`) in the last two. All at `x=13 w=120`; each `id=5` label
+sits **16 px above** its control. So a stock runtime screen is **four option slots and two
+action slots** — the art sets that, not the record.
+
+`PREFS.GUI` is the same story one level up: `128×354` at `(0,126)`, art `IGOPT`, six
+`96×31` buttons at y=24/66/108/150/251/293 — `SOUND`, `MUSIC`, `INTERFACE` (named
+`SPEEDS`), `VISUALS`, `OK` (named `PREV`), `Cancel`. **All six recesses are used.**
+
+`ARMOPT.GUI` (the Tab menu) is `128×352` at `(0,128)`, art `OPTBG`, seven `96×31` buttons
+at y=22/64/105/147/189/231/291: `LOADGAME`, `SAVEGAME`, `PREFS` (“Options”), `MISSION`
+(“Briefing”), `HELP`, `EXIT`, `OK` (“Resume”). **There is a gap between Exit (y=231 h=31)
+and Resume (y=291); whether `OPTBG` paints a recess there is [OPEN]** — that frame is not
+in `commongui.gaf`.
+
+**The consequence for anything new:** a screen needing more than five `h20` rows has no
+stock panel to sit on, and adding an entry point to `PREFS` has no free recess. Both need
+art drawn for it. `tools/guiart.py` splices a seven-recess panel out of `visualsrt`'s own
+pixels so the lab can show the layout, but that output is a derivative of the game's art
+and exists only to be looked at.
+
+**How G18 resolved it, and what shipped** [BUILT 2026-09-09]. `RENDER.GUI` carries its own
+`anims/render.gaf` in a `.ufo` the DLL writes, holding one **uncompressed** 304×212 frame
+drawn from nothing in palette indices — the ramp 55..63, which is where `tools/guipanel.py`'s
+colours already sat. At screen-load the DLL composes `frontend.gaf`'s `back*` nine-slice from
+the **player's own install** and repaints that frame's plane in place through `+0x10
+PtrFrameBits`; uncompressed is what makes the repaint one copy. So the shipped art is ours,
+the art on screen is theirs, and a missing `frontend.gaf` leaves the drawn frame standing.
+A panel with no `id=12` at all gets the engine's own composed dialog ground instead — which
+is what `MSGBOX`/`YESORNO`/`EXITMENU` are, and what the screen looked like before its `id=12`
+existed.
 
 ---
 

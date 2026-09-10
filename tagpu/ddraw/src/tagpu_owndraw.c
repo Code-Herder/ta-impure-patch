@@ -179,6 +179,41 @@ int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
                name_matches((const char*)(def + UD_OBJNAME));
     }
     if (!skip) { g_passed++; return 0; }
+    /* G16 step 8, decision B (gpu-posing.md §4). Skipping the engine's own
+       rasterise is only safe while something replaces it, and since the CPU
+       emitters were deleted the only thing that draws a unit is the posed
+       program. If it cannot run — a missing GL entry point, a shader that will
+       not link, a uniform block under PD_BLOCK — then skipping here would mean
+       NO UNITS AT ALL, because these detours are installed at DLL attach and
+       cannot be uninstalled.
+
+       So the classifier asks first. This runs on the GAME thread and reads a
+       word only the render thread writes; it is safe by DIRECTION, not by
+       timing. The word says "live" only after the programs have linked, and is
+       cleared before a context change invalidates them, so a stale read can
+       only be stale in the direction of NOT skipping — the engine draws a unit
+       we also draw, for the frames before the pass first runs, which is the
+       near-invisible 8bpp-under-RGB double draw. The reverse, skipping when
+       nothing will draw, has no write order that produces it. */
+    {
+        extern int tagpu_posedraw_live(void);
+        extern int tagpu_posedraw_refused(void);
+        if (!tagpu_posedraw_live()) {
+            /* Say something ONLY when the pass has tried and failed. `!live`
+               is also the ordinary state of the first frames, before the
+               render thread has built anything — logging that would dress a
+               one-frame double draw up as a broken driver. */
+            static int said = 0;
+            if (!said && tagpu_posedraw_refused()) {
+                said = 1;
+                olog2("owndraw: the posed unit program REFUSED to arm — the engine's "
+                      "own unit rasterise is NOT being skipped, so units are drawn by "
+                      "the engine at 8bpp. The posedraw: line above says why.");
+            }
+            g_passed++;
+            return 0;
+        }
+    }
     g_skipped++;
     /* engine just (re)built this composite and we are about to skip its
        rasterise — repaint our last render NOW so this frame's blit shows the

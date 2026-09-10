@@ -605,7 +605,12 @@ static void attach(GLuint tex, int first, int count)
 }
 
 /* the destination to zeros: unpainted everywhere, and a dump diffs deterministically */
-static int clear_dest(struct TAGPU_RGLSL_JOB* j)
+/* Bind the destination as a render target, check it is complete, and clear it
+   to alpha 0 -- the restorer's "not painted here yet" mark -- unless the
+   caller is REPAINTING one it already filled (a palette change: every rect is
+   queued again, and clearing first would blank the world for the length of
+   the job instead of recolouring it in place). */
+static int prepare_dest(struct TAGPU_RGLSL_JOB* j, int clear)
 {
     GLint fbo0 = 0;
     GLboolean scissor, cmask[4];
@@ -620,7 +625,7 @@ static int clear_dest(struct TAGPU_RGLSL_JOB* j)
         _snprintf(b, sizeof b, "restoreglsl: %s: the destination atlas is not a complete render target", j->tag);
         rlog(b);
         ok = 0;
-    } else {
+    } else if (clear) {
         scissor = x_glIsEnabled(GL_SCISSOR_TEST);
         x_glGetBooleanv(GL_COLOR_WRITEMASK, cmask);
         glGetFloatv(GL_COLOR_CLEAR_VALUE, cc);
@@ -642,10 +647,10 @@ static void job_drop_work(struct TAGPU_RGLSL_JOB* j)
     j->running = 0;
 }
 
-TAGPU_RGLSL_JOB* tagpu_rglsl_job_new(const char* tag, int prio, int oneshot,
-                                     unsigned int atlasTex, int atlasW, int atlasH,
-                                     const unsigned char* pal,
-                                     unsigned int destTex, int destW, int destH)
+static TAGPU_RGLSL_JOB* job_new_x(const char* tag, int prio, int oneshot,
+                                  unsigned int atlasTex, int atlasW, int atlasH,
+                                  const unsigned char* pal,
+                                  unsigned int destTex, int destW, int destH, int clear)
 {
     struct TAGPU_RGLSL_JOB* j = NULL;
     unsigned char palRGBA[256 * 4];
@@ -669,13 +674,41 @@ TAGPU_RGLSL_JOB* tagpu_rglsl_job_new(const char* tag, int prio, int oneshot,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glBindTexture(GL_TEXTURE_2D, 0);
-    if (!clear_dest(j)) { glDeleteTextures(1, &j->palTex); j->used = 0; return NULL; }
+    if (!prepare_dest(j, clear)) { glDeleteTextures(1, &j->palTex); j->used = 0; return NULL; }
     j->lastTallySlice = s_slice;
     if (!oneshot) {
         _snprintf(b, sizeof b, "restoreglsl: %s: lazy restore armed (%dx%d twin of the %dx%d atlas)", j->tag, destW, destH, atlasW, atlasH);
         rlog(b);
     }
     return j;
+}
+
+TAGPU_RGLSL_JOB* tagpu_rglsl_job_new(const char* tag, int prio, int oneshot,
+                                     unsigned int atlasTex, int atlasW, int atlasH,
+                                     const unsigned char* pal,
+                                     unsigned int destTex, int destW, int destH)
+{
+    return job_new_x(tag, prio, oneshot, atlasTex, atlasW, atlasH, pal, destTex, destW, destH, 1);
+}
+
+TAGPU_RGLSL_JOB* tagpu_rglsl_job_repaint(const char* tag, int prio, int oneshot,
+                                         unsigned int atlasTex, int atlasW, int atlasH,
+                                         const unsigned char* pal,
+                                         unsigned int destTex, int destW, int destH)
+{
+    return job_new_x(tag, prio, oneshot, atlasTex, atlasW, atlasH, pal, destTex, destW, destH, 0);
+}
+
+void tagpu_rglsl_job_repalette(TAGPU_RGLSL_JOB* j, const unsigned char* pal)
+{
+    unsigned char palRGBA[256 * 4];
+    int i;
+    if (!j || !j->used || !j->palTex || !pal) return;
+    for (i = 0; i < 256; i++) { palRGBA[i * 4] = pal[i * 4]; palRGBA[i * 4 + 1] = pal[i * 4 + 1]; palRGBA[i * 4 + 2] = pal[i * 4 + 2]; palRGBA[i * 4 + 3] = 255; }
+    glBindTexture(GL_TEXTURE_2D, j->palTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1, GL_RGBA, GL_UNSIGNED_BYTE, palRGBA);
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 int tagpu_rglsl_job_add(TAGPU_RGLSL_JOB* j, const TAGPU_RGLSL_FRAME* frames, int count)
@@ -727,7 +760,7 @@ void tagpu_rglsl_job_clear(TAGPU_RGLSL_JOB* j)
 {
     if (!j || !j->used) return;
     job_drop_work(j);
-    if (!j->failed) clear_dest(j);
+    if (!j->failed) prepare_dest(j, 1);
 }
 
 int tagpu_rglsl_job_idle(const TAGPU_RGLSL_JOB* j)
@@ -975,7 +1008,7 @@ void tagpu_rglsl_step(void)
             }
         }
     }
-    if (!tagpu_classicpp_on()) return;           /* paused: the queues keep filling */
+    if (!tagpu_classicpp_assets()) return;       /* paused: the queues keep filling */
     j = pick_job();
     if (!j) {
         /* nothing to do: after a while the scratch goes (the queues stay) */

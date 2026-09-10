@@ -129,8 +129,15 @@
    from tagpu_classicpp.c. uLit = 1 selects the Classic++ colour path in the
    shader that carries it (light, then the RGB grey band); 0 is Classic,
    byte for byte. */
+/* uLit is the Classic++ colour branch and follows the MASTER ARM; uLambert is
+   the `light=` half of it (G18a). uLambert 0 does not skip taLambert -- it
+   hands it the LEVEL normal instead, so the slope shading goes while the
+   shadow term, which lives inside taLambert, stays. Level ground is exactly
+   1.0 there by construction: uNorm is 1/level and level is that same lambert
+   of the up normal, so the quotient is x/x. */
 #define TAGPU_GLSL_LIGHT_UNIFORMS \
     "uniform int uLit;\n" \
+    "uniform int uLambert;\n" \
     "uniform vec3 uSun;\n" \
     "uniform float uAmb;\n" \
     "uniform float uNorm;\n"
