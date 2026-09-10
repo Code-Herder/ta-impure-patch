@@ -1902,10 +1902,16 @@ failed ground composition latches instead of leaking one `frontend.gaf` per worl
   blocker distance`, so a sub-texel bias failure is smeared into a blob. At the game's own 2.5
   the lab gives acne 7.66 / worst 61 of 255 and shows the blocky lattice by eye. **The severity
   at the shipped default is 0.96 std / 58 worst and was never measured in the game — open, and
-  it decides how urgent this is.** Fix candidates rejected in the lab: `bslack` (no effect),
-  `mindist` (no effect), `pbias` (works at 4 texels but eats 12 % of the real shadow). Those
-  two null results localise it: the false blocker is on the receiver's OWN ray and far from it
-  in depth.
+  it decides how urgent this is.** **NO BIAS CAN FIX THIS, and that is now measured rather than suspected.** Seven candidates
+  swept to convergence and costed (`bslack`, `mindist`, `castsmooth`, `castsplit`, `pbias`,
+  `noff`, `pofac`, plus the constant floor): every one removes the artifact and the terrain-shadow
+  feature together at about one for one, and the shared ones spend unit shadows too — `pbias=32`
+  takes 90 % of the acne and 91 % of the unit shadows with it. The reason is that a cell's own
+  relief IS the terrain shadow, so the false blocker and the true one sit at the same depth scale
+  and no threshold separates them. The fix must therefore not compare depths at all: a
+  **precomputed horizon / sun-visibility map** (static heightfield, fixed sun, a per-map build
+  step already exists beside `build_hills`) or a receiver-side ray-march. Neither attempted.
+  `terrainshadow=0` is the same trade every knob makes, taken honestly and for free.
 - **`shadowres` outside the four table values** (256, say) is snapped to the nearest row on the
   first click of any row rather than being preserved.
 - **The G15 `strict` walk still has not been run against this screen**, and **GUI scale `k ≠ 1`

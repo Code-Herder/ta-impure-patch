@@ -560,6 +560,51 @@ same lesson `castsplit` gave from the other side, and it rules out every fix tha
 caster (smoothing, a lowered proxy, a coarser mesh). What is left has to change the **bias**, or
 separate terrain from objects so the two can be biased differently.
 
+**THE ANSWER, MEASURED: no bias can fix this, and here is why.** Every candidate was swept to
+convergence and each one was costed against what it destroys. The acne frame is `penumbra=2.5`,
+`shadowres=2048`, eye 1536,9600 (acne 7.655); the unit-shadow cost is a separate scene
+(`tascene-base`) with `terrainshadow=0` so only units cast, counting pixels darkened more than
+2/255 against the 7 137 the shipped build produces.
+
+| candidate | scope | acne removed | unit shadows kept | terrain shadow kept |
+|---|---|---|---|---|
+| `pbias=16` (receiver-plane bias on its own texel) | shared | 58 % | 56 % | 93 % |
+| `pbias=32` | shared | 90 % | **9 %** | 77 % |
+| `noff=8` (slope-scaled normal offset) | shared | 73 % | **28 %** | — |
+| `pofac=16` (slope-scaled polygon offset, caster only) | hills draw | 54 % | **100 %** | 46 % |
+| `pofac=64` | hills draw | 87 % | **100 %** | 12 % |
+| `pofac=256` | hills draw | 98 % | **100 %** | 0.4 % |
+| constant bias floor 24 units | shared | 100 % | 0 % | 0 % |
+| **`terrainshadow=0`** | hills draw | **100 %** | **100 %** | 0 % |
+
+**Every one of them removes the artifact and the feature together, at about one for one.** The
+scoped ones (`pofac`) spare unit shadows completely — they are applied to the hills draw alone —
+and then spend terrain shadow instead, so `pofac=64` is `terrainshadow=0` with extra steps and a
+knob. The shared ones spend unit shadows, which is worse.
+
+**Why no bias can separate them: the false blocker and the true one are the same thing.** A
+cell's own relief IS the terrain shadow — a hill shadowing the valley next to it is one cell's
+height difference read at range, and a cell shadowing itself is the same height difference read
+at zero range. They live at the same depth scale (~24 world units, the relief), so no depth
+threshold, offset, slope term or search rule can admit one and refuse the other. That is the
+whole result, and it is why every row above sits on the same line.
+
+**So the fix has to be a method that does not compare depths at all**, which is what terrain
+renderers generally do:
+
+- **A precomputed horizon / sun-visibility map.** Ray-march the heightfield once per map and
+  store per cell the horizon angle toward the sun, or just a visibility scalar. Terrain
+  shadowing becomes a texture lookup: correct hill-over-valley, **no bias anywhere, no acne,
+  no per-frame cost**. Units keep the shadow map for their own shadows. Fits this project
+  unusually well — the heightfield is static per map, the shadow sun is fixed, and there is
+  already a per-map build step next to it (`build_hills`, §2.8), and the map is 672x800 R8.
+- **Ray-march the heightfield in the receiver.** The same thing live, a short march through the
+  height texture along the light. Exact, handles a moving sun, costs per fragment.
+
+Neither has been attempted. `terrainshadow=0` remains the complete answer meanwhile, and the
+table above says it is not merely a workaround: it is the same trade every knob makes, taken
+honestly and for free.
+
 **And the one candidate that reduces it without wrecking anything:** `pbias`, the receiver-plane
 bias applied to the receiver's own texel — `k · length(dzduv) · uShScale.z`, taken before the
 tap clamp, as a floor under the `nl` term. Same frame, `penumbra=2.5`:
@@ -571,9 +616,8 @@ tap clamp, as a floor under the `nl` term. Same frame, `penumbra=2.5`:
 | 8 | 5.30 | 2.23 |
 | 16 | **3.20** | **2.19** |
 
-7.66 → 3.20 for 6 % of the real shadow, where the constant bias floor that zeroed the acne cost
-37 % of the unit-shadow pixels. Still converging slowly, and **not verified against unit contact
-shadows** — that needs a scene with units and has not been run.
+7.66 → 3.20 for 6 % of the *terrain* shadow — which looked promising until it was costed against
+unit shadows, where `pbias=32` keeps only 9 % of them. See the table above; it is not a fix.
 
 **WHY THE LAB DID NOT SHOW IT — the first answer was wrong, and the lab is what disproved it.**
 The first answer written here was *"the lab has ONE terrain, the game has TWO"*: the game's

@@ -302,7 +302,7 @@ const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 const EXPLORE_ONLY = ["relief", "datum", "sun", "amb", "slope", "undither",
                       "filter", "aniso", "shadows", "penumbra", "shade",
                       "terrainshadow", "shadowres", "unitsun", "shadowsun",
-                      "shadowlen", "airshadow", "restore", "model", "precision", "bslack", "bfloor", "castsplit", "pbias", "mindist", "castsmooth",
+                      "shadowlen", "airshadow", "restore", "model", "precision", "bslack", "bfloor", "castsplit", "pbias", "mindist", "castsmooth", "noff", "pofac", "pounits",
                       "nk", "restorediff"];
 
 function sideQuery(side, presets) {
@@ -436,6 +436,8 @@ function readLook(p, label) {
     pbias: Math.max(0, num("pbias", 0)),
     mindist: Math.max(0, num("mindist", 0)),
     castsmooth: Math.max(0, Math.min(8, num("castsmooth", 0) | 0)),
+    noff: Math.max(0, num("noff", 0)),
+    pofac: num("pofac", 0), pounits: num("pounits", 0),
     // castsplit: mirror the GAME's split — a separate world-space caster
     // mesh (build_hills) and a receiver that reconstructs its world point
     // per fragment, instead of casting and shading one buffer. Default ON:
@@ -570,6 +572,7 @@ uniform float uBSlack;      // depth allowance per world unit of tap offset
 uniform float uBFloor;      // DIAGNOSTIC: constant bias floor, world units
 uniform float uPBias;       // receiver-plane bias, in texels of its own gradient
 uniform float uMinDist;     // ignore blockers nearer than this, world units
+uniform float uNOff;        // slope-scaled normal offset, texels per tan(theta)
 const vec2 POISSON[16] = vec2[16](
   vec2(-0.94201624,-0.39906216), vec2( 0.94558609,-0.76890725),
   vec2(-0.09418410,-0.92938870), vec2( 0.34495938, 0.29387760),
@@ -583,7 +586,13 @@ float shadowAt(vec3 W, vec3 n) {
   if (uShadowOn == 0) return 1.0;
   // 1.5 texels of normal offset, then a slope-scaled bias in depth units
   float nl = dot(n, uShadowSun);
-  vec3 p = (uShadowMat * vec4(W + n * uShScale.x * 1.5, 1.0)).xyz * 0.5 + 0.5;
+  // Normal-offset bias, the standard first answer: move the SAMPLE along the
+  // surface normal so it lands on a texel whose stored depth is right, rather
+  // than pushing depth (which peter-pans). The shipped 1.5 texels is flat; the
+  // usual form scales with the slope relative to the light, tan(acos(N.L)).
+  float nlc = clamp(nl, 0.05, 1.0);
+  float noTex = 1.5 + uNOff * sqrt(1.0 - nlc * nlc) / nlc;
+  vec3 p = (uShadowMat * vec4(W + n * uShScale.x * noTex, 1.0)).xyz * 0.5 + 0.5;
   // Receiver-plane depth bias: the receiver's own depth gradient across the
   // map, from the screen-space derivatives (taken before any early return,
   // where the flow is still uniform). Every tap compares against the plane's
@@ -645,7 +654,13 @@ float lambert(vec3 n, vec3 W) {
 float shadowAtD(vec3 W, vec3 n, vec3 dWdx, vec3 dWdy) {
   if (uShadowOn == 0) return 1.0;
   float nl = dot(n, uShadowSun);
-  vec3 p = (uShadowMat * vec4(W + n * uShScale.x * 1.5, 1.0)).xyz * 0.5 + 0.5;
+  // Normal-offset bias, the standard first answer: move the SAMPLE along the
+  // surface normal so it lands on a texel whose stored depth is right, rather
+  // than pushing depth (which peter-pans). The shipped 1.5 texels is flat; the
+  // usual form scales with the slope relative to the light, tan(acos(N.L)).
+  float nlc = clamp(nl, 0.05, 1.0);
+  float noTex = 1.5 + uNOff * sqrt(1.0 - nlc * nlc) / nlc;
+  vec3 p = (uShadowMat * vec4(W + n * uShScale.x * noTex, 1.0)).xyz * 0.5 + 0.5;
   vec3 dpdx = mat3(uShadowMat) * dWdx * 0.5, dpdy = mat3(uShadowMat) * dWdy * 0.5;
   float det = dpdx.x * dpdy.y - dpdx.y * dpdy.x;
   vec2 dzduv = abs(det) > 1e-14
@@ -686,7 +701,7 @@ float lambertD(vec3 n, vec3 W, vec3 dWdx, vec3 dWdy) {
 
 // the uniforms LAB_LIGHT's shadow term adds to every lab program
 const SHADOW_U = ["uShadowOn", "uShadowSun", "uShadowMat", "uShadowCmp",
-                  "uShadowRaw", "uShScale", "uPenumbra", "uShade", "uBSlack", "uBFloor", "uPBias", "uMinDist"];
+                  "uShadowRaw", "uShScale", "uPenumbra", "uShade", "uBSlack", "uBFloor", "uPBias", "uMinDist", "uNOff"];
 
 // The depth pass: one attribute, the world point, at location 7 in BOTH the
 // terrain and the unit VAO, so one program renders both into the map.
@@ -1434,6 +1449,7 @@ async function main() {
     gl.uniform1f(U.uBFloor, L.bfloor);
     gl.uniform1f(U.uPBias, L.pbias);
     gl.uniform1f(U.uMinDist, L.mindist);
+    gl.uniform1f(U.uNOff, L.noff);
   }
 
   // ---- castsplit: the game's own caster, tagpu_terr.c build_hills ----------
@@ -1524,7 +1540,15 @@ async function main() {
     gl.uniformMatrix4fv(SHU.uShadowMat, false, frame.m);
     if (L.terrainshadow) {
       if (L.castsplit) {
-        buildHills(L.castsmooth); hillsDraw();   // the game's separate caster mesh
+        buildHills(L.castsmooth);
+        // slope-scaled polygon offset on the CASTER alone: `factor` multiplies
+        // the polygon's own depth slope, which is the half a constant push cannot do
+        if (L.pofac !== 0 || L.pounits !== 0) {
+          gl.enable(gl.POLYGON_OFFSET_FILL);
+          gl.polygonOffset(L.pofac, L.pounits);
+        }
+        hillsDraw();
+        gl.disable(gl.POLYGON_OFFSET_FILL);
       } else if (nterr) {
         gl.bindVertexArray(ltVAO); gl.drawArrays(gl.TRIANGLES, 0, nterr);
       }
