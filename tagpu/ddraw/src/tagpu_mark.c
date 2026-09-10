@@ -30,9 +30,12 @@
    positions), so ITS bar steps once per sim tick — and so did ours until
    2026-09-09, while the native unit pass interpolated the body between ticks.
    That was wrong, and visibly so: the bar and the body slid against each other
-   by up to a whole tick of motion, 2.95 px peak-to-peak at 1x on a walking
-   commander and `zoom` times that on screen (5.77 px at 2x), which is the
-   health-bar wobble. Stock TA cannot show it, because there the bar and the
+   by up to a whole tick of motion — 1.68 px peak-to-peak at 1x on a walking
+   commander at TA's NORMAL game speed, 2.95 px at `gamespeed` 20, and `zoom`
+   times either on screen — which is the health-bar wobble. (Both figures were
+   measured; the note here quoted only the 2.95 until the landing review, which
+   is the double-speed one this very session found the reference setup running
+   at, so it overstated the defect by 1.75x.) Stock TA cannot show it, because there the bar and the
    body are the same shorts. The gather now takes `tagpu_native_unit_pos()` —
    the body's own anchor, the same one the selection box and the unit-anchored
    order markers already use.
@@ -737,39 +740,57 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
         if (*(const unsigned char*)(u + U_OWNER) != (unsigned)watched) continue;
 
-        /* THE ANCHOR IS THE BODY'S, NOT THE ENGINE'S SHORTS. `tagpu_native_unit_pos`
-           hands back the very sample the unit pass drew this unit from, so the bar
-           cannot disagree with the model it sits over. Reading the shorts here
-           instead — which is what this loop did until 2026-09-09 — pinned the bar to
-           the SIM rate while the body glided at present rate, and the two then slid
-           against each other by up to a whole tick of motion every tick: measured on
-           a walking commander at 1920x1080, 0.561 px rms and 2.95 px peak-to-peak at
-           1x, and exactly `zoom` times that on screen, because bars are emitted
-           unzoomed and the vertex shader scales them (5.77 px p2p at 2x). That is the
-           health-bar wobble; the selection box never had it, because
-           `tagpu_native.c`'s selbox has always taken this same anchor.
+        /* THE BAR SITS ON WHOEVER DREW THE BODY. That is the invariant, and it needs
+           two branches because two different things draw units.
 
-           THE CALL IS SAFE HERE BY CONSTRUCTION, not by timing: `tagpu_mark_gather`
-           is called from inside the unit pass's own gather (`tagpu_native.c`), on the
-           same thread, in the same frame, AFTER the walk that fills the sub-pixel
-           table — and the accessor refuses any sample that does not still describe
-           this unit's current 16.16 position, so a recycled slot falls through.
+           OURS. `tagpu_native_owns_unit` is the very predicate the unit pass gathers
+           on (`tagpu_native.c`, "units are gathered only by the unit pass"), so when
+           it holds the body was placed from `tagpu_native_unit_pos` — the
+           interpolated sub-pixel sample when there is one, that unit's own raw
+           fractional 16.16 when there is not (`tagpu_subpix.off`, or a slot the walk
+           skipped). Either way the bar takes the same number as the model under it.
 
-           AND THE ANCHOR KEEPS ITS FRACTION. Flooring it — which is what this loop
-           did between 2026-09-09 and the fix below — quantises the bar in the
-           frame's PRE-zoom units, so the bar steps `zoom` game pixels at a time
-           while the body glides continuously underneath it: the residual reads as a
-           2-4 px diagonal twitch at max zoom-in, which is what the owner saw after
-           the first fix. `snap_device` puts the anchor on the DEVICE grid instead,
-           the same rule the selection rect and the glyph atlas already follow, so
-           the step is one device pixel at every zoom.
+           THE ENGINE'S. When it does not hold, the unit pass skipped this unit and
+           the ENGINE drew the body, from `(s16)` reads of the same 16.16 — a floor.
+           The bar has to floor with it, or it sits up to a whole game pixel off a
+           body we did not place. `markown` has suppressed the engine's own bars
+           globally by then, so this is not a rare path: a unit the type filter
+           rejects, or a nanoframe while the build-effect detour is absent, still
+           needs a bar from us.
 
-           WITH NO SAMPLE the engine's own integer arithmetic is kept term for term
-           — `(s16)` of the 16.16 is a floor and `sar 1` floors the already-floored
-           height a second time — so at 1x, where `snap_device` is the identity on an
-           integer, the unit pass disarmed or `tagpu_subpix.off` still produces
-           exactly the bytes this loop produced before any of this work. */
-        if (tagpu_native_unit_pos(u, &fpx, &fpa, &fpd)) {
+           [Until the landing review both branches went through the accessor. It
+           returns 1 whenever its POINTER checks pass and hands back the raw fraction
+           when the table holds no sample — it never reports "no sample" — so the
+           integer branch below was unreachable and every engine-drawn unit got a bar
+           up to a pixel off its body. The comment here asserted the opposite, that
+           the sampleless path was byte-for-byte what it had always been.]
+
+           BOTH CALLS ARE SAFE HERE BY CONSTRUCTION, not by timing. `u` is the
+           engine's own array walk — bounded by its `beg`/`end` and stride-aligned by
+           the loop — which is the same bound under which `tagpu_native.c:2037` calls
+           `tagpu_native_owns_unit` on these very pointers every frame, so the
+           `IsBadReadPtr` inside its nanoframe branch is not what makes this read
+           safe and is not being relied on as such. And `tagpu_mark_gather` is called
+           from inside the unit pass's own gather (`tagpu_native.c:2398`), on the same
+           thread, in the same frame, AFTER the walk that fills the sub-pixel table —
+           so the ownership answer here is the one the unit pass just acted on, and
+           the accessor refuses any sample that does not still describe this unit's
+           current 16.16 position, so a recycled slot falls through to its own
+           fraction.
+
+           AND THE ANCHOR KEEPS ITS FRACTION TO THE LAST MOMENT. Flooring it — which
+           is what this loop did between the first fix and the second, both on
+           2026-09-09 — quantises the bar in the frame's PRE-zoom units, so the bar
+           steps `zoom` game pixels at a time while the body glides continuously
+           underneath it: 4 px at 4x, 8 px at ZOOM_MAX, which is the diagonal twitch
+           the owner reported at max zoom-in. `snap_device` puts the anchor on the
+           DEVICE grid instead, the same rule the selection rect and the glyph atlas
+           already follow, so the step is 1/ss of a displayed pixel at every zoom.
+           It runs on BOTH branches: on the engine's integers it is the identity at
+           1x, so engine parity there is exact, and away from 1x it only makes an
+           already sim-rate anchor land crisply. */
+        if (tagpu_native_owns_unit(u) &&
+            tagpu_native_unit_pos(u, &fpx, &fpa, &fpd)) {
             x  = fpx - (float)v->eyeX + 128.0f;
             y  = fpd - (float)v->eyeY - fpa * 0.5f + 32.0f + 10.0f;
             wx = fpx;

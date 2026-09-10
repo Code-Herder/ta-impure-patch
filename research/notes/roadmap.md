@@ -88,8 +88,12 @@ but `tagpu_mark.c`'s bar and group-digit gather read the engine's integer world 
 directly. That pinned the bar to the **sim** rate while the body glided at **present** rate, so
 the two slid apart by up to a whole sim step of motion, multiplied by the zoom on screen.
 Fixed 2026-09-09 by routing the gather through `tagpu_native_unit_pos()` — the body's own
-anchor. Bar-against-body separation, exact via `tagpu_spxlog.on` on a walking commander at
-1920x1080: **1.68 px peak-to-peak → 1.00 px at 1x** at TA's normal speed, **2.95 → 1.00** at
+anchor — for units the unit pass owns, and keeping the engine's own integer arithmetic for the
+ones it does not, so the bar always sits on whoever drew the body. (That second branch was
+added by the landing review: the accessor never reports "no sample", it returns the raw
+fraction, so the integer path had been unreachable and every engine-drawn unit carried a bar up
+to a pixel off its body.) Bar-against-body separation, exact via `tagpu_spxlog.on` on a walking
+commander at 1920x1080: **1.68 px peak-to-peak → 1.00 px at 1x** at TA's normal speed, **2.95 → 1.00** at
 `gamespeed` 20, and `zoom` times that on screen. The old error was proportional to how far a
 unit moves per sim step, so it grew with unit speed and game speed.
 

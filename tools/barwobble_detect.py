@@ -84,27 +84,51 @@ def frames(path):
     p.stdout.close(); p.wait()
 
 
-def calibrate_green(path, nframes=12):
+def calibrate_green(path, z=1.0, nframes=8):
     """The GUI green AS THIS CAPTURE HAS IT, not as a constant.
 
-    `Gamma` is one shared mutable registry inode across every instance on the machine
-    (memory: the G17a landing), so another session moving it repaints our palette: these
-    legs came back with the bar at (83,223,79) where the constant here says (93,250,88),
-    and an exact-colour match then found ZERO pixels in every frame and reported "no
-    usable run" for both builds -- a silent total miss, not a noisy one.  The GUI green is
-    the most saturated green in the frame by a wide margin (its g - max(r,b) is ~140
-    against the terrain's ~72), so take the modal colour above a threshold in between."""
+    `Gamma` is one shared mutable registry inode across every instance (memory: the G17a
+    landing), so another session moving it repaints our palette: these legs came back with
+    the bar at (83,223,79) where the constant here says (93,250,88), and an exact-colour
+    match then found ZERO pixels in every frame and reported "no usable run" for BOTH
+    builds -- a silent total miss, not a noisy one.
+
+    PICK IT BY THE PROPERTY WE ACTUALLY NEED -- a long HORIZONTAL RUN -- and never by
+    frequency.  Frequency picks foliage: on the stock leg the most common saturated colour
+    is a tree's (57,214,48) at 3854 px against the bar's 263, and keying on that finds no
+    bar at all.  Terrain green is dithered, so its runs stay a few pixels wide however
+    much of it there is; the bar is 33*z pixels of one flat colour and nothing else in the
+    frame is.  So shortlist by frequency, then choose the candidate that actually draws
+    the widest run.
+    """
     from collections import Counter
     c = Counter()
+    frame0 = None
     for i, fr in enumerate(frames(path)):
         if i >= nframes:
             break
+        if frame0 is None:
+            frame0 = fr.copy()
         a = fr.astype(np.int16)
         sat = a[:, :, 1] - np.maximum(a[:, :, 0], a[:, :, 2])
-        yy, xx = np.nonzero(sat >= 100)
+        yy, xx = np.nonzero(sat >= 60)
         c.update(map(tuple, fr[yy, xx]))
-    return np.array(c.most_common(1)[0][0]) if c else GREEN
-
+    if not c or frame0 is None:
+        return GREEN
+    minrun = max(8, int(round(25 * z)))
+    sub0 = frame0[VP[1]:VP[3], VP[0]:VP[2]].astype(np.int16)
+    best = (0, None)
+    for col, _ in c.most_common(32):
+        m = (np.abs(sub0 - np.array(col)).max(axis=2) <= 10)
+        widest = 0
+        for y in np.nonzero(m.sum(axis=1) >= minrun)[0]:
+            r = np.nonzero(m[y])[0]
+            for b in np.split(r, np.nonzero(np.diff(r) != 1)[0] + 1):
+                if len(b) > widest:
+                    widest = len(b)
+        if widest > best[0]:
+            best = (widest, col)
+    return np.array(best[1]) if best[1] is not None else GREEN
 
 def measure(frame, z=1.0, green=GREEN):
     """-> (bar_x, bar_y, box_x, box_y) or None if the bar is not on screen.
@@ -117,28 +141,30 @@ def measure(frame, z=1.0, green=GREEN):
     at 1x whatever the zoom.  At 1x the bar is also the longest run and the two rules
     agree, but by 4x the box's own edges are ~240 px against the bar's 132 and "longest
     run" locks onto the BOX -- which reads as a bar that leaps tens of pixels a frame.  So
-    erode vertically first: `m[:-1] & m[1:]` deletes every 1-px-tall horizontal line and
-    reduces the box's vertical edges to runs of length 1, and what survives at any zoom is
-    the bar."""
+    rank the candidate rows by the HEIGHT of the vertically contiguous block they sit in,
+    and only then by run length.
+
+    Do NOT do this by eroding (`m[:-1] & m[1:]`), which is what the first cut of this fix
+    did: at 1x the fill is only 3 rows and the ss=2 downsample leaves its outer rows a
+    shade off the exact key, so erosion can delete the bar outright and the tool then
+    reports "no usable run" on every 1x leg -- the case this oracle was built for."""
     sub = frame[VP[1]:VP[3], VP[0]:VP[2]].astype(np.int16)
     m = (np.abs(sub - green).max(axis=2) <= 10)
-    thick = m[:-1] & m[1:]
     minrun = max(8, int(round(25 * z)))
-    rows = np.nonzero(thick.sum(axis=1) >= minrun)[0]
+    rows = np.nonzero(m.sum(axis=1) >= minrun)[0]
     if len(rows) == 0:
         return None
-    # the bar: the thick row whose longest run is minrun+, and its run
     best = None
-    for y in rows:
-        r = np.nonzero(thick[y])[0]
-        br = np.split(r, np.nonzero(np.diff(r) != 1)[0] + 1)
-        for b in br:
-            if len(b) >= minrun and (best is None or len(b) > best[2]):
-                best = (y, b, len(b))
+    for blk in np.split(rows, np.nonzero(np.diff(rows) != 1)[0] + 1):
+        h = len(blk)
+        for y in blk:
+            r = np.nonzero(m[y])[0]
+            for b in np.split(r, np.nonzero(np.diff(r) != 1)[0] + 1):
+                if len(b) >= minrun and (best is None or (h, len(b)) > best[0]):
+                    best = ((h, len(b)), y, b)
     if best is None:
         return None
-    ys, run, _ = best
-    rows = np.nonzero(m.sum(axis=1) >= minrun)[0]
+    _, ys, run = best
     # Anchor on the RIGHT edge, not the run centre.  Under ss=2 the downsample puts an
     # antialiased 34th column on the LEFT of the bar on transition frames, which moves a
     # centre-based anchor by half a pixel and destroys the step statistics (it read our
@@ -213,7 +239,7 @@ def contiguous(mask, minlen=40):
 
 
 def video_leg(path, z=1.0):
-    green = calibrate_green(path)
+    green = calibrate_green(path, z)
     bx, by, sx, sy = [], [], [], []
     for fr in frames(path):
         r = measure(fr, z, green)
@@ -241,8 +267,24 @@ def video_leg(path, z=1.0):
     # still and then teleports `q`, which is a second difference of `q`.  Referencing the
     # BOX instead nearly missed the 4x defect (its own rotated outline breathes ~11 px at
     # that zoom, swamping the term), so this is reported beside it and not in place of it.
-    jerk = np.abs(np.diff(bx, 2))
-    step = np.hypot(np.diff(bx), np.diff(by))
+    #
+    # PER BLOCK, never across the concatenation.  `keep` glues non-adjacent blocks
+    # together, so differencing over it invents one jump per junction -- the very trap
+    # this module's docstring names and `contiguous()` exists for, which the first cut of
+    # these two lines walked straight into: the 4x legs ran in 2 blocks and the single
+    # junction alone set `step max` to 19.45 px on a bar whose real step never exceeded
+    # 3.2.  `alt`/`bar_still`/`box_still` were already protected, by `edge`; these were not.
+    seg, off = [], 0
+    for b in blocks:
+        n = len(b)
+        seg.append((off, off + n))
+        off += n
+    jerk = np.concatenate([np.abs(np.diff(bx[a:z], 2)) for a, z in seg if z - a >= 3]
+                          or [np.zeros(0)])
+    step = np.concatenate([np.hypot(np.diff(bx[a:z]), np.diff(by[a:z])) for a, z in seg
+                           if z - a >= 2] or [np.zeros(0)])
+    if len(jerk) == 0 or len(step) == 0:
+        return None
     return dict(n=int(mv.sum()), blocks=len(blocks), alt=alt,
                 slow=float(detrend((sx - bx)[mv]).std()),
                 jerk=float(jerk.mean()), jerk99=float(np.percentile(jerk, 99)),

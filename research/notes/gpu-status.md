@@ -174,11 +174,25 @@ created by the first fix.
 
 **(a) The anchor was the wrong one.** Until 2026-09-09 the bar gather read the engine's integer
 world shorts directly, which pinned the bar to the SIM rate while the body glided at present
-rate; the two slid against each other by up to a whole sim step of motion. It now calls
-`tagpu_native_unit_pos()`, which returns the very sample the body was drawn from this frame.
-The old error was **proportional to how far the unit moves per sim step**, so it grew with unit
-speed and with `gamespeed` — 1.68 px peak-to-peak at 1x at TA's normal speed, 2.95 at
-`gamespeed` 20, and `zoom` times either on screen.
+rate; the two slid against each other by up to a whole sim step of motion. The old error was
+**proportional to how far the unit moves per sim step**, so it grew with unit speed and with
+`gamespeed` — 1.68 px peak-to-peak at 1x at TA's normal speed, 2.95 at `gamespeed` 20, and
+`zoom` times either on screen.
+
+The rule now is **the bar sits on whoever drew the body**, and it takes two branches because
+two different things draw units. When `tagpu_native_owns_unit()` holds — the very predicate the
+unit pass gathers on — the body came from `tagpu_native_unit_pos()`, so the bar takes that same
+number. When it does not, the unit pass skipped the unit and the **engine** drew it from `(s16)`
+reads of the same 16.16, and the bar floors with it. That second branch is not hypothetical:
+`markown` suppresses the engine's own bars globally, so a unit the type filter rejects, or a
+nanoframe while the build-effect detour is absent, still needs a bar from us.
+
+*[The landing review caught this. Both branches went through the accessor at first, on the
+belief that it reports "no sub-pixel sample" — it does not. `tagpu_native_unit_pos` returns 1
+whenever its **pointer** checks pass and hands back the raw fraction when the table holds no
+sample, so the integer branch was unreachable and every engine-drawn unit got a bar up to a
+whole game pixel off its body. The code comment and this note both asserted the opposite, that
+the sampleless path was byte-for-byte what it had always been.]*
 
 **(b) Then it was quantised on the wrong grid.** The first fix floored that anchor, on the
 argument that the selection rect floors the same anchor and the two should agree. They did
