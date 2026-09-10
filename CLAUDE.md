@@ -193,6 +193,21 @@ the separate act: it runs the setup check, then the full content scan (every rev
 worktree, every blob against the manifest), and pushes `main` only when both are clean. Anything
 already pushed is permanent — fix forward.
 
+### Releases: a `v*` tag, and notes written for players
+
+Pushing a `v*` tag is what cuts a release — GitHub Actions builds `ddraw.dll`, packages it and
+publishes the zip. The workflow writes only a one-line placeholder note, so the body is set
+afterwards with `gh release edit <tag> --notes-file <file>`.
+
+**Release notes are for the person downloading the zip, not a lab report.** Say what changed and
+what it means for them, lead with anything that made the previous release not work, and stop
+there. **Never carry the engineering apparatus into them** — no "what was measured", no
+"not covered", no coverage caveats, no percentage tables, no methodology notes. All of that
+belongs in `research/notes/` and in the commit messages, where the next person working on the
+code will look for it; in a release note it reads as hedging and buries the one line a player
+actually needs. Ask before choosing a version number that is not the obvious next one: a patch
+release on top of `v0.2` is `v0.2.1`, and `v0.21` sorts *above* `v0.3` under semver.
+
 ### The local half: `CLAUDE.local.md`
 
 The rules that name what must never be published — the strings, the paths, the scan and its
