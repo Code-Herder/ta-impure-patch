@@ -77,7 +77,24 @@ static void shadow_defaults(TAGPU_LIGHT* L)
     L->penumbra = 0.05f;
     L->shadowlenOn = 1; L->shadowlen[0] = 14.0f; L->shadowlen[1] = 0.25f;
     L->shade = 1.0f;
-    L->terrainshadow = 1;
+    /* OFF (2026-09-09, renderers.md 2.7b). The hills mesh casting on the ground
+       it was built from self-shadows it: on open sea with nothing that can cast,
+       the water darkens in the caster's own 16-unit lattice, and it gets WORSE as
+       `Shadow quality` goes up because the bias is scaled to the texel while the
+       error is scaled to the relief. Seven candidate fixes were swept to
+       convergence and costed in the lab and every one removes the artifact and
+       the terrain-shadow feature together at about one for one, because a cell's
+       own relief IS the terrain shadow -- a hill shadowing the valley beside it
+       is one cell's height difference read at range, a cell shadowing itself is
+       the same difference read at zero range, so no depth threshold separates
+       them. Until the fix that does not compare depths at all is built (a
+       precomputed horizon / sun-visibility map, or a receiver-side ray-march),
+       this default is the same trade every knob makes, taken for free -- and the
+       1997 engine casts no terrain shadows either, so it is also the parity
+       answer. `terrainshadow=1` in the cfg still turns it on: it is the fixture
+       the fix will be measured against. Nothing in the render-options menu
+       writes this key or can reach it (tagpu_menu.c `ours`). */
+    L->terrainshadow = 0;
     L->shadowres = 2048;
     L->airshadow = TAGPU_AIRSHADOW_LEN;
 }
@@ -128,7 +145,15 @@ static void bad(const char* p)
 static void read_cfg(void)
 {
     HANDLE h;
-    char buf[1024]; DWORD n = 0;
+    /* 2048 to match tagpu_menu.c's write_cfg `in[2048]`, and it must: that
+       function copies through every token it does not own and appends its own
+       four (assets/light/shadows/shadowres) LAST, so a reader with a smaller
+       window loses the menu's own settings first. At 1024 a cfg between 1 KB
+       and 2 KB -- a few research knobs plus comments -- read back without the
+       player's rows, which applied for the session and then vanished on the
+       next poll, silently. write_cfg refuses to rewrite at all past its own
+       buffer, so matching it is the whole fix. */
+    char buf[2048]; DWORD n = 0;
     float sunAz = DEF_SUN_AZ, sunEl = DEF_SUN_EL, usunAz = DEF_USUN_AZ, usunEl = DEF_USUN_EL;
     float amb = DEF_AMB;
     float ssunAz = DEF_SSUN_AZ, ssunEl = DEF_SSUN_EL;
@@ -141,6 +166,10 @@ static void read_cfg(void)
     if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
         char* p = buf;
         buf[n] = 0;
+        /* and never truncate in silence: past this the tail is unread, which
+           is how a setting appears not to stick */
+        if (n >= sizeof buf - 1)
+            cplog("classicpp: cfg is larger than the read buffer - the tail was IGNORED");
         while (*p) {
             char* q;
             int last;

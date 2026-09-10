@@ -396,6 +396,328 @@ shadow crop re-registered by the known scroll, differ by **0.00 levels on every 
 pair** (the frames differ on 630,626 px before re-registration) — the shadow moves rigidly
 with the ground under it.
 
+### 2.7b Soft shadows self-shadow the ground, and MORE as the map sharpens [MEASURED 2026-09-09]
+
+**RESOLVED BY DEFAULT [2026-09-09]: `terrainshadow` now ships at 0** (`tagpu_classicpp.c`
+`shadow_defaults`), so the ground no longer casts and a player never meets this. The feature is
+off, not fixed — see the table further down for why every bias-shaped fix was rejected, and the
+two depth-free methods that could bring it back. `terrainshadow=1` in `tagpu_classicpp.cfg`
+still turns it on and is the fixture the fix will be measured against; **the render-options
+screen neither writes the key nor has a row for it, so no path through the UI can enable it**
+(verified in the game 2026-09-09: cycling `Shadows` through Off/Hard/Soft writes
+`assets= light= shadows= shadowres=` and nothing else, and a hand-written `terrainshadow=1`
+survives a UI apply untouched).
+
+**The defect, stated plainly: turning `Shadow quality` UP makes the picture worse.** On open
+sea with no land anywhere in the sample — nothing that can cast — the water darkens by up to
+50/255 in a blocky lattice. Measured at zoom 0.564 on `shadow-mix`, against the same frame with
+`shadows=0`, over a patch that is 100 % water:
+
+| `shadowres` | texel (world units) | acne (std) | worst darkening |
+|---|---|---|---|
+| 512 | 5.115 | **0.03** | 3.3 |
+| 1024 | 2.558 | 1.03 | 33.3 |
+| 2048 | 1.279 | 2.50 | 50.0 |
+| 4096 | 0.639 | 2.50 | 50.0 |
+
+At `Low` it is **effectively absent**. 2048 and 4096 tie because the zoom-out doubling (§2.7)
+caps both at `res=4096, texel=1.279`, which the `shadow: frame` log line confirms.
+
+**The lattice is the caster's, not the map's.** Autocorrelation of the shadow term on open water
+peaks at 9, 18, 27, 36, 45 screen px — a fundamental of 9 px, and at 1.81 world units per pixel
+that is **16.3 world units**: exactly the grid `build_hills` lays down (`o[0] = c*16`,
+`o[2] = r*16 + hh*0.5`, `tagpu_terr.c`). The dumped depth map itself is clean — a smooth
+gradient, 45 029 distinct depths, no blockiness — so the map is right and the **sampling** is
+wrong.
+
+**It is bias, not occlusion, and that was proved rather than argued.** Forcing the constant bias
+to a floor of 24 world units takes the acne to **exactly 0.00 std / 0.0 darkening**. But that is
+a diagnostic, not a fix: at that bias every unit shadow disappears (peter-panning, measured —
+59 970 of 163 200 px changed in the unit region).
+
+**Why it scales with the texel.** The blocker search is a **fixed 24 world units**
+(`search = 24.0 / uShScale.x * uShScale.z`), and the receiver-plane bias `dot(o, dzduv)` is a
+*linear* extrapolation across that distance. On curved seabed the extrapolation error is fixed
+in world units, while the constant bias `(1 + 2(1 − nl)) × texel` shrinks as the map sharpens —
+so past some resolution the bias no longer covers the error and false blockers appear. That the
+required bias turned out to be ~24 world units, the search radius itself, is the confirmation.
+
+**IT IS THE TERRAIN CASTER ALONE, and `terrainshadow=0` removes it completely**
+[MEASURED 2026-09-09, and this supersedes the "candidate fix" this section first proposed].
+The ground shadowing itself is the *hills* mesh (§2.8) casting onto the ground it was built
+from. Same camera, same `shadowres=2048`, shadow term isolated against `shadows=0`:
+
+| | shadow term (std) | worst darkening | 16-unit lattice (autocorr @ 9 px) |
+|---|---|---|---|
+| `terrainshadow=1` | 8.72 | 71.0 | 0.71 |
+| `terrainshadow=0` | **0.00** | **0.0** | **0.00** |
+
+**Exactly zero, not merely reduced** — and unit shadows are untouched by the switch, so
+`terrainshadow=0` is a complete workaround today for anyone who sees it. That also relocates
+the fix: it belongs to the **hills draw alone** (a depth offset on that one `glDrawElements` in
+`tagpu_shadow_hills`, which casters conventionally get), not to the shared bias or the blocker
+search. An earlier candidate here — capping the search at `min(24.0 / uShScale.x, 8.0)` — only
+cut the acne 2.50 → 0.49 and touched *every* shadow including units, so it is the wrong shape
+and is not the recommendation.
+
+**What the fix is NOT — three candidates, all measured, none of them right.** Same camera,
+`shadowres=2048`, shadow term isolated against `shadows=0` (baseline **8.72 std / 71.0 worst**):
+
+| candidate | result | why it is wrong |
+|---|---|---|
+| constant bias floor of 24 world units | **0.00 / 0.0** | also erases every *unit* shadow — peter-panning, 59 970 of 163 200 px changed in the unit region |
+| blocker search capped at 8 texels (`min(24.0/uShScale.x, 8.0)`) | 0.49 / 28.7 | incomplete, and it shortens the penumbra for **every** shadow, units included |
+| `glPolygonOffset` on the hills draw alone | 6.48 @ ~1.1 wu, 5.27 @ ~4.3 wu, **3.22 @ ~12.8 wu** | scoped correctly but converges far too slowly; the magnitude that would finish the job is enough to visibly detach hill shadows |
+
+The polygon-offset result is the informative one: **a uniform depth push cannot reconcile the two
+surfaces**, which means the mismatch is not a constant offset but a *shape* difference between
+the two reconstructions. (Note `units` is in minimum-resolvable-depth steps — here
+3577 / 2²⁴ ≈ 2.1e-4 world units — so the useful range is tens of thousands, not single digits.)
+
+**What the fix is not, continued: it is NOT the caster/receiver split.** That was this
+section's own conclusion for a day and it is wrong; the lab was changed to test it and the test
+says no. See below.
+
+**So the direction the evidence actually points is the bias, and specifically its SCALE.** The
+required bias came out at ~24 world units, which is the blocker search radius itself, and the
+acne grows as the texel shrinks. The constant bias `(1 + 2(1 − nl)) × texel` is sized for a
+receiver error of one texel — the right size for a tap at one texel, and the wrong size for a
+tap 24 world units out, where the receiver-plane bias is a *first-order* extrapolation of a
+curved surface. So the candidate is an allowance that scales with the TAP DISTANCE rather than
+with the texel:
+
+```
+if (d < z + dot(o, dzduv) - k * length(o)_world) { ... }      /* k world units per world unit */
+```
+
+It is scoped correctly (it only relaxes taps that are far out), it costs a unit shadow nothing
+(a unit blocker sits tens of world units above the receiver plane, far beyond any sane `k`), and
+unlike a bias floor it does not peter-pan. **Not yet measured in the game.** It is implemented in
+the lab as `bslack` so that both can be swept with the same knob. `terrainshadow=0` remains the
+complete answer for anyone who sees the artifact today.
+
+**CORRECTION [2026-09-09, later the same day]: the lab reproduces this defect at full
+strength, and the 8.72 figure above was measured on a NON-DEFAULT configuration.** Three
+things were wrong in the paragraphs that follow, and all three are measurement errors of mine
+rather than anything about the renderer:
+
+1. **`penumbra`.** The instance the in-game numbers came from (`g18acne`) carries a
+   `tagpu_classicpp.cfg` reading `sun=225,35  amb=0.35  penumbra=2.5` — the menu writes only
+   `assets/light/shadows/shadowres` and *preserves* those three, so they were put there by hand
+   during the investigation and are not what a player gets. **The shipped default is
+   `penumbra=0.05`**, and the lab was being run at it. The penumbra is the **amplifier**: the
+   PCSS kernel radius is `penumbra × the blocker distance`, so a bias failure that is a
+   fraction of a texel wide gets smeared into a soft blob tens of units across. Same lab frame,
+   same everything else: acne **0.96** at `penumbra=0.05`, **2.44** at 0.5, **7.66** at 2.5.
+2. **The oracle was computed wrongly.** `std(term) − std(term at bfloor=24)` is a difference of
+   standard deviations, not the standard deviation of the difference. The acne is the per-pixel
+   image `term(bfloor=0) − term(bfloor=24)`; take **its** std. The wrong form understated it
+   about fourfold.
+3. **The regions were not comparable.** The game figure was a hand-picked 100 %-water patch; the
+   lab figures were whole 1024×768 frames including the letterbox, which contributes no
+   variance. On one lab frame: 1.34 whole-frame, 1.50 inside the viewport, 3.85 on the worst
+   200×200, **5.92 on the worst 100×100**, 7.47 on the worst 64×64.
+
+With all three fixed, at the game's own `penumbra=2.5`: **lab acne 7.66 over the viewport,
+11.39 on the worst 100×100, worst pixel 61/255**, against the game's 8.72 on its patch — and
+the frame shows the blocky rectilinear lattice by eye, not as a statistic. **The lab is the
+oracle for this defect today.** The sections below are kept because their *structural*
+conclusions were separately tested and stand; read them with the numbers above.
+
+**What this changes about the defect's severity.** At the shipped `penumbra=0.05` the same
+frame gives 0.96 std with a worst pixel of 58/255 — real and visible, but not the dramatic
+form. Whether what was seen in play was the mild form or the severe one was **not** established:
+the play instance carried no cfg (so `penumbra=0.05`), and no severity figure was ever taken at
+the defaults in the game itself. **Open, and worth closing before choosing a fix.**
+
+**Three more fix candidates, all measured in the lab, none of them the fix** (same frame,
+`penumbra=2.5`, `shadowres=2048`, baseline acne 7.66 / real shadow 2.31):
+
+| candidate | knob | result |
+|---|---|---|
+| depth allowance per world unit of tap offset | `bslack` | **no effect at all** — 7.66 at every k up to 1.0, which is 24 world units at the outermost tap. So the false blocker is NOT being found by the ring taps |
+| receiver-plane bias on the receiver's own texel | `pbias` | 7.66 → 6.9 at 2 texels, **0.91 at 4** *(at `penumbra=0.05`: 1.50 → 0.91)*, but it takes 12 % of the real shadow with it |
+| reject blockers nearer than w world units | `mindist` | 7.66 → 7.48 at 8 units. So the false blocker is not *near* either — the map really holds a much shallower depth at the receiver's own texel |
+
+`bslack` and `mindist` between them say the false blocker sits **on the receiver's own ray and
+far from it in depth**, which is a sharper localisation of the defect than anything above and is
+where the next attempt should start.
+
+**The mechanism, as far as it has been measured.** The height byte is one sample per 16 world
+units, and neighbouring bytes differ by up to 70 — a **77° cliff** to anything that treats the
+grid as geometry, where the art it labels is a flat painted tile. A shadow-map texel here is
+1.28 world units, so **across ONE texel the surface's depth changes by tens of world units**
+wherever the grid is steep. The receiver compares against the depth stored for its own texel,
+which is the surface at the texel *centre* — that much shallower. The shipped bias is
+`(1 + 2(1 − nl)) × texel`: one to three texels, sized as though the depth gradient were about 1,
+where `dzduv` runs to the ±4 clamp and beyond. That is why the acne scales as 1/texel, why the
+lattice is the caster's 16-unit cell, and why the bias that finally covers it (~24 units) is the
+*relief* scale rather than anything of the shadow map's.
+
+**A fourth null result, and it is the informative one: SMOOTHING THE CASTER MAKES IT WORSE.**
+`castsmooth=<n>` low-passes the caster's heights over a (2n+1)-cell box — the obvious "make the
+caster depict what the art depicts" move. Same frame, `penumbra=2.5`:
+
+| `castsmooth` | acne | real shadow |
+|---|---|---|
+| 0 | 7.66 | 2.34 |
+| 1 | **12.11** | 1.58 |
+| 2 | **17.53** | 1.03 |
+| 3 | **20.26** | 0.89 |
+
+So the caster and the receiver **must** stay the same surface to the world unit — which is the
+same lesson `castsplit` gave from the other side, and it rules out every fix that reshapes the
+caster (smoothing, a lowered proxy, a coarser mesh). What is left has to change the **bias**, or
+separate terrain from objects so the two can be biased differently.
+
+**THE ANSWER, MEASURED: no bias can fix this, and here is why.** Every candidate was swept to
+convergence and each one was costed against what it destroys. The acne frame is `penumbra=2.5`,
+`shadowres=2048`, eye 1536,9600 (acne 7.655); the unit-shadow cost is a separate scene
+(`tascene-base`) with `terrainshadow=0` so only units cast, counting pixels darkened more than
+2/255 against the 7 137 the shipped build produces.
+
+| candidate | scope | acne removed | unit shadows kept | terrain shadow kept |
+|---|---|---|---|---|
+| `pbias=16` (receiver-plane bias on its own texel) | shared | 58 % | 56 % | 93 % |
+| `pbias=32` | shared | 90 % | **9 %** | 77 % |
+| `noff=8` (slope-scaled normal offset) | shared | 73 % | **28 %** | — |
+| `pofac=16` (slope-scaled polygon offset, caster only) | hills draw | 54 % | **100 %** | 46 % |
+| `pofac=64` | hills draw | 87 % | **100 %** | 12 % |
+| `pofac=256` | hills draw | 98 % | **100 %** | 0.4 % |
+| constant bias floor 24 units | shared | 100 % | 0 % | 0 % |
+| **`terrainshadow=0`** | hills draw | **100 %** | **100 %** | 0 % |
+
+**Every one of them removes the artifact and the feature together, at about one for one.** The
+scoped ones (`pofac`) spare unit shadows completely — they are applied to the hills draw alone —
+and then spend terrain shadow instead, so `pofac=64` is `terrainshadow=0` with extra steps and a
+knob. The shared ones spend unit shadows, which is worse.
+
+**Why no bias can separate them: the false blocker and the true one are the same thing.** A
+cell's own relief IS the terrain shadow — a hill shadowing the valley next to it is one cell's
+height difference read at range, and a cell shadowing itself is the same height difference read
+at zero range. They live at the same depth scale (~24 world units, the relief), so no depth
+threshold, offset, slope term or search rule can admit one and refuse the other. That is the
+whole result, and it is why every row above sits on the same line.
+
+**So the fix has to be a method that does not compare depths at all**, which is what terrain
+renderers generally do:
+
+- **A precomputed horizon / sun-visibility map.** Ray-march the heightfield once per map and
+  store per cell the horizon angle toward the sun, or just a visibility scalar. Terrain
+  shadowing becomes a texture lookup: correct hill-over-valley, **no bias anywhere, no acne,
+  no per-frame cost**. Units keep the shadow map for their own shadows. Fits this project
+  unusually well — the heightfield is static per map, the shadow sun is fixed, and there is
+  already a per-map build step next to it (`build_hills`, §2.8), and the map is 672x800 R8.
+- **Ray-march the heightfield in the receiver.** The same thing live, a short march through the
+  height texture along the light. Exact, handles a moving sun, costs per fragment.
+
+Neither has been attempted. `terrainshadow=0` remains the complete answer meanwhile, and the
+table above says it is not merely a workaround: it is the same trade every knob makes, taken
+honestly and for free.
+
+**And the one candidate that reduces it without wrecking anything:** `pbias`, the receiver-plane
+bias applied to the receiver's own texel — `k · length(dzduv) · uShScale.z`, taken before the
+tap clamp, as a floor under the `nl` term. Same frame, `penumbra=2.5`:
+
+| `pbias` | acne | real shadow |
+|---|---|---|
+| 0 | 7.66 | 2.34 |
+| 4 | 6.73 | 2.28 |
+| 8 | 5.30 | 2.23 |
+| 16 | **3.20** | **2.19** |
+
+7.66 → 3.20 for 6 % of the *terrain* shadow — which looked promising until it was costed against
+unit shadows, where `pbias=32` keeps only 9 % of them. See the table above; it is not a fix.
+
+**WHY THE LAB DID NOT SHOW IT — the first answer was wrong, and the lab is what disproved it.**
+The first answer written here was *"the lab has ONE terrain, the game has TWO"*: the game's
+terrain gather emits screen-space quads with no height, so its fragment shader rebuilds the world
+point per fragment (`taTerrW`) while the caster is a separate world-space mesh (`build_hills`),
+where the lab cast the very buffer it shaded. Plausible, and false. **The two describe the same
+surface**, and it can be shown on paper: `build_hills`'s triangle over lattice corners (c,r),
+(c+1,r), (c,r+1) interpolates to `((c+tx)·16, h, (r+ty)·16 + h/2)` with `h` the same linear blend
+of the same three bytes that `taTerrW` computes at the same parameter, and the two triangulations
+use the same diagonal, (1,0)-(0,1).
+
+The lab was given the split anyway, so the claim could be measured instead of argued
+(`tascene-view.html`, `castsplit`, default **1**): a `build_hills`-shaped indexed caster mesh
+over the whole map, cast in place of `ltVAO`, and a receiver that runs `tagpu_terr.c`'s own
+`taTerrW` / `taTerrN` / analytic-derivative `taShadowAt` per fragment instead of interpolating a
+vertex world point. Both halves, copied from the C source. Result, same frame, `shadowres=2048`:
+
+| | shadow term (std) | worst | px differing from the other mode |
+|---|---|---|---|
+| `castsplit=0` (one buffer, cast and shaded) | **1.669** | 62.0 | — |
+| `castsplit=1` (the game's two representations) | **1.670** | 62.0 | 780 of 786 432, max 9/255 |
+
+*(`castsplit=0` is byte-identical to what the lab drew before the knob existed — verified, 0 px.)*
+**The split's entire footprint is 780 pixels and 0.001 of std.** It is not the cause of anything,
+and the structural "one surface, not two" fix it implied would have been a large terrain-pass
+refactor bought with nothing.
+
+**What the lab DOES reproduce: the defect and its law.** Pointed at open sea on Two Continents
+with no units and no features in the pack — nothing in the scene that can cast but the ground
+— the lab shows terrain self-shadowing that vanishes exactly at `terrainshadow=0` (0.000 std,
+0 px), which is the game's own signature. Most of the raw term there is *legitimate* trench
+shadow, so it has to be isolated first (see the oracle below). Isolated:
+
+| `shadowres` | lab, acne only | game, same sweep (different camera) |
+|---|---|---|
+| 512 | 0.037 | 0.03 |
+| 1024 | 0.123 | 1.03 |
+| 2048 | 0.224 | 2.50 |
+| 4096 | 0.355 | 2.50 |
+
+Same law — acne grows as the map sharpens — and at 512 the two nearly agree. What the lab does
+**not** reproduce is the magnitude at high resolution: it is roughly ten times quieter, and its
+acne sits on trench edges rather than spreading over open water in the game's blocky lattice.
+
+**The acne oracle, because the raw term will not do.** `bfloor=<w>` floors the constant bias at
+w world units. At `bfloor=24` every shadow a real caster throws survives and the ones the bias
+failed to cover are gone, so
+
+```
+acne = std(shadow term) - std(shadow term at bfloor=24)
+```
+
+On the lab's open-water frame the raw term is 1.669 and the acne is 0.224 — 87 % of what the
+naive number reports is real shadow. In the game's sample the raw term was 8.72 and `bfloor=24`
+took it to 0.00, i.e. that sample was **100 % acne and no legitimate terrain shadow at all**,
+which is the sharpest statement of the defect anywhere in this section.
+
+**What is still unexplained, stated as gaps rather than covered over.** The remaining ten-fold
+is not accounted for. Two candidates, neither tested:
+
+- **The lab's light frame is not the game's.** `shadowFrame` fits the box to the *visible*
+  height range (`[h0, h1+128]`) where `frame()` in `tagpu_shadow.c` uses a fixed `[0, Y_TOP]`
+  = `[0, 511]`; the lab's window is the **1x** viewport whatever `zoom` says, where the game
+  uses the zoomed one (`evw`/`evh`); and the lab has no octave, no `res*2 <= 4096` doubling and
+  **no map-anchored lattice snap** (`u0 = floor(u0/texel)*texel`), all three of which the game
+  has and §2.7 describes. The game's measurement was taken at **zoom 0.564**, which is exactly
+  the regime the lab cannot express. This is the next thing to mirror.
+- **The scene.** The acne is driven by the receiver's curvature across the 24-unit search, and
+  no lab eye tried so far has the game sample's seabed. Matching the camera would settle how
+  much of the gap is geometry.
+
+**The rule this still suggests for the lab.** The lab is a faithful oracle for a pass only where
+its inputs have the same shape as the game's — and the falsification above says *which* inputs
+are worth checking first. Here the two terrain representations turned out to agree exactly, so
+duplicating them bought nothing; the light frame, which nobody had compared, is where the game
+and the lab actually differ. Compare the numbers a pass is *fed* before theorising about the
+structure it is fed them through.
+
+**How to measure it, because the obvious metric lies.** The raw standard deviation of the water
+band is ~38 either way: it is dominated by the tile art, and it moved by 0.15 when the artifact
+went from full to absent. The shadow term has to be isolated against an otherwise identical
+`shadows=0` frame first; only then does the signal appear (8.72 → 0.00).
+
+**Not a regression of the G18 landing.** The landed build and `bbceeb8` (main before it) render
+this scene identically where it matters. *(An earlier draft of this line claimed "0 of 270 000
+px differ"; that was a hand-picked crop of deep water and is withdrawn. Full frame: 67 181 px
+differ, of which 64 934 are the menu panel the landing added; 2 247 lie outside it, below the
+4 889-px frame-to-frame noise floor of two runs of the SAME build.)* The menu only
+made the knob reachable, which is how it was found.
+
 ### 2.8 Hills cast: a static per-map heightfield mesh
 The terrain gather emits screen-space quads with no height **[SOURCE `tagpu_terr.c`]**, so
 the depth pass has nothing of the ground to draw. **Decided: one world-space VBO of the whole

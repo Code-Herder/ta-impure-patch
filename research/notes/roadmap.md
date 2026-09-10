@@ -1934,6 +1934,37 @@ failed ground composition latches instead of leaking one `frontend.gaf` per worl
   the pass **on**, and with both present the `.on` wins — so both orderings have a transient
   wrong read. It is sub-frame and the next 250 ms poll corrects it; closing it properly needs a
   single atomic indicator rather than a pair.
+- **[DEFAULTED OFF 2026-09-09 — `terrainshadow=0` ships, and the render-options screen has no path to turn it on]** **The `Shadow quality` row made the picture WORSE as it went up** — the one defect a player
+  actually meets, found by playing zoomed out and diagnosed 2026-09-09. Soft shadows self-shadow
+  flat ground: on open sea with nothing casting, the water darkens up to 50/255 in a 16-world-unit
+  lattice (the `build_hills` caster grid), and the acne grows as the map sharpens because the
+  bias is scaled to the texel while the error is not — 0.03 std at `Low`, 2.50 at `High`/`Ultra`.
+  **It is the TERRAIN caster alone: `terrainshadow=0` takes the shadow term on that water to
+  exactly 0.00 and leaves unit shadows untouched**, so there is a complete workaround today and
+  the fix belongs to the hills draw, not the shared bias. Full diagnosis in
+  [renderers](renderers.html) §2.7b. It is NOT a regression of this landing (2 247 px outside the
+  new menu panel differ between the landed build and `bbceeb8`, under the 4 889-px noise floor of
+  two runs of the same build) and the fix belongs to the shadow module, so it is not taken here.
+  Until it is, `Ultra` is the wrong recommendation.
+  **The caster/receiver split is NOT the cause** — that hypothesis was built into the lab as
+  `castsplit` on 2026-09-09 and measured at 0.001 std / 780 px, which killed it and saved a
+  terrain-pass refactor.
+  **The LAB REPRODUCES THIS at full strength** (same day, later): the 8.72 figure came from an
+  instance whose cfg carried `penumbra=2.5` where the shipped default is `0.05`, and the lab was
+  being run at the default. The penumbra is the amplifier — the PCSS radius is `penumbra × the
+  blocker distance`, so a sub-texel bias failure is smeared into a blob. At the game's own 2.5
+  the lab gives acne 7.66 / worst 61 of 255 and shows the blocky lattice by eye. **The severity
+  at the shipped default is 0.96 std / 58 worst and was never measured in the game — open, and
+  it decides how urgent this is.** **NO BIAS CAN FIX THIS, and that is now measured rather than suspected.** Seven candidates
+  swept to convergence and costed (`bslack`, `mindist`, `castsmooth`, `pbias`,
+  `noff`, `pofac`, plus the constant floor): every one removes the artifact and the terrain-shadow
+  feature together at about one for one, and the shared ones spend unit shadows too — `pbias=32`
+  takes 90 % of the acne and 91 % of the unit shadows with it. The reason is that a cell's own
+  relief IS the terrain shadow, so the false blocker and the true one sit at the same depth scale
+  and no threshold separates them. The fix must therefore not compare depths at all: a
+  **precomputed horizon / sun-visibility map** (static heightfield, fixed sun, a per-map build
+  step already exists beside `build_hills`) or a receiver-side ray-march. Neither attempted.
+  `terrainshadow=0` is the same trade every knob makes, taken honestly and for free.
 - **`shadowres` outside the four table values** (256, say) is snapped to the nearest row on the
   first click of any row rather than being preserved.
 - **The G15 `strict` walk still has not been run against this screen**, and **GUI scale `k ≠ 1`

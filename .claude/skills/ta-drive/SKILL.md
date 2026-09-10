@@ -870,7 +870,9 @@ the **shadow** dimension is still on that master arm and its own `shadows=` key,
   flip moves 37 415 of that rect's 45 056 px.
 - The `gui: twins=` heartbeat carries `cpp=<master> assets=<n> light=<n>`, and `colvalid`
   drops to 0 while `assets=0`. **The shadow keys** (G14i) ride the same file — `shadows=0|1|2`,
-`shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B|off`, `shade=S`, `terrainshadow=0|1`,
+`shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B|off`, `shade=S`, `terrainshadow=0|1`
+(**default 0** since 2026-09-09 — the ground self-shadows, renderers.md 2.7b; set it to 1 only
+to study that),
 `shadowres=N`, `airshadow=len|physical|drop`, the lab's defaults — and answer on a second
 line, `classicpp: shadows=1(soft) shadowsun=225.0,40.0 …`; the map also needs the engine's own
 Shadows option on.
