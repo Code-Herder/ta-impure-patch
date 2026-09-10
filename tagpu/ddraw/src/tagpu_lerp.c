@@ -17,6 +17,18 @@
    model landing on the same address; the level generation catches a whole map
    teardown, which is the case tagpu_reclaim already bumps a counter for.
 
+   WHAT THE KEY DOES NOT CATCH, and it is a real residual: two units OF THE SAME
+   TYPE. `nparts` comes from the bake and is per type, so a dead Peewee and a
+   fresh one landing on the same Object3do match on all three parts. If the new
+   one is first drawn within LERP_MAXGAP of the old one's last sample, its first
+   blended frame sweeps from the dead unit's stance. It is bounded and cosmetic
+   -- one frame, and every index stays inside the same block -- but it is not
+   closed, and it is the artifact to suspect if a just-built unit twitches once.
+   Closing it wants a stable per-unit identity (`unit+0xA8`, the in-game index,
+   is the candidate) rather than the allocation address; that is a new engine
+   read and was deliberately not added at the end of this landing.
+   [FOUND BY THE LANDING REVIEW 2026-09-09, both reviewers independently]
+
    WHY BLOCKS OF 48 PIECES. The arena is fixed and preallocated (3.4 MB, less
    than the 4.7 MB pose arena beside it), and a fixed block size means no
    fragmentation and no allocator: slot i owns pieces [i*48, i*48+48). 48 is
@@ -38,7 +50,10 @@
 #include "tagpu_opt.h"
 
 #define TA_MAINPP   0x00511DE8u
-#define OFF_TICK    0x38A47      /* int GameTime, 30 a second */
+#define OFF_TICK    0x38A47      /* int GameTime. 3 x GameSpeed a second --
+                                    60 on a default skirmish, NOT 30; that
+                                    assumption was this module's first bug.
+                                    The period is learned, never assumed. */
 
 #define LERP_HASH   4096         /* power of two, comfortably over MAXU 2048 */
 #define LERP_PROBE  8
@@ -193,8 +208,10 @@ static LREC* lookup(const char* o3, int nparts)
         if (!r->o3) { if (!cand) cand = r; continue; }
         if (r->o3 != o3) continue;
         if (r->nparts == nparts && r->gen == s_gen) { r->frame = s_frame; return r; }
-        /* SAME ADDRESS, DIFFERENT UNIT -- the recycled-slot case the key
-           exists for. Recycle the record in place; do not blend across it. */
+        /* SAME ADDRESS, DIFFERENT *MODEL* -- recycle the record in place
+           rather than blending across it. Note this arm cannot fire for two
+           units of the same TYPE on a reused allocation: they match on all
+           three parts and take the `return r` above. See the header. */
         rec_release(r);
         cand = r;
         break;

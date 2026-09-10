@@ -760,7 +760,7 @@ on 2026-09-09. The row table and every geometry number here are the current **se
    option — see the row table.)
 
 **The screen — a drop-down, not a stock rect** [SHAPE DECIDED 2026-09-09]. `RENDER.GUI`,
-panel `id=0` at `(w−16−304, 32) 304×212` — right-aligned by `MARGIN = 16`, hanging from the
+panel `id=0` at `(w−16−304, 32) 304×240` — right-aligned by `MARGIN = 16`, hanging from the
 top bar's underside, over the world. Background gadget `id=12` naming its panel frame. Seven
 `id=1` buttons at `x=166 w=120 h=20` on a **28 px** pitch, each with an `id=5` label at
 `x=14 w=144` **on the same line**:
@@ -814,7 +814,7 @@ puts the label above, which seven rows have no room for.*
 behaviour prototyped the same day]. The panel opens on the sprocket and closes on the sprocket;
 clicks anywhere else go to the game untouched. Two things forced it, and both are measurements:
 **every row is live**, so a menu you must dismiss to see the effect of is the wrong shape —
-you would click, close, look, reopen; and the panel is 304×212 in a corner, covering ~8 % of a
+you would click, close, look, reopen; and the panel is 304×240 in a corner, covering ~9 % of a
 1024×768 frame and none of the side panel. It also removes the only place our input code would
 have had to arbitrate with the game's, and makes the earlier *"not measured: whether a `.GUI`
 dispatcher reports a click outside its `id=0` rect"* moot — nothing needs that answer now.

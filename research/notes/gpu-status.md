@@ -1517,6 +1517,11 @@ than snapping at the tick. It is only this small because G16 turned the pose bac
   turn multiply has only 32767 of headroom (`t` reaches +32768; `32768 × 65535` is 2 147 450 880
   against `INT_MAX` 2 147 483 647). The `[0,1)` refusal above already implies it today; the clamp is
   what keeps a later change to that refusal from becoming silent signed overflow.
+- **Known residual, open**: the `(o3, nparts, gen)` key does not separate two units of the **same
+  type** landing on the same reused `Object3do`, so a freshly built unit drawn within `LERP_MAXGAP`
+  of a dead one's last sample can blend one frame from the dead unit's stance. Cosmetic and bounded
+  — every index stays inside the same 48-piece block — but not closed; closing it wants a stable
+  per-unit identity (`unit+0xA8`) rather than the allocation address. Found by the landing review.
 - `lerp=<blended>/<snapped> p=<ms> u=<weight>` rides the `native:` line, and **nothing at all** is
   printed when the lever is off.
 

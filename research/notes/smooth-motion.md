@@ -108,7 +108,11 @@ render at `t − D` with D ≈ 2 ticks; interpolate between the two bracketing s
   snapshots are **3.5 MB**, less than the 4.7 MB pose arena already there. Past the arena, weight
   1.0 — and counted, the way [G16](gpu-posing.md) step 8 counts `rest=`.
 - **Keyed by `(o3, nparts, level generation)`, dropped on mismatch.** Unit array slots are
-  recycled; without this a new unit inherits a dead one's poses.
+  recycled; without this a new unit inherits a dead one's poses. **It does not close the case for
+  two units of the SAME TYPE** — `nparts` is per type, so a dead Peewee and a fresh one on the same
+  reused `Object3do` match all three parts and the new one's first blended frame can sweep from the
+  dead one's stance. Bounded and cosmetic (one frame, indices stay in-block), **open**, and it wants
+  a stable per-unit identity such as `unit+0xA8` to close. [FOUND BY THE LANDING REVIEW 2026-09-09]
 - Sampling happens on the render thread, so a snapshot can mix pieces across a tick boundary —
   bounded by one tick of one piece, the residual [G16](gpu-posing.md) §2 already accepts by design.
 
@@ -213,7 +217,7 @@ needs.
 | **0 — taste** | does smoothed TA look better than the authored stepping? | **PASSED 2026-09-09** — the owner's verdict on the A\|B viewer (§7a), which is the only thing that could decide it |
 | **1 — coverage** | how often would B fall back? | `tools/cob_lookahead.py` — **run, §5** |
 | **2 — parity** | with the lever off, is output unchanged? | **PASSED 2026-09-09** — `tagpu_posecrc.on`, §7e |
-| **3 — cost** | what does it cost at scale? | **MEASURED 2026-09-09 — 0.56 ms/frame at 240 posed units**, §7f |
+| **3 — cost** | what does it cost at scale? | **MEASURED 2026-09-09 — 0.56 ms/frame at 240 posed units**, §7f — ⚠ **that is the first cut's `double` blend; the shipped 16.16 blend is NOT re-measured**, §7i |
 | **4 — sim untouched** | did anything reach the simulation? | **PASSED 2026-09-09** — `cobtrace` on `scenarios/walk-lerp.json`, §7g |
 
 ### 7a. Gate 0's instrument — built 2026-09-09
@@ -627,8 +631,13 @@ above, or to the weight's scale, cannot silently break. See CLAUDE.md, *Fixes mu
 construction*: this is a bound, not a "the weight is never that big" argument.
 
 **Resolution and rounding.** 16.16 gives the weight 1/65536 of a tick, orders of magnitude finer
-than a piece moves in one tick. The position delta stays a **wide** multiply, so no pair of
-endpoints can overflow it whatever a mod puts in those fields. `>> 16` floors where `(int)`
+than a piece moves in one tick. The position delta stays a **wide** multiply, so **the multiply**
+cannot overflow whatever a mod puts in those fields. *The landing review sharpened this: the
+narrowing `(int)` of the shifted product still can, at endpoints spanning more than 2³¹ in 16.16
+(`ap = INT_MIN, bp = INT_MAX` is the witness), which is unreachable with real piece offsets —
+16.16 world units put ±32768 wu at the limit and the largest stock map is 4096. So the guarantee
+is "the wide multiply cannot overflow, and no reachable endpoint pair reaches the narrowing", not
+the flat claim this sentence first made.* `>> 16` floors where `(int)`
 truncated toward zero, so a negative delta can land one LSB — 1/65536 of a world unit — lower
 than the float version did. That is on a path with no parity requirement: invariant 2 is about
 the lever being **off**, which never reaches this function.
@@ -640,7 +649,8 @@ not yet established.** The attempt is recorded because the conditions, not the c
 
 - The fixture reproduced §7f's exactly — `crowd-static`, 1024×768 `ss=2`, `--maxfps 0`,
   `posed=240/32288tri`, and the same blend volume (`lerp=71040/960`, the identical reading §7f
-  quotes), at the same `GameSpeed` 20 / 64 ticks a second. So the work being timed is like-for-like.
+  quotes), at the same `GameSpeed` 20 — **60 ticks a second** (`3 × GameSpeed`; a crude two-peek
+  reading during the run gave 64 and is not the engine's rate). So the work timed is like-for-like.
 - The lever polls live every 30 frames, so this was run as an **interleaved live A/B in one
   process** — off/on pairs back to back — which is strictly better than §7f's paired launches:
   no relaunch, no sim divergence, no different point in a fight.

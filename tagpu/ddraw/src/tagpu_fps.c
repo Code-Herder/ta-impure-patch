@@ -33,13 +33,11 @@
 #define VST       4                   /* x, y, u, v                            */
 
 typedef void (APIENTRY *PFN_DRAWARRAYS)(GLenum, GLint, GLsizei);
-typedef void (APIENTRY *PFN_BLENDFUNC)(GLenum, GLenum);
 typedef void (APIENTRY *PFN_ACTIVETEX)(GLenum);
 typedef void (APIENTRY *PFN_UNIFORM2F)(GLint, GLfloat, GLfloat);
 typedef void (APIENTRY *PFN_UNIFORM3F)(GLint, GLfloat, GLfloat, GLfloat);
 typedef void (APIENTRY *PFN_DISABLE)(GLenum);
 static PFN_DRAWARRAYS x_glDrawArrays;
-static PFN_BLENDFUNC  x_glBlendFunc;
 static PFN_ACTIVETEX  x_glActiveTexture;
 static PFN_UNIFORM2F  x_glUniform2f;
 static PFN_UNIFORM3F  x_glUniform3f;
@@ -117,22 +115,25 @@ static void init_gl(void)
     GLuint vs, fs;
     GLint ok = 0;
     x_glDrawArrays    = (PFN_DRAWARRAYS)getgl("glDrawArrays");
-    x_glBlendFunc     = (PFN_BLENDFUNC) getgl("glBlendFunc");
     x_glActiveTexture = (PFN_ACTIVETEX) getgl("glActiveTexture");
     x_glUniform2f     = (PFN_UNIFORM2F) getgl("glUniform2f");
     x_glUniform3f     = (PFN_UNIFORM3F) getgl("glUniform3f");
     x_glDisable       = (PFN_DISABLE)   getgl("glDisable");
-    if (!x_glDrawArrays || !x_glBlendFunc || !x_glActiveTexture ||
+    if (!x_glDrawArrays || !x_glActiveTexture ||
         !x_glUniform2f || !x_glUniform3f || !x_glDisable) {
         flog("fps: missing GL proc"); s_state = 2; return;
     }
+    /* Both are created before either is tested so the cleanup below is one
+       path -- mksh returns the shader even when it failed, and a leak here is
+       permanent: s_state 2 is never retried inside one GL context. */
     vs = mksh(GL_VERTEX_SHADER, VS); fs = mksh(GL_FRAGMENT_SHADER, FS);
-    if (s_state == 2) return;
+    if (s_state == 2) { glDeleteShader(vs); glDeleteShader(fs); return; }
     s_prog = glCreateProgram();
     glAttachShader(s_prog, vs); glAttachShader(s_prog, fs); glLinkProgram(s_prog);
     glGetProgramiv(s_prog, GL_LINK_STATUS, &ok);
-    if (!ok) { flog("fps: link FAILED"); s_state = 2; return; }
     glDeleteShader(vs); glDeleteShader(fs);
+    if (!ok) { flog("fps: link FAILED"); glDeleteProgram(s_prog); s_prog = 0;
+               s_state = 2; return; }
     s_uFrame = glGetUniformLocation(s_prog, "uFrame");
     s_uInk   = glGetUniformLocation(s_prog, "uInk");
     glUseProgram(s_prog);

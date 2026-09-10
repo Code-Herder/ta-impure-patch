@@ -3167,9 +3167,9 @@ wall clock on `scenarios/walk-lerp.json`.*
 | `main+0x38A3F` | u32 | `scrollLen_buf` — raw elapsed, current − previous `GameRunSec()` |
 | `main+0x38A43` | u32 | the fractional-tick accumulator (used as a float) |
 | `main+0x38A47` | i32 | **`GameTime`** — the sim tick. `tagpu_cobtrace` and `tagpu_posedump` both stamp it, which is how their logs join |
-| `main+0x38A4B` | i16 | **`GameSpeed`** |
-| `main+0x38A4D` | i16 | `GameSpeed_Init` |
-| `main+0x38A4F` | i16 | — |
+| `main+0x38A4B` | i16 | the speed **CEILING** — the corpus calls it `GameSpeed`, and it is what `minus`/`plus` set, but it is *not* what scales time into ticks. `0x49546A` only lets the throttle raise the live value back **while `0x38A4D < 0x38A4B`** (`cmp cx,[eax+0x38a4b]; jae skip`) |
+| `main+0x38A4D` | i16 | the **LIVE effective speed** — the corpus calls it `GameSpeed_Init` and the name is misleading. `0x495260` loads `WORD [main+0x38A4D]`, `fild`s it and multiplies by the double `0.1` at `0x4FDA28`, and *that* product scales elapsed time into ticks. **This is the field to read.** `[VERIFIED 2026-09-09 by disassembly]` |
+| `main+0x38A4F` | i16 | the **lag counter** the throttle runs on: `inc` at `0x49540A`, `dec` at `0x495448`. At **+10** (`0x495415`) it is zeroed and the live speed `0x38A4D` is **decremented**, floored at 1 (`cmp ax,1; jbe`); at **−100** (`0xff9c`, `0x495454`) it is zeroed and the live speed is **incremented**, capped at the ceiling above `[VERIFIED 2026-09-09 by disassembly]` |
 | `main+0x38A51` | u8 | `IsGamePaused` (bit 0 is also read as `[main+0x38A51] & 1` by the HUD's pause icon) |
 
 ### The tick rate is `3 × GameSpeed` a second, and a skirmish does not start at 30 `[MEASURED 2026-09-09]`
@@ -3186,8 +3186,16 @@ wall clock on `scenarios/walk-lerp.json`.*
 **This corrects a reading of the `+clock` cheat.** Its arithmetic (`÷108 000, ÷1 800, ÷30`, in the
 HUD-extras table above) is right, but "30 ticks a second" is the **GameSpeed-10** rate, not a
 property of the engine: at the speed a skirmish actually starts at, that clock runs at double wall
-time. Anything converting sim ticks to wall-clock time must read `GameSpeed` or measure the
-interval; a hard-coded 33.3 ms is wrong by 2× out of the box. `tagpu_lerp.c` measures it, and its
+time. Anything converting sim ticks to wall-clock time must read the **live** speed at
+`main+0x38A4D` — **not** `main+0x38A4B`, which the corpus labels `GameSpeed` but which is only the
+ceiling — or measure the interval; a hard-coded 33.3 ms is wrong by 2× out of the box. **The two
+fields agree until the machine falls behind**, which is exactly the case where the difference
+matters: the throttle drops `0x38A4D` and leaves `0x38A4B` where the player set it, so code that
+reads the ceiling then believes a rate the sim is no longer running at. *(Corrected 2026-09-09 by
+the landing review, which disassembled `0x495260` and the throttle at `0x495415`–`0x49547B`; the
+table above previously carried the corpus's names with no note that they do not describe which
+field drives the rate.)* **Measuring the interval, as `tagpu_lerp.c` does, sidesteps the whole
+question and is the reason that module is right at any speed and through a throttle event. `tagpu_lerp.c` measures it, and its
 learned period read `p=33.2ms` against a predicted 33.3 at GameSpeed 10 (0.3%) and tracked a live
 speed change down from 20.
 
