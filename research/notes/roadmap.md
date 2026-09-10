@@ -1881,7 +1881,7 @@ failed ground composition latches instead of leaking one `frontend.gaf` per worl
   the pass **on**, and with both present the `.on` wins — so both orderings have a transient
   wrong read. It is sub-frame and the next 250 ms poll corrects it; closing it properly needs a
   single atomic indicator rather than a pair.
-- **The `Shadow quality` row makes the picture WORSE as it goes up** — the one defect a player
+- **[DEFAULTED OFF 2026-09-09 — `terrainshadow=0` ships, and the render-options screen has no path to turn it on]** **The `Shadow quality` row made the picture WORSE as it went up** — the one defect a player
   actually meets, found by playing zoomed out and diagnosed 2026-09-09. Soft shadows self-shadow
   flat ground: on open sea with nothing casting, the water darkens up to 50/255 in a 16-world-unit
   lattice (the `build_hills` caster grid), and the acne grows as the map sharpens because the

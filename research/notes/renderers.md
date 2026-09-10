@@ -398,6 +398,16 @@ with the ground under it.
 
 ### 2.7b Soft shadows self-shadow the ground, and MORE as the map sharpens [MEASURED 2026-09-09]
 
+**RESOLVED BY DEFAULT [2026-09-09]: `terrainshadow` now ships at 0** (`tagpu_classicpp.c`
+`shadow_defaults`), so the ground no longer casts and a player never meets this. The feature is
+off, not fixed — see the table further down for why every bias-shaped fix was rejected, and the
+two depth-free methods that could bring it back. `terrainshadow=1` in `tagpu_classicpp.cfg`
+still turns it on and is the fixture the fix will be measured against; **the render-options
+screen neither writes the key nor has a row for it, so no path through the UI can enable it**
+(verified in the game 2026-09-09: cycling `Shadows` through Off/Hard/Soft writes
+`assets= light= shadows= shadowres=` and nothing else, and a hand-written `terrainshadow=1`
+survives a UI apply untouched).
+
 **The defect, stated plainly: turning `Shadow quality` UP makes the picture worse.** On open
 sea with no land anywhere in the sample — nothing that can cast — the water darkens by up to
 50/255 in a blocky lattice. Measured at zoom 0.564 on `shadow-mix`, against the same frame with

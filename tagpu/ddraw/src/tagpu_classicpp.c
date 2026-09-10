@@ -77,7 +77,24 @@ static void shadow_defaults(TAGPU_LIGHT* L)
     L->penumbra = 0.05f;
     L->shadowlenOn = 1; L->shadowlen[0] = 14.0f; L->shadowlen[1] = 0.25f;
     L->shade = 1.0f;
-    L->terrainshadow = 1;
+    /* OFF (2026-09-09, renderers.md 2.7b). The hills mesh casting on the ground
+       it was built from self-shadows it: on open sea with nothing that can cast,
+       the water darkens in the caster's own 16-unit lattice, and it gets WORSE as
+       `Shadow quality` goes up because the bias is scaled to the texel while the
+       error is scaled to the relief. Seven candidate fixes were swept to
+       convergence and costed in the lab and every one removes the artifact and
+       the terrain-shadow feature together at about one for one, because a cell's
+       own relief IS the terrain shadow -- a hill shadowing the valley beside it
+       is one cell's height difference read at range, a cell shadowing itself is
+       the same difference read at zero range, so no depth threshold separates
+       them. Until the fix that does not compare depths at all is built (a
+       precomputed horizon / sun-visibility map, or a receiver-side ray-march),
+       this default is the same trade every knob makes, taken for free -- and the
+       1997 engine casts no terrain shadows either, so it is also the parity
+       answer. `terrainshadow=1` in the cfg still turns it on: it is the fixture
+       the fix will be measured against. Nothing in the render-options menu
+       writes this key or can reach it (tagpu_menu.c `ours`). */
+    L->terrainshadow = 0;
     L->shadowres = 2048;
     L->airshadow = TAGPU_AIRSHADOW_LEN;
 }
