@@ -2412,10 +2412,17 @@ path. **§7's trap therefore does not need fixing for this gate**: we never obse
   picture, so the draw is a downsample and wants a filter — and interpolating palette indices is
   meaningless (§13.3's rule, just as true here). The picture is uploaded already resolved through
   the presented palette, `MIN` linear and `MAG` nearest, re-resolved once per map load and once
-  per palette change.
+  per palette change. The resolution is `tagpu_pal.h`'s, shared with every world pass — its
+  `tagpu_pal_serial()` is the bake's invalidation key, because that serial is bumped on exactly
+  the 1024-byte change this cache has to notice. Before any palette is resolvable
+  (`tagpu_pal_live()` is `NULL`) the bake retries the next frame rather than drawing.
 - **The view box is drawn last**, because that is where the engine puts it (`0x466B44` copies,
   `0x466B5E` draws). Four one-*game*-pixel edges, so it keeps the weight the engine gives it
-  instead of thinning to a device pixel as `k` grows.
+  instead of thinning to a device pixel as `k` grows. **Its colour is a palette index, not an
+  RGB** — the byte at `main+0xDD9`, zero-extended into the `DrawTranspRectangle` call at
+  `0x466B50` [VERIFIED 2026-09-09, engine map] — so it resolves through the same presented
+  palette as the base, and with no palette resolvable the box is skipped rather than drawn in a
+  wrong colour.
 - **Ours at `k > 1`, the engine's at `k = 1`.** Not timidity — arithmetic. See below.
 
 ### Measured

@@ -953,6 +953,17 @@ renderer](gui-renderer.html) §18). The character filter is `sub ebx,first; jb` 
 table entry, likewise) — bounded below and **not above**, so the table is indexed with whatever
 byte the string carries.
 
+**The per-row column counter is a do-while, so a ZERO width byte writes 256 columns per row**
+[VERIFIED 2026-09-09, G17d/G17e]: the width is read into `cl` at `0x4CCFBF`, copied to `ch` at
+**`0x4CCFCA`**, and the column loop decrements it at the BOTTOM — `dec ch` at **`0x4CCFE9`**
+with `je 0x4CCFEF` at `0x4CCFEB` and `jmp 0x4CCFCC` at `0x4CCFED`. `ch = 0` therefore wraps to
+255 on the first decrement and runs 256 times. It is per row, not per glyph: the row tail
+`0x4CD006` jumps back to `0x4CCFCA` and reloads `ch` from `cl` for every one of `font[0]` rows,
+so a corrupt width byte of 0 smears `256 × rows` pixels past everything the caller measured.
+**No stock font has one** — the guard matters only for a font a mod ships. `tagpu_text.c`
+refuses `gw <= 0` in both `measure` and the per-glyph probe, which is a deliberate divergence:
+the engine would smear, we draw nothing.
+
 #### The text globals, and who sets them
 
 | VA | What |
@@ -2345,7 +2356,13 @@ publishes as a pixel op carrying `+0x142DB`'s final bytes, arcs and points inclu
 correctness depends on `+0x142DF` staying unseeded ([GL UI renderer](gui-renderer.html) §7). **Per frame, `DrawMinimap 0x466B00(ctx)`** (`stdcall`, `ret 4`,
 prologue `8B 0D E8 1D 51 00`, gated on `main+0x142F1 & 2`) does
 `0x4C6B70(ctx, [main+0x142DB], main+0x142E7, main+0x142E9)` at `0x466B44` and the view box
-`0x4BF8C0(ctx, main+0x142CB, main+0xDD9)` at `0x466B5E`; **one caller, `0x46961F` in
+`0x4BF8C0(ctx, main+0x142CB, colour)` at `0x466B5E`; **that colour is the BYTE at `main+0xDD9`,
+zero-extended, not the address** [VERIFIED 2026-09-09, G17e — an earlier revision of this line
+read as though the pointer were passed]: `xor ecx,ecx` at `0x466B4E`, `mov cl,BYTE PTR
+[eax+0xdd9]` at **`0x466B50`**, `push ecx` at `0x466B5B`. So the box's colour is a single palette
+index held at `main+0xDD9` — the same byte §"The order-marker chain" records as the range
+labels' colour (gui `0xE`) — and anything replaying the box has to resolve that index through
+the palette the screen is shown with rather than assume a fixed colour; **one caller, `0x46961F` in
 DrawGameScreen, with the game offscreen's context.** The minimap never goes through the GUI
 surfaces. The map loader builds `main+0x1426B` at `0x483900..0x483936` as a GAF frame
 (`0x4B8DA0(0x508B6C, w, h)`, filled via `0x4B8A80` + `0x4B7F90`) and frees it at
