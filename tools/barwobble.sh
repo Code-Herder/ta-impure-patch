@@ -7,7 +7,19 @@
 #   barwobble.sh <i> stock  1958 1296 2658 696 22 1.0 /tmp/bw   # a BARE instance = stock control
 #   barwobble.sh <i> ours   1958 1296 2658 696 22 1.0 /tmp/bw   # --defaults, camera at 1818,850
 #   barwobble.sh <i> zoom2  2100 1150 2500  800 13 2.0 /tmp/bw   # camera at 2300,975 in the fixture
+#   FIX=scenarios/bar-wobble-4x.json \
+#     barwobble.sh <i> zoom4 2218 1086 2398 906 10 4.0 /tmp/bw   # the OWN fixture, camera 2244,996
 # Then: tools/barwobble_detect.py /tmp/bw
+#
+# RUN THE 4x LEG. A defect that quantises the bar in PRE-zoom units is worth `zoom` displayed
+# pixels, so it is at the measurement floor at 1x and 4 px at 4x -- the 1x legs above passed it
+# clean while the owner was watching the bar teleport across the screen. The zoom is taken from
+# the TAG (`zoom4`, `4x`), and every length in the detector scales with it, so a mislabelled leg
+# is a wrong answer and not a noisy one.
+#
+# THE FIXTURE OWNS THE CAMERA and `camera.at` is not the eye: the applier subtracts (832, 550).
+# The 1x walk is 920 wu and leaves the viewport entirely at 4x, which is why the 4x leg has a
+# fixture of its own rather than an argument.
 #
 # READ gamespeed FIRST. It is shared across every prefix (one user.reg inode) and it scales
 # how far a unit moves per sim step, so it scales this artifact: the same walk measures

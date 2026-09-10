@@ -198,7 +198,36 @@ the delta (`~1400 px/s`, clamp 0.15–3 s) → park → re-read. Break when with
    bar is `> 1000` → 0**; the lower bands are the walk itself and belong to the
    fixture. `research/notes/gpu-posing.md` §4 step 7.
 
-7. **A race needs scheduling pressure, not a longer run.** A window that is
+7. **NEVER key a detector on a hard-coded RGB.** `Gamma` is one shared mutable
+   registry inode across every instance (memory: the G17a landing), so another
+   session moving it repaints our whole palette: the health-bar legs came back
+   with the GUI green at `(83,223,79)` where the detector's constant said
+   `(93,250,88)`, an exact match found **zero** pixels in every frame of both
+   builds, and the tool reported "no usable run" — a silent total miss that
+   looks exactly like a capture that failed. Calibrate the key from the capture
+   itself (`barwobble_detect.calibrate_green`: the modal colour above a
+   saturation threshold, since the GUI green is far more saturated than
+   terrain), and it survives the next session that touches Gamma.
+
+8. **Measure the thing against ITSELF before measuring it against a neighbour.**
+   The health-bar oracle referenced the bar to the selection box, which is a
+   rotated outline whose centroid breathes ~11 px at 4×; a defect that made the
+   bar teleport 4 px a frame moved that statistic only 2.79 → 2.27 and read as
+   a pass. The bar's own second difference caught it outright (4.00 → 1.00 px
+   p99) because a unit walks at constant speed, so any anchored thing that
+   tracks it has a second difference near zero. A reference that has its own
+   motion is a noise source, not a baseline.
+
+9. **A defect worth `zoom` pixels needs a leg at a zoom.** Anything this stack
+   emits unzoomed is scaled by the vertex shader, so a quantisation error in
+   pre-zoom units is at the measurement floor at 1× and `ZOOM_MAX` = 8 px at
+   full zoom-in. Every 1× leg of the health-bar A/B passed while the owner was
+   watching the bar jump across the screen. Fixtures: the 1× walk leaves the
+   viewport entirely at 4×, so the zoomed leg needs its own camera and a
+   shorter walk (`scenarios/bar-wobble-4x.json`), and every length in a
+   detector — run thresholds, anchor offsets, search windows — scales with it.
+
+10. **A race needs scheduling pressure, not a longer run.** A window that is
    microseconds wide and opens tens of times a second is essentially never
    sampled on an idle machine: a minute of walking caught it zero times
    over four runs. `taskset -acp 0 <pid>` on the game plus two or three

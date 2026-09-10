@@ -1119,9 +1119,15 @@ Armed, the range widens by exactly that, so `eyeX` goes **negative** at the left
 `zoomedge.off=off` removes the file again.
 
 **To measure a camera bound, jump with the minimap and peek the eye.** Arrow keys do not scroll
-(TA's scroll hotkeys are its own ids `0xF4`/`0xF5`/`0xF6`/`0xF7`, not VK arrows), but a *held*
-left button on the minimap does jump the camera, and lands exactly on `world − (W/2, H/2)`
-before the clamp:
+**under `tacli keys`** — TA's scroll hotkeys are its own ids `0xF4`/`0xF5`/`0xF6`/`0xF7` and our
+injection posts VK arrows, which those ids are not. *[CORRECTED 2026-09-09. This said "arrow keys
+do not scroll" flat, and it was read back to the owner as a statement about the GAME: they were
+sitting at a handed-over instance whose arrows would not pan, and this line agreed with them that
+that was normal. It is not — on a real keyboard the arrows scroll TA perfectly well, and the
+actual cause was that the window they were typing into belonged to another session's instance
+entirely. A measurement made under injection is a fact about the injection until it has been
+checked with the shield off.]* A *held* left button on the minimap does jump the camera, and
+lands exactly on `world − (W/2, H/2)` before the clamp:
 
 ```bash
 tools/tacli keys edge1 mouse:10,0 down:lbutton   # top-left of the minimap click rect

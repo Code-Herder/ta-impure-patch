@@ -1,0 +1,57 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Health-bar wobble regression AT ZOOM 4, the case the 1x fixture cannot see. One SELECTED ARMCOM walks a short 180-wu-per-axis diagonal centred on a pinned camera, so it stays inside the viewport at 4x. The defect this catches is a bar quantised in PRE-zoom units: its step on screen is `zoom` px, invisible at 1x and 4 px here. The oracle is the bar against ITSELF -- a unit walking at constant speed gives a near-zero second difference, a quantised bar gives one the size of the grid. shootall off, noshake on, a far CORE keepalive. tools/barwobble.sh.",
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1920x1080",
+    "clear_existing": true,
+    "switches": {
+      "shootall": false,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "walker",
+      "type": "ARMCOM",
+      "owner": 0,
+      "pos": [
+        2218,
+        1086
+      ],
+      "facing": 45
+    },
+    {
+      "id": "keepalive",
+      "type": "CORCOM",
+      "owner": 1,
+      "pos": [
+        4600,
+        2600
+      ],
+      "facing": 0
+    }
+  ],
+  "camera": {
+    "at": [
+      2244,
+      996
+    ],
+    "pin": true
+  }
+}

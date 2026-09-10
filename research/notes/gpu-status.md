@@ -168,32 +168,52 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x4CCF60` | the glyph blitter (**cdecl**, 9 args, base and pitch taken directly) | *called by us*, on the present thread, once per distinct string — it reads the font object and writes our atlas and touches no engine state at all (`tagpu_text.c`) |
 
 **Everything anchored to a unit takes the unit pass's sub-pixel anchor — including, since
-2026-09-09, the health bar and the group digit.** `tagpu_native_unit_pos()` returns the very
-sample the body was drawn from this frame, and `tagpu_mark.c` floors it exactly where the
-engine floors its own `(s16)` reads, so with no sample (the unit pass disarmed, or
-`tagpu_subpix.off`) the arithmetic is unchanged. Until that date the bar gather read the
-engine's integer shorts directly, which pinned it to the SIM rate while the body glided at
-present rate: the two slid against each other by up to a whole sim step of motion, and
-because bars are emitted unzoomed and the vertex shader scales them, on screen that is
-`zoom` times the error. **Measured** on a walking commander, 1920x1080, camera pinned, the
-bar-against-body separation in x (`tagpu_spxlog.on`, exact, not pixels):
+2026-09-09, the health bar and the group digit — and every one of them is quantised AFTER the
+zoom, not before.** Two separate defects, found and fixed the same day, and the second was
+created by the first fix.
 
-| | 1x | 2x |
+**(a) The anchor was the wrong one.** Until 2026-09-09 the bar gather read the engine's integer
+world shorts directly, which pinned the bar to the SIM rate while the body glided at present
+rate; the two slid against each other by up to a whole sim step of motion. It now calls
+`tagpu_native_unit_pos()`, which returns the very sample the body was drawn from this frame.
+The old error was **proportional to how far the unit moves per sim step**, so it grew with unit
+speed and with `gamespeed` — 1.68 px peak-to-peak at 1x at TA's normal speed, 2.95 at
+`gamespeed` 20, and `zoom` times either on screen.
+
+**(b) Then it was quantised on the wrong grid.** The first fix floored that anchor, on the
+argument that the selection rect floors the same anchor and the two should agree. They did
+agree — with each other, in the frame's PRE-zoom units, which is the wrong grid. The vertex
+shader scales this pass by `zoom` about the zoom centre, so **one unit of quantisation here is
+`zoom` displayed pixels**: invisible at 1x, 4 px at 4x, 8 px at `ZOOM_MAX`. The bar stood still
+and then teleported 4 px while the body glided underneath it, which is what the owner reported
+as a diagonal twitch at max zoom-in. (The selection rect never showed it because it does not
+actually floor in these units — `tagpu_native.c` snaps its corners *forward through the zoom*,
+floors there and comes back. The glyph atlas has done the same since G15.) `tagpu_mark.c`'s
+`snap_device()` is now that rule, shared by the bar, the group digit and the text, so the step
+is **1/ss of a displayed pixel at every zoom** and the bound does not grow with the zoom at all.
+
+**Measured** on a walking commander, 1920x1080, camera pinned, TA's normal game speed, at 4x —
+the separation between the bar and the body it sits over, in *displayed* pixels
+(`tagpu_spxlog.on`; the model is exact and build-independent, which is what makes one run report
+all three rules):
+
+| the bar's anchoring rule | rms | peak-to-peak |
 |---|---|---|
-| before, at TA's normal game speed | 0.354 px rms, **1.68 px p2p** | 0.709 rms, **3.36 p2p** |
-| before, at `gamespeed` 20 (double) | 0.561 px rms, **2.95 px p2p** | 1.080 rms, **5.77 p2p** |
-| after (either speed) | 0.295 px rms, **1.00 px p2p** | 0.591 rms, **2.00 p2p** |
+| the engine's shorts (the original defect) | 1.35 px | **6.56 px** |
+| the body's anchor, floored (fix 1, superseded) | 1.15 px | **4.00 px** — exactly `zoom` |
+| the body's anchor, `snap_device` (ships) | 0.14 px | **0.49 px** — 1/ss, at any zoom |
 
-The old error was **proportional to how far the unit moves per sim step**, so it grew with
-unit speed and with `gamespeed`; the new one is the sub-pixel floor and is bounded at one
-unzoomed pixel whatever the unit or the speed. The residual is not zero on purpose: the
-selection rect has always floored the same anchor (below), and a bar drawn at fractional
-coordinates would antialias its edges under `ss` and disagree with the rect. Confirmed from
-video the same way in both builds — the fraction of presented frames on which the selection
-box does not move goes 51.2 % (stock) / **2.1 % (ours, bar on the shorts)** / 50.9 %
-(`subpix.off`), while the bar's own 30 Hz alternation against it falls from 1.033 px to
-0.616 px, at or below stock's own 0.658 px measurement floor. **Stock TA cannot show this
-artifact at all**, because there the bar and the body are the same shorts.
+Corroborated from video on the two builds themselves, same instrument each leg
+(`tools/barwobble_detect.py`, `scenarios/bar-wobble-4x.json`). The statistic that catches this
+is **the bar against itself**: a unit walks at constant speed, so a bar that tracks it has a
+second difference near zero and a bar quantised on a grid of `q` px stands still and then
+teleports `q`. Before: still on **60.9 %** of presented frames, and every step it did take was
+exactly 0, 4.00 or 8.00 px with nothing in between; |2nd diff| 2.09 px mean, **4.00 px p99**.
+After: still on **2.3 %**, a continuous 1.1–3.2 px spread tracking the unit's real speed;
+|2nd diff| 0.42 px mean, **1.00 px p99**. At 1x both builds pass every 1x oracle equally —
+that is the point of (b), and the reason the 4x fixture is now a tracked one.
+
+**Stock TA cannot show either artifact**, because there the bar and the body are the same shorts.
 
 **The selection rect is drawn at 1x, after the downsample, and matches the engine's pixels.**
 Four things had to be right and none of them was ([UI markers](ui-markers.html) §1, all measured
