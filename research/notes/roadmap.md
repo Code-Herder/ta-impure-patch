@@ -197,8 +197,10 @@ side can be writing the one the other is reading. **The replication is byte-iden
 engine's**: under `tagpu_fogwide_check.on` it rebuilds over the engine's *own* window and
 compares — **0 differing of 720 cells (30x24 at 1024x768, 357 non-zero) and of 1972 (58x34 at
 1920x1080, 1555 non-zero)**. Inert at zoom >= 1 (**0 differing pixels** on/off at 1x at both
-resolutions, sim paused), 86-98 us per rebuild for a 36,260-cell window and only on ticks where
-the engine's grid was invalidated or the window moved, `tagpu_fogwide.off` to turn it off live.
+resolutions, sim paused), 86-98 us per rebuild for a 36,260-cell window with one game on the box
+(109-246 us with six running -- it scales with contention, so the load belongs with the number)
+and only on ticks where the engine's grid was invalidated or the window moved,
+`tagpu_fogwide.off` to turn it off live.
 
 **The one found on the way.** `tagpu_native.c` validated the engine's grid struct with
 `cells == cols * rows`. `cells` is the **allocation**, which the builder rounds up to a multiple

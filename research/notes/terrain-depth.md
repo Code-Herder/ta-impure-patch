@@ -1010,8 +1010,10 @@ Two departures from the engine, both deliberate and both documented in the sourc
    compares.
 
 **Cost**, from the module's own heartbeat (`fogwide:` per 300 ticks): a 245×148 window — 36,260
-cells, 1920×1080 at 0.25× — rebuilds in **86–98 µs** on the game thread, and only on ticks where
-the engine's grid was invalidated or the window moved. Inert at zoom ≥ 1: **0 differing pixels**
+cells, 1920×1080 at 0.25× — rebuilds in **86–98 µs** on the game thread with one game on the
+box, and **109–246 µs with six of them running**, so it is a cost that scales with contention
+rather than a fixed figure; quote the load with the number. It is paid only on ticks where the
+engine's grid was invalidated or the window moved. Inert at zoom ≥ 1: **0 differing pixels**
 on/off at 1× at both 1024×768 and 1920×1080, sim paused.
 
 `tagpu_fogwide.off` in the gamedir disables it live (polled twice a second on the render thread);

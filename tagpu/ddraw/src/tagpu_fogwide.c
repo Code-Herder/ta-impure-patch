@@ -26,7 +26,7 @@
 /* The cap on a wide grid, and the whole reason the three buffers can be
    allocated once and never grown: `tagpu_native.c` refuses a viewport over
    4096 a side and clamps the effective span to 8192, so the widest window any
-   reachable configuration asks for is (8192 + 2*FOGW_MARGIN)/32 + 3 = 274
+   reachable configuration asks for is (8192 + 2*FOGW_MARGIN)/32 + 3 = 275
    cells. 320 leaves room and costs 200 KB a buffer, allocated only for a
    session that actually zooms out. */
 #define FOGW_MAXDIM  320
@@ -53,8 +53,16 @@ typedef struct {
 } FOGW_SRC;
 
 /* ---- the shared state --------------------------------------------------- */
+/* Initialised at DLL ATTACH (tagpu_fogwide_init), before either thread that
+   uses it exists. It was lazy — `if (!s_csInit) { InitializeCriticalSection(); 
+   s_csInit = 1; }` on the game thread with the render thread testing the flag —
+   and that is a publication race the compiler is allowed to lose: `s_csInit` is
+   static and its address never escapes, so nothing stops the store being sunk
+   ahead of the opaque call, and the render thread would then enter a section
+   that was never initialised. Doing it at attach removes the ordering question
+   rather than arguing about it. */
 static CRITICAL_SECTION s_cs;
-static int              s_csInit;
+static volatile LONG    s_csInit;
 
 /* Three buffers, three owners. `s_build` is the game thread's alone, `s_hold`
    the render thread's alone, `s_pub` the hand-over slot. A swap only ever
@@ -363,7 +371,7 @@ static int fogw_window(char* ta, int* col0, int* row0, int* cols, int* rows)
     *rows = (y1 - (32 * *row0 + 16) + 31) / 32 + 2;
     if (*cols < 3 || *rows < 3) return 0;
     /* Clamp, and take the trim off both ends so the view's centre keeps the
-       cover. Unreachable at any viewport the native pass accepts (274 cells is
+       cover. Unreachable at any viewport the native pass accepts (275 cells is
        the widest window this arithmetic produces); stated so it stays true. */
     if (*cols > FOGW_MAXDIM) { *col0 += (*cols - FOGW_MAXDIM) / 2; *cols = FOGW_MAXDIM; }
     if (*rows > FOGW_MAXDIM) { *row0 += (*rows - FOGW_MAXDIM) / 2; *rows = FOGW_MAXDIM; }
@@ -386,7 +394,7 @@ static void fogw_check(char* ta, const FOGW_SRC* s)
     static int armed = -1;
     const int* fg;
     const unsigned short* buf;
-    int cols, rows, cells, i, bad = 0, nz = 0;
+    int cols, rows, cells, i, n, bad = 0, nz = 0;
     char b[192];
 
     if (armed < 0)
@@ -406,12 +414,20 @@ static void fogw_check(char* ta, const FOGW_SRC* s)
     fogw_build(s, scratch, cols, rows,
                eng_col0(*(const int*)(ta + OFF_EYEX)),
                eng_col0(*(const int*)(ta + OFF_EYEY)));
-    for (i = 0; i < cells; i++) {
+    /* `cols*rows`, NOT `cells`: the engine ROUNDS ITS ALLOCATION UP to a
+       multiple of 8 and clears all of it, while fogw_build fills exactly the
+       grid. Comparing the tail put up to 7 entries of untouched `scratch`
+       against the engine's zeroed ones — it cannot make a real difference
+       vanish, but on a reused heap block it invents one, on the instrument
+       this whole landing rests on. */
+    n = cols * rows;
+    for (i = 0; i < n; i++) {
         if (scratch[i] != buf[i]) bad++;
         if (buf[i]) nz++;
     }
-    sprintf(b, "fogwide check: %dx%d cells=%d differ=%d engine-nonzero=%d truelos=%d",
-            cols, rows, cells, bad, nz, s->trueLos);
+    sprintf(b, "fogwide check: %dx%d compared=%d of cells=%d differ=%d "
+               "engine-nonzero=%d truelos=%d",
+            cols, rows, n, cells, bad, nz, s->trueLos);
     flog(b);
 }
 
@@ -437,19 +453,35 @@ static int fogw_alloc(void)
 }
 
 static void fogw_heartbeat(int cols, int rows);
+static void fogw_poll_off(void);
+
+void tagpu_fogwide_init(void)
+{
+    if (s_csInit) return;
+    InitializeCriticalSection(&s_cs);
+    s_csInit = 1;
+}
 
 void tagpu_fogwide_tick(char* ta, int rebuilt)
 {
     FOGW_SRC s;
     int col0, row0, cols, rows, changed;
 
-    if (!s_csInit) { InitializeCriticalSection(&s_cs); s_csInit = 1; }
+    if (!s_csInit) return;                  /* attach did not run, or refused */
     InterlockedIncrement(&s_tick);          /* "the game thread is still here" */
+    fogw_poll_off();
 
-    /* Nothing to do while the view is 1:1 — the engine's own grid spans it, and
-       leaving it in place keeps the fog at 1x bit for bit what it has always
-       been. Same for the off lever, which the render thread polls. */
-    if (s_off || tagpu_zoom_level() >= 1.0f) {
+    /* EVERY bail-out withdraws the published grid, not just the first two.
+       `s_tick` has already advanced by the time any of them is reached, so the
+       render thread's liveness rule cannot catch a producer that is still
+       ticking but has stopped building — it would go on painting a grid
+       anchored at an eye that has moved on. Nothing to do while the view is
+       1:1 either: the engine's own grid spans it, and leaving it in place keeps
+       the fog at 1x bit for bit what it has always been. */
+    if (s_off || tagpu_zoom_level() >= 1.0f ||
+        !fogw_source(ta, &s) ||
+        !fogw_window(ta, &col0, &row0, &cols, &rows) ||
+        !fogw_alloc()) {
         if (s_pubValid) {
             EnterCriticalSection(&s_cs);
             s_pubValid = 0;
@@ -457,17 +489,6 @@ void tagpu_fogwide_tick(char* ta, int rebuilt)
         }
         return;
     }
-
-    if (!fogw_source(ta, &s)) {
-        if (s_pubValid) {
-            EnterCriticalSection(&s_cs);
-            s_pubValid = 0;
-            LeaveCriticalSection(&s_cs);
-        }
-        return;
-    }
-    if (!fogw_window(ta, &col0, &row0, &cols, &rows)) return;
-    if (!fogw_alloc()) return;
     fogw_heartbeat(cols, rows);
 
     fogw_check(ta, &s);
@@ -533,11 +554,23 @@ static void fogw_heartbeat(int cols, int rows)
 
 /* ---- the render thread's side ------------------------------------------- */
 
+/* Polled by the PRODUCER, on the game thread, at the top of the tick — not by
+   the render thread inside tagpu_fogwide_get(). It was the other way round, and
+   then the lever only worked while something was consuming the grid: on any
+   frame the native pass never reached the fog block, `s_off` was never
+   refreshed and the game thread went on rebuilding a ~36k-cell grid nobody
+   read, with `tagpu_fogwide.off` sitting in the gamedir doing nothing. The
+   producer is the one that must obey it, and it is also the thread that can
+   then publish "invalid" and take the consumer down with it in one step. The
+   engine's own loop does file I/O throughout, and tagpu_opt.c's readers poll
+   from this thread on the same cadence. */
 static void fogw_poll_off(void)
 {
-    static DWORD tick;
+    static DWORD tick;                       /* game thread only */
+    static int   first = 1;
     DWORD now = GetTickCount();
-    if (now - tick > 250) {
+    if (first || now - tick > 250) {
+        first = 0;
         tick = now;
         s_off = (GetFileAttributesA("tagpu_fogwide.off") != INVALID_FILE_ATTRIBUTES);
     }
@@ -549,7 +582,6 @@ int tagpu_fogwide_get(const unsigned short** buf,
     LONG tick;
     DWORD now;
 
-    fogw_poll_off();
     if (s_off || !s_csInit) return 0;
 
     /* Liveness: the game thread bumps s_tick every tick whether or not it

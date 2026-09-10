@@ -53,6 +53,10 @@
    held buffer for the whole frame, which is what the CPU-side gates
    (`tagpu_fog_at`) need. */
 
+/* DllMain only. Creates the critical section the hand-over uses, before either
+   thread that touches it exists — the module is inert until this has run. */
+void tagpu_fogwide_init(void);
+
 /* Game thread, from the fog-overlay call site, once per engine frame. `ta` is
    the TAdynmem base; `rebuilt` is 1 when the engine's own grid was rebuilt on
    this tick (its is-current flag had been cleared), which is also our cue that

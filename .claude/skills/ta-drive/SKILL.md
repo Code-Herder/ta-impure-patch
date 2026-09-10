@@ -1061,7 +1061,9 @@ Three things about this one are unlike the other passes:
   only, so `tagpu_fogwide.c` builds the same masks over a window the whole zoom range fits in and
   the passes sample that instead. Levers: `tacli arm <i> fogwide.off` disables it live (the A/B —
   with it the outer ring goes back to a smear of the border cell), `fogwide_check.on` arms the
-  oracle, which logs `fogwide check: … differ=N` every 120th tick and **must read `differ=0`**.
+  oracle, which logs `fogwide check: … compared=N of cells=M differ=N` every 120th tick and
+  **must read `differ=0`**. `compared` is `cols*rows` and `cells` the engine's ALLOCATION, which
+  it rounds up to a multiple of 8 — comparing the tail reads entries nothing built.
   Its heartbeat is `fogwide: <cols>x<rows> cells=… rebuilds=n/300 build=…/… us`. Both only do
   anything while a zoomed-OUT view is live; at zoom ≥ 1 the module publishes nothing and the fog
   is the engine's grid, bit for bit.
