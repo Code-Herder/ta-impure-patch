@@ -128,25 +128,39 @@ read off the `terr: staging` line, against a 4.50 MiB fixed array that could not
 at once**. Before/after captures at 2560×1440 are the picture: `zoomvp` 6768×4598 with a black
 frame around the map, against 9792×5568 filling the viewport edge to edge.
 
-**A second resolution-dependent failure fell out of checking the first, and it is fixed too.**
-The engine's fog grid arrives as a descriptor at `main+0x1421F` — `{buf, cols, rows, cells}` —
-and `tagpu_native.c` would only believe it when `cells == cols * rows`. MEASURED with `tacli
-peek`: at 3840×2160 the grid is **118 × 68** and `cells` is **8024**, exactly the product; at
-2560×1440 it is **78 × 45** and `cells` is **3512** against a product of **3510**. `fogMode` is
-assigned inside that test, so the mismatch does not degrade the fog — it deletes it. A/B on one
-instance, same map, same settings, `--los 2 --mapping 0`: the shipped build logs `native: fog=0
-… foglut=0` at 2560×1440 and the fixed one `fog=1 … foglut=1`. **At that resolution our
-renderer was painting no fog of war at all.** The test now asks what the read actually needs —
-that the allocation cover the `cols × rows` we sample — and probes those cells rather than the
-engine's count, which is *tighter* than the probe it replaced (that one measured a region we
-never read). Where the extra two cells come from is not traced: `0x4843C0` fills the grid and
-`0x483F1C` frees the descriptor; the allocation site was not read.
+**A second resolution-dependent failure fell out of checking the first, and the fog-of-war
+landing on `main` had found it from the other side the same day.** The engine's fog grid arrives
+as a descriptor at `main+0x1421F` — `{buf, cols, rows, cells}` — and `tagpu_native.c` would only
+believe it when `cells == cols * rows`. `fogMode` is assigned inside that test, so a mismatch
+does not degrade the fog, it deletes it. MEASURED here with `tacli peek`: at 3840×2160 the grid
+is **118 × 68** and `cells` is **8024**, exactly the product; at 2560×1440 it is **78 × 45** and
+`cells` is **3512** against a product of **3510**. A/B on one instance, same map, same settings,
+`--los 2 --mapping 0`: `native: fog=0 … foglut=0` before, `fog=1 … foglut=1` after — **at that
+resolution our renderer was painting no fog of war at all.** This branch relaxed the test to
+`cells >= cols*rows` and said the extra two were not traced; `main` **traced them** — `0x483C84`
+rounds the count up to a multiple of 8 before allocating (`add 7, and ~7`) — and tests that
+exact relation, which is what survived the merge. What this branch kept is the `cols`/`rows`
+sanity bound, **256 → 1024**: at one cell per 32 px of viewport plus two, 256 is a viewport
+8128 px wide, so the bound was a screen limit standing in front of the real test.
 
-**What this did not close.** The engine's own **fog grid is one cell per 32 px of the 1×
-viewport plus two, whatever the zoom** — measured above — and `taFog()` clamps outside it, so on
-a genuinely fogged map at 0.25× the ring beyond that grid samples the grid's edge cells and the
-grid itself covers a sixteenth of the world on screen. Unrelated to this fix, present at every
-resolution, and not yet looked at in a fogged game. The feature pass's `MAXBV_BODY` (5461
+**And the gap this entry used to name as open is closed, by `main`.** `tagpu_fogwide.c`
+replicates the engine's builder over a window the whole zoom range fits in and replaces the
+engine's grid outright while a zoom-out is live. It was written against two constants this
+branch removed, though — its `FOGW_MAXDIM` was derived from "the native pass refuses a viewport
+over 4096 and clamps the effective span to 8192" and it repeated both — so merged verbatim it
+would have declined outright at 5120×2880 and, at 3840×2160, covered a 10240-px core of a
+14912-px view with the border cell smeared over the rest: the defect it exists to remove, at the
+resolution that reported it. The merge reconciles them (gate 16384, no span clamp, `FOGW_MAXDIM`
+1024 against windows of 485/645/965 cells at 4K/5K/8K), and keeps the three buffers allocated
+once — fogwide publishes a pointer into `s_pub` to the render thread, so a buffer grown under a
+zoom change would be a use-after-free.
+
+**What this did not close.** Past about **7680×4320** the wide fog window clamps again, centred,
+and the outer ring returns to the border-cell smear. And the **GAF sprite atlas** is the next
+thing a full-map view outgrows: a fixed 2048 square that resets whole when it fills, which at
+3840×2160 / 0.25× on Town & Country reports `atlas-fail=455` — 3.7 % of the feature quads, a
+different 3.7 % each frame. That is a capacity and eviction question rather than another fixed
+budget, and nothing here addresses it. The feature pass's `MAXBV_BODY` (5461
 quads) and the unit pass's `MAXU`/`MAXNV` are unchanged and are now the first budgets a very
 wide view will meet. And the **frame cost of a full 4K zoom-out was not measured on real
 hardware**: the reference setup's GL is only reachable through the live desktop, and the
