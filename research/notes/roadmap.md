@@ -53,7 +53,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
 | Smoke, fire, wakes, nanolathe | ● native (G12f) | one detour on the layer walker `0x471F90` | A/B `sfx-strait`, engine surface empty of particles |
 | Features (trees, rocks, splats, wreckage) | ● native (G13a) | `featown`: one detour on the leaf `0x46A610` | occlusion parity vs the engine's own draw, engine surface empty of features, `feat-forest` |
-| Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02), **and it now spans the zoomed-out view (G13r, 2026-09-09)** | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid — which spans the 1× viewport only, so at zoom < 1 `tagpu_fogwide.c` replicates `0x4843C0` over a window sized for the whole zoom range and hands that to the passes instead | G13c: [Features](features.html) §9. G13r: the replication **byte-identical to the engine's builder** over the engine's own window (0 differing of 720 cells at 1024×768 and of 1972 at 1920×1080), **0 differing pixels** on/off at zoom 1, and an enemy building that was drawn in full colour through the smear now hidden — [terrain & depth](terrain-depth.html) §8 |
+| Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02), **spans the zoomed-out view (G13r, 2026-09-09), and no longer flashes on the first frame of a zoom-out (G13s, 2026-09-10)** | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid — which spans the 1× viewport only, so at zoom < 1 `tagpu_fogwide.c` replicates `0x4843C0` over a window sized for the whole zoom range and hands that to the passes instead | G13c: [Features](features.html) §9. G13r: the replication **byte-identical to the engine's builder** over the engine's own window (0 differing of 720 cells at 1024×768 and of 1972 at 1920×1080), **0 differing pixels** on/off at zoom 1, and an enemy building that was drawn in full colour through the smear now hidden — [terrain & depth](terrain-depth.html) §8. G13s: the one-frame flash at the start of a zoom-out, **6 of 1801 frames unmapped and 7 of 1561 mapped before, 0 and 0 after**, `bare=0` throughout — §8a |
 | Terrain tiles | ● native (G13b) | `terrown`: one detour on `0x483FA0`, whose skip path key-fills the viewport | 0-px parity vs the engine's own blit, engine surface 99.9 % key, in-process map change |
 | Fog overlay | ● native (G13b) | `terrown` detours `0x4848E0` too, replicating only its lazy grid rebuild | 99.06–99.39 % lit-vs-grey agreement with the engine's own overlay |
 | **Selection rect**, health bars, order markers, group digits, ShowRanges labels, build cursor, band box | ● native and **nothing captured** (G13d, corrected G13h, cursor re-drawn G13n, order block ported G13o, **text ported G13p**, **rect at the engine's pixels 2026-09-08**) | `markown`: 14 call-site redirects + one detour on `0x46A430`. Health bars, the build cursor and the drag band box are re-drawn from engine state; the order-marker block is a game-thread snapshot drawn as geometry (`tagpu_order.c`); the group digit and the `ShowRanges` labels are TA's own glyphs rasterised into an atlas of ours through `0x4CCF60` (`tagpu_text.c`). Window A and the identity blend LUT are gone | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x); the build cursor **0-px against the captured path** at 1× and 2.144×, and present in the ring at 0.467× where the capture drew nothing; the order block's node-list diff against the engine clean over **16 650 records / 1 665 blocks**, and at 0.25× four build sites queued in the ring draw where the engine draws none. G13p: the group digit **PIXEL-IDENTICAL to the engine's at 1×** (0 differing pixels, 19 bright each way) and drawn out in the ring at 0.25× where the engine draws nothing at all; the eight `ShowRanges` labels on the engine's own pixels ("weapon1 range" 209 bright against 205). **2026-09-08, the selection rect**: it had been turning the WRONG WAY (the transposed yaw = a rotation by −heading, 2× the heading out — invisible at multiples of 45°), built from the whole model tree where `0x4CB650(…,0)` gives the root piece unioned with the origin, projected with one float expression where the engine truncates each term and halves the height after truncating it, and drawn as a GL line in the 2× supersampled FBO where **the driver clamps aliased line width to 1**, so half a device pixel and about half the engine's colour. All four fixed: 100 % of our box pixels are now exactly the engine's `(83,223,79)` and its own rect differs from ours on **7 px of ~110** on open ground (5–18 on a hillside — a Bresenham step on the other neighbour, or a pixel where ours is correctly hidden behind its unit and the A/B's engine rect is not). `scenarios/selbox-facings.json` / `selbox-slope.json`; checked at 0.5× and 2×, with `ss.off`, and on a unit turning under a move order |
@@ -346,6 +346,56 @@ whose *projected* position lands past the shoreline while its anchor is on the m
 colour above a fogged map. Full read of the builder, its allocation and the completion indices:
 [exe-reverse-engineering](exe-reverse-engineering.html) §"The screen fog grid";
 [terrain & depth](terrain-depth.html) §8.
+
+**G13s — the first frame of a zoom-out outran the grid it needed, and the sampler said "no fog".**
+Reported from play: *"in map town and country, if you move the camera to the bottom left corner
+at max zoom in level with LOS=true or unmapped view and zoom out quickly, the fog or unmapped
+blackness will fail on one row on the bottom/left when zooming out. It will be very brief."*
+Reproduced and fixed 2026-09-10, on the surface G13r built.
+
+**The repro is a video, not a screenshot.** One frame in a gesture is unfindable with `glshot`
+(about one sample a second against 60 fps), so the window was recorded losslessly with
+`ffmpeg -f x11grab -window_id … -framerate 60 -c:v libx264rgb -qp 0` and every frame scanned for
+green-dominant pixels — the criterion that separates lit grass from the grey band. With the
+camera **scrolled** (never written: a written eye leaves the engine's own grid stale, and the
+lit circle it then paints over an enemy base is an artifact of the driving, not of the game) into
+Town & Country's bottom-left corner: **6 failure frames of 1801 unmapped over seven wheel
+gestures, 7 of 1561 mapped + true LOS over six**, each one frame, each 0.08-0.22 s after the
+gesture, each a band of fully lit ground along the bottom and right of the fogged area at exactly
+the engine grid's extent.
+
+**Two faults, and only both together made it visible.** The producer was gated on the live zoom
+level — `tagpu_fogwide_tick` withdrew the published grid whenever `tagpu_zoom_level() >= 1.0f` —
+but that level is published by the RENDER thread, which is also the thread that decides,
+mid-frame, to draw the first zoomed-out frame of a gesture, so on that frame the pass asked for a
+grid the game thread had had no tick to build. And the fallback failed **open**: the last column
+of any grid never has its right corners written (the map cell that would supply them is past the
+builder's loop), so `taFog`'s clamp to `uFogDim - 0.001` landed every sample past the grid on
+corners nobody wrote — coverage 0, *no fog*, rather than the smear the ring is meant to degrade
+to.
+
+**The fix is a producer that cannot be late and a sampler that fails closed.** The wide grid is
+built **every tick** and the consumer picks per frame off the level it is actually drawing with;
+`taFog` clamps to `uFogDim - 1.0`, one whole cell short, so a sample past any grid replicates its
+last complete entry exactly as `fogw_edge_fill` already does off the map. The new **`bare=`**
+counter on the fogwide heartbeat is the instrument and must read 0 — it counts render frames that
+asked for a wide grid and were refused, i.e. zoomed frames drawn over the engine's 1x grid:
+`bare=1 rebuilds=1/300` per gesture before, **0 throughout** after. **After: 0 failure frames of
+1800 unmapped (max 32 green px) and 0 of 1561 mapped (max 0)**, with the replication oracle still
+`differ=0` over 1972 of 1972 cells.
+
+**Parity and cost.** On `crowd-static`, every pass armed, at zoom 1.0 / 0.5 / 0.25, the **outer
+64-px ring of the world viewport — the only region the clamp can reach — differs by 0 pixels** in
+every pair, cross-build and same-build alike; the interior differs by as much within one build as
+across the two (that fixture is static in position, not in pose). Building at 1x as well costs one
+rebuild per 32 px of camera travel — 90 rebuilds in 3.20 s of edge-scrolling, ~28 a second at
+150-220 us, so **4-6 ms of game-thread time per second of scrolling and nothing while the camera
+is still**. Two things the landing corrected on the way: `rebuilds=n/300` is a **ratio**, not a
+rate (a tick is a `DrawGameScreen` call, and the game loop turns that over 330 times a second on
+`crowd-static` and 3200-4900 on a sparse skirmish while both present 58-60 fps), and the off lever
+is polled on the **game** thread, not the render thread as the note said.
+[terrain & depth](terrain-depth.html) §8a; [engine map](exe-reverse-engineering.html) §"The screen
+fog grid" and §"The engine's rates".
 
 **G14j — the Classic structure shadow at parity, in the game and in the lab.** Found on
 2026-09-06 while answering whether the engine draws the Kbot lab a shadow at all (G14i's "did

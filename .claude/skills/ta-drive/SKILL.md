@@ -1066,9 +1066,23 @@ Three things about this one are unlike the other passes:
   oracle, which logs `fogwide check: … compared=N of cells=M differ=N` every 120th tick and
   **must read `differ=0`**. `compared` is `cols*rows` and `cells` the engine's ALLOCATION, which
   it rounds up to a multiple of 8 — comparing the tail reads entries nothing built.
-  Its heartbeat is `fogwide: <cols>x<rows> cells=… rebuilds=n/300 build=…/… us`. Both only do
-  anything while a zoomed-OUT view is live; at zoom ≥ 1 the module publishes nothing and the fog
-  is the engine's grid, bit for bit.
+  Its heartbeat is `fogwide: <cols>x<rows> cells=… rebuilds=n/300 build=…/… us bare=N`.
+  **`bare=` must read 0** (G13s): it counts render frames that drew zoomed and were refused a wide
+  grid, i.e. frames painted over the engine's 1× grid, and it read 1 per gesture before the fix.
+  **The module builds at every zoom since G13s** — the grid has to exist before the frame that
+  eases past 1.0, so the tick no longer waits for the level — while the *picture* at zoom ≥ 1 is
+  still the engine's grid, bit for bit, because the consumer is what gates on the level now.
+  `rebuilds=n/300` is a **ratio, not a rate**: a tick is a `DrawGameScreen` call and the game loop
+  turns that over 330–4900 times a second depending on the scene, while the presenter holds 60.
+- **A one-frame fog artifact is not findable with `glshot`.** Record the window losslessly
+  (`ffmpeg -f x11grab -window_id <id> -framerate 60 -c:v libx264rgb -qp 0`) and scan every frame;
+  the criterion that separates a fog failure from the grey band is **green dominance**
+  (`g > r+20 && g > b+20 && g > 60`), because the band is a grey remap and lit grass is not.
+- **Put the camera where you want it by SCROLLING, not with `tacli eye`.** The engine rebuilds its
+  fog grid only when its own is-current bit is cleared, which a camera *move* does; `tacli eye`
+  writes the eye and the scroll target together, so nothing clears it and the stale grid is drawn
+  at the new position. The symptom is a lit LOS circle sitting over an enemy base you have never
+  scouted, which looks exactly like a fog bug and is not. `keys <i> mouse:0,1079` and wait.
 - **Without `terrown.on` it refuses to draw at all**, and says so:
   `terr: … (NOTHING EMITTED: terrown.on must exist at DLL attach — arm it before launch,
   not after)`. Our terrain is opaque and covers the whole viewport, so drawing it with no

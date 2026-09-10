@@ -271,6 +271,15 @@ at `gamespeed` 20 **Game Time runs at exactly 2× real time** — read off the s
 `00:00:16` at tick 489, `00:01:17` at tick 2319, 30.6 real seconds apart. And any tool that
 treats `main+0x38A47` as seconds×30, or as a sim-step count, is only right at `gamespeed` 10.
 
+**The engine's DRAW loop is neither of these rates, and it is scene-dependent.** `DrawGameScreen`
+— and with it the fog overlay `0x4848E0`, which is where `tagpu_fogwide.c` ticks — turns over as
+fast as the scene allows while the presenter caps only the flip. Counted against the wall clock
+[MEASURED 2026-09-10, 1920×1080, `--maxfps 60`, both instances presenting 58–60 fps]: **330 calls
+a second** on `crowd-static` (256 units, Two Continents) and **3200–4900** on a sparse Town &
+Country skirmish. So a per-draw counter is not a per-frame counter and not a per-tick one either:
+anything reported "per N draws" is a ratio, and turning it into a rate needs the draw rate
+measured in the same run.
+
 **`gamespeed` is shared machine state, exactly like `Gamma`.** It lives in `user.reg`, which
 the template prefix and every instance hold as **one inode** (`clone_prefix` is `cp -al`;
 measured 2026-09-09: 101 links). A running instance keeps its own copy and writes it back at
@@ -410,6 +419,20 @@ entry `(cx−col0, cy−row0)` gets bit 1, `(cx−col0−1, cy−row0)` bit 2, `
 unexplored one (`0x4845CC..0x484678`). The two blocks fall through, so a cell that is both sets
 both. **The last column and the last row of any window are therefore short their right/bottom
 corners**, because the cell that would supply them is outside the loop.
+
+**That is a trap for anything that CLAMPS into the grid** [MEASURED 2026-09-10]. Bilinear
+coverage over an entry whose right corners are 0 falls to 0 as you cross it, so a sampler that
+clamps a world point past the grid onto `cols − ε` lands on corners nobody wrote and reads **no
+fog** — the most dangerous answer available, because the caller then draws unexplored ground lit.
+The engine never meets it: its own overlay paints the viewport only, and **the viewport's right
+and bottom edges are always inside the grid's last column and row** — enumerated over the
+allocation arithmetic above for every viewport from 64 to 16384 and every eye residue, the worst
+slack is **1 px** (a 64-px viewport at `eye % 32 == 15`) and **16 px** for the negative eyes the
+zoom's widened camera range produces. At the 1792×1016 viewport of a 1920×1080 screen — measured
+`cols = 58`, `rows = 34` — it is `16 − r` or `48 − r` px horizontally and `24 − r` or `56 − r`
+vertically, `r` being `eye % 32`. Ours *does* meet it, because a zoomed-out view reaches past the
+grid by design, which is why `taFog` clamps to `uFogDim − 1.0` and not to the last cell
+(`terrain-depth.md` §8a).
 
 ### The four border completions — `0x4846A1..0x4848CD`, and the index that is only right by luck
 

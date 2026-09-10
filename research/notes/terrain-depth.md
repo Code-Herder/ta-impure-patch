@@ -999,7 +999,9 @@ overlay's own call site, where the LOS and MAPPED allocations are the engine's o
 hands the result to the render thread by swapping one of three buffers under a critical section,
 so the two never touch the same one. The render thread uses it in place of the engine's grid,
 same lattice and same bytes, and falls back to the engine's whenever the game thread is not
-building (zoom ≥ 1, the off lever, terrain ownership disarmed, the menus).
+building (the off lever, terrain ownership disarmed, the menus) — or whenever the frame it is
+drawing is 1:1, which since G13s is the CONSUMER's decision and no longer the producer's
+(§8a).
 
 **The oracle is exact**: with `tagpu_fogwide_check.on` the module rebuilds over the *engine's* own
 window each 120th tick and compares byte for byte — **0 differing of 720 cells (30×24, 1024×768,
@@ -1020,13 +1022,69 @@ Two departures from the engine, both deliberate and both documented in the sourc
 
 **Cost**, from the module's own heartbeat (`fogwide:` per 300 ticks): a 245×148 window — 36,260
 cells, 1920×1080 at 0.25× — rebuilds in **86–98 µs** on the game thread with one game on the
-box, and **109–246 µs with six of them running**, so it is a cost that scales with contention
-rather than a fixed figure; quote the load with the number. It is paid only on ticks where the
-engine's grid was invalidated or the window moved. Inert at zoom ≥ 1: **0 differing pixels**
-on/off at 1× at both 1024×768 and 1920×1080, sim paused.
+box, **109–246 µs with six of them running** and 150–220 µs with two or three, so it is a cost
+that scales with contention rather than a fixed figure; quote the load with the number. It is
+paid only on ticks where the engine's grid was invalidated or the window moved.
 
-`tagpu_fogwide.off` in the gamedir disables it live (polled twice a second on the render thread);
-`tagpu_fogwide_check.on` arms the oracle.
+**`rebuilds=n/300` is a RATIO, not a rate.** A tick here is a `DrawGameScreen` call, and the game
+loop turns that over 330 times a second on `crowd-static` and 3200–4900 on a sparse skirmish while
+both present 58–60 fps (engine map, §"The engine's rates") — so 300 ticks is anywhere from a
+tenth of a second to a second. To get a rate, count the window's own travel: edge-scrolling at
+TA's default `ScrollSpeed` of 32 world px a scroll tick, the eye covered 2790 px in 3.20 s and the
+module rebuilt **90 times** — one per 32-px cell crossing, ~28 a second [MEASURED 2026-09-10].
+*(An earlier note here said the heartbeat "reads 300/300 while the camera is moving". It does not,
+and never did: that assumed a tick was a frame.)*
+
+`tagpu_fogwide.off` in the gamedir disables it live — polled on the **game** thread, at the top of
+the tick, because the producer is the one that must obey it (polling it in the consumer left the
+game thread rebuilding a 36k-cell grid nobody read on any frame the pass never reached the fog
+block). `tagpu_fogwide_check.on` arms the oracle.
+
+### 8a. The frame that outran its own grid — G13s [MEASURED 2026-09-10]
+
+Reported from play: at the map's bottom-left corner, zoom out quickly and the fog fails for a
+moment on the outer edge of the view. Reproduced on Town & Country with the camera **scrolled**
+(never written — a written eye leaves the engine's own grid stale and its picture is then a lie),
+recorded losslessly at 60 fps and scanned for green-dominant pixels, which separates lit grass
+from the grey band: **6 frames of 1801 unmapped over seven wheel gestures, 7 of 1561 mapped +
+true LOS over six**, each a single frame, each 0.08–0.22 s after the gesture, each showing lit
+ground along the bottom and right of the fogged area at exactly the engine grid's own extent.
+
+Two faults, and only both together made it visible.
+
+1. **The producer was gated on the live zoom level.** `tagpu_fogwide_tick` withdrew the published
+   grid whenever `tagpu_zoom_level() >= 1.0f`. That level is published by the RENDER thread —
+   which is also the thread that decides, mid-frame, to draw the first zoomed-out frame of a
+   gesture, and on that frame the pass asked for a grid the game thread had had no tick to build.
+   A producer that cannot see the future must not be gated on it: it now builds **every tick**,
+   and the consumer picks per frame off the level it is actually drawing with. The instrument is
+   the heartbeat's new **`bare=`** counter — render-thread frames that asked and were refused, so
+   frames drawn zoomed over the engine's 1× grid: `bare=1 rebuilds=1/300` per gesture before, **0
+   throughout** after. It must read 0.
+2. **The fallback failed OPEN.** The last column of any grid never has its right corners written
+   (engine map, §"The builder `0x4843C0`"), so `taFog`'s clamp to `uFogDim − 0.001` landed every
+   sample past the grid on corners nobody wrote: coverage 0, i.e. **no fog at all** rather than
+   the smear the ring is supposed to degrade to. `uFogDim − 1.0` lands it at `f = 0` in the last
+   *complete* entry instead, replicating the edge outward exactly as `fogw_edge_fill` does off the
+   map. It cannot move a fragment inside a grid, and that is the bound rather than a margin: the
+   viewport's right and bottom edges are inside the engine grid's last column and row for **every
+   viewport size the allocation accepts and every eye** — worst case 1 px, at a 64-px viewport
+   with `eye % 32 == 15`, and 16 px for the negative eyes the widened camera range produces
+   (enumerated over `0x483BB8`'s and `0x4843C0`'s own arithmetic; engine map, §"The screen fog
+   grid") — while the wide grid keeps the view a whole `FOGW_MARGIN` inside.
+
+**After:** 0 failure frames of 1800 unmapped (max 32 green px in any frame) and 0 of 1561 mapped
+(max **0**), `bare=0` on every heartbeat, and the replication oracle still `differ=0` over
+1972 of 1972 cells at 1920×1080.
+
+**Parity**, on `crowd-static` with every pass armed, sim running, zoom 1.0 / 0.5 / 0.25: the
+**outer 64-px ring of the world viewport — the only region the clamp can reach — differs by 0
+pixels** in every pair, cross-build and same-build alike. The interior differs by 456–9049 px in
+the same-build floors as much as across builds, all of it inside the unit block and all of it
+animation phase; that fixture is static in position, not in pose, so it cannot be paired more
+tightly than its own floor. *(A first attempt at this measured nothing at all: `scenario load`
+writes `tagpu_defaults.off`, so the instance had every pass opt-in and none armed and both builds
+were drawing the stock engine's picture. Read the `opt:` line before believing a parity number.)*
 
 ## Appendix — address & offset tables
 

@@ -61,11 +61,13 @@
    write, so the region past the grid REPLICATES its edge — the same thing
    fogw_edge_fill does off the map, and what the engine's own single off-map
    row already amounts to. It cannot change a picture whose fragments are all
-   inside the grid: the engine's grid is the eye rounded to a half cell plus
-   viewW/32 + 2 columns, so its last column starts at least one pixel past the
-   viewport's right edge at every eye (16 - eye%32 px of slack when the eye
-   sits in the first half of its cell, 48 - eye%32 when it does not), and the
-   wide grid keeps the view a whole margin inside. */
+   inside the grid, and that is a bound and not a hope: the engine's grid is the
+   eye rounded to a half cell plus viewW/32 + 2 or 3 columns, and over that
+   arithmetic the viewport's right and bottom edges sit inside its last column
+   and row for EVERY viewport size the allocation accepts (64..16384) and every
+   eye — worst case one pixel, at a 64-px viewport with eye%32 == 15, and 16 px
+   for the negative eyes the zoom's widened camera range produces. The wide grid
+   keeps the view a whole FOGW_MARGIN inside. */
 #define TAGPU_GLSL_FOG_UNIFORMS \
     "uniform sampler2D uFogGrid;\n"   /* RG8 corner masks, r = b0, g = b1  */ \
     "uniform sampler2D uFogLUT;\n"    /* 256x1 palette remap for the grey  */ \
