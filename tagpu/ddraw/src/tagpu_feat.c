@@ -248,6 +248,9 @@ static GLint  s_uGame, s_uFog, s_uFogOrg, s_uFogDim, s_uZoom, s_uZoomC, s_uDepth
               s_uRestored, s_uLit;
 static TAGPU_GAFENT   s_atlasEnts[ATLAS_MAX];
 static TAGPU_GAFATLAS s_atlas;
+/* the map the atlas's entries belong to (see tagpu_feat_gather) */
+static const char* s_mapGrid;
+static int         s_mapW, s_mapH;
 
 enum { B_SHADOW = 0, B_BODY = 1, NBUCKET = 2 };
 /* grown on demand by feat_room(), never shrunk: a zoom-out reallocs once and
@@ -432,6 +435,7 @@ void tagpu_feat_glreset(void)
 {
     s_state = 0;
     tagpu_gaf_atlas_lost(&s_atlas);
+    s_mapGrid = NULL;           /* the entries went with the context */
 }
 
 /* ---- emission ---- */
@@ -713,6 +717,23 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     if (!ptr_ok(fmap) || !ptr_ok(fdefs)) return feat_bail();
     if (mapW <= 0 || mapH <= 0 || mapW > 4096 || mapH > 4096) return feat_bail();
     if (nCols <= 0 || nRows <= 0 || nCols > 1024 || nRows > 1024) return feat_bail();
+
+    /* THE MAP CHANGED — tell the atlas its contents are meaningless.
+       `repack` makes the atlas keep what it holds, and the wall makes it keep
+       that layout for good; both are right for one map and wrong across two.
+       The engine allocates `FeatureMap` per map (main+0x14287, 0xD per 16-px
+       tile) with its dimensions beside it, so the grid pointer moving, or the
+       dimensions moving under it, is the load. The same identity test the
+       terrain pass makes on its TILE_SET (tagpu_terr.c `s_setPtr`/`s_setCount`).
+       Belt and braces: the repack also evicts every entry nothing has asked
+       for since the last one, so even an undetected change (a new map handed
+       the same allocation at the same size) cannot accumulate -- the previous
+       map's frames go at the first repack that needs the room. Checked here,
+       after the pointer is validated and before any atlas_get can run. */
+    if (fmap != s_mapGrid || mapW != s_mapW || mapH != s_mapH) {
+        if (s_mapGrid) tagpu_gaf_atlas_forget(&s_atlas);
+        s_mapGrid = fmap; s_mapW = mapW; s_mapH = mapH;
+    }
 
     /* The engine's own sweep rect and its edge clamps (DrawGameScreen), run
        over the ZOOM's viewport rather than the engine's (TAGPU_FXVIEW.evpL):

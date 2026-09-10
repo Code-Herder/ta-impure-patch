@@ -201,9 +201,24 @@ int tagpu_gaf_decode(const unsigned char* g, int w, int h, unsigned char* out)
     return 1;
 }
 
-void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a)
+/* Throw the atlas away: no entries, no shelves, every UV invalid. Shared by
+   the recycle and by tagpu_gaf_atlas_forget so there is one drop, not two. */
+static void atlas_drop(TAGPU_GAFATLAS* a, const char* why)
 {
     char b[128];
+    a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
+    a->gen++;                   /* every UV in the atlas has just moved */
+    memset(a->hash, 0, sizeof a->hash);
+    /* the twin's rects are about to be re-used by other frames: back to
+       unpainted, and whatever was queued is dropped (it re-queues on its miss) */
+    if (a->job) { tagpu_rglsl_job_clear(a->job); twin_mips(a); }
+    _snprintf(b, sizeof b, "%s: atlas reset (%s) — frames re-decode on demand, generation %u",
+              a->tag ? a->tag : "gaf", why, a->gen);
+    glog(b);
+}
+
+void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a)
+{
     int wasFull = a->full;
     /* PART 2: re-lay what is here instead of throwing it away. Only for an
        atlas that asked (`repack`), only when it actually filled -- a restart
@@ -214,17 +229,23 @@ void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a)
         if (a->repackWall) return;      /* held: nothing a rebuild can improve */
         if (atlas_repack(a)) return;
     }
-    a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
-    a->gen++;                   /* every UV in the atlas has just moved */
-    memset(a->hash, 0, sizeof a->hash);
-    /* the twin's rects are about to be re-used by other frames: back to
-       unpainted, and whatever was queued is dropped (it re-queues on its miss) */
-    if (a->job) { tagpu_rglsl_job_clear(a->job); twin_mips(a); }
     /* the sprite atlases reset when full; the UI atlas also on a re-arm or a
        GL context change (tagpu_gui_surf.c twins_reset), which is not "full" */
-    _snprintf(b, sizeof b, "%s: atlas reset (%s) — frames re-decode on demand, generation %u",
-              a->tag ? a->tag : "gaf", wasFull ? "full" : "restart", a->gen);
-    glog(b);
+    atlas_drop(a, wasFull ? "full" : "restart");
+}
+
+/* The atlas no longer describes anything the caller wants: drop the entries
+   AND the repack decisions taken over them. This is the ONLY way back from
+   the wall, and the feature pass owes it one call when the map changes --
+   `repack` deliberately pins what it holds, and what it holds is only ever
+   right for one map. Without it a session that walled on one map would carry
+   that map's frames into the next and refuse every frame of it for the rest
+   of the session. It goes straight to the drop: a repack here would re-lay
+   the very entries we have just been told are meaningless. */
+void tagpu_gaf_atlas_forget(TAGPU_GAFATLAS* a)
+{
+    a->repackWall = 0;
+    atlas_drop(a, "subject replaced");
 }
 
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
@@ -237,7 +258,7 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     a->rgb = 0; a->job = NULL; a->restoreFailed = 0; a->mippedN = 0;
     /* the entries went with the texture, so the wall the last fill hit says
        nothing about the next one */
-    a->repackN = 0; a->repackWall = 0;
+    a->repackWall = 0;
 }
 
 /* one frame onto the restore queue: the R8 atlas is the source, the twin the
@@ -452,15 +473,37 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
     const int before = a->n;
     char b[192];
     int i, hb, x = 0, y = 0, sh = 0, kept = 0, w;
+    int wanted = 0, wanted_skip = 0;
 
     if (before <= 0 || before > ORD_MAX || !a->tex || !a->ents) return 0;
 
+    /* Only what is still being ASKED FOR is re-laid. An entry nothing has
+       touched since the last repack is not part of the set the atlas is short
+       of room for -- most sharply after a map change, when every one of the
+       previous map's frames is dead weight -- so it is dropped here and
+       re-decodes on demand if it is ever wanted again. This is what keeps the
+       atlas from accumulating across a session, and it is why the wall below
+       can be read as "the LIVE set does not fit" rather than "the set we
+       happen to be holding does not fit". */
     for (i = 0; i < ORD_HBINS; i++) s_ordHead[i] = -1;
     for (i = 0; i < before; i++) {
         const int ch = cell_up(a, (int)a->ents[i].h + 2 * p);
         if (ch < 1 || ch >= ORD_HBINS) return 0;   /* h was bounded; belt and braces */
+        if (!a->ents[i].hit) { wanted_skip++; continue; }
         s_ordNext[i] = s_ordHead[ch];
         s_ordHead[ch] = i;
+        wanted++;
+    }
+    /* Nothing was touched at all -- the caller filled the atlas inside a
+       single frame without a lookup landing, which the hit marking makes
+       impossible in practice. Re-lay everything rather than evict everything. */
+    if (wanted == 0) {
+        for (i = 0; i < ORD_HBINS; i++) s_ordHead[i] = -1;
+        for (i = 0; i < before; i++) {
+            const int ch = cell_up(a, (int)a->ents[i].h + 2 * p);
+            s_ordNext[i] = s_ordHead[ch]; s_ordHead[ch] = i;
+        }
+        wanted = before; wanted_skip = 0;
     }
 
     /* Pass 1 -- the shelf geometry of atlas_insert, fed tallest bin first.
@@ -468,11 +511,11 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
        `sh` is set once per shelf and never grown under a later cell, which is
        exactly the waste arrival order pays. The new rect goes straight into
        the entry: its old one stops meaning anything either way. */
+    for (i = 0; i < before; i++) a->ents[i].resv = 0;   /* the untouched drop out here */
     for (hb = ORD_HBINS - 1; hb >= 1; hb--) {
         for (i = s_ordHead[hb]; i >= 0; i = s_ordNext[i]) {
             TAGPU_GAFENT* e = &a->ents[i];
             const int cw = cell_up(a, (int)e->w + 2 * p);
-            e->resv = 0;
             if (cw > a->dim || hb > a->dim) continue;
             if (x + cw > a->dim) { y += sh; x = 0; sh = 0; }
             if (y + hb > a->dim) continue;      /* shorter bins may still fit */
@@ -510,6 +553,7 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
         dst->u1 = (float)(dst->x + dst->w) / (float)a->dim;
         dst->v1 = (float)(dst->y + dst->h) / (float)a->dim;
         dst->ok = 0;                    /* reserved until its next get paints it */
+        dst->hit = 0;                   /* a fresh interval to prove it is still wanted */
         for (slot = (int)gaf_hash(dst->frame); a->hash[slot];
              slot = (slot + 1) & (TAGPU_GAF_HASH - 1)) { }
         a->hash[slot] = ++w;
@@ -525,26 +569,30 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
        is what lets the twin converge at all while zoomed out. */
     if (a->job) { tagpu_rglsl_job_clear(a->job); twin_mips(a); }
 
-    /* PART 3, the branch that says a second page is the only thing left. A
-       repack is futile by construction once it cannot beat the last one:
-       same entries, same sort, same layout. Hold what we have rather than
-       drop it for a rebuild that would place fewer. */
-    if (kept < before || kept <= a->repackN) {
+    /* PART 3, the branch that says a second page is the only thing left.
+       `wanted` is the set that was still being asked for; if the tallest-first
+       layout could not hold all of it, no re-sort will, and repacking again
+       would only re-decode the same frames to reach the same wall. Hold what
+       we have rather than drop it for a rebuild that would place fewer.
+       Note this compares against `wanted`, never against the previous
+       repack's count: evicting the untouched legitimately lowers that count,
+       and reading a drop as failure would latch the wall on a healthy atlas
+       the first time a map went quiet. */
+    if (kept < wanted) {
         a->repackWall = 1;
         a->full = 1;
         _snprintf(b, sizeof b,
-                  "%s: atlas repack wall — %d of %d frames fit one %d square tallest-first"
+                  "%s: atlas repack wall — %d of %d live frames fit one %d square tallest-first"
                   " (%d%% spanned); holding this layout, only a second page adds room",
-                  a->tag ? a->tag : "gaf", kept, before, a->dim,
+                  a->tag ? a->tag : "gaf", kept, wanted, a->dim,
                   a->dim ? (y + sh) * 100 / a->dim : 0);
     } else {
         _snprintf(b, sizeof b,
-                  "%s: atlas repacked — %d frames re-laid tallest-first, %d%% of the %d square,"
-                  " generation %u (repack %u)",
-                  a->tag ? a->tag : "gaf", kept, a->dim ? (y + sh) * 100 / a->dim : 0,
-                  a->dim, a->gen, a->repacks);
+                  "%s: atlas repacked — %d frames re-laid tallest-first (%d dropped unasked-for),"
+                  " %d%% of the %d square, generation %u (repack %u)",
+                  a->tag ? a->tag : "gaf", kept, wanted_skip,
+                  a->dim ? (y + sh) * 100 / a->dim : 0, a->dim, a->gen, a->repacks);
     }
-    a->repackN = kept;
     glog(b);
     return 1;
 }
@@ -629,6 +677,7 @@ static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const 
     for (slot = (int)gaf_hash(g); a->hash[slot]; slot = (slot + 1) & (TAGPU_GAF_HASH - 1)) {
         TAGPU_GAFENT* c = &a->ents[a->hash[slot] - 1];
         if (c->frame == g && c->pix == pix && c->w == w && c->h == h) {
+            c->hit = 1;                 /* still wanted: survives the next repack */
             if (c->ok) return c;
             /* a repack reserved this rect and the caller is holding exactly
                the pixels it wants: paint it where it already sits */
@@ -648,6 +697,7 @@ static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const 
         e = &a->ents[a->n];
         e->frame = g; e->pix = pix;
         e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0; e->resv = 0;
+        e->hit = 1;                     /* asked for by definition: it is being inserted */
         e->x = (unsigned short)(a->shelfX + p);       /* inside the border */
         e->y = (unsigned short)(a->shelfY + p);
         a->hash[slot] = ++a->n;
@@ -671,7 +721,9 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
     if (w <= 0 || h <= 0 || w > TAGPU_GAF_DECMAX || h > TAGPU_GAF_DECMAX) return NULL;
     pix = *(const void* const*)(g + TAGPU_GF_PIX);
     hit = tagpu_gaf_atlas_find(a, g, pix, w, h);
-    if (hit) return hit;
+    /* the fast path is the one that runs hundreds of times a frame, so this is
+       where an entry proves it is still part of the working set */
+    if (hit) { ((TAGPU_GAFENT*)hit)->hit = 1; return hit; }
     /* a frame whose pixels are momentarily unreadable must stay retryable:
        claiming the slot here would cache the failure for the atlas's whole
        life, and the feature atlas is meant to live as long as the map */

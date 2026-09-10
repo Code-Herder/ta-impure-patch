@@ -50,6 +50,17 @@ typedef struct TAGPU_GAFENT {
     unsigned char  ck;
     char           ok;          /* painted: its texels are in the atlas      */
     char           wrap;        /* tagpu_rglsl_tileable said so at upload    */
+    /* ASKED FOR SINCE THE LAST REPACK. Set by every lookup that returns this
+       entry and by the insertion that made it; cleared on the survivors of a
+       repack. It is what makes a repack an EVICTION as well as a re-lay: an
+       entry nothing has asked for between two repacks is not part of the
+       working set the atlas is short of room for, so it is dropped and
+       re-decodes if it is ever wanted again (one RLE decode, on demand, in
+       the frame that asks). Without it the atlas pins entries for its whole
+       life -- and its life is longer than a map's, so a session that changed
+       maps would carry the previous map's frames forever and reach the wall
+       holding art nothing on screen can use. */
+    char           hit;
     /* RESERVED BY A REPACK: the rect above is assigned but nothing has been
        uploaded to it yet, because a repack moves every entry and we do not
        keep the decoded pixels (only the frame's address and its size). The
@@ -99,14 +110,17 @@ typedef struct TAGPU_GAFATLAS {
        Leave it 0 for an atlas that churns -- the effects atlas frees and
        re-allocates sequences, so pinning its entries would pin dead ones. */
     int           repack;
-    int           repackN;      /* entries the last repack placed            */
-    /* THE WALL. Latched when a repack cannot do better than the last one:
-       either the tallest-first layout itself did not hold every entry, or
-       the atlas filled again at the same entry count. Past it a repack is
-       futile by construction (same entries, same sort, same layout), so the
-       atlas HOLDS what it has rather than dropping it for a rebuild that
-       would place fewer -- and the log says a second page is the only thing
-       left that adds room. See tagpu_gaf.c atlas_repack for what that costs. */
+    /* THE WALL. Latched when a repack could not place every entry that was
+       still being asked for -- i.e. the LIVE working set does not fit one
+       page, which no re-sort can change. Past it a repack is futile by
+       construction, so the atlas HOLDS what it has rather than dropping it
+       for a rebuild that would place fewer, and the log says a second page
+       is the only thing left that adds room.
+       It is NOT a terminal state: tagpu_gaf_atlas_forget clears it, and the
+       owning pass calls that when the thing the atlas describes has been
+       replaced -- for the feature atlas, when the map changed. A wall that
+       could not be cleared would mean an atlas full of the wrong map's art
+       refusing every frame of the new one for the rest of the session. */
     int           repackWall;
     unsigned      repacks;      /* how many have run, for the pass's log line */
     /* The cell layout (renderers.md 2.5, the unit atlas): every frame is
@@ -181,6 +195,12 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_find(const TAGPU_GAFATLAS* a, const void* fr
    it -- and always for a restart that is not "full", such as the UI atlas's
    re-arm -- it drops them and they re-decode in arrival order as before. */
 void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a);
+/* Drop every entry and every repack decision: the atlas no longer describes
+   anything the caller wants. For an atlas with `repack` set this is the only
+   way back from the wall, and the owning pass owes it one call whenever the
+   subject changes underneath -- `tagpu_feat.c` on a map change. Cheap, and
+   correct to call when nothing has changed. */
+void tagpu_gaf_atlas_forget(TAGPU_GAFATLAS* a);
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a);       /* GL context replaced   */
 /* create the GL texture now rather than on the first frame that atlases a
    sprite — a pass whose shader samples the atlas must never bind texture 0 */

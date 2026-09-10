@@ -1738,11 +1738,19 @@ means reimplementing selection, box-select, build placement and every cursor mod
   scenario, resolution and zoom: **`atlas=234`, no `DROPPED` line at all, 0 resets, 1 repack**
   (`205 frames re-laid tallest-first, 50% of the 2048 square, generation 4`), every other field
   on the pass's line unchanged. Confirmed visually at 4K on the reference setup's real GL.
-  `repackWall` latches when a repack cannot beat its predecessor and the atlas then *holds* its
-  layout, naming a second page as the only thing left that adds room — nothing has reached it
-  (42 % of the page is still untouched after the repack, and of the four atlases only this one
-  has ever filled). See [features](features.html) §5 for the branch, the multipage cost, and
-  the residual it leaves.
+  `repackWall` latches when a repack cannot place everything still being asked for, and the atlas
+  then *holds* its layout, naming a second page as the only thing left that adds room — nothing
+  has reached it (42 % of the page is still untouched after the repack, and of the four atlases
+  only this one has ever filled). **The landing review caught that the first version made that
+  wall terminal**: `full` stays latched behind it and the only thing that cleared it was
+  `tagpu_gaf_atlas_lost`, reached solely from `tagpu_native_glreset` on a display-mode change, so
+  a session that walled on one map would have drawn no features at all on the next. Two
+  independent fixes: `tagpu_feat_gather` keeps the `FeatureMap` pointer (`main+0x14287`) and the
+  map's 16-px dimensions and calls the new `tagpu_gaf_atlas_forget` when any moves (the identity
+  test `tagpu_terr.c` makes on its `TILE_SET`), and a repack now re-lays only entries something
+  has asked for since the last one — so a map change the pointer test missed still cannot
+  accumulate. See [features](features.html) §5 and [the GAF sprite atlas](atlas-packing.html) for
+  the branch, the multipage cost, and the residual it leaves.
 - **A crash in the Classic++ shadow pass, fixed 2026-09-09 — and the fix is a BOUND, not a
   probe.** `[MEASURED 2026-09-08]` a 400-unit game under the play defaults faulted at
   `fild [ebx+0x10]` inside `tagpu_native.c`'s `aabb_walk`, `EBX = 0x3D1E4B1E`, seven levels into
@@ -1811,7 +1819,7 @@ means reimplementing selection, box-select, build placement and every cursor mod
 | **Classic++ restored art is not exactly linear in the Gamma factor.** The restorer expands the indexed atlas through the palette the screen is shown with (§2.3f), so at a factor other than 1.0 the model sees brighter art than it was trained on. MEASURED 2026-09-09, Two Continents at factor 1.5 against `min(255, the factor-1.0 frame × 1.5)`: 88 % of the viewport differs, but by **more than 6 levels on 0.68 % of it**, max 19. The Classic (indexed) path is exact at every factor; this is the Classic++ lane only | `tagpu_pal.c`, §2.3f | restoring in the unscaled domain and applying the factor where each twin is *sampled* — five shaders in place of one palette, and it would also retire the repaint |
 | **A Gamma change mid-game costs a full Classic++ re-restore** — 2.5 s of sliced GPU work per atlas that has one, the terrain's being the large one. Bounded (one repaint in flight per atlas) and progressive (no blanking), but it is real work for a slider the player is dragging | `tagpu_gaf.c` / `tagpu_terr.c`, §2.3f | nothing planned; the same "sample-time factor" change above would remove the need entirely |
 | **Past about 7680×4320 the wide fog grid is clamped and the outer ring smears again.** `tagpu_fogwide`'s three buffers are `FOGW_MAXDIM` square and allocated ONCE — it publishes a pointer into `s_pub` to the render thread while the game thread builds into `s_build`, so a buffer grown under a zoom change would be a use-after-free — and 1024 cells covers the window a real screen asks for (485 at 3840×2160, 645 at 5120×2880, 965 at 7680×4320, all MEASURED against the arithmetic 2026-09-09). Past that the clamp takes its trim off both ends, so the view's centre keeps its cover and only the edge returns to the border-cell smear | `tagpu_fogwide.c` `FOGW_MAXDIM` | a bigger allocation, or a publish handshake that makes growing one safe; neither is worth it for a screen nobody has |
-| The feature pass's `MAXBV_BODY` (32768 verts = 5461 quads) and the unit pass's `MAXU`/`MAXNV` are the first budgets a very wide zoomed-out view meets, now that the terrain's is the screen | `tagpu_feat.c`, `tagpu_native.c` | measure how many anchors a 4K 0.25× view over a dense map actually gathers, then size or bail deliberately |
+| The **unit** pass's `MAXU`/`MAXNV` are the first fixed budgets a very wide zoomed-out view meets, now that the terrain's and the feature pass's are the screen | `tagpu_native.c` | measure how many units a 4K 0.25× view over a full map actually gathers, then size or bail deliberately. The feature pass's `MAXBV_BODY`/`MAXBV_SHAD` were this row's other half until 2026-09-10; they are gone — `tagpu_feat.c`'s buckets `realloc`-double from `BV_BODY_0`/`BV_SHAD_0` behind `feat_room()` up to a 16 MB ceiling, and a 4K 0.25× view on Town & Country grew them to 65536/32768 verts with `DROPPED(full=0)` |
 
 ### 3.3 Open questions, not limits
 

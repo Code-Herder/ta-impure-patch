@@ -1438,16 +1438,43 @@ restorer job competing in the same sliced budget as the terrain, the units and t
 then the branch is four lines of state and a message, and the page it would add would be 21 MB of
 memory holding nothing.
 
+## 11b. Keeping is per-map — what the landing review caught
+
+The first version of this shipped the wall as a **terminal** state, and that was wrong. `repack`
+pins what it holds; `full` stays latched behind the wall; and the only thing that cleared either
+was `tagpu_gaf_atlas_lost`, reached solely from `tagpu_native_glreset` on a *display-mode* change.
+So a session that walled on map A and then loaded map B would have refused **every one of map B's
+feature frames for the rest of the session** — no trees, no rocks, no wreckage — while the atlas
+sat full of art from a map nobody was looking at. Before the repack, the per-fill reset flushed
+that by accident.
+
+Two things fix it, and they are independent on purpose:
+
+- **The pass tells the atlas when the map changed.** `tagpu_feat_gather` keeps the identity of the
+  grid it draws — the `FeatureMap` pointer at `main+0x14287` and the map's 16-px dimensions — and
+  calls `tagpu_gaf_atlas_forget` when any of the three moves. `forget` drops every entry *and* the
+  wall, and it is the only way back from the wall. Same identity test `tagpu_terr.c` already makes
+  on its `TILE_SET`.
+- **The repack evicts what nothing asked for.** Every lookup that lands marks its entry; a repack
+  re-lays only the entries marked since the last one and drops the rest. So even a map change the
+  pointer test missed — a new map handed the same allocation at the same size — cannot accumulate:
+  the previous map's frames go at the first repack that needs the room.
+
+The second changes what the wall *means*, for the better. It now latches on "the frames still
+being asked for do not fit one page", not on "the set we happen to be holding does not fit" — so
+evicting dead entries can never latch it, and when it does latch the log line is about the live
+working set.
+
 ## 12. Residual — what this does not settle
 
-**Never evicting has a cost, and it is a stale entry rather than a stale pixel.** The repack pins
-every entry it holds, including one whose GAF frame the engine has since freed. The lookup key is
-`(frame, pix, w, h)` — a value test, not a lifetime guarantee — so an address re-allocated with
-the same pixel pointer and the same size would draw the old art. That hazard predates this
-change, but the per-frame reset used to scrub it by accident and now nothing does: **nothing tells
-the feature atlas when the map changes.** It is why `repack` is opt-in and set only on the atlas
-whose contract is "fills once per map and stays"; the effects atlas, which frees and re-allocates
-sequences constantly, leaves it clear and still resets.
+**A stale entry can still draw old art, for one repack interval.** The lookup key is
+`(frame, pix, w, h)` — a value test, not a lifetime guarantee — so a GAF frame freed by the engine
+and re-allocated at the same address with the same pixel pointer and the same size hits it. That
+hazard predates the repack; what the repack changed is how long an entry can sit unexamined, and
+the eviction above bounds that to the interval between two repacks rather than the atlas's whole
+life. It is also why `repack` is opt-in and set only on the atlas whose contract is "fills once per
+map and stays"; the effects atlas, which frees and re-allocates sequences constantly, leaves it
+clear and still resets.
 
 **The working set is somewhat above 229.** Seven of the map's 123 feature types resolved to no
 definition in the offline scan, and animating types contribute more than one frame each — the live

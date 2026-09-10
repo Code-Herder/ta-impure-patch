@@ -50,10 +50,23 @@ int  tagpu_terr_hills_draw(int r0, int r1);
 
    The trim is what is left of the old fixed budget, and it now fires only if
    the reservation could not be met — an allocation that failed, or a viewport
-   so large the module's own memory guard refuses it. It cannot be skipped: a
-   gather that exceeds the staging BAILS, which hands the draw back for a frame
-   and flashes, and a flash is the one failure that reads as a bug. A black
-   margin is the honest degradation.
+   so large the module's own memory guard refuses it. A gather that exceeds the
+   staging BAILS, which hands the draw back for a frame and flashes, and a
+   flash is the one failure that reads as a bug; a black margin is the honest
+   degradation instead.
+
+   THE TRIM HAS A FLOOR THE CALLER PUTS BACK, and it is worth knowing which
+   failure that leaves. tagpu_native.c raises the rect to the viewport again
+   right after this call (`if (evw < vw) evw = vw`) because a rect narrower
+   than the screen would cull terrain that is plainly on it -- choosing a
+   visible hole over a flash. So the degradation above is real only while the
+   trim stays above the viewport, which is every case the memory ceiling can
+   produce: at the 16384-px viewport gate the reserve asks for ~65600 px and
+   the ceiling cuts it to ~56000, still far wider than the screen. Below the
+   viewport is reachable only if `realloc` itself fails, and there the gather
+   does bail and flash. Sizing the ceiling so it can never cross the viewport
+   is what keeps that path unreachable; do not lower it without re-checking
+   this.
 
    What this replaced was a fixed 32768 cells sized for 1024x768 and 1920x1080.
    An ordinary 3840x2160 desktop exceeded it at any zoom below about 0.5x, and

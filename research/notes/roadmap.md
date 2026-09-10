@@ -200,9 +200,10 @@ carries the branch and the residual it leaves (a recycled frame address with an 
 pointer and size can draw old art; the per-frame reset used to scrub that by accident).
 
 **What this did not close.** Past about **7680×4320** the wide fog window clamps again, centred,
-and the outer ring returns to the border-cell smear. The feature pass's `MAXBV_BODY` (5461
-quads) and the unit pass's `MAXU`/`MAXNV` are unchanged and are now the first budgets a very
-wide view will meet. And the **frame cost of a full 4K zoom-out was not measured on real
+and the outer ring returns to the border-cell smear. The **unit** pass's `MAXU`/`MAXNV` are
+unchanged and are now the first budgets a very wide view will meet — the feature pass's
+`MAXBV_BODY`/`MAXBV_SHAD` are gone, replaced in this same landing by buckets that grow
+(`BV_BODY_0`, `feat_room`, a 16 MB ceiling). And the **frame cost of a full 4K zoom-out was not measured on real
 hardware**: the reference setup's GL is only reachable through the live desktop, and the
 verification above ran on a virtual display under llvmpipe, where a frame rate means nothing.
 

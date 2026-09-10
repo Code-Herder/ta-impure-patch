@@ -338,17 +338,35 @@ And each page carries its own Classic++ twin: 4.2 MB of `GL_R8` plus **16.8 MB o
 with a second restorer job competing in the same queue. Build it when a map's log line
 says `WALL`, against a real case; the branch and the message exist so that it says so.
 
+**Keeping is per-map, and two things enforce that** — both added by the landing review, which
+caught that the first version of this made the wall a *terminal* state. `repack` pins what it
+holds, and what it holds is only ever right for one map; a session that walled on map A and
+then loaded map B would have refused every one of map B's frames for the rest of the session,
+because `full` stays latched and the only thing that cleared it was `tagpu_gaf_atlas_lost`,
+reached solely from `tagpu_native_glreset` on a *display-mode* change.
+
+- **The pass tells the atlas when the map changed.** `tagpu_feat_gather` keeps the identity of
+  the grid it is drawing — the `FeatureMap` pointer (`main+0x14287`) and the map's 16-px
+  dimensions — and calls `tagpu_gaf_atlas_forget` when any of the three moves. `forget` drops
+  every entry *and* the wall; it is the only way back from the wall. This is the identity test
+  `tagpu_terr.c` already makes on its `TILE_SET` (`s_setPtr` / `s_setCount`).
+- **The repack evicts what nothing asked for.** Every lookup that lands sets the entry's `hit`;
+  a repack re-lays only the entries marked since the last one and drops the rest, clearing the
+  marks. So even a map change the pointer test missed — a new map handed the same allocation at
+  the same size — cannot accumulate: the previous map's frames go at the first repack that needs
+  the room. It also makes the wall mean *the live set does not fit one page*, which is the
+  condition worth logging, rather than *the set we happen to be holding does not fit*.
+
 **The residual.** The repack reads only `w` and `h` out of an entry, both bounded to
 1..`TAGPU_GAF_DECMAX` by `atlas_get`/`atlas_put` before the entry existed, and it
 dereferences no pointer an entry stores — so a stale entry cannot make it address outside
 the atlas. What a stale entry *can* do is draw old art: the `(frame, pix, w, h)` key is a
 value test, not a lifetime guarantee, and a GAF frame freed by the engine and re-allocated
-at the same address with the same pixel pointer and the same size would hit it. That
-hazard predates this change — nothing tells the feature atlas when the map changes — but
-the per-frame reset used to scrub it by accident, and now nothing does. `repack` is
-therefore opt-in per atlas and set only on the feature atlas, whose header contract is
-"fills once per map and stays"; the effects atlas, which frees and re-allocates sequences,
-leaves it clear.
+at the same address with the same pixel pointer and the same size would hit it. That hazard
+predates this change and is now bounded to the interval between two repacks rather than the
+atlas's whole life. `repack` is opt-in per atlas and set only on the feature atlas, whose
+header contract is "fills once per map and stays"; the effects atlas, which frees and
+re-allocates sequences, leaves it clear.
 
 ## 6. Owning the draw — `tagpu_featown.c` [LIVE-VERIFIED]
 
