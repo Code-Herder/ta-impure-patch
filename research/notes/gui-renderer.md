@@ -2681,9 +2681,28 @@ going through `xwglGetProcAddress`**, so on Windows it alone resolved to NULL. T
 
 Fixed by fetching it from the module when `wglGetProcAddress` declines it, and by swallowing
 any error still pending after the `GL_EXTENSIONS` fallback so it cannot reach `got_error` by
-another route. **The fallback is deliberate rather than an unconditional module fetch:** under
-Wine `wglGetProcAddress` does return the 1.1 entry points, so the new branch never fires there
-and the platform every measurement in this repo was taken on keeps byte-identical behaviour.
+another route.
+
+**Wine is NOT immune because it resolves the pointer, and the landing review caught this note
+claiming it was.** [field notes](field-notes.html) records, `[VERIFIED]` and backed by a
+reproduced `ip=00000000` crash, that Wine returns NULL for the 1.1 entry points as well — and
+five in-tree comments (`render_ogl.c:1054`/`:1579`, `tagpu_posedraw.c:151`,
+`tagpu_shadow.c:49`, `tagpu_restoreglsl.c:153`) are written around exactly that. So **the
+fallback fires under Wine too**, and Wine escapes the GDI fallback somewhere further down the
+chain — most plausibly its `glGetString(GL_EXTENSIONS)` in a core profile does not leave the
+error pending for `got_error` to find. **That step is inferred, not measured** `[INFERRED]`;
+settling it needs a probe this project has never written.
+
+What that changes about the risk is worth stating, because it cuts the other way from how this
+section first read it. The new branch is **live on the platform every measurement in this
+repository is taken on**, not dormant — so the A/B below is evidence *about the changed path*
+rather than evidence that the path was untouched.
+
+It also matters that `oglu_ext_exists()` has exactly one caller, `render_ogl.c:123`, asking for
+**`WGL_EXT_swap_control`** — a WGL extension, which neither GL branch can ever find. It is
+answered by the `wglGetExtensionsStringARB` branch at the end of the function. So the GL
+branches were never doing useful work for this query at all: their only effect was the pending
+`GL_INVALID_ENUM`, and the fix's whole functional content is removing it.
 
 ### 21.2 The layer painted a stale mirror over the intro movie
 
@@ -2717,8 +2736,17 @@ exists only there. The movie is the same situation without a known rect, so the 
 general instead of positional: **where the engine has painted by a path we never saw, its
 frame is the truth.**
 
-The test is **narrow on purpose**. It fires only where the mirror holds index 0 — the seed
-value, *nothing was ever published for this texel* — and the engine has something. A wider
+The test is **narrow on purpose**. It fires only where the mirror holds index 0 and the engine
+has something else there.
+
+**What index 0 actually means, corrected by the landing review:** `twin_upload` stamps
+`(index, 255)` from the engine's own bytes and the seed op uploads a whole surface, so index 0
+at coverage 255 means *"the engine's surface was black here when we last saw it"* — **not**
+*"we were never told"*. The two are indistinguishable, and the guard's safety does not rest on
+telling them apart. It rests on a **staleness** rule instead: the publisher is purely
+observational, so the twin can lag the engine's surface but can never lead it. Where the twin
+says black and the engine says otherwise, the engine is by construction the newer of the two,
+and deferring to it is right whichever of the two cases produced the 0. A wider
 test (any index mismatch) also unblanks the movie and was tried first, but the twin's index
 and its restored colour are separate channels, so it discarded restored texels whose index
 legitimately differs and dropped that art back to the engine's dithered original, **visibly
@@ -2741,6 +2769,9 @@ produced a convincing but entirely false 1.46 % "regression" on the first attemp
 ### 21.4 Not covered
 
 A long match with heavy combat; resolutions other than the 1024×768 the Windows skirmish
-defaulted to. The intro movie renders washed-out with heavy scanlines, but it does so
+defaulted to. Inside our own cursor rect the guard is suppressed (`!cur`), so stale black there
+is still painted over the movie — a cursor-sized residual nobody has looked for. And whether
+Wine's `glGetString(GL_EXTENSIONS)` leaves an error pending is inferred rather than measured
+(§21.1). The intro movie renders washed-out with heavy scanlines, but it does so
 identically under plain GDI and with all passes off, so that is pre-existing and unrelated.
 

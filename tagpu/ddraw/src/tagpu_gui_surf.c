@@ -519,14 +519,24 @@ static const char* LAY_FS =
        ever reaches the queue, the twin keeps the black it was seeded with at
        coverage 255, and the layer paints that stale black over a playing movie.
 
-       The test is deliberately NARROW: only where the mirror says index 0 - the
-       seed value, "we have never been told what is here" - and the engine has
-       something. A wider test (any index mismatch) also unblanks the movie, but
+       The test is deliberately NARROW: only where the mirror says index 0 and
+       the engine says otherwise. Index 0 does NOT mean "never published" --
+       twin_upload stamps (index, 255) from the engine's own bytes, so it also
+       means "black when we last saw it", and the two are indistinguishable.
+       The guard does not need to tell them apart: the publisher only ever
+       OBSERVES, so the twin can lag the engine's surface but never lead it, and
+       where the two disagree the engine's is the newer. A wider test (any index
+       mismatch) also unblanks the movie, but
        the twin's index and its restored colour are separate channels, so it
        discards restored texels whose index legitimately differs and drops that
        art back to the engine's dithered original. Measured on the tab row: the
        wide rule visibly de-restores it, this one leaves the panel bit-identical
        to an unguarded build at matched interaction history. */
+    /* `p` and not `ib`: p = floor(tc + 0.5) is the NEAREST twin texel to this
+       fragment, which is the corner the bilinear blend above weights most (>= 0.5
+       per axis), and 13.3's sharpening ramp drives that weight toward 1 as k grows.
+       So the guard tests the texel `c` is made of. The uStrict branch below reads
+       the engine's surface at `p` for the same reason. */
     "  if (c.a > 0.5) {\n"
     "    if (uGuard != 0 && !cur) {\n"
     "      int tm = int(texelFetch(uTwin, p, 0).r * 255.0 + 0.5);\n"
