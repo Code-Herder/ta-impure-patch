@@ -14,6 +14,7 @@
 #include "dd.h"
 #include "hook.h"
 #include "tagpu_shield.h"
+#include "tagpu_menu.h"
 #include "mouse.h"
 #include "tagpu_zoom.h"
 
@@ -299,6 +300,19 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
     case TAGPU_M_WHEELDN: msg = WM_MOUSEWHEEL; wheel = -WHEEL_DELTA; break;
     }
 
+    /* The render-options sprocket owns its own 28x28 of the top bar, and it is
+       hit-tested HERE as well as on the real-message path below: with the
+       shield armed this is the ONLY path a tacli instance's clicks take, and
+       with it disarmed it is the only path a player's do not. A press it
+       consumes is dropped whole -- no message and no virtual key state, which
+       the engine polls -- and its release is dropped too, but always clears
+       the key so the engine is never left holding a button. */
+    if (vk == VK_LBUTTON && tagpu_menu_click(gx, gy, down))
+    {
+        if (!down) set_key(VK_LBUTTON, FALSE);
+        return;
+    }
+
     /* A PRESS in the display-only ring is dropped WHOLE — the virtual key state
        as well as the message, because the engine polls that too and a press it
        can see is a press it can act on at its own idea of where the mouse is
@@ -345,6 +359,25 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         deliver_mouse(hwnd, (int)wparam, (short)LOWORD(lparam), (short)HIWORD(lparam));
         *result = 0;
         return TRUE;
+    }
+
+    /* The sprocket, on the REAL path -- before the shield's own gate, so it
+       answers a player's mouse whether the shield is armed or not. The point
+       comes from g_ddraw.cursor rather than lParam because this hook runs at
+       the top of the wndproc, before cnc-ddraw has unscaled a hardware
+       message into game space; the preceding WM_MOUSEMOVE has already put the
+       game-space point there, and it is the same value the injected path
+       hands the same function. */
+    if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP)
+    {
+        int cx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
+        int cy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
+
+        if (tagpu_menu_click(cx, cy, msg == WM_LBUTTONDOWN))
+        {
+            *result = 0;
+            return TRUE;
+        }
     }
 
     if (!tagpu_shield_on())

@@ -1859,15 +1859,103 @@ multiplayer consequence of a constant logical field of view (every player then s
 amount of world, where today a 4K player sees far more); and an SDF glyph atlas, deferred behind a
 look at the string op at `k = 1.5`.
 
+## Phase F — the render options screen (G18)  [PLANNED 2026-09-09]
+
+The player-facing half of everything Phase D and E built: a **real `.GUI` screen**, drawn by
+the engine's own gadget dispatcher with its own GAF art, not a panel the DLL paints.
+[renderers](renderers.html) §2.10 is the design and [GUI gadgets](gui-gadgets.html) §10 the
+facts it rests on; `tools/ta-guiscreen.html` is the lab that draws it and `tools/guiart.py`
+extracts the art (nothing of the game's is tracked). Seven stage buttons, no pages:
+Renderer · Undithered assets · Dynamic lighting · Shadows (off/hard/soft) · Shadow quality ·
+Supersampling · Mouse-wheel zoom, with Custom derived and everything else demoted to the cfg.
+
+**G18a and G18b are worth doing whether or not the screen is ever built** — they are levers
+the cfg and tacli can drive today, and the screen is only their first consumer.
+
+| Gate | Status | Exit |
+|---|---|---|
+| G18a — split the switch: `assets=` and `light=` in `tagpu_classicpp.cfg`, feeding `uRestored` and a new `uLambert` separately | ● **done 2026-09-09** ([renderers](renderers.html) §2.10) | measured live on `tascene-parity`, 1024×768, cfg rewrites only, no relaunch: **`assets=1 light=1` is 0 px from the pre-change DLL** (`glshot` on two separate launches, and again after cycling every combination and back); `assets=0 light=1` = 8bpp indices lit (630 007 px, mean 14.1 levels); `assets=1 light=0` = restored colour flat (329 618 px, mean 4.6, the level half of the frame untouched); `assets=0 light=0 shadows=0` reproduces **Classic** to 594 px, one unit — the per-face `PALETTE.SHD` shade row belongs to the Classic branch, so a Classic++ unit at `light=0` is unshaded rather than LUT-shaded (**corrected by G18b**: 179 of those 594 px were the missing Classic *shadow*, not the shade row — at `shadows=2` the residual falls to 415 px); `light=0 shadows=0` is **byte-identical to `sun=off`** (0 px), which is what proves the flat lambert is exactly 1.0; and shadows **survive** `light=0` (1800 px). The UI twin of G15e follows `assets=` too: 37 415 of the 45 056-px `ARMOPT` rect, reversible to 0 px |
+| G18b — the shadow keys: a third value on `shadows=` for hard, and `sun=off` stops clearing shadows | ● **done 2026-09-09** ([renderers](renderers.html) §2.10, §2.12) | `shadows=` is `0` none / `1` soft / `2` hard, the two never both on. **Hard A/B'd against `classicpp.off` at the same eye** on `shadow-lab`, sim paused: Classic's shadow mask 2144 px, ours 2067, intersection 2006 — **IoU 0.910**, 138 px Classic-only and 61 ours-only, all one-pixel edge slivers, −3.6 % against §2.12's 5 % bar. **`sun=off` IS `light=0` now** — it stops moving `amb` and stops writing `shadows=` (which it used to clear, so the log said `shadows=0` when the cfg said 1): `sun=off shadows=0` is **0 px** from the old `sun=off`, `sun=off shadows=1` is **0 px** from `light=0 shadows=1` and differs from `sun=off shadows=0` by 1800 px — flat light **with** the depth map. Regression, cursor rect excluded: `shadows=1`, `assets=0 light=0 shadows=0` and `light=0 shadows=0` are each **0 px** from the G18a build. `shadows=0` now also drops the `airshadow=drop` aircraft silhouette, and the **level-ground rule holds under a shadow** (300 026 level pixels identical across the lit and flat lanes, 558 of them shadowed) |
+| G18c — the art: a six-recess panel frame and an entry point, both drawn, not spliced | ● **done 2026-09-09** (gate ③): `anims/render.gaf` in the DLL-written `.ufo`, one uncompressed 304×212 frame drawn in palette indices 55..63, repainted at load from `frontend.gaf`'s `back*`; the entry point is the DLL-drawn sprocket. `publish-check.py` has nothing to refuse — the archive is a runtime artifact and `*.ufo` is gitignored | **exit met**: the frame loads as an `id=12` background and every gadget lands in a recess at 1024×768 and 1080p; **no blob matches the original manifest** (`publish-check.py`), which a spliced frame would |
+| G18d — the screen: `RENDER.GUI`, its gadgets, and the callback that writes the cfg and the trigger files | ● **done 2026-09-09** (gates ① and ②) | **exit met**: every row moves the game inside one poll; Custom appears on touching any row and clears on Renderer; `Shadow quality` greys with `grayedout` when Shadows ≠ Soft; the G15 twins mirror it at 0 diff on the `strict` walk |
+| G18e — the way in: how the screen is reached | ● **unblocked 2026-09-09** | a new `.GUI` name CAN be pushed: `GUI_Load 0x4AA8F0` builds a file path from the name, so our DLL is the call site and no stock screen is sacrificed. Push with `0x495207`'s idiom (`main+0x37EA0` + `GUI_Load`, then `+0x08`/`+0x0C`); close by restoring the buffer and letting `UpdateIngameGUI` pop. The trigger is DLL-drawn — no GUI screen owns the top bar. Exit: reached in one click from a running game, the `+clock` seconds still ticking |
+
+**G18e is no longer blocked, and the entry-screen problem evaporated with it.** The screen
+inventory *is* a string table (gui-gadgets §6), but `GUI_Load 0x4AA8F0` never consults it — it
+builds `<prefix at gi+0x9B6><name>.GUI` and opens the file — so a name we invent loads if the
+file exists. And nothing has to be hung on `ARMOPT.GUI` at all (it was full at seven, with
+`commongui.igopt`'s six recesses all used by `PREFS.GUI`): **no GUI screen owns the top bar**,
+every in-game panel being `(0,128) 128×352`, so the trigger is DLL-drawn and needs no host.
+*The `OPTBG` gap measurement is therefore no longer needed for anything.*
+
+**G18 lands as a spike in three gates** [DECIDED 2026-09-09]. The three unknowns below are each
+cheap to test alone and expensive to debug together, so each gate is its own landing with its
+own oracle rather than one ~600-line drop.
+
+| gate | proves | oracle | status |
+|---|---|---|---|
+| **① it exists** | the DLL writes `impure-patch.ufo`, the engine globs it **in the same launch**, and `RENDER.GUI` pushes over a running game | the screen appears; the sim keeps ticking (TA's own menu stops it) | ● **done 2026-09-09** — `tacli ui` reads `gui RENDER.GUI … under: ARMMAIN2.GUI`, the panel right-aligned at the live resolution; the sim tick `main+0x38A47` ran **1801 → 2057** over four seconds with it open against **2147 → 2147** with `ARMOPT` open; pushes and pops repeatedly |
+| **② it responds** | `OnCommand` fires with the index in `UIChange_f`; `0x4A1080` + a repaint visibly advance a stage; **`gi+0xCCA` identified** | a plate moves on click, and the cfg on disk changes | ● **done 2026-09-09** — every click reports the engine's own `stage N → M`; the cfg gains `assets=/light=/shadows=/shadowres=` and the renderer and supersampling rows create and delete their lever files; Custom is derived; `Shadow quality` greys at `Shadows ≠ Soft` and the engine then **refuses the click**. `gi+0xCCA` is the **deferred-repaint flag** — twenty-odd setters, accessors at `0x49FA90`/`0x49FAB0`, one reader at `0x4AA0AF` that clears it and calls `GUI_StageUpdateDraw` with the screen's own flags plus `0x40` |
+| **③ it looks right** | six rows, the composed `back*` ground repainted over our drawn frame, the trigger drawn and hit-tested | the panel matches the lab | ● **done 2026-09-09** — six rows on the shell's `back*` nine-slice composed at runtime from the player's install and repainted into `+0x10 PtrFrameBits`; the 28×28 sprocket at `(w−16−28, 2)` opens and closes the menu while a click at (500,400) does neither. **The G15 `strict` walk has not been run against it** — the walk's screen inventory does not know this screen |
+
+**What the landing review changed, and what it left open** (2026-09-09, two Opus reviewers at
+`high`, on the post-merge diff). Acted on: `grayedout` now goes through the engine's own
+`GUIGADGET_SetGrayed 0x4A1250` instead of a 32-bit field write that cleared bits 1..15 of a u16
+and the two bytes after it; the legacy `sun=off` is dropped from the cfg the menu rewrites,
+because it forced `light=0` *after* the token loop and made the Dynamic lighting row a silent
+no-op; the cfg is written to a temporary and `MoveFileEx`'d over the target, with the write
+checked, so a kill or a short write can no longer leave the player's `sun`/`amb`/`penumbra`
+gone; a cfg too large for the rewrite buffer is now refused rather than silently truncated; a
+press we do not own clears `s_pressed`, so a sprocket press whose release goes elsewhere can no
+longer make the *next* unrelated release get swallowed (the G13e failure); the Classic++ preset
+no longer forces Supersampling on; `tagpu_menu_owns_point` honours `s_drawTrigger`; and a
+failed ground composition latches instead of leaking one `frontend.gaf` per world click.
+
+**Still open, and deliberately not closed here:**
+
+- **The expect-buffer clash.** While the menu is open the tick stamps `RENDER.GUI` into
+  `main+0x37EA0` every frame, and `s_saved` is captured once at open. If the engine pushes a
+  screen of its own through the same slot (the `0x495207` idiom) it would be popped at the next
+  of `UpdateIngameGUI`'s 21 sites, and close would restore a stale name. **This was NOT
+  reproduced**: no engine screen turned out to be reachable in-game on the test instance —
+  `ESC` opens nothing and `ARMMAIN2.GUI` carries only labels — and the control confirmed that,
+  so the probe never tested the path rather than clearing it. A guard was written and then
+  *not* landed, because it could not be run. Reproducing it needs a scenario or build in which
+  an in-game engine screen can actually be opened.
+- **`s_gm` is a raw pointer compared across level teardowns.** A level change with the menu open
+  leaves it dangling; if the new level's allocator returns the same address, `on_stack()` would
+  agree forever. Same class as the above and untested for the same reason.
+- **The `.on`/`.off` pair has an unavoidable window.** Turning Classic++ *off* means deleting
+  one file and creating another; with neither present the shipped DLL's default table reports
+  the pass **on**, and with both present the `.on` wins — so both orderings have a transient
+  wrong read. It is sub-frame and the next 250 ms poll corrects it; closing it properly needs a
+  single atomic indicator rather than a pair.
+- **`shadowres` outside the four table values** (256, say) is snapped to the nearest row on the
+  first click of any row rather than being preserved.
+- **The G15 `strict` walk still has not been run against this screen**, and **GUI scale `k ≠ 1`
+  is still unexercised** — tacli runs the window 1:1 with the engine surface, and
+  `tagpu_devres.on` stayed `devres=0` with supersampling off.
+
+**Gate ① is the one that can invalidate everything downstream** — if a `.ufo` written during
+`DLL_PROCESS_ATTACH` is not globbed in the same launch, the install story changes — which is
+why it is first and why it is a one-button screen rather than the real one.
+
+**Open (answered):** a `stages=2` button with `texturenumber=0` gets **`stagebuttn1`, the
+red/green plate** — read off the built screen, whose Off/On rows show red at stage 0 while its
+3- and 4-stage rows are green throughout. What would select `stagebuttn2` is still unmeasured.
+And the callback question is settled by construction: ours is `GUIMEMSTRUCT+0x08`, set right
+after the load exactly as `0x495219` does, and it writes an in-memory value that the render
+thread turns into files at the next present.
+
 ## Shipping — the build people can download (2026-09-08)
 
-Until the game has an options menu for the new modes ([renderers](renderers.html) §2.10 is the
-design), the shipped DLL turns the play set on by itself, and the build comes off GitHub rather
+Until the game has the render options screen (**Phase F / G18** above; [renderers](renderers.html)
+§2.10 is the design), the shipped DLL turns the play set on by itself, and the build comes off GitHub rather
 than a desk.
 
 | Gate | Status | Exit |
 |---|---|---|
-| S1 — the play defaults: every play pass on with no arm file, a `.off` file per pass, `tagpu_defaults.off` for the table, tacli's instances opted out | ● **done 2026-09-08** ([gpu-status](gpu-status.html) §2.8): `tagpu_opt.c`, seventeen readers routed through it, the `*own` halves paired with their pass; measured with no arm file (all seventeen `ARMED`, Classic++ restoring at 58.5 fps), a live `classicpp.off` (424 380 px back to Classic), and `--no-defaults` (only `curs`/`reclaim`/`shield` armed) | the menu of §2.10 retires the table |
+| S1 — the play defaults: every play pass on with no arm file, a `.off` file per pass, `tagpu_defaults.off` for the table, tacli's instances opted out | ● **done 2026-09-08** ([gpu-status](gpu-status.html) §2.8): `tagpu_opt.c`, seventeen readers routed through it, the `*own` halves paired with their pass; measured with no arm file (all seventeen `ARMED`, Classic++ restoring at 58.5 fps), a live `classicpp.off` (424 380 px back to Classic), and `--no-defaults` (only `curs`/`reclaim`/`shield` armed) | **G18d retires the table** — until then the shipped DLL turns the play set on by itself |
 | S2 — the GitHub build: `ddraw.dll` from Actions on every push to `main`, the release folder (DLL, `ddraw.ini`, the restorer weights, `README.txt`) as the run's artifact and as a release on a `v*` tag | ◐ written 2026-09-08 (`.github/workflows/build.yml`, `tagpu/release/`): the packager and the folder proven locally; **the first run on GitHub waits for the push** | a green run on `main`; a `v0.1` tag with the zip under Releases |
 | S3 — native Windows: the shipped zip on a real Windows, real driver, once per release | ○ the `_local` test VM (KVM, the Ryzen iGPU over VFIO) is being built; nothing measured yet | every pass `ARMED` and a Classic++ frame from a Windows 11 guest on the iGPU |
 

@@ -1008,7 +1008,7 @@ void tagpu_rglsl_step(void)
             }
         }
     }
-    if (!tagpu_classicpp_on()) return;           /* paused: the queues keep filling */
+    if (!tagpu_classicpp_assets()) return;       /* paused: the queues keep filling */
     j = pick_job();
     if (!j) {
         /* nothing to do: after a while the scratch goes (the queues stay) */
