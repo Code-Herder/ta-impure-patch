@@ -1,0 +1,43 @@
+{
+  "format": "ta-scenario/1",
+  "description": "500 ARM vs 500 CORE on the Two Continents plateau — the big-fight fixture (selection overlay bug)",
+  "seed": 20260909,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1920x1080",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1}
+    ]
+  },
+
+  "groups": [
+    { "id": "arm_wave", "owner": 0, "at": [2000, 1200],
+      "pattern": {"kind": "grid", "cols": 25, "spacing": 40, "jitter": 6},
+      "composition": [{"type": "ARMPW", "count": 400}, {"type": "ARMROCK", "count": 99}],
+      "facing": 90,
+      "orders": [{"cmd": "attack", "to": [3600, 1200]}] },
+
+    { "id": "core_wave", "owner": 1, "at": [3600, 1200],
+      "pattern": {"kind": "grid", "cols": 25, "spacing": 40, "jitter": 6},
+      "composition": [{"type": "CORAK", "count": 500}],
+      "facing": 270,
+      "orders": [{"cmd": "attack", "to": [2000, 1200]}] }
+  ],
+
+  "units": [
+    { "id": "hero", "type": "ARMCOM", "owner": 0, "pos": [1700, 1200],
+      "facing": 90, "health": 100, "stance": "hold" }
+  ],
+
+  "features": [
+    { "id": "the_wreck", "type": "armlab_dead", "pos": [2800, 1200], "facing": 45 }
+  ],
+
+  "camera": { "center_on": "the_wreck" }
+}

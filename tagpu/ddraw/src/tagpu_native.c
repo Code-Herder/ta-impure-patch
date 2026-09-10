@@ -355,6 +355,12 @@ static float  s_verts[MAXNV * NVST];
 /* set by the frame, read by tagpu_markown.c on the game thread: 1 while every
    selection box this frame owed was actually emitted */
 static volatile int s_selComplete = 0;
+/* Frames that came up short and handed the WHOLE selection-rect set back to the
+   engine, and the last shortfall's numbers. Reported on the `native:` line only
+   when it has caught something, like BADMODELID: in a healthy game it never
+   does, and when it does the engine draws every box at its UNZOOMED projection
+   for that frame, which at zoom < 1 is a visible scatter. */
+static unsigned s_selHandback, s_selLastDrawn, s_selLastOwed;
 
 /* material constants copied per frame from render3do's calibration */
 static const float SH_V[3] = { 0.0f, 0.8944f, -0.4472f };
@@ -2644,10 +2650,28 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        with unit draws — the engine's is unreadable under our pixels, redraw
        it): flat model-XZ AABB rect at lowest model Y, rotated by body yaw,
        GUI colour 0xA, drawn as GL_LINES at just-under-the-unit depth ---- */
-    int lineStart = nv, selDrawn = 0;
+    int lineStart = nv, selDrawn = 0, selNone = 0;
     if (nsel) {
         for (i = 0; i < nu && nv + 8 <= MAXNV; i++) {
-            if (units[i].dead || !units[i].sel || !units[i].u) continue;
+            if (!units[i].sel) continue;
+            /* OWED NOTHING, so not a shortfall. Two per-unit states reach this
+               loop in a fight and neither is a box anybody draws:
+
+                 `dead` — the unit's model-object pointer moved since the gather
+                   (the re-read above), i.e. the engine freed or replaced it
+                   under this frame, so it is not in the engine's own sweep;
+                 ModelId 0 — "no model" (model_root's own first refusal, the one
+                   it does not even count as bad): 0x46A530 bounds the rect with
+                   0x4CB650(model, ...), so with no model there is nothing for
+                   the engine to bound either.
+
+               Counting them as boxes we failed to draw is what made a 500 v 500
+               fight paint the screen: one dying selected unit dropped
+               `s_selComplete`, markown handed all ~460 rects back, and the
+               engine drew every one of them at the UNZOOMED position
+               [MEASURED 2026-09-09]. */
+            if (units[i].dead || !units[i].u) { selNone++; continue; }
+            if (!*(const unsigned short*)(units[i].u + U_MODELID)) { selNone++; continue; }
             const char* root = model_root(ta, units[i].u);
             const MAABB* a = root ? selbox_aabb(root) : NULL;
             if (!a) continue;
@@ -2747,8 +2771,24 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        leaves a selected unit unmarked. So say so, and let markown hand the
        WHOLE set back for a frame: at 1x the engine's boxes land on the same
        pixels and nothing shows, at any other zoom a one-frame ghost is a much
-       smaller lie than a missing marker. Self-correcting either way. */
-    s_selComplete = (selDrawn == nsel && nu < MAXU);
+       smaller lie than a missing marker.
+
+       IT IS THE WHOLE SET, so what counts as "owed" has to be exact — this is
+       not a counter that can afford to be conservative. `selNone` above is
+       there for that: it is the units nobody draws a box for, and before
+       2026-09-09 they were counted as failures, which made one dying unit in a
+       big selection hand ~460 rects back to the engine. That was not
+       self-correcting at all: while `tagpu_vpwide` has the engine's viewport
+       rect widened, the engine's clip rect used to be clamped to the SURFACE,
+       so those boxes landed on the side panel and the strips — outside the
+       rect our key fill erases, hence permanent (tagpu_vpwide.c's clip guard
+       is the bound that now makes that impossible; this test is what stops the
+       frame happening in the first place). */
+    s_selComplete = (selDrawn + selNone == nsel && nu < MAXU);
+    if (!s_selComplete && nsel) {
+        s_selHandback++;
+        s_selLastDrawn = (unsigned)(selDrawn + selNone); s_selLastOwed = (unsigned)nsel;
+    }
     int lineEnd = nv;
 
     /* nanoframe wireframes: a second line range per unit, empty for everyone
@@ -3404,11 +3444,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         badmodel[0] = 0;
         if (s_badModelId)
             _snprintf(badmodel, sizeof badmodel, " BADMODELID=%u", s_badModelId);
+        /* Frames the selection rects went back to the engine wholesale. Same
+           rule as BADMODELID: printed only when it has happened, because a
+           frame of the engine's own boxes at the unzoomed projection is a
+           visible scatter and should be attributable. */
+        char handback[48];
+        handback[0] = 0;
+        if (s_selHandback)
+            _snprintf(handback, sizeof handback, " SELHANDBACK=%u last=%u/%u",
+                      s_selHandback, s_selLastDrawn, s_selLastOwed);
         _snprintf(b, sizeof b,
-                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d devres=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s%s%s%s",
+                  "native: %d unit(s) %d wreck(s) %d sel %d bar(s) %d slant %d nano %d verts fbo=%dx%d ss=%d devres=%d subpix=%d scaf=%d fog=%d los=%u foglut=%d key=%d reread=%u%s%s%s%s%s",
                   nu - nwr, nwr, nsel, nmark, nslant, nwire, nv, gw, gh, ss, devres, s_subpix, scafOn, fogMode,
                   lostype, s_fogLut, keyOn, s_reread,
-                  bake, posed, badmodel, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
+                  bake, posed, badmodel, handback, s_vtrunc ? " VERTEX-BUDGET-HIT" : "");
         b[sizeof b - 1] = '\0';        /* _snprintf does not terminate a truncation */
         nlog(b);
         s_reread = 0;

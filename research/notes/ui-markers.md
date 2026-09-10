@@ -201,6 +201,45 @@ measured, so nothing was seen crossing; the real fix is the same one the rect
 just had — the marker layer is supersampled too, and every line and glyph in it
 is softer than the engine's for exactly the same reason.
 
+### The hand-back, and the two bugs it hid [MEASURED 2026-09-09]
+
+`markown`'s suppression is per unit — `mark_selbox` skips `0x46A530` for a unit
+`tagpu_native_owns_unit` claims — but it is **also** gated on the last frame having
+drawn every box it owed (`tagpu_native_selbox_complete()`), because a suppressed box we
+then failed to draw leaves a selected unit unmarked. When that flag is 0 the engine
+draws the **whole set** again, all of it at the unzoomed `0x467A50` projection above.
+
+Two things about that were wrong, and a 500 v 500 meeting engagement with the whole
+army selected at 0.42× (`scenarios/500v500.json`) shows both:
+
+- **The "owed" count was not exact, so one dying unit handed back ~460 rects.** The
+  native loop skipped a unit whose model object had moved since the gather (`dead`, the
+  re-read) or whose `ModelId` is 0, while `nsel` had already counted it — so `selDrawn
+  != nsel` and the flag dropped. Neither of those is a box anybody draws: a freed unit
+  is not in the engine's own sweep, and with no model `0x4CB650` has nothing to bound.
+  They are counted separately now (`selNone`), and over a four-minute run of the fixture
+  the hand-back count went **5 → 0** while `reread=` stayed non-zero throughout. The
+  `native:` line grows ` SELHANDBACK=<n> last=<drawn>/<owed>` when it does still happen —
+  BADMODELID's rule, printed only when it has caught something.
+- **A hand-back frame was not self-correcting at zoom < 1, it was permanent.** With
+  `vpwide` live the engine's viewport rect is widened, and until 2026-09-09 the clip
+  guard clamped it to the SURFACE only — so those ~460 boxes, drawn where the *unzoomed*
+  projection puts them (up to 1.4 screens out at 0.42×), landed on the **side panel and
+  the top and bottom strips**. Our key fill erases the true viewport and nothing repaints
+  the panel, so they stayed for the session and accumulated: 5768 stray green pixels on
+  the panel in one four-minute run, and 24 487 after an in-game menu open/close. The clip
+  guard now clamps to the true viewport as well, which is stock's own bound there
+  (`gpu-status.md` §2.3b): same fixture, same five hand-backs, **31** stray pixels — the
+  minimap's view rect, i.e. none.
+
+The two fixes are independent on purpose. The clip bound is what makes the corruption
+impossible whatever draws; the exact "owed" count is what stops the frame happening.
+**What is left, and is intended:** a genuine shortfall — the gather cap, the vertex
+budget, an unreadable model AABB — still hands the whole set back for one frame, and at
+zoom ≠ 1 that frame shows the engine's boxes scattered inside the viewport before the
+next key fill erases them. That is the documented trade (a one-frame ghost against a
+missing marker); it is now bounded to the viewport, and `SELHANDBACK` names it.
+
 ---
 
 ## 2. The health-bar block — hook 8 `0x469BD7` → hook 9 `0x469D2C`

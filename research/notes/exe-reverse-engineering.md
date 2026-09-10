@@ -1579,7 +1579,8 @@ caller is expected to respect.
 
 **Six call sites, and `vpwide` redirects three.** `0x468D85`, `0x46964F` and `0x469F95` are the
 `DrawGameScreen` sites that feed it the viewport rect `main+0x37E27`, so those are the ones that
-would hand it a widened rect; they are redirected and clamped (`gpu-status.md` §2.3b). The other
+would hand it a widened rect; they are redirected and clamped — to the surface allocation *and*,
+since 2026-09-09, to the **true viewport rect** (`gpu-status.md` §2.3b). The other
 three are `0x495CAC`, `0x4A20A1` and `0x4A22DF`, and **none of them is handed the viewport
 rect** — settled by two independent disassembly reads during the G13m landing review. `0x495CAC`
 builds its argument block at `0x495C91..0x495CA9` from a loop accumulator, a literal `0` for `t`,
@@ -1590,9 +1591,18 @@ its enclosing function `0x495A30` does read `main+0x37E27`/`+0x37E2B`, but into 
 `0x468D85`/`0x46964F`/`0x469F95` copy `main+0x37E27` immediately before the call, and those are
 the three that are redirected.
 
+**A widened rect DOES reach engine drawers, and they DO honour this clip rect [MEASURED
+2026-09-09].** Both halves were open until a 500 v 500 fight with the whole army selected at 0.42×
+answered them: with the clip clamped only to the surface, the engine's own selection rect
+`0x46A530` painted the side panel and the strips (5768 stray pixels, permanent and accumulating);
+clamping the same three sites to the true viewport as well took it to 31 — the minimap's own view
+rect — *with the same five hand-back frames still occurring*. So the drawers inside
+`DrawGameScreen` read `ctx+0x1C..+0x28` and stop at it, and nothing else reaches outside the
+viewport there. `gpu-status.md` §2.3b has the numbers; `ui-markers.md` §1 has the drawer.
+
 **Still open:** `0x495A30` calls `DrawGameScreen 0x468CF0` in a loop while driving the eye, so it
-renders *under* whatever rect is in force. Whether a widened rect can reach an engine drawer that
-way was not settled.
+renders *under* whatever rect is in force. Whether that path can be entered while the rect is wide
+was not settled — the clip guard bounds it either way now.
 
 **`GetCursorPos` is the IAT slot `ds:0x4FC2E4`, reached from six places, and only three of them
 move the cursor.**

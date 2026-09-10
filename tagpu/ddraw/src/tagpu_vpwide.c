@@ -156,13 +156,51 @@ static volatile LONG s_pubL, s_pubT, s_pubW, s_pubH, s_pubLive;
 static void __thiscall vpw_setclip(void* self, int l, int t, int r, int b)
 {
     const int* s = (const int*)self;
+    int sw = 0, sh = 0;
     if (ptr_ok(s) && !IsBadReadPtr(s, 8)) {
         int w = s[0], h = s[1];             /* SurfaceCreateNamed: +0 w, +4 h */
         if (w > 0 && h > 0 && w <= 16384 && h <= 16384) {
+            sw = w; sh = h;
             if (l < 0) l = 0;
             if (t < 0) t = 0;
             if (r > w - 1) r = w - 1;
             if (b > h - 1) b = h - 1;
+        }
+    }
+    /* ...and never past the TRUE VIEWPORT, which is a different bound and the
+       one that matters for the picture. The allocation clamp above keeps the
+       write inside the surface; it still leaves the whole side panel and the
+       top and bottom strips fair game, and NOTHING EVER REPAINTS THEM — our
+       key fill covers the true viewport only (that is why it takes its rect
+       from tagpu_vpwide_true_rect and not from the field), and the engine
+       redraws the panel on damage it knows about, which a stray world draw is
+       not. So one frame in which an engine drawer runs with the wide rect
+       leaves marks outside the viewport for the rest of the session: measured
+       2026-09-09 as the stuck selection boxes a 500 v 500 fight with the whole
+       army selected paints over the panel at zoom < 1, permanent and
+       accumulating (the engine's selection rect is the drawer that reaches
+       them: markown hands the whole set back for a frame whenever the native
+       pass came up one box short, and the engine projects each one at the
+       UNZOOMED position, which at 0.42x is up to 1.4 screens away from where
+       the unit is drawn).
+
+       Clamping to the true rect is exactly the bound stock TA sets here —
+       DrawGameScreen feeds these three sites the viewport rect, and unwidened
+       that rect IS the true one — so it can never clip anything the engine
+       would otherwise have drawn on screen. At zoom >= 1 and with the widening
+       disarmed it is the identity. */
+    {
+        const char* ta = *(const char* const*)TA_MAINPP;
+        int tL, tT, tW, tH;
+        tagpu_vpwide_true_rect(ta, &tL, &tT, &tW, &tH);
+        if (tW > 0 && tH > 0 && sw >= tL + tW && sh >= tT + tH) {
+            int cl = l < tL ? tL : l, ct = t < tT ? tT : t;
+            int cr = r > tL + tW - 1 ? tL + tW - 1 : r;
+            int cb = b > tT + tH - 1 ? tT + tH - 1 : b;
+            /* a rect that does not meet the viewport at all is not one of
+               these sites' — leave it as the allocation clamp left it rather
+               than handing the engine an inverted rect */
+            if (cl <= cr && ct <= cb) { l = cl; t = ct; r = cr; b = cb; }
         }
     }
     ((PFN_SETCLIP)VA_SETCLIP)(self, l, t, r, b);
