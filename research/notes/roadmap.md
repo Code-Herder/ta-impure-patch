@@ -1881,6 +1881,20 @@ failed ground composition latches instead of leaking one `frontend.gaf` per worl
   the pass **on**, and with both present the `.on` wins — so both orderings have a transient
   wrong read. It is sub-frame and the next 250 ms poll corrects it; closing it properly needs a
   single atomic indicator rather than a pair.
+- **TODO (IMPORTANT): the hills caster still costs 19 MB per map for a pass that never draws.**
+  `terrainshadow` defaults to 0 since 2026-09-09, and the only caller of `tagpu_terr_hills_draw`
+  is gated on it (`tagpu_shadow.c:398`) — but `build_hills` is **not**: `build_height` calls it
+  unconditionally, so every map still uploads 537 600 vertices (6.4 MB) and 3.2 M indices
+  (12.9 MB) that nothing reads. On the reference setup that is pure waste on every map load, and
+  it scales with map size.
+  **Do not fix it by gating the build on the flag** — the cfg is re-read while the game runs (the
+  render-options screen triggers it), so `terrainshadow=1` mid-session must still produce a mesh,
+  and that live toggle is the fixture the eventual shadow fix gets measured in. **Build it lazily**
+  on the first `tagpu_terr_hills_draw` after the grid changed. The one obstacle: `buf` is freed at
+  the end of `build_height`, so the lazy path needs either that `w*h` byte buffer kept alive
+  (0.5 MB, 3 % of what it replaces) or a re-read of the engine grid at `OFF_FEATMAP` behind the
+  same `ptr_ok`/`IsBadReadPtr` guard. Keep the `s_hMeshW/s_hMeshH == s_hW/s_hH` check in the draw
+  so a failed rebuild still refuses rather than indexing past the old mesh.
 - **[DEFAULTED OFF 2026-09-09 — `terrainshadow=0` ships, and the render-options screen has no path to turn it on]** **The `Shadow quality` row made the picture WORSE as it went up** — the one defect a player
   actually meets, found by playing zoomed out and diagnosed 2026-09-09. Soft shadows self-shadow
   flat ground: on open sea with nothing casting, the water darkens up to 50/255 in a 16-world-unit
