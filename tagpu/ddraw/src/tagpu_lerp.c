@@ -212,8 +212,28 @@ static LREC* lookup(const char* o3, int nparts)
     return cand;
 }
 
-/* PREV -> CUR at weight u, field by field. Invariants 3 and 4 live here. */
-static void blend(const LREC* r, size_t base, int n3, float u,
+/* PREV -> CUR at weight u, field by field. Invariants 3 and 4 live here.
+
+   THE WEIGHT IS A 16.16 INTEGER AND THE LOOP TOUCHES NO FLOAT AT ALL, which is
+   worth 15x and is not a micro-optimisation. This target has no SSE, so there
+   is no `cvttss2si`: C requires a float->int conversion to truncate toward
+   zero, the x87 rounds to nearest, and GCC therefore brackets EVERY `(int)` of
+   a float with a control-word save and restore. The first cut did two such
+   conversions per iteration, so the loop carried FOUR `fldcw` -- a serialising
+   reload of the whole x87 state -- and measured 226 cycles an iteration for
+   about ten cycles of actual arithmetic (smooth-motion.md section 7f).
+
+   The blend never needed floating point. `u` is in [0,1), so 16.16 gives it
+   1/65536 of a tick of resolution, which is finer than a piece moves in a tick
+   by orders of magnitude; the position delta stays a WIDE multiply so no pair
+   of endpoints can overflow it whatever a mod puts in those fields, and the
+   turn delta is 17 bits at most and fits a plain int multiply.
+
+   `>> 16` floors where `(int)` truncated toward zero, so a negative delta can
+   land one LSB lower than the float version did -- 1/65536 of a world unit,
+   and on a path with no parity requirement (invariant 2 is about the lever
+   being OFF, which never reaches this function). */
+static void blend(const LREC* r, size_t base, int n3, int w16,
                   int* obuf, unsigned short* otbuf)
 {
     const int*            ap = s_pos[1 - r->cur] + base;
@@ -222,18 +242,15 @@ static void blend(const LREC* r, size_t base, int n3, float u,
     const unsigned short* bt = s_turn[r->cur] + base;
     int i;
     for (i = 0; i < n3; i++) {
-        /* 16.16 position. The delta over one tick is a piece's own travel, but
-           the subtraction is done wide so that no pair of endpoints can
-           overflow it whatever a mod puts in those fields. */
         long long d = (long long)bp[i] - (long long)ap[i];
-        obuf[i] = ap[i] + (int)((double)d * u);
+        obuf[i] = ap[i] + (int)((d * w16) >> 16);
         {
             /* TAang WRAPS: 350 deg -> 10 deg is +20, not -340. The short way
                round, which is the way the engine's own TURN takes it
                (file-formats.md section 2.6). */
-            int w = (int)(unsigned short)(bt[i] - at[i]);
-            if (w > 32768) w -= 65536;
-            otbuf[i] = (unsigned short)((int)at[i] + (int)((float)w * u));
+            int t = (int)(unsigned short)(bt[i] - at[i]);
+            if (t > 32768) t -= 65536;
+            otbuf[i] = (unsigned short)((int)at[i] + ((t * w16) >> 16));
         }
     }
 }
@@ -304,7 +321,24 @@ int tagpu_lerp_unit(const char* o3, int nparts, const char* const* pr,
         if (!(u >= 0.0f)) { s_nsnap++; return 0; }
         if (u >= 1.0f) { s_nsnap++; return 0; }     /* weight 1.0 is a refusal */
         s_lastU = u;
-        blend(r, base, n3, u, obuf, otbuf);
+        {
+            /* THE ONE float->int conversion, once per unit instead of twice
+               per piece per axis.
+
+               AND THE BOUND IS ENFORCED RATHER THAN ARGUED. `u` is already
+               known to be in [0,1) and multiplying a float by 2^16 only moves
+               the exponent, so the product is EXACT and w16 cannot exceed
+               65535 -- that argument is sound today. It is not what this rests
+               on, because the turn multiply below has only 32767 of headroom:
+               t reaches +32768, and 32768 * 65535 is 2147450880 against an
+               INT_MAX of 2147483647, so a w16 of 65536 is signed overflow. A
+               later change to the refusal above, or to the weight's scale,
+               would reach it silently. Two instructions a unit buy the bound. */
+            int w16 = (int)(u * 65536.0f);
+            if (w16 < 0) w16 = 0;
+            if (w16 > 65535) w16 = 65535;
+            blend(r, base, n3, w16, obuf, otbuf);
+        }
     }
     *pos = obuf;
     *turn = otbuf;
