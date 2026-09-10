@@ -331,6 +331,24 @@ Centre-anchored: no eye motion at all, so `vpwide`, the minimap rect and `Scroll
 with no further plumbing. Pointer-anchored zoom is the open follow-up and is a camera move —
 `tagpu_input.c`'s eye hold, not a transient bias (§3.1).
 
+### 2.3a-bis The arm state is published in one store, never transiently zero  [2026-09-10]
+
+`tagpu_native_armed()` re-reads its lever every 30 frames. It used to do that by setting
+`s_armed = 0`, performing a **file read**, and setting it back — and `tagpu_native_owns_unit()`
+opens `if (s_armed != 1) return 0;` and is called **from the game thread** by `tagpu_markown.c`'s
+`mark_selbox`. So twice a second, for the length of that read, every selected unit read as "not
+ours" and the engine drew its own selection rects into the key-filled viewport, where the GUI
+mirror published the boxes and painted them cyan over the world (`gui-renderer.md` §20).
+
+It is now computed into locals and published in **one store**. `s_type` is the other half of the
+same answer, so it is written only when it has actually changed, and only then is the pass
+disarmed across the write — that is a human moving a lever, not the shipped configuration doing it
+twice a second.
+
+**The general rule this is an instance of:** anything the game thread reads to decide whether we
+own a draw must never have a "not yet" state that the render thread publishes on its way to an
+answer. A poll that tears is a poll that hands the engine back the frame.
+
 ### 2.3b The addressable viewport at zoom < 1 (`tagpu_vpwide.c`, `vpwide.on`)
 
 **On by default since 2026-09-08 through the play defaults (§2.8); opt-in before that.** Nothing

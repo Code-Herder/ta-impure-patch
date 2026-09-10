@@ -1806,15 +1806,37 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (s_state == 2) return;
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
-        s_armed = 0;
+        /* NEVER PUBLISH "DISARMED" WHILE RE-READING. `s_armed` used to be zeroed
+           here and set back at the end of the block, with a FILE READ in
+           between -- and `tagpu_native_owns_unit()` opens `if (s_armed != 1)
+           return 0;` and is called from the GAME thread by tagpu_markown.c's
+           mark_selbox. So for the length of that read, twice a second, every
+           selected unit read as "not ours", markown stopped suppressing, and the
+           engine drew its own selection rects into the key-filled viewport --
+           where the GUI mirror published the boxes and painted them cyan over
+           the world (tagpu_gui_surf.c tap(), which now refuses the key).
+           [MEASURED 2026-09-09: the hit frames landed on a strict 30-frame
+           lattice -- 30/60/90/120/150/180/240 apart, the +1s being 60 fps
+           capture against a 59.8 fps game -- and 256 units with no combat at all
+           reproduced it at a HIGHER rate (0.70 %) than a 500 v 500 fight
+           (0.42 %), which is what ruled out the explosion and vertex-budget
+           theories. SELHANDBACK was 0 in every run.]
+           The state is computed into locals and published in ONE store. `s_type`
+           is the other half of the same answer, so it is written only when it
+           has actually changed -- and only then is the pass disarmed across the
+           write, which is a lever change the human is making, not something the
+           shipped configuration does twice a second. */
         char buf[64];
+        char type[32];
+        int wrecks = s_wrecks, armed = 0;
+        lstrcpyA(type, s_type);
         int n = tagpu_opt_read("tagpu_native.on", buf, sizeof buf);
         if (n >= 0) {
             if (n > 0) {
                 int i = 0; while (buf[i] && buf[i] > ' ') i++;
-                s_wrecks = 0;
+                wrecks = 0;
                 if (i > 0 && i < 32) {
-                    buf[i] = 0; lstrcpyA(s_type, buf);
+                    buf[i] = 0; lstrcpyA(type, buf);
                     /* extra tokens: "wrecks" arms the native husk pass */
                     char* p = buf + i + 1;
                     while (p < buf + n) {
@@ -1823,14 +1845,22 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                         while (*q && *q > ' ') q++;
                         int last = (*q == 0);
                         *q = 0;
-                        if (!lstrcmpiA(p, "wrecks")) s_wrecks = 1;
+                        if (!lstrcmpiA(p, "wrecks")) wrecks = 1;
                         if (last) break;
                         p = q + 1;
                     }
                 }
             }
-            s_armed = 1;
+            armed = 1;
         }
+        /* the type is what owns_unit reads AFTER the gate, so a change to it is
+           the one case that has to disarm across the write */
+        if (lstrcmpA(type, s_type) != 0) {
+            s_armed = 0;
+            lstrcpyA(s_type, type);
+        }
+        s_wrecks = wrecks;
+        s_armed  = armed;                    /* the one store a reader can see */
         s_ss     = (GetFileAttributesA("tagpu_ss.off")     == INVALID_FILE_ATTRIBUTES);
         /* THE DEVICE-RESOLUTION WORLD IS OPT-IN, and the reason is the selection
            rects. The comment by the rect draw records the measurement: the

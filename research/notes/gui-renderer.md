@@ -2547,3 +2547,100 @@ refusal counts in `noeng=`.
 - **`+0x142E3` and `+0x142DF` are read on the render thread while the game thread may be
   rewriting them** — the same standing as the fork's own surface upload. The worst a torn read
   does is put one frame's fog against another's.
+
+---
+
+## 20. The key is not UI — the cyan squares  [MEASURED 2026-09-09, FIXED 2026-09-10]
+
+Reported from play: in a 500 v 500 fight at zoom < 1 with the whole army selected, solid cyan
+squares flash inside the world viewport for an instant. Measured off the player's own frame:
+**~42-45 px, axis-aligned, fill 0.71 with a square hole, one at 0.95 nearly solid**, with a
+smaller rotated green rect inside, RGB(0,255,255) exactly — **palette index 254, the terrain
+key, and the only cyan entry in the live palette.**
+
+### The chain, every link verified in source
+
+1. The engine's `DrawUnitSelectBoxRect 0x46A530` draws each rect as **four `DrawLine 0x4BE950`
+   calls** (`ui-markers.md` §1).
+2. `0x4BE950` is an observed leaf (`tagpu_gui_leaves.h`), and `before_line` records the op box as
+   the **axis-aligned BOUNDING BOX of the line**, gated on nothing but `s_inFlip` and the game
+   thread. The world viewport is *not* excluded.
+3. `publish()` has no `OP_LINE` case, so it falls through to `as_pixels:` -> `PK_PIXELS` +
+   `pub_surface_bytes`, a plain `memcpy` of that box out of the live engine surface. Inside the
+   viewport that surface **is** `tagpu_terrown`'s key fill.
+4. `twin_upload` stamps `s_rg[2*i+1] = 255` — coverage on **every** byte of the box, key included.
+5. `LAY_FS`'s `tap()` gated on coverage alone. The only `uKey` compare in that shader was inside
+   the `uStrict` harness branch, which the shipped build never arms. So a covered 254 resolved
+   through the palette to bright cyan and was emitted **opaque, over the world composite**.
+
+The composite one layer down has exactly this rule already ("THE KEY FILL MUST NEVER REACH THE
+SCREEN, NOT EVEN A FRACTION OF IT", `tagpu_native.c` `CFS`) and the census has it too
+(`tagpu_gui_hook.c`, "a changed pixel that is now the key is that erase") — but the census only
+runs under `census`. The layer that actually paints had it nowhere.
+
+### Why it looked the way it did
+
+- **Shape.** Four bounding boxes of the four edges of a *rotated* square. Near 45° they tile the
+  square **solid**; at intermediate facings they leave a rectangular **hole**; near 0°/90° they
+  degenerate to a thin outline. The measured spread (0.71, and one at 0.95) is that.
+- **The green inside it.** Not ours — the ENGINE's own rect lines, index 233, captured into the
+  twin *with* the key because they are inside the same bounding boxes.
+- **Size, and why it does not scale with zoom.** The engine projects at the unzoomed 1× position
+  and the twin is 1:1 with its surface at `k = 1`, so the square is ~40-45 **device** px at any
+  world zoom, while our own rect goes through the zoom transform and is smaller.
+- **One frame.** `publish()` emits the viewport `PK_CLEAR` per flip, but **the last flip of a
+  batch gets none**, so only a hand-back landing on that flip survives to be presented.
+
+### The trigger was a race, not the vertex budget
+
+`tagpu_native_armed()` re-read its lever every 30 frames by setting `s_armed = 0`, doing a **file
+read**, and setting it back. `tagpu_native_owns_unit()` opens `if (s_armed != 1) return 0;` and is
+called **from the game thread** by `tagpu_markown.c`'s `mark_selbox`. So twice a second, for the
+length of a file read, every selected unit read as "not ours", markown stopped suppressing, and
+the engine drew its own rects into the key-filled viewport.
+
+The evidence that settled it, against two plausible wrong answers:
+
+- The hit frames fell on a **strict 30-frame lattice** (30/60/90/120/150/180/240 apart; the +1s
+  are 60 fps capture against a 59.8 fps game). Explosions are not periodic at 2 Hz.
+- **`crowd-static` — 256 units, no orders, no combat, `0 wreck(s)`, `reread=0`** — reproduced it
+  at a **higher** rate (19/2700 = 0.70 %) than the fight (15/3600 = 0.42 %). That killed both the
+  explosion theory and the vertex-budget theory.
+- **`SELHANDBACK` was 0 in every run**, so the `s_selComplete` hand-back was not involved at all.
+
+### The two fixes
+
+- **`tagpu_gui_surf.c`, `tap()`** — a covered texel whose index is the key, inside the true
+  viewport, returns coverage 0: "no UI here", which is what the twin's readers already mean by it.
+  A new `uVpKey` uniform carries the key only while `tagpu_terrown_filled()` says the viewport
+  really is our fill, so with the terrain pass off — where the engine's own art fills the viewport
+  and 254 would be a real colour — the rule is inert. `uKey` is left alone for `strict`.
+  This is the **bound**: it closes the whole class, not just `OP_LINE`. Every other op kind that
+  falls through to `as_pixels` (`OP_BAR`, `OP_RECT`, `OP_FRAME`, `OP_GAF*`, `OP_SCALE`, an
+  untwinned `OP_COPY`) leaked the same way whenever its box overlapped the fill.
+- **`tagpu_native.c`, the arm block** — the state is computed into locals and published in **one
+  store**; `s_armed` is never transiently zero. `s_type` is the other half of the same answer and
+  is written only when it has actually changed, and only then is the pass disarmed across the
+  write — a lever change a human is making, not something the shipped configuration does twice a
+  second.
+
+### The gate
+
+**`mark.on=noselbox` is the forcing lever for this whole class** — it sets `g_selbox = 0` so
+`mark_selbox` never suppresses and the engine draws every rect every frame, which turns a
+0.4-%-of-frames artifact into a deterministic one. Before: **12 of 12 sampled frames cyan**, 110
+000-135 000 px each. After (2026-09-10, 273 units selected at 0.42×, `markown: engine selection
+rects restored` confirmed in the log): **0 of 20 frames, with ~39 000 green px per frame** — the
+engine drawing throughout, so "no cyan" is not "nothing was drawn".
+
+### Not closed here
+
+- The natural, unforced rate was not re-measured after the fix; the forced gate is far harsher and
+  is the evidence offered. Catching a 0.4 % artifact needs the 60 fps video method
+  (`ffmpeg -f x11grab -window_id … -qp 0`), not `glshot` sampling at ~1 Hz.
+- `tagpu_render3do.c`'s shade-LUT fallback searches `for (c = 2; c <= 254; c++)`, so **254 is a
+  legal output** and a unit face could still render cyan through the world composite, which makes
+  it opaque. Untouched here, and untested — the engine's own `PALETTE.SHD` is uploaded unfiltered
+  too.
+- Whether any effect or unit GAF art contains index 254 was never measured; only tile art and the
+  panel/minimap/chat/build art were.

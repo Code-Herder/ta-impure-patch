@@ -1286,6 +1286,27 @@ storage's does not); `tacli log` returns a tail of the file, so count lines in t
 
 ## Things that will bite you
 
+- **`ErrorLog.txt` is rotated to `.prev` at every launch since 2026-09-10**, so a report in it
+  belongs to the current run. Before that it was appended to forever and `tacli crash` reported
+  the FIRST (oldest) entry with no timestamp — a 20-minute-old fault read as five consecutive
+  fresh crashes on 2026-09-09. It is also per-instance by construction now (TA writes it beside
+  the exe, and `mirror_gamedir` no longer symlinks it through from the template; instances built
+  on or before 2026-09-03 carry a dangling symlink that the launch rotation unlinks). **It lives
+  in the MAIN CHECKOUT** at `tagpu/instances/<inst>/gamedir/`, never under a worktree — a relative
+  path from a worktree deletes nothing, silently.
+- **`mark.on=noselbox` is the forcing lever for anything the engine draws inside the viewport.**
+  It sets `g_selbox = 0`, so `markown` never suppresses the engine's selection rects and the
+  engine draws every one of them, every frame, at the **unzoomed** position. That turns a
+  fraction-of-a-percent artifact into a deterministic one — it is how the cyan-square bug
+  (`gui-renderer.md` §20) went from 15 hits in 3600 frames to 12 of 12. Confirm it took with
+  `tacli log <i> -g 'markown: engine selection'` → `restored`; the `mark: ARMED (… selbox=…)`
+  line is written only when the arm state changes and is stale otherwise. **Remove it afterwards**
+  — a player seeing hundreds of green boxes scattered over the map is this lever, not a bug.
+- **A 1-frame artifact is not findable with `glshot`** (~1 sample/s against 60 fps). Record the
+  window losslessly instead and scan every frame:
+  `ffmpeg -f x11grab -window_id <id> -framerate 60 -c:v libx264rgb -qp 0 out.mkv`. Use
+  `-window_id`, not `:0+x,y` — a screen-region grab captures whatever is on top, which on a shared
+  desktop is usually a browser.
 - **A launch or wait that "timed out" has usually crashed instead.** Check
   `tacli crash <name>` before theorising about loading screens — the commands do it
   for you now, but a hand-rolled poll will not.
