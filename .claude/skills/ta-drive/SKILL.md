@@ -1053,7 +1053,18 @@ Three things about this one are unlike the other passes:
   `key=N` moves it if a mod's UI ever uses 254.
 - **It owns the fog overlay too**, so `terr.on` off/`passive` restores *both*. If the grey
   band ever disappears, check `native: … fog=N los=N` in the log before suspecting the shader:
-  fog is on whenever the grid uploaded, and `los` is the engine's raw `LosType`.
+  fog is on whenever the grid uploaded, and `los` is the engine's raw `LosType`. **`fog=0` means
+  the grid was REFUSED, and that is no fog at all** — not black, not grey, the whole map lit at
+  every zoom. It read 0 at every resolution whose grid cell count is not a multiple of 8
+  (1920×1080 among them) until 2026-09-09.
+- **The fog grid at zoom < 1 is OURS, not the engine's** (G13r): the engine's spans the 1× viewport
+  only, so `tagpu_fogwide.c` builds the same masks over a window the whole zoom range fits in and
+  the passes sample that instead. Levers: `tacli arm <i> fogwide.off` disables it live (the A/B —
+  with it the outer ring goes back to a smear of the border cell), `fogwide_check.on` arms the
+  oracle, which logs `fogwide check: … differ=N` every 120th tick and **must read `differ=0`**.
+  Its heartbeat is `fogwide: <cols>x<rows> cells=… rebuilds=n/300 build=…/… us`. Both only do
+  anything while a zoomed-OUT view is live; at zoom ≥ 1 the module publishes nothing and the fog
+  is the engine's grid, bit for bit.
 - **Without `terrown.on` it refuses to draw at all**, and says so:
   `terr: … (NOTHING EMITTED: terrown.on must exist at DLL attach — arm it before launch,
   not after)`. Our terrain is opaque and covers the whole viewport, so drawing it with no

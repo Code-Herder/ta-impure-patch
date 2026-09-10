@@ -607,17 +607,22 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows,
                  int orgX, int orgY, int wx, int wzp)
 {
     if (!grid || cols <= 0 || rows <= 0) return 0;
-    /* the same bounds tagpu_native.c validates the pointer with when it reads it
-       out of the engine struct — if it no longer holds, the buffer moved */
-    if ((size_t)grid <= 0x600000u || (size_t)grid >= 0x7FFF0000u) {
-        fog_alarm("grid pointer is not in engine address space",
+    /* A plausible userland pointer, and nothing narrower: since tagpu_fogwide
+       the grid is the ENGINE's buffer at zoom >= 1 and OUR OWN heap allocation
+       at zoom < 1, and the process heap of a 0x400000 image can sit below the
+       0x600000 this used to demand. Nothing is given up — both faults this
+       guard has actually caught were a base of -9 and one of -318. */
+    if ((size_t)grid <= 0x10000u || (size_t)grid >= 0x7FFF0000u) {
+        fog_alarm("grid pointer is not a plausible allocation",
                   grid, cols, rows, orgX, orgY, wx, wzp);
         return 0;
     }
-    /* and the dims: the producer refuses anything over 256 a side, so a larger
-       one here means cols/rows and the buffer have come apart */
-    if (cols > 256 || rows > 256) {
-        fog_alarm("grid dims exceed the 256 the producer accepts",
+    /* and the dims: 256 is the engine's own ceiling (its grid is sized from a
+       viewport the native pass caps at 4096), 512 covers the widest window
+       tagpu_fogwide will build. Past that, cols/rows and the buffer have come
+       apart. */
+    if (cols > 512 || rows > 512) {
+        fog_alarm("grid dims exceed the 512 the producers accept",
                   grid, cols, rows, orgX, orgY, wx, wzp);
         return 0;
     }

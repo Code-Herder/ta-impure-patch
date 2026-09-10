@@ -52,6 +52,7 @@
 #include "tagpu_terr.h"
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
+#include "tagpu_fogwide.h"
 
 #define TERRAIN_VA   0x00483FA0u   /* stdcall(ctx), ret 4  */
 #define FOG_VA       0x004848E0u   /* stdcall(ctx), ret 4  */
@@ -145,11 +146,18 @@ static void __cdecl terr_fill(void* ctxv)
     g_fillSeq++;
 }
 
-/* In place of the fog overlay: its lazy grid rebuild, and only that. */
+/* In place of the fog overlay: its lazy grid rebuild, and only that — plus the
+   WIDE grid, which is ours. The engine's grid spans the 1x viewport and no
+   more, so at zoom < 1 the outer ring of the view falls off its lattice
+   entirely; tagpu_fogwide builds the same masks over a window the whole zoom
+   range fits in. It runs here because here is where the maps it reads are the
+   engine's own to read (tagpu_fogwide.h), and it needs to know whether the
+   engine rebuilt on this tick — that is the same "the LOS state moved" signal. */
 static void __cdecl terr_fogtick(void* ctxv)
 {
     char* ta = *(char**)TA_MAINPP;
     unsigned short* los;
+    int rebuilt = 0;
     (void)ctxv;
     if (!ptr_ok(ta)) return;
     los = (unsigned short*)(ta + OFF_LOSTYPE);
@@ -160,7 +168,9 @@ static void __cdecl terr_fogtick(void* ctxv)
         ta = *(char**)TA_MAINPP;
         if (!ptr_ok(ta)) return;
         *(unsigned short*)(ta + OFF_LOSTYPE) |= 8;
+        rebuilt = 1;
     }
+    tagpu_fogwide_tick(ta, rebuilt);
 }
 
 void tagpu_terrown_init(void)

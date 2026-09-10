@@ -353,6 +353,89 @@ the eye, and they do not agree:
   negative eye would read before the array. Moot in practice — `terrown` skips the whole
   function — but it is the reason to keep the eye's excursion a property of *our* passes.
 
+## The screen fog grid — where it is allocated, and every cell the builder reads — mapped by us
+
+[MEASURED 2026-09-09, this project — `objdump -d -M intel` of the pristine Steam build over
+`0x483BB8..0x483CA6` and `0x4843C0..0x4848D6`, plus a live oracle: `tagpu_fogwide.c` replicates
+the builder in C and, under `tagpu_fogwide_check.on`, rebuilds over the engine's own window and
+compares. **0 differing bytes of 720 (30×24, 1024×768) and of 1972 (58×34, 1920×1080)**, 357 and
+1555 non-zero cells respectively. The overlay that consumes the grid is `terrain-depth.md` §5.1;
+what is new here is its **allocation** and the **cell-by-cell reads** of `0x4843C0`.]
+
+### The allocation, at map load — `0x483BB8..0x483CA6`
+
+The struct behind `*(main+0x1421F)` is built **once per map**, inside `LoadMap 0x483610`, from the
+engine's viewport size — and nothing resizes it afterwards:
+
+```
+483bbf  esi = [main+0x37E37]          ; viewW      (1792 at 1920x1080)
+483bc5  ebx = [main+0x37E3B]          ; viewH      (1016)
+483c03  call 0x4B4F10 (16)            ; the {u16* buf; int cols; int rows; int cells} struct
+483c28  [main+0x1421F] = it
+        cols = viewW/32 + (viewW % 32 ? 3 : 2)      ; 483c1e..483c79
+        rows = viewH/32 + (viewH % 32 ? 3 : 2)
+483c84  cells = (cols*rows + 7) & ~7                ; ROUNDED UP TO A MULTIPLE OF 8
+483c96  buf   = malloc(cells * 2)
+```
+
+Three consequences, all of which have bitten:
+
+- **`cells` is the allocation, not `cols*rows`.** A reader that asserts `cells == cols*rows`
+  accepts 1024×768 (30×24 = 720, already a multiple of 8) and **refuses 1920×1080** (58×34 = 1972
+  against an allocated 1976). `tagpu_native.c` asserted exactly that until 2026-09-09, and the
+  refusal is not a degraded fog — it clears `fogMode`, so at 1080p there was **no fog at all**: no
+  black over unexplored ground, no grey band, the whole map drawn lit at every zoom.
+- **The grid spans the 1x viewport and about two cells more**, for ever. It cannot be made to
+  cover a zoomed-out view by asking it to: the size is a map-load decision.
+- **The origin is not stored** — the builder recomputes it from the eye every time (below), so
+  the grid cannot be re-anchored either without lying to the builder about `main+0x1431F`.
+
+### The builder `0x4843C0` — void, no args, `ret` @ `0x4848D6`
+
+Clears `cells*2` bytes, then walks the map cells `[col0, col0+cols) × [row0, row0+rows)`:
+
+| Where | What it reads |
+| --- | --- |
+| `0x4843CD` | `main+0x2A43` — the **LOCAL** player id (not `+0x2A42`, the watched one). `mask = 1 << id` |
+| `0x4843F0` | `ebp = main + 0x1B63 + id*0x14B + 0x7C` — that player's LOS block: `{u8* counters; i32 w; i32 h}` at `+0`/`+4`/`+8` |
+| `0x48442D..0x484485` | `col0 = eyeX/32 − (eyeX % 32 < 16)`, `row0` the same from `eyeY`. Equivalently **origin = `32·col0 + 16`** |
+| `0x4844B9`/`0x4844C7` | `cx`/`cy` bounded against the LOS block's own `w`/`h`, **unsigned**, so a negative index is skipped |
+| `0x4844D7` | `los[cy*w + cx]` — one byte, an overlap **counter**; 0 means out of LOS |
+| `0x4844E7` | `LosType & 2` — the grey mask is written only in true-LOS mode |
+| `0x4845A9` | `idx = (main[0x14233] * cy) / 2 + cx` into `*(main+0x14273)`, **u16** per tile, one **bit per player**. The row stride is `PLOT_C` *bytes*, i.e. the map is `PLOT_C/2` tiles wide; the allocation is `PLOT_C*PLOT_R/2` bytes (`0x483CF6`), so the last index used is exactly its last entry |
+
+A cell that is dark ORs **a different corner bit into each of the four grid entries around it** —
+entry `(cx−col0, cy−row0)` gets bit 1, `(cx−col0−1, cy−row0)` bit 2, `(…, cy−row0−1)` bits 4 and
+8 — into byte `+1` for the out-of-LOS mask (`0x4844FF..0x4845A2`) and byte `+0` for the
+unexplored one (`0x4845CC..0x484678`). The two blocks fall through, so a cell that is both sets
+both. **The last column and the last row of any window are therefore short their right/bottom
+corners**, because the cell that would supply them is outside the loop.
+
+### The four border completions — `0x4846A1..0x4848CD`, and the index that is only right by luck
+
+Off the map there is no cell to darken a corner, so each edge copies the corner bits it does have
+outward: top `4→1, 8→2` (`0x4846AE`), bottom `1→4, 2→8` (`0x484731`), left `8→4, 2→1`
+(`0x4847CA`), right `4→8, 1→2` (`0x48485A`); each pair is gated on `LosType & 2` for the grey
+byte and unconditional for the black one, and **the four run in that order**, reading bits an
+earlier one may have set.
+
+The engine writes them into grid **row 0**, **row `rows−2`**, **column 0** and **column
+`cols−2`**. Those are not the general answer — they are the straddling entries only because the
+engine's own grid never reaches more than one cell past the map (the eye clamp holds `row0` at 0
+or −1). The entry that straddles an edge is the one whose corners are on the map on one side and
+off it on the other:
+
+| edge | gate | straddling entry | the engine's literal |
+|---|---|---|---|
+| top | `row0 < 0` | `gy = −row0 − 1` | `0` |
+| bottom | `row0 + rows > PLOT_R/2` | `gy = PLOT_R/2 − 1 − row0` | `rows − 2` |
+| left | `col0 < 0` | `gx = −col0 − 1` | `0` |
+| right | `col0 + cols > PLOT_C/2` | `gx = PLOT_C/2 − 1 − col0` | `cols − 2` |
+
+The two columns agree whenever the window overshoots by exactly one cell, which is the only case
+the engine can produce. A window that reaches further — ours does — must use the derived index,
+or the completion lands rows out in open water and the shoreline entry keeps a half-set mask.
+
 ## The blend LUT and the marker composites — mapped by us
 
 [MEASURED 2026-09-03, this project — disassembly of the pristine Steam build plus live reads.

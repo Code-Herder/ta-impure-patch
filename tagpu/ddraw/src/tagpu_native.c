@@ -78,6 +78,7 @@
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_terrown.h"
+#include "tagpu_fogwide.h" /* the fog grid over the zoomed-out view, not just the 1x one */
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
 #include "tagpu_order.h"
@@ -1939,8 +1940,40 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (ptr_ok(fg) && !IsBadReadPtr(fg, 16)) {
             const unsigned short* buf = (const unsigned short*)(size_t)fg[0];
             int cols = fg[1], rows = fg[2], cells = fg[3];
+            /* `cells` is the ALLOCATION, not cols*rows: the builder rounds the
+               count up to a multiple of 8 before it allocates (`0x483C84`:
+               add 7, and ~7) and clears that many entries. Demanding equality
+               refused every viewport whose cell count is not already a multiple
+               of 8 — and refusing here sets fogMode 0, which is not a degraded
+               fog but NO fog at all: no black over unexplored ground, no grey
+               band, the whole map drawn lit at every zoom. 1024x768 is 30x24 =
+               720 and passes; 1920x1080 is 58x34 = 1972 against an allocated
+               1976 and did not, so at 1080p the fog rule had never run. */
             if (ptr_ok(buf) && cols > 0 && rows > 0 && cols <= 256 && rows <= 256 &&
-                cells == cols * rows && !IsBadReadPtr(buf, (SIZE_T)cells * 2)) {
+                cells == (((cols * rows) + 7) & ~7) &&
+                !IsBadReadPtr(buf, (SIZE_T)cells * 2)) {
+                /* the overlay puts cell (0,0) at screen vp + (+-16 - eye%32);
+                   in world terms 32*col0 + 16, col0 being the builder's
+                   half-cell-rounded eye>>5. The grid lattice is offset half a
+                   cell from the map cells: a corner IS a map cell's centre. */
+                int orgX = fog_org(eyeX), orgY = fog_org(eyeY);
+                /* ...and that grid spans the 1x VIEWPORT, so at zoom < 1 the
+                   effective rect above reaches past its last row and column,
+                   where taFog's clamp smears the border cell across the whole
+                   outer ring. tagpu_fogwide builds the same masks over a window
+                   the whole zoom range fits in; when it has one, it replaces the
+                   engine's grid outright — same lattice, same bytes, more of
+                   them. At zoom >= 1, and whenever the game thread is not
+                   building (terrain ownership disarmed, the menus), it declines
+                   and the engine's own grid is used exactly as before. The
+                   engine's grid stays the GATE either way: if it cannot be read,
+                   neither can the state the wide one is built from. */
+                {
+                    const unsigned short* wb; int wc, wr, wox, woy;
+                    if (tagpu_fogwide_get(&wb, &wc, &wr, &wox, &woy)) {
+                        buf = wb; cols = wc; rows = wr; orgX = wox; orgY = woy;
+                    }
+                }
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
                 x_glActiveTexture(GL_TEXTURE4);
                 glBindTexture(GL_TEXTURE_2D, s_fogTex);
@@ -1952,12 +1985,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                                     GL_RG, GL_UNSIGNED_BYTE, buf);
                 x_glActiveTexture(GL_TEXTURE0);
                 s_fogGrid = buf; s_fogCols = cols; s_fogRows = rows;
-                /* the overlay puts cell (0,0) at screen vp + (+-16 - eye%32);
-                   in world terms 32*col0 + 16, col0 being the builder's
-                   half-cell-rounded eye>>5. The grid lattice is offset half a
-                   cell from the map cells: a corner IS a map cell's centre. */
-                s_fogOrgX = fog_org(eyeX);
-                s_fogOrgY = fog_org(eyeY);
+                s_fogOrgX = orgX;
+                s_fogOrgY = orgY;
                 /* "fog is on" is NOT LosType bit0 — that bit is only the
                    MAPPING option. The overlay runs every frame and what it
                    paints is decided entirely by the grid bytes: the builder
