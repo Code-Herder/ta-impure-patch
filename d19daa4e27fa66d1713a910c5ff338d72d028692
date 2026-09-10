@@ -1,0 +1,13 @@
+landing-review: G13s (fog wide-grid readiness + taFog clamp), Opus 5, medium, read-only, 2026-09-10.
+Scope main...HEAD at d19daa4. Six findings, all CONFIRMED, all acted on in b51dd17:
+ 1 the 1x rebuild rate is the SIM TICK rate (LOS invalidation), not camera travel — re-measured
+   760 rebuilds in 25.0 s = 30.4/s on 200v200 with the camera still, ~4.4 ms/s of game thread
+ 2 the per-300-tick heartbeat became 11-16 log writes/s once the producer ran at 1x — now wall time
+ 3 FOGW_MAXDIM's 'allocated only for a session that zooms out' falsified — 6 MB every session
+ 4 stale contracts in tagpu_fogwide.h and tagpu_native.c's older comment
+ 5 bare= counted the tagpu_fogwide.off lever, which nothing would ever clear
+ 6 tagpu_fog_at's 'the shaders clamp, which is exact' falsified; recorded, not changed
+Verified clean by the review: the clamp (floor in range for every cols >= 1, safe at uFogDim 0,
+no-op at 1x — min slack 1 px positive eye, 16 px negative), the last-column/row corner claim
+against 0x4844AF/0x48486C/0x484747, one caller for tagpu_fogwide_get, every bail-out withdrawing
+the published grid, and the liveness rule across a long 1x interval.
