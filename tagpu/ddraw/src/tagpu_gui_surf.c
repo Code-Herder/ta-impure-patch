@@ -681,7 +681,7 @@ static void twin_colour(TWIN* t)
     s_colTwins++;
 }
 
-/* Indices arrived for this box and they say nothing about colour: drop the
+/* Indices arrived for the box and they say nothing about colour: drop the
    colour there so the layer falls back to the palette. */
 static void twin_col_drop(TWIN* t, int l, int tp, int w, int h)
 {
