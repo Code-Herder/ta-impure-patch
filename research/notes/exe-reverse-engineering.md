@@ -593,6 +593,26 @@ So the block projects against the true origin while its gate tests the widened r
 combination is what makes the rect correct in the ring and is why `tagpu_vpwide`'s `0x498DA0`
 stub redoes the mouse conversion with the true origin and the wide clamp.
 
+**`0x46A530 DrawUnitSelectBoxRect` has NO ModelId test — a negative result that cost a landing
+review to establish [BINARY-VERIFIED 2026-09-10].** Its only early-out is the `SelBoxes` option
+bit:
+
+```
+46a538  mov  cl,BYTE PTR [eax+0x37f2f]     ; the UI gate byte
+46a541  test cl,0x1
+46a544  je   0x46a602                      ; the ONLY early return
+46a54a  mov  eax,DWORD PTR [eax+0x14377]   ; MODEL_PTRS
+46a55f  mov  dx,WORD PTR [esi+0xa6]        ; ModelId -- not tested
+46a56b  mov  ecx,DWORD PTR [eax+edx*4]     ; MODEL_PTRS[ModelId], unconditional
+46a56f  call 0x4cb650                      ; bound it, unconditional
+```
+
+So a unit whose `ModelId` is 0, or out of `UNITINFOCount`'s range, **still gets a box** — bounded
+by whatever `MODEL_PTRS[0]` holds. Anything of ours that suppresses this call must therefore
+either draw the box itself or leave the unit entirely alone; "it has no model, so the engine
+draws nothing" is false, and believing it left such a unit permanently unmarked
+(`ui-markers.md` §1, `gpu-status.md` §2.3a-bis).
+
 **The colours.** `[esp+0x74]` is `main+0xDCB`, the GUI colour byte array — written once in the
 prologue, `0x468D49 lea ebx,[eax+0xDCB]` / `0x468D51 mov [esp+0x74],ebx`. The outer index is
 picked at `0x469E6B` from the MODE (not from which arm of the gate fired):

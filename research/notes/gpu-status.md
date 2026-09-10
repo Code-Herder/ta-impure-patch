@@ -340,10 +340,24 @@ opens `if (s_armed != 1) return 0;` and is called **from the game thread** by `t
 ours" and the engine drew its own selection rects into the key-filled viewport, where the GUI
 mirror published the boxes and painted them cyan over the world (`gui-renderer.md` §20).
 
-It is now computed into locals and published in **one store**. `s_type` is the other half of the
-same answer, so it is written only when it has actually changed, and only then is the pass
-disarmed across the write — that is a human moving a lever, not the shipped configuration doing it
-twice a second.
+It is now computed into locals and published in **one store**, and `s_armed` is **`volatile`**
+(as `s_selComplete` already was) so that store cannot be hoisted above the state it publishes.
+That closes the periodic window — the one the shipped configuration hits twice a second.
+
+**Residual, stated rather than papered over:** `s_type` is written only when it has actually
+changed, and the pass is disarmed across that write, which **narrows** a window rather than
+removing one — nothing waits for the game thread to observe the disarm. It is reachable only
+while a human is editing the arm file. Closing it properly wants the type published by index into
+a double buffer, which is its own piece of work.
+
+**And one predicate carries the whole ownership decision [2026-09-10].**
+`tagpu_native_owns_unit` now also refuses a unit whose **ModelId will not resolve**, because that
+decision has four consumers that must agree: the gather skips what it refuses, `tagpu_overlay.c`
+leaves the engine's composite unwiped, `tagpu_mark.c` leaves the bar on the engine's anchor, and
+`tagpu_markown.c` leaves the engine's own selection rect alone. Wrong in one direction a unit is
+drawn twice; wrong in the other it is invisible, or keeps its sprite and silently loses its
+selection box for ever — which is what a landing review caught here, against a claim that a unit
+with no model was "owed nothing" (`ui-markers.md` §1 carries the correction and the disassembly).
 
 **The general rule this is an instance of:** anything the game thread reads to decide whether we
 own a draw must never have a "not yet" state that the render thread publishes on its way to an

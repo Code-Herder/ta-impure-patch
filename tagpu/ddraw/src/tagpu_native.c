@@ -309,7 +309,11 @@ static void* getgl(const char* n)
 }
 
 static int    s_state = 0;             /* 0=unloaded 1=ready 2=failed */
-static int    s_armed = -1;
+/* READ FROM THE GAME THREAD (tagpu_native_owns_unit, via tagpu_markown.c's
+   mark_selbox), written here on the render thread — volatile for the same
+   reason s_selComplete is, so the publishing store below cannot be hoisted
+   above the state it publishes. */
+static volatile int s_armed = -1;
 static char   s_type[32] = "armcom";
 static int    s_wrecks = 0;            /* "wrecks" token present            */
 static int    s_ss     = 1;            /* 2x supersample (tagpu_ss.off)     */
@@ -852,12 +856,51 @@ static int type_match(const char* def)
    with owndraw "all" in force it is not even the engine's own look any more:
    the rasterise is skipped, so 0x458DD0 recolours an empty composite and only
    its wireframe survives. */
+/* Is this unit's ModelId one model_root() will resolve? The bound is
+   UNITINFOCount, the count 0x42DBCA itself loops to. Factored out so
+   `tagpu_native_owns_unit` and `model_root` cannot drift apart about it —
+   they are two halves of one answer — and side-effect free, because
+   model_root's BADMODELID counter is a render-thread diagnostic and
+   owns_unit is called from the game thread. */
+static int model_id_ok(const char* ta, const char* u, unsigned* out_mid)
+{
+    unsigned mid = 0, n;
+    int ok = 0;
+    if (ptr_ok(ta) && ptr_ok(u)) {
+        mid = *(const unsigned short*)(u + U_MODELID);
+        n   = *(const unsigned*)(ta + OFF_UDEFCOUNT);
+        ok  = (mid != 0 && n != 0 && n <= 0x10000u && mid < n);
+    }
+    if (out_mid) *out_mid = mid;
+    return ok;
+}
+
 int tagpu_native_owns_unit(const char* u)
 {
     if (s_armed != 1) return 0;
     const char* def = *(const char* const*)(u + U_TYPE);
     if (!ptr_ok(def)) return 0;
     if (!type_match(def)) return 0;
+    /* A UNIT WHOSE MODEL WE CANNOT RESOLVE IS NOT OURS — ALL of it stays the
+       engine's. This predicate is the one place that decision is made: the
+       gather skips what it refuses, tagpu_overlay.c leaves the engine's
+       composite unwiped, tagpu_mark.c leaves the bar on the engine's anchor,
+       and tagpu_markown.c leaves the engine's own selection rect alone. Get it
+       wrong in one direction and a unit is drawn twice; wrong in the other and
+       it is INVISIBLE, or — the case this line was added for — it keeps its
+       sprite and silently loses its selection box for ever.
+
+       0x46A530 has NO ModelId test: its only early-out is the SelBoxes flag at
+       0x46A544, and it indexes MODEL_PTRS[ModelId] at 0x46A56B and bounds it
+       through 0x4CB650 unconditionally [BINARY-VERIFIED 2026-09-10]. So the
+       engine DOES draw a box for a unit we cannot bound, and suppressing it
+       while our own loop skips the unit leaves that unit unmarked every frame.
+       (This corrects the claim, made here and in ui-markers.md on 2026-09-09,
+       that a unit with no model is "owed nothing" — it is owed the engine's.) */
+    {
+        const char* ta = *(const char* const*)TA_MAINPP;
+        if (!model_id_ok(ta, u, NULL)) return 0;
+    }
     /* ...but a unit UNDER CONSTRUCTION only while we can actually take the
        whole of it over. Claiming one means the engine's blit-time build-state
        effect (0x458DD0) must be detoured away and we must stage the look
@@ -954,12 +997,9 @@ static unsigned s_badModelId;          /* refused here, reported with the frame 
 
 static const char* model_root(const char* ta, const char* u)
 {
-    unsigned mid, n;
+    unsigned mid;
     const char* mptrs;
-    if (!ptr_ok(ta) || !ptr_ok(u)) return NULL;
-    mid = *(const unsigned short*)(u + U_MODELID);
-    n   = *(const unsigned*)(ta + OFF_UDEFCOUNT);
-    if (mid == 0 || n == 0 || n > 0x10000u || mid >= n) {
+    if (!model_id_ok(ta, u, &mid)) {        /* it does the ptr_ok pair too */
         if (mid) s_badModelId++;       /* 0 is "no model", not a refusal */
         return NULL;
     }
@@ -1917,11 +1957,18 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            reproduced it at a HIGHER rate (0.70 %) than a 500 v 500 fight
            (0.42 %), which is what ruled out the explosion and vertex-budget
            theories. SELHANDBACK was 0 in every run.]
-           The state is computed into locals and published in ONE store. `s_type`
-           is the other half of the same answer, so it is written only when it
-           has actually changed -- and only then is the pass disarmed across the
-           write, which is a lever change the human is making, not something the
-           shipped configuration does twice a second. */
+           The state is computed into locals and published in ONE store, and
+           `s_armed` is volatile so that store cannot be hoisted above the state
+           it publishes. That closes the periodic window, which is the one the
+           shipped configuration hits twice a second.
+
+           RESIDUAL, stated rather than papered over: `s_type` is written only
+           when it has actually changed, and the pass is disarmed across that
+           write -- which NARROWS a window rather than removing one, since
+           nothing waits for the game thread to observe the disarm. It is
+           reachable only while a human is editing the arm file, never in a
+           steady configuration. Closing it properly wants the type published
+           by index into a double buffer, which is its own piece of work. */
         char buf[64];
         char type[32];
         int wrecks = s_wrecks, armed = 0;
@@ -2830,22 +2877,25 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (nsel) {
         for (i = 0; i < nu && nv + 8 <= MAXNV; i++) {
             if (!units[i].sel) continue;
-            /* OWED NOTHING, so not a shortfall. Two per-unit states reach this
-               loop in a fight and neither is a box anybody draws:
+            /* NOT A SHORTFALL, and the two cases are not the same.
 
-                 `dead` — the unit's model-object pointer moved since the gather
-                   (the re-read above), i.e. the engine freed or replaced it
-                   under this frame, so it is not in the engine's own sweep;
-                 ModelId 0 — "no model" (model_root's own first refusal, the one
-                   it does not even count as bad): 0x46A530 bounds the rect with
-                   0x4CB650(model, ...), so with no model there is nothing for
-                   the engine to bound either.
+               `dead` — the unit's model-object pointer moved since the gather
+               (the re-read above), so the pose we hold is stale. This is a
+               DELIBERATE TRADE, not "owed nothing": markown suppresses on
+               `tagpu_native_owns_unit` alone, which knows nothing about
+               `dead`, so the engine draws no box for it either and the unit is
+               unmarked for that ONE frame. The alternative is what this
+               replaced — one dying selected unit dropped `s_selComplete`,
+               markown handed all ~460 rects back, and the engine drew every one
+               of them at the UNZOOMED position [MEASURED 2026-09-09]. One
+               frame without one marker beats one frame of 460 wrong ones.
 
-               Counting them as boxes we failed to draw is what made a 500 v 500
-               fight paint the screen: one dying selected unit dropped
-               `s_selComplete`, markown handed all ~460 rects back, and the
-               engine drew every one of them at the UNZOOMED position
-               [MEASURED 2026-09-09]. */
+               ModelId 0 is unreachable here since 2026-09-10:
+               `tagpu_native_owns_unit` refuses an unresolvable model, so the
+               gather (`:2213`) never admits such a unit and it is never in
+               `nsel`. Kept as a bound, not as a live path — and it is NOT
+               "owed nothing", because 0x46A530 has no ModelId test and the
+               engine draws its box. See the note there. */
             if (units[i].dead || !units[i].u) { selNone++; continue; }
             if (!*(const unsigned short*)(units[i].u + U_MODELID)) { selNone++; continue; }
             const char* root = model_root(ta, units[i].u);

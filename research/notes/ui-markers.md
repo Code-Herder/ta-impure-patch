@@ -216,7 +216,15 @@ army selected at 0.42× (`scenarios/500v500.json`) shows both:
   native loop skipped a unit whose model object had moved since the gather (`dead`, the
   re-read) or whose `ModelId` is 0, while `nsel` had already counted it — so `selDrawn
   != nsel` and the flag dropped. Neither of those is a box anybody draws: a freed unit
-  is not in the engine's own sweep, and with no model `0x4CB650` has nothing to bound.
+  is not in the engine's own sweep. **[CORRECTED 2026-09-10: the ModelId-0 half of that was
+  wrong.** `0x46A530` has NO ModelId test — its only early-out is the `SelBoxes` flag at
+  `0x46A544`, and it indexes `MODEL_PTRS[ModelId]` at `0x46A56B` and bounds it through
+  `0x4CB650` unconditionally [BINARY-VERIFIED]. So the engine *does* draw a box for a unit we
+  cannot bound, and suppressing it while our own loop skipped the unit left that unit unmarked
+  **every** frame. The fix is one predicate: `tagpu_native_owns_unit` now refuses an
+  unresolvable model, so the gather never admits such a unit, markown never suppresses its box,
+  and the engine draws all of it. `dead` remains a deliberate one-frame trade, not "owed
+  nothing" — see the comment at the test.**
   They are counted separately now (`selNone`), and over a four-minute run of the fixture
   the hand-back count went **5 → 0** while `reread=` stayed non-zero throughout. The
   `native:` line grows ` SELHANDBACK=<n> last=<drawn>/<owed>` when it does still happen —
