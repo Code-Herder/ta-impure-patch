@@ -933,6 +933,14 @@ void __stdcall tagpu_menu_oncommand(void* gi)
    change nothing -- the same silent no-op this landing fixed for the lever files.
    So the menu owns that one token and drops it, expressing it through `light=`.
    `sun=<az>,<el>` is the sun DIRECTION, is the player's, and must survive. */
+/* The keys this screen OWNS -- rewritten from the rows on every apply. Every
+   other token in the cfg is a knob the player never reaches and is copied
+   through untouched (write_cfg), which is what keeps a researcher's
+   `penumbra=`, `shadowsun=`, `shade=` and so on alive across a click.
+   `terrainshadow=` is deliberately NOT here and has no row: the ground casting
+   on itself is a known defect (renderers.md 2.7b) whose default is now 0, so
+   there must be no path through this screen that turns it back on. Adding a row
+   for it means first fixing the defect. */
 static int ours(const char* tok)
 {
     return !_strnicmp(tok, "assets=", 7) || !_strnicmp(tok, "light=", 6) ||

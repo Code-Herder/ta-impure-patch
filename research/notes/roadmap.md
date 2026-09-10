@@ -80,6 +80,59 @@ key — which is the entry condition for the declared endgame, ortho + smooth zo
 
 ### Awaiting review
 
+**The health bar wobbled against the unit under it.** Reported from play: *"when moving the
+commander, I can see the health bar wobble around… not sure if that's stock TA or not?"* It is
+not — stock TA cannot show it. Everything anchored to a unit in our build takes the unit pass's
+interpolated sub-pixel anchor (the body, the selection rect, the unit-anchored order markers),
+but `tagpu_mark.c`'s bar and group-digit gather read the engine's integer world shorts
+directly. That pinned the bar to the **sim** rate while the body glided at **present** rate, so
+the two slid apart by up to a whole sim step of motion, multiplied by the zoom on screen.
+Fixed 2026-09-09 by routing the gather through `tagpu_native_unit_pos()` — the body's own
+anchor — for units the unit pass owns, and keeping the engine's own integer arithmetic for the
+ones it does not, so the bar always sits on whoever drew the body. (That second branch was
+added by the landing review: the accessor never reports "no sample", it returns the raw
+fraction, so the integer path had been unreachable and every engine-drawn unit carried a bar up
+to a pixel off its body.) Bar-against-body separation, exact via `tagpu_spxlog.on` on a walking
+commander at 1920x1080: **1.68 px peak-to-peak → 1.00 px at 1x** at TA's normal speed, **2.95 → 1.00** at
+`gamespeed` 20, and `zoom` times that on screen. The old error was proportional to how far a
+unit moves per sim step, so it grew with unit speed and game speed.
+
+**Then the fix itself left a second, larger artifact at high zoom — the same day, from the
+same file.** Reported from play again: *"the health bar goes up by a few pixel and down by a
+few pixel when walking diagonally… extremely visible at max zoom in."* The first fix took the
+body's anchor and **floored** it, on the argument that the selection rect floors the same
+anchor and the two should agree. They did agree — with each other, in the frame's PRE-zoom
+units, which is the wrong grid: the vertex shader scales this pass by `zoom`, so one unit of
+quantisation there is **`zoom` displayed pixels**. At 1x it is at the measurement floor and
+every 1x oracle passed it clean; at 4x the bar stood still and then teleported 4 px, and at
+`ZOOM_MAX` 8. The selection rect never showed it because it does not floor in those units at
+all — `tagpu_native.c` snaps its corners *forward through the zoom*, floors there and comes
+back, and the glyph atlas has done the same since G15. `tagpu_mark.c` now shares that rule as
+`snap_device()`, so the bar, the group digit and the text all step **1/ss of a displayed pixel
+at every zoom**, a bound that does not grow with the zoom. Measured at 4x, bar-vs-body in
+displayed px: shorts **6.56 p2p** → floored **4.00** (exactly `zoom`) → snapped **0.49**.
+
+**The instrument missed it, and that is the lesson.** The 1x legs passed, and at 4x the shipped
+criterion — the bar's alternation against the selection box — moved only 2.79 → 2.27, because
+the box is a rotated outline whose own centroid breathes ~11 px at that zoom. The statistic that
+catches it is **the bar against itself**: a unit walks at constant speed, so a tracking bar has
+a second difference near zero and a bar quantised on a grid of `q` px stands still and then
+teleports `q`. Before: still on **60.9 %** of frames, every step exactly 0 / 4.00 / 8.00 px and
+nothing between, |2nd diff| p99 **4.00 px**. After: still on 2.3 %, a continuous 1.1–3.2 px
+spread, p99 **1.00 px**. Both are now in `tools/barwobble_detect.py`, with
+`scenarios/bar-wobble-4x.json` as a tracked fixture — a defect worth `zoom` pixels needs a leg
+at a zoom. Details and the full table: [gpu-status](gpu-status.html) §2.2.
+
+**The reference setup was running at double game speed.** Found while measuring the above:
+`gamespeed` was **20**, not TA's normal 10. It lives in `user.reg`, which the template prefix
+and all 58 instance prefixes share as **one inode** — the same trap already documented for
+`Gamma` — so one session pressing `+` leaves every later launch of every instance at that
+speed, and a running instance writes its own copy back at exit. Set back to 10 on 2026-09-09.
+It multiplies the tick rate (`main+0x38A47`: 30/s at 10, 60/s at 20) while the picture still
+changes 30 times a second, so the in-game clock (`tick ÷ 30`) was reading **2× real time**.
+Read it before trusting any measurement that is a rate, a duration, or a distance per second:
+[exe-reverse-engineering](exe-reverse-engineering.html) §"The engine's rates".
+
 **G13q — the left mouse button stopped issuing orders.** Reported from play: *"when I have a
 unit selected, right click/left click both issue a move order. I believe that was not the
 original game behavior."* It was not: at `Interface Type = 1` — right-mouse orders, the value
@@ -1881,6 +1934,51 @@ failed ground composition latches instead of leaking one `frontend.gaf` per worl
   the pass **on**, and with both present the `.on` wins — so both orderings have a transient
   wrong read. It is sub-frame and the next 250 ms poll corrects it; closing it properly needs a
   single atomic indicator rather than a pair.
+- **TODO (IMPORTANT): the hills caster still costs 19 MB per map for a pass that never draws.**
+  `terrainshadow` defaults to 0 since 2026-09-09, and the only caller of `tagpu_terr_hills_draw`
+  is gated on it (`tagpu_shadow.c:398`) — but `build_hills` is **not**: `build_height` calls it
+  unconditionally, so every map still uploads 537 600 vertices (6.4 MB) and 3.2 M indices
+  (12.9 MB) that nothing reads. On the reference setup that is pure waste on every map load, and
+  it scales with map size.
+  **Do not fix it by gating the build on the flag** — the cfg is re-read while the game runs (the
+  render-options screen triggers it), so `terrainshadow=1` mid-session must still produce a mesh,
+  and that live toggle is the fixture the eventual shadow fix gets measured in. **Build it lazily**
+  on the first `tagpu_terr_hills_draw` after the grid changed. The one obstacle: `buf` is freed at
+  the end of `build_height`, so the lazy path needs either that `w*h` byte buffer kept alive
+  (0.5 MB, 3 % of what it replaces) or a re-read of the engine grid at `OFF_FEATMAP` behind the
+  same `ptr_ok`/`IsBadReadPtr` guard. Keep the `s_hMeshW/s_hMeshH == s_hW/s_hH` check in the draw
+  so a failed rebuild still refuses rather than indexing past the old mesh.
+- **[DEFAULTED OFF 2026-09-09 — `terrainshadow=0` ships, and the render-options screen has no path to turn it on]** **The `Shadow quality` row made the picture WORSE as it went up** — the one defect a player
+  actually meets, found by playing zoomed out and diagnosed 2026-09-09. Soft shadows self-shadow
+  flat ground: on open sea with nothing casting, the water darkens up to 50/255 in a 16-world-unit
+  lattice (the `build_hills` caster grid), and the acne grows as the map sharpens because the
+  bias is scaled to the texel while the error is not — 0.03 std at `Low`, 2.50 at `High`/`Ultra`.
+  **It is the TERRAIN caster alone: `terrainshadow=0` takes the shadow term on that water to
+  exactly 0.00 and leaves unit shadows untouched**, so there is a complete workaround today and
+  the fix belongs to the hills draw, not the shared bias. Full diagnosis in
+  [renderers](renderers.html) §2.7b. It is NOT a regression of this landing (2 247 px outside the
+  new menu panel differ between the landed build and `bbceeb8`, under the 4 889-px noise floor of
+  two runs of the same build) and the fix belongs to the shadow module, so it is not taken here.
+  Until it is, `Ultra` is the wrong recommendation.
+  **The caster/receiver split is NOT the cause** — that hypothesis was built into the lab as
+  `castsplit` on 2026-09-09 and measured at 0.001 std / 780 px, which killed it and saved a
+  terrain-pass refactor.
+  **The LAB REPRODUCES THIS at full strength** (same day, later): the 8.72 figure came from an
+  instance whose cfg carried `penumbra=2.5` where the shipped default is `0.05`, and the lab was
+  being run at the default. The penumbra is the amplifier — the PCSS radius is `penumbra × the
+  blocker distance`, so a sub-texel bias failure is smeared into a blob. At the game's own 2.5
+  the lab gives acne 7.66 / worst 61 of 255 and shows the blocky lattice by eye. **The severity
+  at the shipped default is 0.96 std / 58 worst and was never measured in the game — open, and
+  it decides how urgent this is.** **NO BIAS CAN FIX THIS, and that is now measured rather than suspected.** Seven candidates
+  swept to convergence and costed (`bslack`, `mindist`, `castsmooth`, `pbias`,
+  `noff`, `pofac`, plus the constant floor): every one removes the artifact and the terrain-shadow
+  feature together at about one for one, and the shared ones spend unit shadows too — `pbias=32`
+  takes 90 % of the acne and 91 % of the unit shadows with it. The reason is that a cell's own
+  relief IS the terrain shadow, so the false blocker and the true one sit at the same depth scale
+  and no threshold separates them. The fix must therefore not compare depths at all: a
+  **precomputed horizon / sun-visibility map** (static heightfield, fixed sun, a per-map build
+  step already exists beside `build_hills`) or a receiver-side ray-march. Neither attempted.
+  `terrainshadow=0` is the same trade every knob makes, taken honestly and for free.
 - **`shadowres` outside the four table values** (256, say) is snapped to the nearest row on the
   first click of any row rather than being preserved.
 - **The G15 `strict` walk still has not been run against this screen**, and **GUI scale `k ≠ 1`

@@ -45,7 +45,10 @@
                                                 14,0.25; off = physical
                              shade=S            the direct light a shadow
                                                 removes, 1
-                             terrainshadow=0|1  the hills cast too, 1
+                             terrainshadow=0|1  the hills cast too, DEFAULT 0
+                                                -- it self-shadows the ground
+                                                (renderers.md 2.7b); 1 is the
+                                                fixture for fixing it
                              shadowres=N        the map's edge at zoom >= 1,
                                                 2048 (256..4096)
                              airshadow=len|physical|drop   an airborne caster

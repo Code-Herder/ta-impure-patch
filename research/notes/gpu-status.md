@@ -167,6 +167,68 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x485070` | `GetPosHeight(POS16_16*)` (`ret 4`) | *called by us*, on the render thread — a pure read of the height grid, which is what makes a range circle follow the terrain |
 | `0x4CCF60` | the glyph blitter (**cdecl**, 9 args, base and pitch taken directly) | *called by us*, on the present thread, once per distinct string — it reads the font object and writes our atlas and touches no engine state at all (`tagpu_text.c`) |
 
+**Everything anchored to a unit takes the unit pass's sub-pixel anchor — including, since
+2026-09-09, the health bar and the group digit — and every one of them is quantised AFTER the
+zoom, not before.** Two separate defects, found and fixed the same day, and the second was
+created by the first fix.
+
+**(a) The anchor was the wrong one.** Until 2026-09-09 the bar gather read the engine's integer
+world shorts directly, which pinned the bar to the SIM rate while the body glided at present
+rate; the two slid against each other by up to a whole sim step of motion. The old error was
+**proportional to how far the unit moves per sim step**, so it grew with unit speed and with
+`gamespeed` — 1.68 px peak-to-peak at 1x at TA's normal speed, 2.95 at `gamespeed` 20, and
+`zoom` times either on screen.
+
+The rule now is **the bar sits on whoever drew the body**, and it takes two branches because
+two different things draw units. When `tagpu_native_owns_unit()` holds — the very predicate the
+unit pass gathers on — the body came from `tagpu_native_unit_pos()`, so the bar takes that same
+number. When it does not, the unit pass skipped the unit and the **engine** drew it from `(s16)`
+reads of the same 16.16, and the bar floors with it. That second branch is not hypothetical:
+`markown` suppresses the engine's own bars globally, so a unit the type filter rejects, or a
+nanoframe while the build-effect detour is absent, still needs a bar from us.
+
+*[The landing review caught this. Both branches went through the accessor at first, on the
+belief that it reports "no sub-pixel sample" — it does not. `tagpu_native_unit_pos` returns 1
+whenever its **pointer** checks pass and hands back the raw fraction when the table holds no
+sample, so the integer branch was unreachable and every engine-drawn unit got a bar up to a
+whole game pixel off its body. The code comment and this note both asserted the opposite, that
+the sampleless path was byte-for-byte what it had always been.]*
+
+**(b) Then it was quantised on the wrong grid.** The first fix floored that anchor, on the
+argument that the selection rect floors the same anchor and the two should agree. They did
+agree — with each other, in the frame's PRE-zoom units, which is the wrong grid. The vertex
+shader scales this pass by `zoom` about the zoom centre, so **one unit of quantisation here is
+`zoom` displayed pixels**: invisible at 1x, 4 px at 4x, 8 px at `ZOOM_MAX`. The bar stood still
+and then teleported 4 px while the body glided underneath it, which is what the owner reported
+as a diagonal twitch at max zoom-in. (The selection rect never showed it because it does not
+actually floor in these units — `tagpu_native.c` snaps its corners *forward through the zoom*,
+floors there and comes back. The glyph atlas has done the same since G15.) `tagpu_mark.c`'s
+`snap_device()` is now that rule, shared by the bar, the group digit and the text, so the step
+is **1/ss of a displayed pixel at every zoom** and the bound does not grow with the zoom at all.
+
+**Measured** on a walking commander, 1920x1080, camera pinned, TA's normal game speed, at 4x —
+the separation between the bar and the body it sits over, in *displayed* pixels
+(`tagpu_spxlog.on`; the model is exact and build-independent, which is what makes one run report
+all three rules):
+
+| the bar's anchoring rule | rms | peak-to-peak |
+|---|---|---|
+| the engine's shorts (the original defect) | 1.35 px | **6.56 px** |
+| the body's anchor, floored (fix 1, superseded) | 1.15 px | **4.00 px** — exactly `zoom` |
+| the body's anchor, `snap_device` (ships) | 0.14 px | **0.49 px** — 1/ss, at any zoom |
+
+Corroborated from video on the two builds themselves, same instrument each leg
+(`tools/barwobble_detect.py`, `scenarios/bar-wobble-4x.json`). The statistic that catches this
+is **the bar against itself**: a unit walks at constant speed, so a bar that tracks it has a
+second difference near zero and a bar quantised on a grid of `q` px stands still and then
+teleports `q`. Before: still on **60.9 %** of presented frames, and every step it did take was
+exactly 0, 4.00 or 8.00 px with nothing in between; |2nd diff| 2.09 px mean, **4.00 px p99**.
+After: still on **2.3 %**, a continuous 1.1–3.2 px spread tracking the unit's real speed;
+|2nd diff| 0.42 px mean, **1.00 px p99**. At 1x both builds pass every 1x oracle equally —
+that is the point of (b), and the reason the 4x fixture is now a tracked one.
+
+**Stock TA cannot show either artifact**, because there the bar and the body are the same shorts.
+
 **The selection rect is drawn at 1x, after the downsample, and matches the engine's pixels.**
 Four things had to be right and none of them was ([UI markers](ui-markers.html) §1, all measured
 2026-09-08 against the engine's own rect — `mark.on=noselbox` hands it back while everything
@@ -1246,6 +1308,7 @@ is left on the shared stream.
 | **the shadow-depth twin** | the same vertex shader with an empty fragment shader and `uDepthPass = 1`, mirroring `tagpu_shadow.c`'s `VS_U`/`FS_NONE`, so a colour-keyed texel casts on both paths |
 | **the Classic silhouette** | routed through the posed program too — it reuses the body geometry, so a posed unit would otherwise lose its shadow whenever Classic++ is off |
 | **who gates it** | `shadows=`, not the Classic++ master arm and not `assets`/`light` (G18a/G18b, merged in 2026-09-09). Both posed shadow loops in `tagpu_native.c` skip on `cpp && !hard`, so **Classic++ at `shadows=2` (HARD) draws the Classic pair through this program** and `tagpu_shadow_begin` then refuses the depth pass outright (it requires `TAGPU_SHADOWS_SOFT`, `tagpu_shadow.c:368`). At `shadows=0` nothing is drawn, an aircraft's `airshadow=drop` included. This gating was written against the CPU emitters G16 step 8 deleted and was **re-expressed**, not merged |
+| **the ground does NOT cast** (2026-09-09) | `terrainshadow` now defaults to **0** (`tagpu_classicpp.c` `shadow_defaults`), so `tagpu_shadow.c:398` returns before `tagpu_terr_hills_draw` and the heightfield contributes nothing to the depth map. Units are unaffected — this is the caster's own gate, not the shared bias. The ground casting on itself darkened open water in the caster's own 16-unit lattice and got worse as `Shadow quality` went up; seven candidate fixes were swept and costed and every one removed the artifact and the terrain-shadow feature together, because a cell's own relief *is* the terrain shadow ([renderers](renderers.html) §2.7b). `terrainshadow=1` in the cfg still turns it on and is the fixture the eventual fix is measured in; the render-options screen has no row for the key and never writes it, so nothing a player can click re-enables it. The hills mesh is still BUILT at map load (6.4 MB + 12.9 MB on Two Continents) — it is simply never drawn, which is an **open TODO**: `build_hills` is unconditional where the draw is gated, and the fix is a lazy build on first draw rather than gating the build (the flag is live, and `terrainshadow=1` mid-session is the fixture the shadow fix is measured in). See [roadmap](roadmap.html) |
 | **the three ranges** (step 6) | `uRange` selects. **BODY** as above. **SLANT** takes `0x45A610`'s projection `(x + y/4, −z − y/4)` off the posed vertex snapped to whole units, the neutral SHD row, `waterT`/`digT` pinned at −1e9 by the pass itself (the structure branch never erases — the G14j fix), and its own per-piece rule `(P_FLAGS & 3) == 3`. **WIRE** is `GL_LINES` on the body projection, one notch nearer (+0.15), the nanoframe's animated blue from a uniform because it is per unit while the material stream is per type and owner |
 | **the 16.16 snap** (step 6) | the posed vertex is rounded onto the engine's own grid — `floor(m·65536 + 0.5)/65536` — **before anything reads it**, in every range. The engine holds each posed vertex as three 16.16 integers and every CPU emitter reads them back as `v[i]/65536.0f`, so a float compose that stops short sits up to half an LSB off a value that is exactly representable; `recon_prim` rounds the same way. This is what makes the slant portable at all (its `>>16` is a FLOOR, so half an LSB is a whole screen unit) and it took the body's residual to zero as well |
 | **the pose** | a std140 block, `vec4 uRow[3*256]` + two packed per-piece words, `uPieceFlag[64]` (shaded) and `uPieceVis[64]` (0 not drawn / 1 drawn / 3 drawn and casting) = **14 336 bytes**. `GL_MAX_UNIFORM_BLOCK_SIZE` is read at build time and the pass **refuses to arm** below that. Since step 8 there is no CPU emitter to leave those units to, so the refusal is *published* and `owndraw` stops skipping the engine's own unit rasterise — see "when it cannot arm" below. The wire reads the same word rather than the all-zero matrix: a zero-area triangle provably produces no fragments, a zero-length LINE is not promised away, and one bright pixel per hidden edge would land on the unit's origin |

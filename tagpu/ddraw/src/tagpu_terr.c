@@ -526,7 +526,9 @@ static void build_height(const char* ta, unsigned frame)
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, buf);
     glBindTexture(GL_TEXTURE_2D, 0);
-    build_hills(buf, w, h);
+    build_hills(buf, w, h);          /* TODO: unconditional -- 19 MB even when
+                                        terrainshadow=0, which is the default.
+                                        See build_hills' header. */
     free(buf);
     s_hW = w; s_hH = h;
     _snprintf(b, sizeof b, "terr: height grid %dx%d uploaded from %p (Classic++ lighting)",
@@ -540,7 +542,28 @@ static void build_height(const char* ta, unsigned frame)
    diagonal taTerrN interpolates across ((1,0)-(0,1)), indices ordered by
    cell row so the rows under the light window are one contiguous range.
    Static: the map's heights never change. Two Continents: 537,600 vertices
-   (6.4 MB), 3.2 M indices (12.9 MB), once per map. */
+   (6.4 MB), 3.2 M indices (12.9 MB), once per map.
+
+   ==== TODO (IMPORTANT), 2026-09-09: 19 MB of VRAM per map for a pass that is
+   OFF BY DEFAULT and normally never draws. ====
+   `terrainshadow` now defaults to 0 (tagpu_classicpp.c shadow_defaults --
+   the ground self-shadowed itself, renderers.md 2.7b), and the only caller of
+   tagpu_terr_hills_draw is gated on it (tagpu_shadow.c:398). This function is
+   NOT gated: build_height calls it unconditionally, so every map pays 6.4 MB
+   of vertices and 12.9 MB of indices that nothing reads.
+
+   Do NOT fix it by gating the build on the flag. The flag is live -- the cfg
+   is re-read while the game runs (read_cfg, and the render-options screen
+   triggers it) -- so `terrainshadow=1` mid-session must still produce a mesh,
+   and that is the fixture the eventual shadow fix gets measured in.
+
+   Build it LAZILY instead, on the first tagpu_terr_hills_draw after the grid
+   changed. The obstacle is that `buf` is freed at the end of build_height, so
+   the lazy path needs the bytes: either keep that w*h byte buffer alive (0.5 MB
+   on Two Continents, 3 % of what it replaces) or re-read the engine grid at
+   OFF_FEATMAP with the same ptr_ok/IsBadReadPtr guard build_height uses. Keep
+   the existing s_hMeshW/s_hMeshH == s_hW/s_hH check in the draw so a failed
+   rebuild still refuses rather than indexing past the old mesh. */
 static void build_hills(const unsigned char* buf, int w, int h)
 {
     size_t nv = (size_t)w * (size_t)h, ni = (size_t)(w - 1) * (size_t)(h - 1) * 6, k = 0;
