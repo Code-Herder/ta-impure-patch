@@ -65,6 +65,7 @@ PAGES = [
     ("terrain-depth",              "Terrain, features & depth",   "Renderer"),
     ("effects",                    "Effects (fire, explosions, debris)", "Renderer"),
     ("features",                   "Features (trees, rocks, wreckage)",  "Renderer"),
+    ("atlas-packing",              "The GAF sprite atlas",        "Renderer"),
     ("ui-markers",                 "UI markers",                  "Renderer"),
     ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
     ("renderers",                  "Classic and Classic++ renderers", "Renderer"),

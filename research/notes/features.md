@@ -253,6 +253,10 @@ same for the stub/patch machinery, now shared by `tagpu_fxown.c` and `tagpu_feat
 
 ### The atlas filled at 48 % — and now repacks instead of resetting (2026-09-10)
 
+*The illustrated version of this section — every diagram, both rejected options, and the
+plates of the real 229 frames — is [The GAF sprite atlas](atlas-packing.html). What follows
+is the code-level reference.*
+
 The feature atlas is one `GL_R8` 2048 square packed by a **shelf** packer: a cell is
 placed at the current shelf cursor, and if it is taller than the shelf the shelf grows
 under it (`tagpu_gaf.c` `atlas_insert`, `if (ch > a->shelfH) a->shelfH = ch;`). When a
