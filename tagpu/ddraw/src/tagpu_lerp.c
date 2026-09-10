@@ -214,14 +214,19 @@ static LREC* lookup(const char* o3, int nparts)
 
 /* PREV -> CUR at weight u, field by field. Invariants 3 and 4 live here.
 
-   THE WEIGHT IS A 16.16 INTEGER AND THE LOOP TOUCHES NO FLOAT AT ALL, which is
-   worth 15x and is not a micro-optimisation. This target has no SSE, so there
-   is no `cvttss2si`: C requires a float->int conversion to truncate toward
-   zero, the x87 rounds to nearest, and GCC therefore brackets EVERY `(int)` of
-   a float with a control-word save and restore. The first cut did two such
-   conversions per iteration, so the loop carried FOUR `fldcw` -- a serialising
-   reload of the whole x87 state -- and measured 226 cycles an iteration for
-   about ten cycles of actual arithmetic (smooth-motion.md section 7f).
+   THE WEIGHT IS A 16.16 INTEGER AND THE LOOP TOUCHES NO FLOAT AT ALL. This
+   target has no SSE, so there is no `cvttss2si`: C requires a float->int
+   conversion to truncate toward zero, the x87 rounds to nearest, and GCC
+   therefore brackets EVERY `(int)` of a float with a control-word save and
+   restore. The first cut did two such conversions per iteration, so the loop
+   carried FOUR `fldcw` -- a serialising reload of the whole x87 state -- for
+   about ten cycles of actual arithmetic.
+
+   MEASURED FROM THE COMPILER, not from a stopwatch: both forms built with this
+   makefile's own flags give 13 x87 instructions including 4 `fldcw` for the
+   float loop and ZERO for this one (smooth-motion.md section 7i, which also
+   says why the frame-cost half of section 7f has NOT been re-measured yet --
+   do not quote a speedup figure from this comment, there is not one).
 
    The blend never needed floating point. `u` is in [0,1), so 16.16 gives it
    1/65536 of a tick of resolution, which is finer than a piece moves in a tick

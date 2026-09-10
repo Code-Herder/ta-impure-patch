@@ -6,8 +6,9 @@ play-default table, so only that file arms it. Gate 0 passed on the tacob viewer
 owner watched stepped against smoothed side by side and the smoothed walk looks good — but that
 was a **model** of the change; **nobody has looked at option A itself in the game**, and that
 taste question is the one thing still open. Gate 2 parity and gate 4 sim-untouched both PASS
-(§7e, §7g), gate 3 puts the cost at **0.56 ms a frame for 240 posed units** (§7f), and §7h shows
-the blend is measurably live. The concrete piece is interpolating COB-driven piece poses toward
+(§7e, §7g), gate 3 put the cost at **0.56 ms a frame for 240 posed units** (§7f) — **that is the
+first cut's `double` blend; the shipped blend is 16.16 fixed point and its frame cost is not yet
+re-measured (§7i)** — and §7h shows the blend is measurably live. The concrete piece is interpolating COB-driven piece poses toward
 the next keyframe so models animate at render rate instead of at the sim tick — which is **60 a
 second in a skirmish, not 30**, one of the three things this build got wrong first (§7d). The
 wider topic — unit turn rate, body rotation, position between ticks — is §8. Companion pages: [file formats](file-formats.md) §2 (the COB format and the
@@ -548,11 +549,12 @@ measuring where the frame is already 3.4 ms long; what a player at 60 fps would 
 of a millisecond per hundred units. For scale, [G16](gpu-posing.md) step 7 bought **2.3 ms a frame**
 by deleting the CPU emitters, so this spends about a quarter of that win back.
 
-**The obvious optimisation is not taken and is not needed for the gate**: the position blend goes
+**The obvious optimisation was not taken for this gate**: the position blend goes
 through a `double` per component (`(double)d * u`) so that no pair of endpoints can overflow the
 subtraction. A `float` path with the wide subtraction kept, or a 16.16 fixed-point multiply, would
 remove most of it. Left alone deliberately — this is the first cut, and a correctness-first blend
-that costs 2.33 µs is the right thing to measure before tuning it.
+that costs 2.33 µs is the right thing to measure before tuning it. **It was taken afterwards;
+§7i is the follow-up, and the 0.560 ms above is the FLOAT blend's number, not the shipped one.**
 
 ### 7g. Gate 4 — sim untouched, PASSED `[MEASURED 2026-09-09]`
 
@@ -591,6 +593,68 @@ load, which is the wrong thing to go and debug.
 The structural half of the gate is stronger than the measurement anyway: the module writes to its
 own statics and to nothing else, and the invariant-1 read-only rule is checkable by inspection —
 there is no write to `PrimitiveStruct` anywhere in the diff.
+
+### 7i. The blend became fixed point — the x87 control word was the cost `[2026-09-09]`
+
+§7f left the `double` multiply in place deliberately and named the two ways out. The 16.16 one is
+now taken, and the reason it was worth taking is **not** the multiply:
+
+**This target has no SSE.** C requires a float→int conversion to truncate toward zero; the x87
+rounds to nearest; so GCC brackets every `(int)` of a float with an `fnstcw` / `fldcw` pair to
+change the rounding mode and another to change it back. The first cut did **two** such conversions
+per iteration — the position and the turn — so the inner loop carried **four `fldcw`**, each a
+serialising reload of the whole x87 state, around roughly ten cycles of real arithmetic.
+
+**Established from the compiler, with this makefile's own flags** (`-O2 -std=c99`,
+`i686-w64-mingw32-gcc`), by compiling the two loop bodies side by side:
+
+| | x87 instructions | of which `fldcw` | total instructions |
+|---|---|---|---|
+| `(double)d * u` and `(float)w * u` | 13 | **4** | 65 |
+| `(d * w16) >> 16` and `(t * w16) >> 16` | **0** | 0 | 63 |
+
+The **total instruction count barely moves** (65 → 63) and that is the point: the win is not
+fewer instructions, it is that none of the remaining ones serialises the pipeline. Anyone
+re-deriving this by counting instructions will conclude there was nothing to win.
+
+**What the weight costs now.** One float→int conversion per *unit* instead of two per piece per
+axis. `u` is already known to be in `[0,1)` and multiplying a float by 2^16 only moves the
+exponent, so the product is exact and `w16` cannot exceed 65535 — but the bound is **clamped
+rather than argued**, because the turn multiply has only 32767 of headroom (`t` reaches +32768,
+and `32768 × 65535 = 2147450880` against an `INT_MAX` of 2147483647, so a `w16` of 65536 is
+signed overflow). Two instructions a unit buy an invariant that a later change to the refusal
+above, or to the weight's scale, cannot silently break. See CLAUDE.md, *Fixes must be safe by
+construction*: this is a bound, not a "the weight is never that big" argument.
+
+**Resolution and rounding.** 16.16 gives the weight 1/65536 of a tick, orders of magnitude finer
+than a piece moves in one tick. The position delta stays a **wide** multiply, so no pair of
+endpoints can overflow it whatever a mod puts in those fields. `>> 16` floors where `(int)`
+truncated toward zero, so a negative delta can land one LSB — 1/65536 of a world unit — lower
+than the float version did. That is on a path with no parity requirement: invariant 2 is about
+the lever being **off**, which never reaches this function.
+
+#### The frame cost has NOT been re-measured, and here is exactly how far it got `[GAP]`
+
+**§7f's 0.560 ms is the float blend's number and is now stale. The fixed-point blend's number is
+not yet established.** The attempt is recorded because the conditions, not the change, defeated it:
+
+- The fixture reproduced §7f's exactly — `crowd-static`, 1024×768 `ss=2`, `--maxfps 0`,
+  `posed=240/32288tri`, and the same blend volume (`lerp=71040/960`, the identical reading §7f
+  quotes), at the same `GameSpeed` 20 / 64 ticks a second. So the work being timed is like-for-like.
+- The lever polls live every 30 frames, so this was run as an **interleaved live A/B in one
+  process** — off/on pairs back to back — which is strictly better than §7f's paired launches:
+  no relaunch, no sim divergence, no different point in a fight.
+- **Three other TA instances were running on the reference setup throughout**, and the baseline
+  drifted from 267 fps to 183 fps *during* the run as they ramped. Eight off/on pairs gave
+  per-pair costs of 0.068, 0.120, 0.127, 0.129, 0.156, 0.236, 0.260 and 0.461 ms — a 7× spread
+  that tracks the load, not the lever.
+
+**What that does and does not support.** Every pair came in **below** §7f's 0.560 ms, and the
+median is around 0.14 ms; the direction is not in doubt. But a 7× spread is not a measurement,
+and §7f itself is the precedent for saying so rather than quoting the mean — *"the first attempt
+was not a measurement and is recorded as such"*. **Do not quote a speedup factor from this
+section.** To close it: re-run the same interleaved A/B with no other instance on the machine,
+and put the number in §7f's table beside the float one.
 
 ## 8. Future work — the rest of "smooth"
 

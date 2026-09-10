@@ -1437,9 +1437,29 @@ because the panel is right-aligned and a `.GUI` written at attach cannot know th
 `gi+0xCCA`, the repaint flag. And the loaded GAF frame's colour plane (`+0x10 PtrFrameBits`),
 repainted in place with the composed ground. **Nothing sim-side, and nothing that replicates.**
 
+**Seven rows since 2026-09-09**, the seventh being the FPS readout (§2.14). Two things about it
+are unlike the other six, and `read_state()` and the click handler have to agree on both or the
+row would read one way and behave the other:
+
+- **It never makes Renderer read `Custom`.** Every other row below Renderer changes what the game
+  *looks like*, and `Custom` is the honest answer for those; this one draws a diagnostic over the
+  finished frame and changes no pixel the game rendered. So the click handler skips the
+  `STYLE_CUSTOM` assignment for it and `read_state`'s `custom` test leaves it out.
+- **It is never greyed.** Like supersampling, it is orthogonal to the Classic/Classic++ lane, so it
+  is not one of the switch's dependants — grey it with the lane and a player on Classic could not
+  turn it on.
+
+`PANEL_H` went 212 → 240 for the seventh row: `ROW_Y0 34 + ROW_PITCH 28 × 6 = 202` and `ROW_H` is
+20, so the last row ends at 222 and 240 leaves the 18 px the six-row panel left below 194. One
+define carries it — the GAF frame header, the ground, the ramp, the border and the corner bolts
+are all sized from it — and the panel is **composed at runtime** from the player's install rather
+than shipped, so no art is regenerated. `tools/guipanel.py` still says 304×212: it is the lab's
+copy of this layout, not its source.
+
 **Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
 key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off`
-created and deleted; and **both** `tagpu_classicpp.on` and `.off` — the pair, because
+created and deleted; `tagpu_fps.on` created and deleted (§2.14); and **both**
+`tagpu_classicpp.on` and `.off` — the pair, because
 `tagpu_opt.c`'s precedence is an `.on` wins and an `.off` only defeats a *default*-on, so
 driving one of them applies nothing on an instance that carries `tagpu_defaults.off` or a
 hand-armed `.on` (§2.8). Write access to the gamedir is not new — the DLL
@@ -1485,12 +1505,63 @@ than snapping at the tick. It is only this small because G16 turned the pose bac
   take — is untouched, so replacement meshes still step and the sim oracle still reports the
   engine's own fields. The unit's world position and `O3_BTURN` are out of scope, which means the
   pose runs a sample behind a position that is not delayed.
-- **Cost, measured**: `+0.560 ms a frame at 240 posed units` — 2.33 µs a unit, 3.4 % of a 60 fps
-  budget, on the paired `crowd-static` fixture ([smooth motion](smooth-motion.html) §7f). The
-  position blend goes through a `double` per component so no endpoint pair can overflow the
-  subtraction; a float or 16.16 path would remove most of that and is deliberately not taken yet.
+- **Cost**: the first cut's `double` blend measured `+0.560 ms a frame at 240 posed units` — 2.33 µs
+  a unit, 3.4 % of a 60 fps budget, on the paired `crowd-static` fixture
+  ([smooth motion](smooth-motion.html) §7f). **The shipped blend is 16.16 fixed point and that
+  number no longer describes it**: the loop now carries no x87 at all, where the float form carried
+  13 instructions including 4 `fldcw` (§7i, established from the compiler). Its frame cost is
+  **not re-measured** — an interleaved live A/B put every off/on pair below 0.560 ms but spread
+  0.068–0.461 ms under load from three other instances, which is not a number. §7i says how to
+  close it.
+- **The bound on the weight is clamped, not argued.** `w16` is forced into `[0, 65535]` because the
+  turn multiply has only 32767 of headroom (`t` reaches +32768; `32768 × 65535` is 2 147 450 880
+  against `INT_MAX` 2 147 483 647). The `[0,1)` refusal above already implies it today; the clamp is
+  what keeps a later change to that refusal from becoming silent signed overflow.
 - `lerp=<blended>/<snapped> p=<ms> u=<weight>` rides the `native:` line, and **nothing at all** is
   printed when the lever is off.
+
+### 2.14 The frame-rate readout (`tagpu_fps.c`, OFF by default, `tagpu_fps.on`) — 2026-09-09
+
+A row on the render-options screen (Off|On) and the module that draws it. **No engine address, no
+patch, no engine read at all** — it counts our own presents and draws over the finished frame.
+
+| site | what we do there | thread |
+|---|---|---|
+| `tagpu_overlay_draw`, after `tagpu_gui_present` | `tagpu_fps_present()` — the readout, drawn **above** the UI layer so the side panel and dialogs cannot hide it | render |
+| `tagpu_overlay_draw`, the context-change branch | `tagpu_fps_glreset()` alongside the other modules' | render |
+| `tagpu_menu.c` `write_levers()` | create or delete `tagpu_fps.on` — the deferred write, off the game thread, exactly as `tagpu_ss.off` is written | render |
+
+**Files.** `tagpu_fps.on`, positive sense (present = on), polled every 30 frames on the render
+thread. The row and the file are one setting, so either can drive it.
+
+**Why not the one that already exists.** cnc-ddraw's own `dbg_draw_frame_info_start` sits behind
+`tagpu_fpsosd.on`, but it is compiled only under `_DEBUG` and GDI-draws into the engine's 8bpp
+surface, where it beats against the engine's redraw of that area and flickers — its own comment
+says so. A `_DEBUG` build would also move the very numbers a frame-rate readout exists to report.
+
+**The atlas is a cache, and that decides the design.** `tagpu_text_place` keys on the WHOLE STRING
+and packs it onto a shelf that is never freed until the font changes, in a **fixed** 512×256 atlas
+(`tagpu_text.c`). A readout that placed `"FPS 101"`, then `"FPS 102"`, would burn one permanent
+entry per distinct number, exhaust the table within seconds and then start dropping — and it shares
+that atlas with `tagpu_mark`'s group digits and the `ShowRanges` labels, so it would starve those
+too. This places **eleven fixed strings** — `"FPS"` and `"0"`..`"9"` — and emits one quad per
+character. Eleven entries, once, for the life of the font.
+
+**Screen space, not world space.** The marker pass's text is world-anchored: its quads carry
+`(wx, wz)` for the fog lookup and take the zoom transform, so a readout drawn through it would
+fade into fog and scale with the camera. This has its own two-triangle program in game-frame
+pixels and nothing else.
+
+**Threads.** Render thread only. It reads the font the game thread published (`tagpu_text_snapshot`
+at hook 8) through `tagpu_text_frame`'s per-frame latch, exactly as the marker gather does.
+
+**Verified in the game 2026-09-09** on `crowd-static` at 1024×768: `fps: armed …` in the log and
+the readout drawn and legible. *Two things to know before reading a capture of it.* It is drawn at
+`(6, 6)` in game-frame pixels, which in a normal layout is **over the minimap** — deliberate for a
+diagnostic that is off by default, but it means a `glshot` of that corner shows the minimap's own
+grey/yellow view rectangle behind the digits, which reads convincingly as a corrupted glyph until
+you take the pair with the readout off. And the glyph advance is `w + 1`, so it renders as
+`FPS175` with no gap after the label.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 

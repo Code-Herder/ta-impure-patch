@@ -737,7 +737,7 @@ lane runs at zoom 1 by construction and cannot show them (§4).
 ### 2.10 Settings: an in-game screen, drawn by the engine's own GUI  [REVISED 2026-09-09]
 
 **Decided: the render options are a real `.GUI` screen — the engine's own gadgets, its own
-GAF art, its own dispatcher — not a panel the DLL paints.** Six stage buttons, no pages.
+GAF art, its own dispatcher — not a panel the DLL paints.** Seven stage buttons, no pages.
 This supersedes the original decision below, which was for a DLL-drawn panel hanging off an
 "Options" button in the top bar.
 
@@ -748,24 +748,30 @@ game's is tracked). Interviewed with the owner 2026-09-08/09.
 
 **The two rules the owner set.**
 
-*Seven was the count before mouse-wheel zoom was cut (below); the row table and every
-geometry number here are six.*
+*The count has been six and seven at different times and the two changes are unrelated:
+mouse-wheel zoom was cut as a seventh row (below), and the **FPS readout** was added as one
+on 2026-09-09. The row table and every geometry number here are the current **seven**.*
 
 1. **The menu never offers the unmodified original engine.** No row has an "off, let the
    1997 code draw it" position — we own the draw, and the only question a row asks is which
    of *our* two renderers owns it.
-2. **Simplify.** Six gadgets, and everything else demoted to the cfg.
+2. **Simplify.** Seven gadgets, and everything else demoted to the cfg. (Six when the rules
+   were set; the readout is the one addition, and it is a diagnostic rather than a render
+   option — see the row table.)
 
 **The screen — a drop-down, not a stock rect** [SHAPE DECIDED 2026-09-09]. `RENDER.GUI`,
 panel `id=0` at `(w−16−304, 32) 304×212` — right-aligned by `MARGIN = 16`, hanging from the
-top bar's underside, over the world. Background gadget `id=12` naming its panel frame. Six
+top bar's underside, over the world. Background gadget `id=12` naming its panel frame. Seven
 `id=1` buttons at `x=166 w=120 h=20` on a **28 px** pitch, each with an `id=5` label at
 `x=14 w=144` **on the same line**:
 
-*The height is 212, not the 240 an earlier revision of this line said — `tools/guipanel.py`
-is the source of truth for the geometry (`W,H = 304,212`, `DIV_BOT = 202`, the last row
-ending at 194), the paragraph on modality below already said 212, and the built screen
-measures 212.*
+*The height is **240 again as of 2026-09-09**, and the arithmetic — not an earlier draft — is
+why. At six rows it was 212 (`DIV_BOT = 202`, the last row ending at 194) and a revision that
+said 240 was simply wrong; the seventh row moves the last row's end to `34 + 28×6 + 20 = 222`,
+so 240 is what leaves the same 18 px below it. **`tools/guipanel.py` is no longer the source of
+truth for this number** — it still says `W,H = 304,212`, and `PANEL_H` in `tagpu_menu.c` is the
+one define the screen is actually built from (the panel is composed at runtime from the
+player's install, so nothing is regenerated when it changes).*
 
 | y | row | stages | what drives it |
 |---|---|---|---|
@@ -776,6 +782,7 @@ measures 212.*
 | 118 | **Shadows** | Off \| Hard \| Soft | `shadows=` — done, G18b |
 | 146 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=`, live only at Soft |
 | 174 | **Supersampling** | Off \| 2× | `tagpu_ss.off` |
+| 202 | **FPS counter** | Off \| On | `tagpu_fps.on` — the readout, [GPU status](gpu-status.html) §2.14 |
 
 **Every row is live, and that is a rule the menu keeps** [DECIDED 2026-09-09]. Mouse-wheel zoom
 was the seventh row and was **cut**: `tagpu_zoom_init()` runs *once* from `dllmain.c:130` and
@@ -786,6 +793,17 @@ the next frame — `assets`/`light` as per-frame uniforms, `shadows` as a per-fr
 `shadowres` because `tagpu_shadow.c:223` reallocates the depth texture when the edge changes,
 `ss` because `tagpu_ss.off` is re-`stat`ed per unit render. So **no row ever needs an asterisk**,
 and any future row must clear the same bar or stay in the cfg.
+
+**The FPS row cleared that bar rather than being excused from it** [2026-09-09]. It is the first
+row added since the rule was written, and it is live for the same reason the others are:
+`tagpu_fps.c` polls its trigger on the **render thread** every 30 frames and builds its GL
+objects on first use, so there is no attach-time patch and nothing to defer to the next launch —
+which is exactly the property that disqualified mouse-wheel zoom. It is also the first row that
+is **not** a rendering option, and it gets two exemptions the others do not have: it never sets
+Renderer to `Custom` (it changes no pixel the game rendered) and it is never greyed by the
+Classic lane (it is orthogonal to it, as supersampling is). Both are stated in
+[GPU status](gpu-status.html) §2.12, because `read_state()` and the click handler have to agree
+on them or the row misreports itself on the next open.
 
 *This supersedes a 150×352 panel at `(128,128)` — the rect `VISUALRT.GUI` uses — with the
 label 16 px **above** its control on a 44 px pitch. The label moved beside the control, and
