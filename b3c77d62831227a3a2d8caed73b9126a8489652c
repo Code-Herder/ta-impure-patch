@@ -1,0 +1,17 @@
+landing-review: model=opus effort=high range=main..b3c77d6 findings=11 acted=11 rejected=0 date=2026-09-10
+two reviewers in parallel (A general correctness, B state/patches/shared state).
+A: ModelId 0 is NOT owed nothing (0x46A530 has no ModelId test, BINARY-VERIFIED) - fixed in
+d7af08d by refusing an unresolvable model in tagpu_native_owns_unit; the one-store publication
+is not guaranteed without volatile - fixed; the clip gate fails open on a probe failure - fixed
+in 9545f34; s_verified read cross-thread - fixed. No finding against tap()/uVpKey.
+B: the viewport clamp rode the IsBadReadPtr probe, making a bound conditional on a probe
+(CLAUDE.md) - fixed; s_verified volatile - fixed; the s_type window is narrowed not removed -
+documented as residual; mark.on=nocursor's capture window loses ring markers - documented;
+tagpu_native_armed() does not exist - docs corrected; MODEL_PTRS[0] is never written - documented
+as stock behaviour restored; tools/tacli verified safe, stale docstring corrected.
+Verified clean by B against the disassembly: the three redirected sites copy main+0x37E27
+verbatim, 0x497F40 builds it as L=0x80/T=0x20/R=sw-1/B=sh-0x21, so the clamp is stock's own
+bound; the other three 0x4C6B10 sites build stack-local rects and no indirect path reaches the
+stub. All three gui-renderer 20 claims hold.
+Fixes NOT re-reviewed: they are the reviewers' own suggested fixes, each verified against the
+code or the disassembly before acting, and vpw_setclip's change only ever narrows further.
