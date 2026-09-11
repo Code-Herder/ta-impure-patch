@@ -241,7 +241,7 @@
     {
       "t0": 39.0,
       "t1": 44.0,
-      "text": "A test harness that happens to look like a war.",
+      "text": "Control units, spawn more on demand, send any command to a scenario as it runs.",
       "full": true,
       "dim": 195
     },
@@ -253,5 +253,5 @@
       "big": true
     }
   ],
-  "terminal_style": "classic"
+  "terminal_style": "bash"
 }

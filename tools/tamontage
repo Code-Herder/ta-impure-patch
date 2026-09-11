@@ -371,6 +371,15 @@ TERMINAL_STYLES = {
         border=(46, 82, 56), border_w=0.002, cursor="block",
         pad=0.055, tokens=None, scanlines=True, glow=0.35,
         fscale=1.0, valign="top"),
+    # The shipped look: the plain bash window, but with Chrome's three window
+    # controls (minimise / maximise / close) rather than macOS traffic lights.
+    "bash": dict(
+        bg=(14, 17, 21), fg=(226, 230, 236), dim=(120, 128, 138),
+        prompt=(126, 214, 135), out=(150, 200, 255), radius=0.0,
+        header="buttons", header_bg=(32, 36, 42), header_fg=(154, 160, 166),
+        border=(210, 214, 220), border_w=0.0035, cursor="block",
+        pad=0.028, tokens=None, scanlines=False, glow=0.0,
+        fscale=1.0, valign="top"),
     # The command is the hero of the first seven seconds, so set it like one:
     # big type, the block composed against the window rather than clinging to
     # the top edge. The other styles leave ~80% of a 4:3 window empty, which is
@@ -466,6 +475,25 @@ class Terminal:
                 d.rectangle([bw, bar - rad, w - 1 - bw, bar], fill=st["header_bg"])
             else:
                 d.rectangle([bw, bw, w - 1 - bw, bar], fill=st["header_bg"])
+            if st["header"] == "buttons" and bar >= 10:
+                # Chrome's controls: minimise, maximise, close — flat grey
+                # glyphs at the right, not macOS dots.
+                col = st["header_fg"]
+                lw = max(1, int(bar * 0.055))
+                g = bar * 0.26                     # glyph half-extent
+                cell = bar * 1.7
+                cy = bar / 2
+                right = w - bw - cell * 0.55
+                for n in range(3):
+                    cx = right - cell * (2 - n)
+                    if n == 0:                                   # minimise
+                        d.line([(cx - g, cy), (cx + g, cy)], fill=col, width=lw)
+                    elif n == 1:                                 # maximise
+                        d.rectangle([cx - g, cy - g, cx + g, cy + g],
+                                    outline=col, width=lw)
+                    else:                                        # close
+                        d.line([(cx - g, cy - g), (cx + g, cy + g)], fill=col, width=lw)
+                        d.line([(cx - g, cy + g), (cx + g, cy - g)], fill=col, width=lw)
             if st["header"] == "dots" and bar >= 8:
                 r = bar * 0.22
                 for i, col in enumerate([(255, 95, 86), (255, 189, 46), (39, 201, 63)]):

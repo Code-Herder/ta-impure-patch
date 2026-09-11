@@ -37,7 +37,10 @@ terrain colour.
 ## The terminal
 
 `terminal_style` (per script, or `style` per window) picks from `TERMINAL_STYLES`:
-`classic`, `soft`, `chromeless`, `phosphor`, `hero`. Compare them with
+`classic`, `soft`, `chromeless`, `phosphor`, `bash`, `hero`. **`bash` is the
+shipped look** (chosen 2026-09-10): the plain bash window, but with Chrome's three
+window controls — minimise, maximise, close, flat grey at the right — rather than
+macOS traffic-light dots. Compare them with
 `promo/prototype-cuts/terminal-styles.py`, which renders one full frame each plus a
 sheet.
 
@@ -269,7 +272,7 @@ evidence**, and a caption with no row here does not go in the film.
 | "Every fight is a file." / `scenarios/<name>.json` | VERIFIED | `scenarios/*.json`, 63 of them; `scenario validate` / `expand` / `apply` / `load` |
 | "Instances share nothing." / "own game dir · own config · own window" | VERIFIED | each instance is `tagpu/instances/<name>/gamedir/` with its own config and window (`ta-capture`, `ta-drive`) |
 | "Run one." / "or as many as the machine will hold" | **DELIBERATELY VAGUE** | nobody has measured how many instances the reference setup sustains, and the owner chose (2026-09-10) to keep the wording aspirational rather than spend a session measuring it. No count goes on screen unless it has been run |
-| "A test harness that happens to look like a war." | opinion | a characterisation, not a measurement; fine as the closing line |
+| "Control units, spawn more on demand, send any command to a scenario as it runs." | VERIFIED (one caveat) | `tacli order` is "give units an order (no mouse, world coords)"; `scenario apply` is "mutate a live game", compiling entities into a **spawn table** applied from a detour inside the game tick (`research/notes/scenario-format.md`); ~18 verbs act on a live instance (`keys click order wheel eye gui arm peek weapons shot glshot log roster wait ui switches scenario apply`). **Caveat:** "any command" is loose — `create`/`launch`/`rm` are not sent *to* a running game. True in spirit, slightly overclaimed literally |
 
 **The grid is a composite, and that is a disclosure, not a detail.** The wide shot
 tiles a handful of real clips across 1600 cells. It is an ordinary montage technique

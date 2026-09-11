@@ -26,6 +26,7 @@ AT = 6.4
 W, H = 2560, 1440
 
 NOTES = {
+    "bash": "the shipped look: bash titlebar with Chrome window controls",
     "hero": "big type, block composed against the window — the command IS the shot",
     "classic": "what shipped: traffic lights, hard 1px border, tight padding",
     "soft": "rounded, muted chrome, title only, bar cursor, generous padding",
