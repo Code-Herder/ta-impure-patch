@@ -80,6 +80,21 @@ void tagpu_fogwide_init(void);
    every scroll, so in a live game that is the SIM TICK rate whenever anything
    is moving, ~30/s at gamespeed 10 (see the tick's own comment for the number).
 
+   TWO DIFFERENT RATES, and the pair reads as a contradiction if they are not
+   kept apart. This function is called on the DRAW path, not the sim tick:
+   `0x4848E0`'s sole call site is `0x469D8E` inside the per-frame world draw
+   (VERIFIED by objdump against the pristine exe, 2026-09-11 — exactly one
+   `call 0x4848e0` in the image). That path turns over at the `DrawGameScreen`
+   rate, MEASURED at 443/s at 1920x1080 and ~900/s at 1024x768 against a
+   presenter holding 60, and it keeps running with the sim PAUSED. What runs at
+   the sim rate is the REBUILD, because `rebuilt` is cleared by LOS stamps and
+   nothing stamps while the sim is stopped.
+
+   The consequence for the retire ring: `fogw_drain` is at the top of this
+   function, so retired blocks still come back while the game is paused. They
+   stop coming back only when this function stops being called at all — terrain
+   ownership disarmed, or the shell — and that is a strand, not a fault.
+
    AT EVERY ZOOM, since G13s. It does not ask what the level is: the level is
    the render thread's to publish, and that thread is the one that decides,
    mid-frame, to draw the first zoomed-out frame of a gesture — so a producer
