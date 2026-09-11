@@ -2068,6 +2068,22 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* the unit atlas's frame: recycle if full, arm and step its Classic++
        restore -- before any face asks it for a UV */
     tagpu_r3d_atlas_frame(pal);
+    /* THE PAIR IS TWO UNSYNCHRONISED LOADS OF ENGINE MEMORY, AND THE GATE
+       BELOW IS A VALUE FILTER, NOT THE SAFETY ARGUMENT (cross-thread-engine-
+       reads.md §5). What holds it up: the level teardown 0x485980 frees the
+       array and nulls `begin` (0x485A27) inside the cascade tagpu_reclaim
+       fences, so between games the pair is refused here. What does NOT: the
+       next level's load, 0x4854A0 from 0x4918D4, runs with this thread live
+       and stores `begin` at 0x485525, memsets the whole array, makes two more
+       allocations, and only then stores `end` at 0x4855D6 -- the ONLY store
+       to main+0x1435B in the binary, so `end` is never nulled. For the length
+       of that memset the pair is (new begin, last game's end): the same
+       block and nothing shows, a lower block and the walk below runs past the
+       new allocation. Alignment plays no part in it. The engine publishes the
+       slot count (u16 main+0x14351, = 10*[main+0x37EE6]+1 at 0x4854EF) BEFORE
+       `begin` and sets end = begin + (count-1)*0x118, so that exact relation
+       would refuse every skew that is not benign; closing a torn load as well
+       wants the pair published from the game thread. Neither is done yet. */
     char* beg = *(char**)(ta + OFF_BEGIN);
     char* end = *(char**)(ta + OFF_END);
     if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return;
@@ -2155,6 +2171,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int fogMode = 0;
     s_fogGrid = NULL; s_fogCells = 0; s_fogLut = 0;
     {
+        /* PER MAP, NOT PER FRAME: LoadMap 0x483610 builds this descriptor and
+           its buffer once (0x483C03 / 0x483C96), the builder 0x4843C0 only
+           rewrites cells, and the only free is the map-free routine 0x483DD0,
+           inside the teardown cascade tagpu_reclaim fences. That lifetime is
+           the argument; the probe below is a sanity net (cross-thread-engine-
+           reads.md §4). Cells rewritten under this read cost one frame of
+           mixed fog, bounded by cols*rows <= cells. */
         const int* fg = *(const int* const*)(ta + OFF_FOGGRID);
         if (ptr_ok(fg) && !IsBadReadPtr(fg, 16)) {
             const unsigned short* buf = (const unsigned short*)(size_t)fg[0];

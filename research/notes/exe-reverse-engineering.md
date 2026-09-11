@@ -326,22 +326,32 @@ then **fixed for that session** — which is the worst possible diagnostic signa
 bug of this shape reproduces perfectly inside one launch and not at all in the next. Why the
 engine does it is not established; the effect is a per-run jitter of every field's address.
 
-For a field at `main+N`, over the 1000 reachable pads:
+For a dword field at `main+N` with `N ≡ 3 mod 4` — which every offset this project reads across
+threads is (`0x142F3`, `0x142F7`, `0x1431F`, `0x1421F`, `0x14357`, `0x1435B`) — over the 1000
+reachable pads:
 
-| | `main+0x142F7` (a followed-object pointer) |
+| | share of launches |
 | --- | --- |
-| 4-aligned | **25.0 %** of launches — exact, and independent of the allocator's own base |
-| crosses a 64-byte cache line | **4.5–4.8 %**, depending on that base (4.7 % if malloc returns 64-aligned) |
+| 4-aligned | **25 %** — exact, and independent of the allocator's own base |
+| tear-capable on **Intel's** documented guarantee: the dword crosses a 64-byte line | **~4.7 %** — SDM 3A §8.1.1: a P6-or-later core keeps any access that fits inside one cache line atomic, aligned or not |
+| tear-capable on **AMD's** documented guarantee: the dword crosses an aligned 8-byte boundary | **37.5 %** — APM vol. 2 §7.3.2: single loads and stores are "naturally atomic … as long as they do not cross an aligned 8-byte boundary" |
+| misaligned at all | 75 % — **not a tearing condition on either vendor** |
 
-**The load-bearing number is the first one read the other way round: 75 % of launches have the
-field misaligned at all.** That one survives every assumption. The cache-line figure additionally
-assumes a base alignment nobody has established, and `GetTickCount`'s ~15.6 ms granularity means
-the reachable residue set is coarser than 1000 values — so quote "about one launch in twenty",
-not 4.7 %. Every offset this project reads across threads (`0x142F3`, `0x142F7`, `0x1431F`,
-`0x1421F`, `0x14357`) is ≡ 3 mod 4, so they all share the same 25 %.
+*[CORRECTED 2026-09-11. Until then this section called the 75 % "the load-bearing number" and
+quoted "about one launch in twenty" as the tearing rate. The first is wrong: both vendors document
+atomicity for misaligned accesses that stay inside their unit, so misalignment alone tears nothing.
+The second is Intel's figure only; the reference setup is an AMD part, and on its documented
+guarantee more than a third of launches leave each of these fields tear-capable. Whether a Zen core
+actually splits an access inside a cache line has not been measured here — assume the documented
+figure.]* The cache-line figure assumes a 64-aligned malloc base, which nobody has established, and
+`GetTickCount`'s ~15.6 ms granularity makes the reachable residue set coarser than 1000 values; the
+8-byte figure has neither caveat, since `7n mod 8` walks every residue.
 
-An x86 access that crosses a cache line is not atomic (SDM 3A §8.1.1), so in about one launch in
-twenty a cross-thread reader can observe a half-written field. **The rule this gives:**
+**The tear is not the mechanism behind any realistic failure, though.** Every multi-word engine
+read — a `{begin, end}` pair, a `{buf, cols, rows, cells}` descriptor — is several loads that are
+never atomic *as a set*, in 100 % of launches, aligned or not. That skew is what the audit in
+[cross-thread engine reads](cross-thread-engine-reads.md) is about; a torn single load is a rarer
+variant of the same outcome. **The rule this gives:**
 
 * "it is one aligned 32-bit slot, which x86 loads and stores atomically" is true of **our own
   statics** (the compiler aligns them — `tagpu_zoom.h`'s published view is fine) and **false of
@@ -387,15 +397,58 @@ check catches most skews and ships the rest — which by this project's own stan
 better odds rather than a fix. Use it as a cheap refusal on top of a real argument (a lifetime
 fence, a thread), never as the argument itself.
 
-**Not swept, and worth a pass of its own [2026-09-10].** A review sweep of the fork found nine
-places where an engine field is written by one thread and read by the other. Most are coordinates
-or counts whose consumer bounds them. The one it rated most dangerous is the unit array's
-`begin`/`end` pair (`main+0x14357`/`+0x1435B`) read at nine sites as two unsynchronised loads and
-used as the bounds of a `+= 0x118` walk that dereferences each slot, with no mutual-consistency
-check at all; its skew window is a level change, when the two can name different allocations. None
-of this was addressed in the G13u landing that found it. Note before acting: `tagpu_reclaim`'s
-teardown gate already covers some of those sites, so the first job is establishing which are
-uncovered rather than writing nine diffs.
+**Swept and audited [2026-09-11].** The review sweep of 2026-09-10 found nine places where an
+engine field is written by one thread and read by the other; the audit of them, writer by writer
+against this binary, is [cross-thread engine reads](cross-thread-engine-reads.md) §5, and the writers
+it established are the next section here. The short form: the unit array's `begin`/`end` pair
+(`main+0x14357`/`+0x1435B`) is the one open hazard, and its window is not the teardown — which
+`tagpu_reclaim` fences — but the next level's **load**, where `0x4854A0` stores `begin`, memsets the
+array, and only then stores `end`, with `end` never nulled in between (`0x4855D6` is its only store
+in the binary). The fog descriptor, tile set, tile map, feature map, minimap surfaces and projectile
+array are per-map allocations the fenced cascade frees and the load republishes in one store each,
+with `LoadMap` writing the dimensions before the pointers, so they are safe by ordering; the
+particle layers' vectors grow mid-play and were already catalogued as `tagpu_reclaim`'s next
+client. The 2026-09-03 fog faults above predate the fence by three days (`55bc8e5` on 09-03,
+`2062b19` on 09-06), and the descriptor is freed only by that cascade — consistent with the
+lifetime reading, not proof of it.
+
+## The per-map arrays — who allocates, who frees, and in what order — mapped by us
+
+[MEASURED 2026-09-11, this project — `objdump -d -M intel` of the pristine build: every direct
+store to each slot of `main` listed below, then the routines around them. Established by the
+cross-thread audit ([cross-thread engine reads](cross-thread-engine-reads.md) §4), which needed to
+know, for each field the render thread reads, whether it changes per tick, per map, or never.]
+
+**The two routines that bracket a level.** The teardown cascade `0x491B60` (the one
+`tagpu_reclaim` wraps) frees in this order: `0x485980` the unit array (call at `0x491B95`),
+`0x471DE0` the particle layer table (`0x491B9A`), `0x466AA0` the minimap surfaces (`0x491BAE`),
+`0x483DD0` the map (`0x491BB3` — it reaches the feature teardown `0x422170` and frees the tile
+set, tile map, feature map, wreck records and fog descriptor), `0x42DB90` the model templates
+(`0x491C21`), `0x499A80` the projectile array (`0x491C30`). The level load — the routine that
+calls `LoadMap` at `0x4918C0`, entry not traced — allocates in this order: `0x471D90` layers
+(`0x4918B1`), `0x499A30` projectiles (`0x4918B6`), `0x483610` `LoadMap` (`0x4918C0`), `0x4854A0`
+the unit array (`0x4918D4`), and later `0x4669B0` the minimap (`0x4919C3`). Between the two the
+render thread is live: the reclaim post hook clears its flag as soon as `0x491B60` returns.
+
+| Field | What | Published by the load | Freed / nulled by the teardown |
+| --- | --- | --- | --- |
+| `main+0x14351` | the unit array's **slot count**, `u16` = `10·[main+0x37EE6] + 1` (the name is <span class="pill pill-warn">INFERRED</span>; the arithmetic is not) | `0x4854EF`, **before** `begin` | untouched |
+| `main+0x14357` / `+0x1435B` | unit array `begin` / `end`, stride `0x118` | `0x4854A0`: `MEM_Alloc 0x4D83B0` of `count·0x118`; `begin` at `0x485525`; `rep stos` over the whole array; two more allocations (`+0x1435F` at `0x485596`, `+0x14363` at `0x4855AA`); `end = begin + (count−1)·0x118` at `0x4855D6` | `0x485980`: `MEM_Free 0x4D85A0` at `0x485A17`, `begin = 0` at `0x485A27`, `+0x1435F`/`+0x14363` nulled. **`end` is never nulled — `0x4855D6` is the only store to `+0x1435B` in the binary** |
+| `main+0x14233` / `+0x14237` | map W / H in 16-px tiles | `LoadMap`, through `ebp = main+0x141FB` (`0x483627`): `[ebp+0x38]` at `0x483881`, `[ebp+0x3C]` at `0x483892` — **before every pointer below** | untouched; stale until the next load |
+| `main+0x1428B` | `TILE_MAP` | `[ebp+0x90]` at `0x483969` | `0x483DD0`: nulled at `0x483EED` |
+| `main+0x14287` | `FeatureMap` | `[ebp+0x8C]` at `0x4839A2` | nulled at `0x483EE2` |
+| `main+0x14283` | `TILE_SET` `{count, pixels}` | `[ebp+0x88]` at `0x483B68` | nulled at `0x483ECA` |
+| `main+0x1421F` | fog descriptor `{buf, cols, rows, cells}` | `[ebp+0x24]` at `0x483C28` (struct `0x483C03`, buffer `0x483C96`) | `free 0x4B4F20` twice at `0x483F06`/`0x483F0F`, nulled at `0x483F1C` |
+| `main+0x1420B` | wreck records, stride `0x30` | not traced (another base) | one direct store, `0x422214`, inside the feature teardown |
+| `main+0x141F7` / `+0x141F3` | projectile array / live count, stride `0x6B` | `0x499A30`: `MEM_Alloc(0x7D64)` = **300 slots**, pointer at `0x499A49`, count zeroed at `0x499A6A`; the count is rewritten by the sim at 13 sites (`0x49AF76` … `0x49DF3F`) | `0x499A80`: `MEM_Free`, nulled at `0x499A9A` |
+| `main+0x38D77` | particle layer table, 10 × `{…, begin, end}` | `0x471D90`, pointer at `0x471DCB`; each layer's vector and every object's sub-vector grow **mid-play** (`0x4732E0`) | `0x471DE0`, nulled at `0x471E97` |
+| `main+0x142DB` / `+0x142DF` / `+0x142E3` | minimap composite / fogged base / scaled map (8bpp offscreens) | the minimap build: `0x4669DA`, `0x466A05`, `0x46682E` | `0x466AA0`: `0x466AF5`, `0x466AE9`, `0x466ADD` |
+| `main+0x37E37` / `+0x37E3B` | view W / H | `0x49821D` / `0x498237` (the view-size setter), plus the fork's `tagpu_vpwide` from the render thread | — |
+
+The map-free routine also nulls `+0x141FB`, `+0x141FF`, `+0x14203`, `+0x14273`, `+0x14293` and
+`+0x14297` (`0x483EA7..0x483F2E`). **Negative results:** no store to `+0x14233`/`+0x14237` exists
+outside `LoadMap`'s `ebp` form; no routine other than `0x4854A0` and `0x485980` touches `+0x14357`;
+nothing resizes the fog grid between map loads.
 
 ## The camera module — mapped by us
 

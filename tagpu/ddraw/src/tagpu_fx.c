@@ -727,6 +727,15 @@ static void gather_fx(const TAGPU_FXVIEW* v)
     char lb[200];
 
     /* ---- projectiles (0x49BE60) ---- */
+    /* The array is per game: 0x499A30, from the level load at 0x4918B6,
+       allocates it as 0x7D64 bytes = exactly 300 slots of PROJ_STRIDE, and
+       0x499A80 frees and nulls it inside the teardown cascade tagpu_reclaim
+       fences -- that lifetime, not the probe, is why `pbase` is readable here.
+       `np` is the live count the sim rewrites (13 store sites); it is at most
+       300 and cannot tear into a large value, both operands having zero upper
+       bytes, so the 8192 cap is 27x looser than the allocation. GAP: a cap of
+       300 would make the walk exact by construction (cross-thread-engine-
+       reads.md §5). */
     int np = *(const int*)(ta + OFF_NPROJ);
     const char* pbase = *(const char* const*)(ta + OFF_PROJ);
     if (np > 0 && np <= 8192 && ptr_ok(pbase) && !IsBadReadPtr(pbase, (SIZE_T)np * PROJ_STRIDE)) {

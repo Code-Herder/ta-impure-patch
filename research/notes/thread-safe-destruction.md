@@ -19,7 +19,7 @@ thread reads).*
 | **Pattern** | **built** 2026-09-06 as `tagpu/ddraw/src/tagpu_reclaim.c` (G14h), on by default, `tagpu_reclaim.off` disables — see **GPU status, hooks & limits** §2.7 for the landed shape and the log lines |
 | **First client** | the model object `Object3do` (units + wrecks + features), via `FreeObjectState 0x45AAA0` — landed |
 | **Second client** | the **model templates** and their pointer table, via the two `MEM_Free` call sites inside `0x42DB90` — landed 2026-09-09, §6c |
-| **Next clients** | the two particle heap surfaces (sub-vector, layer array); the fog grid separately |
+| **Next clients** | the two particle heap surfaces (sub-vector, layer array); the unit array's `begin`/`end` publish at level load, which the teardown wrap does not reach ([cross-thread engine reads](cross-thread-engine-reads.md) §5). The fog grid is per map and already behind the teardown wrap (§3) |
 
 ## 1. The answer in one paragraph
 
@@ -76,13 +76,17 @@ That single rule tells you, per object type, whether it needs the pattern.
 | **Model templates (`Model3DONode`) and their pointer table** — per TYPE, one block each | A | `0x42DB90` in the teardown cascade: `MEM_Free 0x4D85A0` per model (`0x42DC01`) and once for the table (`0x42DCB6`) | **landed 2026-09-09** — both call sites redirected, §6c |
 | **Particle sub-vector** (smoke/fire/nano per-object point list) | A | each particle destructor `MEM_Free`s `obj+0x10` (nano `0x471560`, fire `0x4716A0`, smoke2 `0x474D10`, smoke1 `0x475110`, flare `0x471430`, wake `0x4717E0`) | latent UAF — same mechanism, fold in next |
 | **Particle layer pointer-array** (during growth) | A | `std::vector` grow `0x4732E0` frees the old array | latent UAF, only while a layer grows |
-| **Screen fog grid** | A | reallocated mid-frame; the indexed read has no `IsBadReadPtr` | second, independent hazard — wants a per-frame snapshot, not this detour |
+| **Screen fog grid** — the descriptor `*(main+0x1421F)` and its buffer | A, **per map** | built once by `LoadMap 0x483610` (`0x483C03` the descriptor, `0x483C96` the buffer); freed only by the map-free routine `0x483DD0`, inside the teardown cascade at `0x491BB3`; the builder `0x4843C0` rewrites cells only | **under the teardown wrap** since G14h. *[Corrected 2026-09-11: this row said "reallocated mid-frame" and asked for a per-frame snapshot; nothing resizes the grid between map loads — [cross-thread engine reads](cross-thread-engine-reads.md) §4.]* |
 | Projectiles, explosions, flying debris, the 76-byte particle objects, unit slots, wreck records, unit/feature defs, model templates, main-block fields | B / stable | fixed arrays, arenas, pools, per-map or session lifetime | already safe; a stale read is at worst one wrong frame |
 
 So the pattern must cover exactly the model object now (the crash), and the two particle heap
 surfaces as a follow-up. Everything in the projectile and effects passes is already crash-safe. The
-fog grid is a separate class-A hazard with a different lifetime (rebuilt each frame), best closed by
-copying it once per frame rather than by a destructor detour.
+fog grid's descriptor and buffer are per-map allocations that the teardown cascade frees, so the
+teardown wrap (§6) covers them; only its cells change per draw, and a cell read under the builder's
+write is one frame of mixed fog, bounded by `cols*rows <= cells`. What the teardown wrap does NOT
+cover is the next level's **load** — the flag clears in the post hook the moment `0x491B60`
+returns — and the one per-map object whose publish is not a single store is the unit array's
+`begin`/`end` pair ([cross-thread engine reads](cross-thread-engine-reads.md) §5).
 
 ## 4. The mechanism
 
@@ -163,9 +167,14 @@ that reaches the non-nulling bulk `FreeObjectState` caller `0x4221C4`
 queue must not free into a heap being torn down. Detour `0x491B60` at entry (first five bytes
 `A1 E8 1D 51 00`, a clean steal, resume `0x491B65`): set a teardown flag, wait briefly for the render
 thread to leave its pass (a short handshake using interlocked stores on the flag and a render-thread
-"busy" flag — the one place a hardware fence is required — with a timeout that degrades to a safe
-leak if the render thread is stuck), flush the queue while the reader is idle, then let the cascade
-free normally. The tick detour clears the flag on the next live game. While the flag is set, any
+"busy" flag — the one place a hardware fence is required — with a timeout after which the queue is
+KEPT, a safe leak, **but the cascade's own frees of the map, unit array, minimap, particle layers
+and projectiles proceed against a reader that may still be mid-pass**: the one timing-dependent
+hole in the design, named as such in [cross-thread engine reads](cross-thread-engine-reads.md)
+§2), flush the queue while the reader is idle, then let the cascade free normally. The **post
+hook** clears the flag the moment `0x491B60` returns — not, as this sentence said until
+2026-09-11, at the next live game — so the next level's load runs with the reader live; what that
+leaves open is the unit array's two-store publish, same page §5. While the flag is set, any
 death frees synchronously, which is safe because the reader is quiesced.
 
 ### 6a. The level generation — what the deferral does NOT cover
@@ -479,6 +488,13 @@ renders the correct final frame rather than garbage, needs no hot-path lock, and
 the simulation.
 
 ## Changelog
+
+- **2026-09-11** — three corrections from the cross-thread audit ([cross-thread engine
+  reads](cross-thread-engine-reads.md)): the fog grid is per map and under the teardown wrap, not
+  "reallocated mid-frame" (§3); the flag clears in the post hook, not at the next live game, so the
+  level LOAD is outside the wrap (§6, and the unit array's `begin`/`end` publish is the one thing
+  that leaves exposed); and the pre hook's timeout is named as the timing-dependent hole it is —
+  the queue is kept, the cascade's own frees are not (§6).
 
 - **2026-09-09** — **second client landed: the model templates** (§6c). `0x42DB90`'s two
   `MEM_Free` call sites are redirected onto the same ring, so the templates outlive any render

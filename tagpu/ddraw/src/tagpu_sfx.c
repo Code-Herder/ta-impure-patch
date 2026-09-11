@@ -167,6 +167,16 @@ void tagpu_sfx_gather(const TAGPU_FXVIEW* v, int from, int to)
 {
     if (s_armed != 1) return;
     const char* ta = v->ta;
+    /* NO LIFETIME ARGUMENT EXISTS FOR WHAT FOLLOWS, and the probes are not
+       one. The layer table itself is per game (0x471D90 allocates it from the
+       level load, 0x471DE0 frees and nulls it inside the teardown cascade
+       tagpu_reclaim fences), but each layer's {begin,end} pair and every
+       object's sub-vector are std::vectors the game thread GROWS mid-play,
+       freeing the old array (0x4732E0): the pair can be read skewed, and a
+       consistent pair can point at memory just freed. thread-safe-
+       destruction.md §3 lists both as the next reclaim clients; until then
+       this pass is exposed and the probes only make a fault rarer
+       (cross-thread-engine-reads.md §5). */
     const char* layers = *(const char* const*)(ta + OFF_LAYERS);
     if (!ptr_ok(layers) || IsBadReadPtr(layers, NLAYER * 0x10)) return;
     int alphaOn = (tagpu_fx_caps() & 0x20) != 0;   /* the alpha blit is gated */

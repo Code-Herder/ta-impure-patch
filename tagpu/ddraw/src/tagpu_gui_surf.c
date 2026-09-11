@@ -1464,9 +1464,17 @@ static void sharp_minimap(const TAGPU_FRAME* f)
     if (s_mmbase) {
         /* THE ENGINE'S OWN PAIR, this frame: fogged base in R, unfogged in G.
            Both are 8bpp OFFSCREENs (w, h, pitch, base as four ints), read here
-           on the render thread while the game thread may be rewriting them —
-           the same standing as the fork's own surface upload, and the worst a
-           torn read can do is put one frame's fog against another's. 13 KB. */
+           on the render thread while the game thread repaints their PIXELS —
+           that part has the same standing as the fork's own surface upload,
+           and the worst it costs is one frame's fog against another's. The
+           descriptors are another matter: they carry a base pointer and a
+           pitch, so a stale or torn one is a wild read, not a stale picture.
+           What makes them readable is their lifetime — the minimap build
+           (0x4669B0, from the level load at 0x4919C3) stores the three
+           pointers once, and 0x466AA0 frees and nulls them inside the
+           teardown cascade tagpu_reclaim fences — and the cross-check below
+           is the DATA bound on top of it (cross-thread-engine-reads.md §4).
+           13 KB. */
         const int* fo = *(const int* const*)(ta + MM_FOGBASE);
         const int* so = *(const int* const*)(ta + MM_SCALEDMAP);
         const int* co = *(const int* const*)(ta + MM_COMPOSITE);

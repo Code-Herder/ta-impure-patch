@@ -607,6 +607,13 @@ static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile
         }
         s_c.gafwreck++;
         if (!s_wreck) return;
+        /* The record table is per map: its slot has one direct store in the
+           binary, 0x422214 inside the feature teardown the cascade reaches
+           (0x491B60 -> 0x483DD0 -> 0x422170), so it lives and dies under the
+           tagpu_reclaim fence [the load-side store goes through another base
+           and was not traced]. That lifetime is the argument; the index is
+           the tile's own, and the probe is a net (cross-thread-engine-reads.md
+           §4). */
         if (!ptr_ok(recs)) return;
         rec = recs + (size_t)*(const unsigned short*)(tile + FT_WIDX) * WR_STRIDE;
         if (IsBadReadPtr(rec, WR_STRIDE)) return;

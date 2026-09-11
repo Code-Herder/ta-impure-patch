@@ -1,0 +1,270 @@
+# Cross-thread engine reads — the game thread, the render thread, and what may be read across them
+
+*An evolving reference for the other half of the threading problem. [Thread-safe
+destruction](thread-safe-destruction.md) is about objects the game thread FREES under the render
+thread; this page is about every engine field the render thread READS, or writes, while the game
+thread owns it — which thread runs what, what the fence covers and what it does not, what x86
+actually promises about a load of a misaligned engine field, and the audit of every such site as
+of 2026-09-11. Engine addresses are* <span class="pill pill-ok">VERIFIED</span> *against
+`pristine/TotalA.exe.pristine` (ImageBase `0x400000`) with `i686-w64-mingw32-objdump -d -M intel`
+unless marked* <span class="pill pill-warn">INFERRED</span>*. First written 2026-09-11 from the
+audit that followed the G13u landing review; see also **GPU status, hooks & limits** §3 (the
+known-gaps table), **Reverse-engineering the exe** (the misaligned `main`, and the per-map array
+census this page leans on), and **Sizing the wide fog grid** §2 (the one fault this class has
+produced).*
+
+## Status
+
+| | |
+|---|---|
+| **Threads that touch engine memory** | two: the engine's own thread, which is the sim and every draw; and the fork's render thread, created at `dd.c:1354` |
+| **Fence** | `tagpu_reclaim`'s wrap of the level teardown `0x491B60`, the pass counters, and the gate at `tagpu_overlay.c:590` — covers the level **teardown**, not the next level's **load** (§2) |
+| **Audit** | the nine sites of the G13u sweep, each classified against the writer it reads (§5): one open hazard, one already catalogued, six under the fence with two named residuals |
+| **Open** | §7 |
+
+## 1. The two threads, and the one that is not
+
+The engine is single-threaded. One thread runs the simulation, `DrawGameScreen`, every draw call
+and every allocation — call it **the game thread**. It owns every byte under
+`main = *(char**)0x511DE8`, and it turns `DrawGameScreen` over roughly 7–15× per presented frame
+(443/s at 1920×1080 — [exe reverse engineering](exe-reverse-engineering.md)), so a field it
+rewrites per draw is rewritten several times inside one of our frames.
+
+The fork adds **the render thread**: cnc-ddraw's presenter, `g_ddraw.render.thread`, which once per
+presented frame uploads the engine's surface and calls `tagpu_overlay_draw` (`render_ogl.c`) between
+`tagpu_reclaim_pass_begin` and `pass_end`. Everything the fork draws itself — the native unit pass,
+terrain, features, effects, markers, the UI layer, the writeback — runs there and reads engine
+memory while the game thread is mutating it. It also **writes** a few engine fields: the eye and
+the scroll target (behind `clamp_pair()`), the view rect through `tagpu_vpwide`, the minimap's view
+rect. `gpu-status.md`'s *fields we write* table is the authority on those.
+
+The fork's game-thread code is its detours: the `Game_MainLoopTick` detour at `0x4969D2` (the
+reclaim drain, the scenario creation pass, the zoom follow release), the own-the-draw detours, the
+teardown pre and post hooks, the gadget callbacks. Anything that runs from one of those is on the
+game thread and reads engine memory exactly as the engine does — **no exposure**, whatever it reads.
+`tagpu_order.c`, `tagpu_weapons.c`'s sim side and `tagpu_scenario.c`'s resolvers are in this class.
+
+`fog_alarm_thread` (`tagpu_fx.c`) exists only to show a message box off the render thread. It reads
+nothing.
+
+## 2. The fence — what it covers, and the two holes
+
+The mechanism is `tagpu_reclaim.c`'s, described in full in [thread-safe
+destruction](thread-safe-destruction.md) §4–§6; what matters here is its *shape*:
+
+1. **On the render thread**, `pass_begin` increments `s_started` and latches the teardown flag for
+   the pass; `tagpu_overlay_draw` runs; the gate at `tagpu_overlay.c:590` replays the latch and
+   returns before the first engine read if it was set; `pass_end` publishes `s_completed`.
+2. **On the game thread**, the pre hook on `0x491B60` sets the flag and spins until
+   `s_completed == s_started` — the reader is between passes — for at most `RC_TEARDOWN_WAIT_MS`
+   (1000 ms), then lets the cascade free. The post hook, run the moment `0x491B60` returns, bumps
+   the level generation and **clears the flag**.
+
+**What the cascade frees under it** — every per-map array the render thread reads: the unit array
+(`0x485980`), the particle layer table (`0x471DE0`), the minimap surfaces (`0x466AA0`), the map
+(`0x483DD0`: tile set, tile map, feature map, fog descriptor and buffer, and through `0x422170` the
+wreck records), the model templates (`0x42DB90`), the projectile array (`0x499A80`), and every
+`Object3do` through `FreeObjectState`. The addresses and store sites are in the exe note's
+*per-map arrays* section.
+
+**What runs before the gate.** Eight `*_flush` calls — the tracer, suppressor, own-draw, effects,
+features, terrain, markers and GUI flushes. Checked 2026-09-11: they are stat loggers and
+90-frame skip watchdogs, and **none of them reads engine memory**, so their position before the gate
+is not an exposure. The on-demand tooling that also runs before it does read engine memory:
+`tagpu_peek_frame`, `tagpu_weapons_frame`, `tagpu_ui_frame`, `tagpu_cat_frame`, the scenario
+detection frame, and the tracer's `sample_composites`. All are trigger-file gated. A `tacli`
+catalogue, peek, UI snapshot or trace issued **during a level change** can therefore fault the render
+thread; that is a tooling hazard, not a play one. So can `writeback_paint`'s opt-in 3DO path on the
+`tagpu_overlay.off` exit, which also precedes the gate.
+
+**Hole 1 — the timeout.** If the reader has not finished its pass within a second (a GL stall, or
+a stuck render thread) the pre hook gives up. The reclaim queue is kept — that part is the "safe
+leak" the note describes — but **the cascade's own frees proceed** against a reader that may still
+be mid-pass, and everything in §4 becomes a live use-after-free for that one teardown. This is the
+design's one timing-dependent mitigation, and it should be cited as one, never as a guarantee.
+
+**Hole 2 — the load.** The flag clears in the post hook, so the next level's load runs with the
+reader live: `0x471D90` layers, `0x499A30` projectiles, `LoadMap 0x483610`, `0x4854A0` the unit
+array, `0x4669B0` the minimap. For every per-map field but one this is safe **by ordering**: the
+teardown nulled the pointer under the fence, every reader refuses a null, and the load publishes the
+new pointer in one store after the object behind it is complete — `LoadMap` even writes the map's
+dimensions (`0x483881`/`0x483892`) before any of its pointers (`0x483969` onward), so a reader that
+sees a new pointer sees the new dimensions. The one field published in **two** stores is the unit
+array's `begin`/`end` pair, which is §5's finding.
+
+## 3. What x86 promises about a load of an engine field
+
+**Our own statics are aligned, so one dword is one atomic load.** That is the compiler's doing and
+it is why `tagpu_zoom.h`'s published view, `tagpu_reclaim`'s counters and every fork-side flag can be
+read across threads as single words.
+
+**No engine field is.** `0x41D920` pads the allocation of `main` by `7 · (GetTickCount() % 1000)`
+and stores `base + pad` into `0x511DE8` — verified instruction by instruction, [exe reverse
+engineering](exe-reverse-engineering.md). So every field's alignment is drawn afresh at each launch
+and then fixed for the session. What that costs, for a dword at `main+N` with `N ≡ 3 mod 4` (every
+offset this page is about):
+
+| | share of launches |
+|---|---|
+| 4-aligned | 25 % |
+| tear-capable on **Intel's** documented guarantee — the dword crosses a 64-byte cache line (SDM 3A §8.1.1: anything inside one line is atomic on P6 and later) | ~4.7 % |
+| tear-capable on **AMD's** documented guarantee — the dword crosses an aligned 8-byte boundary (APM vol. 2 §7.3.2: "naturally atomic … as long as they do not cross an aligned 8-byte boundary") | 37.5 % |
+| misaligned at all | 75 % — not a tearing condition on either vendor |
+
+The reference setup is an AMD part, so the honest figure here is the 8-byte one. Whether a Zen
+core actually splits an access inside a cache line has not been measured; assume the documented
+guarantee. Until 2026-09-11 the notes quoted "about one launch in twenty" (Intel's figure) and
+called the 75 % "load-bearing" (it is not).
+
+**Tear versus skew, and why the skew is the one that matters.** A *tear* is one load observing half
+of one value and half of another; it needs a tear-capable launch, and the load and the store must
+coincide. A *skew* is two loads observing values from different generations — `begin` from this
+game, `end` from the last — and it needs nothing: two loads are never atomic as a pair, aligned or
+not, in 100 % of launches. Every multi-word engine read (`{begin, end}`, `{buf, cols, rows, cells}`,
+`{w, h, pitch, base}`) has the skew hazard first and the tear hazard as a rarer variant of the same
+outcome. An audit that starts from residues mod 4 is looking at the wrong thing; start from the
+writer.
+
+**What a tear can and cannot produce.** A tear composes bytes of the old value and bytes of the new,
+at one split offset. Two valid userland pointers, or a pointer and zero, never compose `0xFF` in the
+top byte. That is why the 2026-09-03 fog faults — a `buf` of `0xFFFFFFF7` and of `0xFFFFFEC2` — are
+not a tear ([sizing the wide fog grid](fog-grid-sizing.md) §2) but a freed-and-reused descriptor,
+i.e. a lifetime fault; the guard commit (`55bc8e5`, 09-03) predates the teardown fence (`2062b19`,
+09-06) by three days, and the descriptor is freed only inside that cascade. Consistent with the
+lifetime reading; not proof of it. The one-fault test that would settle it is still §7's.
+
+**The rule.** A torn *coordinate* is survivable when its consumer bounds it, which is why the eye
+and the scroll target are written from the render thread behind `clamp_pair()`. A torn *pointer,
+length or index* is a wild read, and no reader-side check closes it: `ptr_ok` filters a value,
+`IsBadReadPtr` answers a question about the past, and a `lock` prefix on our store does nothing for
+the engine's own plain split load. The only arguments that count are the ones `CLAUDE.md` names — a
+bound the consumer applies to DATA, a lifetime (the fence, or reclaim), or a thread (do it from the
+game thread).
+
+## 4. The census — what the render thread reads, and who writes it
+
+Reader = the render thread unless stated. "Fenced" means freed only by the teardown cascade under
+the pre hook's wait, and republished by the load in one store. The engine addresses are in the exe
+note's *per-map arrays* section.
+
+| Field | Written | Lifetime class | Fenced? | The reader's own bound |
+|---|---|---|---|---|
+| `main+0x14357`/`+0x1435B` unit array `begin`/`end` | `0x4854A0` at load, in **two stores** around a full memset; `0x485980` nulls `begin` only | per map | teardown yes, **load no** (§5) | `ptr_ok` both, `end > begin`, 20000-slot cap — a filter |
+| unit records (the slots themselves) | the sim, every tick | Mode B: a fixed array recycled in place | n/a | every value out of a slot is bounded before use — `ModelId` by `UNITINFOCount`, the shape [thread-safe destruction](thread-safe-destruction.md) §2 describes |
+| `Object3do` behind `unit+0x9E` | freed per death | Mode A | reclaim's first client | — |
+| model templates | freed by `0x42DB90` in the cascade | per map | reclaim's second client + the level-generation caches | — |
+| `main+0x1421F` fog descriptor `{buf, cols, rows, cells}` | `LoadMap` once; the builder `0x4843C0` rewrites **cells** per draw | per map | yes | `cells == ((cols·rows + 7) & ~7)`, `ptr_ok`, dimension caps; a cell read under the builder is one frame of mixed fog, bounded by `cols·rows ≤ cells` |
+| `main+0x1428B` tile map, `+0x14287` feature map, `+0x14233`/`+0x14237` dims | `LoadMap`, dims before pointers | per map | yes | dims capped at 4096 / 2048 per reader |
+| `main+0x14283` tile set `{count, pixels}` | `LoadMap` | per map | yes | `count ≤ MAX_TILES`, identity test before the megabyte probe |
+| `main+0x1420B` wreck records | one direct store, in the feature teardown the cascade reaches | per map | yes | index is the tile's own |
+| `main+0x141F7` projectile array, `+0x141F3` live count | array at load, **300 slots** of `0x6B`; count by the sim at 13 sites | array per map, count per tick (Mode B) | yes | `np ≤ 8192` — 27× the allocation; 300 would be exact |
+| `main+0x38D77` particle layer table; each layer's `{begin, end}`; each object's sub-vector | table at load; the vectors **grow mid-play**, freeing the old array (`0x4732E0`) | table per map; vectors Mode A | table yes, **vectors no** | `LAYER_CAP`, `ns ≤ 4096`, probes — filters only |
+| `main+0x142DB`/`+0x142DF`/`+0x142E3` minimap surfaces `{w, h, pitch, base}` | the minimap build at load; pixels repainted per draw | per map | yes | dims cross-checked across the three, pitches bounded — the shape to copy |
+| `main+0x37E37`/`+0x37E3B` view W/H | the engine's setter `0x49821D`/`0x498237`; **and the render thread**, through `tagpu_vpwide` | per resolution change | n/a | consumers fail closed on a zero; the lost-update case is detected and repaired (`vpwide: REPAIRED`) |
+| `main+0x1431F`, `+0x142F3`/`+0x142F7` eye, scroll target, followed object | the camera stepper, per draw; **and the render thread** for the first two | per draw | n/a | coordinates behind `clamp_pair()`; the followed-object *pointer* is released from the game thread for exactly this reason (G13u) |
+
+## 5. The audit of the G13u sweep — nine sites, one open hazard
+
+The sweep of 2026-09-10 listed nine places where a field written by one thread is read by the
+other, and rated the unit array the headline. Each row below was checked against the writer, not
+the reader.
+
+| # | Site | Verdict | Why |
+|---|---|---|---|
+| 1 | fog descriptor, captured once and held for the frame (`tagpu_native.c`, used by `tagpu_fog_at`) | **not a live hazard; the sweep's mechanism was wrong** | nothing resizes the grid between map loads: the descriptor is built once by `LoadMap`, freed only by the fenced cascade, and the builder rewrites cells only. Holding the pointer for a frame is fine because the frame is inside the pass the fence waits for |
+| 2 | unit array `begin`/`end` | **real, unfenced, alignment-independent** | the level-load skew, below |
+| 3 | particle layers and sub-vectors (`tagpu_sfx.c`) | real, already catalogued | the vectors grow mid-play and free the old array; no fence covers it; listed as reclaim's next client in [thread-safe destruction](thread-safe-destruction.md) §3. The `(se − sb) / stride` without a `% stride` test is a minor filter gap on top |
+| 4 | tile map / feature map + dims (`tagpu_terr.c`, `tagpu_feat.c`) | not a skew hazard | `LoadMap` stores the dims before the pointers, the cascade nulls the pointers under the fence, every reader loads the pointer first — so a reader that sees a non-null pointer sees the matching dims. The "2048×2048 off a smaller allocation" sequence needs the opposite store order |
+| 5 | tile set `{count, pixels}` | same as 4 | same routine, same order, same null |
+| 6 | projectiles `np`/`pbase` | bounded; cap loose | the array is 300 slots, per map, fenced; `np` is a count of at most 300 whose upper bytes are zero in both operands of any store, so it cannot tear into a large value; the 8192 cap should be 300 |
+| 7 | minimap surfaces (`tagpu_gui_surf.c`) | not a live hazard; the comment was wrong, the code right | per map, fenced, dims and pitches cross-checked. The old comment's "the worst a torn read can do is put one frame's fog against another's" was true of the pixels and false of the descriptors, which carry a pointer and a pitch |
+| 8 | view W/H (`tagpu_vpwide.c`) | survivable | both threads write it; a torn dimension fails closed; the lost update is repaired |
+| 9 | eye / scroll target (`tagpu_zoom.c`) | documented | coordinates, bounded before the write |
+
+Residuals common to every fenced row (1, 4, 5, 6, 7): the timeout of §2, and a torn single-pointer
+load at the null-to-new publish, which needs a tear-capable launch *and* the load coinciding with the
+store. Negligible rate; not zero; named here so nobody has to re-derive it.
+
+### The unit array at level load
+
+The sequence, from the binary:
+
+1. **Teardown** `0x485980`, called from the cascade at `0x491B95`: `MEM_Free` the array
+   (`0x485A17`), `begin = 0` (`0x485A27`). `end` is not touched — `0x4855D6` is the **only** store
+   to `main+0x1435B` in the binary.
+2. The post hook clears the fence. The menus run with the reader live; every reader refuses the
+   null `begin`.
+3. **Load** `0x4854A0`, called from the level-load routine at `0x4918D4`: the slot count
+   `u16 main+0x14351 = 10·[main+0x37EE6] + 1` (`0x4854EF`); `MEM_Alloc` of `count·0x118`;
+   **`begin` stored** (`0x485525`); `rep stos` over the whole array; two more allocations;
+   **`end = begin + (count − 1)·0x118` stored** (`0x4855D6`).
+
+For the length of that memset the pair is (new `begin`, last game's `end`). Six render-thread
+readers gate only on `ptr_ok(beg) && ptr_ok(end) && end > beg` plus the 20000-slot cap and then walk
+slots with no per-slot probe: `tagpu_native_frame`, `tagpu_scaffold_frame`, `log_units`,
+`probe_unit_model`, `writeback_paint`, `tagpu_mark_gather`. If the allocator hands back the same
+block the skew is invisible. If the new block lands below the old end, the walk runs past the new
+allocation into memory the teardown freed — which on the Wine heap can be unmapped, the note's own
+Mode A premise. Nothing here has faulted; the rate is per game start × the memset's share of a
+frame × heap luck. A torn load of `begin` alone, in a tear-capable launch, is the rarer variant.
+
+**On "a relation is a filter, not a fix".** The `(end − begin) % 0x118 == 0` relation is a filter:
+two unrelated allocations pass it one time in 280. The **exact** relation
+`end == begin + (count − 1)·0x118`, with the count the engine publishes *before* `begin`, is not a
+filter against a skew — a skewed triple passes it only when the skew is benign (same block). It is
+still only a filter against a torn load, since a torn value can coincidentally satisfy it. So it
+belongs as a refusal layer, and the lifetime argument closes the tear.
+
+**The by-construction options.** (a) The shape `tagpu_reclaim` already applies to `0x491B60`,
+applied to `0x4854A0`: a pre hook that sets the flag and waits for pass completion, a post hook that
+clears it — a hold of the order of the memset, once per game start; whether `0x4854A0`'s entry
+bytes detour cleanly is unverified. (b) The same post hook publishing `{begin, end, generation}`
+into aligned fork statics, with the readers taking the pair from there: closes skew and tear both.
+(c) Moving the existing flag's release from the teardown's post hook to the first sim tick of the
+new game, which the destruction note once described as the design: it covers the load with one
+change but blanks the UI layer for the whole time between games. Neither is done; the reads carry
+a comment saying so.
+
+## 6. Rules for a new cross-thread read
+
+1. **Which thread?** A detour or a gadget callback is the game thread — no exposure. The overlay is
+   the render thread — everything below applies.
+2. **Name the writer and its lifetime class** before writing the read. Per session (never
+   rewritten): read freely. Per map: nulled by the cascade under the fence and published by the load
+   — check the publish is *one* store and that anything the pointer's consumer needs (dims, counts)
+   is stored *before* it. Per tick, in place (Mode B): every value out of it is DATA and gets a bound.
+   Grown or freed mid-play (Mode A): it needs reclaim, or it is exposed and the comment says so.
+3. **A multi-word read gets a relation the builder guarantees** — exact where one exists (`end` from
+   `begin` and the count; `cells` from `cols·rows`) — as a refusal layer. It is never the argument.
+4. **A pointer, length or index cannot be made safe on the reader's side.** The argument is a
+   lifetime or a thread. A coordinate can: bound it where it is consumed.
+5. **`ptr_ok` and `IsBadReadPtr` are nets.** Keep them; say so in the comment; never cite them as the
+   reason a read is safe.
+6. **Nothing that reads engine memory runs before the gate** unless it is trigger-gated tooling,
+   and then its `tacli` documentation should say "not during a level change".
+7. **A change to any of this is a `high` review** (`CLAUDE.md`, *Review engine changes*), and the
+   second reviewer's brief is the sequence that breaks the claim, not an opinion on the design.
+
+## 7. Open items
+
+- **The unit array's publish at level load** (§5) — the one open hazard. Pick among the three
+  options; add the exact relation as the refusal layer whichever is chosen.
+- **The particle layers' vectors and the per-object sub-vectors** — reclaim's catalogued next
+  client, still not done.
+- **The timeout** — a timing-dependent mitigation that the cascade's own frees fall through. Either
+  accept it explicitly, per `CLAUDE.md`, or defer the cascade's remaining frees the way the
+  templates' are deferred (§6c of the destruction note), which turns the timeout into a leak rather
+  than a fault.
+- **The projectile cap** — `8192` in `tagpu_fx.c` against an allocation of 300; make it 300.
+- **Tooling before the gate** — document the level-change restriction in the `tacli` skill, or move
+  the trigger frames below the gate at the cost of not serving triggers during a teardown.
+- **The one-fault test for the fog guard** — plumb `cells` into `fog_alarm` so the next trip logs
+  all four descriptor fields and separates a tear from a reused slot.
+- **Zen's split behaviour** — unmeasured; the documented 8-byte guarantee is assumed.
+
+## Changelog
+
+- **2026-09-11** — first version, from the audit of the G13u sweep. Corrected the same day in
+  three other notes: the fog grid is per map and under the fence (destruction note §3), the fence
+  clears in the post hook and not at the next live game (§6), and the alignment figures are
+  vendor-dependent, with the 75 % not a tearing condition (exe note, GPU status).

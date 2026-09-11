@@ -712,6 +712,12 @@ static void ensure_height(const char* ta, unsigned frame)
 /* ---- the atlas: built once per map, never per frame ---- */
 static int ensure_atlas(const char* ta)
 {
+    /* Per map: LoadMap 0x483610 builds the set and stores its pointer at
+       0x483B68, and the map-free routine 0x483DD0 nulls it (0x483ECA) inside
+       the teardown cascade tagpu_reclaim fences. That lifetime is the argument
+       for the two probes below; they are sanity nets, and the identity test
+       is what keeps the megabyte one off the per-frame path (cross-thread-
+       engine-reads.md §4). */
     const int* set = *(const int* const*)(ta + OFF_TILESET);
     const unsigned char* pix;
     unsigned char* buf;

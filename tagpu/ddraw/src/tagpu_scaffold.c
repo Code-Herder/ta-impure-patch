@@ -434,6 +434,11 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     }
 
     /* ---- per-unit occlusion prediction (logged; the G12a exit check) ---- */
+    /* Same pair, same standing as tagpu_native_frame's read of it: refused
+       between games by the teardown fence, exposed for the length of the next
+       level's array memset (begin is stored before end, and end is never
+       nulled). The per-slot probe on the composite frame below is a sanity
+       net, not the argument (cross-thread-engine-reads.md §5). */
     char* beg = *(char**)(ta + OFF_BEGIN);
     char* end = *(char**)(ta + OFF_END);
     int logNow = (f->frame_counter % 300) == 0;
