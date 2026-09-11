@@ -361,7 +361,21 @@ class Instance:
             except FileNotFoundError:
                 return None
             ids += [w for w in found if w not in ids]
-        best = None
+        # Rank the candidates by how much evidence there is that this window is
+        # ours, and take the best -- do not let the first one found stand in.
+        #
+        # A window whose pid cannot be read is NOT evidence of anything, and the
+        # old "first candidate wins" let one become the answer. That is how a
+        # shoot came to grab the window of the instance stopped seconds earlier:
+        # a lingering, title-matching, pid-less window at TA's 640x480 SHELL size
+        # outranked nothing and so won. ffmpeg then refused the capture outright
+        # ("capture area 1024x768 ... outside the screen size 640x480"), or, when
+        # the leftover was the right size, grabbed it until it was destroyed
+        # mid-take and the demuxer failed with BadMatch. Ranking is used rather
+        # than skipping, because some wine windows carry no _NET_WM_PID at all
+        # and refusing those outright would find no window on such a setup.
+        gw, gh = self.meta().get("res", list(DEFAULT_RES))
+        ranked = []
         for wid in ids:
             env = {**os.environ, "DISPLAY": display}
             geom = subprocess.run(["xdotool", "getwindowgeometry", "--shell", wid],
@@ -371,15 +385,16 @@ class Instance:
                 continue
             wpid = subprocess.run(["xdotool", "getwindowpid", wid],
                                   capture_output=True, text=True, env=env).stdout.strip()
-            if pid and wpid.isdigit() and int(wpid) != pid:
-                continue
+            mine = wpid.isdigit() and pid and int(wpid) == pid
+            if pid and wpid.isdigit() and not mine:
+                continue            # demonstrably another process's window
             w, h = int(vals.get("WIDTH", 0)), int(vals.get("HEIGHT", 0))
             rec = (int(wid), int(vals.get("X", 0)), int(vals.get("Y", 0)), w, h)
-            gw, gh = self.meta().get("res", list(DEFAULT_RES))
-            if (w, h) == (gw, gh):
-                return rec          # exact client match wins
-            best = best or rec
-        return best
+            score = (2 if (w, h) == (gw, gh) else 0) + (1 if mine else 0)
+            ranked.append((score, rec))
+        if not ranked:
+            return None
+        return max(ranked, key=lambda r: r[0])[1]
 
 
 # --------------------------------------------------------------------------- create
@@ -2955,6 +2970,12 @@ SCN_SWITCHES = {"drop": 0x1, "cheats": 0x2, "selboxes": 0x4, "invulnfeatures": 0
                 "radar": 0x200, "shootall": 0x400}
 SCN_SWITCH_DEFAULTS = {"shootall": True}    # the universal player convention
 
+# SKIRMISH's two map toggles, by the names the screen uses. They are part of the
+# situation -- a scenario shot for a film wants the whole map in full colour, one
+# written to measure scouting wants the fog -- so they belong in the file rather
+# than in whatever flags the last person happened to type.
+SCN_LOS = {"permanent": 0, "true": 1, "circular": 2}
+
 SCN_SIDES = {"arm": 0, "core": 1}           # --player's side numbering
 SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2}
 
@@ -3205,13 +3226,14 @@ def _scn_entity_body(node, where, default=None):
 def _scn_setup(doc, label):
     """Everything `load` needs before the game exists. `apply` ignores it."""
     setup = {"map": None, "res": None, "unit_limit": None, "clear_existing": True,
+             "los": None, "mapping": None,
              "switches": dict(SCN_SWITCH_DEFAULTS), "players": []}
     node = doc.get("setup")
     if node is None:
         return setup
     w = f"{label}: setup"
     _scn_keys(node, w, optional=("map", "res", "unit_limit", "clear_existing",
-                                 "switches", "players"))
+                                 "switches", "players", "los", "mapping"))
     setup["map"] = _scn_str(node, "map", w, raw=True)
     res = _scn_str(node, "res", w, raw=True)
     if res is not None:
@@ -3223,6 +3245,10 @@ def _scn_setup(doc, label):
     # larger number here would be accepted, reported, and then silently ignored.
     setup["unit_limit"] = _scn_int(node, "unit_limit", w, 20, SCN_MAX_LIMIT)
     setup["clear_existing"] = _scn_bool(node, "clear_existing", w, True)
+    # Both default to None = "leave the screen as it is", which is what `load`
+    # did before they existed; `mapping` then falls back to SCN_MAPPING_DEFAULT.
+    setup["los"] = _scn_str(node, "los", w, choices=SCN_LOS)
+    setup["mapping"] = _scn_bool(node, "mapping", w)
 
     switches = node.get("switches")
     if switches is not None:
@@ -4206,8 +4232,14 @@ def cmd_scenario_load(args):
     res = tuple(args.res) if args.res else (tuple(setup["res"]) if setup["res"] else None)
     wanted_map = args.map or setup["map"]
     limit = args.unit_limit if args.unit_limit is not None else setup["unit_limit"]
-    mapping = SCN_MAPPING_DEFAULT if args.mapping is None else args.mapping
+    # the flag wins over the file, the file over the default
+    mapping = args.mapping
+    if mapping is None:
+        mapping = (SCN_MAPPING_DEFAULT if setup["mapping"] is None
+                   else int(setup["mapping"]))
     los = args.los
+    if los is None and setup["los"] is not None:
+        los = SCN_LOS[setup["los"]]
     launched = _launch(argparse.Namespace(
         name=args.name, json=True, force=False, res=res, map=wanted_map,
         maxfps=args.maxfps,

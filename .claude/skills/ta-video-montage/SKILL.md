@@ -342,6 +342,12 @@ A caption is a claim, and this repo's rule is that claims get checked against th
 source before they ship. The montage script carries the copy; **this table carries the
 evidence**, and a caption with no row here does not go in the film.
 
+**Re-shoot every clip from the SAME scenario state.** The transcript in the film is
+the tool's real output, so a scenario edited between takes makes the terminal print
+something the command no longer prints — `big-battle`'s said "2 cleared" after
+`clear_existing` became false, where a fresh run says "0 cleared". Shoot them all
+after the last scenario change, then run `promo/transcripts.py`.
+
 | caption | status | evidence |
 |---|---|---|
 | "One command." / "no menu, no map setup, no clicking" | VERIFIED | `tacli scenario load` is one command and is documented as "launch a game and put the situation in it" (`tools/tacli`, `scenario load` parser) |
@@ -415,18 +421,38 @@ script, which means perfect typing timing, crisp glyphs at any zoom, and no depe
 on anyone's shell theme — but paste in the **real** transcript (rule above). Only the
 game windows need footage.
 
-Per clip, following `ta-capture` rule 5 — grab the **window**, never a screen region:
+**`promo/shoot.sh` is the shoot**, one clip per run — it loads the scenario, waits
+for the fight to develop, grabs the window, stops the instance, and then verifies
+what it got:
 
 ```bash
-tools/tacli scenario load front1 big-battle --res 1024x768
-tools/tacli ls --json                       # window[0] is the CLIENT id; display field
-ffmpeg -y -f x11grab -window_id 0x<client> -draw_mouse 0 -framerate 30 \
-  -video_size 1024x768 -i <display> -c:v libx264 -preset ultrafast -crf 15 \
-  -pix_fmt yuv420p -t 20 clips/big-battle.mp4
-tools/tacli stop front1
+promo/shoot.sh big-battle <outdir> --instance front1 --settle 40 --len 60
+promo/shoot.sh ridge-assault <outdir> --instance front5 --settle 40 --len 40 \
+    --res 1024x768          # filler-only clips need no more than this
 ```
 
-Why this and not a desktop grab:
+It writes `<clip>.mp4`, `<clip>.txt` (the real transcript) and `<clip>-settle.png`
+(the frame the capture starts on, so a bad moment is caught before a 4K render
+rather than after one). **Shoot a hero clip on the instance the film names** —
+`front1` for `scenario load front1 big-battle` — or the transcript contradicts the
+command printed above it; `promo/transcripts.py` refuses the mismatch.
+
+Then fold the transcripts back into the script, which is what keeps the terminal
+honest across a re-shoot:
+
+```bash
+promo/transcripts.py promo/tacli-promo.json <outdir>            # update
+promo/transcripts.py promo/tacli-promo.json <outdir> --check    # CI-shaped
+```
+
+What the script encodes, all of it learned the hard way:
+
+* **Ask `tacli` for the gamedir, never build the path.** Instances live in the main
+  checkout, so `tagpu/instances/<name>/gamedir` resolved against a linked worktree
+  is simply absent — which is how the settle screenshot silently wrote nothing on
+  the first run of this script. `tacli ls --json` reports the real path.
+
+Why a window grab and not a desktop grab:
 
 * `-window_id` reads the window's own redirected pixmap, so the capture is that
   instance's frame **even when the window is covered or off-screen** — which is what
@@ -481,6 +507,123 @@ Shoot each clip **longer than the longest time it is on screen**, and shoot more
 distinct clips than you think you need — `fill` gives each cell a random clip and a
 random time offset, but six clips across 1600 tiles is still six clips, and the eye
 finds the repeat.
+
+### Survey the map before placing anything on water
+
+**`promo/survey-map.py` answers "where is the water", and guessing does not.**
+`scenario validate` checks the schema, not the shoreline, so a fleet placed one
+row too far inland spawns ashore and sits there in formation for the whole clip —
+which is what `naval-push` did on Anteer Strait with `core_fleet` at [3550, 1980],
+and what `shore-raid` did with raiders whose eastern columns crossed the beach.
+
+```bash
+tools/tacli scenario load surveyA <an empty scenario on that map> --restart
+promo/survey-map.py surveyA <outdir> --step 1400 --x0 1600 --x1 5200 \
+    --y0 800 --y1 3600 --cell 200
+```
+
+It walks the camera, `glshot`s each position, classifies every pixel, and prints a
+world-coordinate grid. **Anteer Strait, measured 2026-09-11: the central island is
+x 3000-4000, y 800-1700, and everything south of y = 1800 is open water.** The
+note in `research/notes/` that said water runs at y 1680-2280 was describing the
+island.
+
+Three traps in doing this at all, each of which produced a confidently wrong map:
+
+* **`tacli eye X Y` sets the EYE, not the centre** — the world coordinate at the
+  left edge of the game area and the top of the view. Treating it as the centre
+  shifts every sample half a screen and smears the land into the wrong cells.
+  `tacli roster`'s own `eye` is one panel width smaller (world at screen x=0):
+  `eye 4200 4200` reads back as `(4072, 4210)`.
+* **Survey with `clear_existing: false`.** An empty scenario has no units alive,
+  TA declares the game over instantly and drops to the 640x480 shell, and every
+  `glshot` is then a picture of the menu — reported as "0 % water" at every
+  position. The script now refuses a glshot that is not the instance's resolution.
+* **Survey with as few units as possible.** Units, wrecks and explosions are not
+  blue, so they classify as land: the first attempt at reading the shoreline out
+  of a battle screenshot mapped the fleet, and put the island's southern edge 500
+  units too far south.
+
+### A pinned camera changes what a scenario has to be
+
+Every promo scenario pins the camera, so **the fight has to come to the frame and
+stay in it** for the whole clip — 40 to 50 seconds, not the few seconds a battle
+takes to resolve. Two failures of this, both only visible in the footage:
+
+* **`air-war` was over before the capture started.** Two air forces ordered at each
+  other across an empty view cross once and it is finished: 30 s after the load the
+  frame held a landscape, some turrets and wrecks, and the take measured **90 %
+  duplicate frames, ~6 unique fps**. Aircraft are fast and the camera cannot follow
+  them. It is now built as 200 aircraft over two flak-defended bases 600 units
+  apart, both inside the frame — targets they keep circling and re-attacking, and
+  flak that keeps firing.
+* **Ground battles burn down.** `big-battle` goes 980 → 934 units in the first
+  minute and 790 in the second. Too early and the columns are still marching; too
+  late and it is a mopping-up. `--settle` is the knob, and the settle screenshot is
+  how you judge it without spending the take.
+
+**The duplicate-frame rate is the metric that catches a dead scene** — it is the one
+check that worked unassisted here. Anything under ~25 unique fps on a battle clip
+means the fight is not in frame.
+
+### Turn the fog off, or the tile is mostly grey
+
+**`"los": "permanent"` and `"mapping": true` belong in every scenario shot for a
+film.** Without them TA greys out every part of the map not currently inside a
+unit's sight radius, and since the camera is pinned on the fight, that is most of
+the frame: the first `big-battle` take read as a battle in the corner of an empty
+grey city, and the "empty" part was fog, not terrain. With permanent line of sight
+the whole map stays in full colour and the shot is a battle filling the frame.
+
+Both are `setup` keys now (`scenario load --los/--mapping` still override), because
+this is part of the *situation*: a scenario shot for a film wants the map lit, one
+written to measure scouting wants the fog. `permanent` also means the fog never
+creeps back over ground already seen, which on a 50 s clip would otherwise be a
+slow grey wash across the tile.
+
+### The GAME ends mid-take, and that is what truncates a clip
+
+**When the last unit of a player dies TA declares the game over and returns to its
+640x480 shell.** The window shrinks under the grab, `XGetImage` starts refusing
+with BadMatch, and the take stops there — ffmpeg still exits 0. The tell that this
+is what happened, rather than anything on the desktop, is that it is
+**reproducible to the frame**: `last-stand` gave exactly 2897 of 3600 on three
+consecutive attempts, `naval-push` exactly 3204. A flaky desktop does not do that.
+
+**Every promo scenario therefore sets `clear_existing: false`.** The two starting
+commanders stay alive at the map's start positions — far outside every pinned
+camera — so no player is ever unitless however the battle goes. It also removes
+the "Arm vermin have been exterminated" banner that clearing them printed across
+the top of the frame at load.
+
+Check each scenario's commanders really are out of frame (`tacli roster` gives
+their world positions); on Anteer Strait they sit at (3488, 976) and (2477, 7344),
+and on Town & Country at (4336, 304) and (640, 5561).
+
+### A grab that ends early still exits 0 — count the frames
+
+Four of six clips in the second shoot came back short and ffmpeg reported success
+every time: **11 frames of 3600** for one, 2198 for another, 1341 for a third, and
+one that refused to start with *"Capture area 1024x768 at position 0.0 outside the
+screen size 640x480"*. The short ones die with a BadMatch on `ShmGetImage`, then on
+`XGetImage`, and the demuxer gives up with "Permission denied".
+
+That was the *primary* cause. A second, independent one made it worse:
+**`tacli ls --json` could hand back the wrong window.** `Instance.window()`
+searched by title, and a candidate whose pid could not be read was kept rather than
+rejected — so a lingering, title-matching, pid-less window belonging to the instance
+stopped seconds earlier could win. 640x480 is the giveaway: that is TA's **shell**
+size, not any game resolution. It now ranks candidates by evidence (exact size +
+confirmed pid beats either alone) rather than taking the first one found. Ranking,
+not rejecting: some wine windows carry no `_NET_WM_PID` at all.
+
+Two defences, both cheap, and the shoot script has both:
+
+* **Assert the window is the size you are about to grab** before spending the take.
+* **Check the frame count afterwards** — `nb_read_frames` against `fps * seconds` —
+  and re-take if it is short. A duplicate-frame rate alone does NOT catch this: an
+  11-frame clip scored 80 % duplicates, under the 85 % "wrong window" threshold, and
+  was reported as ok.
 
 ### What the first real shoot measured (2026-09-10)
 

@@ -8,7 +8,9 @@
     "map": "Two Continents",
     "res": "1024x768",
     "unit_limit": 500,
-    "clear_existing": true,
+    "clear_existing": false,
+    "los": "permanent",
+    "mapping": true,
     "switches": {"shootall": true, "noshake": true},
     "players": [
       {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 10000, "energy": 10000},

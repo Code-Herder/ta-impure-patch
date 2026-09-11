@@ -105,12 +105,13 @@
         "big-battle: loaded on front1",
         "  launched 2048x1536, map 'Town & Country', unit limit 500",
         "  clicked SINGLE on MAINMENU.GUI — screen MAINMENU.GUI -> SINGLE.GUI",
-        "  clicked Skirmish on SINGLE.GUI — screen SINGLE.GUI -> SKIRMISH.GUI",
+        "  clicked Skirmish on SINGLE.GUI — engine confirmed",
         "  map unmapped -> mapped",
+        "  line of sight is permanent",
         "  clicked Start on SKIRMISH.GUI",
         "  live with 2 units",
         "  map Maps\\Town & Country.TNT",
-        "applied 980 of 980 (980 units + 0 features), 0 failed, 2 cleared",
+        "applied 980 of 980 (980 units + 0 features), 0 failed, 0 cleared",
         "orders: 980 issued, 0 failed",
         "camera: [4320, 4320] (eye [3424, 3544], pinned)"
       ]
@@ -128,9 +129,18 @@
       "prompt": "~/ta $",
       "command": "tools/tacli scenario load front2 air-war",
       "output": [
-        "  launch front2   1024x768  silent  no-intro",
-        "  map \"Two Continents\"  loaded",
-        "  applied  240 units  2 players"
+        "air-war: loaded on front2",
+        "  launched 2048x1536, map 'Two Continents', unit limit 500",
+        "  clicked SINGLE on MAINMENU.GUI — screen MAINMENU.GUI -> SINGLE.GUI",
+        "  clicked Skirmish on SINGLE.GUI — engine confirmed",
+        "  map unmapped -> mapped",
+        "  line of sight is permanent",
+        "  clicked Start on SKIRMISH.GUI",
+        "  live with 2 units",
+        "  map Maps\\Two Continents.TNT",
+        "applied 284 of 284 (284 units + 0 features), 0 failed, 0 cleared",
+        "orders: 200 issued, 0 failed",
+        "camera: [3000, 1500] (eye [2104, 722], pinned)"
       ]
     },
     {
@@ -146,9 +156,18 @@
       "prompt": "~/ta $",
       "command": "tools/tacli scenario load front3 last-stand",
       "output": [
-        "  launch front3   1024x768  silent  no-intro",
-        "  map \"Two Continents\"  loaded",
-        "  applied  427 units  2 players"
+        "last-stand: loaded on front3",
+        "  launched 2048x1536, map 'Two Continents', unit limit 500",
+        "  clicked SINGLE on MAINMENU.GUI — screen MAINMENU.GUI -> SINGLE.GUI",
+        "  clicked Skirmish on SINGLE.GUI — engine confirmed",
+        "  map unmapped -> mapped",
+        "  line of sight is permanent",
+        "  clicked Start on SKIRMISH.GUI",
+        "  live with 2 units",
+        "  map Maps\\Two Continents.TNT",
+        "applied 427 of 427 (427 units + 0 features), 0 failed, 0 cleared",
+        "orders: 400 issued, 0 failed",
+        "camera: [2980, 1400] (eye [2084, 619], pinned)"
       ]
     },
     {
@@ -164,9 +183,18 @@
       "prompt": "~/ta $",
       "command": "tools/tacli scenario load front4 naval-push",
       "output": [
-        "  launch front4   1024x768  silent  no-intro",
-        "  map \"Anteer Strait\"  loaded",
-        "  applied  85 units  2 players"
+        "naval-push: loaded on front4",
+        "  launched 2048x1536, map 'Anteer Strait', unit limit 500",
+        "  clicked SINGLE on MAINMENU.GUI — screen MAINMENU.GUI -> SINGLE.GUI",
+        "  clicked Skirmish on SINGLE.GUI — engine confirmed",
+        "  map unmapped -> mapped",
+        "  line of sight is permanent",
+        "  clicked Start on SKIRMISH.GUI",
+        "  live with 2 units",
+        "  map Maps\\Anteer Strait.TNT",
+        "applied 205 of 205 (205 units + 0 features), 0 failed, 0 cleared",
+        "orders: 200 issued, 0 failed",
+        "camera: [3200, 2400] (eye [2304, 1663], pinned)"
       ]
     }
   ],

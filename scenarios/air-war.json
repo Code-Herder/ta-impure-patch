@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "Promo fixture: 200 aircraft crossing over Two Continents, ARM fighters and bombers west against CORE west-bound, with a solar farm and light AA under each side so the bombers have a target and the flak has somewhere to come from. Air reads well when tiled small — the units are spread over open ground rather than piled in a column, and tracer and flak give the tile motion even before the formations meet. Camera pinned at the crossing point; resolution 1024x768 to match the montage stage 1:1.",
+  "description": "Promo fixture: 200 aircraft over two flak-defended bases 600 units apart, both inside the pinned frame. The first cut sent the two air forces at each OTHER across an empty view and it played out in seconds: by 30 s after the load the frame held a landscape, a few turrets and some wrecks, and the capture measured 90 % duplicate frames. Aircraft are fast, the camera is pinned, and a crossing is over in one pass -- so give them something in frame to keep attacking. Bases sit at x 2700 and x 3300 either side of the camera, the squadrons enter from x 1750 and x 4250, and the flak keeps firing while they circle.",
   "seed": 20260911,
   "on_error": "abort",
 
@@ -8,7 +8,9 @@
     "map": "Two Continents",
     "res": "1024x768",
     "unit_limit": 500,
-    "clear_existing": true,
+    "clear_existing": false,
+    "los": "permanent",
+    "mapping": true,
     "switches": {"shootall": true, "noshake": true},
     "players": [
       {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 10000, "energy": 10000},
@@ -18,29 +20,31 @@
   },
 
   "groups": [
-    { "id": "arm_air", "owner": 0, "at": [2200, 1400],
-      "pattern": {"kind": "grid", "cols": 10, "spacing": 70, "jitter": 12},
-      "composition": [{"type": "ARMFIG", "count": 60}, {"type": "ARMBRAWL", "count": 24},
-                      {"type": "ARMTHUND", "count": 16}],
-      "facing": 90,
-      "orders": [{"cmd": "attack", "to": [3800, 1400]}] },
-
-    { "id": "core_air", "owner": 1, "at": [3800, 1400],
-      "pattern": {"kind": "grid", "cols": 10, "spacing": 70, "jitter": 12},
-      "composition": [{"type": "CORVAMP", "count": 60}, {"type": "CORFINK", "count": 24},
-                      {"type": "CORSHAD", "count": 16}],
-      "facing": 270,
-      "orders": [{"cmd": "attack", "to": [2200, 1400]}] },
-
-    { "id": "arm_ground", "owner": 0, "at": [2200, 1950],
-      "pattern": {"kind": "grid", "cols": 6, "spacing": 70, "jitter": 0},
-      "composition": [{"type": "ARMSOLAR", "count": 12}, {"type": "ARMJETH", "count": 8}],
+    { "id": "arm_base", "owner": 0, "at": [2700, 1500],
+      "pattern": {"kind": "grid", "cols": 7, "spacing": 64, "jitter": 0},
+      "composition": [{"type": "ARMSOLAR", "count": 20}, {"type": "ARMJETH", "count": 16},
+                      {"type": "ARMLLT", "count": 6}],
       "facing": 90 },
 
-    { "id": "core_ground", "owner": 1, "at": [3800, 1950],
-      "pattern": {"kind": "grid", "cols": 6, "spacing": 70, "jitter": 0},
-      "composition": [{"type": "CORSOLAR", "count": 12}, {"type": "CORCRASH", "count": 8}],
-      "facing": 270 }
+    { "id": "core_base", "owner": 1, "at": [3300, 1500],
+      "pattern": {"kind": "grid", "cols": 7, "spacing": 64, "jitter": 0},
+      "composition": [{"type": "CORSOLAR", "count": 20}, {"type": "CORCRASH", "count": 16},
+                      {"type": "CORLLT", "count": 6}],
+      "facing": 270 },
+
+    { "id": "arm_air", "owner": 0, "at": [1750, 1500],
+      "pattern": {"kind": "grid", "cols": 10, "spacing": 70, "jitter": 12},
+      "composition": [{"type": "ARMFIG", "count": 56}, {"type": "ARMBRAWL", "count": 24},
+                      {"type": "ARMTHUND", "count": 20}],
+      "facing": 90,
+      "orders": [{"cmd": "attack", "to": [3300, 1500]}] },
+
+    { "id": "core_air", "owner": 1, "at": [4250, 1500],
+      "pattern": {"kind": "grid", "cols": 10, "spacing": 70, "jitter": 12},
+      "composition": [{"type": "CORVAMP", "count": 56}, {"type": "CORFINK", "count": 24},
+                      {"type": "CORSHAD", "count": 20}],
+      "facing": 270,
+      "orders": [{"cmd": "attack", "to": [2700, 1500]}] }
   ],
 
   "camera": { "at": [3000, 1500], "pin": true }
