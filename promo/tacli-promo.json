@@ -263,7 +263,9 @@
     "skill's table. Captions wrap and shrink to fit, so a long line is safe.",
     "",
     "Beat 1's card sits AFTER the terminal flips to the game (4.6s, not 1.2s):",
-    "over the terminal it covered the command and the lines it printed."
+    "over the terminal it covered the command and the lines it printed.",
+    "",
+    "The title card has fade_out 0 so it is at FULL opacity on the last frame. The last frame is t1 - 1/fps, so any fade-out leaves it mid-dissolve -- it shipped once at alpha 0.02, present in the file and invisible in every thumbnail and paused player."
   ],
   "captions": [
     {
@@ -302,7 +304,8 @@
       "t1": 57.0,
       "text": "tacli",
       "sub": "github.com/Code-Herder/ta-impure-patch",
-      "big": true
+      "big": true,
+      "fade_out": 0
     }
   ],
   "terminal_style": "soft",
@@ -333,7 +336,7 @@
     "license_url": "http://creativecommons.org/licenses/by/4.0/",
     "isrc": "USUAN1200049",
     "track_seconds": 40.18,
-    "start": 22.0,
+    "start": 19.9,
     "fade_in": 0.8,
     "fade_out": 0.0,
     "gain_db": -2.0,
@@ -371,37 +374,31 @@
       "pitch": 0.06
     },
     "_loop": [
-      "The intro, spliced longer so the music can start at the FIRST ZOOM-OUT",
-      "(7.47s) instead of 22s -- without moving the climax, which still has to land",
-      "on the title card.",
+      "The cue extended so the music can enter at the first zoom-out instead of",
+      "22s. ONE join, in the flat body of the track, with a one-beat crossfade:",
+      "play 0 -> 21.48, jump back six bars to 9.018, play on to the end. Adds",
+      "12.43s minus the fade.",
       "",
-      "`start` below stays authored against the UNLOOPED track. The loop only ever",
-      "extends the front, so it pulls the start earlier by exactly its own length",
-      "and nothing after it moves; tamontage measures the built file rather than",
-      "trusting this arithmetic, so the crossfades cannot drift it. 22.0 - 14.51 =",
-      "7.49s, which is the zoom-out to within 20ms.",
+      "`start` 19.9 is authored against the UNLOOPED track and is 22.0 - 2.1: a",
+      "six-bar loop alone reaches 9.6s, so the whole cue sits 2.1s earlier to meet",
+      "the zoom. The tail goes quiet at 53s instead of 55s -- a small price for a",
+      "single seam. The loop only extends the front, so tamontage subtracts its",
+      "measured length from `start` and nothing downstream moves: loudest second",
+      "45s either way.",
       "",
-      "`segments` is the play order in TRACK seconds. The join that matters is the",
-      "jump from the end of one segment to the start of the next: the music there",
-      "must follow from what preceded the cut, which holds when the span is a whole",
-      "number of bars and the phrase repeats. Measured by chroma self-similarity --",
-      "period 2.07s, one bar at the track's stated 115bpm, downbeats at 0.30 +",
-      "2.087k. A spectral envelope will not find this; it says only 'orchestra'.",
-      "The last segment runs to the end, so that join is seamless by construction.",
-      "",
-      "This is 2.39-6.56 (a two-bar phrase) three times plus one more bar, = seven",
-      "bars. One bar seven times scored a better join (+0.894 vs +0.791) and was",
-      "rejected by ear: seven identical bars read as a loop."
+      "THIS CUE IS NOT LOOP MUSIC. Read the skill's 'Stretching music' section",
+      "before touching these numbers: four plans were built and rejected by ear",
+      "before this one, and the reasons are all measured there. In short -- never",
+      "loop the crescendo, never trust the stated tempo (2.0717s a bar, not",
+      "2.0870), never rely on 18ms fades, and the fewer joins the better. No two",
+      "bars of this piece correlate above 0.33 at the waveform, so a join is",
+      "hidden by a long fade, not by alignment."
     ],
     "loop": {
-      "crossfade_ms": 18,
+      "crossfade_ms": 500,
       "segments": [
-        [0.0, 6.56],
-        [2.39, 6.56],
-        [2.39, 6.56],
-        [2.39, 6.56],
-        [4.47, 6.56],
-        [6.56, null]
+        [0.0, 21.48],
+        [9.018, null]
       ]
     }
   }

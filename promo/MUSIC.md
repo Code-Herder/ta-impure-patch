@@ -84,43 +84,28 @@ that this was too long, with one constraint: **the typing stays dry, and the
 music comes in on the first zoom-out** (7.47 s).
 
 The only way to start earlier without moving the climax is to make the track
-*longer at the front*. `audio.loop` splices bars of the intro back on itself:
+*longer at the front*. `audio.loop` in the montage script does it with **one
+join**, in the flat body, under a one-beat crossfade:
 
 ```json
-"loop": { "crossfade_ms": 18,
-          "segments": [[0.0,6.56],[2.39,6.56],[2.39,6.56],[2.39,6.56],
-                       [4.47,6.56],[6.56,null]] }
+"loop": { "crossfade_ms": 500, "segments": [[0.0, 21.48], [9.018, null]] }
 ```
 
-That is a two-bar phrase three times plus one more bar — **seven bars, +14.51 s**
-— so the music enters at 22.0 − 14.51 = **7.49 s**, the zoom-out to within 20 ms.
+Play 0 → 21.48, jump back six bars to 9.018, play on to the end: **+11.96 s**
+after the fade. That alone reaches 9.6 s, so `start` is authored **19.9** rather
+than 22.0 — the whole cue sits 2.1 s earlier and the music enters at **7.94 s**.
+The price is that the tail goes quiet at 53 s instead of 55; the loudest second
+moves from 47 s to 45 s. One seam was worth it.
 
-**The loop only ever extends the front, so it pulls the start earlier by exactly
-its own length and nothing downstream moves.** `tamontage` measures the built
-file rather than trusting that arithmetic, so the crossfades cannot drift it.
-Proved, not assumed: the loudest second is **47 s at −13.0 dBFS in both** the
-looped cut and the old one.
+Measured on the built file: join at 29.4 s steps **−0.9 dB**; typing 1–3 s dry;
+music audible from 8 s.
 
-### Finding the loop: chroma, not a spectral envelope
-
-A spectral envelope says only "orchestra" — every moment of an orchestral piece
-scores ~0.997 against every other, which is what the first attempt did. **Chroma**
-tracks the harmony that says two moments are the same bar. Measured:
-
-| | |
-|---|---|
-| repeat period | **2.07 s** — one bar at the track's stated 115 bpm |
-| downbeats | 0.30 s + 2.087·k |
-| best 1-bar join in the intro | a = 2.39 → b = 4.47, score +0.894 |
-| best 2-bar join | a = 2.39 → b = 6.56, score +0.791 |
-
-The join that matters is the jump from the end of one segment to the start of the
-next: the music there has to follow from what preceded the cut. The last segment
-runs to the end of the original, so *that* join is seamless by construction.
-
-**The better-scoring loop lost.** One bar seven times scores +0.894 against
-+0.791, and was rejected by ear — seven identical bars read as a loop. A join
-score tells you whether a splice is *audible*, not whether the result is *good*.
+**Four plans were built and rejected by ear before this one.** The whole record —
+what was tried, why each failed, and what the measurements did and did not
+predict — is in the ta-video-montage skill under *Stretching music for a video*.
+`promo/loop-finder.py --from-max 30` reproduces the search. Do not change these
+numbers without reading that section: this cue is not loop music, and the seam
+is hidden by the long fade and the single join, not by alignment.
 
 If a re-cut changes the film's length, move `start` with it:
 **`start = duration_of_film − 35.0`** (still against the unlooped track), and

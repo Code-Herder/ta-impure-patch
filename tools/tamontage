@@ -1149,12 +1149,20 @@ class Montage:
             t0, t1 = cap["t0"], cap["t1"]
             if not (t0 <= t <= t1):
                 continue
+            # `fade` sets both edges; fade_in / fade_out override one. A card
+            # that has to survive being PAUSED ON needs fade_out 0: the last
+            # frame of the film is t1 - 1/fps, so any fade-out at all leaves it
+            # part-way through the dissolve. The title card shipped once at
+            # alpha 0.02 on the final frame -- present in the file, invisible in
+            # the thumbnail and on every paused player.
             fade = cap.get("fade", 0.4)
+            f_in = float(cap.get("fade_in", fade))
+            f_out = float(cap.get("fade_out", fade))
             a = 1.0
-            if t < t0 + fade:
-                a = (t - t0) / fade
-            elif t > t1 - fade:
-                a = (t1 - t) / fade
+            if f_in > 0 and t < t0 + f_in:
+                a = (t - t0) / f_in
+            elif f_out > 0 and t > t1 - f_out:
+                a = (t1 - t) / f_out
             a = ease("smooth", min(1.0, max(0.0, a)))
             if a <= 0.01:
                 continue
@@ -1526,7 +1534,7 @@ def _extend_audio(src: str, loop: dict, out: str) -> tuple[str, float]:
         w.writeframes((np.clip(out_a, -1, 1) * 32767).astype("<i2").tobytes())
     added = len(out_a) / SR_MUX - orig
     print(f"  music: {orig:.2f}s -> {len(out_a)/SR_MUX:.2f}s "
-          f"(+{added:.2f}s from {len(segs) - 2} looped segments)")
+          f"(+{added:.2f}s, {len(segs) - 1} join{'s' if len(segs) != 2 else ''})")
     return out, added
 
 

@@ -1037,64 +1037,85 @@ frame **early**. Snapping to the frame is both the correct sync *and* free,
 natural-sounding jitter: 17 chars/s into 30 fps gives gaps of **33 and 67 ms**
 instead of a metronomic 59, which is what stops it sounding like a machine gun.
 
-## Buying back a silent opening: extend the track, do not move the cue
+## Stretching music for a video
 
-35 s of music could not cover 57 s of film *and* finish at the end, so the opening
-was silent to 22 s — arithmetic, not taste. The owner wanted the music at the
-first zoom-out (7.47 s) with the typing still dry.
+The problem: 35 s of music, 57 s of film, the climax has to land at the end — so
+the opening was silent to 22 s. The owner wanted the music at the first zoom-out
+(7.47 s), with the typing kept dry. **The only way to start earlier without
+moving the climax is to make the track longer at the front.** `audio.loop`
+splices the track onto itself; `promo/loop-finder.py` finds where.
 
-**The only way to start earlier without moving the climax is to make the track
-longer at the FRONT.** `audio.loop` splices bars of the intro back on itself:
+Five plans were built for this cue. Four were rejected by the owner's ear, and
+every one of those rejections was *predicted* by a measurement — just not by the
+measurement being used at the time. This section is the record, because the
+next cue will be the same fight.
 
-```json
-"loop": { "crossfade_ms": 18,
-          "segments": [[0.0,6.56],[2.39,6.56],[2.39,6.56],[2.39,6.56],
-                       [4.47,6.56],[6.56,null]] }
-```
+### What works
 
-`segments` is the play order in track seconds. `start` stays authored against the
-**unlooped** track: the loop only extends the front, so it pulls the start earlier
-by exactly its own length and nothing downstream moves. `tamontage` measures the
-built file rather than trusting the arithmetic, so the crossfades cannot drift it.
-Proved, not assumed: the loudest second is **47 s at -13.0 dBFS in both** the
-looped cut and the original.
+* **Level-match the join.** RMS over 0.5 s either side of the cut, on the
+  *built* file; want within ±1 dB. This is the one metric that agreed with the
+  ear every time. The plan that stepped −2.6 dB was heard at once.
+* **Loop the flat body, never the crescendo.** Print the level per bar first.
+  This intro rises +5 dB a bar; every backward jump inside it is a step down.
+  The body sits within 2 dB for nine bars — that is where a loop lives.
+* **Chroma finds harmonically matching bars.** 12 pitch classes per frame,
+  mean-removed. Repeat period 2.07 s = one bar; downbeats at 0.30 + k·bar. A
+  spectral envelope cannot do this: it scored every bar at ~0.997 against every
+  other, because every bar is "orchestra".
+* **Measure the bar length from the track — and from the harmony.** The stated
+  115 bpm is 2.0870 s a bar; chroma says **2.0635–2.0717**. That 0.7 % is 37 ms
+  over four bars, which is a stutter. The onset-envelope autocorrelation is
+  *not* the tool: it has several peaks between 2.0 and 2.1 s and the search
+  window decides which one wins (it returned 2.0198 and 2.0717 on the same file).
+* **One join.** Each seam is a chance to be heard. Q, the plan that shipped, has
+  exactly one: play to 21.48 s, jump back six bars to 9.018 s, play on.
+* **A one-beat crossfade (500 ms), not 18 ms.** 18 ms is a click suppressor; it
+  hides nothing musical, and turns every residual misalignment into a hiccup.
+  On a through-composed cue a join is hidden by the *fade*, not by alignment.
+* **Shift the whole cue rather than add a join.** Six bars reached 9.6 s; the
+  brief was 7.47. Authoring `start` 2.1 s earlier costs a quiet tail from 53 s
+  instead of 55 and the loudest second moving from 47 s to 45 s. A second join
+  would have cost more.
+* **`start` is authored against the unlooped track.** The loop only extends the
+  front, so it pulls the start earlier by exactly its own length and nothing
+  downstream moves. `tamontage` measures the built file's `added`, so the
+  crossfade cannot drift it.
+* **Verify on the output, then listen.** Level step at every join; loudest
+  second unchanged; typing region still dry. Then the owner listens, because:
 
-### Chroma finds the loop; a spectral envelope cannot
+### What did not work, and why
 
-A spectral envelope says only "orchestra" — every moment of the piece scored
-**~0.997** against every other, which is what the first attempt returned and it
-was useless. **Chroma** tracks the harmony that says two moments are the same bar.
-Measured on this track: repeat period **2.07 s** (one bar at its stated 115 bpm --
-and a naive onset autocorrelation said 95.7 bpm, which was simply wrong),
-downbeats at 0.30 + 2.087k.
+* **Looping the intro (plan B).** Chroma join +0.894, the best in the track —
+  and it stepped **−2.6, −2.6, −2.7, +4.0, +5.1 dB**, because the intro is a
+  crescendo. Heard at 0:14. *Harmonic similarity says nothing about level.*
+* **Level-matched, tempo from the metadata (plan D).** Joins within ±1 dB — and
+  the 4-bar join landed **37 ms off the beat** because 115 ≠ 115.85 bpm. Heard
+  at 0:24. The 1-bar join, with a quarter of the drift, was not heard.
+* **Onset-envelope beat alignment.** Correlations of 0.31–0.39 — fitting
+  noise. The "corrections" measured *worse* on the output (−60, −31, −56 ms).
+* **Waveform cross-correlation to align joins.** Peaks of **0.19–0.33** between
+  any two bars of this piece. That number is the real finding: **this is not
+  loop music.** No two bars are waveform-alike, so no alignment metric locks and
+  no short cut is inaudible. Stop aligning; lengthen the fade and cut fewer times.
+* **Measuring sample-to-sample jumps to find "the stitch".** Found no clicks —
+  correctly — while the owner was hearing a −2.6 dB level step. The wrong
+  metric produces a confident wrong answer.
+* **Equal-power crossfading identical material.** Two of plan D's joins were
+  the same audio faded into itself; cos+sin peaks at 1.41. Merge self-joins out.
+* **Overwriting the review page's file with a new cut at the same name.** It
+  destroyed the A/B and produced "even the original seems changed". Every
+  version gets its own name; nothing is overwritten.
 
-The join that matters is the jump from the end of one segment to the start of the
-next; the last segment runs to the end of the original, so that join is seamless
-by construction. Equal-power crossfades, 18 ms.
+### The procedure, next time
 
-**Known, and older than the loop: a `--t0` preview past the music cue replays the
-track from its beginning** rather than starting mid-track, because the shift is
-`max(0, start - t0)`. Fine for checking picture, wrong for checking a music cue —
-audition those from `--t0 0`.
-
-**The better-scoring loop lost.** One bar seven times scores +0.894 against the
-two-bar phrase's +0.791, and the owner rejected it — seven identical bars read as
-a loop. A join score tells you whether a splice is *audible*, not whether the
-result is *good*.
-
-### `amix` halves both inputs unless you tell it not to
-
-`normalize=0`. Without it the music comes back **6 dB below the level it was
-chosen at**, and nothing in the output says so. Verified by measuring: music
-alone -23.67 dBFS, keys alone -23.72, both together **-20.72** — the
-uncorrelated-power sum, so neither was touched.
-
-### `audio.keyboard` means the FILM wants keys, not that this render has any
-
-A `--t0 30` preview is past the typing, so the track comes back empty. Handle
-that case explicitly and put the silent render in place: falling through to the
-mux deletes the temp file and returns a bare 2, and the whole render is gone with
-no output and no message. Caught by a regression run, not by reasoning.
+1. `promo/loop-finder.py <track> --from-max <before the climax's run-up>` —
+   level profile, measured bar, and three level-matched single-jump candidates
+   per span. The climax run-up is *as loud as the body*, so the level filter
+   cannot see it; you cap it by ear.
+2. Build the two or three plausible ones at 500 ms, mux onto the 1080p cut
+   (`-c:v copy`, one second each), verify the level step on the output.
+3. **Send them and wait.** On this material the ear is the only gate that
+   settled anything, and it settled it every time.
 
 ## Reviewing a cut: `promo/review-server.py`
 
