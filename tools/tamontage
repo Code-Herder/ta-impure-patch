@@ -676,7 +676,8 @@ class Montage:
             if a <= 0.01:
                 continue
 
-            big = cap.get("big", False)
+            # a full-frame card is centred and typeset large, like `big`
+            big = cap.get("big", False) or cap.get("full", False)
             fs = int(h * (0.080 if big else 0.047))
             ss = int(h * (0.030 if big else 0.025))
             f1 = font("sans-bold", fs)
@@ -698,10 +699,17 @@ class Montage:
             box = [w / 2 - wmax / 2 - padx, y - pady,
                    w / 2 + wmax / 2 + padx, y + total + pady]
 
-            # A soft scrim rather than a hard black plate: the grid stays
-            # readable behind the words, which is the point of the wide shot.
-            scrim = int(215 * a) if big else int(190 * a)
-            d.rounded_rectangle(box, radius=int(h * 0.012), fill=(9, 11, 14, scrim))
+            if cap.get("full"):
+                # Full-frame card: the whole picture darkens and the words sit
+                # on it. Reads as a title card rather than as a subtitle.
+                d.rectangle([0, 0, w, h],
+                            fill=(6, 8, 11, int(cap.get("dim", 205) * a)))
+            else:
+                # A soft scrim rather than a hard black plate: the grid stays
+                # readable behind the words, which is the point of the wide shot.
+                scrim = int(215 * a) if big else int(190 * a)
+                d.rounded_rectangle(box, radius=int(h * 0.012),
+                                    fill=(9, 11, 14, scrim))
             d.text((w / 2, y), lines[0], font=f1,
                    fill=(243, 246, 250, int(255 * a)), anchor="ma")
             if len(lines) > 1:
