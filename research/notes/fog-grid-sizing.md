@@ -423,7 +423,10 @@ old — which is why `tagpu_fogwide_get` must *not* refuse a grid for being a ti
 
 
 That is why the source says *"ALLOCATED ONCE AND NEVER GROWN, and that is a lifetime argument,
-not a convenience"*. Any dynamic scheme has to answer it, because **the size a process needs can
+not a convenience"*. That claim is about reallocating **the set** — freeing all three at
+once, which is what `fogw_alloc` would do — and in that form it is exactly right, because one of
+the three is the block a frame is reading. §6.1 shows that growing **one slot at a time** is a
+different question with a different answer. Any dynamic scheme has to answer it, because **the size a process needs can
 grow inside that process**: stock TA cannot change resolution mid-game
 ([resolution](resolution.html) §6), but the front-end and the battleroom write a *desired* mode
 and the switch happens at the next game entry — and this fork runs game → shell → game cycles.
@@ -680,13 +683,69 @@ new size, and three retirements of the old one:
 </svg>
 </div>
 
-**And reuse would not be free anyway — it is 6.2 wearing a different hat.** A retired block may
-still be being read by the render thread; that is the entire reason it was retired rather than
-freed. Handing one back to the producer to write into would not even be a use-after-free, it would
-be a *concurrent write into a buffer a frame is sampling* — the §5 hazard, with no lock and no
-fence. To recycle one safely you must first prove the reader has let go, and once you can prove
-that you may as well call `free`. Recycling is not the cheap version of freeing; it is the same
-problem with the same proof obligation and less of the benefit.
+**Can the old block simply be freed?** Checking this properly changed the answer, so it is set out
+here rather than asserted. **For a per-slot grow, yes — and with no fence at all.**
+
+The block the producer retires is the one sitting in `s_build`, and the render thread can never
+hold a pointer to it. Follow the only routes a block can travel:
+
+<div class="tablewrap fg">
+<p class="fg-cap">a block reaches the producer only after the render thread has let go of it</p>
+<svg class="fg-dia" viewBox="0 0 700 232" role="img" aria-label="Three slots in a row: s_hold, s_pub and s_build. The render thread swaps between hold and pub at the top of a frame; the game thread swaps between pub and build after it builds. There is no edge from hold to build, so a block cannot reach the producer until the render thread has let go of it.">
+  <rect class="fg-hold" x="60"  y="58" width="150" height="48" opacity="0.85"/>
+  <rect class="fg-pub"  x="275" y="58" width="150" height="48" opacity="0.85"/>
+  <rect class="fg-use"  x="490" y="58" width="150" height="48" opacity="0.85"/>
+  <text x="135" y="80" text-anchor="middle" font-size="11">s_hold</text>
+  <text x="350" y="80" text-anchor="middle" font-size="11">s_pub</text>
+  <text x="565" y="80" text-anchor="middle" font-size="11">s_build</text>
+  <text class="fg-lab" x="135" y="97" text-anchor="middle">the render thread reads it</text>
+  <text class="fg-lab" x="350" y="97" text-anchor="middle">nobody reads it</text>
+  <text class="fg-lab" x="565" y="97" text-anchor="middle">the game thread writes it</text>
+
+  <line class="fg-sig" x1="216" y1="82" x2="269" y2="82"/>
+  <line class="fg-sig" x1="431" y1="82" x2="484" y2="82"/>
+  <text class="fg-sigtx" x="242" y="46" text-anchor="middle" font-size="10">swap</text>
+  <text class="fg-sigtx" x="457" y="46" text-anchor="middle" font-size="10">swap</text>
+  <text class="fg-lab" x="242" y="132" text-anchor="middle">render thread, in get,</text>
+  <text class="fg-lab" x="242" y="146" text-anchor="middle">before the frame reads</text>
+  <text class="fg-lab" x="457" y="132" text-anchor="middle">game thread, after</text>
+  <text class="fg-lab" x="457" y="146" text-anchor="middle">it has built</text>
+
+  <path class="fg-ghost" d="M135,112 C 200,186 500,186 565,112"/>
+  <text class="fg-badtx" x="350" y="178" text-anchor="middle" font-size="13">x</text>
+  <text class="fg-lab" x="350" y="204" text-anchor="middle">no edge from hold to build: a block cannot reach the producer until the</text>
+  <text class="fg-lab" x="350" y="218" text-anchor="middle">render thread has put it back, which it does before it reads anything.</text>
+</svg>
+</div>
+
+So the block the producer is about to write left the render thread's hands in an *earlier* frame,
+by the render thread's own action, and the render thread's local pointer does not outlive a frame —
+`s_fogGrid` is cleared at the top of every `tagpu_native_frame`. Freeing that block is the same
+pointer-disjointness argument as §5, the one that already justifies *writing* it. It is not a new
+assumption.
+
+It does rest on three things, and each is one edit away from being false, so they belong in the
+comment above the free:
+
+1. **One `get` per frame, before any read.** A second `get` inside a frame could swap the block
+   the frame is reading out of `s_hold` and into `s_pub`, where the producer may claim it. There
+   is exactly one call site today (`tagpu_native.c`).
+2. **The local pointer never outlives the frame.** Cleared at the top of `tagpu_native_frame`, last
+   read in the `tagpu_fx_gather` of the same call. A cache that held it across frames breaks this.
+3. **Nothing else is handed a buffer pointer.** `tagpu_fogwide_get` is the only accessor.
+
+**So: free, or never free?** The difference is about a megabyte in the worst session and nothing at
+all in a typical one, and the assumption is the same either way — but the *consequence* of that
+assumption failing is not. Break invariant 2 today and the render thread samples a buffer the
+producer is writing: a torn fog frame. Break it with the free in place and it is a use-after-free
+on the render thread — which is precisely the failure this module's neighbours have already
+produced twice ([thread-safe destruction](thread-safe-destruction.html), and the two
+`tagpu_fog_at` faults behind the 512 in §2).
+
+**So the recommendation stays never-free**, for the severity rather than for the safety: it costs a
+megabyte in the worst case, and it cannot turn a future mistake into a dead render thread. The free
+is available, provably correct today, and the right thing to reach for if the strand ever becomes a
+number anyone cares about.
 
 **And the waste is smaller than the chart suggests.** A session that never changes video mode
 retires nothing at all — there is no pile, and the whole scheme is simply "212 KB instead of
@@ -753,6 +812,33 @@ render thread sits inside that bracket: `tagpu_native.c` clears `s_fogGrid` at t
 </svg>
 </div>
 
+**What it would take to be correct.** The fence is an ordering argument, not a timing one — a slow
+reader makes the free happen *later*, never earlier — but there are three ways to build it wrong,
+and the first is a genuine footgun:
+
+1. **The armed check is not optional, and the obvious test reads backwards.** `s_started` and
+   `s_completed` both start at 0, and on a build where `tagpu_reclaim` did not install,
+   `pass_begin` and `pass_end` return without touching them. So `s_completed == s_started` — the
+   "the reader is idle" test — is **true for ever** on an unarmed build, and a free gated on it
+   would fire immediately and unsafely. `tagpu_reclaim_armed()` has to be checked first, and the
+   answer when it is false is "never free".
+2. **A bare equality is not the rule; a stamp is.** Seeing the reader idle *once* says nothing
+   about the pass that may have captured the pointer. `tagpu_reclaim`'s own rule is the one to
+   copy: `MemoryBarrier()`, stamp the entry with `s_started`, and free only when
+   `(LONG)(s_completed - stamp) >= 0` — every pass that had begun by the retire has now ended.
+3. **`pass_end` must run on every path.** A pass that never completes freezes reclamation for the
+   session. That fails safe — it is 6.1 again — but it is silent, which is what the overflow
+   counter in the heartbeat is for.
+
+It also needs an accessor `tagpu_reclaim` does not export today (`s_started`/`s_completed` are
+private to it) and a ring with a stated policy for being full.
+
+**And 6.1's finding narrows what this is for.** A fence is only needed to free a block the render
+thread can reach, and under a per-slot grow there is no such block — the producer only ever retires
+what is in `s_build`, which the reader has already let go of. So 6.2 is what you would need for a
+scheme that grows the **whole set at once**, or that wants to reclaim `s_hold`'s block rather than
+waiting for it to rotate. Neither is necessary.
+
 So this option is strictly *more* than 6.1: it is 6.1 plus a drain. It buys back the stranded
 bytes, and it costs a retire ring with a bounded number of slots, a decision about what to do when
 that ring is full (defer the grow? strand it? — the answer is strand it, which is 6.1 again), an
@@ -814,20 +900,75 @@ the correctness argument is "the old block is still mapped" and not a handshake 
 right. 6.2 is the upgrade to reach for if the stranded bytes ever become a real number, and it
 builds on 6.1 rather than replacing it — which is the other reason to do 6.1 first.
 
-## 7. What is actually being decided
+And note the middle option 6.1 itself opens: the abandoned block **can** be freed on the spot,
+with no fence, because a per-slot grow only ever retires what is in `s_build`. The reason not to is
+severity, not safety — see *"Can the old block simply be freed?"* above.
+
+## 7. How far it scales
+
+Sizing from the window rather than from a constant removes the two literals, and the natural next
+question is where the *next* ceiling is. The grid is `cols × rows × 2` bytes and every figure below
+comes from `fogw_window`'s arithmetic at `ZOOM_MIN` = 0.25, taken at the worst eye residue:
+
+| screen | viewport | grid | one buffer | three | cells | rebuild | game thread |
+|---|---|---|---|---|---|---|---|
+| 1024×768 | 896×704 | 133×109 | 28 KB | 85 KB | 14.5 k | 58 µs | 1.8 ms/s |
+| 1920×1080 | 1792×1016 | 245×148 | 71 KB | 212 KB | 36.3 k | **145 µs** | **4.4 ms/s** |
+| 2560×1440 | 2432×1376 | 325×193 | 123 KB | 368 KB | 62.7 k | 251 µs | 7.6 ms/s |
+| 3840×2160 | 3712×2096 | 485×283 | 268 KB | 804 KB | 137 k | 549 µs | 16.7 ms/s |
+| 5120×2880 | 4992×2816 | 645×373 | 470 KB | 1.38 MB | 241 k | 962 µs | 29.2 ms/s |
+| 7680×4320 | 7552×4256 | 965×553 | 1042 KB | 3.05 MB | 534 k | 2.13 ms | 64.9 ms/s |
+| 15360×8640 | 15232×8576 | 1925×1093 | 4109 KB | 12.0 MB | 2.10 M | 8.41 ms | 256 ms/s |
+
+The 1080p row is the measurement (`200v200`, 400 units, camera still, 30.4 rebuilds/s at 145 µs
+mean — G13s). **Every other rebuild figure is that number scaled by cell count**, and the
+scaling is optimistic rather than conservative: the working set goes from 71 KB, which sits in L2,
+to 4 MB, which does not sit in the L3 of many parts, so the real per-cell cost rises with the grid
+rather than staying flat. Treat the last two rows as a lower bound.
+
+So, taking 16K as the hypothetical:
+
+- **Memory is not the ceiling.** 12 MB for the three buffers, on a machine that has a 16K display.
+  It is twice today's fixed 6 MB, but today's 6 MB is paid by a 1024×768 session too, and this is
+  not.
+- **The producer's cost is.** 8.4 ms per rebuild is a quarter of a 30 Hz sim tick, on the game
+  thread of a lockstep engine, and a rebuild fires on every tick where anything moved. A quarter of
+  the tick spent on fog is not a sizing problem and no option in §6 touches it — the fix, if it is
+  ever needed, is to stop rebuilding the whole window when only part of it changed, or to build at
+  a coarser lattice when the grid is enormous.
+- **The per-frame upload is next.** `tagpu_native.c` calls `glTexSubImage2D` every frame whether or
+  not the grid changed: 71 KB a frame at 1080p is 4 MB/s and invisible, 4.1 MB a frame at 16K is
+  ~250 MB/s at 60 fps. Gating it on `s_pubData` would be a two-line change and is worth doing
+  before anyone tries this.
+- **The hard stop is the viewport guard, and it is just past 16K.** `fogw_window` refuses
+  `vw > 16384`, so a screen wider than **16512 px** gets no wide grid at all and falls back to the
+  engine's. 16K's 15232 is inside it with room; there is no standard mode between them.
+
+Two things that are *not* limits, so that nobody spends a session on them: `tagpu_native.c`'s
+`cols <= 1024` on the **engine's** descriptor is fine at any of these — the engine's own grid is
+`viewW/32 + 2`, which is 478 cells at 16K — and the fog texture at 1925×1093 is far inside any
+GL implementation's maximum.
+
+## 8. What is actually being decided
 
 Three separable questions, in dependency order:
 
 1. **Does the buffer track the window, or stay square?** Tracking the window is where the memory
    win is (72× at 1024×768, 29× at 1080p) and it is a precondition for the rest.
 2. **How does it grow when a later game in the same process needs more?** The four options above.
-3. **What replaces the `512` in `tagpu_fog_at`?** It has to become the same expression the
+3. **Does the old block get freed, or abandoned?** §6.1: a per-slot grow can free it with no
+   fence, and the recommendation is nevertheless to abandon it — the assumption is the same either
+   way, but the free turns a future mistake into a fault instead of a torn frame.
+4. **What replaces the `512` in `tagpu_fog_at`?** It has to become the same expression the
    producer sizes from, not a second number — that is the defect this page exists to describe,
    and re-typing a different literal reproduces it a year from now.
 
-There is a fourth question hiding behind (3): `tagpu_native.c` bounds the **engine's** grid
+There is a fifth question hiding behind (4): `tagpu_native.c` bounds the **engine's** grid
 descriptor at `cols <= 1024 && rows <= 1024`, which is a sanity check on a struct read out of
 engine memory rather than a statement about our own window. That one should stay a fixed,
 generous bound — it is guarding against a corrupted descriptor, and the engine's own grid is
 `viewW/32 + 2` cells, so it cannot legitimately approach 1024 until the viewport is 32,000 px
 wide.
+
+None of them is the ceiling this module will actually hit first — see §7: past about 8K the
+problem stops being how big the buffer is and becomes how long it takes to fill.
