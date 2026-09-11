@@ -38,6 +38,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as cf
 import json
 import math
 import os
@@ -269,7 +270,15 @@ PHASES = 4
 # it re-decoded a PNG from disk for nearly every tile and the clip backend was
 # SLOWER than the procedural one (1178 ms vs 621 ms per 4K frame). Costs about
 # 2.3 MB per entry at 1024x768.
-FULL_LRU = 192
+# The full-frame cache is bounded in BYTES, not in frames. "192 frames" means
+# 460 MB of 1024x768 footage and 1.8 GB of 2048x1536 footage -- per clip, per
+# worker -- and with six clips across sixteen workers that is how a render came
+# to be killed by the OOM killer at 5-6 GB per worker. Exactly the same mistake
+# as keying LOD on absolute pixels: a count is not a budget when the thing being
+# counted changes size. 192 MB per clip is ~20 frames of 2048x1536 hero footage
+# and ~80 of 1024x768 filler, and the whole six-clip set fits in ~1.2 GB.
+FULL_LRU_BYTES = 192 << 20
+FULL_LRU_MIN = 8            # never thrash down to nothing on huge frames
 
 
 def canonical_size(want_w: int, want_h: int) -> tuple[int, int]:
@@ -650,6 +659,25 @@ class Terminal:
         return img
 
 
+class _ThumbView:
+    """The thumb ladder as PIL images, built on demand off a mmapped array.
+
+    Indexing costs one small copy (160x120), which is nothing next to holding
+    every frame of every clip resident in every worker.
+    """
+
+    __slots__ = ("arr",)
+
+    def __init__(self, arr):
+        self.arr = arr
+
+    def __len__(self):
+        return len(self.arr)
+
+    def __getitem__(self, i):
+        return Image.fromarray(np.asarray(self.arr[i]))
+
+
 class Clip:
     """Real footage for one clip id.
 
@@ -669,6 +697,7 @@ class Clip:
         self.dir = cache / clip_id
         self.thumbs: list[Image.Image] = []
         self.full = OrderedDict()
+        self._lru_n = None       # frames, derived from FULL_LRU_BYTES on first read
         self.n = 0
         self._extract()
 
@@ -697,8 +726,11 @@ class Clip:
         # only the first render after a capture pays for it.
         npy = self.dir / f"thumbs-{self.THUMB_W}.npy"
         if npy.exists():
-            arr = np.load(npy, mmap_mode="r")
-            self.thumbs = [Image.fromarray(np.asarray(a)) for a in arr]
+            # mmap, and do NOT materialise: `np.asarray(a)` per frame copies the
+            # whole ladder into this process's heap, which is ~100 MB per clip
+            # per worker and is pure duplication -- the mapped pages are shared.
+            self._thumb_arr = np.load(npy, mmap_mode="r")
+            self.thumbs = _ThumbView(self._thumb_arr)
             return
         for p in self.frames:
             im = Image.open(p).convert("RGB")
@@ -716,8 +748,11 @@ class Clip:
         got = self.full.get(i)
         if got is None:
             got = Image.open(self.frames[i]).convert("RGB")
+            if self._lru_n is None:
+                per = max(1, got.width * got.height * 3)
+                self._lru_n = max(FULL_LRU_MIN, FULL_LRU_BYTES // per)
             self.full[i] = got
-            while len(self.full) > FULL_LRU:
+            while len(self.full) > self._lru_n:
                 self.full.popitem(last=False)
         else:
             self.full.move_to_end(i)
@@ -1270,16 +1305,33 @@ def cmd_render(args) -> int:
                       t0 + first / fps, cnt, str(segdir / f"seg{i:03d}.mp4"),
                       SUPERSAMPLE))
     print(f"  {len(tasks)} segments x ~{per} frames across {jobs} workers")
+    # ProcessPoolExecutor, NOT multiprocessing.Pool: when a worker is killed --
+    # and the OOM killer does kill these, they are the largest processes on the
+    # machine -- Pool quietly starts a replacement and the dead worker's task is
+    # simply never completed, so the parent waits on a result that can never
+    # arrive. It sits there at "10/16 segments" with every worker idle, no error
+    # anywhere, looking exactly like a slow render. The executor raises
+    # BrokenProcessPool instead, which is a failure you can act on.
     done, total = 0, 0
-    with mp.get_context("spawn").Pool(jobs) as pool:
-        for idx, path, cnt, rc in pool.imap_unordered(_render_segment, tasks):
-            if rc != 0:
-                print(f"\n  segment {idx} failed (ffmpeg rc={rc})")
-                return rc
-            done += 1
-            total += cnt
-            print(f"\r  {done}/{len(tasks)} segments, {total}/{n} frames",
-                  end="", flush=True)
+    ctx = mp.get_context("spawn")
+    try:
+        with cf.ProcessPoolExecutor(max_workers=jobs, mp_context=ctx) as pool:
+            futures = [pool.submit(_render_segment, job) for job in tasks]
+            for fut in cf.as_completed(futures):
+                idx, path, cnt, rc = fut.result()
+                if rc != 0:
+                    print(f"\n  segment {idx} failed (ffmpeg rc={rc})")
+                    return rc
+                done += 1
+                total += cnt
+                print(f"\r  {done}/{len(tasks)} segments, {total}/{n} frames",
+                      end="", flush=True)
+    except cf.process.BrokenProcessPool:
+        print(f"\n  a render worker died ({done}/{len(tasks)} segments were done).")
+        print("  Almost certainly the OOM killer: each worker holds a frame cache")
+        print("  per clip, so peak memory scales with --jobs. Retry with a lower")
+        print("  -j, or lower FULL_LRU_BYTES.")
+        return 1
     print()
 
     listing = segdir / "segments.txt"

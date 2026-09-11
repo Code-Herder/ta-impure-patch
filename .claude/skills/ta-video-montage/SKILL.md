@@ -314,6 +314,40 @@ Captions also composited the whole frame: converting 4K to RGBA and back cost ~9
 per frame regardless of caption size. Now only the dirty rect is composited (a full
 card still dirties everything, and then it is the same work).
 
+### Memory is the limit at 4K, and the failure is a HANG, not a crash
+
+**A render of the real footage was killed by the OOM killer at 5-6 GB per worker,
+and it did not look like a crash — it looked like a slow render.** Progress stopped
+at "10/16 segments" with every worker idle, no message anywhere, for as long as you
+let it sit. `multiprocessing.Pool` replaces a dead worker and silently loses the
+task it was running, so the parent waits on a result that can never arrive.
+`cmd_render` uses `concurrent.futures.ProcessPoolExecutor` now, which raises
+`BrokenProcessPool`. The diagnostic that found it: sample `/proc/<pid>/stat`
+utime+stime over ten seconds for every worker — all zero means wedged, not busy.
+
+**Bound the frame cache in BYTES.** `FULL_LRU = 192` frames is 460 MB of 1024x768
+footage and **1.8 GB of 2048x1536 footage, per clip, per worker** — the same
+mistake as keying LOD on absolute pixels, because a count is not a budget when the
+thing being counted changes size. `FULL_LRU_BYTES` (192 MB per clip) makes the six
+clips fit in ~1.2 GB whatever they were shot at. The synthetic stand-ins hid this
+completely: they were small and short, so the cache never filled.
+
+**Do not materialise the thumb ladder.** It is `np.load(..., mmap_mode="r")`, and
+the old code then copied every frame into the worker's heap with `np.asarray` —
+~100 MB per clip per worker of pure duplication. `_ThumbView` indexes the mapped
+array and builds the 160x120 image on demand, so the pages are shared through the
+page cache.
+
+After all three: **15.1 GB across 12 workers** for the 4K cut, against 5-6 GB per
+worker before. `-j` is a memory knob as much as a speed one at 4K.
+
+**Known race, not yet fixed:** every worker constructs its own `Montage`, so on a
+COLD cache all of them try to extract the same clip at once, and `_extract`'s
+`.done` stamp would let one worker `rmtree` a directory another is writing into.
+It has not bitten (extraction happens to win before the others look), but do not
+assume a cold-cache parallel render is safe. Warm the cache with a short
+`--t0/--t1` render at `-j 1` first if it matters.
+
 ### `-j`: frames are independent
 
 `--jobs` (default: half the cores) renders contiguous **segments** in parallel, each
@@ -706,11 +740,21 @@ Two things the prototype changed in the base cut, both worth keeping:
 * **`wire` pass**: renders, decodes clean, 54.0 s / 1620 frames. Reviewed as the
   prototype.
 * **Stability**: wide-shot jitter 108.7 → 30.7 at the default `--supersample 3`.
-* **`clip` pass**: exercised end to end against six synthetic 1024×768 clips, then
-  against **real footage** — `big-battle` shot 2026-09-10 at 2048×1536 and cut into
-  the film's first 11.5 s at 4K (345 frames, decodes clean). The transcript
-  placeholder is **closed**; the terminal carries what the tool really prints.
-* **Not yet done**: five of the six clips are still unshot (`air-war`,
-  `last-stand`, `naval-push`, `ridge-assault`, `shore-raid`), and windows 1-3 still
-  carry the placeholder transcript format. `big-battle` itself needs re-shooting at
-  50 s for the finished film.
+* **`clip` pass: DONE.** All six clips shot 2026-09-11 — the four heroes at
+  2048×1536 (55-60 s) and the two filler-only ones at 1024×768 (40 s), 20-37 unique
+  fps each. The full 57 s cut renders at 4K: 1710 frames, decodes clean, 210 MB
+  master / 23.7 MB 1080p share cut.
+* **Both placeholders are CLOSED.** All four hero terminals carry the real
+  twelve-line transcript, captured after the last scenario change and checked with
+  `promo/transcripts.py --check`.
+* **Real footage aliases less than the wireframe did, as predicted.** Mean temporal
+  second difference over the whole cut is **2.171**, against ~3.1 for the
+  white-box. That prediction is now a measurement.
+* **The parallel concat is sound**: the 11 segment seams average **1.905** against
+  **2.178** elsewhere — below average, and no seam appears in the worst 15 frames.
+* **Where the jitter actually is**: the worst 15 frames are all in **t = 7.6-8.1**,
+  the first few frames of the pull-back as the camera leaves its hold. That is the
+  lurch, localised — it is the easing at the 7.47 keyframe, not anything at 9 s.
+* **Open**: `naval-push` is the weakest clip at ~20 unique fps (TA naval combat is
+  inherently slow and sparse) and `air-war` leaves the outer thirds of its frame
+  fairly empty with the bases only 600 units apart.
