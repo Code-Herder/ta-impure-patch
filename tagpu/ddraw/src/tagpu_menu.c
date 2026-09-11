@@ -660,8 +660,12 @@ static int gput(char* b, int cap, int at, const char* fmt, ...)
     return at + k;
 }
 
+/* `commonattribs` is a field the .GUI parser reads and the stock screens use
+   non-zero values of (VISUALS.GUI's own labels carry 104, its BSHADOWS 109), so
+   a screen we re-emit has to carry it through rather than assume 0. Every
+   RENDER.GUI call site passes 0, which is what it always wrote. */
 static int common(char* b, int cap, int at, int id, const char* name,
-                  int x, int y, int w, int h, int attribs, int colorf)
+                  int x, int y, int w, int h, int attribs, int colorf, int cattr)
 {
     at = gput(b, cap, at,
         "\t[COMMON]\r\n\t\t{\r\n"
@@ -669,8 +673,8 @@ static int common(char* b, int cap, int at, int id, const char* name,
         "\t\txpos=%d;\r\n\t\typos=%d;\r\n\t\twidth=%d;\r\n\t\theight=%d;\r\n"
         "\t\tattribs=%d;\r\n\t\tcolorf=%d;\r\n\t\tcolorb=0;\r\n"
         "\t\ttexturenumber=0;\r\n\t\tfontnumber=0;\r\n\t\tactive=1;\r\n"
-        "\t\tcommonattribs=0;\r\n\t\thelp=;\r\n\t\t}\r\n",
-        id, name, x, y, w, h, attribs, colorf);
+        "\t\tcommonattribs=%d;\r\n\t\thelp=;\r\n\t\t}\r\n",
+        id, name, x, y, w, h, attribs, colorf, cattr);
     return at;
 }
 
@@ -679,7 +683,7 @@ static int build_gui(char* b, int cap, int rows)
     int at = 0, i;
 
     at = gput(b, cap, at, "[GADGET0]\r\n\t{\r\n");
-    at = common(b, cap, at, 0, "RENDER", 0, BAR_H, PANEL_W, PANEL_H, 0, 0);
+    at = common(b, cap, at, 0, "RENDER", 0, BAR_H, PANEL_W, PANEL_H, 0, 0, 0);
     at = gput(b, cap, at,
         "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
@@ -688,13 +692,13 @@ static int build_gui(char* b, int cap, int rows)
 
     /* the ground: an id=12 whose NAME is the GAF frame, over the whole panel */
     at = gput(b, cap, at, "[GADGET1]\r\n\t{\r\n");
-    at = common(b, cap, at, 12, ART_NAME, 0, 0, PANEL_W, PANEL_H, 0, 15);
+    at = common(b, cap, at, 12, ART_NAME, 0, 0, PANEL_W, PANEL_H, 0, 15, 0);
     at = gput(b, cap, at, "\t}\r\n");
 
     /* the caption. tools/guipanel.py rules the panel at DIV_TOP = 30 and the
        band above it is the title's -- an empty one is just a bare rule. */
     at = gput(b, cap, at, "[GADGET2]\r\n\t{\r\n");
-    at = common(b, cap, at, 5, "TITLE", LBL_X, TITLE_Y, TITLE_W, 18, 1, 15);
+    at = common(b, cap, at, 5, "TITLE", LBL_X, TITLE_Y, TITLE_W, 18, 1, 15, 0);
     at = gput(b, cap, at, "\ttext=%s;\r\n\t}\r\n", "Render options");
 
     for (i = 0; i < rows; i++) {
@@ -702,11 +706,11 @@ static int build_gui(char* b, int cap, int rows)
         /* the label, BESIDE its control -- every stock runtime screen puts it
            16 px above, which six rows have no room for (gui-gadgets.md 10.3) */
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 3);
-        at = common(b, cap, at, 5, "TEXT", LBL_X, y, LBL_W, ROW_H, 1, 15);
+        at = common(b, cap, at, 5, "TEXT", LBL_X, y, LBL_W, ROW_H, 1, 15, 0);
         at = gput(b, cap, at, "\ttext=%s;\r\n\t}\r\n", s_row[i].label);
 
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 4);
-        at = common(b, cap, at, 1, s_row[i].name, CTL_X, y, CTL_W, ROW_H, 1, 15);
+        at = common(b, cap, at, 1, s_row[i].name, CTL_X, y, CTL_W, ROW_H, 1, 15, 0);
         at = gput(b, cap, at,
             "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
             s_row[i].text, s_row[i].stages);
@@ -871,32 +875,42 @@ static void menu_close(char* main_p)
 /* ---- the engine calls this ----------------------------------------------- */
 /* __stdcall void(GUIInfo*): the actuated index arrives in gi->UIChange_f, not
    as an argument (GUIMEMSTRUCT+0x08, 0x4A967F). -1 is the pop path. */
-void __stdcall tagpu_menu_oncommand(void* gi)
+/* Which of OUR rows the actuated gadget is, or -1 for anything else -- the
+   engine's, or nothing actuated at all. Shared by both screens: the lookup is
+   by NAME, so it is the same question on RENDER.GUI and on VISUALS.GUI, and on
+   the front end it is also the test for whether the engine's own handler must
+   be allowed to run (see tagpu_vis_oncommand). */
+static int menu_row_of(void* gi)
 {
     char* main_p = *(char**)TA_MAIN;
     char* top;
     char* ctrls;
-    int idx, row, i;
+    int idx, i;
 
-    if (!gi || !main_p) return;
+    if (!gi || !main_p) return -1;
     idx = *(int*)((char*)gi + GI_UICHANGE);
     /* -1 IS NOT PROOF OF A POP. GUI_Pop does set gi->UIChange_f to -1 before
        calling us (0x4A9673), but the pump also resets it (0x4AA096) and calls
        us again on the same click -- measured, and treating that as a pop
        destroyed the model on every click. `on_stack` in the tick is the
        authority on whether our screen is still there. */
-    if (idx < 0) return;
+    if (idx < 0) return -1;
 
     top   = *(char**)(main_p + OFF_TOPGUI);
     ctrls = top ? *(char**)(top + GM_CTRLS) : 0;
-    if (!ctrls || idx < 1 || idx > *(short*)(ctrls + 0xB6)) return;
+    if (!ctrls || idx < 1 || idx > *(short*)(ctrls + 0xB6)) return -1;
 
     /* index -> row, by the gadget's own name: the .GUI's layout is ours but a
        name lookup cannot go wrong if the layout ever changes. */
-    row = -1;
     for (i = 0; i < s_nrows; i++)
         if (!memcmp(ctrls + (size_t)idx * STRIDE + G_NAME, s_row[i].name,
-                    strlen(s_row[i].name) + 1)) { row = i; break; }
+                    strlen(s_row[i].name) + 1)) return i;
+    return -1;
+}
+
+void __stdcall tagpu_menu_oncommand(void* gi)
+{
+    int row = menu_row_of(gi);
     if (row < 0) return;
 
     if (row == R_STYLE) {
@@ -1235,13 +1249,265 @@ static void read_tokens(void)
     }
 }
 
+/* ===================== the front-end screen (VISUALS.GUI) =================
+   The render options reachable before a game starts, on the screen TA already
+   ships for display settings: Single Player -> Options -> Visuals.
+
+   WHY WE MAY REPLACE IT AT ALL. `InitTAHPIAry 0x41D4C0` globs `*.UFO` at
+   position 3 and `*.HPI` at 4, and a .ufo entry SHADOWS the same path in a
+   stock .hpi -- measured 2026-09-11 by packing a `guis/VISUALS.GUI` whose
+   `Shading` caption read `UFO-WINS` and reading it back through `tacli ui`.
+   So the screen ships as a third file in the archive the DLL already writes at
+   attach, with no gadget-array surgery and no patched stock archive.
+
+   WHAT THE STOCK FILE ACTUALLY IS, and it is not what the screenshot suggests:
+   VISUALS.GUI carries ONLY the right-hand column -- eleven gadgets, the five
+   video controls and their captions. The tab column (SOUND / MUSIC / INTERFACE
+   / VISUALS) and the action column (OK / Cancel / Restore / Undo) belong to
+   STARTOPT.GUI, which this screen is pushed on top of. So re-emitting this file
+   cannot break the tabs or the buttons, and the space we may lay out in is
+   what STARTOPT leaves free: x from about 200 to 470, between its tabs (68..188)
+   and its actions (478..598).
+
+   THE LAYOUT. The stock column moves left by VIS_DX to make room and keeps
+   every gadget's own name, size and y -- only x changes -- and our six rows go
+   in a second column at VIS_COL_X. Every stock gadget is re-emitted in its
+   stock ORDER as well, so anything in the engine that dispatches by index
+   rather than by name sees exactly what it saw before.
+
+   THE ROWS ARE THE IN-GAME SCREEN'S, the same `s_row` table and the same
+   `s_stage` model: one model, two views. A player who sets Classic++ here has
+   set it for the game, and the in-game screen opens agreeing with them.
+
+   TWO OBSERVERS, AND NEITHER SKIPS ANYTHING (tagpu_detour.h: an observer is
+   byte-identical to the engine running alone, which is what makes replacing a
+   stock screen's behaviour safe):
+     - `0x45E5E0`, the visual-options dialog build, on RETURN: the gadgets exist
+       by then, so the plates are set from the levers there.
+     - `0x45E100`, OnCommand_VISUALRT_GUI, on ENTRY: the click is ours if the
+       actuated gadget carries one of our names, and `tagpu_menu_oncommand` is
+       already exactly that test -- it maps the index to a row BY NAME and
+       returns silently otherwise, so the front end reuses it unchanged. The
+       engine's own handler then runs and finds none of its gadgets actuated. */
+
+#define VA_VIS_BUILD    0x0045E5E0u     /* dialog build, stdcall(int selvmode) */
+/* 0x45E100 (OnCommand_VISUALRT_GUI) is NOT detoured -- see tagpu_vis_oncommand */
+static const unsigned char VIS_BUILD_STOLEN[7] =
+    { 0x8B, 0x44, 0x24, 0x04, 0x83, 0xEC, 0x10 };   /* mov eax,[esp+4]; sub esp,0x10 */
+
+#define VIS_FILE      "guis/visuals.gui"
+/* the stock column now carries its own x in the table: 208, clear of the tabs */
+#define VIS_COL_X     345       /* ours: 345..465, clear of STARTOPT's actions    */
+#define VIS_Y0        80
+#define VIS_PITCH     68
+#define VIS_LBL_H     17
+#define VIS_CTL_DY    21
+#define VIS_W         120
+#define VIS_STOCK_N   11
+
+typedef struct {
+    int         id, x, y, w, h, attribs, colorf, cattr;
+    const char* name;
+    const char* text;           /* label/button caption, or NULL           */
+    int         a, b;           /* button: quickkey, stages. slider: range, thick */
+} VisStock;
+
+/* The stock gadgets, verbatim from the shipped VISUALS.GUI (extracted with
+   tools/hpipack.py) except for x and y, in their own order.
+
+   THE STOCK COLUMN IS RE-RULED ONTO THE SAME 68-px PITCH AS OURS. Its own y
+   values are irregular -- 80, 143, 224, 292, 358 -- because the Screen Size
+   control is a three-line trio (caption, value, slider) and the stock file
+   simply fits it in. Left alone beside a regular second column the two read as
+   a mistake, so both are on VIS_Y0 + VIS_PITCH*i here and the trio is
+   compressed into its row (148 / 164 / 180, ending at 196, clear of 216).
+   Each caption keeps its own offset from its control, which is how the stock
+   file centres them over unequal widths. */
+static const VisStock s_visStock[VIS_STOCK_N] = {
+    /* id    x    y    w   h  att  cf  ca   name        text            a    b   */
+    { 1, 208, 237, 120, 20,  1,  0,   0, "SHADING",  "Off|On",       79, 2 },
+    { 1, 208, 305, 120, 20,  1,  0,   0, "ANTI",     "Off|On",      102, 2 },
+    { 4, 208, 101, 122, 16,  1,  4,   0, "GAMMA",    NULL,          114, 20 },
+    { 5, 212,  80, 118, 14, 18, 15,   0, "TEXT",     "Gamma",         0, 0 },
+    { 4, 208, 180, 121, 16,  1,  4,   0, "VIDSLDR",  NULL,          114, 26 },
+    { 5, 211, 164, 118, 13, 18, 15,   0, "VIDVAL",   "640x480",       0, 0 },
+    { 5, 207, 148, 122, 14, 18, 15,   0, "VIDTEXT",  "Screen Size",   0, 0 },
+    { 1, 208, 373, 120, 20,  1,  0, 109, "BSHADOWS", "Off|On",      124, 2 },
+    { 5, 209, 352, 118, 18, 18, 15, 104, "TEXT",     "Shadows",       0, 0 },
+    { 5, 206, 284, 120, 17, 18, 15, 104, "TEXT",     "Anti-aliasing", 0, 0 },
+    { 5, 204, 216, 123, 17, 18, 15, 104, "TEXT",     "Shading",       0, 0 },
+};
+
+static int build_visuals_gui(char* b, int cap, int rows)
+{
+    int at = 0, i, g = 1;
+
+    at = gput(b, cap, at, "[GADGET0]\r\n\t{\r\n");
+    at = common(b, cap, at, 0, "visuals.GUI", 0, 0, 639, 480, 0, 0, 1);
+    at = gput(b, cap, at,
+        "\ttotalgadgets=%d;\r\n"
+        "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
+        "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n",
+        VIS_STOCK_N + 1 + rows * 2);
+
+    for (i = 0; i < VIS_STOCK_N; i++) {
+        const VisStock* s = &s_visStock[i];
+        at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+        at = common(b, cap, at, s->id, s->name, s->x, s->y, s->w, s->h,
+                    s->attribs, s->colorf, s->cattr);
+        if (s->id == 1)
+            at = gput(b, cap, at, "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=%d;\r\n"
+                                  "\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
+                      s->text, s->a, s->b);
+        else if (s->id == 4)
+            at = gput(b, cap, at, "\trange=%d;\r\n\tthick=%d;\r\n\tknobpos=0;\r\n"
+                                  "\tknobsize=10;\r\n\t}\r\n", s->a, s->b);
+        else
+            at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", s->text);
+    }
+
+    /* our column's heading, set in the same face the stock captions use */
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+    at = common(b, cap, at, 5, "TEXT", VIS_COL_X, VIS_Y0 - 24, VIS_W, VIS_LBL_H, 18, 15, 104);
+    at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", "Impure rendering");
+
+    for (i = 0; i < rows; i++) {
+        int y = VIS_Y0 + VIS_PITCH * i;
+        at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+        at = common(b, cap, at, 5, "TEXT", VIS_COL_X, y, VIS_W, VIS_LBL_H, 18, 15, 104);
+        at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", s_row[i].label);
+
+        at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+        at = common(b, cap, at, 1, s_row[i].name, VIS_COL_X, y + VIS_CTL_DY,
+                    VIS_W, ROW_H, 1, 0, 0);
+        at = gput(b, cap, at, "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n"
+                              "\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
+                  s_row[i].text, s_row[i].stages);
+    }
+    return at;
+}
+
+/* ---- the two observers --------------------------------------------------- */
+
+static int s_visArmed = 0;
+static void* s_visRet[8];
+static int   s_visRetDepth = 0;
+
+/* Is the screen on top one of ours? Asked by NAME, off the live ControlsAry,
+   because `0x45E5E0` also builds VISUALRT and SELVMODE and neither carries our
+   rows. The count is at +0xB6 and records are 1-based, exactly as the
+   OnCommand index is. */
+static int screen_has_row(void)
+{
+    char* main_p = *(char**)TA_MAIN;
+    char* top    = main_p ? *(char**)(main_p + OFF_TOPGUI) : 0;
+    char* ctrls  = top ? *(char**)(top + GM_CTRLS) : 0;
+    int n, i;
+    size_t len;
+    if (!ctrls) return 0;
+    n = *(short*)(ctrls + 0xB6);
+    len = strlen(s_row[0].name) + 1;
+    for (i = 1; i <= n && i < 256; i++)
+        if (!memcmp(ctrls + (size_t)i * STRIDE + G_NAME, s_row[0].name, len))
+            return 1;
+    return 0;
+}
+
+typedef void (__stdcall *oncmd_fn)(void* gi);
+static oncmd_fn s_visPrevOnCmd = 0;
+
+static void __stdcall tagpu_vis_oncommand(void* gi);
+
+static int __cdecl vis_build_before(void* esp)
+{
+    if (s_visRetDepth >= 8) return 0;          /* recursion guard, not a queue */
+    s_visRet[s_visRetDepth++] = ((void**)esp)[0];
+    return 1;                                   /* ask for the return trampoline */
+}
+
+/* On RETURN from the dialog build: the gadgets exist, so the plates can be set.
+   `read_state` re-reads the levers, which is what makes the screen a front end
+   over them rather than a store of its own. */
+static void* __cdecl vis_build_after(unsigned int* regs)
+{
+    (void)regs;
+    if (screen_has_row()) {
+        char* main_p = *(char**)TA_MAIN;
+        char* top    = *(char**)(main_p + OFF_TOPGUI);
+        oncmd_fn cur = top ? *(oncmd_fn*)(top + GM_ONCMD) : 0;
+        /* Take the dispatch slot, remembering whose it was so the engine's own
+           handler still runs for its own gadgets. The screen is rebuilt every
+           time the player enters it, so this is re-taken per visit and the
+           saved pointer is never a stale one from a previous screen -- the
+           guard is that we never chain to OURSELVES. */
+        if (cur && cur != tagpu_vis_oncommand) {
+            s_visPrevOnCmd = cur;
+            *(oncmd_fn*)(top + GM_ONCMD) = tagpu_vis_oncommand;
+        }
+        read_state();
+        push_stages(main_p + OFF_GUIINFO);
+    }
+    return s_visRetDepth > 0 ? s_visRet[--s_visRetDepth] : NULL;
+}
+
+/* OUR OnCommand for the front-end screen, installed in the engine's own
+   dispatch slot rather than over its handler.
+
+   WHY THE HANDLER CANNOT SIMPLY BE OBSERVED, measured 2026-09-11. An observer
+   never skips, so the engine's `0x45E100` ran after ours -- and its fall-through
+   at `0x45E46A` is not the no-op it looks like:
+
+       mov  eax,[esi+0x60]        ; the actuated index
+       cmp  eax,-1                ; nothing actuated -> return
+       je   0x45E4AB
+       ...                        ; ebx + index*0x15B
+       cmpb $1,(%ebx,%edx,2)      ; is the gadget id == 1, i.e. a BUTTON?
+       je   0x45E499              ; YES -> GUI_Pop 0x4A9660, then call the
+                                  ;        UNDERLYING screen's OnCommand
+
+   That is how the tab buttons work: SOUND / MUSIC / INTERFACE / VISUALS and
+   OK / Cancel / Restore / Undo all live on STARTOPT.GUI *underneath* this
+   screen, so a click the top screen does not recognise means "the player hit
+   the screen below" -- pop, and forward. Our rows are `id=1` stage buttons and
+   are therefore indistinguishable from a tab: every click on one closed the
+   screen. (The symptom was exact -- the row DID advance and the cfg WAS
+   written, and then the screen went back to STARTOPT.)
+
+   So we take `GUIMEMSTRUCT+0x08`, the engine's own extension point and the
+   same field RENDER.GUI owns outright, and chain: ours when the actuated
+   gadget is one of our rows, the engine's for everything else, which keeps the
+   tabs, the buttons and the stock controls behaving exactly as they did. */
+static void __stdcall tagpu_vis_oncommand(void* gi)
+{
+    if (menu_row_of(gi) >= 0) { tagpu_menu_oncommand(gi); return; }
+    /* THE TRAILING -1 MUST NOT BE FORWARDED. The pump calls OnCommand a second
+       time for the same click with UIChange_f reset to -1 (0x4AA096), and
+       `0x45E100`'s -1 branch is the screen's TEARDOWN: it frees the display-mode
+       list at [gi+0x18]+0xC, nulls the pointer and clears `main+0x37EBE` bit 0.
+       Run mid-screen that tears down a screen that is still up. On a real pop
+       GUI_Pop reaches the engine's handler by its own path, so nothing is lost
+       by declining this one. Measured 2026-09-11: forwarding it was the first of
+       two reasons a click closed the screen. */
+    if (gi && *(int*)((char*)gi + GI_UICHANGE) < 0) return;
+    if (s_visPrevOnCmd) s_visPrevOnCmd(gi);
+}
+
+static void vis_install(void)
+{
+    s_visArmed =
+        tagpu_detour_bytes_ok(VA_VIS_BUILD, VIS_BUILD_STOLEN, sizeof VIS_BUILD_STOLEN) &&
+        tagpu_detour_observe(VA_VIS_BUILD, VIS_BUILD_STOLEN, sizeof VIS_BUILD_STOLEN,
+                             vis_build_before, vis_build_after);
+}
+
 void tagpu_menu_init(void)
 {
     static char gui[8192];
+    static char vgui[16384];
     static unsigned char gaf[16 + 0x28 + 8 + 0x18 + PANEL_W * PANEL_H];
-    TAGPU_UFO_FILE f[2];
-    char b[240];
-    int len, wrote, armed;
+    TAGPU_UFO_FILE f[3];
+    char b[300];
+    int len, vlen, wrote, armed;
     unsigned glen;
 
     read_tokens();
@@ -1253,13 +1519,21 @@ void tagpu_menu_init(void)
     if (len < 0) { mlog("menu: NOT armed - the generated .GUI does not fit"); return; }
     glen = build_gaf(gaf, sizeof gaf, s_nrows);
     if (!glen) { mlog("menu: NOT armed - the panel frame does not fit"); return; }
+    /* The front-end screen is a THIRD entry in the same archive. It is written
+       whether or not the observers arm: a half-written archive after a DLL
+       upgrade is the confusing failure, exactly as for render.gui above. */
+    vlen = build_visuals_gui(vgui, sizeof vgui, s_nrows);
+    if (vlen < 0) { mlog("menu: NOT armed - the generated VISUALS.GUI does not fit"); return; }
     f[0].path = "guis/render.gui";
     f[0].data = gui;
     f[0].size = (unsigned)len;
     f[1].path = "anims/render.gaf";
     f[1].data = gaf;
     f[1].size = glen;
-    wrote = tagpu_ufo_write(UFO_FILE, f, 2);
+    f[2].path = VIS_FILE;
+    f[2].data = vgui;
+    f[2].size = (unsigned)vlen;
+    wrote = tagpu_ufo_write(UFO_FILE, f, 3);
 
     armed = wrote && !exists(OFF_FILE) &&
             tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
@@ -1273,12 +1547,15 @@ void tagpu_menu_init(void)
             tagpu_detour_bytes_ok(VA_POSTGUI, POST_STOLEN, sizeof POST_STOLEN) &&
             tagpu_detour_observe(VA_POSTGUI, POST_STOLEN, sizeof POST_STOLEN,
                                  before_postgui, NULL);
+        vis_install();
     }
 
     _snprintf(b, sizeof b,
-              "menu: %s " UFO_STAMP " ufo=%d rows=%d gui=%d gaf=%u trigger=%d bytes "
-              "(RENDER.GUI over DrawGameScreen 0x468CF0; open with " OPEN_FILE ")",
-              armed ? "ARMED" : "NOT armed", wrote, s_nrows, len, glen, s_drawTrigger);
+              "menu: %s " UFO_STAMP " ufo=%d rows=%d gui=%d gaf=%u vis=%d trigger=%d bytes "
+              "(RENDER.GUI over DrawGameScreen 0x468CF0, open with " OPEN_FILE "; "
+              "VISUALS.GUI over the dialog build 0x45E5E0, OnCommand chained at GUIMEMSTRUCT+8, front end=%d)",
+              armed ? "ARMED" : "NOT armed", wrote, s_nrows, len, glen, vlen,
+              s_drawTrigger, s_visArmed);
     b[sizeof b - 1] = 0;
     mlog(b);
 }
