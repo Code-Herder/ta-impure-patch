@@ -134,7 +134,7 @@ int tagpu_fogwide_get(const unsigned short** buf,
    be refused by a cap that has since come down. It starts at
    FOGW_ENGINE_DIMCAP and rises with the window. It exists so that the producer
    and the gate cannot disagree: before it, the producer's cap was 1024 and the
-   gate's a separately typed 512, and a screen between 4064 and 8160 px wide got
+   gate's a separately typed 512, and a screen between 4057 and 8153 px wide got
    a grid that was built and then refused. */
 int tagpu_fogwide_dimcap(void);
 

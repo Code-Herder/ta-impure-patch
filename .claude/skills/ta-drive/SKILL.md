@@ -1083,7 +1083,7 @@ Three things about this one are unlike the other passes:
   **The grid is sized from the screen since 2026-09-10, not from a constant** — `cap=` is what the
   three buffers are allocated for and the `fogwide: grid CxR, N KB for the set` line says the cost
   once per size: **212 KB at 1920x1080, 84 KB at 1024x768**, where it used to be a flat 6144 KB in
-  every session. `ret=freed/retired held=N` is the grow path — a video-mode change grows the set
+  every session. `ret=freed/retired held=N/NKB` is the grow path — a video-mode change grows the set
   and hands the old three blocks to `tagpu_reclaim`'s quiescence fence, so **`held=` must fall
   back to 0** and **`strand=` must read 0**: stranding is what happens when the fence is unarmed
   (`tagpu_reclaim.off`, or an exe where the install failed) or the ring is full, and it is safe but
@@ -1091,6 +1091,16 @@ Three things about this one are unlike the other passes:
   throughout — **the grow path does not run on a normal launch**, so testing it needs either a real
   game → shell → game cycle at a different resolution or a temporary probe that inflates
   `fogw_capacity`.
+  **`rebuilds=0` is not a fault — check `LosType` before you chase it.** The rebuild fires on the
+  engine's is-current bit, which the LOS stamps clear; at **`LosType 12` (permanent LOS,
+  `--los 0`) nothing stamps**, so the rate is legitimately 0 however much is moving on screen.
+  At 14 (true LOS) the same scene gives ~30/s. Read the word at `*0x511DE8 + 0x14281` with
+  `tacli peek` rather than guessing — this cost a round of "is my change broken?" on 2026-09-11
+  when the answer was that `scenario load` had been given `--los 0`.
+  **One `bare=1` per video-mode change is expected** and is not the alarm the counter is for: the
+  render thread is recreated across a mode switch while `fogwide`'s staleness statics survive, so
+  the first frame after it reports one refusal. A second one, or any at all without a mode change,
+  is the real signal.
 - **A one-frame fog artifact is not findable with `glshot`.** Record the window losslessly
   (`ffmpeg -f x11grab -window_id <id> -framerate 60 -c:v libx264rgb -qp 0`) and scan every frame;
   the criterion that separates a fog failure from the grey band is **green dominance**

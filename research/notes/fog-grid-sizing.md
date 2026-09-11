@@ -36,7 +36,7 @@ was measured. Everything below is computed from the code's own arithmetic — `f
 </style>
 
 <p class="fg-cap">the two bounds, on one axis of screen width</p>
-<svg class="fg-dia" viewBox="0 0 700 190" role="img" aria-label="A number line of screen widths from 1024 to 7680 pixels. The CPU-side gate refuses grids wider than 512 cells, which happens past 4064 pixels of screen width; the producer's own cap of 1024 cells does not bite until 8160. Between those two figures the producer builds a grid the consumer refuses.">
+<svg class="fg-dia" viewBox="0 0 700 190" role="img" aria-label="A number line of screen widths from 1024 to 7680 pixels. The CPU-side gate refuses grids wider than 512 cells, which happens past 4057 pixels of screen width; the producer's own cap of 1024 cells does not bite until 8153. Between those two figures the producer builds a grid the consumer refuses.">
   <line class="fg-thin" x1="60" y1="120" x2="660" y2="120"/>
   <rect class="fg-ok"  x="60"  y="96" width="265" height="24"/>
   <rect class="fg-bad" x="325" y="96" width="315" height="24"/>
@@ -46,11 +46,11 @@ was measured. Everything below is computed from the code's own arithmetic — `f
   <text class="fg-badtx" x="482" y="112" text-anchor="middle" font-size="11">producer builds it — consumer refuses it</text>
 
   <line class="fg-sig" x1="325" y1="60" x2="325" y2="96"/>
-  <text class="fg-sigtx" x="325" y="52" text-anchor="middle" font-size="11">4064 px wide</text>
+  <text class="fg-sigtx" x="325" y="52" text-anchor="middle" font-size="11">4057 px wide</text>
   <text class="fg-lab"   x="325" y="38" text-anchor="middle">cols &gt; 512 — tagpu_fog_at refuses</text>
 
   <line class="fg-ghost" x1="640" y1="60" x2="640" y2="96"/>
-  <text class="fg-lab" x="640" y="52" text-anchor="middle">8160 px</text>
+  <text class="fg-lab" x="640" y="52" text-anchor="middle">8153 px</text>
   <text class="fg-lab" x="640" y="38" text-anchor="middle">cols &gt; 1024</text>
 
   <g class="fg-lab" text-anchor="middle">
@@ -68,8 +68,8 @@ was measured. Everything below is computed from the code's own arithmetic — `f
 </div>
 
 **The gap is real, not theoretical arithmetic.** `FOGW_MAXDIM` lets `tagpu_fogwide` build a grid
-up to 1024 cells a side; `tagpu_fog_at` refuses one over 512. Between a screen 4064 px wide and
-one 8160 px wide the producer builds a grid the CPU-side consumer will not read. A 4K screen
+up to 1024 cells a side; `tagpu_fog_at` refuses one over 512. Between a screen 4057 px wide and
+one 8153 px wide the producer builds a grid the CPU-side consumer will not read. A 4K screen
 (485 cells) clears the bound with 27 cells to spare. A 5K screen (645) does not.
 
 ## 1. What "the window" is, and why it is not the viewport
@@ -88,7 +88,7 @@ every outward ease.
   <text class="fg-lab" x="60" y="22">wide window — 245 × 148 cells (7840 × 4736 world px)</text>
 
   <rect class="fg-ghost" x="92" y="46" width="426" height="264"/>
-  <text class="fg-lab" x="100" y="60">drawn at 0.25× — 7168 × 4064 px</text>
+  <text class="fg-lab" x="100" y="60">drawn at 0.25× — 7168 × 4057 px</text>
 
   <rect class="fg-use" x="248" y="150" width="116" height="66" opacity="0.85"/>
   <rect class="fg-thin" x="248" y="150" width="116" height="66" fill="none"/>
@@ -370,11 +370,11 @@ fixed square costs today.
 
 | mode | viewport | window | 3 buffers | today |
 | --- | --- | --- | --- | --- |
-| 1024×768 | 896×704 | 133 × 109 | **85 KB** | 6 MB (72× more) |
+| 1024×768 | 896×704 | 133 × 109 | **84 KB** | 6 MB (72× more) |
 | 1280×1024 | 1152×960 | 165 × 141 | **136 KB** | 6 MB (45×) |
 | 1920×1080 | 1792×1016 | 245 × 148 | **212 KB** | 6 MB (29×) |
-| 2560×1440 | 2432×1376 | 325 × 193 | **368 KB** | 6 MB (17×) |
-| 3440×1440 | 3312×1376 | 435 × 193 | **492 KB** | 6 MB (13×) |
+| 2560×1440 | 2432×1376 | 325 × 193 | **367 KB** | 6 MB (17×) |
+| 3440×1440 | 3312×1376 | 435 × 193 | **491 KB** | 6 MB (13×) |
 | 3840×2160 | 3712×2096 | 485 × 283 | **804 KB** | 6 MB (7.6×) |
 | 5120×2880 | 4992×2816 | 645 × 373 | **1.4 MB** | 6 MB (4.4×) — *refused today* |
 | 7680×4320 | 7552×4256 | 965 × 553 | **3.1 MB** | 6 MB (2.0×) — *refused today* |
@@ -945,9 +945,9 @@ comes from `fogw_window`'s arithmetic at `ZOOM_MIN` = 0.25, taken at the worst e
 
 | screen | viewport | grid | one buffer | three | cells | rebuild | game thread |
 |---|---|---|---|---|---|---|---|
-| 1024×768 | 896×704 | 133×109 | 28 KB | 85 KB | 14.5 k | 58 µs | 1.8 ms/s |
+| 1024×768 | 896×704 | 133×109 | 28 KB | 84 KB | 14.5 k | 58 µs | 1.8 ms/s |
 | 1920×1080 | 1792×1016 | 245×148 | 71 KB | 212 KB | 36.3 k | **145 µs** | **4.4 ms/s** |
-| 2560×1440 | 2432×1376 | 325×193 | 123 KB | 368 KB | 62.7 k | 251 µs | 7.6 ms/s |
+| 2560×1440 | 2432×1376 | 325×193 | 123 KB | 367 KB | 62.7 k | 251 µs | 7.6 ms/s |
 | 3840×2160 | 3712×2096 | 485×283 | 268 KB | 804 KB | 137 k | 549 µs | 16.7 ms/s |
 | 5120×2880 | 4992×2816 | 645×373 | 470 KB | 1.38 MB | 241 k | 962 µs | 29.2 ms/s |
 | 7680×4320 | 7552×4256 | 965×553 | 1042 KB | 3.05 MB | 534 k | 2.13 ms | 64.9 ms/s |
@@ -973,9 +973,15 @@ So, taking 16K as the hypothetical:
   not the grid changed: 71 KB a frame at 1080p is 4 MB/s and invisible, 4.1 MB a frame at 16K is
   ~250 MB/s at 60 fps. Gating it on `s_pubData` would be a two-line change and is worth doing
   before anyone tries this.
-- **The hard stop is the viewport guard, and it is just past 16K.** `fogw_window` refuses
-  `vw > 16384`, so a screen wider than **16512 px** gets no wide grid at all and falls back to the
-  engine's. 16K's 15232 is inside it with room; there is no standard mode between them.
+- **The hard stop is much closer than the viewport guard, and the 16K row above is past it.**
+  `fogw_capacity` takes its viewport from `tagpu_vpwide_true_rect`, whose derived path
+  (`true_rect_of`, `tagpu_vpwide.c:111`) **refuses a screen wider than 8192 px** and falls back to
+  the raw engine fields — which, with `vpwide` armed, are the WIDENED viewport and not the true
+  one. So **7680 is the last row in the table derived from the path that would actually run**, and
+  everything about 16K above is arithmetic rather than a prediction about this code. The
+  `vw > 16384` guard in `fogw_window` is a second, looser bound behind that one and is not what
+  bites first. Raising the real ceiling means raising `true_rect_of`'s 8192, which is a
+  `tagpu_vpwide` change and not a fog one.
 
 ### Why a rebuild costs what it does
 
@@ -1084,7 +1090,10 @@ GL implementation's maximum.
 ## 8. What was decided, and what it measured
 
 Five questions, and what each was answered with. **The answer to (2) was 6.2, not the 6.1 this
-page recommended** — the call was the owner's, and it is the one that strands nothing.
+page recommended** — the call was the owner's, and it is the one that gives the memory back on the
+normal path. It does not strand *nothing*: three paths still do (`tagpu_reclaim` unarmed, the
+retire ring full, and the tick stopping for good with entries still in it), and the heartbeat's
+`strand=` and `held=` are what say so.
 
 1. **Does the buffer track the window, or stay square?** It tracks. `fogw_capacity` is
    `fogw_window`'s own expression evaluated at the **worst eye residue**, so the eye stops being an

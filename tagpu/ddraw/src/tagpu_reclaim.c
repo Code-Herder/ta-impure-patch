@@ -105,6 +105,10 @@ static void (__stdcall *s_real_free)(void*);   /* trampoline into the real body 
 static void (__cdecl   *s_mem_free)(void*) = (void (__cdecl*)(void*))MEMFREE_VA;
 static int   s_installed;
 static int   s_tmplArmed;                  /* the two template redirects are in       */
+/* Render thread only: the teardown flag as pass_begin found it, held for the
+   life of that pass so the driver's gate cannot disagree with the counters
+   pass_begin already published against. */
+static int   s_passTeardown;
 static int   s_quiesced;                   /* this teardown's pre hook proved the
                                               reader idle, so the post hook may free  */
 static volatile DWORD s_owner_tid;         /* the game thread, when the fork has not
@@ -282,8 +286,10 @@ static void __cdecl reclaim_teardown_pre(void)
    THE GENERATION IS BUMPED HERE AND NOT IN THE PRE HOOK, and the difference is
    a bug rather than a preference. The render thread is NOT stopped by
    `pass_begin` -- `render_ogl.c` ignores its return value -- it is stopped by
-   `tagpu_overlay.c`'s `teardown_active()` gate, and a pass that got past that
-   gate before the flag was set runs on while the pre hook waits for it. That
+   `tagpu_overlay.c`'s `teardown_active()` gate, which since the G13t landing
+   returns the flag as `pass_begin` LATCHED it rather than re-reading it. A pass
+   that got past that gate before the flag was set runs on while the pre hook
+   waits for it. That
    pass reaches `tagpu_native_frame` (thirteen lines and two subsystems later,
    one of them file I/O) and would there see a generation bumped in the pre
    hook, drop the template caches, and REFILL THEM IN THE SAME FRAME from
@@ -347,11 +353,32 @@ static void __cdecl reclaim_teardown_post(void)
 
 /* -------------------------------------------------------- render thread ---- */
 
+/* ONE DECISION PER PASS, LATCHED. The teardown flag is read HERE and nowhere
+   else, and tagpu_reclaim_teardown_active() below returns what this read
+   decided rather than sampling it again.
+
+   IT USED TO BE TWO READS, and that was a use-after-free with the reader's own
+   completion counter as the alibi. render_ogl.c ignores this function's return
+   value by design (the driver must still run — input injection, the GL context
+   check, the flushes), so the "skip the engine reads" decision was re-made in
+   tagpu_overlay.c's gate, tens to hundreds of microseconds later. Clear
+   s_teardown in between — reclaim_teardown_post does exactly that — and the
+   gate answers 0 for a pass that already published `s_completed = s_started`
+   at the line below. That pass runs on into tagpu_native_frame and takes
+   pointers while the fence says the reader is idle, so anything stamped after
+   it is freed under a live reader. Found by two reviewers on the G13t landing,
+   against tagpu_fogwide's grid buffers; it applied to this module's own queue
+   the same way. Latching makes the flip impossible rather than unlikely.
+
+   Both pre-existing behaviours are unchanged: a pass that began before the flag
+   was set still runs its engine reads to completion (which is what the pre
+   hook's wait is for), and one that begins after still skips them. */
 int tagpu_reclaim_pass_begin(void)
 {
-    if (!s_installed) return 1;
+    if (!s_installed) { s_passTeardown = 0; return 1; }
     InterlockedIncrement(&s_started);          /* fence: "in a pass" before we look */
-    if (s_teardown) {
+    s_passTeardown = s_teardown ? 1 : 0;
+    if (s_passTeardown) {
         InterlockedExchange(&s_completed, s_started);   /* no engine reads this frame */
         return 0;
     }
@@ -375,7 +402,10 @@ void tagpu_reclaim_pass_end(unsigned frame_counter)
     }
 }
 
-int tagpu_reclaim_teardown_active(void) { return s_installed && s_teardown; }
+/* Render thread, inside the pass. Returns the decision pass_begin LATCHED for
+   this pass, never a fresh read of s_teardown — see pass_begin for the
+   use-after-free the fresh read allowed. */
+int tagpu_reclaim_teardown_active(void) { return s_installed && s_passTeardown; }
 
 unsigned tagpu_reclaim_level_gen(void) { return (unsigned)s_levelGen; }
 

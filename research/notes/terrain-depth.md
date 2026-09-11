@@ -1101,7 +1101,7 @@ frame drawn without a grid, which is what the report was about.
 *(The heap half of that figure was **6 MB in every session** until 2026-09-10 — three fixed
 1024×1024 squares — and is now sized from the screen: **212 KB at 1920×1080, 84 KB at 1024×768**.
 The same change retired the second constant, `tagpu_fog_at`'s separately typed 512, which had gone
-stale against it and would have refused the very grid the producer built past a 4064-px-wide
+stale against it and would have refused the very grid the producer built past a 4057-px-wide
 screen. Why the size is taken at the worst eye residue, why the set grows whole rather than per
 slot, and why the old set goes back through `tagpu_reclaim`'s fence rather than being freed on the
 spot: [sizing the wide fog grid](fog-grid-sizing.html).)*

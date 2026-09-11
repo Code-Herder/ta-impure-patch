@@ -352,7 +352,7 @@ colour above a fogged map. Full read of the builder, its allocation and the comp
 Built 2026-09-10, off a gap G13s recorded rather than closed. The wide grid was a fixed
 1024×1024 square — three 2 MB blocks in **every** session, 29× what 1920×1080 needs and 72× what
 1024×768 does, and still short past a 7680×4320 screen — while `tagpu_fog_at` bounded the same
-dimensions at a separately typed **512**. Past a 4064-px-wide screen the CPU-side gate would have
+dimensions at a separately typed **512**. Past a 4057-px-wide screen the CPU-side gate would have
 refused the very grid `tagpu_fogwide` built for it, and a refusal there returns `0`, which every
 caller reads as *nothing is hidden here*: correct black terrain with the enemy's units, wrecks and
 explosions drawn on top of it.
