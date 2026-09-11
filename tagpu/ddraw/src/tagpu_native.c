@@ -1850,9 +1850,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            downsample, so the rects would reach the screen thinner and dimmer
            than the engine's (about 0.75 of a device pixel at k = 1.5) while
            everything else got sharper. Two landing reviewers found this
-           independently. `tagpu_devres.on` is how it was measured; making it
-           the default waits on drawing the rects as real geometry with a
-           width, which is its own piece of work. */
+           independently. `tagpu_devres.on` is how it was measured.
+           `tagpu_selgeom.on` is the width the rect was waiting for — at k = 1.5
+           it then reaches full colour, 1019 device pixels at >= 0.9 coverage
+           against the GL line's 5 [MEASURED 2026-09-11] — but it is opt-in too,
+           so arming devres alone still gets the thin rect and the pair have not
+           been a default together yet. */
         s_devres = !s_devresFailed &&
                    (GetFileAttributesA("tagpu_devres.on") != INVALID_FILE_ATTRIBUTES);
         /* ...and the rect-as-geometry trigger, on the same poll. Not in
@@ -2705,7 +2708,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- native selection rects (ui-markers: the ONLY marker interleaved
        with unit draws — the engine's is unreadable under our pixels, redraw
        it): flat model-XZ AABB rect at lowest model Y, rotated by body yaw,
-       GUI colour 0xA, drawn as GL_LINES at just-under-the-unit depth ---- */
+       GUI colour 0xA, at just-under-the-unit depth — as GL_LINES, or as two
+       triangles per edge under `tagpu_selgeom.on` (the width the driver will
+       not give us; see the comment inside the loop) ---- */
     int lineStart = nv, selDrawn = 0;
     int selVerts = selgeom ? 24 : 8;      /* 4 edges: two triangles each, or one line */
     if (nsel) {
