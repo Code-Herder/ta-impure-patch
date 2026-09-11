@@ -74,15 +74,21 @@ is the wide shot. Read the beat sheet without rendering:
    linearly spends most of its running time near 44 and reads as braking hard at the
    end. In log space equal times cover equal *ratios*, which is what a steady zoom
    looks like. `Camera.at()` already does this; do not "fix" it.
-4. **Tile detail must scale with tile size.** In the wide shot a tile is ~45 px, and
-   a 1 px white border on 45 px is 4 % of the tile: the grid stops reading as a wall
-   of running games and starts reading as woven fabric. Below `detail` (90 px) the
-   outline and the internal grid come off and the desktop gap does the separating.
-   Judge this on a wide-shot still, never on a close one.
-5. **The content cache is per frame, keyed by (source, frame, pixel size).** Tile
-   size changes every frame during a zoom, so a cache that lives across frames only
-   thrashes. Within one frame every tile at a given zoom is the same size, so the
-   grid costs a few dozen renders rather than 1600.
+4. **Tile detail keys on the DISPLAYED width, never the buffer it is drawn into.**
+   In the wide shot a tile is ~45 px, and a 1 px white border on 45 px is 4 % of the
+   tile: the grid stops reading as a wall of running games and starts reading as
+   woven fabric. Below 70 displayed px the outline and internal grid come off and
+   the desktop gap does the separating. Since sources are now drawn into a canonical
+   buffer ~3x larger (see *Stability*), `disp_w` is passed down explicitly — keying
+   the test on the buffer width silently re-enables every 1 px border in the wide
+   shot, which is exactly the shimmer the canonical buffer exists to remove. Judge
+   this on a wide-shot still, never on a close one.
+5. **Caches are per frame: sources by (id, frame, canonical size, displayed width),
+   scaled tiles by output size and quarter-pixel offset.** Tile size changes every
+   frame during a zoom, so a cache living across frames only thrashes. The
+   quarter-pixel quantisation on the tile cache is what keeps the sub-pixel path
+   from costing 1600 resizes per wide-shot frame; a quarter pixel is far below
+   anything visible, so the sharing is free.
 6. **Render cost is dominated by big tiles, not by many tiles.** The 1600-tile wide
    shot and the single-terminal opening cost about the same. Do not optimise the grid
    before measuring.
@@ -102,6 +108,61 @@ is the wide shot. Read the beat sheet without rendering:
    run. Measured on six synthetic clips: startup fell from ~60 s to ~2 s once
    `thumbs-<W>.npy` existed. Delete the cache directory after re-capturing, or the
    render uses the old footage without saying so.
+
+## Stability: why the picture shimmered, and the knob that fixes it
+
+The first cut shimmered — terminals and tiles crawling even where nothing moved.
+It was **the harness, not the content**, and the proof is one experiment: freeze
+every source's animation so only the camera moves, and the jitter is unchanged
+(108.658 frozen vs 108.732 live — **99.9 %** of it was the renderer).
+
+The cause: sources were drawn *at the destination size*. The camera moves
+continuously, so a tile's pixel width creeps past a whole number every few frames,
+and every feature inside was positioned as `int(w * k)` — one pixel of `w` moved
+the grid, the HUD, the text and the dots by differing amounts. Measured: `iw`
+stepped 1383→1390 over one second while the origin rounded independently.
+
+The fix is two-part, and both halves matter:
+
+* **Draw at a canonical size off a ladder, then scale to the destination.** Content
+  is then stable in its own space and only *resampled* as the camera moves.
+* **Place sub-pixel.** Take `ceil`/`floor` of the destination span and map it back
+  into source coordinates for `resize(..., box=...)`, instead of rounding origin
+  and size independently.
+
+### Measuring it: use the temporal SECOND difference
+
+**Counting changed pixels is the wrong metric and will send you backwards.** By that
+measure the fix looked like a 50 % regression (32.5 % → 48.3 % of pixels changed) —
+because snapping holds still and then jumps, while correct sub-pixel motion changes
+many pixels a little, every frame. Shimmer is *discontinuity*, so measure
+`|2f(n) − f(n−1) − f(n+1)|`: smooth motion cancels, popping does not. (Same idea as
+`ta-capture`'s "differs from both neighbours while the neighbours agree".)
+
+| wide shot, mean 2nd difference | jitter | cost/frame @1080p |
+|---|---|---|
+| drawn at destination size (old) | 108.7 | 39 ms |
+| `--supersample 2`, bilinear | 43.2 | 434 ms |
+| **`--supersample 3`, bilinear (default)** | **30.7** | **628 ms** |
+| `--supersample 3`, lanczos | 36.3 | 931 ms |
+
+**LANCZOS is worse than BILINEAR here, and dearer** — its ringing on a hard window
+border is itself a temporal artifact. Do not "upgrade" the filter. **4× is identical
+to 3×** because the ladder quantises both to the same canonical size, so 3× is the
+knee. `--supersample 1` restores the old fast path for drafts where only pacing is
+being judged.
+
+Some residual shimmer is inherent: a wall of 45 px tiles of high-contrast synthetic
+art with 1 px borders and a regular grid is close to a worst case for minification.
+Real footage is organic and should alias far less — **but that is a prediction, not
+a measurement**, and it gets checked against the first real capture.
+
+## Captions wrap, and shrink if wrapping is not enough
+
+`_fit_text` wraps to `width` (default 0.84 of the frame) and steps the size down
+until the widest line fits in `max_lines`. This is not cosmetic: "A test harness that
+happens to look like a war." typeset at card size is wider than 1920 px and simply
+ran off both edges of the frame. Explicit `\n` is honoured.
 
 ### Measured cost (2026-09-10, six 1024×768 clips, 1920×1080 output)
 
@@ -205,9 +266,30 @@ Why this and not a desktop grab:
   is a near-100 % duplicate-frame rate (`ta-capture` rule 5).
 * `-draw_mouse 0`: the game draws its own cursor, so X's pointer is a second one.
 
-**Tile size and clip size must match**, or every tile is a resample: `stage.tile` is
-1024×768 because that is what `--res 1024x768` gives, and windowed instances are 1:1
-(`ta-capture` rule 4). Change one, change the other.
+### Capture resolution is set by the OUTPUT, and it is not one number
+
+`stage.tile` is a **coordinate system**, not a pixel count — a clip of any size drops
+into it as long as the **aspect matches** (4:3 here). What the capture resolution has
+to satisfy is the largest the clip is ever displayed, and at 4K that is much bigger
+than the tile:
+
+| output | hero tile on screen | upscale from a 1024 capture | widest filler tile |
+|---|---|---|---|
+| 1080p | 1412 px | 1.38× | 41 px |
+| **4K** | **2824 px** | **2.76×** | **82 px** |
+
+So for a 4K deliverable the **four hero clips** must be captured at roughly
+**2880×2160** (4:3), or the close shot is a 2.76× upscale and the 4K is spent on
+nothing. The **filler pool can stay at 1024×768** — it is never shown above 82 px.
+Mixing resolutions between hero and filler clips is fine and is the cheap play.
+
+Whether the engine will give ~2880×2160 has **not been checked** — determine it at
+shoot time (`tacli launch --res`, and `--window` letterboxes if the engine's own
+screen has to differ). If it will not, capture the heroes as large as it does allow
+and accept a smaller upscale; 1920×1440 is a 1.47× upscale, which is far better than
+2.76×.
+
+Whatever you choose, keep the aspect at 4:3 and keep `stage.tile` matching it.
 
 Shoot each clip **longer than the longest time it is on screen**, and shoot more
 distinct clips than you think you need — `fill` gives each cell a random clip and a
@@ -241,10 +323,21 @@ change it in `wire` first — it is a minute per iteration there and an evening 
 
 ## Status
 
-Built 2026-09-10. `promo/tacli-promo.json` is the 54 s tacli promo.
+Built 2026-09-10. `promo/tacli-promo.json` is the 54 s tacli promo, in the **Card
+treatment** — full-frame typographic cards, chosen by the owner from five prototype
+cuts (`promo/prototype-cuts/`). Target output is **1080p landscape now, 4K for the
+final**.
+
+Two things the prototype changed in the base cut, both worth keeping:
+
+* Beat 1's card moved to **after** the terminal flips to the game. Over the terminal
+  it covered the command and the lines it printed — the one thing that shot exists
+  to show.
+* Captions wrap and shrink (above), because the card treatment typesets large.
 
 * **`wire` pass**: renders, decodes clean, 54.0 s / 1620 frames. Reviewed as the
   prototype.
+* **Stability**: wide-shot jitter 108.7 → 30.7 at the default `--supersample 3`.
 * **`clip` pass**: exercised end to end against six synthetic 1024×768 clips —
   extraction, thumb cache, hero tile at full size and the 1600-tile wide shot, all
   decoding clean. Footage lands in a tile 1:1 as intended.

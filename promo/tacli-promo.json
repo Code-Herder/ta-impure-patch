@@ -205,49 +205,52 @@
       "shore-raid"
     ]
   },
-  "_captions": "The pitch. Every claim here is checked in the skill's caption table.",
+  "_captions": [
+    "The Card treatment: full-frame typographic cards, chosen from the five",
+    "prototype cuts on 2026-09-10. Claims are checked in the ta-video-montage",
+    "skill's table. Captions wrap and shrink to fit, so a long line is safe.",
+    "",
+    "Beat 1's card sits AFTER the terminal flips to the game (4.6s, not 1.2s):",
+    "over the terminal it covered the command and the lines it printed."
+  ],
   "captions": [
     {
-      "t0": 1.2,
-      "t1": 4.8,
+      "t0": 4.6,
+      "t1": 8.6,
       "text": "One command.",
-      "sub": "no menu, no map setup, no clicking"
+      "sub": "no menu, no map setup, no clicking",
+      "full": true,
+      "dim": 170
     },
     {
-      "t0": 5.4,
-      "t1": 9.2,
-      "text": "A 1997 engine, mid-battle, in seconds.",
-      "sub": "silent  ·  windowed  ·  no intro movies"
-    },
-    {
-      "t0": 15.0,
-      "t1": 19.6,
+      "t0": 15.2,
+      "t1": 19.8,
       "text": "Every fight is a file.",
-      "sub": "scenarios/big-battle.json  —  edit it, commit it, re-run it"
-    },
-    {
-      "t0": 20.2,
-      "t1": 24.0,
-      "text": "Instances share nothing.",
-      "sub": "own game dir  ·  own config  ·  own window"
+      "sub": "edit it, commit it, re-run it",
+      "full": true,
+      "dim": 185
     },
     {
       "t0": 27.0,
       "t1": 31.5,
       "text": "Run one.",
-      "sub": "or as many as the machine will hold"
+      "sub": "or as many as the machine will hold",
+      "full": true,
+      "dim": 185
     },
     {
-      "t0": 36.0,
-      "t1": 42.0,
-      "text": "A test harness that happens to look like a war."
+      "t0": 36.5,
+      "t1": 41.5,
+      "text": "A test harness that happens to look like a war.",
+      "full": true,
+      "dim": 195
     },
     {
       "t0": 48.5,
       "t1": 54.0,
-      "big": true,
       "text": "tacli",
-      "sub": "github.com/Code-Herder/ta-impure-patch"
+      "sub": "github.com/Code-Herder/ta-impure-patch",
+      "big": true
     }
   ]
 }

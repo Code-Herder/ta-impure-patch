@@ -118,6 +118,40 @@ def text_w(draw: ImageDraw.ImageDraw, s: str, f) -> int:
     return int(draw.textlength(s, font=f))
 
 
+def _wrap(draw, text: str, f, maxw: float) -> list[str]:
+    """Greedy word wrap. Explicit newlines in the text are honoured."""
+    out = []
+    for para in text.split("\n"):
+        cur = ""
+        for word in para.split():
+            trial = f"{cur} {word}".strip()
+            if cur and text_w(draw, trial, f) > maxw:
+                out.append(cur)
+                cur = word
+            else:
+                cur = trial
+        out.append(cur)
+    return out or [""]
+
+
+def _fit_text(draw, text: str, kind: str, size: int, maxw: float,
+              max_lines: int):
+    """Wrap `text` to `maxw`, shrinking the font until it fits in `max_lines`.
+
+    Returns (font, lines). Wrapping alone is not enough: one unbreakable long
+    word, or a narrow output, still overflows, so the size steps down until the
+    widest line fits.
+    """
+    while size > 8:
+        f = font(kind, size)
+        lines = _wrap(draw, text, f, maxw)
+        if len(lines) <= max_lines and max(text_w(draw, l, f) for l in lines) <= maxw:
+            return f, lines
+        size = int(size * 0.92)
+    f = font(kind, max(8, size))
+    return f, _wrap(draw, text, f, maxw)
+
+
 # --------------------------------------------------------------------------
 # easing and interpolation
 # --------------------------------------------------------------------------
@@ -172,6 +206,42 @@ class Camera:
 # sources — what fills a window rect
 # --------------------------------------------------------------------------
 
+# Sources are drawn at a CANONICAL size off a power-of-two ladder and then scaled
+# to the destination, rather than drawn directly at the destination size.
+#
+# Drawing at the destination size is what made the picture shimmer: the camera moves
+# continuously, so a tile's pixel width creeps past a whole number every few frames,
+# and every feature inside it is positioned as int(w * k) — so a one-pixel change in
+# w moves the grid lines, the HUD, the text and the unit dots by differing amounts.
+# Measured before this change: 32.5 % of the wide-shot frame differed from the frame
+# before it, on content that is barely moving.
+#
+# The ladder targets ~2x the displayed size, so the scale-down also anti-aliases:
+# a 1 px border drawn at 128 and shown at 45 becomes a clean third-of-a-pixel line
+# instead of a hard one that pops in and out.
+LADDER = (32, 64, 128, 256, 512, 1024, 2048, 4096)
+# Measured 2026-09-10 on the wide shot, as mean temporal second difference
+# (|2f(n) - f(n-1) - f(n+1)|, which cancels smooth motion and catches popping):
+#
+#   drawn at destination size (the old way) .......... 108.7   39 ms/frame
+#   supersample 2x, bilinear .......................... 43.2  434 ms
+#   supersample 3x, bilinear .......................... 30.7  628 ms   <- default
+#   supersample 3x, lanczos ........................... 36.3  931 ms
+#
+# LANCZOS is WORSE than BILINEAR here and costs more: its ringing on the hard
+# edges of a window border is itself a temporal artifact. Do not "upgrade" it.
+# 4x is identical to 3x because the ladder quantises both to the same canonical
+# size, so 3x is the knee. --supersample 1 disables all of this for fast drafts.
+SUPERSAMPLE = 3
+RESAMPLE = Image.BILINEAR
+
+
+def canonical_size(want_w: int, want_h: int) -> tuple[int, int]:
+    target = min(max(want_w * SUPERSAMPLE, LADDER[0]), LADDER[-1])
+    cw = next((s for s in LADDER if s >= target), LADDER[-1])
+    return cw, max(1, round(cw * want_h / max(1, want_w)))
+
+
 PALETTES = [
     # (terrain, terrain_dark, team_a, team_b)
     ((58, 62, 48), (44, 47, 36), (120, 190, 255), (255, 122, 88)),
@@ -201,7 +271,7 @@ class WireGame:
     def avg_color(self) -> tuple[int, int, int]:
         return self.pal[0]
 
-    def frame(self, t: float, w: int, h: int) -> Image.Image:
+    def frame(self, t: float, w: int, h: int, disp_w: int | None = None) -> Image.Image:
         terrain, dark, team_a, team_b = self.pal
         img = Image.new("RGB", (w, h), terrain)
         d = ImageDraw.Draw(img)
@@ -211,7 +281,7 @@ class WireGame:
         # a woven texture instead of as a wall of running games. Below `detail`
         # the outline and the internal grid come off and the desktop gap does
         # the separating.
-        detail = w >= 90
+        detail = (disp_w if disp_w is not None else w) >= 70
 
         # terrain blobs
         for i in range(4 if detail else 2):
@@ -277,7 +347,7 @@ class Terminal:
         n = int((t - self.t_type) * self.type_rate)
         return self.command[:min(n, len(self.command))]
 
-    def frame(self, t: float, w: int, h: int) -> Image.Image:
+    def frame(self, t: float, w: int, h: int, disp_w: int | None = None) -> Image.Image:
         img = Image.new("RGB", (w, h), (14, 17, 21))
         d = ImageDraw.Draw(img)
         if w < 24 or h < 18:
@@ -409,7 +479,7 @@ class Clip:
             self.full.move_to_end(i)
         return got
 
-    def frame(self, t: float, w: int, h: int) -> Image.Image:
+    def frame(self, t: float, w: int, h: int, disp_w: int | None = None) -> Image.Image:
         i = int(t * self.fps) % self.n
         src = self.thumbs[i] if w <= self.THUMB_W else self._full(i)
         return src.resize((max(1, w), max(1, h)), Image.BILINEAR)
@@ -450,19 +520,26 @@ class Window:
             return 1.0
         return min(1.0, (t - self.t_open) / self.fade)
 
-    def content(self, t: float, w: int, h: int) -> Image.Image | None:
-        """The window's pixels at time t, or None if it is not open yet."""
+    def content(self, t: float, w: int, h: int,
+                disp_w: int | None = None) -> Image.Image | None:
+        """The window's pixels at time t, or None if it is not open yet.
+
+        (w, h) is the canonical buffer to draw into; `disp_w` is how wide the
+        window actually appears on screen, which is what level-of-detail
+        decisions must key on.
+        """
         if t < self.t_open:
             return None
         gt = t + self.phase
         if self.term is None:
-            return self.game.frame(gt, w, h)
+            return self.game.frame(gt, w, h, disp_w)
         if self.t_game is None or t < self.t_game:
-            return self.term.frame(t, w, h)
+            return self.term.frame(t, w, h, disp_w)
         u = (t - self.t_game) / self.flip if self.flip > 0 else 1.0
         if u >= 1.0:
-            return self.game.frame(gt, w, h)
-        return Image.blend(self.term.frame(t, w, h), self.game.frame(gt, w, h),
+            return self.game.frame(gt, w, h, disp_w)
+        return Image.blend(self.term.frame(t, w, h, disp_w),
+                           self.game.frame(gt, w, h, disp_w),
                            ease("smooth", u))
 
 
@@ -618,7 +695,12 @@ class Montage:
         # A cache of rendered content, keyed by the source and the exact pixel
         # size asked for. Within one frame every tile at a given zoom is the
         # same size, so the grid costs a handful of renders, not one per tile.
-        cache: dict[tuple[int, float, int, int], Image.Image] = {}
+        cache: dict = {}
+        # Scaled tiles, keyed by output size and sub-pixel offset quantised to a
+        # quarter pixel. Without this the sub-pixel path costs 1600 resizes per
+        # wide-shot frame instead of a few dozen; a quarter pixel is far below
+        # anything visible, so the sharing is free.
+        tcache: dict = {}
 
         for win in self.windows:
             sx, sy, sw, sh = win.rect()
@@ -638,23 +720,47 @@ class Montage:
                 img.paste(col, (int(px), int(py), int(px) + iw, int(py) + ih))
                 continue
 
+            # The destination span, fully-covered pixels only. Taking ceil/floor
+            # here (rather than rounding the origin and the size independently)
+            # is what lets the source be sampled at the exact sub-pixel offset
+            # below, so the CONTENT stops sliding around inside the tile.
+            X0, Y0 = math.ceil(px), math.ceil(py)
+            X1, Y1 = math.floor(px + pw), math.floor(py + ph)
+            if X1 - X0 < 1 or Y1 - Y0 < 1:
+                continue
+
+            cw, ch = canonical_size(iw, ih)
             gt = round((t + win.phase) * 1000) / 1000.0
             key = (id(win.game), gt if win.term else round(gt * self.fps) / self.fps,
-                   iw, ih)
-            tile = cache.get(key) if win.term is None else None
-            if tile is None:
-                tile = win.content(t, iw, ih)
-                if tile is None:
+                   cw, ch, iw)
+            src = cache.get(key) if win.term is None else None
+            if src is None:
+                src = win.content(t, cw, ch, iw)
+                if src is None:
                     continue
                 if win.term is None:
-                    cache[key] = tile
+                    cache[key] = src
 
-            box = (int(round(px)), int(round(py)))
+            # Map the destination span back into source coordinates and let
+            # resize() do the sub-pixel sampling. Because the canonical size is
+            # ~2x the destination, this reduction is small and also anti-aliases.
+            sw, sh = src.size
+            sx0 = max(0.0, min((X0 - px) / pw * sw, sw))
+            sx1 = max(sx0, min((X1 - px) / pw * sw, sw))
+            sy0 = max(0.0, min((Y0 - py) / ph * sh, sh))
+            sy1 = max(sy0, min((Y1 - py) / ph * sh, sh))
+            tkey = (key, X1 - X0, Y1 - Y0, round(sx0 * 4), round(sy0 * 4))
+            tile = tcache.get(tkey)
+            if tile is None:
+                tile = src.resize((X1 - X0, Y1 - Y0), RESAMPLE,
+                                  box=(sx0, sy0, sx1, sy1))
+                tcache[tkey] = tile
+
             if a >= 1.0:
-                img.paste(tile, box)
+                img.paste(tile, (X0, Y0))
             else:
-                under = img.crop((box[0], box[1], box[0] + iw, box[1] + ih))
-                img.paste(Image.blend(under, tile, a), box)
+                under = img.crop((X0, Y0, X1, Y1))
+                img.paste(Image.blend(under, tile, a), (X0, Y0))
 
         return self._draw_captions(img, t)
 
@@ -680,21 +786,32 @@ class Montage:
             big = cap.get("big", False) or cap.get("full", False)
             fs = int(h * (0.080 if big else 0.047))
             ss = int(h * (0.030 if big else 0.025))
-            f1 = font("sans-bold", fs)
-            f2 = font("mono", ss)
 
             if layer is None:
                 layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
             d = ImageDraw.Draw(layer)
 
-            lines = [cap["text"]] + ([cap["sub"]] if cap.get("sub") else [])
-            gap = int(fs * 0.42)
-            total = fs + (gap + ss if len(lines) > 1 else 0)
+            # Captions WRAP, and shrink if wrapping is not enough. A long line
+            # typeset at card size overruns the frame otherwise — "A test harness
+            # that happens to look like a war." at `full` size is wider than
+            # 1920 px, and simply ran off both edges.
+            maxw = w * cap.get("width", 0.84)
+            f1, head = _fit_text(d, cap["text"], "sans-bold", fs, maxw,
+                                 cap.get("max_lines", 3))
+            body = [(l, f1, (243, 246, 250)) for l in head]
+            if cap.get("sub"):
+                f2, subl = _fit_text(d, cap["sub"], "mono", ss, maxw, 2)
+                body += [(l, f2, (120, 205, 255)) for l in subl]
+
+            lh1 = int(f1.size * 1.22)
+            gap = int(f1.size * 0.42)
+            total = lh1 * len(head)
+            if cap.get("sub"):
+                total += gap + int(f2.size * 1.35) * (len(body) - len(head))
             cy = h * (0.5 if big else 0.845)
             y = cy - total / 2
 
-            wmax = max(text_w(d, lines[0], f1),
-                       text_w(d, lines[1], f2) if len(lines) > 1 else 0)
+            wmax = max(text_w(d, l, f) for l, f, _ in body)
             padx, pady = int(h * 0.035), int(h * 0.026)
             box = [w / 2 - wmax / 2 - padx, y - pady,
                    w / 2 + wmax / 2 + padx, y + total + pady]
@@ -710,11 +827,14 @@ class Montage:
                 scrim = int(215 * a) if big else int(190 * a)
                 d.rounded_rectangle(box, radius=int(h * 0.012),
                                     fill=(9, 11, 14, scrim))
-            d.text((w / 2, y), lines[0], font=f1,
-                   fill=(243, 246, 250, int(255 * a)), anchor="ma")
-            if len(lines) > 1:
-                d.text((w / 2, y + fs + gap), lines[1], font=f2,
-                       fill=(120, 205, 255, int(245 * a)), anchor="ma")
+            ly = y
+            for i, (line, f, col) in enumerate(body):
+                if i == len(head) and len(body) > len(head):
+                    ly += gap          # breathing room before the sub-line(s)
+                d.text((w / 2, ly), line, font=f,
+                       fill=col + (int((255 if i < len(head) else 245) * a),),
+                       anchor="ma")
+                ly += int(f.size * (1.22 if i < len(head) else 1.35))
 
         if layer is None:
             return img
@@ -753,6 +873,8 @@ class Montage:
 # --------------------------------------------------------------------------
 
 def cmd_render(args) -> int:
+    global SUPERSAMPLE
+    SUPERSAMPLE = max(1, args.supersample)
     fps = args.fps
     out_w, out_h = args.width, args.height
     cache = Path(args.cache) if args.cache else Path(
@@ -812,6 +934,9 @@ def main(argv=None) -> int:
     r.add_argument("--width", type=int, default=1920)
     r.add_argument("--height", type=int, default=1080)
     r.add_argument("--fps", type=float, default=30.0)
+    r.add_argument("--supersample", type=int, default=SUPERSAMPLE,
+                   help="draw sources at N x the displayed size and scale down "
+                        "(default 3). 1 is the fast, shimmery draft path")
     r.add_argument("--crf", type=int, default=18)
     r.add_argument("--preset", default="medium")
     r.add_argument("--t0", type=float, default=0.0, help="start time (preview a beat)")
