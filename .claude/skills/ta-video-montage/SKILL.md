@@ -391,6 +391,123 @@ end, and check the temporal second difference at multiples of the segment length
 Measured on the 4K cut: seams averaged **3.395** against **3.615** elsewhere — below
 average, and no seam in the worst 20 frames.
 
+### The ladder was upscaling the footage and throwing it away
+
+**Profile before optimising, and profile the RIGHT frame.** The expensive part of
+this film is not the 1400-tile wide shot — it is `t = 26-34`, where 13 to 48 tiles
+are still 486-1073 px across. That band is ~35 % of the film's cost; the wide shot
+is ~10 %. Cost follows *output pixels x filter taps*, and PIL's reduction filter
+has support that scales with the ratio, so taps grow as the ratio **squared**. A
+thousand small tiles are cheap; two dozen large ones are not.
+
+And the ratio was inflated on purpose. `canonical_size` asked for
+`tile_px * SUPERSAMPLE` with no cap, so a 1073 px tile asked for **4096** — from
+footage **1024** wide. The clip was upscaled 4x and resampled straight back down:
+it cannot add detail, and it triples the cost of the reduction that follows.
+
+`canonical_size` now takes `native_w` and caps there (never below the displayed
+size — the chrome is drawn at this size too). **1.50x on the whole film for
+nothing**, and free by construction rather than by taste:
+
+* the wide shot is **bit-identical**, PSNR 138 dB — there the ladder already sits
+  far below the footage width, which is exactly where supersampling earns its keep;
+* in the band that does change, **gradient energy moves by ±0.5 %** and the
+  **temporal second difference is unchanged**;
+* what differs is sub-pixel edge phase on glyph outlines: 0.4-3 % of pixels.
+
+End to end the 369-frame 4K opening went **42.0 s -> 25.2 s**. At 720p with
+`--supersample 1` it changes nothing — correct, because there the ladder never
+reaches the footage width.
+
+### Every source fetch was decoding a full PNG
+
+**A per-frame bench cannot see this, and that is why it survived.** Every bench
+here re-renders the same `t`, so the frame cache is always warm. In a real
+*sequential* render, PNG decode was **26-56 % of the wall clock**, rising with
+the zoom-out — 56 % in the wide shot.
+
+The 160 px thumb ladder is never reached at 4K: the canonical sizes there run
+254 to 2554, so **840 of 840 source fetches decoded a full PNG** — 33-47 ms for a
+2048x1536 frame, to produce a 318 px tile.
+
+**An LRU cannot fix it.** Each (clip, phase) advances one frame per output frame,
+so every access is a compulsory miss: 456 misses against 104 hits at t = 52. The
+answer is a cheaper read, not a bigger cache. `Clip.LADDERS = (160, 512, 1024)`
+are raw memmapped arrays built **straight from the mp4** — one ffmpeg pass that
+scales and hands over raw frames, ~3 s a clip. Building them by decoding the
+extracted PNGs costs minutes and buys nothing. The wide shot went **19.3 s ->
+6.1 s per 20 frames, decode 56 % -> 0 %**, bit-identical where the PNG path still
+serves and PSNR 49-51 dB / sharpness -0.1 % / jitter +0-1 % where the ladder does.
+
+### Equal frame counts are not equal work
+
+One segment per worker looks balanced and is not: the dearest 123-frame segment
+is **81 s against a 38 s average**, so the wall floor sits at **2.12x the ideal**
+while the workers holding the opening finish in 5 s and idle. `--chunks` (default
+4) cuts four segments per worker so the pool's queue balances them — **2m42 ->
+1m34** on the 57 s 4K cut.
+
+The price is **+8 % file size and +14 % CPU** from the extra I-frames and shorter
+GOPs. It is *not* task overhead — `Montage` construction is 48 ms, so 42 extra
+constructions cost 2 s against 201 s observed, and caching the Montage per worker
+was tried and changed nothing. Quality is unaffected: 55 seams average **1.149**
+against 1.177 elsewhere. `--chunks 1` restores the old behaviour.
+
+### Where the render actually stands
+
+4K, `-j 14`, `-preset medium`, on the reference setup:
+
+| | wall | CPU | master |
+|---|---|---|---|
+| before | 3m19.4 | 34m00 | 226.5 MB |
+| cap the ladder at the footage width | 2m49.9 | 29m06 | 227.5 MB |
+| + memmapped source ladders | 2m41.7 | 22m44 | 227.6 MB |
+| + balanced segments | **1m33.5** | 26m05 | 245.5 MB |
+
+**2.13x wall, no GPU**, every step verified against jitter *and* sharpness.
+
+### Steadier and softer are the same measurement
+
+A GPU compositor prototype came out **12-20x** faster than PIL *and* reported
+**lower jitter at every zoom**. It was wrong. It resampled twice — prefilter to the
+tile scale, then bilinear-shift into place — and the "steadiness" was blur:
+**gradient energy 23-40 % below** the CPU path.
+
+**Never judge a resampler on the temporal second difference alone.** Blur lowers it.
+Measure gradient energy in the same pass, or a softening bug looks like a fix.
+
+Resampling **once**, reproducing PIL's own separable triangle filter with per-tile
+weights, gives **PSNR 54-83 dB, sharpness ±0.0 %, jitter identical** — and 1.7-3.6x
+instead of 12-20x. That is the honest price of being right, and it is what
+`promo/bench/exact.py` does.
+
+### What a GPU is actually worth here
+
+Measured in one harness (`promo/bench/`, which has the full table and how to
+re-run it). These rows predate the ladder and the balancing, so read them as what
+a GPU does to the **compositing half**, not as end-to-end numbers:
+
+| | single-thread cost of the film |
+|---|---|
+| ladder uncapped, all CPU | 778 s |
+| **the cap (shipped)** | **517 s** |
+| + exact GPU compositor (built, verified) | 322 s |
+| + source resampling on the GPU (*projection*) | 109 s |
+
+The last row is a **ceiling, not a pipeline** — it excludes PNG decode and upload.
+Do not quote it as a result. The stage that would pay for the CUDA dependency is
+the **source resizes** (40-97x batched: 7.1 ms against 562 ms for 20 of
+2048x1536), not the compositor. Peak VRAM 2.4 GB at 4K.
+
+**Nothing GPU is shipped**, and on this evidence it should not be first: the CPU
+work above took the render to 1m34 with no CUDA dependency, and the stage a GPU
+would help most — the source resizes — is the same stage the memmapped ladder
+already gutted.
+
+**Captions are the next real target**: a full-frame card costs **95-102 ms per 4K
+frame** and 42 % of the film has one live. That was ~12 % of the cost before today
+and is a much larger share now that everything around it is faster.
+
 ### Where the time actually goes: the encoder is FREE
 
 Asked "is it encoding or rendering?", measure it — one flag answers it. Same 369

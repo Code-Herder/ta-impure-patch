@@ -281,8 +281,26 @@ FULL_LRU_BYTES = 192 << 20
 FULL_LRU_MIN = 8            # never thrash down to nothing on huge frames
 
 
-def canonical_size(want_w: int, want_h: int) -> tuple[int, int]:
-    target = min(max(want_w * SUPERSAMPLE, LADDER[0]), LADDER[-1])
+def canonical_size(want_w: int, want_h: int,
+                   native_w: int | None = None) -> tuple[int, int]:
+    """The shared size a source is rendered at before being scaled to the tile.
+
+    `native_w` is the source's own resolution, where it has one. Supersampling
+    past it manufactures pixels and then throws them away: at a 1073 px tile the
+    ladder asked for 4096, so a 1024-wide clip was upscaled FOUR TIMES and
+    resampled back down, which is most of the cost of every large-tile frame and
+    cannot add a single pixel of detail. Capping at the native width leaves the
+    wide shot untouched -- there the ladder already sits far below 1024, which is
+    where the supersampling actually earns its keep -- and only bites in the
+    large-tile band where a tile is already near or above its source resolution.
+
+    The cap never drops below the displayed size: the chrome is drawn at this
+    size too, and a border drawn smaller than it is shown would go soft.
+    """
+    target = max(want_w * SUPERSAMPLE, LADDER[0])
+    if native_w:
+        target = min(target, max(native_w, want_w))
+    target = min(target, LADDER[-1])
     cw = next((s for s in LADDER if s >= target), LADDER[-1])
     return cw, max(1, round(cw * want_h / max(1, want_w)))
 
@@ -689,6 +707,14 @@ class Clip:
     """
 
     THUMB_W = 160
+    # Raw, memmapped ladders. THUMB_W alone is never reached at 4K -- the
+    # canonical sizes there run 254..2554 -- so every single source fetch was
+    # decoding a full 2048x1536 PNG (33-47 ms) to produce a 318 px tile, and PNG
+    # decode was 26-56% of a real sequential render. An LRU cannot help: each
+    # (clip, phase) advances one frame per output frame, so every access is a
+    # compulsory miss. The answer is a cheaper read, not a bigger cache.
+    LADDERS = (160, 512, 1024)
+    native_w = None          # set from the first extracted frame
 
     def __init__(self, clip_id: str, path: Path, cache: Path, fps: float):
         self.id = clip_id
@@ -720,25 +746,42 @@ class Clip:
         self.n = len(self.frames)
         if self.n == 0:
             raise SystemExit(f"clip {self.id}: no frames extracted from {self.path}")
+        with Image.open(self.frames[0]) as probe:
+            self.native_w = probe.width
 
-        # The thumb ladder is every frame decoded and downscaled, which on a real
-        # 20 s clip is 600 PNG decodes — per clip, per run. Cached as one array so
-        # only the first render after a capture pays for it.
-        npy = self.dir / f"thumbs-{self.THUMB_W}.npy"
-        if npy.exists():
+        # Each ladder is built ONCE, straight from the mp4 -- one ffmpeg pass that
+        # scales and hands over raw frames, ~3 s per clip. Building it by decoding
+        # the extracted PNGs instead costs minutes and buys nothing.
+        self.ladders = []
+        for lw in self.LADDERS:
+            if lw >= self.native_w:
+                break
+            npy = self.dir / f"ladder-{lw}.npy"
+            if not npy.exists():
+                self._build_ladder(npy, lw)
             # mmap, and do NOT materialise: `np.asarray(a)` per frame copies the
             # whole ladder into this process's heap, which is ~100 MB per clip
             # per worker and is pure duplication -- the mapped pages are shared.
-            self._thumb_arr = np.load(npy, mmap_mode="r")
+            self.ladders.append((lw, np.load(npy, mmap_mode="r")))
+        if self.ladders:
+            self._thumb_arr = self.ladders[0][1]
             self.thumbs = _ThumbView(self._thumb_arr)
-            return
-        for p in self.frames:
-            im = Image.open(p).convert("RGB")
-            th = self.THUMB_W
-            self.thumbs.append(im.resize((th, max(1, round(th * im.height / im.width))),
-                                         Image.BILINEAR))
-            im.close()
-        np.save(npy, np.stack([np.asarray(i) for i in self.thumbs]))
+
+    def _build_ladder(self, npy: Path, width: int) -> None:
+        with Image.open(self.frames[0]) as im:
+            sw, sh = im.size
+        h = max(2, round(width * sh / sw) // 2 * 2)
+        proc = subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-i", str(self.path), "-r", str(self.fps),
+             "-vf", f"scale={width}:{h}:flags=lanczos",
+             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE)
+        raw = proc.stdout.read()
+        proc.wait()
+        per = width * h * 3
+        n = len(raw) // per
+        if n == 0:
+            raise SystemExit(f"clip {self.id}: ladder {width} came back empty")
+        np.save(npy, np.frombuffer(raw[:n * per], np.uint8).reshape(n, h, width, 3))
 
     def avg_color(self) -> tuple[int, int, int]:
         small = self.thumbs[0].resize((1, 1), Image.BOX)
@@ -760,7 +803,13 @@ class Clip:
 
     def frame(self, t: float, w: int, h: int, disp_w: int | None = None) -> Image.Image:
         i = int(t * self.fps) % self.n
-        src = self.thumbs[i] if w <= self.THUMB_W else self._full(i)
+        src = None
+        for lw, arr in self.ladders:            # smallest ladder that still has
+            if w <= lw:                         # more pixels than we are asked for
+                src = Image.fromarray(arr[i % len(arr)])
+                break
+        if src is None:
+            src = self._full(i)
         return src.resize((max(1, w), max(1, h)), Image.BILINEAR)
 
 
@@ -1048,7 +1097,7 @@ class Montage:
             if X1 - X0 < 1 or Y1 - Y0 < 1:
                 continue
 
-            cw, ch = canonical_size(iw, ih)
+            cw, ch = canonical_size(iw, ih, getattr(win.game, "native_w", None))
             # Level of detail is a question about APPARENT size, so normalise the
             # tile width to a 1920-wide frame before deciding. In absolute pixels
             # a 4K wide shot (88 px tiles) crosses a threshold that the identical
@@ -1235,6 +1284,9 @@ def _render_segment(job):
      t_start, n_frames, seg_path, supersample) = job
     global SUPERSAMPLE
     SUPERSAMPLE = supersample
+    # Rebuilt per segment on purpose: construction is 48 ms measured, so caching
+    # it across a worker's segments buys 2 s of CPU on the whole film and would
+    # keep a stale frame cache alive for parts of the film the worker has left.
     m = Montage(Path(spec), backend, Path(clips) if clips else None,
                 Path(cache), fps, aspect=h / w)
     proc = subprocess.Popen(_encode_cmd(seg_path, w, h, fps, crf, preset),
@@ -1357,9 +1409,14 @@ def cmd_render(args) -> int:
     if segdir.exists():
         shutil.rmtree(segdir)
     segdir.mkdir(parents=True, exist_ok=True)
-    per = -(-n // jobs)
+    # More segments than workers, so the pool's queue BALANCES them. Equal frame
+    # counts are not equal work: measured on the 57 s cut, the dearest 123-frame
+    # segment is 81 s against a 38 s average, so fourteen equal segments put the
+    # wall floor at 2.1x the ideal and the workers holding the opening sit idle
+    # for most of the render. The cost is one extra keyframe per segment.
+    per = max(1, -(-n // (jobs * args.chunks)))
     tasks = []
-    for i in range(jobs):
+    for i in range(-(-n // per)):
         first = i * per
         cnt = min(per, n - first)
         if cnt <= 0:
@@ -1441,6 +1498,11 @@ def main(argv=None) -> int:
     r.add_argument("--supersample", type=int, default=SUPERSAMPLE,
                    help="draw sources at N x the displayed size and scale down "
                         "(default 3). 1 is the fast, shimmery draft path")
+    r.add_argument("--chunks", type=int, default=4,
+                   help="segments per worker (default 4). Frames are not equal "
+                        "work, so one segment per worker leaves most of them "
+                        "idle; more, smaller segments let the pool balance. 1 "
+                        "restores the old behaviour and the fewest concat seams")
     r.add_argument("--crf", type=int, default=18)
     r.add_argument("--preset", default="medium")
     r.add_argument("--audio", help="soundtrack to lay over the finished cut. The "
