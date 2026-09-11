@@ -307,12 +307,17 @@ class WireGame:
             d.ellipse([bx - r, by - r * 0.7, bx + r, by + r * 0.7], fill=dark)
 
         if detail:
-            # faint wireframe grid — the "white box" signature
+            # Faint wireframe grid — the "white box" signature. Blend the colour
+            # by hand: ImageDraw DISCARDS the alpha channel on an RGB image, so
+            # fill=(255,255,255,8) does not paint 3 % white, it paints SOLID
+            # WHITE. That one silent bug is what made the tiled wall read as
+            # woven fabric and drove most of its shimmer.
+            grid = tuple(int(c + (255 - c) * 0.12) for c in terrain)
             step = max(6, int(w / 12))
             for x in range(0, w, step):
-                d.line([(x, 0), (x, h)], fill=(255, 255, 255, 8), width=1)
+                d.line([(x, 0), (x, h)], fill=grid, width=1)
             for y in range(0, h, step):
-                d.line([(0, y), (w, y)], fill=(255, 255, 255, 8), width=1)
+                d.line([(0, y), (w, y)], fill=grid, width=1)
 
         # units
         rad = max(1, round(w * 0.008))
@@ -909,12 +914,19 @@ class Montage:
                 continue
 
             cw, ch = canonical_size(iw, ih)
+            # Level of detail is a question about APPARENT size, so normalise the
+            # tile width to a 1920-wide frame before deciding. In absolute pixels
+            # a 4K wide shot (88 px tiles) crosses a threshold that the identical
+            # 1080p shot (44 px) does not, re-enabling every 1 px border and grid
+            # line the threshold exists to remove — and those hairlines are the
+            # shimmer.
+            lod_w = max(1, int(iw * 1920 / w))
             gt = round((t + win.phase) * 1000) / 1000.0
             key = (id(win.game), gt if win.term else round(gt * self.fps) / self.fps,
-                   cw, ch, iw)
+                   cw, ch, lod_w)
             src = cache.get(key) if win.term is None else None
             if src is None:
-                src = win.content(t, cw, ch, iw)
+                src = win.content(t, cw, ch, lod_w)
                 if src is None:
                     continue
                 if win.term is None:

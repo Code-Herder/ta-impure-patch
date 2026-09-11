@@ -26,11 +26,12 @@
     "cols = how many window columns fit across the frame, interpolated in log",
     "space. Centre (512,384) is hero 1's middle; (1056,800) the 2x2 block's.",
     "",
-    "The camera is FROZEN whenever text is being typed: 0-7.47s for hero 1, and",
-    "again from 10.5s (once the 2x2 framing has settled) through heroes 2-4.",
-    "Any zoom at all while text is on screen makes the glyphs crawl — the tile is",
-    "continuously resampled. Measured on the prompt region, temporal 2nd",
-    "difference: slow push 7.453, frozen 0.000. Do not add a 'subtle' push here."
+    "The camera is FROZEN whenever text is on screen: 0-7.5s for hero 1, and",
+    "10.5-25.0s across terminals 2-4. Both holds must be EXACTLY constant in",
+    "`cols` — a drift of 3.05 to 2.95 looks like a hold in the file and is a slow",
+    "zoom in the picture, creeping the tiles 593.8 -> 599.3 px and making every",
+    "glyph crawl. Measured on the prompt region, temporal 2nd difference:",
+    "any push 7.453, frozen 0.000. There is no such thing as a subtle push here."
   ],
   "camera": [
     {
@@ -55,7 +56,7 @@
     },
     {
       "t": 25.0,
-      "cols": 2.95,
+      "cols": 3.05,
       "cx": 1056,
       "cy": 800,
       "ease": "linear"

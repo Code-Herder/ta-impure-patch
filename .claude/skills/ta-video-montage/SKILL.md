@@ -96,7 +96,13 @@ is the wide shot. Read the beat sheet without rendering:
    linearly spends most of its running time near 44 and reads as braking hard at the
    end. In log space equal times cover equal *ratios*, which is what a steady zoom
    looks like. `Camera.at()` already does this; do not "fix" it.
-4. **Tile detail keys on the DISPLAYED width, never the buffer it is drawn into.**
+4. **Tile detail keys on APPARENT size: the displayed width normalised to a
+   1920-wide frame** (`lod_w = iw * 1920 / out_w`), never the raw pixel width and
+   never the buffer it is drawn into. In absolute pixels the same shot decides
+   differently at different output sizes — a 4K wide shot (88 px tiles) crosses a
+   70 px threshold that the identical 1080p shot (44 px) does not, re-enabling every
+   1 px border and grid line the threshold exists to remove. That alone was **23.754
+   → 3.468** of wide-shot jitter at 4K.
    In the wide shot a tile is ~45 px, and a 1 px white border on 45 px is 4 % of the
    tile: the grid stops reading as a wall of running games and starts reading as
    woven fabric. Below 70 displayed px the outline and internal grid come off and
@@ -119,12 +125,17 @@ is the wide shot. Read the beat sheet without rendering:
 8. **Importing `tools/tamontage` from a script needs `SourceFileLoader`** — it has no
    `.py` extension, so `spec_from_file_location` returns a spec with no loader and
    fails with a bare `'NoneType' object has no attribute 'loader'`.
-9. **Extracting clip frames: `-r <fps>` alone, never with `-vsync`/`-fps_mode`.**
+9. **`ImageDraw` DISCARDS the alpha channel on an RGB image.** `fill=(255,255,255,8)`
+   does not paint 3 % white, it paints **solid white**, silently. The wireframe's
+   "faint" grid was full-brightness for its whole life — which is what made the tiled
+   wall read as woven fabric and drove much of its shimmer. Blend the colour by hand
+   (`c + (255-c) * f`) or draw on an RGBA layer and composite.
+10. **Extracting clip frames: `-r <fps>` alone, never with `-vsync`/`-fps_mode`.**
    ffmpeg refuses the pair — *"One of -r/-fpsmax was specified together a non-CFR
    -vsync/-fps_mode. This is contradictory."* — and CFR is what the renderer needs
    anyway, because `Clip.frame()` maps time to a frame index by multiplication.
    A variable-rate extraction silently desynchronises every tile.
-10. **The thumb ladder is cached to `.npy`, and that cache is the difference between
+11. **The thumb ladder is cached to `.npy`, and that cache is the difference between
    a 4-minute render and a 25-minute one.** Every clip frame is decoded and
    downscaled at startup — 600 decodes per clip on a 20 s capture, paid on *every*
    run. Measured on six synthetic clips: startup fell from ~60 s to ~2 s once
@@ -193,6 +204,13 @@ Pixel-identical is achievable and is what it should be: **freeze the camera for 
 whole type / hold / enter beat**, and settle the next framing *before* the next
 terminal starts typing. Do not put a "gentle" push back in — it reads as a defect,
 not as production value.
+
+**A hold must be EXACTLY constant in `cols`, and two keyframes that look like a hold
+may not be one.** This was shipped and missed: the pair `{t: 10.5, cols: 3.05}` and
+`{t: 25.0, cols: 2.95}` reads as a hold in the file and is a 14-second slow zoom in
+the picture, creeping the tiles 593.8 → 599.3 px — right across the beat where
+terminals 2-4 type. Check the *rendered* tile width across a hold, not the
+keyframes' intent.
 
 The same rule sets the beat structure: type, then **hold** long enough to read the
 command (2 s, at the owner's instruction), then Enter, then output, then flip.
