@@ -1,0 +1,137 @@
+{
+  "name": "tacli-promo",
+  "duration": 54.0,
+
+  "_stage": [
+    "Tiles are 1024x768 because that is what `tacli launch --res 1024x768` gives,",
+    "so a real clip drops into a tile 1:1 with no letterboxing (ta-capture rule 4).",
+    "The 64px gap is the desktop showing between windows — it is what makes the",
+    "wide shot read as 'a desktop full of games' rather than one big texture."
+  ],
+  "stage": {
+    "tile": { "w": 1024, "h": 768 },
+    "gap":  { "x": 64, "y": 64 },
+    "bg":   [16, 18, 22]
+  },
+
+  "_camera": [
+    "cols = how many window columns fit across the frame. Interpolated in log",
+    "space, so the long pull-back runs at a constant perceived rate.",
+    "Centre (512,384) is hero 1's middle; (1056,800) is the middle of the 2x2 block."
+  ],
+  "camera": [
+    { "t":  0.0, "cols":  1.34, "cx":  512, "cy": 384 },
+    { "t":  9.0, "cols":  1.28, "cx":  512, "cy": 384, "ease": "linear" },
+    { "t": 12.5, "cols":  3.05, "cx": 1056, "cy": 800, "ease": "out" },
+    { "t": 22.0, "cols":  2.95, "cx": 1056, "cy": 800, "ease": "linear" },
+    { "t": 48.0, "cols": 40.00, "cx": 1056, "cy": 800, "ease": "linear" },
+    { "t": 54.0, "cols": 44.00, "cx": 1056, "cy": 800, "ease": "out" }
+  ],
+
+  "_windows": [
+    "The four hero windows. Each opens as a terminal, types its command, prints",
+    "output, then cross-fades into the game in the SAME rect — that is beat 2.",
+    "`clip` is the clip id used by --backend clip; `variant` only colours the",
+    "white box in --backend wire."
+  ],
+  "windows": [
+    {
+      "col": 0, "row": 0, "variant": 0, "clip": "big-battle", "label": "big-battle",
+      "t_open": 0.3, "t_type": 1.0, "t_enter": 3.3, "t_game": 3.9,
+      "prompt": "~/ta $",
+      "scrollback": [
+        "~/ta $ tools/tacli ls",
+        "  (no instances)",
+        ""
+      ],
+      "command": "tools/tacli scenario load front1 big-battle",
+      "output": [
+        "  launch front1   1024x768  silent  no-intro",
+        "  map \"Two Continents\"  loaded",
+        "  applied  412 units  2 players",
+        "  front1 ready in 4.1s"
+      ]
+    },
+    {
+      "col": 1, "row": 0, "variant": 1, "clip": "air-war", "label": "air-war",
+      "t_open": 10.2, "t_type": 10.7, "t_enter": 12.6, "t_game": 13.2,
+      "prompt": "~/ta $",
+      "command": "tools/tacli scenario load front2 air-war",
+      "output": [
+        "  launch front2   1024x768  silent  no-intro",
+        "  applied  188 units  2 players",
+        "  front2 ready in 3.8s"
+      ]
+    },
+    {
+      "col": 0, "row": 1, "variant": 2, "clip": "last-stand", "label": "last-stand",
+      "t_open": 10.7, "t_type": 11.2, "t_enter": 13.1, "t_game": 13.7,
+      "prompt": "~/ta $",
+      "command": "tools/tacli scenario load front3 last-stand",
+      "output": [
+        "  launch front3   1024x768  silent  no-intro",
+        "  applied  263 units  2 players",
+        "  front3 ready in 4.0s"
+      ]
+    },
+    {
+      "col": 1, "row": 1, "variant": 3, "clip": "naval-push", "label": "naval-push",
+      "t_open": 11.2, "t_type": 11.7, "t_enter": 13.6, "t_game": 14.2,
+      "prompt": "~/ta $",
+      "command": "tools/tacli scenario load front4 naval-push",
+      "output": [
+        "  launch front4   1024x768  silent  no-intro",
+        "  applied  205 units  2 players",
+        "  front4 ready in 3.9s"
+      ]
+    }
+  ],
+
+  "_fill": [
+    "The grid behind the heroes. Each cell gets a random clip and a random time",
+    "offset so no two tiles are in step. Range covers the cols=44 wide shot with",
+    "margin: 44 cols across, 44*612/832 = 32 rows down.",
+    "",
+    "reveal.not_before is the hard gate that keeps beats 1-4 honest: until 22.0s",
+    "the desktop holds exactly the scripted windows (one, then four), so no",
+    "neighbour creeps into frame. At 22.0 the first ring fades up over `wave`",
+    "seconds — the desktop filling is a deliberate shot. Every outer ring is",
+    "already open `lead` seconds before the camera reaches it, so nothing pops",
+    "on screen. The times come from the camera path, so retiming the pull-back",
+    "retimes the reveal with no hand-edited open times."
+  ],
+  "fill": {
+    "cols": [-22, 23],
+    "rows": [-16, 18],
+    "seed": 20260910,
+    "reveal": { "not_before": 22.0, "lead": 0.8, "wave": 1.4, "fade": 0.25 },
+    "clips": ["big-battle", "air-war", "last-stand", "naval-push",
+              "ridge-assault", "shore-raid"],
+    "labels": ["big-battle", "air-war", "last-stand", "naval-push",
+               "ridge-assault", "shore-raid"]
+  },
+
+  "_captions": "The pitch. Every claim here is checked in the skill's caption table.",
+  "captions": [
+    { "t0":  1.2, "t1":  4.8, "text": "One command.",
+      "sub": "no menu, no map setup, no clicking" },
+
+    { "t0":  5.4, "t1":  9.2, "text": "A 1997 engine, mid-battle, in seconds.",
+      "sub": "silent  ·  windowed  ·  no intro movies" },
+
+    { "t0": 15.0, "t1": 19.6, "text": "Every fight is a file.",
+      "sub": "scenarios/big-battle.json  —  edit it, commit it, re-run it" },
+
+    { "t0": 20.2, "t1": 24.0, "text": "Instances share nothing.",
+      "sub": "own game dir  ·  own config  ·  own window" },
+
+    { "t0": 27.0, "t1": 31.5, "text": "Run one.",
+      "sub": "or as many as the machine will hold" },
+
+    { "t0": 36.0, "t1": 42.0,
+      "text": "A test harness that happens to look like a war." },
+
+    { "t0": 48.5, "t1": 54.0, "big": true, "text": "tacli",
+      "sub": "github.com/Code-Herder/ta-impure-patch" }
+  ]
+}
