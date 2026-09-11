@@ -5,7 +5,9 @@ builds so that fog covers a zoomed-out view instead of stopping at the edge of t
 This page is about **how big it is**, which is currently answered by two constants that disagree
 with each other and with the screen.
 
-Everything below is computed from the code's own arithmetic — `fogw_window` in
+**BUILT 2026-09-10.** The page is kept as the reasoning behind the change, not as a proposal:
+§6.2 is what shipped, and §8 records what each of its open questions was answered with and what
+was measured. Everything below is computed from the code's own arithmetic — `fogw_window` in
 `tagpu_fogwide.c` and the `cols > 512 || rows > 512` test in `tagpu_fog_at`
 (`tagpu_fx.c`) — evaluated over every eye residue, not estimated.
 
@@ -168,6 +170,20 @@ the game sat there apparently running and frozen. TA's own `ErrorLog` blamed `To
 `ddraw.dll`. Until then the only test either caller made was `!grid`, which a non-NULL garbage
 value walks straight through. The root cause of the corruption was never found; the guard is the
 net, and `fog_alarm`'s message box says as much to the player.
+
+**A candidate for it turned up on 2026-09-10, from the cursor_zoom work rather than from here**, and
+it is worth writing down next to the guard because it would explain the shape of both faults. The
+engine's main struct is deliberately misaligned by a random amount at every launch — the allocator
+at `0x41D920` pads it by `(GetTickCount() % 1000) * 7` — so a four-byte field at `main+N` is
+4-aligned in only a quarter of launches and straddles a cache line in about one in twenty. A
+non-locked access that crosses a line is **not** atomic on x86, so a cross-thread read of any
+`main+…` field can observe a half-written value. The fog descriptor is exactly such a read: the
+render thread takes `{buf, cols, rows, cells}` out of `*(main+0x1421F)` once a frame, on a base
+whose alignment is whatever that launch drew. A torn `buf` is a plausible source of a −9. It is a
+hypothesis and not a finding — nothing has reproduced the fault since — but it points the right
+way: the numbers must keep being treated as DATA, and the `cells == (cols*rows + 7) & ~7` relation
+`tagpu_native.c` already checks is the part most likely to catch a tear. See
+`exe-reverse-engineering.md` for the disassembly and the general rule.
 
 So the question the bound is answering is not "how big may fog be?" but:
 
@@ -1048,26 +1064,55 @@ Two things that are *not* limits, so that nobody spends a session on them: `tagp
 `viewW/32 + 2`, which is 478 cells at 16K — and the fog texture at 1925×1093 is far inside any
 GL implementation's maximum.
 
-## 8. What is actually being decided
+## 8. What was decided, and what it measured
 
-Three separable questions, in dependency order:
+Five questions, and what each was answered with. **The answer to (2) was 6.2, not the 6.1 this
+page recommended** — the call was the owner's, and it is the one that strands nothing.
 
-1. **Does the buffer track the window, or stay square?** Tracking the window is where the memory
-   win is (72× at 1024×768, 29× at 1080p) and it is a precondition for the rest.
-2. **How does it grow when a later game in the same process needs more?** The four options above.
-3. **Does the old block get freed, or abandoned?** §6.1: a per-slot grow can free it with no
-   fence, and the recommendation is nevertheless to abandon it — the assumption is the same either
-   way, but the free turns a future mistake into a fault instead of a torn frame.
-4. **What replaces the `512` in `tagpu_fog_at`?** It has to become the same expression the
-   producer sizes from, not a second number — that is the defect this page exists to describe,
-   and re-typing a different literal reproduces it a year from now.
+1. **Does the buffer track the window, or stay square?** It tracks. `fogw_capacity` is
+   `fogw_window`'s own expression evaluated at the **worst eye residue**, so the eye stops being an
+   input — sizing from this tick's `cols` would reallocate every time the camera crossed a
+   32-world-pixel boundary. What is left moves only when the video mode does.
+2. **How does it grow?** §6.2: as a **set**, under `s_cs`, with the three old blocks retired behind
+   `tagpu_reclaim`'s fence and freed on a later tick. Whole-set growth keeps the three blocks
+   interchangeable, which is what lets a swap move a bare pointer between slots without carrying a
+   capacity beside it — so §6's "the trap that comes free with any of them" does not arise.
+3. **Does the old block get freed, or abandoned?** Freed. Two of the three could have been freed
+   outright (`s_build` is the game thread's alone, `s_pub`'s bytes are never read outside the
+   section), but one rule for the set is cheaper to keep true than three, and the third genuinely
+   needs the fence.
+4. **What replaces the `512`?** `tagpu_fogwide_dimcap()`, published by the code that does the
+   allocating and a **high-water mark**, so a grid built at the old, larger size and still in
+   flight can never be refused by a cap that has since come down.
+5. **And the engine's own descriptor bound?** It stayed fixed and generous, as
+   `FOGW_ENGINE_DIMCAP`, shared between `tagpu_native.c` and `tagpu_fogwide_dimcap()`'s floor. The
+   three numbers that had to agree are now one.
 
-There is a fifth question hiding behind (4): `tagpu_native.c` bounds the **engine's** grid
-descriptor at `cols <= 1024 && rows <= 1024`, which is a sanity check on a struct read out of
-engine memory rather than a statement about our own window. That one should stay a fixed,
-generous bound — it is guarding against a corrupted descriptor, and the engine's own grid is
-`viewW/32 + 2` cells, so it cannot legitimately approach 1024 until the viewport is 32,000 px
-wide.
+Two supporting changes that were not optional. `tagpu_fogwide_get` now takes its outputs **inside**
+the critical section: a grow can replace all three pointers, so a `*buf = s_hold` after the leave
+could pair the new block with the old set's descriptor — a grid read at the wrong stride. And
+`tagpu_reclaim` exports the fence as `pass_stamp`/`pass_passed`, with the trap stated in the
+header: both counters start at 0 and stay there when the install did not happen, so
+`pass_passed` answers **true** from the first call and a caller that does not check `armed()` first
+gets an immediate unfenced free. `fogw_retire` checks it and strands instead.
 
-None of them is the ceiling this module will actually hit first — see §7: past about 8K the
-problem stops being how big the buffer is and becomes how long it takes to fill.
+**Measured** on `200v200` / Two Continents:
+
+| screen | grid | the set | before |
+|---|---|---|---|
+| 1024×768 | 133×109 | **84 KB** | 6144 KB — 73× |
+| 1920×1080 | 245×148 | **212 KB** | 6144 KB — 29× |
+
+Both are exactly the window §7's table predicts. Build 134–178 µs mean at 30 rebuilds/s at 1080p,
+`bare=0`, no `fog_alarm`, no `ErrorLog`.
+
+**The grow path was exercised with a temporary probe, not by a real video-mode change** — six
+forced capacity steps up to 996×810 across ~90 s of continuous zoom churn, each retired block
+poisoned to `0xFF` and its slot re-allocated and poisoned again before release, so a reader still
+holding one would have read an impossible all-corners-set grid or faulted. `ret=18/18` freed,
+`held=0`, `strand=0`, `bare=0`, process alive, fog correct to every screen edge at 0.25×. **The
+untested path is the real one**: a session that goes game → shell → game at a different
+resolution. It is named here rather than written up as covered.
+
+None of this is the ceiling the module hits first — see §7: past about 8K the problem stops being
+how big the buffer is and becomes how long it takes to fill.

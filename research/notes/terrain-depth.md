@@ -1094,10 +1094,17 @@ writes `tagpu_defaults.off`, so the instance had every pass opt-in and none arme
 were drawing the stock engine's picture. Read the `opt:` line before believing a parity number.)*
 
 **What it costs, stated plainly**, because the landing bought the fix with it: ~4.4 ms of
-game-thread time a second whenever anything is moving (above), and **6 MB of heap in every
-session** — the three `FOGW_MAXDIM` buffers are allocated on the first in-game tick now, not on
-the first zoom-out, and nothing frees them before the process exits. The alternative on the table
-was a frame drawn without a grid, which is what the report was about.
+game-thread time a second whenever anything is moving (above), and the three buffers, allocated on
+the first in-game tick now rather than on the first zoom-out. The alternative on the table was a
+frame drawn without a grid, which is what the report was about.
+
+*(The heap half of that figure was **6 MB in every session** until 2026-09-10 — three fixed
+1024×1024 squares — and is now sized from the screen: **212 KB at 1920×1080, 84 KB at 1024×768**.
+The same change retired the second constant, `tagpu_fog_at`'s separately typed 512, which had gone
+stale against it and would have refused the very grid the producer built past a 4064-px-wide
+screen. Why the size is taken at the worst eye residue, why the set grows whole rather than per
+slot, and why the old set goes back through `tagpu_reclaim`'s fence rather than being freed on the
+spot: [sizing the wide fog grid](fog-grid-sizing.html).)*
 
 **And since 2026-09-10 a SECOND thing can ask for that rebuild.** `terr_fogtick`'s condition is
 `!(LosType & 8) || tagpu_zoom_fog_pending()`: the engine's own lazy test, OR-ed with a request

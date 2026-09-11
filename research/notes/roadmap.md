@@ -53,7 +53,7 @@ linked here as they're captured. Detail is "what the gate proved", not how we go
 | Weapon fire, explosions, debris | ● native (G12e) | `fxown`: two call-site redirects + four leaf detours | A/B `fx-lasers`/`fx-mix`/`fx-rockets`, engine surface empty of effects |
 | Smoke, fire, wakes, nanolathe | ● native (G12f) | one detour on the layer walker `0x471F90` | A/B `sfx-strait`, engine surface empty of particles |
 | Features (trees, rocks, splats, wreckage) | ● native (G13a) | `featown`: one detour on the leaf `0x46A610` | occlusion parity vs the engine's own draw, engine surface empty of features, `feat-forest` |
-| Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02), **spans the zoomed-out view (G13r, 2026-09-09), and no longer flashes on the first frame of a zoom-out (G13s, 2026-09-10)** | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid — which spans the 1× viewport only, so at zoom < 1 `tagpu_fogwide.c` replicates `0x4843C0` over a window sized for the whole zoom range and hands that to the passes instead | G13c: [Features](features.html) §9. G13r: the replication **byte-identical to the engine's builder** over the engine's own window (0 differing of 720 cells at 1024×768 and of 1972 at 1920×1080), **0 differing pixels** on/off at zoom 1, and an enemy building that was drawn in full colour through the smear now hidden — [terrain & depth](terrain-depth.html) §8. G13s: the one-frame flash at the start of a zoom-out, **6 of 1801 frames unmapped and 7 of 1561 mapped before, 0 and 0 after**, `bare=0` throughout — §8a |
+| Fog of war *as drawn* | ✅ **at parity** (G13c, 2026-09-02), **spans the zoomed-out view (G13r, 2026-09-09), no longer flashes on the first frame of a zoom-out (G13s, 2026-09-10), and is sized from the screen rather than from a constant (G13t, 2026-09-10)** | one shared rule (`tagpu_glsl.h`) in all four native passes, off the engine's own screen fog grid — which spans the 1× viewport only, so at zoom < 1 `tagpu_fogwide.c` replicates `0x4843C0` over a window sized for the whole zoom range and hands that to the passes instead | G13c: [Features](features.html) §9. G13r: the replication **byte-identical to the engine's builder** over the engine's own window (0 differing of 720 cells at 1024×768 and of 1972 at 1920×1080), **0 differing pixels** on/off at zoom 1, and an enemy building that was drawn in full colour through the smear now hidden — [terrain & depth](terrain-depth.html) §8. G13s: the one-frame flash at the start of a zoom-out, **6 of 1801 frames unmapped and 7 of 1561 mapped before, 0 and 0 after**, `bare=0` throughout — §8a |
 | Terrain tiles | ● native (G13b) | `terrown`: one detour on `0x483FA0`, whose skip path key-fills the viewport | 0-px parity vs the engine's own blit, engine surface 99.9 % key, in-process map change |
 | Fog overlay | ● native (G13b) | `terrown` detours `0x4848E0` too, replicating only its lazy grid rebuild | 99.06–99.39 % lit-vs-grey agreement with the engine's own overlay |
 | **Selection rect**, health bars, order markers, group digits, ShowRanges labels, build cursor, band box | ● native and **nothing captured** (G13d, corrected G13h, cursor re-drawn G13n, order block ported G13o, **text ported G13p**, **rect at the engine's pixels 2026-09-08**) | `markown`: 14 call-site redirects + one detour on `0x46A430`. Health bars, the build cursor and the drag band box are re-drawn from engine state; the order-marker block is a game-thread snapshot drawn as geometry (`tagpu_order.c`); the group digit and the `ShowRanges` labels are TA's own glyphs rasterised into an atlas of ours through `0x4CCF60` (`tagpu_text.c`). Window A and the identity blend LUT are gone | engine surface 99.98 % key with only the cursor left, bar geometry exact (33×3 fill at the engine's x); the build cursor **0-px against the captured path** at 1× and 2.144×, and present in the ring at 0.467× where the capture drew nothing; the order block's node-list diff against the engine clean over **16 650 records / 1 665 blocks**, and at 0.25× four build sites queued in the ring draw where the engine draws none. G13p: the group digit **PIXEL-IDENTICAL to the engine's at 1×** (0 differing pixels, 19 bright each way) and drawn out in the ring at 0.25× where the engine draws nothing at all; the eight `ShowRanges` labels on the engine's own pixels ("weapon1 range" 209 bright against 205). **2026-09-08, the selection rect**: it had been turning the WRONG WAY (the transposed yaw = a rotation by −heading, 2× the heading out — invisible at multiples of 45°), built from the whole model tree where `0x4CB650(…,0)` gives the root piece unioned with the origin, projected with one float expression where the engine truncates each term and halves the height after truncating it, and drawn as a GL line in the 2× supersampled FBO where **the driver clamps aliased line width to 1**, so half a device pixel and about half the engine's colour. All four fixed: 100 % of our box pixels are now exactly the engine's `(83,223,79)` and its own rect differs from ours on **7 px of ~110** on open ground (5–18 on a hillside — a Bresenham step on the other neighbour, or a pixel where ours is correctly hidden behind its unit and the A/B's engine rect is not). `scenarios/selbox-facings.json` / `selbox-slope.json`; checked at 0.5× and 2×, with `ss.off`, and on a unit turning under a move order |
@@ -347,6 +347,40 @@ whose *projected* position lands past the shoreline while its anchor is on the m
 colour above a fogged map. Full read of the builder, its allocation and the completion indices:
 [exe-reverse-engineering](exe-reverse-engineering.html) §"The screen fog grid";
 [terrain & depth](terrain-depth.html) §8.
+
+**G13t — the fog grid is sized from the screen, and the two constants that had to agree are one.**
+Built 2026-09-10, off a gap G13s recorded rather than closed. The wide grid was a fixed
+1024×1024 square — three 2 MB blocks in **every** session, 29× what 1920×1080 needs and 72× what
+1024×768 does, and still short past a 7680×4320 screen — while `tagpu_fog_at` bounded the same
+dimensions at a separately typed **512**. Past a 4064-px-wide screen the CPU-side gate would have
+refused the very grid `tagpu_fogwide` built for it, and a refusal there returns `0`, which every
+caller reads as *nothing is hidden here*: correct black terrain with the enemy's units, wrecks and
+explosions drawn on top of it.
+
+The size now comes from the window the screen asks for, taken at the **worst eye residue** —
+`cols` otherwise oscillates by one cell with the camera's phase and the buffer would reallocate
+every 32 world pixels of scroll. What is left moves only when the video mode does. Growing it is a
+lifetime problem and not an allocation one, because `tagpu_fogwide_get` hands the render thread the
+pointer in `s_hold` and that thread reads it **with no lock for the whole of its frame**: the set
+therefore grows whole, under the critical section, and the three old blocks go back through
+`tagpu_reclaim`'s quiescence fence — stamped after the store that unreachabled them, freed on a
+later tick once the reader has completed every pass that could still hold one. Two supporting
+changes were not optional: `tagpu_fogwide_get` now takes its outputs *inside* the section (a grow
+replaces all three pointers, so a read after the leave could pair the new block with the old set's
+descriptor — a grid read at the wrong stride), and `tagpu_reclaim` exports the fence as
+`pass_stamp`/`pass_passed` with the footgun stated in the header: both counters start at 0 and stay
+there when the install did not happen, so "has this stamp been passed" answers **true** from the
+first call and a caller that does not check `armed()` first gets an immediate unfenced free.
+
+MEASURED on `200v200` / Two Continents: **133×109 and 84 KB for the set at 1024×768, 245×148 and
+212 KB at 1920×1080**, both exactly the predicted window, against 6144 KB before; build 134–178 µs
+mean at 30 rebuilds/s; `bare=0`, no `fog_alarm`, no `ErrorLog`. The grow path was exercised with a
+temporary probe (removed) — six forced capacity steps to 996×810 across ~90 s of zoom churn, every
+retired block poisoned and its slot re-allocated and poisoned again before release — `ret=18/18`
+freed, `held=0`, `strand=0`. **The untested path is the real trigger**: a session that goes
+game → shell → game at a different resolution. Said here rather than written up as covered.
+[Sizing the wide fog grid](fog-grid-sizing.html) is the whole reasoning, including the four options
+weighed and why 6.2 was chosen over the page's own recommendation.
 
 **G13s — the first frame of a zoom-out outran the grid it needed, and the sampler said "no fog".**
 Reported from play: *"in map town and country, if you move the camera to the bottom left corner

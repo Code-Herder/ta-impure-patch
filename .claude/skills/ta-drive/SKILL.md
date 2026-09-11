@@ -1066,8 +1066,9 @@ Three things about this one are unlike the other passes:
   oracle, which logs `fogwide check: … compared=N of cells=M differ=N` every 120th tick and
   **must read `differ=0`**. `compared` is `cols*rows` and `cells` the engine's ALLOCATION, which
   it rounds up to a multiple of 8 — comparing the tail reads entries nothing built.
-  Its heartbeat is `fogwide: <cols>x<rows> cells=… rebuilds=N in 5.0s = R/s ticks=… build=…/… us
-  (mean/max) bare=N`, **one line per five seconds of wall time** (G13s; it used to be per 300
+  Its heartbeat is `fogwide: <cols>x<rows> cells=… cap=<C>x<R> rebuilds=N in 5.0s = R/s ticks=…
+  build=…/… us (mean/max) bare=N ret=F/R held=N strand=N/NKB`, **one line per five seconds of wall
+  time** (G13s; it used to be per 300
   ticks, which was incomparable between runs because a tick is a `DrawGameScreen` call and the game
   loop turns that over 330–4900 times a second depending on the scene while the presenter holds 60).
   **`bare=` must read 0**: it counts render frames that drew zoomed and were refused a wide grid,
@@ -1078,7 +1079,18 @@ Three things about this one are unlike the other passes:
   still the engine's grid, bit for bit, because the consumer is what gates on the level now. That
   costs **~30 rebuilds a second whenever anything is moving** (the rate is the sim tick's, not the
   camera's: every LOS stamp clears the engine's is-current bit) at ~145 µs, i.e. ~4.4 ms of
-  game-thread time a second, plus 6 MB of heap in every session.
+  game-thread time a second.
+  **The grid is sized from the screen since 2026-09-10, not from a constant** — `cap=` is what the
+  three buffers are allocated for and the `fogwide: grid CxR, N KB for the set` line says the cost
+  once per size: **212 KB at 1920x1080, 84 KB at 1024x768**, where it used to be a flat 6144 KB in
+  every session. `ret=freed/retired held=N` is the grow path — a video-mode change grows the set
+  and hands the old three blocks to `tagpu_reclaim`'s quiescence fence, so **`held=` must fall
+  back to 0** and **`strand=` must read 0**: stranding is what happens when the fence is unarmed
+  (`tagpu_reclaim.off`, or an exe where the install failed) or the ring is full, and it is safe but
+  it means memory is not coming back. A session that never changes resolution shows `ret=0/0`
+  throughout — **the grow path does not run on a normal launch**, so testing it needs either a real
+  game → shell → game cycle at a different resolution or a temporary probe that inflates
+  `fogw_capacity`.
 - **A one-frame fog artifact is not findable with `glshot`.** Record the window losslessly
   (`ffmpeg -f x11grab -window_id <id> -framerate 60 -c:v libx264rgb -qp 0`) and scan every frame;
   the criterion that separates a fog failure from the grey band is **green dominance**
