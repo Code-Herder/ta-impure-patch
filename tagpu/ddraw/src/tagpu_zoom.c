@@ -1075,9 +1075,10 @@ void tagpu_zoom_eye_moved(void)
    three stores from the render thread and called them "plain aligned 32-bit
    stores"; two of the three are pointers and none of them is reliably aligned.]
 
-   A LEVEL, NOT AN EDGE. `s_dropFollow` says "a gesture is trying to move the
-   camera right now", so the game thread re-clears for as long as that is true
-   rather than once. That is what makes the engine's own guard-then-store
+   A LEVEL RE-ARMED EVERY FRAME, NOT A ONE-SHOT. `s_dropFollow` says "a gesture
+   is trying to move the camera right now"; the game thread CONSUMES it and the
+   render thread raises it again on every frame that still wants the camera, so
+   the release keeps happening for as long as that is true rather than once. That is what makes the engine's own guard-then-store
    writers harmless: every one of them reads its guard and stores 40-60 bytes
    later — 43-46 bytes for the countdown writers (`0x499E60`->`0x499E8E` is 46,
    `0x499EF0`->`0x499F1B` 43, `0x49B0BA`->`0x49B0E5` 43) and 8 for the two that
@@ -1114,10 +1115,17 @@ static int           s_claimed;      /* render thread only: a delta is banked   
    one and a consumed request must still void the bank it was standing for. */
 static void drop_claim(void)
 {
-    if (!s_claimed) return;
     s_claimed    = 0;
     s_dropFollow = 0;
-    s_residX = s_residY = 0.0f;
+    /* VOID ANY DEBT PAST THE LEGITIMATE CARRY, whatever withheld it — not just
+       one raised under a claim. A frame that moves the eye leaves at most half a
+       world pixel behind, by construction, so at rest `|resid| <= 0.5` is an
+       invariant and anything above it is displacement that was owed and never
+       taken. Testing the residual rather than `s_claimed` also means this does
+       not rest on `s_dropFollow == 1 => s_claimed == 1`, which was true but
+       unstated and would have been the next thing to rot. [landing review] */
+    if (s_residX > 0.5f || s_residX < -0.5f) s_residX = 0.0f;
+    if (s_residY > 0.5f || s_residY < -0.5f) s_residY = 0.0f;
 }
 
 /* Render thread. A READ of the three slots, compared against zero and nothing
@@ -1167,11 +1175,13 @@ void tagpu_zoom_follow_tick(char* ta)
     *hold = 0;
     *unit = 0;
     *obj  = 0;
-    /* Only on an actual release, so this is one line per follow taken and not
-       one per tick of a gesture — the flag stays up for the whole gesture on
-       purpose (above), and after the first release the test above is false. A
-       second line in one gesture is worth seeing: it means the engine put a
-       follow back underneath us. */
+    /* One line per follow actually taken. The request is CONSUMED above and the
+       render thread re-arms it each frame it still wants the camera, so a long
+       gesture asks many times and this fires only when it finds something to
+       release — a second line inside one gesture means the engine put a follow
+       back underneath us, which is worth seeing. [The comment here used to say
+       the flag stays up and the test goes false; that was the pre-consume
+       mechanism. Landing review, 2026-09-10.] */
     {
         /* Throttled like every other per-frame line in this module: the rate is
            the ENGINE's, not ours — a site that re-establishes a follow each tick
@@ -1250,12 +1260,11 @@ static void anchor_step(float zNow, int fromWheel)
     }
     nx = iround(s_residX);
     ny = iround(s_residY);
-    /* Sub-pixel: carried, not lost — and no claim on the camera, which is what
-       keeps the pointer-at-the-viewport-centre case the previous behaviour
-       exactly: `a - c` is zero there, so the residual never reaches a whole
-       world pixel, this returns every frame, and the follow is never touched.
-       The debit below has moved with it: a frame that does not write the eye
-       must not spend the residual either. */
+    /* Sub-pixel: carried, not lost, and no claim on the camera. This is NOT what
+       keeps the centred-pointer case honest — that is the `ax == cx && ay == cy`
+       test below, because `nx` is the accumulated residual and a centred gesture
+       can still find a whole pixel sitting in it. The debit has moved below too:
+       a frame that does not write the eye must not spend the residual either. */
     if (!nx && !ny) { drop_claim(); return; }
 
     {
@@ -1298,6 +1307,20 @@ static void anchor_step(float zNow, int fromWheel)
            finds the camera free. That is what keeps the gesture's total
            displacement exactly `(a - c)(1/z_start - 1/z_end)` across the wait
            instead of losing the frames it spanned. */
+        /* A GESTURE THAT ASKS FOR NO DISPLACEMENT NEVER TAKES THE CAMERA, and
+           this is the test that makes the A/B control structural instead of
+           probable. `nx`/`ny` are the ACCUMULATED residual, so the pointer being
+           on the viewport centre is not on its own enough: `iround` rounds half
+           away from zero, and a debit leaves the remainder in the CLOSED interval
+           [-0.5, +0.5], whose -0.5 endpoint is the common one — there `nx` is -1
+           for ever with nothing feeding it, and a centred wheel would step a pixel
+           and release the follow. Asking what THIS gesture is owed closes it by
+           construction rather than by how often the float lands on a half.
+           The residual is kept: a centred gesture owes nothing, so it spends
+           nothing, and anything already banked is either applied when the pointer
+           moves off the centre or voided by drop_claim() when the gesture ends.
+           [landing review, 2026-09-10] */
+        if (ax == cx && ay == cy) return;
         if (follow_is_set(ta)) { s_claimed = 1; s_dropFollow = 1; return; }
         s_claimed = 0; s_dropFollow = 0;
         s_residX -= (float)nx;

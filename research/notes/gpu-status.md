@@ -459,12 +459,13 @@ so the game-thread wait costs no accuracy. The control — the same gesture aime
 centre — moves the eye by nothing, leaves the follow **intact** and logs no release.
 
 **The leak regression** [2026-09-10, after the review]: three gestures in a row, each re-following
-with Ctrl+C first, gave Δ `(−150, −100)`, `(−150, −100)`, `(−151, −100)`. The odd pixel in the
-third is the carry doing its job, not a bank — the true delta is `−150.37`, and `150 + 150 + 151`
-is `451` against a true `451.1`. A leaked bank would have shown as a jump of hundreds. A
-centre-aimed wheel taken immediately afterwards, with that carry standing, left the eye at
-`(5113, 7624)` unchanged and the follow set — which is the case the review said the old code got
-wrong.
+with Ctrl+C first, gave Δ `(−150, −100)`, `(−150, −100)`, `(−151, −100)` against a true
+`(−150.37, −100.25)` each. Totals: **X 451 against 451.1, Y 300 against 300.7**. Both sit inside
+the ±1 world px that a carry entering and leaving the run can move a three-gesture total by, so
+this is the carry working, not a bank — a leaked bank would have shown as a jump of hundreds, not
+a pixel. *(Quoting X alone as a telescoping proof would be cherry-picking: Y is the looser of the
+two and is the one to check.)* A centre-aimed wheel taken immediately afterwards, with that carry
+standing, left the eye at `(5113, 7624)` unchanged and the follow set.
 
 **Three properties the tests lean on.** The delta is exactly 0 with the pointer at the viewport
 centre, so that case is the previous behaviour — which is the A/B control, and why this needs no

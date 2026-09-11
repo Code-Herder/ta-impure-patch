@@ -344,6 +344,15 @@ twenty a cross-thread reader can observe a half-written field. **The rule this g
 * A `lock`-prefixed store on our side does not rescue it, because the engine's own plain **split
   load** can still straddle an atomic store.
 
+**The fog overlay draw `0x4848E0` has exactly one call site, `0x469D8E`, inside the per-frame
+world draw.** That is what makes `tagpu_terrown`'s `terr_fogtick` — and everything hung off it,
+including `tagpu_zoom`'s follow release — run at the DRAW rate and not the sim rate. It keeps
+running with the sim paused, and it stops only when the game stops drawing. Measured on the
+heartbeat's `ticks=` counter: **443/s at 1920x1080 and ~900/s at 1024x768 against a presenter
+holding 60**, i.e. `DrawGameScreen` turns over roughly 7-15x per presented frame. *[2026-09-10.
+A note in the ta-drive skill claimed the opposite — that pausing the sim stops it — and was
+wrong.]*
+
 **Where this may already have bitten — and the argument AGAINST the obvious suspect.**
 `tagpu_fog_at`'s guard exists because the render thread faulted twice on 2026-09-03 reading the
 fog descriptor `{u16* buf; int cols; int rows; int cells}` out of `*(main+0x1421F)` off a base of
@@ -401,6 +410,7 @@ the eye is eased toward.
 | `0x41C2E0` | `SetFollowUnit(dir)` — `0x48C190(currentFollow, dir)` picks the next/previous unit and the result is stored into `CameraToUnit`. Callers `0x48B074`, `0x4964E7` (dir 0), `0x4964F3` (dir 1) — the cycle-through-units keys. |
 | `0x41C310` | Scans the unit list for one matching a per-player bitmask and stores it into `CameraToUnit`. Sole caller `0x496409`, in the command dispatch under the string `CTRL_C` — **so Ctrl+C makes the camera FOLLOW the commander, it does not merely centre on it** (confirmed live 2026-09-10: `main+0x142F3` goes from 0 to a unit pointer). |
 | `0x41C7F7` | Smooth centre-on; clamps its target inline the same way. |
+| `0x41CB5F` | Inside the stepper, the eye≠target branch: `or word [ecx+0x142F1], di` with `di = 2` — the "camera moved" bit every engine eye writer sets and ours deliberately do not (row below). |
 | `0x41CE90`…`0x41D060` | The scroll poll — see the table below. One caller, `0x496976`. *[CORRECTED 2026-09-04: this said `0x41CF10`, which is not an instruction boundary — `0x41CF0E` is `lea ebp,[esi+0x64]`.]* |
 | `0x466B70` | Fills a RECT with the minimap's view box from the eye and the view size in map cells (`main+0x1423B`/`+0x1423F`). Pure computation; its only two call sites are inside `0x41C3C0`. |
 
@@ -437,6 +447,7 @@ Two things follow, and both cost time to learn the hard way:
 | Where | What |
 | --- | --- |
 | `main+0x1431F` / `+0x14323` | eyeX / eyeY |
+| **the two sites that put a NON-ZERO value in `main+0x142F7`** | `0x49AE8C` (guard `0x49AE84`, 8 bytes earlier — a pointer fixup during the compaction of the record array) and `0x49C7FB` (guard `0x49C7F3`, 8 bytes earlier — the unit→object migration when `[unit+0x110] & 0x20000000`). Like the countdown's seven, the guard is read well before the store, so **neither is usable as a cross-thread interlock**: clearing the slot after the compare has been passed does not stop the write. |
 | `main+0x142F3` / `+0x142F7` / `+0x1434B` | **the camera follow**, three slots the stepper takes in that priority [MEASURED 2026-09-10]. `+0x142F3` is `CameraToUnit` [CORPUS] — a followed *unit*, position at `+0x6A`, set by Ctrl+C (`0x41C310`) and the cycle keys (`0x41C2E0`); `+0x142F7` a followed *object*, position at `+0x4`, which `0x49C7FB` migrates the unit follow onto when `[unit+0x110] & 0x20000000`; `+0x1434B` a u16 **frame countdown** on the remembered position at `main+0x1433F`, both filled by `0x499E50` when a followed object is destroyed. Released together by `0x41C390`. **All seven sites in `.text` that store a NON-ZERO value into the countdown** — `0x499E8E`, `0x499F1B`, `0x499F89`, `0x49B0E5`, `0x49B992`, `0x49BCBD`, `0x49C8DD` — first compare their object against `main+0x142F7` and take the `jne` when it differs. **That guard is NOT usable as a cross-thread interlock:** each reads its guard 40-60 bytes before its store (`0x499E60`->`0x499E8E`, `0x499EF0`->`0x499F1B`, `0x49B0BA`->`0x49B0E5`), so clearing `+0x142F7` from another thread after the compare has been passed does not stop the store. Every other write to the countdown, anywhere, is a zero — apart from the stepper's own decrement at `0x41CA2A`, which stores a non-zero value whenever the countdown was 2 or more. *[The count said six until 2026-09-10; `0x499E8E` was missed. Found by the landing review.]* |
 | **a manual camera move releases the follow** | The engine's own rule, not a convention: the scroll poll's eye-writing tail runs the three stores at `0x41D091`…`0x41D0AA`, and `0x41D035` skips that whole tail on a frame where the eye did **not** change — so it is released exactly when the player actually moved the camera. `tagpu_zoom`'s cursor-anchored wheel does the same, for the same reason: the stepper recomputes the target from the followed unit every frame, so a delta added to the eye is otherwise eased straight back out [MEASURED 2026-09-10 — with the release removed the same gesture moved the eye by (0, −2) instead of the exact (−150, −100)]. |
 | `main+0x14327` / `+0x1432B` | **the scroll target** (`MapXScrollingTo`) the stepper eases the eye toward. Every reference to it in `.text` is inside `0x41C4xx`–`0x41D4xx` — 30 and 28 respectively, and **no drawing code reads it**, which is what makes it camera-local. |
