@@ -118,21 +118,146 @@ must be kept outside anything the view can show ([terrain & depth](terrain-depth
 force, or anything the player does — only on the viewport and the zoom floor. That is what makes
 sizing it dynamically possible at all.
 
-## 2. What tripping the 512 bound actually does
+## 2. What the 512 actually is — a memory-safety guard, not a feature limit
 
-`tagpu_fog_at` is the **CPU-side** fog gate. It is not what paints fog — the shaders do that from
-the uploaded texture, and they are unaffected by this bound. It is what decides whether a thing is
-*drawn at all*:
+The 512 is not a cap on how much fog the renderer will draw. It is a **sanity check on numbers
+read out of volatile engine memory**, standing in front of a raw pointer dereference, and it
+exists because that dereference once killed the render thread.
 
-| caller | what it gates |
+`tagpu_fog_at`'s last two lines are the whole reason it is there:
+
+```c
+int cx = (int)gx, cy = (int)gy;
+unsigned e = grid[cy * cols + cx];        /* cols is the STRIDE */
+```
+
+`grid`, `cols` and `rows` are read out of the engine's own struct `*(main+0x1421F)` **once a
+frame**, on the render thread, in `tagpu_native.c` — and then used **here**, hundreds of lines and
+many call layers later, once per unit, per wreck, per projectile, per particle, per feature. The
+three values travel together as plain numbers. Nothing revalidates them on the way.
+
+<div class="tablewrap fg">
+<p class="fg-cap">why the dimensions need their own check, separate from the pointer</p>
+<svg class="fg-dia" viewBox="0 0 700 235" role="img" aria-label="A buffer drawn as a row of cells. With the true stride the index lands inside the allocation. With a corrupted, larger stride the same row and column land far past the end of the buffer, which is the out-of-bounds read that killed the render thread.">
+  <text class="fg-sigtx" x="24" y="20" font-size="11">grid[cy * cols + cx]   —   cols is the row stride, not a bound</text>
+
+  <rect class="fg-box" x="24" y="48" width="420" height="30"/>
+  <rect class="fg-use" x="24" y="48" width="420" height="30" opacity="0.35"/>
+  <text class="fg-lab" x="24" y="42">the allocation the engine actually made</text>
+  <rect class="fg-sig" x="180" y="48" width="12" height="30" fill="var(--accent-ink)" opacity="0.9"/>
+  <text class="fg-oktx" x="186" y="96" text-anchor="middle" font-size="10.5">cols = 58 → lands inside</text>
+
+  <rect class="fg-box" x="24" y="130" width="420" height="30"/>
+  <rect class="fg-use" x="24" y="130" width="420" height="30" opacity="0.35"/>
+  <rect class="fg-ghost" x="444" y="130" width="232" height="30"/>
+  <text class="fg-lab" x="24" y="124">the same allocation, with cols read as garbage</text>
+  <rect class="fg-bad" x="596" y="130" width="12" height="30"/>
+  <text class="fg-badtx" x="602" y="178" text-anchor="middle" font-size="10.5">cols = 40000 → lands here</text>
+  <text class="fg-lab" x="560" y="122" text-anchor="middle">not our memory</text>
+
+  <text class="fg-lab" x="24" y="206">A plausible POINTER does not make an index safe: the stride is what decides where the</text>
+  <text class="fg-lab" x="24" y="222">read lands, so the dimensions have to be checked too — and against what a producer can emit.</text>
+</svg>
+</div>
+
+**The crash it was built for was real and was ours.** Twice on 2026-09-03 the render thread faulted
+at `tagpu_fog_at+0x10c` — the `movzwl (%ebx,%eax,2)` that is the line above — off a base of −9, and
+earlier −318, reached through `tagpu_overlay_draw → tagpu_native_frame → tagpu_fx_gather →
+tagpu_sfx_gather → tagpu_fx_tile_visible`. It killed the render thread and left the process up, so
+the game sat there apparently running and frozen. TA's own `ErrorLog` blamed `TotalA.exe`; it was
+`ddraw.dll`. Until then the only test either caller made was `!grid`, which a non-NULL garbage
+value walks straight through. The root cause of the corruption was never found; the guard is the
+net, and `fog_alarm`'s message box says as much to the player.
+
+So the question the bound is answering is not "how big may fog be?" but:
+
+> **What is the largest `cols`/`rows` any legitimate producer of this grid could have handed me?
+> Anything past that means these numbers and this buffer have come apart.**
+
+And *that* is why the number went stale. When it was written there were two producers, and 512 was
+comfortably above both: the engine's own grid (`viewW/32 + 2`, against a viewport the native pass
+then capped at 4096) and `tagpu_fogwide`'s window as it was then sized. `FOGW_MAXDIM` has since
+moved to 1024 and the viewport cap to 16384, so the honest answer to the question is now 1024 —
+but the answer lives in a second, hand-typed literal in another file, and only one of the two was
+updated.
+
+The sharpest way to see it: **the same three numbers pass a `cols <= 1024 && rows <= 1024` check
+in `tagpu_native.c` when they are read, and then fail a `cols > 512` check in `tagpu_fx.c` when
+they are used.** One of those two is wrong about what a producer can emit. It is the 512.
+
+## 3. What a "refusal" is — and why it draws *more*, not less
+
+A refusal is not a refusal to draw. `tagpu_fog_at` does not draw anything and cannot stop anything
+being drawn. It **answers a question about one map tile**, and a refusal is it declining to answer
+— by returning `0`.
+
+That is the whole defect, because of what `0` means to everyone who asks:
+
+| return | meaning |
 | --- | --- |
-| `tagpu_native.c:2348` | a unit's anchor tile — unexplored means skip, grey means skip unless it is ours |
-| `tagpu_native.c:2581` | a wreck's anchor tile — hidden only where the map is unexplored |
-| `tagpu_fx_tile_visible` | every projectile, explosion, particle and feature |
+| `1` (bit 0) | this tile is **unexplored** — the engine paints it solid black |
+| `2` (bit 1) | this tile is **explored but out of LOS** — the grey band |
+| `3` | both |
+| **`0`** | **neither — this tile is fully visible, nothing is hidden here** |
 
-On refusal it calls `fog_alarm` — which logs, and pops a **modal message box at the player**, once
-per process — and then returns **0, meaning "no fog"**. Every one of those gates reads 0 as
-*nothing is hidden here*.
+There is no value for *"I could not answer"*. The guard's failure value and the commonest ordinary
+answer are the same number, and it is the permissive one.
+
+<div class="tablewrap fg">
+<p class="fg-cap">three ways out of tagpu_fog_at, two of which are indistinguishable to the caller</p>
+<svg class="fg-dia" viewBox="0 0 700 300" role="img" aria-label="Three exits from the function converge on the same return value of zero: the guard tripping, the anchor being off-grid, and a genuine sample of a fully visible tile. The three callers then each treat zero as permission to draw.">
+  <rect class="fg-bad" x="24" y="30" width="200" height="42"/>
+  <text class="fg-badtx" x="124" y="48" text-anchor="middle" font-size="11">guard trips (cols &gt; 512)</text>
+  <text class="fg-lab"   x="124" y="63" text-anchor="middle">“I cannot read this grid”</text>
+
+  <rect class="fg-box" x="24" y="86" width="200" height="42"/>
+  <text x="124" y="104" text-anchor="middle" font-size="11">anchor is off-grid</text>
+  <text class="fg-lab" x="124" y="119" text-anchor="middle">“it is off-screen, you cull it”</text>
+
+  <rect class="fg-ok" x="24" y="142" width="200" height="42"/>
+  <text class="fg-oktx" x="124" y="160" text-anchor="middle" font-size="11">a real sample, tile is clear</text>
+  <text class="fg-lab"  x="124" y="175" text-anchor="middle">“nothing is hidden here”</text>
+
+  <path class="fg-sig" d="M224 51 C 260 51, 262 107, 296 107"/>
+  <path class="fg-sig" d="M224 107 L 296 107"/>
+  <path class="fg-sig" d="M224 163 C 260 163, 262 107, 296 107"/>
+
+  <rect class="fg-sig" x="296" y="88" width="66" height="38" fill="var(--panel-2)"/>
+  <text class="fg-sigtx" x="329" y="112" text-anchor="middle" font-size="15">0</text>
+
+  <line class="fg-sig" x1="362" y1="107" x2="400" y2="107"/>
+
+  <rect class="fg-box" x="400" y="38" width="276" height="30"/>
+  <text class="fg-lab" x="410" y="50">units — if (fog &amp; 1) continue; (fog &amp; 2) for enemies</text>
+  <text class="fg-badtx" x="410" y="63" font-size="10.5">neither fires → the unit is drawn</text>
+
+  <rect class="fg-box" x="400" y="76" width="276" height="30"/>
+  <text class="fg-lab" x="410" y="88">wreckage — if (fog &amp; 1) continue;</text>
+  <text class="fg-badtx" x="410" y="101" font-size="10.5">does not fire → the wreck is drawn</text>
+
+  <rect class="fg-box" x="400" y="114" width="276" height="30"/>
+  <text class="fg-lab" x="410" y="126">sprites — return tagpu_fog_at(...) == 0;</text>
+  <text class="fg-badtx" x="410" y="139" font-size="10.5">returns “visible” → the effect is drawn</text>
+
+  <text class="fg-lab" x="24" y="216">The middle exit is deliberate and correct: an anchor outside the grid is outside the SCREEN,</text>
+  <text class="fg-lab" x="24" y="232">and the caller's own viewport cull will drop it — clamping to the border cell instead would pop</text>
+  <text class="fg-lab" x="24" y="248">sprites in as you scroll. The top exit borrows that answer for a situation where it is false:</text>
+  <text class="fg-badtx" x="24" y="268" font-size="11">the object IS on screen, so nothing downstream culls it, and the fog it should have been</text>
+  <text class="fg-badtx" x="24" y="284" font-size="11">hidden by never gets consulted again.</text>
+</svg>
+</div>
+
+**Why the shader does not save you.** The shaders never call this function. They sample the grid
+as an RG8 texture with their own clamp (`taFog`, [terrain & depth](terrain-depth.html) §8a), and a
+dimension mismatch cannot make a texture fetch unsafe — so the *terrain* goes on being painted
+black exactly as it should. What breaks is only the CPU-side decision about **whether an object is
+put into the frame at all**. Hence the signature in the picture below: correct black ground, with
+things standing on it that the player has never seen.
+
+**It is per-object, per-frame.** The guard is not a one-shot. Every gated object asks, every frame,
+and every one of them gets `0` for as long as the dimensions are out of range — which, on a screen
+wide enough to trip it, is every frame from the first zoomed-out one onwards. Only the *reporting*
+is rate-limited: the log line once a second, the modal dialog once per process.
 
 <div class="tablewrap fg">
 <p class="fg-cap">a 5120×2880 screen, zoomed out, with the bound tripped</p>
@@ -167,15 +292,23 @@ per process — and then returns **0, meaning "no fog"**. Every one of those gat
 </svg>
 </div>
 
+Which callers, exactly:
+
+| caller | the test | with `0` |
+| --- | --- | --- |
+| `tagpu_native.c:2348` | `if (fog & 1) continue;` then `if ((fog & 2) && owner != watched) continue;` | an enemy unit on unexplored ground is drawn |
+| `tagpu_native.c:2581` | `if (… & 1) continue;` | a wreck on unexplored ground is drawn |
+| `tagpu_fx_tile_visible` | `return tagpu_fog_at(…) == 0;` | every projectile, explosion, particle and feature is drawn |
+
 **This is the leak G13r closed, coming back through a different door.** The reason the wide grid
 exists at all is that the border-cell smear was drawing an enemy Solar Collector on ground with no
-LOS. A refused grid puts that back — worse, because it applies over the whole frame rather than
-the outer ring, and it silently affects every sprite class at once.
+LOS. A refused grid puts that back — and worse, because the smear only affected the outer ring,
+while this applies over the whole frame and to every sprite class at once.
 
 It is unreachable on every screen this project has ever run. It is reachable on a 5K monitor,
 which is a thing that exists.
 
-## 3. The square that is not a window
+## 4. The square that is not a window
 
 The second problem is independent of the bound, and it costs something on **every** screen.
 `fogw_alloc` takes three buffers of `FOGW_MAXDIM × FOGW_MAXDIM` — a **square** — while the window
@@ -213,7 +346,7 @@ fixed square costs today.
 | 5120×2880 | 4992×2816 | 645 × 373 | **1.4 MB** | 6 MB (4.4×) — *refused today* |
 | 7680×4320 | 7552×4256 | 965 × 553 | **3.1 MB** | 6 MB (2.0×) — *refused today* |
 
-## 4. Why it cannot simply be `realloc`'d
+## 5. Why it cannot simply be `realloc`'d
 
 This is the part that makes "just size it dynamically" a design question rather than a one-line
 change. The grid crosses a thread boundary, and it crosses it **by pointer**.
@@ -261,7 +394,7 @@ grow inside that process**: stock TA cannot change resolution mid-game
 and the switch happens at the next game entry — and this fork runs game → shell → game cycles.
 So a session can legitimately go 1080p, back to the shell, then 4K.
 
-## 5. The four ways to grow
+## 6. The four ways to grow
 
 <div class="tablewrap fg">
 <p class="fg-cap">what happens to the block the render thread is holding</p>
@@ -323,7 +456,7 @@ reaching it means having already allocated the 8K one that replaced it. Against 
 of 6 MB committed on the first in-game tick in **every** session, every path here is a net
 reduction.
 
-## 6. What is actually being decided
+## 7. What is actually being decided
 
 Three separable questions, in dependency order:
 
