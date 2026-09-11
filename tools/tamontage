@@ -68,16 +68,33 @@ _FONT_CACHE: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
 
 
 def _fc_match(pattern: str) -> str | None:
-    """Resolve a fontconfig pattern to a file, or None."""
+    """Resolve a fontconfig pattern to a file, or None IF THE FAMILY IS ABSENT.
+
+    `fc-match` NEVER fails: asked for a font the machine does not have it returns
+    its best guess, and the fallback ladder below it is then dead code. Here that
+    silently typeset the terminal in a PROPORTIONAL face for the whole life of
+    the film -- "JetBrains Mono" is not installed on the reference setup and
+    fc-match answered NotoSans-Regular, which matched happily and won. So compare
+    the family it came back with against the family that was asked for, and treat
+    a mismatch as a miss.
+    """
     if not shutil.which("fc-match"):
         return None
     try:
-        out = subprocess.run(["fc-match", "-f", "%{file}", pattern],
+        out = subprocess.run(["fc-match", "-f", "%{file}\t%{family}", pattern],
                              capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return None
-    path = out.stdout.strip()
-    return path if path and Path(path).exists() else None
+    path, _, families = out.stdout.strip().partition("\t")
+    if not path or not Path(path).exists():
+        return None
+    want = pattern.split(":")[0].strip().lower()
+    # a generic alias (monospace, sans-serif) has no family to compare against:
+    # whatever fontconfig picks for it IS the answer.
+    if want in ("monospace", "sans-serif", "serif"):
+        return path
+    got = [f.strip().lower() for f in families.split(",")]
+    return path if any(want == g or want in g for g in got) else None
 
 
 def _font_file(kind: str) -> str | None:
@@ -90,9 +107,11 @@ def _font_file(kind: str) -> str | None:
         "mono": ["JetBrains Mono", "DejaVu Sans Mono", "Liberation Mono", "monospace"],
         "mono-bold": ["JetBrains Mono:style=Bold", "DejaVu Sans Mono:style=Bold",
                       "monospace:style=Bold"],
-        "sans": ["Inter", "DejaVu Sans", "Liberation Sans", "sans-serif"],
-        "sans-bold": ["Inter:style=Bold", "DejaVu Sans:style=Bold",
-                      "Liberation Sans:style=Bold", "sans-serif:style=Bold"],
+        "sans": ["Inter", "Noto Sans", "DejaVu Sans", "Liberation Sans",
+                 "sans-serif"],
+        "sans-bold": ["Inter:style=Bold", "Noto Sans:style=Bold",
+                      "DejaVu Sans:style=Bold", "Liberation Sans:style=Bold",
+                      "sans-serif:style=Bold"],
     }[kind]
     for pat in patterns:
         hit = _fc_match(pat)
@@ -435,7 +454,13 @@ TERMINAL_STYLES = {
         header="dots", header_bg=(25, 29, 36), header_fg=(120, 128, 140),
         border=(52, 59, 70), border_w=0.0015, cursor="bar",
         pad=0.05, tokens=None, scanlines=False, glow=0.0,
-        fscale=1.0, valign="top"),
+        # "fit", not a multiplier: the output is a REAL transcript and is as long
+        # as the tool made it. At a fixed 1.0 the 68-character lines ran off the
+        # right edge of the window and the twelfth line fell out of the bottom.
+        # `out_fscale` then keeps the COMMAND big -- one shared size sets it to
+        # suit the longest line of a transcript nobody is meant to read, which
+        # leaves the typing beat a small line in a large empty window.
+        fscale="fit", max_fscale=1.9, out_fscale=0.62, valign="center"),
     "chromeless": dict(
         bg=(16, 19, 25), fg=(228, 233, 241), dim=(105, 114, 127),
         prompt=(128, 222, 165), out=(132, 186, 232), radius=0.028,
@@ -482,7 +507,8 @@ class Terminal:
     def __init__(self, prompt: str, command: str, output: list[str],
                  t_type: float, type_rate: float, t_enter: float,
                  scrollback: list[str] | None = None, style: str = "classic",
-                 desktop=(16, 18, 22), title: str = "bash"):
+                 desktop=(16, 18, 22), title: str = "bash",
+                 t_done: float | None = None):
         self.prompt = prompt
         self.command = command
         self.output = output
@@ -493,6 +519,7 @@ class Terminal:
         self.st = TERMINAL_STYLES.get(style, TERMINAL_STYLES["classic"])
         self.desktop = tuple(desktop)
         self.title = title
+        self.t_done = t_done
 
     def avg_color(self):
         return self.st["bg"]
@@ -538,26 +565,46 @@ class Terminal:
 
         scale = st.get("fscale", 1.0)
         x0 = int(w * st["pad"])
+        avail = w - 2 * x0
+        avail_h = h * (1.0 - 2 * st["pad"])
+        cmd_line = self.prompt + " " + self.command
+        out_lines = list(self.scrollback) + list(self.output)
+        # `out_fscale` sets the output at a fraction of the command's size: the
+        # command is the shot and a REAL transcript's longest line is far longer
+        # than it, so one shared size shrinks the command to suit text nobody is
+        # meant to read. Unset, everything shares one size like a real terminal.
+        ratio = st.get("out_fscale")
+
+        def _fits(size: int) -> bool:
+            fm_try = font("mono", size)
+            osz = max(7, int(size * ratio)) if ratio else size
+            fo_try = font("mono", osz)
+            wide = (text_w(d, cmd_line, fm_try) > avail
+                    or any(text_w(d, s, fo_try) > avail for s in out_lines))
+            tall = int(size * 1.6) + len(out_lines) * int(osz * 1.6) > avail_h
+            return not (wide or tall)
+
         if scale == "fit":
-            avail = w - 2 * x0
-            widest = max([self.prompt + " " + self.command] + list(self.output), key=len)
             fs = max(7, int(h * 0.052 * st.get("max_fscale", 1.9)))
-            while fs > 8 and text_w(d, widest, font("mono", fs)) > avail:
+            while fs > 8 and not _fits(fs):
                 fs = int(fs * 0.96)
         else:
             fs = max(7, int(h * 0.052 * scale))
+        fs_out = max(7, int(fs * ratio)) if ratio else fs
         fm, fb = font("mono", fs), font("mono-bold", fs)
+        fo = font("mono", fs_out)
         line_h = int(fs * 1.6)
+        out_h = int(fs_out * 1.6)
 
+        block_h = line_h + (len(self.scrollback) + len(self.output)) * out_h
         if st.get("valign") == "center":
-            n_lines = 1 + len(self.scrollback) + len(self.output)
-            y = int((h - n_lines * line_h) / 2)
+            y = int((h - block_h) / 2)
         else:
             y = int(h * 0.055)
 
         for i, line in enumerate(self.scrollback):
-            d.text((x0, y + line_h * i), line, font=fm, fill=st["dim"])
-        y += line_h * len(self.scrollback)
+            d.text((x0, y + out_h * i), line, font=fo, fill=st["dim"])
+        y += out_h * len(self.scrollback)
 
         d.text((x0, y), self.prompt, font=fb, fill=st["prompt"])
         cx = x0 + text_w(d, self.prompt, fb) + int(fs * 0.6)
@@ -583,11 +630,16 @@ class Terminal:
                 d.rectangle([cx, y, cx + int(fs * 0.6), y + fs], fill=st["fg"])
 
         if t >= self.t_enter:
+            step = 0.22
+            if self.t_done is not None and self.output:
+                # every line up, and readable, before the flip
+                step = min(step, max(0.04, (self.t_done - 0.3 - self.t_enter)
+                                     / len(self.output)))
             for i, line in enumerate(self.output):
-                ly = y + line_h * (i + 1)
-                if ly + fs > h or t < self.t_enter + 0.22 * i:
+                ly = y + line_h + out_h * i
+                if ly + fs_out > h or t < self.t_enter + step * i:
                     break
-                d.text((x0, ly), line, font=fm,
+                d.text((x0, ly), line, font=fo,
                        fill=st["out"] if line.startswith("  ") else st["fg"])
 
         if st["scanlines"]:
@@ -867,7 +919,8 @@ class Montage:
                                 spec.get("style", self.spec.get("terminal_style",
                                                                 "classic")),
                                 self.stage.bg,
-                                spec.get("title", "bash"))
+                                spec.get("title", "bash"),
+                                spec.get("t_game"))
             game = self._game(spec.get("clip", f"hero{i}"), spec.get("variant", i),
                               spec.get("label", ""))
             inst = re.search(r"load\s+(\S+)", spec.get("command", ""))

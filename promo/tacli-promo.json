@@ -2,15 +2,17 @@
   "name": "tacli-promo",
   "duration": 57.0,
   "_stage": [
-    "Tiles are 1024x768 because that is what `tacli launch --res 1024x768` gives,",
-    "so a real clip drops into a tile 1:1 with no letterboxing (ta-capture rule 4).",
+    "The tile is the WINDOW, and the game fills the window's CLIENT rect — so it",
+    "is the client that has to be 4:3, not the tile. The title bar takes 5.5% of",
+    "the height, so a 1024x768 tile leaves a 1022x724 client (1.412) and every",
+    "frame of footage was stretched 5.9% wide. 1024x813 leaves 1022x767 (1.3325).",
     "The 64px gap is the desktop showing between windows — it is what makes the",
     "wide shot read as 'a desktop full of games' rather than one big texture."
   ],
   "stage": {
     "tile": {
       "w": 1024,
-      "h": 768
+      "h": 813
     },
     "gap": {
       "x": 64,
@@ -38,41 +40,41 @@
       "t": 0.0,
       "cols": 1.3,
       "cx": 512,
-      "cy": 384
+      "cy": 406.5
     },
     {
       "t": 7.47,
       "cols": 1.3,
       "cx": 512,
-      "cy": 384,
+      "cy": 406.5,
       "ease": "linear"
     },
     {
       "t": 10.5,
       "cols": 3.05,
       "cx": 1056,
-      "cy": 800,
+      "cy": 845.0,
       "ease": "smooth"
     },
     {
       "t": 25.0,
       "cols": 3.05,
       "cx": 1056,
-      "cy": 800,
+      "cy": 845.0,
       "ease": "linear"
     },
     {
       "t": 51.0,
       "cols": 40.0,
       "cx": 1056,
-      "cy": 800,
+      "cy": 845.0,
       "ease": "linear"
     },
     {
       "t": 57.0,
       "cols": 44.0,
       "cx": 1056,
-      "cy": 800,
+      "cy": 845.0,
       "ease": "out"
     }
   ],
@@ -82,9 +84,9 @@
     "`clip` is the clip id used by --backend clip; `variant` only colours the",
     "white box in --backend wire.",
     "",
-    "The map names and unit counts in `output` are REAL — read back from",
-    "`tacli scenario expand <name>` on 2026-09-10. The surrounding line format is",
-    "still a placeholder: capture a real `scenario load` transcript and match it."
+    "Window 0's `output` is the REAL transcript, captured 2026-09-10 from the",
+    "shoot. Windows 1-3 are still the placeholder format and get replaced when",
+    "their clips are shot."
   ],
   "windows": [
     {
@@ -100,9 +102,17 @@
       "prompt": "~/ta $",
       "command": "tools/tacli scenario load front1 big-battle",
       "output": [
-        "  launch front1   1024x768  silent  no-intro",
-        "  map \"Town & Country\"  loaded",
-        "  applied  1200 units  2 players"
+        "big-battle: loaded on front1",
+        "  launched 2048x1536, map 'Town & Country', unit limit 500",
+        "  clicked SINGLE on MAINMENU.GUI — screen MAINMENU.GUI -> SINGLE.GUI",
+        "  clicked Skirmish on SINGLE.GUI — screen SINGLE.GUI -> SKIRMISH.GUI",
+        "  map unmapped -> mapped",
+        "  clicked Start on SKIRMISH.GUI",
+        "  live with 2 units",
+        "  map Maps\\Town & Country.TNT",
+        "applied 980 of 980 (980 units + 0 features), 0 failed, 2 cleared",
+        "orders: 980 issued, 0 failed",
+        "camera: [4320, 4320] (eye [3424, 3544], pinned)"
       ]
     },
     {

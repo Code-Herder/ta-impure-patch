@@ -51,6 +51,24 @@ Counter-intuitively this **reduced** jitter rather than adding to it (4K, mean
 second difference): t=30 3.173 → 1.145, t=40 5.927 → 1.773, t=46.5 21.957 → 9.947.
 The bare tiles had a hard 1 px outline of their own; one faded frame replaced it.
 
+### The CLIENT rect is what has to be 4:3 — not the tile
+
+The game fills the client rect, and the title bar takes 5.5 % of the window's
+height before the client starts. So a 1024x768 tile leaves a **1022x724** client
+(aspect 1.412) and `Clip.frame`'s `resize` stretched every frame of footage
+**5.9 % wide** — on a promo for a renderer whose whole claim is pixel accuracy.
+
+`stage.tile` is therefore **1024x813**, which leaves 1022x767 (1.3325, 0.06 % off
+4:3). Measure it, do not derive it by hand:
+
+```python
+img = Image.new("RGB", (1024, h)); x0, y0, x1, y1 = draw_window_chrome(img, st, "", 1024.0)
+```
+
+Changing the tile moves the cell centres, so the camera's `cy` moves with it:
+hero 1 is `tile_h/2`, the 2x2 block is `(tile_h + gap_y)/2 + tile_h/2`. Both are
+in the script; nothing else needed changing.
+
 ## Fine detail must FADE, never switch
 
 `detail_ramp(lod_w)` ramps hairline visibility over lod_w 32 → 105 instead of
@@ -154,17 +172,29 @@ is the wide shot. Read the beat sheet without rendering:
 8. **Importing `tools/tamontage` from a script needs `SourceFileLoader`** — it has no
    `.py` extension, so `spec_from_file_location` returns a spec with no loader and
    fails with a bare `'NoneType' object has no attribute 'loader'`.
-9. **`ImageDraw` DISCARDS the alpha channel on an RGB image.** `fill=(255,255,255,8)`
+9. **`fc-match` NEVER FAILS, so a fallback ladder below it is dead code.** Asked
+   for a font the machine does not have it returns its best guess and reports
+   success. "JetBrains Mono" is not installed on the reference setup, fc-match
+   answered **NotoSans-Regular**, and the terminal — the thing on screen alone for
+   the first seven seconds of the film — was typeset in a **proportional** face
+   for its whole life, while every width calculation assumed a monospace one.
+   `_fc_match` now compares the family it got against the family that was asked
+   for and treats a mismatch as a miss (generic aliases — `monospace`,
+   `sans-serif` — are exempt: whatever fontconfig picks for them IS the answer).
+   Fixing it also changes every face the ladder resolves, so name the face you
+   actually want: `Noto Sans` is listed explicitly under `sans` because that is
+   the face every cut has been judged in.
+10. **`ImageDraw` DISCARDS the alpha channel on an RGB image.** `fill=(255,255,255,8)`
    does not paint 3 % white, it paints **solid white**, silently. The wireframe's
    "faint" grid was full-brightness for its whole life — which is what made the tiled
    wall read as woven fabric and drove much of its shimmer. Blend the colour by hand
    (`c + (255-c) * f`) or draw on an RGBA layer and composite.
-10. **Extracting clip frames: `-r <fps>` alone, never with `-vsync`/`-fps_mode`.**
+11. **Extracting clip frames: `-r <fps>` alone, never with `-vsync`/`-fps_mode`.**
    ffmpeg refuses the pair — *"One of -r/-fpsmax was specified together a non-CFR
    -vsync/-fps_mode. This is contradictory."* — and CFR is what the renderer needs
    anyway, because `Clip.frame()` maps time to a frame index by multiplication.
    A variable-rate extraction silently desynchronises every tile.
-11. **The thumb ladder is cached to `.npy`, and that cache is the difference between
+12. **The thumb ladder is cached to `.npy`, and that cache is the difference between
    a 4-minute render and a 25-minute one.** Every clip frame is decoded and
    downscaled at startup — 600 decodes per clip on a 20 s capture, paid on *every*
    run. Measured on six synthetic clips: startup fell from ~60 s to ~2 s once
@@ -330,11 +360,15 @@ as the machine holds, count them, and say *that* number.
 
 ### The six promo scenarios
 
-Written 2026-09-10, one per clip id, and all six validate:
+Written 2026-09-10, one per clip id, and all six validate. Every one of them
+declares **`{"slot": 2, "controller": "off"}`**: the SKIRMISH screen comes up with
+three slots filled, so without it a third player exists — its commander and its
+buildings are on the map, and killing it off with `clear_existing` prints a
+game-over message across the frame.
 
 | scenario | map | entities | what the tile shows |
 |---|---|---|---|
-| `big-battle` | Town & Country | 1200 | four columns converging on one point |
+| `big-battle` | Town & Country | 980 | four columns converging on one point |
 | `air-war` | Two Continents | 240 | 200 aircraft crossing, flak from below |
 | `last-stand` | Two Continents | 427 | a fortified line against 400 attackers |
 | `naval-push` | Anteer Strait | 85 | two fleets head-on mid-strait |
@@ -362,13 +396,17 @@ east-west in a band around **y = 1680..2280** and the north shore is land from
 **y ≈ 1620 up**, so a fleet grid one row too deep beaches its outer rank and those
 ships never sail. Re-check with `expand` after any edit; do not trust `validate` alone.
 
-### Open placeholder in `promo/tacli-promo.json`
+### Open placeholders in `promo/tacli-promo.json`
 
-* **The terminal output line *format* is invented.** The map names and unit counts in
-  `output` are real (read back from `scenario expand`), but the surrounding layout is
-  a guess at what `tacli scenario load` prints. Run it once, capture the transcript,
-  and match it — a promo that shows its own tool printing something it does not print
-  is the kind of detail that gets noticed.
+* **CLOSED for window 0** (2026-09-10): its `output` is the real eleven-line
+  transcript, captured from the shoot. Windows 1-3 still carry the invented format —
+  the map names and unit counts in them are real (read back from `scenario expand`),
+  but the surrounding layout is a guess at what `tacli scenario load` prints. Run
+  each one once, capture the transcript, and match it; a promo that shows its own
+  tool printing something it does not print is the kind of detail that gets noticed.
+* Window 0's transcript says `launched 2048x1536` because that is the resolution the
+  hero was shot at. Re-capture it if the shoot resolution changes — the line is real
+  output, so it has to keep being real output.
 
 ## Capturing the clips
 
@@ -414,18 +452,74 @@ So for a 4K deliverable the **four hero clips** must be captured at roughly
 nothing. The **filler pool can stay at 1024×768** — it is never shown above 82 px.
 Mixing resolutions between hero and filler clips is fine and is the cheap play.
 
-Whether the engine will give ~2880×2160 has **not been checked** — determine it at
-shoot time (`tacli launch --res`, and `--window` letterboxes if the engine's own
-screen has to differ). If it will not, capture the heroes as large as it does allow
-and accept a smaller upscale; 1920×1440 is a 1.47× upscale, which is far better than
-2.76×.
+The engine **does** give it: `tacli scenario load front1 big-battle --res 2880x2160`
+launched and ran (2026-09-10). The shoot used **2048×1536** instead, at the owner's
+instruction (a 2160-tall window is too large for the reference setup's desktop),
+which is a 1.38× upscale for a 4K hero — the same ratio 1024 gives at 1080p.
 
-Whatever you choose, keep the aspect at 4:3 and keep `stage.tile` matching it.
+**But resolution is FIELD OF VIEW, not detail.** A windowed instance is 1:1 (game px
+== window px, `ta-capture` rule 4), and the camera is pinned, so doubling the capture
+resolution **doubles how much map is on screen** — it does not render the same
+framing with more pixels. Measured on the `big-battle` capture: world = screen +
+(3296, 3554), i.e. exactly 1 world unit per pixel, so 2048×1536 sees 1920×1536 world
+units where 1024×768 sees 896×768.
+
+Two consequences, and neither is obvious from the tile arithmetic above:
+
+* **A hero clip and a filler clip of the same scenario are different shots.** The
+  hero sees roughly four times the area. That is fine — arguably good, since the
+  hero window is big on screen — but it is a composition decision, not a quality
+  knob, and a scenario composed for a 1024×768 view has its action in the middle
+  third of a 2048×1536 one.
+* **The sharpness a bigger capture buys is real but bounded**: the units are the
+  same size in pixels either way. What you gain is more battle, not a bigger battle.
+
+Whatever you choose, keep the aspect at 4:3 and keep the window's CLIENT rect
+matching it (above).
 
 Shoot each clip **longer than the longest time it is on screen**, and shoot more
 distinct clips than you think you need — `fill` gives each cell a random clip and a
 random time offset, but six clips across 1600 tiles is still six clips, and the eye
 finds the repeat.
+
+### What the first real shoot measured (2026-09-10)
+
+The `big-battle` hero clip, `--res 2048x1536 --maxfps 60`, grabbed by window id:
+
+* **The game presents ~34 unique frames/s**, not 60: a 60 fps grab came back
+  **43.3 % duplicate** frames (1500 frames, 25.0 s, 168 MB at `-crf 15`). Grab at
+  60 and let the montage extract 30 — do not grab at 30 and hope the phase lines up.
+* **Shoot the clip longer than the beat needs.** Hero 1 is on screen from `t_game`
+  to the end of the film — **50 s**, not the 25 s captured here. `Clip.frame` wraps
+  with a modulo, so a short clip silently loops, and a loop is visible on a window
+  that big.
+* **The battle burns down.** 980 units → 934 by the time the first shot was taken
+  and 790 a minute later. Capture the window you want: too early and the columns
+  are still marching, too late and it is a mopping-up.
+* **`clear_existing: true` kills both commanders, which is a player being
+  eliminated**, so the game prints "Arm vermin have been exterminated" / "Core
+  forces have gone to a better place" across the top of the frame at load. They
+  fade on their own — do not start rolling until they have.
+* Per-player unit cap is **500**, full stop (`research/notes/scenario-format.md`,
+  *UnitLimit is clamped to 500*). `big-battle` was written for 1200 and is now 980
+  (245 per group, 490 per player, leaving room for the commander).
+
+### The terminal shows a REAL transcript now
+
+`promo/tacli-promo.json` window 0 carries the eleven lines `tacli scenario load`
+actually printed. Two things had to change to make real output survivable:
+
+* **`fscale: "fit"` must fit BOTH axes, and measure every line.** It sized for
+  width only and picked the widest line by *character count* — which is not the
+  widest line in pixels, and says nothing about whether twelve lines still fit down
+  the window. The transcript ran off the right edge and lost its last line.
+* **`out_fscale` sizes the output relative to the command** (0.62 on `soft`). With
+  one shared size the command — the shot — is set to suit the longest line of a
+  transcript nobody is meant to read, and the typing beat becomes a small line in a
+  large empty window. Drop the key to get one true terminal size back.
+* The printed lines are also **paced to the flip**: `Terminal` takes `t_done` and
+  spreads the reveal over the time the cut gives it, instead of a fixed 0.22 s per
+  line that leaves an eleven-line block still printing when the window flips.
 
 ## Encoding the deliverables
 
@@ -469,9 +563,11 @@ Two things the prototype changed in the base cut, both worth keeping:
 * **`wire` pass**: renders, decodes clean, 54.0 s / 1620 frames. Reviewed as the
   prototype.
 * **Stability**: wide-shot jitter 108.7 → 30.7 at the default `--supersample 3`.
-* **`clip` pass**: exercised end to end against six synthetic 1024×768 clips —
-  extraction, thumb cache, hero tile at full size and the 1600-tile wide shot, all
-  decoding clean. Footage lands in a tile 1:1 as intended.
-* **Not yet done**: no *game* footage has been shot, and the two placeholders above
-  (scenario names, terminal transcript) are open. Until they are closed this montage
-  is a prototype, not a promo.
+* **`clip` pass**: exercised end to end against six synthetic 1024×768 clips, then
+  against **real footage** — `big-battle` shot 2026-09-10 at 2048×1536 and cut into
+  the film's first 11.5 s at 4K (345 frames, decodes clean). The transcript
+  placeholder is **closed**; the terminal carries what the tool really prints.
+* **Not yet done**: five of the six clips are still unshot (`air-war`,
+  `last-stand`, `naval-push`, `ridge-assault`, `shore-raid`), and windows 1-3 still
+  carry the placeholder transcript format. `big-battle` itself needs re-shooting at
+  50 s for the finished film.

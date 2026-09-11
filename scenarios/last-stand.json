@@ -7,12 +7,13 @@
   "setup": {
     "map": "Two Continents",
     "res": "1024x768",
-    "unit_limit": 1000,
+    "unit_limit": 500,
     "clear_existing": true,
     "switches": {"shootall": true, "noshake": true},
     "players": [
       {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 10000, "energy": 10000},
-      {"slot": 1, "controller": "ai",    "side": "core", "color": 1, "metal": 10000, "energy": 10000}
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1, "metal": 10000, "energy": 10000},
+      {"slot": 2, "controller": "off"}
     ]
   },
 

@@ -5,7 +5,7 @@
  "on_error": "skip",
  "setup": {
   "map": "Town & Country",
-  "unit_limit": 1500,
+  "unit_limit": 500,
   "clear_existing": true,
   "switches": {
    "shootall": true,
