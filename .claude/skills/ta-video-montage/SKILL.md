@@ -34,6 +34,24 @@ not a mock of our renderer. Nobody looking at a prototype render should be able 
 mistake it for footage, and nobody reviewing the timing should be arguing about
 terrain colour.
 
+## The terminal
+
+`terminal_style` (per script, or `style` per window) picks from `TERMINAL_STYLES`:
+`classic`, `soft`, `chromeless`, `phosphor`, `hero`. Compare them with
+`promo/prototype-cuts/terminal-styles.py`, which renders one full frame each plus a
+sheet.
+
+**What actually read as unpolished was not the chrome — it was the emptiness.** The
+window is 4:3 and the first four styles use the top ~20 % of it, leaving a void. The
+fix that mattered was typographic: set the command large and compose the block
+against the window (`valign: center`), since the terminal is alone on screen at
+near-full-size for the first seven seconds.
+
+**Size the type to FIT, never by a fixed multiplier.** `fscale: "fit"` finds the
+largest size at which the longest line still fits the padded width. A hard 1.75×
+looked right for one command and ran `big-battle` off the right edge; command length
+changes per scenario, so the multiplier cannot be a constant.
+
 ## The shape of a script
 
 ```
@@ -156,6 +174,24 @@ Some residual shimmer is inherent: a wall of 45 px tiles of high-contrast synthe
 art with 1 px borders and a regular grid is close to a worst case for minification.
 Real footage is organic and should alias far less — **but that is a prediction, not
 a measurement**, and it gets checked against the first real capture.
+
+## Never move the camera while text is on screen
+
+Measured on the prompt region during typing, temporal second difference:
+
+| camera | jitter |
+|---|---|
+| the old "subtle" slow push (tile grew 1355 → 1373 px over the beat) | 7.453 |
+| **frozen** | **0.000** |
+
+A zoom of any size continuously resamples the tile, so every glyph stem crawls.
+Pixel-identical is achievable and is what it should be: **freeze the camera for the
+whole type / hold / enter beat**, and settle the next framing *before* the next
+terminal starts typing. Do not put a "gentle" push back in — it reads as a defect,
+not as production value.
+
+The same rule sets the beat structure: type, then **hold** long enough to read the
+command (2 s, at the owner's instruction), then Enter, then output, then flip.
 
 ## Captions wrap, and shrink if wrapping is not enough
 

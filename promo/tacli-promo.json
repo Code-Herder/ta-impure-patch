@@ -1,6 +1,6 @@
 {
   "name": "tacli-promo",
-  "duration": 54.0,
+  "duration": 57.0,
   "_stage": [
     "Tiles are 1024x768 because that is what `tacli launch --res 1024x768` gives,",
     "so a real clip drops into a tile 1:1 with no letterboxing (ta-capture rule 4).",
@@ -23,47 +23,52 @@
     ]
   },
   "_camera": [
-    "cols = how many window columns fit across the frame. Interpolated in log",
-    "space, so the long pull-back runs at a constant perceived rate.",
-    "Centre (512,384) is hero 1's middle; (1056,800) is the middle of the 2x2 block."
+    "cols = how many window columns fit across the frame, interpolated in log",
+    "space. Centre (512,384) is hero 1's middle; (1056,800) the 2x2 block's.",
+    "",
+    "The camera is FROZEN whenever text is being typed: 0-7.47s for hero 1, and",
+    "again from 10.5s (once the 2x2 framing has settled) through heroes 2-4.",
+    "Any zoom at all while text is on screen makes the glyphs crawl — the tile is",
+    "continuously resampled. Measured on the prompt region, temporal 2nd",
+    "difference: slow push 7.453, frozen 0.000. Do not add a 'subtle' push here."
   ],
   "camera": [
     {
       "t": 0.0,
-      "cols": 1.34,
+      "cols": 1.3,
       "cx": 512,
       "cy": 384
     },
     {
-      "t": 9.0,
-      "cols": 1.28,
+      "t": 7.47,
+      "cols": 1.3,
       "cx": 512,
       "cy": 384,
       "ease": "linear"
     },
     {
-      "t": 12.5,
+      "t": 10.5,
       "cols": 3.05,
       "cx": 1056,
       "cy": 800,
-      "ease": "out"
+      "ease": "smooth"
     },
     {
-      "t": 22.0,
+      "t": 25.0,
       "cols": 2.95,
       "cx": 1056,
       "cy": 800,
       "ease": "linear"
     },
     {
-      "t": 48.0,
+      "t": 51.0,
       "cols": 40.0,
       "cx": 1056,
       "cy": 800,
       "ease": "linear"
     },
     {
-      "t": 54.0,
+      "t": 57.0,
       "cols": 44.0,
       "cx": 1056,
       "cy": 800,
@@ -88,15 +93,10 @@
       "clip": "big-battle",
       "label": "big-battle",
       "t_open": 0.3,
-      "t_type": 1.0,
-      "t_enter": 3.3,
-      "t_game": 3.9,
+      "t_type": 1.2,
+      "t_enter": 5.73,
+      "t_game": 6.97,
       "prompt": "~/ta $",
-      "scrollback": [
-        "~/ta $ tools/tacli ls",
-        "  (no instances)",
-        ""
-      ],
       "command": "tools/tacli scenario load front1 big-battle",
       "output": [
         "  launch front1   1024x768  silent  no-intro",
@@ -110,10 +110,10 @@
       "variant": 1,
       "clip": "air-war",
       "label": "air-war",
-      "t_open": 10.2,
-      "t_type": 10.7,
-      "t_enter": 12.6,
-      "t_game": 13.2,
+      "t_open": 11.0,
+      "t_type": 11.4,
+      "t_enter": 14.35,
+      "t_game": 15.39,
       "prompt": "~/ta $",
       "command": "tools/tacli scenario load front2 air-war",
       "output": [
@@ -128,10 +128,10 @@
       "variant": 2,
       "clip": "last-stand",
       "label": "last-stand",
-      "t_open": 10.7,
-      "t_type": 11.2,
-      "t_enter": 13.1,
-      "t_game": 13.7,
+      "t_open": 11.5,
+      "t_type": 11.9,
+      "t_enter": 15.03,
+      "t_game": 16.07,
       "prompt": "~/ta $",
       "command": "tools/tacli scenario load front3 last-stand",
       "output": [
@@ -146,10 +146,10 @@
       "variant": 3,
       "clip": "naval-push",
       "label": "naval-push",
-      "t_open": 11.2,
-      "t_type": 11.7,
-      "t_enter": 13.6,
-      "t_game": 14.2,
+      "t_open": 12.0,
+      "t_type": 12.4,
+      "t_enter": 15.53,
+      "t_game": 16.57,
       "prompt": "~/ta $",
       "command": "tools/tacli scenario load front4 naval-push",
       "output": [
@@ -183,7 +183,7 @@
     ],
     "seed": 20260910,
     "reveal": {
-      "not_before": 22.0,
+      "not_before": 25.0,
       "lead": 0.8,
       "wave": 1.4,
       "fade": 0.25
@@ -215,42 +215,43 @@
   ],
   "captions": [
     {
-      "t0": 4.6,
-      "t1": 8.6,
+      "t0": 7.82,
+      "t1": 12.02,
       "text": "One command.",
       "sub": "no menu, no map setup, no clicking",
       "full": true,
       "dim": 170
     },
     {
-      "t0": 15.2,
-      "t1": 19.8,
+      "t0": 18.0,
+      "t1": 22.6,
       "text": "Every fight is a file.",
       "sub": "edit it, commit it, re-run it",
       "full": true,
       "dim": 185
     },
     {
-      "t0": 27.0,
-      "t1": 31.5,
+      "t0": 29.0,
+      "t1": 33.5,
       "text": "Run one.",
       "sub": "or as many as the machine will hold",
       "full": true,
       "dim": 185
     },
     {
-      "t0": 36.5,
-      "t1": 41.5,
+      "t0": 39.0,
+      "t1": 44.0,
       "text": "A test harness that happens to look like a war.",
       "full": true,
       "dim": 195
     },
     {
-      "t0": 48.5,
-      "t1": 54.0,
+      "t0": 51.5,
+      "t1": 57.0,
       "text": "tacli",
       "sub": "github.com/Code-Herder/ta-impure-patch",
       "big": true
     }
-  ]
+  ],
+  "terminal_style": "classic"
 }

@@ -340,12 +340,61 @@ class WireGame:
         return img
 
 
+TERMINAL_STYLES = {
+    # The shipped look is chosen from these; render them with
+    # promo/prototype-cuts/terminal-styles.py and compare.
+    "classic": dict(
+        bg=(14, 17, 21), fg=(226, 230, 236), dim=(120, 128, 138),
+        prompt=(126, 214, 135), out=(150, 200, 255), radius=0.0,
+        header="dots", header_bg=(32, 36, 42), header_fg=(150, 156, 165),
+        border=(210, 214, 220), border_w=0.0035, cursor="block",
+        pad=0.028, tokens=None, scanlines=False, glow=0.0,
+        fscale=1.0, valign="top"),
+    "soft": dict(
+        bg=(18, 21, 27), fg=(223, 228, 236), dim=(110, 119, 131),
+        prompt=(122, 200, 255), out=(140, 190, 240), radius=0.022,
+        header="title", header_bg=(25, 29, 36), header_fg=(120, 128, 140),
+        border=(52, 59, 70), border_w=0.0015, cursor="bar",
+        pad=0.05, tokens=None, scanlines=False, glow=0.0,
+        fscale=1.0, valign="top"),
+    "chromeless": dict(
+        bg=(16, 19, 25), fg=(228, 233, 241), dim=(105, 114, 127),
+        prompt=(128, 222, 165), out=(132, 186, 232), radius=0.028,
+        header=None, header_bg=None, header_fg=None,
+        border=(46, 53, 64), border_w=0.0012, cursor="block",
+        pad=0.062, tokens=True, scanlines=False, glow=0.0,
+        fscale=1.0, valign="top"),
+    "phosphor": dict(
+        bg=(10, 13, 11), fg=(168, 255, 186), dim=(72, 128, 88),
+        prompt=(126, 255, 150), out=(120, 224, 150), radius=0.014,
+        header=None, header_bg=None, header_fg=None,
+        border=(46, 82, 56), border_w=0.002, cursor="block",
+        pad=0.055, tokens=None, scanlines=True, glow=0.35,
+        fscale=1.0, valign="top"),
+    # The command is the hero of the first seven seconds, so set it like one:
+    # big type, the block composed against the window rather than clinging to
+    # the top edge. The other styles leave ~80% of a 4:3 window empty, which is
+    # what actually read as unpolished — not the chrome.
+    "hero": dict(
+        bg=(15, 18, 24), fg=(232, 237, 245), dim=(104, 113, 127),
+        prompt=(128, 222, 165), out=(130, 186, 234), radius=0.026,
+        header=None, header_bg=None, header_fg=None,
+        border=(48, 56, 68), border_w=0.0012, cursor="block",
+        pad=0.075, tokens=True, scanlines=False, glow=0.0,
+        fscale="fit", max_fscale=1.9, valign="center"),
+}
+
+
 class Terminal:
-    """A terminal window typing one command, then printing a few lines."""
+    """A terminal window typing one command, then printing a few lines.
+
+    The look comes from TERMINAL_STYLES; `style` on the window spec picks one.
+    """
 
     def __init__(self, prompt: str, command: str, output: list[str],
                  t_type: float, type_rate: float, t_enter: float,
-                 scrollback: list[str] | None = None):
+                 scrollback: list[str] | None = None, style: str = "classic",
+                 desktop=(16, 18, 22), title: str = "bash"):
         self.prompt = prompt
         self.command = command
         self.output = output
@@ -353,9 +402,15 @@ class Terminal:
         self.type_rate = type_rate
         self.t_enter = t_enter
         self.scrollback = scrollback or []
+        self.st = TERMINAL_STYLES.get(style, TERMINAL_STYLES["classic"])
+        self.desktop = tuple(desktop)
+        self.title = title
 
-    def avg_color(self) -> tuple[int, int, int]:
-        return (14, 17, 21)
+    def avg_color(self):
+        return self.st["bg"]
+
+    def typing_ends(self) -> float:
+        return self.t_type + len(self.command) / self.type_rate
 
     def _typed(self, t: float) -> str:
         if t < self.t_type:
@@ -363,62 +418,135 @@ class Terminal:
         n = int((t - self.t_type) * self.type_rate)
         return self.command[:min(n, len(self.command))]
 
-    def frame(self, t: float, w: int, h: int, disp_w: int | None = None) -> Image.Image:
-        img = Image.new("RGB", (w, h), (14, 17, 21))
+    def _tokens(self):
+        """(text, colour_key) spans for the whole command, for syntax colour."""
+        st = self.st
+        if not st["tokens"]:
+            return [(self.command, st["fg"])]
+        out, i = [], 0
+        for n, word in enumerate(self.command.split(" ")):
+            col = st["fg"]
+            if n == 0:
+                col = st["prompt"]
+            elif n <= 2:
+                col = (238, 206, 130)
+            elif word.startswith("-"):
+                col = st["dim"]
+            out.append((word, col))
+        spans, pos = [], 0
+        for n, (word, col) in enumerate(out):
+            if n:
+                spans.append((" ", st["fg"]))
+            spans.append((word, col))
+        return spans
+
+    def frame(self, t: float, w: int, h: int, disp_w: int | None = None):
+        st = self.st
+        img = Image.new("RGB", (w, h), self.desktop if st["radius"] else st["bg"])
         d = ImageDraw.Draw(img)
         if w < 24 or h < 18:
+            d.rectangle([0, 0, w, h], fill=st["bg"])
             return img
 
-        bar = max(2, int(h * 0.055))
-        d.rectangle([0, 0, w, bar], fill=(32, 36, 42))
-        d.rectangle([0, 0, w - 1, h - 1], outline=(210, 214, 220),
-                    width=max(1, int(w * 0.0035)))
-        if bar >= 8:
-            r = bar * 0.22
-            for i, col in enumerate([(255, 95, 86), (255, 189, 46), (39, 201, 63)]):
-                cx = bar * (0.75 + i * 0.85)
-                d.ellipse([cx - r, bar / 2 - r, cx + r, bar / 2 + r], fill=col)
-        if w >= 200:
-            ft = font("mono", max(8, int(bar * 0.55)))
-            d.text((w / 2, bar / 2), "bash", font=ft, fill=(150, 156, 165), anchor="mm")
+        rad = int(min(w, h) * st["radius"])
+        bw = max(1, int(w * st["border_w"]))
+        if rad:
+            d.rounded_rectangle([0, 0, w - 1, h - 1], radius=rad, fill=st["bg"],
+                                outline=st["border"], width=bw)
+        else:
+            d.rectangle([0, 0, w, h], fill=st["bg"])
+            d.rectangle([0, 0, w - 1, h - 1], outline=st["border"], width=bw)
+
+        bar = 0
+        if st["header"]:
+            bar = max(2, int(h * 0.055))
+            if rad:
+                d.rounded_rectangle([bw, bw, w - 1 - bw, bar], radius=rad,
+                                    fill=st["header_bg"])
+                d.rectangle([bw, bar - rad, w - 1 - bw, bar], fill=st["header_bg"])
+            else:
+                d.rectangle([bw, bw, w - 1 - bw, bar], fill=st["header_bg"])
+            if st["header"] == "dots" and bar >= 8:
+                r = bar * 0.22
+                for i, col in enumerate([(255, 95, 86), (255, 189, 46), (39, 201, 63)]):
+                    cx = bar * (0.75 + i * 0.85)
+                    d.ellipse([cx - r, bar / 2 - r, cx + r, bar / 2 + r], fill=col)
+            if w >= 200:
+                ft = font("mono", max(8, int(bar * 0.5)))
+                d.text((w / 2, bar / 2), self.title, font=ft,
+                       fill=st["header_fg"], anchor="mm")
 
         if w < 90:
             return img
 
-        fs = max(7, int(h * 0.042))
-        fm = font("mono", fs)
-        fb = font("mono-bold", fs)
-        x0 = int(w * 0.028)
-        y = bar + int(h * 0.055)
-        line_h = int(fs * 1.55)
+        scale = st.get("fscale", 1.0)
+        if scale == "fit":
+            # As large as it can be while the LONGEST line still fits the padded
+            # width. A fixed multiplier cannot do this: 1.75x ran "big-battle"
+            # off the right edge, and the command length changes per scenario.
+            avail = w - 2 * int(w * st["pad"])
+            probe = ImageDraw.Draw(img)
+            widest = max([self.prompt + " " + self.command] + list(self.output),
+                         key=len)
+            fs = max(7, int(h * 0.042 * st.get("max_fscale", 1.9)))
+            while fs > 8 and text_w(probe, widest, font("mono", fs)) > avail:
+                fs = int(fs * 0.96)
+        else:
+            fs = max(7, int(h * 0.042 * scale))
+        fm, fb = font("mono", fs), font("mono-bold", fs)
+        x0 = int(w * st["pad"])
+        line_h = int(fs * 1.6)
+        if st.get("valign") == "center":
+            # compose the whole block (prompt + output) against the window
+            n_lines = 1 + len(self.scrollback) + len(self.output)
+            y = int((h - n_lines * line_h) / 2)
+        else:
+            y = (bar if bar else int(h * st["pad"] * 0.7)) + int(h * 0.055)
 
-        # dim scrollback above the prompt, so the window does not read as a
-        # blank rectangle with one line in it
         for i, line in enumerate(self.scrollback):
-            d.text((x0, y + line_h * i), line, font=fm, fill=(78, 84, 92))
+            d.text((x0, y + line_h * i), line, font=fm, fill=st["dim"])
         y += line_h * len(self.scrollback)
 
-        d.text((x0, y), self.prompt, font=fb, fill=(126, 214, 135))
-        cx = x0 + text_w(d, self.prompt, fb) + int(fs * 0.55)
+        d.text((x0, y), self.prompt, font=fb, fill=st["prompt"])
+        cx = x0 + text_w(d, self.prompt, fb) + int(fs * 0.6)
         typed = self._typed(t)
-        d.text((cx, y), typed, font=fm, fill=(226, 230, 236))
-        cx += text_w(d, typed, fm)
 
-        # block cursor: solid while typing, blinking once the line is done
-        done = len(typed) >= len(self.command)
+        shown = len(typed)
+        pos = 0
+        for span, col in self._tokens():
+            if pos >= shown:
+                break
+            part = span[:max(0, shown - pos)]
+            if part:
+                d.text((cx, y), part, font=fm, fill=col)
+                cx += text_w(d, part, fm)
+            pos += len(span)
+
+        done = shown >= len(self.command)
         if not done or (t % 1.0) < 0.55:
-            d.rectangle([cx, y, cx + int(fs * 0.6), y + fs], fill=(226, 230, 236))
+            if st["cursor"] == "bar":
+                d.rectangle([cx, y, cx + max(1, int(fs * 0.12)), y + fs], fill=st["fg"])
+            elif st["cursor"] == "underline":
+                d.rectangle([cx, y + fs, cx + int(fs * 0.6), y + fs + max(1, fs // 10)],
+                            fill=st["fg"])
+            else:
+                d.rectangle([cx, y, cx + int(fs * 0.6), y + fs], fill=st["fg"])
 
         if t >= self.t_enter:
             for i, line in enumerate(self.output):
                 ly = y + line_h * (i + 1)
-                if ly + fs > h:
+                if ly + fs > h - int(h * 0.02):
                     break
-                # each output line lands a beat after the last
                 if t < self.t_enter + 0.22 * i:
                     break
-                col = (150, 200, 255) if line.startswith("  ") else (168, 174, 183)
-                d.text((x0, ly), line, font=fm, fill=col)
+                d.text((x0, ly), line, font=fm,
+                       fill=st["out"] if line.startswith("  ") else st["fg"])
+
+        if st["scanlines"]:
+            step = max(2, int(h / 240))
+            dark = tuple(int(c * 0.82) for c in st["bg"])
+            for yy in range(bar, h, step * 2):
+                d.line([(bw, yy), (w - bw, yy)], fill=dark, width=1)
         return img
 
 
@@ -662,7 +790,11 @@ class Montage:
                                 spec.get("t_type", spec.get("t_open", 0.0) + 0.4),
                                 spec.get("type_rate", 17.0),
                                 spec.get("t_enter", 1e9),
-                                spec.get("scrollback", []))
+                                spec.get("scrollback", []),
+                                spec.get("style", self.spec.get("terminal_style",
+                                                                "classic")),
+                                self.stage.bg,
+                                spec.get("title", "bash"))
             game = self._game(spec.get("clip", f"hero{i}"), spec.get("variant", i),
                               spec.get("label", ""))
             self.windows.append(Window(spec, term, game, self.stage))
