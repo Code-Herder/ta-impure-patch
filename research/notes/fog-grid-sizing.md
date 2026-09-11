@@ -636,6 +636,70 @@ reuses the block it already has. Every path is still far below today's flat allo
 </svg>
 </div>
 
+**Is a retired block ever wanted back?** No — and that is a property of the sizing rule, not an
+oversight. Growth is monotone. The capacity test is `cap < need`, so a *smaller* window costs
+nothing at all: the block already in the slot covers it, no allocation happens, and nothing is
+looked up. There is no shrink path, so no request can ever arrive that a retired block could
+satisfy.
+
+The case where a free list looks appealing is the climb. Growth is per slot and lazy, so the three
+slots upgrade one after another as each rotates into the build position — three allocations of the
+new size, and three retirements of the old one:
+
+<div class="tablewrap fg">
+<p class="fg-cap">why a free list would match nothing</p>
+<svg class="fg-dia" viewBox="0 0 700 250" role="img" aria-label="Three large allocation requests on the left, one per buffer slot as it rotates into the build position, and three small retired blocks on the right. Every retired block is smaller than every request, so a free list would never match. A smaller window needs no allocation at all.">
+  <text class="fg-lab" x="20" y="28">the slots climb one after another — three requests, three retirements, no overlap</text>
+
+  <text class="fg-lab" x="40"  y="54">requested, as each slot rotates into build</text>
+  <text class="fg-lab" x="430" y="54">retired by those same growths</text>
+
+  <rect class="fg-use" x="40" y="64"  width="150" height="22" opacity="0.85"/>
+  <rect class="fg-use" x="40" y="94"  width="150" height="22" opacity="0.85"/>
+  <rect class="fg-use" x="40" y="124" width="150" height="22" opacity="0.85"/>
+  <text class="fg-lab" x="196" y="79">268 KB — s_build</text>
+  <text class="fg-lab" x="196" y="109">268 KB — then s_pub's block</text>
+  <text class="fg-lab" x="196" y="139">268 KB — then s_hold's</text>
+
+  <rect class="fg-dead" x="430" y="64"  width="62" height="22"/>
+  <rect class="fg-ghost" x="430" y="64"  width="62" height="22"/>
+  <rect class="fg-dead" x="430" y="94"  width="62" height="22"/>
+  <rect class="fg-ghost" x="430" y="94"  width="62" height="22"/>
+  <rect class="fg-dead" x="430" y="124" width="62" height="22"/>
+  <rect class="fg-ghost" x="430" y="124" width="62" height="22"/>
+  <text class="fg-lab" x="498" y="79">71 KB</text>
+  <text class="fg-lab" x="498" y="109">71 KB</text>
+  <text class="fg-lab" x="498" y="139">71 KB</text>
+
+  <text class="fg-lab" x="20" y="172">Every retired block is smaller than the need that retired it — a free list would be consulted</text>
+  <text class="fg-lab" x="20" y="186">three times and match nothing.</text>
+
+  <rect class="fg-ok" x="20" y="198" width="660" height="46"/>
+  <text class="fg-lab" x="36" y="218">The other direction costs nothing either: a smaller window passes cap &lt; need and allocates</text>
+  <text class="fg-lab" x="36" y="234">nothing. The block in the slot already covers it, so need only ever goes up.</text>
+</svg>
+</div>
+
+**And reuse would not be free anyway — it is 6.2 wearing a different hat.** A retired block may
+still be being read by the render thread; that is the entire reason it was retired rather than
+freed. Handing one back to the producer to write into would not even be a use-after-free, it would
+be a *concurrent write into a buffer a frame is sampling* — the §5 hazard, with no lock and no
+fence. To recycle one safely you must first prove the reader has let go, and once you can prove
+that you may as well call `free`. Recycling is not the cheap version of freeing; it is the same
+problem with the same proof obligation and less of the benefit.
+
+**And the waste is smaller than the chart suggests.** A session that never changes video mode
+retires nothing at all — there is no pile, and the whole scheme is simply "212 KB instead of
+6144 KB". The strand exists only for a session that changed mode mid-process, and even the
+three-mode case above is 1016 KB against a 6144 KB baseline it replaces.
+
+*One refinement worth recording rather than arguing about later*: the climb can be two steps
+instead of three. `s_build` is the game thread's outright, and `s_pub`'s block can be replaced
+under `s_cs` as well — its bytes are never read outside the lock, since the render thread only
+ever exchanges that pointer, never dereferences it. Only `s_hold` has to wait for its own
+rotation. It changes nothing above; the published grid is full size from the very first rebuild
+either way.
+
 **What it does not solve.** Nothing, in this module — but be honest about the shape of the claim:
 it is *never free*, so an allocation pattern that grew without bound would be a leak. It does not
 grow without bound here for a specific reason (monotone, and driven by a quantity with a handful
