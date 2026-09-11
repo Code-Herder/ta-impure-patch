@@ -103,6 +103,9 @@ fi
 
 # 60 fps, not 30: the game presents ~34 unique frames a second, so a 30 fps grab
 # samples it at a beat frequency. The montage extracts the 30 it wants.
+# +faststart puts the moov atom at the FRONT: without it a player has to fetch
+# the whole file before the first frame, which makes a 400 MB take unreviewable
+# over HTTP. It costs one rewrite pass at the end of the capture.
 # -draw_mouse 0: the game draws its own cursor, X's pointer would be a second one.
 #
 # A grab can END EARLY and ffmpeg still exits 0, leaving a short but perfectly
@@ -118,6 +121,7 @@ while :; do
   ffmpeg -y -v error -f x11grab -window_id "$WIN" -draw_mouse 0 \
     -framerate 60 -video_size "${W}x${H}" -i "$DISPLAY_ID" \
     -c:v libx264 -preset ultrafast -crf 15 -pix_fmt yuv420p \
+    -movflags +faststart \
     -t "$LEN" "$OUTDIR/$CLIP.mp4" || true
 
   GOT=$(ffprobe -v error -count_frames -select_streams v:0 \

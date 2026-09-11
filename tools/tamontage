@@ -1248,6 +1248,60 @@ def _render_segment(job):
     return idx, seg_path, n_frames, rc
 
 
+def _mux_audio(video: str, audio: str, spec: dict, duration: float,
+               out: str) -> int:
+    """Lay the soundtrack over a finished cut. Video is COPIED, never re-encoded.
+
+    Measured: 1.5 s for a 57 s 4K cut. Which is the whole reason the track is
+    chosen AFTER the render rather than before — auditioning a candidate costs
+    seconds, so there is no case for deciding it up front.
+
+    `start` is where the music begins in the film. A track shorter than the film
+    is normal; what matters is that it ENDS with the film, because the climax is
+    at the end. `promo/MUSIC.md` works this out for the current track, and the
+    rule is start = duration_of_film - duration_of_track.
+    """
+    start = float(spec.get("start", 0.0))
+    gain = float(spec.get("gain_db", 0.0))
+    fade_in = float(spec.get("fade_in", 0.0))
+    fade_out = float(spec.get("fade_out", 0.0))
+
+    chain = []
+    if start > 0:
+        # adelay wants milliseconds, per channel
+        ms = int(round(start * 1000))
+        chain.append(f"adelay={ms}|{ms}")
+    if fade_in > 0:
+        chain.append(f"afade=t=in:st={start:g}:d={fade_in:g}")
+    if fade_out > 0:
+        chain.append(f"afade=t=out:st={max(0.0, duration - fade_out):g}:"
+                     f"d={fade_out:g}")
+    if gain:
+        chain.append(f"volume={gain:g}dB")
+    # -shortest alone would cut the VIDEO if the audio ends first, which it does
+    # here by design; apad pads the audio to the film instead.
+    chain.append("apad")
+    filt = ",".join(chain) if chain else "anull"
+
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+           "-i", video, "-i", audio,
+           "-filter_complex", f"[1:a]{filt}[a]",
+           "-map", "0:v", "-map", "[a]",
+           "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+           "-t", f"{duration:g}", "-movflags", "+faststart", out]
+    rc = subprocess.run(cmd).returncode
+    if rc == 0:
+        cred = spec.get("credit")
+        print(f"  audio: {Path(audio).name} from {start:g}s"
+              + (f", {gain:g} dB" if gain else "")
+              + (f", {fade_out:g}s fade" if fade_out else ""))
+        if cred:
+            print(f"  CREDIT REQUIRED — put this where the film is posted:")
+            for line in cred.splitlines():
+                print(f"    {line}")
+    return rc
+
+
 def cmd_render(args) -> int:
     global SUPERSAMPLE
     SUPERSAMPLE = max(1, args.supersample)
@@ -1267,10 +1321,17 @@ def cmd_render(args) -> int:
     print(f"[tamontage] {m.name}: {n} frames, {out_w}x{out_h}@{fps:g}, "
           f"{len(m.windows)} windows, backend={args.backend}", flush=True)
 
+    aspec = dict(m.spec.get("audio") or {})
+    if args.audio:
+        # `start` is written against the whole film; a --t0 preview shifts it.
+        aspec["start"] = max(0.0, float(aspec.get("start", 0.0)) - t0)
+    rendered = n / fps
+    tmp_out = f"{args.out}.silent.mp4" if args.audio else args.out
+
     jobs = max(1, args.jobs)
     if jobs == 1:
         proc = subprocess.Popen(
-            _encode_cmd(args.out, out_w, out_h, fps, args.crf, args.preset),
+            _encode_cmd(tmp_out, out_w, out_h, fps, args.crf, args.preset),
             stdin=subprocess.PIPE)
         assert proc.stdin is not None
         try:
@@ -1283,6 +1344,9 @@ def cmd_render(args) -> int:
         finally:
             proc.stdin.close()
             rc = proc.wait()
+        if rc == 0 and args.audio:
+            rc = _mux_audio(tmp_out, args.audio, aspec, rendered, args.out)
+            os.unlink(tmp_out)
         print(f"\r  done: {args.out}" + " " * 20)
         return rc
 
@@ -1340,7 +1404,10 @@ def cmd_render(args) -> int:
     rc = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
                          "-f", "concat", "-safe", "0", "-i", str(listing),
                          "-c", "copy", "-movflags", "+faststart",
-                         args.out]).returncode
+                         tmp_out]).returncode
+    if rc == 0 and args.audio:
+        rc = _mux_audio(tmp_out, args.audio, aspec, rendered, args.out)
+        os.unlink(tmp_out)
     if rc == 0:
         shutil.rmtree(segdir, ignore_errors=True)
         print(f"  done: {args.out}")
@@ -1376,6 +1443,11 @@ def main(argv=None) -> int:
                         "(default 3). 1 is the fast, shimmery draft path")
     r.add_argument("--crf", type=int, default=18)
     r.add_argument("--preset", default="medium")
+    r.add_argument("--audio", help="soundtrack to lay over the finished cut. The "
+                   "PATH is a command-line argument on purpose: the script "
+                   "carries the timing and the credit, never a path into "
+                   "someone's home directory, and the track itself is licensed "
+                   "for use in a work rather than for redistribution")
     r.add_argument("--t0", type=float, default=0.0, help="start time (preview a beat)")
     r.add_argument("--t1", type=float, default=None, help="end time")
     r.set_defaults(func=cmd_render)

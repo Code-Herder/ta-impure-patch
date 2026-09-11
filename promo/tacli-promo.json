@@ -292,5 +292,40 @@
       "big": true
     }
   ],
-  "terminal_style": "soft"
+  "terminal_style": "soft",
+  "_audio": [
+    "The soundtrack, laid over the finished cut by `--audio <file>`. The PATH is",
+    "not here on purpose: it would name someone's home directory, and the track is",
+    "licensed for use inside a work rather than for redistribution, so the file",
+    "never enters this repository. promo/MUSIC.md carries the full metadata and the",
+    "dispute answer if the video is ever content-matched.",
+    "",
+    "ALIGN THE MUSIC'S HIT TO THE FILM'S HIT, NOT THE FILE'S ENDS. The mp3 is",
+    "40.18s long but about 5s of that is digital silence: the music peaks at 31.5s",
+    "and its tail resolves by ~35s, which is why the source lists it as 0:36.",
+    "Aligning 57.0 - 40.18 = 16.82 put the peak at 48s and left the climax -- the",
+    "1600-window wide shot and the title card -- playing over dead air.",
+    "",
+    "start 20.0 lands the peak at 51.5s, exactly where the title card appears on",
+    "the full wall, and the tail resolves at ~55s under it. The ~20s of silence",
+    "before it is forced arithmetic, not taste: 35s of music cannot cover 57s of",
+    "film AND finish at the end. It falls over the opening, where one terminal",
+    "types one command, and that plays better dry anyway."
+  ],
+  "audio": {
+    "title": "Evening Melodrama",
+    "artist": "Kevin MacLeod",
+    "source": "https://incompetech.com/music/royalty-free/music.html",
+    "license": "CC BY 4.0",
+    "license_url": "http://creativecommons.org/licenses/by/4.0/",
+    "isrc": "USUAN1200049",
+    "track_seconds": 40.18,
+    "start": 22.0,
+    "fade_in": 0.8,
+    "fade_out": 0.0,
+    "gain_db": -2.0,
+    "credit": "\"Evening Melodrama\" Kevin MacLeod (incompetech.com)\nLicensed under Creative Commons: By Attribution 4.0 License\nhttp://creativecommons.org/licenses/by/4.0/",
+    "music_ends": 35.0,
+    "peak": 31.5
+  }
 }

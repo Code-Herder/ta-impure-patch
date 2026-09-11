@@ -197,6 +197,9 @@ PAGE = """<!doctype html>
   .meta {{ color:#8b95a1; font-size:12.5px; margin-top:10px;
           font-variant-numeric:tabular-nums; }}
   .note {{ color:#6f7884; font-size:12.5px; margin-top:18px; max-width:70ch; }}
+  .hint {{ color:#ffb454; font-size:13px; margin-top:12px; max-width:70ch;
+          background:#231c10; border:1px solid #4a3a1c; border-radius:8px;
+          padding:10px 13px; }}
   kbd {{ background:#1b2128; border:1px solid #2a3038; border-bottom-width:2px;
         border-radius:5px; padding:1px 5px; font:600 11px ui-monospace,monospace; }}
 </style>
@@ -212,6 +215,10 @@ PAGE = """<!doctype html>
   <div class="row" id="renditions"></div>
   <div class="chips" id="chapters"></div>
   <div class="meta" id="meta"></div>
+  <p class="hint" id="hint" hidden>Nothing loading? Chrome will not fetch video
+  into a <b>background tab</b> &mdash; it sits at readyState 0 with no error,
+  which looks exactly like a broken file and is not one. Bring this tab to the
+  front and it starts.</p>
 
   <p class="note">
     <kbd>space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> 5 s ·
@@ -274,6 +281,27 @@ function paint() {{
 v.addEventListener('timeupdate', paint);
 v.addEventListener('loadedmetadata', paint);
 
+// CHROME DOES NOT LOAD MEDIA IN A HIDDEN TAB. A background tab sits at
+// readyState 0 with networkState LOADING, duration NaN and NO ERROR, EVER --
+// indistinguishable from a broken file, a broken encode or a broken server, and
+// it is none of them (fetch() of the same URL succeeds in milliseconds the whole
+// time). So say so on the page, and kick the load when the tab is actually
+// looked at, instead of leaving a spinner that means nothing.
+const hint = document.getElementById('hint');
+function checkVisibility() {{
+  const stuck = v.readyState === 0 && !v.error;
+  if (document.visibilityState === 'hidden') return;
+  hint.hidden = true;
+  if (stuck) v.load();                 // it refused to load while hidden
+}}
+document.addEventListener('visibilitychange', checkVisibility);
+setTimeout(() => {{
+  if (v.readyState === 0 && !v.error) {{
+    hint.hidden = false;               // still nothing after 3s
+  }}
+}}, 3000);
+checkVisibility();
+
 addEventListener('keydown', e => {{
   if (e.target.tagName === 'INPUT') return;
   if (e.code === 'Space') {{ e.preventDefault(); v.paused ? v.play() : v.pause(); }}
@@ -314,15 +342,20 @@ def main() -> int:
     rends = []
     for p in vids:
         info = probe(p)
-        label = f"{info['h']}p" if info["h"] else p.stem
-        if info["h"] >= 2000:
-            label = "4K master"
-        elif info["h"]:
-            label = f"{info['h']}p"
-        rends.append({"src": p.name, "label": label, "w": info["w"],
+        rends.append({"src": p.name, "label": "", "w": info["w"],
                       "h": info["h"], "size": human(p.stat().st_size),
-                      "dur": info["dur"]})
-    rends.sort(key=lambda r: r["h"])          # lightest first: it streams sooner
+                      "dur": info["dur"], "stem": p.stem})
+    # Label by RESOLUTION when the files are renditions of one cut, and by NAME
+    # when they are not -- pointed at a directory of six source clips, "1536p"
+    # four times over says nothing about which is which.
+    heights = [r["h"] for r in rends]
+    by_res = len(set(heights)) == len(heights)
+    for r in rends:
+        if by_res:
+            r["label"] = "4K master" if r["h"] >= 2000 else f"{r['h']}p"
+        else:
+            r["label"] = r["stem"]
+    rends.sort(key=lambda r: (r["h"], r["stem"]) if by_res else (r["stem"],))
 
     chaps = chapters(Path(args.script)) if args.script else []
     sub = " · ".join(f"{r['label']} {r['size']}" for r in rends)
