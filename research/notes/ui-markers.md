@@ -244,6 +244,15 @@ and the DLL are held) and after two fresh `native:` lines:
 | `selbox-slope`, `ss = 2` | `10b14e51fd828641ed6b057635d25451` | **0** |
 | `selbox-facings`, `ss = 2` / `ss = 1` | `c0ebd5bf…` / `29d4be02…` | **0** |
 
+And the shipped path was checked against the binary that predates the change, not
+just against the same binary with the trigger off: the DLL built from the parent
+commit draws the sweep as `d30931e371388f3e6373fa692a860b0d` at `ss = 2` and
+`c061e864da4b4556a5f085949fe9fa07` at `ss = 1` — the same two md5s, so the
+frame a player sees is byte-for-byte what it was. (Both fixtures reach a **0-px
+noise floor** and reproduce their md5 across relaunches, which is what makes
+these comparable at all; the pointer is parked and its rect excluded, because
+the cursor sprite animates wherever it sits.)
+
 **What it buys, at `devres` `k = 1.5`** (1024×768 in a 1536×1152 client; the
 rect's coverage estimated per device pixel against a third shot with nothing
 selected, so the background is known):
