@@ -1618,8 +1618,23 @@ tools/tacli ui <i> click SINGLE --device                   # aim where the gadge
   so the composite downsamples rather than nearest-stretching. The native log line carries
   `devres=` beside `ss=`. It is not the default because a selection rect drawn in an `ss` buffer
   is one *supersample* wide (the driver clamps aliased line width to 1), which under `devres`
-  reaches the screen thinner and dimmer than the engine's — that wants the rects drawn as real
-  geometry first.
+  reaches the screen thinner and dimmer than the engine's.
+- **`tagpu_selgeom.on` is the answer to that, and the second lever to arm under `devres`.** It
+  draws the rect as two triangles per edge instead of `GL_LINES`, a band of `w` GAME pixels
+  (`arm <i> 'selgeom.on=w=2'`, default 1; `wdev=` states it in device pixels). At `k = 1.5` the
+  rect then reaches full colour — 1019 device pixels at ≥ 0.9 coverage against the line path's 5
+  — and at 1:1 it is **bit-identical**, so the parity md5 does not move (measured 2026-09-11 at
+  `ss = 1`, `ss = 2`, zoom 0.5 and 2.0). The native log line carries
+  `selgeom=<w>gpx@1x|@ss` whenever it is armed, and `selgeom.on=main` turns the 1x detour off
+  (the A/B for whether that apparatus is still owed — it is: 1320 px at `ss = 2`).
+- **A/B-ing the rect needs a fixture that is frozen without pausing.** `tacli keys <i> tab` opens
+  the in-game menu and writes PAUSED across the middle of the viewport, over whatever is there.
+  Still tanks on `Two Continents` settle by themselves: `scenarios/selbox-facings.json` and
+  `selbox-slope.json` both reach a **0-pixel noise floor** within a few seconds and reproduce the
+  same md5 across relaunches. Two things still move in a "static" frame — the **cursor sprite**
+  animates wherever it is parked (exclude its rect, as `uiwalk` does), and at zoom < 1 a stray
+  animating feature can come into view (mask it). Band-select with
+  `keys <i> mouse:X,Y down:lbutton mouse:… up:lbutton`; there is no `tacli select`.
 
 ### The Q2 diff — is the restored UI right? (G15e)
 
