@@ -273,7 +273,17 @@ treats `main+0x38A47` as seconds×30, or as a sim-step count, is only right at `
 
 **The engine's DRAW loop is neither of these rates, and it is scene-dependent.** `DrawGameScreen`
 — and with it the fog overlay `0x4848E0`, which is where `tagpu_fogwide.c` ticks — turns over as
-fast as the scene allows while the presenter caps only the flip. Counted against the wall clock
+fast as the scene allows while the presenter caps only the flip.
+
+**`0x4848E0` has exactly ONE call site: `0x469D8E`, inside the per-frame world draw**
+[VERIFIED 2026-09-11 by `objdump -d -M intel` over the whole image of
+`pristine/TotalA.exe.pristine`: one `call 0x4848e0` in `.text`, encoded `e8 4d ab 01 00`. The grid
+builder it drives, `0x4843C0`, likewise has exactly one]. That is worth stating because the
+function reads like a sim tick and is not one: **it is on the DRAW path and keeps running with the
+sim paused**, so anything hung off it runs at the draw rate below and not at `gamespeed`'s. What
+*does* follow the sim rate is the fog REBUILD, because the is-current bit it tests is cleared by
+the LOS stamps and nothing stamps while the sim is stopped. Reported by the cursor_zoom session,
+whose own note had it the other way round; verified here rather than taken on trust. Counted against the wall clock
 [MEASURED 2026-09-10, 1920×1080, `--maxfps 60`, both instances presenting 58–60 fps]: **330 calls
 a second** on `crowd-static` (256 units, Two Continents) and **3200–4900** on a sparse Town &
 Country skirmish. So a per-draw counter is not a per-frame counter and not a per-tick one either:
