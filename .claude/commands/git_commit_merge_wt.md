@@ -194,7 +194,7 @@ They get re-derived every time they are not written down, and a *wrong* line cos
 missing one — G13g spent several probes chasing a skill note that claimed edge scroll "does not
 fire under injected input" (it does; the trigger is an exact equality on the outermost pixel).
 The most reused output of that landing was the page for functions we only *read* — the camera
-stepper `0x41CA30`, the scroll poll `0x41CF10`, the dead clamp `0x41C450`.
+stepper `0x41CA10`, the scroll poll `0x41CE90`, the dead clamp `0x41C450`.
 
 ## Step 5 — Review gate: check it, then run it if it is missing
 

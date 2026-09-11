@@ -1189,9 +1189,12 @@ centre. Four consequences for driving:
   driving: a recipe that sets up a follow and then wheels has no follow afterwards — read
   `main+0x142F3` (`CameraToUnit`, 0 = nothing followed) rather than assuming, and expect one
   `zoom: cursor anchor took the camera - the unit follow is released` per follow in the log.
-  And **with the sim paused (`tab`) the camera will not move under a follow at all** — the
-  request is never serviced, which is the fail-safe direction, not a bug. A wheel aimed at the
-  viewport centre moves the eye by nothing and leaves the follow alone, which is the control.
+  **Pausing the sim (`tab`) does NOT stop this** — the fog tick is a detour on the fog-overlay
+  *draw* `0x4848E0`, whose sole call site `0x469D8E` is inside the per-frame world draw, so a
+  paused game still services the request and the wheel still takes the camera. What does stop it
+  is the game thread ceasing to DRAW, which is the fail-safe direction and not a state you meet
+  while testing. A wheel aimed at the viewport centre moves the eye by nothing and leaves the
+  follow alone, which is the control.
 - **`Ctrl+C` needs the SHIELD ON.** It is a modifier combo, so under injection it only reaches
   the game through `fake_GetAsyncKeyState` — with `--no-shield` your `ctrl` is invisible and
   the follow is never established, which looks exactly like the feature not working.

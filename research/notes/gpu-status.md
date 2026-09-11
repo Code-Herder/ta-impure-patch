@@ -413,23 +413,40 @@ Three consequences, all deliberate:
 * **The residual is kept WHOLE while it waits.** A frame that finds a follow set returns without
   spending `s_residX`/`s_residY`, so the gesture's total displacement is still exactly
   `(a − c)(1/z_start − 1/z_end)` across the wait rather than losing the frames it spanned.
-* **A level, not an edge**, because the engine's own writers are guard-then-store with 40–60 bytes
-  between the two (`0x49AE84`→`0x49AE8C`, `0x49C7F3`→`0x49C7FB` for the object slot): a follow
-  re-established in that window would survive a one-shot request, and is simply taken away again
-  on the next tick. The render thread drops the level the moment it stops wanting the camera, so a
-  finished gesture leaves no claim behind.
-* **A game thread that stops ticking never releases, and the anchor then never steps the eye** —
-  the camera keeps following, which is the old behaviour and the fail-safe direction.
+* **A level, not an edge**, because the engine's own writers are guard-then-store with the compare
+  well before the store — 43–46 bytes for the countdown writers, 8 for the two that write the
+  object slot (`0x49AE84`→`0x49AE8C`, `0x49C7F3`→`0x49C7FB`): a follow re-established in that
+  window would survive a one-shot request, and is taken away again on the next tick.
+* **The game thread CONSUMES the request and the render thread re-arms it** every frame it still
+  wants the camera. That bounds the one thing a level cannot bound by itself, a producer that
+  *stops*: `terrown` keeps skipping for up to 90 frames after the native pass goes quiet, and a
+  frozen level would spend those frames deleting every follow the player established. Consumed, a
+  dead producer costs exactly one release.
+* **A game thread that stops DRAWING never releases, and the anchor then never steps the eye** —
+  the camera keeps following, which is the old behaviour and the fail-safe direction. **Pausing the
+  sim is not that**: `0x4848E0`'s sole call site `0x469D8E` is inside the per-frame world draw, so
+  a paused game still services the request.
+* **The banked debt dies with the claim.** A gesture that ends without ever getting the camera
+  voids its residual (`drop_claim()`), and so does every exit that gives the claim up. Without that
+  the bank survives the gesture — nothing else spends it, since every later frame returns at
+  `zNow == s_zStep` — and the next notch anywhere on the map discharges it in one frame as a silent
+  camera jump. It is also what kept the centre-aimed control honest: `nx` tests the *accumulated*
+  residual, not this frame's contribution, so a banked value would make a centred wheel step and
+  release. [All four found by the landing review, 2026-09-10.]
 
 **Also in the fields we write, by consequence:** releasing the follow zeroes `CameraToUnit`, which
-is `+0` of the camera block `0x469BFC` hands the order-marker driver — so from that frame the
-followed unit's order lines stop being drawn (`tagpu_order.c` reads it as `camU`). Same thread, no
-tear, and it is the state the engine reaches after its own edge scroll; noted because marker-parity
-captures depend on it.
+is `+0` of the camera block `0x469BFC` hands the order-marker driver — so from that frame an
+**unselected** followed unit's order lines stop being drawn (`tagpu_order.c` reads it as `camU`; a
+*selected* unit takes the same mask on the next branch and is unaffected, so the Ctrl+C case loses
+its lines only while nothing is selected). Same thread, no tear, and it is the state the engine
+reaches after its own edge scroll; noted because marker-parity captures depend on it. It applies
+under the partial arm set too (`vpwide.on` + `terrown.on` without `zoom.on`), which is a
+configuration the module otherwise declines to drive.
 
 **Measured 2026-09-10** on the landing binary, same skirmish, commander followed with Ctrl+C, four
-notches aimed at `(900, 600)` against a viewport centre of `(576, 384)` — a matched pair, same
-gesture and direction, on two builds differing only in whether the request is published:
+notches aimed at `(900, 600)` against a viewport centre of `(576, 384)` — same gesture and
+direction on two builds differing only in whether the request is published, from a start eye within
+2 px (the followed commander drifts between runs):
 
 | build | gesture | eye | follow after |
 | --- | --- | --- | --- |
@@ -441,9 +458,23 @@ Both landed rows are the predicted `(a − c)(1/z_prev − 1/z_now)` = `(±150.4
 so the game-thread wait costs no accuracy. The control — the same gesture aimed at the viewport
 centre — moves the eye by nothing, leaves the follow **intact** and logs no release.
 
+**The leak regression** [2026-09-10, after the review]: three gestures in a row, each re-following
+with Ctrl+C first, gave Δ `(−150, −100)`, `(−150, −100)`, `(−151, −100)`. The odd pixel in the
+third is the carry doing its job, not a bank — the true delta is `−150.37`, and `150 + 150 + 151`
+is `451` against a true `451.1`. A leaked bank would have shown as a jump of hundreds. A
+centre-aimed wheel taken immediately afterwards, with that carry standing, left the eye at
+`(5113, 7624)` unchanged and the follow set — which is the case the review said the old code got
+wrong.
+
 **Three properties the tests lean on.** The delta is exactly 0 with the pointer at the viewport
-centre, so that case is the previous behaviour bit for bit — which is the A/B control, and why
-this needs no lever. The steps **telescope**, so total displacement is
+centre, so that case is the previous behaviour — which is the A/B control, and why this needs no
+lever. *Precisely*, since G13u ties the follow release to the eye actually stepping: `nx` tests the
+ACCUMULATED residual, not this frame's contribution, so the control holds while the carry standing
+from an earlier gesture is under half a world pixel — which `drop_claim()` now guarantees, because
+the only residual that survives a gesture is the sub-pixel remainder of a frame that did move the
+eye. The one case left is a carry of exactly ±0.5, where `iround`'s half-away-from-zero gives ±1:
+a centred wheel would then step one world pixel and take the follow with it. Not reproduced, and
+not special-cased — changing the rounding would break the in-then-out oracle's exactness. The steps **telescope**, so total displacement is
 `(a − c)(1/z_start − 1/z_end)` whatever the frame timing, giving an exact oracle on the eye.
 And in-then-out with a still pointer returns the eye exactly.
 

@@ -295,8 +295,8 @@ arithmetic over all 1000 tick residues. Found by the landing review of G13u, whi
 change that assumed the opposite.]
 
 **Nothing at `main+0xNNN` can be assumed aligned, so no cross-thread access to an engine field
-is atomic by virtue of its width.** `0x41D920` is the only site in `.text` that stores into
-`ds:0x511DE8`, and it pads the allocation by a random amount first:
+is atomic by virtue of its width — a READ as much as a write.** `0x41D920` is the only *function*
+that stores into `ds:0x511DE8`, and it pads the allocation by a random amount first:
 
 ```
 0x41D924  call ds:0x4FC0DC        ; GetTickCount  (confirmed in the import table)
@@ -307,6 +307,10 @@ is atomic by virtue of its width.** `0x41D920` is the only site in `.text` that 
 0x41D9D5  mov  ds:0x511DE8, esi
 ```
 
+It stores twice: `0x41D9D5` above, and `0x41D9E1` (`mov ds:0x511DE8, ebp` with `ebp` zero) on the
+allocation-failure branch taken at `0x41D96E` — so **`main` can legitimately be NULL**, which is
+why every reader in the fork tests it before use rather than out of habit.
+
 `7 * n mod 4` walks every residue, so the struct's alignment is drawn afresh at each launch and
 then **fixed for that session** — which is the worst possible diagnostic signature, because a
 bug of this shape reproduces perfectly inside one launch and not at all in the next. Why the
@@ -316,8 +320,15 @@ For a field at `main+N`, over the 1000 reachable pads:
 
 | | `main+0x142F7` (a followed-object pointer) |
 | --- | --- |
-| 4-aligned | **25.0 %** of launches |
-| crosses a 64-byte cache line | **4.7 %** of launches |
+| 4-aligned | **25.0 %** of launches — exact, and independent of the allocator's own base |
+| crosses a 64-byte cache line | **4.5–4.8 %**, depending on that base (4.7 % if malloc returns 64-aligned) |
+
+**The load-bearing number is the first one read the other way round: 75 % of launches have the
+field misaligned at all.** That one survives every assumption. The cache-line figure additionally
+assumes a base alignment nobody has established, and `GetTickCount`'s ~15.6 ms granularity means
+the reachable residue set is coarser than 1000 values — so quote "about one launch in twenty",
+not 4.7 %. Every offset this project reads across threads (`0x142F3`, `0x142F7`, `0x1431F`,
+`0x1421F`, `0x14357`) is ≡ 3 mod 4, so they all share the same 25 %.
 
 An x86 access that crosses a cache line is not atomic (SDM 3A §8.1.1), so in about one launch in
 twenty a cross-thread reader can observe a half-written field. **The rule this gives:**
@@ -333,14 +344,39 @@ twenty a cross-thread reader can observe a half-written field. **The rule this g
 * A `lock`-prefixed store on our side does not rescue it, because the engine's own plain **split
   load** can still straddle an atomic store.
 
-**Where this may already have bitten.** `tagpu_fog_at`'s guard exists because the render thread
-faulted twice on 2026-09-03 reading the fog descriptor `{u16* buf; int cols; int rows; int cells}`
-out of `*(main+0x1421F)` off a base of `-9` (earlier `-318`), root cause never found; a torn `buf`
-is a candidate, and it is recorded as a hypothesis in `fog-grid-sizing.md` §2. The defensive shape
+**Where this may already have bitten — and the argument AGAINST the obvious suspect.**
+`tagpu_fog_at`'s guard exists because the render thread faulted twice on 2026-09-03 reading the
+fog descriptor `{u16* buf; int cols; int rows; int cells}` out of `*(main+0x1421F)` off a base of
+`-9` = `0xFFFFFFF7` (earlier `-318` = `0xFFFFFEC2`), root cause never found. A torn `buf` looks
+like the answer and probably is not: composing either value needs **three `0xFF` bytes**, and
+neither operand of that store has an `0xFF` byte up there at any split offset — a userland heap
+pointer's top byte is `0x00`–`0x7F`, and the value it replaces is the previous such pointer or
+zero. No split offset composes either observed value out of two valid pointers, so the tear
+reading survives only if the slot already held `0xFF` poison — in which case the interesting bug
+is the freed-and-reused descriptor, i.e. a **lifetime** fault, not an alignment one. Both readings
+are recorded in `fog-grid-sizing.md` §2. The test that separates them in one fault: log the other
+three descriptor fields at the guard trip — a tear gives one bad field and three consistent ones,
+a reused slot gives four that are garbage together. The defensive shape
 already in `tagpu_native.c` is the one to copy for any multi-field engine struct read across
 threads: bound every field AND check a **relation the builder guarantees** —
 `cells == ((cols*rows + 7) & ~7)`, the round-up at `0x483C84` — because a tear almost certainly
 breaks the relation even when each field looks individually plausible.
+
+**A relation is a filter, not a proof, and the distinction matters here.** Two pointers into
+unrelated allocations satisfy `(end − begin) % stride == 0` about one time in `stride`, so such a
+check catches most skews and ships the rest — which by this project's own standard is the bug with
+better odds rather than a fix. Use it as a cheap refusal on top of a real argument (a lifetime
+fence, a thread), never as the argument itself.
+
+**Not swept, and worth a pass of its own [2026-09-10].** A review sweep of the fork found nine
+places where an engine field is written by one thread and read by the other. Most are coordinates
+or counts whose consumer bounds them. The one it rated most dangerous is the unit array's
+`begin`/`end` pair (`main+0x14357`/`+0x1435B`) read at nine sites as two unsynchronised loads and
+used as the bounds of a `+= 0x118` walk that dereferences each slot, with no mutual-consistency
+check at all; its skew window is a level change, when the two can name different allocations. None
+of this was addressed in the G13u landing that found it. Note before acting: `tagpu_reclaim`'s
+teardown gate already covers some of those sites, so the first job is establishing which are
+uncovered rather than writing nine diffs.
 
 ## The camera module — mapped by us
 
@@ -401,7 +437,7 @@ Two things follow, and both cost time to learn the hard way:
 | Where | What |
 | --- | --- |
 | `main+0x1431F` / `+0x14323` | eyeX / eyeY |
-| `main+0x142F3` / `+0x142F7` / `+0x1434B` | **the camera follow**, three slots the stepper takes in that priority [MEASURED 2026-09-10]. `+0x142F3` is `CameraToUnit` [CORPUS] — a followed *unit*, position at `+0x6A`, set by Ctrl+C (`0x41C310`) and the cycle keys (`0x41C2E0`); `+0x142F7` a followed *object*, position at `+0x4`, which `0x49C7FB` migrates the unit follow onto when `[unit+0x110] & 0x20000000`; `+0x1434B` a u16 **frame countdown** on the remembered position at `main+0x1433F`, both filled by `0x499E50` when a followed object is destroyed. Released together by `0x41C390`. **All seven sites in `.text` that store a NON-ZERO value into the countdown** — `0x499E8E`, `0x499F1B`, `0x499F89`, `0x49B0E5`, `0x49B992`, `0x49BCBD`, `0x49C8DD` — first compare their object against `main+0x142F7` and take the `jne` when it differs. **That guard is NOT usable as a cross-thread interlock:** each reads its guard 40-60 bytes before its store (`0x499E60`->`0x499E8E`, `0x499EF0`->`0x499F1B`, `0x49B0BA`->`0x49B0E5`), so clearing `+0x142F7` from another thread after the compare has been passed does not stop the store. Every other write to the countdown, anywhere, is a zero. *[The count said six until 2026-09-10; `0x499E8E` was missed. Found by the landing review.]* |
+| `main+0x142F3` / `+0x142F7` / `+0x1434B` | **the camera follow**, three slots the stepper takes in that priority [MEASURED 2026-09-10]. `+0x142F3` is `CameraToUnit` [CORPUS] — a followed *unit*, position at `+0x6A`, set by Ctrl+C (`0x41C310`) and the cycle keys (`0x41C2E0`); `+0x142F7` a followed *object*, position at `+0x4`, which `0x49C7FB` migrates the unit follow onto when `[unit+0x110] & 0x20000000`; `+0x1434B` a u16 **frame countdown** on the remembered position at `main+0x1433F`, both filled by `0x499E50` when a followed object is destroyed. Released together by `0x41C390`. **All seven sites in `.text` that store a NON-ZERO value into the countdown** — `0x499E8E`, `0x499F1B`, `0x499F89`, `0x49B0E5`, `0x49B992`, `0x49BCBD`, `0x49C8DD` — first compare their object against `main+0x142F7` and take the `jne` when it differs. **That guard is NOT usable as a cross-thread interlock:** each reads its guard 40-60 bytes before its store (`0x499E60`->`0x499E8E`, `0x499EF0`->`0x499F1B`, `0x49B0BA`->`0x49B0E5`), so clearing `+0x142F7` from another thread after the compare has been passed does not stop the store. Every other write to the countdown, anywhere, is a zero — apart from the stepper's own decrement at `0x41CA2A`, which stores a non-zero value whenever the countdown was 2 or more. *[The count said six until 2026-09-10; `0x499E8E` was missed. Found by the landing review.]* |
 | **a manual camera move releases the follow** | The engine's own rule, not a convention: the scroll poll's eye-writing tail runs the three stores at `0x41D091`…`0x41D0AA`, and `0x41D035` skips that whole tail on a frame where the eye did **not** change — so it is released exactly when the player actually moved the camera. `tagpu_zoom`'s cursor-anchored wheel does the same, for the same reason: the stepper recomputes the target from the followed unit every frame, so a delta added to the eye is otherwise eased straight back out [MEASURED 2026-09-10 — with the release removed the same gesture moved the eye by (0, −2) instead of the exact (−150, −100)]. |
 | `main+0x14327` / `+0x1432B` | **the scroll target** (`MapXScrollingTo`) the stepper eases the eye toward. Every reference to it in `.text` is inside `0x41C4xx`–`0x41D4xx` — 30 and 28 respectively, and **no drawing code reads it**, which is what makes it camera-local. |
 | **why we do NOT set `main+0x142F1` bit 1** | Every engine eye writer sets it; ours deliberately do not [2026-09-10]. It is the same unlocked-RMW exposure as bit 3 and a far worse one in practice, because `DrawMinimap 0x466B00` **clears it at `0x466B16` in the same breath** — measured 2026-09-09, `tagpu_gui_surf.c:1385`: it reads 0 on almost every frame, so a read-modify-write from the render thread would be racing a writer that is always writing. What actually needs to follow a camera we moved is the view BOX, and `tagpu_zoom_eye_moved()` recomputes `main+0x142CB` directly through the same `0x466B70` wrapper the engine's own clamp calls; the sharp minimap layer reads that rect every frame and is not gated on the dirty bit at all. |
