@@ -380,15 +380,102 @@ the zoom and the eye it is drawn with change together.
 **Fields we write:** `main+0x1431F`/`+0x14323` (the eye) and `main+0x14327`/`+0x1432B` (its
 scroll target) — always together, because the two disagreeing is what the per-frame stepper
 reads as a camera move in flight and would rebuild the fog grid every frame for as long as it
-lasted (G13g) — and `main+0x142CB`, the minimap's view box, recomputed through the engine's own
-`0x466B70` because `0x41C3C0` is the only place it is otherwise filled. **No engine flag bit is
+lasted (G13g) — `main+0x142CB`, the minimap's view box, recomputed through the engine's own
+`0x466B70` because `0x41C3C0` is the only place it is otherwise filled, and, on a frame that
+actually steps the eye, the three **camera-follow** slots zeroed (below). **No engine flag bit is
 written at all**, and both omissions are deliberate: see the two new rows in
 [exe reverse engineering](exe-reverse-engineering.html) on `main+0x14281` bit 3 and
 `main+0x142F1` bit 1.
 
+**A frame that wants to step the eye asks the GAME THREAD to release the camera follow**
+[G13u, 2026-09-10]. Following a unit, the stepper `0x41CA10` recomputes the scroll target from it
+*every* frame and clamps it inline, so the anchor's delta was eased straight back out and the zoom
+read as pinned to the unit. The engine answers the same problem in its own edge and hotkey scroll
+by releasing the follow — the scroll poll's eye-writing tail clears `main+0x1434B`, `+0x142F3` and
+`+0x142F7` at `0x41D091`…`0x41D0AA`, the body of `0x41C390`, and `0x41D035` skips that tail on a
+frame where the eye did not change.
+
+**Those three stores are ours to make only on the game thread, and that is the whole safety
+argument** — the same handshake as the fog request above, for the same reason plus one more.
+`main` is **randomly misaligned at every launch** (`0x41D920` pads it by
+`(GetTickCount() % 1000) * 7`; see [exe reverse engineering](exe-reverse-engineering.html)), so
+`main+0x142F7` is 4-aligned in only 25 % of launches and straddles a cache line in 4.7 % of them.
+A cross-thread store of zero would therefore be torn in about one launch in twenty — into a slot
+the stepper **dereferences** at `0x41CA58`/`0x41CA95`. The eye and the scroll target are misaligned
+in exactly the same way and are written from the render thread anyway, because a torn *coordinate*
+is bounded by `clamp_pair()`; a torn *pointer* is a wild read.
+
+So: `anchor_step()` publishes a level — `s_dropFollow`, "a gesture is trying to move the camera
+right now" — and `tagpu_zoom_follow_tick()` does the stores from `terr_fogtick`, gated on the same
+`tagpu_terrown_owns_fog()` that anchoring itself is gated on, so the request always has a consumer.
+Three consequences, all deliberate:
+
+* **The residual is kept WHOLE while it waits.** A frame that finds a follow set returns without
+  spending `s_residX`/`s_residY`, so the gesture's total displacement is still exactly
+  `(a − c)(1/z_start − 1/z_end)` across the wait rather than losing the frames it spanned.
+* **A level, not an edge**, because the engine's own writers are guard-then-store with the compare
+  well before the store — 43–46 bytes for the countdown writers, 8 for the two that write the
+  object slot (`0x49AE84`→`0x49AE8C`, `0x49C7F3`→`0x49C7FB`): a follow re-established in that
+  window would survive a one-shot request, and is taken away again on the next tick.
+* **The game thread CONSUMES the request and the render thread re-arms it** every frame it still
+  wants the camera. That bounds the one thing a level cannot bound by itself, a producer that
+  *stops*: `terrown` keeps skipping for up to 90 frames after the native pass goes quiet, and a
+  frozen level would spend those frames deleting every follow the player established. Consumed, a
+  dead producer costs exactly one release.
+* **A game thread that stops DRAWING never releases, and the anchor then never steps the eye** —
+  the camera keeps following, which is the old behaviour and the fail-safe direction. **Pausing the
+  sim is not that**: `0x4848E0`'s sole call site `0x469D8E` is inside the per-frame world draw, so
+  a paused game still services the request.
+* **The banked debt dies with the claim.** A gesture that ends without ever getting the camera
+  voids its residual (`drop_claim()`), and so does every exit that gives the claim up. Without that
+  the bank survives the gesture — nothing else spends it, since every later frame returns at
+  `zNow == s_zStep` — and the next notch anywhere on the map discharges it in one frame as a silent
+  camera jump. It is also what kept the centre-aimed control honest: `nx` tests the *accumulated*
+  residual, not this frame's contribution, so a banked value would make a centred wheel step and
+  release. [All four found by the landing review, 2026-09-10.]
+
+**Also in the fields we write, by consequence:** releasing the follow zeroes `CameraToUnit`, which
+is `+0` of the camera block `0x469BFC` hands the order-marker driver — so from that frame an
+**unselected** followed unit's order lines stop being drawn (`tagpu_order.c` reads it as `camU`; a
+*selected* unit takes the same mask on the next branch and is unaffected, so the Ctrl+C case loses
+its lines only while nothing is selected). Same thread, no tear, and it is the state the engine
+reaches after its own edge scroll; noted because marker-parity captures depend on it. It applies
+under the partial arm set too (`vpwide.on` + `terrown.on` without `zoom.on`), which is a
+configuration the module otherwise declines to drive.
+
+**Measured 2026-09-10** on the landing binary, same skirmish, commander followed with Ctrl+C, four
+notches aimed at `(900, 600)` against a viewport centre of `(576, 384)` — same gesture and
+direction on two builds differing only in whether the request is published, from a start eye within
+2 px (the followed commander drifts between runs):
+
+| build | gesture | eye | follow after |
+| --- | --- | --- | --- |
+| request removed | −4, z 1.0 → 0.683, from `(5127, 7609)` | `(5125, 7609)`, Δ `(−2, 0)` — cancelled | still set |
+| as landed | −4, z 1.0 → 0.683, from `(5127, 7611)` | `(4977, 7511)`, Δ `(−150, −100)` | released |
+| as landed | +4, z 0.683 → 1.0, from `(5127, 7609)` | `(5277, 7709)`, Δ `(+150, +100)` | released |
+
+Both landed rows are the predicted `(a − c)(1/z_prev − 1/z_now)` = `(±150.4, ±100.3)` to the pixel,
+so the game-thread wait costs no accuracy. The control — the same gesture aimed at the viewport
+centre — moves the eye by nothing, leaves the follow **intact** and logs no release.
+
+**The leak regression** [2026-09-10, after the review]: three gestures in a row, each re-following
+with Ctrl+C first, gave Δ `(−150, −100)`, `(−150, −100)`, `(−151, −100)` against a true
+`(−150.37, −100.25)` each. Totals: **X 451 against 451.1, Y 300 against 300.7**. Both sit inside
+the ±1 world px that a carry entering and leaving the run can move a three-gesture total by, so
+this is the carry working, not a bank — a leaked bank would have shown as a jump of hundreds, not
+a pixel. *(Quoting X alone as a telescoping proof would be cherry-picking: Y is the looser of the
+two and is the one to check.)* A centre-aimed wheel taken immediately afterwards, with that carry
+standing, left the eye at `(5113, 7624)` unchanged and the follow set.
+
 **Three properties the tests lean on.** The delta is exactly 0 with the pointer at the viewport
-centre, so that case is the previous behaviour bit for bit — which is the A/B control, and why
-this needs no lever. The steps **telescope**, so total displacement is
+centre, so that case is the previous behaviour — which is the A/B control, and why this needs no
+lever. *Precisely*, since G13u ties the follow release to the eye actually stepping: `nx` tests the
+ACCUMULATED residual, not this frame's contribution, so the control holds while the carry standing
+from an earlier gesture is under half a world pixel — which `drop_claim()` now guarantees, because
+the only residual that survives a gesture is the sub-pixel remainder of a frame that did move the
+eye. The one case left is a carry of exactly ±0.5, where `iround`'s half-away-from-zero gives ±1:
+a centred wheel would then step one world pixel and take the follow with it. Not reproduced, and
+not special-cased — changing the rounding would break the in-then-out oracle's exactness. The steps **telescope**, so total displacement is
 `(a − c)(1/z_start − 1/z_end)` whatever the frame timing, giving an exact oracle on the eye.
 And in-then-out with a still pointer returns the eye exactly.
 
@@ -455,10 +542,16 @@ establish, so this is a measured behaviour and not an explained one.
 **Named gaps.** The eye is an integer in world px, so the anchor can sit up to `z/2` screen px
 from the pointer while a gesture is in flight — 0.5 px at 1×, 4 px at 8×; holding it exactly
 would need an off-centre scale centre, which vpwide's addressable rect, fogwide's window and
-the ring test all assume away. The three sites that clamp the scroll target inline against
-`[0, map − W]` — `0x41C4C0`, `0x41C7F7` and the per-frame camera FOLLOW `0x41CAF7` — do not go
-through our clamp, so on those paths a target we stepped can be recomputed without the delta
-and the stepper eases the eye back; the camera owns itself while it is following something.
+the ring test all assume away. Two sites that clamp the scroll target inline against
+`[0, map − W]` — `0x41C4C0` and `0x41C7F7` — do not go through our clamp, so on those paths a
+target we stepped can be recomputed without the delta and the stepper eases the eye back;
+neither is a standing state, so the zoom composes with the next camera move. *[CORRECTED
+2026-09-10: this listed the per-frame camera FOLLOW `0x41CAF7` as a third such site and
+concluded "the camera owns itself while it is following something". It does not — a follow is
+recomputed **every** frame, so it did not merely stop the delta `d` short of a map edge, it
+cancelled the whole gesture's camera move (measured: the eye moved (0, −2) where the anchor
+asked for (−150, −100)). `release_follow()` releases the follow instead, which is the engine's
+own rule for a manual camera move.]*
 `eye[0] += nx` is a read-modify-write on an unaligned field (`main+0x1431F` is an odd offset)
 racing the game thread's own stepper, and the landing accepts it: every value that escapes goes
 through `clamp_pair()` so nothing can address memory the engine does not own, but a lost update
@@ -563,14 +656,15 @@ engine's camera** — the minimap's view box, the minimap click jump, the mouse 
 the HotUnits cull and our own passes needed nothing new.
 
 **What is not covered, and the scroll target is where the line falls.** `main+0x14327`/`+0x1432B`
-is where the camera is *heading*, and the per-frame stepper `0x41CA30` eases the eye toward it.
+is where the camera is *heading*, and the per-frame stepper `0x41CA10` eases the eye toward it.
 Paths that set the eye and copy it into the target afterwards (`0x41C574`, `0x41CDB0`, the
 scroll `0x41D037`) reach the widened range through the detour. Three sites instead compute the
 target and clamp it **inline** against `[0, map − W]`, never calling `0x41C3C0` for it —
 `0x41C4C0` (smooth `SetCamera`), `0x41C7F7` (smooth centre-on) and `0x41CAF7` (the per-frame
 camera **follow**, which recomputes the target from the tracked unit every frame). The stepper
 walks the eye to that target and our wider clamp leaves it there, so **those paths still stop
-`d` short of a map edge**. Nothing fights and nothing churns — the eye arrives at a target
+`d` short of a map edge**. (The follow is still one of the three *for the range*; what changed
+is that the cursor anchor now releases it rather than competing with it — §2.3e.) Nothing fights and nothing churns — the eye arrives at a target
 inside our range and both stop — it is simply the old behaviour where the detour does not sit.
 Closing it means widening three inline clamps in the middle of the camera module.
 
@@ -1076,7 +1170,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x14357` / `+0x1435B` | unit array begin/end, stride `0x118` |
 | `main+0x1435F` / `+0x14367` | HotUnits ids / count (culled to whatever the viewport rect says — the unzoomed one, or the widened one under `vpwide`) |
 | `main+0x1431F` / `+0x14323` | eyeX / eyeY. **WRITTEN**, and only ever *clamped*: our replacement of the engine's own clamp widens its range to what the zoom shows (§2.3c), and `apply_eye_range()` re-applies the same bounds once a frame so a zoom-out cannot leave the eye past them. Sim-neutral for the same reason `ScrollSpeed` is |
-| `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA30` eases the eye toward it. **WRITTEN by `apply_eye_range()` only**, clamped to the same range as the eye and for the same frame, because a disagreement between the two costs the fog grid its is-current flag every frame (§2.3c). The replacement clamp deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
+| `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA10` eases the eye toward it. **WRITTEN by `apply_eye_range()` only**, clamped to the same range as the eye and for the same frame, because a disagreement between the two costs the fog grid its is-current flag every frame (§2.3c). The replacement clamp deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
 | `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so `apply_eye_range()` recomputes it through the same wrapper on the frames it corrects the eye. The one **render-thread** write of it; a game thread drawing the minimap in that instant sees a one-frame torn box, the same standing as the published view |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live** (§2.3b); every pass that means the true 1× rect must call `tagpu_vpwide_true_rect()` rather than read the field |
 | `main+0x2C76` / `+0x2C7A` | mouse position, two dwords (`+0x2C78` is the high half of x, not the y) — the x and y of the 6-dword record the dispatch fills. **WRITTEN by `vpw_mouse_world()` while the zoom transform is live** (§2.3d): the engine is polled with the true pointer now, so the unzoomed `u` is put back here, where `GetUnitAtMouse 0x48CD80` and the routing test at `0x469DE1` read it. Untouched at zoom 1, on the screen-space UI, and for a record that came off the event ring. **Local, but NOT inert:** all three fillers (`0x4999C4`, `0x4999E7`, `0x4999F9`) and our write sit inside one game-thread tick, before the first reader, so nothing races — but the readers include the order dispatchers `0x419BE0`/`0x41A490`, so a wrong value here becomes a wrong **replicated order**, not just a wrong highlight. That is why the ring test above has to be exact |

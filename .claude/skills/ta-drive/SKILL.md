@@ -1197,13 +1197,29 @@ about six frames.
 **The wheel ZOOMS TO THE CURSOR since G13t (2026-09-10), so it MOVES THE CAMERA.** The world
 point under the pointer is held still, which means `tacli wheel --at X Y` is no longer a
 camera-neutral operation: the eye steps by `(a − c)(1/z0 − 1/z1)`, where `c` is the viewport
-centre. Three consequences for driving:
+centre. Four consequences for driving:
 
 - **Re-read the eye after any wheel**, and do not assume a recipe's camera survived one.
 - **`--at` the viewport centre is the old behaviour exactly** — the delta is 0 there, so that
   is the control for any A/B, and it needs no flag (there isn't one).
 - **`tagpu_zoom.txt` still does NOT move the camera.** Only the wheel anchors, so every
   scripted zoom and every fixture is unchanged.
+- **An off-centre wheel RELEASES a camera follow (G13u), and it needs the GAME THREAD to be
+  ticking.** Ctrl+C follows your commander (it does not merely centre on it) and the
+  cycle-through-units keys do the same; a wheel that wants to move the eye asks for all three
+  follow slots to be cleared, and `terrown`'s fog tick does the clearing. Two consequences for
+  driving: a recipe that sets up a follow and then wheels has no follow afterwards — read
+  `main+0x142F3` (`CameraToUnit`, 0 = nothing followed) rather than assuming, and expect one
+  `zoom: cursor anchor took the camera - the unit follow is released` per follow in the log.
+  **Pausing the sim (`tab`) does NOT stop this** — the fog tick is a detour on the fog-overlay
+  *draw* `0x4848E0`, whose sole call site `0x469D8E` is inside the per-frame world draw, so a
+  paused game still services the request and the wheel still takes the camera. What does stop it
+  is the game thread ceasing to DRAW, which is the fail-safe direction and not a state you meet
+  while testing. A wheel aimed at the viewport centre moves the eye by nothing and leaves the
+  follow alone, which is the control.
+- **`Ctrl+C` needs the SHIELD ON.** It is a modifier combo, so under injection it only reaches
+  the game through `fake_GetAsyncKeyState` — with `--no-shield` your `ctrl` is invisible and
+  the follow is never established, which looks exactly like the feature not working.
 
 Anchoring is off — and says so once a second in the log — while `tagpu_eye.txt` holds the
 camera (`zoom: cursor anchor off - tagpu_eye.txt holds the camera`), and while `terrown` is
