@@ -67,8 +67,17 @@ again after they change it.
 
 Once approved, once per landing (not per commit), on the accumulated branch diff, review at
 **`medium`** when the landing touches **`tagpu/ddraw/**`**, **`tagpu/src/**`** or
-**`tools/tacli`** — `high` if it writes engine or user state, adds or moves a byte patch, or is
-sim-adjacent. Verify each finding against the code before acting on it, and never apply findings
+**`tools/tacli`** — `high` if it writes engine or user state, adds or moves a byte patch, is
+sim-adjacent, **or changes the synchronisation between the game thread and the render thread**.
+
+That last one is not covered by the others and is the reason this line was amended. A change to a
+lock, a handshake, a published counter, or the lifetime of anything one thread writes and the other
+reads is the class this stack fails at silently: it does not throw, it produces a dead render
+thread or a wrong frame days later, on one launch in twenty, and the reproduction is a story about
+timing rather than a test. `tagpu_reclaim` exists because of one; `tagpu_fog_at`'s guard exists
+because of another whose root cause was never found; G13s was a producer gated on a value the
+other thread published. A diff that adds three lines to a critical section is small in the
+reviewer's sense and large in this one. Verify each finding against the code before acting on it, and never apply findings
 blindly.
 
 **Reviews run on Opus (Opus 5), not on the session model.** The built-in `/code-review` cannot
