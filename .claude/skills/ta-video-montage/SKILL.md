@@ -164,16 +164,60 @@ until the widest line fits in `max_lines`. This is not cosmetic: "A test harness
 happens to look like a war." typeset at card size is wider than 1920 px and simply
 ran off both edges of the frame. Explicit `\n` is honoured.
 
-### Measured cost (2026-09-10, six 1024×768 clips, 1920×1080 output)
+## Speed: `-j`, and the three self-inflicted wounds before it
 
-| pass | per frame | full 54 s |
+**A full 4K render of the 54 s cut takes 2m22s with `-j 16`.** Getting there was
+mostly undoing redundant work, not clever optimisation — profile before reaching for
+a GPU.
+
+| | 4K wide-shot frame | jitter |
 |---|---|---|
-| `wire` | ~70 ms | ~72 s |
-| `clip`, warm caches | ~140 ms | ~4 min |
+| drawn at destination size (the start) | — | 108.7 |
+| after the supersample fix | 1683 ms | 30.7 |
+| after the cache + ladder fixes | 621 ms | **8.45** |
+| full 54 s cut, `-j 16` | **2m22s total** | |
 
-The single-terminal opening and the 1600-tile wide shot cost about the same, so the
-grid is not what to optimise (hard rule 6). Cold, add one-time frame extraction plus
-the thumb build.
+The three wounds, all found by `cProfile`, none guessable:
+
+1. **A continuous random `phase` per filler window made every tile a unique
+   source**, so the per-frame cache never shared: 251 source draws and 252 resizes
+   for ~234 visible tiles. `PHASES` quantises it. Keep
+   `len(clips) * VARIANTS_PER_CLIP * PHASES` **well below** the on-screen tile count
+   or the cache cannot do its job.
+2. **A 2× ladder wasted two thirds of every draw.** A 211 px tile asked for 633 and
+   got rounded up to 1024. Finer ~1.25× steps cut the cost *and* the jitter (30.7 →
+   8.45): coarse steps mean the canonical size holds, then **doubles**, and every
+   tile re-rasterises hard at that jump.
+3. **`_game()` keyed on `variant`, splitting 6 clip files into 24 `Clip` objects**,
+   each decoding and holding its own copy of every frame — which made the clip
+   backend *slower* than the procedural one (1178 ms vs 621 ms). Variant only
+   recolours a white box; it must not split a real clip.
+
+Captions also composited the whole frame: converting 4K to RGBA and back cost ~93 ms
+per frame regardless of caption size. Now only the dirty rect is composited (a full
+card still dirties everything, and then it is the same work).
+
+### `-j`: frames are independent
+
+`--jobs` (default: half the cores) renders contiguous **segments** in parallel, each
+worker encoding its own mp4, concatenated with `-c copy`. Workers encode their own
+segments rather than shipping frames back, because a 4K frame is 24 MB and piping
+1600 of them through IPC costs more than rendering them.
+
+**Verify a parallel render at the seams**, since `-c copy` concat is exactly the kind
+of thing that fails silently: count decoded frames (`-count_frames`), decode end to
+end, and check the temporal second difference at multiples of the segment length.
+Measured on the 4K cut: seams averaged **3.395** against **3.615** elsewhere — below
+average, and no seam in the worst 20 frames.
+
+### Do we need the GPU?
+
+Not yet, and it would have been the wrong first move — the CPU path was doing ~5x
+redundant work. It is feasible if it ever is needed: the reference setup has a
+CUDA GPU, `torch` is already installed with CUDA support, and `libEGL_nvidia` is
+present, so a `grid_sample` compositor needs no new dependency. Mipmapped texture sampling would
+also beat supersampling for minification. Revisit only if 4K renders become frequent;
+at 2m22s each they are not.
 
 ## Honesty: what the film may and may not claim
 

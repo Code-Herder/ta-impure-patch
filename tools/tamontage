@@ -219,7 +219,8 @@ class Camera:
 # The ladder targets ~2x the displayed size, so the scale-down also anti-aliases:
 # a 1 px border drawn at 128 and shown at 45 becomes a clean third-of-a-pixel line
 # instead of a hard one that pops in and out.
-LADDER = (32, 64, 128, 256, 512, 1024, 2048, 4096)
+LADDER = (32, 48, 64, 80, 96, 128, 160, 192, 256, 320, 384, 512, 640, 768,
+          1024, 1280, 1536, 2048, 2560, 3072, 4096)
 # Measured 2026-09-10 on the wide shot, as mean temporal second difference
 # (|2f(n) - f(n-1) - f(n+1)|, which cancels smooth motion and catches popping):
 #
@@ -234,6 +235,21 @@ LADDER = (32, 64, 128, 256, 512, 1024, 2048, 4096)
 # size, so 3x is the knee. --supersample 1 disables all of this for fast drafts.
 SUPERSAMPLE = 3
 RESAMPLE = Image.BILINEAR
+
+# How much variety the filler wall carries, and therefore how much the per-frame
+# source cache can share. distinct sources = len(clips) * VARIANTS_PER_CLIP, and
+# each appears at PHASES different points in its animation. Keep the product well
+# BELOW the number of tiles on screen (~1400 at the widest) or the cache cannot
+# share and every tile pays for its own draw and its own resize.
+VARIANTS_PER_CLIP = 4
+PHASES = 4
+
+# Decoded full-size clip frames held in RAM. This must comfortably exceed the
+# number of distinct (clip, phase) combinations on screen, or it thrashes: at 8
+# it re-decoded a PNG from disk for nearly every tile and the clip backend was
+# SLOWER than the procedural one (1178 ms vs 621 ms per 4K frame). Costs about
+# 2.3 MB per entry at 1024x768.
+FULL_LRU = 192
 
 
 def canonical_size(want_w: int, want_h: int) -> tuple[int, int]:
@@ -473,7 +489,7 @@ class Clip:
         if got is None:
             got = Image.open(self.frames[i]).convert("RGB")
             self.full[i] = got
-            while len(self.full) > 8:
+            while len(self.full) > FULL_LRU:
                 self.full.popitem(last=False)
         else:
             self.full.move_to_end(i)
@@ -609,7 +625,10 @@ class Montage:
     # -- sources -----------------------------------------------------------
 
     def _game(self, clip_id: str, variant: int, label: str):
-        key = f"{clip_id}#{variant}"
+        # `variant` only recolours a white box, so it must NOT split a real clip
+        # into separate objects: keying on it gave 24 Clip instances for 6 files,
+        # each decoding and holding its own copy of every frame.
+        key = f"{clip_id}#{variant}" if self.backend == "wire" else clip_id
         got = self._games.get(key)
         if got is not None:
             return got
@@ -673,7 +692,7 @@ class Montage:
 
         auto = self._first_visible(cells)
         for (col, row), a in zip(cells, auto):
-            k = rng.randrange(len(ids) * 8)
+            k = rng.randrange(len(ids) * VARIANTS_PER_CLIP)
             game = self._game(ids[k % len(ids)], k, labels[k % len(labels)])
             # Already there before the camera reaches it (so nothing pops in
             # frame), except the first ring, which is deliberately spread over
@@ -681,7 +700,7 @@ class Montage:
             t_open = max(not_before + rng.random() * wave, float(a) - lead)
             self.windows.append(Window(
                 {"col": col, "row": row, "t_open": t_open, "fade": fade,
-                 "phase": rng.random() * 9.0},
+                 "phase": rng.randrange(PHASES) * (9.0 / PHASES)},
                 None, game, self.stage))
 
     # -- rendering ---------------------------------------------------------
@@ -768,6 +787,7 @@ class Montage:
         """Draw every live caption onto one RGBA layer, composited once."""
         w, h = img.size
         layer = None
+        dirty = (w, h, 0, 0)          # accumulated bounds of what captions touch
         for cap in self.captions:
             t0, t1 = cap["t0"], cap["t1"]
             if not (t0 <= t <= t1):
@@ -821,12 +841,15 @@ class Montage:
                 # on it. Reads as a title card rather than as a subtitle.
                 d.rectangle([0, 0, w, h],
                             fill=(6, 8, 11, int(cap.get("dim", 205) * a)))
+                dirty = (0, 0, w, h)
             else:
                 # A soft scrim rather than a hard black plate: the grid stays
                 # readable behind the words, which is the point of the wide shot.
                 scrim = int(215 * a) if big else int(190 * a)
                 d.rounded_rectangle(box, radius=int(h * 0.012),
                                     fill=(9, 11, 14, scrim))
+                dirty = (min(dirty[0], box[0]), min(dirty[1], box[1]),
+                         max(dirty[2], box[2]), max(dirty[3], box[3]))
             ly = y
             for i, (line, f, col) in enumerate(body):
                 if i == len(head) and len(body) > len(head):
@@ -838,7 +861,20 @@ class Montage:
 
         if layer is None:
             return img
-        return Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB")
+        # Composite only the region the captions actually touch. A lower-third
+        # card covers ~12 % of the frame, but converting the whole thing to RGBA
+        # and back cost ~93 ms per 4K frame whatever its size. A full-frame card
+        # dirties everything, and then this is the same work as before.
+        bx0, by0, bx1, by1 = dirty
+        bx0 = max(0, int(bx0)); by0 = max(0, int(by0))
+        bx1 = min(w, int(bx1) + 1); by1 = min(h, int(by1) + 1)
+        if bx1 <= bx0 or by1 <= by0:
+            return img
+        region = (bx0, by0, bx1, by1)
+        merged = Image.alpha_composite(img.crop(region).convert("RGBA"),
+                                       layer.crop(region))
+        img.paste(merged.convert("RGB"), (bx0, by0))
+        return img
 
     # -- introspection -----------------------------------------------------
 
@@ -872,6 +908,39 @@ class Montage:
 # driver
 # --------------------------------------------------------------------------
 
+def _encode_cmd(out: str, w: int, h: int, fps: float, crf: int, preset: str) -> list[str]:
+    return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "rawvideo", "-pix_fmt", "rgb24",
+            "-s", f"{w}x{h}", "-r", f"{fps:g}", "-i", "-",
+            "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", out]
+
+
+def _render_segment(job):
+    """Render one contiguous run of frames straight into its own mp4 segment.
+
+    Frames are independent, so this is embarrassingly parallel. Each worker
+    encodes its own segment rather than shipping raw frames back to the parent:
+    a 4K frame is 24 MB, and piping 1600 of them through IPC costs more than the
+    rendering does. The segments are concatenated with `-c copy` afterwards.
+    """
+    (idx, spec, backend, clips, cache, fps, w, h, crf, preset,
+     t_start, n_frames, seg_path, supersample) = job
+    global SUPERSAMPLE
+    SUPERSAMPLE = supersample
+    m = Montage(Path(spec), backend, Path(clips) if clips else None,
+                Path(cache), fps, aspect=h / w)
+    proc = subprocess.Popen(_encode_cmd(seg_path, w, h, fps, crf, preset),
+                            stdin=subprocess.PIPE)
+    try:
+        for i in range(n_frames):
+            proc.stdin.write(m.render_frame(t_start + i / fps, w, h).tobytes())
+    finally:
+        proc.stdin.close()
+        rc = proc.wait()
+    return idx, seg_path, n_frames, rc
+
+
 def cmd_render(args) -> int:
     global SUPERSAMPLE
     SUPERSAMPLE = max(1, args.supersample)
@@ -891,25 +960,66 @@ def cmd_render(args) -> int:
     print(f"[tamontage] {m.name}: {n} frames, {out_w}x{out_h}@{fps:g}, "
           f"{len(m.windows)} windows, backend={args.backend}", flush=True)
 
-    ff = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-          "-f", "rawvideo", "-pix_fmt", "rgb24",
-          "-s", f"{out_w}x{out_h}", "-r", f"{fps:g}", "-i", "-",
-          "-c:v", "libx264", "-preset", args.preset, "-crf", str(args.crf),
-          "-pix_fmt", "yuv420p", "-movflags", "+faststart", args.out]
-    proc = subprocess.Popen(ff, stdin=subprocess.PIPE)
-    assert proc.stdin is not None
-    try:
-        for i in range(n):
-            t = t0 + i / fps
-            frame = m.render_frame(t, out_w, out_h)
-            proc.stdin.write(frame.tobytes())
-            if i % int(fps) == 0:
-                pct = 100.0 * i / max(1, n)
-                print(f"\r  {t:6.2f}s  {pct:5.1f}%", end="", flush=True)
-    finally:
-        proc.stdin.close()
-        rc = proc.wait()
-    print(f"\r  done: {args.out}" + " " * 20)
+    jobs = max(1, args.jobs)
+    if jobs == 1:
+        proc = subprocess.Popen(
+            _encode_cmd(args.out, out_w, out_h, fps, args.crf, args.preset),
+            stdin=subprocess.PIPE)
+        assert proc.stdin is not None
+        try:
+            for i in range(n):
+                t = t0 + i / fps
+                proc.stdin.write(m.render_frame(t, out_w, out_h).tobytes())
+                if i % int(fps) == 0:
+                    print(f"\r  {t:6.2f}s  {100.0 * i / max(1, n):5.1f}%",
+                          end="", flush=True)
+        finally:
+            proc.stdin.close()
+            rc = proc.wait()
+        print(f"\r  done: {args.out}" + " " * 20)
+        return rc
+
+    # Parallel: contiguous segments, one worker each, concatenated with -c copy.
+    import multiprocessing as mp
+
+    segdir = Path(args.out).parent / f".{Path(args.out).stem}-segments"
+    if segdir.exists():
+        shutil.rmtree(segdir)
+    segdir.mkdir(parents=True, exist_ok=True)
+    per = -(-n // jobs)
+    tasks = []
+    for i in range(jobs):
+        first = i * per
+        cnt = min(per, n - first)
+        if cnt <= 0:
+            break
+        tasks.append((i, args.script, args.backend, args.clips or "", str(cache),
+                      fps, out_w, out_h, args.crf, args.preset,
+                      t0 + first / fps, cnt, str(segdir / f"seg{i:03d}.mp4"),
+                      SUPERSAMPLE))
+    print(f"  {len(tasks)} segments x ~{per} frames across {jobs} workers")
+    done, total = 0, 0
+    with mp.get_context("spawn").Pool(jobs) as pool:
+        for idx, path, cnt, rc in pool.imap_unordered(_render_segment, tasks):
+            if rc != 0:
+                print(f"\n  segment {idx} failed (ffmpeg rc={rc})")
+                return rc
+            done += 1
+            total += cnt
+            print(f"\r  {done}/{len(tasks)} segments, {total}/{n} frames",
+                  end="", flush=True)
+    print()
+
+    listing = segdir / "segments.txt"
+    listing.write_text("".join(
+        f"file '{segdir / f'seg{i:03d}.mp4'}'\n" for i in range(len(tasks))))
+    rc = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                         "-f", "concat", "-safe", "0", "-i", str(listing),
+                         "-c", "copy", "-movflags", "+faststart",
+                         args.out]).returncode
+    if rc == 0:
+        shutil.rmtree(segdir, ignore_errors=True)
+        print(f"  done: {args.out}")
     return rc
 
 
@@ -934,6 +1044,9 @@ def main(argv=None) -> int:
     r.add_argument("--width", type=int, default=1920)
     r.add_argument("--height", type=int, default=1080)
     r.add_argument("--fps", type=float, default=30.0)
+    r.add_argument("--jobs", "-j", type=int, default=max(1, (os.cpu_count() or 4) // 2),
+                   help="parallel render workers (frames are independent). "
+                        "1 renders serially into a single encoder")
     r.add_argument("--supersample", type=int, default=SUPERSAMPLE,
                    help="draw sources at N x the displayed size and scale down "
                         "(default 3). 1 is the fast, shimmery draft path")
