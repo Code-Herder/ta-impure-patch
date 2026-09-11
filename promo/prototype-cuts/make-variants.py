@@ -168,93 +168,9 @@ def main():
 
 
 def page(manifest):
-    return PAGE.replace("__DATA__", json.dumps(manifest))
-
-
-PAGE = r"""<!doctype html>
-<meta charset="utf-8"><title>tacli promo — prototype cuts</title>
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:#0b0d10; color:#e8ebef; font:14px/1.5 system-ui,sans-serif; }
-  header { padding:18px 24px 10px; }
-  h1 { margin:0 0 4px; font-size:18px; letter-spacing:.2px; }
-  .warn { color:#ffb454; font-size:12px; }
-  main { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:20px;
-         padding:8px 24px 120px; align-items:start; }
-  video { width:100%; background:#000; border:1px solid #22262c; border-radius:8px; display:block; }
-  .panel { background:#111418; border:1px solid #22262c; border-radius:8px; padding:14px 16px; }
-  .panel h2 { margin:0 0 2px; font-size:15px; }
-  .panel .blurb { color:#9aa3ad; font-size:12.5px; margin:0 0 12px; }
-  dl { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; margin:0; font-size:12.5px; }
-  dt { color:#7f8894; } dd { margin:0; font-variant-numeric:tabular-nums; }
-  .cam { margin-top:12px; font:11.5px/1.5 ui-monospace,monospace; color:#8fd0ff;
-         white-space:pre; overflow-x:auto; }
-  .bar { position:fixed; left:50%; transform:translateX(-50%); bottom:18px;
-         display:flex; gap:6px; padding:8px; background:#151a20ee; backdrop-filter:blur(8px);
-         border:1px solid #2a3038; border-radius:12px; box-shadow:0 8px 30px #0008; }
-  .bar button { appearance:none; border:1px solid #2a3038; background:#1b2128; color:#cfd6de;
-         padding:8px 13px; border-radius:8px; font:600 12.5px system-ui; cursor:pointer; }
-  .bar button:hover { background:#232b34; }
-  .bar button[aria-pressed=true] { background:#3a7bd5; border-color:#3a7bd5; color:#fff; }
-  .bar .k { opacity:.5; font-weight:400; margin-left:6px; }
-  @media (max-width:900px) { main { grid-template-columns:1fr; } }
-</style>
-<header>
-  <h1>tacli promo — prototype cuts</h1>
-  <div class="warn">PROTOTYPE · white-box render, 960&times;540 · not footage · delete when a cut is chosen</div>
-</header>
-<main>
-  <div><video id="v" controls autoplay muted loop playsinline></video></div>
-  <div class="panel">
-    <h2 id="t"></h2>
-    <p class="blurb" id="b"></p>
-    <dl>
-      <dt>duration</dt><dd id="d"></dd>
-      <dt>captions</dt><dd id="c"></dd>
-      <dt>ends at</dt><dd id="e"></dd>
-      <dt>opens on</dt><dd id="f"></dd>
-    </dl>
-    <div class="cam" id="cam"></div>
-  </div>
-</main>
-<div class="bar" id="bar"></div>
-<script>
-const V = __DATA__;
-const v = document.getElementById('v'), bar = document.getElementById('bar');
-let cur = null;
-
-function show(id, keepTime) {
-  const m = V.find(x => x.id === id) || V[0];
-  const t = keepTime ? v.currentTime : 0;
-  if (cur !== m.id) { v.src = m.id + '.mp4'; v.currentTime = t; v.play().catch(()=>{}); }
-  cur = m.id;
-  document.getElementById('t').textContent = m.title;
-  document.getElementById('b').textContent = m.blurb;
-  document.getElementById('d').textContent = m.duration.toFixed(1) + ' s';
-  document.getElementById('c').textContent = m.captions;
-  document.getElementById('e').textContent = m.end_cols + ' columns wide';
-  document.getElementById('f').textContent = m.first_caption;
-  document.getElementById('cam').textContent =
-    m.camera.map(([tt, cc]) => `t=${String(tt).padStart(5)}  cols=${cc}`).join('\n');
-  for (const btn of bar.children) btn.setAttribute('aria-pressed', btn.dataset.id === m.id);
-  const u = new URL(location); u.searchParams.set('v', m.id); history.replaceState({}, '', u);
-}
-
-V.forEach((m, i) => {
-  const b = document.createElement('button');
-  b.dataset.id = m.id;
-  b.innerHTML = m.title + '<span class="k">' + (i + 1) + '</span>';
-  b.onclick = () => show(m.id, true);
-  bar.appendChild(b);
-});
-addEventListener('keydown', e => {
-  const i = parseInt(e.key, 10);
-  if (i >= 1 && i <= V.length) show(V[i - 1].id, true);
-});
-show(new URL(location).searchParams.get('v') || V[0].id, false);
-</script>
-"""
+    """The compare page: template beside this file, data substituted in."""
+    tmpl = (HERE / "page.html.tmpl").read_text()
+    return tmpl.replace("__DATA__", json.dumps(manifest))
 
 
 if __name__ == "__main__":

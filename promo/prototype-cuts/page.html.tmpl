@@ -1,0 +1,264 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>tacli promo — prototype cuts</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0b0d10; color:#e8ebef;
+         font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; padding-bottom:96px; }
+  header { padding:16px 22px 6px; display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:17px; letter-spacing:.2px; }
+  .warn { color:#ffb454; font-size:12px; }
+  .hint { color:#6f7884; font-size:12px; margin-left:auto; }
+
+  .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; padding:10px 22px; }
+  @media (max-width:1400px){ .grid{ grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  @media (max-width:800px){ .grid{ grid-template-columns:1fr; } }
+
+  figure { margin:0; background:#111418; border:1px solid #222831; border-radius:10px;
+           overflow:hidden; cursor:pointer; transition:border-color .12s; }
+  figure:hover { border-color:#3a7bd5; }
+  figure.ended { opacity:.55; }
+  video { width:100%; display:block; background:#000; aspect-ratio:16/9; }
+  figcaption { padding:9px 12px 11px; }
+  .ft { font-weight:650; font-size:13.5px; }
+  .fs { color:#8b95a1; font-size:11.5px; margin-top:2px; font-variant-numeric:tabular-nums; }
+  .fb { color:#6f7884; font-size:11.5px; margin-top:5px; }
+  .badge { float:right; font:11px ui-monospace,monospace; color:#7fd0ff; }
+
+  .solo { display:none; grid-template-columns:minmax(0,1fr) 300px; gap:18px; padding:10px 22px; }
+  body.mode-solo .solo { display:grid; }
+  body.mode-solo .grid { display:none; }
+  .panel { background:#111418; border:1px solid #222831; border-radius:10px; padding:14px 16px; }
+  .panel h2 { margin:0 0 3px; font-size:15px; }
+  .panel .blurb { color:#9aa3ad; font-size:12.5px; margin:0 0 12px; }
+  dl { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; margin:0; font-size:12.5px; }
+  dt { color:#7f8894; } dd { margin:0; font-variant-numeric:tabular-nums; }
+  .cam { margin-top:12px; font:11.5px/1.55 ui-monospace,monospace; color:#8fd0ff; white-space:pre; }
+
+  .bar { position:fixed; left:0; right:0; bottom:0; display:flex; align-items:center; gap:10px;
+         padding:11px 18px; background:#12171ded; backdrop-filter:blur(10px);
+         border-top:1px solid #262d36; }
+  .bar button { appearance:none; border:1px solid #2a3038; background:#1b2128; color:#cfd6de;
+         padding:7px 12px; border-radius:8px; font:600 12.5px system-ui; cursor:pointer; }
+  .bar button:hover { background:#232b34; }
+  .bar button[aria-pressed=true] { background:#3a7bd5; border-color:#3a7bd5; color:#fff; }
+  .bar .sep { width:1px; height:24px; background:#2a3038; margin:0 3px; }
+  #scrub { flex:1; accent-color:#3a7bd5; min-width:120px; }
+  #clk { font:12.5px ui-monospace,monospace; color:#9aa3ad; min-width:104px; text-align:right;
+         font-variant-numeric:tabular-nums; }
+  .k { opacity:.45; font-weight:400; margin-left:5px; }
+</style>
+
+<header>
+  <h1>tacli promo — prototype cuts</h1>
+  <span class="warn">PROTOTYPE · white-box render · not footage</span>
+  <span class="hint">space play/pause · ←/→ 5s · 1-5 solo · G grid · click a cut to focus</span>
+</header>
+
+<div class="grid" id="grid"></div>
+
+<div class="solo">
+  <div><video id="sv" controls muted playsinline></video></div>
+  <div class="panel">
+    <h2 id="st"></h2>
+    <p class="blurb" id="sb"></p>
+    <dl>
+      <dt>duration</dt><dd id="sd"></dd>
+      <dt>captions</dt><dd id="sc"></dd>
+      <dt>ends at</dt><dd id="se"></dd>
+      <dt>opens on</dt><dd id="sf"></dd>
+    </dl>
+    <div class="cam" id="scam"></div>
+  </div>
+</div>
+
+<div class="bar">
+  <button id="pp">▶ Play<span class="k">space</span></button>
+  <input type="range" id="scrub" min="0" max="100" step="0.05" value="0">
+  <span id="clk">0.0 / 0.0 s</span>
+  <div class="sep"></div>
+  <button id="mg" aria-pressed="true">Grid<span class="k">G</span></button>
+  <span id="solobtns"></span>
+</div>
+
+<script>
+const V = __DATA__;
+const MAX = Math.max(...V.map(v => v.duration));
+const $ = id => document.getElementById(id);
+
+let clock = 0, playing = false, lastNow = 0, soloId = null;
+
+// ---- build the grid -------------------------------------------------------
+const grid = $('grid');
+V.forEach((m, i) => {
+  const fig = document.createElement('figure');
+  fig.dataset.id = m.id;
+  fig.innerHTML = `
+    <video muted playsinline preload="auto" src="${m.id}.mp4" data-dur="${m.duration}"></video>
+    <figcaption>
+      <div class="ft">${m.title}<span class="badge">${i + 1}</span></div>
+      <div class="fs">${m.duration.toFixed(0)}s · ${m.captions} captions · ends ${m.end_cols} cols</div>
+      <div class="fb">${m.blurb}</div>
+    </figcaption>`;
+  fig.onclick = e => { if (e.target.tagName !== 'VIDEO' || true) solo(m.id); };
+  grid.appendChild(fig);
+});
+const vids = [...grid.querySelectorAll('video')];
+const figs = [...grid.querySelectorAll('figure')];
+
+// ---- solo buttons ---------------------------------------------------------
+V.forEach((m, i) => {
+  const b = document.createElement('button');
+  b.textContent = m.title.split(' ')[0];
+  b.dataset.id = m.id;
+  b.onclick = () => solo(m.id);
+  $('solobtns').appendChild(b);
+});
+
+// ---- transport ------------------------------------------------------------
+$('scrub').max = MAX;
+
+// NEVER write currentTime before the element has metadata. Assigning it while
+// readyState is 0 aborts the in-flight load and restarts it, so a per-frame
+// correction loop keeps the video permanently at HAVE_NOTHING: black tiles,
+// duration NaN, and no error anywhere to tell you why.
+const ready = el => el.readyState >= 1 && !el.seeking;
+
+function seekAll(t) {
+  clock = Math.max(0, Math.min(t, MAX));
+  for (const el of vids) {
+    if (!ready(el)) continue;
+    const d = +el.dataset.dur;
+    el.currentTime = Math.min(clock, Math.max(0, d - 0.05));
+  }
+  const sv = $('sv');
+  if (soloId && ready(sv)) {
+    const m = V.find(x => x.id === soloId);
+    sv.currentTime = Math.min(clock, m.duration - 0.05);
+  }
+  paint();
+}
+
+function setPlaying(p) {
+  playing = p;
+  $('pp').innerHTML = (p ? '❚❚ Pause' : '▶ Play') + '<span class="k">space</span>';
+  lastNow = performance.now();
+  if (!p) { vids.forEach(v => v.pause()); $('sv').pause(); }
+}
+
+let lastSync = 0;
+
+function tick(now) {
+  if (playing) {
+    clock += (now - lastNow) / 1000;
+    lastNow = now;
+    if (clock >= MAX) { seekAll(0); }          // loop the whole comparison
+    // Drift-correct a few times a second, not every frame: a seek costs a
+    // decoder flush, and at 60 Hz that is all the decoder ever does.
+    const sync = now - lastSync > 500;
+    if (sync) lastSync = now;
+    const soloOn = document.body.classList.contains('mode-solo');
+    for (const el of vids) {
+      const d = +el.dataset.dur, fig = el.closest('figure');
+      if (soloOn) { el.pause(); continue; }
+      if (clock >= d) {
+        if (!el.paused) el.pause();
+        fig.classList.add('ended');
+      } else {
+        fig.classList.remove('ended');
+        if (el.paused) el.play().catch(() => {});
+        if (sync && ready(el) && Math.abs(el.currentTime - clock) > 0.35)
+          el.currentTime = clock;
+      }
+    }
+    if (soloOn) {
+      const sv = $('sv'), m = V.find(x => x.id === soloId);
+      if (clock >= m.duration) { seekAll(0); }
+      else {
+        if (sv.paused) sv.play().catch(() => {});
+        if (sync && ready(sv) && Math.abs(sv.currentTime - clock) > 0.35)
+          sv.currentTime = clock;
+      }
+    }
+    paint();
+  }
+  requestAnimationFrame(tick);
+}
+
+function paint() {
+  $('scrub').value = clock;
+  $('clk').textContent = clock.toFixed(1) + ' / ' + MAX.toFixed(1) + ' s';
+}
+
+// ---- modes ----------------------------------------------------------------
+function grid_() {
+  soloId = null;
+  document.body.classList.remove('mode-solo');
+  $('sv').removeAttribute('src'); $('sv').load();
+  $('mg').setAttribute('aria-pressed', 'true');
+  for (const b of $('solobtns').children) b.setAttribute('aria-pressed', 'false');
+  url('grid');
+  seekAll(clock);
+}
+
+function solo(id) {
+  const m = V.find(x => x.id === id); if (!m) return;
+  soloId = id;
+  document.body.classList.add('mode-solo');
+  const sv = $('sv');
+  if (!sv.src.endsWith(m.id + '.mp4')) sv.src = m.id + '.mp4';
+  sv.currentTime = Math.min(clock, m.duration - 0.05);
+  if (playing) sv.play().catch(() => {});
+  vids.forEach(v => v.pause());
+  $('st').textContent = m.title;
+  $('sb').textContent = m.blurb;
+  $('sd').textContent = m.duration.toFixed(1) + ' s';
+  $('sc').textContent = m.captions;
+  $('se').textContent = m.end_cols + ' columns wide';
+  $('sf').textContent = m.first_caption;
+  $('scam').textContent = m.camera
+    .map(([t, c]) => `t=${String(t).padStart(5)}   cols=${c}`).join('\n');
+  $('mg').setAttribute('aria-pressed', 'false');
+  for (const b of $('solobtns').children)
+    b.setAttribute('aria-pressed', String(b.dataset.id === id));
+  url(id);
+}
+
+function url(v) {
+  const u = new URL(location); u.searchParams.set('v', v);
+  history.replaceState({}, '', u);
+}
+
+// ---- wiring ---------------------------------------------------------------
+$('pp').onclick = () => setPlaying(!playing);
+$('mg').onclick = grid_;
+$('scrub').oninput = e => seekAll(+e.target.value);
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
+  else if (e.key === 'ArrowRight') seekAll(clock + 5);
+  else if (e.key === 'ArrowLeft') seekAll(clock - 5);
+  else if (e.key === 'g' || e.key === 'G') grid_();
+  else { const i = parseInt(e.key, 10); if (i >= 1 && i <= V.length) solo(V[i - 1].id); }
+});
+
+// Chrome does NOT load media in a hidden tab — a background tab sits at
+// readyState 0 forever with no error, which looks exactly like a broken video or
+// a broken server and is neither. So: catch each element up when it finally gets
+// metadata, and restart the clock cleanly when the tab is actually looked at.
+for (const el of vids) {
+  el.addEventListener('loadedmetadata', () => {
+    const d = +el.dataset.dur;
+    if (clock < d) el.currentTime = Math.min(clock, d - 0.05);
+  });
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { lastNow = performance.now(); seekAll(clock); }
+});
+
+const want = new URL(location).searchParams.get('v');
+if (want && want !== 'grid' && V.some(v => v.id === want)) solo(want); else grid_();
+requestAnimationFrame(tick);
+setPlaying(true);
+</script>
