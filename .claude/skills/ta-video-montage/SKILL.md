@@ -34,6 +34,35 @@ not a mock of our renderer. Nobody looking at a prototype render should be able 
 mistake it for footage, and nobody reviewing the timing should be arguing about
 terrain colour.
 
+## Every window wears the same frame — the game included
+
+`Window.content` draws the window decoration ONCE and renders the source into the
+client rect, so the terminal does not turn into a bare rectangle when the command
+runs: it keeps its frame, its title bar and its buttons, and so does every tile on
+the desktop. The title bar switches at the flip (`bash` → `Total Annihilation —
+tacli:front1`), which the cross-fade handles for free because both sides carry the
+same chrome.
+
+Sources (`Terminal`, `WireGame`, `Clip`) therefore render **client content only** —
+none of them draws a border. Putting the frame in one place is also what made
+`detail_ramp` possible, since there is now a single set of hairlines to fade.
+
+Counter-intuitively this **reduced** jitter rather than adding to it (4K, mean
+second difference): t=30 3.173 → 1.145, t=40 5.927 → 1.773, t=46.5 21.957 → 9.947.
+The bare tiles had a hard 1 px outline of their own; one faded frame replaced it.
+
+## Fine detail must FADE, never switch
+
+`detail_ramp(lod_w)` ramps hairline visibility over lod_w 32 → 105 instead of
+testing a threshold. A hard cutoff is visible as a glitch: the borders were on at
+t=46 and **gone at t=47** as lod_w crossed 70 — the owner saw exactly that, "the
+white line shimmers and then all of a sudden disappears".
+
+The decomposition that matters: **solid fills are safe at any size, only hairlines
+shimmer.** The title bar, the side panel and the bottom strip are solid and stay
+drawn however small the tile gets; the border, the buttons, the panel divider and
+the terrain grid all fade out with the ramp.
+
 ## The terminal
 
 `terminal_style` (per script, or `style` per window) picks from `TERMINAL_STYLES`:
@@ -290,7 +319,7 @@ evidence**, and a caption with no row here does not go in the film.
 | "A 1997 engine, mid-battle, in seconds." | VERIFIED | `ta-capture`: `tacli launch cap1 --res 1024x768` is "~2s to a window"; the scenario applier runs after |
 | "Every fight is a file." / `scenarios/<name>.json` | VERIFIED | `scenarios/*.json`, 63 of them; `scenario validate` / `expand` / `apply` / `load` |
 | "Instances share nothing." / "own game dir · own config · own window" | VERIFIED | each instance is `tagpu/instances/<name>/gamedir/` with its own config and window (`ta-capture`, `ta-drive`) |
-| "Run one." / "or as many as the machine will hold" | **DELIBERATELY VAGUE** | nobody has measured how many instances the reference setup sustains, and the owner chose (2026-09-10) to keep the wording aspirational rather than spend a session measuring it. No count goes on screen unless it has been run |
+| "Run one" / "or as many as the machine will hold" | **DELIBERATELY VAGUE** | nobody has measured how many instances the reference setup sustains, and the owner chose (2026-09-10) to keep the wording aspirational rather than spend a session measuring it. No count goes on screen unless it has been run |
 | "Control units, spawn more on demand, send any command to a scenario as it runs." | VERIFIED (one caveat) | `tacli order` is "give units an order (no mouse, world coords)"; `scenario apply` is "mutate a live game", compiling entities into a **spawn table** applied from a detour inside the game tick (`research/notes/scenario-format.md`); ~18 verbs act on a live instance (`keys click order wheel eye gui arm peek weapons shot glshot log roster wait ui switches scenario apply`). **Caveat:** "any command" is loose — `create`/`launch`/`rm` are not sent *to* a running game. True in spirit, slightly overclaimed literally |
 
 **The grid is a composite, and that is a disclosure, not a detail.** The wide shot

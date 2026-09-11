@@ -42,6 +42,7 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -267,6 +268,90 @@ PALETTES = [
 ]
 
 
+def _lerp(a, b, u):
+    return tuple(int(a[i] + (b[i] - a[i]) * u) for i in range(3))
+
+
+def detail_ramp(lod_w: float, lo: float = 32.0, hi: float = 105.0) -> float:
+    """How visible fine detail should be at this apparent tile width, 0..1.
+
+    A hard threshold makes hairlines VANISH mid-shot: the borders were on at
+    t=46 and gone at t=47 as lod_w crossed 70, which reads as a glitch. Fading
+    them over a range removes both the pop and the shimmer on the way down.
+    """
+    u = max(0.0, min(1.0, (lod_w - lo) / (hi - lo)))
+    return u * u * (3.0 - 2.0 * u)
+
+
+def draw_window_chrome(img, st, title: str, lod_w: float):
+    """Draw the window frame into `img`; return its client rect.
+
+    Every window on the desktop wears this, the game included — the terminal
+    does not turn into a bare rectangle, it keeps its window. Solid fills (the
+    body, the title bar) are drawn at any size because a solid area cannot
+    shimmer; HAIRLINES (the border, the buttons, the title) fade out with
+    `detail_ramp` instead of switching off.
+    """
+    w, h = img.size
+    d = ImageDraw.Draw(img)
+    dv = detail_ramp(lod_w)
+    rad = int(min(w, h) * st["radius"])
+    bw = max(1, int(w * st["border_w"]))
+    body = st["bg"]
+
+    if rad:
+        d.rounded_rectangle([0, 0, w - 1, h - 1], radius=rad, fill=body)
+    else:
+        d.rectangle([0, 0, w, h], fill=body)
+
+    bar = 0
+    if st["header"]:
+        bar = max(1, int(h * 0.055))
+        hb = st["header_bg"]
+        if rad:
+            d.rounded_rectangle([bw, bw, w - 1 - bw, bar], radius=rad, fill=hb)
+            d.rectangle([bw, max(bw, bar - rad), w - 1 - bw, bar], fill=hb)
+        else:
+            d.rectangle([bw, bw, w - 1 - bw, bar], fill=hb)
+
+        if dv > 0.03 and bar >= 6:
+            if st["header"] == "dots":
+                r = bar * 0.22
+                for i, col in enumerate([(255, 95, 86), (255, 189, 46), (39, 201, 63)]):
+                    cx = bar * (0.75 + i * 0.85)
+                    d.ellipse([cx - r, bar / 2 - r, cx + r, bar / 2 + r],
+                              fill=_lerp(hb, col, dv))
+            elif st["header"] == "buttons":
+                col = _lerp(hb, st["header_fg"], dv)
+                lw = max(1, int(bar * 0.055))
+                g = bar * 0.26
+                cell = bar * 1.7
+                right = w - bw - cell * 0.55
+                cy = bar / 2
+                for n in range(3):
+                    cx = right - cell * (2 - n)
+                    if n == 0:
+                        d.line([(cx - g, cy), (cx + g, cy)], fill=col, width=lw)
+                    elif n == 1:
+                        d.rectangle([cx - g, cy - g, cx + g, cy + g], outline=col, width=lw)
+                    else:
+                        d.line([(cx - g, cy - g), (cx + g, cy + g)], fill=col, width=lw)
+                        d.line([(cx - g, cy + g), (cx + g, cy - g)], fill=col, width=lw)
+        if title and lod_w >= 150 and w >= 200:
+            ft = font("mono", max(8, int(bar * 0.5)))
+            d.text((w / 2, bar / 2), title, font=ft,
+                   fill=_lerp(hb, st["header_fg"], dv), anchor="mm")
+
+    if dv > 0.02:
+        bc = _lerp(body, st["border"], dv)
+        if rad:
+            d.rounded_rectangle([0, 0, w - 1, h - 1], radius=rad, outline=bc, width=bw)
+        else:
+            d.rectangle([0, 0, w - 1, h - 1], outline=bc, width=bw)
+
+    return (bw, (bar + 1) if bar else bw, w - bw, h - bw)
+
+
 class WireGame:
     """A white-box stand-in for a running game window.
 
@@ -288,60 +373,49 @@ class WireGame:
         return self.pal[0]
 
     def frame(self, t: float, w: int, h: int, disp_w: int | None = None) -> Image.Image:
+        """The window's CLIENT area only — the frame is drawn by the Window."""
         terrain, dark, team_a, team_b = self.pal
         img = Image.new("RGB", (w, h), terrain)
         d = ImageDraw.Draw(img)
+        if w < 8 or h < 6:
+            return img
 
-        # Detail scales with the tile. In the wide shot a tile is ~45 px, and a
-        # 1 px white border on 45 px is 4 % of the tile — the grid then reads as
-        # a woven texture instead of as a wall of running games. Below `detail`
-        # the outline and the internal grid come off and the desktop gap does
-        # the separating.
-        detail = (disp_w if disp_w is not None else w) >= 70
+        lod = disp_w if disp_w is not None else w
+        dv = detail_ramp(lod)                 # hairlines fade, they never snap off
 
-        # terrain blobs
-        for i in range(4 if detail else 2):
+        for i in range(4 if dv > 0.5 else 2):
             bx = (0.17 + 0.23 * i + 0.05 * math.sin(t * 0.2 + i)) * w
             by = (0.25 + 0.19 * ((i * 5) % 3)) * h
             r = 0.11 * w
             d.ellipse([bx - r, by - r * 0.7, bx + r, by + r * 0.7], fill=dark)
 
-        if detail:
-            # Faint wireframe grid — the "white box" signature. Blend the colour
-            # by hand: ImageDraw DISCARDS the alpha channel on an RGB image, so
-            # fill=(255,255,255,8) does not paint 3 % white, it paints SOLID
-            # WHITE. That one silent bug is what made the tiled wall read as
-            # woven fabric and drove most of its shimmer.
-            grid = tuple(int(c + (255 - c) * 0.12) for c in terrain)
+        if dv > 0.03:
+            # ImageDraw DISCARDS alpha on an RGB image, so blend by hand — a
+            # fill of (255,255,255,8) paints SOLID WHITE, not 3% white.
+            grid = _lerp(terrain, (255, 255, 255), 0.12 * dv)
             step = max(6, int(w / 12))
             for x in range(0, w, step):
                 d.line([(x, 0), (x, h)], fill=grid, width=1)
             for y in range(0, h, step):
                 d.line([(0, y), (w, y)], fill=grid, width=1)
 
-        # units
-        rad = max(1, round(w * 0.008))
+        rad = max(1, round(w * 0.009))
         for (ux, uy, phase, speed, side) in self.units:
-            a = phase + t * speed * math.tau
-            x = (ux + 0.10 * math.cos(a)) * w
-            y = (uy + 0.10 * math.sin(a * 1.3)) * h
-            col = team_a if side else team_b
-            d.ellipse([x - rad, y - rad, x + rad, y + rad], fill=col)
+            ang = phase + t * speed * math.tau
+            x = (ux + 0.10 * math.cos(ang)) * w
+            y = (uy + 0.10 * math.sin(ang * 1.3)) * h
+            d.ellipse([x - rad, y - rad, x + rad, y + rad],
+                      fill=team_a if side else team_b)
 
-        # HUD: TA's side panel and bottom strip
+        # TA's side panel and bottom strip: SOLID fills, so they are safe at any
+        # size — a solid area cannot shimmer, only hairlines can.
         panel = max(1, int(w * 0.135))
         d.rectangle([0, 0, panel, h], fill=(24, 26, 30))
         d.rectangle([0, h - max(1, int(h * 0.09)), w, h], fill=(24, 26, 30))
-        if detail:
-            hud = max(1, int(w * 0.012))
-            d.rectangle([0, 0, w - 1, h - 1], outline=(210, 214, 220), width=hud)
-            d.line([(panel, 0), (panel, h)], fill=(210, 214, 220),
-                   width=max(1, hud // 2))
-
-        if w >= 180:
-            f = font("mono-bold", max(9, int(h * 0.035)))
-            d.text((panel + int(w * 0.02), int(h * 0.03)), self.label,
-                   font=f, fill=(235, 238, 242))
+        if dv > 0.05:
+            d.line([(panel, 0), (panel, h)],
+                   fill=_lerp((24, 26, 30), (210, 214, 220), dv * 0.7),
+                   width=max(1, int(w * 0.006)))
         return img
 
 
@@ -455,86 +529,31 @@ class Terminal:
         return spans
 
     def frame(self, t: float, w: int, h: int, disp_w: int | None = None):
+        """The window's CLIENT area only — the frame is drawn by the Window."""
         st = self.st
-        img = Image.new("RGB", (w, h), self.desktop if st["radius"] else st["bg"])
+        img = Image.new("RGB", (w, h), st["bg"])
+        if w < 40 or h < 24:
+            return img
         d = ImageDraw.Draw(img)
-        if w < 24 or h < 18:
-            d.rectangle([0, 0, w, h], fill=st["bg"])
-            return img
-
-        rad = int(min(w, h) * st["radius"])
-        bw = max(1, int(w * st["border_w"]))
-        if rad:
-            d.rounded_rectangle([0, 0, w - 1, h - 1], radius=rad, fill=st["bg"],
-                                outline=st["border"], width=bw)
-        else:
-            d.rectangle([0, 0, w, h], fill=st["bg"])
-            d.rectangle([0, 0, w - 1, h - 1], outline=st["border"], width=bw)
-
-        bar = 0
-        if st["header"]:
-            bar = max(2, int(h * 0.055))
-            if rad:
-                d.rounded_rectangle([bw, bw, w - 1 - bw, bar], radius=rad,
-                                    fill=st["header_bg"])
-                d.rectangle([bw, bar - rad, w - 1 - bw, bar], fill=st["header_bg"])
-            else:
-                d.rectangle([bw, bw, w - 1 - bw, bar], fill=st["header_bg"])
-            if st["header"] == "buttons" and bar >= 10:
-                # Chrome's controls: minimise, maximise, close — flat grey
-                # glyphs at the right, not macOS dots.
-                col = st["header_fg"]
-                lw = max(1, int(bar * 0.055))
-                g = bar * 0.26                     # glyph half-extent
-                cell = bar * 1.7
-                cy = bar / 2
-                right = w - bw - cell * 0.55
-                for n in range(3):
-                    cx = right - cell * (2 - n)
-                    if n == 0:                                   # minimise
-                        d.line([(cx - g, cy), (cx + g, cy)], fill=col, width=lw)
-                    elif n == 1:                                 # maximise
-                        d.rectangle([cx - g, cy - g, cx + g, cy + g],
-                                    outline=col, width=lw)
-                    else:                                        # close
-                        d.line([(cx - g, cy - g), (cx + g, cy + g)], fill=col, width=lw)
-                        d.line([(cx - g, cy + g), (cx + g, cy - g)], fill=col, width=lw)
-            if st["header"] == "dots" and bar >= 8:
-                r = bar * 0.22
-                for i, col in enumerate([(255, 95, 86), (255, 189, 46), (39, 201, 63)]):
-                    cx = bar * (0.75 + i * 0.85)
-                    d.ellipse([cx - r, bar / 2 - r, cx + r, bar / 2 + r], fill=col)
-            if w >= 200:
-                ft = font("mono", max(8, int(bar * 0.5)))
-                d.text((w / 2, bar / 2), self.title, font=ft,
-                       fill=st["header_fg"], anchor="mm")
-
-        if w < 90:
-            return img
 
         scale = st.get("fscale", 1.0)
+        x0 = int(w * st["pad"])
         if scale == "fit":
-            # As large as it can be while the LONGEST line still fits the padded
-            # width. A fixed multiplier cannot do this: 1.75x ran "big-battle"
-            # off the right edge, and the command length changes per scenario.
-            avail = w - 2 * int(w * st["pad"])
-            probe = ImageDraw.Draw(img)
-            widest = max([self.prompt + " " + self.command] + list(self.output),
-                         key=len)
-            fs = max(7, int(h * 0.042 * st.get("max_fscale", 1.9)))
-            while fs > 8 and text_w(probe, widest, font("mono", fs)) > avail:
+            avail = w - 2 * x0
+            widest = max([self.prompt + " " + self.command] + list(self.output), key=len)
+            fs = max(7, int(h * 0.052 * st.get("max_fscale", 1.9)))
+            while fs > 8 and text_w(d, widest, font("mono", fs)) > avail:
                 fs = int(fs * 0.96)
         else:
-            fs = max(7, int(h * 0.042 * scale))
+            fs = max(7, int(h * 0.052 * scale))
         fm, fb = font("mono", fs), font("mono-bold", fs)
-        x0 = int(w * st["pad"])
         line_h = int(fs * 1.6)
+
         if st.get("valign") == "center":
-            # compose the whole block (prompt + output) against the window
             n_lines = 1 + len(self.scrollback) + len(self.output)
             y = int((h - n_lines * line_h) / 2)
         else:
-            y = (bar if bar else int(h * st["pad"] * 0.7)) + int(h * 0.055)
+            y = int(h * 0.055)
 
         for i, line in enumerate(self.scrollback):
             d.text((x0, y + line_h * i), line, font=fm, fill=st["dim"])
@@ -544,8 +563,7 @@ class Terminal:
         cx = x0 + text_w(d, self.prompt, fb) + int(fs * 0.6)
         typed = self._typed(t)
 
-        shown = len(typed)
-        pos = 0
+        shown, pos = len(typed), 0
         for span, col in self._tokens():
             if pos >= shown:
                 break
@@ -555,8 +573,7 @@ class Terminal:
                 cx += text_w(d, part, fm)
             pos += len(span)
 
-        done = shown >= len(self.command)
-        if not done or (t % 1.0) < 0.55:
+        if shown < len(self.command) or (t % 1.0) < 0.55:
             if st["cursor"] == "bar":
                 d.rectangle([cx, y, cx + max(1, int(fs * 0.12)), y + fs], fill=st["fg"])
             elif st["cursor"] == "underline":
@@ -568,9 +585,7 @@ class Terminal:
         if t >= self.t_enter:
             for i, line in enumerate(self.output):
                 ly = y + line_h * (i + 1)
-                if ly + fs > h - int(h * 0.02):
-                    break
-                if t < self.t_enter + 0.22 * i:
+                if ly + fs > h or t < self.t_enter + 0.22 * i:
                     break
                 d.text((x0, ly), line, font=fm,
                        fill=st["out"] if line.startswith("  ") else st["fg"])
@@ -578,8 +593,8 @@ class Terminal:
         if st["scanlines"]:
             step = max(2, int(h / 240))
             dark = tuple(int(c * 0.82) for c in st["bg"])
-            for yy in range(bar, h, step * 2):
-                d.line([(bw, yy), (w - bw, yy)], fill=dark, width=1)
+            for yy in range(0, h, step * 2):
+                d.line([(0, yy), (w, yy)], fill=dark, width=1)
         return img
 
 
@@ -674,7 +689,13 @@ class Window:
     has no terminal at all and is simply always running.
     """
 
-    def __init__(self, spec: dict, term: Terminal | None, game, stage):
+    def __init__(self, spec: dict, term: Terminal | None, game, stage,
+                 style=None, desktop=(16, 18, 22),
+                 term_title="bash", game_title=""):
+        self.style = style or TERMINAL_STYLES["classic"]
+        self.desktop = tuple(desktop)
+        self.term_title = term_title
+        self.game_title = game_title
         self.col = spec["col"]
         self.row = spec["row"]
         self.t_open = spec.get("t_open", 0.0)
@@ -699,25 +720,42 @@ class Window:
 
     def content(self, t: float, w: int, h: int,
                 disp_w: int | None = None) -> Image.Image | None:
-        """The window's pixels at time t, or None if it is not open yet.
+        """The whole window at time t — chrome plus client — or None if unopened.
 
-        (w, h) is the canonical buffer to draw into; `disp_w` is how wide the
-        window actually appears on screen, which is what level-of-detail
-        decisions must key on.
+        The chrome is drawn ONCE, here, and the source fills the client area.
+        That is what keeps the game inside the same window the command was typed
+        in: the terminal does not become a bare rectangle, it keeps its frame,
+        its title bar and its buttons, and so does every tile on the desktop.
         """
         if t < self.t_open:
             return None
+        lod = float(disp_w if disp_w is not None else w)
+        img = Image.new("RGB", (w, h), self.desktop)
+        cx0, cy0, cx1, cy1 = draw_window_chrome(img, self.style, self.title_at(t), lod)
+        cw, ch = max(1, cx1 - cx0), max(1, cy1 - cy0)
+        lod_c = max(1.0, lod * cw / max(1, w))
+
         gt = t + self.phase
         if self.term is None:
-            return self.game.frame(gt, w, h, disp_w)
-        if self.t_game is None or t < self.t_game:
-            return self.term.frame(t, w, h, disp_w)
-        u = (t - self.t_game) / self.flip if self.flip > 0 else 1.0
-        if u >= 1.0:
-            return self.game.frame(gt, w, h, disp_w)
-        return Image.blend(self.term.frame(t, w, h, disp_w),
-                           self.game.frame(gt, w, h, disp_w),
-                           ease("smooth", u))
+            inner = self.game.frame(gt, cw, ch, lod_c)
+        elif self.t_game is None or t < self.t_game:
+            inner = self.term.frame(t, cw, ch, lod_c)
+        else:
+            u = (t - self.t_game) / self.flip if self.flip > 0 else 1.0
+            if u >= 1.0:
+                inner = self.game.frame(gt, cw, ch, lod_c)
+            else:
+                inner = Image.blend(self.term.frame(t, cw, ch, lod_c),
+                                    self.game.frame(gt, cw, ch, lod_c),
+                                    ease("smooth", u))
+        img.paste(inner, (cx0, cy0))
+        return img
+
+    def title_at(self, t: float) -> str:
+        """Title bar text: the shell while typing, the game once it is running."""
+        if self.term is not None and (self.t_game is None or t < self.t_game):
+            return self.term_title
+        return self.game_title
 
 
 class Stage:
@@ -813,6 +851,8 @@ class Montage:
     # -- window construction ----------------------------------------------
 
     def _build(self) -> None:
+        style = TERMINAL_STYLES.get(self.spec.get("terminal_style", "classic"),
+                                    TERMINAL_STYLES["classic"])
         taken = set()
         for i, spec in enumerate(self.spec.get("windows", [])):
             taken.add((spec["col"], spec["row"]))
@@ -830,7 +870,13 @@ class Montage:
                                 spec.get("title", "bash"))
             game = self._game(spec.get("clip", f"hero{i}"), spec.get("variant", i),
                               spec.get("label", ""))
-            self.windows.append(Window(spec, term, game, self.stage))
+            inst = re.search(r"load\s+(\S+)", spec.get("command", ""))
+            self.windows.append(Window(
+                spec, term, game, self.stage, style, self.stage.bg,
+                spec.get("title", "bash"),
+                spec.get("game_title",
+                         f"Total Annihilation — tacli:{inst.group(1)}"
+                         if inst else spec.get("label", ""))))
 
         fill = self.spec.get("fill")
         if not fill:
@@ -866,7 +912,8 @@ class Montage:
             self.windows.append(Window(
                 {"col": col, "row": row, "t_open": t_open, "fade": fade,
                  "phase": rng.randrange(PHASES) * (9.0 / PHASES)},
-                None, game, self.stage))
+                None, game, self.stage, style, self.stage.bg,
+                "bash", f"Total Annihilation — {labels[k % len(labels)]}"))
 
     # -- rendering ---------------------------------------------------------
 
