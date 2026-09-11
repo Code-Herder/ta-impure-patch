@@ -1175,13 +1175,21 @@ about six frames.
 **The wheel ZOOMS TO THE CURSOR since G13t (2026-09-10), so it MOVES THE CAMERA.** The world
 point under the pointer is held still, which means `tacli wheel --at X Y` is no longer a
 camera-neutral operation: the eye steps by `(a − c)(1/z0 − 1/z1)`, where `c` is the viewport
-centre. Three consequences for driving:
+centre. Four consequences for driving:
 
 - **Re-read the eye after any wheel**, and do not assume a recipe's camera survived one.
 - **`--at` the viewport centre is the old behaviour exactly** — the delta is 0 there, so that
   is the control for any A/B, and it needs no flag (there isn't one).
 - **`tagpu_zoom.txt` still does NOT move the camera.** Only the wheel anchors, so every
   scripted zoom and every fixture is unchanged.
+- **An off-centre wheel RELEASES a camera follow (G13u).** Ctrl+C follows your commander (it
+  does not merely centre on it) and the cycle-through-units keys do the same; a wheel that
+  moves the eye clears all three follow slots, which is the engine's own rule for a manual
+  camera move. So a recipe that sets up a follow and then wheels has no follow afterwards —
+  read `main+0x142F3` (`CameraToUnit`, 0 = nothing followed) rather than assuming, and expect
+  one `zoom: cursor anchor took the camera - the unit follow is released` per follow in the
+  log. A wheel aimed at the viewport centre moves the eye by nothing and leaves the follow
+  alone, which is the control here too.
 
 Anchoring is off — and says so once a second in the log — while `tagpu_eye.txt` holds the
 camera (`zoom: cursor anchor off - tagpu_eye.txt holds the camera`), and while `terrown` is

@@ -702,6 +702,10 @@ static void __stdcall zoom_minimap_rect(int* r)
 #define OFF_SCRTX        0x14327       /* MapXScrollingTo — the eye eases to here */
 #define OFF_SCRTY        0x1432B
 #define OFF_MM_RECT      0x142CB       /* the RECT 0x466B70 fills                 */
+/* The three slots the camera FOLLOW lives in — see release_follow(). */
+#define OFF_FOLLOW_OBJ   0x142F7       /* followed object, position at +0x4       */
+#define OFF_FOLLOW_UNIT  0x142F3       /* followed unit, position at +0x6A        */
+#define OFF_FOLLOW_HOLD  0x1434B       /* u16 frame countdown on main+0x1433F     */
 
 /* `mov eax, ds:0x511DE8` — the whole first instruction, so the five stolen
    bytes end on an instruction boundary (0x41C3C5 is `push esi`). */
@@ -918,13 +922,24 @@ static void apply_eye_range(void)
    every rect derived from the viewport (vpwide's addressable rect, fogwide's
    window, the ring test) currently assumes away.
 
-   AND WHAT IS NOT COVERED. The three sites that compute the scroll target and
-   clamp it INLINE against `[0, map - W]` — `0x41C4C0`, `0x41C7F7` and the
-   per-frame camera FOLLOW `0x41CAF7` — do not go through our clamp, so on
-   those paths a target we stepped can be recomputed without our delta and the
-   stepper eases the eye back. Nothing fights and nothing churns; the camera
-   simply owns itself while it is following something, which is what following
-   means. */
+   A FOLLOWED CAMERA IS RELEASED RATHER THAN FOUGHT. The stepper recomputes the
+   scroll target from the followed unit every frame (`0x41CAF7`) and clamps it
+   inline, so a delta added to the eye is eased straight back out: the zoom
+   would read as pinned to the unit, which is the bug this note used to describe
+   as "the camera owns itself while it is following something". It is not what
+   following means — the engine's own edge scroll releases the follow the moment
+   it moves the eye, and so does a frame that steps the eye here. See
+   release_follow() for the three slots and why writing them from this thread is
+   safe. A gesture that moves the eye by NOTHING — the pointer on the viewport
+   centre — releases nothing, so the A/B control below still holds exactly.
+
+   AND WHAT IS STILL NOT COVERED. `0x41C4C0` (the smooth SetCamera) and
+   `0x41C7F7` (the smooth centre-on) also compute the scroll target and clamp it
+   INLINE against `[0, map - W]` without going through our clamp, so a target we
+   stepped can be recomputed there without our delta and the stepper eases the
+   eye back. Neither is a standing state the way a follow is — each is one
+   camera move in flight, and the zoom composes with the next one — so nothing
+   fights and nothing churns. */
 
 /* The level the eye was last stepped at, and the sub-world-pixel carry. Render
    thread only: the same thread that owns the level itself. */
@@ -1007,6 +1022,81 @@ void tagpu_zoom_eye_moved(void)
     if (!ta_ok(ta)) return;
     zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
     if (tagpu_terrown_owns_fog()) InterlockedIncrement(&s_eyeSeq);
+}
+
+/* ---- releasing the camera follow -------------------------------------------
+
+   A CAMERA THE PLAYER IS DRIVING IS NOT FOLLOWING ANYTHING, AND THAT IS THE
+   ENGINE'S OWN RULE, not a preference of ours. The per-frame stepper `0x41CA10`
+   recomputes the scroll target from whatever the camera is following, EVERY
+   frame, and clamps it inline — so a delta we add to the eye is eased straight
+   back out and the zoom reads as though it were pinned to the unit. The engine
+   has the same problem with its own edge and hotkey scroll and solves it by
+   releasing the follow: `0x41D091..0x41D0AA`, the tail of the scroll poll, runs
+   exactly the three stores below — and only on a frame where the eye actually
+   changed (`0x41D035` skips the whole tail when it did not). This function is
+   the body of `0x41C390`, the engine's own release, which `0x4174FD` (the
+   camera-track toggle) and `0x48D709` (centre-on-unit) call verbatim.
+
+   THREE SLOTS, because the stepper takes the first of three that is set
+   [MEASURED 2026-09-10, objdump of the pristine build, `0x41CA1A..0x41CA8D`]:
+
+     main+0x1434B  u16  a frame COUNTDOWN; while non-zero the camera follows the
+                        remembered position at main+0x1433F. `0x499E50` fills
+                        both when a followed object is destroyed.
+     main+0x142F7  ptr  the followed object; its position is at +0x4.
+     main+0x142F3  ptr  the followed unit; position +0x6A, and it is dropped by
+                        the stepper itself once `[unit+0x110] & 0x10000000`
+                        goes away. `Ctrl+C` (0x41C310) and the next/previous
+                        unit keys (0x41C2E0) are what set it.
+
+   WHY THIS IS SAFE TO WRITE FROM THE RENDER THREAD, slot by slot — the rule
+   being that a store of ours must never widen what the game thread does:
+
+   * The two POINTERS are plain aligned 32-bit stores of ZERO, so they cannot
+     tear and they cannot be lost. And zero is the one value that is safe by
+     construction whoever else is writing: the stepper's only use of either slot
+     is to dereference it, so our store can only ever REMOVE a dereference, never
+     introduce one or redirect it at an object we chose. A stepper that read the
+     slot just before us follows a still-valid object for one more frame, which
+     is a state the engine reaches by itself every time a follow ends.
+   * The COUNTDOWN is the one field the engine read-modify-writes (the stepper
+     decrements it unlocked at `0x41CA29`), so our zero CAN be swallowed by a
+     decrement already in flight. That costs nothing that is not already
+     bounded, and the bound is exact rather than statistical: every site in
+     `.text` that stores a NON-ZERO value into it — `0x499F1B`, `0x499F89`,
+     `0x49B0E5`, `0x49B992`, `0x49BCBD`, `0x49C8DD`, all six of them — first
+     compares its object against `main+0x142F7` and takes the `jne` when it
+     differs [MEASURED 2026-09-10]. With that slot zeroed none of them can
+     fire, so after our store the countdown has exactly one remaining writer,
+     the decrement, and it is monotonically expiring. Our store can only move
+     it toward zero sooner; a swallowed one leaves the camera on the remembered
+     position for at most the frames it was going to run anyway. Every frame of
+     the gesture repeats it, and the pointer slots — the ones that hold a follow
+     INDEFINITELY, which is the behaviour being fixed — are not exposed to this
+     at all.
+
+   Through the caller's already-validated `ta` rather than by calling `0x41C390`,
+   which re-reads `ds:0x511DE8` for itself: the pointer this writes through is
+   then the one `ta_ok()` passed, the same one the eye and the target are
+   written through two lines later. */
+static void release_follow(char* ta)
+{
+    int*   obj  = (int*)  (ta + OFF_FOLLOW_OBJ);
+    int*   unit = (int*)  (ta + OFF_FOLLOW_UNIT);
+    short* hold = (short*)(ta + OFF_FOLLOW_HOLD);
+
+    if (!*obj && !*unit && !*hold) return;   /* nothing follows: the usual case */
+    /* The engine's own order at 0x41C390 — and it is the harmless one: the
+       stepper reads the countdown first and the unit last, so every state this
+       passes through is one it produces for itself. */
+    *hold = 0;
+    *unit = 0;
+    *obj  = 0;
+    /* Not throttled, and it does not need to be: the release is what makes the
+       condition false, so this is one line per follow the player set, not one
+       per frame. */
+    zlog("zoom: cursor anchor took the camera - the unit follow is released");
 }
 
 /* 1 while the eye may be stepped: our passes own the frame (so the fog
@@ -1095,6 +1185,13 @@ static void anchor_step(float zNow, int fromWheel)
            tagpu_opt.c's `needs` steers a DEFAULT, not a requirement. */
         if (!zoom_eye_range(ta, g_eyeInstalled ? eye_level() : 1.0f,
                             &loX, &hiX, &loY, &hiY)) return;
+        /* BEFORE the writes, not after. Released first, a stepper that runs
+           between the two leaves the target alone and our delta lands on both
+           halves of the pair; released after, that same stepper would have
+           already recomputed the target from the followed unit and our `scr`
+           step would be the one thrown away. The engine clears last only
+           because its scroll poll IS the game thread and has no such window. */
+        release_follow(ta);
         eye[0] += nx; eye[1] += ny;
         /* the target moves with the eye, always: the two disagreeing is what
            the per-frame stepper reads as "a camera move is in flight", and it
