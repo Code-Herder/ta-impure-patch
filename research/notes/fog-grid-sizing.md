@@ -387,6 +387,41 @@ change. The grid crosses a thread boundary, and it crosses it **by pointer**.
 </svg>
 </div>
 
+**Why the unlocked read is safe today.** Reading `s_hold` for a whole frame with no lock held is
+not an oversight, and the game thread cannot be writing that block while it happens. The safety
+here is **pointer disjointness, not content locking**. Three blocks, three roles: `s_build` is the
+game thread's to write, `s_hold` is the render thread's to read, and `s_pub` is the hand-over slot
+that neither writes into. A swap only ever exchanges **two** of the three pointers and every swap
+is under `s_cs`, so the three stay pairwise distinct — the block being read can never be the block
+being written. The lock is held just long enough to exchange a pointer and copy four numbers;
+never across a build, never across a frame.
+
+Follow one grid through. The game thread fills `s_build` entirely outside the lock — legal,
+because nothing else can name that block — then takes `s_cs`, swaps `s_build` with `s_pub`, writes
+`cols/rows/orgX/orgY`, bumps `s_pubData`, leaves. The block it just filled is now `s_pub`; the
+block it may write next is the old `s_pub`, which is not `s_hold`, because `s_hold` was not one of
+the two it exchanged. The render thread takes `s_cs`, and only if `s_pubData` differs from the
+version it already holds, swaps `s_hold` with `s_pub` and copies those same four numbers out —
+**the dimensions travel with the buffer, inside one critical section**, so no frame can ever get
+grid A's memory with grid B's stride. Then it leaves the section and reads. The producer may
+rebuild twice more inside that same frame; each rebuild swaps `s_build` against `s_pub`, and the
+render thread's block is neither.
+
+The third buffer is exactly what buys that. With two, a producer that finished a rebuild mid-frame
+would have to either block on the presenter or write the block being read.
+
+So "does the game thread write while we read" is answered by construction. What a `realloc` would
+break is a *different* property. "Nobody writes your block" says nothing about your block
+continuing to exist: `free(old); malloc(bigger)` on the game thread frees memory the render thread
+may be holding as a plain local pointer taken at the top of the frame, and it would read on into
+it. That converts an argument about **data disjointness**, which holds, into one about
+**lifetime**, which nothing here supplies. Every option in §6 is a way to supply one.
+
+The one race that does remain is a staleness rather than a data race: the grid a frame draws over
+can be one game tick old. The engine's own grid is rebuilt on that same thread and is exactly as
+old — which is why `tagpu_fogwide_get` must *not* refuse a grid for being a tick behind.
+
+
 That is why the source says *"ALLOCATED ONCE AND NEVER GROWN, and that is a lifetime argument,
 not a convenience"*. Any dynamic scheme has to answer it, because **the size a process needs can
 grow inside that process**: stock TA cannot change resolution mid-game
