@@ -75,7 +75,9 @@ int  tagpu_reclaim_pass_passed(long stamp);
 
    NOT the pre hook, and the difference is a bug rather than a preference: the
    render thread is stopped by tagpu_overlay.c's teardown_active() gate, not by
-   pass_begin, so a pass that got past that gate before the flag was set runs on
+   pass_begin's return value — and since G13t that gate replays the flag as
+   pass_begin latched it, so the boundary is pass_begin. A pass that had already
+   begun when the flag was set latched 0 and runs its engine reads to completion
    while the pre hook waits for it — and would there see a generation bumped in
    the pre hook, drop its template caches and refill them from templates the
    cascade has not freed yet. reclaim_teardown_post carries the full reasoning.

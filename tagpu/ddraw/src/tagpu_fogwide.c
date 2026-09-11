@@ -180,9 +180,13 @@ static const void*      s_lastMapped;
 static int              s_lastLosW, s_lastLosH, s_lastMask, s_lastTrue;
 static int              s_said;                           /* one-shot diagnostics */
 static int              s_saidFail;
-/* The capacity request that malloc refused. Game thread only; cleared by any
-   different request, so a window that changes size asks again. */
+/* The capacity request that malloc refused, and when. Game thread only. A
+   different request asks at once; the same one asks again after FOGW_RETRY_MS,
+   because a refusal that is never forgiven pins the grid smaller for the rest
+   of the session — see fogw_alloc. */
 static int              s_failCols, s_failRows;
+static DWORD            s_failMs;
+#define FOGW_RETRY_MS   5000
 
 /* ---- the replication of 0x4843C0 ---------------------------------------- */
 
@@ -643,18 +647,37 @@ static int fogw_alloc(int capCols, int capRows)
 
     if (s_build && s_pub && s_hold &&
         capCols <= s_capCols && capRows <= s_capRows) return 1;
-    /* A REQUEST THAT COULD NOT BE SERVED IS NOT RETRIED UNTIL IT CHANGES. This
+    /* THE CLAMP COMES FIRST, and the order is a bug I had the other way round:
+       the set never shrinks, so what is actually requested is the componentwise
+       max of the ask and what we already have. Latching the pre-clamp ask and
+       comparing the post-clamp one never matched when one dimension shrank
+       while the other grew — which is exactly the window-resize case the
+       backoff exists for. */
+    if (capCols < s_capCols) capCols = s_capCols;
+    if (capRows < s_capRows) capRows = s_capRows;
+
+    /* A REQUEST THAT COULD NOT BE SERVED IS NOT RETRIED EVERY TICK. This
        function is reached at the DRAW rate, not the sim rate — hundreds to
        thousands of times a second — and the grow needs all three blocks at
        once, so under memory pressure an un-latched retry is two malloc/free
        pairs per call, for as long as the pressure lasts, on the thread this
        module is otherwise careful to keep at ~4 ms/s. The pre-G13t code kept
        each block it managed to get and converged within three ticks; this one
-       cannot, so it must stop asking instead. */
-    if (capCols == s_failCols && capRows == s_failRows)
+       cannot, so it must ask less often instead.
+
+       IT MUST NOT STOP ASKING ALTOGETHER, which is what the first version did.
+       Memory pressure is transient, and a latch cleared only by a *successful*
+       grow pins the set at whatever size it had when the one refusal happened:
+       the window is then clamped inside the view for the rest of the session,
+       on-screen cells fall off the grid, and `tagpu_fog_at` answers 0 — "nothing
+       is hidden here" — for every one of them. That is this landing's own bug
+       class, made permanent, where the code it replaced recovered on the next
+       tick. So the latch EXPIRES. The interval is a quality knob and not a
+       safety argument: running on the smaller set is correct at any cadence,
+       and this only decides how soon a transient failure is forgiven. */
+    if (capCols == s_failCols && capRows == s_failRows &&
+        GetTickCount() - s_failMs < FOGW_RETRY_MS)
         return (s_build && s_pub && s_hold);
-    if (capCols < s_capCols) capCols = s_capCols;
-    if (capRows < s_capRows) capRows = s_capRows;
 
     bytes = (size_t)capCols * capRows * 2;
     nb = (unsigned short*)malloc(bytes);
@@ -662,7 +685,7 @@ static int fogw_alloc(int capCols, int capRows)
     nh = (unsigned short*)malloc(bytes);
     if (!nb || !np || !nh) {
         free(nb); free(np); free(nh);
-        s_failCols = capCols; s_failRows = capRows;
+        s_failCols = capCols; s_failRows = capRows; s_failMs = GetTickCount();
         if (!s_saidFail) {
             char fb[128];
             sprintf(fb, "fogwide: could not allocate 3 x %dx%d (%d KB) — staying "

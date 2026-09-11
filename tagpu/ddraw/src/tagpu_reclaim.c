@@ -286,11 +286,11 @@ static void __cdecl reclaim_teardown_pre(void)
    THE GENERATION IS BUMPED HERE AND NOT IN THE PRE HOOK, and the difference is
    a bug rather than a preference. The render thread is NOT stopped by
    `pass_begin` -- `render_ogl.c` ignores its return value -- it is stopped by
-   `tagpu_overlay.c`'s `teardown_active()` gate, which since the G13t landing
-   returns the flag as `pass_begin` LATCHED it rather than re-reading it. A pass
-   that got past that gate before the flag was set runs on while the pre hook
-   waits for it. That
-   pass reaches `tagpu_native_frame` (thirteen lines and two subsystems later,
+   `tagpu_overlay.c`'s `teardown_active()` gate. Since the G13t landing that
+   gate replays the flag as `pass_begin` LATCHED it, so the boundary is
+   `pass_begin` itself: a pass that had ALREADY BEGUN when the flag was set
+   latched 0 and runs its engine reads to completion while the pre hook waits
+   for it. That pass reaches `tagpu_native_frame` (thirteen lines and two subsystems later,
    one of them file I/O) and would there see a generation bumped in the pre
    hook, drop the template caches, and REFILL THEM IN THE SAME FRAME from
    templates the cascade has not freed yet -- because the game thread is still
