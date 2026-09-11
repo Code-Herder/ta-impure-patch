@@ -46,12 +46,27 @@
    step of any lever can outrun the grid.
 
    HANDING IT OVER. Three buffers and three pointers — build, published, held —
-   swapped under a critical section, never copied and never reallocated (they are
-   allocated once, at the cap). Each pointer belongs to exactly one party at a
-   time and a swap only ever exchanges two of them, so the game thread cannot
-   write the buffer the render thread is reading. The render thread keeps its
-   held buffer for the whole frame, which is what the CPU-side gates
-   (`tagpu_fog_at`) need. */
+   swapped under a critical section and never copied. Each pointer belongs to
+   exactly one party at a time and a swap only ever exchanges two of them, so
+   the game thread cannot write the buffer the render thread is reading. The
+   render thread keeps its held buffer for the whole frame, which is what the
+   CPU-side gates (`tagpu_fog_at`) need.
+
+   HOW BIG. Sized from the window the screen asks for, not from a constant — see
+   THE BUFFER SET in tagpu_fogwide.c for why the size is taken at the worst eye
+   residue and why the three grow together. The set is grown, never shrunk, and
+   the old set is freed only once tagpu_reclaim's fence says the render thread
+   has finished every frame that could still be holding one of its blocks: the
+   held pointer outlives the critical section by a whole frame, so the size of a
+   buffer is a lifetime question and not an allocation one. */
+
+/* The sanity bound tagpu_native.c applies to the ENGINE's own grid descriptor —
+   three numbers read out of engine memory, where the question is "has this
+   struct been corrupted", not "how big may a grid be". It stays fixed and
+   generous: the engine builds one cell per 32 px of ITS viewport plus two, so
+   this is a viewport 32,000 px wide and cannot be reached by a screen.
+   tagpu_fogwide_dimcap() is never below it. */
+#define FOGW_ENGINE_DIMCAP 1024
 
 /* DllMain only. Creates the critical section the hand-over uses, before either
    thread that touches it exists — the module is inert until this has run. */
@@ -87,5 +102,25 @@ void tagpu_fogwide_tick(char* ta, int rebuilt);
    not counted. */
 int tagpu_fogwide_get(const unsigned short** buf,
                       int* cols, int* rows, int* orgX, int* orgY);
+
+/* Either thread. The largest `cols`/`rows` any producer in this fork can
+   legitimately hand out, for a consumer that has to bound a descriptor before
+   indexing with it — `tagpu_fog_at` (tagpu_fx.c) is the one that does.
+
+   IT IS NOT A LIMIT ON FOG and nothing should treat it as one. It is the
+   memory-safety bound on a stride: `grid[cy * cols + cx]` computes an index
+   from numbers that were read out of engine memory a frame and several call
+   layers earlier, and a plausible pointer with a corrupt `cols` still lands
+   past the end of the allocation. Tripping it means the descriptor and the
+   buffer have come apart, not that the screen is large.
+
+   A HIGH-WATER MARK over the sets this process has allocated, so it only ever
+   relaxes — a grid built at the old, larger size and still in flight can never
+   be refused by a cap that has since come down. It starts at
+   FOGW_ENGINE_DIMCAP and rises with the window. It exists so that the producer
+   and the gate cannot disagree: before it, the producer's cap was 1024 and the
+   gate's a separately typed 512, and a screen between 4064 and 8160 px wide got
+   a grid that was built and then refused. */
+int tagpu_fogwide_dimcap(void);
 
 #endif

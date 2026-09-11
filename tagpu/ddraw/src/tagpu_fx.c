@@ -58,6 +58,7 @@
 #include "tagpu_gaf.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
+#include "tagpu_fogwide.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define TAPROG_PP     0x0051FBD0u
@@ -617,14 +618,22 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows,
                   grid, cols, rows, orgX, orgY, wx, wzp);
         return 0;
     }
-    /* and the dims: 256 is the engine's own ceiling (its grid is sized from a
-       viewport the native pass caps at 4096), 512 covers the widest window
-       tagpu_fogwide will build. Past that, cols/rows and the buffer have come
-       apart. */
-    if (cols > 512 || rows > 512) {
-        fog_alarm("grid dims exceed the 512 the producers accept",
-                  grid, cols, rows, orgX, orgY, wx, wzp);
-        return 0;
+    /* and the dims, against the bound the PRODUCER publishes rather than a
+       number typed here. This used to be a literal 512, chosen when it covered
+       both producers and then left behind by both: the wide grid's own cap went
+       to 1024 and the viewport bound to 16384, so a screen between 4064 and
+       8160 px wide got a grid tagpu_fogwide built and this test refused — and a
+       refusal here is `0`, which every caller reads as "nothing is hidden",
+       so the whole screen's units, wrecks and effects drew through the black.
+       tagpu_fogwide_dimcap() is a high-water mark, so it can only ever be too
+       generous, which for a corruption guard is the right direction to err. */
+    {
+        int cap = tagpu_fogwide_dimcap();
+        if (cols > cap || rows > cap) {
+            fog_alarm("grid dims exceed the cap the producers publish",
+                      grid, cols, rows, orgX, orgY, wx, wzp);
+            return 0;
+        }
     }
     float gx = (float)(wx  - orgX) * (1.0f / 32.0f);
     float gy = (float)(wzp - orgY) * (1.0f / 32.0f);

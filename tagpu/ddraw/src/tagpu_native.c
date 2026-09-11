@@ -2167,7 +2167,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                band, the whole map drawn lit at every zoom. 1024x768 is 30x24 =
                720 and passes; 1920x1080 is 58x34 = 1972 against an allocated
                1976 and did not, so at 1080p the fog rule had never run. */
-            /* 1024, not 256: this bound is a sanity check on a count read out of
+            /* FOGW_ENGINE_DIMCAP (1024), not 256: this bound is a sanity check
+               on a count read out of
                engine memory, and 256 made it a SCREEN limit as well. The engine
                builds the grid at one cell per 32 px of its viewport plus two —
                MEASURED 2026-09-09, 118 x 68 for the 3712 x 2096 viewport of a
@@ -2176,7 +2177,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                would have been refused here. Refusing sets fogMode 0, which is
                no fog at all, so the bound must not be the first thing a new
                monitor meets. The relation below is the real test. */
-            if (ptr_ok(buf) && cols > 0 && rows > 0 && cols <= 1024 && rows <= 1024 &&
+            if (ptr_ok(buf) && cols > 0 && rows > 0 &&
+                cols <= FOGW_ENGINE_DIMCAP && rows <= FOGW_ENGINE_DIMCAP &&
                 cells == (((cols * rows) + 7) & ~7) &&
                 !IsBadReadPtr(buf, (SIZE_T)cells * 2)) {
                 /* the overlay puts cell (0,0) at screen vp + (+-16 - eye%32);
