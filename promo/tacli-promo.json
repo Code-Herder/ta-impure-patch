@@ -255,7 +255,33 @@
       "naval-push",
       "ridge-assault",
       "shore-raid"
-    ]
+    ],
+    "_text": [
+      "The wall spells IMPURE in big-battle tiles. Town & Country is the one",
+      "dark clip (luma 44 against 68-99 for the other five), so its tiles read",
+      "as ink on the wide shot and it appears NOWHERE else in the fill -- a",
+      "stray dark tile is a smudge on the letters.",
+      "",
+      "origin is arithmetic, not taste. The block is 29 cols x 7 rows. Centred",
+      "on the camera's final target (1056, 845) it sat exactly where the title",
+      "card lands at 51.5s: the card's plate hid P-U-R for the last 5.5s and",
+      "left I-M and E poking out either side. So the word sits BELOW the card:",
+      "rows 5..11 span 64-89% of the frame height at cols 40 and 63-86% at 44,",
+      "and the card's plate ends at 61%. The word enters from the bottom edge",
+      "as the camera pulls back (fully in frame from ~50s) and the card then",
+      "drops in above it, URL over word. Cols -13..15 centre it 1.3% right.",
+      "No hero window is inside the block, so nothing constrains the mask;",
+      "tamontage would print a WARNING if one were and disagreed."
+    ],
+    "text": {
+      "string": "IMPURE",
+      "clip": "big-battle",
+      "origin": [
+        -13,
+        5
+      ],
+      "gap": 1
+    }
   },
   "_captions": [
     "The Card treatment: full-frame typographic cards, chosen from the five",

@@ -140,6 +140,7 @@ stage    tile size + desktop gap. Cell (col,row) sits at (col*pitch, row*pitch),
 windows  the hero windows, placed by cell. Each opens as a terminal, types its
          command, prints output, then cross-fades into the game IN THE SAME RECT.
 fill     the filler grid: a cell range, a clip pool, and a reveal policy.
+         fill.text spells a word in the tiles of ONE clip (see below).
 camera   keyframes of (t, cx, cy, cols).
 captions (t0, t1, text, sub).
 ```
@@ -310,6 +311,55 @@ command (2 s, at the owner's instruction), then Enter, then output, then flip.
 until the widest line fits in `max_lines`. This is not cosmetic: "A test harness that
 happens to look like a war." typeset at card size is wider than 1920 px and simply
 ran off both edges of the frame. Explicit `\n` is honoured.
+
+## A word on the wall: `fill.text`
+
+The wide shot is a wall of ~1600 tiles, and tiles of one dark clip on a wall of
+light ones read as ink. `fill.text` spells a word that way:
+
+```json
+"text": { "string": "IMPURE", "clip": "big-battle", "origin": [-13, 5], "gap": 1 }
+```
+
+`TEXT_FONT` in `tools/tamontage` is a 7-row cap font with variable widths (I is 3,
+M/N/T/V/W/X/Y are 5, the rest 4); `text_cells()` turns the string into a set of
+`(col, row)` cells from `origin` (the block's top-left cell) with `gap` empty
+columns between glyphs. In `_build`, a filler cell on a stroke gets `text.clip`
+and **every other filler cell gets one of the other clips** — the word's clip
+appears nowhere else in the fill, because one stray dark tile in the field is a
+smudge on the letters. The draw's variant is kept and only its clip swapped, so
+the phases and reveal times of the rest of the wall are what they were.
+
+Three things that were measured rather than assumed, in the order they bit:
+
+1. **Which clip is the ink is a luma measurement, not a guess.** Mean luma over the
+   cached 160 px ladder: big-battle (Town & Country, a brown city grid) **44**;
+   air-war 70, last-stand 70, naval-push 74, ridge-assault 68, shore-raid **99**.
+   One clip is dark and five are light, which is exactly the situation the trick
+   needs. Two dark clips would have needed the darker one AND both out of the field.
+2. **Centre the word on the camera and the title card lands on it.** The obvious
+   placement — centred on the final camera target, 1.3 % off either way — put the
+   card's plate (39-61 % of the frame height) over P-U-R for the last 5.5 s, with I-M
+   and E poking out either side. So the word sits BELOW the card: rows 5..11 span
+   64-89 % of the height at `cols` 40 and 63-86 % at 44. It enters from the bottom
+   edge as the camera pulls back, is fully in frame from ~50 s, and the card then
+   drops in above it with the URL line directly over the word.
+3. **A hero window inside the block has to agree with the mask**, because heroes
+   keep their scripted clips: on a stroke it must already play the word's clip, off
+   a stroke it must not. `_build` prints a `WARNING` for any hero that disagrees.
+   The centred placement needed a search for this (origin (-13,-2) put hero 0,
+   big-battle, on the P's stem and the other three in the gap column); the placement
+   under the card has no hero inside it and needs none. What remains is hero 0
+   itself: big-battle at (0,0) is a **single dark tile at dead centre** from ~47 s
+   until the card's plate covers it at 51.5 s. It is the window the film opened on
+   and its clip is the transcript's, so it stays.
+
+Check it on the draft path, not the master: `--t0 44 --t1 57 --width 1920 --height
+1080 --supersample 1 --preset ultrafast` renders the whole tail in **3.4 s** wall
+at `-j 14`, and frames at 50 s, 51.4 s (the last clean frame before the card) and
+the final frame are the three that matter. The full 4K re-render is unavoidable
+here: the assignment changes every filler tile the camera ever sees from 25 s on,
+so there is no segment boundary to splice at.
 
 ## Speed: `-j`, and the three self-inflicted wounds before it
 
@@ -1190,7 +1240,10 @@ change it in `wire` first — it is a minute per iteration there and an evening 
 
 `promo/tacli-promo.json` is the **57 s** tacli promo in the **Card treatment** —
 full-frame typographic cards, chosen by the owner from five prototype cuts
-(`promo/prototype-cuts/`). Shipped at 4K with a 1080p share cut. Scored.
+(`promo/prototype-cuts/`). Shipped at 4K with a 1080p share cut. Scored. Public
+since 2026-09-11 at https://youtu.be/VMC52vFmxb0 on the Total Annihilation: Impure
+channel (v4: typing, one-join music, banner held). **v5 spells IMPURE on the wall**
+in big-battle tiles under the title card (`fill.text`, above) — rendered, not posted.
 
 Two things the prototype changed in the base cut, both worth keeping:
 
@@ -1221,9 +1274,9 @@ What the finished film measures (2026-09-11):
 
 Open, and none of it blocking:
 
-* **Nobody has watched it.** Every check above is a measurement. Measurements catch
-  broken, not bad — in particular whether 22 s of silent opening reads as deliberate
-  is a question only ears answer.
+* **The owner has watched v1-v4 and chose each change by eye and ear**; the
+  measurements above caught broken, the owner caught bad (the loop seams, the synth
+  typing). v5 has been checked on frames only.
 * **The t = 7.7-8.1 s camera lurch.** The worst frames of every render so far, and
   it is the easing at the 7.47 keyframe, not anything at 9 s.
 * `air-war` leaves the outer thirds of its frame fairly empty, with the bases only

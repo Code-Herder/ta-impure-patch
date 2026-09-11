@@ -910,6 +910,68 @@ class Stage:
 # the montage
 # --------------------------------------------------------------------------
 
+# A word spelled by the wall. Each glyph is 7 rows of '#'/'.'; widths vary so
+# the block stays compact (I is 3 wide, M/N/T/V/W/X/Y are 5, the rest 4).
+# Cells on a '#' get `text.clip`, every other filler cell gets one of the other
+# clips, so at the wide shot that clip's tone appears nowhere but the word.
+TEXT_FONT = {
+    "A": ".##. #..# #..# #### #..# #..# #..#",
+    "B": "###. #..# #..# ###. #..# #..# ###.",
+    "C": ".### #... #... #... #... #... .###",
+    "D": "###. #..# #..# #..# #..# #..# ###.",
+    "E": "#### #... #... ###. #... #... ####",
+    "F": "#### #... #... ###. #... #... #...",
+    "G": ".### #... #... #.## #..# #..# .###",
+    "H": "#..# #..# #..# #### #..# #..# #..#",
+    "I": "### .#. .#. .#. .#. .#. ###",
+    "J": "..## ...# ...# ...# ...# #..# .##.",
+    "K": "#..# #.#. ##.. ##.. #.#. #..# #..#",
+    "L": "#... #... #... #... #... #... ####",
+    "M": "#...# ##.## #.#.# #.#.# #...# #...# #...#",
+    "N": "#...# ##..# #.#.# #..## #...# #...# #...#",
+    "O": ".##. #..# #..# #..# #..# #..# .##.",
+    "P": "###. #..# #..# ###. #... #... #...",
+    "Q": ".##. #..# #..# #..# #.## #..# .###",
+    "R": "###. #..# #..# ###. #.#. #..# #..#",
+    "S": ".### #... #... .##. ...# ...# ###.",
+    "T": "##### ..#.. ..#.. ..#.. ..#.. ..#.. ..#..",
+    "U": "#..# #..# #..# #..# #..# #..# .##.",
+    "V": "#...# #...# #...# #...# .#.#. .#.#. ..#..",
+    "W": "#...# #...# #...# #.#.# #.#.# ##.## #...#",
+    "X": "#...# .#.#. ..#.. ..#.. ..#.. .#.#. #...#",
+    "Y": "#...# .#.#. ..#.. ..#.. ..#.. ..#.. ..#..",
+    "Z": "#### ...# ..#. .#.. #... #... ####",
+    " ": ".. .. .. .. .. .. ..",
+}
+TEXT_ROWS = 7
+# Render workers rebuild the Montage per segment; the word's summary line is
+# for the person running the render, once, not 56 times.
+QUIET = False
+
+
+def text_cells(text: dict | None) -> tuple[set, str | None, tuple | None]:
+    """The (col, row) cells that spell `text.string`, the clip they show, and
+    the block's (c0, r0, c1, r1) extent. `origin` is the block's top-left cell
+    and `gap` the empty columns between glyphs (default 1)."""
+    if not text:
+        return set(), None, None
+    word = str(text.get("string", "")).upper()
+    c0, r0 = text.get("origin", [0, 0])
+    gap = int(text.get("gap", 1))
+    cells: set = set()
+    x = c0
+    for ch in word:
+        rows = TEXT_FONT[ch].split()
+        assert len(rows) == TEXT_ROWS, ch
+        for dy, row in enumerate(rows):
+            for dx, bit in enumerate(row):
+                if bit == "#":
+                    cells.add((x + dx, r0 + dy))
+        x += len(rows[0]) + gap
+    extent = (c0, r0, x - gap - 1, r0 + TEXT_ROWS - 1)
+    return cells, text.get("clip"), extent
+
+
 class Montage:
     def __init__(self, path: Path, backend: str, clips_dir: Path | None,
                  cache: Path, fps: float, aspect: float = 1080 / 1920):
@@ -1039,9 +1101,40 @@ class Montage:
         wave = rev.get("wave", 0.9)
         fade = rev.get("fade", 0.25)
 
+        # The word, if the script spells one. The scripted (hero) windows keep
+        # their own clips, so a hero inside the block has to agree with it:
+        # on a stroke it must already play the word's clip, off a stroke it
+        # must not. That is a placement question, answered when `origin` is
+        # chosen; here it is only checked, loudly.
+        mask, word_clip, extent = text_cells(fill.get("text"))
+        if word_clip is not None and word_clip not in ids:
+            raise SystemExit(f"fill.text.clip {word_clip!r} is not in fill.clips")
+        others = [i for i, cid in enumerate(ids) if cid != word_clip] or [0]
+        if extent is not None:
+            ec0, er0, ec1, er1 = extent
+            for spec in self.spec.get("windows", []):
+                c, r = spec["col"], spec["row"]
+                if ec0 <= c <= ec1 and er0 <= r <= er1:
+                    on = (c, r) in mask
+                    plays = spec.get("clip") == word_clip
+                    if on != plays:
+                        print(f"  WARNING: hero window at ({c},{r}) plays "
+                              f"{spec.get('clip')!r} but the word wants "
+                              f"{'a stroke' if on else 'a gap'} there",
+                              file=sys.stderr)
+            if not QUIET:
+                print(f"  text {fill['text'].get('string')!r} in {word_clip}: "
+                      f"cols {ec0}..{ec1}, rows {er0}..{er1}, {len(mask)} cells",
+                      flush=True)
+
         auto = self._first_visible(cells)
         for (col, row), a in zip(cells, auto):
             k = rng.randrange(len(ids) * VARIANTS_PER_CLIP)
+            if word_clip is not None:
+                # Keep the draw's variant, replace its clip: strokes show the
+                # word's clip, everything else one of the others.
+                ci = ids.index(word_clip) if (col, row) in mask else others[k % len(others)]
+                k = ci + len(ids) * (k // len(ids))
             game = self._game(ids[k % len(ids)], k, labels[k % len(labels)])
             # Already there before the camera reaches it (so nothing pops in
             # frame), except the first ring, which is deliberately spread over
@@ -1291,8 +1384,9 @@ def _render_segment(job):
     """
     (idx, spec, backend, clips, cache, fps, w, h, crf, preset,
      t_start, n_frames, seg_path, supersample) = job
-    global SUPERSAMPLE
+    global SUPERSAMPLE, QUIET
     SUPERSAMPLE = supersample
+    QUIET = True
     # Rebuilt per segment on purpose: construction is 48 ms measured, so caching
     # it across a worker's segments buys 2 s of CPU on the whole film and would
     # keep a stale frame cache alive for parts of the film the worker has left.
