@@ -171,19 +171,36 @@ the game sat there apparently running and frozen. TA's own `ErrorLog` blamed `To
 value walks straight through. The root cause of the corruption was never found; the guard is the
 net, and `fog_alarm`'s message box says as much to the player.
 
-**A candidate for it turned up on 2026-09-10, from the cursor_zoom work rather than from here**, and
-it is worth writing down next to the guard because it would explain the shape of both faults. The
-engine's main struct is deliberately misaligned by a random amount at every launch — the allocator
-at `0x41D920` pads it by `(GetTickCount() % 1000) * 7` — so a four-byte field at `main+N` is
-4-aligned in only a quarter of launches and straddles a cache line in about one in twenty. A
-non-locked access that crosses a line is **not** atomic on x86, so a cross-thread read of any
-`main+…` field can observe a half-written value. The fog descriptor is exactly such a read: the
+**Two readings of it turned up on 2026-09-10**, from the cursor_zoom work rather than from here.
+Both are written down because the weaker one arrived first and would have pointed the next
+investigation at the wrong half of the problem.
+
+*The alignment reading.* The engine's main struct is deliberately misaligned by a random amount at
+every launch — the allocator at `0x41D920` pads it by `(GetTickCount() % 1000) * 7` — so a
+four-byte field at `main+N` is **4-aligned in only a quarter of launches**, and a non-locked access
+that crosses a cache line is not atomic on x86. The fog descriptor is exactly such a read: the
 render thread takes `{buf, cols, rows, cells}` out of `*(main+0x1421F)` once a frame, on a base
-whose alignment is whatever that launch drew. A torn `buf` is a plausible source of a −9. It is a
-hypothesis and not a finding — nothing has reproduced the fault since — but it points the right
-way: the numbers must keep being treated as DATA, and the `cells == (cols*rows + 7) & ~7` relation
-`tagpu_native.c` already checks is the part most likely to catch a tear. See
-`exe-reverse-engineering.md` for the disassembly and the general rule.
+whose alignment is whatever that launch drew. A torn `buf` would be a wild pointer.
+
+*What argues against it, and it is the observed values themselves.* −9 is `0xFFFFFFF7` and −318 is
+`0xFFFFFEC2`: both carry **`0xFF` in their top bytes**. A tear hands you the bytes of one operand
+below the split and the bytes of the other above it, and neither operand of a `buf` store carries
+`0xFF` up there — a userland heap pointer's top byte is `0x00`–`0x7F`, and the value it replaces is
+the previous such pointer or zero. **No split offset composes either observed value out of two
+valid pointers.** The reading survives only if the slot already held `0xFF` poison, and at that
+point the tear is no longer the interesting part.
+
+*The lifetime reading fits both values with no special pleading.* A descriptor that was freed and
+whose memory was reused by something storing small negative integers gives −9 and −318 directly.
+That is the class `tagpu_reclaim` exists for, and its teardown wrap has a documented timeout hole.
+
+**One fault would separate them**, and it is worth arranging before the next one is spent: log the
+descriptor's *other* fields at the trip, not just the one that was used. A tear gives one
+implausible field beside three consistent ones; a freed-and-reused slot gives four values that are
+garbage together. `fog_alarm` already logs `cols` and `rows`; `cells` is not passed to
+`tagpu_fog_at` and would have to be plumbed. See `exe-reverse-engineering.md` for the disassembly
+and the general rule about `main+…` fields — which stands regardless of which reading is right, and
+is why the numbers must keep being treated as DATA.
 
 So the question the bound is answering is not "how big may fog be?" but:
 
