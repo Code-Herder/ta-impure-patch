@@ -1241,9 +1241,11 @@ change it in `wire` first — it is a minute per iteration there and an evening 
 `promo/tacli-promo.json` is the **57 s** tacli promo in the **Card treatment** —
 full-frame typographic cards, chosen by the owner from five prototype cuts
 (`promo/prototype-cuts/`). Shipped at 4K with a 1080p share cut. Scored. Public
-since 2026-09-11 at https://youtu.be/VMC52vFmxb0 on the Total Annihilation: Impure
-channel (v4: typing, one-join music, banner held). **v5 spells IMPURE on the wall**
-in big-battle tiles under the title card (`fill.text`, above) — rendered, not posted.
+since 2026-09-11 at https://youtu.be/MZCJUIns_6I on the Total Annihilation: Impure
+channel: v5, which **spells IMPURE on the wall** in big-battle tiles under the title
+card (`fill.text`, above), on top of v4's typing, one-join music and held banner.
+**YouTube cannot replace a video's file**: a re-cut is a new upload and a new URL, and
+the previous one goes private. v4 was public for a few hours at a URL that is now dead.
 
 Two things the prototype changed in the base cut, both worth keeping:
 
