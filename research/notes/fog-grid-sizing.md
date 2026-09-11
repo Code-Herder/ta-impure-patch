@@ -933,9 +933,9 @@ So, taking 16K as the hypothetical:
   not.
 - **The producer's cost is.** 8.4 ms per rebuild is a quarter of a 30 Hz sim tick, on the game
   thread of a lockstep engine, and a rebuild fires on every tick where anything moved. A quarter of
-  the tick spent on fog is not a sizing problem and no option in §6 touches it — the fix, if it is
-  ever needed, is to stop rebuilding the whole window when only part of it changed, or to build at
-  a coarser lattice when the grid is enormous.
+  the tick spent on fog is not a sizing problem and no option in §6 touches it — see *What could
+  make one cheaper* below, where the only change that attacks it properly is to stop rebuilding
+  when nothing in the window moved.
 - **The per-frame upload is next.** `tagpu_native.c` calls `glTexSubImage2D` every frame whether or
   not the grid changed: 71 KB a frame at 1080p is 4 MB/s and invisible, 4.1 MB a frame at 16K is
   ~250 MB/s at 60 fps. Gating it on `s_pubData` would be a two-line change and is worth doing
@@ -943,6 +943,105 @@ So, taking 16K as the hypothetical:
 - **The hard stop is the viewport guard, and it is just past 16K.** `fogw_window` refuses
   `vw > 16384`, so a screen wider than **16512 px** gets no wide grid at all and falls back to the
   engine's. 16K's 15232 is inside it with room; there is no standard mode between them.
+
+### Why a rebuild costs what it does
+
+The per-cell figure above is not a property of the grid size — it swings by 7× on the same grid
+depending on how much fog is in it.
+
+`fogw_build` replicates `0x4843C0`, which is a **scatter**. It walks map cells, and each dark one
+calls `corner_or`, which ORs a bit into **four** output bytes — two on the current row, two on the
+row above. A cell that is both unexplored and out of LOS does it twice: **eight read-modify-writes
+per cell**, at four addresses, across two rows. Three costs follow that a plain fill does not pay:
+
+- **every output byte is written four times** — each grid corner is shared by four map cells;
+- **a loop-carried dependency through memory** — cell `gx` writes bytes `gx` and `gx-1`, the next
+  iteration writes `gx+1` and `gx`, so each waits on the previous store to forward;
+- **two data-dependent branches per cell** (`los == 0`, `(mapped & mask) == 0`), unpredictable
+  wherever the fog boundary is ragged.
+
+Measured on the reference setup as a host microbenchmark — the same loop, the same cell count,
+64-bit and outside the game, so read the ratios and not the absolutes (485×283 = 137 k cells, the
+compiler flag the DLL actually uses is `-O2`):
+
+| window contents | scatter — today |
+|---|---|
+| fully explored, fully lit | 154 µs — **1.1 ns/cell** |
+| mixed: LOS blobs on a partly-explored map | 563 µs — **4.1 ns/cell** |
+| nothing explored, nothing lit | 1068 µs — **7.8 ns/cell** |
+
+The in-game measurement, 145 µs over 36.3 k cells, is 4.0 ns/cell — in the mixed band, so the model
+explains the number rather than merely fitting it. **It also means the table at the top of this
+section is a mixed-fog figure**: a zoomed-out view of an unexplored 4K map is closer to twice it.
+
+### What could make one cheaper
+
+In rough order of what they buy, with the recommendation for each. **None of them is worth doing
+today**: at 1080p the whole producer is 4.4 ms per second of game-thread time, which is 0.4 %.
+These matter at 4K and above.
+
+**1. Stop rebuilding when nothing in the window changed — the biggest win, and the only one that
+attacks the rate rather than the cost.** `changed` is `rebuilt || the window moved`, and `rebuilt`
+is the engine's is-current bit, which *any* LOS stamp clears — including one for a unit on the far
+side of the map, nowhere near the window. So most of the ~30 rebuilds a second recompute a grid
+that comes out byte-identical. The fix is a dirty rect: detour the four stamp sites
+(`0x481911`, `0x481D2D`, `0x481D73`, `0x482293`) to record where the stamp landed, and skip the
+build when the accumulated rect misses the window. **Recommended if 8K is ever a target**, with one
+precondition — those four sites' argument signatures are not mapped yet, so this is
+reverse-engineering work before it is optimisation work. Measure first: count what fraction of
+rebuilds produce an identical grid (`memcmp` against the published one is ~3 µs at 1080p against a
+145 µs build, so the measurement is nearly free even though the *saving* is not).
+
+**2. Gate the per-frame texture upload on the version counter.** `tagpu_native.c` calls
+`glTexSubImage2D` every frame whether or not the grid changed: 71 KB a frame at 1080p, 4.1 MB a
+frame at 16K (~250 MB/s at 60 fps). `s_pubData` already says when the contents moved.
+**Recommended now** — two lines, no parity risk, and it is independent of everything else here.
+
+**3. Rewrite the build as a gather.** Decode each map row once into a 0/1 row and store each entry
+as `a[gx] | a[gx+1]<<1 | b[gx]<<2 | b[gx+1]<<3`: one store per entry instead of eight
+read-modify-writes, no memory dependency, no branches, and row `b` of one output row is row `a` of
+the next, so each source row is read once instead of four times. Same host benchmark:
+
+| | fog-free | mixed | all-dark |
+|---|---|---|---|
+| scatter `-O2` — today | 1.1 ns/cell | 4.1 | 7.8 |
+| gather, scalar `-O2` | 2.6 | 2.6 | 2.5 |
+| gather, `-O3` — autovectorised | **1.0** | **1.0** | **1.1** |
+
+Two things that decide whether this is worth it. The scalar gather is **slower than the scatter on
+a clear map** — the scatter skips everything when there is no fog and the gather always pays — so
+it only wins where there is fog to draw. And the vectorised row is **not reachable in the shipped
+build**: `tagpu/ddraw/Makefile:51` compiles the DLL `-march=i486`, which has no SSE at all, so the
+compiler cannot vectorise this whatever the `-O` level. **Recommended only together with (4).**
+
+A correctness note for whoever writes it: a gather naturally fills the last column's right corners
+and the last row's bottom ones, which the engine deliberately leaves unset (§1). That gap is
+load-bearing — it is exactly what the `uFogDim - 1.0` clamp in `taFog` exists to stay inside — so a
+parity-preserving gather has to reproduce it, not close it.
+
+**4. Raise the ISA baseline for this translation unit.** `-march=i486` is a statement about which
+CPUs the DLL must run on, and it costs a factor of about 2.5 here. The narrow version is to compile
+`tagpu_fogwide.c` alone at a higher baseline, or to hand-write the inner loop with SSE2 intrinsics
+behind a CPUID check. **A policy decision, not a local change** — it belongs to whoever owns the
+minimum-hardware claim, and it should not be made as a side effect of a fog optimisation.
+
+**5. Drop the `memset`.** 72 KB at 1080p, 268 KB at 4K, about 2 % of a build. It exists because the
+scatter only ORs; a gather stores every byte and makes it dead. **Free, as part of (3); pointless
+on its own.**
+
+**6. Rebuild only the strip the window uncovered.** When the window scrolls by whole cells and
+nothing else changed, `memmove` the overlap and build the new edge. **Not recommended**: it only
+helps in the case `rebuilt == 0`, which during play is the rare one, and it adds a second code path
+producing the same bytes — the kind of thing that goes subtly wrong for one column at one zoom.
+
+**7. Rate-limit the rebuild.** **Recommended against.** It is a timing-dependent quality
+degradation: the fog would lag unit movement by up to the interval, visibly.
+
+**8. Gate the producer on the zoom level again.** **Recommended against, emphatically** — this is
+the G13s bug. The level is published by the render thread, which is also the thread that decides
+mid-frame to draw the first zoomed-out frame, so a producer gated on it is always one tick late and
+that frame is drawn with no fog beyond the 1× viewport. Build every tick; let the consumer choose
+per frame.
 
 Two things that are *not* limits, so that nobody spends a session on them: `tagpu_native.c`'s
 `cols <= 1024` on the **engine's** descriptor is fine at any of these — the engine's own grid is
