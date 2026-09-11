@@ -1,0 +1,1 @@
+landing-review: model=opus effort=high range=main..18a7ee7 agents=4 findings=9 acted=9 rejected=0 date=2026-09-10 briefs=synchronisation-adversarial,alignment+repo-sweep,correctness,documentation; fixed in 3216c9e
