@@ -1,12 +1,13 @@
-# The promo's soundtrack
+# The promo's audio
 
-The track is **not in this repository** and must not be added to it: it is licensed
-for use *inside* a work, not for redistribution as a file. Everything needed to
-prove the licence is here instead, which is also what a platform wants if the video
-is ever content-matched.
+Two recordings: the score, and a keyboard. **Neither is in this repository and
+neither may be added to it** — both are licensed for use *inside* a work rather
+than for redistribution as a file. Everything needed to prove the licence is here
+instead, which is also what a platform wants if the video is ever content-matched.
 
-Render with `--audio <path to the mp3>`; the montage script carries the timing and
-the credit, never the path (a path would name a person's home directory).
+Render with `--audio <mp3>` and `--keys <mp3>`; the montage script carries the
+timing, the splice recipe and the credit, never the paths (a path would name a
+person's home directory).
 
 ## Evening Melodrama
 
@@ -71,25 +72,93 @@ which put the peak at 48 s and left the climax — the 1600-window wide shot at 
 and the title card at 51.5 s — playing over **dead air**. The bug was using the
 file's duration for the music's duration.
 
-**`start` is 22.0.** That lands the peak at **53.5 s**, on the title card sitting
-over the full wall, and the tail resolves at ~55 s with about a second and a half
-of quiet before the cut. Verified by measuring the muxed output's RMS per second,
-not by listening alone.
+**`start` is 22.0, and it stays 22.0** — it is authored against the *unlooped*
+track. That lands the climax at **47 s**, measured as the loudest second at
+−13.0 dBFS, with the tail resolving by ~55 s.
 
-The ~22 s of silence before it is **arithmetic, not taste**: 35 s of music cannot
-cover 57 s of film *and* finish at the end, and the climax is at the end. The
-silence lands on the opening, where one terminal types one command — which plays
-better dry, so the constraint and the edit happen to agree.
+### The 22 s of silence was arithmetic; the loop is how we bought it back
+
+35 s of music cannot cover 57 s of film *and* finish at the end, and the climax
+has to be at the end — so the opening was silent to 22 s. The owner's call was
+that this was too long, with one constraint: **the typing stays dry, and the
+music comes in on the first zoom-out** (7.47 s).
+
+The only way to start earlier without moving the climax is to make the track
+*longer at the front*. `audio.loop` splices bars of the intro back on itself:
+
+```json
+"loop": { "crossfade_ms": 18,
+          "segments": [[0.0,6.56],[2.39,6.56],[2.39,6.56],[2.39,6.56],
+                       [4.47,6.56],[6.56,null]] }
+```
+
+That is a two-bar phrase three times plus one more bar — **seven bars, +14.51 s**
+— so the music enters at 22.0 − 14.51 = **7.49 s**, the zoom-out to within 20 ms.
+
+**The loop only ever extends the front, so it pulls the start earlier by exactly
+its own length and nothing downstream moves.** `tamontage` measures the built
+file rather than trusting that arithmetic, so the crossfades cannot drift it.
+Proved, not assumed: the loudest second is **47 s at −13.0 dBFS in both** the
+looped cut and the old one.
+
+### Finding the loop: chroma, not a spectral envelope
+
+A spectral envelope says only "orchestra" — every moment of an orchestral piece
+scores ~0.997 against every other, which is what the first attempt did. **Chroma**
+tracks the harmony that says two moments are the same bar. Measured:
+
+| | |
+|---|---|
+| repeat period | **2.07 s** — one bar at the track's stated 115 bpm |
+| downbeats | 0.30 s + 2.087·k |
+| best 1-bar join in the intro | a = 2.39 → b = 4.47, score +0.894 |
+| best 2-bar join | a = 2.39 → b = 6.56, score +0.791 |
+
+The join that matters is the jump from the end of one segment to the start of the
+next: the music there has to follow from what preceded the cut. The last segment
+runs to the end of the original, so *that* join is seamless by construction.
+
+**The better-scoring loop lost.** One bar seven times scores +0.894 against
++0.791, and was rejected by ear — seven identical bars read as a loop. A join
+score tells you whether a splice is *audible*, not whether the result is *good*.
 
 If a re-cut changes the film's length, move `start` with it:
-**`start = duration_of_film − 35.0`**, and re-measure `35.0` if the track changes.
+**`start = duration_of_film − 35.0`** (still against the unlooped track), and
+re-measure `35.0` if the track changes.
 
 ## Rendering with it
 
 ```bash
 tools/tamontage render promo/tacli-promo.json -o cut.mp4 \
-    --backend clip --clips <dir> --audio "<path to the mp3>"
+    --backend clip --clips <dir> \
+    --audio "<path to the mp3>" --keys "<path to the typing recording>"
 ```
+
+## The typing
+
+`--keys` supplies a recording of someone typing; it is sliced into individual
+one-shots at render time and one is placed on each keystroke (see
+`audio.keyboard` in the montage script). Same rule as the music: the path is an
+argument, never the script, and the file never enters this repository.
+
+| | |
+|---|---|
+| **Recording** | "Fast Typing on Mechanical Keyboard" |
+| **Uploader** | freesound_community, via Pixabay |
+| **Source** | <https://pixabay.com/sound-effects/film-special-effects-fast-typing-on-mechanical-keyboard-28197/> |
+| **Licence** | Pixabay Content Licence — **no attribution required**, commercial use allowed |
+| **Prohibition that applies** | may not be sold or distributed "on a Standalone basis", i.e. unchanged and on its own. Cut into one-shots and mixed under a film is not that. |
+| **Switches** | Kailh Blue (the upload is tagged "Blue, Havit, Kailh") — a genuinely clicky board |
+| **File** | 36.1 s, 24 kHz, 160 kbps, stereo, 706 KB |
+| **Downloaded** | 2026-09-11 |
+
+The fidelity is the weak point — 24 kHz against the 48 kHz/320 kbps CC0 takes on
+BigSoundBank — but those are membrane boards, and the owner chose the sound over
+the spec sheet.
+
+**Synthesised clicks were built first and rejected.** They cost nothing and carry
+no licence, and they did not sound good; the only test that settled it was the
+owner listening to three of them. That code is gone — `git log` has it.
 
 The video stream is **copied**, never re-encoded: measured at **0.5 s** for the
 57 s / 227 MB 4K cut. That is why the track is chosen *after* the render — auditioning a

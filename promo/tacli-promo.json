@@ -341,34 +341,68 @@
     "music_ends": 35.0,
     "peak": 31.5,
     "_keyboard": [
-      "The typing, SYNTHESISED from this file's own `command` and `type_rate` --",
-      "no sample file, so no second licence, no second credit and nothing else",
-      "that must be kept out of the repository. Deterministic from `seed`, so a",
-      "re-cut regenerates the identical track.",
+      "The typing. `--keys <recording>` supplies a take of someone typing; it is",
+      "sliced into individual one-shots at render time and one is placed on each",
+      "keystroke. The PATH is an argument and never this file, for the same two",
+      "reasons as the music: it would name someone's home directory, and the",
+      "recording is licensed for use inside a work rather than for redistribution.",
+      "promo/MUSIC.md carries which recording and its licence.",
       "",
-      "`windows` picks which terminals are heard. Only window 0 is: it types",
-      "alone on a silent desktop, and that is the shot the sound is for. Adding",
-      "windows 1-3 puts three keyboards on top of each other at 11-15.5s, which",
-      "is a different idea and needs deciding on its own.",
+      "`windows` picks which terminals are heard. Only window 0 is: it types alone",
+      "on a silent desktop, and that is the shot the sound is for. Windows 1-3 would",
+      "put three keyboards on top of each other at 11-15.5s, which is a different",
+      "idea and needs deciding on its own.",
       "",
-      "Each keystroke is placed on the FRAME its glyph appears on, not at the",
-      "analytic instant: the renderer only samples the typing at frame times, so",
-      "the analytic time is up to 33ms early. Snapping is both the right sync and",
-      "free jitter -- 17 chars/s into 30fps gives 33 and 67ms gaps instead of a",
-      "metronomic 59.",
+      "Each keystroke lands on the FRAME its glyph appears on, not at the analytic",
+      "instant: the renderer only samples the typing at frame times, so the analytic",
+      "time is up to 33ms early. Snapping is both the right sync and free jitter --",
+      "17 chars/s into 30fps gives 33 and 67ms gaps instead of a metronomic 59.",
       "",
-      "voice: clicky (bright tick, centroid ~4.5kHz) | thocky (deeper bottom-out,",
-      "~1.1kHz) | soft (quieter, little tick). AWAITING THE OWNER'S PICK -- thocky",
-      "is only the placeholder that the three auditions were cut against."
+      "Synthesised clicks were tried first and rejected by the only test that",
+      "counts: the owner listened to them. Real recordings, sliced, replaced them."
     ],
     "keyboard": {
       "windows": [
         0
       ],
-      "voice": "thocky",
-      "gain_db": -6.0,
+      "gain_db": -5.0,
       "spread": 0.3,
-      "seed": 20260911
+      "seed": 20260911,
+      "pitch": 0.06
+    },
+    "_loop": [
+      "The intro, spliced longer so the music can start at the FIRST ZOOM-OUT",
+      "(7.47s) instead of 22s -- without moving the climax, which still has to land",
+      "on the title card.",
+      "",
+      "`start` below stays authored against the UNLOOPED track. The loop only ever",
+      "extends the front, so it pulls the start earlier by exactly its own length",
+      "and nothing after it moves; tamontage measures the built file rather than",
+      "trusting this arithmetic, so the crossfades cannot drift it. 22.0 - 14.51 =",
+      "7.49s, which is the zoom-out to within 20ms.",
+      "",
+      "`segments` is the play order in TRACK seconds. The join that matters is the",
+      "jump from the end of one segment to the start of the next: the music there",
+      "must follow from what preceded the cut, which holds when the span is a whole",
+      "number of bars and the phrase repeats. Measured by chroma self-similarity --",
+      "period 2.07s, one bar at the track's stated 115bpm, downbeats at 0.30 +",
+      "2.087k. A spectral envelope will not find this; it says only 'orchestra'.",
+      "The last segment runs to the end, so that join is seamless by construction.",
+      "",
+      "This is 2.39-6.56 (a two-bar phrase) three times plus one more bar, = seven",
+      "bars. One bar seven times scored a better join (+0.894 vs +0.791) and was",
+      "rejected by ear: seven identical bars read as a loop."
+    ],
+    "loop": {
+      "crossfade_ms": 18,
+      "segments": [
+        [0.0, 6.56],
+        [2.39, 6.56],
+        [2.39, 6.56],
+        [2.39, 6.56],
+        [4.47, 6.56],
+        [6.56, null]
+      ]
     }
   }
 }

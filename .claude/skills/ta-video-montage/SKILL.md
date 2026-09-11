@@ -1001,23 +1001,33 @@ A content-ID match on a Creative Commons library track is an **expected event**,
 a sign anything is wrong. Keep the ISRC and the download date; that plus the licence
 is the dispute answer.
 
-## The typing: synthesise it, and take the timing from the picture
+## The typing: real recordings, sliced, on the picture's own timing
 
-`audio.keyboard` adds a mechanical-keyboard track for the terminals it names.
-**Synthesised, never sampled** — the film already carries one licensed asset with
-an attribution obligation, and a second sample pack would mean another credit,
-another content-ID answer and another file that must never enter the repository.
-This one is deterministic from `seed`, regenerates for any re-cut, and belongs to
-nobody. numpy only, because `tools/tamontage` runs under the system interpreter,
-which has numpy and PIL but **no scipy** — so the band-shaping is done on the
-spectrum rather than with a filter design.
+`audio.keyboard` names which terminals are heard; `--keys <recording>` supplies a
+take of someone typing, which is **cut into individual one-shots at render time**
+and one placed on each keystroke.
 
 ```json
-"keyboard": { "windows": [0], "voice": "thocky", "gain_db": -6.0, "seed": 20260911 }
+"keyboard": { "windows": [0], "gain_db": -5.0, "seed": 20260911, "pitch": 0.06 }
 ```
 
-Three voices: `clicky` (bright tick, spectral centroid ~4.5 kHz), `thocky` (deeper
-bottom-out, ~1.1 kHz), `soft` (quieter, little tick).
+**Synthesised clicks were built first and rejected.** They cost nothing, carry no
+licence and regenerate from a seed — and they did not sound good. Three voices
+were auditioned and the owner's verdict was "doesn't sound very good". No
+measurement would have caught that: the synthesis was *correct* (right envelope,
+right spectrum, right variation) and still wrong. **When the deliverable is a
+sound, the only gate is someone listening.** Build the audition early and cheaply.
+
+Slicing a continuous take: detect onsets on the **high band** (a keystroke IS a
+click; the low end is room and body that smears the attack), cut a window at
+each, and drop the ones that are clipped or crowded by their neighbour. The
+biggest, lowest-frequency one-shots are the space bar and the other long keys, so
+they become the bank for space and Enter. A 36-59 s take yields 40-300 usable
+one-shots. Placement varies pitch ±6 %, level ±25 %, pan, and never repeats a
+click within four.
+
+The guard on `--keys` only catches *silence*. Feed it the music by mistake and it
+will happily find "keystrokes" in an orchestral track and render them.
 
 ### Snap each keystroke to the FRAME its glyph appears on
 
@@ -1027,15 +1037,50 @@ frame **early**. Snapping to the frame is both the correct sync *and* free,
 natural-sounding jitter: 17 chars/s into 30 fps gives gaps of **33 and 67 ms**
 instead of a metronomic 59, which is what stops it sounding like a machine gun.
 
-Three more things that separate a keyboard from a row of identical blips:
+## Buying back a silent opening: extend the track, do not move the cue
 
-* **The plate is struck a hair after the switch clicks.** Land both transients
-  together and it reads as one synthetic pop; `1 - exp(-t/0.9ms)` on the body
-  fixes it.
-* **The release, 45-75 ms later.** At 17 chars/s that falls *under the next
-  keystroke*, and that overlap is what makes fast typing sound dense.
-* **Vary every key** — body pitch ±16 %, decay ±25 %, level ±24 %, and a small
-  random pan, because a hand moves across the board.
+35 s of music could not cover 57 s of film *and* finish at the end, so the opening
+was silent to 22 s — arithmetic, not taste. The owner wanted the music at the
+first zoom-out (7.47 s) with the typing still dry.
+
+**The only way to start earlier without moving the climax is to make the track
+longer at the FRONT.** `audio.loop` splices bars of the intro back on itself:
+
+```json
+"loop": { "crossfade_ms": 18,
+          "segments": [[0.0,6.56],[2.39,6.56],[2.39,6.56],[2.39,6.56],
+                       [4.47,6.56],[6.56,null]] }
+```
+
+`segments` is the play order in track seconds. `start` stays authored against the
+**unlooped** track: the loop only extends the front, so it pulls the start earlier
+by exactly its own length and nothing downstream moves. `tamontage` measures the
+built file rather than trusting the arithmetic, so the crossfades cannot drift it.
+Proved, not assumed: the loudest second is **47 s at -13.0 dBFS in both** the
+looped cut and the original.
+
+### Chroma finds the loop; a spectral envelope cannot
+
+A spectral envelope says only "orchestra" — every moment of the piece scored
+**~0.997** against every other, which is what the first attempt returned and it
+was useless. **Chroma** tracks the harmony that says two moments are the same bar.
+Measured on this track: repeat period **2.07 s** (one bar at its stated 115 bpm --
+and a naive onset autocorrelation said 95.7 bpm, which was simply wrong),
+downbeats at 0.30 + 2.087k.
+
+The join that matters is the jump from the end of one segment to the start of the
+next; the last segment runs to the end of the original, so that join is seamless
+by construction. Equal-power crossfades, 18 ms.
+
+**Known, and older than the loop: a `--t0` preview past the music cue replays the
+track from its beginning** rather than starting mid-track, because the shift is
+`max(0, start - t0)`. Fine for checking picture, wrong for checking a music cue —
+audition those from `--t0 0`.
+
+**The better-scoring loop lost.** One bar seven times scores +0.894 against the
+two-bar phrase's +0.791, and the owner rejected it — seven identical bars read as
+a loop. A join score tells you whether a splice is *audible*, not whether the
+result is *good*.
 
 ### `amix` halves both inputs unless you tell it not to
 

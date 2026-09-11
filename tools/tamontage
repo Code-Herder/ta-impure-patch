@@ -1313,59 +1313,88 @@ def _render_segment(job):
 # on the spectrum rather than with a filter design.
 
 KEY_SR = 48000
-KEY_VOICES = {
-    # tick band (Hz), tick decay, body Hz, body decay, how much tick, level
-    "clicky": dict(tick=(2200.0, 9000.0), tick_dec=0.0022, body=230.0,
-                   body_dec=0.020, tick_mix=0.62, lvl=1.00),
-    "thocky": dict(tick=(900.0, 4200.0), tick_dec=0.0035, body=150.0,
-                   body_dec=0.032, tick_mix=0.34, lvl=1.00),
-    "soft":   dict(tick=(1400.0, 5200.0), tick_dec=0.0026, body=190.0,
-                   body_dec=0.018, tick_mix=0.22, lvl=0.72),
-}
+SR_MUX = 44100
 
 
-def _key_noise(n: int, rng, lo: float, hi: float):
-    """Band-limited noise shaped on the spectrum -- soft skirts, so no ring."""
-    X = np.fft.rfft(rng.standard_normal(n))
-    f = np.maximum(np.fft.rfftfreq(n, 1.0 / KEY_SR), 1.0)
-    g = (1.0 / (1.0 + (lo / f) ** 4)) * (1.0 / (1.0 + (f / hi) ** 4))
-    return np.fft.irfft(X * g, n)
+def _key_hp(x: np.ndarray, cut_hz: float) -> np.ndarray:
+    """High-pass on the spectrum. numpy only: `tools/tamontage` runs under the
+    system interpreter, which has numpy and PIL but no scipy."""
+    X = np.fft.rfft(x)
+    f = np.maximum(np.fft.rfftfreq(len(x), 1.0 / KEY_SR), 1.0)
+    return np.fft.irfft(X * (1.0 / (1.0 + (cut_hz / f) ** 4)), len(x))
 
 
-def _key_one(rng, voice: str, kind: str):
-    v = KEY_VOICES[voice]
-    lo, hi = v["tick"]
-    body_f, body_d, tick_d, lvl = v["body"], v["body_dec"], v["tick_dec"], v["lvl"]
-    if kind == "space":          # a big stabilised key: lower, longer, louder
-        body_f *= 0.55; body_d *= 1.9; lvl *= 1.22; lo *= 0.8; hi *= 0.85
-    elif kind == "enter":
-        body_f *= 0.70; body_d *= 1.7; lvl *= 1.30
-    # Per-key variation, or it is a machine gun of identical clicks.
-    body_f *= rng.uniform(0.86, 1.17)
-    body_d *= rng.uniform(0.80, 1.28)
-    tick_d *= rng.uniform(0.82, 1.25)
-    lvl *= rng.uniform(0.76, 1.24)
+def _key_load(path: str) -> np.ndarray:
+    out = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-f", "f32le",
+                          "-ac", "1", "-ar", str(KEY_SR), "-"],
+                         capture_output=True)
+    a = np.frombuffer(out.stdout, np.float32).astype(np.float64)
+    if a.size == 0:
+        raise SystemExit(f"--keys {path}: ffmpeg decoded nothing")
+    return a
 
-    n = int(KEY_SR * 0.16)
-    t = np.arange(n) / KEY_SR
-    tick = _key_noise(n, rng, lo * rng.uniform(0.9, 1.15), hi) * np.exp(-t / tick_d)
-    body = (np.sin(2 * np.pi * body_f * t) * np.exp(-t / body_d)
-            + 0.42 * np.sin(2 * np.pi * body_f * 2.7 * t)
-            * np.exp(-t / (body_d * 0.45)))
-    # The plate is struck a hair AFTER the switch clicks. Without this the two
-    # transients land together and the result reads as one synthetic blip.
-    body *= 1.0 - np.exp(-t / 0.0009)
-    x = (v["tick_mix"] * tick + (1.0 - v["tick_mix"]) * 1.35 * body) * lvl
 
-    # The release, 45-75 ms later. At 17 chars/s that lands under the NEXT
-    # keystroke, which is what makes fast typing sound dense rather than like a
-    # row of separate clicks.
-    up = int(KEY_SR * rng.uniform(0.045, 0.075))
-    if up < n:
-        m = n - up
-        tu = np.arange(m) / KEY_SR
-        x[up:] += _key_noise(m, rng, lo * 1.3, hi) * np.exp(-tu / 0.0016) * 0.34 * lvl
-    return x
+def _key_bank(path: str, thresh: float = 0.22, min_gap_ms: float = 45.0):
+    """Cut a recording of someone typing into individual keystroke one-shots.
+
+    A continuous take is not usable as-is: the film needs a click on one exact
+    frame, forty-odd times. So find the onsets, cut a window at each, and keep
+    the ones that are cleanly separated from their neighbour.
+
+    Detection runs on the HIGH band -- a keystroke IS a click, and the low end is
+    room and body that smears the onset and costs you the attack.
+    """
+    x = _key_load(path)
+    env = np.abs(_key_hp(x, 1500.0))
+    w = int(KEY_SR * 0.003)
+    env = np.convolve(env, np.ones(w) / w, mode="same")
+    env /= max(env.max(), 1e-9)
+
+    gap = int(KEY_SR * min_gap_ms / 1000.0)
+    idx, last = [], -gap
+    for i in np.where(env > thresh)[0]:
+        if i - last < gap:
+            continue
+        j = i                       # walk back to where the rise actually starts
+        while j > 0 and env[j] > env[i] * 0.12 and i - j < int(KEY_SR * 0.01):
+            j -= 1
+        idx.append(j)
+        last = i
+
+    pre = int(KEY_SR * 0.002)
+    normal, heavy = [], []
+    scored = []
+    for n, i in enumerate(idx):
+        nxt = idx[n + 1] if n + 1 < len(idx) else len(x)
+        end = min(i + int(KEY_SR * 0.170), nxt - int(KEY_SR * 0.004), len(x))
+        st = max(0, i - pre)
+        if end - st < int(KEY_SR * 0.05):
+            continue                # crowded by its neighbour: no clean tail
+        seg = x[st:end].copy()
+        seg[:pre] *= np.linspace(0, 1, pre)                  # no click-in
+        tail = min(len(seg) // 4, int(KEY_SR * 0.02))
+        seg[-tail:] *= np.linspace(1, 0, tail)               # no click-out
+        pk = float(np.abs(seg).max())
+        if pk < 0.02 or pk > 0.999:
+            continue                # silence, or clipped in the source
+        X = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+        f = np.fft.rfftfreq(len(seg), 1.0 / KEY_SR)
+        lo = float(X[f < 500].sum() / max(X.sum(), 1e-9))
+        scored.append((lo, seg / pk))
+    if len(scored) < 8:
+        raise SystemExit(f"--keys {path}: only {len(scored)} usable keystrokes "
+                         f"found; is this a recording of typing?")
+    # The biggest, lowest one-shots are the space bar and the other long keys.
+    scored.sort(key=lambda r: r[0])
+    cut = max(3, len(scored) // 8)
+    heavy = [r[1] for r in scored[-cut:]]
+    normal = [r[1] for r in scored[:-cut]]
+    return normal, heavy
+
+
+def _key_pitch(seg: np.ndarray, f: float) -> np.ndarray:
+    n = max(1, int(len(seg) / f))
+    return np.interp(np.arange(n) * f, np.arange(len(seg)), seg)
 
 
 def _key_events(spec: dict, fps: float, t0: float, duration: float):
@@ -1400,24 +1429,31 @@ def _key_events(spec: dict, fps: float, t0: float, duration: float):
 
 
 def _keyboard_wav(spec: dict, fps: float, t0: float, duration: float,
-                  path: str) -> str | None:
-    """Render the keystroke track to a wav, or None if the film asks for none."""
+                  path: str, source: str) -> str | None:
+    """Render the keystroke track to a wav, or None if there is nothing to play."""
     kb = (spec.get("audio") or {}).get("keyboard") or {}
     if not kb:
         return None
     ev = _key_events(spec, fps, t0, duration)
     if not ev:
         return None
-    voice = kb.get("voice", "thocky")
-    if voice not in KEY_VOICES:
-        raise SystemExit(f"audio.keyboard.voice {voice!r} is not one of "
-                         f"{sorted(KEY_VOICES)}")
+    normal, heavy = _key_bank(source)
     rng = np.random.default_rng(int(kb.get("seed", 0)))
     spread = float(kb.get("spread", 0.30))
+    pitch = float(kb.get("pitch", 0.06))
     n = int(KEY_SR * duration) + KEY_SR
     out = np.zeros((n, 2), np.float64)
+    recent: list[int] = []
     for t, kind in ev:
-        k = _key_one(rng, voice, kind)
+        pool = heavy if kind in ("space", "enter") else normal
+        j = int(rng.integers(len(pool)))
+        for _ in range(12):                  # never the same click twice running
+            if j not in recent[-4:]:
+                break
+            j = int(rng.integers(len(pool)))
+        recent.append(j)
+        k = _key_pitch(pool[j], float(rng.uniform(1 - pitch, 1 + pitch)))
+        k = k * rng.uniform(0.72, 1.06) * (1.18 if kind == "enter" else 1.0)
         i = int(round(t * KEY_SR))
         if i + len(k) > n:
             k = k[: n - i]
@@ -1425,23 +1461,73 @@ def _keyboard_wav(spec: dict, fps: float, t0: float, duration: float,
         out[i:i + len(k), 0] += k * math.sqrt(0.5 * (1 - pan))
         out[i:i + len(k), 1] += k * math.sqrt(0.5 * (1 + pan))
 
-    # A small room, or the clicks sound pasted onto the picture instead of in it.
-    for ms, lvl in ((7.0, 0.20), (13.0, 0.13), (23.0, 0.08), (37.0, 0.05)):
-        d = int(KEY_SR * ms / 1000.0)
-        tilt = np.array([[1.0, 0.85]]) if int(ms) % 2 else np.array([[0.85, 1.0]])
-        out[d:] += out[:-d] * lvl * tilt
-
     peak = float(np.abs(out).max())
     if peak > 0:
         out /= peak
-    out *= 10.0 ** (float(kb.get("gain_db", -6.0)) / 20.0)
+    out *= 10.0 ** (float(kb.get("gain_db", -5.0)) / 20.0)
     out = out[: int(KEY_SR * duration)]
     with wave.open(path, "wb") as w:
         w.setnchannels(2); w.setsampwidth(2); w.setframerate(KEY_SR)
         w.writeframes((np.clip(out, -1, 1) * 32767).astype("<i2").tobytes())
-    print(f"  keyboard: {len(ev)} keystrokes, {voice}, "
-          f"{float(kb.get('gain_db', -6.0)):g} dB")
+    print(f"  keyboard: {len(ev)} keystrokes from {len(normal)}+{len(heavy)} "
+          f"one-shots off {Path(source).name}, "
+          f"{float(kb.get('gain_db', -5.0)):g} dB")
     return path
+
+
+def _extend_audio(src: str, loop: dict, out: str) -> tuple[str, float]:
+    """Splice a track longer by repeating bars of its own intro.
+
+    The film needed the music 14.5 s earlier without moving its climax, and the
+    only way to buy that is to make the track longer at the FRONT.
+
+    `segments` is the play order, in track seconds, as [start, end] pairs; a null
+    end means "to the end of the track". The join that matters is the jump from
+    the end of one segment back to the start of the next: the music there has to
+    follow naturally from what preceded the cut, which is true when the span is a
+    whole number of bars AND the phrase repeats. Chroma self-similarity is how
+    those points were found -- a spectral envelope says only "orchestra", while
+    chroma tracks the harmony that says two moments are the same bar. Measured on
+    this track: period 2.07 s, which is one bar at its stated 115 bpm, downbeats
+    at 0.30 + 2.087k.
+
+    The last segment runs to the end of the original, so that join is seamless by
+    construction and only the loop joins need to be right.
+    """
+    segs = loop.get("segments") or []
+    if not segs:
+        raise SystemExit("audio.loop needs a `segments` list")
+    xf = int(SR_MUX * float(loop.get("crossfade_ms", 18.0)) / 1000.0)
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", src, "-f", "f32le",
+                          "-ac", "2", "-ar", str(SR_MUX), "-"],
+                         capture_output=True).stdout
+    x = np.frombuffer(raw, np.float32).astype(np.float64).reshape(-1, 2)
+    if x.size == 0:
+        raise SystemExit(f"--audio {src}: ffmpeg decoded nothing")
+    orig = len(x) / SR_MUX
+
+    out_a = None
+    for a, b in segs:
+        i0 = int(float(a) * SR_MUX)
+        i1 = len(x) if b is None else int(float(b) * SR_MUX)
+        seg = x[i0:i1].copy()
+        if len(seg) == 0:
+            raise SystemExit(f"audio.loop segment [{a}, {b}] is empty")
+        if out_a is None:
+            out_a = seg
+            continue
+        n = min(xf, len(out_a), len(seg))
+        fo = np.cos(np.linspace(0, np.pi / 2, n))[:, None]      # equal power:
+        fi = np.sin(np.linspace(0, np.pi / 2, n))[:, None]      # no dip at the join
+        out_a = np.concatenate([out_a[:-n], out_a[-n:] * fo + seg[:n] * fi,
+                                seg[n:]])
+    with wave.open(out, "wb") as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(SR_MUX)
+        w.writeframes((np.clip(out_a, -1, 1) * 32767).astype("<i2").tobytes())
+    added = len(out_a) / SR_MUX - orig
+    print(f"  music: {orig:.2f}s -> {len(out_a)/SR_MUX:.2f}s "
+          f"(+{added:.2f}s from {len(segs) - 2} looped segments)")
+    return out, added
 
 
 def _mux_audio(video: str, audio: str | None, spec: dict, duration: float,
@@ -1527,14 +1613,27 @@ def _finish_audio(m, args, aspec, fps, t0, rendered, tmp_out, keys_wav) -> int:
     than fall through the mux, which otherwise deletes the temp file and returns
     a bare 2 -- the whole render gone, with no output and no message.
     """
-    kw = _keyboard_wav(m.spec, fps, t0, rendered, keys_wav) if keys_wav else None
+    kw = (_keyboard_wav(m.spec, fps, t0, rendered, keys_wav, args.keys)
+          if keys_wav else None)
     if not args.audio and not kw:
         os.replace(tmp_out, args.out)
         return 0
-    rc = _mux_audio(tmp_out, args.audio, aspec, rendered, args.out, kw)
+    music, ext_wav = args.audio, None
+    if args.audio and aspec.get("loop"):
+        ext_wav = f"{args.out}.music.wav"
+        music, added = _extend_audio(args.audio, aspec["loop"], ext_wav)
+        # `start` is authored against the UNLOOPED track, and the loop only ever
+        # extends the front -- so it pulls the start earlier by exactly its own
+        # length and nothing downstream of it moves. Taking `added` from the
+        # built file rather than from the arithmetic makes that true whatever the
+        # crossfades cost.
+        aspec["start"] = max(0.0, float(aspec.get("start", 0.0)) - added)
+    rc = _mux_audio(tmp_out, music, aspec, rendered, args.out, kw)
     os.unlink(tmp_out)
     if kw:
         os.unlink(kw)
+    if ext_wav and os.path.exists(ext_wav):
+        os.unlink(ext_wav)
     return rc
 
 
@@ -1565,7 +1664,10 @@ def cmd_render(args) -> int:
     # The keystroke track is synthesised from the script's own typing, so it
     # exists whether or not a music file was given -- and the keys land in the
     # silent opening, which is where the music deliberately is not.
-    want_keys = bool(aspec.get("keyboard")) and not args.no_keys
+    want_keys = bool(aspec.get("keyboard")) and bool(args.keys) and not args.no_keys
+    if aspec.get("keyboard") and not args.keys and not args.no_keys:
+        print("  note: the script asks for a keyboard track but no --keys "
+              "recording was given; rendering without it", file=sys.stderr)
     has_audio = bool(args.audio) or want_keys
     keys_wav = f"{args.out}.keys.wav" if want_keys else None
     tmp_out = f"{args.out}.silent.mp4" if has_audio else args.out
@@ -1698,6 +1800,13 @@ def main(argv=None) -> int:
                    "carries the timing and the credit, never a path into "
                    "someone's home directory, and the track itself is licensed "
                    "for use in a work rather than for redistribution")
+    r.add_argument("--keys", help="a recording of someone typing, sliced into "
+                   "one-shots at render time and placed on the film's own "
+                   "keystroke times (audio.keyboard in the script). Like "
+                   "--audio, the PATH is an argument and never the script: it "
+                   "would name someone's home directory, and the recording is "
+                   "licensed for use inside a work rather than for "
+                   "redistribution, so it never enters this repository")
     r.add_argument("--no-keys", action="store_true",
                    help="skip the synthesised keystroke track even if the script "
                         "asks for one (audio.keyboard)")
