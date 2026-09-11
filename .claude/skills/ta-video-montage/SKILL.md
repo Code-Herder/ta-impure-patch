@@ -37,10 +37,11 @@ terrain colour.
 ## The terminal
 
 `terminal_style` (per script, or `style` per window) picks from `TERMINAL_STYLES`:
-`classic`, `soft`, `chromeless`, `phosphor`, `bash`, `hero`. **`bash` is the
-shipped look** (chosen 2026-09-10): the plain bash window, but with Chrome's three
-window controls — minimise, maximise, close, flat grey at the right — rather than
-macOS traffic-light dots. Compare them with
+`classic`, `soft`, `chromeless`, `phosphor`, `bash`, `hero`. **`soft` is the shipped
+look** (chosen 2026-09-10): rounded corners, muted titlebar, blue prompt, thin bar
+cursor, generous padding — carrying the round brightly-coloured window buttons
+(`header: "dots"`). `bash` is the same idea with Chrome's flat minimise / maximise /
+close glyphs instead, kept for comparison. Compare them with
 `promo/prototype-cuts/terminal-styles.py`, which renders one full frame each plus a
 sheet.
 

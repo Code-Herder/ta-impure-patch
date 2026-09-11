@@ -353,7 +353,7 @@ TERMINAL_STYLES = {
     "soft": dict(
         bg=(18, 21, 27), fg=(223, 228, 236), dim=(110, 119, 131),
         prompt=(122, 200, 255), out=(140, 190, 240), radius=0.022,
-        header="title", header_bg=(25, 29, 36), header_fg=(120, 128, 140),
+        header="dots", header_bg=(25, 29, 36), header_fg=(120, 128, 140),
         border=(52, 59, 70), border_w=0.0015, cursor="bar",
         pad=0.05, tokens=None, scanlines=False, glow=0.0,
         fscale=1.0, valign="top"),

@@ -253,5 +253,5 @@
       "big": true
     }
   ],
-  "terminal_style": "bash"
+  "terminal_style": "soft"
 }
