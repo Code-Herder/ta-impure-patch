@@ -47,6 +47,7 @@ import re
 import shutil
 import subprocess
 import sys
+import wave
 from bisect import bisect_right
 from collections import OrderedDict
 from pathlib import Path
@@ -1300,8 +1301,151 @@ def _render_segment(job):
     return idx, seg_path, n_frames, rc
 
 
-def _mux_audio(video: str, audio: str, spec: dict, duration: float,
-               out: str) -> int:
+# --------------------------------------------------------------------------
+# keyboard
+# --------------------------------------------------------------------------
+# SYNTHESISED, not sampled, on purpose. The film already carries one licensed
+# asset with an attribution obligation; a second would mean another credit,
+# another content-ID dispute answer and another file that must never enter the
+# repository. This is deterministic from a seed, regenerates for any re-cut, and
+# belongs to nobody. numpy only: `tools/tamontage` runs under the system
+# interpreter, which has numpy and PIL but no scipy, so the band-shaping is done
+# on the spectrum rather than with a filter design.
+
+KEY_SR = 48000
+KEY_VOICES = {
+    # tick band (Hz), tick decay, body Hz, body decay, how much tick, level
+    "clicky": dict(tick=(2200.0, 9000.0), tick_dec=0.0022, body=230.0,
+                   body_dec=0.020, tick_mix=0.62, lvl=1.00),
+    "thocky": dict(tick=(900.0, 4200.0), tick_dec=0.0035, body=150.0,
+                   body_dec=0.032, tick_mix=0.34, lvl=1.00),
+    "soft":   dict(tick=(1400.0, 5200.0), tick_dec=0.0026, body=190.0,
+                   body_dec=0.018, tick_mix=0.22, lvl=0.72),
+}
+
+
+def _key_noise(n: int, rng, lo: float, hi: float):
+    """Band-limited noise shaped on the spectrum -- soft skirts, so no ring."""
+    X = np.fft.rfft(rng.standard_normal(n))
+    f = np.maximum(np.fft.rfftfreq(n, 1.0 / KEY_SR), 1.0)
+    g = (1.0 / (1.0 + (lo / f) ** 4)) * (1.0 / (1.0 + (f / hi) ** 4))
+    return np.fft.irfft(X * g, n)
+
+
+def _key_one(rng, voice: str, kind: str):
+    v = KEY_VOICES[voice]
+    lo, hi = v["tick"]
+    body_f, body_d, tick_d, lvl = v["body"], v["body_dec"], v["tick_dec"], v["lvl"]
+    if kind == "space":          # a big stabilised key: lower, longer, louder
+        body_f *= 0.55; body_d *= 1.9; lvl *= 1.22; lo *= 0.8; hi *= 0.85
+    elif kind == "enter":
+        body_f *= 0.70; body_d *= 1.7; lvl *= 1.30
+    # Per-key variation, or it is a machine gun of identical clicks.
+    body_f *= rng.uniform(0.86, 1.17)
+    body_d *= rng.uniform(0.80, 1.28)
+    tick_d *= rng.uniform(0.82, 1.25)
+    lvl *= rng.uniform(0.76, 1.24)
+
+    n = int(KEY_SR * 0.16)
+    t = np.arange(n) / KEY_SR
+    tick = _key_noise(n, rng, lo * rng.uniform(0.9, 1.15), hi) * np.exp(-t / tick_d)
+    body = (np.sin(2 * np.pi * body_f * t) * np.exp(-t / body_d)
+            + 0.42 * np.sin(2 * np.pi * body_f * 2.7 * t)
+            * np.exp(-t / (body_d * 0.45)))
+    # The plate is struck a hair AFTER the switch clicks. Without this the two
+    # transients land together and the result reads as one synthetic blip.
+    body *= 1.0 - np.exp(-t / 0.0009)
+    x = (v["tick_mix"] * tick + (1.0 - v["tick_mix"]) * 1.35 * body) * lvl
+
+    # The release, 45-75 ms later. At 17 chars/s that lands under the NEXT
+    # keystroke, which is what makes fast typing sound dense rather than like a
+    # row of separate clicks.
+    up = int(KEY_SR * rng.uniform(0.045, 0.075))
+    if up < n:
+        m = n - up
+        tu = np.arange(m) / KEY_SR
+        x[up:] += _key_noise(m, rng, lo * 1.3, hi) * np.exp(-tu / 0.0016) * 0.34 * lvl
+    return x
+
+
+def _key_events(spec: dict, fps: float, t0: float, duration: float):
+    """When does each glyph actually appear? Not when it analytically should.
+
+    `Terminal._typed` shows character i once int((t - t_type) * rate) >= i + 1,
+    and it is only ever sampled at frame times -- so the analytic instant is up
+    to one frame early. Snapping each keystroke to the frame its glyph lands on
+    is both the correct sync AND free, natural-sounding jitter: at 17 chars/s
+    into 30 fps the gaps come out 33 and 67 ms instead of a metronomic 59.
+    """
+    kb = (spec.get("audio") or {}).get("keyboard") or {}
+    want = kb.get("windows")
+    ev = []
+    for i, w in enumerate(spec.get("windows", [])):
+        if "command" not in w:
+            continue
+        if want is not None and i not in want:
+            continue
+        cmd = w["command"]
+        rate = float(w.get("type_rate", 17.0))
+        ts = float(w.get("t_type", w.get("t_open", 0.0) + 0.4))
+        for n, ch in enumerate(cmd):
+            t = math.ceil((ts + (n + 1) / rate) * fps) / fps - t0
+            if 0.0 <= t < duration:
+                ev.append((t, "space" if ch == " " else "key"))
+        te = float(w.get("t_enter", 1e9)) - t0
+        if 0.0 <= te < duration:
+            ev.append((te, "enter"))
+    ev.sort()
+    return ev
+
+
+def _keyboard_wav(spec: dict, fps: float, t0: float, duration: float,
+                  path: str) -> str | None:
+    """Render the keystroke track to a wav, or None if the film asks for none."""
+    kb = (spec.get("audio") or {}).get("keyboard") or {}
+    if not kb:
+        return None
+    ev = _key_events(spec, fps, t0, duration)
+    if not ev:
+        return None
+    voice = kb.get("voice", "thocky")
+    if voice not in KEY_VOICES:
+        raise SystemExit(f"audio.keyboard.voice {voice!r} is not one of "
+                         f"{sorted(KEY_VOICES)}")
+    rng = np.random.default_rng(int(kb.get("seed", 0)))
+    spread = float(kb.get("spread", 0.30))
+    n = int(KEY_SR * duration) + KEY_SR
+    out = np.zeros((n, 2), np.float64)
+    for t, kind in ev:
+        k = _key_one(rng, voice, kind)
+        i = int(round(t * KEY_SR))
+        if i + len(k) > n:
+            k = k[: n - i]
+        pan = rng.uniform(-spread, spread)        # a hand moving across the board
+        out[i:i + len(k), 0] += k * math.sqrt(0.5 * (1 - pan))
+        out[i:i + len(k), 1] += k * math.sqrt(0.5 * (1 + pan))
+
+    # A small room, or the clicks sound pasted onto the picture instead of in it.
+    for ms, lvl in ((7.0, 0.20), (13.0, 0.13), (23.0, 0.08), (37.0, 0.05)):
+        d = int(KEY_SR * ms / 1000.0)
+        tilt = np.array([[1.0, 0.85]]) if int(ms) % 2 else np.array([[0.85, 1.0]])
+        out[d:] += out[:-d] * lvl * tilt
+
+    peak = float(np.abs(out).max())
+    if peak > 0:
+        out /= peak
+    out *= 10.0 ** (float(kb.get("gain_db", -6.0)) / 20.0)
+    out = out[: int(KEY_SR * duration)]
+    with wave.open(path, "wb") as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(KEY_SR)
+        w.writeframes((np.clip(out, -1, 1) * 32767).astype("<i2").tobytes())
+    print(f"  keyboard: {len(ev)} keystrokes, {voice}, "
+          f"{float(kb.get('gain_db', -6.0)):g} dB")
+    return path
+
+
+def _mux_audio(video: str, audio: str | None, spec: dict, duration: float,
+               out: str, keys: str | None = None) -> int:
     """Lay the soundtrack over a finished cut. Video is COPIED, never re-encoded.
 
     Measured: 1.5 s for a 57 s 4K cut. Which is the whole reason the track is
@@ -1335,14 +1479,34 @@ def _mux_audio(video: str, audio: str, spec: dict, duration: float,
     chain.append("apad")
     filt = ",".join(chain) if chain else "anull"
 
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-           "-i", video, "-i", audio,
-           "-filter_complex", f"[1:a]{filt}[a]",
+    ins, graph, labels = ["-i", video], [], []
+    if audio:
+        ins += ["-i", audio]
+        graph.append(f"[{len(labels) + 1}:a]{filt}[m]")
+        labels.append("[m]")
+    if keys:
+        ins += ["-i", keys]
+        # The keystrokes are already mixed and levelled in the wav; they only
+        # need padding to the film so `-shortest` cannot trim the picture.
+        graph.append(f"[{len(labels) + 1}:a]apad[k]")
+        labels.append("[k]")
+    if not labels:
+        return 2
+    if len(labels) == 1:
+        graph.append(f"{labels[0]}anull[a]")
+    else:
+        # normalize=0, or amix halves BOTH sources to make room for each other
+        # and the music comes back 6 dB down from the level it was chosen at.
+        graph.append(f"{''.join(labels)}amix=inputs={len(labels)}:"
+                     f"normalize=0:duration=longest[a]")
+
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *ins,
+           "-filter_complex", ";".join(graph),
            "-map", "0:v", "-map", "[a]",
            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
            "-t", f"{duration:g}", "-movflags", "+faststart", out]
     rc = subprocess.run(cmd).returncode
-    if rc == 0:
+    if rc == 0 and audio:
         cred = spec.get("credit")
         print(f"  audio: {Path(audio).name} from {start:g}s"
               + (f", {gain:g} dB" if gain else "")
@@ -1351,6 +1515,26 @@ def _mux_audio(video: str, audio: str, spec: dict, duration: float,
             print(f"  CREDIT REQUIRED — put this where the film is posted:")
             for line in cred.splitlines():
                 print(f"    {line}")
+    return rc
+
+
+def _finish_audio(m, args, aspec, fps, t0, rendered, tmp_out, keys_wav) -> int:
+    """Mux whatever audio this render actually has -- possibly none.
+
+    `audio.keyboard` in the script means the film WANTS keystrokes, not that
+    this render has any: a `--t0 30` preview is past the typing, so the track
+    comes back empty. That case has to put the silent render in place rather
+    than fall through the mux, which otherwise deletes the temp file and returns
+    a bare 2 -- the whole render gone, with no output and no message.
+    """
+    kw = _keyboard_wav(m.spec, fps, t0, rendered, keys_wav) if keys_wav else None
+    if not args.audio and not kw:
+        os.replace(tmp_out, args.out)
+        return 0
+    rc = _mux_audio(tmp_out, args.audio, aspec, rendered, args.out, kw)
+    os.unlink(tmp_out)
+    if kw:
+        os.unlink(kw)
     return rc
 
 
@@ -1378,7 +1562,13 @@ def cmd_render(args) -> int:
         # `start` is written against the whole film; a --t0 preview shifts it.
         aspec["start"] = max(0.0, float(aspec.get("start", 0.0)) - t0)
     rendered = n / fps
-    tmp_out = f"{args.out}.silent.mp4" if args.audio else args.out
+    # The keystroke track is synthesised from the script's own typing, so it
+    # exists whether or not a music file was given -- and the keys land in the
+    # silent opening, which is where the music deliberately is not.
+    want_keys = bool(aspec.get("keyboard")) and not args.no_keys
+    has_audio = bool(args.audio) or want_keys
+    keys_wav = f"{args.out}.keys.wav" if want_keys else None
+    tmp_out = f"{args.out}.silent.mp4" if has_audio else args.out
 
     jobs = max(1, args.jobs)
     if jobs == 1:
@@ -1396,9 +1586,8 @@ def cmd_render(args) -> int:
         finally:
             proc.stdin.close()
             rc = proc.wait()
-        if rc == 0 and args.audio:
-            rc = _mux_audio(tmp_out, args.audio, aspec, rendered, args.out)
-            os.unlink(tmp_out)
+        if rc == 0 and has_audio:
+            rc = _finish_audio(m, args, aspec, fps, t0, rendered, tmp_out, keys_wav)
         print(f"\r  done: {args.out}" + " " * 20)
         return rc
 
@@ -1462,9 +1651,8 @@ def cmd_render(args) -> int:
                          "-f", "concat", "-safe", "0", "-i", str(listing),
                          "-c", "copy", "-movflags", "+faststart",
                          tmp_out]).returncode
-    if rc == 0 and args.audio:
-        rc = _mux_audio(tmp_out, args.audio, aspec, rendered, args.out)
-        os.unlink(tmp_out)
+    if rc == 0 and has_audio:
+        rc = _finish_audio(m, args, aspec, fps, t0, rendered, tmp_out, keys_wav)
     if rc == 0:
         shutil.rmtree(segdir, ignore_errors=True)
         print(f"  done: {args.out}")
@@ -1510,6 +1698,9 @@ def main(argv=None) -> int:
                    "carries the timing and the credit, never a path into "
                    "someone's home directory, and the track itself is licensed "
                    "for use in a work rather than for redistribution")
+    r.add_argument("--no-keys", action="store_true",
+                   help="skip the synthesised keystroke track even if the script "
+                        "asks for one (audio.keyboard)")
     r.add_argument("--t0", type=float, default=0.0, help="start time (preview a beat)")
     r.add_argument("--t1", type=float, default=None, help="end time")
     r.set_defaults(func=cmd_render)

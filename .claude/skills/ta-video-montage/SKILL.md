@@ -1001,6 +1001,56 @@ A content-ID match on a Creative Commons library track is an **expected event**,
 a sign anything is wrong. Keep the ISRC and the download date; that plus the licence
 is the dispute answer.
 
+## The typing: synthesise it, and take the timing from the picture
+
+`audio.keyboard` adds a mechanical-keyboard track for the terminals it names.
+**Synthesised, never sampled** — the film already carries one licensed asset with
+an attribution obligation, and a second sample pack would mean another credit,
+another content-ID answer and another file that must never enter the repository.
+This one is deterministic from `seed`, regenerates for any re-cut, and belongs to
+nobody. numpy only, because `tools/tamontage` runs under the system interpreter,
+which has numpy and PIL but **no scipy** — so the band-shaping is done on the
+spectrum rather than with a filter design.
+
+```json
+"keyboard": { "windows": [0], "voice": "thocky", "gain_db": -6.0, "seed": 20260911 }
+```
+
+Three voices: `clicky` (bright tick, spectral centroid ~4.5 kHz), `thocky` (deeper
+bottom-out, ~1.1 kHz), `soft` (quieter, little tick).
+
+### Snap each keystroke to the FRAME its glyph appears on
+
+`Terminal._typed` shows character *i* once `int((t - t_type) * rate) >= i + 1`,
+and it is only ever sampled at frame times — so the analytic instant is up to one
+frame **early**. Snapping to the frame is both the correct sync *and* free,
+natural-sounding jitter: 17 chars/s into 30 fps gives gaps of **33 and 67 ms**
+instead of a metronomic 59, which is what stops it sounding like a machine gun.
+
+Three more things that separate a keyboard from a row of identical blips:
+
+* **The plate is struck a hair after the switch clicks.** Land both transients
+  together and it reads as one synthetic pop; `1 - exp(-t/0.9ms)` on the body
+  fixes it.
+* **The release, 45-75 ms later.** At 17 chars/s that falls *under the next
+  keystroke*, and that overlap is what makes fast typing sound dense.
+* **Vary every key** — body pitch ±16 %, decay ±25 %, level ±24 %, and a small
+  random pan, because a hand moves across the board.
+
+### `amix` halves both inputs unless you tell it not to
+
+`normalize=0`. Without it the music comes back **6 dB below the level it was
+chosen at**, and nothing in the output says so. Verified by measuring: music
+alone -23.67 dBFS, keys alone -23.72, both together **-20.72** — the
+uncorrelated-power sum, so neither was touched.
+
+### `audio.keyboard` means the FILM wants keys, not that this render has any
+
+A `--t0 30` preview is past the typing, so the track comes back empty. Handle
+that case explicitly and put the silent render in place: falling through to the
+mux deletes the temp file and returns a bare 2, and the whole render is gone with
+no output and no message. Caught by a regression run, not by reasoning.
+
 ## Reviewing a cut: `promo/review-server.py`
 
 A 230 MB 4K file is not reviewable over chat. `promo/review-server.py <dir>` serves a
