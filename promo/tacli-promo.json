@@ -33,18 +33,31 @@
     "`cols` — a drift of 3.05 to 2.95 looks like a hold in the file and is a slow",
     "zoom in the picture, creeping the tiles 593.8 -> 599.3 px and making every",
     "glyph crawl. Measured on the prompt region, temporal 2nd difference:",
-    "any push 7.453, frozen 0.000. There is no such thing as a subtle push here."
+    "any push 7.453, frozen 0.000. There is no such thing as a subtle push here.",
+    "",
+    "cols 1.476 on the opening is ARITHMETIC, not taste: the hero window has to",
+    "sit inside the frame with 5% of the height clear above and below it.",
+    "  visible world height = cols * pitch_x * (out_h / out_w) = cols * 612",
+    "  cols = tile.h / (0.90 * 612) = 813 / 550.8 = 1.4760",
+    "At the 1.3 this opened on, the visible height was 795.6 against an 813-tall",
+    "tile, so the window was 17 units TALLER than the frame and its top and",
+    "bottom borders were cut off -- it read as a window with no edges. 1.476",
+    "leaves 45 units of desktop top and bottom. It also matches the 2x2 block at",
+    "cols 3.05, which sits at 1690/(3.05*612) = 90.5% of the height: beats 1 and",
+    "2 are now framed the same way instead of one bleeding and one not. The",
+    "16:9 ratio is what makes the sides wider (18.1% each) -- a 1.26:1 window",
+    "cannot be inset vertically and tight horizontally at the same time."
   ],
   "camera": [
     {
       "t": 0.0,
-      "cols": 1.3,
+      "cols": 1.476,
       "cx": 512,
       "cy": 406.5
     },
     {
       "t": 7.47,
-      "cols": 1.3,
+      "cols": 1.476,
       "cx": 512,
       "cy": 406.5,
       "ease": "linear"

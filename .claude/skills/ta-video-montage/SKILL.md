@@ -69,6 +69,35 @@ Changing the tile moves the cell centres, so the camera's `cy` moves with it:
 hero 1 is `tile_h/2`, the 2x2 block is `(tile_h + gap_y)/2 + tile_h/2`. Both are
 in the script; nothing else needed changing.
 
+### A 4:3 window in a 16:9 frame: solve for the height, accept the sides
+
+A window shot that fills the frame's width crops its own top and bottom, because
+the window is 1.26:1 and the frame is 1.78:1. The opening shipped that way and the
+owner caught it: at `cols: 1.3` the visible world height was **795.6** against an
+**813**-tall tile, so the window was 17 units taller than the frame and its top and
+bottom borders were simply cut off. It stopped reading as a window.
+
+Frame the height and let the sides fall where they land:
+
+```
+visible world height = cols * pitch_x * (out_h / out_w)      # = cols * 612 at 16:9
+cols = tile_h / ((1 - 2*margin) * pitch_x * out_h / out_w)
+     = 813 / (0.90 * 612) = 1.476                            # 5 % clear top and bottom
+```
+
+It is aspect-only, so a 1080p cut of a 4K master is framed identically. The sides
+go to 18.1 % each and that is not a fault to fix — a 1.26:1 window **cannot** be
+inset vertically and tight horizontally at once. Check the answer against the
+beats that already work: the 2x2 block at `cols: 3.05` sits at
+`1690 / (3.05 * 612)` = 90.5 % of the height, so 5 % puts beat 1 in the same
+frame as beat 2 instead of one bleeding and one not.
+
+**Measure the margin on the encoded frame, not the arithmetic.** The background
+`[16,18,22]` comes back as `[15,16,21]` through yuv420 and the terminal body is
+`[16,19,26]` — three levels off the desktop. A bounding box thresholded at 8 finds
+"no window" and reports a clean frame; take the background from the frame's own
+corner and threshold at 3.
+
 ## Fine detail must FADE, never switch
 
 `detail_ramp(lod_w)` ramps hairline visibility over lod_w 32 → 105 instead of
@@ -116,8 +145,9 @@ captions (t0, t1, text, sub).
 ```
 
 **`cols` is the zoom, and it is how you would say it out loud** — how many window
-columns fit across the frame. `cols: 1.3` is one window filling the height; `cols: 44`
-is the wide shot. Read the beat sheet without rendering:
+columns fit across the frame. `cols: 1.476` is one window inset 5 % top and bottom
+(see the framing arithmetic above); `cols: 44` is the wide shot. Read the beat
+sheet without rendering:
 
 ```bash
 .venv-undither/bin/python tools/tamontage probe promo/tacli-promo.json
@@ -361,14 +391,55 @@ end, and check the temporal second difference at multiples of the segment length
 Measured on the 4K cut: seams averaged **3.395** against **3.615** elsewhere — below
 average, and no seam in the worst 20 frames.
 
+### Where the time actually goes: the encoder is FREE
+
+Asked "is it encoding or rendering?", measure it — one flag answers it. Same 369
+frames at 3840x2160, `-j 3`, warm cache:
+
+| | wall |
+|---|---|
+| `-preset medium`, supersample 3 — what ships | **42.0 s** |
+| `-preset ultrafast`, supersample 3 | 43.4 s |
+| `-preset medium`, `--supersample 1` | **23.4 s** |
+| `--supersample 1 --preset ultrafast` | 22.8 s |
+
+**Making x264 as cheap as it goes changes nothing** (42.0 → 43.4 is noise, and so is
+23.4 → 22.8). All of it is the compositor, and supersampling is ~45 % of that. The
+practical consequence: **NVENC or any GPU encoder would buy exactly zero here**, and
+`--preset` is not a speed knob — leave it at `medium` and take the quality.
+
+### Draft fast, master once
+
+Three independent levers, all measured on the real footage:
+
+| | |
+|---|---|
+| `--t0/--t1` | render one beat. The opening, 0-12.3 s at 4K: 42 s instead of ~3.5 min |
+| `--width/--height` | 1080p is a quarter of 4K's pixels. 0-11 s at 1080p: **10.5 s** |
+| `--supersample 1` | the draft raster path: ~1.8x on top of the above |
+| all three | **the whole 57 s film at 720p draft, `-j 14`: 1m07s** |
+
+```bash
+# check a framing or a timing change before paying for 4K
+tools/tamontage render promo/tacli-promo.json -o /tmp/look.mp4 \
+    --backend clip --clips <dir> --cache <dir> \
+    --width 1920 --height 1080 --t0 0 --t1 11.0 -j 8
+```
+
+**A framing check at 1080p is EXACT for 4K** — `cols` resolves against `out_h/out_w`,
+which is 16:9 either way, so the margin you measure on the draft is the margin that
+ships. Only shimmer and fine-detail decisions need the real size, because those are
+the ones keyed on apparent pixels.
+
 ### Do we need the GPU?
 
-Not yet, and it would have been the wrong first move — the CPU path was doing ~5x
-redundant work. It is feasible if it ever is needed: the reference setup has a
-CUDA GPU, `torch` is already installed with CUDA support, and `libEGL_nvidia` is
-present, so a `grid_sample` compositor needs no new dependency. Mipmapped texture sampling would
-also beat supersampling for minification. Revisit only if 4K renders become frequent;
-at 2m22s each they are not.
+Not for encoding — see the table above; there is nothing there to speed up. For the
+*compositor* it is feasible if it is ever needed: the reference setup has a CUDA GPU,
+`torch` is already installed with CUDA support, and `libEGL_nvidia` is present, so a
+`grid_sample` compositor needs no new dependency. Mipmapped texture sampling would
+also beat supersampling for minification. But it is a rewrite of the draw path, not a
+flag, and the CPU path was doing ~5x redundant work when it last looked slow — profile
+first. Revisit only if 4K renders become frequent; at ~3.5 min each they are not.
 
 ## Honesty: what the film may and may not claim
 
@@ -709,7 +780,166 @@ Render is CRF 18 by default, which is the master. Then:
   pixels to quantise beats more pixels encoded worse.
 * Judge a candidate on a **wide-shot frame**, not on the number: that is where the
   cut either holds up or turns to mush.
+* **Sending a cut to the owner caps at 30 MiB.** That is what fixes the share cut at
+  CRF 25 rather than 23 — the 57 s 4K master at CRF 23/1080p is 34.3 MB and is simply
+  refused. CRF 25 is 25.7 MB. Check the size before the upload, not after it fails.
 * Verify the decode (hard rule 7) before sending anything.
+
+### Re-render a beat, not the film: cut at a SEGMENT BOUNDARY
+
+A note on framing or timing usually touches one beat. Re-rendering 1710 frames to
+change 369 of them is waste, and it also re-rolls the encode of every frame the
+owner has already approved. Splice instead — and the splice point is not free:
+
+**The master's only keyframes are the parallel render's segment boundaries.** Each
+worker encodes its own segment as a single GOP (123 frames at `-j 14`, well under
+x264's 250-frame keyint), so `ffprobe -skip_frame nokey` on the 57 s cut returns
+exactly 14 times: f0, f123, f246, f369, … A `-c copy` cut is only possible there.
+So round the end of the changed range UP to the next boundary:
+
+```bash
+# the change ends at 10.5 s; the next boundary is f369 = 12.3 s
+tools/tamontage render <script> -o head.mp4 --t0 0 --t1 12.3 -j 3 ...   # 42 s
+ffmpeg -ss 12.3 -i master.mp4 -map 0:v -c copy tail.mp4
+printf "file '%s'\nfile '%s'\n" $PWD/head.mp4 $PWD/tail.mp4 > splice.txt
+ffmpeg -f concat -safe 0 -i splice.txt -c copy -movflags +faststart silent.mp4
+ffmpeg -i silent.mp4 -i master.mp4 -map 0:v -map 1:a -c copy out.mp4   # audio unchanged
+```
+
+Choose `-j` so the head's own segments land on the SAME boundaries: 369 frames at
+`-j 3` is 123 each, so the seams at f123 and f246 stay where they were and the
+splice at f369 reuses a seam that already existed. **The cut adds no new seam.**
+
+Two traps:
+
+* **Do not splice through the raw elementary stream.** Converting both files to
+  Annex-B with ffmpeg's mp4-to-Annex-B bitstream filter, concatenating them and
+  remuxing at `-r 30` looks cleaner and silently **drops the first two frames**
+  (1708, not 1710) on the initial negative DTS that the mp4 edit list was there to
+  absorb. The concat demuxer handles it; the elementary-stream route does not.
+* The extracted tail reports `start_time=0.066016` from that same edit list, and
+  `-avoid_negative_ts make_zero` does not clear it. It does not matter — the concat
+  demuxer re-bases each input by accumulated duration and ignores it.
+
+**Take the audio from the old master with `-c copy`.** The film's length did not
+change, so the AAC is still correct, and copying it is byte-exact — no re-mux of the
+mp3, no chance of drifting `start`.
+
+Verify three things, not one: **1710 frames and 57.000 s**; the keyframes back in
+their old places; and `mean |delta|` against the previous master **~0 after the cut
+point** (0.001 measured) and non-zero before it. The last one is what proves you
+changed the beat you meant to and nothing else.
+
+## The soundtrack: score it AFTER the render
+
+`--audio <file>` lays a track over a finished cut. The video stream is **copied, not
+re-encoded**: measured at **0.5 s** for the 57 s / 227 MB 4K master. That is the reason
+the track is chosen last — auditioning a candidate costs seconds, so there is no
+reason to commit to one before the picture is locked.
+
+The script carries the timing and the credit; the **path is a command-line argument
+on purpose**, because a path names someone's home directory and the track is licensed
+for use *inside* a work rather than for redistribution. It never enters the
+repository. `promo/MUSIC.md` holds the full metadata and the dispute answer.
+
+### Align the music's hit to the film's hit, never the two files' ends
+
+This shipped wrong once. The mp3 is 40.18 s long, but **~5 s of it is digital
+silence** — the music peaks at 31.5 s and resolves by ~35 s, which is why the source
+page calls it 0:36. Setting `start = 57.0 - 40.18 = 16.82` from the *file length* put
+the peak at 48 s and left the climax — the wide shot and the title card — playing over
+dead air. The rule is `start = duration_of_film - music_ends`, and `music_ends` is
+**measured**, not read off the file:
+
+**`astats` is not the tool.** `-af astats=metadata=1:reset=1` writes at ffmpeg's
+*info* level, so `-v error` swallows it, and the `ametadata=print` variant needs an
+explicit `file=-`. Decode to mono PCM and do the arithmetic instead — unambiguous,
+and it works the same on the mp3 and on the muxed cut:
+
+```bash
+ffmpeg -v error -i cut.mp4 -map 0:a -f s16le -ac 1 -ar 8000 - \
+| python3 -c "
+import sys, numpy as np
+a = np.frombuffer(sys.stdin.buffer.read(), np.int16).astype(float)
+sec = a[:len(a)//8000*8000].reshape(-1, 8000)
+db = 20*np.log10(np.maximum(np.sqrt((sec**2).mean(axis=1)), 1)/32768)
+for i, v in enumerate(db): print(f'{i:3d}s {v:7.1f} dB', '#'*int(max(0, v+60)/2))
+"
+```
+
+`start` 22.0 lands the peak at 53.5 s on the title card. A long silent opening is
+usually **arithmetic, not taste**: 35 s of music cannot cover 57 s of film *and*
+finish at the end, and the climax is at the end.
+
+**Verify by measuring the muxed output's RMS per second, not by listening alone** —
+the failure mode is "silent where it should build", which a quick scrub hides.
+
+### CC BY is a real obligation and the renderer will not let you forget it
+
+`_mux_audio` prints the required credit **every time it muxes**. Put it where the
+film is posted — the video description and the README that embeds it. A credit that
+exists only in `MUSIC.md` does not discharge the licence.
+
+A content-ID match on a Creative Commons library track is an **expected event**, not
+a sign anything is wrong. Keep the ISRC and the download date; that plus the licence
+is the dispute answer.
+
+## Reviewing a cut: `promo/review-server.py`
+
+A 230 MB 4K file is not reviewable over chat. `promo/review-server.py <dir>` serves a
+directory of cuts as a page with chapter buttons generated from the montage script.
+
+Two things it must do, and both are load-bearing:
+
+* **HTTP Range / 206 and a threaded server.** `<video>` seeking does not work without
+  Range, and a single-threaded handler blocks the page while the video streams.
+  `http.server`'s default does neither.
+* **Bind to the Tailscale address only.** Never `tailscale serve` or `funnel` — those
+  publish. The default `--bind tailscale` resolves the interface address and binds
+  there.
+
+It rebuilds its file list **at startup**, so a new cut dropped into the directory
+needs a restart to appear. It labels by resolution when the files are renditions of
+one cut and by name when they are not.
+
+### Chrome does not load media in a BACKGROUND TAB, and it reports nothing
+
+This cost a long detour: the video sat at `readyState 0`, `networkState 2`, **no
+error, ever**, and every plausible cause — faststart, bitrate, CPU load from the
+render — was wrong. The cause is that the tab was never foregrounded.
+`document.visibilityState === "hidden"` suppresses the load, indefinitely and
+silently.
+
+So the page diagnoses itself rather than leaving the next person to re-derive it:
+
+```js
+function checkVisibility() {
+  const stuck = v.readyState === 0 && !v.error;
+  if (document.visibilityState === 'hidden') return;   // nothing to say yet
+  hint.hidden = true;
+  if (stuck) v.load();                                  // foregrounded: kick it
+}
+```
+
+**Never conclude a served video is broken from a headless or background check.** The
+only valid test is a foreground tab.
+
+## Verifying a finished cut
+
+Run all of these; each one has caught a real failure that the others missed.
+
+| check | what it catches |
+|---|---|
+| `ffmpeg -i cut.mp4 -map 0:v -f null -` and again `-map 0:a` | a truncated or corrupt stream; **check the audio separately** |
+| `ffprobe -count_frames` → exact frame count and duration | a `-c copy` concat that silently dropped frames |
+| temporal 2nd difference at multiples of the segment length | a bad seam |
+| the worst 10 frames by that metric, with their timestamps | *where* the jitter is — it is usually one camera move, not the seams |
+| window bbox vs frame on a few opening frames | framing (see the 16:9 section) |
+| per-second RMS of the muxed audio | music that starts or ends in the wrong place |
+| `mean \|delta\|` against the previous master, per frame | after a splice: proves you changed only the beat you meant to |
+
+The last one is the one people skip, and it is the only check that distinguishes
+"I re-rendered a beat" from "I re-rendered the film and hoped it matched".
 
 ## Re-cutting for a new release
 
@@ -725,10 +955,9 @@ change it in `wire` first — it is a minute per iteration there and an evening 
 
 ## Status
 
-Built 2026-09-10. `promo/tacli-promo.json` is the 54 s tacli promo, in the **Card
-treatment** — full-frame typographic cards, chosen by the owner from five prototype
-cuts (`promo/prototype-cuts/`). Target output is **1080p landscape now, 4K for the
-final**.
+`promo/tacli-promo.json` is the **57 s** tacli promo in the **Card treatment** —
+full-frame typographic cards, chosen by the owner from five prototype cuts
+(`promo/prototype-cuts/`). Shipped at 4K with a 1080p share cut. Scored.
 
 Two things the prototype changed in the base cut, both worth keeping:
 
@@ -737,24 +966,35 @@ Two things the prototype changed in the base cut, both worth keeping:
   to show.
 * Captions wrap and shrink (above), because the card treatment typesets large.
 
-* **`wire` pass**: renders, decodes clean, 54.0 s / 1620 frames. Reviewed as the
-  prototype.
-* **Stability**: wide-shot jitter 108.7 → 30.7 at the default `--supersample 3`.
+What the finished film measures (2026-09-11):
+
+* **The cut**: 1710 frames, 3840x2160, 57.000 s, aac stereo. Video and audio both
+  decode clean. **238 MB** master, **25.7 MB** 1080p share cut at CRF 25.
 * **`clip` pass: DONE.** All six clips shot 2026-09-11 — the four heroes at
-  2048×1536 (55-60 s) and the two filler-only ones at 1024×768 (40 s), 20-37 unique
-  fps each. The full 57 s cut renders at 4K: 1710 frames, decodes clean, 210 MB
-  master / 23.7 MB 1080p share cut.
-* **Both placeholders are CLOSED.** All four hero terminals carry the real
-  twelve-line transcript, captured after the last scenario change and checked with
-  `promo/transcripts.py --check`.
-* **Real footage aliases less than the wireframe did, as predicted.** Mean temporal
-  second difference over the whole cut is **2.171**, against ~3.1 for the
-  white-box. That prediction is now a measurement.
-* **The parallel concat is sound**: the 11 segment seams average **1.905** against
-  **2.178** elsewhere — below average, and no seam appears in the worst 15 frames.
-* **Where the jitter actually is**: the worst 15 frames are all in **t = 7.6-8.1**,
-  the first few frames of the pull-back as the camera leaves its hold. That is the
-  lurch, localised — it is the easing at the 7.47 keyframe, not anything at 9 s.
-* **Open**: `naval-push` is the weakest clip at ~20 unique fps (TA naval combat is
-  inherently slow and sparse) and `air-war` leaves the outer thirds of its frame
-  fairly empty with the bases only 600 units apart.
+  2048x1536 and the two filler-only ones at 1024x768, 27-35 unique fps each.
+* **Both transcript placeholders are CLOSED.** All four hero terminals carry the
+  real twelve-line transcript, captured after the last scenario change and checked
+  with `promo/transcripts.py --check`.
+* **Real footage aliases less than the wireframe did, as predicted.** That
+  prediction is now a measurement.
+* **The parallel concat is sound**: at `-j 14` the 13 segment seams average
+  **1.369** against **1.177** elsewhere, and no seam appears in the worst 10 frames.
+* **Scored.** "Evening Melodrama", Kevin MacLeod, CC BY 4.0 — `promo/MUSIC.md`.
+  Verified by per-second RMS on the muxed cut: below -90 dB until **22 s**, loudest
+  RMS second at **47 s** (-16.2 dB), loudest peak sample in second **52** — under the
+  title card — and back below -30 dB by **55 s**.
+* **The opening is framed 5 % clear top and bottom** (`cols: 1.476`). It shipped
+  once at 1.3, bleeding off both edges; re-rendered as a 369-frame splice.
+
+Open, and none of it blocking:
+
+* **Nobody has watched it.** Every check above is a measurement. Measurements catch
+  broken, not bad — in particular whether 22 s of silent opening reads as deliberate
+  is a question only ears answer.
+* **The t = 7.7-8.1 s camera lurch.** The worst frames of every render so far, and
+  it is the easing at the 7.47 keyframe, not anything at 9 s.
+* `air-war` leaves the outer thirds of its frame fairly empty, with the bases only
+  600 units apart in a 1920-unit frame.
+* `scenarios/ball10.json` asks for 625 units per player against the engine's hard
+  cap of 500, so it has never created what it declares. Left failing validation
+  deliberately, because what that fixture should be is a measurement decision.

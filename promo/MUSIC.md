@@ -91,7 +91,7 @@ tools/tamontage render promo/tacli-promo.json -o cut.mp4 \
     --backend clip --clips <dir> --audio "<path to the mp3>"
 ```
 
-The video stream is **copied**, never re-encoded: measured at **1.5 s** for a 57 s
-4K cut. That is why the track is chosen *after* the render — auditioning a
+The video stream is **copied**, never re-encoded: measured at **0.5 s** for the
+57 s / 227 MB 4K cut. That is why the track is chosen *after* the render — auditioning a
 candidate costs seconds, so there is no reason to decide one up front. The renderer
 prints the required credit every time it muxes, so it cannot be forgotten quietly.
