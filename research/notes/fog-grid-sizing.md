@@ -431,65 +431,324 @@ So a session can legitimately go 1080p, back to the shell, then 4K.
 
 ## 6. The four ways to grow
 
+All four options below share the same first half — the buffer stops being a compile-time square and
+becomes a size derived from the same expression the producer already uses. They differ only in
+what happens to the **old** block, and that is the whole design question, because §5 showed the
+render thread reading it without a lock.
+
 <div class="tablewrap fg">
-<p class="fg-cap">what happens to the block the render thread is holding</p>
-<svg class="fg-dia" viewBox="0 0 700 320" role="img" aria-label="Four options compared. Grow and never free leaves the old block mapped so a stale pointer still reads. A quiescence handshake defers the free until the render thread has passed a fence. Sizing once from the engine's mode list avoids growth but is a fixed cap again. Sizing once and clamping brings the border smear back for the larger game.">
+<p class="fg-cap">at a glance: what happens to the block the render thread is holding</p>
+<svg class="fg-dia" viewBox="0 0 700 250" role="img" aria-label="Four options compared. Grow and never free leaves the old block mapped so a stale pointer still reads. A quiescence handshake defers the free until the render thread has passed a fence. Sizing once from the largest presentable mode avoids growth but is a prediction. Sizing once and clamping brings the border smear back for the larger game.">
   <g>
-    <rect class="fg-ok" x="24" y="34" width="150" height="120"/>
-    <text x="99" y="52" text-anchor="middle" font-size="11">grow, never free</text>
+    <rect class="fg-ok" x="24" y="34" width="150" height="126"/>
+    <text x="99" y="52" text-anchor="middle" font-size="11">6.1 grow, never free</text>
     <rect class="fg-hold" x="40" y="64" width="52" height="26" opacity="0.85"/>
     <text class="fg-lab" x="66" y="102" text-anchor="middle">old</text>
     <rect class="fg-use" x="104" y="64" width="54" height="40" opacity="0.85"/>
     <text class="fg-lab" x="131" y="116" text-anchor="middle">new</text>
-    <text class="fg-lab" x="99" y="134" text-anchor="middle">stale pointer still</text>
-    <text class="fg-lab" x="99" y="146" text-anchor="middle">reads — one stale frame</text>
+    <text class="fg-lab" x="99" y="134" text-anchor="middle">stale pointer still reads</text>
+    <text class="fg-lab" x="99" y="148" text-anchor="middle">— one stale frame</text>
   </g>
   <g>
-    <rect class="fg-box" x="188" y="34" width="150" height="120"/>
-    <text x="263" y="52" text-anchor="middle" font-size="11">quiescence handshake</text>
+    <rect class="fg-box" x="188" y="34" width="150" height="126"/>
+    <text x="263" y="52" text-anchor="middle" font-size="11">6.2 quiescence fence</text>
     <rect class="fg-hold" x="204" y="64" width="52" height="26" opacity="0.45"/>
-    <line class="fg-sig" x1="264" y1="60" x2="264" y2="96"/>
-    <text class="fg-sigtx" x="270" y="76" font-size="10">fence</text>
+    <line class="fg-sig" x1="264" y1="64" x2="264" y2="104"/>
     <rect class="fg-use" x="272" y="64" width="52" height="40" opacity="0.85"/>
     <text class="fg-lab" x="263" y="122" text-anchor="middle">old block freed, later</text>
-    <text class="fg-lab" x="263" y="134" text-anchor="middle">+ epoch, ring, overflow</text>
-    <text class="fg-lab" x="263" y="146" text-anchor="middle">counter that must read 0</text>
+    <text class="fg-lab" x="263" y="136" text-anchor="middle">+ epoch, ring, overflow</text>
+    <text class="fg-lab" x="263" y="150" text-anchor="middle">counter that must read 0</text>
   </g>
   <g>
-    <rect class="fg-box" x="352" y="34" width="150" height="120"/>
-    <text x="427" y="52" text-anchor="middle" font-size="11">size from the mode list</text>
+    <rect class="fg-box" x="352" y="34" width="150" height="126"/>
+    <text x="427" y="52" text-anchor="middle" font-size="11">6.3 size from the mode</text>
     <rect class="fg-use" x="368" y="64" width="118" height="40" opacity="0.85"/>
-    <text class="fg-lab" x="427" y="122" text-anchor="middle">no growth path at all</text>
-    <text class="fg-lab" x="427" y="134" text-anchor="middle">but a fixed cap again —</text>
-    <text class="fg-lab" x="427" y="146" text-anchor="middle">the fork can force a mode</text>
+    <text class="fg-lab" x="427" y="122" text-anchor="middle">no growth path at all,</text>
+    <text class="fg-lab" x="427" y="136" text-anchor="middle">but a prediction — the</text>
+    <text class="fg-lab" x="427" y="150" text-anchor="middle">desktop can change too</text>
   </g>
   <g>
-    <rect class="fg-bad" x="516" y="34" width="160" height="120"/>
-    <text x="596" y="52" text-anchor="middle" font-size="11">size once, clamp after</text>
+    <rect class="fg-bad" x="516" y="34" width="160" height="126"/>
+    <text x="596" y="52" text-anchor="middle" font-size="11">6.4 size once, clamp</text>
     <rect class="fg-use" x="532" y="64" width="60" height="30" opacity="0.85"/>
     <rect class="fg-ghost" x="532" y="64" width="128" height="46"/>
     <text class="fg-badtx" x="596" y="128" text-anchor="middle" font-size="10.5">the smear returns for</text>
-    <text class="fg-badtx" x="596" y="140" text-anchor="middle" font-size="10.5">the second, bigger game</text>
+    <text class="fg-badtx" x="596" y="142" text-anchor="middle" font-size="10.5">the second, bigger game</text>
   </g>
 
-  <text class="fg-lab" x="24" y="196">The blue block is the one the render thread may still be reading when the grow runs.</text>
-  <text class="fg-lab" x="24" y="212">Only the first two keep it readable; the fourth never grows, so it never has the problem —</text>
-  <text class="fg-lab" x="24" y="228">it just gives the player the bug this whole module exists to remove.</text>
-
-  <rect class="fg-ok" x="24" y="246" width="652" height="58"/>
-  <text class="fg-oktx" x="40" y="266" font-size="11">Recommended: grow, never free.</text>
-  <text class="fg-lab" x="40" y="282">A mode change happens a handful of times a session, and each abandoned set is a few</text>
-  <text class="fg-lab" x="40" y="296">hundred KB — against the 6 MB this frees on the very first in-game tick.</text>
+  <text class="fg-lab" x="24" y="192">The blue block is the one the render thread may still be reading when the grow runs.</text>
+  <text class="fg-lab" x="24" y="208">Only the first two keep it readable; the last two never grow, so they never face the</text>
+  <text class="fg-lab" x="24" y="224">question — 6.3 by predicting the answer, 6.4 by giving the player the bug back.</text>
 </svg>
 </div>
 
-**Why "never free" is not a leak worth worrying about here.** The abandoned set is bounded by the
-number of *distinct, increasing* window sizes a session visits, which is bounded by the number of
-video modes the player switches between — a handful, and only ever upward, since a smaller window
-reuses the block it already has. The largest set anyone can strand is one 8K set, 3.1 MB, and
-reaching it means having already allocated the 8K one that replaced it. Against today's baseline
-of 6 MB committed on the first in-game tick in **every** session, every path here is a net
-reduction.
+### 6.0 What "size it dynamically" actually means in code
+
+`fogw_window` already computes the answer; nothing new has to be derived:
+
+```c
+evw   = vw / zmin + 64;                      /* the span the native pass gathers over */
+W     = evw + 2 * FOGW_MARGIN;               /* plus the slack for eye movement       */
+cols  = ceil((W + r) / 32) + 2;              /* r = (x0 - 16) mod 32 — see below      */
+```
+
+Two properties of that expression decide how often a dynamic buffer would have to grow.
+
+**`cols` oscillates by one cell as the camera moves.** `col0` is `x0 - 16` floor-divided by 32, so
+the residue `r ∈ [0, 31]` rides on the count: the same screen at the same zoom asks for `cols` or
+`cols + 1` depending purely on where the eye happens to sit. A buffer sized from *this tick's*
+`cols` would therefore reallocate every time the camera crossed a 32-world-pixel boundary —
+several times a second while scrolling, which is the difference between "grows a handful of times
+a session" and "grows constantly". **Size from the worst residue** (`ceil((W + 31) / 32) + 2`) and
+the eye stops being an input at all.
+
+**What is left is the viewport.** `vw`/`vh` come from `tagpu_vpwide_true_rect`, which derives the
+*true* engine viewport — `(screenW − 128) × (screenH − 64)` — and `zmin` is a compile-time
+constant (`tagpu_zoom_min` returns `ZOOM_MIN`). So once the residue is removed, the required size
+is a pure function of the video mode, and it changes exactly when the video mode does: at game
+entry, after a trip through the shell.
+
+### The trap that comes free with any of them
+
+The three slots hold *interchangeable* pointers today, and that is only true while they are all the
+same size. The moment two blocks differ, a bare pointer swap mixes generations: the small block
+that was `s_pub` becomes `s_build`, and the next build writes the new, larger window into it.
+
+<div class="tablewrap fg">
+<p class="fg-cap">why the capacity has to travel with the pointer</p>
+<svg class="fg-dia" viewBox="0 0 700 330" role="img" aria-label="Three buffer slots holding blocks of two different sizes. After a grow and one swap, the small block ends up in the build slot, and the next build writes a 485 by 283 grid into a block sized for 245 by 148, running past its end. The fix is to swap pointer and capacity together and to check the capacity before building.">
+  <text x="20" y="22" font-size="11">naive — the slots swap bare pointers, so the small block comes back round</text>
+
+  <text class="fg-lab" x="20" y="52">tick N, after the grow and one swap</text>
+  <g>
+    <text class="fg-lab" x="90"  y="70" text-anchor="middle">s_build</text>
+    <text class="fg-lab" x="330" y="70" text-anchor="middle">s_pub</text>
+    <text class="fg-lab" x="560" y="70" text-anchor="middle">s_hold</text>
+    <rect class="fg-use"  x="55"  y="78" width="70"  height="26" opacity="0.85"/>
+    <rect class="fg-pub"  x="255" y="78" width="150" height="26" opacity="0.85"/>
+    <rect class="fg-hold" x="525" y="78" width="70"  height="26" opacity="0.85"/>
+    <text class="fg-lab" x="90"  y="120" text-anchor="middle">71 KB — the old pub</text>
+    <text class="fg-lab" x="330" y="120" text-anchor="middle">268 KB — the block just built</text>
+    <text class="fg-lab" x="560" y="120" text-anchor="middle">71 KB — in flight</text>
+  </g>
+
+  <text class="fg-lab" x="20" y="152">tick N+1, the next build</text>
+  <g>
+    <rect class="fg-use" x="55" y="162" width="70" height="26" opacity="0.85"/>
+    <rect class="fg-bad" x="125" y="162" width="80" height="26"/>
+    <text class="fg-badtx" x="212" y="180" font-size="10.5">fogw_build writes 485x283 — ~197 KB past the end of the block</text>
+    <text class="fg-lab" x="20" y="206">Silent: the heap does not complain, the grid still draws, and what it corrupts</text>
+    <text class="fg-lab" x="20" y="220">is whatever malloc handed out next.</text>
+  </g>
+
+  <rect class="fg-ok" x="20" y="238" width="660" height="76"/>
+  <text class="fg-oktx" x="36" y="258" font-size="11">The fix, and it is the same one in all four options: the slot is a pair, not a pointer.</text>
+  <text class="fg-lab" x="36" y="276">struct { unsigned short* p; int cap; }  — swapped as a unit under s_cs, so capacity can</text>
+  <text class="fg-lab" x="36" y="290">never be paired with the wrong block; and the producer tests b.cap before it builds.</text>
+  <text class="fg-lab" x="36" y="306">The consumer needs no change: cols/rows describe the CONTENT and already travel with it.</text>
+</svg>
+</div>
+
+### 6.1 Grow, never free — the recommendation
+
+The producer checks capacity before each build. When the window outgrows the block it is about to
+write, it `malloc`s a new one **for that slot only**, and the old block is not freed — it is simply
+no longer named by any slot.
+
+```c
+/* game thread, before fogw_build */
+if (s_build.cap < need) {
+    retire(s_build.p);                    /* remembered for the heartbeat; never freed */
+    s_build.p = malloc(need * 2);
+    s_build.cap = need;
+}
+```
+
+**The safety argument is a lifetime, and it is the strongest of the four because it removes the
+question rather than answering it.** A block that is never freed stays mapped for the life of the
+process. The render thread may be holding one across a frame; it keeps reading valid memory, and
+nothing writes it again either, because a retired block is named by no slot. Crucially, **the
+safety does not depend on any bookkeeping being correct**: losing track of a retired pointer is
+not a bug here, it is the normal case. The `retire()` list exists only so the heartbeat can print
+what was stranded.
+
+<div class="tablewrap fg">
+<p class="fg-cap">what the in-flight frame sees when the grow happens</p>
+<svg class="fg-dia" viewBox="0 0 700 300" role="img" aria-label="A timeline. The game thread allocates a larger block, retires the old one without freeing it, builds and publishes. The render thread is mid-frame holding the old block and keeps reading it safely, drawing one frame at the previous window size, then picks up the new block on its next frame.">
+  <line class="fg-thin" x1="60" y1="150" x2="670" y2="150" stroke-dasharray="3 4"/>
+  <text class="fg-lab" x="20" y="62">game</text>
+  <text class="fg-lab" x="20" y="214">render</text>
+
+  <rect class="fg-box" x="60"  y="42" width="118" height="42"/>
+  <text class="fg-lab" x="119" y="60" text-anchor="middle">cap 245x148</text>
+  <text class="fg-lab" x="119" y="74" text-anchor="middle">need 485x283</text>
+  <rect class="fg-box" x="194" y="42" width="152" height="42"/>
+  <text class="fg-lab" x="270" y="60" text-anchor="middle">malloc 485x283</text>
+  <text class="fg-lab" x="270" y="74" text-anchor="middle">retire the old — no free</text>
+  <rect class="fg-use" x="362" y="42" width="104" height="42" opacity="0.85"/>
+  <text class="fg-lab" x="414" y="67" text-anchor="middle">build into it</text>
+  <line class="fg-sig" x1="482" y1="38" x2="482" y2="88"/>
+  <text class="fg-sigtx" x="490" y="66" font-size="10">s_cs: swap + publish</text>
+
+  <rect class="fg-hold" x="90" y="176" width="400" height="30" opacity="0.85"/>
+  <text class="fg-lab" x="290" y="195" text-anchor="middle">frame N — reading the OLD block, no lock, straight through the grow</text>
+  <rect class="fg-use" x="510" y="176" width="160" height="30" opacity="0.85"/>
+  <text class="fg-lab" x="590" y="195" text-anchor="middle">frame N+1 — the new block</text>
+
+  <rect class="fg-dead" x="196" y="234" width="294" height="24"/>
+  <rect class="fg-ghost" x="196" y="234" width="294" height="24"/>
+  <text class="fg-lab" x="343" y="250" text-anchor="middle">retired: still mapped, never written again, 71 KB stranded</text>
+
+  <text class="fg-lab" x="20" y="284">Frame N draws the PREVIOUS window: correct where it covers, and its outer ring falls back to</text>
+  <text class="fg-lab" x="20" y="296">the engine's own grid — the bare=1 behaviour, for one frame, at a level load.</text>
+</svg>
+</div>
+
+**What it costs.** The stranded total is bounded by the number of *distinct, increasing* window
+sizes a session visits — a handful of video modes, and only ever upward, since a smaller window
+reuses the block it already has. Every path is still far below today's flat allocation:
+
+<div class="tablewrap fg">
+<p class="fg-cap">bytes committed over a session — today versus grow-never-free</p>
+<svg class="fg-dia" viewBox="0 0 700 266" role="img" aria-label="A bar chart. Today every session commits 6144 KB from the first in-game tick. Under grow and never free, a single-resolution session commits 212 KB, a session that goes 1080p then 4K commits 1016 KB, and one that goes 1080p then 4K then 8K commits 4143 KB — all below today's figure.">
+  <line class="fg-thin" x1="70" y1="200" x2="670" y2="200"/>
+  <line class="fg-bad" x1="70" y1="40" x2="670" y2="40" stroke-dasharray="5 4" fill="none"/>
+  <text class="fg-badtx" x="670" y="33" text-anchor="end" font-size="10.5">today: 6144 KB, first in-game tick, every session</text>
+
+  <rect class="fg-bad"  x="100" y="40"    width="90" height="160"/>
+  <text class="fg-lab"  x="145" y="216" text-anchor="middle">today</text>
+  <text class="fg-badtx" x="145" y="32" text-anchor="middle" font-size="10.5">6144</text>
+
+  <rect class="fg-ok" x="250" y="194.5" width="90" height="5.5"/>
+  <text class="fg-lab" x="295" y="216" text-anchor="middle">one resolution</text>
+  <text class="fg-oktx" x="295" y="188" text-anchor="middle" font-size="10.5">212 KB</text>
+
+  <rect class="fg-ok" x="400" y="173.6" width="90" height="26.4"/>
+  <text class="fg-lab" x="445" y="216" text-anchor="middle">1080p then 4K</text>
+  <text class="fg-oktx" x="445" y="167" text-anchor="middle" font-size="10.5">1016 KB</text>
+
+  <rect class="fg-ok" x="550" y="92.1" width="90" height="107.9"/>
+  <text class="fg-lab" x="595" y="216" text-anchor="middle">1080p, 4K, then 8K</text>
+  <text class="fg-oktx" x="595" y="85" text-anchor="middle" font-size="10.5">4143 KB</text>
+
+  <text class="fg-lab" x="70" y="240">Live plus stranded. The 8K column has already allocated the 8K set, so the 1016 KB below it is</text>
+  <text class="fg-lab" x="70" y="256">the part that is stranded — against a 3127 KB set that is in use.</text>
+</svg>
+</div>
+
+**What it does not solve.** Nothing, in this module — but be honest about the shape of the claim:
+it is *never free*, so an allocation pattern that grew without bound would be a leak. It does not
+grow without bound here for a specific reason (monotone, and driven by a quantity with a handful
+of possible values), and that reason is what has to be written down next to the code. If the window
+ever became a function of something that varies continuously, this option stops being safe and the
+argument, not just the number, has to change.
+
+### 6.2 Free behind a quiescence fence
+
+The disciplined version: retire the old block, and free it once the render thread has demonstrably
+left the region where it could still hold the pointer. That is an **ordering** argument, so it
+meets the same bar as the rest of this stack — and the striking thing is that the fence already
+exists and already brackets exactly the right region.
+
+`render_ogl.c` wraps the overlay driver in `tagpu_reclaim_pass_begin()` / `tagpu_reclaim_pass_end()`
+for `tagpu_reclaim`'s benefit (the deferred `Object3do` free —
+[thread-safe destruction](thread-safe-destruction.html)). The fog pointer's entire live range on the
+render thread sits inside that bracket: `tagpu_native.c` clears `s_fogGrid` at the top of
+`tagpu_native_frame`, sets it from `tagpu_fogwide_get` a few lines later, and the last read is the
+`tagpu_fx_gather` in the same call.
+
+<div class="tablewrap fg">
+<p class="fg-cap">the fence already exists, and the fog pointer never leaves it</p>
+<svg class="fg-dia" viewBox="0 0 700 280" role="img" aria-label="The render thread's frame, bracketed by reclaim pass begin and pass end. Inside it, the overlay draw calls native frame, whose fog pointer live range is strictly inside the bracket. A free performed on the game thread between two passes is safe. Below, a warning that the fence is only armed when reclaim installed.">
+  <text class="fg-lab" x="20" y="28">render thread, one frame</text>
+  <line class="fg-sig" x1="70"  y1="40" x2="70"  y2="112"/>
+  <line class="fg-sig" x1="470" y1="40" x2="470" y2="112"/>
+  <text class="fg-sigtx" x="76"  y="52" font-size="10">pass_begin</text>
+  <text class="fg-sigtx" x="464" y="52" text-anchor="end" font-size="10">pass_end</text>
+
+  <rect class="fg-box"  x="80" y="60" width="380" height="44"/>
+  <text class="fg-lab"  x="270" y="78" text-anchor="middle">tagpu_overlay_draw -&gt; tagpu_native_frame</text>
+  <rect class="fg-hold" x="150" y="84" width="270" height="14" opacity="0.85"/>
+  <text class="fg-lab"  x="285" y="120" text-anchor="middle">s_fogGrid live — set from fogwide_get, last read in fx_gather</text>
+
+  <rect class="fg-ghost" x="486" y="60" width="80" height="44"/>
+  <text class="fg-lab" x="526" y="86" text-anchor="middle">between</text>
+  <line class="fg-sig" x1="582" y1="40" x2="582" y2="112"/>
+  <text class="fg-sigtx" x="588" y="52" font-size="10">pass_begin</text>
+
+  <text class="fg-lab" x="20" y="152">game thread</text>
+  <rect class="fg-ok" x="486" y="140" width="80" height="26"/>
+  <text class="fg-oktx" x="526" y="157" text-anchor="middle" font-size="10.5">free here</text>
+  <text class="fg-lab" x="20" y="184">Safe because s_completed == s_started says the reader is not in a pass — a published fact,</text>
+  <text class="fg-lab" x="20" y="196">not an elapsed time. A stalled reader freezes reclamation instead of racing it.</text>
+
+  <rect class="fg-bad" x="20" y="210" width="660" height="58"/>
+  <text class="fg-badtx" x="36" y="230" font-size="11">The trap: the fence is only armed when tagpu_reclaim installed.</text>
+  <text class="fg-lab" x="36" y="248">tagpu_reclaim.off, or an exe where the byte-match failed, and pass_begin returns without</text>
+  <text class="fg-lab" x="36" y="262">touching the counters. The free must then never happen — which is 6.1, with extra machinery.</text>
+</svg>
+</div>
+
+So this option is strictly *more* than 6.1: it is 6.1 plus a drain. It buys back the stranded
+bytes, and it costs a retire ring with a bounded number of slots, a decision about what to do when
+that ring is full (defer the grow? strand it? — the answer is strand it, which is 6.1 again), an
+overflow counter that must read 0 in the heartbeat, and one more cross-module dependency in a
+module that currently has none. It is the right shape if the bytes ever matter. They do not yet:
+the worst case in the chart above is 1016 KB stranded, in a session that has already committed
+3127 KB it is using.
+
+**The variant worth knowing about**: free at the *level* boundary instead of between passes, using
+`tagpu_reclaim_level_gen()` — the window can only change size at game entry, so the natural moment
+to reclaim the previous game's block is the next teardown. It does not avoid the fence, though:
+the teardown hook itself runs on the game thread while the render thread may be mid-pass, which is
+why reclaim's own teardown path already has a "reader was still in its pass — the blocks are KEPT
+and leave by the epoch" branch. Same machinery, better timing.
+
+### 6.3 Size once, from the largest mode the process could present
+
+No growth path at all: work out the biggest viewport this process could ever be asked for, size for
+it on the first tick, and the lifetime question never arises because nothing is ever reallocated.
+The bound would come from the desktop — a window cannot present larger than the X screen — rather
+than from a number typed into a header.
+
+This is genuinely attractive, and it is *almost* by construction. What makes it a prediction rather
+than a bound: the desktop itself can change inside the process's lifetime (a monitor plugged in, a
+resolution changed, a different X screen), and the fork can be told what to present at. When the
+prediction is wrong you are back to either clamping (6.4's failure) or growing after all (6.1),
+which means shipping this alone means shipping a path you have not designed.
+
+Its honest form is therefore **6.3 as the initial size, 6.1 as the fallback** — which is worth
+doing, because it makes the fallback almost unreachable rather than merely cheap.
+
+### 6.4 Size once, clamp after
+
+The zero-machinery option, and the only one that needs no new state at all: size on the first tick
+from the window that screen wants, and if a later game wants a bigger one, clamp it. `fogw_window`
+already does exactly this for `FOGW_MAXDIM`, and already takes the trim off both ends so what
+survives stays centred on the view.
+
+It is safe, it is three lines, and it is **a regression against today for the one path that
+matters**. Start a game at 1080p (245×148), return to the shell, come back at 4K (485×283): the
+wide grid now covers a 1080p-sized rectangle in the middle of a 4K screen, and everything outside
+it falls back to the engine's grid — the border smear this whole module exists to remove, in a
+configuration that works correctly today because 1024 happens to cover both. Ruling it out is not
+a close call.
+
+### Side by side
+
+| | new state | the safety argument | worst stranded | when the assumption breaks |
+|---|---|---|---|---|
+| **6.1 grow, never free** | a `cap` per slot; a retire list for reporting only | **lifetime** — a block that is never freed is always readable | 1016 KB | a window driven by something continuous would leak |
+| **6.2 quiescence fence** | 6.1's, plus a retire ring, an epoch and an overflow counter | **ordering** — `s_completed == s_started` is a published fact | 0 | reclaim unarmed → must degrade to 6.1 |
+| **6.3 size from the mode** | one size, computed once | **bound**, if the desktop really is the ceiling | 0 | desktop changes in-process → needs 6.1 anyway |
+| **6.4 size once, clamp** | a `cap` per slot | **bound** — nothing is ever reallocated | 0 | second, larger game gets the border smear back |
+
+**The recommendation is 6.1, sized as in 6.3.** Take the initial size from the largest viewport the
+process could plausibly present rather than from the first frame's, so that growth is rare by
+design; then let growth be a `malloc` that abandons its predecessor, so that when it does happen
+the correctness argument is "the old block is still mapped" and not a handshake that has to be got
+right. 6.2 is the upgrade to reach for if the stranded bytes ever become a real number, and it
+builds on 6.1 rather than replacing it — which is the other reason to do 6.1 first.
 
 ## 7. What is actually being decided
 
