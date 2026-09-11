@@ -387,36 +387,59 @@ written at all**, and both omissions are deliberate: see the two new rows in
 [exe reverse engineering](exe-reverse-engineering.html) on `main+0x14281` bit 3 and
 `main+0x142F1` bit 1.
 
-**A frame that steps the eye releases the camera follow** [G13u, 2026-09-10]. Following a unit,
-the stepper recomputes the scroll target from it *every* frame and clamps it inline, so the
-anchor's delta was eased straight back out and the zoom read as pinned to the unit. The engine
-has the same problem with its own edge and hotkey scroll and answers it the same way: the scroll
-poll's eye-writing tail clears `main+0x1434B`, `+0x142F3` and `+0x142F7` at `0x41D091`…`0x41D0AA`
-— the body of `0x41C390`, its own release — and `0x41D035` skips that tail on a frame where the
-eye did not change. `release_follow()` is that function, written through the already-validated
-`ta` and **before** the eye writes, so a stepper landing between the two leaves the target alone
-instead of having already recomputed it. Safety, slot by slot: the two pointers are plain aligned
-32-bit stores of **zero**, which the stepper only ever dereferences, so our store can only remove
-a dereference and never add or redirect one; the countdown is the one field the engine
-read-modify-writes (`dec` at `0x41CA29`, unlocked), so a swallowed store costs only frames of a
-follow that was already expiring — all six sites in `.text` that store a *non-zero* value into
-it (`0x499F1B`, `0x499F89`, `0x49B0E5`, `0x49B992`, `0x49BCBD`, `0x49C8DD`) first compare their
-object against `main+0x142F7` and take the `jne` when it differs, so with that slot zeroed the
-decrement is the only writer left.
+**A frame that wants to step the eye asks the GAME THREAD to release the camera follow**
+[G13u, 2026-09-10]. Following a unit, the stepper `0x41CA10` recomputes the scroll target from it
+*every* frame and clamps it inline, so the anchor's delta was eased straight back out and the zoom
+read as pinned to the unit. The engine answers the same problem in its own edge and hotkey scroll
+by releasing the follow — the scroll poll's eye-writing tail clears `main+0x1434B`, `+0x142F3` and
+`+0x142F7` at `0x41D091`…`0x41D0AA`, the body of `0x41C390`, and `0x41D035` skips that tail on a
+frame where the eye did not change.
 
-**Measured 2026-09-10**, same skirmish, same start eye `(5113, 7626)` at `z = 1.0`, Ctrl+C
-following the commander, four notches aimed at `(900, 600)` with the viewport centre at
-`(576, 384)`:
+**Those three stores are ours to make only on the game thread, and that is the whole safety
+argument** — the same handshake as the fog request above, for the same reason plus one more.
+`main` is **randomly misaligned at every launch** (`0x41D920` pads it by
+`(GetTickCount() % 1000) * 7`; see [exe reverse engineering](exe-reverse-engineering.html)), so
+`main+0x142F7` is 4-aligned in only 25 % of launches and straddles a cache line in 4.7 % of them.
+A cross-thread store of zero would therefore be torn in about one launch in twenty — into a slot
+the stepper **dereferences** at `0x41CA58`/`0x41CA95`. The eye and the scroll target are misaligned
+in exactly the same way and are written from the render thread anyway, because a torn *coordinate*
+is bounded by `clamp_pair()`; a torn *pointer* is a wild read.
 
-| build | eye after | follow after |
-| --- | --- | --- |
-| release removed | `(5113, 7624)` — the gesture cancelled | still set |
-| as landed | `(5263, 7726)` — exactly the predicted `(+150.4, +100.3)`, held over 4 samples | released |
+So: `anchor_step()` publishes a level — `s_dropFollow`, "a gesture is trying to move the camera
+right now" — and `tagpu_zoom_follow_tick()` does the stores from `terr_fogtick`, gated on the same
+`tagpu_terrown_owns_fog()` that anchoring itself is gated on, so the request always has a consumer.
+Three consequences, all deliberate:
 
-The two builds differ only in the six PE timestamp bytes and the one call. The control — the
-same gesture aimed at the viewport centre — moves the eye by nothing and leaves the follow
-**intact**, which is the identity property above still holding: a zoom that takes no camera
-takes no follow either.
+* **The residual is kept WHOLE while it waits.** A frame that finds a follow set returns without
+  spending `s_residX`/`s_residY`, so the gesture's total displacement is still exactly
+  `(a − c)(1/z_start − 1/z_end)` across the wait rather than losing the frames it spanned.
+* **A level, not an edge**, because the engine's own writers are guard-then-store with 40–60 bytes
+  between the two (`0x49AE84`→`0x49AE8C`, `0x49C7F3`→`0x49C7FB` for the object slot): a follow
+  re-established in that window would survive a one-shot request, and is simply taken away again
+  on the next tick. The render thread drops the level the moment it stops wanting the camera, so a
+  finished gesture leaves no claim behind.
+* **A game thread that stops ticking never releases, and the anchor then never steps the eye** —
+  the camera keeps following, which is the old behaviour and the fail-safe direction.
+
+**Also in the fields we write, by consequence:** releasing the follow zeroes `CameraToUnit`, which
+is `+0` of the camera block `0x469BFC` hands the order-marker driver — so from that frame the
+followed unit's order lines stop being drawn (`tagpu_order.c` reads it as `camU`). Same thread, no
+tear, and it is the state the engine reaches after its own edge scroll; noted because marker-parity
+captures depend on it.
+
+**Measured 2026-09-10** on the landing binary, same skirmish, commander followed with Ctrl+C, four
+notches aimed at `(900, 600)` against a viewport centre of `(576, 384)` — a matched pair, same
+gesture and direction, on two builds differing only in whether the request is published:
+
+| build | gesture | eye | follow after |
+| --- | --- | --- | --- |
+| request removed | −4, z 1.0 → 0.683, from `(5127, 7609)` | `(5125, 7609)`, Δ `(−2, 0)` — cancelled | still set |
+| as landed | −4, z 1.0 → 0.683, from `(5127, 7611)` | `(4977, 7511)`, Δ `(−150, −100)` | released |
+| as landed | +4, z 0.683 → 1.0, from `(5127, 7609)` | `(5277, 7709)`, Δ `(+150, +100)` | released |
+
+Both landed rows are the predicted `(a − c)(1/z_prev − 1/z_now)` = `(±150.4, ±100.3)` to the pixel,
+so the game-thread wait costs no accuracy. The control — the same gesture aimed at the viewport
+centre — moves the eye by nothing, leaves the follow **intact** and logs no release.
 
 **Three properties the tests lean on.** The delta is exactly 0 with the pointer at the viewport
 centre, so that case is the previous behaviour bit for bit — which is the A/B control, and why

@@ -1182,14 +1182,19 @@ centre. Four consequences for driving:
   is the control for any A/B, and it needs no flag (there isn't one).
 - **`tagpu_zoom.txt` still does NOT move the camera.** Only the wheel anchors, so every
   scripted zoom and every fixture is unchanged.
-- **An off-centre wheel RELEASES a camera follow (G13u).** Ctrl+C follows your commander (it
-  does not merely centre on it) and the cycle-through-units keys do the same; a wheel that
-  moves the eye clears all three follow slots, which is the engine's own rule for a manual
-  camera move. So a recipe that sets up a follow and then wheels has no follow afterwards —
-  read `main+0x142F3` (`CameraToUnit`, 0 = nothing followed) rather than assuming, and expect
-  one `zoom: cursor anchor took the camera - the unit follow is released` per follow in the
-  log. A wheel aimed at the viewport centre moves the eye by nothing and leaves the follow
-  alone, which is the control here too.
+- **An off-centre wheel RELEASES a camera follow (G13u), and it needs the GAME THREAD to be
+  ticking.** Ctrl+C follows your commander (it does not merely centre on it) and the
+  cycle-through-units keys do the same; a wheel that wants to move the eye asks for all three
+  follow slots to be cleared, and `terrown`'s fog tick does the clearing. Two consequences for
+  driving: a recipe that sets up a follow and then wheels has no follow afterwards — read
+  `main+0x142F3` (`CameraToUnit`, 0 = nothing followed) rather than assuming, and expect one
+  `zoom: cursor anchor took the camera - the unit follow is released` per follow in the log.
+  And **with the sim paused (`tab`) the camera will not move under a follow at all** — the
+  request is never serviced, which is the fail-safe direction, not a bug. A wheel aimed at the
+  viewport centre moves the eye by nothing and leaves the follow alone, which is the control.
+- **`Ctrl+C` needs the SHIELD ON.** It is a modifier combo, so under injection it only reaches
+  the game through `fake_GetAsyncKeyState` — with `--no-shield` your `ctrl` is invisible and
+  the follow is never established, which looks exactly like the feature not working.
 
 Anchoring is off — and says so once a second in the log — while `tagpu_eye.txt` holds the
 camera (`zoom: cursor anchor off - tagpu_eye.txt holds the camera`), and while `terrown` is

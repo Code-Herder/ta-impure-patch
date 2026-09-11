@@ -1034,8 +1034,8 @@ void tagpu_zoom_eye_moved(void)
    has the same problem with its own edge and hotkey scroll and solves it by
    releasing the follow: `0x41D091..0x41D0AA`, the tail of the scroll poll, runs
    exactly the three stores below — and only on a frame where the eye actually
-   changed (`0x41D035` skips the whole tail when it did not). This function is
-   the body of `0x41C390`, the engine's own release, which `0x4174FD` (the
+   changed (`0x41D035` skips the whole tail when it did not). Those three stores
+   are the body of `0x41C390`, the engine's own release, which `0x4174FD` (the
    camera-track toggle) and `0x48D709` (centre-on-unit) call verbatim.
 
    THREE SLOTS, because the stepper takes the first of three that is set
@@ -1050,52 +1050,86 @@ void tagpu_zoom_eye_moved(void)
                         goes away. `Ctrl+C` (0x41C310) and the next/previous
                         unit keys (0x41C2E0) are what set it.
 
-   WHY THIS IS SAFE TO WRITE FROM THE RENDER THREAD, slot by slot — the rule
-   being that a store of ours must never widen what the game thread does:
+   THE STORES ARE THE GAME THREAD'S, AND THAT IS THE WHOLE SAFETY ARGUMENT.
+   This is the same handshake as the fog grid above and for the same reason;
+   `tagpu_terrown.c`'s `terr_fogtick` states it best — "this is the only code
+   that decides, and it is on the thread that owns the word". The render thread
+   only ever READS these slots, and only to compare them against zero.
 
-   * The two POINTERS are plain aligned 32-bit stores of ZERO, so they cannot
-     tear and they cannot be lost. And zero is the one value that is safe by
-     construction whoever else is writing: the stepper's only use of either slot
-     is to dereference it, so our store can only ever REMOVE a dereference, never
-     introduce one or redirect it at an object we chose. A stepper that read the
-     slot just before us follows a still-valid object for one more frame, which
-     is a state the engine reaches by itself every time a follow ends.
-   * The COUNTDOWN is the one field the engine read-modify-writes (the stepper
-     decrements it unlocked at `0x41CA29`), so our zero CAN be swallowed by a
-     decrement already in flight. That costs nothing that is not already
-     bounded, and the bound is exact rather than statistical: every site in
-     `.text` that stores a NON-ZERO value into it — `0x499F1B`, `0x499F89`,
-     `0x49B0E5`, `0x49B992`, `0x49BCBD`, `0x49C8DD`, all six of them — first
-     compares its object against `main+0x142F7` and takes the `jne` when it
-     differs [MEASURED 2026-09-10]. With that slot zeroed none of them can
-     fire, so after our store the countdown has exactly one remaining writer,
-     the decrement, and it is monotonically expiring. Our store can only move
-     it toward zero sooner; a swallowed one leaves the camera on the remembered
-     position for at most the frames it was going to run anyway. Every frame of
-     the gesture repeats it, and the pointer slots — the ones that hold a follow
-     INDEFINITELY, which is the behaviour being fixed — are not exposed to this
-     at all.
+   WHY A RENDER-THREAD STORE IS NOT AVAILABLE HERE, since the obvious shape is
+   to write them where we write the eye. `main` IS NOT ALIGNED, and not by
+   accident: the allocator at `0x41D920` takes `pad = (GetTickCount() % 1000) * 7`,
+   `malloc(0x3924D + pad)` and publishes `base + pad` (`0x41D9D5`), so the
+   struct's alignment is drawn afresh at every launch and then fixed for the
+   session. `main+0x142F7` is 4-aligned in **25%** of launches and straddles a
+   64-byte cache line in **4.7%** of them [MEASURED 2026-09-10, over all 1000
+   tick residues], and an x86 access that crosses a line is not atomic. A
+   cross-thread store of ZERO would therefore be torn in about one launch in
+   twenty — and torn into a slot the stepper DEREFERENCES, at `0x41CA58` and
+   `0x41CA95`: half a pointer passes `cmp eax, ebp` and is then read through.
+   The eye and the scroll target are misaligned in exactly the same way and are
+   written from the render thread anyway, because a torn COORDINATE is bounded
+   by `clamp_pair()`; a torn pointer is a wild read. Nor would a `lock`-prefixed
+   store fix it, because the engine's own plain split LOAD can still straddle an
+   atomic store. [landing review, 2026-09-10 — the first draft of this made all
+   three stores from the render thread and called them "plain aligned 32-bit
+   stores"; two of the three are pointers and none of them is reliably aligned.]
 
-   Through the caller's already-validated `ta` rather than by calling `0x41C390`,
-   which re-reads `ds:0x511DE8` for itself: the pointer this writes through is
-   then the one `ta_ok()` passed, the same one the eye and the target are
-   written through two lines later. */
-static void release_follow(char* ta)
+   A LEVEL, NOT AN EDGE. `s_dropFollow` says "a gesture is trying to move the
+   camera right now", so the game thread re-clears for as long as that is true
+   rather than once. That is what makes the engine's own guard-then-store
+   writers harmless: every one of them reads its guard and stores 40-60 bytes
+   later (`0x499E60`->`0x499E8E`, `0x499EF0`->`0x499F1B`, `0x49B0BA`->`0x49B0E5`,
+   and `0x49AE84`->`0x49AE8C` and `0x49C7F3`->`0x49C7FB` for the object slot),
+   so a follow re-established in that window would survive a one-shot request —
+   and is simply taken away again on the next tick by this one. The flag is
+   cleared by the render thread the moment it stops wanting the camera, so a
+   gesture that ends leaves no claim behind. */
+static volatile LONG s_dropFollow;   /* render thread writes, game thread reads */
+
+/* Render thread. A READ of the three slots, compared against zero and nothing
+   else — never dereferenced, so the misalignment above cannot hurt us here.
+   A torn read costs one frame either way and is self-correcting: read non-zero
+   when it is zero and we ask for a release that finds nothing to do; read zero
+   when it is not and we step the eye into a follow that eases it back, and the
+   next frame sees the slot and asks. Volatile because the game thread writes
+   them and this is re-asked every frame by design. */
+static int follow_is_set(const char* ta)
 {
-    int*   obj  = (int*)  (ta + OFF_FOLLOW_OBJ);
-    int*   unit = (int*)  (ta + OFF_FOLLOW_UNIT);
-    short* hold = (short*)(ta + OFF_FOLLOW_HOLD);
+    return *(volatile const int*)  (ta + OFF_FOLLOW_OBJ)  != 0 ||
+           *(volatile const int*)  (ta + OFF_FOLLOW_UNIT) != 0 ||
+           *(volatile const short*)(ta + OFF_FOLLOW_HOLD) != 0;
+}
 
+/* GAME THREAD, from terr_fogtick — the same tick that answers the fog request,
+   and gated on the same `tagpu_terrown_owns_fog()` that anchoring itself is
+   gated on, so the consumer exists exactly when there is a producer. A game
+   thread that stops ticking simply never releases, and the anchor then never
+   steps the eye: the camera keeps following, which is the old behaviour and the
+   fail-safe direction.
+
+   The stores are the engine's own order at `0x41C390`. On this thread there is
+   no interleaving to reason about at all — every other writer and the only
+   reader are right here. */
+void tagpu_zoom_follow_tick(char* ta)
+{
+    int*   obj;
+    int*   unit;
+    short* hold;
+
+    if (!s_dropFollow) return;
+    obj  = (int*)  (ta + OFF_FOLLOW_OBJ);
+    unit = (int*)  (ta + OFF_FOLLOW_UNIT);
+    hold = (short*)(ta + OFF_FOLLOW_HOLD);
     if (!*obj && !*unit && !*hold) return;   /* nothing follows: the usual case */
-    /* The engine's own order at 0x41C390 — and it is the harmless one: the
-       stepper reads the countdown first and the unit last, so every state this
-       passes through is one it produces for itself. */
     *hold = 0;
     *unit = 0;
     *obj  = 0;
-    /* Not throttled, and it does not need to be: the release is what makes the
-       condition false, so this is one line per follow the player set, not one
-       per frame. */
+    /* Only on an actual release, so this is one line per follow taken and not
+       one per tick of a gesture — the flag stays up for the whole gesture on
+       purpose (above), and after the first release the test above is false. A
+       second line in one gesture is worth seeing: it means the engine put a
+       follow back underneath us. */
     zlog("zoom: cursor anchor took the camera - the unit follow is released");
 }
 
@@ -1135,17 +1169,20 @@ static void anchor_step(float zNow, int fromWheel)
     /* Whatever happens below, the level the NEXT step measures from is this
        one. A frame that declined to move the eye must not leave its change
        banked for a later frame to apply in one jump. */
-    if (zNow == s_zStep) return;                 /* the common case: no gesture */
+    if (zNow == s_zStep) {                       /* the common case: no gesture */
+        s_dropFollow = 0;                        /* and no gesture, no claim */
+        return;
+    }
     {
         float zWas = s_zStep;
         s_zStep = zNow;
 
         if (!fromWheel || !s_anchorSet || !anchor_allowed() ||
-            zWas <= 0.05f || zNow <= 0.05f) { s_residX = s_residY = 0.0f; return; }
-        if ((int)s_vw <= 0 || (int)s_vh <= 0) { s_residX = s_residY = 0.0f; return; }
+            zWas <= 0.05f || zNow <= 0.05f) { s_dropFollow = 0; s_residX = s_residY = 0.0f; return; }
+        if ((int)s_vw <= 0 || (int)s_vh <= 0) { s_dropFollow = 0; s_residX = s_residY = 0.0f; return; }
 
         ta = *(char**)TA_MAINPP;
-        if (!ta_ok(ta)) { s_residX = s_residY = 0.0f; return; }
+        if (!ta_ok(ta)) { s_dropFollow = 0; s_residX = s_residY = 0.0f; return; }
 
         a  = s_anchor;
         ax = (float)(int)(short)(a & 0xFFFF);
@@ -1159,9 +1196,13 @@ static void anchor_step(float zNow, int fromWheel)
     }
     nx = iround(s_residX);
     ny = iround(s_residY);
-    if (!nx && !ny) return;                      /* sub-pixel: carried, not lost */
-    s_residX -= (float)nx;
-    s_residY -= (float)ny;
+    /* Sub-pixel: carried, not lost — and no claim on the camera, which is what
+       keeps the pointer-at-the-viewport-centre case the previous behaviour
+       exactly: `a - c` is zero there, so the residual never reaches a whole
+       world pixel, this returns every frame, and the follow is never touched.
+       The debit below has moved with it: a frame that does not write the eye
+       must not spend the residual either. */
+    if (!nx && !ny) { s_dropFollow = 0; return; }
 
     {
         int* eye = (int*)(ta + OFF_EYEX);
@@ -1191,7 +1232,17 @@ static void anchor_step(float zNow, int fromWheel)
            already recomputed the target from the followed unit and our `scr`
            step would be the one thrown away. The engine clears last only
            because its scroll poll IS the game thread and has no such window. */
-        release_follow(ta);
+        /* THE FOLLOW GOES FIRST, AND WE ONLY ASK. While anything is followed
+           the stepper owns the scroll target, so stepping the eye now would
+           just be eased back out — and the residual is kept WHOLE rather than
+           spent, so the delta this frame owed is applied by whichever frame
+           finds the camera free. That is what keeps the gesture's total
+           displacement exactly `(a - c)(1/z_start - 1/z_end)` across the wait
+           instead of losing the frames it spanned. */
+        if (follow_is_set(ta)) { s_dropFollow = 1; return; }
+        s_dropFollow = 0;
+        s_residX -= (float)nx;
+        s_residY -= (float)ny;
         eye[0] += nx; eye[1] += ny;
         /* the target moves with the eye, always: the two disagreeing is what
            the per-frame stepper reads as "a camera move is in flight", and it

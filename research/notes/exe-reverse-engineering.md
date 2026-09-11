@@ -288,6 +288,60 @@ exit, so a session that presses `+` leaves every later launch at that speed. It 
 and note that a walking-unit artifact measured at 20 is twice the size a player at normal
 speed would see.
 
+## `main` is deliberately MISALIGNED, and it is redrawn at every launch — mapped by us
+
+[MEASURED 2026-09-10, this project — `objdump -d -M intel` of the pristine build, plus the
+arithmetic over all 1000 tick residues. Found by the landing review of G13u, which caught a
+change that assumed the opposite.]
+
+**Nothing at `main+0xNNN` can be assumed aligned, so no cross-thread access to an engine field
+is atomic by virtue of its width.** `0x41D920` is the only site in `.text` that stores into
+`ds:0x511DE8`, and it pads the allocation by a random amount first:
+
+```
+0x41D924  call ds:0x4FC0DC        ; GetTickCount  (confirmed in the import table)
+0x41D92C  mov  ecx, 0x3E8         ; div by 1000
+0x41D935  shl  esi,3 / sub esi,edx ; pad = (tick % 1000) * 7      -> 0..6993
+0x41D93A  lea  edi,[esi+0x3924D]  ; malloc(0x3924D + pad)
+0x41D965  add  esi, ebx           ; main = base + pad
+0x41D9D5  mov  ds:0x511DE8, esi
+```
+
+`7 * n mod 4` walks every residue, so the struct's alignment is drawn afresh at each launch and
+then **fixed for that session** — which is the worst possible diagnostic signature, because a
+bug of this shape reproduces perfectly inside one launch and not at all in the next. Why the
+engine does it is not established; the effect is a per-run jitter of every field's address.
+
+For a field at `main+N`, over the 1000 reachable pads:
+
+| | `main+0x142F7` (a followed-object pointer) |
+| --- | --- |
+| 4-aligned | **25.0 %** of launches |
+| crosses a 64-byte cache line | **4.7 %** of launches |
+
+An x86 access that crosses a cache line is not atomic (SDM 3A §8.1.1), so in about one launch in
+twenty a cross-thread reader can observe a half-written field. **The rule this gives:**
+
+* "it is one aligned 32-bit slot, which x86 loads and stores atomically" is true of **our own
+  statics** (the compiler aligns them — `tagpu_zoom.h`'s published view is fine) and **false of
+  every engine field**.
+* A torn **coordinate** is survivable when the consumer bounds it — which is why the eye and the
+  scroll target are written from the render thread anyway, behind `clamp_pair()`.
+* A torn **pointer, length or index** is not: it is a wild read. `main+0x142F3`/`+0x142F7` are
+  dereferenced by the camera stepper at `0x41CA58` and `0x41CA95`, which is why G13u releases the
+  camera follow from the **game thread** rather than storing zero into them from ours.
+* A `lock`-prefixed store on our side does not rescue it, because the engine's own plain **split
+  load** can still straddle an atomic store.
+
+**Where this may already have bitten.** `tagpu_fog_at`'s guard exists because the render thread
+faulted twice on 2026-09-03 reading the fog descriptor `{u16* buf; int cols; int rows; int cells}`
+out of `*(main+0x1421F)` off a base of `-9` (earlier `-318`), root cause never found; a torn `buf`
+is a candidate, and it is recorded as a hypothesis in `fog-grid-sizing.md` §2. The defensive shape
+already in `tagpu_native.c` is the one to copy for any multi-field engine struct read across
+threads: bound every field AND check a **relation the builder guarantees** —
+`cells == ((cols*rows + 7) & ~7)`, the round-up at `0x483C84` — because a tear almost certainly
+breaks the relation even when each field looks individually plausible.
+
 ## The camera module — mapped by us
 
 [MEASURED 2026-09-03, this project — disassembly of the pristine build plus live reads, not
@@ -303,7 +357,7 @@ the eye is eased toward.
 | **`0x41C3C0`** | **The eye clamp.** `eyeX = clamp(eyeX, 0, mapW − W)`, the same for Y, then `0x466B70(main+0x142CB)` to refill the minimap's view rect — every path through it ends in that one call. TADR calls it `ScrollMinimap`, which describes the tail rather than the job. **12 call sites:** `0x41C59F`, `0x41C898`, `0x41C9CC`, `0x41CC16`, `0x41CC37`, `0x41CC52`, `0x41CDE1`, `0x41D054`, `0x41D184`, `0x41D26B`, `0x41D319`, `0x41D459`. |
 | `0x41C450` | The same clamp shape for the *target* pair — and it has **no callers**. Dead code; an `E8`/`E9` scan of `.text` finds nothing pointing at it. |
 | `0x41C4C0` | `SetCamera(x, y, smooth)` — writes the target, then clamps it **inline** against `[0, map − view]` without calling `0x41C3C0`. Callers: `0x495C68`, `0x495E11`, `0x497060`, `0x4978C9` (game-screen entry / load). |
-| **`0x41CA10`** | **The per-frame camera stepper.** One caller, `0x495599`. It first picks a follow source (next row); with none it takes `je 0x41CB4A`. Where eye ≠ target it sets bit 1 of `main+0x142F1` ("camera moved"), **clears bit 3 of `main+0x14281`** — the screen fog grid's own is-current flag — then moves the eye *halfway* toward the target, capped at ±`0x140` (320 px) per axis per frame, and hands the result to `0x41C3C0`. It never writes the target. *[CORRECTED 2026-09-10: this row said `0x41CA30`, which is mid-function — the byte there is the tail of `0x41CA29 dec eax`, and an `E8`/`E9` scan of `.text` finds nothing calling it. `0x41CA10` is the prologue (`mov ecx, ds:0x511DE8; push ebp; push esi; xor ebp, ebp`).]* |
+| **`0x41CA10`** | **The per-frame camera stepper.** One caller, `0x495599`. It first picks a follow source (next row); with none it takes `je 0x41CB4A`. Where eye ≠ target it sets bit 1 of `main+0x142F1` ("camera moved"), **clears bit 3 of `main+0x14281`** — the screen fog grid's own is-current flag — then moves the eye *halfway* toward the target, capped at ±`0x140` (320 px) per axis per frame, and hands the result to `0x41C3C0`. It never writes the target. *[CORRECTED 2026-09-10: this row said `0x41CA30`, which is mid-function — the byte there is the LAST byte of the 7-byte `mov WORD PTR [ecx+0x1434B], ax` at `0x41CA2A`, and an `E8`/`E9` scan of `.text` finds nothing calling it. `0x41CA10` is the prologue (`mov ecx, ds:0x511DE8; push ebp; push esi; xor ebp, ebp`).]* |
 | **`0x41CA1A`…`0x41CA8D`** | **The follow selection, and it takes the FIRST of three sources that is set** [MEASURED 2026-09-10]: the countdown `main+0x1434B`, then the object `main+0x142F7` (position at `+0x4`), then the unit `main+0x142F3` = `CameraToUnit` (position at `+0x6A`). A unit whose `[+0x110] & 0x10000000` has gone away is not followed and the stepper **releases all three itself** at `0x41CA69`. The countdown is *decremented* here (`0x41CA29`, unlocked `dec` on a u16), which is what makes it expire. |
 | `0x41CAC7`/`0x41CAD2` | Inside the stepper: the camera-**follow** target written from the followed source as `pos − view/2`, then clamped **inline** at `0x41CAF7` to `[0, map − view]`. |
 | **`0x41C390`** | **Release the camera follow** — a leaf with no arguments: `main+0x1434B` (u16) = 0, then `main+0x142F3` = 0, then `main+0x142F7` = 0, `ret`. Two callers, `0x4174FD` (the camera-track toggle on bit 1 of `main+0x14373`) and `0x48D709` (centre-on-unit, which releases and then calls the smooth centre-on `0x41C8E0`). The same three stores are **inlined** at `0x41C2B0`, `0x41CC60`, `0x41D091`, `0x41D1C4` and `0x41D406`. |
@@ -347,7 +401,7 @@ Two things follow, and both cost time to learn the hard way:
 | Where | What |
 | --- | --- |
 | `main+0x1431F` / `+0x14323` | eyeX / eyeY |
-| `main+0x142F3` / `+0x142F7` / `+0x1434B` | **the camera follow**, three slots the stepper takes in that priority [MEASURED 2026-09-10]. `+0x142F3` is `CameraToUnit` [CORPUS] — a followed *unit*, position at `+0x6A`, set by Ctrl+C (`0x41C310`) and the cycle keys (`0x41C2E0`); `+0x142F7` a followed *object*, position at `+0x4`, which `0x49C7FB` migrates the unit follow onto when `[unit+0x110] & 0x20000000`; `+0x1434B` a u16 **frame countdown** on the remembered position at `main+0x1433F`, both filled by `0x499E50` when a followed object is destroyed. Released together by `0x41C390`. **All six sites in `.text` that store a NON-ZERO value into the countdown** — `0x499F1B`, `0x499F89`, `0x49B0E5`, `0x49B992`, `0x49BCBD`, `0x49C8DD` — first compare their object against `main+0x142F7` and take the `jne` when it differs, so with that slot zeroed the stepper's own `dec` is its only remaining writer. Every other write to it, anywhere, is a zero. |
+| `main+0x142F3` / `+0x142F7` / `+0x1434B` | **the camera follow**, three slots the stepper takes in that priority [MEASURED 2026-09-10]. `+0x142F3` is `CameraToUnit` [CORPUS] — a followed *unit*, position at `+0x6A`, set by Ctrl+C (`0x41C310`) and the cycle keys (`0x41C2E0`); `+0x142F7` a followed *object*, position at `+0x4`, which `0x49C7FB` migrates the unit follow onto when `[unit+0x110] & 0x20000000`; `+0x1434B` a u16 **frame countdown** on the remembered position at `main+0x1433F`, both filled by `0x499E50` when a followed object is destroyed. Released together by `0x41C390`. **All seven sites in `.text` that store a NON-ZERO value into the countdown** — `0x499E8E`, `0x499F1B`, `0x499F89`, `0x49B0E5`, `0x49B992`, `0x49BCBD`, `0x49C8DD` — first compare their object against `main+0x142F7` and take the `jne` when it differs. **That guard is NOT usable as a cross-thread interlock:** each reads its guard 40-60 bytes before its store (`0x499E60`->`0x499E8E`, `0x499EF0`->`0x499F1B`, `0x49B0BA`->`0x49B0E5`), so clearing `+0x142F7` from another thread after the compare has been passed does not stop the store. Every other write to the countdown, anywhere, is a zero. *[The count said six until 2026-09-10; `0x499E8E` was missed. Found by the landing review.]* |
 | **a manual camera move releases the follow** | The engine's own rule, not a convention: the scroll poll's eye-writing tail runs the three stores at `0x41D091`…`0x41D0AA`, and `0x41D035` skips that whole tail on a frame where the eye did **not** change — so it is released exactly when the player actually moved the camera. `tagpu_zoom`'s cursor-anchored wheel does the same, for the same reason: the stepper recomputes the target from the followed unit every frame, so a delta added to the eye is otherwise eased straight back out [MEASURED 2026-09-10 — with the release removed the same gesture moved the eye by (0, −2) instead of the exact (−150, −100)]. |
 | `main+0x14327` / `+0x1432B` | **the scroll target** (`MapXScrollingTo`) the stepper eases the eye toward. Every reference to it in `.text` is inside `0x41C4xx`–`0x41D4xx` — 30 and 28 respectively, and **no drawing code reads it**, which is what makes it camera-local. |
 | **why we do NOT set `main+0x142F1` bit 1** | Every engine eye writer sets it; ours deliberately do not [2026-09-10]. It is the same unlocked-RMW exposure as bit 3 and a far worse one in practice, because `DrawMinimap 0x466B00` **clears it at `0x466B16` in the same breath** — measured 2026-09-09, `tagpu_gui_surf.c:1385`: it reads 0 on almost every frame, so a read-modify-write from the render thread would be racing a writer that is always writing. What actually needs to follow a camera we moved is the view BOX, and `tagpu_zoom_eye_moved()` recomputes `main+0x142CB` directly through the same `0x466B70` wrapper the engine's own clamp calls; the sharp minimap layer reads that rect every frame and is not gated on the dirty bit at all. |
