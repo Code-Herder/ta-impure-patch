@@ -1,0 +1,51 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Promo fixture: an ARM squadron standing off the Anteer Strait's north shore and shelling a CORE coastal position. Asymmetric on purpose — the other five promo scenarios are two lines meeting, and a grid of clips needs one tile that is plainly a different KIND of fight. The fleet sits in the water band around y=2050 and the shore battery on the proven land line at y=1450-1520, which is inside Crusader range of the water, so the exchange starts without either side moving far. Tidal generators sit in the water off the east flank because that is where a tidal has to be. Camera pinned on the waterline so both the ships and the shore are in frame; resolution 1024x768 to match the montage stage 1:1.",
+  "seed": 20260915,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Anteer Strait",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 10000, "energy": 10000},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1, "metal": 10000, "energy": 10000}
+    ]
+  },
+
+  "units": [
+    { "id": "hlt_w",   "type": "CORHLT",   "owner": 1, "pos": [3100, 1450], "facing": 180 },
+    { "id": "hlt_c",   "type": "CORHLT",   "owner": 1, "pos": [3250, 1450], "facing": 180 },
+    { "id": "hlt_e",   "type": "CORHLT",   "owner": 1, "pos": [3400, 1450], "facing": 180 },
+    { "id": "llt1",    "type": "CORLLT",   "owner": 1, "pos": [3000, 1520], "facing": 180 },
+    { "id": "llt2",    "type": "CORLLT",   "owner": 1, "pos": [3120, 1520], "facing": 180 },
+    { "id": "llt3",    "type": "CORLLT",   "owner": 1, "pos": [3240, 1520], "facing": 180 },
+    { "id": "llt4",    "type": "CORLLT",   "owner": 1, "pos": [3360, 1520], "facing": 180 },
+    { "id": "llt5",    "type": "CORLLT",   "owner": 1, "pos": [3480, 1520], "facing": 180 },
+    { "id": "mex1",    "type": "CORMEX",   "owner": 1, "pos": [3060, 1340], "facing": 180 },
+    { "id": "mex2",    "type": "CORMEX",   "owner": 1, "pos": [3440, 1340], "facing": 180 },
+    { "id": "estor1",  "type": "CORESTOR", "owner": 1, "pos": [3180, 1260], "facing": 180 },
+    { "id": "estor2",  "type": "CORESTOR", "owner": 1, "pos": [3260, 1260], "facing": 180 },
+    { "id": "tide_e1", "type": "CORTIDE",  "owner": 1, "pos": [3620, 1900], "facing": 180 },
+    { "id": "tide_e2", "type": "CORTIDE",  "owner": 1, "pos": [3700, 1900], "facing": 180 }
+  ],
+
+  "groups": [
+    { "id": "core_solar", "owner": 1, "at": [3250, 1330],
+      "pattern": {"kind": "grid", "cols": 6, "spacing": 70, "jitter": 0},
+      "composition": [{"type": "CORSOLAR", "count": 12}],
+      "facing": 180 },
+
+    { "id": "arm_raiders", "owner": 0, "at": [2900, 2050],
+      "pattern": {"kind": "grid", "cols": 6, "spacing": 80, "jitter": 10},
+      "composition": [{"type": "ARMCRUS", "count": 10}, {"type": "ARMROY", "count": 8},
+                      {"type": "ARMPT", "count": 16}],
+      "facing": 0,
+      "orders": [{"cmd": "attack", "to": [3250, 1490]}] }
+  ],
+
+  "camera": { "at": [3200, 1760], "pin": true }
+}

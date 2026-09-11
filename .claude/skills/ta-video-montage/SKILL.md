@@ -125,9 +125,9 @@ evidence**, and a caption with no row here does not go in the film.
 | "One command." / "no menu, no map setup, no clicking" | VERIFIED | `tacli scenario load` is one command and is documented as "launch a game and put the situation in it" (`tools/tacli`, `scenario load` parser) |
 | "silent · windowed · no intro movies" | VERIFIED | `tacli create` parser: `--sound` is "enable sound (default: silent)", `--intro` is "keep the intro movies" — both off unless asked |
 | "A 1997 engine, mid-battle, in seconds." | VERIFIED | `ta-capture`: `tacli launch cap1 --res 1024x768` is "~2s to a window"; the scenario applier runs after |
-| "Every fight is a file." / `scenarios/<name>.json` | VERIFIED | `scenarios/*.json`, 57 of them; `scenario validate` / `expand` / `apply` / `load` |
+| "Every fight is a file." / `scenarios/<name>.json` | VERIFIED | `scenarios/*.json`, 63 of them; `scenario validate` / `expand` / `apply` / `load` |
 | "Instances share nothing." / "own game dir · own config · own window" | VERIFIED | each instance is `tagpu/instances/<name>/gamedir/` with its own config and window (`ta-capture`, `ta-drive`) |
-| "Run one." / "or as many as the machine will hold" | **UNMEASURED** | nobody has yet measured how many instances this machine actually sustains. Either measure it and say the number, or keep the wording aspirational — do not put a count on screen that has not been run |
+| "Run one." / "or as many as the machine will hold" | **DELIBERATELY VAGUE** | nobody has measured how many instances the reference setup sustains, and the owner chose (2026-09-10) to keep the wording aspirational rather than spend a session measuring it. No count goes on screen unless it has been run |
 | "A test harness that happens to look like a war." | opinion | a characterisation, not a measurement; fine as the closing line |
 
 **The grid is a composite, and that is a disclosure, not a detail.** The wide shot
@@ -136,19 +136,47 @@ and it is fine — but never describe the film as "N instances running at once" 
 N instances were actually running. If the film wants that claim, shoot it: run as many
 as the machine holds, count them, and say *that* number.
 
-### Open placeholders in `promo/tacli-promo.json`
+### The six promo scenarios
 
-Both must be closed before a real render — they are invented text standing in for real
-text, which is exactly the kind of thing that ships by accident:
+Written 2026-09-10, one per clip id, and all six validate:
 
-* **The scenario names do not exist.** `big-battle`, `air-war`, `last-stand`,
-  `naval-push`, `ridge-assault`, `shore-raid` are not in `scenarios/`. Either write
-  them (they are JSON, and a promo deserves scenarios chosen to look good) or re-point
-  the script at real ones — `500v500`, `200v200` and `warlordex-vs-fleet` already
-  carry their own drama.
-* **The terminal output lines are invented.** `"applied 412 units, 2 players"` is
-  plausible, not real. Run the command, capture what it prints, paste the real
-  transcript into `output`.
+| scenario | map | entities | what the tile shows |
+|---|---|---|---|
+| `big-battle` | Town & Country | 1200 | four columns converging on one point |
+| `air-war` | Two Continents | 240 | 200 aircraft crossing, flak from below |
+| `last-stand` | Two Continents | 427 | a fortified line against 400 attackers |
+| `naval-push` | Anteer Strait | 85 | two fleets head-on mid-strait |
+| `ridge-assault` | Two Continents | 149 | heavy armour, individually legible |
+| `shore-raid` | Anteer Strait | 60 | ships shelling a shore battery |
+
+Three rules they were built to, all of which matter *because* the clip gets tiled:
+
+* **`camera.pin: true`, always.** A moving camera in a 48 px tile is noise, not motion.
+* **`switches.noshake: true`.** Screen shake fights a pinned camera.
+* **`"res": "1024x768"`** so the capture drops into `stage.tile` 1:1 (hard rule under
+  *Capturing the clips*).
+
+They are also written for **variety across tiles**, not just for looking good alone:
+`ridge-assault` is deliberately smaller and wider-spaced so units stay individually
+legible, and `shore-raid` is deliberately asymmetric — five tiles of "two lines meet"
+repeated 1600 times reads as wallpaper.
+
+**Placement without a live catalogue.** `scenario validate` checks the schema, but
+without `--instance` it does **not** check unit names or map bounds. These six were
+built only from unit types and coordinate neighbourhoods already proven by existing
+scenarios, and their extents were then read back with `scenario expand` and checked
+against those windows. On Anteer Strait that distinction is the whole game: water runs
+east-west in a band around **y = 1680..2280** and the north shore is land from
+**y ≈ 1620 up**, so a fleet grid one row too deep beaches its outer rank and those
+ships never sail. Re-check with `expand` after any edit; do not trust `validate` alone.
+
+### Open placeholder in `promo/tacli-promo.json`
+
+* **The terminal output line *format* is invented.** The map names and unit counts in
+  `output` are real (read back from `scenario expand`), but the surrounding layout is
+  a guess at what `tacli scenario load` prints. Run it once, capture the transcript,
+  and match it — a promo that shows its own tool printing something it does not print
+  is the kind of detail that gets noticed.
 
 ## Capturing the clips
 

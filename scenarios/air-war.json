@@ -1,0 +1,46 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Promo fixture: 200 aircraft crossing over Two Continents, ARM fighters and bombers west against CORE west-bound, with a solar farm and light AA under each side so the bombers have a target and the flak has somewhere to come from. Air reads well when tiled small — the units are spread over open ground rather than piled in a column, and tracer and flak give the tile motion even before the formations meet. Camera pinned at the crossing point; resolution 1024x768 to match the montage stage 1:1.",
+  "seed": 20260911,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 10000, "energy": 10000},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1, "metal": 10000, "energy": 10000}
+    ]
+  },
+
+  "groups": [
+    { "id": "arm_air", "owner": 0, "at": [2200, 1400],
+      "pattern": {"kind": "grid", "cols": 10, "spacing": 70, "jitter": 12},
+      "composition": [{"type": "ARMFIG", "count": 60}, {"type": "ARMBRAWL", "count": 24},
+                      {"type": "ARMTHUND", "count": 16}],
+      "facing": 90,
+      "orders": [{"cmd": "attack", "to": [3800, 1400]}] },
+
+    { "id": "core_air", "owner": 1, "at": [3800, 1400],
+      "pattern": {"kind": "grid", "cols": 10, "spacing": 70, "jitter": 12},
+      "composition": [{"type": "CORVAMP", "count": 60}, {"type": "CORFINK", "count": 24},
+                      {"type": "CORSHAD", "count": 16}],
+      "facing": 270,
+      "orders": [{"cmd": "attack", "to": [2200, 1400]}] },
+
+    { "id": "arm_ground", "owner": 0, "at": [2200, 1950],
+      "pattern": {"kind": "grid", "cols": 6, "spacing": 70, "jitter": 0},
+      "composition": [{"type": "ARMSOLAR", "count": 12}, {"type": "ARMJETH", "count": 8}],
+      "facing": 90 },
+
+    { "id": "core_ground", "owner": 1, "at": [3800, 1950],
+      "pattern": {"kind": "grid", "cols": 6, "spacing": 70, "jitter": 0},
+      "composition": [{"type": "CORSOLAR", "count": 12}, {"type": "CORCRASH", "count": 8}],
+      "facing": 270 }
+  ],
+
+  "camera": { "at": [3000, 1500], "pin": true }
+}

@@ -1,0 +1,44 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Promo fixture: two 40-ship fleets meeting head-on in the Anteer Strait. The strait's water runs east-west in a band around y=1980 (measured from the fleet scenarios: hulls sit between y=1680 and y=2280, the north shore is land from y=1620 up), so both formations are 6 rows deep at 75 spacing to stay off the beach — a wider grid puts the outer rows aground and they never sail. A little shore dressing on the proven land line at y=1400 keeps the top of the frame from being empty water. Camera pinned mid-strait; resolution 1024x768 to match the montage stage 1:1.",
+  "seed": 20260913,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Anteer Strait",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {"shootall": true, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 10000, "energy": 10000},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1, "metal": 10000, "energy": 10000}
+    ]
+  },
+
+  "units": [
+    { "id": "shore_fus1", "type": "CORFUS",   "owner": 1, "pos": [3000, 1400], "facing": 180 },
+    { "id": "shore_fus2", "type": "CORFUS",   "owner": 1, "pos": [3180, 1400], "facing": 180 },
+    { "id": "shore_es1",  "type": "CORESTOR", "owner": 1, "pos": [3340, 1400], "facing": 180 },
+    { "id": "shore_es2",  "type": "CORESTOR", "owner": 1, "pos": [3420, 1400], "facing": 180 },
+    { "id": "arm_solar",  "type": "ARMSOLAR", "owner": 0, "pos": [3800, 1300], "facing": 180 }
+  ],
+
+  "groups": [
+    { "id": "arm_fleet", "owner": 0, "at": [2600, 1980],
+      "pattern": {"kind": "grid", "cols": 7, "spacing": 75, "jitter": 10},
+      "composition": [{"type": "ARMCRUS", "count": 12}, {"type": "ARMROY", "count": 8},
+                      {"type": "ARMPT", "count": 20}],
+      "facing": 90,
+      "orders": [{"cmd": "attack", "to": [3550, 1980]}] },
+
+    { "id": "core_fleet", "owner": 1, "at": [3550, 1980],
+      "pattern": {"kind": "grid", "cols": 7, "spacing": 75, "jitter": 10},
+      "composition": [{"type": "CORCRUS", "count": 12}, {"type": "CORMSHIP", "count": 8},
+                      {"type": "CORPT", "count": 20}],
+      "facing": 270,
+      "orders": [{"cmd": "attack", "to": [2600, 1980]}] }
+  ],
+
+  "camera": { "at": [3075, 1900], "pin": true }
+}
