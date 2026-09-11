@@ -69,6 +69,7 @@
 #define VA_SETGRAYED    0x004A1250u     /* (gi, name, grayed): see push_stages */
 #define VA_STAGEDRAW    0x004A81E0u
 #define VA_SETDIRTY     0x0049FA90u     /* gi+0xCCA = 1: repaint at the pump   */
+#define VA_ACTDONE      0x004AB0A0u     /* gi->UIChange_f = -1: see menu_accept */
 #define VA_DRAWLOCK     0x004C2470u     /* the counted pair GUI_Load draws under */
 #define VA_DRAWUNLOCK   0x004C2870u
 #define VA_UPDGUI       0x00491D70u
@@ -96,6 +97,7 @@ typedef int   (__stdcall *set_status_fn)(void* gi, const char* name, int value);
 typedef int   (__stdcall *set_grayed_fn)(void* gi, const char* name, int grayed);
 typedef int   (__stdcall *stage_draw_fn)(void* gi, int flags);
 typedef void  (__stdcall *set_dirty_fn)(void* gi);
+typedef void  (__stdcall *act_done_fn)(void* gi);
 typedef int   (__stdcall *upd_gui_fn)(int);
 typedef void  (__cdecl   *lock_fn)(void);
 typedef void  (__stdcall *gaf_blit_fn)(void* ctx, const void* frame, int x, int y);
@@ -721,10 +723,26 @@ static int build_gui(char* b, int cap, int rows)
 /* ---- reading the levers -------------------------------------------------- */
 /* The screen is a FRONT END over the trigger files and the cfg, never a store
    of its own -- so the plates show what the levers say, read at open time. */
+/* Classic++ is every row the switch OWNS at its Classic++ value; anything else
+   is Custom, which is why Custom is derived and never chosen.
+
+   R_SS IS NOT ONE OF THEM. Supersampling is orthogonal to the lane -- the native
+   pass reads `tagpu_ss.off` under Classic as well as Classic++, which is why
+   `row_greyed` exempts it and why the Classic++ preset in `tagpu_menu_oncommand`
+   deliberately leaves it alone. It was in this test and nowhere else, so a
+   player who turned supersampling off saw the Renderer row read "Custom" on the
+   next visit with nothing in the lane actually customised. */
+static int derive_style(void)
+{
+    return (s_stage[R_ASSETS] != 1 || s_stage[R_LIGHT] != 1 ||
+            s_stage[R_SHADOWS] != 2 || s_stage[R_SHADOWQ] != 2)
+           ? STYLE_CUSTOM : STYLE_PP;
+}
+
 static void read_state(void)
 {
     const TAGPU_LIGHT* L = tagpu_classicpp_light();
-    int i, custom = 0;
+    int i;
 
     s_stage[R_ASSETS]  = tagpu_classicpp_assets() ? 1 : 0;
     s_stage[R_LIGHT]   = tagpu_classicpp_lit() ? 1 : 0;
@@ -736,16 +754,7 @@ static void read_state(void)
     s_stage[R_SHADOWQ] = 2;
     for (i = 0; i < 4; i++) if (L && SHADOWQ_VAL[i] == L->shadowres) s_stage[R_SHADOWQ] = i;
 
-    if (!tagpu_classicpp_on()) {
-        s_stage[R_STYLE] = STYLE_CLASSIC;
-    } else {
-        /* Classic++ is every row below at its Classic++ value; anything else
-           is Custom, which is why Custom is derived and never chosen. */
-        custom = s_stage[R_ASSETS] != 1 || s_stage[R_LIGHT] != 1 ||
-                 s_stage[R_SHADOWS] != 2 || s_stage[R_SHADOWQ] != 2 ||
-                 s_stage[R_SS] != 1;
-        s_stage[R_STYLE] = custom ? STYLE_CUSTOM : STYLE_PP;
-    }
+    s_stage[R_STYLE] = tagpu_classicpp_on() ? derive_style() : STYLE_CLASSIC;
 }
 
 /* ---- pushing the state at the engine ------------------------------------- */
@@ -802,9 +811,14 @@ static int on_stack(char* main_p, void* gm)
    from the levers. A re-open with fresh == 0 is a RECOVERY, and there the model
    is ours and must survive: the engine tears the whole in-game GUI stack down
    and rebuilds it (a new ARMMAIN2.GUI whose `under` is NULL) on a world click,
-   and our panel hangs over the world, so its own clicks do it too. Re-reading
-   the levers there put every plate back the moment it was clicked -- the cfg on
-   disk said assets=1 while the button still read Off. */
+   and our panel hangs over the world. Re-reading the levers there put every
+   plate back the moment it was clicked -- the cfg on disk said assets=1 while
+   the button still read Off.
+
+   Until `menu_accept` landed, a click on one of OUR OWN rows took this path as
+   well, because the pump popped and freed the panel every time. It no longer
+   does; the recovery is now what its name says, and an ordinary click never
+   reaches it. */
 static void menu_open(char* main_p, int fresh)
 {
     void* gi = main_p + OFF_GUIINFO;
@@ -889,11 +903,13 @@ static int menu_row_of(void* gi)
 
     if (!gi || !main_p) return -1;
     idx = *(int*)((char*)gi + GI_UICHANGE);
-    /* -1 IS NOT PROOF OF A POP. GUI_Pop does set gi->UIChange_f to -1 before
-       calling us (0x4A9673), but the pump also resets it (0x4AA096) and calls
-       us again on the same click -- measured, and treating that as a pop
-       destroyed the model on every click. `on_stack` in the tick is the
-       authority on whether our screen is still there. */
+    /* -1 MEANS THIS SCREEN IS BEING DESTROYED, not that a row was clicked:
+       both callers that pass it -- GUI_Pop (0x4A9673) and the pump's inlined
+       pop (0x4AA7AC) -- free the GUIMEMSTRUCT immediately afterwards. It is
+       still not the signal to throw the model away: the front-end screen is
+       rebuilt from `s_stage` on the next visit, and in game the panel is
+       re-opened with `fresh == 0` precisely so a recovery keeps it. `on_stack`
+       in the tick is the authority on whether our screen is still there. */
     if (idx < 0) return -1;
 
     top   = *(char**)(main_p + OFF_TOPGUI);
@@ -906,6 +922,50 @@ static int menu_row_of(void* gi)
         if (!memcmp(ctrls + (size_t)idx * STRIDE + G_NAME, s_row[i].name,
                     strlen(s_row[i].name) + 1)) return i;
     return -1;
+}
+
+/* SAY THE CLICK WAS HANDLED, or the pump destroys the screen under us.
+
+   `gi->UIChange_f` is not only the inbound argument -- it is also the ANSWER
+   the GUI pump reads back, and leaving it set means "not mine". The pump's
+   dispatch tail is explicit about it (0x4AA78D, the only site that calls a
+   screen's `OnCommand` for a click):
+
+       mov  edx,[ebp+0x18]        ; gi->TheActive_GUIMEM
+       mov  eax,[edx+0x08]        ; its OnCommand
+       test eax,eax
+       je   0x4AA79A
+       push ebp
+       call eax                   ; <- us
+       cmp  [ebp+0x60],edi        ; UIChange_f still != -1 ?
+       je   0x4AA7FA              ; -1: handled, done
+       ...                        ; else: UIChange_f = -1, call OnCommand
+                                  ; AGAIN, stage 2, then relink
+                                  ; gi->TheActive_GUIMEM = top->per_active
+                                  ; and free(top)
+
+   That tail (0x4AA7BC..0x4AA7FA) is `GUI_Pop 0x4A9660`'s body INLINED,
+   instruction for instruction -- the draw-lock pair, stage 2, the relink, the
+   `0x4D85A0` free and the `flags & 0x800` repaint. So the screen is popped and
+   freed WITHOUT `GUI_Pop` ever being entered, which is why an observer armed on
+   `0x4A9660` sat there and never fired while the screen vanished on every
+   click (measured 2026-09-11, and the reason this took a second session).
+
+   Every one of the engine's own handlers ends by calling `0x4AB0A0(gi)` --
+   `0x45E2F0` and `0x45E27C` in the visual-options handler, `0x45E48C` on the
+   fall-through it does not recognise -- and the ones that deliberately want the
+   pop (the tab buttons at `0x45E46A`, OK at `0x45E457`) are exactly the ones
+   that return without it. It is a protocol, not a courtesy: clearing the field
+   IS how a screen says "I consumed this".
+
+   This is also what the in-game RENDER.GUI screen was missing. Its GUIMEMSTRUCT
+   was popped and freed on every click too; `before_update`'s `on_stack` check
+   noticed and re-opened it with `fresh == 0`, so it LOOKED like it worked. That
+   recovery path stays -- the engine really does tear the in-game GUI stack down
+   on a world click -- but it is no longer on the path of an ordinary click. */
+static void menu_accept(void* gi)
+{
+    ((act_done_fn)VA_ACTDONE)(gi);
 }
 
 void __stdcall tagpu_menu_oncommand(void* gi)
@@ -926,13 +986,19 @@ void __stdcall tagpu_menu_oncommand(void* gi)
         }
     } else {
         s_stage[row] = (s_stage[row] + 1) % s_row[row].stages;
-        if (s_stage[R_STYLE] != STYLE_CLASSIC) s_stage[R_STYLE] = STYLE_CUSTOM;
+        /* DERIVED, not forced to Custom. A row clicked back to its Classic++
+           value leaves nothing customised, and saying "Custom" there is the
+           screen telling the player something untrue -- the same test
+           `read_state` applies on the way in, so the label a visit opens with
+           and the label a click produces are now one rule. */
+        if (s_stage[R_STYLE] != STYLE_CLASSIC) s_stage[R_STYLE] = derive_style();
     }
 
     push_stages(gi);
     /* NOT the file. The cfg is written from the render thread at the next
        present: TA is lockstep and this is the game thread. */
     InterlockedExchange(&s_dirty, 1);
+    menu_accept(gi);
 }
 
 /* ---- the deferred write (render thread) ---------------------------------- */
@@ -1263,11 +1329,26 @@ static void read_tokens(void)
    WHAT THE STOCK FILE ACTUALLY IS, and it is not what the screenshot suggests:
    VISUALS.GUI carries ONLY the right-hand column -- eleven gadgets, the five
    video controls and their captions. The tab column (SOUND / MUSIC / INTERFACE
-   / VISUALS) and the action column (OK / Cancel / Restore / Undo) belong to
-   STARTOPT.GUI, which this screen is pushed on top of. So re-emitting this file
-   cannot break the tabs or the buttons, and the space we may lay out in is
-   what STARTOPT leaves free: x from about 200 to 470, between its tabs (68..188)
-   and its actions (478..598).
+   / VISUALS) and the action column (OK / Cancel / Restore / Undo) are
+   STARTOPT.GUI's. So re-emitting this file cannot break the tabs or the
+   buttons, and the space we may lay out in is what STARTOPT leaves free: x from
+   about 200 to 470, between its tabs (68..188) and its actions (478..598).
+
+   AND IT IS NOT A SCREEN OF ITS OWN. `0x45E5E0` loads STARTOPT.GUI with flags
+   `0x80` (which pushes) and then loads VISUALS.GUI with flags **`0x200`**, and
+   `0x200` is GUI_Load's MERGE flag: `0x4AAA2F` branches on it and parses the
+   file straight into the tail of the CURRENT top screen's `ControlsAry`
+   (`0x4AAA31`: `edi = gi->TheActive_GUIMEM`, `ebp = ctrls + (count+1)*0x15B`),
+   sums the counts into `ctrls+0xB6` (`0x4AABE6`), skips the stack push
+   entirely (`0x4AAC54`), and then stamps the LOADED file's name over
+   `ControlsAry[0].name` (`0x4AAC98`). So the screen `tacli ui` calls
+   VISUALS.GUI is one GUIMEMSTRUCT holding STARTOPT's tabs and actions, the
+   stock video controls and our rows, all in one array -- which is exactly what
+   a snapshot of it shows, and why our rows and the tab buttons are
+   indistinguishable to `0x45E100`. The STARTOPT.GUI that `tacli` reports
+   *under* it is the earlier, un-merged one the Options click pushed; a tab
+   switch pops the merged screen and that one rebuilds the next tab the same
+   way.
 
    THE LAYOUT. The stock column moves left by VIS_DX to make room and keeps
    every gadget's own name, size and y -- only x changes -- and our six rows go
@@ -1465,30 +1546,37 @@ static void* __cdecl vis_build_after(unsigned int* regs)
        je   0x45E499              ; YES -> GUI_Pop 0x4A9660, then call the
                                   ;        UNDERLYING screen's OnCommand
 
-   That is how the tab buttons work: SOUND / MUSIC / INTERFACE / VISUALS and
-   OK / Cancel / Restore / Undo all live on STARTOPT.GUI *underneath* this
-   screen, so a click the top screen does not recognise means "the player hit
-   the screen below" -- pop, and forward. Our rows are `id=1` stage buttons and
-   are therefore indistinguishable from a tab: every click on one closed the
-   screen. (The symptom was exact -- the row DID advance and the cfg WAS
-   written, and then the screen went back to STARTOPT.)
+   That is how the tab buttons work. SOUND / MUSIC / INTERFACE / VISUALS and
+   OK / Cancel / Restore / Undo came from STARTOPT.GUI and sit in the SAME
+   gadget array as the video controls (the `0x200` merge above), so the handler
+   cannot tell them apart by position: a click it does not recognise by name
+   means "one of STARTOPT's own", and the answer is to pop this merged screen
+   and hand the click to the plain STARTOPT underneath, which rebuilds around
+   the tab that was hit. Our rows are `id=1` stage buttons in that same array
+   and are therefore indistinguishable from a tab.
 
    So we take `GUIMEMSTRUCT+0x08`, the engine's own extension point and the
    same field RENDER.GUI owns outright, and chain: ours when the actuated
    gadget is one of our rows, the engine's for everything else, which keeps the
-   tabs, the buttons and the stock controls behaving exactly as they did. */
+   tabs, the buttons and the stock controls behaving exactly as they did.
+
+   THE -1 CALL IS FORWARDED, and must be. It arrives from exactly two places --
+   `GUI_Pop 0x4A9673` and the pump's inlined pop at `0x4AA7AC` -- and BOTH free
+   this GUIMEMSTRUCT within a dozen instructions of the call returning. So the
+   -1 branch of `0x45E100` is not a teardown running mid-screen; it is the
+   screen's own destructor arriving on time, and it is the only thing that frees
+   the display-mode list hanging off `GUIMEMSTRUCT+0x0C` (`0x45E11B`: the entry
+   table, the list, the block) and clears `main+0x37EBE` bit 0. Declining it
+   leaked those three allocations on every visit to this tab, and left the bit
+   alone -- which is the bit `0x45E5E0` reads to decide between VISUALS.GUI and
+   VISUALRT.GUI.
+
+   An earlier revision declined it, on the theory that the -1 was a second call
+   for the same click that left the screen up. It is not -- see `menu_accept`
+   for what actually took the screen down. */
 static void __stdcall tagpu_vis_oncommand(void* gi)
 {
     if (menu_row_of(gi) >= 0) { tagpu_menu_oncommand(gi); return; }
-    /* THE TRAILING -1 MUST NOT BE FORWARDED. The pump calls OnCommand a second
-       time for the same click with UIChange_f reset to -1 (0x4AA096), and
-       `0x45E100`'s -1 branch is the screen's TEARDOWN: it frees the display-mode
-       list at [gi+0x18]+0xC, nulls the pointer and clears `main+0x37EBE` bit 0.
-       Run mid-screen that tears down a screen that is still up. On a real pop
-       GUI_Pop reaches the engine's handler by its own path, so nothing is lost
-       by declining this one. Measured 2026-09-11: forwarding it was the first of
-       two reasons a click closed the screen. */
-    if (gi && *(int*)((char*)gi + GI_UICHANGE) < 0) return;
     if (s_visPrevOnCmd) s_visPrevOnCmd(gi);
 }
 

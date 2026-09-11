@@ -2504,7 +2504,24 @@ arg 1 is dereferenced at `+0x18` (`TheActive_GUIMEM`) at `0x4AA917`, and arg 2 i
 - **`flags` bit `0x800`** — before anything else, read the current top screen's panel rect
   (`+0x13/+0x15/+0x17/+0x19`) and call `0x4BF4D0(panel+0xBC, rect, -0x18)`; then set the top
   screen's `+0x14` to 1. A save/dirty step, `0x4AA912..0x4AA97C`.
-- **`flags` bit `0x200` suppresses the push** (`0x4AAA26`, `0x4AAC46`).
+- **`flags` bit `0x200` does not suppress the push so much as replace it: the file is
+  MERGED into the screen already on top** [VERIFIED 2026-09-11, and LIVE — see below].
+  `0x4AAA2F` branches on it and takes `edi = gi->TheActive_GUIMEM` instead of allocating:
+  `ebp` is set to `ControlsAry + (count+1)*0x15B`, i.e. **the tail of the existing gadget
+  array**, and the parse writes there. `0x4AABE6` then does `add WORD PTR [ctrls+0xB6],ax` —
+  the loaded file's gadget count is *added* to the existing one — a `rep movs` at `0x4AAC12`
+  shifts the loaded records down one stride to overwrite the loaded file's own panel record,
+  and `0x4AAC54` skips the push. `0x4AAC98` still stamps the **loaded** file's name over
+  `ControlsAry[0].name`, so the merged screen answers `IsOnTop` under the *second* file's
+  name.
+  **Consequence, and it is not cosmetic:** a screen built this way is ONE `GUIMEMSTRUCT`
+  whose array holds both files' gadgets, so nothing downstream — `GUI_FindGadgetByName`, the
+  pump's hit loop, an `OnCommand` — can tell which file a gadget came from. The
+  visual-options screen is exactly this: `0x45E5E0` loads `STARTOPT.GUI` with `0x80` (pushing)
+  and then `VISUALS.GUI` (or `VISUALRT.GUI` in game) with `0x200`, so what `tacli ui` reports
+  as `VISUALS.GUI` is STARTOPT's array with the video controls appended — its tabs, its
+  OK/Cancel/Restore/Undo and the video toggles listed together in one snapshot (LIVE
+  2026-09-11). The `STARTOPT.GUI` `tacli` shows *under* it is the earlier, un-merged one.
 - **THE PUSH, `0x4AAC56`** — the writer of `per_active` that was previously unmapped:
   ```asm
   4aac43:  mov [edi+0x04],ebp        ; new->ControlsAry = the gadget array
@@ -2593,6 +2610,80 @@ not text but the GAF entry **`igpaused`** (`0x5035BC`), looked up once at `0x429
 `0x4B8D40` into `main+0x1481B` beside two siblings at `main+0x14813`/`+0x14817`, and drawn on
 `[main+0x38A51] & 1`. **The pause is single-player only** — a network game cannot be paused
 unilaterally — so the earlier statements need that qualifier.
+
+### The pump's dispatch contract: `gi->UIChange_f` is the ANSWER, and an unanswered click POPS THE SCREEN [VERIFIED 2026-09-11]
+
+*Found the expensive way. The render-options work read `UIChange_f` as an inbound argument
+only, and its front-end screen was destroyed on every click with `GUI_Pop 0x4A9660` — armed
+with an observer — never firing once.*
+
+**`0x4AA78D`, in the GUI pump `0x4A9FD0`, is the only site that calls a screen's `OnCommand`
+for a mouse click**, and what it does afterwards is the whole protocol:
+
+```asm
+4aa675:  mov  [ebp+0x60],eax       ; gi->UIChange_f = the actuated gadget index
+...
+4aa78d:  mov  edx,[ebp+0x18]       ; gi->TheActive_GUIMEM
+4aa790:  mov  eax,[edx+0x08]       ; ->OnCommand
+4aa795:  je   0x4aa79a
+4aa797:  push ebp
+4aa798:  call eax                  ; the screen's handler
+4aa79a:  cmp  [ebp+0x60],edi       ; edi == -1. Still set?
+4aa79d:  je   0x4aa7fa             ;   -1 -> handled; return
+4aa7ac:  mov  [ebp+0x60],edi       ;   else: UIChange_f = -1 ...
+4aa7b9:  call eax                  ;   ... call OnCommand AGAIN, with -1 ...
+4aa7bc:  call 0x4c2470             ;   ... and then POP AND FREE the screen:
+4aa7c1:  push 2 / push ebp / call 0x4a81e0
+4aa7c9:  call 0x4c2870
+4aa7ce:  mov  ecx,[ebp+0x18]
+4aa7d1:  mov  eax,[ecx]            ;   top->per_active
+4aa7d5:  mov  [ebp+0x18],eax       ;   gi->TheActive_GUIMEM = it
+4aa7da:  mov  [eax+0x14],1
+4aa7e1:  push ecx / call 0x4d85a0  ;   free(top)
+4aa7ea:  test esi,0x800 -> 0x4a81e0(gi, 0x40)
+```
+
+**`0x4AA7BC..0x4AA7FA` is `GUI_Pop 0x4A9660`'s body inlined, instruction for instruction** —
+the same `0x4C2470`/`0x4C2870` lock pair, the same stage-2 draw, the same relink, the same
+`0x4D85A0` free, the same `flags & 0x800` repaint (compare `0x4A9689..0x4A96C7`). So **a
+screen can leave the stack without `GUI_Pop` being entered**, and an observer on `0x4A9660`
+is blind to it. `gui-gadgets.md` §1.3 now carries this too.
+
+**Clearing `UIChange_f` is how a handler says "I consumed this", and `0x4AB0A0(gi)` is the
+engine's own one-line setter for it** (`mov [eax+0x60],-1; ret 4`). The visual-options
+handler `0x45E100` is the worked example, and it uses both answers deliberately:
+
+| branch | ends with | because |
+|---|---|---|
+| SHADING / ANTI / BSHADOWS (`0x45E2EA`, `0x45E276`) | `0x49FA90(gi)` then **`0x4AB0A0(gi)`** (`0x45E2F0`, `0x45E27C`) | the toggle was handled; the screen stays |
+| a gadget it does not recognise that is **not** a button (`0x45E48C`) | **`0x4AB0A0(gi)`** | consumed and ignored |
+| UNDO / RESTORE (`0x45E318`, `0x45E425`) | its own `GUI_Pop` + rebuild | `GUI_Pop` sets `-1` at `0x4A9673`, so the pump is already answered |
+| a **button** it does not recognise — the tab column (`0x45E46A` → `0x45E499`) | `GUI_Pop`, restore the index, `call [below->OnCommand]` | "the player hit STARTOPT's own gadget": pop and forward |
+| OK while `selvmode.gui` is on top (`0x45E457`) | nothing | *deliberately* leaves it set so the pump pops `selvmode` |
+
+**And `-1` on the way in means this screen is being destroyed.** Both callers that pass it —
+`GUI_Pop` (`0x4A9673`) and the pump's inlined pop (`0x4AA7AC`) — free the `GUIMEMSTRUCT`
+within a dozen instructions of the call returning. `0x45E100`'s `-1` branch is accordingly the
+screen's destructor: it frees the display-mode list hanging off `GUIMEMSTRUCT+0x0C`
+(`0x45E11B`: `[list+0x14]`, `[list+0x04]`, then the block), nulls the field, and clears
+`main+0x37EBE` bit 0 — the bit `0x45E5E0` reads to choose `VISUALS.GUI` over `VISUALRT.GUI`.
+A chained handler that declines to forward that call leaks all three.
+
+**`0x45E5E0(selvmode)` is the visual-options dialog build**, and its shape is worth recording
+because two of its calls are easy to misread:
+
+| | |
+|---|---|
+| `selvmode != 0` | `GUI_Load(gi, "SELVMODE.GUI", 0x800)` and nothing else |
+| `selvmode == 0` | `0x45CFC0` → `GUI_Load(gi, in game ? "PREFS.GUI" : "STARTOPT.GUI", 0x80)`, **which pushes**, and sets `main+0x37EBE` bit 0 on the in-game side (`0x45D002`); then `GUI_StageUpdateDraw(gi, 2)`; then `0x45CE80`, which *appends a synthesized gadget* to the pushed screen's array in game (`ctrls+0xB6` incremented at `0x45CECC`); then `GUI_Load(gi, "VISUALRT.GUI" or "VISUALS.GUI", **0x200**)` — the merge |
+| both | `0x49FA50(gi)`, then `[ebx+0x08] = 0x45E100` at `0x45E68B` — the OnCommand goes on the **pushed** screen, which is the one the merge landed in |
+
+The display-mode list is built after that: `0x45E6B0` allocates the 0x20-byte header into
+`GUIMEMSTRUCT+0x0C`, `0x45E6BD` a 0x4B0-byte table, `0x45E6EC` a string block of
+`count << 8`, and `0x45E726` hangs it off the `VIDSLDR` gadget (`+0x13C` = count-1,
+`+0x144` = the per-gadget callback `0x45BBF0`, `+0x14A` = the list). In game the whole block
+is skipped (`0x45E69E` branches on `main+0x37EBE` bit 0), which is why `GUIMEMSTRUCT+0x0C` is
+NULL there and the destructor's frees are guarded by `test edi,edi` at `0x45E11B`.
 
 ### The GAF banks a screen can reach [VERIFIED 2026-09-09]
 

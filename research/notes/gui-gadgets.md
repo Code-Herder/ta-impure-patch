@@ -68,7 +68,7 @@ GUI0IDControl*  ctrl = top->ControlsAry;                 /* top + 0x04 */
 |---|---|---|
 | `+0x00` | `per_active` → the GUI **below** this one (LIFO stack link) | [BINARY-VERIFIED] `0x4A969B` |
 | `+0x04` | `ControlsAry` → panel record, gadgets follow | [BINARY-VERIFIED] `0x4AB06B`, `0x49FE7D` |
-| `+0x08` | `OnCommand` — `__stdcall void(GUIInfo*)`; reads the actuated index from `gi->UIChange_f`, **not** an argument | [BINARY-VERIFIED] `0x4A967F` |
+| `+0x08` | `OnCommand` — `__stdcall void(GUIInfo*)`; reads the actuated index from `gi->UIChange_f`, **not** an argument, **and writes its answer back to the same field** (clear it to `-1` or the pump pops the screen — see §1.3) | [BINARY-VERIFIED] `0x4A967F`, `0x4AA790` |
 | `+0x10` | flags (bit `0x800` re-runs a stage on pop) | [BINARY-VERIFIED] `0x4A96B7` |
 | `+0x14` | `Active_b` — set to 1 on the GUI newly exposed by a pop | [BINARY-VERIFIED] `0x4A96A7` |
 | `+0x4F` | `GUIName[16]` | [CORPUS] |
@@ -79,7 +79,7 @@ GUI0IDControl*  ctrl = top->ControlsAry;                 /* top + 0x04 */
 |---|---|---|---|
 | `+0x18` | `main+0x531` | `TheActive_GUIMEM` (topmost = the only interactive screen) | [BINARY-VERIFIED] |
 | `+0x3C` | `main+0x555` | cursor / rect block, 6 dwords; `[0]`,`[1]` are the pointer x,y | [BINARY-VERIFIED] `0x49FD20` |
-| `+0x60` | `main+0x579` | `UIChange_f` — index of the last actuated gadget, or `-1` | [BINARY-VERIFIED] `0x4A9673`, `0x4AB0A4` |
+| `+0x60` | `main+0x579` | `UIChange_f` — index of the last actuated gadget, or `-1`. **Bidirectional**: the pump writes the index before calling `OnCommand` (`0x4AA675`) and reads it back after (`0x4AA79A`) to decide whether the screen handled the click or should be popped | [BINARY-VERIFIED] `0x4A9673`, `0x4AB0A4`, `0x4AA675`/`0x4AA79A` |
 | `+0x64`, `+0x68` | | reset to `-1` alongside `UIChange_f` on pop (focus/hot, [INFERRED]) | [BINARY-VERIFIED] reset only |
 
 ### 1.3 The stack is real
@@ -93,6 +93,16 @@ marks the newly exposed GUI active (`+0x14 = 1`) and frees the old one via `0x4D
 `while (main+0x531) { if (IsOnTop(gi, main+0x37EA0)) break; GUI_Pop(gi); }` — popping
 until the expected in-game screen (name held at `main+0x37EA0`) is on top.
 [BINARY-VERIFIED]
+
+**But `GUI_Pop` is not the only way off the stack, and watching it is not enough**
+[VERIFIED 2026-09-11]. The GUI pump carries its own **inlined copy** of that whole body at
+`0x4AA7BC..0x4AA7FA` — same lock pair, same stage 2, same relink, same `0x4D85A0` free — and
+runs it whenever a click's handler returns with `gi->UIChange_f` still set. An observer armed
+on `0x4A9660` never fires for it, so a screen can vanish with the pop apparently never
+happening. See *The pump's dispatch contract* in
+[exe-reverse-engineering](exe-reverse-engineering.html): clearing `UIChange_f` — the engine's
+own setter is `0x4AB0A0(gi)` — is how a handler says it consumed the click, and leaving it
+set is a request to be popped.
 
 **Consequence for tooling:** only the top GUI is interactive. A snapshot should report the
 top screen's gadgets in full and the names beneath it as a breadcrumb — listing covered

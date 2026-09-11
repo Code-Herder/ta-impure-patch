@@ -1478,12 +1478,27 @@ one small archive.
 | `DLL_PROCESS_ATTACH` | write `impure-patch.ufo` (`guis/render.gui` + `anims/render.gaf`) unconditionally, with a version stamp. `DDRAW.dll` is TotalA.exe's first static import, so this precedes `InitTAHPIAry 0x41D4C0`'s `*.UFO` glob by the loader's rules | — |
 | `DrawGameScreen 0x468CF0` (observer) | the per-frame tick: sample the trigger file on its edges, open or close, re-assert `main+0x37EA0`, and recover if the screen was freed under us | game |
 | `0x46A308` (observer, post-GUI) | blit the sprocket into the back buffer with `CopyGafToContext 0x4B7F90(NULL, frame, x, y)` | game |
-| `GUIMEMSTRUCT+0x08` (our `OnCommand`) | advance the row, `GUIGADGET_SetStatus 0x4A1080` for every row, `grayedout` for Shadow quality, and set the repaint flag `gi+0xCCA` via `0x49FA90`. **It writes no file** | game |
+| `GUIMEMSTRUCT+0x08` (our `OnCommand`) | advance the row, `GUIGADGET_SetStatus 0x4A1080` for every row, `grayedout` for Shadow quality, set the repaint flag `gi+0xCCA` via `0x49FA90`, and **answer the pump with `0x4AB0A0(gi)`** (`gi->UIChange_f = -1`). **It writes no file** | game |
 | `tagpu_shield.c`, both paths | `tagpu_menu_click()` — the sprocket's hit test, from `deliver_mouse()` (injected) and from the wndproc before the shield's gate (real) | game |
 | `tagpu_zoom.c`, two entry points | `tagpu_menu_owns_point()` — the zoom transform must leave a point the menu owns alone. The panel hangs over the world and the transform's gate is geometric, so at any zoom ≠ 1 a row click was bent away and **no row worked**; `tagpu_zoom_drop_mouse` must not treat it as the display-only ring either | game |
 | `render_ogl.c`'s frame | `tagpu_menu_present()` — the deferred cfg/lever write | render |
 | open | `GUI_Load 0x4AA8F0(gi, main+0x37EA0, flags)` with `0x20` + `0x400`, patch the panel rect, set `+0x08`/`+0x0C`, then `0x4C2470(); GUI_StageUpdateDraw(gi, 0x21); 0x4C2870()` — GUI_Load's own suppressed stage 1, reproduced; then repaint the ground and set `gi+0xCCA` | game |
 | close | restore `main+0x37EA0` and call `UpdateIngameGUI 0x491D70(1)`. **`GUI_Pop` is never called** | game |
+
+**Answering the pump is not optional** [VERIFIED 2026-09-11]. `gi->UIChange_f` is
+bidirectional: the pump writes the actuated index into it before calling `OnCommand`
+(`0x4AA675`) and reads it back afterwards (`0x4AA79A`), and a handler that returns with it
+still set is asking to be popped — whereupon `0x4AA7BC..0x4AA7FA`, an **inlined copy of
+`GUI_Pop`'s body**, relinks the stack and `free()`s the `GUIMEMSTRUCT`. Every engine handler
+ends with `0x4AB0A0(gi)` for exactly this reason; see *The pump's dispatch contract* in the
+[engine map](exe-reverse-engineering.html).
+
+Until 2026-09-11 this screen did not, so **every click popped and freed it**, and the tick's
+`on_stack` recovery re-opened it with `fresh == 0` the same frame — which is why it looked
+like it worked. On the front-end screen, where there is no recovery, the same omission simply
+closed the screen; the `GUI_Pop 0x4A9660` observer that was armed to catch it could never fire,
+because the pop is inlined. The recovery path stays (the engine really does tear the in-game
+GUI stack down on a world click) but an ordinary click no longer reaches it.
 
 **Fields we write.** `main+0x37EA0`, the expected-screen name buffer — 16 bytes, saved and
 restored, and re-asserted every frame while the menu is open. Gadget `status_curnt` (`+0x137`)
