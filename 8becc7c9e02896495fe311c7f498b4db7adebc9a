@@ -1,0 +1,1 @@
+landing-review: model=opus effort=high range=main..8becc7c agents=2 findings=8 acted=8 rejected=0 date=2026-09-10 outcome=MECHANISM-REJECTED (render-thread stores into randomly-misaligned engine pointers); reworked in 18a7ee7
