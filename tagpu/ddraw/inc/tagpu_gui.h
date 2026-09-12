@@ -73,26 +73,6 @@ struct TAGPU_PACKET;
 void tagpu_gui_cursor_frame(const struct TAGPU_PACKET* packet);
 int  tagpu_gui_cursor_own(float* r);
 
-/* GAME THREAD, from the packet's publisher (landing 4c). The TNT's own minimap
-   picture (`main+0x1426B`, TED_GENERATED_PIC) — 252x252 or 252x256 against the
-   126-px box the engine fits it into, so drawing it at its native size is a
-   free 2x with no new data path (gui-renderer.md 13.6). `gen` moves once per
-   map load.
-
-   IT IS DECODED ON THE LOADER THREAD and there is no choice about that: the
-   observer sits at `BuildMinimapSurface 0x466780`'s entry because that call is
-   the one place the picture is alive — it consumes the frame at 0x46684F and
-   the loader frees the picture at 0x483DF3/0x483E0B, so by the first in-play
-   draw there is nothing left to decode.
-
-   WHAT LANDING 4C REMOVED IS THE RENDER THREAD READING THAT BUFFER. The
-   publisher copies it into the level's FIRST in-play packet and the render half
-   keeps its own copy from there, keyed on the level generation. The ordering
-   that makes the copy safe is the engine's own rather than a barrier of ours:
-   the loader's last act sets bit 1 of `main+0x38D75`, and the game-screen
-   handler installs the in-play frame handler only after testing that flag — so
-   the decode is complete before any in-play publish can exist. */
-int  tagpu_gui_minimap_pic_game(const unsigned char** pix, int* w, int* h, unsigned* gen);
 
 /* WHETHER THE PACKET CARRIES THE THREE MINIMAP SURFACES (landing 4c). The
    sharp minimap raises it from its own frame — once per present, whenever it

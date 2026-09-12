@@ -1335,14 +1335,3 @@ void tagpu_gui_flush(unsigned int frame_counter)
    caches anything derived from these bytes drops it when the generation moves.
    The bytes are stable for the life of that generation: one writer, one write,
    and it happens inside the map loader before any frame of that map presents. */
-int tagpu_gui_minimap_pic_game(const unsigned char** pix, int* w, int* h, unsigned* gen)
-{
-    unsigned g = s_mmGen;
-    if (!g) return 0;
-    MemoryBarrier();
-    if (pix) *pix = s_mmPic;
-    if (w) *w = s_mmW;
-    if (h) *h = s_mmH;
-    if (gen) *gen = g;
-    return 1;
-}

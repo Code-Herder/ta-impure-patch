@@ -1351,10 +1351,9 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 
 /* the interleave the render half used to do per frame, per row */
 static unsigned char s_mmRg[TAGPU_PK_MM_DIMCAP * TAGPU_PK_MM_DIMCAP * 3];
-/* the level's picture: what was sent, for the heartbeat. The bytes are the GL
-   UI observer's — see fill_gui — and are copied straight out of it. */
+/* the level's picture, decoded once per level (see fill_gui) */
+static unsigned char s_mmPic[TAGPU_PK_MM_DIMCAP * TAGPU_PK_MM_DIMCAP];
 static int s_mmPicW, s_mmPicH, s_mmPicGen = -1;
-static unsigned s_mmPicSrcGen;       /* the decoder's generation we last sent */
 /* the picture rides in ONE packet per level; this says it already has */
 static int s_mmPicSent;
 static volatile unsigned s_cMmCopies, s_cMmRefused, s_cMmPic;
@@ -1395,42 +1394,42 @@ static unsigned fill_gui(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     co = *(const int* const*)(ta + MM_COMPOSITE);
     p->mm_live = ptr_ok(co) ? 1u : 0u;
 
-    /* THE LEVEL'S PICTURE, INTO ITS FIRST IN-PLAY PACKET AND NO OTHER.
-       It cannot be decoded here: `main+0x1426B` is alive only inside
-       BuildMinimapSurface 0x466780, which consumes the frame at 0x46684F, and
-       the loader frees the picture at 0x483DF3/0x483E0B — by the first in-play
-       draw there is nothing left to decode. So the GL UI's observer at that
-       entry still decodes it, on the LOADER thread, into a buffer of ours; what
-       landing 4c removes is the render thread ever reading that buffer.
+    /* THE LEVEL'S PICTURE, DECODED HERE, INTO ITS FIRST IN-PLAY PACKET AND NO
+       OTHER. `main+0x1426B` is the TNT's own minimap picture, a GAF frame, and
+       it is ALIVE FOR THE WHOLE LEVEL: LoadMap stores it at 0x483900 (0x483936
+       stores NULL when the file is absent), `BuildMinimapSurface 0x466780`
+       reads it at 0x46684F and does not null it, and the only thing that frees
+       it is 0x483DFE inside 0x483DD0, whose only caller is 0x491BB3 — the level
+       TEARDOWN cascade [VERIFIED 2026-09-12, objdump of the pristine build].
 
-       THE ORDERING IS THE ENGINE'S OWN, not a barrier of ours: the loader's
-       last act sets bit 1 of main+0x38D75 and the game-screen handler installs
-       the in-play frame handler only after testing it, so the decode is
-       complete before any in-play publish can run. That is the same ordering
-       the whole exchange's level story rests on. */
+       That is what let landing 4c delete the GL UI's loader-thread observer
+       outright. It sat at 0x466780's entry decoding the same frame, on the
+       LOADER thread, because this fork's notes said the picture was alive only
+       inside that call; it is not, and nothing of ours runs on that thread any
+       more. The first in-play draw is the earliest moment the engine's own
+       ordering makes every per-map pointer final (the in-play handler is
+       installed only after the loader sets bit 1 of main+0x38D75), and this is
+       that draw. */
     if (!s_mmPicSent && s_mmPicGen != (int)p->level_gen) {
-        const unsigned char* pic; int w, h; unsigned gen = 0;
-        /* THE DECODER'S OWN GENERATION IS THE FRESHNESS TEST, not the level's.
-           `tagpu_gui_minimap_pic_game` hands back the last picture it decoded
-           SUCCESSFULLY, whatever level that was, so a level whose decode failed
-           would otherwise put the PREVIOUS map's minimap in this level's first
-           packet — a picture of the wrong world, which is worse than none. An
-           unchanged generation means this level produced no picture, and the
-           consumer then keeps drawing the engine's own minimap. */
-        if (tagpu_gui_minimap_pic_game(&pic, &w, &h, &gen) && gen != s_mmPicSrcGen &&
-            w > 0 && h > 0 && w <= TAGPU_PK_MM_DIMCAP && h <= TAGPU_PK_MM_DIMCAP) {
-            p->mmpic_w = w; p->mmpic_h = h;
-            e = append_area(p, cursor, pic, (unsigned)w * (unsigned)h,
-                            &p->mmpic_off, &p->mmpic_len, TAGPU_PK_TRUNC_MMPIC);
-            if (e > need) need = e;
-            if (p->mmpic_len) {                  /* it landed: no later packet carries it */
-                s_mmPicSent = 1; s_mmPicGen = (int)p->level_gen;
-                s_mmPicSrcGen = gen;
-                s_mmPicW = w; s_mmPicH = h; s_cMmPic++;
-            } else {
-                p->mmpic_w = p->mmpic_h = 0;     /* it did not fit: the next packet tries */
+        const unsigned char* fr = tagpu_gaf_frame_sane(*(const void* const*)(ta + MM_PICFRAME));
+        s_mmPicGen = (int)p->level_gen;              /* tried: not once a draw */
+        s_mmPicW = s_mmPicH = 0;
+        if (fr) {
+            int w = *(const unsigned short*)(fr + TAGPU_GF_W);
+            int h = *(const unsigned short*)(fr + TAGPU_GF_H);
+            if (w > 0 && h > 0 && w <= TAGPU_PK_MM_DIMCAP && h <= TAGPU_PK_MM_DIMCAP &&
+                tagpu_gaf_decode(fr, w, h, s_mmPic)) {
+                s_mmPicW = w; s_mmPicH = h;
             }
         }
+    }
+    if (s_mmPicW > 0 && !s_mmPicSent && s_mmPicGen == (int)p->level_gen) {
+        p->mmpic_w = s_mmPicW; p->mmpic_h = s_mmPicH;
+        e = append_area(p, cursor, s_mmPic, (unsigned)s_mmPicW * (unsigned)s_mmPicH,
+                        &p->mmpic_off, &p->mmpic_len, TAGPU_PK_TRUNC_MMPIC);
+        if (e > need) need = e;
+        if (p->mmpic_len) { s_mmPicSent = 1; s_cMmPic++; }
+        else { p->mmpic_w = p->mmpic_h = 0; }        /* did not fit: the next packet tries */
     }
 
     if (p->mm_live && tagpu_gui_want_minimap()) {
