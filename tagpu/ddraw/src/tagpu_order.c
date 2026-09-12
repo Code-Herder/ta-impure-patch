@@ -369,18 +369,38 @@ int tagpu_order_armed(unsigned frame_counter)
    fields for one frame. Every position is carried BOTH as the 16.16 the
    snapshot saw and, where it came from a unit, as that unit, so the present
    thread can ask tagpu_native_unit_pos() for the interpolated one. */
+/* NO ENGINE POINTER SURVIVES INTO THE DRAW (frame packet exchange, landing 3).
+   A record used to carry five raw UnitStruct* and a UnitDef*, and the present
+   thread bounded each against the live `begin`/`end` pair before dereferencing
+   it — the same unsynchronised pair the unit pass read, and the audit's open
+   hazard (cross-thread-engine-reads.md §5 row 2). The snapshot runs on the GAME
+   thread inside the marker block, so it resolves all of it there: a unit
+   becomes its ARRAY SLOT (the present thread finds the matching PK_UNIT in the
+   frame packet, or draws the snapshotted 16.16 if it is gone), and every def
+   and weapon field the drawing needs becomes a number in the record. A GAF
+   sequence pointer still crosses, as a session asset tagpu_gaf.c resolves —
+   the cursor table is loaded once and never rewritten. */
 typedef struct ORDREC {
-    const char* unit;        /* the unit whose order list this node is on     */
-    const char* owner;       /* node+0x0E, the issuing unit                   */
-    const char* target;      /* node+0x16, or NULL for a ground target        */
-    const char* startU;      /* unit the chain-in position came from, or NULL */
-    const char* endU;        /* unit the resolved sprite position came from   */
-    const char* cirU;        /* unit the target-circle centre came from       */
     int sx, sy, sz;          /* chain-in position (16.16)                     */
     int bx, by, bz;          /* node+0x22.. — the build site / ground target  */
     int ex, ey, ez;          /* resolved sprite position (16.16)              */
     int cx, cy, cz;          /* target-circle centre (16.16)                  */
-    const char* bdef;        /* UnitDef of the build target (bit 0), or NULL  */
+    int ux, uy, uz;          /* the ISSUING unit's own 16.16 position         */
+    int ownerSlot;           /* node+0x0E's unit, as an array slot; -1 = none */
+    int startSlot;           /* the chain-in position's unit, or -1           */
+    int endSlot;             /* the resolved sprite position's unit, or -1    */
+    int cirSlot;             /* the target-circle centre's unit, or -1        */
+    const char* seq;         /* the cursor sprite's GAF sequence (session)    */
+    int foot[5];             /* the build def's five footprint extents        */
+    int wrange[3];           /* live weapon ranges (0 = no such slot)         */
+    int wattack[3];          /* ...and their attackrunlength (ShowRanges)     */
+    int explodeAoe;          /* ExplodeAs weapon's AoE >> 1 (kamikaze pulse)  */
+    short rng[9];            /* the nine labelled def ranges, in engine order */
+    unsigned short waoe[3];  /* the weapons' area of effect (ShowRanges)      */
+    unsigned short defAttack;/* def+0x216, the def's own attack run length    */
+    unsigned short cloakDist;/* def+0x208                                     */
+    unsigned short kamiDist; /* def+0x218                                     */
+    short sight;             /* def+0x202                                     */
     int issue;               /* node+0x46                                     */
     int cirR;                /* target-circle radius, world units             */
     unsigned mask;           /* descriptor mask AND the driver's              */
@@ -389,6 +409,12 @@ typedef struct ORDREC {
     unsigned char cursor;    /* descriptor+0x10                               */
     unsigned char flag;      /* driver flag: 1 = hovered / tracked            */
     unsigned char sel;       /* the issuing unit was selected                 */
+    unsigned char cloaked;   /* the issuing unit is actively cloaked          */
+    unsigned char kamikaze;  /* def+0x241 bit28                               */
+    unsigned char kamiPick;  /* the engine's *(u+0) test: kamikazedistance or
+                                sight for the second pulse circle             */
+    unsigned char haveDef;   /* the issuing unit's def resolved               */
+    unsigned char haveBdef;  /* the build target's def resolved               */
 } ORDREC;
 
 typedef struct ORDARENA {
@@ -397,6 +423,10 @@ typedef struct ORDARENA {
     int    gameTime;         /* snapshotted, so the arena is self-contained   */
     int    showRanges;
     int    dropped;          /* records the cap refused                       */
+    const char* pathIcon;    /* main+0x148D3, the route dots' GAF sequence:
+                                a session asset, resolved here so the present
+                                thread needs no engine pointer of its own     */
+    const unsigned char* gui;/* unused: the GUI colours ride in the packet    */
 } ORDARENA;
 
 /* Two arenas and a published index, filled the same way the capture layer is:
@@ -494,7 +524,20 @@ static const char* circle_centre(const char* node, int out[3], int* radius)
 
 /* One unit's order list, exactly as 0x439B30 walks it. `budget` bounds the
    whole snapshot; a list that never terminates costs it and stops. */
-static void walk_unit(ORDARENA* A, const char* ta, const char* unit,
+/* A unit pointer as its array SLOT, on the game thread, from the base the
+   caller already holds. -1 for "no unit", which is what the present thread
+   draws a fixed 16.16 position for. */
+static int ord_slot(const char* units, const char* u)
+{
+    size_t d;
+    if (!ptr_ok(units) || !ptr_ok(u) || u <= units) return -1;
+    d = (size_t)(u - units);
+    if (d % UNIT_STRIDE) return -1;
+    d /= UNIT_STRIDE;
+    return (d && d < 0x10000u) ? (int)d : -1;
+}
+
+static void walk_unit(ORDARENA* A, const char* ta, const char* units, const char* unit,
                       unsigned callerMask, int flag, int* budget)
 {
     int pos[3];
@@ -533,12 +576,62 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* unit,
 
             r = &A->rec[A->n];
             memset(r, 0, sizeof *r);
-            r->unit   = unit;
-            r->owner  = *(const char* const*)(node + N_OWNER);
-            r->target = *(const char* const*)(node + N_TARGET);
-            if (!ptr_ok(r->owner))  r->owner  = NULL;
-            if (!ptr_ok(r->target)) r->target = NULL;
-            r->startU = startU;
+            r->ownerSlot = r->startSlot = r->endSlot = r->cirSlot = -1;
+            {
+                const char* own = *(const char* const*)(node + N_OWNER);
+                if (!ptr_ok(own)) own = NULL;
+                r->ownerSlot = ord_slot(units, own);
+                /* THE ISSUING UNIT, RESOLVED HERE. Everything the present
+                   thread used to read off this pointer — its position, its
+                   cloak bit, its def's nine ranges and its three live weapons
+                   — is copied now, on the thread that owns it. */
+                if (own) {
+                    const char* def = *(const char* const*)(own + U_TYPE);
+                    r->ux = *(const int*)(own + U_POS + 0);
+                    r->uy = *(const int*)(own + U_POS + 4);
+                    r->uz = *(const int*)(own + U_POS + 8);
+                    r->cloaked = (unsigned char)((*(const unsigned char*)(own + U_CLOAKF) & 4) ? 1 : 0);
+                    r->kamiPick = (unsigned char)(*(const unsigned*)own ? 1 : 0);
+                    r->sel = (unsigned char)((*(const unsigned*)(own + U_STATE) & 0x10u) ? 1 : 0);
+                    if (ptr_ok(def)) {
+                        static const int rngOff[9] = {
+                            UD_CLOAKDIST, UD_SIGHT, UD_RADAR, UD_SONAR, UD_RJAM,
+                            UD_SJAM, UD_BUILDDIST, UD_MANEUVER, UD_KAMIDIST };
+                        static const int rngSgn[9] = { 1, 1, 1, 1, 1, 1, 0, 0, 0 };
+                        int k;
+                        r->haveDef = 1;
+                        for (k = 0; k < 9; k++)
+                            r->rng[k] = rngSgn[k] ? *(const short*)(def + rngOff[k])
+                                                  : (short)*(const unsigned short*)(def + rngOff[k]);
+                        r->cloakDist = *(const unsigned short*)(def + UD_CLOAKDIST);
+                        r->sight     = *(const short*)(def + UD_SIGHT);
+                        r->kamiDist  = *(const unsigned short*)(def + UD_KAMIDIST);
+                        r->defAttack = *(const unsigned short*)(def + UD_ATTACKRUN);
+                        r->kamikaze  = (unsigned char)((*(const unsigned*)(def + UD_TYPEMASK0) & 0x10000000u) ? 1 : 0);
+                        if (r->kamikaze) {
+                            const char* weap = *(const char* const*)(def + UD_EXPLODEAS);
+                            if (ptr_ok(weap)) r->explodeAoe = *(const unsigned short*)(weap + W_AOE) >> 1;
+                        }
+                        for (k = 0; k < 3; k++) {
+                            const char* w;
+                            /* The third weapon is gated on the FIRST one's flag
+                               byte in this build (`test [edx+0x1f],2` at both
+                               0x439443 and 0x43949D, where slot 1 correctly uses
+                               +0x3B). Reproduced rather than corrected — a "fix"
+                               here would show up as a marker the engine never
+                               drew. */
+                            int fl = (k == 2) ? 0 : k;
+                            if (!(*(const unsigned char*)(own + U_WEAPFLAGS + fl * 0x1C) & 2)) continue;
+                            w = *(const char* const*)(own + U_WEAP0 + k * 0x1C);
+                            if (!ptr_ok(w)) continue;
+                            r->wrange[k]  = *(const int*)(w + W_RANGE);
+                            r->waoe[k]    = *(const unsigned short*)(w + W_AOE);
+                            r->wattack[k] = *(const int*)(w + W_ATTACKRUN);
+                        }
+                    }
+                }
+            }
+            r->startSlot = ord_slot(units, startU);
             r->sx = entry[0]; r->sy = entry[1]; r->sz = entry[2];
             r->bx = *(const int*)(node + N_TPOS + 0);
             r->by = *(const int*)(node + N_TPOS + 4);
@@ -549,8 +642,10 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* unit,
             r->type   = type;
             r->cursor = (unsigned char)(d ? *(const unsigned char*)(d + DESC_CURSOR) : 0);
             r->flag   = (unsigned char)(flag != 0);
-            r->sel    = (unsigned char)(r->owner &&
-                            (*(const unsigned*)(r->owner + U_STATE) & 0x10u) ? 1 : 0);
+            /* the cursor sprite's sequence, resolved on this thread: a session
+               asset (tagpu_gaf.c's class), so the pointer may cross */
+            if (r->cursor && r->cursor < 0x15)
+                r->seq = *(const char* const*)(ta + OFF_CURSORARY + (size_t)r->cursor * 4);
 
             /* bit 0 — the build site. Nothing at all without a build target
                type, chains pos to the node's own target when there is one.
@@ -568,7 +663,14 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* unit,
                     unsigned ndef = *(const unsigned*)(ta + OFF_UDEFCOUNT);
                     if (ptr_ok(base) && ndef <= 16384u && (unsigned)r->btype < ndef) {
                         const char* d2 = base + (size_t)r->btype * UDEF_STRIDE;
-                        if (ptr_ok(d2)) r->bdef = d2;
+                        if (ptr_ok(d2)) {
+                            r->haveBdef = 1;
+                            r->foot[0] = *(const int*)(d2 + UD_FOOT_X0);
+                            r->foot[1] = *(const int*)(d2 + UD_FOOT_Y0);
+                            r->foot[2] = *(const int*)(d2 + UD_FOOT_Z0);
+                            r->foot[3] = *(const int*)(d2 + UD_FOOT_X1);
+                            r->foot[4] = *(const int*)(d2 + UD_FOOT_Z1);
+                        }
                     }
                     pos[0] = r->bx; pos[1] = r->by; pos[2] = r->bz;
                     startU = NULL;
@@ -580,20 +682,21 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* unit,
                written. */
             if (mask & 0x0A) {
                 int p[3];
-                r->endU = resolve_sprite(node, p);
+                startU = resolve_sprite(node, p);
+                r->endSlot = ord_slot(units, startU);
                 r->ex = p[0]; r->ey = p[1]; r->ez = p[2];
                 pos[0] = p[0]; pos[1] = p[1]; pos[2] = p[2];
-                startU = r->endU;
             }
             /* bit 2 — the target circle. It chains too, and it runs BEFORE
                bit 3, so a node carrying both ends up chained to the sprite. */
             if (mask & 0x04) {
                 int c[3];
-                r->cirU = circle_centre(node, c, &r->cirR);
+                const char* cu = circle_centre(node, c, &r->cirR);
+                r->cirSlot = ord_slot(units, cu);
                 r->cx = c[0]; r->cy = c[1]; r->cz = c[2];
                 if (!(mask & 0x08)) {
                     pos[0] = c[0]; pos[1] = c[1]; pos[2] = c[2];
-                    startU = r->cirU;
+                    startU = cu;
                 }
             }
             /* bit 4 — range circles, once per unit behind the engine's guard */
@@ -605,11 +708,11 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* unit,
                 char b[224];
                 _snprintf(b, sizeof b,
                     "order TRACE own: u=%p node=%p type=%u mask=%x flag=%d "
-                    "in=(%d,%d,%d) out=(%d,%d,%d) tgt=%p btype=%u issue=%d",
+                    "in=(%d,%d,%d) out=(%d,%d,%d) ownerslot=%d btype=%u issue=%d",
                     (const void*)unit, (const void*)node, type, r->mask, flag,
                     entry[0] >> 16, entry[1] >> 16, entry[2] >> 16,
                     pos[0] >> 16, pos[1] >> 16, pos[2] >> 16,
-                    (const void*)r->target, r->btype, r->issue);
+                    r->ownerSlot, r->btype, r->issue);
                 flog(b);
             }
             node = *(char* const*)(node + N_NEXT);
@@ -667,6 +770,7 @@ int tagpu_order_snapshot(void* ctx, void* view)
     A->dropped = 0;
     A->gameTime  = *(const int*)(ta + OFF_GAMETIME);
     A->showRanges = *(const int*)(ta + OFF_SHOWRANGE) != 0;
+    A->pathIcon  = *(const char* const*)(ta + OFF_PATHICON);
 
     if (ptr_ok(first) && ptr_ok(last) && first <= last &&
         (size_t)(last - first) <= (size_t)UNIT_STRIDE * 20000) {
@@ -684,7 +788,7 @@ int tagpu_order_snapshot(void* ctx, void* view)
             } else if (builder) {
                 mask = 0x01; flag = 1;
             } else continue;
-            walk_unit(A, ta, u, mask, flag, &budget);
+            walk_unit(A, ta, units, u, mask, flag, &budget);
         }
     }
 
@@ -722,9 +826,10 @@ void tagpu_order_trace_drawer(int bit, const void* node, const int* pos, int fla
 
 /* the frame's derived constants, set once per gather */
 static const TAGPU_FXVIEW* s_v;
-static const char*         s_ta;   /* this file's own read of the main pointer (to-convert:3) */
+static const TAGPU_PACKET* s_pk;   /* this frame's packet: the units and the GUI colours */
 static ORDREC s_rec[MAXORD];     /* the present thread's private copy       */
 static const unsigned char* s_gui;
+static const char* s_pathIcon;   /* the arena's copy, a session GAF sequence  */
 static double s_px;              /* one SCREEN pixel, in game-frame units    */
 static int    s_nrec, s_nline, s_ndot, s_nover, s_nlabel;
 
@@ -739,31 +844,36 @@ static void project(double wx, double walt, double wz, float* sx, float* sy)
     *sy = (float)(wz - walt * 0.5 - (double)s_v->eyeY + 32.0);
 }
 
-/* A record's unit pointer, but only if it still names a SLOT of the live unit
-   array. The game thread writes the arena while this thread walks it, and the
-   two-arena discipline makes a torn record rare rather than impossible — a
-   torn coordinate costs one wrong line, but a torn POINTER handed to a
-   dereference costs the process, so it is bounded instead of trusted. */
-static const char* sane_unit(const char* u)
+/* THE UNIT A RECORD NAMES, out of THIS FRAME'S PACKET (landing 3). The record
+   carries an array SLOT the game thread computed; the packet's units table is
+   in slot order, so this is a binary search over our own memory — no bound on
+   an engine pointer, no `begin`/`end` pair, and a unit that died between the
+   snapshot and the packet simply is not found and the record draws from the
+   16.16 position the snapshot took. */
+static const TAGPU_PK_UNIT* pk_unit(int slot)
 {
-    const char *beg, *end;
-    if (!u || !s_v) return NULL;
-    beg = *(const char* const*)(s_ta + OFF_UNITS);
-    end = *(const char* const*)(s_ta + OFF_UNITEND);
-    if (!ptr_ok(beg) || !ptr_ok(end) || u < beg || u >= end) return NULL;
-    if ((size_t)(u - beg) % UNIT_STRIDE) return NULL;
-    return u;
+    const TAGPU_PK_UNIT* uu;
+    unsigned lo, hi;
+    if (slot < 0 || !s_pk || !s_pk->n_units) return NULL;
+    uu = tagpu_pk_units(s_pk);
+    lo = 0; hi = s_pk->n_units;
+    while (lo < hi) {
+        unsigned mid = lo + (hi - lo) / 2u;
+        if (uu[mid].slot == (unsigned)slot) return &uu[mid];
+        if (uu[mid].slot < (unsigned)slot) lo = mid + 1u; else hi = mid;
+    }
+    return NULL;
 }
 
 /* A position that may ride a unit: the interpolated sample when the record
-   named a unit and this frame's unit gather produced one, the snapshotted
-   16.16 otherwise. */
-static void rec_pos(const char* unit, int fx, int fy, int fz,
+   named a unit this frame's packet still carries, the snapshotted 16.16
+   otherwise. */
+static void rec_pos(int slot, int fx, int fy, int fz,
                     double* x, double* y, double* z)
 {
+    const TAGPU_PK_UNIT* u = pk_unit(slot);
     float ux, uy, uz;
-    unit = sane_unit(unit);
-    if (unit && tagpu_native_unit_pos(unit, &ux, &uy, &uz)) {
+    if (u && tagpu_native_unit_pos(u, &ux, &uy, &uz)) {
         *x = ux; *y = uy; *z = uz;
         return;
     }
@@ -941,12 +1051,12 @@ static void ocircle(double wx, double walt, double wz, double rad, int col,
     range_label(wx, walt, wz, rad, label, slot);
 }
 
-static void range_circle(const char* unit, int fx, int fy, int fz, double rad,
+static void range_circle(int uslot, int fx, int fy, int fz, double rad,
                          int col, const char* label, int slot)
 {
     double wx, wy, wz;
     if (rad <= 0.0) return;
-    rec_pos(unit, fx, fy, fz, &wx, &wy, &wz);
+    rec_pos(uslot, fx, fy, fz, &wx, &wy, &wz);
     ocircle(wx, wy, wz, rad, col, label, slot);
 }
 
@@ -980,15 +1090,18 @@ static int seq_ink(const char* seq, int fallback)
     w = *(const unsigned short*)(g + TAGPU_GF_W);
     h = *(const unsigned short*)(g + TAGPU_GF_H);
     ck = *(const unsigned char*)(g + TAGPU_GF_CK);
-    /* THE ENGINE'S OWN TABLE, deliberately, and the one place in the world's
-       code that still reads it. Two reasons, both required: this walk runs on
-       the GAME THREAD (tagpu_order.h, "the two-thread split") and tagpu_pal.c
-       resolves on the render thread's cadence, so calling it here would race
-       the snapshot every other pass reads; and the question is a luminance
-       RANKING over one sprite's own colours, which a uniform scale of every
-       entry cannot change — the ink index this picks is a property of the art,
-       not of the display. */
-    pal = (const unsigned char*)(s_ta + OFF_PALETTE);
+    /* THE ENGINE'S OWN TABLE, deliberately — the packet's copy of main+0x143A7
+       rather than tagpu_pal.c's gamma-scaled snapshot. The question is a
+       luminance RANKING over one sprite's own colours, which a uniform scale of
+       every entry cannot change: the ink index this picks is a property of the
+       art, not of the display. (This comment used to say the walk runs on the
+       GAME thread. It does not and never did: `tagpu_order_gather` is called
+       from `tagpu_mark_gather`, inside the unit pass, on the render thread —
+       only the SNAPSHOT is game-side. The reasoning above is unaffected; the
+       claim about which thread reads the table was simply wrong, and the table
+       now arrives in the packet either way.) */
+    pal = s_pk ? s_pk->pal : NULL;
+    if (!pal) return fallback;
     if (w > 0 && h > 0 && w <= 128 && h <= 128 &&
         tagpu_gaf_decode(g, w, h, pix)) {
         memset(hist, 0, sizeof hist);
@@ -1013,20 +1126,19 @@ static int seq_ink(const char* seq, int fallback)
 /* --- bit 0: the queued build site --- */
 static void draw_build(const ORDREC* r, int gameTime)
 {
-    const char* def = r->bdef;
     double t;
     double p0x, p0y, p0z, p1x, p1z;
     float x0, z0, x1, z1;
     float xg0, xg1, zg0, zg1, e;
     int colA, colB, age;
 
-    if (!s_build || !r->btype || !ptr_ok(def)) return;
+    if (!s_build || !r->btype || !r->haveBdef) return;
 
-    p0x = ((double)(short)((*(const int*)(def + UD_FOOT_X0) + r->bx) >> 16));
-    p0y = ((double)(short)((*(const int*)(def + UD_FOOT_Y0) + r->by) >> 16));
-    p0z = ((double)(short)((*(const int*)(def + UD_FOOT_Z0) + r->bz) >> 16));
-    p1x = ((double)(short)((*(const int*)(def + UD_FOOT_X1) + r->bx) >> 16));
-    p1z = ((double)(short)((*(const int*)(def + UD_FOOT_Z1) + r->bz) >> 16));
+    p0x = ((double)(short)((r->foot[0] + r->bx) >> 16));
+    p0y = ((double)(short)((r->foot[1] + r->by) >> 16));
+    p0z = ((double)(short)((r->foot[2] + r->bz) >> 16));
+    p1x = ((double)(short)((r->foot[3] + r->bx) >> 16));
+    p1z = ((double)(short)((r->foot[4] + r->bz) >> 16));
 
     project(p0x, p0y, p0z, &x0, &z0);
     project(p1x, p0y, p1z, &x1, &z1);
@@ -1065,7 +1177,6 @@ static void draw_build(const ORDREC* r, int gameTime)
    information — translucency costs legibility. */
 static void draw_sprite(const ORDREC* r, int gameTime, int showRanges)
 {
-    const char* ta = s_ta;
     const char* seq;
     double wx, wy, wz;
     float cx, cy;
@@ -1076,7 +1187,7 @@ static void draw_sprite(const ORDREC* r, int gameTime, int showRanges)
        included — `0x4397F9` returns before `0x439811` ever reads the toggle */
     if (!s_sprite || !r->cursor || r->cursor >= 0x15) return;
 
-    rec_pos(r->endU, r->ex, r->ey, r->ez, &wx, &wy, &wz);
+    rec_pos(r->endSlot, r->ex, r->ey, r->ez, &wx, &wy, &wz);
     project(wx, wy, wz, &cx, &cy);
 
     /* `0x439740` has a ShowRanges limb of its own (`0x439811..0x439948`), and it
@@ -1087,40 +1198,32 @@ static void draw_sprite(const ORDREC* r, int gameTime, int showRanges)
        flags here are the regular `0x1F + i*0x1C` — this drawer does NOT carry
        `0x4390A0`'s third-slot quirk. */
     if (showRanges && (r->cursor == 1 || r->cursor == 2)) {
-        const char* u = sane_unit(r->owner);
         int flash = s_gui[(gameTime & 1) ? GUI_FLASH : GUI_RED];
-        if (u) {
-            const char* def = *(const char* const*)(u + U_TYPE);
+        if (r->ownerSlot >= 0) {
             char lab[40];
             int i, v;
             for (i = 0; i < 3; i++) {
-                const char* w;
-                if (!(*(const unsigned char*)(u + U_WEAPFLAGS + i * 0x1C) & 2)) continue;
-                w = *(const char* const*)(u + U_WEAP0 + i * 0x1C);
-                if (!ptr_ok(w)) continue;
-                v = *(const unsigned short*)(w + W_AOE);
+                v = (int)r->waoe[i];
                 if (v) {
                     /* `0x5051C4` through the engine's own sprintf at `0x43989B`,
                        with the weapon INDEX (0..2), and label slot 0 */
                     _snprintf(lab, sizeof lab, "weapon %d - area of effect", i);
                     ocircle(wx, wy, wz, (double)v, flash, lab, 0);
                 }
-                v = *(const int*)(w + W_ATTACKRUN);
+                v = r->wattack[i];
                 if (v) {
                     _snprintf(lab, sizeof lab, "weapon %d - coverage", i);
                     ocircle(wx, wy, wz, (double)v, flash, lab, 1);
                 }
             }
-            if (ptr_ok(def)) {
-                v = *(const unsigned short*)(def + UD_ATTACKRUN);
-                if (v) ocircle(wx, wy, wz, (double)v, flash, "attack length", 2);
-            }
+            if (r->haveDef && r->defAttack)
+                ocircle(wx, wy, wz, (double)r->defAttack, flash, "attack length", 2);
         }
     }
 
     /* the sprite itself, and only now: the engine reaches its own sequence
        lookup at `0x439952`, after the limb above */
-    seq = *(const char* const*)(ta + OFF_CURSORARY + (size_t)r->cursor * 4);
+    seq = r->seq;
     if (!ptr_ok(seq)) return;
     nfr = *(const unsigned short*)seq;
     period = *(const unsigned short*)(seq + 0x2C);
@@ -1145,7 +1248,6 @@ static void draw_sprite(const ORDREC* r, int gameTime, int showRanges)
 /* --- bit 1: the marching route dots --- */
 static void draw_dots(const ORDREC* r, int gameTime)
 {
-    const char* ta = s_ta;
     const char* seq;
     double ax, ay, az, bx, by, bz;
     double dx, dy, dz, len, cursor, phase;
@@ -1155,11 +1257,11 @@ static void draw_dots(const ORDREC* r, int gameTime)
     /* only the frames' INK is wanted: what the engine steps through the
        sequence for is the dot's animation, and a procedurally drawn round dot
        is the same dot in every frame */
-    seq = *(const char* const*)(ta + OFF_PATHICON);
+    seq = s_pathIcon;
     ink = ptr_ok(seq) ? seq_ink(seq, s_gui[GUI_WHITE]) : s_gui[GUI_WHITE];
 
-    rec_pos(r->startU, r->sx, r->sy, r->sz, &ax, &ay, &az);
-    rec_pos(r->endU,   r->ex, r->ey, r->ez, &bx, &by, &bz);
+    rec_pos(r->startSlot, r->sx, r->sy, r->sz, &ax, &ay, &az);
+    rec_pos(r->endSlot,   r->ex, r->ey, r->ez, &bx, &by, &bz);
     dx = bx - ax; dy = by - ay; dz = bz - az;
     len = sqrt(dx * dx + dy * dy + dz * dz);
     if (len < 1.0) return;                       /* the engine's 0x10000 floor */
@@ -1183,52 +1285,38 @@ static void draw_circle(const ORDREC* r)
     if (!s_circle) return;
     rr = (double)r->cirR;
     if (rr <= 0.0) return;
-    rec_pos(r->cirU, r->cx, r->cy, r->cz, &wx, &wy, &wz);
+    rec_pos(r->cirSlot, r->cx, r->cy, r->cz, &wx, &wy, &wz);
     oellipse(wx, wy, wz, rr, rr * CIRCLE_SQUASH, s_gui[GUI_RED], 0);
 }
 
 /* --- bit 4: the per-unit range circles --- */
 static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
 {
-    const char* u = sane_unit(r->owner);
-    const char* def;
-    int ux, uy, uz, nslot = 0;
+    int us = r->ownerSlot;
+    int ux = r->ux, uy = r->uy, uz = r->uz, nslot = 0;
 
-    if (!s_ranges || !u) return;
-    def = *(const char* const*)(u + U_TYPE);
-    if (!ptr_ok(def)) return;
-    ux = *(const int*)(u + U_POS + 0);
-    uy = *(const int*)(u + U_POS + 4);
-    uz = *(const int*)(u + U_POS + 8);
+    if (!s_ranges || us < 0 || !r->haveDef) return;
 
     if (!showRanges) {
-        const char* weap;
         int aoe, t, rr;
-        if (*(const unsigned short*)(def + UD_CLOAKDIST) &&
-            (*(const unsigned char*)(u + U_CLOAKF) & 4))
-            range_circle(u, ux, uy, uz,
-                         (double)*(const short*)(def + UD_CLOAKDIST),
+        if (r->cloakDist && r->cloaked)
+            range_circle(us, ux, uy, uz, (double)(short)r->cloakDist,
                          s_gui[GUI_WHITE], NULL, 0);
-        if (!(*(const unsigned*)(def + UD_TYPEMASK0) & 0x10000000u)) return;
-        weap = *(const char* const*)(def + UD_EXPLODEAS);
-        if (!ptr_ok(weap)) return;
-        aoe = *(const unsigned short*)(weap + W_AOE) >> 1;
+        if (!r->kamikaze) return;
+        aoe = r->explodeAoe;
+        if (!aoe) return;
         /* radius = clamp(((gameTime % 60) * aoe * 2) / 60, 8, aoe/2), all of it
            the engine's UNSIGNED arithmetic */
         t  = (int)((unsigned)gameTime % 60u);
         rr = (int)(((unsigned)t * (unsigned)aoe * 2u) / 60u);
         if (rr < 8) rr = 8;
         if (rr > aoe) rr = aoe;
-        range_circle(u, ux, uy, uz, (double)rr, s_gui[GUI_RED], NULL, 0);
+        range_circle(us, ux, uy, uz, (double)rr, s_gui[GUI_RED], NULL, 0);
         /* and the engine picks between kamikazedistance and sight on unit+0x0 */
-        if (*(const unsigned*)u)
-            range_circle(u, ux, uy, uz,
-                         (double)*(const unsigned short*)(def + UD_KAMIDIST),
-                         s_gui[GUI_RED], NULL, 0);
+        if (r->kamiPick)
+            range_circle(us, ux, uy, uz, (double)r->kamiDist, s_gui[GUI_RED], NULL, 0);
         else
-            range_circle(u, ux, uy, uz,
-                         (double)*(const short*)(def + UD_SIGHT),
-                         s_gui[GUI_RED], NULL, 0);
+            range_circle(us, ux, uy, uz, (double)r->sight, s_gui[GUI_RED], NULL, 0);
         return;
     }
 
@@ -1248,13 +1336,9 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
            kamikazedistance (`0x43937A`, `0x4393B7`, `0x439404`). Inert for any
            value under 32768, which all of them are in stock content — recorded
            because a blanket cast either way is a guess, and this one is free. */
-        static const struct { int off; int sgn; const char* name; } rng[9] = {
-            { UD_CLOAKDIST, 1, "mincloak"  }, { UD_SIGHT,    1, "sight"    },
-            { UD_RADAR,     1, "radar"     }, { UD_SONAR,    1, "sonar"    },
-            { UD_RJAM,      1, "radarjam"  }, { UD_SJAM,     1, "sonarjam" },
-            { UD_BUILDDIST, 0, "build distance" },
-            { UD_MANEUVER,  0, "maneuver"  },
-            { UD_KAMIDIST,  0, "kamikazedistance" },
+        static const char* const rname[9] = {
+            "mincloak", "sight", "radar", "sonar", "radarjam", "sonarjam",
+            "build distance", "maneuver", "kamikazedistance"
         };
         int i;
         /* The label SLOT is the number of circles drawn so far, which is what
@@ -1264,10 +1348,9 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
            pushes it without incrementing. The strings are the engine's own,
            at `0x505190/88/80/78/6C/60/50/44` and `0x503A0C`. */
         for (i = 0; i < 9; i++) {
-            int v = rng[i].sgn ? (int)*(const short*)(def + rng[i].off)
-                               : (int)*(const unsigned short*)(def + rng[i].off);
-            if (v) range_circle(u, ux, uy, uz, (double)v, s_gui[GUI_YELLOW],
-                                rng[i].name, nslot++);
+            int v = (int)r->rng[i];
+            if (v) range_circle(us, ux, uy, uz, (double)v, s_gui[GUI_YELLOW],
+                                rname[i], nslot++);
         }
     }
     {
@@ -1276,20 +1359,12 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
         int flash = s_gui[(gameTime & 1) ? GUI_FLASH : GUI_RED];
         int i;
         for (i = 0; i < 3; i++) {
-            const char* w;
-            int rng;
-            /* The third weapon is gated on the FIRST one's flag byte in this
-               build (`test [edx+0x1f],2` at both 0x439443 and 0x43949D, where
-               slot 1 correctly uses +0x3B). Reproduced rather than corrected —
-               a "fix" here would show up as a marker the engine never drew. */
-            int fl = (i == 2) ? 0 : i;
-            if (!(*(const unsigned char*)(u + U_WEAPFLAGS + fl * 0x1C) & 2)) continue;
-            w = *(const char* const*)(u + U_WEAP0 + i * 0x1C);
-            if (!ptr_ok(w)) continue;
-            rng = *(const int*)(w + W_RANGE);
+            int rng = r->wrange[i];
             /* the weapon labels carry the slot as a LITERAL 0/1/2
-               (`0x439457`, `0x439485`, `0x4394B0`), not the running count */
-            if (rng) range_circle(u, ux, uy, uz, (double)rng, flash, wname[i], i);
+               (`0x439457`, `0x439485`, `0x4394B0`), not the running count.
+               The snapshot applied the engine's own slot gate, including its
+               third-weapon quirk. */
+            if (rng) range_circle(us, ux, uy, uz, (double)rng, flash, wname[i], i);
         }
     }
 }
@@ -1307,10 +1382,11 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
     /* Without the redirect the engine is still drawing its own and ours would
        be a second set at the unzoomed position. Refuse rather than double. */
     if (!tagpu_markown_installed()) return 0;
-    /* this file's own read of the main pointer: the view record no longer
-       carries it (frame packet exchange, landing 2), so the rule sees it here */
-    s_ta = *(const char* const*)TA_MAINPP;
-    if (!ptr_ok(v) || !ptr_ok(s_ta)) return 0;
+    /* THE FRAME PACKET IS THE ONLY ENGINE STATE THIS HALF SEES (landing 3):
+       the units the records name, the GUI colour table and the palette the ink
+       ranking uses. No main pointer, no unit array pair, no def dereference. */
+    s_pk = v->packet;
+    if (!ptr_ok(v) || !s_pk || !s_pk->in_game) return 0;
     /* Taking the draw is done HERE and not from the arm poll, for the reason
        tagpu_mark_armed spells out: the render is the only place that knows the
        pass is really running, and the arm poll is reached at the menus too. */
@@ -1335,7 +1411,9 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
        unit pointer goes through sane_unit(), `bdef` is bounded against the
        UnitDef array, and every primitive is culled against the viewport, so the
        worst a straddled copy can produce is one frame of a marker in the wrong
-       place. */
+       place. Since landing 3 that is stronger still: a record carries no engine
+       pointer at all, so a straddled copy can produce a wrong NUMBER and never
+       a wrong dereference. */
     for (i = 0; i < 2; i++) {
         /* Sample the generation BEFORE the slot, so a publication that lands
            between the two is seen as well as one that lands during the copy. */
@@ -1348,13 +1426,14 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
         showRanges = A->showRanges;
         if (n < 0) n = 0;
         if (n > MAXORD) n = MAXORD;
+        s_pathIcon = A->pathIcon;
         if (n) memcpy(s_rec, A->rec, (size_t)n * sizeof s_rec[0]);
         if (g_gen == gen) break;      /* nothing was published under us */
     }
     if (n <= 0) return 0;
 
     s_v   = v;
-    s_gui = (const unsigned char*)(s_ta + OFF_GUICOL);
+    s_gui = s_pk->gui_col;
     s_px  = 1.0 / (double)(v->zoom > 0.0f ? v->zoom : 1.0f);
 
     for (i = 0; i < n; i++) {

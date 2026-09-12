@@ -3,7 +3,7 @@
    destabilised TA under wine). Called from render_ogl.c just before SwapBuffers.
    Runs the file-triggered services (input, peek, ui, catalogues, scenario),
    detects GL context changes, flushes the engine detours, logs the live roster
-   tacli reads, then dispatches the GL passes (scaffold, native, write-back).
+   tacli reads, then dispatches the GL passes (scaffold, native).
    tagpu_overlay.off is the kill switch for everything we draw in GL.
    The G1/G2/Phase-A proof markers (corner spinner, mouse dot, per-unit and
    per-piece triangles) were retired 2026-09-02; the log lines they shared stay. */
@@ -16,7 +16,6 @@
 #include "tagpu_overlay.h"
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
-#include "tagpu_render3do.h"
 #include "tagpu_owndraw.h"
 #include "tagpu_fxown.h"
 #include "tagpu_featown.h"
@@ -194,302 +193,86 @@ void tagpu_overlay_capture_end(const TAGPU_FRAME* f)
     (void)f;
 }
 
-/* ---- G2: read live engine state (unit array, eye, local player, mouse) ----
-   Addresses binary-confirmed against stock TA 3.1 (see wiki: field-notes / roadmap).
-   All reads are read-only; guards keep us safe at the menu (no game struct yet). */
-#define TA_MAINPP     0x00511DE8u  /* TAdynmemStruct** */
-#define OFF_BEGIN     0x14357      /* UnitStruct* BeginUnitsArray_p */
-#define OFF_END       0x1435B      /* UnitStruct* EndOfUnitsArray_p */
-#define OFF_EYEX      0x1431F      /* int scroll origin X */
-#define OFF_EYEY      0x14323      /* int scroll origin Y */
-#define OFF_LOCALPID  0x2A42       /* char local player slot */
-#define OFF_MOUSE     0x2C76       /* POINT CurtMousePostion — SCREEN x,y (0x498DA0 makes the world point) */
-#define UNIT_STRIDE   0x118
-#define U_STATE       0x110        /* uint UnitStateMask: alive 0x10000000, skip 0x4000 */
-#define U_XPOS        0x6C         /* short world X */
-#define U_ZPOS        0x70         /* short altitude */
-#define U_YPOS        0x74         /* short world Y (map depth) */
-#define U_OWNER       0xFF         /* byte owner slot */
+/* ---- what the roster log reads, and where it comes from ------------------
+   Until the frame packet's landing 3 this file walked the engine's unit array
+   on the RENDER thread — three times, for the roster log, a piece-tree probe
+   and the opt-in write-back — through the same unsynchronised begin/end pair
+   the audit names as its open hazard (cross-thread-engine-reads.md §5 row 2).
+   All three are gone:
 
+     the roster log     reads the packet's units table below;
+     probe_unit_model   deleted. It dumped one unit's PrimitiveStructs to the
+                        log; `tools/tacob pose-check` and `tagpu_posedump.on`
+                        both do that from the game thread, against the engine's
+                        own reconstruction, and neither needs this;
+     writeback_paint    deleted with tagpu_render3do()'s FBO path. It was the
+                        Phase B proof: render a unit's posed 3DO and WRITE the
+                        pixels back into the engine's composite plane from the
+                        render thread. The native pass has drawn units directly
+                        since Phase C, and a render-thread store into engine
+                        memory is the one thing the exchange exists to remove —
+                        landing 2's claim that none remains was true only
+                        because this path was off by default. */
 
-/* ---- G6 probe: dump the posed 3DO piece tree of the first alive unit ----
-   Chain (binary-verified 2026-08-31, see wiki unit-3do-bridge): unit+0x9E ->
-   Object3doStruct; pieces inline at obj3do+0x22, stride 0x36, index == COB
-   piece number. Read-only; logs one unit per call. */
-#define U_OBJ3DO      0x9E     /* Object3doStruct* */
-#define O3_NUMPARTS   0x00     /* u16 piece count            */
-#define O3_THISUNIT   0x0C     /* UnitStruct* back-pointer   */
-#define O3_BODYTURN   0x18     /* u16[3] cached unit turn    */
-#define O3_BASEOBJ    0x1E     /* PrimitiveStruct* (== obj3do+0x22) */
-#define O3_PRIM0      0x22     /* inline PrimitiveStruct[]   */
-#define PRIM_STRIDE   0x36
-#define P_NODE        0x00     /* Model3DONode*              */
-#define P_POS         0x04     /* i32[3] 16.16: x, y(up), z  */
-#define P_TURN        0x10     /* u16[3]: x-pitch,y-yaw,z-roll (65536=360deg) */
-#define P_ORIGIN      0x16     /* i32[3] 16.16 posed origin, model space */
-#define P_VBUF        0x22     /* i32* posed verts (VertexCount*3)       */
-#define P_FLAGS       0x28     /* bit0 = visible             */
-#define N_VCOUNT      0x04     /* Model3DONode.VertexCount   */
-#define N_NAME        0x1C     /* Model3DONode.pNameStr      */
+/* Walk the packet's units table and log what tacli reads: the `units:` line
+   every 30 frames (`scenario load` waits on alive>0, `roster` takes eye= from
+   it) and the full roster block every 300 frames (`tacli roster`). Screen
+   coords use the engine's rule sx = wx - eyeX + vpL, sy = wy - alt/2 - eyeY
+   + vpT at the engine's own viewport origin. */
+static unsigned s_lastMouseLog;
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
-
-static void probe_unit_model(void)
-{
-    char* ta = *(char**)TA_MAINPP;
-    if (!ptr_ok(ta)) return;
-    char* beg = *(char**)(ta + OFF_BEGIN);
-    char* end = *(char**)(ta + OFF_END);
-    if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return;
-
-    for (char* u = beg + UNIT_STRIDE; u < end; u += UNIT_STRIDE) {
-        unsigned st = *(unsigned*)(u + U_STATE);
-        if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
-
-        char* o3 = *(char**)(u + U_OBJ3DO);
-        if (!ptr_ok(o3)) { olog("probe: unit has no Object3do"); return; }
-        if (*(char**)(o3 + O3_THISUNIT) != u) { olog("probe: ThisUnit mismatch!"); return; }
-
-        int nparts = *(unsigned short*)(o3 + O3_NUMPARTS);
-        if (nparts <= 0 || nparts > TAGPU_PBMAXPIECE) { olog("probe: bad NumParts"); return; }
-
-        {
-        char b[256]; int i;
-        _snprintf(b, sizeof b, "probe: unit=%p obj3do=%p base=%p parts=%d bodyTurn=(%u,%u,%u)",
-                  u, o3, *(void**)(o3 + O3_BASEOBJ), nparts,
-                  *(unsigned short*)(o3 + O3_BODYTURN),
-                  *(unsigned short*)(o3 + O3_BODYTURN + 2),
-                  *(unsigned short*)(o3 + O3_BODYTURN + 4));
-        olog(b);
-
-        for (i = 0; i < nparts; i++) {
-            char* pr = o3 + O3_PRIM0 + i * PRIM_STRIDE;
-            char* nd = *(char**)(pr + P_NODE);
-            const char* nm = "?";
-            int vc = -1;
-            if (ptr_ok(nd)) {
-                char* ns = *(char**)(nd + N_NAME);
-                if (ptr_ok(ns) && ns[0] >= 0x20 && ns[0] < 0x7F) nm = ns;
-                vc = *(int*)(nd + N_VCOUNT);
-            }
-            _snprintf(b, sizeof b,
-                "  piece %2d '%.12s' vis=%d verts=%d pos=(%d,%d,%d) turn=(%u,%u,%u) org=(%d,%d,%d) vbuf=%p",
-                i, nm, *(unsigned char*)(pr + P_FLAGS) & 1, vc,
-                *(int*)(pr + P_POS)      >> 16, *(int*)(pr + P_POS + 4)  >> 16, *(int*)(pr + P_POS + 8) >> 16,
-                *(unsigned short*)(pr + P_TURN), *(unsigned short*)(pr + P_TURN + 2), *(unsigned short*)(pr + P_TURN + 4),
-                *(int*)(pr + P_ORIGIN)   >> 16, *(int*)(pr + P_ORIGIN + 4) >> 16, *(int*)(pr + P_ORIGIN + 8) >> 16,
-                *(void**)(pr + P_VBUF));
-            olog(b);
-        }
-        }
-        return;   /* one unit per call is enough */
-    }
-}
-
-/* ---- G6 write-back proof: repaint TA's own per-unit composite buffer with our
-   content, in place, so the engine's blit (0x459200) stamps it onto the frame.
-   Composite buffer (binary-verified, wiki composite-buffer): GAFFrame at
-   Object3do+0x10 = 0x18 header + colour plane (w*h, 8bpp, top-down, stride=W,
-   index 1 = ColorKey/transparent) + depth plane (w*h, larger=nearer).
-   We do NOT suppress: we let the engine build the buffer, then overwrite the
-   colour plane every frame; the next frame's blit shows our pattern. Read the
-   authoritative sim; write only into the engine-owned scratch composite. */
-#define U_TYPE        0x92     /* UnitDefStruct* */
-#define UDEF_NAME     0x00     /* char Name[0x20] */
-#define O3_COMPOSITE  0x10     /* GAFFrame* (persistent per-unit composite) */
-#define GF_WIDTH      0x00     /* u16 */
-#define GF_HEIGHT     0x02     /* u16 */
-#define GF_COLORKEY   0x08     /* u8, ==1 */
-#define GF_COMPRESSED 0x09     /* u8, ==0 */
-#define GF_SUBFRAMES  0x0A     /* u8, ==0 */
-#define GF_PTRCOLOR   0x10     /* u8* colour plane */
-#define GF_PTRDEPTH   0x14     /* u8* depth plane */
-
-static int   s_wb_state = 0;              /* 0=unchecked 1=armed 2=off */
-static char  s_wb_type[32] = "armcom";    /* target unit-type name */
-
-static void wb_init(void)
-{
-    HANDLE h = CreateFileA("tagpu_writeback.on", GENERIC_READ, FILE_SHARE_READ,
-                           0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) { s_wb_state = 2; return; }
-    char buf[64]; DWORD n = 0;
-    if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
-        buf[n] = 0;
-        int i = 0; while (buf[i] && buf[i] > ' ') i++;   /* first token */
-        if (i > 0 && i < (int)sizeof s_wb_type) { buf[i] = 0; lstrcpyA(s_wb_type, buf); }
-    }
-    CloseHandle(h);
-    s_wb_state = 1;
-    { char b[96]; _snprintf(b, sizeof b, "writeback: ARMED target=\"%s\"", s_wb_type); olog(b); }
-}
-
-static int name_ieq(const char* a, const char* b)
-{
-    int i;
-    for (i = 0; i < 31 && a[i] && b[i]; i++) {
-        char ca = a[i], cb = b[i];
-        if (ca >= 'A' && ca <= 'Z') ca += 32;
-        if (cb >= 'A' && cb <= 'Z') cb += 32;
-        if (ca != cb) return 0;
-    }
-    return a[i] == 0 || a[i] <= ' ';   /* def name is NUL-padded; match its full length */
-}
-
-static void writeback_paint(const TAGPU_FRAME* f)
-{
-    if (s_wb_state == 0) wb_init();
-    if (s_wb_state != 1) return;
-
-    char* ta = *(char**)TA_MAINPP;
-    if (!ptr_ok(ta)) return;
-    char* beg = *(char**)(ta + OFF_BEGIN);
-    char* end = *(char**)(ta + OFF_END);
-    if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return;
-    if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return;
-
-    int painted = 0;
-    for (char* u = beg + UNIT_STRIDE; u < end; u += UNIT_STRIDE) {
-        unsigned st = *(unsigned*)(u + U_STATE);
-        if (!(st & 0x10000000) || (st & 0x4000)) continue;
-
-        char* def = *(char**)(u + U_TYPE);
-        char* o3  = *(char**)(u + U_OBJ3DO);
-        if (!ptr_ok(def) || !ptr_ok(o3)) continue;
-
-        /* One-shot diagnostic: dump the first alive unit's identity + composite state
-           so a match/format failure is debuggable from the log. */
-        static int diag = 0;
-        if (!diag) { diag = 1;
-            char* fr = *(char**)(o3 + O3_COMPOSITE);
-            char b[224];
-            _snprintf(b, sizeof b,
-                "writeback DIAG: name@00=\"%.16s\" unitname@20=\"%.16s\" objname@80=\"%.16s\" comp=%p%s",
-                def + 0x00, def + 0x20, def + 0x80, (void*)fr,
-                ptr_ok(fr) ? "" : " (invalid)");
-            olog(b);
-            if (ptr_ok(fr)) { char b2[160]; _snprintf(b2, sizeof b2,
-                "writeback DIAG: W=%d H=%d colorkey=%u comp=%u sub=%u pcol=%p pdep=%p",
-                *(unsigned short*)(fr + GF_WIDTH), *(unsigned short*)(fr + GF_HEIGHT),
-                *(unsigned char*)(fr + GF_COLORKEY), *(unsigned char*)(fr + GF_COMPRESSED),
-                *(unsigned char*)(fr + GF_SUBFRAMES),
-                *(void**)(fr + GF_PTRCOLOR), *(void**)(fr + GF_PTRDEPTH)); olog(b2); }
-        }
-
-        /* "armcom" may live in Name@0x00, UnitName@0x20, or ObjectName@0x80;
-           token "all" renders every unit the engine has a composite for. */
-        if (!name_ieq("all", s_wb_type) &&
-            !name_ieq(def + 0x00, s_wb_type) &&
-            !name_ieq(def + 0x20, s_wb_type) &&
-            !name_ieq(def + 0x80, s_wb_type)) continue;
-
-        char* frame = *(char**)(o3 + O3_COMPOSITE);
-        if (!ptr_ok(frame)) continue;
-        /* G12b: natively-rendered units leave the composite path — keep the
-           plane ColorKey-empty so the engine blit shows nothing */
-        if (tagpu_native_owns_unit(u)) {
-            extern void tagpu_r3dcache_wipe(unsigned int frame);
-            tagpu_r3dcache_wipe((unsigned int)(size_t)frame);
-            continue;
-        }
-        if (*(unsigned char*)(frame + GF_COMPRESSED) != 0) continue;
-        if (*(unsigned char*)(frame + GF_SUBFRAMES)  != 0) continue;
-
-        int W = *(unsigned short*)(frame + GF_WIDTH);
-        int H = *(unsigned short*)(frame + GF_HEIGHT);
-        if (W <= 0 || H <= 0 || W > 1280 || H > 1280) continue;
-
-        unsigned char* col = *(unsigned char**)(frame + GF_PTRCOLOR);
-        if (!ptr_ok(col)) continue;
-
-        /* Phase B: real GPU render of the posed 3DO into the colour plane.
-           Falls back to the G6 proof gradient if the GL path is unavailable,
-           so a render failure is visually obvious (gradient) in the log. */
-        if (!tagpu_render3do(f, u, o3, frame)) {
-            int shift = (int)(f->frame_counter / 2);
-            int x, y;
-            for (y = 0; y < H; y++) {
-                unsigned char* row = col + (size_t)y * W;   /* stride = W, top-down */
-                for (x = 0; x < W; x++)
-                    row[x] = (unsigned char)(2 + ((x + y + shift) % 252));  /* 2..253 */
-            }
-        }
-        painted++;
-    }
-
-    static unsigned last = 0;
-    if (f->frame_counter - last >= 60) { last = f->frame_counter;
-        char b[96]; _snprintf(b, sizeof b, "writeback: painted=%d units (type=%s)", painted, s_wb_type);
-        olog(b); }
-}
-
-
-/* Log TA's own mouse position (SCREEN space, read from memory — 0x498DA0 is what
-   makes the world point). No longer drawn, but still the way to read the engine's
-   cursor without touching the user's pointer (input-firewall.md). */
-static void log_mouse(const TAGPU_FRAME* f, char* ta)
-{
-    int mx = *(int*)(ta + OFF_MOUSE);
-    int my = *(int*)(ta + OFF_MOUSE + 4);
-    if (mx < -50 || mx > 4000 || my < -50 || my > 4000) return;
-    static unsigned last = 0;
-    if (f->frame_counter - last >= 15) { last = f->frame_counter;
-        char b[96]; _snprintf(b, sizeof b, "mouse: screen=(%d,%d)", mx, my); olog(b); }
-}
-
-/* Walk the live unit array and log what tacli reads: the `units:` line every
-   30 frames (`scenario load` waits on alive>0, `roster` takes eye= from it) and
-   the full roster block every 300 frames (`tacli roster`). Screen coords use the
-   engine's rule sx=wx-eyeX+vpL, sy=wy-alt/2-eyeY+vpT at the 640x480 viewport. */
 static void log_units(const TAGPU_FRAME* f)
 {
-    char* ta = *(char**)TA_MAINPP;
-    if ((size_t)ta < 0x600000u) return;             /* no game struct yet (menu) */
-    log_mouse(f, ta);
-    char* beg = *(char**)(ta + OFF_BEGIN);
-    char* end = *(char**)(ta + OFF_END);
-    if ((size_t)beg < 0x600000u || (size_t)end < 0x600000u || end <= beg) return;
-    if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return; /* sanity */
+    const TAGPU_PACKET* pk = f->packet;
+    const TAGPU_PK_UNIT* uu;
+    unsigned i;
+    int alive = 0, onscreen = 0, eyeX, eyeY, gw, gh, me;
+    static unsigned last = 0;
 
-    /* the eye the world was drawn with, from the packet (the roster's screen=
-       is the 1x projection about it); the last one seen when no in-game
-       packet is held this frame — never the engine's field from this thread */
-    static int s_eyeX, s_eyeY;
-    if (f->packet && f->packet->in_game) { s_eyeX = f->packet->eye[0]; s_eyeY = f->packet->eye[1]; }
-    int eyeX = s_eyeX;
-    int eyeY = s_eyeY;
-    unsigned char me = *(unsigned char*)(ta + OFF_LOCALPID);
-    int gw = f->game_width  > 0 ? f->game_width  : 640;
-    int gh = f->game_height > 0 ? f->game_height : 480;
+    if (!pk || !pk->in_game) return;
+    /* the eye the world was drawn with, from the packet: the roster's screen=
+       is the 1x projection about it */
+    eyeX = pk->eye[0]; eyeY = pk->eye[1];
+    me   = pk->local_player;
+    gw = f->game_width  > 0 ? f->game_width  : 640;
+    gh = f->game_height > 0 ? f->game_height : 480;
 
-    int alive = 0, onscreen = 0;
-    for (char* u = beg + UNIT_STRIDE; u < end; u += UNIT_STRIDE) {
-        unsigned st = *(unsigned*)(u + U_STATE);
-        if (!(st & 0x10000000) || (st & 0x4000)) continue;
-        alive++;
-        short wx = *(short*)(u + U_XPOS), wz = *(short*)(u + U_ZPOS), wy = *(short*)(u + U_YPOS);
+    /* TA's own mouse position (SCREEN space) — no longer drawn, but still the
+       way to read the engine's cursor without touching the user's pointer
+       (input-firewall.md). It rides in the packet header now. */
+    if (f->frame_counter - s_lastMouseLog >= 15) {
+        int mx = pk->mouse[0], my = pk->mouse[1];
+        s_lastMouseLog = f->frame_counter;
+        if (mx >= -50 && mx <= 4000 && my >= -50 && my <= 4000) {
+            char b[96]; _snprintf(b, sizeof b, "mouse: screen=(%d,%d)", mx, my); olog(b);
+        }
+    }
+
+    uu = tagpu_pk_units(pk);
+    for (i = 0; i < pk->n_units; i++) {
+        const TAGPU_PK_UNIT* u = &uu[i];
+        int wx = (int)(short)(u->pos[0] >> 16);
+        int wz = (int)(short)(u->pos[1] >> 16);
+        int wy = (int)(short)(u->pos[2] >> 16);
         int sx = wx - eyeX + 128;
         int sy = wy - (wz / 2) - eyeY + 32;
+        alive++;
         /* full roster dump every ~10s: index, type, owner, position — makes
-           headless camera steering to any specific unit possible */
+           headless camera steering to any specific unit possible.
+           idx = UnitInGameIndex (+0xA8), the engine's own slot. It is
+           RECYCLED on death, so it is never a public identity — but it is
+           what `tacli scenario` reports per spawned entity, so the roster
+           has to speak the same number for the two to be comparable. */
         if ((f->frame_counter % 300) == 0) {
-            char* def = *(char**)(u + 0x92);
-            const char* nm = "?";
-            if ((size_t)def > 0x600000u && (size_t)def < 0x7FFF0000u) nm = def + 0x20;
-            /* idx = UnitInGameIndex (+0xA8), the engine's own slot. It is
-               RECYCLED on death, so it is never a public identity — but it is
-               what `tacli scenario` reports per spawned entity, so the roster
-               has to speak the same number for the two to be comparable. */
             char db[192]; _snprintf(db, sizeof db,
                 "  u%03d %-12.12s own=%d idx=%d world=(%d,%d,%d) screen=(%d,%d) nano=%.2f",
-                alive, nm, (int)*(unsigned char*)(u + U_OWNER),
-                (int)*(short*)(u + 0xA8), wx, wy, wz, sx, sy,
-                *(float*)(u + 0x104));   /* build fraction REMAINING (build-state.md) */
-            olog(db); }
+                alive, u->name[0] ? u->name : "?", (int)u->owner, (int)u->id,
+                wx, wy, wz, sx, sy, u->nano);
+            olog(db);
+        }
         if (sx >= -gw / 40 && sx <= gw + gw / 40 && sy >= -gh / 40 && sy <= gh + gh / 40)
             onscreen++;
     }
-    static unsigned last = 0;
     if (f->frame_counter - last >= 30) { last = f->frame_counter;
         char b[160]; _snprintf(b, sizeof b, "units: alive=%d onscreen=%d eye=(%d,%d) me=%d",
                                alive, onscreen, eyeX, eyeY, (int)me); olog(b); }
@@ -556,7 +339,6 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
         if (cur != s_ctx) {
             if (s_ctx) {
                 s_state = 0;
-                s_wb_state = 0;
                 tagpu_overlay_glreset();
                 tagpu_native_glreset();
                 tagpu_scaffold_glreset();
@@ -586,12 +368,14 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        (or a GL context change) would leave it bending clicks against the last
        viewport it saw — menu clicks included (tagpu_zoom.h). */
     if (GetFileAttributesA("tagpu_overlay.off")!=INVALID_FILE_ATTRIBUTES)
-        { tagpu_zoom_frame_end(); writeback_paint(f); return; }
+        { tagpu_zoom_frame_end(); return; }
     if (s_state==0) init_overlay();
-    if (s_state!=1) { tagpu_zoom_frame_end(); writeback_paint(f); return; }
-    /* tagpu_reclaim: a level teardown is freeing the objects everything below
-       reads (units, wrecks, their 3DO objects); sit the rest of this frame
-       out. Not the writeback either — its opt-in 3DO path reads them too.
+    if (s_state!=1) { tagpu_zoom_frame_end(); return; }
+    /* tagpu_reclaim: a level teardown is freeing the MODEL TEMPLATES and the
+       per-map arrays the fenced passes still index; sit the rest of this frame
+       out. The units themselves come from the packet since landing 3, so this
+       is no longer what keeps a unit read safe — it is the fence for the
+       assets, which the packet does not carry.
        The pass bracket's end stays in the caller (render_ogl.c). */
     if (tagpu_reclaim_teardown_active()) { tagpu_zoom_frame_end(); return; }
 
@@ -608,9 +392,9 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        nowhere else, so no two passes can draw one frame from two eyes. */
     tagpu_zoom_read_lever(f->packet);
 
-    /* live-state logs tacli depends on (roster, units:, mouse:) + the 3DO probe */
+    /* live-state logs tacli depends on (roster, units:, mouse:), from the
+       packet's units table and header */
     log_units(f);
-    if ((f->frame_counter % 300) == 61) probe_unit_model();
 
     /* G12a: scene-depth scaffold debug overlay (tagpu_scaffold.on). Own GL
        state block; leaves program/VAO at 0. */
@@ -646,11 +430,4 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        drawn, so the input path goes back to 1:1 (tagpu_zoom.h). Every early
        return above does the same. */
     tagpu_zoom_frame_end();
-
-    /* G6/Phase B write-back LAST: its FBO pass clobbers the viewport and FBO
-       binding (it restores binding 0), which is safe here — nothing after us
-       uses GL this frame and the fork re-establishes viewport/program/VAO at
-       the top of the next one. */
-    writeback_paint(f);
-    oerr("writeback");
 }

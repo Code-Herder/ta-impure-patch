@@ -202,7 +202,8 @@
 #define ROW_SLACK 8               /* rows a gathered unit may sit past the sweep */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
-static void pose_dump(const char* u, const char* o3);
+static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
+                      const TAGPU_PK_PIECE* pc, int nparts);
 
 /* ---- sub-pixel motion, and why the table is file-static ----------------
    The engine keeps 16.16 fixed-point unit positions (the roster shorts are
@@ -1013,15 +1014,21 @@ int tagpu_native_owns_obj(unsigned int obj3do)
    and is the reason this function is not the last word on the subject. */
 static unsigned s_badModelId;          /* refused here, reported with the frame */
 
-static const char* model_root(const char* ta, const char* u)
+/* THE MODEL ID ARRIVES BOUNDED (frame packet exchange, landing 3). The
+   publisher drops a unit's `model_id` unless it is inside UNITINFOCount, so
+   what reaches here is already a slot the engine writes; the count is carried
+   beside it and re-checked, because this is the one place an index becomes an
+   address. The table itself, and the templates in it, are freed by the level
+   teardown (0x42DBCA/0x42DCB6) and held out of that window by tagpu_reclaim's
+   teardown wrap — the fence, unchanged by this landing. */
+static const char* model_root(const TAGPU_PACKET* pk, unsigned mid)
 {
-    unsigned mid;
-    const char* mptrs;
-    if (!model_id_ok(ta, u, &mid)) {        /* it does the ptr_ok pair too */
+    const char* mptrs = (const char*)(size_t)pk->model_ptrs;
+    unsigned n = pk->udef_count;
+    if (!(mid && n && n <= 0x10000u && mid < n)) {
         if (mid) s_badModelId++;       /* 0 is "no model", not a refusal */
         return NULL;
     }
-    mptrs = *(const char* const*)(ta + OFF_MODELPTRS);
     if (!ptr_ok(mptrs)) return NULL;
     return *(const char* const*)(mptrs + (size_t)mid * 4);   /* in bounds */
 }
@@ -1569,8 +1576,7 @@ static void cache_gen_check(void)
    a local. Both are render-thread only: they are reached only from
    tagpu_native_frame. */
 typedef struct {
-    const char* nd[TAGPU_PBMAXPIECE];
-    const char* pr[TAGPU_PBMAXPIECE];
+    const char* nd[TAGPU_PBMAXPIECE];  /* the TYPE's template nodes, from the run  */
     float acc[TAGPU_PBMAXPIECE][12];   /* rest vertex of that piece -> model space */
     float rest[TAGPU_PBMAXPIECE][3];   /* accumulated rest offset                  */
     unsigned char done[TAGPU_PBMAXPIECE]; /* 0 = tree link broken, piece at rest    */
@@ -1580,18 +1586,21 @@ typedef struct {
    where the compose adds it (0x45B0DB, only on the top-level call) -- the
    reconstruction needs it because P_VBUF holds the body-rotated pose, while
    hires_pose and pose_dump want model space and pass NULL. */
-static int pose_accum_body(const char* o3, HPOSE* h, const unsigned short* bt)
+/* `pc` is this unit's PK_PIECE run out of the frame packet and `nparts` its
+   length; `basePiece` the index the body turn folds into (0xFFFF = none). The
+   per-piece POSE fields are the packet's copy, taken on the game thread; the
+   per-piece NODE is the type's template, which the level teardown frees and
+   tagpu_reclaim's fence covers, so it is still dereferenced here. */
+static int pose_accum_body(const TAGPU_PK_PIECE* pc, int nparts, unsigned basePiece,
+                           HPOSE* h, const unsigned short* bt)
 {
     static short parent[TAGPU_PBMAXPIECE];   /* render thread only, as HPOSE is */
-    const char* basePrim = bt ? *(const char* const*)(o3 + O3_BASEPRIM) : NULL;
-    int nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
     const char** nd = h->nd;
-    const char** pr = h->pr;
     int i, g, left, pass;
     if (nparts <= 0 || nparts > TAGPU_PBMAXPIECE) return 0;
+    if (!bt) basePiece = 0xFFFFu;
     for (i = 0; i < nparts; i++) {
-        pr[i] = o3 + O3_PRIM0 + i * PRIM_STRIDE;
-        nd[i] = *(const char* const*)(pr[i] + P_NODE);
+        nd[i] = (const char*)(size_t)pc[i].node;
         if (!ptr_ok(nd[i]) || IsBadReadPtr(nd[i], N_CHILD + 4)) return 0;
         parent[i] = -1;
         h->done[i] = 0;
@@ -1616,14 +1625,14 @@ static int pose_accum_body(const char* o3, HPOSE* h, const unsigned short* bt)
             if (h->done[i] || (parent[i] >= 0 && !h->done[parent[i]])) continue;
             {
                 const int* off = (const int*)(nd[i] + N_OFF);
-                const int* mv  = (const int*)(pr[i] + P_POS);
-                const unsigned short* tn = (const unsigned short*)(pr[i] + P_TURN);
+                const int* mv  = pc[i].pos;
+                const unsigned short* tn = pc[i].turn;
                 unsigned short bturn[3];
                 float d[3], loc[12];
                 int k;
                 for (k = 0; k < 3; k++)
                     d[k] = (float)off[k] / 65536.0f + (float)mv[k] / 65536.0f;
-                if (basePrim && pr[i] == basePrim) {
+                if ((unsigned)i == basePiece) {
                     for (k = 0; k < 3; k++)
                         bturn[k] = (unsigned short)(tn[k] + bt[k]);
                     tn = bturn;
@@ -1705,20 +1714,20 @@ static unsigned s_poseCrcRaced = 0;         /* samples the sim moved under */
    Deliberately the LIVE fields and not the blended ones -- `in` has to name
    the ENGINE state, so a lever-on run and a lever-off run that saw the same
    simulation join on the same key. */
-static unsigned long pose_crc_in(const char* basePrim, const TAGPU_PBGEOM* g,
-                                 const char* const* pr, const char* const* nd,
+static unsigned long pose_crc_in(unsigned basePiece, const TAGPU_PBGEOM* g,
+                                 const TAGPU_PK_PIECE* pc, const char* const* nd,
                                  const unsigned short* bt, int nparts)
 {
     unsigned long c = Crc32_ComputeBuf(0, bt, 3 * sizeof *bt);
     int i;
     for (i = 0; i < nparts; i++) {
-        unsigned char fl = *(const unsigned char*)(pr[i] + P_FLAGS);
+        unsigned char fl = pc[i].flags;
         short par = g->parent[i];
         unsigned char link = (unsigned char)((nd[i] ? 1 : 0) |
-                                             (basePrim && pr[i] == basePrim ? 2 : 0));
+                                             ((unsigned)i == basePiece ? 2 : 0));
         if (nd[i]) c = Crc32_ComputeBuf(c, nd[i] + N_OFF, 12);
-        c = Crc32_ComputeBuf(c, pr[i] + P_POS, 12);
-        c = Crc32_ComputeBuf(c, pr[i] + P_TURN, 6);
+        c = Crc32_ComputeBuf(c, pc[i].pos, 12);
+        c = Crc32_ComputeBuf(c, pc[i].turn, 6);
         c = Crc32_ComputeBuf(c, &fl, 1);
         c = Crc32_ComputeBuf(c, &par, sizeof par);
         c = Crc32_ComputeBuf(c, &link, 1);
@@ -1726,16 +1735,16 @@ static unsigned long pose_crc_in(const char* basePrim, const TAGPU_PBGEOM* g,
     return c;
 }
 
-static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
+static int posed_pose(const TAGPU_PK_UNIT* pu, const TAGPU_PK_PIECE* pc,
+                      const unsigned short* bturnSrc, unsigned basePiece,
+                      const TAGPU_PBGEOM* g,
                       float* out, unsigned char* shaded, unsigned char* pvis)
 {
     static float acc[TAGPU_PBMAXPIECE][12];      /* render thread only */
     static unsigned char done[TAGPU_PBMAXPIECE];
-    static const char* pr[TAGPU_PBMAXPIECE];
     static const char* nd[TAGPU_PBMAXPIECE];
     const unsigned short* bturn;
     unsigned short bt[3];
-    const char* basePrim;
     int nparts, i, pass, left, anyShadeFlag = 0;
     /* smooth-motion.md option A: NULL unless tagpu_lerp.on is armed AND this
        unit has two adjacent sim ticks of history. NULL is the blend weight of
@@ -1744,21 +1753,18 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
     const int* lpos = NULL;
     const unsigned short* lturn = NULL;
 
-    if (!ptr_ok(o3)) return 0;
+    if (!pc) return 0;
     /* the bake's count, not a fresh read of the unit's: tagpu_posebake_unit
-       keyed the entry on it, so the two agree by construction and a second
-       read could only disagree by catching a recycled slot */
+       keyed the entry on it, so the two agree by construction */
     nparts = g->nparts;
     if (nparts <= 0 || nparts > TAGPU_PBMAXPIECE) return 0;
-    bturn = (const unsigned short*)(o3 + O3_BTURN);
+    bturn = bturnSrc;
     bt[0] = bturn[2];                       /* +0x1C = unit+0x68, about X */
     bt[1] = bturn[1];                       /* +0x1A = unit+0x66, about Y */
     bt[2] = bturn[0];                       /* +0x18 = unit+0x64, about Z */
-    basePrim = *(const char* const*)(o3 + O3_BASEPRIM);
     for (i = 0; i < nparts; i++) {
         unsigned char fl;
-        pr[i] = o3 + O3_PRIM0 + i * PRIM_STRIDE;
-        nd[i] = *(const char* const*)(pr[i] + P_NODE);
+        nd[i] = (const char*)(size_t)pc[i].node;
         /* a node that does not read leaves THAT PIECE at rest rather than
            dropping the unit: `done[i]` stays 0 and the identity is written
            for it below, the same degradation an unresolved parent takes.
@@ -1766,14 +1772,14 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
            generation the bake is keyed by; this is a value filter. */
         if (!ptr_ok(nd[i])) { nd[i] = NULL; }
         done[i] = 0;
-        fl = *(const unsigned char*)(pr[i] + P_FLAGS);
+        fl = pc[i].flags;
         if ((fl & 1) && (fl & 4)) anyShadeFlag = 1;
     }
-    /* After pr[] is built and before anything is composed: one call per unit
-       per frame, which is also where the tick's snapshot is taken. It reads
-       P_POS/P_TURN and writes nothing back -- invariant 1. */
-    if (!tagpu_lerp_unit(o3, nparts, pr, &lpos, &lturn)) { lpos = NULL; lturn = NULL; }
-    if (s_poseCrcOn) s_poseCrcIn = pose_crc_in(basePrim, g, pr, nd, bt, nparts);
+    /* Before anything is composed: one call per unit per frame. It pairs this
+       unit against the PREVIOUS packet by its stable id and blends the two
+       piece runs; nothing engine-side is read or written -- invariant 1. */
+    if (!pu || !tagpu_lerp_unit(pu, pc, nparts, &lpos, &lturn)) { lpos = NULL; lturn = NULL; }
+    if (s_poseCrcOn) s_poseCrcIn = pose_crc_in(basePiece, g, pc, nd, bt, nparts);
     /* parents before children, exactly as pose_accum_body orders them; the
        links themselves come off the bake */
     left = nparts;
@@ -1788,8 +1794,8 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
             int k;
             if (done[i] || !nd[i] || (par >= 0 && !done[par])) continue;
             off = (const int*)(nd[i] + N_OFF);
-            mv  = (const int*)(pr[i] + P_POS);
-            tn  = (const unsigned short*)(pr[i] + P_TURN);
+            mv  = pc[i].pos;
+            tn  = pc[i].turn;
             /* THE WHOLE OF OPTION A IS THESE TWO LINES. Everything below --
                the rest offset, the body-turn fold, piece_local, the parent
                multiply -- is the arithmetic it always was, on a blended pair
@@ -1797,7 +1803,7 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
             if (lpos) { mv = lpos + i * 3; tn = lturn + i * 3; }
             for (k = 0; k < 3; k++)
                 d[k] = (float)off[k] / 65536.0f + (float)mv[k] / 65536.0f;
-            if (basePrim && pr[i] == basePrim) {
+            if ((unsigned)i == basePiece) {
                 for (k = 0; k < 3; k++)
                     bturn2[k] = (unsigned short)(tn[k] + bt[k]);
                 tn = bturn2;
@@ -1826,7 +1832,7 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
        showing — which collapses its triangles onto the model origin, the same
        vertices `emit_geom_at`'s `if (!(pflags & 1)) continue` never emitted */
     for (i = 0; i < nparts; i++) {
-        unsigned char fl = *(const unsigned char*)(pr[i] + P_FLAGS);
+        unsigned char fl = pc[i].flags;
         if (fl & 1) memcpy(out + (size_t)i * 12, acc[i], 12 * sizeof(float));
         else        memset(out + (size_t)i * 12, 0, 12 * sizeof(float));
         shaded[i] = (unsigned char)(anyShadeFlag ? ((fl & 4) != 0) : 1);
@@ -1846,16 +1852,17 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
         c = Crc32_ComputeBuf(c, shaded, (size_t)nparts);
         c = Crc32_ComputeBuf(c, pvis, (size_t)nparts);
         s_poseCrcOut = c;
-        /* AND THE INPUT AGAIN. The COB scripts run on the GAME thread while
-           this one poses, so the fields can move between the hash above and
-           the loop that read them -- gpu-posing.md section 2's residual, one
-           tick of one piece, accepted there by design. It is real and it is
-           rare (measured at 1 sample in 1498 on the walk fixture), but it
-           makes `in` a lie for that one sample and the join then reports a
-           mismatch that is nothing to do with the code under test. Hashing the
-           input on BOTH sides of the loop turns that from a false positive
-           into a MEASUREMENT: the sample is dropped and counted instead. */
-        if (pose_crc_in(basePrim, g, pr, nd, bt, nparts) != s_poseCrcIn) {
+        /* AND THE INPUT AGAIN. This is THE GATE LANDING 3 IS MEASURED BY.
+           Until the packet, the COB scripts ran on the GAME thread while this
+           one posed, so the fields could move between the hash above and the
+           loop that read them -- gpu-posing.md section 2's residual, one tick
+           of one piece, measured at 1 sample in 1498 on the walk fixture. The
+           pose now comes out of a packet the game thread finished writing
+           before it handed the slot over, and the exchange forbids a fill that
+           overlaps a consumer frame, so `raced=` must read EXACTLY 0: this is
+           no longer a rate to accept but a race that cannot happen, and a
+           non-zero count means the exchange itself is broken. */
+        if (pose_crc_in(basePiece, g, pc, nd, bt, nparts) != s_poseCrcIn) {
             s_poseCrcRaced++;
             s_poseCrcIn = 0;                /* 0 = "do not join on this one" */
         }
@@ -1890,20 +1897,17 @@ static int posed_pose(const char* o3, const TAGPU_PBGEOM* g,
    The caller sends 0 for the shader's yaw whenever this returns 1: the pose
    already carries the rotation, and turning it again would double it.
    model-import.md, "The body turn is all three words". */
-static int hires_pose(const char* o3, const void* mesh, float* out, int npiece)
+static int hires_pose(const TAGPU_PK_PIECE* pc, int nparts, const unsigned short* bturn,
+                      unsigned basePiece, const void* mesh, float* out, int npiece)
 {
     static HPOSE h;                        /* 17 kB at TAGPU_PBMAXPIECE: not a local */
     unsigned short bt[3];
-    int g, nparts;
-    if (!ptr_ok(o3) || IsBadReadPtr(o3, O3_PRIM0)) return 0;
-    {
-        const unsigned short* bturn = (const unsigned short*)(o3 + O3_BTURN);
-        bt[0] = bturn[2];                  /* +0x1C = unit+0x68, about X */
-        bt[1] = bturn[1];                  /* +0x1A = unit+0x66, about Y */
-        bt[2] = bturn[0];                  /* +0x18 = unit+0x64, about Z */
-    }
-    nparts = pose_accum_body(o3, &h, bt);
-    if (!nparts) return 0;
+    int g;
+    if (!pc || nparts <= 0) return 0;
+    bt[0] = bturn[2];                      /* +0x1C = unit+0x68, about X */
+    bt[1] = bturn[1];                      /* +0x1A = unit+0x66, about Y */
+    bt[2] = bturn[0];                      /* +0x18 = unit+0x64, about Z */
+    if (!pose_accum_body(pc, nparts, basePiece, &h, bt)) return 0;
     {
         const HPMAP* pm = pmap_for(mesh, h.nd, nparts);
         for (g = 0; g < npiece; g++) {
@@ -1919,7 +1923,7 @@ static int hires_pose(const char* o3, const void* mesh, float* out, int npiece)
                 o[0] = o[5] = o[10] = 1.0f;
                 continue;
             }
-            if (!(*(const unsigned char*)(h.pr[e] + P_FLAGS) & 1)) {
+            if (!(pc[e].flags & 1)) {
                 memset(o, 0, 12 * sizeof(float));       /* COB HIDE */
                 continue;
             }
@@ -1951,10 +1955,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     pose_rest_block_init();      /* the degradation's block, once per session */
     tagpu_posedraw_frame();      /* this frame's counters */
     /* smooth-motion.md option A. BEFORE the gather, because posed_pose
-       samples through it: it latches this frame's sim tick and the phase
-       inside that tick, and ages the history table. Off by default and a
-       no-op past its own early-out when tagpu_lerp.on is absent. */
-    tagpu_lerp_frame(f->frame_counter);
+       blends through it: it latches THIS FRAME'S PAIR — the packet and the
+       previous one, which the exchange guarantees are two distinct sim ticks —
+       and the wall-clock weight between their two tick stamps. Off by default
+       and a no-op past its own early-out when tagpu_lerp.on is absent. */
+    tagpu_lerp_frame(f->frame_counter, f->packet, f->packet_prev);
     if ((f->frame_counter % 30) == 0)
         s_poseCrcOn = GetFileAttributesA("tagpu_posecrc.on") != INVALID_FILE_ATTRIBUTES;
     if (s_state == 2) return;
@@ -2117,36 +2122,32 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* the unit atlas's frame: recycle if full, arm and step its Classic++
        restore -- before any face asks it for a UV */
     tagpu_r3d_atlas_frame(pal);
-    /* THE PAIR IS TWO UNSYNCHRONISED LOADS OF ENGINE MEMORY, AND THE GATE
-       BELOW IS A VALUE FILTER, NOT THE SAFETY ARGUMENT (cross-thread-engine-
-       reads.md §5). What holds it up: the level teardown 0x485980 frees the
-       array and nulls `begin` (0x485A27) inside the cascade tagpu_reclaim
-       fences, so between games the pair is refused here. What does NOT: the
-       next level's load, 0x4854A0 from 0x4918D4, runs with this thread live
-       and stores `begin` at 0x485525, memsets the whole array, makes two more
-       allocations, and only then stores `end` at 0x4855D6 -- the ONLY store
-       to main+0x1435B in the binary, so `end` is never nulled. For the length
-       of that memset the pair is (new begin, last game's end): the same
-       block and nothing shows, a lower block and the walk below runs past the
-       new allocation. Alignment plays no part in it. The engine publishes the
-       slot count (u16 main+0x14351, = 10*[main+0x37EE6]+1 at 0x4854EF) BEFORE
-       `begin` and sets end = begin + (count-1)*0x118, so that exact relation
-       would refuse every skew that is not benign; closing a torn load as well
-       wants the pair published from the game thread. Neither is done yet. */
-    char* beg = *(char**)(ta + OFF_BEGIN);
-    char* end = *(char**)(ta + OFF_END);
-    if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return;
-    if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return;
+    /* THE UNIT ARRAY IS NOT READ HERE ANY MORE, AND THAT IS WHAT LANDING 3 IS
+       (cross-thread-engine-reads.md §5 row 2). This pass used to load `begin`
+       and `end` as an unsynchronised pair: the level teardown 0x485980 frees
+       the array and nulls `begin` (0x485A27) inside the cascade tagpu_reclaim
+       fences, so between games the pair was refused — but the NEXT level's
+       load, 0x4854A0 from 0x4918D4, runs with this thread live, stores `begin`
+       at 0x485525, memsets the whole array, makes two more allocations and only
+       then stores `end` at 0x4855D6, the ONLY store to main+0x1435B in the
+       binary, so `end` is never nulled. For the length of that memset the pair
+       was (new begin, last game's end) and the walk could run past the new
+       allocation. No read-side gate could close that, and alignment played no
+       part in it. The fix is the ordering the publisher stands on: every unit
+       in the packet was copied on the GAME thread, during an in-play draw, at a
+       point where the loader thread has finished — and the walk there runs to
+       the engine's own SLOT COUNT, so it needs no pair at all.
 
-    /* THE VIEW COMES FROM THE PACKET (frame packet exchange, landing 2): the
+       THE VIEW COMES FROM THE PACKET (landing 2): the
        TRUE 1x rect — not the field, which tagpu_vpwide widens at zoom < 1 —
        as the game thread published it, and the eye this frame is drawn from:
        the packet's eye plus the cursor anchor's deltas the game thread has not
        applied yet (tagpu_zoom_predicted_eye). No packet, or an out-of-game
        one, is no world to draw. The composite key rect (uVp), the zoom's
        published view and the effective gather below all mean this rect. */
-    if (!f->packet || !f->packet->in_game) return;
-    int vpL = f->packet->vp[0], vpT = f->packet->vp[1], vw = f->packet->vp[2], vh = f->packet->vp[3];
+    const TAGPU_PACKET* pk = f->packet;
+    if (!pk || !pk->in_game) return;
+    int vpL = pk->vp[0], vpT = pk->vp[1], vw = pk->vp[2], vh = pk->vp[3];
     int eyeX, eyeY;
     if (!tagpu_zoom_predicted_eye(&eyeX, &eyeY)) return;
     /* A SANITY BOUND ON ENGINE DATA, NOT A SUPPORTED-RESOLUTION LIMIT. The
@@ -2208,9 +2209,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     float airKey = fxKey + 12.0f;
     float depthScale = airKey + 8.0f;
 
-    unsigned gfx = *(unsigned short*)(ta + OFF_GFXOPT);
-    unsigned lostype = *(unsigned short*)(ta + OFF_LOSTYPE);
-    int watched = *(unsigned char*)(ta + OFF_WATCHED);
+    unsigned gfx = pk->gfx_opt;
+    unsigned lostype = pk->los_type;
+    int watched = pk->watched;
 
     /* ---- fog upload: the engine's own screen fog grid ----
        NOT the LOS/MAPPED source maps. The engine's overlay (0x4848E0) is
@@ -2392,9 +2393,16 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     }
 
     /* ---- gather native-owned on-screen units ---- */
-    typedef struct { const char* o3; const char* u; const void* hires;
-                     const char* rec;       /* the wreck record (feat), else NULL */
-                     int dead;              /* object pointer moved since the gather */
+    /* ONE GATHERED DRAWABLE. `pu`/`pw` point into THIS FRAME'S PACKET — our
+       own memory for the length of the frame, which is what retires the `dead`
+       re-read this record used to carry (the engine's Object3do pointer was
+       compared against the unit record again before every draw, because it
+       could be freed between the gather and the draw). `pc` is the entry's
+       piece run in the same packet. */
+    typedef struct { const TAGPU_PK_UNIT* pu; const TAGPU_PK_WRECK* pw;
+                     const TAGPU_PK_PIECE* pc; int nparts; unsigned basePiece;
+                     const unsigned short* bturn;
+                     const void* hires;
                      float ax, ay, gy, wx0, wz0, wy, gnd;
                      int rel, owner, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
                      float waterT, digT; int waterMode;
@@ -2404,19 +2412,21 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        table, the read half and why both are file-static now */
     s_spxFrame = f->frame_counter;
     int nu = 0, nv = 0, nwr = 0, nsel = 0;
-    unsigned uiGates = *(unsigned char*)(ta + OFF_UIGATES);
+    unsigned uiGates = pk->ui_gates;
+    const TAGPU_PK_UNIT* pkUnits = tagpu_pk_units(pk);
     if (s_armed) {                 /* units are gathered only by the unit pass */
-    for (char* u = beg + UNIT_STRIDE; u < end && nu < MAXU; u += UNIT_STRIDE) {
-        unsigned st = *(unsigned*)(u + U_STATE);
-        if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
-        if (!tagpu_native_owns_unit(u)) continue;
-        char* o3 = *(char**)(u + U_OBJ3DO);
-        if (!ptr_ok(o3)) continue;
-        short wx = *(short*)(u + U_XPOS), wz = *(short*)(u + U_ZPOS), wy = *(short*)(u + U_YPOS);
-        int ix = *(int*)(u + U_XFIX), iz = *(int*)(u + U_ZFIX), iy = *(int*)(u + U_YFIX);
+    for (unsigned pui = 0; pui < pk->n_units && nu < MAXU; pui++) {
+        const TAGPU_PK_UNIT* pu = &pkUnits[pui];
+        unsigned st = pu->state;
+        const TAGPU_PK_PIECE* pc;
+        if (!(pu->flags & TAGPU_PK_U_NATIVE)) continue;
+        pc = tagpu_pk_pieces(pk, pu->piece_off, pu->piece_n);
+        if (!pc) continue;         /* outside the widest rect: no pose to draw */
+        short wx = (short)(pu->pos[0] >> 16), wz = (short)(pu->pos[1] >> 16), wy = (short)(pu->pos[2] >> 16);
+        int ix = pu->pos[0], iz = pu->pos[1], iy = pu->pos[2];
         float fx = (float)ix / 65536.0f, fz = (float)iz / 65536.0f, fy = (float)iy / 65536.0f;
         if (s_subpix) {
-            size_t slot = (size_t)(u - beg) / UNIT_STRIDE;
+            unsigned slot = pu->slot;
             if (slot < 8192) {
                 SPX* e = &s_spx[slot];
                 if (e->tc == 0 || e->x != ix || e->z != iz || e->y != iy) {
@@ -2431,8 +2441,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (ax < evpL - 256 || ax > evpL + evw + 256 ||
             ay < evpT - 256 || ay > evpT + evh + 256)
             continue;
-        int owner = *(unsigned char*)(u + U_OWNER);
-        int cloaked = (*(unsigned char*)(u + U_CLOAKF) & 4) != 0;
+        int owner = pu->owner;
+        int cloaked = (pu->cloak & 4) != 0;
         if (cloaked && owner != watched) continue;    /* enemies never see cloak */
         /* fog gate at the anchor tile: engine draws nothing there */
         if (fogMode & 1) {
@@ -2452,12 +2462,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                       f->frame_counter, ix, iy, ax, ay);
             nlog(b);
         }
-        if (nu == 0) pose_dump(u, o3);
+        if (nu == 0) pose_dump(pk, pu, pc, pu->piece_n);
         NU* n2 = &units[nu++];
-        n2->o3 = o3; n2->u = u; n2->ax = ax; n2->ay = ay; n2->rec = NULL; n2->dead = 0;
+        n2->pu = pu; n2->pw = NULL; n2->pc = pc; n2->nparts = pu->piece_n;
+        n2->basePiece = pu->base_piece; n2->bturn = pu->bturn;
+        n2->ax = ax; n2->ay = ay;
         n2->wx0 = fx; n2->wz0 = fy - fz * 0.5f;
         n2->wy = fz; n2->gnd = fz;          /* the ground under it, refined below */
-        n2->yaw = *(const unsigned short*)(u + U_YAW);
+        n2->yaw = pu->rot[1];
         n2->hires = NULL;
         n2->shadow = 0; n2->slant = 0;
         /* build state: the engine's own staging for a unit under construction
@@ -2466,12 +2478,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            projection is skipped for every unit this pass owns — the third
            owndraw detour, on 0x458DD0. */
         n2->nanoOn = s_nano &&
-                     tagpu_r3d_nano_state(u, &n2->nanoT, n2->nanoC, &n2->nanoWire);
+                     tagpu_r3d_nano_state(pu->nano, pu->id, pk->tick,
+                                          &n2->nanoT, n2->nanoC, &n2->nanoWire);
         n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
-        unsigned mask = 0;                    /* FBI booleans, read below */
+        unsigned mask = 0;                    /* FBI booleans, from the packet */
         {
-            const char* def = *(const char* const*)(u + U_TYPE);
-            if (ptr_ok(def)) {
+            if (pu->type_row != 0xFFFFu) {
                 /* mirror the engine's shadow branch in the blit 0x459200
                    (shadows-cloak.md §3). ST_STRUCT units take the CACHED
                    SLANT SHADOW branch (Object3do+0x14): while owndraw "all"
@@ -2483,7 +2495,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    silhouette the wipe emptied -- ours, under the engine's
                    FBI gates. Without the redirect a structure keeps the
                    engine's cached shadow, exactly as before. */
-                mask = *(const unsigned*)(def + UD_TYPEMASK);
+                mask = pu->def_mask;
                 /* a digger never reaches the cached branch: path A tests the
                    structure bit first and then sends a digger to the
                    COMPLETED branch (0x4592C8), path B tests digger before the
@@ -2492,22 +2504,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 if (n2->slant) {
                     n2->shadow = tagpu_owndraw_structshadow_ours() &&
                                  !(mask & 0x02000000u);    /* noshadow          */
-                    if (n2->shadow &&
-                        *(const unsigned short*)(u + U_MODELID) == 0 &&
-                        fz < (float)*(const unsigned char*)(ta + OFF_SEALEVEL))
+                    if (n2->shadow && pu->model_id == 0 &&
+                        fz < (float)pk->sea_level)
                         n2->shadow = 0;
                 } else {
                     n2->shadow = !(mask & 0x02000000u) &&  /* noshadow          */
                                  !(mask & 0x00081000u);    /* canhover|floater  */
                 }
-                char nm[32]; int ci;
-                for (ci = 0; ci < 31; ci++) {
-                    char cch = def[0x20 + ci];   /* UnitName, e.g. ARMSOLAR */
-                    if (cch >= 'A' && cch <= 'Z') cch = (char)(cch + 32);
-                    nm[ci] = cch;
-                    if (!cch) break;
-                }
-                nm[31] = 0;
+                /* the UnitName, lowercased by the publisher (UnitDef+0x20) */
+                char nm[sizeof pu->name + 1];
+                memcpy(nm, pu->name, sizeof pu->name);
+                nm[sizeof pu->name] = 0;
                 n2->hires = tagpu_hires_mesh(nm, f->frame_counter);
                 /* A replacement unit contributes NO vertices to this pass, so
                    routing it there while the other pass cannot draw makes it
@@ -2534,11 +2541,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            Enemy without the sonar bit: erased; own / sonar-seen: tinted.
            Digger: everything below the unit origin is erased. */
         {
-            const char* fr = *(const char* const*)(o3 + O3_COMPOSITE);
-            if (ptr_ok(fr) && *(const unsigned*)(fr + GF_PTRDEPTH) != 0) {
-                float sub = (float)*(const unsigned char*)(ta + OFF_SEALEVEL) - fz;
+            if (pu->flags & TAGPU_PK_U_DEPTHPLANE) {
+                float sub = (float)pk->sea_level - fz;
                 if (sub > 0.0f) {
-                    int local = *(const unsigned char*)(ta + OFF_LOCALPL);
+                    int local = pk->local_player;
                     n2->waterT = sub;
                     n2->waterMode = (owner != local && !(st & ST_SONAR)) ? 1 : 2;
                 }
@@ -2565,11 +2571,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            terrain height byte = PLOT_MEMORY tile +0x04 (16-px grid) */
         {
             float gy = ay;
-            const char* fmap = *(const char* const*)(ta + OFF_FMAP);
-            int mapW = *(const int*)(ta + OFF_MAPW), mapH = *(const int*)(ta + OFF_MAPH);
-            int tx = wx >> 4, tyy = wy >> 4;
-            if (ptr_ok(fmap) && tx >= 0 && tyy >= 0 && tx < mapW && tyy < mapH) {
-                int th = *(const unsigned char*)(fmap + ((size_t)tyy * mapW + tx) * FT_STRIDE + 0x04);
+            if (pu->flags & TAGPU_PK_U_GROUND) {
+                int th = pu->ground_h;
                 gy = fy - (float)th * 0.5f - (float)eyeY + (float)vpT;
                 n2->gnd = (float)th;
             }
@@ -2601,18 +2604,24 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        (0x459657, state & 0x20000) is mirrored so a member it does not draw
        does not get moved either. */
     for (int a = 0; a < nu; a++) {
-        const char* pu = units[a].u;
-        if (!ptr_ok(pu)) continue;
-        const char* c = *(const char* const*)(pu + U_CARGO);
-        for (int guard = 0; ptr_ok(c) && guard < 64; guard++,
-             c = *(const char* const*)(c + U_CARGONEXT)) {
-            if (*(const unsigned*)(c + U_STATE) & ST_NOCARGO) continue;
-            for (int b = 0; b < nu; b++)
-                if (units[b].u == c) {
-                    units[b].rel = units[a].rel;
-                    units[b].air = units[a].air;
-                    break;
-                }
+        const TAGPU_PK_UNIT* parent = units[a].pu;
+        int ci;
+        if (!parent) continue;
+        /* the chain, as PACKET indices the publisher resolved: every hop is a
+           bounded index into the units table, so the 64-hop guard is now a
+           cycle guard rather than a bound on a pointer walk */
+        for (ci = parent->cargo_first; ci >= 0; ) {
+            const TAGPU_PK_UNIT* c = &pkUnits[ci];
+            if (!(c->state & ST_NOCARGO)) {
+                for (int b = 0; b < nu; b++)
+                    if (units[b].pu == c) {
+                        units[b].rel = units[a].rel;
+                        units[b].air = units[a].air;
+                        break;
+                    }
+            }
+            ci = c->cargo_next;
+            if (ci == parent->cargo_first) break;      /* a cycle: stop */
         }
     }
     }
@@ -2623,45 +2632,40 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        depth (3+rel*4). The engine's own scratch-fake-unit draw is suppressed
        by the owndraw classifier while this pass is armed. */
     if (s_armed && s_wrecks) {
-        const char* fmap = *(const char* const*)(ta + OFF_FMAP);
-        const char* defs = *(const char* const*)(ta + OFF_FDEFS);
-        const char* recs = *(const char* const*)(ta + OFF_WRECKS);
-        int mapW = *(const int*)(ta + OFF_MAPW), mapH = *(const int*)(ta + OFF_MAPH);
-        if (ptr_ok(fmap) && ptr_ok(defs) && ptr_ok(recs) &&
-            mapW > 0 && mapH > 0 && mapW <= 4096 && mapH <= 4096) {
-            /* both axes off the ZOOM's rect, like the row range and the cull
+        int mapW = pk->map_w16, mapH = pk->map_h16;
+        const TAGPU_PK_WRECK* pkWrecks = tagpu_pk_wrecks(pk);
+        if (mapW > 0 && mapH > 0 && mapW <= 4096 && mapH <= 4096) {
+            /* THE HUSKS COME OUT OF THE PACKET. The publisher walked the
+               feature grid for anchors whose def is a 3D wreck and copied the
+               record's pose, so this pass no longer follows tile -> def ->
+               record -> Object3do on the render thread. The rect is unchanged:
+               both axes off the ZOOM's rect, like the row range and the cull
                below — leaving the columns on the engine's viewport stopped
                wrecks at the unzoomed left and right edges while terrain,
-               features and units carried on past them */
+               features and units carried on past them. */
             int tx0 = ((eyeX + (evpL - vpL)) >> 4) - 8;
             int tx1 = tx0 + (evw >> 4) + 16;
             int ty0 = r0, ty1 = r0 + rows;
+            unsigned wi;
             if (tx0 < 0) tx0 = 0;
             if (ty0 < 0) ty0 = 0;
             if (tx1 > mapW) tx1 = mapW;
             if (ty1 > mapH) ty1 = mapH;
-            for (int ty = ty0; ty < ty1 && nu < MAXU; ty++)
-            for (int tx = tx0; tx < tx1 && nu < MAXU; tx++) {
-                const char* t = fmap + ((size_t)ty * mapW + tx) * FT_STRIDE;
-                if (!(*(const unsigned char*)(t + FT_FLAGS) & 1)) continue;
-                unsigned defIdx = *(const unsigned short*)(t + FT_DEFIDX);
-                if (defIdx >= 0xFFFB) continue;               /* not an anchor */
-                const char* def = defs + (size_t)defIdx * FD_STRIDE;
-                if (*(const unsigned char*)(def + FD_MASK) & 1) continue; /* GAF wreck */
-                unsigned widx = *(const unsigned short*)(t + FT_WIDX);
-                const char* rec = recs + (size_t)widx * WR_STRIDE;
-                if (IsBadReadPtr(rec, WR_STRIDE)) continue;
-                const char* o3 = *(const char* const*)(rec + WR_OBJ3DO);
-                if (!ptr_ok(o3)) continue;
+            for (wi = 0; wi < pk->n_wrecks && nu < MAXU; wi++) {
+                const TAGPU_PK_WRECK* pw = &pkWrecks[wi];
+                const TAGPU_PK_PIECE* wpc;
                 /* wreck record positions are 16.16 fixed-point (the engine
                    copies them straight into the scratch unit's +0x6A/6E/72
                    16.16 pos fields, then projects from the high words) — shift
                    to whole world units, exactly what the projection below and
-                   the fog/rel maths expect. Reading them raw put every wreck
-                   ~1700<<16 px off-screen, so all wrecks were culled (nu=0). */
-                int rx = *(const int*)(rec + WR_XPOS) >> 16;
-                int rz = *(const int*)(rec + WR_ZPOS) >> 16;
-                int ry = *(const int*)(rec + WR_YPOS) >> 16;
+                   the fog/rel maths expect. */
+                int rx = pw->pos[0] >> 16;
+                int rz = pw->pos[1] >> 16;
+                int ry = pw->pos[2] >> 16;
+                if ((rx >> 4) < tx0 || (rx >> 4) >= tx1) continue;
+                if ((ry >> 4) < ty0 || (ry >> 4) >= ty1) continue;
+                wpc = tagpu_pk_pieces(pk, pw->piece_off, pw->piece_n);
+                if (!wpc) continue;
                 float ax = (float)(rx - eyeX + vpL);
                 float ay = (float)(ry - rz / 2 - eyeY + vpT);
                 if (ax < evpL - 256 || ax > evpL + evw + 256 ||
@@ -2673,8 +2677,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                                   s_fogOrgX, s_fogOrgY, rx, ry - rz / 2) & 1))
                     continue;
                 NU* n2 = &units[nu++];
-                n2->o3 = o3; n2->u = NULL; n2->ax = ax; n2->ay = ay; n2->gy = ay;
-                n2->rec = rec; n2->dead = 0;
+                n2->pu = NULL; n2->pw = pw; n2->pc = wpc; n2->nparts = pw->piece_n;
+                n2->basePiece = pw->base_piece; n2->bturn = pw->bturn;
+                n2->ax = ax; n2->ay = ay; n2->gy = ay;
                 n2->wx0 = (float)rx; n2->wz0 = (float)(ry - rz / 2);
                 n2->wy = (float)rz; n2->gnd = (float)rz;
                 n2->rel = (ry >> 4) - r0;
@@ -2852,11 +2857,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     unsigned crcNow = 0;
     int crcLog = 0;
     if (s_poseCrcOn) {
-        const char* cta = *(const char* const*)TA_MAINPP;
-        if (ptr_ok(cta)) {
-            crcNow = (unsigned)*(const int*)(cta + 0x38A47);
-            if (crcNow != crcTick) { crcTick = crcNow; crcLog = 1; }
-        }
+        crcNow = pk->tick;
+        if (crcNow != crcTick) { crcTick = crcNow; crcLog = 1; }
     }
     s_hposeN = 0;
     for (i = 0; i < nu; i++) {
@@ -2882,16 +2884,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         encb[i] = encBase;                    /* before the dead check: encb is
                                                  static, and every later loop
                                                  indexes it by i */
-        {
-            const char* now = units[i].o3;
-            if (units[i].feat) { if (units[i].rec) now = *(const char* const*)(units[i].rec + WR_OBJ3DO); }
-            else if (units[i].u) now = *(const char* const*)(units[i].u + U_OBJ3DO);
-            if (now != units[i].o3) {
-                units[i].dead = 1; s_reread++;
-                hidx[i] = -1; topv[i] = 0.0f;   /* static: the depth pass reads them too */
-                continue;
-            }
-        }
+        /* THE RE-READ IS GONE (frame packet exchange, landing 3). This used to
+           compare the unit's `+0x9E` again against the Object3do gathered a
+           moment earlier, because the engine could free it between the two —
+           the narrow-window guard tagpu_reclaim's deferral sits behind. There
+           is nothing left to re-read: the pose, the composite rect and every
+           field below are a COPY the game thread made, in our own memory,
+           valid for the whole frame. `s_reread` therefore stays 0 for good
+           and the counter is kept only so a non-zero one would be loud. */
         if (units[i].hires) {
             /* no vertices here: this unit is the other pass's, and leaving
                firstv[i] == firstv[i+1] makes its draws below empty */
@@ -2906,7 +2906,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 if (np > TAGPU_HMAXPIECE) np = TAGPU_HMAXPIECE;
                 if (np > 0 && s_hposeN + np * 12 <= HPOSE_MAX) {
                     float* dst = s_hpose + s_hposeN;
-                    if (hires_pose(units[i].o3, units[i].hires, dst, np)) {
+                    if (hires_pose(units[i].pc, units[i].nparts, units[i].bturn,
+                                   units[i].basePiece, units[i].hires, dst, np)) {
                         h->pose = dst; h->npose = np;
                         s_hposeN += np * 12;
                     }
@@ -2921,8 +2922,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                which has no pose to carry anything, still needs an outer
                rotation — and it takes the heading from the CACHED triple the
                drawn geometry follows, not the live unit word */
-            h->yaw = h->pose ? 0
-                   : (unsigned short)*(const unsigned short*)(units[i].o3 + O3_BTURN + 2);
+            h->yaw = h->pose ? 0 : units[i].bturn[1];
             h->alpha = units[i].cloaked ? 0.5f : 1.0f;
             h->fog = FOGW(i);
             h->waterT = units[i].waterT;
@@ -2962,7 +2962,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             hidx[i] = -1;
             topv[i] = 0.0f;
             if (!pdReady) continue;
-            if (!tagpu_posebake_unit(units[i].o3, units[i].owner, &bg, &bm) ||
+            if (!tagpu_posebake_unit(units[i].pc, units[i].nparts, units[i].owner, &bg, &bm) ||
                 bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) {
                 s_poseNoBake++;
                 continue;
@@ -2982,7 +2982,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 memset(q, 0, sizeof *q);
                 q->geom = bg; q->mat = bm;
                 if (fits &&
-                    posed_pose(units[i].o3, bg, pdPose + pdPoseN,
+                    posed_pose(units[i].pu, units[i].pc, units[i].bturn, units[i].basePiece,
+                               bg, pdPose + pdPoseN,
                                pdShaded + pdShadedN, pdPvis + pdShadedN)) {
                     q->pose   = pdPose + pdPoseN;
                     q->shaded = pdShaded + pdShadedN;
@@ -2992,8 +2993,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     if (crcLog && s_poseCrcIn) {
                         char cb[128];
                         _snprintf(cb, sizeof cb,
-                                  "posecrc: tick=%u o3=%p np=%d in=%08lx out=%08lx raced=%u",
-                                  crcNow, (const void*)units[i].o3, np,
+                                  "posecrc: tick=%u o3=%08X np=%d in=%08lx out=%08lx raced=%u",
+                                  crcNow, units[i].pu ? units[i].pu->o3_key
+                                                      : (units[i].pw ? units[i].pw->o3_key : 0u), np,
                                   s_poseCrcIn, s_poseCrcOut, s_poseCrcRaced);
                         cb[sizeof cb - 1] = '\0';
                         nlog(cb);
@@ -3074,9 +3076,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                `nsel`. Kept as a bound, not as a live path — and it is NOT
                "owed nothing", because 0x46A530 has no ModelId test and the
                engine draws its box. See the note there. */
-            if (units[i].dead || !units[i].u) { selNone++; continue; }
-            if (!*(const unsigned short*)(units[i].u + U_MODELID)) { selNone++; continue; }
-            const char* root = model_root(ta, units[i].u);
+            if (!units[i].pu) { selNone++; continue; }
+            if (!units[i].pu->model_id) { selNone++; continue; }
+            const char* root = model_root(pk, units[i].pu->model_id);
             const MAABB* a = root ? selbox_aabb(root) : NULL;
             if (!a) continue;
             /* the engine hands all THREE of the unit's angles to 0x4B6CC0
@@ -3089,8 +3091,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                of pitch; the TRANSPOSED yaw,
                which this loop used until 2026-09-08, is a rotation by
                -heading, so the rect turned against the unit it marks. */
-            const unsigned short* rot =
-                (const unsigned short*)(units[i].u + U_ROT);
+            const unsigned short* rot = units[i].pu->rot;
             const float K = 6.2831853f / 65536.0f;
             float c0 = cosf((float)rot[0] * K), s0 = sinf((float)rot[0] * K);
             float c1 = cosf((float)rot[1] * K), s1 = sinf((float)rot[1] * K);
@@ -3259,8 +3260,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     o[1] = qy[t2];
                     o[2] = enc;
                     o[3] = -1.0f; o[4] = -1.0f;                 /* flat path  */
-                    o[5] = (float)*(unsigned char*)(ta + OFF_GUICOL + SELBOX_COLIDX)
-                           / 255.0f;
+                    o[5] = (float)pk->gui_col[SELBOX_COLIDX] / 255.0f;
                     o[6] = -1.0f;
                     o[7] = (float)tagpu_r3d_shade_neutral() / 31.0f;
                     o[8] = units[i].wx0; o[9] = units[i].wz0;
@@ -3304,7 +3304,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        loses the unit, while losing a shadow loses a shadow. */
     int nwire = 0, npdWire = 0;
     for (i = 0; i < nu; i++) {
-        if (units[i].dead || !units[i].nanoOn || pdix[i] < 0) continue;
+        if (!units[i].nanoOn || pdix[i] < 0) continue;
         {
             const TAGPU_PBGEOM* pg = (const TAGPU_PBGEOM*)pdu[pdix[i]].geom;
             if (pg && pg->count[TAGPU_PB_WIRE] > 0) { npdWire++; nwire++; }
@@ -3341,7 +3341,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                   cppL->shadows != TAGPU_SHADOWS_OFF;
     int nslant = 0, npdSlant = 0;
     for (i = 0; i < nu; i++) {
-        if (units[i].dead || (cpp && !hard) || !units[i].slant || !units[i].shadow ||
+        if ((cpp && !hard) || !units[i].slant || !units[i].shadow ||
             units[i].hires || pdix[i] < 0) continue;
         npdSlant++; nslant++;
     }
@@ -3364,7 +3364,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         hv.scafP[2] = (float)vw;  hv.scafP[3] = (float)vh;
         hv.fogOrg[0] = (float)s_fogOrgX; hv.fogOrg[1] = (float)s_fogOrgY;
         hv.fogDim[0] = (float)s_fogCols; hv.fogDim[1] = (float)s_fogRows;
-        hv.palTex = s_palTex; hv.lutTex = tagpu_r3d_lut_texref();
+        hv.palTex = s_palTex; hv.lutTex = tagpu_r3d_lut_texref(tagpu_pk_shd(pk));
         hv.fogTex = s_fogTex; hv.fogLutTex = s_fogLutTex;
         hv.shNeutral = tagpu_r3d_shade_neutral();
         hv.shDir = tagpu_r3d_shade_dir();
@@ -3391,16 +3391,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         for (i = 0; i < nu; i++) {
             float agl, throw_, sv, top = 0.0f, amn = 0.0f;
             int skip;
-            /* its object moved since the gather (the body loop above):
-               nothing in its record is its own any more, and its hires
-               index would be last frame's slot -- another unit's entry */
-            if (units[i].dead) continue;
             /* the model height at rest, the lab's meshTop: the whole-tree
                AABB for a unit (constant per type, so an animating piece does
                not make its shadow breathe); a wreck has no unit record and
                takes its posed top, which never moves */
-            if (units[i].u) {
-                const char* root = model_root(ta, units[i].u);
+            if (units[i].pu) {
+                const char* root = model_root(pk, units[i].pu->model_id);
                 if (root) {
                     const MAABB* a = model_aabb(root);
                     if (a) { top = a->mx[1]; amn = a->mn[1]; }
@@ -3416,11 +3412,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             if (agl < 0.0f) agl = 0.0f;
             tagpu_shadow_caster(top, agl, &throw_, &sv);
             castv[i][0] = units[i].wy; castv[i][1] = units[i].gnd + throw_; castv[i][2] = sv;
-            if (s_castLogged < 16 && units[i].u && units[i].wx0 != s_castLogX) {
+            if (s_castLogged < 16 && units[i].pu && units[i].wx0 != s_castLogX) {
                 s_castLogX = units[i].wx0;
                 char b[160];
                 _snprintf(b, sizeof b, "shadow: caster model=%u top=%.1f (aabb y %.1f..%.1f) wy=%.1f gnd=%.1f agl=%.1f throw=%.1f sv=%.3f air=%d",
-                          (unsigned)*(const unsigned short*)(units[i].u + U_MODELID),
+                          (unsigned)units[i].pu->model_id,
                           top, amn, top, units[i].wy, units[i].gnd, agl, throw_, sv, units[i].air);
                 nlog(b);
                 s_castLogged++;
@@ -3518,7 +3514,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     x_glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tagpu_r3d_atlas_texref());
     x_glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, tagpu_r3d_lut_texref());
+    glBindTexture(GL_TEXTURE_2D, tagpu_r3d_lut_texref(tagpu_pk_shd(pk)));
     x_glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, s_palTex);
     x_glActiveTexture(GL_TEXTURE3);
@@ -3746,7 +3742,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (x_glLineWidth) x_glLineWidth((GLfloat)ss);
         tagpu_posedraw_wire_begin();
         for (i = 0; i < nu; i++) {
-            if (pdix[i] < 0 || units[i].dead || !units[i].nanoOn) continue;
+            if (pdix[i] < 0 || !units[i].nanoOn) continue;
             tagpu_posedraw_wire_unit(&pdu[pdix[i]], units[i].nanoWire);
         }
         tagpu_posedraw_end();
@@ -3816,7 +3812,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             x_glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, tagpu_r3d_atlas_texref());
             x_glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, tagpu_r3d_lut_texref());
+            glBindTexture(GL_TEXTURE_2D, tagpu_r3d_lut_texref(tagpu_pk_shd(pk)));
             x_glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, s_palTex);
             x_glActiveTexture(GL_TEXTURE3);
@@ -4032,7 +4028,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
    and it is how a unit whose script does something no sample covered — a piece
    MOVEd, two turn axes at once — says so, instead of just rendering slightly
    wrong. err should read 0.00. */
-static void pose_dump(const char* u, const char* o3)
+/* THE ENGINE'S POSED VERTEX BUFFER IS NO LONGER READ HERE (frame packet
+   exchange, landing 3). `err=` compared our reconstruction against
+   PrimitiveStruct+0x22 — the buffer the engine rewrites in place, inside the
+   Object3do that FreeObjectState can take away mid-frame — and it was the last
+   per-unit engine read left in this file. What the dump is FOR survives whole:
+   `tools/tacob pose-check` diffs tacob's own reconstruction against the FIELDS
+   printed below (the rest offset, the COB move and turn, the visibility bit),
+   and `tagpu_posecrc.on` watches the matrices this pass hands the GPU. The
+   `err=` column is a gap this landing leaves open, not one it closes:
+   recovering it wants the posed buffer copied into the packet under the
+   trigger, which is a table nothing else would use. */
+static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
+                      const TAGPU_PK_PIECE* pc, int nparts)
 {
     if (GetFileAttributesA("tagpu_posedump.on") == INVALID_FILE_ATTRIBUTES) return;
     DeleteFileA("tagpu_posedump.on");
@@ -4052,14 +4060,14 @@ static void pose_dump(const char* u, const char* o3)
        number: recon_err skips a piece whose visible bit is clear and compares
        recon_prim's 16.16-ROUNDED output, while this reports every piece,
        ` HIDDEN` ones included, differenced in float. */
-    const unsigned short* bturn = (const unsigned short*)(o3 + O3_BTURN);
+    const unsigned short* bturn = u->bturn;
     unsigned short bt[3];
-    int nparts;
+    int ok;
     char b[288];
     bt[0] = bturn[2];                       /* +0x1C = unit+0x68, about X */
     bt[1] = bturn[1];                       /* +0x1A = unit+0x66, about Y */
     bt[2] = bturn[0];                       /* +0x18 = unit+0x64, about Z */
-    nparts = pose_accum_body(o3, &h, bt);
+    ok = pose_accum_body(pc, nparts, u->base_piece, &h, bt);
     /* tick and in-game index first, so the line joins tagpu_cobtrace.log's
        (tick, unit) columns; the tick is read here on the render thread, so
        it names the sim tick this pass sampled, which may be the one before
@@ -4075,65 +4083,29 @@ static void pose_dump(const char* u, const char* o3)
        established -- this line is what will say. `yaw=` is kept, and is the
        live heading, so a fixture written before this change still parses. */
     _snprintf(b, sizeof b,
-              "posedump: tick=%d idx=%d unit=%p o3=%p nparts=%d yaw=%u "
+              "posedump: tick=%d idx=%d o3=%08X nparts=%d yaw=%u "
               "body=(%u,%u,%u) live=(%u,%u,%u)",
-              *(const int*)(*(const char* const*)TA_MAINPP + 0x38A47),
-              (int)*(const short*)(u + 0xA8), u, o3,
-              (int)*(const unsigned short*)(o3 + O3_NUMPARTS),
-              (unsigned)*(const unsigned short*)(u + U_YAW),
+              (int)pk->tick, (int)u->id, u->o3_key, nparts,
+              (unsigned)u->rot[1],
               (unsigned)bt[0], (unsigned)bt[1], (unsigned)bt[2],
-              (unsigned)*(const unsigned short*)(u + 0x68),
-              (unsigned)*(const unsigned short*)(u + U_YAW),
-              (unsigned)*(const unsigned short*)(u + 0x64));
+              (unsigned)u->rot[2], (unsigned)u->rot[1], (unsigned)u->rot[0]);
     nlog(b);
-    if (!nparts) { nlog("posedump: pose_accum_body refused this unit"); return; }
+    if (!ok) { nlog("posedump: pose_accum_body refused this unit"); return; }
     int p;
     for (p = 0; p < nparts && p < 32; p++) {
-        const char* pr = h.pr[p];
         const char* nd = h.nd[p];
-        const int*  vb = *(const int* const*)(pr + P_VBUF);
         const int*  of = (const int*)(nd + N_OFF);
-        const int*  mv = (const int*)(pr + P_POS);
-        const unsigned short* tn = (const unsigned short*)(pr + P_TURN);
+        const int*  mv = pc[p].pos;
+        const unsigned short* tn = pc[p].turn;
         const char* nm = *(const char* const*)(nd + N_NAME);
-        const int*  nv = *(const int* const*)(nd + N_VERTS);
-        int cnt = *(const int*)(nd + N_VCOUNT);
-        float worst = -1.0f;
-        if (h.done[p] && ptr_ok(nv) && ptr_ok(vb) && cnt > 0 && cnt <= MAXNODEV &&
-            !IsBadReadPtr(nv, (SIZE_T)cnt * 12) && !IsBadReadPtr(vb, (SIZE_T)cnt * 12)) {
-            int k, r;
-            worst = 0.0f;
-            for (k = 0; k < cnt; k++) {
-                float v[3], g[3];
-                for (r = 0; r < 3; r++) v[r] = (float)nv[k*3+r] / 65536.0f;
-                for (r = 0; r < 3; r++) {
-                    const float* m = h.acc[p] + r * 4;
-                    g[r] = m[0]*v[0] + m[1]*v[1] + m[2]*v[2] + m[3];
-                }
-                for (r = 0; r < 3; r++) {
-                    float d = g[r] - (float)vb[k*3+r] / 65536.0f;
-                    if (d < 0.0f) d = -d;
-                    if (d > worst) worst = d;
-                }
-            }
-        }
         _snprintf(b, sizeof b,
                   "posedump: p%d %s%s off=(%d,%d,%d) move=(%d,%d,%d) "
-                  "turn=(%u,%u,%u) err=%.2f",
+                  "turn=(%u,%u,%u)",
                   p, ptr_ok(nm) ? nm : "?",
-                  (*(const unsigned char*)(pr + P_FLAGS) & 1) ? "" : " HIDDEN",
+                  (pc[p].flags & 1) ? "" : " HIDDEN",
                   of[0], of[1], of[2], mv[0], mv[1], mv[2],
-                  (unsigned)tn[0], (unsigned)tn[1], (unsigned)tn[2], worst);
+                  (unsigned)tn[0], (unsigned)tn[1], (unsigned)tn[2]);
         nlog(b);
-        if (ptr_ok(nv) && ptr_ok(vb) && cnt > 0) {
-            int k, kmax = cnt < 3 ? cnt : 3;
-            for (k = 0; k < kmax; k++) {
-                _snprintf(b, sizeof b,
-                    "posedump:   v%d node=(%d,%d,%d) vbuf=(%d,%d,%d)", k,
-                    nv[k*3], nv[k*3+1], nv[k*3+2], vb[k*3], vb[k*3+1], vb[k*3+2]);
-                nlog(b);
-            }
-        }
     }
 }
 
@@ -4180,37 +4152,29 @@ int tagpu_native_selbox_complete(void) { return s_selComplete; }
    catches the large jump, and the equality test below catches the rest by
    refusing any sample that does not still describe THIS unit's current
    position. 0 means "no position" — callers must not use the outputs. */
-int tagpu_native_unit_pos(const char* u, float* x, float* y, float* z)
+int tagpu_native_unit_pos(const TAGPU_PK_UNIT* u, float* x, float* y, float* z)
 {
-    const char* ta;
-    const char* beg;
-    const char* end;
-    size_t off;
     int ix, iz, iy;
     float fx, fz, fy;
 
     if (!u || !x || !y || !z) return 0;
-    if (!ptr_ok(u)) return 0;
-    ta = *(const char* const*)TA_MAINPP;
-    if (!ptr_ok(ta)) return 0;
-    beg = *(const char* const*)(ta + OFF_BEGIN);
-    end = *(const char* const*)(ta + OFF_END);
-    /* BOTH ends, and the stride. Callers today pre-filter, but this is a
-       published accessor and its contract is "one unit's position" — a pointer
-       past the array's end, or one landing mid-slot, is not that. */
-    if (!ptr_ok(beg) || !ptr_ok(end) || u < beg || u >= end) return 0;
-    if ((size_t)(u - beg) % UNIT_STRIDE) return 0;
-
-    ix = *(const int*)(u + U_XFIX);
-    iz = *(const int*)(u + U_ZFIX);
-    iy = *(const int*)(u + U_YFIX);
+    ix = u->pos[0];
+    iz = u->pos[1];
+    iy = u->pos[2];
     fx = (float)ix / 65536.0f;
     fz = (float)iz / 65536.0f;
     fy = (float)iy / 65536.0f;
 
-    off = (size_t)(u - beg);
+    /* THE SLOT CHECK IS NOT OPTIONAL, and the packet does not retire it. The
+       table is indexed by the engine's array slot and a slot outlives the unit
+       that filled it, so a sample belonging to a dead unit would be handed to
+       whatever took its place: the equality test refuses any sample that does
+       not still describe THIS unit's current 16.16 position, and spx_sample's
+       own distance snap catches the large jump. What the packet does retire is
+       the bounds check the pointer form needed — a slot is now a number the
+       publisher took out of its own walk, not an address to validate. */
     {
-        size_t slot = off / UNIT_STRIDE;
+        unsigned slot = u->slot;
         if (slot < 8192 && s_spx[slot].x == ix && s_spx[slot].z == iz &&
             s_spx[slot].y == iy)
             spx_sample(slot, s_spxFrame, &fx, &fz, &fy);

@@ -29,10 +29,15 @@
    not acquire on its own; the pointer is valid for THIS frame only.
 
    Landing 1 carried the header, the marker text's font as glyph bytes, and
-   the out-of-game packet. Landing 2 adds the view (the addressable rect, the
-   palette and gamma, the command acknowledgement) and the command record. No
-   tables yet: the units, pieces, fog and the rest arrive with landings 3..4
-   and every table then has its `off`/`n` here. */
+   the out-of-game packet. Landing 2 added the view (the addressable rect, the
+   palette and gamma, the command acknowledgement) and the command record.
+   LANDING 3 adds the four world tables — units, pieces, wrecks and feature
+   anchors — with the header fields they need (the GUI colours, the mouse and
+   the build cursor, the per-map array bases the fenced passes index, the
+   engine's shade table), and makes the acquire tick-aware so that the two
+   packets the consumer holds always span two distinct sim ticks. The
+   projectile, explosion, particle and fog tables arrive with landing 4 and
+   every table then has its `off`/`n` here. */
 #include <stdint.h>
 
 /* One glyph of the marker font, as a self-contained one-glyph FONT OBJECT the
@@ -59,6 +64,155 @@ typedef struct TAGPU_PK_GLYPH {
 /* truncated bits */
 #define TAGPU_PK_TRUNC_FONT   0x1u
 #define TAGPU_PK_TRUNC_STRESS 0x2u          /* the stress lever's dummy table   */
+
+
+/* ---- THE WORLD TABLES (landing 3) ---------------------------------------
+   One contiguous block per slot: this header, then the tables, 4-aligned, each
+   named by an `off_`/`n_` pair below. Every field says where the publisher
+   reads it (game thread, in-play frames only) and the bound it applies. A
+   `_key` is an engine address that crosses as an OPAQUE IDENTITY — a cache key
+   the render thread compares and never dereferences — with one stated
+   exception, PK_PIECE.node, whose paragraph says why.
+
+   NOTHING PER-UNIT IS DEREFERENCED ON THE RENDER THREAD ANY MORE. The unit
+   array and every Object3do field the passes used to read are copied here by
+   the thread that owns them, which is what closes the audit's open hazard
+   (cross-thread-engine-reads.md §5 row 2: the unsynchronised begin/end pair). */
+
+/* 100 B, one per LIVE unit, in engine slot order. The table's CAPACITY is the
+   engine's own slot count (`unit_slots` above), so a unit is never cut: the
+   engine allocates slots in per-player blocks and a walk stopped short would
+   drop the highest-numbered players entirely (the plan's §5 card). */
+typedef struct TAGPU_PK_UNIT {
+    uint32_t state;          /* unit+0x110: bit28 alive, bit14 excluded,
+                                bit4 selected, bit17 cargo-chain skip,
+                                bit29 structure (cached-shadow blit), bit9 sonar */
+    int32_t  pos[3];         /* unit+0x6A / +0x6E / +0x72, 16.16: x, altitude, depth */
+    uint32_t squad;          /* unit+0xAC, read as a DWORD because 0x469C55 does */
+    uint32_t o3_key;         /* unit+0x9E, the Object3do address, KEY: the pose
+                                caches key on it and nothing dereferences it   */
+    uint32_t piece_off;      /* byte offset of this unit's PK_PIECE run, 0 = none */
+    uint32_t def_mask;       /* UnitDef+0x241, the FBI booleans (bit12 canhover,
+                                bit19 floater, bit25 noshadow, bit30 digger)    */
+    float    nano;           /* unit+0x104, the fraction of the build REMAINING */
+    int32_t  max_health;     /* UnitDef+0x1FA, read as the engine's divisor does */
+    uint16_t rot[3];         /* unit+0x64: bank, heading (+0x66), pitch         */
+    uint16_t bturn[3];       /* Object3do+0x18 / +0x1A / +0x1C, the cached body
+                                turn the compose folds into the base piece      */
+    uint16_t slot;           /* index in the engine's unit array (stride 0x118) */
+    uint16_t id;             /* unit+0xA8, the stable in-game id: the lerp's key
+                                and the only thing two packets are matched on   */
+    uint16_t model_id;       /* unit+0xA6; the entry is DROPPED unless
+                                model_id < udef_count, so an index taken from a
+                                recycled slot can never address the model table
+                                out of bounds                                   */
+    uint16_t type_row;       /* the UnitDef row of unit+0x92, bounded by
+                                udef_count; 0xFFFF = the def did not resolve     */
+    uint16_t nparts;         /* Object3do+0x00, <= TAGPU_PBMAXPIECE             */
+    uint16_t piece_n;        /* nparts when the unit is inside the WIDEST zoom
+                                rect plus a margin, else 0 — never the current
+                                zoom level, which a held packet outlives        */
+    uint16_t base_piece;     /* (Object3do+0x1E - prim0) / 0x36, the piece the
+                                body turn folds into; 0xFFFF = none             */
+    int16_t  health;         /* unit+0x108                                      */
+    int16_t  cargo_first;    /* unit+0x8A / +0x8E resolved to PACKET indices,   */
+    int16_t  cargo_next;     /* -1 = none                                        */
+    int16_t  comp_w, comp_h; /* the unit composite's GAFFrame rect and hotspot  */
+    int16_t  comp_hx, comp_hy;
+    uint8_t  owner;          /* unit+0xFF, player id                            */
+    uint8_t  cloak;          /* unit+0x10E, bit2 = actively cloaked             */
+    uint8_t  flags;          /* TAGPU_PK_U_* below                              */
+    uint8_t  ground_h;       /* the feature cell's height byte under the anchor */
+    char     name[16];       /* UnitDef+0x20 UnitName, LOWERCASED and NUL-padded:
+                                what the glTF replacement pass looks a mesh up by
+                                and what the roster line prints. 16 is the FBI
+                                field's own width; a longer name is truncated    */
+} TAGPU_PK_UNIT;
+
+#define TAGPU_PK_U_DEPTHPLANE 0x01u  /* the composite has a depth plane (path B) */
+#define TAGPU_PK_U_NATIVE     0x02u  /* tagpu_native_owns_unit() said yes, on the
+                                        GAME thread, with the def in hand        */
+#define TAGPU_PK_U_INRECT     0x04u  /* inside the widest zoom rect: piece_n set  */
+#define TAGPU_PK_U_GROUND     0x08u  /* ground_h is a real cell: the unit's anchor
+                                        tile was inside the map                   */
+
+/* 24 B, piece_n per unit, in the model's own order (parents first).
+   `node` IS DEREFERENCED, and that is deliberate: it is the per-TYPE
+   Model3DONode template, which the level teardown cascade frees (0x42DB90)
+   and no unit's destructor touches, so its lifetime is tagpu_reclaim's
+   teardown fence — the same argument tagpu_posebake.c and tagpu_r3dcache.c
+   already stand on, and the one landing 3 deliberately does not change (the
+   plan's row 3: "the template ones stay, they are the fence's"). What the
+   packet removes here is the per-UNIT read: the PrimitiveStruct lives inside
+   the Object3do, which FreeObjectState 0x45AAA0 frees while the render thread
+   may be mid-frame, and it is that read — not the template one — that the
+   game thread now makes on our behalf. */
+typedef struct TAGPU_PK_PIECE {
+    int32_t  pos[3];         /* prim+0x04 P_POS, the COB MOVE delta, 16.16      */
+    uint16_t turn[3];        /* prim+0x10 P_TURN, 65536 = 360 degrees           */
+    uint8_t  flags;          /* prim+0x28 P_FLAGS: bit0 visible                 */
+    uint8_t  pad;
+    uint32_t node;           /* prim+0x00 P_NODE, the type's template node      */
+} TAGPU_PK_PIECE;
+
+/* 36 B, one per live wreck record the anchor rect names. Posed exactly as a
+   unit is — the engine draws a husk through a scratch fake unit — so it
+   carries the same pose fields. */
+typedef struct TAGPU_PK_WRECK {
+    int32_t  pos[3];         /* record+0x08 / +0x0C / +0x10, 16.16              */
+    uint32_t o3_key;         /* record+0x04, KEY                                */
+    uint32_t piece_off;
+    uint16_t bturn[3];
+    uint16_t rec;            /* the record index (stride 0x30)                  */
+    uint16_t def;            /* the FeatureDef row of the anchor that named it  */
+    uint16_t nparts, piece_n;
+    uint16_t base_piece;
+    uint16_t pad;
+} TAGPU_PK_WRECK;
+
+/* 16 B, one per feature-grid cell in the anchor rect that anchors a feature,
+   row-major over that rect. PER FRAME, not per level: the def index, the flags
+   and the wreck index are sim state the game thread rewrites every tick. The
+   six height bytes are the cell's own and the five neighbours the two height
+   rules need — the 2x2 corner average of the engine's projection (h, hr, hd,
+   hrd) and the left/right/up/down gradient the Classic++ ground light uses
+   (hl, h, hr and hu, h, hd) — so a consumer needs no second grid read. */
+typedef struct TAGPU_PK_ANCHOR {
+    uint16_t col, row;       /* the cell, in 16-px tiles                        */
+    uint16_t def;            /* cell+0x08 FT_DEFIDX, live when < 0xFFFB and
+                                inside the FeatureDef count; bounded here       */
+    uint16_t wreck;          /* cell+0x0A FT_WIDX, valid when flags bit0        */
+    uint8_t  flags;          /* cell+0x0C FT_FLAGS: bit0 wreckage present,
+                                bits 3.. the seen-by-player nibble              */
+    uint8_t  h;              /* cell+0x04, this cell's height byte              */
+    uint8_t  hr, hd, hrd;    /* (col+1,row), (col,row+1), (col+1,row+1)         */
+    uint8_t  hl, hu;         /* (col-1,row), (col,row-1)                        */
+    uint8_t  pad;
+} TAGPU_PK_ANCHOR;
+
+/* truncation bits, one per table (TAGPU_PK_TRUNC_FONT/STRESS are above) */
+#define TAGPU_PK_TRUNC_UNITS   0x4u
+#define TAGPU_PK_TRUNC_PIECES  0x8u
+#define TAGPU_PK_TRUNC_WRECKS  0x10u
+#define TAGPU_PK_TRUNC_ANCHORS 0x20u
+#define TAGPU_PK_TRUNC_SHD     0x40u
+
+#define TAGPU_PK_SHD_ROWS   32u      /* the engine's PALETTE.SHD shade table:  */
+#define TAGPU_PK_SHD_BYTES  (TAGPU_PK_SHD_ROWS * 256u)   /* 32 x 256 bytes     */
+
+/* The piece-count bound, the same number tagpu_model3do.h's TAGPU_PBMAXPIECE
+   states as a fact about a model (the largest stock model has 36 pieces).
+   Spelled again here so the packet's own bounds check needs no model header;
+   tagpu_packet_pub.c compiles a static assertion that the two agree. */
+#define TAGPU_PK_MAXPIECE   256u
+
+/* The units table's own ceiling. The engine's slot count is 10 x MaxUnits + 1
+   and MaxUnits tops out at 1500, so 15001 is the largest the engine can ask
+   for; 16384 is that rounded up, and a slot count past it truncates the table
+   (and says so) rather than walking off the publisher's scratch. */
+#define TAGPU_PK_MAX_UNITS    16384u
+#define TAGPU_PK_MAX_WRECKS   4096u
+#define TAGPU_PK_MAX_ANCHORS  65536u
 
 /* THE PRIMITIVE'S PREFIX AND SUFFIX. Every record the exchange carries — the
    frame packet below and the command record after it — starts with these
@@ -137,6 +291,40 @@ typedef struct TAGPU_PACKET {
     uint32_t font_len;          /* inside the slot; 0 = no font in this packet  */
     uint32_t stress_off;        /* the stress lever's dummy table (grows the   */
     uint32_t stress_len;        /* slot on purpose); 0 otherwise                */
+
+    /* ---- landing 3: the world tables and what reads them ---- */
+    uint32_t n_units,   off_units;    /* PK_UNIT,   live units in slot order    */
+    uint32_t n_pieces,  off_pieces;   /* PK_PIECE,  the arena the runs index    */
+    uint32_t n_wrecks,  off_wrecks;   /* PK_WRECK                               */
+    uint32_t n_anchors, off_anchors;  /* PK_ANCHOR, row-major over the rect     */
+    int32_t  anch_c0, anch_r0;        /* the anchor rect, in 16-px cells, already */
+    int32_t  anch_cols, anch_rows;    /* clamped to the map: the WIDEST zoom rect
+                                         plus a margin, so a consumer at any zoom
+                                         asks for a sub-rect of it               */
+    uint32_t unit_dup;                /* live units sharing a stable id in THIS
+                                         packet: the collision oracle, and a gate */
+    uint32_t feat_defs;               /* the per-map arrays the fenced passes    */
+    uint32_t feat_recs;               /* index — FeatureDef (stride 0x100), the  */
+    uint32_t model_ptrs;              /* wreck records (0x30) and Model3DONode*[]:
+                                         published here so no render-thread file
+                                         needs the engine's root pointer at all.
+                                         Their LIFETIME is unchanged: the level,
+                                         under tagpu_reclaim's teardown fence     */
+    int32_t  feat_defcount;           /* NumFeatureDefs: the bound on a def row  */
+    int32_t  sweep_cols, sweep_rows;  /* the engine's own feature sweep rect size */
+    int32_t  mouse[2];                /* the dispatched mouse point, screen px    */
+    int32_t  build_rect[6];           /* the build cursor's two corners as
+                                         x, altitude, z (0x2C92..0x2CA6)          */
+    uint8_t  gui_col[64];             /* GetGuiPaletteColor's byte array          */
+    uint8_t  cursor_mode;             /* 0x2CC3: 0x0E = build placement           */
+    uint8_t  region_flags;            /* 0x2CC6: bit3 band box, bit6 site OK      */
+    uint8_t  game_opt;                /* 0x37F06 low byte: bit0 damagebars,
+                                         bit2 Shadow, bit3 TShadow, bit4 FShadow  */
+    uint8_t  pad3;
+    uint32_t shd_off, shd_len;        /* the engine's 32x256 shade table
+                                         (PALETTE.SHD at graphics+0xC4), copied
+                                         whole: the Gouraud LUT the unit pass
+                                         builds its shading from                  */
     uint32_t truncated;         /* TAGPU_PK_TRUNC_* bits: what did not fit      */
     uint32_t crc;               /* CRC-32 of the slot with these two fields as
                                    zero, under `tagpu_packet.check`; else 0     */
@@ -179,6 +367,25 @@ typedef struct TAGPU_CMD {
     uint32_t tail_seq;
 } TAGPU_CMD;
 
+/* ---- the tables, by name ------------------------------------------------
+   Every offset in the header was checked against `used_bytes` at acquire
+   (tagpu_packet.c's frame_valid), so these are plain adds; a consumer bounds
+   its INDEX by the matching `n_` and nothing else. */
+static __inline const TAGPU_PK_UNIT* tagpu_pk_units(const TAGPU_PACKET* p)
+{ return p->n_units ? (const TAGPU_PK_UNIT*)(const void*)((const unsigned char*)p + p->off_units) : (const TAGPU_PK_UNIT*)0; }
+static __inline const TAGPU_PK_WRECK* tagpu_pk_wrecks(const TAGPU_PACKET* p)
+{ return p->n_wrecks ? (const TAGPU_PK_WRECK*)(const void*)((const unsigned char*)p + p->off_wrecks) : (const TAGPU_PK_WRECK*)0; }
+static __inline const TAGPU_PK_ANCHOR* tagpu_pk_anchors(const TAGPU_PACKET* p)
+{ return p->n_anchors ? (const TAGPU_PK_ANCHOR*)(const void*)((const unsigned char*)p + p->off_anchors) : (const TAGPU_PK_ANCHOR*)0; }
+/* One unit's or wreck's piece run, or NULL when the entry carries none (it sat
+   outside the widest zoom rect, or its model has no pieces). `piece_off` was
+   checked to lie inside the pieces area with room for `piece_n` entries. */
+static __inline const TAGPU_PK_PIECE* tagpu_pk_pieces(const TAGPU_PACKET* p, unsigned off, unsigned n)
+{ return (n && off) ? (const TAGPU_PK_PIECE*)(const void*)((const unsigned char*)p + off) : (const TAGPU_PK_PIECE*)0; }
+/* The engine's shade table, 32 rows of 256 bytes, or NULL if it did not fit. */
+static __inline const unsigned char* tagpu_pk_shd(const TAGPU_PACKET* p)
+{ return p->shd_len == TAGPU_PK_SHD_BYTES ? (const unsigned char*)p + p->shd_off : (const unsigned char*)0; }
+
 /* ---- lifetime ---- */
 /* DLL attach, before either thread exists — never lazily: reserves the slots
    of both exchanges and puts each into its initial permutation. A zeroed cell
@@ -191,14 +398,20 @@ int  tagpu_packet_armed(void);
    (render_ogl.c) and nobody else. Takes the fresh packet if there is one,
    else keeps the one it holds. Returns NULL when no packet has ever arrived,
    when the module is off, or when the packet fails its structural bounds
-   (counted as a violation). `*prev` is the previously taken packet when it is
-   from the same level and in-game, else NULL — and it MAY carry the same tick
-   as the packet returned: the give-back is the plain one (PREV handed back on
-   every take), and the tick-aware give-back the lerp needs (a same-tick packet
-   replaces READ and keeps PREV, so the pair spans two distinct ticks) is
-   landing 3's, with the lerp that consumes it. Nothing reads `prev` until
-   then. Both pointers are valid until tagpu_packet_frame_end(); caching
-   either across frames is the bug the poison lever exists to expose. */
+   (counted as a violation).
+
+   `*prev` is the previously taken packet when it is from the same level, in
+   game, and of a DIFFERENT sim tick — so the pair the interpolation blends
+   over always spans two ticks, never one (landing 3). The engine publishes
+   several packets per tick, so a consumer that handed PREV back on every take
+   would soon hold two of the same tick and the blend would refuse: stepped
+   motion, always. The give-back is therefore tick-aware, and the way it is
+   made so is the frame instance holding THREE slots rather than two — READ,
+   PREV and a SPARE — so the choice is made AFTER the exchange, out of records
+   the consumer already owns, instead of peeking at a slot the producer may be
+   refilling (tagpu_packet.c, "the rotation"). Both pointers are valid until
+   tagpu_packet_frame_end(); caching either across frames is the bug the poison
+   lever exists to expose. */
 const TAGPU_PACKET* tagpu_packet_acquire(const TAGPU_PACKET** prev);
 /* After the frame's LAST read of either packet, unconditionally — every path
    out of the overlay. Verifies the held slot was not rewritten during the

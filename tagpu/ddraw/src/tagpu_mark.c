@@ -104,11 +104,16 @@
 #include "tagpu_order.h"
 #include "tagpu_text.h"
 #include "tagpu_glsl.h"
+#include "tagpu_packet.h"   /* the frame packet: the view, the tables (landing 3) */
 
-/* ---- engine layout ---- */
-#define OFF_BEGIN    0x14357     /* unit array base / end (stride 0x118)      */
-#define OFF_END      0x1435B
-/* THE OWNER TEST'S PLAYER ID, and it is NOT the one the order driver uses.
+/* ---- what the marker block reads, and where it comes from ----------------
+   SINCE THE FRAME PACKET'S LANDING 3 this file reads no engine memory at all.
+   The unit array walk, the two player-id bytes, the damagebars option, the GUI
+   colour table, the build cursor's corners and the dispatched mouse point all
+   arrive in the packet, copied by the game thread inside the very draw whose
+   markers these are.
+
+   THE OWNER TEST'S PLAYER ID, and it is NOT the one the order driver uses.
    `DrawGameScreen` loads `main+0x2A43` into a local at `0x46967D`/`0x469689` and
    both the health bar (`0x469CA6`) and the group digit (`0x469CC9`) compare the
    unit's `owner->id` against THAT — while the order-marker driver `0x48CC30`
@@ -119,32 +124,8 @@
    were drawn for a different player's units than the engine's whenever the two
    disagree. Which of the pair is "watched" and which "local" is NOT established
    here and the notes disagree with each other about it, so they are named by
-   address. [BINARY-VERIFIED 2026-09-05] */
-#define OFF_BAROWNER 0x2A43      /* u8, the id the bar/digit loop compares to  */
-#define OFF_GAMEOPT  0x37F06     /* bit0 = the registry option "damagebars"   */
-#define OFF_GUICOL   0x0DCB      /* GUI colour byte array (GetGuiPaletteColor)*/
-#define UNIT_STRIDE  0x118
-#define U_XPOS       0x6C        /* s16 world x                               */
-#define U_ZPOS       0x70        /* s16 altitude                              */
-#define U_YPOS       0x74        /* s16 world z (map depth)                   */
-#define U_TYPE       0x92        /* UnitDefStruct*                            */
-#define U_SQUAD      0xAC        /* group digit; the engine tests all 4 bytes */
-#define U_HEALTH     0x108       /* s16                                       */
-#define U_STATE      0x110       /* bit28 alive, bit14 excluded               */
-#define U_OWNER      0xFF        /* u8 player id                              */
-#define UD_MAXHP     0x1FA       /* read as a DWORD, as the engine's div does */
-/* the build cursor / band box block, all DWORDs unless noted (0x469E13) */
-#define OFF_CURMODE  0x2CC3      /* u8 order/cursor mode; 0x0E = build placement */
-#define OFF_MOUSEFL  0x2CC6      /* u8 region flags; bit3 band box, bit6 site OK */
-#define OFF_MOUSE_X  0x2C76      /* the dispatched mouse point vpwide repairs  */
-#define OFF_MOUSE_Y  0x2C7A
-#define OFF_CUR_X1   0x2C92      /* world x of one corner                      */
-#define OFF_CUR_H1   0x2C96      /* its altitude — projected as z - alt/2      */
-#define OFF_CUR_Z1   0x2C9A      /* its world z                                */
-#define OFF_CUR_X2   0x2C9E      /* and the same three for the other corner    */
-#define OFF_CUR_H2   0x2CA2
-#define OFF_CUR_Z2   0x2CA6
-#define OFF_VPRECT   0x37E27     /* L,T,R,B — WIDENED by vpwide at zoom < 1    */
+   address. [BINARY-VERIFIED 2026-09-05] The packet carries both: `local_player`
+   IS 0x2A43, the bar loop's, and `watched` is 0x2A42, the order driver's. */
 #define CUR_BUILD    0x0E        /* the cursor mode the footprint belongs to   */
 
 #define GUI_BLACK    0x00
@@ -178,7 +159,6 @@
    that can reach the cap, and it costs the digits first. */
 #define MAXORDX      4800                    /* text verts (6 per quad)      */
 
-static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
 static void flog(const char* s)
 {
@@ -615,34 +595,36 @@ static void put_outline(int* nv, int l, int t, int r, int b, int col,
 
 /* the build-cursor footprint and the drag band box — the whole of
    `0x469DB4..0x469F23`, transcribed in the header comment */
-#define TA_MAINPP 0x00511DE8u   /* this file's own read (to-convert:3) */
-
 static void gather_cursor(const TAGPU_FXVIEW* v)
 {
-    const char* ta = *(const char* const*)TA_MAINPP;
+    /* EVERY WORD HERE IS THE PACKET'S (frame packet exchange, landing 3): the
+       GUI colour bytes, the two mode bytes, the dispatched mouse point and the
+       build cursor's two world corners, all copied by the game thread inside
+       the draw that is about to use them. The rect the engine can NAME comes
+       from the packet too (landing 2): the field 0x37E27 as the game thread
+       left it after its own widening — inclusive L, T, R, B, exactly what
+       IsPositionInRect tests against. */
+    const TAGPU_PACKET* pk = v->packet;
     const unsigned char* gui;
-    /* the rect the engine can NAME, from the packet (landing 2): the field
-       0x37E27 as the game thread left it after its own widening — inclusive
-       L, T, R, B, exactly what IsPositionInRect tests against */
-    const int* vp = v->packet ? v->packet->vp_addr : NULL;
+    const int* vp = pk ? pk->vp_addr : NULL;
     int mode, fl, l, t, r, b, idx, outer, inner, nv = CURSBASE;
     float wx, wz;
 
     s_ncurs = 0;
     if (s_armed != 1 || !s_cursor || s_passive) return;
-    if (!ptr_ok(ta) || !vp) return;
-    gui = (const unsigned char*)(ta + OFF_GUICOL);
+    if (!pk || !vp) return;
+    gui = pk->gui_col;
     /* Without the redirect the engine is still drawing its own pair and ours
        would be a second, differently placed one. Refuse rather than double. */
     if (!tagpu_markown_installed()) return;
 
-    fl   = *(const unsigned char*)(ta + OFF_MOUSEFL);
-    mode = *(const unsigned char*)(ta + OFF_CURMODE);
+    fl   = pk->region_flags;
+    mode = pk->cursor_mode;
     if (!(fl & 8)) {
         int mx, my;
         if (mode != CUR_BUILD) return;
-        mx = *(const int*)(ta + OFF_MOUSE_X);
-        my = *(const int*)(ta + OFF_MOUSE_Y);
+        mx = pk->mouse[0];
+        my = pk->mouse[1];
         /* IsPositionInRect 0x4B6720 — inclusive on all four edges. The rect
            the engine can NAME (the packet's vp_addr, the field as the game
            thread left it), not the true viewport: while zoomed out that rect
@@ -651,14 +633,13 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
         if (mx < vp[0] || mx > vp[2] || my < vp[1] || my > vp[3]) return;
     }
 
-    l = *(const int*)(ta + OFF_CUR_X1) - v->eyeX + 0x80;
-    r = *(const int*)(ta + OFF_CUR_X2) - v->eyeX + 0x80;
-    t = *(const int*)(ta + OFF_CUR_Z1) - (*(const int*)(ta + OFF_CUR_H1) >> 1)
-        - v->eyeY + 0x20;
-    b = *(const int*)(ta + OFF_CUR_Z2) - (*(const int*)(ta + OFF_CUR_H2) >> 1)
-        - v->eyeY + 0x20;
-    /* the globals are live sim state read from the render thread, so a rect
-       that could not be one is dropped rather than turned into a quad */
+    /* build_rect is the two corners as {x, altitude, z}, in the engine's own
+       order at 0x2C92..0x2CA6 */
+    l = pk->build_rect[0] - v->eyeX + 0x80;
+    r = pk->build_rect[3] - v->eyeX + 0x80;
+    t = pk->build_rect[2] - (pk->build_rect[1] >> 1) - v->eyeY + 0x20;
+    b = pk->build_rect[5] - (pk->build_rect[4] >> 1) - v->eyeY + 0x20;
+    /* a rect that could not be one is dropped rather than turned into a quad */
     if (l < -0x100000 || l > 0x100000 || r < -0x100000 || r > 0x100000 ||
         t < -0x100000 || t > 0x100000 || b < -0x100000 || b > 0x100000) return;
 
@@ -695,14 +676,15 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
 
 int tagpu_mark_gather(const TAGPU_FXVIEW* v)
 {
-    const char* ta = *(const char* const*)TA_MAINPP;   /* this file's own read (to-convert:3) */
-    const char *beg, *end, *u;
+    const TAGPU_PACKET* pk = v->packet;
+    const TAGPU_PK_UNIT* uu;
     const unsigned char* gui;
+    unsigned ui;
     int watched, nv = BARBASE;
 
     s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0; s_nordx = 0;
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
-    if (!ptr_ok(ta)) return 0;
+    if (!pk || !pk->in_game) return 0;
     /* before anything emits: tagpu_order.c's labels come through
        tagpu_mark_emit_text, which sizes its quads with this */
     /* one font for the whole frame, before anything asks the atlas for a string:
@@ -731,24 +713,19 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        both itself and ours would be a second set at a second position. Refuse
        rather than double-draw. */
     if (!tagpu_markown_installed()) return 0;
-    if (!(*(const unsigned char*)(ta + OFF_GAMEOPT) & 1)) return 0;  /* damagebars */
+    if (!(pk->game_opt & 1)) return 0;                  /* damagebars */
 
-    beg = *(const char* const*)(ta + OFF_BEGIN);
-    end = *(const char* const*)(ta + OFF_END);
-    if (!ptr_ok(beg) || !ptr_ok(end) || end <= beg) return 0;
-    if ((size_t)(end - beg) > (size_t)UNIT_STRIDE * 20000) return 0;
-    watched = *(const unsigned char*)(ta + OFF_BAROWNER);
-    gui = (const unsigned char*)(ta + OFF_GUICOL);
+    watched = pk->local_player;      /* 0x2A43: the bar loop's, see the header */
+    gui = pk->gui_col;
+    uu = tagpu_pk_units(pk);
 
-    for (u = beg + UNIT_STRIDE; u < end && s_cBar < MAXBAR; u += UNIT_STRIDE) {
-        unsigned st = *(const unsigned*)(u + U_STATE);
-        const char* def;
+    for (ui = 0; ui < pk->n_units && s_cBar < MAXBAR; ui++) {
+        const TAGPU_PK_UNIT* u = &uu[ui];
         int hp, maxhp, third, w, col;
         float x, y;                     /* the anchor, in game-frame units     */
         float fpx, fpa, fpd;            /* world x, ALTITUDE, map depth        */
         float wx, wz;
-        if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
-        if (*(const unsigned char*)(u + U_OWNER) != (unsigned)watched) continue;
+        if (u->owner != (unsigned)watched) continue;
 
         /* THE BAR SITS ON WHOEVER DREW THE BODY. That is the invariant, and it needs
            two branches because two different things draw units.
@@ -775,18 +752,16 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
            up to a pixel off its body. The comment here asserted the opposite, that
            the sampleless path was byte-for-byte what it had always been.]
 
-           BOTH CALLS ARE SAFE HERE BY CONSTRUCTION, not by timing. `u` is the
-           engine's own array walk — bounded by its `beg`/`end` and stride-aligned by
-           the loop — which is the same bound under which `tagpu_native.c:2037` calls
-           `tagpu_native_owns_unit` on these very pointers every frame, so the
-           `IsBadReadPtr` inside its nanoframe branch is not what makes this read
-           safe and is not being relied on as such. And `tagpu_mark_gather` is called
-           from inside the unit pass's own gather (`tagpu_native.c:2398`), on the same
-           thread, in the same frame, AFTER the walk that fills the sub-pixel table —
-           so the ownership answer here is the one the unit pass just acted on, and
-           the accessor refuses any sample that does not still describe this unit's
-           current 16.16 position, so a recycled slot falls through to its own
-           fraction.
+           NEITHER CALL READS ENGINE MEMORY ANY MORE (frame packet exchange,
+           landing 3). The ownership answer is the PUBLISHER's — one bit in the
+           packet, taken on the game thread with the def in hand — so the unit
+           pass, this loop and the composite wipe act on one answer instead of
+           three reads of the same bytes. `tagpu_mark_gather` is still called
+           from inside the unit pass's own gather, on the same thread, in the
+           same frame, AFTER the walk that fills the sub-pixel table, so the
+           sample it finds is this frame's; the accessor refuses any sample that
+           does not still describe this unit's current 16.16 position, so a
+           recycled slot falls through to its own fraction.
 
            AND THE ANCHOR KEEPS ITS FRACTION TO THE LAST MOMENT. Flooring it — which
            is what this loop did between the first fix and the second, both on
@@ -799,16 +774,18 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
            It runs on BOTH branches: on the engine's integers it is the identity at
            1x, so engine parity there is exact, and away from 1x it only makes an
            already sim-rate anchor land crisply. */
-        if (tagpu_native_owns_unit(u) &&
+        if ((u->flags & TAGPU_PK_U_NATIVE) &&
             tagpu_native_unit_pos(u, &fpx, &fpa, &fpd)) {
             x  = fpx - (float)v->eyeX + 128.0f;
             y  = fpd - (float)v->eyeY - fpa * 0.5f + 32.0f + 10.0f;
             wx = fpx;
             wz = fpd - fpa * 0.5f;
         } else {
-            int px = *(const short*)(u + U_XPOS);   /* world x            */
-            int pa = *(const short*)(u + U_ZPOS);   /* altitude  (U_ZPOS) */
-            int pd = *(const short*)(u + U_YPOS);   /* map depth (U_YPOS) */
+            /* the engine reads these as the HIGH WORD of the 16.16 triple —
+               a floor — and the bar has to floor with it */
+            int px = (int)(short)(u->pos[0] >> 16);   /* world x   */
+            int pa = (int)(short)(u->pos[1] >> 16);   /* altitude  */
+            int pd = (int)(short)(u->pos[2] >> 16);   /* map depth */
             x  = (float)(px - v->eyeX + 0x80);
             y  = (float)(pd - v->eyeY - (pa >> 1) + 0x20 + 0x0A);
             wx = (float)px;
@@ -835,7 +812,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
            than `y` here. No health test — the engine's leaf returns early on a
            dead unit but the digit is drawn from the caller. */
         if (s_digits && !s_passive) {
-            unsigned squad = *(const unsigned*)(u + U_SQUAD);
+            unsigned squad = u->squad;
             if (squad) {
                 char d[2];
                 int tc = tagpu_text_colour();
@@ -849,11 +826,10 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
         }
         if (!s_bars) continue;
 
-        hp = *(const short*)(u + U_HEALTH);
+        hp = u->health;
         if (hp <= 0) continue;
-        def = *(const char* const*)(u + U_TYPE);
-        if (!ptr_ok(def)) continue;
-        maxhp = *(const int*)(def + UD_MAXHP);
+        if (u->type_row == 0xFFFFu) continue;     /* no def resolved for it     */
+        maxhp = u->max_health;
         if (maxhp <= 0) continue;                 /* the engine's div would trap */
         s_cBar++;
         if (s_passive) continue;      /* the A/B lever: count, let the engine draw */

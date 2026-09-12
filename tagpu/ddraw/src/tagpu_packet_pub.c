@@ -88,6 +88,9 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
+#include "tagpu_native.h"   /* tagpu_native_owns_unit: the ownership answer, taken here */
+#include "tagpu_zoom.h"      /* TAGPU_ZOOM_MIN: the widest rect the tables cover */
+#include "tagpu_model3do.h"  /* TAGPU_PBMAXPIECE, to assert the packet's copy of it */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -239,6 +242,7 @@ void tagpu_packet_pub_font_snapshot(void)
     }
 }
 
+
 /* ---- the fills ----------------------------------------------------------- */
 
 static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, unsigned len,
@@ -254,6 +258,472 @@ static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, 
     *cursor = end;
     return end;
 }
+
+/* ======================= THE WORLD TABLES (landing 3) =====================
+   Everything below runs on the GAME THREAD, inside DrawGameScreen, on the
+   in-play gate — the one set of frames during which the loader thread has
+   finished and this thread owns every array it touches (the file comment's
+   "THE LOADER THREAD"). That ordering is what closes the audit's open hazard:
+   the unit array's begin/end pair was read unsynchronised by six render-thread
+   files, and no read-side gate could close it because `end` is never nulled.
+
+   THE BOUNDS ARE THE ENGINE'S OWN COUNTS, APPLIED HERE AND NOWHERE ELSE.
+   The walk runs to `unit_slots` (u16 main+0x14351, stored at 0x4854EF BEFORE
+   `begin`), never to the `end` pointer — so it needs no pair at all and cannot
+   be skewed by one. A model id is dropped unless it is inside UNITINFOCount, a
+   feature def unless it is inside NumFeatureDefs, a piece count unless it is
+   inside TAGPU_PK_MAXPIECE, a cargo link unless it resolves to a slot this
+   packet carries. Past this file every index is a packet index into a table
+   whose length the consumer's own bounds check has already verified.
+
+   THE LAYOUT, and why it is this order: header | pieces | units | wrecks |
+   anchors | font | shd. A unit's `piece_off` has to be an absolute byte offset
+   when the entry is written, so the piece arena has to start at a known place
+   — which means first. The unit and wreck entries are therefore built in
+   file-static scratch and copied in afterwards; the anchors likewise, because
+   the wrecks come out of the same walk. The scratch is ~2.7 MB of BSS, touched
+   only as far as a level actually fills it. */
+
+#define PKT_ALIGN4(x)   (((x) + 3u) & ~3u)
+
+/* THE LAYOUT IS PART OF THE CONTRACT, so it is asserted rather than described:
+   the consumer indexes these tables by stride, and a compiler that padded one
+   differently would read every entry but the first at the wrong offset. The
+   packet's copy of the piece bound has to be the model header's number too. */
+typedef char pk_maxpiece_agrees[(TAGPU_PK_MAXPIECE == TAGPU_PBMAXPIECE) ? 1 : -1];
+typedef char pk_unit_size  [(sizeof(TAGPU_PK_UNIT)   == 100) ? 1 : -1];
+typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
+typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  40) ? 1 : -1];
+typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
+
+static TAGPU_PK_UNIT   s_uScratch[TAGPU_PK_MAX_UNITS];
+static TAGPU_PK_WRECK  s_wScratch[TAGPU_PK_MAX_WRECKS];
+static TAGPU_PK_ANCHOR s_aScratch[TAGPU_PK_MAX_ANCHORS];
+/* slot -> index in the units table, for the cargo links; 0xFFFF = not carried
+   in this packet. Sized like the scratch and rewritten for the slots the walk
+   actually visits, so no memset of 32 KB per frame. */
+static unsigned short  s_slotIdx[TAGPU_PK_MAX_UNITS];
+/* the stable-id collision oracle: one bit per id, cleared only for the ids
+   this packet used (the sweep is over n_units, not over 65536) */
+static unsigned char   s_idSeen[8192];
+static unsigned short  s_idUsed[TAGPU_PK_MAX_UNITS];
+
+/* the shade table, latched like the font: a pointer plus its first bytes, so a
+   reallocation or a rebuild is noticed. PALETTE.SHD is built at init and the
+   note records no rebuild, but "no note establishes it" is exactly the font's
+   lesson, so it is re-copied whenever either changes. */
+static unsigned char s_shd[TAGPU_PK_SHD_BYTES];
+static const unsigned char* s_shdPtr;
+static int s_shdOk;
+static volatile unsigned s_cShdCopies;
+
+/* counters the heartbeat prints; game thread writes, render thread reads */
+static volatile unsigned s_cUnitTrunc, s_cWreckTrunc, s_cAnchTrunc, s_cPieceTrunc;
+static volatile unsigned s_cUnitDup, s_cRelBad, s_cAnchCells;
+static volatile unsigned s_cLastUnits, s_cLastPieces, s_cLastWrecks, s_cLastAnchors;
+
+static void shd_snapshot(void)
+{
+    const char* g = *(const char* const*)TA_GFX_PP;
+    const unsigned char* t;
+    if (!ptr_ok(g)) return;
+    t = *(const unsigned char* const*)(g + GFX_SHD);
+    if (!ptr_ok(t)) return;
+    if (t == s_shdPtr && s_shdOk) return;
+    /* THE BOUND IS THE FORMAT: 0x459C70's Gouraud path indexes [row][idx] with
+       a 5-bit row and a byte, so the table is exactly 32 x 256 and a copy of
+       that size reads what the rasteriser reads and nothing more. */
+    memcpy(s_shd, t, sizeof s_shd);
+    s_shdPtr = t; s_shdOk = 1; s_cShdCopies++;
+}
+
+/* One live unit's entry. `ta` and `u` are the game thread's own; every value
+   that leaves here is either a copy of a field or an index this function has
+   already bounded. */
+static void fill_unit(TAGPU_PK_UNIT* e, const char* ta, const char* u,
+                      unsigned slot, unsigned udefCount, const char* udefs)
+{
+    const char* def;
+    const char* o3;
+    unsigned i;
+
+    memset(e, 0, sizeof *e);
+    e->slot        = (unsigned short)slot;
+    e->state       = RDU32(u, U_STATE);
+    e->pos[0]      = RD32(u, U_XFIX);
+    e->pos[1]      = RD32(u, U_ZFIX);
+    e->pos[2]      = RD32(u, U_YFIX);
+    for (i = 0; i < 3; i++) e->rot[i] = RDU16(u, U_ROT + i * 2);
+    e->id          = RDU16(u, U_INDEX);
+    e->model_id    = RDU16(u, U_MODELID);
+    e->owner       = RDU8(u, U_OWNER);
+    e->cloak       = RDU8(u, U_CLOAKF);
+    e->health      = RDI16(u, U_HEALTH);
+    e->squad       = RDU32(u, U_SQUAD);
+    e->nano        = *(const float*)(u + U_NANO);
+    e->o3_key      = (unsigned)(size_t)*(const void* const*)(u + U_OBJ3DO);
+    e->cargo_first = -1;
+    e->cargo_next  = -1;
+    e->type_row    = 0xFFFFu;
+    e->base_piece  = 0xFFFFu;
+    /* the model id is DROPPED, not clamped, when it is outside the table the
+       engine writes (1 .. UNITINFOCount-1): slot 0 is its own "no model" and a
+       recycled unit slot is the only way a larger value gets here */
+    if (!(e->model_id && udefCount && e->model_id < udefCount)) e->model_id = 0;
+
+    /* THE DEF, BY ROW. `unit+0x92` is a pointer into the UnitDef array; the row
+       is what crosses, so the consumer can key a cache on it without ever
+       holding an engine address, and the three fields the passes actually read
+       come over with it. A pointer that is not a row of that array resolves to
+       0xFFFF and the entry carries no def at all. */
+    def = *(const char* const*)(u + U_TYPE);
+    if (ptr_ok(def) && ptr_ok(udefs) && udefCount && def >= udefs) {
+        size_t d = (size_t)(def - udefs);
+        if (d % UDEF_STRIDE == 0 && d / UDEF_STRIDE < udefCount) {
+            e->type_row   = (unsigned short)(d / UDEF_STRIDE);
+            e->def_mask   = RDU32(def, UD_TYPEMASK);
+            e->max_health = RD32(def, UD_MAXHP);
+            for (i = 0; i < sizeof e->name - 1u; i++) {
+                char c = def[UD_NAME + i];
+                if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+                e->name[i] = c;
+                if (!c) break;
+            }
+        }
+    }
+
+    /* The feature cell under the anchor: the shadow's ground height. The grid
+       and its dimensions are read by the caller once per frame. */
+    /* (filled by the caller, which holds the grid) */
+
+    o3 = *(const char* const*)(u + U_OBJ3DO);
+    if (ptr_ok(o3)) {
+        unsigned np = RDU16(o3, O3_NUMPARTS);
+        const char* fr;
+        if (np && np <= TAGPU_PK_MAXPIECE) e->nparts = (unsigned short)np;
+        for (i = 0; i < 3; i++) e->bturn[i] = RDU16(o3, O3_BTURN + i * 2);
+        {
+            const char* bp = *(const char* const*)(o3 + O3_BASEPRIM);
+            const char* p0 = o3 + O3_PRIM0;
+            if (bp >= p0 && e->nparts) {
+                size_t d = (size_t)(bp - p0);
+                if (d % PRIM_STRIDE == 0 && d / PRIM_STRIDE < e->nparts)
+                    e->base_piece = (unsigned short)(d / PRIM_STRIDE);
+            }
+        }
+        fr = *(const char* const*)(o3 + O3_COMPOSITE);
+        if (ptr_ok(fr)) {
+            e->comp_w  = (short)RDU16(fr, GF_WIDTH);
+            e->comp_h  = (short)RDU16(fr, GF_HEIGHT);
+            e->comp_hx = RDI16(fr, GF_HOTX);
+            e->comp_hy = RDI16(fr, GF_HOTY);
+            if (RDU32(fr, GF_PTRDEPTH)) e->flags |= TAGPU_PK_U_DEPTHPLANE;
+        }
+    }
+    /* THE OWNERSHIP ANSWER IS TAKEN HERE, ON THIS THREAD, WITH THE DEF IN
+       HAND. `tagpu_native_owns_unit` reads the def's three name fields and the
+       build fraction; the unit pass used to call it per unit per frame from the
+       render thread, which is one of the reads this landing removes. It is the
+       same predicate the marker pass, the composite wipe and the owndraw
+       classifier already ask on the game thread, so all four now agree by
+       construction rather than by two threads reading the same bytes. */
+    if (tagpu_native_owns_unit(u)) e->flags |= TAGPU_PK_U_NATIVE;
+    (void)ta;
+}
+
+/* A unit pointer as a SLOT, or -1: the only arithmetic that ever turns an
+   engine address into an index, done once, here. A cargo link that is not a
+   stride-aligned member of the array inside the slot count is dropped. */
+static short slot_of(const char* beg, const char* u, unsigned slots)
+{
+    size_t d;
+    if (!ptr_ok(u) || u <= beg) return -1;
+    d = (size_t)(u - beg);
+    if (d % UNIT_STRIDE) return -1;
+    d /= UNIT_STRIDE;
+    return (d && d < slots && d < 0x7FFFu) ? (short)d : (short)-1;
+}
+
+/* one table into the record: 4-aligned, bounded by the committed capacity,
+   and the count published only when the bytes actually landed */
+static unsigned append_table(TAGPU_PACKET* p, unsigned* cursor, const void* src,
+                             unsigned n, unsigned stride,
+                             unsigned* off_out, unsigned* n_out, unsigned trunc_bit)
+{
+    unsigned at = PKT_ALIGN4(*cursor);
+    unsigned end = at + n * stride;
+    *off_out = 0; *n_out = 0;
+    if (!n) return *cursor;
+    if (end > p->cap_bytes) { p->truncated |= trunc_bit; return end; }
+    tagpu_pk_copy((unsigned char*)p + at, src, n * stride);
+    *off_out = at; *n_out = n; *cursor = end;
+    return end;
+}
+
+/* one unit's or wreck's pieces into the arena; returns the pieces written */
+static unsigned fill_pieces(TAGPU_PACKET* p, const char* o3, unsigned nparts,
+                            unsigned at, unsigned* truncated)
+{
+    unsigned i;
+    unsigned end = at + nparts * (unsigned)sizeof(TAGPU_PK_PIECE);
+    if (!nparts) return 0;
+    if (end > p->cap_bytes) { *truncated = 1; return 0; }
+    for (i = 0; i < nparts; i++) {
+        const char* pr = o3 + O3_PRIM0 + i * PRIM_STRIDE;
+        TAGPU_PK_PIECE e;
+        e.pos[0]  = RD32(pr, P_POS + 0);
+        e.pos[1]  = RD32(pr, P_POS + 4);
+        e.pos[2]  = RD32(pr, P_POS + 8);
+        e.turn[0] = RDU16(pr, P_TURN + 0);
+        e.turn[1] = RDU16(pr, P_TURN + 2);
+        e.turn[2] = RDU16(pr, P_TURN + 4);
+        e.flags   = RDU8(pr, P_FLAGS);
+        e.pad     = 0;
+        e.node    = RDU32(pr, P_NODE);
+        tagpu_pk_copy((unsigned char*)p + at + i * sizeof e, &e, sizeof e);
+    }
+    return nparts;
+}
+
+/* THE ANCHOR RECT: the engine's own feature sweep grown to the WIDEST zoom the
+   lever allows, plus a margin, and clamped to the map. Never the zoom in force
+   — the render thread may still be drawing from this packet a frame later, and
+   at a level the game thread has not seen; the margin also absorbs the cursor
+   anchor's unacknowledged eye delta, which is how far ahead of `eye` the frame
+   is actually drawn. A consumer at any zoom asks for a sub-rect of this one and
+   counts what falls outside. */
+#define PK_ANCH_MARGIN 32           /* 16-px cells on every side               */
+
+static void anchor_rect(const TAGPU_PACKET* p, int* c0, int* r0, int* cols, int* rows)
+{
+    int vw = p->vp[2], vh = p->vp[3];
+    int ew = (int)((float)vw / TAGPU_ZOOM_MIN) + 64;
+    int eh = (int)((float)vh / TAGPU_ZOOM_MIN) + 64;
+    int mapW = p->map_w16, mapH = p->map_h16;
+    *c0   = ((p->eye[0] + (vw - ew) / 2) >> 4) - PK_ANCH_MARGIN;
+    *r0   = ((p->eye[1] + (vh - eh) / 2) >> 4) - PK_ANCH_MARGIN;
+    *cols = (ew >> 4) + 16 + 2 * PK_ANCH_MARGIN;
+    *rows = (eh >> 4) + 40 + 2 * PK_ANCH_MARGIN;
+    if (*c0 < 0) { *cols += *c0; *c0 = 0; }
+    if (*r0 < 0) { *rows += *r0; *r0 = 0; }
+    if (*c0 + *cols > mapW) *cols = mapW - *c0;
+    if (*r0 + *rows > mapH) *rows = mapH - *r0;
+    if (*cols < 0) *cols = 0;
+    if (*rows < 0) *rows = 0;
+}
+
+/* The four tables, into the slot the producer holds. Returns the byte count
+   the fill NEEDED — past cap_bytes means something truncated this frame and
+   the primitive grows the write slot before the next fill. */
+static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
+{
+    const char* beg   = *(const char* const*)(ta + OFF_UNIT_BEGIN);
+    const char* uend  = *(const char* const*)(ta + OFF_UNIT_END);
+    const char* udefs = *(const char* const*)(ta + OFF_UNITDEFS);
+    const char* fmap  = *(const char* const*)(ta + OFF_FEATMAP);
+    const char* fdefs = *(const char* const*)(ta + OFF_FEATDEF);
+    const char* recs  = *(const char* const*)(ta + OFF_WRECKS);
+    unsigned udefCount = p->udef_count;
+    unsigned slots = p->unit_slots;
+    int mapW = p->map_w16, mapH = p->map_h16;
+    unsigned nu = 0, nw = 0, na = 0, pk = 0, i, dup = 0, walk;
+    unsigned pieces_base = PKT_ALIGN4((unsigned)sizeof(TAGPU_PACKET));
+    unsigned need = pieces_base, e;
+    unsigned pTrunc = 0;
+    int c0, r0, cols, rows, row, col;
+    int inL, inT, inR, inB;
+
+    p->feat_defs   = (unsigned)(size_t)fdefs;
+    p->feat_recs   = (unsigned)(size_t)recs;
+    p->model_ptrs  = (unsigned)(size_t)*(const void* const*)(ta + OFF_MODELPTRS);
+    p->feat_defcount = RD32(ta, OFF_FEATCOUNT);
+    p->sweep_cols  = RD32(ta, OFF_SWEEP_C);
+    p->sweep_rows  = RD32(ta, OFF_SWEEP_R);
+    if (p->feat_defcount < 0 || p->feat_defcount > 4096) p->feat_defcount = 0;
+
+    anchor_rect(p, &c0, &r0, &cols, &rows);
+    p->anch_c0 = c0; p->anch_r0 = r0; p->anch_cols = cols; p->anch_rows = rows;
+
+    /* the piece-cull rect, in world px: the widest viewport about the eye plus
+       the 256-px slack the unit gather already allows itself */
+    {
+        int vw = p->vp[2], vh = p->vp[3];
+        int ew = (int)((float)vw / TAGPU_ZOOM_MIN) + 64 + 512;
+        int eh = (int)((float)vh / TAGPU_ZOOM_MIN) + 64 + 512;
+        inL = p->eye[0] - (ew - vw) / 2;
+        inT = p->eye[1] - (eh - vh) / 2;
+        inR = inL + ew;
+        inB = inT + eh;
+    }
+
+    /* ---- the units, and their pieces ---- */
+    walk = slots;
+    if (ptr_ok(beg) && slots > 1) {
+        if (walk > TAGPU_PK_MAX_UNITS) { walk = TAGPU_PK_MAX_UNITS; s_cUnitTrunc++; p->truncated |= TAGPU_PK_TRUNC_UNITS; }
+        /* THE RELATION, ASSERTED RATHER THAN RELIED ON. `end` is stored once in
+           the binary, as begin + (count-1)*stride (0x4855D6); the walk below
+           uses the COUNT and never the pointer, so a disagreement cannot
+           mis-bound anything — it is recorded because it would mean one of the
+           three fields is not what the note says it is. */
+        if (uend != beg + (size_t)(slots - 1u) * UNIT_STRIDE) s_cRelBad++;
+        for (i = 1; i < walk; i++) {
+            const char* u = beg + (size_t)i * UNIT_STRIDE;
+            unsigned st = RDU32(u, U_STATE);
+            TAGPU_PK_UNIT* ue;
+            const char* o3;
+            s_slotIdx[i] = 0xFFFFu;
+            if (!(st & ST_ALIVE) || (st & ST_EXCLUDED)) continue;
+            ue = &s_uScratch[nu];
+            fill_unit(ue, ta, u, i, udefCount, udefs);
+            /* the ground cell under the anchor: the shadow's height, and the
+               one feature-grid read a unit needs */
+            {
+                int wx = (int)(short)(ue->pos[0] >> 16);
+                int wy = (int)(short)(ue->pos[2] >> 16);
+                int tx = wx >> 4, ty = wy >> 4;
+                if (ptr_ok(fmap) && tx >= 0 && ty >= 0 && tx < mapW && ty < mapH) {
+                    ue->ground_h = *(const unsigned char*)(fmap + ((size_t)ty * mapW + tx) * FT_STRIDE + FT_HEIGHT);
+                    ue->flags |= TAGPU_PK_U_GROUND;
+                }
+                if (wx >= inL && wx <= inR && wy >= inT && wy <= inB)
+                    ue->flags |= TAGPU_PK_U_INRECT;
+            }
+            /* the cargo links, as SLOTS for now: the packet indices they become
+               are not all known until the walk ends */
+            {
+                const char* c = *(const char* const*)(u + U_CARGO);
+                const char* n = *(const char* const*)(u + U_CARGONEXT);
+                ue->cargo_first = slot_of(beg, c, slots);
+                ue->cargo_next  = slot_of(beg, n, slots);
+            }
+            o3 = *(const char* const*)(u + U_OBJ3DO);
+            if ((ue->flags & TAGPU_PK_U_INRECT) && ue->nparts && ptr_ok(o3)) {
+                unsigned at = pieces_base + pk * (unsigned)sizeof(TAGPU_PK_PIECE);
+                unsigned got = fill_pieces(p, o3, ue->nparts, at, &pTrunc);
+                if (got) { ue->piece_off = at; ue->piece_n = (unsigned short)got; pk += got; }
+                need = at + ue->nparts * (unsigned)sizeof(TAGPU_PK_PIECE);
+            }
+            s_slotIdx[i] = (unsigned short)nu;
+            /* THE STABLE-ID COLLISION ORACLE, over THIS packet. Two live units
+               with one id would make the pose blend match the wrong pair across
+               two packets, silently; the gate is that this reads 0. The bitmap
+               is cleared only over the ids this packet used, so it costs the
+               unit count and not 8 KB a frame. */
+            {
+                unsigned id = ue->id;
+                if (s_idSeen[id >> 3] & (unsigned char)(1u << (id & 7u))) dup++;
+                else s_idSeen[id >> 3] |= (unsigned char)(1u << (id & 7u));
+                s_idUsed[nu] = (unsigned short)id;
+            }
+            if (++nu >= TAGPU_PK_MAX_UNITS) { s_cUnitTrunc++; p->truncated |= TAGPU_PK_TRUNC_UNITS; break; }
+        }
+        /* slots -> packet indices, now that every slot the walk visited has one */
+        for (i = 0; i < nu; i++) {
+            int s1 = s_uScratch[i].cargo_first, s2 = s_uScratch[i].cargo_next;
+            s_uScratch[i].cargo_first = (s1 >= 0 && (unsigned)s1 < walk && s_slotIdx[s1] != 0xFFFFu)
+                                        ? (short)s_slotIdx[s1] : (short)-1;
+            s_uScratch[i].cargo_next  = (s2 >= 0 && (unsigned)s2 < walk && s_slotIdx[s2] != 0xFFFFu)
+                                        ? (short)s_slotIdx[s2] : (short)-1;
+        }
+        /* the oracle's bitmap, cleared only where it was set */
+        for (i = 0; i < nu; i++) s_idSeen[s_idUsed[i] >> 3] = 0;
+    }
+
+    /* ---- the feature anchors, and the 3D wrecks they name ---- */
+    if (ptr_ok(fmap) && mapW > 0 && mapH > 0 && cols > 0 && rows > 0) {
+        for (row = r0; row < r0 + rows; row++) {
+            const char* trow = fmap + ((size_t)row * mapW) * FT_STRIDE;
+            for (col = c0; col < c0 + cols; col++) {
+                const char* t = trow + (size_t)col * FT_STRIDE;
+                unsigned d = RDU16(t, FT_DEFIDX);
+                TAGPU_PK_ANCHOR* a;
+                if (d >= 0xFFFBu) continue;
+                if (na >= TAGPU_PK_MAX_ANCHORS) { s_cAnchTrunc++; p->truncated |= TAGPU_PK_TRUNC_ANCHORS; row = r0 + rows; break; }
+                a = &s_aScratch[na++];
+                a->col = (unsigned short)col; a->row = (unsigned short)row;
+                a->def = (unsigned short)d;
+                a->wreck = RDU16(t, FT_WIDX);
+                a->flags = RDU8(t, FT_FLAGS);
+                a->h   = RDU8(t, FT_HEIGHT);
+                a->hr  = (col + 1 < mapW) ? RDU8(t + FT_STRIDE, FT_HEIGHT) : a->h;
+                a->hl  = (col > 0)        ? RDU8(t - FT_STRIDE, FT_HEIGHT) : a->h;
+                a->hu  = (row > 0)        ? RDU8(t - (size_t)mapW * FT_STRIDE, FT_HEIGHT) : a->h;
+                if (row + 1 < mapH) {
+                    const char* t2 = t + (size_t)mapW * FT_STRIDE;
+                    a->hd  = RDU8(t2, FT_HEIGHT);
+                    a->hrd = (col + 1 < mapW) ? RDU8(t2 + FT_STRIDE, FT_HEIGHT) : a->hd;
+                } else { a->hd = a->h; a->hrd = a->hr; }
+                a->pad = 0;
+                /* the 3D husk: the engine draws it through a scratch fake unit,
+                   so it is posed exactly as a unit and carries the same fields.
+                   A GAF wreck (FeatureMask bit0) is the feature pass's, not
+                   this table's. */
+                if ((a->flags & 1u) && ptr_ok(recs) && ptr_ok(fdefs) &&
+                    p->feat_defcount && (int)d < p->feat_defcount &&
+                    !(RDU8(fdefs + (size_t)d * FD_STRIDE, FD_MASK) & 1u)) {
+                    const char* rec = recs + (size_t)a->wreck * WR_STRIDE;
+                    const char* o3 = *(const char* const*)(rec + WR_OBJ3DO);
+                    if (nw >= TAGPU_PK_MAX_WRECKS) { s_cWreckTrunc++; p->truncated |= TAGPU_PK_TRUNC_WRECKS; }
+                    else if (ptr_ok(o3)) {
+                        TAGPU_PK_WRECK* we = &s_wScratch[nw++];
+                        unsigned np = RDU16(o3, O3_NUMPARTS), k;
+                        memset(we, 0, sizeof *we);
+                        we->pos[0] = RD32(rec, WR_XPOS);
+                        we->pos[1] = RD32(rec, WR_ZPOS);
+                        we->pos[2] = RD32(rec, WR_YPOS);
+                        we->o3_key = (unsigned)(size_t)o3;
+                        we->rec = a->wreck; we->def = (unsigned short)d;
+                        we->base_piece = 0xFFFFu;
+                        if (np && np <= TAGPU_PK_MAXPIECE) we->nparts = (unsigned short)np;
+                        for (k = 0; k < 3; k++) we->bturn[k] = RDU16(o3, O3_BTURN + k * 2);
+                        {
+                            const char* bp = *(const char* const*)(o3 + O3_BASEPRIM);
+                            const char* p0 = o3 + O3_PRIM0;
+                            if (bp >= p0 && we->nparts) {
+                                size_t dd = (size_t)(bp - p0);
+                                if (dd % PRIM_STRIDE == 0 && dd / PRIM_STRIDE < we->nparts)
+                                    we->base_piece = (unsigned short)(dd / PRIM_STRIDE);
+                            }
+                        }
+                        if (we->nparts) {
+                            unsigned at = pieces_base + pk * (unsigned)sizeof(TAGPU_PK_PIECE);
+                            unsigned got = fill_pieces(p, o3, we->nparts, at, &pTrunc);
+                            if (got) { we->piece_off = at; we->piece_n = (unsigned short)got; pk += got; }
+                            need = at + we->nparts * (unsigned)sizeof(TAGPU_PK_PIECE);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    s_cAnchCells = (unsigned)(cols > 0 && rows > 0 ? cols * rows : 0);
+    if (pTrunc) { s_cPieceTrunc++; p->truncated |= TAGPU_PK_TRUNC_PIECES; }
+
+    /* the arena is done: name it, then the three tables after it */
+    p->off_pieces = pk ? pieces_base : 0;
+    p->n_pieces   = pk;
+    *cursor = pieces_base + pk * (unsigned)sizeof(TAGPU_PK_PIECE);
+    if (*cursor > p->cap_bytes) *cursor = pieces_base;      /* nothing fitted   */
+    if (need < *cursor) need = *cursor;
+
+    e = append_table(p, cursor, s_uScratch, nu, (unsigned)sizeof(TAGPU_PK_UNIT),
+                     &p->off_units, &p->n_units, TAGPU_PK_TRUNC_UNITS);
+    if (e > need) need = e;
+    e = append_table(p, cursor, s_wScratch, nw, (unsigned)sizeof(TAGPU_PK_WRECK),
+                     &p->off_wrecks, &p->n_wrecks, TAGPU_PK_TRUNC_WRECKS);
+    if (e > need) need = e;
+    e = append_table(p, cursor, s_aScratch, na, (unsigned)sizeof(TAGPU_PK_ANCHOR),
+                     &p->off_anchors, &p->n_anchors, TAGPU_PK_TRUNC_ANCHORS);
+    if (e > need) need = e;
+    /* a table that did not fit leaves its runs dangling: drop the pieces with
+       the units rather than leave an offset nothing indexes */
+    if (!p->n_units && !p->n_wrecks) { p->n_pieces = 0; p->off_pieces = 0; }
+    p->unit_dup = dup;
+    s_cUnitDup += dup;
+    s_cLastUnits = nu; s_cLastPieces = pk; s_cLastWrecks = nw; s_cLastAnchors = na;
+    return need;
+}
+
 
 /* The engine's palette table and gamma factor, into the packet — both kinds
    of packet carry them (the level-end one from the teardown, where `main` is
@@ -331,6 +801,29 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->paused       = RDU8(ta, OFF_GAMEPAUSED) & 1u;
     p->game_speed   = RDI16(ta, OFF_GAMESPEED_LIVE);
     p->text_fg      = s_textFg;
+    /* what the marker pass reads and used to take from engine memory itself:
+       the GUI colour bytes, the dispatched mouse point, the build cursor's two
+       corners and the two mode bytes that gate them */
+    tagpu_pk_copy(p->gui_col, ta + OFF_GUICOL, sizeof p->gui_col);
+    p->mouse[0]     = RD32(ta, OFF_MOUSE_X);
+    p->mouse[1]     = RD32(ta, OFF_MOUSE_Y);
+    {
+        int k;
+        for (k = 0; k < 6; k++) p->build_rect[k] = RD32(ta, OFF_BUILDRECT + k * 4);
+    }
+    p->cursor_mode  = RDU8(ta, OFF_CURMODE);
+    p->region_flags = RDU8(ta, OFF_REGIONFL);
+    p->game_opt     = RDU8(ta, OFF_GFXOPT);
+
+    /* ---- the world tables ---- */
+    e = fill_world(p, ta, &cursor);
+    if (e > need) need = e;
+    shd_snapshot();
+    if (s_shdOk) {
+        e = append_area(p, &cursor, s_shd, (unsigned)sizeof s_shd, &p->shd_off, &p->shd_len,
+                        TAGPU_PK_TRUNC_SHD);
+        if (e > need) need = e;
+    }
 
     /* the font: header + glyph table in the header, the objects in the area */
     p->font_gen   = s_fontGen;
@@ -529,13 +1022,17 @@ static void extra(char* buf, unsigned cap, double secs)
         if (!p50 && total && acc * 2u >= total) p50 = i * 2u;
         if (!p99 && total && acc * 100u >= total * 99u) p99 = i * 2u;
     }
-    _snprintf(buf, cap, " | draws=%u inplay=%u draws/s=%.0f inplay/s=%.0f foreign=%u deep=%u fontcopies=%u/%u levelend=%s vpapply=%u vpwh=%u applyus p50=%u p99=%s%u",
+    _snprintf(buf, cap, " | draws=%u inplay=%u draws/s=%.0f inplay/s=%.0f foreign=%u deep=%u fontcopies=%u/%u levelend=%s vpapply=%u vpwh=%u applyus p50=%u p99=%s%u"
+              " | world: u=%u p=%u w=%u a=%u/%u cells dup=%u trunc=%u/%u/%u/%u relbad=%u shd=%u",
               all, in,
               secs > 0.0 ? (double)(all - lastAll) / secs : 0.0,
               secs > 0.0 ? (double)(in - lastIn) / secs : 0.0,
               s_cForeign, s_cDeep, s_cFontCopies, s_cFontRefused,
               s_levelEndBy == 1 ? "reclaim" : s_levelEndBy == 2 ? "own" : "none",
-              vpApplies, vpWh, p50, p99 >= APPLY_HIST_N * 2u ? ">" : "", p99);
+              vpApplies, vpWh, p50, p99 >= APPLY_HIST_N * 2u ? ">" : "", p99,
+              s_cLastUnits, s_cLastPieces, s_cLastWrecks, s_cLastAnchors, s_cAnchCells,
+              s_cUnitDup, s_cUnitTrunc, s_cPieceTrunc, s_cWreckTrunc, s_cAnchTrunc,
+              s_cRelBad, s_cShdCopies);
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;
 }

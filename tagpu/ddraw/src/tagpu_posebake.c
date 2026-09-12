@@ -35,6 +35,7 @@
 #include "tagpu_posebake.h"
 #include "tagpu_render3do.h"
 #include "tagpu_reclaim.h"
+#include "tagpu_packet.h"   /* the piece run the bake keys on (landing 3) */
 
 /* A 69-unit inventory of 67 distinct types filled a 64-entry table and started
    evicting, so both are set clear of a busy screen rather than at it. A stock
@@ -597,23 +598,26 @@ void tagpu_posebake_glreset(void)
 }
 
 /* ---- the lookup --------------------------------------------------------- */
-int tagpu_posebake_unit(const char* o3, int owner,
+int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
                         const TAGPU_PBGEOM** geomOut, const TAGPU_PBMAT** matOut)
 {
     const char* nd[TAGPU_PBMAXPIECE];
-    int nparts, i;
+    int i;
     unsigned lvl = s_lvlGen, agen = s_atlasGen;   /* the frame's, not a fresh read */
     TAGPU_PBGEOM* g = NULL;
     TAGPU_PBMAT* m = NULL;
 
     if (geomOut) *geomOut = NULL;
     if (matOut)  *matOut  = NULL;
-    if (!ptr_ok(o3) || IsBadReadPtr(o3, O3_PRIM0)) return 0;
-    nparts = *(const unsigned short*)(o3 + O3_NUMPARTS);
-    if (nparts <= 0 || nparts > TAGPU_PBMAXPIECE) return 0;
+    /* THE PIECE LIST COMES FROM THE FRAME PACKET (landing 3). Each entry's
+       `node` is the TYPE's Model3DONode — a per-level template the teardown
+       cascade frees, which is what this module's fence argument has always
+       been about — while the Object3do it used to be read through is per UNIT
+       and could be freed under this thread mid-frame. The publisher walked
+       the prims on the game thread; nothing here dereferences a unit. */
+    if (!pc || nparts <= 0 || nparts > TAGPU_PBMAXPIECE) return 0;
     for (i = 0; i < nparts; i++) {
-        const char* pr = o3 + O3_PRIM0 + i * PRIM_STRIDE;
-        nd[i] = *(const char* const*)(pr + P_NODE);
+        nd[i] = (const char*)(size_t)pc[i].node;
         if (!ptr_ok(nd[i]) || IsBadReadPtr(nd[i], N_CHILD + 4)) return 0;
     }
     /* THE KEY IS THE TEMPLATE, NOT THE UNIT. Primitive 0's node identifies the

@@ -113,10 +113,12 @@ typedef struct TAGPU_PBMAT {
 void tagpu_posebake_frame(unsigned frame_counter);
 
 /* Bake (or find) the geometry and the material stream for one unit's type.
-   `o3` supplies the piece list — the node pointers are the type's, so the entry
-   is shared by every unit of it. Returns 0 when the template could not be read
-   or GL is not ready; a caller that gets 0 keeps whatever it was doing. */
-int  tagpu_posebake_unit(const char* o3, int owner,
+   `pc` is the unit's PK_PIECE run out of the frame packet and supplies the
+   piece list — each entry's `node` is the TYPE's template, so the entry is
+   shared by every unit of it. Returns 0 when the template could not be read or
+   GL is not ready; a caller that gets 0 keeps whatever it was doing. */
+struct TAGPU_PK_PIECE;
+int  tagpu_posebake_unit(const struct TAGPU_PK_PIECE* pc, int nparts, int owner,
                          const TAGPU_PBGEOM** geom, const TAGPU_PBMAT** mat);
 
 /* The vertex count `emit_geom` should produce for THIS unit out of this bake:

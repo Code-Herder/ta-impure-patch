@@ -33,30 +33,15 @@
 #include "tagpu_zoom.h"      /* the predicted eye every pass draws from */
 #include "tagpu_packet.h"    /* the true viewport, from this frame's packet */
 
-/* ---- engine layout (terrain-depth.md, binary-verified) ---- */
-#define TA_MAINPP    0x00511DE8u
-#define OFF_EYEX     0x1431F
-#define OFF_EYEY     0x14323
-#define OFF_VP_L     0x37E27   /* viewport rect on the offscreen: l,t,r,b (int) */
-#define OFF_VP_T     0x37E2B
-#define OFF_VIEW_W   0x37E37   /* view W/H in px (int)                          */
-#define OFF_VIEW_H   0x37E3B
-#define OFF_MAP_W16  0x14233   /* map W/H in 16-px tiles (int)                  */
-#define OFF_MAP_H16  0x14237
-#define OFF_SWEEP_C  0x1424B   /* sweep cols = viewTilesX+0xC (int)             */
-#define OFF_SWEEP_R  0x1424F   /* sweep rows = viewTilesY+0x20 (int)            */
-#define OFF_FEATMAP  0x14287   /* FeatureStruct grid, stride 0xD                */
-#define OFF_FEATDEF  0x1426F   /* FeatureDef array, stride 0x100                */
-#define OFF_BEGIN    0x14357
-#define OFF_END      0x1435B
-#define UNIT_STRIDE  0x118
-#define U_STATE      0x110
-#define U_XPOS       0x6C
-#define U_ZPOS       0x70      /* altitude */
-#define U_YPOS       0x74      /* world Z (map depth) — THE sort key source */
-#define U_OBJ3DO     0x9E
-#define U_TYPE       0x92
-#define O3_COMPOSITE 0x10
+/* ---- engine layout (terrain-depth.md, binary-verified) ----
+   SINCE THE FRAME PACKET'S LANDING 3 this file reads no engine field of its
+   own. The view, the map dimensions, the engine's sweep rect, the feature
+   anchors in it and every unit it stamps for come out of the packet; what is
+   left below is the FeatureDef record's own layout, and the def array's base
+   arrives in the packet header as well. Those records are the per-MAP asset
+   the teardown cascade frees, so their lifetime is tagpu_reclaim's fence — the
+   same standing tagpu_terr.c and tagpu_r3dcache.c have, and not the per-frame
+   sim state the packet exists to copy. */
 #define FEAT_STRIDE  0x0D
 #define FT_HEIGHT    0x04      /* u8 tile height                                */
 #define FT_DEFIDX    0x08      /* u16; <0xFFFB = live feature anchor            */
@@ -280,56 +265,14 @@ static const unsigned char* feat_frame0(const char* def)
     return g;
 }
 
-/* One-shot whole-map feature census: where are the TALL features? Logs each
-   def in use (height, footprint, count, first anchor in world px) so the
-   session can steer the camera to a tall one for the G12a occlusion proof. */
-static int s_census = 0;
-static void census(const char* fmap, const char* fdef, int mapW, int mapH)
-{
-    static unsigned short cnt[1024];
-    static int firstx[1024], firsty[1024];
-    memset(cnt, 0, sizeof cnt);
-    int anchors = 0;
-    for (int row = 0; row < mapH; row++) {
-        const char* trow = fmap + (size_t)row * mapW * FEAT_STRIDE;
-        if (IsBadReadPtr(trow, (SIZE_T)mapW * FEAT_STRIDE)) return;
-        for (int col = 0; col < mapW; col++) {
-            unsigned idx = *(const unsigned short*)(trow + col * FEAT_STRIDE + FT_DEFIDX);
-            if (idx >= 0xFFFB || idx >= 1024) continue;
-            if (!cnt[idx]) { firstx[idx] = col * 16; firsty[idx] = row * 16; }
-            if (cnt[idx] < 0xFFFF) cnt[idx]++;
-            anchors++;
-        }
-    }
-    { char b[96]; _snprintf(b, sizeof b, "census: %d feature anchors on %dx%d map",
-                            anchors, mapW, mapH); slog(b); }
-    for (int i = 0; i < 1024; i++) {
-        if (!cnt[i]) continue;
-        const char* def = fdef + (size_t)i * FD_STRIDE;
-        if (IsBadReadPtr(def, FD_STRIDE)) continue;
-        int h = *(const unsigned char*)(def + FD_HEIGHT);
-        const char* nm = "?";
-        const char* np = *(const char* const*)(def + 0x00);
-        if (ptr_ok(np) && !IsBadReadPtr(np, 16) && np[0] >= 0x20 && np[0] < 0x7F) nm = np;
-        char b[200]; _snprintf(b, sizeof b,
-            "census: def=%d h=%d foot=%dx%d n=%d %s first=(%d,%d)",
-            i, h,
-            *(const short*)(def + FD_FOOTX),
-            *(const short*)(def + FD_FOOTZ),
-            cnt[i], h >= 10 ? "TALL" : "flat", firstx[i], firsty[i]);
-        slog(b);
-        (void)nm;
-        if (h >= 10) {                       /* raw window for the offset question */
-            const unsigned char* d8 = (const unsigned char*)def;
-            _snprintf(b, sizeof b,
-                "census: def=%d raw90=%02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X seq=%p anim=%p",
-                i, d8[0x90],d8[0x91],d8[0x92],d8[0x93], d8[0x94],d8[0x95],d8[0x96],d8[0x97],
-                d8[0x98],d8[0x99],d8[0x9A],d8[0x9B], d8[0x9C],d8[0x9D],d8[0x9E],d8[0x9F],
-                *(void* const*)(def + FD_BODYSEQ), *(void* const*)(def + 0xCC));
-            slog(b);
-        }
-    }
-}
+/* THE WHOLE-MAP CENSUS IS GONE (frame packet exchange, landing 3). It walked
+   every cell of the engine's feature grid on the render thread — the whole map,
+   not a rect — to log which defs a map uses and where the tall ones are. That
+   was the G12a proof's camera-steering aid, and `tagpu_features.trigger`
+   (tagpu_cat.c, a tooling reader with its documented caveat) has answered the
+   same question properly since. Nothing replaces it here: the packet carries
+   the anchors of the gather rect, which is what this pass draws from, and a
+   whole-map walk is not something a render-thread pass should be doing at all. */
 
 void tagpu_scaffold_frame(const TAGPU_FRAME* f)
 {
@@ -341,34 +284,33 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     if (s_state != 1) return;
     serr("s-entry");
 
-    char* ta = *(char**)TA_MAINPP;
-    if (!ptr_ok(ta)) return;
-
-    /* live view geometry — the Phase D rule: no constants. The view comes
-       from the FRAME PACKET (landing 2): the true 1x rect the game thread
-       published and the same predicted eye the native pass draws from, so
-       the two never disagree by a frame; the feature grid and the sweep
-       below are still engine reads (landing 3). No in-game packet, no
+    /* live view geometry — the Phase D rule: no constants. EVERYTHING comes
+       from the FRAME PACKET: the true 1x rect and the map and sweep dimensions
+       the game thread published, the same predicted eye the native pass draws
+       from (so the two never disagree by a frame), the feature anchors of the
+       gather rect, and the units this pass predicts occlusion for. The only
+       engine memory left is the FeatureDef record, whose base the packet also
+       carries and whose lifetime is the level. No in-game packet, no
        scaffold. */
+    const TAGPU_PACKET* pk = f->packet;
     int vpL, vpT, vw, vh, eyeX, eyeY;
-    if (!f->packet || !f->packet->in_game) return;
-    vpL = f->packet->vp[0]; vpT = f->packet->vp[1]; vw = f->packet->vp[2]; vh = f->packet->vp[3];
+    if (!pk || !pk->in_game) return;
+    vpL = pk->vp[0]; vpT = pk->vp[1]; vw = pk->vp[2]; vh = pk->vp[3];
     if (!tagpu_zoom_predicted_eye(&eyeX, &eyeY)) return;
-    int mapW = *(int*)(ta + OFF_MAP_W16), mapH = *(int*)(ta + OFF_MAP_H16);
-    int nCols = *(int*)(ta + OFF_SWEEP_C), nRows = *(int*)(ta + OFF_SWEEP_R);
-    const char* fmap = *(const char* const*)(ta + OFF_FEATMAP);
-    const char* fdef = *(const char* const*)(ta + OFF_FEATDEF);
+    int mapW = pk->map_w16, mapH = pk->map_h16;
+    int nCols = pk->sweep_cols, nRows = pk->sweep_rows;
+    const char* fdef = (const char*)(size_t)pk->feat_defs;
     if ((f->frame_counter % 300) == 0) {              /* gate trace */
         char b[192]; _snprintf(b, sizeof b,
-            "scaffold GATES: vp=(%d,%d) view=%dx%d map16=%dx%d sweep=%dx%d fmap=%p fdef=%p eye=(%d,%d)",
+            "scaffold GATES: vp=(%d,%d) view=%dx%d map16=%dx%d sweep=%dx%d fdef=%p anchors=%u eye=(%d,%d)",
             vpL, vpT, vw, vh, mapW, mapH, nCols, nRows,
-            (const void*)fmap, (const void*)fdef, eyeX, eyeY);
+            (const void*)fdef, pk->n_anchors, eyeX, eyeY);
         slog(b);
     }
     if (vw < 64 || vh < 64 || vw > 4096 || vh > 4096) return;
     if (mapW <= 0 || mapH <= 0 || mapW > 4096 || mapH > 4096) return;
     if (nCols <= 0 || nRows <= 0 || nCols > 512 || nRows > 512) return;
-    if (!ptr_ok(fmap) || !ptr_ok(fdef)) return;
+    if (!ptr_ok(fdef)) return;
 
     if (vw != s_bw || vh != s_bh) {
         free(s_buf);
@@ -379,24 +321,28 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
           slog(b); }
     }
     if (!s_buf) return;
-    if (!s_census) { s_census = 1; census(fmap, fdef, mapW, mapH); }
     memset(s_buf, 0, (size_t)vw * vh);
 
-    /* ---- walk the engine's own sweep rect and stamp tall features ---- */
+    /* ---- walk the packet's anchors over the engine's own sweep rect ----
+       The rect is unchanged; what moved is where the cells come from. The
+       packet's anchor table covers the WIDEST zoom rect, so this rect is a
+       sub-rect of it, and each entry already carries the four corner heights
+       the engine's projection averages. */
     int r0 = (eyeY >> 4) - 16;
     s_lastR0 = r0; s_lastRows = nRows; s_lastFrame = f->frame_counter;
     int c0 = (eyeX >> 4) - 10;
-    int tall = 0, flat = 0, gafFail = 0;
-    for (int r = 0; r < nRows; r++) {
-        int row = r0 + r;
-        if (row < 0 || row >= mapH) continue;
-        for (int c = 0; c < nCols; c++) {
-            int col = c0 + c;
-            if (col < 0 || col >= mapW) continue;
-            const char* tile = fmap + ((size_t)row * mapW + col) * FEAT_STRIDE;
-            unsigned idx = *(const unsigned short*)(tile + FT_DEFIDX);
-            if (idx >= 0xFFFB) continue;                  /* no anchor here */
+    int tall = 0, flat = 0, gafFail = 0, outside = 0;
+    const TAGPU_PK_ANCHOR* anch = tagpu_pk_anchors(pk);
+    for (unsigned ai = 0; ai < pk->n_anchors; ai++) {
+        const TAGPU_PK_ANCHOR* a = &anch[ai];
+        int row = a->row, col = a->col;
+        int r = row - r0, c = col - c0;
+        {
+            if (r < 0 || r >= nRows || c < 0 || c >= nCols) continue;
+            if (row < 0 || row >= mapH || col < 0 || col >= mapW) continue;
+            unsigned idx = a->def;
             const char* def = fdef + (size_t)idx * FD_STRIDE;
+            if (pk->feat_defcount && (int)idx >= pk->feat_defcount) { outside++; continue; }
             if (*(const unsigned char*)(def + FD_HEIGHT) < 10) { flat++; continue; }
             tall++;
 
@@ -406,15 +352,9 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
                height-corrected by the 2x2 corner-tile average */
             int fx = *(const short*)(def + FD_FOOTX);
             int fz = *(const short*)(def + FD_FOOTZ);
-            if (fx < 0 || fx > 16) fx = 1;   /* garbage guard (defs 14+ read wild; */
-            if (fz < 0 || fz > 16) fz = 1;   /* raw bytes logged by census)        */
-            int h00 = *(const unsigned char*)(tile + FT_HEIGHT), h01 = h00, h10 = h00, h11 = h00;
-            if (col + 1 < mapW) h01 = *(const unsigned char*)(tile + FEAT_STRIDE + FT_HEIGHT);
-            if (row + 1 < mapH) {
-                const char* t2 = fmap + ((size_t)(row + 1) * mapW + col) * FEAT_STRIDE;
-                h10 = *(const unsigned char*)(t2 + FT_HEIGHT);
-                if (col + 1 < mapW) h11 = *(const unsigned char*)(t2 + FEAT_STRIDE + FT_HEIGHT);
-            }
+            if (fx < 0 || fx > 16) fx = 1;   /* garbage guard: defs past the map's */
+            if (fz < 0 || fz > 16) fz = 1;   /* own count hold wild footprints     */
+            int h00 = a->h, h01 = a->hr, h10 = a->hd, h11 = a->hrd;
             int sx = col * 16 + fx * 8 - eyeX;            /* buffer coords (no vpL) */
             int sy = row * 16 + fz * 8 - eyeY - (h00 + h01 + h10 + h11) / 8;
 
@@ -440,36 +380,29 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
         }
     }
 
-    /* ---- per-unit occlusion prediction (logged; the G12a exit check) ---- */
-    /* Same pair, same standing as tagpu_native_frame's read of it: refused
-       between games by the teardown fence, exposed for the length of the next
-       level's array memset (begin is stored before end, and end is never
-       nulled). The per-slot probe on the composite frame below is a sanity
-       net, not the argument (cross-thread-engine-reads.md §5). */
-    char* beg = *(char**)(ta + OFF_BEGIN);
-    char* end = *(char**)(ta + OFF_END);
+    /* ---- per-unit occlusion prediction (logged; the G12a exit check) ----
+       Out of the packet's units table: the state bits, the 16.16 anchor and
+       the unit composite's rect and hotspot, all copied by the game thread.
+       This used to walk the engine's array through the same unsynchronised
+       begin/end pair the unit pass did, and probe each composite frame with
+       IsBadReadPtr — a check whose answer can go stale between the check and
+       the read, and never the argument (cross-thread-engine-reads.md §5). */
     int logNow = (f->frame_counter % 300) == 0;
-    if (ptr_ok(beg) && ptr_ok(end) && end > beg &&
-        (size_t)(end - beg) <= (size_t)UNIT_STRIDE * 20000) {
-        int uidx = 0;
-        for (char* u = beg + UNIT_STRIDE; u < end; u += UNIT_STRIDE) {
-            unsigned st = *(unsigned*)(u + U_STATE);
-            if (!(st & 0x10000000u) || (st & 0x4000u)) continue;
-            uidx++;
-            if ((st & 3) != 1) continue;                  /* airborne: never occluded */
-            char* o3 = *(char**)(u + U_OBJ3DO);
-            if (!ptr_ok(o3)) continue;
-            const unsigned char* cf = *(const unsigned char* const*)(o3 + O3_COMPOSITE);
-            if (!ptr_ok(cf) || IsBadReadPtr(cf, 0x18)) continue;
-            int cw = *(const unsigned short*)(cf + GF_WIDTH);
-            int chh = *(const unsigned short*)(cf + GF_HEIGHT);
-            int hx = *(const short*)(cf + GF_HOTX), hy = *(const short*)(cf + GF_HOTY);
+    {
+        const TAGPU_PK_UNIT* uu = tagpu_pk_units(pk);
+        unsigned ui;
+        for (ui = 0; ui < pk->n_units; ui++) {
+            const TAGPU_PK_UNIT* u = &uu[ui];
+            int cw = u->comp_w, chh = u->comp_h, hx = u->comp_hx, hy = u->comp_hy;
+            int wx, wz, wy, relU, Bu, bx0, by0, occ = 0, tot = 0;
+            if ((u->state & 3) != 1) continue;            /* airborne: never occluded */
             if (cw <= 0 || chh <= 0 || cw > 1280 || chh > 1280) continue;
-            short wx = *(short*)(u + U_XPOS), wz = *(short*)(u + U_ZPOS), wy = *(short*)(u + U_YPOS);
-            int relU = (wy >> 4) - r0;
-            int Bu = relU * 4 + 1;                        /* units before features in-row */
-            int bx0 = wx - eyeX - hx, by0 = wy - wz / 2 - eyeY - hy;
-            int occ = 0, tot = 0;
+            wx = (int)(short)(u->pos[0] >> 16);
+            wz = (int)(short)(u->pos[1] >> 16);
+            wy = (int)(short)(u->pos[2] >> 16);
+            relU = (wy >> 4) - r0;
+            Bu = relU * 4 + 1;                            /* units before features in-row */
+            bx0 = wx - eyeX - hx; by0 = wy - wz / 2 - eyeY - hy;
             for (int y = by0; y < by0 + chh; y += 2) {
                 if (y < 0 || y >= s_bh) continue;
                 for (int x = bx0; x < bx0 + cw; x += 2) {
@@ -479,20 +412,18 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
                 }
             }
             if (logNow && tot > 0 && occ > 0) {
-                char* def2 = *(char**)(u + U_TYPE);
-                const char* nm = ptr_ok(def2) ? def2 + 0x20 : "?";
                 char b[160]; _snprintf(b, sizeof b,
                     "scaffold: u%03d %-12.12s row=%d occl=%d%% (%d/%d px)",
-                    uidx, nm, wy >> 4, occ * 100 / tot, occ, tot);
+                    ui + 1, u->name[0] ? u->name : "?", wy >> 4, occ * 100 / tot, occ, tot);
                 slog(b);
             }
         }
     }
 
     if (logNow) {
-        char b[128]; _snprintf(b, sizeof b,
-            "scaffold: swept %dx%d tall=%d flat=%d gafFallback=%d eye=(%d,%d)",
-            nCols, nRows, tall, flat, gafFail, eyeX, eyeY);
+        char b[160]; _snprintf(b, sizeof b,
+            "scaffold: swept %dx%d tall=%d flat=%d gafFallback=%d outside=%d eye=(%d,%d)",
+            nCols, nRows, tall, flat, gafFail, outside, eyeX, eyeY);
         slog(b);
     }
 

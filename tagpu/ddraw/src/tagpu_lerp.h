@@ -8,6 +8,16 @@
    changes. That is only this small because G16 turned the pose back into
    per-piece FIELDS -- before it, the pose arrived already baked into vertices.
 
+   THE HISTORY IS THE EXCHANGE ITSELF (frame packet exchange, landing 3). Until
+   then this module kept its own 3.4 MB arena of two pose banks, keyed on the
+   Object3do address, and sampled P_POS/P_TURN off the engine's PrimitiveStructs
+   on the render thread -- one of the per-unit reads the packet removes. Now the
+   two packets the consumer holds ARE the two banks: `read` is the later tick,
+   `prev` the earlier one, the acquire guarantees they differ (tagpu_packet.c's
+   rotation), and units are matched between them by the STABLE ID, never by
+   table position. The arena, the pointer hash, the free-list, the ageing sweep
+   and the learned tick period all go with it.
+
    THE INVARIANTS (smooth-motion.md section 3), all load-bearing:
 
      1. READ-ONLY. Nothing is written back to PrimitiveStruct. The sim reads
@@ -15,12 +25,15 @@
         engine weapon muzzle origins out of them) and TA has NO runtime desync
         detection, so a framerate-dependent, per-machine blend written there
         would diverge two machines silently. Kept inside posed_pose's output it
-        is invisible to the simulation.
+        is invisible to the simulation -- and since landing 3 this module holds
+        no engine pointer at all, so the invariant is a property of the code
+        rather than a rule to keep.
      2. ONE RENDERER. Degradation is a blend weight of 1.0, never a second code
         path -- and here that is literal: every refusal returns 0 and the
-        caller then reads the live fields with the code it always had, so the
-        off case is bit-identical BY CONSTRUCTION rather than by a float lerp
-        that happens to land on the endpoint (`a + (b-a)*1.0f` is NOT `b`).
+        caller then reads the packet's own CURRENT triples with the code it
+        always had, so the off case is bit-identical BY CONSTRUCTION rather
+        than by a float lerp that happens to land on the endpoint
+        (`a + (b-a)*1.0f` is NOT `b`).
      3. Blend the FIELDS, not the composed matrices.
      4. TAang WRAPS -- take the short way round, as the engine's own TURN does.
      5. Visibility never blends: P_FLAGS is not touched here at all.
@@ -33,19 +46,27 @@
 #ifndef TAGPU_LERP_H
 #define TAGPU_LERP_H
 
-/* Once per render frame, before the unit gather: re-reads the lever, latches
-   the sim tick and the sub-tick phase, and ages the history table. */
-void tagpu_lerp_frame(unsigned frameCounter);
+struct TAGPU_PACKET;
+struct TAGPU_PK_UNIT;
+struct TAGPU_PK_PIECE;
 
-/* One unit's blended pose fields, or 0 for "use the live fields".
-   `pr[nparts]` are the unit's PrimitiveStructs, as posed_pose already built
-   them. On 1, *pos is int[nparts*3] and *turn is unsigned short[nparts*3],
+/* Once per render frame, before the unit gather: re-reads the lever and
+   latches this frame's pair and its sub-tick weight. `prev` may be NULL (no
+   pair this frame: every unit then draws its packet pose unblended). */
+void tagpu_lerp_frame(unsigned frameCounter,
+                      const struct TAGPU_PACKET* pk,
+                      const struct TAGPU_PACKET* prev);
+
+/* One unit's blended pose fields, or 0 for "use the packet's own triples".
+   `cur` is this unit's PK_PIECE run out of the packet `tagpu_lerp_frame` was
+   given. On 1, *pos is int[nparts*3] and *turn is unsigned short[nparts*3],
    valid until the next call on this thread (render thread only). */
-int tagpu_lerp_unit(const char* o3, int nparts, const char* const* pr,
+int tagpu_lerp_unit(const struct TAGPU_PK_UNIT* u,
+                    const struct TAGPU_PK_PIECE* cur, int nparts,
                     const int** pos, const unsigned short** turn);
 
-/* " lerp=<blended>/<snapped>[ big=<n>][ full=<n>]" for the native: line, or ""
-   when the lever is off. Resets the window's counters. */
+/* " lerp=<blended>/<snapped>[ miss=<n>]" for the native: line, or "" when the
+   lever is off. Resets the window's counters. */
 void tagpu_lerp_stats(char* buf, unsigned cap);
 
 #endif

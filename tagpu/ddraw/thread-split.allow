@@ -37,7 +37,7 @@ src/tagpu_hud.c          publisher           # HUD scale (G18f): an observer on 
 src/tagpu_reclaim.c      publisher           # FreeObjectState and the teardown wrap on the game thread; the fence itself
 src/tagpu_gui_hook.c     publisher           # the GL UI observers and the flip publisher on the game thread; the probes are on its own arena
 src/tagpu_gui_leaves.h   to-convert:4c       # observers on the game thread — except before_minimap, which publishes from the LOADER thread and goes in 4c
-src/tagpu_order.c        to-convert:3        # the order-marker snapshot is game-thread (0x469BFC); its unit resolution and the palette read on the render thread go with the units table
+src/tagpu_order.c        publisher           # the order-marker snapshot at 0x469BFC, game thread: it resolves every unit pointer to an array SLOT and every def and weapon field to a number in the record, so the present half reads the packet's units, GUI colours and palette and dereferences nothing (landing 3). The GAF sequences it carries are session assets tagpu_gaf.c resolves
 src/tagpu_owndraw.c      publisher           # the composite detours' classifier on the game thread (0x459830/0x459C70)
 src/tagpu_fxown.c        publisher           # effects call-site redirects and leaf detours on the game thread
 src/tagpu_featown.c      publisher           # the feature leaf detour 0x46A610 on the game thread
@@ -53,14 +53,10 @@ src/tagpu_cat.c          tooling             # unit/feature catalogues behind ta
 src/tagpu_gui_snap.c     tooling             # the gadget-tree snapshot behind tagpu_ui.trigger
 src/tagpu_zoom.c         publisher           # the camera clamp 0x41C3C0, the follow clamp 0x41CAF7, the minimap-rect and ScrollSpeed-save redirects, and the command apply at the top of every in-play draw: every engine word here is read and written on the game thread; the render half (the levers, the anchor arithmetic, the predicted eye) reads only the packet
 src/tagpu_vpwide.c       publisher           # the 0x498DA0 mouse->world redirect and the clip guard inside DrawGameScreen; the rect is widened and restored from the command apply, game thread; the true rect is read on the game thread only
-src/tagpu_overlay.c      to-convert:3        # the roster log and the model probe walk the unit array on the render thread (the eye it logs is the packet's since landing 2)
-src/tagpu_native.c       to-convert:3        # the unit pass: the unit array, poses, fog descriptor, option bits on the render thread
-src/tagpu_scaffold.c     to-convert:3        # the scene-depth scaffold walks the unit array and the feature grid on the render thread (its eye and viewport come from the packet since landing 2)
-src/tagpu_mark.c         to-convert:3        # bars, digits and boxes gathered from the unit array on the render thread
-src/tagpu_lerp.c         to-convert:3        # the pose history samples P_POS/P_TURN on the render thread; rekeyed to the packet's stable id
-src/tagpu_render3do.c    to-convert:3        # the opt-in writeback / render3do path reads Object3do on the render thread
-src/tagpu_hires.c        to-convert:3        # the glTF replacement pass poses from the unit's Object3do on the render thread
-src/tagpu_feat.c         to-convert:3        # feature anchors from the feature grid, per frame, on the render thread
+src/tagpu_native.c       fenced              # the unit array, the poses, the option bits and the ground heights all come from the packet since landing 3; what is left is per-LEVEL assets under tagpu_reclaim's teardown fence — the model templates behind MODEL_PTRS (whose base and bound the packet carries) and the engine's screen fog descriptor, which landing 4b takes. tagpu_native_owns_unit/owns_obj read the unit record and its def on the GAME thread, for the publisher and the owndraw classifier
+src/tagpu_scaffold.c     fenced              # the units, the feature anchors, the map and sweep dimensions all come from the packet since landing 3; the FeatureDef records and the GAF frames it stamps from are per-MAP assets under the fence
+src/tagpu_render3do.c    fenced              # the write-back is deleted (landing 3) and the shade table and build-state formulas take the packet's copies; the face material helpers still read the model template's face records and their GAF frames, per level, under the fence
+src/tagpu_feat.c         fenced              # the anchors, their six height bytes, the map dimensions and the player and option bytes come from the packet since landing 3; the FeatureDef records and the wreck records it draws GAF frames out of are per-MAP assets under the fence
 src/tagpu_fx.c           to-convert:4a       # projectiles, explosions and debris walked on the render thread
 src/tagpu_sfx.c          to-convert:4a       # the ten particle layers walked on the render thread
 src/tagpu_gui_surf.c     to-convert:4c       # the GL UI's render half: the true viewport, the minimap descriptors and pixels, the view box, the cursor sprite

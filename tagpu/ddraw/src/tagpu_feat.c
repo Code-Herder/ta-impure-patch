@@ -74,25 +74,18 @@
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_native.h"
+#include "tagpu_packet.h"   /* the frame packet: the view, the tables (landing 3) */
 
-/* ---- engine layout (terrain-depth.md appendix, byte-confirmed) ---- */
-#define OFF_FEATMAP  0x14287   /* FeatureStruct grid, stride 0xD              */
-#define OFF_FEATDEF  0x1426F   /* FeatureDef array, stride 0x100              */
-#define OFF_WRECKS   0x1420B   /* wreck records, stride 0x30                  */
-#define OFF_MAPW16   0x14233   /* map W/H in 16-px tiles                      */
-#define OFF_MAPH16   0x14237
-#define OFF_SWEEPC   0x1424B   /* sweep cols = viewTilesX + 0xC               */
-#define OFF_SWEEPR   0x1424F   /* sweep rows = viewTilesY + 0x20              */
-#define OFF_LOCALPL  0x2A43    /* u8 local player id (the seen-nibble compare)*/
-#define OFF_GFXOPT   0x37F06   /* bit4 = FShadow                              */
-#define OFF_FCOUNT   0x14253   /* int NumFeatureDefs — anything past it is    */
-                               /* junk (terrain-depth "Corrections")          */
-
-#define FT_STRIDE    0x0D
-#define FT_HEIGHT    0x04      /* u8 tile height                              */
-#define FT_DEFIDX    0x08      /* u16; < 0xFFFB = live feature anchor         */
-#define FT_WIDX      0x0A      /* u16 wreck record index (when flags bit0)    */
-#define FT_FLAGS     0x0C      /* u8; bit0 wreckage, bit2 deferred, bits3+ seen */
+/* ---- engine layout (terrain-depth.md appendix, byte-confirmed) ----
+   THE FEATURE GRID IS GONE FROM THIS FILE (frame packet exchange, landing 3).
+   Its cells are per-TICK sim state — the def index, the flags nibble and the
+   wreck index all change as features are built, burned and scarred — so the
+   game thread copies the anchors of the widest zoom rect into the packet, with
+   the six height bytes the two height rules need. What stays is the FeatureDef
+   record and the wreck record: per-MAP allocations the teardown cascade frees
+   (0x483DD0 -> 0x422170), so their lifetime is tagpu_reclaim's fence, the same
+   standing tagpu_terr.c has for the tile set. Their bases arrive in the packet
+   header; this file adds no engine offset to them. */
 #define FD_STRIDE    0x100
 #define FD_NAME      0x00      /* char Name[0x20] — INLINE, not a pointer      */
 #define FD_FOOTX     0x94      /* i16 footprint in 16-px tiles                */
@@ -524,7 +517,7 @@ static int feat_visible(const TAGPU_FXVIEW* v, int col, int row, int fx, int fz,
 
 /* ---- per-frame counters ---- */
 typedef struct {
-    int anchors, flat, tall, gafwreck, wreck3d, losSkip, junk, animated, shadows;
+    int anchors, flat, tall, gafwreck, wreck3d, losSkip, junk, animated, shadows, outside;
 } FEATC;
 static FEATC s_c;
 static int s_logged;
@@ -536,18 +529,18 @@ static int s_lit;                       /* light= this frame: anchors take the g
    cell, coordinates clamped to the map, normal (-dx, 1, -dz), then the one
    lighting rule (tagpu_classicpp.c). Every corner of every quad the anchor
    emits takes this one value, as the lab's do. */
-static float ground_lambert(const char* fmap, int col, int row, unsigned mapW, unsigned mapH)
+/* The gradient over the anchor's four neighbours. The publisher clamps each
+   at the map edge exactly as this used to — (col-1 -> col at column 0, col+1
+   -> col at the last column, and the same for rows) — so the six bytes in the
+   anchor ARE the six values HAT() produced. */
+static float ground_lambert(const TAGPU_PK_ANCHOR* a)
 {
-#define HAT(c, r) ((int)*(const unsigned char*)(fmap + ((size_t)(r) * mapW + (size_t)(c)) * FT_STRIDE + FT_HEIGHT))
-    int cl = col > 0 ? col - 1 : 0, cr = (unsigned)(col + 1) < mapW ? col + 1 : (int)mapW - 1;
-    int ru = row > 0 ? row - 1 : 0, rd = (unsigned)(row + 1) < mapH ? row + 1 : (int)mapH - 1;
-    float dx = (float)(HAT(cr, row) - HAT(cl, row)) / 32.0f;
-    float dz = (float)(HAT(col, rd) - HAT(col, ru)) / 32.0f;
+    float dx = (float)((int)a->hr - (int)a->hl) / 32.0f;
+    float dz = (float)((int)a->hd - (int)a->hu) / 32.0f;
     float inv = 1.0f / sqrtf(dx * dx + 1.0f + dz * dz);
     float n[3];
     n[0] = -dx * inv; n[1] = inv; n[2] = -dz * inv;
     return tagpu_classicpp_ground(n);
-#undef HAT
 }
 
 /* FeatureDef.Name is an inline char[0x20] (tagpu_cat.c reads the same field
@@ -561,15 +554,14 @@ static const char* def_name(const char* def)
 }
 
 /* one anchor: the three bodies of 0x46A610 */
-static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile,
-                         const char* def, int col, int row, int flat,
+static void draw_feature(const TAGPU_FXVIEW* v, const TAGPU_PACKET* pk,
+                         const TAGPU_PK_ANCHOR* a, const char* def, int flat,
                          float encBody, int shadowsOn)
 {
     int fx = *(const short*)(def + FD_FOOTX);
     int fz = *(const short*)(def + FD_FOOTZ);
-    unsigned mapW = (unsigned)*(const int*)(ta + OFF_MAPW16);
-    unsigned mapH = (unsigned)*(const int*)(ta + OFF_MAPH16);
-    unsigned flags = *(const unsigned char*)(tile + FT_FLAGS);
+    int col = a->col, row = a->row;
+    unsigned flags = a->flags;
     unsigned mask  = *(const unsigned char*)(def + FD_MASK);
     int h00, h01, h10, h11, sx, sy, wax, waz;
     float lam;
@@ -579,13 +571,7 @@ static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile
     if (fx < 0 || fx > MAXFOOT) { fx = 1; s_c.junk++; }
     if (fz < 0 || fz > MAXFOOT) { fz = 1; s_c.junk++; }
 
-    h00 = *(const unsigned char*)(tile + FT_HEIGHT);
-    h01 = ((unsigned)(col + 1) < mapW) ? *(const unsigned char*)(tile + FT_STRIDE + FT_HEIGHT) : h00;
-    if ((unsigned)(row + 1) < mapH) {
-        const char* t2 = tile + (size_t)mapW * FT_STRIDE;
-        h10 = *(const unsigned char*)(t2 + FT_HEIGHT);
-        h11 = ((unsigned)(col + 1) < mapW) ? *(const unsigned char*)(t2 + FT_STRIDE + FT_HEIGHT) : h10;
-    } else { h10 = h00; h11 = h01; }
+    h00 = a->h; h01 = a->hr; h10 = a->hd; h11 = a->hrd;
 
     /* the engine's projection, +128/+32 baked in as (col+8)*16 / (row+2)*16 */
     wax = col * 16 + (fx * 16) / 2;
@@ -595,11 +581,10 @@ static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile
     /* `light=` is applied HERE, by baking 1.0 -- a billboard has no normal, so
        there is no level normal to hand the rule the way the terrain and unit
        shaders do, and no shadow term in it to preserve either */
-    lam = s_lit ? ground_lambert(*(const char* const*)(ta + OFF_FEATMAP), col, row, mapW, mapH)
-                : 1.0f;
+    lam = s_lit ? ground_lambert(a) : 1.0f;
 
     if (flags & 1) {                                  /* wreckage on this tile */
-        const char* recs = *(const char* const*)(ta + OFF_WRECKS);
+        const char* recs = (const char*)(size_t)pk->feat_recs;
         const char* rec;
         if (!(mask & 1)) {                            /* body 1: 3D wreck      */
             s_c.wreck3d++;                            /* the native wreck pass */
@@ -615,7 +600,7 @@ static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile
            the tile's own, and the probe is a net (cross-thread-engine-reads.md
            §4). */
         if (!ptr_ok(recs)) return;
-        rec = recs + (size_t)*(const unsigned short*)(tile + FT_WIDX) * WR_STRIDE;
+        rec = recs + (size_t)a->wreck * WR_STRIDE;
         if (IsBadReadPtr(rec, WR_STRIDE)) return;
         if (shadowsOn && s_shadow && (*(const unsigned char*)(rec + WR_FLAGS) & 4)) {
             g = tagpu_gaf_state_frame(rec + WR_SHADANIM);
@@ -662,7 +647,7 @@ static void draw_feature(const TAGPU_FXVIEW* v, const char* ta, const char* tile
             s_logged++;
             _snprintf(b, sizeof b,
                 "feat: def=%u \"%.24s\" h=%u foot=%dx%d mask=%02X/%02X %s frame=%ux%u hot=(%d,%d) tile=(%d,%d) at=(%d,%d) enc=%.2f",
-                (unsigned)*(const unsigned short*)(tile + FT_DEFIDX), def_name(def),
+                (unsigned)a->def, def_name(def),
                 (unsigned)*(const unsigned char*)(def + FD_HEIGHT), fx, fz,
                 mask, *(const unsigned char*)(def + FD_MASKHI),
                 flat ? "flat" : "tall",
@@ -685,18 +670,17 @@ static int feat_bail(void)
     return 0;
 }
 
-#define TA_MAINPP 0x00511DE8u   /* this file's own read (to-convert:3) */
-
 int tagpu_feat_gather(const TAGPU_FXVIEW* v)
 {
-    const char* ta = *(const char* const*)TA_MAINPP;
-    const char* fmap;
+    const TAGPU_PACKET* pk = v->packet;
+    const TAGPU_PK_ANCHOR* anch;
     const char* fdefs;
-    int mapW, mapH, nCols, nRows, r0, c0, row, col;
-    int localPl, shadowsOn, nDefs;
+    int mapW, mapH, nCols, nRows, r0, c0;
+    int localPl, shadowsOn, nDefs, outside = 0;
+    unsigned ai;
     float flatSpan;
     if (s_armed != 1) return feat_bail();
-    if (!ptr_ok(ta)) return feat_bail();
+    if (!pk || !pk->in_game) return feat_bail();
     if (s_state == 0) init_gl();
     if (s_state != 1) return feat_bail();
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
@@ -718,13 +702,12 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     s_cpp = tagpu_classicpp_on();
     s_lit = tagpu_classicpp_lit();
 
-    fmap  = *(const char* const*)(ta + OFF_FEATMAP);
-    fdefs = *(const char* const*)(ta + OFF_FEATDEF);
-    mapW = *(const int*)(ta + OFF_MAPW16);
-    mapH = *(const int*)(ta + OFF_MAPH16);
-    nCols = *(const int*)(ta + OFF_SWEEPC);
-    nRows = *(const int*)(ta + OFF_SWEEPR);
-    if (!ptr_ok(fmap) || !ptr_ok(fdefs)) return feat_bail();
+    fdefs = (const char*)(size_t)pk->feat_defs;
+    mapW = pk->map_w16;
+    mapH = pk->map_h16;
+    nCols = pk->sweep_cols;
+    nRows = pk->sweep_rows;
+    if (!ptr_ok(fdefs)) return feat_bail();
     if (mapW <= 0 || mapH <= 0 || mapW > 4096 || mapH > 4096) return feat_bail();
     if (nCols <= 0 || nRows <= 0 || nCols > 1024 || nRows > 1024) return feat_bail();
 
@@ -740,9 +723,9 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
        the same allocation at the same size) cannot accumulate -- the previous
        map's frames go at the first repack that needs the room. Checked here,
        after the pointer is validated and before any atlas_get can run. */
-    if (fmap != s_mapGrid || mapW != s_mapW || mapH != s_mapH) {
+    if (fdefs != s_mapGrid || mapW != s_mapW || mapH != s_mapH) {
         if (s_mapGrid) tagpu_gaf_atlas_forget(&s_atlas);
-        s_mapGrid = fmap; s_mapW = mapW; s_mapH = mapH;
+        s_mapGrid = fdefs; s_mapW = mapW; s_mapH = mapH;
     }
 
     /* The engine's own sweep rect and its edge clamps (DrawGameScreen), run
@@ -769,20 +752,32 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     if (c0 + nCols > mapW - 1) nCols = mapW - c0 - 1;
     if (nRows <= 0 || nCols <= 0) return feat_bail();
 
-    nDefs = *(const int*)(ta + OFF_FCOUNT);
+    nDefs = pk->feat_defcount;
     if (nDefs < 0 || nDefs > 4096) nDefs = 0;         /* no guard we can trust */
-    localPl = *(const unsigned char*)(ta + OFF_LOCALPL);
-    shadowsOn = (*(const unsigned short*)(ta + OFF_GFXOPT) & 0x10) != 0;
+    localPl = pk->local_player;
+    shadowsOn = (pk->gfx_opt & 0x10) != 0;
     flatSpan = (float)nRows * (float)nCols;
 
-    for (row = r0; row < r0 + nRows; row++) {
-        for (col = c0; col < c0 + nCols; col++) {
-            const char* tile = fmap + ((size_t)row * mapW + col) * FT_STRIDE;
-            unsigned idx = *(const unsigned short*)(tile + FT_DEFIDX);
+    /* THE ANCHORS COME OUT OF THE PACKET, in the same row-major order the grid
+       walk produced them, over a rect the publisher sized for the WIDEST zoom —
+       so this loop's own rect is a sub-rect of it and the filter below is the
+       one the double loop used to be. `outside=` counts an anchor the rect
+       wanted and the packet did not carry, which is 0 at every reachable zoom
+       and is the number to look at if features ever stop at the frame edge. */
+    anch = tagpu_pk_anchors(pk);
+    if (r0 < pk->anch_r0 || c0 < pk->anch_c0 ||
+        r0 + nRows > pk->anch_r0 + pk->anch_rows ||
+        c0 + nCols > pk->anch_c0 + pk->anch_cols) outside++;
+    for (ai = 0; ai < pk->n_anchors; ai++) {
+        const TAGPU_PK_ANCHOR* a = &anch[ai];
+        int row = a->row, col = a->col;
+        {
+            unsigned idx = a->def;
             const char* def;
             int flat;
             float enc;
-            if (idx >= 0xFFFB) continue;              /* no anchor on this tile */
+            if (row < r0 || row >= r0 + nRows) continue;
+            if (col < c0 || col >= c0 + nCols) continue;
             /* tiles can name defs past the map's real ones, whose 0x100-byte
                records hold garbage — wild footprints and invalid sequence
                pointers (terrain-depth.md "Corrections") */
@@ -796,13 +791,12 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
             /* the engine's gate: only defs flagged +0xFF bit3 are LOS-tested,
                and a tile already seen by the local player skips even that */
             if ((*(const unsigned char*)(def + FD_MASKHI) & 8) &&
-                ((*(const unsigned char*)(tile + FT_FLAGS) >> 3) & 0xF) != (unsigned)localPl) {
+                ((a->flags >> 3) & 0xF) != (unsigned)localPl) {
                 int fx = *(const short*)(def + FD_FOOTX);
                 int fz = *(const short*)(def + FD_FOOTZ);
                 if (fx < 0 || fx > MAXFOOT) fx = 1;
                 if (fz < 0 || fz > MAXFOOT) fz = 1;
-                if (!feat_visible(v, col, row, fx, fz,
-                                  *(const unsigned char*)(tile + FT_HEIGHT))) {
+                if (!feat_visible(v, col, row, fx, fz, a->h)) {
                     s_c.losSkip++;
                     continue;
                 }
@@ -829,9 +823,10 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
                 enc = 3.0f + (float)rel * 4.0f
                       + 1.5f * ((float)(col - c0) / (float)nCols);
             }
-            draw_feature(v, ta, tile, def, col, row, flat, enc, shadowsOn);
+            draw_feature(v, pk, a, def, flat, enc, shadowsOn);
         }
     }
+    s_c.outside = outside;
 
     /* we drew this frame: the engine's feature leaf may be skipped. Body 1
        (3D wreckage) goes through DrawUnit, which only the native pass's wreck
@@ -849,8 +844,8 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
                     &p, "feat: rect=%dx%d anchors=%d flat=%d tall=%d gafwreck=%d 3dwreck=%d",
                     nCols, nRows, s_c.anchors, s_c.flat, s_c.tall, s_c.gafwreck, s_c.wreck3d);
             sappend(b, sizeof b, &p, " defs=%d", nDefs);
-            sappend(b, sizeof b, &p, " anim=%d los-skip=%d junk=%d -> body=%d shadow=%d atlas=%d",
-                    s_c.animated, s_c.losSkip, s_c.junk, s_cBody, s_cShadow, s_atlas.n);
+            sappend(b, sizeof b, &p, " anim=%d los-skip=%d junk=%d outside=%d -> body=%d shadow=%d atlas=%d",
+                    s_c.animated, s_c.losSkip, s_c.junk, s_c.outside, s_cBody, s_cShadow, s_atlas.n);
             /* repacks should settle at a small number and stop; `wall` means
                the map wants more than one 2048 page holds (tagpu_gaf.h) */
             sappend(b, sizeof b, &p, " repack=%u%s", s_atlas.repacks,

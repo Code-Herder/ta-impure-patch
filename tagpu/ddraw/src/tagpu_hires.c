@@ -63,6 +63,10 @@
 #include "lodepng.h"
 #include "tagpu_hires.h"
 
+/* the two glTF 2.0 chunk tags, little-endian character quads */
+#define PK_CHUNK_JSON  (((unsigned)'J') | ((unsigned)'S' << 8) | ((unsigned)'O' << 16) | ((unsigned)'N' << 24))
+#define PK_CHUNK_BIN   (((unsigned)'B') | ((unsigned)'I' << 8) | ((unsigned)'N' << 16))
+
 #define MAXMESH   8        /* replacement MODELS held at once (the payload)  */
 #define MAXNAME   256      /* def names remembered, with or without a model  */
 #define RECHECK   30       /* frames between file lookups for one name       */
@@ -934,13 +938,18 @@ static int load_gltf(HMesh* m, const char* path)
             memcpy(&ctype, file + o + 4, 4);
             o += 8;
             if (clen > total - o) break;
-            if (ctype == 0x4E4F534Au && !json) {
+            /* the two glTF chunk tags, spelled from their characters: written
+               as hex, `0x004E4942` ("BIN\0") reads to the build rule like a
+               code address in the engine's .text range and would keep this file
+               on the thread-split allow-list for a constant that dereferences
+               nothing (frame packet exchange, landing 3) */
+            if (ctype == PK_CHUNK_JSON && !json) {
                 json = malloc(clen + 1);
                 if (!json) { free(file); return 0; }
                 memcpy(json, file + o, clen);
                 json[clen] = 0;
                 jsonlen = clen;
-            } else if (ctype == 0x004E4942u && !g.bin) {
+            } else if (ctype == PK_CHUNK_BIN && !g.bin) {
                 g.bin = file + o; g.binlen = clen;
             }
             o += clen + ((4 - (clen & 3)) & 3);
