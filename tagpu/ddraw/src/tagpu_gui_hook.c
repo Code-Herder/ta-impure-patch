@@ -171,61 +171,77 @@ static void surf_drop_offscreens(unsigned keepBase)
    The table is the game thread's alone — `surf_drop` swap-removes and
    `surf_get` memsets the tail — so an observer that fires on another thread
    must not walk it: it would read a slot mid-move, mark the wrong entry and
-   leave the right one standing (which is the crash this whole mechanism
-   exists to stop). It leaves the block pointer here instead, and the game
-   thread retires the entry at the top of the next flip, BEFORE the census or
-   the publisher read any base.
+   leave the right one standing, which is the crash this whole mechanism exists
+   to stop. It leaves the block pointer here instead, and the game thread
+   retires the entry at the top of the next flip, BEFORE the census or the
+   publisher read any base. The engine's allocator is genuinely multi-threaded
+   (`0x4D85B0` takes a critical section at `0x4D85C2`), so this is not a
+   theoretical path even though no off-thread free of a recorded surface has
+   yet been observed.
 
-   One naturally aligned 32-bit slot per entry, so a reader takes one whole
-   pointer or another; the worst a torn ring can do is retire a surface that is
-   still alive, which costs a re-seed and nothing else. And if more than FREEQ
-   blocks are freed off-thread between two flips, the count says so and EVERY
-   entry is retired — a bound, not a hope. The engine's allocator is genuinely
-   multi-threaded (`0x4D85B0` takes a critical section at `0x4D85C2`), so this
-   is not a theoretical path even though no off-thread free of a recorded
-   surface has yet been observed. */
-#define FREEQ 64
-static volatile LONG s_freeqN;                  /* pushed, ever — any thread    */
-static LONG          s_freeqDone;               /* retired, ever — game thread  */
-static volatile unsigned s_freeq[FREEQ];
-static unsigned      s_freeqFlush;              /* times the ring overflowed    */
+   EVERY OFF-THREAD FREE IS PUSHED, unfiltered, and that is deliberate. The
+   obvious optimisation — scan the table off-thread and push only on a match —
+   is NOT safe and was caught being unsafe: `MEM_Free` fires once per block, so
+   a scan that races a swap-remove and misses (the moved entry lands in a slot
+   the scan has already passed) queues nothing, the game thread never hears
+   about it, and the entry stands for ever. A filter would have been
+   load-bearing, not an optimisation.
 
-/* The engine frees ~10 500 blocks a second and only a handful of them are ever
-   a surface, so the ring is fed through a READ-ONLY filter: the off-thread
-   observer looks for a matching entry and pushes only then. That scan can race
-   a `surf_drop` moving a slot, so it may miss a match (leaving the entry for
-   one more flip, which is what this module did for every path before G18-8) or
-   find a stale one (costing a re-seed). Neither is the safety argument — the
-   game thread re-checks authoritatively in surf_drain_freeq — the filter only
-   decides whether to bother it. Without it the ring took every free on every
-   other thread and overflowed three times in one game (MEASURED 2026-09-12). */
+   EVERY WAY THIS RING CAN LOSE AN ENTRY ENDS IN THE SAME PLACE: retire the
+   WHOLE table and let the surfaces re-register from the engine's own draws.
+   That is the bound, and MEASURED 2026-09-12 it is also cheap and rare: three
+   flushes in a session, ALL of them between flip 156 500 and 237 073 — the
+   level load, where the loader thread frees in bulk — and none at all in the
+   157 000 flips of play that followed. A flush costs what a GL context change
+   already costs, a re-seed of the surfaces still being drawn into; a surface
+   that is not drawn into again simply re-registers when it is, because
+   `surf_of_ctx` runs on every blit.
+     - a producer that has claimed a slot but not yet stored into it: the slot
+       reads 0, because the consumer zeroes each slot as it takes it. 0 means
+       "someone is mid-push", which is exactly a value we cannot act on.
+     - a producer that laps the consumer mid-walk: the head is re-read after
+       the walk and compared against where the walk started.
+     - more than FREEQ pushed between two flips: the count says so up front.
+   A torn or stale slot that we DO act on can only retire a surface that is
+   still alive, which costs a re-seed; the dangerous direction — failing to
+   retire a dead one — is what the three arms above cover. */
+#define FREEQ 256
+static volatile LONG s_freeqN;                  /* claimed, ever — any thread   */
+static LONG          s_freeqDone;               /* taken, ever — game thread    */
+static volatile LONG s_freeq[FREEQ];            /* 0 = claimed but not stored   */
+static unsigned      s_freeqFlush;              /* times the table was flushed  */
+
 static void surf_free_offthread(unsigned p)
 {
-    int i;
-    LONG n;
-    for (i = 0; i < s_nsurf; i++) if (s_surf[i].owner == p) break;
-    if (i >= s_nsurf) return;
-    n = InterlockedIncrement(&s_freeqN) - 1;
-    s_freeq[n & (FREEQ - 1)] = p;
+    LONG n = InterlockedIncrement(&s_freeqN) - 1;
+    InterlockedExchange(&s_freeq[n & (FREEQ - 1)], (LONG)p);
 }
 
 static void surf_drain_freeq(void)              /* game thread only */
 {
-    LONG n = InterlockedExchangeAdd(&s_freeqN, 0);
-    if (n == s_freeqDone) return;
-    if (n - s_freeqDone > FREEQ) {              /* overflowed: nothing is trusted */
-        s_freeqFlush++;
-        while (s_nsurf) surf_drop(0);
-    }
+    LONG head = InterlockedExchangeAdd(&s_freeqN, 0);
+    LONG from = s_freeqDone;
+    int flush = 0;
+
+    if (head == from) return;
+    if (head - from > FREEQ) flush = 1;          /* more than the ring holds */
     else {
-        for (; s_freeqDone != n; s_freeqDone++) {
-            unsigned p = s_freeq[s_freeqDone & (FREEQ - 1)];
+        LONG k;
+        for (k = from; k != head; k++) {
+            unsigned p = (unsigned)InterlockedExchange(&s_freeq[k & (FREEQ - 1)], 0);
             int i;
+            if (!p) { flush = 1; break; }        /* claimed, not yet stored  */
             for (i = 0; i < s_nsurf; i++)
                 if (s_surf[i].owner == p) { surf_drop(i); break; }
         }
+        /* did a producer lap the window while we were walking it? */
+        if (!flush && InterlockedExchangeAdd(&s_freeqN, 0) - from > FREEQ) flush = 1;
     }
-    s_freeqDone = n;
+    if (flush) {
+        s_freeqFlush++;
+        while (s_nsurf) surf_drop(0);
+    }
+    s_freeqDone = head;
 }
 
 static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)

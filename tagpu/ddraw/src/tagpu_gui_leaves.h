@@ -392,10 +392,13 @@ static int __cdecl before_free(void* e)
    scan racing those reads a slot mid-move — it can mark a slot that is about
    to become a different, live surface and leave the freed one standing, which
    is the very fault this observer exists to remove. So an off-thread free
-   leaves the block pointer in `surf_freeq` and the game thread retires the
-   entry at the top of the next flip, before the census or the publisher read
-   a base. The residual window — one thread freeing a surface another is
-   drawing into — is the engine's own and was never ours to close.
+   pushes the block pointer into `surf_free_offthread`'s ring, unfiltered and
+   without reading the table at all, and the game thread retires the entry at
+   the top of the next flip, before the census or the publisher read a base.
+   Filtering there would not be an optimisation but a hole: MEM_Free fires once
+   per block, so a filter that misses queues nothing and nobody ever re-checks.
+   The residual window — one thread freeing a surface another is drawing into —
+   is the engine's own and was never ours to close.
 
    The observer sits at the ENTRY of 0x4D85A0, before the allocator's own
    critical section, so the CRT `free()` that surf_drop calls inverts no lock. */
