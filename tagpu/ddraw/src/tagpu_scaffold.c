@@ -341,13 +341,14 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
             if (r < 0 || r >= nRows || c < 0 || c >= nCols) continue;
             if (row < 0 || row >= mapH || col < 0 || col >= mapW) continue;
             unsigned idx = a->def;
-            const char* def = fdef + (size_t)idx * FD_STRIDE;
+            const char* def;
             /* A BOUND THIS PASS DID NOT HAVE. A tile can name a def past the
                map's own count, whose 0x100-byte record holds garbage (the
                terrain-depth note's "Corrections"); the feature pass has always
                refused those and this one indexed them. Counted as `junk`, as
-               there. */
+               there — and applied BEFORE the address is formed, not after. */
             if (pk->feat_defcount && (int)idx >= pk->feat_defcount) { junk++; continue; }
+            def = fdef + (size_t)idx * FD_STRIDE;
             if (*(const unsigned char*)(def + FD_HEIGHT) < 10) { flat++; continue; }
             tall++;
 

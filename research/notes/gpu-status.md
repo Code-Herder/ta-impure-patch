@@ -2333,7 +2333,7 @@ Object3do ([cross-thread engine reads](cross-thread-engine-reads.html) §5 row 2
 
 | site | what we do there | thread |
 |---|---|---|
-| `DrawGameScreen 0x468CF0`, the observer's **`after`** | the packet grew four tables. `PK_UNIT` (100 B) one per LIVE unit, the walk bounded by the engine's own SLOT COUNT (`u16 main+0x14351`) rather than by the `begin`/`end` pair, and the table sized to that count so no player is ever cut; `PK_PIECE` (24 B) the COB move and turn triples and the flags, plus the TYPE's template node; `PK_WRECK` (40 B) the husks the anchors name; `PK_ANCHOR` (16 B) the feature cells of the widest zoom rect with the six height bytes the engine's 2×2 projection average and the Classic++ ground gradient need. The header grew with them: the GUI colour table, the dispatched mouse point, the build cursor's corners, the two mode bytes, the option byte, the feature sweep, the per-map array bases the fenced passes index, and the engine's 32×256 shade table. Every offset and every bound: [engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies" | game |
+| `DrawGameScreen 0x468CF0`, the observer's **`after`** | the packet grew four tables. `PK_UNIT` (100 B) one per LIVE unit, the walk bounded by the engine's own SLOT COUNT (`u16 main+0x14351`) rather than by the `begin`/`end` pair, and the table sized to that count so no player is ever cut; `PK_PIECE` (24 B) the COB move and turn triples and the flags, plus the TYPE's template node; `PK_WRECK` (44 B) the husks the anchors name, each carrying the ANCHOR TILE it was found on rather than its own position, because that is what the grid walk it replaced filtered on; `PK_ANCHOR` (16 B) the feature cells of the widest zoom rect with the six height bytes the engine's 2×2 projection average and the Classic++ ground gradient need. The header grew with them: the GUI colour table, the dispatched mouse point, the build cursor's corners, the two mode bytes, the option byte, the feature sweep, the per-map array bases the fenced passes index, and the engine's 32×256 shade table. Every offset and every bound: [engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies" | game |
 | the same `after` | `tagpu_native_owns_unit()` is asked here, once per unit, with the def in hand — the answer crosses as one flag bit, so the unit pass, the marker pass and the composite wipe act on ONE answer instead of three threads' reads of the same bytes | game |
 | the order-marker snapshot `0x469BFC` | every unit pointer a record carried becomes an ARRAY SLOT, and every def and weapon field the drawing needs becomes a number in the record: the nine labelled ranges, the three live weapon ranges and their AoE and attack runs, the build def's five footprint extents, the kamikaze set, the cursor sprite's GAF sequence | game |
 | `tagpu_packet.c`'s acquire | **the rotation**: the frame instance holds THREE slots (READ, PREV and a SPARE) rather than two, so a packet of the same tick replaces READ and keeps PREV, and the pair the pose blend runs over always spans two distinct ticks. The choice is made AFTER the exchange out of records this thread owns — the two-slot alternative would have to peek at a slot the producer may be refilling | render |
@@ -2371,7 +2371,67 @@ draws on which `end != begin + (count−1)·0x118`, the relation the note record
 **The gates, measured 2026-09-12 on the reference setup, 1920×1080, `--maxfps 0`, the play
 defaults, this DLL against the one built from landing 2's tip (`4b84098`):**
 
-<!-- GATES-3 -->
+- *The protocol*, `200v200` under `check`+`stress`+`poison`, three runs of 300 s: **436 191 publishes
+  and 6 658 taken frames** in the first, `viol=0 pviol=0 crcbad=0 foreign=0 commitfail=0` on both
+  exchanges, **`dup=0`** (the stable-id collision oracle) and **`relbad=0`** (the `end` pointer
+  agreed with `begin + (count−1)·0x118` on every one of them), 0 `VIOLATION` lines in the log.
+- *The pose CRC join* (`tagpu_posecrc.on`): **`raced=0`**. That is the gate this landing is
+  measured by and its meaning changed with it — the race it counts is between the COB scripts on
+  the game thread and the pose loop on the render thread, and the pose now comes out of a packet
+  the game thread finished writing before it handed the slot over, so a non-zero count would mean
+  the exchange itself is broken rather than a rate to accept.
+- *The pose, held to the previous DLL directly*: on `selbox-slope` (three ARMSTUMPs on a hillside,
+  real bank and pitch in the angle triple) the three units' `in`/`out` CRC pairs are
+  **identical in both builds** — `42db193f`/`76a8ee95`, `65210a9c`/`22fc162a`,
+  `40efe2fd`/`95f837bd` — and so is the whole `native:` counter line. The matrices, the shade
+  rows and the visibility words the pass hands the GPU are byte-for-byte what they were.
+- *Two level cycles in one process*, three levels in all (`gen` 0 → 1 → 2): the level-end packet
+  at each teardown (`packet: level end -> gen N: in_game=0 published`), the loader thread entering
+  three times and leaving before each level's first in-play packet, the command epoch bumped with
+  the generation, **0 violations in the whole log**, and the new level's tables sized to the new
+  map (`anchors=1747(350x362)` on one, `842(532x201)` on the next).
+- *Cost*. The publish is **p50 70 µs, p99 322 µs** at 354 units / 5 443 pieces / 35 wrecks /
+  760 anchors, against landing 2's 2 µs for a header-only packet; the command apply is unchanged at
+  p50/p99 **2 µs**. Two thirds of that first figure was the feature-grid scan (168 µs of 200 before
+  it was cached per tick — 465 × 273 = 126 945 cells at the zoom floor), which now runs **735 times
+  against 4 567 reuses** over one interval. Under `stress` the publish is p50 136 / p99 324 µs.
+- *Pixel A/B against landing 2's DLL* (`4b84098`), 1920×1080, `--maxfps 0`, the play defaults, the
+  world viewport only, the animating cursor sprite's rect excluded as `uiwalk` excludes it:
+
+  | fixture | what it exercises | noise floor | this DLL vs `4b84098` |
+  |---|---|---|---|
+  | `selbox-facings` | three tanks on the flat, the posed unit path | 0 within a launch | **0** |
+  | `selbox-slope` | three tanks on a hillside, real bank and pitch in the angle triple | 0 within a launch, 26 across two | **0** |
+  | `one-wreck` | the wreck table's own path | 0 | **0** |
+  | `hires-vehicle-slope` | the glTF replacement pass | 0 | **0** |
+  | `hires-wreck` | the replacement pass over a husk | 780 (the fixture animates) | 780 — exactly the floor |
+  | `feat-forest` | the anchor table, a forest and a walking commander | 512 (the commander) | 561 |
+
+  **Two harness traps cost a round of wrong numbers each, and both are worth writing down.**
+
+  *A parity capture must wait for `restoreglsl: terr: done`, not for a fixed settle.* With several
+  instances sharing the GPU the Classic++ restore does not finish in 30 s, and two mixed frames —
+  part indexed art, part restored — differ by tens of thousands of pixels for a reason that has
+  nothing to do with the build. One such pair read **71 558**. The ta-drive skill has said this
+  since G14e; the first cut of this sweep did not do it.
+
+  *And the cursor sprite must be masked from where the ENGINE has it, not from where you parked
+  it.* `scenario load`'s `center_on` leaves the pointer on the anchor, and an injected `mouse:`
+  does not always survive the engine's own polls: in one pair the new build's cursor sat at
+  (60,1000) where it was put and the reference's at (950,529), the screen centre. That is a 21×23
+  animated sprite in two different places — **195 pixels**, all of it the cursor, and 0 once both
+  rects are masked. Read `[0x51FBD0]+0x1B6`/`+0x1BA` per instance rather than assuming.
+
+  What is left after both is the fixture's own floor: **26 pixels** across two launches of this
+  DLL, three clusters of single-channel ±1 on the three tanks — the same unit type, so the same
+  atlas texels three times over. It is the Classic++ restored unit-atlas twin, whose lazy restore
+  is time-sliced against a GPU budget: with `classicpp` off the two builds agree to **1 pixel**,
+  the pose CRC join says the matrices, shade rows and visibility words are byte-identical, and the
+  `native:` counter line is identical.
+
+- *The rule*: the allow-list is **36 files**, down from 40, with `tagpu_mark.c`, `tagpu_overlay.c`,
+  `tagpu_lerp.c` and `tagpu_hires.c` off it entirely and four more re-classed from `to-convert:3`
+  to `fenced`; a planted `0x00511DE8` in `tagpu_mark.c` fails `make`.
 
 ## 3. Known limits — what is still wrong, and what closing it needs
 
