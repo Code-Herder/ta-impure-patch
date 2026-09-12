@@ -187,44 +187,59 @@ static void surf_drop_offscreens(unsigned keepBase)
    about it, and the entry stands for ever. A filter would have been
    load-bearing, not an optimisation.
 
+   THE DRAIN ONLY EVER READS A QUIESCENT RING. A producer claims a slot with
+   `s_freeqN`, stores into it, and only THEN bumps `s_freeqIn`; the consumer
+   reads `s_freeqIn` first and `s_freeqN` second, so any push still in flight
+   makes the two disagree and it does not read the window at all. That is what
+   makes the slots trustworthy: every index in [done, head) was stored by its
+   own claimant, so no stale value from an earlier lap can be read as a live
+   one. (The third review found exactly that hole in the version before this:
+   a flush skipped slots without clearing them, so a stale pointer survived a
+   lap and was taken as real while the pointer that should have been there was
+   written after the consumer had moved past. The zero-on-take below is kept as
+   an assertion — a 0 now means a bug — and is NOT the argument.)
+
    EVERY WAY THIS RING CAN LOSE AN ENTRY ENDS IN THE SAME PLACE: retire the
    WHOLE table and let the surfaces re-register from the engine's own draws.
-   That is the bound, and MEASURED 2026-09-12 it is also cheap and rare: three
-   flushes in a session, ALL of them between flip 156 500 and 237 073 — the
-   level load, where the loader thread frees in bulk — and none at all in the
-   157 000 flips of play that followed. A flush costs what a GL context change
-   already costs, a re-seed of the surfaces still being drawn into; a surface
-   that is not drawn into again simply re-registers when it is, because
-   `surf_of_ctx` runs on every blit.
-     - a producer that has claimed a slot but not yet stored into it: the slot
-       reads 0, because the consumer zeroes each slot as it takes it. 0 means
-       "someone is mid-push", which is exactly a value we cannot act on.
-     - a producer that laps the consumer mid-walk: the head is re-read after
-       the walk and compared against where the walk started.
-     - more than FREEQ pushed between two flips: the count says so up front.
-   A torn or stale slot that we DO act on can only retire a surface that is
-   still alive, which costs a re-seed; the dangerous direction — failing to
-   retire a dead one — is what the three arms above cover. */
+   The three ways are a push in flight, more than FREEQ claimed since the last
+   drain, and a producer lapping the window while we walk it (the head is
+   re-read against where the walk STARTED, which is the comparison that catches
+   a claim at index >= from + FREEQ).
+
+   WHAT IT COSTS, MEASURED 2026-09-12 over a load and four minutes of play:
+   33 842 off-thread frees, EVERY ONE of them during the level load — the
+   loader thread, created at 0x4982CA — and not one in the 236 000 flips of
+   play that followed. Three flushes, all in the load. So in play this
+   mechanism is inert, and its cost is three re-seeds while a map is loading.
+   That is also why the ring exists rather than "any off-thread free flushes":
+   at 33 842 frees spread over a load, an unconditional flush would re-seed
+   every surface on most of the load's flips. */
 #define FREEQ 256
 static volatile LONG s_freeqN;                  /* claimed, ever — any thread   */
+static volatile LONG s_freeqIn;                 /* STORED, ever — any thread    */
 static LONG          s_freeqDone;               /* taken, ever — game thread    */
-static volatile LONG s_freeq[FREEQ];            /* 0 = claimed but not stored   */
+static volatile LONG s_freeq[FREEQ];            /* 0 = taken; see the assertion  */
 static unsigned      s_freeqFlush;              /* times the table was flushed  */
 
 static void surf_free_offthread(unsigned p)
 {
-    LONG n = InterlockedIncrement(&s_freeqN) - 1;
+    LONG n = InterlockedIncrement(&s_freeqN) - 1;   /* claim */
     InterlockedExchange(&s_freeq[n & (FREEQ - 1)], (LONG)p);
+    InterlockedIncrement(&s_freeqIn);               /* and only now is it there */
 }
 
 static void surf_drain_freeq(void)              /* game thread only */
 {
+    /* STORED BEFORE CLAIMED, in that order: a push that completes between the
+       two reads makes them disagree, which is the conservative answer. */
+    LONG in   = InterlockedExchangeAdd(&s_freeqIn, 0);
     LONG head = InterlockedExchangeAdd(&s_freeqN, 0);
     LONG from = s_freeqDone;
     int flush = 0;
 
     if (head == from) return;
-    if (head - from > FREEQ) flush = 1;          /* more than the ring holds */
+    if (in != head) flush = 1;                   /* a push is in flight */
+    else if (head - from > FREEQ) flush = 1;     /* more than the ring holds */
     else {
         LONG k;
         for (k = from; k != head; k++) {
