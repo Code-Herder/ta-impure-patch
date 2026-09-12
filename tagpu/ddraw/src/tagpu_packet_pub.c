@@ -1354,21 +1354,29 @@ static unsigned char s_mmRg[TAGPU_PK_MM_DIMCAP * TAGPU_PK_MM_DIMCAP * 3];
 /* the level's picture: what was sent, for the heartbeat. The bytes are the GL
    UI observer's — see fill_gui — and are copied straight out of it. */
 static int s_mmPicW, s_mmPicH, s_mmPicGen = -1;
+static unsigned s_mmPicSrcGen;       /* the decoder's generation we last sent */
 /* the picture rides in ONE packet per level; this says it already has */
 static int s_mmPicSent;
 static volatile unsigned s_cMmCopies, s_cMmRefused, s_cMmPic;
 static volatile int s_lastMmW, s_lastMmH;
 
+/* The three values the render half's `cursor_rect` used to take live out of the
+   graphics globals, in exactly its shape: an unreadable globals block is
+   (-1, -1, 0, 0) — no rect, erase nothing — and a readable one with an
+   unreadable sprite record is the position with the 64x64 fallback size. The
+   out-of-game packet zeroes the header and never reaches here, so the consumer
+   also treats a zero size as "no cursor state this frame". */
 static void fill_cursor(TAGPU_PACKET* p)
 {
     const char* g = *(const char* const*)TA_GFX_PP;
     const unsigned short* rec;
-    p->cur_w = 64; p->cur_h = 64;
+    p->cur_pos[0] = -1; p->cur_pos[1] = -1;
+    p->cur_w = 0; p->cur_h = 0;
     if (!ptr_ok(g)) return;
     p->cur_pos[0] = RD32(g, GFX_CUR_X);
     p->cur_pos[1] = RD32(g, GFX_CUR_Y);
     rec = *(const unsigned short* const*)(g + GFX_CUR_REC);
-    if (!ptr_ok(rec)) return;
+    if (!ptr_ok(rec)) { p->cur_w = 64; p->cur_h = 64; return; }
     /* the record IS a GAF frame header, so its first two u16 are the size the
        render half read out of it; the frame itself crosses as a key */
     p->cur_rec = (unsigned)(size_t)rec;
@@ -1401,8 +1409,15 @@ static unsigned fill_gui(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        complete before any in-play publish can run. That is the same ordering
        the whole exchange's level story rests on. */
     if (!s_mmPicSent && s_mmPicGen != (int)p->level_gen) {
-        const unsigned char* pic; int w, h; unsigned gen;
-        if (tagpu_gui_minimap_pic_game(&pic, &w, &h, &gen) &&
+        const unsigned char* pic; int w, h; unsigned gen = 0;
+        /* THE DECODER'S OWN GENERATION IS THE FRESHNESS TEST, not the level's.
+           `tagpu_gui_minimap_pic_game` hands back the last picture it decoded
+           SUCCESSFULLY, whatever level that was, so a level whose decode failed
+           would otherwise put the PREVIOUS map's minimap in this level's first
+           packet — a picture of the wrong world, which is worse than none. An
+           unchanged generation means this level produced no picture, and the
+           consumer then keeps drawing the engine's own minimap. */
+        if (tagpu_gui_minimap_pic_game(&pic, &w, &h, &gen) && gen != s_mmPicSrcGen &&
             w > 0 && h > 0 && w <= TAGPU_PK_MM_DIMCAP && h <= TAGPU_PK_MM_DIMCAP) {
             p->mmpic_w = w; p->mmpic_h = h;
             e = append_area(p, cursor, pic, (unsigned)w * (unsigned)h,
@@ -1410,6 +1425,7 @@ static unsigned fill_gui(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             if (e > need) need = e;
             if (p->mmpic_len) {                  /* it landed: no later packet carries it */
                 s_mmPicSent = 1; s_mmPicGen = (int)p->level_gen;
+                s_mmPicSrcGen = gen;
                 s_mmPicW = w; s_mmPicH = h; s_cMmPic++;
             } else {
                 p->mmpic_w = p->mmpic_h = 0;     /* it did not fit: the next packet tries */

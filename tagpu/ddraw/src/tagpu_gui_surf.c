@@ -1227,11 +1227,16 @@ static void upload_palette(void)
    every consumer below declines. */
 static void cursor_rect(const TAGPU_PACKET* pk, float* r)
 {
-    r[0] = r[1] = -1.0f; r[2] = 64.0f; r[3] = 64.0f;
-    if (!pk) return;
+    /* (-1, -1, 0, 0) is "no rect": no packet, or a packet whose publisher could
+       not read the graphics globals, or the out-of-game packet — which zeroes
+       the header, so a zero SIZE is the test rather than a zero position. The
+       old live read had exactly these three outcomes. */
+    r[0] = r[1] = -1.0f; r[2] = r[3] = 0.0f;
+    if (!pk || pk->cur_w <= 0 || pk->cur_h <= 0) return;
     r[0] = (float)pk->cur_pos[0];
     r[1] = (float)pk->cur_pos[1];
-    if (pk->cur_w > 0 && pk->cur_h > 0) { r[2] = (float)pk->cur_w; r[3] = (float)pk->cur_h; }
+    r[2] = (float)pk->cur_w;
+    r[3] = (float)pk->cur_h;
 }
 
 /* ------------------------------------------------------------- the cursor */
