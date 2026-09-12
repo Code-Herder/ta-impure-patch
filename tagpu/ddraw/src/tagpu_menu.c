@@ -665,18 +665,41 @@ static int gput(char* b, int cap, int at, const char* fmt, ...)
 /* `commonattribs` is a field the .GUI parser reads and the stock screens use
    non-zero values of (VISUALS.GUI's own labels carry 104, its BSHADOWS 109), so
    a screen we re-emit has to carry it through rather than assume 0. Every
-   RENDER.GUI call site passes 0, which is what it always wrote. */
-static int common(char* b, int cap, int at, int id, const char* name,
+   RENDER.GUI call site passes 0, which is what it always wrote.
+
+   `assoc` IS THE SAME KIND OF FIELD AND WE GOT IT WRONG UNTIL 2026-09-11, with
+   a symptom nobody would trace back to a re-emitted file: on the front-end
+   screen the SCREEN SIZE arrows moved the GAMMA slider.
+
+   `assoc` is a group id (`gadget+0x01`), and for a slider it is the binding to
+   everything that drives or displays it. The scroll arrows are not in the file
+   at all -- `GUI_StageUpdateDraw` synthesizes two unnamed `id=1` buttons per
+   slider at load (`0x4A8663..0x4A8979`) and COPIES THE SLIDER'S `assoc` into
+   them -- and the arrow's click handler then finds its slider by a linear scan
+   from record 1:
+
+       4a6fa4:  mov   cl,[ebp+0x01]       ; the arrow's assoc
+       4a6fc0:  cmp   BYTE PTR [eax],0x4  ; an id=4 slider?
+       4a6fc5:  cmp   BYTE PTR [eax+1],cl ; with my assoc?
+       4a6fc8:  je    0x4a6fd6            ; -> mine. FIRST match wins.
+
+   The stock VISUALS.GUI gives VIDSLDR, VIDVAL and VIDTEXT `assoc=243` and
+   leaves GAMMA at 0. Writing `assoc=0` for everything made both sliders match
+   every arrow, and the scan stops at the first one -- GAMMA, which we emit
+   first. Nothing faults (a scan that matches nothing falls back to gadget 0 at
+   `0x4A6FD4`), the wrong slider simply moves. So the field is carried through
+   from the stock file like every other one. */
+static int common(char* b, int cap, int at, int id, int assoc, const char* name,
                   int x, int y, int w, int h, int attribs, int colorf, int cattr)
 {
     at = gput(b, cap, at,
         "\t[COMMON]\r\n\t\t{\r\n"
-        "\t\tid=%d;\r\n\t\tassoc=0;\r\n\t\tname=%s;\r\n"
+        "\t\tid=%d;\r\n\t\tassoc=%d;\r\n\t\tname=%s;\r\n"
         "\t\txpos=%d;\r\n\t\typos=%d;\r\n\t\twidth=%d;\r\n\t\theight=%d;\r\n"
         "\t\tattribs=%d;\r\n\t\tcolorf=%d;\r\n\t\tcolorb=0;\r\n"
         "\t\ttexturenumber=0;\r\n\t\tfontnumber=0;\r\n\t\tactive=1;\r\n"
         "\t\tcommonattribs=%d;\r\n\t\thelp=;\r\n\t\t}\r\n",
-        id, name, x, y, w, h, attribs, colorf, cattr);
+        id, assoc, name, x, y, w, h, attribs, colorf, cattr);
     return at;
 }
 
@@ -685,7 +708,7 @@ static int build_gui(char* b, int cap, int rows)
     int at = 0, i;
 
     at = gput(b, cap, at, "[GADGET0]\r\n\t{\r\n");
-    at = common(b, cap, at, 0, "RENDER", 0, BAR_H, PANEL_W, PANEL_H, 0, 0, 0);
+    at = common(b, cap, at, 0, 0, "RENDER", 0, BAR_H, PANEL_W, PANEL_H, 0, 0, 0);
     at = gput(b, cap, at,
         "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
@@ -694,13 +717,13 @@ static int build_gui(char* b, int cap, int rows)
 
     /* the ground: an id=12 whose NAME is the GAF frame, over the whole panel */
     at = gput(b, cap, at, "[GADGET1]\r\n\t{\r\n");
-    at = common(b, cap, at, 12, ART_NAME, 0, 0, PANEL_W, PANEL_H, 0, 15, 0);
+    at = common(b, cap, at, 12, 0, ART_NAME, 0, 0, PANEL_W, PANEL_H, 0, 15, 0);
     at = gput(b, cap, at, "\t}\r\n");
 
     /* the caption. tools/guipanel.py rules the panel at DIV_TOP = 30 and the
        band above it is the title's -- an empty one is just a bare rule. */
     at = gput(b, cap, at, "[GADGET2]\r\n\t{\r\n");
-    at = common(b, cap, at, 5, "TITLE", LBL_X, TITLE_Y, TITLE_W, 18, 1, 15, 0);
+    at = common(b, cap, at, 5, 0, "TITLE", LBL_X, TITLE_Y, TITLE_W, 18, 1, 15, 0);
     at = gput(b, cap, at, "\ttext=%s;\r\n\t}\r\n", "Render options");
 
     for (i = 0; i < rows; i++) {
@@ -708,11 +731,11 @@ static int build_gui(char* b, int cap, int rows)
         /* the label, BESIDE its control -- every stock runtime screen puts it
            16 px above, which six rows have no room for (gui-gadgets.md 10.3) */
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 3);
-        at = common(b, cap, at, 5, "TEXT", LBL_X, y, LBL_W, ROW_H, 1, 15, 0);
+        at = common(b, cap, at, 5, 0, "TEXT", LBL_X, y, LBL_W, ROW_H, 1, 15, 0);
         at = gput(b, cap, at, "\ttext=%s;\r\n\t}\r\n", s_row[i].label);
 
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", i * 2 + 4);
-        at = common(b, cap, at, 1, s_row[i].name, CTL_X, y, CTL_W, ROW_H, 1, 15, 0);
+        at = common(b, cap, at, 1, 0, s_row[i].name, CTL_X, y, CTL_W, ROW_H, 1, 15, 0);
         at = gput(b, cap, at,
             "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
             s_row[i].text, s_row[i].stages);
@@ -1387,7 +1410,7 @@ static const unsigned char VIS_BUILD_STOLEN[7] =
 #define VIS_STOCK_N   11
 
 typedef struct {
-    int         id, x, y, w, h, attribs, colorf, cattr;
+    int         id, assoc, x, y, w, h, attribs, colorf, cattr;
     const char* name;
     const char* text;           /* label/button caption, or NULL           */
     int         a, b;           /* button: quickkey, stages. slider: range, thick */
@@ -1405,18 +1428,20 @@ typedef struct {
    Each caption keeps its own offset from its control, which is how the stock
    file centres them over unequal widths. */
 static const VisStock s_visStock[VIS_STOCK_N] = {
-    /* id    x    y    w   h  att  cf  ca   name        text            a    b   */
-    { 1, 208, 237, 120, 20,  1,  0,   0, "SHADING",  "Off|On",       79, 2 },
-    { 1, 208, 305, 120, 20,  1,  0,   0, "ANTI",     "Off|On",      102, 2 },
-    { 4, 208, 101, 122, 16,  1,  4,   0, "GAMMA",    NULL,          114, 20 },
-    { 5, 212,  80, 118, 14, 18, 15,   0, "TEXT",     "Gamma",         0, 0 },
-    { 4, 208, 180, 121, 16,  1,  4,   0, "VIDSLDR",  NULL,          114, 26 },
-    { 5, 211, 164, 118, 13, 18, 15,   0, "VIDVAL",   "640x480",       0, 0 },
-    { 5, 207, 148, 122, 14, 18, 15,   0, "VIDTEXT",  "Screen Size",   0, 0 },
-    { 1, 208, 373, 120, 20,  1,  0, 109, "BSHADOWS", "Off|On",      124, 2 },
-    { 5, 209, 352, 118, 18, 18, 15, 104, "TEXT",     "Shadows",       0, 0 },
-    { 5, 206, 284, 120, 17, 18, 15, 104, "TEXT",     "Anti-aliasing", 0, 0 },
-    { 5, 204, 216, 123, 17, 18, 15, 104, "TEXT",     "Shading",       0, 0 },
+    /* id  asc    x    y    w   h  att  cf  ca   name        text            a    b   */
+    { 1,   0, 208, 237, 120, 20,  1,  0,   0, "SHADING",  "Off|On",       79, 2 },
+    { 1,   0, 208, 305, 120, 20,  1,  0,   0, "ANTI",     "Off|On",      102, 2 },
+    { 4,   0, 208, 101, 122, 16,  1,  4,   0, "GAMMA",    NULL,          114, 20 },
+    { 5,   0, 212,  80, 118, 14, 18, 15,   0, "TEXT",     "Gamma",         0, 0 },
+    /* 243 is the stock group id, and it is what binds the synthesized scroll
+       arrows to THIS slider rather than to GAMMA -- see `common` above. */
+    { 4, 243, 208, 180, 121, 16,  1,  4,   0, "VIDSLDR",  NULL,          114, 26 },
+    { 5, 243, 211, 164, 118, 13, 18, 15,   0, "VIDVAL",   "640x480",       0, 0 },
+    { 5, 243, 207, 148, 122, 14, 18, 15,   0, "VIDTEXT",  "Screen Size",   0, 0 },
+    { 1,   0, 208, 373, 120, 20,  1,  0, 109, "BSHADOWS", "Off|On",      124, 2 },
+    { 5,   0, 209, 352, 118, 18, 18, 15, 104, "TEXT",     "Shadows",       0, 0 },
+    { 5,   0, 206, 284, 120, 17, 18, 15, 104, "TEXT",     "Anti-aliasing", 0, 0 },
+    { 5,   0, 204, 216, 123, 17, 18, 15, 104, "TEXT",     "Shading",       0, 0 },
 };
 
 static int build_visuals_gui(char* b, int cap, int rows)
@@ -1424,7 +1449,7 @@ static int build_visuals_gui(char* b, int cap, int rows)
     int at = 0, i, g = 1;
 
     at = gput(b, cap, at, "[GADGET0]\r\n\t{\r\n");
-    at = common(b, cap, at, 0, "visuals.GUI", 0, 0, 639, 480, 0, 0, 1);
+    at = common(b, cap, at, 0, 0, "visuals.GUI", 0, 0, 639, 480, 0, 0, 1);
     at = gput(b, cap, at,
         "\ttotalgadgets=%d;\r\n"
         "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
@@ -1434,7 +1459,7 @@ static int build_visuals_gui(char* b, int cap, int rows)
     for (i = 0; i < VIS_STOCK_N; i++) {
         const VisStock* s = &s_visStock[i];
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
-        at = common(b, cap, at, s->id, s->name, s->x, s->y, s->w, s->h,
+        at = common(b, cap, at, s->id, s->assoc, s->name, s->x, s->y, s->w, s->h,
                     s->attribs, s->colorf, s->cattr);
         if (s->id == 1)
             at = gput(b, cap, at, "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=%d;\r\n"
@@ -1449,17 +1474,17 @@ static int build_visuals_gui(char* b, int cap, int rows)
 
     /* our column's heading, set in the same face the stock captions use */
     at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
-    at = common(b, cap, at, 5, "TEXT", VIS_COL_X, VIS_Y0 - 24, VIS_W, VIS_LBL_H, 18, 15, 104);
+    at = common(b, cap, at, 5, 0, "TEXT", VIS_COL_X, VIS_Y0 - 24, VIS_W, VIS_LBL_H, 18, 15, 104);
     at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", "Impure rendering");
 
     for (i = 0; i < rows; i++) {
         int y = VIS_Y0 + VIS_PITCH * i;
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
-        at = common(b, cap, at, 5, "TEXT", VIS_COL_X, y, VIS_W, VIS_LBL_H, 18, 15, 104);
+        at = common(b, cap, at, 5, 0, "TEXT", VIS_COL_X, y, VIS_W, VIS_LBL_H, 18, 15, 104);
         at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", s_row[i].label);
 
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
-        at = common(b, cap, at, 1, s_row[i].name, VIS_COL_X, y + VIS_CTL_DY,
+        at = common(b, cap, at, 1, 0, s_row[i].name, VIS_COL_X, y + VIS_CTL_DY,
                     VIS_W, ROW_H, 1, 0, 0);
         at = gput(b, cap, at, "\tstatus=0;\r\n\ttext=%s;\r\n\tquickkey=0;\r\n"
                               "\tgrayedout=0;\r\n\tstages=%d;\r\n\t}\r\n",
