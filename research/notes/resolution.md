@@ -358,9 +358,54 @@ side-indexed sequences — top bar `*(main+0x1481F + side*4)` at
 x = frame.XPos+0x81, bottom bar `*(main+0x14833 + side*4)` at
 y = frame.YPos + **GetTA_ScreenHeight() − 0x20** (anchored to the real screen
 bottom), side panel `*(main+0x14847 + side*4)` at its own hotspot. So the
-bottom bar tracks the mode; the panel art itself is fixed-size GAF frames —
-how the art covers ≥1024-wide bars is an asset question, not engine code
-[INFERRED — verify live at a wide mode].
+bottom bar tracks the mode; the panel art itself is fixed-size GAF frames.
+
+**Three straight-line blits, no loop** [BINARY-VERIFIED 2026-09-11]: `0x467DC8`,
+`0x467DFD`, `0x467E2B` each fetch a frame (`0x4B7F30`) and each blit it once
+(`0x4B7F90`). Whatever covers a wide bar, it is not a tiling loop in this
+function.
+
+### 3.4a How the HUD actually covers a wide screen [MEASURED 2026-09-11]
+
+The `[INFERRED — verify live at a wide mode]` that stood here is closed. Three
+skirmishes on the same map, the engine's own surface read with `tacli shot` at
+**800×600, 1920×1080 and 3840×2160**:
+
+| | result |
+|---|---|
+| bar content reaches | x = 799, 1919 and **3839** — the full width every time, **no garbage strip** |
+| first 200 bar columns, left-aligned, 800 vs 1920 | **200 / 200 identical** (and 300/300 for 1920 vs 3840) |
+| last 200 bar columns, right-aligned, 800 vs 1920 | **0 / 200 identical** |
+| bottom-bar seams, 1920 | x = 298, 467, 811, 980, 1324, 1493, 1837 — 169 and 344 alternating, a ~513 px repeat |
+| whole-bar comparison under proportional stretch | 2 / 671 columns — **not stretched** |
+
+So the bars are **left-anchored and repeat to any width, with nothing anchored to
+the right edge**. (An ornament lands near the right edge at more than one width;
+it is the repeat arriving there, not a right-anchored element — the right-aligned
+comparison is what tells them apart.)
+
+**The side panel is a fixed 128×480 block, top-anchored, and it does not
+stretch.** Its content occupies rows 0..479 at *every* surface measured — 480
+rows at 600, at 1080 and at 2160 — leaving 120, 600 and **1680** dead rows of
+strip below it. `ARMPAN`/`CORPAN` in `anims/commongui.gaf` is 128×352; the rest
+of the block is the screen's own gadgets.
+
+Two consequences for anything that wants a larger HUD: the panel can be
+magnified about its top-left corner with no slicing, and the scale has a hard
+ceiling of **`s ≤ H / 480`** — which is exactly 1.0 at 640×480 and lands on
+20 % of the width for any 4:3 surface, 1997's own figure. See
+[GUI renderer](gui-renderer.html) §20.
+
+### 3.4b A 3840×2160 engine surface runs [MEASURED 2026-09-11]
+
+Recorded because §7 lists it as untested. At that surface `devres` does not
+engage and `ss` stays 2, so the supersampled target is **7680×4320** — and it
+allocated: `native: FBO 3840x2160 ss=2 status=8cd5/8cd5`, both framebuffers
+`GL_FRAMEBUFFER_COMPLETE` (the line prints `w×h` with `ss` separate; the texture
+is `w·ss × h·ss`). The composited frame carries 13 654 distinct colours over the
+world with no black and no un-keyed cyan. **On this GPU only** — the
+`s_devresFailed` latch still only stands `devres` down, and the resolve path has
+no fallback if a driver refuses the allocation.
 
 ---
 

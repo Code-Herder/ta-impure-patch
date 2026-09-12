@@ -2547,3 +2547,76 @@ refusal counts in `noeng=`.
 - **`+0x142E3` and `+0x142DF` are read on the render thread while the game thread may be
   rewriting them** — the same standing as the fork's own surface upload. The worst a torn read
   does is put one frame's fog against another's.
+
+---
+
+## 20. HUD scale — the HUD bigger, the map kept  [DECIDED 2026-09-11]
+
+*The third interview. §13 settled how the UI is drawn at a scale; this settles what the
+player's **UI scale** row means, which turned out to be a different question with a different
+answer. Nothing here changes phase 1 or phase 2; it is additive and is an identity at `s = 1`.*
+
+### 20.1 The ask, and why the obvious reading of it was wrong
+
+The row's ask, in the owner's words: *"if I set UI scale to 50%, in the game the behavior is
+that it's 50% larger than it would be by default in the original renderer at that resolution"*
+— and the scale is **relative to the Screen Size the player picked**.
+
+The obvious reading, and the one four options were drawn around, is that the surface shrinks:
+`surface = monitor ÷ k`, so everything grows together. That ladder is real and it works, but it
+buys a bigger HUD by spending map, one for one, and it **cannot reach the HUD size the game was
+designed around**. TA's panel is a hard 128 logical px (`0x4981C9`, an immediate), so at
+640×480 it was 20 % of the screen; the best rung of a monitor÷k ladder on a 4K screen is a
+13.3 % panel with 1.63× the 1997 map across.
+
+What the ask actually describes is the HUD scaling **within** the chosen grid — so Screen Size
+and UI scale are independent dials, not two names for one number. Measured against the ladder,
+at the ceiling: **15 % panel and 6.38× the map, against 13.3 % and 1.63×.** Better on both
+axes at once, which is only true because of §3.4a's measurement.
+
+### 20.2 The six decisions
+
+| | decision | why this and not the alternative |
+|---|---|---|
+| **Space** | The engine reserves it. `0x4981C9..0x498237` computes its rect from `s`: left `128s`, top `32s`, bottom `H−32s−1`. | The alternative is to overlay the HUD over a full-size world. The engine would then still believe the world viewport is full size, so edge scroll, the unit-under-pointer probe at `main+0x2CBA` and drag-selection would all reason about pixels the player cannot see — a unit hoverable but invisible. Reserving makes every clamp right by construction. |
+| **Pixels** | We magnify what the engine drew. The HUD regions of the twin are scaled by `s` at composite; the pointer is divided by `s` inside them. | **128 is not one constant.** `0x467D70` positions at `HotX+0x81`; `DrawGameScreen`'s tail draws at `0x81`, `0x82`, `0x83`, `0xBC`, `0x1EE`. Re-laying the HUD out means patching a family whose size nobody knows, and a missed member is a misplaced element rather than a build error. Magnifying a *region* cannot be wrong about a constant nobody has found. |
+| **Scale** | `Auto = H / 480` — the panel fills the screen height. Percentages over stock override; stages past the ceiling grey out. | §3.4a: the panel block is 128×480 and does not stretch, so `H/480` is simultaneously the natural target and the hard ceiling. It is **exactly 1.0 at 640×480**, the shipped default, so an untouched install is unchanged. |
+| **Extent** | Panel, top bar and bottom bar all by the same `s`. | The top bar carries the resource readouts, the hardest thing to read at 4K. §3.4a rules out the complication: the bars are left-anchored tiling with nothing anchored right, so no nine-slice is needed. |
+| **Row** | "UI scale" becomes HUD scale, live in window **and** fullscreen. The window multiplier is dropped. | The existing row means `window = k × surface`, which is why it is greyed in fullscreen. One name cannot carry both. Dropping the multiplier costs the integer-window snap (an exact upscale landing on texel centres); the owner took that trade for one row instead of seven. |
+| **When** | At game entry, like the Screen Size row above it. | The rect is written once inside `0x497F40`, before the loader thread, and the SORT buffers are allocated from the dims it produces. |
+
+**The ceiling, by surface** — `s = H/480`, panel `= 128s`:
+
+| surface | s | panel | % of width |
+|---|---|---|---|
+| 640×480 | 1.00 | 128 | 20.0 % — identity |
+| 1024×768 | 1.60 | 205 | 20.0 % |
+| 1280×1024 | 2.13 | 273 | 21.3 % |
+| 1920×1080 | 2.25 | 288 | 15.0 % |
+| 3840×2160 | 4.50 | 576 | 15.0 % |
+
+15 % on a widescreen is not a shortfall against 20 %: a full-height panel is a smaller fraction
+of a wider screen. It is the same thing.
+
+### 20.3 The gate, and what is still open
+
+**At `s = 1` the frame is bit-identical** — the parity md5 must not move. The same rule §13.3
+holds for `k = 1`, and for the same reason: it is what makes the rest of the claim checkable.
+
+- **The HUD is bigger, not sharper.** It is 1× art magnified. §18's string op exists but stamps
+  glyphs **into the twin**, not into §13.2's device-res sharp layer, so text scales with
+  everything else. Moving its output to the sharp layer is the fix and is a separate piece.
+- **Not verified: that nothing sim-relevant derives from viewW/H.** The evidence is two-sided
+  and neither half is a proof. Every attributed reader is view-side — the camera cluster
+  (`0x41C3C0`, `0x41C4C0`, `0x41C7C0`, `0x41C8E0`, `0x41CA10`, `0x41D0F0`, `0x41D1F0`), the
+  terrain pass `0x483FA0`, LoadMap `0x483610`, the minimap box filler `0x466B70`, the map debug
+  overlay `0x418310`, and the eye-driving flyby `0x495A30`; and structurally, TA broadcasts each
+  player's own resolution (`PlayerInfo+0x8B/+0x8D`) and lets players in one game run different
+  ones, which a sim dependency on viewW/H could not survive.
+- **Our two notes disagree about `main+0x1423B/+0x1423F`.** [resolution](resolution.html) §3
+  calls them tile-view dims derived from viewW/H by `>>4`;
+  [exe map](exe-reverse-engineering.html) calls them map dimensions. A full-image scan finds
+  **thirteen reads and no write** at that displacement, so neither claim is confirmed by it and
+  the writer uses some other base. `main+0x14243/47/4B/4F`, which §3 lists alongside them, have
+  **no references at all**. Unresolved; it does not change 20.2's "when", because the rect and
+  the SORT buffers settle that on their own.

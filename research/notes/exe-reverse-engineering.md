@@ -2277,6 +2277,39 @@ cannot be prologue-detoured without relocating the call.
   HotY)`** (top bar), `(HotX+0x81, HotY+screenH−0x20)` (bottom bar), `(HotX, HotY)` (side
   panel); then `0x4C63A0()`.
 - The `LIGHTBAR` slide `0x45FFB0`: `0x4B8D40`, `0x4B7F30`, `0x4B7F90`, `0x47F1A0`.
+- **Three blits, no loop** [BINARY-VERIFIED 2026-09-11]. `0x467DC8`, `0x467DFD` and `0x467E2B`
+  each fetch one frame and each blit it once; there is no tiling loop in the function. How the
+  bars nevertheless cover a 3840-wide screen is measured in
+  [resolution](resolution.html) §3.4a — left-anchored, repeating, nothing anchored right.
+- **The in-game HUD's geometry is a family of absolute immediates, not one constant.** Anything
+  that wants to move the panel's edge has to reckon with all of them: `0x4981C9`'s `0x80`
+  (panel) and `0x20` (bars); this function's `+0x81` for both bars and
+  `screenH − 0x20` for the bottom one; and, in `DrawGameScreen`'s tail, x `0x81` (the `+bps`
+  lines), `0x82` (the `+clock` line), `0x83`, `0xBC`, `0x1EE` (the debug line). The list is not
+  known to be complete, which is why [GUI renderer](gui-renderer.html) §20 magnifies a region
+  rather than re-laying the HUD out.
+
+### Who reads the viewport dimensions `main+0x37E37`/`+0x37E3B` [MEASURED 2026-09-11]
+
+A full-image displacement scan, for §20's question of whether a changed viewport rect can reach
+the simulation. **Seventeen sites, twelve functions**, and every one that can be named is
+view-side:
+
+| function | what it is |
+|---|---|
+| `0x41C3C0`, `0x41C4C0`, `0x41C7C0`, `0x41C8E0`, `0x41CA10`, `0x41D0F0`, `0x41D1F0` | the camera / scroll cluster — `SetCamera`, smooth centre-on, the per-frame scroll, the minimap drag |
+| `0x483610` | LoadMap |
+| `0x483FA0` | the terrain pass |
+| `0x496EE0`, `0x497180` | game setup (`0x497180` folds the skirmish settings; it is `0x496EE0`'s only caller) |
+| `0x497CE0` | contains the write site itself — `0x498237` is the store, not a read |
+
+And `main+0x1423B`/`+0x1423F`: **thirteen reads, no write** at that displacement, from
+`0x4161F0` (which calls the flyby `0x495A30`), the map debug overlay `0x418310`, the minimap box
+filler `0x466B70`, `0x47F300` (called from the in-play frame handlers `0x499EB0`, `0x49B720`,
+`0x49C740`) and `0x495A30`. `main+0x14243`, `+0x14247`, `+0x1424B`, `+0x1424F` have **no
+references at all**, which is worth recording as a negative result:
+[resolution](resolution.html) §3 lists all six as LoadMap's derivations from viewW/H, and this
+scan neither confirms the writer nor finds a reader for four of them.
 
 ### The frame's HUD extras — what gates each, what it draws, where [VERIFIED 2026-09-07, Phase E G15c]
 
