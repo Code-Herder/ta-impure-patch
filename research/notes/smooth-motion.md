@@ -401,7 +401,28 @@ is the transferable part:
   wipe gives pause-then-jump-*forward* anyway. It was item 9. The hardening (monotonic playback,
   no wipe except on a real restart) is insurance, and the note says so rather than claiming a fix.
 
-### 7d. Option A, built — `tagpu_lerp.c` (2026-09-09)
+### 7j. The history became the frame packet — `tagpu_lerp.c` rewritten (2026-09-12)
+
+`[VERIFIED — the code is in the tree]` Landing 3 of the
+[frame packet exchange](frame-packet-exchange.html) put the units, their pieces and their poses
+into the packet the game thread publishes, and **the two packets the consumer holds are this
+module's history**. Everything 7d describes below the insertion point is gone with it. What
+replaced each part:
+
+| 7d's part | after landing 3 |
+|---|---|
+| the key `(Object3do, nparts, level generation)` | the **stable id** `unit+0xA8`, verified on `(o3_key, type_row, piece_n)`. The residual 7d named — two units of the same type on a recycled allocation — narrows to "a unit died and another took its id inside one tick, of the same type, on the same allocation"; the publisher's collision oracle (`dup=`) says the id is unique among the live units of one packet |
+| the 4096-record table, the probe, the 180-frame sweep | nothing. The pairing is an id → index array over the previous packet's units table, rebuilt per frame and cleared only over the ids it used |
+| the 3.4 MB arena, two banks, `LERP_BLOCK` 48 | nothing. The packet's two `PK_PIECE` runs ARE the two banks, so the 48-piece ceiling (and its `big=` counter) is gone and a 256-piece model interpolates |
+| the learned, smoothed tick period with its 4 ms floor | the two packets' own `tick_start` stamps, taken by the GAME thread the instant it first saw each tick — within one engine draw of the boundary, and the engine draws hundreds of times a second. `u = (now − read.tick_start) / (read.tick_start − prev.tick_start)`, refused outside 0.5..500 ms of span |
+| "a packet of the same tick may be `prev`" | impossible: the acquire's rotation keeps a third slot so that `prev` and `read` always carry two distinct ticks, and the `pair` callback gates on it as well |
+| the two field reads in `posed_pose` | unchanged in shape — `mv = pc[i].pos; tn = pc[i].turn;` and the same `if (lpos)` line. Invariant 2 is now literal in a stronger sense: this module holds no engine pointer at all, so "nothing is written back" is a property of the code rather than a rule to keep |
+
+The lever, the refusal-is-a-`return 0` rule, the TAang short way round and the fixed-point blend
+(7i) are all unchanged. `lerp=` on the `native:` line reads `lerp=<blended>/<snapped>
+span=<ms>ms u=<weight>` with `miss=<n>` when a unit had no partner in the previous packet.
+
+### 7d. Option A, built — `tagpu_lerp.c` (2026-09-09) — SUPERSEDED IN PART BY 7j
 
 `[VERIFIED — the code is in the tree]` The lever is **`tagpu_lerp.on`**, a file beside the exe,
 **off by default and absent from `tagpu_opt.c`'s play-default table**, so only that file arms it;

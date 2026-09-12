@@ -233,7 +233,11 @@ static void log_units(const TAGPU_FRAME* f)
     /* the eye the world was drawn with, from the packet: the roster's screen=
        is the 1x projection about it */
     eyeX = pk->eye[0]; eyeY = pk->eye[1];
-    me   = pk->local_player;
+    /* `me=` on the roster line is main+0x2A42, the order driver's player — the
+       byte this log has always printed, NOT the bar loop's main+0x2A43. The
+       packet carries both and they are written independently (the exe note's
+       marker-block section), so the wrong one would change what tacli reads. */
+    me   = pk->watched;
     gw = f->game_width  > 0 ? f->game_width  : 640;
     gh = f->game_height > 0 ? f->game_height : 480;
 

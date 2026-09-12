@@ -167,6 +167,10 @@ typedef struct TAGPU_PK_WRECK {
     uint16_t def;            /* the FeatureDef row of the anchor that named it  */
     uint16_t nparts, piece_n;
     uint16_t base_piece;
+    uint16_t col, row;       /* THE ANCHOR TILE, not the husk's own position: the
+                                unit pass decides which wrecks are in its rect by
+                                the tile, as the grid walk it replaced did, and
+                                only then culls by the projected anchor          */
     uint16_t pad;
 } TAGPU_PK_WRECK;
 

@@ -2669,6 +2669,45 @@ faster than the load. Nothing of ours may publish or apply outside the gate: the
 observer, which fires inside `BuildMinimapSurface 0x466780` on *this* thread (the "own thread"
 that note measured is the loader thread), goes with landing 4c.
 
+### What the frame packet's publisher copies, per in-play draw [VERIFIED 2026-09-12, landing 3]
+
+[This project — the offsets collected from the nine render-thread files landing 3 of the
+[frame packet exchange](frame-packet-exchange.html) converted, each already binary-verified where
+it was first used; the costs MEASURED the same day on `200v200`, Two Continents, 1920×1080,
+`--maxfps 0`, 298 published frames a second against a 60 Hz sim.]
+
+The publisher reads exactly this set, on the game thread, inside the `0x4969D2` gate. It is
+listed here because it is now **the whole census of what the world needs out of engine memory**:
+anything a render-thread pass wants that is not below has to be added here, on this thread, with
+its bound.
+
+| Where | Offsets | Bound applied, and by what |
+| --- | --- | --- |
+| the unit array | walked as `begin + i·0x118`, `i = 1 .. count−1`, `count = u16 main+0x14351` | the COUNT, never the `end` pointer — so the pair that was the audit's open hazard is not read at all. `end == begin + (count−1)·0x118` is asserted for the record (`relbad=`, 0 over every run) |
+| one unit record | `+0x64` rot triple, `+0x6A/+0x6E/+0x72` the 16.16 position, `+0x8A`/`+0x8E` the cargo chain, `+0x92` def, `+0x9E` Object3do, `+0xA6` ModelId, `+0xA8` the stable id, `+0xAC` the group tag (a DWORD, as `0x469C55` reads it), `+0xFF` owner, `+0x104` the build fraction, `+0x108` health, `+0x10E` cloak, `+0x110` state | the walk's own bound; `ModelId` is DROPPED unless `< UNITINFOCount`, the cargo links resolve to packet indices or −1 |
+| its UnitDef | `+0x20` UnitName (inline, lowercased into 16 bytes), `+0x1FA` MaxHitPoints, `+0x241` the FBI booleans | the pointer is turned into a ROW: it must lie in `main+0x1439B`, be a multiple of `0x249`, and be inside `UNITINFOCount` — otherwise the entry carries no def at all |
+| its Object3do | `+0x00` nparts, `+0x10` the composite GAFFrame (W/H/hot x/y at `+0x00..+0x06`, the depth plane at `+0x14` as a flag), `+0x18` the cached body turn, `+0x1E` the base PrimitiveStruct, `+0x22 + i·0x36` the pieces | `nparts` against `TAGPU_PBMAXPIECE`; the base prim becomes an INDEX and must be inside `nparts` |
+| one piece | `+0x00` the template node (crosses as a value the fence covers), `+0x04` the COB move, `+0x10` the COB turn, `+0x28` the flags | copied whole, `nparts` of them |
+| the feature grid | `main+0x14287`, `0x0D` per cell: `+0x04` height, `+0x08` def index, `+0x0A` wreck index, `+0x0C` flags | the rect is clamped to `main+0x14233`/`+0x14237`; a def index `≥ 0xFFFB` is not an anchor |
+| a wreck record | `main+0x1420B + idx·0x30`: `+0x04` Object3do, `+0x08/+0x0C/+0x10` the 16.16 position | reached only from an anchor whose FeatureDef row is inside `main+0x14253` and whose `FeatureMask` bit 0 is clear |
+| the frame's option bytes | `main+0x0DCB` the GUI colour array (64 of them), `+0x2C76`/`+0x2C7A` the dispatched mouse point, `+0x2C92..+0x2CA6` the build cursor's two corners, `+0x2CC3` the cursor mode, `+0x2CC6` the region flags, `+0x37F06` the option byte (damagebars, Shadow, TShadow, FShadow), `+0x1424B`/`+0x1424F` the feature sweep | none needed: they are values, and every consumer of them already treated them as such |
+| the shade table | `[0x51FBD0]+0xC4`, 32 × 256 bytes | the FORMAT is the bound: `0x459C70`'s Gouraud path indexes it with a 5-bit row and a byte, so a copy of exactly that size reads what the rasteriser reads |
+
+**What it costs, and the one thing that made it worth caching.** The whole publish is **p50 70 µs,
+p99 322 µs** at 354 units, 5443 pieces, 35 wrecks and 760 anchors. The anchor scan alone was **168
+of the first 200 µs**: the rect is the viewport at the zoom floor plus a margin, 465 × 273 cells
+here, and 126 945 `u16` loads is what that costs. The grid is SIM STATE — the def index, the flags
+nibble and the wreck index are written by the tick and by nothing else — so two publishes of one
+tick over one rect must produce the same table, and the second reuses the first. Measured over one
+interval: **735 scans against 4567 reuses**, which is the ratio 298 published frames a second
+against 60 ticks predicts.
+
+**Negative results.** No engine field is written by any of this. The `end` pointer is read once
+per publish for the assertion and never used as a bound. `main+0x1421F`, the screen fog
+descriptor, is deliberately NOT copied — it is landing 4b's, and the unit pass still reads it
+itself under the fence. Neither is `main+0x14287`'s height byte for any cell that does not anchor
+a feature: a unit's own ground height rides in its packet entry, and nothing else asked.
+
 ### The GUI is retained: `GUI_StageUpdateDraw 0x4A81E0` builds, `0x4AB0B0` blits [VERIFIED]
 
 **`0x4A81E0(GUIInfo* gi, int flags)`** — `stdcall`, `ret 8`; prologue

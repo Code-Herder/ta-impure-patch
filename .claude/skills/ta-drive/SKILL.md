@@ -552,6 +552,15 @@ Design, engine recipe and what the live runs corrected: `research/notes/scenario
   engine UI (menus, placement boxes). **Native GPU-rendered units are invisible here.**
 - `tacli glshot` — the GL framebuffer: what is actually presented, including our
   passes. Use this to judge our renderer.
+- **`tagpu_posedump.on` no longer reports `err=`** (landing 3). It dumped one unit's pose fields
+  and, beside them, the largest disagreement between our reconstruction and the ENGINE's posed
+  vertex buffer at `PrimitiveStruct+0x22` — a per-unit `Object3do` read on the render thread, which
+  is what the packet removed. The fields the dump exists for are unchanged and `tools/tacob
+  pose-check` is unaffected; what is gone is that column and the `v0..v2` lines.
+- **`tagpu_writeback.on` does nothing: the write-back is deleted** (landing 3). It rendered one
+  unit's posed 3DO into an FBO and wrote the pixels back into the engine's composite plane from
+  the render thread. The native pass has drawn units directly since Phase C, and a render-thread
+  store into engine memory is what the exchange exists to remove.
 - `tacli crash <name>` — the last crash TA recorded, **symbolised**. TA installs
   its own exception handler and writes `ErrorLog.txt` the instant it faults, so a
   crash is visible in milliseconds; `launch`, `wait` and `scenario apply/load` all
@@ -1015,7 +1024,11 @@ instead: `tacli arm <i> classicpp.on=off`.
   skip expires, ~90 frames), no command is applied (the engine keeps its own camera range, rect
   and scroll rate; `tagpu_eye.txt` and the wheel do nothing), and every string through
   `tagpu_text_place` draws nothing — the group digits, the `ShowRanges` labels and the FPS
-  readout. Read `packet: ARMED 4 slots x 8 MB reserved … commands: 4 slots x 64 KB …` and
+  readout. Read `packet: ARMED 5 slots x 8 MB reserved … (unit 100 B, piece 24 B, wreck 40 B,
+  anchor 16 B); commands: 4 slots x 64 KB …` — **five** frame slots since landing 3, because the
+  consumer holds three (READ, PREV and a SPARE) so the give-back can be tick-aware and `prev`
+  always carries a different sim tick from `read`; the command record's instance still holds
+  two — and
   `packet: publisher ARMED on DrawGameScreen 0x468CF0 … level-end packet by tagpu_reclaim's
   teardown post hook …` at launch (`… by our own observer on the teardown 0x491B60` under
   `reclaim.off`), then
@@ -1024,7 +1037,18 @@ instead: `tacli arm <i> classicpp.on=off`.
   seq=… tick=… tps=… speed=… paused=… in_game=… gen=… flags=… eye=… vp=… addr=… z=… pal=… gamma=…
   flips=… font=… fg=… trunc=… used=… | cmd: post=… take=… new=… overrun=… viol=… nocmd=… seq=…
   ack=… unacked=(dx,dy) z=… live=… hold=… | draws=… inplay=… draws/s=… inplay/s=… foreign=…
-  deep=… fontcopies=… levelend=reclaim|own|none vpapply=… vpwh=…`. **`viol`, `pviol`,
+  deep=… fontcopies=… levelend=reclaim|own|none vpapply=… vpwh=…`, with **two world segments
+  since landing 3**: in the packet segment `units=… pieces=… wrecks=… anchors=<n>(<cols>x<rows>)
+  dup=… pair=… same=…`, and at the very end `| world: u=… p=… w=… a=<anchors>/<cells scanned>
+  scan=<scans>/<reuses> dup=… trunc=<units>/<pieces>/<wrecks>/<anchors> relbad=… shd=…`.
+  **`dup` must read 0** — it is the stable-id collision oracle over one packet, and the pose blend
+  matches units across two packets by that id — and **`relbad` must read 0**: it counts draws on
+  which the engine's `end` pointer did not equal `begin + (count−1)·0x118`, the relation the exe
+  note records. `pair` is the frames that had a two-tick pair to blend over and `same` the
+  rotations that displaced READ because the tick had not moved; `scan=` says how many publishes
+  actually walked the feature grid (it is cached per tick, so at 300 published frames a second
+  against a 60 Hz sim expect roughly one scan in five). `trunc` past the first fill of each slot
+  is a fault; the first fill of each is the growth path doing its job. **`viol`, `pviol`,
   `crcbad`, `foreign` and `commitfail` must stay 0, on both exchanges, and so must `vpwh`**
   (in-play draws on which the viewport's W/H disagreed with the screen — the old race, now
   impossible by construction); `skip` is the FRESH gate doing its job (one

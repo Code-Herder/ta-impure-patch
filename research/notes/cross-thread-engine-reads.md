@@ -151,14 +151,14 @@ note's *per-map arrays* section.
 
 | Field | Written | Lifetime class | Fenced? | The reader's own bound |
 |---|---|---|---|---|
-| `main+0x14357`/`+0x1435B` unit array `begin`/`end` | `0x4854A0` at load, in **two stores** around a full memset; `0x485980` nulls `begin` only | per map | teardown yes, **load no** (§5) | `ptr_ok` both, `end > begin`, 20000-slot cap — a filter |
-| unit records (the slots themselves) | the sim, every tick | Mode B: a fixed array recycled in place | n/a | every value out of a slot is bounded before use — `ModelId` by `UNITINFOCount`, the shape [thread-safe destruction](thread-safe-destruction.md) §2 describes |
-| `Object3do` behind `unit+0x9E` | freed per death | Mode A | reclaim's first client | — |
-| model templates | freed by `0x42DB90` in the cascade | per map | reclaim's second client + the level-generation caches | — |
+| `main+0x14357`/`+0x1435B` unit array `begin`/`end` | `0x4854A0` at load, in **two stores** around a full memset; `0x485980` nulls `begin` only | per map | teardown yes, **load no** (§5) | **NOT READ ON THE RENDER THREAD since 2026-09-12 (landing 3): the source is the packet.** The publisher walks to the engine's own slot count instead of reading the pair at all |
+| unit records (the slots themselves) | the sim, every tick | Mode B: a fixed array recycled in place | n/a | **source after landing 3: the packet.** Every value out of a slot is still bounded before use, and now in ONE place — `ModelId` by `UNITINFOCount`, the cargo links to packet indices, the shape [thread-safe destruction](thread-safe-destruction.md) §2 describes |
+| `Object3do` behind `unit+0x9E` | freed per death | Mode A | reclaim's first client | **NOT READ ON THE RENDER THREAD since landing 3**: the piece poses, the body turn, the base piece and the composite's rect are copied by the game thread. The address crosses as an opaque cache key. This is what makes reclaim's deferral redundant *for the render thread's unit reads* — it still covers the model templates |
+| model templates | freed by `0x42DB90` in the cascade | per map | reclaim's second client + the level-generation caches | still read on the render thread, deliberately: the fence IS the argument, and landing 3 did not change it. The packet carries the per-piece template node and the `MODEL_PTRS` base and bound, so the reader no longer needs the main pointer to reach them |
 | `main+0x1421F` fog descriptor `{buf, cols, rows, cells}` | `LoadMap` once; the builder `0x4843C0` rewrites **cells** per draw | per map | yes | `cells == ((cols·rows + 7) & ~7)`, `ptr_ok`, dimension caps; a cell read under the builder is one frame of mixed fog, bounded by `cols·rows ≤ cells` |
-| `main+0x1428B` tile map, `+0x14287` feature map, `+0x14233`/`+0x14237` dims | `LoadMap`, dims before pointers | per map | yes | dims capped at 4096 / 2048 per reader |
+| `main+0x1428B` tile map, `+0x14287` feature map, `+0x14233`/`+0x14237` dims | `LoadMap`, dims before pointers | per map | yes | **the FEATURE map is not read on the render thread since landing 3** — its cells are per-TICK sim state, so the anchors of the widest zoom rect cross in the packet with the six height bytes the two height rules need. The tile map is the terrain pass's and unchanged; the dims come from the packet |
 | `main+0x14283` tile set `{count, pixels}` | `LoadMap` | per map | yes | `count ≤ MAX_TILES`, identity test before the megabyte probe |
-| `main+0x1420B` wreck records | one direct store, in the feature teardown the cascade reaches | per map | yes | index is the tile's own |
+| `main+0x1420B` wreck records | one direct store, in the feature teardown the cascade reaches | per map | yes | the index is the ANCHOR's now, and the anchor came out of the packet; the 3D husks' poses are copied by the publisher, so only the feature pass's GAF wreck still reads a record |
 | `main+0x141F7` projectile array, `+0x141F3` live count | array at load, **300 slots** of `0x6B`; count by the sim at 13 sites | array per map, count per tick (Mode B) | yes | `np ≤ 8192` — 27× the allocation; 300 would be exact |
 | `main+0x38D77` particle layer table; each layer's `{begin, end}`; each object's sub-vector | table at load; the vectors **grow mid-play**, freeing the old array (`0x4732E0`) | table per map; vectors Mode A | table yes, **vectors no** | `LAYER_CAP`, `ns ≤ 4096`, probes — filters only |
 | `main+0x142DB`/`+0x142DF`/`+0x142E3` minimap surfaces `{w, h, pitch, base}` | the minimap build at load; pixels repainted per draw | per map | yes | dims cross-checked across the three, pitches bounded — the shape to copy |
@@ -189,7 +189,7 @@ the reader.
 | # | Site | Verdict | Why |
 |---|---|---|---|
 | 1 | fog descriptor, captured once and held for the frame (`tagpu_native.c`, used by `tagpu_fog_at`) | **not a live hazard; the sweep's mechanism was wrong** | nothing resizes the grid between map loads: the descriptor is built once by `LoadMap`, freed only by the fenced cascade, and the builder rewrites cells only. Holding the pointer for a frame is fine because the frame is inside the pass the fence waits for |
-| 2 | unit array `begin`/`end` | **real, unfenced, alignment-independent** | the level-load skew, below |
+| 2 | unit array `begin`/`end` | **CLOSED 2026-09-12** by landing 3 of the [frame packet exchange](frame-packet-exchange.html) — it was real, unfenced and alignment-independent; the level-load skew is still described below because it is what had to be closed | no render-thread file reads the pair, or the array, or any Object3do. The game thread copies the units into the packet during an in-play draw, and its walk runs to the engine's own SLOT COUNT (`u16 main+0x14351`, stored *before* `begin`), so there is no pair to skew. The exact relation `end == begin + (count−1)·0x118` is asserted per publish for the record (`relbad=` on the heartbeat, 0 over every run) and bounds nothing |
 | 3 | particle layers and sub-vectors (`tagpu_sfx.c`) | real, already catalogued | the vectors grow mid-play and free the old array; no fence covers it; listed as reclaim's next client in [thread-safe destruction](thread-safe-destruction.md) §3. The `(se − sb) / stride` without a `% stride` test is a minor filter gap on top |
 | 4 | tile map / feature map + dims (`tagpu_terr.c`, `tagpu_feat.c`) | not a skew hazard | `LoadMap` stores the dims before the pointers, the cascade nulls the pointers under the fence, every reader loads the pointer first — so a reader that sees a non-null pointer sees the matching dims. The "2048×2048 off a smaller allocation" sequence needs the opposite store order |
 | 5 | tile set `{count, pixels}` | same as 4 | same routine, same order, same null |
@@ -216,10 +216,21 @@ The sequence, from the binary:
    **`begin` stored** (`0x485525`); `rep stos` over the whole array; two more allocations;
    **`end = begin + (count − 1)·0x118` stored** (`0x4855D6`).
 
-For the length of that memset the pair is (new `begin`, last game's `end`). Six render-thread
-readers gate only on `ptr_ok(beg) && ptr_ok(end) && end > beg` plus the 20000-slot cap and then walk
-slots with no per-slot probe: `tagpu_native_frame`, `tagpu_scaffold_frame`, `log_units`,
-`probe_unit_model`, `writeback_paint`, `tagpu_mark_gather`. If the allocator hands back the same
+For the length of that memset the pair is (new `begin`, last game's `end`). **Six render-thread
+readers had it, and landing 3 is what removed all six** — `tagpu_native_frame` and
+`tagpu_scaffold_frame` read the packet's units table, `log_units` reads it too,
+`probe_unit_model` and `writeback_paint` are deleted, and `tagpu_mark_gather` walks the table. A
+seventh, `tagpu_order.c`'s `sane_unit`, bounded a record's unit pointer against the same pair on
+the present thread and is now a binary search over the packet's own table by array slot. **The
+argument is the engine's own ORDERING, not a copy that outruns the load**: the level load runs on
+the loader thread, whose last act sets bit 1 of `main+0x38D75`, and the in-play frame callback —
+the only site the publisher acts on — is installed only after the game thread has seen that bit
+([engine map](exe-reverse-engineering.html), "The in-play publish point"). So the publisher cannot
+run while the array is being built.
+
+The paragraph below is the hazard as it stood. All six gated only on
+`ptr_ok(beg) && ptr_ok(end) && end > beg` plus the 20000-slot cap and then walked
+slots with no per-slot probe. If the allocator hands back the same
 block the skew is invisible. If the new block lands below the old end, the walk runs past the new
 allocation into memory the teardown freed — which on the Wine heap can be unmapped, the note's own
 Mode A premise. Nothing here has faulted; the rate is per game start × the memset's share of a
@@ -264,8 +275,11 @@ a comment saying so.
 
 ## 7. Open items
 
-- **The unit array's publish at level load** (§5) — the one open hazard. Pick among the three
-  options; add the exact relation as the refusal layer whichever is chosen.
+- ~~**The unit array's publish at level load** (§5) — the one open hazard.~~ **CLOSED 2026-09-12**
+  by landing 3 of the frame packet exchange. Not by any of the three options this note listed: the
+  readers went instead, and the ordering the loader thread already provides became the argument.
+  The exact relation is still checked, as the option would have had it, but as a RECORD — nothing
+  is bounded by it, because the walk that replaced them runs to the count.
 - **The particle layers' vectors and the per-object sub-vectors** — reclaim's catalogued next
   client, still not done.
 - **The timeout** — a timing-dependent mitigation that the cascade's own frees fall through. Either
@@ -281,6 +295,10 @@ a comment saying so.
 
 ## Changelog
 
+- **2026-09-12 (later)** — §5's row 2 and its open item CLOSED by landing 3: the six readers are
+  converted or deleted, the seventh (the order markers' `sane_unit`) with them, and the census's
+  "source after" for the unit array is the packet. §5's description of the hazard is kept as the
+  record of what was closed.
 - **2026-09-12** — the loader thread row in the status table and the landing-1 note under §4;
   the design's first landing is built, the readers are unchanged.
 - **2026-09-11** — first version, from the audit of the G13u sweep. Corrected the same day in

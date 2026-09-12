@@ -293,7 +293,7 @@ static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, 
 typedef char pk_maxpiece_agrees[(TAGPU_PK_MAXPIECE == TAGPU_PBMAXPIECE) ? 1 : -1];
 typedef char pk_unit_size  [(sizeof(TAGPU_PK_UNIT)   == 100) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
-typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  40) ? 1 : -1];
+typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
 
 static TAGPU_PK_UNIT   s_uScratch[TAGPU_PK_MAX_UNITS];
@@ -543,6 +543,11 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     unsigned slots = p->unit_slots;
     int mapW = p->map_w16, mapH = p->map_h16;
     unsigned nu = 0, nw = 0, na = 0, pk = 0, i, dup = 0, walk;
+    /* what the arena WOULD have taken if everything fitted. `pk` stops at the
+       first run that did not, so growing on it would add one unit's worth per
+       publish and take as many publishes as there are units to converge; this
+       counts the whole demand, so one growth is enough. */
+    unsigned pkWant = 0;
     unsigned pieces_base = PKT_ALIGN4((unsigned)sizeof(TAGPU_PACKET));
     unsigned need = pieces_base, e;
     unsigned pTrunc = 0;
@@ -617,7 +622,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                 unsigned at = pieces_base + pk * (unsigned)sizeof(TAGPU_PK_PIECE);
                 unsigned got = fill_pieces(p, o3, ue->nparts, at, &pTrunc);
                 if (got) { ue->piece_off = at; ue->piece_n = (unsigned short)got; pk += got; }
-                need = at + ue->nparts * (unsigned)sizeof(TAGPU_PK_PIECE);
+                pkWant += ue->nparts;
             }
             s_slotIdx[i] = (unsigned short)nu;
             /* THE STABLE-ID COLLISION ORACLE, over THIS packet. Two live units
@@ -707,6 +712,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                 we->pos[2] = RD32(rec, WR_YPOS);
                 we->o3_key = (unsigned)(size_t)o3;
                 we->rec = a->wreck; we->def = (unsigned short)d;
+                we->col = a->col; we->row = a->row;
                 we->base_piece = 0xFFFFu;
                 if (np && np <= TAGPU_PK_MAXPIECE) we->nparts = (unsigned short)np;
                 for (k = 0; k < 3; k++) we->bturn[k] = RDU16(o3, O3_BTURN + k * 2);
@@ -723,8 +729,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                     unsigned at = pieces_base + pk * (unsigned)sizeof(TAGPU_PK_PIECE);
                     unsigned got = fill_pieces(p, o3, we->nparts, at, &pTrunc);
                     if (got) { we->piece_off = at; we->piece_n = (unsigned short)got; pk += got; }
-                    if (at + we->nparts * (unsigned)sizeof(TAGPU_PK_PIECE) > need)
-                        need = at + we->nparts * (unsigned)sizeof(TAGPU_PK_PIECE);
+                    pkWant += we->nparts;
                 }
             }
         }
@@ -738,6 +743,10 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     *cursor = pieces_base + pk * (unsigned)sizeof(TAGPU_PK_PIECE);
     if (*cursor > p->cap_bytes) *cursor = pieces_base;      /* nothing fitted   */
     if (need < *cursor) need = *cursor;
+    {
+        unsigned want = pieces_base + pkWant * (unsigned)sizeof(TAGPU_PK_PIECE);
+        if (want > need) need = want;
+    }
 
     e = append_table(p, cursor, s_uScratch, nu, (unsigned)sizeof(TAGPU_PK_UNIT),
                      &p->off_units, &p->n_units, TAGPU_PK_TRUNC_UNITS);

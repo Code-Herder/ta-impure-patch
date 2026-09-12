@@ -477,6 +477,34 @@ and silent to break, so the landing must check every one.
   the crash: the emit reads `obj+0x10` only for the waterline depth-plane test, and the frame's
   owner is the composite draw context (`main+0x1437B`, nulled at teardown `0x42DCA3`).
 
+## 10b. What the frame packet's landing 3 took off this fence (2026-09-12)
+
+`[VERIFIED — the code is in the tree]` The deferral was built because the render thread gathered a
+unit's or wreck's `Object3do` and read it later in the same frame while the game thread freed it
+(`FreeObjectState 0x45AAA0`). **The render thread does not read an `Object3do` any more.** Landing
+3 of the [frame packet exchange](frame-packet-exchange.html) has the game thread copy the piece
+poses, the body turn, the base-piece index and the composite's rect into the packet, and the
+address itself crosses only as an opaque cache key nothing dereferences.
+
+So for the render thread's UNIT and WRECK reads the ring is now redundant, and the `dead` re-read
+the unit pass carried — comparing `unit+0x9E` against the pointer gathered a moment earlier, the
+narrow-window guard this deferral sits behind — is deleted with them.
+
+**It is not retired, and three things still need it:**
+
+- **The model templates.** `0x42DB90` frees every one of them in the teardown cascade, and the
+  render thread walks them for geometry, faces and the piece tree. That is the fence's argument,
+  unchanged; landing 3 deliberately did not touch it, and the packet carries the per-piece template
+  node and the `MODEL_PTRS` base so the reader reaches them without the main pointer.
+- **The per-map arrays the fenced passes still index** — the FeatureDef records and the wreck
+  records, freed by `0x483DD0` inside the same cascade.
+- **The teardown wait itself** (§6b, §6c), which is what holds the render thread out of the whole
+  cascade.
+
+The plan's row 5 and its "?" row are where the rest of this goes: the asset channel would retire
+the fence entirely, and until then §2's Mode A / Mode B classification is still how the remaining
+objects are decided.
+
 ## 11. Bottom line
 
 Classify each render-read object by how the engine reclaims it; for heap-freed objects, detour the

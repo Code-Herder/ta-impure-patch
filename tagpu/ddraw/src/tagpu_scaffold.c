@@ -331,7 +331,7 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     int r0 = (eyeY >> 4) - 16;
     s_lastR0 = r0; s_lastRows = nRows; s_lastFrame = f->frame_counter;
     int c0 = (eyeX >> 4) - 10;
-    int tall = 0, flat = 0, gafFail = 0, outside = 0;
+    int tall = 0, flat = 0, gafFail = 0, junk = 0;
     const TAGPU_PK_ANCHOR* anch = tagpu_pk_anchors(pk);
     for (unsigned ai = 0; ai < pk->n_anchors; ai++) {
         const TAGPU_PK_ANCHOR* a = &anch[ai];
@@ -342,7 +342,12 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
             if (row < 0 || row >= mapH || col < 0 || col >= mapW) continue;
             unsigned idx = a->def;
             const char* def = fdef + (size_t)idx * FD_STRIDE;
-            if (pk->feat_defcount && (int)idx >= pk->feat_defcount) { outside++; continue; }
+            /* A BOUND THIS PASS DID NOT HAVE. A tile can name a def past the
+               map's own count, whose 0x100-byte record holds garbage (the
+               terrain-depth note's "Corrections"); the feature pass has always
+               refused those and this one indexed them. Counted as `junk`, as
+               there. */
+            if (pk->feat_defcount && (int)idx >= pk->feat_defcount) { junk++; continue; }
             if (*(const unsigned char*)(def + FD_HEIGHT) < 10) { flat++; continue; }
             tall++;
 
@@ -422,8 +427,8 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
 
     if (logNow) {
         char b[160]; _snprintf(b, sizeof b,
-            "scaffold: swept %dx%d tall=%d flat=%d gafFallback=%d outside=%d eye=(%d,%d)",
-            nCols, nRows, tall, flat, gafFail, outside, eyeX, eyeY);
+            "scaffold: swept %dx%d tall=%d flat=%d gafFallback=%d junk=%d eye=(%d,%d)",
+            nCols, nRows, tall, flat, gafFail, junk, eyeX, eyeY);
         slog(b);
     }
 

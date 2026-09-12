@@ -2324,6 +2324,55 @@ design (a count-based expiry is timing). `tagpu_packet.off` now means no world p
 every pass reads the packet's view — and no commands applied: the engine's own camera range,
 rect and scroll rate, and after ~90 frames its own terrain again once terrown's skip expires.
 
+### 2.18 The frame packet exchange, landing 3 — the world in the packet (`tagpu_packet.c`, `tagpu_packet_pub.c`, `tagpu_native.c`, `tagpu_scaffold.c`, `tagpu_mark.c`, `tagpu_overlay.c`, `tagpu_lerp.c`, `tagpu_order.c`, `tagpu_feat.c`, `tagpu_render3do.c`, `tagpu_posebake.c`) — 2026-09-12
+
+The plan's row 3 ([frame packet exchange](frame-packet-exchange.html) §11): the units, their
+pieces, the wrecks and the feature anchors cross in the packet, and **the audit's one open hazard
+closes with them** — no file on the render thread walks the unit array, and none dereferences an
+Object3do ([cross-thread engine reads](cross-thread-engine-reads.html) §5 row 2).
+
+| site | what we do there | thread |
+|---|---|---|
+| `DrawGameScreen 0x468CF0`, the observer's **`after`** | the packet grew four tables. `PK_UNIT` (100 B) one per LIVE unit, the walk bounded by the engine's own SLOT COUNT (`u16 main+0x14351`) rather than by the `begin`/`end` pair, and the table sized to that count so no player is ever cut; `PK_PIECE` (24 B) the COB move and turn triples and the flags, plus the TYPE's template node; `PK_WRECK` (40 B) the husks the anchors name; `PK_ANCHOR` (16 B) the feature cells of the widest zoom rect with the six height bytes the engine's 2×2 projection average and the Classic++ ground gradient need. The header grew with them: the GUI colour table, the dispatched mouse point, the build cursor's corners, the two mode bytes, the option byte, the feature sweep, the per-map array bases the fenced passes index, and the engine's 32×256 shade table. Every offset and every bound: [engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies" | game |
+| the same `after` | `tagpu_native_owns_unit()` is asked here, once per unit, with the def in hand — the answer crosses as one flag bit, so the unit pass, the marker pass and the composite wipe act on ONE answer instead of three threads' reads of the same bytes | game |
+| the order-marker snapshot `0x469BFC` | every unit pointer a record carried becomes an ARRAY SLOT, and every def and weapon field the drawing needs becomes a number in the record: the nine labelled ranges, the three live weapon ranges and their AoE and attack runs, the build def's five footprint extents, the kamikaze set, the cursor sprite's GAF sequence | game |
+| `tagpu_packet.c`'s acquire | **the rotation**: the frame instance holds THREE slots (READ, PREV and a SPARE) rather than two, so a packet of the same tick replaces READ and keeps PREV, and the pair the pose blend runs over always spans two distinct ticks. The choice is made AFTER the exchange out of records this thread owns — the two-slot alternative would have to peek at a slot the producer may be refilling | render |
+| `tagpu_native.c` | the unit and wreck gathers, the whole pose path (`pose_accum_body`, `posed_pose`, `hires_pose`, `pose_dump`, the pose CRC), the ownership test, the ground height, the option bits, the sub-pixel table's key: all from the packet. What it still reads is per-LEVEL assets under `tagpu_reclaim`'s teardown fence — the model templates behind `MODEL_PTRS` (base and bound both in the packet) and the screen fog descriptor, which is landing 4b's | render |
+| `tagpu_scaffold.c`, `tagpu_feat.c` | the anchors, the map and sweep dimensions, the units they stamp for; the FeatureDef and wreck RECORDS stay, under the fence, with their bases from the packet | render |
+| `tagpu_mark.c`, `tagpu_overlay.c`, `tagpu_lerp.c`, `tagpu_hires.c` | off the allow-list entirely: they name no engine memory at all | render |
+| `tagpu_render3do.c` | the shade table and the build-state formulas take the packet's copies; the **write-back is deleted** | render |
+
+**The lerp is rekeyed, and its arena is gone.** `tagpu_lerp.c` kept 3.4 MB of pose banks keyed on
+`(Object3do, nparts, level generation)` and sampled `P_POS`/`P_TURN` on the render thread. The two
+held packets are that history now: `prev` is an earlier tick and `read` a later one by
+construction, units are matched by the STABLE ID (`unit+0xA8`) and verified on the model identity,
+and the blend's clock is the two packets' own `tick_start` stamps — taken by the game thread the
+instant it first saw each tick, within one engine draw of the boundary — instead of the learned,
+smoothed period this module used to keep. The arena, the pointer hash, the free list, the ageing
+sweep and the `LERP_BLOCK` 48-piece ceiling all go; a 256-piece model is now interpolable.
+
+**What was deleted rather than converted.** The opt-in write-back (`tagpu_render3do()`,
+`tagpu_writeback.on`, `writeback_paint`) — it walked an Object3do on the render thread and then
+STORED into engine memory from there, which is the one shape the exchange exists to remove;
+landing 2's "no render-thread store into engine memory remains" was true only because it was off
+by default. With it went its FBO, its program and the four readback planes. Also gone: the model
+probe in `tagpu_overlay.c`, and `tagpu_scaffold.c`'s whole-map feature census (`tagpu_features.trigger`
+has answered that question properly since).
+
+**Read it in `tagpu.log`.** The `packet:` heartbeat's packet segment gained `units= pieces=
+wrecks= anchors=<n>(<cols>x<rows>) dup= pair= same=` — `dup` is the stable-id collision oracle over
+one packet and **must read 0**, `pair` the frames that had a usable two-tick pair, `same` the
+rotations that displaced READ because the tick had not moved. A `world:` segment at the very end
+carries the publisher's own: `u= p= w= a=<anchors>/<cells scanned> scan=<scans>/<reuses> dup=
+trunc=<units>/<pieces>/<wrecks>/<anchors> relbad= shd=`. **`relbad` must stay 0** — it counts
+draws on which `end != begin + (count−1)·0x118`, the relation the note records — and so must every
+`trunc` past the first fill of each slot.
+
+**The gates, measured 2026-09-12 on the reference setup, 1920×1080, `--maxfps 0`, the play
+defaults, this DLL against the one built from landing 2's tip (`4b84098`):**
+
+<!-- GATES-3 -->
+
 ## 3. Known limits — what is still wrong, and what closing it needs
 
 ### 3.0 Closed since the last pass: the interior cracks at zoom-out

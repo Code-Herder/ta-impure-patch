@@ -395,7 +395,10 @@ typedef struct ORDREC {
     int wrange[3];           /* live weapon ranges (0 = no such slot)         */
     int wattack[3];          /* ...and their attackrunlength (ShowRanges)     */
     int explodeAoe;          /* ExplodeAs weapon's AoE >> 1 (kamikaze pulse)  */
-    short rng[9];            /* the nine labelled def ranges, in engine order */
+    int      rng[9];         /* the nine labelled def ranges, in engine order —
+                                as INTs, because the engine's own reads are mixed
+                                (`movsx` for six of them, `and 0xffff` for three)
+                                and a short would turn a value past 32767 negative */
     unsigned short waoe[3];  /* the weapons' area of effect (ShowRanges)      */
     unsigned short defAttack;/* def+0x216, the def's own attack run length    */
     unsigned short cloakDist;/* def+0x208                                     */
@@ -601,8 +604,8 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* units, const char
                         int k;
                         r->haveDef = 1;
                         for (k = 0; k < 9; k++)
-                            r->rng[k] = rngSgn[k] ? *(const short*)(def + rngOff[k])
-                                                  : (short)*(const unsigned short*)(def + rngOff[k]);
+                            r->rng[k] = rngSgn[k] ? (int)*(const short*)(def + rngOff[k])
+                                                  : (int)*(const unsigned short*)(def + rngOff[k]);
                         r->cloakDist = *(const unsigned short*)(def + UD_CLOAKDIST);
                         r->sight     = *(const short*)(def + UD_SIGHT);
                         r->kamiDist  = *(const unsigned short*)(def + UD_KAMIDIST);
@@ -1348,7 +1351,7 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
            pushes it without incrementing. The strings are the engine's own,
            at `0x505190/88/80/78/6C/60/50/44` and `0x503A0C`. */
         for (i = 0; i < 9; i++) {
-            int v = (int)r->rng[i];
+            int v = r->rng[i];
             if (v) range_circle(us, ux, uy, uz, (double)v, s_gui[GUI_YELLOW],
                                 rname[i], nslot++);
         }

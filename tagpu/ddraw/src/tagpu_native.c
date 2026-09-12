@@ -2605,12 +2605,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        does not get moved either. */
     for (int a = 0; a < nu; a++) {
         const TAGPU_PK_UNIT* parent = units[a].pu;
-        int ci;
+        int ci, guard = 0;
         if (!parent) continue;
         /* the chain, as PACKET indices the publisher resolved: every hop is a
-           bounded index into the units table, so the 64-hop guard is now a
-           cycle guard rather than a bound on a pointer walk */
-        for (ci = parent->cargo_first; ci >= 0; ) {
+           bounded index into the units table. The engine walk's own 64-hop
+           guard is KEPT and is what terminates: a chain that loops back on
+           itself anywhere — not only to its head — costs 64 iterations and
+           stops, where a head test alone would not. */
+        for (ci = parent->cargo_first; ci >= 0 && guard < 64; guard++) {
             const TAGPU_PK_UNIT* c = &pkUnits[ci];
             if (!(c->state & ST_NOCARGO)) {
                 for (int b = 0; b < nu; b++)
@@ -2621,7 +2623,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     }
             }
             ci = c->cargo_next;
-            if (ci == parent->cargo_first) break;      /* a cycle: stop */
         }
     }
     }
@@ -2662,8 +2663,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 int rx = pw->pos[0] >> 16;
                 int rz = pw->pos[1] >> 16;
                 int ry = pw->pos[2] >> 16;
-                if ((rx >> 4) < tx0 || (rx >> 4) >= tx1) continue;
-                if ((ry >> 4) < ty0 || (ry >> 4) >= ty1) continue;
+                /* BY THE ANCHOR TILE, as the grid walk this replaced was: a
+                   record's own position is near its tile but not inside it, so
+                   filtering on the position would take a different set at the
+                   rect's edge */
+                if (pw->col < tx0 || pw->col >= tx1) continue;
+                if (pw->row < ty0 || pw->row >= ty1) continue;
                 wpc = tagpu_pk_pieces(pk, pw->piece_off, pw->piece_n);
                 if (!wpc) continue;
                 float ax = (float)(rx - eyeX + vpL);
