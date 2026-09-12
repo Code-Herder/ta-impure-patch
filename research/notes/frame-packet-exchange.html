@@ -1096,9 +1096,11 @@ void tagpu_packet_frame_end(void)
 </div>
 <script>
 (function () {
+  /* the page may be embedded in a shadow root (the wiki); look its elements up from there */
+  var R = (function () { var h = document.getElementById('fpx-host'); return (h && h.shadowRoot) ? h.shadowRoot : document; })();
   /* inline: scale every fitted figure down to its column; never up */
   function fitAll() {
-    document.querySelectorAll('.fit').forEach(function (f) {
+    R.querySelectorAll('.fit').forEach(function (f) {
       var inner = f.querySelector('.fit-inner'); if (!inner) return;
       inner.style.transform = 'none'; f.style.height = '';
       var w = inner.scrollWidth, avail = f.clientWidth;
@@ -1114,7 +1116,7 @@ void tagpu_packet_frame_end(void)
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitAll);
 
   /* the lightbox: the same content at 1:1, with scroll and zoom */
-  var lb = document.getElementById('lightbox');
+  var lb = R.getElementById('lightbox');
   var body = lb.querySelector('.lb-body'), box = lb.querySelector('.zoombox'), title = lb.querySelector('.t');
   var clone = null, W = 0, H = 0, lastFocus = null;
   function press(btn) { lb.querySelectorAll('[data-scale],[data-fit]').forEach(function (b) { b.setAttribute('aria-pressed', String(b === btn)); }); }
@@ -1127,7 +1129,7 @@ void tagpu_packet_frame_end(void)
   function fit() { setScale(Math.min(1, (body.clientWidth - 64) / W), lb.querySelector('[data-fit]')); }
   function open(f) {
     var src = f.querySelector('.fit-inner'); if (!src) return;
-    lastFocus = document.activeElement;
+    lastFocus = R.activeElement || document.activeElement;
     clone = src.cloneNode(true); clone.className = 'zoominner'; clone.style.transform = 'none';
     box.style.width = ''; box.style.height = '';
     box.replaceChildren(clone);
@@ -1147,7 +1149,7 @@ void tagpu_packet_frame_end(void)
     box.replaceChildren(); clone = null;
     if (lastFocus && lastFocus.focus) lastFocus.focus();
   }
-  document.querySelectorAll('.fit').forEach(function (f) {
+  R.querySelectorAll('.fit').forEach(function (f) {
     f.addEventListener('click', function () { open(f); });
     f.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(f); } });
   });

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Build the TotalA.exe modding wiki from research/notes/*.md into research/site/.
 
-A note may also be authored HTML: research/notes/<slug>.html is passed through as it is
-(its own <title>, <link>s and <style> become the head, the rest the body) under a one-line
-wiki crumb, so a page whose layout IS the content keeps it. Register it in PAGES like any
-other slug; it is searched and carded like the markdown pages.
+A note may also be authored HTML: research/notes/<slug>.html (its own <title>, <link>s and one
+<style>, then its body, then its script) is rendered inside the wiki template with its styles
+isolated in a shadow root, so a page whose layout IS the content keeps it and still gets the
+sidebar, the search, the crumb and the theme toggle. Register it in PAGES like any other slug;
+it is searched and carded like the markdown pages. See emit_html_page.
 """
 
 import argparse
@@ -630,42 +631,74 @@ def copy_static():
     return h.hexdigest()[:10]
 
 
-HTML_PAGE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="color-scheme" content="light dark">
-{head}
-<style>
-  .wiki-crumb {{ font: 500 .74rem/1.5 "IBM Plex Mono", ui-monospace, Consolas, monospace; letter-spacing: .05em; text-transform: uppercase; padding: .55rem clamp(16px, 4vw, 40px); border-bottom: 1px solid rgba(127,127,127,.3); }}
-  .wiki-crumb a {{ color: inherit; }}
-</style>
-</head>
-<body>
-<div class="wiki-crumb"><a href="index.html">{site}</a> &nbsp;/&nbsp; {section} &nbsp;/&nbsp; {title}</div>
-{body}
-</body>
-</html>
-"""
+FPX_BOOT = """(function () {
+  var host = document.getElementById('fpx-host'), tpl = document.getElementById('fpx-tpl'), js = document.getElementById('fpx-js');
+  if (!host || !tpl || !host.attachShadow) return;
+  var root = host.attachShadow({mode: 'open'});
+  root.appendChild(tpl.content.cloneNode(true));
+  if (js) { var s = document.createElement('script'); s.textContent = js.textContent; root.appendChild(s); }
+  /* fragment links cannot reach into a shadow tree by themselves: route them */
+  function go(id) { var el = root.getElementById(id); if (!el) return false; el.scrollIntoView({block: 'start'}); try { history.replaceState(null, '', '#' + id); } catch (e) {} return true; }
+  document.addEventListener('click', function (e) {
+    var path = e.composedPath ? e.composedPath() : [e.target], a = null, i;
+    for (i = 0; i < path.length; i++) { if (path[i].tagName === 'A') { a = path[i]; break; } }
+    if (!a) return; var h = a.getAttribute('href') || ''; if (h.charAt(0) !== '#') return;
+    if (go(h.slice(1))) e.preventDefault();
+  });
+  if (location.hash) setTimeout(function () { go(location.hash.slice(1)); }, 0);
+})();"""
 
 
-def emit_html_page(slug, section, src):
-    """An authored HTML note: everything up to its </style> is the head, the rest the body."""
+def emit_html_page(slug, label, section, src, nav_html):
+    """An authored HTML note, rendered INSIDE the wiki template but with its styles isolated.
+
+    The note is a standalone page: <title>, <link>s and one <style> before its body, its own
+    script at the end. Here its body and its element/class rules go into a shadow root on
+    #fpx-host, where wiki.css cannot reach them; its theme tokens (the three :root blocks)
+    are rewritten onto the host in the light DOM so the wiki's data-theme stamp and the
+    OS preference drive them; its font <link>s stay in the light DOM (a @font-face inside a
+    shadow tree is not reliable); its script is re-created inside the shadow root, where it
+    finds its elements through a root it looks up itself. Fragment links are routed by the
+    bootstrap because the browser does not scroll to ids inside a shadow tree."""
     text = src.read_text()
     cut = text.find("</style>")
     head, body = (text[:cut + 8], text[cut + 8:]) if cut >= 0 else ("", text)
     m = re.search(r"<title>(.*?)</title>", head, flags=re.S)
-    title = m.group(1).strip() if m else slug.replace("-", " ").title()
-    plain = strip_html(body)
-    m = re.search(r'<p class="lede">(.*?)</p>', body, flags=re.S)
-    blurb = strip_html(m.group(1)) if m else plain
-    blurb = blurb.strip()
+    title = m.group(1).strip() if m else label
+    links = "".join(re.findall(r"<link [^>]*>", head))
+    m = re.search(r"<style>(.*)</style>", head, flags=re.S)
+    css = m.group(1) if m else ""
+    k = css.find(':root[data-theme="dark"]')
+    k2 = css.find("}", k) + 1 if k >= 0 else 0
+    tokens, rest = css[:k2], css[k2:]
+    tokens = (tokens.replace(":root {", "#fpx-host {")
+                    .replace(':root:not([data-theme="light"]) {', ':root:not([data-theme="light"]) #fpx-host {')
+                    .replace(':root[data-theme="dark"] {', ':root[data-theme="dark"] #fpx-host {'))
+    tokens = re.sub(r"\n\s*color-scheme: (light|dark);", "", tokens)
+    rest = rest.replace("\n  html {", "\n  .fpx-html-rule-unused {").replace("\n  body {", "\n  .page {")
+    rest += ("\n  :host { display: block; }\n"
+             "  :host(.in-wiki) nav.toc { display: none; }\n"
+             "  :host(.in-wiki) main { grid-template-columns: minmax(0, 1fr); gap: 0; }\n"
+             "  :host(.in-wiki) .page { margin: 0; padding-inline: 0; }\n"
+             "  :host(.in-wiki) #lightbox { z-index: 1000; }\n")
+    sm = re.search(r"<script>(.*?)</script>\s*$", body, flags=re.S)
+    script = sm.group(1) if sm else ""
+    inner = body[:sm.start()] if sm else body
+    secs = re.findall(r'<section id="([^"]+)">.*?<h2>(.*?)</h2>', inner, flags=re.S)
+    toc_links = "".join(f'<a class="lvl2" href="#{i}">{strip_html(h)}</a>' for i, h in secs)
+    toc_html = f'<nav class="toc"><h5>On this page</h5>{toc_links}</nav>' if toc_links else ""
+    wiki_body = (links
+                 + "<style>" + tokens + "\n#fpx-host { background: var(--paper); color: var(--ink); }</style>\n"
+                 + '<div id="fpx-host" class="in-wiki"></div>\n'
+                 + '<template id="fpx-tpl"><style>' + rest + "</style>" + inner + "</template>\n"
+                 + '<script type="text/x-fpx" id="fpx-js">' + script + "</script>\n"
+                 + "<script>" + FPX_BOOT + "</script>")
+    plain = strip_html(inner)
+    m = re.search(r'<p class="lede">(.*?)</p>', inner, flags=re.S)
+    blurb = (strip_html(m.group(1)) if m else plain).strip()
     if len(blurb) > 165:
         blurb = blurb[:162].rsplit(" ", 1)[0] + "…"
-    (SITE / f"{slug}.html").write_text(
-        HTML_PAGE.format(head=head, body=body, site=SITE_TITLE, section=section, title=title)
-    )
+    (SITE / f"{slug}.html").write_text(render(title, wiki_body, nav_html, toc_html, ""))
     return title, plain, blurb
 
 
@@ -760,7 +793,7 @@ def main(bake="auto"):
 
     for slug, label, sec in present:
         if not (NOTES / f"{slug}.md").exists():
-            title, plain, blurb = emit_html_page(slug, sec, NOTES / f"{slug}.html")
+            title, plain, blurb = emit_html_page(slug, label, sec, NOTES / f"{slug}.html", nav_for(slug, ""))
             search_index.append({"u": f"{slug}.html", "t": title, "h": "", "b": plain[:2600]})
             meta[slug] = {"title": title, "label": label, "section": sec,
                           "words": len(plain.split()), "blurb": blurb}
