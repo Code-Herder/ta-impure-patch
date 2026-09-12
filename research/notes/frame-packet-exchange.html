@@ -81,6 +81,7 @@
   }
 
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }   /* the artifact host injects this; the wiki does not, and #lightbox sets display:flex */
   html { -webkit-text-size-adjust: 100%; }
   body {
     margin: 0;
