@@ -34,7 +34,6 @@
 #include "tagpu_model3do.h"
 #include "tagpu_posebake.h"
 #include "tagpu_render3do.h"
-#include "tagpu_reclaim.h"
 #include "tagpu_packet.h"   /* the piece run the bake keys on (landing 3) */
 
 /* A 69-unit inventory of 67 distinct types filled a 64-entry table and started

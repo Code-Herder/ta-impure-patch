@@ -190,14 +190,26 @@ this note already documents as recycling aggressively, so a render-thread cache 
 template pointer is not protected by any of the machinery above **and** the address-reuse premise
 is not hypothetical.
 
-`tagpu_reclaim_level_gen()` is the counter that closes the CACHE half of it (the block half is
+A LEVEL GENERATION is the counter that closes the CACHE half of it (the block half is
 §6c, which defers those frees so a walk in flight cannot be reading freed memory in the first
-place): `InterlockedIncrement` in the
+place). `tagpu_reclaim` keeps one, `InterlockedIncrement` in the
 **post hook**, after the cascade has freed the templates and before the reader is released.
 Unconditional — the pre hook's `busy` path keeps the queue and frees nothing of ours, but
-`0x42DB90` runs either way. A cache stamps its entries with the generation and drops them when it
-changes; the counter never moves on an exe where the teardown could not be hooked, which is the
-behaviour those caches had before it existed.
+`0x42DB90` runs either way.
+
+**`[CORRECTED 2026-09-12, a landing review]` that counter is NOT the one the caches may key on,
+because it only moves when `tagpu_reclaim` is armed.** Reclaim has five ways not to arm — its
+lever, a byte mismatch at the patch site, a stub, a land failure — and on any of them
+`tagpu_reclaim_level_gen()` stays 0 for the life of the process, so every cache keyed on it
+silently stopped invalidating and a second level reusing a template address served the first
+level's answer. The counter the caches key on is **the frame packet's `level_gen`**
+(`tagpu_packet.h`), advanced by the publisher at every level end whichever provider published it —
+reclaim's teardown post hook when reclaim is armed, our own `0x491B60` observer otherwise. It
+reaches the render thread inside the packet, so it arrives with the frame it describes rather than
+through a second shared word. Reclaim's own counter still exists and still governs reclaim's own
+ring; what changed is which of the two a cache is allowed to believe. Verified live with
+`tagpu_reclaim.off` over two levels in one process: `packet: level end -> gen 1 (reclaim's 0)`,
+then `native: level 0 -> 1, dropping the template caches`, which did not happen before.
 
 **It must not be bumped in the pre hook, and this is a trap rather than a preference.** The render
 thread is not stopped by `pass_begin` — `render_ogl.c` ignores its return — it is stopped by
@@ -495,11 +507,40 @@ narrow-window guard this deferral sits behind — is deleted with them.
 - **The model templates.** `0x42DB90` frees every one of them in the teardown cascade, and the
   render thread walks them for geometry, faces and the piece tree. That is the fence's argument,
   unchanged; landing 3 deliberately did not touch it, and the packet carries the per-piece template
-  node and the `MODEL_PTRS` base so the reader reaches them without the main pointer.
+  node, and the `MODEL_PTRS` BOUND — but not its base, which the reader takes live at every
+  call, because the teardown nulls `main+0x14377` and that null is the refusal.
 - **The per-map arrays the fenced passes still index** — the FeatureDef records and the wreck
   records, freed by `0x483DD0` inside the same cascade.
 - **The teardown wait itself** (§6b, §6c), which is what holds the render thread out of the whole
   cascade.
+
+### What "under the fence" is worth when the fence is not there
+
+**`[NAMED 2026-09-12, a landing review — this is an OPEN residual, not a closed one]`** Every
+sentence above and in [GPU status](gpu-status.html) §2.18 that says a per-level read is safe
+"under `tagpu_reclaim`'s teardown fence" is true **only while reclaim is armed**, and reclaim has
+five ways not to be: its own lever `tagpu_reclaim.off`, a byte mismatch at the patch site, a stub,
+a land failure, and an exe this project has not seen. In any of those,
+`tagpu_reclaim_teardown_active()` is 0 for the life of the process, nothing sits a frame out, and
+the game thread runs the whole cascade while the render thread is inside a pass. The reads at
+stake are the three above: a model template through `MODEL_PTRS`, a FeatureDef record, a wreck
+record.
+
+What landing 3's review changed is the **second** line of defence, not the first. Each of those
+three bases is read live at every use and the teardown NULLS it after freeing it
+(`0x422214`, `0x42228B`, `0x42DCD8`), so a pass that starts after the null refuses; each index is
+now bounded by the engine's own count or pool size, so a read cannot leave the block even when the
+block is dead. What remains uncovered is a pass already inside the walk when the cascade frees
+under it — a use-after-free within the freed allocation, for the length of one teardown.
+
+**There is no by-design fix for that in landing 3's shape**, and it is important to say so rather
+than imply one. Publishing the `in_game = 0` packet in the teardown's *before* instead of its
+*after* would narrow the window and not close it, because the consumer takes packets on its own
+schedule — that is a timing argument, and this project does not accept them as fixes. The
+by-design fix IS the fence, i.e. reclaim being armed; and the general retirement is the plan's
+row 5 (the cascade's frees) and the asset channel behind it. Until then the honest statement is:
+**with `tagpu_reclaim` unarmed, a level teardown can race the render thread's per-level asset
+reads, and the bounds and the null-out reduce it from arbitrary memory to one freed block.**
 
 The plan's row 5 and its "?" row are where the rest of this goes: the asset channel would retire
 the fence entirely, and until then §2's Mode A / Mode B classification is still how the remaining

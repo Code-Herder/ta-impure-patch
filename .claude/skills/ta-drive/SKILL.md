@@ -1040,11 +1040,13 @@ instead: `tacli arm <i> classicpp.on=off`.
   deep=… fontcopies=… levelend=reclaim|own|none vpapply=… vpwh=…`, with **two world segments
   since landing 3**: in the packet segment `units=… pieces=… wrecks=… anchors=<n>(<cols>x<rows>)
   dup=… pair=… same=…`, and at the very end `| world: u=… p=… w=… a=<anchors>/<cells scanned>
-  scan=<scans>/<reuses> dup=… trunc=<units>/<pieces>/<wrecks>/<anchors> relbad=… shd=…`.
+  scan=<scans>/<reuses> dup=… trunc=<units>/<pieces>/<wrecks>/<anchors> relbad=… woob=… shd=…`.
   **`dup` must read 0** — it is the stable-id collision oracle over one packet, and the pose blend
   matches units across two packets by that id — and **`relbad` must read 0**: it counts draws on
   which the engine's `end` pointer did not equal `begin + (count−1)·0x118`, the relation the exe
-  note records. `pair` is the frames that had a two-tick pair to blend over and `same` the
+  note records. **`woob` should read 0 too**: it counts feature cells naming a wreck record outside
+  the engine's own 2048-record pool, and it is a monitor rather than the guard — the guard is the
+  bound itself, which refuses the read either way. `pair` is the frames that had a two-tick pair to blend over and `same` the
   rotations that displaced READ because the tick had not moved; `scan=` says how many publishes
   actually walked the feature grid (it is cached per tick, so at 300 published frames a second
   against a 60 Hz sim expect roughly one scan in five). `trunc` past the first fill of each slot

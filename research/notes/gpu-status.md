@@ -1236,11 +1236,11 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x1426B`, `+0x142CB`, `+0x142DB`, `+0x142DF`, `+0x142E3`, `+0x142E7..+0x142ED`, `+0xDD9` | the minimap: the TNT's picture, the view rect and its colour, and the three 126-px surfaces (composite, fog base, scaled base). **Read only.** The picture is decoded on the MINIMAP BUILD's own thread inside `BuildMinimapSurface 0x466780` — not the game thread, measured — and the three surfaces are read per frame on the render thread while the game thread may be rewriting them, the same standing as the fork's own surface upload (G17e, [GL UI renderer](gui-renderer.html) §19) |
 | `[0x51FBD0]+0x1B2`, `+0x1B6`, `+0x1BA` | the cursor's **GAF frame** and the position it was last drawn at. Read only, on the render thread, once per frame in `tagpu_gui_cursor_frame()` — and read ONCE because two modules act on the answer: the UI layer stops discarding that rect and the world composite counts it as the terrain key, and a second read a pass later would leave a sliver of the engine's cursor standing (G17c, [GL UI renderer](gui-renderer.html) §17). The frame's pixels go through `tagpu_gaf_decode` into the UI atlas like any other sprite |
 | `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with. **Since 2026-09-12 (the frame packet's landing 1) the font is COPIED there**, header and 95 printable glyphs, each as a one-glyph font object, into the packet (`tagpu_packet_pub.c`); the present thread rasterises from the copy and no longer dereferences the engine's font at all (`tagpu_text.c`, §2.16). The GL UI's string op still carries the font's address — landing 4c |
-| **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (map px, map cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`), the per-map bases `+0x1426F`, `+0x1420B` and `+0x14377`, and `[0x51FBD0]+0xC4` (the 32×256 shade table). The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect, and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate, the GL UI's layer draw and the palette module read no engine field for any of them |
+| **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (map px, map cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table). **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect, and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate, the GL UI's layer draw and the palette module read no engine field for any of them |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
-| the **level generation** (`tagpu_reclaim_level_gen()`) | not an engine field — our own counter, bumped on the game thread inside the teardown `0x491B60` and read on the render thread. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a) |
+| the **level generation** (the frame packet's `level_gen`) | not an engine field — our own counter, bumped on the game thread at every level end and carried to the render thread inside the packet. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`, and the geometry bake's) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a). **[CORRECTED 2026-09-12, a landing review]** between then and landing 3 the counter read was `tagpu_reclaim_level_gen()`, which is bumped only in reclaim's teardown post hook — so under `tagpu_reclaim.off`, or any of reclaim's four other ways not to arm, it never moved and the caches were exactly as stale as before 2026-09-08. The publisher owns the counter now and advances it whichever provider publishes the level-end packet |
 | the **pose history** (`tagpu_lerp.c`, `tagpu_lerp.on`) | not an engine field — our own arena, 3.4 MB of `P_POS`/`P_TURN` snapshots keyed by `(Object3do, nparts, level generation)`. **It READS `pr+P_POS` and `pr+P_TURN` and writes NOTHING back**, which is the whole safety argument: the sim reads those fields (`get PIECE_XZ`, and `QueryPrimary`/`AimFromPrimary` hand the engine weapon muzzle origins out of them) and TA has no runtime desync detection, so a framerate-dependent per-machine blend written there would diverge two machines silently. Verified by running it: the walker's COB trace is byte-identical with the lever on and off ([smooth motion](smooth-motion.html) §7g) |
 | `node+0x24` | the model's REST vertices, `count × 12` bytes of 16.16. Read only. Shared by every unit of a type and never written after load, which is what makes the reconstruction in §2.9 safe to build from while the engine is rewriting the posed copy |
 | `main+0x1421F` | the screen fog grid `{u16* buf; cols; rows; cells}`. Read only, per frame on the render thread. **Its last column and last row are short their outer corners** — the map cell that would supply them is past the builder's loop — so a sampler that clamps a world point into that cell reads *no fog*, not the border cell; `taFog` clamps to `uFogDim − 1.0`, one whole cell short, and the grid's own overshoot of the viewport — at least 1 px on every side for every viewport size the allocation accepts and every eye, 16 px for a negative one — is what makes that a no-op at 1× (terrain-depth §8a). **`cells` is the ALLOCATION**, `(cols*rows + 7) & ~7` — asserting `cells == cols*rows` accepted 1024×768 and refused 1920×1080, where the refusal cleared `fogMode` and there was no fog at all until 2026-09-09 ([terrain & depth](terrain-depth.html) §5.2). **The dimensions are one cell per 32 px of the 1× viewport plus two**, whatever the zoom: MEASURED by `tacli peek` through this descriptor, **118 × 68** for the 3712 × 2096 viewport of a 3840×2160 screen (`cells` 8024, exactly the product) and **78 × 45** for the 2432 × 1376 of a 2560×1440 one (`cells` 3512 against a product of 3510 — the round-up, and the case that refused). The `cols`/`rows` sanity bound in `tagpu_native.c` is 1024, not 256: at that rate 256 is a viewport 8128 px wide, which made the bound a screen limit standing in front of the real test |
@@ -1651,7 +1651,7 @@ byte-identical to what it was.
 | **the geometry buffer**, per type | rest position, the rest normal of the vertex's own triangle, the piece index and a flags word — 8 floats — with body triangles, slant triangles and wire lines laid down as three ranges of one buffer. Keyed on primitive 0's node pointer plus the level and GL generations |
 | **the material stream**, per (type, owner, atlas generation) | UV, flat colour, colour key and a **skip** flag — 5 floats. The two buffers always hold the **same** vertex count: a face the engine paints nothing for is baked and collapsed by its flag rather than dropped, which is what lets either be rebuilt without the other |
 | **the topology**, per type | the parent array and the accumulated rest offsets, so `pose_accum_body`'s per-unit sibling scan stops being a per-frame cost. Cached now, consumed in step 5 |
-| **invalidated by** | the level generation (`tagpu_reclaim_level_gen()`), the GL generation, the **atlas** generation — new, `TAGPU_GAFATLAS.gen`, bumped by every `atlas_reset` and `atlas_lost` because every UV moves — and the owner, which is in the key |
+| **invalidated by** | the level generation (the frame packet's `level_gen`), the GL generation, the **atlas** generation — new, `TAGPU_GAFATLAS.gen`, bumped by every `atlas_reset` and `atlas_lost` because every UV moves — and the owner, which is in the key |
 
 **Fields we write: none.** Every engine read is the one the emitters already make.
 
@@ -2074,7 +2074,7 @@ half).
 | `0x497C70` | **observer** on the loader thread's entry (stolen `55 8B EC 6A FF`, position-independent): logs the thread's id, the load-flag word and, at its return, whether the level's first in-play packet had already been published — the direct measurement of the loader thread and of the ORDER the in-play gate rests on ([engine map](exe-reverse-engineering.html), "The in-play publish point") | loader |
 | hook 8, `0x469BD7` (markown's stub) | `tagpu_packet_pub_font_snapshot()`: whenever `[globals+0x204]` or its header signature changed, copy the font's header and its 95 printable glyphs into a game-side buffer, each as a one-glyph font object the blitter accepts; latch `[globals+0x208]`. Every packet carries the buffer (1612 B for the stock in-game font) | game |
 | the teardown post hook (`tagpu_reclaim.c`, inside the `0x491B60` wrap) | `tagpu_packet_pub_level_end()`: a header-only packet with `in_game = 0` and the bumped generation, forced past the fresh gate, before the reader is released — without it the renderer would draw the dead level's last packet over the menus | game |
-| `0x491B60`, the teardown, **only when `tagpu_reclaim` is not armed** (`tagpu_reclaim.off`, or its own install refused) | **observer** (stolen `A1 E8 1D 51 00`, the five bytes reclaim's wrap takes; hijacked return, so both of the function's exits — the `ret` and the tail-jump to `0x450DD0` — reach `after`): the same level-end packet, published by us. The out-of-game packet must not depend on another module being armed (landing review); with neither provider the publisher stays count-only, because no packet is better than a stale one. The launch line says which: `level-end packet by tagpu_reclaim's teardown post hook` or `by our own observer …`. Under `tagpu_reclaim.off` the level generation stays 0 for the session (reclaim's counter is the one counter, and it does not move without reclaim) | game |
+| `0x491B60`, the teardown, **only when `tagpu_reclaim` is not armed** (`tagpu_reclaim.off`, or its own install refused) | **observer** (stolen `A1 E8 1D 51 00`, the five bytes reclaim's wrap takes; hijacked return, so both of the function's exits — the `ret` and the tail-jump to `0x450DD0` — reach `after`): the same level-end packet, published by us. The out-of-game packet must not depend on another module being armed (landing review); with neither provider the publisher stays count-only, because no packet is better than a stale one. The launch line says which: `level-end packet by tagpu_reclaim's teardown post hook` or `by our own observer …`. **[SUPERSEDED 2026-09-12 by landing 3]** this line used to end "under `tagpu_reclaim.off` the level generation stays 0 for the session"; the publisher owns the counter now and advances it here too, which is what makes the template caches drop between levels with reclaim disarmed | game |
 | `render_ogl.c`, around the overlay | `tagpu_packet_acquire()` once, before `tagpu_reclaim_pass_begin`, the pointer handed down through `TAGPU_FRAME.packet` / `TAGPU_FXVIEW.packet`; `tagpu_packet_frame_end()` after `pass_end`, unconditionally — the tail check and the heartbeat | render |
 | `tagpu_text.c` | `tagpu_text_frame(packet)` copies the font area out of the packet once per font generation; the measure walks the glyph table, the raster hands each one-glyph object to `0x4CCF60` at the x the engine's own string loop would reach. **No `IsBadReadPtr`, no engine pointer on this path any more**; the GL UI's glyph cache (`tagpu_text_glyph`) keeps its probes until 4c | render |
 
@@ -2199,7 +2199,8 @@ tick as the packet returned; the tick-aware give-back the plan's §5 describes l
 that needs it. Under `tagpu_reclaim.off` the level generation never moves (0 for the session), so a
 cache keyed on it would not drop between levels; the level-end packet still arrives (our own
 observer), and nothing keys on the generation yet. *[The first sentence is landing 1's state;
-§2.17 is what landing 2 closed.]*
+§2.17 is what landing 2 closed, and landing 3's review closed the generation: it is the
+publisher's own counter now and moves with or without reclaim.]*
 
 ### 2.17 The frame packet exchange, landing 2 — the view from the header, the commands the other way (`tagpu_packet.c`, `tagpu_packet_pub.c`, `tagpu_zoom.c`, `tagpu_vpwide.c`, `tagpu_input.c`, `tagpu_pal.c`) — 2026-09-12
 
@@ -2333,12 +2334,12 @@ Object3do ([cross-thread engine reads](cross-thread-engine-reads.html) §5 row 2
 
 | site | what we do there | thread |
 |---|---|---|
-| `DrawGameScreen 0x468CF0`, the observer's **`after`** | the packet grew four tables. `PK_UNIT` (100 B) one per LIVE unit, the walk bounded by the engine's own SLOT COUNT (`u16 main+0x14351`) rather than by the `begin`/`end` pair, and the table sized to that count so no player is ever cut; `PK_PIECE` (24 B) the COB move and turn triples and the flags, plus the TYPE's template node; `PK_WRECK` (44 B) the husks the anchors name, each carrying the ANCHOR TILE it was found on rather than its own position, because that is what the grid walk it replaced filtered on; `PK_ANCHOR` (16 B) the feature cells of the widest zoom rect with the six height bytes the engine's 2×2 projection average and the Classic++ ground gradient need. The header grew with them: the GUI colour table, the dispatched mouse point, the build cursor's corners, the two mode bytes, the option byte, the feature sweep, the per-map array bases the fenced passes index, and the engine's 32×256 shade table. Every offset and every bound: [engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies" | game |
+| `DrawGameScreen 0x468CF0`, the observer's **`after`** | the packet grew four tables. `PK_UNIT` (100 B) one per LIVE unit, the walk bounded by the engine's own SLOT COUNT (`u16 main+0x14351`) rather than by the `begin`/`end` pair, and the table sized to that count so no player is ever cut; `PK_PIECE` (24 B) the COB move and turn triples and the flags, plus the TYPE's template node; `PK_WRECK` (44 B) the husks the anchors name, each carrying the ANCHOR TILE it was found on rather than its own position, because that is what the grid walk it replaced filtered on; `PK_ANCHOR` (16 B) the feature cells of the widest zoom rect with the six height bytes the engine's 2×2 projection average and the Classic++ ground gradient need. The header grew with them: the GUI colour table, the dispatched mouse point, the build cursor's corners, the two mode bytes, the option byte, the feature sweep, the two array COUNTS the fenced passes bound by, and the engine's 32×256 shade table — the per-map BASES are read live instead, because the teardown nulls them and a held copy would not know. Every offset and every bound: [engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies" | game |
 | the same `after` | `tagpu_native_owns_unit()` is asked here, once per unit, with the def in hand — the answer crosses as one flag bit, so the unit pass, the marker pass and the composite wipe act on ONE answer instead of three threads' reads of the same bytes | game |
 | the order-marker snapshot `0x469BFC` | every unit pointer a record carried becomes an ARRAY SLOT, and every def and weapon field the drawing needs becomes a number in the record: the nine labelled ranges, the three live weapon ranges and their AoE and attack runs, the build def's five footprint extents, the kamikaze set, the cursor sprite's GAF sequence | game |
 | `tagpu_packet.c`'s acquire | **the rotation**: the frame instance holds THREE slots (READ, PREV and a SPARE) rather than two, so a packet of the same tick replaces READ and keeps PREV, and the pair the pose blend runs over always spans two distinct ticks. The choice is made AFTER the exchange out of records this thread owns — the two-slot alternative would have to peek at a slot the producer may be refilling | render |
-| `tagpu_native.c` | the unit and wreck gathers, the whole pose path (`pose_accum_body`, `posed_pose`, `hires_pose`, `pose_dump`, the pose CRC), the ownership test, the ground height, the option bits, the sub-pixel table's key: all from the packet. What it still reads is per-LEVEL assets under `tagpu_reclaim`'s teardown fence — the model templates behind `MODEL_PTRS` (base and bound both in the packet) and the screen fog descriptor, which is landing 4b's | render |
-| `tagpu_scaffold.c`, `tagpu_feat.c` | the anchors, the map and sweep dimensions, the units they stamp for; the FeatureDef and wreck RECORDS stay, under the fence, with their bases from the packet | render |
+| `tagpu_native.c` | the unit and wreck gathers, the whole pose path (`pose_accum_body`, `posed_pose`, `hires_pose`, `pose_dump`, the pose CRC), the ownership test, the ground height, the option bits, the sub-pixel table's key: all from the packet. What it still reads is per-LEVEL assets under `tagpu_reclaim`'s teardown fence — the model templates behind `MODEL_PTRS`, whose base is read LIVE every call (the teardown nulls it at `0x42DCD8`, and that null is the refusal) while the bound is the packet's `udef_count`, and the screen fog descriptor, which is landing 4b's | render |
+| `tagpu_scaffold.c`, `tagpu_feat.c` | the anchors, the map and sweep dimensions, the units they stamp for; the FeatureDef and wreck RECORDS stay, under the fence. Their bases are read LIVE at every use (the teardown nulls both, and those nulls are the refusal) and their indices are bounded without a probe: a def row by `min(live NumFeatureDefs, the packet's)`, a wreck record by the engine's fixed 2048-record pool | render |
 | `tagpu_mark.c`, `tagpu_overlay.c`, `tagpu_lerp.c`, `tagpu_hires.c` | off the allow-list entirely: they name no engine memory at all | render |
 | `tagpu_render3do.c` | the shade table and the build-state formulas take the packet's copies; the **write-back is deleted** | render |
 
@@ -2364,9 +2365,43 @@ wrecks= anchors=<n>(<cols>x<rows>) dup= pair= same=` — `dup` is the stable-id 
 one packet and **must read 0**, `pair` the frames that had a usable two-tick pair, `same` the
 rotations that displaced READ because the tick had not moved. A `world:` segment at the very end
 carries the publisher's own: `u= p= w= a=<anchors>/<cells scanned> scan=<scans>/<reuses> dup=
-trunc=<units>/<pieces>/<wrecks>/<anchors> relbad= shd=`. **`relbad` must stay 0** — it counts
+trunc=<units>/<pieces>/<wrecks>/<anchors> relbad= woob= shd=`. **`relbad` must stay 0** — it counts
 draws on which `end != begin + (count−1)·0x118`, the relation the note records — and so must every
-`trunc` past the first fill of each slot.
+`trunc` past the first fill of each slot. **`woob` is the wreck-record index the bound refused**,
+added by the landing review below; it is a monitor and not the safety argument, which is the
+engine's own 2048-record pool.
+
+**What the landing review changed.** Two Opus reviewers at `high` over the branch diff, one
+working down the brief's risk list and one told to range freely. **Eight defects**, every one
+verified against the pristine binary before anything moved — seven the reviewers' and one found
+while verifying their first. All eight are fixed on the branch:
+
+| # | what it was | why it mattered |
+|---|---|---|
+| 1 | the packet CACHED the three per-map array bases `main+0x1426F`, `+0x1420B` and `+0x14377` | **the worst of the eight.** The teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), and that null is what refuses the walk on the next frame — the code this replaced read live and bailed on `ptr_ok(NULL)`. A copy taken at publish time is a pointer to freed memory that still tests non-NULL, so the fenced passes read straight through it for the length of a teardown, and with `tagpu_reclaim` unarmed for the whole cascade. The bases are read live at every use again; only the BOUNDS stay in the packet |
+| 2 | the wreck-record index reached memory **with no bound**: the feature cell's raw `u16` times `0x30` off `main+0x1420B` | up to ~3 MB past the pool. A garbage "Object3do" that survives `ptr_ok` puts up to 256 rows of nonsense `node` pointers into the packet, **dereferenced afterwards on the render thread**. The engine's own read at `0x46A6C4` is unbounded too, but it only forms the address for a cell it is DRAWING, where this walk covers the zoom-floor rect plus a 32-cell margin. The bound is the engine's: `0x421F29` allocates `0x18000` bytes at stride `0x30`, so **2048 records** |
+| 3 | `level_gen` was `tagpu_reclaim_level_gen()`, bumped only in reclaim's teardown post hook | with reclaim unarmed it never moved, so the PREV withheld across a level, the pose blend's refusal and **all four model-template caches** silently stopped invalidating. The publisher owns the counter now |
+| 4 | an **in-range** permutation break was counted and carried on from | the cell held a slot the consumer already holds, so the producer wrote a slot it did not own — the partition the whole exchange rests on is gone, and continuing leaves a duplicate in the held set and one slot owned by nobody. It fail-stops now, like the out-of-range case |
+| 5 | `tagpu_order.c` returned early on the explode RADIUS where the engine returns on the ExplodeAs weapon POINTER (`0x439125`) | dropped the second circle (`0x439196`) for a weapon whose `AoE>>1` is 0. Inert on stock content |
+| 6 | a truncated anchor scan was cached as a complete one | every reuse publish of that tick under-reported `trunc` — 6 publishes in 7 |
+| 7 | the wreck gather left the nanoframe group of the static `units[]` unwritten | a wreck on an index that held a unit under construction was staged and wire-drawn as one. **Present on main since G16**, not introduced here |
+| 8 | *(found while verifying 1)* the FeatureDef index was bounded by the PACKET's `NumFeatureDefs` against a base read live, and two `IsBadReadPtr` probes stood in for the bound — one on the wreck record in `tagpu_feat.c`, whose index was as unbounded as the publisher's, and one on the FeatureDef record | across a level boundary those are two different maps. The engine grows that array one record at a time and writes the count **last** (`0x422543` reallocs, `0x422558` stores the base, `0x422DAC` increments the count), so the live count is always a conservative bound on the live base — the two passes take `min(live, packet)` now. `MODEL_PTRS` is the opposite order (`0x42D542` counts, `0x42D693` allocates, `0x42D6AA` stores), so a non-NULL base there already implies its count, and the packet's `udef_count` stands |
+
+One more was a DOCUMENTATION finding and is acted on rather than fixed: every sentence in these
+notes that called a per-level read safe "under `tagpu_reclaim`'s teardown fence" was true only
+while reclaim is ARMED, and reclaim has five ways not to be. [Thread-safe
+destruction](thread-safe-destruction.html) §10b now carries the residual in full — what the live
+bases and the new bounds do cover (a pass that starts after the teardown's null-out, and any index
+straying outside the block), what they do not (a pass already inside the walk when the cascade
+frees under it), and why there is no by-design fix in this landing's shape. It is an **open**
+residual whose retirement is the plan's row 5.
+
+Rejected: one PLAUSIBLE finding that the anchor rect's left margin is thin at the zoom floor. The
+detector already exists — `outside=` on the `feat:` line, a flag set when the frame's rect asks for
+cells outside the ones the packet carried — and it reads **0 on all 116 frames** of two runs at
+`z=0.25`, the floor, with the eye thrown to nine map corners and back four times each, on a
+forest fixture (`anchors=541` of 98 736 cells) and a wreck one (`anchors=730` of 142 136). Not
+asserted this time: measured.
 
 **The gates, measured 2026-09-12 on the reference setup, 1920×1080, `--maxfps 0`, the play
 defaults, this DLL against the one built from landing 2's tip (`4b84098`):**
@@ -2375,7 +2410,12 @@ defaults, this DLL against the one built from landing 2's tip (`4b84098`):**
   publishes and 19 481 taken frames** (436 191/6 658, 376 318/6 177, 458 499/6 646),
   `viol=0 pviol=0 crcbad=0 foreign=0 commitfail=0` on both exchanges in all three,
   **`dup=0`** (the stable-id collision oracle) and **`relbad=0`** (the `end` pointer agreed with
-  `begin + (count−1)·0x118` on every published draw), 0 `VIOLATION` lines in the log.
+  `begin + (count−1)·0x118` on every published draw), 0 `VIOLATION` lines in the log. **Re-run once
+  on the binary that ships** after the review's fixes — which changed the exchange itself, adding a
+  second fail-stop — for another **450 345 publishes and 7 377 taken frames** with the same five
+  counters at 0, plus the new `woob=0`, `raced=0`, and `pubus p50 148 / p99 290 µs` under stress.
+  `trunc=0/1/0/0` in every run is the growth path doing its job: the pieces slot truncates while it
+  is still growing (`grow=22`) and never afterwards.
 - *The pose CRC join* (`tagpu_posecrc.on`): **`raced=0`**. That is the gate this landing is
   measured by and its meaning changed with it — the race it counts is between the COB scripts on
   the game thread and the pose loop on the render thread, and the pose now comes out of a packet
@@ -2386,39 +2426,119 @@ defaults, this DLL against the one built from landing 2's tip (`4b84098`):**
   **identical in both builds** — `42db193f`/`76a8ee95`, `65210a9c`/`22fc162a`,
   `40efe2fd`/`95f837bd` — and so is the whole `native:` counter line. The matrices, the shade
   rows and the visibility words the pass hands the GPU are byte-for-byte what they were.
-- *Two level cycles in one process*, three levels in all (`gen` 0 → 1 → 2): the level-end packet
-  at each teardown (`packet: level end -> gen N: in_game=0 published`), the loader thread entering
-  three times and leaving before each level's first in-play packet, the command epoch bumped with
-  the generation, **0 violations in the whole log**, and the new level's tables sized to the new
-  map (`anchors=1747(350x362)` on one, `842(532x201)` on the next).
+- *Two level cycles in one process, three levels in all, run once with `tagpu_reclaim` ARMED and
+  once with it OFF* — because the review's third finding was that the level generation only moved
+  in the armed case, and the two providers of the level-end packet are the two halves of this gate.
+
+  | | reclaim ARMED | `tagpu_reclaim.off` |
+  |---|---|---|
+  | provider on the heartbeat | `levelend=reclaim` | `levelend=own` |
+  | the generations | `gen 1 (reclaim's 1)`, `gen 2 (reclaim's 2)` | `gen 1 (reclaim's 0)` |
+  | the template caches | `native: level 0 -> 1` and `1 -> 2`, both dropping | `native: level 0 -> 1`, dropping |
+  | `VIOLATION` lines | 0 | 0 |
+  | `viol` / `dup` / `relbad` / `woob` / `trunc` | all 0 | all 0 |
+
+  **The publisher's counter is not a divergent second counter**: with reclaim armed it tracks
+  reclaim's exactly, and with reclaim absent it is the only one that moves. **The right-hand column's
+  template-cache row is the fix.** Before it, with reclaim disarmed, no `native: level` line existed
+  at all — a second level reusing a template address served the first level's answer for the life of
+  the process.
+  The loader thread entered three times and left before each level's first in-play packet, the
+  command epoch tracked the generation (`epoch=2/2`), the new level's tables were sized to the new
+  map, and the feature pass was unbothered by the new `min(live, packet)` def bound
+  (`defs=442 junk=0 outside=0`).
+
 - *Cost*. The publish is **p50 70 µs, p99 322 µs** at 354 units / 5 443 pieces / 35 wrecks /
   760 anchors, against landing 2's 2 µs for a header-only packet; the command apply is unchanged at
   p50/p99 **2 µs**. Two thirds of that first figure was the feature-grid scan (168 µs of 200 before
   it was cached per tick — 465 × 273 = 126 945 cells at the zoom floor), which now runs **735 times
   against 4 567 reuses** over one interval. Under `stress` the publish is p50 136 / p99 324 µs.
+
+  **And it is not slower — measured twice, and the second time on the shipped binary.** On
+  `200v200` (≈400 units) with the sim paused and the restore finished, the two DLLs run back to
+  back for 60 s each:
+
+  | pair | what | this DLL | `4b84098` |
+  |---|---|---|---|
+  | first | render frames / s | 207.5 | 178.5 |
+  | first | in-play draws / s | 811 | 763 |
+  | second, the shipped binary | render frames / s | **134.5** | 128.5 |
+  | second, the shipped binary | in-play draws / s | **769** | 684 |
+  | both | publish, game thread | p50 112 µs, p99 220 µs | p50 2 µs, p99 2 µs |
+
+  **Read the direction, not the figure.** The method is identical in both pairs; what differs is
+  how busy the GPU was, and that alone moves the level by 70 frames a second. So the only claim the
+  measurement supports is the one both pairs agree on: the new build is **not slower**, and is
+  modestly ahead on both. The publisher's 112 µs is real and is spent on the game thread; what buys
+  it back is that the render thread no longer walks the unit array, the feature grid or an
+  `Object3do` per unit per frame. This is not a speed landing and the number is not a target — it
+  is recorded because a cost this shape could equally have gone the other way, and only a
+  measurement tells the two apart.
+
 - *Pixel A/B against landing 2's DLL* (`4b84098`), 1920×1080, `--maxfps 0`, the play defaults, the
   world viewport only, the animating cursor sprite's rect excluded as `uiwalk` excludes it:
 
-  | fixture | what it exercises | noise floor | this DLL vs `4b84098` |
-  |---|---|---|---|
-  | `selbox-facings` | three tanks on the flat, the posed unit path | 0 within a launch | **0** |
-  | `selbox-slope` | three tanks on a hillside, real bank and pitch in the angle triple | 0 within a launch, 26 across two | **0** |
-  | `one-wreck` | the wreck table's own path | 0 | **0** |
-  | `hires-vehicle-slope` | the glTF replacement pass | 0 | **0** |
-  | `hires-wreck` | the replacement pass over a husk | 532 | 686 |
-  | `cob-kbot` | a live COB script over a burning wreck | 652 | 899 |
-  | `feat-forest` | the anchor table, a forest and a walking commander | 512 (the commander) | 561 |
-  | `pose-inventory` | 69 units, all eight pose classes, every one idling | 8 556 | 9 192 |
+  **Two different floors, and a row needs whichever is larger.** Within a launch, consecutive
+  frames of a fixture with a burning wreck or an idling unit already differ — that is the
+  within-launch floor. Across two launches of the SAME build they differ again and for a second
+  reason: Classic++'s unit-atlas restore is lazy and time-sliced against a GPU budget, so the
+  atlas it has finished is not the same one twice. On `selbox-slope` the within-launch floor is 0
+  and the cross-launch floor is **26 pixels** — three clusters of single-channel ±1 on the three
+  tanks, maximum channel delta 3, inside x 702..956, y 456..576. Measured twice, on two different
+  builds, it comes back as the same 26 pixels in the same box. Every row below therefore carries
+  both floors and the A/B, and the column that decides anything is the last one:
 
-  **The three fixtures that are not zero animate, and the difference is confined to what
-  animates.** `hires-wreck` and `cob-kbot` both carry a burning wreck, and every differing pixel
-  of both — the cross-build figure AND the within-launch floor, which is the proof — lies inside
-  one 45×65 box that holds a smoke plume; the particle pass that draws it is landing 4a's and this
-  landing does not touch it. `feat-forest`'s is its walking commander, and `pose-inventory`'s 8 556-pixel floor is
-  69 units all running their idle scripts — it is the pose COVERAGE fixture, not a parity one, and
-  the pose CRC join is what holds this landing to the previous DLL there. A fixture with a live
-  particle emitter or a moving unit cannot be pixel-paired across two launches at all, which is
-  why the floor is quoted beside every figure rather than the figure alone.
+  | fixture | zoom | what it exercises | this DLL's floor | `4b84098`'s floor | A/B | **outside both floors** |
+  |---|---|---|---|---|---|---|
+  | `selbox-facings` | 1 | three tanks on the flat, the posed unit path | 0 | 77 | 0 | **0** |
+  | `one-wreck` | 1 | the wreck table's own path | 0 | 0 | 0 | **0** |
+  | `hires-vehicle-slope` | 1 | the glTF replacement pass | 0 | 0 | 0 | **0** |
+  | `hires-wreck` | 1 | the replacement pass over a husk | 495 | 833 | 500 | **0** |
+  | `selbox-facings` | 0.5 | the same three tanks, wide | 183 | 232 | 189 | **0** |
+  | `feat-forest` | 0.5 | the anchor table over a forest | 178 | 165 | 206 | **0** |
+  | `selbox-slope` | 1 | three tanks on a hillside, real bank and pitch in the angle triple | 0 | 0 | 26 | 26 — **under its own 191-pixel cross-launch floor** |
+  | `cob-kbot` | 1 | a live COB script over a burning wreck | 780 | 414 | 738 | 18 |
+  | `pose-inventory` | 1 | 69 units, all eight pose classes, every one idling | 7 140 | 9 194 | 10 126 | 731 |
+
+  **Six of the nine are exactly 0**: every pixel that differs between the two builds is a pixel
+  that differs between two frames of the SAME build. For the three that are not, the decisive
+  control is this build launched TWICE and held to itself, which is the comparison the A/B actually
+  is — and on all three **the build differs from itself by more than it differs from `4b84098`:**
+
+  | fixture | this build vs ITSELF, two launches | this build vs `4b84098` |
+  |---|---|---|
+  | `selbox-slope` | **191** | 26 |
+  | `cob-kbot` | **847** | 738 |
+  | `pose-inventory` | **10 457** | 10 126 |
+
+  There is no residue to explain after that, but each has a named cause anyway:
+
+  - **`selbox-slope`.** Its 26 pixels sit in one box (x 702..956, y 456..576, maximum channel delta
+    3) that reproduces on every measurement, on two different builds: three clusters of
+    single-channel ±1 on three tanks of the same type, i.e. the same atlas texels three times.
+    It is Classic++'s lazily restored unit atlas, whose restore is time-sliced against a GPU budget
+    and does not land identically twice. With `classicpp` off the two builds agree to **1 pixel**.
+    That atlas is also why this fixture's own within-launch floor is not a constant — 0 when the
+    GPU was busy and the restore had stalled between two shots 3 s apart, 265 and 288 when it was
+    free and the restore was still running.
+  - **`cob-kbot`.** Its 18 pixels outside both within-launch floors lie at x 1509..1525, y 318..362,
+    wholly inside the 45×65 box that holds the burning wreck's smoke plume — drawn by the particle
+    pass, which is landing 4a's and untouched here.
+  - **`pose-inventory`.** 69 units all running idle scripts. Its floor has been measured at 7 140,
+    8 556, 8 957 and 9 056 within a single launch of one build. It is the pose COVERAGE fixture,
+    not a parity one, and what actually holds this landing to the previous DLL there is the pose
+    CRC join above: `raced=0`, with identical `in`/`out` pairs.
+
+  **One fixture was DROPPED from the wide-zoom set, and the rosters are why.** An earlier sweep
+  ran `one-wreck` at zoom 0.5 and it read 217 pixels outside both floors, 196 of them in the
+  rightmost 32-pixel column of the viewport, where the picture is a unit clipped by the edge in one
+  build and absent in the other. Reading `tacli roster --json` from both launches settles it:
+  **they are not the same game.** One had 8 units and the other 9, the player's own commander
+  started at world (3552, 1008) in one and (9283, 5088) in the other, and every AI's commander and
+  mex was somewhere else again — **the skirmish assigns start positions per launch.** At zoom 1
+  that camera sees no unit at all, which is why the same fixture is 0 there. A wide-zoom fixture is
+  comparable only while no unit enters the widened view; `feat-forest` and `selbox-facings` are,
+  and they are the wide-zoom evidence here.
 
   **Two harness traps cost a round of wrong numbers each, and both are worth writing down.**
 

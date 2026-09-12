@@ -488,7 +488,7 @@ render thread is live: the reclaim post hook clears its flag as soon as `0x491B6
 | `main+0x14287` | `FeatureMap` | `[ebp+0x8C]` at `0x4839A2` | nulled at `0x483EE2` |
 | `main+0x14283` | `TILE_SET` `{count, pixels}` | `[ebp+0x88]` at `0x483B68` | nulled at `0x483ECA` |
 | `main+0x1421F` | fog descriptor `{buf, cols, rows, cells}` | `[ebp+0x24]` at `0x483C28` (struct `0x483C03`, buffer `0x483C96`) | `free 0x4B4F20` twice at `0x483F06`/`0x483F0F`, nulled at `0x483F1C` |
-| `main+0x1420B` | wreck records, stride `0x30` | not traced (another base) | one direct store, `0x422214`, inside the feature teardown |
+| `main+0x1420B` | wreck records, stride `0x30`, **a fixed pool of 2048** | `0x421F20`, through `esi = main+0x141FB`: `MEM_Alloc(0x18000)` at `0x421F29`/`0x421F39`, pointer into `[esi+0x10]` at `0x421F47`, `rep stos` of `0x6000` dwords, then a doubly-linked free list threaded through every record — `0x421F5F..0x421F7E` steps `eax` by `0x30` from 0 to `0x18000` writing `u16 [rec+0x00] = i+1` (next) and `u16 [rec+0x02] = i−1` (prev), so **`0x18000 / 0x30` = 2048 records, 0..2047**; `0x421F8D` terminates the prev chain at record 0 and `0x421F94` the next chain at `+0x17FD0` = record 2047. `[esi+0x18]`/`[esi+0x1C]` (`main+0x14213`/`+0x14217`) are two live-list heads, both −1; `[esi+0x20]` (`+0x1421B`) the free head, 0 | `0x4221F1`→`0x4221F8` frees it and `0x422214` **nulls** it, inside the feature teardown, after `0x42219A`'s loop has walked both live lists calling `FreeObjectState 0x45AAA0` on each record's `+0x04` |
 | `main+0x141F7` / `+0x141F3` | projectile array / live count, stride `0x6B` | `0x499A30`: `MEM_Alloc(0x7D64)` = **300 slots**, pointer at `0x499A49`, count zeroed at `0x499A6A`; the count is rewritten by the sim at 13 sites (`0x49AF76` … `0x49DF3F`) | `0x499A80`: `MEM_Free`, nulled at `0x499A9A` |
 | `main+0x38D77` | particle layer table, 10 × `{…, begin, end}` | `0x471D90`, pointer at `0x471DCB`; each layer's vector and every object's sub-vector grow **mid-play** (`0x4732E0`) | `0x471DE0`, nulled at `0x471E97` |
 | `main+0x142DB` / `+0x142DF` / `+0x142E3` | minimap composite / fogged base / scaled map (8bpp offscreens) | the minimap build: `0x4669DA`, `0x466A05`, `0x46682E` | `0x466AA0`: `0x466AF5`, `0x466AE9`, `0x466ADD` |
@@ -2689,9 +2689,40 @@ its bound.
 | its Object3do | `+0x00` nparts, `+0x10` the composite GAFFrame (W/H/hot x/y at `+0x00..+0x06`, the depth plane at `+0x14` as a flag), `+0x18` the cached body turn, `+0x1E` the base PrimitiveStruct, `+0x22 + i·0x36` the pieces | `nparts` against `TAGPU_PBMAXPIECE`; the base prim becomes an INDEX and must be inside `nparts` |
 | one piece | `+0x00` the template node (crosses as a value the fence covers), `+0x04` the COB move, `+0x10` the COB turn, `+0x28` the flags | copied whole, `nparts` of them |
 | the feature grid | `main+0x14287`, `0x0D` per cell: `+0x04` height, `+0x08` def index, `+0x0A` wreck index, `+0x0C` flags | the rect is clamped to `main+0x14233`/`+0x14237`; a def index `≥ 0xFFFB` is not an anchor |
-| a wreck record | `main+0x1420B + idx·0x30`: `+0x04` Object3do, `+0x08/+0x0C/+0x10` the 16.16 position | reached only from an anchor whose FeatureDef row is inside `main+0x14253` and whose `FeatureMask` bit 0 is clear |
+| a wreck record | `main+0x1420B + idx·0x30`: `+0x04` Object3do, `+0x08/+0x0C/+0x10` the 16.16 position | reached only from an anchor whose FeatureDef row is inside `main+0x14253` and whose `FeatureMask` bit 0 is clear — **and whose cell index is under 2048**, the pool `0x421F29` allocates. **[ADDED 2026-09-12, a landing review]** the index had no bound at all before, and this walk is not the engine's: the engine's own read at `0x46A6C4` is equally unbounded but only ever forms the address for a cell it is drawing, where the publisher covers the zoom-floor rect plus a 32-cell margin. The allocator `0x4232A0` returns 2048 itself when the free list is empty, so 2048 is the engine's own "no record" value as well as the array's length |
 | the frame's option bytes | `main+0x0DCB` the GUI colour array (64 of them), `+0x2C76`/`+0x2C7A` the dispatched mouse point, `+0x2C92..+0x2CA6` the build cursor's two corners, `+0x2CC3` the cursor mode, `+0x2CC6` the region flags, `+0x37F06` the option byte (damagebars, Shadow, TShadow, FShadow), `+0x1424B`/`+0x1424F` the feature sweep | none needed: they are values, and every consumer of them already treated them as such |
 | the shade table | `[0x51FBD0]+0xC4`, 32 × 256 bytes | the FORMAT is the bound: `0x459C70`'s Gouraud path indexes it with a 5-bit row and a byte, so a copy of exactly that size reads what the rasteriser reads |
+
+**The FeatureDef array grows one record at a time, and the count is written LAST.** `0x422520`
+reallocs `main+0x1426F` to `(NumFeatureDefs + 1) · 0x100` (`0x422543`, through `0x4D84A0`), stores
+the new base at `0x422558`, the caller fills the new record, and only then does `0x422DAC` write
+`NumFeatureDefs + 1` back to `main+0x14253`. **So the count never describes more records than the
+allocation holds**, and a live count read after a live base is a conservative bound on that base.
+The teardown is the mirror: `0x42227D` frees the array, `0x42228B` nulls the base, `0x422299`
+zeroes the count — base first, so a reader that tests the base never sees a live pointer with a
+dead count. **[MEASURED FROM THE DISASSEMBLY 2026-09-12, a landing review]**: this is what licenses
+`tagpu_feat.c` and `tagpu_scaffold.c` to bound a feature index by `min(live count, packet count)`;
+the packet's alone belongs to the packet's level, and a held packet from a 442-def map would
+authorise 442 records of the next map's 30-record array.
+
+**`MODEL_PTRS` is the other order, and that is equally load-bearing.** `0x42D542` computes
+`UNITINFOCount` into `main+0x1438F` from the unit-def array's extent (`(edi − main+0x1439B) /
+0x249`), and only afterwards does `0x42D693` allocate `count · 4` and `0x42D6AA` store the base
+into `main+0x14377`. **A non-NULL base therefore implies the count already describes it**, which is
+why `tagpu_native.c`'s `model_root` may read the base live and bound by the packet's `udef_count`.
+`0x42DCB6` frees the table and `0x42DCD8` nulls the base.
+
+**The two kamikaze circles at `0x4390F0`, and which test gates which.** `0x439115` tests the def's
+`+0x241` bit 28 and `0x439125` loads `def+0x220`, the ExplodeAs weapon; **both circles are skipped
+only when one of those two fails**, and the second test is on the POINTER. With a weapon in hand,
+`0x439137` takes its `u16 +0xD6` (AoE) and `0x43914B` halves it, and the pulse radius is
+`clamp((GameTime % 60) · (AoE>>1) · 2 / 60, 8, AoE>>1)` — the clamps in that order at `0x439161`
+and `0x439168`, so an `AoE>>1` under 8 ends at `AoE>>1` and not at 8, including 0. Execution then
+falls through unconditionally to `0x439196`, which draws a second circle of radius `def+0x218`
+(kamikazedistance) whenever the pointer at `[esp+0x18]` names a non-zero dword. **[ADDED
+2026-09-12, a landing review]** `tagpu_order.c` returned early on the radius instead of the
+pointer and so dropped that second circle for a weapon with `AoE>>1 == 0`; nothing in stock content
+has one.
 
 **What it costs, and the one thing that made it worth caching.** The whole publish is **p50 70 µs,
 p99 322 µs** at 354 units, 5443 pieces, 35 wrecks and 760 anchors. The anchor scan alone was **168
